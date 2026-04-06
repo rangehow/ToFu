@@ -82,7 +82,7 @@ def dispatch_chat(messages, *, max_tokens=4096, temperature=0,
     Returns:
         (content_text: str, usage_dict: dict)
     """
-    from lib.llm_client import ContentFilterError, PermissionError_, RateLimitError, StreamOnlyError, chat
+    from lib.llm_client import ContentFilterError, InvalidImageError, PermissionError_, PromptTooLongError, RateLimitError, StreamOnlyError, chat
 
     dispatcher = get_dispatcher()
     exclude = set()           # models to exclude entirely (hard model errors)
@@ -226,6 +226,16 @@ def dispatch_chat(messages, *, max_tokens=4096, temperature=0,
             logger.warning('%s Content filter (HTTP 450) — not retrying: %s', tag, str(e)[:200], exc_info=True)
             raise
 
+        except PromptTooLongError:
+            logger.warning('%s Prompt/request too large — not retrying on other slots '
+                           '(same payload = same rejection)', tag)
+            raise   # ★ Escape to orchestrator for reactive compaction
+
+        except InvalidImageError:
+            logger.warning('%s Image content error — not retrying on other slots '
+                           '(same image = same rejection)', tag)
+            raise   # ★ Same payload = same rejection on all keys
+
         except StreamOnlyError as e:
             # ★ Model only supports streaming — exclude entire model and
             #   try a different one. Mark the slot so future dispatches
@@ -268,6 +278,78 @@ def dispatch_chat(messages, *, max_tokens=4096, temperature=0,
 
 
 # ═══════════════════════════════════════════════════════════
+#  Helpers — pre-built body adaptation for model swap
+# ═══════════════════════════════════════════════════════════
+
+def _readjust_thinking_params(body: dict, new_model: str, thinking_format: str):
+    """Fix thinking parameters when a pre-built body is dispatched to a different model family.
+
+    Different model families use incompatible thinking parameter formats:
+      - Claude:   thinking.type = 'adaptive'
+      - Doubao:   thinking.type = 'enabled' / 'disabled'
+      - GLM:      thinking.type = 'enabled' / 'disabled'
+      - MiniMax:  reasoning_split = True
+      - Qwen/Gemini/LongCat: enable_thinking = True/False
+
+    When dispatch swaps the model (e.g. Claude → Doubao), the body may carry
+    the wrong format, causing HTTP 400 errors. This function detects mismatches
+    and converts to the correct format for the new model.
+    """
+    from lib.llm_client import is_claude, is_doubao, is_gemini, is_glm, is_longcat, is_minimax, is_qwen
+
+    # Detect current thinking state from the body
+    thinking_dict = body.get('thinking')
+    enable_thinking = body.get('enable_thinking')
+    reasoning_split = body.get('reasoning_split')
+    effort = body.get('effort')
+
+    has_thinking_params = (thinking_dict is not None or
+                           enable_thinking is not None or
+                           reasoning_split is not None)
+    if not has_thinking_params:
+        return  # No thinking params to adjust
+
+    # Determine if thinking is currently enabled
+    is_enabled = False
+    if isinstance(thinking_dict, dict):
+        t = thinking_dict.get('type', '')
+        is_enabled = t in ('enabled', 'adaptive')
+    elif enable_thinking is not None:
+        is_enabled = bool(enable_thinking)
+    elif reasoning_split is not None:
+        is_enabled = bool(reasoning_split)
+
+    # Clean ALL thinking-related keys before re-setting
+    body.pop('thinking', None)
+    body.pop('enable_thinking', None)
+    body.pop('reasoning_split', None)
+    body.pop('effort', None)
+
+    # Re-apply for the new model using the same logic as build_body
+    _tf = thinking_format
+    if _tf == 'enable_thinking' or (not _tf and (is_longcat(new_model) or is_qwen(new_model) or is_gemini(new_model))):
+        body['enable_thinking'] = is_enabled
+    elif _tf == 'thinking_type' or (not _tf and is_doubao(new_model)):
+        body['thinking'] = {'type': 'enabled' if is_enabled else 'disabled'}
+    elif not _tf and is_glm(new_model):
+        body['thinking'] = {'type': 'enabled' if is_enabled else 'disabled'}
+        if is_enabled:
+            body['temperature'] = 1.0
+        else:
+            body['temperature'] = max(body.get('temperature', 0.7), 0.01)
+    elif not _tf and is_minimax(new_model):
+        if is_enabled:
+            body['reasoning_split'] = True
+    elif not _tf and is_claude(new_model):
+        if is_enabled:
+            body['thinking'] = {'type': 'adaptive'}
+            body['temperature'] = 1.0
+            if effort:
+                body['effort'] = effort
+    # else: standard OpenAI-compatible — no thinking params needed
+
+
+# ═══════════════════════════════════════════════════════════
 #  Public API — dispatch_stream (streaming)
 # ═══════════════════════════════════════════════════════════
 
@@ -304,7 +386,9 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
     from lib.llm_client import (
         AbortedError,
         ContentFilterError,
+        InvalidImageError,
         PermissionError_,
+        PromptTooLongError,
         RateLimitError,
         build_body,
         stream_chat,
@@ -319,7 +403,9 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
     # Detect if it's a pre-built body or raw messages
     is_body = isinstance(body_or_messages, dict) and 'messages' in body_or_messages
 
-    # ★ hard_attempts counts only non-429 failures; 429 loops forever.
+    # ★ hard_attempts counts only non-429 failures; 429 loops forever
+    #   but with a safety cap to prevent spinning for 10+ minutes.
+    _MAX_429_CYCLES = 120  # ~2 minutes at 1s/cycle — enough for RPM window rotation
     hard_attempts = 0
     _429_count = 0
 
@@ -328,6 +414,17 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
         if abort_check and abort_check():
             from lib.llm_client import AbortedError as _AE
             raise _AE('Aborted during dispatch retry')
+
+        # ★ Safety cap on 429 cycling — if we've been rate-limited for
+        #   too many cycles, something is fundamentally wrong (e.g. payload
+        #   too large causing 413 on some slots and 429 on the rest).
+        if _429_count >= _MAX_429_CYCLES:
+            logger.error(
+                '%s dispatch_stream: 429 cycling exceeded safety cap '
+                '(%d cycles) — giving up. Last error: %s',
+                log_prefix, _MAX_429_CYCLES, str(last_err)[:200])
+            raise last_err or RuntimeError(
+                'Rate-limited %d times without success' % _429_count)
 
         total_attempts = hard_attempts + _429_count
         # Log available slots at start of each attempt for debugging
@@ -380,12 +477,19 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
                 from lib.llm_client import _clamp_max_tokens
                 body['max_tokens'] = _clamp_max_tokens(
                     slot.model, body['max_tokens'])
+            # ★ Re-adjust thinking parameters when model family changes.
+            #   Pre-built body may carry thinking.type='adaptive' (Claude)
+            #   but dispatch swapped to Doubao/GLM which expects 'enabled'.
+            _readjust_thinking_params(body, slot.model,
+                                      slot.thinking_format or '')
             # ★ Claude 4.6 prefill guard: if dispatch swapped the model
             #   to Claude on a pre-built body from a non-Claude model,
             #   ensure messages don't end with an assistant message.
-            from lib.llm_client import _strip_trailing_assistant_for_claude, is_claude
+            from lib.llm_client import _downscale_oversized_images, _strip_trailing_assistant_for_claude, is_claude
             if is_claude(slot.model) and body.get('messages'):
                 _strip_trailing_assistant_for_claude(body['messages'], slot.model)
+                # ★ Downscale oversized images for Claude (pre-built body path)
+                _downscale_oversized_images(body['messages'], slot.model)
         else:
             body = build_body(
                 slot.model, body_or_messages,
@@ -494,6 +598,16 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
         except ContentFilterError:
             logger.warning('%s Content filter (HTTP 450) — not retrying', tag, exc_info=True)
             raise   # ★ Same content = same filter, no point retrying
+
+        except PromptTooLongError:
+            logger.warning('%s Prompt/request too large — not retrying on other slots '
+                           '(same payload = same rejection)', tag)
+            raise   # ★ Escape to orchestrator for reactive compaction
+
+        except InvalidImageError:
+            logger.warning('%s Image content error — not retrying on other slots '
+                           '(same image = same rejection)', tag)
+            raise   # ★ Same payload = same rejection on all keys
 
         except Exception as e:
             latency = (time.time() - t0) * 1000

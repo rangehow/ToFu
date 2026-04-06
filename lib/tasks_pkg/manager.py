@@ -248,19 +248,37 @@ def _sync_result_to_conversation(task, meta):
             return
 
         # ── CROSS-TALK DETECTION: verify message count consistency ──
-        # If the DB has significantly more messages than expected, it may indicate
-        # that the frontend injected messages from another conversation's stream.
+        # Normal cause: the frontend saves completed previous turns to the DB
+        # between task creation and task completion, so the DB naturally has more
+        # messages than the snapshot sent to create_task().  We only flag as a
+        # true anomaly when the extra messages contain consecutive same-role
+        # entries (e.g. assistant-assistant or user-user), which cannot arise
+        # from normal turn-taking and may indicate cross-talk or data corruption.
         expected_msg_count = task.get('_initial_msg_count')
         if expected_msg_count is not None and len(messages) > expected_msg_count + 2:
-            logger.error(
-                '%s conv=%s ⛔ MESSAGE COUNT ANOMALY: DB has %d messages but task started '
-                'with %d — %d extra messages may indicate cross-talk injection! '
-                'Extra msgs: %s',
-                pfx, conv_id, len(messages), expected_msg_count,
-                len(messages) - expected_msg_count,
-                [(m.get('role'), len(m.get('content') or ''), m.get('model', 'N/A'))
-                 for m in messages[expected_msg_count:]]
+            extra_msgs = messages[expected_msg_count:]
+            extra_summary = [(m.get('role'), len(m.get('content') or ''), m.get('model', 'N/A'))
+                             for m in extra_msgs]
+            # Check for consecutive same-role messages in the extras
+            has_consecutive_same_role = any(
+                extra_msgs[i].get('role') == extra_msgs[i + 1].get('role')
+                for i in range(len(extra_msgs) - 1)
             )
+            if has_consecutive_same_role:
+                logger.error(
+                    '%s conv=%s ⛔ MESSAGE COUNT ANOMALY with consecutive same-role: '
+                    'DB has %d messages but task started with %d — %d extra. '
+                    'Extra msgs: %s',
+                    pfx, conv_id, len(messages), expected_msg_count,
+                    len(extra_msgs), extra_summary
+                )
+            else:
+                logger.debug(
+                    '%s conv=%s Message count drift (DB=%d, task_start=%d, delta=%d) — '
+                    'normal frontend save of previous turns. Extra msgs: %s',
+                    pfx, conv_id, len(messages), expected_msg_count,
+                    len(extra_msgs), extra_summary
+                )
 
         # Find the last assistant message to fill in
         last_msg = messages[-1]

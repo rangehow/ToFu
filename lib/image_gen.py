@@ -968,7 +968,12 @@ def generate_image(
                 # ── FRIDAY proprietary API paths ──
                 if _is_openai_model(use_model):
                     if is_edit:
-                        result = _generate_openai_edit(
+                        # FRIDAY proxy doesn't support multipart/form-data
+                        # for /images/edits — fall back to Gemini API path
+                        # which sends source_images via JSON inlineData.
+                        logger.info('[ImageGen] FRIDAY+OpenAI edit → falling back to Gemini API path '
+                                    'for source_images (multipart not supported)')
+                        result = _generate_gemini(
                             prompt, use_model, api_key, aspect_ratio,
                             resolution, timeout, source_images=source_images,
                             friday_base=friday_base, extra_headers=_slot_hdrs)

@@ -65,6 +65,13 @@ def chat_start():
     if not messages:
         return jsonify({'error': 'No messages'}), 400
     cleanup_old_tasks()
+
+    # ── Backend dispatch: external backends get their own flow ──
+    backend_name = data.get('config', {}).get('agentBackend', 'builtin')
+    if backend_name and backend_name != 'builtin':
+        return _start_external_backend(data, messages, backend_name)
+
+    # ── Default: built-in Tofu backend (existing flow — ZERO CHANGE) ──
     task = create_task(data.get('convId', ''), messages, data.get('config', {}))
     from lib.tasks_pkg import run_task
     _cfg_model = data.get('config', {}).get('model', '?')
@@ -79,6 +86,138 @@ def chat_start():
         task['status'] = 'error'
         task['error'] = 'Server failed to start task thread'
         return jsonify({'error': 'Failed to start task'}), 500
+    return jsonify({'taskId': task['id']})
+
+
+def _start_external_backend(data, messages, backend_name):
+    """Start a task using an external CLI agent backend (Claude Code, Codex, etc.).
+
+    Validates backend availability/auth, creates a task, then spawns a thread
+    that calls ``backend.start_turn()`` and pipes NormalizedEvents through
+    ``normalized_to_sse()`` into ``append_event()``.
+
+    The existing SSE streaming (``chat_stream``) and polling (``chat_poll``)
+    work unchanged — they read from the same ``task['events']`` queue.
+    """
+    from lib.agent_backends import get_backend
+    from lib.agent_backends.sse_bridge import normalized_to_sse
+    from lib.tasks_pkg.manager import append_event, persist_task_result
+
+    backend = get_backend(backend_name)
+    if backend is None:
+        return jsonify({'error': f'Unknown backend: {backend_name}'}), 400
+    if not backend.is_available():
+        return jsonify({
+            'error': f'{backend.display_name} CLI is not installed. '
+                     f'Install it first, then try again.',
+        }), 400
+    if not backend.is_authenticated():
+        return jsonify({
+            'error': f'{backend.display_name} is not authenticated. '
+                     f'Run the CLI and log in first.',
+        }), 401
+
+    task = create_task(data.get('convId', ''), messages, data.get('config', {}))
+    task['_backend'] = backend_name
+
+    # Extract the last user message text
+    user_message = ''
+    for m in reversed(messages):
+        if m.get('role') == 'user':
+            content = m.get('content', '')
+            if isinstance(content, list):
+                content = ' '.join(
+                    b.get('text', '') for b in content
+                    if isinstance(b, dict) and b.get('type') == 'text'
+                )
+            user_message = content or ''
+            break
+
+    project_path = data.get('config', {}).get('projectPath')
+    conv_id = data.get('convId', '')
+    session_id = backend.get_session_id(conv_id) if conv_id else None
+
+    logger.info('[Chat] Starting EXTERNAL task %s for conv %s backend=%s project=%s session=%s',
+                task['id'], conv_id, backend_name,
+                project_path or 'none', session_id[:16] if session_id else 'none')
+
+    def _run_external():
+        try:
+            accumulated_content = ''
+            accumulated_thinking = ''
+
+            for event in backend.start_turn(
+                task, user_message,
+                project_path=project_path,
+                session_id=session_id,
+            ):
+                # Accumulate text for persistence
+                if event.kind == 'text_delta':
+                    accumulated_content += event.text
+                    with task.get('content_lock', threading.Lock()):
+                        task['content'] = accumulated_content
+                elif event.kind == 'thinking_delta':
+                    accumulated_thinking += event.text
+                    task['thinking'] = accumulated_thinking
+
+                # Translate to SSE and emit
+                sse_event = normalized_to_sse(event)
+                if sse_event:
+                    append_event(task, sse_event)
+
+                # Store session ID from done event
+                if event.session_id:
+                    task['_external_session_id'] = event.session_id
+
+                # Store usage from done event
+                if event.kind == 'done' and event.usage:
+                    task['usage'] = event.usage
+                if event.kind == 'done' and event.finish_reason:
+                    task['finishReason'] = event.finish_reason
+
+            task['status'] = 'done'
+            task['model'] = backend_name  # Show backend name as "model"
+
+            # Ensure done event was emitted
+            has_done = any(
+                e.get('type') == 'done'
+                for e in task.get('events', [])
+            )
+            if not has_done:
+                done_evt = {'type': 'done', 'finishReason': task.get('finishReason', 'stop')}
+                if task.get('usage'):
+                    done_evt['usage'] = task['usage']
+                append_event(task, done_evt)
+
+            # Persist to DB
+            try:
+                persist_task_result(task)
+            except Exception as e:
+                logger.warning('[Chat] Failed to persist external task result: %s', e)
+
+            logger.info('[Chat] External task %s completed — backend=%s content=%dchars',
+                        task['id'][:8], backend_name, len(accumulated_content))
+
+        except Exception as e:
+            logger.error('[Chat] External task %s failed: %s',
+                         task['id'][:8], e, exc_info=True)
+            task['error'] = str(e)
+            task['status'] = 'done'
+            append_event(task, {'type': 'done', 'error': str(e), 'finishReason': 'error'})
+            try:
+                persist_task_result(task)
+            except Exception:
+                pass
+
+    try:
+        threading.Thread(target=_run_external, daemon=True).start()
+    except Exception:
+        logger.exception('[Chat] Failed to start external backend thread for task %s',
+                         task['id'])
+        task['status'] = 'error'
+        task['error'] = 'Server failed to start backend thread'
+        return jsonify({'error': 'Failed to start task'}), 500
+
     return jsonify({'taskId': task['id']})
 
 
@@ -365,6 +504,19 @@ def chat_abort(task_id):
         logger.info('[Chat] Task %s ABORT RECEIVED — conv=%s model=%s status=%s '
                     'elapsed=%.1fs content=%dchars thinking=%dchars',
                     task_id, _conv_id, _model, _status, _elapsed, _content_len, _thinking_len)
+    # ── External backend: also signal the subprocess to terminate ──
+    _backend_name = task.get('_backend')
+    if _backend_name and _backend_name != 'builtin':
+        try:
+            from lib.agent_backends import get_backend
+            backend = get_backend(_backend_name)
+            if backend:
+                backend.abort(task_id)
+                logger.info('[Chat] Sent abort to external backend %s for task %s',
+                            _backend_name, task_id[:8])
+        except Exception as e:
+            logger.warning('[Chat] Failed to abort external backend %s: %s',
+                           _backend_name, e)
     return jsonify({'ok': True})
 
 

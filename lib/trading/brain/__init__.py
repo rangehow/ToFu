@@ -30,8 +30,6 @@ Architecture note (2026-04):
 
 import logging
 
-from lib._pkg_utils import build_facade
-
 _logger = logging.getLogger(__name__)
 
 __all__: list[str] = []

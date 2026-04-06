@@ -1422,8 +1422,15 @@ function renderFinishInfo(msg) {
     // ★ API rounds info
     const rounds = msg.apiRounds || [];
     const numRounds = rounds.length;
-    if (inp > 0 || out > 0) {
-      let tokText = `${fmt(inp)} → ${fmt(out)}`;
+    /* ★ Compute display input: for Anthropic-style APIs, prompt_tokens is
+     *   only the uncached portion. The total input = uncached + cw + cr. */
+    const _cw0 = u.cache_write_tokens || u.cache_creation_input_tokens || 0;
+    const _cr0 = u.cache_read_tokens || u.cache_read_input_tokens || 0;
+    const _displayInp = (inp <= _cw0 + _cr0 && (_cw0 > 0 || _cr0 > 0))
+      ? inp + _cw0 + _cr0   /* Anthropic: inp is uncached only */
+      : inp;                /* OpenAI: inp is already total */
+    if (_displayInp > 0 || out > 0) {
+      let tokText = `${fmt(_displayInp)} → ${fmt(out)}`;
       if (thk > 0)
         tokText += ` <span style="color:#a78bfa;opacity:0.8">(${fmt(thk)}思)</span>`;
       if (numRounds > 1)
@@ -1461,9 +1468,20 @@ function renderFinishInfo(msg) {
         });
         tipLines.push("");
       }
-      tipLines.push(
-        `Input: ${fmt(inp)} tokens → ${fCny(costInfo.inputCostCny)}`,
-      );
+      /* ★ Show uncached input correctly — for Anthropic-style APIs where
+       *   prompt_tokens is only the uncached residual, show that as the
+       *   standard-rate input line, not the confusing raw prompt_tokens total */
+      const _si = costInfo.inputTokens || 0;
+      const _totalInp = costInfo.totalInputTokens || inp;
+      if (_totalInp > _si && _si >= 0) {
+        tipLines.push(
+          `Input: ${fmt(_si)} tokens → ${fCny(costInfo.inputCostCny)}`,
+        );
+      } else {
+        tipLines.push(
+          `Input: ${fmt(inp)} tokens → ${fCny(costInfo.inputCostCny)}`,
+        );
+      }
       if (cw > 0)
         tipLines.push(
           `Cache write: ${fmt(cw)} tokens → ${fCny(costInfo.cacheWriteCostCny)}`,
@@ -3089,7 +3107,7 @@ async function saveEditAndResend(idx) {
   }
 
   /* ★ FIX: Persist the truncated messages to server BEFORE starting the new task. */
-  await syncConversationToServer(conv);
+  await syncConversationToServer(conv, { allowTruncate: true });
   await startAssistantResponse(conv.id);
 }
 

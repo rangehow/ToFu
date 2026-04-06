@@ -6,31 +6,28 @@ Decomposed from monolithic lib/project.py into:
   - modifications.py  — Session/undo/redo system
   - scanner.py        — File scanning and tree building
   - tools.py          — Tool implementations and dispatch
-  - indexer.py        — AI-powered file indexing
+  - indexer.py        — Context generation for prompt injection
 """
 
 __all__ = [
     # Config & State
-    '_lock', '_state', '_ScanAborted',
+    '_lock', '_state',
     'get_state', 'get_project_path',
     'get_recent_projects', 'save_recent_project', 'clear_recent_projects',
     'IGNORE_DIRS', 'IGNORE_FILES', 'BINARY_EXTENSIONS',
     'MAX_FILE_SIZE', 'MAX_SCAN_FILES', 'MAX_TREE_ENTRIES', 'MAX_READ_CHARS',
     'MAX_GREP_RESULTS', 'LINE_COUNT_LIMIT',
-    'INDEX_MODEL', 'PARALLEL_INDEX_THRESHOLD', 'LARGE_FILE_THRESHOLD',
-    'INDEX_DIR', 'SESSIONS_DIR', 'SKIP_INDEX_THRESHOLD',
-    'rate_limiter',
+    'SESSIONS_DIR',
     'MAX_COMMAND_TIMEOUT', 'MAX_COMMAND_OUTPUT', 'SHELL_PREFIX',
     'DANGEROUS_PATTERNS', 'CODE_EXTENSIONS', 'DATA_EXTENSIONS',
-    'MAX_INDEX_FILE_SIZE', 'MAX_DATA_FILE_PREVIEW',
+    'MAX_DATA_FILE_PREVIEW',
     # Modifications / Undo
     'get_modifications', 'get_conv_ids_with_modifications',
     'undo_conv_modifications', 'undo_task_modifications', 'undo_all_modifications',
-    '_record_modification', '_schedule_index_update',
+    '_record_modification',
     # Scanner
-    'set_project', 'set_project_paths', 'clear_project', 'rescan',
+    'set_project', 'set_project_paths', 'ensure_project_state', 'clear_project', 'rescan',
     'add_project_root', 'remove_project_root', 'list_roots',
-    '_scan_worker', '_scan_and_build_tree',
     '_should_ignore', '_is_data_file', '_is_likely_data_content',
     '_fmt_size', '_safe_path',
     # Multi-Root Config
@@ -41,9 +38,8 @@ __all__ = [
     'tool_write_file', 'tool_apply_diff', 'tool_run_command',
     'execute_tool', 'execute_standalone_command',
     'project_tool_display', 'browse_directory',
-    # Indexer
-    'start_indexing', 'get_context_for_prompt',
-    '_load_cached_index', '_save_index',
+    # Context
+    'get_context_for_prompt',
 ]
 
 # ── Config & State ──
@@ -55,27 +51,20 @@ from lib.project_mod.config import (
     DATA_EXTENSIONS,
     IGNORE_DIRS,
     IGNORE_FILES,
-    INDEX_DIR,
-    INDEX_MODEL,
-    LARGE_FILE_THRESHOLD,
     LINE_COUNT_LIMIT,
     MAX_COMMAND_OUTPUT,
     MAX_COMMAND_TIMEOUT,
     MAX_DATA_FILE_PREVIEW,
     MAX_FILE_SIZE,
     MAX_GREP_RESULTS,
-    MAX_INDEX_FILE_SIZE,
     MAX_READ_CHARS,
     MAX_SCAN_FILES,
     MAX_TREE_ENTRIES,
-    PARALLEL_INDEX_THRESHOLD,
     SESSIONS_DIR,
     SHELL_PREFIX,
-    SKIP_INDEX_THRESHOLD,
     _lock,
     _make_root_state,
     _roots,
-    _ScanAborted,
     _state,
     clear_recent_projects,
     get_project_path,
@@ -83,23 +72,18 @@ from lib.project_mod.config import (
     get_root_path,
     get_roots,
     get_state,
-    rate_limiter,
     resolve_namespaced_path,
     save_recent_project,
 )
 
-# ── Indexer ──
+# ── Context ──
 from lib.project_mod.indexer import (
-    _load_cached_index,
-    _save_index,
     get_context_for_prompt,
-    start_indexing,
 )
 
 # ── Modifications / Undo ──
 from lib.project_mod.modifications import (
     _record_modification,
-    _schedule_index_update,
     get_conv_ids_with_modifications,
     get_modifications,
     undo_all_modifications,
@@ -107,17 +91,16 @@ from lib.project_mod.modifications import (
     undo_task_modifications,
 )
 
-# ── Scanner ──
+# ── Scanner (path registration, no background scan) ──
 from lib.project_mod.scanner import (
     _fmt_size,
     _is_data_file,
     _is_likely_data_content,
     _safe_path,
-    _scan_and_build_tree,
-    _scan_worker,
     _should_ignore,
     add_project_root,
     clear_project,
+    ensure_project_state,
     list_roots,
     remove_project_root,
     rescan,

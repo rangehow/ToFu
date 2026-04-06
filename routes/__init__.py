@@ -22,6 +22,7 @@ from .skills import skills_bp
 from .swarm import swarm_bp
 from .translate import translate_bp
 from .upload import upload_bp
+from .agent_backends import agent_backends_bp
 
 # ── Core (always-on) blueprints ──
 ALL_BLUEPRINTS = [
@@ -41,6 +42,7 @@ ALL_BLUEPRINTS = [
     endpoint_bp,
     daily_report_bp,
     oauth_bp,
+    agent_backends_bp,
 ]
 
 # ── Trading blueprints (conditionally loaded) ──

@@ -159,10 +159,11 @@ def pre_backtest_evaluate(
         _fetch_nav_history = trading_provider.fetch_price_history
         _fetch_info = trading_provider.fetch_asset_info
     else:
-        def _fetch_nav_history(code, start, end):
-            return fetch_price_history(
-                        code, start, end, client=client,
-                    )
+        _fetch_nav_history = (
+            lambda code, start, end: fetch_price_history(
+                code, start, end, client=client,
+            )
+        )
         _fetch_info = lambda code: fetch_asset_info(code, client=client)  # noqa: E731
 
     results = {}

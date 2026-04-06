@@ -6,7 +6,8 @@
 
 <p align="center">
   多模型对话 · 自主智能体 · 项目协作 · 多智能体集群<br/>
-  每日报告与待办 · 浏览器插件 · 桌面代理 · 飞书机器人
+  每日报告与待办 · 浏览器插件 · 桌面代理 · 飞书机器人<br/>
+  <strong>🔀 CLI 后端切换 — 支持 Claude Code 或 Codex 作为智能体引擎</strong>
 </p>
 
 <p align="center">
@@ -90,6 +91,18 @@ Tofu 是一个完全自托管的 AI 助手，采用 **Flask 后端** + **原生 
 - **SCHEDULER 徽章** — 显示在顶部状态栏；点击可查看所有活跃的主动代理及其最近运行日志
 - 通过工具子菜单中的 🕐 **定时任务** 开关启用
 
+### 🔀 CLI 后端切换（新功能）
+
+在 **Tofu 内置智能体**、**Claude Code** 和 **OpenAI Codex** 之间自由切换编码智能体后端 — 直接在 UI 中操作。
+
+- **纯前端模式** — 使用 Claude Code 或 Codex 时，Tofu 仅作为 Web UI；外部 CLI 使用自己的认证处理所有 LLM 调用、工具执行和上下文管理
+- **零配置** — 安装 CLI，在终端登录一次，Tofu 自动检测
+- **能力驱动的 UI** — 界面自动适配：使用外部后端时，模型选择器、思维深度、Tofu 专属功能（图片生成、浏览器、集群…）自动隐藏
+- **会话持久化** — 通过后端会话 ID 映射，多轮对话在页面刷新后保持连贯
+- **一键切换** — 点击顶部栏的后端选择器即可切换；每个对话记忆其使用的后端
+
+> 🧪 **立即体验**：切换到 [`cli_switch`](https://github.com/rangehow/ToFu/tree/cli_switch) 分支！
+
 ### 更多特性
 
 - **技能系统** — 持久化的可复用知识（Markdown 文件）—— 助手跨会话学习项目规范、Bug 模式和工作流
@@ -104,46 +117,87 @@ Tofu 是一个完全自托管的 AI 助手，采用 **Flask 后端** + **原生 
 
 ## 快速开始
 
-### 前提条件
+### 方式 A：一键安装（推荐）
 
-- Python 3.10+
-- conda（用于安装 PostgreSQL 服务器）
+支持 **Linux**、**macOS** 和 **Windows**。只需 Python 3.10+ 和 Git — 无需 conda，无需管理员权限。
 
-### 1. 克隆并安装
+**Linux / macOS：**
+```bash
+curl -fsSL https://raw.githubusercontent.com/rangehow/ToFu/main/install.sh | bash
+```
+
+**Windows (PowerShell)：**
+```powershell
+irm https://raw.githubusercontent.com/rangehow/ToFu/main/install.ps1 | iex
+```
+
+**或直接运行跨平台安装器**（任何安装了 Python 3.10+ 的系统）：
+```bash
+git clone https://github.com/rangehow/ToFu.git && cd ToFu
+python install.py
+```
+
+自动完成：创建虚拟环境、安装所有依赖、定位/安装 PostgreSQL、启动服务器。就绪后打开 **http://localhost:15000**。
+
+**带参数：**
+```bash
+python install.py --api-key sk-xxx --port 8080   # 预配置 API Key
+python install.py --no-launch                     # 仅安装不启动
+python install.py --docker                        # 使用 Docker
+python install.py --skip-playwright               # 跳过浏览器自动化
+```
+
+### 方式 B：Docker（零依赖）
+
+```bash
+git clone https://github.com/rangehow/ToFu.git && cd ToFu
+docker compose up -d
+```
+
+或直接拉取镜像（镜像发布后）：
+```bash
+docker run -d -p 15000:15000 -v tofu-data:/app/data --name tofu ghcr.io/rangehow/tofu:latest
+```
+
+打开 **http://localhost:15000** — 搞定。所有数据通过 Docker volume 持久化。
+
+### 方式 C：手动安装
+
+<details>
+<summary>逐步操作，完全控制</summary>
+
+**前提条件：** Python 3.10+，PostgreSQL 16+
 
 ```bash
 git clone https://github.com/rangehow/ToFu.git
 cd ToFu
 
-# 更新 conda 到最新版本
-conda update -n base -c defaults conda
+# 创建环境（任选其一）
+python -m venv .venv && source .venv/bin/activate   # 标准 venv
+# 或者: conda create -n tofu python=3.12 -y && conda activate tofu
 
-# 创建名为 'tofu' 的新环境，安装 Python 3.12
-conda create -n tofu python=3.12 -y
-
-# 激活环境
-conda activate tofu
-
-# 安装 PostgreSQL 18+ 服务器（用户态，无需 root 权限）
-conda install -c conda-forge postgresql>=18
+# 安装 PostgreSQL（如尚未安装）
+# macOS:   brew install postgresql@16
+# Ubuntu:  sudo apt install postgresql
+# Windows: https://www.postgresql.org/download/windows/
+# conda:   conda install -c conda-forge postgresql>=16
 
 # 安装 Python 依赖
 pip install -r requirements.txt
 
-# 安装浏览器自动化引擎（高级抓取功能需要）
-playwright install chromium
-```
+# 可选：浏览器自动化（高级网页抓取）
+pip install playwright && playwright install chromium
 
-> PostgreSQL 以本地用户态进程运行 — 无需 `sudo`，无需系统服务。
-> 首次运行 `python server.py` 时，数据库会自动初始化（`initdb`、建表、端口选择）。
-
-### 2. 启动
-
-```bash
+# 启动
 python server.py
 ```
 
+</details>
+
 在浏览器中打开 **http://localhost:15000** — 就这么简单！所有配置都可以在设置界面中完成。
+
+> **PostgreSQL** 以本地用户态进程运行 — 无需 `sudo`，无需系统服务。
+> 首次运行 `python server.py` 时，数据库会自动初始化（`initdb`、建表、端口选择）。
 
 #### 自动依赖修复
 
@@ -268,6 +322,7 @@ cp .env.example .env
 ├── .env.example               环境变量模板
 │
 ├── lib/                       核心库
+│   ├── agent_backends/        多后端智能体切换（内置/CC/Codex）
 │   ├── llm_client.py          LLM API 客户端（流式，重试）
 │   ├── llm_dispatch/          多密钥多模型调度器
 │   ├── database.py            PostgreSQL（自动初始化）
@@ -296,6 +351,63 @@ cp .env.example .env
 ---
 
 ## 高级用法
+
+### CLI 后端切换 — Claude Code / Codex
+
+Tofu 可以作为外部编码智能体的纯 Web 前端。无需使用 Tofu 内置的编排器，你可以委托给 **Claude Code** 或 **OpenAI Codex** — 它们使用自己的认证处理 LLM 调用、工具执行和上下文管理。
+
+#### 安装 Claude Code
+
+```bash
+# 通过 npm 安装
+npm install -g @anthropic-ai/claude-code
+
+# 登录（仅需一次）
+claude auth login
+# 按浏览器提示用你的 Claude 账号认证
+
+# 验证
+claude --version
+```
+
+#### 安装 Codex
+
+```bash
+# 通过 npm 安装
+npm install -g @openai/codex
+
+# 登录（仅需一次）— 需要 OpenAI API key 或 ChatGPT Plus 订阅
+codex auth login
+
+# 验证
+codex --version
+```
+
+#### 在 Tofu 中使用
+
+1. 启动 Tofu：`python server.py`
+2. 点击顶部栏的**后端选择器**（🤖）
+3. 可用的后端显示 ✅ 标志，不可用的显示 ❌
+4. 选择 **Claude Code** 或 **Codex** — UI 自动适配：
+   - 模型选择器、思维深度、搜索开关自动隐藏（CLI 自行处理）
+   - Tofu 专属功能（图片生成、浏览器插件、集群、定时任务）置灰
+5. 发送消息 — Tofu 启动 CLI 子进程，流式输出并渲染在聊天界面中
+
+#### 各后端功能对比
+
+| 功能 | 内置 (Tofu) | Claude Code | Codex |
+|------|:-:|:-:|:-:|
+| 对话与流式输出 | ✅ | ✅ | ✅ |
+| 网页搜索 | ✅ | ✅ (CC 自带) | ✅ (Codex 自带) |
+| 文件操作 | ✅ | ✅ (CC 自带) | ✅ (Codex 自带) |
+| 代码执行 | ✅ | ✅ (Bash) | ✅ (exec) |
+| 模型选择 | ✅ | — (CC 决定) | — (Codex 决定) |
+| 图片生成 | ✅ | ❌ | ❌ |
+| 浏览器插件 | ✅ | ❌ | ❌ |
+| 多智能体集群 | ✅ | ❌ | ❌ |
+| 桌面代理 | ✅ | ❌ | ❌ |
+
+> **注意**：CLI 必须安装在与 Tofu 服务器**同一台机器**上。Tofu 通过子进程启动智能体。
 
 ### 项目协作
 

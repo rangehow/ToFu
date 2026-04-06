@@ -3,35 +3,19 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.backends._legacy:_Backend"
 
 [project]
-name = "miaobi"
-version = "0.1.0"
-description = "MiaoBi (妙笔) — AI-powered novel writing system with deep context management and preference learning"
+name = "tofu"
+version = "0.5.1"
+description = "Tofu (豆腐) — Self-hosted AI assistant with Flask backend and vanilla JS frontend"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
-dependencies = [
-    "openai>=1.0",
-    "pyyaml>=6.0",
-    "click>=8.0",
-    "fastapi>=0.100",
-    "uvicorn>=0.20",
-    "sse-starlette>=1.0",
-    "tiktoken>=0.5",
-]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
-    "pytest-asyncio>=0.21",
+    "ruff",
 ]
-
-[project.scripts]
-miaobi = "miaobi.api.cli:main"
-
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["miaobi*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -39,3 +23,9 @@ python_files = "test_*.py"
 python_classes = "Test*"
 python_functions = "test_*"
 addopts = "-v --tb=short"
+markers = [
+    "unit: Pure unit tests (no server, no DB)",
+    "api: API integration tests (requires PostgreSQL)",
+    "visual: Visual E2E tests (requires live server + Chromium)",
+    "slow: Long-running tests (opt-in)",
+]

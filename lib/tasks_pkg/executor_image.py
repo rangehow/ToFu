@@ -225,7 +225,7 @@ def _save_image_to_project(image_b64, mime_type, output_path, project_path,
     """Save base64 image to a path inside the active project directory."""
     import base64 as _b64
 
-    from lib.project_mod.modifications import _record_modification, _schedule_index_update
+    from lib.project_mod.modifications import _record_modification
     from lib.project_mod.scanner import _safe_path
     from lib.project_mod.tools import _touch_for_vscode
 
@@ -271,7 +271,6 @@ def _save_image_to_project(image_b64, mime_type, output_path, project_path,
             original_content=original_content if existed else None,
             conv_id=conv_id, task_id=task_id,
         )
-        _schedule_index_update(project_path, output_path)
 
         return output_path
     except Exception as e:
@@ -342,14 +341,13 @@ def _convert_to_svg(saved_url: str, project_save_path: str,
 
                 # Record modification for undo support
                 try:
-                    from lib.project_mod.modifications import _record_modification, _schedule_index_update
+                    from lib.project_mod.modifications import _record_modification
                     from lib.project_mod.tools import _touch_for_vscode
                     _record_modification(
                         project_path, 'write_file', svg_rel,
                         original_content=None,
                         conv_id=conv_id, task_id=task_id,
                     )
-                    _schedule_index_update(project_path, svg_rel)
                     _touch_for_vscode(svg_abs)
                 except Exception as e:
                     logger.debug('[Tool:generate_image] SVG mod tracking failed: %s', e)

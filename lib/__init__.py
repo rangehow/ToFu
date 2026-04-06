@@ -164,6 +164,37 @@ def _resolve_trading_enabled():
     return False  # default OFF
 
 TRADING_ENABLED = _resolve_trading_enabled()
+
+
+# ── Cache Extended TTL (default ON — use 1h TTL for stable prefix) ──
+# When enabled, system prompt + tools get 1-hour cache TTL, while the
+# conversation tail keeps the default 5-minute TTL.  This eliminates
+# server-side TTL evictions for the static prefix in long conversations.
+# Requires Anthropic beta header: extended-cache-ttl-2025-04-11
+# Priority: env-var > features.json > default(ON)
+def _resolve_cache_extended_ttl():
+    """Resolve CACHE_EXTENDED_TTL setting.
+
+    Priority: env-var > data/config/features.json > default(ON).
+    """
+    env_val = os.environ.get('CACHE_EXTENDED_TTL')
+    if env_val is not None:
+        return env_val == '1'
+    _features_path = _config_path('features.json')
+    try:
+        if os.path.isfile(_features_path):
+            import json as _json
+            with open(_features_path) as f:
+                feats = _json.load(f)
+            if isinstance(feats, dict) and 'cache_extended_ttl' in feats:
+                return bool(feats['cache_extended_ttl'])
+    except Exception as _e:
+        import logging as _logging
+        _logging.getLogger(__name__).debug('Could not read features.json: %s', _e)
+    return True  # default ON — 1h TTL for stable prefix
+
+CACHE_EXTENDED_TTL = _resolve_cache_extended_ttl()
+
 FETCH_TOP_N            = int(os.environ.get('FETCH_TOP_N', '6'))
 FETCH_TIMEOUT          = int(os.environ.get('FETCH_TIMEOUT', '15'))
 FETCH_MAX_CHARS_SEARCH = int(os.environ.get('FETCH_MAX_CHARS_SEARCH', '60000'))

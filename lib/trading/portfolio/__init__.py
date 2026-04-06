@@ -7,8 +7,6 @@ Re-exports key functions from existing modules for backward compatibility.
 
 import logging
 
-from lib._pkg_utils import build_facade
-
 _logger = logging.getLogger(__name__)
 
 __all__: list[str] = []

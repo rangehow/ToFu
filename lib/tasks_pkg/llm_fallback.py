@@ -232,6 +232,31 @@ def _llm_call_with_fallback(task, body, model, round_num, max_tokens,
                              'falling through to model fallback',
                              tid, _attempts, _REACTIVE_COMPACT_MAX_RETRIES)
 
+        # InvalidImageError — image content rejected (too large, corrupt, etc.)
+        # Fallback to another model won't help (same image = same rejection).
+        from lib.llm_client import InvalidImageError
+        if isinstance(e, InvalidImageError):
+            err_str = str(e)[:300]
+            logger.warning('[%s] 🖼️ INVALID_IMAGE at round %d model=%s: %s',
+                           tid, round_num, model, err_str)
+            # Extract a user-friendly message
+            _user_msg = ('⚠️ Image error: one or more images in this conversation '
+                         'exceed the API size limit. Please try with a smaller image '
+                         'or remove the oversized image from the conversation.')
+            if 'many-image' in err_str.lower():
+                _user_msg = ('⚠️ Image error: too many large images. When sending 5+ images, '
+                             'each must be under 2000×2000 pixels. Please resize or remove some images.')
+            return {
+                'assistant_msg': {'role': 'assistant', 'content': _user_msg},
+                'finish_reason': 'error',
+                'usage': None,
+                'model': model,
+                'preset': preset,
+                'thinking_enabled': thinking_enabled,
+                '_loop_action': 'break',
+                '_loop_exit_reason': f'invalid_image_round_{round_num}',
+            }
+
         # ContentFilterError (HTTP 450) — content policy violation.
         # Fallback to another model won't help (same content = same filter).
         # Return content_filter finish_reason so orchestrator shows the right message.

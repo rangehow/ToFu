@@ -340,7 +340,10 @@ def trading_page():
 
 @common_bp.route('/api/features')
 def features():
-    return jsonify({'trading_enabled': _lib.TRADING_ENABLED})
+    return jsonify({
+        'trading_enabled': _lib.TRADING_ENABLED,
+        'cache_extended_ttl': getattr(_lib, 'CACHE_EXTENDED_TTL', False),
+    })
 
 
 @common_bp.route('/api/features', methods=['POST'])
@@ -363,6 +366,13 @@ def save_features():
         if old_val != new_val:
             changed.append('trading_enabled')
             logger.info('[Features] trading_enabled: %s → %s', old_val, new_val)
+    if 'cache_extended_ttl' in data:
+        new_val = bool(data['cache_extended_ttl'])
+        old_val = existing.get('cache_extended_ttl', None)
+        existing['cache_extended_ttl'] = new_val
+        if old_val != new_val:
+            changed.append('cache_extended_ttl')
+            logger.info('[Features] cache_extended_ttl: %s → %s', old_val, new_val)
     try:
         os.makedirs(os.path.dirname(features_path), exist_ok=True)
         with open(features_path, 'w') as f:
@@ -377,6 +387,10 @@ def save_features():
         logger.info('[Features] Hot-reloaded TRADING_ENABLED → %s '
                     '(note: trading route registration requires restart)',
                     _lib.TRADING_ENABLED)
+    # Hot-reload CACHE_EXTENDED_TTL — takes effect on next LLM request
+    if 'cache_extended_ttl' in changed:
+        _lib.CACHE_EXTENDED_TTL = existing.get('cache_extended_ttl', True)
+        logger.info('[Features] Hot-reloaded CACHE_EXTENDED_TTL → %s', _lib.CACHE_EXTENDED_TTL)
 
     return jsonify({'ok': True, 'saved': existing,
                     'needs_restart': False, 'changed': changed})

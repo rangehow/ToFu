@@ -2,7 +2,6 @@
 import hashlib
 import json
 import os
-import threading
 import time
 
 from lib.log import get_logger
@@ -23,9 +22,6 @@ def _nudge_vscode(filepath):
     except OSError as e:
         logger.debug('Failed to bump mtime for VS Code watcher on %s: %s', filepath, e)
 
-# Debounced auto-index on file changes — per-root tracking
-_dirty_by_root = {}   # {abs_base_path: set of rel_paths}
-_dirty_timer = None
 
 def _get_session_dir(base_path):
     """Get session directory for storing modification history."""
@@ -109,155 +105,7 @@ def _record_modification(base_path, mod_type, path, original_content=None, rever
             logger.error('Failed to save modifications: %s', e, exc_info=True)
 
     logger.debug('Recorded modification: %s %s (conv=%s task=%s)', mod_type, path, conv_id or '?', task_id or '?')
-    # ★ Schedule smart index update for the changed file
-    _schedule_index_update(base_path, path)
     return True
-
-
-# ═══════════════════════════════════════════════════════
-#  ★ Smart Auto-Update Index (debounced, background, per-root isolated)
-# ═══════════════════════════════════════════════════════
-
-def _schedule_index_update(base_path, rel_path):
-    """Schedule a debounced re-index of modified files (3s delay to batch changes).
-
-    Each root's dirty files are tracked independently so that switching
-    the primary project or removing an extra root never mixes file
-    descriptions from different projects.
-    """
-    global _dirty_timer
-    with _lock:
-        # Check whether this root has an active index to update.
-        # Could be primary (_state) or an extra root (_roots).
-        from lib.project_mod.config import _roots
-        has_index = False
-        if _state.get('path') == base_path and _state.get('index'):
-            has_index = True
-        else:
-            for _rn, rs in _roots.items():
-                if rs['path'] == base_path and rs.get('index'):
-                    has_index = True
-                    break
-        if not has_index:
-            return
-        _dirty_by_root.setdefault(base_path, set()).add(rel_path)
-        # Cancel previous timer and reset (debounce)
-        if _dirty_timer is not None:
-            _dirty_timer.cancel()
-        _dirty_timer = threading.Timer(3.0, _run_index_update)
-        _dirty_timer.daemon = True
-        _dirty_timer.start()
-
-
-def cancel_pending_index_updates():
-    """Cancel any pending debounced index updates.
-
-    Called when the primary project changes so that stale dirty-file
-    sets from a previous project are never applied to the new one.
-    """
-    global _dirty_timer
-    with _lock:
-        if _dirty_timer is not None:
-            _dirty_timer.cancel()
-            _dirty_timer = None
-        _dirty_by_root.clear()
-    logger.debug('Cancelled all pending index updates')
-
-
-def _run_index_update():
-    """Background: re-index only the dirty files and merge into *their own* root's index."""
-    from lib.project_mod.config import _roots
-
-    global _dirty_timer
-    with _lock:
-        if _state.get('indexing'):
-            # Full indexing running — skip, it'll pick up changes
-            _dirty_by_root.clear()
-            return
-        # Snapshot and clear all pending dirty entries
-        pending = {bp: set(fset) for bp, fset in _dirty_by_root.items()}
-        _dirty_by_root.clear()
-        _dirty_timer = None
-
-    if not pending:
-        return
-
-    for base_path, files in pending.items():
-        # Resolve the correct index object for this base_path.
-        # It may live in _state (primary) or in _roots (extra root).
-        with _lock:
-            index = None
-            if _state.get('path') == base_path:
-                index = _state.get('index')
-            else:
-                for _rn, rs in _roots.items():
-                    if rs['path'] == base_path:
-                        index = rs.get('index')
-                        break
-        if not index:
-            logger.debug('Skipping dirty update for %s — no active index', base_path)
-            continue
-
-        _update_index_for_root(base_path, files, index)
-
-
-def _update_index_for_root(base_path, files, index):
-    """Re-index *files* for a single root and merge results into *index*."""
-    from lib.project_mod.config import INDEX_MODEL
-    from lib.project_mod.indexer import _call_llm, _extract_json, _file_hash, _save_index
-
-    MAX_CHARS = 3000
-    contents = []  # [(rel, text)]
-    new_hashes = {}
-    for rel in files:
-        fp = os.path.join(base_path, rel)
-        if not os.path.isfile(fp):
-            # File deleted — remove from index
-            index.get('files', {}).pop(rel, None)
-            index.get('fileHashes', {}).pop(rel, None)
-            continue
-        try:
-            curr_hash = _file_hash(fp)
-            new_hashes[rel] = curr_hash
-            with open(fp, errors='replace') as f:
-                lines = []
-                for _ in range(60):
-                    ln = f.readline()
-                    if not ln:
-                        break
-                    lines.append(ln)
-            text = ''.join(lines)
-            if len(text) > MAX_CHARS:
-                text = text[:MAX_CHARS] + '\n…'
-            contents.append((rel, text))
-        except Exception as e:
-            logger.debug('[Modifications] file read failed for %s during re-index: %s', rel, e, exc_info=True)
-            contents.append((rel, '(could not read)'))
-
-    if not contents:
-        # Only deletions — save updated index
-        _save_index(base_path, index)
-        return
-
-    # Call LLM to describe the changed files
-    prompt = (
-        'Briefly describe each file\'s purpose (1 sentence max per file). '
-        'Reply ONLY with valid JSON: {"path": "description", ...}\n\n')
-    for rel, text in contents:
-        prompt += f'=== {rel} ===\n{text}\n\n'
-
-    try:
-        resp_text = _call_llm([{'role': 'user', 'content': prompt}], INDEX_MODEL)
-        parsed = _extract_json(resp_text)
-        if parsed:
-            index.setdefault('files', {}).update(parsed)
-            index.setdefault('fileHashes', {}).update(new_hashes)
-            _save_index(base_path, index)
-            logger.info('Auto-updated index for %s: %s', base_path, list(parsed.keys()))
-        else:
-            logger.info('Auto-update index: LLM returned no valid JSON')
-    except Exception as e:
-        logger.error('Auto-update index error for %s: %s', base_path, e, exc_info=True)
 
 
 def get_modifications(base_path, conv_id=None):
@@ -392,11 +240,6 @@ def undo_conv_modifications(base_path, conv_id):
         _state['modifications'] = [m for m in _state['modifications'] if m.get('convId') != conv_id]
     _save_modifications(session_dir)
 
-    # Schedule re-index for affected files
-    affected_files = set(m['path'] for m in conv_mods)
-    for f in affected_files:
-        _schedule_index_update(base_path, f)
-
     return {
         'ok': True,
         'undone': len(undone),
@@ -429,11 +272,6 @@ def undo_task_modifications(base_path, task_id):
     with _lock:
         _state['modifications'] = [m for m in _state['modifications'] if m.get('taskId') != task_id]
     _save_modifications(session_dir)
-
-    # Schedule re-index for affected files
-    affected_files = set(m['path'] for m in task_mods)
-    for f in affected_files:
-        _schedule_index_update(base_path, f)
 
     return {
         'ok': True,

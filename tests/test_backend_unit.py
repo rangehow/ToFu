@@ -12,6 +12,7 @@ Run:  pytest tests/test_backend_unit.py -m unit
 """
 from __future__ import annotations
 
+import json
 import os
 import sys
 
@@ -157,7 +158,12 @@ class TestProtocols:
 
     def test_protocols_importable(self):
         from lib.protocols import (
+            BodyBuilder,
+            FetchService,
             LLMService,
+            TaskEventSink,
+            ToolHandler,
+            TradingDataProvider,
         )
         # All should be Protocol classes
         assert hasattr(LLMService, "__protocol_attrs__") or hasattr(LLMService, "_is_protocol")

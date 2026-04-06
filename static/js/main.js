@@ -13,6 +13,210 @@
 /* ── Race-condition guard: incremented on every send or conversation switch ── */
 let _sendGeneration = 0;
 
+/* ═══════════════════════════════════════════
+   Agent Backend Selection
+   ═══════════════════════════════════════════ */
+let activeAgentBackend = 'builtin';       // 'builtin' | 'claude-code' | 'codex'
+let _agentBackendCapabilities = null;     // BackendCapabilities from server
+let _agentBackendCache = null;            // Cached /api/agent-backends/status result
+
+/**
+ * Fetch backend status from server and cache it.
+ * @returns {Promise<Array>} List of backend info objects.
+ */
+async function _fetchAgentBackends() {
+  try {
+    const resp = await fetch(apiUrl('/api/agent-backends/status'));
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    _agentBackendCache = data.backends || [];
+    return _agentBackendCache;
+  } catch (e) {
+    console.error('[AgentBackends] Failed to fetch status:', e);
+    return _agentBackendCache || [];
+  }
+}
+
+/**
+ * Switch the active agent backend.
+ * @param {string} backendName - 'builtin', 'claude-code', or 'codex'
+ */
+async function switchAgentBackend(backendName) {
+  if (backendName === activeAgentBackend) return;
+
+  // Validate availability
+  const backends = _agentBackendCache || await _fetchAgentBackends();
+  const backend = backends.find(b => b.name === backendName);
+  if (!backend) {
+    if (typeof debugLog === 'function') debugLog(`Unknown backend: ${backendName}`, 'error');
+    return;
+  }
+  if (!backend.available) {
+    if (typeof debugLog === 'function')
+      debugLog(`${backend.displayName || backendName} is not installed`, 'error');
+    return;
+  }
+  if (!backend.authenticated) {
+    if (typeof debugLog === 'function')
+      debugLog(`${backend.displayName || backendName} is not authenticated. Run the CLI and log in first.`, 'error');
+    return;
+  }
+
+  activeAgentBackend = backendName;
+  _agentBackendCapabilities = backend.capabilities || {};
+
+  // Update UI
+  _applyAgentBackendUI();
+  _applyBackendCapabilities();
+  _saveConvToolState();
+
+  if (typeof debugLog === 'function')
+    debugLog(`Switched to ${backend.displayName || backendName}`, 'success');
+}
+
+/**
+ * Update the backend selector button states.
+ */
+function _applyAgentBackendUI() {
+  document.querySelectorAll('.agent-backend-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.backend === activeAgentBackend);
+  });
+  // Show backend indicator in header
+  const indicator = document.getElementById('backendIndicator');
+  if (indicator) {
+    if (activeAgentBackend === 'builtin') {
+      indicator.style.display = 'none';
+    } else {
+      const backends = _agentBackendCache || [];
+      const b = backends.find(x => x.name === activeAgentBackend);
+      indicator.textContent = b ? b.displayName : activeAgentBackend;
+      indicator.style.display = 'inline-block';
+    }
+  }
+}
+
+/**
+ * Show/hide/grey UI controls based on backend capabilities.
+ * When using an external backend, Tofu-only features are greyed out
+ * and config controls the backend handles itself are hidden.
+ */
+function _applyBackendCapabilities() {
+  const caps = _agentBackendCapabilities || {};
+  const isExternal = activeAgentBackend !== 'builtin';
+
+  // Model selector & thinking depth — hide when external backend handles them
+  const modelGroup = document.getElementById('modelGroup');
+  if (modelGroup) modelGroup.style.display = caps.modelSelector === false ? 'none' : '';
+  const depthBar = document.getElementById('thinkingDepthSection');
+  if (depthBar) depthBar.style.display = caps.thinkingDepth === false ? 'none' : '';
+
+  // Search toggle — hide when external backend has its own search
+  const searchToggle = document.getElementById('searchModeToggle');
+  if (searchToggle) searchToggle.style.display = caps.searchToggle === false ? 'none' : '';
+
+  // Preset selector — hide for external backends
+  const presetSelect = document.getElementById('presetSelect');
+  if (presetSelect) {
+    const presetParent = presetSelect.closest('.preset-group') || presetSelect.parentElement;
+    if (presetParent) presetParent.style.display = caps.presetSelector === false ? 'none' : '';
+  }
+
+  // Tofu-only feature toggles — grey out when unavailable
+  const _toggleMap = {
+    'browserToggle':  caps.hasBrowserExt !== false,
+    'desktopToggle':  caps.hasDesktopAgent !== false,
+    'imageGenToggle': caps.hasImageGen !== false,
+    'swarmToggle':    caps.hasSwarm !== false,
+    'schedulerToggle': caps.hasScheduler !== false,
+    'humanGuidanceToggle': caps.hasHumanGuidance !== false,
+  };
+  for (const [id, enabled] of Object.entries(_toggleMap)) {
+    const el = document.getElementById(id);
+    if (el) {
+      el.style.opacity = enabled ? '' : '0.35';
+      el.style.pointerEvents = enabled ? '' : 'none';
+      if (!enabled) el.classList.remove('active');
+    }
+  }
+
+  // Endpoint mode — hide if not supported
+  const endpointToggle = document.getElementById('endpointToggle');
+  if (endpointToggle) {
+    endpointToggle.style.opacity = caps.endpointMode !== false ? '' : '0.35';
+    endpointToggle.style.pointerEvents = caps.endpointMode !== false ? '' : 'none';
+  }
+}
+
+/** Toggle the agent backend dropdown visibility. */
+function _toggleBackendDropdown() {
+  const dd = document.getElementById('agentBackendDropdown');
+  if (!dd) return;
+  const isVisible = dd.style.display !== 'none';
+  dd.style.display = isVisible ? 'none' : 'block';
+
+  // Fetch fresh status when opening
+  if (!isVisible) {
+    _refreshBackendStatuses();
+  }
+
+  // Close dropdown when clicking outside
+  if (!isVisible) {
+    const _closeHandler = (e) => {
+      if (!dd.contains(e.target) && e.target.id !== 'agentBackendTrigger' &&
+          !e.target.closest('.agent-backend-trigger')) {
+        dd.style.display = 'none';
+        document.removeEventListener('click', _closeHandler);
+      }
+    };
+    // Delay adding the listener so this click doesn't immediately close it
+    setTimeout(() => document.addEventListener('click', _closeHandler), 0);
+  }
+}
+
+/** Refresh backend status indicators in the dropdown. */
+async function _refreshBackendStatuses() {
+  const backends = await _fetchAgentBackends();
+  for (const b of backends) {
+    if (b.name === 'builtin') continue;
+
+    const statusEl = b.name === 'claude-code'
+      ? document.getElementById('ccStatus')
+      : document.getElementById('codexStatus');
+    const iconEl = b.name === 'claude-code'
+      ? document.getElementById('ccStatusIcon')
+      : document.getElementById('codexStatusIcon');
+    const btnEl = document.querySelector(`.agent-backend-btn[data-backend="${b.name}"]`);
+
+    if (statusEl) {
+      if (!b.available) {
+        statusEl.textContent = 'Not installed';
+        statusEl.style.color = 'var(--text-tertiary)';
+      } else if (!b.authenticated) {
+        statusEl.textContent = 'Not authenticated';
+        statusEl.style.color = '#f59e0b';
+      } else {
+        statusEl.textContent = b.version || 'Ready';
+        statusEl.style.color = '#22c55e';
+      }
+    }
+    if (iconEl) {
+      if (!b.available) {
+        iconEl.textContent = '✗';
+        iconEl.className = 'ab-status ab-unavailable';
+      } else if (!b.authenticated) {
+        iconEl.textContent = '!';
+        iconEl.className = 'ab-status ab-not-auth';
+      } else {
+        iconEl.textContent = '✓';
+        iconEl.className = 'ab-status ab-ready';
+      }
+    }
+    if (btnEl) {
+      btnEl.disabled = !b.available || !b.authenticated;
+    }
+  }
+}
+
 // ── Conversation CRUD ──
 function _purgeEmptyConvs() {
   const before = conversations.length;
@@ -256,8 +460,8 @@ function _reflowToolbar() {
     natural += child.scrollWidth;
   }
   natural += Math.max(0, visibleCount - 1) * gap;
-  /* Add padding + .input-box border + safety */
-  const chrome = 20 + 3 + 16;
+  /* Add padding + .input-box border + safety + breathing room */
+  const chrome = 26 + 3 + 48;
   let want = Math.ceil(natural + chrome);
   /* Clamp: min 480, max = available viewport width */
   const sidebar = document.getElementById('sidebar');
@@ -506,6 +710,7 @@ function _saveConvToolState() {
   conv.imageGenEnabled = !!imageGenEnabled;
   conv.imageGenMode = !!imageGenMode;
   conv.humanGuidanceEnabled = !!humanGuidanceEnabled;
+  conv.agentBackend = activeAgentBackend || 'builtin';
   /* ★ FIX: Sync projectPath from the UI-visible projectState to the conv object.
    * Without this, conv.projectPath can diverge from projectState when:
    *  (a) A new conv is created (has no projectPath property at all)
@@ -590,9 +795,33 @@ function _restoreConvToolState(conv) {
       b.classList.toggle('active', b.dataset.res === _igSelectedResolution));
   }
   _applyAutoTranslateUI(conv.autoTranslate !== undefined ? !!conv.autoTranslate : true);
+  /* ★ Restore agent backend selection per-conversation */
+  const _savedBackend = conv.agentBackend || 'builtin';
+  if (_savedBackend !== activeAgentBackend) {
+    activeAgentBackend = _savedBackend;
+    // Restore capabilities from cache
+    if (_agentBackendCache) {
+      const b = _agentBackendCache.find(x => x.name === activeAgentBackend);
+      if (b) _agentBackendCapabilities = b.capabilities || {};
+    }
+    _applyAgentBackendUI();
+    _applyBackendCapabilities();
+  }
   if (typeof updateSubmenuCounts === 'function') updateSubmenuCounts();
+  /* ★ BUG FIX: Always reflow toolbar after restoring conv tool state.
+   * _applyModelUI and _applyImageGenUI have optimization paths that skip
+   * _scheduleReflow when model/igMode haven't changed.  But other toggles
+   * (submenu badges, search mode, depth) may have changed the toolbar's
+   * natural width.  Without this, --toolbar-w stays stale → visible gap
+   * on the right side of the toolbar. */
+  _scheduleReflow();
 }
 function _resetToolsToDefaults() {
+  // ★ Reset agent backend to builtin
+  activeAgentBackend = 'builtin';
+  _agentBackendCapabilities = null;
+  _applyAgentBackendUI();
+  _applyBackendCapabilities();
   config.thinkingDepth = config.defaultThinkingDepth;   // ← reset to default depth BEFORE applying model UI (let _applyModelUI normalize)
   _applyModelUI(serverModel);
   _applySearchModeUI("multi");
@@ -618,6 +847,15 @@ function _resetToolsToDefaults() {
   const genText = document.querySelector('.ig-gen-text');
   if (genText) genText.textContent = '生成';
   if (typeof updateSubmenuCounts === 'function') updateSubmenuCounts();
+  /* ★ BUG FIX: Always reflow toolbar after resetting tools to defaults.
+   * _applyModelUI skips _scheduleReflow when the model hasn't changed
+   * (common case: new chat uses the same default model as the previous conv).
+   * _applyImageGenUI skips when igMode is already false.
+   * But tool toggle changes (submenu badge counts, search mode, depth bar)
+   * alter the toolbar's natural width.  Without this unconditional reflow,
+   * --toolbar-w stays at the previous conv's stale value → visible empty
+   * gap on the right side of the input toolbar after clicking New Chat. */
+  _scheduleReflow();
 }
 function newChat() {
   _purgeEmptyConvs();
@@ -1132,6 +1370,9 @@ async function startAssistantResponse(convId) {
       desktopEnabled: _de,
       imageGenEnabled: _ig,
       humanGuidanceEnabled: _hg,
+      /* ★ Agent backend: external backends (claude-code, codex) bypass our
+       * orchestrator entirely — the config fields above are ignored by them. */
+      agentBackend: activeAgentBackend || 'builtin',
       /* ★ AutoTranslate flag: tell the backend whether autoTranslate is on
        * so it can skip the _needs_translation heuristic and always translate. */
       autoTranslate: conv.autoTranslate !== undefined ? !!conv.autoTranslate : !!autoTranslate,
@@ -1953,7 +2194,7 @@ async function regenerateFromUser(idx) {
   }
 
   /* ★ FIX: Persist the truncated messages to server BEFORE starting the new task. */
-  await syncConversationToServer(conv);
+  await syncConversationToServer(conv, { allowTruncate: true });
   await startAssistantResponse(conv.id);
 }
 
@@ -1984,7 +2225,7 @@ async function continueAssistant() {
     /* ★ FIX: clear _needsLoad and _serverMsgCount after pop — same reason as regenerateFromUser */
     conv._needsLoad = false;
     conv._serverMsgCount = conv.messages.length;
-    await syncConversationToServer(conv);
+    await syncConversationToServer(conv, { allowTruncate: true });
     await startAssistantResponse(conv.id);
     return;
   }
@@ -2063,7 +2304,7 @@ async function continueAssistant() {
     conv._needsLoad = false;
     conv._serverMsgCount = conv.messages.length;
     if (activeConvId === conv.id) renderChat(conv, false);
-    await syncConversationToServer(conv);
+    await syncConversationToServer(conv, { allowTruncate: true });
     await startAssistantResponse(conv.id);
     return;
   }
@@ -3076,7 +3317,7 @@ async function initActiveTasks() {
           );
           conv.messages.pop();
           saveConversations(conv.id);
-          syncConversationToServer(conv);
+          syncConversationToServer(conv, { allowTruncate: true });
         }
       }
 
@@ -3588,6 +3829,8 @@ function _ensureNewest() {
   if (typeof _initSelectionPopup === "function") _initSelectionPopup();
   loadPricing();
   loadProjectStatus();
+  /* ★ Pre-fetch agent backend availability for the backend selector dropdown */
+  _fetchAgentBackends().catch(() => {});
   _updateAutoApplyUI();
   _applyAutoTranslateUI();
   setInterval(() => {

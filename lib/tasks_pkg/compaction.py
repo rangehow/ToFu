@@ -594,12 +594,13 @@ def micro_compact(messages: list, conv_id: str = '') -> int:
     # ── Phase B: Compress cold tool results (original logic) ──────────
     tool_indices = [i for i, m in enumerate(messages) if m.get('role') == 'tool']
 
+    cold_indices = []
     if len(tool_indices) <= MICRO_HOT_TAIL:
-        logger.debug('[L1] %d tool results ≤ hot-tail size %d, nothing to do',
+        logger.debug('[L1] %d tool results ≤ hot-tail size %d, '
+                     'skipping Phase B (Phase C image strip may still run)',
                      len(tool_indices), MICRO_HOT_TAIL)
-        return tokens_saved
-
-    cold_indices = tool_indices[:-MICRO_HOT_TAIL]
+    else:
+        cold_indices = tool_indices[:-MICRO_HOT_TAIL]
     compacted_count = 0
     skipped_short = 0
     skipped_already = 0
@@ -617,12 +618,37 @@ def micro_compact(messages: list, conv_id: str = '') -> int:
 
         # ── Handle multimodal content (list of content blocks) ──
         if isinstance(content, list):
-            text_parts = [
-                b.get('text', '')
-                for b in content
-                if isinstance(b, dict) and b.get('type') == 'text'
-            ]
+            text_parts = []
+            image_count = 0
+            image_chars = 0
+            for b in content:
+                if not isinstance(b, dict):
+                    continue
+                if b.get('type') == 'text':
+                    text_parts.append(b.get('text', ''))
+                elif b.get('type') == 'image_url':
+                    image_count += 1
+                    image_chars += len(
+                        b.get('image_url', {}).get('url', ''))
+
             text_len = sum(len(t) for t in text_parts)
+            total_content_chars = text_len + image_chars
+
+            # Images consume enormous context (base64 data URLs).
+            # Always compact cold image tool results regardless of
+            # text length — the image data is the real cost.
+            if image_count > 0:
+                text_preview = ' '.join(text_parts).strip()[:200]
+                msg['content'] = (
+                    f'[{tool_name} result compacted — had {image_count} '
+                    f'image(s) ({_human_size(image_chars)} base64) + '
+                    f'{text_len:,} chars text — re-call tool if needed]\n'
+                    f'Text was: {text_preview}'
+                )
+                tool_tokens_saved += total_content_chars // 4
+                compacted_count += 1
+                continue
+
             if text_len <= MICRO_COMPACT_THRESHOLD:
                 skipped_short += 1
                 continue
@@ -675,6 +701,67 @@ def micro_compact(messages: list, conv_id: str = '') -> int:
                 len(cold_indices), compacted_count,
                 skipped_short, skipped_already,
                 thinking_stripped, tokens_saved)
+
+    # ── Phase C: Aggressively strip cold images ──────────────────────
+    # Images consume massive context (base64 data URLs: 1-10MB each).
+    # Unlike text tool results, images can't be re-searched or grepped,
+    # so the model only needs recent images. Use a much tighter hot tail.
+    _IMAGE_HOT_TAIL = 2  # keep only the 2 most recent image tool results
+    image_tool_indices = [
+        i for i, m in enumerate(messages)
+        if m.get('role') == 'tool'
+        and isinstance(m.get('content'), list)
+        and any(
+            isinstance(b, dict) and b.get('type') == 'image_url'
+            for b in m['content']
+        )
+    ]
+    images_stripped = 0
+    image_tokens_saved = 0
+
+    if len(image_tool_indices) > _IMAGE_HOT_TAIL:
+        cold_image_indices = image_tool_indices[:-_IMAGE_HOT_TAIL]
+        for idx in cold_image_indices:
+            if idx < _cache_prefix_count:
+                continue
+            msg = messages[idx]
+            content = msg['content']
+            tool_name = msg.get('name', 'tool')
+
+            # Measure image data size
+            image_count = 0
+            image_chars = 0
+            text_parts = []
+            for b in content:
+                if not isinstance(b, dict):
+                    continue
+                if b.get('type') == 'image_url':
+                    image_count += 1
+                    image_chars += len(
+                        b.get('image_url', {}).get('url', ''))
+                elif b.get('type') == 'text':
+                    text_parts.append(b.get('text', ''))
+
+            if image_count == 0:
+                continue
+
+            text_preview = ' '.join(text_parts).strip()[:200]
+            msg['content'] = (
+                f'[{tool_name} image compacted — had {image_count} '
+                f'image(s) ({_human_size(image_chars)} base64) — '
+                f're-call tool if image needed]\n'
+                f'Text was: {text_preview}'
+            )
+            image_tokens_saved += image_chars // 4
+            images_stripped += 1
+
+    if images_stripped > 0:
+        tokens_saved += image_tokens_saved
+        logger.info('[L1-img] conv=%s  stripped %d cold image tool results '
+                    '(~%d tokens, %s base64 data freed)',
+                    conv_id[:8] if conv_id else '?',
+                    images_stripped, image_tokens_saved,
+                    _human_size(image_tokens_saved * 4))
 
     return tokens_saved
 

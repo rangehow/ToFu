@@ -7,7 +7,7 @@ import os
 from difflib import SequenceMatcher
 
 from lib.log import get_logger
-from lib.project_mod.modifications import _record_modification, _schedule_index_update
+from lib.project_mod.modifications import _record_modification
 from lib.project_mod.scanner import _fmt_size, _safe_path
 
 logger = get_logger(__name__)
@@ -122,7 +122,6 @@ def tool_write_file(base, rel_path, content, description='', conv_id=None, task_
 
         _record_modification(base, 'write_file', rel_path, original_content,
                              conv_id=conv_id, task_id=task_id)
-        _schedule_index_update(base, rel_path)
 
         result = {
             'ok': True, 'action': 'write_file', 'path': rel_path,
@@ -250,7 +249,6 @@ def _apply_one_diff(base, rel_path, search, replace, description='', conv_id=Non
 
         _record_modification(base, 'apply_diff', rel_path, reverse_patch=reverse_patch,
                              conv_id=conv_id, task_id=task_id)
-        _schedule_index_update(base, rel_path)
 
         result = {
             'ok': True, 'action': 'apply_diff', 'path': rel_path,

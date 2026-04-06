@@ -10,7 +10,8 @@
 
 <p align="center">
   Multi-model chat · Autonomous agents · Project co-pilot · Multi-agent swarm<br/>
-  Daily reports & to-do · Browser extension · Desktop agent · Feishu bot
+  Daily reports & to-do · Browser extension · Desktop agent · Feishu bot<br/>
+  <strong>🔀 CLI backend switching — use Claude Code or Codex as the agent engine</strong>
 </p>
 
 <p align="center">
@@ -94,6 +95,18 @@ Click the ☑️ **My Day** button in the sidebar header to open the daily dashb
 - **SCHEDULER badge** — appears in the top status bar; click to see all active proactive agents and their recent run logs
 - Enable via the 🕐 **Scheduler** toggle in the tool submenu
 
+### 🔀 CLI Backend Switching (NEW)
+
+Switch between **Tofu's built-in agent**, **Claude Code**, or **OpenAI Codex** as the coding agent backend — right from the UI.
+
+- **Pure frontend mode** — when using Claude Code or Codex, Tofu acts as a pure web UI; the external CLI handles all LLM calls, tool execution, and context management with its own authentication
+- **Zero config for external agents** — install the CLI, log in once in your terminal, and Tofu auto-detects it
+- **Capabilities-driven UI** — the interface automatically adapts: model selector, thinking depth, and Tofu-only features (image gen, browser, swarm…) are hidden when using an external backend
+- **Session persistence** — multi-turn conversations are maintained across page refreshes via backend session ID mapping
+- **One-click switching** — click the backend selector in the top bar to switch between agents; each conversation remembers its backend
+
+> 🧪 **Try it now** on the [`cli_switch`](https://github.com/rangehow/ToFu/tree/cli_switch) branch!
+
 ### More
 
 - **Skills system** — persistent reusable knowledge (Markdown files) — the assistant learns project conventions, bug patterns, and workflows across sessions
@@ -108,46 +121,87 @@ Click the ☑️ **My Day** button in the sidebar header to open the daily dashb
 
 ## Quick Start
 
-### Prerequisites
+### Option A: One-Command Install (recommended)
 
-- Python 3.10+
-- conda (for PostgreSQL server installation)
+Works on **Linux**, **macOS**, and **Windows**. Requires only Python 3.10+ and Git — no conda, no admin/root.
 
-### 1. Clone & Install
+**Linux / macOS:**
+```bash
+curl -fsSL https://raw.githubusercontent.com/rangehow/ToFu/main/install.sh | bash
+```
+
+**Windows (PowerShell):**
+```powershell
+irm https://raw.githubusercontent.com/rangehow/ToFu/main/install.ps1 | iex
+```
+
+**Or run the cross-platform installer directly** (any OS with Python 3.10+):
+```bash
+git clone https://github.com/rangehow/ToFu.git && cd ToFu
+python install.py
+```
+
+This automatically creates a virtual environment, installs all dependencies, locates/installs PostgreSQL, and starts the server. Open **http://localhost:15000** when it's ready.
+
+**With options:**
+```bash
+python install.py --api-key sk-xxx --port 8080   # Pre-configure API key
+python install.py --no-launch                     # Install only
+python install.py --docker                        # Use Docker instead
+python install.py --skip-playwright               # Skip browser automation
+```
+
+### Option B: Docker (zero dependencies)
+
+```bash
+git clone https://github.com/rangehow/ToFu.git && cd ToFu
+docker compose up -d
+```
+
+Or without cloning (when the image is published):
+```bash
+docker run -d -p 15000:15000 -v tofu-data:/app/data --name tofu ghcr.io/rangehow/tofu:latest
+```
+
+Open **http://localhost:15000** — done. All data persists in Docker volumes.
+
+### Option C: Manual Install
+
+<details>
+<summary>Step-by-step for full control</summary>
+
+**Prerequisites:** Python 3.10+, PostgreSQL 16+
 
 ```bash
 git clone https://github.com/rangehow/ToFu.git
 cd ToFu
 
-# Update conda to the latest version
-conda update -n base -c defaults conda
+# Create environment (pick one)
+python -m venv .venv && source .venv/bin/activate   # Standard venv
+# OR: conda create -n tofu python=3.12 -y && conda activate tofu
 
-# Create a new environment named 'tofu' with Python 3.12
-conda create -n tofu python=3.12 -y
-
-# Activate the environment
-conda activate tofu
-
-# Install PostgreSQL 18+ server (userspace, no root required)
-conda install -c conda-forge postgresql>=18
+# Install PostgreSQL (if not already installed)
+# macOS:   brew install postgresql@16
+# Ubuntu:  sudo apt install postgresql
+# Windows: https://www.postgresql.org/download/windows/
+# conda:   conda install -c conda-forge postgresql>=16
 
 # Install Python dependencies
 pip install -r requirements.txt
 
-# Install browser automation engine (required for advanced fetching)
-playwright install chromium
-```
+# Optional: browser automation for advanced page fetching
+pip install playwright && playwright install chromium
 
-> PostgreSQL runs as a local userspace process — no `sudo`, no system service.
-> On first `python server.py`, the database auto-bootstraps (`initdb`, schema creation, port selection).
-
-### 2. Run
-
-```bash
+# Run
 python server.py
 ```
 
+</details>
+
 Open **http://localhost:15000** in your browser — that's it! Configure everything from the Settings UI.
+
+> **PostgreSQL** runs as a local userspace process — no `sudo`, no system service.
+> On first `python server.py`, the database auto-bootstraps (`initdb`, schema creation, port selection).
 
 #### Automatic Dependency Repair
 
@@ -273,6 +327,7 @@ cp .env.example .env
 ├── .env.example               Environment variable template
 │
 ├── lib/                       Core libraries
+│   ├── agent_backends/        Multi-backend agent switching (builtin/CC/Codex)
 │   ├── llm_client.py          LLM API client (streaming, retry)
 │   ├── llm_dispatch/          Multi-key multi-model dispatcher
 │   ├── database.py            PostgreSQL (auto-bootstrap)
@@ -301,6 +356,63 @@ cp .env.example .env
 ---
 
 ## Advanced Usage
+
+### CLI Backend Switching — Claude Code / Codex
+
+Tofu can act as a pure web frontend for external coding agents. Instead of using Tofu's built-in orchestrator, you can delegate to **Claude Code** or **OpenAI Codex** — they handle LLM calls, tool execution, and context management with their own authentication.
+
+#### Install Claude Code
+
+```bash
+# Install via npm
+npm install -g @anthropic-ai/claude-code
+
+# Log in (one-time)
+claude auth login
+# Follow the browser prompt to authenticate with your Claude account
+
+# Verify
+claude --version
+```
+
+#### Install Codex
+
+```bash
+# Install via npm
+npm install -g @openai/codex
+
+# Log in (one-time) — requires OpenAI API key or ChatGPT Plus subscription
+codex auth login
+
+# Verify
+codex --version
+```
+
+#### Use in Tofu
+
+1. Start Tofu: `python server.py`
+2. Click the **backend selector** (🤖) in the top bar
+3. Available backends show a ✅ badge; unavailable ones show ❌
+4. Select **Claude Code** or **Codex** — the UI automatically adapts:
+   - Model selector, thinking depth, and search toggle are hidden (the CLI handles these)
+   - Tofu-only features (image gen, browser extension, swarm, scheduler) are greyed out
+5. Send a message — Tofu spawns the CLI subprocess, streams its output, and renders it in the chat UI
+
+#### Feature availability by backend
+
+| Feature | Built-in (Tofu) | Claude Code | Codex |
+|---------|:-:|:-:|:-:|
+| Chat & streaming | ✅ | ✅ | ✅ |
+| Web search | ✅ | ✅ (CC's) | ✅ (Codex's) |
+| File operations | ✅ | ✅ (CC's) | ✅ (Codex's) |
+| Code execution | ✅ | ✅ (Bash) | ✅ (exec) |
+| Model selection | ✅ | — (CC decides) | — (Codex decides) |
+| Image generation | ✅ | ❌ | ❌ |
+| Browser extension | ✅ | ❌ | ❌ |
+| Multi-agent swarm | ✅ | ❌ | ❌ |
+| Desktop agent | ✅ | ❌ | ❌ |
+
+> **Note**: The CLI must be installed on the **same machine** as the Tofu server. Tofu spawns the agent as a subprocess.
 
 ### Project Co-Pilot
 

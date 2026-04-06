@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://rangehow.github.io/cardcraft/sitemap.xml

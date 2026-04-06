@@ -46,18 +46,6 @@ def project_set_paths():
         return jsonify({'error': str(e)}), 400
 
 
-@project_bp.route('/api/project/index', methods=['POST'])
-@rate_limit(limit=5, per=300)  # 5 requests per 5 minutes
-def project_index():
-    """Trigger AI-powered semantic indexing of the current project."""
-    from lib.project_mod import start_indexing
-    try:
-        result = start_indexing()
-        return jsonify(result)
-    except Exception as e:
-        logger.error('[Project] Indexing failed: %s', e, exc_info=True)
-        return jsonify({'status': 'error', 'message': str(e)}), 500
-
 
 @project_bp.route('/api/project/status', methods=['GET'])
 def project_status():

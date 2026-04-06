@@ -311,17 +311,22 @@ def start_oauth_flow(provider: str) -> dict:
             'email': None,
         }
 
-    # Start relay server in background thread
-    thread = threading.Thread(
-        target=_run_relay_server,
-        args=(provider, flow['callback_port'], flow['state']),
-        daemon=True,
-        name=f'oauth-relay-{provider}',
-    )
-    thread.start()
-
-    logger.info('[OAuth] Started %s flow — relay on :%d, auth URL ready',
-                 provider, flow['callback_port'])
+    # Start relay server in background thread (only for providers that
+    # redirect to localhost — Claude redirects to console.anthropic.com,
+    # so the user must manually copy the code#state back)
+    if provider != 'claude':
+        thread = threading.Thread(
+            target=_run_relay_server,
+            args=(provider, flow['callback_port'], flow['state']),
+            daemon=True,
+            name=f'oauth-relay-{provider}',
+        )
+        thread.start()
+        logger.info('[OAuth] Started %s flow — relay on :%d, auth URL ready',
+                     provider, flow['callback_port'])
+    else:
+        logger.info('[OAuth] Started %s flow — auth URL ready (manual code paste required)',
+                     provider)
     return {
         'auth_url': flow['auth_url'],
         'status': 'started',
@@ -330,12 +335,23 @@ def start_oauth_flow(provider: str) -> dict:
     }
 
 
+_FLOW_TIMEOUT = 300  # 5 minutes — auto-expire stale OAuth flows
+
+
 def get_oauth_status(provider: str) -> dict:
     """Get current OAuth status for a provider."""
     from lib.oauth.token_store import load_token
 
     with _flows_lock:
         flow = _active_flows.get(provider, {})
+        # Auto-expire stale flows that have been waiting too long
+        if flow and flow.get('status') in ('started', 'waiting_callback'):
+            started_at = flow.get('started_at', 0)
+            if started_at and (time.time() - started_at) > _FLOW_TIMEOUT:
+                logger.info('[OAuth] Auto-expiring stale %s flow (started %.0fs ago)',
+                            provider, time.time() - started_at)
+                _active_flows.pop(provider, None)
+                flow = {}
 
     stored = load_token(provider)
     authenticated = bool(stored and stored.get('access_token'))
@@ -358,7 +374,7 @@ def get_all_oauth_status() -> dict:
     }
 
 
-def exchange_code(provider: str, code: str) -> dict:
+def exchange_code(provider: str, code: str, state: str = '') -> dict:
     """Exchange an authorization code for tokens.
 
     Called by the frontend after receiving the code via postMessage
@@ -367,6 +383,7 @@ def exchange_code(provider: str, code: str) -> dict:
     Args:
         provider: 'claude' or 'codex'.
         code: Authorization code from OAuth callback.
+        state: OAuth state parameter for CSRF validation.
 
     Returns:
         dict with status info.
@@ -379,9 +396,14 @@ def exchange_code(provider: str, code: str) -> dict:
         flow = _active_flows.get(provider, {})
     pkce = flow.get('pkce', {})
     pkce_verifier = pkce.get('code_verifier', '')
+    flow_state = flow.get('state', '')
 
     if not pkce_verifier:
         return {'error': 'No active OAuth flow found. Please start a new login first.'}
+
+    # Use the state from the active flow if not explicitly provided
+    if not state:
+        state = flow_state
 
     logger.info('[OAuth] Exchanging code for %s tokens (code_len=%d)', provider, len(code))
 
@@ -391,7 +413,7 @@ def exchange_code(provider: str, code: str) -> dict:
 
     if provider == 'claude':
         from lib.oauth.claude import claude_exchange_code
-        token = claude_exchange_code(code, pkce_verifier)
+        token = claude_exchange_code(code, pkce_verifier, state=state)
     elif provider == 'codex':
         from lib.oauth.codex import codex_exchange_code
         token = codex_exchange_code(code, pkce_verifier)

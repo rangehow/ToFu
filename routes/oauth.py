@@ -19,7 +19,7 @@ logger = get_logger(__name__)
 oauth_bp = Blueprint('oauth', __name__)
 
 
-@oauth_bp.route('/api/oauth/login', methods=['POST'])
+@oauth_bp.route('/api/oauth/login', methods=['GET', 'POST'])
 def oauth_login():
     """Start an OAuth login flow.
 
@@ -28,14 +28,21 @@ def oauth_login():
     popup and listen for postMessage('oauth_callback', ...) to receive
     the authorization code.
 
-    Body: { "provider": "claude" | "codex" }
+    POST Body: { "provider": "claude" | "codex" }
+    GET Query: ?provider=claude|codex
     Returns: { "auth_url": "...", "status": "started", "provider": "...", "callback_port": N }
     """
     try:
         from lib.oauth.manager import start_oauth_flow
 
-        data = request.get_json(force=True, silent=True) or {}
-        provider = data.get('provider', '')
+        logger.info('[OAuth API] %s /api/oauth/login from %s', request.method, request.remote_addr)
+
+        # Support both GET (query params) and POST (JSON body)
+        if request.method == 'GET':
+            provider = request.args.get('provider', '')
+        else:
+            data = request.get_json(force=True, silent=True) or {}
+            provider = data.get('provider', '')
 
         if provider not in ('claude', 'codex'):
             return jsonify({'error': 'Invalid provider. Use "claude" or "codex".'}), 400
@@ -52,24 +59,35 @@ def oauth_login():
         return jsonify({'error': str(e)}), 500
 
 
-@oauth_bp.route('/api/oauth/callback', methods=['POST'])
+@oauth_bp.route('/api/oauth/callback', methods=['GET', 'POST'])
 def oauth_callback():
     """Exchange an authorization code for tokens.
 
     Called by the frontend after receiving the code via postMessage
     from the relay page, or via manual URL paste.
 
-    Body: { "provider": "claude" | "codex", "code": "XXX" }
+    POST Body: { "provider": "claude" | "codex", "code": "XXX" }
       or: { "provider": "claude" | "codex", "callback_url": "http://localhost:.../callback?code=XXX" }
+    GET Query: ?provider=claude|codex&code=XXX or ?provider=...&callback_url=...
     """
     try:
         from lib.oauth.manager import exchange_code
         from urllib.parse import urlparse, parse_qs
 
-        data = request.get_json(force=True, silent=True) or {}
-        provider = data.get('provider', '')
-        code = data.get('code', '')
-        callback_url = data.get('callback_url', '')
+        logger.info('[OAuth API] %s /api/oauth/callback from %s', request.method, request.remote_addr)
+
+        # Support both GET (query params) and POST (JSON body)
+        if request.method == 'GET':
+            provider = request.args.get('provider', '')
+            code = request.args.get('code', '')
+            callback_url = request.args.get('callback_url', '')
+            state = request.args.get('state', '')
+        else:
+            data = request.get_json(force=True, silent=True) or {}
+            provider = data.get('provider', '')
+            code = data.get('code', '')
+            callback_url = data.get('callback_url', '')
+            state = data.get('state', '')
 
         if provider not in ('claude', 'codex'):
             return jsonify({'error': 'Invalid provider'}), 400
@@ -85,7 +103,7 @@ def oauth_callback():
         if not code:
             return jsonify({'error': 'No authorization code provided'}), 400
 
-        result = exchange_code(provider, code)
+        result = exchange_code(provider, code, state=state)
 
         if 'error' in result:
             return jsonify(result), 400
@@ -120,17 +138,66 @@ def oauth_status():
         return jsonify({'error': str(e)}), 500
 
 
-@oauth_bp.route('/api/oauth/logout', methods=['POST'])
+@oauth_bp.route('/api/oauth/test')
+def oauth_test():
+    """Test server-side connectivity to OAuth endpoints.
+
+    Returns which endpoints are reachable from the server (for diagnosing
+    geo-blocking issues in China).
+    """
+    import requests as req
+    from lib.proxy import proxies_for
+
+    results = {}
+    endpoints = {
+        'claude_token': 'https://console.anthropic.com/v1/oauth/token',
+        'claude_auth': 'https://claude.ai/',
+        'codex_token': 'https://auth.openai.com/oauth/token',
+        'codex_auth': 'https://auth.openai.com/',
+    }
+
+    for name, url in endpoints.items():
+        try:
+            r = req.get(url, proxies=proxies_for(url), timeout=8,
+                        allow_redirects=False)
+            blocked = (
+                r.status_code == 302 and 'unavailable-in-region' in (r.headers.get('Location', ''))
+                or 'unsupported_country_region_territory' in r.text[:500]
+            )
+            results[name] = {
+                'url': url, 'status': r.status_code,
+                'reachable': not blocked,
+                'blocked': blocked,
+                'detail': r.headers.get('Location', '')[:200] if r.status_code == 302
+                          else r.text[:200],
+            }
+        except Exception as e:
+            results[name] = {
+                'url': url, 'status': 0, 'reachable': False,
+                'blocked': True, 'detail': str(e)[:200],
+            }
+
+    return jsonify(results)
+
+
+@oauth_bp.route('/api/oauth/logout', methods=['GET', 'POST'])
 def oauth_logout():
     """Logout from an OAuth provider.
 
-    Body: { "provider": "claude" | "codex" }
+    POST Body: { "provider": "claude" | "codex" }
+    GET Query: ?provider=claude|codex
     """
     try:
         from lib.oauth.manager import logout_oauth
 
-        data = request.get_json(force=True, silent=True) or {}
-        provider = data.get('provider', '')
+        logger.info('[OAuth API] %s /api/oauth/logout from %s', request.method, request.remote_addr)
+
+        # Support both GET (query params) and POST (JSON body)
+        if request.method == 'GET':
+            provider = request.args.get('provider', '')
+        else:
+            data = request.get_json(force=True, silent=True) or {}
+            provider = data.get('provider', '')
 
         if provider not in ('claude', 'codex'):
             return jsonify({'error': 'Invalid provider'}), 400

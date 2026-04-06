@@ -11,6 +11,7 @@ Covers:
 """
 
 import copy
+import json
 
 import pytest
 
@@ -355,9 +356,15 @@ class TestCacheTracking:
         assert result is None or 'system_prompt' not in result
 
     def test_breakpoint_on_conversation_tail(self):
-        """add_cache_breakpoints should place a breakpoint near the tail,
-        not just on user messages.  In a multi-round tool conversation,
-        the breakpoint should cover tool results (not just user messages)."""
+        """add_cache_breakpoints should place BP4 on the LAST message with
+        content (msg[-1]), not msg[-2].  In tool conversations, msg[-1] is
+        the tool result — always has content and becomes prefix next round.
+
+        This was changed from msg[-2] to msg[-1] to fix the cache oscillation
+        bug where empty-content assistants at msg[-2] caused BP4 to fall back
+        to an early message, under-caching the conversation tail.
+        See: debug/CACHE_BP4_AB_REPORT.md
+        """
         from lib.llm_client import add_cache_breakpoints
         # Simulate a multi-round tool conversation:
         # system, user, asst+tc, tool, asst+tc, tool(latest)
@@ -379,19 +386,30 @@ class TestCacheTracking:
             ],
         }
         add_cache_breakpoints(body)
-        # Second-to-last message (index 4, assistant with content) should
-        # get a cache breakpoint since it has non-empty string content
-        penultimate = body['messages'][-2]
-        content = penultimate.get('content', '')
+        # BP4 should be on the LAST message (msg[-1], the tool result)
+        # because it caches the maximum prefix for the next round.
+        last_msg = body['messages'][-1]
+        content = last_msg.get('content', '')
         # It should have been converted to list with cache_control
         assert isinstance(content, list), \
-            f'Expected list content on penultimate msg, got {type(content)}'
+            f'Expected list content on last msg, got {type(content)}'
         has_cache_control = any(
             isinstance(b, dict) and 'cache_control' in b
             for b in content
         )
         assert has_cache_control, \
-            'Penultimate message should have cache_control breakpoint'
+            'Last message (tool result) should have cache_control breakpoint (BP4)'
+        # Penultimate (msg[-2], assistant with content) should NOT have BP4
+        # because msg[-1] already has it (maximum prefix coverage)
+        penultimate = body['messages'][-2]
+        pen_content = penultimate.get('content', '')
+        if isinstance(pen_content, list):
+            pen_has_cc = any(
+                isinstance(b, dict) and 'cache_control' in b
+                for b in pen_content
+            )
+            assert not pen_has_cc, \
+                'Penultimate should NOT have BP4 when last msg has it'
 
 
 
@@ -433,7 +451,7 @@ class TestToolHooks:
 
     def test_register_and_run_pre_hook(self):
         from lib.tasks_pkg.tool_hooks import HookResult, _pre_hooks, register_pre_hook, run_pre_hooks
-        len(_pre_hooks)
+        original_count = len(_pre_hooks)
 
         def my_hook(tool_name, args, task):
             if tool_name == 'dangerous_tool':
@@ -446,14 +464,14 @@ class TestToolHooks:
             assert result is not None
             assert result.action == 'block'
 
-            run_pre_hooks('safe_tool', {}, {})
+            result2 = run_pre_hooks('safe_tool', {}, {})
             # May return None or a built-in hook result
         finally:
             _pre_hooks.pop()  # cleanup
 
     def test_register_and_run_post_hook(self):
         from lib.tasks_pkg.tool_hooks import _post_hooks, register_post_hook, run_post_hooks
-        len(_post_hooks)
+        original_count = len(_post_hooks)
 
         def my_hook(tool_name, args, result, task):
             return result + '\n[MODIFIED]'
@@ -474,7 +492,7 @@ class TestToolHooks:
         register_pre_hook(bad_hook)
         try:
             # Should not raise — exceptions are caught and logged
-            run_pre_hooks('test_tool', {}, {})
+            result = run_pre_hooks('test_tool', {}, {})
             # Result could be None (bad hook's exception caught)
         finally:
             _pre_hooks.pop()
@@ -514,6 +532,12 @@ class TestDynamicDeferral:
     """Tests for the dynamic deferral in lib/tools/deferral.py."""
 
     def test_static_deferral_still_works(self):
+        """With default (large) context window, all user-selected tools stay in core.
+
+        Phase 1 static deferral was removed — user-selected tools are never
+        silently deferred.  Only dynamic threshold-based deferral (Phase 2)
+        can move tools out when total tool tokens exceed the threshold.
+        """
         from lib.tools.deferral import partition_tools
         tools = [
             {'function': {'name': 'read_files', 'parameters': {}}},
@@ -523,9 +547,9 @@ class TestDynamicDeferral:
         ]
         core, deferred = partition_tools(tools)
         core_names = {t['function']['name'] for t in core}
-        deferred_names = {t['function']['name'] for t in deferred}
+        # With default 200k context window, 2 small tools should all stay in core
         assert 'read_files' in core_names
-        assert 'browser_type' in deferred_names
+        assert 'browser_type' in core_names
 
     def test_dynamic_deferral_small_context(self):
         """With a very small context window, more tools get deferred."""

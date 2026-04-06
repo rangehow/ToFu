@@ -250,11 +250,10 @@ function _getConvProjectPath(conv) {
 function _clearProjectStateLocal() {
   // Reset local projectState without touching server — used when switching to a conv with no project
   // ★ BUG FIX: Stop background polls BEFORE clearing state.
-  // Without this, _doScanPoll / _pollIndexStatus keep fetching the old project
+  // Without this, _doScanPoll keeps fetching the old project
   // from the server and _applyProjectData resurrects projectState.active=true,
   // making it impossible to clear the project bar (e.g. on "New Chat").
   _stopScanPoll();
-  _indexPollAborted = true;   // signal _pollIndexStatus loop to stop
   projectState = {
     active: false,
     path: "",
@@ -262,10 +261,6 @@ function _clearProjectStateLocal() {
     dirCount: 0,
     totalSize: 0,
     languages: {},
-    indexed: false,
-    indexedCount: 0,
-    indexing: false,
-    indexProgress: "",
     scanning: false,
     scanProgress: "",
     scanDetail: "",
@@ -310,7 +305,6 @@ async function _restoreConvProject(conv) {
     const data = await resp.json();
     if (resp.ok) {
       _applyProjectData(data);
-      if (data.scanning) _startScanPoll();
       // ★ BUG FIX: Update recent projects on restore so new projects appear
       //   in the recent list and last_used stays current.
       saveRecentProject(data.path);
@@ -457,7 +451,6 @@ async function mpApplyFolders() {
     closeProjectModal();
     const nExtras = _mpFolders.length - 1;
     debugLog(`Project set: ${data.path}` + (nExtras ? ` + ${nExtras} extra folder(s)` : ''), "success");
-    if (data.scanning) _startScanPoll();
   } catch (e) {
     statusEl.innerHTML = `<div style="color:var(--error-text);font-size:12px">${escapeHtml(e.message)}</div>`;
   }
@@ -479,8 +472,7 @@ async function clearProject() {
   _mpFolders = [];
   projectState = {
     active: false, path: "", fileCount: 0, dirCount: 0, totalSize: 0,
-    languages: {}, indexed: false, indexedCount: 0, indexing: false,
-    indexProgress: "", scanning: false, scanProgress: "", scanDetail: "",
+    languages: {}, scanning: false, scanProgress: "", scanDetail: "",
     scannedAt: 0, extraRoots: [],
   };
   _updateProjectUI();
@@ -555,8 +547,7 @@ async function rescanProject() {
     const data = await resp.json();
     if (resp.ok) {
       _applyProjectData(data);
-      if (data.scanning) _startScanPoll();
-      debugLog("Project rescan started", "success");
+      debugLog("Project refreshed", "success");
     }
   } catch (e) {
     debugLog("Rescan failed: " + e.message, "warn");
@@ -656,38 +647,6 @@ async function undoAllModifications() {
   }
 }
 
-async function indexProject() {
-  if (!projectState.active || projectState.scanning || projectState.indexing)
-    return;
-  try {
-    const resp = await fetch(apiUrl("/api/project/index"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: "{}",
-    });
-    const data = await resp.json();
-    if (data.status === "error") {
-      debugLog("Index: " + (data.message || "error"), "warn");
-      return;
-    }
-    if (data.status === "skipped") {
-      debugLog(
-        "Index skipped: " +
-          (data.message || "project too large, using tool-based exploration"),
-        "info",
-      );
-      return;
-    }
-    if (data.status === "started" || data.status === "already_running") {
-      projectState.indexing = true;
-      _updateProjectUI();
-      _pollIndexStatus();
-      debugLog("Project indexing started", "success");
-    }
-  } catch (e) {
-    debugLog("Index failed: " + e.message, "warn");
-  }
-}
 
 function _applyProjectData(data) {
   projectState = {
@@ -698,10 +657,6 @@ function _applyProjectData(data) {
     dirCount: data.dirCount ?? projectState.dirCount,
     totalSize: data.totalSize ?? projectState.totalSize,
     languages: data.languages || projectState.languages,
-    indexed: data.indexed ?? projectState.indexed,
-    indexedCount: data.indexedCount ?? projectState.indexedCount,
-    indexing: data.indexing ?? projectState.indexing,
-    indexProgress: data.indexProgress || projectState.indexProgress,
     scanning: data.scanning ?? false,
     scanProgress: data.scanProgress || "",
     scanDetail: data.scanDetail || "",
@@ -715,8 +670,7 @@ function _applyProjectData(data) {
 }
 
 function _startScanPoll() {
-  _stopScanPoll();
-  _scanPollTimer = setInterval(_doScanPoll, 250);
+  // No-op: scanning was removed — project relies on tools for exploration
 }
 
 function _stopScanPoll() {
@@ -726,59 +680,6 @@ function _stopScanPoll() {
   }
 }
 
-async function _doScanPoll() {
-  try {
-    const resp = await fetch(apiUrl("/api/project/status"));
-    if (!resp.ok) {
-      _stopScanPoll();
-      return;
-    }
-    const data = await resp.json();
-    _applyProjectData(data);
-    if (!data.scanning) {
-      _stopScanPoll();
-      debugLog(
-        `Scan complete: ${data.fileCount} files, ${data.dirCount} dirs`,
-        "success",
-      );
-      // Auto-index after scan completes (if not already indexed/indexing)
-      if (
-        !projectState.indexed &&
-        !projectState.indexing &&
-        projectState.fileCount > 0
-      ) {
-        debugLog("Auto-indexing project…", "info");
-        indexProject();
-      }
-    }
-  } catch (e) {
-    _stopScanPoll();
-    debugLog("Scan poll error: " + e.message, "warn");
-  }
-}
-
-let _indexPollAborted = false;
-
-async function _pollIndexStatus() {
-  _indexPollAborted = false;
-  for (let i = 0; i < 300; i++) {
-    await new Promise((r) => setTimeout(r, 2000));
-    if (_indexPollAborted) break;   // ★ Stop if project was cleared
-    try {
-      const resp = await fetch(apiUrl("/api/project/status"));
-      const data = await resp.json();
-      if (_indexPollAborted) break;  // ★ Re-check after await
-      projectState.indexing = data.indexing;
-      projectState.indexProgress = data.indexProgress;
-      projectState.indexed = data.indexed;
-      projectState.indexedCount = data.indexedCount || 0;
-      _updateProjectUI();
-      if (!data.indexing) break;
-    } catch {
-      break;
-    }
-  }
-}
 
 function _updateProjectUI() {
   const bar = document.getElementById("projectBar");
@@ -789,7 +690,7 @@ function _updateProjectUI() {
 
   if (!projectState.active) {
     bar.style.display = "none";
-    bar.classList.remove("scanning", "indexing");
+    bar.classList.remove("scanning");
     badge.classList.remove("visible");
     toggle.classList.remove("active");
     return;
@@ -821,22 +722,8 @@ function _updateProjectUI() {
   foldersEl.innerHTML = badges.join('');
 
   // ── Stats line ──
-  if (projectState.scanning) {
-    bar.classList.add("scanning");
-    bar.classList.remove("indexing");
-    let txt = (projectState.scanProgress || "Scanning…");
-    if (projectState.scanDetail) txt += " · " + projectState.scanDetail;
-    statsEl.textContent = txt;
-  } else if (projectState.indexing) {
-    bar.classList.remove("scanning");
-    bar.classList.add("indexing");
-    statsEl.innerHTML = `${projectState.fileCount} files, ${projectState.dirCount} dirs &middot; ${projectState.indexProgress || "Indexing…"}`;
-  } else {
-    bar.classList.remove("scanning", "indexing");
-    let parts = [`${projectState.fileCount} files, ${projectState.dirCount} dirs`];
-    if (projectState.indexed) parts.push(`${projectState.indexedCount} indexed`);
-    statsEl.innerHTML = parts.join(" &middot; ");
-  }
+  bar.classList.remove("scanning");
+  statsEl.innerHTML = '';
 }
 
 function _updateProjectModalStatus() {
@@ -844,9 +731,8 @@ function _updateProjectModalStatus() {
   if (!el) return;
   if (!projectState.active) { el.innerHTML = ""; return; }
   const total = _mpFolders.length;
-  const scan = projectState.scanning ? " · Scanning…" : "";
   el.innerHTML = `<div style="font-size:12px;color:#34d399;margin-bottom:12px">
-    ✓ ${total} folder${total > 1 ? 's' : ''} active &middot; ${projectState.fileCount} files, ${projectState.dirCount} dirs${projectState.indexed ? ` &middot; <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;opacity:0.7"><rect width="16" height="16" x="4" y="4" rx="2"/><rect width="6" height="6" x="9" y="9" rx="1"/><path d="M15 2v2"/><path d="M15 20v2"/><path d="M2 15h2"/><path d="M2 9h2"/><path d="M20 15h2"/><path d="M20 9h2"/><path d="M9 2v2"/><path d="M9 20v2"/></svg> Indexed` : ""}${scan}
+    ✓ ${total} folder${total > 1 ? 's' : ''} active
   </div>`;
 }
 
@@ -870,8 +756,7 @@ async function loadProjectStatus() {
       _applyProjectData(data);
       /* ★ FIX: Ensure conv.projectPath is set — same reason as _restoreConvProject fix. */
       if (conv) conv.projectPath = data.path || savedPath;
-      if (data.scanning) _startScanPoll();
-      if (data.indexing) _pollIndexStatus();
+
     } else {
       // Server has no project or a different one — restore from conv
       debugLog("Restoring project from conversation: " + savedPath, "info");
@@ -886,7 +771,6 @@ async function loadProjectStatus() {
           _applyProjectData(setData);
           /* ★ FIX: Sync conv.projectPath after successful restore. */
           if (conv) conv.projectPath = setData.path || savedPath;
-          if (setData.scanning) _startScanPoll();
           debugLog("Project restored: " + savedPath, "success");
         } else {
           debugLog("Saved project path no longer valid, clearing", "warn");

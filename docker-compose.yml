@@ -1,0 +1,61 @@
+# ═══════════════════════════════════════════════════════════════
+#  Tofu (豆腐) — Docker Compose
+# ═══════════════════════════════════════════════════════════════
+#
+#  Quick start:
+#    docker compose up -d
+#
+#  With API key pre-configured:
+#    LLM_API_KEYS=sk-xxx docker compose up -d
+#
+#  View logs:
+#    docker compose logs -f tofu
+#
+#  Stop:
+#    docker compose down
+#
+#  Upgrade:
+#    docker compose pull && docker compose up -d
+#
+# ═══════════════════════════════════════════════════════════════
+
+services:
+  tofu:
+    build: .
+    # image: ghcr.io/rangehow/tofu:latest  # uncomment after publishing
+    container_name: tofu
+    restart: unless-stopped
+    ports:
+      - "${PORT:-15000}:15000"
+    volumes:
+      # Persistent data — database, configs, uploads survive restarts
+      - tofu-data:/app/data
+      - tofu-logs:/app/logs
+      - tofu-uploads:/app/uploads
+    environment:
+      - PORT=15000
+      - BIND_HOST=0.0.0.0
+      # ── LLM API (optional — can also configure via Settings UI) ──
+      - LLM_API_KEYS=${LLM_API_KEYS:-}
+      - LLM_BASE_URL=${LLM_BASE_URL:-}
+      - LLM_MODEL=${LLM_MODEL:-}
+      # ── Proxy (if needed) ──
+      - HTTP_PROXY=${HTTP_PROXY:-}
+      - HTTPS_PROXY=${HTTPS_PROXY:-}
+      - PROXY_BYPASS_DOMAINS=${PROXY_BYPASS_DOMAINS:-}
+      # ── Feishu bot (optional) ──
+      - FEISHU_APP_ID=${FEISHU_APP_ID:-}
+      - FEISHU_APP_SECRET=${FEISHU_APP_SECRET:-}
+      # ── Trading (disabled by default) ──
+      - TRADING_ENABLED=${TRADING_ENABLED:-0}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:15000/"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
+volumes:
+  tofu-data:
+  tofu-logs:
+  tofu-uploads:

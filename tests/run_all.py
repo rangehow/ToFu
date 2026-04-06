@@ -84,6 +84,7 @@ def main():
         exit_code = _run_pytest(["visual"], extra)
     else:
         # Run all (optionally skip visual)
+        markers = ["unit"]
         _banner("Phase 1: Unit Tests")
         rc = _run_pytest(["unit"], extra)
         if rc != 0:

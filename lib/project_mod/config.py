@@ -7,8 +7,6 @@ from lib.log import get_logger
 
 logger = get_logger(__name__)
 
-import lib as _lib  # module ref for hot-reload
-
 # ═══════════════════════════════════════════════════════
 #  Constants
 # ═══════════════════════════════════════════════════════
@@ -43,20 +41,11 @@ IGNORE_FILES = {
 MAX_FILE_SIZE    = 512 * 1024
 MAX_SCAN_FILES   = 5000
 MAX_TREE_ENTRIES = 500
-SMALL_PROJECT_THRESHOLD = 150    # ★ Below this: inject full tree+descriptions; above: rely on tools
 MAX_READ_CHARS   = 100_000
 MAX_GREP_RESULTS = 50
 LINE_COUNT_LIMIT = 50_000        # ★ skip line counting for files above this
-INDEX_MODEL      = _lib.QWEN_MODEL  # ★ Default model for indexing (was LongCat, now Qwen)
-PARALLEL_INDEX_THRESHOLD = 40    # ★ Use multi-model pool when file count exceeds this
-LARGE_FILE_THRESHOLD = 50_000    # ★ Files >50KB use stronger model
-INDEX_DIR        = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                                '.project_indexes')
 SESSIONS_DIR     = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                                 '.project_sessions')
-
-# ★ Skip semantic indexing for very large projects — let the model explore with tools
-SKIP_INDEX_THRESHOLD = int(os.environ.get('SKIP_INDEX_THRESHOLD', '300'))
 
 MAX_COMMAND_TIMEOUT = None      # ★ no timeout limit for run_command
 MAX_COMMAND_OUTPUT  = 100_000   # ★ max chars of command output to return
@@ -88,7 +77,7 @@ CODE_EXTENSIONS = {
     '.md', '.txt', '.sh', '.dockerfile',
 }
 
-# ★ Data / bulk files — not binary but not worth indexing or reading in full
+# ★ Data / bulk files — not binary but not worth reading in full
 DATA_EXTENSIONS = {
     '.jsonl', '.ndjson', '.csv', '.tsv', '.parquet',
     '.log', '.logs', '.out', '.err',
@@ -96,107 +85,8 @@ DATA_EXTENSIONS = {
     '.xml', '.xsd', '.dtd',
     '.arff', '.sav', '.rec', '.ftr', '.feather',
 }
-# ★ Max file size sent to LLM for indexing (smaller than general MAX_FILE_SIZE)
-MAX_INDEX_FILE_SIZE = 256 * 1024
 # ★ Max chars returned to LLM for data files in tool_read_file
 MAX_DATA_FILE_PREVIEW = 2000
-
-
-# ═══════════════════════════════════════════════════════
-#  ★ Per-Model RPM Rate Limiter
-# ═══════════════════════════════════════════════════════
-
-# RPM limits per model — configurable via env vars
-# Format: MODEL_RPM_<sanitized_name>=<rpm>  or use defaults below
-_DEFAULT_RPM = {
-    _lib.QWEN_MODEL:        int(os.environ.get('RPM_QWEN',      '20')),
-}
-
-import time as _time
-
-
-class ModelRateLimiter:
-    """Token-bucket RPM limiter — one instance per model.
-
-    Supports:
-      - acquire(model): blocks until a slot is available
-      - Dynamic RPM adjustment if 429s are detected
-      - wait_time(model): estimate how long until next slot
-    """
-
-    def __init__(self):
-        self._lock = threading.Lock()
-        # {model: [timestamp, timestamp, ...]}  — recent request timestamps
-        self._windows: dict[str, list[float]] = {}
-        self._rpm: dict[str, int] = dict(_DEFAULT_RPM)
-
-    def _get_rpm(self, model: str) -> int:
-        return self._rpm.get(model, 15)   # conservative default for unknown models
-
-    def set_rpm(self, model: str, rpm: int):
-        with self._lock:
-            self._rpm[model] = max(1, rpm)
-
-    def acquire(self, model: str, timeout: float = 300.0) -> bool:
-        """Block until a request slot is available. Returns True if acquired, False if timed out."""
-        deadline = _time.monotonic() + timeout
-        rpm = self._get_rpm(model)
-        window = 60.0  # 1 minute window
-
-        while True:
-            now = _time.monotonic()
-            if now > deadline:
-                return False
-
-            with self._lock:
-                timestamps = self._windows.setdefault(model, [])
-                # Prune expired timestamps
-                cutoff = now - window
-                self._windows[model] = [t for t in timestamps if t > cutoff]
-                timestamps = self._windows[model]
-
-                if len(timestamps) < rpm:
-                    timestamps.append(now)
-                    return True
-
-                # Calculate wait time until the oldest request expires
-                wait = timestamps[0] - cutoff
-
-            # Sleep outside the lock — add small jitter to avoid thundering herd
-            import random
-            sleep_time = max(0.1, wait + random.uniform(0.05, 0.3))
-            _time.sleep(min(sleep_time, deadline - _time.monotonic()))
-
-    def on_rate_limited(self, model: str):
-        """Called when a 429 is received — temporarily reduce effective RPM."""
-        with self._lock:
-            current = self._rpm.get(model, 15)
-            # Reduce by 30%, minimum 3 RPM
-            self._rpm[model] = max(3, int(current * 0.7))
-            logger.debug('429 on %s: RPM reduced %d → %d', model, current, self._rpm[model])
-
-    def on_success(self, model: str):
-        """Gradually recover RPM after success."""
-        with self._lock:
-            current = self._rpm.get(model, 15)
-            default = _DEFAULT_RPM.get(model, 15)
-            if current < default:
-                # Recover by 1 RPM per success, up to the default
-                self._rpm[model] = min(default, current + 1)
-
-    def stats(self) -> dict:
-        with self._lock:
-            now = _time.monotonic()
-            result = {}
-            for model, rpm in self._rpm.items():
-                timestamps = self._windows.get(model, [])
-                active = sum(1 for t in timestamps if t > now - 60.0)
-                result[model] = {'rpm_limit': rpm, 'rpm_used': active}
-            return result
-
-
-# ★ Global singleton — shared by all indexing threads
-rate_limiter = ModelRateLimiter()
 
 
 # ═══════════════════════════════════════════════════════
@@ -208,7 +98,6 @@ _state = {
     'path': None, 'tree': None,
     'fileCount': 0, 'dirCount': 0, 'totalSize': 0,
     'languages': {}, 'scannedAt': 0,
-    'index': None, 'indexing': False, 'indexProgress': '',
     # ★ Async scanning
     'scanning': False, 'scanProgress': '', 'scanDetail': '',
     # ★ Modification history for undo (后悔药)
@@ -224,13 +113,13 @@ _state = {
 
 _roots = {}  # name → per-root state dict
 
+
 def _make_root_state(abs_path):
     """Create a fresh per-root state dict."""
     return {
         'path': abs_path, 'tree': None,
         'fileCount': 0, 'dirCount': 0, 'totalSize': 0,
         'languages': {}, 'scannedAt': 0,
-        'index': None, 'indexing': False, 'indexProgress': '',
         'scanning': False, 'scanProgress': '', 'scanDetail': '',
     }
 
@@ -278,10 +167,6 @@ class _ScanAborted(Exception):
 def get_state():
     with _lock:
         s = dict(_state)
-        s.pop('index', None)
-        s['indexed'] = _state['index'] is not None
-        idx = _state.get('index')
-        s['indexedCount'] = len(idx.get('files', {})) if idx else 0
         # Include modification count for undo
         s['modificationsCount'] = len(_state.get('modifications', []))
         # ★ Always include extra roots so the frontend stays in sync

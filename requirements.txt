@@ -1,9 +1,7 @@
-openai>=1.0
-pyyaml>=6.0
-click>=8.0
-fastapi>=0.100
-uvicorn>=0.20
-sse-starlette>=1.0
-tiktoken>=0.5
-pytest>=7.0
-pytest-cov>=4.0
+flask>=3.0
+flask-compress>=1.14
+requests>=2.31
+psutil>=5.9
+psycopg2-binary>=2.9
+trafilatura>=1.6
+playwright>=1.40

@@ -105,7 +105,13 @@ class TestBackwardCompatImports:
         """All model detection functions still importable from llm_client."""
         from lib.llm_client import (
             is_claude,
+            is_doubao,
+            is_gemini,
+            is_glm,
             is_gpt,
+            is_longcat,
+            is_minimax,
+            is_qwen,
         )
         # Quick sanity
         assert is_claude('claude-4')

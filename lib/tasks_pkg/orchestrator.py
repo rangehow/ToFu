@@ -386,6 +386,13 @@ def run_task(task: dict[str, Any]) -> None:
         project_enabled = mcfg['project_enabled']
         if project_enabled and project_path:
             logger.info('[Task:%s] project_path=%s', task['id'], project_path)
+            # ★ Ensure the server's global project state matches this task's
+            # project path.  Another conversation may have switched the server
+            # to a different project, causing get_context_for_prompt to miss
+            # the file tree (path mismatch → no tree in system prompt → LLM
+            # doesn't know the project structure → "backend cannot use tools").
+            from lib.project_mod import ensure_project_state
+            ensure_project_state(project_path)
         code_exec_enabled = mcfg['code_exec_enabled']
         skills_enabled  = mcfg['skills_enabled']
         browser_enabled = mcfg['browser_enabled']

@@ -1,16 +1,17 @@
 """lib/oauth/claude.py — Claude (Anthropic) OAuth PKCE authentication.
 
-OAuth flow:
+OAuth flow (console callback):
   1. Generate PKCE codes + state
-  2. Build auth URL → user opens in browser
-  3. Local callback server receives code
-  4. Exchange code for access_token / refresh_token
-  5. Token is a standard Anthropic API key (sk-ant-oat01-...)
+  2. Build auth URL → user opens in popup browser
+  3. User authenticates on claude.ai
+  4. Redirect to console.anthropic.com/oauth/code/callback which shows code#state
+  5. User copies code#state and pastes into Tofu input box
+  6. Exchange code for access_token / refresh_token via console.anthropic.com/v1/oauth/token
+  7. Token is a standard Anthropic API key (sk-ant-oat01-...)
      → use with Authorization: Bearer header on api.anthropic.com/v1/messages
 
-The key insight: Claude OAuth tokens work directly with the standard
-Anthropic Messages API — no format translation needed. Only the auth
-header changes from x-api-key to Authorization: Bearer.
+Important: Anthropic uses JSON (not form-urlencoded) for token exchange.
+The redirect_uri must be the registered console callback URL.
 """
 
 import json
@@ -22,6 +23,7 @@ import requests
 from lib.log import get_logger
 from lib.oauth.pkce import generate_pkce_codes
 from lib.oauth.token_store import load_token, save_token
+from lib.proxy import proxies_for
 
 logger = get_logger(__name__)
 
@@ -40,11 +42,12 @@ __all__ = [
 
 CLAUDE_OAUTH_CONFIG = {
     'auth_url': 'https://claude.ai/oauth/authorize',
-    'token_url': 'https://api.anthropic.com/v1/oauth/token',
+    'token_url': 'https://console.anthropic.com/v1/oauth/token',
     'client_id': '9d1c250a-e61b-44d9-88ed-5944d1962f5e',
-    'callback_port': 54545,
-    'redirect_uri': 'http://localhost:54545/callback',
-    'scope': 'user:inference user:profile offline_access',
+    'callback_port': 54545,  # kept for relay server (auto-callback)
+    'redirect_uri': 'https://console.anthropic.com/oauth/code/callback',
+    'redirect_uri_local': 'http://localhost:54545/callback',  # for relay server auto-callback
+    'scope': 'org:create_api_key user:profile user:inference',
     'provider': 'claude',
 }
 
@@ -63,6 +66,7 @@ def claude_build_auth_url() -> dict:
     state = uuid.uuid4().hex
 
     params = {
+        'code': 'true',  # tell Anthropic to return code on the callback page
         'response_type': 'code',
         'client_id': CLAUDE_OAUTH_CONFIG['client_id'],
         'redirect_uri': CLAUDE_OAUTH_CONFIG['redirect_uri'],
@@ -86,12 +90,13 @@ def claude_build_auth_url() -> dict:
     }
 
 
-def claude_exchange_code(code: str, pkce_verifier: str) -> dict | None:
+def claude_exchange_code(code: str, pkce_verifier: str, state: str = '') -> dict | None:
     """Exchange authorization code for tokens.
 
     Args:
         code: Authorization code from OAuth callback.
         pkce_verifier: The PKCE code verifier used in the auth request.
+        state: The OAuth state parameter (for CSRF validation).
 
     Returns:
         Token dict with access_token, refresh_token, email, expire, etc.
@@ -100,16 +105,19 @@ def claude_exchange_code(code: str, pkce_verifier: str) -> dict | None:
     payload = {
         'grant_type': 'authorization_code',
         'code': code,
+        'state': state,
         'redirect_uri': CLAUDE_OAUTH_CONFIG['redirect_uri'],
         'client_id': CLAUDE_OAUTH_CONFIG['client_id'],
         'code_verifier': pkce_verifier,
     }
 
     try:
+        token_url = CLAUDE_OAUTH_CONFIG['token_url']
         resp = requests.post(
-            CLAUDE_OAUTH_CONFIG['token_url'],
-            data=payload,
-            headers={'Content-Type': 'application/x-www-form-urlencoded'},
+            token_url,
+            json=payload,
+            headers={'Content-Type': 'application/json'},
+            proxies=proxies_for(token_url),
             timeout=30,
         )
 
@@ -176,10 +184,12 @@ def claude_refresh_token(refresh_tok: str = None) -> dict | None:
 
     for attempt in range(3):
         try:
+            token_url = CLAUDE_OAUTH_CONFIG['token_url']
             resp = requests.post(
-                CLAUDE_OAUTH_CONFIG['token_url'],
-                data=payload,
-                headers={'Content-Type': 'application/x-www-form-urlencoded'},
+                token_url,
+                json=payload,
+                headers={'Content-Type': 'application/json'},
+                proxies=proxies_for(token_url),
                 timeout=30,
             )
 

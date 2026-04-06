@@ -168,20 +168,39 @@ def save_conv(conv_id):
     settings = json.dumps(settings_dict, ensure_ascii=False)
     db = get_db(DOMAIN_CHAT)
 
+    # ── Guard: prevent stale syncs from overwriting newer data ──
+    # A frontend sync captured lightMsgs before an await; by the time the PUT
+    # arrives, a fresher sync with MORE messages may have already completed.
+    # Reject PUTs with fewer messages unless the client explicitly signals
+    # truncation (e.g. regen/edit sends allowTruncate=true).
+    allow_truncate = data.get('allowTruncate', False)
+    existing_row = db.execute(
+        'SELECT msg_count FROM conversations WHERE id=? AND user_id=?',
+        (conv_id, DEFAULT_USER_ID)
+    ).fetchone()
+    existing_count = existing_row[0] if existing_row else 0
+
+    if msg_count == 0 and existing_count > 0:
+        logger.warning('[save_conv] ⚠️ BLOCKED overwrite of conv %s — '
+                       'server has %d msgs but client sent 0. '
+                       'This is likely a race condition.',
+                       conv_id[:12], existing_count)
+        return jsonify({'ok': False, 'error': 'blocked_empty_overwrite',
+                        'serverMsgCount': existing_count}), 409
+
+    if msg_count > 0 and msg_count < existing_count and not allow_truncate:
+        logger.warning('[save_conv] ⚠️ BLOCKED regression of conv %s — '
+                       'server has %d msgs but client sent %d (delta=%d). '
+                       'This is a stale sync from a concurrent async callback '
+                       '(e.g. translate poll). Set allowTruncate=true for '
+                       'intentional truncation (regen/edit).',
+                       conv_id[:12], existing_count, msg_count,
+                       existing_count - msg_count)
+        return jsonify({'ok': False, 'error': 'blocked_msg_regression',
+                        'serverMsgCount': existing_count,
+                        'clientMsgCount': msg_count}), 409
+
     if msg_count == 0:
-        existing = db.execute(
-            'SELECT messages FROM conversations WHERE id=? AND user_id=?',
-            (conv_id, DEFAULT_USER_ID)
-        ).fetchone()
-        if existing:
-            existing_msgs = _safe_json(existing['messages'], default=[], label='messages')
-            if len(existing_msgs) > 0:
-                logger.warning('[save_conv] ⚠️ BLOCKED overwrite of conv %s — '
-                               'server has %d msgs but client sent 0. '
-                               'This is likely a race condition.',
-                               conv_id[:12], len(existing_msgs))
-                return jsonify({'ok': False, 'error': 'blocked_empty_overwrite',
-                                'serverMsgCount': len(existing_msgs)}), 409
         logger.info('[save_conv] Conv %s — saving with 0 messages (new/empty conv)',
                     conv_id[:12])
     else:

@@ -6,9 +6,11 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sys
+import threading
 import time
 from concurrent.futures import Future
 from unittest.mock import MagicMock, patch
@@ -444,7 +446,7 @@ class TestMemoryPrefetch:
 
         # The fallback should be called — mock it
         with patch('lib.project_mod.get_context_for_prompt',
-                   return_value='Fallback project ctx'), \
+                   return_value='Fallback project ctx') as mock_fn, \
              patch('lib.tasks_pkg.system_context._build_search_addendum',
                    return_value=''):
             _inject_system_contexts(
@@ -477,7 +479,7 @@ class TestMemoryPrefetch:
         messages = [{'role': 'system', 'content': 'Base prompt'}]
 
         with patch('lib.project_mod.get_context_for_prompt',
-                   return_value='Sync fallback ctx'), \
+                   return_value='Sync fallback ctx') as mock_fn, \
              patch('lib.tasks_pkg.system_context._build_search_addendum',
                    return_value=''):
             _inject_system_contexts(

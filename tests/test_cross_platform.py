@@ -5,6 +5,7 @@ optional dependency flags, command safety analysis, and key module imports.
 """
 
 import os
+import platform
 import signal
 import sys
 

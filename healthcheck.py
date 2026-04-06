@@ -109,7 +109,7 @@ tl_checks = [
                            "tool_list_dir", "tool_read_file", "tool_grep", "tool_find_files",
                            "tool_write_file", "tool_apply_diff", "tool_run_command",
                            "execute_tool", "browse_directory",
-                           "start_indexing", "get_context_for_prompt",
+                           "get_context_for_prompt",
                            "get_modifications", "undo_conv_modifications"]),
 ]
 

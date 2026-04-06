@@ -95,6 +95,15 @@ class PromptTooLongError(Exception):
     pass
 
 
+class InvalidImageError(Exception):
+    """HTTP 400 indicating image content is invalid (too large, corrupt, etc.).
+
+    Same payload = same rejection on ALL keys/endpoints → should NOT retry.
+    Bubbles up to the user with a descriptive message.
+    """
+    pass
+
+
 class StreamOnlyError(Exception):
     """HTTP 400 indicating the model only supports stream mode.
 
@@ -104,6 +113,21 @@ class StreamOnlyError(Exception):
     def __init__(self, message, model):
         super().__init__(message)
         self.model = model
+
+# Patterns in HTTP 400 that indicate an image content error (not retryable)
+_IMAGE_ERROR_PATTERNS = [
+    'image dimensions exceed',
+    'exceed max allowed size',
+    'could not process image',
+    'invalid image',
+    'image is too large',
+    'image resolution exceed',
+]
+
+def _is_image_error(err_msg: str) -> bool:
+    """Check if an HTTP 400 error is about invalid image content."""
+    lower = err_msg.lower()
+    return any(p in lower for p in _IMAGE_ERROR_PATTERNS)
 
 # Status codes that indicate a transient server-side issue (retry on same key)
 # NOTE: 429 is NOT here — it gets RateLimitError which escapes to dispatch layer
@@ -344,6 +368,117 @@ def _validate_image_blocks(messages: list) -> list:
     return messages
 
 
+# ── Claude image dimension limits ──────────────────────────────
+# Single image: max 8000px on longest side
+# Many images (5+): max 2000px on longest side
+# Use slightly lower limits (7999/1999) to avoid boundary issues where
+# the API rejects images at exactly the limit.
+_CLAUDE_SINGLE_IMAGE_MAX_PX = 7999
+_CLAUDE_MANY_IMAGE_MAX_PX = 1999
+_CLAUDE_MANY_IMAGE_THRESHOLD = 5  # ≥5 images = "many-image" mode
+
+
+def _downscale_oversized_images(messages: list, model: str) -> None:
+    """Downscale base64 images that exceed the model's dimension limits.
+
+    Claude API rejects images with dimensions > 8000px (single image) or
+    > 2000px (many-image requests with 5+ images).  This function detects
+    oversized images and downscales them in-place using PIL/Pillow.
+
+    Only processes data: URI images (base64-encoded).  Remote URLs are
+    left untouched since the API resizes those server-side.
+
+    Args:
+        messages: List of message dicts (mutated in-place).
+        model: Model name string (only applied for Claude models).
+    """
+    if not is_claude(model):
+        return
+
+    try:
+        from PIL import Image
+    except ImportError:
+        logger.debug('[ImageDownscale] Pillow not installed — skipping image size check')
+        return
+
+    import base64 as _b64
+    import io
+
+    # Count total images across all messages to determine limit
+    total_images = 0
+    for msg in messages:
+        content = msg.get('content')
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if isinstance(block, dict) and block.get('type') == 'image_url':
+                total_images += 1
+
+    max_px = (_CLAUDE_MANY_IMAGE_MAX_PX if total_images >= _CLAUDE_MANY_IMAGE_THRESHOLD
+              else _CLAUDE_SINGLE_IMAGE_MAX_PX)
+
+    _resized = 0
+    for msg in messages:
+        content = msg.get('content')
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict) or block.get('type') != 'image_url':
+                continue
+            url = block.get('image_url', {}).get('url', '')
+            if not url.startswith('data:'):
+                continue
+
+            parts = url.split(',', 1)
+            if len(parts) != 2:
+                continue
+            header, b64_data = parts
+            try:
+                raw_bytes = _b64.b64decode(b64_data)
+                img = Image.open(io.BytesIO(raw_bytes))
+                w, h = img.size
+
+                if max(w, h) <= max_px:
+                    continue  # Within limits
+
+                # Calculate new dimensions preserving aspect ratio
+                scale = max_px / max(w, h)
+                new_w = int(w * scale)
+                new_h = int(h * scale)
+
+                # Resize with high-quality resampling
+                img = img.resize((new_w, new_h), Image.LANCZOS)
+
+                # Re-encode to JPEG (good compression) unless it's PNG with alpha
+                if img.mode == 'RGBA':
+                    out_format = 'PNG'
+                    mime = 'image/png'
+                else:
+                    if img.mode != 'RGB':
+                        img = img.convert('RGB')
+                    out_format = 'JPEG'
+                    mime = 'image/jpeg'
+
+                buf = io.BytesIO()
+                img.save(buf, format=out_format, quality=85, optimize=True)
+                new_b64 = _b64.b64encode(buf.getvalue()).decode('ascii')
+
+                block['image_url']['url'] = f'data:{mime};base64,{new_b64}'
+                _resized += 1
+                logger.info('[ImageDownscale] Resized %dx%d → %dx%d '
+                            '(max_px=%d, %d→%d bytes, images=%d)',
+                            w, h, new_w, new_h, max_px,
+                            len(raw_bytes), buf.tell(), total_images)
+
+            except Exception as e:
+                logger.warning('[ImageDownscale] Failed to check/resize image: %s', e)
+                # Leave the original image — let the API decide
+
+    if _resized:
+        logger.info('[ImageDownscale] Resized %d oversized image(s) for model %s '
+                    '(limit=%dpx, total_images=%d)', _resized, model, max_px, total_images)
+
+
 def _merge_consecutive_same_role(messages: list) -> list:
     """Merge consecutive messages with the same role (except system/tool).
 
@@ -572,6 +707,11 @@ def build_body(model, messages, *, max_tokens=128000, temperature=1.0,
     # rest of the conversation is not lost.
     _validate_image_blocks(clean_messages)
 
+    # ── Downscale oversized images for Claude ──────────────────
+    # Claude rejects images > 8000px (single) or > 2000px (many-image).
+    # Auto-resize to prevent HTTP 400 errors.
+    _downscale_oversized_images(clean_messages, model)
+
     # ── Strip images for non-vision models ─────────────────────
     # Some APIs (e.g. MiniMax) silently accept image_url blocks but
     # cannot actually see images — they respond generically as if
@@ -762,19 +902,24 @@ def _strip_trailing_assistant_for_claude(messages: list, model: str = ''):
 # ══════════════════════════════════════════════════════════
 
 def add_cache_breakpoints(body, log_prefix=''):
-    """Add Anthropic-style ephemeral cache breakpoints.
+    """Add Anthropic-style ephemeral cache breakpoints with mixed TTL.
 
     Annotates up to 4 content blocks with cache_control for:
       1. System messages (1-2 breakpoints for static/dynamic blocks)
       2. Last tool definition
-      3. Second-to-last message (any role) — the conversation tail
+      3. Last message with content — the conversation tail
 
-    The tail breakpoint advances each round as new messages are appended,
-    ensuring the entire growing prefix is covered by the cache.  This is
-    critical for multi-round tool conversations: previously, the breakpoint
-    was on the "second-to-last user message" which in tool-heavy convos
-    was always the original user message (index ~1), so the growing
-    assistant/tool prefix was never cached.
+    **Mixed TTL strategy** (when CACHE_EXTENDED_TTL is enabled):
+      - BP1-BP3 (system + tools): ``ttl="1h"`` — stable content, rarely
+        changes, benefits enormously from 1-hour cache persistence.
+        Cost: 2x base input price (vs 1.25x for 5-min).
+      - BP4 (conversation tail): ``ttl="5m"`` (default) — changes every
+        round, so 1h TTL would waste money on writes that are immediately
+        superseded.
+
+    **Constraint**: Anthropic requires 1-hour TTL entries to appear BEFORE
+    5-minute entries in the same request.  Since BP1-BP3 are always
+    earlier in the message array than BP4, this is naturally satisfied.
 
     Only applied to Claude/Anthropic models.  OpenAI & Qwen use
     automatic server-side prefix caching — no client annotation needed.
@@ -787,6 +932,17 @@ def add_cache_breakpoints(body, log_prefix=''):
     model = body.get('model', '')
     if not is_claude(model):
         return
+
+    import lib as _lib
+    use_extended_ttl = getattr(_lib, 'CACHE_EXTENDED_TTL', False)
+
+    # cache_control dicts for stable prefix (BP1-BP3) and tail (BP4)
+    if use_extended_ttl:
+        _cc_stable = {'type': 'ephemeral', 'ttl': '1h'}   # 1-hour for system+tools
+        _cc_tail   = {'type': 'ephemeral'}                 # 5-min default for tail
+    else:
+        _cc_stable = {'type': 'ephemeral'}
+        _cc_tail   = {'type': 'ephemeral'}
 
     messages = body.get('messages', [])
 
@@ -808,7 +964,7 @@ def add_cache_breakpoints(body, log_prefix=''):
 
     bp = 0
 
-    # ── Cache system messages ──
+    # ── Cache system messages (BP1-BP2: stable, use extended TTL) ──
     # When the system message has multiple text blocks (static + dynamic),
     # place cache breakpoints on EACH block independently.  This way the
     # static guidance (FRC, tool usage, output efficiency) that never changes
@@ -821,7 +977,7 @@ def add_cache_breakpoints(body, log_prefix=''):
         if isinstance(content, str) and content.strip():
             messages[i] = {**msg, 'content': [
                 {'type': 'text', 'text': content,
-                 'cache_control': {'type': 'ephemeral'}}
+                 'cache_control': dict(_cc_stable)}
             ]}
             bp += 1
         elif isinstance(content, list) and content:
@@ -830,51 +986,78 @@ def add_cache_breakpoints(body, log_prefix=''):
                 if bp >= 4:
                     break
                 if isinstance(blk, dict) and blk.get('type') == 'text':
-                    content[blk_idx] = {**blk, 'cache_control': {'type': 'ephemeral'}}
+                    content[blk_idx] = {**blk, 'cache_control': dict(_cc_stable)}
                     bp += 1
 
-    # ── Cache last tool definition ──
+    # ── Cache last tool definition (BP3: stable, use extended TTL) ──
     tools = body.get('tools')
     if tools and bp < 4:
         fn = tools[-1].get('function')
         if fn:
             # Deep copy to avoid mutating module-level tool constants
             tools[-1] = {**tools[-1],
-                         'function': {**fn, 'cache_control': {'type': 'ephemeral'}}}
+                         'function': {**fn, 'cache_control': dict(_cc_stable)}}
             bp += 1
 
-    # ── Cache conversation tail: second-to-last message ──
+    # ── Cache conversation tail: scan backwards for a message with content ──
     # In multi-round tool conversations, the conversation grows as:
     #   [system, user, asst+tc, tool, asst+tc, tool, ...]
-    # The original code cached the "second-to-last user message", but in
-    # tool-heavy conversations there's usually only ONE user message, so
-    # this breakpoint never moved — the growing assistant/tool prefix was
-    # never covered by a cache breakpoint.
     #
-    # Fix: cache the second-to-last message (any role), which advances as
-    # the conversation grows.  This ensures the entire prefix up to the
-    # penultimate message is cached, and only the final message (new content)
-    # is uncached.  This matches Claude Code's approach of placing a
-    # breakpoint near the tail of the conversation to maximize cache hits.
-    if len(messages) >= 3 and bp < 4:
-        # Second-to-last message — the breakpoint advances each round
-        idx = len(messages) - 2
-        msg = messages[idx]
-        content = msg.get('content', '')
-        if isinstance(content, str) and content:
-            messages[idx] = {**msg, 'content': [
-                {'type': 'text', 'text': content,
-                 'cache_control': {'type': 'ephemeral'}}
-            ]}
-            bp += 1
-        elif isinstance(content, list) and content:
-            last = content[-1]
-            if isinstance(last, dict):
-                content[-1] = {**last, 'cache_control': {'type': 'ephemeral'}}
+    # We want to place a breakpoint near the tail to cache the growing prefix.
+    # The breakpoint marks "cache everything up to AND INCLUDING this block".
+    # Next round, new messages are appended, and the old prefix (including the
+    # breakpointed message) becomes part of the cached prefix for a cache hit.
+    #
+    # We scan from msg[-1] backwards (not msg[-2]) because:
+    #   - In tool rounds, msg[-1] is a tool result that becomes prefix next round
+    #   - In non-tool rounds, msg[-1] is the user query that becomes prefix next round
+    #   - Starting from msg[-2] missed msg[-1] (often the tool result with content)
+    #     and fell back to much earlier messages, under-caching the tail
+    #
+    # Assistant messages with ONLY tool_calls often have empty content
+    # (content='' or None), so we skip them and keep scanning backwards.
+    #
+    # Minimum cache block size:
+    #   - Opus / Haiku 4.5: 4,096 tokens
+    #   - Sonnet: 1,024 tokens
+    # If the segment between the previous BP and this one is smaller, Anthropic
+    # silently ignores the breakpoint. We place BP4 as close to the tail as
+    # possible (on the last message with content) to maximize the cached segment.
+    # ── Cache conversation tail (BP4: volatile, use short TTL) ──
+    if len(messages) >= 2 and bp < 4:
+        _bp4_placed = False
+        # Scan from msg[-1] backwards, up to 5 positions
+        for _bp4_offset in range(1, min(6, len(messages))):
+            idx = len(messages) - _bp4_offset
+            if idx <= 0:
+                break  # Don't go past system message
+            msg = messages[idx]
+            # Skip system messages (already have their own breakpoints)
+            if msg.get('role') == 'system':
+                break
+            content = msg.get('content', '')
+            if isinstance(content, str) and content:
+                messages[idx] = {**msg, 'content': [
+                    {'type': 'text', 'text': content,
+                     'cache_control': dict(_cc_tail)}
+                ]}
                 bp += 1
+                _bp4_placed = True
+                break
+            elif isinstance(content, list) and content:
+                last = content[-1]
+                if isinstance(last, dict):
+                    content[-1] = {**last, 'cache_control': dict(_cc_tail)}
+                    bp += 1
+                    _bp4_placed = True
+                    break
+        if not _bp4_placed and log_prefix:
+            logger.debug('%s Cache: BP4 tail breakpoint could not be placed '
+                         '(no message with content near tail)', log_prefix)
 
     if bp > 0 and log_prefix:
-        logger.debug('%s Cache: %d breakpoint(s)', log_prefix, bp)
+        _ttl_info = ' (mixed TTL: BP1-3=1h, BP4=5m)' if use_extended_ttl else ''
+        logger.debug('%s Cache: %d breakpoint(s)%s', log_prefix, bp, _ttl_info)
 
 
 # ══════════════════════════════════════════════════════════
@@ -979,6 +1162,17 @@ def chat(messages, model=None, *, max_tokens=4096, temperature=0,
                             'new_limit': _detected_limit,
                         }
                         return content_r, usage_r
+                # ★ HTTP 413 = request body too large for gateway/API → same as prompt too long
+                if resp.status_code == 413:
+                    logger.warning('%s Request entity too large (HTTP 413) — '
+                                   'treating as prompt-too-long: %s',
+                                   log_prefix, err_msg[:300])
+                    raise PromptTooLongError(err_msg)
+                # ★ Detect image content errors (non-streaming)
+                if resp.status_code == 400 and _is_image_error(err_msg):
+                    logger.warning('%s Image content error (HTTP 400): %s',
+                                   log_prefix, err_msg[:300])
+                    raise InvalidImageError(err_msg)
                 # ★ Detect prompt-too-long errors for reactive compaction (non-streaming)
                 if resp.status_code == 400:
                     _ptl_patterns = [
@@ -1003,7 +1197,7 @@ def chat(messages, model=None, *, max_tokens=4096, temperature=0,
                 logger.error('%s Non-retryable API error (HTTP %d): %s', log_prefix, resp.status_code, err_msg[:300])
                 raise Exception(err_msg)
             break   # success
-        except (RateLimitError, PermissionError_, ContentFilterError, PromptTooLongError, StreamOnlyError):
+        except (RateLimitError, PermissionError_, ContentFilterError, PromptTooLongError, StreamOnlyError, InvalidImageError):
             raise   # escape to dispatch layer immediately — don't retry same key
         except _RETRYABLE as e:
             if attempt < retries:
@@ -1169,6 +1363,24 @@ def _stream_chat_once(body, *, on_thinking=None, on_content=None,
     """
     add_cache_breakpoints(body, log_prefix)
 
+    # ── Auto-inject extended cache TTL beta header for Anthropic ──
+    # When CACHE_EXTENDED_TTL is enabled and model is Claude, add the
+    # anthropic-beta header so the server accepts ttl:"1h" in cache_control.
+    # This header is safe to add even if the proxy doesn't need it.
+    if is_claude(body.get('model', '')):
+        import lib as _lib
+        if getattr(_lib, 'CACHE_EXTENDED_TTL', False):
+            if extra_headers is None:
+                extra_headers = {}
+            # Append to existing anthropic-beta if present, don't overwrite
+            _existing_beta = extra_headers.get('anthropic-beta', '')
+            _ttl_beta = 'extended-cache-ttl-2025-04-11'
+            if _ttl_beta not in _existing_beta:
+                if _existing_beta:
+                    extra_headers['anthropic-beta'] = f'{_existing_beta},{_ttl_beta}'
+                else:
+                    extra_headers['anthropic-beta'] = _ttl_beta
+
     # ── Codex OAuth: translate request for ChatGPT Plus subscription ──
     _codex_mode = False
     _codex_translator = None
@@ -1226,6 +1438,12 @@ def _stream_chat_once(body, *, on_thinking=None, on_content=None,
             if resp.status_code in _PERMISSION_STATUS_CODES:
                 logger.warning('%s Permission error (HTTP %d)', log_prefix, resp.status_code)
                 raise PermissionError_(err_msg)
+            # ★ HTTP 413 = request body too large for gateway/API → same as prompt too long
+            if resp.status_code == 413:
+                logger.warning('%s Request entity too large (HTTP 413) — '
+                               'treating as prompt-too-long: %s',
+                               log_prefix, err_msg[:300])
+                raise PromptTooLongError(err_msg)
             # ★ Detect and auto-learn max_tokens limit errors (HTTP 400)
             if resp.status_code == 400:
                 _detected_limit = _parse_token_limit_from_error(
@@ -1235,6 +1453,11 @@ def _stream_chat_once(body, *, on_thinking=None, on_content=None,
                     raise ModelLimitError(
                         err_msg, body.get('model', ''),
                         _detected_limit, body.get('max_tokens', 0))
+                # ★ Detect image content errors (too large, corrupt, etc.)
+                if _is_image_error(err_msg):
+                    logger.warning('%s Image content error (HTTP 400): %s',
+                                   log_prefix, err_msg[:300])
+                    raise InvalidImageError(err_msg)
                 # ★ Detect prompt-too-long errors for reactive compaction
                 _ptl_patterns = [
                     'prompt is too long', 'context length exceeded',

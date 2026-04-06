@@ -13,8 +13,10 @@ Run:  pytest tests/test_compaction_improvements.py -m unit -v
 """
 from __future__ import annotations
 
+import json
 import os
 import sys
+import uuid
 
 import pytest
 
@@ -95,7 +97,7 @@ class TestToolResultBudgeting:
 
     def test_persistence_preview_truncated_at_newline(self):
         """Preview in persisted result should truncate at newline boundary."""
-        from lib.tasks_pkg.compaction import budget_tool_result
+        from lib.tasks_pkg.compaction import _PERSIST_PREVIEW_CHARS, budget_tool_result
         # Build content with lines
         lines = [f'Line {i}: ' + 'x' * 80 for i in range(500)]
         content = '\n'.join(lines)
@@ -410,6 +412,7 @@ class TestDeltaAttachments:
         """Simulate the real scenario: 2 tasks in same conversation.
         Both should have project context in their system message."""
         from lib.tasks_pkg.system_context import (
+            _append_to_system_message,
             _inject_system_contexts,
             _last_context_cache,
         )

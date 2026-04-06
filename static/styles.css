@@ -136,7 +136,7 @@ textarea::placeholder{color:var(--text-tertiary)}
 .send-btn:disabled{opacity:.25;cursor:not-allowed;transform:none;box-shadow:none;background:var(--border)}
 .send-btn.stop-btn{background:linear-gradient(135deg,var(--error-text),#ff6b6b);box-shadow:0 2px 10px rgba(207,80,80,0.2)}
 /* Unified toolbar */
-.input-actions{position:relative;display:flex;align-items:center;padding:8px 8px 10px 12px;gap:6px;flex-wrap:nowrap;overflow:visible}.input-actions-scroll{display:flex;align-items:center;gap:2px;flex:0 1 auto;min-width:0;overflow:visible;scrollbar-width:none;-ms-overflow-style:none}.input-actions-scroll::-webkit-scrollbar{display:none}.input-actions-right{display:flex;align-items:center;gap:4px;flex-shrink:0}
+.input-actions{position:relative;display:flex;align-items:center;padding:8px 12px 10px 14px;gap:8px;flex-wrap:nowrap;overflow:visible}.input-actions-scroll{display:flex;align-items:center;gap:2px;flex:0 1 auto;min-width:0;overflow:visible;scrollbar-width:none;-ms-overflow-style:none}.input-actions-scroll::-webkit-scrollbar{display:none}.input-actions-right{display:flex;align-items:center;gap:4px;flex-shrink:0;margin-left:auto}
 /* Gradient hairline divider */
 .input-actions::before{content:'';position:absolute;top:0;left:16px;right:16px;height:1px;background:linear-gradient(90deg,transparent,var(--border-light),transparent);opacity:.5}
 .input-group{display:flex;align-items:center;gap:2px;flex-shrink:0}
@@ -10433,7 +10433,8 @@ animation:swarmBorderPulse 2s ease-in-out infinite}
   display: flex;
   gap: 8px;
 }
-.oauth-provider-actions .btn-small {
+.oauth-provider-actions .btn-small,
+.oauth-manual-fallback .btn-small {
   padding: 6px 16px;
   font-size: 12px;
   font-weight: 700;
@@ -10443,18 +10444,25 @@ animation:swarmBorderPulse 2s ease-in-out infinite}
   box-shadow: var(--s-shadow-xs);
   transition: transform 0.1s, box-shadow 0.1s;
 }
-.oauth-provider-actions .btn-small:hover {
+.oauth-provider-actions .btn-small:hover,
+.oauth-manual-fallback .btn-small:hover {
   transform: translate(1px, 1px);
   box-shadow: 1px 1px 0 var(--s-ink);
 }
-.oauth-provider-actions .btn-primary {
+.oauth-provider-actions .btn-primary,
+.oauth-manual-fallback .btn-primary {
   background: var(--s-ink);
   color: var(--s-white);
 }
-.oauth-provider-actions .btn-danger {
+.oauth-provider-actions .btn-danger,
+.oauth-manual-fallback .btn-danger {
   background: #dc3545;
   color: #fff;
   border-color: #dc3545;
+}
+.oauth-manual-fallback .btn-small:not(.btn-primary):not(.btn-danger) {
+  background: var(--s-white);
+  color: var(--s-ink);
 }
 .oauth-notes {
   font-size: 12px;
@@ -10486,3 +10494,27 @@ animation:swarmBorderPulse 2s ease-in-out infinite}
   font-size: 12px;
   font-family: monospace;
 }
+
+/* ═══════════════════════════════════════════
+   Agent Backend Selector
+   ═══════════════════════════════════════════ */
+.agent-backend-selector{position:relative;display:inline-flex;align-items:center}
+.agent-backend-trigger{cursor:pointer;opacity:0.7;transition:opacity 0.15s}
+.agent-backend-trigger:hover{opacity:1}
+.agent-backend-dropdown{position:absolute;top:100%;right:0;margin-top:8px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:12px;padding:8px;min-width:260px;z-index:1000;box-shadow:0 8px 32px rgba(0,0,0,0.2)}
+.agent-backend-title{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-tertiary);padding:4px 8px 8px;border-bottom:1px solid var(--border);margin-bottom:4px}
+.agent-backend-btn{display:flex;align-items:center;gap:10px;width:100%;padding:8px 10px;border:none;background:transparent;border-radius:8px;cursor:pointer;color:var(--text-primary);text-align:left;transition:background 0.15s}
+.agent-backend-btn:hover{background:var(--bg-tertiary)}
+.agent-backend-btn.active{background:var(--bg-tertiary);box-shadow:inset 0 0 0 1.5px var(--accent, #6366f1)}
+.agent-backend-btn[disabled]{opacity:0.4;cursor:not-allowed}
+.ab-icon{width:24px;height:24px;display:flex;align-items:center;justify-content:center;flex-shrink:0;border-radius:6px;background:var(--bg-primary);border:1px solid var(--border)}
+.ab-icon img,.ab-icon svg{width:16px;height:16px}
+.ab-info{display:flex;flex-direction:column;gap:1px;min-width:0;flex:1}
+.ab-name{font-size:12px;font-weight:600;white-space:nowrap}
+.ab-desc{font-size:10px;color:var(--text-tertiary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ab-status{font-size:11px;flex-shrink:0;width:18px;text-align:center}
+.ab-ready{color:#22c55e}
+.ab-unavailable{color:var(--text-tertiary);opacity:0.5}
+.ab-not-auth{color:#f59e0b}
+/* Backend indicator badge in topbar */
+.backend-indicator{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;padding:2px 7px;border-radius:6px;color:#6366f1;background:rgba(99,102,241,0.1);border:1px solid rgba(99,102,241,0.2);vertical-align:middle;margin-left:4px}

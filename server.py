@@ -525,6 +525,20 @@ def _handle_413(exc):
         413
     )
 
+@app.errorhandler(405)
+def _handle_405(exc):
+    _lifecycle_log.warning('405 Method Not Allowed: %s %s (allowed: %s)',
+                           request.method, request.path,
+                           exc.valid_methods if hasattr(exc, 'valid_methods') else 'unknown')
+    if _is_api_request():
+        return jsonify({'ok': False, 'error': 'Method Not Allowed',
+                        'allowed': list(exc.valid_methods) if hasattr(exc, 'valid_methods') and exc.valid_methods else []}), 405
+    return make_response(
+        '<h2>405 — Method Not Allowed</h2>'
+        '<p>The method <code>%s</code> is not allowed for this URL.</p>' % request.method,
+        405
+    )
+
 @app.errorhandler(415)
 def _handle_415(exc):
     _lifecycle_log.warning('415 Unsupported Media Type: %s %s (Content-Type: %s)',

@@ -192,10 +192,7 @@ let projectState = {
   dirCount: 0,
   totalSize: 0,
   languages: {},
-  indexed: false,
-  indexedCount: 0,
-  indexing: false,
-  indexProgress: "",
+
   scanning: false,
   scanProgress: "",
   scanDetail: "",
@@ -357,21 +354,37 @@ function calcCostCny(usage, modelOrPreset) {
   }
   let inputCostUsd = 0, cwCostUsd = 0, crCostUsd = 0;
   const outputCostUsd = (out * outP) / 1e6;
+  /* ★ Detect Anthropic-style usage where prompt_tokens = uncached only
+   *   (NOT total including cached). Heuristic: if inp < cw + cr, the API
+   *   is returning the uncached residual, not the total.
+   *   OpenAI convention: prompt_tokens = total (inp >= cw + cr)
+   *   Anthropic convention: prompt_tokens = uncached (inp << cw + cr) */
+  let si, totalInput;
   if (cacheWrite > 0 || cacheRead > 0) {
-    const si = Math.max(0, inp - cacheWrite - cacheRead);
+    if (inp <= cacheWrite + cacheRead) {
+      /* Anthropic convention: inp IS the uncached portion */
+      si = inp;
+      totalInput = inp + cacheWrite + cacheRead;
+    } else {
+      /* OpenAI convention: inp is the total */
+      si = inp - cacheWrite - cacheRead;
+      totalInput = inp;
+    }
     inputCostUsd = (si * baseIn) / 1e6;
     cwCostUsd = (cacheWrite * baseIn * cwMul) / 1e6;
     crCostUsd = (cacheRead * baseIn * crMul) / 1e6;
   } else {
+    si = inp;
+    totalInput = inp;
     inputCostUsd = (inp * baseIn) / 1e6;
   }
   const costUsd = inputCostUsd + cwCostUsd + crCostUsd + outputCostUsd;
-  const noCacheInputUsd = (inp * baseIn) / 1e6;
+  const noCacheInputUsd = (totalInput * baseIn) / 1e6;
   const cacheSavingsUsd = noCacheInputUsd - (inputCostUsd + cwCostUsd + crCostUsd);
   return {
     costUsd: Math.round(costUsd * 1e4) / 1e4,
     costCny: Math.round(costUsd * rate * 1e4) / 1e4,
-    inputTokens: inp, outputTokens: out,
+    inputTokens: si, outputTokens: out, totalInputTokens: totalInput,
     cacheWriteTokens: cacheWrite, cacheReadTokens: cacheRead, thinkingTokens: thinkTok,
     inputCostCny: r6(inputCostUsd * rate),
     outputCostCny: r6(outputCostUsd * rate),
@@ -1108,7 +1121,7 @@ function syncConversationToServerDebounced(conv, delayMs = 1500) {
   }, delayMs));
 }
 
-async function syncConversationToServer(conv) {
+async function syncConversationToServer(conv, { allowTruncate = false } = {}) {
   try {
     /* Guard: skip sync while actively streaming — the assistant message is
      * incomplete, and uploading it would overwrite the server-side accumulator
@@ -1243,6 +1256,18 @@ async function syncConversationToServer(conv) {
       lastMsgRole: lastMsg?.role || null,
       lastMsgTimestamp: lastMsg?.timestamp || null,
     };
+    /* ★ FIX: Pre-send staleness check — if conv.messages grew since lightMsgs
+     * was captured (due to sendMessage/startAssistantResponse running while we
+     * were computing lightMsgs), this PUT would overwrite newer data.
+     * Cancel and let the fresher sync win. */
+    if (!allowTruncate && conv.messages.length > lightMsgs.length) {
+      console.warn(
+        `[syncToServer] ⏭ CANCELLED stale sync for conv=${conv.id.slice(0,8)} — ` +
+        `lightMsgs=${lightMsgs.length} but conv.messages=${conv.messages.length} (grew by ${conv.messages.length - lightMsgs.length} during async). ` +
+        `A fresher sync should follow.`
+      );
+      return;
+    }
     const resp = await fetch(apiUrl(`/api/conversations/${conv.id}`), {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -1252,6 +1277,7 @@ async function syncConversationToServer(conv) {
         createdAt: conv.createdAt,
         updatedAt: conv.updatedAt || Date.now(),
         settings,
+        ...(allowTruncate ? { allowTruncate: true } : {}),
       }),
     });
     if (resp.ok) {
@@ -2070,7 +2096,9 @@ function renderMarkdown(text) {
   });
   // ★ No lookbehind (Safari <16.4 compat) — safe because $$ blocks
   //   are already extracted above, so no $$ sequences remain.
-  p = p.replace(/\$(?!\$)((?:[^$\\]|\\.)+?)\$(?!\$)/g, (_, t) => {
+  // ★ FIX: [^$\\\n] excludes newlines — prevents $ in table cells (e.g. $0.40)
+  //   from matching across rows/paragraphs and destroying table structure.
+  p = p.replace(/\$(?!\$)((?:[^$\\\n]|\\.)+?)\$(?!\$)/g, (_, t) => {
     mathStore.push({ tex: t.trim(), display: false });
     return "\x02MATH" + (mathStore.length - 1) + "\x03";
   });

@@ -14,7 +14,7 @@ logger = get_logger(__name__)
 #  Schema Version Cache — Skip redundant DDL on subsequent startups
 # ═══════════════════════════════════════════════════════════════════════
 
-_SCHEMA_VERSION = 6  # Increment when tables/columns/indexes change
+_SCHEMA_VERSION = 7  # Increment when tables/columns/indexes change
 
 
 def _column_exists(conn, table, column):
@@ -252,6 +252,19 @@ def _init_chat_schema(conn):
     if tsv_backfill > 0:
         logger.info('[DB] Backfilling search_tsv for %d conversations...', tsv_backfill)
         _backfill_search_tsv(conn)
+
+    # ── Agent backend session mapping ──
+    _safe_create_table(cur, '''
+        CREATE TABLE IF NOT EXISTS agent_sessions (
+            conv_id TEXT NOT NULL,
+            backend TEXT NOT NULL,
+            session_id TEXT NOT NULL,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            last_used_at TIMESTAMPTZ DEFAULT NOW(),
+            PRIMARY KEY (conv_id, backend)
+        )
+    ''')
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_agent_sessions_backend ON agent_sessions(backend)')
 
     # Seed default user
     cur.execute("""

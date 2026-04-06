@@ -29,7 +29,10 @@ class TestSearchFacade:
         assert callable(search_via_browser)
 
     def test_engines(self):
-        from lib.search.engines.ddg import search_ddg_html
+        from lib.search.engines.bing import search_bing
+        from lib.search.engines.brave import search_brave
+        from lib.search.engines.ddg import search_ddg_api, search_ddg_html
+        from lib.search.engines.searxng import search_searxng
         assert callable(search_ddg_html)
 
     def test_common(self):
@@ -54,8 +57,14 @@ class TestBrowserFacade:
 
     def test_queue_api(self):
         from lib.browser import (
+            get_connected_clients,
+            get_pending_commands,
             is_extension_connected,
+            mark_poll,
+            resolve_batch,
+            resolve_command,
             send_browser_command,
+            wait_for_commands,
         )
         assert callable(send_browser_command)
         assert callable(is_extension_connected)
@@ -105,11 +114,11 @@ class TestPdfParserFacade:
         assert callable(extract_pdf_text)
 
     def test_vlm(self):
-        from lib.pdf_parser import start_vlm_task
+        from lib.pdf_parser import get_vlm_task, start_vlm_task, vlm_parse_pdf
         assert callable(start_vlm_task)
 
     def test_images(self):
-        from lib.pdf_parser import render_pdf_pages
+        from lib.pdf_parser import detect_and_clip_figures, render_pdf_pages
         assert callable(render_pdf_pages)
 
     def test_math(self):
@@ -139,7 +148,15 @@ class TestSkillsFacade:
     def test_storage_crud(self):
         from lib.skills import (
             create_skill,
+            delete_skill,
+            get_eligible_skills,
+            get_enabled_skills,
+            get_skill,
             list_all_skills,
+            list_skills,
+            merge_skills,
+            toggle_skill,
+            update_skill,
         )
         assert callable(create_skill)
         assert callable(list_all_skills)
@@ -158,7 +175,7 @@ class TestSkillsFacade:
         assert 'merge_skills' in SKILL_TOOL_NAMES
 
     def test_constants(self):
-        from lib.skills import GLOBAL_SKILLS_SUBDIR, MIN_DESCRIPTION_LENGTH
+        from lib.skills import GLOBAL_SKILLS_SUBDIR, MIN_DESCRIPTION_LENGTH, PROJECT_SKILLS_SUBDIR
         assert isinstance(GLOBAL_SKILLS_SUBDIR, str)
         assert isinstance(MIN_DESCRIPTION_LENGTH, int)
 
@@ -179,7 +196,7 @@ class TestConsumerImports:
     """Verify that all real import sites across the codebase resolve correctly."""
 
     def test_executor_search(self):
-        from lib.search import perform_web_search
+        from lib.search import format_search_for_tool_response, perform_web_search
         assert callable(perform_web_search)
 
     def test_executor_browser(self):
@@ -187,7 +204,7 @@ class TestConsumerImports:
         assert callable(execute_browser_tool)
 
     def test_model_config_browser(self):
-        from lib.browser import ADVANCED_BROWSER_TOOLS
+        from lib.browser import ADVANCED_BROWSER_TOOL_NAMES, ADVANCED_BROWSER_TOOLS
         assert isinstance(ADVANCED_BROWSER_TOOLS, list)
 
     def test_tool_display_browser(self):
@@ -196,16 +213,21 @@ class TestConsumerImports:
 
     def test_routes_browser(self):
         from lib.browser import (
+            get_connected_clients,
+            get_pending_commands,
+            is_extension_connected,
             mark_poll,
+            resolve_batch,
+            wait_for_commands,
         )
         assert callable(mark_poll)
 
     def test_browser_fetch(self):
-        from lib.browser import fetch_url_via_browser
+        from lib.browser import fetch_url_via_browser, is_extension_connected
         assert callable(fetch_url_via_browser)
 
     def test_pdf_upload(self):
-        from lib.pdf_parser import parse_pdf
+        from lib.pdf_parser import get_vlm_task, parse_pdf, start_vlm_task
         assert callable(parse_pdf)
 
     def test_pdf_fetch(self):
@@ -213,11 +235,11 @@ class TestConsumerImports:
         assert callable(extract_pdf_text)
 
     def test_skills_executor(self):
-        from lib.skills import create_skill
+        from lib.skills import create_skill, delete_skill, merge_skills, update_skill
         assert callable(create_skill)
 
     def test_skills_model_config(self):
-        from lib.skills import ALL_SKILL_TOOLS
+        from lib.skills import ALL_SKILL_TOOLS, SKILL_TOOL_NAMES
         assert isinstance(ALL_SKILL_TOOLS, list)
 
     def test_skills_injection(self):

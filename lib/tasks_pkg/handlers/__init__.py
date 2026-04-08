@@ -13,8 +13,9 @@ Each submodule uses the ``@tool_registry.handler()`` / ``@tool_registry.tool_set
 from lib.tasks_pkg.handlers import (  # noqa: F401
     browser,
     code_exec,
+    mcp,
+    memory,
     misc,
     project,
     search,
-    skills,
 )

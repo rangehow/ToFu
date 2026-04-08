@@ -298,7 +298,7 @@ function _renderBranchPanel(msg, msgIdx, bi) {
       <span class="branch-panel-icon">${icon}</span>
       <span class="branch-panel-title">${escapeHtml(branch.title)}</span>
       <span class="branch-panel-count">${userCount}条对话</span>
-      <span class="branch-panel-tools" style="font-size:10px;opacity:0.5;margin-left:4px">${searchMode !== "off" ? "" : ""}${fetchEnabled ? "" : ""}${codeExecEnabled ? "⚡" : ""}${browserEnabled ? "" : ""}${skillsEnabled ? "" : ""}</span>
+      <span class="branch-panel-tools" style="font-size:10px;opacity:0.5;margin-left:4px">${searchMode !== "off" ? "" : ""}${fetchEnabled ? "" : ""}${codeExecEnabled ? "⚡" : ""}${browserEnabled ? "" : ""}${memoryEnabled ? "" : ""}</span>
       ${(isStreaming || hasPersistentTask) ? `<button class="branch-panel-stop" onclick="stopBranchStream(${msgIdx},${bi})" title="停止生成">停止</button>` : ""}
       <button class="branch-panel-collapse" onclick="closeBranchPanel()" title="收起分支">▾ 收起</button>
       <button class="branch-panel-delete" onclick="deleteBranch(${msgIdx},${bi})" title="删除分支"></button>
@@ -561,7 +561,7 @@ async function sendBranchMessage(text, images) {
   const apiMsgs = _buildBranchApiMessages(conv, msgIdx, branch, userMsg);
 
   // Collect config — use the SAME global variables that main chat uses
-  // Tool flags (fetchEnabled, codeExecEnabled, browserEnabled, skillsEnabled,
+  // Tool flags (fetchEnabled, codeExecEnabled, browserEnabled, memoryEnabled,
   // autoApplyWrites, projectState) are global `let` variables in core.js,
   // NOT properties on the `config` object.
   const body = {
@@ -576,7 +576,7 @@ async function sendBranchMessage(text, images) {
       searchMode,
       fetchEnabled,
       codeExecEnabled,
-      skillsEnabled,
+      memoryEnabled,
       schedulerEnabled,
       browserEnabled,
       autoApply: autoApplyWrites,
@@ -590,7 +590,7 @@ async function sendBranchMessage(text, images) {
   if (activeConvId === conv.id) _rebuildBranchPanelDOM(msg, msgIdx, branchIdx);
 
   console.log("[Branch] sendBranchMessage config:", {
-    searchMode, fetchEnabled, codeExecEnabled, browserEnabled, skillsEnabled,
+    searchMode, fetchEnabled, codeExecEnabled, browserEnabled, memoryEnabled,
     autoApply: autoApplyWrites, projectPath: (typeof _getConvProjectPath === 'function') ? _getConvProjectPath(conv) : (conv.projectPath || ""),
     model: serverModel, preset: config.preset,
   });
@@ -754,14 +754,14 @@ async function _branchStreamSSE(conv, msgIdx, branchIdx, branch, assistantMsg, t
         r.approvalId = null;
         if (ev.searchDiag) r.searchDiag = ev.searchDiag;
       }
-      /* ★ Toast for create_skill */
-      if (ev.results && ev.results.some(r => r.toolName === 'create_skill')) {
-        const sk = ev.results.find(r => r.toolName === 'create_skill');
-        const ok = sk.skillOk === true || (sk.badge && sk.badge.includes('saved'));
+      /* ★ Toast for create_memory */
+      if (ev.results && ev.results.some(r => r.toolName === 'create_memory')) {
+        const sk = ev.results.find(r => r.toolName === 'create_memory');
+        const ok = sk.memoryOk === true || (sk.badge && sk.badge.includes('saved'));
         if (typeof showToast === 'function') {
-          const sName = sk.skillName || 'Skill';
-          const sScope = sk.skillScope || 'project';
-          const title = ok ? `${sName}` : 'Skill Failed';
+          const sName = sk.memoryName || 'Memory';
+          const sScope = sk.memoryScope || 'project';
+          const title = ok ? `${sName}` : 'Memory Failed';
           const body = ok
             ? `Saved to ${sScope} scope — available in future sessions`
             : (sk.snippet || sk.title || 'Unknown error');
@@ -778,11 +778,9 @@ async function _branchStreamSSE(conv, msgIdx, branchIdx, branch, assistantMsg, t
       // ★ Re-render branch UI so preview button appears reactively
       _updateBranchStreamingUI(msgIdx, branchIdx, assistantMsg);
     } else if (ev.type === "emit_ref") {
-      // ★ emit_to_user: tag the referenced round for auto-expansion
-      if (assistantMsg.searchRounds) {
-        const r = assistantMsg.searchRounds.find(r => r.roundNum === ev.roundNum);
-        if (r) r._emit_ref = true;
-      }
+      // ★ emit_to_user: store emitted tool content on message for inline rendering
+      assistantMsg._emitContent = ev.emitContent || '';
+      assistantMsg._emitToolName = ev.emitToolName || '';
       _updateBranchStreamingUI(msgIdx, branchIdx, assistantMsg);
     } else if (ev.type === "approval_required") {
       assistantMsg.approvalRequired = true;

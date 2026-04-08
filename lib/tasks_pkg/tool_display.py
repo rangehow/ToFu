@@ -14,7 +14,7 @@ logger = get_logger(__name__)
 from lib.browser.advanced import ADVANCED_BROWSER_TOOL_NAMES
 from lib.desktop_tools import DESKTOP_TOOL_NAMES
 from lib.scheduler import SCHEDULER_TOOL_NAMES
-from lib.skills import SKILL_TOOL_NAMES
+from lib.memory import MEMORY_TOOL_NAMES
 from lib.tasks_pkg.executor import SWARM_TOOL_NAMES
 from lib.tools import (
     BROWSER_TOOL_NAMES,
@@ -37,12 +37,46 @@ def _tool_display_web_search(fn_name, fn_args, tc_id, tc_args_str):
     return query, {'toolName': 'web_search'}
 
 
+def _short_url(url, max_len=60):
+    """Return a human-friendly short URL: hostname + path (truncated).
+
+    For URLs like ``https://github.com/org/repo``, the hostname alone
+    (``github.com``) loses important context.  This helper keeps the
+    path prefix so users can distinguish different pages on the same host.
+
+    Args:
+        url: Full URL string.
+        max_len: Maximum character length for the result.
+
+    Returns:
+        Shortened URL string, e.g. ``github.com/org/repo``.
+    """
+    try:
+        p = urlparse(url)
+    except Exception:
+        return url[:max_len]
+    host = p.netloc or ''
+    path = (p.path or '').rstrip('/')
+    # Drop trivial index paths
+    if path in ('', '/'):
+        return host
+    short = host + path
+    if len(short) <= max_len:
+        return short
+    # Truncate path, keeping the beginning which is most informative
+    avail = max_len - len(host) - 1  # 1 for the ellipsis '…'
+    if avail > 5:
+        return host + path[:avail] + '…'
+    # Fallback: just hostname
+    return host
+
+
 def _tool_display_fetch_url(fn_name, fn_args, tc_id, tc_args_str):
     """Build display info for fetch_url tool calls."""
     target_url = fn_args.get('url', '')
-    domain = urlparse(target_url).netloc
     is_pdf_hint = target_url.lower().rstrip('/').endswith('.pdf')
-    display_query = f'{"📑 PDF" if is_pdf_hint else "🌐"} {domain}'
+    short = _short_url(target_url)
+    display_query = f'{"📑 PDF" if is_pdf_hint else "🌐"} {short}'
     return f'📄 {target_url}', {'toolName': 'fetch_url', '_display_query': display_query}
 
 
@@ -67,17 +101,17 @@ def _tool_display_browser(fn_name, fn_args, tc_id, tc_args_str):
     return display, {'toolName': fn_name}
 
 
-def _tool_display_skill(fn_name, fn_args, tc_id, tc_args_str):
-    """Build display info for skill management tool calls."""
-    if fn_name == 'create_skill':
-        display = f"💡 Saving skill: {fn_args.get('name', '?')}"
-    elif fn_name == 'update_skill':
-        display = f"✏️ Updating skill: {fn_args.get('skill_id', '?')}"
-    elif fn_name == 'delete_skill':
-        display = f"🗑️ Deleting skill: {fn_args.get('skill_id', '?')}"
-    elif fn_name == 'merge_skills':
-        ids = fn_args.get('skill_ids', [])
-        display = f"🔀 Merging {len(ids)} skills → {fn_args.get('name', '?')}"
+def _tool_display_memory(fn_name, fn_args, tc_id, tc_args_str):
+    """Build display info for memory management tool calls."""
+    if fn_name == 'create_memory':
+        display = f"💡 Saving memory: {fn_args.get('name', '?')}"
+    elif fn_name == 'update_memory':
+        display = f"✏️ Updating memory: {fn_args.get('memory_id', '?')}"
+    elif fn_name == 'delete_memory':
+        display = f"🗑️ Deleting memory: {fn_args.get('memory_id', '?')}"
+    elif fn_name == 'merge_memories':
+        ids = fn_args.get('memory_ids', [])
+        display = f"🔀 Merging {len(ids)} memories → {fn_args.get('name', '?')}"
     else:
         display = f"💡 {fn_name}"
     return display, {'toolName': fn_name}
@@ -159,8 +193,7 @@ def _tool_display_human_guidance(fn_name, fn_args, tc_id, tc_args_str):
 def _tool_display_emit_to_user(fn_name, fn_args, tc_id, tc_args_str):
     """Build display info for emit_to_user tool calls."""
     comment = fn_args.get('comment', '…')[:80]
-    tool_round = fn_args.get('tool_round', '?')
-    return f'📤 Emit result (round {tool_round}): {comment}', {'toolName': 'emit_to_user'}
+    return f'📤 Emit: {comment}', {'toolName': 'emit_to_user'}
 
 
 def _tool_display_tool_search(fn_name, fn_args, tc_id, tc_args_str):
@@ -169,8 +202,24 @@ def _tool_display_tool_search(fn_name, fn_args, tc_id, tc_args_str):
     return f'🔍 Searching tools: {query}', {'toolName': 'tool_search'}
 
 
+def _tool_display_mcp(fn_name, fn_args, tc_id, tc_args_str):
+    """Build display info for MCP bridge tool calls (mcp__server__tool)."""
+    from lib.mcp.types import parse_namespaced_name
+    parsed = parse_namespaced_name(fn_name)
+    if parsed:
+        server_name, tool_name = parsed
+        display = f'🔌 {server_name}/{tool_name}'
+    else:
+        display = f'🔌 {fn_name}'
+    return display, {'toolName': fn_name}
+
+
 def _tool_display_generic(fn_name, fn_args, tc_id, tc_args_str):
     """Catch-all display info for unknown/future tools."""
+    # Check if this is an MCP tool before falling through to generic
+    from lib.mcp.types import MCP_TOOL_PREFIX
+    if fn_name.startswith(MCP_TOOL_PREFIX):
+        return _tool_display_mcp(fn_name, fn_args, tc_id, tc_args_str)
     logger.warning('[Orchestrator] Unregistered tool %s — using generic round_entry. This tool may need a dedicated display handler.', fn_name)
     return f"🔧 {fn_name}", {'toolName': fn_name}
 
@@ -210,9 +259,9 @@ def _build_display_dispatch_table():
     for name in ADVANCED_BROWSER_TOOL_NAMES:
         table[name] = _tool_display_browser
 
-    # Skill tools
-    for name in SKILL_TOOL_NAMES:
-        table[name] = _tool_display_skill
+    # Memory tools
+    for name in MEMORY_TOOL_NAMES:
+        table[name] = _tool_display_memory
 
     # Conversation reference tools
     for name in CONV_REF_TOOL_NAMES:

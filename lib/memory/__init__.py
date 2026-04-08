@@ -1,13 +1,13 @@
-"""lib/skills/ — Skill accumulation system: storage, injection, tool definitions.
+"""lib/memory/ — Memory accumulation system: storage, injection, tool definitions.
 
 Façade package — all public API is re-exported here::
 
-    from lib.skills import create_skill, update_skill, delete_skill, merge_skills
-    from lib.skills import list_all_skills, get_skill, build_skills_context
-    from lib.skills import ALL_SKILL_TOOLS, SKILL_TOOL_NAMES
-    from lib.skills import SKILL_ACCUMULATION_INSTRUCTIONS
-    from lib.skills import SKILL_ACCUMULATION_INSTRUCTIONS_COMPACT
-    from lib.skills import filter_relevant_skills
+    from lib.memory import create_memory, update_memory, delete_memory, merge_memories
+    from lib.memory import list_all_memories, get_memory, build_memory_context
+    from lib.memory import ALL_MEMORY_TOOLS, MEMORY_TOOL_NAMES
+    from lib.memory import MEMORY_ACCUMULATION_INSTRUCTIONS
+    from lib.memory import MEMORY_ACCUMULATION_INSTRUCTIONS_COMPACT
+    from lib.memory import filter_relevant_memories
 """
 
 from lib._pkg_utils import build_facade

@@ -31,7 +31,7 @@ def endpoint_start():
       convId   — conversation ID (optional, auto-generated if missing)
       config   — dict with standard config keys:
         model, preset, thinkingDepth, searchMode, fetchEnabled,
-        codeExecEnabled, browserEnabled, skillsEnabled, etc.
+        codeExecEnabled, browserEnabled, memoryEnabled, etc.
         (The Critic uses the same model and tools as the Worker.)
 
     Response JSON:

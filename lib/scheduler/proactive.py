@@ -328,7 +328,7 @@ def execute_proactive_task(task: dict[str, Any]) -> str | None:
             'projectPath': tools_cfg.get('projectPath', settings.get('projectPath', '')),
             'codeExecEnabled': tools_cfg.get('codeExecEnabled', settings.get('codeExecEnabled', False)),
             'browserEnabled': tools_cfg.get('browserEnabled', settings.get('browserEnabled', False)),
-            'skillsEnabled': tools_cfg.get('skillsEnabled', settings.get('skillsEnabled', True)),
+            'memoryEnabled': tools_cfg.get('memoryEnabled', settings.get('memoryEnabled', True)),
             'swarmEnabled': tools_cfg.get('swarmEnabled', settings.get('swarmEnabled', False)),
             'imageGenEnabled': tools_cfg.get('imageGenEnabled', settings.get('imageGenEnabled', False)),
             'schedulerEnabled': True,  # scheduler tools remain available

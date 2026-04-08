@@ -453,7 +453,7 @@
 
       return `
       <div class="sr-risk-row ${rc.cls}">
-        <span class="sr-risk-dot"></span>
+        <span class="sr-rimem-dot"></span>
         <span class="sr-risk-factor">${escHtml(r.factor || "")}</span>
         <div class="sr-risk-tags">
           <span class="sr-risk-tag sr-risk-p" data-level="${p}">可能性 ${_riskLabel(p)}</span>

@@ -216,44 +216,35 @@ def _handle_error_tracker_tool(task, tc, fn_name, tc_id, fn_args, rn, round_entr
 @tool_registry.tool_set(EMIT_TO_USER_TOOL_NAMES, category='emit',
                         description='End turn by referencing an existing tool result')
 def _handle_emit_to_user(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg, project_path, project_enabled, all_tools=None):
-    """Handle emit_to_user — reference an existing tool result for the user."""
-    tool_round = fn_args.get('tool_round')
+    """Handle emit_to_user — reference the most recent tool result for the user.
+
+    Auto-infers the last tool round from searchRounds. The model only needs
+    to provide a comment.
+    """
     comment = fn_args.get('comment', '')
 
-    if tool_round is None:
-        error_msg = 'Error: tool_round parameter is required for emit_to_user.'
-        logger.warning('[Tool:emit_to_user] Missing tool_round param, task=%s', task.get('id', '?')[:8])
+    # Auto-infer: find the last completed tool round (exclude this emit round itself)
+    search_rounds = task.get('searchRounds', [])
+    ref_round = None
+    ref_tool_name = None
+    for sr in reversed(search_rounds):
+        if sr.get('roundNum') != rn and sr.get('toolName') != 'emit_to_user':
+            ref_round = sr
+            ref_tool_name = sr.get('toolName', '?')
+            break
+
+    if ref_round is None:
+        error_msg = 'Error: no prior tool round found to reference.'
+        logger.warning('[Tool:emit_to_user] No prior tool round found, task=%s', task.get('id', '?')[:8])
         meta = _build_simple_meta(
             fn_name, error_msg, source='Emit',
-            title='❌ emit_to_user: missing tool_round',
+            title='❌ emit_to_user: no prior tool round',
             badge='❌ error',
         )
         _finalize_tool_round(task, rn, round_entry, [meta])
         return tc_id, error_msg, False
 
-    ref_found = False
-    ref_tool_name = None
-    for sr in task.get('searchRounds', []):
-        if sr.get('roundNum') == tool_round:
-            ref_found = True
-            ref_tool_name = sr.get('toolName', '?')
-            break
-
-    if not ref_found:
-        error_msg = (
-            f'Error: tool_round={tool_round} not found in searchRounds. '
-            f'Available rounds: {[sr.get("roundNum") for sr in task.get("searchRounds", [])]}.'
-        )
-        logger.warning('[Tool:emit_to_user] tool_round=%d not found, task=%s, available=%s',
-                       tool_round, task.get('id', '?')[:8],
-                       [sr.get('roundNum') for sr in task.get('searchRounds', [])])
-        meta = _build_simple_meta(
-            fn_name, error_msg, source='Emit',
-            title=f'❌ emit_to_user: round {tool_round} not found',
-            badge='❌ not found',
-        )
-        _finalize_tool_round(task, rn, round_entry, [meta])
-        return tc_id, error_msg, False
+    tool_round = ref_round.get('roundNum')
 
     logger.info('[Tool:emit_to_user] Terminal emit: tool_round=%d (%s), comment=%.200s, task=%s',
                 tool_round, ref_tool_name, comment, task.get('id', '?')[:8])
@@ -264,9 +255,9 @@ def _handle_emit_to_user(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg
 
     meta = _build_simple_meta(
         fn_name, comment, source='Emit',
-        title=f'📤 Referencing result from round {tool_round} ({ref_tool_name})',
+        title=f'📤 Emit: {ref_tool_name}',
         snippet=comment[:120],
-        badge=f'📤 round {tool_round}',
+        badge=f'📤 {ref_tool_name}',
     )
     _finalize_tool_round(task, rn, round_entry, [meta])
     return tc_id, comment, False

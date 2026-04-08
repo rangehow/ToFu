@@ -982,7 +982,7 @@ def add_cache_breakpoints(body, log_prefix=''):
     # When the system message has multiple text blocks (static + dynamic),
     # place cache breakpoints on EACH block independently.  This way the
     # static guidance (FRC, tool usage, output efficiency) that never changes
-    # gets its own cache entry, and the dynamic context (project/skills)
+    # gets its own cache entry, and the dynamic context (project/memory)
     # gets a separate one.  Up to 2 breakpoints used here.
     for i, msg in enumerate(messages):
         if msg.get('role') != 'system' or bp >= 4:
@@ -1443,11 +1443,14 @@ def _stream_chat_once(body, *, on_thinking=None, on_content=None,
 
     _stream_t0 = time.time()  # ★ Track stream wall-clock time for gateway diagnostics
 
-    # Streaming timeout: (connect=1200s, read=3000s) — intentionally large
-    # because SSE streams for complex tasks can run for many minutes;
-    # abort_check handles early termination on the client side.
+    # Streaming timeout: (connect=60s, read=300s).
+    # The read timeout applies to each chunk read in iter_lines(),
+    # NOT the total stream duration.  300s means "if the server sends
+    # no SSE data for 5 minutes, assume the connection is dead".
+    # Previous value of 3000s caused 50-minute hangs when the API
+    # queued the request but never started streaming.
     resp = requests.post(url, headers=hdrs, json=body,
-                         stream=True, timeout=(1200, 3000),
+                         stream=True, timeout=(60, 300),
                          proxies=_proxies_for(url))
 
     try:

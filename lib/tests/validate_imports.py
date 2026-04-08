@@ -54,7 +54,7 @@ _TOP_LEVEL_MODULES = [
     'lib.protocols',
     'lib.rate_limiter',
     'lib.search',
-    'lib.skills',
+    'lib.memory',
 ]
 
 ALL_MODULES = _SUB_PACKAGES + _TOP_LEVEL_MODULES

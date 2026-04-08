@@ -88,7 +88,7 @@ lib/                   — Core business logic (LLM client, tools, fetch, tradin
   tasks_pkg/           — Task orchestration, compaction, execution
   project_mod/         — Project file tools (list/read/write/grep/run)
   swarm/               — Multi-agent orchestration
-  skills.py            — Skill accumulation system
+  skills.py            — Memory accumulation system
 routes/                — Flask Blueprints (chat, common, browser, fund_*)
 static/js/             — Frontend (core.js, main.js, ui.js, trading/*.js)
 static/                — CSS

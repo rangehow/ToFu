@@ -1,6 +1,5 @@
 """lib/tools/meta.py — Tool result metadata builder for frontend UI display."""
 
-import os
 import re
 from collections import OrderedDict
 
@@ -16,7 +15,12 @@ def build_project_tool_meta(fn_name, fn_args, tool_content):
             'fetchedChars': chars, 'url': ''}
     path = fn_args.get('path', '')
 
-    _META_BUILDERS.get(fn_name, _build_default)(meta, fn_name, fn_args, tool_content, path)
+    # Check for MCP tools (dynamic names not in static dispatch table)
+    from lib.mcp.types import MCP_TOOL_PREFIX
+    if fn_name.startswith(MCP_TOOL_PREFIX):
+        _build_mcp_tool(meta, fn_name, fn_args, tool_content, path)
+    else:
+        _META_BUILDERS.get(fn_name, _build_default)(meta, fn_name, fn_args, tool_content, path)
     return meta
 
 
@@ -155,24 +159,6 @@ def _build_run_command(meta, fn_name, fn_args, tool_content, path):
         meta['badge'] = f'✗ exit {exit_code}'
 
 
-def _build_read_local_file(meta, fn_name, fn_args, tool_content, path):
-    file_path = fn_args.get('path', '?')
-    filename = os.path.basename(file_path) if file_path else '?'
-    ext = os.path.splitext(filename)[1].lower() if filename else ''
-    chars = len(tool_content)
-    if tool_content.startswith('❌'):
-        meta['snippet'] = tool_content[:120].replace('\n', ' ')
-        meta['badge'] = '❌ failed'
-    elif ext == '.pdf':
-        meta['snippet'] = f'{filename} — {chars:,} chars extracted'
-        meta['badge'] = '📄 PDF'
-    elif ext in ('.docx', '.doc', '.pptx', '.ppt', '.xlsx', '.xls'):
-        meta['snippet'] = f'{filename} — {chars:,} chars extracted'
-        meta['badge'] = f'📄 {ext}'
-    else:
-        meta['snippet'] = f'{filename} — {chars:,} chars'
-        meta['badge'] = f'{chars:,} chars'
-
 
 def _build_insert_content(meta, fn_name, fn_args, tool_content, path):
     edits = fn_args.get('edits')
@@ -205,6 +191,20 @@ def _build_default(meta, fn_name, fn_args, tool_content, path):
     meta['badge'] = ''
 
 
+def _build_mcp_tool(meta, fn_name, fn_args, tool_content, path):
+    from lib.mcp.types import parse_namespaced_name
+    parsed = parse_namespaced_name(fn_name)
+    if parsed:
+        server_name, tool_name = parsed
+        meta['title'] = f'🔌 {server_name}/{tool_name}'
+        meta['source'] = f'MCP:{server_name}'
+        meta['badge'] = f'🔌 {server_name}'
+    else:
+        meta['title'] = f'🔌 {fn_name}'
+        meta['badge'] = '🔌 MCP'
+    meta['snippet'] = tool_content[:120].replace('\n', ' ')
+
+
 # Module-level dispatch table — O(1) lookup replaces if/elif chain
 _META_BUILDERS = {
     'read_file':    _build_read_files,
@@ -215,7 +215,6 @@ _META_BUILDERS = {
     'write_file':   _build_write_file,
     'apply_diff':   _build_apply_diff,
     'run_command':  _build_run_command,
-    'read_local_file': _build_read_local_file,
     'insert_content': _build_insert_content,
 }
 

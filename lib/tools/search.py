@@ -62,7 +62,7 @@ FETCH_URL_TOOL = {
             "When a page contains links to sub-pages (shown in '--- Page Links ---' section), "
             "you SHOULD use fetch_url to follow the most relevant links and explore deeper.\n"
             "IMPORTANT: This tool is for REMOTE web URLs only (http:// or https://). "
-            "Do NOT use for local file paths or file:// URIs — use read_local_file instead."
+            "Do NOT use for local file paths or file:// URIs — use read_files with an absolute path instead."
         ),
         "parameters": {
             "type": "object",

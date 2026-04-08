@@ -75,7 +75,7 @@ SCHEDULE_TOOL_CREATE = {
                     "description": (
                         "For agent type: tool settings for execution. Keys: "
                         "searchMode, fetchEnabled, projectPath, codeExecEnabled, "
-                        "browserEnabled, skillsEnabled, swarmEnabled, imageGenEnabled, model. "
+                        "browserEnabled, memoryEnabled, swarmEnabled, imageGenEnabled, model. "
                         "Omitted keys inherit from the target conversation's saved settings."
                     )
                 },

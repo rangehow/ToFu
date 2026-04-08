@@ -160,6 +160,51 @@ def _extract_symbols(text, ext, max_symbols=20):
 #  read_file / read_files
 # ═══════════════════════════════════════════════════════
 
+def _is_absolute_path(path: str) -> bool:
+    """Check if a path is absolute (starts with / or ~) rather than project-relative."""
+    if not path:
+        return False
+    return path.startswith('/') or path.startswith('~')
+
+
+def _read_absolute_file(path: str, start_line=None, end_line=None):
+    """Read a file by absolute path, supporting images, PDFs, Office docs, and text.
+
+    Delegates to ``lib.file_reader.read_local_file`` for binary format detection
+    and encoding handling.  Adds line-range support on top for text results.
+
+    Args:
+        path: Absolute file path (may start with ~ for home expansion).
+        start_line: Optional start line (1-based).
+        end_line: Optional end line (inclusive).
+
+    Returns:
+        For images: dict with ``__screenshot__`` protocol.
+        For all other files: str with extracted text content.
+    """
+    from lib.file_reader import read_local_file as _read_local
+    result = _read_local(path)
+
+    # Images return a dict — line ranges don't apply
+    if isinstance(result, dict) and result.get('__screenshot__'):
+        return result
+
+    # For text results, apply line range if requested
+    if isinstance(result, str) and (start_line or end_line) and not result.startswith('❌'):
+        lines = result.split('\n')
+        total = len(lines)
+        s = max(1, start_line or 1) - 1
+        e = min(total, end_line or total)
+        sliced = '\n'.join(lines[s:e])
+        expanded_path = os.path.expanduser(path)
+        expanded_path = os.path.abspath(expanded_path)
+        filename = os.path.basename(expanded_path)
+        header = f'File: {filename} (lines {s + 1}-{e} of {total})\n'
+        return header + '─' * 40 + '\n' + sliced
+
+    return result
+
+
 def tool_read_file(base, rel_path, start_line=None, end_line=None):
     try:
         target = _safe_path(base, rel_path)
@@ -271,6 +316,7 @@ def tool_read_files(base, reads):
     reads = _merge_same_file_ranges(reads)
 
     parts = []
+    image_results = {}  # index → dict for __screenshot__ results
     total_chars = 0
     BATCH_CHAR_BUDGET = 200_000
     WHOLE_FILE_THRESHOLD = 40_000
@@ -282,6 +328,32 @@ def tool_read_files(base, reads):
         sl = spec.get('start_line')
         el = spec.get('end_line')
 
+        # Route: absolute paths → _read_absolute_file (images, PDFs, Office, text)
+        if _is_absolute_path(rel_path):
+            result = _read_absolute_file(rel_path, sl, el)
+            # Image results are dicts — track separately
+            if isinstance(result, dict) and result.get('__screenshot__'):
+                text_fallback = result.get('_text_fallback', 'Image loaded.')
+                image_results[i] = result
+                parts.append(text_fallback)
+                total_chars += len(text_fallback)
+                continue
+            # Text/PDF/Office result — budget as normal string
+            if isinstance(result, str):
+                if total_chars + len(result) > BATCH_CHAR_BUDGET:
+                    remaining = BATCH_CHAR_BUDGET - total_chars
+                    if remaining > 200:
+                        result = result[:remaining] + '\n… [truncated — batch budget exceeded]'
+                    else:
+                        parts.append(f'[{i+1}] … [{len(reads) - i} more files skipped — batch budget exceeded]')
+                        break
+                total_chars += len(result)
+                parts.append(result)
+                continue
+            parts.append(str(result))
+            continue
+
+        # Project-relative path
         if sl is not None or el is not None:
             try:
                 target = _safe_path(base, rel_path)
@@ -303,7 +375,16 @@ def tool_read_files(base, reads):
                 break
         total_chars += len(result)
         parts.append(result)
-    return '\n\n'.join(parts)
+
+    text_result = '\n\n'.join(parts)
+
+    # If any image results, return a mixed result with __batch_images__
+    if image_results:
+        return {
+            '__batch_images__': image_results,
+            '_text_content': text_result,
+        }
+    return text_result
 
 
 # ═══════════════════════════════════════════════════════

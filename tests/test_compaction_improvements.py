@@ -45,11 +45,11 @@ class TestToolResultBudgeting:
         assert result == content  # NOT truncated
         assert len(result) == 200_000
 
-    def test_read_local_file_exempt_never_truncated(self):
-        """read_local_file results should NEVER be truncated."""
+    def test_read_files_exempt_for_absolute_paths(self):
+        """read_files results should NEVER be truncated (covers both relative and absolute paths)."""
         from lib.tasks_pkg.compaction import budget_tool_result
         content = "y" * 200_000
-        result = budget_tool_result('read_local_file', content)
+        result = budget_tool_result('read_files', content)
         assert result == content
 
     def test_large_grep_result_persisted_to_disk(self):
@@ -59,7 +59,7 @@ class TestToolResultBudgeting:
         result = budget_tool_result('grep_search', content)
         assert len(result) < len(content)
         assert '[Persisted to:' in result
-        assert 'read_local_file' in result  # tells model how to access
+        assert 'read_files' in result  # tells model how to access
         assert 'Preview' in result
         # Verify the file was actually written
         import re
@@ -343,7 +343,7 @@ class TestDeltaAttachments:
 
     CRITICAL DESIGN: In our system, each task gets fresh messages from the
     frontend (system message only has the user's custom prompt, no project/
-    skills context).  Delta tracking must ALWAYS inject the text into the
+    memory context).  Delta tracking must ALWAYS inject the text into the
     system message — it only skips the expensive FUSE I/O computation.
     This is different from Claude Code where the messages array persists
     across turns and delta tracking prevents DUPLICATE injection.
@@ -423,7 +423,7 @@ class TestDeltaAttachments:
                  {'role': 'user', 'content': 'Hello'}]
         _inject_system_contexts(
             msgs1, '/fake', project_enabled=False,
-            skills_enabled=False, search_enabled=False,
+            memory_enabled=False, search_enabled=False,
             swarm_enabled=False, has_real_tools=False,
             conv_id='conv6',
         )
@@ -433,7 +433,7 @@ class TestDeltaAttachments:
                  {'role': 'user', 'content': 'Hello again'}]
         _inject_system_contexts(
             msgs2, '/fake', project_enabled=False,
-            skills_enabled=False, search_enabled=False,
+            memory_enabled=False, search_enabled=False,
             swarm_enabled=False, has_real_tools=False,
             conv_id='conv6',
         )
@@ -662,7 +662,7 @@ class TestPostCompactReinjection:
         task = {
             'config': {
                 'projectPath': '/tmp/test_project',
-                'skillsEnabled': False,
+                'memoryEnabled': False,
                 'searchMode': '',
                 'swarmEnabled': False,
             }
@@ -681,7 +681,7 @@ class TestPostCompactReinjection:
         task = {
             'config': {
                 'projectPath': '/tmp/test_project',
-                'skillsEnabled': False,
+                'memoryEnabled': False,
                 'searchMode': '',
                 'swarmEnabled': False,
             }
@@ -736,6 +736,75 @@ class TestDiskPersistence:
         result = _persist_to_disk(content, 'web_search', 'tc_3')
         # Result should be much smaller than original
         assert len(result) < _PERSIST_PREVIEW_CHARS + 500  # preview + metadata
+
+    def test_web_search_structured_preview_shows_all_results(self):
+        """web_search persist preview should show title/URL/snippet for ALL results."""
+        from lib.tasks_pkg.compaction import _generate_web_search_preview
+        content = (
+            "Search results:\n\n"
+            "[1] First Result Title\n"
+            "    URL: https://example.com/first\n"
+            "    Source: Google\n"
+            "\n"
+            "    ──── Full Page Content (10,000 chars) ────\n"
+            "    First result full content here. " + "a" * 5000 + "\n"
+            "\n"
+            "════════════════════\n"
+            "\n"
+            "[2] Second Result Title\n"
+            "    URL: https://example.com/second\n"
+            "    Source: Bing\n"
+            "\n"
+            "    ──── Full Page Content (8,000 chars) ────\n"
+            "    Second result full content here. " + "b" * 4000 + "\n"
+            "\n"
+            "════════════════════\n"
+            "\n"
+            "[3] Third Result Title\n"
+            "    URL: https://example.com/third\n"
+            "    Source: Google\n"
+            "\n"
+            "    (Full content not available — call fetch_url to read this page.)\n"
+        )
+        preview = _generate_web_search_preview(content)
+        # All three results should be mentioned
+        assert '[1] First Result Title' in preview
+        assert '[2] Second Result Title' in preview
+        assert '[3] Third Result Title' in preview
+        assert 'https://example.com/first' in preview
+        assert 'https://example.com/second' in preview
+        assert 'https://example.com/third' in preview
+        # Full content should NOT be included (only snippets)
+        assert len(preview) < 5000  # much smaller than original
+
+    def test_web_search_preview_fallback_for_non_structured(self):
+        """Non-structured content should fall back to default truncation."""
+        from lib.tasks_pkg.compaction import _PERSIST_PREVIEW_CHARS, _generate_web_search_preview
+        content = "This is not structured web search output. " * 500
+        preview = _generate_web_search_preview(content)
+        assert len(preview) <= _PERSIST_PREVIEW_CHARS
+
+    def test_persist_to_disk_web_search_uses_structured_preview(self):
+        """_persist_to_disk for web_search should use structured preview."""
+        from lib.tasks_pkg.compaction import _persist_to_disk
+        content = (
+            "Search results:\n\n"
+            "[1] First\n    URL: https://a.com\n    Source: G\n\n"
+            "    ──── Full Page Content (5,000 chars) ────\n"
+            "    Content A " + "x" * 20000 + "\n\n"
+            "════════════════════\n\n"
+            "[2] Second\n    URL: https://b.com\n    Source: B\n\n"
+            "    ──── Full Page Content (5,000 chars) ────\n"
+            "    Content B " + "y" * 20000 + "\n"
+        )
+        result = _persist_to_disk(content, 'web_search', 'tc_ws')
+        assert '[Persisted to:' in result
+        # Both results should be in the preview
+        assert '[1] First' in result
+        assert '[2] Second' in result
+        assert 'https://a.com' in result
+        assert 'https://b.com' in result
+
 
 
 # ═══════════════════════════════════════════════════════════

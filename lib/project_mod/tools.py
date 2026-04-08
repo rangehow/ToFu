@@ -1515,10 +1515,6 @@ def execute_tool(fn_name, fn_args, base_path, conv_id=None, task_id=None, **kwar
                     f"({result['oldLines']}L → {result['newLines']}L)")
         else:
             return f"❌ Insert failed: {result['error']}"
-    elif fn_name == 'read_local_file':
-        from lib.file_reader import read_local_file as _read_local
-        file_path = fn_args.get('path', '')
-        return _read_local(file_path)
     elif fn_name == 'run_command':
         # ★ Multi-root: resolve working_dir if model specifies one
         cwd = base_path
@@ -1718,8 +1714,5 @@ def project_tool_display(fn_name, fn_args):
     elif fn_name == 'run_command':
         cmd = fn_args.get('command', '?')
         return cmd  # Full command without $ prefix — frontend adds it
-    elif fn_name == 'read_local_file':
-        p = fn_args.get('path', '?')
-        return f'Read {os.path.basename(p)}'
     return fn_name
 

@@ -191,49 +191,49 @@ check('pdf_parser __all__ completeness', _pdf_all)
 
 
 # ══════════════════════════════════════════════════════
-#  4. lib/skills/
+#  4. lib/memory/
 # ══════════════════════════════════════════════════════
-print('\n═══ 4. lib/skills/ ═══')
+print('\n═══ 4. lib/memory/ ═══')
 
-check('import lib.skills', lambda: __import__('lib.skills'))
+check('import lib.memory', lambda: __import__('lib.memory'))
 
 def _skills_storage():
-    from lib.skills import (create_skill, update_skill, delete_skill, merge_skills,
-                            list_all_skills, list_skills, get_skill,
-                            get_enabled_skills, get_eligible_skills, toggle_skill)
-    assert callable(create_skill)
-    assert callable(list_all_skills)
-    assert callable(get_skill)
+    from lib.memory import (create_memory, update_memory, delete_memory, merge_memories,
+                            list_all_memories, list_memories, get_memory,
+                            get_enabled_memories, get_eligible_memories, toggle_memory)
+    assert callable(create_memory)
+    assert callable(list_all_memories)
+    assert callable(get_memory)
 check('skills storage CRUD', _skills_storage)
 
 def _skills_injection():
-    from lib.skills import build_skills_context, SKILL_ACCUMULATION_INSTRUCTIONS
-    assert callable(build_skills_context)
-    assert isinstance(SKILL_ACCUMULATION_INSTRUCTIONS, str)
-    assert len(SKILL_ACCUMULATION_INSTRUCTIONS) > 100
-check('skills injection (build_skills_context, INSTRUCTIONS)', _skills_injection)
+    from lib.memory import build_memory_context, MEMORY_ACCUMULATION_INSTRUCTIONS
+    assert callable(build_memory_context)
+    assert isinstance(MEMORY_ACCUMULATION_INSTRUCTIONS, str)
+    assert len(MEMORY_ACCUMULATION_INSTRUCTIONS) > 100
+check('skills injection (build_memory_context, INSTRUCTIONS)', _skills_injection)
 
 def _skills_tools():
-    from lib.skills import ALL_SKILL_TOOLS, SKILL_TOOL_NAMES
-    assert isinstance(ALL_SKILL_TOOLS, list)
-    assert len(ALL_SKILL_TOOLS) == 4
-    assert isinstance(SKILL_TOOL_NAMES, set)
-    assert 'create_skill' in SKILL_TOOL_NAMES
-    assert 'merge_skills' in SKILL_TOOL_NAMES
-check('skills tools (ALL_SKILL_TOOLS, SKILL_TOOL_NAMES)', _skills_tools)
+    from lib.memory import ALL_MEMORY_TOOLS, MEMORY_TOOL_NAMES
+    assert isinstance(ALL_MEMORY_TOOLS, list)
+    assert len(ALL_MEMORY_TOOLS) == 4
+    assert isinstance(MEMORY_TOOL_NAMES, set)
+    assert 'create_memory' in MEMORY_TOOL_NAMES
+    assert 'merge_memories' in MEMORY_TOOL_NAMES
+check('skills tools (ALL_MEMORY_TOOLS, MEMORY_TOOL_NAMES)', _skills_tools)
 
 def _skills_constants():
-    from lib.skills import GLOBAL_SKILLS_SUBDIR, PROJECT_SKILLS_SUBDIR, MIN_DESCRIPTION_LENGTH
-    assert isinstance(GLOBAL_SKILLS_SUBDIR, str)
+    from lib.memory import GLOBAL_MEMORY_SUBDIR, PROJECT_MEMORY_SUBDIR, MIN_DESCRIPTION_LENGTH
+    assert isinstance(GLOBAL_MEMORY_SUBDIR, str)
     assert isinstance(MIN_DESCRIPTION_LENGTH, int)
-check('skills constants (GLOBAL_SKILLS_SUBDIR, etc.)', _skills_constants)
+check('skills constants (GLOBAL_MEMORY_SUBDIR, etc.)', _skills_constants)
 
 def _skills_all():
-    import lib.skills
-    for name in ['create_skill', 'update_skill', 'delete_skill', 'merge_skills',
-                 'ALL_SKILL_TOOLS', 'SKILL_TOOL_NAMES', 'build_skills_context',
-                 'SKILL_ACCUMULATION_INSTRUCTIONS']:
-        assert name in lib.skills.__all__, f'{name} not in __all__'
+    import lib.memory
+    for name in ['create_memory', 'update_memory', 'delete_memory', 'merge_memories',
+                 'ALL_MEMORY_TOOLS', 'MEMORY_TOOL_NAMES', 'build_memory_context',
+                 'MEMORY_ACCUMULATION_INSTRUCTIONS']:
+        assert name in lib.memory.__all__, f'{name} not in __all__'
 check('skills __all__ completeness', _skills_all)
 
 
@@ -325,17 +325,17 @@ check('fetch → lib.pdf_parser.extract_pdf_text', _consumer_pdf_fetch)
 
 # skills consumers
 def _consumer_skills_executor():
-    from lib.skills import (create_skill, update_skill, delete_skill, merge_skills,
-                            list_all_skills, get_skill, toggle_skill)
-check('executor → lib.skills CRUD', _consumer_skills_executor)
+    from lib.memory import (create_memory, update_memory, delete_memory, merge_memories,
+                            list_all_memories, get_memory, toggle_memory)
+check('executor → lib.memory CRUD', _consumer_skills_executor)
 
 def _consumer_skills_model_config():
-    from lib.skills import ALL_SKILL_TOOLS, SKILL_TOOL_NAMES, SKILL_ACCUMULATION_INSTRUCTIONS
-check('model_config → lib.skills tools', _consumer_skills_model_config)
+    from lib.memory import ALL_MEMORY_TOOLS, MEMORY_TOOL_NAMES, MEMORY_ACCUMULATION_INSTRUCTIONS
+check('model_config → lib.memory tools', _consumer_skills_model_config)
 
 def _consumer_skills_injection():
-    from lib.skills import build_skills_context
-check('orchestrator → lib.skills.build_skills_context', _consumer_skills_injection)
+    from lib.memory import build_memory_context
+check('orchestrator → lib.memory.build_memory_context', _consumer_skills_injection)
 
 # translate route consumers (cross-import from common)
 def _consumer_translate_common():
@@ -414,7 +414,7 @@ check('No stale monolithic .py files', _no_stale)
 
 def _packages_exist():
     for pkg in ['lib/search/__init__.py', 'lib/browser/__init__.py',
-                'lib/pdf_parser/__init__.py', 'lib/skills/__init__.py']:
+                'lib/pdf_parser/__init__.py', 'lib/memory/__init__.py']:
         assert os.path.isfile(pkg), f'{pkg} not found'
 check('All 4 new packages have __init__.py', _packages_exist)
 

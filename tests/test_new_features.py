@@ -561,7 +561,7 @@ class TestDynamicDeferral:
             {'function': {'name': 'find_files', 'parameters': {'p': 'x' * 500}}},
             {'function': {'name': 'run_command', 'parameters': {'p': 'x' * 500}}},
             {'function': {'name': 'web_search', 'parameters': {'p': 'x' * 500}}},
-            {'function': {'name': 'create_skill', 'parameters': {'p': 'x' * 500}}},
+            {'function': {'name': 'create_memory', 'parameters': {'p': 'x' * 500}}},
             {'function': {'name': 'check_error_logs', 'parameters': {'p': 'x' * 500}}},
         ]
         # With a tiny context window, some tools should be auto-deferred
@@ -577,11 +577,11 @@ class TestDynamicDeferral:
         from lib.tools.deferral import partition_tools
         tools = [
             {'function': {'name': 'read_files', 'parameters': {}}},
-            {'function': {'name': 'create_skill', 'parameters': {}}},
+            {'function': {'name': 'create_memory', 'parameters': {}}},
         ]
         core, deferred = partition_tools(tools, context_window=1_000_000)
         core_names = {t['function']['name'] for t in core}
-        assert 'create_skill' in core_names  # Not deferred with huge window
+        assert 'create_memory' in core_names  # Not deferred with huge window
 
     def test_estimate_tool_tokens(self):
         from lib.tools.deferral import _estimate_tool_tokens

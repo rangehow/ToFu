@@ -195,18 +195,44 @@ def _resolve_cache_extended_ttl():
 
 CACHE_EXTENDED_TTL = _resolve_cache_extended_ttl()
 
-FETCH_TOP_N            = int(os.environ.get('FETCH_TOP_N', '6'))
-FETCH_TIMEOUT          = int(os.environ.get('FETCH_TIMEOUT', '15'))
-FETCH_MAX_CHARS_SEARCH = int(os.environ.get('FETCH_MAX_CHARS_SEARCH', '60000'))
-FETCH_MAX_CHARS_DIRECT = int(os.environ.get('FETCH_MAX_CHARS_DIRECT', '200000'))
-FETCH_MAX_CHARS_PDF    = int(os.environ.get('FETCH_MAX_CHARS_PDF', '0'))
-FETCH_MAX_BYTES        = int(os.environ.get('FETCH_MAX_BYTES', str(20*1024*1024)))
+# ── Fetch / search settings ──
+# Priority: ENV VAR > server_config.json search section > hardcoded default
+_search_cfg = _SAVED_CONFIG.get('search', {})
+
+def _fetch_cfg(env_key, saved_key, default):
+    """Resolve a fetch/search integer setting.  0 is a valid value (e.g. PDF no-limit)."""
+    env = os.environ.get(env_key)
+    if env is not None and env != '':
+        return int(env)
+    saved = _search_cfg.get(saved_key)
+    if saved is not None:
+        return int(saved)
+    return default
+
+FETCH_TOP_N            = _fetch_cfg('FETCH_TOP_N', 'fetch_top_n', 6)
+FETCH_TIMEOUT          = _fetch_cfg('FETCH_TIMEOUT', 'fetch_timeout', 15)
+FETCH_MAX_CHARS_SEARCH = _fetch_cfg('FETCH_MAX_CHARS_SEARCH', 'max_chars_search', 60000)
+FETCH_MAX_CHARS_DIRECT = _fetch_cfg('FETCH_MAX_CHARS_DIRECT', 'max_chars_direct', 200000)
+FETCH_MAX_CHARS_PDF    = _fetch_cfg('FETCH_MAX_CHARS_PDF', 'max_chars_pdf', 0)
+FETCH_MAX_BYTES        = _fetch_cfg('FETCH_MAX_BYTES', 'max_bytes', 20*1024*1024)
 
 SKIP_DOMAINS = {
     'youtube.com','youtu.be','twitter.com','x.com',
     'facebook.com','instagram.com','tiktok.com',
     'linkedin.com','discord.com',
 }
+# Apply saved skip_domains on top of defaults
+if isinstance(_search_cfg.get('skip_domains'), list):
+    SKIP_DOMAINS = set(_search_cfg['skip_domains'])
+
+# Apply saved llm_content_filter setting at startup (not just on hot-reload)
+if 'llm_content_filter' in _search_cfg:
+    try:
+        import lib.fetch.content_filter as _cf_mod
+        _cf_mod.FILTER_ENABLED = bool(_search_cfg['llm_content_filter'])
+    except Exception as _e:
+        import logging as _logging
+        _logging.getLogger(__name__).debug('Could not apply saved llm_content_filter: %s', _e)
 
 # ── Model pricing (USD per 1M tokens) — hardcoded fallback ──
 # cacheWriteMul / cacheReadMul are multipliers of the base input price:
@@ -486,14 +512,22 @@ def reload_config():
         'text-embedding-3-large',
     ]
 
-    # Fetch settings (may have been overridden by search section in server_config)
+    # Fetch settings — same priority chain as module init: ENV > saved > default
     _search = _SAVED_CONFIG.get('search', {})
-    _mod.FETCH_TOP_N = int(_search.get('fetch_top_n', os.environ.get('FETCH_TOP_N', '6')))
-    _mod.FETCH_TIMEOUT = int(_search.get('fetch_timeout', os.environ.get('FETCH_TIMEOUT', '15')))
-    _mod.FETCH_MAX_CHARS_SEARCH = int(_search.get('max_chars_search', os.environ.get('FETCH_MAX_CHARS_SEARCH', '60000')))
-    _mod.FETCH_MAX_CHARS_DIRECT = int(_search.get('max_chars_direct', os.environ.get('FETCH_MAX_CHARS_DIRECT', '200000')))
-    _mod.FETCH_MAX_CHARS_PDF = int(_search.get('max_chars_pdf', os.environ.get('FETCH_MAX_CHARS_PDF', '0')))
-    _mod.FETCH_MAX_BYTES = int(_search.get('max_bytes', os.environ.get('FETCH_MAX_BYTES', str(20*1024*1024))))
+    def _rcfg(env_key, saved_key, default):
+        env = os.environ.get(env_key)
+        if env is not None and env != '':
+            return int(env)
+        saved_val = _search.get(saved_key)
+        if saved_val is not None:
+            return int(saved_val)
+        return default
+    _mod.FETCH_TOP_N = _rcfg('FETCH_TOP_N', 'fetch_top_n', 6)
+    _mod.FETCH_TIMEOUT = _rcfg('FETCH_TIMEOUT', 'fetch_timeout', 15)
+    _mod.FETCH_MAX_CHARS_SEARCH = _rcfg('FETCH_MAX_CHARS_SEARCH', 'max_chars_search', 60000)
+    _mod.FETCH_MAX_CHARS_DIRECT = _rcfg('FETCH_MAX_CHARS_DIRECT', 'max_chars_direct', 200000)
+    _mod.FETCH_MAX_CHARS_PDF = _rcfg('FETCH_MAX_CHARS_PDF', 'max_chars_pdf', 0)
+    _mod.FETCH_MAX_BYTES = _rcfg('FETCH_MAX_BYTES', 'max_bytes', 20*1024*1024)
     if 'skip_domains' in _search and isinstance(_search['skip_domains'], list):
         _mod.SKIP_DOMAINS = set(_search['skip_domains'])
 
@@ -509,6 +543,9 @@ def reload_config():
 
     import logging as _logging
     _logging.getLogger(__name__).info(
-        '[Config] Hot-reloaded: model=%s, base_url=%.60s, keys=%d, fetch_top_n=%d',
-        _mod.LLM_MODEL, _mod.LLM_BASE_URL, len(_mod.LLM_API_KEYS), _mod.FETCH_TOP_N,
+        '[Config] Hot-reloaded: model=%s, base_url=%.60s, keys=%d, '
+        'fetch_top_n=%d, timeout=%d, max_chars_search=%d, max_chars_direct=%d',
+        _mod.LLM_MODEL, _mod.LLM_BASE_URL, len(_mod.LLM_API_KEYS),
+        _mod.FETCH_TOP_N, _mod.FETCH_TIMEOUT,
+        _mod.FETCH_MAX_CHARS_SEARCH, _mod.FETCH_MAX_CHARS_DIRECT,
     )

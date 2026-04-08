@@ -130,7 +130,7 @@ let thinkingEnabled = true,
   codeExecEnabled = false,
   browserEnabled = false,
   desktopEnabled = false,
-  skillsEnabled = true,
+  memoryEnabled = true,
   schedulerEnabled = false,
   swarmEnabled = false,
   endpointEnabled = false,
@@ -534,7 +534,7 @@ function toggleDebug() {
 function restoreDebugForConv(convId) {
   const cached = _debugCache[convId];
   if (cached && cached.messages && cached.messages.length > 0) {
-    showMessagesInDebug(cached.messages, cached.label, false);
+    showMessagesInDebug(cached.messages, cached.label, false, undefined, cached.tools);
   } else {
     // ★ FIX: No memory cache — try to rebuild from conversation data as fallback
     // This covers page refresh / different device scenarios where _debugCache is empty
@@ -561,11 +561,14 @@ function restoreDebugForConv(convId) {
 }
 // ★ Render full messages array into debug panel — supports incremental updates
 //   isUpdate=true → streaming update, preserve collapse states, only patch changed blocks
-function showMessagesInDebug(messages, label, isUpdate, forConvId) {
+function showMessagesInDebug(messages, label, isUpdate, forConvId, tools) {
   const cid =
     forConvId || (typeof activeConvId !== "undefined" ? activeConvId : null);
   // Cache for conversation switching
-  if (cid) _debugCache[cid] = { messages, label };
+  if (cid) {
+    _debugCache[cid] = { messages, label };
+    if (tools) _debugCache[cid].tools = tools;
+  }
   // Only render if this conv is currently active (or no conv specified)
   if (
     forConvId &&
@@ -576,8 +579,10 @@ function showMessagesInDebug(messages, label, isUpdate, forConvId) {
   const p = document.getElementById("debugContent");
   if (!p) return;
   const title = document.getElementById("debugTitle");
-  if (title)
-    title.textContent = `📨 Messages (${messages.length}条)${label ? " — " + label : ""}`;
+  if (title) {
+    const toolsSuffix = tools && tools.length > 0 ? ` · 🔧${tools.length}` : '';
+    title.textContent = `📨 Messages (${messages.length}条${toolsSuffix})${label ? " — " + label : ""}`;
+  }
   // Helper: syntax-color JSON (full, no truncation)
   function colorJson(obj, depth) {
     if (depth === undefined) depth = 0;
@@ -839,8 +844,59 @@ function showMessagesInDebug(messages, label, isUpdate, forConvId) {
     });
     p.scrollTop = 0;
   }
+  // ★ Render tools section (collapsible, before messages)
+  if (tools && tools.length > 0) {
+    let toolsBlock = p.querySelector('.debug-tools-block');
+    if (!toolsBlock) {
+      toolsBlock = document.createElement('div');
+      toolsBlock.className = 'debug-tools-block debug-msg-block';
+      const tHeader = document.createElement('div');
+      tHeader.className = 'debug-msg-header';
+      const tRole = document.createElement('span');
+      tRole.className = 'role-tools';
+      tRole.textContent = '🔧 TOOLS';
+      tHeader.appendChild(tRole);
+      const tSummary = document.createElement('span');
+      tSummary.className = 'debug-msg-summary';
+      tHeader.appendChild(tSummary);
+      const tArrow = document.createElement('span');
+      tArrow.textContent = '▶';
+      tArrow.style.cssText = 'font-size:9px;transition:transform 0.2s;color:var(--text-tertiary)';
+      tHeader.appendChild(tArrow);
+      const tBody = document.createElement('div');
+      tBody.className = 'debug-msg-body';
+      const tPre = document.createElement('pre');
+      tBody.appendChild(tPre);
+      tHeader.onclick = () => {
+        const isOpen = toolsBlock.classList.toggle('open');
+        tArrow.style.transform = isOpen ? 'rotate(90deg)' : '';
+        if (isOpen && !tBody.dataset.rendered) {
+          tBody.dataset.rendered = '1';
+          tPre.innerHTML = colorJson(toolsBlock._toolsRef, 0);
+        }
+      };
+      toolsBlock.appendChild(tHeader);
+      toolsBlock.appendChild(tBody);
+      p.insertBefore(toolsBlock, p.firstChild);
+    }
+    // Update summary and ref
+    const names = tools.map(t => (t.function ? t.function.name : '?'));
+    const tSum = toolsBlock.querySelector('.debug-msg-summary');
+    if (tSum) tSum.textContent = `${tools.length} tools: ${names.join(', ')}`;
+    toolsBlock._toolsRef = tools;
+    // Invalidate body if open
+    const tBody = toolsBlock.querySelector('.debug-msg-body');
+    if (tBody && tBody.dataset.rendered && toolsBlock.classList.contains('open')) {
+      tBody.dataset.rendered = '1';
+      const tPre = tBody.querySelector('pre');
+      if (tPre) tPre.innerHTML = colorJson(tools, 0);
+    } else if (tBody) {
+      tBody.dataset.rendered = '';
+    }
+  }
   // Store for copy
   p._rawMessages = messages;
+  p._rawTools = tools || null;
 }
 /* ── Safe clipboard helper: works on HTTP (non-secure) contexts ── */
 function _safeClipboardWrite(text) {
@@ -866,7 +922,9 @@ function copyDebugContent() {
   if (!p) return;
   const msgs = p._rawMessages;
   if (msgs) {
-    const text = JSON.stringify(msgs, null, 2);
+    const payload = { messages: msgs };
+    if (p._rawTools) payload.tools = p._rawTools;
+    const text = JSON.stringify(payload, null, 2);
     _safeClipboardWrite(text).then(() => {
       const btn = document.getElementById("debugCopyBtn");
       if (btn) {
@@ -1233,7 +1291,7 @@ async function syncConversationToServer(conv, { allowTruncate = false } = {}) {
       codeExecEnabled: conv.codeExecEnabled,
       browserEnabled: conv.browserEnabled,
       desktopEnabled: conv.desktopEnabled || false,
-      skillsEnabled: conv.skillsEnabled !== undefined ? conv.skillsEnabled : true,
+      memoryEnabled: conv.memoryEnabled !== undefined ? conv.memoryEnabled : true,
       schedulerEnabled: conv.schedulerEnabled || false,
       swarmEnabled: conv.swarmEnabled || false,
       endpointEnabled: conv.endpointEnabled || false,
@@ -1309,8 +1367,8 @@ function _applySettingsToConv(conv, settings) {
     conv.browserEnabled = settings.browserEnabled;
   if (settings.desktopEnabled !== undefined)
     conv.desktopEnabled = settings.desktopEnabled;
-  if (settings.skillsEnabled !== undefined)
-    conv.skillsEnabled = settings.skillsEnabled;
+  if (settings.memoryEnabled !== undefined)
+    conv.memoryEnabled = settings.memoryEnabled;
   if (settings.schedulerEnabled !== undefined)
     conv.schedulerEnabled = settings.schedulerEnabled;
   if (settings.swarmEnabled !== undefined)

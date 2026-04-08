@@ -3,7 +3,7 @@
 Wraps the existing ``run_task()`` orchestrator as an ``AgentBackend``.
 This is the default backend that provides ALL Tofu features: web search,
 fetch, project tools, image gen, browser extension, desktop agent, swarm,
-scheduler, skills, error tracker, etc.
+scheduler, memory, error tracker, etc.
 
 For the built-in backend, ``start_turn()`` is NOT the primary code path.
 The existing ``chat_start()`` in ``routes/chat.py`` calls ``run_task()``

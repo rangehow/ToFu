@@ -16,7 +16,7 @@
 <link rel="stylesheet" href="static/vendor/google-fonts-local.css">
 <link rel="stylesheet" href="static/vendor/github-dark.min.css">
 <link rel="stylesheet" href="static/vendor/katex/katex.min.css">
-<link rel="stylesheet" href="static/styles.css?v=0.7.0">
+<link rel="stylesheet" href="static/styles.css?v=0.7.1">
 <script>
   // Prevent flash of wrong theme — apply before render (default: tofu)
   (function(){var t=localStorage.getItem('claude_ui_theme')||'tofu';document.documentElement.setAttribute('data-theme',t);})();
@@ -39,7 +39,7 @@
     // Stub critical handlers that users can trigger immediately
     var stubs = ['handleKeyDown','sendMessage','newChat','togglePresetDropdown',
       'cycleTheme','toggleDebug','toggleSidebar','openSettings','toggleCodeExec',
-      'toggleBrowser','toggleSkills','toggleSwarm','toggleAutoTranslate',
+      'toggleBrowser','toggleMemory','toggleSwarm','toggleAutoTranslate',
       'toggleAutoApply','selectThinkingDepth','cycleSearchMode','enterImageGenMode'];
     for (var i = 0; i < stubs.length; i++) {
       (function(name) {
@@ -121,7 +121,7 @@
     <span class="project-badge" id="projectBadge"><span class="pb-dot"></span>PROJECT</span>
     <span class="code-exec-badge" id="codeExecBadge"><span class="cb-dot"></span>CODE EXEC</span>
     <span class="browser-badge" id="browserBadge"><span class="bb-dot"></span>BROWSER</span>
-    <span class="skills-badge" id="skillsBadge"><span class="sk-dot"></span>SKILLS</span>
+    <span class="memory-badge" id="memoryBadge"><span class="mem-dot"></span>MEMORY</span>
     <span class="scheduler-badge" id="schedulerBadge" onclick="toggleSchedulerPanel(event)"><span class="sc-dot"></span>SCHEDULER<span class="proactive-count" id="proactiveCount" style="display:none">0</span>
       <div class="scheduler-panel" id="schedulerPanel">
         <div class="scheduler-panel-title">Proactive Agents</div>
@@ -231,6 +231,9 @@
         <input type="file" id="fileInput" accept="image/*,.pdf,application/pdf,.docx,.doc,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.pptx,application/vnd.openxmlformats-officedocument.presentationml.presentation,.xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,.ppt,application/vnd.ms-powerpoint,.txt,.md,.csv,.json,.xml,.html,.yaml,.yml,.toml,.py,.js,.ts,.java,.c,.cpp,.go,.rs,.rb,.sh,.sql,.tex,.log,.rst,.ini,.cfg" multiple onchange="handleFileUpload(event)" style="display:none">
         <div class="input-box">
           <div class="input-row">
+            <button class="attach-btn" id="attachBtn" onclick="document.getElementById('fileInput').click()" title="Attach files (images, PDF, docs)">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            </button>
             <textarea id="userInput" placeholder="Type your message..." rows="1" onkeydown="handleKeyDown(event)"></textarea>
           </div>
           <div class="input-actions">
@@ -271,9 +274,9 @@
                     <span class="submenu-item-text"><span class="submenu-item-name">代码执行</span><span class="submenu-item-desc">允许 AI 运行代码</span></span>
                     <span class="submenu-item-check">✓</span>
                   </div>
-                  <div class="submenu-item" id="skillsToggle" onclick="toggleSkills();updateSubmenuCounts()" title="Skills — accumulated experience">
+                  <div class="submenu-item" id="memoryToggle" onclick="toggleMemory();updateSubmenuCounts()" title="Memory — accumulated experience">
                     <span class="submenu-item-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg></span>
-                    <span class="submenu-item-text"><span class="submenu-item-name">技能经验</span><span class="submenu-item-desc">注入积累的经验</span></span>
+                    <span class="submenu-item-text"><span class="submenu-item-name">记忆经验</span><span class="submenu-item-desc">注入积累的经验</span></span>
                     <span class="submenu-item-check">✓</span>
                   </div>
                   <div class="submenu-item" id="translateToggle" onclick="toggleAutoTranslate();updateSubmenuCounts()" title="Auto-translate: Chinese↔English (Ctrl+Shift+K to exclude selected text from translation)">
@@ -353,6 +356,7 @@
               </button>
             </div>
             <div class="input-actions-right">
+
             <!-- Mobile-only "more" button — opens bottom sheet with all toggles -->
             <button class="mobile-more-btn" id="mobileMoreBtn" onclick="toggleMobileSheet()" title="更多选项"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg></button>
             <div class="search-mode-toggle" id="searchModeToggle" data-mode="off" onclick="cycleSearchMode()" title="Click to cycle: Off → Single → Multi → Off">
@@ -457,6 +461,11 @@
         <button class="settings-tab" data-tab="oauth" onclick="switchSettingsTab('oauth')">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h4a2 2 0 012 2v14a2 2 0 01-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>
           <span>订阅登录</span>
+        </button>
+
+        <button class="settings-tab" data-tab="mcp" onclick="switchSettingsTab('mcp')">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4m0 12v4M2 12h4m12 0h4"/><circle cx="12" cy="12" r="3"/><path d="M12 8V6m0 12v-2M8 12H6m12 0h-2"/></svg>
+          <span>MCP</span>
         </button>
         <button class="settings-tab" data-tab="advanced" onclick="switchSettingsTab('advanced')">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
@@ -849,6 +858,93 @@
           </ul>
         </div>
 
+
+        <!-- ═══ MCP Apps Tab ═══ -->
+        <div class="settings-tab-panel" id="settingsTab_mcp">
+          <!-- Header with search and status -->
+          <div class="mcp-store-header">
+            <div style="display:flex;align-items:center;gap:10px;">
+              <span class="settings-section-title" style="margin:0;">Apps</span>
+              <span class="stg-badge" id="mcpToolCount" style="font-size:10px;">0 tools</span>
+            </div>
+            <input type="text" class="mcp-search" id="mcpSearch" placeholder="搜索 Apps…"
+                   oninput="_mcpFilterCatalog(this.value)">
+          </div>
+
+          <!-- Category filter pills -->
+          <div class="mcp-category-bar" id="mcpCategoryBar"></div>
+
+          <!-- Catalog grid -->
+          <div id="mcpCatalogGrid" class="mcp-catalog-grid">
+            <p class="stg-loading">正在加载…</p>
+          </div>
+
+          <!-- Installed section -->
+          <div id="mcpInstalledSection" style="display:none;">
+            <div class="settings-divider"></div>
+            <div class="settings-section-title" style="display:flex;align-items:center;gap:8px;">
+              <span>已安装</span>
+              <span class="stg-badge" id="mcpInstalledCount" style="font-size:10px;">0</span>
+            </div>
+            <div id="mcpInstalledList" class="mcp-installed-list"></div>
+          </div>
+
+          <!-- Advanced: manual add (collapsed by default) -->
+          <div class="settings-divider"></div>
+          <details class="mcp-advanced-toggle">
+            <summary class="settings-section-title" style="cursor:pointer;user-select:none;">
+              ⚙ 手动添加自定义服务器
+            </summary>
+            <div class="mcp-add-form" style="margin-top:12px;">
+              <div class="stg-field-grid">
+                <div class="stg-field"><label>名称</label>
+                  <input type="text" id="mcpNewName" placeholder="my-custom-server"></div>
+                <div class="stg-field"><label>传输协议</label>
+                  <select id="mcpNewTransport" onchange="_mcpTransportChanged()">
+                    <option value="stdio">stdio (本地命令)</option>
+                    <option value="sse">SSE (远程 URL)</option>
+                  </select></div>
+              </div>
+              <div id="mcpStdioFields">
+                <div class="stg-field"><label>命令</label>
+                  <input type="text" id="mcpNewCommand" placeholder="npx"></div>
+                <div class="stg-field"><label>参数 <span class="stg-hint">（每行一个）</span></label>
+                  <textarea id="mcpNewArgs" rows="2" placeholder="-y&#10;@my-org/my-mcp-server"></textarea></div>
+              </div>
+              <div id="mcpSseFields" style="display:none;">
+                <div class="stg-field"><label>URL</label>
+                  <input type="text" id="mcpNewUrl" placeholder="http://localhost:8080/sse"></div>
+              </div>
+              <div class="stg-field"><label>环境变量 <span class="stg-hint">（每行 KEY=VALUE）</span></label>
+                <textarea id="mcpNewEnv" rows="2" placeholder="MY_API_KEY=xxxxx"></textarea></div>
+              <div class="stg-field"><label>描述 <span class="stg-hint">（可选）</span></label>
+                <input type="text" id="mcpNewDesc" placeholder="My custom MCP server"></div>
+              <div class="mcp-add-actions">
+                <button class="btn btn-primary btn-sm" onclick="_mcpSaveServer()">保存并连接</button>
+              </div>
+            </div>
+          </details>
+        </div>
+
+        <!-- MCP Install Modal (overlay) -->
+        <div class="mcp-install-modal-overlay" id="mcpInstallOverlay" style="display:none;" onclick="_mcpCloseInstallModal(event)">
+          <div class="mcp-install-modal">
+            <div class="mcp-install-modal-header">
+              <span class="mcp-install-modal-icon" id="mcpInstallIcon"></span>
+              <div>
+                <div class="mcp-install-modal-title" id="mcpInstallTitle"></div>
+                <div class="mcp-install-modal-desc" id="mcpInstallDesc"></div>
+              </div>
+            </div>
+            <div id="mcpInstallFields"></div>
+            <div class="mcp-install-modal-actions">
+              <button class="btn btn-primary btn-sm" id="mcpInstallBtn" onclick="_mcpDoInstall()">安装并连接</button>
+              <button class="btn btn-secondary btn-sm" onclick="_mcpCloseInstallModal()">取消</button>
+            </div>
+            <div id="mcpInstallStatus" class="mcp-install-status" style="display:none;"></div>
+          </div>
+        </div>
+
         <!-- ═══ Advanced Tab ═══ -->
         <div class="settings-tab-panel" id="settingsTab_advanced">
           <div class="settings-section-title">导入 / 导出</div>
@@ -953,7 +1049,7 @@
 </div>
 
 <!-- Preview Modal -->
-<div class="modal-overlay" id="previewModal" onclick="if(event.target===this)closePreview()">
+<div class="modal-overlay" id="previewModal" onclick="if(event.target===this||event.target===document.getElementById('previewBody'))closePreview()">
 
   <div class="preview-body" id="previewBody"></div>
 </div>
@@ -1071,68 +1167,68 @@
   </div>
 </div>
 
-<!-- ★ Skills Management Modal — v5 Refined -->
-<div class="modal-overlay" id="skillsModal" onclick="if(event.target===this)closeSkillsModal()">
-  <div class="modal skills-modal">
-    <!-- Header -->
-    <div class="skills-modal-header">
-      <h3 class="skills-modal-title">Skills</h3>
-      <div class="skills-modal-subtitle">经验积累 · AI 自动学习并应用的知识库</div>
-      <button class="skills-modal-close" onclick="closeSkillsModal()" title="关闭">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+<!-- ★ Memory Management Modal — v7 Tofu Block Design -->
+<div class="modal-overlay" id="memoryModal" onclick="if(event.target===this)closeMemoryModal()">
+  <div class="modal memory-modal">
+    <!-- Header — cream band with gold kintsugi -->
+    <div class="memory-modal-header">
+      <h3 class="memory-modal-title">Memory</h3>
+      <div class="memory-modal-subtitle">记忆积累 · AI 自动学习并应用的知识库</div>
+      <button class="memory-modal-close" onclick="closeMemoryModal()" title="关闭">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
       </button>
     </div>
 
-    <!-- Stats chips -->
-    <div class="skills-stats" id="skillsStats"></div>
+    <!-- Stats chips — tofu blocks -->
+    <div class="memory-stats" id="memoryStats"></div>
 
     <!-- Toolbar: tabs + search -->
-    <div class="skills-toolbar">
-      <div class="skills-tabs">
-        <button class="skills-tab active" data-scope="all" onclick="switchSkillsTab('all')">全部</button>
-        <button class="skills-tab" data-scope="project" onclick="switchSkillsTab('project')">项目</button>
-        <button class="skills-tab" data-scope="global" onclick="switchSkillsTab('global')">全局</button>
+    <div class="memory-toolbar">
+      <div class="memory-tabs">
+        <button class="memory-tab active" data-scope="all" onclick="switchMemoryTab('all')">全部</button>
+        <button class="memory-tab" data-scope="project" onclick="switchMemoryTab('project')">项目</button>
+        <button class="memory-tab" data-scope="global" onclick="switchMemoryTab('global')">全局</button>
       </div>
-      <div class="skills-search-box">
-        <svg class="skills-search-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-        <input type="text" id="skillsSearchInput" placeholder="搜索技能…" class="skills-search-input" oninput="filterSkillsList(this.value)">
+      <div class="memory-search-box">
+        <svg class="memory-search-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input type="text" id="memorySearchInput" placeholder="搜索记忆…" class="memory-search-input" oninput="filterMemoryList(this.value)">
       </div>
     </div>
 
-    <!-- Skills list -->
-    <div class="skills-list" id="skillsList">
-      <div class="skills-empty">
-        <span class="skills-empty-icon"><svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.4"><path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/><path d="M15 13a4.5 4.5 0 0 1-3 4 4.5 4.5 0 0 1-3-4"/><path d="M12 18v4"/><path d="M8 18l-2 2"/><path d="M16 18l2 2"/></svg></span>
-        <div class="skills-empty-title">还没有积累任何技能</div>
-        <div class="skills-empty-hint">AI 在对话中发现有用模式时会自动保存技能<br>你也可以点击下方「+ 新建」手动添加</div>
+    <!-- Memory list -->
+    <div class="memory-list" id="memoryList">
+      <div class="memory-empty">
+        <span class="memory-empty-icon"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/><path d="M15 13a4.5 4.5 0 0 1-3 4 4.5 4.5 0 0 1-3-4"/><path d="M12 18v4"/><path d="M8 18l-2 2"/><path d="M16 18l2 2"/></svg></span>
+        <div class="memory-empty-title">还没有积累任何记忆</div>
+        <div class="memory-empty-hint">AI 在对话中发现有用模式时会自动保存记忆<br>你也可以点击下方「+ 新建」手动添加</div>
       </div>
     </div>
 
     <!-- Add section -->
-    <div class="skills-add-section" id="skillsAddSection" style="display:none">
-      <div class="skills-add-header">创建新技能</div>
-      <input type="text" id="skillNewName" placeholder="技能名称 (短横线命名, e.g. react-hooks-convention)" class="skills-input">
-      <input type="text" id="skillNewDesc" placeholder="简短描述 — 什么时候该使用这个技能？" class="skills-input">
-      <textarea id="skillNewBody" placeholder="技能内容（支持 Markdown）…" class="skills-textarea" rows="5"></textarea>
-      <div class="skills-add-row">
-        <select id="skillNewScope" class="skills-select">
+    <div class="memory-add-section" id="memoryAddSection" style="display:none">
+      <div class="memory-add-header">创建新记忆</div>
+      <input type="text" id="memoryNewName" placeholder="记忆名称 (短横线命名, e.g. react-hooks-convention)" class="memory-input">
+      <input type="text" id="memoryNewDesc" placeholder="简短描述 — 什么时候该使用这条记忆？" class="memory-input">
+      <textarea id="memoryNewBody" placeholder="记忆内容（支持 Markdown）…" class="memory-textarea" rows="5"></textarea>
+      <div class="memory-add-row">
+        <select id="memoryNewScope" class="memory-select">
           <option value="project">项目级</option>
           <option value="global">全局</option>
         </select>
-        <input type="text" id="skillNewTags" placeholder="标签（逗号分隔）" class="skills-input" style="flex:1;margin-bottom:0">
-        <button class="skills-action-btn skills-btn-on" onclick="createSkillFromModal()">创建</button>
+        <input type="text" id="memoryNewTags" placeholder="标签（逗号分隔）" class="memory-input" style="flex:1;margin-bottom:0">
+        <button class="memory-action-btn memory-btn-on" onclick="createMemoryFromModal()">创建</button>
       </div>
     </div>
-    <div id="skillsModalStatus" class="skills-modal-status"></div>
+    <div id="memoryModalStatus" class="memory-modal-status"></div>
 
-    <!-- Bottom action bar -->
-    <div class="skills-modal-footer">
-      <button class="skills-action-btn skills-btn-add" onclick="toggleSkillsAddForm()">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+    <!-- Bottom action bar — cream band -->
+    <div class="memory-modal-footer">
+      <button class="memory-action-btn memory-btn-add" onclick="toggleMemoryAddForm()">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
         新建
       </button>
       <div style="flex:1"></div>
-      <button class="skills-action-btn skills-btn-on" id="skillsModalToggleBtn" onclick="toggleSkillsFromModal()">启用 Skills</button>
+      <button class="memory-action-btn memory-btn-on" id="memoryModalToggleBtn" onclick="toggleMemoryFromModal()">启用 Memory</button>
     </div>
   </div>
 </div>
@@ -1180,10 +1276,10 @@
       </span>
       <span class="mobile-sheet-item-check">✓</span>
     </div>
-    <div class="mobile-sheet-item" id="mobileSkills" onclick="toggleSkills();updateMobileSheet()">
+    <div class="mobile-sheet-item" id="mobileMemory" onclick="toggleMemory();updateMobileSheet()">
       <span class="mobile-sheet-item-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg></span>
       <span class="mobile-sheet-item-text">
-        <span class="mobile-sheet-item-name">技能注入</span>
+        <span class="mobile-sheet-item-name">记忆注入</span>
         <span class="mobile-sheet-item-desc">注入累积经验</span>
       </span>
       <span class="mobile-sheet-item-check">✓</span>
@@ -1256,30 +1352,30 @@
 <!-- Full-page drop overlay -->
 <div class="drop-overlay" id="dropOverlay">
   <div class="drop-overlay-inner">
-    <div class="drop-icon"></div>
+    <div class="drop-icon"><svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></div>
     <div class="drop-text">Drop files here</div>
     <div class="drop-hint">Images · PDF · Word · Excel · PPT · Text files</div>
   </div>
 </div>
 
 <!-- html2canvas: lazy-loaded on first Export click (199KB, avoids DevTools freeze) -->
-<script defer src="static/js/idb-cache.js?v=0.7.0" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
-<script defer src="static/js/core.js?v=0.7.0" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
-<script defer src="static/js/export-images.js?v=0.7.0" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
-<script defer src="static/js/branch.js?v=0.7.0" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
-<script defer src="static/js/ui.js?v=0.7.0" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
+<script defer src="static/js/idb-cache.js?v=0.7.1" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
+<script defer src="static/js/core.js?v=0.7.1" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
+<script defer src="static/js/export-images.js?v=0.7.1" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
+<script defer src="static/js/branch.js?v=0.7.1" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
+<script defer src="static/js/ui.js?v=0.7.1" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
 <!-- Feature modules (extracted from main.js) -->
-<script defer src="static/js/log-clean.js?v=0.7.0" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
-<script defer src="static/js/translation.js?v=0.7.0" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
-<script defer src="static/js/upload.js?v=0.7.0" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
-<script defer src="static/js/image-gen.js?v=0.7.0" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
-<script defer src="static/js/project.js?v=0.7.0" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
-<script defer src="static/js/skills.js?v=0.7.0" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
-<script defer src="static/js/scheduler.js?v=0.7.0" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
-<script defer src="static/js/timer.js?v=0.7.0" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
-<script defer src="static/js/myday.js?v=0.7.0" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
-<script defer src="static/js/settings.js?v=0.7.0" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
-<script defer src="static/js/main.js?v=0.7.0" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
+<script defer src="static/js/log-clean.js?v=0.7.1" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
+<script defer src="static/js/translation.js?v=0.7.1" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
+<script defer src="static/js/upload.js?v=0.7.1" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
+<script defer src="static/js/image-gen.js?v=0.7.1" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
+<script defer src="static/js/project.js?v=0.7.1" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
+<script defer src="static/js/memory.js?v=0.7.1" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
+<script defer src="static/js/scheduler.js?v=0.7.1" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
+<script defer src="static/js/timer.js?v=0.7.1" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
+<script defer src="static/js/myday.js?v=0.7.1" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
+<script defer src="static/js/settings.js?v=0.7.1" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
+<script defer src="static/js/main.js?v=0.7.1" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
 <script>
 // Feature flags — show/hide optional modules
 var _featureFlags = {};

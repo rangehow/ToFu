@@ -385,7 +385,7 @@ class TestEdgeCases:
                 {'role': 'system', 'content': 'sys'},
                 {'role': 'user', 'content': 'analyze this'},
                 {'role': 'assistant', 'content': '',
-                 'tool_calls': [{'function': {'name': 'read_local_file', 'arguments': '{}'}}]},
+                 'tool_calls': [{'function': {'name': 'read_files', 'arguments': '{}'}}]},
                 {'role': 'tool', 'content': [
                     {'type': 'text', 'text': 'File analysis results...'},
                     {'type': 'image_url', 'image_url': {'url': 'data:image/png;base64,abc'}},

@@ -620,12 +620,12 @@ function previewMsgPdfText(msgIdx, pdfIdx) {
 function openImagePreview(src) {
   if (!src) return;
   document.getElementById("previewBody").innerHTML =
-    `<img src="${src}" alt="Preview" class="preview-image">`;
+    `<button class="preview-close-btn" onclick="closePreview()" aria-label="Close">✕</button><img src="${src}" alt="Preview" class="preview-image">`;
   document.getElementById("previewModal").classList.add("open");
 }
 function openTextPreview(title, meta, text) {
   document.getElementById("previewBody").innerHTML =
-    `<div class="preview-text-panel"><div class="preview-text-header"><span class="preview-text-title">${escapeHtml(title)}</span><span class="preview-text-meta">${escapeHtml(meta)}</span></div><pre class="preview-text-body">${escapeHtml(text)}</pre></div>`;
+    `<button class="preview-close-btn" onclick="closePreview()" aria-label="Close">✕</button><div class="preview-text-panel"><div class="preview-text-header"><span class="preview-text-title">${escapeHtml(title)}</span><span class="preview-text-meta">${escapeHtml(meta)}</span></div><pre class="preview-text-body">${escapeHtml(text)}</pre></div>`;
   document.getElementById("previewModal").classList.add("open");
 }
 function closePreview() {

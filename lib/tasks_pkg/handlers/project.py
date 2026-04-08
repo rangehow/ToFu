@@ -44,15 +44,29 @@ def _handle_project_tool(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg
                     fn_args.get('path', '?'), task.get('id', '?')[:8])
 
     from lib.project_mod import execute_tool
-    # read_local_file works with absolute paths — doesn't need a project path
-    if fn_name == 'read_local_file':
-        from lib.file_reader import read_local_file as _read_local
-        tool_content = _read_local(fn_args.get('path', ''))
+    # read_files supports absolute paths (images, PDFs, etc.) even without a project
+    if fn_name == 'read_files' and not project_path:
+        # Allow read_files to work without a project path — absolute paths
+        # are routed inside tool_read_files; project-relative paths will error
+        tool_content = execute_tool(fn_name, fn_args, '.', conv_id=task['convId'], task_id=task['id'])
     else:
         _stdin_cb = _make_stdin_callback(task, rn, round_entry, fn_args.get('command', '')) if fn_name == 'run_command' else None
         tool_content = execute_tool(fn_name, fn_args, project_path, conv_id=task['convId'], task_id=task['id'], stdin_callback=_stdin_cb) if project_path else 'Error: No project path.'
 
-    # read_local_file may return a __screenshot__ dict for images
+    # read_files with absolute image paths returns a batch dict with __batch_images__
+    is_batch_image = isinstance(tool_content, dict) and tool_content.get('__batch_images__')
+    if is_batch_image:
+        # Extract the first image for VLM upload, keep text content
+        _images = tool_content['__batch_images__']
+        _text = tool_content.get('_text_content', '')
+        # Use the first image as the primary screenshot result
+        first_img = next(iter(_images.values()))
+        tool_content = first_img
+        # Store the text content as fallback
+        if _text:
+            tool_content['_text_fallback'] = _text
+
+    # read_files may return a __screenshot__ dict for images (single absolute image path)
     is_image_result = isinstance(tool_content, dict) and tool_content.get('__screenshot__')
     if is_image_result:
         tool_content.get('_text_fallback', '') or 'Image loaded.'

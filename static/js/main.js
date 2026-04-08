@@ -4,7 +4,7 @@
    wires toolbar UI, and boots the app.
    Feature modules live in separate files:
      image-gen.js, log-clean.js, translation.js,
-     upload.js, project.js, skills.js, scheduler.js, myday.js
+     upload.js, project.js, memory.js, scheduler.js, myday.js
    ═══════════════════════════════════════════ */
 
 /* pendingPdfTexts → defined in upload.js */
@@ -104,11 +104,23 @@ function _applyBackendCapabilities() {
   const caps = _agentBackendCapabilities || {};
   const isExternal = activeAgentBackend !== 'builtin';
 
-  // Model selector & thinking depth — hide when external backend handles them
+  // Model selector — hide when external backend handles it
   const modelGroup = document.getElementById('modelGroup');
   if (modelGroup) modelGroup.style.display = caps.modelSelector === false ? 'none' : '';
+  // Thinking depth — only HIDE when external backend explicitly disables it.
+  // Do NOT set display='' here — that clobbers _applyModelUI's inline display:flex,
+  // reverting to the CSS default (display:none) and the perf cache in _applyModelUI
+  // won't re-apply it since it thinks nothing changed.
+  // When switching BACK from an external backend, invalidate the perf cache so
+  // _applyModelUI re-applies the depth bar's correct visibility on its next call.
   const depthBar = document.getElementById('thinkingDepthSection');
-  if (depthBar) depthBar.style.display = caps.thinkingDepth === false ? 'none' : '';
+  if (caps.thinkingDepth === false) {
+    if (depthBar) depthBar.style.display = 'none';
+  } else if (depthBar && depthBar.style.display === 'none') {
+    // Depth bar was hidden by a previous external backend — invalidate the perf cache
+    // so the next _applyModelUI call (from _resetToolsToDefaults) does a full DOM update.
+    _lastAppliedModelId = null;
+  }
 
   // Search toggle — hide when external backend has its own search
   const searchToggle = document.getElementById('searchModeToggle');
@@ -474,6 +486,13 @@ function selectThinkingDepth(depth) {
       if (brand === 'generic') iconEl.innerHTML = _DEPTH_ICONS[depth] || _DEPTH_ICON_FALLBACK;
     }
   }
+  /* ★ FIX: Persist depth to conv object immediately.  Without this,
+   * conv.thinkingDepth stays stale (e.g. 'off') while config.thinkingDepth
+   * is updated (e.g. 'max').  If an async operation like
+   * loadConversationsFromServer triggers _restoreConvToolState before the
+   * user sends, it clobbers config.thinkingDepth back to conv.thinkingDepth
+   * → backend receives the stale depth → no thinking generated. */
+  _saveConvToolState();
   try { localStorage.setItem("claude_client_config", JSON.stringify(config)); }
   catch (e) { debugLog(`[selectThinkingDepth] localStorage save failed: ${e.message}`, 'error'); }
 }
@@ -542,15 +561,15 @@ function _applyBrowserUI(enabled) {
   }
   _updateBrowserModalBtn();
 }
-function _applySkillsUI(enabled) {
-  skillsEnabled = !!enabled;
+function _applyMemoryUI(enabled) {
+  memoryEnabled = !!enabled;
   document
-    .getElementById("skillsToggle")
-    ?.classList.toggle("active", skillsEnabled);
+    .getElementById("memoryToggle")
+    ?.classList.toggle("active", memoryEnabled);
   document
-    .getElementById("skillsBadge")
-    ?.classList.toggle("visible", skillsEnabled);
-  _updateSkillsModalBtn();
+    .getElementById("memoryBadge")
+    ?.classList.toggle("visible", memoryEnabled);
+  _updateMemoryModalBtn();
 }
 function _applySchedulerUI(enabled) {
   schedulerEnabled = !!enabled;
@@ -600,7 +619,7 @@ function _applyImageGenUI(enabled) {
   const hint = document.getElementById('inputHint');
   if (hint) hint.textContent = imageGenMode
     ? 'Enter 生成 · Esc 退出 · 粘贴/拖拽图片可编辑 · 支持中英文'
-    : 'Enter send · Ctrl+Enter newline · Drop files anywhere';
+    : 'Enter send · Ctrl+Enter newline · 📎 or drop files';
   /* ★ Reflow toolbar only if the mode actually changed — switching between
    * ig-active / normal swaps the visible toolbar so re-measure is needed.
    * But on conv switch where both convs have imageGenMode=false, skip. */
@@ -647,7 +666,7 @@ function _saveConvToolState() {
   conv.codeExecEnabled = !!codeExecEnabled;
   conv.browserEnabled = !!browserEnabled;
   conv.desktopEnabled = !!desktopEnabled;
-  conv.skillsEnabled = !!skillsEnabled;
+  conv.memoryEnabled = !!memoryEnabled;
   conv.schedulerEnabled = !!schedulerEnabled;
   conv.swarmEnabled = !!swarmEnabled;
   conv.endpointEnabled = !!endpointEnabled;
@@ -690,7 +709,11 @@ function _saveConvToolState() {
   if (!_taskActive) {
     conv.autoTranslate = !!autoTranslate;
   }
-  saveConversations(conv.id);
+  /* ★ FIX: Pass null instead of conv.id — toggling tools is a metadata-only
+   * change, NOT new conversation activity.  Passing conv.id bumps
+   * updatedAt = Date.now(), making the conversation jump to the top of the
+   * sidebar just because the user toggled a tool button. */
+  saveConversations(null);
   /* ★ BUG FIX: Do NOT sync empty convs to server.
    * When a new conv is created, _saveConvToolState() fires before the user
    * message is pushed.  Syncing messages:[] overwrites the server with nothing,
@@ -710,7 +733,7 @@ function _restoreConvToolState(conv) {
   _applyCodeExecUI(!!conv.codeExecEnabled);
   _applyBrowserUI(!!conv.browserEnabled);
   _applyDesktopUI(!!conv.desktopEnabled);
-  _applySkillsUI(conv.skillsEnabled !== undefined ? !!conv.skillsEnabled : true);
+  _applyMemoryUI(conv.memoryEnabled !== undefined ? !!conv.memoryEnabled : true);
   _applySchedulerUI(!!conv.schedulerEnabled);
   _applySwarmUI(!!conv.swarmEnabled);
   _applyEndpointUI(!!conv.endpointEnabled);
@@ -767,7 +790,7 @@ function _resetToolsToDefaults() {
   _applyFetchEnabledUI(true);
   _applyCodeExecUI(false);
   _applyBrowserUI(false);
-  _applySkillsUI(true);
+  _applyMemoryUI(true);
   _applySwarmUI(false);
   _applyEndpointUI(false);
   _applyImageGenToolUI(false);
@@ -799,7 +822,7 @@ function newChat() {
     prevConv.fetchEnabled = !!fetchEnabled;
     prevConv.codeExecEnabled = !!codeExecEnabled;
     prevConv.browserEnabled = !!browserEnabled;
-    prevConv.skillsEnabled = !!skillsEnabled;
+    prevConv.memoryEnabled = !!memoryEnabled;
     prevConv.swarmEnabled = !!swarmEnabled;
     prevConv.endpointEnabled = !!endpointEnabled;
     prevConv.imageGenEnabled = !!imageGenEnabled;
@@ -862,7 +885,7 @@ function loadConversation(id) {
     prevConv.codeExecEnabled = !!codeExecEnabled;
     prevConv.browserEnabled = !!browserEnabled;
     prevConv.desktopEnabled = !!desktopEnabled;
-    prevConv.skillsEnabled = !!skillsEnabled;
+    prevConv.memoryEnabled = !!memoryEnabled;
     prevConv.schedulerEnabled = !!schedulerEnabled;
     prevConv.swarmEnabled = !!swarmEnabled;
     prevConv.endpointEnabled = !!endpointEnabled;
@@ -970,8 +993,12 @@ function loadConversation(id) {
   if (_needsDeferredSave && prevConv) {
     const pc = prevConv;
     setTimeout(() => {
-      /* Re-check: don't double-sync if _saveConvToolState was called elsewhere */
-      saveConversations(pc.id);
+      /* ★ FIX: Pass null instead of pc.id — saving tool state on conversation
+       * switch is a metadata-only change, NOT new conversation activity.
+       * Passing pc.id would bump updatedAt = Date.now(), which makes the
+       * outgoing conversation jump to the top of the sidebar even though
+       * the user only viewed it without making any changes. */
+      saveConversations(null);
       if (pc.messages && pc.messages.length > 0) {
         syncConversationToServer(pc);
       }
@@ -1259,7 +1286,7 @@ async function startAssistantResponse(convId) {
   const _sm   = _isActive ? searchMode           : (conv.searchMode || "multi");
   const _fe   = _isActive ? fetchEnabled          : (!!conv.fetchEnabled);
   const _ce   = _isActive ? codeExecEnabled       : (!!conv.codeExecEnabled);
-  const _sk   = _isActive ? skillsEnabled         : (conv.skillsEnabled !== undefined ? !!conv.skillsEnabled : true);
+  const _sk   = _isActive ? memoryEnabled         : (conv.memoryEnabled !== undefined ? !!conv.memoryEnabled : true);
   const _sch  = _isActive ? schedulerEnabled      : (!!conv.schedulerEnabled);
   const _sw   = _isActive ? swarmEnabled           : (!!conv.swarmEnabled);
   const _be   = _isActive ? browserEnabled         : (!!conv.browserEnabled);
@@ -1293,7 +1320,7 @@ async function startAssistantResponse(convId) {
       searchMode: _sm,
       fetchEnabled: _fe,
       codeExecEnabled: _ce,
-      skillsEnabled: _sk,
+      memoryEnabled: _sk,
       schedulerEnabled: _sch,
       swarmEnabled: _sw,
       projectPath: _pp,
@@ -2353,7 +2380,7 @@ async function continueAssistant() {
     searchMode,
     fetchEnabled,
     codeExecEnabled,
-    skillsEnabled,
+    memoryEnabled,
     /* ★ FIX: read from per-conv state, not global projectState (same race as startAssistantResponse) */
     projectPath: _getConvProjectPath(conv),
     autoApply: autoApplyWrites,
@@ -2731,8 +2758,8 @@ document.addEventListener("click", (e) => {
 });
 
 function updateSubmenuCounts() {
-  // AI enhance: codeExec, skills, translate
-  const aiCount = (codeExecEnabled ? 1 : 0) + (skillsEnabled ? 1 : 0) + (autoTranslate ? 1 : 0);
+  // AI enhance: codeExec, memory, translate
+  const aiCount = (codeExecEnabled ? 1 : 0) + (memoryEnabled ? 1 : 0) + (autoTranslate ? 1 : 0);
   const aiEl = document.getElementById("submenuAICount");
   if (aiEl) {
     aiEl.textContent = aiCount;
@@ -2924,7 +2951,7 @@ function toggleSidebar() {
 })();
 
 /* ═══ Mobile "More" Bottom Sheet ═══
- * Mirrors the state of the desktop toolbar toggles (codeExec, skills,
+ * Mirrors the state of the desktop toolbar toggles (codeExec, memory,
  * translate, browser, imageGen, humanGuidance, swarm, endpoint).
  * Each item reads the live state from the existing toggle elements. */
 
@@ -2953,7 +2980,7 @@ function updateMobileSheet() {
   /* Sync each mobile sheet item's .active class with the desktop toggle state */
   const map = {
     mobileCodeExec:    "codeExecToggle",
-    mobileSkills:      "skillsToggle",
+    mobileMemory:      "memoryToggle",
     mobileTranslate:   "translateToggle",
     mobileBrowser:     "browserToggle",
     mobileImageGen:    "imageGenToggle",
@@ -3684,11 +3711,11 @@ function _ensureNewest() {
     .getElementById("browserBadge")
     ?.classList.toggle("visible", browserEnabled);
   document
-    .getElementById("skillsToggle")
-    ?.classList.toggle("active", skillsEnabled);
+    .getElementById("memoryToggle")
+    ?.classList.toggle("active", memoryEnabled);
   document
-    .getElementById("skillsBadge")
-    ?.classList.toggle("visible", skillsEnabled);
+    .getElementById("memoryBadge")
+    ?.classList.toggle("visible", memoryEnabled);
   renderConversationList();
   function _handleConvClick(e) {
     const cpBtn = e.target.closest(".conv-copy-id");

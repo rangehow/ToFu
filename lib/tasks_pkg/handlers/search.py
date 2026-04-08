@@ -104,12 +104,12 @@ def _handle_fetch_url(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg, p
         logger.warning('[Fetch] Rejected non-HTTP URL scheme=%r: %s', scheme, target_url[:120])
         tool_content = (
             f'fetch_url only supports http:// and https:// URLs (got {scheme}://). '
-            f'For local files, use read_local_file with path="{local_path}" '
-            f'or read_files for project-relative text files.'
+            f'For local files, use read_files with path="{local_path}" '
+            f'(read_files supports both project-relative and absolute paths).'
         )
         dr = {
             'title': f'Rejected: {scheme}:// scheme',
-            'snippet': 'Use read_local_file for local paths',
+            'snippet': 'Use read_files for local paths',
             'url': target_url, 'source': 'N/A',
             'fetched': False, 'fetchedChars': 0,
         }
@@ -135,8 +135,9 @@ def _handle_fetch_url(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg, p
             logger.info('[Executor] fetch_url IRRELEVANT: %s', target_url[:100])
             page_content = None
     filtered_chars = len(page_content) if page_content else 0
+    from lib.tasks_pkg.tool_display import _short_url
     dr = {
-        'title': f'{"PDF" if is_pdf else "Page"}: {urlparse(target_url).netloc}',
+        'title': f'{"PDF" if is_pdf else "Page"}: {_short_url(target_url)}',
         'snippet': (f'{filtered_chars:,} chars' + (f' (filtered from {raw_chars:,})' if filtered_chars < raw_chars else '')) if page_content else 'Failed',
         'url': target_url, 'source': 'PDF' if is_pdf else 'Direct Fetch',
         'fetched': bool(page_content), 'fetchedChars': filtered_chars,

@@ -45,7 +45,7 @@
 | **6-section delegation prompt** | Task, Expected Outcome, Required Tools, Must Do, Must Not Do, Context | Ad-hoc objective string in `SubTaskSpec` | `lib/swarm/protocol.py` | **Gap** — no structured delegation template |
 | **Todo continuation enforcer** | Hook injects "You have incomplete todos!" reminder into context | No equivalent — Critic provides feedback but doesn't inject todo reminders mid-turn | `lib/tasks_pkg/tool_hooks.py` (hook system exists but no todo hook) | **Gap** |
 | **Boulder state (crash persistence)** | `boulder.json` — tracks plan + session ID for resume | Endpoint turns persisted to DB via `_sync_endpoint_turns_to_conversation` | `lib/tasks_pkg/endpoint.py` | **Covered** — DB persistence is more robust than file-based |
-| **Wisdom accumulation** | After each task, extract conventions/successes/failures/gotchas/commands → pass to next task | `session_memory.py` + skills system | `lib/tasks_pkg/session_memory.py`, `lib/tasks_pkg/handlers/skills.py` | **Mostly covered** — session memory is cross-turn, skills are cross-session; but no automatic "pass wisdom to next subtask" in swarm |
+| **Wisdom accumulation** | After each task, extract conventions/successes/failures/gotchas/commands → pass to next task | `session_memory.py` + skills system | `lib/tasks_pkg/session_memory.py`, `lib/tasks_pkg/handlers/memory.py` | **Mostly covered** — session memory is cross-turn, skills are cross-session; but no automatic "pass wisdom to next subtask" in swarm |
 | **Atlas runtime hooks** | `src/hooks/atlas/index.ts` — blocks Write/Edit tools, injects boulder state | `tool_hooks.py` — pre/post hooks exist; `_run_command_safety_hook` blocks dangerous commands | `lib/tasks_pkg/tool_hooks.py` | **Partial** — hook infrastructure exists but not used for orchestrator discipline |
 | **Category-based delegation** | visual-engineering, ultrabrain, quick, etc. (semantic, not model names) | `lib/swarm/registry.py` — role-based (researcher, coder, analyst) + model tiers (light/standard/heavy) | `lib/swarm/registry.py` | **Partial** — tiers exist but categories are less semantic |
 | **Verification protocol** | lsp_diagnostics + test execution + visual QA + manual file reading | Critic phase uses full tools to verify | `lib/tasks_pkg/endpoint_review.py` | **Partial** — Critic CAN use tools but not prompted for adversarial verification |
@@ -63,7 +63,7 @@
 | **Plan agent** | Read-only architect, designs implementation plans, no file modifications | Planner phase in endpoint mode | `lib/tasks_pkg/endpoint_review.py` | **Close** — same idea |
 | **Agent tool allowlist/denylist** | `tools` and `disallowedTools` per agent definition | `scope_tools_for_role()` | `lib/swarm/registry.py` | **Covered** |
 | **shouldDefer (tool batching)** | TodoWriteTool deferred to avoid blocking main turn | No tool batching concept | N/A | **Minor gap** |
-| **Agent listing as attachment** | Dynamic agent list moved from tool description to message attachment for cache stability | Skills listing already in user message (not system) for cache stability | `lib/tasks_pkg/system_context.py` | **Covered** (via skill `skills-listing-user-message-cache-stability`) |
+| **Agent listing as attachment** | Dynamic agent list moved from tool description to message attachment for cache stability | Skills listing already in user message (not system) for cache stability | `lib/tasks_pkg/system_context.py` | **Covered** (via memory `memory-listing-user-message-cache-stability`) |
 
 ---
 

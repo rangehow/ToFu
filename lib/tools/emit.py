@@ -1,8 +1,11 @@
 """lib/tools/emit.py — emit_to_user tool definition.
 
 The ``emit_to_user`` tool allows the model to end its turn by pointing the
-user to an existing tool result instead of re-outputting it verbatim.  This
-saves output tokens and latency when the tool output speaks for itself.
+user to the most recent tool result instead of re-outputting it verbatim.
+This saves output tokens and latency when the tool output speaks for itself.
+
+The referenced tool round is auto-inferred (last tool round in searchRounds),
+so the model only needs to provide a brief comment.
 """
 
 EMIT_TO_USER_TOOL = {
@@ -10,7 +13,7 @@ EMIT_TO_USER_TOOL = {
     "function": {
         "name": "emit_to_user",
         "description": (
-            "End your response by pointing the user to an existing tool result "
+            "End your response by pointing the user to the most recent tool result "
             "instead of re-outputting it. The user can already see all tool results "
             "in expandable panels in the UI. Use this when a tool's raw output fully "
             "answers the user's question and you don't need to analyze, transform, or "
@@ -21,10 +24,6 @@ EMIT_TO_USER_TOOL = {
         "parameters": {
             "type": "object",
             "properties": {
-                "tool_round": {
-                    "type": "integer",
-                    "description": "roundNum of the tool result to highlight for the user"
-                },
                 "comment": {
                     "type": "string",
                     "description": (
@@ -33,7 +32,7 @@ EMIT_TO_USER_TOOL = {
                     )
                 }
             },
-            "required": ["tool_round", "comment"]
+            "required": ["comment"]
         }
     }
 }

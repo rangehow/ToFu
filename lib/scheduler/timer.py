@@ -226,13 +226,12 @@ def _build_poll_tools(tools_config: dict) -> list | None:
     Returns a list of tool definitions or None if no tools should be available.
     The timer poll gets the same tools as the main agent (project tools,
     search, fetch, code_exec) except for human interaction tools (ask_human,
-    emit_to_user, scheduler, swarm, skills).
+    emit_to_user, scheduler, swarm, memory).
     """
     try:
         from lib.tools import (
             CODE_EXEC_TOOL,
             FETCH_URL_TOOL,
-            PROJECT_TOOL_READ_LOCAL_FILE,
             PROJECT_TOOLS,
             SEARCH_TOOL_MULTI,
         )
@@ -248,15 +247,11 @@ def _build_poll_tools(tools_config: dict) -> list | None:
         if tools_config.get('fetchEnabled', True) or search_mode:
             tool_list.append(FETCH_URL_TOOL)
 
-        # ★ Project tools — file operations on the project
+        # ★ Project tools (read_files supports both relative and absolute paths)
         if project_enabled:
-            tool_list.extend(t for t in PROJECT_TOOLS
-                             if t is not PROJECT_TOOL_READ_LOCAL_FILE)
+            tool_list.extend(PROJECT_TOOLS)
         elif tools_config.get('codeExecEnabled', False):
             tool_list.append(CODE_EXEC_TOOL)
-
-        # ★ Local file reader — always available
-        tool_list.append(PROJECT_TOOL_READ_LOCAL_FILE)
 
         # ★ Browser tools
         if tools_config.get('browserEnabled', False):
@@ -631,7 +626,7 @@ def _execute_continuation(timer: dict[str, Any]) -> str | None:
             'projectPath': tools_cfg.get('projectPath', settings.get('projectPath', '')),
             'codeExecEnabled': tools_cfg.get('codeExecEnabled', settings.get('codeExecEnabled', False)),
             'browserEnabled': tools_cfg.get('browserEnabled', settings.get('browserEnabled', False)),
-            'skillsEnabled': tools_cfg.get('skillsEnabled', settings.get('skillsEnabled', True)),
+            'memoryEnabled': tools_cfg.get('memoryEnabled', settings.get('memoryEnabled', True)),
             'swarmEnabled': tools_cfg.get('swarmEnabled', settings.get('swarmEnabled', False)),
             'imageGenEnabled': tools_cfg.get('imageGenEnabled', settings.get('imageGenEnabled', False)),
             'schedulerEnabled': True,

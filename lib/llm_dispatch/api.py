@@ -18,6 +18,25 @@ from .factory import get_dispatcher
 
 logger = get_logger(__name__)
 
+
+
+def _abortable_backoff(seconds: float, abort_check=None, interval: float = 0.5):
+    """Sleep for *seconds* but poll abort_check every *interval*.
+
+    If abort_check fires, raises AbortedError so the retry loop exits
+    without making the user wait through the entire backoff.
+    """
+    if not abort_check:
+        time.sleep(seconds)
+        return
+    from lib.llm_client import AbortedError
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if abort_check():
+            raise AbortedError('User aborted during 429 backoff')
+        remaining = deadline - time.monotonic()
+        time.sleep(min(interval, max(0, remaining)))
+
 __all__ = [
     'pick_key_for_model',
     'dispatch_chat',
@@ -110,6 +129,8 @@ def dispatch_chat(messages, *, max_tokens=4096, temperature=0,
     # ★ hard_attempts counts only non-429 failures; 429 loops forever.
     hard_attempts = 0
     _429_count = 0
+    _last_exclusion_reset = time.monotonic()  # ★ track when we last reset hard-error exclusions
+    _EXCLUSION_RESET_INTERVAL = 60  # reset exclude_pairs every 60s during 429 cycling
 
     while hard_attempts < max_retries:
         _remaining = _deadline - time.time()
@@ -119,6 +140,22 @@ def dispatch_chat(messages, *, max_tokens=4096, temperature=0,
             break
 
         total_attempts = hard_attempts + _429_count
+
+        # ★ Periodically reset hard-error exclusions during 429 cycling.
+        #   502/timeout errors may be transient (gateway restart), but
+        #   exclude_pairs is permanent per dispatch call.  After 60s,
+        #   give excluded slots another chance.
+        if _429_count > 0 and (time.monotonic() - _last_exclusion_reset) >= _EXCLUSION_RESET_INTERVAL:
+            if exclude_pairs or exclude_keys:
+                logger.info(
+                    '%s dispatch_chat: resetting hard-error exclusions '
+                    'after %ds of 429 cycling (cycle #%d) — '
+                    'exclude_keys=%s exclude_pairs=%s',
+                    log_prefix, _EXCLUSION_RESET_INTERVAL, _429_count,
+                    exclude_keys, exclude_pairs)
+                exclude_keys.clear()
+                exclude_pairs.clear()
+            _last_exclusion_reset = time.monotonic()
 
         slot = dispatcher.pick_and_reserve(
             capability=capability,
@@ -130,7 +167,7 @@ def dispatch_chat(messages, *, max_tokens=4096, temperature=0,
         if slot is None:
             # All slots in cooldown / excluded — wait briefly and retry
             if _429_count > 0:
-                time.sleep(0.5)
+                time.sleep(0.3)
                 _429_count += 1
                 if _429_count % 20 == 0:
                     logger.warning(
@@ -187,10 +224,16 @@ def dispatch_chat(messages, *, max_tokens=4096, temperature=0,
             # ★ Don't exclude anything — slot.record_error() sets a 0.5s
             #   cooldown which naturally steers pick_and_reserve to another
             #   slot.  After cooldown the slot is eligible again.
-            logger.info(
-                '%s 429 rate-limited on %s:%s (cycle #%d) — '
-                'will retry after brief sleep',
-                log_prefix, slot.key_name, slot.model, _429_count)
+            # ★ Fast 0.3s sleep — 429 in shared-key = contention, poll aggressively.
+            _err_body = str(e)[:300]
+            if _429_count <= 3 or _429_count % 100 == 0:
+                logger.warning(
+                    '%s 429 rate-limited on %s:%s (cycle #%d) — body: %s',
+                    log_prefix, slot.key_name, slot.model, _429_count, _err_body)
+            else:
+                logger.info(
+                    '%s 429 rate-limited on %s:%s (cycle #%d)',
+                    log_prefix, slot.key_name, slot.model, _429_count)
             time.sleep(0.3)
             # ★ Don't increment hard_attempts — 429 retries are free
             continue
@@ -403,11 +446,14 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
     # Detect if it's a pre-built body or raw messages
     is_body = isinstance(body_or_messages, dict) and 'messages' in body_or_messages
 
-    # ★ hard_attempts counts only non-429 failures; 429 loops forever
-    #   but with a safety cap to prevent spinning for 10+ minutes.
-    _MAX_429_CYCLES = 120  # ~2 minutes at 1s/cycle — enough for RPM window rotation
+    # ★ hard_attempts counts only non-429 failures; 429 loops forever.
+    #   Set _MAX_429_CYCLES = 0 to disable the cap (retry indefinitely).
+    #   The abort_check runs every cycle so the user can always cancel.
+    _MAX_429_CYCLES = 0  # 0 = infinite; set >0 to re-enable safety cap
     hard_attempts = 0
     _429_count = 0
+    _last_exclusion_reset = time.monotonic()  # ★ track when we last reset hard-error exclusions
+    _EXCLUSION_RESET_INTERVAL = 60  # reset exclude_pairs every 60s during 429 cycling
 
     while hard_attempts < max_retries:
         # Abort check — let the user cancel during 429 cycling
@@ -418,7 +464,7 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
         # ★ Safety cap on 429 cycling — if we've been rate-limited for
         #   too many cycles, something is fundamentally wrong (e.g. payload
         #   too large causing 413 on some slots and 429 on the rest).
-        if _429_count >= _MAX_429_CYCLES:
+        if _MAX_429_CYCLES > 0 and _429_count >= _MAX_429_CYCLES:
             logger.error(
                 '%s dispatch_stream: 429 cycling exceeded safety cap '
                 '(%d cycles) — giving up. Last error: %s',
@@ -434,6 +480,27 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
             log_prefix, hard_attempts + 1, max_retries, _429_count,
             dispatcher.summarize_slots(capability))
 
+        # ★ Periodically reset hard-error exclusions during 429 cycling.
+        #   502/timeout errors may be transient (gateway restart), but
+        #   exclude_pairs is permanent per dispatch call.  After 60s,
+        #   give excluded slots another chance — if still broken, they'll
+        #   get re-excluded quickly.  This prevents permanently losing
+        #   slots that recovered while we were in the 429 retry loop.
+        if _429_count > 0 and (time.monotonic() - _last_exclusion_reset) >= _EXCLUSION_RESET_INTERVAL:
+            if exclude or exclude_keys or exclude_pairs:
+                logger.info(
+                    '%s dispatch_stream: resetting hard-error exclusions '
+                    'after %ds of 429 cycling (cycle #%d) — '
+                    'exclude_models=%s exclude_keys=%s exclude_pairs=%s',
+                    log_prefix, _EXCLUSION_RESET_INTERVAL, _429_count,
+                    exclude, exclude_keys, exclude_pairs)
+                exclude.clear()
+                exclude_keys.clear()
+                exclude_pairs.clear()
+                # Don't reset hard_attempts — we still want to count
+                # genuinely broken slots toward the retry limit
+            _last_exclusion_reset = time.monotonic()
+
         slot = dispatcher.pick_and_reserve(
             capability=capability,
             prefer_model=prefer_model,
@@ -444,7 +511,7 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
         if slot is None:
             # All slots in cooldown / excluded — wait briefly and retry
             if _429_count > 0:
-                time.sleep(0.5)
+                time.sleep(0.3)
                 _429_count += 1
                 if _429_count % 20 == 0:
                     logger.warning(
@@ -556,10 +623,21 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
             #   cooldown which naturally steers pick_and_reserve to another
             #   slot.  After cooldown expires the slot is eligible again,
             #   so all slots rotate automatically.
-            logger.info(
-                '%s 429 rate-limited on %s:%s (cycle #%d) — '
-                'will retry after brief sleep',
-                log_prefix, slot.key_name, slot.model, _429_count)
+            # ★ Fast 0.3s sleep — 429 in a shared-key environment means
+            #   contention with other users.  We need to poll aggressively
+            #   to grab slots the instant they become available.  Backoff
+            #   would let competing users grab slots while we sleep.
+            # ★ Log response body periodically to diagnose persistent 429s
+            _err_body = str(e)[:300]
+            if _429_count <= 3 or _429_count % 100 == 0:
+                logger.warning(
+                    '%s 429 rate-limited on %s:%s (cycle #%d) — body: %s',
+                    log_prefix, slot.key_name, slot.model, _429_count,
+                    _err_body)
+            else:
+                logger.info(
+                    '%s 429 rate-limited on %s:%s (cycle #%d)',
+                    log_prefix, slot.key_name, slot.model, _429_count)
             if on_retry:
                 on_retry(attempt=_429_count, reason='Rate limited (429)', status_code=429)
             time.sleep(0.3)

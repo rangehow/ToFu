@@ -65,7 +65,7 @@ class _ContentWithDisplayResults(str):
 _STREAMABLE_TOOLS = frozenset({
     'read_files', 'grep_search', 'find_files', 'list_dir',
     'web_search', 'fetch_url',
-    'check_error_logs', 'read_local_file',
+    'check_error_logs',
 })
 
 # ── Internal tool prefixes to skip (proxy artifacts, not real tools) ──
@@ -282,11 +282,11 @@ class StreamingToolAccumulator:
             elif fn_name == 'fetch_url':
                 from lib.fetch import fetch_page_content
                 url = fn_args.get('url', '')
-                from lib.tasks_pkg.executor import FETCH_MAX_CHARS_DIRECT, FETCH_MAX_CHARS_PDF
+                import lib as _lib_ref
                 content = fetch_page_content(
                     url,
-                    max_chars=FETCH_MAX_CHARS_DIRECT,
-                    pdf_max_chars=FETCH_MAX_CHARS_PDF,
+                    max_chars=_lib_ref.FETCH_MAX_CHARS_DIRECT,
+                    pdf_max_chars=_lib_ref.FETCH_MAX_CHARS_PDF,
                 )
                 if content:
                     return (f"Content from {url} "
@@ -297,16 +297,6 @@ class StreamingToolAccumulator:
                 from lib.project_error_tracker import scan_project_errors
                 path = self._project_path or '.'
                 return str(scan_project_errors(path))
-
-            elif fn_name == 'read_local_file':
-                from lib.file_reader import read_local_file
-                result = read_local_file(fn_args.get('path', ''))
-                # For images (__screenshot__ dict), return the text fallback
-                # for pre-execution — the full image handling happens in
-                # the main executor pipeline.
-                if isinstance(result, dict) and result.get('__screenshot__'):
-                    return result.get('_text_fallback', 'Image loaded.')
-                return result
 
             return ''
 

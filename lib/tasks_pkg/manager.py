@@ -353,6 +353,12 @@ def _sync_result_to_conversation(task, meta):
         if meta.get('modifiedFileList'):
             last_msg['modifiedFileList'] = meta['modifiedFileList']
 
+        # emit_to_user: persist emitted tool content for inline display
+        if task.get('_emitContent'):
+            last_msg['_emitContent'] = task['_emitContent']
+        if task.get('_emitToolName'):
+            last_msg['_emitToolName'] = task['_emitToolName']
+
         # Serialize and write back — json_dumps_pg strips null bytes from
         # raw data AND removes \u0000 escapes from the JSON text.
         messages_json = json_dumps_pg(messages)

@@ -1,9 +1,9 @@
-"""lib/skills/relevance.py — BM25-based skill relevance scoring.
+"""lib/memory/relevance.py — BM25-based memory relevance scoring.
 
-Lightweight BM25 scorer that ranks skills by relevance to a query string.
+Lightweight BM25 scorer that ranks memories by relevance to a query string.
 No external dependencies — uses only stdlib math.
 
-Used to reduce the number of skills injected per turn from 100+ to ~30,
+Used to reduce the number of memories injected per turn from 100+ to ~30,
 cutting context consumption while preserving discoverability.
 """
 
@@ -15,7 +15,7 @@ from lib.log import get_logger
 
 logger = get_logger(__name__)
 
-__all__ = ['filter_relevant_skills']
+__all__ = ['filter_relevant_memories']
 
 # ═══════════════════════════════════════════════════════
 #  Constants
@@ -61,48 +61,48 @@ def _tokenize(text: str) -> list[str]:
 #  BM25 Scorer
 # ═══════════════════════════════════════════════════════
 
-def _build_skill_doc(skill: dict[str, Any]) -> list[str]:
-    """Build a token list from a skill's metadata (name + description + tags)."""
+def _build_memory_doc(mem: dict[str, Any]) -> list[str]:
+    """Build a token list from a memory's metadata (name + description + tags)."""
     parts = [
-        skill.get('name', ''),
-        skill.get('description', ''),
+        mem.get('name', ''),
+        mem.get('description', ''),
     ]
-    tags = skill.get('tags', [])
+    tags = mem.get('tags', [])
     if isinstance(tags, list):
         parts.extend(tags)
     return _tokenize(' '.join(parts))
 
 
-def filter_relevant_skills(
-    skills: list[dict[str, Any]],
+def filter_relevant_memories(
+    memories: list[dict[str, Any]],
     query: str,
     top_k: int = DEFAULT_TOP_K,
 ) -> list[dict[str, Any]]:
-    """Filter skills by BM25 relevance to query, returning top-K.
+    """Filter memories by BM25 relevance to query, returning top-K.
 
     Args:
-        skills: List of skill dicts (with 'name', 'description', 'tags').
+        memories: List of memory dicts (with 'name', 'description', 'tags').
         query: User message text to match against.
-        top_k: Maximum number of skills to return.
+        top_k: Maximum number of memories to return.
 
     Returns:
-        List of skill dicts, sorted by relevance (most relevant first).
-        If len(skills) <= top_k, returns all skills unchanged (no filtering).
-        If query is empty/None, returns all skills unchanged.
+        List of memory dicts, sorted by relevance (most relevant first).
+        If len(memories) <= top_k, returns all memories unchanged (no filtering).
+        If query is empty/None, returns all memories unchanged.
     """
-    if not query or not skills:
-        return skills
+    if not query or not memories:
+        return memories
 
-    n = len(skills)
+    n = len(memories)
     if n <= top_k:
-        return skills
+        return memories
 
     query_tokens = _tokenize(query)
     if not query_tokens:
-        return skills
+        return memories
 
-    # Build document token lists for all skills
-    docs = [_build_skill_doc(s) for s in skills]
+    # Build document token lists for all memories
+    docs = [_build_memory_doc(s) for s in memories]
     doc_lens = [len(d) for d in docs]
     avg_dl = sum(doc_lens) / n if n > 0 else 1.0
 
@@ -113,9 +113,9 @@ def filter_relevant_skills(
         count = sum(1 for doc in docs if term in doc)
         df[term] = count
 
-    # Compute BM25 score for each skill
+    # Compute BM25 score for each memory
     scores = []
-    for i, (skill, doc, dl) in enumerate(zip(skills, docs, doc_lens)):
+    for i, (mem, doc, dl) in enumerate(zip(memories, docs, doc_lens)):
         score = 0.0
         # Term frequency map for this document
         tf_map: dict[str, int] = {}
@@ -140,10 +140,10 @@ def filter_relevant_skills(
     # Sort by score descending, then by original index for stability
     scores.sort(key=lambda x: (-x[0], x[1]))
 
-    # Return top_k skills
-    result = [skills[idx] for _, idx in scores[:top_k]]
+    # Return top_k memories
+    result = [memories[idx] for _, idx in scores[:top_k]]
     n_filtered = n - len(result)
     if n_filtered > 0:
-        logger.debug('[SkillBM25] Filtered %d→%d skills for query (%.60s)',
+        logger.debug('[MemoryBM25] Filtered %d→%d memories for query (%.60s)',
                      n, len(result), query)
     return result

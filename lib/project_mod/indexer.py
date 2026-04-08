@@ -58,10 +58,13 @@ Tools for code modification:
   Set replace_all=true to replace ALL occurrences (default: errors on multiple matches for safety).
   For MULTIPLE edits, pass an 'edits' array: apply_diff(edits=[{path, search, replace, replace_all?, description?}, ...])
   Edits are applied sequentially so later edits see earlier changes. Much faster than separate calls.
+- insert_content(path, anchor, content, position?, description?) — Insert new content before or after an anchor string without replacing it.
+  The 'anchor' must match exactly once (errors on 0 or multiple matches, like apply_diff's search).
+  position='before' or 'after' (default: 'after'). For MULTIPLE insertions, pass an 'edits' array.
 - run_command(command, timeout?, working_dir?) — Execute shell command. In multi-root workspaces, use working_dir='rootname:' to run in a specific root.
 
 Token-saving tools (use these to avoid re-generating existing content):
-- emit_to_user(tool_round, comment) — TERMINAL: end your turn by pointing the user to a tool result they can already see, instead of re-outputting it.
+- emit_to_user(comment) — TERMINAL: end your turn by pointing the user to the most recent tool result they can already see, instead of re-outputting it.
   Use when a tool's raw output fully answers the question (e.g. command output, file contents, search results).
   The user sees all tool results in expandable panels. Just add a brief comment — do NOT repeat the output.
   This is a TERMINAL tool — calling it ends your turn immediately. Do NOT call other tools after this.
@@ -77,6 +80,7 @@ Strategy:
 5. When suggesting changes, show exact code with file path
 6. Use apply_diff for small targeted edits, write_file for new files or major rewrites
 7. When making multiple edits, prefer batch apply_diff(edits=[...]) over separate calls — this dramatically reduces round trips
+8. **Prefer insert_content over apply_diff when the change is purely additive** (adding new lines without modifying existing ones). Examples: adding an import, appending to end of file, inserting a new function/method/block before or after existing code. insert_content is simpler (no need to repeat the anchor in both search and replace) and less error-prone.
 
 ⚠️ IMPORTANT — read WIDE, not narrow:
 - When reading a function or class, read 200+ lines in one shot — don't read 50-line fragments and come back for more

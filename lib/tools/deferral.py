@@ -64,11 +64,11 @@ DEFERRED_TOOL_HINTS: dict[str, str] = {
     'desktop_type':          'desktop type keyboard text input',
     'desktop_move_mouse':    'desktop mouse move cursor position',
 
-    # Skills tools
-    'create_skill':          'skill create save accumulate knowledge',
-    'update_skill':          'skill update modify edit',
-    'delete_skill':          'skill delete remove',
-    'merge_skills':          'skill merge combine consolidate',
+    # Memory tools
+    'create_memory':          'memory create save accumulate knowledge',
+    'update_memory':          'memory update modify edit',
+    'delete_memory':          'memory delete remove',
+    'merge_memories':          'memory merge combine consolidate',
 
     # Error tracker tools
     'check_error_logs':      'error log check scan bugs issues',
@@ -86,12 +86,10 @@ CORE_TOOL_NAMES = frozenset({
     'write_file', 'apply_diff', 'run_command',
     # Search & fetch
     'web_search', 'fetch_url',
-    # Skills
-    'create_skill', 'update_skill', 'delete_skill', 'merge_skills',
+    # Memory
+    'create_memory', 'update_memory', 'delete_memory', 'merge_memories',
     # Error tracking
     'check_error_logs', 'resolve_error',
-    # Local file reading (images, PDFs, Office docs)
-    'read_local_file',
     # Essential meta
     'emit_to_user', 'ask_human',
     # Swarm
@@ -194,7 +192,7 @@ def partition_tools(tool_list: list,
 
     # Phase 2: Dynamic threshold-based deferral (tst-auto inspired)
     # If core tools still exceed the token threshold, defer the largest
-    # non-essential core tools (e.g. skills tools, error tracker)
+    # non-essential core tools (e.g. memory tools, error tracker)
     token_threshold = int(context_window * _AUTO_DEFER_THRESHOLD_PCT / 100)
     core_tokens = _estimate_tool_tokens(core)
 

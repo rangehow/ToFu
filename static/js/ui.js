@@ -916,6 +916,14 @@ function renderMessage(msg, idx) {
       }
       body += `<div class="md-content${isUser ? " user-content" : ""}">${mdHtml}</div>`;
     } catch (e) {
+  // ── emit_to_user: render emitted tool content inline below the comment ──
+  if (!isUser && msg._emitContent) {
+    const toolLabel = msg._emitToolName ? escapeHtml(msg._emitToolName) : 'Tool result';
+    body += `<div class="emit-content-block">
+      <div class="emit-content-header">📤 ${toolLabel}</div>
+      <pre class="emit-content-output"><code>${escapeHtml(msg._emitContent)}</code></pre>
+    </div>`;
+  }
       body += `<div class="md-content${isUser ? " user-content" : ""}">${escapeHtml(msg.content)}</div>`;
     }
   }
@@ -1566,7 +1574,7 @@ function _extractFileChangesFromRounds(searchRounds) {
       continue;
     }
 
-    if (tn !== 'write_file' && tn !== 'apply_diff') continue;
+    if (tn !== 'write_file' && tn !== 'apply_diff' && tn !== 'insert_content') continue;
     // ★ For in-progress writes, show as pending (during streaming only)
     if (!round.results || !round.results.length) {
       if (round.status === 'searching' && round.toolArgs) {
@@ -1581,7 +1589,7 @@ function _extractFileChangesFromRounds(searchRounds) {
           for (const p of paths) {
             if (!changes.has(p)) {
               changes.set(p, {
-                action: tn === 'apply_diff' ? 'patching…' : 'writing…',
+                action: tn === 'apply_diff' ? 'patching…' : tn === 'insert_content' ? 'inserting…' : 'writing…',
                 ok: true, count: 0, pending: true
               });
             }
@@ -1592,8 +1600,8 @@ function _extractFileChangesFromRounds(searchRounds) {
     }
     const meta = round.results[0];
     const ok = meta.writeOk !== false;
-    // For apply_diff with edits array, extract all paths
-    if (tn === 'apply_diff' && round.toolArgs) {
+    // For apply_diff / insert_content with edits array, extract all paths
+    if ((tn === 'apply_diff' || tn === 'insert_content') && round.toolArgs) {
       try {
         const args = typeof round.toolArgs === 'string' ? JSON.parse(round.toolArgs) : round.toolArgs;
         if (args.edits && Array.isArray(args.edits)) {
@@ -1601,7 +1609,7 @@ function _extractFileChangesFromRounds(searchRounds) {
             if (e.path) {
               const prev = changes.get(e.path);
               changes.set(e.path, {
-                action: 'patched',
+                action: tn === 'insert_content' ? 'inserted' : 'patched',
                 ok: prev ? (prev.ok && ok) : ok,
                 count: (prev?.count || 0) + 1
               });
@@ -1612,7 +1620,7 @@ function _extractFileChangesFromRounds(searchRounds) {
         if (args.path) {
           const prev = changes.get(args.path);
           changes.set(args.path, {
-            action: 'patched',
+            action: tn === 'insert_content' ? 'inserted' : 'patched',
             ok: prev ? (prev.ok && ok) : ok,
             count: (prev?.count || 0) + 1
           });
@@ -1643,7 +1651,7 @@ function _extractFileChangesFromRounds(searchRounds) {
     if (fallbackPath) {
       const prev = changes.get(fallbackPath);
       changes.set(fallbackPath, {
-        action: tn === 'apply_diff' ? 'patched' : 'written',
+        action: tn === 'apply_diff' ? 'patched' : tn === 'insert_content' ? 'inserted' : 'written',
         ok: prev ? (prev.ok && ok) : ok,
         count: (prev?.count || 0) + 1
       });
@@ -1770,6 +1778,7 @@ function _isRoundProject(round) {
     "find_files",
     "write_file",
     "apply_diff",
+    "insert_content",
     "run_command",
   ].includes(round.toolName);
 }
@@ -1804,7 +1813,7 @@ const _TOOL_DISPLAY = {
   fetch_url:     { icon: "", label: "Fetching",  color: "#34d399" },
   spawn_agents:  { icon: "", label: "Swarm",     color: "#f59e0b" },
   check_agents:  { icon: "", label: "Agents",    color: "#f59e0b" },
-  create_skill:  { icon: "", label: "Skill",     color: "#a78bfa" },
+  create_memory:  { icon: "", label: "Memory",     color: "#a78bfa" },
   schedule_task: { icon: "", label: "Schedule",  color: "#fb923c" },
   timer_create:  { icon: "⏱️", label: "Timer Watcher", color: "#a855f7" },
   timer_manage:  { icon: "⏱️", label: "Timer",   color: "#a855f7" },
@@ -1840,6 +1849,7 @@ function _getRoundIcon(round) {
       find_files: "find",
       write_file: "write",
       apply_diff: "diff",
+      insert_content: "insert",
       run_command: "terminal",
     };
     return m[round.toolName] || "folder";
@@ -1950,7 +1960,7 @@ const _webToolSvg = {
   web_search: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="16.5" y1="16.5" x2="21" y2="21"/><circle cx="11" cy="11" r="3" stroke-dasharray="2 2"/></svg>',
   fetch: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>',
   code_exec: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>',
-  create_skill: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L9 9l-7 1 5 5-1 7 6-3 6 3-1-7 5-5-7-1z"/></svg>',
+  create_memory: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L9 9l-7 1 5 5-1 7 6-3 6 3-1-7 5-5-7-1z"/></svg>',
   schedule_task: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>',
   ask_human: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
   generic: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>',
@@ -2256,12 +2266,11 @@ function _renderUnifiedToolLine(round, isSearching) {
       : isOk
         ? "✓ done"
         : `✗ exit ${exitCode}`;
-    const uid = "pcmd-r" + round.roundNum;
     let outputHtml = "";
     if (output) {
-      outputHtml = `<div class="ptool-cmd-output-wrap" id="${uid}-wrap">
-           <div class="ptool-cmd-toggle" onclick="event.stopPropagation();var w=document.getElementById('${uid}-wrap');w.classList.toggle('expanded');this.textContent=w.classList.contains('expanded')?'▾ Collapse':'▸ Show output';">▸ Show output</div>
-           <pre class="ptool-cmd-output" id="${uid}-out"><code>${escapeHtml(output)}</code></pre>
+      outputHtml = `<div class="ptool-cmd-output-wrap">
+           <div class="ptool-cmd-toggle" onclick="event.stopPropagation();var w=this.parentElement;w.classList.toggle('expanded');this.textContent=w.classList.contains('expanded')?'▾ Collapse':'▸ Show output';">▸ Show output</div>
+           <pre class="ptool-cmd-output"><code>${escapeHtml(output)}</code></pre>
          </div>`;
     }
     return `<div class="ptool-cmd-block ${statusCls}" data-rn="${round.roundNum}">
@@ -2418,28 +2427,6 @@ function _renderUnifiedToolLine(round, isSearching) {
   if (!badgeHtml && !_isRoundProject(round) && !_isRoundBrowser(round) && results.length === 0) {
     const elapsed = round._elapsed ? ` · ${round._elapsed}` : "";
     badgeHtml = `<span class="ptool-badge ptool-badge-ok">✓ done${elapsed}</span>`;
-  }
-
-  // ★ emit_to_user referenced round: auto-expand the tool output
-  //   so the user sees it without clicking "Preview"
-  let emitRefHtml = "";
-  if (round._emit_ref && round.toolContent) {
-    const uid = "emitref-r" + round.roundNum;
-    emitRefHtml = `<div class="ptool-cmd-output-wrap expanded" id="${uid}-wrap">
-         <pre class="ptool-cmd-output" id="${uid}-out"><code>${escapeHtml(round.toolContent)}</code></pre>
-       </div>`;
-  }
-
-  if (emitRefHtml) {
-    return `<div class="ptool-cmd-block ptool-cmd-ok" data-rn="${round.roundNum}">
-         <div class="ptool-cmd-header">
-           <span class="ptool-cmd-icon">${svg}</span>
-           <span class="ptool-cmd-label">${escapeHtml(round.toolName || 'Tool')}</span>
-           ${badgeHtml}
-           ${_tcPreviewBtn(round)}
-         </div>
-         ${emitRefHtml}
-       </div>`;
   }
 
   return `<div class="ptool-line">
@@ -3490,7 +3477,6 @@ function _syncSearchRoundsDOM(container, rounds) {
         : r.status === 'pending_approval' ? 5 : 0);
     _fp = _fp * 31 + ((r.results && r.results.length) || 0);
     _fp = _fp * 31 + (r.toolContent ? 1 : 0);
-    _fp = _fp * 31 + (r._emit_ref ? 1 : 0);
     _fp = _fp * 31 + (r._hgTranslating ? 1 : 0);
     if (r._translatedQuestion) _fp = _fp * 31 + r._translatedQuestion.length;
     if (r._timerPolls) _fp = _fp * 31 + r._timerPolls.length;
@@ -3611,9 +3597,6 @@ function _syncSearchRoundsDOM(container, rounds) {
         } else if (round._timerPolls && slot.querySelector('.timer-watcher-block')) {
           // ★ Timer watcher: always re-render to show latest poll results
           slot.innerHTML = _renderUnifiedToolLine(round, isActive);
-        } else if (round._emit_ref && !slot.querySelector('.ptool-cmd-output-wrap')) {
-          // ★ emit_to_user: re-render to auto-expand referenced tool output
-          slot.innerHTML = _renderUnifiedToolLine(round, false);
         } else if (round.toolContent && !slot.querySelector('[data-tc-preview]')) {
           const ptLine = slot.querySelector('.ptool-line');
           if (ptLine) {
@@ -4894,14 +4877,14 @@ async function _trySSE(convId, taskId, stream, assistantMsg) {
           if (ev.searchDiag) r.searchDiag = ev.searchDiag;
         }
       }
-      /* ★ Toast for create_skill */
-      if (ev.results && ev.results.some(r => r.toolName === 'create_skill')) {
-        const sk = ev.results.find(r => r.toolName === 'create_skill');
-        const ok = sk.skillOk === true || (sk.badge && sk.badge.includes('saved'));
+      /* ★ Toast for create_memory */
+      if (ev.results && ev.results.some(r => r.toolName === 'create_memory')) {
+        const sk = ev.results.find(r => r.toolName === 'create_memory');
+        const ok = sk.memoryOk === true || (sk.badge && sk.badge.includes('saved'));
         if (typeof showToast === 'function') {
-          const sName = sk.skillName || 'Skill';
-          const sScope = sk.skillScope || 'project';
-          const title = ok ? `${sName}` : 'Skill Failed';
+          const sName = sk.memoryName || 'Memory';
+          const sScope = sk.memoryScope || 'project';
+          const title = ok ? `${sName}` : 'Memory Failed';
           const body = ok
             ? `Saved to ${sScope} scope — available in future sessions`
             : (sk.snippet || sk.title || 'Unknown error');
@@ -4939,13 +4922,11 @@ async function _trySSE(convId, taskId, stream, assistantMsg) {
       twUpdate(convId);
 
     } else if (ev.type === "emit_ref") {
-      // ★ emit_to_user: tag the referenced tool round for auto-expansion
-      if (assistantMsg.searchRounds) {
-        const r = assistantMsg.searchRounds.find(r => r.roundNum === ev.roundNum);
-        if (r) r._emit_ref = true;
-      }
-      if (buf)
-        buf.searchRounds = assistantMsg.searchRounds || [];
+      // ★ emit_to_user: store emitted tool content on message for inline rendering
+      assistantMsg._emitContent = ev.emitContent || '';
+      assistantMsg._emitToolName = ev.emitToolName || '';
+      if (buf) buf._emitContent = assistantMsg._emitContent;
+      if (buf) buf._emitToolName = assistantMsg._emitToolName;
       twUpdate(convId);
 
     } else if (ev.type === "timer_poll_check") {
@@ -5176,6 +5157,7 @@ async function _trySSE(convId, taskId, stream, assistantMsg) {
           ev.label || `Round ${ev.round} · ${ev.messageCount}条`,
           true,
           convId,
+          ev.tools || undefined,
         );
 
     /* ═══ Endpoint mode events ═══ */

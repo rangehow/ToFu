@@ -72,7 +72,7 @@ Use EXACTLY this structure (the Worker and Critic both parse it):
 ---
 
 ## Guidelines
-- Write for a skilled AI agent, not for a human.  Be direct and technical.
+- Write for a memoryed AI agent, not for a human.  Be direct and technical.
 - DO NOT execute the task yourself.  You are planning, not doing.
 - You have FULL tool access (list_dir, read_files, grep_search, find_files,
   run_command, fetch_url, web_search, etc.).  USE tools to explore the

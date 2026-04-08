@@ -134,7 +134,7 @@ var ConvCache = (function () {
               model: conv.model, thinkingDepth: conv.thinkingDepth,
               searchMode: conv.searchMode, fetchEnabled: conv.fetchEnabled,
               codeExecEnabled: conv.codeExecEnabled, browserEnabled: conv.browserEnabled,
-              desktopEnabled: conv.desktopEnabled, skillsEnabled: conv.skillsEnabled,
+              desktopEnabled: conv.desktopEnabled, memoryEnabled: conv.memoryEnabled,
               schedulerEnabled: conv.schedulerEnabled, swarmEnabled: conv.swarmEnabled,
               endpointEnabled: conv.endpointEnabled, imageGenMode: conv.imageGenMode,
               humanGuidanceEnabled: conv.humanGuidanceEnabled,

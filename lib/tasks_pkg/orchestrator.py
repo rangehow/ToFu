@@ -52,7 +52,7 @@ from lib.tasks_pkg.stream_handler import analyse_stream_result
 from lib.tasks_pkg.system_context import (
     _inject_system_contexts,
     inject_search_addendum_to_user,
-    inject_skills_to_user,
+    inject_memory_to_user,
 )
 from lib.tasks_pkg.tool_dispatch import (
     _TOOL_EXEC_LABELS,
@@ -124,7 +124,17 @@ def _emit_tool_round_phase(task, assistant_msg, round_num):
     else:
         tool_names = [tc['function']['name'] for tc in assistant_msg.get('tool_calls', [])]
         unique_names = list(dict.fromkeys(tool_names))
-        labeled = [_TOOL_EXEC_LABELS.get(n, n) for n in unique_names]
+        def _orch_label(tn):
+            from lib.mcp.types import MCP_TOOL_PREFIX, parse_namespaced_name
+            lbl = _TOOL_EXEC_LABELS.get(tn)
+            if lbl:
+                return lbl
+            if tn.startswith(MCP_TOOL_PREFIX):
+                parsed = parse_namespaced_name(tn)
+                if parsed:
+                    return f'🔌 {parsed[0]}/{parsed[1]}'
+            return tn
+        labeled = [_orch_label(n) for n in unique_names]
         summary = ', '.join(labeled)
         append_event(task, {
             'type': 'phase', 'phase': 'llm_thinking',
@@ -317,6 +327,8 @@ def _finalize_and_emit_done(task: dict[str, Any], *, model: str, preset: str, th
                         action = 'created' if not m.get('existed', True) else 'written'
                     elif t == 'apply_diff':
                         action = 'patched'
+                    elif t == 'insert_content':
+                        action = 'inserted'
                     elif t == 'run_command':
                         # run_command changes carry granular action based on existed flag
                         if not m.get('existed', True):
@@ -403,21 +415,21 @@ def run_task(task: dict[str, Any]) -> None:
             from lib.project_mod import ensure_project_state
             ensure_project_state(project_path)
         code_exec_enabled = mcfg['code_exec_enabled']
-        skills_enabled  = mcfg['skills_enabled']
+        memory_enabled  = mcfg['memory_enabled']
         browser_enabled = mcfg['browser_enabled']
         desktop_enabled = mcfg['desktop_enabled']
         swarm_enabled   = mcfg['swarm_enabled']
         image_gen_enabled = mcfg['image_gen_enabled']
         human_guidance_enabled = mcfg.get('human_guidance_enabled', False)
         scheduler_enabled = mcfg.get('scheduler_enabled', False)
-        # ── Memory Prefetch: start loading project and skills contexts in
+        # ── Memory Prefetch: start loading project and memory contexts in
         #    background threads while tool assembly runs (FUSE I/O can be slow).
         #    Inspired by Claude Code's startRelevantMemoryPrefetch().
         from concurrent.futures import ThreadPoolExecutor as _PrefetchPool
         _prefetch_executor = _PrefetchPool(max_workers=2,
                                            thread_name_prefix='mem-prefetch')
         _prefetch_project_future = None
-        _prefetch_skills_future = None
+        _prefetch_memory_future = None
 
         if project_enabled and project_path:
             def _prefetch_project():
@@ -426,21 +438,21 @@ def run_task(task: dict[str, Any]) -> None:
             _prefetch_project_future = _prefetch_executor.submit(_prefetch_project)
 
         # Simple heuristic: if any tool-providing feature is enabled, we'll
-        # have real tools → need skills injection + accumulation instructions.
+        # have real tools → need memory injection + accumulation instructions.
         _has_real_tools_hint = (search_enabled or fetch_enabled or
                                 project_enabled or browser_enabled or
                                 desktop_enabled or swarm_enabled or
                                 code_exec_enabled or image_gen_enabled)
         _pp = project_path if project_enabled else None
-        if skills_enabled or _has_real_tools_hint:
-            def _prefetch_skills():
-                from lib.skills import build_skills_context
-                return build_skills_context(project_path=_pp)
-            _prefetch_skills_future = _prefetch_executor.submit(_prefetch_skills)
+        if memory_enabled or _has_real_tools_hint:
+            def _prefetch_memory():
+                from lib.memory import build_memory_context
+                return build_memory_context(project_path=_pp)
+            _prefetch_memory_future = _prefetch_executor.submit(_prefetch_memory)
 
         # Store prefetch futures on the task for _inject_system_contexts to use
         task['_prefetch_project'] = _prefetch_project_future
-        task['_prefetch_skills'] = _prefetch_skills_future
+        task['_prefetch_memory'] = _prefetch_memory_future
 
         # ── Section 2: Tool Assembly ──
         tool_list, deferred_tools, has_real_tools, max_tool_rounds = _assemble_tool_list(
@@ -468,14 +480,14 @@ def run_task(task: dict[str, Any]) -> None:
         # ── Section 3: Context Injection ──
         _inject_system_contexts(
             messages, project_path, project_enabled,
-            skills_enabled, search_enabled, swarm_enabled,
+            memory_enabled, search_enabled, swarm_enabled,
             has_real_tools,
             conv_id=task.get('convId', ''),
             task=task,
         )
         # Cleanup prefetch futures (no longer needed)
         task.pop('_prefetch_project', None)
-        task.pop('_prefetch_skills', None)
+        task.pop('_prefetch_memory', None)
         _prefetch_executor.shutdown(wait=False)
 
         # NOTE: Auto-prefetch disabled — the model can fetch URLs on demand
@@ -572,36 +584,39 @@ def run_task(task: dict[str, Any]) -> None:
             inject_search_addendum_to_user(messages, search_enabled,
                                            round_num=round_num)
 
-            # ★ Skills listing: inject into the last user message (NOT system)
-            #   to avoid cache-breaking on skill CRUD. Uses BM25 relevance
-            #   filtering to show only ~30 most relevant skills per turn.
+            # ★ Memory listing: inject into the last user message (NOT system)
+            #   to avoid cache-breaking on memory CRUD. Uses BM25 relevance
+            #   filtering to show only ~30 most relevant memories per turn.
             #   MUST be the LAST user-message injection — after attachments,
             #   after search addendum, after any planner/critic replacements.
             #   Only on round 0 — subsequent rounds skip to preserve cache.
-            inject_skills_to_user(
+            inject_memory_to_user(
                 messages,
                 project_path=project_path,
                 project_enabled=project_enabled,
-                skills_enabled=skills_enabled,
+                memory_enabled=memory_enabled,
                 has_real_tools=has_real_tools,
                 conv_id=task.get('convId', ''),
                 task=task,
                 round_num=round_num,
             )
 
+            _tools_this_round = tool_list if (tool_list and round_num < max_tool_rounds) else None
+
             # ★ Emit messages snapshot for debug panel (before LLM call)
             try:
                 snapshot = _strip_base64_for_snapshot(messages)
-                append_event(task, {
+                snap_evt = {
                     'type': 'messages_snapshot',
                     'round': round_num + 1,
                     'label': f'Round {round_num + 1} 请求前 · {len(messages)}条',
                     'messages': snapshot,
-                })
+                }
+                if _tools_this_round:
+                    snap_evt['tools'] = _tools_this_round
+                append_event(task, snap_evt)
             except Exception:
                 logger.warning('[Task %s] messages_snapshot failed at round %d model=%s', tid, round_num + 1, model, exc_info=True)
-
-            _tools_this_round = tool_list if (tool_list and round_num < max_tool_rounds) else None
 
             # ★ Cache-aware tool result ordering: sort consecutive tool results
             #   by tool_call_id so the prefix is deterministic across rounds
@@ -769,9 +784,9 @@ def run_task(task: dict[str, Any]) -> None:
             # Set the comment as final content and break the loop immediately
             # — no further LLM calls needed.
             #
-            # ★ The referenced tool round is tagged with _emit_ref=True so the
-            #   frontend can auto-expand it (making the tool output visible
-            #   without requiring the user to click "Preview").
+            # ★ The referenced tool round's content is extracted and sent to
+            #   the frontend via an emit_ref SSE event so it can be rendered
+            #   inline below the comment in the assistant message bubble.
             _emit_detected = False
             for _ptc in parsed_tcs:
                 _ptc_tc, _ptc_fn, _ptc_id, _ptc_args, _ptc_rn, _ptc_re, _ptc_pe = _ptc
@@ -779,23 +794,32 @@ def run_task(task: dict[str, Any]) -> None:
                     _emit_comment = _ptc_re.get('_emit_comment', '')
                     _emit_round = _ptc_re.get('_emit_tool_round', '?')
 
-                    # ★ Tag the referenced tool round so the frontend
-                    #   auto-expands it — the user should see the output
-                    #   without having to click "Preview".
+                    # ★ Extract the referenced tool round's content so the
+                    #   frontend can render it inline as the answer.
+                    _emit_tool_content = ''
+                    _emit_tool_name = ''
                     if isinstance(_emit_round, int):
                         for _sr in task.get('searchRounds', []):
                             if _sr.get('roundNum') == _emit_round:
-                                _sr['_emit_ref'] = True
-                                # Notify frontend to tag its copy too
-                                append_event(task, {
-                                    'type': 'emit_ref',
-                                    'roundNum': _emit_round,
-                                })
+                                _emit_tool_content = _sr.get('toolContent') or ''
+                                _emit_tool_name = _sr.get('toolName') or ''
                                 break
+
+                    # Store emit content on task for persistence
+                    task['_emitContent'] = _emit_tool_content
+                    task['_emitToolName'] = _emit_tool_name
 
                     with task['content_lock']:
                         task['content'] = _emit_comment
+                    # Send comment as regular delta so it appears in the bubble
                     append_event(task, {'type': 'delta', 'content': _emit_comment})
+                    # Send emit content for inline rendering below the comment
+                    append_event(task, {
+                        'type': 'emit_ref',
+                        'roundNum': _emit_round,
+                        'emitContent': _emit_tool_content,
+                        'emitToolName': task.get('_emitToolName', ''),
+                    })
                     last_finish_reason = 'stop'
                     _loop_exit_reason = f'emit_to_user_round_{_emit_round}'
                     _emit_detected = True

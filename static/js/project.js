@@ -321,7 +321,11 @@ async function _restoreConvProject(conv) {
       debugLog("Saved project path no longer valid: " + savedPath, "warn");
       // Clear the invalid path from conversation
       conv.projectPath = "";
-      saveConversations(conv.id);
+      /* ★ FIX: Pass null — clearing a stale project path is a metadata-only
+       * change, NOT new conversation activity.  Passing conv.id bumps
+       * updatedAt = Date.now(), making the conversation jump to the top
+       * of the sidebar just because its saved project path was invalid. */
+      saveConversations(null);
     }
   } catch (e) {
     debugLog("Project restore failed: " + e.message, "warn");

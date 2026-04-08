@@ -9,7 +9,8 @@ Provides a unified ``read_local_file(path)`` function that handles:
   - **Plain text** (any other text-decodable file): direct read with encoding
     detection.
 
-This module is called by the ``read_local_file`` tool handler in the executor.
+This module is called by ``read_files`` (via ``_read_absolute_file`` in
+``lib/project_mod/read_tools.py``) when the path is absolute.
 """
 
 import base64

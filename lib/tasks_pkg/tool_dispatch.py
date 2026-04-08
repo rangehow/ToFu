@@ -54,7 +54,7 @@ _IDEMPOTENT_TOOLS = frozenset({
 # concurrent-safe (run in parallel) but not idempotent (don't cache).
 _WRITE_TOOLS = frozenset({
     'write_file', 'apply_diff', 'run_command',
-    'create_skill', 'update_skill', 'delete_skill', 'merge_skills',
+    'create_memory', 'update_memory', 'delete_memory', 'merge_memories',
     'resolve_error',
 })
 
@@ -112,16 +112,16 @@ def _build_cache_hit_meta(
 
     # ── fetch_url: include URL so frontend can render clickable link ──
     if fn_name == 'fetch_url':
-        from urllib.parse import urlparse
         target_url = fn_args.get('url', '')
-        netloc = urlparse(target_url).netloc if target_url else ''
+        from lib.tasks_pkg.tool_display import _short_url
+        short = _short_url(target_url) if target_url else ''
         is_pdf = target_url.lower().rstrip('/').endswith('.pdf')
         fetched_ok = bool(content_str) and not content_str.startswith('Failed to fetch')
         chars_label = (
             f'{chars:,} chars' if fetched_ok else 'Failed'
         )
         return {
-            'title': f'{"PDF" if is_pdf else "Page"}: {netloc}{badge_suffix}',
+            'title': f'{"PDF" if is_pdf else "Page"}: {short}{badge_suffix}',
             'snippet': chars_label,
             'url': target_url,
             'source': source_label,
@@ -169,9 +169,10 @@ _TOOL_EXEC_LABELS = {
     'find_files':   '🔎 Finding files',
     'write_file':   '✏️ Writing files',
     'apply_diff':   '✏️ Applying changes',
+    'insert_content':'📥 Inserting content',
     'code_exec':    '▶️ Running code',
     'bash_exec':    '▶️ Running command',
-    'create_skill': '💡 Saving skill',
+    'create_memory': '💡 Saving memory',
     'check_error_logs': '🔍 Checking error logs',
     'resolve_error': '✅ Marking errors resolved',
     'ask_human': '🙋 Asking for your input',
@@ -361,10 +362,22 @@ def emit_tool_exec_phase(
     unique_tool_names = list(dict.fromkeys(tool_names_list))
     n = len(parsed_tcs)
 
+    def _label(tn):
+        """Get human-readable label for a tool name, with MCP fallback."""
+        label = _TOOL_EXEC_LABELS.get(tn)
+        if label:
+            return label
+        from lib.mcp.types import MCP_TOOL_PREFIX, parse_namespaced_name
+        if tn.startswith(MCP_TOOL_PREFIX):
+            parsed = parse_namespaced_name(tn)
+            if parsed:
+                return f'🔌 {parsed[0]}/{parsed[1]}'
+        return tn
+
     if n == 1:
-        detail = _TOOL_EXEC_LABELS.get(unique_tool_names[0], f'Running {unique_tool_names[0]}')
+        detail = _label(unique_tool_names[0])
     else:
-        labeled = [_TOOL_EXEC_LABELS.get(tn, tn) for tn in unique_tool_names]
+        labeled = [_label(tn) for tn in unique_tool_names]
         detail = f'Executing {n} tools: {", ".join(labeled)}'
 
     _append = event_sink.append_event if event_sink is not None else append_event
@@ -733,41 +746,25 @@ def execute_tool_pipeline(
         if is_search:
             all_search_results_text.append(tool_content)
 
-        # Emit tool_complete with raw content for continue context restoration
-        try:
-            # For screenshot/image dicts, use the text fallback instead of
-            # serializing the entire base64 data URI (which would be huge).
-            if isinstance(tool_content, dict) and tool_content.get('__screenshot__'):
-                tc_content_str = tool_content.get('_text_fallback', '') or 'Image captured.'
-            elif isinstance(tool_content, str):
-                tc_content_str = tool_content
-            else:
-                tc_content_str = json.dumps(tool_content, ensure_ascii=False)
-            if len(tc_content_str) > 50000:
-                tc_content_str = tc_content_str[:50000] + '\n... [truncated for continue context]'
-
-            # ★ Persist toolContent on round_entry so checkpoint writes it to DB.
-            #   Without this, crash-recovery loses tool context and Continue
-            #   rolls back ALL tool rounds (toolContent == null → incomplete).
-            if round_entry:
-                round_entry['toolContent'] = tc_content_str
-
-            append_event(task, {
-                'type': 'tool_complete',
-                'roundNum': rn,
-                'toolCallId': tc_id,
-                'toolName': fn_name,
-                'toolContent': tc_content_str,
-            })
-        except Exception as e:
-            logger.warning(
-                '[Task %s] tool_complete event error for tool=%s at round %d (non-fatal): %s',
-                tid, fn_name, round_num, e, exc_info=True)
-
-
         # Convert screenshot dict → image_url content block for vision models
         if isinstance(tool_content, dict) and tool_content.get('__screenshot__'):
             _append_screenshot_message(messages, tc_id, tool_content)
+            # Emit tool_complete for screenshot with text fallback
+            try:
+                tc_content_str = tool_content.get('_text_fallback', '') or 'Image captured.'
+                if round_entry:
+                    round_entry['toolContent'] = tc_content_str
+                append_event(task, {
+                    'type': 'tool_complete',
+                    'roundNum': rn,
+                    'toolCallId': tc_id,
+                    'toolName': fn_name,
+                    'toolContent': tc_content_str,
+                })
+            except Exception as e:
+                logger.warning(
+                    '[Task %s] tool_complete event error for tool=%s at round %d (non-fatal): %s',
+                    tid, fn_name, round_num, e, exc_info=True)
         else:
             # ★ Post-tool hooks: modify/enrich result after execution.
             # Inspired by Claude Code's PostToolUse hooks.
@@ -782,7 +779,7 @@ def execute_tool_pipeline(
             # ★ Layer 0: Budget tool results before they enter context.
             # Persists oversized results to disk (inspired by Claude Code's
             # per-tool maxResultSizeChars + persistence).  Exempt tools
-            # (read_files, read_local_file) pass through unchanged.
+            # (read_files) pass through unchanged.
             # Layer 1 (micro_compact) will further compress these once
             # they fall outside the hot tail.
             if isinstance(tool_content, str):
@@ -795,6 +792,36 @@ def execute_tool_pipeline(
             _round_results_for_budget.append((tc_id, tool_content, fn_name))
 
             messages.append({'role': 'tool', 'tool_call_id': tc_id, 'content': tool_content})
+
+            # ★ Emit tool_complete AFTER budgeting so that toolContent
+            #   reflects the ACTUAL content given to the model (budgeted/
+            #   persisted form).  Preview must show what the model sees.
+            try:
+                if isinstance(tool_content, str):
+                    tc_content_str = tool_content
+                else:
+                    tc_content_str = json.dumps(tool_content, ensure_ascii=False)
+                if len(tc_content_str) > 50000:
+                    tc_content_str = tc_content_str[:50000] + '\n... [truncated for continue context]'
+
+                # ★ Persist toolContent on round_entry so checkpoint writes
+                #   it to DB.  Without this, crash-recovery loses tool
+                #   context and Continue rolls back ALL tool rounds
+                #   (toolContent == null → incomplete).
+                if round_entry:
+                    round_entry['toolContent'] = tc_content_str
+
+                append_event(task, {
+                    'type': 'tool_complete',
+                    'roundNum': rn,
+                    'toolCallId': tc_id,
+                    'toolName': fn_name,
+                    'toolContent': tc_content_str,
+                })
+            except Exception as e:
+                logger.warning(
+                    '[Task %s] tool_complete event error for tool=%s at round %d (non-fatal): %s',
+                    tid, fn_name, round_num, e, exc_info=True)
 
     # ══════════════════════════════════════════
     #  Per-round aggregate budget check
@@ -811,7 +838,8 @@ def execute_tool_pipeline(
         }
         _conv_id = task.get('convId', '') if task else ''
         _updated = enforce_round_aggregate_budget(_agg_dict, conv_id=_conv_id)
-        # Apply any changes back to messages
+        # Apply any changes back to messages AND round_entries/toolContent
+        # so Preview stays in sync with actual model content.
         for msg in messages:
             if msg.get('role') == 'tool':
                 _tc_id = msg.get('tool_call_id', '')
@@ -819,16 +847,29 @@ def execute_tool_pipeline(
                     new_content, _, _ = _updated[_tc_id]
                     if new_content != msg.get('content'):
                         msg['content'] = new_content
+                        # Update toolContent on the corresponding round_entry
+                        for _ptc in parsed_tcs:
+                            if _ptc[2] == _tc_id:  # tc_id match
+                                _re = _ptc[5]  # round_entry
+                                if _re:
+                                    _tc_str = new_content if isinstance(new_content, str) else str(new_content)
+                                    if len(_tc_str) > 50000:
+                                        _tc_str = _tc_str[:50000] + '\n... [truncated for continue context]'
+                                    _re['toolContent'] = _tc_str
+                                break
 
     # Emit snapshot AFTER tool results appended
     try:
         snapshot = _strip_base64_for_snapshot(messages)
-        append_event(task, {
+        snap_evt = {
             'type': 'messages_snapshot',
             'round': round_num + 1,
             'label': f'Round {round_num + 1} 工具结果后 · {len(messages)}条',
             'messages': snapshot,
-        })
+        }
+        if tool_list:
+            snap_evt['tools'] = tool_list
+        append_event(task, snap_evt)
     except Exception:
         logger.warning(
             '[Task %s] messages_snapshot post-tool failed at round %d model=%s',
@@ -900,13 +941,58 @@ def _approval_meta_apply_diff(approval_meta, fn_args):
             approval_meta['replaceAll'] = True
 
 
+def _approval_meta_insert_content(approval_meta, fn_args):
+    """Enrich approval metadata for ``insert_content``."""
+    edits = fn_args.get('edits')
+    if edits and isinstance(edits, list):
+        paths = list(dict.fromkeys(
+            e.get('path', '?') for e in edits if isinstance(e, dict)
+        ))
+        approval_meta['path'] = (
+            ', '.join(paths[:5])
+            + (f' +{len(paths)-5} more' if len(paths) > 5 else '')
+        )
+        approval_meta['editCount'] = len(edits)
+        approval_meta['batchMode'] = True
+        approval_meta['description'] = f'Batch: {len(edits)} insertions across {len(paths)} file(s)'
+        edit_summaries = []
+        for i, e in enumerate(edits[:20]):
+            if not isinstance(e, dict):
+                continue
+            anchor_text = e.get('anchor', '')
+            content_text = e.get('content', '')
+            pos = e.get('position', 'after')
+            edit_summaries.append({
+                'path': e.get('path', '?'),
+                'description': e.get('description', f'Insert {pos} anchor'),
+                'search': anchor_text[:500] + ('…' if len(anchor_text) > 500 else ''),
+                'replace': content_text[:500] + ('…' if len(content_text) > 500 else ''),
+                'searchLines': anchor_text.count('\n') + 1,
+                'replaceLines': content_text.count('\n') + 1,
+            })
+        approval_meta['editSummaries'] = edit_summaries
+    else:
+        anchor_text = fn_args.get('anchor', '')
+        content_text = fn_args.get('content', '')
+        pos = fn_args.get('position', 'after')
+        # Reuse search/replace UI — anchor shown as 'search' (context), content as 'replace' (addition)
+        approval_meta['search'] = anchor_text[:2000] + ('…' if len(anchor_text) > 2000 else '')
+        approval_meta['replace'] = content_text[:2000] + ('…' if len(content_text) > 2000 else '')
+        approval_meta['searchLines'] = anchor_text.count('\n') + 1
+        approval_meta['searchChars'] = len(anchor_text)
+        approval_meta['replaceLines'] = content_text.count('\n') + 1
+        approval_meta['replaceChars'] = len(content_text)
+        approval_meta['description'] = approval_meta.get('description', '') or f'Insert {pos} anchor'
+
+
 # Module-level dispatch table — maps tool name → approval meta enricher.
 # Only tools that need special approval metadata are listed; tools not in
 # this dict get the base metadata only (path + description).
 _APPROVAL_META_ENRICHERS = {
-    'run_command': _approval_meta_run_command,
-    'write_file':  _approval_meta_write_file,
-    'apply_diff':  _approval_meta_apply_diff,
+    'run_command':     _approval_meta_run_command,
+    'write_file':      _approval_meta_write_file,
+    'apply_diff':      _approval_meta_apply_diff,
+    'insert_content':  _approval_meta_insert_content,
 }
 
 

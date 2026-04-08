@@ -6,3 +6,4 @@ psycopg2-binary>=2.9
 trafilatura>=1.6
 playwright>=1.40
 Pillow>=10.0
+mcp>=1.0

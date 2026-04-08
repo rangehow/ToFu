@@ -1,13 +1,13 @@
 """System context injection — append/prepend helpers and context layering.
 
 Extracted from orchestrator.py to isolate the system-message manipulation
-logic (project context, skills, swarm prompt, search addendum).
+logic (project context, memory, swarm prompt, search addendum).
 
 Includes delta attachment tracking (inspired by Claude Code): context strings
 are hashed, and when the content is unchanged between successive tasks in the
 same conversation, we **skip the expensive load** (FUSE I/O) but still inject
 the text.  This is necessary because each task receives a *fresh* message list
-from the frontend — the system message does NOT carry over project/skills
+from the frontend — the system message does NOT carry over project/memory
 context from the previous task.
 
 Includes Claude Code-inspired prompt sections:
@@ -48,6 +48,8 @@ _TOOL_USAGE_GUIDANCE = """\
  - When using web_search and fetch_url, review search result summaries first before deciding what to fetch. Use fetch_url on the 1-2 most promising URLs to read full content.
  - Prefer grep_search for finding code patterns (built-in fuzzy hints, context lines, case-insensitive). Prefer read_files for understanding code (returns with line numbers, supports batch reads). Prefer run_command for shell operations (counting, testing, building).
  - Use apply_diff for small targeted edits, write_file for new files or major rewrites. When making multiple edits, prefer batch apply_diff(edits=[...]) over separate calls — this dramatically reduces round trips.
+ - Use insert_content to add new code (imports, functions, config entries) next to existing code without replacing it. Provide an anchor string to locate the insertion point and specify position='before' or 'after'. If the anchor matches multiple locations, make it more specific.
+ - **Prefer insert_content over apply_diff when the change is purely additive** (adding new lines without modifying existing ones). Examples: adding an import, appending to end of file, inserting a new function/method/block before or after existing code. insert_content is simpler (no need to repeat the anchor in both search and replace) and less error-prone.
  - If an approach fails, diagnose why before switching tactics — read the error, check your assumptions, try a focused fix. Don't retry the identical action blindly, but don't abandon a viable approach after a single failure either."""
 
 _OUTPUT_EFFICIENCY_GUIDANCE = """\
@@ -67,7 +69,7 @@ If you can say it in one sentence, don't use three. Prefer short, direct sentenc
 # ── Delta attachment tracking ──
 # Cache of (hash, text) per category per conv_id.
 # Purpose: skip the expensive FUSE load (get_context_for_prompt /
-# build_skills_context) when the content hasn't changed.
+# build_memory_context) when the content hasn't changed.
 # IMPORTANT: we ALWAYS inject into the system message — we only skip
 # the *computation*.  Each task gets fresh messages from the frontend,
 # so the text is NOT already present.
@@ -88,7 +90,7 @@ def _get_cached_or_compute(conv_id: str, category: str,
 
     Args:
         conv_id:    Conversation ID for cache scoping.
-        category:   'project' or 'skills'.
+        category:   'project' or 'memory'.
         compute_fn: Zero-arg callable that produces the context string.
 
     Returns:
@@ -163,7 +165,7 @@ def _wrap_system_reminder(text: str) -> str:
     tags to distinguish them from user-authored content.  The model is trained
     to treat <system-reminder> content as authoritative system instructions.
 
-    We use the same convention for dynamic injected context (project, skills,
+    We use the same convention for dynamic injected context (project, memory,
     search addendum, swarm) so that:
       1. The model clearly distinguishes system instructions from user text.
       2. Compaction can identify and preserve system-reminder blocks.
@@ -227,7 +229,7 @@ def _prepend_to_system_message(messages, text):
 
 
 def _inject_system_contexts(messages, project_path, project_enabled,
-                             skills_enabled, search_enabled, swarm_enabled,
+                             memory_enabled, search_enabled, swarm_enabled,
                              has_real_tools, conv_id: str = '',
                              task: dict = None):
     """Inject project, swarm, and static contexts into the system message.
@@ -237,23 +239,23 @@ def _inject_system_contexts(messages, project_path, project_enabled,
 
       1. Project context (CLAUDE.md, file tree) — prepended, changes on file edits
       2. Static guidance (FRC, tool usage, output) — SEPARATE BLOCK, never changes
-      3. Compact skill instructions — static, ~400 chars
+      3. Compact memory instructions — static, ~400 chars
       4. Swarm prompt — static when swarm is enabled
       5. Session memory — changes across turns (least cacheable)
 
-    **Skills listing** (the `<available_skills>` XML index) is NO LONGER injected
+    **Memory listing** (the `<available_memories>` XML index) is NO LONGER injected
     here.  It is injected into the **last user message** by
-    ``inject_skills_to_user()`` in the orchestrator's main loop.  This prevents
-    skill CRUD operations from breaking the prompt cache.
+    ``inject_memory_to_user()`` in the orchestrator's main loop.  This prevents
+    memory CRUD operations from breaking the prompt cache.
 
     IMPORTANT: Context is ALWAYS injected into the system message.  Each task
     receives fresh messages from the frontend (which only has the user's custom
-    system prompt — no project/skills context).  Delta tracking is used solely
+    system prompt — no project/memory context).  Delta tracking is used solely
     to skip expensive FUSE I/O when the context hasn't changed since the last
     task in this conversation — the *text* is still injected from cache.
 
     Memory prefetch support: if ``task`` is provided and contains
-    ``_prefetch_project`` / ``_prefetch_skills`` futures, their already-
+    ``_prefetch_project`` / ``_prefetch_memory`` futures, their already-
     completed results are consumed instead of re-computing (saving FUSE I/O
     latency).  Inspired by Claude Code's ``startRelevantMemoryPrefetch()``.
     """
@@ -307,15 +309,15 @@ def _inject_system_contexts(messages, project_path, project_enabled,
         _append_to_system_message(messages, _static_guidance,
                                   as_separate_block=True)
 
-    # ★ 3. Compact skill accumulation instructions (static, ~400 chars)
+    # ★ 3. Compact memory accumulation instructions (static, ~400 chars)
     #   Only the HOW-TO-USE instructions stay in the system message.
-    #   The dynamic skills listing (<available_skills> index) is injected
-    #   into the user message by inject_skills_to_user() — see orchestrator.
+    #   The dynamic memory listing (<available_memories> index) is injected
+    #   into the user message by inject_memory_to_user() — see orchestrator.
     if has_real_tools:
-        from lib.skills import SKILL_ACCUMULATION_INSTRUCTIONS_COMPACT
+        from lib.memory import MEMORY_ACCUMULATION_INSTRUCTIONS_COMPACT
         _append_to_system_message(
             messages,
-            _wrap_system_reminder(SKILL_ACCUMULATION_INSTRUCTIONS_COMPACT))
+            _wrap_system_reminder(MEMORY_ACCUMULATION_INSTRUCTIONS_COMPACT))
 
     # ★ 4. Swarm system prompt injection
     if swarm_enabled and project_enabled:
@@ -376,10 +378,10 @@ Use `depends_on: [0]` only when a task truly needs another's output (rare — pr
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  Skills-to-user-message injection
+#  Memory-to-user-message injection
 # ═══════════════════════════════════════════════════════════════════════════════
 
-_SKILLS_MARKER = '<available_skills>'
+_MEMORY_MARKER = '<available_memories>'
 
 
 def _extract_last_user_text(messages: list) -> str:
@@ -398,17 +400,17 @@ def _extract_last_user_text(messages: list) -> str:
     return ''
 
 
-def _strip_old_skills_listing(text: str) -> str:
-    """Remove a previously injected skills listing from text.
+def _strip_old_memory_listing(text: str) -> str:
+    """Remove a previously injected memory listing from text.
 
     Prevents accumulation across rounds — strips everything from
-    <available_skills> to </available_skills> inclusive.
+    <available_memories> to </available_memories> inclusive.
     """
-    if _SKILLS_MARKER not in text:
+    if _MEMORY_MARKER not in text:
         return text
     import re
     cleaned = re.sub(
-        r'\n*<available_skills>.*?</available_skills>\n*',
+        r'\n*<available_memories>.*?</available_memories>\n*',
         '\n',
         text,
         flags=re.DOTALL,
@@ -416,74 +418,74 @@ def _strip_old_skills_listing(text: str) -> str:
     return cleaned.rstrip()
 
 
-def inject_skills_to_user(messages: list, project_path: str = None,
+def inject_memory_to_user(messages: list, project_path: str = None,
                            project_enabled: bool = False,
-                           skills_enabled: bool = False,
+                           memory_enabled: bool = False,
                            has_real_tools: bool = False,
                            conv_id: str = '',
                            task: dict = None,
                            round_num: int = 0):
-    """Inject the skills listing into the last user message.
+    """Inject the memory listing into the last user message.
 
     Called AFTER all other user message modifications (planner replacement,
     critic messages, attachments, search addendum) so it always operates
     on the final user message content.
 
     Uses BM25 relevance filtering: extracts the user message text as a query,
-    scores skills against it, and includes only the top-K most relevant ones.
+    scores memories against it, and includes only the top-K most relevant ones.
 
     ★ CACHE OPTIMIZATION: Only inject on round 0.  On subsequent rounds,
-    the skills listing was already injected in R0 and is part of the cached
+    the memory listing was already injected in R0 and is part of the cached
     prefix.  Re-injecting (strip+replace) risks changing the prefix bytes
-    and causing a full cache miss.  Skills don't change within a task.
+    and causing a full cache miss.  Memories don't change within a task.
 
     Args:
         messages: The messages list (mutated in-place).
-        project_path: Path to project for project-scoped skills.
+        project_path: Path to project for project-scoped memories.
         project_enabled: Whether project mode is active.
-        skills_enabled: Whether skills are enabled in settings.
-        has_real_tools: Whether the task has real tools (skills CRUD needs tools).
+        memory_enabled: Whether memory is enabled in settings.
+        has_real_tools: Whether the task has real tools (memory CRUD needs tools).
         conv_id: Conversation ID for cache scoping.
         task: Task dict (may contain prefetch futures).
         round_num: Current round within the task (0-based).
     """
-    if not skills_enabled and not has_real_tools:
+    if not memory_enabled and not has_real_tools:
         return
     if round_num > 0:
-        return  # ★ Preserve cached prefix — skills already injected in R0
+        return  # ★ Preserve cached prefix — memories already injected in R0
 
     _pp = project_path if project_enabled else None
 
-    # Extract user message text as BM25 query BEFORE injecting skills
+    # Extract user message text as BM25 query BEFORE injecting memories
     query_text = _extract_last_user_text(messages)
 
     # ── Helper: try to get prefetched result, else compute synchronously ──
-    def _get_prefetched_skills():
-        if task and task.get('_prefetch_skills'):
-            future = task['_prefetch_skills']
+    def _get_prefetched_memory():
+        if task and task.get('_prefetch_memory'):
+            future = task['_prefetch_memory']
             if future.done():
                 try:
                     return future.result(timeout=0)
                 except Exception as e:
-                    logger.debug('[SkillsToUser] Prefetch failed, computing: %s', e)
+                    logger.debug('[MemoryToUser] Prefetch failed, computing: %s', e)
         return None
 
-    # Build skills context with BM25 filtering
-    def _load_skills():
-        from lib.skills import build_skills_context
-        return build_skills_context(project_path=_pp, query=query_text)
+    # Build memory context with BM25 filtering
+    def _load_memory():
+        from lib.memory import build_memory_context
+        return build_memory_context(project_path=_pp, query=query_text)
 
     # Try prefetch first (but prefetch doesn't have BM25 filtering)
-    # If prefetch available, use it directly (it covers all skills);
-    # BM25 filtering happens inside build_skills_context when query is set.
+    # If prefetch available, use it directly (it covers all memories);
+    # BM25 filtering happens inside build_memory_context when query is set.
     _cid = conv_id or ''
     if _cid:
-        skills_ctx = _get_cached_or_compute(
-            _cid, 'skills_user', _load_skills)
+        memory_ctx = _get_cached_or_compute(
+            _cid, 'memory_user', _load_memory)
     else:
-        skills_ctx = _load_skills() or ''
+        memory_ctx = _load_memory() or ''
 
-    if not skills_ctx:
+    if not memory_ctx:
         return
 
     # Find last user message and inject (with dedup)
@@ -491,18 +493,18 @@ def inject_skills_to_user(messages: list, project_path: str = None,
         if messages[i].get('role') == 'user':
             content = messages[i].get('content', '')
             if isinstance(content, str):
-                content = _strip_old_skills_listing(content)
-                messages[i]['content'] = content + '\n\n' + skills_ctx
+                content = _strip_old_memory_listing(content)
+                messages[i]['content'] = content + '\n\n' + memory_ctx
             elif isinstance(content, list):
-                # Remove old skills listing text blocks
+                # Remove old memory listing text blocks
                 messages[i]['content'] = [
                     b for b in messages[i]['content']
                     if not (isinstance(b, dict) and b.get('type') == 'text'
-                            and _SKILLS_MARKER in b.get('text', ''))
+                            and _MEMORY_MARKER in b.get('text', ''))
                 ]
                 messages[i]['content'].append({
                     'type': 'text',
-                    'text': '\n\n' + skills_ctx,
+                    'text': '\n\n' + memory_ctx,
                 })
             return
-    logger.debug('[SkillsToUser] No user message found to inject into')
+    logger.debug('[MemoryToUser] No user message found to inject into')

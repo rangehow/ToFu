@@ -1,7 +1,7 @@
 """Unit tests for package façade imports.
 
 Migrated from debug/test_refactoring.py. Validates that all decomposed
-packages (lib/search/, lib/browser/, lib/pdf_parser/, lib/skills/) expose
+packages (lib/search/, lib/browser/, lib/pdf_parser/, lib/memory/) expose
 their public APIs correctly through __init__.py façades, that all consumer
 import sites work, and that Flask route registration is complete.
 """
@@ -137,54 +137,54 @@ class TestPdfParserFacade:
 
 
 # ═══════════════════════════════════════════════════════════
-#  4. lib/skills/
+#  4. lib/memory/
 # ═══════════════════════════════════════════════════════════
 
 @pytest.mark.unit
 class TestSkillsFacade:
     def test_package_import(self):
-        import lib.skills  # noqa: F401
+        import lib.memory  # noqa: F401
 
     def test_storage_crud(self):
-        from lib.skills import (
-            create_skill,
-            delete_skill,
-            get_eligible_skills,
-            get_enabled_skills,
-            get_skill,
-            list_all_skills,
-            list_skills,
-            merge_skills,
-            toggle_skill,
-            update_skill,
+        from lib.memory import (
+            create_memory,
+            delete_memory,
+            get_eligible_memories,
+            get_enabled_memories,
+            get_memory,
+            list_all_memories,
+            list_memories,
+            merge_memories,
+            toggle_memory,
+            update_memory,
         )
-        assert callable(create_skill)
-        assert callable(list_all_skills)
+        assert callable(create_memory)
+        assert callable(list_all_memories)
 
     def test_injection(self):
-        from lib.skills import SKILL_ACCUMULATION_INSTRUCTIONS, build_skills_context
-        assert callable(build_skills_context)
-        assert isinstance(SKILL_ACCUMULATION_INSTRUCTIONS, str)
-        assert len(SKILL_ACCUMULATION_INSTRUCTIONS) > 100
+        from lib.memory import MEMORY_ACCUMULATION_INSTRUCTIONS, build_memory_context
+        assert callable(build_memory_context)
+        assert isinstance(MEMORY_ACCUMULATION_INSTRUCTIONS, str)
+        assert len(MEMORY_ACCUMULATION_INSTRUCTIONS) > 100
 
     def test_tools(self):
-        from lib.skills import ALL_SKILL_TOOLS, SKILL_TOOL_NAMES
-        assert isinstance(ALL_SKILL_TOOLS, list)
-        assert len(ALL_SKILL_TOOLS) == 4
-        assert 'create_skill' in SKILL_TOOL_NAMES
-        assert 'merge_skills' in SKILL_TOOL_NAMES
+        from lib.memory import ALL_MEMORY_TOOLS, MEMORY_TOOL_NAMES
+        assert isinstance(ALL_MEMORY_TOOLS, list)
+        assert len(ALL_MEMORY_TOOLS) == 4
+        assert 'create_memory' in MEMORY_TOOL_NAMES
+        assert 'merge_memories' in MEMORY_TOOL_NAMES
 
     def test_constants(self):
-        from lib.skills import GLOBAL_SKILLS_SUBDIR, MIN_DESCRIPTION_LENGTH, PROJECT_SKILLS_SUBDIR
-        assert isinstance(GLOBAL_SKILLS_SUBDIR, str)
+        from lib.memory import GLOBAL_MEMORY_SUBDIR, MIN_DESCRIPTION_LENGTH, PROJECT_MEMORY_SUBDIR
+        assert isinstance(GLOBAL_MEMORY_SUBDIR, str)
         assert isinstance(MIN_DESCRIPTION_LENGTH, int)
 
     def test_all_completeness(self):
-        import lib.skills
-        for name in ['create_skill', 'update_skill', 'delete_skill', 'merge_skills',
-                     'ALL_SKILL_TOOLS', 'SKILL_TOOL_NAMES', 'build_skills_context',
-                     'SKILL_ACCUMULATION_INSTRUCTIONS']:
-            assert name in lib.skills.__all__
+        import lib.memory
+        for name in ['create_memory', 'update_memory', 'delete_memory', 'merge_memories',
+                     'ALL_MEMORY_TOOLS', 'MEMORY_TOOL_NAMES', 'build_memory_context',
+                     'MEMORY_ACCUMULATION_INSTRUCTIONS']:
+            assert name in lib.memory.__all__
 
 
 # ═══════════════════════════════════════════════════════════
@@ -235,16 +235,16 @@ class TestConsumerImports:
         assert callable(extract_pdf_text)
 
     def test_skills_executor(self):
-        from lib.skills import create_skill, delete_skill, merge_skills, update_skill
-        assert callable(create_skill)
+        from lib.memory import create_memory, delete_memory, merge_memories, update_memory
+        assert callable(create_memory)
 
     def test_skills_model_config(self):
-        from lib.skills import ALL_SKILL_TOOLS, SKILL_TOOL_NAMES
-        assert isinstance(ALL_SKILL_TOOLS, list)
+        from lib.memory import ALL_MEMORY_TOOLS, MEMORY_TOOL_NAMES
+        assert isinstance(ALL_MEMORY_TOOLS, list)
 
     def test_skills_injection(self):
-        from lib.skills import build_skills_context
-        assert callable(build_skills_context)
+        from lib.memory import build_memory_context
+        assert callable(build_memory_context)
 
 
 # ═══════════════════════════════════════════════════════════
@@ -316,5 +316,5 @@ class TestNoStaleFiles:
     def test_packages_have_init(self):
         import os
         for pkg in ['lib/search/__init__.py', 'lib/browser/__init__.py',
-                     'lib/pdf_parser/__init__.py', 'lib/skills/__init__.py']:
+                     'lib/pdf_parser/__init__.py', 'lib/memory/__init__.py']:
             assert os.path.isfile(pkg), f'{pkg} not found'

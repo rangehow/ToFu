@@ -96,7 +96,7 @@ tl_checks = [
     ("lib.database",      ["get_db", "close_db", "init_db"]),
     ("lib",               ["LLM_MODEL", "LLM_API_KEY", "LLM_BASE_URL"]),
     ("lib.llm_client",    ["chat", "build_body", "stream_chat"]),
-    ("lib.skills",        ["list_skills", "create_skill", "update_skill", "delete_skill", "toggle_skill"]),
+    ("lib.memory",        ["list_memories", "create_memory", "update_memory", "delete_memory", "toggle_memory"]),
     ("lib.browser",       ["wait_for_commands", "mark_poll", "resolve_batch",
                            "resolve_command", "is_extension_connected", "send_browser_command"]),
     ("lib.search",        ["perform_web_search"]),

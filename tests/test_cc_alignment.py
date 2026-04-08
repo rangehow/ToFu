@@ -80,7 +80,7 @@ class TestSystemPromptSections:
             messages,
             project_path='/tmp/test',
             project_enabled=False,
-            skills_enabled=False,
+            memory_enabled=False,
             search_enabled=False,
             swarm_enabled=False,
             has_real_tools=True,
@@ -104,7 +104,7 @@ class TestSystemPromptSections:
             messages,
             project_path='/tmp/test',
             project_enabled=False,
-            skills_enabled=False,
+            memory_enabled=False,
             search_enabled=False,
             swarm_enabled=False,
             has_real_tools=False,
@@ -412,7 +412,7 @@ class TestMessageRoles:
             messages,
             project_path='/tmp/test',
             project_enabled=False,
-            skills_enabled=False,
+            memory_enabled=False,
             search_enabled=False,
             swarm_enabled=False,
             has_real_tools=True,
@@ -484,9 +484,9 @@ class TestAssembleToolListReturnValue:
             messages=None,
         )
         assert deferred_tools == []
-        # Always-on tools (skills, emit_to_user, read_local_file) are always present
-        # even when all explicit tool categories are disabled
-        assert isinstance(tool_list, list)
+        # With all features off (no project, no search, no browser),
+        # tool_list is None — no tools to offer the model
+        assert tool_list is None
 
 
 # ═══════════════════════════════════════════════════════════
@@ -509,7 +509,7 @@ class TestFullPipelineIntegration:
         for name in ['read_files', 'list_dir', 'grep_search', 'find_files',
                       'write_file', 'apply_diff', 'run_command',
                       'web_search', 'fetch_url',
-                      'create_skill', 'update_skill',
+                      'create_memory', 'update_memory',
                       'check_error_logs', 'resolve_error',
                       'emit_to_user', 'ask_human',
                       'browser_type', 'browser_scroll',
@@ -558,7 +558,7 @@ class TestFullPipelineIntegration:
             messages,
             project_path='/tmp/test',
             project_enabled=False,
-            skills_enabled=False,
+            memory_enabled=False,
             search_enabled=False,
             swarm_enabled=False,
             has_real_tools=True,
@@ -618,9 +618,9 @@ class TestSystemReminderAndBlocks:
         """Skills listing is injected into the user message, not the system message.
 
         After the refactor, _inject_system_contexts no longer injects the full
-        skills listing. Instead, inject_skills_to_user() handles it.
+        memory listing. Instead, inject_memory_to_user() handles it.
         """
-        from lib.tasks_pkg.system_context import _inject_system_contexts, inject_skills_to_user
+        from lib.tasks_pkg.system_context import _inject_system_contexts, inject_memory_to_user
         messages = [
             {'role': 'system', 'content': 'Base'},
             {'role': 'user', 'content': 'Hello world'},
@@ -629,27 +629,27 @@ class TestSystemReminderAndBlocks:
             messages, '/tmp', False, True, False, False,
             has_real_tools=False,
         )
-        # System message should NOT contain skills listing
+        # System message should NOT contain memory listing
         content = messages[0]['content']
         if isinstance(content, list):
             full = '\n\n'.join(b['text'] for b in content if isinstance(b, dict))
         else:
             full = content
-        assert '<available_skills>' not in full
+        assert '<available_memories>' not in full
 
         # Now inject skills into user message
-        with patch('lib.skills.build_skills_context',
-                   return_value='<available_skills>\nSkill 1: python\n</available_skills>'):
-            inject_skills_to_user(
-                messages, skills_enabled=True, has_real_tools=False)
+        with patch('lib.memory.build_memory_context',
+                   return_value='<available_memories>\nSkill 1: python\n</available_memories>'):
+            inject_memory_to_user(
+                messages, memory_enabled=True, has_real_tools=False)
 
-        # User message should contain skills listing
+        # User message should contain memory listing
         user_msg = messages[-1]
         assert user_msg['role'] == 'user'
         user_text = user_msg.get('content', '')
         if isinstance(user_text, list):
             user_text = '\n'.join(b.get('text', '') for b in user_text if isinstance(b, dict))
-        assert '<available_skills>' in user_text
+        assert '<available_memories>' in user_text
 
     def test_static_guidance_as_separate_block(self):
         """Static guidance sections are injected as a separate text block."""

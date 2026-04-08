@@ -237,11 +237,21 @@ PROJECT_TOOL_READ_FILES = {
     "function": {
         "name": "read_files",
         "description": (
-            "Read the contents of one or more files in the project. Can read specific line ranges for large files. "
+            "Read the contents of one or more files. Can read specific line ranges for large files. "
             "Returns file content with line numbers.\n"
             "Each entry in the 'reads' array has 'path' (required), 'start_line' and 'end_line' (optional).\n"
             "When you need to read multiple files, put them all in one call — maximum 20 files per batch.\n"
-            "Files under ~40KB are auto-expanded to whole-file regardless of range specified."
+            "Files under ~40KB are auto-expanded to whole-file regardless of range specified.\n\n"
+            "Supports BOTH relative project paths AND absolute paths:\n"
+            "• Relative paths (e.g. 'src/main.py') are resolved within the project.\n"
+            "• Absolute paths (e.g. '/home/user/report.pdf', '~/Documents/photo.png') "
+            "read from the local filesystem with format auto-detection:\n"
+            "  - **Images** (.png, .jpg, .gif, .webp, .bmp): Uploaded natively as an image — "
+            "you will SEE the image visually and can analyze its content.\n"
+            "  - **PDFs** (.pdf): Extracts text content with layout preservation.\n"
+            "  - **Office docs** (.docx, .xlsx, .pptx): Extracts text and tables as Markdown.\n"
+            "  - **Text files**: Reads with auto encoding detection.\n"
+            "Also handles file:// URIs — strip the file:// prefix and pass just the path."
         ),
         "parameters": {
             "type": "object",
@@ -252,7 +262,14 @@ PROJECT_TOOL_READ_FILES = {
                     "items": {
                         "type": "object",
                         "properties": {
-                            "path": {"type": "string", "description": "Relative file path from project root"},
+                            "path": {
+                                "type": "string",
+                                "description": (
+                                    "File path — relative from project root (e.g. 'lib/server.py') "
+                                    "or absolute (e.g. '/home/user/data.csv', '~/report.pdf'). "
+                                    "Supports ~ expansion."
+                                )
+                            },
                             "start_line": {"type": "integer", "description": "Start line (1-based, optional)"},
                             "end_line": {"type": "integer", "description": "End line (inclusive, optional)"}
                         },
@@ -265,54 +282,21 @@ PROJECT_TOOL_READ_FILES = {
     }
 }
 
-PROJECT_TOOL_READ_LOCAL_FILE = {
-    "type": "function",
-    "function": {
-        "name": "read_local_file",
-        "description": (
-            "Read a file from the local filesystem (any absolute path, not limited to the project). "
-            "Supports multiple formats:\n"
-            "• **Images** (.png, .jpg, .jpeg, .gif, .webp, .bmp): Uploaded natively as an image — "
-            "you will SEE the image visually and can analyze its content.\n"
-            "• **PDFs** (.pdf): Extracts text content with layout preservation.\n"
-            "• **Office docs** (.docx, .doc, .xlsx, .xls, .pptx, .ppt): Extracts text and tables as Markdown.\n"
-            "• **Text files** (.txt, .md, .csv, .json, .xml, .py, etc.): Reads with auto encoding detection.\n\n"
-            "Use this when the user provides a file path outside the project, or when you need to "
-            "read binary formats (images, PDFs, Office docs) that read_files cannot handle.\n"
-            "Also use this for file:// URIs — strip the file:// prefix and pass just the path."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "path": {
-                    "type": "string",
-                    "description": (
-                        "Absolute file path (e.g. '/home/user/report.pdf', '~/Documents/photo.png'). "
-                        "Supports ~ expansion. If given a file:// URI, strip the prefix first."
-                    )
-                }
-            },
-            "required": ["path"]
-        }
-    }
-}
-
 PROJECT_TOOLS = [
     PROJECT_TOOL_LIST_DIR, PROJECT_TOOL_READ_FILES,
     PROJECT_TOOL_GREP, PROJECT_TOOL_FIND,
     PROJECT_TOOL_WRITE_FILE, PROJECT_TOOL_APPLY_DIFF, PROJECT_TOOL_INSERT_CONTENT,
     PROJECT_TOOL_RUN_COMMAND,
-    PROJECT_TOOL_READ_LOCAL_FILE,
 ]
 PROJECT_TOOL_NAMES = {
     'list_dir', 'read_files', 'grep_search', 'find_files',
-    'write_file', 'apply_diff', 'insert_content', 'run_command', 'read_local_file',
+    'write_file', 'apply_diff', 'insert_content', 'run_command',
 }
 
 __all__ = [
     'PROJECT_TOOL_LIST_DIR', 'PROJECT_TOOL_READ_FILES',
     'PROJECT_TOOL_GREP', 'PROJECT_TOOL_FIND',
     'PROJECT_TOOL_WRITE_FILE', 'PROJECT_TOOL_APPLY_DIFF', 'PROJECT_TOOL_INSERT_CONTENT',
-    'PROJECT_TOOL_RUN_COMMAND', 'PROJECT_TOOL_READ_LOCAL_FILE',
+    'PROJECT_TOOL_RUN_COMMAND',
     'PROJECT_TOOLS', 'PROJECT_TOOL_NAMES',
 ]

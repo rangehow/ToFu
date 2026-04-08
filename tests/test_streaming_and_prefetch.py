@@ -44,7 +44,7 @@ class TestStreamingToolAccumulator:
         """Only read-only tools are in _STREAMABLE_TOOLS."""
         from lib.tasks_pkg.streaming_tool_executor import _STREAMABLE_TOOLS
         write_tools = {'write_file', 'apply_diff', 'run_command',
-                       'generate_image', 'create_skill'}
+                       'generate_image', 'create_memory'}
         assert _STREAMABLE_TOOLS.isdisjoint(write_tools), \
             f"Write tools in _STREAMABLE_TOOLS: {_STREAMABLE_TOOLS & write_tools}"
 
@@ -343,9 +343,9 @@ class TestDeltaAttachments:
         r1 = _get_cached_or_compute('test-conv-delta-4', 'project',
                                      lambda: 'proj context')
         r2 = _get_cached_or_compute('test-conv-delta-4', 'skills',
-                                     lambda: 'skills context')
+                                     lambda: 'memory context')
         assert r1 == 'proj context'
-        assert r2 == 'skills context'
+        assert r2 == 'memory context'
 
     def test_empty_compute_returns_empty(self):
         """Empty string from compute returns empty."""
@@ -406,7 +406,7 @@ class TestMemoryPrefetch:
 
         task = {
             '_prefetch_project': future,
-            '_prefetch_skills': None,
+            '_prefetch_memory': None,
         }
 
         messages = [{'role': 'system', 'content': 'Base system prompt'}]
@@ -437,7 +437,7 @@ class TestMemoryPrefetch:
 
         task = {
             '_prefetch_project': future,
-            '_prefetch_skills': None,
+            '_prefetch_memory': None,
         }
 
         messages = [{'role': 'system', 'content': 'Base prompt'}]
@@ -469,7 +469,7 @@ class TestMemoryPrefetch:
 
         task = {
             '_prefetch_project': future,
-            '_prefetch_skills': None,
+            '_prefetch_memory': None,
         }
 
         messages = [{'role': 'system', 'content': 'Base prompt'}]
@@ -509,13 +509,13 @@ class TestMemoryPrefetch:
         mock_fn.assert_called_once()
 
     def test_skills_prefetch_consumed(self):
-        """Skills listing is injected into user message (not system) via inject_skills_to_user.
+        """Skills listing is injected into user message (not system) via inject_memory_to_user.
 
         After the refactor, _inject_system_contexts only puts compact skill
-        instructions in the system message. The full skills listing goes into
-        the last user message via inject_skills_to_user().
+        instructions in the system message. The full memory listing goes into
+        the last user message via inject_memory_to_user().
         """
-        from lib.tasks_pkg.system_context import _inject_system_contexts, inject_skills_to_user
+        from lib.tasks_pkg.system_context import _inject_system_contexts, inject_memory_to_user
 
         # Create completed futures
         proj_future = Future()
@@ -523,7 +523,7 @@ class TestMemoryPrefetch:
 
         task = {
             '_prefetch_project': proj_future,
-            '_prefetch_skills': None,
+            '_prefetch_memory': None,
         }
 
         messages = [
@@ -533,41 +533,41 @@ class TestMemoryPrefetch:
 
         _inject_system_contexts(
             messages, '/tmp/proj', True,
-            True, False, False,  # skills_enabled=True
+            True, False, False,  # memory_enabled=True
             has_real_tools=True,
             conv_id='',
             task=task,
         )
 
         # System message should have compact skill instructions but NOT
-        # the full <available_skills> listing
+        # the full <available_memories> listing
         sys_content = messages[0]['content']
         if isinstance(sys_content, list):
             sys_text = '\n\n'.join(b['text'] for b in sys_content if isinstance(b, dict))
         else:
             sys_text = sys_content
-        assert 'skill_accumulation' in sys_text
-        assert '<available_skills>' not in sys_text
+        assert 'memory_accumulation' in sys_text
+        assert '<available_memories>' not in sys_text
 
         # Now inject skills into user message (simulates orchestrator flow)
-        with patch('lib.skills.build_skills_context',
-                   return_value='<available_skills>\nSkill listing here\n</available_skills>'):
-            inject_skills_to_user(
+        with patch('lib.memory.build_memory_context',
+                   return_value='<available_memories>\nSkill listing here\n</available_memories>'):
+            inject_memory_to_user(
                 messages,
                 project_path='/tmp/proj',
                 project_enabled=True,
-                skills_enabled=True,
+                memory_enabled=True,
                 has_real_tools=True,
                 conv_id='test-conv',
             )
 
-        # User message should now contain the skills listing
+        # User message should now contain the memory listing
         user_msg = messages[-1]
         assert user_msg['role'] == 'user'
         user_text = user_msg.get('content', '')
         if isinstance(user_text, list):
             user_text = '\n'.join(b.get('text', '') for b in user_text if isinstance(b, dict))
-        assert '<available_skills>' in user_text
+        assert '<available_memories>' in user_text
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

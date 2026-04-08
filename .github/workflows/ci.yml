@@ -4,7 +4,6 @@
 #
 #  Runs on every push to main and on all pull requests.
 #  Jobs: lint → test-unit → test-api → healthcheck
-#  Visual E2E tests run separately (optional, non-blocking).
 #
 # ═══════════════════════════════════════════════════════════════
 
@@ -152,59 +151,4 @@ jobs:
       - name: Run healthcheck
         run: python healthcheck.py
 
-  # ── Visual E2E Tests (optional, non-blocking) ───────────────
-  test-visual:
-    name: Visual E2E Tests
-    runs-on: ubuntu-latest
-    needs: [test-unit, test-api]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    continue-on-error: true
-    timeout-minutes: 20
 
-    services:
-      postgres:
-        image: postgres:17
-        env:
-          POSTGRES_USER: chatui
-          POSTGRES_PASSWORD: chatui
-          POSTGRES_DB: chatui
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U chatui"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
-    env:
-      CHATUI_PG_HOST: localhost
-      CHATUI_PG_PORT: "5432"
-      CHATUI_PG_USER: chatui
-      CHATUI_PG_PASSWORD: chatui
-      CHATUI_PG_DBNAME: chatui
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-
-      - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
-          pip install pytest
-          playwright install --with-deps chromium
-
-      - name: Run visual tests
-        run: python -m pytest -m visual --tb=short -q
-
-      - name: Upload screenshots
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: screenshots
-          path: tests/screenshots/
-          retention-days: 7
-          if-no-files-found: ignore

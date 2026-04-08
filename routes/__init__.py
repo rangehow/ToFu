@@ -18,11 +18,12 @@ from .errors import errors_bp
 from .oauth import oauth_bp
 from .project import project_bp
 from .scheduler import scheduler_bp
-from .skills import skills_bp
+from .memory import memory_bp
 from .swarm import swarm_bp
 from .translate import translate_bp
 from .upload import upload_bp
 from .agent_backends import agent_backends_bp
+from .mcp import mcp_bp
 
 # ── Core (always-on) blueprints ──
 ALL_BLUEPRINTS = [
@@ -34,7 +35,7 @@ ALL_BLUEPRINTS = [
     translate_bp,
     chat_bp,
     project_bp,
-    skills_bp,
+    memory_bp,
     browser_bp,
     desktop_bp,
     scheduler_bp,
@@ -43,6 +44,7 @@ ALL_BLUEPRINTS = [
     daily_report_bp,
     oauth_bp,
     agent_backends_bp,
+    mcp_bp,
 ]
 
 # ── Trading blueprints (conditionally loaded) ──

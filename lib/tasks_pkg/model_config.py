@@ -20,7 +20,6 @@ from lib.tools import (
     EMIT_TO_USER_TOOL,
     ERROR_TRACKER_TOOLS,
     FETCH_URL_TOOL,
-    PROJECT_TOOL_READ_LOCAL_FILE,
     PROJECT_TOOLS,
     SEARCH_TOOL_MULTI,
     SEARCH_TOOL_SINGLE,
@@ -85,7 +84,7 @@ def _resolve_model_config(cfg, task_id):
 
     Returns a dict with keys: model, thinking_enabled, thinking_depth, preset,
     max_tokens, temperature, search_mode, search_enabled, fetch_enabled,
-    project_path, project_enabled, code_exec_enabled, skills_enabled,
+    project_path, project_enabled, code_exec_enabled, memory_enabled,
     browser_enabled, desktop_enabled, swarm_enabled.
     """
     tid = task_id[:8]
@@ -147,7 +146,7 @@ def _resolve_model_config(cfg, task_id):
     project_path = cfg.get('projectPath', '')
     project_enabled = bool(project_path)
     code_exec_enabled = cfg.get('codeExecEnabled', False)
-    skills_enabled = cfg.get('skillsEnabled', True)
+    memory_enabled = cfg.get('memoryEnabled', True)
     browser_enabled = cfg.get('browserEnabled', False)
     desktop_enabled = cfg.get('desktopEnabled', False)
     swarm_enabled = cfg.get('swarmEnabled', False)
@@ -167,7 +166,7 @@ def _resolve_model_config(cfg, task_id):
         'project_path': project_path,
         'project_enabled': project_enabled,
         'code_exec_enabled': code_exec_enabled,
-        'skills_enabled': skills_enabled,
+        'memory_enabled': memory_enabled,
         'browser_enabled': browser_enabled,
         'desktop_enabled': desktop_enabled,
         'swarm_enabled': swarm_enabled,
@@ -199,15 +198,11 @@ def _assemble_tool_list(cfg, project_path, project_enabled, task_id,
     if fetch_enabled or search_enabled:
         tool_list.append(FETCH_URL_TOOL)
 
-    # ★ Project tools
+    # ★ Project tools (read_files supports both relative and absolute paths)
     if project_enabled:
-        tool_list.extend(t for t in PROJECT_TOOLS
-                         if t is not PROJECT_TOOL_READ_LOCAL_FILE)
+        tool_list.extend(PROJECT_TOOLS)
     elif code_exec_enabled:
         tool_list.append(CODE_EXEC_TOOL)
-
-    # ★ Local file reader — always available (uses absolute paths, no project needed)
-    tool_list.append(PROJECT_TOOL_READ_LOCAL_FILE)
 
     # ★ Browser extension tools
     if browser_enabled:
@@ -263,11 +258,11 @@ def _assemble_tool_list(cfg, project_path, project_enabled, task_id,
     elif human_guidance_enabled:
         logger.debug('[Task %s] 🙋 Human guidance requested but no base tools — skipped', tid)
 
-    # ★ Skills tool — only when other tools exist
+    # ★ Memory tool — only when other tools exist
     has_real_tools = len(tool_list) > 0
     if has_real_tools:
-        from lib.skills import ALL_SKILL_TOOLS
-        tool_list.extend(ALL_SKILL_TOOLS)
+        from lib.memory import ALL_MEMORY_TOOLS
+        tool_list.extend(ALL_MEMORY_TOOLS)
 
     # ★ emit_to_user — terminal tool to reference existing tool results
     #   instead of re-outputting them. Only useful when other tools exist.
@@ -286,6 +281,20 @@ def _assemble_tool_list(cfg, project_path, project_enabled, task_id,
         tool_list.append(SPAWN_AGENTS_TOOL)
         tool_list.append(CHECK_AGENTS_TOOL)
         logger.debug('[Task %s] 🐝 Swarm mode enabled — spawn_agents + check_agents tools available', tid)
+
+    # ★ MCP tools — bridge to external MCP servers (ClawHub tools, etc.)
+    #   Injected after all native tools so they appear at the end of the list.
+    try:
+        from lib.mcp import get_bridge
+        bridge = get_bridge()
+        if bridge.connected:
+            mcp_tools = bridge.get_openai_tool_defs()
+            if mcp_tools:
+                tool_list.extend(mcp_tools)
+                logger.info('[Task %s] 🔌 MCP tools loaded: %d from %d servers',
+                            tid, len(mcp_tools), bridge.server_count)
+    except Exception as e:
+        logger.debug('[Task %s] MCP bridge not available: %s', tid, e)
 
     deferred_tools = []  # tools discovered via tool_search
     if not tool_list:

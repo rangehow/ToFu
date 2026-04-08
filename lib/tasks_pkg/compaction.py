@@ -290,7 +290,6 @@ def cleanup_compaction_data(conv_id: str):
 # micro_compact (Layer 1) will compress them later when they become cold.
 _BUDGET_EXEMPT_TOOLS = frozenset({
     'read_files',
-    'read_local_file',
 })
 
 TOOL_RESULT_MAX_CHARS: dict[str, int] = {
@@ -306,7 +305,7 @@ TOOL_RESULT_MAX_CHARS: dict[str, int] = {
     'browser_execute_js': 30_000,
     'browser_get_app_state': 30_000,
     'check_error_logs': 30_000,
-    'read_local_file': 0,        # exempt — see _BUDGET_EXEMPT_TOOLS
+
 }
 _DEFAULT_TOOL_RESULT_MAX = 60_000
 """Default budget for tools not listed above."""
@@ -314,7 +313,7 @@ _DEFAULT_TOOL_RESULT_MAX = 60_000
 # ── Disk persistence for oversized results ──────────────────────────────
 # Instead of irreversibly truncating large tool results (head+tail),
 # write the full content to a temp file and return a preview + file path.
-# The model can later use read_local_file to access the full content.
+# The model can later use read_files to access the full content.
 # Inspired by Claude Code's toolResultStorage.ts persistence mechanism.
 
 _PERSIST_DIR_BASE = '/tmp/chatui-tool-results'
@@ -332,8 +331,13 @@ def _persist_to_disk(content: str, tool_name: str, tool_use_id: str = '',
                      conv_id: str = '') -> str:
     """Write full content to disk and return a preview + file path.
 
-    The model receives the file path and can use read_local_file to
+    The model receives the file path and can use read_files to
     access the full content later.  Information is never lost.
+
+    For web_search results, generates a structured preview that shows
+    title/URL/snippet for ALL results (not just the first), so the model
+    retains awareness of all search results and can selectively read
+    individual ones via read_files.
 
     Args:
         content:     Full tool result string.
@@ -364,23 +368,116 @@ def _persist_to_disk(content: str, tool_name: str, tool_use_id: str = '',
         return _truncate_head_tail(content, tool_name,
                                    TOOL_RESULT_MAX_CHARS.get(tool_name, _DEFAULT_TOOL_RESULT_MAX))
 
-    # Generate preview truncated at newline boundary
-    preview = content[:_PERSIST_PREVIEW_CHARS]
-    last_nl = preview.rfind('\n')
-    if last_nl > _PERSIST_PREVIEW_CHARS // 2:
-        preview = preview[:last_nl]
-
     logger.info('[Persist] %s result persisted to disk: %s (%s)',
                 tool_name, filepath, _human_size(len(content)))
+
+    # Generate tool-specific preview
+    if tool_name == 'web_search':
+        preview = _generate_web_search_preview(content)
+    else:
+        # Default: first N chars truncated at newline boundary
+        preview = content[:_PERSIST_PREVIEW_CHARS]
+        last_nl = preview.rfind('\n')
+        if last_nl > _PERSIST_PREVIEW_CHARS // 2:
+            preview = preview[:last_nl]
 
     return (
         f'[Persisted to: {filepath}]\n'
         f'Output too large ({_human_size(len(content))}). '
         f'Full output saved to: {filepath}\n'
-        f'Use read_local_file to access the full content if needed.\n\n'
-        f'Preview (first ~{_human_size(len(preview))}):\n'
-        f'{preview}\n...'
+        f'Use read_files to access the full content if needed.\n\n'
+        f'Preview:\n'
+        f'{preview}\n'
     )
+
+
+def _generate_web_search_preview(content: str) -> str:
+    """Generate a structured preview for web_search results.
+
+    Instead of dumbly taking the first N chars (which only shows the
+    first result's content), parse the structured web_search output and
+    generate a preview that includes title + URL + content snippet for
+    ALL results.  This lets the model retain awareness of all search
+    results and selectively read individual ones.
+
+    The web_search format is:
+        Search results:
+
+        [1] Title
+            URL: ...
+            Source: ...
+
+            ──── Full Page Content (X chars) ────
+            ...full content...
+
+        ════════════════════
+
+        [2] Title
+        ...
+    """
+    # Only attempt structured parsing if the content looks like
+    # formatted web_search output (has numbered result markers).
+    if not re.search(r'^\[1\]', content, re.MULTILINE):
+        # Not structured web_search format — fall through to default
+        preview = content[:_PERSIST_PREVIEW_CHARS]
+        last_nl = preview.rfind('\n')
+        if last_nl > _PERSIST_PREVIEW_CHARS // 2:
+            preview = preview[:last_nl]
+        return preview
+
+    # Split by the separator between results
+    _SEP = '════════════════════'
+    parts = content.split(_SEP)
+
+    preview_parts = []
+    _CONTENT_SNIPPET_CHARS = 500  # chars of full_content per result
+    _HEADER_MAX_CHARS = 300       # cap header in case of unexpected format
+
+    for part in parts:
+        part = part.strip()
+        if not part:
+            continue
+
+        lines = part.split('\n')
+        # Extract header lines (title, URL, source) — before the content separator
+        header_lines = []
+        content_start = -1
+        for j, line in enumerate(lines):
+            if '──── Full Page Content' in line or '────' in line:
+                content_start = j + 1
+                break
+            header_lines.append(line)
+
+        header = '\n'.join(header_lines).strip()
+        if len(header) > _HEADER_MAX_CHARS:
+            header = header[:_HEADER_MAX_CHARS] + '…'
+
+        if content_start > 0 and content_start < len(lines):
+            # Extract a snippet of the full content
+            full_text = '\n'.join(lines[content_start:])
+            snippet = full_text[:_CONTENT_SNIPPET_CHARS].rstrip()
+            # Truncate at last newline for cleanliness
+            last_nl = snippet.rfind('\n', _CONTENT_SNIPPET_CHARS // 2)
+            if last_nl > 0:
+                snippet = snippet[:last_nl]
+            preview_parts.append(
+                f'{header}\n'
+                f'    Content snippet: {snippet}\n'
+                f'    ...'
+            )
+        else:
+            # No full content (fetch failed) — include as-is
+            preview_parts.append(header)
+
+    if preview_parts:
+        return '\n\n'.join(preview_parts)
+
+    # Fallback: couldn't parse, use default truncation
+    preview = content[:_PERSIST_PREVIEW_CHARS]
+    last_nl = preview.rfind('\n')
+    if last_nl > _PERSIST_PREVIEW_CHARS // 2:
+        preview = preview[:last_nl]
+    return preview
 
 
 def _truncate_head_tail(content: str, tool_name: str, max_chars: int) -> str:
@@ -412,13 +509,13 @@ def budget_tool_result(tool_name: str, content: str,
                        tool_use_id: str = '', conv_id: str = '') -> str:
     """Budget a tool result — persist to disk or pass through.
 
-    For exempt tools (read_files, read_local_file): always pass through
-    unchanged.  These tools have their own internal limits and truncating
-    them is counterproductive (the model would just re-call).
+    For exempt tools (read_files): always pass through unchanged.
+    These tools have their own internal limits and truncating them is
+    counterproductive (the model would just re-call).
 
     For other tools: if the content exceeds the per-tool budget, persist
     the full content to disk and return a preview + file path.  The model
-    can later use read_local_file to access the full content.
+    can later use read_files to access the full content.
 
     Args:
         tool_name:   Name of the tool that produced the result.
@@ -1191,7 +1288,7 @@ def _extract_recently_accessed_files(messages: list,
             fn_name = fn.get('name', '')
 
             if fn_name not in ('read_files', 'read_file',
-                               'write_file', 'apply_diff'):
+                               'write_file', 'apply_diff', 'insert_content'):
                 continue
 
             try:
@@ -1209,6 +1306,14 @@ def _extract_recently_accessed_files(messages: list,
                         files_set.add(p)
             elif fn_name == 'apply_diff' and args.get('edits'):
                 # Batch apply_diff: paths are inside edits[i].path
+                for edit in args['edits']:
+                    if isinstance(edit, dict):
+                        p = edit.get('path', '')
+                        if p and p not in files_set:
+                            files_seen.append(p)
+                            files_set.add(p)
+            elif fn_name == 'insert_content' and args.get('edits'):
+                # Batch insert_content: paths are inside edits[i].path
                 for edit in args['edits']:
                     if isinstance(edit, dict):
                         p = edit.get('path', '')
@@ -1514,7 +1619,7 @@ def _head_truncate(messages: list, task: dict | None = None):
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Post-compact context re-injection
 #  Inspired by Claude Code: after compaction replaces old messages, the system
-#  context (project context, skills, swarm prompt) is re-injected to ensure
+#  context (project context, memory, swarm prompt) is re-injected to ensure
 #  the model doesn't lose critical instructions.
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -1523,7 +1628,7 @@ def _reinject_system_contexts_after_compact(messages: list, task: dict | None = 
 
     After force_compact replaces old messages, the system message may have
     been rebuilt from only the archived system messages.  This ensures
-    project context, skills, and swarm prompts are still present.
+    project context, memory, and swarm prompts are still present.
 
     Only runs if the task has the necessary config to re-inject.
     """
@@ -1533,7 +1638,7 @@ def _reinject_system_contexts_after_compact(messages: list, task: dict | None = 
     cfg = task.get('config', {})
     project_path = cfg.get('projectPath', '')
     project_enabled = bool(project_path)
-    skills_enabled = cfg.get('skillsEnabled', True)
+    memory_enabled = cfg.get('memoryEnabled', True)
     search_enabled = cfg.get('searchMode', '') in ('single', 'multi')
     swarm_enabled = cfg.get('swarmEnabled', False)
 
@@ -1554,7 +1659,7 @@ def _reinject_system_contexts_after_compact(messages: list, task: dict | None = 
             # Re-inject from scratch — the system_context module handles dedup
             _inject_system_contexts(
                 messages, project_path, project_enabled,
-                skills_enabled, search_enabled, swarm_enabled,
+                memory_enabled, search_enabled, swarm_enabled,
                 has_real_tools=True,
             )
             logger.info('[PostCompact] Re-injected system contexts after compaction')

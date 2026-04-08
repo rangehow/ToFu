@@ -183,7 +183,7 @@ class SwarmBenchmark:
             "thinkingDepth": "medium",
             "searchMode": "off",
             "fetchEnabled": False,
-            "skillsEnabled": False,
+            "memoryEnabled": False,
         }
         if self.model:
             config["model"] = self.model

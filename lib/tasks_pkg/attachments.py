@@ -3,7 +3,7 @@
 
 Inspired by Claude Code's ``attachments.ts`` (3997 lines), which computes
 per-turn injections including file attachments, delta announcements, memory
-surfacing, TODO reminders, and skill discoveries.
+surfacing, TODO reminders, and memory discoveries.
 
 ChatUI adaptation: because we inject all context into the system message (not
 via separate `user` messages like Claude Code), our attachments are appended
@@ -16,7 +16,7 @@ Why we CAN'T replicate Claude Code's full attachment system:
     which are not architecturally present in ChatUI.
   - Claude Code's per-turn relevant memory surfacing uses hierarchical
     CLAUDE.md files with @include directives.  ChatUI uses flat project
-    context and skills.
+    context and memory.
 
 What we CAN implement:
   1. Session memory injection (from session_memory.py)
@@ -88,7 +88,7 @@ def _get_modified_files_attachment(messages: list, project_path: str,
     for msg in messages[-10:]:  # last 10 messages
         for tc in msg.get('tool_calls', []):
             fn_name = tc.get('function', {}).get('name', '')
-            if fn_name in ('write_file', 'apply_diff'):
+            if fn_name in ('write_file', 'apply_diff', 'insert_content'):
                 has_write_in_recent = True
                 state['last_write_round'] = round_num
                 state['rounds_since_write'] = 0

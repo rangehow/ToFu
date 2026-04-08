@@ -15,9 +15,9 @@ Migration:
   always start fresh.
 
 Note:
-  Skills (both global and project-scoped) are now stored under
+  Memories (both global and project-scoped) are now stored under
   ``<project>/.chatui/skills/`` — no external ``~/.chatui/`` dependency.
-  This module does NOT touch skills paths.
+  This module does NOT touch memory paths.
 """
 
 import os

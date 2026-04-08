@@ -1152,13 +1152,13 @@ textarea.form-input{resize:vertical;min-height:56px}
 .sr-risk-row.risk-med{border-color:rgba(255,193,7,.12)}
 .sr-risk-row.risk-low{border-color:var(--border)}
 
-.sr-risk-dot{
+.sr-rimem-dot{
   width:8px;height:8px;border-radius:50%;flex-shrink:0;
 }
-.risk-crit .sr-risk-dot{background:var(--red);box-shadow:0 0 6px rgba(255,77,106,.5)}
-.risk-high .sr-risk-dot{background:#ff9800;box-shadow:0 0 6px rgba(255,152,0,.4)}
-.risk-med .sr-risk-dot{background:var(--yellow)}
-.risk-low .sr-risk-dot{background:var(--t3)}
+.risk-crit .sr-rimem-dot{background:var(--red);box-shadow:0 0 6px rgba(255,77,106,.5)}
+.risk-high .sr-rimem-dot{background:#ff9800;box-shadow:0 0 6px rgba(255,152,0,.4)}
+.risk-med .sr-rimem-dot{background:var(--yellow)}
+.risk-low .sr-rimem-dot{background:var(--t3)}
 
 .sr-risk-factor{flex:1;font-size:13px;font-weight:500;color:var(--t1)}
 .sr-risk-tags{display:flex;gap:6px;flex-shrink:0}

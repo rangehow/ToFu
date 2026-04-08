@@ -31,7 +31,7 @@ _BUNDLE_FILES = [
     'upload.js',
     'image-gen.js',
     'project.js',
-    'skills.js',
+    'memory.js',
     'scheduler.js',
     'timer.js',
     'myday.js',

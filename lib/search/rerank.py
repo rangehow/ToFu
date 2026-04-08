@@ -3,7 +3,7 @@
 Operates on LLM-cleaned full page content (``full_content``) when available,
 falling back to ``title — snippet`` for results that were not fetched.
 
-Uses pure-Python BM25 scoring (same algorithm as skill relevance filtering)
+Uses pure-Python BM25 scoring (same algorithm as memory relevance filtering)
 instead of calling an external embedding API, eliminating the ~11s embedding
 latency from the search pipeline.
 """
@@ -19,7 +19,7 @@ logger = get_logger(__name__)
 __all__ = ['rerank_by_bm25']
 
 # ═══════════════════════════════════════════════════════
-#  BM25 constants (same as lib/skills/relevance.py)
+#  BM25 constants (same as lib/memory/relevance.py)
 # ═══════════════════════════════════════════════════════
 
 BM25_K1 = 1.5

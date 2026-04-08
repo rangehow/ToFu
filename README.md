@@ -347,7 +347,7 @@ cp .env.example .env
 │   ├── search/                Multi-engine web search
 │   ├── browser/               Browser extension bridge
 │   ├── project_mod/           Project co-pilot (scan, edit, undo)
-│   ├── skills/                Skill accumulation system
+│   ├── skills/                Memory accumulation system
 │   ├── feishu/                Feishu bot integration
 │   └── ...
 │
@@ -516,3 +516,5 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the full guide. Quick version:
 ## License
 
 MIT
+
+---

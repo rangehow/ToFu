@@ -66,7 +66,7 @@ class TestImportValidation:
         "lib.protocols",
         "lib.rate_limiter",
         "lib.search",
-        "lib.skills",
+        "lib.memory",
     ]
 
     @pytest.mark.parametrize("module_name", _SUB_PACKAGES + _TOP_LEVEL_MODULES)

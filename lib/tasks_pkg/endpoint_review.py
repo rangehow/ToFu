@@ -98,7 +98,7 @@ def _run_planner_turn(task, messages):
     #   The planner gets the same tools as the worker so it can explore
     #   the project (list_dir, read_files, grep_search, etc.) and produce
     #   a well-informed plan grounded in actual code.  Context injection
-    #   (CLAUDE.md, file tree, skills) also applies via _inject_system_contexts.
+    #   (CLAUDE.md, file tree, memory) also applies via _inject_system_contexts.
     result = _run_single_turn(task, messages_override=planner_messages)
 
     content = result.get('content', '')

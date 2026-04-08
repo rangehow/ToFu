@@ -258,7 +258,7 @@ class TestMiscEndpoints:
     """Various other endpoints return valid responses."""
 
     def test_skills_list(self, flask_client):
-        resp = flask_client.get("/api/skills")
+        resp = flask_client.get("/api/memory")
         assert resp.status_code == 200
 
     def test_browser_commands(self, flask_client):

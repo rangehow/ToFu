@@ -256,8 +256,8 @@ def search_convs():
 
     Two-phase approach for speed:
       Phase 1: tsvector prefix match via GIN index (~0-5ms for most queries).
-      Phase 2: If <50 results, ILIKE fallback on left(search_text, 10000) to
-               catch substring matches that tsvector misses (~70-120ms).
+      Phase 2: If <50 results, ILIKE fallback on search_text (using pg_trgm
+               GIN index) to catch substring matches that tsvector misses.
 
     Snippets are extracted only for the final result set (max 50 rows).
     """
@@ -307,7 +307,7 @@ def search_convs():
                 placeholders = ','.join(['?'] * len(result_ids))
                 rows = db.execute(
                     f"""SELECT id FROM conversations
-                        WHERE user_id=? AND left(search_text, 10000) ILIKE ?
+                        WHERE user_id=? AND search_text ILIKE ?
                           AND id NOT IN ({placeholders})
                         ORDER BY updated_at DESC LIMIT ?""",
                     (DEFAULT_USER_ID, _like_pattern, *result_ids, remaining)
@@ -315,7 +315,7 @@ def search_convs():
             else:
                 rows = db.execute(
                     """SELECT id FROM conversations
-                       WHERE user_id=? AND left(search_text, 10000) ILIKE ?
+                       WHERE user_id=? AND search_text ILIKE ?
                        ORDER BY updated_at DESC LIMIT ?""",
                     (DEFAULT_USER_ID, _like_pattern, remaining)
                 ).fetchall()

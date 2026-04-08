@@ -5,7 +5,7 @@ Provides a simple async-friendly embedding client that:
   • Round-robins across API keys via dispatch slots
   • Batches texts for efficient embedding
   • Returns normalized numpy-free float vectors
-  • Can be used for semantic search on conversations, skills, etc.
+  • Can be used for semantic search on conversations, memories, etc.
 
 Usage:
     from lib.embeddings import embed_texts, cosine_similarity

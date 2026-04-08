@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import json
 from typing import Any
-from urllib.parse import urlparse
 
 import lib as _lib  # module ref for hot-reload
 from lib.fetch import extract_urls_from_text, fetch_urls
@@ -17,9 +16,9 @@ from lib.tasks_pkg.manager import append_event
 
 logger = get_logger(__name__)
 
-# Re-export lib constants that other modules import from here for convenience.
-FETCH_MAX_CHARS_DIRECT = _lib.FETCH_MAX_CHARS_DIRECT  # noqa: F841
-FETCH_MAX_CHARS_PDF = _lib.FETCH_MAX_CHARS_PDF  # noqa: F841
+# NOTE: Do NOT re-export _lib.FETCH_* as module-level copies here.
+# Module-level copies become stale after reload_config() — always read
+# from _lib.<VAR> at call time to pick up hot-reloaded values.
 
 # ══════════════════════════════════════════════════════════
 #  ToolRegistry — formal registry pattern for tool dispatch
@@ -515,10 +514,11 @@ def _prefetch_user_urls(
     else:
         logger.debug('[Prefetch] no pages to LLM-filter (%d fetched, all short/pdf/empty)',
                      len(fetched))
+    from lib.tasks_pkg.tool_display import _short_url
     for url, entry, rn in round_entries:
         content = fetched.get(url)
         is_pdf = url.lower().rstrip('/').endswith('.pdf') or (content and content.startswith('[Page '))
-        entry['results'] = [{'title': f'{"PDF" if is_pdf else "Page"}: {urlparse(url).netloc}',
+        entry['results'] = [{'title': f'{"PDF" if is_pdf else "Page"}: {_short_url(url)}',
             'snippet': f'{len(content):,} chars extracted' if content else 'Failed to fetch',
             'url': url, 'source': 'PDF' if is_pdf else 'Direct Fetch',
             'fetched': bool(content), 'fetchedChars': len(content) if content else 0}]

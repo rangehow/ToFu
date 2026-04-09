@@ -75,51 +75,94 @@ function _swapActiveConvItem(newActiveId) {
   return true;
 }
 
+/* ── Folder tab bar ── */
+let _lastFolderTabsHash = '';
+function renderFolderTabs(folders, activeFolderId) {
+  const tabsEl = document.getElementById('folderTabs');
+  if (!tabsEl) return;
+
+  // Always show tabs — even with 0 folders, show just the "+" button for discoverability
+  tabsEl.style.display = '';
+
+  // Hash to avoid unnecessary re-renders
+  const safeFolders = folders || [];
+  const hash = `${activeFolderId||''}|${safeFolders.map(f=>`${f.id}|${f.name}|${f.color||''}|${f.order||0}`).join(',')}`;
+  if (hash === _lastFolderTabsHash) return;
+  _lastFolderTabsHash = hash;
+
+  const sortedFolders = [...safeFolders].sort((a, b) => (a.order || 0) - (b.order || 0));
+
+  let html = '<div class="folder-tabs-scroll">';
+  // Only show "All" tab when there are folders (otherwise it's redundant)
+  if (sortedFolders.length > 0) {
+    html += `<button class="folder-tab${!activeFolderId ? ' active' : ''}" data-folder-id="">All</button>`;
+  }
+  // Folder tabs
+  for (const f of sortedFolders) {
+    const fcolor = f.color ? escapeHtml(f.color) : 'var(--accent)';
+    const fname = escapeHtml(f.name);
+    const isActive = activeFolderId === f.id;
+    html += `<button class="folder-tab${isActive ? ' active' : ''}" data-folder-id="${escapeHtml(f.id)}" title="${fname}">`;
+    html += `<span class="folder-tab-dot" style="background:${fcolor}"></span>`;
+    html += `<span class="folder-tab-name">${fname}</span>`;
+    html += `</button>`;
+  }
+  // "+" add tab — always visible
+  html += `<button class="folder-tab folder-tab-add" title="新建文件夹">`;
+  html += `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>`;
+  html += `</button>`;
+  html += '</div>';
+  tabsEl.innerHTML = html;
+}
+
 function renderConversationList() {
   const listEl = document.getElementById("convList"),
-    pinnedZone = document.getElementById("convPinnedZone"),
-    freezeBorder = document.getElementById("convFreezeBorder"),
     statsEl = document.getElementById("sidebarSearchStats");
   if (!sidebarSearchQuery) {
     _lastRenderedSearchQuery = "";   // reset when exiting search mode
     statsEl.classList.remove("visible");
     const all = conversations.filter((c) => c.messages.length > 0 || (c._serverMsgCount || 0) > 0 || c._needsLoad);
-    if (all.length > 50) {
-      console.log(`[renderConversationList] total=${conversations.length}, visible=${all.length}`);
-    } else {
-      console.log(`[renderConversationList] total=${conversations.length}, visible=${all.length}, ` +
-        `withMsgs=${conversations.filter(c=>c.messages?.length>0).length}, ` +
-        `withServerCount=${conversations.filter(c=>(c._serverMsgCount||0)>0).length}, ` +
-        `withNeedsLoad=${conversations.filter(c=>c._needsLoad).length}`);
-    }
-    const pinned = all.filter((c) => c.pinned);
-    const unpinned = all.filter((c) => !c.pinned);
 
-    /* ── Lightweight hash: use id+title+pinned+active+updatedAt+translating instead of full HTML ── */
+    const folders = typeof getFolders === 'function' ? getFolders() : [];
+    const _activeFolderId = typeof getActiveFolderId === 'function' ? getActiveFolderId() : null;
+
+    /* ── Lightweight hash ── */
     const _quickHash = (arr) => arr.map(c =>
-      `${c.id}|${c.title}|${c.updatedAt||""}|${c.id===activeConvId?1:0}|${activeStreams?.has(c.id)?1:0}|${c.activeTaskId||""}|${c._translating?1:0}`
+      `${c.id}|${c.title}|${c.updatedAt||""}|${c.id===activeConvId?1:0}|${activeStreams?.has(c.id)?1:0}|${c.activeTaskId||""}|${c._translating?1:0}|${c.folderId||""}`
     ).join("\n");
-    const hash = `P${pinned.length}:${_quickHash(pinned)}|||${_quickHash(unpinned)}`;
+    const folderHash = folders.map(f => `${f.id}|${f.name}|${f.order}|${f.color||''}`).join(",");
+    /* ── Render folder tabs (always, regardless of hash — tab visibility may change) ── */
+    renderFolderTabs(folders, _activeFolderId);
+
+    const hash = `AF${_activeFolderId||''}|${_quickHash(all)}|||F${folderHash}`;
     if (hash === _lastConvListHash) return;
     _lastConvListHash = hash;
 
-    let pinnedHtml = "";
-    if (pinned.length > 0) {
-      pinnedHtml +=
-        '<div class="conv-pinned-label"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"/></svg>已置顶<span class="conv-pinned-count">' +
-        pinned.length +
-        "</span></div>";
-      pinned.forEach((c) => {
-        pinnedHtml += _buildConvItemHTML(c, escapeHtml(stripNoTranslateTags(c.title)), "");
-      });
+    /* ── Filter by active folder tab ── */
+    let filtered = all;
+    if (_activeFolderId) {
+      const activeFolder = folders.find(f => f.id === _activeFolderId);
+      if (!activeFolder) { // folder was deleted while viewing it
+        if (typeof setActiveFolderId === 'function') setActiveFolderId(null);
+        return;
+      }
+      filtered = all.filter(c => c.folderId === _activeFolderId);
     }
-    const hasPinned = pinned.length > 0;
+
     let listHtml = "";
-    unpinned.forEach((c) => {
+    filtered.forEach((c) => {
       listHtml += _buildConvItemHTML(c, escapeHtml(stripNoTranslateTags(c.title)), "");
     });
-    pinnedZone.innerHTML = pinnedHtml;
-    freezeBorder.style.display = hasPinned ? "" : "none";
+
+    /* ── Empty folder state ── */
+    if (_activeFolderId && filtered.length === 0) {
+      listHtml = `<div class="folder-view-empty">` +
+        `<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.3;margin-bottom:8px"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>` +
+        `<div style="font-size:12px;color:var(--text-tertiary)">文件夹是空的</div>` +
+        `<div style="font-size:11px;color:var(--text-tertiary);opacity:0.6;margin-top:4px">点击 New Chat 创建对话，或拖拽对话到此标签</div>` +
+        `</div>`;
+    }
+
     listEl.innerHTML = listHtml;
     /* ★ Keep _lastActiveConvId in sync after a full rebuild so
      * _swapActiveConvItem can do O(1) swaps on subsequent switches. */
@@ -140,9 +183,6 @@ function renderConversationList() {
      * input handler calling renderConversationList with a new sidebarSearchQuery). */
     if (query === _lastRenderedSearchQuery) return;
     _lastRenderedSearchQuery = query;
-
-    pinnedZone.innerHTML = "";
-    freezeBorder.style.display = "none";
 
     // Phase 1: instant title matches (local, ~0 ms)
     const titleHits = searchByTitle(query);
@@ -222,10 +262,7 @@ function _buildConvItemHTML(c, titleHtml, snippetHtml) {
     }
   }
   const eid = escapeHtml(c.id);
-  const pinnedClass = c.pinned ? " pinned" : "";
   const isActive = c.id === activeConvId ? " active" : "";
-  const pinTitle = c.pinned ? "取消置顶" : "置顶对话";
-  const pinSvg = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"/></svg>`;
   const delSvg = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>`;
   const feishuBadge = c.source === 'feishu' ? '<span class="conv-feishu-badge" title="飞书对话">Feishu</span>' : '';
   const cpSvg = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>`;
@@ -245,7 +282,12 @@ function _buildConvItemHTML(c, titleHtml, snippetHtml) {
   } else if (streaming) {
     statusTag = '<span class="conv-status-tag conv-status-streaming">回答中</span>';
   }
-  return `<div class="conv-item${isActive}${pinnedClass}" data-conv-id="${eid}" title="ID: ${eid}">${dotHtml}<div class="conv-text"><div class="conv-title">${feishuBadge}${titleHtml}</div>${snippetHtml || ""}<div class="conv-date">${formatConvTime(c.updatedAt || c.createdAt)}${statusTag}</div></div><div class="conv-actions"><button class="conv-action-btn conv-copy-id" data-conv-id="${eid}" title="复制会话ID">${cpSvg}</button><button class="conv-action-btn conv-ref" data-conv-id="${eid}" data-conv-title="${escapeHtml(c.title || 'Untitled')}" title="引用此对话">@</button><button class="conv-action-btn conv-pin" data-conv-id="${eid}" title="${pinTitle}">${pinSvg}</button><button class="conv-action-btn conv-delete" data-conv-id="${eid}" title="删除对话">${delSvg}</button></div></div>`;
+  const dupSvg = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="8" width="14" height="14" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>`;
+  const folderSvg = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>`;
+  const _isDebug = typeof _featureFlags !== 'undefined' && _featureFlags.debug_mode;
+  const copyIdBtn = _isDebug ? `<button class="conv-action-btn conv-copy-id" data-conv-id="${eid}" title="复制会话ID">${cpSvg}</button>` : '';
+  const folderClass = c.folderId ? ' in-folder' : '';
+  return `<div class="conv-item${isActive}${folderClass}" data-conv-id="${eid}" draggable="true" title="ID: ${eid}">${dotHtml}<div class="conv-text"><div class="conv-title">${feishuBadge}${titleHtml}</div>${snippetHtml || ""}<div class="conv-date">${formatConvTime(c.updatedAt || c.createdAt)}${statusTag}</div></div><div class="conv-actions">${copyIdBtn}<button class="conv-action-btn conv-ref" data-conv-id="${eid}" data-conv-title="${escapeHtml(c.title || 'Untitled')}" title="引用此对话">@</button><button class="conv-action-btn conv-folder-assign" data-conv-id="${eid}" title="移入文件夹">${folderSvg}</button><button class="conv-action-btn conv-dup" data-conv-id="${eid}" title="复制为新对话">${dupSvg}</button><button class="conv-action-btn conv-delete" data-conv-id="${eid}" title="删除对话">${delSvg}</button></div></div>`;
 }
 
 function highlightMatch(text, query) {
@@ -499,6 +541,19 @@ function renderChat(conv, forceScroll) {
   /* ── Guard 1b: skip background re-renders while branch panel is open ── */
   if (forceScroll === false && _activeBranch && conv.id === activeConvId) return;
 
+  /* ── Guard 1c: protect active streaming bubble from destruction ──
+   * A full renderChat() destroys the #streaming-msg element and replaces all
+   * messages with static renderMessage() output.  The streaming assistant message
+   * (which has msg.model set from the state/preset SSE event) gets a finish-bar
+   * with only the model tag — appearing as if the message is done while the
+   * sidebar still pulses and the stop button is active.
+   * Fix: delegate to showStreamingUIForConv() which properly renders prev messages
+   * statically and creates a fresh streaming bubble for the in-progress message. */
+  if (conv.id === activeConvId && activeStreams.has(conv.id) && document.getElementById('streaming-msg')) {
+    if (typeof showStreamingUIForConv === 'function') showStreamingUIForConv(conv.id);
+    return;
+  }
+
   /* ── Guard 2: fingerprint-based skip for background syncs (forceScroll===false) ── */
   const fp = _convRenderFingerprint(conv);
   if (
@@ -538,7 +593,14 @@ function renderChat(conv, forceScroll) {
      * Each outerHTML assignment invalidates layout; batching avoids interleaving
      * layout reads (getElementById) with writes (outerHTML) — prevents forced reflows. */
     const _pendingUpdates = [];
+    /* ★ Skip the streaming message — it's rendered as #streaming-msg,
+     *   not as msg-N.  Without this skip, the else branch below would
+     *   append a static renderMessage() (with finish-bar) for the streaming
+     *   message, then step 3 would remove the live streaming bubble. */
+    const _streamingActive = activeStreams.has(conv.id) && document.getElementById('streaming-msg');
+    const _skipIdx = _streamingActive ? (total - 1) : -1;
     for (let i = startIdx; i < total; i++) {
+      if (i === _skipIdx) continue;  // streaming message — leave #streaming-msg alone
       const msg = conv.messages[i];
       const el = document.getElementById("msg-" + i);
       if (el) {
@@ -576,9 +638,11 @@ function renderChat(conv, forceScroll) {
       }
     }
 
-    /* 3) Remove any leftover streaming bubble (task finished) */
+    /* 3) Remove any leftover streaming bubble (task finished)
+     * ★ Only remove if the stream has actually finished — don't destroy a live
+     *   streaming bubble.  Guard 1c should have caught this, but belt-and-suspenders. */
     const leftoverStreaming = document.getElementById("streaming-msg");
-    if (leftoverStreaming) {
+    if (leftoverStreaming && !activeStreams.has(conv.id)) {
       leftoverStreaming.remove();
       anyChange = true;
     }
@@ -1469,7 +1533,7 @@ function renderFinishInfo(msg) {
           let rdLabel = `第${i + 1}轮`;
           if (rd.tag && rd.tag.includes("FALLBACK"))
             rdLabel += ` 回退(${rd.model || "?"})`;
-          const rdTrace = ru.trace_id ? ` ${ru.trace_id.slice(0,8)}` : '';
+          const rdTrace = (ru.trace_id && typeof _featureFlags !== 'undefined' && _featureFlags.debug_mode) ? ` ${ru.trace_id.slice(0,8)}` : '';
           tipLines.push(
             `${rdLabel}: ${fmt(ri)}→${fmt(ro)}${rt > 0 ? " ✶" + fmt(rt) : ""} = ${rdCnyStr}${rcr > 0 ? " cache:" + fmt(rcr) : ""}${rcw > 0 ? " cw:" + fmt(rcw) : ""}${rdTrace}`,
           );
@@ -1507,11 +1571,13 @@ function renderFinishInfo(msg) {
         tipLines.push(`Cache 节省: ${fCny(costInfo.cacheSavingsCny)}`);
       tipLines.push(`──────────`);
       tipLines.push(`Total: ${formatCny(costInfo.costCny)}`);
-      // ★ Show trace_id(s) for debugging — all unique trace_ids from rounds
-      const traceIds = rounds.map(rd => (rd.usage || {}).trace_id).filter(Boolean);
-      const lastTrace = traceIds.length ? traceIds[traceIds.length - 1] : (u.trace_id || '');
-      if (lastTrace) {
-        tipLines.push(`TraceId: ${lastTrace}`);
+      // ★ Show trace_id(s) for debugging — all unique trace_ids from rounds (debug mode only)
+      if (typeof _featureFlags !== 'undefined' && _featureFlags.debug_mode) {
+        const traceIds = rounds.map(rd => (rd.usage || {}).trace_id).filter(Boolean);
+        const lastTrace = traceIds.length ? traceIds[traceIds.length - 1] : (u.trace_id || '');
+        if (lastTrace) {
+          tipLines.push(`TraceId: ${lastTrace}`);
+        }
       }
       let savingsHtml = "";
       if (costInfo.cacheSavingsCny > 0)
@@ -1521,8 +1587,8 @@ function renderFinishInfo(msg) {
       );
     }
   }
-  // ★ Clickable trace tag — click to copy full trace_id
-  {
+  // ★ Clickable trace tag — click to copy full trace_id (debug mode only)
+  if (typeof _featureFlags !== 'undefined' && _featureFlags.debug_mode) {
     const _allTraces = (msg.apiRounds || []).map(rd => (rd.usage || {}).trace_id).filter(Boolean);
     const _lastTrace = _allTraces.length ? _allTraces[_allTraces.length - 1] : ((msg.usage || {}).trace_id || '');
     if (_lastTrace) {
@@ -2181,11 +2247,18 @@ function _renderUnifiedToolLine(round, isSearching) {
     return _renderTimerWatcherBlock(round, svg);
   }
   // Timer tool with "searching" status but no polls yet — show initial waiting
+  // After reconnection, backend now includes _timerPolls in state snapshots,
+  // so this state should be brief (only before the first poll fires).
   if (round.toolName === "timer_create" && round.status === "searching" && !round._timerPolls) {
+    // ★ Try to recover timer polls from the API if timerId is known
+    if (round._timerTimerId && !round._timerPollsRecoveryAttempted) {
+      round._timerPollsRecoveryAttempted = true;
+      _recoverTimerPolls(round);
+    }
     return `<div class="ptool-line ptool-active">
          <span class="ptool-icon">⏱️</span>
          <span class="ptool-text">${q || "Timer Watcher"}</span>
-         <span class="ptool-badge ptool-badge-warn">initializing…</span>
+         <span class="ptool-badge ptool-badge-warn">waiting for first poll…</span>
          <span class="ptool-spinner"></span>
        </div>`;
   }
@@ -2460,6 +2533,57 @@ function _renderUnifiedToolLine(round, isSearching) {
 // ★ Backwards compat alias
 const _renderProjectToolLine = _renderUnifiedToolLine;
 
+/* ── Timer poll recovery: fetch poll log from API when _timerPolls is missing ──
+   This handles edge cases where the state snapshot doesn't include polls
+   (e.g. old server version, or server restarted and lost in-memory state). */
+async function _recoverTimerPolls(round) {
+  const timerId = round._timerTimerId;
+  if (!timerId) return;
+  try {
+    const resp = await fetch(apiUrl(`/api/timer/${timerId}/status?limit=50`),
+                             { signal: AbortSignal.timeout(5000) });
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const polls = data.poll_log || [];
+    if (polls.length > 0) {
+      // poll_log is newest-first from the API, reverse for chronological order
+      const chronological = [...polls].reverse();
+      const recoveredPolls = chronological.map((p, idx) => ({
+        pollNum: p.poll_num || p.pollNum || (idx + 1),
+        decision: p.decision || 'wait',
+        reason: (p.reason || '').slice(0, 200),
+        tokensUsed: p.tokens_used || 0,
+        timerId: timerId,
+        ts: p.poll_time ? new Date(p.poll_time).getTime() : Date.now(),
+      }));
+      const triggered = chronological.some(p => p.decision === 'ready');
+
+      // Apply to the round object — but also search the active conv's
+      // searchRounds in case the round reference was replaced by a state event
+      round._timerPolls = recoveredPolls;
+      if (triggered) { round._timerTriggered = true; round.status = 'done'; }
+
+      if (activeConvId) {
+        const conv = conversations.find(c => c.id === activeConvId);
+        const lastMsg = conv?.messages?.[conv.messages.length - 1];
+        if (lastMsg?.searchRounds) {
+          const liveRound = lastMsg.searchRounds.find(r =>
+            r.toolName === 'timer_create' && r._timerTimerId === timerId && !r._timerPolls
+          );
+          if (liveRound && liveRound !== round) {
+            liveRound._timerPolls = recoveredPolls;
+            if (triggered) { liveRound._timerTriggered = true; liveRound.status = 'done'; }
+          }
+        }
+        twUpdate(activeConvId);
+      }
+      console.info(`[Timer] Recovered ${recoveredPolls.length} polls for timer ${timerId.slice(0,12)}`);
+    }
+  } catch (e) {
+    console.debug('[Timer] Poll recovery failed:', e.message);
+  }
+}
+
 /* ── Timer Watcher Block ──
    Renders the timer_create tool call as a collapsible panel showing
    each poll check (wait/ready/error) with timestamps and reasons.
@@ -2477,6 +2601,9 @@ function _renderTimerWatcherBlock(round, svg) {
   if (triggered) {
     headerLabel = `⏱️ Timer ${timerIdShort} — ✅ triggered after ${totalPolls} poll${totalPolls !== 1 ? "s" : ""}`;
     headerCls = "timer-watcher-triggered";
+  } else if (round._timerOrphaned) {
+    headerLabel = `⏱️ Timer ${timerIdShort} — ⚠️ task interrupted (${totalPolls} poll${totalPolls !== 1 ? "s" : ""}, timer still active in background)`;
+    headerCls = "timer-watcher-orphaned";
   } else if (isActive) {
     headerLabel = `⏱️ Timer ${timerIdShort} — watching… (${totalPolls} poll${totalPolls !== 1 ? "s" : ""})`;
     headerCls = "timer-watcher-active";
@@ -2703,7 +2830,18 @@ async function translateMessage(idx) {
     }
     saveConversations(conv.id);
     syncConversationToServerDebounced(conv);  // persist toggle state to server
-    renderChat(conv);
+    /* ★ FIX: Use surgical single-element replacement instead of full renderChat()
+     *   to avoid destroying the #streaming-msg when a stream is active.
+     *   renderChat(conv) without forceScroll=false does a full innerHTML wipe. */
+    const el = document.getElementById(`msg-${idx}`);
+    if (el) {
+      const _ct = document.getElementById('chatContainer');
+      const _sv = _ct ? _ct.scrollTop : -1;
+      el.outerHTML = renderMessage(msg, idx);
+      if (_sv >= 0 && _ct) _ct.scrollTop = _sv;
+    } else {
+      renderChat(conv);
+    }
     return;
   }
   // First time: call translate API via async task (survives page reload)
@@ -2759,7 +2897,18 @@ async function translateMessage(idx) {
         delete msg._translateTaskId;
         saveConversations(conv.id);
         syncConversationToServerDebounced(conv);
-        if (activeConvId === conv.id) renderChat(conv);
+        /* ★ FIX: surgical render to avoid destroying #streaming-msg */
+        if (activeConvId === conv.id) {
+          const _te = document.getElementById(`msg-${idx}`);
+          if (_te) {
+            const _ct = document.getElementById('chatContainer');
+            const _sv = _ct ? _ct.scrollTop : -1;
+            _te.outerHTML = renderMessage(msg, idx);
+            if (_sv >= 0 && _ct) _ct.scrollTop = _sv;
+          } else {
+            renderChat(conv);
+          }
+        }
         return;
       }
       if (result.status === 'error' || result.status === 'not_found') {
@@ -2776,7 +2925,18 @@ async function translateMessage(idx) {
               msg._translateDone = true;
               delete msg._translateTaskId;
               saveConversations(conv.id);
-              if (activeConvId === conv.id) renderChat(conv);
+              /* ★ FIX: surgical render to avoid destroying #streaming-msg */
+              if (activeConvId === conv.id) {
+                const _te2 = document.getElementById(`msg-${idx}`);
+                if (_te2) {
+                  const _ct = document.getElementById('chatContainer');
+                  const _sv = _ct ? _ct.scrollTop : -1;
+                  _te2.outerHTML = renderMessage(msg, idx);
+                  if (_sv >= 0 && _ct) _ct.scrollTop = _sv;
+                } else {
+                  renderChat(conv);
+                }
+              }
               return;
             }
           }
@@ -3669,8 +3829,10 @@ function _syncSearchRoundsDOM(container, rounds) {
           if (round.status !== "submitted") {
             slot.innerHTML = _renderUnifiedToolLine(round, false);
           }
-        } else if (round._timerPolls && slot.querySelector('.timer-watcher-block')) {
-          // ★ Timer watcher: always re-render to show latest poll results
+        } else if (round._timerPolls && round._timerPolls.length > 0) {
+          // ★ Timer watcher: always re-render to show latest poll results.
+          // This covers both the initial ptool-line → timer-watcher-block transition
+          // AND subsequent poll additions to an existing timer-watcher-block.
           slot.innerHTML = _renderUnifiedToolLine(round, isActive);
         } else if (round.toolContent && !slot.querySelector('[data-tc-preview]')) {
           const ptLine = slot.querySelector('.ptool-line');
@@ -4090,7 +4252,22 @@ function finishStream(convId) {
         if (msg) {
           try {
             const html = renderMessage(msg, idx);
-            if (html) sm.outerHTML = html;
+            if (html) {
+              /* ★ FIX: Save/restore scrollTop around outerHTML replacement to prevent
+               *   "jump upward" when the streaming-msg is replaced by the final message.
+               *   Root cause: during streaming, the thinking-block is .expanded (max-height:none,
+               *   showing full thinking text).  The final renderMessage renders it collapsed
+               *   (max-height:0).  This height drop (potentially thousands of px) combined
+               *   with _forceScrollToBottom scrolling to the new (smaller) scrollHeight
+               *   causes a jarring visual jump.  Fix: preserve scroll position instead of
+               *   forcing to bottom — the user is already looking at the content. */
+              const _ct = document.getElementById('chatContainer');
+              const _savedScroll = _ct ? _ct.scrollTop : -1;
+              sm.outerHTML = html;
+              if (_savedScroll >= 0 && _ct) {
+                _ct.scrollTop = _savedScroll;
+              }
+            }
           } catch (e) {
             console.error('[finishStream] renderMessage/outerHTML failed:', e.message);
           }
@@ -4102,7 +4279,12 @@ function finishStream(convId) {
           `conv=${convId.slice(0,8)} msgs=${conv.messages.length}`);
         renderChat(conv);
       }
-      _forceScrollToBottom();
+      /* ★ FIX: Don't force-scroll-to-bottom after stream finishes.
+       *   The user is already reading the content at their current scroll position.
+       *   Forcing to bottom after the streaming→final DOM swap causes a visible jump
+       *   because the final message may be shorter (collapsed thinking, no phase indicator).
+       *   Only scroll if the user was already near the bottom (within 80px). */
+      if (isNearBottom(80)) scrollToBottom();
       if (conv) {
         buildTurnNav(conv);
         _lastRenderedFingerprint = _convRenderFingerprint(conv);
@@ -5013,14 +5195,18 @@ async function _trySSE(convId, taskId, stream, assistantMsg) {
         const r = assistantMsg.searchRounds.find(r => r.roundNum === ev.roundNum);
         if (r) {
           if (!r._timerPolls) r._timerPolls = [];
-          r._timerPolls.push({
-            pollNum: ev.pollNum,
-            decision: ev.decision,
-            reason: ev.reason || "",
-            tokensUsed: ev.tokensUsed || 0,
-            timerId: ev.timerId || "",
-            ts: Date.now(),
-          });
+          // ★ Dedup: skip if this pollNum already exists (from state snapshot)
+          const _alreadyHas = r._timerPolls.some(p => p.pollNum === ev.pollNum && p.decision === ev.decision);
+          if (!_alreadyHas) {
+            r._timerPolls.push({
+              pollNum: ev.pollNum,
+              decision: ev.decision,
+              reason: ev.reason || "",
+              tokensUsed: ev.tokensUsed || 0,
+              timerId: ev.timerId || "",
+              ts: Date.now(),
+            });
+          }
           // Keep the round in "searching" state while timer is polling
           if (ev.decision === "ready") {
             r.status = "done";

@@ -26,6 +26,8 @@ const _BRAND_ICONS = {
   tsinghua: '<svg viewBox="0 0 24 24"><path fill-rule="evenodd" d="M0 12a12 12 0 1024 0 12 12 0 10-24 0zm1 0a11 11 0 1122 0 11 11 0 11-22 0zm1.8 0a9.2 9.2 0 1018.4 0 9.2 9.2 0 10-18.4 0zm.7 0a8.5 8.5 0 1117 0 8.5 8.5 0 11-17 0zm1.5 0a7 7 0 1014 0 7 7 0 10-14 0zm.7 0a6.3 6.3 0 1112.6 0 6.3 6.3 0 11-12.6 0z"/><polygon points="12,8.8 12.8,11 15,11 13.2,12.4 13.9,14.6 12,13.3 10.1,14.6 10.8,12.4 9,11 11.2,11"/></svg>',
   openrouter: '<svg viewBox="0 0 24 24"><path d="M16.804 1.957l7.22 4.105v.087L16.73 10.21l.017-2.117-.821-.03c-1.059-.028-1.611.002-2.268.11-1.064.175-2.038.577-3.147 1.352L8.345 11.03c-.284.195-.495.336-.68.455l-.515.322-.397.234.385.23.53.338c.476.314 1.17.796 2.701 1.866 1.11.775 2.083 1.177 3.147 1.352l.3.045c.694.091 1.375.094 2.825.033l.022-2.159 7.22 4.105v.087L16.589 22l.014-1.862-.635.022c-1.386.042-2.137.002-3.138-.162-1.694-.28-3.26-.926-4.881-2.059l-2.158-1.5a21.997 21.997 0 00-.755-.498l-.467-.28a55.927 55.927 0 00-.76-.43C2.908 14.73.563 14.116 0 14.116V9.888l.14.004c.564-.007 2.91-.622 3.809-1.124l1.016-.58.438-.274c.428-.28 1.072-.726 2.686-1.853 1.621-1.133 3.186-1.78 4.881-2.059 1.152-.19 1.974-.213 3.814-.138l.02-1.907z"/></svg>',
   mimo: '<svg viewBox="0 0 24 24"><path d="M.958 15.936a.459.459 0 01.459.44v2.729a.46.46 0 01-.918 0v-2.729a.459.459 0 01.459-.44zm4.814-2.035a.46.46 0 01.553.45v4.754a.458.458 0 11-.918 0V15.48L3.74 17.202a.462.462 0 01-.655.016.462.462 0 01-.065-.082L.628 14.67a.459.459 0 01.658-.637l2.124 2.187 2.127-2.188a.46.46 0 01.235-.13zm2.068.004a.46.46 0 01.458.445v4.755a.46.46 0 01-.458.458.459.459 0 01-.458-.458V14.35a.459.459 0 01.458-.445zm1.973 2.014a.46.46 0 01.46.457v2.729a.46.46 0 01-.784.324.46.46 0 01-.134-.324v-2.729a.46.46 0 01.458-.458zm.002-2.045a.458.458 0 01.328.157l2.127 2.19 2.125-2.19a.459.459 0 01.784.318v4.756a.46.46 0 01-.455.458.46.46 0 01-.458-.458V15.48l-1.667 1.723a.46.46 0 01-.65.008l-.005-.005c0-.002-.002-.002-.004-.003l-2.455-2.534a.46.46 0 01-.008-.667.461.461 0 01.338-.128zm6.797 1.206a.46.46 0 01.53.651A1.966 1.966 0 0019.81 18.4a.462.462 0 01.623.18.46.46 0 01-.181.624 2.863 2.863 0 01-1.38.353l-.142-.004a2.88 2.88 0 01-2.393-4.263.461.461 0 01.274-.21zm.864-.931a2.884 2.884 0 013.915 3.914.46.46 0 01-.402.24l-.057-.004a.458.458 0 01-.164-.055.46.46 0 01-.182-.622 1.967 1.967 0 00-2.669-2.67.459.459 0 11-.441-.803zM9.59 6.368c1.481 0 1.696 1.202 1.696 1.654v2.648h-.917v-.432c-.26.346-.792.535-1.36.535-.133 0-1.289-.03-1.384-1.136-.082-.932.675-1.61 2.053-1.61h.691c0-.563-.367-.886-.983-.886-.44.013-.864.174-1.2.458l-.36-.664c.484-.379 1.012-.567 1.764-.567zm4.427.1c1.263 0 2.082.97 2.083 2.15 0 1.181-.824 2.154-2.083 2.154-1.26 0-2.084-.972-2.084-2.152 0-1.18.82-2.153 2.084-2.153zm6.801.015c.68 0 1.202.465 1.197 1.548v2.642H21.1V8.29c0-.312-.002-.98-.63-.98s-.628.667-.628.838v2.524h-.89V8.148c0-.17-.001-.838-.63-.838-.628 0-.628.668-.628.98v2.383h-.917v-4.03h.917V7a1.22 1.22 0 01.947-.516c.398 0 .76.193.982.686a1.321 1.321 0 011.195-.686zm-18.093.872l1.457-1.772H5.32L3.311 8.07l2.14 2.602H4.24L2.725 8.796 1.21 10.672H0L2.138 8.07.13 5.583h1.138l1.458 1.772zm4.149 3.317h-.916V6.644h.916v4.028zm16.99 0h-.916V6.644h.916v4.028zM9.925 8.71c-1.055 0-1.359.412-1.326.742.032.329.324.537.757.537a1.013 1.013 0 001.014-.968l.002-.31h-.447zM14.018 7.3c-.663 0-1.184.487-1.184 1.32 0 .832.52 1.32 1.184 1.32.662 0 1.182-.49 1.182-1.32 0-.832-.52-1.32-1.182-1.32zM6.417 5.001a.568.568 0 01.587.582.588.588 0 01-1.175 0A.57.57 0 016.417 5zm16.991 0a.57.57 0 01.592.582.588.588 0 01-1.174 0 .57.57 0 01.357-.542.572.572 0 01.225-.04z"/></svg>',
+  kimi: '<svg viewBox="0 0 24 24"><path d="M21.846 0a1.923 1.923 0 110 3.846H20.15a.226.226 0 01-.227-.226V1.923C19.923.861 20.784 0 21.846 0z"/><path d="M11.065 11.199l7.257-7.2c.137-.136.06-.41-.116-.41H14.3a.164.164 0 00-.117.051l-7.82 7.756c-.122.12-.302.013-.302-.179V3.82c0-.127-.083-.23-.185-.23H3.186c-.103 0-.186.103-.186.23V19.77c0 .128.083.23.186.23h2.69c.103 0 .186-.102.186-.23v-3.25c0-.069.025-.135.069-.178l2.424-2.406a.158.158 0 01.205-.023l6.484 4.772a7.677 7.677 0 003.453 1.283c.108.012.2-.095.2-.23v-3.06c0-.117-.07-.212-.164-.227a5.028 5.028 0 01-2.027-.807l-5.613-4.064c-.117-.078-.132-.279-.028-.381z"/></svg>',
+  shubiaobiao: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="11" fill="currentColor" opacity=".15"/><circle cx="12" cy="12" r="11" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 5a7 7 0 100 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M12 9a3 3 0 110 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="1" fill="currentColor"/></svg>',
   baiducloud: '<svg viewBox="0 0 24 24"><path d="M21.715 5.61l-3.983 2.31a.903.903 0 01-.896 0L12.44 5.384a.903.903 0 00-.897 0L7.156 7.92a.903.903 0 01-.896 0L2.276 5.617 12.002 0l9.713 5.61z"/><path d="M18.641 9.467a.89.89 0 00-.438.77v5.072a.896.896 0 01-.445.77l-4.428 2.51a.884.884 0 00-.445.777v4.607l4.429-2.536 5.31-3.047V7.157l-3.983 2.31z"/><path d="M10.98 18.941a.936.936 0 00-.305-.352l-4.429-2.516a.903.903 0 01-.431-.764v-5.078a.89.89 0 00-.452-.757l-.451-.26L1.38 7.158V18.39l5.311 3.047L11.126 24v-4.608a.881.881 0 00-.146-.45z"/></svg>',
   generic: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="4"/><circle cx="9" cy="10" r="1.5" fill="currentColor" stroke="none"/><circle cx="15" cy="10" r="1.5" fill="currentColor" stroke="none"/><path d="M8.5 15.5c1 1.5 6 1.5 7 0" stroke-linecap="round"/></svg>',
 };
@@ -35,7 +37,8 @@ const _BRAND_COLORS = {
   claude: '#D97706', openai: '#10a37f', gemini: '#4285F4', qwen: '#6F42C1',
   doubao: '#3B82F6', minimax: '#ef4444', deepseek: '#4D6BFE', grok: '#aaa',
   mistral: '#F7D046', glm: '#3859FF', meituan: '#FFC300', tsinghua: '#82318E',
-  openrouter: '#6566F1', mimo: '#FF6A00', baiducloud: '#2932E1', generic: '#888',
+  kimi: '#ccc', openrouter: '#6566F1', mimo: '#FF6A00', baiducloud: '#2932E1',
+  shubiaobiao: '#E87A7A', generic: '#888',
 };
 
 const _BRAND_PATTERNS = [
@@ -45,6 +48,7 @@ const _BRAND_PATTERNS = [
   // [/your-org-pattern/i, 'your-org'],  // Add org detection pattern
   [/openrouter/i,                          'openrouter'],
   [/mimo|xiaomi/i,                         'mimo'],
+  [/shubiaobiao|数标标/i,                      'shubiaobiao'],
   [/qianfan|ernie|baidu|wenxin|文心/i,       'baiducloud'],
   [/claude|anthropic|opus|sonnet|haiku/i, 'claude'],
   [/gpt|openai|o[134]-|chatgpt|dall/i,   'openai'],
@@ -52,6 +56,7 @@ const _BRAND_PATTERNS = [
   [/qwen|tongyi|qwq/i,                    'qwen'],
   [/doubao|seed.*pro|byte/i,              'doubao'],
   [/minimax|abab|m2-her/i,                  'minimax'],
+  [/kimi|moonshot|月之暗面/i,                'kimi'],
   [/deepseek/i,                            'deepseek'],
   [/grok|xai/i,                            'grok'],
   [/mistral|mixtral|pixtral/i,             'mistral'],
@@ -97,7 +102,7 @@ function _brandSvg(brand, size) {
 // Generate new icons: python3 scripts/gen_tofu_icons.py
 // Convert PNG→SVG:    python3 scripts/png_to_svg.py
 
-const _ICON_V = '0.7.2';  // cache-bust version — bump when icons change
+const _ICON_V = '0.7.3';  // cache-bust version — bump when icons change
 const _ICON_BASE = (typeof BASE_PATH!=='undefined'?BASE_PATH:'') + '/static/icons';
 
 const _TOFU_PLANNER_SVG = `<img src="${_ICON_BASE}/tofu-planner.svg?v=${_ICON_V}" alt="Planner" style="width:100%;height:100%;display:block">`;
@@ -111,7 +116,7 @@ const _USER_AVATAR_SVG  = `<img src="${_ICON_BASE}/onigiri.svg?v=${_ICON_V}" alt
 
 const _PROVIDER_TEMPLATES = [
   {
-    key: 'minimax', brand: 'minimax',
+    key: 'minimax', brand: 'minimax', category: 'official',
     name: 'MiniMax',
     base_url: 'https://api.minimax.chat/v1',
     balance_url: '',
@@ -127,7 +132,7 @@ const _PROVIDER_TEMPLATES = [
     ],
   },
   {
-    key: 'glm', brand: 'glm',
+    key: 'glm', brand: 'glm', category: 'official',
     name: 'GLM (Zhipu AI)',
     base_url: 'https://open.bigmodel.cn/api/paas/v4',
     balance_url: 'https://open.bigmodel.cn/api/paas/v4/dashboard/billing/subscription',
@@ -140,7 +145,21 @@ const _PROVIDER_TEMPLATES = [
     ],
   },
   {
-    key: 'deepseek', brand: 'deepseek',
+    key: 'kimi', brand: 'kimi', category: 'official',
+    name: 'Moonshot (Kimi)',
+    base_url: 'https://api.moonshot.ai/v1',
+    balance_url: '',
+    models: [
+      { model_id: 'kimi-k2.5',                capabilities: ['text', 'vision', 'thinking'],  rpm: 60,  cost: 0.003 },
+      { model_id: 'kimi-k2-0905-preview',     capabilities: ['text', 'thinking'],            rpm: 60,  cost: 0.003 },
+      { model_id: 'kimi-k2-thinking',         capabilities: ['text', 'thinking'],            rpm: 60,  cost: 0.003 },
+      { model_id: 'kimi-k2-turbo-preview',    capabilities: ['text'],                        rpm: 60,  cost: 0.008 },
+      { model_id: 'kimi-k2-thinking-turbo',   capabilities: ['text', 'thinking'],            rpm: 60,  cost: 0.008 },
+      { model_id: 'kimi-k2-0711-preview',     capabilities: ['text'],                        rpm: 60,  cost: 0.003 },
+    ],
+  },
+  {
+    key: 'deepseek', brand: 'deepseek', category: 'official',
     name: 'DeepSeek',
     base_url: 'https://api.deepseek.com',
     balance_url: 'https://api.deepseek.com/user/balance',
@@ -150,7 +169,7 @@ const _PROVIDER_TEMPLATES = [
     ],
   },
   {
-    key: 'openai', brand: 'openai',
+    key: 'openai', brand: 'openai', category: 'official',
     name: 'OpenAI',
     base_url: 'https://api.openai.com/v1',
     balance_url: 'https://api.openai.com/v1/dashboard/billing/subscription',
@@ -165,30 +184,35 @@ const _PROVIDER_TEMPLATES = [
     ],
   },
   {
-    key: 'anthropic', brand: 'claude',
+    key: 'anthropic', brand: 'claude', category: 'official',
     name: 'Anthropic',
     base_url: 'https://api.anthropic.com/v1',
     balance_url: 'https://api.anthropic.com/v1/dashboard/billing/subscription',
     models: [
       { model_id: 'claude-opus-4-6',            capabilities: ['text', 'vision', 'thinking'], rpm: 30,  cost: 0.025 },
       { model_id: 'claude-sonnet-4-6',           capabilities: ['text', 'vision', 'thinking'], rpm: 50,  cost: 0.015 },
+      { model_id: 'claude-sonnet-4-5',           capabilities: ['text', 'vision', 'thinking'], rpm: 50,  cost: 0.009 },
+      { model_id: 'claude-opus-4-5',             capabilities: ['text', 'vision', 'thinking'], rpm: 30,  cost: 0.025 },
       { model_id: 'claude-haiku-4-5',            capabilities: ['text', 'vision', 'cheap'],    rpm: 100, cost: 0.005 },
       { model_id: 'claude-sonnet-4-20250514',    capabilities: ['text', 'vision', 'thinking'], rpm: 50,  cost: 0.009 },
     ],
   },
   {
-    key: 'doubao', brand: 'doubao',
+    key: 'doubao', brand: 'doubao', category: 'official',
     name: 'Doubao (Volcengine)',
     base_url: 'https://ark.cn-beijing.volces.com/api/v3',
     balance_url: 'https://ark.cn-beijing.volces.com/api/v3/dashboard/billing/subscription',
     models: [
-      { model_id: 'Doubao-Seed-2.0-pro',    capabilities: ['text', 'vision', 'thinking'], rpm: 60,  cost: 0.002 },
-      { model_id: 'Doubao-Seed-2.0-lite',   capabilities: ['text', 'cheap'],              rpm: 120, cost: 0.001 },
-      { model_id: 'Doubao-Seed-2.0-mini',   capabilities: ['text', 'cheap'],              rpm: 200, cost: 0.001 },
+      { model_id: 'doubao-seed-2-0-pro-260215',           capabilities: ['text', 'vision', 'thinking'], rpm: 60,  cost: 0.002 },
+      { model_id: 'doubao-seed-2-0-lite-260215',          capabilities: ['text', 'cheap'],              rpm: 120, cost: 0.001 },
+      { model_id: 'doubao-seed-2-0-code-preview-260215',  capabilities: ['text', 'thinking'],           rpm: 60,  cost: 0.002 },
+      { model_id: 'doubao-seed-1.8-thinking',              capabilities: ['text', 'thinking'],           rpm: 60,  cost: 0.002 },
+      { model_id: 'doubao-seed-1.6-thinking',              capabilities: ['text', 'thinking'],           rpm: 60,  cost: 0.001 },
+      { model_id: 'doubao-seed-1.6',                       capabilities: ['text'],                       rpm: 120, cost: 0.001 },
     ],
   },
   {
-    key: 'mistral', brand: 'mistral',
+    key: 'mistral', brand: 'mistral', category: 'official',
     name: 'Mistral AI',
     base_url: 'https://api.mistral.ai/v1',
     balance_url: 'https://api.mistral.ai/v1/dashboard/billing/subscription',
@@ -199,17 +223,21 @@ const _PROVIDER_TEMPLATES = [
     ],
   },
   {
-    key: 'xai', brand: 'grok',
+    key: 'xai', brand: 'grok', category: 'official',
     name: 'xAI (Grok)',
     base_url: 'https://api.x.ai/v1',
     balance_url: 'https://api.x.ai/v1/dashboard/billing/subscription',
     models: [
-      { model_id: 'grok-3',       capabilities: ['text', 'thinking'],          rpm: 30,  cost: 0.010 },
-      { model_id: 'grok-3-mini',  capabilities: ['text', 'thinking', 'cheap'], rpm: 60,  cost: 0.003 },
+      { model_id: 'grok-4.20',      capabilities: ['text', 'vision', 'thinking'], rpm: 30,  cost: 0.006 },
+      { model_id: 'grok-4',         capabilities: ['text', 'vision', 'thinking'], rpm: 30,  cost: 0.006 },
+      { model_id: 'grok-4.1',       capabilities: ['text', 'vision', 'thinking'], rpm: 30,  cost: 0.005 },
+      { model_id: 'grok-4.1-mini',  capabilities: ['text', 'vision', 'cheap'],    rpm: 60,  cost: 0.001 },
+      { model_id: 'grok-3',         capabilities: ['text', 'thinking'],           rpm: 30,  cost: 0.010 },
+      { model_id: 'grok-3-mini',    capabilities: ['text', 'thinking', 'cheap'],  rpm: 60,  cost: 0.003 },
     ],
   },
   {
-    key: 'qwen', brand: 'qwen',
+    key: 'qwen', brand: 'qwen', category: 'official',
     name: 'Qwen (DashScope)',
     base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
     balance_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1/dashboard/billing/subscription',
@@ -431,18 +459,21 @@ const _PROVIDER_TEMPLATES = [
     ],
   },
   {
-    key: 'gemini', brand: 'gemini',
+    key: 'gemini', brand: 'gemini', category: 'official',
     name: 'Google Gemini',
     base_url: 'https://generativelanguage.googleapis.com/v1beta/openai',
     balance_url: '',
     models: [
-      { model_id: 'gemini-2.5-pro',        capabilities: ['text', 'vision', 'thinking'], rpm: 30,  cost: 0.005 },
-      { model_id: 'gemini-2.5-flash',      capabilities: ['text', 'vision', 'cheap'],    rpm: 100, cost: 0.001 },
-      { model_id: 'gemini-2.0-flash-lite', capabilities: ['text', 'cheap'],              rpm: 200, cost: 0.001 },
+      { model_id: 'gemini-3.1-pro-preview',       capabilities: ['text', 'vision', 'thinking'], rpm: 15,  cost: 0.005 },
+      { model_id: 'gemini-3-flash-preview',        capabilities: ['text', 'vision', 'thinking'], rpm: 30,  cost: 0.002 },
+      { model_id: 'gemini-3.1-flash-lite-preview', capabilities: ['text', 'cheap'],              rpm: 200, cost: 0.001 },
+      { model_id: 'gemini-2.5-pro',                capabilities: ['text', 'vision', 'thinking'], rpm: 30,  cost: 0.005 },
+      { model_id: 'gemini-2.5-flash',              capabilities: ['text', 'vision', 'cheap'],    rpm: 100, cost: 0.001 },
+      { model_id: 'gemini-2.5-flash-lite',         capabilities: ['text', 'cheap'],              rpm: 200, cost: 0.001 },
     ],
   },
   {
-    key: 'openrouter', brand: 'openrouter',
+    key: 'openrouter', brand: 'openrouter', category: 'relay',
     name: 'OpenRouter',
     base_url: 'https://openrouter.ai/api/v1',
     balance_url: 'https://openrouter.ai/api/v1/credits',
@@ -450,17 +481,18 @@ const _PROVIDER_TEMPLATES = [
       { model_id: 'anthropic/claude-opus-4.6',       capabilities: ['text', 'vision', 'thinking'], rpm: 30,  cost: 0.025 },
       { model_id: 'anthropic/claude-sonnet-4.6',      capabilities: ['text', 'vision', 'thinking'], rpm: 50,  cost: 0.015 },
       { model_id: 'openai/gpt-5.4',                   capabilities: ['text', 'vision', 'thinking'], rpm: 30,  cost: 0.015 },
-      { model_id: 'google/gemini-2.5-pro',            capabilities: ['text', 'vision', 'thinking'], rpm: 30,  cost: 0.005 },
+      { model_id: 'google/gemini-3.1-pro-preview',    capabilities: ['text', 'vision', 'thinking'], rpm: 15,  cost: 0.005 },
       { model_id: 'google/gemini-2.5-flash',          capabilities: ['text', 'vision', 'cheap'],    rpm: 100, cost: 0.001 },
+      { model_id: 'x-ai/grok-4.20',                   capabilities: ['text', 'vision', 'thinking'], rpm: 30,  cost: 0.006 },
+      { model_id: 'x-ai/grok-4',                      capabilities: ['text', 'vision', 'thinking'], rpm: 30,  cost: 0.006 },
       { model_id: 'deepseek/deepseek-chat',           capabilities: ['text'],                        rpm: 60,  cost: 0.001 },
       { model_id: 'deepseek/deepseek-r1',             capabilities: ['text', 'thinking'],            rpm: 30,  cost: 0.002 },
-      { model_id: 'x-ai/grok-3',                      capabilities: ['text', 'thinking'],            rpm: 30,  cost: 0.010 },
       { model_id: 'openai/o3',                         capabilities: ['text', 'vision', 'thinking'], rpm: 30,  cost: 0.010 },
       { model_id: 'openai/gpt-5.4-mini',               capabilities: ['text', 'vision', 'cheap'],    rpm: 60,  cost: 0.005 },
     ],
   },
   {
-    key: 'mimo', brand: 'mimo',
+    key: 'mimo', brand: 'mimo', category: 'official',
     name: 'Xiaomi MiMo',
     base_url: 'https://api.xiaomimimo.com/v1',
     balance_url: 'https://api.xiaomimimo.com/v1/dashboard/billing/subscription',
@@ -471,7 +503,7 @@ const _PROVIDER_TEMPLATES = [
     ],
   },
   {
-    key: 'qianfan', brand: 'baiducloud',
+    key: 'qianfan', brand: 'baiducloud', category: 'official',
     name: 'Baidu Qianfan (百度千帆)',
     base_url: 'https://qianfan.baidubce.com/v2',
     balance_url: '',
@@ -504,9 +536,41 @@ const _PROVIDER_TEMPLATES = [
       { model_id: 'bge-large-zh',                     capabilities: ['embedding'],                   rpm: 60,   cost: 0.001 },
     ],
   },
+  {
+    key: 'shubiaobiao', brand: 'shubiaobiao', category: 'relay',
+    name: 'ShuBiaoBiao (数标标)',
+    base_url: 'https://api.shubiaobiao.com/v1',
+    balance_url: '',
+    models: [
+      // ── DeepSeek ──
+      { model_id: 'deepseek-r1',                     capabilities: ['text', 'thinking'],             rpm: 60,  cost: 0.002 },
+      { model_id: 'deepseek-v3',                     capabilities: ['text'],                         rpm: 60,  cost: 0.001 },
+      { model_id: 'deepseek-chat',                   capabilities: ['text'],                         rpm: 60,  cost: 0.001 },
+      // ── GPT ──
+      { model_id: 'gpt-4o',                          capabilities: ['text', 'vision'],               rpm: 60,  cost: 0.005 },
+      { model_id: 'gpt-4o-mini',                     capabilities: ['text', 'vision', 'cheap'],      rpm: 120, cost: 0.001 },
+      { model_id: 'gpt-4.5-preview',                 capabilities: ['text', 'vision'],               rpm: 30,  cost: 0.010 },
+      { model_id: 'gpt-4-turbo',                     capabilities: ['text', 'vision'],               rpm: 30,  cost: 0.010 },
+      { model_id: 'o1',                              capabilities: ['text', 'thinking'],             rpm: 30,  cost: 0.010 },
+      { model_id: 'o1-mini',                         capabilities: ['text', 'thinking', 'cheap'],    rpm: 60,  cost: 0.003 },
+      { model_id: 'o3-mini',                         capabilities: ['text', 'thinking', 'cheap'],    rpm: 60,  cost: 0.003 },
+      { model_id: 'gpt-3.5-turbo',                   capabilities: ['text', 'cheap'],                rpm: 200, cost: 0.001 },
+      // ── Claude ──
+      { model_id: 'claude-opus-4-6',                 capabilities: ['text', 'vision', 'thinking'],   rpm: 30,  cost: 0.020 },
+      { model_id: 'claude-sonnet-4-6',               capabilities: ['text', 'vision', 'thinking'],   rpm: 50,  cost: 0.012 },
+      { model_id: 'claude-sonnet-4-5',               capabilities: ['text', 'vision', 'thinking'],   rpm: 50,  cost: 0.009 },
+      { model_id: 'claude-haiku-4-5',                capabilities: ['text', 'vision', 'cheap'],      rpm: 100, cost: 0.003 },
+      // ── Gemini ──
+      { model_id: 'gemini-2.5-pro',                  capabilities: ['text', 'vision', 'thinking'],   rpm: 30,  cost: 0.005 },
+      { model_id: 'gemini-2.5-flash',                capabilities: ['text', 'vision', 'cheap'],      rpm: 120, cost: 0.001 },
+      // ── Grok ──
+      { model_id: 'grok-4.20',                       capabilities: ['text', 'vision', 'thinking'],   rpm: 30,  cost: 0.006 },
+      { model_id: 'grok-4',                          capabilities: ['text', 'vision', 'thinking'],   rpm: 30,  cost: 0.006 },
+    ],
+  },
   // Meituan template loaded from static/provider_templates/meituan.json (if present)
   {
-    key: 'yeysai', brand: 'tsinghua',
+    key: 'yeysai', brand: 'tsinghua', category: 'relay',
     name: 'YEYSAI (THUNLP / Tsinghua)',
     base_url: 'https://yeysai.com/v1',
     balance_url: 'https://yeysai.com/v1/dashboard/billing/subscription',
@@ -819,6 +883,12 @@ function openSettings() {
       document.getElementById('tradingRestartHint').style.display =
         (this.checked !== !!(typeof _featureFlags !== 'undefined' && _featureFlags.trading_enabled)) ? 'block' : 'none';
     };
+  }
+
+  // Debug mode toggle
+  var debugCb = document.getElementById('settingDebugMode');
+  if (debugCb) {
+    debugCb.checked = !!(typeof _featureFlags !== 'undefined' && _featureFlags.debug_mode);
   }
 
   // Theme picker sync
@@ -1462,21 +1532,57 @@ async function _showTemplateMenu(btn) {
   menu.id = 'stgTemplateMenu';
   menu.className = 'stg-template-menu';
 
+  // ── Group templates by category ──
+  var _CATEGORY_META = {
+    official: { label: '官方 API',  icon: '🏢', desc: '直连模型厂商' },
+    relay:    { label: '中转 API',  icon: '🔀', desc: '聚合多家模型' },
+    _other:   { label: '其他',      icon: '📦', desc: '' },
+  };
+  var _CAT_ORDER = ['official', 'relay', '_other'];
+  var grouped = {};
   for (var i = 0; i < _PROVIDER_TEMPLATES.length; i++) {
-    var tpl = _PROVIDER_TEMPLATES[i];
-    var item = document.createElement('div');
-    item.className = 'stg-template-item';
-    item.setAttribute('data-tpl-key', tpl.key);
-    item.innerHTML = _brandSvg(tpl.brand, 18) +
-      '<span class="stg-template-name">' + escapeHtml(tpl.name) + '</span>' +
-      '<span class="stg-template-models">' + tpl.models.length + ' 个模型</span>';
-    item.onclick = (function(key) {
-      return function() {
-        addProviderFromTemplate(key);
-        menu.remove();
-      };
-    })(tpl.key);
-    menu.appendChild(item);
+    var cat = _PROVIDER_TEMPLATES[i].category || '_other';
+    if (!grouped[cat]) grouped[cat] = [];
+    grouped[cat].push(_PROVIDER_TEMPLATES[i]);
+  }
+
+  for (var ci = 0; ci < _CAT_ORDER.length; ci++) {
+    var catKey = _CAT_ORDER[ci];
+    var catItems = grouped[catKey];
+    if (!catItems || catItems.length === 0) continue;
+    var meta = _CATEGORY_META[catKey] || _CATEGORY_META._other;
+
+    // ── Section header ──
+    var header = document.createElement('div');
+    header.className = 'stg-template-section';
+    header.innerHTML =
+      '<span class="stg-template-section-icon">' + meta.icon + '</span>' +
+      '<span class="stg-template-section-label">' + meta.label + '</span>' +
+      (meta.desc ? '<span class="stg-template-section-desc">' + meta.desc + '</span>' : '');
+    menu.appendChild(header);
+
+    // ── Items grid ──
+    var grid = document.createElement('div');
+    grid.className = 'stg-template-grid';
+    for (var j = 0; j < catItems.length; j++) {
+      var tpl = catItems[j];
+      var item = document.createElement('div');
+      item.className = 'stg-template-item';
+      item.setAttribute('data-tpl-key', tpl.key);
+      item.innerHTML = _brandSvg(tpl.brand, 20) +
+        '<div class="stg-template-info">' +
+          '<span class="stg-template-name">' + escapeHtml(tpl.name) + '</span>' +
+          '<span class="stg-template-models">' + tpl.models.length + ' 个模型</span>' +
+        '</div>';
+      item.onclick = (function(key) {
+        return function() {
+          addProviderFromTemplate(key);
+          menu.remove();
+        };
+      })(tpl.key);
+      grid.appendChild(item);
+    }
+    menu.appendChild(grid);
   }
 
   // Position below button
@@ -2399,6 +2505,28 @@ function saveSettings() {
     }
   }
 
+  // 2b. Debug mode toggle
+  var debugCb = document.getElementById('settingDebugMode');
+  if (debugCb) {
+    var newDbg = debugCb.checked;
+    var curDbg = !!(typeof _featureFlags !== 'undefined' && _featureFlags.debug_mode);
+    if (newDbg !== curDbg) {
+      fetch(apiUrl('/api/features'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ debug_mode: newDbg }),
+      }).then(function(r) { return r.json(); }).then(function(data) {
+        if (data.ok) {
+          debugLog('Debug mode ' + (newDbg ? 'enabled' : 'disabled'), 'success');
+          if (typeof _featureFlags !== 'undefined') _featureFlags.debug_mode = newDbg;
+          // Re-render sidebar and messages to show/hide debug elements
+          if (typeof renderConversationList === 'function') renderConversationList();
+          if (typeof renderMessages === 'function') renderMessages();
+        }
+      }).catch(function(e) { debugLog('Feature flag save failed: ' + e.message, 'error'); });
+    }
+  }
+
   // 3. Server config (Providers / Presets / Search)
   if (_serverConfig) {
     _saveServerConfig();
@@ -3016,7 +3144,7 @@ function _renderMcpCatalog() {
     html += '<div class="mcp-app-desc">' + escapeHtml(e.description || '') + '</div>';
     if (e.url) {
       html += '<a class="mcp-app-repo" href="' + escapeHtml(e.url) + '" target="_blank" rel="noopener" title="Source Repository">'
-        + '<svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>'
+        + '<svg width="9" height="9" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>'
         + ' Repo</a>';
     }
     html += '</div>';
@@ -3091,7 +3219,7 @@ function _mcpOpenInstallModal(serverId) {
   if (repoLink) {
     if (entry.url) {
       repoLink.href = entry.url;
-      repoLink.innerHTML = '<svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>' + escapeHtml(entry.url.replace(/^https?:\/\//, ''));
+      repoLink.innerHTML = '<svg width="9" height="9" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>' + escapeHtml(entry.url.replace(/^https?:\/\//, ''));
       repoLink.style.display = '';
     } else {
       repoLink.style.display = 'none';

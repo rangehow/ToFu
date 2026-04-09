@@ -17,36 +17,57 @@ __all__ = [
 ]
 
 # ── Auto-cheap pricing threshold ──────────────────────────────
-# Models whose blended price (input + output) / 2 is at or below this
-# value are automatically tagged with the 'cheap' capability.
-# Threshold = Claude Sonnet 4 blended: ($3.0 + $15.0) / 2 = $9.0 / 1M tokens.
+# A model is 'cheap' if BOTH its input price AND output price are strictly
+# below Sonnet's.  This prevents models that are expensive on one dimension
+# (e.g. high output price) from being misclassified as cheap.
+# Reference: Claude Sonnet 4.6 — input $3.0/1M, output $15.0/1M.
+CHEAP_INPUT_THRESHOLD = 3.0   # USD per 1M tokens (= Sonnet input)
+CHEAP_OUTPUT_THRESHOLD = 15.0  # USD per 1M tokens (= Sonnet output)
+
+# Legacy blended threshold kept for fallback when only a single 'cost'
+# number ($/1K blended) is available and we can't split input vs output.
 CHEAP_BLENDED_THRESHOLD = 9.0  # USD per 1M tokens
 
 
-def is_model_cheap(model_id: str, fallback_cost_per_1k: float = None) -> bool:
-    """Check whether *model_id* qualifies as 'cheap' from real pricing data.
+def is_model_cheap(model_id: str, fallback_cost_per_1k: float = None,
+                   input_price: float = None, output_price: float = None) -> bool:
+    """Check whether *model_id* qualifies as 'cheap'.
+
+    A model is cheap if its input price < Sonnet input ($3/1M) AND its output
+    price < Sonnet output ($15/1M).
 
     Lookup order:
-      1. ``MODEL_PRICING[model_id]`` → compute blended = (input + output) / 2
-      2. *fallback_cost_per_1k* (the simplified $/1K-tokens field from slot
-         config) → convert to $/1M and compare.
+      1. Explicit *input_price* / *output_price* args (from discovery enrichment).
+      2. ``MODEL_PRICING[model_id]`` → use stored input / output.
+      3. *fallback_cost_per_1k* → assume symmetric pricing and compare blended.
 
     Args:
         model_id: Model identifier to look up in MODEL_PRICING.
         fallback_cost_per_1k: Optional simplified cost in $/1K tokens used
             when *model_id* has no entry in MODEL_PRICING.
+        input_price: Explicit input price in $/1M tokens (overrides lookup).
+        output_price: Explicit output price in $/1M tokens (overrides lookup).
 
     Returns:
-        True if the model's blended price ≤ CHEAP_BLENDED_THRESHOLD.
+        True if the model is cheaper than Sonnet on both input and output.
     """
     from lib import MODEL_PRICING
 
-    pricing = MODEL_PRICING.get(model_id)
-    if pricing:
-        blended = (pricing['input'] + pricing['output']) / 2.0
-        return blended <= CHEAP_BLENDED_THRESHOLD
+    inp = input_price
+    out = output_price
 
-    # Fallback: convert $/1K → $/1M for comparison
+    # Try MODEL_PRICING if explicit prices not given
+    if inp is None or out is None:
+        pricing = MODEL_PRICING.get(model_id)
+        if pricing:
+            inp = pricing.get('input', 0)
+            out = pricing.get('output', 0)
+
+    # If we have both input and output, do the proper two-sided check
+    if inp is not None and out is not None:
+        return inp < CHEAP_INPUT_THRESHOLD and out < CHEAP_OUTPUT_THRESHOLD
+
+    # Fallback: only blended cost available — convert $/1K → $/1M
     if fallback_cost_per_1k is not None and fallback_cost_per_1k > 0:
         blended_1m = fallback_cost_per_1k * 1000.0
         return blended_1m <= CHEAP_BLENDED_THRESHOLD
@@ -86,84 +107,84 @@ DEFAULT_SLOT_CONFIGS = {
     # ── OpenAI (GPT-5.4 family — March 2026) ──
     'gpt-5.4':                       {'caps': {'text', 'vision', 'thinking'},      'rpm': 30,  'latency': 3000, 'cost': 0.015},
     'gpt-5.4-pro':                   {'caps': {'text', 'vision', 'thinking'},      'rpm': 10,  'latency': 10000,'cost': 0.180},
-    'gpt-5.4-mini':                  {'caps': {'text', 'vision', 'thinking'},      'rpm': 60,  'latency': 2000, 'cost': 0.005},
+    'gpt-5.4-mini':                  {'caps': {'text', 'vision', 'thinking', 'cheap'}, 'rpm': 60,  'latency': 2000, 'cost': 0.005},
     'gpt-5.4-nano':                  {'caps': {'text', 'vision', 'cheap'},         'rpm': 200, 'latency': 1000, 'cost': 0.001},
     # ── OpenAI (GPT-5 family) ──
-    'gpt-5':                         {'caps': {'text', 'vision', 'thinking'},      'rpm': 30,  'latency': 3000, 'cost': 0.010},
-    'gpt-5.2':                       {'caps': {'text', 'vision', 'thinking'},      'rpm': 30,  'latency': 3000, 'cost': 0.014},
+    'gpt-5':                         {'caps': {'text', 'vision', 'thinking', 'cheap'}, 'rpm': 30,  'latency': 3000, 'cost': 0.010},
+    'gpt-5.2':                       {'caps': {'text', 'vision', 'thinking', 'cheap'}, 'rpm': 30,  'latency': 3000, 'cost': 0.014},
     'gpt-5-mini':                    {'caps': {'text', 'vision', 'cheap'},         'rpm': 60,  'latency': 2000, 'cost': 0.002},
     'gpt-5-nano':                    {'caps': {'text', 'cheap'},                   'rpm': 200, 'latency': 1000, 'cost': 0.001},
     # ── OpenAI (o-series reasoning) ──
-    'o3':                            {'caps': {'text', 'vision', 'thinking'},      'rpm': 30,  'latency': 5000, 'cost': 0.010},
-    'o4-mini':                       {'caps': {'text', 'vision', 'thinking'},      'rpm': 30,  'latency': 3000, 'cost': 0.005},
-    'o3-mini':                       {'caps': {'text', 'vision', 'thinking'},      'rpm': 30,  'latency': 3000, 'cost': 0.005},
+    'o3':                            {'caps': {'text', 'vision', 'thinking', 'cheap'}, 'rpm': 30,  'latency': 5000, 'cost': 0.010},
+    'o4-mini':                       {'caps': {'text', 'vision', 'thinking', 'cheap'}, 'rpm': 30,  'latency': 3000, 'cost': 0.005},
+    'o3-mini':                       {'caps': {'text', 'vision', 'thinking', 'cheap'}, 'rpm': 30,  'latency': 3000, 'cost': 0.005},
     # ── OpenAI (GPT-4 family — previous gen) ──
-    'gpt-4o':                        {'caps': {'text', 'vision'},                  'rpm': 60,  'latency': 2000, 'cost': 0.005},
+    'gpt-4o':                        {'caps': {'text', 'vision', 'cheap'},         'rpm': 60,  'latency': 2000, 'cost': 0.005},
     'gpt-4o-mini':                   {'caps': {'text', 'vision', 'cheap'},         'rpm': 200, 'latency': 1500, 'cost': 0.001},
     'gpt-4-turbo':                   {'caps': {'text', 'vision'},                  'rpm': 30,  'latency': 3000, 'cost': 0.020},
-    'gpt-4.1':                       {'caps': {'text', 'vision'},                  'rpm': 30,  'latency': 3000, 'cost': 0.010},
+    'gpt-4.1':                       {'caps': {'text', 'vision', 'cheap'},         'rpm': 30,  'latency': 3000, 'cost': 0.010},
     'gpt-4.1-mini':                  {'caps': {'text', 'vision', 'cheap'},         'rpm': 60,  'latency': 2000, 'cost': 0.001},
     'gpt-4.1-nano':                  {'caps': {'text', 'cheap'},                   'rpm': 200, 'latency': 1000, 'cost': 0.001},
 
     # ── DeepSeek ──
-    'deepseek-chat':                 {'caps': {'text'},                            'rpm': 60,  'latency': 2000, 'cost': 0.001},
-    'deepseek-v3.2':                 {'caps': {'text'},                            'rpm': 60,  'latency': 2000, 'cost': 0.001},
-    'deepseek-reasoner':             {'caps': {'text', 'thinking'},                'rpm': 30,  'latency': 3000, 'cost': 0.002, 'stream_only': True},
+    'deepseek-chat':                 {'caps': {'text', 'cheap'},                  'rpm': 60,  'latency': 2000, 'cost': 0.001},
+    'deepseek-v3.2':                 {'caps': {'text', 'cheap'},                  'rpm': 60,  'latency': 2000, 'cost': 0.001},
+    'deepseek-reasoner':             {'caps': {'text', 'thinking', 'cheap'},      'rpm': 30,  'latency': 3000, 'cost': 0.002, 'stream_only': True},
 
     # ── Gemini ──
-    'gemini-2.5-pro':                {'caps': {'text', 'vision', 'thinking'},      'rpm': 100, 'latency': 2000, 'cost': 0.005},
+    'gemini-2.5-pro':                {'caps': {'text', 'vision', 'thinking', 'cheap'}, 'rpm': 100, 'latency': 2000, 'cost': 0.005},
     'gemini-2.5-flash':              {'caps': {'text', 'vision', 'cheap'},         'rpm': 200, 'latency': 1500, 'cost': 0.001},
     'gemini-2.0-flash-lite':         {'caps': {'text', 'cheap'},                   'rpm': 200, 'latency': 1000, 'cost': 0.001},
     'gemini-3.1-flash-lite-preview': {'caps': {'text', 'vision', 'cheap'},         'rpm': 30,  'latency': 1500, 'cost': 0.001},
-    'gemini-3.1-pro-preview':        {'caps': {'text', 'vision', 'thinking'},      'rpm': 5,   'latency': 3000, 'cost': 0.006},
-    'gemini-3-flash-preview':        {'caps': {'text', 'vision', 'thinking'},      'rpm': 60,  'latency': 1500, 'cost': 0.001},
+    'gemini-3.1-pro-preview':        {'caps': {'text', 'vision', 'thinking', 'cheap'}, 'rpm': 5,   'latency': 3000, 'cost': 0.006},
+    'gemini-3-flash-preview':        {'caps': {'text', 'vision', 'thinking', 'cheap'}, 'rpm': 60,  'latency': 1500, 'cost': 0.001},
 
     # ── Qwen (DashScope) ──
-    'qwen3.6-plus':                  {'caps': {'text', 'vision', 'thinking'},      'rpm': 60,  'latency': 2000, 'cost': 0.002},
-    'qwen3.5-plus':                  {'caps': {'text', 'vision', 'thinking'},      'rpm': 60,  'latency': 2000, 'cost': 0.001},
+    'qwen3.6-plus':                  {'caps': {'text', 'vision', 'thinking', 'cheap'}, 'rpm': 60, 'latency': 2000, 'cost': 0.002},
+    'qwen3.5-plus':                  {'caps': {'text', 'vision', 'thinking', 'cheap'}, 'rpm': 60, 'latency': 2000, 'cost': 0.001},
     'qwen3.5-flash':                 {'caps': {'text', 'thinking', 'cheap'},       'rpm': 120, 'latency': 1500, 'cost': 0.001},
-    'qwen3-max':                     {'caps': {'text', 'thinking'},                'rpm': 30,  'latency': 3000, 'cost': 0.004},
-    'qwen3-vl-plus':                 {'caps': {'text', 'vision', 'thinking'},      'rpm': 30,  'latency': 3000, 'cost': 0.002},
+    'qwen3-max':                     {'caps': {'text', 'thinking', 'cheap'},      'rpm': 30,  'latency': 3000, 'cost': 0.004},
+    'qwen3-vl-plus':                 {'caps': {'text', 'vision', 'thinking', 'cheap'}, 'rpm': 30, 'latency': 3000, 'cost': 0.002},
     'qwen3-vl-flash':                {'caps': {'text', 'vision', 'thinking', 'cheap'}, 'rpm': 60, 'latency': 2000, 'cost': 0.001},
-    'qwen3-coder-plus':              {'caps': {'text', 'thinking'},                'rpm': 30,  'latency': 3000, 'cost': 0.004},
-    'qwen3-coder-flash':             {'caps': {'text', 'thinking'},                'rpm': 60,  'latency': 2000, 'cost': 0.002},
-    'qwen-plus':                     {'caps': {'text', 'thinking'},                'rpm': 60,  'latency': 2000, 'cost': 0.002},
-    'qwen-max':                      {'caps': {'text'},                            'rpm': 30,  'latency': 3000, 'cost': 0.004},
+    'qwen3-coder-plus':              {'caps': {'text', 'thinking', 'cheap'},      'rpm': 30,  'latency': 3000, 'cost': 0.004},
+    'qwen3-coder-flash':             {'caps': {'text', 'thinking', 'cheap'},      'rpm': 60,  'latency': 2000, 'cost': 0.002},
+    'qwen-plus':                     {'caps': {'text', 'thinking', 'cheap'},      'rpm': 60,  'latency': 2000, 'cost': 0.002},
+    'qwen-max':                      {'caps': {'text', 'cheap'},                  'rpm': 30,  'latency': 3000, 'cost': 0.004},
     'qwen-flash':                    {'caps': {'text', 'thinking', 'cheap'},       'rpm': 120, 'latency': 1500, 'cost': 0.001},
-    'qwq-plus':                      {'caps': {'text', 'thinking'},                'rpm': 60,  'latency': 2000, 'cost': 0.002, 'stream_only': True},
-    'qvq-max':                       {'caps': {'text', 'vision', 'thinking'},      'rpm': 30,  'latency': 3000, 'cost': 0.006},
-    'qvq-plus':                      {'caps': {'text', 'vision', 'thinking'},      'rpm': 60,  'latency': 2000, 'cost': 0.002},
-    'qwen-vl-max':                   {'caps': {'text', 'vision'},                  'rpm': 30,  'latency': 3000, 'cost': 0.002},
+    'qwq-plus':                      {'caps': {'text', 'thinking', 'cheap'},      'rpm': 60,  'latency': 2000, 'cost': 0.002, 'stream_only': True},
+    'qvq-max':                       {'caps': {'text', 'vision', 'thinking', 'cheap'}, 'rpm': 30, 'latency': 3000, 'cost': 0.006},
+    'qvq-plus':                      {'caps': {'text', 'vision', 'thinking', 'cheap'}, 'rpm': 60, 'latency': 2000, 'cost': 0.002},
+    'qwen-vl-max':                   {'caps': {'text', 'vision', 'cheap'},        'rpm': 30,  'latency': 3000, 'cost': 0.002},
     'qwen-vl-plus':                  {'caps': {'text', 'vision', 'cheap'},         'rpm': 60,  'latency': 2000, 'cost': 0.001},
     'qwen-turbo':                    {'caps': {'text', 'cheap'},                   'rpm': 200, 'latency': 1000, 'cost': 0.001},
-    'qwen-long':                     {'caps': {'text'},                            'rpm': 60,  'latency': 2000, 'cost': 0.001},
+    'qwen-long':                     {'caps': {'text', 'cheap'},                  'rpm': 60,  'latency': 2000, 'cost': 0.001},
 
     # ── MiniMax ──
-    'MiniMax-M2':                    {'caps': {'text', 'vision'},                  'rpm': 60,  'latency': 2000, 'cost': 0.001},
-    'MiniMax-M2.1':                  {'caps': {'text', 'thinking'},                'rpm': 60,  'latency': 2000, 'cost': 0.001},
-    'MiniMax-M2.1-highspeed':        {'caps': {'text', 'thinking'},                'rpm': 60,  'latency': 1500, 'cost': 0.002},
-    'MiniMax-M2.5':                  {'caps': {'text', 'thinking'},                'rpm': 60,  'latency': 2000, 'cost': 0.001},
-    'MiniMax-M2.5-highspeed':        {'caps': {'text', 'thinking'},                'rpm': 60,  'latency': 2000, 'cost': 0.001},
-    'MiniMax-M2.7':                  {'caps': {'text', 'thinking'},                'rpm': 60,  'latency': 2000, 'cost': 0.001},
-    'MiniMax-M2.7-highspeed':        {'caps': {'text', 'thinking'},                'rpm': 60,  'latency': 2000, 'cost': 0.001},
-    'M2-her':                        {'caps': {'text'},                            'rpm': 60,  'latency': 2000, 'cost': 0.001},
+    'MiniMax-M2':                    {'caps': {'text', 'vision', 'cheap'},        'rpm': 60,  'latency': 2000, 'cost': 0.001},
+    'MiniMax-M2.1':                  {'caps': {'text', 'thinking', 'cheap'},      'rpm': 60,  'latency': 2000, 'cost': 0.001},
+    'MiniMax-M2.1-highspeed':        {'caps': {'text', 'thinking', 'cheap'},      'rpm': 60,  'latency': 1500, 'cost': 0.002},
+    'MiniMax-M2.5':                  {'caps': {'text', 'thinking', 'cheap'},      'rpm': 60,  'latency': 2000, 'cost': 0.001},
+    'MiniMax-M2.5-highspeed':        {'caps': {'text', 'thinking', 'cheap'},      'rpm': 60,  'latency': 2000, 'cost': 0.001},
+    'MiniMax-M2.7':                  {'caps': {'text', 'thinking', 'cheap'},      'rpm': 60,  'latency': 2000, 'cost': 0.001},
+    'MiniMax-M2.7-highspeed':        {'caps': {'text', 'thinking', 'cheap'},      'rpm': 60,  'latency': 2000, 'cost': 0.001},
+    'M2-her':                        {'caps': {'text', 'cheap'},                  'rpm': 60,  'latency': 2000, 'cost': 0.001},
 
     # ── Doubao (Volcengine) ──
-    'Doubao-Seed-2.0-pro':           {'caps': {'text', 'vision', 'thinking'},      'rpm': 60,  'latency': 2000, 'cost': 0.002},
+    'Doubao-Seed-2.0-pro':           {'caps': {'text', 'vision', 'thinking', 'cheap'}, 'rpm': 60, 'latency': 2000, 'cost': 0.002},
     'Doubao-Seed-2.0-lite':          {'caps': {'text', 'cheap'},                   'rpm': 120, 'latency': 1500, 'cost': 0.001},
     'Doubao-Seed-2.0-mini':          {'caps': {'text', 'cheap'},                   'rpm': 200, 'latency': 1000, 'cost': 0.001},
 
     # ── GLM (Zhipu AI) ──
     'glm-5.1':                       {'caps': {'text', 'thinking'},                'rpm': 60,  'latency': 3000, 'cost': 0.004},
     'glm-5':                         {'caps': {'text', 'thinking'},                'rpm': 60,  'latency': 3000, 'cost': 0.004},
-    'glm-4.7':                       {'caps': {'text', 'thinking'},                'rpm': 60,  'latency': 2000, 'cost': 0.002},
+    'glm-4.7':                       {'caps': {'text', 'thinking', 'cheap'},      'rpm': 60,  'latency': 2000, 'cost': 0.002},
     'glm-4.5-air':                   {'caps': {'text', 'cheap'},                   'rpm': 120, 'latency': 1500, 'cost': 0.001},
     'glm-4.5-flash':                 {'caps': {'text', 'cheap'},                   'rpm': 200, 'latency': 1000, 'cost': 0.0},
 
     # ── Mistral AI ──
-    'mistral-large-latest':          {'caps': {'text', 'vision', 'thinking'},      'rpm': 30,  'latency': 3000, 'cost': 0.008},
+    'mistral-large-latest':          {'caps': {'text', 'vision', 'thinking', 'cheap'}, 'rpm': 30, 'latency': 3000, 'cost': 0.008},
     'mistral-small-latest':          {'caps': {'text', 'cheap'},                   'rpm': 60,  'latency': 2000, 'cost': 0.001},
-    'codestral-latest':              {'caps': {'text'},                            'rpm': 60,  'latency': 2000, 'cost': 0.003},
+    'codestral-latest':              {'caps': {'text', 'cheap'},                  'rpm': 60,  'latency': 2000, 'cost': 0.003},
 
     # ── xAI (Grok) ──
     'grok-3':                        {'caps': {'text', 'thinking'},                'rpm': 30,  'latency': 3000, 'cost': 0.010},

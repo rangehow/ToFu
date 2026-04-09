@@ -23,6 +23,7 @@ from .swarm import swarm_bp
 from .translate import translate_bp
 from .upload import upload_bp
 from .agent_backends import agent_backends_bp
+from .folders import folders_bp
 from .mcp import mcp_bp
 
 # ── Core (always-on) blueprints ──
@@ -44,6 +45,7 @@ ALL_BLUEPRINTS = [
     daily_report_bp,
     oauth_bp,
     agent_backends_bp,
+    folders_bp,
     mcp_bp,
 ]
 

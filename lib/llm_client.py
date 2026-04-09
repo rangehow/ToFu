@@ -179,6 +179,7 @@ from lib.model_info import (  # noqa: F401
     is_gemini,
     is_glm,
     is_gpt,
+    is_kimi,
     is_longcat,
     is_minimax,
     is_qwen,
@@ -636,6 +637,7 @@ def build_body(model, messages, *, max_tokens=128000, temperature=1.0,
 
     Handles provider-specific parameters automatically:
       • Claude:   thinking.type='adaptive', effort param, cache breakpoints
+      • Kimi:     thinking.type='enabled'/'disabled', fixed temp (1.0/0.6)
       • GLM:      thinking.type='enabled', temperature clamped to (0, 1)
       • Doubao:   thinking.type='enabled'/'disabled'
       • LongCat:  enable_thinking flag, temperature adjustment
@@ -801,6 +803,27 @@ def build_body(model, messages, *, max_tokens=128000, temperature=1.0,
         else:
             body['thinking'] = {'type': 'disabled'}
             body['temperature'] = max(temperature, 0.01) if temperature else 0.7
+    elif not _tf and is_kimi(model):
+        # Moonshot Kimi (K2/K2.5) uses thinking.type format:
+        #   {"thinking": {"type": "enabled"}}  — enables thinking
+        #   {"thinking": {"type": "disabled"}} — disables thinking
+        # K2.5: temperature fixed at 1.0 (thinking) or 0.6 (non-thinking).
+        # K2.5: top_p/n/presence_penalty/frequency_penalty are also fixed;
+        # sending non-default values causes HTTP 400.
+        # K2-thinking: thinking is always on, ignore disable request.
+        # Reasoning output uses `reasoning_content` field (already handled).
+        # Docs: https://platform.moonshot.ai/docs/guide/kimi-k2-5-quickstart
+        _is_k2_thinking = 'k2-thinking' in model.lower() and 'turbo' not in model.lower()
+        if _is_k2_thinking or thinking_enabled:
+            body['thinking'] = {'type': 'enabled'}
+            body['temperature'] = 1.0
+        else:
+            body['thinking'] = {'type': 'disabled'}
+            body['temperature'] = 0.6
+        # Remove parameters that K2.5 rejects with non-default values
+        body.pop('top_p', None)
+        body.pop('presence_penalty', None)
+        body.pop('frequency_penalty', None)
     elif not _tf and is_minimax(model):
         # MiniMax M2.5/M2.7/M2.1: send reasoning_split=True so the API returns
         # thinking content in a separate reasoning_details field instead of

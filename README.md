@@ -25,6 +25,18 @@
   <img src="https://img.shields.io/badge/platform-Linux%20·%20macOS%20·%20Windows-lightgrey" alt="Platform" />
 </p>
 
+<p align="center">
+  <img src="propaganda/mainpage.jpg" width="800" alt="Main Interface" />
+</p>
+
+<p align="center">
+  <img src="propaganda/chatinner.jpg" width="800" alt="Chat Interface" />
+</p>
+
+<p align="center">
+  <img src="propaganda/providersetting.jpg" width="800" alt="Model Provider Settings" />
+</p>
+
 ---
 
 ## What is Tofu?

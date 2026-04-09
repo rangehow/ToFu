@@ -350,6 +350,7 @@ def features():
     return jsonify({
         'trading_enabled': _lib.TRADING_ENABLED,
         'cache_extended_ttl': getattr(_lib, 'CACHE_EXTENDED_TTL', False),
+        'debug_mode': getattr(_lib, 'DEBUG_MODE', False),
     })
 
 
@@ -380,6 +381,13 @@ def save_features():
         if old_val != new_val:
             changed.append('cache_extended_ttl')
             logger.info('[Features] cache_extended_ttl: %s → %s', old_val, new_val)
+    if 'debug_mode' in data:
+        new_val = bool(data['debug_mode'])
+        old_val = existing.get('debug_mode', None)
+        existing['debug_mode'] = new_val
+        if old_val != new_val:
+            changed.append('debug_mode')
+            logger.info('[Features] debug_mode: %s → %s', old_val, new_val)
     try:
         os.makedirs(os.path.dirname(features_path), exist_ok=True)
         with open(features_path, 'w') as f:
@@ -398,6 +406,10 @@ def save_features():
     if 'cache_extended_ttl' in changed:
         _lib.CACHE_EXTENDED_TTL = existing.get('cache_extended_ttl', True)
         logger.info('[Features] Hot-reloaded CACHE_EXTENDED_TTL → %s', _lib.CACHE_EXTENDED_TTL)
+    # Hot-reload DEBUG_MODE — takes effect on next page load (client-side flag)
+    if 'debug_mode' in changed:
+        _lib.DEBUG_MODE = existing.get('debug_mode', False)
+        logger.info('[Features] Hot-reloaded DEBUG_MODE → %s', _lib.DEBUG_MODE)
 
     return jsonify({'ok': True, 'saved': existing,
                     'needs_restart': False, 'changed': changed})

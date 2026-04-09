@@ -2,7 +2,8 @@
 
 Auto-discovers available models from an OpenAI-compatible provider API,
 infers capabilities from model name patterns + pricing data, and auto-tags
-'cheap' for models whose blended price ≤ Sonnet ($9/1M tokens).
+'cheap' for models whose input < Sonnet input ($3/1M) AND output < Sonnet
+output ($15/1M).
 
 Called automatically on first boot when endpoint is non-default, and via
 the Settings UI "Discover Models" button.
@@ -51,6 +52,7 @@ _VISION_PAT = re.compile(
     r'|gemini(?!.*lite)'                     # Gemini (except flash-lite)
     r'|qwen.*(vl|max|plus)'                 # Qwen VL/Max/Plus
     r'|ernie-5\.0'                           # ERNIE 5.0 is natively multimodal
+    r'|kimi-k2\.5'                           # Kimi K2.5 is natively multimodal
     r')',
     re.I,
 )
@@ -69,8 +71,8 @@ _CHEAP_HINT_PAT = re.compile(
 def _infer_capabilities(model_id: str, model_meta: dict = None) -> set:
     """Infer model capabilities from its name and optional API metadata.
 
-    Auto-tags 'cheap' if the model's blended price ≤ CHEAP_BLENDED_THRESHOLD
-    (= Sonnet, $9/1M tokens) using MODEL_PRICING, or from name heuristics.
+    Auto-tags 'cheap' if the model's input price < Sonnet input ($3/1M) AND
+    output price < Sonnet output ($15/1M), using MODEL_PRICING.
 
     Args:
         model_id: The model identifier (e.g. 'gpt-5.4-mini').
@@ -112,9 +114,8 @@ def _infer_capabilities(model_id: str, model_meta: dict = None) -> set:
     from lib.llm_dispatch.config import is_model_cheap
     if is_model_cheap(model_id):
         caps.add('cheap')
-    elif _CHEAP_HINT_PAT.search(mid_lower):
-        # Name suggests cheap, no pricing data to confirm → tag it
-        caps.add('cheap')
+    # Note: name-heuristic fallback (_CHEAP_HINT_PAT) is intentionally removed.
+    # cheap tag should only come from real pricing data to avoid false positives.
 
     return caps
 
@@ -256,14 +257,21 @@ def discover_models(base_url: str, api_key: str,
         rpm = _infer_rpm(model_id, caps)
         cost = _infer_cost(model_id, caps)
 
-        result.append({
+        entry = {
             'model_id': model_id,
             'aliases': [],
             'capabilities': sorted(caps),
             'rpm': rpm,
             'cost': cost,
             'thinking_default': 'thinking' in caps,
-        })
+        }
+        # If MODEL_PRICING has real input/output, include them
+        from lib import MODEL_PRICING
+        mp = MODEL_PRICING.get(model_id)
+        if mp:
+            entry['input_price'] = mp.get('input', 0)
+            entry['output_price'] = mp.get('output', 0)
+        result.append(entry)
 
     # Sort: text models first, then image_gen, then embedding
     def _sort_key(m):
@@ -335,7 +343,7 @@ def enrich_models_with_pricing(models: list[dict]) -> list[dict]:
             or_lookup[short.lower()] = data
             or_lookup[mid.lower()] = data
 
-        from lib.llm_dispatch.config import CHEAP_BLENDED_THRESHOLD
+        from lib.llm_dispatch.config import is_model_cheap
 
         updated = 0
         for model in models:
@@ -361,14 +369,20 @@ def enrich_models_with_pricing(models: list[dict]) -> list[dict]:
                         match = or_val
 
             if match:
-                blended_1m = (match['input_1m'] + match['output_1m']) / 2.0
+                inp_1m = match['input_1m']
+                out_1m = match['output_1m']
+                blended_1m = (inp_1m + out_1m) / 2.0
                 model['cost'] = round(blended_1m / 1000.0, 4)
+                # Preserve real input/output pricing ($/1M tokens)
+                model['input_price'] = round(inp_1m, 4)
+                model['output_price'] = round(out_1m, 4)
                 caps = set(model['capabilities'])
-                if blended_1m <= CHEAP_BLENDED_THRESHOLD and 'cheap' not in caps:
+                cheap = is_model_cheap(model['model_id'],
+                                       input_price=inp_1m, output_price=out_1m)
+                if cheap and 'cheap' not in caps:
                     caps.add('cheap')
                     model['capabilities'] = sorted(caps)
-                elif blended_1m > CHEAP_BLENDED_THRESHOLD and 'cheap' in caps:
-                    # Name heuristic said cheap, but pricing says no
+                elif not cheap and 'cheap' in caps:
                     caps.discard('cheap')
                     model['capabilities'] = sorted(caps)
                 updated += 1
@@ -401,6 +415,7 @@ _DOMAIN_BRAND_MAP = [
     ('api.mistral.ai',              'mistral',      'Mistral AI'),
     ('siliconflow.cn',              'siliconflow',  'SiliconFlow'),
     ('api.moonshot.cn',             'kimi',         'Moonshot (Kimi)'),
+    ('api.moonshot.ai',             'kimi',         'Moonshot (Kimi)'),
     ('api.baichuan-ai.com',         'baichuan',     'Baichuan'),
     ('api.stepfun.com',             'stepfun',      'StepFun (阶跃星辰)'),
     ('api.lingyiwanwu.com',         'yi',           'Yi (零一万物)'),

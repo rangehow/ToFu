@@ -64,6 +64,12 @@ def is_glm(model: str) -> bool:
     return 'glm' in model.lower()
 
 
+def is_kimi(model: str) -> bool:
+    """Moonshot Kimi models (kimi-k2, kimi-k2.5, moonshot-v1, etc.)."""
+    m = model.lower()
+    return 'kimi' in m or 'moonshot' in m
+
+
 def is_ernie(model: str) -> bool:
     """Baidu ERNIE models (ERNIE-5.0, ERNIE-X1, ERNIE-4.5, etc.)."""
     return 'ernie' in model.lower()
@@ -199,12 +205,31 @@ def _ernie_max_output(model: str) -> int:
     return 16384
 
 
+def _kimi_max_output(model: str) -> int:
+    """Return the max output token limit for a specific Kimi model.
+
+    Moonshot Kimi model limits:
+      - kimi-k2.5:                 32,768  (default for K2.5)
+      - kimi-k2-turbo-preview:     32,768
+      - kimi-k2-thinking-turbo:    32,768
+      - kimi-k2-*-preview:         32,768
+      - kimi-k2-thinking:          32,768
+      - moonshot-v1-*:             16,384  (legacy models)
+      - Default:                   32,768
+    """
+    m = model.lower()
+    if 'moonshot-v1' in m:
+        return 16384
+    return 32768
+
+
 _MODEL_MAX_OUTPUT = {
     # (checker_fn, limit) — limit can be int or callable(model) → int
     'longcat': (is_longcat, 65536),
     'qwen':    (is_qwen,    _qwen_max_output),  # per-model lookup
     'gemini':  (is_gemini,  65536),
     'minimax': (is_minimax, _minimax_max_output),
+    'kimi':    (is_kimi,    _kimi_max_output),    # per-model lookup
     'doubao':  (is_doubao,  16384),
     'ernie':   (is_ernie,   _ernie_max_output),   # per-model lookup
     'gpt':     (is_gpt,     32768),

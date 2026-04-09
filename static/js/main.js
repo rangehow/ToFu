@@ -917,6 +917,13 @@ function loadConversation(id) {
   }
   activeConvId = id;
   sessionStorage.setItem('chatui_activeConvId', id);
+  /* ★ If loading a conv that doesn't belong to the active folder view, exit it */
+  if (typeof getActiveFolderId === 'function' && getActiveFolderId()) {
+    const _loadedConv = conversations.find(c => c.id === id);
+    if (_loadedConv && _loadedConv.folderId !== getActiveFolderId()) {
+      setActiveFolderId(null);
+    }
+  }
   if (typeof closeBranchPanel === "function") closeBranchPanel();
   const c = conversations.find((x) => x.id === id);
   if (!c) return;
@@ -1028,6 +1035,86 @@ function deleteConversation(id, e) {
     if (conversations.length > 0) loadConversation(conversations[0].id);
     else newChat();
   } else renderConversationList();
+}
+
+// ══════════════════════════════════════════════════════
+// ★ Duplicate (copy) a conversation as a completely independent new conversation
+// ══════════════════════════════════════════════════════
+async function duplicateConversation(id, e) {
+  if (e && e.stopPropagation) e.stopPropagation();
+  const srcConv = conversations.find((c) => c.id === id);
+  if (!srcConv) return;
+
+  // If the source conversation hasn't been loaded from server yet, load it first
+  if (srcConv._needsLoad) {
+    try {
+      await loadConversationMessages(srcConv.id);
+    } catch (err) {
+      console.warn(`[duplicateConv] Failed to load source conv: ${err.message}`);
+      if (typeof showToast === "function") showToast("", "复制失败", "无法加载原始对话内容", 4000);
+      return;
+    }
+  }
+
+  const now = Date.now();
+  const newId = generateId();
+
+  // ★ PERF: Show toast immediately for instant feedback
+  if (typeof showToast === "function") {
+    showToast("", "对话复制中…", `正在复制 "${srcConv.title}"`, 2000);
+  }
+
+  // ★ PERF: Defer heavy work (deep clone + serialize) to next frame
+  // so the toast renders immediately without blocking
+  requestAnimationFrame(() => {
+    // Deep-clone messages, stripping runtime/streaming state
+    const clonedMessages = JSON.parse(JSON.stringify(srcConv.messages || [])).map(msg => {
+      delete msg._taskId;
+      delete msg.activeTaskId;
+      delete msg.approvalRequired;
+      if (msg.branches) {
+        for (const b of msg.branches) delete b.activeTaskId;
+      }
+      return msg;
+    });
+
+    const newConv = {
+      id: newId,
+      title: (srcConv.title || "Untitled") + " (副本)",
+      messages: clonedMessages,
+      createdAt: now,
+      updatedAt: now,
+      activeTaskId: null,
+      ...(srcConv.projectPath ? { projectPath: srcConv.projectPath } : {}),
+      ...(srcConv.projectPaths ? { projectPaths: [...srcConv.projectPaths] } : {}),
+      ...(srcConv.model ? { model: srcConv.model } : {}),
+      ...(srcConv.thinkingDepth !== undefined ? { thinkingDepth: srcConv.thinkingDepth } : {}),
+      ...(srcConv.searchMode ? { searchMode: srcConv.searchMode } : {}),
+      ...(srcConv.fetchEnabled !== undefined ? { fetchEnabled: srcConv.fetchEnabled } : {}),
+      ...(srcConv.codeExecEnabled !== undefined ? { codeExecEnabled: srcConv.codeExecEnabled } : {}),
+      ...(srcConv.browserEnabled !== undefined ? { browserEnabled: srcConv.browserEnabled } : {}),
+      ...(srcConv.memoryEnabled !== undefined ? { memoryEnabled: srcConv.memoryEnabled } : {}),
+      ...(srcConv.autoTranslate !== undefined ? { autoTranslate: srcConv.autoTranslate } : {}),
+      ...(srcConv.folderId ? { folderId: srcConv.folderId } : {}),
+    };
+
+    // Add to conversation list (at top) & render sidebar
+    conversations.unshift(newConv);
+    saveConversations(newConv.id);
+
+    // ★ PERF: Sync to server in background — don't block UI
+    syncConversationToServer(newConv).catch(err => {
+      console.warn('[duplicateConv] Background sync failed:', err);
+    });
+
+    // Switch to the new conversation
+    loadConversation(newId);
+
+    if (typeof showToast === "function") {
+      showToast("", "对话已复制 ✓", `"${srcConv.title}" → 独立副本已创建`, 3000);
+    }
+    console.log(`[duplicateConv] Duplicated conv ${id.slice(0,8)} → ${newId.slice(0,8)} (${clonedMessages.length} msgs)`);
+  });
 }
 
 // ══════════════════════════════════════════════════════
@@ -1492,6 +1579,9 @@ async function sendMessage() {
       }
       conv.projectPaths = allPaths;
     }
+    /* ★ Auto-assign to active folder when creating a new conversation in folder view */
+    const _curFolderId = typeof getActiveFolderId === 'function' ? getActiveFolderId() : null;
+    if (_curFolderId) conv.folderId = _curFolderId;
     conversations.unshift(conv);
     activeConvId = conv.id;
     sessionStorage.setItem('chatui_activeConvId', conv.id);
@@ -2941,6 +3031,389 @@ function toggleEndpoint() {
   );
 }
 
+/* ═══ Folder management UI ═══ */
+
+/** Show a dropdown under the folder-assign button to pick or create a folder */
+function _showFolderPicker(convId, anchorEl) {
+  // Remove any existing picker
+  _closeFolderPicker();
+  const conv = conversations.find(c => c.id === convId);
+  if (!conv) return;
+
+  const folders = typeof getFolders === 'function' ? getFolders() : [];
+  const picker = document.createElement('div');
+  picker.className = 'folder-picker';
+  picker.id = '_folderPicker';
+
+  let html = '<div class="folder-picker-title">移入文件夹</div>';
+  // "Remove from folder" option if currently in a folder
+  if (conv.folderId) {
+    html += `<div class="folder-picker-item folder-picker-remove" data-folder-id="">` +
+      `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>` +
+      `移出文件夹</div>`;
+  }
+  // Existing folders
+  for (const f of folders) {
+    const active = conv.folderId === f.id ? ' active' : '';
+    const dot = f.color ? `<span class="folder-color-dot" style="background:${escapeHtml(f.color)}"></span>` : '';
+    html += `<div class="folder-picker-item${active}" data-folder-id="${escapeHtml(f.id)}">${dot}${escapeHtml(f.name)}</div>`;
+  }
+  // "New folder" option
+  html += `<div class="folder-picker-divider"></div>`;
+  html += `<div class="folder-picker-item folder-picker-new">` +
+    `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>` +
+    `新建文件夹</div>`;
+
+  picker.innerHTML = html;
+
+  // Position near the anchor button
+  document.body.appendChild(picker);
+  const rect = anchorEl.getBoundingClientRect();
+  picker.style.top = Math.min(rect.bottom + 4, window.innerHeight - picker.offsetHeight - 8) + 'px';
+  picker.style.left = Math.min(rect.left, window.innerWidth - picker.offsetWidth - 8) + 'px';
+
+  // Handle clicks
+  picker.addEventListener('click', async (ev) => {
+    ev.stopPropagation();
+    const item = ev.target.closest('.folder-picker-item');
+    if (!item) return;
+
+    if (item.classList.contains('folder-picker-new')) {
+      _closeFolderPicker();
+      _promptCreateFolder(convId);
+      return;
+    }
+    const folderId = item.dataset.folderId;
+    setConversationFolder(convId, folderId || null);
+    _closeFolderPicker();
+    if (folderId) {
+      const f = getFolderById(folderId);
+      if (typeof showToast === 'function') showToast('', '已移入文件夹', f ? f.name : '', 2000);
+    } else {
+      if (typeof showToast === 'function') showToast('', '已移出文件夹', '', 2000);
+    }
+  });
+
+  // Close on outside click
+  setTimeout(() => {
+    document.addEventListener('click', _closeFolderPicker, { once: true });
+  }, 0);
+}
+
+function _closeFolderPicker() {
+  const p = document.getElementById('_folderPicker');
+  if (p) p.remove();
+}
+
+/** Show inline dialog to create a new folder, optionally assigning a conv to it */
+function _promptCreateFolder(assignConvId) {
+  // Remove any existing dialog
+  const existing = document.getElementById('_folderCreateDialog');
+  if (existing) existing.remove();
+
+  const colors = ['#6e56cf', '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#ec4899', '#8b5cf6', '#14b8a6'];
+  let selectedColor = colors[Math.floor(Math.random() * colors.length)];
+
+  const overlay = document.createElement('div');
+  overlay.id = '_folderCreateDialog';
+  overlay.className = 'folder-dialog-overlay';
+  overlay.innerHTML = `
+    <div class="folder-dialog">
+      <div class="folder-dialog-title">新建文件夹</div>
+      <input type="text" class="folder-dialog-input" id="_folderNameInput"
+             placeholder="文件夹名称" maxlength="50" autocomplete="off" spellcheck="false">
+      <div class="folder-dialog-colors" id="_folderColorPicker">
+        ${colors.map(c => `<span class="folder-color-dot${c === selectedColor ? ' selected' : ''}" data-color="${c}" style="background:${c}"></span>`).join('')}
+      </div>
+      <div class="folder-dialog-actions">
+        <button class="folder-dialog-cancel" id="_folderDialogCancel">取消</button>
+        <button class="folder-dialog-ok" id="_folderDialogOk">创建</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  const nameInput = document.getElementById('_folderNameInput');
+  const colorPicker = document.getElementById('_folderColorPicker');
+  const okBtn = document.getElementById('_folderDialogOk');
+  const cancelBtn = document.getElementById('_folderDialogCancel');
+
+  // Focus input
+  setTimeout(() => nameInput.focus(), 50);
+
+  // Color selection
+  colorPicker.addEventListener('click', (e) => {
+    const dot = e.target.closest('.folder-color-dot');
+    if (!dot) return;
+    colorPicker.querySelectorAll('.folder-color-dot').forEach(d => d.classList.remove('selected'));
+    dot.classList.add('selected');
+    selectedColor = dot.dataset.color;
+  });
+
+  function _closeDialog() { overlay.remove(); }
+
+  async function _submit() {
+    const name = nameInput.value.trim();
+    if (!name) { nameInput.focus(); return; }
+    okBtn.disabled = true;
+    okBtn.textContent = '创建中…';
+    const folder = await createFolder(name, selectedColor);
+    _closeDialog();
+    if (!folder) {
+      if (typeof showToast === 'function') showToast('', '创建失败', '无法创建文件夹', 3000);
+      return;
+    }
+    if (assignConvId) {
+      setConversationFolder(assignConvId, folder.id);
+    }
+    renderConversationList();
+    if (typeof showToast === 'function') showToast('', '文件夹已创建', folder.name, 2000);
+  }
+
+  okBtn.addEventListener('click', _submit);
+  cancelBtn.addEventListener('click', _closeDialog);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) _closeDialog(); });
+  nameInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); _submit(); }
+    if (e.key === 'Escape') _closeDialog();
+  });
+}
+
+function _promptRenameFolder(folderId) {
+  const f = getFolderById(folderId);
+  if (!f) return;
+
+  // Remove any existing dialog
+  const existing = document.getElementById('_folderCreateDialog');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = '_folderCreateDialog';
+  overlay.className = 'folder-dialog-overlay';
+  overlay.innerHTML = `
+    <div class="folder-dialog">
+      <div class="folder-dialog-title">重命名文件夹</div>
+      <input type="text" class="folder-dialog-input" id="_folderNameInput"
+             placeholder="文件夹名称" maxlength="50" autocomplete="off" spellcheck="false">
+      <div class="folder-dialog-actions">
+        <button class="folder-dialog-cancel" id="_folderDialogCancel">取消</button>
+        <button class="folder-dialog-ok" id="_folderDialogOk">确定</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  const nameInput = document.getElementById('_folderNameInput');
+  nameInput.value = f.name;
+  setTimeout(() => { nameInput.focus(); nameInput.select(); }, 50);
+
+  function _closeDialog() { overlay.remove(); }
+
+  async function _submit() {
+    const name = nameInput.value.trim();
+    if (!name || name === f.name) { _closeDialog(); return; }
+    await updateFolder(folderId, { name });
+    _closeDialog();
+    renderConversationList();
+  }
+
+  document.getElementById('_folderDialogOk').addEventListener('click', _submit);
+  document.getElementById('_folderDialogCancel').addEventListener('click', _closeDialog);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) _closeDialog(); });
+  nameInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); _submit(); }
+    if (e.key === 'Escape') _closeDialog();
+  });
+}
+
+function _confirmDeleteFolder(folderId) {
+  const f = getFolderById(folderId);
+  if (!f) return;
+
+  const existing = document.getElementById('_folderCreateDialog');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = '_folderCreateDialog';
+  overlay.className = 'folder-dialog-overlay';
+  overlay.innerHTML = `
+    <div class="folder-dialog">
+      <div class="folder-dialog-title">删除文件夹</div>
+      <div style="font-size:13px;color:var(--text-secondary);margin-bottom:16px;line-height:1.5">
+        确定删除文件夹 <b style="color:var(--text-primary)">${f.name}</b>？<br>
+        文件夹内的对话不会被删除，只是变为未分类。
+      </div>
+      <div class="folder-dialog-actions">
+        <button class="folder-dialog-cancel" id="_folderDialogCancel">取消</button>
+        <button class="folder-dialog-ok" id="_folderDialogOk" style="background:#ef4444">删除</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  function _closeDialog() { overlay.remove(); }
+
+  document.getElementById('_folderDialogOk').addEventListener('click', async () => {
+    _closeDialog();
+    // If we're viewing this folder, exit folder view first
+    if (typeof getActiveFolderId === 'function' && getActiveFolderId() === folderId) {
+      setActiveFolderId(null);
+    }
+    await deleteFolder(folderId);
+    renderConversationList();
+    if (typeof showToast === 'function') showToast('', '文件夹已删除', f.name, 2000);
+  });
+  document.getElementById('_folderDialogCancel').addEventListener('click', _closeDialog);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) _closeDialog(); });
+}
+
+/** Create new folder button handler */
+function createNewFolder() {
+  _promptCreateFolder(null);
+}
+
+/** Initialize folder tab bar interactions */
+function _initFolderTabs() {
+  const tabsEl = document.getElementById('folderTabs');
+  if (!tabsEl) return;
+
+  // Click: switch folder tab or create new folder
+  tabsEl.addEventListener('click', (e) => {
+    const tab = e.target.closest('.folder-tab');
+    if (!tab) return;
+    e.stopPropagation();
+    if (tab.classList.contains('folder-tab-add')) {
+      _promptCreateFolder(null);
+      return;
+    }
+    const folderId = tab.dataset.folderId;
+    setActiveFolderId(folderId || null);
+  });
+
+  // Right-click / context menu on folder tabs (rename/delete)
+  tabsEl.addEventListener('contextmenu', (e) => {
+    const tab = e.target.closest('.folder-tab');
+    if (!tab || tab.classList.contains('folder-tab-add') || !tab.dataset.folderId) return;
+    e.preventDefault();
+    e.stopPropagation();
+    _showFolderTabMenu(tab.dataset.folderId, e.clientX, e.clientY);
+  });
+
+  // Drag-and-drop: allow dragging conversations onto folder tabs
+  tabsEl.addEventListener('dragover', (e) => {
+    if (!_dragConvId) return;
+    const tab = e.target.closest('.folder-tab');
+    if (!tab || tab.classList.contains('folder-tab-add')) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    tabsEl.querySelectorAll('.folder-tab').forEach(t => t.classList.remove('folder-tab-drop'));
+    tab.classList.add('folder-tab-drop');
+  });
+
+  tabsEl.addEventListener('dragleave', (e) => {
+    const tab = e.target.closest('.folder-tab');
+    if (tab) tab.classList.remove('folder-tab-drop');
+  });
+
+  tabsEl.addEventListener('drop', (e) => {
+    e.preventDefault();
+    const convId = _dragConvId || e.dataTransfer.getData('text/plain');
+    if (!convId) return;
+    const tab = e.target.closest('.folder-tab');
+    if (!tab || tab.classList.contains('folder-tab-add')) return;
+    const folderId = tab.dataset.folderId || null;
+    tabsEl.querySelectorAll('.folder-tab').forEach(t => t.classList.remove('folder-tab-drop'));
+    setConversationFolder(convId, folderId);
+    const f = folderId ? getFolderById(folderId) : null;
+    if (f) {
+      if (typeof showToast === 'function') showToast('', '已移入文件夹', f.name, 2000);
+    } else if (!folderId) {
+      if (typeof showToast === 'function') showToast('', '已移出文件夹', '', 2000);
+    }
+  });
+}
+
+/** Show context menu for a folder tab (rename/delete) */
+function _showFolderTabMenu(folderId, x, y) {
+  // Remove existing
+  const old = document.getElementById('_folderTabMenu');
+  if (old) old.remove();
+
+  const f = getFolderById(folderId);
+  if (!f) return;
+
+  const menu = document.createElement('div');
+  menu.id = '_folderTabMenu';
+  menu.className = 'folder-tab-menu';
+  menu.innerHTML = `
+    <div class="folder-tab-menu-item" data-action="rename">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>
+      重命名
+    </div>
+    <div class="folder-tab-menu-item folder-tab-menu-delete" data-action="delete">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+      删除文件夹
+    </div>
+  `;
+  document.body.appendChild(menu);
+
+  // Position
+  const mw = menu.offsetWidth, mh = menu.offsetHeight;
+  menu.style.left = Math.min(x, window.innerWidth - mw - 8) + 'px';
+  menu.style.top = Math.min(y, window.innerHeight - mh - 8) + 'px';
+
+  menu.addEventListener('click', (e) => {
+    const item = e.target.closest('.folder-tab-menu-item');
+    if (!item) return;
+    menu.remove();
+    if (item.dataset.action === 'rename') _promptRenameFolder(folderId);
+    else if (item.dataset.action === 'delete') _confirmDeleteFolder(folderId);
+  });
+
+  // Close on outside click
+  setTimeout(() => {
+    document.addEventListener('click', function _close() {
+      menu.remove();
+      document.removeEventListener('click', _close);
+    }, { once: true });
+  }, 0);
+}
+
+/* ── Drag-and-drop conversations — drag from convList, drop on folder tabs ── */
+let _dragConvId = null;
+function _initFolderDragDrop() {
+  const convList = document.getElementById('convList');
+  if (!convList) return;
+
+  function _onDragStart(e) {
+    const item = e.target.closest('.conv-item');
+    if (!item || !item.dataset.convId) return;
+    _dragConvId = item.dataset.convId;
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', item.dataset.convId);
+    item.classList.add('conv-dragging');
+    // Highlight folder tabs as drop targets
+    setTimeout(() => {
+      const tabsEl = document.getElementById('folderTabs');
+      if (tabsEl) tabsEl.classList.add('folder-tabs-drop-active');
+    }, 0);
+  }
+
+  function _onDragEnd() {
+    _dragConvId = null;
+    document.querySelectorAll('.conv-dragging').forEach(el => el.classList.remove('conv-dragging'));
+    const tabsEl = document.getElementById('folderTabs');
+    if (tabsEl) {
+      tabsEl.classList.remove('folder-tabs-drop-active');
+      tabsEl.querySelectorAll('.folder-tab-drop').forEach(t => t.classList.remove('folder-tab-drop'));
+    }
+  }
+
+  convList.addEventListener('dragstart', _onDragStart);
+  convList.addEventListener('dragend', _onDragEnd);
+}
+
+
 function toggleSidebar() {
   const sidebar = document.getElementById("sidebar");
   const backdrop = document.getElementById("sidebarBackdrop");
@@ -3343,7 +3816,7 @@ function cycleTheme() {
 
 /* Cost dashboard aliases — moved to myday.js */
 
-// ── Sidebar search ──
+// ── Sidebar search (expandable from header button) ──
 function initSidebarSearch() {
   const input = document.getElementById("sidebarSearchInput");
   let timer = null;
@@ -3351,29 +3824,52 @@ function initSidebarSearch() {
     clearTimeout(timer);
     timer = setTimeout(() => {
       sidebarSearchQuery = input.value.trim().toLowerCase();
-      document
-        .getElementById("sidebarSearchClear")
-        .classList.toggle("visible", sidebarSearchQuery.length > 0);
+      /* Exit folder view when searching — search should cover all conversations */
+      if (sidebarSearchQuery && typeof getActiveFolderId === 'function' && getActiveFolderId()) {
+        setActiveFolderId(null);
+      }
       renderConversationList();
     }, 300);
   });
   input.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
       e.preventDefault();
-      clearSidebarSearch();
-      input.blur();
+      closeSidebarSearch();
     }
   });
 }
-function clearSidebarSearch() {
-  const input = document.getElementById("sidebarSearchInput");
-  input.value = "";
-  sidebarSearchQuery = "";
-  document.getElementById("sidebarSearchClear").classList.remove("visible");
-  document.getElementById("sidebarSearchStats").classList.remove("visible");
-  renderConversationList();
-  input.focus();
+
+/** Toggle sidebar search panel open/closed */
+function toggleSidebarSearch() {
+  const wrapper = document.getElementById("sidebarSearchWrapper");
+  const toggle = document.getElementById("sidebarSearchToggle");
+  if (!wrapper) return;
+  const isOpen = wrapper.style.display !== "none";
+  if (isOpen) {
+    closeSidebarSearch();
+  } else {
+    wrapper.style.display = "";
+    if (toggle) toggle.classList.add("active");
+    const input = document.getElementById("sidebarSearchInput");
+    if (input) { input.focus(); input.select(); }
+  }
 }
+
+/** Close sidebar search and clear results */
+function closeSidebarSearch() {
+  const wrapper = document.getElementById("sidebarSearchWrapper");
+  const toggle = document.getElementById("sidebarSearchToggle");
+  const input = document.getElementById("sidebarSearchInput");
+  if (input) input.value = "";
+  sidebarSearchQuery = "";
+  document.getElementById("sidebarSearchStats")?.classList.remove("visible");
+  if (wrapper) wrapper.style.display = "none";
+  if (toggle) toggle.classList.remove("active");
+  renderConversationList();
+}
+
+/* Legacy alias — in case any code calls clearSidebarSearch */
+function clearSidebarSearch() { closeSidebarSearch(); }
 
 // ── Init ──
 async function initActiveTasks() {
@@ -3383,10 +3879,13 @@ async function initActiveTasks() {
        its messages in the same request, eliminating the second round-trip
        that shows "loading..." */
     const prefetchTarget = activeConvId || sessionStorage.getItem('chatui_activeConvId') || null;
-    const [, activeResp] = await Promise.all([
+    const [, , activeResp] = await Promise.all([
       loadConversationsFromServer(prefetchTarget),
+      typeof loadFolders === 'function' ? loadFolders() : Promise.resolve(),
       fetch(apiUrl("/api/chat/active")),
     ]);
+    /* ★ Migrate pinned conversations to a "⭐ 置顶" folder (one-time) */
+    if (typeof _migratePinnedToFolder === 'function') _migratePinnedToFolder();
     if (!activeResp.ok) {
       _ensureNewest();
       return;
@@ -3671,6 +4170,7 @@ async function initActiveTasks() {
           /* ★ FIX: Clean up orphaned awaiting_human / submitted HG rounds.
            *   Task is finished — any unanswered HG request is now dead. */
           let _hgCleaned = 0;
+          let _timerCleaned = 0;
           for (const m of conv.messages) {
             if (m.searchRounds) {
               for (const r of m.searchRounds) {
@@ -3680,11 +4180,26 @@ async function initActiveTasks() {
                   r._hgSkipped = true;
                   _hgCleaned++;
                 }
+                // ★ Clean up orphaned timer_create rounds — the task is dead,
+                //   so the blocking poll can't complete. Mark as done and try
+                //   to recover poll data from the API.
+                if (r.toolName === 'timer_create' && r.status === 'searching') {
+                  r.status = 'done';
+                  r._timerOrphaned = true;
+                  _timerCleaned++;
+                  // Async: try to recover poll log from the timer API
+                  if (r._timerTimerId && typeof _recoverTimerPolls === 'function') {
+                    _recoverTimerPolls(r);
+                  }
+                }
               }
             }
           }
           if (_hgCleaned > 0) {
             console.info(`[initActiveTasks CaseB] 🧹 Cleaned ${_hgCleaned} orphaned HG round(s) — conv=${conv.id.slice(0,8)}`);
+          }
+          if (_timerCleaned > 0) {
+            console.info(`[initActiveTasks CaseB] 🧹 Cleaned ${_timerCleaned} orphaned timer round(s) — conv=${conv.id.slice(0,8)}`);
           }
           conv.activeTaskId = null;
           conv._activeTaskClearedAt = Date.now();
@@ -3797,18 +4312,20 @@ function _ensureNewest() {
       }
       return;
     }
+    // ★ Duplicate conversation button
+    const dup = e.target.closest(".conv-dup");
+    if (dup) {
+      e.stopPropagation();
+      if (dup.dataset.convId) duplicateConversation(dup.dataset.convId, e);
+      return;
+    }
     const del = e.target.closest(".conv-delete");
     if (del) {
       e.stopPropagation();
       if (del.dataset.convId) deleteConversation(del.dataset.convId, e);
       return;
     }
-    const pin = e.target.closest(".conv-pin");
-    if (pin) {
-      e.stopPropagation();
-      if (pin.dataset.convId) togglePinConversation(pin.dataset.convId);
-      return;
-    }
+    /* pin button removed — pinning replaced by folders */
     // ★ @ reference button — add conversation reference chip
     const ref = e.target.closest(".conv-ref");
     if (ref) {
@@ -3818,15 +4335,24 @@ function _ensureNewest() {
       }
       return;
     }
+    // ★ Folder assign button — show folder picker dropdown
+    const folderAssign = e.target.closest(".conv-folder-assign");
+    if (folderAssign) {
+      e.stopPropagation();
+      if (folderAssign.dataset.convId) _showFolderPicker(folderAssign.dataset.convId, folderAssign);
+      return;
+    }
+    // ★ Folder assign button — handled above
     const item = e.target.closest(".conv-item");
     if (item && item.dataset.convId) loadConversation(item.dataset.convId);
   }
   document
     .getElementById("convList")
     .addEventListener("click", _handleConvClick);
-  document
-    .getElementById("convPinnedZone")
-    .addEventListener("click", _handleConvClick);
+  // Initialize folder drag-and-drop
+  _initFolderDragDrop();
+  // ── Folder tab bar click + context menu ──
+  _initFolderTabs();
   const ta = document.getElementById("userInput");
   ta.addEventListener("input", () => {
     ta.style.height = "auto";
@@ -3918,7 +4444,20 @@ function _ensureNewest() {
     { passive: true },
   );
   document.addEventListener("keydown", (e) => {
+    /* Ctrl/Cmd+K → toggle sidebar search */
+    if ((e.ctrlKey || e.metaKey) && e.key === "k") {
+      e.preventDefault();
+      toggleSidebarSearch();
+      return;
+    }
     if (e.key === "Escape") {
+      /* Close search panel if open */
+      const sw = document.getElementById("sidebarSearchWrapper");
+      if (sw && sw.style.display !== "none") {
+        closeSidebarSearch();
+        e.preventDefault();
+        return;
+      }
       const am = document.getElementById("applyModal");
       if (am && am.classList.contains("open")) {
         closeApplyModal();

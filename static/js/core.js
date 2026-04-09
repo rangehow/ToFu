@@ -47,37 +47,137 @@ try {
  *   This eliminates an entire class of desync / ghost bugs. */
 let conversations = [];
 try { localStorage.removeItem('claude_conversations'); } catch(_) {} /* clean up stale data */
+
+
+/* ═══ Folder management ═══ */
+let _folders = [];  // Array of {id, name, color, collapsed, order, createdAt}
+
+async function loadFolders() {
+  try {
+    const resp = await fetch(apiUrl('/api/folders'));
+    if (resp.ok) _folders = await resp.json();
+  } catch (e) {
+    console.warn('[Folders] Failed to load folders:', e.message);
+  }
+  return _folders;
+}
+
+async function createFolder(name, color) {
+  try {
+    const resp = await fetch(apiUrl('/api/folders'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, color: color || '' }),
+    });
+    if (!resp.ok) return null;
+    const folder = await resp.json();
+    _folders.push(folder);
+    return folder;
+  } catch (e) {
+    console.warn('[Folders] Create failed:', e.message);
+    return null;
+  }
+}
+
+async function updateFolder(folderId, updates) {
+  try {
+    const resp = await fetch(apiUrl(`/api/folders/${folderId}`), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updates),
+    });
+    if (!resp.ok) return null;
+    const updated = await resp.json();
+    const idx = _folders.findIndex(f => f.id === folderId);
+    if (idx >= 0) Object.assign(_folders[idx], updated);
+    return updated;
+  } catch (e) {
+    console.warn('[Folders] Update failed:', e.message);
+    return null;
+  }
+}
+
+async function deleteFolder(folderId) {
+  try {
+    const resp = await fetch(apiUrl(`/api/folders/${folderId}`), { method: 'DELETE' });
+    if (!resp.ok) return false;
+    _folders = _folders.filter(f => f.id !== folderId);
+    // Unassign conversations from deleted folder
+    for (const c of conversations) {
+      if (c.folderId === folderId) {
+        c.folderId = null;
+        syncConversationToServer(c).catch(() => {});
+      }
+    }
+    return true;
+  } catch (e) {
+    console.warn('[Folders] Delete failed:', e.message);
+    return false;
+  }
+}
+
+function toggleFolderCollapsed(folderId) {
+  const f = _folders.find(x => x.id === folderId);
+  if (!f) return;
+  f.collapsed = !f.collapsed;
+  updateFolder(folderId, { collapsed: f.collapsed }).catch(() => {});
+  renderConversationList();
+}
+
+function setConversationFolder(convId, folderId) {
+  const c = conversations.find(x => x.id === convId);
+  if (!c) return;
+  c.folderId = folderId || null;
+  saveConversations(null);  // null = metadata-only, don't bump updatedAt
+  renderConversationList();
+  syncConversationToServer(c).catch(() => {});
+}
+
+function getFolders() { return _folders; }
+function getFolderById(id) { return _folders.find(f => f.id === id); }
+
+/* ── Folder View Mode: when set, sidebar shows only this folder's conversations ── */
+let _activeFolderId = null;
+function getActiveFolderId() { return _activeFolderId; }
+function setActiveFolderId(id) {
+  _activeFolderId = id || null;
+  renderConversationList();
+}
+
 function _convSorter(a, b) {
-  const ap = a.pinned ? 1 : 0,
-    bp = b.pinned ? 1 : 0;
-  if (ap !== bp) return bp - ap;
-  if (ap && bp) return (b.pinnedAt || 0) - (a.pinnedAt || 0);
-  /* ★ Active (streaming / generating) conversations float to top of unpinned zone
+  /* ★ Active (streaming / generating) conversations float to top
    *   so they are never pushed out of view when other conversations update. */
   const aAct = (activeStreams.has(a.id) || a.activeTaskId) ? 1 : 0;
   const bAct = (activeStreams.has(b.id) || b.activeTaskId) ? 1 : 0;
   if (aAct !== bAct) return bAct - aAct;
   return (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0);
 }
-function togglePinConversation(id) {
-  const c = conversations.find((x) => x.id === id);
-  if (!c) return;
-  c.pinned = !c.pinned;
-  c.pinnedAt = c.pinned ? Date.now() : 0;
-  /* Pass null instead of id — pin/unpin is a metadata-only change,
-   * NOT new conversation activity.  Passing changedConvId would bump
-   * updatedAt = Date.now(), which makes the unpinned conversation
-   * jump to the top of the non-pinned section. */
+
+/**
+ * Auto-migrate pinned conversations to a "⭐ 置顶" folder.
+ * Called once after both loadFolders() and loadConversationsFromServer() complete.
+ * Creates the folder only if pinned convs exist and they aren't already in a folder.
+ */
+async function _migratePinnedToFolder() {
+  const pinnedConvs = conversations.filter(c => c.pinned && !c.folderId);
+  if (pinnedConvs.length === 0) return;
+
+  // Check if "⭐ 置顶" folder already exists (from a previous migration)
+  let starFolder = _folders.find(f => f.name === '⭐ 置顶');
+  if (!starFolder) {
+    starFolder = await createFolder('⭐ 置顶', '#f59e0b');
+    if (!starFolder) { console.warn('[Folders] Failed to create migration folder'); return; }
+  }
+
+  for (const c of pinnedConvs) {
+    c.folderId = starFolder.id;
+    c.pinned = false;
+    c.pinnedAt = 0;
+    syncConversationToServer(c).catch(() => {});
+  }
   saveConversations(null);
   renderConversationList();
-  /* If messages aren't loaded yet, load them first so the sync guard
-     (which skips convs with 0 messages) doesn't block the pinned state
-     from reaching the server. */
-  if (c.messages.length === 0 && c._needsLoad) {
-    loadConversationMessages(id).then(() => syncConversationToServerDebounced(c));
-  } else {
-    syncConversationToServerDebounced(c);
-  }
+  console.info('[Folders] Migrated %d pinned conversations to "⭐ 置顶" folder', pinnedConvs.length);
 }
 let activeConvId = sessionStorage.getItem('chatui_activeConvId') || null,
   activeStreams = new Map(),
@@ -1304,6 +1404,7 @@ async function syncConversationToServer(conv, { allowTruncate = false } = {}) {
       autoTranslate: conv.autoTranslate,
       pinned: conv.pinned || false,
       pinnedAt: conv.pinnedAt || 0,
+      folderId: conv.folderId || null,
       /* ★ Persist activeTaskId so the server knows which task is associated
        *   with this conversation.  On page reload, initActiveTasks reads this
        *   to recover completed task results even when the SSE stream died. */
@@ -1391,6 +1492,7 @@ function _applySettingsToConv(conv, settings) {
     conv.autoTranslate = settings.autoTranslate;
   if (settings.pinned !== undefined) conv.pinned = settings.pinned;
   if (settings.pinnedAt !== undefined) conv.pinnedAt = settings.pinnedAt;
+  if (settings.folderId !== undefined) conv.folderId = settings.folderId;
   if (settings.source) conv.source = settings.source;
   if (settings.feishuUser) conv.feishuUser = settings.feishuUser;
   /* ★ Persist last message info for Case E orphan detection on _needsLoad shells */

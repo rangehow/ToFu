@@ -15,7 +15,7 @@ _logger = get_logger(__name__)
 __all__: list[str] = []
 
 # ── All modules (all required for scheduler to function) ─
-from . import _shared, cron, executor, manager, proactive, timer, tool_defs  # noqa: E402
+from . import _shared, cron, executor, manager, proactive, timer, tool_defs  # noqa: E402, F401
 from .cron import *  # noqa: F401,F403
 from .executor import *  # noqa: F401,F403
 from .manager import *  # noqa: F401,F403

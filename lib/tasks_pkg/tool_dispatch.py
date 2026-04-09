@@ -516,12 +516,15 @@ def execute_tool_pipeline(
                 if round_entry:
                     # Use stored display_results for web_search if available
                     if cached_display and fn_name == 'web_search':
+                        extra = {}
+                        if cached_engine_bkdn:
+                            round_entry['engineBreakdown'] = cached_engine_bkdn
+                            extra['engineBreakdown'] = cached_engine_bkdn
                         _finalize_tool_round(
                             task, rn, round_entry, cached_display,
                             query_override=round_entry.get('query', fn_name),
+                            extra_event_fields=extra or None,
                         )
-                        if cached_engine_bkdn:
-                            round_entry['engineBreakdown'] = cached_engine_bkdn
                     else:
                         _meta = _build_cache_hit_meta(
                             fn_name, fn_args, cached_content, is_prefetch,

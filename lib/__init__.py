@@ -12,6 +12,7 @@ __all__ = [
     'DOUBAO_MODEL', 'CLAUDE_SONNET_MODEL',
     'IMAGE_GEN_MODEL', 'EMBEDDING_MODELS',
     'TRADING_ENABLED',
+    'DEBUG_MODE',
     'FETCH_TOP_N', 'FETCH_TIMEOUT',
     'FETCH_MAX_CHARS_SEARCH', 'FETCH_MAX_CHARS_DIRECT',
     'FETCH_MAX_CHARS_PDF', 'FETCH_MAX_BYTES',
@@ -164,6 +165,31 @@ def _resolve_trading_enabled():
     return False  # default OFF
 
 TRADING_ENABLED = _resolve_trading_enabled()
+
+
+# ── Debug Mode (default OFF — shows trace_id, conv-copy-id in sidebar) ──
+def _resolve_debug_mode():
+    """Resolve DEBUG_MODE from env-var or persistent features.json.
+
+    Priority: env-var > data/config/features.json > default(OFF).
+    When enabled, shows trace_id in finish tags and copy-conv-id button in sidebar.
+    """
+    env_val = os.environ.get('DEBUG_MODE')
+    if env_val is not None:
+        return env_val == '1'
+    _features_path = _config_path('features.json')
+    try:
+        if os.path.isfile(_features_path):
+            with open(_features_path) as f:
+                feats = _json.load(f)
+            if isinstance(feats, dict) and 'debug_mode' in feats:
+                return bool(feats['debug_mode'])
+    except Exception as _e:
+        import logging as _logging
+        _logging.getLogger(__name__).debug('Could not read features.json: %s', _e)
+    return False  # default OFF
+
+DEBUG_MODE = _resolve_debug_mode()
 
 
 # ── Cache Extended TTL (default ON — use 1h TTL for stable prefix) ──
@@ -533,6 +559,8 @@ def reload_config():
 
     # Trading flag
     _mod.TRADING_ENABLED = _resolve_trading_enabled()
+    # Debug mode flag
+    _mod.DEBUG_MODE = _resolve_debug_mode()
 
     # Model defaults (from model_defaults section)
     _md = _SAVED_CONFIG.get('model_defaults', {})

@@ -343,8 +343,31 @@ def _execute_timer_create(fn_args):
         logger.info('[Timer:%s] Inline blocking poll started (interval=%ds, max=%d)',
                     timer_id, poll_interval, max_polls)
 
+        # ── Helper: update the searchRound entry in task['searchRounds'] ──
+        # so that SSE state snapshots include _timerPolls for reconnection.
+        def _attach_poll_to_round(poll_entry):
+            """Append a poll entry to the searchRound's _timerPolls list."""
+            if not parent_task:
+                return
+            for sr in parent_task.get('searchRounds', []):
+                if sr.get('roundNum') == round_num:
+                    if '_timerPolls' not in sr:
+                        sr['_timerPolls'] = []
+                    sr['_timerPolls'].append(poll_entry)
+                    sr['_timerTimerId'] = timer_id
+                    break
+
         # Emit initial status so frontend shows "watching…"
         if parent_task and round_num is not None:
+            _started_poll = {
+                'pollNum': 0,
+                'decision': 'started',
+                'reason': f'Timer created — polling every {poll_interval}s (max {max_polls})',
+                'tokensUsed': 0,
+                'timerId': timer_id,
+                'ts': int(_time.time() * 1000),
+            }
+            _attach_poll_to_round(_started_poll)
             append_event(parent_task, {
                 'type': 'timer_poll_check',
                 'roundNum': round_num,
@@ -394,6 +417,15 @@ def _execute_timer_create(fn_args):
                 _increment_poll_count(timer_id, 'error', str(e)[:200])
                 # Emit error event
                 if parent_task and round_num is not None:
+                    _err_poll = {
+                        'pollNum': poll_count,
+                        'decision': 'error',
+                        'reason': f'Poll error: {str(e)[:100]}',
+                        'tokensUsed': 0,
+                        'timerId': timer_id,
+                        'ts': int(_time.time() * 1000),
+                    }
+                    _attach_poll_to_round(_err_poll)
                     append_event(parent_task, {
                         'type': 'timer_poll_check',
                         'roundNum': round_num,
@@ -420,6 +452,22 @@ def _execute_timer_create(fn_args):
 
             # ── Emit SSE event for each poll check ──
             if parent_task and round_num is not None:
+                _poll_entry = {
+                    'pollNum': poll_count,
+                    'decision': decision,
+                    'reason': reason[:200],
+                    'tokensUsed': tokens_used,
+                    'timerId': timer_id,
+                    'ts': int(_time.time() * 1000),
+                }
+                _attach_poll_to_round(_poll_entry)
+                # Mark the round as triggered if ready
+                if ready:
+                    for sr in parent_task.get('searchRounds', []):
+                        if sr.get('roundNum') == round_num:
+                            sr['_timerTriggered'] = True
+                            sr['status'] = 'done'
+                            break
                 append_event(parent_task, {
                     'type': 'timer_poll_check',
                     'roundNum': round_num,

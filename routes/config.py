@@ -49,6 +49,42 @@ def _write_server_config(data):
 
 
 # ══════════════════════════════════════════════════════
+#  Cheap Tag Re-evaluation
+# ══════════════════════════════════════════════════════
+
+def _reeval_cheap_tags(providers: list):
+    """Re-evaluate 'cheap' capability on all provider models using real pricing.
+
+    Fixes stale cheap tags from old discovery runs that used the blended
+    threshold or name-heuristic fallback.  Uses the strict two-sided check:
+    input < Sonnet input ($3/1M) AND output < Sonnet output ($15/1M).
+    """
+    from lib.llm_dispatch.config import is_model_cheap
+
+    for prov in providers:
+        for m in prov.get('models', []):
+            mid = m.get('model_id', '')
+            if not mid:
+                continue
+            caps = set(m.get('capabilities', []))
+            # Skip non-chat models
+            if 'image_gen' in caps or 'embedding' in caps:
+                continue
+            cheap = is_model_cheap(
+                mid,
+                fallback_cost_per_1k=m.get('cost'),
+                input_price=m.get('input_price'),
+                output_price=m.get('output_price'),
+            )
+            if cheap and 'cheap' not in caps:
+                caps.add('cheap')
+                m['capabilities'] = sorted(caps)
+            elif not cheap and 'cheap' in caps:
+                caps.discard('cheap')
+                m['capabilities'] = sorted(caps)
+
+
+# ══════════════════════════════════════════════════════
 #  Provider Defaults Builder
 # ══════════════════════════════════════════════════════
 
@@ -216,6 +252,10 @@ def get_server_config():
     else:
         providers, presets = _build_default_providers()
 
+    # Re-evaluate cheap tags using real pricing data (fixes stale tags from
+    # old discovery runs or name-heuristic fallback).
+    _reeval_cheap_tags(providers)
+
     model_keys = [
         'LLM_MODEL', 'QWEN_MODEL',
         'GEMINI_MODEL', 'GEMINI_PRO_MODEL', 'GEMINI_PRO_PREVIEW_MODEL',
@@ -290,6 +330,17 @@ def get_server_config():
             'output': info.get('output', 0),
             'name': info.get('name', model_name),
         }
+    # Also include input/output pricing from provider models (e.g. from discovery enrichment)
+    for prov in providers:
+        for m in prov.get('models', []):
+            mid = m.get('model_id', '')
+            if mid and mid not in model_pricing:
+                if m.get('input_price') is not None and m.get('output_price') is not None:
+                    model_pricing[mid] = {
+                        'input': m['input_price'],
+                        'output': m['output_price'],
+                        'name': mid,
+                    }
 
     model_limits = saved.get('model_limits', {})
     model_defaults = {

@@ -388,6 +388,7 @@ SPA_DOMAINS = frozenset({
     'trello.com',
     'canva.com',
     'v0.dev',
+    'volcengine.com',
 })
 
 # Playwright 需要 JS 渲染的最小可提取文本长度阈值
@@ -412,6 +413,8 @@ def _looks_like_spa_shell(raw_html, extracted_text):
     判定为 SPA 空壳的条件 (需满足 至少一个):
       A) HTML 中包含典型 SPA 挂载点标记 (id="root"/"app"/__next 等) 且文本极少
       B) HTML > 2KB 但提取文本 < 100 字符 (大 HTML 却没内容, 强信号)
+      C) <noscript> 中包含 "enable JavaScript" 且有 SPA 挂载点 (最强信号 —
+         即使导航菜单贡献了较多文字, 真实内容仍需 JS 渲染, 如 volcengine.com)
     """
     if not raw_html:
         return False
@@ -434,6 +437,29 @@ def _looks_like_spa_shell(raw_html, extracted_text):
     # B) 大 HTML + 极少文本 = 强 SPA 信号 (2KB+ HTML 但 < 100 字文本)
     if html_len > 2000 and text_len < 100:
         return True
+
+    # C) <noscript> 中明确要求启用 JavaScript + SPA 挂载点 = 确定是 SPA
+    #    很多 SPA 框架 (React/Vue/Angular/Modern.js) 在 <noscript> 中放置
+    #    "You need to enable JavaScript to run this app" 之类的提示。
+    #    这种情况下即使 HTML 中有导航菜单等文字 (导致 text_len 较高),
+    #    真实页面内容也必须靠 JS 渲染。只在有 SPA 挂载点时才触发，避免
+    #    误判那些仅因增强功能而提示 JS 的非 SPA 页面。
+    if has_spa_marker:
+        # 搜索 <noscript> 块中的 JS-required 提示
+        noscript_re = re.compile(r'<noscript[^>]*>(.*?)</noscript>', re.I | re.DOTALL)
+        for m in noscript_re.finditer(html_str[:50000]):
+            ns_text = m.group(1).lower()
+            if any(kw in ns_text for kw in (
+                'enable javascript', 'requires javascript',
+                'javascript is required', 'javascript is disabled',
+                'need to enable javascript', 'need javascript',
+                'activate javascript', 'turn on javascript',
+                '启用 javascript', '需要启用 javascript',
+                '请启用 javascript', '开启 javascript',
+            )):
+                logger.debug('SPA noscript+marker detected (text=%d) — '
+                             'JS required message in <noscript>', text_len)
+                return True
 
     return False
 

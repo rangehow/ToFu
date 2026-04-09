@@ -141,6 +141,7 @@ var ConvCache = (function () {
               projectPath: conv.projectPath, projectPaths: conv.projectPaths,
               autoTranslate: conv.autoTranslate,
               pinned: conv.pinned, pinnedAt: conv.pinnedAt,
+              folderId: conv.folderId,
             },
             // Messages: strip base64 image data (re-hydrated on demand anyway)
             messages: conv.messages.map(function (m) {

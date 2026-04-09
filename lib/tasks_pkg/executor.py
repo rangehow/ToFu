@@ -259,6 +259,7 @@ def _finalize_tool_round(
     results: list,
     *,
     query_override: str = '',
+    extra_event_fields: dict[str, Any] | None = None,
 ) -> None:
     """Finalize a tool round: set results & status, emit the SSE event.
 
@@ -280,15 +281,21 @@ def _finalize_tool_round(
         List of result meta dicts (usually ``[meta]``).
     query_override : str, optional
         If provided, overrides ``round_entry['query']`` in the event.
+    extra_event_fields : dict, optional
+        Additional fields to merge into the SSE event payload
+        (e.g. ``{'engineBreakdown': ...}``).
     """
     round_entry['results'] = results
     round_entry['status'] = 'done'
-    append_event(task, {
+    event = {
         'type': 'tool_result',
         'roundNum': rn,
         'query': query_override or round_entry['query'],
         'results': results,
-    })
+    }
+    if extra_event_fields:
+        event.update(extra_event_fields)
+    append_event(task, event)
 
 
 def _build_simple_meta(

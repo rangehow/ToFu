@@ -2,6 +2,7 @@
 import hashlib
 import json
 import os
+import tempfile
 import time
 
 from lib.log import get_logger
@@ -12,6 +13,29 @@ from lib.project_mod.config import (
 )
 
 logger = get_logger(__name__)
+
+
+def _atomic_json_write(filepath, data):
+    """Write JSON data to file atomically (write to temp, then rename).
+
+    Prevents file corruption if the process is killed mid-write.
+    os.replace() is atomic on POSIX when src and dst are on the same filesystem.
+    """
+    dir_name = os.path.dirname(filepath)
+    fd, tmp_path = tempfile.mkstemp(dir=dir_name, suffix='.tmp', prefix='.modifications_')
+    try:
+        with os.fdopen(fd, 'w') as f:
+            json.dump(data, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, filepath)
+    except BaseException:
+        # Clean up temp file on any failure (including KeyboardInterrupt)
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 def _nudge_vscode(filepath):
@@ -39,6 +63,15 @@ def _start_new_session(base_path):
     if not session_dir:
         return None
     session_file = os.path.join(session_dir, 'modifications.json')
+    # Clean up stale .tmp files from previously crashed atomic writes
+    try:
+        for name in os.listdir(session_dir):
+            if name.startswith('.modifications_') and name.endswith('.tmp'):
+                stale = os.path.join(session_dir, name)
+                os.unlink(stale)
+                logger.debug('Cleaned up stale temp file: %s', name)
+    except OSError as e:
+        logger.debug('Failed to clean stale temp files: %s', e)
     with _lock:
         _state['sessionId'] = session_dir
         _state['modifications'] = []
@@ -51,7 +84,14 @@ def _start_new_session(base_path):
                 _state['modifications'] = data.get('modifications', [])
             logger.info('Loaded %d pending modifications', len(_state["modifications"]))
         except Exception as e:
-            logger.error('Failed to load modifications: %s', e, exc_info=True)
+            logger.error('Failed to load modifications (corrupt file?): %s', e, exc_info=True)
+            # Rename corrupt file so we don't fail on every restart
+            corrupt_path = session_file + '.corrupt'
+            try:
+                os.replace(session_file, corrupt_path)
+                logger.warning('Renamed corrupt modifications file to %s', corrupt_path)
+            except OSError as rename_err:
+                logger.warning('Could not rename corrupt file: %s', rename_err)
     return session_dir
 
 
@@ -96,11 +136,10 @@ def _record_modification(base_path, mod_type, path, original_content=None, rever
 
     with _lock:
         _state['modifications'].append(mod)
-        # Save to disk
+        # Save to disk (atomic write to prevent corruption on crash)
         session_file = os.path.join(session_dir, 'modifications.json')
         try:
-            with open(session_file, 'w') as f:
-                json.dump({'modifications': _state['modifications']}, f, indent=2)
+            _atomic_json_write(session_file, {'modifications': _state['modifications']})
         except Exception as e:
             logger.error('Failed to save modifications: %s', e, exc_info=True)
 
@@ -205,14 +244,13 @@ def _undo_modifications_list(base_path, modifications):
 
 
 def _save_modifications(session_dir):
-    """Save current modifications to disk."""
+    """Save current modifications to disk (atomic write)."""
     session_file = os.path.join(session_dir, 'modifications.json')
     try:
         with _lock:
             mods = list(_state['modifications'])
         if mods:
-            with open(session_file, 'w') as f:
-                json.dump({'modifications': mods}, f, indent=2)
+            _atomic_json_write(session_file, {'modifications': mods})
         else:
             if os.path.exists(session_file):
                 os.remove(session_file)

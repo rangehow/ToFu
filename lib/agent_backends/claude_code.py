@@ -173,6 +173,7 @@ class ClaudeCodeBackend(AgentBackend):
         # State for tool input accumulation
         tool_input_buffers: dict[int, str] = {}  # index → accumulated JSON string
         current_tools: dict[int, dict] = {}       # index → {id, name}
+        tool_id_to_name: dict[str, str] = {}       # tool_id → tool_name (for matching results)
 
         try:
             for line in proc.stdout:
@@ -193,8 +194,19 @@ class ClaudeCodeBackend(AgentBackend):
                     logger.debug('[ClaudeCode] Skipping non-JSON line: %.100s', raw)
                     continue
 
+                etype = event.get('type', '?')
+                subtype = event.get('subtype', '')
+                se_type = ''
+                if etype == 'stream_event':
+                    se_type = event.get('event', {}).get('type', '?')
+                logger.debug('[ClaudeCode] Event: type=%s%s%s',
+                             etype,
+                             '/%s' % subtype if subtype else '',
+                             '/%s' % se_type if se_type else '')
+
                 yield from self._normalize(
-                    event, tool_input_buffers, current_tools, task
+                    event, tool_input_buffers, current_tools,
+                    tool_id_to_name, task,
                 )
 
         except Exception as e:
@@ -264,6 +276,7 @@ class ClaudeCodeBackend(AgentBackend):
         event: dict,
         tool_input_buffers: dict[int, str],
         current_tools: dict[int, dict],
+        tool_id_to_name: dict[str, str],
         task: dict,
     ) -> Iterator[NormalizedEvent]:
         """Normalize a Claude Code stream-json event to NormalizedEvents.
@@ -271,7 +284,8 @@ class ClaudeCodeBackend(AgentBackend):
         Handles the full event taxonomy:
           - system: init, api_retry
           - stream_event: content_block_start/delta/stop, message_start/delta/stop
-          - assistant: full message (non-streaming)
+          - assistant: full message (non-streaming, tool_use blocks)
+          - user: tool results from Claude Code's internal execution
           - result: session_id, usage, cost
         """
         etype = event.get('type', '')
@@ -279,18 +293,31 @@ class ClaudeCodeBackend(AgentBackend):
         if etype == 'system':
             sub = event.get('subtype', '')
             if sub == 'init':
+                model = event.get('model', 'unknown')
+                version = event.get('claude_code_version', '?')
+                logger.info('[ClaudeCode] Init — model=%s version=%s tools=%d',
+                            model, version, len(event.get('tools', [])))
                 yield NormalizedEvent(kind=K.PHASE, text='Initializing Claude Code...')
             elif sub == 'api_retry':
-                detail = event.get('message', 'Retrying API call...')
-                yield NormalizedEvent(kind=K.PHASE, text=detail)
+                attempt = event.get('attempt', '?')
+                max_retries = event.get('max_retries', '?')
+                error_status = event.get('error_status', '')
+                error_type = event.get('error', 'unknown')
+                delay_ms = event.get('retry_delay_ms', 0)
+                delay_s = delay_ms / 1000 if isinstance(delay_ms, (int, float)) else 0
+                detail = 'API %s (HTTP %s) — retry %s/%s in %.1fs' % (
+                    error_type, error_status, attempt, max_retries, delay_s)
+                logger.warning('[ClaudeCode] %s', detail)
+                yield NormalizedEvent(kind=K.PHASE, phase_type='retrying', text=detail)
 
         elif etype == 'stream_event':
             yield from self._normalize_stream_event(
-                event, tool_input_buffers, current_tools
+                event, tool_input_buffers, current_tools,
+                tool_id_to_name,
             )
 
         elif etype == 'assistant':
-            # Full completed message — extract text and tool results
+            # Full completed assistant message — extract text and tool_use calls
             msg = event.get('message', {})
             content_blocks = msg.get('content', [])
             for block in content_blocks:
@@ -300,24 +327,46 @@ class ClaudeCodeBackend(AgentBackend):
                     if text:
                         yield NormalizedEvent(kind=K.TEXT_DELTA, text=text)
                 elif btype == 'tool_use':
+                    # Non-streaming tool call — emit TOOL_START with full input
+                    tool_name = block.get('name', '')
+                    tool_id = block.get('id', '')
+                    if tool_id and tool_name:
+                        tool_id_to_name[tool_id] = tool_name
                     yield NormalizedEvent(
                         kind=K.TOOL_START,
-                        tool_name=block.get('name', ''),
-                        tool_id=block.get('id', ''),
+                        tool_name=tool_name,
+                        tool_id=tool_id,
                         tool_input=block.get('input', {}),
                     )
-                elif btype == 'tool_result':
+
+        elif etype == 'user':
+            # Tool results from Claude Code's internal tool execution.
+            # Claude Code sends user-role messages with tool_result blocks
+            # after it executes tools internally.
+            msg = event.get('message', {})
+            content_blocks = msg.get('content', [])
+            for block in content_blocks:
+                if not isinstance(block, dict):
+                    continue
+                btype = block.get('type', '')
+                if btype == 'tool_result':
+                    tool_use_id = block.get('tool_use_id', '')
+                    is_error = block.get('is_error', False)
                     content = block.get('content', '')
                     if isinstance(content, list):
                         content = '\n'.join(
                             b.get('text', '') for b in content
                             if isinstance(b, dict) and b.get('type') == 'text'
                         )
+                    resolved_name = tool_id_to_name.get(tool_use_id, '')
+                    logger.debug('[ClaudeCode] Tool result: id=%s name=%s error=%s output_len=%d',
+                                 tool_use_id[:12], resolved_name, is_error, len(str(content)))
                     yield NormalizedEvent(
                         kind=K.TOOL_COMPLETE,
-                        tool_id=block.get('tool_use_id', ''),
+                        tool_id=tool_use_id,
+                        tool_name=resolved_name,
                         tool_output=str(content),
-                        tool_is_error=block.get('is_error', False),
+                        tool_is_error=is_error,
                     )
 
         elif etype == 'result':
@@ -360,6 +409,7 @@ class ClaudeCodeBackend(AgentBackend):
         event: dict,
         tool_input_buffers: dict[int, str],
         current_tools: dict[int, dict],
+        tool_id_to_name: dict[str, str],
     ) -> Iterator[NormalizedEvent]:
         """Normalize a stream_event (wrapping Anthropic SSE)."""
         se = event.get('event', {})
@@ -375,10 +425,16 @@ class ClaudeCodeBackend(AgentBackend):
                 tool_name = cb.get('name', '')
                 current_tools[index] = {'id': tool_id, 'name': tool_name}
                 tool_input_buffers[index] = ''
+                # Record the mapping early so tool results can resolve names
+                if tool_id and tool_name:
+                    tool_id_to_name[tool_id] = tool_name
+                # Do NOT yield TOOL_START here — we don't have the full input yet.
+                # TOOL_START is yielded in content_block_stop after input is accumulated.
+                # Yield a PHASE hint so the UI knows something is happening.
                 yield NormalizedEvent(
-                    kind=K.TOOL_START,
-                    tool_name=tool_name,
-                    tool_id=tool_id,
+                    kind=K.PHASE,
+                    phase_type='tool_exec',
+                    text='%s — preparing…' % (tool_name or 'Tool'),
                 )
             elif cb_type == 'thinking':
                 pass  # Thinking block start — content comes in deltas
@@ -420,8 +476,15 @@ class ClaudeCodeBackend(AgentBackend):
                         logger.debug('[ClaudeCode] Failed to parse tool input JSON: %.200s', raw_input)
                         tool_input = {'_raw': raw_input}
 
+                # Tool call JSON is fully accumulated — now Claude Code will
+                # execute it internally. Yield TOOL_START (not TOOL_COMPLETE)
+                # because the tool hasn't been executed yet. The actual result
+                # comes later as a 'user' type event with tool_result blocks.
+                logger.info('[ClaudeCode] Tool call ready: name=%s id=%s input_keys=%s',
+                            tool_info['name'], tool_info['id'][:12],
+                            list(tool_input.keys()) if isinstance(tool_input, dict) else '?')
                 yield NormalizedEvent(
-                    kind=K.TOOL_COMPLETE,
+                    kind=K.TOOL_START,
                     tool_name=tool_info['name'],
                     tool_id=tool_info['id'],
                     tool_input=tool_input,

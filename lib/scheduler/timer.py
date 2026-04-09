@@ -488,16 +488,8 @@ def poll_timer(timer_id: str) -> tuple[bool, str, int, bool]:
 
     # Parse JSON decision from final content
     try:
-        text = (content or '').strip()
-        if text.startswith('```'):
-            text = text.split('\n', 1)[-1]
-            if text.endswith('```'):
-                text = text[:-3]
-            text = text.strip()
-
-        decision = json.loads(text)
-        ready = bool(decision.get('ready', False))
-        reason = str(decision.get('reason', ''))[:200]
+        from lib.scheduler._shared import parse_json_decision
+        ready, reason = parse_json_decision(content, key='ready')
     except (json.JSONDecodeError, TypeError, AttributeError) as e:
         logger.warning('[Timer:%s] Failed to parse poll response: %s — raw: %.500s',
                        timer_id, e, content)
@@ -538,147 +530,57 @@ def _execute_continuation(timer: dict[str, Any]) -> str | None:
     Returns:
         The agentic task_id, or None on failure.
     """
-    import threading as _threading
-
-    from lib.database import DOMAIN_CHAT, db_execute_with_retry, get_thread_db, json_dumps_pg
-    from lib.tasks_pkg import run_task
-    from lib.tasks_pkg.manager import create_task as create_agentic_task
+    from lib.scheduler._shared import inject_and_run_task
 
     timer_id = timer['id']
     conv_id = timer['conv_id']
     continuation_msg = timer['continuation_message']
+    log_prefix = f'[Timer:{timer_id}]'
 
-    logger.info('[Timer:%s] 🚀 Executing continuation in conv=%s', timer_id, conv_id[:12])
+    logger.info('%s 🚀 Executing continuation in conv=%s', log_prefix, conv_id[:12])
 
-    try:
-        db = get_thread_db(DOMAIN_CHAT)
+    # Build the timer-specific user message
+    user_message = {
+        'role': 'user',
+        'content': (
+            f'⏱️ **[Timer Watcher Triggered — {timer_id}]**\n\n'
+            f'{continuation_msg}'
+        ),
+        'timestamp': datetime.now().isoformat(),
+        '_timer': True,
+        '_timerId': timer_id,
+    }
 
-        # 1. Load conversation
-        row = db.execute(
-            'SELECT messages, settings FROM conversations WHERE id=? AND user_id=1',
-            (conv_id,)
-        ).fetchone()
+    agentic_task_id = inject_and_run_task(
+        conv_id=conv_id,
+        user_message=user_message,
+        tools_config_json=timer.get('tools_config', '{}'),
+        log_prefix=log_prefix,
+    )
 
-        if not row:
-            logger.error('[Timer:%s] Conversation %s not found', timer_id, conv_id)
-            return None
-
+    if agentic_task_id:
+        # Mark timer as triggered in DB
         try:
-            messages = json.loads(row['messages'] or '[]')
-        except (json.JSONDecodeError, TypeError) as e:
-            logger.debug('[Timer:%s] Failed to parse conv messages, defaulting to []: %s', timer_id, e)
-            messages = []
+            from lib.database import DOMAIN_SYSTEM, get_thread_db
+            sysdb = get_thread_db(DOMAIN_SYSTEM)
+            now_iso = datetime.now().isoformat()
+            sysdb.execute(
+                "UPDATE timer_watchers SET status='triggered', triggered_at=?, "
+                "execution_task_id=?, updated_at=? WHERE id=?",
+                [now_iso, agentic_task_id, now_iso, timer_id]
+            )
+            sysdb.commit()
+        except Exception as e:
+            logger.error('%s Failed to mark timer as triggered: %s',
+                         log_prefix, e, exc_info=True)
 
-        try:
-            settings = json.loads(row['settings'] or '{}')
-        except (json.JSONDecodeError, TypeError) as e:
-            logger.debug('[Timer:%s] Failed to parse conv settings, defaulting to {}: %s', timer_id, e)
-            settings = {}
+    # Clean up in-memory state regardless of outcome
+    with _timers_lock:
+        _active_timers.pop(timer_id, None)
+    with _cmd_outputs_lock:
+        _last_cmd_outputs.pop(timer_id, None)
 
-        # 2. Append timer user message
-        timer_user_msg = {
-            'role': 'user',
-            'content': (
-                f'⏱️ **[Timer Watcher Triggered — {timer_id}]**\n\n'
-                f'{continuation_msg}'
-            ),
-            'timestamp': datetime.now().isoformat(),
-            '_timer': True,
-            '_timerId': timer_id,
-        }
-        messages.append(timer_user_msg)
-
-        # 3. Append placeholder assistant message
-        assistant_msg = {
-            'role': 'assistant',
-            'content': '',
-            'thinking': '',
-            'timestamp': datetime.now().isoformat(),
-            '_timer': True,
-        }
-        messages.append(assistant_msg)
-
-        # 4. Write messages back
-        from routes.conversations import build_search_text
-        messages_json = json_dumps_pg(messages)
-        search_text = build_search_text(messages)
-        now_ms = int(time.time() * 1000)
-        db_execute_with_retry(db,
-            """UPDATE conversations SET messages=?, updated_at=?, msg_count=?, search_text=?,
-                   search_tsv=to_tsvector('simple', left(?, 50000))
-               WHERE id=? AND user_id=1""",
-            (messages_json, now_ms, len(messages), search_text, search_text, conv_id)
-        )
-
-        # 5. Build config from tools_config
-        try:
-            tools_cfg = json.loads(timer.get('tools_config', '{}') or '{}')
-        except (json.JSONDecodeError, TypeError) as e:
-            logger.debug('[Timer:%s] Failed to parse tools_config, defaulting to {}: %s', timer_id, e)
-            tools_cfg = {}
-
-        config = {
-            'model': settings.get('model') or tools_cfg.get('model', ''),
-            'preset': settings.get('model') or tools_cfg.get('model', ''),
-            'thinkingEnabled': True,
-            'searchMode': tools_cfg.get('searchMode', settings.get('searchMode', 'multi')),
-            'fetchEnabled': True,
-            'projectPath': tools_cfg.get('projectPath', settings.get('projectPath', '')),
-            'codeExecEnabled': tools_cfg.get('codeExecEnabled', settings.get('codeExecEnabled', False)),
-            'browserEnabled': tools_cfg.get('browserEnabled', settings.get('browserEnabled', False)),
-            'memoryEnabled': tools_cfg.get('memoryEnabled', settings.get('memoryEnabled', True)),
-            'swarmEnabled': tools_cfg.get('swarmEnabled', settings.get('swarmEnabled', False)),
-            'imageGenEnabled': tools_cfg.get('imageGenEnabled', settings.get('imageGenEnabled', False)),
-            'schedulerEnabled': True,
-        }
-
-        # 6. Create and start the agentic task
-        agentic_task = create_agentic_task(conv_id, messages, config)
-        agentic_task_id = agentic_task['id']
-
-        settings['activeTaskId'] = agentic_task_id
-        settings_json = json.dumps(settings, ensure_ascii=False)
-        db_execute_with_retry(db,
-            'UPDATE conversations SET settings=? WHERE id=? AND user_id=1',
-            (settings_json, conv_id)
-        )
-
-        logger.info('[Timer:%s] Created agentic task %s in conv=%s',
-                     timer_id, agentic_task_id[:8], conv_id[:12])
-
-        # 7. Mark timer as triggered
-        from lib.database import DOMAIN_SYSTEM
-        from lib.database import get_thread_db as _get_db
-        sysdb = _get_db(DOMAIN_SYSTEM)
-        now_iso = datetime.now().isoformat()
-        sysdb.execute(
-            "UPDATE timer_watchers SET status='triggered', triggered_at=?, execution_task_id=?, updated_at=? WHERE id=?",
-            [now_iso, agentic_task_id, now_iso, timer_id]
-        )
-        sysdb.commit()
-
-        # 8. Run in background thread
-        def _run():
-            try:
-                run_task(agentic_task)
-            except Exception as e:
-                logger.error('[Timer:%s] Agentic task %s execution failed: %s',
-                             timer_id, agentic_task_id[:8], e, exc_info=True)
-
-        _threading.Thread(target=_run, daemon=True,
-                          name=f'timer-exec-{agentic_task_id[:8]}').start()
-
-        # Remove from active timers registry and clean up caches
-        with _timers_lock:
-            _active_timers.pop(timer_id, None)
-        with _cmd_outputs_lock:
-            _last_cmd_outputs.pop(timer_id, None)
-
-        return agentic_task_id
-
-    except Exception as e:
-        logger.error('[Timer:%s] Failed to execute continuation: %s', timer_id, e, exc_info=True)
-        return None
+    return agentic_task_id
 
 
 # ═════════════════════════════════════════════════════════════════════════════

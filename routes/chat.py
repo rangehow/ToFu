@@ -100,7 +100,7 @@ def _start_external_backend(data, messages, backend_name):
     work unchanged — they read from the same ``task['events']`` queue.
     """
     from lib.agent_backends import get_backend
-    from lib.agent_backends.sse_bridge import normalized_to_sse
+    from lib.agent_backends.sse_bridge import SSEBridgeState
     from lib.tasks_pkg.manager import append_event, persist_task_result
 
     backend = get_backend(backend_name)
@@ -142,6 +142,8 @@ def _start_external_backend(data, messages, backend_name):
                 project_path or 'none', session_id[:16] if session_id else 'none')
 
     def _run_external():
+        bridge = SSEBridgeState()
+
         try:
             accumulated_content = ''
             accumulated_thinking = ''
@@ -160,8 +162,43 @@ def _start_external_backend(data, messages, backend_name):
                     accumulated_thinking += event.text
                     task['thinking'] = accumulated_thinking
 
-                # Translate to SSE and emit
-                sse_event = normalized_to_sse(event)
+                # ── Track searchRounds on the task dict for persistence ──
+                if event.kind == 'tool_start':
+                    # Translate first so bridge assigns roundNum
+                    sse_event = bridge.translate(event)
+                    if sse_event:
+                        # Build search round entry (mirrors tool_display.py)
+                        rn = sse_event.get('roundNum', 0)
+                        round_entry = {
+                            'roundNum': rn,
+                            'query': sse_event.get('query', ''),
+                            'results': None,
+                            'status': 'searching',
+                            'toolName': sse_event.get('toolName', event.tool_name or 'tool'),
+                            'toolCallId': sse_event.get('toolCallId', event.tool_id or ''),
+                            'toolArgs': sse_event.get('toolArgs', ''),
+                        }
+                        task['searchRounds'].append(round_entry)
+                        append_event(task, sse_event)
+                    continue
+
+                if event.kind == 'tool_complete':
+                    sse_event = bridge.translate(event)
+                    if sse_event:
+                        # Update the matching search round
+                        rn = sse_event.get('roundNum', 0)
+                        for sr in task.get('searchRounds', []):
+                            if sr.get('roundNum') == rn:
+                                sr['results'] = sse_event.get('results', [])
+                                sr['status'] = 'done'
+                                if sse_event.get('engineBreakdown'):
+                                    sr['engineBreakdown'] = sse_event['engineBreakdown']
+                                break
+                        append_event(task, sse_event)
+                    continue
+
+                # Translate all other events normally
+                sse_event = bridge.translate(event)
                 if sse_event:
                     append_event(task, sse_event)
 
@@ -195,8 +232,9 @@ def _start_external_backend(data, messages, backend_name):
             except Exception as e:
                 logger.warning('[Chat] Failed to persist external task result: %s', e)
 
-            logger.info('[Chat] External task %s completed — backend=%s content=%dchars',
-                        task['id'][:8], backend_name, len(accumulated_content))
+            logger.info('[Chat] External task %s completed — backend=%s content=%dchars searchRounds=%d',
+                        task['id'][:8], backend_name, len(accumulated_content),
+                        len(task.get('searchRounds', [])))
 
         except Exception as e:
             logger.error('[Chat] External task %s failed: %s',

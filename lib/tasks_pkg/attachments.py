@@ -19,10 +19,9 @@ Why we CAN'T replicate Claude Code's full attachment system:
     context and memory.
 
 What we CAN implement:
-  1. Session memory injection (from session_memory.py)
-  2. Recently modified files reminder
-  3. Periodic TODO/next-step reminders
-  4. Tool announcement deltas (new tools discovered via tool_search)
+  1. Recently modified files reminder
+  2. Periodic TODO/next-step reminders
+  3. Tool announcement deltas (new tools discovered via tool_search)
 """
 
 from __future__ import annotations
@@ -55,20 +54,7 @@ def _get_state(conv_id: str) -> dict[str, Any]:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  Attachment 1: Session Memory
-# ═══════════════════════════════════════════════════════════════════════════════
-
-def _get_session_memory_attachment(conv_id: str) -> str | None:
-    """Get session memory for injection into the conversation.
-
-    Returns formatted session memory block or None.
-    """
-    from lib.tasks_pkg.session_memory import get_session_memory_for_prompt
-    return get_session_memory_for_prompt(conv_id)
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-#  Attachment 2: Recently Modified Files Reminder
+#  Attachment 1: Recently Modified Files Reminder
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _get_modified_files_attachment(messages: list, project_path: str,
@@ -127,7 +113,7 @@ def _get_modified_files_attachment(messages: list, project_path: str,
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  Attachment 3: Tool Discovery Delta
+#  Attachment 2: Tool Discovery Delta
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _get_tool_discovery_delta(task: dict, conv_id: str) -> str | None:
@@ -189,13 +175,7 @@ def compute_turn_attachments(
     """
     attachments = []
 
-    # 1. Session memory
-    if conv_id:
-        mem = _get_session_memory_attachment(conv_id)
-        if mem:
-            attachments.append(mem)
-
-    # 2. Modified files reminder
+    # 1. Modified files reminder
     if project_enabled and project_path and round_num > 5:
         files_reminder = _get_modified_files_attachment(
             messages, project_path, conv_id, round_num)

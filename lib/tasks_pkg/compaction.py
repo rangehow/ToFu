@@ -1221,26 +1221,8 @@ def _generate_query_aware_summary(messages: list, current_query: str,
         logger.info('%s Input truncated: %s → %s',
                     tag, _human_size(original_len), _human_size(len(formatted)))
 
-    # ★ Session memory as compact seed: if session memory notes exist,
-    #   include them so the summary model preserves key decisions.
-    #   Inspired by Claude Code's sessionMemoryCompact.ts which uses
-    #   session memory as the compaction summary source.
-    _session_seed = ''
-    if conv_id:
-        try:
-            from lib.tasks_pkg.session_memory import get_session_memory_for_compact
-            _seed = get_session_memory_for_compact(conv_id)
-            if _seed:
-                _session_seed = (
-                    f'\n\n## Existing Session Notes (incorporate into summary)\n\n'
-                    f'{_seed}\n\n'
-                )
-        except Exception as e:
-            logger.debug('[Compaction] session seed extraction failed: %s', e)
-
     user_content = (
         f'## Current User Query\n{current_query}\n\n'
-        f'{_session_seed}'
         f'## Conversation History to Compress\n\n{formatted}'
     )
 

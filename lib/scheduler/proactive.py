@@ -15,7 +15,6 @@ that runs a two-phase cycle:
 from __future__ import annotations
 
 import json
-import threading
 import time
 from datetime import datetime
 from typing import Any
@@ -161,21 +160,11 @@ def poll_decision(task: dict[str, Any]) -> tuple[bool, str, int]:
 
     # Parse the LLM's JSON decision
     try:
-        # Strip markdown code fences if present
-        text = content.strip()
-        if text.startswith('```'):
-            text = text.split('\n', 1)[-1]
-            if text.endswith('```'):
-                text = text[:-3]
-            text = text.strip()
-
-        decision = json.loads(text)
-        should_act = bool(decision.get('act', False))
-        reason = str(decision.get('reason', ''))[:200]
+        from lib.scheduler._shared import parse_json_decision
+        should_act, reason = parse_json_decision(content, key='act')
     except (json.JSONDecodeError, TypeError, AttributeError) as e:
         logger.warning('[Proactive:%s] Failed to parse poll response: %s — raw: %.500s',
                        task['id'][:8], e, content)
-        # If we can't parse, default to skip
         should_act = False
         reason = f'Parse error: {content[:100]}'
 
@@ -224,8 +213,9 @@ def execute_proactive_task(task: dict[str, Any]) -> str | None:
     """Create a real agentic task in the target conversation and run it.
 
     This creates a user message (tagged as proactive) in the conversation,
-    then creates a task via create_task() and runs it with full tool access.
-    The execution is visible in the frontend as a normal assistant response.
+    then delegates to :func:`inject_and_run_task` for the common load →
+    inject → config → create → run sequence.  The execution is visible in
+    the frontend as a normal assistant response.
 
     Args:
         task: The scheduled task dict.
@@ -233,136 +223,44 @@ def execute_proactive_task(task: dict[str, Any]) -> str | None:
     Returns:
         The task_id of the created agentic task, or None on failure.
     """
-
-    from lib.database import DOMAIN_CHAT, db_execute_with_retry, get_thread_db, json_dumps_pg
-    from lib.tasks_pkg import run_task
-    from lib.tasks_pkg.manager import create_task as create_agentic_task
+    from lib.scheduler._shared import inject_and_run_task
 
     task_id_short = task['id'][:8]
     target_conv = task.get('target_conv_id', '')
     instruction = task.get('command', '')
     poll_count = task.get('poll_count', 0)
+    log_prefix = f'[Proactive:{task_id_short}]'
 
     if not target_conv:
-        logger.error('[Proactive:%s] No target_conv_id — cannot execute', task_id_short)
+        logger.error('%s No target_conv_id — cannot execute', log_prefix)
         return None
 
     if not instruction:
-        logger.error('[Proactive:%s] No instruction (command) — cannot execute', task_id_short)
+        logger.error('%s No instruction (command) — cannot execute', log_prefix)
         return None
 
-    logger.info('[Proactive:%s] 🚀 Executing agent task in conv=%s (poll #%d triggered)',
-                task_id_short, target_conv[:12], poll_count)
+    logger.info('%s 🚀 Executing agent task in conv=%s (poll #%d triggered)',
+                log_prefix, target_conv[:12], poll_count)
 
-    try:
-        db = get_thread_db(DOMAIN_CHAT)
+    # Build the proactive-specific user message
+    user_message = {
+        'role': 'user',
+        'content': (
+            f'⏰ **[Proactive Agent — Poll #{poll_count + 1}]** '
+            f'"{task["name"]}"\n\n'
+            f'{instruction}'
+        ),
+        'timestamp': datetime.now().isoformat(),
+        '_proactive': True,
+        '_proactiveTaskId': task['id'],
+    }
 
-        # ── 1. Load conversation messages ──
-        row = db.execute(
-            'SELECT messages, settings FROM conversations WHERE id=? AND user_id=1',
-            (target_conv,)
-        ).fetchone()
-
-        if not row:
-            logger.error('[Proactive:%s] Target conversation %s not found in DB', task_id_short, target_conv)
-            return None
-
-        try:
-            messages = json.loads(row['messages'] or '[]')
-        except (json.JSONDecodeError, TypeError):
-            messages = []
-
-        try:
-            settings = json.loads(row['settings'] or '{}')
-        except (json.JSONDecodeError, TypeError):
-            settings = {}
-
-        # ── 2. Append proactive user message ──
-        proactive_user_msg = {
-            'role': 'user',
-            'content': (
-                f'⏰ **[Proactive Agent — Poll #{poll_count + 1}]** '
-                f'"{task["name"]}"\n\n'
-                f'{instruction}'
-            ),
-            'timestamp': datetime.now().isoformat(),
-            '_proactive': True,
-            '_proactiveTaskId': task['id'],
-        }
-        messages.append(proactive_user_msg)
-
-        # ── 3. Append placeholder assistant message ──
-        assistant_msg = {
-            'role': 'assistant',
-            'content': '',
-            'thinking': '',
-            'timestamp': datetime.now().isoformat(),
-            '_proactive': True,
-        }
-        messages.append(assistant_msg)
-
-        # ── 4. Write messages back to DB ──
-        from routes.conversations import build_search_text
-        messages_json = json_dumps_pg(messages)
-        search_text = build_search_text(messages)
-        now_ms = int(time.time() * 1000)
-        db_execute_with_retry(db,
-            """UPDATE conversations SET messages=?, updated_at=?, msg_count=?, search_text=?,
-                   search_tsv=to_tsvector('simple', left(?, 50000))
-               WHERE id=? AND user_id=1""",
-            (messages_json, now_ms, len(messages), search_text, search_text, target_conv)
-        )
-
-        # ── 5. Build config from the stored tools_config ──
-        try:
-            tools_cfg = json.loads(task.get('tools_config', '{}') or '{}')
-        except (json.JSONDecodeError, TypeError):
-            tools_cfg = {}
-
-        config = {
-            'model': settings.get('model') or tools_cfg.get('model', ''),
-            'preset': settings.get('model') or tools_cfg.get('model', ''),
-            'thinkingEnabled': True,
-            'searchMode': tools_cfg.get('searchMode', settings.get('searchMode', 'multi')),
-            'fetchEnabled': True,  # always on
-            'projectPath': tools_cfg.get('projectPath', settings.get('projectPath', '')),
-            'codeExecEnabled': tools_cfg.get('codeExecEnabled', settings.get('codeExecEnabled', False)),
-            'browserEnabled': tools_cfg.get('browserEnabled', settings.get('browserEnabled', False)),
-            'memoryEnabled': tools_cfg.get('memoryEnabled', settings.get('memoryEnabled', True)),
-            'swarmEnabled': tools_cfg.get('swarmEnabled', settings.get('swarmEnabled', False)),
-            'imageGenEnabled': tools_cfg.get('imageGenEnabled', settings.get('imageGenEnabled', False)),
-            'schedulerEnabled': True,  # scheduler tools remain available
-        }
-
-        # ── 6. Create the agentic task ──
-        agentic_task = create_agentic_task(target_conv, messages, config)
-        agentic_task_id = agentic_task['id']
-
-        # Write activeTaskId into conversation settings so frontend can discover it
-        settings['activeTaskId'] = agentic_task_id
-        settings_json = json.dumps(settings, ensure_ascii=False)
-        db_execute_with_retry(db,
-            'UPDATE conversations SET settings=? WHERE id=? AND user_id=1',
-            (settings_json, target_conv)
-        )
-
-        logger.info('[Proactive:%s] Created agentic task %s in conv=%s, starting execution thread',
-                    task_id_short, agentic_task_id[:8], target_conv[:12])
-
-        # ── 7. Run the task in a background thread ──
-        def _run():
-            try:
-                run_task(agentic_task)
-            except Exception as e:
-                logger.error('[Proactive:%s] Agentic task %s execution failed: %s',
-                             task_id_short, agentic_task_id[:8], e, exc_info=True)
-
-        threading.Thread(target=_run, daemon=True, name=f'proactive-{agentic_task_id[:8]}').start()
-        return agentic_task_id
-
-    except Exception as e:
-        logger.error('[Proactive:%s] Failed to execute agent task: %s', task_id_short, e, exc_info=True)
-        return None
+    return inject_and_run_task(
+        conv_id=target_conv,
+        user_message=user_message,
+        tools_config_json=task.get('tools_config', '{}'),
+        log_prefix=log_prefix,
+    )
 
 
 # ── Check if task is currently executing ────────────────────────────────────

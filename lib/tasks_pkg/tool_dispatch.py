@@ -478,15 +478,28 @@ def execute_tool_pipeline(
             cache_key = _make_cache_key(fn_name, fn_args)
             cached = _cache.get(cache_key)
             if cached is not None:
-                # Cache entries: (content, is_search, source, display_results?)
+                # Cache entries: (content, is_search, source, display_results?, engine_breakdown?)
                 # Legacy formats: (content, is_search) or (content, is_search, source)
                 cached_display = None
-                if len(cached) == 4:
+                cached_engine_bkdn = None
+                if not isinstance(cached, (tuple, list)):
+                    # Safety: if cached is a bare string/value, wrap it
+                    logger.debug('[Dedup] cache value is %s not tuple — wrapping', type(cached).__name__)
+                    cached = (cached, False, 'dedup', None, None)
+                if len(cached) == 5:
+                    cached_content, cached_is_search, cached_source, cached_display, cached_engine_bkdn = cached
+                elif len(cached) == 4:
                     cached_content, cached_is_search, cached_source, cached_display = cached
                 elif len(cached) == 3:
                     cached_content, cached_is_search, cached_source = cached
-                else:
+                elif len(cached) == 2:
                     cached_content, cached_is_search = cached
+                    cached_source = 'dedup'
+                else:
+                    # 1-element or other unexpected length
+                    logger.warning('[Dedup] cache entry has unexpected length %d', len(cached))
+                    cached_content = cached[0] if cached else ''
+                    cached_is_search = False
                     cached_source = 'dedup'
                 is_prefetch = cached_source == 'prefetch'
                 logger.info(
@@ -507,6 +520,8 @@ def execute_tool_pipeline(
                             task, rn, round_entry, cached_display,
                             query_override=round_entry.get('query', fn_name),
                         )
+                        if cached_engine_bkdn:
+                            round_entry['engineBreakdown'] = cached_engine_bkdn
                     else:
                         _meta = _build_cache_hit_meta(
                             fn_name, fn_args, cached_content, is_prefetch,
@@ -682,14 +697,17 @@ def execute_tool_pipeline(
                             for _pi in parallel_items:
                                 if _pi[2] == ret_tc_id:  # tc_id match
                                     _pi_cache_key = _make_cache_key(fut_fn_name, _pi[3])
-                                    # For web_search, also cache display_results
+                                    # For web_search, also cache display_results + engineBreakdown
                                     # from the round_entry for later cache hits
                                     _pi_display = None
+                                    _pi_eng_bkdn = None
                                     if fut_fn_name == 'web_search':
                                         _pi_re = _pi[5]  # round_entry
                                         if _pi_re and _pi_re.get('results'):
                                             _pi_display = _pi_re['results']
-                                    _cache[_pi_cache_key] = (tool_content, is_search, 'dedup', _pi_display)
+                                        if _pi_re:
+                                            _pi_eng_bkdn = _pi_re.get('engineBreakdown')
+                                    _cache[_pi_cache_key] = (tool_content, is_search, 'dedup', _pi_display, _pi_eng_bkdn)
                                     break
                         # ── Invalidate project cache after write/exec ops ──
                         elif fut_fn_name in ('write_file', 'apply_diff', 'code_exec',

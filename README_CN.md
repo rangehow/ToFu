@@ -33,7 +33,7 @@ Tofu 是一个完全自托管的 AI 助手，采用 **Flask 后端** + **原生 
 
 ### 多模型对话
 
-- **20+ 大语言模型** — OpenAI、Anthropic、Google Gemini、Qwen、DeepSeek、MiniMax、Doubao、GLM、Mistral、Grok，以及任何 OpenAI 兼容 API
+- **20+ 大语言模型** — OpenAI、Anthropic、Google Gemini、Qwen、DeepSeek、MiniMax、Doubao、GLM、Mistral、Grok、百度千帆 (ERNIE)，以及任何 OpenAI 兼容 API
 - **智能调度** — 多密钥、多服务商路由，支持实时延迟评分、错误率追踪和按密钥限速冷却
 - **流式响应**，支持按模型计费跟踪（输入/输出/缓存 token × 阶梯定价）
 - **多模型对比** — 同一提示词同时发送给多个模型，并排对比输出
@@ -240,7 +240,7 @@ python server.py
 
 多服务商 API 管理 — 在此添加你的 LLM API 密钥。
 
-- **⚡ 从模板添加** — 一键配置 OpenAI、Anthropic、Google Gemini、DeepSeek、Qwen、MiniMax、GLM、Doubao、Mistral、Grok、OpenRouter、Azure、Ollama 等
+- **⚡ 从模板添加** — 一键配置 OpenAI、Anthropic、Google Gemini、DeepSeek、Qwen、MiniMax、GLM、Doubao、Mistral、Grok、百度千帆、OpenRouter、Azure、Ollama 等
 - **自定义服务商** — 添加任何 OpenAI 兼容的端点和自定义 Base URL
 - **按服务商配置** — 每个服务商有独立的 API 密钥、Base URL 和模型列表
 - **自动发现模型** — 从服务商的 `/v1/models` 端点自动获取可用模型

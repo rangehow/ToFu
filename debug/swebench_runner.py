@@ -86,7 +86,7 @@ CC_MODEL = os.environ.get('CC_MODEL', 'opus')
 # Only a generous safety net to catch truly stuck processes (4 hours).
 INFERENCE_SAFETY_TIMEOUT = int(os.environ.get('INFERENCE_SAFETY_TIMEOUT', '14400'))
 # Test execution timeout (per test, in seconds)
-TEST_TIMEOUT = int(os.environ.get('TEST_TIMEOUT', '300'))
+TEST_TIMEOUT = int(os.environ.get('TEST_TIMEOUT', '1800'))  # 30 min — large test suites need time
 # Cooldown between API calls to avoid rate limits
 COOLDOWN_SECONDS = int(os.environ.get('COOLDOWN_SECONDS', '5'))
 
@@ -197,6 +197,14 @@ class BenchmarkResult:
 
 # ─── Dataset Loading ─────────────────────────────────────────────────────────
 
+# Repos that require C/Cython compilation — cannot install without Docker
+C_EXTENSION_REPOS = {
+    'astropy/astropy',
+    'scikit-learn/scikit-learn',
+    'matplotlib/matplotlib',
+}
+
+
 def load_swebench_instances(
     num: int = None,
     instance_ids: list = None,
@@ -204,6 +212,7 @@ def load_swebench_instances(
     difficulty_filter: str = None,
     seed: int = 42,
     load_all: bool = False,
+    skip_repos: set = None,
 ) -> list[SWEInstance]:
     """Load SWE-bench Verified instances from HuggingFace."""
     from datasets import load_dataset
@@ -229,6 +238,11 @@ def load_swebench_instances(
         instances.append(inst)
 
     # Apply filters
+    if skip_repos:
+        before = len(instances)
+        instances = [i for i in instances if i.repo not in skip_repos]
+        if len(instances) < before:
+            log.info('Skipped %d instances from repos: %s', before - len(instances), skip_repos)
     if instance_ids:
         id_set = set(instance_ids)
         instances = [i for i in instances if i.instance_id in id_set]
@@ -308,7 +322,7 @@ def setup_workspace(inst: SWEInstance, tool: str, base_dir: Path) -> Path:
 
     repo_path = get_repo_path(inst.repo)
     subprocess.run(
-        ['git', 'clone', '--quiet', '--no-local', str(repo_path), str(ws)],
+        ['git', 'clone', '--quiet', '--shared', str(repo_path), str(ws)],
         capture_output=True, text=True, timeout=300, check=True,
     )
     subprocess.run(
@@ -704,6 +718,123 @@ def _extract_git_diff(workspace: Path) -> str:
 
 # ─── Evaluation ───────────────────────────────────────────────────────────────
 
+def _parse_django_log_fixed(log: str, test_spec) -> dict[str, str]:
+    """Parse Django test output, correctly handling multi-line docstring output.
+
+    The official swebench parse_log_django misparses tests with docstrings because
+    the verbose output spans two lines:
+        test_foo (module.TestClass)
+        Description of the test ... ok
+
+    The parser takes the docstring line as the key instead of the test name line.
+    This version tracks prev_test to handle this correctly.
+    """
+    from swebench.harness.grading import TestStatus
+    status_map = {}
+    lines = log.split('\n')
+    prev_test = None
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            prev_test = None
+            continue
+
+        # Check if this is a test name line: "test_foo (module.Class)" without " ... "
+        test_name_match = re.match(r'^(\S+\s+\([^)]+\))\s*$', stripped)
+        if test_name_match:
+            prev_test = test_name_match.group(1)
+            continue
+
+        # Check for status suffixes
+        status = None
+        test_name = None
+
+        if ' ... ok' in stripped or ' ... OK' in stripped or ' ...  OK' in stripped:
+            status = TestStatus.PASSED.value
+            test_name = re.split(r'\s+\.\.\.\s+(?:ok|OK)', stripped)[0]
+        elif ' ... skipped' in stripped:
+            status = TestStatus.SKIPPED.value
+            test_name = stripped.split(' ... skipped')[0]
+        elif stripped.endswith(' ... FAIL'):
+            status = TestStatus.FAILED.value
+            test_name = stripped.rsplit(' ... FAIL', 1)[0]
+        elif stripped.endswith(' ... ERROR'):
+            status = TestStatus.ERROR.value
+            test_name = stripped.rsplit(' ... ERROR', 1)[0]
+        elif stripped.startswith('FAIL:'):
+            status = TestStatus.FAILED.value
+            parts = stripped.split()
+            test_name = parts[1].strip() if len(parts) > 1 else stripped
+        elif stripped.startswith('ERROR:'):
+            status = TestStatus.ERROR.value
+            parts = stripped.split()
+            test_name = parts[1].strip() if len(parts) > 1 else stripped
+
+        if status:
+            # If the test_name looks like a docstring and we have prev_test, use prev_test
+            if prev_test and not re.match(r'^(\w+)\s+\(', test_name):
+                # test_name is a docstring — use prev_test instead
+                status_map[prev_test] = status
+            else:
+                status_map[test_name] = status
+            prev_test = None
+        elif not test_name_match:
+            # Non-test line that doesn't reset state (could be continuation)
+            pass
+
+    return status_map
+
+
+def _get_test_directives(inst: SWEInstance) -> list[str]:
+    """Extract test directives from test_patch using official SWE-bench logic.
+
+    For Django: converts file paths to module notation (tests/auth_tests/test_validators.py → auth_tests.test_validators).
+    For others: returns file paths as-is (e.g. tests/test_foo.py).
+
+    If the test_patch only modifies non-Python files (e.g. .txt, .json), extracts
+    unique test modules from the F2P + P2P test IDs as a fallback.
+    """
+    diff_pat = r"diff --git a/.* b/(.*)"
+    directives = re.findall(diff_pat, inst.test_patch)
+    # Remove non-test files
+    non_test_exts = ['.txt', '.md', '.rst', '.json', '.yml', '.yaml', '.cfg', '.ini', '.toml']
+    directives = [d for d in directives if not any(d.endswith(ext) for ext in non_test_exts)]
+
+    if inst.repo == 'django/django':
+        transformed = []
+        for d in directives:
+            d = d[:-len('.py')] if d.endswith('.py') else d
+            d = d[len('tests/'):] if d.startswith('tests/') else d
+            d = d.replace('/', '.')
+            transformed.append(d)
+        directives = transformed
+
+    # Fallback: when test_patch only modifies non-.py files (e.g. .txt fixtures),
+    # extract unique test modules from F2P + P2P test IDs
+    if not directives:
+        modules = set()
+        for test_id in inst.fail_to_pass + inst.pass_to_pass:
+            if inst.repo == 'django/django':
+                # Django format: "test_method (module.TestClass)"
+                m = re.match(r'\S+\s+\(([^)]+)\)', test_id)
+                if m:
+                    parts = m.group(1).split('.')
+                    mod = '.'.join(parts[:2]) if len(parts) >= 2 else parts[0]
+                    modules.add(mod)
+            elif '::' in test_id:
+                # pytest format: "path/to/test.py::test_func"
+                modules.add(test_id.split('::')[0])
+            elif '/' in test_id:
+                modules.add(test_id)
+        directives = sorted(modules)
+        if directives:
+            log.info('  Extracted %d test directives from F2P/P2P (no .py in test_patch)',
+                     len(directives))
+
+    return directives
+
+
 def evaluate_patch(
     inst: SWEInstance,
     model_patch: str,
@@ -711,15 +842,23 @@ def evaluate_patch(
     base_dir: Path,
     env_map: dict[str, Path],
 ) -> EvalResult:
-    """Evaluate a model-generated patch using official SWE-bench test specs.
+    """Evaluate a model-generated patch using official SWE-bench test methodology.
 
+    Uses the EXACT same approach as the official SWE-bench Docker harness:
     1. Create fresh workspace at base_commit
-    2. Apply model_patch
-    3. Apply gold test_patch
-    4. Install package in conda env
-    5. Run FAIL_TO_PASS tests using official test_cmd
-    6. Run PASS_TO_PASS tests (sampled)
+    2. Apply model_patch + gold test_patch
+    3. Install package in conda env
+    4. Run the FULL test command once (with test directives from test_patch)
+    5. Parse output with official repo-specific log parser
+    6. Grade with official get_eval_tests_report
     """
+    from swebench.harness.constants import MAP_REPO_VERSION_TO_SPECS
+    from swebench.harness.grading import (
+        MAP_REPO_TO_PARSER, get_eval_tests_report, get_resolution_status,
+        ResolvedStatus, TestStatus, FAIL_TO_PASS, PASS_TO_PASS,
+        EvalType, FAIL_ONLY_REPOS,
+    )
+
     result = EvalResult(instance_id=inst.instance_id, tool=tool)
 
     if not model_patch:
@@ -730,7 +869,12 @@ def evaluate_patch(
     env_key = f'{inst.repo}/{inst.version}'
     env_path = env_map.get(env_key)
 
-    # Create eval workspace
+    # Get specs
+    specs = {}
+    if inst.repo in MAP_REPO_VERSION_TO_SPECS:
+        specs = MAP_REPO_VERSION_TO_SPECS[inst.repo].get(inst.version, {})
+
+    # --- Workspace setup ---
     eval_ws = base_dir / 'eval' / f'{inst.instance_id}__{tool}'
     if eval_ws.exists():
         shutil.rmtree(eval_ws)
@@ -738,8 +882,8 @@ def evaluate_patch(
     try:
         repo_path = get_repo_path(inst.repo)
         subprocess.run(
-            ['git', 'clone', '--quiet', '--no-local', str(repo_path), str(eval_ws)],
-            capture_output=True, text=True, timeout=120, check=True,
+            ['git', 'clone', '--quiet', '--shared', str(repo_path), str(eval_ws)],
+            capture_output=True, text=True, timeout=300, check=True,
         )
         subprocess.run(
             ['git', 'checkout', '--quiet', inst.base_commit],
@@ -753,7 +897,7 @@ def evaluate_patch(
         result.error = f'Workspace setup failed: {e}'
         return result
 
-    # Apply model patch
+    # --- Apply model patch ---
     patch_file = eval_ws / '__model_patch.diff'
     patch_file.write_text(model_patch)
     r = subprocess.run(
@@ -763,7 +907,6 @@ def evaluate_patch(
     result.patch_applies = (r.returncode == 0)
     result.patch_apply_stderr = r.stderr[:2000] if r.stderr else ''
     if not result.patch_applies:
-        # Try with reduced context
         r2 = subprocess.run(
             ['git', 'apply', '--whitespace=fix', '-C1', str(patch_file)],
             capture_output=True, text=True, timeout=30, cwd=str(eval_ws),
@@ -773,14 +916,13 @@ def evaluate_patch(
             result.patch_apply_stderr = '(applied with -C1)'
         else:
             result.patch_apply_stderr += '\n--- fallback -C1 ---\n' + (r2.stderr[:1000] or '')
-            # Last resort: --reject
             subprocess.run(
                 ['git', 'apply', '--whitespace=fix', '--reject', str(patch_file)],
                 capture_output=True, text=True, timeout=30, cwd=str(eval_ws),
             )
             result.error = f'Patch apply failed: {r.stderr[:300]}'
 
-    # Apply gold test patch
+    # --- Apply gold test patch ---
     test_patch_file = eval_ws / '__test_patch.diff'
     test_patch_file.write_text(inst.test_patch)
     r = subprocess.run(
@@ -802,41 +944,152 @@ def evaluate_patch(
                 capture_output=True, text=True, timeout=30, cwd=str(eval_ws),
             )
 
-    # Install package in conda env
+    # --- Install package ---
     if env_path:
-        install_r = _install_in_conda(inst, eval_ws, env_path)
+        install_r = _install_in_conda(inst, eval_ws, env_path, specs)
         if install_r:
             result.install_stdout = (install_r.stdout or '')[-5000:]
             result.install_stderr = (install_r.stderr or '')[-5000:]
 
-    # Run FAIL_TO_PASS tests
-    for test_id in inst.fail_to_pass:
-        test_out = _run_test_captured(inst, eval_ws, test_id, env_path)
-        result.fail_to_pass_results[test_id] = test_out.passed
-        result.fail_to_pass_outputs.append(test_out)
+    # --- Run full test command (official SWE-bench approach) ---
+    test_directives = _get_test_directives(inst)
+    test_cmd_template = specs.get('test_cmd', 'python -m pytest -rA')
+    if isinstance(test_cmd_template, list):
+        test_cmd_template = test_cmd_template[-1]
 
-    # Run PASS_TO_PASS tests (sample up to 20 for speed)
-    for test_id in inst.pass_to_pass[:20]:
-        test_out = _run_test_captured(inst, eval_ws, test_id, env_path)
-        result.pass_to_pass_results[test_id] = test_out.passed
-        result.pass_to_pass_outputs.append(test_out)
+    # Build full test command with directives
+    full_test_cmd = f'{test_cmd_template} {" ".join(test_directives)}'
 
-    # Resolved = all F2P tests now pass
-    result.resolved = (
-        len(result.fail_to_pass_results) > 0
-        and all(result.fail_to_pass_results.values())
-    )
+    # Set up environment variables from eval_commands
+    env_setup_cmds = []
+    for cmd in specs.get('eval_commands', []):
+        if cmd.startswith('export '):
+            env_setup_cmds.append(cmd)
+        elif 'locale-gen' in cmd or 'locale.gen' in cmd:
+            continue  # skip locale setup (requires root)
+    env_prefix = '; '.join(env_setup_cmds) + '; ' if env_setup_cmds else ''
+    # Always set LANG for Django tests
+    if 'django' in inst.repo:
+        env_prefix = 'export LANG=en_US.UTF-8; export LC_ALL=en_US.UTF-8; ' + env_prefix
+
+    log.info('  Running tests: %s', full_test_cmd[:200])
+
+    # Run the full test command
+    t0 = time.time()
+    test_output = TestOutput(test_id='__full_test_run__')
+    try:
+        if env_path:
+            r = _conda_run(
+                env_path,
+                f'bash -c "{env_prefix}{full_test_cmd}"',
+                cwd=str(eval_ws),
+                timeout=TEST_TIMEOUT,
+            )
+        else:
+            r = subprocess.run(
+                f'bash -c "{env_prefix}{full_test_cmd}"',
+                shell=True, capture_output=True, text=True,
+                timeout=TEST_TIMEOUT, cwd=str(eval_ws),
+            )
+        test_output.stdout = (r.stdout or '')[-50000:]  # keep more for log parsing
+        test_output.stderr = (r.stderr or '')[-50000:]
+        test_output.return_code = r.returncode
+        test_output.command = full_test_cmd
+    except subprocess.TimeoutExpired as e:
+        test_output.stderr = f'TIMEOUT after {TEST_TIMEOUT}s'
+        raw = getattr(e, 'stdout', None)
+        if isinstance(raw, bytes):
+            test_output.stdout = raw.decode('utf-8', errors='replace')[-50000:]
+        result.error = f'Test timeout after {TEST_TIMEOUT}s'
+    except Exception as e:
+        test_output.stderr = f'Test execution error: {e}'
+        result.error = str(e)
+    test_output.duration_s = round(time.time() - t0, 2)
+
+    # Store the full test output for debugging
+    result.fail_to_pass_outputs = [test_output]
+
+    # --- Parse test output with official log parser ---
+    log_content = test_output.stdout + '\n' + test_output.stderr
+    # Use our fixed Django parser that handles multi-line docstring output
+    if inst.repo == 'django/django':
+        log_parser = _parse_django_log_fixed
+    else:
+        log_parser = MAP_REPO_TO_PARSER.get(inst.repo)
+
+    if log_parser:
+        try:
+            # Create a minimal TestSpec-like object for the parser
+            class _MinimalTestSpec:
+                def __init__(self, inst):
+                    self.instance_id = inst.instance_id
+                    self.repo = inst.repo
+                    self.version = inst.version
+                    self.FAIL_TO_PASS = inst.fail_to_pass
+                    self.PASS_TO_PASS = inst.pass_to_pass
+
+            test_spec = _MinimalTestSpec(inst)
+            status_map = log_parser(log_content, test_spec)
+            log.info('  Parsed %d test results from log output', len(status_map))
+
+            # Grade using official logic
+            eval_ref = {
+                'instance_id': inst.instance_id,
+                FAIL_TO_PASS: inst.fail_to_pass,
+                PASS_TO_PASS: inst.pass_to_pass,
+            }
+            eval_type = EvalType.FAIL_ONLY if inst.repo in FAIL_ONLY_REPOS else EvalType.PASS_AND_FAIL
+            report = get_eval_tests_report(status_map, eval_ref, eval_type=eval_type)
+
+            # Extract results
+            f2p_success = report.get(FAIL_TO_PASS, {}).get('success', [])
+            f2p_failure = report.get(FAIL_TO_PASS, {}).get('failure', [])
+            p2p_success = report.get(PASS_TO_PASS, {}).get('success', [])
+            p2p_failure = report.get(PASS_TO_PASS, {}).get('failure', [])
+
+            for t in f2p_success:
+                result.fail_to_pass_results[t] = True
+            for t in f2p_failure:
+                result.fail_to_pass_results[t] = False
+            for t in p2p_success:
+                result.pass_to_pass_results[t] = True
+            for t in p2p_failure:
+                result.pass_to_pass_results[t] = False
+
+            # Resolved = all F2P pass AND all P2P pass (official criteria)
+            result.resolved = (
+                get_resolution_status(report) == ResolvedStatus.FULL.value
+            )
+
+            log.info('  F2P: %d/%d passed, P2P: %d/%d passed, resolved=%s',
+                     len(f2p_success), len(f2p_success) + len(f2p_failure),
+                     len(p2p_success), len(p2p_success) + len(p2p_failure),
+                     result.resolved)
+
+        except Exception as e:
+            log.warning('  Log parser failed: %s', e, exc_info=True)
+            result.error = f'Log parser failed: {e}'
+    else:
+        log.warning('  No log parser for repo %s — using return code', inst.repo)
+        # Fallback: treat return code 0 as all tests passed
+        if test_output.return_code == 0:
+            for t in inst.fail_to_pass:
+                result.fail_to_pass_results[t] = True
+            for t in inst.pass_to_pass:
+                result.pass_to_pass_results[t] = True
+            result.resolved = True
 
     return result
 
 
-def _install_in_conda(inst: SWEInstance, workspace: Path, env_path: Path):
+def _install_in_conda(inst: SWEInstance, workspace: Path, env_path: Path,
+                      specs: dict = None):
     """Install the package in the conda env for testing."""
-    from swebench.harness.constants import MAP_REPO_VERSION_TO_SPECS
-
-    specs = {}
-    if inst.repo in MAP_REPO_VERSION_TO_SPECS:
-        specs = MAP_REPO_VERSION_TO_SPECS[inst.repo].get(inst.version, {})
+    if specs is None:
+        from swebench.harness.constants import MAP_REPO_VERSION_TO_SPECS
+        specs = {}
+        if inst.repo in MAP_REPO_VERSION_TO_SPECS:
+            specs = MAP_REPO_VERSION_TO_SPECS[inst.repo].get(inst.version, {})
 
     # Run pre_install (skip apt commands)
     for cmd in specs.get('pre_install', []):
@@ -844,8 +1097,15 @@ def _install_in_conda(inst: SWEInstance, workspace: Path, env_path: Path):
             continue
         _conda_run(env_path, f'bash -c "{cmd}"', cwd=str(workspace), timeout=120)
 
-    # Run eval_commands (environment setup)
-    eval_cmds = specs.get('eval_commands', [])
+    # Run eval_commands that are NOT 'export' (those are env vars, handled at test time)
+    for cmd in specs.get('eval_commands', []):
+        if cmd.startswith('export '):
+            continue  # handled at test time
+        if 'locale-gen' in cmd or 'locale.gen' in cmd:
+            continue  # requires root
+        if 'apt-get' in cmd or 'apt ' in cmd:
+            continue
+        _conda_run(env_path, f'bash -c "{cmd}"', cwd=str(workspace), timeout=120)
 
     # Install
     install_cmd = specs.get('install', 'python -m pip install -e .')
@@ -856,240 +1116,8 @@ def _install_in_conda(inst: SWEInstance, workspace: Path, env_path: Path):
     return r
 
 
-def _run_test_captured(inst: SWEInstance, workspace: Path, test_id: str,
-                       env_path: Path = None) -> TestOutput:
-    """Run a single test and return full captured output (stdout/stderr/timing).
-
-    This is the primary test entry point for the evaluation pipeline.
-    """
-    out = TestOutput(test_id=test_id)
-    t0 = time.time()
-
-    try:
-        from swebench.harness.constants import MAP_REPO_VERSION_TO_SPECS
-        specs = {}
-        if inst.repo in MAP_REPO_VERSION_TO_SPECS:
-            specs = MAP_REPO_VERSION_TO_SPECS[inst.repo].get(inst.version, {})
-
-        test_cmd_template = specs.get('test_cmd', 'pytest -rA')
-
-        if 'django' in inst.repo:
-            r, passed = _run_django_test(workspace, test_id, inst, env_path, test_cmd_template)
-        elif 'sympy' in inst.repo and 'bin/test' in test_cmd_template:
-            r, passed = _run_sympy_test(workspace, test_id, inst, env_path, test_cmd_template)
-        elif '::' in test_id or '/' in test_id:
-            r, passed = _run_pytest_test(workspace, test_id, env_path)
-        else:
-            r, passed = _run_pytest_bare(workspace, test_id, inst, env_path)
-
-        out.passed = passed
-        if r is not None:
-            out.stdout = (r.stdout or '')[-10000:]
-            out.stderr = (r.stderr or '')[-5000:]
-            out.return_code = r.returncode
-            out.command = getattr(r, '_command', '')
-
-    except subprocess.TimeoutExpired as e:
-        out.passed = False
-        out.stderr = f'TIMEOUT after {TEST_TIMEOUT}s'
-        raw = getattr(e, 'stdout', None)
-        if isinstance(raw, bytes):
-            out.stdout = raw.decode('utf-8', errors='replace')[-5000:]
-        elif raw:
-            out.stdout = str(raw)[-5000:]
-    except Exception as e:
-        out.passed = False
-        out.stderr = f'Exception: {e}'
-        log.debug('Test execution error for %s: %s', test_id, e)
-
-    out.duration_s = round(time.time() - t0, 2)
-    return out
-
-
-def _run_test(inst: SWEInstance, workspace: Path, test_id: str, env_path: Path = None) -> bool:
-    """Run a single test — backward-compat wrapper."""
-    return _run_test_captured(inst, workspace, test_id, env_path).passed
-
-
-def _run_django_test(workspace: Path, test_id: str, inst: SWEInstance,
-                     env_path: Path, test_cmd: str) -> tuple:
-    """Run Django test using official runtests.py.
-
-    Returns (subprocess_result, passed_bool).
-    """
-    try:
-        # Parse test ID: "test_method (module.TestClass)" or "module.TestClass.test_method"
-        match = re.match(r'(\w+)\s+\(([^)]+)\)', test_id)
-        if match:
-            method_name = match.group(1)
-            class_path = match.group(2)
-            django_test_id = f'{class_path}.{method_name}'
-        else:
-            django_test_id = test_id
-
-        # Extract test label for runtests.py
-        # e.g., "auth_tests.test_validators.UsernameValidatorsTests.test_ascii" → "auth_tests.test_validators"
-        parts = django_test_id.split('.')
-        # Find the test module (before the TestClass)
-        test_label = '.'.join(parts[:2]) if len(parts) >= 3 else parts[0]
-
-        # Use official test command
-        # test_cmd is like: ./tests/runtests.py --verbosity 2 --settings=test_sqlite --parallel 1
-        cmd = f'{test_cmd} {test_label}'
-
-        env_setup = 'export LANG=en_US.UTF-8; export LC_ALL=en_US.UTF-8; '
-        full_cmd = f'{env_setup} cd tests && python runtests.py --verbosity 2 --settings=test_sqlite --parallel 1 {test_label}'
-
-        if env_path:
-            r = _conda_run(env_path, f'bash -c "{full_cmd}"',
-                          cwd=str(workspace), timeout=TEST_TIMEOUT)
-        else:
-            r = subprocess.run(
-                [sys.executable, 'tests/runtests.py', '--verbosity=2',
-                 '--settings=test_sqlite', '--parallel=1', test_label],
-                capture_output=True, text=True, timeout=TEST_TIMEOUT,
-                cwd=str(workspace),
-                env={**os.environ, 'PYTHONPATH': str(workspace)},
-            )
-
-        r._command = full_cmd  # attach for logging
-
-        # Check for our specific test passing
-        passed = False
-        if match:
-            if re.search(rf'{method_name}\b.*\bok\b', r.stdout):
-                passed = True
-        if not passed:
-            passed = (r.returncode == 0)
-        return r, passed
-
-    except subprocess.TimeoutExpired:
-        return None, False
-    except Exception as e:
-        log.debug('Django test error: %s', e)
-        return None, False
-
-
-def _run_sympy_test(workspace: Path, test_id: str, inst: SWEInstance,
-                    env_path: Path, test_cmd: str) -> tuple:
-    """Run sympy test using bin/test.
-
-    Returns (subprocess_result, passed_bool).
-    """
-    try:
-        test_file = _find_test_file(inst, workspace, test_id)
-        if not test_file:
-            return None, False
-
-        cmd = f"python bin/test -C --verbose {test_file}"
-
-        if env_path:
-            r = _conda_run(env_path, cmd, cwd=str(workspace), timeout=TEST_TIMEOUT)
-        else:
-            r = subprocess.run(
-                cmd, shell=True,
-                capture_output=True, text=True, timeout=TEST_TIMEOUT,
-                cwd=str(workspace),
-                env={**os.environ, 'PYTHONPATH': str(workspace)},
-            )
-
-        r._command = cmd
-
-        passed = False
-        if r.returncode == 0:
-            passed = True
-        elif 'passed' in r.stdout and '0 failed' in r.stdout:
-            passed = True
-        return r, passed
-
-    except subprocess.TimeoutExpired:
-        return None, False
-    except Exception:
-        return None, False
-
-
-def _run_pytest_test(workspace: Path, test_id: str, env_path: Path = None) -> tuple:
-    """Run a pytest-style test.
-
-    Returns (subprocess_result, passed_bool).
-    """
-    try:
-        cmd = f'python -m pytest {test_id} -xvs --no-header -rN'
-        if env_path:
-            r = _conda_run(env_path, cmd,
-                          cwd=str(workspace), timeout=TEST_TIMEOUT)
-        else:
-            r = subprocess.run(
-                [sys.executable, '-m', 'pytest', test_id, '-xvs', '--no-header', '-rN'],
-                capture_output=True, text=True, timeout=TEST_TIMEOUT,
-                cwd=str(workspace),
-                env={**os.environ, 'PYTHONPATH': str(workspace), 'PYTHONDONTWRITEBYTECODE': '1'},
-            )
-        r._command = cmd
-        return r, (r.returncode == 0)
-    except subprocess.TimeoutExpired:
-        return None, False
-    except Exception:
-        return None, False
-
-
-def _run_pytest_bare(workspace: Path, test_name: str, inst: SWEInstance,
-                     env_path: Path = None) -> tuple:
-    """Run a bare test name by finding the file from the test_patch.
-
-    Returns (subprocess_result, passed_bool).
-    """
-    test_file = _find_test_file(inst, workspace, test_name)
-    if test_file:
-        return _run_pytest_test(workspace, f'{test_file}::{test_name}', env_path)
-
-    # Fallback: pytest -k
-    try:
-        cmd = f'python -m pytest -k {test_name} -x'
-        if env_path:
-            r = _conda_run(env_path, cmd,
-                          cwd=str(workspace), timeout=TEST_TIMEOUT)
-        else:
-            r = subprocess.run(
-                [sys.executable, '-m', 'pytest', '-k', test_name, '-x'],
-                capture_output=True, text=True, timeout=TEST_TIMEOUT,
-                cwd=str(workspace),
-                env={**os.environ, 'PYTHONPATH': str(workspace)},
-            )
-        r._command = cmd
-        return r, (r.returncode == 0 and 'passed' in r.stdout)
-    except Exception:
-        return None, False
-
-
-def _find_test_file(inst: SWEInstance, workspace: Path, test_name: str) -> Optional[str]:
-    """Find the test file for a bare test name from the test_patch."""
-    for line in inst.test_patch.split('\n'):
-        if line.startswith('+++ b/'):
-            candidate = line[6:].strip()
-            if (workspace / candidate).exists():
-                return candidate
-        elif line.startswith('diff --git'):
-            parts = line.split()
-            if len(parts) >= 4:
-                candidate = parts[3][2:]  # strip 'b/'
-                if (workspace / candidate).exists():
-                    return candidate
-
-    # Search
-    try:
-        r = subprocess.run(
-            ['grep', '-rl', f'def {test_name}', '--include=*.py', '.'],
-            capture_output=True, text=True, timeout=10, cwd=str(workspace),
-        )
-        for line in r.stdout.strip().split('\n'):
-            f = line.strip().lstrip('./')
-            if f and 'test' in f.lower():
-                return f
-    except Exception:
-        pass
-
-    return None
+    # (Old per-test runner functions removed — evaluation now uses official SWE-bench
+    #  log parsers via evaluate_patch() above)
 
 
 # ─── Cost Computation ─────────────────────────────────────────────────────────
@@ -1158,27 +1186,16 @@ def _save_per_run_detail(
     }
 
     if eval_result:
-        test_outputs_f2p = []
+        # Full test run output (single run, parsed with official log parser)
+        test_run_outputs = []
         for to in getattr(eval_result, 'fail_to_pass_outputs', []):
-            test_outputs_f2p.append({
+            test_run_outputs.append({
                 'test_id': to.test_id,
-                'passed': to.passed,
                 'duration_s': to.duration_s,
                 'command': to.command,
                 'return_code': to.return_code,
-                'stdout': to.stdout[-5000:] if to.stdout else '',  # cap at 5KB per test
-                'stderr': to.stderr[-3000:] if to.stderr else '',
-            })
-        test_outputs_p2p = []
-        for to in getattr(eval_result, 'pass_to_pass_outputs', []):
-            test_outputs_p2p.append({
-                'test_id': to.test_id,
-                'passed': to.passed,
-                'duration_s': to.duration_s,
-                'command': to.command,
-                'return_code': to.return_code,
-                'stdout': to.stdout[-3000:] if to.stdout else '',
-                'stderr': to.stderr[-2000:] if to.stderr else '',
+                'stdout': to.stdout[-30000:] if to.stdout else '',
+                'stderr': to.stderr[-10000:] if to.stderr else '',
             })
 
         detail['eval'] = {
@@ -1191,8 +1208,7 @@ def _save_per_run_detail(
             'install_stderr': (eval_result.install_stderr or '')[-3000:],
             'fail_to_pass': eval_result.fail_to_pass_results,
             'pass_to_pass': eval_result.pass_to_pass_results,
-            'fail_to_pass_outputs': test_outputs_f2p,
-            'pass_to_pass_outputs': test_outputs_p2p,
+            'test_run_output': test_run_outputs,
             'error': eval_result.error,
         }
 
@@ -1626,6 +1642,10 @@ def main():
                         help='Resume from existing results')
     parser.add_argument('--reeval', action='store_true',
                         help='Re-evaluate all existing patches (skip inference)')
+    parser.add_argument('--skip-c-repos', action='store_true', default=True,
+                        help='Skip repos requiring C compilation (astropy, sklearn, matplotlib). Default: True')
+    parser.add_argument('--include-c-repos', action='store_true',
+                        help='Include C-extension repos (requires Docker-like env)')
     parser.add_argument('--seed', type=int, default=42)
     args = parser.parse_args()
 
@@ -1656,6 +1676,7 @@ def main():
     log.info('Loading SWE-bench Verified dataset...')
     instance_ids = [x.strip() for x in args.instances.split(',') if x.strip()] if args.instances else None
     num = args.num if args.num else (None if args.all else 5)
+    skip_repos = C_EXTENSION_REPOS if (args.skip_c_repos and not args.include_c_repos) else None
     instances = load_swebench_instances(
         num=num,
         instance_ids=instance_ids,
@@ -1663,6 +1684,7 @@ def main():
         difficulty_filter=args.difficulty or None,
         seed=args.seed,
         load_all=args.all,
+        skip_repos=skip_repos,
     )
     log.info('Selected %d instances', len(instances))
 

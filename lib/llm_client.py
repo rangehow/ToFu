@@ -175,6 +175,7 @@ from lib.model_info import (  # noqa: F401
     _qwen_max_output,
     is_claude,
     is_doubao,
+    is_ernie,
     is_gemini,
     is_glm,
     is_gpt,
@@ -639,6 +640,7 @@ def build_body(model, messages, *, max_tokens=128000, temperature=1.0,
       • Doubao:   thinking.type='enabled'/'disabled'
       • LongCat:  enable_thinking flag, temperature adjustment
       • Qwen:     enable_thinking flag, temperature adjustment
+      • ERNIE:    enable_thinking flag (Baidu Qianfan models)
       • Others:   standard OpenAI-compatible body
 
     ``thinking_depth`` is the preferred depth param (medium/high/max).
@@ -769,7 +771,7 @@ def build_body(model, messages, *, max_tokens=128000, temperature=1.0,
     # model-name-based auto-detection. This allows any endpoint to
     # configure how thinking parameters are sent, regardless of model name.
     _tf = thinking_format  # per-provider override (or '' for auto-detect)
-    if _tf == 'enable_thinking' or (not _tf and (is_longcat(model) or is_qwen(model) or is_gemini(model))):
+    if _tf == 'enable_thinking' or (not _tf and (is_longcat(model) or is_qwen(model) or is_gemini(model) or is_ernie(model))):
         # enable_thinking format: LongCat, Qwen, Gemini, or any provider that opts in
         body['enable_thinking'] = thinking_enabled
         if is_longcat(model):

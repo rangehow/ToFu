@@ -64,6 +64,11 @@ def is_glm(model: str) -> bool:
     return 'glm' in model.lower()
 
 
+def is_ernie(model: str) -> bool:
+    """Baidu ERNIE models (ERNIE-5.0, ERNIE-X1, ERNIE-4.5, etc.)."""
+    return 'ernie' in model.lower()
+
+
 def is_gpt(model: str) -> bool:
     """OpenAI GPT models (gpt-4, gpt-4.1, gpt-4o, etc.)."""
     return 'gpt' in model.lower()
@@ -168,6 +173,32 @@ def _minimax_max_output(model: str) -> int:
     return 65536
 
 
+def _ernie_max_output(model: str) -> int:
+    """Return the max output token limit for a specific Baidu ERNIE model.
+
+    Per Qianfan V2 API model list (2026-04):
+      - ERNIE 5.0 / thinking variants:   65,536
+      - ERNIE X1.1:                       65,536
+      - ERNIE X1 Turbo:                   28,160
+      - ERNIE 4.5 Turbo (128k/32k):      12,288
+      - ERNIE 4.5 Turbo VL:              16,384
+      - ERNIE Speed / Lite (pro-128k):    4,096
+      - Default:                          16,384
+    """
+    m = model.lower()
+    if '5.0' in m or 'x1.1' in m:
+        return 65536
+    if 'x1' in m and 'turbo' in m:
+        return 28160
+    if 'speed' in m or 'lite' in m:
+        return 4096
+    if 'vl' in m:
+        return 16384
+    if '4.5' in m and 'turbo' in m:
+        return 12288
+    return 16384
+
+
 _MODEL_MAX_OUTPUT = {
     # (checker_fn, limit) — limit can be int or callable(model) → int
     'longcat': (is_longcat, 65536),
@@ -175,6 +206,7 @@ _MODEL_MAX_OUTPUT = {
     'gemini':  (is_gemini,  65536),
     'minimax': (is_minimax, _minimax_max_output),
     'doubao':  (is_doubao,  16384),
+    'ernie':   (is_ernie,   _ernie_max_output),   # per-model lookup
     'gpt':     (is_gpt,     32768),
     'glm':     (is_glm,     131072),
 

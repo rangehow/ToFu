@@ -2330,6 +2330,26 @@ function _renderUnifiedToolLine(round, isSearching) {
         : "";
       return `<div class="search-result-item"><div class="search-result-title">${r.url ? `<a href="${escapeHtml(r.url)}" target="_blank" rel="noopener">${escapeHtml(r.title)}</a>` : `<span>${escapeHtml(r.title)}</span>`}<span class="search-result-source">${escapeHtml(r.source)}</span>${fb}</div>${r.snippet ? `<div class="search-result-snippet">${escapeHtml(r.snippet)}</div>` : ""}${r.url ? `<div class="search-result-url">${escapeHtml(r.url)}</div>` : ""}</div>`;
     }).join("");
+    // ── Engine breakdown: show raw per-engine URLs (before dedup/filter) ──
+    let engineBkdnHtml = "";
+    const eb = round.engineBreakdown;
+    if (eb && typeof eb === "object") {
+      const engines = Object.keys(eb);
+      if (engines.length > 0) {
+        const totalRaw = engines.reduce((s, e) => s + (eb[e] ? eb[e].length : 0), 0);
+        const ebInner = engines.map((eng) => {
+          const urls = eb[eng] || [];
+          const urlItems = urls.map((u) =>
+            `<div class="eb-url-item"><a href="${escapeHtml(u.url)}" target="_blank" rel="noopener">${escapeHtml(u.title || u.url)}</a><div class="eb-url-text">${escapeHtml(u.url)}</div></div>`
+          ).join("");
+          return `<div class="eb-engine"><div class="eb-engine-name">${escapeHtml(eng)} <span class="eb-engine-count">(${urls.length})</span></div><div class="eb-engine-urls">${urlItems}</div></div>`;
+        }).join("");
+        engineBkdnHtml = `<div class="eb-section">
+          <div class="eb-toggle" onclick="event.stopPropagation();this.parentElement.classList.toggle('eb-expanded')">🔍 Engine Sources <span class="eb-total">${totalRaw} raw → ${results.length} final</span> <span class="eb-arrow">▸</span></div>
+          <div class="eb-content">${ebInner}</div>
+        </div>`;
+      }
+    }
     return `<div class="ptool-results-block" data-rn="${round.roundNum}">
          <div class="ptool-line ptool-results-header" onclick="if(event.target.closest('[data-tc-preview]'))return;event.stopPropagation();this.parentElement.classList.toggle('expanded')">
            <span class="ptool-icon">${svg}</span>
@@ -2338,7 +2358,7 @@ function _renderUnifiedToolLine(round, isSearching) {
            ${_tcPreviewBtn(round)}
            <span class="ptool-results-toggle">▼</span>
          </div>
-         <div class="ptool-results-content">${items}</div>
+         <div class="ptool-results-content">${items}${engineBkdnHtml}</div>
        </div>`;
   }
 
@@ -3192,8 +3212,59 @@ function buildTurnNav(conv) {
   requestAnimationFrame(() => updateActiveTurn());
 }
 function scrollToTurn(idx) {
-  const el = document.getElementById("msg-" + idx);
-  if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+  let el = document.getElementById("msg-" + idx);
+  if (el) {
+    el.scrollIntoView({ behavior: "smooth", block: "start" });
+    return;
+  }
+  /* Message not in DOM yet — lazy-load all messages down to idx, then scroll */
+  if (idx < _lazyRenderedFrom) {
+    const conv = conversations.find((c) => c.id === _lazyConvId);
+    if (!conv) return;
+    const inner = document.getElementById("chatInner");
+    const sentinel = document.getElementById("_lazyLoadSentinel");
+    const container = document.getElementById("chatContainer");
+    if (!inner || !container) return;
+
+    const targetStart = Math.max(0, idx);
+    const endIdx = _lazyRenderedFrom;
+    let html = "";
+    for (let i = targetStart; i < endIdx; i++) {
+      html += renderMessage(conv.messages[i], i);
+    }
+
+    const prevScrollTop = container.scrollTop;
+    const prevScrollHeight = container.scrollHeight;
+
+    const wrapper = document.createElement("div");
+    wrapper.innerHTML = html;
+    const frag = document.createDocumentFragment();
+    while (wrapper.firstChild) frag.appendChild(wrapper.firstChild);
+    if (sentinel) {
+      sentinel.after(frag);
+    } else {
+      inner.prepend(frag);
+    }
+    _lazyRenderedFrom = targetStart;
+
+    /* Fix scroll position so current view doesn't jump */
+    container.scrollTop = prevScrollTop + (container.scrollHeight - prevScrollHeight);
+
+    /* Update or remove sentinel */
+    if (sentinel) {
+      if (targetStart <= 0) {
+        sentinel.remove();
+      } else {
+        const countEl = sentinel.querySelector("._lazy-count");
+        if (countEl) countEl.textContent = targetStart;
+        if (_lazyObserver) _lazyObserver.observe(sentinel);
+      }
+    }
+
+    /* Now scroll to the newly rendered element */
+    el = document.getElementById("msg-" + idx);
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
 }
 /* ★ Perf: (1) cache one getBoundingClientRect for container, (2) only touch classList
  * when active dot actually changes, (3) break early once past threshold */
@@ -3432,6 +3503,10 @@ function updateStreamingUI(msg) {
     _phaseHtml = `<div class="stream-phase stream-phase-retrying"><span class="stream-phase-icon">⟳</span><span class="stream-phase-text">${escapeHtml(phase.detail || 'Retrying…')}</span><span class="stream-phase-dots"><span>.</span><span>.</span><span>.</span></span></div>`;
   } else if (phase && phase.phase === "tool_exec" && !hasActiveSearch) {
     _phaseKey = "exec:" + phase.detail;
+    _phaseHtml = `<div class="stream-phase"><span class="stream-phase-text">${escapeHtml(phase.detail)}</span><span class="stream-phase-dots"><span>.</span><span>.</span><span>.</span></span></div>`;
+  } else if (phase && phase.phase === "working" && phase.detail) {
+    /* Generic "working" phase from external backends (e.g. "Initializing Claude Code...") */
+    _phaseKey = "working:" + phase.detail;
     _phaseHtml = `<div class="stream-phase"><span class="stream-phase-text">${escapeHtml(phase.detail)}</span><span class="stream-phase-dots"><span>.</span><span>.</span><span>.</span></span></div>`;
   } else if (hasActiveSearch) {
     _phaseKey = "search";
@@ -4860,7 +4935,7 @@ async function _trySSE(convId, taskId, stream, assistantMsg) {
         /* Critic's tool result → accumulate into critic message */
         if (_epCriticMsg.searchRounds) {
           const r = _epCriticMsg.searchRounds.find(r => r.roundNum === ev.roundNum);
-          if (r) { r.results = ev.results; r.status = "done"; if (ev.searchDiag) r.searchDiag = ev.searchDiag; }
+          if (r) { r.results = ev.results; r.status = "done"; if (ev.searchDiag) r.searchDiag = ev.searchDiag; if (ev.engineBreakdown) r.engineBreakdown = ev.engineBreakdown; }
         }
         if (_epCriticBuf) _epCriticBuf.searchRounds = _epCriticMsg.searchRounds || [];
         twUpdate(convId);
@@ -4875,6 +4950,7 @@ async function _trySSE(convId, taskId, stream, assistantMsg) {
           r.approvalMeta = null;
           r.guidanceId = null;
           if (ev.searchDiag) r.searchDiag = ev.searchDiag;
+          if (ev.engineBreakdown) r.engineBreakdown = ev.engineBreakdown;
         }
       }
       /* ★ Toast for create_memory */

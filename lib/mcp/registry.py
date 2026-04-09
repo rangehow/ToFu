@@ -508,6 +508,219 @@ CATALOG: list[CatalogEntry] = [
         'url': 'https://github.com/modelcontextprotocol/servers-archived/tree/main/src/puppeteer',
         'tags': ['browser', 'scrape', 'automation'],
     },
+
+    # ── Knowledge & Documentation ──────────────────────────
+
+    {
+        'id': 'context7',
+        'name': 'Context7',
+        'description': 'Up-to-date, version-specific library documentation for AI coding',
+        'icon': '📚',
+        'category': CAT_DEV,
+        'command': 'npx',
+        'args': ['-y', '@upstash/context7-mcp@latest'],
+        'env_specs': [],
+        'url': 'https://github.com/upstash/context7',
+        'tags': ['documentation', 'docs', 'libraries', 'coding', 'context'],
+        'featured': True,
+    },
+
+    # ── Cloud & Infrastructure ─────────────────────────────
+
+    {
+        'id': 'supabase',
+        'name': 'Supabase',
+        'description': 'Query Postgres, manage edge functions, and inspect schemas',
+        'icon': '⚡',
+        'category': CAT_DATA,
+        'command': 'npx',
+        'args': ['-y', '@supabase/mcp-server-supabase@latest', '--read-only'],
+        'env_specs': [
+            {'key': 'SUPABASE_ACCESS_TOKEN', 'label': 'Access Token',
+             'hint': 'sbp_xxxxxxxxxxxx', 'required': True},
+        ],
+        'url': 'https://supabase.com/docs/guides/getting-started/mcp',
+        'tags': ['database', 'postgres', 'supabase', 'cloud'],
+    },
+    {
+        'id': 'vercel',
+        'name': 'Vercel',
+        'description': 'Manage deployments, projects, and domains on Vercel',
+        'icon': '▲',
+        'category': CAT_DEVOPS,
+        'command': 'npx',
+        'args': ['-y', '@vercel/mcp@latest'],
+        'env_specs': [
+            {'key': 'VERCEL_API_TOKEN', 'label': 'API Token',
+             'hint': 'xxxxxxxxxxxx', 'required': True},
+        ],
+        'url': 'https://vercel.com/docs/mcp',
+        'tags': ['deploy', 'hosting', 'vercel', 'frontend'],
+    },
+    {
+        'id': 'aws',
+        'name': 'AWS',
+        'description': 'Manage AWS resources — S3, Lambda, EC2, CloudWatch, and more',
+        'icon': '☁️',
+        'category': CAT_DEVOPS,
+        'command': 'npx',
+        'args': ['-y', '@aws/mcp@latest'],
+        'env_specs': [
+            {'key': 'AWS_ACCESS_KEY_ID', 'label': 'Access Key ID',
+             'hint': 'AKIA...', 'required': True, 'secret': False},
+            {'key': 'AWS_SECRET_ACCESS_KEY', 'label': 'Secret Access Key',
+             'hint': 'xxxxxxxxxxxx', 'required': True},
+            {'key': 'AWS_REGION', 'label': 'Region',
+             'hint': 'us-east-1', 'required': False, 'secret': False},
+        ],
+        'url': 'https://awslabs.github.io/mcp/',
+        'tags': ['cloud', 'aws', 'infrastructure', 's3', 'lambda'],
+    },
+    {
+        'id': 'upstash',
+        'name': 'Upstash',
+        'description': 'Interact with Upstash Redis, Vector, and QStash cloud services',
+        'icon': '🟢',
+        'category': CAT_DATA,
+        'command': 'npx',
+        'args': ['-y', '@upstash/mcp-server@latest'],
+        'env_specs': [
+            {'key': 'UPSTASH_EMAIL', 'label': 'Upstash Email',
+             'hint': 'you@example.com', 'required': True, 'secret': False},
+            {'key': 'UPSTASH_API_KEY', 'label': 'API Key',
+             'hint': 'xxxxxxxxxxxx', 'required': True},
+        ],
+        'url': 'https://github.com/upstash/mcp-server',
+        'tags': ['redis', 'vector', 'cloud', 'serverless'],
+    },
+
+    # ── Project Management ─────────────────────────────────
+
+    {
+        'id': 'jira',
+        'name': 'Jira',
+        'description': 'Search, create, and update Jira issues and boards',
+        'icon': '📋',
+        'category': CAT_DEV,
+        'command': 'npx',
+        'args': ['-y', 'mcp-server-atlassian'],
+        'env_specs': [
+            {'key': 'ATLASSIAN_SITE_URL', 'label': 'Site URL',
+             'hint': 'https://your-org.atlassian.net', 'required': True, 'secret': False},
+            {'key': 'ATLASSIAN_USER_EMAIL', 'label': 'Email',
+             'hint': 'you@example.com', 'required': True, 'secret': False},
+            {'key': 'ATLASSIAN_API_TOKEN', 'label': 'API Token',
+             'hint': 'xxxxxxxxxxxx', 'required': True},
+        ],
+        'url': 'https://github.com/sooperset/mcp-atlassian',
+        'tags': ['project-management', 'issues', 'agile', 'jira', 'confluence'],
+    },
+    {
+        'id': 'asana',
+        'name': 'Asana',
+        'description': 'Manage tasks, projects, and workspaces in Asana',
+        'icon': '🎯',
+        'category': CAT_PROD,
+        'command': 'npx',
+        'args': ['-y', '@asana/mcp-server-asana@latest'],
+        'env_specs': [
+            {'key': 'ASANA_ACCESS_TOKEN', 'label': 'Personal Access Token',
+             'hint': '1/xxxxx:xxxxxxxxxxxx', 'required': True},
+        ],
+        'url': 'https://github.com/Asana/asana-mcp-server',
+        'tags': ['tasks', 'project-management', 'asana'],
+    },
+
+    # ── Communication (additional) ─────────────────────────
+
+    {
+        'id': 'discord',
+        'name': 'Discord',
+        'description': 'Read messages, manage channels, and interact with Discord servers',
+        'icon': '🎮',
+        'category': CAT_COMMS,
+        'command': 'npx',
+        'args': ['-y', 'mcp-server-discord'],
+        'env_specs': [
+            {'key': 'DISCORD_BOT_TOKEN', 'label': 'Bot Token',
+             'hint': 'xxxxxxxxxxxx', 'required': True},
+        ],
+        'url': 'https://github.com/v-3/mcp-discord',
+        'tags': ['chat', 'messaging', 'community'],
+    },
+
+    # ── Search (additional) ────────────────────────────────
+
+    {
+        'id': 'perplexity',
+        'name': 'Perplexity',
+        'description': 'AI-powered web search with cited answers',
+        'icon': '🔮',
+        'category': CAT_SEARCH,
+        'command': 'npx',
+        'args': ['-y', 'mcp-server-perplexity'],
+        'env_specs': [
+            {'key': 'PERPLEXITY_API_KEY', 'label': 'API Key',
+             'hint': 'pplx-xxxxxxxxxxxx', 'required': True},
+        ],
+        'url': 'https://docs.perplexity.ai',
+        'tags': ['search', 'ai', 'research'],
+    },
+
+    # ── Automation & Integration ───────────────────────────
+
+    {
+        'id': 'zapier',
+        'name': 'Zapier',
+        'description': 'Connect to 8,000+ apps — Sheets, Jira, HubSpot, and more',
+        'icon': '⚡',
+        'category': CAT_PROD,
+        'command': '',
+        'transport': 'sse',
+        'args': [],
+        'env_specs': [
+            {'key': 'ZAPIER_MCP_URL', 'label': 'Zapier MCP URL',
+             'hint': 'https://actions.zapier.com/mcp/YOUR_SERVER_ID/sse',
+             'required': True, 'secret': False},
+        ],
+        'url': 'https://zapier.com/mcp',
+        'tags': ['automation', 'integration', 'workflow', 'no-code'],
+    },
+
+    # ── Data & Analytics ───────────────────────────────────
+
+    {
+        'id': 'bigquery',
+        'name': 'BigQuery',
+        'description': 'Query and explore Google BigQuery datasets',
+        'icon': '📊',
+        'category': CAT_DATA,
+        'command': 'npx',
+        'args': ['-y', '@anthropic/mcp-server-bigquery'],
+        'env_specs': [
+            {'key': 'GOOGLE_APPLICATION_CREDENTIALS', 'label': 'Service Account JSON Path',
+             'hint': '/path/to/service-account.json', 'required': True, 'secret': False},
+            {'key': 'BIGQUERY_PROJECT_ID', 'label': 'Project ID',
+             'hint': 'my-project-id', 'required': True, 'secret': False},
+        ],
+        'url': 'https://github.com/anthropics/anthropic-quickstarts',
+        'tags': ['database', 'analytics', 'google', 'bigquery'],
+    },
+
+    # ── AI & Reasoning ─────────────────────────────────────
+
+    {
+        'id': 'mcp-compass',
+        'name': 'MCP Compass',
+        'description': 'Discover and recommend MCP servers from the ecosystem',
+        'icon': '🧭',
+        'category': CAT_OTHER,
+        'command': 'npx',
+        'args': ['-y', 'mcp-compass'],
+        'env_specs': [],
+        'url': 'https://github.com/liuyoshio/mcp-compass',
+        'tags': ['discovery', 'mcp', 'meta'],
+    },
 ]
 
 
@@ -541,13 +754,20 @@ def build_server_config(server_id: str, env_values: dict[str, str] | None = None
         logger.warning('[MCP:Registry] Unknown server_id: %s', server_id)
         return None
 
+    transport = entry.get('transport', 'stdio')
     config: dict = {
-        'command': entry['command'],
-        'args': list(entry.get('args', [])),
-        'transport': entry.get('transport', 'stdio'),
+        'transport': transport,
         'enabled': True,
         'description': entry.get('description', entry['name']),
     }
+
+    if transport == 'sse':
+        # SSE transport: needs a URL, no command
+        config['url'] = ''  # will be set below from env_specs
+    else:
+        # stdio transport: needs command + args
+        config['command'] = entry['command']
+        config['args'] = list(entry.get('args', []))
 
     # Special handling: some servers take args from env vars
     # e.g. filesystem server takes allowed dirs as CLI args, not env
@@ -581,13 +801,21 @@ def build_server_config(server_id: str, env_values: dict[str, str] | None = None
             # MongoDB takes URI as CLI arg
             if val:
                 extra_args.append(val)
+        elif key == 'ZAPIER_MCP_URL':
+            # Zapier: the env var IS the SSE URL
+            if val:
+                config['url'] = val
+        elif key == 'SUPABASE_ACCESS_TOKEN':
+            # Supabase: token is passed as CLI arg --access-token
+            if val:
+                extra_args.extend(['--access-token', val])
         else:
             # Standard: pass as environment variable
             if val:
                 env[key] = val
 
     if extra_args:
-        config['args'].extend(extra_args)
+        config.setdefault('args', []).extend(extra_args)
     if env:
         config['env'] = env
 

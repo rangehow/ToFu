@@ -766,6 +766,37 @@ if __name__ == '__main__':
 
     _start_background_workers()
 
+    # ── MCP auto-connect (reconnect all enabled MCP servers) ──
+    _mcp_config = {}
+    try:
+        from lib.mcp.client import get_bridge
+        from lib.mcp.config import load_mcp_config
+
+        _mcp_config = load_mcp_config()
+        if _mcp_config:
+            _enabled_count = sum(1 for c in _mcp_config.values() if c.get('enabled', True))
+            if _enabled_count > 0:
+                _server_log.info('[MCP] Auto-connecting %d enabled server(s) in background…', _enabled_count)
+
+                def _mcp_auto_connect():
+                    try:
+                        bridge = get_bridge()
+                        result = bridge.connect_all()
+                        total = sum(len(v) for v in result.values())
+                        _server_log.info('[MCP] Auto-connect complete: %d server(s), %d tool(s)',
+                                         len(result), total)
+                    except Exception as e:
+                        _server_log.error('[MCP] Auto-connect failed: %s', e, exc_info=True)
+
+                import threading
+                threading.Thread(target=_mcp_auto_connect, name='mcp-auto-connect', daemon=True).start()
+            else:
+                _server_log.info('[MCP] No enabled MCP servers — skipping auto-connect')
+        else:
+            _server_log.debug('[MCP] No MCP config found — skipping auto-connect')
+    except Exception as _mcp_err:
+        _server_log.warning('[MCP] Auto-connect setup failed: %s', _mcp_err, exc_info=True)
+
     # ── DolphinFS keepalive (prevents FUSE mount from going stale) ──
     try:
         from lib.fs_keepalive import start_fs_keepalive
@@ -795,6 +826,7 @@ if __name__ == '__main__':
 
     from lib import TRADING_ENABLED as _trading_on
     from lib.version import __version__ as _ver
+    _mcp_count = len(_mcp_config)
     _banner_lines = [
         '=' * 52,
         f'  🫧 Tofu Server  v{_ver}',
@@ -810,6 +842,10 @@ if __name__ == '__main__':
         _banner_lines.append('  💬  Feishu Bot: ON (WebSocket long-connection)')
     else:
         _banner_lines.append('  💬  Feishu Bot: OFF (set FEISHU_APP_ID & FEISHU_APP_SECRET)')
+    if _mcp_count > 0:
+        _banner_lines.append(f'  🔌  MCP Apps: {_mcp_count} server(s) auto-connecting')
+    else:
+        _banner_lines.append('  🔌  MCP Apps: none configured (install via Settings → Apps)')
     _banner_lines.append('  ⏰  Proactive Agent Scheduler: active')
     if TUNNEL_TOKEN:
         _banner_lines.append('  🔒  Tunnel Auth: ON')

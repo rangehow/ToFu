@@ -47,7 +47,6 @@ from lib.tasks_pkg.model_config import (
     _assemble_tool_list,
     _resolve_model_config,
 )
-from lib.tasks_pkg.session_memory import trigger_memory_extraction
 from lib.tasks_pkg.stream_handler import analyse_stream_result
 from lib.tasks_pkg.system_context import (
     _inject_system_contexts,
@@ -892,15 +891,6 @@ def run_task(task: dict[str, Any]) -> None:
         #    Without this, task['messages'] still holds the PRE-run_task
         #    snapshot, and endpoint mode's critic never sees the worker's output.
         task['messages'] = messages
-
-        # ★ Session memory extraction: background thread extracts
-        #   persistent session notes after tool-heavy turns.
-        #   Inspired by Claude Code's SessionMemory system.
-        if tool_call_happened and task.get('convId'):
-            trigger_memory_extraction(
-                task['convId'], messages,
-                tool_call_happened=tool_call_happened,
-            )
 
         # ── Post-loop finalization: fallback, done event, persist ──
         _finalize_and_emit_done(

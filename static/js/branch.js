@@ -753,6 +753,7 @@ async function _branchStreamSSE(conv, msgIdx, branchIdx, branch, assistantMsg, t
         r.status = "done";
         r.approvalId = null;
         if (ev.searchDiag) r.searchDiag = ev.searchDiag;
+        if (ev.engineBreakdown) r.engineBreakdown = ev.engineBreakdown;
       }
       /* ★ Toast for create_memory */
       if (ev.results && ev.results.some(r => r.toolName === 'create_memory')) {

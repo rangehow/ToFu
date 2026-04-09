@@ -2522,6 +2522,21 @@ function _populateModelDropdown(models) {
       dropdown.appendChild(item);
     }
   }
+
+  /* Show a hint when there are many models, suggesting to hide unused ones in Settings */
+  if (visibleModels.length > 10) {
+    const hint = document.createElement('div');
+    hint.className = 'ps-dd-hint';
+    hint.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>'
+      + '<span>模型太多？在 <b>设置 → 模型</b> 中隐藏不需要的模型</span>';
+    hint.onclick = function(e) {
+      e.stopPropagation();
+      document.getElementById("presetWrapper")?.classList.remove("open");
+      if (typeof openSettings === 'function') openSettings();
+      if (typeof switchSettingsTab === 'function') switchSettingsTab('preset');
+    };
+    dropdown.appendChild(hint);
+  }
 }
 
 /* ★ Load the model list from server config and populate the dropdown.
@@ -2977,6 +2992,8 @@ function closeMobileSheet() {
 }
 
 function updateMobileSheet() {
+  /* Sync mobile backend selector with active backend */
+  _updateMobileBackendSection();
   /* Sync each mobile sheet item's .active class with the desktop toggle state */
   const map = {
     mobileCodeExec:    "codeExecToggle",
@@ -3025,6 +3042,54 @@ function updateMobileDepth() {
   mobileSection.querySelectorAll(".mobile-depth-btn").forEach(btn => {
     btn.classList.toggle("active", btn.dataset.depth === activeDepth);
   });
+}
+
+/**
+ * Switch backend from mobile bottom sheet.
+ * Calls the existing switchAgentBackend() and updates the sheet UI.
+ */
+async function switchMobileBackend(backendName) {
+  await switchAgentBackend(backendName);
+  _updateMobileBackendSection();
+}
+
+/**
+ * Sync the mobile backend section's active states and availability.
+ * Fetches backend status if not cached.
+ */
+async function _updateMobileBackendSection() {
+  const backends = _agentBackendCache || await _fetchAgentBackends();
+  // Sync active state
+  document.querySelectorAll('#mobileBackendSection .mobile-sheet-item').forEach(el => {
+    const bn = el.dataset.backend;
+    el.classList.toggle('active', bn === activeAgentBackend);
+  });
+  // Sync availability for non-builtin backends
+  for (const b of backends) {
+    if (b.name === 'builtin') continue;
+    const mobileEl = b.name === 'claude-code'
+      ? document.getElementById('mobileBackendClaudeCode')
+      : document.getElementById('mobileBackendCodex');
+    const statusEl = b.name === 'claude-code'
+      ? document.getElementById('ccStatusMobile')
+      : document.getElementById('codexStatusMobile');
+    if (!mobileEl) continue;
+    const usable = b.available && b.authenticated;
+    mobileEl.classList.toggle('disabled', !usable);
+    mobileEl.style.opacity = usable ? '' : '0.45';
+    if (statusEl) {
+      if (!b.available) {
+        statusEl.textContent = '未安装';
+        statusEl.style.color = 'var(--text-tertiary)';
+      } else if (!b.authenticated) {
+        statusEl.textContent = '未认证';
+        statusEl.style.color = '#f59e0b';
+      } else {
+        statusEl.textContent = b.version || '就绪';
+        statusEl.style.color = '#22c55e';
+      }
+    }
+  }
 }
 
 /* ── Reflow toolbar on window resize ── */

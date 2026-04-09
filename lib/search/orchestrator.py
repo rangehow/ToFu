@@ -36,8 +36,13 @@ class SearchResultList(list):
 
     When search returns 0 results, ``_search_diag`` is set to a dict
     with keys: reason, reason_detail, engine_errors, engine_empty, engine_ok.
+
+    ``_engine_breakdown`` is always set: a dict mapping engine tag →
+    list of {url, title} for *all* raw results before dedup/filter.
+    This lets the frontend show which engine contributed which URLs.
     """
     _search_diag = None
+    _engine_breakdown = None
 
 
 def perform_web_search(query, max_results=None, user_question=''):
@@ -132,6 +137,15 @@ def perform_web_search(query, max_results=None, user_question=''):
                         len(browser_results), query[:80])
             all_results.extend(browser_results)
 
+    # ── Build engine breakdown for diagnostics (before dedup) ──
+    engine_breakdown = {}
+    for r in all_results:
+        eng = r.get('source', 'Unknown')
+        engine_breakdown.setdefault(eng, []).append({
+            'url': r['url'],
+            'title': r.get('title', '')[:100],
+        })
+
     # ── Step 2: Deduplicate by normalised URL ──
     seen, unique = set(), []
     for r in all_results:
@@ -209,6 +223,7 @@ def perform_web_search(query, max_results=None, user_question=''):
                 final_count, query[:60])
 
     final_results = SearchResultList(relevant[:max_results])
+    final_results._engine_breakdown = engine_breakdown
 
     # ── Attach diagnostics when 0 results ──
     if not final_results:

@@ -72,32 +72,44 @@ def set_backend():
 
     data = request.get_json(silent=True) or {}
     backend_name = data.get('backend', '')
+    conv_id = data.get('convId', 'global')
+
+    logger.info('[AgentBackends] Switch requested: backend=%s conv=%s', backend_name, conv_id)
 
     if not backend_name:
+        logger.warning('[AgentBackends] Switch rejected: no backend specified in request body')
         return jsonify({'error': 'No backend specified'}), 400
 
     backend = get_backend(backend_name)
     if backend is None:
+        logger.warning('[AgentBackends] Switch rejected: unknown backend %r', backend_name)
         return jsonify({'error': f'Unknown backend: {backend_name}'}), 400
 
     if not backend.is_available():
+        logger.warning('[AgentBackends] Switch rejected: %s (%s) CLI is not installed',
+                       backend_name, backend.display_name)
         return jsonify({
             'error': f'{backend.display_name} CLI is not installed. '
                      f'Install it first, then try again.',
         }), 400
 
     if not backend.is_authenticated():
+        logger.warning('[AgentBackends] Switch rejected: %s (%s) is not authenticated',
+                       backend_name, backend.display_name)
         return jsonify({
             'error': f'{backend.display_name} is not authenticated. '
                      f'Run the CLI and log in first.',
         }), 401
 
-    logger.info('[AgentBackends] Backend set to: %s (conv=%s)',
-                backend_name, data.get('convId', 'global'))
+    version = backend.get_version()
+    capabilities = backend.get_capabilities().to_dict()
+
+    logger.info('[AgentBackends] Switch successful: backend=%s display=%s version=%s conv=%s capabilities=%s',
+                backend_name, backend.display_name, version, conv_id, capabilities)
 
     return jsonify({
         'ok': True,
         'backend': backend_name,
         'displayName': backend.display_name,
-        'capabilities': backend.get_capabilities().to_dict(),
+        'capabilities': capabilities,
     })

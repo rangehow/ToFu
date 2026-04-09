@@ -39,7 +39,7 @@ _IMAGE_GEN_PAT = re.compile(r'(dall-?e|[-_]image|image[-_])', re.I)
 
 # Thinking / reasoning models
 _THINKING_PAT = re.compile(
-    r'(think|reason|\bo[1234]-|\bo[1234]\b)',
+    r'(think|reason|\bo[1234]-|\bo[1234]\b|ernie-x)',
     re.I,
 )
 
@@ -50,6 +50,7 @@ _VISION_PAT = re.compile(
     r'|claude.*(opus|sonnet|haiku)'          # All Claude 3+ have vision
     r'|gemini(?!.*lite)'                     # Gemini (except flash-lite)
     r'|qwen.*(vl|max|plus)'                 # Qwen VL/Max/Plus
+    r'|ernie-5\.0'                           # ERNIE 5.0 is natively multimodal
     r')',
     re.I,
 )

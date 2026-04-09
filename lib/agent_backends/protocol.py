@@ -158,6 +158,9 @@ class NormalizedEvent:
 
     kind: str  # One of NormalizedEventKind constants
 
+    # ── Phase hint (for PHASE events) ──
+    phase_type: str = ''  # Frontend phase: 'working', 'retrying', 'tool_exec', etc.
+
     # ── Text content ──
     text: str = ''
 

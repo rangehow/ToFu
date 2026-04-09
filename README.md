@@ -37,7 +37,7 @@ Tofu is a fully self-hosted AI assistant built with a **Flask backend** and **va
 
 ### Multi-Model Chat
 
-- **20+ LLM models** — OpenAI, Anthropic, Google Gemini, Qwen, DeepSeek, MiniMax, Doubao, GLM, Mistral, Grok, and any OpenAI-compatible API
+- **20+ LLM models** — OpenAI, Anthropic, Google Gemini, Qwen, DeepSeek, MiniMax, Doubao, GLM, Mistral, Grok, Baidu Qianfan (ERNIE), and any OpenAI-compatible API
 - **Smart dispatch** — multi-key, multi-provider routing with real-time latency scoring, error-rate tracking, and per-key rate-limit cooldowns
 - **Streaming responses** with per-model cost tracking (input/output/cache tokens × tiered pricing)
 - **Multi-model comparison** — send the same prompt to several models side-by-side
@@ -244,7 +244,7 @@ Core model parameters and global preferences.
 
 Multi-provider API management — this is where you add your LLM API keys.
 
-- **⚡ Add from template** — one-click setup for OpenAI, Anthropic, Google Gemini, DeepSeek, Qwen, MiniMax, GLM, Doubao, Mistral, Grok, OpenRouter, Azure, Ollama, and more
+- **⚡ Add from template** — one-click setup for OpenAI, Anthropic, Google Gemini, DeepSeek, Qwen, MiniMax, GLM, Doubao, Mistral, Grok, Baidu Qianfan, OpenRouter, Azure, Ollama, and more
 - **Custom provider** — add any OpenAI-compatible endpoint with custom base URL
 - **Per-provider settings** — each provider has its own API key(s), base URL, and model list
 - **Auto-discover models** — fetches available models from the provider's `/v1/models` endpoint

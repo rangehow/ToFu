@@ -53,11 +53,13 @@ class _ContentWithDisplayResults(str):
     Attributes:
         display_results: List of result dicts for frontend rendering.
         search_diag: Optional diagnostic dict when search returns 0 results.
+        engine_breakdown: Optional dict mapping engine tag → list of raw URLs.
     """
     def __new__(cls, content: str, display_results: list):
         instance = super().__new__(cls, content)
         instance.display_results = display_results
         instance.search_diag = None
+        instance.engine_breakdown = None
         return instance
 
 # ── Read-only tools safe to pre-execute during streaming ──
@@ -262,6 +264,7 @@ class StreamingToolAccumulator:
                 results = perform_web_search(query,
                                              user_question=user_question)
                 search_diag = getattr(results, '_search_diag', None)
+                engine_breakdown = getattr(results, '_engine_breakdown', None)
                 formatted = format_search_for_tool_response(results,
                                                             search_diag=search_diag)
                 # Build display results for the frontend (same as search handler)
@@ -272,11 +275,13 @@ class StreamingToolAccumulator:
                         dr['fetched'] = True
                         dr['fetchedChars'] = len(r['full_content'])
                     display_results.append(dr)
-                # Attach display_results + searchDiag as attributes so
-                # inject_into_cache stores them alongside the content
+                # Attach display_results + searchDiag + engineBreakdown as
+                # attributes so inject_into_cache stores them alongside the content
                 formatted = _ContentWithDisplayResults(formatted, display_results)
                 if not display_results and search_diag:
                     formatted.search_diag = search_diag
+                if engine_breakdown:
+                    formatted.engine_breakdown = engine_breakdown
                 return formatted
 
             elif fn_name == 'fetch_url':
@@ -332,9 +337,10 @@ class StreamingToolAccumulator:
                     elapsed = time.time() - t0
                     is_search = fn_name in ('web_search',)
                     cache_key = _make_cache_key(fn_name, fn_args)
-                    # Extract display_results if available (web_search)
+                    # Extract display_results + engine_breakdown if available (web_search)
                     _disp = getattr(content, 'display_results', None)
-                    cache[cache_key] = (str(content), is_search, 'prefetch', _disp)
+                    _eng_bkdn = getattr(content, 'engine_breakdown', None)
+                    cache[cache_key] = (str(content), is_search, 'prefetch', _disp, _eng_bkdn)
                     injected += 1
                     logger.info('[%s] StreamingToolExec: injected %s into '
                                 'dedup cache (%.1fs, %d chars%s)',
@@ -377,9 +383,10 @@ class StreamingToolAccumulator:
                     elapsed = time.time() - t0
                     is_search = fn_name in ('web_search',)
                     cache_key = _make_cache_key(fn_name, fn_args)
-                    # Extract display_results if available (web_search)
+                    # Extract display_results + engine_breakdown if available (web_search)
                     _disp = getattr(content, 'display_results', None)
-                    cache[cache_key] = (str(content), is_search, 'prefetch', _disp)
+                    _eng_bkdn = getattr(content, 'engine_breakdown', None)
+                    cache[cache_key] = (str(content), is_search, 'prefetch', _disp, _eng_bkdn)
                     injected += 1
                     logger.info('[%s] StreamingToolExec: waited and injected '
                                 '%s into dedup cache (%.1fs, %d chars%s)',

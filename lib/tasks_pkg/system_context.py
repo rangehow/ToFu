@@ -362,19 +362,7 @@ Use `depends_on: [0]` only when a task truly needs another's output (rare — pr
     _append_to_system_message(
         messages, f'Current date: {_date_str}')
 
-    # ★ 5. Session memory injection (most dynamic — injected LAST in system msg)
-    #   Persistent session notes extracted by background thread (session_memory.py).
-    #   Injected every turn so the model retains key decisions and working state
-    #   across compactions.  Inspired by Claude Code's SessionMemory system.
-    if _cid:
-        try:
-            from lib.tasks_pkg.session_memory import get_session_memory_for_prompt
-            _session_mem = get_session_memory_for_prompt(_cid)
-            if _session_mem:
-                _append_to_system_message(
-                    messages, _wrap_system_reminder(_session_mem))
-        except Exception as e:
-            logger.debug('[SystemCtx] Session memory injection failed: %s', e)
+
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

@@ -60,9 +60,11 @@ def _handle_web_search(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg, 
     query = fn_args.get('query', '')
     user_question = task.get('lastUserQuery', '')
     search_diag = None
+    engine_breakdown = None
     try:
         results = perform_web_search(query, user_question=user_question)
         search_diag = getattr(results, '_search_diag', None)
+        engine_breakdown = getattr(results, '_engine_breakdown', None)
     except Exception as e:
         logger.error('[Executor] web_search failed for query=%r: %s', query, e, exc_info=True)
         results = []
@@ -81,6 +83,9 @@ def _handle_web_search(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg, 
     round_entry['results'] = display_results
     round_entry['status'] = 'done'
     event_payload = {'type': 'tool_result', 'roundNum': rn, 'query': query, 'results': display_results}
+    if engine_breakdown:
+        round_entry['engineBreakdown'] = engine_breakdown
+        event_payload['engineBreakdown'] = engine_breakdown
     if not display_results and search_diag:
         round_entry['searchDiag'] = search_diag
         event_payload['searchDiag'] = search_diag

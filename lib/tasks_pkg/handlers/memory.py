@@ -73,12 +73,26 @@ def _memory_merge(fn_args, project_path):
     )
 
 
+def _memory_search(fn_args, project_path):
+    from lib.memory.relevance import search_memories
+    query = fn_args.get('query', '')
+    top_k = fn_args.get('top_k', 30)
+    result = search_memories(
+        query=query,
+        project_path=project_path,
+        top_k=top_k,
+    )
+    snippet = query[:80] if query else '(empty)'
+    return result, '🔍 searched', f'🔍 Memory search: {snippet}'
+
+
 # Module-level dispatch table — maps memory fn_name → handler.
 _MEMORY_OP_DISPATCH = {
     'create_memory': _memory_create,
     'update_memory': _memory_update,
     'delete_memory': _memory_delete,
     'merge_memories': _memory_merge,
+    'search_memories': _memory_search,
 }
 
 

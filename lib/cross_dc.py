@@ -147,6 +147,12 @@ _last_benchmark: float = 0.0
 # Whether initialization has been done
 _initialized: bool = False
 
+# Whether benchmarking is complete (may lag behind _initialized)
+_benchmark_done: bool = False
+
+# Event signaled when benchmark finishes (for callers that want to wait)
+_benchmark_event = threading.Event()
+
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Initialization — discover cluster mounts from environment
@@ -306,12 +312,20 @@ def _benchmark_clusters(clusters):
 
 
 def _init():
-    """Initialize cross-DC detection (idempotent, thread-safe)."""
+    """Initialize cross-DC detection (idempotent, thread-safe).
+
+    Two-phase design for non-blocking startup:
+      Phase 1 (fast): Parse env vars, build path index, mark _initialized=True.
+      Phase 2 (slow): Benchmark clusters in a background thread.
+
+    Between Phase 1 and Phase 2 completion, public APIs return conservative
+    defaults (unknown latency class, 1.0× multiplier, no warnings).
+    """
     global _clusters, _path_to_cluster, _local_idc, _local_clusters
-    global _last_benchmark, _initialized
+    global _last_benchmark, _initialized, _benchmark_done
 
     with _lock:
-        if _initialized and (time.monotonic() - _last_benchmark) < _BENCHMARK_TTL_S:
+        if _initialized and _benchmark_done and (time.monotonic() - _last_benchmark) < _BENCHMARK_TTL_S:
             return
 
         # Load optional config overrides
@@ -319,6 +333,8 @@ def _init():
         if cfg.get('enabled') is False:
             logger.info('[CrossDC] Disabled via config')
             _initialized = True
+            _benchmark_done = True
+            _benchmark_event.set()
             return
 
         _apply_config(cfg)
@@ -338,30 +354,58 @@ def _init():
         if not raw_clusters:
             logger.debug('[CrossDC] No cluster mount env vars found — cross-DC detection disabled')
             _initialized = True
+            _benchmark_done = True
+            _benchmark_event.set()
             return
 
-        logger.info('[CrossDC] Found %d storage clusters, local IDC=%s. Benchmarking...',
-                     len(raw_clusters), _local_idc or '(unknown)')
-
+        # ── Phase 1 (fast): build path index, mark initialized ──────────
         _path_to_cluster = _build_path_index(raw_clusters)
 
-        latencies, local = _benchmark_clusters(raw_clusters)
-
-        # Update state
+        # Pre-populate clusters with no latency data yet (keep existing
+        # latency data if this is a TTL re-benchmark, so public APIs
+        # continue returning the old values until the new benchmark finishes)
         for cluster_name, paths in raw_clusters.items():
-            _clusters[cluster_name] = {
-                'paths': paths,
-                'latency_s': latencies.get(cluster_name),
-            }
+            if cluster_name not in _clusters:
+                _clusters[cluster_name] = {
+                    'paths': paths,
+                    'latency_s': None,  # unknown until benchmark completes
+                }
 
-        _local_clusters = local
-        _last_benchmark = time.monotonic()
-        _initialized = True
+        _benchmark_done = False  # reset for the new benchmark round
+        _benchmark_event.clear()
+        _initialized = True  # public APIs now work (return 'unknown' / 1.0×)
 
-        logger.info('[CrossDC] Initialization complete: %d clusters, %d local (%s), %d remote',
-                     len(_clusters), len(_local_clusters),
-                     ', '.join(sorted(_local_clusters)) or 'none',
-                     len(_clusters) - len(_local_clusters))
+        logger.info('[CrossDC] Phase 1 complete: %d clusters indexed, local IDC=%s. '
+                     'Benchmarking in background...',
+                     len(raw_clusters), _local_idc or '(unknown)')
+
+    # ── Phase 2 (slow): benchmark in background thread ──────────────
+    def _bg_benchmark():
+        global _local_clusters, _last_benchmark, _benchmark_done
+        try:
+            latencies, local = _benchmark_clusters(raw_clusters)
+            with _lock:
+                for cluster_name, paths in raw_clusters.items():
+                    _clusters[cluster_name] = {
+                        'paths': paths,
+                        'latency_s': latencies.get(cluster_name),
+                    }
+                _local_clusters = local
+                _last_benchmark = time.monotonic()
+                _benchmark_done = True
+            logger.info('[CrossDC] Benchmark complete: %d clusters, %d local (%s), %d remote',
+                         len(_clusters), len(local),
+                         ', '.join(sorted(local)) or 'none',
+                         len(_clusters) - len(local))
+        except Exception as e:
+            logger.error('[CrossDC] Background benchmark failed: %s', e, exc_info=True)
+            with _lock:
+                _benchmark_done = True  # mark done even on failure to avoid retrying in hot loop
+        finally:
+            _benchmark_event.set()
+
+    t = threading.Thread(target=_bg_benchmark, daemon=True, name='cross-dc-benchmark')
+    t.start()
 
 
 def _ensure_initialized():
@@ -499,6 +543,7 @@ def get_status() -> dict:
         },
         'local_clusters': sorted(_local_clusters),
         'initialized': _initialized,
+        'benchmark_done': _benchmark_done,
         'last_benchmark_ago_s': round(time.monotonic() - _last_benchmark, 0) if _last_benchmark else None,
     }
 
@@ -508,19 +553,15 @@ def get_status() -> dict:
 # ═══════════════════════════════════════════════════════════════════════
 
 def init_cross_dc_detection():
-    """Initialize cross-DC detection in a background thread.
+    """Initialize cross-DC detection.
 
-    Safe to call from server startup — benchmarking runs in background
-    so it doesn't block the web server from starting.
+    Phase 1 (path index) runs inline (fast).  Phase 2 (benchmarking) runs
+    in a background thread spawned by _init(), so this call returns quickly.
 
     On machines without the relevant env vars, this is a fast no-op.
     """
-    def _bg_init():
-        try:
-            _init()
-        except Exception as e:
-            logger.error('[CrossDC] Background init failed: %s', e, exc_info=True)
-
-    t = threading.Thread(target=_bg_init, daemon=True, name='cross-dc-init')
-    t.start()
-    logger.info('[CrossDC] Background initialization started')
+    try:
+        _init()
+    except Exception as e:
+        logger.error('[CrossDC] Init failed: %s', e, exc_info=True)
+    logger.info('[CrossDC] Initialization triggered (benchmark running in background)')

@@ -154,9 +154,17 @@ async function _loadPaperPdf(url) {
   viewer.innerHTML = '<div class="paper-loading"><div class="paper-loading-spinner"></div><div>Loading PDF…</div></div>';
 
   try {
-    // Ensure PDF.js is available
+    // Lazy-load PDF.js if not yet loaded
     if (typeof pdfjsLib === 'undefined') {
-      viewer.innerHTML = '<div class="paper-error">PDF.js not loaded. Please refresh the page.</div>';
+      if (typeof _ensurePdfJs === 'function') {
+        await _ensurePdfJs();
+      } else {
+        viewer.innerHTML = '<div class="paper-error">PDF.js loader not available. Please refresh the page.</div>';
+        return;
+      }
+    }
+    if (typeof pdfjsLib === 'undefined') {
+      viewer.innerHTML = '<div class="paper-error">PDF.js failed to load. Please refresh the page.</div>';
       return;
     }
 
@@ -347,6 +355,19 @@ function _showPaperLanding() {
     </div>`;
 }
 
+/** Handle a PDF File dropped directly (from drag-and-drop). */
+async function _handlePaperFileDrop(file) {
+  if (!file) return;
+  if (!file.name.toLowerCase().endsWith('.pdf') && file.type !== 'application/pdf') {
+    debugLog('Only PDF files are supported in Paper mode', 'warning');
+    return;
+  }
+  // If we're not in paper mode yet, enter it first
+  if (!paperMode) enterPaperMode();
+  // Delegate to the shared upload logic
+  await _paperUploadFile(file);
+}
+
 async function _handlePaperFileUpload(event) {
   const file = event.target.files[0];
   if (!file) return;
@@ -354,8 +375,17 @@ async function _handlePaperFileUpload(event) {
     debugLog('Only PDF files are supported', 'warning');
     return;
   }
+  await _paperUploadFile(file);
+}
 
+/** Shared: upload a PDF File into the paper reader (used by file picker + drag-drop). */
+async function _paperUploadFile(file) {
   _paperLoading = true;
+  // Reset report cache for new paper
+  _paperReportCache = '';
+  _paperReportTaskId = '';
+  _paperQAHistory = [];
+
   const viewer = document.getElementById('paperPdfViewer');
   if (viewer) viewer.innerHTML = '<div class="paper-loading"><div class="paper-loading-spinner"></div><div>Uploading PDF…</div></div>';
 
@@ -878,4 +908,32 @@ document.addEventListener('mouseup', function() {
 /* Initialize translate tab content */
 document.addEventListener('DOMContentLoaded', function() {
   _initPaperTranslateTab();
+
+  /* Paper viewer drag-and-drop: allow dropping PDFs directly onto the viewer */
+  const pdfViewer = document.getElementById('paperPdfViewer');
+  if (pdfViewer) {
+    pdfViewer.addEventListener('dragover', function(e) {
+      if (paperMode && e.dataTransfer && e.dataTransfer.types.includes('Files')) {
+        e.preventDefault();
+        e.stopPropagation();
+        pdfViewer.classList.add('paper-drag-over');
+      }
+    });
+    pdfViewer.addEventListener('dragleave', function() {
+      pdfViewer.classList.remove('paper-drag-over');
+    });
+    pdfViewer.addEventListener('drop', async function(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      pdfViewer.classList.remove('paper-drag-over');
+      if (!paperMode) return;
+      const files = Array.from(e.dataTransfer?.files || []);
+      for (const f of files) {
+        if (f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf')) {
+          await _handlePaperFileDrop(f);
+          break; // Only one PDF at a time in paper reader
+        }
+      }
+    });
+  }
 });

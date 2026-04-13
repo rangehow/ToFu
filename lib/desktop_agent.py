@@ -311,9 +311,11 @@ def cmd_gui_action(params):
             from PIL import Image
             img_bytes = base64.b64decode(image_b64)
             img = Image.open(io.BytesIO(img_bytes))
-            # Save temp file for pyautogui
-            import tempfile as _tempfile
-            tmp_path = os.path.join(_tempfile.gettempdir(), '_chatui_locate.png')
+            # Save temp file for pyautogui (use project-local data/ dir,
+            # as /tmp may not be accessible on all machines)
+            _data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data')
+            os.makedirs(_data_dir, exist_ok=True)
+            tmp_path = os.path.join(_data_dir, '_chatui_locate.png')
             img.save(tmp_path)
             loc = pyautogui.locateOnScreen(tmp_path, confidence=params.get('confidence', 0.8))
             if loc:

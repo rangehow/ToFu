@@ -719,7 +719,7 @@ class SubAgent:
             'status': 'running',
             'events': self.parent_task.get('events', []),
             'events_lock': self.parent_task.get('events_lock', threading.Lock()),
-            'searchRounds': self.parent_task.get('searchRounds', []),
+            'toolRounds': self.parent_task.get('toolRounds', []),
             'phase': self.parent_task.get('phase'),
         }
 

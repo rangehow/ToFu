@@ -157,6 +157,8 @@ var _i18n = {
   'settings.tradingRestart': { zh: '需要重启服务器才能生效', en: 'Server restart required to take effect' },
   'settings.debugMode': { zh: '调试模式', en: 'Debug Mode' },
   'settings.debugModeDesc': { zh: '显示 trace_id、复制会话 ID 按钮等开发调试信息', en: 'Show trace_id, copy conv ID buttons, and other debug info' },
+  'settings.keepToolHistory': { zh: '保留工具调用历史', en: 'Keep Tool Call History' },
+  'settings.keepToolHistoryDesc': { zh: '多轮对话时保留完整的工具调用记录（搜索内容、网页抓取结果等），模型能看到之前搜过什么，避免重复调用。关闭可节省 token 但模型会丢失工具上下文', en: 'Preserve full tool call records (search results, fetched pages, etc.) across conversation turns. Model can see what was searched before, avoiding redundant calls. Disable to save tokens but model loses tool context' },
 
   // ══════════════════════════════════════
   //  Settings — Providers Tab
@@ -164,6 +166,7 @@ var _i18n = {
   'settings.providersTitle': { zh: 'API 服务商 & 模型', en: 'API Providers & Models' },
   'settings.autoSetup': { zh: '🚀 自动配置', en: '🚀 Auto Setup' },
   'settings.fromTemplate': { zh: '⚡ 从模板添加', en: '⚡ From Template' },
+  'settings.syncTemplate': { zh: '同步模板', en: 'Sync Template' },
   'settings.customProvider': { zh: '+ 自定义服务商', en: '+ Custom Provider' },
   'settings.providersDesc': { zh: '使用「🚀 自动配置」只需填写 API 地址和密钥，系统自动发现模型、检测余额接口和定价。也可从模板添加或手动创建。', en: 'Use "🚀 Auto Setup" — just enter API URL and key, the system auto-discovers models, balance endpoint, and pricing. You can also add from templates or create manually.' },
   'settings.loadingConfig': { zh: '正在加载配置…', en: 'Loading config…' },
@@ -205,6 +208,7 @@ var _i18n = {
   'settings.output': { zh: '输出', en: 'Output' },
   'settings.perMillionTokens': { zh: '每百万 Token', en: 'per million tokens' },
   'settings.balance': { zh: '余额', en: 'Balance' },
+  'settings.balanceClickRefresh': { zh: '余额（点击刷新）', en: 'Balance (click to refresh)' },
   'settings.used': { zh: '已用', en: 'Used' },
   'settings.remaining': { zh: '剩余', en: 'Remaining' },
   'settings.quota': { zh: '额度', en: 'Quota' },
@@ -248,6 +252,38 @@ var _i18n = {
   'settings.maxBytesHint': { zh: '字节，默认 20MB', en: 'bytes, default 20MB' },
   'settings.blockedDomains': { zh: '屏蔽域名', en: 'Blocked Domains' },
   'settings.blockedDomainsDesc': { zh: '抓取器不会访问的域名，每行一个。', en: 'Domains the fetcher will not visit, one per line.' },
+
+  // ══════════════════════════════════════
+  //  Settings — Translation Tab
+  // ══════════════════════════════════════
+  'settings.tabTranslate': { zh: '翻译', en: 'Translation' },
+  'settings.mtService': { zh: '机器翻译服务', en: 'Machine Translation Service' },
+  'settings.mtServiceDesc': { zh: '配置专用机器翻译 API，比 LLM 翻译更快、更便宜。<br>未配置或关闭时，翻译将自动使用 LLM cheap 模型。', en: 'Configure a dedicated machine translation API — faster and cheaper than LLM translation.<br>When not configured or disabled, translation falls back to LLM cheap model.' },
+  'settings.mtEnable': { zh: '启用机器翻译', en: 'Enable Machine Translation' },
+  'settings.mtEnableDesc': { zh: '开启后，翻译将优先使用机器翻译 API，失败时自动回退到 LLM', en: 'When enabled, translation uses the MT API first, falling back to LLM on failure' },
+  'settings.mtProvider': { zh: '翻译服务商', en: 'Translation Provider' },
+  'settings.mtProviderNiutrans': { zh: '小牛翻译 NiuTrans', en: 'NiuTrans' },
+  'settings.mtProviderCustom': { zh: '自定义 Custom', en: 'Custom' },
+  'settings.mtNiutransName': { zh: '小牛翻译', en: 'NiuTrans' },
+  'settings.mtNiutransDesc': { zh: '支持 400+ 语种互译 · 中英日韩高质量翻译 · 东北大学 NLP 实验室', en: '400+ language pairs · High-quality CJK translation · NEU NLP Lab' },
+  'settings.mtApplyKey': { zh: '申请 API Key', en: 'Get API Key' },
+  'settings.mtApiKeyPh': { zh: '在小牛翻译控制台 → API 管理中获取', en: 'Get from NiuTrans console → API Management' },
+  'settings.mtAppIdLabel': { zh: 'App ID', en: 'App ID' },
+  'settings.mtAppIdHint': { zh: '可选，v2 签名鉴权', en: 'Optional, v2 signed auth' },
+  'settings.mtAppIdPh': { zh: '留空使用简单 API Key 鉴权 (v1)', en: 'Leave empty for simple API Key auth (v1)' },
+  'settings.mtApiUrlLabel': { zh: 'API 地址', en: 'API URL' },
+  'settings.mtApiUrlHint': { zh: '可选', en: 'Optional' },
+  'settings.mtApiUrlPh': { zh: '留空使用默认地址', en: 'Leave empty for default URL' },
+  'settings.mtTestBtn': { zh: '测试连接', en: 'Test Connection' },
+  'settings.mtTesting': { zh: '⏳ 测试中…', en: '⏳ Testing…' },
+  'settings.mtTestOk': { zh: '✅ 连接成功：', en: '✅ Connected: ' },
+  'settings.mtTestFail': { zh: '未知错误', en: 'Unknown error' },
+  'settings.mtTestReqFail': { zh: '❌ 请求失败: ', en: '❌ Request failed: ' },
+  'settings.mtCustomName': { zh: '自定义服务商', en: 'Custom Provider' },
+  'settings.mtCustomDesc': { zh: '接入其他兼容 NiuTrans API 格式的翻译服务', en: 'Connect to other translation services compatible with NiuTrans API format' },
+  'settings.mtCustomApiKeyPh': { zh: '翻译服务 API Key', en: 'Translation service API Key' },
+  'settings.mtCustomAppIdPh': { zh: '如需签名鉴权则填写', en: 'Fill in if signed auth is required' },
+  'settings.mtCustomApiUrlHint': { zh: '必填', en: 'Required' },
 
   // ══════════════════════════════════════
   //  Settings — Network Tab
@@ -438,6 +474,77 @@ var _i18n = {
   'myday.refresh': { zh: '生成/刷新报告', en: 'Generate/refresh report' },
   'myday.done': { zh: '完成', en: 'Done' },
   'myday.open': { zh: '未完成', en: 'Open' },
+  // Date helpers
+  'myday.today': { zh: '今天', en: 'Today' },
+  'myday.yesterday': { zh: '昨天', en: 'Yesterday' },
+  'myday.weekdays': { zh: '日,一,二,三,四,五,六', en: 'Sun,Mon,Tue,Wed,Thu,Fri,Sat' },
+  'myday.weekdayPrefix': { zh: '周', en: '' },
+  'myday.monthDay': { zh: '{m}月{d}日', en: '{m}/{d}' },
+  'myday.yearMonth': { zh: '{y}年{m}月', en: '{y}/{m}' },
+  'myday.dateFull': { zh: '{y}年{m}月{d}日', en: '{m}/{d}/{y}' },
+  // Calendar day headers
+  'myday.calWeek': { zh: '日,一,二,三,四,五,六', en: 'S,M,T,W,T,F,S' },
+  // Status labels
+  'myday.statusDone': { zh: '✓ 完成', en: '✓ Done' },
+  'myday.statusInProgress': { zh: '⏳ 进行中', en: '⏳ In Progress' },
+  'myday.statusBlocked': { zh: '⛔ 受阻', en: '⛔ Blocked' },
+  'myday.statusIncomplete': { zh: '进行中', en: 'In Progress' },
+  'myday.toggleStatus': { zh: '切换状态', en: 'Toggle status' },
+  // Section labels
+  'myday.todayTodos': { zh: '今日待办', en: "Today's TODOs" },
+  'myday.unfinishedSection': { zh: '未完成', en: 'Unfinished' },
+  'myday.activeSection': { zh: '进行中', en: 'In Progress' },
+  'myday.doneSection': { zh: '已完成', en: 'Completed' },
+  'myday.tomorrowPlan': { zh: '明日计划', en: "Tomorrow's Plan" },
+  'myday.nextDayPlan': { zh: '次日计划', en: 'Next Day Plan' },
+  'myday.todoItems': { zh: '待办事项', en: 'TODOs' },
+  // Stream info
+  'myday.convCount': { zh: '{n} 个对话', en: '{n} conversations' },
+  'myday.independentConvs': { zh: '{n} 个独立对话', en: '{n} independent conversations' },
+  // Waiting / empty
+  'myday.reportNotGenerated': { zh: '报告尚未生成', en: 'Report not generated yet' },
+  'myday.checkingConvs': { zh: '正在查询对话数量…', en: 'Checking conversation count…' },
+  'myday.hasConvsHint': { zh: '有 {n} 个对话，点击上方刷新按钮或下方按钮生成报告', en: '{n} conversations found — click refresh or the button below to generate' },
+  'myday.noConvsHint': { zh: '还没有对话记录，开始聊天后可以生成报告', en: 'No conversations yet — start chatting to generate a report' },
+  'myday.generateBtn': { zh: '生成报告', en: 'Generate Report' },
+  'myday.generateDaily': { zh: '生成日报', en: 'Generate Report' },
+  'myday.quietDay': { zh: '这天很安静', en: 'A quiet day' },
+  'myday.noConvsFound': { zh: '没有找到对话记录', en: 'No conversations found' },
+  // Progress stages
+  'myday.generating': { zh: '正在生成报告', en: 'Generating report' },
+  'myday.stageStarting': { zh: '正在启动…', en: 'Starting…' },
+  'myday.stageExtracting': { zh: '扫描对话', en: 'Scanning conversations' },
+  'myday.stageAnalyzing': { zh: 'AI 分析', en: 'AI Analysis' },
+  'myday.stageSaving': { zh: '保存报告', en: 'Saving report' },
+  'myday.stageScanMsg': { zh: '扫描对话 {c}/{t}', en: 'Scanning {c}/{t}' },
+  'myday.stageAnalyzeMsg': { zh: 'LLM 分析 {n} 个对话…', en: 'Analyzing {n} conversations…' },
+  'myday.stageSaveMsg': { zh: '保存报告…', en: 'Saving report…' },
+  'myday.genHint': { zh: '你可以切换到其他日期，生成不会中断', en: 'You can switch dates — generation continues in background' },
+  'myday.genFailed': { zh: '生成失败', en: 'Generation failed' },
+  'myday.genFailRetry': { zh: '启动生成失败，请重试', en: 'Failed to start generation, please retry' },
+  'myday.analyzing': { zh: '分析中…', en: 'Analyzing…' },
+  // Stats
+  'myday.convStat': { zh: '{n} 对话', en: '{n} convs' },
+  'myday.streamStat': { zh: '{n} 工作流', en: '{n} streams' },
+  // Badges
+  'myday.badgeYesterday': { zh: '昨日', en: 'Yesterday' },
+  'myday.badgeCarried': { zh: '延续', en: 'Carried' },
+  // TODO actions
+  'myday.addPlaceholder': { zh: '添加待办…', en: 'Add a task…' },
+  'myday.markDone': { zh: '标记完成', en: 'Mark done' },
+  'myday.markUndone': { zh: '标记未完成', en: 'Mark undone' },
+  'myday.startConv': { zh: '开始对话', en: 'Start conversation' },
+  'myday.deleteTodo': { zh: '删除', en: 'Delete' },
+  // Inherited prompt
+  'myday.hasConvsToday': { zh: '今日已有 {n} 个对话', en: '{n} conversations today' },
+  // Close button
+  'myday.close': { zh: '关闭', en: 'Close' },
+  // Misc streams
+  'myday.miscQA': { zh: '零碎问答', en: 'Misc Q&A' },
+  // Reminder toast
+  'myday.reminderTitle': { zh: '📋 查看今日日报', en: '📋 Check your daily report' },
+  'myday.reminderBody': { zh: '今天有 {n} 个对话，来看看你的工作总结吧', en: "You had {n} conversations today — review your summary" },
+  'myday.reminderBodyGeneric': { zh: '来看看今天的工作总结吧', en: 'Review your daily work summary' },
 
   // ══════════════════════════════════════
   //  Conversation Actions

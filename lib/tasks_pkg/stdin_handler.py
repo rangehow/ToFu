@@ -9,6 +9,7 @@ This mirrors the human_guidance pattern but is specifically for subprocess
 stdin interaction.
 """
 
+import time
 import threading
 
 from lib.log import get_logger
@@ -21,6 +22,12 @@ _stdin_lock = threading.Lock()
 # How often (seconds) the blocking wait wakes up to check for task abort.
 _ABORT_POLL_INTERVAL = 1.0
 
+# Maximum time (seconds) to wait for user stdin input before auto-closing.
+# Prevents tasks from blocking indefinitely when:
+# - User navigates away without responding to stdin prompt
+# - False-positive stdin detection (e.g. `rg` inheriting pipe stdin)
+_STDIN_TIMEOUT = 120.0
+
 
 def request_stdin(stdin_id, task=None):
     """Block the current thread until the user provides stdin input.
@@ -30,10 +37,10 @@ def request_stdin(stdin_id, task=None):
         task: Optional task dict — if provided, abort is checked periodically.
 
     Returns:
-        The user's input string (with trailing newline), or None if aborted.
+        The user's input string (with trailing newline), or None if aborted/timed out.
     """
-    logger.info('[StdinHandler] Request %s blocking (abort_poll=%.1fs, task=%s)',
-                stdin_id, _ABORT_POLL_INTERVAL,
+    logger.info('[StdinHandler] Request %s blocking (abort_poll=%.1fs, timeout=%.0fs, task=%s)',
+                stdin_id, _ABORT_POLL_INTERVAL, _STDIN_TIMEOUT,
                 task.get('id', '?')[:8] if task else 'none')
     evt = threading.Event()
     with _stdin_lock:
@@ -42,6 +49,7 @@ def request_stdin(stdin_id, task=None):
             'response': None,
         }
 
+    deadline = time.monotonic() + _STDIN_TIMEOUT
     resolved = False
     while not resolved:
         resolved = evt.wait(timeout=_ABORT_POLL_INTERVAL)
@@ -49,6 +57,14 @@ def request_stdin(stdin_id, task=None):
             break
         if task and task.get('aborted'):
             logger.info('[StdinHandler] Request %s — task aborted, unblocking', stdin_id)
+            with _stdin_lock:
+                _stdin_requests.pop(stdin_id, None)
+            return None
+        if time.monotonic() >= deadline:
+            logger.warning('[StdinHandler] Request %s — timed out after %.0fs, '
+                           'closing stdin (task=%s)',
+                           stdin_id, _STDIN_TIMEOUT,
+                           task.get('id', '?')[:8] if task else 'none')
             with _stdin_lock:
                 _stdin_requests.pop(stdin_id, None)
             return None
@@ -78,7 +94,8 @@ def resolve_stdin(stdin_id, input_text):
             return False
         entry['response'] = input_text
         entry['event'].set()
-    logger.info('[StdinHandler] User resolved %s → input_len=%d', stdin_id, len(input_text))
+    logger.info('[StdinHandler] User resolved %s → input_len=%s',
+                stdin_id, len(input_text) if input_text is not None else 'EOF')
     return True
 
 

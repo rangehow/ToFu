@@ -55,6 +55,11 @@ from lib.tasks_pkg.system_context import (
     inject_search_addendum_to_user,
     inject_memory_to_user,
 )
+from lib.tasks_pkg.server_message_store import (
+    rebuild_messages_with_history as _rebuild_messages_with_history,
+    save_messages as _save_messages_to_store,
+    estimate_token_overhead as _estimate_token_overhead,
+)
 from lib.tasks_pkg.tool_dispatch import (
     _TOOL_EXEC_LABELS,
     emit_tool_exec_phase,
@@ -384,6 +389,49 @@ def _finalize_and_emit_done(task: dict[str, Any], *, model: str, preset: str, th
         except Exception as e:
             logger.warning('[Task %s] get_modifications failed for conv=%s model=%s: %s',
                       task['id'][:8], task.get('convId', ''), model, e, exc_info=True)
+    # ── Continue checkpoint merging: merge pre-checkpoint metadata into
+    #   both the done event and the task dict so that:
+    #   (a) the frontend done handler sees merged data (even though it also
+    #       merges client-side, this makes poll fallback consistent), and
+    #   (b) _sync_result_to_conversation writes the full merged set to DB. ──
+    _cp_usage = task.get('_checkpointUsage')
+    if _cp_usage and done_evt.get('usage'):
+        merged_usage = {}
+        for k in set(list(_cp_usage.keys()) + list(done_evt['usage'].keys())):
+            cv = _cp_usage.get(k)
+            nv = done_evt['usage'].get(k)
+            merged_usage[k] = (cv + nv) if isinstance(cv, (int, float)) and isinstance(nv, (int, float)) else (nv if nv is not None else cv)
+        done_evt['usage'] = merged_usage
+        task['usage'] = merged_usage
+    elif _cp_usage and not done_evt.get('usage'):
+        done_evt['usage'] = _cp_usage
+        task['usage'] = _cp_usage
+
+    _cp_api_rounds = task.get('_checkpointApiRounds')
+    if _cp_api_rounds:
+        merged_api = list(_cp_api_rounds) + (done_evt.get('apiRounds') or [])
+        done_evt['apiRounds'] = merged_api
+        task['apiRounds'] = merged_api
+
+    _cp_mod_files = task.get('_checkpointModifiedFiles')
+    if _cp_mod_files is not None and done_evt.get('modifiedFiles') is not None:
+        done_evt['modifiedFiles'] = _cp_mod_files + done_evt['modifiedFiles']
+        task['modifiedFiles'] = done_evt['modifiedFiles']
+
+    _cp_mod_list = task.get('_checkpointModifiedFileList')
+    if _cp_mod_list:
+        # Merge: old + new, dedup by path (new action wins)
+        merged_map = {}
+        for f in _cp_mod_list:
+            p = f.get('path', f) if isinstance(f, dict) else str(f)
+            merged_map[p] = f
+        for f in (done_evt.get('modifiedFileList') or []):
+            p = f.get('path', f) if isinstance(f, dict) else str(f)
+            merged_map[p] = f
+        merged_list = list(merged_map.values())
+        done_evt['modifiedFileList'] = merged_list
+        task['modifiedFileList'] = merged_list
+
     if _suspicion_reasons:
         done_evt['_diagnostics'] = {
             'loop_exit_reason': _loop_exit_reason,
@@ -510,8 +558,42 @@ def run_task(task: dict[str, Any]) -> None:
 
         messages = list(task['messages'])
         original_messages = list(messages)
-        search_round_num = 0
+        tool_round_num = 0
         all_search_results_text = []
+
+        # ── Section 2.5: Server-side tool history restoration ──
+        # If keepToolHistory is enabled AND we have stored full messages
+        # from a previous turn, replace the frontend's summary-only messages
+        # with the full tool_use/tool_result history.
+        _keep_tool_history = cfg.get('keepToolHistory', True)
+        _conv_id = task.get('convId', '')
+        if _keep_tool_history and _conv_id:
+            rebuilt, _rebuild_stats = _rebuild_messages_with_history(_conv_id, messages)
+            if _rebuild_stats['used_store']:
+                # Log the overhead for monitoring
+                _oh = _estimate_token_overhead(messages, rebuilt)
+                logger.info(
+                    '[%s] conv=%s ★ TOOL HISTORY RESTORED: '
+                    'frontend=%d msgs → rebuilt=%d msgs '
+                    '(tool_msgs=%d, overhead=+%d est_tokens, ratio=%.1fx)',
+                    tid, _conv_id[:8],
+                    _rebuild_stats['frontend_msg_count'], len(rebuilt),
+                    _rebuild_stats['tool_msgs_restored'],
+                    _oh['overhead_est_tokens'], _oh['ratio'],
+                )
+                messages = rebuilt
+                original_messages = list(messages)
+                # Emit a diagnostic event for the debug panel
+                append_event(task, {
+                    'type': 'phase',
+                    'phase': 'tool_history_restored',
+                    'detail': f'Restored {_rebuild_stats["tool_msgs_restored"]} tool messages from server store',
+                    'stats': _rebuild_stats,
+                    'overhead': _oh,
+                })
+            else:
+                logger.debug('[%s] conv=%s keepToolHistory enabled but no stored messages found',
+                             tid, _conv_id[:8])
 
         # ── Section 3: Context Injection ──
         _inject_system_contexts(
@@ -532,7 +614,7 @@ def run_task(task: dict[str, Any]) -> None:
         # if fetch_enabled:
         #     prefetched = _prefetch_user_urls(messages, task)
         #     if prefetched:
-        #         search_round_num = inject_prefetched_urls(messages, prefetched, task)
+        #         tool_round_num = inject_prefetched_urls(messages, prefetched, task)
 
 
         logger.debug('[Task %s] conv=%s Start model=%s think=%s search=%s fetch=%s project=%s code_exec=%s',
@@ -549,7 +631,7 @@ def run_task(task: dict[str, Any]) -> None:
         _injected_tool_calls = inject_tool_history(messages, cfg, task, model)
         if _injected_tool_calls:
             tool_call_happened = True
-            search_round_num = _injected_tool_calls  # offset so new roundNums don't conflict
+            tool_round_num = _injected_tool_calls  # offset so new roundNums don't conflict
 
         # ★ Apply preserved content prefix from Continue — ensures backend checkpoints
         #   include text the LLM generated alongside completed tool rounds in the prior
@@ -560,6 +642,25 @@ def run_task(task: dict[str, Any]) -> None:
                 task['content'] = _content_prefix
             logger.debug('[%s] conv=%s Applied contentPrefix (%d chars) from continue checkpoint',
                          tid, task.get('convId', ''), len(_content_prefix))
+
+        # ★ Stash checkpoint metadata for merging into done event and DB persistence.
+        #   NOTE: we do NOT pre-populate task['toolRounds'] with checkpoint rounds
+        #   because the frontend's state/delta handlers would double-count them
+        #   (frontend does _continueToolRounds.concat(ev.toolRounds)).  Instead,
+        #   checkpoint rounds are merged only when writing to DB and in the done event.
+        _checkpoint_tr = cfg.get('checkpointToolRounds') or []
+        if _checkpoint_tr:
+            task['_checkpointToolRounds'] = list(_checkpoint_tr)
+            logger.debug('[%s] conv=%s Stashed %d checkpoint toolRounds for DB merge',
+                         tid, task.get('convId', ''), len(_checkpoint_tr))
+        if cfg.get('checkpointUsage'):
+            task['_checkpointUsage'] = cfg['checkpointUsage']
+        if cfg.get('checkpointApiRounds'):
+            task['_checkpointApiRounds'] = cfg['checkpointApiRounds']
+        if cfg.get('checkpointModifiedFiles'):
+            task['_checkpointModifiedFiles'] = cfg['checkpointModifiedFiles']
+        if cfg.get('checkpointModifiedFileList'):
+            task['_checkpointModifiedFileList'] = cfg['checkpointModifiedFileList']
 
         # ★ 禁止添加 anti-loop / 预算警告 / _force_stop 等机制。
         #   不允许在运行时向 messages 注入任何 [SYSTEM NOTE] 或 [SYSTEM:] 消息来
@@ -620,12 +721,9 @@ def run_task(task: dict[str, Any]) -> None:
             inject_search_addendum_to_user(messages, search_enabled,
                                            round_num=round_num)
 
-            # ★ Memory listing: inject into the last user message (NOT system)
-            #   to avoid cache-breaking on memory CRUD. Uses BM25 relevance
-            #   filtering to show only ~30 most relevant memories per turn.
-            #   MUST be the LAST user-message injection — after attachments,
-            #   after search addendum, after any planner/critic replacements.
-            #   Only on round 0 — subsequent rounds skip to preserve cache.
+            # ★ Legacy memory cleanup: strip old <available_memories> listings
+            #   from persisted conversation history. Memory count hint is now
+            #   injected into the system message by _inject_system_contexts().
             inject_memory_to_user(
                 messages,
                 project_path=project_path,
@@ -680,7 +778,7 @@ def run_task(task: dict[str, Any]) -> None:
             from lib.tasks_pkg.streaming_tool_executor import StreamingToolAccumulator
             _stream_acc = StreamingToolAccumulator(
                 task, project_path=cfg.get('projectPath'),
-                search_round_num=search_round_num,
+                tool_round_num=tool_round_num,
                 round_num=round_num,
                 project_enabled=project_enabled,
             )
@@ -726,11 +824,11 @@ def run_task(task: dict[str, Any]) -> None:
                     model=model, tid=task['id'],
                 )
 
-            # ★ Read back updated search_round_num from streaming accumulator
+            # ★ Read back updated tool_round_num from streaming accumulator
             #   (tool_start events emitted during streaming already consumed
             #   round numbers, so parse_tool_calls must start from here).
             if _stream_acc.announced_tc_map:
-                search_round_num = _stream_acc.search_round_num
+                tool_round_num = _stream_acc.tool_round_num
 
             # ★ Inject pre-computed streaming tool results into dedup cache.
             #   execute_tool_pipeline will find these and skip re-execution.
@@ -791,14 +889,27 @@ def run_task(task: dict[str, Any]) -> None:
             if task['aborted']:
                 _abort_detected_phase = f'before_tool_exec_round_{round_num}'
                 _loop_exit_reason = f'aborted_before_tools_round_{round_num}'
+                # ★ Remove the assistant message with tool_calls that we just
+                #   appended (line ~879) — since we're skipping tool execution,
+                #   leaving it creates orphaned tool_use blocks without matching
+                #   tool_result.  This causes HTTP 400 on the next turn when
+                #   server_message_store replays the full message history.
+                if messages and messages[-1].get('tool_calls'):
+                    _popped = messages.pop()
+                    logger.info('[%s] Removed trailing tool_calls message (abort) — '
+                                'prevents orphaned tool_use in stored history', tid)
+                    # If it had content alongside tool_calls, keep just the content
+                    if _popped.get('content'):
+                        messages.append({'role': 'assistant', 'content': _popped['content']})
+                        logger.debug('[%s] Re-added assistant content without tool_calls', tid)
                 logger.info('[%s] Task aborted before tool execution at round %d — skipping all tools', tid, round_num)
                 break
 
             # ── Phase 1: Parse all tool_calls ──
             #   Pass early_announced so parse_tool_calls skips re-emitting
             #   tool_start events that were already sent during streaming.
-            parsed_tcs, search_round_num = parse_tool_calls(
-                assistant_msg, task, round_num, search_round_num, project_enabled,
+            parsed_tcs, tool_round_num = parse_tool_calls(
+                assistant_msg, task, round_num, tool_round_num, project_enabled,
                 early_announced=_stream_acc.announced_tc_map,
             )
 
@@ -835,7 +946,7 @@ def run_task(task: dict[str, Any]) -> None:
                     _emit_tool_content = ''
                     _emit_tool_name = ''
                     if isinstance(_emit_round, int):
-                        for _sr in task.get('searchRounds', []):
+                        for _sr in task.get('toolRounds', []):
                             if _sr.get('roundNum') == _emit_round:
                                 _emit_tool_content = _sr.get('toolContent') or ''
                                 _emit_tool_name = _sr.get('toolName') or ''
@@ -929,6 +1040,14 @@ def run_task(task: dict[str, Any]) -> None:
         #    snapshot, and endpoint mode's critic never sees the worker's output.
         task['messages'] = messages
 
+        # ── Save full messages to server store for next turn ──
+        if _keep_tool_history and _conv_id:
+            try:
+                _save_messages_to_store(_conv_id, messages)
+            except Exception as e:
+                logger.warning('[%s] conv=%s Failed to save messages to store: %s',
+                               tid, _conv_id[:8], e, exc_info=True)
+
         # ── Post-loop finalization: fallback, done event, persist ──
         _finalize_and_emit_done(
             task,
@@ -1004,7 +1123,7 @@ def _run_single_turn(
     task['status']       = 'running'
     task['error']        = None
     task['finishReason'] = None
-    task['searchRounds'] = []    # fresh tool rounds per turn
+    task['toolRounds'] = []    # fresh tool rounds per turn
 
     # Flag to tell run_task NOT to emit final 'done' event
     task['_endpoint_managed'] = True

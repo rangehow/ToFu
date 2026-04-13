@@ -448,6 +448,8 @@ def _bootstrap_pg(pgdata, base_dir, pg_host, pg_port, pg_user, pg_password, pg_d
             f.write(f'port = {free_port}\n')
             f.write("listen_addresses = '*'\n")
             f.write("unix_socket_directories = ''\n")
+            f.write("max_connections = 200\n")
+            f.write("idle_in_transaction_session_timeout = 300s\n")
         logger.info('[DB] Configured PG port=%d in postgresql.conf', free_port)
     except Exception as e:
         logger.error('[DB] Cannot write postgresql.conf: %s', e)

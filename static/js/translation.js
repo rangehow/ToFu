@@ -199,6 +199,7 @@ async function _resumePendingTranslations(convId) {
         if (!p.msg.originalContent) p.msg.originalContent = p.msg.content;
         p.msg.content = result.translated;
       }
+      if (result.model) p.msg._translateModel = result.model;
       p.msg._translateDone = true;
       anyApplied = true;
       console.log(`%c[TranslateTask] ✓ Applied ${result.taskId} to msg ${p.idx} (${field})`, 'color:#22c55e');

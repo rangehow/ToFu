@@ -4,7 +4,7 @@ The ``emit_to_user`` tool allows the model to end its turn by pointing the
 user to the most recent tool result instead of re-outputting it verbatim.
 This saves output tokens and latency when the tool output speaks for itself.
 
-The referenced tool round is auto-inferred (last tool round in searchRounds),
+The referenced tool round is auto-inferred (last tool round in toolRounds),
 so the model only needs to provide a brief comment.
 """
 

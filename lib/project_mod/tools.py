@@ -43,7 +43,6 @@ from lib.project_mod.read_tools import (  # noqa: E402,F401
     tool_find_files,
     tool_grep,
     tool_list_dir,
-    tool_read_file,
     tool_read_files,
 )
 
@@ -1010,6 +1009,27 @@ def _run_command_simple(command, full_command, timeout, base):
                 f'[exit code: -1]')
 
 
+# Commands that read stdin as a data source (piped input) rather than for
+# interactive prompting.  When these are detected as "reading stdin", it's
+# almost always a false positive — they inherited our stdin pipe and are
+# treating it as a data stream (e.g. `rg` reads stdin when it's not a tty).
+_NON_INTERACTIVE_COMMANDS = frozenset({
+    'rg', 'grep', 'egrep', 'fgrep', 'ag', 'ack',
+    'sort', 'uniq', 'wc', 'head', 'tail', 'cat', 'tac', 'rev',
+    'awk', 'gawk', 'mawk', 'sed', 'tr', 'cut', 'paste', 'join',
+    'xargs', 'tee', 'comm', 'diff', 'patch',
+    'jq', 'yq', 'csvtool', 'column',
+    'md5sum', 'sha256sum', 'sha1sum', 'base64',
+    'less', 'more', 'bat', 'hexdump', 'xxd', 'od',
+    'perl', 'ruby',  # often used as one-liners in pipes
+})
+
+
+# Sentinel returned when only non-interactive commands are reading stdin.
+# The caller should close stdin (send EOF) so they can proceed.
+_STDIN_NON_INTERACTIVE = 'non_interactive'
+
+
 def _is_any_child_reading_stdin(parent_pid, stdin_pipe_ino):
     """Check if any descendant of *parent_pid* is blocked in read(2) on our stdin pipe.
 
@@ -1019,7 +1039,14 @@ def _is_any_child_reading_stdin(parent_pid, stdin_pipe_ino):
     combined with verifying that the child's fd 0 inode matches our stdin
     pipe inode (to avoid false positives from unrelated processes).
 
-    Returns the (pid, comm) tuple of the blocked process, or None.
+    Excludes known non-interactive commands (rg, grep, sort, etc.) that read
+    stdin as a data source rather than for user interaction.
+
+    Returns:
+        - ``(pid, comm)`` tuple if an interactive process is reading stdin
+        - ``_STDIN_NON_INTERACTIVE`` if only non-interactive commands are
+          reading stdin (caller should close stdin to send EOF)
+        - ``None`` if no process is reading our stdin pipe
 
     **Linux-only**: requires /proc filesystem. Returns None on macOS/Windows.
     """
@@ -1031,6 +1058,8 @@ def _is_any_child_reading_stdin(parent_pid, stdin_pipe_ino):
     except OSError as e:
         logger.debug('[StdinDetect] _collect_descendants failed: %s', e)
         return None
+
+    found_non_interactive = False
 
     for pid in pids_to_check:
         try:
@@ -1055,10 +1084,26 @@ def _is_any_child_reading_stdin(parent_pid, stdin_pipe_ino):
                         comm = f.read().strip()
                 except OSError:
                     comm = '?'
+
+                # Skip known non-interactive commands that read stdin as
+                # a data source.  These inherit our stdin pipe but are NOT
+                # prompting the user — they just treat stdin as input data.
+                if comm in _NON_INTERACTIVE_COMMANDS:
+                    logger.debug('[StdinDetect] Ignoring non-interactive %s '
+                                 '(pid=%d) reading stdin — data consumer, '
+                                 'not interactive prompt', comm, pid)
+                    found_non_interactive = True
+                    continue
+
                 return (pid, comm)
         except (OSError, ValueError, IndexError):
             # Process may have exited between checks — harmless
             continue
+
+    # If we found non-interactive readers but no interactive ones,
+    # signal the caller to close stdin so they get EOF and can proceed.
+    if found_non_interactive:
+        return _STDIN_NON_INTERACTIVE
     return None
 
 
@@ -1199,6 +1244,22 @@ def _run_command_interactive(command, full_command, timeout, base, stdin_callbac
             if (retcode is None and not stdin_closed
                     and stdin_pipe_ino is not None):
                 reader = _is_any_child_reading_stdin(proc.pid, stdin_pipe_ino)
+
+                # Non-interactive commands (rg, grep, sort, …) are reading
+                # our stdin pipe as a data source.  Close stdin immediately
+                # so they receive EOF and proceed (or fall back to directory
+                # search).  Without this, they block forever waiting on
+                # data that will never come.
+                if reader is _STDIN_NON_INTERACTIVE:
+                    logger.info('run_command: non-interactive command(s) '
+                                'reading stdin — closing pipe to send EOF')
+                    try:
+                        proc.stdin.close()
+                    except OSError:
+                        pass
+                    stdin_closed = True
+                    continue
+
                 if reader:
                     reader_pid, reader_comm = reader
                     # Gather what we have so far as the "prompt" context
@@ -1351,7 +1412,13 @@ def _resolve_base(base_path, rel_path):
             try:
                 return resolve_namespaced_path(rel_path)
             except ValueError:
-                logger.debug('[Tools] namespaced path %s not a known root, treating as plain path', rel_path[:40], exc_info=True)
+                # ★ Strip the 'name:' prefix to prevent the colon from
+                #   leaking into filesystem paths (colons are invalid in
+                #   most path contexts and cause Popen ENOENT errors).
+                _name, _, _rest = rel_path.partition(':')
+                rel_path = _rest if _rest else '.'
+                logger.debug('[Tools] namespaced path %s: not a known root, '
+                             'stripped prefix → rel_path=%s', _name, rel_path)
 
     # ── Multi-root cross-check for path-misrouting ──
     # When the model forgets the 'rootname:' prefix in a multi-root
@@ -1400,49 +1467,24 @@ def execute_tool(fn_name, fn_args, base_path, conv_id=None, task_id=None, **kwar
         return tool_list_dir(bp, rp)
     elif fn_name == 'read_files':
         reads = fn_args.get('reads', [])
-        # Resolve base for each read spec
+        # Resolve multi-root 'rootname:path' and normalise bare-string specs.
+        # Each spec gets a '_base' key so tool_read_files can use the correct
+        # base per file (important for multi-root workspaces).
         resolved = []
         for spec in reads:
             if isinstance(spec, dict) and 'path' in spec:
                 bp2, rp2 = _resolve_base(base_path, spec['path'])
-                resolved.append({'path': rp2, 'start_line': spec.get('start_line'), 'end_line': spec.get('end_line'), '_base': bp2})
+                resolved.append({'path': rp2, 'start_line': spec.get('start_line'),
+                                 'end_line': spec.get('end_line'), '_base': bp2})
             elif isinstance(spec, str) and spec.strip():
-                # Model sent a bare string path instead of {path: ...} — normalise it
                 bp2, rp2 = _resolve_base(base_path, spec.strip())
                 resolved.append({'path': rp2, '_base': bp2})
                 logger.debug('[Tools] read_files: normalised bare string spec %r → dict', spec[:80])
             else:
                 logger.warning('[Tools] read_files: skipping invalid spec type=%s val=%r',
                                type(spec).__name__, str(spec)[:120])
-                # Do NOT append raw spec — downstream code expects dicts with .get()
                 continue
-        # Use first resolved base (all should be same in single-root projects)
-        bp_main = base_path
-        for r in resolved:
-            if isinstance(r, dict) and '_base' in r:
-                bp_main = r['_base']
-                break
-        # For multi-root, we call tool_read_file individually per spec
-        parts = []
-        total_chars = 0
-        BATCH_CHAR_BUDGET = 200_000
-        MAX_BATCH = 20
-        for i, spec in enumerate(resolved[:MAX_BATCH]):
-            if not isinstance(spec, dict):
-                parts.append(f'[{i+1}] Error: invalid entry')
-                continue
-            bp2 = spec.pop('_base', bp_main)
-            result = tool_read_file(bp2, spec.get('path', ''), spec.get('start_line'), spec.get('end_line'))
-            if total_chars + len(result) > BATCH_CHAR_BUDGET:
-                remaining = BATCH_CHAR_BUDGET - total_chars
-                if remaining > 200:
-                    result = result[:remaining] + '\n… [truncated — batch budget exceeded]'
-                else:
-                    parts.append(f'… [{len(resolved) - i} more files skipped — batch budget exceeded]')
-                    break
-            total_chars += len(result)
-            parts.append(result)
-        return '\n\n'.join(parts)
+        return tool_read_files(base_path, resolved)
     elif fn_name == 'grep_search':
         search_path = fn_args.get('path')
         bp = base_path

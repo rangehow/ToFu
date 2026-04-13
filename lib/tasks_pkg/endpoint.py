@@ -236,7 +236,7 @@ def run_endpoint_task(task):
             'role': 'assistant',
             'content': planner_content,
             'thinking': planner_result.get('thinking', ''),
-            'searchRounds': task.get('searchRounds') or [],
+            'toolRounds': task.get('toolRounds') or [],
             'timestamp': time.strftime('%Y-%m-%dT%H:%M:%S'),
             '_isEndpointPlanner': True,
         }
@@ -357,7 +357,7 @@ def run_endpoint_task(task):
                 'role': 'assistant',
                 'content': turn_content,
                 'thinking': turn_result.get('thinking', ''),
-                'searchRounds': task.get('searchRounds') or [],
+                'toolRounds': task.get('toolRounds') or [],
                 'timestamp': time.strftime('%Y-%m-%dT%H:%M:%S'),
                 '_epIteration': iteration,
             }

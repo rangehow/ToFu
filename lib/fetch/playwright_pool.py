@@ -68,9 +68,10 @@ class PlaywrightPool:
                 if 'Executable doesn\'t exist' in str(_launch_err) or 'executable' in str(_launch_err).lower():
                     logger.info('Playwright browser not installed — attempting auto-install...')
                     import subprocess
+                    import sys as _sys
                     try:
                         subprocess.run(
-                            ['python', '-m', 'playwright', 'install', 'chromium'],
+                            [_sys.executable, '-m', 'playwright', 'install', 'chromium'],
                             timeout=120, capture_output=True, check=True,
                         )
                         logger.info('Playwright chromium installed successfully, retrying launch...')

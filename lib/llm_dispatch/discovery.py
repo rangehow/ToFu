@@ -53,6 +53,7 @@ _VISION_PAT = re.compile(
     r'|qwen.*(vl|max|plus)'                 # Qwen VL/Max/Plus
     r'|ernie-5\.0'                           # ERNIE 5.0 is natively multimodal
     r'|kimi-k2\.5'                           # Kimi K2.5 is natively multimodal
+    r'|glm-5v'                               # GLM-5V (vision variant)
     r')',
     re.I,
 )

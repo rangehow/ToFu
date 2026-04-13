@@ -87,20 +87,32 @@ def search_searxng(query, max_results=6):
 
     Tries JSON API first (fast, structured), falls back to HTML scraping.
     Rotates across instances to spread load and survive rate-limits.
+
+    Optimised for speed: 2 instances max, 2s timeout per request.
+    Most public instances block datacenter IPs via 302→homepage redirect;
+    we detect this and skip immediately.
     """
     import time as _time
     t0 = _time.time()
     shuffled = list(_SEARXNG_INSTANCES)
     random.shuffle(shuffled)
-    # Try up to 3 instances (short timeout — SearXNG often 429s from datacenter IPs)
-    for inst in shuffled[:3]:
+    _TIMEOUT = 2  # seconds — if SearXNG can't respond in 2s, it won't
+    _MAX_INSTANCES = 2  # try at most 2 instances (was 3)
+    for inst in shuffled[:_MAX_INSTANCES]:
         try:
-            # Try JSON first
+            # Try JSON first (don't follow redirects — detect 302→homepage)
             resp = requests.get(
                 f'{inst}/search',
                 params={'q': query, 'format': 'json', 'engines': 'google,bing,duckduckgo'},
-                headers=HEADERS, timeout=5,
+                headers=HEADERS, timeout=_TIMEOUT, allow_redirects=False,
             )
+
+            # 302/301 → homepage redirect = bot block, skip immediately
+            if resp.status_code in (301, 302):
+                logger.debug('[Search] SearXNG %s redirected (%d) — bot block, skipping',
+                             inst, resp.status_code)
+                continue
+
             json_results = []
             if resp.ok and 'json' in resp.headers.get('content-type', ''):
                 json_results = _searxng_parse_json(resp.json(), max_results)
@@ -118,8 +130,13 @@ def search_searxng(query, max_results=6):
                 resp = requests.get(
                     f'{inst}/search',
                     params={'q': query},
-                    headers=HEADERS, timeout=5,
+                    headers=HEADERS, timeout=_TIMEOUT, allow_redirects=False,
                 )
+                # Detect redirect again
+                if resp.status_code in (301, 302):
+                    logger.debug('[Search] SearXNG %s HTML redirected (%d) — bot block',
+                                 inst, resp.status_code)
+                    continue
                 if resp.ok and len(resp.text) > 500:
                     results = _searxng_parse_html(resp.text, max_results)
                     if results:
@@ -127,7 +144,7 @@ def search_searxng(query, max_results=6):
                         return results
 
         except requests.Timeout:
-            logger.debug('[Search] SearXNG timeout: %s', inst)
+            logger.debug('[Search] SearXNG timeout (%ds): %s', _TIMEOUT, inst)
         except requests.RequestException as e:
             logger.debug('[Search] SearXNG %s failed: %s', inst, e)
         except Exception as e:

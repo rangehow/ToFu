@@ -247,7 +247,7 @@ TIMER_TOOL_CREATE = {
                         "Optional shell command to run before each poll. Its output is fed "
                         "to the LLM for grounded decision-making. Example: "
                         "'tail -20 /path/to/experiment.log' or "
-                        "'ssh server \"cat /tmp/job_status.txt\"'. "
+                        "'ssh server \"cat ~/job_status.txt\"'. "
                         "If omitted, the LLM decides based on the check_instruction alone "
                         "(less reliable for external processes)."
                     )

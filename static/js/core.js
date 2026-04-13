@@ -32,6 +32,27 @@ function _ensureKatex() {
   return _katexLoading;
 }
 
+/* ── Lazy PDF.js loader (pdf.min.js + worker, heavy — lazy-loaded on first use) ── */
+let _pdfJsLoading = null;
+function _ensurePdfJs() {
+  if (typeof pdfjsLib !== 'undefined') return Promise.resolve();
+  if (_pdfJsLoading) return _pdfJsLoading;
+  _pdfJsLoading = new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = BASE_PATH + '/static/vendor/pdf.min.js';
+    s.onload = () => {
+      /* Configure worker path */
+      if (typeof pdfjsLib !== 'undefined' && pdfjsLib.GlobalWorkerOptions) {
+        pdfjsLib.GlobalWorkerOptions.workerSrc = BASE_PATH + '/static/vendor/pdf.worker.min.js';
+      }
+      resolve();
+    };
+    s.onerror = () => reject(new Error('Failed to load PDF.js'));
+    document.head.appendChild(s);
+  });
+  return _pdfJsLoading;
+}
+
 const TAB_ID = Math.random().toString(36).slice(2, 10);
 let _syncChannel = null;
 try {
@@ -116,14 +137,6 @@ async function deleteFolder(folderId) {
     console.warn('[Folders] Delete failed:', e.message);
     return false;
   }
-}
-
-function toggleFolderCollapsed(folderId) {
-  const f = _folders.find(x => x.id === folderId);
-  if (!f) return;
-  f.collapsed = !f.collapsed;
-  updateFolder(folderId, { collapsed: f.collapsed }).catch(() => {});
-  renderConversationList();
 }
 
 function setConversationFolder(convId, folderId) {
@@ -214,7 +227,7 @@ function _convRenderFingerprint(conv) {
   const n = conv.messages.length;
   if (n === 0) return conv.id + ":0:" + (conv.title || "");
   const last = conv.messages[n - 1];
-  const sr = last.searchRounds || last.searchResults;
+  const sr = last.toolRounds || last.searchResults;
   return (
     conv.id +
     ":" +
@@ -565,23 +578,6 @@ function calcConversationCost(conv) {
     cacheSavingsCny: tSav,
   };
 }
-function calcAllConversationsCost() {
-  let tc = 0,
-    tu = 0;
-  for (const c of conversations) {
-    const r = calcConversationCost(c);
-    tc += r.totalCny;
-    tu += r.totalUsd;
-  }
-  return { totalCny: tc, totalUsd: tu };
-}
-function estimateTokens(text) {
-  if (!text) return 0;
-  const cjk = (text.match(/[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/g) || [])
-    .length;
-  return Math.ceil(cjk / 1.5 + (text.length - cjk) / 4);
-}
-
 function debugLog(msg, type = "") {
   console.log(`[${type || "info"}]`, msg);
   /* Auto-report error/warn level messages to server logs */
@@ -1097,7 +1093,9 @@ function scrollToBottom(force) {
     c.scrollTop = c.scrollHeight;
   });
 }
-function getSearchRoundsFromMsg(msg) {
+function getToolRoundsFromMsg(msg) {
+  if (msg.toolRounds && msg.toolRounds.length > 0) return msg.toolRounds;
+  // ── Backward compat: old conversations stored under 'searchRounds' ──
   if (msg.searchRounds && msg.searchRounds.length > 0) return msg.searchRounds;
   if (msg.searchResults && msg.searchResults.length > 0)
     return [
@@ -1172,7 +1170,7 @@ document.addEventListener("visibilitychange", () => {
         updateStreamingUI({
           thinking: buf.thinking,
           content: buf.content,
-          searchRounds: buf.searchRounds,
+          toolRounds: buf.toolRounds,
           phase: buf.phase,
         });
         scrollToBottom();
@@ -1265,7 +1263,7 @@ async function _recoverOfflineConversations(trigger) {
         );
         am.content = serverLast.content;
         if (serverLast.thinking) am.thinking = serverLast.thinking;
-        if (serverLast.searchRounds) am.searchRounds = serverLast.searchRounds;
+        if (serverLast.toolRounds) am.toolRounds = serverLast.toolRounds;
         if (serverLast.usage) am.usage = serverLast.usage;
         if (serverLast.model) am.model = serverLast.model;
         if (serverLast.modifiedFiles) am.modifiedFiles = serverLast.modifiedFiles;
@@ -2002,16 +2000,16 @@ async function loadConversationMessages(convId) {
           if ((lastServer.thinking || '').length > (lastLocal.thinking || '').length) {
             lastLocal.thinking = lastServer.thinking;
           }
-          if (lastServer.searchRounds?.length && !lastLocal.searchRounds?.length) {
-            lastLocal.searchRounds = lastServer.searchRounds;
+          if (lastServer.toolRounds?.length && !lastLocal.toolRounds?.length) {
+            lastLocal.toolRounds = lastServer.toolRounds;
           }
           /* Also update the stream buffer if one exists (for showStreamingUIForConv) */
           const buf = streamBufs.get(convId);
           if (buf) {
             if (!buf.content && lastLocal.content) buf.content = lastLocal.content;
             if (!buf.thinking && lastLocal.thinking) buf.thinking = lastLocal.thinking;
-            if (!buf.searchRounds?.length && lastLocal.searchRounds?.length)
-              buf.searchRounds = lastLocal.searchRounds.map(r => ({...r}));
+            if (!buf.toolRounds?.length && lastLocal.toolRounds?.length)
+              buf.toolRounds = lastLocal.toolRounds.map(r => ({...r}));
           }
         }
       }
@@ -2463,10 +2461,6 @@ function _mdCacheKey(text) {
   }
   return h + ":" + n;
 }
-function invalidateMdCache() {
-  _mdCache.clear();
-}
-
 /* ★ _fixTableExtraPipes — repair Markdown table rows where unescaped pipes
  * inside cell content cause extra columns.
  *
@@ -2611,9 +2605,10 @@ function renderMarkdown(text) {
   });
   // ★ No lookbehind (Safari <16.4 compat) — safe because $$ blocks
   //   are already extracted above, so no $$ sequences remain.
-  // ★ FIX: [^$\\\n] excludes newlines — prevents $ in table cells (e.g. $0.40)
-  //   from matching across rows/paragraphs and destroying table structure.
-  p = p.replace(/\$(?!\$)((?:[^$\\\n]|\\.)+?)\$(?!\$)/g, (_, t) => {
+  // ★ FIX: [^$\\\n|] excludes newlines AND pipes — prevents $ in table cells
+  //   (e.g. $2.28) from matching across rows/paragraphs/columns and
+  //   destroying table structure.  For | in math, use \vert or \mid.
+  p = p.replace(/\$(?!\$)((?:[^$\\\n|]|\\.)+?)\$(?!\$)/g, (_, t) => {
     mathStore.push({ tex: t.trim(), display: false });
     return "\x02MATH" + (mathStore.length - 1) + "\x03";
   });
@@ -2626,6 +2621,17 @@ function renderMarkdown(text) {
       .split("\x02CODE" + i + "\x03")
       .join(upgradeFenceIfNeeded(codeStore[i]));
   }
+
+  /* ★ FIX: Normalize missing spaces in Markdown structural markers.
+   * CommonMark requires a space after #/##/### and after list markers (- * +).
+   * LLMs (especially with CJK output) often omit the space:
+   *   "###标题"  → should be "### 标题"
+   *   "-项目一"  → should be "- 项目一"
+   * Without the space, marked.js treats them as plain text.
+   * Only applied to line-start patterns to avoid false positives in mid-line text. */
+  p = p.replace(/^(\s{0,3}#{1,6})([^\s#])/gm, '$1 $2');
+  p = p.replace(/^(\s*[-*+])([^\s\-*+\d])/gm, '$1 $2');
+  p = p.replace(/^(\s*\d+\.)([^\s])/gm, '$1 $2');
 
   /* ★ FIX: Repair Markdown table rows with extra unescaped pipes.
    * LLMs sometimes generate cell content like "82|181" where the pipe is
@@ -2737,6 +2743,29 @@ function copyCode(btn) {
   btn.textContent = "Copied!";
   setTimeout(() => (btn.textContent = "Copy"), 1500);
 }
+function _cellToMarkdown(cell) {
+  /* Reconstruct approximate markdown from a table cell's DOM,
+   * preserving bold, italic, and inline code formatting. */
+  let md = '';
+  cell.childNodes.forEach(node => {
+    if (node.nodeType === 3) { // text node
+      md += node.textContent;
+    } else if (node.nodeType === 1) { // element
+      const tag = node.tagName.toLowerCase();
+      const inner = node.textContent;
+      if (tag === 'strong' || tag === 'b') {
+        md += '**' + inner + '**';
+      } else if (tag === 'em' || tag === 'i') {
+        md += '*' + inner + '*';
+      } else if (tag === 'code') {
+        md += '`' + inner + '`';
+      } else {
+        md += inner;
+      }
+    }
+  });
+  return md.replace(/\|/g, '\\|').trim();
+}
 function copyTableMarkdown(btn) {
   const wrapper = btn.closest(".md-table-wrapper");
   const table = wrapper.querySelector("table");
@@ -2746,7 +2775,7 @@ function copyTableMarkdown(btn) {
   const lines = [];
   rows.forEach((tr, i) => {
     const cells = tr.querySelectorAll("th, td");
-    const vals = Array.from(cells).map(c => c.textContent.replace(/\|/g, "\\|").trim());
+    const vals = Array.from(cells).map(c => _cellToMarkdown(c));
     lines.push("| " + vals.join(" | ") + " |");
     if (i === 0) {
       lines.push("| " + vals.map(() => "---").join(" | ") + " |");
@@ -2978,7 +3007,7 @@ function twStart(convId) {
   streamBufs.set(convId, {
     content: "",
     thinking: "",
-    searchRounds: [],
+    toolRounds: [],
     phase: null,
   });
   // Start elapsed timer
@@ -3024,7 +3053,7 @@ function _twFlush() {
       updateStreamingUI({
         thinking: buf.thinking,
         content: buf.content,
-        searchRounds: buf.searchRounds,
+        toolRounds: buf.toolRounds,
         phase: buf.phase,
       });
   }

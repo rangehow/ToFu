@@ -24,16 +24,16 @@ def inject_prefetched_urls(messages, prefetched, task):
     prefetched : list[tuple[str, str]]
         List of ``(url, fetched_content)`` pairs from ``_prefetch_user_urls``.
     task : dict
-        Live task dict (used to read ``task['searchRounds']`` count).
+        Live task dict (used to read ``task['toolRounds']`` count).
 
     Returns
     -------
     int
-        Updated ``search_round_num`` based on how many search rounds already
+        Updated ``tool_round_num`` based on how many tool rounds already
         exist after prefetch.
     """
     if not prefetched:
-        return len(task.get('searchRounds', []))
+        return len(task.get('toolRounds', []))
 
     url_blocks = []
     for url, content in prefetched:
@@ -61,7 +61,7 @@ def inject_prefetched_urls(messages, prefetched, task):
             }
         break
 
-    return len(task.get('searchRounds', []))
+    return len(task.get('toolRounds', []))
 
 
 def inject_tool_history(messages, cfg, task, model):
@@ -90,7 +90,7 @@ def inject_tool_history(messages, cfg, task, model):
         Number of individual tool call entries injected (0 if none).
         Each toolHistory round may contain multiple tool calls; this
         returns the TOTAL across all rounds — useful for offsetting
-        ``search_round_num`` in the orchestrator so new rounds get
+        ``tool_round_num`` in the orchestrator so new rounds get
         non-conflicting roundNum values.
     """
     tool_history = cfg.get('toolHistory') or []

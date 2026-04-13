@@ -89,16 +89,28 @@ def get_username(fallback: str = 'postgres') -> str:
 # ═══════════════════════════════════════════════════════════════════════
 
 def get_temp_dir() -> str:
-    """Return the platform-appropriate temp directory.
+    """Return the project-local temp directory (``data/tmp/``).
 
-    - Linux: ``/tmp``
-    - macOS: ``/var/folders/...`` or ``/tmp``
-    - Windows: ``C:\\Users\\<user>\\AppData\\Local\\Temp``
+    Uses a project-local directory instead of the system ``/tmp`` because
+    ``/tmp`` may not be accessible (or may be on a different filesystem)
+    on all deployment machines, while the project directory is always
+    available.
+
+    Falls back to ``tempfile.gettempdir()`` only if the project-local
+    directory cannot be created.
 
     Returns:
-        Absolute path to the temp directory.
+        Absolute path to a usable temp directory.
     """
-    return tempfile.gettempdir()
+    _project_tmp = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        'data', 'tmp',
+    )
+    try:
+        os.makedirs(_project_tmp, exist_ok=True)
+        return _project_tmp
+    except OSError:
+        return tempfile.gettempdir()
 
 
 # ═══════════════════════════════════════════════════════════════════════

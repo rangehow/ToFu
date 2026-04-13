@@ -48,9 +48,21 @@ def endpoint_start():
         endpoint_complete    — {type, totalIterations, reason}
     """
     data = request.get_json(silent=True) or {}
-    messages = data.get('messages', [])
+    conv_id = data.get('convId', '')
+    config = data.get('config', {})
+
+    # ── Server-side message building (same as chat_start) ──
+    messages = data.get('messages')
     if not messages:
-        return jsonify({'error': 'No messages provided'}), 400
+        from lib.tasks_pkg.conv_message_builder import build_api_messages_from_db
+        exclude_last = config.get('excludeLast', False)
+        messages = build_api_messages_from_db(conv_id, config, exclude_last=exclude_last)
+        if messages is None:
+            return jsonify({'error': 'Conversation not found'}), 404
+        if not messages:
+            return jsonify({'error': 'No messages'}), 400
+        logger.info('[Endpoint] Built %d API messages from DB for conv %s',
+                    len(messages), conv_id[:8])
 
     has_user_msg = any(
         m.get('role') == 'user' and m.get('content')
@@ -58,12 +70,10 @@ def endpoint_start():
     )
     if not has_user_msg:
         return jsonify({'error': 'At least one user message with content required'}), 400
-
-    config = data.get('config', {})
     config['endpointMode'] = True
 
     cleanup_old_tasks()
-    task = create_task(data.get('convId', ''), messages, config)
+    task = create_task(conv_id, messages, config)
     task['endpoint_mode'] = True
     # ★ Set initial phase BEFORE starting the thread to avoid a race:
     # the SSE state snapshot defaults _endpoint_phase to 'working' if unset,

@@ -85,7 +85,7 @@ class StreamingToolAccumulator:
 
         acc = StreamingToolAccumulator(
             task, project_path,
-            search_round_num=search_round_num,
+            tool_round_num=tool_round_num,
             round_num=round_num,
             project_enabled=project_enabled,
         )
@@ -93,30 +93,30 @@ class StreamingToolAccumulator:
             task, body, tag='R1',
             on_tool_call_ready=acc.on_tool_call_ready,
         )
-        # Read back the updated search_round_num
-        search_round_num = acc.search_round_num
+        # Read back the updated tool_round_num
+        tool_round_num = acc.tool_round_num
         # Inject completed results into dedup cache
         hit_count = acc.inject_into_cache(task)
         # Now parse_tool_calls will skip re-emitting for already-announced tools
-        parsed_tcs, search_round_num = parse_tool_calls(
-            assistant_msg, task, round_num, search_round_num, project_enabled,
+        parsed_tcs, tool_round_num = parse_tool_calls(
+            assistant_msg, task, round_num, tool_round_num, project_enabled,
             early_announced=acc.announced_tc_map,
         )
 
     Args:
         task: Live task dict.
         project_path: Base path for project tools (may be None).
-        search_round_num: Current search round counter (will be incremented).
+        tool_round_num: Current tool round counter (will be incremented).
         round_num: Current orchestrator loop round (for llmRound tagging).
         project_enabled: Whether project-mode is active.
     """
 
     def __init__(self, task: dict, project_path: str | None,
-                 search_round_num: int = 0, round_num: int = 0,
+                 tool_round_num: int = 0, round_num: int = 0,
                  project_enabled: bool = False):
         self._task = task
         self._project_path = project_path
-        self._search_round_num = search_round_num
+        self._tool_round_num = tool_round_num
         self._round_num = round_num
         self._project_enabled = project_enabled
         self._pool = ThreadPoolExecutor(max_workers=4,
@@ -130,9 +130,9 @@ class StreamingToolAccumulator:
         self._first_announced = True  # for assistantContent tagging
 
     @property
-    def search_round_num(self) -> int:
-        """Current search_round_num (updated as tools are announced)."""
-        return self._search_round_num
+    def tool_round_num(self) -> int:
+        """Current tool_round_num (updated as tools are announced)."""
+        return self._tool_round_num
 
     @property
     def announced_tc_map(self) -> dict[str, tuple[int, dict]]:
@@ -204,19 +204,19 @@ class StreamingToolAccumulator:
         Uses the same ``_build_tool_round_entry`` as ``parse_tool_calls``
         to ensure consistent roundNum assignment and display formatting.
 
-        Requires ``task['searchRounds']`` and ``task['events_lock']`` to exist.
+        Requires ``task['toolRounds']`` and ``task['events_lock']`` to exist.
         Silently skips if the task doesn't have these (e.g. in unit tests).
         """
         # Guard: skip if task is not fully initialised (e.g. unit tests)
-        if 'searchRounds' not in self._task:
+        if 'toolRounds' not in self._task:
             return
 
         from lib.tasks_pkg.manager import append_event
         from lib.tasks_pkg.tool_display import _build_tool_round_entry
 
-        self._search_round_num, round_entry, event_payload = _build_tool_round_entry(
+        self._tool_round_num, round_entry, event_payload = _build_tool_round_entry(
             fn_name, fn_args, tc_id, tc_args_str,
-            self._search_round_num, self._project_enabled,
+            self._tool_round_num, self._project_enabled,
         )
         rn = round_entry['roundNum']
 
@@ -224,8 +224,8 @@ class StreamingToolAccumulator:
         round_entry['llmRound'] = self._round_num
         event_payload['llmRound'] = self._round_num
 
-        # Append to task's searchRounds and emit SSE event
-        self._task['searchRounds'].append(round_entry)
+        # Append to task's toolRounds and emit SSE event
+        self._task['toolRounds'].append(round_entry)
         append_event(self._task, event_payload)
 
         # Track as announced
@@ -310,6 +310,58 @@ class StreamingToolAccumulator:
                            self._tid, fn_name, e)
             raise
 
+    @staticmethod
+    def _normalize_image_result(content):
+        """Convert image dict results to __screenshot__ protocol.
+
+        read_files returns ``{'__batch_images__': {idx: screenshot_dict}, '_text_content': ...}``
+        for image files.  The handler in ``handlers/project.py`` normally converts
+        this to a ``__screenshot__`` dict, but the streaming executor bypasses handlers.
+
+        Without this conversion, ``str(content)`` on the batch dict would dump
+        800K+ of base64 text into the cache, which then gets injected as plain text
+        into the conversation context (blowing up the token count).
+
+        Returns:
+            The original content (if not an image dict), or the extracted
+            ``__screenshot__`` dict (preserving _text_fallback).
+        """
+        if not isinstance(content, dict):
+            return content
+        # Single __screenshot__ — already in the right format
+        if content.get('__screenshot__'):
+            return content
+        # __batch_images__ — extract first image, attach text fallback
+        if content.get('__batch_images__'):
+            images = content['__batch_images__']
+            text = content.get('_text_content', '')
+            if images:
+                first_img = next(iter(images.values()))
+                if isinstance(first_img, dict) and first_img.get('__screenshot__'):
+                    if text and not first_img.get('_text_fallback'):
+                        first_img['_text_fallback'] = text
+                    return first_img
+        return content
+
+    def _prepare_cache_value(self, content, fn_name):
+        """Prepare a tool result for cache storage.
+
+        Handles image dicts by preserving them as-is (not stringifying)
+        so the post-phase can detect ``__screenshot__`` and convert to
+        ``image_url`` blocks instead of dumping base64 as plain text.
+
+        Returns:
+            (cache_content, content_len_for_log)
+        """
+        # Normalize image results from read_files
+        content = self._normalize_image_result(content)
+        if isinstance(content, dict) and content.get('__screenshot__'):
+            # Log compressed size instead of len(dict) which would be key count
+            sz = content.get('compressedSize', 0)
+            return content, sz
+        content_str = str(content) if not isinstance(content, str) else content
+        return content_str, len(content_str)
+
     def inject_into_cache(self, task: dict) -> int:
         """Inject pre-execution results into the dedup cache.
 
@@ -340,11 +392,12 @@ class StreamingToolAccumulator:
                     # Extract display_results + engine_breakdown if available (web_search)
                     _disp = getattr(content, 'display_results', None)
                     _eng_bkdn = getattr(content, 'engine_breakdown', None)
-                    cache[cache_key] = (str(content), is_search, 'prefetch', _disp, _eng_bkdn)
+                    cache_val, content_len = self._prepare_cache_value(content, fn_name)
+                    cache[cache_key] = (cache_val, is_search, 'prefetch', _disp, _eng_bkdn)
                     injected += 1
                     logger.info('[%s] StreamingToolExec: injected %s into '
                                 'dedup cache (%.1fs, %d chars%s)',
-                                self._tid, fn_name, elapsed, len(content),
+                                self._tid, fn_name, elapsed, content_len,
                                 ', %d display_results' % len(_disp) if _disp else '')
                 except Exception as e:
                     logger.debug('[%s] StreamingToolExec: %s pre-exec failed, '
@@ -386,11 +439,12 @@ class StreamingToolAccumulator:
                     # Extract display_results + engine_breakdown if available (web_search)
                     _disp = getattr(content, 'display_results', None)
                     _eng_bkdn = getattr(content, 'engine_breakdown', None)
-                    cache[cache_key] = (str(content), is_search, 'prefetch', _disp, _eng_bkdn)
+                    cache_val, content_len = self._prepare_cache_value(content, fn_name)
+                    cache[cache_key] = (cache_val, is_search, 'prefetch', _disp, _eng_bkdn)
                     injected += 1
                     logger.info('[%s] StreamingToolExec: waited and injected '
                                 '%s into dedup cache (%.1fs, %d chars%s)',
-                                self._tid, fn_name, elapsed, len(content),
+                                self._tid, fn_name, elapsed, content_len,
                                 ', %d display_results' % len(_disp) if _disp else '')
                 except TimeoutError:
                     logger.warning('[%s] StreamingToolExec: %s timed out after '

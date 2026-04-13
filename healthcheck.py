@@ -106,7 +106,7 @@ tl_checks = [
     ("lib.tasks_pkg",     ["tasks", "tasks_lock", "create_task", "cleanup_old_tasks", "run_task"]),
     ("lib.project_mod",   ["set_project", "clear_project", "get_state", "get_project_path",
                            "get_recent_projects", "save_recent_project", "clear_recent_projects",
-                           "tool_list_dir", "tool_read_file", "tool_grep", "tool_find_files",
+                           "tool_list_dir", "tool_read_files", "tool_grep", "tool_find_files",
                            "tool_write_file", "tool_apply_diff", "tool_run_command",
                            "execute_tool", "browse_directory",
                            "get_context_for_prompt",

@@ -77,6 +77,9 @@ function _swapActiveConvItem(newActiveId) {
 
 /* ── Folder tab bar ── */
 let _lastFolderTabsHash = '';
+
+
+
 function renderFolderTabs(folders, activeFolderId, allConvs) {
   const tabsEl = document.getElementById('folderTabs');
   if (!tabsEl) return;
@@ -99,14 +102,26 @@ function renderFolderTabs(folders, activeFolderId, allConvs) {
     }
   }
 
-  // Hash to avoid unnecessary re-renders (includes counts)
-  const hash = `${activeFolderId||''}|U${uncategorizedCount}|${safeFolders.map(f=>`${f.id}|${f.name}|${f.color||''}|${f.order||0}|${countMap[f.id]||0}`).join(',')}`;
+  // Compute latest activity time per folder for sorting
+  const lastActiveMap = {};
+  for (const c of safeConvs) {
+    if (c.folderId && folderIds.has(c.folderId)) {
+      const ts = c.updatedAt || c.createdAt || 0;
+      if (!lastActiveMap[c.folderId] || ts > lastActiveMap[c.folderId]) {
+        lastActiveMap[c.folderId] = ts;
+      }
+    }
+  }
+
+  // Hash to avoid unnecessary re-renders (includes counts + last active time)
+  const hash = `${activeFolderId||''}|U${uncategorizedCount}|${safeFolders.map(f=>`${f.id}|${f.name}|${f.color||''}|${lastActiveMap[f.id]||0}|${countMap[f.id]||0}`).join(',')}`;
   if (hash === _lastFolderTabsHash) return;
   _lastFolderTabsHash = hash;
 
-  const sortedFolders = [...safeFolders].sort((a, b) => (a.order || 0) - (b.order || 0));
+  const sortedFolders = [...safeFolders].sort((a, b) => (lastActiveMap[b.id] || 0) - (lastActiveMap[a.id] || 0) || (a.order || 0) - (b.order || 0));
 
-  let html = '<div class="folder-tabs-scroll">';
+  let html = '';
+  html += '<div class="folder-tabs-scroll">';
   // "未分类" tab — shows conversations not in any folder (only when folders exist)
   if (sortedFolders.length > 0) {
     const ucBadge = uncategorizedCount > 0 ? `<span class="folder-tab-count">${uncategorizedCount}</span>` : '';
@@ -290,8 +305,8 @@ function _buildConvItemHTML(c, titleHtml, snippetHtml) {
   if (c.messages) {
     for (let i = c.messages.length - 1; i >= 0; i--) {
       const m = c.messages[i];
-      if (m.role === 'assistant' && m.searchRounds) {
-        for (const r of m.searchRounds) {
+      if (m.role === 'assistant' && m.toolRounds) {
+        for (const r of m.toolRounds) {
           if (r.status === 'awaiting_human') { awaitingHuman = true; break; }
         }
         if (awaitingHuman) break;
@@ -553,7 +568,7 @@ function _forceScrollToBottom(container, forceActualHeights) {
 /** Per-message fingerprint for surgical DOM diffing.
  *  Must change whenever the rendered HTML for this message would differ. */
 function _msgFingerprint(msg) {
-  const sr = msg.searchRounds || msg.searchResults;
+  const sr = msg.toolRounds || msg.searchResults;
   return (msg.role || "") + ":" +
     (msg.content || "").length + ":" +
     (msg.thinking || "").length + ":" +
@@ -622,7 +637,14 @@ function renderChat(conv, forceScroll) {
    * so the full-render path runs with _forceScrollToBottom — no flash. */
   if (forceScroll === false && conv.id === activeConvId && conv.messages.length > 0 && _hasMsgDom && !conv._initialSwitchLoad) {
     const total = conv.messages.length;
-    const startIdx = Math.max(0, total - _INITIAL_RENDER);
+    /* ★ FIX: Respect _lazyRenderedFrom so force-loaded messages (from scrollToTurn
+     * or manual scroll-up) survive surgical updates.  Previously this always used
+     * total - _INITIAL_RENDER, which removed force-loaded messages and left
+     * _lazyRenderedFrom stale — making turn-nav dots unclickable a second time. */
+    const defaultStart = Math.max(0, total - _INITIAL_RENDER);
+    const startIdx = (_lazyConvId === conv.id && _lazyRenderedFrom < defaultStart)
+      ? _lazyRenderedFrom
+      : defaultStart;
     let anyChange = false;
 
     /* 1) Update or add messages
@@ -662,13 +684,15 @@ function renderChat(conv, forceScroll) {
       upd.el.outerHTML = upd.html;
     }
 
-    /* 2) Remove stale messages beyond the current count */
+    /* 2) Remove stale messages beyond the current count
+     * ★ FIX: Use startIdx (which respects _lazyRenderedFrom) instead of
+     * recalculating total - _INITIAL_RENDER — keeps force-loaded messages alive. */
     const staleEls = inner.querySelectorAll('[id^="msg-"]');
     for (const el of staleEls) {
       const m = el.id.match(/^msg-(\d+)$/);
       if (m) {
         const idx = parseInt(m[1], 10);
-        if (idx >= total || idx < (Math.max(0, total - _INITIAL_RENDER))) {
+        if (idx >= total || idx < startIdx) {
           el.remove();
           anyChange = true;
         }
@@ -850,8 +874,8 @@ function renderMessage(msg, idx) {
     const taskName = msg._proactiveTaskId ? `Task ${(msg._proactiveTaskId || "").slice(0, 8)}` : "Proactive Agent";
     body += `<div class="proactive-banner"><span class="pb-text"><span class="pb-name">${escapeHtml(taskName)}</span> — scheduled execution</span></div>`;
   }
-  const rounds = getSearchRoundsFromMsg(msg);
-  if (rounds.length > 0) body += renderSearchRoundsHTML(rounds, false);
+  const rounds = getToolRoundsFromMsg(msg);
+  if (rounds.length > 0) body += renderToolRoundsHTML(rounds, false);
   if (msg.thinking) {
     const thinkLen = msg.thinking.length;
     const thinkMeta = thinkLen >= 1024 ? ` (${Math.round(thinkLen / 1024)}k chars)` : ` (${thinkLen} chars)`;
@@ -1030,10 +1054,12 @@ function renderMessage(msg, idx) {
   }
   // ── Bilingual display ──
   if (isUser && msg.originalContent && msg.originalContent !== msg.content) {
-    body += `<div class="bilingual-block bilingual-translated"><div class="bilingual-header" onclick="if(event.target.closest('.bilingual-copy-btn'))return;this.parentElement.classList.toggle('expanded')"><span class="bilingual-label">译文</span><button class="bilingual-copy-btn" onclick="event.stopPropagation();copyBilingualOriginal(this,'user',${idx})" title="Copy translation"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button><span class="bilingual-toggle">▼</span></div><div class="bilingual-body"><div class="md-content user-content">${escapeHtml(msg.content)}</div></div></div>`;
+    const _tmUser = msg._translateModel ? `<span class="bilingual-model" title="${escapeHtml(msg._translateModel)}">${escapeHtml(msg._translateModel)}</span>` : '';
+    body += `<div class="bilingual-block bilingual-translated"><div class="bilingual-header" onclick="if(event.target.closest('.bilingual-copy-btn'))return;this.parentElement.classList.toggle('expanded')"><span class="bilingual-label"><span class="bilingual-type">原文</span><span class="bilingual-sep">/</span><span class="bilingual-type active">译文</span>${_tmUser}</span><button class="bilingual-copy-btn" onclick="event.stopPropagation();copyBilingualOriginal(this,'user',${idx})" title="Copy translation"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button><span class="bilingual-toggle">▼</span></div><div class="bilingual-body"><div class="md-content user-content">${escapeHtml(msg.content)}</div></div></div>`;
   }
   if (!isUser && msg.translatedContent && msg._showingTranslation !== false) {
-    body += `<div class="bilingual-block bilingual-original"><div class="bilingual-header" onclick="if(event.target.closest('.bilingual-copy-btn'))return;this.parentElement.classList.toggle('expanded')"><span class="bilingual-label">原文</span><button class="bilingual-copy-btn" onclick="event.stopPropagation();copyBilingualOriginal(this,'assistant',${idx})" title="Copy original text"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button><span class="bilingual-toggle">▼</span></div><div class="bilingual-body"><div class="md-content">${renderMarkdown(msg.content)}</div></div></div>`;
+    const _tmAsst = msg._translateModel ? `<span class="bilingual-model" title="${escapeHtml(msg._translateModel)}">${escapeHtml(msg._translateModel)}</span>` : '';
+    body += `<div class="bilingual-block bilingual-original"><div class="bilingual-header" onclick="if(event.target.closest('.bilingual-copy-btn'))return;this.parentElement.classList.toggle('expanded')"><span class="bilingual-label"><span class="bilingual-type active">原文</span><span class="bilingual-sep">/</span><span class="bilingual-type">译文</span>${_tmAsst}</span><button class="bilingual-copy-btn" onclick="event.stopPropagation();copyBilingualOriginal(this,'assistant',${idx})" title="Copy original text"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button><span class="bilingual-toggle">▼</span></div><div class="bilingual-body"><div class="md-content">${renderMarkdown(msg.content)}</div></div></div>`;
   }
   // ── Persistent "translating..." indicator (survives re-render / tab switch) ──
   if (!isUser && !msg.translatedContent && msg._translateDone === false) {
@@ -1316,149 +1342,6 @@ function _renderConvRefChips() {
   if (refBtn) refBtn.classList.toggle("has-refs", _pendingConvRefs.length > 0);
 }
 
-// ══════════════════════════════════════════════════════
-// ★ Conversation Reference Picker (@-popover)
-// ══════════════════════════════════════════════════════
-function openConvRefPicker() {
-  // Close if already open
-  const existing = document.getElementById("conv-ref-picker");
-  if (existing) { existing.remove(); return; }
-
-  const btn = document.getElementById("convRefBtn");
-  if (!btn) return;
-
-  // Build the popover
-  const picker = document.createElement("div");
-  picker.id = "conv-ref-picker";
-  picker.className = "conv-ref-picker";
-
-  // Get conversations (from global state)
-  const allConvs = (typeof conversations !== "undefined" ? conversations : [])
-    .filter(c => c.id !== (typeof activeConvId !== "undefined" ? activeConvId : ""))
-    .sort((a, b) => (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0));
-
-  picker.innerHTML = `
-    <div class="conv-ref-picker-header">
-      <span class="conv-ref-picker-title">${t('convRef.title')}</span>
-      <button class="conv-ref-picker-close" title="关闭">&times;</button>
-    </div>
-    <div class="conv-ref-picker-search">
-      <input type="text" id="convRefSearchInput" placeholder="${t('convRef.searchPh')}" autocomplete="off" spellcheck="false" />
-    </div>
-    <div class="conv-ref-picker-list" id="convRefPickerList"></div>
-  `;
-
-  // Position relative to the button
-  document.body.appendChild(picker);
-  _positionConvRefPicker(picker, btn);
-
-  // Populate list
-  _renderConvRefPickerList(allConvs, "");
-
-  // Wire events
-  const searchInput = picker.querySelector("#convRefSearchInput");
-  searchInput.focus();
-
-  searchInput.addEventListener("input", () => {
-    const q = searchInput.value.trim().toLowerCase();
-    const filtered = allConvs.filter(c =>
-      !q || (c.title || "").toLowerCase().includes(q) || (c.id || "").includes(q)
-    );
-    _renderConvRefPickerList(filtered, q);
-  });
-
-  picker.querySelector(".conv-ref-picker-close").addEventListener("click", () => picker.remove());
-
-  // Click outside to close
-  setTimeout(() => {
-    function _outsideClick(e) {
-      if (!picker.contains(e.target) && e.target !== btn && !btn.contains(e.target)) {
-        picker.remove();
-        document.removeEventListener("mousedown", _outsideClick);
-      }
-    }
-    document.addEventListener("mousedown", _outsideClick);
-  }, 50);
-
-  // Escape to close
-  searchInput.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") picker.remove();
-  });
-}
-
-function _positionConvRefPicker(picker, anchor) {
-  const rect = anchor.getBoundingClientRect();
-  // Position above the button
-  picker.style.position = "fixed";
-  picker.style.bottom = (window.innerHeight - rect.top + 8) + "px";
-  picker.style.left = Math.max(12, rect.left - 120) + "px";
-  picker.style.width = "340px";
-  picker.style.maxHeight = "400px";
-}
-
-function _renderConvRefPickerList(convs, query) {
-  const listEl = document.getElementById("convRefPickerList");
-  if (!listEl) return;
-
-  if (convs.length === 0) {
-    listEl.innerHTML = `<div class="conv-ref-picker-empty">${query ? t('convRef.noMatch') : t('convRef.noOther')}</div>`;
-    return;
-  }
-
-  // Check which are already referenced
-  const refIds = new Set(_pendingConvRefs.map(r => r.id));
-
-  listEl.innerHTML = convs.slice(0, 30).map(c => {
-    const isReffed = refIds.has(c.id);
-    const title = escapeHtml(c.title || "Untitled");
-    const msgCount = (c.messages || []).length;
-    const ts = (c.updatedAt || c.createdAt) ? _formatRelativeTime(c.updatedAt || c.createdAt) : "";
-    return `<div class="conv-ref-picker-item${isReffed ? " is-referenced" : ""}" data-id="${escapeHtml(c.id)}" data-title="${escapeHtml(c.title || "Untitled")}">
-      <div class="conv-ref-picker-item-main">
-        <span class="conv-ref-picker-item-title">${title}</span>
-        ${isReffed ? '<span class="conv-ref-picker-item-check">✓</span>' : ""}
-      </div>
-      <div class="conv-ref-picker-item-meta">
-        <span>${msgCount} 条消息</span>${ts ? `<span>· ${ts}</span>` : ""}
-      </div>
-    </div>`;
-  }).join("");
-
-  // Click handlers
-  listEl.querySelectorAll(".conv-ref-picker-item").forEach(item => {
-    item.addEventListener("click", () => {
-      const id = item.dataset.id;
-      const title = item.dataset.title;
-      if (item.classList.contains("is-referenced")) {
-        // Remove it
-        const idx = _pendingConvRefs.findIndex(r => r.id === id);
-        if (idx >= 0) removeConvRef(idx);
-        item.classList.remove("is-referenced");
-        item.querySelector(".conv-ref-picker-item-check")?.remove();
-      } else {
-        addConvRef(id, title);
-        item.classList.add("is-referenced");
-        const mainDiv = item.querySelector(".conv-ref-picker-item-main");
-        if (mainDiv && !mainDiv.querySelector(".conv-ref-picker-item-check")) {
-          mainDiv.insertAdjacentHTML("beforeend", '<span class="conv-ref-picker-item-check">✓</span>');
-        }
-      }
-    });
-  });
-}
-
-function _formatRelativeTime(ts) {
-  const diff = Date.now() - ts;
-  const mins = Math.floor(diff / 60000);
-  if (mins < 1) return t('time.justNow');
-  if (mins < 60) return `${mins}${t('time.minutesAgoFull')}`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}${t('time.hoursAgoFull')}`;
-  const days = Math.floor(hrs / 24);
-  if (days < 30) return `${days}${t('time.daysAgoFull')}`;
-  return new Date(ts).toLocaleDateString();
-}
-
 // ── Scroll branch panel to bottom ──
 function renderFinishInfo(msg) {
   if (!msg.finishReason && !msg.usage && !msg.model && !msg.preset && !msg.effort) return "";
@@ -1659,13 +1542,13 @@ function renderFinishInfo(msg) {
 // ═══════════════════════════════════════════════════════════════════
 
 /**
- * Extract file change info from searchRounds (during/after streaming).
+ * Extract file change info from toolRounds (during/after streaming).
  * Returns array of {path, action, ok} objects.
  */
-function _extractFileChangesFromRounds(searchRounds) {
-  if (!searchRounds || !searchRounds.length) return [];
+function _extractFileChangesFromRounds(toolRounds) {
+  if (!toolRounds || !toolRounds.length) return [];
   const changes = new Map(); // path → {action, ok, pending}
-  for (const round of searchRounds) {
+  for (const round of toolRounds) {
     const tn = round.toolName;
 
     // ★ run_command: extract file changes from meta.fileChanges if present
@@ -1775,17 +1658,17 @@ function _extractFileChangesFromRounds(searchRounds) {
 
 /**
  * Render the file-changes bar for a message.
- * Dual source: prefers modifiedFileList from done event; falls back to searchRounds extraction.
+ * Dual source: prefers modifiedFileList from done event; falls back to toolRounds extraction.
  */
 function renderFileChangesBar(msg, msgIdx) {
-  // Build change list from authoritative server data or from searchRounds
+  // Build change list from authoritative server data or from toolRounds
   let files = [];
   if (msg.modifiedFileList && msg.modifiedFileList.length) {
     files = msg.modifiedFileList.map(f => ({
       path: f.path, action: f.action, ok: true, count: 1
     }));
-  } else if (msg.searchRounds) {
-    files = _extractFileChangesFromRounds(msg.searchRounds);
+  } else if (msg.toolRounds) {
+    files = _extractFileChangesFromRounds(msg.toolRounds);
   }
   if (!files.length) return '';
   return _renderFileChangesHtml(files, false, msgIdx);
@@ -2604,15 +2487,15 @@ async function _recoverTimerPolls(round) {
       const triggered = chronological.some(p => p.decision === 'ready');
 
       // Apply to the round object — but also search the active conv's
-      // searchRounds in case the round reference was replaced by a state event
+      // toolRounds in case the round reference was replaced by a state event
       round._timerPolls = recoveredPolls;
       if (triggered) { round._timerTriggered = true; round.status = 'done'; }
 
       if (activeConvId) {
         const conv = conversations.find(c => c.id === activeConvId);
         const lastMsg = conv?.messages?.[conv.messages.length - 1];
-        if (lastMsg?.searchRounds) {
-          const liveRound = lastMsg.searchRounds.find(r =>
+        if (lastMsg?.toolRounds) {
+          const liveRound = lastMsg.toolRounds.find(r =>
             r.toolName === 'timer_create' && r._timerTimerId === timerId && !r._timerPolls
           );
           if (liveRound && liveRound !== round) {
@@ -2742,7 +2625,7 @@ function _tcPreviewBtn(round) {
   return `<button class="tc-preview-btn" data-tc-preview data-tc-rn="${round.roundNum}" data-tc-tcid="${escapeHtml(round.toolCallId || '')}" title="Preview tool content">Preview</button>`;
 }
 
-function renderSearchRoundsHTML(rounds, isStreaming) {
+function renderToolRoundsHTML(rounds, isStreaming) {
   if (!rounds || rounds.length === 0) return "";
   // ★ UNIFIED: All tool rounds go into one panel (except swarm, which has its own dashboard)
   const toolRounds = [];
@@ -2937,6 +2820,7 @@ async function translateMessage(idx) {
       if (result.status === 'done') {
         msg._translatedCache = result.translated;
         msg.translatedContent = result.translated;
+        if (result.model) msg._translateModel = result.model;
         msg._showingTranslation = true;
         msg._translateDone = true;
         delete msg._translateTaskId;
@@ -3176,6 +3060,7 @@ function saveEditOnly(idx) {
               const result = await _pollTranslateTask(taskId);
               if (result.status === 'done' && result.translated) {
                 msg.content = result.translated;
+                if (result.model) msg._translateModel = result.model;
                 msg._translateDone = true;
                 saveConversations(convId);
                 syncConversationToServerDebounced(conversations.find(c => c.id === convId));
@@ -3225,52 +3110,39 @@ async function saveEditAndResend(idx) {
   const t = ta.value.trim();
   const msg = conv.messages[idx];
   // ★ Collect attachments from shared state (skip still-parsing PDFs)
-  msg.images = [...pendingImages];
-  msg.pdfTexts = pendingPdfTexts.filter(p => p.method !== "parsing");
+  const editedImages = [...pendingImages];
+  const editedPdfTexts = pendingPdfTexts.filter(p => p.method !== "parsing");
   // ★ Restore main input state from backup
   _restoreInputFromBackup();
-  if (!t && !(msg.images?.length > 0) && !(msg.pdfTexts?.length > 0)) return;
-  delete msg.originalContent;
+  if (!t && !(editedImages.length > 0) && !(editedPdfTexts.length > 0)) return;
+
+  // ── Wait for VLM parsing to complete before sending ──
+  if (editedPdfTexts.length > 0 && typeof _waitForVlmParsing === 'function') {
+    const _tempMsg = { pdfTexts: editedPdfTexts };
+    await _waitForVlmParsing(_tempMsg, conv.id, idx);
+  }
+
+  const convId = conv.id;
+
+  // ── Optimistic UI: truncate local messages and re-render edited message ──
   msg.content = t;
-
-  // ★ Use per-conv autoTranslate with BLOCKING poll (matches sendMessage exactly)
-  const _convAutoTranslate = conv.autoTranslate !== undefined ? !!conv.autoTranslate : !!autoTranslate;
-  let needsTranslation = false;
-  if (_convAutoTranslate && t) {
-    const hasChinese = /[\u4e00-\u9fff\u3400-\u4dbf]/.test(t);
-    if (hasChinese) {
-      msg.originalContent = t;
-      needsTranslation = true;
-    }
-  }
-
-  // Reply quotes and conv refs: keep as-is
-  if (msg.replyQuote && !msg.replyQuotes) {
-    msg.replyQuotes = [msg.replyQuote];
-    delete msg.replyQuote;
-  }
+  msg.images = editedImages;
+  msg.pdfTexts = editedPdfTexts;
+  delete msg.originalContent;
   msg.timestamp = Date.now();
   conv.messages = conv.messages.slice(0, idx + 1);
-  /* ★ FIX: After truncation, clear _needsLoad and reset _serverMsgCount.
-   * Without this, startAssistantResponse's _needsLoad guard reloads from DB,
-   * which brings back the old assistant messages that were just truncated.
-   * Also reset _serverMsgCount so syncConversationToServer's "fewer messages"
-   * guard doesn't block the truncated save. */
   conv._needsLoad = false;
   conv._serverMsgCount = conv.messages.length;
+
   if (conv.messages.filter((m) => m.role === "user").length === 1 && t) {
-    // ★ Strip <notranslate>/<nt> wrapper tags so they don't appear in sidebar titles
-    const titleSource = stripNoTranslateTags(msg.originalContent || t);
+    const titleSource = stripNoTranslateTags(t);
     conv.title = titleSource.slice(0, 60) + (titleSource.length > 60 ? "..." : "");
     document.getElementById("topbarTitle").textContent = conv.title;
   }
-  saveConversations(conv.id);
 
-  /* ── Surgical DOM truncation (same pattern as regenerateFromUser) ──
-   * Remove only the message nodes after the edited message instead of
-   * wiping innerHTML via renderChat, which causes a scroll-jump-to-top. */
+  /* ── Surgical DOM truncation ── */
   let usedSurgical = false;
-  if (activeConvId === conv.id) {
+  if (activeConvId === convId) {
     const inner = document.getElementById("chatInner");
     if (inner) {
       const toRemove = [];
@@ -3280,11 +3152,8 @@ async function saveEditAndResend(idx) {
       });
       const oldStreaming = document.getElementById("streaming-msg");
       if (oldStreaming) toRemove.push(oldStreaming);
-      /* Also re-render the edited message itself (content changed) */
       const editedEl = document.getElementById("msg-" + idx);
-      if (editedEl) {
-        editedEl.outerHTML = renderMessage(msg, idx);
-      }
+      if (editedEl) editedEl.outerHTML = renderMessage(msg, idx);
       if (toRemove.length > 0 || inner.querySelector('.message[id^="msg-"]')) {
         for (const el of toRemove) el.remove();
         usedSurgical = true;
@@ -3293,35 +3162,69 @@ async function saveEditAndResend(idx) {
       }
     }
   }
-  if (!usedSurgical) {
-    renderChat(conv);
-  }
-
+  if (!usedSurgical) renderChat(conv);
   renderConversationList();
 
-  // ── ★ NON-BLOCKING auto-translate: fire background, free UI immediately ──
-  if (needsTranslation) {
-    const convId = conv.id;
-    conv._translating = true;
-    conv._translateAborted = false;
-    if (typeof updateSendButton === 'function') updateSendButton();
-    renderConversationList();
-    if (activeConvId === convId) {
-      const msgEl = document.getElementById('msg-' + idx);
-      if (msgEl) msgEl.classList.add('user-translating');
+  // ── Atomic backend call: truncate + edit + translate + task start ──
+  const _regenConfig = _buildConvConfig(conv);
+
+  try {
+    const resp = await fetch(apiUrl('/api/chat/regenerate'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        convId,
+        truncateToIndex: idx,
+        editedContent: t,
+        editedImages,
+        editedPdfTexts,
+        config: _regenConfig,
+        settings: _buildConvSettings(conv),
+      }),
+      signal: typeof AbortSignal.timeout === 'function'
+        ? AbortSignal.timeout(60000) : undefined,
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
+      throw new Error(err.error || `Server ${resp.status}`);
     }
-    _translateThenRespond(conv, convId, msg, idx, t, { allowTruncate: true });
-    return;
-  }
+    const result = await resp.json();
 
-  // ── Wait for VLM parsing to complete before starting generation ──
-  if (msg.pdfTexts?.length > 0 && typeof _waitForVlmParsing === 'function') {
-    await _waitForVlmParsing(msg, conv.id, idx);
-  }
+    // Update local state with server response (may have translated)
+    if (result.userMessage) {
+      Object.assign(msg, result.userMessage);
+      if (activeConvId === convId) {
+        const msgEl = document.getElementById('msg-' + idx);
+        if (msgEl) msgEl.outerHTML = renderMessage(msg, idx);
+      }
+    }
+    if (result.title) conv.title = result.title;
+    conv._serverMsgCount = result.msgCount || conv.messages.length;
 
-  /* ★ FIX: Persist the truncated messages to server BEFORE starting the new task. */
-  await syncConversationToServer(conv, { allowTruncate: true });
-  await startAssistantResponse(conv.id);
+    // Push assistant msg + connect to task
+    const taskId = result.taskId;
+    const assistantMsg = {
+      role: "assistant", content: "", thinking: "",
+      timestamp: Date.now(), toolRounds: [],
+      model: _regenConfig.model || serverModel,
+    };
+    // ★ Endpoint mode: mark as planner so SSE reconnection identifies it correctly
+    if (_regenConfig.endpointMode) assistantMsg._isEndpointPlanner = true;
+    conv.messages.push(assistantMsg);
+    conv.activeTaskId = taskId;
+    saveConversations(convId);
+
+    if (activeConvId === convId) _renderStreamingBubble(conv, _regenConfig);
+    buildTurnNav(conv);
+    connectToTask(convId, taskId);
+
+  } catch (e) {
+    debugLog("Edit+resend failed: " + e.message, "error");
+    console.error('[saveEditAndResend] /api/chat/regenerate failed:', e);
+    saveConversations(convId);
+    syncConversationToServer(conv, { allowTruncate: true });
+    buildTurnNav(conv);
+  }
 }
 
 // ── Turn navigation ──
@@ -3332,7 +3235,7 @@ function _turnWriteInfo(conv, userMsgIdx) {
   for (let j = userMsgIdx + 1; j < conv.messages.length; j++) {
     const m = conv.messages[j];
     if (m.role === 'user') break; // hit the next turn
-    for (const r of (m.searchRounds || [])) {
+    for (const r of (m.toolRounds || [])) {
       if ((r.toolName === 'write_file' || r.toolName === 'apply_diff') && r.status === 'done') {
         // toolArgs is a JSON string, not a parsed object
         try {
@@ -3542,9 +3445,9 @@ function updateStreamingUI(msg) {
   const zones = _getStreamZones();
   if (!zones) return;
   const { body, tool: toolZone, think: thinkZone, content: contentZone, fc: fcZone, status: statusZone } = zones;
-  const rounds = msg.searchRounds || [];
+  const rounds = msg.toolRounds || [];
   const hasActiveSearch = rounds.some((r) => r.status === "searching");
-  _syncSearchRoundsDOM(toolZone, rounds);
+  _syncToolRoundsDOM(toolZone, rounds);
   // ★ Live file-changes tracker — update during streaming
   // PERF: _extractFileChangesFromRounds calls JSON.parse on every round's toolArgs
   // which is expensive for 50+ rounds.  Skip when rounds haven't changed.
@@ -3655,7 +3558,7 @@ function updateStreamingUI(msg) {
 
           const tailHtml = renderMarkdown(tailText);
           contentZone.innerHTML =
-            `<div class="md-content">${frozenHtml}<span class="md-stream-tail">${tailHtml}</span></div>`;
+            `<div class="md-content">${frozenHtml}<div class="md-stream-tail">${tailHtml}</div></div>`;
           contentZone._frozenLen = freezeIdx;
         } else {
           /* Content too short to split — render whole thing */
@@ -3746,7 +3649,7 @@ function updateStreamingUI(msg) {
   if (isNearBottom(80)) scrollToBottom();
 }
 
-function _syncSearchRoundsDOM(container, rounds) {
+function _syncToolRoundsDOM(container, rounds) {
   // ★ Fast-path: skip if rounds haven't changed since last sync
   let _fp = rounds.length;
   for (let i = 0; i < rounds.length; i++) {
@@ -3808,7 +3711,7 @@ function _syncSearchRoundsDOM(container, rounds) {
               trunc.className = "ptool-truncated";
               const hiddenN = done.length - _TOOL_VISIBLE_WINDOW;
               trunc.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg><span>${hiddenN} earlier tool calls hidden — click to expand</span>`;
-              trunc.onclick = () => { trunc.remove(); body._showAll = true; container._roundsFingerprint = null; _syncSearchRoundsDOM(container, rounds); };
+              trunc.onclick = () => { trunc.remove(); body._showAll = true; container._roundsFingerprint = null; _syncToolRoundsDOM(container, rounds); };
               body.prepend(trunc);
             } else if (body.querySelector('.ptool-truncated')) {
               const truncEl = body.querySelector('.ptool-truncated');
@@ -3822,13 +3725,21 @@ function _syncSearchRoundsDOM(container, rounds) {
         const rn = round.roundNum;
         const isActive = round.status === "searching";
         let slot = body.querySelector(`[data-prn="${rn}"]`);
+        /* ★ Determine if this round needs an interactive card (HG, stdin, approval).
+         *   Interactive cards are tall (200-300px) and must NOT be collapsed by
+         *   content-visibility:auto (which assumes 32px intrinsic size for off-screen
+         *   slots).  Force content-visibility:visible on these slots. */
+        const _isInteractive = round.status === "awaiting_human" || round.status === "awaiting_stdin"
+          || round.status === "pending_approval";
         if (!slot) {
           slot = document.createElement("div");
           slot.setAttribute("data-prn", rn);
           if (round._hgTranslating) slot.setAttribute("data-hg-translating", "1");
+          if (_isInteractive) slot.style.contentVisibility = "visible";
           slot.innerHTML = _renderUnifiedToolLine(round, isActive);
           body.appendChild(slot);
         } else if (isActive || round.status === "pending_approval") {
+          if (_isInteractive) slot.style.contentVisibility = "visible";
           slot.innerHTML = _renderUnifiedToolLine(round, isActive);
         } else if (
           slot.querySelector(".ptool-active") ||
@@ -3836,11 +3747,13 @@ function _syncSearchRoundsDOM(container, rounds) {
           slot.querySelector(".ptool-pending") ||
           slot.querySelector(".code-exec-running")
         ) {
+          if (_isInteractive) slot.style.contentVisibility = "visible";
           slot.innerHTML = _renderUnifiedToolLine(round, false);
         } else if (slot.querySelector(".ptool-cmd-stdin")) {
           // ★ Stdin input card — avoid re-rendering while still awaiting_stdin
           //   to prevent destroying live DOM (input field) mid-type.
           if (round.status !== "awaiting_stdin" || !round.stdinId) {
+            slot.style.contentVisibility = "";  // reset to CSS default
             slot.innerHTML = _renderUnifiedToolLine(round, false);
           }
           // else: still awaiting — keep the live input field intact
@@ -3851,6 +3764,7 @@ function _syncSearchRoundsDOM(container, rounds) {
           //   translation state (_hgTranslating) flipped.
           if (round.status !== "awaiting_human" || !round.guidanceId) {
             // Status transitioned → rebuild as submitted/done line
+            slot.style.contentVisibility = "";  // reset to CSS default
             slot.innerHTML = _renderUnifiedToolLine(round, false);
           } else {
             // Still awaiting — only update if translation state changed
@@ -3872,6 +3786,7 @@ function _syncSearchRoundsDOM(container, rounds) {
         } else if (slot.querySelector(".hg-submitted-line")) {
           // ★ Submitted HG line — only re-render when status transitions away
           if (round.status !== "submitted") {
+            slot.style.contentVisibility = "";  // reset to CSS default
             slot.innerHTML = _renderUnifiedToolLine(round, false);
           }
         } else if (round._timerPolls && round._timerPolls.length > 0) {
@@ -3884,6 +3799,13 @@ function _syncSearchRoundsDOM(container, rounds) {
           if (ptLine) {
             ptLine.insertAdjacentHTML('beforeend', _tcPreviewBtn(round));
           }
+        } else if (_isInteractive && !slot.querySelector(".hg-card") && !slot.querySelector(".ptool-cmd-stdin") && !slot.querySelector(".ptool-pending")) {
+          // ★ Fallback: round is in an interactive state (awaiting_human / awaiting_stdin /
+          //   pending_approval) but the slot doesn't have the expected interactive card DOM.
+          //   This can happen when content-visibility:auto or timing races prevent the
+          //   earlier branches from triggering.  Force a re-render to show the card.
+          slot.style.contentVisibility = "visible";
+          slot.innerHTML = _renderUnifiedToolLine(round, false);
         }
       }
     }
@@ -4189,14 +4111,14 @@ function showStreamingUIForConv(convId) {
   updateSendButton();
   if (lastMsg && (lastMsg.role === "assistant" || (lastMsg._isEndpointReview && !lastMsg.done))) {
     const buf = streamBufs.get(convId);
-    /* ★ FIX: buf?.searchRounds is [] (truthy) even when empty, preventing
-     *   fallback to getSearchRoundsFromMsg(lastMsg).  Use .length check. */
-    const rounds = (buf?.searchRounds?.length ? buf.searchRounds : null)
-                   || getSearchRoundsFromMsg(lastMsg);
+    /* ★ FIX: buf?.toolRounds is [] (truthy) even when empty, preventing
+     *   fallback to getToolRoundsFromMsg(lastMsg).  Use .length check. */
+    const rounds = (buf?.toolRounds?.length ? buf.toolRounds : null)
+                   || getToolRoundsFromMsg(lastMsg);
     updateStreamingUI({
       thinking: buf?.thinking || lastMsg.thinking || "",
       content: buf?.content || lastMsg.content || "",
-      searchRounds: rounds,
+      toolRounds: rounds,
       phase: buf?.phase || null,
     });
     /* ★ FIX: After page refresh, SSE data may arrive AFTER this initial render.
@@ -4212,7 +4134,7 @@ function showStreamingUIForConv(convId) {
       updateStreamingUI({
         thinking: dBuf.thinking,
         content: dBuf.content,
-        searchRounds: dBuf.searchRounds,
+        toolRounds: dBuf.toolRounds,
         phase: dBuf.phase,
       });
     }, 300);
@@ -4260,8 +4182,8 @@ function finishStream(convId) {
      *   and the card collapses to a "no response" line. */
     let _hgCleaned = 0;
     for (const m of conv.messages) {
-      if (m.searchRounds) {
-        for (const r of m.searchRounds) {
+      if (m.toolRounds) {
+        for (const r of m.toolRounds) {
           if (r.status === 'awaiting_human' || r.status === 'submitted') {
             r.status = 'done';
             r.guidanceId = null;
@@ -4391,15 +4313,17 @@ function finishStream(convId) {
     }
   }
 
-  // ── ★ Drain pending message queue ──
-  const queueDepth = pendingMessageQueue.has(convId) ? pendingMessageQueue.get(convId).length : 0;
-  if (queueDepth > 0) {
+  // ── ★ Server-side queue: server auto-dispatches next queued message ──
+  // The server's persist_task_result automatically checks the message_queue
+  // table and dispatches the next queued message.  We poll for the new task
+  // so we can connect to its SSE stream.
+  if (pendingMessageQueue.has(convId) || conv?.activeTaskId) {
     console.log(
-      `%c[Queue] ⏭ Stream ended for conv=${convId.slice(0,8)} — ${queueDepth} message(s) queued, dispatching next in 300ms…`,
+      `%c[Queue] ⏭ Stream ended for conv=${convId.slice(0,8)} — checking server for auto-dispatched task…`,
       'color:#a78bfa;font-weight:bold'
     );
-    // Small delay for UX — let the user see the response settled before next auto-send
-    setTimeout(() => _dispatchQueuedMessage(convId), 300);
+    // Give the server a moment to finish dispatching, then check for new task
+    setTimeout(() => _checkForQueuedTask(convId), 500);
   } else {
     console.log(`%c[Queue] ✓ Stream ended for conv=${convId.slice(0,8)}, no queued messages`, 'color:#6b7280');
   }
@@ -4416,8 +4340,8 @@ function _retriggerHgTranslations(convId) {
   const _hgAutoTrans = conv.autoTranslate !== undefined ? !!conv.autoTranslate : !!autoTranslate;
   if (!_hgAutoTrans) return;
   const assistantMsg = [...conv.messages].reverse().find(m => m.role === 'assistant');
-  if (!assistantMsg || !assistantMsg.searchRounds) return;
-  for (const r of assistantMsg.searchRounds) {
+  if (!assistantMsg || !assistantMsg.toolRounds) return;
+  for (const r of assistantMsg.toolRounds) {
     if (r.status === 'awaiting_human' && r.guidanceQuestion && !r._translatedQuestion && !r._hgTranslating) {
       console.log(`[HG-Translate] Re-triggering translation for guidance=${r.guidanceId} after reconnect`);
       _autoTranslateHumanGuidance(convId, r.roundNum, r.guidanceQuestion, r.guidanceType || 'free_text', r.guidanceOptions || []);
@@ -4434,19 +4358,19 @@ async function _autoTranslateHumanGuidance(convId, roundNum, question, responseT
   const conv = conversations.find(c => c.id === convId);
   if (!conv) return;
   const assistantMsg = [...conv.messages].reverse().find(m => m.role === 'assistant');
-  if (!assistantMsg || !assistantMsg.searchRounds) return;
-  const round = assistantMsg.searchRounds.find(r => r.roundNum === roundNum);
+  if (!assistantMsg || !assistantMsg.toolRounds) return;
+  const round = assistantMsg.toolRounds.find(r => r.roundNum === roundNum);
   if (!round || round.status !== 'awaiting_human') return;
 
-  // ★ Helper: sync assistantMsg.searchRounds → buf.searchRounds so that the
-  //   reactive rendering pipeline (twUpdate → updateStreamingUI → _syncSearchRoundsDOM)
+  // ★ Helper: sync assistantMsg.toolRounds → buf.toolRounds so that the
+  //   reactive rendering pipeline (twUpdate → updateStreamingUI → _syncToolRoundsDOM)
   //   sees translation-related flags (_hgTranslating, _translatedQuestion, etc.).
-  //   Without this, buf.searchRounds is a stale shallow copy from the
+  //   Without this, buf.toolRounds is a stale shallow copy from the
   //   human_guidance_request handler and never gets updated.
   function _syncHgToBuf() {
     const buf = streamBufs.get(convId);
-    if (buf && assistantMsg.searchRounds) {
-      buf.searchRounds = assistantMsg.searchRounds;
+    if (buf && assistantMsg.toolRounds) {
+      buf.toolRounds = assistantMsg.toolRounds;
     }
   }
 
@@ -4477,8 +4401,8 @@ async function _autoTranslateHumanGuidance(convId, roundNum, question, responseT
     const conv2 = conversations.find(c => c.id === convId);
     if (!conv2) return;
     const msg2 = [...conv2.messages].reverse().find(m => m.role === 'assistant');
-    if (!msg2 || !msg2.searchRounds) return;
-    const round2 = msg2.searchRounds.find(r => r.roundNum === roundNum);
+    if (!msg2 || !msg2.toolRounds) return;
+    const round2 = msg2.toolRounds.find(r => r.roundNum === roundNum);
     if (!round2 || round2.status !== 'awaiting_human') return;
 
     // Apply translated question
@@ -4503,8 +4427,8 @@ async function _autoTranslateHumanGuidance(convId, roundNum, question, responseT
       `question: ${question.length}→${round2._translatedQuestion.length} chars`);
     // ★ Sync translated properties to buf before re-render
     const buf2 = streamBufs.get(convId);
-    if (buf2 && msg2.searchRounds) {
-      buf2.searchRounds = msg2.searchRounds;
+    if (buf2 && msg2.toolRounds) {
+      buf2.toolRounds = msg2.toolRounds;
     }
     twUpdate(convId);
   } catch (e) {
@@ -4513,13 +4437,13 @@ async function _autoTranslateHumanGuidance(convId, roundNum, question, responseT
     const conv2 = conversations.find(c => c.id === convId);
     if (conv2) {
       const msg2 = [...conv2.messages].reverse().find(m => m.role === 'assistant');
-      const round2 = msg2?.searchRounds?.find(r => r.roundNum === roundNum);
+      const round2 = msg2?.toolRounds?.find(r => r.roundNum === roundNum);
       if (round2) {
         round2._hgTranslating = false;
         // ★ Sync cleared flag to buf before re-render
         const buf2 = streamBufs.get(convId);
-        if (buf2 && msg2.searchRounds) {
-          buf2.searchRounds = msg2.searchRounds;
+        if (buf2 && msg2.toolRounds) {
+          buf2.toolRounds = msg2.toolRounds;
         }
         twUpdate(convId);
       }
@@ -4575,6 +4499,7 @@ async function _startAutoTranslateForMsg(conv, convId, idx, msg) {
         const result = await _pollTranslateTask(taskId);
         if (result.status === 'done' && result.translated) {
           msg.translatedContent = result.translated;
+          if (result.model) msg._translateModel = result.model;
           msg._showingTranslation = true;
           msg._translateDone = true;
           saveConversations(convId);
@@ -4644,7 +4569,7 @@ async function connectToTask(convId, taskId, retries = 0) {
       role: "assistant",
       content: "",
       thinking: "",
-      searchRounds: [],
+      toolRounds: [],
       timestamp: new Date().toISOString(),
       _epIteration: (assistantMsg._epIteration || 0) + 1,
     };
@@ -4666,7 +4591,7 @@ async function connectToTask(convId, taskId, retries = 0) {
       content: "",
       thinking: "",
       timestamp: Date.now(),
-      searchRounds: [],
+      toolRounds: [],
       model: conv.model || (typeof serverModel !== 'undefined' ? serverModel : ''),
     };
     conv.messages.push(assistantMsg);
@@ -4707,10 +4632,10 @@ async function connectToTask(convId, taskId, retries = 0) {
     }
     twStart(convId);
     const buf = streamBufs.get(convId);
-    if (assistantMsg.searchRounds)
-      buf.searchRounds = [...assistantMsg.searchRounds];
+    if (assistantMsg.toolRounds)
+      buf.toolRounds = [...assistantMsg.toolRounds];
     else if (assistantMsg.searchResults)
-      buf.searchRounds = [
+      buf.toolRounds = [
         {
           roundNum: 1,
           query: assistantMsg.searchQuery || "search",
@@ -4760,7 +4685,7 @@ async function _trySSE(convId, taskId, stream, assistantMsg) {
    * streaming bubble for the critic's review.  */
   let _epCriticPhase = false;
   let _epCriticMsg = null;   // the critic message object in conv.messages
-  let _epCriticBuf = null;   // {content, thinking, searchRounds}
+  let _epCriticBuf = null;   // {content, thinking, toolRounds}
   let _roundThinkingLen = 0; // thinking chars accumulated in current LLM call (reset on phase events)
   let _lastEventId = null; // ★ Item 6: track SSE event ID for reconnection
   function _processSSELine(line) {
@@ -4778,7 +4703,7 @@ async function _trySSE(convId, taskId, stream, assistantMsg) {
     } catch {
       return false;
     }
-    /* ★ Continue checkpoint: searchRounds to merge with newly streamed ones */
+    /* ★ Continue checkpoint: toolRounds to merge with newly streamed ones */
     if (ev.type === "state") {
       /* ★ Endpoint mode reconnection: rebuild conv.messages from endpointTurns
        *   and set the correct phase (working/reviewing) so streaming goes to
@@ -4804,12 +4729,12 @@ async function _trySSE(convId, taskId, stream, assistantMsg) {
             if (plannerMsg) {
               plannerMsg.content = ev.content || plannerMsg.content || "";
               plannerMsg.thinking = ev.thinking || plannerMsg.thinking || "";
-              if (ev.searchRounds) plannerMsg.searchRounds = ev.searchRounds;
+              if (ev.toolRounds) plannerMsg.toolRounds = ev.toolRounds;
               assistantMsg = plannerMsg;
               if (buf) {
                 buf.thinking = assistantMsg.thinking;
                 buf.content = assistantMsg.content;
-                if (ev.searchRounds) buf.searchRounds = ev.searchRounds;
+                if (ev.toolRounds) buf.toolRounds = ev.toolRounds;
               }
             }
             /* ★ FIX: Update the streaming-msg DOM to show Planner role/avatar
@@ -4849,7 +4774,7 @@ async function _trySSE(convId, taskId, stream, assistantMsg) {
             if (!plannerMsg) {
               plannerMsg = {
                 role: "assistant", content: ev.content || "", thinking: ev.thinking || "",
-                searchRounds: ev.searchRounds || [],
+                toolRounds: ev.toolRounds || [],
                 timestamp: new Date().toISOString(),
                 _isEndpointPlanner: true,
               };
@@ -4857,19 +4782,19 @@ async function _trySSE(convId, taskId, stream, assistantMsg) {
             }
             plannerMsg.content = ev.content || "";
             plannerMsg.thinking = ev.thinking || "";
-            if (ev.searchRounds) plannerMsg.searchRounds = ev.searchRounds;
+            if (ev.toolRounds) plannerMsg.toolRounds = ev.toolRounds;
             assistantMsg = plannerMsg;
             if (buf) {
               buf.thinking = assistantMsg.thinking;
               buf.content = assistantMsg.content;
-              if (ev.searchRounds) buf.searchRounds = ev.searchRounds;
+              if (ev.toolRounds) buf.toolRounds = ev.toolRounds;
             }
           } else if (ev.endpointPhase === 'reviewing') {
             // Critic is in progress — create a critic msg and set phase
             _epCriticPhase = true;
             _epCriticMsg = {
               role: "user", content: ev.content || "", thinking: ev.thinking || "",
-              searchRounds: ev.searchRounds || [],
+              toolRounds: ev.toolRounds || [],
               timestamp: new Date().toISOString(),
               _isEndpointReview: true, _epIteration: ev.endpointIteration || 1,
               _epApproved: false, _isStuck: false,
@@ -4877,7 +4802,7 @@ async function _trySSE(convId, taskId, stream, assistantMsg) {
             conv.messages.push(_epCriticMsg);
             _epCriticBuf = {
               content: (_epCriticMsg.content || "").replace(/\[VERDICT:\s*(?:STOP|CONTINUE)\s*\]\s*$/i, "").trimEnd(),
-              thinking: _epCriticMsg.thinking, searchRounds: [],
+              thinking: _epCriticMsg.thinking, toolRounds: [],
             };
             streamBufs.set(convId, _epCriticBuf);
             buf = _epCriticBuf;
@@ -4893,19 +4818,19 @@ async function _trySSE(convId, taskId, stream, assistantMsg) {
             if (!workerMsg) {
               workerMsg = {
                 role: "assistant", content: "", thinking: "",
-                searchRounds: [], timestamp: new Date().toISOString(),
+                toolRounds: [], timestamp: new Date().toISOString(),
                 _epIteration: iterNum,
               };
               conv.messages.push(workerMsg);
             }
             workerMsg.content = ev.content || "";
             workerMsg.thinking = ev.thinking || "";
-            if (ev.searchRounds) workerMsg.searchRounds = ev.searchRounds;
+            if (ev.toolRounds) workerMsg.toolRounds = ev.toolRounds;
             assistantMsg = workerMsg;
             if (buf) {
               buf.thinking = assistantMsg.thinking;
               buf.content = assistantMsg.content;
-              if (ev.searchRounds) buf.searchRounds = ev.searchRounds;
+              if (ev.toolRounds) buf.toolRounds = ev.toolRounds;
             }
           }
 
@@ -4953,12 +4878,12 @@ async function _trySSE(convId, taskId, stream, assistantMsg) {
         assistantMsg.content = ev.content || "";
         assistantMsg.thinking = ev.thinking || "";
         if (ev.error) assistantMsg.error = ev.error;
-        if (ev.searchRounds) {
+        if (ev.toolRounds) {
           /* Merge: keep checkpoint rounds + new ones from state snapshot */
-          const existing = assistantMsg._continueSearchRounds || [];
-          assistantMsg.searchRounds = existing.concat(ev.searchRounds || []);
+          const existing = assistantMsg._continueToolRounds || [];
+          assistantMsg.toolRounds = existing.concat(ev.toolRounds || []);
           if (buf)
-            buf.searchRounds = assistantMsg.searchRounds;
+            buf.toolRounds = assistantMsg.toolRounds;
         }
         if (ev.finishReason) assistantMsg.finishReason = ev.finishReason;
         if (ev.usage) assistantMsg.usage = ev.usage;
@@ -4973,7 +4898,7 @@ async function _trySSE(convId, taskId, stream, assistantMsg) {
       }
       twUpdate(convId);
       // ★ Re-trigger HG translations on state snapshot (handles page refresh / SSE reconnect)
-      if (ev.searchRounds) _retriggerHgTranslations(convId);
+      if (ev.toolRounds) _retriggerHgTranslations(convId);
     } else if (ev.type === "delta") {
       if (_epCriticPhase) {
         /* Accumulate into critic bubble instead of worker */
@@ -5057,9 +4982,9 @@ async function _trySSE(convId, taskId, stream, assistantMsg) {
             toolCallId: ev.toolCallId || null, toolArgs: ev.toolArgs || null,
             llmRound: ev.llmRound ?? null, _swarm: false,
           };
-          if (!_epCriticMsg.searchRounds) _epCriticMsg.searchRounds = [];
-          _epCriticMsg.searchRounds.push(r);
-          if (_epCriticBuf) _epCriticBuf.searchRounds = _epCriticMsg.searchRounds;
+          if (!_epCriticMsg.toolRounds) _epCriticMsg.toolRounds = [];
+          _epCriticMsg.toolRounds.push(r);
+          if (_epCriticBuf) _epCriticBuf.toolRounds = _epCriticMsg.toolRounds;
         }
         twUpdate(convId);
       } else {
@@ -5076,18 +5001,18 @@ async function _trySSE(convId, taskId, stream, assistantMsg) {
         };
         // ★ Preserve per-round assistantContent for Continue replay
         if (ev.assistantContent) r.assistantContent = ev.assistantContent;
-        if (!assistantMsg.searchRounds) assistantMsg.searchRounds = [];
-        assistantMsg.searchRounds.push(r);
+        if (!assistantMsg.toolRounds) assistantMsg.toolRounds = [];
+        assistantMsg.toolRounds.push(r);
         /* Track swarm round number so swarm_phase events can find it */
         if (r._swarm) assistantMsg._swarmRoundNum = r.roundNum;
         if (buf)
-          buf.searchRounds = assistantMsg.searchRounds;
+          buf.toolRounds = assistantMsg.toolRounds;
         twUpdate(convId);
       }
     } else if (ev.type === "human_guidance_request") {
       /* ── Human Guidance: LLM is asking the user a question ── */
-      if (assistantMsg.searchRounds) {
-        const r = assistantMsg.searchRounds.find(
+      if (assistantMsg.toolRounds) {
+        const r = assistantMsg.toolRounds.find(
           (r) => r.roundNum === ev.roundNum,
         );
         if (r) {
@@ -5099,7 +5024,7 @@ async function _trySSE(convId, taskId, stream, assistantMsg) {
         }
       }
       if (buf)
-        buf.searchRounds = assistantMsg.searchRounds || [];
+        buf.toolRounds = assistantMsg.toolRounds || [];
       twUpdate(convId);
       // ★ Update sidebar to show amber blinking dot for awaiting-human state
       renderConversationList();
@@ -5113,8 +5038,8 @@ async function _trySSE(convId, taskId, stream, assistantMsg) {
       }
     } else if (ev.type === "stdin_request") {
       /* ── Stdin Request: subprocess is waiting for user keyboard input ── */
-      if (assistantMsg.searchRounds) {
-        const r = assistantMsg.searchRounds.find(
+      if (assistantMsg.toolRounds) {
+        const r = assistantMsg.toolRounds.find(
           (r) => r.roundNum === ev.roundNum,
         );
         if (r) {
@@ -5125,12 +5050,12 @@ async function _trySSE(convId, taskId, stream, assistantMsg) {
         }
       }
       if (buf)
-        buf.searchRounds = assistantMsg.searchRounds || [];
+        buf.toolRounds = assistantMsg.toolRounds || [];
       twUpdate(convId);
     } else if (ev.type === "stdin_resolved") {
       /* ── Stdin Resolved: user input was sent, command continues ── */
-      if (assistantMsg.searchRounds) {
-        const r = assistantMsg.searchRounds.find(
+      if (assistantMsg.toolRounds) {
+        const r = assistantMsg.toolRounds.find(
           (r) => r.roundNum === ev.roundNum,
         );
         if (r) {
@@ -5140,12 +5065,12 @@ async function _trySSE(convId, taskId, stream, assistantMsg) {
         }
       }
       if (buf)
-        buf.searchRounds = assistantMsg.searchRounds || [];
+        buf.toolRounds = assistantMsg.toolRounds || [];
       twUpdate(convId);
     } else if (ev.type === "write_approval_request") {
       if (_epCriticPhase) { /* skip approval during critic phase */ }
-      else if (assistantMsg.searchRounds) {
-        const r = assistantMsg.searchRounds.find(
+      else if (assistantMsg.toolRounds) {
+        const r = assistantMsg.toolRounds.find(
           (r) => r.roundNum === ev.roundNum,
         );
         if (r) {
@@ -5155,19 +5080,19 @@ async function _trySSE(convId, taskId, stream, assistantMsg) {
         }
       }
       if (!_epCriticPhase && buf)
-        buf.searchRounds = assistantMsg.searchRounds || [];
+        buf.toolRounds = assistantMsg.toolRounds || [];
       twUpdate(convId);
     } else if (ev.type === "tool_result") {
       if (_epCriticPhase && _epCriticMsg) {
         /* Critic's tool result → accumulate into critic message */
-        if (_epCriticMsg.searchRounds) {
-          const r = _epCriticMsg.searchRounds.find(r => r.roundNum === ev.roundNum);
+        if (_epCriticMsg.toolRounds) {
+          const r = _epCriticMsg.toolRounds.find(r => r.roundNum === ev.roundNum);
           if (r) { r.results = ev.results; r.status = "done"; if (ev.searchDiag) r.searchDiag = ev.searchDiag; if (ev.engineBreakdown) r.engineBreakdown = ev.engineBreakdown; }
         }
-        if (_epCriticBuf) _epCriticBuf.searchRounds = _epCriticMsg.searchRounds || [];
+        if (_epCriticBuf) _epCriticBuf.toolRounds = _epCriticMsg.toolRounds || [];
         twUpdate(convId);
-      } else if (assistantMsg.searchRounds) {
-        const r = assistantMsg.searchRounds.find(
+      } else if (assistantMsg.toolRounds) {
+        const r = assistantMsg.toolRounds.find(
           (r) => r.roundNum === ev.roundNum,
         );
         if (r) {
@@ -5195,7 +5120,7 @@ async function _trySSE(convId, taskId, stream, assistantMsg) {
         }
       }
       if (buf)
-        buf.searchRounds = assistantMsg.searchRounds || [];
+        buf.toolRounds = assistantMsg.toolRounds || [];
       twUpdate(convId);
       // ★ If this was an ask_human tool_result, refresh sidebar to clear amber dot
       if (ev.results && ev.results.some(r2 => r2.toolName === 'ask_human')) {
@@ -5204,24 +5129,24 @@ async function _trySSE(convId, taskId, stream, assistantMsg) {
     } else if (ev.type === "tool_complete") {
       // ★ Store raw tool content for continue context restoration
       if (_epCriticPhase && _epCriticMsg) {
-        if (_epCriticMsg.searchRounds) {
-          const r = _epCriticMsg.searchRounds.find(r => r.roundNum === ev.roundNum && r.toolCallId === ev.toolCallId);
+        if (_epCriticMsg.toolRounds) {
+          const r = _epCriticMsg.toolRounds.find(r => r.roundNum === ev.roundNum && r.toolCallId === ev.toolCallId);
           if (r) r.toolContent = ev.toolContent || null;
         }
         if (_epCriticBuf)
-          _epCriticBuf.searchRounds = _epCriticMsg.searchRounds || [];
-      } else if (assistantMsg.searchRounds) {
-        const r = assistantMsg.searchRounds.find(
+          _epCriticBuf.toolRounds = _epCriticMsg.toolRounds || [];
+      } else if (assistantMsg.toolRounds) {
+        const r = assistantMsg.toolRounds.find(
           (r) => r.roundNum === ev.roundNum && r.toolCallId === ev.toolCallId,
         );
         if (r) {
           r.toolContent = ev.toolContent || null;
         }
       }
-      // ★ Sync to buf and let the reactive pipeline (twUpdate → _syncSearchRoundsDOM)
+      // ★ Sync to buf and let the reactive pipeline (twUpdate → _syncToolRoundsDOM)
       //   handle preview button rendering — no fragile direct DOM injection needed.
       if (buf)
-        buf.searchRounds = assistantMsg.searchRounds || [];
+        buf.toolRounds = assistantMsg.toolRounds || [];
       twUpdate(convId);
 
     } else if (ev.type === "emit_ref") {
@@ -5236,8 +5161,8 @@ async function _trySSE(convId, taskId, stream, assistantMsg) {
       /* ═══ Timer Watcher inline poll progress ═══
          Each poll emits a sub-event attached to the timer_create tool round.
          We store polls as _timerPolls[] on the round for collapsible rendering. */
-      if (assistantMsg.searchRounds) {
-        const r = assistantMsg.searchRounds.find(r => r.roundNum === ev.roundNum);
+      if (assistantMsg.toolRounds) {
+        const r = assistantMsg.toolRounds.find(r => r.roundNum === ev.roundNum);
         if (r) {
           if (!r._timerPolls) r._timerPolls = [];
           // ★ Dedup: skip if this pollNum already exists (from state snapshot)
@@ -5263,16 +5188,16 @@ async function _trySSE(convId, taskId, stream, assistantMsg) {
         }
       }
       if (buf)
-        buf.searchRounds = assistantMsg.searchRounds || [];
+        buf.toolRounds = assistantMsg.toolRounds || [];
       twUpdate(convId);
 
     /* ═══ Swarm mode events ═══ */
     } else if (ev.type === "swarm_phase") {
       /* Master-level swarm lifecycle: planning → spawning → wave_start → complete */
-      if (!assistantMsg.searchRounds) assistantMsg.searchRounds = [];
+      if (!assistantMsg.toolRounds) assistantMsg.toolRounds = [];
       const _findSwarmRound = () => {
         const rn = assistantMsg._swarmRoundNum;
-        return (assistantMsg.searchRounds || []).find(r => r._swarm && (rn ? r.roundNum === rn : true));
+        return (assistantMsg.toolRounds || []).find(r => r._swarm && (rn ? r.roundNum === rn : true));
       };
       if (ev.phase === "spawning" || ev.phase === "planning" || ev.phase === "spawn_more") {
         /* Upgrade the existing tool_start round into a swarm panel */
@@ -5304,7 +5229,7 @@ async function _trySSE(convId, taskId, stream, assistantMsg) {
           }
         } else {
           sr = {
-            roundNum: (assistantMsg.searchRounds.length + 1),
+            roundNum: (assistantMsg.toolRounds.length + 1),
             query: "Agent Swarm",
             results: null,
             status: "searching",
@@ -5314,7 +5239,7 @@ async function _trySSE(convId, taskId, stream, assistantMsg) {
             _swarmStartTime: Date.now(),
             _swarmAgents: agentData,
           };
-          assistantMsg.searchRounds.push(sr);
+          assistantMsg.toolRounds.push(sr);
           assistantMsg._swarmRoundNum = sr.roundNum;
         }
       } else if (ev.phase === "complete") {
@@ -5348,12 +5273,12 @@ async function _trySSE(convId, taskId, stream, assistantMsg) {
           }
         }
       }
-      if (buf) buf.searchRounds = assistantMsg.searchRounds || [];
+      if (buf) buf.toolRounds = assistantMsg.toolRounds || [];
       twUpdate(convId);
 
     } else if (ev.type === "swarm_agent_phase") {
       /* An individual agent changed phase (starting, thinking, tool_use, done, error) */
-      const sr = (assistantMsg.searchRounds || []).find(r => r._swarmActive);
+      const sr = (assistantMsg.toolRounds || []).find(r => r._swarmActive);
       if (sr) {
         if (!sr._swarmAgents) sr._swarmAgents = [];
         let agent = sr._swarmAgents.find(a => a.id === ev.agentId);
@@ -5393,12 +5318,12 @@ async function _trySSE(convId, taskId, stream, assistantMsg) {
           if (ev.tokens) agent.tokens = ev.tokens;
         }
       }
-      if (buf) buf.searchRounds = assistantMsg.searchRounds || [];
+      if (buf) buf.toolRounds = assistantMsg.toolRounds || [];
       twUpdate(convId);
 
     } else if (ev.type === "swarm_agent_progress") {
       /* Agent progress: tool usage, partial results, etc. */
-      const sr = (assistantMsg.searchRounds || []).find(r => r._swarmActive);
+      const sr = (assistantMsg.toolRounds || []).find(r => r._swarmActive);
       if (sr && sr._swarmAgents) {
         const agent = sr._swarmAgents.find(a => a.id === ev.agentId);
         if (agent) {
@@ -5415,12 +5340,12 @@ async function _trySSE(convId, taskId, stream, assistantMsg) {
           }
         }
       }
-      if (buf) buf.searchRounds = assistantMsg.searchRounds || [];
+      if (buf) buf.toolRounds = assistantMsg.toolRounds || [];
       twUpdate(convId);
 
     } else if (ev.type === "swarm_agent_complete") {
       /* Individual agent finished */
-      const sr = (assistantMsg.searchRounds || []).find(r => r._swarmActive || r._swarm);
+      const sr = (assistantMsg.toolRounds || []).find(r => r._swarmActive || r._swarm);
       if (sr && sr._swarmAgents) {
         let agent = sr._swarmAgents.find(a => a.id === ev.agentId);
         /* Fallback: match by objective if ID doesn't match (ID remap) */
@@ -5441,11 +5366,11 @@ async function _trySSE(convId, taskId, stream, assistantMsg) {
           if (ev.error) agent.preview = ev.error;
         }
       }
-      if (buf) buf.searchRounds = assistantMsg.searchRounds || [];
+      if (buf) buf.toolRounds = assistantMsg.toolRounds || [];
       twUpdate(convId);
 
     } else if (ev.type === "swarm_agent_error") {
-      const sr = (assistantMsg.searchRounds || []).find(r => r._swarmActive || r._swarm);
+      const sr = (assistantMsg.toolRounds || []).find(r => r._swarmActive || r._swarm);
       if (sr && sr._swarmAgents) {
         const agent = sr._swarmAgents.find(a => a.id === ev.agentId);
         if (agent) {
@@ -5454,7 +5379,7 @@ async function _trySSE(convId, taskId, stream, assistantMsg) {
           agent.preview = ev.error || ev.content || "Agent failed";
         }
       }
-      if (buf) buf.searchRounds = assistantMsg.searchRounds || [];
+      if (buf) buf.toolRounds = assistantMsg.toolRounds || [];
       twUpdate(convId);
 
     } else if (ev.type === "messages_snapshot") {
@@ -5532,7 +5457,7 @@ async function _trySSE(convId, taskId, stream, assistantMsg) {
             role: "user",
             content: "",
             thinking: "",
-            searchRounds: [],
+            toolRounds: [],
             timestamp: new Date().toISOString(),
             _isEndpointReview: true,
             _epIteration: ev.iteration,
@@ -5550,7 +5475,7 @@ async function _trySSE(convId, taskId, stream, assistantMsg) {
           }
 
           // 4. Create a separate stream buffer for the critic
-          _epCriticBuf = { content: "", thinking: "", searchRounds: [] };
+          _epCriticBuf = { content: "", thinking: "", toolRounds: [] };
           streamBufs.set(convId, _epCriticBuf);
           buf = _epCriticBuf;
 
@@ -5610,7 +5535,7 @@ async function _trySSE(convId, taskId, stream, assistantMsg) {
               role: "assistant",
               content: "",
               thinking: "",
-              searchRounds: [],
+              toolRounds: [],
               timestamp: new Date().toISOString(),
               _epIteration: ev.iteration,
             };
@@ -5618,7 +5543,7 @@ async function _trySSE(convId, taskId, stream, assistantMsg) {
             assistantMsg = newAssistant;
 
             // Reset stream buffer for the new worker turn
-            const newBuf = { content: "", thinking: "", searchRounds: [] };
+            const newBuf = { content: "", thinking: "", toolRounds: [] };
             streamBufs.set(convId, newBuf);
             buf = newBuf;
 
@@ -5761,7 +5686,7 @@ async function _trySSE(convId, taskId, stream, assistantMsg) {
           role: "assistant",
           content: "",
           thinking: "",
-          searchRounds: [],
+          toolRounds: [],
           timestamp: new Date().toISOString(),
           _epIteration: ev.iteration,
         };
@@ -5769,7 +5694,7 @@ async function _trySSE(convId, taskId, stream, assistantMsg) {
         assistantMsg = newAssistant;
 
         // Reset stream buffer for the new worker turn
-        const newBuf = { content: "", thinking: "", searchRounds: [] };
+        const newBuf = { content: "", thinking: "", toolRounds: [] };
         streamBufs.set(convId, newBuf);
         buf = newBuf;
 
@@ -5870,16 +5795,17 @@ async function _trySSE(convId, taskId, stream, assistantMsg) {
       console.warn(
         `[_trySSE] SSE timeout notice received — taskId=${taskId.slice(0,8)} conv=${convId.slice(0,8)} ` +
         `contentSoFar=${assistantMsg.content?.length || 0}chars thinkingSoFar=${assistantMsg.thinking?.length || 0}chars ` +
-        `toolRounds=${assistantMsg.searchRounds?.length || 0} — backend continues, switching to poll fallback`
+        `toolRounds=${assistantMsg.toolRounds?.length || 0} — backend continues, switching to poll fallback`
       );
       // Return false — NOT a done event. Task is still running.
       return false;
+
 
     } else if (ev.type === "done") {
       /* ★ DIAGNOSTIC: log task completion details for debugging silent completions */
       const _dContentLen = assistantMsg.content?.length || 0;
       const _dThinkLen = assistantMsg.thinking?.length || 0;
-      const _dToolRounds = assistantMsg.searchRounds?.length || 0;
+      const _dToolRounds = assistantMsg.toolRounds?.length || 0;
       /* ★ CROSS-TALK DETECTION: verify the conv we're writing to still matches */
       const _dConv = conversations.find(c => c.id === convId);
       const _dMsgCount = _dConv?.messages?.length || 0;
@@ -5965,7 +5891,7 @@ async function _trySSE(convId, taskId, stream, assistantMsg) {
         }
       }
       /* ★ Clean up continue checkpoint markers */
-      delete assistantMsg._continueSearchRounds;
+      delete assistantMsg._continueToolRounds;
       delete assistantMsg._continueContentPrefix;
       delete assistantMsg._continueModifiedFiles;
       delete assistantMsg._continueModifiedFileList;
@@ -6059,7 +5985,7 @@ async function _trySSE(convId, taskId, stream, assistantMsg) {
          and return false so connectToTask falls back to polling. */
       const _accContent = assistantMsg.content?.length || 0;
       const _accThinking = assistantMsg.thinking?.length || 0;
-      const _accRounds = assistantMsg.searchRounds?.length || 0;
+      const _accRounds = assistantMsg.toolRounds?.length || 0;
       console.error(
         `[_trySSE] ⚠ SSE PREMATURE CLOSE — taskId=${taskId.slice(0,8)} ` +
         `contentAccumulated=${_accContent}chars thinkingAccumulated=${_accThinking}chars ` +
@@ -6250,10 +6176,10 @@ async function _pollFallback(convId, taskId, stream, assistantMsg) {
         const existingApiRounds = assistantMsg._continueApiRounds || [];
         assistantMsg.apiRounds = existingApiRounds.concat(data.apiRounds);
       }
-      if (data.searchRounds) {
-        const existingRounds = assistantMsg._continueSearchRounds || [];
-        assistantMsg.searchRounds = existingRounds.concat(data.searchRounds);
-        if (buf) buf.searchRounds = assistantMsg.searchRounds;
+      if (data.toolRounds) {
+        const existingRounds = assistantMsg._continueToolRounds || [];
+        assistantMsg.toolRounds = existingRounds.concat(data.toolRounds);
+        if (buf) buf.toolRounds = assistantMsg.toolRounds;
       }
       if (buf) buf.phase = data.phase || null;
       twUpdate(convId);
@@ -6272,7 +6198,7 @@ async function _pollFallback(convId, taskId, stream, assistantMsg) {
             `recovered content=${assistantMsg.content?.length||0}chars thinking=${assistantMsg.thinking?.length||0}chars`);
         }
         /* ★ Clean up continue checkpoint markers (poll fallback) */
-        delete assistantMsg._continueSearchRounds;
+        delete assistantMsg._continueToolRounds;
         delete assistantMsg._continueApiRounds;
         delete assistantMsg._continueUsage;
         delete assistantMsg._continueModifiedFiles;

@@ -180,6 +180,7 @@ DEFAULT_SLOT_CONFIGS = {
     'glm-4.7':                       {'caps': {'text', 'thinking', 'cheap'},      'rpm': 60,  'latency': 2000, 'cost': 0.002},
     'glm-4.5-air':                   {'caps': {'text', 'cheap'},                   'rpm': 120, 'latency': 1500, 'cost': 0.001},
     'glm-4.5-flash':                 {'caps': {'text', 'cheap'},                   'rpm': 200, 'latency': 1000, 'cost': 0.0},
+    'glm-5v-turbo':                  {'caps': {'text', 'vision', 'cheap'},         'rpm': 60,  'latency': 2000, 'cost': 0.002},
 
     # ── Mistral AI ──
     'mistral-large-latest':          {'caps': {'text', 'vision', 'thinking', 'cheap'}, 'rpm': 30, 'latency': 3000, 'cost': 0.008},
@@ -193,7 +194,7 @@ DEFAULT_SLOT_CONFIGS = {
     # ── LongCat (internal, free) ──
     'LongCat-Flash-Thinking-2601':   {'caps': {'text', 'thinking', 'cheap'},       'rpm': 60,  'latency': 2000, 'cost': 0.0},
     'LongCat-Flash-Chat-2603':       {'caps': {'text', 'cheap'},                   'rpm': 60,  'latency': 1500, 'cost': 0.001},
-    'LongCat-MoE3B-Chat-YourProvider':   {'caps': {'text', 'cheap'},                   'rpm': 60,  'latency': 1500, 'cost': 0.0},
+    'longcat-pro-0403':              {'caps': {'text', 'thinking', 'cheap'},       'rpm': 60,  'latency': 2000, 'cost': 0.0},
 
     # ── OpenAI Codex (ChatGPT Plus subscription) ──
     'gpt-5.2-codex':                 {'caps': {'text', 'vision', 'thinking'},      'rpm': 10,  'latency': 5000, 'cost': 0.0},
@@ -223,10 +224,10 @@ DEFAULT_SLOT_CONFIGS = {
 #  This benefits anyone routing Claude through multiple gateway prefixes.
 # ══════════════════════════════════════════════════════════════
 MODEL_ALIAS_GROUPS = [
-    # Claude Opus 4 — aws, vertex, direct API names are interchangeable
+    # Claude Opus 4.6 — aws, vertex, direct API names are interchangeable
     {'aws.claude-opus-4.6', 'aws.claude-opus-4.6-b', 'vertex.claude-opus-4.6',
      'claude-opus-4-20250514', 'claude-opus-4-6-20250514'},
-    # Claude Sonnet 4 — aws gateway vs direct API name
+    # Claude Sonnet 4.6 — aws gateway vs direct API name
     {'aws.claude-sonnet-4.6', 'claude-sonnet-4-20250514', 'claude-sonnet-4-6-20250514'},
 ]
 

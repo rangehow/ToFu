@@ -2,10 +2,6 @@
    myday.js — My Day — Daily Task Report
    ═══════════════════════════════════════════ */
 
-/* ── Cost Dashboard — aliases for backward compatibility ── */
-function openCostDashboard() { openDailyReport(); }
-function closeCostDashboard() { closeDailyReport(); }
-
 /* ═══════════════════════════════════════════════════════════
    ★ My Day — daily task report with async progress & categories
    Clean task list as hero, mini calendar sidebar for date nav.
@@ -47,7 +43,14 @@ const _STATUS_ICONS = {
   blocked:     '<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" fill="#f87171" opacity="0.15" stroke="#f87171" stroke-width="1.5"/><line x1="8" y1="8" x2="16" y2="16" stroke="#f87171" stroke-width="2" stroke-linecap="round"/><line x1="16" y1="8" x2="8" y2="16" stroke="#f87171" stroke-width="2" stroke-linecap="round"/></svg>',
   incomplete:  '<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.5" opacity="0.25"/></svg>',
 };
-const _STATUS_LABELS = { done: '✓ 完成', in_progress: '⏳ 进行中', blocked: '⛔ 受阻', incomplete: '进行中' };
+function _getStatusLabels() {
+  return {
+    done: t('myday.statusDone'),
+    in_progress: t('myday.statusInProgress'),
+    blocked: t('myday.statusBlocked'),
+    incomplete: t('myday.statusIncomplete'),
+  };
+}
 const _STATUS_CYCLE = ['in_progress', 'done', 'blocked']; // toggle order
 
 /* ═══════ Date helpers ═══════ */
@@ -55,18 +58,19 @@ function _mydayDateStr(y, m, d) {
   return `${y}-${String(m + 1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
 }
 function _mydayWeekday(dateStr) {
-  return ['周日','周一','周二','周三','周四','周五','周六'][new Date(dateStr + 'T00:00:00').getDay()];
+  const days = t('myday.weekdays').split(',');
+  const prefix = t('myday.weekdayPrefix');
+  return prefix + days[new Date(dateStr + 'T00:00:00').getDay()];
 }
 function _mydayFormatDate(dateStr) {
   const d = new Date(dateStr + 'T00:00:00');
-  const months = ['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'];
   const now = new Date();
   const todayStr = _mydayDateStr(now.getFullYear(), now.getMonth(), now.getDate());
   const yest = new Date(now); yest.setDate(yest.getDate() - 1);
   const yestStr = _mydayDateStr(yest.getFullYear(), yest.getMonth(), yest.getDate());
-  if (dateStr === todayStr) return '今天';
-  if (dateStr === yestStr) return '昨天';
-  return `${months[d.getMonth()]}${d.getDate()}日`;
+  if (dateStr === todayStr) return t('myday.today');
+  if (dateStr === yestStr) return t('myday.yesterday');
+  return t('myday.monthDay', { m: d.getMonth() + 1, d: d.getDate() });
 }
 
 /* ═══════ Mini calendar sidebar ═══════ */
@@ -83,7 +87,7 @@ function _mydayCalNext() {
 
 function _mydayRenderCalendar() {
   const { year, month, selectedDay } = _myday;
-  const mNames = ['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'];
+  // mNames not needed — use i18n yearMonth
   const now = new Date();
   const isCurMonth = now.getFullYear() === year && now.getMonth() === month;
   const todayD = isCurMonth ? now.getDate() : -1;
@@ -92,7 +96,7 @@ function _mydayRenderCalendar() {
   const hdr = document.getElementById('mydayCalHeader');
   if (hdr) hdr.innerHTML =
     `<button class="mcal-nav" onclick="_mydayCalPrev()">‹</button>
-     <span class="mcal-title">${year}年${mNames[month]}</span>
+     <span class="mcal-title">${t('myday.yearMonth', { y: year, m: month + 1 })}</span>
      <button class="mcal-nav" onclick="_mydayCalNext()">›</button>`;
 
   // Conversation counts per day — use server data (client-side conversations
@@ -118,7 +122,7 @@ function _mydayRenderCalendar() {
   const firstDow = new Date(year, month, 1).getDay();
   const daysInMonth = new Date(year, month + 1, 0).getDate();
   let html = '';
-  const wk = ['日','一','二','三','四','五','六'];
+  const wk = t('myday.calWeek').split(',');
   for (const w of wk) html += `<span class="mcal-wk">${w}</span>`;
 
   // Padding
@@ -281,10 +285,10 @@ function _mydayUpdateHeader(dateStr) {
   const titleEl = document.getElementById('mydayTitle');
   const subEl = document.getElementById('mydaySubtitle');
   const label = _mydayFormatDate(dateStr);
-  if (titleEl) titleEl.textContent = label === '今天' ? '我的一天' : label;
+  if (titleEl) titleEl.textContent = label === t('myday.today') ? t('myday.title') : label;
   if (subEl) {
     const d = new Date(dateStr + 'T00:00:00');
-    subEl.textContent = `${d.getFullYear()}年${d.getMonth()+1}月${d.getDate()}日 ${_mydayWeekday(dateStr)}`;
+    subEl.textContent = `${t('myday.dateFull', { y: d.getFullYear(), m: d.getMonth()+1, d: d.getDate() })} ${_mydayWeekday(dateStr)}`;
   }
 }
 
@@ -296,7 +300,7 @@ function _mydayRenderSidebarInfo(dateStr) {
   const costDaily = _myday._costDays || {};
   const dayData = costDaily[d.getDate()];
   if (!dayData || dayData.cost <= 0) { el.innerHTML = ''; return; }
-  el.innerHTML = `<div class="mcal-info-label">💰 ¥${dayData.cost.toFixed(2)}</div>`;
+  el.innerHTML = `<div class="mcal-info-label">\ud83d\udcb0 ¥${dayData.cost.toFixed(2)}</div>`;
 }
 
 /* ═══════ Skeleton ═══════ */
@@ -323,10 +327,25 @@ function _mydayShowProgressUI(dateStr, progressData) {
   if (!container) return;
 
   const stage = (progressData && progressData.stage) || 'starting';
-  const message = (progressData && progressData.message) || '正在启动…';
+  // Use localized message based on stage (server sends Chinese progress text)
+  let message;
+  if (stage === 'extracting' && progressData && progressData.current != null) {
+    message = t('myday.stageScanMsg', { c: progressData.current, t: progressData.total || '?' });
+  } else if (stage === 'analyzing' && progressData && progressData.total) {
+    message = t('myday.stageAnalyzeMsg', { n: progressData.total });
+  } else if (stage === 'saving') {
+    message = t('myday.stageSaveMsg');
+  } else {
+    message = t('myday.stageStarting');
+  }
 
   const stageEmoji = { starting: '🚀', extracting: '🔍', analyzing: '✶', saving: '💾' };
-  const stageLabel = { starting: '启动中', extracting: '扫描对话', analyzing: 'AI 分析', saving: '保存报告' };
+  const stageLabel = {
+    starting: t('myday.stageStarting'),
+    extracting: t('myday.stageExtracting'),
+    analyzing: t('myday.stageAnalyzing'),
+    saving: t('myday.stageSaving'),
+  };
   const stageOrder = ['starting', 'extracting', 'analyzing', 'saving'];
   const activeIdx = stageOrder.indexOf(stage);
 
@@ -346,10 +365,10 @@ function _mydayShowProgressUI(dateStr, progressData) {
   container.innerHTML = `
     <div class="myday-generating">
       <div class="myday-gen-spinner"></div>
-      <div class="myday-gen-title">正在生成报告</div>
+      <div class="myday-gen-title">${t('myday.generating')}</div>
       <div class="myday-gen-message">${escapeHtml(message)}</div>
       ${stepsHtml}
-      <div class="myday-gen-hint">你可以切换到其他日期，生成不会中断</div>
+      <div class="myday-gen-hint">${t('myday.genHint')}</div>
     </div>`;
   const prog = document.getElementById('mydayProgress');
   if (prog) prog.innerHTML = '';
@@ -392,7 +411,7 @@ function _mydayStartPolling(dateStr) {
       if (data.status === 'error') {
         _mydayStopPolling(dateStr);
         if (_myday.selectedDateStr === dateStr) {
-          _mydayRenderEmpty(`生成失败: ${data.error || '未知错误'}`);
+          _mydayRenderEmpty(`${t('myday.genFailed')}: ${data.error || 'Unknown'}`);
         }
         const refreshBtn = document.getElementById('mydayRefreshBtn');
         if (refreshBtn) refreshBtn.classList.remove('spinning');
@@ -439,8 +458,8 @@ async function _mydayRenderWaiting(dateStr) {
   container.innerHTML = `
     <div class="myday-empty">
       ${tofuSvg}
-      <div class="myday-empty-title">报告尚未生成</div>
-      <div class="myday-empty-hint">正在查询对话数量…</div>
+      <div class="myday-empty-title">${t('myday.reportNotGenerated')}</div>
+      <div class="myday-empty-hint">${t('myday.checkingConvs')}</div>
     </div>`;
   const prog = document.getElementById('mydayProgress');
   if (prog) prog.innerHTML = '';
@@ -461,25 +480,25 @@ async function _mydayRenderWaiting(dateStr) {
   if (_myday.selectedDateStr !== dateStr) return;
 
   const hint = convCount > 0
-    ? `有 ${convCount} 个对话，点击上方刷新按钮或下方按钮生成报告`
-    : '还没有对话记录，开始聊天后可以生成报告';
+    ? t('myday.hasConvsHint', { n: convCount })
+    : t('myday.noConvsHint');
 
   container.innerHTML = `
     <div class="myday-empty">
       ${tofuSvg}
-      <div class="myday-empty-title">报告尚未生成</div>
+      <div class="myday-empty-title">${t('myday.reportNotGenerated')}</div>
       <div class="myday-empty-hint">${hint}</div>
       ${convCount > 0 ? `
         <button class="myday-generate-btn" id="mydayGenerateBtn" onclick="_mydayTriggerGenerate()">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M12 2L12 6M12 18L12 22M4.93 4.93L7.76 7.76M16.24 16.24L19.07 19.07M2 12H6M18 12H22M4.93 19.07L7.76 16.24M16.24 7.76L19.07 4.93"/>
           </svg>
-          生成报告
+          ${t('myday.generateBtn')}
         </button>` : ''}
     </div>
     <div class="myday-add-todo">
-      <button class="myday-add-btn" onclick="document.getElementById('mydayTodoInput').focus()" title="添加">＋</button>
-      <input type="text" class="myday-todo-input" id="mydayTodoInput" placeholder="添加待办…"
+      <button class="myday-add-btn" onclick="document.getElementById('mydayTodoInput').focus()" title="${t('myday.addPlaceholder')}">＋</button>
+      <input type="text" class="myday-todo-input" id="mydayTodoInput" placeholder="${t('myday.addPlaceholder')}"
         onkeydown="if(event.key==='Enter'){event.preventDefault();_mydayAddTodo();}">
     </div>`;
 }
@@ -498,10 +517,10 @@ async function _mydayTriggerGenerate() {
 
   // Disable inline generate button if present
   const inlineBtn = document.getElementById('mydayGenerateBtn');
-  if (inlineBtn) { inlineBtn.classList.add('loading'); inlineBtn.textContent = '分析中…'; }
+  if (inlineBtn) { inlineBtn.classList.add('loading'); inlineBtn.textContent = t('myday.analyzing'); }
 
   // Show progress immediately
-  _mydayShowProgressUI(dateStr, { stage: 'starting', message: '正在启动…' });
+  _mydayShowProgressUI(dateStr, { stage: 'starting' });
 
   try {
     const resp = await fetch(apiUrl('/api/daily-report/generate'), {
@@ -527,7 +546,7 @@ async function _mydayTriggerGenerate() {
     _mydayRenderCalendar();
   } catch (e) {
     console.warn('[MyDay] Generate failed:', e);
-    if (_myday.selectedDateStr === dateStr) _mydayRenderEmpty('启动生成失败，请重试');
+    if (_myday.selectedDateStr === dateStr) _mydayRenderEmpty(t('myday.genFailRetry'));
     if (refreshBtn) refreshBtn.classList.remove('spinning');
   }
 }
@@ -541,7 +560,7 @@ async function _mydayBackfillDay(dateStr) {
 async function _mydayTriggerGenerateForDate(dateStr, force) {
   if (_myday._pollTimers[dateStr]) return; // already running
 
-  _mydayShowProgressUI(dateStr, { stage: 'starting', message: '正在启动…' });
+  _mydayShowProgressUI(dateStr, { stage: 'starting' });
   const refreshBtn = document.getElementById('mydayRefreshBtn');
   if (refreshBtn) refreshBtn.classList.add('spinning');
 
@@ -567,7 +586,7 @@ async function _mydayTriggerGenerateForDate(dateStr, force) {
     _mydayRenderCalendar();
   } catch (e) {
     console.warn('[MyDay] Generate failed for', dateStr, e);
-    if (_myday.selectedDateStr === dateStr) _mydayRenderEmpty('加载失败，请重试');
+    if (_myday.selectedDateStr === dateStr) _mydayRenderEmpty(t('myday.genFailRetry'));
     if (refreshBtn) refreshBtn.classList.remove('spinning');
   }
 }
@@ -583,8 +602,8 @@ function _mydayRenderTasks(report) {
     const legacyTasks = report.tasks.filter(t => !t._todo);
     const done = legacyTasks.filter(t => t.status === 'done').length;
     streams = [{
-      id: 'legacy-summary', title: '旧版报告',
-      summary: `${legacyTasks.length} 个对话 (${done} 完成) — 点击 ↻ 重新生成`,
+      id: 'legacy-summary', title: 'Legacy Report',
+      summary: `${legacyTasks.length} conversations (${done} done) — click ↻ to regenerate`,
       status: 'in_progress', conv_ids: [], conv_count: legacyTasks.length,
     }];
   }
@@ -615,12 +634,12 @@ function _mydayRenderTasks(report) {
   const convCount = (report.stats || {}).totalConversations || 0;
   if (isInherited && streams.length === 0 && convCount > 0) {
     html += `<div class="myday-inherited-prompt">
-      <span>今日已有 ${convCount} 个对话</span>
+      <span>${t('myday.hasConvsToday', { n: convCount })}</span>
       <button class="myday-generate-btn" onclick="_mydayTriggerGenerate()">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M12 2L12 6M12 18L12 22M4.93 4.93L7.76 7.76M16.24 16.24L19.07 19.07M2 12H6M18 12H22M4.93 19.07L7.76 16.24M16.24 7.76L19.07 4.93"/>
         </svg>
-        生成日报
+        ${t('myday.generateDaily')}
       </button>
     </div>`;
   }
@@ -630,7 +649,7 @@ function _mydayRenderTasks(report) {
     const todayDoneCount = todayTodos.filter(t => t.done).length;
     const todayRatio = todayTodos.length > 0 ? Math.round(todayDoneCount / todayTodos.length * 100) : 0;
     html += `<div class="myday-section-label">
-      今日待办
+      ${t('myday.todayTodos')}
       <span class="myday-section-count">${todayDoneCount}/${todayTodos.length}</span>
       ${todayRatio > 0 ? `<span class="myday-accountability-bar"><span class="myday-accountability-fill" style="width:${todayRatio}%"></span></span>` : ''}
     </div>`;
@@ -642,7 +661,7 @@ function _mydayRenderTasks(report) {
   // ── Section: Unfinished (yesterday's items not addressed today) ──
   if (unfinished.length > 0) {
     html += `<div class="myday-section-label" style="color:#f59e0b">
-      未完成
+      ${t('myday.unfinishedSection')}
       <span class="myday-section-count">${unfinished.length}</span>
     </div>`;
     html += '<div class="myday-unfinished">';
@@ -652,20 +671,20 @@ function _mydayRenderTasks(report) {
 
   // ── Section: Active work ──
   if (active.length > 0) {
-    html += `<div class="myday-section-label">进行中 <span class="myday-section-count">${active.length}</span></div>`;
+    html += `<div class="myday-section-label">${t('myday.activeSection')} <span class="myday-section-count">${active.length}</span></div>`;
     for (const s of active) html += _mydayStreamRow(s);
   }
 
   // ── Section: Done ──
   if (done.length > 0) {
-    html += `<div class="myday-section-label">已完成 <span class="myday-section-count">${done.length}</span></div>`;
+    html += `<div class="myday-section-label">${t('myday.doneSection')} <span class="myday-section-count">${done.length}</span></div>`;
     for (const s of done) html += _mydayStreamRow(s);
   }
 
   // ── Section: Tomorrow TODOs (LLM-generated plan for next day) ──
   if (tomorrow.length > 0) {
     const isToday = _myday.selectedDateStr === _mydayDateStr(new Date().getFullYear(), new Date().getMonth(), new Date().getDate());
-    const todoLabel = isInherited ? '待办事项' : isToday ? '明日计划' : '次日计划';
+    const todoLabel = isInherited ? t('myday.todoItems') : isToday ? t('myday.tomorrowPlan') : t('myday.nextDayPlan');
     html += `<div class="myday-section-label" style="margin-top:6px">${todoLabel} <span class="myday-section-count">${tomorrow.length}</span></div>`;
     html += '<div class="myday-tomorrow">';
     for (const item of tomorrow) html += _mydayTodoRow(item);
@@ -674,8 +693,8 @@ function _mydayRenderTasks(report) {
 
   // ── Manual add ──
   html += `<div class="myday-add-todo">
-    <button class="myday-add-btn" onclick="document.getElementById('mydayTodoInput').focus()" title="添加">＋</button>
-    <input type="text" class="myday-todo-input" id="mydayTodoInput" placeholder="添加待办…"
+    <button class="myday-add-btn" onclick="document.getElementById('mydayTodoInput').focus()" title="${t('myday.addPlaceholder')}">＋</button>
+    <input type="text" class="myday-todo-input" id="mydayTodoInput" placeholder="${t('myday.addPlaceholder')}"
       onkeydown="if(event.key==='Enter'){event.preventDefault();_mydayAddTodo();}">
   </div>`;
 
@@ -698,13 +717,13 @@ function _mydayStreamRow(stream) {
     ? `<div class="myday-stream-summary">${escapeHtml(stream.summary)}</div>` : '';
 
   const convsHtml = convCount > 1
-    ? `<div class="myday-stream-convs">${convCount} 个对话</div>` : '';
+    ? `<div class="myday-stream-convs">${t('myday.convCount', { n: convCount })}</div>` : '';
 
   return `
     <div class="myday-stream s-${st}" data-streamid="${escapeHtml(stream.id)}">
       <div class="myday-dot s-${st}"
         onclick="_mydayToggleStreamStatus('${escapeHtml(stream.id)}')"
-        title="切换状态"></div>
+        title="${t('myday.toggleStatus')}"></div>
       <div class="myday-stream-body">
         <div class="myday-stream-title">${escapeHtml(stream.title)}</div>
         ${summaryHtml}
@@ -722,22 +741,22 @@ function _mydayTodoRow(item) {
   const checkSvg = `<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#34d399" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L19 7"/></svg>`;
   const delSvg = `<svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square"><path d="M1 1l6 6M7 1l-6 6"/></svg>`;
   const launchSvg = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>`;
-  const carriedBadge = isCarried ? '<span class="myday-inherited-badge" style="background:rgba(245,158,11,0.12);color:#f59e0b">延续</span>' : '';
+  const carriedBadge = isCarried ? `<span class="myday-inherited-badge" style="background:rgba(245,158,11,0.12);color:#f59e0b">${t('myday.badgeCarried')}</span>` : '';
   const launchBtn = hasAction ? `
       <button class="myday-todo-launch"
         onclick="event.stopPropagation();_mydayStartTodoConv('${escapeHtml(item.id)}')"
-        title="开始对话">${launchSvg}</button>` : '';
+        title="${t('myday.startConv')}">${launchSvg}</button>` : '';
   return `
     <div class="myday-todo-item${isDone ? ' done' : ''}">
       <button class="myday-todo-check${isDone ? ' checked' : ''}"
         onclick="_mydayToggleTodo('${escapeHtml(item.id)}')"
-        title="${isDone ? '标记未完成' : '标记完成'}">${checkSvg}</button>
+        title="${isDone ? t('myday.markUndone') : t('myday.markDone')}">${checkSvg}</button>
       <span class="myday-todo-text"${qa_prefill ? ` title="${escapeHtml(qa_prefill)}"` : ''}>${escapeHtml(item.text)}</span>
       ${carriedBadge}
       ${launchBtn}
       <button class="myday-todo-del"
         onclick="event.stopPropagation();_mydayDeleteTodo('${escapeHtml(item.id)}')"
-        title="删除">${delSvg}</button>
+        title="${t('myday.deleteTodo')}">${delSvg}</button>
     </div>`;
 }
 
@@ -753,18 +772,18 @@ function _mydayInheritedTodoRow(item) {
   const launchBtn = hasAction ? `
       <button class="myday-todo-launch"
         onclick="event.stopPropagation();_mydayStartTodoConvInherited('${escapeHtml(item.id)}', '${escapeHtml(originDate)}')"
-        title="开始对话">${launchSvg}</button>` : '';
+        title="${t('myday.startConv')}">${launchSvg}</button>` : '';
   return `
     <div class="myday-todo-item inherited${isDone ? ' done' : ''}">
       <button class="myday-todo-check${isDone ? ' checked' : ''}"
         onclick="_mydayToggleInheritedTodo('${escapeHtml(item.id)}', '${escapeHtml(originDate)}')"
-        title="${isDone ? '标记未完成' : '标记完成'}">${checkSvg}</button>
+        title="${isDone ? t('myday.markUndone') : t('myday.markDone')}">${checkSvg}</button>
       <span class="myday-todo-text"${qa_prefill ? ` title="${escapeHtml(qa_prefill)}"` : ''}>${escapeHtml(item.text)}</span>
-      <span class="myday-inherited-badge">昨日</span>
+      <span class="myday-inherited-badge">${t('myday.badgeYesterday')}</span>
       ${launchBtn}
       <button class="myday-todo-del"
         onclick="event.stopPropagation();_mydayDeleteInheritedTodo('${escapeHtml(item.id)}', '${escapeHtml(originDate)}')"
-        title="删除">${delSvg}</button>
+        title="${t('myday.deleteTodo')}">${delSvg}</button>
     </div>`;
 }
 
@@ -778,7 +797,7 @@ function _mydayUnfinishedRow(item, idx) {
   const launchBtn = hasAction ? `
       <button class="myday-todo-launch"
         onclick="event.stopPropagation();_mydayStartTodoConvUnfinished(${idx})"
-        title="开始对话">${launchSvg}</button>` : '';
+        title="${t('myday.startConv')}">${launchSvg}</button>` : '';
   return `
     <div class="myday-todo-item unfinished" style="opacity:0.55">
       <span style="display:inline-flex;align-items:center;width:22px;justify-content:center;flex-shrink:0">${dashCircle}</span>
@@ -1076,8 +1095,8 @@ function _mydayRenderStreamStats(streams, report) {
   const totalConvs = stats.totalConversations || streams.reduce((n, s) => n + (s.conv_count || 0), 0);
 
   const parts = [];
-  if (totalConvs) parts.push(`${totalConvs} 对话`);
-  parts.push(`${streams.length} 工作流`);
+  if (totalConvs) parts.push(t('myday.convStat', { n: totalConvs }));
+  parts.push(t('myday.streamStat', { n: streams.length }));
   const quote = report.quote;
   if (quote) parts.push(escapeHtml(quote));
   el.innerHTML = `<span class="myday-stat">${parts.join(' · ')}</span>`;
@@ -1106,7 +1125,7 @@ function _mydayRenderEmpty(msg) {
   let todayHtml = '';
   if (todayTodos.length > 0) {
     const todayDoneCount = todayTodos.filter(t => t.done).length;
-    todayHtml += `<div class="myday-section-label">今日待办 <span class="myday-section-count">${todayDoneCount}/${todayTodos.length}</span></div>`;
+    todayHtml += `<div class="myday-section-label">${t('myday.todayTodos')} <span class="myday-section-count">${todayDoneCount}/${todayTodos.length}</span></div>`;
     todayHtml += '<div class="myday-today-todos">';
     for (const item of todayTodos) todayHtml += _mydayInheritedTodoRow(item);
     todayHtml += '</div>';
@@ -1116,12 +1135,12 @@ function _mydayRenderEmpty(msg) {
     ${todayHtml}
     <div class="myday-empty">
       ${tofuSvg}
-      <div class="myday-empty-title">${msg || '这天很安静'}</div>
-      <div class="myday-empty-hint">没有找到对话记录</div>
+      <div class="myday-empty-title">${msg || t('myday.quietDay')}</div>
+      <div class="myday-empty-hint">${t('myday.noConvsFound')}</div>
     </div>
     <div class="myday-add-todo">
-      <button class="myday-add-btn" onclick="document.getElementById('mydayTodoInput').focus()" title="添加">＋</button>
-      <input type="text" class="myday-todo-input" id="mydayTodoInput" placeholder="添加待办…"
+      <button class="myday-add-btn" onclick="document.getElementById('mydayTodoInput').focus()" title="${t('myday.addPlaceholder')}">＋</button>
+      <input type="text" class="myday-todo-input" id="mydayTodoInput" placeholder="${t('myday.addPlaceholder')}"
         onkeydown="if(event.key==='Enter'){event.preventDefault();_mydayAddTodo();}">
     </div>`;
   const prog = document.getElementById('mydayProgress');
@@ -1202,4 +1221,68 @@ function _mydayLaunchConvFromAction(item) {
 
   // 5) Update send button state
   if (typeof updateSendButton === 'function') updateSendButton();
+}
+
+
+/* ═══════ Daily Reminder — gentle toast to check daily report ═══════ */
+
+/**
+ * _mydayScheduleReminder — schedule a daily toast reminder.
+ *
+ * Shows a toast once per day (afternoon, after enough conversations)
+ * nudging the user to check their daily report.
+ * Respects a localStorage flag so it only shows once per calendar day.
+ */
+function _mydayScheduleReminder() {
+  const REMINDER_DELAY_MS = 3 * 60 * 60 * 1000; // 3 hours after page load
+  const MIN_HOUR = 14; // Don't remind before 2 PM
+
+  setTimeout(async () => {
+    try {
+      const now = new Date();
+      if (now.getHours() < MIN_HOUR) return; // too early
+
+      // Check if already reminded today
+      const todayStr = _mydayDateStr(now.getFullYear(), now.getMonth(), now.getDate());
+      const lastReminder = localStorage.getItem('tofu_myday_last_reminder');
+      if (lastReminder === todayStr) return; // already shown today
+
+      // Check if modal is already open
+      const modal = document.getElementById('dailyReportModal');
+      if (modal && modal.classList.contains('open')) return;
+
+      // Check if there are conversations today (quick API check)
+      let convCount = 0;
+      try {
+        const resp = await fetch(apiUrl(`/api/daily-report/conv-count/${todayStr}`));
+        if (resp.ok) {
+          const data = await resp.json();
+          convCount = data.count || 0;
+        }
+      } catch (e) { /* ignore */ }
+
+      if (convCount < 3) return; // not enough activity to warrant a reminder
+
+      // Mark as reminded
+      localStorage.setItem('tofu_myday_last_reminder', todayStr);
+
+      // Show a gentle toast
+      if (typeof showToast === 'function') {
+        const title = t('myday.reminderTitle');
+        const body = convCount > 0
+          ? t('myday.reminderBody', { n: convCount })
+          : t('myday.reminderBodyGeneric');
+        showToast('📋', title, body, 8000);
+      }
+    } catch (e) {
+      console.warn('[MyDay] Reminder check failed:', e);
+    }
+  }, REMINDER_DELAY_MS);
+}
+
+// Auto-schedule reminder on page load
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', _mydayScheduleReminder);
+} else {
+  _mydayScheduleReminder();
 }

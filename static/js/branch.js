@@ -212,9 +212,9 @@ function _renderBranchMsg(m, msgIdx, bi, i) {
     content += escapeHtml(m.content || "");
   } else {
     // Tool call results (search, browser, code exec, project tools) — use the full renderer
-    const rounds = getSearchRoundsFromMsg(m);
+    const rounds = getToolRoundsFromMsg(m);
     if (rounds.length > 0) {
-      content += renderSearchRoundsHTML(rounds, false);
+      content += renderToolRoundsHTML(rounds, false);
     }
     // Thinking
     if (m.thinking) {
@@ -551,7 +551,7 @@ async function sendBranchMessage(text, images) {
   // Add empty assistant message (placeholder for streaming)
   const assistantMsg = {
     role: "assistant", content: "", thinking: "",
-    timestamp: Date.now(), searchRounds: [],
+    timestamp: Date.now(), toolRounds: [],
   };
   branch.messages.push(userMsg, assistantMsg);
   saveConversations(conv.id);
@@ -719,7 +719,7 @@ async function _branchStreamSSE(conv, msgIdx, branchIdx, branch, assistantMsg, t
       if (ev.content !== undefined) assistantMsg.content = ev.content;
       if (ev.thinking !== undefined) assistantMsg.thinking = ev.thinking;
       if (ev.error) assistantMsg.error = ev.error;
-      if (ev.searchRounds) assistantMsg.searchRounds = ev.searchRounds;
+      if (ev.toolRounds) assistantMsg.toolRounds = ev.toolRounds;
       _updateBranchStreamingUI(msgIdx, branchIdx, assistantMsg);
     } else if (ev.type === "phase") {
       // Update status indicator
@@ -737,8 +737,8 @@ async function _branchStreamSSE(conv, msgIdx, branchIdx, branch, assistantMsg, t
         if (zone) zone.innerHTML = statusHtml;
       }
     } else if (ev.type === "tool_start") {
-      if (!assistantMsg.searchRounds) assistantMsg.searchRounds = [];
-      assistantMsg.searchRounds.push({
+      if (!assistantMsg.toolRounds) assistantMsg.toolRounds = [];
+      assistantMsg.toolRounds.push({
         roundNum: ev.roundNum,
         query: ev.query || ev.toolName || "",
         toolName: ev.toolName || "search",
@@ -747,7 +747,7 @@ async function _branchStreamSSE(conv, msgIdx, branchIdx, branch, assistantMsg, t
       });
       _updateBranchStreamingUI(msgIdx, branchIdx, assistantMsg);
     } else if (ev.type === "tool_result") {
-      const r = (assistantMsg.searchRounds || []).find(r => r.roundNum === ev.roundNum);
+      const r = (assistantMsg.toolRounds || []).find(r => r.roundNum === ev.roundNum);
       if (r) {
         r.results = ev.results;
         r.status = "done";
@@ -772,8 +772,8 @@ async function _branchStreamSSE(conv, msgIdx, branchIdx, branch, assistantMsg, t
       _updateBranchStreamingUI(msgIdx, branchIdx, assistantMsg);
     } else if (ev.type === "tool_complete") {
       // Store toolContent on the round for preview
-      if (assistantMsg.searchRounds) {
-        const r = assistantMsg.searchRounds.find(r => r.roundNum === ev.roundNum && r.toolCallId === ev.toolCallId);
+      if (assistantMsg.toolRounds) {
+        const r = assistantMsg.toolRounds.find(r => r.roundNum === ev.roundNum && r.toolCallId === ev.toolCallId);
         if (r) r.toolContent = ev.toolContent || null;
       }
       // ★ Re-render branch UI so preview button appears reactively
@@ -888,7 +888,7 @@ async function _branchStreamPoll(conv, msgIdx, branchIdx, branch, assistantMsg, 
       const data = await res.json();
       if (data.thinking !== undefined) assistantMsg.thinking = data.thinking;
       if (data.content !== undefined) assistantMsg.content = data.content;
-      if (data.searchRounds) assistantMsg.searchRounds = data.searchRounds;
+      if (data.toolRounds) assistantMsg.toolRounds = data.toolRounds;
       _updateBranchStreamingUI(msgIdx, branchIdx, assistantMsg);
       if (Date.now() - (assistantMsg._lastSave || 0) > 3000) {
         assistantMsg._lastSave = Date.now();
@@ -915,8 +915,8 @@ function _updateBranchStreamingUI(msgIdx, branchIdx, assistantMsg) {
 
   // Tool call zone — use the full renderer for rich display
   const toolZone = body.querySelector('[data-zone="tool"]');
-  if (toolZone && assistantMsg.searchRounds?.length) {
-    toolZone.innerHTML = renderSearchRoundsHTML(assistantMsg.searchRounds, true);
+  if (toolZone && assistantMsg.toolRounds?.length) {
+    toolZone.innerHTML = renderToolRoundsHTML(assistantMsg.toolRounds, true);
   }
 
   // Thinking zone
@@ -1034,7 +1034,7 @@ async function _reconnectBranchStream(conv, msgIdx, branchIdx, branch) {
         if (data.preset) last.preset = data.preset;
         if (data.toolSummary) last.toolSummary = data.toolSummary;
         if (data.usage) last.usage = data.usage;
-        if (data.searchRounds) last.searchRounds = data.searchRounds;
+        if (data.toolRounds) last.toolRounds = data.toolRounds;
       }
       branch.activeTaskId = null;
       saveConversations(conv.id);

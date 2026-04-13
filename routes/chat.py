@@ -11,6 +11,11 @@ from lib.log import get_logger
 from lib.rate_limiter import rate_limit
 from lib.tasks_pkg import cleanup_old_tasks, create_task, tasks, tasks_lock
 
+import re
+
+from lib.database import db_execute_with_retry, get_thread_db, json_dumps_pg
+from routes.common import DEFAULT_USER_ID, _invalidate_meta_cache
+
 logger = get_logger(__name__)
 
 chat_bp = Blueprint('chat', __name__)
@@ -61,21 +66,37 @@ def chat_active():
 @rate_limit(limit=10, per=60)  # 10 requests per minute
 def chat_start():
     data = request.get_json(silent=True) or {}
-    messages = data.get('messages', [])
+    conv_id = data.get('convId', '')
+    cfg = data.get('config', {})
+
+    # ── Server-side message building ──
+    # The frontend now sends {convId, config} only.
+    # Messages are loaded from the DB and transformed server-side.
+    # Legacy path: if frontend still sends 'messages', use them as fallback.
+    messages = data.get('messages')
     if not messages:
-        return jsonify({'error': 'No messages'}), 400
+        from lib.tasks_pkg.conv_message_builder import build_api_messages_from_db
+        exclude_last = cfg.get('excludeLast', False)
+        messages = build_api_messages_from_db(conv_id, cfg, exclude_last=exclude_last)
+        if messages is None:
+            return jsonify({'error': 'Conversation not found'}), 404
+        if not messages:
+            return jsonify({'error': 'No messages'}), 400
+        logger.info('[Chat] Built %d API messages from DB for conv %s',
+                    len(messages), conv_id[:8])
+
     cleanup_old_tasks()
 
     # ── Backend dispatch: external backends get their own flow ──
-    backend_name = data.get('config', {}).get('agentBackend', 'builtin')
+    backend_name = cfg.get('agentBackend', 'builtin')
     if backend_name and backend_name != 'builtin':
         return _start_external_backend(data, messages, backend_name)
 
-    # ── Default: built-in Tofu backend (existing flow — ZERO CHANGE) ──
-    task = create_task(data.get('convId', ''), messages, data.get('config', {}))
+    # ── Default: built-in Tofu backend ──
+    task = create_task(conv_id, messages, cfg)
     from lib.tasks_pkg import run_task
-    _cfg_model = data.get('config', {}).get('model', '?')
-    _cfg_preset = data.get('config', {}).get('preset', data.get('config', {}).get('effort', '?'))
+    _cfg_model = cfg.get('model', '?')
+    _cfg_preset = cfg.get('preset', cfg.get('effort', '?'))
     logger.info('[Chat] Starting task %s for conv %s model=%s preset=%s',
                 task['id'], task['convId'], _cfg_model, _cfg_preset)
     try:
@@ -86,7 +107,544 @@ def chat_start():
         task['status'] = 'error'
         task['error'] = 'Server failed to start task thread'
         return jsonify({'error': 'Failed to start task'}), 500
+
     return jsonify({'taskId': task['id']})
+
+
+# ══════════════════════════════════════════════════════════
+#  Atomic send: user message creation + task start
+# ══════════════════════════════════════════════════════════
+
+def _auto_translate_user(text, config):
+    """Translate Chinese user text to English if autoTranslate is on.
+
+    Returns:
+        (translated_text, original_text_or_None, model_or_None)
+    """
+    auto_translate = config.get('autoTranslate', False)
+    if not auto_translate or not text:
+        return text, None, None
+
+    has_chinese = bool(re.search(r'[\u4e00-\u9fff\u3400-\u4dbf]', text))
+    if not has_chinese:
+        return text, None, None
+
+    try:
+        from routes.translate import _build_translate_prompt, _translate_one_chunk
+        system_prompt = _build_translate_prompt('English', 'Chinese')
+        result, _usage = _translate_one_chunk(
+            text, system_prompt, chunk_label=':send',
+            source='Chinese', target='English',
+        )
+        if result and result.strip():
+            _model = None
+            if isinstance(_usage, dict):
+                _disp = _usage.get('_dispatch', {})
+                _model = _disp.get('model', _usage.get('model'))
+            logger.info('[Send] Auto-translated user message: %d→%d chars model=%s',
+                        len(text), len(result.strip()), _model)
+            return result.strip(), text, _model
+    except Exception as e:
+        logger.warning('[Send] Auto-translate failed: %s', e)
+
+    return text, None, None
+
+
+def _build_user_msg_from_payload(payload, config):
+    """Build a user message dict from frontend payload + optional auto-translate.
+
+    Args:
+        payload: dict with text, images, pdfTexts, replyQuotes, convRefs, convRefTexts, timestamp
+        config: task config dict (reads autoTranslate)
+
+    Returns:
+        user_msg dict ready to append to conv.messages
+    """
+    text = payload.get('text', '')
+    timestamp = payload.get('timestamp') or int(time.time() * 1000)
+
+    translated_text, original_text, translate_model = _auto_translate_user(text, config)
+
+    user_msg = {
+        'role': 'user',
+        'content': translated_text,
+        'timestamp': timestamp,
+    }
+    if original_text:
+        user_msg['originalContent'] = original_text
+        user_msg['_translateDone'] = True
+        if translate_model:
+            user_msg['_translateModel'] = translate_model
+    if payload.get('images'):
+        user_msg['images'] = payload['images']
+    if payload.get('pdfTexts'):
+        user_msg['pdfTexts'] = payload['pdfTexts']
+    if payload.get('replyQuotes'):
+        user_msg['replyQuotes'] = payload['replyQuotes']
+    if payload.get('convRefs'):
+        user_msg['convRefs'] = payload['convRefs']
+    if payload.get('convRefTexts'):
+        user_msg['convRefTexts'] = payload['convRefTexts']
+
+    return user_msg
+
+
+def _load_or_create_conv(db, conv_id, config, payload):
+    """Load existing conversation messages or create a new one.
+
+    Returns:
+        (messages_list, is_new, title) or raises.
+    """
+    row = db.execute(
+        'SELECT messages, title, settings FROM conversations WHERE id=? AND user_id=?',
+        (conv_id, DEFAULT_USER_ID)
+    ).fetchone()
+
+    if row:
+        try:
+            messages = json.loads(row['messages'] or '[]')
+        except (json.JSONDecodeError, TypeError) as e:
+            logger.warning('[Send] Failed to parse messages for conv=%s: %s', conv_id[:8], e)
+            messages = []
+        return messages, False, row['title']
+
+    # New conversation — create it
+    title = (payload.get('text') or 'New Chat')[:60]
+    # Strip <notranslate>/<nt> tags from title
+    title = re.sub(r'</?(?:notranslate|nt)>', '', title, flags=re.IGNORECASE)
+    now_ms = int(time.time() * 1000)
+    settings = {}
+    if config.get('projectPath'):
+        settings['projectPath'] = config['projectPath']
+    if payload.get('folderId'):
+        settings['folderId'] = payload['folderId']
+
+    db_execute_with_retry(db, '''
+        INSERT INTO conversations (id, user_id, title, messages, created_at, updated_at, settings, msg_count, search_text)
+        VALUES (?, ?, ?, '[]', ?, ?, ?, 0, '')
+    ''', (conv_id, DEFAULT_USER_ID, title, now_ms, now_ms,
+          json.dumps(settings, ensure_ascii=False)))
+
+    return [], True, title
+
+
+def _persist_conv_messages(db, conv_id, messages, title, settings_patch=None):
+    """Write messages + metadata to the conversation row."""
+    now_ms = int(time.time() * 1000)
+    messages_json = json_dumps_pg(messages)
+
+    from routes.conversations import build_search_text
+    search_text = build_search_text(messages)
+
+    # Build settings update
+    settings_update = {}
+    if settings_patch:
+        settings_update.update(settings_patch)
+
+    # Always inject lastMsgRole/lastMsgTimestamp
+    if messages:
+        last = messages[-1]
+        settings_update['lastMsgRole'] = last.get('role')
+        settings_update['lastMsgTimestamp'] = last.get('timestamp')
+
+    # Merge with existing settings
+    existing = db.execute(
+        'SELECT settings FROM conversations WHERE id=? AND user_id=?',
+        (conv_id, DEFAULT_USER_ID)
+    ).fetchone()
+    if existing:
+        try:
+            settings = json.loads(existing['settings'] or '{}')
+        except (json.JSONDecodeError, TypeError):
+            settings = {}
+        settings.update(settings_update)
+    else:
+        settings = settings_update
+
+    settings_json = json.dumps(settings, ensure_ascii=False)
+
+    db_execute_with_retry(db, '''
+        INSERT INTO conversations (id, user_id, title, messages, created_at, updated_at,
+                                   settings, msg_count, search_text, search_tsv)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, to_tsvector('simple', left(?, 50000)))
+        ON CONFLICT(id, user_id) DO UPDATE SET
+            title=excluded.title, messages=excluded.messages,
+            updated_at=excluded.updated_at, settings=excluded.settings,
+            msg_count=excluded.msg_count, search_text=excluded.search_text,
+            search_tsv=excluded.search_tsv
+    ''', (conv_id, DEFAULT_USER_ID, title, messages_json, now_ms, now_ms,
+          settings_json, len(messages), search_text, search_text))
+
+
+def _start_task_for_conv(conv_id, config, data=None):
+    """Build API messages from DB and start a task. Returns (taskId, error_response).
+
+    Automatically routes to endpoint mode (planner → worker → critic loop)
+    when ``config['endpointMode']`` is truthy, so callers (chat_send,
+    chat_regenerate, etc.) don't need separate routing logic.
+    """
+    from lib.tasks_pkg.conv_message_builder import build_api_messages_from_db
+    from lib.tasks_pkg import run_task
+
+    api_messages = build_api_messages_from_db(conv_id, config)
+    if api_messages is None:
+        return None, (jsonify({'error': 'Conversation not found after save'}), 500)
+    if not api_messages:
+        return None, (jsonify({'error': 'No messages to process'}), 400)
+
+    cleanup_old_tasks()
+
+    # External backend support
+    backend_name = config.get('agentBackend', 'builtin')
+    if backend_name and backend_name != 'builtin':
+        # Reuse existing external backend flow
+        full_data = {'convId': conv_id, 'config': config}
+        if data:
+            full_data.update(data)
+        return None, _start_external_backend(full_data, api_messages, backend_name)
+
+    task = create_task(conv_id, api_messages, config)
+    task_id = task['id']
+    _cfg_model = config.get('model', '?')
+
+    # ★ Endpoint mode: route to the autonomous planner → worker → critic loop
+    is_endpoint = config.get('endpointMode', False)
+
+    if is_endpoint:
+        from lib.tasks_pkg.endpoint import run_endpoint_task
+        task['endpoint_mode'] = True
+        task['_endpoint_phase'] = 'planning'
+        task['_endpoint_iteration'] = 0
+        logger.info('[Chat] Starting ENDPOINT task %s for conv %s model=%s',
+                    task_id[:8], conv_id[:8], _cfg_model)
+        try:
+            threading.Thread(target=run_endpoint_task, args=(task,), daemon=True).start()
+        except Exception:
+            logger.exception('[Chat] Failed to start endpoint thread for task %s conv=%s',
+                             task_id[:8], conv_id[:8])
+            task['status'] = 'error'
+            task['error'] = 'Server failed to start task thread'
+            return None, (jsonify({'error': 'Failed to start task'}), 500)
+    else:
+        logger.info('[Chat] Starting task %s for conv %s model=%s',
+                    task_id[:8], conv_id[:8], _cfg_model)
+        try:
+            threading.Thread(target=run_task, args=(task,), daemon=True).start()
+        except Exception:
+            logger.exception('[Chat] Failed to start thread for task %s conv=%s',
+                             task_id[:8], conv_id[:8])
+            task['status'] = 'error'
+            task['error'] = 'Server failed to start task thread'
+            return None, (jsonify({'error': 'Failed to start task'}), 500)
+
+    return task_id, None
+
+
+@chat_bp.route('/api/chat/send', methods=['POST'])
+@rate_limit(limit=10, per=60)
+def chat_send():
+    """Atomic send: create user message + auto-translate + persist + start task.
+
+    Body: {
+        convId: str,
+        message: { text, images?, pdfTexts?, replyQuotes?, convRefs?, convRefTexts?, folderId? },
+        config: { model, searchMode, ... all tool settings },
+        settings?: { per-conv tool state to persist }
+    }
+
+    Returns: { taskId, convId, title, userMessage, isNew }
+    """
+    data = request.get_json(silent=True) or {}
+    conv_id = data.get('convId', '')
+    if not conv_id:
+        return jsonify({'error': 'convId required'}), 400
+
+    payload = data.get('message', {})
+    config = data.get('config', {})
+    settings_patch = data.get('settings')
+
+    text = payload.get('text', '')
+    if not text and not payload.get('images') and not payload.get('pdfTexts'):
+        return jsonify({'error': 'Empty message'}), 400
+
+    try:
+        db = get_thread_db(DOMAIN_CHAT)
+
+        # 1. Load or create conversation
+        messages, is_new, title = _load_or_create_conv(db, conv_id, config, payload)
+
+        # 2. Build user message (with auto-translate)
+        user_msg = _build_user_msg_from_payload(payload, config)
+
+        # 3. Append user message
+        messages.append(user_msg)
+
+        # 4. Update title if first user message
+        user_msgs = [m for m in messages if m.get('role') == 'user']
+        if len(user_msgs) == 1 and text:
+            title_text = re.sub(r'</?(?:notranslate|nt)>', '', text, flags=re.IGNORECASE)
+            title = title_text[:60] + ('...' if len(title_text) > 60 else '')
+
+        # 5. Persist to DB
+        _persist_conv_messages(db, conv_id, messages, title, settings_patch)
+
+        logger.info('[Send] conv=%s msgs=%d title=%.50s isNew=%s translated=%s',
+                    conv_id[:8], len(messages), title, is_new,
+                    bool(user_msg.get('originalContent')))
+
+        # 6. Start task
+        task_id, err_resp = _start_task_for_conv(conv_id, config, data)
+        if err_resp is not None:
+            # External backend returns a full Response directly
+            if isinstance(err_resp, tuple):
+                return err_resp
+            return err_resp  # direct Response from _start_external_backend
+
+        # 7. Update activeTaskId in settings
+        try:
+            _persist_conv_messages(db, conv_id, messages, title,
+                                   {'activeTaskId': task_id})
+        except Exception as e:
+            logger.warning('[Send] Failed to update activeTaskId: %s', e)
+
+        _invalidate_meta_cache()
+
+        return jsonify({
+            'taskId': task_id,
+            'convId': conv_id,
+            'title': title,
+            'userMessage': user_msg,
+            'isNew': is_new,
+            'msgCount': len(messages),
+        })
+
+    except Exception as e:
+        logger.error('[Send] Failed for conv=%s: %s', conv_id[:8], e, exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
+@chat_bp.route('/api/chat/regenerate', methods=['POST'])
+@rate_limit(limit=10, per=60)
+def chat_regenerate():
+    """Atomic regenerate/edit: truncate messages + optional edit + auto-translate + start task.
+
+    Body: {
+        convId: str,
+        truncateToIndex: int,         // keep messages[0..truncateToIndex] inclusive
+        editedContent?: str,          // if provided, replace the message at truncateToIndex
+        editedImages?: [],            // replacement images (optional)
+        editedPdfTexts?: [],          // replacement pdfTexts (optional)
+        config: { model, searchMode, ... },
+        settings?: { per-conv tool state to persist }
+    }
+
+    Returns: { taskId, convId, title, msgCount, userMessage? }
+    """
+    data = request.get_json(silent=True) or {}
+    conv_id = data.get('convId', '')
+    if not conv_id:
+        return jsonify({'error': 'convId required'}), 400
+
+    truncate_to = data.get('truncateToIndex')
+    if truncate_to is None:
+        return jsonify({'error': 'truncateToIndex required'}), 400
+
+    config = data.get('config', {})
+    edited_content = data.get('editedContent')
+    edited_images = data.get('editedImages')
+    edited_pdf_texts = data.get('editedPdfTexts')
+    settings_patch = data.get('settings')
+
+    try:
+        db = get_thread_db(DOMAIN_CHAT)
+        row = db.execute(
+            'SELECT messages, title FROM conversations WHERE id=? AND user_id=?',
+            (conv_id, DEFAULT_USER_ID)
+        ).fetchone()
+
+        if not row:
+            return jsonify({'error': 'Conversation not found'}), 404
+
+        try:
+            messages = json.loads(row['messages'] or '[]')
+        except (json.JSONDecodeError, TypeError) as e:
+            logger.warning('[Regen] Failed to parse messages for conv=%s: %s', conv_id[:8], e)
+            return jsonify({'error': 'Failed to parse conversation'}), 500
+
+        title = row['title']
+
+        if truncate_to < 0 or truncate_to >= len(messages):
+            return jsonify({'error': f'truncateToIndex {truncate_to} out of range (0..{len(messages)-1})'}), 400
+
+        # 1. Truncate
+        messages = messages[:truncate_to + 1]
+
+        # 2. Apply edit if provided
+        user_msg = messages[truncate_to]
+        if edited_content is not None:
+            user_msg['content'] = edited_content
+            user_msg.pop('originalContent', None)
+            user_msg['timestamp'] = int(time.time() * 1000)
+        if edited_images is not None:
+            user_msg['images'] = edited_images
+        if edited_pdf_texts is not None:
+            user_msg['pdfTexts'] = edited_pdf_texts
+
+        # 3. Auto-translate if needed
+        text = user_msg.get('content', '')
+        auto_translate = config.get('autoTranslate', False)
+        if auto_translate and text:
+            has_chinese = bool(re.search(r'[\u4e00-\u9fff\u3400-\u4dbf]', text))
+            # If the message already has originalContent and _translateDone, skip re-translation
+            # (user didn't edit the text, just regenerating)
+            already_translated = (user_msg.get('originalContent')
+                                  and user_msg.get('_translateDone')
+                                  and edited_content is None)
+            if has_chinese and not already_translated:
+                translated, original, model = _auto_translate_user(text, config)
+                if original:
+                    user_msg['content'] = translated
+                    user_msg['originalContent'] = original
+                    user_msg['_translateDone'] = True
+                    if model:
+                        user_msg['_translateModel'] = model
+
+        # 4. Update title if this is the only user message
+        user_msgs = [m for m in messages if m.get('role') == 'user']
+        if len(user_msgs) == 1 and text:
+            original_text = user_msg.get('originalContent') or text
+            title_text = re.sub(r'</?(?:notranslate|nt)>', '', original_text, flags=re.IGNORECASE)
+            title = title_text[:60] + ('...' if len(title_text) > 60 else '')
+
+        # 5. Persist truncated messages to DB
+        _persist_conv_messages(db, conv_id, messages, title, settings_patch)
+
+        logger.info('[Regen] conv=%s truncated to idx=%d msgs=%d edited=%s title=%.50s',
+                    conv_id[:8], truncate_to, len(messages),
+                    edited_content is not None, title)
+
+        # 6. Start task
+        task_id, err_resp = _start_task_for_conv(conv_id, config, data)
+        if err_resp is not None:
+            if isinstance(err_resp, tuple):
+                return err_resp
+            return err_resp
+
+        # 7. Update activeTaskId
+        try:
+            _persist_conv_messages(db, conv_id, messages, title,
+                                   {'activeTaskId': task_id})
+        except Exception as e:
+            logger.warning('[Regen] Failed to update activeTaskId: %s', e)
+
+        _invalidate_meta_cache()
+
+        return jsonify({
+            'taskId': task_id,
+            'convId': conv_id,
+            'title': title,
+            'msgCount': len(messages),
+            'userMessage': user_msg if edited_content is not None else None,
+        })
+
+    except Exception as e:
+        logger.error('[Regen] Failed for conv=%s: %s', conv_id[:8], e, exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
+@chat_bp.route('/api/chat/tool-state/<conv_id>', methods=['PATCH'])
+def chat_tool_state(conv_id):
+    """Lightweight tool-state sync: merge tool settings into conversation settings.
+
+    Unlike the full PUT /api/conversations/<id>, this only touches the settings
+    column — no messages, no msg_count, no search_text update.
+    Safe to call frequently (e.g. on every tool toggle).
+
+    Body: { model?, searchMode?, fetchEnabled?, browserEnabled?, projectPath?, ... }
+    """
+    data = request.get_json(silent=True) or {}
+    if not data:
+        return jsonify({'error': 'No settings provided'}), 400
+
+    try:
+        db = get_thread_db(DOMAIN_CHAT)
+        row = db.execute(
+            'SELECT settings FROM conversations WHERE id=? AND user_id=?',
+            (conv_id, DEFAULT_USER_ID)
+        ).fetchone()
+
+        if not row:
+            # Conv not in DB yet (no messages sent) — that's OK, skip
+            return jsonify({'ok': True, 'skipped': True})
+
+        try:
+            settings = json.loads(row['settings'] or '{}')
+        except (json.JSONDecodeError, TypeError):
+            settings = {}
+
+        settings.update(data)
+        settings_json = json.dumps(settings, ensure_ascii=False)
+
+        db_execute_with_retry(db, '''
+            UPDATE conversations SET settings=? WHERE id=? AND user_id=?
+        ''', (settings_json, conv_id, DEFAULT_USER_ID))
+
+        logger.debug('[ToolState] conv=%s patched %d keys: %s',
+                     conv_id[:8], len(data), list(data.keys())[:10])
+        return jsonify({'ok': True})
+
+    except Exception as e:
+        logger.error('[ToolState] Failed for conv=%s: %s', conv_id[:8], e, exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
+# ══════════════════════════════════════════════════════════
+#  Server-side message queue
+# ══════════════════════════════════════════════════════════
+
+@chat_bp.route('/api/chat/queue', methods=['POST'])
+def chat_queue_enqueue():
+    """Enqueue a message to be sent after the current task completes."""
+    data = request.get_json(silent=True) or {}
+    conv_id = data.get('convId', '')
+    if not conv_id:
+        return jsonify({'error': 'convId required'}), 400
+
+    message_data = data.get('message', {})
+    config = data.get('config', {})
+
+    if not message_data.get('text') and not message_data.get('images') and not message_data.get('pdfTexts'):
+        return jsonify({'error': 'Empty message'}), 400
+
+    from lib.message_queue import enqueue_message
+    result = enqueue_message(conv_id, message_data, config)
+    return jsonify(result)
+
+
+@chat_bp.route('/api/chat/queue/<conv_id>', methods=['GET'])
+def chat_queue_get(conv_id):
+    """Get all queued messages for a conversation."""
+    from lib.message_queue import get_queue
+    queue = get_queue(conv_id)
+    return jsonify(queue)
+
+
+@chat_bp.route('/api/chat/queue/<conv_id>/<queue_id>', methods=['DELETE'])
+def chat_queue_remove(conv_id, queue_id):
+    """Remove a specific message from the queue."""
+    from lib.message_queue import remove_from_queue
+    removed = remove_from_queue(conv_id, queue_id)
+    if not removed:
+        return jsonify({'error': 'Not found'}), 404
+    return jsonify({'ok': True})
+
+
+@chat_bp.route('/api/chat/queue/<conv_id>', methods=['DELETE'])
+def chat_queue_clear(conv_id):
+    """Clear all queued messages for a conversation."""
+    from lib.message_queue import clear_queue
+    count = clear_queue(conv_id)
+    return jsonify({'cleared': count})
 
 
 def _start_external_backend(data, messages, backend_name):
@@ -162,7 +720,7 @@ def _start_external_backend(data, messages, backend_name):
                     accumulated_thinking += event.text
                     task['thinking'] = accumulated_thinking
 
-                # ── Track searchRounds on the task dict for persistence ──
+                # ── Track toolRounds on the task dict for persistence ──
                 if event.kind == 'tool_start':
                     # Translate first so bridge assigns roundNum
                     sse_event = bridge.translate(event)
@@ -178,7 +736,7 @@ def _start_external_backend(data, messages, backend_name):
                             'toolCallId': sse_event.get('toolCallId', event.tool_id or ''),
                             'toolArgs': sse_event.get('toolArgs', ''),
                         }
-                        task['searchRounds'].append(round_entry)
+                        task['toolRounds'].append(round_entry)
                         append_event(task, sse_event)
                     continue
 
@@ -187,7 +745,7 @@ def _start_external_backend(data, messages, backend_name):
                     if sse_event:
                         # Update the matching search round
                         rn = sse_event.get('roundNum', 0)
-                        for sr in task.get('searchRounds', []):
+                        for sr in task.get('toolRounds', []):
                             if sr.get('roundNum') == rn:
                                 sr['results'] = sse_event.get('results', [])
                                 sr['status'] = 'done'
@@ -232,9 +790,9 @@ def _start_external_backend(data, messages, backend_name):
             except Exception as e:
                 logger.warning('[Chat] Failed to persist external task result: %s', e)
 
-            logger.info('[Chat] External task %s completed — backend=%s content=%dchars searchRounds=%d',
+            logger.info('[Chat] External task %s completed — backend=%s content=%dchars toolRounds=%d',
                         task['id'][:8], backend_name, len(accumulated_content),
-                        len(task.get('searchRounds', [])))
+                        len(task.get('toolRounds', [])))
 
         except Exception as e:
             logger.error('[Chat] External task %s failed: %s',
@@ -267,7 +825,7 @@ def chat_stream(task_id):
     if not task:
         db = get_db(DOMAIN_CHAT)
         row = db.execute(
-            'SELECT content,thinking,error,status,search_rounds,metadata FROM task_results WHERE task_id=?',
+            'SELECT content,thinking,error,status,tool_rounds,metadata FROM task_results WHERE task_id=?',
             (task_id,)
         ).fetchone()
         if row:
@@ -277,11 +835,11 @@ def chat_stream(task_id):
             }
             if row['error']:
                 state['error'] = row['error']
-            if row['search_rounds']:
+            if row['tool_rounds']:
                 try:
-                    state['searchRounds'] = json.loads(row['search_rounds'])
+                    state['toolRounds'] = json.loads(row['tool_rounds'])
                 except (json.JSONDecodeError, TypeError) as e:
-                    logger.warning('[Chat] Failed to parse search_rounds for task %s: %s', task_id, e, exc_info=True)
+                    logger.warning('[Chat] Failed to parse tool_rounds for task %s: %s', task_id, e, exc_info=True)
             meta = _extract_db_meta(row)
             for key in ('finishReason', 'usage', 'preset', 'model', 'thinkingDepth'):
                 if meta.get(key):
@@ -384,8 +942,8 @@ def chat_stream(task_id):
                 }
                 if task['error']:
                     state['error'] = task['error']
-                if task['searchRounds']:
-                    state['searchRounds'] = task['searchRounds']
+                if task['toolRounds']:
+                    state['toolRounds'] = task['toolRounds']
                 meta = _extract_task_meta(task)
                 for key in ('finishReason', 'usage', 'model', 'thinkingDepth'):
                     if meta.get(key):
@@ -580,7 +1138,7 @@ def chat_poll(task_id):
             'id': task['id'], 'status': task['status'],
             'content': task['content'], 'thinking': task['thinking'],
         }
-        for key in ('error', 'searchRounds', 'finishReason', 'usage', 'preset',
+        for key in ('error', 'toolRounds', 'finishReason', 'usage', 'preset',
                      'toolSummary', 'phase', 'modifiedFiles', 'modifiedFileList',
                      'model', 'thinkingDepth', 'apiRounds'):
             if task.get(key):
@@ -601,7 +1159,7 @@ def chat_poll(task_id):
     logger.debug('[Chat] Poll %s — not in memory, checking DB', task_id[:8])
     db = get_db(DOMAIN_CHAT)
     row = db.execute(
-        'SELECT task_id,content,thinking,error,status,search_rounds,metadata FROM task_results WHERE task_id=?',
+        'SELECT task_id,content,thinking,error,status,tool_rounds,metadata FROM task_results WHERE task_id=?',
         (task_id,)
     ).fetchone()
     if row:
@@ -636,11 +1194,11 @@ def chat_poll(task_id):
         }
         if row['error']:
             r['error'] = row['error']
-        if row['search_rounds']:
+        if row['tool_rounds']:
             try:
-                r['searchRounds'] = json.loads(row['search_rounds'])
+                r['toolRounds'] = json.loads(row['tool_rounds'])
             except (json.JSONDecodeError, TypeError) as e:
-                logger.warning('[Chat] Failed to parse search_rounds in poll for task %s: %s', task_id, e, exc_info=True)
+                logger.warning('[Chat] Failed to parse tool_rounds in poll for task %s: %s', task_id, e, exc_info=True)
         for key in ('finishReason', 'usage', 'preset', 'toolSummary'):
             if _db_meta.get(key):
                 r[key] = _db_meta[key]

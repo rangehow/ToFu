@@ -165,10 +165,10 @@ def get_conversation(conversation_id, include_tool_details=True, current_conv_id
                     thinking = thinking[:3000] + f"\n... [thinking truncated, {len(msg['thinking'])} chars total]"
                 parts.append(f"\n  [Thinking]: {thinking}")
 
-            # Tool rounds (searchRounds)
-            search_rounds = msg.get('searchRounds', [])
-            if search_rounds:
-                parts.append(_format_tool_rounds(search_rounds, include_tool_details))
+            # Tool rounds (toolRounds)
+            tool_rounds = msg.get('toolRounds', [])
+            if tool_rounds:
+                parts.append(_format_tool_rounds(tool_rounds, include_tool_details))
 
         parts.append("")  # blank line between messages
 
@@ -202,7 +202,7 @@ def _extract_text(content):
 
 
 def _format_tool_rounds(rounds, include_details=True):
-    """Format tool call rounds from searchRounds data."""
+    """Format tool call rounds from toolRounds data."""
     if not rounds:
         return ""
 
@@ -255,7 +255,7 @@ def _extract_result_text(result):
     if isinstance(result, str):
         return result
     if isinstance(result, dict):
-        # Common patterns in searchRounds results
+        # Common patterns in toolRounds results
         if 'text' in result:
             return result['text']
         if 'content' in result:

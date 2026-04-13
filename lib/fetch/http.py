@@ -4,6 +4,7 @@ Contains the low-level HTTP request logic, Playwright fallback,
 browser extension fallback, and the _HttpError exception.
 """
 
+import threading
 import time
 from urllib.parse import urlparse
 
@@ -20,6 +21,40 @@ from lib.fetch.utils import (
 from lib.log import get_logger
 
 logger = get_logger(__name__)
+
+# ── Browser fallback concurrency cap ──
+# The browser extension dispatches fetches via real browser tabs (parallel).
+# The poll-based queue can handle many concurrent commands; the semaphore
+# just prevents extreme scenarios (30+ tabs) from overwhelming the browser.
+_BROWSER_CONCURRENCY_LIMIT = 16
+_browser_semaphore = threading.Semaphore(_BROWSER_CONCURRENCY_LIMIT)
+
+# ── Browser fallback timeout ──
+# Reduced from 25s to 15s.  Most successful browser fetches complete in
+# <5s; the 25s timeout only helped hopeless cases that returned empty.
+_BROWSER_TIMEOUT = 15
+
+# ── Domains where browser fallback consistently fails (paywalls, login walls) ──
+# These domains return 403 to servers AND return empty/paywall via browser.
+# Skipping browser fallback for these saves 15-25s per URL.
+_BROWSER_SKIP_DOMAINS = frozenset({
+    'medium.com',            # paywall — browser gets metered wall
+    'stackademic.com',       # Medium-hosted, same paywall
+    'towardsdatascience.com',  # Medium-hosted
+    'betterprogramming.pub',   # Medium-hosted
+    'levelup.gitconnected.com',  # Medium-hosted
+    'tandfonline.com',       # academic paywall
+    'preprints.org',         # login wall
+    'ouci.dntb.gov.ua',      # unreliable government archive
+    'ieeexplore.ieee.org',   # academic paywall
+    'dl.acm.org',            # academic paywall
+    'link.springer.com',     # academic paywall
+    'wiley.com',             # academic paywall
+    'onlinelibrary.wiley.com',  # academic paywall
+    'jstor.org',             # academic paywall
+    'nature.com',            # academic paywall
+    'science.org',           # academic paywall
+})
 
 __all__ = [
     'HttpError',
@@ -156,6 +191,9 @@ def try_browser_fetch(url, max_chars, reason='unknown'):
     适用于 401/403 场景：服务端没有认证信息，但用户在浏览器中已登录该站点。
     浏览器扩展会在后台标签页打开 URL，提取文本后关闭标签页。
 
+    Concurrency is capped at _BROWSER_CONCURRENCY_LIMIT to avoid overwhelming
+    the browser extension.  Excess requests are skipped instantly.
+
     Args:
         url: URL to fetch.
         max_chars: Maximum characters to return.
@@ -163,19 +201,43 @@ def try_browser_fetch(url, max_chars, reason='unknown'):
                 'ConnectionError'). Logged at INFO level for diagnostics.
     """
     try:
+        # ── Skip known-paywall domains that never succeed via browser ──
+        domain = urlparse(url).netloc.lower()
+        # Strip 'www.' prefix for matching
+        bare_domain = domain[4:] if domain.startswith('www.') else domain
+        if bare_domain in _BROWSER_SKIP_DOMAINS or any(
+                bare_domain.endswith('.' + d) for d in _BROWSER_SKIP_DOMAINS):
+            with _browser_fallback_lock:
+                _browser_fallback_stats['skipped'] += 1
+            logger.debug('[Fetch] Browser fallback skipped (paywall domain %s) — %s',
+                         bare_domain, url[:80])
+            return None
+
         from lib.browser import fetch_url_via_browser, is_extension_connected
         if not is_extension_connected():
             with _browser_fallback_lock:
                 _browser_fallback_stats['skipped'] += 1
             logger.debug('[Fetch] Browser fallback skipped (extension not connected) — %s', url[:80])
             return None
+
+        # ── Concurrency cap: skip if too many browser fetches in flight ──
+        if not _browser_semaphore.acquire(blocking=False):
+            with _browser_fallback_lock:
+                _browser_fallback_stats['skipped'] += 1
+            logger.debug('[Fetch] Browser fallback skipped (concurrency limit %d) — %s',
+                         _BROWSER_CONCURRENCY_LIMIT, url[:80])
+            return None
+
         with _browser_fallback_lock:
             _browser_fallback_stats['attempts'] += 1
             attempt_num = _browser_fallback_stats['attempts']
         logger.info('[Fetch] Browser fallback ATTEMPT #%d reason=%s — %s',
                     attempt_num, reason, url[:100])
         bf_t0 = time.time()
-        text = fetch_url_via_browser(url, max_chars=max_chars, timeout=25)
+        try:
+            text = fetch_url_via_browser(url, max_chars=max_chars, timeout=_BROWSER_TIMEOUT)
+        finally:
+            _browser_semaphore.release()
         bf_elapsed = time.time() - bf_t0
         if text:
             # ── Guard: browser extension may also return bot-protection pages ──

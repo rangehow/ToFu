@@ -14,7 +14,7 @@ logger = get_logger(__name__)
 #  Schema Version Cache — Skip redundant DDL on subsequent startups
 # ═══════════════════════════════════════════════════════════════════════
 
-_SCHEMA_VERSION = 7  # Increment when tables/columns/indexes change
+_SCHEMA_VERSION = 8  # Increment when tables/columns/indexes change
 
 
 def _column_exists(conn, table, column):
@@ -189,7 +189,7 @@ def _init_chat_schema(conn):
             thinking TEXT NOT NULL DEFAULT '',
             error TEXT,
             status TEXT NOT NULL DEFAULT 'done',
-            search_rounds TEXT,
+            tool_rounds TEXT,
             search_results TEXT,
             metadata TEXT,
             created_at BIGINT NOT NULL,
@@ -213,12 +213,40 @@ def _init_chat_schema(conn):
     # Migrations — check columns
     for col, sql in {
         'search_results': "ALTER TABLE task_results ADD COLUMN search_results TEXT",
-        'search_rounds':  "ALTER TABLE task_results ADD COLUMN search_rounds TEXT",
         'metadata':       "ALTER TABLE task_results ADD COLUMN metadata TEXT",
     }.items():
         if not _column_exists(conn, 'task_results', col):
             cur.execute(sql)
             logger.info('[DB] Migration: added column %s to task_results', col)
+
+    # ── Migration: rename search_rounds → tool_rounds ──
+    if _column_exists(conn, 'task_results', 'search_rounds') and not _column_exists(conn, 'task_results', 'tool_rounds'):
+        cur.execute('ALTER TABLE task_results RENAME COLUMN search_rounds TO tool_rounds')
+        logger.info('[DB] Migration: renamed column search_rounds → tool_rounds in task_results')
+    elif not _column_exists(conn, 'task_results', 'tool_rounds'):
+        cur.execute('ALTER TABLE task_results ADD COLUMN tool_rounds TEXT')
+        logger.info('[DB] Migration: added column tool_rounds to task_results')
+
+    # ── Migration: rename searchRounds → toolRounds inside conversations messages JSON ──
+    # The messages JSONB column stores assistant messages with a 'searchRounds' key.
+    # Rename all occurrences to 'toolRounds' in a single SQL update.
+    # This is idempotent — only updates messages that still have 'searchRounds'.
+    try:
+        cur.execute("""
+            UPDATE conversations
+            SET messages = REPLACE(messages::text, '"searchRounds":', '"toolRounds":')::jsonb
+            WHERE messages::text LIKE '%"searchRounds":%'
+        """)
+        _migrated_count = cur.rowcount
+        if _migrated_count > 0:
+            logger.info('[DB] Migration: renamed searchRounds → toolRounds in %d conversation(s)', _migrated_count)
+        conn.commit()
+    except Exception as _sr_err:
+        logger.warning('[DB] Migration: searchRounds→toolRounds in conversations failed (non-fatal): %s', _sr_err)
+        try:
+            conn._conn.rollback()
+        except Exception:
+            pass
 
     for col, sql in {
         'settings':  "ALTER TABLE conversations ADD COLUMN settings JSONB NOT NULL DEFAULT '{}'::jsonb",
@@ -266,6 +294,19 @@ def _init_chat_schema(conn):
         )
     ''')
     cur.execute('CREATE INDEX IF NOT EXISTS idx_agent_sessions_backend ON agent_sessions(backend)')
+
+    # ── Message queue: server-side pending message queue ──
+    _safe_create_table(cur, '''
+        CREATE TABLE IF NOT EXISTS message_queue (
+            id TEXT PRIMARY KEY,
+            conv_id TEXT NOT NULL,
+            payload TEXT NOT NULL DEFAULT '{}',
+            config TEXT NOT NULL DEFAULT '{}',
+            position INTEGER NOT NULL DEFAULT 1,
+            created_at BIGINT NOT NULL
+        )
+    ''')
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_mq_conv ON message_queue(conv_id, position)')
 
     # Seed default user
     cur.execute("""

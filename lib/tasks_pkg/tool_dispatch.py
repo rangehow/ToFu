@@ -200,7 +200,7 @@ def parse_tool_calls(
     assistant_msg: dict[str, Any],
     task: dict[str, Any],
     round_num: int,
-    search_round_num: int,
+    tool_round_num: int,
     project_enabled: bool,
     early_announced: dict[str, tuple] | None = None,
 ) -> tuple[list[tuple], int]:
@@ -212,7 +212,7 @@ def parse_tool_calls(
 
     When ``early_announced`` is provided (from ``StreamingToolAccumulator``),
     tool calls that were already announced during streaming are NOT re-emitted.
-    Their existing round entries (already in ``task['searchRounds']``) are
+    Their existing round entries (already in ``task['toolRounds']``) are
     reused, avoiding duplicate ``tool_start`` events on the frontend.
 
     Parameters
@@ -220,11 +220,11 @@ def parse_tool_calls(
     assistant_msg : dict
         The assistant message with a ``tool_calls`` list.
     task : dict
-        Live task dict — mutated (``searchRounds`` appended, events emitted).
+        Live task dict — mutated (``toolRounds`` appended, events emitted).
     round_num : int
         Zero-based loop iteration index (for logging).
-    search_round_num : int
-        Current search round counter (updated as search-like rounds are created).
+    tool_round_num : int
+        Current tool round counter (updated as tool rounds are created).
     project_enabled : bool
         Whether project-mode is active.
     early_announced : dict, optional
@@ -235,7 +235,7 @@ def parse_tool_calls(
     Returns
     -------
     tuple[list, int]
-        ``(parsed_tcs, search_round_num)`` where ``parsed_tcs`` is a list of
+        ``(parsed_tcs, tool_round_num)`` where ``parsed_tcs`` is a list of
         7-tuples: ``(tc, fn_name, tc_id, fn_args, rn, round_entry,
         _args_parse_error)``.
     """
@@ -321,9 +321,9 @@ def parse_tool_calls(
         tc_args_str = json.dumps(fn_args, ensure_ascii=False) if fn_args else '{}'
 
         # ── Build round entry + event via dispatch-dict helper ──
-        search_round_num, round_entry, event_payload = _build_tool_round_entry(
+        tool_round_num, round_entry, event_payload = _build_tool_round_entry(
             fn_name, fn_args, tc_id, tc_args_str,
-            search_round_num, project_enabled,
+            tool_round_num, project_enabled,
         )
         rn = round_entry['roundNum']
         # ★ Tag with LLM round so frontend can batch tool calls from the
@@ -335,7 +335,7 @@ def parse_tool_calls(
             round_entry['assistantContent'] = _assistant_content
             event_payload['assistantContent'] = _assistant_content
             _ac_tagged = True
-        task['searchRounds'].append(round_entry)
+        task['toolRounds'].append(round_entry)
         append_event(task, event_payload)
 
         # Swarm tools need extra bookkeeping for sub-agent event routing
@@ -344,7 +344,7 @@ def parse_tool_calls(
 
         parsed_tcs.append((tc, fn_name, tc_id, fn_args, rn, round_entry, _args_parse_error))
 
-    return parsed_tcs, search_round_num
+    return parsed_tcs, tool_round_num
 
 
 def emit_tool_exec_phase(
@@ -436,7 +436,7 @@ def execute_tool_pipeline(
     Parameters
     ----------
     task : dict
-        Live task dict — mutated (events appended, searchRounds updated).
+        Live task dict — mutated (events appended, toolRounds updated).
     parsed_tcs : list[tuple]
         7-tuples from :func:`parse_tool_calls`.
     cfg : dict
@@ -514,16 +514,31 @@ def execute_tool_pipeline(
                     cached_is_search = False
                     cached_source = 'dedup'
                 is_prefetch = cached_source == 'prefetch'
+                # Compute content length for logging without materializing
+                # a massive str() for screenshot dicts (which contain base64)
+                if isinstance(cached_content, dict) and cached_content.get('__screenshot__'):
+                    _log_len = cached_content.get('compressedSize', 0)
+                    _log_suffix = ' (image)'
+                else:
+                    _log_len = len(str(cached_content))
+                    _log_suffix = ''
                 logger.info(
                     '[Task %s] conv=%s %s HIT: %s with same args at round %d — '
-                    'returning %s result (%d chars) instead of re-executing',
+                    'returning %s result (%d chars%s) instead of re-executing',
                     tid, task.get('convId', ''),
                     'PREFETCH' if is_prefetch else 'DEDUP',
                     fn_name, round_num,
                     'prefetched' if is_prefetch else 'cached',
-                    len(str(cached_content)),
+                    _log_len, _log_suffix,
                 )
-                dedup_content = cached_content if isinstance(cached_content, str) else str(cached_content)
+                # Preserve __screenshot__ dicts as-is so the post-phase
+                # can detect them and convert to image_url blocks.
+                # Converting to str() would dump 800K+ of base64 text
+                # directly into the context, blowing up the token count.
+                if isinstance(cached_content, dict) and cached_content.get('__screenshot__'):
+                    dedup_content = cached_content  # keep as dict
+                else:
+                    dedup_content = cached_content if isinstance(cached_content, str) else str(cached_content)
                 # Update round_entry to show cached/prefetched status
                 if round_entry:
                     # Use stored display_results for web_search if available

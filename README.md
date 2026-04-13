@@ -147,7 +147,7 @@ The core experience: pick a model from the dropdown, type a message, get a strea
 
 **When you want to try different models on the same question** — switch models mid-conversation. Each message remembers which model generated it, so you can compare outputs naturally. Branch any assistant message to explore alternative responses from different models or with different parameters, all in the same thread.
 
-**When you're working in Chinese but need English sources** — enable auto-translation per conversation. Your Chinese questions are translated to English for the model, and the English response is translated back. The original is always preserved — click to toggle.
+**When you're working in Chinese but need English sources** — enable auto-translation per conversation. Your Chinese questions are translated to English for the model, and the English response is translated back. The original is always preserved — click to toggle. For faster, cheaper translation, connect a dedicated [machine translation provider](#-machine-translation) instead of using the LLM.
 
 **When conversations get long and you lose context** — Tofu's 3-layer compaction pipeline handles this automatically:
 1. **Micro-compaction** (zero cost): old tool results are replaced with summaries, keeping only the recent "hot tail"
@@ -250,6 +250,28 @@ Some tasks are too big for a single agent. The swarm system lets a master orches
 **Agent roles** — each agent gets role-specific system prompts, model tiers, and scoped tool access. A "researcher" agent gets search tools; a "coder" agent gets project tools; a "reviewer" gets read-only access.
 
 **Rate limiting** — a shared semaphore prevents agents from overwhelming the LLM API with concurrent requests. Automatic exponential backoff on 429s.
+
+---
+
+### 🌐 Machine Translation
+
+When you translate frequently and want faster, cheaper results — connect a dedicated machine translation provider instead of using the LLM for translation.
+
+**How it works:** By default, Tofu uses a cheap LLM model for auto-translation (which understands context but is slower). When you configure a machine translation provider, all translation requests are routed directly to the MT API — typically **3–5× faster** and **10–100× cheaper** than LLM-based translation, with no prompt overhead.
+
+**Setup:** Go to **Settings → 🌐 翻译 (Translation)**, enable machine translation, and choose a provider:
+
+| Provider | Description | How to get API Key |
+|---|---|---|
+| **NiuTrans (小牛翻译)** | Chinese MT specialist, supports 300+ language pairs | [niutrans.com/cloud/overview](https://niutrans.com/cloud/overview) |
+| **Custom** | Any compatible REST API | Enter your endpoint and credentials |
+
+NiuTrans is the default provider with excellent Chinese↔English quality. Click **"申请 API Key"** in the settings card to register.
+
+**Fallback behavior:**
+- **No MT configured** → uses the cheap LLM model (default, works out of the box)
+- **MT configured** → uses the MT API; if it fails, automatically falls back to LLM translation
+- **Code block protection** → fenced (` ```...``` `) and inline (`` `...` ``) code blocks are extracted before translation and restored after, preventing MT from corrupting code
 
 ---
 
@@ -438,25 +460,33 @@ All configuration is done through the **⚙️ Settings** panel (top-right gear 
 | **🔗 Providers** | API keys, endpoints, model lists, multi-key rotation, auto-discovery |
 | **📦 Display** | Which models appear in dropdowns, default model, fallback model |
 | **🔍 Search & Fetch** | Result count, timeouts, character limits, blocked domains, content filter |
+| **🌐 Translation** | Machine translation provider (NiuTrans / Custom), API key, endpoint |
 | **🌐 Network** | HTTP/HTTPS proxy, bypass domains |
 | **🐦 Feishu** | App credentials, default project, allowed users |
 | **`</>` Advanced** | Price overrides, cache management, server info |
 
 ### Environment Variables (fallback)
 
-For headless/Docker setups, you can configure via environment variables. The Settings UI always takes priority.
+For headless/Docker setups, you can configure via environment variables instead of the Settings UI. Copy the template and edit:
 
 ```bash
 cp .env.example .env
+vim .env   # fill in your values
 ```
 
-| Variable | Description | Example |
+The `.env.example` file documents all supported variables. Key ones:
+
+| Variable | Description | Default |
 |---|---|---|
-| `LLM_API_KEY` | API key (fallback) | `sk-abc123...` |
-| `LLM_BASE_URL` | Endpoint (fallback) | `https://api.openai.com/v1` |
-| `LLM_MODEL` | Default model (fallback) | `gpt-4o` |
+| `LLM_API_KEYS` | Comma-separated API keys | *(none)* |
+| `LLM_BASE_URL` | API endpoint | `https://api.openai.com/v1` |
+| `LLM_MODEL` | Default model | `gpt-4o` |
 | `PORT` | Server port | `15000` |
 | `BIND_HOST` | Bind address | `0.0.0.0` |
+| `TUNNEL_TOKEN` | Auth token for public tunnel access | *(disabled)* |
+| `TRADING_ENABLED` | Enable trading module (`1`/`0`) | `0` |
+
+> **Priority:** Settings UI > `.env` file > system environment > defaults. You can also `export` variables directly — `.env` is just a convenience.
 
 ---
 
@@ -488,6 +518,7 @@ cp .env.example .env
 │   ├── feishu/                Feishu bot integration
 │   ├── scheduler/             Task scheduling (cron, proactive agents)
 │   ├── image_gen.py           Image generation (multi-model dispatch)
+│   ├── mt_provider.py         Machine translation providers (NiuTrans, custom)
 │   ├── desktop_agent.py       Desktop automation agent
 │   └── ...
 │

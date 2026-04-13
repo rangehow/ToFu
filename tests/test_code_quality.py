@@ -120,42 +120,50 @@ class TestSilentCatches:
     # Each entry must have a comment explaining why it's acceptable.
     ACCEPTABLE = {
         # Platform detection — expected to fail on non-Linux
-        ('lib/compat.py', 83), ('lib/compat.py', 127), ('lib/compat.py', 133),
-        ('lib/compat.py', 135), ('lib/compat.py', 160), ('lib/compat.py', 170),
-        ('lib/compat.py', 227),
+        ('lib/compat.py', 83), ('lib/compat.py', 112), ('lib/compat.py', 139),
+        ('lib/compat.py', 145), ('lib/compat.py', 147), ('lib/compat.py', 172),
+        ('lib/compat.py', 182), ('lib/compat.py', 239),
         # Encoding fallback loops — continue to try next encoding
-        ('lib/doc_parser.py', 679), ('lib/file_reader.py', 304),
+        ('lib/doc_parser.py', 679), ('lib/file_reader.py', 305),
         # /proc comm read — process may exit between checks, harmless
-        ('lib/project_mod/tools.py', 1053),
+        ('lib/project_mod/tools.py', 1056),
         # /proc walking — processes exit between checks, completely harmless
-        ('lib/project_mod/tools.py', 1056), ('lib/project_mod/tools.py', 1083),
+        ('lib/project_mod/tools.py', 1059), ('lib/project_mod/tools.py', 1086),
         # stdin pipe inode fstat — may fail if pipe not ready
-        ('lib/project_mod/tools.py', 1134),
+        ('lib/project_mod/tools.py', 1137),
         # select on fds — fd may already be closed
-        ('lib/project_mod/tools.py', 1163),
+        ('lib/project_mod/tools.py', 1166),
         # Pipe I/O in non-blocking mode — BlockingIOError is expected
-        ('lib/project_mod/tools.py', 1176), ('lib/project_mod/tools.py', 1185),
-        ('lib/project_mod/tools.py', 1191),
+        ('lib/project_mod/tools.py', 1179), ('lib/project_mod/tools.py', 1188),
+        ('lib/project_mod/tools.py', 1194),
         # proc.stdin.close() — expected OSError during cleanup
-        ('lib/project_mod/tools.py', 1217),
+        ('lib/project_mod/tools.py', 1220),
         # proc.kill() — process may have already exited
-        ('lib/project_mod/tools.py', 1238),
+        ('lib/project_mod/tools.py', 1241),
         # fd.close() in finally — harmless cleanup
-        ('lib/project_mod/tools.py', 1248),
+        ('lib/project_mod/tools.py', 1251),
         # proc.wait TimeoutExpired — kill and wait in cleanup
-        ('lib/project_mod/tools.py', 1252),
+        ('lib/project_mod/tools.py', 1255),
         # os.stat in snapshot loop — files may vanish during walk
         ('lib/project_mod/tools.py', 810),
         # bytes decode fallback — keep as raw bytes if not valid text
-        ('lib/project_mod/tools.py', 1579),
+        ('lib/project_mod/tools.py', 1598),
         # grep count parsing — non-numeric lines in grep -c output
-        ('lib/project_mod/read_tools.py', 406),
+        ('lib/project_mod/read_tools.py', 486),
         # Cross-DC probe — FileNotFoundError is the EXPECTED outcome (measuring latency)
         ('lib/cross_dc.py', 238),
-        # project_error_tracker — standalone module, JSON parse-or-skip in log parsing
-        ('lib/project_error_tracker.py', 257),
+        # Cross-DC probe — OSError when mount point is inaccessible
+        ('lib/cross_dc.py', 241),
+        # Temp file cleanup on failure — file may already be gone
+        ('lib/project_mod/modifications.py', 36),
+        # project_error_tracker — standalone module, parse-or-skip in log/JSON parsing
+        ('lib/project_error_tracker.py', 257), ('lib/project_error_tracker.py', 292),
+        # doc_parser — date format fallback for xls cells
+        ('lib/doc_parser.py', 134),
+        # tool_display — URL parse fallback
+        ('lib/tasks_pkg/tool_display.py', 56),
         # daily_report — filename parsing in directory listing loop
-        ('routes/daily_report.py', 1281),
+        ('routes/daily_report.py', 1322),
     }
 
     def test_no_silent_catches_in_lib(self):

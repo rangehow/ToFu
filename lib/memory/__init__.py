@@ -4,10 +4,10 @@ Façade package — all public API is re-exported here::
 
     from lib.memory import create_memory, update_memory, delete_memory, merge_memories
     from lib.memory import list_all_memories, get_memory, build_memory_context
-    from lib.memory import ALL_MEMORY_TOOLS, MEMORY_TOOL_NAMES
+    from lib.memory import ALL_MEMORY_TOOLS, MEMORY_TOOL_NAMES, SEARCH_MEMORIES_TOOL
     from lib.memory import MEMORY_ACCUMULATION_INSTRUCTIONS
     from lib.memory import MEMORY_ACCUMULATION_INSTRUCTIONS_COMPACT
-    from lib.memory import filter_relevant_memories
+    from lib.memory import filter_relevant_memories, search_memories
 """
 
 from lib._pkg_utils import build_facade

@@ -239,14 +239,13 @@ def _inject_system_contexts(messages, project_path, project_enabled,
 
       1. Project context (CLAUDE.md, file tree) — prepended, changes on file edits
       2. Static guidance (FRC, tool usage, output) — SEPARATE BLOCK, never changes
-      3. Compact memory instructions — static, ~400 chars
+      3. Memory count hint + compact instructions — count is dynamic, instructions static
       4. Swarm prompt — static when swarm is enabled
       5. Session memory — changes across turns (least cacheable)
 
-    **Memory listing** (the `<available_memories>` XML index) is NO LONGER injected
-    here.  It is injected into the **last user message** by
-    ``inject_memory_to_user()`` in the orchestrator's main loop.  This prevents
-    memory CRUD operations from breaking the prompt cache.
+    The memory count hint (e.g. "You have 30 accumulated memories...") is
+    injected here in the system message alongside compact memory instructions,
+    NOT in the user message.
 
     IMPORTANT: Context is ALWAYS injected into the system message.  Each task
     receives fresh messages from the frontend (which only has the user's custom
@@ -309,15 +308,31 @@ def _inject_system_contexts(messages, project_path, project_enabled,
         _append_to_system_message(messages, _static_guidance,
                                   as_separate_block=True)
 
-    # ★ 3. Compact memory accumulation instructions (static, ~400 chars)
-    #   Only the HOW-TO-USE instructions stay in the system message.
-    #   The dynamic memory listing (<available_memories> index) is injected
-    #   into the user message by inject_memory_to_user() — see orchestrator.
+    # ★ 3. Compact memory accumulation instructions + memory count hint
+    #   Both the HOW-TO-USE instructions and the dynamic count hint
+    #   ("You have N accumulated memories...") go into the system message.
     if has_real_tools:
         from lib.memory import MEMORY_ACCUMULATION_INSTRUCTIONS_COMPACT
+
+        # Build memory count hint (dynamic, changes on CRUD)
+        _pp = project_path if project_enabled else None
+        def _load_memory_hint():
+            from lib.memory import build_memory_context
+            return build_memory_context(project_path=_pp)
+
+        if _cid:
+            _mem_hint = _get_cached_or_compute(
+                _cid, 'memory_hint', _load_memory_hint)
+        else:
+            _mem_hint = _load_memory_hint() or ''
+
+        _mem_block = MEMORY_ACCUMULATION_INSTRUCTIONS_COMPACT
+        if _mem_hint:
+            _mem_block = _mem_hint + '\n\n' + _mem_block
+
         _append_to_system_message(
             messages,
-            _wrap_system_reminder(MEMORY_ACCUMULATION_INSTRUCTIONS_COMPACT))
+            _wrap_system_reminder(_mem_block))
 
     # ★ 4. Swarm system prompt injection
     if swarm_enabled and project_enabled:
@@ -369,7 +384,7 @@ Use `depends_on: [0]` only when a task truly needs another's output (rare — pr
 #  Memory-to-user-message injection
 # ═══════════════════════════════════════════════════════════════════════════════
 
-_MEMORY_MARKER = '<available_memories>'
+_MEMORY_MARKER = '<available_memories>'  # Legacy marker for stripping old listings
 
 
 def _extract_last_user_text(messages: list) -> str:
@@ -413,86 +428,38 @@ def inject_memory_to_user(messages: list, project_path: str = None,
                            conv_id: str = '',
                            task: dict = None,
                            round_num: int = 0):
-    """Inject the memory listing into the last user message.
+    """Strip legacy <available_memories> listings from user messages.
 
-    Called AFTER all other user message modifications (planner replacement,
-    critic messages, attachments, search addendum) so it always operates
-    on the final user message content.
-
-    Uses BM25 relevance filtering: extracts the user message text as a query,
-    scores memories against it, and includes only the top-K most relevant ones.
-
-    ★ CACHE OPTIMIZATION: Only inject on round 0.  On subsequent rounds,
-    the memory listing was already injected in R0 and is part of the cached
-    prefix.  Re-injecting (strip+replace) risks changing the prefix bytes
-    and causing a full cache miss.  Memories don't change within a task.
+    Memory count hint is now injected into the system message by
+    _inject_system_contexts() (step 3).  This function only handles
+    backward-compat cleanup of old-format listings that may exist in
+    persisted conversation history.
 
     Args:
         messages: The messages list (mutated in-place).
-        project_path: Path to project for project-scoped memories.
-        project_enabled: Whether project mode is active.
+        project_path: Unused (kept for backward compat).
+        project_enabled: Unused (kept for backward compat).
         memory_enabled: Whether memory is enabled in settings.
-        has_real_tools: Whether the task has real tools (memory CRUD needs tools).
-        conv_id: Conversation ID for cache scoping.
-        task: Task dict (may contain prefetch futures).
+        has_real_tools: Whether the task has real tools.
+        conv_id: Unused (kept for backward compat).
+        task: Unused (kept for backward compat).
         round_num: Current round within the task (0-based).
     """
     if not memory_enabled and not has_real_tools:
         return
     if round_num > 0:
-        return  # ★ Preserve cached prefix — memories already injected in R0
-
-    _pp = project_path if project_enabled else None
-
-    # Extract user message text as BM25 query BEFORE injecting memories
-    query_text = _extract_last_user_text(messages)
-
-    # ── Helper: try to get prefetched result, else compute synchronously ──
-    def _get_prefetched_memory():
-        if task and task.get('_prefetch_memory'):
-            future = task['_prefetch_memory']
-            if future.done():
-                try:
-                    return future.result(timeout=0)
-                except Exception as e:
-                    logger.debug('[MemoryToUser] Prefetch failed, computing: %s', e)
-        return None
-
-    # Build memory context with BM25 filtering
-    def _load_memory():
-        from lib.memory import build_memory_context
-        return build_memory_context(project_path=_pp, query=query_text)
-
-    # Try prefetch first (but prefetch doesn't have BM25 filtering)
-    # If prefetch available, use it directly (it covers all memories);
-    # BM25 filtering happens inside build_memory_context when query is set.
-    _cid = conv_id or ''
-    if _cid:
-        memory_ctx = _get_cached_or_compute(
-            _cid, 'memory_user', _load_memory)
-    else:
-        memory_ctx = _load_memory() or ''
-
-    if not memory_ctx:
         return
 
-    # Find last user message and inject (with dedup)
+    # Legacy cleanup only: strip old <available_memories> listings
     for i in range(len(messages) - 1, -1, -1):
         if messages[i].get('role') == 'user':
             content = messages[i].get('content', '')
-            if isinstance(content, str):
-                content = _strip_old_memory_listing(content)
-                messages[i]['content'] = content + '\n\n' + memory_ctx
+            if isinstance(content, str) and _MEMORY_MARKER in content:
+                messages[i]['content'] = _strip_old_memory_listing(content)
             elif isinstance(content, list):
-                # Remove old memory listing text blocks
                 messages[i]['content'] = [
-                    b for b in messages[i]['content']
+                    b for b in content
                     if not (isinstance(b, dict) and b.get('type') == 'text'
                             and _MEMORY_MARKER in b.get('text', ''))
                 ]
-                messages[i]['content'].append({
-                    'type': 'text',
-                    'text': '\n\n' + memory_ctx,
-                })
             return
-    logger.debug('[MemoryToUser] No user message found to inject into')

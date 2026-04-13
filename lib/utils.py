@@ -65,7 +65,7 @@ def repair_json(raw: str) -> dict:
         # Fix \u not followed by exactly 4 hex digits (e.g. \user → \\user)
         val = re.sub(r'\\u(?![0-9a-fA-F]{4})', r'\\\\u', val)
         # Fix remaining invalid escapes: \X where X is NOT one of the valid JSON escapes
-        val = re.sub(r'\\(?!["\\\\/ bfnrtu])', r'\\\\', val)
+        val = re.sub(r'\\(?!["\\\\/bfnrtu])', r'\\\\', val)
         return val
 
     s_esc = re.sub(r'"(?:[^"\\]|\\.)*"', _fix_escapes, s)

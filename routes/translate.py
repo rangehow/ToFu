@@ -471,7 +471,8 @@ def _do_translate(task_id, text, target, source, conv_id, msg_idx, field):
                 if conv_id and msg_idx is not None:
                     try:
                         _commit_translation_to_db(conv_id, msg_idx, field, content,
-                                                  original_text=original_text)
+                                                  original_text=original_text,
+                                                  model='skipped')
                     except Exception as ce:
                         logger.warning('[Translate] Auto-commit failed for task %s: %s',
                                        task_id[:8], ce, exc_info=True)
@@ -531,7 +532,8 @@ def _do_translate(task_id, text, target, source, conv_id, msg_idx, field):
 
         if conv_id and msg_idx is not None:
             try:
-                _commit_translation_to_db(conv_id, msg_idx, field, content, original_text=original_text)
+                _commit_translation_to_db(conv_id, msg_idx, field, content,
+                                         original_text=original_text, model=_model)
             except Exception as ce:
                 logger.warning('[Translate] Auto-commit failed for task %s: %s', task_id[:8], ce, exc_info=True)
 
@@ -543,7 +545,8 @@ def _do_translate(task_id, text, target, source, conv_id, msg_idx, field):
         logger.error('[Translate] Task %s failed: %s', task_id[:8], e, exc_info=True)
 
 
-def _commit_translation_to_db(conv_id, msg_idx, field, translated_text, original_text=None):
+def _commit_translation_to_db(conv_id, msg_idx, field, translated_text,
+                              original_text=None, model=None):
     """Write translated content directly into the conversation's messages in DB."""
     from lib.database import get_thread_db
     db = None
@@ -579,6 +582,8 @@ def _commit_translation_to_db(conv_id, msg_idx, field, translated_text, original
             msg['translatedContent'] = translated_text
             msg['_showingTranslation'] = True
             msg['_translateDone'] = True
+            if model:
+                msg['_translateModel'] = model
         elif field == 'content':
             if not msg.get('originalContent'):
                 msg['originalContent'] = msg.get('content', '')
@@ -786,7 +791,7 @@ def translate_text():
             _model = _disp.get('model', _usage.get('model', 'unknown'))
         logger.debug('[Translate] OK %s→%s  in=%d chars  out=%d chars  model=%s',
                      source or 'auto', target, input_len, len(content), _model)
-        return jsonify({'translated': content})
+        return jsonify({'translated': content, 'model': _model})
     except Exception as e:
         logger.error('[Translate] Error translating %d-char text (target=%s): %s',
                      input_len, target, e, exc_info=True)

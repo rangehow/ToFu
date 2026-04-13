@@ -327,7 +327,7 @@ def _execute_poll_tool(tool_call: dict, timer_id: str,
             'status': 'running',
             'events': [],
             'events_lock': _threading.Lock(),
-            'searchRounds': [],
+            'toolRounds': [],
             'phase': None,
         }
 

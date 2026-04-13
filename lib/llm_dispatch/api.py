@@ -20,23 +20,6 @@ logger = get_logger(__name__)
 
 
 
-def _abortable_backoff(seconds: float, abort_check=None, interval: float = 0.5):
-    """Sleep for *seconds* but poll abort_check every *interval*.
-
-    If abort_check fires, raises AbortedError so the retry loop exits
-    without making the user wait through the entire backoff.
-    """
-    if not abort_check:
-        time.sleep(seconds)
-        return
-    from lib.llm_client import AbortedError
-    deadline = time.monotonic() + seconds
-    while time.monotonic() < deadline:
-        if abort_check():
-            raise AbortedError('User aborted during 429 backoff')
-        remaining = deadline - time.monotonic()
-        time.sleep(min(interval, max(0, remaining)))
-
 __all__ = [
     'pick_key_for_model',
     'dispatch_chat',

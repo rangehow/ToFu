@@ -184,8 +184,8 @@ function _collapseHgRoundAfterSubmit(guidanceId, responseText) {
   const conv = conversations.find(c => c.id === activeConvId);
   if (!conv) return;
   const assistantMsg = [...conv.messages].reverse().find(m => m.role === 'assistant');
-  if (!assistantMsg || !assistantMsg.searchRounds) return;
-  const round = assistantMsg.searchRounds.find(r => r.guidanceId === guidanceId);
+  if (!assistantMsg || !assistantMsg.toolRounds) return;
+  const round = assistantMsg.toolRounds.find(r => r.guidanceId === guidanceId);
   if (!round) return;
   // Transition: awaiting_human → submitted (immediately collapses card)
   round.status = 'submitted';
@@ -197,7 +197,7 @@ function _collapseHgRoundAfterSubmit(guidanceId, responseText) {
   // Force-refresh streaming UI to show collapsed state
   const buf = typeof streamBufs !== 'undefined' ? streamBufs.get(activeConvId) : null;
   if (buf) {
-    buf.searchRounds = assistantMsg.searchRounds.map(r => ({...r}));
+    buf.toolRounds = assistantMsg.toolRounds.map(r => ({...r}));
   }
   twUpdate(activeConvId);
 }
@@ -418,7 +418,7 @@ function _mpSelectBrowsed() {
   }
 }
 
-/* ★ mpApplyFolders — the new unified "Set & Scan" action.
+/* ★ mpApplyFolders — the "Set Project" action.
    First path → primary project; remaining → extra roots. */
 async function mpApplyFolders() {
   if (!_mpFolders.length) return;
@@ -429,6 +429,11 @@ async function mpApplyFolders() {
       id: generateId(), title: "New Chat", messages: [],
       createdAt: now, updatedAt: now, activeTaskId: null, projectPath: "",
     };
+    /* ★ FIX: Auto-assign to active folder when creating a conv from project modal.
+     * Without this, the conv stays uncategorized even though the user selected
+     * a folder tab before clicking New Chat → project tool → send message. */
+    const _curFolderId = typeof getActiveFolderId === 'function' ? getActiveFolderId() : null;
+    if (_curFolderId) conv.folderId = _curFolderId;
     conversations.unshift(conv);
     activeConvId = conv.id;
     /* ★ Persist immediately — the conv only exists in memory until synced.

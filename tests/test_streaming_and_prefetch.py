@@ -509,11 +509,11 @@ class TestMemoryPrefetch:
         mock_fn.assert_called_once()
 
     def test_skills_prefetch_consumed(self):
-        """Skills listing is injected into user message (not system) via inject_memory_to_user.
+        """Memory count hint is injected into the system message by _inject_system_contexts.
 
-        After the refactor, _inject_system_contexts only puts compact skill
-        instructions in the system message. The full memory listing goes into
-        the last user message via inject_memory_to_user().
+        After the refactor, both compact memory instructions AND the dynamic
+        count hint ("You have N memories...") go into the system message.
+        inject_memory_to_user() only handles legacy cleanup.
         """
         from lib.tasks_pkg.system_context import _inject_system_contexts, inject_memory_to_user
 
@@ -531,43 +531,44 @@ class TestMemoryPrefetch:
             {'role': 'user', 'content': 'Help me with flask migration'},
         ]
 
-        _inject_system_contexts(
-            messages, '/tmp/proj', True,
-            True, False, False,  # memory_enabled=True
-            has_real_tools=True,
-            conv_id='',
-            task=task,
-        )
+        with patch('lib.memory.build_memory_context',
+                   return_value='You have 42 accumulated memories from previous sessions. Use search_memories(query) to find relevant past experience.'):
+            _inject_system_contexts(
+                messages, '/tmp/proj', True,
+                True, False, False,  # memory_enabled=True
+                has_real_tools=True,
+                conv_id='',
+                task=task,
+            )
 
-        # System message should have compact skill instructions but NOT
-        # the full <available_memories> listing
+        # System message should have both compact instructions AND the count hint
         sys_content = messages[0]['content']
         if isinstance(sys_content, list):
             sys_text = '\n\n'.join(b['text'] for b in sys_content if isinstance(b, dict))
         else:
             sys_text = sys_content
         assert 'memory_accumulation' in sys_text
+        assert '42 accumulated memories' in sys_text
         assert '<available_memories>' not in sys_text
 
-        # Now inject skills into user message (simulates orchestrator flow)
-        with patch('lib.memory.build_memory_context',
-                   return_value='<available_memories>\nSkill listing here\n</available_memories>'):
-            inject_memory_to_user(
-                messages,
-                project_path='/tmp/proj',
-                project_enabled=True,
-                memory_enabled=True,
-                has_real_tools=True,
-                conv_id='test-conv',
-            )
+        # inject_memory_to_user should NOT add anything to user message
+        # (it only handles legacy cleanup now)
+        inject_memory_to_user(
+            messages,
+            project_path='/tmp/proj',
+            project_enabled=True,
+            memory_enabled=True,
+            has_real_tools=True,
+            conv_id='test-conv',
+        )
 
-        # User message should now contain the memory listing
+        # User message should NOT contain the memory hint (it's in system now)
         user_msg = messages[-1]
         assert user_msg['role'] == 'user'
         user_text = user_msg.get('content', '')
         if isinstance(user_text, list):
             user_text = '\n'.join(b.get('text', '') for b in user_text if isinstance(b, dict))
-        assert '<available_memories>' in user_text
+        assert 'accumulated memories' not in user_text
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

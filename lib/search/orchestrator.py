@@ -1,21 +1,25 @@
 """lib/search/orchestrator.py — Parallel multi-engine search pipeline.
 
 Pipeline order (cheap → expensive):
-  1. 5 engines in parallel (DDG ×2 + Brave + Bing + SearXNG) → ~72 raw
-  2. URL dedup
-  3. Content dedup (Jaccard on title+snippet shingles)
-  4. Page fetch — "race to N" concurrent fetch (stops once enough fast pages complete)
+  1+4 MERGED: engines fire in parallel; as each engine returns results,
+      URLs are immediately deduped and submitted to the fetch pool.
+      Page fetching starts as soon as the FIRST engine responds (~0.7s),
+      overlapping with slower engines (SearXNG, retries, etc.).
+  2. URL dedup — runs incrementally as each engine batch arrives
+  3. Content dedup (Jaccard on title+snippet shingles) — runs once after
+     all engines complete, only on not-yet-submitted URLs
   5. LLM content filter — relevance verdict + noise removal (parallel LLM calls)
   6. BM25 rerank — on cleaned full text → top-N (pure Python, no API call)
   7. Format for model (in executor, not here)
 """
 # HOT_PATH
 
+import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 
 import lib as _lib  # module ref for hot-reload
-from lib.fetch import fetch_contents_for_results
+from lib.fetch import fetch_page_content
 from lib.fetch.content_filter import IRRELEVANT_SENTINEL, filter_web_contents_batch
 from lib.log import get_logger
 from lib.search.browser_fallback import search_via_browser
@@ -45,67 +49,127 @@ class SearchResultList(list):
     _engine_breakdown = None
 
 
+def _url_dedup_key(url: str) -> str:
+    """Normalise a URL into a dedup key."""
+    return url.lower().rstrip('/').replace('https://', '').replace('http://', '')[:150]
+
+
 def perform_web_search(query, max_results=None, user_question=''):
-    """Run all search engines in parallel, then progressively narrow results.
+    """Run search engines and page fetches in an overlapping streaming pipeline.
+
+    As each engine returns results, its URLs are immediately deduped and
+    submitted to the page-fetch thread pool — no waiting for slower engines.
+    This means the first page fetch starts at ~0.7s (when DDG returns)
+    instead of ~11s (when SearXNG finally times out).
 
     Args:
         query: Search query string.
-        max_results: Max results to return. Defaults to FETCH_TOP_N (configurable
-                     via Settings → Search → "Top N Results").
-        user_question: The user's original question (true intent). Used by the
-                       LLM content filter to judge relevance.
+        max_results: Max results to return. Defaults to FETCH_TOP_N.
+        user_question: The user's original question (true intent).
 
     Returns:
-        list[dict]: Search results.  When the list is empty, a ``_search_diag``
-        attribute is attached with diagnostic info about *why* no results
-        were found (network errors vs genuinely empty).
-
-    7-step pipeline (cheap operations first, expensive last):
-      Step 1: 5 engines in parallel (DDG 20 + Brave 20 + Bing 20 + DDG-API 6 + SearXNG 6 = 72 max)
-      Step 2: URL dedup — normalize and deduplicate by URL
-      Step 3: Content dedup — Jaccard similarity on title+snippet shingles (CJK bigrams + Latin words)
-      Step 4: Page fetch — concurrent HTTP requests for full page content
-      Step 5: LLM content filter — relevance verdict (vs user question) + noise removal (parallel)
-      Step 6: BM25 rerank — on LLM-cleaned text → top max_results
-      Step 7: Format for model (in executor, not here)
+        SearchResultList: Search results with diagnostics.
     """
     pipeline_t0 = time.time()
-    step_timings = {}  # step_name → elapsed_seconds
+    step_timings = {}
 
     if max_results is None:
         max_results = _lib.FETCH_TOP_N
-    all_results = []
-    engine_counts = {}      # engines that returned results
-    engine_timings = {}     # engine_name → elapsed_seconds
-    engine_errors = {}      # engines that raised exceptions
-    engine_empty = []       # engines that returned [] without error
+
+    # ── Shared state for the streaming pipeline ──
+    # All access is protected by _lock since engine callbacks and
+    # the fetch pool run on different threads.
+    _lock = threading.Lock()
+    seen_urls: set[str] = set()              # URL dedup keys already seen
+    all_results: list[dict] = []             # all raw results (for diagnostics)
+    unique_results: list[dict] = []          # URL-deduped results (final list)
+    fetch_futs: dict[Future, dict] = {}      # fetch future → result dict
+    ok_count = 0                             # pages fetched successfully
+    url_timings: list[tuple] = []            # (url, elapsed, ok, chars)
+
+    target_ok = _lib.FETCH_TOP_N * 2        # Race-to-N target
+
+    engine_counts = {}
+    engine_timings = {}
+    engine_errors = {}
+    engine_empty = []
 
     ALL_ENGINE_NAMES = ['DDG-HTML', 'Brave', 'Bing', 'DDG-API', 'SearXNG']
 
+    max_chars = _lib.FETCH_MAX_CHARS_SEARCH
+    pdf_max_chars = _lib.FETCH_MAX_CHARS_PDF
+
+    # ── The fetch pool lives for the entire pipeline ──
+    # Engine threads submit fetch jobs into it as soon as results arrive.
+    fetch_pool = ThreadPoolExecutor(max_workers=16)
+
+    # Track first-fetch-submitted time for logging
+    first_fetch_submitted_at = None
+
+    def _submit_fetches_for_batch(batch: list[dict]):
+        """Dedup a batch of engine results and submit new URLs to fetch pool.
+
+        Called from engine-completion callbacks (inside the engine pool's
+        as_completed loop). Thread-safe via _lock.
+        """
+        nonlocal first_fetch_submitted_at
+        new_results = []
+        with _lock:
+            for r in batch:
+                key = _url_dedup_key(r['url'])
+                if key not in seen_urls:
+                    seen_urls.add(key)
+                    unique_results.append(r)
+                    new_results.append(r)
+            all_results.extend(batch)
+
+        if not new_results:
+            return
+
+        # Submit fetches for new URLs (outside the lock — pool.submit is fast)
+        def _do_fetch(result_dict):
+            url = result_dict['url']
+            t0 = time.time()
+            content = fetch_page_content(url, max_chars=max_chars,
+                                         pdf_max_chars=pdf_max_chars)
+            elapsed = time.time() - t0
+            return result_dict, content, elapsed
+
+        with _lock:
+            for r in new_results:
+                fut = fetch_pool.submit(_do_fetch, r)
+                fetch_futs[fut] = r
+            if first_fetch_submitted_at is None:
+                first_fetch_submitted_at = time.time()
+                logger.info('[Search] ⚡ First fetch submitted at +%.1fs (pipeline overlap started)',
+                            first_fetch_submitted_at - pipeline_t0)
+
+    # ══════════════════════════════════════════════════════
+    #  Step 1: Fire all engines + immediate fetch submission
+    # ══════════════════════════════════════════════════════
     step1_t0 = time.time()
-    engine_submit_times = {}  # track when each engine was submitted
-    with ThreadPoolExecutor(max_workers=5) as pool:
-        futs = {
-            pool.submit(search_ddg_html, query, 20): 'DDG-HTML',
-            pool.submit(search_brave, query, 20):     'Brave',
-            pool.submit(search_bing, query, 20):       'Bing',
-            pool.submit(search_ddg_api, query, 6):    'DDG-API',
-            pool.submit(search_searxng, query, 6):    'SearXNG',
+
+    with ThreadPoolExecutor(max_workers=5) as engine_pool:
+        engine_futs = {
+            engine_pool.submit(search_ddg_html, query, 20): 'DDG-HTML',
+            engine_pool.submit(search_brave, query, 20):     'Brave',
+            engine_pool.submit(search_bing, query, 20):       'Bing',
+            engine_pool.submit(search_ddg_api, query, 6):    'DDG-API',
+            engine_pool.submit(search_searxng, query, 6):    'SearXNG',
         }
-        for tag in futs.values():
-            engine_submit_times[tag] = step1_t0
         try:
-            for fut in as_completed(futs, timeout=20):
-                tag = futs[fut]
+            for fut in as_completed(engine_futs, timeout=20):
+                tag = engine_futs[fut]
                 engine_elapsed = time.time() - step1_t0
                 try:
                     r = fut.result()
                     if r:
-                        all_results.extend(r)
                         engine_counts[tag] = len(r)
                         engine_timings[tag] = engine_elapsed
-                        logger.info('[Search] ✓ %s returned %d results in %.1fs',
+                        logger.info('[Search] ✓ %s returned %d results in %.1fs → submitting fetches',
                                     tag, len(r), engine_elapsed)
+                        # Immediately dedup and submit to fetch pool
+                        _submit_fetches_for_batch(r)
                     else:
                         engine_empty.append(tag)
                         engine_timings[tag] = engine_elapsed
@@ -115,17 +179,14 @@ def perform_web_search(query, max_results=None, user_question=''):
                     engine_errors[tag] = str(e)[:200]
                     engine_timings[tag] = engine_elapsed
         except TimeoutError:
-            # as_completed() raises TimeoutError when the deadline expires
-            # while some futures are still pending.  Collect the results
-            # we already have (from the completed engines) and record the
-            # timed-out engines as errors instead of discarding everything.
-            timed_out = [futs[f] for f in futs if not f.done()]
+            timed_out = [engine_futs[f] for f in engine_futs if not f.done()]
             for name in timed_out:
                 engine_errors[name] = 'Timed out after 20s'
                 engine_timings[name] = 20.0
             logger.warning('[Search] %d/%d engines timed out (%s), keeping %d results from others. query=%r',
-                           len(timed_out), len(futs), ', '.join(timed_out),
+                           len(timed_out), len(engine_futs), ', '.join(timed_out),
                            len(all_results), query[:80])
+
     step_timings['step1_engines'] = time.time() - step1_t0
 
     if engine_counts:
@@ -140,12 +201,11 @@ def perform_web_search(query, max_results=None, user_question=''):
         time.sleep(0.8)
         retry = search_ddg_html(query, max_results)
         if retry:
-            all_results.extend(retry)
+            _submit_fetches_for_batch(retry)
         else:
-            # Try Brave as second retry
             retry_brave = search_brave(query, max_results)
             if retry_brave:
-                all_results.extend(retry_brave)
+                _submit_fetches_for_batch(retry_brave)
 
     # ── Browser fallback: server network may be down but user browser works ──
     if not all_results:
@@ -153,7 +213,7 @@ def perform_web_search(query, max_results=None, user_question=''):
         if browser_results:
             logger.info('[Search] Browser fallback produced %d results for query=%r',
                         len(browser_results), query[:80])
-            all_results.extend(browser_results)
+            _submit_fetches_for_batch(browser_results)
 
     # ── Build engine breakdown for diagnostics (before dedup) ──
     engine_breakdown = {}
@@ -164,50 +224,101 @@ def perform_web_search(query, max_results=None, user_question=''):
             'title': r.get('title', '')[:100],
         })
 
-    # ── Step 2: Deduplicate by normalised URL ──
-    step2_t0 = time.time()
-    seen, unique = set(), []
-    for r in all_results:
-        key = r['url'].lower().rstrip('/').replace('https://', '').replace('http://', '')[:150]
-        if key not in seen:
-            seen.add(key)
-            unique.append(r)
+    url_dedup_count = len(unique_results)
+    step_timings['step2_url_dedup'] = 0.0  # done incrementally, ~0 cost
 
-    url_dedup_count = len(unique)
-    step_timings['step2_url_dedup'] = time.time() - step2_t0
-
-    # ── Step 3: Content dedup — remove near-duplicate title+snippets ──
+    # ── Step 3: Content dedup on the unique results ──
+    # This runs after all engines have completed. We apply content dedup
+    # to filter near-duplicate title+snippets. URLs already submitted to
+    # the fetch pool will continue fetching (harmless — extra fetches just
+    # populate the cache). The dedup only affects which results we KEEP
+    # for the final ranking.
     step3_t0 = time.time()
-    if len(unique) > max_results:
-        unique = dedup_by_content(unique)
-    content_dedup_count = len(unique)
+    if len(unique_results) > max_results:
+        unique_results = dedup_by_content(unique_results)
+    content_dedup_count = len(unique_results)
     step_timings['step3_content_dedup'] = time.time() - step3_t0
 
-    # ── Step 4: Page fetch — get full content for all candidates ──
-    # Fetch ALL deduplicated candidates (not just top-N) so the LLM
-    # filter and embedding reranker operate on real page content.
+    # Build set of URLs we want to keep after content dedup
+    kept_urls = {r['url'] for r in unique_results}
+
+    # ══════════════════════════════════════════════════════
+    #  Step 4: Wait for fetch futures (already running!)
+    # ══════════════════════════════════════════════════════
+    # Fetches have been running in parallel with the engine calls.
+    # Now we just wait for completion with Race-to-N.
     step4_t0 = time.time()
-    unique = fetch_contents_for_results(unique, max_fetch=len(unique))
-    fetch_count = sum(1 for r in unique if r.get('full_content'))
+
+    # Snapshot current fetch futures
+    with _lock:
+        pending_futs = set(fetch_futs.keys())
+
+    if pending_futs:
+        logger.info('[Fetch] Waiting for %d in-flight fetches (started %.1fs ago), target_ok=%d',
+                    len(pending_futs), time.time() - (first_fetch_submitted_at or pipeline_t0),
+                    target_ok)
+        try:
+            for fut in as_completed(pending_futs, timeout=90):
+                try:
+                    result_dict, content, fetch_elapsed = fut.result()
+                    url = result_dict['url']
+                    ok = bool(content and len(content) > 50)
+                    chars = len(content) if content else 0
+                    url_timings.append((url, fetch_elapsed, ok, chars))
+                    if ok:
+                        result_dict['full_content'] = content
+                        ok_count += 1
+                    if fetch_elapsed > 5:
+                        logger.info('[Fetch] ⚠ SLOW url=%.80s  %.1fs  ok=%s chars=%d',
+                                    url, fetch_elapsed, ok, chars)
+                except Exception as e:
+                    logger.warning('[Fetch] fetch thread error: %s', e, exc_info=True)
+
+                # Race-to-N: count only kept URLs (after content dedup)
+                kept_ok = sum(1 for r in unique_results
+                              if r.get('full_content') and r['url'] in kept_urls)
+                if kept_ok >= target_ok:
+                    remaining = [f for f in pending_futs if not f.done()]
+                    if remaining:
+                        elapsed_so_far = time.time() - (first_fetch_submitted_at or step4_t0)
+                        logger.info('[Fetch] Race-to-N: got %d/%d pages in %.1fs, '
+                                    'cancelling %d slow fetches',
+                                    kept_ok, len(pending_futs), elapsed_so_far,
+                                    len(remaining))
+                        for f in remaining:
+                            f.cancel()
+                        break
+        except TimeoutError:
+            logger.warning('[Fetch] as_completed timeout (90s)', exc_info=True)
+
+    # Shut down the fetch pool (cancel any stragglers)
+    fetch_pool.shutdown(wait=False)
+
+    fetch_count = sum(1 for r in unique_results if r.get('full_content'))
     step_timings['step4_page_fetch'] = time.time() - step4_t0
 
+    # Log overlap savings
+    if first_fetch_submitted_at:
+        overlap_duration = step_timings['step1_engines'] - (first_fetch_submitted_at - pipeline_t0)
+        if overlap_duration > 0.5:
+            logger.info('[Search] ⚡ Pipeline overlap saved ~%.1fs '
+                        '(fetches started at +%.1fs, engines finished at +%.1fs)',
+                        overlap_duration,
+                        first_fetch_submitted_at - pipeline_t0,
+                        step_timings['step1_engines'])
+
     # ── Step 5: LLM content filter — relevance + cleaning ──
-    # Run in parallel (concurrency = number of documents).  Irrelevant pages
-    # (don't help answer the user's question) get their full_content cleared
-    # so they're excluded from embedding reranking and the final model context.
-    # ALL documents go through the filter — including short ones, which may
-    # be bot-protection pages, cookie walls, or other junk.
     step5_t0 = time.time()
-    to_filter = [(r['url'], r['full_content']) for r in unique
+    to_filter = [(r['url'], r['full_content']) for r in unique_results
                  if r.get('full_content')]
     irrelevant_urls: set[str] = set()
     if to_filter:
         logger.info('[Search] LLM-filtering %d/%d fetched pages, query=%r user_question=%r',
-                    len(to_filter), len(unique), query[:80], user_question[:80])
+                    len(to_filter), len(unique_results), query[:80], user_question[:80])
         filtered = filter_web_contents_batch(to_filter, query=query,
                                              user_question=user_question,
                                              min_chars=0)
-        for r in unique:
+        for r in unique_results:
             if r['url'] in filtered:
                 val = filtered[r['url']]
                 if val == IRRELEVANT_SENTINEL:
@@ -223,13 +334,9 @@ def perform_web_search(query, max_results=None, user_question=''):
     step_timings['step5_llm_filter'] = time.time() - step5_t0
 
     # Remove fully irrelevant results from candidate set
-    relevant = [r for r in unique if r['url'] not in irrelevant_urls]
+    relevant = [r for r in unique_results if r['url'] not in irrelevant_urls]
 
     # ── Step 5b: Deprioritize results without full content ──
-    # Results that failed to fetch (SKIP_DOMAINS, HTTP error, etc.) only
-    # have title+snippet.  They waste a slot in the final top-N because
-    # the model rarely calls fetch_url on them.  Move them to the back
-    # so results WITH content always get priority.
     has_content = [r for r in relevant if r.get('full_content')]
     no_content  = [r for r in relevant if not r.get('full_content')]
     relevant = has_content + no_content
@@ -237,10 +344,8 @@ def perform_web_search(query, max_results=None, user_question=''):
     # ── Step 6: BM25 rerank on cleaned full text → top-N ──
     step6_t0 = time.time()
     if len(has_content) > max_results:
-        # Enough content-bearing results — rerank only those
         relevant = rerank_by_bm25(query, has_content, max_results)
     elif len(relevant) > max_results:
-        # Not enough content results — rerank all, content ones are already first
         relevant = rerank_by_bm25(query, relevant, max_results)
     final_count = min(len(relevant), max_results)
     step_timings['step6_bm25_rerank'] = time.time() - step6_t0
@@ -248,7 +353,7 @@ def perform_web_search(query, max_results=None, user_question=''):
     pipeline_total = time.time() - pipeline_t0
     step_timings['total'] = pipeline_total
 
-    # Build timing summary: sorted by duration descending to highlight bottlenecks
+    # Build timing summary
     timing_parts = []
     for step_name in ['step1_engines', 'step2_url_dedup', 'step3_content_dedup',
                       'step4_page_fetch', 'step5_llm_filter', 'step6_bm25_rerank']:
@@ -262,6 +367,15 @@ def perform_web_search(query, max_results=None, user_question=''):
                 len(all_results), url_dedup_count, content_dedup_count,
                 fetch_count, len(irrelevant_urls), len(relevant),
                 final_count, pipeline_total, timing_str, query[:60])
+
+    # Log fetch timing breakdown
+    if url_timings:
+        url_timings.sort(key=lambda x: -x[1])
+        slow_summary = '  '.join(
+            f'[{"✓" if ok else "✗"}]{url[:50]}={et:.1f}s'
+            for url, et, ok, _chars in url_timings[:8]
+        )
+        logger.info('[Fetch] Timing breakdown (slowest first): %s', slow_summary)
 
     # Warn if any step is excessively slow
     if step_timings.get('step4_page_fetch', 0) > 15:
@@ -285,7 +399,6 @@ def perform_web_search(query, max_results=None, user_question=''):
         total_engines = len(ALL_ENGINE_NAMES)
         errored = len(engine_errors)
         empty = len(engine_empty)
-        # Determine the primary reason
         if errored == total_engines:
             reason = 'network_error'
             reason_detail = 'All %d search engines failed due to network errors.' % total_engines

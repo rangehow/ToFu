@@ -218,16 +218,16 @@ def _handle_error_tracker_tool(task, tc, fn_name, tc_id, fn_args, rn, round_entr
 def _handle_emit_to_user(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg, project_path, project_enabled, all_tools=None):
     """Handle emit_to_user — reference the most recent tool result for the user.
 
-    Auto-infers the last tool round from searchRounds. The model only needs
+    Auto-infers the last tool round from toolRounds. The model only needs
     to provide a comment.
     """
     comment = fn_args.get('comment', '')
 
     # Auto-infer: find the last completed tool round (exclude this emit round itself)
-    search_rounds = task.get('searchRounds', [])
+    tool_rounds = task.get('toolRounds', [])
     ref_round = None
     ref_tool_name = None
-    for sr in reversed(search_rounds):
+    for sr in reversed(tool_rounds):
         if sr.get('roundNum') != rn and sr.get('toolName') != 'emit_to_user':
             ref_round = sr
             ref_tool_name = sr.get('toolName', '?')

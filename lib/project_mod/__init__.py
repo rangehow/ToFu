@@ -34,7 +34,7 @@ __all__ = [
     '_roots', '_make_root_state', 'resolve_namespaced_path',
     'get_roots', 'get_root_path',
     # Tools
-    'tool_list_dir', 'tool_read_file', 'tool_grep', 'tool_find_files',
+    'tool_list_dir', 'tool_read_files', 'tool_grep', 'tool_find_files',
     'tool_write_file', 'tool_apply_diff', 'tool_insert_content', 'tool_run_command',
     'execute_tool', 'execute_standalone_command',
     'project_tool_display', 'browse_directory',
@@ -119,7 +119,7 @@ from lib.project_mod.tools import (
     tool_grep,
     tool_insert_content,
     tool_list_dir,
-    tool_read_file,
+    tool_read_files,
     tool_run_command,
     tool_write_file,
 )

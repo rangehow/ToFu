@@ -14,9 +14,9 @@ Features:
   2. **Cache-aware microcompact**: when editing messages, skip those in the
      "cache prefix" (messages that were part of the last cache hit) to
      maintain byte-identical content for prompt cache stability.
-  3. **Concurrent conversation tracking**: detects when multiple active
-     conversations share the same model, which can cause mutual cache
-     eviction on the server side.
+  3. **Concurrent conversation tracking**: counts active conversations on
+     the same model (for diagnostics only — A/B tested 2026-04-10: cache
+     contention between different conversations does NOT exist).
   4. **Session-stable TTL latch**: latches the CACHE_EXTENDED_TTL decision
      once per task to prevent mid-session cache key changes from shifting
      the beta header.
@@ -346,6 +346,7 @@ def detect_cache_break(
         prev.tools_hash = tools_hash
         prev.per_tool_hashes = per_tool_hashes
         prev.prefix_content_hash = prefix_hash
+        prev.prefix_content_count = _new_prefix_count
         prev.model = model
         prev.message_count = msg_count
         prev.last_cache_read_tokens = cache_read
@@ -380,17 +381,26 @@ def detect_cache_break(
             return client_changes
         elif api_break and not client_changes:
             # Cache tokens dropped but we can't explain why — likely
-            # server-side TTL expiry or routing change
+            # server-side TTL expiry or breakpoint advancement.
+            #
+            # NOTE: "cache contention" between different conversations is
+            # NOT a real phenomenon. A/B tested 2026-04-10: per-round
+            # cache_read is identical between solo and interleaved modes
+            # (±0.0%). Anthropic cache is keyed on exact prefix bytes —
+            # different conversations have different keys and CANNOT
+            # evict each other. The old "_count_active_on_model" heuristic
+            # was a false positive.
+            #
+            # Real causes of unexplained drops:
+            #   1. TTL expiry (>5min gap)
+            #   2. Breakpoint advancement (BP4 moves forward, previous
+            #      breakpoint position's cache expires before next hit)
+            #   3. Server-side capacity pressure (rare)
             if elapsed > 300:  # >5min gap
                 reason = 'possible TTL expiry (>5min gap, prompt unchanged)'
             else:
-                # Check for concurrent conversations that might cause eviction
-                _concurrent = _count_active_on_model(model, exclude_conv=conv_id)
-                if _concurrent > 0:
-                    reason = (f'likely cache contention ({_concurrent} other '
-                              f'active conv(s) on {model}, <5min gap)')
-                else:
-                    reason = 'likely server-side (prompt unchanged, <5min gap)'
+                reason = ('server-side eviction or breakpoint advancement '
+                          '(prompt unchanged, <5min gap)')
             logger.info(
                 '[CacheTrack] conv=%s call=%d cache_read dropped: %d → %d '
                 '(gap=%.1fs, %s)',
@@ -466,10 +476,15 @@ def notify_compaction(conv_id: str) -> None:
 def _count_active_on_model(model: str, exclude_conv: str = '') -> int:
     """Count conversations active on the same model within the last 60s.
 
-    When multiple conversations hit the same model simultaneously,
-    their different prefixes can compete for server-side cache capacity,
-    causing mutual evictions.  This is most relevant for Anthropic where
-    cache is keyed on the exact prefix bytes.
+    NOTE (2026-04-10): A/B tested — cache contention between different
+    conversations does NOT exist on Anthropic. Per-round cache_read is
+    identical between solo and interleaved modes. The cache is keyed on
+    exact prefix bytes, so different conversations have different keys
+    and cannot evict each other.
+
+    This function is retained for diagnostics/logging only (e.g., to
+    report how many conversations are active on the same model), but
+    should NOT be used to explain cache misses.
 
     Args:
         model: Model name to check.

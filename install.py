@@ -566,9 +566,17 @@ def install_fd(install_dir: str):
 # ═══════════════════════════════════════════════════════════════
 
 def install_playwright(py: str, install_dir: str):
-    """Install Playwright for advanced web fetching (optional, non-fatal)."""
+    """Install Playwright for advanced web fetching (optional, non-fatal).
+
+    On Linux, also tries ``playwright install --with-deps`` which uses the
+    system package manager (apt/dnf) to install shared-library dependencies
+    required by Chromium (libgbm, libnss3, etc.).  This needs sudo.
+    If --with-deps fails (e.g. no sudo), it falls back to browser-only
+    install — the user may need to install system deps manually.
+    """
     step("Installing Playwright browser (optional)")
 
+    # 1. Ensure the playwright Python package is installed
     result = run(
         [py, "-m", "pip", "install", "playwright", "-q"],
         check=False, capture=True, cwd=install_dir,
@@ -577,14 +585,40 @@ def install_playwright(py: str, install_dir: str):
         warn("Playwright pip install failed (non-critical — basic fetching still works)")
         return
 
-    result = run(
-        [py, "-m", "playwright", "install", "chromium"],
-        check=False, capture=True, cwd=install_dir,
-    )
-    if result.returncode == 0:
-        ok("Playwright chromium installed")
-    else:
+    # 2. Install Chromium browser binary
+    #    On Linux, try --with-deps first (installs system libs via apt/dnf).
+    #    Falls back to plain install if --with-deps fails (no sudo, etc.).
+    installed = False
+
+    if IS_LINUX:
+        info("Attempting Playwright install with system dependencies...")
+        result = run(
+            [py, "-m", "playwright", "install", "--with-deps", "chromium"],
+            check=False, capture=True, cwd=install_dir,
+        )
+        if result.returncode == 0:
+            ok("Playwright chromium + system deps installed")
+            installed = True
+        else:
+            info("--with-deps failed (may need sudo) — trying browser-only install...")
+
+    if not installed:
+        result = run(
+            [py, "-m", "playwright", "install", "chromium"],
+            check=False, capture=True, cwd=install_dir,
+        )
+        if result.returncode == 0:
+            ok("Playwright chromium installed")
+            installed = True
+
+    if not installed:
         warn("Playwright chromium install failed (non-critical)")
+        info("Web fetching will use requests + trafilatura instead.")
+        info("To install manually later:")
+        print(f"     {py} -m playwright install chromium")
+        if IS_LINUX:
+            info("If you see missing system library errors:")
+            print(f"     sudo {py} -m playwright install-deps chromium")
 
 
 # ═══════════════════════════════════════════════════════════════

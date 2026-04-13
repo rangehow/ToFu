@@ -643,7 +643,7 @@ function previewToolContent(roundNum, toolCallId) {
   for (let i = conv.messages.length - 1; i >= 0; i--) {
     const msg = conv.messages[i];
     if (msg.role !== 'assistant' && msg.role !== 'optimizer') continue;
-    const rounds = msg.searchRounds || [];
+    const rounds = msg.toolRounds || [];
     const round = rounds.find(r => r.roundNum === roundNum && (toolCallId ? r.toolCallId === toolCallId : true));
     if (round && round.toolContent) {
       const td = typeof _getToolDisplay === 'function' ? _getToolDisplay(round) : { icon: '📄', label: 'Tool' };
@@ -680,7 +680,7 @@ document.addEventListener('click', function(e) {
     const conv = conversations.find(c => c.id === activeConvId);
     if (conv && conv.messages && conv.messages[msgIdx]) {
       const msg = conv.messages[msgIdx];
-      const allRounds = getSearchRoundsFromMsg(msg);
+      const allRounds = getToolRoundsFromMsg(msg);
       if (allRounds.length > 0) {
         trunc.remove();
         body.innerHTML = '';

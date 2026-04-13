@@ -1422,7 +1422,10 @@ def main():
     print(f'\n🏃 {len(selected)} cases × {len(tools)} tools × {args.repeat} repeats = {total_runs} runs')
     print(f'   Timeout: {args.timeout}s | Delay: {args.delay}s\n')
 
-    base_dir = Path(tempfile.mkdtemp(prefix='bench_'))
+    # Use project-local data/tmp/ instead of system /tmp (may not be accessible on all machines)
+    _project_tmp = Path(__file__).resolve().parent.parent / 'data' / 'tmp'
+    _project_tmp.mkdir(parents=True, exist_ok=True)
+    base_dir = Path(tempfile.mkdtemp(prefix='bench_', dir=str(_project_tmp)))
     print(f'📁 Workspace: {base_dir}\n')
 
     all_results: list[RunResult] = []

@@ -81,13 +81,19 @@ def set_project(path_str):
     logger.info('[Project] set_project: %s → %s (cleared roots: %s)',
                 old_path, abs_path, old_roots)
 
-    # ★ Cross-DC latency check — warn if project is on a remote DolphinFS cluster
+    # ★ Cross-DC latency check — log warning if project is on a remote cluster.
+    #   This is non-blocking: if benchmark hasn't finished yet, latency_class
+    #   will be 'unknown' and we skip the warning.  The benchmark result will
+    #   be available for subsequent tool calls (timeout adjustment, etc.).
     try:
         from lib.cross_dc import cross_dc_warning, get_latency_class
         lat_class = get_latency_class(abs_path)
         if lat_class in ('slow', 'very_slow'):
             warning = cross_dc_warning(abs_path)
             logger.warning('[Project] %s', warning)
+        elif lat_class == 'unknown':
+            logger.debug('[Project] Cross-DC status unknown for %s '
+                         '(benchmark may still be running)', abs_path)
     except Exception as e:
         logger.debug('[Project] Cross-DC check skipped: %s', e)
 

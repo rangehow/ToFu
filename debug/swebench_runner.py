@@ -98,11 +98,69 @@ CONDA_ENV_PREFIX = Path(os.environ.get(
     '/tmp/swebench_conda_envs',
 ))
 
-# Pricing (Opus via example-corp gateway — Anthropic convention)
+# Default pricing (Opus via example-corp gateway — Anthropic convention)
 PRICE_INPUT_PER_1K = 0.015
 PRICE_OUTPUT_PER_1K = 0.075
 PRICE_CACHE_READ_PER_1K = 0.0015
 PRICE_CACHE_WRITE_PER_1K = 0.01875
+
+# Max parallel eval workers (test execution is CPU-bound)
+MAX_EVAL_WORKERS = int(os.environ.get('MAX_EVAL_WORKERS', '8'))
+
+
+# ─── Model Configuration ─────────────────────────────────────────────────────
+
+@dataclass
+class ModelConfig:
+    """Configuration for one model to benchmark."""
+    name: str          # Short display name (e.g. 'opus', 'minimax', 'glm')
+    backend: str       # 'tofu' or 'cc'
+    model_id: str      # Model string sent to the API (e.g. 'aws.claude-opus-4.6')
+    concurrency: int = 3    # Max parallel inference workers for this model
+    # Per-model pricing (per 1K tokens)
+    price_input: float = 0.015
+    price_output: float = 0.075
+    price_cache_read: float = 0.0015
+    price_cache_write: float = 0.01875
+
+
+# Built-in model presets (user can override via --models)
+MODEL_PRESETS = {
+    'opus': ModelConfig(
+        name='opus', backend='tofu', model_id='aws.claude-opus-4.6',
+        concurrency=3,
+        price_input=0.015, price_output=0.075,
+        price_cache_read=0.0015, price_cache_write=0.01875,
+    ),
+    'cc': ModelConfig(
+        name='cc', backend='cc', model_id='opus',
+        concurrency=3,
+        price_input=0.015, price_output=0.075,
+        price_cache_read=0.0015, price_cache_write=0.01875,
+    ),
+    'minimax': ModelConfig(
+        name='minimax', backend='tofu', model_id='MiniMax-M2.7',
+        concurrency=5,
+        price_input=0.001, price_output=0.002,
+        price_cache_read=0.0002, price_cache_write=0.001,
+    ),
+    'glm': ModelConfig(
+        name='glm', backend='tofu', model_id='glm-5.1',
+        concurrency=5,
+        price_input=0.002, price_output=0.008,
+        price_cache_read=0.0004, price_cache_write=0.002,
+    ),
+    'longcat': ModelConfig(
+        name='longcat', backend='tofu', model_id='longcat-pro-0403',
+        concurrency=5,
+        price_input=0.001, price_output=0.004,
+        price_cache_read=0.0002, price_cache_write=0.001,
+    ),
+}
+
+# Thread-safe results management
+import threading as _threading
+_results_lock = _threading.Lock()
 
 # ─── Data Structures ─────────────────────────────────────────────────────────
 
@@ -528,27 +586,46 @@ def build_agent_prompt(inst: SWEInstance) -> str:
 
 # ─── Inference: Tofu ──────────────────────────────────────────────────────────
 
-def run_tofu_inference(inst: SWEInstance, workspace: Path) -> InferenceResult:
+def run_tofu_inference(inst: SWEInstance, workspace: Path,
+                      mcfg: ModelConfig = None) -> InferenceResult:
     """Run Tofu on an instance. No artificial timeout."""
-    result = InferenceResult(instance_id=inst.instance_id, tool='tofu')
+    tool_name = mcfg.name if mcfg else 'tofu'
+    model_id = mcfg.model_id if mcfg else TOFU_MODEL
+    result = InferenceResult(instance_id=inst.instance_id, tool=tool_name)
     prompt = build_agent_prompt(inst)
     t0 = time.time()
 
     try:
-        resp = requests.post(
-            f'{TOFU_BASE_URL}/api/chat/start',
-            json={
-                'convId': f'swebench-{inst.instance_id}-tofu-{int(time.time())}',
-                'messages': [{'role': 'user', 'content': prompt}],
-                'config': {
-                    'model': TOFU_MODEL,
-                    'projectPath': str(workspace),
-                },
-            },
-            timeout=30,
-        )
-        resp.raise_for_status()
-        task_id = resp.json()['taskId']
+        # Retry the initial POST up to 3 times — the server may be briefly
+        # busy finishing a previous task (GIL contention, heavy streaming).
+        task_id = None
+        for attempt in range(1, 4):
+            try:
+                resp = requests.post(
+                    f'{TOFU_BASE_URL}/api/chat/start',
+                    json={
+                        'convId': f'swebench-{inst.instance_id}-{tool_name}-{int(time.time())}',
+                        'messages': [{'role': 'user', 'content': prompt}],
+                        'config': {
+                            'model': model_id,
+                            'projectPath': str(workspace),
+                        },
+                    },
+                    timeout=120,
+                )
+                resp.raise_for_status()
+                task_id = resp.json()['taskId']
+                break
+            except (requests.Timeout, requests.ConnectionError) as e:
+                log.warning('[Tofu] POST attempt %d/3 failed: %s', attempt, e)
+                if attempt < 3:
+                    time.sleep(10 * attempt)  # back off: 10s, 20s
+                else:
+                    raise  # final attempt — let outer handler catch it
+        if not task_id:
+            result.error = 'Failed to get task_id after 3 attempts'
+            result.duration_s = time.time() - t0
+            return result
 
         # Poll until done — no tight timeout, generous safety net only
         poll_interval = 2.0
@@ -589,7 +666,7 @@ def run_tofu_inference(inst: SWEInstance, workspace: Path) -> InferenceResult:
                         result.cache_read_tokens += ru.get('cache_read_tokens', 0)
                         result.cache_write_tokens += ru.get('cache_write_tokens', 0)
 
-                result.cost_usd = _compute_cost(result)
+                result.cost_usd = _compute_cost(result, mcfg)
 
                 # Save full poll response for debugging
                 try:
@@ -613,56 +690,195 @@ def run_tofu_inference(inst: SWEInstance, workspace: Path) -> InferenceResult:
     return result
 
 
+# ─── CC Proxy Management ──────────────────────────────────────────────────────
+
+CC_PROXY_URL = os.environ.get('CC_PROXY_URL', 'http://127.0.0.1:8082')
+CC_PROXY_DIR = os.environ.get('CC_PROXY_DIR', '')  # auto-detected if empty
+_cc_proxy_proc = None
+
+
+def _find_proxy_dir() -> Optional[Path]:
+    """Find the claude-code-proxy directory."""
+    if CC_PROXY_DIR:
+        return Path(CC_PROXY_DIR)
+    # Auto-detect: look relative to chatui project
+    candidates = [
+        Path(__file__).resolve().parent.parent.parent / 'claude-code-workspace' / 'proxy',
+        Path.home() / 'claude-code-workspace' / 'proxy',
+    ]
+    for c in candidates:
+        if (c / 'start_proxy.py').exists():
+            return c
+    return None
+
+
+def ensure_cc_proxy_alive() -> bool:
+    """Check if CC proxy is responding; restart it if dead. Returns True if alive."""
+    global _cc_proxy_proc
+    try:
+        resp = requests.get(f'{CC_PROXY_URL}/health', timeout=5)
+        if resp.status_code == 200:
+            return True
+    except Exception:
+        pass
+
+    # Proxy is dead — try to restart
+    log.warning('[CC Proxy] Not responding, attempting restart...')
+    proxy_dir = _find_proxy_dir()
+    if not proxy_dir:
+        log.error('[CC Proxy] Cannot find proxy directory. Set CC_PROXY_DIR env var.')
+        return False
+
+    # Kill any lingering proxy process
+    if _cc_proxy_proc and _cc_proxy_proc.poll() is None:
+        _cc_proxy_proc.terminate()
+        try:
+            _cc_proxy_proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            _cc_proxy_proc.kill()
+
+    env = os.environ.copy()
+    env['HOST'] = '127.0.0.1'  # Override conda's HOST
+    _cc_proxy_proc = subprocess.Popen(
+        [sys.executable, 'start_proxy.py'],
+        cwd=str(proxy_dir),
+        env=env,
+        stdout=open('/tmp/cc_proxy.log', 'a'),
+        stderr=subprocess.STDOUT,
+        stdin=subprocess.DEVNULL,
+    )
+    log.info('[CC Proxy] Started PID %d, waiting for it to be ready...', _cc_proxy_proc.pid)
+
+    # Wait for proxy to become healthy
+    for i in range(30):  # up to 30 seconds
+        time.sleep(1)
+        try:
+            resp = requests.get(f'{CC_PROXY_URL}/health', timeout=3)
+            if resp.status_code == 200:
+                log.info('[CC Proxy] Healthy after %ds', i + 1)
+                return True
+        except Exception:
+            pass
+
+    log.error('[CC Proxy] Failed to start after 30s')
+    return False
+
+
 # ─── Inference: Claude Code ───────────────────────────────────────────────────
 
-def run_cc_inference(inst: SWEInstance, workspace: Path) -> InferenceResult:
-    """Run Claude Code CLI on an instance. No artificial timeout."""
-    result = InferenceResult(instance_id=inst.instance_id, tool='cc')
+def _is_cc_retryable_error(stdout: str, stderr: str) -> bool:
+    """Check if CC output indicates a retryable error (429, ECONNREFUSED, etc)."""
+    combined = (stdout or '') + (stderr or '')
+    retryable_patterns = [
+        'ECONNREFUSED',
+        '429',
+        'rate_limit',
+        'too many requests',
+        'overloaded',
+        'Unable to connect to API',
+        'socket hang up',
+        'ETIMEDOUT',
+        'ECONNRESET',
+    ]
+    lower = combined.lower()
+    for pat in retryable_patterns:
+        if pat.lower() in lower:
+            return True
+    return False
+
+
+def run_cc_inference(inst: SWEInstance, workspace: Path,
+                    mcfg: ModelConfig = None) -> InferenceResult:
+    """Run Claude Code CLI on an instance. Retries on 429/connection errors."""
+    tool_name = mcfg.name if mcfg else 'cc'
+    cc_model = mcfg.model_id if mcfg else CC_MODEL
+    result = InferenceResult(instance_id=inst.instance_id, tool=tool_name)
     prompt = build_agent_prompt(inst)
     t0 = time.time()
+    max_retries = 10  # generous — 429s can require many retries
 
-    try:
-        proc = subprocess.run(
-            [
-                'claude', '-p',
-                '--output-format', 'json',
-                '--model', CC_MODEL,
-                '--dangerously-skip-permissions',
-                prompt,
-            ],
-            capture_output=True, text=True,
-            timeout=INFERENCE_SAFETY_TIMEOUT,  # safety net only
-            cwd=str(workspace),
-            stdin=subprocess.DEVNULL,
-        )
+    for attempt in range(1, max_retries + 1):
+        # Ensure proxy is alive before each attempt
+        if not ensure_cc_proxy_alive():
+            log.error('[CC] Proxy dead and cannot restart, attempt %d/%d', attempt, max_retries)
+            if attempt < max_retries:
+                time.sleep(30)
+                continue
+            result.error = 'CC proxy unavailable'
+            result.duration_s = time.time() - t0
+            return result
 
-        result.duration_s = time.time() - t0
+        # Reset workspace for retry (undo any partial changes)
+        if attempt > 1:
+            subprocess.run(
+                ['git', 'checkout', '.'],
+                capture_output=True, text=True, timeout=30, cwd=str(workspace),
+            )
+            subprocess.run(
+                ['git', 'clean', '-fd', '--quiet'],
+                capture_output=True, text=True, timeout=30, cwd=str(workspace),
+            )
 
-        if proc.returncode != 0 and not proc.stdout.strip():
-            result.error = f'Exit code {proc.returncode}: {proc.stderr[:500]}'
+        try:
+            proc = subprocess.run(
+                [
+                    'claude', '-p',
+                    '--output-format', 'json',
+                    '--model', cc_model,
+                    '--dangerously-skip-permissions',
+                    prompt,
+                ],
+                capture_output=True, text=True,
+                timeout=INFERENCE_SAFETY_TIMEOUT,  # safety net only
+                cwd=str(workspace),
+                stdin=subprocess.DEVNULL,
+            )
 
-        # Parse CC JSON output
-        if proc.stdout.strip():
-            try:
-                data = json.loads(proc.stdout.strip())
-                result.num_turns = data.get('num_turns', 1)
-                usage = data.get('usage', {})
-                result.input_tokens = usage.get('input_tokens', 0)
-                result.output_tokens = usage.get('output_tokens', 0)
-                result.cache_read_tokens = usage.get('cache_read_input_tokens', 0)
-                result.cache_write_tokens = usage.get('cache_creation_input_tokens', 0)
-                result.raw_output = proc.stdout[:50000]  # save full output for detail file
-            except (json.JSONDecodeError, KeyError, TypeError):
-                result.raw_output = proc.stdout[:20000]
+            # Check for retryable errors in output
+            if _is_cc_retryable_error(proc.stdout, proc.stderr):
+                wait = min(30 * attempt, 300)  # 30s, 60s, 90s, ... up to 5min
+                log.warning('[CC] Attempt %d/%d hit retryable error, waiting %ds: %.200s',
+                            attempt, max_retries, wait,
+                            (proc.stdout or proc.stderr or '')[:200])
+                if attempt < max_retries:
+                    time.sleep(wait)
+                    continue
+                # Last attempt — fall through to record whatever we got
 
-        result.cost_usd = _compute_cost(result)
+            result.duration_s = time.time() - t0
 
-    except subprocess.TimeoutExpired:
-        result.duration_s = time.time() - t0
-        result.error = f'Safety timeout after {INFERENCE_SAFETY_TIMEOUT}s'
-    except Exception as e:
-        result.duration_s = time.time() - t0
-        result.error = str(e)
+            if proc.returncode != 0 and not proc.stdout.strip():
+                result.error = f'Exit code {proc.returncode}: {proc.stderr[:500]}'
+
+            # Parse CC JSON output
+            if proc.stdout.strip():
+                try:
+                    data = json.loads(proc.stdout.strip())
+                    result.num_turns = data.get('num_turns', 1)
+                    usage = data.get('usage', {})
+                    result.input_tokens = usage.get('input_tokens', 0)
+                    result.output_tokens = usage.get('output_tokens', 0)
+                    result.cache_read_tokens = usage.get('cache_read_input_tokens', 0)
+                    result.cache_write_tokens = usage.get('cache_creation_input_tokens', 0)
+                    result.raw_output = proc.stdout[:50000]  # save full output for detail file
+                except (json.JSONDecodeError, KeyError, TypeError):
+                    result.raw_output = proc.stdout[:20000]
+
+            result.cost_usd = _compute_cost(result, mcfg)
+            break  # success — exit retry loop
+
+        except subprocess.TimeoutExpired:
+            result.duration_s = time.time() - t0
+            result.error = f'Safety timeout after {INFERENCE_SAFETY_TIMEOUT}s'
+            break  # don't retry timeouts
+        except Exception as e:
+            result.duration_s = time.time() - t0
+            result.error = str(e)
+            if attempt < max_retries:
+                log.warning('[CC] Attempt %d/%d exception, retrying: %s', attempt, max_retries, e)
+                time.sleep(30 * attempt)
+                continue
+            break
 
     result.model_patch = _extract_git_diff(workspace)
     return result
@@ -1122,13 +1338,17 @@ def _install_in_conda(inst: SWEInstance, workspace: Path, env_path: Path,
 
 # ─── Cost Computation ─────────────────────────────────────────────────────────
 
-def _compute_cost(result: InferenceResult) -> float:
-    """Compute cost from token counts (Anthropic convention)."""
+def _compute_cost(result: InferenceResult, mcfg: ModelConfig = None) -> float:
+    """Compute cost from token counts using per-model pricing."""
+    pi = mcfg.price_input if mcfg else PRICE_INPUT_PER_1K
+    po = mcfg.price_output if mcfg else PRICE_OUTPUT_PER_1K
+    pcr = mcfg.price_cache_read if mcfg else PRICE_CACHE_READ_PER_1K
+    pcw = mcfg.price_cache_write if mcfg else PRICE_CACHE_WRITE_PER_1K
     cost = (
-        result.input_tokens * PRICE_INPUT_PER_1K / 1000
-        + result.output_tokens * PRICE_OUTPUT_PER_1K / 1000
-        + result.cache_read_tokens * PRICE_CACHE_READ_PER_1K / 1000
-        + result.cache_write_tokens * PRICE_CACHE_WRITE_PER_1K / 1000
+        result.input_tokens * pi / 1000
+        + result.output_tokens * po / 1000
+        + result.cache_read_tokens * pcr / 1000
+        + result.cache_write_tokens * pcw / 1000
     )
     return round(cost, 6)
 

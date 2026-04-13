@@ -170,9 +170,10 @@ class TestSkillsFacade:
     def test_tools(self):
         from lib.memory import ALL_MEMORY_TOOLS, MEMORY_TOOL_NAMES
         assert isinstance(ALL_MEMORY_TOOLS, list)
-        assert len(ALL_MEMORY_TOOLS) == 4
+        assert len(ALL_MEMORY_TOOLS) == 5
         assert 'create_memory' in MEMORY_TOOL_NAMES
         assert 'merge_memories' in MEMORY_TOOL_NAMES
+        assert 'search_memories' in MEMORY_TOOL_NAMES
 
     def test_constants(self):
         from lib.memory import GLOBAL_MEMORY_SUBDIR, MIN_DESCRIPTION_LENGTH, PROJECT_MEMORY_SUBDIR
@@ -182,6 +183,7 @@ class TestSkillsFacade:
     def test_all_completeness(self):
         import lib.memory
         for name in ['create_memory', 'update_memory', 'delete_memory', 'merge_memories',
+                     'search_memories', 'SEARCH_MEMORIES_TOOL',
                      'ALL_MEMORY_TOOLS', 'MEMORY_TOOL_NAMES', 'build_memory_context',
                      'MEMORY_ACCUMULATION_INSTRUCTIONS']:
             assert name in lib.memory.__all__

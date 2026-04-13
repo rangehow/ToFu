@@ -15,7 +15,7 @@ from lib.log import get_logger
 
 logger = get_logger(__name__)
 
-__all__ = ['filter_relevant_memories']
+__all__ = ['filter_relevant_memories', 'search_memories']
 
 # ═══════════════════════════════════════════════════════
 #  Constants
@@ -61,8 +61,13 @@ def _tokenize(text: str) -> list[str]:
 #  BM25 Scorer
 # ═══════════════════════════════════════════════════════
 
-def _build_memory_doc(mem: dict[str, Any]) -> list[str]:
-    """Build a token list from a memory's metadata (name + description + tags)."""
+def _build_memory_doc(mem: dict[str, Any], include_body: bool = False) -> list[str]:
+    """Build a token list from a memory's metadata (name + description + tags).
+
+    Args:
+        mem: Memory dict.
+        include_body: If True, also tokenize the memory body for deeper matching.
+    """
     parts = [
         mem.get('name', ''),
         mem.get('description', ''),
@@ -70,6 +75,11 @@ def _build_memory_doc(mem: dict[str, Any]) -> list[str]:
     tags = mem.get('tags', [])
     if isinstance(tags, list):
         parts.extend(tags)
+    if include_body:
+        body = mem.get('body', '')
+        if body:
+            # Limit body to first 2000 chars to keep tokenization fast
+            parts.append(body[:2000])
     return _tokenize(' '.join(parts))
 
 
@@ -147,3 +157,110 @@ def filter_relevant_memories(
         logger.debug('[MemoryBM25] Filtered %d→%d memories for query (%.60s)',
                      n, len(result), query)
     return result
+
+
+# ═══════════════════════════════════════════════════════
+#  search_memories — Tool-callable search with body content
+# ═══════════════════════════════════════════════════════
+
+SEARCH_DEFAULT_TOP_K = 30
+
+
+def search_memories(
+    query: str,
+    project_path: str | None = None,
+    top_k: int = SEARCH_DEFAULT_TOP_K,
+) -> str:
+    """Search memories by BM25 relevance, including body content in scoring.
+
+    Returns a compact index of matching memories (name, description, tags,
+    file path). The model can then use read_files to read specific memories
+    it finds interesting.
+
+    Args:
+        query: Search keywords from the model.
+        project_path: Project path for scoped memories.
+        top_k: Maximum number of results.
+
+    Returns:
+        Formatted index of matching memories with file paths.
+    """
+    from lib.memory.storage import get_eligible_memories
+
+    memories = get_eligible_memories(project_path)
+    if not memories:
+        return 'No memories found. You have no accumulated memories yet.'
+
+    if not query or not query.strip():
+        return f'Please provide search keywords. You have {len(memories)} memories available.'
+
+    top_k = max(1, min(top_k, 50))  # Clamp to [1, 50]
+
+    query_tokens = _tokenize(query)
+    if not query_tokens:
+        return f'No valid search terms after tokenization. You have {len(memories)} memories available.'
+
+    n = len(memories)
+    # Build document token lists WITH body content for deeper matching
+    docs = [_build_memory_doc(m, include_body=True) for m in memories]
+    doc_lens = [len(d) for d in docs]
+    avg_dl = sum(doc_lens) / n if n > 0 else 1.0
+
+    query_terms = set(query_tokens)
+    df: dict[str, int] = {}
+    for term in query_terms:
+        count = sum(1 for doc in docs if term in doc)
+        df[term] = count
+
+    scores: list[tuple[float, int]] = []
+    for i, (doc, dl) in enumerate(zip(docs, doc_lens)):
+        score = 0.0
+        tf_map: dict[str, int] = {}
+        for t in doc:
+            if t in query_terms:
+                tf_map[t] = tf_map.get(t, 0) + 1
+        for term in query_terms:
+            tf = tf_map.get(term, 0)
+            if tf == 0:
+                continue
+            d = df.get(term, 0)
+            idf = math.log((n - d + 0.5) / (d + 0.5) + 1.0)
+            numerator = tf * (BM25_K1 + 1)
+            denominator = tf + BM25_K1 * (1 - BM25_B + BM25_B * dl / avg_dl)
+            score += idf * numerator / denominator
+        scores.append((score, i))
+
+    scores.sort(key=lambda x: (-x[0], x[1]))
+
+    # Filter to only memories with score > 0
+    relevant = [(sc, idx) for sc, idx in scores if sc > 0]
+    if not relevant:
+        return (
+            f'No memories matched query "{query}". '
+            f'You have {n} memories — try different keywords.'
+        )
+
+    results = relevant[:top_k]
+    logger.info('[MemorySearch] query="%.80s" → %d/%d matches (showing top %d)',
+                query, len(relevant), n, len(results))
+
+    # Format results — compact index with file paths
+    parts = [f'Found {len(relevant)} matching memories (showing top {len(results)}):']
+    parts.append('')
+    for rank, (sc, idx) in enumerate(results, 1):
+        mem = memories[idx]
+        tags = mem.get('tags', [])
+        tag_str = f'  tags: {", ".join(tags)}' if tags else ''
+        parts.append(
+            f'{rank}. **{mem["name"]}** (scope: {mem["scope"]})\n'
+            f'   {mem.get("description", "")}\n'
+            f'   path: {mem.get("filepath", "")}'
+            f'{tag_str}'
+        )
+
+    remaining = len(relevant) - len(results)
+    if remaining > 0:
+        parts.append(f'\n{remaining} more matches not shown. Refine your query for more specific results.')
+    parts.append('\nUse read_files to read the full content of any memory you need.')
+
+    return '\n'.join(parts)

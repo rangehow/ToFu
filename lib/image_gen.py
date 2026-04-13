@@ -26,7 +26,6 @@ Usage:
         mime_type = result['mime_type']
 """
 
-import base64 as _b64
 import os
 import time
 from urllib.parse import urlparse
@@ -223,121 +222,6 @@ def _generate_openai(
         }
 
     return {'ok': False, 'error': 'No image data in OpenAI response'}
-
-
-# ══════════════════════════════════════════════════════════════
-#  OpenAI Image Edit: POST /v1/openai/native/images/edits
-# ══════════════════════════════════════════════════════════════
-
-def _generate_openai_edit(
-    prompt: str,
-    model: str,
-    api_key: str,
-    aspect_ratio: str,
-    resolution: str,
-    timeout: int,
-    source_images: list[dict],
-    friday_base: str = '',
-    extra_headers: dict | None = None,
-) -> dict:
-    """Edit an image using the OpenAI images/edits API.
-
-    Sends the source image(s) and prompt via multipart form data to the
-    ``/v1/openai/native/images/edits`` endpoint.
-
-    Args:
-        prompt: Edit instruction (e.g. "change background to blue").
-        model: OpenAI model (gpt-image-1, gpt-image-1.5, etc.).
-        api_key: API key.
-        aspect_ratio: Aspect ratio hint.
-        resolution: Resolution hint.
-        timeout: HTTP timeout.
-        source_images: List of ``{image_b64, mime_type}`` dicts.
-        friday_base: FRIDAY API base URL.
-        extra_headers: Extra HTTP headers.
-
-    Returns:
-        dict with 'ok', 'image_b64', 'mime_type', 'text', 'error'.
-        Raises on HTTP errors (caller handles retry).
-    """
-    _base = friday_base or _IMAGE_GEN_BASE_DEFAULT
-    url = f'{_base}/v1/openai/native/images/edits'
-    headers = {
-        'Authorization': f'Bearer {api_key}',
-    }
-    if extra_headers:
-        headers.update(extra_headers)
-
-    size = _OPENAI_SIZE_MAP.get(aspect_ratio, '1024x1024')
-
-    # Build multipart form data
-    # The OpenAI edits endpoint expects: image (file), prompt (text), model, size, n
-    files = []
-    ext_map = {'image/png': '.png', 'image/jpeg': '.jpg', 'image/webp': '.webp'}
-
-    for i, img in enumerate(source_images):
-        b64 = img.get('image_b64', '')
-        mime = img.get('mime_type', 'image/png')
-        if not b64:
-            continue
-        ext = ext_map.get(mime, '.png')
-        filename = f'source_{i}{ext}'
-        raw_bytes = _b64.b64decode(b64)
-        # OpenAI expects image[] for multiple images, or image for single
-        if len(source_images) > 1:
-            files.append(('image[]', (filename, raw_bytes, mime)))
-        else:
-            files.append(('image', (filename, raw_bytes, mime)))
-
-    if not files:
-        return {'ok': False, 'error': 'No valid source images for editing'}
-
-    data = {
-        'model': model,
-        'prompt': prompt,
-        'n': '1',
-        'size': size,
-        'quality': 'auto',
-    }
-
-    t0 = time.time()
-    resp = requests.post(url, headers=headers, files=files, data=data,
-                         proxies=_proxies_for(url), timeout=timeout)
-    elapsed = time.time() - t0
-
-    if resp.status_code == 429:
-        raise _RateLimitError(f'429 from OpenAI image edit API after {elapsed:.1f}s')
-
-    if resp.status_code != 200:
-        raise _HttpError(resp.status_code, resp.text[:300], elapsed)
-
-    result_data = resp.json()
-    items = result_data.get('data', [])
-    if not items:
-        return {'ok': False, 'error': 'Empty response from OpenAI image edit API'}
-
-    item = items[0]
-    image_b64 = item.get('b64_json', '')
-    image_url = item.get('url', '')
-    revised = item.get('revised_prompt', '') or ''
-    mime_type = 'image/png'
-
-    # Download from URL if no inline base64
-    if image_url and not image_b64:
-        image_b64, mime_type = _download_image(image_url)
-
-    if image_b64:
-        logger.info('[ImageGen] ✅ OpenAI edited image: model=%s %.1fs b64=%d chars',
-                     model, elapsed, len(image_b64))
-        return {
-            'ok': True,
-            'image_b64': image_b64,
-            'image_url': image_url,
-            'mime_type': mime_type,
-            'text': revised,
-        }
-
-    return {'ok': False, 'error': 'No image data in OpenAI edit response'}
 
 
 # ══════════════════════════════════════════════════════════════

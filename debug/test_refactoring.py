@@ -216,10 +216,11 @@ check('skills injection (build_memory_context, INSTRUCTIONS)', _skills_injection
 def _skills_tools():
     from lib.memory import ALL_MEMORY_TOOLS, MEMORY_TOOL_NAMES
     assert isinstance(ALL_MEMORY_TOOLS, list)
-    assert len(ALL_MEMORY_TOOLS) == 4
+    assert len(ALL_MEMORY_TOOLS) == 5
     assert isinstance(MEMORY_TOOL_NAMES, set)
     assert 'create_memory' in MEMORY_TOOL_NAMES
     assert 'merge_memories' in MEMORY_TOOL_NAMES
+    assert 'search_memories' in MEMORY_TOOL_NAMES
 check('skills tools (ALL_MEMORY_TOOLS, MEMORY_TOOL_NAMES)', _skills_tools)
 
 def _skills_constants():

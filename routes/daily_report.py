@@ -149,10 +149,22 @@ Each stream:
   "conv_ids": ["exact conversation IDs from input"]
 }
 
+Status classification rules (BE PRECISE):
+- "done" — the task was COMPLETED: code was deployed/merged, bug was fixed and verified,
+  question was fully answered, investigation reached a clear conclusion, implementation
+  was finished. A task counts as done if the conversation shows a successful outcome
+  (e.g., "fixed", "deployed", "works now", "merged", test passing, problem solved).
+- "in_progress" — work is actively ongoing but not yet finished: partial implementation,
+  debugging still in progress, waiting for test results, iterating on a solution.
+- "blocked" — cannot proceed due to an external dependency: waiting for someone else's
+  input, API/service is down, permission needed, unclear requirements needing clarification.
+
 Summary rules:
 - ONE sentence only. Concise. Not "discussed X" but "fixed X" / "identified root cause of X".
 - If blocked, the summary should say WHY it's blocked.
 - Trivial quick Q&A can merge into one "零碎问答" stream.
+- Default to "done" for short Q&A conversations that got a clear answer.
+- Default to "done" if a fix/implementation was applied AND confirmed working.
 
 ═══ TOMORROW ═══
 Synthesize 3-8 TODO items from ALL unfinished work across streams.
@@ -190,7 +202,14 @@ If the input includes a "YESTERDAY'S TODO STATUS" section:
 - Review each ✗ item and check if today's work (visible in streams) addressed it.
 - If a TODO was clearly worked on today, include its EXACT original text in
   the "yesterday_done" array (copy-paste the text after the ✗ marker).
-- Only include items that were actually worked on. If not addressed, omit.
+- Be GENEROUS in matching: if any of today's streams relate to the same topic
+  as a yesterday TODO (even partially), mark it as done. The goal is to
+  automatically close resolved tasks rather than leave them lingering.
+- A TODO counts as "done" if:
+  • Today's conversation explicitly fixed / completed the thing described
+  • Today's conversation investigated or made progress on the same issue
+  • Today's conversation shows the feature/bug described in the TODO was addressed
+- Only omit items where today had ZERO relevant activity.
 - If no yesterday TODOs exist, return an empty array.
 
 ═══ RULES ═══
@@ -608,20 +627,32 @@ def _get_yesterday_todo_accountability(target_date):
         return []
 
 
-def _mark_yesterday_todos_done(target_date, yesterday_done, todo_status):
+def _mark_yesterday_todos_done(target_date, yesterday_done, todo_status,
+                               stream_titles=None):
     """Write back completion status to yesterday's report file.
 
     When the LLM identifies that yesterday's TODO items were addressed
     by today's work, this function marks those items as ``done: True``
     in yesterday's saved report JSON.
 
+    Also checks if any of today's stream titles fuzzy-match yesterday's
+    TODO items — if they do, auto-mark them as done (a stream about the
+    same topic means the work was addressed).
+
     Args:
         target_date: Today's date string 'YYYY-MM-DD'.
         yesterday_done: List of TODO texts the LLM says were completed.
         todo_status: List of (text, done_bool) from yesterday's TODOs
                      (used to find items that were already done).
+        stream_titles: Optional list of today's stream titles+summaries
+                       for additional fuzzy matching.
     """
-    if not yesterday_done or not todo_status:
+    all_done_texts = list(yesterday_done or [])
+    # Also treat stream titles+summaries as potential done signals
+    if stream_titles:
+        all_done_texts.extend(stream_titles)
+
+    if not all_done_texts or not todo_status:
         return
 
     try:
@@ -638,9 +669,9 @@ def _mark_yesterday_todos_done(target_date, yesterday_done, todo_status):
             todo_text = todo.get('text', '')
             if not todo_text:
                 continue
-            # Check if LLM flagged this as done (fuzzy match since LLM may
-            # slightly alter the text even when asked to copy-paste)
-            for done_text in yesterday_done:
+            # Check if LLM flagged this as done, or if any stream title
+            # matches (fuzzy match since LLM may slightly alter text)
+            for done_text in all_done_texts:
                 if not isinstance(done_text, str):
                     continue
                 if _fuzzy_todo_match(todo_text, done_text):
@@ -812,7 +843,17 @@ def _analyse_conversations(convs, target_date):
         user_prompt, len(convs))
 
     # ── Write back yesterday's completion status ──
-    _mark_yesterday_todos_done(target_date, raw_yesterday_done, todo_status)
+    # Collect stream titles+summaries for additional fuzzy matching
+    _stream_hints = []
+    for s in raw_streams:
+        title = s.get('title', '')
+        summary = s.get('summary', '')
+        if title:
+            _stream_hints.append(title)
+        if summary:
+            _stream_hints.append(summary)
+    _mark_yesterday_todos_done(target_date, raw_yesterday_done, todo_status,
+                               stream_titles=_stream_hints)
 
     # ── Close remaining yesterday TODOs → "unfinished" category ──
     # Once today's report is generated, yesterday's undone items are finalized
@@ -980,7 +1021,7 @@ def _build_transcript_from_messages(msgs, day_start_ms, day_end_ms):
             turns.append({'role': 'USER', 'text': content})
         elif role == 'assistant':
             tool_names = []
-            for r in (msg.get('searchRounds', []) or []):
+            for r in (msg.get('toolRounds', []) or []):
                 for call in (r.get('calls', []) or r.get('toolCalls', []) or []):
                     tn = ''
                     if isinstance(call, dict):
@@ -1094,7 +1135,7 @@ def _extract_convs_for_date(date_str, progress_cb=None):
             if msg.get('role') == 'user':
                 rounds += 1
             elif msg.get('role') == 'assistant':
-                for sr in (msg.get('searchRounds', []) or []):
+                for sr in (msg.get('toolRounds', []) or []):
                     for call in (sr.get('calls', []) or sr.get('toolCalls', []) or []):
                         if isinstance(call, dict):
                             fn = call.get('function', {})

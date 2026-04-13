@@ -358,14 +358,14 @@ def _resolve_content_ref(
 ) -> str | None:
     """Resolve a ``content_ref`` to actual text from a previous tool round.
 
-    Looks up the referenced ``tool_round`` number in ``task['searchRounds']``
+    Looks up the referenced ``tool_round`` number in ``task['toolRounds']``
     and returns the ``toolContent`` stored there.  Supports optional
     ``start``/``end`` for substring extraction.
 
     Parameters
     ----------
     task : dict
-        Live task dict with ``searchRounds`` list.
+        Live task dict with ``toolRounds`` list.
     content_ref : dict
         Reference dict with keys: ``tool_round`` (required), ``start`` and
         ``end`` (optional character indices).
@@ -381,7 +381,7 @@ def _resolve_content_ref(
         logger.warning('[content_ref] Missing tool_round in content_ref: %s', content_ref)
         return None
 
-    for sr in task.get('searchRounds', []):
+    for sr in task.get('toolRounds', []):
         if sr.get('roundNum') == round_num:
             content = sr.get('toolContent', '')
             if not content:
@@ -398,8 +398,8 @@ def _resolve_content_ref(
                             round_num, len(content))
             return content
 
-    logger.warning('[content_ref] tool_round=%d not found in %d searchRounds',
-                   round_num, len(task.get('searchRounds', [])))
+    logger.warning('[content_ref] tool_round=%d not found in %d toolRounds',
+                   round_num, len(task.get('toolRounds', [])))
     return None
 
 
@@ -473,7 +473,7 @@ def _prefetch_user_urls(
     messages : list[dict]
         Conversation message list.
     task : dict
-        Live task dict — mutated (searchRounds appended, events emitted).
+        Live task dict — mutated (toolRounds appended, events emitted).
     fetch_service : FetchService, optional
         Optional :class:`~lib.protocols.FetchService` for dependency injection.
         When provided, ``fetch_service.fetch_urls()`` is used instead of the
@@ -499,9 +499,9 @@ def _prefetch_user_urls(
     logger.debug('[Task %s] Pre-fetching %d URL(s)', task['id'][:8], len(urls))
     round_entries = []
     for url in urls:
-        rn = len(task['searchRounds']) + 1
+        rn = len(task['toolRounds']) + 1
         entry = {'roundNum': rn, 'query': f'📄 {url}', 'results': None, 'status': 'searching', 'toolName': 'fetch_url'}
-        task['searchRounds'].append(entry)
+        task['toolRounds'].append(entry)
         round_entries.append((url, entry, rn))
         append_event(task, {'type': 'tool_start', 'roundNum': rn, 'query': f'Fetching {url[:80]}', 'toolName': 'fetch_url'})
     # Dispatch through protocol or concrete import

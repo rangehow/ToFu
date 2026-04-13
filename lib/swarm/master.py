@@ -148,7 +148,7 @@ class MasterOrchestrator(ReviewMixin):
             'convId': conv_id,
             'events_lock': threading.Lock(),
             'events': [],
-            'searchRounds': [],
+            'toolRounds': [],
             'phase': 'tool',
         }
 

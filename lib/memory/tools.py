@@ -2,7 +2,8 @@
 
 __all__ = ['ALL_MEMORY_TOOLS', 'MEMORY_TOOL_NAMES',
            'CREATE_MEMORY_TOOL', 'UPDATE_MEMORY_TOOL',
-           'DELETE_MEMORY_TOOL', 'MERGE_MEMORY_TOOL']
+           'DELETE_MEMORY_TOOL', 'MERGE_MEMORY_TOOL',
+           'SEARCH_MEMORIES_TOOL']
 
 
 CREATE_MEMORY_TOOL = {
@@ -153,5 +154,34 @@ MERGE_MEMORY_TOOL = {
     }
 }
 
-ALL_MEMORY_TOOLS = [CREATE_MEMORY_TOOL, UPDATE_MEMORY_TOOL, DELETE_MEMORY_TOOL, MERGE_MEMORY_TOOL]
-MEMORY_TOOL_NAMES = {'create_memory', 'update_memory', 'delete_memory', 'merge_memories'}
+SEARCH_MEMORIES_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "search_memories",
+        "description": (
+            "Search your accumulated memories (past experiences, bug patterns, "
+            "project conventions, workflow recipes) by keyword. Use this when you "
+            "encounter a situation where past experience might be relevant — e.g. "
+            "debugging a tricky issue, working with a specific library/API, or "
+            "following project conventions. You can call this multiple times with "
+            "different keywords to refine your search."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Search keywords — use specific terms related to what you're looking for (e.g. 'flask blueprint circular import', 'NCCL socket retry', 'cache invalidation pattern')"
+                },
+                "top_k": {
+                    "type": "integer",
+                    "description": "Maximum number of results to return (default: 30)"
+                }
+            },
+            "required": ["query"]
+        }
+    }
+}
+
+ALL_MEMORY_TOOLS = [CREATE_MEMORY_TOOL, UPDATE_MEMORY_TOOL, DELETE_MEMORY_TOOL, MERGE_MEMORY_TOOL, SEARCH_MEMORIES_TOOL]
+MEMORY_TOOL_NAMES = {'create_memory', 'update_memory', 'delete_memory', 'merge_memories', 'search_memories'}

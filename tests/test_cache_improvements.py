@@ -175,24 +175,31 @@ class TestConcurrentConversationTracking:
         count = _count_active_on_model('claude-opus-4', exclude_conv='stale-a')
         assert count == 0  # stale-b is too old
 
-    def test_contention_mentioned_in_cache_drop_reason(self):
-        """When cache drops with concurrent conversations, reason mentions contention."""
+    def test_unexplained_drop_reason_no_contention(self):
+        """When cache drops without client changes, reason does NOT mention contention.
+
+        A/B tested 2026-04-10: cache contention between different conversations
+        does NOT exist on Anthropic. Cache is keyed on exact prefix bytes;
+        different conversations cannot evict each other.
+        """
         from lib.tasks_pkg.cache_tracking import detect_cache_break
 
         msgs = [{'role': 'system', 'content': 'sys'}]
 
-        # Establish two conversations
+        # Establish two conversations on the same model
         detect_cache_break('race-a', msgs, None, 'claude-opus-4',
                            usage={'cache_read_tokens': 50000})
         detect_cache_break('race-b', msgs, None, 'claude-opus-4',
                            usage={'cache_read_tokens': 30000})
 
-        # Cache drop on conv-a (unexplained)
+        # Cache drop on conv-a (unexplained) — should NOT blame contention
         result = detect_cache_break('race-a', msgs, None, 'claude-opus-4',
                                     usage={'cache_read_tokens': 5000})
         assert result is not None
         assert 'server_side' in result
-        assert 'contention' in result['server_side']
+        assert 'contention' not in result['server_side']
+        # Should mention the real possible causes
+        assert 'eviction' in result['server_side'] or 'breakpoint' in result['server_side']
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

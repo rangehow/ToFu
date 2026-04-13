@@ -109,7 +109,7 @@ def _extract_image_gen_history(task, messages=None):
 
     1. **Conversation messages** — tool result messages with ``image_url``
        content blocks from previous tasks (cross-turn history).
-    2. **Current task searchRounds** — successful ``generate_image`` rounds
+    2. **Current task toolRounds** — successful ``generate_image`` rounds
        from this task that have ``imageDataUri`` (intra-turn history).
 
     Returns:
@@ -157,8 +157,8 @@ def _extract_image_gen_history(task, messages=None):
                     'mime_type': mime_type,
                 })
 
-    # ── Phase 2: Scan current task's searchRounds ──
-    for sr in (task.get('searchRounds') or []):
+    # ── Phase 2: Scan current task's toolRounds ──
+    for sr in (task.get('toolRounds') or []):
         if sr.get('toolName') != 'generate_image':
             continue
         results = sr.get('results') or []

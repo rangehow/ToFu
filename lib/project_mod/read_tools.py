@@ -205,7 +205,13 @@ def _read_absolute_file(path: str, start_line=None, end_line=None):
     return result
 
 
-def tool_read_file(base, rel_path, start_line=None, end_line=None):
+def _read_project_file(base, rel_path, start_line=None, end_line=None):
+    """Read a single project-relative file.  Internal helper for tool_read_files.
+
+    Handles safe-path validation, data-file detection, symbol TOC extraction,
+    and truncation.  Absolute paths are NOT handled here — the caller
+    (tool_read_files) routes those to _read_absolute_file.
+    """
     try:
         target = _safe_path(base, rel_path)
     except ValueError as e:
@@ -260,10 +266,15 @@ def tool_read_file(base, rel_path, start_line=None, end_line=None):
 
 
 def _merge_same_file_ranges(reads):
-    """Merge overlapping/adjacent ranges for the same file."""
+    """Merge overlapping/adjacent ranges for the same file.
+
+    Preserves ``_base`` (per-spec base override for multi-root) through
+    the merge — the first occurrence's ``_base`` wins for each path group.
+    """
     GAP_THRESHOLD = 40
     from collections import OrderedDict
-    grouped = OrderedDict()
+    grouped = OrderedDict()  # path → list[(sl, el)]
+    base_map = {}            # path → _base (first seen)
     for spec in reads:
         if not isinstance(spec, dict) or 'path' not in spec:
             grouped.setdefault(None, []).append(spec)
@@ -272,6 +283,8 @@ def _merge_same_file_ranges(reads):
         sl = spec.get('start_line')
         el = spec.get('end_line')
         grouped.setdefault(p, []).append((sl, el))
+        if p not in base_map and '_base' in spec:
+            base_map[p] = spec['_base']
 
     merged = []
     for p, ranges in grouped.items():
@@ -281,7 +294,10 @@ def _merge_same_file_ranges(reads):
             continue
         full_file = any(sl is None and el is None for sl, el in ranges)
         if full_file:
-            merged.append({'path': p})
+            entry = {'path': p}
+            if p in base_map:
+                entry['_base'] = base_map[p]
+            merged.append(entry)
             continue
         sorted_ranges = sorted(ranges, key=lambda r: (r[0] or 1, r[1] or float('inf')))
         combined = []
@@ -296,6 +312,8 @@ def _merge_same_file_ranges(reads):
                     combined.append([sl, el])
         for s, e in combined:
             entry = {'path': p}
+            if p in base_map:
+                entry['_base'] = base_map[p]
             if s is not None:
                 entry['start_line'] = s
             if e is not None:
@@ -306,7 +324,15 @@ def _merge_same_file_ranges(reads):
 
 
 def tool_read_files(base, reads):
-    """Batch-read multiple files (or file ranges) in one call."""
+    """Batch-read multiple files (or file ranges) in one call.
+
+    Each spec in *reads* is ``{path, start_line?, end_line?}``.
+    Multi-root callers may attach ``_base`` per-spec to override the
+    default *base* for that particular file.
+
+    Absolute paths (starting with ``/`` or ``~``) are routed to
+    ``_read_absolute_file`` and bypass the project sandbox.
+    """
     if not reads or not isinstance(reads, list):
         return 'Error: "reads" must be a non-empty array of {path, start_line?, end_line?} objects.'
     MAX_BATCH = 20
@@ -327,6 +353,7 @@ def tool_read_files(base, reads):
         rel_path = spec['path']
         sl = spec.get('start_line')
         el = spec.get('end_line')
+        spec_base = spec.get('_base', base)  # per-spec base override (multi-root)
 
         # Route: absolute paths → _read_absolute_file (images, PDFs, Office, text)
         if _is_absolute_path(rel_path):
@@ -353,19 +380,18 @@ def tool_read_files(base, reads):
             parts.append(str(result))
             continue
 
-        # Project-relative path
+        # Project-relative path — auto-expand small files to whole-file
         if sl is not None or el is not None:
             try:
-                target = _safe_path(base, rel_path)
+                target = _safe_path(spec_base, rel_path)
                 if os.path.isfile(target):
                     file_sz = os.path.getsize(target)
                     if file_sz <= WHOLE_FILE_THRESHOLD:
                         sl, el = None, None
             except (ValueError, OSError) as e:
                 logger.debug('[Tools] read_files range check failed for %s: %s', rel_path, e, exc_info=True)
-                pass
 
-        result = tool_read_file(base, rel_path, sl, el)
+        result = _read_project_file(spec_base, rel_path, sl, el)
         if total_chars + len(result) > BATCH_CHAR_BUDGET:
             remaining = BATCH_CHAR_BUDGET - total_chars
             if remaining > 200:

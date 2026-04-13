@@ -614,22 +614,23 @@ class TestSystemReminderAndBlocks:
         assert 'Project files: a.py, b.py' in full
         assert '</system-reminder>' in full
 
-    def test_skills_context_in_user_message(self):
-        """Skills listing is injected into the user message, not the system message.
+    def test_skills_context_in_system_message(self):
+        """Memory count hint is injected into the system message.
 
-        After the refactor, _inject_system_contexts no longer injects the full
-        memory listing. Instead, inject_memory_to_user() handles it.
+        Both compact memory instructions and the dynamic count hint go
+        into the system message. inject_memory_to_user() only handles
+        legacy cleanup of old <available_memories> listings.
         """
         from lib.tasks_pkg.system_context import _inject_system_contexts, inject_memory_to_user
         messages = [
             {'role': 'system', 'content': 'Base'},
             {'role': 'user', 'content': 'Hello world'},
         ]
+        # has_real_tools=False means no memory injection (no tools = no memory)
         _inject_system_contexts(
             messages, '/tmp', False, True, False, False,
             has_real_tools=False,
         )
-        # System message should NOT contain memory listing
         content = messages[0]['content']
         if isinstance(content, list):
             full = '\n\n'.join(b['text'] for b in content if isinstance(b, dict))
@@ -637,19 +638,34 @@ class TestSystemReminderAndBlocks:
             full = content
         assert '<available_memories>' not in full
 
-        # Now inject skills into user message
+        # With has_real_tools=True, the count hint should appear in system msg
+        messages2 = [
+            {'role': 'system', 'content': 'Base'},
+            {'role': 'user', 'content': 'Hello world'},
+        ]
         with patch('lib.memory.build_memory_context',
-                   return_value='<available_memories>\nSkill 1: python\n</available_memories>'):
-            inject_memory_to_user(
-                messages, memory_enabled=True, has_real_tools=False)
+                   return_value='You have 10 accumulated memories from previous sessions. Use search_memories(query) to find relevant past experience.'):
+            _inject_system_contexts(
+                messages2, '/tmp', False, True, False, False,
+                has_real_tools=True,
+            )
+        content2 = messages2[0]['content']
+        if isinstance(content2, list):
+            full2 = '\n\n'.join(b['text'] for b in content2 if isinstance(b, dict))
+        else:
+            full2 = content2
+        assert '10 accumulated memories' in full2
+        assert 'memory_accumulation' in full2
 
-        # User message should contain memory listing
-        user_msg = messages[-1]
-        assert user_msg['role'] == 'user'
-        user_text = user_msg.get('content', '')
-        if isinstance(user_text, list):
-            user_text = '\n'.join(b.get('text', '') for b in user_text if isinstance(b, dict))
-        assert '<available_memories>' in user_text
+        # Legacy cleanup: inject_memory_to_user strips old listings from user msg
+        messages3 = [
+            {'role': 'system', 'content': 'Base'},
+            {'role': 'user', 'content': 'Hello <available_memories>\nOld listing\n</available_memories>'},
+        ]
+        inject_memory_to_user(
+            messages3, memory_enabled=True, has_real_tools=False)
+        user_text = messages3[-1].get('content', '')
+        assert '<available_memories>' not in user_text
 
     def test_static_guidance_as_separate_block(self):
         """Static guidance sections are injected as a separate text block."""

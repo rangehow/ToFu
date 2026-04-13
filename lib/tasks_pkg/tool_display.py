@@ -1,4 +1,4 @@
-"""Tool-call display helpers — build search-round entries and tool_start events.
+"""Tool-call display helpers — build tool-round entries and tool_start events.
 
 Extracted from ``orchestrator.py`` to keep the main run-loop module focused on
 orchestration logic.  The public entry-point is :func:`_build_tool_round_entry`;
@@ -112,6 +112,9 @@ def _tool_display_memory(fn_name, fn_args, tc_id, tc_args_str):
     elif fn_name == 'merge_memories':
         ids = fn_args.get('memory_ids', [])
         display = f"🔀 Merging {len(ids)} memories → {fn_args.get('name', '?')}"
+    elif fn_name == 'search_memories':
+        query = fn_args.get('query', '')
+        display = f"🔍 Searching memories: {query[:80]}" if query else "🔍 Searching memories"
     else:
         display = f"💡 {fn_name}"
     return display, {'toolName': fn_name}
@@ -304,16 +307,16 @@ def _build_display_dispatch_table():
 _TOOL_DISPLAY_DISPATCH = _build_display_dispatch_table()
 
 
-def _build_tool_round_entry(fn_name, fn_args, tc_id, tc_args_str, search_round_num,
+def _build_tool_round_entry(fn_name, fn_args, tc_id, tc_args_str, tool_round_num,
                              project_enabled):
-    """Build a search-round entry and tool_start event payload for a tool call.
+    """Build a tool-round entry and tool_start event payload for a tool call.
 
     Uses a module-level dispatch table (``_TOOL_DISPLAY_DISPATCH``) instead of
     rebuilding a dict on every call.  The only runtime override is for
     CODE_EXEC_TOOL_NAMES when ``project_enabled`` is False — those get
     redirected to ``_tool_display_code_exec``.
 
-    Returns (new_search_round_num, round_entry, event_payload).
+    Returns (new_tool_round_num, round_entry, event_payload).
     """
     # ── Runtime override: code-exec tools display differently when project
     #    mode is off (standalone code execution vs. project tool).
@@ -329,8 +332,8 @@ def _build_tool_round_entry(fn_name, fn_args, tc_id, tc_args_str, search_round_n
         display_query = f'🔧 {fn_name}'
         extra = {'toolName': fn_name}
 
-    search_round_num += 1
-    rn = search_round_num
+    tool_round_num += 1
+    rn = tool_round_num
 
     # Build round_entry
     round_entry = {
@@ -356,4 +359,4 @@ def _build_tool_round_entry(fn_name, fn_args, tc_id, tc_args_str, search_round_n
         if not k.startswith('_display_'):
             event[k] = v
 
-    return search_round_num, round_entry, event
+    return tool_round_num, round_entry, event

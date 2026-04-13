@@ -1167,6 +1167,114 @@ def _is_import_or_package_error(stderr_text: str) -> bool:
     return any(ind in stderr_text for ind in indicators)
 
 
+def _is_mypyc_error(stderr_text: str) -> bool:
+    """Heuristic: does the error look like a broken mypyc compiled extension?
+
+    Packages like charset-normalizer, black, and mypy ship mypyc-compiled
+    .so/.pyd files.  When a user's Python version or platform doesn't match
+    the compiled extension, the import fails with:
+        No module named '<hash>__mypyc'
+    or:
+        partially initialized module '...' has no attribute 'md__mypyc'
+
+    Fix: ``pip install --force-reinstall <package>`` to get a wheel that
+    matches the current Python.
+    """
+    return bool(re.search(r"No module named '[0-9a-f]+__mypyc'", stderr_text)
+                or '__mypyc' in stderr_text)
+
+
+# Known packages that ship mypyc-compiled extensions.
+# Keys are regex patterns matched against the stderr traceback to identify
+# which pip package is broken.  Patterns use word boundaries to avoid
+# false positives (e.g. '__mypyc' should NOT match the 'mypyc' entry).
+_MYPYC_PACKAGE_PATTERNS: list[tuple[re.Pattern, str]] = [
+    (re.compile(r'charset_normalizer'),          'charset-normalizer'),
+    (re.compile(r'\bblack\b'),                   'black'),
+    (re.compile(r'\bmypy[^c]|\bmypy$'),          'mypy'),
+]
+
+
+def _detect_mypyc_broken_packages(stderr_text: str) -> list[str]:
+    """Detect which pip packages have broken mypyc extensions from the traceback.
+
+    Returns a list of pip package names to force-reinstall.
+    """
+    packages = set()
+    # Look for known package names in the traceback context
+    for pattern, pip_name in _MYPYC_PACKAGE_PATTERNS:
+        if pattern.search(stderr_text):
+            packages.add(pip_name)
+    # Fallback: if we see __mypyc but can't identify the package,
+    # force-reinstall charset-normalizer (by far the most common culprit)
+    if not packages and '__mypyc' in stderr_text:
+        packages.add('charset-normalizer')
+    return sorted(packages)
+
+
+def _try_fix_mypyc(stderr_text: str) -> bool:
+    """Try to fix broken mypyc compiled extensions by force-reinstalling.
+
+    Returns True if packages were reinstalled (caller should retry server).
+    """
+    packages = _detect_mypyc_broken_packages(stderr_text)
+    if not packages:
+        return False
+
+    pkg_str = ', '.join(packages)
+    _bus.emit('phase', json.dumps({
+        'id': 'mypyc-fix',
+        'label': f'🔧 Fixing broken mypyc extensions: {pkg_str}',
+        'status': 'active',
+        'detail': 'These packages have compiled C extensions that don\'t match '
+                  'your Python version. Force-reinstalling to get correct wheels…',
+    }))
+    _bus.emit('log', f'Detected broken mypyc extensions in: {pkg_str}')
+    _bus.emit('log', 'Running pip install --force-reinstall to fix…')
+
+    cmd = [sys.executable, '-m', 'pip', 'install', '--force-reinstall',
+           '--no-input'] + packages
+    _bus.emit('log', f'$ {" ".join(cmd)}')
+
+    try:
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, bufsize=1, cwd=BASE_DIR)
+    except Exception as e:
+        _bus.emit('log', f'Failed to run pip: {e}')
+        _bus.emit('phase', json.dumps({
+            'id': 'mypyc-fix',
+            'label': f'🔧 mypyc fix — pip failed to start',
+            'status': 'error',
+        }))
+        return False
+
+    for line in proc.stdout:
+        line = line.rstrip('\n')
+        _bus.emit('pip_output', line)
+
+    proc.wait(timeout=PIP_TIMEOUT)
+
+    if proc.returncode == 0:
+        _bus.emit('log', f'✅ Force-reinstalled: {pkg_str}')
+        _bus.emit('phase', json.dumps({
+            'id': 'mypyc-fix',
+            'label': f'🔧 Fixed mypyc extensions: {pkg_str}',
+            'status': 'done',
+        }))
+        return True
+    else:
+        _bus.emit('log', f'❌ pip install --force-reinstall failed (exit code {proc.returncode})')
+        _bus.emit('phase', json.dumps({
+            'id': 'mypyc-fix',
+            'label': f'🔧 mypyc fix failed',
+            'status': 'error',
+            'detail': f'Exit code {proc.returncode}. Try manually: '
+                      f'pip install --force-reinstall {pkg_str}',
+        }))
+        return False
+
+
 def _is_pg_missing_error(stderr_text: str) -> bool:
     """Heuristic: does the error look like PostgreSQL binaries are missing?"""
     indicators = [
@@ -1234,6 +1342,42 @@ def main():
         'detail': f'Exit code {rc}',
     }))
     _bus.emit('error_text', stderr_text[-3000:])
+
+    # ── Fast path: mypyc broken extensions (no LLM needed) ──
+    # Packages like charset-normalizer ship mypyc-compiled .so files that
+    # are platform/Python-version specific.  When they don't match, every
+    # import that touches requests/urllib3 fails.  Fix: force-reinstall.
+    if _is_mypyc_error(stderr_text) and _try_fix_mypyc(stderr_text):
+        _bus.emit('phase', json.dumps({
+            'id': 'mypyc-retry',
+            'label': '🔄 Retrying server.py after mypyc fix…',
+            'status': 'active',
+        }))
+        _bus.emit('log', 'Restarting server.py…')
+        _bus.emit('phase', json.dumps({
+            'id': 'handoff-mypyc',
+            'label': '🔄 Handing off to server.py — this may take a moment…',
+            'status': 'active',
+            'detail': 'The server is starting up (database init, migrations, etc.).',
+        }))
+        time.sleep(0.5)
+
+        _stop_status_server(status_server)
+        status_server = None
+
+        _, stderr_text, rc = _try_start_server()
+        # If _try_start_server returns, the server crashed again.
+        # Re-open status page and fall through to normal repair flow.
+        _bus = EventBus()
+        status_server = _start_status_server(host, port)
+        _bus.emit('phase', json.dumps({
+            'id': 'mypyc-retry',
+            'label': '🔄 Still failing after mypyc fix',
+            'status': 'error',
+            'detail': f'Exit code {rc}',
+        }))
+        _bus.emit('error_text', stderr_text[-3000:])
+        # Fall through to requirements.txt / LLM repair below
 
     # ── Fast path: requirements.txt (no LLM needed) ──
     # For import / package errors, try installing from requirements.txt

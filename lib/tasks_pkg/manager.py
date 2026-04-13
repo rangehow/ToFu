@@ -34,7 +34,7 @@ def create_task(conv_id, messages, config):
     task = {
         'id': task_id, 'convId': conv_id, 'messages': messages, 'config': config,
         'status': 'running', 'content': '', 'thinking': '', 'error': None,
-        'aborted': False, 'searchRounds': [], 'events': [],
+        'aborted': False, 'toolRounds': [], 'events': [],
         'events_lock': threading.Lock(), 'content_lock': threading.Lock(),
         'created_at': time.time(),
         'finishReason': None, 'usage': None, 'toolSummary': None,
@@ -138,15 +138,18 @@ def persist_task_result(task):
     if task.get('modifiedFiles'): meta['modifiedFiles'] = task['modifiedFiles']
     if task.get('modifiedFileList'): meta['modifiedFileList'] = task['modifiedFileList']
 
+    # ★ Merge checkpoint toolRounds for DB persistence (continue flow)
+    _merged_tr = list(task.get('_checkpointToolRounds') or []) + (task.get('toolRounds') or [])
+
     try:
         db = get_thread_db(DOMAIN_CHAT)
-        sr_json = json.dumps(task.get('searchRounds') or [], ensure_ascii=False)
+        tr_json = json.dumps(_merged_tr, ensure_ascii=False)
         meta_json = json.dumps(meta, ensure_ascii=False) if meta else None
         db_execute_with_retry(db, '''INSERT OR REPLACE INTO task_results
-            (task_id,conv_id,content,thinking,error,status,search_rounds,metadata,created_at,completed_at)
+            (task_id,conv_id,content,thinking,error,status,tool_rounds,metadata,created_at,completed_at)
             VALUES (?,?,?,?,?,?,?,?,?,?)''',
             (task['id'], task['convId'], task['content'], task['thinking'],
-             task['error'], task['status'], sr_json, meta_json,
+             task['error'], task['status'], tr_json, meta_json,
              int(task['created_at']*1000), int(time.time()*1000)))
         logger.debug('[Task %s] conv=%s Persisted to DB successfully', task_id_short, conv_id_short)
     except Exception:
@@ -167,6 +170,9 @@ def persist_task_result(task):
 
     # ★ Update proactive scheduler task execution status
     _update_proactive_execution_status(task)
+
+    # ★ Auto-dispatch next queued message (server-side queue)
+    _dispatch_queued_message(task)
 
 
 def _update_proactive_execution_status(task):
@@ -200,11 +206,36 @@ def _update_proactive_execution_status(task):
                        task_id[:8], e, exc_info=True)
 
 
+def _dispatch_queued_message(task):
+    """Check for queued messages and dispatch the next one after task completion.
+
+    Runs in a fire-and-forget manner — failures are logged but don't affect
+    the calling task's persistence.
+    """
+    conv_id = task.get('convId', '')
+    if not conv_id:
+        return
+    # Don't dispatch if the task was aborted or errored (user may want to fix something)
+    if task.get('aborted'):
+        logger.debug('[Queue] Skipping auto-dispatch for conv=%s — task was aborted', conv_id[:8])
+        return
+
+    try:
+        from lib.message_queue import dispatch_next_queued
+        new_task_id = dispatch_next_queued(conv_id)
+        if new_task_id:
+            logger.info('[Queue] Auto-dispatched queued message → task %s for conv=%s',
+                        new_task_id[:8], conv_id[:8])
+    except Exception as e:
+        logger.warning('[Queue] Auto-dispatch failed for conv=%s: %s',
+                       conv_id[:8], e, exc_info=True)
+
+
 def _sync_result_to_conversation(task, meta):
     """Write the completed task result into the conversation's messages in the DB.
 
     Finds or creates the last assistant message and fills in content, thinking,
-    searchRounds, finishReason, etc.  This makes the backend self-sufficient —
+    toolRounds, finishReason, etc.  This makes the backend self-sufficient —
     even if no frontend client receives the 'done' SSE event, the conversation
     is updated.
 
@@ -314,25 +345,60 @@ def _sync_result_to_conversation(task, meta):
         new_content_len = len(content)
         new_thinking_len = len(thinking)
 
-        if existing_content_len > new_content_len and existing_thinking_len > new_thinking_len:
-            logger.info('%s conv=%s Server already has MORE content (existing=%d+%d > new=%d+%d) — '
-                       'frontend likely already synced. Skipping.',
-                       pfx, conv_id, existing_content_len, existing_thinking_len,
-                       new_content_len, new_thinking_len)
-            return
+        # ★ Merge checkpoint toolRounds for continue flow
+        _cp_tr = task.get('_checkpointToolRounds') or []
+        _new_tr = task.get('toolRounds') or []
+        tool_rounds = (list(_cp_tr) + _new_tr) if _cp_tr else _new_tr
 
-        # ── Fill in the assistant message ──
-        if content:
-            last_msg['content'] = content
-        if thinking:
-            last_msg['thinking'] = thinking
-        if error:
-            last_msg['error'] = error
+        if existing_content_len > new_content_len and existing_thinking_len > new_thinking_len:
+            # ★ FIX: Even when frontend has more content (synced before us),
+            #   still update toolRounds + metadata — the backend has richer
+            #   tool data (toolContent, assistantContent) that the frontend
+            #   may have missed if the SSE stream broke mid-delivery.
+            #   Without this, page refresh → Continue loses toolContent
+            #   because the frontend's stale sync overwrote our checkpoint.
+            _tr_updated = False
+            if tool_rounds:
+                _existing_tr = last_msg.get('toolRounds') or []
+                # Only replace if we have more rounds or the existing rounds
+                # are missing toolContent (frontend sync race condition)
+                _existing_has_tc = all(r.get('toolContent') for r in _existing_tr if r.get('status') == 'done')
+                _new_has_tc = any(r.get('toolContent') for r in tool_rounds if r.get('status') == 'done')
+                if len(tool_rounds) > len(_existing_tr) or (not _existing_has_tc and _new_has_tc):
+                    last_msg['toolRounds'] = tool_rounds
+                    _tr_updated = True
+            # Always update finishReason/metadata (frontend may not have received done event)
+            if meta.get('finishReason') and not last_msg.get('finishReason'):
+                last_msg['finishReason'] = meta['finishReason']
+            if meta.get('usage') and not last_msg.get('usage'):
+                last_msg['usage'] = meta['usage']
+            if meta.get('model') and not last_msg.get('model'):
+                last_msg['model'] = meta['model']
+            if _tr_updated or meta.get('finishReason'):
+                logger.info('%s conv=%s Content guard: existing=%d+%d > new=%d+%d, '
+                           'but still updating toolRounds=%s metadata=%s',
+                           pfx, conv_id, existing_content_len, existing_thinking_len,
+                           new_content_len, new_thinking_len,
+                           _tr_updated, bool(meta.get('finishReason')))
+            else:
+                logger.info('%s conv=%s Server already has MORE content (existing=%d+%d > new=%d+%d) — '
+                           'frontend likely already synced. Skipping.',
+                           pfx, conv_id, existing_content_len, existing_thinking_len,
+                           new_content_len, new_thinking_len)
+                return
+
+        else:
+            # Normal path: backend has equal or more content — update everything
+            if content:
+                last_msg['content'] = content
+            if thinking:
+                last_msg['thinking'] = thinking
+            if error:
+                last_msg['error'] = error
 
         # Copy metadata fields that the frontend would normally set
-        search_rounds = task.get('searchRounds')
-        if search_rounds:
-            last_msg['searchRounds'] = search_rounds
+        if tool_rounds:
+            last_msg['toolRounds'] = tool_rounds
         if meta.get('finishReason'):
             last_msg['finishReason'] = meta['finishReason']
         if meta.get('usage'):
@@ -614,19 +680,24 @@ def checkpoint_task_partial(task):
     if content_len == 0 and thinking_len == 0:
         return
 
+    # ★ Merge checkpoint toolRounds for continue flow
+    _cp_tr = task.get('_checkpointToolRounds') or []
+    _cur_tr = task.get('toolRounds') or []
+    _merged_tr = (list(_cp_tr) + _cur_tr) if _cp_tr else _cur_tr
+
     try:
         db = get_thread_db(DOMAIN_CHAT)
-        sr_json = json.dumps(task.get('searchRounds') or [], ensure_ascii=False)
+        tr_json = json.dumps(_merged_tr, ensure_ascii=False)
         meta = {}
         if task.get('model'): meta['model'] = task['model']
         if task.get('preset'): meta['preset'] = task['preset']
         if task.get('thinkingDepth'): meta['thinkingDepth'] = task['thinkingDepth']
         meta_json = json.dumps(meta, ensure_ascii=False) if meta else None
         db_execute_with_retry(db, '''INSERT OR REPLACE INTO task_results
-            (task_id,conv_id,content,thinking,error,status,search_rounds,metadata,created_at,completed_at)
+            (task_id,conv_id,content,thinking,error,status,tool_rounds,metadata,created_at,completed_at)
             VALUES (?,?,?,?,?,?,?,?,?,?)''',
             (task['id'], conv_id, task.get('content') or '', task.get('thinking') or '',
-             task.get('error'), 'running', sr_json, meta_json,
+             task.get('error'), 'running', tr_json, meta_json,
              int(task['created_at']*1000), int(time.time()*1000)))
         logger.debug('[Checkpoint %s] conv=%s Saved partial: content=%dchars thinking=%dchars',
                      task_id_short, conv_id, content_len, thinking_len)
@@ -690,21 +761,31 @@ def _sync_partial_to_conversation(task):
             last_msg = {'role': 'assistant', 'content': '', 'thinking': ''}
             messages.append(last_msg)
 
+        # Also write toolRounds if available
+        # ★ Merge checkpoint toolRounds for continue flow
+        _cp_tr = task.get('_checkpointToolRounds') or []
+        _cur_tr = task.get('toolRounds') or []
+        tool_rounds = (list(_cp_tr) + _cur_tr) if _cp_tr else _cur_tr
+
         # Only update if we have MORE content than what's already in DB
         existing_content_len = len(last_msg.get('content') or '')
         existing_thinking_len = len(last_msg.get('thinking') or '')
         if len(content) <= existing_content_len and len(thinking) <= existing_thinking_len:
-            return  # DB already has equal or more — skip
+            # ★ FIX: Even when content didn't grow, still update toolRounds
+            #   if the backend has richer data (toolContent).  This prevents
+            #   the frontend's stale sync from permanently losing tool content.
+            if tool_rounds and len(tool_rounds) > len(last_msg.get('toolRounds') or []):
+                last_msg['toolRounds'] = tool_rounds
+            else:
+                return  # DB already has equal or more — skip
 
         if content and len(content) > existing_content_len:
             last_msg['content'] = content
         if thinking and len(thinking) > existing_thinking_len:
             last_msg['thinking'] = thinking
 
-        # Also write searchRounds if available
-        search_rounds = task.get('searchRounds')
-        if search_rounds:
-            last_msg['searchRounds'] = search_rounds
+        if tool_rounds:
+            last_msg['toolRounds'] = tool_rounds
 
         from routes.conversations import build_search_text
         messages_json = json_dumps_pg(messages)

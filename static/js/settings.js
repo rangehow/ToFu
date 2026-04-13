@@ -102,7 +102,7 @@ function _brandSvg(brand, size) {
 // Generate new icons: python3 scripts/gen_tofu_icons.py
 // Convert PNG→SVG:    python3 scripts/png_to_svg.py
 
-const _ICON_V = '0.7.3';  // cache-bust version — bump when icons change
+const _ICON_V = '0.8.0';  // cache-bust version — bump when icons change
 const _ICON_BASE = (typeof BASE_PATH!=='undefined'?BASE_PATH:'') + '/static/icons';
 
 const _TOFU_PLANNER_SVG = `<img src="${_ICON_BASE}/tofu-planner.svg?v=${_ICON_V}" alt="Planner" style="width:100%;height:100%;display:block">`;
@@ -896,6 +896,12 @@ function openSettings() {
     debugCb.checked = !!(typeof _featureFlags !== 'undefined' && _featureFlags.debug_mode);
   }
 
+  // Keep Tool History toggle — defaults to true
+  var kthCb = document.getElementById('settingKeepToolHistory');
+  if (kthCb) {
+    kthCb.checked = config.keepToolHistory !== false; // default true
+  }
+
   // Theme picker sync
   var ct = _getCurrentTheme();
   document.querySelectorAll(".theme-option").forEach(function(el) {
@@ -983,9 +989,9 @@ function _renderProvidersTab() {
         '<div class="stg-provider-url">' + escapeHtml(p.base_url || '—') + '</div>' +
       '</div>' +
       '<div class="stg-provider-badges">' +
-        '<span class="stg-badge">' + keyCount + ' 个密钥</span>' +
-        '<span class="stg-badge">' + models.length + ' 个模型</span>' +
-        (p.enabled === false ? '<span class="stg-badge off">已禁用</span>' : '') +
+        '<span class="stg-badge">' + keyCount + ' ' + t('settings.keys') + '</span>' +
+        '<span class="stg-badge">' + models.length + ' ' + t('settings.models') + '</span>' +
+        (p.enabled === false ? '<span class="stg-badge off">' + t('settings.disabled') + '</span>' : '') +
       '</div>' +
       '<span class="stg-chevron">▾</span>' +
     '</div>';
@@ -1050,6 +1056,7 @@ function _renderProvidersTab() {
       '<div class="stg-models-header">' +
         '<span class="stg-models-title">模型列表</span>' +
         '<div class="stg-models-actions">' +
+          (_findMatchingTemplate(p) ? '<button class="stg-btn-add" onclick="_syncFromTemplate(' + pi + ')" title="从内置模板同步新增模型">📋 ' + t('settings.syncTemplate') + '</button>' : '') +
           '<button class="stg-btn-add" onclick="_discoverModels(' + pi + ')" title="从 /v1/models 接口自动发现模型">🔍 自动发现</button>' +
           '<button class="stg-btn-add" onclick="_addModel(' + pi + ')">+ 添加模型</button>' +
         '</div>' +
@@ -1410,7 +1417,7 @@ function _updateBalanceBadge(provIdx, info) {
   var span = document.createElement('span');
   span.className = 'stg-badge stg-badge-balance stg-badge-bal-' + colorClass;
   span.textContent = '\uD83D\uDCB0 ' + text;
-  span.title = '余额（点击刷新）';
+  span.title = t('settings.balanceClickRefresh');
   span.style.cursor = 'pointer';
   span.onclick = function(e) {
     e.stopPropagation();
@@ -1689,6 +1696,67 @@ function _findMatchingTemplate(provider) {
     }
   }
   return null;
+}
+
+// ── Template Sync: merge new models from template into existing provider ──
+
+/**
+ * Sync models from the matching built-in template into the provider.
+ * Adds any models present in the template but missing from the provider.
+ * Updates capabilities/cost for existing models if the template has newer info.
+ */
+async function _syncFromTemplate(provIdx) {
+  var p = _stgProviders[provIdx];
+  if (!p) return;
+  await _loadExternalProviderTemplates();
+  var tpl = _findMatchingTemplate(p);
+  if (!tpl) {
+    alert('找不到匹配的内置模板。');
+    return;
+  }
+  var existingIds = new Set((p.models || []).map(function(m) { return m.model_id; }));
+  var added = 0;
+  var updated = 0;
+  var tplModels = tpl.models || [];
+  for (var i = 0; i < tplModels.length; i++) {
+    var tm = tplModels[i];
+    if (existingIds.has(tm.model_id)) {
+      // Update capabilities and cost for existing model
+      for (var j = 0; j < p.models.length; j++) {
+        if (p.models[j].model_id === tm.model_id) {
+          var changed = false;
+          if (tm.capabilities && JSON.stringify(p.models[j].capabilities) !== JSON.stringify(tm.capabilities)) {
+            p.models[j].capabilities = tm.capabilities.slice();
+            changed = true;
+          }
+          if (tm.cost != null && p.models[j].cost !== tm.cost) {
+            p.models[j].cost = tm.cost;
+            changed = true;
+          }
+          if (changed) updated++;
+          break;
+        }
+      }
+      continue;
+    }
+    p.models.push({
+      model_id: tm.model_id,
+      aliases: (tm.aliases || []).slice(),
+      capabilities: (tm.capabilities || ['text']).slice(),
+      rpm: tm.rpm || 30,
+      cost: tm.cost || 0.01,
+      thinking_default: (tm.capabilities || []).indexOf('thinking') >= 0,
+    });
+    added++;
+  }
+  _renderProvidersTab();
+  _renderPresetsTab(_serverConfig);
+  var msg = '模板同步完成：';
+  if (added > 0) msg += '新增 ' + added + ' 个模型';
+  if (updated > 0) msg += (added > 0 ? '，' : '') + '更新 ' + updated + ' 个模型';
+  if (added === 0 && updated === 0) msg += '所有模型已是最新，无需更新。';
+  msg += '\n\n记得点击「保存」按钮来保存更改。';
+  alert(msg);
 }
 
 // ── Model Auto-Discovery ──
@@ -2385,7 +2453,7 @@ function _testMtProvider() {
   var result = document.getElementById('mtTestResult' + suffix);
   if (!btn || !result) return;
   btn.disabled = true;
-  result.textContent = '⏳ 测试中…';
+  result.textContent = t('settings.mtTesting');
   result.style.color = 'var(--text-secondary)';
 
   fetch(apiUrl('/api/translate/mt-test'), {
@@ -2400,15 +2468,15 @@ function _testMtProvider() {
   }).then(function(r) { return r.json(); }).then(function(data) {
     btn.disabled = false;
     if (data.ok) {
-      result.textContent = '✅ 连接成功：' + (data.translated || '').substring(0, 60);
+      result.textContent = t('settings.mtTestOk') + (data.translated || '').substring(0, 60);
       result.style.color = 'var(--accent-green, #4caf50)';
     } else {
-      result.textContent = '❌ ' + (data.error || '未知错误');
+      result.textContent = '❌ ' + (data.error || t('settings.mtTestFail'));
       result.style.color = 'var(--accent-red, #f44336)';
     }
   }).catch(function(e) {
     btn.disabled = false;
-    result.textContent = '❌ 请求失败: ' + e.message;
+    result.textContent = t('settings.mtTestReqFail') + e.message;
     result.style.color = 'var(--accent-red, #f44336)';
   });
 }
@@ -2576,6 +2644,12 @@ function saveSettings() {
       config.thinkingDepth = config.defaultThinkingDepth;
     }
   }
+  // Keep Tool History toggle
+  var kthCb = document.getElementById('settingKeepToolHistory');
+  if (kthCb) {
+    config.keepToolHistory = kthCb.checked;
+  }
+
   try { localStorage.setItem("claude_client_config", JSON.stringify(config)); }
   catch (e) { debugLog('[saveSettings] localStorage save failed: ' + e.message, 'error'); }
 

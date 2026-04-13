@@ -51,7 +51,10 @@ def test_config():
     from lib.mcp import config as mcp_config
 
     # Use a temp dir to avoid touching real config
-    with tempfile.TemporaryDirectory() as tmpdir:
+    # Use project-local data/tmp/ (/tmp may not be accessible on all machines)
+    _project_tmp = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data', 'tmp')
+    os.makedirs(_project_tmp, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=_project_tmp) as tmpdir:
         # Monkey-patch config dir
         original_dir = mcp_config._CONFIG_DIR
         mcp_config._CONFIG_DIR = tmpdir

@@ -308,6 +308,19 @@ class PgConnection:
                 self._conn.close()
             except Exception as _close_err:
                 logger.debug('[DB] Error closing PG connection: %s', _close_err)
+            # Release the connection semaphore slot (if governed)
+            sem = getattr(self, '_semaphore', None)
+            if sem is not None:
+                try:
+                    sem.release()
+                except ValueError:
+                    logger.debug('[DB] Semaphore already released (double-close)')  # defensive
+                self._semaphore = None
+                # Decrement global count
+                from lib.database._core import _conn_count_lock
+                import lib.database._core as _core_mod
+                with _conn_count_lock:
+                    _core_mod._conn_count = max(0, _core_mod._conn_count - 1)
 
     def cursor(self):
         cur = self._conn.cursor()

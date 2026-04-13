@@ -754,17 +754,36 @@ function _saveConvToolState() {
    * updatedAt = Date.now(), making the conversation jump to the top of the
    * sidebar just because the user toggled a tool button. */
   saveConversations(null);
-  /* ★ BUG FIX: Do NOT sync empty convs to server.
-   * When a new conv is created, _saveConvToolState() fires before the user
-   * message is pushed.  Syncing messages:[] overwrites the server with nothing,
-   * which causes the conv to flicker/disappear on reload (_serverMsgCount=0,
-   * _purgeEmptyConvs kills it).  Only sync when there are actual messages. */
+  /* ★ Lightweight tool-state sync via PATCH (no messages, no msg_count).
+   * Only syncs when the conv already exists in the DB (has messages).
+   * Uses a debounced fetch to coalesce rapid toggles. */
   if (conv.messages && conv.messages.length > 0) {
-    syncConversationToServerDebounced(conv);
+    _syncToolStateDebounced(conv);
   } else {
     console.log(`[_saveConvToolState] Skipped server sync — conv ${conv.id.slice(0,8)} has no messages yet`);
   }
 }
+
+// ── Debounced lightweight tool-state PATCH ──
+const _toolStateDebounceTimers = new Map();
+function _syncToolStateDebounced(conv, delayMs = 1500) {
+  const existing = _toolStateDebounceTimers.get(conv.id);
+  if (existing) clearTimeout(existing);
+  _toolStateDebounceTimers.set(conv.id, setTimeout(() => {
+    _toolStateDebounceTimers.delete(conv.id);
+    const settings = _buildConvSettings(conv);
+    fetch(apiUrl(`/api/chat/tool-state/${conv.id}`), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(settings),
+    }).then(resp => {
+      if (!resp.ok) console.warn(`[ToolState] PATCH failed: HTTP ${resp.status}`);
+    }).catch(err => {
+      console.warn(`[ToolState] PATCH error: ${err.message}`);
+    });
+  }, delayMs));
+}
+
 function _restoreConvToolState(conv) {
   config.thinkingDepth = conv.thinkingDepth || null;   // ← restore depth BEFORE model UI (let _applyModelUI normalize)
   _applyModelUI(conv.model || conv.preset || conv.effort || serverModel);
@@ -1035,6 +1054,8 @@ function loadConversation(id) {
   }
 
   renderPendingQueueUI(id);
+  // ★ Refresh server queue state for this conversation
+  _refreshServerQueue(id);
   updateSendButton();
   if (typeof restoreDebugForConv === "function") restoreDebugForConv(id);
   const inp = document.getElementById("userInput"),
@@ -1304,7 +1325,7 @@ function buildApiMessages(conv, opts = {}) {
         toolCtx = msg.toolSummary;
       } else {
         // Fallback: serialize raw tool calls (for old messages without toolSummary)
-        const rounds = getSearchRoundsFromMsg(msg);
+        const rounds = getToolRoundsFromMsg(msg);
         if (rounds.length > 0) {
           const calls = rounds.map(r => {
             const call = { name: r.toolName || "unknown" };
@@ -1352,6 +1373,95 @@ function buildApiMessages(conv, opts = {}) {
   return messages;
 }
 
+// ══════════════════════════════════════════════════════
+//  ★ Shared config/settings builders for /api/chat/send and /api/chat/regenerate
+// ══════════════════════════════════════════════════════
+
+/**
+ * Build the task config object from per-conversation state.
+ * Used by sendMessage, saveEditAndResend, regenerateFromUser for atomic backend calls.
+ */
+function _buildConvConfig(conv) {
+  const _isActive = (conv.id === activeConvId);
+  return {
+    maxTokens: config.maxTokens,
+    thinkingEnabled,
+    model: _isActive ? (config.model || serverModel) : (conv.model || serverModel),
+    preset: _isActive ? (config.model || serverModel) : (conv.model || serverModel),
+    systemPrompt: config.systemPrompt || '',
+    thinkingDepth: _isActive ? config.thinkingDepth : (conv.thinkingDepth || null),
+    temperature: config.temperature,
+    searchMode: _isActive ? searchMode : (conv.searchMode || "multi"),
+    fetchEnabled: _isActive ? fetchEnabled : (!!conv.fetchEnabled),
+    codeExecEnabled: _isActive ? codeExecEnabled : (!!conv.codeExecEnabled),
+    memoryEnabled: _isActive ? memoryEnabled : (conv.memoryEnabled !== undefined ? !!conv.memoryEnabled : true),
+    schedulerEnabled: _isActive ? schedulerEnabled : (!!conv.schedulerEnabled),
+    swarmEnabled: _isActive ? swarmEnabled : (!!conv.swarmEnabled),
+    projectPath: _getConvProjectPath(conv),
+    autoApply: autoApplyWrites,
+    browserEnabled: _isActive ? browserEnabled : (!!conv.browserEnabled),
+    desktopEnabled: _isActive ? desktopEnabled : (!!conv.desktopEnabled),
+    imageGenEnabled: _isActive ? imageGenEnabled : (!!conv.imageGenEnabled),
+    humanGuidanceEnabled: _isActive ? humanGuidanceEnabled : (!!conv.humanGuidanceEnabled),
+    endpointMode: _isActive ? endpointEnabled : (!!conv.endpointEnabled),
+    agentBackend: activeAgentBackend || 'builtin',
+    autoTranslate: conv.autoTranslate !== undefined ? !!conv.autoTranslate : !!autoTranslate,
+    browserClientId: (_isActive ? browserEnabled : (!!conv.browserEnabled)) ? (window._browserClientId || null) : null,
+    keepToolHistory: config.keepToolHistory !== false,
+  };
+}
+
+/**
+ * Build the per-conversation settings dict for server persistence.
+ * Mirrors what syncConversationToServer sends in the PUT settings.
+ */
+function _buildConvSettings(conv) {
+  return {
+    model: conv.model || config.model || serverModel,
+    preset: conv.model || config.model || serverModel,
+    thinkingDepth: conv.thinkingDepth || config.thinkingDepth,
+    searchMode: conv.searchMode || searchMode,
+    fetchEnabled: !!conv.fetchEnabled,
+    codeExecEnabled: !!conv.codeExecEnabled,
+    browserEnabled: !!conv.browserEnabled,
+    desktopEnabled: !!conv.desktopEnabled,
+    memoryEnabled: conv.memoryEnabled !== undefined ? !!conv.memoryEnabled : true,
+    schedulerEnabled: !!conv.schedulerEnabled,
+    swarmEnabled: !!conv.swarmEnabled,
+    endpointEnabled: !!conv.endpointEnabled,
+    imageGenEnabled: !!conv.imageGenEnabled,
+    humanGuidanceEnabled: !!conv.humanGuidanceEnabled,
+    projectPath: conv.projectPath || '',
+    projectPaths: conv.projectPaths || [],
+    autoTranslate: conv.autoTranslate !== undefined ? !!conv.autoTranslate : !!autoTranslate,
+    folderId: conv.folderId || null,
+  };
+}
+
+/**
+ * Render the streaming assistant bubble in the chat DOM.
+ * Shared by sendMessage and regenerateFromUser flows.
+ */
+function _renderStreamingBubble(conv, sendConfig) {
+  const inner = document.getElementById("chatInner");
+  if (!inner) return;
+  const el = document.createElement("div");
+  el.className = "message message-new";
+  el.addEventListener('animationend', () => el.classList.remove('message-new'), { once: true });
+  el.id = "streaming-msg";
+  const _isEndpoint = !!sendConfig.endpointMode;
+  const _streamAvatar = _isEndpoint
+    ? ((typeof _TOFU_PLANNER_SVG !== 'undefined') ? _TOFU_PLANNER_SVG : '✦')
+    : ((typeof _TOFU_WORKER_SVG !== 'undefined') ? _TOFU_WORKER_SVG : '✦');
+  const _streamRole = _isEndpoint ? 'Planner' : 'Agent';
+  const _streamStatus = _isEndpoint ? 'Planning…' : 'Preparing...';
+  const _streamClass = _isEndpoint ? 'ep-planner-msg' : 'ep-worker-msg';
+  el.innerHTML = `<div class="message-avatar">${_streamAvatar}</div><div class="message-content"><div class="message-header"><span class="message-role">${_streamRole}</span><span class="message-time">${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span><span id="stream-elapsed-timer" class="stream-elapsed-timer"></span></div><div class="message-body" id="streaming-body"><div class="stream-status"><div class="pulse"></div> ${_streamStatus}</div></div></div>`;
+  if (_streamClass) el.classList.add(_streamClass);
+  inner.appendChild(el);
+  scrollToBottom();
+}
+
 async function startAssistantResponse(convId) {
   const conv = conversations.find((c) => c.id === convId);
   if (!conv || activeStreams.has(convId) || conv.activeTaskId) return;
@@ -1373,7 +1483,7 @@ async function startAssistantResponse(convId) {
     content: "",
     thinking: "",
     timestamp: Date.now(),
-    searchRounds: [],
+    toolRounds: [],
     model: _convModel,
   };
   conv.messages.push(assistantMsg);
@@ -1404,14 +1514,14 @@ async function startAssistantResponse(convId) {
   /* ★ Don't persist the empty assistant message yet — wait until we have a taskId.
         This prevents a "ghost" empty message if the user refreshes before POST returns. */
   buildTurnNav(conv);
-  /* ★ Wait for image hydration to complete — after page reload, images loaded
-     from DB only have url (no base64). _hydrateImageBase64 fetches them in
-     background, but buildApiMessages needs base64 for the LLM API. */
-  if (conv._hydratePromise) await conv._hydratePromise;
-  const apiMessages = buildApiMessages(conv);
-  // ★ Show full messages in debug panel for inspection
+  // ★ Server-side message building: the backend loads messages from DB,
+  //   so we MUST sync to server BEFORE the POST to ensure DB is up-to-date.
+  //   We sync all messages EXCEPT the trailing empty assistant (it's just a
+  //   UI placeholder — the backend doesn't need it).
+  await syncConversationToServer(conv);
+  // Debug panel shows raw conv.messages for inspection (not API-processed).
   showMessagesInDebug(
-    apiMessages,
+    conv.messages.slice(0, -1),  // exclude trailing empty assistant msg
     `${conv.messages.length} ${t('conv.messages')}`,
     false,
     convId,
@@ -1453,10 +1563,10 @@ async function startAssistantResponse(convId) {
   try {
     const baseConfig = {
       maxTokens: config.maxTokens,
-      model: serverModel,
       thinkingEnabled,
       preset: _pre,
       model: _pre,
+      systemPrompt: config.systemPrompt || '',
       thinkingDepth: _dep,
       temperature: config.temperature,
       searchMode: _sm,
@@ -1480,6 +1590,9 @@ async function startAssistantResponse(convId) {
       /* ★ Per-client browser routing: send the client ID of the extension
        * that should execute browser commands for this task. */
       browserClientId: _be ? (window._browserClientId || null) : null,
+      /* ★ Keep tool history: preserve full tool_use/tool_result messages
+       * across conversation turns so the model can see previous tool results. */
+      keepToolHistory: config.keepToolHistory !== false,
     };
     /* Endpoint-specific config — critic uses same model+tools as worker */
     if (_ep) {
@@ -1490,7 +1603,6 @@ async function startAssistantResponse(convId) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         convId,
-        messages: apiMessages,
         config: baseConfig,
       }),
       signal: typeof AbortSignal.timeout === 'function'
@@ -1643,7 +1755,7 @@ async function sendMessage() {
     _saveConvToolState();
     renderConversationList();
   }
-  // ── ★ Queue-on-stream: if currently streaming OR translating, queue message for later dispatch ──
+  // ── ★ Queue-on-stream: if currently streaming OR translating, queue to SERVER ──
   if (activeStreams.has(conv.id) || conv.activeTaskId || conv._translating) {
     const queuedItem = {
       text: finalText,
@@ -1667,6 +1779,12 @@ async function sendMessage() {
         clearConvRefs();
       }
     }
+    // ★ Build config snapshot (same as startAssistantResponse) so the
+    //   server can dispatch with the correct settings later.
+    //   Reuse _buildConvConfig() to avoid duplicate logic that can diverge.
+    const _queueConfig = _buildConvConfig(conv);
+    // ★ Enqueue to SERVER (survives page refresh)
+    // Optimistic local update for instant UI feedback
     if (!pendingMessageQueue.has(conv.id)) pendingMessageQueue.set(conv.id, []);
     pendingMessageQueue.get(conv.id).push(queuedItem);
     const depth = pendingMessageQueue.get(conv.id).length;
@@ -1676,7 +1794,7 @@ async function sendMessage() {
     const hasQuote = (queuedItem.replyQuotes?.length || 0) > 0;
     const attachInfo = [hasImg && `${queuedItem.images.length}img`, hasPdf && `${queuedItem.pdfTexts.length}pdf`, hasRef && `${queuedItem.convRefs.length}ref`, hasQuote && `${queuedItem.replyQuotes.length}quote`].filter(Boolean).join('+');
     console.log(
-      `%c[Queue] ✚ Enqueued %c#${depth}%c for conv=${conv.id.slice(0,8)} | text=${finalText.length}ch${attachInfo ? ' | attach=' + attachInfo : ''} | reason=${activeStreams.has(conv.id) ? 'streaming' : conv._translating ? 'translating' : 'taskActive'}`,
+      `%c[Queue] ✚ Enqueuing to server %c#${depth}%c for conv=${conv.id.slice(0,8)} | text=${finalText.length}ch${attachInfo ? ' | attach=' + attachInfo : ''} | reason=${activeStreams.has(conv.id) ? 'streaming' : conv._translating ? 'translating' : 'taskActive'}`,
       'color:#a78bfa;font-weight:bold', 'color:#fbbf24;font-weight:bold', 'color:#a78bfa'
     );
     // Clear input immediately so user sees it was accepted
@@ -1690,40 +1808,55 @@ async function sendMessage() {
     renderPendingQueueUI(conv.id);
     updateSendButton();
     debugLog(`消息已排队 (#${depth})，将在当前回复结束后自动发送`, 'info');
+    // Fire server enqueue in background (don't block UI)
+    fetch(apiUrl('/api/chat/queue'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ convId: conv.id, message: queuedItem, config: _queueConfig }),
+    }).then(resp => {
+      if (!resp.ok) {
+        console.error(`[Queue] Server enqueue failed: HTTP ${resp.status}`);
+        debugLog('排队消息发送到服务器失败', 'error');
+      } else {
+        console.log(`%c[Queue] ✓ Server confirmed enqueue for conv=${conv.id.slice(0,8)}`, 'color:#34d399');
+      }
+    }).catch(err => {
+      console.error('[Queue] Server enqueue error:', err);
+      debugLog('排队消息发送到服务器失败: ' + err.message, 'error');
+    });
     return;
   }
   const convId = conv.id;
-  const userMsg = {
-    role: "user",
-    content: finalText,
+
+  // ── Build message payload for backend ──
+  const msgPayload = {
+    text: finalText,
     images: [...pendingImages],
     pdfTexts: [...pendingPdfTexts],
     timestamp: Date.now(),
   };
-  // ── Reply quotes: attach if pending (supports multiple) ──
+  // Reply quotes
   if (typeof getPendingReplyQuotes === "function") {
     const rqs = getPendingReplyQuotes();
     if (rqs && rqs.length > 0) {
-      userMsg.replyQuotes = rqs;
+      msgPayload.replyQuotes = rqs;
       clearReplyQuote();
     }
   }
-  // ── Conversation references: attach if pending ──
+  // Conversation references (just the refs — server will format text from DB)
   if (typeof getPendingConvRefs === "function") {
     const crs = getPendingConvRefs();
     if (crs && crs.length > 0) {
-      userMsg.convRefs = crs;
+      msgPayload.convRefs = crs;
       clearConvRefs();
-      // Fetch and format all referenced conversations client-side
+      // Fetch and format conv ref texts (still needed for DB persistence)
       const fetchPromises = crs.map(async (cr) => {
         try {
-          // First try to use locally cached conversation data
           let convMsgs = null;
           const localConv = conversations.find(c => c.id === cr.id);
           if (localConv && localConv.messages && localConv.messages.length > 0) {
             convMsgs = localConv.messages;
           } else {
-            // Fall back to fetching from the server (existing endpoint)
             const resp = await fetch(apiUrl(`/api/conversations/${cr.id}`));
             if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
             const data = await resp.json();
@@ -1734,36 +1867,34 @@ async function sendMessage() {
           return { id: cr.id, title: cr.title, text: `[Error loading conversation: ${e.message}]` };
         }
       });
-      userMsg.convRefTexts = await Promise.all(fetchPromises);
+      msgPayload.convRefTexts = await Promise.all(fetchPromises);
     }
   }
-  // ── Auto-translate: detect Chinese (defer actual translation until after render) ──
-  // ★ Use per-conv state (just saved by _saveConvToolState above) for consistency
-  const _sendAutoTranslate = conv.autoTranslate !== undefined ? !!conv.autoTranslate : !!autoTranslate;
-  let needsTranslation = false;
-  if (_sendAutoTranslate && finalText) {
-    const hasChinese = /[\u4e00-\u9fff\u3400-\u4dbf]/.test(finalText);
-    if (hasChinese) {
-      userMsg.originalContent = finalText;
-      needsTranslation = true;
-    }
-  }
-  // ── Immediately push message & render the chat page (no blocking) ──
-  /* ★ FIX: Clear _needsLoad BEFORE pushing the user message.
-   * If the server was down when sendMessage() called loadConversationMessages(),
-   * _needsLoad stays true.  After server restart, loadConversationsFromServer()
-   * sees _needsLoad=true and re-fetches from the DB, OVERWRITING the local
-   * user message with stale server data → permanent message loss.
-   * By clearing _needsLoad here, we declare: "this conv has local mutations
-   * that are the source of truth — don't overwrite from server." */
+  // Auto-assign folder
+  const _curFolderId = typeof getActiveFolderId === 'function' ? getActiveFolderId() : null;
+  if (_curFolderId) msgPayload.folderId = _curFolderId;
+
+  // ── Wait for VLM parsing before sending ──
+  const _tempUserMsg = { pdfTexts: msgPayload.pdfTexts };
+  await _waitForVlmParsing(_tempUserMsg, convId, -1);
+  msgPayload.pdfTexts = _tempUserMsg.pdfTexts;
+
+  // ── Optimistic UI: render user message immediately ──
+  const userMsg = {
+    role: "user",
+    content: finalText,
+    images: msgPayload.images,
+    pdfTexts: msgPayload.pdfTexts,
+    timestamp: msgPayload.timestamp,
+  };
+  if (msgPayload.replyQuotes) userMsg.replyQuotes = msgPayload.replyQuotes;
+  if (msgPayload.convRefs) userMsg.convRefs = msgPayload.convRefs;
+  if (msgPayload.convRefTexts) userMsg.convRefTexts = msgPayload.convRefTexts;
+
   conv._needsLoad = false;
   conv.messages.push(userMsg);
   const userMsgIdx = conv.messages.length - 1;
-  if (
-    conv.messages.filter((m) => m.role === "user").length === 1 &&
-    finalText
-  ) {
-    // ★ Strip <notranslate>/<nt> wrapper tags so they don't appear in sidebar titles
+  if (conv.messages.filter((m) => m.role === "user").length === 1 && finalText) {
     const titleText = stripNoTranslateTags(finalText);
     conv.title = titleText.slice(0, 60) + (titleText.length > 60 ? "..." : "");
     if (activeConvId === convId)
@@ -1789,34 +1920,89 @@ async function sendMessage() {
     }
     scrollToBottom(true);
   }
-  // ── Auto-translate user message: NON-BLOCKING background translation ──
-  // ★ Fire-and-forget: translation runs in background, UI is freed immediately.
-  //   Sidebar shows "翻译中" status. When translation finishes, auto-starts assistant.
-  if (needsTranslation) {
-    conv._translating = true;
-    conv._translateAborted = false;
-    updateSendButton();
-    renderConversationList();
-    // ★ Show subtle inline indicator on the user message itself
-    if (activeConvId === convId) {
-      const msgEl = document.getElementById('msg-' + userMsgIdx);
-      if (msgEl) msgEl.classList.add('user-translating');
-    }
-    // ★ NON-BLOCKING: fire background translation, then auto-start assistant
-    _translateThenRespond(conv, convId, userMsg, userMsgIdx, finalText);
-    // sendMessage returns immediately — input is free for next interaction
-    return;
-  }
-  // ── ★ Wait for VLM parsing to complete (mandatory for PDFs) ──
-  // VLM runs in parallel with translation, so by now it may already be done.
-  // If not, block here until it finishes (or fails/times out).
-  await _waitForVlmParsing(userMsg, convId, userMsgIdx);
 
-  saveConversations(convId);
-  /* ★ Proceed to start assistant response — translation is already done (or failed/timed out).
-     Race guard: if user switched conv, still save & start the response
-     but don't let startAssistantResponse render into wrong conv's DOM */
-  await startAssistantResponse(convId);
+  // ── Atomic backend call: message creation + translate + task start ──
+  const _sendConfig = _buildConvConfig(conv);
+
+  try {
+    const resp = await fetch(apiUrl('/api/chat/send'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        convId,
+        message: msgPayload,
+        config: _sendConfig,
+        settings: _buildConvSettings(conv),
+      }),
+      signal: typeof AbortSignal.timeout === 'function'
+        ? AbortSignal.timeout(60000)   // 60s timeout (includes translation time)
+        : undefined,
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
+      throw new Error(err.error || `Server ${resp.status}`);
+    }
+    const result = await resp.json();
+
+    // Update local state with server response
+    if (result.userMessage) {
+      // Server may have translated the message — update local copy
+      Object.assign(userMsg, result.userMessage);
+      if (activeConvId === convId) {
+        const msgEl = document.getElementById('msg-' + userMsgIdx);
+        if (msgEl) msgEl.outerHTML = renderMessage(userMsg, userMsgIdx);
+      }
+    }
+    if (result.title && result.title !== conv.title) {
+      conv.title = result.title;
+      if (activeConvId === convId)
+        document.getElementById("topbarTitle").textContent = conv.title;
+      renderConversationList();
+    }
+    conv._serverMsgCount = result.msgCount || conv.messages.length;
+
+    // Push empty assistant msg + connect to task SSE
+    const taskId = result.taskId;
+    const assistantMsg = {
+      role: "assistant", content: "", thinking: "",
+      timestamp: Date.now(), toolRounds: [],
+      model: _sendConfig.model || serverModel,
+    };
+    // ★ Endpoint mode: mark as planner so SSE reconnection identifies it correctly
+    if (_sendConfig.endpointMode) assistantMsg._isEndpointPlanner = true;
+    conv.messages.push(assistantMsg);
+    conv.activeTaskId = taskId;
+    saveConversations(convId);
+
+    debugLog(`Task started: ${taskId} (send)`, "success");
+
+    if (activeConvId === convId) {
+      _renderStreamingBubble(conv, _sendConfig);
+    }
+    buildTurnNav(conv);
+    connectToTask(convId, taskId);
+
+  } catch (e) {
+    const errMsg = e.name === 'TimeoutError'
+      ? 'Request timed out — server may be overloaded.'
+      : e.message;
+    debugLog("Failed: " + errMsg, "error");
+    console.error('[sendMessage] /api/chat/send failed:', e.name, e.message);
+    // Show error on the user message
+    const errAssistant = {
+      role: "assistant", content: "", thinking: "",
+      error: errMsg, timestamp: Date.now(), toolRounds: [],
+    };
+    conv.messages.push(errAssistant);
+    if (activeConvId === convId) {
+      const chatInnerEl = document.getElementById("chatInner");
+      if (chatInnerEl)
+        chatInnerEl.insertAdjacentHTML("beforeend", renderMessage(errAssistant, conv.messages.length - 1));
+    }
+    saveConversations(convId);
+    syncConversationToServer(conv);
+    buildTurnNav(conv);
+  }
 }
 
 // ══════════════════════════════════════════════════════
@@ -1858,6 +2044,7 @@ async function _translateThenRespond(conv, convId, userMsg, userMsgIdx, original
       const d = await translateResp.json();
       if (d.translated) {
         userMsg.content = d.translated;
+        if (d.model) userMsg._translateModel = d.model;
         userMsg._translateDone = true;
         saveConversations(convId);
         syncConversationToServer(conversations.find(c => c.id === convId));
@@ -1880,6 +2067,7 @@ async function _translateThenRespond(conv, convId, userMsg, userMsgIdx, original
           const result = await _pollTranslateTask(taskId);
           if (result.status === 'done' && result.translated) {
             userMsg.content = result.translated;
+            if (result.model) userMsg._translateModel = result.model;
             userMsg._translateDone = true;
             saveConversations(convId);
             syncConversationToServer(conversations.find(c => c.id === convId));
@@ -2139,6 +2327,7 @@ function renderPendingQueueUI(convId) {
       <span class="queue-item-text">${escapeHtml(preview)}</span>
       ${badges.length ? `<span class="queue-item-attachments">${badges.join('')}</span>` : ''}
       <button class="queue-item-cancel" onclick="removePendingQueueItem('${convId}', ${i})" title="取消此消息">✕</button>
+      ${item.queueId ? '<span class="queue-item-synced" title="已同步到服务器">☁</span>' : ''}
     </div>`;
   }).join("");
   const headerSvg = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4m0 12v4M4.93 4.93l2.83 2.83m8.48 8.48l2.83 2.83M2 12h4m12 0h4M4.93 19.07l2.83-2.83m8.48-8.48l2.83-2.83"/></svg>`;
@@ -2150,13 +2339,16 @@ function renderPendingQueueUI(convId) {
 }
 
 /**
- * Remove a single item from the pending queue.
+ * Remove a single item from the pending queue (server-backed).
  */
 function removePendingQueueItem(convId, idx) {
   const queue = pendingMessageQueue.get(convId);
   if (!queue) return;
   const removed = queue[idx];
   const removedPreview = removed?.text ? removed.text.slice(0, 40) : '(attachment)';
+  const queueId = removed?.queueId;
+
+  // Optimistic local removal
   queue.splice(idx, 1);
   console.log(
     `%c[Queue] ✕ Removed%c item #${idx + 1} from conv=${convId.slice(0,8)} | "${removedPreview}" | remaining=${queue.length}`,
@@ -2166,10 +2358,19 @@ function removePendingQueueItem(convId, idx) {
   renderPendingQueueUI(convId);
   updateSendButton();
   debugLog(`已取消排队消息 #${idx + 1}`, 'info');
+
+  // Server removal
+  if (queueId) {
+    fetch(apiUrl(`/api/chat/queue/${convId}/${queueId}`), { method: 'DELETE' })
+      .then(resp => {
+        if (!resp.ok) console.error(`[Queue] Server remove failed: HTTP ${resp.status}`);
+      })
+      .catch(err => console.error('[Queue] Server remove error:', err));
+  }
 }
 
 /**
- * Clear all pending queued messages for a conversation.
+ * Clear all pending queued messages for a conversation (server-backed).
  */
 function clearPendingQueue(convId) {
   const count = pendingMessageQueue.get(convId)?.length || 0;
@@ -2181,6 +2382,102 @@ function clearPendingQueue(convId) {
   renderPendingQueueUI(convId);
   updateSendButton();
   debugLog(`已清空全部 ${count} 条排队消息`, 'info');
+
+  // Server clear
+  fetch(apiUrl(`/api/chat/queue/${convId}`), { method: 'DELETE' })
+    .then(resp => {
+      if (!resp.ok) console.error(`[Queue] Server clear failed: HTTP ${resp.status}`);
+    })
+    .catch(err => console.error('[Queue] Server clear error:', err));
+}
+
+/**
+ * Refresh the local queue state from the server.
+ * Called after stream ends and after page load for active conversations.
+ */
+/**
+ * Check if the server auto-dispatched a queued message and created a new task.
+ * If found, load the new user message and connect to the task's SSE stream.
+ */
+async function _checkForQueuedTask(convId) {
+  try {
+    const resp = await fetch(apiUrl('/api/chat/active'));
+    if (!resp.ok) return;
+    const activeTasks = await resp.json();
+    const newTask = activeTasks.find(t => t.convId === convId && t.status === 'running');
+    if (!newTask) {
+      // No new task — refresh queue UI (items may have been consumed)
+      _refreshServerQueue(convId);
+      return;
+    }
+    console.log(
+      `%c[Queue] ▶ Found auto-dispatched task ${newTask.id.slice(0,8)} for conv=${convId.slice(0,8)}`,
+      'color:#34d399;font-weight:bold'
+    );
+
+    const conv = conversations.find(c => c.id === convId);
+    if (!conv) return;
+
+    // Reload messages from server to pick up the queued user message
+    await loadConversationMessages(convId);
+
+    // Create the empty assistant message placeholder
+    const assistantMsg = {
+      role: 'assistant',
+      content: '',
+      thinking: '',
+      timestamp: Date.now(),
+      toolRounds: [],
+    };
+    conv.messages.push(assistantMsg);
+    conv.activeTaskId = newTask.id;
+    conv._needsLoad = false;
+
+    if (activeConvId === convId) {
+      renderChat(conv);
+    }
+    renderConversationList();
+
+    // Connect to the new task's SSE stream
+    connectToTask(convId, newTask.id);
+    debugLog(`服务器已自动发送排队消息`, 'info');
+
+    // Refresh queue UI
+    _refreshServerQueue(convId);
+  } catch (err) {
+    console.warn('[Queue] _checkForQueuedTask error:', err);
+  }
+}
+
+async function _refreshServerQueue(convId) {
+  try {
+    const resp = await fetch(apiUrl(`/api/chat/queue/${convId}`));
+    if (!resp.ok) {
+      console.warn(`[Queue] Server queue fetch failed: HTTP ${resp.status}`);
+      return;
+    }
+    const serverQueue = await resp.json();
+    if (serverQueue.length > 0) {
+      // Convert server format to local format
+      const localQueue = serverQueue.map(item => ({
+        queueId: item.queueId,
+        text: item.text || '',
+        images: item.hasImages ? ['(server)'] : [],
+        pdfTexts: item.hasPdfs ? ['(server)'] : [],
+        convRefs: item.hasRefs ? ['(server)'] : [],
+        replyQuotes: item.hasQuotes ? ['(server)'] : [],
+        timestamp: item.timestamp,
+      }));
+      pendingMessageQueue.set(convId, localQueue);
+    } else {
+      pendingMessageQueue.delete(convId);
+    }
+    renderPendingQueueUI(convId);
+    updateSendButton();
+    console.log(`%c[Queue] Refreshed from server: ${serverQueue.length} items for conv=${convId.slice(0,8)}`, 'color:#6b7280');
+  } catch (err) {
+    console.warn('[Queue] Failed to refresh from server:', err);
+  }
 }
 
 // ══════════════════════════════════════════════════════
@@ -2191,87 +2488,44 @@ async function regenerateFromUser(idx) {
   if (!conv || activeStreams.has(conv.id) || conv.activeTaskId) return;
   const msg = conv.messages[idx];
   if (!msg || msg.role !== "user") return;
-  // Truncate all messages after this user message
-  conv.messages = conv.messages.slice(0, idx + 1);
-  /* ★ FIX: After truncation, clear _needsLoad and reset _serverMsgCount.
-   * Without this, startAssistantResponse's _needsLoad guard reloads from DB,
-   * which brings back the old assistant messages that were just truncated.
-   * Also reset _serverMsgCount so syncConversationToServer's "fewer messages"
-   * guard doesn't block the truncated save. */
-  conv._needsLoad = false;
-  conv._serverMsgCount = conv.messages.length;
 
   // ── Image Gen mode intercept: re-generate via direct image API ──
-  // When imageGenMode is ON (or the message was an image-gen message),
-  // pop the user message, fill the textarea, and call generateImageDirect().
   const _isIgConv = imageGenMode || conv.imageGenMode;
-  const _isIgMsg  = msg._isImageGen || (msg.content && msg.content.startsWith('🎨 '));  // backward compat: old convs may have 🎨 prefix
+  const _isIgMsg  = msg._isImageGen || (msg.content && msg.content.startsWith('🎨 '));
   if (_isIgConv || _isIgMsg) {
-    // Remove the user message so generateImageDirect() can re-add it
-    conv.messages.pop();
+    conv.messages = conv.messages.slice(0, idx);
     saveConversations(conv.id);
     renderChat(conv);
     renderConversationList();
-    // Fill the textarea with the original prompt (strip 🎨 prefix if present — backward compat for old convs)
     let prompt = msg.content || '';
     if (prompt.startsWith('🎨 ')) prompt = prompt.slice(2).trim();
     const textarea = document.getElementById('userInput');
     if (textarea) { textarea.value = prompt; }
-    // Ensure image gen mode is active
     if (!imageGenMode) _applyImageGenUI(true);
     generateImageDirect();
     return;
   }
 
-  // ── ★ BLOCKING auto-translate (sync call, matches sendMessage/saveEditAndResend) ──
-  // ★ Use per-conv autoTranslate (not global) — matches sendMessage behavior
-  const _regenAutoTranslate = conv.autoTranslate !== undefined ? !!conv.autoTranslate : !!autoTranslate;
-  let needsTranslation = false;
-  if (_regenAutoTranslate && msg.content) {
-    /* ★ FIX: Detect interrupted translation — when user stopped during the
-     *   translation phase, originalContent is set but content was never updated
-     *   to the English translation (content === originalContent, _translateDone
-     *   is falsy).  In that case, we must re-translate on regen.
-     *   Case 1: No originalContent → fresh Chinese text, needs translation.
-     *   Case 2: originalContent exists, content === originalContent, not _translateDone
-     *           → translation was interrupted before completing, needs re-translation. */
-    const _translationIncomplete = msg.originalContent
-      && msg.content === msg.originalContent && !msg._translateDone;
-    if (!msg.originalContent || _translationIncomplete) {
-      const hasChinese = /[\u4e00-\u9fff\u3400-\u4dbf]/.test(
-        msg.originalContent || msg.content
-      );
-      if (hasChinese) {
-        if (!msg.originalContent) msg.originalContent = msg.content;
-        needsTranslation = true;
-      }
-    }
-  }
+  const convId = conv.id;
 
-  saveConversations(conv.id);
+  // ── Optimistic UI: truncate local messages ──
+  conv.messages = conv.messages.slice(0, idx + 1);
+  conv._needsLoad = false;
+  conv._serverMsgCount = conv.messages.length;
 
-  /* ── Surgical DOM truncation: remove message nodes after idx ──
-   * Instead of renderChat(conv) which wipes innerHTML (causing a
-   * visible scroll-jump-to-top then snap-back), we surgically remove
-   * only the DOM nodes for messages that were truncated.  This
-   * preserves the scroll position entirely — zero visual glitch.
-   * Falls back to full renderChat if the DOM state is unexpected. */
+  /* ── Surgical DOM truncation ── */
   let usedSurgical = false;
-  if (activeConvId === conv.id) {
+  if (activeConvId === convId) {
     const inner = document.getElementById("chatInner");
     if (inner) {
-      /* Collect message elements with idx > the regen point */
       const toRemove = [];
       inner.querySelectorAll('.message[id^="msg-"]').forEach(el => {
         const m = el.id.match(/^msg-(\d+)$/);
         if (m && parseInt(m[1], 10) > idx) toRemove.push(el);
       });
-      /* Also remove any leftover streaming bubble */
       const oldStreaming = document.getElementById("streaming-msg");
       if (oldStreaming) toRemove.push(oldStreaming);
-
       if (toRemove.length > 0 || inner.querySelector('.message[id^="msg-"]')) {
-        /* Remove in a single batch — no reflow between removals */
         for (const el of toRemove) el.remove();
         usedSurgical = true;
         _lastRenderedFingerprint = _convRenderFingerprint(conv);
@@ -2279,30 +2533,66 @@ async function regenerateFromUser(idx) {
       }
     }
   }
-  if (!usedSurgical) {
-    renderChat(conv);
-  }
-
+  if (!usedSurgical) renderChat(conv);
   renderConversationList();
 
-  // ── ★ NON-BLOCKING auto-translate: fire background, free UI immediately ──
-  if (needsTranslation) {
-    const convId = conv.id;
-    conv._translating = true;
-    conv._translateAborted = false;
-    if (typeof updateSendButton === 'function') updateSendButton();
-    renderConversationList();
-    if (activeConvId === convId) {
-      const msgEl = document.getElementById('msg-' + idx);
-      if (msgEl) msgEl.classList.add('user-translating');
-    }
-    _translateThenRespond(conv, convId, msg, idx, msg.originalContent, { allowTruncate: true });
-    return;
-  }
+  // ── Atomic backend call: truncate + translate + task start ──
+  const _regenConfig = _buildConvConfig(conv);
 
-  /* ★ FIX: Persist the truncated messages to server BEFORE starting the new task. */
-  await syncConversationToServer(conv, { allowTruncate: true });
-  await startAssistantResponse(conv.id);
+  try {
+    const resp = await fetch(apiUrl('/api/chat/regenerate'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        convId,
+        truncateToIndex: idx,
+        config: _regenConfig,
+        settings: _buildConvSettings(conv),
+      }),
+      signal: typeof AbortSignal.timeout === 'function'
+        ? AbortSignal.timeout(60000) : undefined,
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
+      throw new Error(err.error || `Server ${resp.status}`);
+    }
+    const result = await resp.json();
+
+    // Update local state if server translated the message
+    if (result.userMessage) {
+      Object.assign(msg, result.userMessage);
+      if (activeConvId === convId) {
+        const msgEl = document.getElementById('msg-' + idx);
+        if (msgEl) msgEl.outerHTML = renderMessage(msg, idx);
+      }
+    }
+    if (result.title) conv.title = result.title;
+    conv._serverMsgCount = result.msgCount || conv.messages.length;
+
+    // Push assistant msg + connect to task
+    const taskId = result.taskId;
+    const assistantMsg = {
+      role: "assistant", content: "", thinking: "",
+      timestamp: Date.now(), toolRounds: [],
+      model: _regenConfig.model || serverModel,
+    };
+    // ★ Endpoint mode: mark as planner so SSE reconnection identifies it correctly
+    if (_regenConfig.endpointMode) assistantMsg._isEndpointPlanner = true;
+    conv.messages.push(assistantMsg);
+    conv.activeTaskId = taskId;
+    saveConversations(convId);
+
+    if (activeConvId === convId) _renderStreamingBubble(conv, _regenConfig);
+    buildTurnNav(conv);
+    connectToTask(convId, taskId);
+
+  } catch (e) {
+    debugLog("Regenerate failed: " + e.message, "error");
+    console.error('[regenerateFromUser] /api/chat/regenerate failed:', e);
+    saveConversations(convId);
+    syncConversationToServer(conv, { allowTruncate: true });
+    buildTurnNav(conv);
+  }
 }
 
 // ══════════════════════════════════════════════════════
@@ -2314,7 +2604,7 @@ async function regenerateFromUser(idx) {
 //       complete tool batch.  Discard partial content/thinking after that
 //       point and let the LLM regenerate from the tool results.
 //     - If no tool rounds → no recoverable checkpoint → full regeneration.
-//  2. Roll back searchRounds, content, and thinking to the checkpoint.
+//  2. Roll back toolRounds, content, and thinking to the checkpoint.
 //     The user sees only the preserved tool rounds; any discarded partial
 //     text is removed from the message before the request is sent.
 //  3. Backend receives the same message structure as a normal request
@@ -2339,10 +2629,10 @@ async function continueAssistant() {
 
   // ═══════════════════════════════════════════════════════════
   // ★ Step 1: Find the latest recoverable checkpoint
-  //   Scan searchRounds to find complete tool batches.
+  //   Scan toolRounds to find complete tool batches.
   //   A "complete" round has toolCallId, status==="done", and toolContent.
   // ═══════════════════════════════════════════════════════════
-  const allRounds = getSearchRoundsFromMsg(assistantMsg);
+  const allRounds = getToolRoundsFromMsg(assistantMsg);
   let toolHistory = [];
   let lastCompleteIdx = -1;  // index in allRounds of last complete entry
 
@@ -2360,13 +2650,35 @@ async function continueAssistant() {
         if (!r.toolCallId) { roundBatchMap.push(-1); continue; }
 
         // Is this round complete?
-        if (r.toolContent == null || r.status !== "done") {
-          // Incomplete — stop here, don't include this or anything after
+        // ★ FIX: After page refresh, toolContent may be lost from DB
+        //   (race: frontend sync overwrote backend's richer checkpoint).
+        //   If status==="done" and we have results metadata, treat as
+        //   recoverable — reconstruct toolContent from results for toolHistory.
+        if (r.status !== "done") {
           debugLog(
-            `Tool round #${r.roundNum} (${r.toolName}) incomplete — checkpoint before it`,
+            `Tool round #${r.roundNum} (${r.toolName}) not done (status=${r.status}) — checkpoint before it`,
             "warn",
           );
           break;
+        }
+        if (r.toolContent == null) {
+          // Try to reconstruct from results metadata (available after DB round-trip)
+          if (r.results && r.results.length > 0) {
+            const reconstructed = r.results.map(res =>
+              res.snippet || res.title || res.content || ''
+            ).filter(Boolean).join('\n') || '[tool result not available]';
+            r.toolContent = reconstructed;
+            debugLog(
+              `Tool round #${r.roundNum} (${r.toolName}) missing toolContent — reconstructed ${reconstructed.length} chars from results`,
+              "warn",
+            );
+          } else {
+            debugLog(
+              `Tool round #${r.roundNum} (${r.toolName}) missing toolContent and no results — checkpoint before it`,
+              "warn",
+            );
+            break;
+          }
         }
 
         // Determine batch key
@@ -2418,7 +2730,7 @@ async function continueAssistant() {
 
   // ═══════════════════════════════════════════════════════════
   // ★ Step 3: Roll back to checkpoint
-  //   - Keep only complete tool rounds in searchRounds
+  //   - Keep only complete tool rounds in toolRounds
   //   - Discard partial content and thinking (the LLM will regenerate)
   //   - The user sees the tool call history preserved, text regenerated
   // ═══════════════════════════════════════════════════════════
@@ -2429,15 +2741,28 @@ async function continueAssistant() {
   //   instead of wiping everything to "".  Each kept round's assistantContent
   //   is the text the LLM wrote alongside that tool call batch — preserving it
   //   means the user doesn't lose visible output from successful prior rounds.
-  const preservedContent = keptRounds
+  let preservedContent = keptRounds
     .map(r => r.assistantContent || "")
     .filter(c => c)
     .join("\n\n");
   const originalContent = assistantMsg.content || "";
+  // ★ FIX: After page refresh, assistantContent may be missing from rounds
+  //   (backend checkpoint race).  If preservedContent is empty but we have
+  //   keptRounds, use the original content up to a reasonable boundary
+  //   as the prefix — the LLM only needs to regenerate from the checkpoint.
+  if (!preservedContent && keptRounds.length > 0 && originalContent) {
+    // Use the full original content as prefix — the backend will inject
+    // it via contentPrefix and the LLM will continue from there.
+    preservedContent = originalContent;
+    debugLog(
+      `Continue: assistantContent missing from rounds, using full original content (${originalContent.length} chars) as prefix`,
+      "warn",
+    );
+  }
   const discardedContent = Math.max(0, originalContent.length - preservedContent.length);
   const discardedThinking = (assistantMsg.thinking || "").length;
 
-  assistantMsg.searchRounds = keptRounds;
+  assistantMsg.toolRounds = keptRounds;
   assistantMsg.content = preservedContent;
   assistantMsg.thinking = "";
   // ★ Save the prefix so state/delta handlers can merge correctly
@@ -2470,8 +2795,8 @@ async function continueAssistant() {
   assistantMsg._continueApiRounds = (assistantMsg.apiRounds || []).slice();
   if (assistantMsg.usage)
     assistantMsg._continueUsage = { ...assistantMsg.usage };
-  // Save the checkpoint searchRounds so we can merge with new ones
-  assistantMsg._continueSearchRounds = keptRounds.slice();
+  // Save the checkpoint toolRounds so we can merge with new ones
+  assistantMsg._continueToolRounds = keptRounds.slice();
   // ★ Save modifiedFiles/modifiedFileList for merging after completion
   if (assistantMsg.modifiedFiles)
     assistantMsg._continueModifiedFiles = assistantMsg.modifiedFiles;
@@ -2481,7 +2806,7 @@ async function continueAssistant() {
   // ═══════════════════════════════════════════════════════════
   // ★ Step 4: Build messages — EXCLUDE the trailing assistant message
   // ═══════════════════════════════════════════════════════════
-  const apiMessages = buildApiMessages(conv); // excludes last msg (assistant)
+  // ★ Server-side message building: no longer send messages, backend loads from DB
 
   // ═══════════════════════════════════════════════════════════
   // ★ Step 5: Set up streaming UI
@@ -2515,28 +2840,35 @@ async function continueAssistant() {
 
   // ═══════════════════════════════════════════════════════════
   // ★ Step 6: Build config payload
+  //   Use _buildConvConfig() to get per-conv settings, avoiding the
+  //   cross-talk bug where globals from the active conv leak into a
+  //   background conv's continue request.
   // ═══════════════════════════════════════════════════════════
-  const cfgPayload = {
-    preset: config.model || serverModel,
-    model: config.model || serverModel,
-    thinkingEnabled,
-    thinkingDepth: config.thinkingDepth,
-    temperature: config.temperature,
-    searchMode,
-    fetchEnabled,
-    codeExecEnabled,
-    memoryEnabled,
-    /* ★ FIX: read from per-conv state, not global projectState (same race as startAssistantResponse) */
-    projectPath: _getConvProjectPath(conv),
-    autoApply: autoApplyWrites,
-    browserEnabled,
-  };
+  const cfgPayload = _buildConvConfig(conv);
   if (toolHistory.length > 0) {
     cfgPayload.toolHistory = toolHistory;
   }
   // ★ Send preserved content prefix so backend checkpoints include it
   if (preservedContent) {
     cfgPayload.contentPrefix = preservedContent;
+  }
+  // ★ Send checkpoint metadata so backend can merge into DB on persist.
+  //   Without this, _sync_result_to_conversation only writes NEW task data,
+  //   losing the pre-checkpoint toolRounds/usage/apiRounds on page refresh.
+  if (keptRounds.length > 0) {
+    cfgPayload.checkpointToolRounds = keptRounds;
+  }
+  if (assistantMsg._continueUsage) {
+    cfgPayload.checkpointUsage = assistantMsg._continueUsage;
+  }
+  if (assistantMsg._continueApiRounds && assistantMsg._continueApiRounds.length > 0) {
+    cfgPayload.checkpointApiRounds = assistantMsg._continueApiRounds;
+  }
+  if (assistantMsg._continueModifiedFiles) {
+    cfgPayload.checkpointModifiedFiles = assistantMsg._continueModifiedFiles;
+  }
+  if (assistantMsg._continueModifiedFileList && assistantMsg._continueModifiedFileList.length > 0) {
+    cfgPayload.checkpointModifiedFileList = assistantMsg._continueModifiedFileList;
   }
   debugLog(
     `Continue: sending ${toolHistory.length} tool round(s) as checkpoint` +
@@ -2545,6 +2877,8 @@ async function continueAssistant() {
     "info",
   );
 
+  // ★ Sync to server BEFORE POST so backend can load messages from DB
+  await syncConversationToServer(conv);
   let taskId;
   try {
     const res = await fetch(apiUrl("/api/chat/start"), {
@@ -2552,8 +2886,7 @@ async function continueAssistant() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         convId: conv.id,
-        messages: apiMessages,
-        config: cfgPayload,
+        config: { ...cfgPayload, excludeLast: true },
       }),
     });
     const data = await res.json();
@@ -2570,7 +2903,7 @@ async function continueAssistant() {
 }
 
 /**
- * ★ Build a single tool history round from a batch of searchRound entries.
+ * ★ Build a single tool history round from a batch of toolRound entries.
  * Each round represents one assistant message with tool_calls + their results.
  */
 function _buildToolHistoryRound(batch) {
@@ -2829,23 +3162,6 @@ function selectModel(modelId) {
     ? ` [${config.thinkingDepth.toUpperCase()}]`
     : '';
   debugLog(`Model: ${config.model}${depthSuffix}`, "success");
-}
-/* Backward-compat alias */
-function selectPreset(presetOrModel) { selectModel(presetOrModel); }
-function cyclePreset() {
-  /* Cycle through visible (non-hidden, chat-only) registered models */
-  const models = _registeredModels.filter(m => {
-    if (_hiddenModels.has(m.model_id)) return false;
-    var caps = m.capabilities || [];
-    for (var i = 0; i < caps.length; i++) {
-      if (caps[i] === 'image_gen' || caps[i] === 'embedding') return false;
-    }
-    return true;
-  }).map(m => m.model_id);
-  if (models.length === 0) return;
-  const cur = config.model || '';
-  const idx = models.indexOf(cur);
-  selectModel(models[(idx + 1) % models.length]);
 }
 // toggleFetch removed — fetch is always on
 function toggleCodeExec() {
@@ -3322,15 +3638,27 @@ function _confirmDeleteFolder(folderId) {
   overlay.addEventListener('click', (e) => { if (e.target === overlay) _closeDialog(); });
 }
 
-/** Create new folder button handler */
-function createNewFolder() {
-  _promptCreateFolder(null);
-}
-
 /** Initialize folder tab bar interactions */
 function _initFolderTabs() {
   const tabsEl = document.getElementById('folderTabs');
   if (!tabsEl) return;
+
+  // ── Desktop: mouse wheel → horizontal scroll ──
+  // Only intercept vertical wheel (mouse scroll wheel) and convert to horizontal.
+  // Trackpad native horizontal swipe (deltaX) is left to the browser — intercepting
+  // it causes jitter because preventDefault() kills inertia scrolling.
+  tabsEl.addEventListener('wheel', (e) => {
+    const scrollEl = tabsEl.querySelector('.folder-tabs-scroll');
+    if (!scrollEl) return;
+    if (scrollEl.scrollWidth <= scrollEl.clientWidth) return;
+    // Trackpad horizontal swipe: let the browser handle it natively
+    if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+    // Mouse wheel (vertical): convert to horizontal scroll
+    if (e.deltaY) {
+      e.preventDefault();
+      scrollEl.scrollLeft += e.deltaY;
+    }
+  }, { passive: false });
 
   // Click: switch folder tab or create new folder
   tabsEl.addEventListener('click', (e) => {
@@ -4038,7 +4366,7 @@ async function initActiveTasks() {
             content: "",
             thinking: "",
             timestamp: Date.now(),
-            searchRounds: [],
+            toolRounds: [],
             model: conv.model || config.model || serverModel,
           });
         }
@@ -4206,7 +4534,7 @@ async function initActiveTasks() {
                   }
                 }
                 if (td.error) am.error = td.error;
-                if (td.searchRounds) am.searchRounds = td.searchRounds;
+                if (td.toolRounds) am.toolRounds = td.toolRounds;
                 if (td.finishReason) am.finishReason = td.finishReason;
                 if (td.usage) am.usage = td.usage;
                 if (td.preset) am.preset = td.preset;
@@ -4252,8 +4580,8 @@ async function initActiveTasks() {
           let _hgCleaned = 0;
           let _timerCleaned = 0;
           for (const m of conv.messages) {
-            if (m.searchRounds) {
-              for (const r of m.searchRounds) {
+            if (m.toolRounds) {
+              for (const r of m.toolRounds) {
                 if (r.status === 'awaiting_human' || r.status === 'submitted') {
                   r.status = 'done';
                   r.guidanceId = null;
@@ -4331,7 +4659,7 @@ async function initActiveTasks() {
                     );
                     am.content = serverLast.content;
                     if (serverLast.thinking) am.thinking = serverLast.thinking;
-                    if (serverLast.searchRounds) am.searchRounds = serverLast.searchRounds;
+                    if (serverLast.toolRounds) am.toolRounds = serverLast.toolRounds;
                     if (serverLast.finishReason && serverLast.finishReason !== 'server_offline') {
                       am.finishReason = serverLast.finishReason;
                     }
@@ -4416,6 +4744,8 @@ function _ensureNewest() {
       const c = getActiveConv();
       if (c) renderChat(c);
     }
+    // ★ Restore server-side queue state (survives page refresh)
+    _refreshServerQueue(activeConvId);
   }
 }
 
@@ -4548,7 +4878,19 @@ function _ensureNewest() {
       e.preventDefault();
       if (!e.dataTransfer || !e.dataTransfer.types.includes("Files")) return;
       _dragCounter++;
-      if (_dragCounter === 1 && overlay) overlay.classList.add("visible");
+      if (_dragCounter === 1 && overlay) {
+        overlay.classList.add("visible");
+        // Update overlay text for paper mode
+        const dropText = overlay.querySelector('.drop-text');
+        const dropHint = overlay.querySelector('.drop-hint');
+        if (typeof paperMode !== 'undefined' && paperMode) {
+          if (dropText) dropText.textContent = 'Drop PDF to read';
+          if (dropHint) dropHint.textContent = 'PDF files only in Paper Reading Mode';
+        } else {
+          if (dropText) dropText.textContent = 'Drop files here';
+          if (dropHint) dropHint.textContent = 'Images · PDF · Word · Excel · PPT · Text files';
+        }
+      }
     });
     document.addEventListener("dragover", (e) => {
       if (e.dataTransfer && e.dataTransfer.types.includes("Files"))
@@ -4568,6 +4910,20 @@ function _ensureNewest() {
       _dragCounter = 0;
       if (overlay) overlay.classList.remove("visible");
       const files = Array.from(e.dataTransfer?.files || []);
+
+      // ★ Paper mode: route PDFs into the paper reader instead of main input
+      if (typeof paperMode !== 'undefined' && paperMode) {
+        for (const f of files) {
+          if (f.type === "application/pdf" || f.name.toLowerCase().endsWith(".pdf")) {
+            if (typeof _handlePaperFileDrop === 'function') {
+              await _handlePaperFileDrop(f);
+              break; // Only one PDF at a time in paper reader
+            }
+          }
+        }
+        return;
+      }
+
       // ★ Edit mode uses the shared pendingImages/pendingPdfTexts — no separate handlers needed.
       // Dropped files go through the same path as the main input (below).
       for (const f of files) {

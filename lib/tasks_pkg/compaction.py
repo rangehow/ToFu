@@ -261,16 +261,32 @@ def _archive_transcript(conv_id: str, messages: list, summary: str = ''):
 
 
 def cleanup_compaction_data(conv_id: str):
-    """Delete all compaction artifacts for a conversation."""
+    """Delete all compaction artifacts for a conversation.
+
+    Cleans up both database records and persisted tool-result files on disk.
+    """
+    import shutil
     from lib.database import DOMAIN_CHAT, db_execute_with_retry, get_thread_db
     try:
         db = get_thread_db(DOMAIN_CHAT)
         db_execute_with_retry(db, 'DELETE FROM transcript_archive WHERE conv_id=?', (conv_id,))
-        logger.debug('[Compaction] Cleaned up artifacts for conv=%s',
+        logger.debug('[Compaction] Cleaned up DB artifacts for conv=%s',
                      conv_id[:8] if conv_id else '?')
     except Exception as e:
-        logger.debug('[Compaction] Cleanup artifacts failed for conv=%s: %s',
+        logger.debug('[Compaction] Cleanup DB artifacts failed for conv=%s: %s',
                      conv_id[:8] if conv_id else '?', e, exc_info=True)
+
+    # Clean up persisted tool-result files for this conversation
+    if conv_id:
+        dir_name = conv_id[:12]
+        persist_dir = os.path.join(_PERSIST_DIR_BASE, dir_name)
+        if os.path.isdir(persist_dir):
+            try:
+                shutil.rmtree(persist_dir)
+                logger.debug('[Compaction] Cleaned up persisted files: %s', persist_dir)
+            except Exception as e:
+                logger.debug('[Compaction] Failed to clean persisted files %s: %s',
+                             persist_dir, e)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -316,7 +332,10 @@ _DEFAULT_TOOL_RESULT_MAX = 60_000
 # The model can later use read_files to access the full content.
 # Inspired by Claude Code's toolResultStorage.ts persistence mechanism.
 
-_PERSIST_DIR_BASE = '/tmp/chatui-tool-results'
+_PERSIST_DIR_BASE = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    'data', 'tool-results'
+)
 _PERSIST_PREVIEW_CHARS = 2000
 """Preview size for persisted results (truncated at newline boundary)."""
 
@@ -329,15 +348,14 @@ MAX_ROUND_TOOL_RESULTS_CHARS = 300_000
 
 def _persist_to_disk(content: str, tool_name: str, tool_use_id: str = '',
                      conv_id: str = '') -> str:
-    """Write full content to disk and return a preview + file path.
+    """Persist oversized tool result to disk and return a summary with file paths.
 
-    The model receives the file path and can use read_files to
-    access the full content later.  Information is never lost.
+    For tools with structured, multi-item results (web_search, grep_search),
+    each item is saved to a **separate** file so the model can selectively
+    read only the items it needs via read_files.
 
-    For web_search results, generates a structured preview that shows
-    title/URL/snippet for ALL results (not just the first), so the model
-    retains awareness of all search results and can selectively read
-    individual ones via read_files.
+    For single-blob tools (fetch_url, run_command, etc.), the full content
+    is saved to a single file as before.
 
     Args:
         content:     Full tool result string.
@@ -346,15 +364,27 @@ def _persist_to_disk(content: str, tool_name: str, tool_use_id: str = '',
         conv_id:     Conversation ID (used for directory grouping).
 
     Returns:
-        A formatted string with file path + preview.
+        A formatted string with file path(s) + preview/index.
     """
-    # Build directory: /tmp/chatui-tool-results/{conv_id_prefix}/
+    # Build directory: data/tool-results/{conv_id_prefix}/
     dir_name = conv_id[:12] if conv_id else 'default'
     persist_dir = os.path.join(_PERSIST_DIR_BASE, dir_name)
     os.makedirs(persist_dir, exist_ok=True)
 
-    # Filename: {tool_name}_{tool_use_id}.txt
     safe_id = (tool_use_id or uuid.uuid4().hex[:12]).replace('/', '_')
+
+    # ── Try split-persist for multi-item tools ──
+    if tool_name == 'web_search':
+        result = _persist_web_search_split(content, persist_dir, safe_id)
+        if result is not None:
+            return result
+
+    if tool_name == 'grep_search':
+        result = _persist_grep_search_split(content, persist_dir, safe_id)
+        if result is not None:
+            return result
+
+    # ── Default: single file persistence ──
     filename = f'{tool_name}_{safe_id}.txt'
     filepath = os.path.join(persist_dir, filename)
 
@@ -364,22 +394,17 @@ def _persist_to_disk(content: str, tool_name: str, tool_use_id: str = '',
     except Exception as e:
         logger.warning('[Persist] Failed to write %s: %s', filepath, e,
                        exc_info=True)
-        # Fall back to old head+tail truncation
         return _truncate_head_tail(content, tool_name,
                                    TOOL_RESULT_MAX_CHARS.get(tool_name, _DEFAULT_TOOL_RESULT_MAX))
 
     logger.info('[Persist] %s result persisted to disk: %s (%s)',
                 tool_name, filepath, _human_size(len(content)))
 
-    # Generate tool-specific preview
-    if tool_name == 'web_search':
-        preview = _generate_web_search_preview(content)
-    else:
-        # Default: first N chars truncated at newline boundary
-        preview = content[:_PERSIST_PREVIEW_CHARS]
-        last_nl = preview.rfind('\n')
-        if last_nl > _PERSIST_PREVIEW_CHARS // 2:
-            preview = preview[:last_nl]
+    # Default preview: first N chars truncated at newline boundary
+    preview = content[:_PERSIST_PREVIEW_CHARS]
+    last_nl = preview.rfind('\n')
+    if last_nl > _PERSIST_PREVIEW_CHARS // 2:
+        preview = preview[:last_nl]
 
     return (
         f'[Persisted to: {filepath}]\n'
@@ -389,6 +414,237 @@ def _persist_to_disk(content: str, tool_name: str, tool_use_id: str = '',
         f'Preview:\n'
         f'{preview}\n'
     )
+
+
+# ── Split-persist helpers ───────────────────────────────────────────────
+
+def _sanitize_filename(s: str, max_len: int = 60) -> str:
+    """Convert a string to a safe, short filename fragment."""
+    # Keep alphanumeric, CJK, hyphens, underscores
+    s = re.sub(r'[^\w\-]', '_', s)
+    s = re.sub(r'_+', '_', s).strip('_')
+    return s[:max_len] if s else 'item'
+
+
+def _persist_web_search_split(content: str, persist_dir: str,
+                              safe_id: str) -> str | None:
+    """Split web_search results into per-result files.
+
+    Each search result is saved as a separate file.  Returns an index
+    listing each result's title, URL, char count, and file path so
+    the model can selectively read only the results it needs.
+
+    Returns None if the content doesn't look like structured web_search
+    output (falls through to default single-file persistence).
+    """
+    if not re.search(r'^\[1\]', content, re.MULTILINE):
+        return None
+
+    _SEP = '════════════════════'
+    parts = content.split(_SEP)
+
+    if len(parts) < 2:
+        return None  # Only one result or no separators — use default
+
+    index_lines = []
+    index_lines.append(f'Search results saved to {len(parts)} separate files '
+                       f'(total {_human_size(len(content))}). '
+                       f'Use read_files to read individual results.\n')
+
+    files_written = 0
+    _SNIPPET_CHARS = 200
+
+    for i, part in enumerate(parts, 1):
+        part = part.strip()
+        if not part:
+            continue
+
+        lines = part.split('\n')
+
+        # Extract title from first line: "[N] Title"
+        title = ''
+        url = ''
+        has_content = False
+        content_chars = 0
+        for line in lines:
+            m_title = re.match(r'^\[(\d+)\]\s*(.+)', line)
+            if m_title and not title:
+                title = m_title.group(2).strip()
+            if line.strip().startswith('URL:'):
+                url = line.strip()[4:].strip()
+            if '──── Full Page Content' in line:
+                has_content = True
+
+        if has_content:
+            # Count content chars (after the ──── marker)
+            content_start = False
+            for line in lines:
+                if content_start:
+                    content_chars += len(line) + 1
+                elif '──── Full Page Content' in line:
+                    content_start = True
+
+        # Save this result to its own file
+        safe_title = _sanitize_filename(title) if title else f'result_{i}'
+        filename = f'search_{safe_id}_{i}_{safe_title}.txt'
+        filepath = os.path.join(persist_dir, filename)
+
+        try:
+            with open(filepath, 'w', encoding='utf-8') as f:
+                f.write(part)
+            files_written += 1
+        except Exception as e:
+            logger.warning('[Persist] Failed to write split file %s: %s',
+                           filepath, e)
+            continue
+
+        # Build index entry with snippet
+        snippet = ''
+        if has_content:
+            # Get first few chars of the full content as snippet
+            content_start = False
+            snippet_buf = []
+            for line in lines:
+                if content_start:
+                    snippet_buf.append(line)
+                    if sum(len(l) for l in snippet_buf) > _SNIPPET_CHARS:
+                        break
+                elif '──── Full Page Content' in line:
+                    content_start = True
+            snippet = ' '.join(snippet_buf)[:_SNIPPET_CHARS].strip()
+
+        status = f'{_human_size(content_chars)} fetched' if has_content else 'snippet only'
+        index_lines.append(
+            f'[{i}] {title}\n'
+            f'    URL: {url}\n'
+            f'    Status: {status}\n'
+            f'    File: {filepath}'
+        )
+        if snippet:
+            index_lines.append(f'    Preview: {snippet}…')
+
+    if files_written < 2:
+        # Split produced fewer than 2 files — not useful, fall through
+        return None
+
+    logger.info('[Persist] web_search split into %d files in %s',
+                files_written, persist_dir)
+
+    return '\n'.join(index_lines)
+
+
+def _persist_grep_search_split(content: str, persist_dir: str,
+                               safe_id: str) -> str | None:
+    """Split grep_search results by source file into per-file result files.
+
+    Each source file's matches are saved as a separate file.  Returns an
+    index listing each source file, its match count, and the saved file
+    path so the model can selectively read only specific files' matches.
+
+    Returns None if the content can't be parsed into per-file groups
+    (falls through to default single-file persistence).
+    """
+    lines = content.split('\n')
+
+    # Skip the header line (e.g., 'grep "pattern" — N matches:')
+    header = ''
+    body_start = 0
+    for idx, line in enumerate(lines):
+        if line.strip() == '':
+            body_start = idx + 1
+            header = '\n'.join(lines[:idx])
+            break
+    else:
+        # No blank line found — might be a very short result
+        return None
+
+    # Group matches by source file.
+    # rg/grep output format: "filepath:line_num:content" or with
+    # context lines: "filepath-line_num-content" or "--" separators.
+    file_groups: dict[str, list[str]] = {}
+    current_file = None
+
+    for line in lines[body_start:]:
+        if not line.strip():
+            continue
+        if line.strip() == '--':
+            # Context separator — keep it with current file group
+            if current_file and current_file in file_groups:
+                file_groups[current_file].append(line)
+            continue
+
+        # Try to extract file path from "filepath:num:..." or "filepath-num-..."
+        m = re.match(r'^([^:]+?):(\d+)[:：](.*)$', line)
+        if not m:
+            m = re.match(r'^([^-]+?)-(\d+)-(.*)$', line)
+        if m:
+            fpath = m.group(1)
+            current_file = fpath
+            if fpath not in file_groups:
+                file_groups[fpath] = []
+            file_groups[fpath].append(line)
+        elif current_file:
+            # Continuation line (e.g., context lines without prefix)
+            file_groups[current_file].append(line)
+
+    if len(file_groups) < 2:
+        # Fewer than 2 files — not worth splitting
+        return None
+
+    index_lines = []
+    index_lines.append(
+        f'{header}\n'
+        f'Results span {len(file_groups)} files '
+        f'(total {_human_size(len(content))}). '
+        f'Each file\'s matches saved separately — use read_files to read specific ones.\n'
+    )
+
+    files_written = 0
+    _PREVIEW_LINES = 3  # Show first N match lines in index
+
+    for fpath, match_lines in file_groups.items():
+        safe_fname = _sanitize_filename(
+            fpath.replace('/', '_').replace('\\', '_')
+        )
+        filename = f'grep_{safe_id}_{safe_fname}.txt'
+        filepath = os.path.join(persist_dir, filename)
+
+        file_content = '\n'.join(match_lines)
+        try:
+            with open(filepath, 'w', encoding='utf-8') as f:
+                f.write(file_content)
+            files_written += 1
+        except Exception as e:
+            logger.warning('[Persist] Failed to write split file %s: %s',
+                           filepath, e)
+            continue
+
+        # Count actual matches (lines with :num: pattern)
+        match_count = sum(
+            1 for l in match_lines
+            if re.match(r'^[^:]+?:\d+:', l)
+        )
+
+        # Preview: first few match lines (not separators)
+        preview_lines = [
+            l for l in match_lines[:_PREVIEW_LINES * 2]
+            if l.strip() and l.strip() != '--'
+        ][:_PREVIEW_LINES]
+        preview = '\n    '.join(preview_lines)
+
+        index_lines.append(
+            f'  {fpath}  ({match_count} matches)\n'
+            f'    File: {filepath}\n'
+            f'    {preview}'
+        )
+
+    if files_written < 2:
+        return None
+
+    logger.info('[Persist] grep_search split into %d files in %s',
+                files_written, persist_dir)
+
+    return '\n'.join(index_lines)
 
 
 def _generate_web_search_preview(content: str) -> str:

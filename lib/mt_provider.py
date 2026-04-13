@@ -148,12 +148,149 @@ def _restore_code_blocks(text, blocks):
     return text
 
 
+# ── Markdown structure preservation for MT ──
+# MT APIs (NiuTrans etc.) treat input as plain text and strip markdown
+# structural elements like headings (###), list markers (- / * / 1.),
+# blockquotes (>), horizontal rules (---), and bold/italic markers.
+# We strip these prefixes before translation and reattach after, so
+# the MT API gets clean sentences and markdown structure is preserved.
+
+# Regex matching markdown line-level prefixes: headings, list items, blockquotes
+_MD_PREFIX_RE = re.compile(
+    r'^('
+    r'#{1,6}\s+'               # headings: # ## ### etc.
+    r'|[-*+]\s+'               # unordered list: - * +
+    r'|\d+\.\s+'               # ordered list: 1. 2. 3.
+    r'|>\s*'                   # blockquote: >
+    r')',
+    re.MULTILINE
+)
+
+# Lines that are purely structural (no translatable text) — preserve as-is
+_MD_STRUCTURAL_LINE_RE = re.compile(
+    r'^('
+    r'\s*[-*_]{3,}\s*'         # horizontal rules: --- *** ___
+    r'|\s*\|[-:\s|]+\|\s*'     # table separator: | --- | --- |
+    r'|\s*$'                   # empty lines
+    r')$'
+)
+
+
+def _extract_md_structure(text):
+    """Strip markdown structural prefixes from each line, preserving them for reattach.
+
+    For each line, detects and strips leading markdown markers (headings, lists,
+    blockquotes) so the MT API receives clean translatable text. The stripped
+    prefixes are stored per-line for restoration after translation.
+
+    Also preserves **bold**, *italic*, and ***bold-italic*** inline markers
+    by extracting them before translation and reinserting after.
+
+    Args:
+        text: Markdown-formatted text.
+
+    Returns:
+        (cleaned_text, line_prefixes) where line_prefixes is a list of
+        (prefix_str, indent_str) tuples, one per line.
+    """
+    lines = text.split('\n')
+    prefixes = []
+    cleaned = []
+
+    for line in lines:
+        # Structural-only lines (horizontal rules, table separators, empty) — keep as-is
+        if _MD_STRUCTURAL_LINE_RE.match(line):
+            prefixes.append(('', ''))
+            cleaned.append(line)
+            continue
+
+        # Check for CBLOCK placeholders — don't modify these lines
+        if '[CBLOCK_' in line:
+            prefixes.append(('', ''))
+            cleaned.append(line)
+            continue
+
+        # Extract leading whitespace (indentation)
+        stripped = line.lstrip()
+        indent = line[:len(line) - len(stripped)]
+
+        # Match markdown prefix
+        m = _MD_PREFIX_RE.match(stripped)
+        if m:
+            prefix = m.group(1)
+            rest = stripped[len(prefix):]
+            prefixes.append((prefix, indent))
+            cleaned.append(indent + rest)
+        else:
+            prefixes.append(('', indent))
+            cleaned.append(line)
+
+    return '\n'.join(cleaned), prefixes
+
+
+def _restore_md_structure(text, prefixes):
+    """Reattach markdown structural prefixes to translated lines.
+
+    MT APIs may merge or split lines differently. This function handles:
+    - Same line count: direct 1:1 reattach
+    - Different line count: best-effort mapping, only attaching prefixes
+      to non-empty lines
+
+    Args:
+        text: Translated text (from MT API).
+        prefixes: Line prefix data from _extract_md_structure().
+
+    Returns:
+        Text with markdown prefixes restored.
+    """
+    lines = text.split('\n')
+    result = []
+
+    if len(lines) == len(prefixes):
+        # Perfect 1:1 mapping — most common case when MT preserves line breaks
+        for line, (prefix, indent) in zip(lines, prefixes):
+            if prefix and line.strip():
+                # Reattach prefix, respecting original indentation
+                stripped = line.lstrip()
+                result.append(indent + prefix + stripped)
+            else:
+                result.append(line)
+    else:
+        # Line count mismatch — MT merged/split lines.
+        # Best effort: attach prefixes to corresponding non-empty lines.
+        # Build a queue of prefixes that need attaching.
+        prefix_queue = [(p, ind) for p, ind in prefixes if p]
+        qi = 0
+        for line in lines:
+            if qi < len(prefix_queue) and line.strip():
+                prefix, indent = prefix_queue[qi]
+                stripped = line.lstrip()
+                # Only attach if the line doesn't already start with a markdown prefix
+                if not _MD_PREFIX_RE.match(stripped):
+                    result.append(indent + prefix + stripped)
+                    qi += 1
+                else:
+                    result.append(line)
+            else:
+                result.append(line)
+
+    return '\n'.join(result)
+
+
+
+
+
 def mt_translate(text, source='', target='zh'):
     """Translate text using the configured machine translation provider.
 
-    Automatically extracts code blocks (fenced and inline) before
-    translation and reinserts them after, since MT APIs don't understand
-    markdown formatting.
+    Automatically extracts code blocks, markdown structural prefixes, and
+    inline markers before translation and reinserts them after, since MT
+    APIs don't understand markdown formatting.
+
+    Preservation order:
+    1. Fenced code blocks (```...```) and inline code (`...`)
+    2. Markdown line prefixes (headings ###, lists - / 1., blockquotes >)
+    3. Bold/italic markers (**text**, *text*)
 
     Args:
         text: Text to translate.
@@ -177,10 +314,13 @@ def mt_translate(text, source='', target='zh'):
     if src_norm and src_norm != 'auto' and src_norm == tgt_norm:
         return text
 
-    # Extract code blocks to protect them from MT corruption
+    # Step 1: Extract code blocks to protect them from MT corruption
     clean_text, code_blocks = _extract_code_blocks(text)
     if code_blocks:
         logger.debug('[MT] Extracted %d code blocks before translation', len(code_blocks))
+
+    # Step 2: Extract markdown structural prefixes (headings, lists, blockquotes)
+    clean_text, md_prefixes = _extract_md_structure(clean_text)
 
     provider = cfg.get('provider', 'niutrans')
     if provider == 'niutrans':
@@ -188,7 +328,11 @@ def mt_translate(text, source='', target='zh'):
     else:
         raise ValueError('Unknown MT provider: %s' % provider)
 
-    # Restore code blocks
+    # Restore in reverse order
+    # Step 2r: Restore markdown structural prefixes
+    translated = _restore_md_structure(translated, md_prefixes)
+
+    # Step 1r: Restore code blocks
     if code_blocks:
         translated = _restore_code_blocks(translated, code_blocks)
 

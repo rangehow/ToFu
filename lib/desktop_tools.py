@@ -16,7 +16,7 @@ DESKTOP_TOOL_LIST_FILES = {
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "Directory path to list. Use ~ for home directory. Examples: '~/Documents', '~/Desktop', '/tmp'"
+                    "description": "Directory path to list. Use ~ for home directory. Examples: '~/Documents', '~/Desktop'"
                 }
             },
             "required": ["path"]

@@ -343,13 +343,13 @@ def _execute_timer_create(fn_args):
         logger.info('[Timer:%s] Inline blocking poll started (interval=%ds, max=%d)',
                     timer_id, poll_interval, max_polls)
 
-        # ── Helper: update the searchRound entry in task['searchRounds'] ──
+        # ── Helper: update the toolRound entry in task['toolRounds'] ──
         # so that SSE state snapshots include _timerPolls for reconnection.
         def _attach_poll_to_round(poll_entry):
-            """Append a poll entry to the searchRound's _timerPolls list."""
+            """Append a poll entry to the toolRound's _timerPolls list."""
             if not parent_task:
                 return
-            for sr in parent_task.get('searchRounds', []):
+            for sr in parent_task.get('toolRounds', []):
                 if sr.get('roundNum') == round_num:
                     if '_timerPolls' not in sr:
                         sr['_timerPolls'] = []
@@ -463,7 +463,7 @@ def _execute_timer_create(fn_args):
                 _attach_poll_to_round(_poll_entry)
                 # Mark the round as triggered if ready
                 if ready:
-                    for sr in parent_task.get('searchRounds', []):
+                    for sr in parent_task.get('toolRounds', []):
                         if sr.get('roundNum') == round_num:
                             sr['_timerTriggered'] = True
                             sr['status'] = 'done'

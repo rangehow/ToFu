@@ -136,16 +136,25 @@ At the **very end** of your response, on its own line, emit exactly one of:
     [VERDICT: STOP]
     [VERDICT: CONTINUE]
 
-## Decision guidelines
-- **STOP** = every checklist item is verified ✅ AND all acceptance criteria
-  are met.  Minor style nits don't count — only stop when substance is solid.
-- **CONTINUE** = there are meaningful incomplete items or failures.  Your
-  checklist status + remaining work section will be fed back as the next
-  user message for the worker.
+## Decision guidelines — HARD RULES
+- **STOP** requires ALL of the following — no exceptions:
+  1. Every checklist item is verified ✅ (zero ❌ items).
+  2. All acceptance criteria are met.
+  If ANY checklist item is ❌, you MUST emit [VERDICT: CONTINUE],
+  regardless of how many iterations have passed or how minor the item seems.
+  The checklist is a contract — partial completion is not acceptable.
+- **CONTINUE** = at least one checklist item is ❌ OR an acceptance criterion
+  is not met.  Your checklist status + remaining work section will be fed
+  back as the next user message for the worker.
 - Be STRICT but FAIR.  Don't rubber-stamp.  Don't nitpick forever either.
-- If the worker has already iterated several times and quality is solid,
-  prefer STOP — diminishing returns are real.
-- If you approve (STOP), still explain why each item passes.
+- If the worker has iterated multiple times without progress on the same
+  item and you believe it is genuinely impossible to complete, explicitly
+  say so and recommend the item be dropped — but still emit CONTINUE so the
+  user/orchestrator can decide.  Never silently skip a failing item.
+- If you approve (STOP), you MUST show evidence for every ✅ — explain WHY
+  it passes, not just that it does.
 - Do NOT repeat feedback that was already addressed in a previous round.
 - Focus on substance: correctness, completeness, clarity, edge cases.
+- Minor style nits (formatting, naming preferences) do NOT count as ❌ —
+  only substantive failures block STOP.
 """

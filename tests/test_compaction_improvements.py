@@ -719,7 +719,7 @@ class TestDiskPersistence:
         import re
         m = re.search(r'\[Persisted to: (.+?)\]', result)
         filepath = m.group(1)
-        # Should be under /tmp/chatui-tool-results/{conv_prefix}/
+        # Should be under data/tool-results/{conv_prefix}/
         assert _PERSIST_DIR_BASE in filepath
         assert 'conv_abcdef1' in filepath  # first 12 chars of conv_id
 
@@ -784,8 +784,8 @@ class TestDiskPersistence:
         preview = _generate_web_search_preview(content)
         assert len(preview) <= _PERSIST_PREVIEW_CHARS
 
-    def test_persist_to_disk_web_search_uses_structured_preview(self):
-        """_persist_to_disk for web_search should use structured preview."""
+    def test_persist_to_disk_web_search_splits_per_result(self):
+        """_persist_to_disk for web_search should split into per-result files."""
         from lib.tasks_pkg.compaction import _persist_to_disk
         content = (
             "Search results:\n\n"
@@ -798,17 +798,60 @@ class TestDiskPersistence:
             "    Content B " + "y" * 20000 + "\n"
         )
         result = _persist_to_disk(content, 'web_search', 'tc_ws')
-        assert '[Persisted to:' in result
-        # Both results should be in the preview
+        # Should split into separate files — both results listed in index
         assert '[1] First' in result
         assert '[2] Second' in result
         assert 'https://a.com' in result
         assert 'https://b.com' in result
+        # Each result has its own file path
+        assert 'search_tc_ws_1_' in result
+        assert 'search_tc_ws_2_' in result
+        assert 'separate files' in result.lower()
 
 
 
 # ═══════════════════════════════════════════════════════════
 #  15. Per-Round Aggregate Budget
+
+    def test_persist_to_disk_grep_search_splits_per_file(self):
+        """_persist_to_disk for grep_search should split results by source file."""
+        from lib.tasks_pkg.compaction import _persist_to_disk
+        content = 'grep "import" (*.py) — 20 matches:\n\n'
+        content += 'lib/a.py:1:import os\nlib/a.py:2:import sys\n'
+        content += 'lib/b.py:1:import json\nlib/b.py:3:import re\n'
+        # Make it big enough to trigger budgeting (> 30K chars)
+        for i in range(500):
+            content += f'lib/c.py:{i}:import thing_{i}\n'
+        result = _persist_to_disk(content, 'grep_search', 'tc_gs')
+        # Should split by source file
+        assert 'lib/a.py' in result
+        assert 'lib/b.py' in result
+        assert 'lib/c.py' in result
+        assert 'grep_tc_gs_' in result
+        assert 'separately' in result.lower() or 'separate' in result.lower()
+
+    def test_persist_grep_search_single_file_fallback(self):
+        """grep_search with matches in only 1 file should NOT split."""
+        from lib.tasks_pkg.compaction import _persist_to_disk
+        content = 'grep "x" (*.py) — 5 matches:\n\n'
+        content += 'lib/only.py:1:x\n' * 500 + 'y' * 30000
+        result = _persist_to_disk(content, 'grep_search', 'tc_gs2')
+        # Falls through to single-file persistence
+        assert '[Persisted to:' in result
+
+    def test_persist_web_search_single_result_fallback(self):
+        """web_search with only 1 result should NOT split."""
+        from lib.tasks_pkg.compaction import _persist_to_disk
+        content = (
+            "Search results:\n\n"
+            "[1] Only Result\n    URL: https://only.com\n    Source: G\n\n"
+            "    ──── Full Page Content (40,000 chars) ────\n"
+            "    Content " + "z" * 40000 + "\n"
+        )
+        result = _persist_to_disk(content, 'web_search', 'tc_ws3')
+        # Falls through to single-file persistence (no separator)
+        assert '[Persisted to:' in result
+
 # ═══════════════════════════════════════════════════════════
 
 @pytest.mark.unit
@@ -915,7 +958,7 @@ class TestMicroCompactPersistenceMarkers:
             })
             if i < 3:  # First 3 are persisted markers
                 content = (
-                    '[Persisted to: /tmp/chatui-tool-results/test/grep_search_tc.txt]\n'
+                    '[Persisted to: data/tool-results/test/grep_search_tc.txt]\n'
                     'Output too large (50.0KB). Full output saved.\n'
                     'Preview:\nsome preview content...'
                 )

@@ -20,6 +20,18 @@
 #    --reset-env        Delete the existing conda env and recreate from scratch
 #                       (⚠️  DESTRUCTIVE: removes ANY extra packages the user
 #                        installed into this env. Only use for your own env.)
+#    --force-sqlite     Skip PostgreSQL install + bootstrap entirely and pin
+#                       CHATUI_DB_BACKEND=sqlite in .env. Use this when the
+#                       host's conda-forge snapshot can't satisfy PG deps
+#                       (e.g. icu/libxml2 pin conflicts) — SQLite is fine for
+#                       single-user / <100 concurrent use.
+#    --pg-major <N>     Force a specific PG major version (e.g. 17). Default
+#                       tries 18 → 17 → 16 in order, picking the first one
+#                       whose solve succeeds on this host.
+#    --reinit-pgdata    If data/pgdata exists but was created by a different
+#                       PG major than the one we install, back it up and
+#                       re-initdb. WITHOUT this flag we auto-detect the
+#                       mismatch and fall back to SQLite (data preserved).
 #
 #  This script relies ENTIRELY on conda (conda-forge). It:
 #    1. Installs Miniforge if no conda is found
@@ -28,8 +40,10 @@
 #    4. Creates a fresh conda env with Python 3.10+
 #    5. Installs ALL Python dependencies from conda-forge (no pip)
 #    6. Installs ripgrep, fd-find, and Chromium shared libs from conda-forge
-#    7. Installs the Playwright Chromium browser binary
-#    8. Launches the server
+#    7. Installs PostgreSQL with layered fallback (18 → 17 → 16 → SQLite)
+#    8. Validates data/pgdata/ matches installed PG major (auto-heals)
+#    9. Installs the Playwright Chromium browser binary
+#   10. Launches the server
 #
 #  For Windows, use install.ps1 instead.
 # ═══════════════════════════════════════════════════════════════
@@ -60,6 +74,10 @@ NO_LAUNCH=0
 SKIP_PLAYWRIGHT=0
 NO_UPDATE_CONDA=0
 RESET_ENV=0
+FORCE_SQLITE=0
+PG_MAJOR=""         # empty = auto-pick from PG_MAJOR_CANDIDATES
+REINIT_PGDATA=0
+PG_MAJOR_CANDIDATES=(18 17 16)
 
 # ── Parse arguments ─────────────────────────────────────────
 FORWARD_ARGS=()
@@ -74,6 +92,9 @@ while [[ $# -gt 0 ]]; do
         --skip-playwright)  SKIP_PLAYWRIGHT=1; shift ;;
         --no-update-conda)  NO_UPDATE_CONDA=1; shift ;;
         --reset-env)        RESET_ENV=1; shift ;;
+        --force-sqlite)     FORCE_SQLITE=1; shift ;;
+        --pg-major)         PG_MAJOR="$2"; shift 2 ;;
+        --reinit-pgdata)    REINIT_PGDATA=1; shift ;;
         *)  FORWARD_ARGS+=("$1"); shift ;;
     esac
 done
@@ -84,6 +105,54 @@ echo -e "  ${BOLD}🧈 Tofu (豆腐) — Self-Hosted AI Assistant${NC}"
 echo -e "  ─────────────────────────────────────────"
 echo -e "  Conda-based installer"
 echo ""
+
+# ── Tee ALL output (stdout + stderr) into a log file ──
+# Everything printed from this point onward ends up in
+# <INSTALL_DIR>/logs/install-YYYYMMDD_HHMMSS.log — makes it easy to
+# attach the full transcript when reporting an issue.
+#
+# We respect --dir here but fall back to the CWD if the dir doesn't exist
+# yet (e.g. first-ever clone). The log is re-linked to the final path
+# once the install directory is known for sure.
+_TOFU_LOG_ROOT="${INSTALL_DIR}"
+[[ -d "$_TOFU_LOG_ROOT" ]] || _TOFU_LOG_ROOT="$(pwd)"
+_TOFU_LOG_DIR="${_TOFU_LOG_ROOT}/logs"
+mkdir -p "$_TOFU_LOG_DIR" 2>/dev/null || _TOFU_LOG_DIR="/tmp"
+TOFU_INSTALL_LOG="${_TOFU_LOG_DIR}/install-$(date +%Y%m%d_%H%M%S).log"
+# Use `tee` via process substitution so the log captures the raw
+# (ANSI-coloured) output that the user sees. Colours are fine in the
+# log — most tools that read it (pagers, chat UI) handle them, and you
+# can strip them later with `sed -r 's/\x1b\[[0-9;]*m//g'` if you want.
+# stdbuf -oL keeps stdout line-buffered so progress shows up immediately
+# even when piped to tee (solves the "nothing prints for 30s" issue
+# during long conda solves).
+exec > >(stdbuf -oL tee -a "$TOFU_INSTALL_LOG") 2>&1
+# Record key metadata at the top of the log for future debugging.
+{
+    echo "──────────────────────────────────────────────"
+    echo "tofu install.sh — $(date -Iseconds)"
+    echo "host:    $(hostname 2>/dev/null || echo unknown)"
+    echo "user:    $(whoami 2>/dev/null || echo unknown)"
+    echo "args:    $0 $*"
+    echo "pwd:     $(pwd)"
+    echo "bash:    ${BASH_VERSION:-unknown}"
+    echo "which conda (pre-locate): $(command -v conda 2>/dev/null || echo none)"
+    echo "──────────────────────────────────────────────"
+} >&2
+info "Install log: $TOFU_INSTALL_LOG"
+
+# On any non-zero exit (error, Ctrl-C, set -e trigger), remind the user
+# where the log is so they can grab it for bug reports.
+_tofu_exit_reminder() {
+    local rc=$?
+    if [[ $rc -ne 0 ]]; then
+        echo "" >&2
+        echo -e "  ${YELLOW}!${NC}  install.sh exited with code ${rc}" >&2
+        echo -e "  ${YELLOW}!${NC}  Full transcript saved to: ${TOFU_INSTALL_LOG}" >&2
+        echo -e "  ${YELLOW}!${NC}  Copy it when filing a bug:  cat \"${TOFU_INSTALL_LOG}\"" >&2
+    fi
+}
+trap _tofu_exit_reminder EXIT
 
 # ── Platform check ──────────────────────────────────────────
 OS="$(uname -s)"
@@ -251,19 +320,32 @@ ok "Using Python: $PY ($(python --version 2>&1))"
 # ═══════════════════════════════════════════════════════════════
 step "Installing Python dependencies from conda-forge"
 
-# Map requirements.txt → conda-forge package names. Most match 1:1.
-# Notable: flask-compress → flask-compress; python-pptx → python-pptx;
-# Pillow → pillow (conda is case-insensitive on install).
+# Map requirements.txt → conda-forge package names.
+#
+# IMPORTANT: trafilatura and htmldate are INTENTIONALLY NOT in this list.
+# The conda-forge htmldate package (≤1.9.3) pins "lxml<6,>=5.3", which
+# forces libxml2<2.14, which forces icu<76. That transitively blocks
+# PostgreSQL 18.1+ (needs icu 78) AND blocks lxml 6.x from being installed.
+# The upstream htmldate 1.9.4 (released 2025-11-04) already removed the
+# "<6" upper bound on lxml, but conda-forge's feedstock hasn't caught up.
+# We install both via pip below — they're pure Python and pip is happy to
+# install the unpinned latest version, sidestepping the entire icu deadlock.
 CONDA_PKGS=(
+    # pip itself — conda 'python' packages OMIT pip by default in recent
+    # conda-forge builds. Without this, `python -m pip install ...` below
+    # fails with "No module named pip" and trafilatura/htmldate never get
+    # installed. Install pip explicitly every time.
+    "pip>=23"
     "flask>=3.0"
     "flask-compress>=1.14"
     "requests>=2.31"
     "psutil>=5.9"
-    "trafilatura>=1.6"
     "playwright>=1.40"
     "pillow>=10.0"
     "python-pptx>=0.6.21"
-    "lxml>=5.3"
+    # lxml ≥6 works with libxml2 2.14+ and icu 75 OR 78 — gives the solver
+    # maximum freedom. It's ABI-compatible with lxml 5.x at the Python level.
+    "lxml>=6"
     # BS4 — HTML fallback parser in lib/fetch/html_extract.py
     "beautifulsoup4>=4.12"
     # python-dateutil — eagerly imported by lib/fetch/html_extract.py
@@ -280,9 +362,29 @@ CONDA_PKGS=(
     "uv>=0.4"
 )
 
-# Pip-only deps — not available on conda-forge, installed via pip INTO the env.
+# Pip-installed deps.
+#
+# trafilatura + htmldate are pure-Python packages; installing them via pip
+# lets us get htmldate 1.9.4+ (no "lxml<6" upper bound), which in turn lets
+# the conda env install PG 18 + icu 78 + lxml 6 cleanly. This is NOT a
+# downgrade — it's the opposite: pip gives us NEWER htmldate than conda has.
+#
+# We ALSO list trafilatura's other pure-Python deps explicitly here
+# (justext, courlan, dateparser, charset-normalizer) because we install
+# with --no-deps below (to prevent pip from pulling an old lxml that
+# shadows our conda lxml 6). Without these, importing trafilatura fails
+# with "ModuleNotFoundError: No module named 'justext'" etc.
 PIP_ONLY_PKGS=(
     "pymupdf4llm>=0.0.17"
+    "trafilatura>=1.6"
+    "htmldate>=1.9.4"
+    # trafilatura's pure-Python deps (from its pyproject.toml).
+    # certifi/urllib3 are already pulled in by requests via conda.
+    "justext>=3.0.1"
+    "courlan>=1.3.2"
+    "charset-normalizer>=3.4.0"
+    # htmldate's pure-Python deps.
+    "dateparser>=1.1.2"
 )
 
 # ── Heal broken envs: remove any pip-installed versions of these deps ──
@@ -291,7 +393,11 @@ PIP_ONLY_PKGS=(
 # links to GLIBC_2.25+ and crashes at import. We uninstall any pip copies
 # first so conda-forge's (sysroot-linked) version is the one used.
 info "Purging any pip-installed copies that would shadow conda-forge..."
-PIP_NAMES=(flask flask-compress Flask-Compress requests psutil trafilatura
+# Note: trafilatura + htmldate are INTENTIONALLY kept in pip (we WANT
+# pip versions of those — conda-forge's htmldate ≤1.9.3 has the
+# lxml<6 pin that locks us out of modern icu/PG). So we DON'T include
+# them in this purge list.
+PIP_NAMES=(flask flask-compress Flask-Compress requests psutil
            playwright pillow Pillow python-pptx lxml beautifulsoup4 bs4
            python-dateutil dateutil python-docx docx openpyxl xlrd olefile
            mcp pymupdf PyMuPDF uv)
@@ -316,14 +422,21 @@ info "Solving and installing: ${CONDA_PKGS[*]}"
 # main solve, purge known conflict sources so the solver has a clean slate.
 # All removes are best-effort — missing packages are fine.
 info "Purging potentially conflicting conda packages (best-effort)..."
+# trafilatura + htmldate removed from conda (we install via pip — see
+# PIP_ONLY_PKGS above for rationale). If a previous run installed them
+# via conda, nuke them here so their stale 'lxml<6' pin doesn't fight us.
 CONDA_CONFLICT_PKGS=(
     postgresql psycopg2
-    trafilatura htmldate
+    trafilatura htmldate courlan
     lxml libxml2 libxml2-16 libxslt
     icu
 )
 conda remove -n "$ENV_NAME" -y --force "${CONDA_CONFLICT_PKGS[@]}" >/dev/null 2>&1 || true
 ok "Conflict-prone packages cleared (will reinstall below)"
+
+# Also purge any pip-installed trafilatura/htmldate from prior runs so
+# pip's own install below is clean.
+python -m pip uninstall -y trafilatura htmldate courlan >/dev/null 2>&1 || true
 
 # --force-reinstall: make sure conda actually re-lays-down the files even if
 # its metadata still thinks the package is satisfied (common right after a
@@ -358,12 +471,67 @@ if ! _install_main_deps; then
 fi
 ok "Python dependencies installed"
 
+# ── Post-install import check: conda's metadata occasionally says a
+#    package is installed when the actual files are missing (happens when
+#    a prior run did `conda remove --force` and cache got confused).
+#    Verify each critical package imports; if any fail, force a
+#    --force-reinstall targeted at just those.
+info "Verifying critical conda packages import correctly..."
+_IMPORT_CHECK_PKGS=(
+    "flask:flask"
+    "flask_compress:flask-compress"
+    "requests:requests"
+    "psutil:psutil"
+    "playwright:playwright"
+    "PIL:pillow"
+    "pptx:python-pptx"
+    "lxml:lxml"
+    "bs4:beautifulsoup4"
+    "dateutil:python-dateutil"
+    "docx:python-docx"
+    "openpyxl:openpyxl"
+    "mcp:mcp"
+    "fitz:pymupdf"
+)
+_MISSING_PKGS=()
+for _spec in "${_IMPORT_CHECK_PKGS[@]}"; do
+    _mod="${_spec%%:*}"
+    _conda_name="${_spec##*:}"
+    if ! python -c "import ${_mod}" 2>/dev/null; then
+        warn "  ${_mod} (conda pkg '${_conda_name}') imports missing"
+        _MISSING_PKGS+=("$_conda_name")
+    fi
+done
+if [[ ${#_MISSING_PKGS[@]} -gt 0 ]]; then
+    warn "Conda metadata inconsistent — force-reinstalling: ${_MISSING_PKGS[*]}"
+    conda install -n "$ENV_NAME" -c conda-forge --override-channels -y \
+        --force-reinstall "${_MISSING_PKGS[@]}" || \
+        warn "Force-reinstall failed — env may need a full rebuild (re-run with --reset-env)"
+fi
+
 # ── Install pip-only deps (e.g. pymupdf4llm) into the conda env ──
 # pymupdf4llm is not shipped on conda-forge; it's a thin LLM-oriented Markdown
 # extractor built on top of pymupdf (which we just installed via conda).
 if [[ ${#PIP_ONLY_PKGS[@]} -gt 0 ]]; then
     info "Installing pip-only deps (not on conda-forge): ${PIP_ONLY_PKGS[*]}"
-    if python -m pip install --no-deps --upgrade "${PIP_ONLY_PKGS[@]}"; then
+
+    # Defensive: ensure pip is actually importable in this env. Recent
+    # conda-forge 'python' no longer bundles pip automatically; if the
+    # main deps install above didn't pull it in, install it now so the
+    # pip commands below don't fail with "No module named pip".
+    if ! python -c "import pip" 2>/dev/null; then
+        warn "pip not found in env — installing it from conda-forge now"
+        if ! conda install -n "$ENV_NAME" -c conda-forge --override-channels -y 'pip>=23'; then
+            warn "Could not install pip via conda — trying ensurepip as fallback"
+            python -m ensurepip --upgrade 2>/dev/null || true
+        fi
+    fi
+
+    if ! python -c "import pip" 2>/dev/null; then
+        warn "pip STILL not available — skipping pip installs (trafilatura/htmldate/pymupdf4llm)"
+        warn "Manual recovery: conda install -n ${ENV_NAME} -c conda-forge pip && \\"
+        warn "                 pip install ${PIP_ONLY_PKGS[*]}"
+    elif python -m pip install --no-deps --upgrade "${PIP_ONLY_PKGS[@]}"; then
         ok "Pip-only deps installed"
     else
         warn "pip install --no-deps failed — retrying with dependency resolution"
@@ -377,24 +545,105 @@ fi
 
 # ── Install PostgreSQL + psycopg2 from conda-forge (optional but recommended) ──
 # tofu uses PG for better concurrency (100+ concurrent users), auto-falls back
-# to SQLite if PG is missing. Installing from conda-forge gives a rootless,
-# userspace PG that auto-bootstraps at first run.
-info "Installing PostgreSQL + psycopg2 from conda-forge (for multi-user concurrency)..."
-if conda install -n "$ENV_NAME" -c conda-forge --override-channels -y \
-        'postgresql>=16' 'psycopg2>=2.9' >/dev/null 2>&1; then
-    ok "PostgreSQL + psycopg2 installed (will auto-bootstrap on first run)"
+# to SQLite if PG is missing.
+#
+# Layered fallback: try PG 18 → 17 → 16 → SQLite. Different conda-forge
+# snapshots pin icu/libxml2 in ways that conflict with trafilatura/lxml
+# (we saw this on hosts where PG 18 requires icu>=78 but trafilatura needs
+# icu<76). Trying older majors often succeeds because their icu pins are
+# looser. The first major whose solve succeeds wins.
+PG_INSTALLED_MAJOR=""   # set to the major we successfully installed, empty if we gave up
+if [[ "$FORCE_SQLITE" -eq 1 ]]; then
+    info "--force-sqlite: skipping PostgreSQL install entirely"
 else
-    warn "Could not install PostgreSQL — tofu will fall back to SQLite (fine for <100 users)"
+    # If user pinned a specific major, only try that one.
+    if [[ -n "$PG_MAJOR" ]]; then
+        _PG_TRY=("$PG_MAJOR")
+    else
+        _PG_TRY=("${PG_MAJOR_CANDIDATES[@]}")
+    fi
+
+    info "Installing PostgreSQL + psycopg2 from conda-forge (trying majors: ${_PG_TRY[*]})"
+    # ── Pre-clean prior PG remnants from the env ──
+    # A previous run may have left a different PG major installed. Its
+    # history pin will fight any attempt to install a different major.
+    # --force remove clears the package files; the history pin is cleared
+    # later by --prune-deps if needed.
+    conda remove -n "$ENV_NAME" -y --force postgresql libpq psycopg2 >/dev/null 2>&1 || true
+
+    _PG_BIN_DIR="${CONDA_BASE}/envs/${ENV_NAME}/bin"
+    _PG_LAST_LOG=""
+
+    # Install strategy: try the requested major with a plain spec first.
+    # Since trafilatura/htmldate are now pip-installed (see Step 5 above),
+    # nothing in the env forces a libxml2 version, so the solver is free to
+    # pick whichever icu/libxml2 combination matches the PG major chosen.
+    #
+    # If the first attempt still fails (e.g. conda-forge snapshot is mid-
+    # migration and PG's icu-78 libpq build isn't fully propagated to this
+    # arch yet), we fall back to the next major in the list.
+    for _try_major in "${_PG_TRY[@]}"; do
+        info "  Trying PostgreSQL ${_try_major}.x ..."
+        _PG_LAST_LOG="/tmp/tofu_pg_install_${_try_major}.log"
+
+        set +e
+        conda install -n "$ENV_NAME" -c conda-forge --override-channels -y \
+            "postgresql=${_try_major}" 'psycopg2>=2.9' 2>&1 | tee "$_PG_LAST_LOG"
+        _rc="${PIPESTATUS[0]}"
+        set -e
+
+        if [[ "$_rc" -eq 0 && -x "${_PG_BIN_DIR}/postgres" ]]; then
+            _got_major="$("${_PG_BIN_DIR}/postgres" --version 2>/dev/null \
+                | awk '{print $3}' | cut -d. -f1)"
+            if [[ "$_got_major" == "$_try_major" ]]; then
+                PG_INSTALLED_MAJOR="$_got_major"
+                ok "PostgreSQL ${PG_INSTALLED_MAJOR}.x installed + psycopg2"
+                break
+            fi
+            warn "  Installed postgres reports major=${_got_major}, expected ${_try_major}"
+        elif [[ "$_rc" -ne 0 ]]; then
+            warn "  PG ${_try_major}.x solve failed (rc=${_rc}) — see ${_PG_LAST_LOG}"
+        else
+            warn "  conda returned 0 but ${_PG_BIN_DIR}/postgres missing"
+        fi
+
+        # Ensure next attempt starts clean (important: leftover libpq/history
+        # pins can make the next major fail for unrelated reasons).
+        conda remove -n "$ENV_NAME" -y --force postgresql libpq psycopg2 >/dev/null 2>&1 || true
+    done
+
+    if [[ -z "$PG_INSTALLED_MAJOR" ]]; then
+        warn "All PG majors failed to install on this host"
+        [[ -n "$_PG_LAST_LOG" ]] && warn "Last conda log: ${_PG_LAST_LOG}"
+        warn ""
+        warn "Diagnosis checklist (from the conda solver output above):"
+        warn "  1. Is the conda-forge snapshot mid-migration for your arch?"
+        warn "     → Run: conda search -c conda-forge --override-channels 'postgresql=18' --info | head -40"
+        warn "       and check whether libpq-18.x builds exist for your platform."
+        warn "  2. Does something in the env still pin icu/libxml2 to an old side?"
+        warn "     → Run: conda list -n ${ENV_NAME} | grep -E '(icu|libxml2|lxml)'"
+        warn "     → If you see 'icu 75' but PG needs 78 (or vice-versa), inspect the"
+        warn "       'history' file: \$CONDA_PREFIX/conda-meta/history"
+        warn "  3. Is conda itself outdated?"
+        warn "     → Re-run WITHOUT --no-update-conda"
+        warn ""
+        warn "Last-resort: re-run with --force-sqlite if you just want to get running (SQLite"
+        warn "                 is fine for single-user / <100 concurrent and is bit-for-bit"
+        warn "                 compatible with the same app code)."
+    fi
 fi
 
-# ── Verify lxml imports (catches glibc mismatches immediately) ──
-info "Verifying lxml + trafilatura import correctly..."
-if python -c "import lxml.etree, trafilatura; print('lxml', lxml.__version__, 'trafilatura', trafilatura.__version__)"; then
+# ── Verify the full HTML-fetch stack imports (no hidden missing deps) ──
+# This runs the same chain that server.py will run at startup, so any
+# ModuleNotFoundError here surfaces BEFORE the user hits it.
+info "Verifying lxml + trafilatura + htmldate + justext import correctly..."
+if python -c "import lxml.etree, trafilatura, htmldate, justext, courlan, dateparser; print('lxml', lxml.__version__, 'trafilatura', trafilatura.__version__, 'htmldate', htmldate.__version__, 'justext', justext.__version__)"; then
     ok "Import check passed"
 else
-    warn "lxml/trafilatura failed to import."
+    warn "One of lxml/trafilatura/htmldate/justext/courlan/dateparser failed to import."
     warn "If you see 'GLIBC_2.xx not found', a pip wheel is still shadowing conda's copy."
     warn "Try: conda activate ${ENV_NAME} && pip uninstall -y lxml && conda install -c conda-forge --force-reinstall lxml"
+    warn "If you see 'No module named X', run: pip install X"
 fi
 
 # ═══════════════════════════════════════════════════════════════
@@ -458,6 +707,93 @@ else
 fi
 
 # ═══════════════════════════════════════════════════════════════
+#  Step 8.5: Validate data/pgdata/ matches installed PG major
+#
+#  Catches: "unrecognized configuration parameter 'autovacuum_worker_slots'"
+#  (PG 18 data dir running under PG 17 binary) and similar version skews
+#  that make the scheduler spin forever on "connection refused".
+#
+#  Policy:
+#    - No pgdata/ yet           → nothing to check, PG bootstrap will initdb later.
+#    - pgdata major == installed major → OK, reuse.
+#    - mismatch + --reinit-pgdata     → back up pgdata, let PG bootstrap re-initdb.
+#    - mismatch without --reinit-pgdata → pin CHATUI_DB_BACKEND=sqlite (data preserved).
+#    - pgdata exists but no PG installed locally → pin CHATUI_DB_BACKEND=sqlite.
+# ═══════════════════════════════════════════════════════════════
+step "Validating data/pgdata/ (version compatibility)"
+
+PGDATA_DIR="${INSTALL_DIR}/data/pgdata"
+PGDATA_MAJOR=""
+if [[ -f "${PGDATA_DIR}/PG_VERSION" ]]; then
+    PGDATA_MAJOR="$(tr -d '[:space:]' < "${PGDATA_DIR}/PG_VERSION" | cut -d. -f1)"
+    info "Found existing pgdata (PG ${PGDATA_MAJOR})"
+fi
+
+# Default: whatever we installed wins.
+DB_BACKEND_CHOICE=""   # empty = auto (let server.py decide), 'sqlite' = force
+
+if [[ "$FORCE_SQLITE" -eq 1 ]]; then
+    DB_BACKEND_CHOICE="sqlite"
+    if [[ -n "$PGDATA_MAJOR" ]]; then
+        info "--force-sqlite: leaving pgdata in place but using SQLite"
+    fi
+elif [[ -z "$PG_INSTALLED_MAJOR" ]]; then
+    # PG never got installed
+    if [[ -n "$PGDATA_MAJOR" ]]; then
+        warn "pgdata exists (PG ${PGDATA_MAJOR}) but no PG binaries installed in env"
+        warn "Would cause scheduler/db retry storms \u2014 pinning CHATUI_DB_BACKEND=sqlite"
+    else
+        info "No PG installed \u2014 tofu will use SQLite"
+    fi
+    DB_BACKEND_CHOICE="sqlite"
+elif [[ -n "$PGDATA_MAJOR" && "$PGDATA_MAJOR" != "$PG_INSTALLED_MAJOR" ]]; then
+    warn "pgdata major (${PGDATA_MAJOR}) differs from installed PG (${PG_INSTALLED_MAJOR})"
+    warn "Running pgdata under a mismatched major will cause FATAL config-param errors"
+    if [[ "$REINIT_PGDATA" -eq 1 ]]; then
+        _BAK="${PGDATA_DIR}.bak.$(date +%Y%m%d_%H%M%S)"
+        info "--reinit-pgdata: backing up existing pgdata \u2192 ${_BAK}"
+        mv "$PGDATA_DIR" "$_BAK"
+        ok "pgdata moved aside; PG bootstrap will initdb fresh under PG ${PG_INSTALLED_MAJOR}"
+        # Also nuke the SQLite db if we want a totally clean slate? No \u2014
+        # SQLite is independent, leave it alone.
+    else
+        warn "Re-run with --reinit-pgdata to auto-initdb (existing PG data will be backed up)"
+        warn "For now, pinning CHATUI_DB_BACKEND=sqlite so scheduler doesn't spin"
+        DB_BACKEND_CHOICE="sqlite"
+    fi
+elif [[ -n "$PGDATA_MAJOR" ]]; then
+    ok "pgdata (PG ${PGDATA_MAJOR}) matches installed PG (${PG_INSTALLED_MAJOR}) \u2014 reusing"
+else
+    ok "PG ${PG_INSTALLED_MAJOR} ready; bootstrap will initdb on first server.py run"
+fi
+
+# ═══════════════════════════════════════════════════════════════
+#  Step 8.6: Smoke-test PG startup (best-effort, don't block install)
+#
+#  If we chose to use PG, try `pg_ctl start` once under a timeout so
+#  config-file errors surface NOW instead of during first /api call.
+# ═══════════════════════════════════════════════════════════════
+if [[ -z "$DB_BACKEND_CHOICE" && -n "$PG_INSTALLED_MAJOR" && -d "$PGDATA_DIR" ]]; then
+    step "Smoke-testing PostgreSQL startup"
+    _PG_CTL="${CONDA_BASE}/envs/${ENV_NAME}/bin/pg_ctl"
+    _PG_LOG_DIR="${INSTALL_DIR}/logs"
+    mkdir -p "$_PG_LOG_DIR"
+    # Stop any stale process first (best-effort), then try to start.
+    "$_PG_CTL" -D "$PGDATA_DIR" stop -m fast >/dev/null 2>&1 || true
+    # Remove stale pidfile left by killed/crashed prior runs
+    rm -f "${PGDATA_DIR}/postmaster.pid" 2>/dev/null || true
+    if "$_PG_CTL" -D "$PGDATA_DIR" -l "${_PG_LOG_DIR}/postgresql.log" -w -t 15 start >/dev/null 2>&1; then
+        ok "PostgreSQL started successfully (smoke test)"
+        "$_PG_CTL" -D "$PGDATA_DIR" stop -m fast >/dev/null 2>&1 || true
+    else
+        warn "PG failed to start during smoke test \u2014 see ${_PG_LOG_DIR}/postgresql.log"
+        warn "Pinning CHATUI_DB_BACKEND=sqlite to avoid scheduler retry storms"
+        warn "Re-run with --reinit-pgdata after moving ${PGDATA_DIR} aside if you want fresh PG"
+        DB_BACKEND_CHOICE="sqlite"
+    fi
+fi
+
+# ═══════════════════════════════════════════════════════════════
 #  Step 9: Configure .env
 # ═══════════════════════════════════════════════════════════════
 step "Configuring .env"
@@ -498,6 +834,17 @@ if [[ -n "$API_KEY" ]]; then
     _set_env_var "LLM_API_KEYS" "$API_KEY" "$ENV_FILE"
     ok "API key configured"
 fi
+
+# Write DB backend decision into .env so server.py knows exactly which
+# backend to use (no silent PG-then-fallback retry storms at startup).
+if [[ "$DB_BACKEND_CHOICE" == "sqlite" ]]; then
+    _set_env_var "CHATUI_DB_BACKEND" "sqlite" "$ENV_FILE"
+    info "CHATUI_DB_BACKEND=sqlite pinned in .env"
+elif [[ -n "$PG_INSTALLED_MAJOR" ]]; then
+    _set_env_var "CHATUI_DB_BACKEND" "postgres" "$ENV_FILE"
+    info "CHATUI_DB_BACKEND=postgres pinned in .env (PG ${PG_INSTALLED_MAJOR})"
+fi
+
 ok ".env ready (PORT=${PORT})"
 
 # ═══════════════════════════════════════════════════════════════
@@ -510,6 +857,8 @@ echo "  To activate this env later:"
 echo "    conda activate ${ENV_NAME}"
 echo "    cd ${INSTALL_DIR}"
 echo "    python server.py"
+echo ""
+info "Full install log: $TOFU_INSTALL_LOG"
 echo ""
 
 if [[ "$NO_LAUNCH" -eq 1 ]]; then

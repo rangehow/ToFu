@@ -744,6 +744,54 @@ def _ensure_pg_running(pgdata, base_dir, pg_host, pg_port, pg_user, pg_password,
             logger.warning('[DB] Remote PG owner %s is NOT reachable on port %d — '
                           'will try to start PG locally (Step 4)', remote_host, pg_port)
 
+    # ── Step 3b: pgdata ↔ binary major-version sanity check ──
+    # If the pgdata directory was created by a different PG major than the
+    # one installed locally (very common when a project is exported/copied
+    # between machines with different PG versions), any start attempt will
+    # fail with a FATAL config-param error (e.g. PG 18's
+    # "autovacuum_worker_slots" under PG 17 binary), causing the scheduler
+    # to retry-storm on "connection refused". Detect this here and return
+    # None so the caller falls back to SQLite cleanly.
+    pg_version_file = os.path.join(pgdata, 'PG_VERSION')
+    if os.path.isfile(pg_version_file):
+        try:
+            with open(pg_version_file) as _vf:
+                pgdata_major = _vf.read().strip().split('.')[0]
+        except Exception as _e:
+            logger.debug('[DB] Could not read PG_VERSION from %s: %s', pgdata, _e)
+            pgdata_major = None
+        if pgdata_major:
+            # Query the locally-installed postgres binary for its major.
+            try:
+                _postgres_bin = _find_pg_binary('postgres')
+                _ver_out = subprocess.run(
+                    [_postgres_bin, '--version'],
+                    capture_output=True, text=True, timeout=5
+                )
+                if _ver_out.returncode == 0:
+                    # Output is like "postgres (PostgreSQL) 17.2"
+                    _bin_major = _ver_out.stdout.strip().split()[-1].split('.')[0]
+                    if _bin_major != pgdata_major:
+                        logger.error(
+                            '[DB] pgdata major=%s but local postgres binary major=%s '
+                            '— REFUSING to start (would FATAL with config-param errors). '
+                            'Falling back to SQLite. To recover: move %s aside (e.g. '
+                            '`mv pgdata pgdata.bak`) so a fresh pgdata is initdb\'d, '
+                            'OR install matching PG version, OR set CHATUI_DB_BACKEND=sqlite.',
+                            pgdata_major, _bin_major, pgdata)
+                        return None
+                    logger.debug('[DB] pgdata major (%s) matches local binary', pgdata_major)
+            except FileNotFoundError:
+                # No postgres binary on host — caller (_core) already bailed
+                # earlier via _pg_binaries_present(), so this shouldn't fire,
+                # but guard anyway.
+                logger.info('[DB] No postgres binary to version-check pgdata against')
+                return None
+            except Exception as _e:
+                logger.debug('[DB] Could not run postgres --version: %s', _e)
+                # Non-fatal — let normal flow try to start PG; it'll fail
+                # with a clearer log if incompatible.
+
     # ── Step 4/5: Start PG locally or bootstrap ──
     if not os.path.isdir(pgdata):
         logger.info('[DB] No pgdata directory — bootstrapping new PostgreSQL instance')

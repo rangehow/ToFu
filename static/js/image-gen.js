@@ -18,12 +18,14 @@ const _IG_ALL_MODELS = [
   'gemini-3-pro-image-preview',
   'gemini-2.5-flash-image',
   'gpt-image-1.5',
+  'gpt-image-2',
 ];
 var _IG_MODEL_SHORT = {
   'gemini-3.1-flash-image-preview': 'Gemini 3.1 Flash',
   'gemini-3-pro-image-preview': 'Gemini 3 Pro',
   'gemini-2.5-flash-image': 'Gemini 2.5 Flash',
   'gpt-image-1.5': 'GPT Image 1.5',
+  'gpt-image-2': 'GPT Image 2',
 };
 
 // ═══════════════════════════════════════════════════

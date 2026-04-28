@@ -58,8 +58,10 @@ from lib.log import audit_log, get_logger, log_context
 logger = get_logger(__name__)
 
 from lib.database import DOMAIN_CHAT, db_execute_with_retry, get_thread_db
+from lib.tasks_pkg.endpoint_prompts import WORKER_DIRECTIVE_HEADER
 from lib.tasks_pkg.endpoint_review import (
     _accumulate_usage,
+    _count_state_changing_rounds,
     _detect_stuck,
     _run_critic_turn,
     _run_planner_turn,
@@ -69,6 +71,14 @@ from lib.tasks_pkg.orchestrator import _run_single_turn, run_task
 
 MAX_ITERATIONS = 10   # hard cap — safety valve to prevent runaway loops
 MAX_REPLANS = 3       # hard cap on CONTINUE_PLANNER branches per task
+
+# Zero-deliverable guard — if the worker produces zero state-changing tool
+# calls for this many consecutive turns, the orchestrator skips the Critic
+# and injects a hard-coded "execute, don't analyze" directive instead,
+# advancing the iteration counter.  This pre-empts the analysis-paralysis
+# mode where the worker + critic agree that "more investigation is needed"
+# and burn token budget without shipping anything.
+MAX_ZERO_DELIVERABLE_TURNS = 2
 
 
 def _replan_enabled() -> bool:
@@ -82,20 +92,22 @@ def _build_worker_directive(plan_content: str) -> str:
     Extracted so both the initial planner path AND the replan path produce
     the exact same ``user`` message shape — identical byte-for-byte apart
     from the plan body.  This keeps the prefix-cache discipline in place.
+
+    The directive header (``WORKER_DIRECTIVE_HEADER`` from
+    ``endpoint_prompts``) hard-codes the execution rules: start with a
+    state-changing tool call, no clarifying questions unless blocked,
+    narrative is secondary, etc.  See endpoint_prompts.py for the
+    rationale.
     """
-    return (
-        'You are the Worker.  Execute the plan below produced by '
-        'the Planner.  Work through the checklist items in order, '
-        'use your tools to actually edit files / run commands / '
-        'verify results — do not just restate the plan.  After '
-        'each checklist item, briefly report what you changed.  '
-        'Stop only when every checklist item can be verified ✅.\n\n'
-        '───── Plan ─────\n\n'
-        + plan_content
-    )
+    return WORKER_DIRECTIVE_HEADER + plan_content
 
 
-def _reset_worker_messages_with_plan(original_messages: list, plan_content: str) -> list:
+def _reset_worker_messages_with_plan(
+    original_messages: list,
+    plan_content: str,
+    *,
+    progress_summary: str = '',
+) -> list:
     """Rebuild the worker's working messages: keep system prompts verbatim
     (prefix-cache friendly), replace the last ``user`` with the wrapped plan.
 
@@ -104,6 +116,18 @@ def _reset_worker_messages_with_plan(original_messages: list, plan_content: str)
     message list), NOT the accumulated worker/critic turns — the new plan
     starts a clean worker context, while the DB retains the full history
     for display purposes.
+
+    Parameters
+    ----------
+    progress_summary : str, optional
+        When supplied (re-plan path), a compacted summary of what the
+        worker already accomplished under the previous plan is appended
+        as a user turn after the plan directive.  This preserves the
+        worker's partial progress across re-plans so it doesn't
+        re-explore the codebase from scratch — which was one of the
+        biggest causes of the analysis-spiral pattern (see task
+        ``00d009c6``).  The summary is bounded in size (see
+        ``_build_progress_summary``).
     """
     worker_directive = _build_worker_directive(plan_content)
     working_messages = []
@@ -123,33 +147,178 @@ def _reset_worker_messages_with_plan(original_messages: list, plan_content: str)
             'role': 'user',
             'content': worker_directive,
         })
+    # Append the progress summary AFTER the plan, as an assistant turn
+    # (it's the worker's own "memory" of prior work), so the model treats
+    # it as established context rather than a new directive.
+    if progress_summary:
+        working_messages.append({
+            'role': 'assistant',
+            'content': progress_summary,
+        })
+        # And a nudge user turn so the model's next reply is grounded as
+        # "continue from here" rather than "respond to the assistant".
+        working_messages.append({
+            'role': 'user',
+            'content': (
+                'Continue from the state summarised above.  Apply the '
+                'revised plan to any remaining or re-opened checklist '
+                'items.  Your first tool call MUST be a state-changing '
+                'one — do not re-explore the codebase.'
+            ),
+        })
     return working_messages
 
 
-def _build_replan_input_messages(original_messages: list, critic_feedback: str) -> list:
+def _build_progress_summary(endpoint_turns: list) -> str:
+    """Compact summary of prior worker deliverables to carry across re-plans.
+
+    The orchestrator keeps the full ``endpoint_turns`` for DB / UI display,
+    but the LLM working-messages are reset on re-plan.  Without carryover,
+    the worker loses track of everything it already did and tends to
+    re-read the same files, re-analyze, and produce a *new* zero-deliverable
+    turn.  This helper scans the worker turns for their state-changing
+    tool calls and produces a ≤ ~1500-char summary that fits cleanly into
+    the new worker context.
+
+    Empty / omitted when there are no worker turns or no deliverables yet.
+    """
+    if not endpoint_turns:
+        return ''
+
+    # Collect worker turns (role=assistant + _epIteration).
+    lines = []
+    lines.append('=== Progress summary from prior worker iterations ===')
+    for msg in endpoint_turns:
+        if msg.get('role') != 'assistant':
+            continue
+        if msg.get('_isEndpointPlanner'):
+            continue
+        it = msg.get('_epIteration')
+        if not it:
+            continue
+        tool_rounds = msg.get('toolRounds') or []
+        sc_count, exp_count, sc_names = _count_state_changing_rounds(tool_rounds)
+        # Summarise by tool name + count
+        counts: dict[str, int] = {}
+        for n in sc_names:
+            counts[n] = counts.get(n, 0) + 1
+        name_parts = [f'{n}×{c}' if c > 1 else n for n, c in counts.items()]
+        names_str = ', '.join(name_parts) if name_parts else '(no state-changing calls)'
+        # Snippet of what the worker wrote at the end (narrative)
+        content = (msg.get('content') or '').strip()
+        if len(content) > 400:
+            content = content[:380] + '…'
+        lines.append(
+            f'\n— Iteration {it}: state-changing={sc_count} '
+            f'[{names_str}], exploratory={exp_count}\n'
+            f'  Worker notes: {content}'
+        )
+
+    body = '\n'.join(lines)
+    if len(body) > 4000:
+        body = body[:3800] + '\n\n…(older iterations truncated for brevity)'
+    body += (
+        '\n\n=== End progress summary ===\n\n'
+        'Treat the above as established context.  Do NOT redo work that '
+        'already succeeded; focus on the items the revised plan calls '
+        'out as still needing attention.'
+    )
+    return body
+
+
+def _build_replan_input_messages(
+    original_messages: list,
+    critic_feedback: str,
+    *,
+    prior_plan: str = '',
+    plan_defect: str = '',
+    replan_count: int = 1,
+) -> list:
     """Build the input message list passed to the Planner for a replan.
 
     Starts from the ORIGINAL conversation (system + user request) so the
     new plan is grounded in the user's actual ask — not biased by the
-    failed worker iterations.  The critic's feedback is appended as an
-    imperative user turn that tells the planner what was wrong with the
-    previous plan and asks for a revised brief.  Prefix-cache friendly:
-    the original [system, ...user] prefix is bitwise identical across the
-    first planner call and every subsequent replan.
+    failed worker iterations.  The critic's feedback, the *prior plan*,
+    and the PLAN_DEFECT diagnosis are appended as an imperative user turn
+    that tells the planner exactly what to revise.  Prefix-cache friendly:
+    the original ``[system, ...user]`` prefix is bitwise identical across
+    the first planner call and every subsequent replan.
+
+    Parameters
+    ----------
+    prior_plan : str
+        The plan that failed.  The planner is explicitly instructed to
+        produce a *delta* (not a sprawling rewrite), keeping what worked
+        and amending only what the PLAN_DEFECT diagnosis identifies as
+        broken.  Without this, re-plans tend to grow unboundedly (10k
+        → 13k → 15k chars over 3 revisions — see task ``00d009c6``).
+    plan_defect : str
+        The structured PLAN_DEFECT reason extracted from the critic's
+        verdict.  Empty when the orchestrator triggered the re-plan
+        through some other channel (shouldn't happen post-rewrite, but
+        defensive).
+    replan_count : int
+        1-based re-plan counter for surfacing in the directive.
     """
     planner_input = [dict(m) for m in original_messages]
+
+    defect_line = (
+        f'- PLAN_DEFECT identified by the critic: {plan_defect}\n'
+        if plan_defect
+        else ''
+    )
+    prior_plan_block = (
+        '\n───── Previous plan (for reference — produce a DELTA) ─────\n'
+        f'{prior_plan}\n'
+        '───── End previous plan ─────\n'
+        if prior_plan
+        else ''
+    )
+
     revision_directive = (
-        '=== Previous plan needs revision ===\n\n'
-        f'{critic_feedback}\n\n'
+        f'=== Previous plan needs revision (replan #{replan_count}) ===\n\n'
+        f'{defect_line}'
+        f'Critic feedback:\n{critic_feedback}\n\n'
+        f'{prior_plan_block}\n'
         '=== End revision feedback ===\n\n'
-        'Produce a NEW structured execution brief that addresses the '
-        'issues raised above.  The previous plan either had the wrong '
-        'scope, missed a critical requirement, or chose an approach '
-        'that cannot pass its own acceptance criteria.  Your new brief '
-        'must use the same format as your original planner role output.'
+        'Produce a NEW structured execution brief.  HARD RULES:\n'
+        '1. This is a DELTA, not a rewrite.  Keep whatever was correct '
+        'about the prior plan.  Amend only what the PLAN_DEFECT / critic '
+        'feedback says is broken.\n'
+        '2. The new plan MUST NOT be longer than the prior plan in '
+        'characters or in number of checklist items.  Condense where '
+        'you can; delete items that turned out to be unnecessary.\n'
+        '3. In your ``## Context`` section, state up-front in one '
+        'sentence: "Revising because <PLAN_DEFECT summary>."\n'
+        '4. If the PLAN_DEFECT suggests the task is genuinely out of '
+        'scope under any plan, emit a minimal 1-2-item plan that asks '
+        'the user to clarify / narrow scope, rather than trying to '
+        'force a workaround.\n'
+        '5. Same output format as your original planner role.'
     )
     planner_input.append({'role': 'user', 'content': revision_directive})
     return planner_input
+
+
+# ──────────────────────────────────────
+#  Zero-deliverable injection (orchestrator-side guard)
+# ──────────────────────────────────────
+
+_ZERO_DELIVERABLE_DIRECTIVE = (
+    '[Orchestrator directive — execute, do not analyze]\n\n'
+    'Your previous turn produced ZERO state-changing tool calls '
+    '(no write_file / apply_diff / insert_content / run_command / '
+    'create_project).  That is analysis paralysis; it does not advance '
+    'the plan.\n\n'
+    'Your next tool call MUST be a state-changing one on a checklist '
+    'item that is still ❌.  Do not read more files.  Do not produce '
+    'more narrative.  Pick the next actionable checklist step and '
+    'execute it with a tool.\n\n'
+    'If you genuinely cannot make progress because the plan is '
+    'impossible (not because you have unanswered questions), stop '
+    'calling tools and state precisely why in ONE paragraph — the '
+    'critic will route this to a re-plan if that diagnosis holds up.'
+)
 
 # Legacy re-exports for anything that might still import from here
 from lib.tasks_pkg.endpoint_prompts import (  # noqa: F401
@@ -551,6 +720,22 @@ def run_endpoint_task(task):
         # else: planner failed, fall back to original messages as-is
 
         # ══════════════════════════════════════
+        #  Loop-wide counters (analysis-spiral prevention)
+        # ══════════════════════════════════════
+        # ``current_plan`` tracks the plan the Worker is currently
+        # executing — used when building the re-plan directive so the
+        # new Planner can produce a *delta* rather than a rewrite.
+        current_plan = planner_content or ''
+        # Running total of state-changing tool calls across all worker
+        # turns.  Surfaced to the Critic via the Deliverables Snapshot.
+        cumulative_state_changing = 0
+        # Counter for consecutive zero-deliverable worker turns.  When
+        # it hits ``MAX_ZERO_DELIVERABLE_TURNS``, the orchestrator skips
+        # the Critic and injects a hard-coded "execute, don't analyze"
+        # directive instead.
+        zero_deliverable_streak = 0
+
+        # ══════════════════════════════════════
         #  Worker → Critic loop
         # ══════════════════════════════════════
         iteration = 0
@@ -596,14 +781,50 @@ def run_endpoint_task(task):
             # Update working messages with assistant reply
             messages = list(turn_messages)
 
+            # ── Count deliverables for this worker turn ──
+            # Snapshot the toolRounds BEFORE we stash them on the turn msg
+            # (so cumulative accounting is off the same data the critic sees).
+            _latest_tool_rounds = list(task.get('toolRounds') or [])
+            (turn_state_changing,
+             turn_exploratory,
+             turn_sc_names) = _count_state_changing_rounds(_latest_tool_rounds)
+            cumulative_state_changing += turn_state_changing
+            if turn_state_changing == 0:
+                zero_deliverable_streak += 1
+            else:
+                zero_deliverable_streak = 0
+            logger.info(
+                '[Endpoint] Task %s iter=%d deliverables: state_changing=%d '
+                '(%s) exploratory=%d cumulative_sc=%d zero_streak=%d',
+                tid, iteration, turn_state_changing,
+                ','.join(turn_sc_names) or '-',
+                turn_exploratory, cumulative_state_changing,
+                zero_deliverable_streak,
+            )
+            audit_log(
+                'endpoint_worker_turn',
+                task_id=tid,
+                iteration=iteration,
+                state_changing=turn_state_changing,
+                exploratory=turn_exploratory,
+                tools=turn_sc_names,
+                cumulative_state_changing=cumulative_state_changing,
+                zero_deliverable_streak=zero_deliverable_streak,
+            )
+
             # ── Accumulate worker turn for DB persistence ──
             worker_turn_msg = {
                 'role': 'assistant',
                 'content': turn_content,
                 'thinking': turn_result.get('thinking', ''),
-                'toolRounds': task.get('toolRounds') or [],
+                'toolRounds': _latest_tool_rounds,
                 'timestamp': time.strftime('%Y-%m-%dT%H:%M:%S'),
                 '_epIteration': iteration,
+                # Expose per-turn deliverable counts on the DB row so the
+                # UI can render a small "X edits / Y reads" badge in the
+                # future (consumer to come; harmless metadata for now).
+                '_epStateChangingCount': turn_state_changing,
+                '_epExploratoryCount': turn_exploratory,
             }
             if turn_result.get('usage'):
                 worker_turn_msg['usage'] = turn_result['usage']
@@ -623,6 +844,86 @@ def run_endpoint_task(task):
                 stop_reason = 'aborted'
                 break
 
+            # ══════════════════════════════════════════════════
+            #  Zero-deliverable guard — SKIP the Critic and inject
+            #  a hard-coded "execute, don't analyze" directive.
+            # ══════════════════════════════════════════════════
+            # Rationale: when the worker produces a narrative-only turn
+            # (zero state-changing tool calls), the Critic's LLM-level
+            # pre-check usually catches it and emits CONTINUE_WORKER with
+            # similar feedback.  But on top of that being an expensive
+            # extra full-tool LLM turn, it sometimes mis-routes to
+            # CONTINUE_PLANNER and starts the spiral.  For consecutive
+            # zero-deliverable turns we short-circuit: synthesise the
+            # feedback, skip the critic, and send the worker back in.
+            #
+            # First zero-deliverable turn still goes through the critic
+            # (which may genuinely need to answer a clarifying question);
+            # only at ``MAX_ZERO_DELIVERABLE_TURNS`` do we bypass.
+            if zero_deliverable_streak >= MAX_ZERO_DELIVERABLE_TURNS:
+                logger.warning(
+                    '[Endpoint] Task %s iter=%d — %d consecutive '
+                    'zero-deliverable worker turns, bypassing Critic and '
+                    'injecting execute-not-analyze directive',
+                    tid, iteration, zero_deliverable_streak,
+                )
+                audit_log(
+                    'endpoint_zero_deliverable_guard',
+                    task_id=tid,
+                    iteration=iteration,
+                    streak=zero_deliverable_streak,
+                )
+                # Synthesize the critic turn so the UI still sees a
+                # review bubble and the DB stays consistent.
+                synthetic_feedback = _ZERO_DELIVERABLE_DIRECTIVE
+                critic_turn_msg = {
+                    'role': 'user',
+                    'content': synthetic_feedback,
+                    'timestamp': time.strftime('%Y-%m-%dT%H:%M:%S'),
+                    '_isEndpointReview': True,
+                    '_epIteration': iteration,
+                    '_epApproved': False,
+                    '_epNextPhase': 'worker',
+                    '_isStuck': False,
+                    '_isSyntheticCritic': True,
+                    'done': True,
+                }
+                endpoint_turns.append(critic_turn_msg)
+                append_event(task, {
+                    'type': 'endpoint_critic_msg',
+                    'iteration': iteration,
+                    'content': synthetic_feedback,
+                    'next_phase': 'worker',
+                    'should_stop': False,
+                    'is_stuck': False,
+                    'synthetic': True,
+                })
+                _store_endpoint_turns_on_task(task, endpoint_turns)
+                _sync_endpoint_turns_to_conversation(task, endpoint_turns)
+
+                messages.append({
+                    'role': 'user',
+                    'content': synthetic_feedback,
+                })
+
+                # Reset the streak counter so the guard doesn't fire
+                # again on the same turn index if the worker does one
+                # more zero-deliverable pass (it'll re-accumulate from 1
+                # in the next iteration's counting block, then fire
+                # again at 2, which is what we want).
+                zero_deliverable_streak = 0
+
+                if iteration + 1 > MAX_ITERATIONS:
+                    stop_reason = 'max_iterations'
+                    logger.info('[Endpoint] Max iterations after '
+                                'zero-deliverable guard, stopping')
+                    break
+                append_event(task, {
+                    'type': 'endpoint_new_turn',
+                    'iteration': iteration + 1,
+                })
+                continue
+
             # ── Phase 2: CRITIC ──
             task['_endpoint_phase'] = 'reviewing'
             append_event(task, {
@@ -635,6 +936,12 @@ def run_endpoint_task(task):
                 task,
                 original_messages=original_messages,
                 worker_messages=messages,
+                iteration=iteration,
+                latest_tool_rounds=_latest_tool_rounds,
+                # Exclude the current turn's count from cumulative so the
+                # snapshot's "Latest" + "Cumulative" line up correctly.
+                cumulative_state_changing=
+                    cumulative_state_changing - turn_state_changing,
             )
 
             _accumulate_usage(total_usage, critic_result.get('usage', {}))
@@ -643,6 +950,7 @@ def run_endpoint_task(task):
             next_phase  = critic_result.get('next_phase',
                                             'stop' if critic_result.get('should_stop') else 'worker')
             should_stop = (next_phase == 'stop')
+            plan_defect = critic_result.get('plan_defect') or ''
 
             if task.get('aborted'):
                 stop_reason = 'aborted'
@@ -720,6 +1028,8 @@ def run_endpoint_task(task):
                     task_id=tid,
                     iteration=iteration,
                     replan_count=replan_count,
+                    plan_defect=plan_defect[:300] if plan_defect else '',
+                    prior_plan_chars=len(current_plan),
                     feedback_preview=feedback[:200],
                 )
 
@@ -732,13 +1042,22 @@ def run_endpoint_task(task):
                     'replan': True,
                 })
 
-                # Run the new planner turn (prefix-cache friendly: input
-                # is the original conversation + a single wrapper user).
+                # Run the new planner turn.  The planner now sees:
+                #   - the PLAN_DEFECT reason (hard structural diagnosis)
+                #   - the prior plan verbatim (for delta production)
+                #   - the critic's full feedback
+                # plus an explicit "DO NOT grow the plan" directive.
                 replan_input = _build_replan_input_messages(
                     original_messages, feedback,
+                    prior_plan=current_plan,
+                    plan_defect=plan_defect,
+                    replan_count=replan_count,
                 )
                 with log_context('endpoint_replan', logger=logger):
-                    replan_result = _run_planner_turn(task, replan_input)
+                    replan_result = _run_planner_turn(
+                        task, replan_input,
+                        planner_tag=f'replan-{replan_count}',
+                    )
                 _accumulate_usage(total_usage, replan_result.get('usage', {}))
 
                 new_plan = replan_result.get('content', '')
@@ -757,6 +1076,35 @@ def run_endpoint_task(task):
                     )
                     next_phase = 'worker'
                 else:
+                    # ── Plan-size growth guard ──
+                    # The Planner is instructed to produce a DELTA and
+                    # not grow the plan.  If it does grow — often
+                    # significantly — it usually means the planner is
+                    # folding in scope creep that will just extend the
+                    # spiral.  We log (audit) a warning when growth
+                    # exceeds 50%.  We deliberately do NOT reject the
+                    # plan (that could loop infinitely); we just surface
+                    # the violation for tuning.
+                    if current_plan and len(new_plan) > 0:
+                        growth_ratio = len(new_plan) / max(1, len(current_plan))
+                        if growth_ratio > 1.5:
+                            logger.warning(
+                                '[Endpoint] Replan grew plan %.1f× '
+                                '(old=%d chars → new=%d chars) — expected '
+                                'a delta, not a rewrite.  Accepting plan '
+                                'but auditing.',
+                                growth_ratio, len(current_plan), len(new_plan),
+                            )
+                            audit_log(
+                                'endpoint_replan_size_violation',
+                                task_id=tid,
+                                iteration=iteration,
+                                replan_count=replan_count,
+                                old_chars=len(current_plan),
+                                new_chars=len(new_plan),
+                                growth_ratio=round(growth_ratio, 2),
+                            )
+
                     planner_iteration_counter += 1
                     new_planner_turn_msg = {
                         'role': 'assistant',
@@ -783,17 +1131,33 @@ def run_endpoint_task(task):
                     _store_endpoint_turns_on_task(task, endpoint_turns)
                     _sync_endpoint_turns_to_conversation(task, endpoint_turns)
 
-                    # Reset the worker context to a CLEAN plan — do NOT
-                    # carry over the prior worker/critic turns into the
-                    # LLM messages (they remain in the DB for display).
-                    # This keeps token budgets sane and avoids having
-                    # the worker anchor on the failed approach.
+                    # Reset the worker context under the NEW plan, but
+                    # carry over a compact progress summary so the worker
+                    # doesn't re-explore from scratch.  This is the single
+                    # biggest change vs. the previous re-plan path — see
+                    # _build_progress_summary docstring.
+                    progress_summary = _build_progress_summary(endpoint_turns)
                     messages = _reset_worker_messages_with_plan(
                         original_messages, new_plan,
+                        progress_summary=progress_summary,
                     )
+                    logger.info(
+                        '[Endpoint] Task %s replan: carried progress summary '
+                        '(%d chars) into new worker context',
+                        tid, len(progress_summary),
+                    )
+
+                    # Update the current_plan tracker so the NEXT replan
+                    # can measure its growth against THIS plan (delta
+                    # discipline is cumulative).
+                    current_plan = new_plan
 
                     # Reset stuck-detection history — we're starting a new plan.
                     feedback_history = []
+                    # Reset the zero-deliverable streak — the new plan
+                    # deserves a fresh chance, and the guard shouldn't
+                    # fire on turns predating the new plan.
+                    zero_deliverable_streak = 0
 
                     # Guard against replan that bumps iteration past MAX_ITERATIONS
                     if iteration + 1 > MAX_ITERATIONS:
@@ -811,8 +1175,8 @@ def run_endpoint_task(task):
                     })
                     logger.info(
                         '[Endpoint] Iteration %d: CONTINUE_PLANNER — new plan '
-                        '(%d chars), replan_count=%d',
-                        iteration, len(new_plan), replan_count,
+                        '(%d chars, defect=%r), replan_count=%d',
+                        iteration, len(new_plan), plan_defect[:80], replan_count,
                     )
                     continue  # back to top of while — iteration += 1 happens there
 
@@ -897,6 +1261,14 @@ def _finalize(task, accumulated_content, total_usage, iteration,
     task['usage'] = total_usage
     task['status'] = 'done'
     task['finishReason'] = 'stop'
+    # ★ Clear _endpoint_phase once the loop is finalized.  Without this the
+    #   state snapshot (see routes/chat.py) still reports endpointPhase='reviewing'
+    #   after approval, which the frontend's reconnect paths misinterpret as
+    #   "critic still running → start a new worker on the next turn".  The
+    #   explicit 'done' phase is the authoritative signal used by
+    #   connectToTask / _trySSE state-handler to reject ghost worker creation.
+    task['_endpoint_phase'] = 'done'
+    task['_endpoint_stop_reason'] = stop_reason
 
     complete_evt = {
         'type': 'endpoint_complete',

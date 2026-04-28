@@ -511,27 +511,13 @@ def _run_arm(
         # Estimate tokens before compaction
         est_before = _estimate_tokens(messages)
 
-        # Apply micro_compact
-        if enable_phase_d:
-            tokens_saved = micro_compact(messages, conv_id=f'ab_{label}')
-        else:
-            # Disable Phase D by monkey-patching: save & restore
-            # We'll do this by temporarily setting _ASSISTANT_HOT_TAIL very high
-            import lib.tasks_pkg.compaction as _comp_mod
-            # Run micro_compact but skip Phase D by making hot tail = 9999
-            _orig_code = None  # We can't easily monkey-patch Phase D out...
-            # Instead, run normal micro_compact but then UN-compact assistants
-            tokens_saved = micro_compact(messages, conv_id=f'ab_{label}')
-            # Undo Phase D effects: this is tricky. Better approach: use a flag.
-            # Actually, the simplest approach: for ARM A, restore the original
-            # assistant content from full_messages after micro_compact
-            for i, msg in enumerate(messages):
-                if (msg.get('role') == 'assistant'
-                        and isinstance(msg.get('content'), str)
-                        and msg['content'].startswith('[Assistant response compacted')):
-                    # Restore original content
-                    if i < len(full_messages):
-                        messages[i] = copy.deepcopy(full_messages[i])
+        # Apply micro_compact.  Phase D is gated on the explicit
+        # `enable_assistant_compact` kwarg; ARM A omits it, ARM B passes True.
+        tokens_saved = micro_compact(
+            messages,
+            conv_id=f'ab_{label}',
+            enable_assistant_compact=enable_phase_d,
+        )
 
         est_after = _estimate_tokens(messages)
 

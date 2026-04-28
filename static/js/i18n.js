@@ -165,6 +165,12 @@ var _i18n = {
   'settings.debugModeDesc': { zh: '显示 trace_id、复制会话 ID 按钮等开发调试信息', en: 'Show trace_id, copy conv ID buttons, and other debug info' },
   'settings.keepToolHistory': { zh: '保留工具调用历史', en: 'Keep Tool Call History' },
   'settings.keepToolHistoryDesc': { zh: '多轮对话时保留完整的工具调用记录（搜索内容、网页抓取结果等），模型能看到之前搜过什么，避免重复调用。关闭可节省 token 但模型会丢失工具上下文', en: 'Preserve full tool call records (search results, fetched pages, etc.) across conversation turns. Model can see what was searched before, avoiding redundant calls. Disable to save tokens but model loses tool context' },
+  'settings.inputSendMode': { zh: '输入框发送方式', en: 'Input Send Behavior' },
+  'settings.inputSendModeDesc': { zh: '选择触发"发送消息"的按键。Shift+Enter 始终插入换行。', en: 'Choose which key sends the message. Shift+Enter always inserts a newline.' },
+  'settings.inputSendModeEnter': { zh: 'Enter 发送 · Ctrl+Enter 换行', en: 'Enter send · Ctrl+Enter newline' },
+  'settings.inputSendModeCtrlEnter': { zh: 'Ctrl+Enter 发送 · Enter 换行', en: 'Ctrl+Enter send · Enter newline' },
+  'input.hintEnter': { zh: 'Enter 发送 · Ctrl+Enter / Shift+Enter 换行 · 📎 或拖拽上传', en: 'Enter send · Ctrl+Enter / Shift+Enter newline · 📎 or drop files' },
+  'input.hintCtrlEnter': { zh: 'Ctrl+Enter 发送 · Enter / Shift+Enter 换行 · 📎 或拖拽上传', en: 'Ctrl+Enter send · Enter / Shift+Enter newline · 📎 or drop files' },
 
   // ══════════════════════════════════════
   //  Settings — Providers Tab

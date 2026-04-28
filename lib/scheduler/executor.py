@@ -9,6 +9,29 @@ from lib.scheduler.manager import get_scheduler
 logger = get_logger(__name__)
 
 
+def _coerce_int_arg(name, raw, default):
+    """Coerce an LLM-supplied tool arg to int, with warning on fallback.
+
+    LLM tool-call arguments sometimes arrive as strings (e.g. ``"60"``)
+    even for parameters declared as integers in the tool schema. Rather
+    than raising ``TypeError`` deep inside the call chain, we coerce
+    here and fall back to *default* with a warning if the value can't
+    be parsed.
+    """
+    if isinstance(raw, bool):
+        # bool is a subclass of int — reject explicitly to avoid
+        # silently mapping True→1 / False→0 for numeric params.
+        logger.warning('[Timer] Boolean %s=%r passed as numeric — '
+                       'coerced to default %d', name, raw, default)
+        return default
+    try:
+        return int(raw)
+    except (TypeError, ValueError) as _e:
+        logger.warning('[Timer] Non-integer %s=%r — coerced to default %d '
+                       '(reason: %s)', name, raw, default, _e)
+        return default
+
+
 def execute_scheduler_tool(fn_name, fn_args):
     """Execute a scheduler tool call. Returns string result for LLM."""
     mgr = get_scheduler()
@@ -221,8 +244,8 @@ def _execute_await_task(fn_args):
         )
 
     if action == 'wait':
-        timeout = min(fn_args.get('timeout', 600), 3600)
-        poll_interval = max(fn_args.get('poll_interval', 5), 2)
+        timeout = min(_coerce_int_arg('timeout', fn_args.get('timeout', 600), 600), 3600)
+        poll_interval = max(_coerce_int_arg('poll_interval', fn_args.get('poll_interval', 5), 5), 2)
         deadline = _time.time() + timeout
         parent_task = fn_args.get('_parent_task')  # injected by tool_dispatch
 
@@ -325,13 +348,20 @@ def _execute_timer_create(fn_args):
         'imageGenEnabled': _parent_cfg.get('imageGenEnabled', False),
     }
 
+    # Coerce numeric LLM-supplied args defensively — timer schema declares
+    # them as integers but some models pass them as strings.
+    _poll_interval_arg = _coerce_int_arg(
+        'poll_interval', fn_args.get('poll_interval', 60), 60)
+    _max_polls_arg = _coerce_int_arg(
+        'max_polls', fn_args.get('max_polls', 120), 120)
+
     try:
         timer = create_timer(
             conv_id=conv_id,
             check_instruction=check_instruction,
             continuation_message=continuation_message,
-            poll_interval=fn_args.get('poll_interval', 60),
-            max_polls=fn_args.get('max_polls', 120),
+            poll_interval=_poll_interval_arg,
+            max_polls=_max_polls_arg,
             check_command=fn_args.get('check_command', ''),
             tools_config=_poll_tools_config,
             source_task_id=fn_args.get('_source_task_id', ''),
@@ -437,10 +467,31 @@ def _execute_timer_create(fn_args):
                 continue
 
             # Skipped polls (unchanged command output) — no LLM call,
-            # no DB record, no SSE event — silently wait.
+            # no DB record, but emit lightweight heartbeat so the UI
+            # can show "waiting… output unchanged (N consecutive skips)"
+            # instead of appearing frozen.
             if skipped:
                 logger.debug('[Timer:%s] Poll #%d skipped (output unchanged)',
                              timer_id, poll_count)
+                if parent_task and round_num is not None:
+                    _now_ms = int(_time.time() * 1000)
+                    # Attach skip metadata directly to the toolRound so state
+                    # snapshots (page refresh, reconnect) can reconstruct the UI.
+                    for sr in parent_task.get('toolRounds', []):
+                        if sr.get('roundNum') == round_num:
+                            sr['_timerSkipCount'] = sr.get('_timerSkipCount', 0) + 1
+                            sr['_timerLastSkipTs'] = _now_ms
+                            sr['_timerLastSkipPollNum'] = poll_count
+                            sr['_timerTimerId'] = timer_id
+                            break
+                    append_event(parent_task, {
+                        'type': 'timer_poll_check',
+                        'roundNum': round_num,
+                        'timerId': timer_id,
+                        'pollNum': poll_count,
+                        'decision': 'skipped',
+                        'reason': 'check_command output unchanged — LLM call skipped',
+                    })
                 continue
 
             decision = 'ready' if ready else 'wait'

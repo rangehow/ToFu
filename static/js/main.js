@@ -659,7 +659,7 @@ function _applyImageGenUI(enabled) {
   const hint = document.getElementById('inputHint');
   if (hint) hint.textContent = imageGenMode
     ? t('ig.hint')
-    : 'Enter send · Ctrl+Enter newline · 📎 or drop files';
+    : _inputSendHintText();
   /* ★ Reflow toolbar only if the mode actually changed — switching between
    * ig-active / normal swaps the visible toolbar so re-measure is needed.
    * But on conv switch where both convs have imageGenMode=false, skip. */
@@ -3818,24 +3818,78 @@ window.addEventListener('resize', (function() {
   });
 })();
 
+function _inputSendHintText() {
+  // Returns the footer hint string for the normal (non-image-gen) input mode,
+  // honoring config.inputSendMode and the current i18n language.
+  const m = (typeof config !== 'undefined' && config && config.inputSendMode) === 'ctrl_enter'
+    ? 'ctrl_enter' : 'enter';
+  try {
+    if (typeof t === 'function') {
+      return t(m === 'ctrl_enter' ? 'input.hintCtrlEnter' : 'input.hintEnter');
+    }
+  } catch (_) { /* fall through */ }
+  return m === 'ctrl_enter'
+    ? 'Ctrl+Enter send · Enter / Shift+Enter newline · 📎 or drop files'
+    : 'Enter send · Ctrl+Enter / Shift+Enter newline · 📎 or drop files';
+}
+
+function refreshInputSendHint() {
+  // Update the #inputHint footer if we are not in image-gen mode.
+  try {
+    if (typeof imageGenMode !== 'undefined' && imageGenMode) return;
+    const hint = document.getElementById('inputHint');
+    if (hint) hint.textContent = _inputSendHintText();
+  } catch (_) { /* noop */ }
+}
+if (typeof window !== 'undefined') window.refreshInputSendHint = refreshInputSendHint;
+
+function _insertNewlineAtCursor(ta) {
+  const start = ta.selectionStart;
+  const end = ta.selectionEnd;
+  ta.value = ta.value.substring(0, start) + '\n' + ta.value.substring(end);
+  ta.selectionStart = ta.selectionEnd = start + 1;
+  ta.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+function _getSendMode() {
+  // 'enter' (default) — Enter sends, Ctrl+Enter newline
+  // 'ctrl_enter'      — Ctrl+Enter sends, Enter newline
+  // Shift+Enter always inserts a newline regardless of mode.
+  const m = (typeof config !== 'undefined' && config && config.inputSendMode) || 'enter';
+  return m === 'ctrl_enter' ? 'ctrl_enter' : 'enter';
+}
+
+function _doSendOrGenerate() {
+  if (imageGenMode) { generateImageDirect(); }
+  else { sendMessage(); }
+}
+
 function handleKeyDown(e) {
-  // Enter (no modifier) → send; Ctrl+Enter → newline
-  if (e.key === "Enter" && !e.ctrlKey && !e.shiftKey) {
-    e.preventDefault();
-    // Route to image generation when in image gen mode
-    if (imageGenMode) { generateImageDirect(); }
-    else { sendMessage(); }
+  // Shift+Enter ALWAYS inserts a newline (let browser default run).
+  if (e.key === "Enter" && e.shiftKey && !e.ctrlKey) {
     return;
   }
-  if (e.key === "Enter" && e.ctrlKey) {
-    e.preventDefault();
-    const ta = e.target;
-    const start = ta.selectionStart;
-    const end = ta.selectionEnd;
-    ta.value = ta.value.substring(0, start) + '\n' + ta.value.substring(end);
-    ta.selectionStart = ta.selectionEnd = start + 1;
-    ta.dispatchEvent(new Event('input', { bubbles: true }));
-    return;
+  const mode = _getSendMode();
+  if (mode === 'ctrl_enter') {
+    // Ctrl+Enter → send; plain Enter → newline (default behavior, don't prevent).
+    if (e.key === "Enter" && e.ctrlKey && !e.shiftKey) {
+      e.preventDefault();
+      _doSendOrGenerate();
+      return;
+    }
+    // plain Enter — let the textarea insert a newline naturally.
+  } else {
+    // Default 'enter' mode: Enter → send; Ctrl+Enter → newline.
+    if (e.key === "Enter" && !e.ctrlKey && !e.shiftKey) {
+      e.preventDefault();
+      _doSendOrGenerate();
+      return;
+    }
+    if (e.key === "Enter" && e.ctrlKey) {
+      e.preventDefault();
+      _insertNewlineAtCursor(e.target);
+      return;
+    }
   }
   // Ctrl+Shift+K — wrap selected text in <notranslate> tags (skip translation)
   if (e.key === "K" && e.ctrlKey && e.shiftKey) {
@@ -4491,6 +4545,8 @@ function _ensureNewest() {
     _applyModelUI(config.model || serverModel);
     _loadServerConfigAndPopulate();
   })();
+  // Apply stored input-send-mode hint text on load
+  try { refreshInputSendHint(); } catch (_) {}
   // fetchToggle / fetchBadge removed — fetch is always on
   document
     .getElementById("codeExecToggle")

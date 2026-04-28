@@ -143,6 +143,7 @@ DEFAULT_SLOT_CONFIGS = {
     # V4 family (Apr 2026) — 1M ctx, dual Thinking / Non-Thinking; pro=1.6T/49B, flash=284B/13B.
     'deepseek-v4-pro':               {'caps': {'text', 'thinking', 'cheap'},      'rpm': 30,  'latency': 3000, 'cost': 0.003},
     'deepseek-v4-flash':             {'caps': {'text', 'thinking', 'cheap'},      'rpm': 60,  'latency': 2000, 'cost': 0.0002},
+    'deepseek-v4-flash-huawei':      {'caps': {'text', 'thinking', 'cheap'},      'rpm': 60,  'latency': 2000, 'cost': 0.0002},
     'deepseek-chat':                 {'caps': {'text', 'cheap'},                  'rpm': 60,  'latency': 2000, 'cost': 0.001},
     'deepseek-v3.2':                 {'caps': {'text', 'cheap'},                  'rpm': 60,  'latency': 2000, 'cost': 0.001},
     'deepseek-v3.2-tencent':         {'caps': {'text', 'cheap'},                  'rpm': 60,  'latency': 2000, 'cost': 0.001},
@@ -222,6 +223,7 @@ DEFAULT_SLOT_CONFIGS = {
 
     # ── Image generation ──
     'gpt-image-1.5':                         {'caps': {'image_gen'},               'rpm': 10,  'latency': 30000, 'cost': 0.043},
+    'gpt-image-2':                           {'caps': {'image_gen'},               'rpm': 10,  'latency': 30000, 'cost': 0.065},
     'gpt-image-1':                           {'caps': {'image_gen'},               'rpm': 10,  'latency': 30000, 'cost': 0.040},
     'gpt-image-1-mini':                      {'caps': {'image_gen'},               'rpm': 15,  'latency': 20000, 'cost': 0.015},
     'dall-e-3':                              {'caps': {'image_gen'},               'rpm': 5,   'latency': 30000, 'cost': 0.040},
@@ -254,6 +256,8 @@ MODEL_ALIAS_GROUPS = [
      'claude-sonnet-4-6', 'us.anthropic.claude-sonnet-4-6-v1:0'},
     # DeepSeek V3.2 — YourProvider gateway mirrors across Tencent/Baidu/Huawei/Doubao clouds
     {'deepseek-v3.2-tencent', 'deepseek-v3.2-baidu', 'deepseek-v3.2-huawei', 'deepseek-v3.2-doubao'},
+    # DeepSeek V4 Flash — direct DeepSeek API + YourProvider gateway Huawei-cloud mirror
+    {'deepseek-v4-flash', 'deepseek-v4-flash-huawei'},
 ]
 
 MODEL_ALIASES: dict[str, set[str]] = {}

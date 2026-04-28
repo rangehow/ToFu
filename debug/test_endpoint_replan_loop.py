@@ -1,7 +1,7 @@
 """Integration test: endpoint replan loop.
 
 Drives ``run_endpoint_task`` through the scripted sequence:
-  Planner(1) → Worker(1) → Critic(CONTINUE_PLANNER) →
+  Planner(1) → Worker(1) → Critic(CONTINUE_PLANNER w/ defect) →
   Planner(2) → Worker(2) → Critic(STOP)
 
 and asserts:
@@ -13,6 +13,7 @@ and asserts:
   - Final stop_reason='approved' (not 'max_replans' / 'stuck').
   - endpoint_critic_msg SSE events contain 'next_phase' (new field) AND
     'should_stop' (legacy mirror).
+  - Worker deliverable counts are tracked.
 
 Stubs out _run_single_turn and _run_planner_turn to return canned
 responses so the test is hermetic (no LLM calls).
@@ -59,15 +60,15 @@ def main():
     # and stub _sync_endpoint_turns_to_conversation so it doesn't hit the DB.
     import lib.tasks_pkg.endpoint as ep_mod
     import lib.tasks_pkg.endpoint_review as review_mod
-    import lib.tasks_pkg.orchestrator as orch_mod
 
     critic_seq = [
-        # Iteration 1 critic: CONTINUE_PLANNER
+        # Iteration 1 critic: CONTINUE_PLANNER with a real plan defect.
         {
             'feedback': 'Plan is wrong: missing step to handle edge case X.',
             'next_phase': 'planner',
             'should_stop': False,
-            'content': 'Plan is wrong: missing step to handle edge case X.\n[VERDICT: CONTINUE_PLANNER]',
+            'plan_defect': 'plan is missing edge-case-X handling, mandatory per CLAUDE.md',
+            'content': 'Plan is wrong.\n[PLAN_DEFECT: plan is missing edge-case-X handling]\n[VERDICT: CONTINUE_PLANNER]',
             'thinking': '',
             'usage': {'total_tokens': 100},
             'error': None,
@@ -77,6 +78,7 @@ def main():
             'feedback': 'Looks great, everything ✅',
             'next_phase': 'stop',
             'should_stop': True,
+            'plan_defect': None,
             'content': 'Looks great, everything ✅\n[VERDICT: STOP]',
             'thinking': '',
             'usage': {'total_tokens': 90},
@@ -93,7 +95,7 @@ def main():
             'messages': [],
             'error': None,
         },
-        # Replan
+        # Replan (same size or smaller — the loop audits growth > 1.5×)
         {
             'content': '## Goal\nDo the thing (v2).\n\n## Checklist\n1. Step A\n2. Handle edge case X\n\n## Acceptance Criteria\n1. Works with X.',
             'thinking': '',
@@ -104,22 +106,32 @@ def main():
     ]
 
     worker_seq = [
-        # Worker iteration 1
+        # Worker iteration 1 — produces a state-changing tool call so the
+        # zero-deliverable guard doesn't fire.
         {
             'content': 'Did Step A.',
             'thinking': '',
-            'toolRounds': [],
+            'toolRounds': [{'roundNum': 1, 'toolName': 'apply_diff'}],
             'usage': {'total_tokens': 500},
-            'messages': [{'role': 'user', 'content': '...'}, {'role': 'assistant', 'content': 'Did Step A.'}],
+            'messages': [
+                {'role': 'user', 'content': '...'},
+                {'role': 'assistant', 'content': 'Did Step A.'},
+            ],
             'error': None,
         },
         # Worker iteration 2 (after replan)
         {
             'content': 'Did Step A and handled X.',
             'thinking': '',
-            'toolRounds': [],
+            'toolRounds': [
+                {'roundNum': 1, 'toolName': 'apply_diff'},
+                {'roundNum': 2, 'toolName': 'run_command'},
+            ],
             'usage': {'total_tokens': 520},
-            'messages': [{'role': 'user', 'content': '...'}, {'role': 'assistant', 'content': 'Did Step A and handled X.'}],
+            'messages': [
+                {'role': 'user', 'content': '...'},
+                {'role': 'assistant', 'content': 'Did Step A and handled X.'},
+            ],
             'error': None,
         },
     ]
@@ -127,7 +139,7 @@ def main():
     # ── Install stubs ──
     call_log = {'planner': 0, 'worker': 0, 'critic': 0}
 
-    def fake_planner(task, messages):
+    def fake_planner(task, messages, *, planner_tag='initial'):
         idx = call_log['planner']
         call_log['planner'] += 1
         if idx >= len(planner_seq):
@@ -139,9 +151,14 @@ def main():
         call_log['worker'] += 1
         if idx >= len(worker_seq):
             raise RuntimeError(f'Unexpected {idx+1}th worker call')
-        return worker_seq[idx]
+        seq = worker_seq[idx]
+        # Emulate _run_single_turn side effect: populate task['toolRounds'].
+        task['toolRounds'] = list(seq.get('toolRounds') or [])
+        return seq
 
-    def fake_critic(task, original_messages, worker_messages):
+    def fake_critic(task, original_messages, worker_messages, *,
+                    iteration=0, latest_tool_rounds=None,
+                    cumulative_state_changing=0):
         idx = call_log['critic']
         call_log['critic'] += 1
         if idx >= len(critic_seq):
@@ -176,9 +193,8 @@ def main():
     ep_mod._trigger_endpoint_auto_translate = fake_trigger_translate
 
     # Also patch review module (where _run_critic_turn is defined) —
-    # but endpoint.py imported it by name, so the ep_mod binding is
-    # what matters for the loop.  Double-patch review_mod to be safe
-    # in case any other module resolves it there.
+    # endpoint.py imported it by name, so the ep_mod binding is what
+    # actually matters for the loop, but double-patch to be defensive.
     review_mod._run_critic_turn = fake_critic
     review_mod._run_planner_turn = fake_planner
 
@@ -224,7 +240,16 @@ def main():
     assert critics[1].get('_epNextPhase') == 'stop'
     assert critics[1].get('_epApproved') is True
 
-    # 4) stop_reason via endpoint_complete event
+    # 4) Worker rows carry deliverable metadata (new in 2026-04-26 rewrite)
+    workers = [m for m in endpoint_turns if _kind(m) == 'worker']
+    assert workers[0].get('_epStateChangingCount') == 1, (
+        f"Worker 1 _epStateChangingCount={workers[0].get('_epStateChangingCount')}"
+    )
+    assert workers[1].get('_epStateChangingCount') == 2, (
+        f"Worker 2 _epStateChangingCount={workers[1].get('_epStateChangingCount')}"
+    )
+
+    # 5) stop_reason via endpoint_complete event
     complete_evts = [e for e in captured_events if e.get('type') == 'endpoint_complete']
     assert complete_evts, 'No endpoint_complete event emitted'
     assert complete_evts[-1].get('reason') == 'approved', (
@@ -234,7 +259,7 @@ def main():
         f'Expected replanCount=1, got {complete_evts[-1].get("replanCount")}'
     )
 
-    # 5) endpoint_critic_msg events carry BOTH next_phase (new) AND should_stop (legacy mirror)
+    # 6) endpoint_critic_msg events carry BOTH next_phase (new) AND should_stop (legacy mirror)
     critic_events = [e for e in captured_events if e.get('type') == 'endpoint_critic_msg']
     assert len(critic_events) == 2, f'Expected 2 critic events, got {len(critic_events)}'
     for evt in critic_events:
@@ -245,7 +270,7 @@ def main():
     assert critic_events[1]['next_phase'] == 'stop'
     assert critic_events[1]['should_stop'] is True
 
-    # 6) An endpoint_iteration with phase='planning' + replan=True fired
+    # 7) An endpoint_iteration with phase='planning' + replan=True fired
     replan_iter_evts = [
         e for e in captured_events
         if e.get('type') == 'endpoint_iteration'
@@ -254,19 +279,20 @@ def main():
     ]
     assert replan_iter_evts, 'No endpoint_iteration(planning, replan=True) event'
 
-    # 7) endpoint_planner_done fired twice (initial + replan)
+    # 8) endpoint_planner_done fired twice (initial + replan)
     planner_done_evts = [e for e in captured_events if e.get('type') == 'endpoint_planner_done']
     assert len(planner_done_evts) == 2, (
         f'Expected 2 endpoint_planner_done events, got {len(planner_done_evts)}'
     )
     assert planner_done_evts[1].get('plannerIteration') == 2
 
-    # 8) Call counts sanity: 2 planner, 2 worker, 2 critic
+    # 9) Call counts sanity: 2 planner, 2 worker, 2 critic
     assert call_log == {'planner': 2, 'worker': 2, 'critic': 2}, f'Bad call counts: {call_log}'
 
     print('[test_endpoint_replan_loop] ALL ASSERTIONS PASSED ✅')
     print(f'  endpoint_turns kinds: {kinds}')
     print(f'  critic next_phases: {[c.get("_epNextPhase") for c in critics]}')
+    print(f'  worker deliverables: {[w.get("_epStateChangingCount") for w in workers]}')
     print(f'  stop_reason: {complete_evts[-1].get("reason")}')
     print(f'  replanCount: {complete_evts[-1].get("replanCount")}')
 

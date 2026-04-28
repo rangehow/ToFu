@@ -113,7 +113,7 @@ function _brandSvg(brand, size) {
 // Generate new icons: python3 scripts/gen_tofu_icons.py
 // Convert PNG→SVG:    python3 scripts/png_to_svg.py
 
-const _ICON_V = '0.9.2';  // cache-bust version — bump when icons change
+const _ICON_V = '0.9.3';  // cache-bust version — bump when icons change
 const _ICON_BASE = (typeof BASE_PATH!=='undefined'?BASE_PATH:'') + '/static/icons';
 
 const _TOFU_PLANNER_SVG = `<img src="${_ICON_BASE}/tofu-planner.svg?v=${_ICON_V}" alt="Planner" style="width:100%;height:100%;display:block">`;
@@ -197,6 +197,10 @@ const _PROVIDER_TEMPLATES = [
       { model_id: 'o4-mini',       capabilities: ['text', 'vision', 'thinking'],   rpm: 30,  cost: 0.005 },
       { model_id: 'gpt-4.1',       capabilities: ['text', 'vision'],               rpm: 30,  cost: 0.010 },
       { model_id: 'gpt-4.1-mini',  capabilities: ['text', 'vision', 'cheap'],      rpm: 60,  cost: 0.002 },
+      // ── Image generation ──
+      { model_id: 'gpt-image-2',   capabilities: ['image_gen'],                    rpm: 10,  cost: 0.065 },
+      { model_id: 'gpt-image-1.5', capabilities: ['image_gen'],                    rpm: 10,  cost: 0.043 },
+      { model_id: 'gpt-image-1',   capabilities: ['image_gen'],                    rpm: 10,  cost: 0.040 },
     ],
   },
   {
@@ -525,6 +529,12 @@ const _PROVIDER_TEMPLATES = [
       { model_id: 'deepseek/deepseek-r1',             capabilities: ['text', 'thinking'],            rpm: 30,  cost: 0.002 },
       { model_id: 'openai/o3',                         capabilities: ['text', 'vision', 'thinking'], rpm: 30,  cost: 0.010 },
       { model_id: 'openai/gpt-5.4-mini',               capabilities: ['text', 'vision', 'cheap'],    rpm: 60,  cost: 0.005 },
+      // ── Image generation ──
+      { model_id: 'openai/gpt-5.4-image-2',            capabilities: ['image_gen'],                   rpm: 10,  cost: 0.065 },
+      { model_id: 'openai/gpt-5-image',                capabilities: ['image_gen'],                   rpm: 10,  cost: 0.043 },
+      { model_id: 'openai/gpt-5-image-mini',           capabilities: ['image_gen'],                   rpm: 15,  cost: 0.015 },
+      { model_id: 'google/gemini-3-pro-image-preview', capabilities: ['image_gen'],                   rpm: 10,  cost: 0.020 },
+      { model_id: 'google/gemini-2.5-flash-image',     capabilities: ['image_gen'],                   rpm: 10,  cost: 0.015 },
     ],
   },
   {
@@ -942,6 +952,12 @@ function openSettings() {
   var kthCb = document.getElementById('settingKeepToolHistory');
   if (kthCb) {
     kthCb.checked = config.keepToolHistory !== false; // default true
+  }
+
+  // Input send mode — defaults to 'enter'
+  var ismSel = document.getElementById('settingInputSendMode');
+  if (ismSel) {
+    ismSel.value = (config.inputSendMode === 'ctrl_enter') ? 'ctrl_enter' : 'enter';
   }
 
   // Theme picker sync
@@ -2929,6 +2945,13 @@ function saveSettings() {
   var kthCb = document.getElementById('settingKeepToolHistory');
   if (kthCb) {
     config.keepToolHistory = kthCb.checked;
+  }
+
+  // Input send mode
+  var ismSel = document.getElementById('settingInputSendMode');
+  if (ismSel) {
+    config.inputSendMode = (ismSel.value === 'ctrl_enter') ? 'ctrl_enter' : 'enter';
+    if (typeof refreshInputSendHint === 'function') refreshInputSendHint();
   }
 
   try { localStorage.setItem("claude_client_config", JSON.stringify(config)); }

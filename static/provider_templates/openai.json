@@ -34,6 +34,14 @@
       "cost": 0.001
     },
     {
+      "model_id": "gpt-image-2",
+      "capabilities": [
+        "image_gen"
+      ],
+      "rpm": 10,
+      "cost": 0.065
+    },
+    {
       "model_id": "gpt-image-1.5",
       "capabilities": [
         "image_gen"

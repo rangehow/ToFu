@@ -10,7 +10,7 @@ Supports two families of image generation models:
 
  2. **OpenAI** (sync one-shot):
     POST /v1/openai/native/images/generations → b64_json / url
-    Models: GPT-image-1.5
+    Models: GPT-image-1.5, GPT-image-2
 
 Dispatch picks from all available image_gen slots (currently 4 models × 2 keys = 8
 slots) and cycles rapidly on 429 (rate-limit) since each slot has very low RPM (~10).
@@ -53,6 +53,7 @@ _POLL_MAX_WAIT = 180     # max seconds to wait for result
 
 # ── Models that use the OpenAI sync images/generations API ──
 _OPENAI_IMAGE_MODELS = frozenset({
+    'gpt-image-2',
     'gpt-image-1.5',
     'gpt-image-1',
     'gpt-image-1-mini',

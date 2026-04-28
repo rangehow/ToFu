@@ -228,6 +228,29 @@ def _prepend_to_system_message(messages, text):
         messages.insert(0, {'role': 'system', 'content': text})
 
 
+def _system_text(messages) -> str:
+    """Return the plain-text concatenation of the first system message.
+
+    Used for idempotency checks in ``_inject_system_contexts`` — callers
+    can look for a known marker substring (e.g. ``[PROJECT CO-PILOT MODE]``,
+    ``Function Result Clearing``) to detect whether a context block has
+    already been injected.  Returns empty string when there is no system
+    message.
+    """
+    if not messages or messages[0].get('role') != 'system':
+        return ''
+    sc = messages[0].get('content', '')
+    if isinstance(sc, str):
+        return sc
+    if isinstance(sc, list):
+        parts = []
+        for b in sc:
+            if isinstance(b, dict) and b.get('type') == 'text':
+                parts.append(b.get('text', '') or '')
+        return '\n\n'.join(parts)
+    return ''
+
+
 def _inject_system_contexts(messages, project_path, project_enabled,
                              memory_enabled, search_enabled, swarm_enabled,
                              has_real_tools, conv_id: str = '',
@@ -257,8 +280,21 @@ def _inject_system_contexts(messages, project_path, project_enabled,
     ``_prefetch_project`` / ``_prefetch_memory`` futures, their already-
     completed results are consumed instead of re-computing (saving FUSE I/O
     latency).  Inspired by Claude Code's ``startRelevantMemoryPrefetch()``.
+
+    **Idempotency.**  This function is called once per ``run_task`` invocation.
+    In endpoint mode (``lib.tasks_pkg.endpoint``) the SAME task runs the
+    orchestrator three times — Planner, Worker, Critic — and the Critic
+    reuses ``worker_messages`` which already has contexts injected by the
+    orchestrator's previous call.  Re-injecting would double the project
+    CLAUDE.md block, the static guidance block, the memory hint, and the
+    date line — producing the "messages duplicated twice in the debug
+    panel" symptom.  Each section below checks for its own marker via
+    ``_system_text(messages)`` and skips if already present.
     """
     _cid = conv_id or ''
+
+    # ── Idempotency probe: detect an already-injected system message ──
+    _existing = _system_text(messages)
 
     # ── Helper: try to get prefetched result, else compute synchronously ──
     def _get_prefetched(key, fallback_fn):
@@ -279,63 +315,81 @@ def _inject_system_contexts(messages, project_path, project_enabled,
 
     # ★ 1. Project context injection (prepended — appears first after user system prompt)
     if project_enabled:
-        def _load_project():
-            from lib.project_mod import get_context_for_prompt
-            return get_context_for_prompt(project_path)
-
-        if _cid:
-            # Delta path: use cache to skip FUSE I/O when content unchanged
-            proj_ctx = _get_cached_or_compute(
-                _cid, 'project',
-                lambda: _get_prefetched('_prefetch_project', _load_project),
-            )
+        # Idempotency guard — skip if project CLAUDE.md already present
+        # (endpoint-mode Critic reuses the Worker's post-injection messages).
+        if '[PROJECT CO-PILOT MODE]' in _existing:
+            logger.debug('[Inject] Project context already present, skipping '
+                         'prepend (conv=%s)', _cid[:8] if _cid else '?')
         else:
-            proj_ctx = _get_prefetched('_prefetch_project', _load_project)
+            def _load_project():
+                from lib.project_mod import get_context_for_prompt
+                return get_context_for_prompt(project_path)
 
-        if proj_ctx:
-            _prepend_to_system_message(messages, _wrap_system_reminder(proj_ctx))
+            if _cid:
+                # Delta path: use cache to skip FUSE I/O when content unchanged
+                proj_ctx = _get_cached_or_compute(
+                    _cid, 'project',
+                    lambda: _get_prefetched('_prefetch_project', _load_project),
+                )
+            else:
+                proj_ctx = _get_prefetched('_prefetch_project', _load_project)
+
+            if proj_ctx:
+                _prepend_to_system_message(messages, _wrap_system_reminder(proj_ctx))
+                # Refresh probe after mutation so later steps see the update.
+                _existing = _system_text(messages)
 
     # ★ 2. Static guidance sections (SEPARATE BLOCK — never changes, maximizes cache prefix)
     #   Injected BEFORE any dynamic content so the cache-stable prefix is as
     #   long as possible: [user system prompt] → [project CLAUDE.md] → [static guidance]
     if has_real_tools:
-        _static_guidance = '\n\n'.join([
-            _FUNCTION_RESULT_CLEARING_SECTION,
-            _SUMMARIZE_TOOL_RESULTS_SECTION,
-            _TOOL_USAGE_GUIDANCE,
-            _OUTPUT_EFFICIENCY_GUIDANCE,
-        ])
-        _append_to_system_message(messages, _static_guidance,
-                                  as_separate_block=True)
+        if '# Function Result Clearing' in _existing:
+            logger.debug('[Inject] Static guidance already present, skipping '
+                         'append (conv=%s)', _cid[:8] if _cid else '?')
+        else:
+            _static_guidance = '\n\n'.join([
+                _FUNCTION_RESULT_CLEARING_SECTION,
+                _SUMMARIZE_TOOL_RESULTS_SECTION,
+                _TOOL_USAGE_GUIDANCE,
+                _OUTPUT_EFFICIENCY_GUIDANCE,
+            ])
+            _append_to_system_message(messages, _static_guidance,
+                                      as_separate_block=True)
+            _existing = _system_text(messages)
 
     # ★ 3. Compact memory accumulation instructions + memory count hint
     #   Both the HOW-TO-USE instructions and the dynamic count hint
     #   ("You have N accumulated memories...") go into the system message.
     if has_real_tools:
-        from lib.memory import MEMORY_ACCUMULATION_INSTRUCTIONS_COMPACT
-
-        # Build memory count hint (dynamic, changes on CRUD)
-        _pp = project_path if project_enabled else None
-        def _load_memory_hint():
-            from lib.memory import build_memory_context
-            return build_memory_context(project_path=_pp)
-
-        if _cid:
-            _mem_hint = _get_cached_or_compute(
-                _cid, 'memory_hint', _load_memory_hint)
+        if '<memory_accumulation>' in _existing:
+            logger.debug('[Inject] Memory instructions already present, skipping '
+                         'append (conv=%s)', _cid[:8] if _cid else '?')
         else:
-            _mem_hint = _load_memory_hint() or ''
+            from lib.memory import MEMORY_ACCUMULATION_INSTRUCTIONS_COMPACT
 
-        _mem_block = MEMORY_ACCUMULATION_INSTRUCTIONS_COMPACT
-        if _mem_hint:
-            _mem_block = _mem_hint + '\n\n' + _mem_block
+            # Build memory count hint (dynamic, changes on CRUD)
+            _pp = project_path if project_enabled else None
+            def _load_memory_hint():
+                from lib.memory import build_memory_context
+                return build_memory_context(project_path=_pp)
 
-        _append_to_system_message(
-            messages,
-            _wrap_system_reminder(_mem_block))
+            if _cid:
+                _mem_hint = _get_cached_or_compute(
+                    _cid, 'memory_hint', _load_memory_hint)
+            else:
+                _mem_hint = _load_memory_hint() or ''
+
+            _mem_block = MEMORY_ACCUMULATION_INSTRUCTIONS_COMPACT
+            if _mem_hint:
+                _mem_block = _mem_hint + '\n\n' + _mem_block
+
+            _append_to_system_message(
+                messages,
+                _wrap_system_reminder(_mem_block))
+            _existing = _system_text(messages)
 
     # ★ 4. Swarm system prompt injection
-    if swarm_enabled and project_enabled:
+    if swarm_enabled and project_enabled and '<parallel_execution>' not in _existing:
         swarm_prompt = """
 <parallel_execution>
 You have a **parallel execution** system via `spawn_agents`. It dramatically speeds up complex tasks by running multiple sub-tasks simultaneously.
@@ -374,8 +428,11 @@ Use `depends_on: [0]` only when a task truly needs another's output (rare — pr
     #   Date-only changes once per day so BP1-BP2 (1h TTL) stay perfectly stable.
     #   Decoupled from search_enabled — model always knows today's date.
     _date_str = datetime.now(timezone.utc).strftime('%Y-%m-%d')
-    _append_to_system_message(
-        messages, f'Current date: {_date_str}')
+    # Idempotency guard — avoid appending "Current date:" twice when the
+    # endpoint loop re-enters _inject_system_contexts on the critic turn.
+    if f'Current date: {_date_str}' not in _existing:
+        _append_to_system_message(
+            messages, f'Current date: {_date_str}')
 
 
 

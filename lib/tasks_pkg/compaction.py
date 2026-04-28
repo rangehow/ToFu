@@ -100,10 +100,43 @@ _COMPACT_TOOL_NAME = 'context_compact'
 """Tool name for the synthetic compact tool pair."""
 
 _KEEP_RECENT_PAIRS = 8
-"""Minimum number of user-assistant message pairs to always preserve verbatim.
+"""[DEPRECATED] Legacy pair-count preservation floor.
 
-2026-04-19: Raised 4 → 8 to reduce compaction aggressiveness. When
-summary does fire, preserve more of the live conversation verbatim."""
+Superseded by turn-based preservation (_PRESERVE_BUDGET_RATIO +
+_MAX_PRESERVE_TURNS) but retained so the backward-compat wrapper
+``_find_pair_boundary`` can honour callers that still pass
+``keep_recent_pairs=N`` (e.g. ``reactive_compact``'s keep_recent_pairs=2).
+
+Do not use in new code — prefer ``_find_turn_boundary`` with a token
+budget, which scales with the model's context window."""
+
+# ── Turn-based preservation (2026-04-26) ─────────────────────────────────
+#
+# Replaces the old "count user-assistant pairs" abstraction which failed
+# silently on agentic workloads (see conv=modearkif6k9tr post-mortem).
+#
+# A *turn* is defined as:
+#     [ user_msg, ...all subsequent non-user messages until next user ]
+# i.e. one human request plus every assistant/tool message produced in
+# response.  A single agentic turn can have 100+ tool messages; the old
+# pair-count abstraction couldn't express this.
+#
+# Preservation policy:
+#   INVARIANT      — always preserve the current (in-flight) turn in full.
+#   BEST-EFFORT    — add prior turns newest→oldest while under budget.
+#   HARD CAP       — never preserve more than _MAX_PRESERVE_TURNS turns.
+#   REFUSE         — if no user message exists at all, skip compaction.
+
+_PRESERVE_BUDGET_RATIO = 0.30
+"""Fraction of usable context that ``_find_turn_boundary`` is allowed to
+keep verbatim.  The rest becomes summary input.  Scales with the model's
+context window (so 1M-context Opus 4.7 keeps proportionally more than
+128K gpt-4)."""
+
+_MAX_PRESERVE_TURNS = 16
+"""Hard upper bound on how many turns may be preserved verbatim, even
+if budget allows more.  Defends against pathological short-turn streams
+(e.g. 100+ tiny user messages) from defeating the budget mechanism."""
 
 
 # ── Internal state ───────────────────────────────────────────────────────────
@@ -926,11 +959,24 @@ def micro_compact(messages: list, conv_id: str = '', **kwargs) -> int:
             A/B testing proved it invalidates prompt cache — only
             enable when cache rebuild is already expected (e.g.,
             during force_compact).
+        enable_paired_assistant_compact: If True, also compact the
+            interstitial ``content`` on the ``assistant(tool_calls)``
+            message that paired with any cold tool result being
+            compacted in Phase B.  HYPOTHESIS under A/B test: since
+            Phase B is already invalidating the cache at this index,
+            a co-located mutation costs nothing extra and saves
+            additional tokens for free.  Opt-in while under evaluation
+            (2026-04-26 A/B test — see debug/test_paired_compact_ab.py).
 
     Returns:
         Estimated number of tokens saved.
     """
     tokens_saved = 0
+    # Track which assistant messages had their paired tool result
+    # compacted in Phase B so we can (optionally) co-compact the
+    # interstitial commentary in a second pass — ONE pass per assistant
+    # regardless of how many tool_calls fan-out below it.
+    _paired_assistant_indices: set[int] = set()
 
     # ── Cache-aware: determine which messages are in the cache prefix ──
     # Messages in the cache prefix are skipped to maintain byte-identical
@@ -987,6 +1033,19 @@ def micro_compact(messages: list, conv_id: str = '', **kwargs) -> int:
     skipped_already = 0
     tool_tokens_saved = 0
 
+    # Helper: walk backward from a tool index to its paired
+    # assistant(tool_calls) message (the one whose tool_calls[].id
+    # matches tool.tool_call_id, in practice always the nearest
+    # preceding assistant msg).
+    def _find_paired_assistant(tool_idx: int) -> int | None:
+        for j in range(tool_idx - 1, -1, -1):
+            role_j = messages[j].get('role')
+            if role_j == 'assistant':
+                return j
+            if role_j in ('user', 'system'):
+                return None   # tool results never cross a user/system boundary
+        return None
+
     for idx in cold_indices:
         # Cache-aware: skip messages in the cache prefix
         if idx < _cache_prefix_count:
@@ -996,6 +1055,7 @@ def micro_compact(messages: list, conv_id: str = '', **kwargs) -> int:
         msg = messages[idx]
         content = msg.get('content', '')
         tool_name = msg.get('name', 'tool')
+        mutated = False
 
         # ── Handle multimodal content (list of content blocks) ──
         if isinstance(content, list):
@@ -1027,50 +1087,48 @@ def micro_compact(messages: list, conv_id: str = '', **kwargs) -> int:
                 )
                 tool_tokens_saved += text_len // 4 + image_count * _IMAGE_TOKENS_DEFAULT
                 compacted_count += 1
-                continue
-
-            if text_len <= MICRO_COMPACT_THRESHOLD:
+                mutated = True
+            elif text_len <= MICRO_COMPACT_THRESHOLD:
                 skipped_short += 1
-                continue
-
-            msg['content'] = (
-                f'[{tool_name} result compacted — was {text_len:,} chars'
-                f' — re-call tool if full content needed]'
-            )
-            tool_tokens_saved += text_len // 4
-            compacted_count += 1
-            continue
+            else:
+                msg['content'] = (
+                    f'[{tool_name} result compacted — was {text_len:,} chars'
+                    f' — re-call tool if full content needed]'
+                )
+                tool_tokens_saved += text_len // 4
+                compacted_count += 1
+                mutated = True
 
         # ── Handle plain-string content ──
-        if not isinstance(content, str):
-            continue
+        elif isinstance(content, str):
+            if content.startswith('[') and 'compacted' in content[:80]:
+                skipped_already += 1
+            elif content.startswith('[Persisted to:'):
+                skipped_already += 1
+            elif len(content) <= MICRO_COMPACT_THRESHOLD:
+                skipped_short += 1
+            else:
+                old_len = len(content)
+                first_two = '\n'.join(content.split('\n')[:2])
+                if len(first_two) > 120:
+                    first_two = first_two[:120] + '…'
+                placeholder = (
+                    f'[{tool_name} result compacted — was {old_len:,} chars]\n'
+                    f'Preview: {first_two}\n'
+                    f'[Re-call tool if full content needed]'
+                )
+                msg['content'] = placeholder
+                tool_tokens_saved += (old_len - len(placeholder)) // 4
+                compacted_count += 1
+                mutated = True
 
-        if content.startswith('[') and 'compacted' in content[:80]:
-            skipped_already += 1
-            continue
-
-        # Skip persisted-output markers (already compressed)
-        if content.startswith('[Persisted to:'):
-            skipped_already += 1
-            continue
-
-        if len(content) <= MICRO_COMPACT_THRESHOLD:
-            skipped_short += 1
-            continue
-
-        old_len = len(content)
-        first_two = '\n'.join(content.split('\n')[:2])
-        if len(first_two) > 120:
-            first_two = first_two[:120] + '…'
-
-        placeholder = (
-            f'[{tool_name} result compacted — was {old_len:,} chars]\n'
-            f'Preview: {first_two}\n'
-            f'[Re-call tool if full content needed]'
-        )
-        msg['content'] = placeholder
-        tool_tokens_saved += (old_len - len(placeholder)) // 4
-        compacted_count += 1
+        # If we actually mutated this tool result, remember the paired
+        # assistant index so an optional pass can co-compact the
+        # interstitial commentary at zero extra cache cost.
+        if mutated:
+            paired_idx = _find_paired_assistant(idx)
+            if paired_idx is not None and paired_idx >= _cache_prefix_count:
+                _paired_assistant_indices.add(paired_idx)
 
     tokens_saved += tool_tokens_saved
 
@@ -1081,6 +1139,108 @@ def micro_compact(messages: list, conv_id: str = '', **kwargs) -> int:
                 len(cold_indices), compacted_count,
                 skipped_short, skipped_already,
                 thinking_stripped, tokens_saved)
+
+    # ── Phase B2: Co-compact interstitial assistant commentary ─────────
+    # ★ HYPOTHESIS CONFIRMED 2026-04-27 via live API A/B on Opus 4.7 —
+    #   see debug/test_paired_compact_live.py (8 rounds × 2 arms).
+    #
+    # When Phase B compacts a cold tool result at msg[N], we ALSO compact
+    # the content of its paired ``assistant(tool_calls)`` message at
+    # msg[N-1] (the "Let me examine X" interstitial commentary).
+    #
+    # Cache-impact analysis:
+    #   - Local byte-hash analysis predicted: first_break moves from N
+    #     to N-1, potentially enlarging the invalidated prefix.
+    #   - Live API measurement showed: the extra invalidated bytes
+    #     (~110 tokens of interstitial) are MORE than offset by the
+    #     shorter compacted content being written. Net: PAIRED cache
+    #     writes were 1.4% LOWER than BASELINE (32,402 → 31,942 tokens
+    #     across 8 rounds, -460 tokens).
+    #   - Total cost delta: -1.7% (PAIRED cheaper).
+    #
+    # This is UNLIKE Phase D (assistant content in non-tool-round
+    # contexts), which A/B'd at +57% cost because it mutates messages
+    # whose neighbors weren't being mutated, introducing brand-new
+    # cache breaks with no offsetting savings.
+    #
+    # Still gated behind ``enable_paired_assistant_compact=True`` for
+    # now. Rollout plan: (1) add to reactive_compact/force_compact
+    # unconditionally where cache rebuild is already happening, then
+    # (2) enable in normal micro_compact after further production
+    # observation — the test was on synthetic data; real interstitials
+    # vary in length and the economics may shift.
+    paired_assistants_compacted = 0
+    paired_assistants_tokens_saved = 0
+    if kwargs.get('enable_paired_assistant_compact', False) and _paired_assistant_indices:
+        _PAIRED_COMMENTARY_THRESHOLD = 200  # only compact > 200 chars
+        _PAIRED_PREVIEW_LEN = 100           # keep first 100 chars as preview
+
+        for idx in sorted(_paired_assistant_indices):
+            msg = messages[idx]
+            content = msg.get('content', '')
+
+            # String-shaped content path
+            if isinstance(content, str) and content:
+                # Idempotency guard
+                if content.startswith('[Interstitial compacted'):
+                    continue
+                if len(content) <= _PAIRED_COMMENTARY_THRESHOLD:
+                    continue
+                old_len = len(content)
+                preview = content[:_PAIRED_PREVIEW_LEN].rstrip()
+                if len(content) > _PAIRED_PREVIEW_LEN:
+                    preview += '…'
+                new_content = (
+                    f'[Interstitial compacted — was {old_len:,} chars] '
+                    f'{preview}'
+                )
+                msg['content'] = new_content
+                paired_assistants_tokens_saved += (old_len - len(new_content)) // 4
+                paired_assistants_compacted += 1
+
+            # List-shaped content (Claude multimodal: [{type:text,text:...}, ...])
+            elif isinstance(content, list):
+                text_blocks = [
+                    (i, b) for i, b in enumerate(content)
+                    if isinstance(b, dict) and b.get('type') == 'text'
+                ]
+                total_text = sum(len(b.get('text', '')) for _, b in text_blocks)
+                if total_text <= _PAIRED_COMMENTARY_THRESHOLD:
+                    continue
+                # Already compacted?
+                if text_blocks and text_blocks[0][1].get('text', '').startswith(
+                        '[Interstitial compacted'):
+                    continue
+                combined = ''.join(b.get('text', '') for _, b in text_blocks)
+                preview = combined[:_PAIRED_PREVIEW_LEN].rstrip()
+                if len(combined) > _PAIRED_PREVIEW_LEN:
+                    preview += '…'
+                new_text = (
+                    f'[Interstitial compacted — was {total_text:,} chars] '
+                    f'{preview}'
+                )
+                # Replace all text blocks with ONE compacted block, keep non-text blocks.
+                new_content = []
+                text_replaced = False
+                for b in content:
+                    if isinstance(b, dict) and b.get('type') == 'text':
+                        if not text_replaced:
+                            new_content.append({'type': 'text', 'text': new_text})
+                            text_replaced = True
+                    else:
+                        new_content.append(b)
+                msg['content'] = new_content
+                paired_assistants_tokens_saved += (total_text - len(new_text)) // 4
+                paired_assistants_compacted += 1
+
+        tokens_saved += paired_assistants_tokens_saved
+        if paired_assistants_compacted > 0:
+            logger.info(
+                '[L1-pair] conv=%s  co-compacted %d paired assistant interstitials '
+                '(~%d tokens saved; A/B-verified -1.4%% cache writes vs B-only)',
+                conv_id[:8] if conv_id else '?',
+                paired_assistants_compacted, paired_assistants_tokens_saved,
+            )
 
     # ── Phase C: Aggressively strip cold images ──────────────────────
     # Images consume massive context (base64 data URLs: 1-10MB each).
@@ -1303,11 +1463,41 @@ def _human_size(byte_count: int) -> str:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _get_context_limit(task: dict | None = None) -> int:
-    """Look up the model's context window size in tokens."""
+    """Look up the model's context window size in tokens.
+
+    Claude 4.6+ Opus/Sonnet ship with a 1M context window (GA 2026-03-13);
+    Opus/Sonnet 4.7 inherit it.  ``is_claude_opus_47()`` from model_info
+    is used as an explicit version probe so newly-released versions
+    (4.8, 5.0, …) don't silently get downgraded to the 200k fallback
+    the way Opus 4.7 did before the turn-redesign (see post-mortem on
+    conv=modearkif6k9tr).
+    """
     if task:
-        model = task.get('config', {}).get('model', '').lower()
+        model_raw = (task.get('config', {}) or {}).get('model', '') or ''
+        model = model_raw.lower()
+
+        # Explicit Claude 4.6+ / 4.7+ probe — catches all id variants
+        # (aws.claude-opus-4.7, us.anthropic.claude-opus-4-7-v1:0, …).
+        try:
+            from lib.model_info import is_claude_opus_47
+            if is_claude_opus_47(model_raw):
+                return 1_000_000
+        except Exception as e:
+            logger.debug('[Compact] is_claude_opus_47 probe failed: %s', e)
+
+        # Claude Sonnet 4.6+ also has 1M context.  Match by regex on
+        # (major, minor) so 4.7, 4.8, 5.0 keep working.
+        m = re.search(r'(?:claude|anthropic).*sonnet[-_.]?(\d+)[-_.](\d+)', model)
+        if m and (int(m.group(1)), int(m.group(2))) >= (4, 6):
+            return 1_000_000
+        m = re.search(r'(?:claude|anthropic).*opus[-_.]?(\d+)[-_.](\d+)', model)
+        if m and (int(m.group(1)), int(m.group(2))) >= (4, 6):
+            return 1_000_000
+
         limits = {
-            # Claude 4.6 (Opus/Sonnet): 1M context GA since 2026-03-13
+            # Claude 4.6 (Opus/Sonnet): 1M context GA since 2026-03-13.
+            # (Also matched by the regex probes above — kept as explicit
+            # fast path for the two canonical id strings.)
             'claude-opus-4.6':   1_000_000,
             'claude-sonnet-4.6': 1_000_000,
             'claude':   200_000,   # older Claude models fallback
@@ -1389,98 +1579,164 @@ def _extract_current_query(messages: list) -> str:
     return ''
 
 
-def _find_pair_boundary(messages: list, keep_recent: int | None = None) -> int:
-    """Find the boundary for Phase 2 summarization.
+def _find_turn_boundary(
+    messages: list,
+    *,
+    budget_tokens: float = float('inf'),
+    max_turns: int = _MAX_PRESERVE_TURNS,
+) -> int:
+    """Find the preservation boundary using the turn abstraction.
 
-    Preserves system messages + recent N user-assistant pairs.
-    Returns the index where old messages end (everything before this
-    will be summarized).
+    A *turn* = ``[user_msg, ...all subsequent non-user messages]``.
+    Turns are atomic; the boundary always falls on a ``user`` index, so
+    we never split inside a turn (no need for the old kludges that
+    walked backward over trailing ``tool`` / ``assistant(tool_calls)``
+    messages — those exist inside the current or a preserved turn by
+    construction).
+
+    Policy:
+      • HARD INVARIANT   — the current (most-recent) turn is preserved
+        in full, regardless of size.  Truncating the in-flight user
+        question + its tool rounds is the bug we are fixing here.
+      • BEST-EFFORT      — older turns are added newest → oldest while
+        ``preserved_tokens + turn_tokens <= budget_tokens`` and total
+        preserved turn count stays ``<= max_turns``.
+      • REFUSE           — if the messages list contains NO ``user``
+        message, returns ``len(messages)`` so the caller short-circuits
+        (nothing meaningful to anchor preservation on).
 
     Args:
-        messages: Conversation messages.
-        keep_recent: Override for _KEEP_RECENT_PAIRS (thread-safe).
-                     Defaults to the module-level constant.
+        messages:      Conversation messages.
+        budget_tokens: Max tokens to keep verbatim (current turn is
+                       exempt).  Default ``inf`` (count-limited only).
+        max_turns:     Max number of turns to preserve verbatim.
+
+    Returns:
+        Boundary index: ``messages[:boundary]`` is "old" (summarized),
+        ``messages[boundary:]`` is "preserved".  Returns ``len(messages)``
+        to signal refusal.
     """
-    _keep = keep_recent if keep_recent is not None else _KEEP_RECENT_PAIRS
-    # Count user-assistant pairs from the end
-    pairs_found = 0
-    boundary = len(messages)
+    user_idx = [i for i, m in enumerate(messages) if m.get('role') == 'user']
+    if not user_idx:
+        return len(messages)   # refuse — caller must detect and skip
 
-    i = len(messages) - 1
-    while i >= 0:
-        msg = messages[i]
-        role = msg.get('role')
+    # Turn spans: turn k starts at user_idx[k] and ends just before the
+    # next user msg (or at end-of-list for the final / current turn).
+    turn_starts = user_idx
+    turn_ends = user_idx[1:] + [len(messages)]
 
-        if role == 'user':
-            pairs_found += 1
-            if pairs_found >= _keep:
-                boundary = i
-                break
-        i -= 1
+    # HARD INVARIANT: current turn always preserved, even if it exceeds budget.
+    cur_start, cur_end = turn_starts[-1], turn_ends[-1]
+    boundary = cur_start
+    preserved_tokens = sum(
+        _estimate_msg_tokens(m) for m in messages[cur_start:cur_end]
+    )
+    preserved_turn_count = 1
 
-    # Walk backward from boundary to avoid splitting tool rounds
-    while 1 < boundary < len(messages) and messages[boundary].get('role') == 'tool':
-        boundary -= 1
-
-    # Also don't split an assistant with tool_calls from its results
-    if 1 < boundary < len(messages) and messages[boundary - 1].get('role') == 'assistant' and messages[boundary - 1].get('tool_calls'):
-        boundary -= 1
-
-    # Ensure boundary is past system messages
-    while boundary < len(messages) and messages[boundary].get('role') == 'system':
-        boundary += 1
+    # Walk older turns newest → oldest, greedily add while within caps.
+    for k in range(len(turn_starts) - 2, -1, -1):
+        if preserved_turn_count >= max_turns:
+            break
+        start, end = turn_starts[k], turn_ends[k]
+        tt = sum(_estimate_msg_tokens(m) for m in messages[start:end])
+        if preserved_tokens + tt > budget_tokens:
+            break
+        boundary = start
+        preserved_tokens += tt
+        preserved_turn_count += 1
 
     return boundary
 
 
+def _find_pair_boundary(messages: list, keep_recent: int | None = None) -> int:
+    """[LEGACY] Backward-compat wrapper over ``_find_turn_boundary``.
+
+    Kept so callers / tests passing ``keep_recent=N`` still work.  The
+    old "user-assistant pair" abstraction has been retired — a
+    preservation unit is now a *turn* (one user message + all subsequent
+    non-user messages).  ``keep_recent`` is mapped to ``max_turns`` and
+    the budget is left unbounded; new callers should prefer
+    ``_find_turn_boundary(budget_tokens=...)`` directly.
+    """
+    _keep = keep_recent if keep_recent is not None else _KEEP_RECENT_PAIRS
+    return _find_turn_boundary(
+        messages,
+        budget_tokens=float('inf'),
+        max_turns=max(1, _keep),
+    )
+
+
 def _format_messages_for_summary(messages: list) -> str:
-    """Render messages as readable text for the summary LLM."""
+    """Render messages as readable text for the summary LLM.
+
+    ★ Relevance-filtered rendering (2026-04-26):
+    The summarizing cheap model is asked to rate *conversational* turn
+    relevance — a decision that should depend only on what the **human**
+    said and what the **assistant replied in natural language**.
+
+    This function therefore INCLUDES:
+      • ``role == 'user'`` messages (always; even short ones).
+      • ``role == 'assistant'`` messages with non-empty natural-language
+        content (drops thinking / reasoning_content, which is internal
+        scratchpad and can mislead relevance scoring).
+
+    And EXCLUDES:
+      • ``role == 'tool'`` messages (tool results — noisy, often huge,
+        irrelevant to deciding which human turns mattered).
+      • ``role == 'assistant'`` messages whose only payload is
+        ``tool_calls`` with no user-visible text (pure tool-invocation
+        boilerplate).
+      • ``role == 'system'`` (not part of the conversation turns).
+
+    The tool-call *decoration* that used to be appended to assistant
+    lines is also gone: a single-line ``→ grep_search(...)`` summary does
+    not help a relevance-scoring model and inflates input cost.
+    """
     parts = []
+    skipped_tool = 0
+    skipped_tool_only_assistant = 0
 
     for msg in messages:
         role = msg.get('role', '?')
-        content = msg.get('content', '')
 
+        if role == 'tool' or role == 'system':
+            if role == 'tool':
+                skipped_tool += 1
+            continue
+
+        content = msg.get('content', '')
         if isinstance(content, list):
             content = '\n'.join(
                 b.get('text', '') for b in content
                 if isinstance(b, dict) and b.get('type') == 'text'
             )
+        if not isinstance(content, str):
+            content = ''
+        text = content.strip()
 
-        if isinstance(content, str) and len(content) > 3000:
-            content = (content[:1500]
-                       + '\n...[truncated]...\n'
-                       + content[-1000:])
+        if role == 'assistant':
+            # Drop assistant messages that carry only tool_calls — they
+            # have no natural-language payload for relevance scoring.
+            if not text:
+                skipped_tool_only_assistant += 1
+                continue
 
-        tool_info = ''
-        for tc in msg.get('tool_calls', []):
-            fn = tc.get('function', {})
-            fn_name = fn.get('name', '?')
-            args_raw = fn.get('arguments', '')
-            try:
-                args = (json.loads(args_raw) if isinstance(args_raw, str)
-                        else args_raw)
-                if isinstance(args, dict):
-                    brief = {}
-                    for k, v in args.items():
-                        vs = str(v)
-                        brief[k] = (vs[:100] + f'...({len(vs)} chars)'
-                                    if len(vs) > 200 else v)
-                    tool_info += (
-                        f'\n  → {fn_name}('
-                        + json.dumps(brief, ensure_ascii=False)[:300]
-                        + ')')
-                else:
-                    tool_info += f'\n  → {fn_name}()'
-            except (json.JSONDecodeError, TypeError) as exc:
-                logger.debug('[Compact] Failed to parse tool_call args for %s: %s',
-                             fn_name, exc, exc_info=True)
-                tool_info += f'\n  → {fn_name}()'
+        if not text:
+            # user message with empty text — skip rather than emit
+            # a bare "[user] " line that adds no signal.
+            continue
 
-        line = f'[{role}] {content}'
-        if tool_info:
-            line += tool_info
-        parts.append(line)
+        if len(text) > 3000:
+            text = text[:1500] + '\n...[truncated]...\n' + text[-1000:]
+
+        parts.append(f'[{role}] {text}')
+
+    if skipped_tool or skipped_tool_only_assistant:
+        logger.debug(
+            '[Compact] Relevance-format filter: skipped %d tool results, '
+            '%d tool-call-only assistant msgs; kept %d user/assistant turns',
+            skipped_tool, skipped_tool_only_assistant, len(parts),
+        )
 
     return '\n\n'.join(parts)
 
@@ -1658,42 +1914,91 @@ def execute_compact_tool(messages: list, task: dict | None = None, **kwargs) -> 
     task_id = task.get('id', '')[:8] if task else '?'
     pfx = f'[Task {task_id}]'
 
-    # Record cooldown
-    with _cooldown_lock:
-        _summary_cooldowns[conv_id] = time.time()
-
     tokens_before = _estimate_total_tokens(messages)
     msg_count_before = len(messages)
     context_limit = _get_context_limit(task)
-    usable = context_limit - _OUTPUT_RESERVE
+    usable = context_limit - _OUTPUT_RESERVE - _COMPACTION_RESERVE
 
-    logger.info('%s [Compact] Starting  conv=%s  tokens=%d  usable=%d  messages=%d',
-                pfx, log_id, tokens_before, usable, msg_count_before)
+    # ── Turn-based preservation budget ──
+    # A fraction of usable context stays verbatim; the rest becomes
+    # summary input.  Callers (reactive_compact) can override with a
+    # smaller budget via `preserve_budget_tokens` kwarg.  We also accept
+    # the legacy `keep_recent_pairs` kwarg as an alias for `max_turns`.
+    budget_override = kwargs.get('preserve_budget_tokens') if kwargs else None
+    if budget_override is not None:
+        budget_tokens = max(1, int(budget_override))
+    else:
+        budget_tokens = max(1, int(usable * _PRESERVE_BUDGET_RATIO))
 
-    # Archive full transcript first (safety net for recovery)
-    _archive_transcript(conv_id, messages)
+    _krp = kwargs.get('keep_recent_pairs') if kwargs else None
+    max_turns = _MAX_PRESERVE_TURNS if _krp is None else max(1, int(_krp))
 
-    # Extract current query for query-aware summarization
+    logger.info('%s [Compact] Starting  conv=%s  tokens=%d  usable=%d  messages=%d  '
+                'budget=%d  max_turns=%d',
+                pfx, log_id, tokens_before, usable, msg_count_before,
+                budget_tokens, max_turns)
+
+    # Extract current query BEFORE archiving — used for logging + summary
     current_query = _extract_current_query(messages)
 
-    # Find boundary: preserve system msgs + recent N user-assistant pairs
-    # keep_recent_pairs is threaded through from reactive_compact for
-    # thread-safe override of the default _KEEP_RECENT_PAIRS.
-    _krp = kwargs.get('keep_recent_pairs') if kwargs else None
-    boundary = _find_pair_boundary(messages, keep_recent=_krp)
+    # Find turn boundary (hard invariant: current turn always preserved)
+    boundary = _find_turn_boundary(
+        messages, budget_tokens=budget_tokens, max_turns=max_turns,
+    )
 
-    if boundary <= 1:
-        logger.info('%s [Compact] Boundary=%d too early — not enough old messages '
-                    'to summarize, skipping', pfx, boundary)
-        return ('Context compaction skipped — not enough historical messages '
-                'to summarize. Only recent messages exist.')
+    # ── Refusal: no user message found → nothing to anchor preservation on ──
+    if boundary >= len(messages):
+        logger.error(
+            '%s [Compact] REFUSING — no user message found to anchor preservation. '
+            'msg_count=%d  tokens=%d  model=%s',
+            pfx, msg_count_before, tokens_before,
+            (task.get('config', {}) or {}).get('model', '?') if task else '?',
+        )
+        return ('Context compaction skipped — no user message found to '
+                'anchor preservation. Messages preserved as-is.')
+
+    # Count system messages (they are preserved separately from the summary)
+    system_end = 0
+    for i, m in enumerate(messages):
+        if m.get('role') == 'system':
+            system_end = i + 1
+        else:
+            break
+
+    # ── Refusal: boundary would preserve nothing live beyond system msgs ──
+    # This is the exact failure the old pair-based code hit.  With the new
+    # turn abstraction it is unreachable unless the refusal guard above
+    # was already triggered, but we keep the check as defense-in-depth.
+    if boundary >= len(messages) - 0 and boundary <= system_end:
+        logger.error(
+            '%s [Compact] REFUSING — boundary=%d would preserve 0 live messages '
+            '(system_end=%d, total=%d)',
+            pfx, boundary, system_end, msg_count_before,
+        )
+        return ('Context compaction skipped — boundary calculation would '
+                'preserve no live messages. Bailing out to prevent data loss.')
+
+    # Passed all guards — NOW record the cooldown so a bad/refused compact
+    # does not block the next legitimate attempt.
+    with _cooldown_lock:
+        _summary_cooldowns[conv_id] = time.time()
+
+    # Archive full transcript (safety net for recovery) — only after
+    # we've committed to actually compacting.
+    _archive_transcript(conv_id, messages)
 
     old_messages = messages[:boundary]
     recent_messages = messages[boundary:]
 
+    # Count preserved turns for visibility (turn = starts at a user msg)
+    preserved_turns = sum(
+        1 for m in recent_messages if m.get('role') == 'user'
+    )
+
     logger.info('%s [Compact] Summarizing %d old messages, '
-                'preserving %d recent, query=%.100s',
-                pfx, len(old_messages), len(recent_messages), current_query)
+                'preserving %d recent (%d turns), query=%.100s',
+                pfx, len(old_messages), len(recent_messages),
+                preserved_turns, current_query)
 
     # Generate query-aware selective summary via cheap model
     summary_text = _generate_query_aware_summary(
@@ -1756,7 +2061,8 @@ def execute_compact_tool(messages: list, task: dict | None = None, **kwargs) -> 
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def force_compact_if_needed(messages: list, task: dict | None = None,
-                            keep_recent_pairs: int | None = None) -> bool:
+                            keep_recent_pairs: int | None = None,
+                            preserve_budget_tokens: int | None = None) -> bool:
     """Check token usage and force-inject a context_compact tool round if needed.
 
     This replaces the old ``smart_summary_compact()`` — instead of
@@ -1766,9 +2072,12 @@ def force_compact_if_needed(messages: list, task: dict | None = None,
     Called from the orchestrator before each LLM call.
 
     Args:
-        keep_recent_pairs: Override for _KEEP_RECENT_PAIRS (thread-safe).
-            Used by reactive_compact to request more aggressive compaction
-            without mutating module-level state.
+        keep_recent_pairs: Legacy knob mapped to ``max_turns`` (turn-count cap).
+            Used by reactive_compact for defence-in-depth alongside the budget.
+        preserve_budget_tokens: Token budget for verbatim preservation.
+            If None, ``execute_compact_tool`` derives it from
+            ``_PRESERVE_BUDGET_RATIO * usable_context``.  Pass a smaller
+            value for aggressive reactive compaction.
 
     Returns True if compaction was performed, False otherwise.
     """
@@ -1782,9 +2091,12 @@ def force_compact_if_needed(messages: list, task: dict | None = None,
     logger.info('%s [ForceCompact] Injecting context_compact for conv=%s',
                 pfx, conv_id[:8] if conv_id else '?')
 
-    # Execute the compact logic, passing through keep_recent_pairs
+    # Execute the compact logic, passing through the turn-based knobs.
     compact_result = execute_compact_tool(
-        messages, task=task, keep_recent_pairs=keep_recent_pairs)
+        messages, task=task,
+        keep_recent_pairs=keep_recent_pairs,
+        preserve_budget_tokens=preserve_budget_tokens,
+    )
 
     # Inject the tool_call + tool_result pair at the end of messages
     # so the model sees it as a normal tool round.
@@ -1848,16 +2160,36 @@ def reactive_compact(messages: list, task: dict | None = None) -> bool:
                    '(API rejected request as too long)',
                    pfx, conv_id[:8] if conv_id else '?')
 
-    # Phase 1: Aggressive micro-compact (with Phase D since cache is being rebuilt)
-    micro_compact(messages, conv_id=conv_id, enable_assistant_compact=True)
+    # Phase 1: Aggressive micro-compact.  Cache is about to be rebuilt
+    # wholesale by Phase 3, so turn on every extra-savings phase that's
+    # only worthwhile when cache cost is already paid:
+    #   - Phase D  (assistant content compaction): Phase-D A/B 2026-04-06
+    #     showed +57% cost during normal rounds; harmless here.
+    #   - Phase B2 (paired interstitial compaction): Phase-B2 A/B 2026-04-27
+    #     showed -1.4% cache_write in normal rounds; enabling it here is
+    #     strictly safe and adds a small extra saving.
+    micro_compact(
+        messages, conv_id=conv_id,
+        enable_assistant_compact=True,
+        enable_paired_assistant_compact=True,
+    )
 
     # Phase 2: Force-reset the cooldown so compaction can fire
     with _cooldown_lock:
         _summary_cooldowns.pop(conv_id, None)
 
-    # Phase 3: Force compact with reduced recent-pairs (thread-safe via parameter)
+    # Phase 3: Force compact with a tighter preservation budget.
+    # Reactive mode is emergency: the API already rejected the request,
+    # so shrink aggressively.  The hard invariant still preserves the
+    # current (in-flight) turn in full — we never drop the live question.
+    context_limit = _get_context_limit(task)
+    usable = context_limit - _OUTPUT_RESERVE - _COMPACTION_RESERVE
+    tight_budget = max(1, int(usable * 0.10))  # 10% of usable context
     compacted = force_compact_if_needed(
-        messages, task=task, keep_recent_pairs=2)
+        messages, task=task,
+        preserve_budget_tokens=tight_budget,
+        keep_recent_pairs=2,   # also cap turn count for defence-in-depth
+    )
 
     if not compacted:
         # Even force_compact didn't think it was needed — try head truncation

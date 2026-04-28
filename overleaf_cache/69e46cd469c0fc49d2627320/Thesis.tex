@@ -65,7 +65,23 @@
 %->> Document content
 %---------------------------------------------------------------------------%
 \def\alltex{}
+% bibtex cache-buster: bumping this tag forces Overleaf to re-run bibtex on
+% the next compile so new entries in Biblio/ref.bib are picked up.
+% buster: 2026-04-25-02
+\usepackage{tikz}       % TikZ 是基礎
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.18}% silence "backwards compatibility mode" warning
 \begin{document}
+
+% Force every citation used in the query-rewriting chapters to be picked up
+% by bibtex even when an incremental build reuses a stale output.bbl.  All
+% keys below are defined in Biblio/ref.bib.
+\nocite{mo2024convsar,lee2017coref,halliday1976cohesion,quan2019gecor,
+  elgohary2019canyouunpack,vakulenko2021question,mao2023llm4cs,
+  voskarides2020quretec,yu2020fewshotgenerative,wu2022conqrr,
+  mo2023convgqr,jang2024itercqr,lin2020conversational,raffel2020t5,
+  ye2023enhancing,mao2023search,kim2022saving,schulman2017ppo,
+  lin2023dragon,warner2024modernbert,qu2020orquac,mtrsuite2025,lora2022}
 \begin{sloppypar}
 
 

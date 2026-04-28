@@ -88,6 +88,79 @@ _conn_semaphore = threading.BoundedSemaphore(_MAX_TOTAL_CONNS)
 _conn_count = 0
 _conn_count_lock = threading.Lock()
 
+# ── PG self-heal / auto-rebootstrap state ──
+# When the locally-owned PG crashes silently (symptom: psycopg2
+# OperationalError "Connection refused"), try to re-run
+# ``_ensure_pg_running`` ONCE and retry the connect. Multiple concurrent
+# refused connections are coalesced behind this lock/cooldown so we
+# don't stampede ``pg_ctl start``. Override via
+# ``CHATUI_PG_REBOOT_COOLDOWN_S`` env var.
+_PG_REBOOT_COOLDOWN_S = int(os.environ.get('CHATUI_PG_REBOOT_COOLDOWN_S', '60'))
+_pg_reboot_lock = threading.Lock()
+_last_pg_reboot_attempt_ts = 0.0  # monotonic seconds; 0 = never
+
+
+def _maybe_reboot_pg(reason):
+    """Attempt to re-bootstrap the locally-owned PG, guarded by a cooldown.
+
+    Only does anything when:
+      • Active backend is PG, AND
+      • This process OWNS the local PG (started it or attached at import).
+
+    Returns:
+        True if a reboot attempt was made (whether it succeeded or not),
+        False if skipped due to cooldown or because we don't own PG.
+
+    Concurrent callers are serialised; only the first one within a
+    ``_PG_REBOOT_COOLDOWN_S`` window performs the bootstrap call.
+    """
+    global _last_pg_reboot_attempt_ts
+    if _BACKEND != 'pg':
+        return False
+    try:
+        from lib.database._bootstrap import is_pg_owned_locally
+    except ImportError as e:
+        logger.debug('[DB] PG bootstrap module import failed during reboot: %s', e)
+        return False
+    if not is_pg_owned_locally():
+        logger.debug('[DB] Refused PG but not locally-owned — skipping self-heal')
+        return False
+
+    now = time.monotonic()
+    with _pg_reboot_lock:
+        # Re-check under the lock (double-checked locking pattern)
+        if (now - _last_pg_reboot_attempt_ts) < _PG_REBOOT_COOLDOWN_S:
+            logger.debug('[DB] PG self-heal suppressed by cooldown '
+                         '(%.1fs since last attempt, cooldown=%ds)',
+                         now - _last_pg_reboot_attempt_ts,
+                         _PG_REBOOT_COOLDOWN_S)
+            return False
+        _last_pg_reboot_attempt_ts = now
+
+        logger.error('[DB] PG appears dead (%s) — attempting re-bootstrap '
+                     'once (cooldown=%ds)', reason, _PG_REBOOT_COOLDOWN_S)
+        try:
+            from lib.log import audit_log as _audit
+            _audit('pg_auto_restart', reason=str(reason)[:300],
+                   cooldown_s=_PG_REBOOT_COOLDOWN_S)
+        except Exception as _audit_err:
+            logger.debug('[DB] audit_log for pg_auto_restart failed: %s',
+                         _audit_err)
+        try:
+            from lib.database._bootstrap import _ensure_pg_running
+            result = _ensure_pg_running(_PGDATA, BASE_DIR, PG_HOST, PG_PORT,
+                                        PG_USER, PG_PASSWORD, PG_DBNAME)
+            if result:
+                logger.info('[DB] PG re-bootstrap succeeded: host=%s port=%s',
+                            result.get('PG_HOST'), result.get('PG_PORT'))
+            else:
+                logger.warning('[DB] PG re-bootstrap returned None — PG may '
+                               'still be down')
+            return True
+        except Exception as e:
+            logger.error('[DB] PG re-bootstrap raised: %s', e, exc_info=True)
+            return True  # we did ATTEMPT — cooldown still applies
+
 
 # ═══════════════════════════════════════════════════════════════════════
 #  SQLite-only wrappers (used when _BACKEND == 'sqlite')
@@ -367,17 +440,31 @@ def _new_pg_connection():
     json_type = psycopg2.extensions.new_type((JSON_OID,), 'JSON_AS_STR', _jsonb_as_string)
     jsonb_type = psycopg2.extensions.new_type((JSONB_OID,), 'JSONB_AS_STR', _jsonb_as_string)
 
+    _connect_kwargs = dict(
+        connect_timeout=_CONNECT_TIMEOUT_S,
+        keepalives=1,
+        keepalives_idle=_TCP_KEEPALIVES_IDLE_S,
+        keepalives_interval=_TCP_KEEPALIVES_INTERVAL_S,
+        keepalives_count=_TCP_KEEPALIVES_COUNT,
+        application_name='chatui',
+        gssencmode='disable',
+    )
     try:
-        conn = psycopg2.connect(
-            PG_DSN,
-            connect_timeout=_CONNECT_TIMEOUT_S,
-            keepalives=1,
-            keepalives_idle=_TCP_KEEPALIVES_IDLE_S,
-            keepalives_interval=_TCP_KEEPALIVES_INTERVAL_S,
-            keepalives_count=_TCP_KEEPALIVES_COUNT,
-            application_name='chatui',
-            gssencmode='disable',
-        )
+        try:
+            conn = psycopg2.connect(PG_DSN, **_connect_kwargs)
+        except psycopg2.OperationalError as e:
+            err_txt = str(e)
+            # Only self-heal on the "PG is dead" signature. Anything else
+            # (auth failure, bad host, etc.) re-raises immediately.
+            if 'Connection refused' not in err_txt:
+                raise
+            attempted = _maybe_reboot_pg(err_txt[:200])
+            if not attempted:
+                # Cooldown suppressed reboot OR we don't own PG — re-raise.
+                raise
+            # One-shot retry after re-bootstrap
+            logger.info('[DB] Retrying psycopg2.connect after PG re-bootstrap')
+            conn = psycopg2.connect(PG_DSN, **_connect_kwargs)
     except Exception:
         _conn_semaphore.release()
         raise
@@ -971,6 +1058,10 @@ else:
                         '(max_conns=%d, pool_max=%d, acquire_timeout=%ds)',
                         PG_HOST, PG_PORT, PG_DBNAME,
                         _MAX_TOTAL_CONNS, _CONN_POOL_MAX, _CONN_ACQUIRE_TIMEOUT_S)
+            logger.info('[DB] PG self-heal active: _new_pg_connection retries '
+                        'once via _ensure_pg_running on "Connection refused" '
+                        '(cooldown=%ds, env=CHATUI_PG_REBOOT_COOLDOWN_S)',
+                        _PG_REBOOT_COOLDOWN_S)
 
             # Start the reaper daemon thread (PG only)
             _reaper_thread = threading.Thread(target=_conn_reaper_loop, daemon=True,

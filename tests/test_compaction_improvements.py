@@ -1170,3 +1170,533 @@ class TestAssistantContentCompaction:
         # Each compacted message saves ~(2000 - 250) / 4 ≈ 437 tokens
         # With 6 cold assistants (12 - 6 hot tail), expect ~2600+ tokens
         assert tokens_saved > 1000
+
+
+# ═══════════════════════════════════════════════════════════
+#  12. Turn-based preservation (2026-04-26 redesign)
+#  Replaces the old "user-assistant pair" abstraction.  A turn =
+#  [user, ...all subsequent non-user messages until the next user].
+# ═══════════════════════════════════════════════════════════
+
+@pytest.mark.unit
+class TestTurnBoundary:
+    """Verify _find_turn_boundary — the core of the new compaction design."""
+
+    @staticmethod
+    def _mk_agentic_turn(user_text, n_tool_rounds=3, tool_chars=1000):
+        """Build one agentic turn: 1 user + N×(assistant(tool_calls) + tool).
+
+        This is what a real conversation looks like: one human question
+        produces many tool messages.  The OLD pair-based code treated
+        these many messages as many pairs — this was the bug.
+        """
+        msgs = [{'role': 'user', 'content': user_text}]
+        for i in range(n_tool_rounds):
+            msgs.append({
+                'role': 'assistant',
+                'content': None,
+                'tool_calls': [{
+                    'id': f'tc_{i}',
+                    'type': 'function',
+                    'function': {'name': 'grep_search', 'arguments': '{}'},
+                }],
+            })
+            msgs.append({
+                'role': 'tool',
+                'tool_call_id': f'tc_{i}',
+                'name': 'grep_search',
+                'content': 'x' * tool_chars,
+            })
+        msgs.append({
+            'role': 'assistant',
+            'content': f'Done investigating: {user_text}',
+        })
+        return msgs
+
+    # ── Hard invariant: current turn is always preserved ─────────────
+
+    def test_current_turn_always_preserved_fewer_turns_than_cap(self):
+        """Regression for conv=modearkif6k9tr: few user turns + many tool
+        messages must still preserve the current turn."""
+        from lib.tasks_pkg.compaction import _find_turn_boundary
+        msgs = [{'role': 'system', 'content': 'You are helpful.'}]
+        # 4 user turns, each with 50 tool messages (like the bug conv)
+        for k in range(4):
+            msgs.extend(self._mk_agentic_turn(f'Q{k}', n_tool_rounds=50))
+
+        # Default call — unbounded budget, _MAX_PRESERVE_TURNS cap (16)
+        boundary = _find_turn_boundary(msgs)
+        # Boundary must NOT equal len(messages) — we must preserve SOMETHING
+        assert boundary < len(msgs), (
+            'REGRESSION: boundary == len(messages) means nothing preserved — '
+            'the exact bug that hit conv=modearkif6k9tr'
+        )
+        # The preserved slice must start with a user message
+        assert msgs[boundary].get('role') == 'user', (
+            f'Boundary must land on a user message, got role='
+            f"{msgs[boundary].get('role')}"
+        )
+        # The current (last) user message must be in the preserved slice
+        last_user_idx = max(i for i, m in enumerate(msgs) if m.get('role') == 'user')
+        assert boundary <= last_user_idx
+
+    def test_current_turn_preserved_even_when_oversized(self):
+        """If the current turn alone exceeds the budget, preserve it anyway."""
+        from lib.tasks_pkg.compaction import _find_turn_boundary
+        # Build a huge single turn that dwarfs any budget
+        msgs = [{'role': 'user', 'content': 'tiny old Q'}]
+        msgs.append({'role': 'assistant', 'content': 'tiny old A'})
+        msgs.extend(self._mk_agentic_turn('Current Q', n_tool_rounds=100,
+                                          tool_chars=2000))
+        # Even with a tiny budget, current turn must be preserved.
+        boundary = _find_turn_boundary(msgs, budget_tokens=1)
+        last_user_idx = max(i for i, m in enumerate(msgs) if m.get('role') == 'user')
+        assert boundary == last_user_idx
+
+    def test_budget_caps_older_turns(self):
+        """Budget limits how many PRIOR turns (beyond current) are kept."""
+        from lib.tasks_pkg.compaction import _find_turn_boundary
+        msgs = []
+        for k in range(10):
+            msgs.extend(self._mk_agentic_turn(f'Q{k}', n_tool_rounds=2,
+                                              tool_chars=400))
+        # Tiny budget → only the current turn is preserved (invariant)
+        b_tight = _find_turn_boundary(msgs, budget_tokens=1)
+        # Large budget → more prior turns fit
+        b_loose = _find_turn_boundary(msgs, budget_tokens=1_000_000)
+        # Loose budget must preserve a larger slice (smaller boundary index)
+        assert b_loose <= b_tight, (
+            f'Larger budget should preserve more: '
+            f'loose_boundary={b_loose} tight_boundary={b_tight}'
+        )
+
+    def test_max_turns_caps_preservation(self):
+        """max_turns caps how many turns are kept regardless of budget."""
+        from lib.tasks_pkg.compaction import _find_turn_boundary
+        msgs = []
+        for k in range(20):
+            msgs.extend(self._mk_agentic_turn(f'Q{k}', n_tool_rounds=1))
+        # Unbounded budget, max_turns=3 → only 3 turns kept
+        boundary = _find_turn_boundary(msgs, budget_tokens=float('inf'),
+                                       max_turns=3)
+        preserved = msgs[boundary:]
+        user_count_preserved = sum(
+            1 for m in preserved if m.get('role') == 'user')
+        assert user_count_preserved == 3
+
+    def test_refuse_when_no_user_message(self):
+        """No user message → return len(messages) to signal refusal."""
+        from lib.tasks_pkg.compaction import _find_turn_boundary
+        msgs = [
+            {'role': 'system', 'content': 'sys'},
+            {'role': 'assistant', 'content': 'hello'},
+        ]
+        assert _find_turn_boundary(msgs) == len(msgs)
+
+    def test_boundary_always_on_user_index(self):
+        """Invariant: the returned boundary points at a 'user' message
+        (or len(messages) for refusal)."""
+        from lib.tasks_pkg.compaction import _find_turn_boundary
+        msgs = [{'role': 'system', 'content': 'sys'}]
+        for k in range(5):
+            msgs.extend(self._mk_agentic_turn(f'Q{k}', n_tool_rounds=3))
+        boundary = _find_turn_boundary(msgs, budget_tokens=5000, max_turns=2)
+        assert 0 < boundary < len(msgs)
+        assert msgs[boundary].get('role') == 'user'
+
+    def test_single_turn_conversation(self):
+        """A fresh conversation with just one turn → the whole turn is preserved."""
+        from lib.tasks_pkg.compaction import _find_turn_boundary
+        msgs = [{'role': 'system', 'content': 'sys'}]
+        msgs.extend(self._mk_agentic_turn('hi', n_tool_rounds=2))
+        boundary = _find_turn_boundary(msgs)
+        # Should land on the user msg (start of the only turn)
+        assert msgs[boundary].get('role') == 'user'
+        # System is NOT part of a turn — boundary must be AFTER it
+        assert boundary > 0
+
+
+@pytest.mark.unit
+class TestPairBoundaryBackwardCompat:
+    """_find_pair_boundary must remain a working wrapper over the new impl."""
+
+    def test_keep_recent_is_mapped_to_max_turns(self):
+        from lib.tasks_pkg.compaction import _find_pair_boundary
+        msgs = [{'role': 'system', 'content': 'sys'}]
+        for k in range(10):
+            msgs.append({'role': 'user', 'content': f'Q{k}'})
+            msgs.append({'role': 'assistant', 'content': f'A{k}'})
+        b_default = _find_pair_boundary(msgs)              # _KEEP_RECENT_PAIRS
+        b_tight   = _find_pair_boundary(msgs, keep_recent=2)
+        b_loose   = _find_pair_boundary(msgs, keep_recent=5)
+        # Smaller max_turns → larger boundary index (less preserved)
+        assert b_tight >= b_loose >= b_default or b_tight >= b_default
+
+    def test_regression_old_pair_boundary_would_return_end(self):
+        """The exact scenario that broke conv=modearkif6k9tr:
+        conversation with fewer user turns than _KEEP_RECENT_PAIRS.
+        Old pair-based impl returned len(messages); new impl must
+        preserve the current turn."""
+        from lib.tasks_pkg.compaction import _KEEP_RECENT_PAIRS, _find_pair_boundary
+        msgs = [{'role': 'system', 'content': 'sys'}]
+        # Only 4 user turns — fewer than _KEEP_RECENT_PAIRS (8).
+        for k in range(4):
+            msgs.append({'role': 'user', 'content': f'Q{k}'})
+            for _ in range(20):  # many tool messages per turn
+                msgs.append({'role': 'assistant', 'content': None,
+                             'tool_calls': [{
+                                 'id': f't{k}', 'type': 'function',
+                                 'function': {'name': 'grep_search',
+                                              'arguments': '{}'}}]})
+                msgs.append({'role': 'tool', 'tool_call_id': f't{k}',
+                             'name': 'grep_search', 'content': 'x' * 500})
+        n_users = sum(1 for m in msgs if m.get('role') == 'user')
+        assert n_users < _KEEP_RECENT_PAIRS   # precondition of the bug
+
+        boundary = _find_pair_boundary(msgs)
+        # MUST preserve at least the current (last) turn
+        assert boundary < len(msgs), (
+            'REGRESSION: _find_pair_boundary returned len(messages) for a '
+            'conversation with fewer user turns than _KEEP_RECENT_PAIRS — '
+            'this is the exact bug from conv=modearkif6k9tr.'
+        )
+        last_user = max(i for i, m in enumerate(msgs) if m.get('role') == 'user')
+        assert boundary <= last_user
+
+
+@pytest.mark.unit
+class TestRelevanceFormatFilter:
+    """Verify _format_messages_for_summary only shows user + natural-language
+    assistant messages to the relevance-rating cheap model."""
+
+    def test_tool_messages_excluded(self):
+        from lib.tasks_pkg.compaction import _format_messages_for_summary
+        msgs = [
+            {'role': 'user', 'content': 'find foo'},
+            {'role': 'assistant', 'content': None,
+             'tool_calls': [{'id': 't1', 'type': 'function',
+                             'function': {'name': 'grep_search',
+                                          'arguments': '{"pattern":"foo"}'}}]},
+            {'role': 'tool', 'tool_call_id': 't1', 'name': 'grep_search',
+             'content': 'file.py:1:foo\nfile.py:2:foo bar\n' * 1000},
+            {'role': 'assistant', 'content': 'Found 2000 matches in file.py'},
+        ]
+        out = _format_messages_for_summary(msgs)
+        assert 'find foo' in out
+        assert 'Found 2000 matches' in out
+        assert 'file.py:1:foo' not in out, (
+            'tool result content leaked into relevance-format output'
+        )
+        # Tool-call-only assistant message should be dropped
+        assert 'grep_search' not in out
+
+    def test_tool_call_only_assistant_dropped(self):
+        from lib.tasks_pkg.compaction import _format_messages_for_summary
+        msgs = [
+            {'role': 'user', 'content': 'question'},
+            {'role': 'assistant', 'content': '',
+             'tool_calls': [{'id': 't1', 'type': 'function',
+                             'function': {'name': 'read_files',
+                                          'arguments': '{}'}}]},
+        ]
+        out = _format_messages_for_summary(msgs)
+        assert '[user] question' in out
+        assert '[assistant]' not in out
+
+    def test_assistant_with_text_kept_even_with_tool_calls(self):
+        """Assistant message with both text AND tool_calls — text is kept."""
+        from lib.tasks_pkg.compaction import _format_messages_for_summary
+        msgs = [
+            {'role': 'user', 'content': 'Q'},
+            {'role': 'assistant',
+             'content': 'I need to investigate this first.',
+             'tool_calls': [{'id': 't1', 'type': 'function',
+                             'function': {'name': 'grep_search',
+                                          'arguments': '{}'}}]},
+        ]
+        out = _format_messages_for_summary(msgs)
+        assert 'I need to investigate' in out
+
+    def test_system_messages_excluded(self):
+        from lib.tasks_pkg.compaction import _format_messages_for_summary
+        msgs = [
+            {'role': 'system', 'content': 'You are helpful'},
+            {'role': 'user', 'content': 'Q'},
+        ]
+        out = _format_messages_for_summary(msgs)
+        assert 'You are helpful' not in out
+        assert '[user] Q' in out
+
+    def test_reasoning_content_excluded(self):
+        """reasoning_content (thinking) must not leak into relevance format."""
+        from lib.tasks_pkg.compaction import _format_messages_for_summary
+        msgs = [
+            {'role': 'user', 'content': 'Q'},
+            {'role': 'assistant', 'content': 'Answer',
+             'reasoning_content': 'Secret internal thinking scratchpad'},
+        ]
+        out = _format_messages_for_summary(msgs)
+        assert 'Secret internal thinking' not in out
+        assert '[assistant] Answer' in out
+
+    def test_empty_user_skipped(self):
+        from lib.tasks_pkg.compaction import _format_messages_for_summary
+        msgs = [
+            {'role': 'user', 'content': ''},
+            {'role': 'user', 'content': '   '},
+            {'role': 'user', 'content': 'real question'},
+        ]
+        out = _format_messages_for_summary(msgs)
+        assert '[user] real question' in out
+        # Only one [user] line should be present
+        assert out.count('[user]') == 1
+
+
+@pytest.mark.unit
+class TestContextLimitDetection:
+    """Ensure newer Claude versions aren't silently downgraded to 200k."""
+
+    def test_claude_opus_47_variants(self):
+        from lib.tasks_pkg.compaction import _get_context_limit
+        variants = [
+            'aws.claude-opus-4.7',
+            'claude-opus-4-7',
+            'us.anthropic.claude-opus-4-7-v1:0',
+            'claude-opus-4.8',   # future
+        ]
+        for m in variants:
+            limit = _get_context_limit({'config': {'model': m}})
+            assert limit == 1_000_000, (
+                f'Model {m!r} got wrong context limit: {limit:,}. '
+                'This is the latent bug that caused force-compact to fire '
+                'prematurely on conv=modearkif6k9tr.'
+            )
+
+    def test_claude_sonnet_46_plus(self):
+        from lib.tasks_pkg.compaction import _get_context_limit
+        for m in ['claude-sonnet-4.6', 'claude-sonnet-4-7', 'aws.claude-sonnet-4.8']:
+            assert _get_context_limit({'config': {'model': m}}) == 1_000_000
+
+    def test_older_claude_still_200k(self):
+        from lib.tasks_pkg.compaction import _get_context_limit
+        assert _get_context_limit({'config': {'model': 'claude-3-opus'}}) == 200_000
+        assert _get_context_limit({'config': {'model': 'claude-3.5-sonnet'}}) == 200_000
+
+
+@pytest.mark.unit
+class TestCompactRefusalGuards:
+    """execute_compact_tool must refuse rather than destroy the current turn."""
+
+    def test_refuses_when_no_user_message(self, monkeypatch):
+        """No user msg → compaction is refused, messages untouched."""
+        from lib.tasks_pkg.compaction import execute_compact_tool
+        msgs = [
+            {'role': 'system', 'content': 'sys'},
+            {'role': 'assistant', 'content': 'orphaned'},
+        ]
+        original = list(msgs)
+        task = {'id': 'test_refuse', 'convId': 'conv_refuse',
+                'config': {'model': 'gpt-4'}}
+        result = execute_compact_tool(msgs, task=task)
+        assert 'skipped' in result.lower() or 'refus' in result.lower()
+        assert msgs == original, (
+            'REFUSED compaction MUST NOT mutate the messages list — '
+            'that was the core bug we are fixing.'
+        )
+
+    def test_cooldown_not_set_on_refusal(self):
+        """Refused compactions must not claim the 30s cooldown slot."""
+        from lib.tasks_pkg.compaction import _summary_cooldowns, execute_compact_tool
+        conv_id = 'conv_cooldown_test'
+        _summary_cooldowns.pop(conv_id, None)
+        msgs = [{'role': 'assistant', 'content': 'orphaned'}]  # no user
+        task = {'id': 't', 'convId': conv_id, 'config': {'model': 'gpt-4'}}
+        execute_compact_tool(msgs, task=task)
+        # Cooldown must NOT have been set by the refused call
+        assert conv_id not in _summary_cooldowns, (
+            'Refused compaction registered a cooldown, blocking the next '
+            'legitimate attempt for 30s.'
+        )
+
+
+# ═══════════════════════════════════════════════════════════
+#  13. Paired Assistant Compaction (Phase B2)
+#  A/B-verified 2026-04-27: -1.4% cache_write vs Phase B alone.
+#  Enabled ALONGSIDE Phase D in reactive_compact where cache is
+#  being rebuilt wholesale.
+# ═══════════════════════════════════════════════════════════
+
+@pytest.mark.unit
+class TestPairedAssistantCompaction:
+    """Phase B2: co-compact interstitial on assistant(tool_calls) whose
+    paired cold tool result was compacted by Phase B."""
+
+    @staticmethod
+    def _mk_long_interstitial(prefix: str) -> str:
+        # 500+ chars, over _PAIRED_COMMENTARY_THRESHOLD (200).
+        return (f'{prefix}: Let me carefully investigate this by running '
+                'several focused searches across the codebase. I want to '
+                'understand the existing patterns before proposing any '
+                'changes, because refactoring without understanding the '
+                'intended invariants tends to break more than it fixes. '
+                'I will start with a broad search, then narrow.') * 2
+
+    @staticmethod
+    def _mk_conversation(n_rounds: int, *, hot_tail: int = 3):
+        """Build 1 user + N rounds of (assistant interstitial + tool result)."""
+        msgs = [
+            {'role': 'system', 'content': 'sys'},
+            {'role': 'user', 'content': 'Investigate.'},
+        ]
+        for r in range(n_rounds):
+            tc_id = f'call_{r}'
+            msgs.append({
+                'role': 'assistant',
+                'content': TestPairedAssistantCompaction._mk_long_interstitial(
+                    f'R{r}'),
+                'tool_calls': [{
+                    'id': tc_id, 'type': 'function',
+                    'function': {'name': 'grep_search',
+                                 'arguments': '{"pattern":"x"}'}}],
+            })
+            msgs.append({
+                'role': 'tool', 'tool_call_id': tc_id,
+                'name': 'grep_search',
+                'content': 'match\n' * 500,  # 3000+ chars → cold-eligible
+            })
+        return msgs
+
+    def test_off_by_default_no_paired_compaction(self):
+        """micro_compact must NOT compact interstitials unless flag is set."""
+        import lib.tasks_pkg.compaction as _c
+        orig = _c.MICRO_HOT_TAIL
+        _c.MICRO_HOT_TAIL = 2
+        try:
+            msgs = self._mk_conversation(6)
+            _c.micro_compact(msgs, conv_id='test_off')
+            # No assistant content should be replaced with the
+            # interstitial-compacted marker
+            touched = [m for m in msgs
+                       if m.get('role') == 'assistant'
+                       and isinstance(m.get('content'), str)
+                       and m['content'].startswith('[Interstitial compacted')]
+            assert not touched, f'Phase B2 fired when OFF: {len(touched)} messages'
+        finally:
+            _c.MICRO_HOT_TAIL = orig
+
+    def test_on_compacts_paired_assistants(self):
+        """With flag enabled, paired interstitials on cold rounds compact."""
+        import lib.tasks_pkg.compaction as _c
+        orig = _c.MICRO_HOT_TAIL
+        _c.MICRO_HOT_TAIL = 2
+        try:
+            msgs = self._mk_conversation(6)
+            _c.micro_compact(msgs, conv_id='test_on',
+                             enable_paired_assistant_compact=True)
+            touched = [m for m in msgs
+                       if m.get('role') == 'assistant'
+                       and isinstance(m.get('content'), str)
+                       and m['content'].startswith('[Interstitial compacted')]
+            # 6 rounds, hot_tail=2 → 4 cold pairs, 4 interstitials compacted
+            assert len(touched) == 4, (
+                f'Expected 4 compacted interstitials, got {len(touched)}')
+        finally:
+            _c.MICRO_HOT_TAIL = orig
+
+    def test_current_turn_interstitial_preserved(self):
+        """Phase B2 must NEVER touch interstitials in the hot tail — they're
+        still active context for the model."""
+        import lib.tasks_pkg.compaction as _c
+        orig = _c.MICRO_HOT_TAIL
+        _c.MICRO_HOT_TAIL = 2
+        try:
+            msgs = self._mk_conversation(6)
+            # Record the last 2 assistants' content before compaction
+            assistant_idx = [i for i, m in enumerate(msgs)
+                             if m.get('role') == 'assistant']
+            hot_assistant_indices = assistant_idx[-2:]
+            before = [msgs[i]['content'] for i in hot_assistant_indices]
+            _c.micro_compact(msgs, conv_id='test_hot',
+                             enable_paired_assistant_compact=True)
+            after = [msgs[i]['content'] for i in hot_assistant_indices]
+            assert before == after, (
+                'Phase B2 touched hot-tail interstitials — their paired '
+                'tool results should not have been compacted either.')
+        finally:
+            _c.MICRO_HOT_TAIL = orig
+
+    def test_idempotent(self):
+        """Running B2 twice must not double-compact."""
+        import lib.tasks_pkg.compaction as _c
+        orig = _c.MICRO_HOT_TAIL
+        _c.MICRO_HOT_TAIL = 2
+        try:
+            msgs = self._mk_conversation(6)
+            _c.micro_compact(msgs, conv_id='idem1',
+                             enable_paired_assistant_compact=True)
+            snapshot = [
+                m.get('content') for m in msgs if m.get('role') == 'assistant'
+            ]
+            _c.micro_compact(msgs, conv_id='idem2',
+                             enable_paired_assistant_compact=True)
+            after = [
+                m.get('content') for m in msgs if m.get('role') == 'assistant'
+            ]
+            assert snapshot == after, 'Phase B2 not idempotent'
+        finally:
+            _c.MICRO_HOT_TAIL = orig
+
+    def test_short_interstitial_skipped(self):
+        """Interstitials below _PAIRED_COMMENTARY_THRESHOLD (200) are untouched."""
+        import lib.tasks_pkg.compaction as _c
+        orig_ht = _c.MICRO_HOT_TAIL
+        _c.MICRO_HOT_TAIL = 2
+        try:
+            msgs = [
+                {'role': 'system', 'content': 'sys'},
+                {'role': 'user', 'content': 'Q'},
+            ]
+            # 6 rounds with SHORT interstitials (< 200 chars) and long tool results
+            for r in range(6):
+                tc_id = f'call_{r}'
+                msgs.append({
+                    'role': 'assistant', 'content': 'short',
+                    'tool_calls': [{'id': tc_id, 'type': 'function',
+                                    'function': {'name': 'grep_search',
+                                                 'arguments': '{}'}}],
+                })
+                msgs.append({
+                    'role': 'tool', 'tool_call_id': tc_id,
+                    'name': 'grep_search', 'content': 'match\n' * 500,
+                })
+            _c.micro_compact(msgs, conv_id='test_short',
+                             enable_paired_assistant_compact=True)
+            touched = [m for m in msgs
+                       if m.get('role') == 'assistant'
+                       and isinstance(m.get('content'), str)
+                       and m['content'].startswith('[Interstitial compacted')]
+            assert not touched, (
+                'Short interstitials should not be compacted '
+                f'(got {len(touched)})')
+        finally:
+            _c.MICRO_HOT_TAIL = orig_ht
+
+    def test_reactive_compact_enables_paired(self):
+        """reactive_compact must pass enable_paired_assistant_compact=True
+        alongside enable_assistant_compact=True."""
+        import inspect
+        from lib.tasks_pkg import compaction as _c
+        src = inspect.getsource(_c.reactive_compact)
+        assert 'enable_paired_assistant_compact=True' in src, (
+            'reactive_compact should enable Phase B2 — cache is being '
+            'rebuilt wholesale there, so the extra savings are free.')
+        assert 'enable_assistant_compact=True' in src, (
+            'reactive_compact should still enable Phase D.')
+
+    def test_micro_compact_kwarg_accepted(self):
+        """Defensive: ensure the flag is actually wired through."""
+        import inspect
+        from lib.tasks_pkg.compaction import micro_compact
+        src = inspect.getsource(micro_compact)
+        assert 'enable_paired_assistant_compact' in src, (
+            'micro_compact must honor enable_paired_assistant_compact kwarg')

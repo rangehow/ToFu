@@ -1495,6 +1495,12 @@ def chat_stream(task_id):
                     ep_turns = task.get('_endpoint_turns')
                     if ep_turns:
                         state['endpointTurns'] = ep_turns
+                    # ★ Authoritative finished signal — when task has completed
+                    #   (_finalize set _endpoint_phase='done'), propagate the
+                    #   stop reason so the frontend's reconnect paths never
+                    #   create a ghost worker after Critic STOP approval.
+                    if task.get('_endpoint_stop_reason'):
+                        state['endpointStopReason'] = task['_endpoint_stop_reason']
                 cursor = len(task['events'])
 
             # ★ State snapshot gets NO id: field — it's synthetic, not a real

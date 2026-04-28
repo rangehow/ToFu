@@ -2512,7 +2512,7 @@ function _renderUnifiedToolLine(round, isSearching) {
   }
 
   // ★ Timer Watcher: render collapsible poll checks
-  if (round._timerPolls && round._timerPolls.length > 0) {
+  if ((round._timerPolls && round._timerPolls.length > 0) || round._timerSkipCount) {
     return _renderTimerWatcherBlock(round, svg);
   }
   // Timer tool with "searching" status but no polls yet — show initial waiting
@@ -2874,7 +2874,9 @@ function _renderTimerWatcherBlock(round, svg) {
     headerLabel = `⏱️ Timer ${timerIdShort} — ⚠️ task interrupted (${totalPolls} poll${totalPolls !== 1 ? "s" : ""}, timer still active in background)`;
     headerCls = "timer-watcher-orphaned";
   } else if (isActive) {
-    headerLabel = `⏱️ Timer ${timerIdShort} — watching… (${totalPolls} poll${totalPolls !== 1 ? "s" : ""})`;
+    const skipN = round._timerSkipCount || 0;
+    const skipSuffix = skipN > 0 ? `, ${skipN} skipped` : "";
+    headerLabel = `⏱️ Timer ${timerIdShort} — watching… (${totalPolls} poll${totalPolls !== 1 ? "s" : ""}${skipSuffix})`;
     headerCls = "timer-watcher-active";
   } else {
     headerLabel = `⏱️ Timer ${timerIdShort} — ${round.status || "done"} (${totalPolls} polls)`;
@@ -2916,6 +2918,24 @@ function _renderTimerWatcherBlock(round, svg) {
     hiddenHtml = `<div class="timer-poll-hidden">${hidden} earlier check${hidden !== 1 ? "s" : ""} hidden</div>`;
   }
 
+  // ★ Skip heartbeat trailer — shows "N polls skipped (output unchanged)"
+  //   so the user knows the timer is still alive even when the LLM isn't
+  //   being called. Without this, long runs of identical check_command
+  //   output look like the timer is frozen.
+  let skipTrailer = "";
+  if (round._timerSkipCount && isActive) {
+    const skipTs = round._timerLastSkipTs
+      ? new Date(round._timerLastSkipTs).toLocaleTimeString()
+      : "";
+    const lastPollNum = round._timerLastSkipPollNum || 0;
+    skipTrailer = `<div class="timer-poll-line timer-poll-skipped">
+      <span class="timer-poll-icon">💤</span>
+      <span class="timer-poll-num">${lastPollNum ? `#${lastPollNum}` : ""}</span>
+      <span class="timer-poll-reason">${round._timerSkipCount} poll${round._timerSkipCount !== 1 ? "s" : ""} skipped — check_command output unchanged</span>
+      <span class="timer-poll-meta">${skipTs}</span>
+    </div>`;
+  }
+
   const uid = "tmr-r" + round.roundNum;
   const expandedByDefault = isActive;  // auto-expand while active
   return `<div class="timer-watcher-block ${headerCls}" data-rn="${round.roundNum}">
@@ -2925,7 +2945,7 @@ function _renderTimerWatcherBlock(round, svg) {
          <span class="timer-toggle">${expandedByDefault ? '▾' : '▸'}</span>
        </div>
        <div class="timer-watcher-body${expandedByDefault ? ' expanded' : ''}" id="${uid}-wrap">
-         ${pollLines}${hiddenHtml}
+         ${pollLines}${hiddenHtml}${skipTrailer}
        </div>
      </div>`;
 }
@@ -3689,6 +3709,41 @@ async function saveEditAndResend(idx) {
   _restoreInputFromBackup();
   if (!t && !(editedImages.length > 0) && !(editedPdfTexts.length > 0)) return;
 
+  // ── Image Gen mode intercept: re-run via direct image API ──
+  //   Without this, edits on image-gen messages would fall through to
+  //   ``/api/chat/regenerate`` and be executed as a normal text chat task —
+  //   mirrors the intercept in ``regenerateFromUser`` (main.js).
+  const _isIgConv = (typeof imageGenMode !== 'undefined' && imageGenMode) || conv.imageGenMode;
+  const _isIgMsg  = msg._isImageGen || (msg.content && msg.content.startsWith('🎨 '));
+  if (_isIgConv || _isIgMsg) {
+    console.info(`[ImageGen] saveEditAndResend intercept — conv=${conv.id.slice(0,8)} idx=${idx} images=${editedImages.length}`);
+    // Apply the user's edits, then truncate to BEFORE this message
+    //   (generateImageDirect will re-push the user msg itself).
+    msg.content = t;
+    msg.images = editedImages;
+    msg.pdfTexts = editedPdfTexts;
+    delete msg.originalContent;
+    msg.timestamp = Date.now();
+    conv.messages = conv.messages.slice(0, idx);
+    saveConversations(conv.id);
+    if (typeof renderChat === 'function') renderChat(conv);
+    if (typeof renderConversationList === 'function') renderConversationList();
+    // Seed textarea + pendingImages so generateImageDirect picks them up.
+    let prompt = t || '';
+    if (prompt.startsWith('🎨 ')) prompt = prompt.slice(2).trim();
+    const textarea = document.getElementById('userInput');
+    if (textarea) { textarea.value = prompt; }
+    // Edited images become source images for the next edit/generation.
+    if (typeof pendingImages !== 'undefined') {
+      pendingImages = editedImages.slice();
+      if (typeof renderImagePreviews === 'function') renderImagePreviews();
+    }
+    if (typeof imageGenMode !== 'undefined' && !imageGenMode &&
+        typeof _applyImageGenUI === 'function') _applyImageGenUI(true);
+    if (typeof generateImageDirect === 'function') generateImageDirect();
+    return;
+  }
+
   // ── Wait for VLM parsing to complete before sending ──
   if (editedPdfTexts.length > 0 && typeof _waitForVlmParsing === 'function') {
     const _tempMsg = { pdfTexts: editedPdfTexts };
@@ -4312,6 +4367,7 @@ function _syncToolRoundsDOM(container, rounds) {
     _fp = _fp * 31 + (r._hgTranslating ? 1 : 0);
     if (r._translatedQuestion) _fp = _fp * 31 + r._translatedQuestion.length;
     if (r._timerPolls) _fp = _fp * 31 + r._timerPolls.length;
+    if (r._timerSkipCount) _fp = _fp * 31 + r._timerSkipCount;
   }
   if (container._roundsFingerprint === _fp) return;
   container._roundsFingerprint = _fp;
@@ -4438,10 +4494,11 @@ function _syncToolRoundsDOM(container, rounds) {
             slot.style.contentVisibility = "";  // reset to CSS default
             slot.innerHTML = _renderUnifiedToolLine(round, false);
           }
-        } else if (round._timerPolls && round._timerPolls.length > 0) {
-          // ★ Timer watcher: always re-render to show latest poll results.
+        } else if ((round._timerPolls && round._timerPolls.length > 0) || round._timerSkipCount) {
+          // ★ Timer watcher: always re-render to show latest poll results
+          // (including skip heartbeats that bump _timerSkipCount).
           // This covers both the initial ptool-line → timer-watcher-block transition
-          // AND subsequent poll additions to an existing timer-watcher-block.
+          // AND subsequent poll/skip additions to an existing timer-watcher-block.
           slot.innerHTML = _renderUnifiedToolLine(round, isActive);
         } else if (round.toolContent && !slot.querySelector('[data-tc-preview]')) {
           const ptLine = slot.querySelector('.ptool-line');
@@ -5284,22 +5341,44 @@ async function connectToTask(convId, taskId, retries = 0) {
   let assistantMsg = conv.messages[conv.messages.length - 1];
 
   /* ★ Endpoint mode reconnection: if the last message is a critic review
-   *   (role=user, _isEndpointReview), we need to create a fresh assistant
-   *   message for the next worker turn that's about to start. Also strip
-   *   duplicate DB-loaded endpoint turns — the SSE will re-send them. */
+   *   (role=user, _isEndpointReview), we may need to create a fresh
+   *   assistant message for the next worker turn that's about to start.
+   *
+   *   ROOT-CAUSE GUARD — the placeholder must ONLY be created when the
+   *   backend is about to start a new worker turn.  If the critic has
+   *   already approved ([VERDICT: STOP] / _epApproved) or chose
+   *   CONTINUE_PLANNER, NO new worker turn is coming — creating a ghost
+   *   placeholder here was the bug where the previous worker's content
+   *   reappeared as a duplicate after Critic STOP (SSE replay / poll
+   *   fallback writes the last worker's `td.content` into the ghost
+   *   placeholder).  The authoritative SSE `state` event (endpointPhase)
+   *   or live `endpoint_iteration(phase='working')` event will push a
+   *   proper worker message when a new worker turn truly starts. */
   const hasEpTurns = conv.messages.some(m => m._epIteration);
   if (hasEpTurns && assistantMsg && assistantMsg.role !== "assistant") {
-    // The last message is a critic review — create a placeholder assistant msg
-    // for the new worker turn the backend is about to start
-    assistantMsg = {
-      role: "assistant",
-      content: "",
-      thinking: "",
-      toolRounds: [],
-      timestamp: new Date().toISOString(),
-      _epIteration: (assistantMsg._epIteration || 0) + 1,
-    };
-    conv.messages.push(assistantMsg);
+    const lastCriticApproved = !!(assistantMsg._isEndpointReview
+      && (assistantMsg._epApproved
+          || assistantMsg._epNextPhase === 'stop'
+          || assistantMsg._epNextPhase === 'planner'));
+    if (lastCriticApproved) {
+      console.info(
+        `[connectToTask] 🛡  Endpoint reconnect — last critic is ` +
+        `${assistantMsg._epNextPhase || 'stop'} (approved=${!!assistantMsg._epApproved}); ` +
+        `NOT creating a ghost worker placeholder for conv=${convId.slice(0,8)}`
+      );
+    } else {
+      // The last message is a critic review awaiting a new worker turn —
+      // create a placeholder assistant msg for the incoming worker.
+      assistantMsg = {
+        role: "assistant",
+        content: "",
+        thinking: "",
+        toolRounds: [],
+        timestamp: new Date().toISOString(),
+        _epIteration: (assistantMsg._epIteration || 0) + 1,
+      };
+      conv.messages.push(assistantMsg);
+    }
   }
 
   if (!assistantMsg || assistantMsg.role !== "assistant") {
@@ -5541,28 +5620,58 @@ async function _trySSE(convId, taskId, stream, assistantMsg) {
             // Point assistantMsg to the last completed worker turn
             const lastWorker = [...conv.messages].reverse().find(m => m.role === "assistant");
             if (lastWorker) assistantMsg = lastWorker;
-          } else {
-            // Worker is in progress — find or create the current worker msg
+          } else if (ev.endpointPhase === 'done' || ev.endpointStopReason) {
+            /* ★ Task already finalized by the backend (Critic STOP /
+             *   max-iterations / aborted).  DO NOT create any new
+             *   worker/critic/planner message — the authoritative
+             *   endpoint turns have already been appended to
+             *   conv.messages above.  Point assistantMsg at the last
+             *   assistant turn so metadata (done event, finishStream)
+             *   attaches to the correct bubble. */
             _epCriticPhase = false;
-            const iterNum = ev.endpointIteration || 1;
-            let workerMsg = conv.messages.find(m =>
-              m.role === "assistant" && m._epIteration === iterNum);
-            if (!workerMsg) {
-              workerMsg = {
-                role: "assistant", content: "", thinking: "",
-                toolRounds: [], timestamp: new Date().toISOString(),
-                _epIteration: iterNum,
-              };
-              conv.messages.push(workerMsg);
-            }
-            workerMsg.content = ev.content || "";
-            workerMsg.thinking = ev.thinking || "";
-            if (ev.toolRounds) workerMsg.toolRounds = ev.toolRounds;
-            assistantMsg = workerMsg;
-            if (buf) {
-              buf.thinking = assistantMsg.thinking;
-              buf.content = assistantMsg.content;
-              if (ev.toolRounds) buf.toolRounds = ev.toolRounds;
+            const lastAssist = [...conv.messages].reverse().find(m => m.role === "assistant");
+            if (lastAssist) assistantMsg = lastAssist;
+            console.info(`[SSE state] Endpoint already finalized — ` +
+              `phase=${ev.endpointPhase} stopReason=${ev.endpointStopReason || 'n/a'} ` +
+              `conv=${convId.slice(0,8)} — skipping in-progress bubble creation`);
+          } else {
+            // Worker is in progress — find or create the current worker msg.
+            // Guard against ghost-worker creation after Critic STOP: if the
+            // last message is an approved critic, the task is finished even
+            // if endpointPhase hasn't been updated yet — don't blindly push
+            // a new worker turn (that was Bug 1).
+            _epCriticPhase = false;
+            const _lastMsg = conv.messages[conv.messages.length - 1];
+            const _lastCriticApproved = _lastMsg && _lastMsg._isEndpointReview
+              && (_lastMsg._epApproved || _lastMsg._epNextPhase === 'stop'
+                  || _lastMsg._epNextPhase === 'planner');
+            if (_lastCriticApproved) {
+              const lastAssist = [...conv.messages].reverse().find(m => m.role === "assistant");
+              if (lastAssist) assistantMsg = lastAssist;
+              console.info(`[SSE state] Endpoint reconnect — last critic is ` +
+                `${_lastMsg._epNextPhase || 'stop'}; skipping ghost worker creation ` +
+                `conv=${convId.slice(0,8)}`);
+            } else {
+              const iterNum = ev.endpointIteration || 1;
+              let workerMsg = conv.messages.find(m =>
+                m.role === "assistant" && m._epIteration === iterNum);
+              if (!workerMsg) {
+                workerMsg = {
+                  role: "assistant", content: "", thinking: "",
+                  toolRounds: [], timestamp: new Date().toISOString(),
+                  _epIteration: iterNum,
+                };
+                conv.messages.push(workerMsg);
+              }
+              workerMsg.content = ev.content || "";
+              workerMsg.thinking = ev.thinking || "";
+              if (ev.toolRounds) workerMsg.toolRounds = ev.toolRounds;
+              assistantMsg = workerMsg;
+              if (buf) {
+                buf.thinking = assistantMsg.thinking;
+                buf.content = assistantMsg.content;
+                if (ev.toolRounds) buf.toolRounds = ev.toolRounds;
+              }
             }
           }
 
@@ -5923,31 +6032,43 @@ async function _trySSE(convId, taskId, stream, assistantMsg) {
     } else if (ev.type === "timer_poll_check") {
       /* ═══ Timer Watcher inline poll progress ═══
          Each poll emits a sub-event attached to the timer_create tool round.
-         We store polls as _timerPolls[] on the round for collapsible rendering. */
+         We store polls as _timerPolls[] on the round for collapsible rendering.
+         ★ decision='skipped' is a lightweight heartbeat for polls where
+           the check_command output was unchanged — we don't push it into
+           _timerPolls[] (would spam), just bump skip metadata so the UI
+           can render a subdued "N skipped — output unchanged" trailer. */
       if (assistantMsg.toolRounds) {
         const r = assistantMsg.toolRounds.find(r => r.roundNum === ev.roundNum);
         if (r) {
-          if (!r._timerPolls) r._timerPolls = [];
-          // ★ Dedup: skip if this pollNum already exists (from state snapshot)
-          const _alreadyHas = r._timerPolls.some(p => p.pollNum === ev.pollNum && p.decision === ev.decision);
-          if (!_alreadyHas) {
-            r._timerPolls.push({
-              pollNum: ev.pollNum,
-              decision: ev.decision,
-              reason: ev.reason || "",
-              tokensUsed: ev.tokensUsed || 0,
-              timerId: ev.timerId || "",
-              ts: Date.now(),
-            });
-          }
-          // Keep the round in "searching" state while timer is polling
-          if (ev.decision === "ready") {
-            r.status = "done";
-            r._timerTriggered = true;
-          } else {
-            r.status = "searching";
-          }
           r._timerTimerId = ev.timerId;
+          if (ev.decision === "skipped") {
+            r._timerSkipCount = (r._timerSkipCount || 0) + 1;
+            r._timerLastSkipTs = Date.now();
+            r._timerLastSkipPollNum = ev.pollNum;
+            // Keep the round in "searching" state while timer is polling
+            r.status = "searching";
+          } else {
+            if (!r._timerPolls) r._timerPolls = [];
+            // ★ Dedup: skip if this pollNum already exists (from state snapshot)
+            const _alreadyHas = r._timerPolls.some(p => p.pollNum === ev.pollNum && p.decision === ev.decision);
+            if (!_alreadyHas) {
+              r._timerPolls.push({
+                pollNum: ev.pollNum,
+                decision: ev.decision,
+                reason: ev.reason || "",
+                tokensUsed: ev.tokensUsed || 0,
+                timerId: ev.timerId || "",
+                ts: Date.now(),
+              });
+            }
+            // Keep the round in "searching" state while timer is polling
+            if (ev.decision === "ready") {
+              r.status = "done";
+              r._timerTriggered = true;
+            } else {
+              r.status = "searching";
+            }
+          }
         }
       }
       if (buf)

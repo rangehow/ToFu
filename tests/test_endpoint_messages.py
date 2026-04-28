@@ -244,48 +244,97 @@ class TestRoleValidationHelpers:
 
 @pytest.mark.unit
 class TestVerdictParsing:
-    """Unit tests for _parse_verdict (three-way: stop / worker / planner)."""
+    """Unit tests for _parse_verdict (three-way: stop / worker / planner).
+
+    The parser now returns a 3-tuple ``(feedback, next_phase, plan_defect)``
+    and enforces a mandatory ``[PLAN_DEFECT: ...]`` tag for
+    CONTINUE_PLANNER.  STOP-with-❌ downgrades to **CONTINUE_WORKER** —
+    previously it was CONTINUE_PLANNER, but a residual ❌ is almost
+    always a worker-execution problem, and forcing a re-plan on it wipes
+    accumulated progress.
+    """
 
     def test_stop_verdict(self):
         from lib.tasks_pkg.endpoint_review import _parse_verdict
-        feedback, phase = _parse_verdict("All good! [VERDICT: STOP]")
+        feedback, phase, defect = _parse_verdict("All good! [VERDICT: STOP]")
         assert phase == 'stop'
+        assert defect is None
         assert "All good!" in feedback
 
     def test_continue_worker_verdict(self):
         from lib.tasks_pkg.endpoint_review import _parse_verdict
-        feedback, phase = _parse_verdict("Needs work. [VERDICT: CONTINUE_WORKER]")
+        feedback, phase, defect = _parse_verdict(
+            "Needs work. [VERDICT: CONTINUE_WORKER]"
+        )
         assert phase == 'worker'
+        assert defect is None
         assert "Needs work." in feedback
 
     def test_legacy_continue_verdict_maps_to_worker(self):
         """Backward compat: bare [VERDICT: CONTINUE] must map to 'worker'."""
         from lib.tasks_pkg.endpoint_review import _parse_verdict
-        feedback, phase = _parse_verdict("Needs work. [VERDICT: CONTINUE]")
+        feedback, phase, defect = _parse_verdict(
+            "Needs work. [VERDICT: CONTINUE]"
+        )
         assert phase == 'worker'
         assert "Needs work." in feedback
 
-    def test_continue_planner_verdict(self):
+    def test_continue_planner_with_defect_tag(self):
+        """CONTINUE_PLANNER requires a [PLAN_DEFECT: ...] tag."""
         from lib.tasks_pkg.endpoint_review import _parse_verdict
-        feedback, phase = _parse_verdict(
-            "Plan is wrong. [VERDICT: CONTINUE_PLANNER]"
+        feedback, phase, defect = _parse_verdict(
+            "The plan picks pandas but requirements.txt forbids it.\n"
+            "[PLAN_DEFECT: plan requires pandas which is forbidden]\n"
+            "[VERDICT: CONTINUE_PLANNER]"
         )
         assert phase == 'planner'
+        assert defect and 'pandas' in defect.lower()
+        # Tag itself is stripped from the UI-visible feedback.
+        assert 'PLAN_DEFECT' not in feedback
+
+    def test_continue_planner_without_defect_downgrades(self):
+        """Bare CONTINUE_PLANNER (no defect tag) is downgraded to worker."""
+        from lib.tasks_pkg.endpoint_review import _parse_verdict
+        feedback, phase, defect = _parse_verdict(
+            "Plan is wrong. [VERDICT: CONTINUE_PLANNER]"
+        )
+        assert phase == 'worker'
+        assert defect is None
+
+    def test_continue_planner_with_worker_rationalization_downgrades(self):
+        """Defects that blame the worker are downgraded."""
+        from lib.tasks_pkg.endpoint_review import _parse_verdict
+        feedback, phase, defect = _parse_verdict(
+            "[PLAN_DEFECT: worker didn't finish item 3]\n"
+            "[VERDICT: CONTINUE_PLANNER]"
+        )
+        assert phase == 'worker', (
+            'Worker-rationalization defects must be rejected — they are '
+            'worker problems, not plan-structural problems.'
+        )
 
     def test_no_verdict_defaults_to_worker(self):
         from lib.tasks_pkg.endpoint_review import _parse_verdict
-        feedback, phase = _parse_verdict("Some feedback without a verdict tag.")
+        feedback, phase, defect = _parse_verdict(
+            "Some feedback without a verdict tag."
+        )
         assert phase == 'worker'
 
-    def test_stop_with_x_markers_overridden_to_planner(self):
-        """Defense-in-depth: STOP with unresolved ❌ → override to 'planner'."""
+    def test_stop_with_x_markers_overridden_to_worker(self):
+        """Defense-in-depth: STOP with unresolved ❌ → downgrade to 'worker'.
+
+        Changed in 2026-04-26 rewrite — previously escalated to 'planner',
+        but forcing a re-plan on a single residual ❌ destroyed accumulated
+        worker progress (see task 00d009c6 in logs/app.log.2026-04-23).
+        CONTINUE_WORKER lets the worker address the ❌ directly.
+        """
         import os
         os.environ['CHATUI_ENDPOINT_REPLAN'] = '1'
         from lib.tasks_pkg.endpoint_review import _parse_verdict
-        feedback, phase = _parse_verdict(
+        feedback, phase, defect = _parse_verdict(
             "- ❌ Item 1 still failing\n[VERDICT: STOP]"
         )
-        assert phase == 'planner'
+        assert phase == 'worker'
 
 
 # ═══════════════════════════════════════════════════════════

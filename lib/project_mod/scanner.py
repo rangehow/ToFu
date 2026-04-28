@@ -164,17 +164,39 @@ def set_project_paths(paths):
     primary = abs_paths[0]
     extras  = abs_paths[1:]
 
-    # 1) Set (or re-set) the primary project — this clears old roots too
+    # 1) Set (or re-set) the primary project.
+    #    NOTE: set_project() preserves existing extra roots when the primary
+    #    is unchanged (the `same_primary` idempotence guard, needed so
+    #    mid-conversation tool_create_project roots survive repeated
+    #    /api/project/set calls). This means we must explicitly prune any
+    #    extras not in the new list below — otherwise the modal's "remove
+    #    folder" action would silently no-op when the primary is untouched.
     set_project(primary)
 
-    # 2) Add each extra root
+    # 2) Prune extras that the caller no longer wants. The new extras set
+    #    is `extras`; anything currently registered that isn't primary and
+    #    isn't in `extras` must go.
+    desired_extras = set(extras)
+    with _lock:
+        to_remove = [
+            rn for rn, rs in _roots.items()
+            if rs['path'] != primary and rs['path'] not in desired_extras
+        ]
+    for rn in to_remove:
+        try:
+            remove_project_root(rn)
+            logger.info('[Project] set_project_paths: pruned stale extra root %s', rn)
+        except Exception as e:
+            logger.warning('[Project] set_project_paths: failed to prune %s: %s', rn, e)
+
+    # 3) Add each extra root not already registered
     for ep in extras:
         try:
             add_project_root(ep)
         except Exception as e:
             logger.debug('[Scanner] add_project_root failed for %s, skipping: %s', ep, e, exc_info=True)
 
-    # 3) Build a unified response (get_state() now includes extraRoots)
+    # 4) Build a unified response (get_state() now includes extraRoots)
     return get_state()
 
 

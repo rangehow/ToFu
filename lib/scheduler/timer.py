@@ -70,6 +70,20 @@ def create_timer(conv_id: str,
 
     timer_id = 'tmr_' + str(uuid.uuid4())[:8]
     now = datetime.now().isoformat()
+
+    # ── Defensive coercion: LLM tool-calls sometimes arrive with
+    #    string-valued numeric args (e.g. "60"). Coerce to int with a
+    #    safe fallback so ``max()`` below never raises TypeError.
+    def _coerce_int(name, raw, default):
+        try:
+            return int(raw)
+        except (TypeError, ValueError) as _e:
+            logger.warning('[Timer] Non-integer %s=%r — coerced to default %d '
+                           '(reason: %s)', name, raw, default, _e)
+            return default
+    poll_interval = _coerce_int('poll_interval', poll_interval, 60)
+    max_polls = _coerce_int('max_polls', max_polls, 120)
+
     poll_interval = max(poll_interval, 10)  # floor at 10s
 
     db = get_thread_db(DOMAIN_SYSTEM)

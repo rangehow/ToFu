@@ -64,6 +64,8 @@ MODEL_PRICING = {
     # cacheReadMul derived from disclosed cache-hit pricing: Pro $0.145 / $1.74 ≈ 0.083, Flash $0.028 / $0.14 = 0.20.
     'deepseek-v4-pro':           {'input': 1.74,  'output': 3.48,  'cacheWriteMul': 1.00, 'cacheReadMul': 0.083, 'name': 'DeepSeek V4 Pro'},
     'deepseek-v4-flash':         {'input': 0.14,  'output': 0.28,  'cacheWriteMul': 1.00, 'cacheReadMul': 0.20,  'name': 'DeepSeek V4 Flash'},
+    # YourProvider gateway Huawei-cloud mirror for DeepSeek V4 Flash — same pricing.
+    'deepseek-v4-flash-huawei':  {'input': 0.14,  'output': 0.28,  'cacheWriteMul': 1.00, 'cacheReadMul': 0.20,  'name': 'DeepSeek V4 Flash (Huawei)'},
     'deepseek-v3.2':             {'input': 0.28,  'output': 0.41,  'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'DeepSeek V3.2'},  # ¥2/¥3 per 1M
     # DeepSeek V3.2 mirrors on YourProvider gateway — tiered ¥2/¥4 input, ¥4/¥6 output at 32K (cheapest tier in USD)
     'deepseek-v3.2-tencent':     {'input': 0.28,  'output': 0.55,  'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'DeepSeek V3.2 (Tencent)'},  # ¥2/¥4 per 1M ≤32K
@@ -104,6 +106,8 @@ MODEL_PRICING = {
     'gemini-2.5-flash-image':        {'input': 0.15, 'output': 0.60, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.25, 'name': 'Gemini 2.5 Flash Image'},
     'gemini-2.0-flash-preview-image-generation': {'input': 0.10, 'output': 0.40, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.25, 'name': 'Gemini 2.0 Flash Image'},
     'gpt-image-1.5':                 {'input': 0.0,  'output': 0.0,  'cacheWriteMul': 0, 'cacheReadMul': 0, 'name': 'GPT Image 1.5'},
+    # GPT Image 2 — token-priced (YourProvider): text in ¥36/M ($4.97), image in ¥57.6/M ($7.96), image out ¥216/M ($29.83).
+    'gpt-image-2':                   {'input': 4.97, 'output': 29.83,'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'GPT Image 2'},
     'gpt-image-1':                   {'input': 0.0,  'output': 0.0,  'cacheWriteMul': 0, 'cacheReadMul': 0, 'name': 'GPT Image 1'},
     'gpt-image-1-mini':              {'input': 0.0,  'output': 0.0,  'cacheWriteMul': 0, 'cacheReadMul': 0, 'name': 'GPT Image 1 Mini'},
     'dall-e-3':                      {'input': 0.0,  'output': 0.0,  'cacheWriteMul': 0, 'cacheReadMul': 0, 'name': 'DALL-E 3'},
@@ -195,6 +199,10 @@ QWEN_PRICING_CNY = {
     'deepseek-v3.2-baidu':   {'input': [(32_000, 2.0), (1_000_000, 4.0)], 'output': [(32_000, 4.0), (1_000_000, 6.0)]},
     'deepseek-v3.2-huawei':  {'input': [(32_000, 2.0), (1_000_000, 4.0)], 'output': [(32_000, 4.0), (1_000_000, 6.0)]},
     'deepseek-v3.2-doubao':  {'input': [(32_000, 2.0), (1_000_000, 4.0)], 'output': [(32_000, 4.0), (1_000_000, 6.0)]},
+    # DeepSeek V4 on YourProvider: flat ¥1/¥2 (flash) and ¥12/¥24 (pro) per 1M tokens.
+    'deepseek-v4-flash':        {'input': [(1_000_000, 1.0)],  'output': [(1_000_000, 2.0)]},
+    'deepseek-v4-flash-huawei': {'input': [(1_000_000, 1.0)],  'output': [(1_000_000, 2.0)]},
+    'deepseek-v4-pro':          {'input': [(1_000_000, 12.0)], 'output': [(1_000_000, 24.0)]},
     'deepseek-r1':      {'input': [(1_000_000, 4.0)],  'output': [(1_000_000, 16.0)]},
     'glm-5v-turbo':     {'input': [(32_000, 5.0), (1_000_000, 7.0)],  'output': [(32_000, 22.0), (1_000_000, 26.0)]},
     '_default':         {'input': [(128_000, 0.8), (256_000, 2.0), (1_000_000, 4.0)], 'output': [(128_000, 4.8), (256_000, 12.0), (1_000_000, 24.0)]},

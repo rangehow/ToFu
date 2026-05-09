@@ -1,0 +1,483 @@
+"""Disk-layer primitives for the file-history store.
+
+Serialises to ``<base_path>/.chatui/file-history/`` with three things on
+disk:
+
+* ``snapshots.jsonl`` — append-only log of :class:`FileHistorySnapshot`.
+* ``tracked.json`` — single-shot persisted set of currently-tracked
+  ``rel_path``s plus their latest version number (so we don't have to
+  re-scan ``backups/`` on every call).
+* ``backups/<sha256(rel)[:2]>/<sha256(rel)>@v<n>`` — copy backup blobs.
+
+All public helpers in this module are guarded by a per-project ``RLock``
+so concurrent task threads on the same project don't tear the
+``snapshots.jsonl`` or the ``tracked.json`` index.  Different projects
+do not contend.
+"""
+from __future__ import annotations
+
+import contextlib
+import functools
+import hashlib
+import json
+import os
+import shutil
+import tempfile
+import threading
+import time
+from typing import Iterable
+
+from lib.log import get_logger
+
+logger = get_logger(__name__)
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  Tunables
+# ═══════════════════════════════════════════════════════════════════
+
+#: Per-file version cap.  When exceeded we drop the oldest backups
+#: except the earliest one (preserves "rewind to start of session").
+MAX_VERSIONS_PER_FILE = 20
+
+#: Hard cap on a single backup's size.  Files larger than this are NOT
+#: backed up — the snapshot records ``{rel: None}`` so a rewind through
+#: that snapshot will leave the file untouched (with a warning).
+MAX_BACKUP_SIZE_BYTES = 16 * 1024 * 1024
+
+#: When the directory containing snapshots/backups grows above this many
+#: bytes, ``compact_store`` may be called to trim oldest snapshots.
+SOFT_DISK_BUDGET_BYTES = 256 * 1024 * 1024
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  Per-project lock (mirrors the per-repo RLock pattern)
+# ═══════════════════════════════════════════════════════════════════
+
+_PROJECT_LOCKS: dict[str, threading.RLock] = {}
+_PROJECT_LOCKS_MUTEX = threading.Lock()
+
+
+def _project_lock(base_path: str) -> threading.RLock:
+    key = os.path.abspath(base_path)
+    with _PROJECT_LOCKS_MUTEX:
+        lk = _PROJECT_LOCKS.get(key)
+        if lk is None:
+            lk = threading.RLock()
+            _PROJECT_LOCKS[key] = lk
+    return lk
+
+
+def with_project_lock(f):
+    """Serialise mutations to the on-disk store for one project."""
+    @functools.wraps(f)
+    def wrapper(base_path, *args, **kwargs):
+        with _project_lock(base_path):
+            return f(base_path, *args, **kwargs)
+    return wrapper
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  Path helpers
+# ═══════════════════════════════════════════════════════════════════
+
+def store_dir(base_path: str) -> str:
+    return os.path.join(os.path.abspath(base_path), '.chatui', 'file-history')
+
+
+def snapshots_path(base_path: str) -> str:
+    return os.path.join(store_dir(base_path), 'snapshots.jsonl')
+
+
+def tracked_path(base_path: str) -> str:
+    return os.path.join(store_dir(base_path), 'tracked.json')
+
+
+def backups_dir(base_path: str) -> str:
+    return os.path.join(store_dir(base_path), 'backups')
+
+
+def _hash_rel_path(rel_path: str) -> str:
+    """Stable filesystem-safe key for a project-relative path."""
+    norm = rel_path.replace('\\', '/').lstrip('/').strip()
+    return hashlib.sha256(norm.encode('utf-8', 'replace')).hexdigest()
+
+
+def backup_blob_path(base_path: str, rel_path: str, version: int) -> str:
+    h = _hash_rel_path(rel_path)
+    return os.path.join(backups_dir(base_path), h[:2], f'{h}@v{int(version)}')
+
+
+def ensure_store(base_path: str) -> str:
+    """Idempotent bootstrap of the on-disk store.  Returns the store dir."""
+    sd = store_dir(base_path)
+    os.makedirs(os.path.join(sd, 'backups'), exist_ok=True)
+    # Touch a marker file so casual ``ls`` sees the dir is intentional.
+    readme = os.path.join(sd, 'README.txt')
+    if not os.path.exists(readme):
+        try:
+            with open(readme, 'w', encoding='utf-8') as f:
+                f.write(
+                    'Tofu file-history store.  Tracks per-file copy backups\n'
+                    'so file edits made by the assistant can be undone or\n'
+                    'redone round-by-round.  Safe to delete — you will lose\n'
+                    'the in-session undo history but your project files are\n'
+                    'unaffected.\n')
+        except OSError as e:
+            logger.debug('[FileHistory] could not create README at %s: %s',
+                         readme, e)
+    return sd
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  Atomic writes (matches modifications.py convention)
+# ═══════════════════════════════════════════════════════════════════
+
+def _atomic_write_bytes(path: str, data: bytes) -> None:
+    dn = os.path.dirname(path)
+    os.makedirs(dn, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=dn, prefix='.fh-', suffix='.tmp')
+    try:
+        with os.fdopen(fd, 'wb') as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
+
+
+def _atomic_write_json(path: str, payload) -> None:
+    raw = json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8')
+    _atomic_write_bytes(path, raw)
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  Tracked-files index
+# ═══════════════════════════════════════════════════════════════════
+
+def load_tracked(base_path: str) -> dict:
+    """Return ``{rel_path: {latest_version, deleted, mtime, size}}``.
+
+    Empty dict when no store yet.  Caller must hold the project lock.
+    """
+    p = tracked_path(base_path)
+    if not os.path.exists(p):
+        return {}
+    try:
+        with open(p, encoding='utf-8') as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            logger.warning('[FileHistory] tracked.json malformed (not a dict) at %s — resetting', p)
+            return {}
+        return data
+    except Exception as e:
+        logger.warning('[FileHistory] tracked.json corrupt at %s (%s) — resetting', p, e)
+        return {}
+
+
+def save_tracked(base_path: str, tracked: dict) -> None:
+    _atomic_write_json(tracked_path(base_path), tracked)
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  Backup helpers
+# ═══════════════════════════════════════════════════════════════════
+
+def _stat_or_none(abs_path: str):
+    try:
+        return os.stat(abs_path)
+    except (FileNotFoundError, IsADirectoryError, PermissionError, OSError) as e:
+        logger.debug('[FileHistory] stat failed for %s: %s', abs_path, e)
+        return None
+
+
+def _file_sha256(abs_path: str, *, max_bytes: int) -> str | None:
+    h = hashlib.sha256()
+    n = 0
+    try:
+        with open(abs_path, 'rb') as f:
+            while True:
+                chunk = f.read(65536)
+                if not chunk:
+                    break
+                n += len(chunk)
+                if n > max_bytes:
+                    return None
+                h.update(chunk)
+        return h.hexdigest()
+    except (FileNotFoundError, IsADirectoryError, PermissionError, OSError) as e:
+        logger.debug('[FileHistory] sha256 read failed for %s: %s', abs_path, e)
+        return None
+
+
+def _copy_backup(abs_src: str, dst: str) -> bool:
+    """Copy ``abs_src`` to ``dst`` atomically (tempfile + rename).
+
+    Returns True on success.  Logs and returns False on failure — never
+    raises (the caller treats backup failures as "skip this version").
+    """
+    try:
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=os.path.dirname(dst),
+                                   prefix='.fh-blob-', suffix='.tmp')
+        os.close(fd)
+        shutil.copyfile(abs_src, tmp)
+        os.replace(tmp, dst)
+        return True
+    except (FileNotFoundError, IsADirectoryError, PermissionError, OSError) as e:
+        logger.debug('[FileHistory] copy backup %s → %s failed: %s', abs_src, dst, e)
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)  # type: ignore[name-defined]
+        return False
+
+
+def stage_backup(base_path: str, rel_path: str,
+                 *, explicit_content: bytes | str | None = None) -> int | None:
+    """Record the contents of ``rel_path`` as the next version.
+
+    By default reads the current on-disk contents.  ``explicit_content``
+    overrides that with caller-provided bytes/str — used when the write
+    tool already has the pre-write content in memory and the on-disk
+    file has already been overwritten.
+
+    Returns the version number written, or ``None`` if no backup was
+    needed (file unchanged since the last backed-up version) or if
+    backup was skipped (file too large, missing, etc.).
+
+    Caller must hold the project lock.
+    """
+    if explicit_content is not None:
+        return _stage_explicit(base_path, rel_path, explicit_content)
+    abs_p = os.path.join(os.path.abspath(base_path), rel_path)
+    st = _stat_or_none(abs_p)
+    tracked = load_tracked(base_path)
+    entry = tracked.get(rel_path) or {}
+    latest = int(entry.get('latest_version') or 0)
+
+    if st is None:
+        # File doesn't exist on disk.  Record a tombstone version if the
+        # file was previously tracked AND the previous state was "exists".
+        if entry.get('deleted'):
+            return None
+        if latest == 0:
+            # Never seen before AND already absent — nothing to record.
+            tracked[rel_path] = {
+                'latest_version': 0,
+                'deleted': True,
+                'mtime': 0,
+                'size': 0,
+                'first_seen': time.time(),
+            }
+            save_tracked(base_path, tracked)
+            return 0
+        new_v = latest + 1
+        tracked[rel_path] = {
+            **entry,
+            'latest_version': new_v,
+            'deleted': True,
+            'mtime': 0,
+            'size': 0,
+        }
+        save_tracked(base_path, tracked)
+        return new_v
+
+    if st.st_size > MAX_BACKUP_SIZE_BYTES:
+        logger.info('[FileHistory] skipping backup of %s (%d bytes > cap %d)',
+                    rel_path, st.st_size, MAX_BACKUP_SIZE_BYTES)
+        # Mark tracked but with no blob — rewind through this version
+        # will leave the file untouched.
+        new_v = latest + 1
+        tracked[rel_path] = {
+            **entry,
+            'latest_version': new_v,
+            'deleted': False,
+            'mtime': st.st_mtime,
+            'size': st.st_size,
+            'too_large': True,
+        }
+        save_tracked(base_path, tracked)
+        return new_v
+
+    # Dedup: if mtime+size+sha unchanged from latest version, skip.
+    if (latest > 0
+            and not entry.get('deleted')
+            and not entry.get('too_large')
+            and entry.get('size') == st.st_size
+            and abs(float(entry.get('mtime') or 0) - st.st_mtime) < 1e-3):
+        return None
+
+    new_v = latest + 1
+    dst = backup_blob_path(base_path, rel_path, new_v)
+    if not _copy_backup(abs_p, dst):
+        return None
+    tracked[rel_path] = {
+        **entry,
+        'latest_version': new_v,
+        'deleted': False,
+        'mtime': st.st_mtime,
+        'size': st.st_size,
+        'first_seen': entry.get('first_seen') or time.time(),
+    }
+    save_tracked(base_path, tracked)
+    _gc_old_versions(base_path, rel_path, new_v)
+    return new_v
+
+
+def _stage_explicit(base_path: str, rel_path: str,
+                    content: bytes | str) -> int | None:
+    """Stage a backup blob from caller-provided content.
+
+    Used by ``track_edit(... pre_content=...)`` so write tools can record
+    the pre-write snapshot AFTER they've overwritten the file (the
+    common case in this codebase — ``_record_modification`` runs after
+    the write).  The version is bumped unconditionally; we don't have a
+    cheap dedup check (no stat to compare against).  ``mtime``/``size``
+    in the tracked index are set to 0 so the next on-disk-driven
+    ``stage_backup`` call will re-snapshot if needed.
+    """
+    if isinstance(content, str):
+        data = content.encode('utf-8', 'replace')
+    elif isinstance(content, (bytes, bytearray)):
+        data = bytes(content)
+    else:
+        logger.debug('[FileHistory] _stage_explicit: unsupported type %s for %s',
+                     type(content).__name__, rel_path)
+        return None
+    if len(data) > MAX_BACKUP_SIZE_BYTES:
+        logger.info('[FileHistory] skipping explicit backup of %s (%d bytes > cap %d)',
+                    rel_path, len(data), MAX_BACKUP_SIZE_BYTES)
+        return None
+    tracked = load_tracked(base_path)
+    entry = tracked.get(rel_path) or {}
+    new_v = int(entry.get('latest_version') or 0) + 1
+    dst = backup_blob_path(base_path, rel_path, new_v)
+    try:
+        _atomic_write_bytes(dst, data)
+    except OSError as e:
+        logger.warning('[FileHistory] _stage_explicit write failed for %s@v%d: %s',
+                       rel_path, new_v, e)
+        return None
+    tracked[rel_path] = {
+        **entry,
+        'latest_version': new_v,
+        'deleted': False,
+        'mtime': 0,
+        'size': len(data),
+        'first_seen': entry.get('first_seen') or time.time(),
+    }
+    save_tracked(base_path, tracked)
+    _gc_old_versions(base_path, rel_path, new_v)
+    return new_v
+
+
+def _gc_old_versions(base_path: str, rel_path: str, latest: int) -> None:
+    """Delete oldest backup blobs beyond ``MAX_VERSIONS_PER_FILE``.
+
+    Always preserves version 1 if present (so rewind to round 1 stays
+    possible), and any reference held by an existing snapshot.
+    """
+    keep_above = latest - (MAX_VERSIONS_PER_FILE - 1)
+    if keep_above <= 1:
+        return
+    # Find versions actually present on disk for this path.
+    h = _hash_rel_path(rel_path)
+    bucket = os.path.join(backups_dir(base_path), h[:2])
+    if not os.path.isdir(bucket):
+        return
+    referenced = _versions_referenced_by_snapshots(base_path, rel_path)
+    for name in os.listdir(bucket):
+        if not name.startswith(h + '@v'):
+            continue
+        try:
+            v = int(name.rsplit('@v', 1)[-1])
+        except ValueError:
+            continue
+        if v == 1:
+            continue
+        if v >= keep_above:
+            continue
+        if v in referenced:
+            continue
+        with contextlib.suppress(OSError):
+            os.unlink(os.path.join(bucket, name))
+
+
+def _versions_referenced_by_snapshots(base_path: str, rel_path: str) -> set[int]:
+    """Set of ``rel_path``'s versions still pinned by some snapshot.
+
+    Best-effort — on read errors returns an empty set (which is the safe
+    side: GC will preserve fewer files, never delete still-pinned ones,
+    because the keep-above threshold also applies).
+    """
+    refs: set[int] = set()
+    try:
+        for snap in iter_snapshots(base_path):
+            files = snap.get('files') or {}
+            v = files.get(rel_path)
+            if isinstance(v, int):
+                refs.add(v)
+    except Exception as e:
+        logger.debug('[FileHistory] snapshot scan for refs failed: %s', e)
+    return refs
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  Snapshots log (append-only JSONL)
+# ═══════════════════════════════════════════════════════════════════
+
+def append_snapshot_record(base_path: str, record: dict) -> None:
+    p = snapshots_path(base_path)
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    line = (json.dumps(record, ensure_ascii=False) + '\n').encode('utf-8')
+    # Append atomically: open in append mode + fsync.
+    with open(p, 'ab') as f:
+        f.write(line)
+        f.flush()
+        os.fsync(f.fileno())
+
+
+def iter_snapshots(base_path: str) -> Iterable[dict]:
+    """Yield every snapshot record in chronological order (oldest first).
+
+    Skips malformed lines with a debug log.  Never raises.
+    """
+    p = snapshots_path(base_path)
+    if not os.path.exists(p):
+        return
+    try:
+        with open(p, encoding='utf-8') as f:
+            for raw in f:
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    yield json.loads(raw)
+                except json.JSONDecodeError as e:
+                    logger.debug('[FileHistory] malformed snapshot line skipped: %s', e)
+    except OSError as e:
+        logger.warning('[FileHistory] could not read %s: %s', p, e)
+
+
+def find_snapshot(base_path: str, snapshot_id: str) -> dict | None:
+    if not snapshot_id:
+        return None
+    for s in iter_snapshots(base_path):
+        if s.get('id') == snapshot_id:
+            return s
+    return None
+
+
+def read_blob(base_path: str, rel_path: str, version: int) -> bytes | None:
+    p = backup_blob_path(base_path, rel_path, version)
+    try:
+        with open(p, 'rb') as f:
+            return f.read()
+    except FileNotFoundError:
+        return None
+    except OSError as e:
+        logger.warning('[FileHistory] read blob v%d for %s failed: %s',
+                       version, rel_path, e)
+        return None

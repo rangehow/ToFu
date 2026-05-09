@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "ChatUI Browser Bridge",
-  "version": "4.1.0",
-  "description": "Bridge between ChatUI server and your browser — lets the AI read tabs, extract content, execute JS, manage cookies, capture screenshots, and more.",
+  "name": "Tofu Browser Bridge",
+  "version": "4.2.0",
+  "description": "Bridge between Tofu server and your browser — lets the AI read tabs, extract content, execute JS, manage cookies, capture full-page screenshots, and more.",
 
   "permissions": [
     "tabs",
@@ -34,7 +34,7 @@
 
   "action": {
     "default_popup": "popup.html",
-    "default_title": "ChatUI Browser Bridge"
+    "default_title": "Tofu Browser Bridge"
   },
 
   "content_security_policy": {

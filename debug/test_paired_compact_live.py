@@ -44,14 +44,16 @@ logger = get_logger(__name__)
 
 # ─── Config ───────────────────────────────────────────────────────────
 
-# Sankuai gateway — OpenAI-compatible endpoint.
-SANKUAI_URL = 'https://api.openai.com/v1/chat/completions'
-SANKUAI_KEY_0 = 'YOUR_API_KEY_HERE'   # App:**8427 — per-minute limit
-SANKUAI_KEY_1 = 'YOUR_API_KEY_HERE'   # App:**4861 — daily quota; reset at midnight Beijing
+# OpenAI-compatible endpoint — set TOFU_PROBE_BASE_URL / TOFU_PROBE_API_KEY.
+SANKUAI_URL = os.environ.get(
+    'TOFU_PROBE_BASE_URL', 'https://api.openai.com/v1',
+).rstrip('/') + '/chat/completions'
+SANKUAI_KEY_0 = os.environ.get('TOFU_PROBE_API_KEY', '')
+SANKUAI_KEY_1 = os.environ.get('TOFU_PROBE_API_KEY_2', SANKUAI_KEY_0)
 SANKUAI_HEADERS = {
     'Authorization': f'Bearer {SANKUAI_KEY_0}',
     'Content-Type': 'application/json',
-    'M-TransferContext-INF-CELL': 'gray-release-ai-gpt-test',
+    **json.loads(os.environ.get('TOFU_PROBE_EXTRA_HEADERS', '{}')),
 }
 
 DEFAULT_MODEL = 'aws.claude-opus-4.7'    # Opus 4.7 (30 rpm) currently has headroom

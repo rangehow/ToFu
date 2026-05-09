@@ -30,16 +30,43 @@ function stripNoTranslateTags(text) {
  */
 async function _patchMessageOnServer(convId, msgIdx, patch, opts = {}) {
   if (!convId || msgIdx == null || !patch || Object.keys(patch).length === 0) return null;
+  // Prefer stable id addressing when the message has _msgId. The conv is
+  // expected on the global `conversations` array; if a caller has only the
+  // index, the legacy index endpoint is still served. opts.msgId overrides
+  // the lookup (useful when the caller has the id but no live `messages`).
+  let msgId = opts.msgId || null;
+  if (!msgId && typeof conversations !== 'undefined') {
+    try {
+      const c = conversations.find(x => x.id === convId);
+      const m = c && c.messages && c.messages[msgIdx];
+      if (m && m._msgId) msgId = m._msgId;
+    } catch (_e) { /* ignore */ }
+  }
+  const url = msgId
+    ? apiUrl(`/api/conversations/${convId}/messages/by-id/${encodeURIComponent(msgId)}`)
+    : apiUrl(`/api/conversations/${convId}/messages/${msgIdx}`);
   try {
-    const res = await fetch(apiUrl(`/api/conversations/${convId}/messages/${msgIdx}`), {
+    const res = await fetch(url, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(patch),
     });
     if (!res.ok) {
+      // 404 on by-id path means the message was rebuilt without an id;
+      // retry once via the legacy index path before surfacing the error.
+      if (res.status === 404 && msgId && msgIdx != null) {
+        try {
+          const fallback = await fetch(
+            apiUrl(`/api/conversations/${convId}/messages/${msgIdx}`),
+            { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) }
+          );
+          if (fallback.ok) return await fallback.json();
+        } catch (_fe) { /* fall through to error path */ }
+      }
       let body = null;
       try { body = await res.json(); } catch (_e) { /* ignore */ }
-      console.warn('[patchMsg] conv=%s idx=%d status=%d body=%o', convId, msgIdx, res.status, body);
+      console.warn('[patchMsg] conv=%s idx=%d msgId=%s status=%d body=%o',
+        convId, msgIdx, (msgId || '').slice(0, 8) || '-', res.status, body);
       if (typeof opts.onError === 'function') opts.onError(body, res.status);
       return null;
     }
@@ -399,8 +426,13 @@ function _renderSearchResults(results, query, listEl, statsEl, isPartial) {
       let snip = "";
       if (matchSnippet) {
         const ico = "";
-        const rl = matchRole === "user" ? "You" : "Claude";
-        snip = `<div class="conv-item-snippet">${ico} ${rl}: ${highlightMatch(matchSnippet, query)}</div>`;
+        /* ID match: no role prefix ("You:"/"Claude:") — snippet is the ID itself. */
+        if (matchField === "id") {
+          snip = `<div class="conv-item-snippet">${highlightMatch(matchSnippet, query)}</div>`;
+        } else {
+          const rl = matchRole === "user" ? "You" : "Claude";
+          snip = `<div class="conv-item-snippet">${ico} ${rl}: ${highlightMatch(matchSnippet, query)}</div>`;
+        }
       }
       return _buildConvItemHTML(c, tHtml, snip);
     },
@@ -484,9 +516,31 @@ let _searchSeq = 0;        // monotonic counter to discard stale results
 function searchByTitle(query) {
   if (!query) return [];
   const results = [];
+  const seen = new Set();
+  /* ── Conv ID match (exact or prefix) ──
+   * Conv IDs are lowercase alphanumeric (14 chars) like "mosnzwji2h8kwo".
+   * If the user pastes an ID (full or partial ≥4 chars, no spaces), surface
+   * that conversation first — lets you jump to a known ID without scrolling.
+   * Gate by /^[a-z0-9]+$/ + length ≥ 4 so ordinary search words don't
+   * accidentally trigger an ID scan that overlaps with title text. */
+  if (/^[a-z0-9]{4,}$/.test(query)) {
+    for (const c of conversations) {
+      if (c.id && c.id.toLowerCase().includes(query)) {
+        results.push({
+          conv: c,
+          matchField: "id",
+          matchSnippet: `ID: ${c.id}`,
+          matchRole: null,
+        });
+        seen.add(c.id);
+      }
+    }
+  }
   for (const c of conversations) {
+    if (seen.has(c.id)) continue;
     if ((c.title || "").toLowerCase().includes(query)) {
       results.push({ conv: c, matchField: "title", matchSnippet: null });
+      seen.add(c.id);
     }
   }
   return results;
@@ -1150,6 +1204,13 @@ function renderMessage(msg, idx) {
     const taskName = msg._proactiveTaskId ? `Task ${(msg._proactiveTaskId || "").slice(0, 8)}` : "Proactive Agent";
     body += `<div class="proactive-banner"><span class="pb-text"><span class="pb-name">${escapeHtml(taskName)}</span> — scheduled execution</span></div>`;
   }
+  // ── MCP login-hint + Memory Prefetch indicator (finished message) ──
+  if (!isUser && msg._mcpLoginHint) {
+    body += renderMcpLoginHintHtml(msg._mcpLoginHint);
+  }
+  if (!isUser && msg._memoryPrefetch) {
+    body += renderMemoryPrefetchHtml(msg._memoryPrefetch);
+  }
   const rounds = getToolRoundsFromMsg(msg);
   if (rounds.length > 0) body += renderToolRoundsHTML(rounds, false);
   if (msg.thinking) {
@@ -1306,7 +1367,7 @@ function renderMessage(msg, idx) {
                         && msg.translatedContent
                         && msg._showingTranslation !== false;
       if (showTrans) {
-        mdHtml = renderMarkdown(msg.translatedContent);
+        mdHtml = renderMarkdown(stripNoTranslateTags(msg.translatedContent));
       } else if (_isCritic) {
         // Critic messages are user-role but contain rich markdown
         mdHtml = renderMarkdown(msg.content);
@@ -1325,11 +1386,57 @@ function renderMessage(msg, idx) {
     } catch (e) {
   // ── emit_to_user: render emitted tool content inline below the comment ──
   if (!isUser && msg._emitContent) {
-    const toolLabel = msg._emitToolName ? escapeHtml(msg._emitToolName) : 'Tool result';
+    const toolLabel = msg._emitToolName ? escapeHtml(msg._emitToolName) : 'tool';
+    // ★ Pretty-print JSON payloads so the inline block reads nicely
+    //   instead of being one raw line of "{...}". Fall back silently to
+    //   the original string for non-JSON output.
+    let displayText = msg._emitContent;
+    const trimmed = (displayText || '').trim();
+    if (trimmed && (trimmed[0] === '{' || trimmed[0] === '[')) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        displayText = JSON.stringify(parsed, null, 2);
+      } catch (_e) { /* not JSON — keep raw */ }
+    }
     body += `<div class="emit-content-block">
-      <div class="emit-content-header">📤 ${toolLabel}</div>
-      <pre class="emit-content-output"><code>${escapeHtml(msg._emitContent)}</code></pre>
+      <div class="emit-content-label">${toolLabel}</div>
+      <pre class="emit-content-output"><code>${escapeHtml(displayText)}</code></pre>
     </div>`;
+  }
+  // ── Compaction markers — render inline chips for each archived snapshot ──
+  // Each marker becomes a clickable chip that opens the Compaction Viewer
+  // (window.openCompactionViewer in static/js/compaction-viewer.js). We
+  // intentionally render in render-time order; clicking is delegated through
+  // a global handler so the chips survive innerHTML replacement.
+  if (!isUser && Array.isArray(msg._compactions) && msg._compactions.length) {
+    const _ccDom = msg._compactions.map((c) => {
+      const trig = (c.trigger || 'force');
+      const trigLabel = trig === 'reactive'
+        ? '⚡ 紧急压缩'
+        : (trig === 'manual' ? '🔧 手动压缩' : '🗜️ 自动压缩');
+      const before = c.tokensBefore || 0;
+      const after  = c.tokensAfter  || 0;
+      const reductionPct = (c.reductionPct != null) ? c.reductionPct
+                          : (before > 0 ? Math.round((1 - after / before) * 100) : 0);
+      const sizeFrag = before > 0 && after > 0
+        ? `${(before/1000).toFixed(0)}k → ${(after/1000).toFixed(0)}k tokens · −${reductionPct}%`
+        : (before > 0 ? `${(before/1000).toFixed(0)}k tokens 已归档` : '已归档');
+      const reasonFrag = c.reason ? `<span class="compaction-marker-reason">${escapeHtml(c.reason)}</span>` : '';
+      const statusCls = (c.status === 'done') ? 'is-done' : 'is-progress';
+      const archiveAttr = (c.archiveId == null) ? '' : `data-archive-id="${c.archiveId}"`;
+      const convAttr = `data-conv-id="${escapeHtml(c.convId || '')}"`;
+      return `<button type="button" class="compaction-marker ${statusCls}"
+        ${archiveAttr} ${convAttr}
+        onclick="if(window.openCompactionViewer){window.openCompactionViewer(this.dataset.convId, parseInt(this.dataset.archiveId,10))}else{console.warn('compaction-viewer not loaded')}"
+        title="点击查看压缩前的完整上下文">
+        <span class="compaction-marker-icon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8v13H3V8"/><path d="M1 3h22v5H1z"/><path d="M10 12h4"/></svg></span>
+        <span class="compaction-marker-trigger">${trigLabel}</span>
+        <span class="compaction-marker-stat">${escapeHtml(sizeFrag)}</span>
+        ${reasonFrag}
+        <span class="compaction-marker-cta">查看历史</span>
+      </button>`;
+    }).join('');
+    body += `<div class="compaction-marker-row">${_ccDom}</div>`;
   }
       body += `<div class="md-content${isUser ? " user-content" : ""}">${escapeHtml(msg.content)}</div>`;
     }
@@ -1337,16 +1444,21 @@ function renderMessage(msg, idx) {
   // ── Bilingual display ──
   if (isUser && msg.originalContent && msg.originalContent !== msg.content) {
     const _tmUser = msg._translateModel ? `<span class="bilingual-model" title="${escapeHtml(msg._translateModel)}">${escapeHtml(msg._translateModel)}</span>` : '';
-    body += `<div class="bilingual-block bilingual-translated"><div class="bilingual-header" onclick="if(event.target.closest('.bilingual-copy-btn'))return;this.parentElement.classList.toggle('expanded')"><span class="bilingual-label"><span class="bilingual-type">原文</span><span class="bilingual-sep">/</span><span class="bilingual-type active">译文</span>${_tmUser}</span><button class="bilingual-copy-btn" onclick="event.stopPropagation();copyBilingualOriginal(this,'user',${idx})" title="Copy translation"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button><span class="bilingual-toggle">▼</span></div><div class="bilingual-body"><div class="md-content user-content">${escapeHtml(msg.content)}</div></div></div>`;
+    // Strip any leaked <notranslate>/<nt> tags from the translation display.
+    const _userTrans = stripNoTranslateTags(msg.content || '');
+    body += `<div class="bilingual-block bilingual-translated"><div class="bilingual-header" onclick="if(event.target.closest('.bilingual-copy-btn'))return;this.parentElement.classList.toggle('expanded')"><span class="bilingual-label"><span class="bilingual-type">原文</span><span class="bilingual-sep">/</span><span class="bilingual-type active">译文</span>${_tmUser}</span><button class="bilingual-copy-btn" onclick="event.stopPropagation();copyBilingualOriginal(this,'user',${idx})" title="Copy translation"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button><span class="bilingual-toggle">▼</span></div><div class="bilingual-body"><div class="md-content user-content">${escapeHtml(_userTrans)}</div></div></div>`;
   }
   if (!isUser && msg.translatedContent && msg._showingTranslation !== false) {
     const _tmAsst = msg._translateModel ? `<span class="bilingual-model" title="${escapeHtml(msg._translateModel)}">${escapeHtml(msg._translateModel)}</span>` : '';
-    body += `<div class="bilingual-block bilingual-original"><div class="bilingual-header" onclick="if(event.target.closest('.bilingual-copy-btn'))return;this.parentElement.classList.toggle('expanded')"><span class="bilingual-label"><span class="bilingual-type active">原文</span><span class="bilingual-sep">/</span><span class="bilingual-type">译文</span>${_tmAsst}</span><button class="bilingual-copy-btn" onclick="event.stopPropagation();copyBilingualOriginal(this,'assistant',${idx})" title="Copy original text"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button><span class="bilingual-toggle">▼</span></div><div class="bilingual-body"><div class="md-content">${renderMarkdown(msg.content)}</div></div></div>`;
+    // Defense in depth — strip any leaked <notranslate>/<nt> tags.
+    const _asstOrig = stripNoTranslateTags(msg.content || '');
+    body += `<div class="bilingual-block bilingual-original"><div class="bilingual-header" onclick="if(event.target.closest('.bilingual-copy-btn'))return;this.parentElement.classList.toggle('expanded')"><span class="bilingual-label"><span class="bilingual-type active">原文</span><span class="bilingual-sep">/</span><span class="bilingual-type">译文</span>${_tmAsst}</span><button class="bilingual-copy-btn" onclick="event.stopPropagation();copyBilingualOriginal(this,'assistant',${idx})" title="Copy original text"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button><span class="bilingual-toggle">▼</span></div><div class="bilingual-body"><div class="md-content">${renderMarkdown(_asstOrig)}</div></div></div>`;
   }
   // ── Critic (endpoint review) bilingual block — symmetric with assistant ──
   if (isUser && msg._isEndpointReview && msg.translatedContent && msg._showingTranslation !== false) {
     const _tmCritic = msg._translateModel ? `<span class="bilingual-model" title="${escapeHtml(msg._translateModel)}">${escapeHtml(msg._translateModel)}</span>` : '';
-    body += `<div class="bilingual-block bilingual-original"><div class="bilingual-header" onclick="if(event.target.closest('.bilingual-copy-btn'))return;this.parentElement.classList.toggle('expanded')"><span class="bilingual-label"><span class="bilingual-type active">原文</span><span class="bilingual-sep">/</span><span class="bilingual-type">译文</span>${_tmCritic}</span><button class="bilingual-copy-btn" onclick="event.stopPropagation();copyBilingualOriginal(this,'critic',${idx})" title="Copy original text"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button><span class="bilingual-toggle">▼</span></div><div class="bilingual-body"><div class="md-content">${renderMarkdown(msg.content)}</div></div></div>`;
+    const _critOrig = stripNoTranslateTags(msg.content || '');
+    body += `<div class="bilingual-block bilingual-original"><div class="bilingual-header" onclick="if(event.target.closest('.bilingual-copy-btn'))return;this.parentElement.classList.toggle('expanded')"><span class="bilingual-label"><span class="bilingual-type active">原文</span><span class="bilingual-sep">/</span><span class="bilingual-type">译文</span>${_tmCritic}</span><button class="bilingual-copy-btn" onclick="event.stopPropagation();copyBilingualOriginal(this,'critic',${idx})" title="Copy original text"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button><span class="bilingual-toggle">▼</span></div><div class="bilingual-body"><div class="md-content">${renderMarkdown(_critOrig)}</div></div></div>`;
   }
   // ── Persistent "translating..." indicator (survives re-render / tab switch) ──
   // Fires for both assistant messages AND endpoint-critic (role=user,
@@ -1358,7 +1470,24 @@ function renderMessage(msg, idx) {
     if (errText) {
       body += `<div class="translate-loading" id="translate-loading-${idx}" style="color:#f59e0b;cursor:pointer" onclick="translateMessage(${idx})">${t('translate.failed')}</div>`;
     } else {
-      body += `<div class="translate-loading" id="translate-loading-${idx}"><span class="translate-spinner"></span> ${t('translate.translatingToCN')}</div>`;
+      // ── Show a retry-status sub-line when the backend is retrying
+      //    (e.g. 429 / rate-limit / empty-output). Without this the user
+      //    sees only "Translating…" and has no idea there's a problem. ──
+      let statusSub = '';
+      if (msg._translateStatus) {
+        const kind = msg._translateStatusKind || '';
+        // Prefer a localized label keyed by kind, fall back to the raw server message.
+        const i18nKey = kind ? `translate.retry.${kind}` : '';
+        const localized = i18nKey && typeof t === 'function' ? t(i18nKey) : '';
+        const display = (localized && localized !== i18nKey) ? localized : msg._translateStatus;
+        statusSub = `<div class="translate-status-sub" style="font-size:11px;color:#f59e0b;margin-top:2px" title="${escapeHtml(msg._translateStatus)}">⚠ ${escapeHtml(display)}</div>`;
+      }
+      // ── Streaming preview: render partial translation text as it arrives. ──
+      let previewSub = '';
+      if (msg._translatePartial) {
+        previewSub = `<div class="translate-preview-sub" style="font-size:12px;color:var(--text-secondary,#888);margin-top:4px;white-space:pre-wrap;opacity:0.7;max-height:200px;overflow:hidden">${escapeHtml(msg._translatePartial)}</div>`;
+      }
+      body += `<div class="translate-loading" id="translate-loading-${idx}"><span class="translate-spinner"></span> ${t('translate.translatingToCN')}${statusSub}${previewSub}</div>`;
     }
   }
   if (msg.error)
@@ -1649,6 +1778,7 @@ function renderFinishInfo(msg) {
   if (!msg.finishReason && !msg.usage && !msg.model && !msg.preset && !msg.effort) return "";
   const parts = [];
   const _mid = msg.model || msg.preset || msg.effort || "";
+  const _pid = msg.provider_id || msg.providerId || "";
   const u = msg.usage || {};
   const fmt = (n) => (n >= 1000000 ? (n / 1000000).toFixed(1) + "m" : n >= 1000 ? (n / 1000).toFixed(1) + "k" : n.toString());
   const thk = u.reasoning_tokens || u.thinking_tokens || 0;
@@ -1742,7 +1872,7 @@ function renderFinishInfo(msg) {
     const cw = u.cache_write_tokens || u.cache_creation_input_tokens || 0;
     const cr = u.cache_read_tokens || u.cache_read_input_tokens || 0;
     // ★ Enhanced cost display with per-round breakdown
-    const costInfo = calcCostCny(u, _mid);
+    const costInfo = calcCostCny(u, _mid, _pid);
     if (costInfo && costInfo.costCny > 0) {
       const fCny = (v) =>
         v >= 0.01 ? "¥" + v.toFixed(3) : v > 0 ? "¥" + v.toFixed(4) : "¥0";
@@ -1758,7 +1888,7 @@ function renderFinishInfo(msg) {
           const rcw =
             ru.cache_write_tokens || ru.cache_creation_input_tokens || 0;
           const rcr = ru.cache_read_tokens || ru.cache_read_input_tokens || 0;
-          const rdCost = calcCostCny(ru, _mid);
+          const rdCost = calcCostCny(ru, _mid, rd.provider_id || rd.providerId || _pid);
           const rdCnyStr = rdCost ? fCny(rdCost.costCny) : "¥0";
           let rdLabel = `第${i + 1}轮`;
           if (rd.tag && rd.tag.includes("FALLBACK"))
@@ -2321,7 +2451,18 @@ function _renderHumanGuidanceCard(round, svg) {
   const gid = escapeHtml(round.guidanceId || '');
   const rawQuestion = round.guidanceQuestion || 'The AI needs your input';
   const respType = round.guidanceType || 'free_text';
-  const options = round.guidanceOptions || [];
+  /* ★ Defensive: guidanceOptions MUST be an array for options.map(…) below.
+   *   The LLM sometimes returns null, undefined, a JSON string, or an object
+   *   instead of a proper array — and older persisted conversations may
+   *   contain such legacy shapes.  Without this normalization, the caller
+   *   hits `TypeError: options.map is not a function` which crashes the
+   *   whole toolRounds sync pass.  See routes/common client-error logs. */
+  let options = round.guidanceOptions;
+  if (typeof options === 'string') {
+    try { options = JSON.parse(options); }
+    catch (e) { options = []; }
+  }
+  if (!Array.isArray(options)) options = [];
 
   // ★ Use translated question if available (populated by _autoTranslateHumanGuidance)
   const displayQuestion = round._translatedQuestion || rawQuestion;
@@ -2387,7 +2528,11 @@ function _renderHumanGuidanceCard(round, svg) {
 function _renderUnifiedToolLine(round, isSearching) {
   const svg = _getToolSvg(round);
   const td = _getToolDisplay(round);
-  const q = escapeHtml(round.query || "");
+  /* Preserve real newlines in the tool-call title — batch search/fetch
+   * displays render one item per line so users can see every candidate
+   * without elision. escapeHtml first (HTML-safe), THEN substitute
+   * \n → <br> so the browser actually breaks the line. */
+  const q = escapeHtml(round.query || "").replace(/\n/g, '<br>');
   const results = round.results || [];
   const meta = results[0] || {};
 
@@ -2564,9 +2709,22 @@ function _renderUnifiedToolLine(round, isSearching) {
   }
 
   if (isSearching) {
-    // ★ run_command / code_exec: show running state with full command
+    // ★ run_command / code_exec: show running state with full command.
+    //   If streaming output has started arriving via tool_progress events,
+    //   render it live inside the block so the user can follow along.
     if (round.toolName === "run_command" || round.toolName === "code_exec") {
       const cmdText = escapeHtml(round.query || "");
+      const partial = typeof round._partialOutput === "string" ? round._partialOutput : "";
+      let liveOutHtml = "";
+      if (partial) {
+        // Cap the live-view length so the DOM stays snappy on very chatty
+        // commands; the authoritative full output lands in meta.output on done.
+        const MAX_LIVE = 20000;
+        const shown = partial.length > MAX_LIVE
+          ? ("… [" + (partial.length - MAX_LIVE).toLocaleString() + " earlier chars elided] …\n" + partial.slice(-MAX_LIVE))
+          : partial;
+        liveOutHtml = `<pre class="ptool-cmd-output ptool-cmd-output-live"><code>${escapeHtml(shown)}</code></pre>`;
+      }
       return `<div class="ptool-cmd-block ptool-cmd-running">
            <div class="ptool-cmd-header">
              <span class="ptool-cmd-icon">${svg}</span>
@@ -2574,6 +2732,7 @@ function _renderUnifiedToolLine(round, isSearching) {
              <span class="ptool-spinner"></span>
            </div>
            <pre class="ptool-cmd-code"><code>$ ${cmdText}</code></pre>
+           ${liveOutHtml}
          </div>`;
     }
     // ★ Web search: show orbit animation
@@ -2986,6 +3145,159 @@ function _tcPreviewBtn(round) {
   return `<button class="tc-preview-btn" data-tc-preview data-tc-rn="${round.roundNum}" data-tc-tcid="${escapeHtml(round.toolCallId || '')}" title="Preview tool content">Preview</button>`;
 }
 
+// ── Memory Prefetch indicator (chip above tool panel) ──
+// Rendered in the streaming bubble AND in the finished assistant message.
+// Shows that a cheap model is (or was) filtering memories in the background.
+/**
+ * Render the MCP login-hint chip.
+ *   phase = awaiting_approval | approved | denied | timeout | done
+ * The banner appears as soon as the SSE tool_start for an MCP login-style
+ * tool arrives, so the user knows to check their phone for the push
+ * notification BEFORE the subprocess times out (up to 5 min wait).
+ */
+function renderMcpLoginHintHtml(lh) {
+  if (!lh) return '';
+  const phase = lh.phase || 'awaiting_approval';
+  const user = lh.username || '';
+  let icon = '📱';
+  let state = 'running';
+  let headline = '';
+  let sub = '';          // short subtitle (non-technical)
+  let snippetBlock = ''; // optional <pre> with the raw CLI response
+  /* Helper: format the stashed snippet for in-chip display.
+   * Prefer a tidy pretty-printed JSON block when the snippet parses
+   * as JSON, else show the raw text verbatim. Always shown in full —
+   * no slicing or ellipsis — because the user explicitly asked for
+   * "incomplete displays are not allowed". */
+  const _formatSnippet = (raw) => {
+    if (!raw) return '';
+    let text = String(raw).trim();
+    try {
+      const trimmed = text.replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, '');
+      const parsed = JSON.parse(trimmed);
+      text = JSON.stringify(parsed, null, 2);
+    } catch (_e) { /* leave raw */ }
+    return `<pre class="mp-snippet">${escapeHtml(text)}</pre>`;
+  };
+  if (phase === 'awaiting_approval') {
+    headline = user
+      ? `Waiting for mobile approval · ${user}`
+      : 'Waiting for mobile approval';
+    sub = 'Tap Approve on your mobile office app — push may take a few seconds to arrive';
+  } else if (phase === 'approved') {
+    state = 'done';
+    icon = '✓';
+    headline = user ? `Login approved · ${user}` : 'Login approved';
+    sub = 'Session is live';
+  } else if (phase === 'denied') {
+    state = 'failed';
+    icon = '✕';
+    headline = 'Login denied';
+    sub = 'Approval was rejected or cancelled on the phone';
+    snippetBlock = _formatSnippet(lh.snippet);
+  } else if (phase === 'timeout') {
+    state = 'failed';
+    icon = '⏰';
+    headline = 'Login timed out';
+    sub = 'No approval received in time — try again';
+    snippetBlock = _formatSnippet(lh.snippet);
+  } else {
+    state = 'done';
+    headline = 'Login finished';
+    snippetBlock = _formatSnippet(lh.snippet);
+  }
+  return `<div class="mem-prefetch-chip mp-${state} mp-login-hint">` +
+    `<span class="mp-icon">${icon}</span>` +
+    `<span class="mp-text"><span class="mp-headline">${escapeHtml(headline)}</span>` +
+    (sub ? `<span class="mp-sub">${escapeHtml(sub)}</span>` : '') +
+    snippetBlock +
+    `</span>` +
+    (state === 'running'
+      ? `<span class="mp-dots"><span>.</span><span>.</span><span>.</span></span>`
+      : '') +
+    `</div>`;
+}
+
+function renderMemoryPrefetchHtml(mp) {
+  if (!mp) return "";
+  const phase = mp.phase || "started";
+  const selected = mp.selected || 0;
+  const candidates = mp.candidates || 0;
+  const bm25Ms = mp.bm25Ms || 0;
+  const rerankMs = mp.rerankMs || 0;
+  const totalMs = mp.totalMs || 0;
+  const fellBack = !!mp.fellBack;
+
+  // ── Build a short headline ──
+  let icon = "🧠";
+  let state = "running";
+  let headline = "";
+  let sub = "";
+  if (phase === "started") {
+    headline = "Surfacing relevant memories…";
+    sub = (mp.totalMemories ? `${mp.totalMemories} total` : "") + " · BM25";
+  } else if (phase === "bm25_done") {
+    headline = `Filtering ${candidates} candidates with cheap model…`;
+    sub = `BM25 ${bm25Ms}ms`;
+  } else if (phase === "rerank_started") {
+    headline = `Filtering ${candidates} candidates with cheap model…`;
+    sub = `BM25 ${bm25Ms}ms`;
+  } else if (phase === "done") {
+    state = "done";
+    if (selected === 0) {
+      headline = "No prior memory relevant to this turn";
+      sub = `${candidates||0} candidates · BM25 ${bm25Ms}ms · filter ${rerankMs}ms`;
+    } else {
+      headline = `Prefetched ${selected} memor${selected === 1 ? "y" : "ies"}`;
+      const parts = [];
+      if (candidates) parts.push(`${candidates} candidates`);
+      parts.push(`BM25 ${bm25Ms}ms`);
+      if (rerankMs) parts.push(`filter ${rerankMs}ms`);
+      if (totalMs) parts.push(`total ${totalMs}ms`);
+      if (fellBack) parts.push("⚠ fallback to BM25 top-3");
+      sub = parts.join(" · ");
+    }
+  } else if (phase === "skipped") {
+    state = "skipped";
+    headline = "Memory prefetch skipped";
+    sub = mp.reason || "";
+  } else if (phase === "failed") {
+    state = "failed";
+    icon = "⚠️";
+    headline = "Memory prefetch failed";
+    sub = mp.reason || "";
+  } else {
+    headline = "Memory prefetch…";
+    sub = phase;
+  }
+
+  // ── Optional detail panel listing picked memories ──
+  let details = "";
+  if (phase === "done" && selected > 0 && Array.isArray(mp.memories) && mp.memories.length > 0) {
+    const items = mp.memories.map(m => {
+      const nm = escapeHtml(m.name || "?");
+      const sc = escapeHtml(m.scope || "");
+      const ds = escapeHtml(m.description || "");
+      return `<li><span class="mp-mem-name">${nm}</span>` +
+             (sc ? ` <span class="mp-mem-scope">${sc}</span>` : "") +
+             (ds ? `<div class="mp-mem-desc">${ds}</div>` : "") +
+             `</li>`;
+    }).join("");
+    details = `<ul class="mp-mem-list">${items}</ul>`;
+  }
+
+  const expandable = !!details;
+  return `<div class="mem-prefetch-chip mp-${state}${expandable ? ' mp-expandable' : ''}"${expandable ? ' onclick="this.classList.toggle(\'mp-expanded\')"' : ''}>` +
+    `<span class="mp-icon">${icon}</span>` +
+    `<span class="mp-text"><span class="mp-headline">${escapeHtml(headline)}</span>` +
+    (sub ? `<span class="mp-sub">${escapeHtml(sub)}</span>` : "") +
+    `</span>` +
+    (state === "running" ? `<span class="mp-dots"><span>.</span><span>.</span><span>.</span></span>` : "") +
+    (expandable ? `<span class="mp-chevron">▾</span>` : "") +
+    (details ? `<div class="mp-details">${details}</div>` : "") +
+    `</div>`;
+}
+
 function renderToolRoundsHTML(rounds, isStreaming) {
   if (!rounds || rounds.length === 0) return "";
   // ★ UNIFIED: All tool rounds go into one panel (except swarm, which has its own dashboard)
@@ -3300,137 +3612,27 @@ async function translateMessage(idx) {
     }
     return;
   }
-  // First time: call translate API via async task (survives page reload)
-  // Clear any previous error state
+  // First time: kick off the unified translation pipeline.
+  // Clear any previous error state so the message-body indicator shows
+  // "翻译中…" instead of the stale failed state.
   delete msg._translateError;
   delete msg._translateTaskId;
   msg._translateDone = false;
   const text = msg.content || "";
   if (!text.trim()) return;
-  const btn = document.querySelector(`#msg-${idx} .msg-translate-btn`);
-  if (!btn) return;
   // Detect target language: if mostly Chinese → English, otherwise → Chinese
   const chineseChars = (text.match(/[\u4e00-\u9fff]/g) || []).length;
   const targetLang = chineseChars / text.length > 0.3 ? "English" : "Chinese";
-  // Save original content
   msg._originalContent = text;
-  // Show loading state
-  const origHTML = btn.innerHTML;
-  btn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="spin-icon"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg> Translating...`;
-  btn.disabled = true;
-
-  try {
-    // Start async task — server will auto-commit result to DB even if we navigate away
-    const taskId = await _startTranslateTask(
-      text, targetLang, "",
-      conv.id, idx, "translatedContent"
-    );
-    if (!taskId) throw new Error("Failed to start translation task");
-
-    // Save taskId on message so _resumePendingTranslations can pick it up
-    msg._translateTaskId = taskId;
-    msg._translateField = "translatedContent";
-    msg._translateDone = false;
-    saveConversations(conv.id);
-
-    // Poll for result
-    const _pollManual = async (attempt) => {
-      if (attempt > 30) {
-        // Give up polling but server will still auto-commit
-        btn.innerHTML = origHTML;
-        btn.disabled = false;
-        btn.title = "Translation in progress — will appear when you return";
-        return;
-      }
-      await new Promise(r => setTimeout(r, attempt < 3 ? 1000 : 2000));
-
-      const result = await _pollTranslateTask(taskId);
-      if (result.status === 'done') {
-        msg._translatedCache = result.translated;
-        msg.translatedContent = result.translated;
-        if (result.model) msg._translateModel = result.model;
-        msg._showingTranslation = true;
-        msg._translateDone = true;
-        delete msg._translateTaskId;
-        saveConversations(conv.id);
-        // ★ Targeted PATCH — replaces full-conv PUT. Server already
-        //   committed translatedContent via task persistence, but we
-        //   still need to persist _showingTranslation/_translateDone.
-        _patchMessageOnServer(conv.id, idx, {
-          translatedContent: msg.translatedContent,
-          _translateModel: msg._translateModel || null,
-          _translateDone: true,
-          _showingTranslation: true,
-        });
-        /* ★ FIX: surgical render to avoid destroying #streaming-msg */
-        if (activeConvId === conv.id) {
-          const _te = document.getElementById(`msg-${idx}`);
-          if (_te) {
-            const _ct = document.getElementById('chatContainer');
-            const _sv = _ct ? _ct.scrollTop : -1;
-            _te.outerHTML = renderMessage(msg, idx);
-            if (_sv >= 0 && _ct) _ct.scrollTop = _sv;
-          } else {
-            renderChat(conv);
-          }
-        }
-        return;
-      }
-      if (result.status === 'error' || result.status === 'not_found') {
-        // Server auto-committed — reload from server
-        console.warn(`[translateMessage] Task ${taskId} error/expired — reloading conv from server`);
-        try {
-          const resp = await fetch(apiUrl(`/api/conversations/${conv.id}`));
-          if (resp.ok) {
-            const data = await resp.json();
-            if (data.messages?.[idx]?.translatedContent) {
-              msg.translatedContent = data.messages[idx].translatedContent;
-              msg._translatedCache = msg.translatedContent;
-              msg._showingTranslation = true;
-              msg._translateDone = true;
-              delete msg._translateTaskId;
-              saveConversations(conv.id);
-              /* ★ FIX: surgical render to avoid destroying #streaming-msg */
-              if (activeConvId === conv.id) {
-                const _te2 = document.getElementById(`msg-${idx}`);
-                if (_te2) {
-                  const _ct = document.getElementById('chatContainer');
-                  const _sv = _ct ? _ct.scrollTop : -1;
-                  _te2.outerHTML = renderMessage(msg, idx);
-                  if (_sv >= 0 && _ct) _ct.scrollTop = _sv;
-                } else {
-                  renderChat(conv);
-                }
-              }
-              return;
-            }
-          }
-        } catch (e2) { /* ignore */ }
-
-        msg._translateError = result.error || "Translation failed";
-        delete msg._translateTaskId;
-        btn.innerHTML = origHTML;
-        btn.disabled = false;
-        return;
-      }
-      // Still running
-      _pollManual(attempt + 1);
-    };
-    _pollManual(0);
-  } catch (e) {
-    console.error("Translation task start failed:", e);
-    const errMsg = e.message || "Translation failed";
-    debugLog(`Translation error: ${errMsg}`, "error");
-    btn.innerHTML = origHTML;
-    btn.disabled = false;
-    btn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg> ${errMsg.length > 30 ? 'Failed' : errMsg}`;
-    btn.title = errMsg;
-    setTimeout(() => {
-      btn.innerHTML = origHTML;
-      btn.disabled = false;
-      btn.title = '';
-    }, 4000);
-  }
+  // Delegate to unified pipeline. mode='manual' surfaces the error on the
+  // message body (renderMessage shows the click-to-retry hint) instead of
+  // auto-retrying behind the scenes.
+  _runTranslationPipeline(conv, idx, msg, {
+    sourceLang: '',
+    targetLang,
+    field: 'translatedContent',
+    mode: 'manual',
+  });
 }
 
 // ── Edit messages ──
@@ -3576,46 +3778,20 @@ function saveEditOnly(idx) {
   // ★ Use per-conv autoTranslate (not global) — matches sendMessage behavior
   const _convAutoTranslate = conv.autoTranslate !== undefined ? !!conv.autoTranslate : !!autoTranslate;
   // ★ Auto-translate: detect Chinese and fire-and-forget translate task
-  // Works for both previously-translated and never-translated messages
+  // Works for both previously-translated and never-translated messages.
+  // Delegates to the unified pipeline so behaviour matches manual + auto
+  // (same poll cadence, same persistence, same render).
   if (_convAutoTranslate && t) {
     const hasChinese = /[\u4e00-\u9fff\u3400-\u4dbf]/.test(t);
     if (hasChinese) {
       msg.originalContent = t;
-      const convId = conv.id;
-      (async () => {
-        try {
-          const taskId = await _startTranslateTask(t, "English", "Chinese", convId, idx, "content");
-          if (taskId) {
-            msg._translateTaskId = taskId;
-            msg._translateField = "content";
-            msg._translateDone = false;
-            saveConversations(convId);
-            const _poll = async (attempt) => {
-              if (attempt > 20) return;
-              await new Promise(r => setTimeout(r, attempt < 3 ? 1500 : 3000));
-              const result = await _pollTranslateTask(taskId);
-              if (result.status === 'done' && result.translated) {
-                msg.content = result.translated;
-                if (result.model) msg._translateModel = result.model;
-                msg._translateDone = true;
-                saveConversations(convId);
-                // ★ Targeted PATCH for just this message (was
-                //   syncConversationToServerDebounced — full-conv PUT).
-                _patchMessageOnServer(convId, idx, {
-                  content: msg.content,
-                  _translateDone: true,
-                  _translateModel: msg._translateModel || null,
-                });
-                if (activeConvId === convId) {
-                  const msgEl = document.getElementById("msg-" + idx);
-                  if (msgEl) msgEl.outerHTML = renderMessage(msg, idx);
-                }
-              } else if (result.status === 'running') { _poll(attempt + 1); }
-            };
-            _poll(0);
-          }
-        } catch (e) { console.error("Edit translation task failed:", e); }
-      })();
+      _runTranslationPipeline(conv, idx, msg, {
+        sourceLang: 'Chinese',
+        targetLang: 'English',
+        field: 'content',
+        mode: 'auto',
+        text: t,
+      });
     }
   }
   // Reply quotes and conv refs: keep as-is
@@ -3813,7 +3989,7 @@ async function saveEditAndResend(idx) {
     conv._translateAbortCtrl = _editAbortCtrl;
     updateSendButton();
     renderConversationList();
-    if (activeConvId === convId) _renderTranslatingBubble();
+    if (activeConvId === convId) _renderTranslatingBubble(convId);
   }
 
   try {
@@ -4109,7 +4285,7 @@ function updateActiveTurn() {
 function _ensureStreamZones(body) {
   if (body.querySelector('[data-zone="tool"]')) return;
   body.innerHTML =
-    '<div data-zone="tool"></div><div data-zone="thinking"></div><div data-zone="content"></div><div data-zone="fc"></div><div data-zone="status"></div>';
+    '<div data-zone="memprefetch"></div><div data-zone="tool"></div><div data-zone="thinking"></div><div data-zone="content"></div><div data-zone="fc"></div><div data-zone="status"></div>';
 }
 
 /* ★ Helper: check if user has an active text selection inside the streaming message area */
@@ -4136,6 +4312,7 @@ function _getStreamZones() {
     _ensureStreamZones(body);
     _streamZoneCache = {
       body,
+      memprefetch: body.querySelector('[data-zone="memprefetch"]'),
       tool: body.querySelector('[data-zone="tool"]'),
       think: body.querySelector('[data-zone="thinking"]'),
       content: body.querySelector('[data-zone="content"]'),
@@ -4148,10 +4325,30 @@ function _getStreamZones() {
 function updateStreamingUI(msg) {
   const zones = _getStreamZones();
   if (!zones) return;
-  const { body, tool: toolZone, think: thinkZone, content: contentZone, fc: fcZone, status: statusZone } = zones;
+  const { body, memprefetch: memprefetchZone, tool: toolZone, think: thinkZone, content: contentZone, fc: fcZone, status: statusZone } = zones;
   const rounds = msg.toolRounds || [];
   const hasActiveSearch = rounds.some((r) => r.status === "searching");
   _syncToolRoundsDOM(toolZone, rounds);
+  /* ★ Memory Prefetch indicator (streaming path) */
+  if (memprefetchZone) {
+    const mp = msg._memoryPrefetch;
+    /* ★ MCP login-hint chip (rendered alongside prefetch chip).
+     *   The hint is pushed by handlers that detect a pending MCP login push,
+     *   so the user knows to tap "Approve" on their mobile-office app
+     *   before the subprocess times out. */
+    const lh = msg._mcpLoginHint;
+    const lhHtml = lh ? renderMcpLoginHintHtml(lh) : '';
+    const html = (lhHtml || '') + (mp ? renderMemoryPrefetchHtml(mp) : '');
+    /* fp includes snippet length so a late-arriving tool_result with a
+     * longer snippet triggers a re-render (earlier fp only checked
+     * phase+updatedAt, which can stay the same when we just append). */
+    const fp = (lh ? `L|${lh.phase}|${lh.username||''}|${lh.updatedAt||0}|${(lh.snippet||'').length}|` : '') +
+               (mp ? `${mp.phase}|${mp.selected||0}|${mp.candidates||0}|${mp.totalMs||0}` : '');
+    if (memprefetchZone.getAttribute('data-mp-fp') !== fp) {
+      memprefetchZone.setAttribute('data-mp-fp', fp);
+      memprefetchZone.innerHTML = html;
+    }
+  }
   // ★ Live file-changes tracker — update during streaming
   // PERF: _extractFileChangesFromRounds calls JSON.parse on every round's toolArgs
   // which is expensive for 50+ rounds.  Skip when rounds haven't changed.
@@ -4829,6 +5026,8 @@ function showStreamingUIForConv(convId) {
       content: buf?.content || lastMsg.content || "",
       toolRounds: rounds,
       phase: buf?.phase || null,
+      _memoryPrefetch: buf?._memoryPrefetch || lastMsg._memoryPrefetch,
+      _mcpLoginHint: buf?._mcpLoginHint,
     });
     /* ★ FIX: After page refresh, SSE data may arrive AFTER this initial render.
      *   Schedule a deferred re-render (300ms) so that any SSE state event that
@@ -4845,6 +5044,8 @@ function showStreamingUIForConv(convId) {
         content: dBuf.content,
         toolRounds: dBuf.toolRounds,
         phase: dBuf.phase,
+        _memoryPrefetch: dBuf._memoryPrefetch,
+        _mcpLoginHint: dBuf._mcpLoginHint,
       });
     }, 300);
   }
@@ -4908,7 +5109,21 @@ function finishStream(convId) {
     conv.activeTaskId = null;
     conv._activeTaskClearedAt = Date.now();
     saveConversations(convId);
-    syncConversationToServer(conv);
+    /* ★ Queue-race guard: when there are queued messages, skip the full-conv
+     *   PUT to the server.  The backend's dispatch_next_queued() will append
+     *   the queued user_msg + run the new task; if our PUT lands AFTER it reads
+     *   (but BEFORE it writes), we'd overwrite the queued user message — the
+     *   "invisible" queued-message bug.  Backend's _sync_result_to_conversation
+     *   already persists the aborted assistant state for us in this path. */
+    const _fsHasQueued = pendingMessageQueue.has(convId)
+      && pendingMessageQueue.get(convId).length > 0;
+    if (_fsHasQueued) {
+      console.info(`[finishStream] 🚧 Skipping syncConversationToServer — ` +
+        `queue has ${pendingMessageQueue.get(convId).length} item(s) for conv=${convId.slice(0,8)}; ` +
+        `backend owns the next DB write via dispatch_next_queued()`);
+    } else {
+      syncConversationToServer(conv);
+    }
     /* ★ Eagerly update IndexedDB cache — syncConversationToServer also does this
      *   on success, but it may be guarded/skipped in some edge cases.  This ensures
      *   the cache always has the latest post-stream content for instant reload. */
@@ -5109,7 +5324,33 @@ function finishStream(convId) {
   // message_queue table and auto-dispatches the next message. We poll for
   // the new task to connect to its SSE stream. No frontend gate — the
   // backend is the single source of truth for queue state.
-  setTimeout(() => _checkForQueuedTask(convId), 500);
+  //
+  // ★ Optimistic UI (when queue has items): insert a placeholder streaming
+  //   bubble immediately so the user has visual feedback that their queued
+  //   message is about to be dispatched, instead of dead air between stop and
+  //   the new SSE connection.  _checkForQueuedTask → loadConversationMessages
+  //   → renderChat will replace this bubble with the real streaming one.
+  // ★ Timing: skip the 500ms delay when there's a queued item — we want the
+  //   dispatch poll to fire ASAP so the user sees the new task start without
+  //   lag.  When there's no queue, keep the 500ms debounce to avoid hammering
+  //   /api/chat/active on every normal stream end.
+  const _hasQueued = pendingMessageQueue.has(convId)
+    && pendingMessageQueue.get(convId).length > 0;
+  if (_hasQueued && activeConvId === convId) {
+    try {
+      const inner = document.getElementById('chatInner');
+      if (inner && !document.getElementById('streaming-msg')) {
+        const _qTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        inner.insertAdjacentHTML('beforeend',
+          _streamingBubbleHTML('worker', 'Dispatching queued message…', _qTime));
+        if (isNearBottom(80)) scrollToBottom();
+      }
+    } catch (e) {
+      console.warn('[finishStream] queued-dispatch placeholder insert failed:', e);
+    }
+  }
+  const _queuedCheckDelay = _hasQueued ? 0 : 500;
+  setTimeout(() => _checkForQueuedTask(convId), _queuedCheckDelay);
 }
 
 /**
@@ -5166,10 +5407,19 @@ async function _autoTranslateHumanGuidance(convId, roundNum, question, responseT
   // Concatenate all texts with a separator to make a single API call (cheaper & faster)
   const SEP = '\n‖‖‖\n'; // unique separator unlikely to appear in content
   const parts = [question];
-  if (responseType === 'choice' && options.length > 0) {
-    for (const opt of options) {
-      parts.push(opt.label || '');
-      parts.push(opt.description || '');
+  /* ★ Defensive: ensure `options` is an array before iterating. Some
+   *   upstream callers (e.g. legacy persisted rounds) can pass null,
+   *   a JSON string, or an object. */
+  let _optsArr = options;
+  if (typeof _optsArr === 'string') {
+    try { _optsArr = JSON.parse(_optsArr); }
+    catch (_e) { _optsArr = []; }
+  }
+  if (!Array.isArray(_optsArr)) _optsArr = [];
+  if (responseType === 'choice' && _optsArr.length > 0) {
+    for (const opt of _optsArr) {
+      parts.push((opt && opt.label) || '');
+      parts.push((opt && opt.description) || '');
     }
   }
   const batchText = parts.join(SEP);
@@ -5193,7 +5443,9 @@ async function _autoTranslateHumanGuidance(convId, roundNum, question, responseT
     round2._hgTranslating = false;
 
     // Apply translated option labels & descriptions
-    if (responseType === 'choice' && round2.guidanceOptions && translatedParts.length > 1) {
+    // ★ Defensive: round2.guidanceOptions may not be an array (see above).
+    if (responseType === 'choice' && Array.isArray(round2.guidanceOptions)
+        && translatedParts.length > 1) {
       for (let i = 0; i < round2.guidanceOptions.length; i++) {
         const labelIdx = 1 + i * 2;
         const descIdx = 2 + i * 2;
@@ -5235,96 +5487,16 @@ async function _autoTranslateHumanGuidance(convId, roundNum, question, responseT
 }
 
 /**
- * Start auto-translate for an assistant message. Extracted so it can be
- * called from finishStream and from _resumePendingTranslations.
+ * Start auto-translate for an assistant message. Thin wrapper around the
+ * unified _runTranslationPipeline (defined in translation.js).
  */
 async function _startAutoTranslateForMsg(conv, convId, idx, msg) {
-  try {
-    const taskId = await _startTranslateTask(
-      msg.content, "Chinese", "English",
-      convId, idx, "translatedContent"
-    );
-    if (taskId) {
-      msg._translateTaskId = taskId;
-      msg._translateField = "translatedContent";
-      msg._translateDone = false;
-      saveConversations(convId);
-      // Re-render to show the "翻译中…" indicator persistently
-      if (activeConvId === convId) {
-        const el = document.getElementById(`msg-${idx}`);
-        if (el) {
-          // ★ Save/restore scroll to prevent content-visibility:auto layout shift
-          const _ct = document.getElementById('chatContainer');
-          const _sv = _ct ? _ct.scrollTop : -1;
-          el.outerHTML = renderMessage(msg, idx);
-          if (_sv >= 0 && _ct) _ct.scrollTop = _sv;
-        }
-      }
-      // Optimistic poll loop: try to show result quickly
-      const _pollAndApply = async (attempt) => {
-        if (attempt > 40) { // ~2 min max
-          // Give up polling — server auto-committed to DB anyway
-          msg._translateDone = true;
-          msg._translateError = 'Translation timeout';
-          saveConversations(convId);
-          if (activeConvId === convId) {
-            const el = document.getElementById(`msg-${idx}`);
-            if (el) {
-              const _ct = document.getElementById('chatContainer');
-              const _sv = _ct ? _ct.scrollTop : -1;
-              el.outerHTML = renderMessage(msg, idx);
-              if (_sv >= 0 && _ct) _ct.scrollTop = _sv;
-            }
-          }
-          return;
-        }
-        await new Promise(r => setTimeout(r, attempt < 5 ? 2000 : 4000));
-        const result = await _pollTranslateTask(taskId);
-        if (result.status === 'done' && result.translated) {
-          msg.translatedContent = result.translated;
-          if (result.model) msg._translateModel = result.model;
-          msg._showingTranslation = true;
-          msg._translateDone = true;
-          saveConversations(convId);
-          syncConversationToServer(conv);
-          if (activeConvId === convId) {
-            const el = document.getElementById(`msg-${idx}`);
-            if (el) {
-              // ★ Save/restore scroll to prevent content-visibility:auto layout shift
-              // that causes the view to jump to top during outerHTML replacement
-              const _ct = document.getElementById('chatContainer');
-              const _sv = _ct ? _ct.scrollTop : -1;
-              el.outerHTML = renderMessage(msg, idx);
-              if (_sv >= 0 && _ct) _ct.scrollTop = _sv;
-            }
-            _lastRenderedFingerprint = _convRenderFingerprint(conv);
-            // ★ Force scroll to bottom — the translated message is taller,
-            // and the isNearBottom guard may fail after the layout shift
-            scrollToBottom(true);
-          }
-        } else if (result.status === 'running') {
-          _pollAndApply(attempt + 1);
-        } else {
-          // Error — mark and re-render
-          msg._translateDone = true;
-          msg._translateError = result.error || 'Translation failed';
-          saveConversations(convId);
-          if (activeConvId === convId) {
-            const el = document.getElementById(`msg-${idx}`);
-            if (el) {
-              const _ct = document.getElementById('chatContainer');
-              const _sv = _ct ? _ct.scrollTop : -1;
-              el.outerHTML = renderMessage(msg, idx);
-              if (_sv >= 0 && _ct) _ct.scrollTop = _sv;
-            }
-          }
-        }
-      };
-      _pollAndApply(0);
-    }
-  } catch (e) {
-    console.error("Translation task start failed:", e);
-  }
+  return _runTranslationPipeline(conv, idx, msg, {
+    sourceLang: 'English',
+    targetLang: 'Chinese',
+    field: 'translatedContent',
+    mode: 'auto',
+  });
 }
 
 // ── Stream connection ──
@@ -5339,6 +5511,37 @@ async function connectToTask(convId, taskId, retries = 0) {
     `retries=${retries}`
   );
   let assistantMsg = conv.messages[conv.messages.length - 1];
+
+  /* ★ Stale-prior-turn guard — if the last assistant message belongs to a
+   *   DIFFERENT, already-completed task (different `_taskId`, or has a
+   *   `finishReason` set, or carries explicit `_doneAt`), the new task's
+   *   SSE stream must NOT reuse it as the target.  Reusing it causes the
+   *   previous turn's full content to be re-rendered into the new bubble
+   *   (the bug the user reported: "上一轮对话又重新流式吐出").  Push a
+   *   fresh placeholder instead.  Skip endpoint mode — the next block has
+   *   its own logic that already handles critic→worker transitions. */
+  if (assistantMsg && assistantMsg.role === 'assistant'
+      && !conv.messages.some(m => m._epIteration)) {
+    const _staleTaskId = assistantMsg._taskId && assistantMsg._taskId !== taskId;
+    const _isCompletedTurn = !!assistantMsg.finishReason;
+    if (_staleTaskId || _isCompletedTurn) {
+      console.info(
+        `[connectToTask] 🆕 Last assistant belongs to a prior turn ` +
+        `(taskId=${assistantMsg._taskId?.slice(0,8) || 'none'} vs new=${taskId.slice(0,8)}, ` +
+        `finishReason=${assistantMsg.finishReason || 'none'}) — pushing fresh placeholder ` +
+        `for conv=${convId.slice(0,8)} so SSE doesn't replay old content into it`
+      );
+      assistantMsg = {
+        role: 'assistant',
+        content: '',
+        thinking: '',
+        timestamp: Date.now(),
+        toolRounds: [],
+        model: conv.model || (typeof serverModel !== 'undefined' ? serverModel : ''),
+      };
+      conv.messages.push(assistantMsg);
+    }
+  }
 
   /* ★ Endpoint mode reconnection: if the last message is a critic review
    *   (role=user, _isEndpointReview), we may need to create a fresh
@@ -5419,10 +5622,61 @@ async function connectToTask(convId, taskId, retries = 0) {
         const _isEpPlanner = assistantMsg._isEndpointPlanner
           || (conv.endpointEnabled && !conv.messages.some(m => m._epIteration));
         const _reconRole = _isEpPlanner ? 'planner' : 'worker';
-        const _reconStatus = _isEpPlanner ? 'Planning…' : 'Connecting…';
+        /* ★ FIX (refresh-into-running-task UX):
+         *   When we reconnect to an in-flight task, assistantMsg may
+         *   ALREADY carry partial content/thinking/toolRounds that the
+         *   server persisted before our refresh.  Previously we removed
+         *   the rendered msg-N bubble and inserted an empty placeholder
+         *   that just said "Connecting…", then waited for SSE replay
+         *   to rebuild from event 0 — which made every refresh look
+         *   like the task was regenerating from scratch (the bug the
+         *   user just hit on conv movmck3a2x6jyk task 2f39395c).
+         *   Now we pre-render the existing partial content so the
+         *   bubble shows real progress immediately, and SSE deltas
+         *   merely append on top.
+         *   Status reflects task age: "Resuming…" if we have any prior
+         *   content/thinking/toolRounds, plain "Connecting…" otherwise. */
+        const _hasPartial = !!(
+          (assistantMsg.content && assistantMsg.content.length) ||
+          (assistantMsg.thinking && assistantMsg.thinking.length) ||
+          (assistantMsg.toolRounds && assistantMsg.toolRounds.length)
+        );
+        const _reconStatus = _isEpPlanner
+          ? 'Planning…'
+          : (_hasPartial ? 'Resuming…' : 'Connecting…');
         const _reconTime = new Date(assistantMsg.timestamp || Date.now())
           .toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
         inner.insertAdjacentHTML('beforeend', _streamingBubbleHTML(_reconRole, _reconStatus, _reconTime));
+        /* Pre-populate streaming-body with whatever content was already
+         * persisted, so the user sees real progress before SSE arrives.
+         * The first delta from _trySSE will replace .stream-status with
+         * actual content via the normal append path. */
+        if (_hasPartial) {
+          try {
+            const _body = document.getElementById('streaming-body');
+            if (_body) {
+              let _html = '';
+              if (assistantMsg.thinking && assistantMsg.thinking.length) {
+                _html += `<details class="thinking-block" open>` +
+                  `<summary>Thinking</summary>` +
+                  `<div class="thinking-body">${renderMarkdown(assistantMsg.thinking)}</div>` +
+                  `</details>`;
+              }
+              if (assistantMsg.content && assistantMsg.content.length) {
+                _html += `<div class="md-content">${renderMarkdown(assistantMsg.content)}</div>`;
+              }
+              _html += `<div class="stream-status"><div class="pulse"></div> Resuming…</div>`;
+              _body.innerHTML = _html;
+              console.info(
+                `[connectToTask] 🔁 Pre-populated bubble — content=${(assistantMsg.content||'').length}c ` +
+                `thinking=${(assistantMsg.thinking||'').length}c ` +
+                `toolRounds=${(assistantMsg.toolRounds||[]).length} for conv=${convId.slice(0,8)}`
+              );
+            }
+          } catch (_e) {
+            console.warn(`[connectToTask] pre-populate failed (non-fatal): ${_e.message}`);
+          }
+        }
         scrollToBottom();
       }
     }
@@ -5838,6 +6092,36 @@ async function _trySSE(convId, taskId, stream, assistantMsg) {
         if (ev.assistantContent) r.assistantContent = ev.assistantContent;
         if (!assistantMsg.toolRounds) assistantMsg.toolRounds = [];
         assistantMsg.toolRounds.push(r);
+        /* ★ MCP login-hint: surface a prominent "Check your phone for the
+         *   approval push" banner whenever a login-style MCP call starts.
+         *   Meituan's `hope login` blocks the subprocess for up to ~5 min
+         *   waiting for the user to tap Approve on their mobile-office app
+         *   — without this banner the user has no idea the tool is
+         *   waiting on them and the task appears frozen.
+         *   Matches:
+         *     - mcp__hope__hope_login
+         *     - mcp__hope__hope_check_login (auto-login triggered when
+         *       HOPE_USERNAME is configured and no cached creds)
+         *     - generic *_login / *_check_login MCP tools
+         */
+        try {
+          const _toolN = String(ev.toolName || '');
+          if (/^mcp__/.test(_toolN) && /(hope_login|hope_check_login|_login$)/.test(_toolN)) {
+            let _un = '';
+            try {
+              const a = ev.toolArgs && (typeof ev.toolArgs === 'string' ? JSON.parse(ev.toolArgs) : ev.toolArgs);
+              _un = (a && (a.username || a.user)) || '';
+            } catch (_e) { /* best-effort username extraction */ }
+            assistantMsg._mcpLoginHint = {
+              phase: 'awaiting_approval',
+              toolName: _toolN,
+              roundNum: ev.roundNum,
+              username: _un,
+              updatedAt: Date.now(),
+            };
+            if (buf) buf._mcpLoginHint = assistantMsg._mcpLoginHint;
+          }
+        } catch (_e) { /* best-effort */ }
         /* Track swarm round number so swarm_phase events can find it */
         if (r._swarm) assistantMsg._swarmRoundNum = r.roundNum;
         if (buf)
@@ -5855,7 +6139,16 @@ async function _trySSE(convId, taskId, stream, assistantMsg) {
           r.guidanceId = ev.guidanceId;
           r.guidanceQuestion = ev.question;
           r.guidanceType = ev.responseType;
-          r.guidanceOptions = ev.options ? ev.options.map(o => ({...o})) : [];
+          /* ★ Defensive: ev.options may arrive as a JSON string or object
+           *   from an upstream model that serialised it oddly. Normalise to
+           *   an array before assigning so _renderHumanGuidanceCard can map. */
+          let _ev_opts = ev.options;
+          if (typeof _ev_opts === 'string') {
+            try { _ev_opts = JSON.parse(_ev_opts); }
+            catch (_e) { _ev_opts = []; }
+          }
+          if (!Array.isArray(_ev_opts)) _ev_opts = [];
+          r.guidanceOptions = _ev_opts.map(o => ({...(o || {})}));
         }
       }
       if (buf)
@@ -5871,6 +6164,33 @@ async function _trySSE(convId, taskId, stream, assistantMsg) {
       if (_hgAutoTrans && ev.question) {
         _autoTranslateHumanGuidance(convId, ev.roundNum, ev.question, ev.responseType, ev.options || []);
       }
+    } else if (ev.type === "tool_progress") {
+      /* ── Streaming run_command output: append chunk to the round's
+       *    partial output buffer and re-render so the user sees it live. */
+      const _trMsg = _epCriticPhase ? _epCriticMsg : assistantMsg;
+      if (_trMsg && _trMsg.toolRounds) {
+        const r = _trMsg.toolRounds.find(rr => rr.roundNum === ev.roundNum);
+        if (r) {
+          // _partialOutput is the live, growing terminal buffer.
+          // It's replaced wholesale by meta.output once tool_result arrives.
+          if (typeof r._partialOutput !== "string") r._partialOutput = "";
+          r._partialOutput += (ev.chunk || "");
+        }
+      }
+      if (!_epCriticPhase && buf) {
+        buf.toolRounds = assistantMsg.toolRounds || [];
+      } else if (_epCriticPhase && _epCriticBuf && _epCriticMsg) {
+        _epCriticBuf.toolRounds = _epCriticMsg.toolRounds || [];
+      }
+      twUpdate(convId);
+      // Auto-scroll the live terminal box(es) to the bottom so the newest
+      // output is always visible — DOM was just rerendered above.
+      try {
+        const _liveOut = document.querySelectorAll('.ptool-cmd-output-live');
+        for (let i = 0; i < _liveOut.length; i++) {
+          _liveOut[i].scrollTop = _liveOut[i].scrollHeight;
+        }
+      } catch (_e) { /* best-effort */ }
     } else if (ev.type === "stdin_request") {
       /* ── Stdin Request: subprocess is waiting for user keyboard input ── */
       if (assistantMsg.toolRounds) {
@@ -5938,6 +6258,71 @@ async function _trySSE(convId, taskId, stream, assistantMsg) {
           r.guidanceId = null;
           if (ev.searchDiag) r.searchDiag = ev.searchDiag;
           if (ev.engineBreakdown) r.engineBreakdown = ev.engineBreakdown;
+        }
+        /* ★ Clear the MCP login-hint banner once the login call returns.
+         *   Classification priority (each test uses STRUCTURED fields
+         *   first, text matching second, and always with word-boundaries
+         *   to avoid matching e.g. "denied": false inside a JSON dump):
+         *     1. Parse snippet as JSON → read `approved`/`denied`/`approval_timed_out`
+         *     2. Fallback regex on rendered text WITH word boundaries
+         *   Without this, the chip showed "Login denied" whenever the
+         *   result JSON contained the literal token `"denied"`, even
+         *   when approval actually succeeded. */
+        const _lh = assistantMsg._mcpLoginHint;
+        if (_lh && _lh.roundNum === ev.roundNum) {
+          const _res = Array.isArray(ev.results) ? ev.results[0] : null;
+          const _snippet = (_res && (_res.snippet || _res.title || '')) || '';
+          const _resultOk = !!(_res && _res.ok);
+          // Try to parse the structured result — MCP tools typically
+          // embed the tool's JSON response in snippet.
+          let _parsed = null;
+          if (_snippet) {
+            try {
+              // The snippet may be "{...}" or wrapped in markdown fences
+              const _trim = _snippet.trim().replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, '');
+              _parsed = JSON.parse(_trim);
+            } catch (_e) { /* non-JSON snippet — fall through */ }
+          }
+          let _phase;
+          if (_parsed && typeof _parsed === 'object') {
+            /* Trust the tool's own structured verdict. hope_login returns
+             * {approved, denied, approval_timed_out, token_verified}. */
+            if (_parsed.approved === true) _phase = 'approved';
+            else if (_parsed.denied === true) _phase = 'denied';
+            else if (_parsed.approval_timed_out === true) _phase = 'timeout';
+            else if (_parsed.token_verified === false) _phase = 'denied'; // token missing → treat as failure
+            else _phase = _resultOk ? 'approved' : 'done';
+          } else {
+            /* Word-boundary regex fallback for non-JSON replies.
+             * \b prevents matching "denied" inside "\"denied\":false". */
+            const _deniedText = /\bdenied\b\s*$|\brejected\b|\bcancell?ed\b/i.test(_snippet);
+            const _timeoutText = /\btimed?\s*out\b|\bapproval\s+timeout\b/i.test(_snippet);
+            _phase = _resultOk ? 'approved'
+                  : _deniedText ? 'denied'
+                  : _timeoutText ? 'timeout'
+                  : 'done';
+          }
+          assistantMsg._mcpLoginHint = {
+            ..._lh,
+            phase: _phase,
+            /* Keep the snippet in full — the user wants to see the
+             * complete response, not a 200-char slice with ellipsis.
+             * The chip CSS is also updated to wrap instead of clip. */
+            snippet: _snippet,
+            updatedAt: Date.now(),
+          };
+          if (buf) buf._mcpLoginHint = assistantMsg._mcpLoginHint;
+          /* Auto-dismiss on success after 4s so the chip doesn't linger
+           * forever once the session is live. */
+          if (_phase === 'approved') {
+            setTimeout(() => {
+              if (assistantMsg._mcpLoginHint === buf?._mcpLoginHint) {
+                assistantMsg._mcpLoginHint = null;
+                if (buf) buf._mcpLoginHint = null;
+                twUpdate(convId);
+              }
+            }, 4000);
+          }
         }
       }
       /* ★ After create_project: refresh project status so the new extra
@@ -6028,6 +6413,94 @@ async function _trySSE(convId, taskId, stream, assistantMsg) {
       if (buf) buf._emitContent = assistantMsg._emitContent;
       if (buf) buf._emitToolName = assistantMsg._emitToolName;
       twUpdate(convId);
+
+    } else if (ev.type === "compaction" || ev.type === "compaction_done") {
+      /* ── Compaction marker ────────────────────────────────────────────
+       * Emitted by lib/tasks_pkg/compaction.py when an archive row is
+       * inserted (transcript_archive). Each marker becomes an inline
+       * chip inside the assistant bubble; clicking it opens the right-
+       * side Compaction Viewer drawer (see static/js/compaction-viewer.js)
+       * which lazy-loads the pre-compaction message list.
+       *
+       * We store markers on the LIVE assistant message so they reappear
+       * after re-render without a DB round-trip. On reload, the drawer
+       * also pulls the authoritative list from
+       * GET /api/conversations/<id>/compactions. */
+      assistantMsg._compactions = assistantMsg._compactions || [];
+      if (ev.type === "compaction") {
+        const existing = assistantMsg._compactions.find(c => c.archiveId === ev.archiveId);
+        if (!existing) {
+          assistantMsg._compactions.push({
+            archiveId:     ev.archiveId,
+            convId:        ev.convId || convId,
+            trigger:       ev.trigger || 'force',
+            roundNum:      ev.roundNum || 0,
+            tokensBefore:  ev.tokensBefore || 0,
+            tokensAfter:   ev.tokensAfter || 0,
+            msgsBefore:    ev.msgsBefore || 0,
+            msgsAfter:     ev.msgsAfter || 0,
+            model:         ev.model || '',
+            reason:        ev.reason || '',
+            ts:            ev.ts || Math.floor(Date.now() / 1000),
+            status:        'in_progress',
+          });
+        }
+      } else {
+        // compaction_done — upgrade the matching marker with final numbers
+        const marker = assistantMsg._compactions.find(c => c.archiveId === ev.archiveId);
+        if (marker) {
+          marker.tokensAfter = ev.tokensAfter || marker.tokensAfter;
+          marker.msgsAfter   = ev.msgsAfter   || marker.msgsAfter;
+          marker.reductionPct = ev.reductionPct;
+          marker.status = 'done';
+        }
+      }
+      if (buf) buf._compactions = assistantMsg._compactions;
+      twUpdate(convId);
+
+    } else if (ev.type === "memory_prefetch") {
+      /* ── Memory Prefetch indicator ────────────────────────────────────
+       * Phases emitted by lib/memory/prefetch.py:
+       *   started       — BM25 scoring about to run
+       *   bm25_done     — coarse stage complete; cheap-LLM next
+       *   rerank_started — cheap-model filter running
+       *   done          — memories injected (or none picked)
+       *   skipped       — no memories / empty query / bm25 empty
+       *   failed        — unexpected error
+       * We show a small chip inside the assistant bubble (above the tool panel)
+       * so the user can see that a cheap model is filtering memories in the
+       * background — otherwise the ~1-3s latency before the main model starts
+       * producing tokens would feel unexplained. */
+      const prev = assistantMsg._memoryPrefetch || {};
+      assistantMsg._memoryPrefetch = {
+        ...prev,
+        phase: ev.phase,
+        totalMemories: ev.total_memories ?? prev.totalMemories,
+        candidates: ev.candidates ?? prev.candidates,
+        bm25Ms: ev.bm25_ms ?? prev.bm25Ms,
+        rerankMs: ev.rerank_ms ?? prev.rerankMs,
+        totalMs: ev.total_ms ?? prev.totalMs,
+        selected: ev.selected ?? prev.selected,
+        memories: ev.memories ?? prev.memories,
+        reason: ev.reason ?? prev.reason,
+        fellBack: ev.fell_back ?? prev.fellBack,
+        startedAt: prev.startedAt || Date.now(),
+      };
+      if (buf) buf._memoryPrefetch = assistantMsg._memoryPrefetch;
+      twUpdate(convId);
+
+    } else if (ev.type === "project_external_edit") {
+      // ★ Git-shim: external edits captured outside Tofu round boundary.
+      //   Show a brief toast so the user knows we auto-committed their changes.
+      const files = ev.files || [];
+      const sha = (ev.sha || '').slice(0, 7);
+      try {
+        if (typeof showToast === 'function') {
+          const preview = files.slice(0, 3).join(', ') + (files.length > 3 ? ` +${files.length - 3} more` : '');
+          showToast(`📝 Captured ${files.length} external edit(s) — ${preview}${sha ? ' · ' + sha : ''}`, 'info');
+        }
+      } catch (e) { console.warn('[project_external_edit] toast failed', e); }
+      console.log('[project_external_edit]', { sha, files });
 
     } else if (ev.type === "timer_poll_check") {
       /* ═══ Timer Watcher inline poll progress ═══
@@ -6715,6 +7188,20 @@ async function _trySSE(convId, taskId, stream, assistantMsg) {
       return false;
 
 
+    } else if (ev.type === "round_committed") {
+      /* ★ Async shadow-git commit landed AFTER the done event was emitted.
+         Backend moved commit_round out of the critical path (2026-05-07)
+         so queue dispatch isn't blocked by slow FUSE git.  Wire the sha
+         (and any git-derived modifiedFileList additions) onto the
+         assistant message so undo/diff UI still works. */
+      if (ev.gitSha) assistantMsg._gitSha = ev.gitSha;
+      if (ev.modifiedFileList) assistantMsg.modifiedFileList = ev.modifiedFileList;
+      if (typeof ev.modifiedFiles === 'number') assistantMsg.modifiedFiles = ev.modifiedFiles;
+      /* Re-render the message so its footer reflects the new file list /
+         undo button availability. */
+      try { if (typeof renderChat === 'function') renderChat(); } catch (_) {}
+      return false;  // not a done event
+
     } else if (ev.type === "done") {
       /* ★ DIAGNOSTIC: log task completion details for debugging silent completions */
       const _dContentLen = assistantMsg.content?.length || 0;
@@ -6776,6 +7263,8 @@ async function _trySSE(convId, taskId, stream, assistantMsg) {
         }
       }
       if (ev.taskId) assistantMsg._taskId = ev.taskId;
+      /* ★ git-shim: round commit sha for redo/diff references */
+      if (ev.gitSha) assistantMsg._gitSha = ev.gitSha;
       /* ★ Continue: merge usage & apiRounds with existing */ if (ev.usage) {
         if (assistantMsg._continueUsage) {
           const cu = assistantMsg._continueUsage;
@@ -7109,6 +7598,10 @@ async function _pollFallback(convId, taskId, stream, assistantMsg) {
       /* ★ emit_to_user: recover emitContent from poll response */
       if (data.emitContent) assistantMsg._emitContent = data.emitContent;
       if (data.emitToolName) assistantMsg._emitToolName = data.emitToolName;
+      /* ★ memory prefetch: recover indicator state from poll response */
+      if (data.memoryPrefetch) assistantMsg._memoryPrefetch = data.memoryPrefetch;
+      /* ★ git-shim: round commit sha for redo/diff references */
+      if (data.gitSha) assistantMsg._gitSha = data.gitSha;
       if (data.apiRounds) {
         const existingApiRounds = assistantMsg._continueApiRounds || [];
         assistantMsg.apiRounds = existingApiRounds.concat(data.apiRounds);

@@ -3404,6 +3404,45 @@ input.settings-mono {
   .mcp-catalog-grid { grid-template-columns: 1fr; }
 }
 
+/* ── Skills pagination ── */
+.skills-pagination {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 6px;
+  padding: 6px 2px 2px;
+  border-top: 1px solid var(--border, rgba(255,255,255,.08));
+  font-size: 11px;
+  opacity: .85;
+}
+.skills-page-info { opacity: .7; }
+.skills-page-ctrls { display: flex; align-items: center; gap: 2px; }
+.skills-page-btn {
+  min-width: 24px;
+  height: 24px;
+  padding: 0 6px;
+  border: 1px solid var(--border, rgba(255,255,255,.12));
+  background: transparent;
+  color: inherit;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+}
+.skills-page-btn:hover:not([disabled]):not(.is-active) {
+  background: var(--hover-bg, rgba(255,255,255,.06));
+}
+.skills-page-btn.is-active {
+  background: var(--accent, #b38b5d);
+  color: #fff;
+  border-color: var(--accent, #b38b5d);
+  cursor: default;
+}
+.skills-page-btn[disabled] { opacity: .4; cursor: not-allowed; }
+.skills-page-ellipsis { opacity: .6; padding: 0 2px; }
+
 /* ── App card ── */
 .mcp-app-card {
   position: relative;
@@ -3510,7 +3549,11 @@ input.settings-mono {
   overflow: hidden;
 }
 
-/* Card footer: repo link + action */
+/* Card footer: repo link + action
+ * Use min-height matching the .btn-xs height so the left-side text
+ * (Repo) and the right-side buttons (卸载/连接/…) share a common
+ * vertical axis regardless of whether the right side is rendered as
+ * plain text only (no button), plain buttons, or text + button. */
 .mcp-app-footer {
   grid-column: 1 / -1;
   display: flex;
@@ -3519,6 +3562,7 @@ input.settings-mono {
   gap: 8px;
   margin-top: 6px;
   padding-top: 8px;
+  min-height: 30px;   /* = .btn-xs content box (~18px) + padding (6px×2) */
   border-top: 1px dashed rgba(26, 24, 20, 0.18);
 }
 .mcp-app-repo {
@@ -3543,10 +3587,30 @@ input.settings-mono {
   color: var(--s-ink);
   font-family: 'JetBrains Mono', monospace;
   opacity: 0.7;
+  line-height: 1;
 }
 
-/* Action buttons cluster */
-.mcp-app-action { display: flex; gap: 6px; flex-shrink: 0; }
+/* Version badge: server-reported upstream version (InitializeResult.serverInfo.version) */
+.mcp-app-version {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--s-ink-soft);
+  font-family: 'JetBrains Mono', monospace;
+  padding: 2px 5px;
+  border: 1px solid rgba(26, 24, 20, 0.18);
+  border-radius: var(--s-radius);
+  background: rgba(201, 153, 63, 0.08);
+  line-height: 1;
+  white-space: nowrap;
+}
+
+/* Action buttons cluster — share the button baseline with left-side text */
+.mcp-app-action {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+  align-items: center;
+}
 
 /* ── Header quick action ── */
 .mcp-connect-all-btn {
@@ -3973,6 +4037,44 @@ animation:swarmBorderPulse 2s ease-in-out infinite}
 .scheduler-panel-item .spi-decision.skip{background:rgba(250,204,21,0.15);color:#facc15}
 .scheduler-panel-item .spi-decision.act_failed{background:rgba(239,68,68,0.15);color:#ef4444}
 .scheduler-panel-empty{color:var(--text-secondary);text-align:center;padding:20px 10px;font-size:11px}
+/* ── Daily Optimizer badge + panel ── */
+.optimizer-badge{font-size:10px;font-weight:700;font-family:'JetBrains Mono',monospace;padding:3px 9px;border-radius:20px;white-space:nowrap;display:inline-flex;align-items:center;gap:5px;border:1px solid;animation:fadeIn .3s ease;background:rgba(52,211,153,0.12);color:#34d399;border-color:rgba(52,211,153,0.35);cursor:pointer;position:relative}
+.optimizer-badge:hover{background:rgba(52,211,153,0.20)}
+.optimizer-badge .opt-dot{width:6px;height:6px;border-radius:50%;background:#34d399;box-shadow:0 0 6px #34d399}
+.optimizer-badge .optimizer-count{font-size:8px;background:#34d399;color:#0f172a;border-radius:50%;width:14px;height:14px;display:inline-flex;align-items:center;justify-content:center;margin-left:2px;font-weight:800}
+.optimizer-panel{position:absolute;top:100%;right:0;margin-top:6px;width:380px;max-height:500px;overflow-y:auto;background:var(--panel-bg,#1e1e2e);border:1px solid var(--border);border-radius:var(--radius-md,8px);box-shadow:0 8px 32px rgba(0,0,0,0.4);z-index:1000;padding:10px;display:none;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;text-align:left}
+.optimizer-panel.visible{display:block}
+.optimizer-panel-title{font-size:11px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;padding-bottom:6px;border-bottom:1px solid var(--border)}
+.optimizer-panel-empty{color:var(--text-secondary);text-align:center;padding:20px 10px;font-size:11px;line-height:1.5}
+.opt-toolbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;font-size:10px;color:var(--text-secondary)}
+.opt-toolbar-info{font-family:'JetBrains Mono',monospace}
+.opt-run-btn{font-size:10px;padding:3px 10px;border-radius:4px;border:1px solid rgba(52,211,153,0.35);background:rgba(52,211,153,0.1);color:#34d399;cursor:pointer;font-weight:700}
+.opt-run-btn:hover{background:rgba(52,211,153,0.2)}
+.opt-run-btn:disabled{opacity:0.55;cursor:default}
+.opt-section-title{font-size:10px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.3px;margin:8px 0 4px;display:flex;align-items:center;gap:6px}
+.opt-count{font-size:9px;background:var(--border);color:var(--text-secondary);padding:1px 6px;border-radius:10px;font-weight:700}
+.opt-history-header{cursor:pointer;user-select:none;padding:4px 0;border-top:1px solid var(--border);margin-top:8px}
+.opt-history-header:hover{color:#34d399}
+.opt-row{padding:8px;border-radius:6px;margin-bottom:6px;background:rgba(52,211,153,0.04);border:1px solid rgba(52,211,153,0.12)}
+.opt-row.opt-status-pending_review{background:rgba(250,204,21,0.05);border-color:rgba(250,204,21,0.2)}
+.opt-row.opt-status-rejected{background:rgba(239,68,68,0.04);border-color:rgba(239,68,68,0.15);opacity:0.75}
+.opt-row.opt-status-expired,.opt-row.opt-status-reverted{background:rgba(148,163,184,0.06);border-color:rgba(148,163,184,0.18);opacity:0.8}
+.opt-row-head{display:flex;align-items:center;gap:6px;font-size:11px;font-weight:600;color:var(--text-primary)}
+.opt-status-icon{flex-shrink:0}
+.opt-action-summary{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.opt-row-conf{font-size:9px;font-family:'JetBrains Mono',monospace;flex-shrink:0}
+.opt-row-meta{font-size:10px;color:var(--text-secondary);margin-top:2px}
+.opt-row-title{color:var(--text-secondary)}
+.opt-row-rationale{font-size:10px;color:var(--text-secondary);margin-top:4px;line-height:1.4;background:rgba(0,0,0,0.15);padding:4px 6px;border-radius:4px;border-left:2px solid rgba(52,211,153,0.25)}
+.opt-row-reason{font-size:10px;color:#facc15;margin-top:4px;font-style:italic}
+.opt-row-actions{margin-top:6px;display:flex;gap:4px}
+.opt-btn{font-size:9px;padding:2px 10px;border-radius:4px;border:1px solid;cursor:pointer;font-weight:700}
+.opt-btn-approve{border-color:rgba(34,197,94,0.4);background:rgba(34,197,94,0.1);color:#22c55e}
+.opt-btn-approve:hover{background:rgba(34,197,94,0.2)}
+.opt-btn-reject{border-color:rgba(239,68,68,0.4);background:rgba(239,68,68,0.08);color:#ef4444}
+.opt-btn-reject:hover{background:rgba(239,68,68,0.18)}
+.opt-btn-revert{border-color:rgba(250,204,21,0.4);background:rgba(250,204,21,0.08);color:#facc15}
+.opt-btn-revert:hover{background:rgba(250,204,21,0.18)}
 /* Proactive agent message banner inside chat */
 .proactive-banner{background:linear-gradient(135deg,rgba(168,85,247,0.08),rgba(139,92,246,0.04));border:1px solid rgba(168,85,247,0.2);border-radius:8px;padding:8px 12px;margin-bottom:8px;font-size:12px;display:flex;align-items:center;gap:8px}
 .proactive-banner .pb-icon{font-size:16px;flex-shrink:0}
@@ -4167,13 +4269,15 @@ animation:swarmBorderPulse 2s ease-in-out infinite}
 }
 
 .ptool-line {
-  display: flex; align-items: center; gap: 8px;
+  display: flex; align-items: flex-start; gap: 8px;
   padding: 5px 12px 5px 16px;
   font-size: 12px;
   color: var(--text-secondary);
   transition: background .15s;
   min-height: 28px;
 }
+.ptool-line .ptool-icon { padding-top: 4px; }
+.ptool-line .ptool-badge { margin-top: 4px; }
 .ptool-line:hover { background: rgba(234,179,8,0.05); }
 .ptool-line.ptool-active { color: var(--text-primary); }
 .ptool-icon {
@@ -4526,6 +4630,29 @@ animation:swarmBorderPulse 2s ease-in-out infinite}
   font-family: inherit;
   font-size: 11px;
 }
+/* Live (streaming) output while a run_command is in-flight.
+ * Always visible (no collapse), capped height with auto-scroll so the
+ * newest lines stay in view. */
+.ptool-cmd-output-live {
+  display: block !important;
+  max-height: 220px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 8px 12px;
+  background: rgba(0,0,0,0.25);
+  border-top: 1px solid rgba(255,255,255,0.04);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  color: rgba(255,255,255,0.65);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.ptool-cmd-output-live code {
+  color: inherit;
+  font-family: inherit;
+  font-size: inherit;
+}
+
 .ptool-cmd-output-wrap.expanded .ptool-cmd-output {
   display: block;
 }
@@ -4533,35 +4660,50 @@ animation:swarmBorderPulse 2s ease-in-out infinite}
 
 /* ═══════════════════════════════════════════
    ★ emit_to_user — inline tool result in assistant bubble
+   No heavy outer frame: just a subtle accent stripe on the left and
+   a small tool-name label, so the payload reads as a natural
+   continuation of the assistant message rather than a boxed artifact.
    ═══════════════════════════════════════════ */
 .emit-content-block {
   margin: 10px 0 4px;
-  border: 1px solid rgba(96, 165, 250, 0.2);
-  border-radius: var(--radius-sm);
-  background: rgba(96, 165, 250, 0.04);
-  overflow: hidden;
+  padding: 2px 0 2px 10px;
+  border-left: 2px solid var(--accent);
+  background: transparent;
+  opacity: 1;
 }
-.emit-content-header {
-  padding: 5px 12px;
-  font-size: 11.5px;
+/* Dim the stripe a bit without committing to a specific hue, so it
+   harmonises with any theme (default purple, tofu warm-beige, light). */
+.emit-content-block { border-left-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+.emit-content-label {
+  display: inline-block;
+  margin: 0 0 4px;
+  padding: 1px 8px;
+  font-size: 10.5px;
   font-weight: 500;
-  color: rgba(96, 165, 250, 0.8);
-  background: rgba(96, 165, 250, 0.06);
-  border-bottom: 1px solid rgba(96, 165, 250, 0.1);
+  font-family: 'JetBrains Mono', 'SF Mono', monospace;
+  letter-spacing: 0.02em;
+  color: var(--text-tertiary);
+  background: var(--accent-subtle);
+  border-radius: 3px;
 }
 .emit-content-output {
   margin: 0;
-  padding: 8px 12px;
+  padding: 0;
   white-space: pre-wrap;
-  word-break: break-all;
+  word-break: break-word;
   max-height: 600px;
   overflow-y: auto;
+  background: transparent;
+  border: none;
 }
 .emit-content-output code {
-  color: rgba(255, 255, 255, 0.75);
-  font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+  color: var(--text-secondary);
+  background: transparent;
+  padding: 0;
+  border: none;
+  font-family: 'JetBrains Mono', 'SF Mono', monospace;
   font-size: 12px;
-  line-height: 1.5;
+  line-height: 1.55;
 }
 
 /* ═══════════════════════════════════════════
@@ -9980,6 +10122,58 @@ animation:swarmBorderPulse 2s ease-in-out infinite}
 .memory-btn-add{background:var(--m-accent);color:var(--m-white);border-color:var(--m-ink)}
 .memory-btn-add:hover{background:#5b3fb5;transform:translate(1px,1px);box-shadow:1px 1px 0 var(--m-ink)}
 
+/* ── Skill-package badge on memory cards ── */
+.memory-card-pkg{display:inline-flex;align-items:center;gap:3px;padding:1px 6px;border:1px solid var(--m-ink);border-radius:3px;background:var(--m-skin);color:var(--m-ink);font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.04em}
+.memory-card-pkg svg{display:block}
+
+/* ── Skills Settings tab ── App-Store layout ── */
+.skills-scope-tabs{display:inline-flex;gap:4px;margin-right:10px;padding:2px;background:var(--bg-tertiary,#1a1a1a);border:1px solid var(--border-color,#333);border-radius:6px}
+.skills-scope-tab{padding:3px 12px;border:none;background:transparent;color:var(--text-secondary,#aaa);font-size:12px;border-radius:4px;cursor:pointer;transition:all .15s ease}
+.skills-scope-tab:hover{color:var(--text-primary,#fff)}
+.skills-scope-tab.active{background:var(--bg-secondary,#2a2a2a);color:var(--text-primary,#fff);box-shadow:0 1px 3px rgba(0,0,0,.2)}
+
+.skills-drop-zone{display:flex;align-items:center;justify-content:center;gap:10px;padding:14px 18px;margin:8px 0 14px;border:1.5px dashed var(--border-color,#444);border-radius:8px;color:var(--text-secondary,#888);font-size:12.5px;cursor:pointer;transition:all .2s ease;background:transparent}
+.skills-drop-zone:hover{border-color:var(--accent,#6c64e6);color:var(--text-primary,#ccc);background:rgba(108,100,230,.05)}
+.skills-drop-zone.is-dragging{border-color:var(--accent,#6c64e6);border-style:solid;background:rgba(108,100,230,.12);color:var(--text-primary,#fff);transform:scale(1.005)}
+.skills-drop-zone-text{pointer-events:none}
+
+/* Skill card uses mcp-app-card as base; add skill-specific accents */
+.mcp-app-card.skill-card .mcp-app-icon{filter:saturate(1.1)}
+.mcp-app-card .skill-badge-official{display:inline-flex;align-items:center;gap:3px;padding:1px 6px;margin-left:6px;border:1px solid currentColor;border-radius:10px;background:transparent;color:#d97706;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;vertical-align:middle}
+.mcp-app-card .skill-badge-warn{display:inline-flex;align-items:center;gap:3px;padding:1px 6px;margin-top:4px;border:1px solid rgba(234,179,8,.4);border-radius:3px;background:rgba(234,179,8,.1);color:#d4a518;font-size:10px;font-weight:500}
+.mcp-app-card .skill-author{font-size:10px;opacity:.55;margin-top:2px}
+.mcp-app-card .skill-card-footer{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:8px;padding-top:8px;border-top:1px solid var(--border-color,#333)}
+.mcp-app-card .skill-card-actions{display:flex;gap:4px;flex-wrap:wrap}
+
+.mcp-app-card.is-installed{background:rgba(34,197,94,.05);border-color:rgba(34,197,94,.25)}
+
+/* Skills file browser list */
+.skills-files-modal{max-width:640px;max-height:80vh;display:flex;flex-direction:column}
+.skills-files-list{flex:1;overflow-y:auto;margin:12px 0;padding:8px 0;border:1px solid var(--border-color,#333);border-radius:6px;background:var(--bg-tertiary,#161616);max-height:50vh}
+.skills-file-row{display:flex;align-items:center;gap:10px;padding:6px 12px;font-size:12.5px;color:var(--text-primary,#ddd);border-bottom:1px solid rgba(255,255,255,.03)}
+.skills-file-row:last-child{border-bottom:none}
+.skills-file-row:hover{background:rgba(255,255,255,.03)}
+.skills-file-kind{flex:0 0 16px;font-size:14px;text-align:center}
+.skills-file-path{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--font-mono,monospace);font-size:11.5px}
+.skills-file-size{flex:0 0 auto;font-size:10px;opacity:.55;font-variant-numeric:tabular-nums}
+.skills-file-row.is-skill{background:rgba(108,100,230,.08);font-weight:500}
+
+/* Toast used by catalog install */
+.skills-toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);padding:10px 18px;background:var(--bg-secondary,#1e1e1e);color:var(--text-primary,#fff);border:1px solid var(--border-color,#333);border-radius:6px;font-size:13px;box-shadow:0 4px 12px rgba(0,0,0,.3);z-index:10020;animation:skillsToastIn .25s cubic-bezier(.2,1,.3,1)}
+.skills-toast.is-error{border-color:rgba(239,68,68,.5);color:#fca5a5}
+.skills-toast.is-success{border-color:rgba(34,197,94,.5)}
+@keyframes skillsToastIn{from{opacity:0;transform:translate(-50%,10px)}to{opacity:1;transform:translate(-50%,0)}}
+
+/* ── Drag-and-drop overlay (skill package install) ── */
+.memory-modal{position:relative}
+.memory-drop-overlay{position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:rgba(26,24,20,0.78);backdrop-filter:blur(4px);z-index:50;border-radius:inherit;pointer-events:none}
+.memory-modal.is-dragging .memory-drop-overlay{display:flex}
+.memory-drop-card{padding:28px 36px;border:2px dashed var(--m-gold);border-radius:8px;background:var(--m-cream);color:var(--m-ink);text-align:center;display:flex;flex-direction:column;align-items:center;gap:10px;box-shadow:4px 4px 0 var(--m-ink);max-width:380px}
+.memory-drop-title{font-weight:600;font-size:15px}
+.memory-drop-hint{font-size:12px;opacity:.75}
+.memory-install-toast{position:absolute;left:50%;bottom:64px;transform:translateX(-50%);padding:10px 16px;background:var(--m-ink);color:var(--m-white);border-radius:4px;font-size:13px;box-shadow:2px 2px 0 var(--m-gold);z-index:60;max-width:80%;animation:memorySlam .25s cubic-bezier(.2,1,.3,1)}
+.memory-install-toast.is-error{background:#b91c1c}
+
 /* ── Light theme — already matches since memory-modal uses its own tokens ── */
 [data-theme="light"] .memory-modal{border-color:rgba(26,24,20,0.15) !important;box-shadow:4px 4px 16px rgba(0,0,0,0.08) !important}
 [data-theme="light"] .memory-modal-header{border-bottom-color:rgba(0,0,0,0.1)}
@@ -12599,3 +12793,733 @@ animation:swarmBorderPulse 2s ease-in-out infinite}
 .ab-not-auth{color:#f59e0b}
 /* Backend indicator badge in topbar */
 .backend-indicator{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;padding:2px 7px;border-radius:6px;color:#6366f1;background:rgba(99,102,241,0.1);border:1px solid rgba(99,102,241,0.2);vertical-align:middle;margin-left:4px}
+
+/* ══════════════════════════════════════════════════════════════════
+   ★ Pre-tool indicator chips (Memory Prefetch + MCP Login Hint)
+   ══════════════════════════════════════════════════════════════════
+   These chips render in the assistant bubble ABOVE the unified tool
+   activity panel. Visual language is intentionally harmonised with
+   the tool panel directly below so the two feel like one continuous
+   element instead of two transplanted styles:
+      .ptool-panel  →  .mem-prefetch-chip
+   Shared tokens:
+     – warm amber/gold palette (rgba(234,179,8,*), rgba(245,158,11,*))
+     – border-radius:var(--radius-sm) (=8px by default)
+     – JetBrains Mono 11.5px body / 12px header
+     – flat 1px border with a very subtle tinted background
+     – no gradient, no heavy glow, no pulsing when idle
+   Status variants (mp-running / mp-done / mp-failed / mp-skipped) map
+   to the same semantic color pattern the tool panel uses: amber for
+   in-flight, green for success, red for failure, slate for skip. */
+
+.mem-prefetch-chip{
+  display:inline-flex;align-items:center;gap:8px;
+  padding:7px 11px;margin:0 0 8px 0;
+  background:rgba(234,179,8,0.04);
+  border:1px solid rgba(234,179,8,0.22);
+  border-radius:var(--radius-sm);
+  font-size:11.5px;line-height:1.4;color:var(--text-secondary);
+  font-family:'JetBrains Mono','SF Mono',Menlo,monospace;
+  max-width:100%;
+  flex-wrap:wrap;
+  transition:background .15s ease,border-color .15s ease;
+}
+.mem-prefetch-chip.mp-expandable{cursor:pointer;user-select:none}
+.mem-prefetch-chip.mp-expandable:hover{background:rgba(234,179,8,0.07);border-color:rgba(234,179,8,0.35)}
+
+/* Icon + text column */
+.mem-prefetch-chip .mp-icon{
+  flex-shrink:0;width:16px;display:flex;align-items:center;justify-content:center;
+  font-size:13px;color:rgba(234,179,8,0.75);line-height:1;
+}
+.mem-prefetch-chip .mp-text{
+  display:flex;flex-direction:column;min-width:0;gap:2px;flex:1;
+}
+.mem-prefetch-chip .mp-headline{
+  font-weight:600;color:var(--text-primary,#e4e4e7);font-size:11.5px;
+  /* Default: single line with ellipsis. Variants that need full wrapping
+     (login-hint body copy, expandable memory details) override below. */
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.mem-prefetch-chip .mp-sub{
+  font-size:10.5px;opacity:0.7;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+
+/* Three-dot "working" indicator — amber dots, not indigo */
+.mem-prefetch-chip .mp-dots{display:inline-flex;gap:3px;align-items:center;margin-left:2px;flex-shrink:0}
+.mem-prefetch-chip .mp-dots span{
+  width:3px;height:3px;border-radius:50%;
+  background:rgba(245,158,11,0.85);
+  animation:mp-dot-pulse 1.2s infinite ease-in-out;
+}
+.mem-prefetch-chip .mp-dots span:nth-child(2){animation-delay:0.15s}
+.mem-prefetch-chip .mp-dots span:nth-child(3){animation-delay:0.3s}
+@keyframes mp-dot-pulse{0%,60%,100%{opacity:0.25;transform:scale(0.8)}30%{opacity:1;transform:scale(1)}}
+
+/* Chevron for expandable prefetch chip */
+.mem-prefetch-chip .mp-chevron{font-size:10px;opacity:0.55;transition:transform 0.2s ease;flex-shrink:0}
+.mem-prefetch-chip.mp-expanded .mp-chevron{transform:rotate(180deg)}
+
+/* Expanded details area (memory list) */
+.mem-prefetch-chip .mp-details{
+  display:none;flex-basis:100%;margin-top:7px;padding-top:7px;
+  border-top:1px dashed rgba(234,179,8,0.22);
+}
+.mem-prefetch-chip.mp-expanded .mp-details{display:block}
+.mem-prefetch-chip .mp-mem-list{
+  list-style:none;margin:0;padding:0;
+  display:flex;flex-direction:column;gap:6px;
+}
+.mem-prefetch-chip .mp-mem-list li{
+  padding:7px 9px;
+  background:rgba(234,179,8,0.06);
+  border:1px solid rgba(234,179,8,0.22);
+  border-radius:6px;
+  font-size:11.5px;line-height:1.5;
+}
+.mem-prefetch-chip .mp-mem-name{font-weight:600;color:#fbbf24;font-size:12px}
+.mem-prefetch-chip .mp-mem-scope{
+  font-size:9px;padding:1px 6px;margin-left:6px;border-radius:10px;
+  background:rgba(234,179,8,0.16);color:#fde68a;
+  text-transform:uppercase;letter-spacing:0.06em;font-weight:700;
+  vertical-align:1px;
+}
+.mem-prefetch-chip .mp-mem-desc{
+  margin-top:4px;color:var(--text-primary,#e4e4e7);font-size:11px;
+  opacity:0.85;font-family:inherit;white-space:normal;line-height:1.5;
+}
+
+/* ── Status variants ─────────────────────────────────────────────
+   Amber = running (default), green = done, red = failed, slate = skipped.
+   Same semantic palette as the tool panel's ptool-badge-ok / -err / -warn. */
+.mem-prefetch-chip.mp-running{
+  border-color:rgba(245,158,11,0.32);background:rgba(245,158,11,0.05);
+}
+.mem-prefetch-chip.mp-running .mp-icon{color:#f59e0b}
+.mem-prefetch-chip.mp-done{
+  border-color:rgba(52,211,153,0.3);background:rgba(52,211,153,0.05);
+}
+.mem-prefetch-chip.mp-done .mp-icon{color:#34d399}
+.mem-prefetch-chip.mp-done .mp-mem-name{color:#86efac}
+.mem-prefetch-chip.mp-failed{
+  border-color:rgba(239,68,68,0.32);background:rgba(239,68,68,0.05);
+}
+.mem-prefetch-chip.mp-failed .mp-icon{color:#f87171}
+.mem-prefetch-chip.mp-skipped{
+  border-color:rgba(100,116,139,0.28);background:rgba(100,116,139,0.04);
+  opacity:0.75;
+}
+.mem-prefetch-chip.mp-skipped .mp-icon{color:rgba(148,163,184,0.7)}
+
+/* ── MCP login-hint sub-variant ──────────────────────────────────
+   Same chassis as mem-prefetch-chip but needs to accommodate:
+     • a wrapping multi-line headline (full question, no ellipsis)
+     • a free-text subtitle that wraps
+     • an optional pretty-printed JSON snippet block
+     • a gentle glow while awaiting approval so the user notices
+   The glow is limited to the "awaiting_approval" state — approved
+   and failed variants are quiet like everything else in the panel. */
+.mem-prefetch-chip.mp-login-hint{
+  align-items:flex-start;        /* icon aligns with first line of headline */
+}
+.mem-prefetch-chip.mp-login-hint .mp-icon{margin-top:1px}
+.mem-prefetch-chip.mp-login-hint .mp-headline,
+.mem-prefetch-chip.mp-login-hint .mp-sub{
+  white-space:normal;overflow:visible;text-overflow:clip;
+  word-break:break-word;line-height:1.5;
+}
+.mem-prefetch-chip.mp-login-hint .mp-sub{opacity:0.78;margin-top:1px}
+.mem-prefetch-chip.mp-login-hint pre.mp-snippet{
+  margin:6px 0 0;padding:8px 10px;
+  background:rgba(0,0,0,0.22);
+  border:1px solid rgba(234,179,8,0.14);
+  border-radius:6px;
+  font-family:'JetBrains Mono','SF Mono',Menlo,monospace;
+  font-size:10.5px;line-height:1.45;
+  white-space:pre-wrap;word-break:break-word;
+  max-height:260px;overflow:auto;
+  color:var(--text-secondary);
+  flex-basis:100%;
+}
+/* Running state: soft amber breathing outline, no heavy pulse */
+.mem-prefetch-chip.mp-login-hint.mp-running{
+  animation:mp-login-breathe 2.4s ease-in-out infinite;
+}
+@keyframes mp-login-breathe{
+  0%,100%{box-shadow:0 0 0 0 rgba(245,158,11,0.24)}
+  50%    {box-shadow:0 0 0 4px rgba(245,158,11,0)}
+}
+
+/* ── Light theme overrides ──────────────────────────────────────── */
+[data-theme="light"] .mem-prefetch-chip{
+  background:rgba(180,140,0,0.05);border-color:rgba(180,140,0,0.28);
+}
+[data-theme="light"] .mem-prefetch-chip .mp-icon{color:#a06e00}
+[data-theme="light"] .mem-prefetch-chip .mp-headline{color:#1f2937}
+[data-theme="light"] .mem-prefetch-chip .mp-sub{color:#4b5563;opacity:0.9}
+[data-theme="light"] .mem-prefetch-chip.mp-running{
+  background:rgba(245,158,11,0.06);border-color:rgba(245,158,11,0.35);
+}
+[data-theme="light"] .mem-prefetch-chip.mp-done{
+  background:rgba(34,197,94,0.06);border-color:rgba(34,197,94,0.32);
+}
+[data-theme="light"] .mem-prefetch-chip.mp-done .mp-icon{color:#059669}
+[data-theme="light"] .mem-prefetch-chip.mp-failed{
+  background:rgba(220,38,38,0.05);border-color:rgba(220,38,38,0.32);
+}
+[data-theme="light"] .mem-prefetch-chip.mp-failed .mp-icon{color:#dc2626}
+[data-theme="light"] .mem-prefetch-chip.mp-skipped{
+  background:rgba(100,116,139,0.06);border-color:rgba(100,116,139,0.3);
+}
+[data-theme="light"] .mem-prefetch-chip .mp-mem-list li{
+  background:rgba(245,158,11,0.08);border-color:rgba(245,158,11,0.28);
+}
+[data-theme="light"] .mem-prefetch-chip .mp-mem-name{color:#b45309}
+[data-theme="light"] .mem-prefetch-chip.mp-done .mp-mem-name{color:#047857}
+[data-theme="light"] .mem-prefetch-chip .mp-mem-scope{
+  background:rgba(245,158,11,0.18);color:#92400e;
+}
+[data-theme="light"] .mem-prefetch-chip .mp-mem-desc{color:#1f2937;opacity:1}
+[data-theme="light"] .mem-prefetch-chip.mp-login-hint pre.mp-snippet{
+  background:rgba(0,0,0,0.04);border-color:rgba(0,0,0,0.08);color:#374151;
+}
+
+/* ── Tofu theme overrides — warm ivory/kinako/matcha/azuki ──────
+   The default chip uses neon amber (#eab308) + lime (#86efac) +
+   mint (#34d399) which fight the soy-milk palette and make the
+   text-on-tint unreadable. Rebuild with the tofu token palette,
+   matching the adjacent .ptool-panel pixel-window aesthetic:
+     • kinako warm #C4956A / #A67B52 for running / info
+     • matcha #5E8A50 / #6A8A5E for done
+     • azuki #A85A4A / #B46E60 for failed
+     • muted #9C9178 for skipped
+   Use flat 1px borders (no NES 3D) since this chip sits ABOVE
+   the ptool-panel and should read as a subtle prelude banner. */
+[data-theme="tofu"] .mem-prefetch-chip{
+  background:rgba(196,149,106,0.06);
+  border:1px solid rgba(196,149,106,0.28);
+  border-radius:var(--radius-sm);
+  color:#4A3F2F;
+  font-family:'JetBrains Mono','SF Mono',Menlo,monospace;
+}
+[data-theme="tofu"] .mem-prefetch-chip.mp-expandable:hover{
+  background:rgba(196,149,106,0.1);
+  border-color:rgba(196,149,106,0.4);
+}
+[data-theme="tofu"] .mem-prefetch-chip .mp-icon{color:#A67B52}
+[data-theme="tofu"] .mem-prefetch-chip .mp-headline{color:#4A3F2F}
+[data-theme="tofu"] .mem-prefetch-chip .mp-sub{color:#736750;opacity:1}
+[data-theme="tofu"] .mem-prefetch-chip .mp-dots span{background:#C4956A}
+[data-theme="tofu"] .mem-prefetch-chip .mp-chevron{color:#A67B52;opacity:0.7}
+[data-theme="tofu"] .mem-prefetch-chip .mp-details{
+  border-top:1.5px dashed #C2BCA4;
+}
+
+/* ── Status variants ── */
+[data-theme="tofu"] .mem-prefetch-chip.mp-running{
+  background:rgba(196,149,106,0.08);border-color:rgba(196,149,106,0.35);
+}
+[data-theme="tofu"] .mem-prefetch-chip.mp-running .mp-icon{color:#C4956A}
+[data-theme="tofu"] .mem-prefetch-chip.mp-done{
+  background:rgba(106,138,94,0.07);border-color:rgba(106,138,94,0.32);
+}
+[data-theme="tofu"] .mem-prefetch-chip.mp-done .mp-icon{color:#5E8A50}
+[data-theme="tofu"] .mem-prefetch-chip.mp-failed{
+  background:rgba(184,106,90,0.07);border-color:rgba(184,106,90,0.3);
+}
+[data-theme="tofu"] .mem-prefetch-chip.mp-failed .mp-icon{color:#A85A4A}
+[data-theme="tofu"] .mem-prefetch-chip.mp-skipped{
+  background:rgba(196,149,106,0.04);border-color:rgba(196,149,106,0.18);
+  opacity:0.8;
+}
+[data-theme="tofu"] .mem-prefetch-chip.mp-skipped .mp-icon{color:#9C9178}
+
+/* ── Memory list items (expanded details) ── */
+[data-theme="tofu"] .mem-prefetch-chip .mp-mem-list li{
+  background:#F8F6F0;
+  border:1.5px solid #C4B89E;
+  border-top-color:#DDD6C4;border-left-color:#DDD6C4;
+  border-right-color:#A89878;border-bottom-color:#A89878;
+  border-radius:6px;
+  box-shadow:0 1px 0 #C8BDA6;
+  color:#4A3F2F;
+}
+[data-theme="tofu"] .mem-prefetch-chip .mp-mem-name{
+  color:#7A5A3A;            /* dark kinako — readable on ivory */
+  font-weight:700;
+}
+[data-theme="tofu"] .mem-prefetch-chip.mp-done .mp-mem-name{
+  color:#4E7242;            /* dark matcha */
+}
+[data-theme="tofu"] .mem-prefetch-chip.mp-failed .mp-mem-name{
+  color:#8A4A3C;            /* dark azuki */
+}
+[data-theme="tofu"] .mem-prefetch-chip .mp-mem-scope{
+  background:rgba(196,149,106,0.18);
+  color:#7A5A3A;
+  border:1px solid rgba(196,149,106,0.35);
+  border-radius:4px;
+  font-weight:700;
+}
+[data-theme="tofu"] .mem-prefetch-chip .mp-mem-desc{
+  color:#4A3F2F;opacity:1;
+}
+
+/* ── MCP login-hint snippet ── */
+[data-theme="tofu"] .mem-prefetch-chip.mp-login-hint pre.mp-snippet{
+  background:#EDEBE2;
+  border:1.5px solid #C4B89E;
+  color:#4A3F2F;
+}
+[data-theme="tofu"] .mem-prefetch-chip.mp-login-hint.mp-running{
+  animation:tofuMpBreathe 2.4s ease-in-out infinite;
+}
+@keyframes tofuMpBreathe{
+  0%,100%{box-shadow:0 0 0 0 rgba(196,149,106,0.26)}
+  50%    {box-shadow:0 0 0 4px rgba(196,149,106,0)}
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+ * Compaction Viewer — inline markers + right-side drawer
+ * (see static/js/compaction-viewer.js)
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+/* Inline chips rendered inside the assistant bubble when a compaction fired */
+.compaction-marker-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 10px 0 4px;
+  padding: 8px 10px;
+  border-left: 2px dashed color-mix(in srgb, var(--accent) 55%, transparent);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  border-radius: 3px;
+}
+.compaction-marker {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  font-size: 11.5px;
+  font-family: 'JetBrains Mono', 'SF Mono', monospace;
+  color: var(--text-secondary);
+  background: var(--bg-elevated, rgba(255,255,255,0.03));
+  border: 1px solid var(--border-subtle, rgba(255,255,255,0.08));
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 120ms ease;
+  text-align: left;
+  line-height: 1.35;
+}
+.compaction-marker:hover {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border-subtle, rgba(255,255,255,0.08)));
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--text-primary);
+  transform: translateY(-1px);
+}
+.compaction-marker.is-progress {
+  animation: compactionMarkerPulse 1.6s ease-in-out infinite;
+}
+@keyframes compactionMarkerPulse {
+  0%, 100% { opacity: 0.78; }
+  50%      { opacity: 1; }
+}
+.compaction-marker-icon {
+  display: inline-flex;
+  color: color-mix(in srgb, var(--accent) 75%, var(--text-tertiary));
+}
+.compaction-marker-trigger {
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+.compaction-marker-stat {
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+.compaction-marker-reason {
+  color: color-mix(in srgb, #f59e0b 70%, var(--text-tertiary));
+  font-size: 10.5px;
+  font-style: italic;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.compaction-marker-cta {
+  margin-left: auto;
+  padding: 1px 6px;
+  font-size: 10px;
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  border-radius: 3px;
+  opacity: 0.85;
+}
+.compaction-marker:hover .compaction-marker-cta {
+  opacity: 1;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+/* Drawer container */
+.compaction-drawer {
+  position: fixed;
+  inset: 0;
+  z-index: 9998;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 180ms ease;
+}
+.compaction-drawer.is-open {
+  opacity: 1;
+  pointer-events: auto;
+}
+.compaction-drawer-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.38);
+  backdrop-filter: blur(1px);
+  cursor: pointer;
+}
+.compaction-drawer-panel {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(780px, 94vw);
+  background: var(--bg-primary, #1a1a1d);
+  border-left: 1px solid var(--border-subtle, rgba(255,255,255,0.08));
+  box-shadow: -20px 0 60px rgba(0, 0, 0, 0.45);
+  display: flex;
+  flex-direction: column;
+  transform: translateX(30px);
+  transition: transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.compaction-drawer.is-open .compaction-drawer-panel {
+  transform: translateX(0);
+}
+
+body.compaction-drawer-open .app-root,
+body.compaction-drawer-open .chat-shell {
+  /* Soft fade of background so the drawer feels focused without
+     actually freezing the main chat. */
+  transition: filter 200ms ease;
+}
+
+/* Drawer header */
+.compaction-drawer-header {
+  flex: 0 0 auto;
+  padding: 18px 22px 12px;
+  border-bottom: 1px solid var(--border-subtle, rgba(255,255,255,0.08));
+  background: var(--bg-elevated, rgba(255,255,255,0.02));
+}
+.compaction-drawer-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.compaction-drawer-header h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.compaction-drawer-close {
+  background: transparent;
+  border: 1px solid var(--border-subtle, rgba(255,255,255,0.08));
+  color: var(--text-secondary);
+  border-radius: 4px;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 120ms ease;
+}
+.compaction-drawer-close:hover {
+  color: var(--text-primary);
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border-subtle, rgba(255,255,255,0.08)));
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.compaction-drawer-subtitle {
+  margin: 8px 0 12px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-tertiary);
+}
+.compaction-drawer-subtitle strong { color: var(--text-secondary); font-weight: 600; }
+.compaction-drawer-subtitle em { color: color-mix(in srgb, #f59e0b 65%, var(--text-tertiary)); font-style: normal; }
+
+/* Metadata grid */
+.cd-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 6px 16px;
+  font-size: 11.5px;
+  font-family: 'JetBrains Mono', 'SF Mono', monospace;
+  margin-bottom: 10px;
+}
+.cd-meta-row { display: flex; gap: 8px; align-items: baseline; }
+.cd-meta-k {
+  min-width: 68px;
+  color: var(--text-tertiary);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.cd-meta-v { color: var(--text-secondary); }
+.cd-meta-v em { color: color-mix(in srgb, #22c55e 75%, var(--text-secondary)); font-style: normal; }
+.cd-meta-trigger-reactive { color: #fb923c; font-weight: 600; }
+.cd-meta-trigger-force { color: var(--accent); font-weight: 600; }
+.cd-meta-reason { grid-column: 1 / -1; }
+.cd-meta-reason .cd-meta-v { color: #fbbf24; font-style: italic; }
+
+/* Tabs */
+.compaction-drawer-tabs {
+  display: flex;
+  gap: 2px;
+  margin-top: 8px;
+  border-bottom: 1px solid var(--border-subtle, rgba(255,255,255,0.08));
+  margin-bottom: -13px;
+}
+.compaction-tab {
+  background: transparent;
+  border: none;
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  transition: all 120ms ease;
+}
+.compaction-tab:hover { color: var(--text-secondary); }
+.compaction-tab.is-active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+/* Body */
+.compaction-drawer-body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 16px 22px;
+}
+.compaction-drawer-loading {
+  padding: 40px 0;
+  text-align: center;
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+.cd-empty { padding: 32px 0; text-align: center; color: var(--text-tertiary); font-size: 12.5px; line-height: 1.6; }
+.cd-empty p { margin: 4px 0; }
+.cd-empty.cd-error { color: #ef4444; }
+
+/* Message list */
+.compaction-msg-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.cd-msg {
+  border: 1px solid var(--border-subtle, rgba(255,255,255,0.08));
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--bg-elevated, rgba(255,255,255,0.02)) 80%, transparent);
+  overflow: hidden;
+}
+.cd-msg-system { border-left: 3px solid #64748b; }
+.cd-msg-user   { border-left: 3px solid #3b82f6; }
+.cd-msg-assistant { border-left: 3px solid color-mix(in srgb, var(--accent) 75%, #a855f7); }
+.cd-msg-tool   { border-left: 3px solid #10b981; }
+.cd-msg-function { border-left: 3px solid #10b981; }
+
+.cd-msg-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  font-size: 10.5px;
+  font-family: 'JetBrains Mono', 'SF Mono', monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: color-mix(in srgb, var(--bg-elevated, rgba(255,255,255,0.02)) 120%, transparent);
+  border-bottom: 1px solid var(--border-subtle, rgba(255,255,255,0.06));
+}
+.cd-msg-idx  { color: var(--text-tertiary); min-width: 32px; }
+.cd-msg-role { font-weight: 600; color: var(--text-secondary); }
+.cd-msg-meta { margin-left: auto; color: var(--text-tertiary); font-size: 10px; text-transform: none; letter-spacing: 0; }
+.cd-msg-body { padding: 10px 12px; }
+.cd-empty-body { color: var(--text-tertiary); font-size: 11px; }
+
+.cd-content, .cd-toolcall-args, .cd-summary {
+  margin: 4px 0;
+  padding: 8px 10px;
+  background: rgba(0, 0, 0, 0.22);
+  border-radius: 3px;
+  font-size: 11.5px;
+  font-family: 'JetBrains Mono', 'SF Mono', monospace;
+  line-height: 1.55;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 360px;
+  overflow: auto;
+}
+.cd-summary { max-height: none; white-space: pre-wrap; }
+.cd-content-blocks { display: flex; flex-direction: column; gap: 4px; }
+
+.cd-toolcall {
+  margin: 6px 0;
+  padding: 0;
+}
+.cd-toolcall-name {
+  font-family: 'JetBrains Mono', 'SF Mono', monospace;
+  font-size: 11px;
+  color: #22d3ee;
+  margin: 4px 0;
+}
+.cd-toolcall-id {
+  margin-left: 8px;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  opacity: 0.7;
+}
+
+.cd-image-block {
+  margin: 4px 0;
+  padding: 8px 10px;
+  background: rgba(0, 0, 0, 0.18);
+  border: 1px dashed var(--border-subtle, rgba(255,255,255,0.1));
+  border-radius: 4px;
+}
+.cd-image-head {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  margin-bottom: 6px;
+  font-family: 'JetBrains Mono', 'SF Mono', monospace;
+}
+.cd-image-placeholder button {
+  background: transparent;
+  border: 1px solid var(--border-subtle, rgba(255,255,255,0.12));
+  color: var(--accent);
+  padding: 4px 10px;
+  font-size: 11px;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: all 120ms ease;
+}
+.cd-image-placeholder button:hover {
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--text-primary);
+}
+.cd-image-placeholder img {
+  max-width: 100%;
+  max-height: 360px;
+  border-radius: 3px;
+  display: block;
+}
+
+.cd-thinking {
+  margin-top: 6px;
+  padding: 6px 10px;
+  background: rgba(0, 0, 0, 0.15);
+  border: 1px solid var(--border-subtle, rgba(255,255,255,0.06));
+  border-radius: 3px;
+}
+.cd-thinking summary {
+  cursor: pointer;
+  font-size: 10.5px;
+  color: var(--text-tertiary);
+  font-family: 'JetBrains Mono', 'SF Mono', monospace;
+}
+.cd-thinking pre { margin: 6px 0 0; }
+
+/* History tab */
+.compaction-history-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.cd-history-item {
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle, rgba(255,255,255,0.08));
+  border-radius: 4px;
+  background: var(--bg-elevated, rgba(255,255,255,0.02));
+  cursor: pointer;
+  transition: all 120ms ease;
+}
+.cd-history-item:hover {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border-subtle, rgba(255,255,255,0.08)));
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.cd-history-item.is-active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.cd-history-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 12px;
+}
+.cd-history-trigger { font-weight: 600; }
+.cd-history-trigger-reactive { color: #fb923c; }
+.cd-history-trigger-force { color: var(--accent); }
+.cd-history-time { color: var(--text-tertiary); font-size: 10.5px; margin-left: auto; }
+.cd-history-stats {
+  margin-top: 4px;
+  font-family: 'JetBrains Mono', 'SF Mono', monospace;
+  font-size: 10.5px;
+  color: var(--text-tertiary);
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.cd-history-stats em { color: #22c55e; font-style: normal; }
+.cd-history-reason {
+  margin-top: 4px;
+  font-size: 11px;
+  color: #fbbf24;
+  font-style: italic;
+}
+
+/* Footer */
+.compaction-drawer-footer {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 8px;
+  padding: 12px 22px;
+  border-top: 1px solid var(--border-subtle, rgba(255,255,255,0.08));
+  background: var(--bg-elevated, rgba(255,255,255,0.02));
+}
+.compaction-drawer-btn {
+  padding: 6px 12px;
+  font-size: 12px;
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-subtle, rgba(255,255,255,0.1));
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 120ms ease;
+}
+.compaction-drawer-btn:hover {
+  color: var(--text-primary);
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border-subtle, rgba(255,255,255,0.1)));
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+/* Small screens — full-width drawer */
+@media (max-width: 720px) {
+  .compaction-drawer-panel {
+    width: 100vw;
+    border-left: none;
+  }
+  .cd-meta-grid { grid-template-columns: 1fr; }
+}

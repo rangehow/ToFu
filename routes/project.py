@@ -165,6 +165,85 @@ def project_undo_all():
         return jsonify({'error': 'internal_error'}), 500
 
 
+@project_bp.route('/api/project/gitignore/suggestions', methods=['GET'])
+def project_gitignore_suggestions():
+    """List pending .gitignore suggestions detected from grep timeouts.
+
+    Query: ?projectPath=/abs/path  (optional — uses active project if omitted)
+    """
+    project_path = (request.args.get('projectPath') or '').strip()
+    if not project_path:
+        from lib.project_mod.config import _state
+        project_path = _state.get('path', '')
+    if not project_path:
+        return jsonify({'error': 'No active project'}), 400
+    try:
+        from lib.project_mod.gitignore_suggest import get_suggestions
+        items = get_suggestions(project_path)
+        return jsonify({'ok': True, 'projectPath': project_path, 'suggestions': items})
+    except Exception as e:
+        logger.error('[Project] gitignore/suggestions failed: %s', e, exc_info=True)
+        return jsonify({'error': 'internal_error'}), 500
+
+
+@project_bp.route('/api/project/gitignore/accept', methods=['POST'])
+@rate_limit(limit=10, per=60)
+def project_gitignore_accept():
+    """Append the given dirs to the project's .gitignore.
+
+    Body: { "projectPath": "...", "dirs": ["swebench_rerun_workdir", ...] }
+    Only dirs currently in the suggestion registry are accepted (defense
+    against arbitrary writes). Existing entries in .gitignore are skipped.
+    """
+    data = request.get_json(silent=True) or {}
+    project_path = (data.get('projectPath') or '').strip()
+    dirs = data.get('dirs') or []
+    if not project_path:
+        from lib.project_mod.config import _state
+        project_path = _state.get('path', '')
+    if not project_path:
+        return jsonify({'error': 'No active project'}), 400
+    if not isinstance(dirs, list) or not dirs:
+        return jsonify({'error': 'dirs must be a non-empty list'}), 400
+    try:
+        from lib.project_mod.gitignore_suggest import accept_suggestions
+        result = accept_suggestions(project_path, dirs)
+        if 'error' in result:
+            return jsonify(result), 400
+        logger.info('[Project] gitignore/accept %s: added=%s skipped=%s unknown=%s',
+                    project_path, result.get('added'),
+                    result.get('skipped_existing'), result.get('unknown'))
+        return jsonify({'ok': True, **result})
+    except Exception as e:
+        logger.error('[Project] gitignore/accept failed: %s', e, exc_info=True)
+        return jsonify({'error': 'internal_error'}), 500
+
+
+@project_bp.route('/api/project/gitignore/dismiss', methods=['POST'])
+def project_gitignore_dismiss():
+    """Remove the given dirs from the suggestion registry (no .gitignore write).
+
+    Body: { "projectPath": "...", "dirs": [...] }
+    """
+    data = request.get_json(silent=True) or {}
+    project_path = (data.get('projectPath') or '').strip()
+    dirs = data.get('dirs') or []
+    if not project_path:
+        from lib.project_mod.config import _state
+        project_path = _state.get('path', '')
+    if not project_path:
+        return jsonify({'error': 'No active project'}), 400
+    if not isinstance(dirs, list) or not dirs:
+        return jsonify({'error': 'dirs must be a non-empty list'}), 400
+    try:
+        from lib.project_mod.gitignore_suggest import dismiss_suggestions
+        removed = dismiss_suggestions(project_path, dirs)
+        return jsonify({'ok': True, 'removed': removed})
+    except Exception as e:
+        logger.error('[Project] gitignore/dismiss failed: %s', e, exc_info=True)
+        return jsonify({'error': 'internal_error'}), 500
+
+
 @project_bp.route('/api/project/rescan', methods=['POST'])
 def project_rescan():
     """Re-scan the current project to refresh file tree and stats."""
@@ -174,4 +253,35 @@ def project_rescan():
         return jsonify({'ok': True, **(result or {})})
     except Exception as e:
         logger.error('[Project] rescan failed: %s', e, exc_info=True)
+        return jsonify({'error': 'internal_error'}), 500
+
+
+# ═══════════════════════════════════════════════════════
+#  ★ Per-round redo (file-history)
+# ═══════════════════════════════════════════════════════
+
+@project_bp.route('/api/project/redo', methods=['POST'])
+def project_redo():
+    """Re-apply a previously-undone round via the file-history snapshot.
+
+    Body: { "taskId": "...", "projectPath": "..." }
+    """
+    data = request.get_json(silent=True) or {}
+    project_path = (data.get('projectPath') or '').strip()
+    task_id = (data.get('taskId') or '').strip()
+    if not project_path:
+        from lib.project_mod.config import _state
+        project_path = _state.get('path', '')
+    if not project_path:
+        return jsonify({'error': 'No active project'}), 400
+    if not task_id:
+        return jsonify({'error': 'taskId is required'}), 400
+    try:
+        from lib.project_mod import redo_task_modifications
+        result = redo_task_modifications(project_path, task_id)
+        logger.info('[Project] redo task=%s: redone=%s ok=%s',
+                    task_id[:8], result.get('redone', 0), result.get('ok'))
+        return jsonify(result)
+    except Exception as e:
+        logger.error('[Project] redo failed: %s', e, exc_info=True)
         return jsonify({'error': 'internal_error'}), 500

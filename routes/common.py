@@ -430,6 +430,7 @@ def features():
         'pptx_translate_enabled': getattr(_lib, 'PPTX_TRANSLATE_ENABLED', False),
         'cache_extended_ttl': getattr(_lib, 'CACHE_EXTENDED_TTL', False),
         'debug_mode': getattr(_lib, 'DEBUG_MODE', False),
+        'optimizer_enabled': getattr(_lib, 'OPTIMIZER_ENABLED', True),
     })
 
 
@@ -474,6 +475,13 @@ def save_features():
         if old_val != new_val:
             changed.append('debug_mode')
             logger.info('[Features] debug_mode: %s → %s', old_val, new_val)
+    if 'optimizer_enabled' in data:
+        new_val = bool(data['optimizer_enabled'])
+        old_val = existing.get('optimizer_enabled', None)
+        existing['optimizer_enabled'] = new_val
+        if old_val != new_val:
+            changed.append('optimizer_enabled')
+            logger.info('[Features] optimizer_enabled: %s → %s', old_val, new_val)
     try:
         os.makedirs(os.path.dirname(features_path), exist_ok=True)
         with open(features_path, 'w') as f:
@@ -511,6 +519,25 @@ def save_features():
     if 'debug_mode' in changed:
         _lib.DEBUG_MODE = existing.get('debug_mode', False)
         logger.info('[Features] Hot-reloaded DEBUG_MODE → %s', _lib.DEBUG_MODE)
+    # Hot-reload OPTIMIZER_ENABLED. Also toggles the underlying scheduled
+    # task's enabled flag so the cron tick won't fire `run_once` when off.
+    if 'optimizer_enabled' in changed:
+        _lib.OPTIMIZER_ENABLED = existing.get('optimizer_enabled', True)
+        logger.info('[Features] Hot-reloaded OPTIMIZER_ENABLED → %s',
+                    _lib.OPTIMIZER_ENABLED)
+        try:
+            from lib.scheduler import get_scheduler
+            mgr = get_scheduler()
+            db = mgr._get_db()
+            rows = db.execute(
+                "SELECT id FROM scheduled_tasks WHERE task_type=? AND name=?",
+                ['optimizer', 'Daily Optimizer']).fetchall()
+            for r in rows:
+                tid = r['id'] if isinstance(r, dict) else r[0]
+                mgr.toggle_task(tid, enabled=_lib.OPTIMIZER_ENABLED)
+        except Exception as _te:
+            logger.warning('[Features] Could not toggle Daily Optimizer task: %s',
+                           _te, exc_info=True)
 
     return jsonify({'ok': True, 'saved': existing,
                     'needs_restart': False, 'changed': changed})

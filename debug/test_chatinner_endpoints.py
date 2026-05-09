@@ -18,7 +18,7 @@ import uuid
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Avoid starting background threads during import (server.py would start them).
-os.environ.setdefault('CHATUI_DB_BACKEND', 'sqlite')
+os.environ.setdefault('TOFU_DB_BACKEND', 'sqlite')
 
 # The editable Flask dev snapshot in this environment (from the SWE-bench
 # workdir) ships a werkzeug that lacks __version__; Flask's test_client()

@@ -98,7 +98,7 @@ class ScheduledTaskManager:
              target_conv_id, source_conv_id, tools_config, max_executions, expires_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', [task_id, name, schedule, task_type, command, description,
-              int(notify_on_failure), int(notify_on_success), max_runtime, now, now,
+              bool(notify_on_failure), bool(notify_on_success), max_runtime, now, now,
               target_conv_id or '', source_conv_id or '', tools_json,
               max_executions, expires_at or ''])
         db.commit()
@@ -251,6 +251,31 @@ class ScheduledTaskManager:
             except Exception as e:
                 logger.error('[Scheduler] Prompt task failed: cmd=%s: %s', str(command)[:100], e, exc_info=True)
                 return False, 'Prompt execution error (see logs)'
+
+        elif task_type == 'optimizer':
+            # Daily Optimizer: runs lib.optimizer.run_once() in-process.
+            # ``command`` is informational only (the handler ignores it so
+            # the LLM cannot inject arbitrary code).
+            try:
+                import lib as _lib
+                if not getattr(_lib, 'OPTIMIZER_ENABLED', True):
+                    logger.info('[Scheduler] Optimizer task skipped — '
+                                'OPTIMIZER_ENABLED=False')
+                    return True, 'skipped (optimizer disabled in Settings)'
+                from lib.optimizer import run_once
+                import json as _json
+                summary = run_once(dry_run=False)
+                text = _json.dumps({
+                    'proposals': len(summary.get('proposals', [])),
+                    'applied': len(summary.get('applied', [])),
+                    'pending_review': len(summary.get('pending_review', [])),
+                    'rejected': len(summary.get('rejected', [])),
+                    'reverts': len(summary.get('reverts', [])),
+                }, ensure_ascii=False)
+                return True, text
+            except Exception as e:
+                logger.error('[Scheduler] Optimizer task failed: %s', e, exc_info=True)
+                return False, 'Optimizer execution error (see logs)'
 
         return False, f'Unknown task type: {task_type}'
 
@@ -445,11 +470,67 @@ class ScheduledTaskManager:
             record_poll(task_id, 'act_failed', reason, 'cheap', tokens_used, status_snapshot)
             logger.error('%s ❌ Execution failed to start', pfx)
 
+    def _ensure_default_optimizer_task(self):
+        """Idempotently register the Daily Optimizer cron task.
+
+        Runs ``lib.optimizer.run_once()`` nightly at 03:30 local.  Matched
+        by exact name so subsequent boots never create duplicates.
+        """
+        try:
+            db = self._get_db()
+            row = db.execute(
+                "SELECT id FROM scheduled_tasks WHERE name=? AND task_type=?",
+                ['Daily Optimizer', 'optimizer']).fetchone()
+            if row:
+                logger.debug('[Scheduler] Daily Optimizer task already present '
+                             '(id=%s) — skipping auto-registration',
+                             row['id'] if isinstance(row, dict) else row[0])
+                return
+            # Also tolerate an older row with the same name but wrong type
+            old_row = db.execute(
+                "SELECT id FROM scheduled_tasks WHERE name=?",
+                ['Daily Optimizer']).fetchone()
+            if old_row:
+                logger.info('[Scheduler] Daily Optimizer row exists with wrong '
+                            'task_type — leaving in place, not overwriting')
+                return
+            task = self.create_task(
+                name='Daily Optimizer',
+                schedule='30 3 * * *',
+                command='lib.optimizer.run_once()',  # informational
+                task_type='optimizer',
+                description='Mines logs + daily reports once per day and applies '
+                            'whitelisted optimisations (block_search_domain). '
+                            'Auto-registered by lib.scheduler.manager.',
+                notify_on_failure=True,
+                notify_on_success=False,
+                max_runtime=600,
+            )
+            # Respect the current feature flag on first boot.
+            try:
+                import lib as _lib
+                if not getattr(_lib, 'OPTIMIZER_ENABLED', True):
+                    self.toggle_task(task.get('id'), enabled=False)
+            except Exception as _fe:
+                logger.debug('[Scheduler] optimizer feature flag check skipped: %s',
+                             _fe)
+            logger.info('[Scheduler] Auto-registered Daily Optimizer task id=%s',
+                        task.get('id'))
+        except Exception as e:
+            logger.warning('[Scheduler] Could not auto-register Daily Optimizer: %s',
+                           e, exc_info=True)
+
     def start(self):
         """Start the background scheduler thread."""
         if self._running:
             return
         self._running = True
+
+        # Idempotent default task registration.  Safe to call on every boot.
+        try:
+            self._ensure_default_optimizer_task()
+        except Exception as e:
+            logger.warning('[Scheduler] default-task bootstrap failed: %s', e, exc_info=True)
 
         def _loop():
             logger.info('🕐 Background scheduler started')

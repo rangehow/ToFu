@@ -67,7 +67,7 @@ ready.
 > Python). If `postgresql` is available (the installer fetches it from
 > conda-forge too), Tofu auto-bootstraps a rootless userspace PG instance for
 > better concurrency with 100+ users. Force SQLite with
-> `CHATUI_DB_BACKEND=sqlite`.
+> `TOFU_DB_BACKEND=sqlite` (legacy `CHATUI_DB_BACKEND=sqlite` still works).
 
 ```bash
 # Pre-configure API key and port
@@ -170,8 +170,8 @@ python server.py
 > **Database auto-detection:** On first launch, Tofu tries PostgreSQL first
 > (for best concurrency). If PG isn't available, it falls back to **SQLite**
 > automatically — no action needed. PostgreSQL runs as a local userspace
-> process (no `sudo`, no system service). Set `CHATUI_DB_BACKEND=sqlite` to
-> force SQLite.
+> process (no `sudo`, no system service). Set `TOFU_DB_BACKEND=sqlite` to
+> force SQLite (legacy `CHATUI_DB_BACKEND=sqlite` still works).
 
 > **Missing packages?** If any dependency is missing, `server.py` auto-
 > delegates to `bootstrap.py`, which first tries `conda install -c conda-forge`
@@ -432,6 +432,32 @@ When you're reading research papers — arXiv PDFs, conference proceedings, inte
 
 > ⚠️ **Beta:** Paper Reader is actively being iterated on. Feedback welcome on [GitHub Issues](https://github.com/rangehow/ToFu/issues).
 
+#### Optional: Layout-aware PDF parsing with Docling
+
+The default PDF pipeline (`pymupdf4llm`) does a good job on most papers, but
+struggles with **borderless tables** and **complex math formulas** that are
+common in ML / theoretical CS papers. For those, Tofu can route through
+[**Docling**](https://github.com/docling-project/docling) (IBM) — a layout-aware
+model that uses TableFormer for tables and an internal equation model for math,
+producing much cleaner Markdown.
+
+**Trade-off:** Docling pulls in PyTorch + ~2 GB of model weights, so it's **opt-in**.
+
+```bash
+# At install time
+./install.sh --with-docling
+# Or:
+python install.py --with-docling
+
+# Or after the fact:
+pip install docling --extra-index-url https://download.pytorch.org/whl/cpu
+```
+
+Then enable it by setting `PDF_TEXT_MODE=structured` in your `.env`, or
+per-request via the form field `textMode=structured` on `/api/pdf/parse`.
+If Docling isn't installed when `structured` is requested, the server falls
+back to `pymupdf4llm` automatically — your uploads never break.
+
 ---
 
 ### 🖼️ Image Generation
@@ -571,6 +597,9 @@ The `.env.example` file documents all supported variables. Key ones:
 | `BIND_HOST` | Bind address | `0.0.0.0` |
 | `TUNNEL_TOKEN` | Auth token for public tunnel access | *(disabled)* |
 | `TRADING_ENABLED` | Enable trading module (`1`/`0`) | `0` |
+| `PDF_TEXT_MODE` | Default PDF text-extract strategy: `rich` (pymupdf4llm, default), `structured` (Docling; requires `pip install docling`), `fast` | `rich` |
+| `PDF_VLM_BATCH_PAGES` | Pages per VLM call when VLM parsing is used (1–16) | `4` |
+| `PDF_VLM_MAX_WORKERS` | Cap on concurrent VLM calls (useful on shared keys to avoid 429 storms) | unlimited |
 
 > **Priority:** Settings UI > `.env` file > system environment > defaults. You can also `export` variables directly — `.env` is just a convenience.
 

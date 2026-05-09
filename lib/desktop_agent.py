@@ -1,7 +1,7 @@
 """
-Desktop Agent — Local machine control bridge for ChatUI.
+Desktop Agent — Local machine control bridge for Tofu.
 
-Runs on the user's local machine (not the server), connects back to ChatUI
+Runs on the user's local machine (not the server), connects back to Tofu
 and exposes system-level tools that Chrome Extension cannot provide:
 
   ✅ File system operations (read/write/move/copy local files)
@@ -13,7 +13,7 @@ and exposes system-level tools that Chrome Extension cannot provide:
   ✅ Manage local services (start/stop processes)
 
 Architecture:
-  Desktop Agent (your PC)  ←→  ChatUI Server  ←→  LLM
+  Desktop Agent (your PC)  ←→  Tofu Server  ←→  LLM
 
   The agent polls /api/desktop/poll just like the browser extension polls
   /api/browser/poll. The server queues commands and returns results.
@@ -23,7 +23,7 @@ Usage:
   python lib/desktop_agent.py --server http://your-server:5000
 
 Security:
-  The agent only accepts commands from YOUR ChatUI server.
+  The agent only accepts commands from YOUR Tofu server.
   All dangerous operations require --allow-write / --allow-exec flags.
 """
 
@@ -315,7 +315,7 @@ def cmd_gui_action(params):
             # as /tmp may not be accessible on all machines)
             _data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data')
             os.makedirs(_data_dir, exist_ok=True)
-            tmp_path = os.path.join(_data_dir, '_chatui_locate.png')
+            tmp_path = os.path.join(_data_dir, '_tofu_locate.png')
             img.save(tmp_path)
             loc = pyautogui.locateOnScreen(tmp_path, confidence=params.get('confidence', 0.8))
             if loc:
@@ -543,7 +543,7 @@ def run_agent(server_url, permissions, poll_interval=1.0):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
-        description='ChatUI Desktop Agent — control your computer from AI',
+        description='Tofu Desktop Agent — control your computer from AI',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -560,7 +560,7 @@ Examples:
   python desktop_agent.py --server http://localhost:5000 --allow-all
 """
     )
-    parser.add_argument('--server', required=True, help='ChatUI server URL')
+    parser.add_argument('--server', required=True, help='Tofu server URL')
     parser.add_argument('--allow-write', action='store_true', help='Allow file write/move operations')
     parser.add_argument('--allow-exec', action='store_true', help='Allow running commands and opening apps')
     parser.add_argument('--allow-gui', action='store_true', help='Allow GUI automation (mouse, keyboard, screenshot)')

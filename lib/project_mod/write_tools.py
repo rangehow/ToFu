@@ -441,7 +441,7 @@ def _apply_one_diff(base, rel_path, search, replace, description='', conv_id=Non
                              f'File has {content.count(chr(10))+1} lines. '
                              f'Use read_files to verify the exact content first.')
                 if hint:
-                    error_msg += f'\n\n💡 Most similar block (line {hint["line"]}, {hint["similarity"]:.0%} match):\n```\n{hint["text"]}\n```'
+                    error_msg += f'\n\nMost similar block (line {hint["line"]}, {hint["similarity"]:.0%} match):\n```\n{hint["text"]}\n```'
                 return {
                     'ok': False, 'action': 'apply_diff', 'path': rel_path,
                     'error': error_msg,
@@ -476,7 +476,9 @@ def _apply_one_diff(base, rel_path, search, replace, description='', conv_id=Non
         new_lines = new_content.count('\n') + 1
         diff_lines = len(search.split('\n'))
 
-        _record_modification(base, 'apply_diff', rel_path, reverse_patch=reverse_patch,
+        _record_modification(base, 'apply_diff', rel_path,
+                             original_content=content,
+                             reverse_patch=reverse_patch,
                              conv_id=conv_id, task_id=task_id)
 
         result = {
@@ -519,7 +521,7 @@ def tool_apply_diffs(base_path, edits, conv_id=None, task_id=None):
 
     for i, edit in enumerate(edits, 1):
         if not isinstance(edit, dict):
-            results.append(f'[{i}] ❌ Invalid edit entry')
+            results.append(f'[{i}] FAIL Invalid edit entry')
             fail_count += 1
             continue
 
@@ -529,7 +531,7 @@ def tool_apply_diffs(base_path, edits, conv_id=None, task_id=None):
         desc = edit.get('description', '')
 
         if not rp or not search:
-            results.append(f'[{i}] ❌ Missing required field (path or search)')
+            results.append(f'[{i}] FAIL Missing required field (path or search)')
             fail_count += 1
             continue
 
@@ -539,7 +541,7 @@ def tool_apply_diffs(base_path, edits, conv_id=None, task_id=None):
             bp, resolved_rp = _resolve_base(base_path, rp)
         except ValueError as _rve:
             fail_count += 1
-            results.append(f'[{i}] ❌ {rp}: {_rve}')
+            results.append(f'[{i}] FAIL {rp}: {_rve}')
             continue
         result = _apply_one_diff(bp, resolved_rp, search, replace, desc, conv_id, replace_all=ra, task_id=task_id)
 
@@ -549,13 +551,13 @@ def tool_apply_diffs(base_path, edits, conv_id=None, task_id=None):
             if result.get('replacedCount'):
                 extra = f' [{result["replacedCount"]} occurrences]'
             results.append(
-                f'[{i}] ✅ {result["path"]}: {result["linesChanged"]} lines changed '
+                f'[{i}] OK {result["path"]}: {result["linesChanged"]} lines changed '
                 f'({result["oldLines"]}L → {result["newLines"]}L){extra}'
                 + (f' — {desc}' if desc else '')
             )
         else:
             fail_count += 1
-            results.append(f'[{i}] ❌ {rp}: {result["error"]}')
+            results.append(f'[{i}] FAIL {rp}: {result["error"]}')
 
     header = f'Applied {ok_count}/{ok_count + fail_count} edits'
     if fail_count:
@@ -629,7 +631,7 @@ def _insert_one(base, rel_path, anchor, content, position='after', description='
                              f'File has {file_content.count(chr(10))+1} lines. '
                              f'Use read_files to verify the exact content first.')
                 if hint:
-                    error_msg += (f'\n\n💡 Most similar block (line {hint["line"]}, '
+                    error_msg += (f'\n\nMost similar block (line {hint["line"]}, '
                                   f'{hint["similarity"]:.0%} match):\n```\n{hint["text"]}\n```')
                 return {'ok': False, 'action': 'insert_content', 'path': rel_path,
                         'error': error_msg, 'anchorLen': len(anchor)}
@@ -726,7 +728,9 @@ def _insert_one(base, rel_path, anchor, content, position='after', description='
         new_lines = new_content.count('\n') + 1
         inserted_lines = content.count('\n') + 1
 
-        _record_modification(base, 'apply_diff', rel_path, reverse_patch=reverse_patch,
+        _record_modification(base, 'apply_diff', rel_path,
+                             original_content=file_content,
+                             reverse_patch=reverse_patch,
                              conv_id=conv_id, task_id=task_id)
 
         # Calculate which line the insertion happened at
@@ -771,7 +775,7 @@ def tool_insert_contents(base_path, edits, conv_id=None, task_id=None):
 
     for i, edit in enumerate(edits, 1):
         if not isinstance(edit, dict):
-            results.append(f'[{i}] ❌ Invalid edit entry')
+            results.append(f'[{i}] FAIL Invalid edit entry')
             fail_count += 1
             continue
 
@@ -782,12 +786,12 @@ def tool_insert_contents(base_path, edits, conv_id=None, task_id=None):
         desc = edit.get('description', '')
 
         if not rp or not anchor:
-            results.append(f'[{i}] ❌ Missing required field (path or anchor)')
+            results.append(f'[{i}] FAIL Missing required field (path or anchor)')
             fail_count += 1
             continue
 
         if position not in ('before', 'after'):
-            results.append(f'[{i}] ❌ Invalid position: {position} (must be "before" or "after")')
+            results.append(f'[{i}] FAIL Invalid position: {position} (must be "before" or "after")')
             fail_count += 1
             continue
 
@@ -795,21 +799,21 @@ def tool_insert_contents(base_path, edits, conv_id=None, task_id=None):
             bp, resolved_rp = _resolve_base(base_path, rp)
         except ValueError as _rve:
             fail_count += 1
-            results.append(f'[{i}] ❌ {rp}: {_rve}')
+            results.append(f'[{i}] FAIL {rp}: {_rve}')
             continue
         result = _insert_one(bp, resolved_rp, anchor, content, position, desc, conv_id, task_id=task_id)
 
         if result['ok']:
             ok_count += 1
             results.append(
-                f'[{i}] ✅ {result["path"]}: {result["linesInserted"]} lines inserted '
+                f'[{i}] OK {result["path"]}: {result["linesInserted"]} lines inserted '
                 f'{result["position"]} anchor at L{result["anchorLine"]} '
                 f'({result["oldLines"]}L → {result["newLines"]}L)'
                 + (f' — {desc}' if desc else '')
             )
         else:
             fail_count += 1
-            results.append(f'[{i}] ❌ {rp}: {result["error"]}')
+            results.append(f'[{i}] FAIL {rp}: {result["error"]}')
 
     header = f'Inserted {ok_count}/{ok_count + fail_count} edits'
     if fail_count:

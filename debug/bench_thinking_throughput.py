@@ -33,9 +33,9 @@ NODES = {
     },
 }
 
-DEFAULT_DATA = (
-    "/path/to/your/data"
-    "your-username/open-instruct/open_instruct/IFEvalG/enhanced_messages_v2.jsonl"
+DEFAULT_DATA = os.environ.get(
+    "BENCH_PROMPTS_JSONL",
+    "./data/bench_prompts.jsonl",
 )
 
 TIMEOUT = 600  # thinking 模式输出可能很长, 给足超时

@@ -1,4 +1,4 @@
-"""lib/log.py — Centralized logging for ChatUI.
+"""lib/log.py — Centralized logging for Tofu.
 
 Usage in any module:
     from lib.log import get_logger, log_exception, audit_log, log_context

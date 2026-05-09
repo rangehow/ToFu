@@ -134,11 +134,104 @@ def chat_start():
 _TRANSLATE_SEND_TIMEOUT = 20
 
 
-def _auto_translate_user(text, config):
+# ══════════════════════════════════════════════════════════
+#  Send-path translate status (per-conv)
+#
+#  The atomic /api/chat/send handler translates synchronously, blocking the
+#  HTTP response until the translate either succeeds or hits
+#  _TRANSLATE_SEND_TIMEOUT. If the backend is retrying (429, empty output),
+#  the user sees only the frontend "Translating…" bubble with no progress
+#  clue. We expose a tiny poll endpoint — /api/chat/send-translate-status —
+#  so the frontend can display the current retry reason underneath the
+#  bubble while the send call is in flight.
+# ══════════════════════════════════════════════════════════
+_send_translate_status = {}           # conv_id -> {statusMessage, statusKind, updatedAt}
+_send_translate_status_lock = threading.Lock()
+
+# ══════════════════════════════════════════════════════════
+#  Per-conv abort marker for in-flight /api/chat/send.
+#
+#  When the user clicks Stop while a /api/chat/send is still inside the
+#  synchronous auto-translate (and no task has been started yet), the
+#  frontend hits /api/chat/abort-conv but there is nothing to abort —
+#  the send handler will keep blocking, finish translating, then either
+#  start a task or enqueue the message. We record the abort wall-clock
+#  here so the send handler can detect 'this conv was aborted AFTER my
+#  request started' and bail out before persisting / enqueueing /
+#  dispatching anything.
+# ══════════════════════════════════════════════════════════
+_send_abort_marker = {}               # conv_id -> abort_wall_clock_seconds
+_send_abort_marker_lock = threading.Lock()
+
+
+def _mark_conv_aborted(conv_id):
+    """Record that this conv was aborted at wall clock ``time.time()``."""
+    if not conv_id:
+        return
+    with _send_abort_marker_lock:
+        _send_abort_marker[conv_id] = time.time()
+
+
+def _was_aborted_after(conv_id, since_ts):
+    """Return True if /api/chat/abort-conv ran for this conv after ``since_ts``."""
+    if not conv_id or since_ts is None:
+        return False
+    with _send_abort_marker_lock:
+        ts = _send_abort_marker.get(conv_id)
+    return ts is not None and ts >= since_ts
+
+
+def _set_send_translate_status(conv_id, event):
+    """Record a status event for an in-flight send-path translate.
+
+    Called from the _translate_one_chunk status callback. ``event`` is a
+    dict carrying ``kind``, ``attempt``, ``elapsed``, ``detail`` — see
+    ``routes/translate._format_status_message``.
+    """
+    if not conv_id:
+        return
+    try:
+        from routes.translate import _format_status_message
+        msg = _format_status_message(event)
+    except Exception as e:
+        logger.debug('[Send] _format_status_message failed: %s', e)
+        msg = event.get('kind', '')
+    with _send_translate_status_lock:
+        _send_translate_status[conv_id] = {
+            'statusMessage': msg,
+            'statusKind': event.get('kind', ''),
+            'updatedAt': time.time(),
+        }
+
+
+def _clear_send_translate_status(conv_id):
+    if not conv_id:
+        return
+    with _send_translate_status_lock:
+        _send_translate_status.pop(conv_id, None)
+
+
+@chat_bp.route('/api/chat/send-translate-status/<conv_id>', methods=['GET'])
+def chat_send_translate_status(conv_id):
+    """Return the current send-path translate retry status for a conv.
+
+    Returns ``{statusMessage, statusKind, updatedAt}`` or ``{}`` if no
+    translate is currently in flight (or hasn't yet hit its first retry).
+    """
+    with _send_translate_status_lock:
+        st = _send_translate_status.get(conv_id)
+    return jsonify(st or {})
+
+
+def _auto_translate_user(text, config, conv_id=None):
     """Translate Chinese user text to English if autoTranslate is on.
 
     Capped at ``_TRANSLATE_SEND_TIMEOUT`` seconds to prevent the synchronous
     HTTP handler from blocking long enough to trigger the frontend's abort.
+
+    When ``conv_id`` is provided, transient retry statuses are published
+    to ``_send_translate_status[conv_id]`` so the frontend can poll for
+    them and surface them below the "Translating…" bubble.
 
     Returns:
         (translated_text, original_text_or_None, model_or_None)
@@ -153,13 +246,36 @@ def _auto_translate_user(text, config):
 
     import concurrent.futures
 
+    def _status_cb(event):
+        """Forward chunk-level status events into the per-conv dict."""
+        _set_send_translate_status(conv_id, event)
+
     def _do_translate():
-        from routes.translate import _build_translate_prompt, _translate_one_chunk
-        system_prompt = _build_translate_prompt('English', 'Chinese')
-        return _translate_one_chunk(
-            text, system_prompt, chunk_label=':send',
-            source='Chinese', target='English',
+        from routes.translate import (
+            _build_translate_prompt,
+            _translate_one_chunk,
+            _extract_notranslate_blocks,
+            _reattach_notranslate_blocks,
+            _strip_notranslate_tags,
         )
+        system_prompt = _build_translate_prompt('English', 'Chinese')
+        # ── Extract <notranslate>/<nt> blocks so the LLM doesn't see the tags ──
+        # Without this, the tags leak into the translated English `content`
+        # (and stay visible in the "译文" display).
+        inner_text, nt_blocks = _extract_notranslate_blocks(text)
+        if nt_blocks and not inner_text.strip():
+            # Whole message was inside <notranslate> — nothing to translate.
+            return _strip_notranslate_tags(text), {'model': 'skipped',
+                                                   '_dispatch': {'model': 'skipped'}}
+        translate_target = inner_text if nt_blocks else text
+        translated, _u = _translate_one_chunk(
+            translate_target, system_prompt, chunk_label=':send',
+            source='Chinese', target='English',
+            status_cb=_status_cb if conv_id else None,
+        )
+        if nt_blocks and translated:
+            translated = _reattach_notranslate_blocks(translated, nt_blocks)
+        return translated, _u
 
     try:
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
@@ -170,14 +286,23 @@ def _auto_translate_user(text, config):
             if isinstance(_usage, dict):
                 _disp = _usage.get('_dispatch', {})
                 _model = _disp.get('model', _usage.get('model'))
-            logger.info('[Send] Auto-translated user message: %d→%d chars model=%s',
-                        len(text), len(result.strip()), _model)
-            return result.strip(), text, _model
+            # Strip any <notranslate>/<nt> tags that the LLM may have leaked
+            # through (defense in depth — _reattach above already handles the
+            # common case, but the LLM sometimes echoes the tags literally).
+            from routes.translate import _strip_notranslate_tags
+            clean = _strip_notranslate_tags(result.strip()).strip()
+            logger.info('[Send] Auto-translated user message: %d→%d chars model=%s nt_stripped=%s',
+                        len(text), len(clean), _model, clean != result.strip())
+            return clean, text, _model
     except concurrent.futures.TimeoutError:
         logger.warning('[Send] Auto-translate timed out after %ds, sending original text',
                        _TRANSLATE_SEND_TIMEOUT)
     except Exception as e:
         logger.warning('[Send] Auto-translate failed: %s', e)
+    finally:
+        # Always clear the per-conv status on exit — no stale retry hint
+        # should leak into a subsequent poll after the send returns.
+        _clear_send_translate_status(conv_id)
 
     return text, None, None
 
@@ -218,12 +343,16 @@ def _resolve_conv_refs(conv_refs):
     return results
 
 
-def _build_user_msg_from_payload(payload, config):
+def _build_user_msg_from_payload(payload, config, conv_id=None):
     """Build a user message dict from frontend payload + optional auto-translate.
 
     Args:
         payload: dict with text, images, pdfTexts, replyQuotes, convRefs, convRefTexts, timestamp
         config: task config dict (reads autoTranslate)
+        conv_id: optional — when provided, transient translate retry
+            statuses are exposed via /api/chat/send-translate-status/<conv_id>
+            so the frontend can display retry reasons under the "Translating…"
+            bubble.
 
     Returns:
         user_msg dict ready to append to conv.messages
@@ -231,7 +360,7 @@ def _build_user_msg_from_payload(payload, config):
     text = payload.get('text', '')
     timestamp = payload.get('timestamp') or int(time.time() * 1000)
 
-    translated_text, original_text, translate_model = _auto_translate_user(text, config)
+    translated_text, original_text, translate_model = _auto_translate_user(text, config, conv_id=conv_id)
 
     user_msg = {
         'role': 'user',
@@ -476,14 +605,35 @@ def chat_send():
     if not text and not payload.get('images') and not payload.get('pdfTexts'):
         return jsonify({'error': 'Empty message'}), 400
 
+    # Snapshot the request start wall-clock BEFORE the synchronous
+    # auto-translate call. If /api/chat/abort-conv runs while we are
+    # blocked in translation, _was_aborted_after() will catch it.
+    _send_started_at = time.time()
+
     try:
         db = get_thread_db(DOMAIN_CHAT)
 
         # 1. Load or create conversation
         messages, is_new, title = _load_or_create_conv(db, conv_id, config, payload)
 
-        # 2. Build user message (with auto-translate)
-        user_msg = _build_user_msg_from_payload(payload, config)
+        # 2. Build user message (with auto-translate).
+        #    Pass conv_id so send-path retries surface via
+        #    /api/chat/send-translate-status/<conv_id>.
+        user_msg = _build_user_msg_from_payload(payload, config, conv_id=conv_id)
+
+        # 2a. If the user clicked Stop while we were inside the auto-
+        #     translate call, drop this message entirely — do NOT persist,
+        #     enqueue, or dispatch. This prevents the 'translation finishes
+        #     after abort → enqueue → fires after regen completes' double-
+        #     send bug.
+        if _was_aborted_after(conv_id, _send_started_at):
+            logger.info('[Send] conv=%s ⚠️ Aborted during translate — dropping message '
+                        '(translated=%s)',
+                        conv_id[:8], bool(user_msg.get('originalContent')))
+            return jsonify({
+                'aborted': True,
+                'convId': conv_id,
+            })
 
         # 3. Compute title for first user message
         user_msgs = [m for m in messages if m.get('role') == 'user']
@@ -744,7 +894,7 @@ def chat_regenerate():
                                   and user_msg.get('_translateDone')
                                   and edited_content is None)
             if has_chinese and not already_translated:
-                translated, original, model = _auto_translate_user(text, config)
+                translated, original, model = _auto_translate_user(text, config, conv_id=conv_id)
                 if original:
                     user_msg['content'] = translated
                     user_msg['originalContent'] = original
@@ -761,6 +911,21 @@ def chat_regenerate():
 
         # 5. Persist truncated messages to DB
         _persist_conv_messages(db, conv_id, messages, title, settings_patch)
+
+        # 5a. Defensive: clear any messages still sitting in the server-side
+        #     queue for this conv. If a previous /api/chat/send was aborted
+        #     mid-translate but its enqueue still landed (or a different race
+        #     left the queue non-empty), regenerating should start clean —
+        #     otherwise the queue would auto-dispatch a phantom turn after
+        #     this regen completes.
+        try:
+            from lib.message_queue import clear_queue
+            _cleared = clear_queue(conv_id)
+            if _cleared:
+                logger.info('[Regen] conv=%s cleared %d stale queued message(s) before regen',
+                            conv_id[:8], _cleared)
+        except Exception as e:
+            logger.warning('[Regen] Failed to clear queue for conv=%s: %s', conv_id[:8], e)
 
         logger.info('[Regen] conv=%s truncated to idx=%d msgs=%d edited=%s title=%.50s',
                     conv_id[:8], truncate_to, len(messages),
@@ -1084,104 +1249,16 @@ def chat_continue():
         return jsonify({'error': 'internal_error'}), 500
 
 
-@chat_bp.route('/api/chat/tool-state/<conv_id>', methods=['PATCH'])
-def chat_tool_state(conv_id):
-    """Lightweight tool-state sync: merge tool settings into conversation settings.
-
-    Unlike the full PUT /api/conversations/<id>, this only touches the settings
-    column — no messages, no msg_count, no search_text update.
-    Safe to call frequently (e.g. on every tool toggle).
-
-    Body: { model?, searchMode?, fetchEnabled?, browserEnabled?, projectPath?, ... }
-    """
-    data = request.get_json(silent=True) or {}
-    if not data:
-        return jsonify({'error': 'No settings provided'}), 400
-
-    try:
-        db = get_thread_db(DOMAIN_CHAT)
-        row = db.execute(
-            'SELECT settings FROM conversations WHERE id=? AND user_id=?',
-            (conv_id, DEFAULT_USER_ID)
-        ).fetchone()
-
-        if not row:
-            # Conv not in DB yet (no messages sent) — that's OK, skip
-            return jsonify({'ok': True, 'skipped': True})
-
-        try:
-            settings = json.loads(row['settings'] or '{}')
-        except (json.JSONDecodeError, TypeError):
-            settings = {}
-
-        settings.update(data)
-        settings_json = json.dumps(settings, ensure_ascii=False)
-
-        db_execute_with_retry(db, '''
-            UPDATE conversations SET settings=? WHERE id=? AND user_id=?
-        ''', (settings_json, conv_id, DEFAULT_USER_ID))
-
-        logger.debug('[ToolState] conv=%s patched %d keys: %s',
-                     conv_id[:8], len(data), list(data.keys())[:10])
-        return jsonify({'ok': True})
-
-    except Exception as e:
-        logger.error('[ToolState] Failed for conv=%s: %s', conv_id[:8], e, exc_info=True)
-        return jsonify({'error': 'internal_error'}), 500
+# ══════════════════════════════════════════════════════════
+#  Tool-state sync endpoint
+#  → moved to routes/chat_tool_state.py (kept on the same chat_bp)
+# ══════════════════════════════════════════════════════════
 
 
 # ══════════════════════════════════════════════════════════
-#  Server-side message queue
+#  Server-side message queue endpoints
+#  → moved to routes/chat_queue.py (kept on the same chat_bp)
 # ══════════════════════════════════════════════════════════
-
-@chat_bp.route('/api/chat/queue', methods=['POST'])
-def chat_queue_enqueue():
-    """Legacy enqueue endpoint — kept for programmatic/API use.
-
-    The primary send path is now ``/api/chat/send`` which auto-detects
-    whether to start immediately or enqueue.  This endpoint is a thin
-    wrapper around ``enqueue_message`` for backward compat.
-    """
-    data = request.get_json(silent=True) or {}
-    conv_id = data.get('convId', '')
-    if not conv_id:
-        return jsonify({'error': 'convId required'}), 400
-
-    message_data = data.get('message', {})
-    config = data.get('config', {})
-
-    if not message_data.get('text') and not message_data.get('images') and not message_data.get('pdfTexts'):
-        return jsonify({'error': 'Empty message'}), 400
-
-    from lib.message_queue import enqueue_message
-    result = enqueue_message(conv_id, message_data, config)
-    return jsonify(result)
-
-
-@chat_bp.route('/api/chat/queue/<conv_id>', methods=['GET'])
-def chat_queue_get(conv_id):
-    """Get all queued messages for a conversation."""
-    from lib.message_queue import get_queue
-    queue = get_queue(conv_id)
-    return jsonify(queue)
-
-
-@chat_bp.route('/api/chat/queue/<conv_id>/<queue_id>', methods=['DELETE'])
-def chat_queue_remove(conv_id, queue_id):
-    """Remove a specific message from the queue."""
-    from lib.message_queue import remove_from_queue
-    removed = remove_from_queue(conv_id, queue_id)
-    if not removed:
-        return jsonify({'error': 'Not found'}), 404
-    return jsonify({'ok': True})
-
-
-@chat_bp.route('/api/chat/queue/<conv_id>', methods=['DELETE'])
-def chat_queue_clear(conv_id):
-    """Clear all queued messages for a conversation."""
-    from lib.message_queue import clear_queue
-    count = clear_queue(conv_id)
-    return jsonify({'cleared': count})
 
 
 def _start_external_backend(data, messages, backend_name):
@@ -1360,6 +1437,65 @@ def chat_stream(task_id):
         task = tasks.get(task_id)
 
     if not task:
+        # ★ Cold-path resumption: if the client provides Last-Event-ID and we
+        #   still have persisted events for this task, replay from the table.
+        #   This makes Last-Event-ID resumption durable across cleanup_old_tasks
+        #   and server restart — without it, the stale reader would receive
+        #   only a synthetic `state`+`done` snapshot and lose every intermediate
+        #   tool/phase event the user saw before the disconnect.
+        _replay_cursor_hdr = request.headers.get('Last-Event-ID', '').strip()
+        if _replay_cursor_hdr:
+            try:
+                _replay_cursor = int(_replay_cursor_hdr)
+            except (ValueError, TypeError):
+                _replay_cursor = None
+            if _replay_cursor is not None and _replay_cursor >= 0:
+                from lib.tasks_pkg.event_log import read_events as _read_events
+                _persisted = _read_events(task_id, since_event_id=_replay_cursor)
+                if _persisted:
+                    logger.info('[Chat] Stream %s cold replay from event_log: %d event(s) since id=%d',
+                                task_id[:8], len(_persisted), _replay_cursor)
+
+                    def gen_persisted():
+                        for _ in range(4):
+                            yield ':' + ' ' * 2048 + '\n\n'
+                        for ev in _persisted:
+                            eid = ev['event_id']
+                            payload = ev['payload']
+                            yield f'id: {eid}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n'
+                            if isinstance(payload, dict) and payload.get('type') == 'done':
+                                return
+                        # No persisted 'done' — synthesize one from task_results
+                        try:
+                            db_local = get_db(DOMAIN_CHAT)
+                            row_local = db_local.execute(
+                                'SELECT error,status,metadata FROM task_results WHERE task_id=?',
+                                (task_id,)
+                            ).fetchone()
+                            done_evt_local = {'type': 'done'}
+                            if row_local:
+                                if row_local['metadata']:
+                                    try:
+                                        m = json.loads(row_local['metadata'])
+                                        for k in ('finishReason', 'usage', 'preset', 'toolSummary',
+                                                  'model', 'thinkingDepth', 'fallbackModel', 'fallbackFrom'):
+                                            if m.get(k):
+                                                done_evt_local[k] = m[k]
+                                    except (json.JSONDecodeError, TypeError):
+                                        pass
+                                if row_local['error']:
+                                    done_evt_local['error'] = row_local['error']
+                            yield f'data: {json.dumps(done_evt_local, ensure_ascii=False)}\n\n'
+                        except Exception as _e:
+                            logger.debug('[Chat] cold-replay synthetic done failed: %s', _e)
+
+                    return Response(gen_persisted(), mimetype='text/event-stream', headers={
+                        'Content-Type': 'text/event-stream; charset=utf-8',
+                        'Cache-Control': 'no-cache, no-transform',
+                        'X-Accel-Buffering': 'no',
+                        'Connection': 'keep-alive',
+                    })
+
         db = get_db(DOMAIN_CHAT)
         row = db.execute(
             'SELECT content,thinking,error,status,tool_rounds,metadata FROM task_results WHERE task_id=?',
@@ -1563,10 +1699,22 @@ def chat_stream(task_id):
                 late_done.update(late_meta)
                 if task['error']:
                     late_done['error'] = task['error']
-                logger.warning('[Chat] SSE stream %s emitting LATE done (task finished but no done event in queue) — '
-                             'finishReason=%s model=%s error=%s',
-                             task_id[:8], late_meta.get('finishReason', '?'),
-                             late_meta.get('model', '?'), task['error'] or 'none')
+                # ★ Severity split: an aborted/interrupted/normally-stopped
+                #   task that needs a LATE done synthesis is expected:
+                #   - aborted/interrupted: user hit Stop after orchestrator
+                #     already flushed its own done event.
+                #   - stop: task finished normally between the queue poll and
+                #     this status check (the common 157-line/day pattern).
+                #   Anything else (length, content_filter, error, etc.) still
+                #   signals a missed done-event — keep as warning.
+                _late_fr = late_meta.get('finishReason', '?')
+                _is_benign = _late_fr in ('aborted', 'interrupted', 'stop')
+                _log_fn = logger.info if _is_benign else logger.warning
+                _log_fn('[Chat] SSE stream %s emitting LATE done '
+                        '(task finished but no done event in queue) — '
+                        'finishReason=%s model=%s error=%s',
+                        task_id[:8], _late_fr,
+                        late_meta.get('model', '?'), task['error'] or 'none')
                 yield f'id: {cursor}\ndata: {json.dumps(late_done, ensure_ascii=False)}\n\n'
                 return
             # ★ SSE reader dedup: if a newer SSE reader connected, exit this one
@@ -1640,8 +1788,13 @@ def chat_abort_conv(conv_id):
     Used when the frontend aborts during translation and never received a
     taskId — the server may have already started a task that needs to be
     killed.  This is the convId-based counterpart of ``/api/chat/abort/<task_id>``.
+
+    Also records a per-conv abort marker so any /api/chat/send still
+    blocked inside auto-translate can detect the abort and bail out
+    before persisting / enqueueing / dispatching the message.
     """
     from lib.tasks_pkg import abort_running_tasks_for_conv
+    _mark_conv_aborted(conv_id)
     aborted = abort_running_tasks_for_conv(conv_id)
     if aborted:
         logger.info('[Chat] Abort-by-conv conv=%s — aborted %d task(s)', conv_id[:8], aborted)
@@ -1746,6 +1899,9 @@ def chat_poll(task_id):
             r['emitContent'] = task['_emitContent']
         if task.get('_emitToolName'):
             r['emitToolName'] = task['_emitToolName']
+        # ★ Memory prefetch indicator (persists through poll fallback + reload)
+        if task.get('_memoryPrefetch'):
+            r['memoryPrefetch'] = task['_memoryPrefetch']
         # ★ Include endpoint turns for endpoint mode tasks so _pollFallback
         #   can reconstruct the full multi-turn conversation
         if task.get('endpoint_mode') and task.get('_endpoint_turns'):
@@ -1816,72 +1972,7 @@ def chat_poll(task_id):
     return jsonify({'error': 'Task not found'}), 404
 
 
-@chat_bp.route('/api/chat/stdin_response', methods=['POST'])
-def chat_stdin_response():
-    """Provide stdin input to a subprocess waiting for user input.
-
-    Body: { "stdinId": "stdin_...", "input": "user's text", "eof": false }
-    If ``eof`` is true, stdin is closed (no input is sent).
-    """
-    data = request.get_json(silent=True) or {}
-    stdin_id = data.get('stdinId', '')
-    is_eof = data.get('eof', False)
-    input_text = data.get('input', '')
-    logger.info('[Stdin] /api/chat/stdin_response received: '
-                'stdinId=%s, eof=%s, input_len=%d',
-                stdin_id, is_eof, len(input_text))
-    if not stdin_id:
-        logger.warning('[Stdin] Rejected — missing stdinId')
-        return jsonify({'error': 'No stdinId'}), 400
-
-    from lib.tasks_pkg import resolve_stdin
-    # EOF → resolve with None to signal stdin close
-    resolved_text = None if is_eof else input_text
-    try:
-        ok = resolve_stdin(stdin_id, resolved_text)
-    except Exception as e:
-        logger.error('[Stdin] Exception resolving %s: %s',
-                     stdin_id, e, exc_info=True)
-        return jsonify({'error': 'Internal server error'}), 500
-    if not ok:
-        logger.warning('[Stdin] Request not found or expired: stdinId=%s',
-                       stdin_id)
-        return jsonify({'error': 'Stdin request not found or expired'}), 404
-    logger.info('[Stdin] Successfully resolved %s', stdin_id)
-    return jsonify({'ok': True, 'stdinId': stdin_id})
-
-
-@chat_bp.route('/api/chat/human_response', methods=['POST'])
-def chat_human_response():
-    """Resolve a human guidance request — the user has answered a question.
-
-    Body: { "guidanceId": "hg_...", "response": "user's answer text" }
-    """
-    data = request.get_json(silent=True) or {}
-    guidance_id = data.get('guidanceId', '')
-    response_text = data.get('response', '')
-    logger.info('[HumanGuidance] /api/chat/human_response received: '
-                'guidanceId=%s, response_len=%d',
-                guidance_id, len(response_text))
-    if not guidance_id:
-        logger.warning('[HumanGuidance] Rejected — missing guidanceId')
-        return jsonify({'error': 'No guidanceId'}), 400
-    if not response_text:
-        logger.warning('[HumanGuidance] Rejected — empty response for '
-                       'guidanceId=%s', guidance_id)
-        return jsonify({'error': 'No response text'}), 400
-
-    from lib.tasks_pkg import resolve_human_guidance
-    try:
-        ok = resolve_human_guidance(guidance_id, response_text)
-    except Exception as e:
-        logger.error('[HumanGuidance] Exception resolving %s: %s',
-                     guidance_id, e, exc_info=True)
-        return jsonify({'error': 'Internal server error'}), 500
-    if not ok:
-        logger.warning('[HumanGuidance] Guidance request not found or '
-                       'expired: guidanceId=%s', guidance_id)
-        return jsonify({'error': 'Guidance request not found or expired'}), 404
-    logger.info('[HumanGuidance] Successfully resolved %s (response_len=%d)',
-                guidance_id, len(response_text))
-    return jsonify({'ok': True, 'guidanceId': guidance_id})
+# ══════════════════════════════════════════════════════════
+#  Stdin / human-guidance response endpoints
+#  → moved to routes/chat_human_io.py (kept on the same chat_bp)
+# ══════════════════════════════════════════════════════════

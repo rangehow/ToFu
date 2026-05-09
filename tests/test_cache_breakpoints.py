@@ -358,9 +358,16 @@ class TestBackwardScan:
 class TestEdgeCases:
     """Edge cases for add_cache_breakpoints."""
 
-    def test_non_claude_model_no_breakpoints(self):
-        """Non-Claude models should NOT get any cache breakpoints."""
-        for model in ['gpt-4o', 'qwen-plus', 'deepseek-chat', 'gemini-2.5-pro']:
+    def test_non_marker_models_get_no_breakpoints(self):
+        """Models that don't honor cache markers must not be annotated.
+
+        Per the 2026-05-03 probe (``_CACHE_MARKERS_HELP`` in llm_client.py),
+        Claude + glm-5 + qwen + deepseek are the gateways where attaching
+        cache_control markers is beneficial. Models outside that allow-list
+        (gpt-4o, gemini, doubao, minimax, etc.) must receive zero
+        breakpoints to avoid degrading their auto-caching paths.
+        """
+        for model in ['gpt-4o', 'gemini-2.5-pro', 'doubao-seed-1-6', 'MiniMax-M2']:
             body = _make_tool_conv(3, empty_assistant_content=True)
             body['model'] = model
             add_cache_breakpoints(body)

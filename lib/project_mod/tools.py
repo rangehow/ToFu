@@ -918,15 +918,16 @@ def _format_run_output(command, stdout, stderr, exit_code, timed_out=False, abor
     if output:
         result_text += f'{output}\n'
     if aborted:
-        result_text += '\n🛑 Command aborted by user.\n[exit code: -1]'
+        result_text += '\n[Command aborted by user]\n[exit code: -1]'
     elif timed_out:
-        result_text += '\n⏰ Command timed out.\n[exit code: -1]'
+        result_text += '\n[Command timed out]\n[exit code: -1]'
     else:
         result_text += f'\n[exit code: {exit_code}]'
     return result_text
 
 
-def tool_run_command(base, command, timeout=None, stdin_callback=None, task=None):
+def tool_run_command(base, command, timeout=None, stdin_callback=None, task=None,
+                     on_chunk=None):
     """Execute a shell command with optional interactive stdin support.
 
     Args:
@@ -940,9 +941,16 @@ def tool_run_command(base, command, timeout=None, stdin_callback=None, task=None
             (original non-interactive behavior).
         task: Optional task dict — when provided, the subprocess is killed
             if ``task['aborted']`` becomes True (cooperative abort).
+        on_chunk: Optional callback ``fn(stream, text)`` invoked for each
+            output chunk as soon as it is read from the subprocess.  ``stream``
+            is ``'stdout'`` or ``'stderr'``.  Used to forward output to the
+            frontend as a streaming SSE ``tool_progress`` event so the user
+            sees output incrementally instead of waiting for the command to
+            finish.  Exceptions raised inside the callback are logged and
+            swallowed — they must NOT abort the command.
     """
     if not command or not command.strip():
-        return '❌ Empty command.'
+        return 'Error: Empty command.'
 
     if not base:
         base = os.path.expanduser('~')
@@ -960,7 +968,7 @@ def tool_run_command(base, command, timeout=None, stdin_callback=None, task=None
         timeout = max(1, int(timeout)) if timeout > 0 else 300
 
     if _DANGEROUS_RE.search(command):
-        return '❌ Command blocked for safety: matches dangerous pattern.'
+        return 'Error: Command blocked for safety: matches dangerous pattern.'
 
     # ★ Cross-DC timeout adjustment — multiply timeout for remote DolphinFS clusters
     try:
@@ -983,20 +991,42 @@ def tool_run_command(base, command, timeout=None, stdin_callback=None, task=None
 
     # ── Non-interactive fast path (no stdin_callback) ──
     if not stdin_callback:
-        return _run_command_simple(command, full_command, timeout, base, task=task)
+        return _run_command_simple(command, full_command, timeout, base, task=task,
+                                   on_chunk=on_chunk)
 
     # ── Interactive path: Popen with stdin pipe + stdin detection ──
-    return _run_command_interactive(command, full_command, timeout, base, stdin_callback)
+    return _run_command_interactive(command, full_command, timeout, base, stdin_callback,
+                                    on_chunk=on_chunk)
 
 
-def _run_command_simple(command, full_command, timeout, base, task=None):
-    """Execute command with abort-awareness via Popen + polling.
+def _safe_on_chunk(on_chunk, stream, text):
+    """Invoke an on_chunk callback, swallowing any exception.
+
+    The callback is user-supplied (comes from the SSE layer).  A bug in the
+    frontend-event emission MUST NOT abort the subprocess.
+    """
+    if not on_chunk or not text:
+        return
+    try:
+        on_chunk(stream, text)
+    except Exception as e:
+        logger.debug('[run_command] on_chunk callback raised: %s', e)
+
+
+def _run_command_simple(command, full_command, timeout, base, task=None, on_chunk=None):
+    """Execute command with abort-awareness + incremental output streaming.
+
+    Reads stdout/stderr in non-blocking 64 KB chunks using ``safe_select_pipes``
+    (same primitive as the interactive path).  Each chunk is appended to the
+    accumulator AND forwarded to ``on_chunk(stream, text)`` if provided, so
+    callers can stream output to the frontend as it arrives instead of
+    waiting for the command to finish.
 
     When *task* is provided, the subprocess PID is stored on the task dict
-    so the abort handler can kill it directly.  The polling loop checks
-    ``task['aborted']`` every 0.5s and terminates the subprocess if set.
+    so the abort handler can kill it directly.  The loop checks
+    ``task['aborted']`` on every tick (~0.2s) and terminates if set.
     """
-    from lib.compat import get_shell_args
+    from lib.compat import get_shell_args, safe_select_pipes, set_pipe_nonblocking
     try:
         proc = subprocess.Popen(
             get_shell_args(full_command),
@@ -1004,80 +1034,161 @@ def _run_command_simple(command, full_command, timeout, base, task=None):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             stdin=subprocess.DEVNULL,
-            text=True,
+            text=False,  # binary mode for non-blocking I/O
             cwd=base,
-            errors='replace',
             env=_get_cmd_env(),
             start_new_session=True,  # own process group for clean kill
         )
-        # Store PID on task so abort handler can kill it directly
-        if task is not None:
-            task['_subprocess_pid'] = proc.pid
-            task['_subprocess_pgid'] = None
-            try:
-                task['_subprocess_pgid'] = os.getpgid(proc.pid)
-            except OSError:
-                pass
+    except (FileNotFoundError, NotADirectoryError) as e:
+        logger.warning('run_command: cannot start (cwd=%s): %s', base, e)
+        return (f'$ {command}\n\n'
+                f'Error starting command: {e}\n'
+                f'[exit code: -1]')
+    except Exception as e:
+        logger.error('run_command Popen error (cwd=%s): %s', base, e, exc_info=True)
+        return (f'$ {command}\n\n'
+                f'Error starting command: {e}\n'
+                f'[exit code: -1]')
 
-        # Polling loop: wait for completion, checking abort every 0.5s
-        _POLL_INTERVAL = 0.5
-        _start = time.time()
-        _aborted = False
+    # Store PID on task so abort handler can kill it directly
+    if task is not None:
+        task['_subprocess_pid'] = proc.pid
+        task['_subprocess_pgid'] = None
+        try:
+            task['_subprocess_pgid'] = os.getpgid(proc.pid)
+        except OSError:
+            pass
+
+    # Set stdout/stderr to non-blocking.  On platforms where this fails
+    # (Windows), safe_select_pipes degrades to short-timeout polling.
+    nonblocking_ok = all(
+        set_pipe_nonblocking(fd) for fd in (proc.stdout, proc.stderr)
+    )
+    if not nonblocking_ok:
+        logger.debug('run_command: non-blocking pipe setup failed — using polling I/O')
+
+    stdout_chunks = []   # list[bytes]
+    stderr_chunks = []   # list[bytes]
+    start_time = time.monotonic()
+    timed_out = False
+    aborted = False
+
+    def _drain_after_kill():
+        """Best-effort tail drain after a kill — grab whatever was already
+        buffered in the pipe before SIGTERM landed."""
+        for fd, bucket, sname in (
+            (proc.stdout, stdout_chunks, 'stdout'),
+            (proc.stderr, stderr_chunks, 'stderr'),
+        ):
+            try:
+                rest = fd.read()
+            except (BlockingIOError, OSError, ValueError):
+                rest = None
+            if rest:
+                bucket.append(rest)
+                _safe_on_chunk(on_chunk, sname,
+                               rest.decode('utf-8', errors='replace'))
+
+    try:
         while True:
-            try:
-                proc.wait(timeout=_POLL_INTERVAL)
-                break  # process exited
-            except subprocess.TimeoutExpired:
-                pass
+            # ── timeout ──
+            elapsed = time.monotonic() - start_time
+            if timeout is not None and elapsed >= timeout:
+                logger.info('run_command timed out after %ss — killing PID %d',
+                            timeout, proc.pid)
+                _kill_process_tree(proc)
+                _drain_after_kill()
+                timed_out = True
+                break
 
-            # Check abort flag
+            # ── abort ──
             if task and task.get('aborted'):
                 logger.info('[run_command] Task aborted — killing subprocess PID %d: %s',
                             proc.pid, command[:80])
                 _kill_process_tree(proc)
-                _aborted = True
+                _drain_after_kill()
+                aborted = True
                 break
 
-            # Check wall-clock timeout
-            if timeout is not None and (time.time() - _start) >= timeout:
-                # Expected outcome of user-declared timeout budget —
-                # caller already surfaces [TIMEOUT] in stdout.
-                logger.info('run_command timed out after %ss — killing PID %d',
-                            timeout, proc.pid)
-                _kill_process_tree(proc)
-                # Clean up task ref
-                if task is not None:
-                    task.pop('_subprocess_pid', None)
-                    task.pop('_subprocess_pgid', None)
-                return _format_run_output(command, '', '', -1, timed_out=True)
+            retcode = proc.poll()
 
+            # ── drain available output ──
+            got_output = False
+            try:
+                readable = safe_select_pipes(
+                    [proc.stdout, proc.stderr], timeout=0.2
+                )
+            except (ValueError, OSError):
+                readable = []
+
+            for fd in readable:
+                try:
+                    chunk = fd.read(65536)
+                except (BlockingIOError, OSError):
+                    chunk = None
+                if chunk:
+                    got_output = True
+                    if fd is proc.stdout:
+                        stdout_chunks.append(chunk)
+                        _safe_on_chunk(on_chunk, 'stdout',
+                                       chunk.decode('utf-8', errors='replace'))
+                    else:
+                        stderr_chunks.append(chunk)
+                        _safe_on_chunk(on_chunk, 'stderr',
+                                       chunk.decode('utf-8', errors='replace'))
+
+            # ── exit condition: process ended and no more buffered data ──
+            if retcode is not None and not got_output:
+                for fd, bucket, sname in (
+                    (proc.stdout, stdout_chunks, 'stdout'),
+                    (proc.stderr, stderr_chunks, 'stderr'),
+                ):
+                    try:
+                        rest = fd.read()
+                    except (BlockingIOError, OSError):
+                        rest = None
+                    if rest:
+                        bucket.append(rest)
+                        _safe_on_chunk(on_chunk, sname,
+                                       rest.decode('utf-8', errors='replace'))
+                break
+    except Exception as e:
+        logger.error('run_command loop error: %s', e, exc_info=True)
+        try:
+            _kill_process_tree(proc)
+        except Exception:
+            pass
         # Clean up task ref
         if task is not None:
             task.pop('_subprocess_pid', None)
             task.pop('_subprocess_pgid', None)
-
-        if _aborted:
-            stdout = ''
-            stderr = ''
-            try:
-                stdout, stderr = proc.communicate(timeout=2)
-            except Exception:
-                pass
-            return _format_run_output(command, stdout, stderr, -1, timed_out=False,
-                                      aborted=True)
-
-        stdout, stderr = proc.stdout.read(), proc.stderr.read()
-        proc.stdout.close()
-        proc.stderr.close()
-        logger.info('run_command done: exit=%d, stdout=%dch, stderr=%dch',
-                     proc.returncode, len(stdout or ''), len(stderr or ''))
-        return _format_run_output(command, stdout or '', stderr or '',
-                                  proc.returncode)
-    except Exception as e:
-        logger.error('run_command error: %s', e, exc_info=True)
         return (f'$ {command}\n\n'
-                f'❌ Error executing command: {e}\n'
+                f'Error executing command: {e}\n'
                 f'[exit code: -1]')
+    finally:
+        for fd in (proc.stdout, proc.stderr):
+            try:
+                fd.close()
+            except (OSError, AttributeError):
+                pass
+
+    # Clean up task ref
+    if task is not None:
+        task.pop('_subprocess_pid', None)
+        task.pop('_subprocess_pgid', None)
+
+    stdout = b''.join(stdout_chunks).decode('utf-8', errors='replace')
+    stderr = b''.join(stderr_chunks).decode('utf-8', errors='replace')
+
+    if timed_out:
+        return _format_run_output(command, stdout, stderr, -1, timed_out=True)
+    if aborted:
+        return _format_run_output(command, stdout, stderr, -1,
+                                  timed_out=False, aborted=True)
+
+    logger.info('run_command done: exit=%d, stdout=%dch, stderr=%dch',
+                proc.returncode, len(stdout), len(stderr))
+    return _format_run_output(command, stdout, stderr, proc.returncode)
 
 
 def _kill_process_tree(proc):
@@ -1235,7 +1346,8 @@ def _collect_descendants(parent_pid):
     return result
 
 
-def _run_command_interactive(command, full_command, timeout, base, stdin_callback):
+def _run_command_interactive(command, full_command, timeout, base, stdin_callback,
+                              on_chunk=None):
     """Popen-based execution with stdin detection and interactive input.
 
     Uses non-blocking I/O on stdout/stderr.  On Linux, periodically checks
@@ -1260,12 +1372,12 @@ def _run_command_interactive(command, full_command, timeout, base, stdin_callbac
         # pass a non-existent project path.
         logger.warning('run_command: cannot start (cwd=%s): %s', base, e)
         return (f'$ {command}\n\n'
-                f'❌ Error starting command: {e}\n'
+                f'Error starting command: {e}\n'
                 f'[exit code: -1]')
     except Exception as e:
         logger.error('run_command Popen error (cwd=%s): %s', base, e, exc_info=True)
         return (f'$ {command}\n\n'
-                f'❌ Error starting command: {e}\n'
+                f'Error starting command: {e}\n'
                 f'[exit code: -1]')
 
     # Set stdout/stderr to non-blocking (no-op on Windows, uses threading there).
@@ -1322,8 +1434,12 @@ def _run_command_interactive(command, full_command, timeout, base, stdin_callbac
                         got_output = True
                         if fd is proc.stdout:
                             stdout_chunks.append(chunk)
+                            _safe_on_chunk(on_chunk, 'stdout',
+                                           chunk.decode('utf-8', errors='replace'))
                         else:
                             stderr_chunks.append(chunk)
+                            _safe_on_chunk(on_chunk, 'stderr',
+                                           chunk.decode('utf-8', errors='replace'))
                 except (BlockingIOError, OSError):
                     pass
 
@@ -1333,12 +1449,16 @@ def _run_command_interactive(command, full_command, timeout, base, stdin_callbac
                     rest_out = proc.stdout.read()
                     if rest_out:
                         stdout_chunks.append(rest_out)
+                        _safe_on_chunk(on_chunk, 'stdout',
+                                       rest_out.decode('utf-8', errors='replace'))
                 except (BlockingIOError, OSError):
                     pass
                 try:
                     rest_err = proc.stderr.read()
                     if rest_err:
                         stderr_chunks.append(rest_err)
+                        _safe_on_chunk(on_chunk, 'stderr',
+                                       rest_err.decode('utf-8', errors='replace'))
                 except (BlockingIOError, OSError):
                     pass
                 break
@@ -1405,7 +1525,7 @@ def _run_command_interactive(command, full_command, timeout, base, stdin_callbac
         except OSError:
             pass
         return (f'$ {command}\n\n'
-                f'❌ Error during interactive execution: {e}\n'
+                f'Error during interactive execution: {e}\n'
                 f'[exit code: -1]')
     finally:
         # Clean up
@@ -1493,7 +1613,7 @@ def browse_directory(path_str=None, show_hidden=False):
 #  Tool Dispatch
 # ═══════════════════════════════════════════════════════
 
-def _resolve_base(base_path, rel_path):
+def _resolve_base(base_path, rel_path, conv_id=None):
     """Resolve base_path + rel_path, supporting multi-root 'name:path' syntax.
 
     If rel_path contains ':', treat the part before ':' as a root name.
@@ -1505,6 +1625,20 @@ def _resolve_base(base_path, rel_path):
     auto-routes to that root and logs a warning.  This prevents the
     common model mistake of writing files intended for root B into root A.
 
+    ★ conv_id scoping (2026-05-05): when the caller knows which
+    conversation's root registry should authoritatively answer this
+    resolution, pass the full conv_id.  resolve_namespaced_path will
+    check that conv's registry first so concurrent tasks cannot
+    clobber each other's root namespaces.  Falls back to the shared
+    global _roots when no conv-specific match is found.
+
+    Self-healing fallback: if no conv-specific registry answers AND
+    ``base_path`` is provided AND its basename matches the root name
+    used in ``rel_path``, resolve to ``base_path`` + rel.  This covers
+    the concurrent-clobber case where a task's global _roots entry was
+    overwritten by another task after the system prompt was built but
+    before the tool call executed.
+
     Returns (effective_base, effective_rel).
     """
     if rel_path and ':' in rel_path and not os.path.isabs(rel_path):
@@ -1513,8 +1647,24 @@ def _resolve_base(base_path, rel_path):
         if colon_idx > 0 and colon_idx < 40:  # reasonable name length
             from lib.project_mod.config import resolve_namespaced_path
             try:
-                return resolve_namespaced_path(rel_path)
+                return resolve_namespaced_path(rel_path, conv_id=conv_id)
             except ValueError as _ve:
+                _name, _, _rest = rel_path.partition(':')
+                # ── Self-heal: base_path's basename matches the requested
+                #    root name → this is almost certainly the concurrent-
+                #    clobber case (we *are* in the task whose root that is,
+                #    but some other task wiped the global registry).  Resolve
+                #    to the provided base_path.  Safe because the name and
+                #    path agree by construction.
+                if base_path:
+                    bp_basename = os.path.basename(os.path.abspath(base_path))
+                    if bp_basename == _name or bp_basename.lower() == _name.lower():
+                        logger.info('[Tools] Self-heal namespaced path %r: '
+                                    'base_path basename matches unknown root — '
+                                    'resolving to base_path (conv-state race workaround). '
+                                    'conv_id=%s',
+                                    rel_path, conv_id[:12] if conv_id else '?')
+                        return base_path, (_rest or '.')
                 # ★ DO NOT silently strip the 'name:' prefix. Stripping
                 #   it converts a model typo ('CDP:foo' when meant 'cdp:foo',
                 #   or a stale root that was cleared by set_project) into a
@@ -1527,12 +1677,16 @@ def _resolve_base(base_path, rel_path):
                 #   as an explicit error to the model.  The only legitimate
                 #   case for a colon in a path is a Windows drive letter
                 #   ('C:\...'), which is already excluded by isabs() above.
-                _name, _, _rest = rel_path.partition(':')
+                # Log ONCE here with full context. Task-executor layers
+                # that re-raise should NOT re-log this as WARNING — they
+                # check isinstance(e, UnknownWorkspaceRootError) and log
+                # at INFO (recoverable, LLM-facing error).
                 logger.warning('[Tools] namespaced path %r: unknown root %r — '
                                'refusing to fall through to primary '
                                '(would risk silent clobber). %s',
                                rel_path, _name, _ve)
-                raise ValueError(
+                from lib.project_mod.config import UnknownWorkspaceRootError
+                raise UnknownWorkspaceRootError(
                     f'Unknown workspace root "{_name}" in path "{rel_path}". '
                     f'Either (1) call create_project(path=...) first to register '
                     f'"{_name}" as a root, (2) use a known root name (see the '
@@ -1583,30 +1737,55 @@ def _resolve_base(base_path, rel_path):
 
 
 
-def _resolve_base_safe(base_path, rel_path):
+def _resolve_base_safe(base_path, rel_path, conv_id=None):
     """Same as _resolve_base but returns (None, error_string) on ValueError.
 
     Used by execute_tool for tools that must surface the error as a tool
     result to the model, rather than bubbling as an exception.
     """
     try:
-        return _resolve_base(base_path, rel_path), None
+        return _resolve_base(base_path, rel_path, conv_id=conv_id), None
     except ValueError as e:
         logger.debug('[Tools] _resolve_base_safe rejected %r: %s', rel_path, e)
         return None, str(e)
 
 def execute_tool(fn_name, fn_args, base_path, conv_id=None, task_id=None, **kwargs):
-    # ★ Multi-root: resolve 'rootname:relative/path' for path-based tools
+    # ★ Multi-root: resolve 'rootname:relative/path' for path-based tools.
+    #   _rb/_rb_safe bind the caller's conv_id so per-conv root registries
+    #   resolve correctly even when another task has clobbered the shared
+    #   global _roots.  See _resolve_base docstring for background.
+    def _rb(bp_arg, rp_arg):
+        return _resolve_base(bp_arg, rp_arg, conv_id=conv_id)
+
+    def _rb_safe(bp_arg, rp_arg):
+        return _resolve_base_safe(bp_arg, rp_arg, conv_id=conv_id)
+
     if fn_name == 'list_dir':
-        bp, rp = _resolve_base(base_path, fn_args.get('path', '.'))
+        bp, rp = _rb(base_path, fn_args.get('path', '.'))
         return tool_list_dir(bp, rp)
     elif fn_name == 'read_files':
-        reads = fn_args.get('reads', [])
+        # ★ Compatibility shim: some models (e.g. DeepSeek) flatten the
+        #   "reads" array into top-level {"path": "..."} instead of
+        #   {"reads": [{"path": "..."}]}.  Detect and auto-wrap.
+        reads = fn_args.get('reads')
+        if reads is None:
+            # Model passed top-level scalar params — wrap into reads array
+            spec = {}
+            for key in ('path', 'start_line', 'end_line'):
+                if key in fn_args:
+                    spec[key] = fn_args[key]
+            if 'path' in spec:
+                reads = [spec]
+                logger.info('[Tools] read_files: auto-wrapped flat args into reads array '
+                            '(path=%s) — model likely missing "reads" wrapper', spec['path'][:120])
+            else:
+                reads = []
         if not isinstance(reads, list):
             return (
                 'Error: read_files expects "reads" to be an array of '
                 '{"path": "...", "start_line"?: int, "end_line"?: int} objects. '
-                f'Got type={type(reads).__name__}. Retry with the correct schema.'
+                f'Got type={type(reads).__name__}. '
+                'Correct usage: {"reads": [{"path": "file.py"}]}'
             )
         # Resolve multi-root 'rootname:path' and normalise bare-string specs.
         # Each spec gets a '_base' key so tool_read_files can use the correct
@@ -1615,11 +1794,11 @@ def execute_tool(fn_name, fn_args, base_path, conv_id=None, task_id=None, **kwar
         invalid_specs = []  # (index, preview) pairs for error reporting
         for i, spec in enumerate(reads):
             if isinstance(spec, dict) and 'path' in spec:
-                bp2, rp2 = _resolve_base(base_path, spec['path'])
+                bp2, rp2 = _rb(base_path, spec['path'])
                 resolved.append({'path': rp2, 'start_line': spec.get('start_line'),
                                  'end_line': spec.get('end_line'), '_base': bp2})
             elif isinstance(spec, str) and spec.strip():
-                bp2, rp2 = _resolve_base(base_path, spec.strip())
+                bp2, rp2 = _rb(base_path, spec.strip())
                 resolved.append({'path': rp2, '_base': bp2})
                 logger.debug('[Tools] read_files: normalised bare string spec %r → dict', spec[:80])
             else:
@@ -1663,7 +1842,7 @@ def execute_tool(fn_name, fn_args, base_path, conv_id=None, task_id=None, **kwar
                     continue
                 sp = spec.get('path')
                 if sp:
-                    bp2, rp2 = _resolve_base(base_path, sp)
+                    bp2, rp2 = _rb(base_path, sp)
                     spec = dict(spec, path=rp2, _base=bp2)
                 else:
                     spec = dict(spec, _base=base_path)
@@ -1681,7 +1860,7 @@ def execute_tool(fn_name, fn_args, base_path, conv_id=None, task_id=None, **kwar
         search_path = fn_args.get('path')
         bp = base_path
         if search_path:
-            bp, search_path = _resolve_base(base_path, search_path)
+            bp, search_path = _rb(base_path, search_path)
         return tool_grep(bp, fn_args.get('pattern', ''),
                          search_path, fn_args.get('include'),
                          fn_args.get('context_lines'),
@@ -1697,7 +1876,7 @@ def execute_tool(fn_name, fn_args, base_path, conv_id=None, task_id=None, **kwar
                     continue
                 sp = spec.get('path')
                 if sp:
-                    bp2, rp2 = _resolve_base(base_path, sp)
+                    bp2, rp2 = _rb(base_path, sp)
                     spec = dict(spec, path=rp2, _base=bp2)
                 else:
                     spec = dict(spec, _base=base_path)
@@ -1714,7 +1893,7 @@ def execute_tool(fn_name, fn_args, base_path, conv_id=None, task_id=None, **kwar
         search_path = fn_args.get('path')
         bp = base_path
         if search_path:
-            bp, search_path = _resolve_base(base_path, search_path)
+            bp, search_path = _rb(base_path, search_path)
         return tool_find_files(bp, fn_args.get('pattern', ''),
                                search_path,
                                max_results=fn_args.get('max_results'))
@@ -1727,23 +1906,23 @@ def execute_tool(fn_name, fn_args, base_path, conv_id=None, task_id=None, **kwar
             conv_id=conv_id, task_id=task_id,
         )
         if result.get('ok'):
-            return (f"✅ {result['message']}")
-        return f"❌ create_project failed: {result.get('error', 'unknown error')}"
+            return (f"{result['message']}")
+        return f"create_project failed: {result.get('error', 'unknown error')}"
     # ★ Write tools — pass conv_id + task_id for per-round undo
     elif fn_name == 'write_file':
         try:
-            bp, rp = _resolve_base(base_path, fn_args.get('path', ''))
+            bp, rp = _rb(base_path, fn_args.get('path', ''))
         except ValueError as _rve:
-            return f"❌ write_file: {_rve}"
+            return f"write_file: {_rve}"
         result = tool_write_file(bp, rp,
                                  fn_args.get('content', ''),
                                  fn_args.get('description', ''),
                                  conv_id=conv_id, task_id=task_id)
         if result['ok']:
-            return (f"✅ File {'created' if result.get('created') else 'updated'}: {result['path']} "
+            return (f"File {'created' if result.get('created') else 'updated'}: {result['path']} "
                     f"({result['lines']} lines, {_fmt_size(result['bytesWritten'])})")
         else:
-            return f"❌ Write failed: {result['error']}"
+            return f"Write failed: {result['error']}"
     elif fn_name == 'apply_diff':
         # ★ Batch mode: if 'edits' array is present, apply all edits in sequence
         edits = fn_args.get('edits')
@@ -1751,9 +1930,9 @@ def execute_tool(fn_name, fn_args, base_path, conv_id=None, task_id=None, **kwar
             return tool_apply_diffs(base_path, edits, conv_id=conv_id, task_id=task_id)
         # ★ Single-edit mode (backward compatible)
         try:
-            bp, rp = _resolve_base(base_path, fn_args.get('path', ''))
+            bp, rp = _rb(base_path, fn_args.get('path', ''))
         except ValueError as _rve:
-            return f"❌ apply_diff: {_rve}"
+            return f"apply_diff: {_rve}"
         result = tool_apply_diff(bp, rp,
                                  fn_args.get('search', ''),
                                  fn_args.get('replace', ''),
@@ -1761,14 +1940,14 @@ def execute_tool(fn_name, fn_args, base_path, conv_id=None, task_id=None, **kwar
                                  conv_id=conv_id, task_id=task_id,
                                  replace_all=bool(fn_args.get('replace_all', False)))
         if result['ok']:
-            msg = (f"✅ Applied diff to {result['path']}: "
+            msg = (f"Applied diff to {result['path']}: "
                    f"{result['linesChanged']} lines changed "
                    f"({result['oldLines']}L → {result['newLines']}L)")
             if result.get('replacedCount'):
                 msg += f" [{result['replacedCount']} occurrences replaced]"
             return msg
         else:
-            return f"❌ Diff failed: {result['error']}"
+            return f"Diff failed: {result['error']}"
     elif fn_name == 'insert_content':
         # ★ Batch mode: if 'edits' array is present, apply all insertions in sequence
         edits = fn_args.get('edits')
@@ -1776,9 +1955,9 @@ def execute_tool(fn_name, fn_args, base_path, conv_id=None, task_id=None, **kwar
             return tool_insert_contents(base_path, edits, conv_id=conv_id, task_id=task_id)
         # ★ Single insertion mode
         try:
-            bp, rp = _resolve_base(base_path, fn_args.get('path', ''))
+            bp, rp = _rb(base_path, fn_args.get('path', ''))
         except ValueError as _rve:
-            return f"❌ insert_content: {_rve}"
+            return f"insert_content: {_rve}"
         result = tool_insert_content(bp, rp,
                                      fn_args.get('anchor', ''),
                                      fn_args.get('content', ''),
@@ -1786,18 +1965,18 @@ def execute_tool(fn_name, fn_args, base_path, conv_id=None, task_id=None, **kwar
                                      fn_args.get('description', ''),
                                      conv_id=conv_id, task_id=task_id)
         if result['ok']:
-            return (f"✅ Inserted {result['linesInserted']} lines "
+            return (f"Inserted {result['linesInserted']} lines "
                     f"{result['position']} anchor at L{result['anchorLine']} "
                     f"in {result['path']} "
                     f"({result['oldLines']}L → {result['newLines']}L)")
         else:
-            return f"❌ Insert failed: {result['error']}"
+            return f"Insert failed: {result['error']}"
     elif fn_name == 'run_command':
         # ★ Multi-root: resolve working_dir if model specifies one
         cwd = base_path
         working_dir = fn_args.get('working_dir', '')
         if working_dir:
-            cwd_bp, _ = _resolve_base(base_path, working_dir)
+            cwd_bp, _ = _rb(base_path, working_dir)
             cwd = os.path.join(cwd_bp, _) if _ and _ != '.' else cwd_bp
 
         command_str = fn_args.get('command', '')
@@ -1849,7 +2028,8 @@ def execute_tool(fn_name, fn_args, base_path, conv_id=None, task_id=None, **kwar
                                   command_str,
                                   fn_args.get('timeout', None),
                                   stdin_callback=kwargs.get('stdin_callback'),
-                                  task=kwargs.get('task'))
+                                  task=kwargs.get('task'),
+                                  on_chunk=kwargs.get('on_chunk'))
 
         # ★ Diff snapshot after command (only if we took one)
         if snap_before is not None:
@@ -1885,13 +2065,20 @@ def execute_tool(fn_name, fn_args, base_path, conv_id=None, task_id=None, **kwar
     return f'Unknown project tool: {fn_name}'
 
 
-def execute_standalone_command(fn_name, fn_args, working_dir=None, stdin_callback=None):
+# Note: tool_project_history / tool_project_diff / tool_project_blame were
+# retired in the Tier-3 file-history redesign (2026-05-08).  See
+# lib/file_history/__init__.py for the rationale.
+
+
+def execute_standalone_command(fn_name, fn_args, working_dir=None, stdin_callback=None,
+                               on_chunk=None):
     """Execute run_command without requiring a project path."""
     if fn_name == 'run_command':
         return tool_run_command(working_dir,
                                 fn_args.get('command', ''),
                                 fn_args.get('timeout', None),
-                                stdin_callback=stdin_callback)
+                                stdin_callback=stdin_callback,
+                                on_chunk=on_chunk)
     return f'Unknown tool: {fn_name}'
 
 
@@ -1900,7 +2087,10 @@ def project_tool_display(fn_name, fn_args):
     if not isinstance(fn_args, dict):
         return f'{fn_name}({fn_args})'
     if fn_name == 'read_files':
-        reads = fn_args.get('reads', [])
+        reads = fn_args.get('reads')
+        if reads is None and 'path' in fn_args:
+            # Flat-args compat (same shim as execute_tool)
+            reads = [fn_args]
         if not reads:
             return 'Read files (empty)'
         # Group by unique path, collect line ranges per file
@@ -1921,18 +2111,36 @@ def project_tool_display(fn_name, fn_args):
             elif sl is not None:
                 grouped[p].append(f'L{sl}+')
         n_files = len(grouped)
-        # Disambiguate duplicate basenames
-        basenames = [p.rsplit('/', 1)[-1] for p in grouped]
+        # Split each path into (rootname_prefix, bare_path) so the
+        # rootname is preserved on display in multi-root workspaces —
+        # otherwise two roots' files with the same basename look identical.
+        # Rootname prefix = "name:" where name has no '/' or '\' and isn't
+        # a Windows drive letter (drive letters are single chars, so the
+        # heuristic ``len > 1 or non-ascii`` distinguishes them).
+        def _split_rootname(path_str):
+            if ':' not in path_str:
+                return '', path_str
+            head, _, rest = path_str.partition(':')
+            if not head or '/' in head or '\\' in head:
+                return '', path_str
+            # Windows drive letter heuristic: single ASCII letter before ':'
+            if len(head) == 1 and head.isalpha():
+                return '', path_str
+            return head + ':', rest
+        # Disambiguate duplicate basenames (rootname-aware)
         from collections import Counter
-        dup = {b for b, c in Counter(basenames).items() if c > 1}
+        bare_basenames = [_split_rootname(p)[1].rsplit('/', 1)[-1] for p in grouped]
+        dup = {b for b, c in Counter(bare_basenames).items() if c > 1}
         parts = []
         for p, ranges in list(grouped.items())[:4]:
-            base = p.rsplit('/', 1)[-1]
-            name = '/'.join(p.rsplit('/', 2)[-2:]) if base in dup else base
+            prefix, bare = _split_rootname(p)
+            base = bare.rsplit('/', 1)[-1]
+            name = '/'.join(bare.rsplit('/', 2)[-2:]) if base in dup else base
+            display_name = f'{prefix}{name}'
             if ranges:
-                parts.append(f'{name} {", ".join(ranges)}')
+                parts.append(f'{display_name} {", ".join(ranges)}')
             else:
-                parts.append(name)
+                parts.append(display_name)
         suffix = f' +{n_files - 4} more' if n_files > 4 else ''
         return f'Read {n_files} file{"s" if n_files != 1 else ""}: {"; ".join(parts)}{suffix}'
     elif fn_name == 'grep_search':

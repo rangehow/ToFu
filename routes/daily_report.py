@@ -1,7 +1,9 @@
 """routes/daily_report.py — Daily task-centric report with LLM analysis.
 
 Generates LLM-powered task analysis for conversations.  Persists reports
-to ``~/.chatui/daily_reports/YYYY-MM-DD.json`` so past days are cached.
+to ``<project>/data/config/daily_reports/YYYY-MM-DD.json`` so past days
+are cached. The path lives inside the project (per :mod:`lib.config_dir`)
+so multiple copies on one machine don't share state.
 
 Endpoints:
   POST /api/daily-report              — Analyse today (or specified date)
@@ -285,15 +287,19 @@ def _qwen_cny(tokens, tok_type, model_id=''):
     return 0.0
 
 
-def _calc_msg_cost_cny(usage, model_or_preset=''):
+def _calc_msg_cost_cny(usage, model_or_preset='', provider_id=''):
     """Calculate cost in CNY for a single message's usage dict.
 
     This is a faithful Python port of the frontend ``calcCostCny()``
-    in ``core.js``, using the same MODEL_PRICING table and logic.
+    in ``core.js``, using the same pricing logic.
 
     Args:
         usage: Token usage dict (prompt_tokens, completion_tokens, etc.).
         model_or_preset: Model ID or legacy preset key.
+        provider_id: Optional provider that served the call. When set, a
+            provider-scoped override in ``PROVIDER_PRICING`` (registered
+            from the provider template's per-model ``pricing`` field) is
+            preferred over the global ``MODEL_PRICING`` table.
 
     Returns:
         Cost in CNY (float), or 0.0 if no tokens.
@@ -301,8 +307,8 @@ def _calc_msg_cost_cny(usage, model_or_preset=''):
     if not usage:
         return 0.0
 
-    from lib import DEFAULT_USD_CNY_RATE, MODEL_PRICING
-    from lib.pricing import get_pricing_data
+    from lib import DEFAULT_USD_CNY_RATE
+    from lib.pricing import get_pricing_data, lookup_pricing
 
     # Resolve legacy preset
     model_id = model_or_preset or ''
@@ -334,7 +340,7 @@ def _calc_msg_cost_cny(usage, model_or_preset=''):
     cw_mul = 1.25
     cr_mul = 0.10
 
-    mp = MODEL_PRICING.get(model_id)
+    mp = lookup_pricing(model_id, provider_id=provider_id)
     if mp:
         base_in = mp.get('input', 0)
         out_p = mp.get('output', 0)
@@ -446,8 +452,9 @@ def _scan_costs_in_range(ms_start, ms_end, year=None, month=None):
 
             msg_model = (msg.get('model') or msg.get('preset')
                          or msg.get('effort') or conv_model)
+            msg_provider = msg.get('provider_id') or msg.get('providerId') or ''
 
-            cost_cny = _calc_msg_cost_cny(usage, msg_model)
+            cost_cny = _calc_msg_cost_cny(usage, msg_model, msg_provider)
             if cost_cny <= 0:
                 continue
 
@@ -747,15 +754,23 @@ def _fuzzy_todo_match(text_a, text_b, threshold=0.35):
 #  Core: analyse a list of conversation digests
 # ═════════════════════════════════════════════════════════════
 
-def _get_yesterday_carryover(target_date):
+def _get_yesterday_carryover(target_date, _prev=None):
     """Load yesterday's unfinished TODO items and blocked streams.
+
+    Args:
+        target_date: Today's date string 'YYYY-MM-DD'.
+        _prev: Optional pre-loaded yesterday report dict — pass through
+            when already loaded elsewhere to avoid a 2nd disk read.
 
     Returns a list of short carryover strings for LLM context.
     """
     try:
-        dt = _dt.date.fromisoformat(target_date)
-        yesterday = (dt - _dt.timedelta(days=1)).isoformat()
-        prev = _load_report(yesterday)
+        if _prev is None:
+            dt = _dt.date.fromisoformat(target_date)
+            yesterday = (dt - _dt.timedelta(days=1)).isoformat()
+            prev = _load_report(yesterday)
+        else:
+            prev = _prev
         if not prev:
             return []
         items = []
@@ -773,18 +788,23 @@ def _get_yesterday_carryover(target_date):
         return []
 
 
-def _get_today_inherited_todos(target_date):
+def _get_today_inherited_todos(target_date, _prev=None):
     """Load yesterday's unfinished TODO items as structured dicts for display.
 
     These are items from the previous day's ``tomorrow[]`` that haven't
     been checked off.  They appear in the current day's "今日待办" section.
+
+    Args:
+        target_date: Today's date string 'YYYY-MM-DD'.
+        _prev: Optional pre-loaded yesterday report dict (avoids re-reading
+            the JSON file from disk when the caller already has it).
 
     Returns list of dicts: [{id, text, done, _inherited, _origin_date}, ...].
     """
     try:
         dt = _dt.date.fromisoformat(target_date)
         yesterday = (dt - _dt.timedelta(days=1)).isoformat()
-        prev = _load_report(yesterday)
+        prev = _prev if _prev is not None else _load_report(yesterday)
         if not prev:
             return []
         items = []
@@ -807,15 +827,22 @@ def _get_today_inherited_todos(target_date):
         return []
 
 
-def _get_yesterday_todo_accountability(target_date):
+def _get_yesterday_todo_accountability(target_date, _prev=None):
     """Load yesterday's TODO items with completion status for LLM context.
+
+    Args:
+        target_date: Today's date string 'YYYY-MM-DD'.
+        _prev: Optional pre-loaded yesterday report dict.
 
     Returns list of (text, done_bool) tuples for the LLM prompt.
     """
     try:
-        dt = _dt.date.fromisoformat(target_date)
-        yesterday = (dt - _dt.timedelta(days=1)).isoformat()
-        prev = _load_report(yesterday)
+        if _prev is None:
+            dt = _dt.date.fromisoformat(target_date)
+            yesterday = (dt - _dt.timedelta(days=1)).isoformat()
+            prev = _load_report(yesterday)
+        else:
+            prev = _prev
         if not prev:
             return []
         results = []
@@ -829,8 +856,8 @@ def _get_yesterday_todo_accountability(target_date):
 
 
 def _mark_yesterday_todos_done(target_date, yesterday_done, todo_status,
-                               stream_titles=None):
-    """Write back completion status to yesterday's report file.
+                               stream_titles=None, _prev=None, _defer_save=False):
+    """Write back completion status to yesterday's report.
 
     When the LLM identifies that yesterday's TODO items were addressed
     by today's work, this function marks those items as ``done: True``
@@ -847,6 +874,14 @@ def _mark_yesterday_todos_done(target_date, yesterday_done, todo_status,
                      (used to find items that were already done).
         stream_titles: Optional list of today's stream titles+summaries
                        for additional fuzzy matching.
+        _prev: Optional pre-loaded yesterday report dict. When provided,
+            this function mutates it in-place.
+        _defer_save: If True, skip the _save_report disk write (caller is
+            expected to save once at the end of the generation cycle).
+
+    Returns:
+        Tuple ``(prev_dict_or_None, changed_count)`` so the caller can
+        perform a coalesced save covering multiple mutations.
     """
     all_done_texts = list(yesterday_done or [])
     # Also treat stream titles+summaries as potential done signals
@@ -854,14 +889,14 @@ def _mark_yesterday_todos_done(target_date, yesterday_done, todo_status,
         all_done_texts.extend(stream_titles)
 
     if not all_done_texts or not todo_status:
-        return
+        return _prev, 0
 
     try:
         dt = _dt.date.fromisoformat(target_date)
         yesterday = (dt - _dt.timedelta(days=1)).isoformat()
-        prev = _load_report(yesterday)
+        prev = _prev if _prev is not None else _load_report(yesterday)
         if not prev:
-            return
+            return None, 0
 
         changed = 0
         for todo in prev.get('tomorrow', []):
@@ -883,15 +918,17 @@ def _mark_yesterday_todos_done(target_date, yesterday_done, todo_status,
                                  todo_text)
                     break
 
-        if changed:
+        if changed and not _defer_save:
             _save_report(yesterday, prev)
             logger.info('[DailyReport] Wrote back %d completed TODOs to %s',
                         changed, yesterday)
+        return prev, changed
     except Exception as e:
         logger.warning('[DailyReport] Failed to write back yesterday TODOs: %s', e)
+        return _prev, 0
 
 
-def _close_yesterday_remaining_todos(target_date):
+def _close_yesterday_remaining_todos(target_date, _prev=None, _defer_save=False):
     """Close ALL remaining undone TODOs in yesterday's report.
 
     Once today's report is generated, yesterday's plan is finalized:
@@ -905,15 +942,20 @@ def _close_yesterday_remaining_todos(target_date):
     On force re-generation, items previously ``_auto_closed`` are
     re-included in the unfinished list (they remain closed).
 
+    Args:
+        target_date: Today's date string 'YYYY-MM-DD'.
+        _prev: Optional pre-loaded yesterday report dict (mutated in place).
+        _defer_save: If True, skip the _save_report write. Caller must save.
+
     Returns:
-        List of unfinished item dicts: ``[{text, _origin_date}, ...]``.
+        Tuple ``(unfinished_list, prev_dict_or_None, changed_count)``.
     """
     try:
         dt = _dt.date.fromisoformat(target_date)
         yesterday = (dt - _dt.timedelta(days=1)).isoformat()
-        prev = _load_report(yesterday)
+        prev = _prev if _prev is not None else _load_report(yesterday)
         if not prev:
-            return []
+            return [], None, 0
 
         unfinished = []
         changed = 0
@@ -937,15 +979,15 @@ def _close_yesterday_remaining_todos(target_date):
                 uf_item['quick_action'] = todo['quick_action']
             unfinished.append(uf_item)
 
-        if changed:
+        if changed and not _defer_save:
             _save_report(yesterday, prev)
             logger.info('[DailyReport] Auto-closed %d remaining TODOs from %s',
                         changed, yesterday)
 
-        return unfinished
+        return unfinished, prev, changed
     except Exception as e:
         logger.warning('[DailyReport] Failed to close yesterday remaining TODOs: %s', e)
-        return []
+        return [], _prev, 0
 
 
 def _analyse_conversations(convs, target_date):
@@ -967,7 +1009,18 @@ def _analyse_conversations(convs, target_date):
     logger.info('[DailyReport] Starting stream analysis: %d convs, ~%d rounds for %s',
                 len(convs), total_rounds, target_date)
 
-    carryover = _get_yesterday_carryover(target_date)
+    # ── Load yesterday's report ONCE for carryover / accountability / write-back.
+    # Three helpers used to re-open the same JSON; now we pass this dict through
+    # and save it exactly once at the end if any mutation occurred.
+    try:
+        _yday = (_dt.date.fromisoformat(target_date) - _dt.timedelta(days=1)).isoformat()
+        _yday_report = _load_report(_yday)
+    except (ValueError, TypeError) as e:
+        logger.debug('[DailyReport] Yesterday date resolve failed for %s: %s',
+                     target_date, e)
+        _yday, _yday_report = None, None
+
+    carryover = _get_yesterday_carryover(target_date, _prev=_yday_report)
 
     if not convs:
         logger.info('[DailyReport] No conversations to analyse for %s', target_date)
@@ -1022,7 +1075,7 @@ def _analyse_conversations(convs, target_date):
         carryover_text = '\n'.join(co_lines) + '\n\n'
 
     # ── TODO accountability (done/undone from yesterday's plan) ──
-    todo_status = _get_yesterday_todo_accountability(target_date)
+    todo_status = _get_yesterday_todo_accountability(target_date, _prev=_yday_report)
     if todo_status:
         acc_lines = ["YESTERDAY'S TODO STATUS:"]
         for text, done in todo_status:
@@ -1053,13 +1106,29 @@ def _analyse_conversations(convs, target_date):
             _stream_hints.append(title)
         if summary:
             _stream_hints.append(summary)
-    _mark_yesterday_todos_done(target_date, raw_yesterday_done, todo_status,
-                               stream_titles=_stream_hints)
+    _yday_report, mark_changed = _mark_yesterday_todos_done(
+        target_date, raw_yesterday_done, todo_status,
+        stream_titles=_stream_hints,
+        _prev=_yday_report, _defer_save=True,
+    )
 
     # ── Close remaining yesterday TODOs → "unfinished" category ──
     # Once today's report is generated, yesterday's undone items are finalized
     # as "未完成" instead of lingering as "今日待办".
-    unfinished = _close_yesterday_remaining_todos(target_date)
+    unfinished, _yday_report, close_changed = _close_yesterday_remaining_todos(
+        target_date, _prev=_yday_report, _defer_save=True,
+    )
+
+    # Coalesced single write for both mutations above (was 2× save previously).
+    if _yday and _yday_report and (mark_changed or close_changed):
+        try:
+            _save_report(_yday, _yday_report)
+            logger.info('[DailyReport] Coalesced yesterday writeback for %s: '
+                        'mark_done=%d auto_closed=%d',
+                        _yday, mark_changed, close_changed)
+        except Exception as e:
+            logger.warning('[DailyReport] Coalesced yesterday save failed for %s: %s',
+                           _yday, e)
 
     # ── Post-process streams ──
     all_conv_ids = {str(c.get('id', '')) for c in convs}
@@ -1514,39 +1583,56 @@ def get_calendar_month(year, month):
         return jsonify({'ok': False, 'error': 'Invalid month'}), 400
 
     prefix = f'{year:04d}-{month:02d}-'
-    days = {}
-    try:
-        for fname in os.listdir(_REPORTS_DIR):
-            if fname.startswith(prefix) and fname.endswith('.json'):
-                try:
-                    day_num = int(fname[len(prefix):].replace('.json', ''))
-                except ValueError:
-                    continue
-                report = _load_report(fname.replace('.json', ''))
-                if report and ('streams' in report or 'tasks' in report):
-                    streams = report.get('streams', [])
-                    tasks = report.get('tasks', [])
-                    if streams:
-                        done = sum(1 for s in streams if s.get('status') == 'done')
-                        total = len(streams)
-                    elif tasks:
-                        done = sum(1 for t in tasks if t.get('status') == 'done')
-                        total = len(tasks)
-                    else:
-                        continue
-                    date_key = f'{year:04d}-{month:02d}-{day_num:02d}'
-                    days[date_key] = {
-                        'total': total,
-                        'done': done,
-                        'incomplete': total - done,
-                    }
-    except Exception as e:
-        logger.warning('[DailyReport] Calendar scan %d-%02d: %s', year, month, e)
-
-    # ── TTL cache for expensive DB scans (conv_days + cost_days) ──
     cache_key = (year, month)
     cached = _calendar_cache.get(cache_key)
-    if cached and (time.monotonic() - cached['ts']) < _CALENDAR_CACHE_TTL:
+    cache_fresh = cached and (time.monotonic() - cached['ts']) < _CALENDAR_CACHE_TTL
+
+    # ── Per-day report summary: reuse the cached parse when fresh ──
+    # Quick-win: previously we re-listed + re-parsed every YYYY-MM-*.json on
+    # every call.  Now the parsed summary lives on the same cache entry as
+    # conv_days/cost_days and is only rebuilt on TTL miss (or cost-cache
+    # invalidation, which already clears this entry).
+    days = None
+    if cache_fresh and 'days' in cached:
+        days = cached['days']
+        logger.debug('[DailyReport] Calendar %d-%02d: days cache hit', year, month)
+    if days is None:
+        days = {}
+        try:
+            for fname in os.listdir(_REPORTS_DIR):
+                if not (fname.startswith(prefix) and fname.endswith('.json')):
+                    continue
+                try:
+                    day_num = int(fname[len(prefix):].replace('.json', ''))
+                except ValueError as e:
+                    logger.debug('[DailyReport] Skipping non-day filename %r: %s',
+                                 fname, e)
+                    continue
+                report = _load_report(fname.replace('.json', ''))
+                if not report or not ('streams' in report or 'tasks' in report):
+                    continue
+                streams = report.get('streams', [])
+                tasks = report.get('tasks', [])
+                if streams:
+                    done = sum(1 for s in streams if s.get('status') == 'done')
+                    total = len(streams)
+                elif tasks:
+                    done = sum(1 for t in tasks if t.get('status') == 'done')
+                    total = len(tasks)
+                else:
+                    continue
+                date_key = f'{year:04d}-{month:02d}-{day_num:02d}'
+                days[date_key] = {
+                    'total': total,
+                    'done': done,
+                    'incomplete': total - done,
+                }
+        except Exception as e:
+            logger.warning('[DailyReport] Calendar scan %d-%02d: %s',
+                           year, month, e)
+
+    # ── TTL cache for expensive DB scans (conv_days + cost_days) ──
+    if cache_fresh:
         conv_days = cached['conv_days']
         cost_days = cached['cost_days']
         logger.debug('[DailyReport] Calendar %d-%02d: cache hit (age %.1fs)',
@@ -1605,8 +1691,10 @@ def get_calendar_month(year, month):
         except Exception as e:
             logger.warning('[DailyReport] Calendar cost calc %d-%02d: %s', year, month, e)
 
-        # Store in cache
+        # Store in cache (including the parsed per-day report summaries so
+        # subsequent hits skip both the DB scans and the filesystem walk).
         _calendar_cache[cache_key] = {
+            'days': days,
             'conv_days': conv_days,
             'cost_days': cost_days,
             'ts': time.monotonic(),

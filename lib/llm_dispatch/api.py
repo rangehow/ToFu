@@ -19,6 +19,38 @@ from .factory import get_dispatcher
 logger = get_logger(__name__)
 
 
+# ═══════════════════════════════════════════════════════════
+#  Config-surface audit trail (CLAUDE.md §10)
+# ═══════════════════════════════════════════════════════════
+
+_AUDITED_SEVERITY_DOWNGRADE = False
+
+
+def _audit_severity_downgrade() -> None:
+    """Emit a one-time audit_log entry for the 2026-05-05 per-cycle 429
+    severity downgrade (WARNING→INFO). Only logged once per process.
+
+    This keeps CLAUDE.md §10 ("config changes must leave a trace") happy
+    without flooding audit.log with the same entry on every dispatch.
+    """
+    global _AUDITED_SEVERITY_DOWNGRADE
+    if _AUDITED_SEVERITY_DOWNGRADE:
+        return
+    _AUDITED_SEVERITY_DOWNGRADE = True
+    try:
+        from lib.log import audit_log
+        audit_log('config_change',
+                  param='dispatch_429_severity',
+                  old='warning',
+                  new='info',
+                  reason='log-noise audit 2026-05-05 — per-cycle 429 is '
+                         'routine backpressure, rotation handled by '
+                         'dispatcher; only final key exhaustion is warning',
+                  approved_by='plan')
+    except Exception as e:
+        logger.debug('[Dispatch] audit_log unavailable: %s', e)
+
+
 
 __all__ = [
     'pick_key_for_model',
@@ -86,6 +118,12 @@ def dispatch_chat(messages, *, max_tokens=4096, temperature=0,
     """
     from lib.llm_client import ContentFilterError, InvalidImageError, PermissionError_, PromptTooLongError, RateLimitError, StreamOnlyError, chat
 
+    # 2026-05-05 config-surface change (CLAUDE.md §10): per-cycle 429
+    # severity downgraded from WARNING → INFO (routine backpressure; the
+    # dispatch handler already rotates to the next key). Only final key
+    # exhaustion stays WARNING/ERROR. Audited here on first call so the
+    # change is discoverable in audit.log without a code-search.
+    _audit_severity_downgrade()
     dispatcher = get_dispatcher()
     exclude = set()           # models to exclude entirely (hard model errors)
     exclude_keys = set()      # keys to exclude entirely
@@ -224,8 +262,13 @@ def dispatch_chat(messages, *, max_tokens=4096, temperature=0,
             #   slot.  After cooldown the slot is eligible again.
             # ★ Fast 0.3s sleep — 429 in shared-key = contention, poll aggressively.
             _err_body = str(e)[:300]
+            # 2026-05-05 noise-reduction: per-cycle 429 is ROUTINE backpressure
+              # (handler already rotates to the next key). Log at INFO, not
+              # WARNING — only the final exhaustion path (all keys excluded)
+              # remains WARNING/ERROR. See CLAUDE.md §10 / audit_log below.
             if _429_count <= 3 or _429_count % 100 == 0:
-                logger.warning(
+                # First few + every 100th kept informative (include body)
+                logger.info(
                     '%s 429 rate-limited on %s:%s (cycle #%d) — body: %s',
                     log_prefix, slot.key_name, slot.model, _429_count, _err_body)
             else:
@@ -693,8 +736,12 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
             #   would let competing users grab slots while we sleep.
             # ★ Log response body periodically to diagnose persistent 429s
             _err_body = str(e)[:300]
+            # 2026-05-05 noise-reduction: per-cycle 429 is ROUTINE backpressure
+              # (handler already rotates to the next key). Log at INFO, not
+              # WARNING — only the final exhaustion path (all keys excluded)
+              # remains WARNING/ERROR.
             if _429_count <= 3 or _429_count % 100 == 0:
-                logger.warning(
+                logger.info(
                     '%s 429 rate-limited on %s:%s (cycle #%d) — body: %s',
                     log_prefix, slot.key_name, slot.model, _429_count,
                     _err_body)

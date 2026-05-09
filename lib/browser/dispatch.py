@@ -57,22 +57,22 @@ def _handle_advanced_tool(fn_name, fn_args):
                 field_delay=fn_args.get('field_delay', 0.2),
             )
         else:
-            return f'❌ Unknown advanced browser tool: {fn_name}'
+            return f'Error: Unknown advanced browser tool: {fn_name}'
         # Format result dict
         if isinstance(result, dict):
             if result.get('success'):
                 steps = result.get('steps_completed', '?')
                 details = result.get('details', {})
-                parts = [f'✅ {fn_name} succeeded ({steps} steps)']
+                parts = [f'{fn_name} succeeded ({steps} steps)']
                 if details:
                     parts.append(json.dumps(details, ensure_ascii=False, indent=2))
                 return '\n'.join(parts)
             else:
-                return f'❌ {fn_name} failed: {result.get("error", "unknown error")} (completed {result.get("steps_completed", 0)} steps)'
+                return f'{fn_name} failed: {result.get("error", "unknown error")} (completed {result.get("steps_completed", 0)} steps)'
         return str(result)
     except Exception as e:
         logger.warning("Browser tool %s error: %s", fn_name, e, exc_info=True)
-        return f'❌ {fn_name} error: {e}'
+        return f'{fn_name} error: {e}'
 
 
 # Maps browser tool fn_name → handler(fn_args).
@@ -115,4 +115,4 @@ def execute_browser_tool(fn_name, fn_args, client_id=None):
     if handler is not None:
         return handler(fn_args)
     logger.warning("Unknown browser tool requested: %s", fn_name)
-    return f'❌ Unknown browser tool: {fn_name}'
+    return f'Error: Unknown browser tool: {fn_name}'

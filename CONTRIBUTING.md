@@ -1,4 +1,4 @@
-# Contributing to ChatUI
+# Contributing to Tofu
 
 Thank you for contributing! This guide covers coding conventions, log-level
 policy, design patterns, and the pre-submit checklist. Please read it before
@@ -42,7 +42,7 @@ opening a PR.
 
 ### Package Map
 
-ChatUI's backend is organized into **13 decomposed packages** under `lib/`,
+Tofu's backend is organized into **13 decomposed packages** under `lib/`,
 each using the [Package Façade Pattern](#package-façade-pattern). The
 architecture separates **request-handling hot-path** modules from
 **domain-specific computation** packages.

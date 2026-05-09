@@ -36,8 +36,13 @@ def extract_pdf_text(pdf_bytes: bytes, max_chars: int = 0, url: str = '',
                      progress_callback=None, mode: str = 'rich') -> str:
     """Extract text from PDF as Markdown.
 
-    Strategy 1: pymupdf4llm  → Markdown with table/header preservation
-    Strategy 2: pymupdf raw  → plain-text page-by-page fallback
+    Strategy 0: docling           → Layout-aware (TableFormer + math model);
+                                    only when ``mode='structured'`` AND
+                                    the optional ``docling`` package is
+                                    installed. Falls through to Strategy 1
+                                    on any failure.
+    Strategy 1: pymupdf4llm       → Markdown with table/header preservation
+    Strategy 2: pymupdf raw       → plain-text page-by-page fallback
 
     Args:
         pdf_bytes: Raw PDF file bytes.
@@ -47,15 +52,20 @@ def extract_pdf_text(pdf_bytes: bytes, max_chars: int = 0, url: str = '',
             ``(pages_done, total_pages)`` after each page is processed. Lets
             long-running parses stream real progress to the UI. Exceptions
             raised by the callback are logged at DEBUG level and swallowed.
+            NOTE: Docling (``mode='structured'``) does not expose mid-call
+            per-page progress; only start (0/N) and end (N/N) ticks fire.
         mode: ``'rich'`` (default) → use pymupdf4llm with table_strategy='lines'
             for full Markdown preservation (tables, headers, math). Best
-            quality but 1-3s/page on dense academic PDFs.
+            quality / latency tradeoff with no extra deps.
+            ``'structured'`` → try docling first (best for borderless tables
+            and math formulas on academic PDFs), then fall back to pymupdf4llm
+            if docling is unavailable or fails. Opt-in heavy dep (~2 GB).
             ``'fast'`` → skip pymupdf4llm entirely, use raw pymupdf
             ``page.get_text()`` directly. ≈50× faster (~0.05s/page) but loses
             Markdown structure. Use for web_search/fetch_url callers that only
             need plain text for BM25 ranking or short snippets.
 
-    Returns Markdown string (rich mode) or plain text (fast mode), or an
+    Returns Markdown string (rich/structured) or plain text (fast), or an
     error message string.
     """
     if len(pdf_bytes) > MAX_PDF_BYTES:
@@ -65,6 +75,30 @@ def extract_pdf_text(pdf_bytes: bytes, max_chars: int = 0, url: str = '',
         return f'[PDF too large: {len(pdf_bytes) // (1024*1024)} MB exceeds {MAX_PDF_BYTES // (1024*1024)} MB limit]'
 
     limit = max_chars if max_chars > 0 else 999_999_999
+
+    # ── Strategy 0: Docling layout-aware pipeline (opt-in) ──
+    if mode == 'structured':
+        try:
+            from lib.pdf_parser.docling import extract_pdf_text_docling
+            md = extract_pdf_text_docling(
+                pdf_bytes,
+                max_chars=limit if limit < 999_999_999 else 0,
+                url=url,
+                progress_callback=progress_callback,
+            )
+            if md is not None:
+                # Run the same math-block + cleanup pass we apply to
+                # pymupdf4llm output, so downstream consumers see a
+                # consistent shape regardless of which strategy ran.
+                md = postprocess_math_blocks(md)
+                md = cleanup_markdown(md)
+                return md
+            logger.info("[PDF] structured mode: docling unavailable/failed, "
+                        "falling back to pymupdf4llm — %s", url[:60])
+            # fall through to Strategy 1
+        except Exception as e:
+            logger.warning('[PDF] structured mode: unexpected error %s '
+                           '(falling back to pymupdf4llm)', e, exc_info=True)
 
     # ── Fast mode: jump straight to Strategy 2 (raw get_text) ──
     # Skips pymupdf4llm + table_strategy='lines' entirely. Used by

@@ -159,7 +159,7 @@ def warm_cache():
 
 def run_benchmark():
     print("=" * 70)
-    print("GREP vs RIPGREP — A/B Benchmark for ChatUI grep_search tool")
+    print("GREP vs RIPGREP — A/B Benchmark for Tofu grep_search tool")
     print(f"Project: {PROJECT_ROOT}")
     print(f"Iterations per test: {N_ITERATIONS}")
     print("=" * 70)

@@ -14,7 +14,7 @@ Covers:
   9. CONTINUE_PLANNER without [PLAN_DEFECT: ...] → downgrade to 'worker'
  10. CONTINUE_PLANNER with worker-rationalization defect ("worker didn't…")
      → downgrade to 'worker'
- 11. Kill switch: CHATUI_ENDPOINT_REPLAN=0 downgrades planner→worker
+ 11. Kill switch: TOFU_ENDPOINT_REPLAN=0 downgrades planner→worker
 
 Run: python debug/test_endpoint_verdict.py
 Exits 0 on success, raises on failure.
@@ -30,7 +30,7 @@ sys.path.insert(0, _ROOT)
 
 
 def _reload_endpoint_review():
-    """Re-import endpoint_review so env changes to CHATUI_ENDPOINT_REPLAN take effect."""
+    """Re-import endpoint_review so env changes to TOFU_ENDPOINT_REPLAN take effect."""
     import importlib
 
     import lib.tasks_pkg.endpoint_review as mod
@@ -40,7 +40,7 @@ def _reload_endpoint_review():
 
 def _test_replan_enabled():
     """Helper: run the parser tests with replan enabled."""
-    os.environ['CHATUI_ENDPOINT_REPLAN'] = '1'
+    os.environ['TOFU_ENDPOINT_REPLAN'] = '1'
     mod = _reload_endpoint_review()
     _parse_verdict = mod._parse_verdict
 
@@ -132,8 +132,8 @@ def _test_replan_enabled():
 
 
 def _test_replan_disabled():
-    """When CHATUI_ENDPOINT_REPLAN=0: planner → worker is downgraded."""
-    os.environ['CHATUI_ENDPOINT_REPLAN'] = '0'
+    """When TOFU_ENDPOINT_REPLAN=0: planner → worker is downgraded."""
+    os.environ['TOFU_ENDPOINT_REPLAN'] = '0'
     mod = _reload_endpoint_review()
     _parse_verdict = mod._parse_verdict
 
@@ -146,7 +146,7 @@ def _test_replan_disabled():
     )
 
     # Restore default for any follow-up tests
-    os.environ['CHATUI_ENDPOINT_REPLAN'] = '1'
+    os.environ['TOFU_ENDPOINT_REPLAN'] = '1'
     _reload_endpoint_review()
 
     print('[test_endpoint_verdict] replan-disabled: all 1 check passed ✅')

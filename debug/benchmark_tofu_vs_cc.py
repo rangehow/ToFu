@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""benchmark_tofu_vs_cc.py — Compare Tofu (ChatUI) vs Claude Code CLI on project-level tasks.
+"""benchmark_tofu_vs_cc.py — Compare Tofu vs Claude Code CLI on project-level tasks.
 
 Measures accuracy, speed, and cost across complex coding tasks that require
 reading files, understanding project structure, writing multi-file changes,
 running commands, and debugging — the kind of real work these tools are for.
 
-Both tools use the same underlying model (aws.claude-opus-4.6) via the example-corp
+Both tools use the same underlying model (aws.claude-opus-4.6) via the sankuai
 gateway, which provides:
   - Automatic server-side KV cache
   - Explicit cache_control breakpoint support (Anthropic-style)
@@ -60,7 +60,7 @@ TOFU_MODEL = os.environ.get('TOFU_MODEL', 'aws.claude-opus-4.6')
 CC_MODEL = os.environ.get('CC_MODEL', 'opus')
 DEFAULT_TIMEOUT = 300  # 5 minutes per case — complex tasks need time
 
-# ─── Pricing (USD per 1K tokens — Opus 4 via example-corp) ────────────────────────
+# ─── Pricing (USD per 1K tokens — Opus 4 via sankuai) ────────────────────────
 PRICE_INPUT_PER_1K = float(os.environ.get('PRICE_INPUT_PER_1K', '0.015'))
 PRICE_OUTPUT_PER_1K = float(os.environ.get('PRICE_OUTPUT_PER_1K', '0.075'))
 PRICE_CACHE_READ_PER_1K = float(os.environ.get('PRICE_CACHE_READ_PER_1K', '0.0015'))
@@ -1118,7 +1118,7 @@ def _parse_cc_output(stdout: str, result: RunResult):
 def _compute_cost(result: RunResult) -> float:
     """Compute cost from token counts.
 
-    Both Tofu and CC use the Anthropic convention from the example-corp gateway:
+    Both Tofu and CC use the Anthropic convention from the sankuai gateway:
       - prompt_tokens / input_tokens = uncached input tokens only
       - cache_read_tokens = tokens read from cache (10% of input price)
       - cache_write_tokens = tokens written to cache (125% of input price)

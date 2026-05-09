@@ -31,7 +31,7 @@ _ROOT = os.path.dirname(_HERE)
 sys.path.insert(0, _ROOT)
 
 # Force replan enabled
-os.environ['CHATUI_ENDPOINT_REPLAN'] = '1'
+os.environ['TOFU_ENDPOINT_REPLAN'] = '1'
 
 
 def _build_mock_task():

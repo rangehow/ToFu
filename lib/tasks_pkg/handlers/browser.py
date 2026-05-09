@@ -28,7 +28,9 @@ def _badge_read_tab(meta, fn_name, display_text, chars, is_screenshot):
 def _badge_ok_or_error(icon_ok, icon_fail='❌ error'):
     """Factory for simple ok/fail badge handlers."""
     def _handler(meta, fn_name, display_text, chars, is_screenshot):
-        ok = not display_text.startswith('❌')
+        # Tool results no longer include emoji prefixes; error strings
+        # start with 'Error:' or contain ' error:' / ' failed:'.
+        ok = not display_text.startswith('Error')
         meta['badge'] = icon_ok if ok else icon_fail
     return _handler
 
@@ -73,7 +75,7 @@ def _handle_browser_tool(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg
     # browser_read_tab: apply LLM content filter
     is_read_tab = (fn_name == 'browser_read_tab'
                    and isinstance(tool_content, str)
-                   and not tool_content.startswith('❌'))
+                   and not tool_content.startswith('Error'))
     if is_read_tab and len(display_text) > 1500:
         tab_url = ''
         for line in display_text.split('\n', 5):

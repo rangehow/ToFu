@@ -23,7 +23,7 @@ def _memory_create(fn_args, project_path):
         project_path=project_path,
     )
     content = (
-        f"✅ Memory created: **{mem['name']}** "
+        f"Memory created: **{mem['name']}** "
         f"(id: {mem['id']}, scope: {mem['scope']})\n\n"
         f"This memory will be available in future conversations when Memory mode is enabled."
     )
@@ -40,8 +40,8 @@ def _memory_update(fn_args, project_path):
     )
     if mem is None:
         logger.warning('[Memory] update_memory returned None for memory_id=%s', sid)
-        return f"❌ Memory not found: {sid}", '❌ not found', f"✏️ Memory: {sid}"
-    return f"✅ Memory updated: **{mem['name']}** (id: {mem['id']})", '✏️ updated', f"✏️ Memory: {mem['name']}"
+        return f"Memory not found: {sid}", '❌ not found', f"✏️ Memory: {sid}"
+    return f"Memory updated: **{mem['name']}** (id: {mem['id']})", '✏️ updated', f"✏️ Memory: {mem['name']}"
 
 
 def _memory_delete(fn_args, project_path):
@@ -49,8 +49,8 @@ def _memory_delete(fn_args, project_path):
     sid = fn_args.get('memory_id', '')
     deleted = delete_memory(memory_id=sid, project_path=project_path)
     if deleted:
-        return f"✅ Memory deleted: {sid}", '🗑️ deleted', f"🗑️ Memory: {sid}"
-    return f"❌ Memory not found: {sid}", '❌ not found', f"🗑️ Memory: {sid}"
+        return f"Memory deleted: {sid}", '🗑️ deleted', f"🗑️ Memory: {sid}"
+    return f"Memory not found: {sid}", '❌ not found', f"🗑️ Memory: {sid}"
 
 
 def _memory_merge(fn_args, project_path):
@@ -67,7 +67,7 @@ def _memory_merge(fn_args, project_path):
     merged = result['merged_memory']
     n_del = len(result['deleted_ids'])
     return (
-        f"✅ Merged {n_del} memories → **{merged['name']}** (id: {merged['id']}, scope: {merged['scope']})",
+        f"Merged {n_del} memories → **{merged['name']}** (id: {merged['id']}, scope: {merged['scope']})",
         f'🔀 merged {n_del}',
         f"🔀 Merge → {fn_args.get('name', '?')}",
     )
@@ -109,7 +109,7 @@ def _handle_memory_tool(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg,
         memory_ok = True
     except Exception as e:
         logger.warning('[Executor] memory operation %s failed: %s', fn_name, e, exc_info=True)
-        tool_content = f"❌ Failed to {fn_name.replace('_', ' ')}: {e}"
+        tool_content = f"Failed to {fn_name.replace('_', ' ')}: {e}"
         badge_ok = '❌ failed'
         title = f"❌ {fn_name}: error"
 

@@ -49,39 +49,27 @@ def _write_server_config(data):
 
 
 # ══════════════════════════════════════════════════════
-#  Cheap Tag Re-evaluation
+#  Pricing-Tier Tag Re-evaluation (cheap, and any future tiers)
 # ══════════════════════════════════════════════════════
 
 def _reeval_cheap_tags(providers: list):
-    """Re-evaluate 'cheap' capability on all provider models using real pricing.
+    """Re-evaluate pricing-tier capability tags on all provider models.
 
-    Fixes stale cheap tags from old discovery runs that used the blended
-    threshold or name-heuristic fallback.  Uses the strict two-sided check:
-    input < Sonnet input ($3/1M) AND output < Sonnet output ($15/1M).
+    Delegates to :func:`lib.llm_dispatch.config.reevaluate_pricing_tags`,
+    which is driven by the PRICING_TIERS table (currently just 'cheap' —
+    input < $3/1M AND output < $15/1M, strict).  New tiers added to that
+    table are auto-applied here with no further code changes.
+
+    The legacy name ``_reeval_cheap_tags`` is retained for continuity
+    with existing call sites; it now covers every managed tier tag.
     """
-    from lib.llm_dispatch.config import is_model_cheap
+    from lib.llm_dispatch.config import reevaluate_pricing_tags
 
     for prov in providers:
-        for m in prov.get('models', []):
-            mid = m.get('model_id', '')
-            if not mid:
-                continue
-            caps = set(m.get('capabilities', []))
-            # Skip non-chat models
-            if 'image_gen' in caps or 'embedding' in caps:
-                continue
-            cheap = is_model_cheap(
-                mid,
-                fallback_cost_per_1k=m.get('cost'),
-                input_price=m.get('input_price'),
-                output_price=m.get('output_price'),
-            )
-            if cheap and 'cheap' not in caps:
-                caps.add('cheap')
-                m['capabilities'] = sorted(caps)
-            elif not cheap and 'cheap' in caps:
-                caps.discard('cheap')
-                m['capabilities'] = sorted(caps)
+        models = prov.get('models') or []
+        if not models:
+            continue
+        reevaluate_pricing_tags(models, log_prefix='provider=%s' % prov.get('id', '?'))
 
 
 # ══════════════════════════════════════════════════════
@@ -91,15 +79,24 @@ def _reeval_cheap_tags(providers: list):
 def _build_default_providers():
     """Build default provider config from environment/hardcoded values."""
     import lib as _lib
-    from lib.llm_dispatch.config import DEFAULT_SLOT_CONFIGS, MODEL_ALIAS_GROUPS, is_model_cheap
+    from lib.llm_dispatch.config import (
+        DEFAULT_SLOT_CONFIGS,
+        MODEL_ALIAS_GROUPS,
+        MANAGED_TIER_TAGS,
+        get_pricing_tiers,
+    )
 
     base_url = getattr(_lib, 'LLM_BASE_URL', '')
     api_keys = list(getattr(_lib, 'LLM_API_KEYS', []))
 
     def _auto_cheap(model_id, caps_set, cost):
-        if 'image_gen' not in caps_set and 'embedding' not in caps_set and 'cheap' not in caps_set:
-            if is_model_cheap(model_id, fallback_cost_per_1k=cost):
-                caps_set.add('cheap')
+        # Apply every managed pricing-tier tag (cheap, plus any future tier).
+        if 'image_gen' in caps_set or 'embedding' in caps_set:
+            return caps_set
+        tiers = get_pricing_tiers(model_id, fallback_cost_per_1k=cost)
+        # Drop any stale managed tier tag not in the current desired set.
+        caps_set -= (MANAGED_TIER_TAGS - tiers)
+        caps_set |= tiers
         return caps_set
 
     def _build_chat_model_entry(model_id, think_default):
@@ -342,6 +339,45 @@ def get_server_config():
                         'name': mid,
                     }
 
+    # ── Per-provider pricing overrides ──
+    # Each provider's models may carry an explicit 'pricing' dict. We:
+    #   1. Register it into PROVIDER_PRICING so backend cost calc honors it.
+    #   2. Surface it to the frontend as ``provider_pricing`` so the UI's
+    #      calcCostCny() uses the same numbers when a message has a known
+    #      provider_id.
+    # Templates that omit 'pricing' transparently fall back to the global
+    # MODEL_PRICING table — this stays compatible with all existing templates.
+    from lib.pricing import (
+        clear_provider_pricing as _clear_pp,
+        set_provider_pricing as _set_pp,
+    )
+    provider_pricing = {}
+    for prov in providers:
+        pid = prov.get('id') or prov.get('key')
+        if not pid:
+            continue
+        _clear_pp(pid)
+        per_model = {}
+        for m in prov.get('models', []):
+            mid = m.get('model_id', '')
+            pinfo = m.get('pricing')
+            if not (mid and isinstance(pinfo, dict)):
+                continue
+            if pinfo.get('input') is None or pinfo.get('output') is None:
+                continue
+            entry = {
+                'input': pinfo['input'],
+                'output': pinfo['output'],
+                'name': pinfo.get('name', mid),
+            }
+            for k in ('cacheWriteMul', 'cacheReadMul', 'context_tiers'):
+                if k in pinfo:
+                    entry[k] = pinfo[k]
+            _set_pp(pid, mid, entry)
+            per_model[mid] = entry
+        if per_model:
+            provider_pricing[pid] = per_model
+
     model_limits = saved.get('model_limits', {})
     model_defaults = {
         'fallback_model': getattr(_lib, 'FALLBACK_MODEL', ''),
@@ -371,6 +407,16 @@ def get_server_config():
         'enabled': mt_provider_cfg.get('enabled', False),
     }
 
+    # Upload-shrink policy — single source of truth for image re-encode rules.
+    # Frontend compressImage() reads this to mirror the backend exactly, so
+    # the browser doesn't double-shrink what the server would have kept.
+    try:
+        from routes.upload import get_upload_policy
+        upload_policy = get_upload_policy()
+    except Exception as e:
+        logger.warning('[ServerConfig] upload policy unavailable: %s', e)
+        upload_policy = {}
+
     return jsonify({
         'providers': providers, 'presets': presets,
         'models': models, 'search': search_info,
@@ -380,10 +426,12 @@ def get_server_config():
         'hidden_models': hidden_models,
         'hidden_ig_models': hidden_ig_models,
         'model_pricing': model_pricing,
+        'provider_pricing': provider_pricing,
         'model_limits': model_limits,
         'model_defaults': model_defaults,
         'network': network_info,
         'mt_provider': mt_provider_info,
+        'upload': upload_policy,
     })
 
 
@@ -763,7 +811,16 @@ def probe_provider_endpoint():
 
 @config_bp.route('/api/provider-templates')
 def get_provider_templates():
-    """Serve external provider templates from static/provider_templates/*.json."""
+    """Serve external provider templates from static/provider_templates/*.json.
+
+    Pricing-tier tags ('cheap', plus any future PRICING_TIERS row) are
+    re-evaluated on every request against live MODEL_PRICING data, so a
+    stale tag in the JSON file (e.g. a new model whose price was lowered)
+    doesn't mislead the one-click provider setup UI.  The JSON files are
+    NOT rewritten — use ``debug/reeval_pricing_tags.py`` for that.
+    """
+    from lib.llm_dispatch.config import reevaluate_pricing_tags
+
     templates_dir = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
         'static', 'provider_templates'
@@ -778,10 +835,20 @@ def get_provider_templates():
         try:
             with open(fpath, encoding='utf-8') as f:
                 tpl = json.load(f)
-            if isinstance(tpl, dict) and tpl.get('key') and tpl.get('models'):
-                result.append(tpl)
-                logger.debug('[ProviderTemplates] Loaded %s (%d models)',
-                            fname, len(tpl.get('models', [])))
+            if not (isinstance(tpl, dict) and tpl.get('key') and tpl.get('models')):
+                continue
+            # Normalize pricing-tier tags using live pricing data.
+            try:
+                reevaluate_pricing_tags(
+                    tpl['models'],
+                    log_prefix='template=%s' % tpl.get('key', fname),
+                )
+            except Exception as e:
+                logger.warning('[ProviderTemplates] Tier re-eval failed for %s: %s',
+                               fname, e, exc_info=True)
+            result.append(tpl)
+            logger.debug('[ProviderTemplates] Loaded %s (%d models)',
+                        fname, len(tpl.get('models', [])))
         except Exception as e:
             logger.warning('[ProviderTemplates] Failed to load %s: %s', fname, e)
     return jsonify(result)

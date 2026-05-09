@@ -22,6 +22,108 @@ import time
 import hashlib
 
 
+# ══════════════════════════════════════════════════════════
+#  Earliest possible heartbeat — before ANY heavy import
+# ══════════════════════════════════════════════════════════
+# On cold FUSE/NFS, `from flask import …` + opening 4 rotating log
+# handlers can take 10–30s BEFORE the first _boot(...) line fires at
+# ~line 374. The terminal looks frozen during that window. Emit a
+# minimal stdlib-only ping so the user sees activity immediately. Uses
+# os.write(2, …) directly to bypass any stderr buffering.
+#
+# We also record _PROC_T0 here (process wall time) so _boot() can later
+# switch to this earlier zero-point and expose the real cost of the
+# cold imports (otherwise they're hidden before _BOOT_T0 is set).
+_PROC_T0 = time.time()
+try:
+    os.write(2, b'\033[36m[boot +  0.0s]\033[0m \xf0\x9f\xab\xa7 Tofu '
+                b'bootstrap \xe2\x80\x94 importing core libraries '
+                b'(first run on cold FUSE may take 10\xe2\x80\x9330s)\xe2\x80\xa6\n')
+except OSError:
+    pass
+
+
+# ══════════════════════════════════════════════════════════
+#  Auto-activate Tofu's conda env via .tofu_env.json marker
+# ══════════════════════════════════════════════════════════
+# install.sh writes <project>/.tofu_env.json after creating the env. When
+# the user runs `python server.py` from a shell where the Tofu env wasn't
+# explicitly `conda activate`d (very common — fresh terminal, system
+# python first on PATH, IDE play button, systemd unit, …), we re-exec
+# into the env's python here. This avoids any need to run `conda init`
+# (which would mutate ~/.bashrc) and survives `git pull`.
+#
+# Loop guard: _TOFU_ENV_REEXEC=1 prevents infinite re-exec.
+# Failure mode: if the marker is malformed or the python no longer exists,
+#   we log to stderr and continue with the current interpreter — never
+#   block startup on a stale marker.
+#
+# Uses ONLY the standard library (os/sys/json) so it works even when
+# every third-party package is missing (that case is handled afterwards
+# by the bootstrap excepthook below).
+def _tofu_maybe_reexec_into_env():
+    if os.environ.get('_TOFU_ENV_REEXEC') == '1':
+        return  # already re-execed once — don't loop
+    marker = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), '.tofu_env.json')
+    if not os.path.isfile(marker):
+        return
+    try:
+        with open(marker, 'r', encoding='utf-8') as f:
+            cfg = json.load(f)
+    except Exception as e:
+        sys.stderr.write(
+            f'[server.py] Could not read .tofu_env.json ({e}) — '
+            f'continuing with current python.\n')
+        return
+    target_py = cfg.get('python') or ''
+    env_prefix = cfg.get('env_prefix') or ''
+    if not target_py or not os.access(target_py, os.X_OK):
+        sys.stderr.write(
+            f'[server.py] .tofu_env.json points at python={target_py!r} '
+            f'which is not executable — ignoring.\n')
+        return
+    try:
+        same = os.path.realpath(target_py) == os.path.realpath(sys.executable)
+    except OSError:
+        same = (target_py == sys.executable)
+    if same:
+        return  # already running under the right interpreter
+
+    # Make conda env shared libs visible (libpq, libxml2, Chromium libs, …)
+    # without invoking `conda activate`. This is enough for everything
+    # tofu needs — the env's site-packages comes free with the python
+    # binary itself.
+    if env_prefix and os.path.isdir(env_prefix):
+        env_lib = os.path.join(env_prefix, 'lib')
+        if os.path.isdir(env_lib):
+            os.environ['LD_LIBRARY_PATH'] = (
+                env_lib + os.pathsep + os.environ.get('LD_LIBRARY_PATH', ''))
+        # Help any subprocess that DOES rely on PATH (e.g. playwright,
+        # pg_ctl). Front-prepend so the env wins over system tools.
+        env_bin = os.path.join(env_prefix, 'bin')
+        if os.path.isdir(env_bin):
+            os.environ['PATH'] = env_bin + os.pathsep + os.environ.get('PATH', '')
+        os.environ.setdefault('CONDA_PREFIX', env_prefix)
+    if cfg.get('env_name'):
+        os.environ.setdefault('CONDA_DEFAULT_ENV', cfg['env_name'])
+
+    os.environ['_TOFU_ENV_REEXEC'] = '1'
+    sys.stderr.write(
+        f'[server.py] Re-exec into Tofu env python: {target_py}\n')
+    sys.stderr.flush()
+    try:
+        os.execv(target_py, [target_py, *sys.argv])
+    except OSError as e:
+        # execv failure is rare (binary disappeared mid-run) — log and
+        # fall through; the current interpreter may still work.
+        sys.stderr.write(f'[server.py] os.execv failed: {e}\n')
+        os.environ.pop('_TOFU_ENV_REEXEC', None)
+
+
+_tofu_maybe_reexec_into_env()
+
+
 # ══════════════════════════════════════════
 #  Auto-delegate to bootstrap.py on missing deps
 # ══════════════════════════════════════════
@@ -36,7 +138,8 @@ import hashlib
 _BOOTSTRAP_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), 'bootstrap.py')
 
-if (os.environ.get('_CHATUI_VIA_BOOTSTRAP') != '1'
+if (os.environ.get('_TOFU_VIA_BOOTSTRAP') != '1'
+        and os.environ.get('_CHATUI_VIA_BOOTSTRAP') != '1'  # legacy
         and os.path.isfile(_BOOTSTRAP_PATH)):
 
     def _bootstrap_excepthook(exc_type, exc_value, exc_tb):
@@ -155,6 +258,18 @@ class _VendorOnly(logging.Filter):
         return (not record.name.startswith(_BIZ_PREFIXES)
                 and record.name != 'werkzeug')
 
+class _BizAndWerkzeugOnly(logging.Filter):
+    """Pass biz + werkzeug records, EXCLUDE third-party vendor records.
+
+    Attached to error.log so noisy vendor libraries (trafilatura, urllib3,
+    pymupdf, etc.) don't duplicate into error.log — they remain fully
+    visible in vendor.log per the original logging contract (CLAUDE.md §9).
+    Routing, not silencing: every vendor event is still captured.
+    """
+    def filter(self, record):
+        return (record.name.startswith(_BIZ_PREFIXES)
+                or record.name == 'werkzeug')
+
 class _WerkzeugOnly(logging.Filter):
     """Pass only werkzeug (HTTP access) records."""
     def filter(self, record):
@@ -193,11 +308,18 @@ _access_handler.setLevel(logging.INFO)
 _access_handler.addFilter(_WerkzeugOnly())
 
 # ── Handler 3: logs/error.log — all WARNING/ERROR/CRITICAL ──
+# 2026-05-05 noise-reduction: exclude vendor-library records from
+# error.log (they remain in vendor.log). Previously trafilatura/urllib3
+# WARNINGs (malformed CSS, certificate hostname mismatch on random
+# third-party URLs) flooded error.log with cosmetic events that the
+# libraries already recover from gracefully. CLAUDE.md §9 says every
+# warning must still appear *somewhere* — vendor.log is where.
 _error_handler = RotatingFileHandler(
     os.path.join(LOG_DIR, 'error.log'),
     maxBytes=5 * 1024 * 1024, backupCount=10, encoding='utf-8')
 _error_handler.setFormatter(_formatter)
 _error_handler.setLevel(logging.WARNING)
+_error_handler.addFilter(_BizAndWerkzeugOnly())
 
 # ── Handler 4: logs/vendor.log — third-party libs, WARNING+ ──
 _vendor_handler = RotatingFileHandler(
@@ -256,7 +378,10 @@ logging.getLogger('werkzeug').addFilter(_QuietPollFilter())
 # so the user sees progress in real time while the audit trail is still
 # captured in logs/app.log.
 
-_BOOT_T0 = time.time()
+# Use _PROC_T0 (set at the very top of the file, before any heavy import)
+# so the [boot +N.Ns] counter reflects real wall time from `python server.py`,
+# including the 10–30s cold-FUSE import cost before logging is even wired up.
+_BOOT_T0 = _PROC_T0
 _boot_logger = logging.getLogger('server.boot')
 
 def _boot(msg, *args):
@@ -487,6 +612,35 @@ def _assign_req_id_and_log():
     level = logging.DEBUG if is_quiet else logging.INFO
     _lifecycle_log.log(level, '[%s] → %s %s', rid, request.method, path)
 
+# Known-benign 409 error codes — our own regression guards in
+# routes/conversations.py that block stale concurrent syncs. These are
+# the GUARD firing correctly, not an error.
+_BENIGN_409_ERRORS = frozenset({
+    'blocked_msg_regression',
+    'blocked_empty_overwrite',
+    'blocked_stale_checkpoint',
+})
+
+
+def _is_benign_409(response) -> bool:
+    """Return True if *response* is a 409 emitted by one of our known
+    regression guards (body includes `error` field in :data:`_BENIGN_409_ERRORS`).
+
+    Safe / cheap: bails out on any extraction failure.
+    """
+    try:
+        if not response.is_json:
+            return False
+        data = response.get_json(silent=True)
+        if not isinstance(data, dict):
+            return False
+        return data.get('error') in _BENIGN_409_ERRORS
+    except Exception as e:
+        # Defensive: any extraction failure → fall back to WARNING path
+        _lifecycle_log.debug('_is_benign_409 extract failed: %s', e)
+        return False
+
+
 @app.after_request
 def _log_response(response):
     """Log response status and duration for every request."""
@@ -503,6 +657,14 @@ def _log_response(response):
         # Suppress noisy Chrome/Safari DevTools probes and favicon
         if status == 404 and request.path.startswith('/.well-known/'):
             _lifecycle_log.debug('[%s] ← %s %s %d (%.3fs)', rid, request.method, path, status, elapsed)
+        # 2026-05-05: 409 Conflict from our own regression guards
+        # (blocked_msg_regression / blocked_empty_overwrite /
+        # blocked_stale_checkpoint) is the EXPECTED success signal for
+        # the guard — it means we correctly refused a stale concurrent
+        # sync. Demote to INFO so error.log isn't flooded (176+/day).
+        elif status == 409 and _is_benign_409(response):
+            _lifecycle_log.info('[%s] ← %s %s %d benign-guard (%.3fs)',
+                                rid, request.method, path, status, elapsed)
         else:
             _lifecycle_log.warning('[%s] ← %s %s %d (%.3fs)', rid, request.method, path, status, elapsed)
     elif elapsed >= _SLOW_THRESHOLD_S and not is_quiet:
@@ -751,6 +913,14 @@ with app.app_context():
         _server_log.info('Initialising database (SQLite)...')
         init_db()
         warmup_db()
+        # Auto-heal any TOAST corruption that may have been carried over
+        # from a prior hot-copied pgdata (see heal_toast_corruption docstring).
+        # Silent no-op on SQLite and on healthy PG clusters.
+        try:
+            from lib.database import heal_toast_corruption
+            heal_toast_corruption()
+        except Exception as _heal_exc:
+            _server_log.warning('TOAST auto-heal failed (non-fatal): %s', _heal_exc)
         _boot('Database ready.')
         _server_log.info('Database ready (SQLite).')
         # ── Clean up stale tasks from previous crashes ──
@@ -968,13 +1138,14 @@ if __name__ == '__main__':
                 f'  \n'
                 f'  To fix:\n'
                 f'    • SSH to {_other_host} and stop PID {_other_pid} there, OR\n'
-                f'    • Set CHATUI_SKIP_LOCK=1 to bypass this check\n'
+                f'    • Set TOFU_SKIP_LOCK=1 to bypass this check\n'
             )
 
-        _skip_lock = os.environ.get('CHATUI_SKIP_LOCK', '').strip()
+        _skip_lock = (os.environ.get('TOFU_SKIP_LOCK', '')
+                      or os.environ.get('CHATUI_SKIP_LOCK', '')).strip()
         if _skip_lock == '1':
             _server_log.warning(
-                '[Lock] CHATUI_SKIP_LOCK=1 — bypassing instance lock! '
+                '[Lock] TOFU_SKIP_LOCK=1 — bypassing instance lock! '
                 'Lock held by PID=%s on host=%s. Proceeding anyway.',
                 _other_pid, _other_host
             )
@@ -997,7 +1168,7 @@ if __name__ == '__main__':
                 '  \n'
                 '  Solutions:\n'
                 '    1. Stop the other instance first (on the correct host!)\n'
-                '    2. Set CHATUI_SKIP_LOCK=1 to force start (at your own risk)\n'
+                '    2. Set TOFU_SKIP_LOCK=1 to force start (at your own risk)\n'
                 '    3. Use a different PORT env var for a second instance\n'
                 '    4. Copy the project to a different directory for full isolation\n'
                 '  ══════════════════════════════════════════════════════',
@@ -1035,7 +1206,7 @@ if __name__ == '__main__':
         from lib.database._core import stop_local_pg_if_owned
         _atexit.register(stop_local_pg_if_owned)
         _server_log.info('[Server] PG shutdown hook registered '
-                         '(set CHATUI_STOP_PG_ON_EXIT=0 to disable)')
+                         '(set TOFU_STOP_PG_ON_EXIT=0 to disable)')
     except Exception as _e:
         _server_log.warning('[Server] Failed to register PG shutdown hook: %s', _e)
 
@@ -1113,6 +1284,18 @@ if __name__ == '__main__':
         start_fs_keepalive()
     except Exception as e:
         _server_log.warning('Failed to start FS keepalive: %s', e, exc_info=True)
+
+    # ── code-server / VS Code fileWatcher exclude sync ──
+    # Mirrors .vscode/settings.json excludes into User-scope settings so
+    # they apply even when the workspace root is above the project dir.
+    # Non-blocking daemon thread; see lib/code_server_excludes.py.
+    _boot('Syncing code-server fileWatcher excludes…')
+    try:
+        from lib.code_server_excludes import start_code_server_excludes_sync
+        start_code_server_excludes_sync()
+    except Exception as e:
+        _server_log.warning('Failed to start code-server excludes sync: %s',
+                            e, exc_info=True)
 
     # ── Cross-datacenter DolphinFS detection ──
     _boot('Probing cross-datacenter FUSE latency…')

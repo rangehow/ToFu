@@ -17,10 +17,21 @@
 var ConvCache = (function () {
   'use strict';
 
-  var DB_NAME = 'chatui_conv_cache';
+  var DB_NAME = 'tofu_conv_cache';
+  var LEGACY_DB_NAME = 'chatui_conv_cache';
   var DB_VERSION = 1;
   var STORE = 'conversations';
   var MAX_CACHED = 200;
+
+  // One-time best-effort cleanup of the legacy IndexedDB.  Server
+  // (PostgreSQL/SQLite) is the source of truth, so dropping the cache
+  // costs one extra server fetch per conversation the first time it's
+  // re-opened post-rollout — acceptable transient blip.
+  try {
+    if (typeof indexedDB !== 'undefined' && typeof indexedDB.deleteDatabase === 'function') {
+      indexedDB.deleteDatabase(LEGACY_DB_NAME);
+    }
+  } catch (_e) { /* no-op — legacy DB may not exist */ }
 
   /** @type {IDBDatabase|null} */
   var _db = null;

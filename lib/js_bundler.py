@@ -34,10 +34,16 @@ _BUNDLE_FILES = [
     'paper-reader.js',
     'project.js',
     'memory.js',
+    'skills.js',
     'scheduler.js',
     'timer.js',
     'myday.js',
     'settings.js',
+    # Agent backend selection (depends on apiUrl/debugLog from core+ui;
+    # must come BEFORE main.js because main.js references its functions
+    # like _saveConvToolState ↔ _applyAgentBackendUI bidirectionally,
+    # but only at runtime — not at module-load).
+    'agent-backend.js',
     # Orchestrator (MUST be last)
     'main.js',
 ]

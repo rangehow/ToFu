@@ -22,12 +22,14 @@ function toggleMemoryFromModal() {
 }
 function openMemoryModal() {
   console.log("[Memory] Opening modal...");
-  document.getElementById("memoryModal").classList.add("open");
+  const overlay = document.getElementById("memoryModal");
+  overlay.classList.add("open");
   _memoryFilter = "";
   const search = document.getElementById("memorySearchInput");
   if (search) search.value = "";
   refreshMemoryList();
   _updateMemoryModalBtn();
+  _attachMemoryDropZone();
 }
 function closeMemoryModal() {
   document.getElementById("memoryModal").classList.remove("open");
@@ -166,6 +168,15 @@ function _buildMemoryCardEl(sk) {
   scopeBadge.className = "memory-card-scope " + sk.scope;
   scopeBadge.textContent = sk.scope === "global" ? "全局" : "项目";
   header.appendChild(scopeBadge);
+
+  // Package badge (SKILL.md directory package)
+  if (sk.is_package) {
+    const pkg = document.createElement("span");
+    pkg.className = "memory-card-pkg";
+    pkg.title = sk.package_dir || "Skill package";
+    pkg.innerHTML = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>SKILL';
+    header.appendChild(pkg);
+  }
 
   // Actions inline in header
   const actions = document.createElement("div");
@@ -360,4 +371,141 @@ async function createMemoryFromModal() {
       status.textContent = e.error || "Failed";
     }
   } catch (e) { status.textContent = "Error: " + e.message; }
+}
+
+// ══════════════════════════════════════════════════════
+// ★ Skill-Package Install — drag-and-drop .zip into modal
+// ══════════════════════════════════════════════════════
+
+let _memoryDropAttached = false;
+let _memoryDragDepth = 0;  // counter for nested dragenter/dragleave
+
+function _attachMemoryDropZone() {
+  if (_memoryDropAttached) return;
+  _memoryDropAttached = true;
+
+  const modal = document.getElementById("memoryModal");
+  const card  = modal ? modal.querySelector(".memory-modal") : null;
+  if (!modal || !card) return;
+
+  // Only react to OS-drag-of-files (dataTransfer.types contains "Files").
+  // Avoid swallowing intra-app drags of our own cards.
+  const hasFiles = (e) => {
+    const dt = e.dataTransfer;
+    if (!dt || !dt.types) return false;
+    for (let i = 0; i < dt.types.length; i++) {
+      if (dt.types[i] === "Files") return true;
+    }
+    return false;
+  };
+
+  modal.addEventListener("dragenter", (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    _memoryDragDepth++;
+    card.classList.add("is-dragging");
+  });
+  modal.addEventListener("dragover", (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+  });
+  modal.addEventListener("dragleave", (e) => {
+    if (!hasFiles(e)) return;
+    _memoryDragDepth = Math.max(0, _memoryDragDepth - 1);
+    if (_memoryDragDepth === 0) card.classList.remove("is-dragging");
+  });
+  modal.addEventListener("drop", (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    _memoryDragDepth = 0;
+    card.classList.remove("is-dragging");
+    const files = e.dataTransfer.files;
+    if (!files || !files.length) return;
+    // Install first zip we find.
+    for (let i = 0; i < files.length; i++) {
+      const f = files[i];
+      if (f && (/\.zip$/i.test(f.name) || f.type === "application/zip" ||
+                f.type === "application/x-zip-compressed")) {
+        _uploadSkillPackage(f);
+        return;
+      }
+    }
+    _showInstallToast("拖入的文件不是 .zip 技能包", true);
+  });
+}
+
+function installSkillFromFileInput(inputEl) {
+  const f = inputEl && inputEl.files && inputEl.files[0];
+  if (!f) return;
+  _uploadSkillPackage(f);
+  inputEl.value = "";  // allow re-selecting the same file
+}
+
+async function _uploadSkillPackage(file) {
+  const activeTab = document.querySelector(".memory-tab.active");
+  const tabScope = activeTab?.dataset?.scope;
+  const scope = (tabScope === "global") ? "global" : "project";
+
+  _showInstallToast(`正在安装 ${file.name} …`);
+  const fd = new FormData();
+  fd.append("file", file);
+  fd.append("scope", scope);
+
+  try {
+    const r = await fetch(apiUrl("/api/memory/install"), {
+      method: "POST",
+      body: fd,
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      _showInstallToast(`安装失败: ${d.error || r.statusText}`, true);
+      debugLog("Skill install failed: " + (d.error || r.statusText), "error");
+      return;
+    }
+
+    const mem = d.memory || {};
+    const hints = d.install_hints || [];
+    let msg = `已安装技能包 "${mem.name}" (scope=${mem.scope})`;
+    if (d.replaced) msg += " · 已覆盖旧版";
+    if (hints.length) {
+      const files = hints.map(h => h.file).join(", ");
+      msg += ` · 发现安装脚本 ${files}（出于安全未自动执行）`;
+    }
+    _showInstallToast(msg);
+    debugLog(msg, "success");
+
+    // Insert new card on top, no full refresh.
+    _memoryCache.unshift(mem);
+    const list = document.getElementById("memoryList");
+    if (list) {
+      if (list.querySelector('.memory-empty')) list.innerHTML = '';
+      const cardEl = _buildMemoryCardEl(mem);
+      cardEl.style.animation = 'memorySlam .3s cubic-bezier(.2,1,.3,1)';
+      list.prepend(cardEl);
+    }
+    _updateMemoryStats(_memoryCache);
+  } catch (e) {
+    _showInstallToast("安装异常: " + e.message, true);
+    debugLog("Skill install error: " + e.message, "error");
+  }
+}
+
+function _showInstallToast(text, isError) {
+  const modal = document.getElementById("memoryModal");
+  const card = modal ? modal.querySelector(".memory-modal") : null;
+  if (!card) return;
+  // Remove existing toast
+  const existing = card.querySelector(".memory-install-toast");
+  if (existing) existing.remove();
+
+  const toast = document.createElement("div");
+  toast.className = "memory-install-toast" + (isError ? " is-error" : "");
+  toast.textContent = text;
+  card.appendChild(toast);
+  setTimeout(() => {
+    toast.style.transition = "opacity .3s";
+    toast.style.opacity = "0";
+    setTimeout(() => toast.remove(), 300);
+  }, isError ? 5000 : 3500);
 }

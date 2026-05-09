@@ -4,10 +4,10 @@
 Problem
 -------
 When the user's VS Code SSH / port-forwarding session disconnects,
-the DolphinFS (BeeGFS over FUSE) mount can go idle.  After enough idle
-time the kernel FUSE connection stales, causing ALL subsequent I/O on
-``/mnt/your-fs`` to block in uninterruptible sleep (D-state) for
-minutes or even hours — until the network path recovers.
+a FUSE-backed network mount (BeeGFS, NFS, etc.) can go idle.  After
+enough idle time the kernel FUSE connection stales, causing ALL
+subsequent I/O on the mount to block in uninterruptible sleep (D-state)
+for minutes or even hours — until the network path recovers.
 
 Because the application's database and files live on the same FUSE mount,
 the entire application (task checkpoints, DB queries, tool I/O) freezes

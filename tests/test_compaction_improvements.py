@@ -661,7 +661,8 @@ class TestPostCompactReinjection:
 
     def test_detects_missing_project_context(self):
         from lib.tasks_pkg.compaction import _reinject_system_contexts_after_compact
-        messages = [{'role': 'system', 'content': 'A bare system message without project context'}]
+        # Bare system message: CC static marker is missing → should re-inject
+        messages = [{'role': 'system', 'content': 'A bare system message without the CC static block'}]
         task = {
             'config': {
                 'projectPath': '/tmp/test_project',
@@ -670,17 +671,28 @@ class TestPostCompactReinjection:
                 'swarmEnabled': False,
             }
         }
-        # This should detect that [PROJECT CO-PILOT MODE] is missing
-        # and attempt to re-inject.  It may fail gracefully if the
-        # project path doesn't exist, but it should not crash.
+        # Should detect the missing CC marker and re-inject. May fail
+        # gracefully if the project path doesn't exist, but must not crash.
         try:
             _reinject_system_contexts_after_compact(messages, task=task)
         except Exception:
             pass  # OK — project path doesn't exist in test env
 
     def test_skips_when_project_context_present(self):
+        """When the CC static block is already in the system message, no
+        re-injection happens.  The trigger marker switched from
+        ``[PROJECT CO-PILOT MODE]`` (Layout B, where CLAUDE.md was in
+        system) to ``_CC_STATIC_MARKER`` (Layout A, where CLAUDE.md is
+        in a user _isMeta msg) when Layout B was retired — see
+        compaction.py and system_context.py.
+        """
         from lib.tasks_pkg.compaction import _reinject_system_contexts_after_compact
-        messages = [{'role': 'system', 'content': '[PROJECT CO-PILOT MODE]\nProject info...'}]
+        from lib.tasks_pkg.system_context import _CC_STATIC_MARKER
+        # The CC marker present → system prompt already injected
+        sys_text = (f'Some bare prompt with the marker: '
+                    f'"{_CC_STATIC_MARKER}". Pretend this is the CC static '
+                    f'block.')
+        messages = [{'role': 'system', 'content': sys_text}]
         task = {
             'config': {
                 'projectPath': '/tmp/test_project',
@@ -689,7 +701,6 @@ class TestPostCompactReinjection:
                 'swarmEnabled': False,
             }
         }
-        # Should not try to re-inject since project context marker is present
         original_content = messages[0]['content']
         _reinject_system_contexts_after_compact(messages, task=task)
         assert messages[0]['content'] == original_content
@@ -739,6 +750,140 @@ class TestDiskPersistence:
         result = _persist_to_disk(content, 'web_search', 'tc_3')
         # Result should be much smaller than original
         assert len(result) < _PERSIST_PREVIEW_CHARS + 500  # preview + metadata
+
+    def test_fetch_url_batch_split_persist(self):
+        """Batch fetch_url persist should produce per-URL files + index listing ALL URLs."""
+        import os
+        import re as _re
+        from lib.tasks_pkg.compaction import _persist_to_disk
+
+        url1 = 'https://example.com/alpha'
+        url2 = 'https://example.com/beta'
+        url3 = 'https://example.net/gamma/page'
+        body1 = 'AAA-start\n' + ('a' * 40_000) + '\nAAA-end'
+        body2 = 'BBB-start\n' + ('b' * 40_000) + '\nBBB-end'
+        body3 = 'CCC-start\n' + ('c' * 40_000) + '\nCCC-end'
+        content = (
+            f"Content from {url1} ({len(body1):,} chars):\n\n{body1}\n\n"
+            f"Content from {url2} ({len(body2):,} chars):\n\n{body2}\n\n"
+            f"Content from {url3} ({len(body3):,} chars):\n\n{body3}"
+        )
+
+        result = _persist_to_disk(content, 'fetch_url', 'tc_fetch_batch',
+                                  'conv_fetchtest123')
+
+        # Index should mention ALL three URLs with per-URL file paths
+        for url in (url1, url2, url3):
+            assert url in result, f'URL {url} missing from persist index'
+
+        # Should produce three separate files — extract all file paths
+        file_paths = _re.findall(r'File: (\S+\.txt)', result)
+        assert len(file_paths) == 3, f'expected 3 files, got {len(file_paths)}: {file_paths}'
+
+        # Each file should exist and contain the matching body
+        for fp, body in zip(file_paths, (body1, body2, body3)):
+            assert os.path.exists(fp), f'persisted file missing: {fp}'
+            with open(fp, 'r', encoding='utf-8') as f:
+                disk_content = f.read()
+            assert body[:40] in disk_content
+            os.unlink(fp)  # cleanup
+
+        # Index should have a per-URL preview for each
+        assert result.count('Preview:') >= 3
+
+    def test_fetch_url_single_falls_through(self):
+        """Single-URL fetch_url should use default single-file persist (not split)."""
+        from lib.tasks_pkg.compaction import _persist_to_disk
+        url = 'https://example.com/only'
+        body = 'single-page-body\n' + ('z' * 60_000)
+        content = f"Content from {url} ({len(body):,} chars):\n\n{body}"
+        result = _persist_to_disk(content, 'fetch_url', 'tc_fetch_single',
+                                  'conv_fetchsingle')
+        # Should go through the default path (single [Persisted to:] header)
+        assert result.startswith('[Persisted to:')
+
+    def test_find_files_batch_split_persist(self):
+        """Batch find_files persist should produce per-search files + index listing ALL patterns."""
+        import os
+        import re as _re
+        from lib.tasks_pkg.compaction import _persist_to_disk
+
+        # Simulate batch find_files output (3 searches, each with many files)
+        def _mk_section(pattern, in_path, n):
+            files = '\n'.join(f'{in_path or "."}/match_{pattern}_{k}.py' for k in range(n))
+            header = f'Files matching "{pattern}"'
+            if in_path:
+                header += f' in {in_path}'
+            header += f' ({n} found):'
+            return f'{header}\n\n{files}'
+
+        sec1 = _mk_section('*.py', 'lib', 2000)
+        sec2 = _mk_section('test_*.py', 'tests', 1500)
+        sec3 = _mk_section('*.js', 'static/js', 1200)
+        content = f'{sec1}\n\n{sec2}\n\n{sec3}'
+        assert len(content) > 20_000  # must exceed find_files budget
+
+        result = _persist_to_disk(content, 'find_files', 'tc_find_batch',
+                                  'conv_findtest123')
+
+        # Index should mention ALL three patterns
+        assert '"*.py"' in result
+        assert '"test_*.py"' in result
+        assert '"*.js"' in result
+        # All three in_paths visible
+        assert 'lib' in result and 'tests' in result and 'static/js' in result
+        # Per-search result counts visible
+        assert '2000 found' in result
+        assert '1500 found' in result
+        assert '1200 found' in result
+
+        file_paths = _re.findall(r'File: (\S+\.txt)', result)
+        assert len(file_paths) == 3, f'expected 3 files, got {len(file_paths)}'
+
+        for fp in file_paths:
+            assert os.path.exists(fp)
+            os.unlink(fp)
+
+    def test_find_files_single_falls_through(self):
+        """Single-search find_files output uses default single-file persist."""
+        from lib.tasks_pkg.compaction import _persist_to_disk
+        content = (
+            'Files matching "*.py" in lib (5000 found):\n\n'
+            + '\n'.join(f'lib/file_{k}.py' for k in range(5000))
+        )
+        result = _persist_to_disk(content, 'find_files', 'tc_find_single',
+                                  'conv_findsingle')
+        assert result.startswith('[Persisted to:')
+
+    def test_fetch_url_batch_failed_sections_included(self):
+        """Failed fetches in a batch should also appear as FAILED entries in the index."""
+        import os
+        import re as _re
+        from lib.tasks_pkg.compaction import _persist_to_disk
+
+        url1 = 'https://ok.example.com/a'
+        url2 = 'https://bad.example.com/b'
+        url3 = 'https://ok.example.com/c'
+        body1 = 'A' * 40_000
+        body3 = 'C' * 40_000
+        content = (
+            f"Content from {url1} ({len(body1):,} chars):\n\n{body1}\n\n"
+            f"Failed to fetch {url2}. (HTTP 503)\n\n"
+            f"Content from {url3} ({len(body3):,} chars):\n\n{body3}"
+        )
+
+        result = _persist_to_disk(content, 'fetch_url', 'tc_fetch_mixed',
+                                  'conv_fetchmixed123')
+
+        assert url1 in result
+        assert url2 in result
+        assert url3 in result
+        assert 'FAILED' in result
+        file_paths = _re.findall(r'File: (\S+\.txt)', result)
+        assert len(file_paths) == 3
+        for fp in file_paths:
+            if os.path.exists(fp):
+                os.unlink(fp)
 
     def test_web_search_structured_preview_shows_all_results(self):
         """web_search persist preview should show title/URL/snippet for ALL results."""

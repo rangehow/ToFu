@@ -253,8 +253,13 @@ class StreamingToolAccumulator:
             if fn_name in ('read_files', 'grep_search', 'find_files',
                            'list_dir'):
                 from lib.project_mod.tools import execute_tool
+                # ★ Pass conv_id so namespaced paths resolve against this
+                #   conversation's root registry (prevents concurrent-task
+                #   clobber — see lib/project_mod/config.py::set_conv_roots).
+                _conv_id = self._task.get('convId') or self._task.get('id') or ''
                 return execute_tool(fn_name, fn_args,
-                                    self._project_path or '.')
+                                    self._project_path or '.',
+                                    conv_id=_conv_id)
 
             elif fn_name == 'web_search':
                 from lib.search import format_search_for_tool_response, perform_web_search
@@ -406,6 +411,22 @@ class StreamingToolAccumulator:
             return ''
 
         except Exception as e:
+            # UnknownWorkspaceRootError is already logged ONCE as WARNING
+            # at the raise site (lib/project_mod/tools.py) and will be
+            # re-logged at INFO by executor._execute_tool_one after the
+            # normal-pipeline fallback. Keep it at INFO here too so we
+            # don't triple-log the same event in error.log.
+            try:
+                from lib.project_mod.config import UnknownWorkspaceRootError
+                if isinstance(e, UnknownWorkspaceRootError):
+                    logger.info(
+                        '[%s] StreamingToolExec: pre-exec of %s hit '
+                        'unknown workspace root (recoverable, returned '
+                        'to LLM): %s', self._tid, fn_name, e)
+                    raise
+            except ImportError as _imp:
+                logger.debug('[%s] UnknownWorkspaceRootError import '
+                             'failed: %s', self._tid, _imp)
             logger.warning('[%s] StreamingToolExec: pre-exec of %s failed: %s',
                            self._tid, fn_name, e)
             raise
@@ -530,9 +551,26 @@ class StreamingToolAccumulator:
                     future.cancel()
                     continue
                 try:
-                    # 60s generous timeout — same tools get the same timeout
-                    # in serial pipeline, but they're already partway done
-                    content = future.result(timeout=60)
+                    # ★ Timeout should match the underlying tool's I/O
+                    #   timeout (cross-DC multiplier adjusts for slow
+                    #   FUSE/NFS mounts — see lib.cross_dc).  The old
+                    #   hard-coded 60s threw away in-flight rg work on
+                    #   slow mounts, only for the serial pipeline to
+                    #   then re-run the same rg from scratch → wasted
+                    #   60s + a fresh full scan.  We now align, so the
+                    #   pre-execution's result gets injected.
+                    _wait_timeout = 60
+                    if fn_name in ('grep_search', 'read_files',
+                                   'find_files', 'list_dir'):
+                        try:
+                            from lib.project_mod.read_tools import _get_io_timeout
+                            _wait_timeout = _get_io_timeout(
+                                self._project_path or '.', default=60)
+                        except Exception as _e:
+                            logger.debug('[%s] StreamingToolExec: cross-DC '
+                                         'timeout probe unavailable: %s',
+                                         self._tid, _e)
+                    content = future.result(timeout=_wait_timeout)
                     elapsed = time.time() - t0
                     is_search = fn_name in ('web_search',)
                     cache_key = _make_cache_key(fn_name, fn_args)
@@ -548,8 +586,8 @@ class StreamingToolAccumulator:
                                 ', %d display_results' % len(_disp) if _disp else '')
                 except TimeoutError:
                     logger.warning('[%s] StreamingToolExec: %s timed out after '
-                                   '60s, deferring to normal pipeline',
-                                   self._tid, fn_name)
+                                   '%ds, deferring to normal pipeline',
+                                   self._tid, fn_name, _wait_timeout)
                 except Exception as e:
                     logger.debug('[%s] StreamingToolExec: %s pre-exec failed, '
                                  'deferring to normal pipeline: %s',

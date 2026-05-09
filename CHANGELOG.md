@@ -2,6 +2,67 @@
 
 All notable changes to tofu-open are documented in this file.
 
+## [0.10.0] - 2026-05-09
+
+### Added
+- **Daily Optimizer (self-tuning loop).** New `lib/optimizer/` package mines the
+  prior day's logs, audit events, and daily reports, asks an LLM for
+  optimisation proposals, and either auto-applies whitelisted low-risk
+  actions (currently `block_search_domain`, with TTL-based auto-revert) or
+  stages everything else as `pending_review` for human approval. Runs nightly
+  at 03:30 via the scheduler (`Daily Optimizer` task, auto-registered on
+  boot). REST API in `routes/optimizer.py`; review UI in `static/js/optimizer.js`.
+  Gated by `OPTIMIZER_ENABLED` setting.
+- **Skills Store (curated catalogue + drag-and-drop installer).** Settings →
+  Skills tab now has an App-Store-style layout (search + Catalogue/Installed
+  scope tabs + category pills) backed by `lib/memory/catalog.py`. One-click
+  install downloads a `.zip` over HTTPS (≤ 50 MB) and unpacks it via
+  `lib/memory/installer.py`. Anthropic / OpenClaw / AgentSkills `.zip`
+  packages can also be drag-dropped onto the tab; bundled `install.sh`
+  scripts are surfaced as hints, never auto-executed.
+- **Pluggable token counter.** New `lib/token_counter/` package routes token
+  counting through provider-specific backends (Anthropic / Gemini / DeepSeek
+  / HuggingFace / tiktoken / heuristic) with a usage cache, replacing the
+  scattered ad-hoc estimators.
+- **File-history store.** New `lib/file_history/` records per-file edit
+  history so write tools and the diff viewer can show a coherent timeline
+  of changes across a session.
+- **Memory prefetch.** `lib/memory/prefetch.py` surfaces likely-relevant
+  memories at turn start via the `<relevant_memories>` block, so the model
+  doesn't have to call `search_memories` as a generic discovery step.
+- **Compaction archive viewer.** New `routes/conversations_compaction.py`
+  + `static/js/compaction-viewer.js` let you inspect the archived layers
+  produced by 3-layer context compaction.
+- **Conversation full-text search endpoints** moved into a dedicated
+  `routes/conversations_search.py` Blueprint (extracted from
+  `routes/conversations.py`).
+- **Provider templates.** Added Meituan and Tencent provider one-click
+  templates in Settings → Providers.
+
+### Improved
+- **`routes/chat.py` decomposition.** Extracted `chat_human_io.py`,
+  `chat_queue.py`, and `chat_tool_state.py` so the chat blueprint is
+  smaller and individual concerns (stdin/human-guidance responses,
+  server-side message queue, tool-toggle PATCH) live in their own
+  modules.
+- **PDF parsing.** Added `lib/pdf_parser/docling.py` as an additional
+  backend alongside the existing text/VLM/math paths.
+- **Project tools.** New `lib/project_mod/gitignore_suggest.py` proposes
+  `.gitignore` entries for files the indexer keeps re-scanning.
+- **Multi-root workspace robustness.** Extra roots now persist across
+  conversation switches (frontend sends `projectPaths`; backend
+  `ensure_project_state()` accepts `extra_paths`). The system prompt's
+  multi-root section explicitly warns about new-file creation in
+  non-primary roots, since there is no auto-detection until the file
+  exists.
+- **`requirements.txt`.** Pin `lxml_html_clean>=0.4` so trafilatura keeps
+  working on lxml 5.2+ where `lxml.html.clean` was extracted.
+
+### Fixed
+- Numerous small fixes in browser dispatch, conv_ref handling, image
+  generation, LLM sanitisation, scheduler timer/manager, and trading
+  decision routes (see file-level diffs).
+
 ## [0.9.3] - 2026-04-22
 
 ### Fixed

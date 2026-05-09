@@ -21,16 +21,26 @@ from lib.project_mod.modifications import _start_new_session
 
 logger = get_logger(__name__)
 
-def ensure_project_state(path_str, extra_paths=None):
+def ensure_project_state(path_str, extra_paths=None, conv_id=None):
     """Ensure the server's project state matches the given path(s).
 
     Called from the task orchestrator before context injection.
     If the server's _state already matches (primary + extras), this is a no-op.
     Otherwise calls set_project_paths() or set_project() to register.
 
+    ★ 2026-05-05 — ``conv_id`` parameter.  When provided, this ALSO
+    writes a per-conversation root registry via :func:`set_conv_roots`.
+    The per-conv registry is immune to the global ``_roots.clear()``
+    that happens when another task calls ``set_project`` with a
+    different primary path.  Tool calls originating from this conv
+    will resolve namespaced paths (``name:rel/path``) against this
+    conv-local registry first, preventing concurrent tasks from
+    clobbering each other's namespaces.
+
     Args:
         path_str: Primary project path.
         extra_paths: Optional list of additional root paths (multi-root workspace).
+        conv_id: Conversation identifier for scoping (optional).
 
     Returns True if state was already correct or successfully set.
     """
@@ -47,6 +57,18 @@ def ensure_project_state(path_str, extra_paths=None):
             aep = os.path.abspath(os.path.expanduser(ep))
             if os.path.isdir(aep) and aep != abs_path and aep not in abs_extras:
                 abs_extras.append(aep)
+
+    # ★ Always register the per-conv scope up front (cheap; no disk I/O).
+    #   Do this BEFORE touching the global registry so even if the
+    #   subsequent set_project* call is delayed, the conv's tool calls
+    #   can still resolve via the conv registry.
+    if conv_id:
+        try:
+            from lib.project_mod.config import set_conv_roots
+            set_conv_roots(conv_id, abs_path, extras=abs_extras)
+        except Exception as e:
+            logger.warning('[Project] set_conv_roots failed conv=%s: %s',
+                           conv_id[:12] if conv_id else '?', e)
 
     with _lock:
         if _state.get('path') == abs_path:

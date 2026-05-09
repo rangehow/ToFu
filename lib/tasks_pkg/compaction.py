@@ -99,6 +99,30 @@ _COMPACTION_RESERVE = 8_000
 _COMPACT_TOOL_NAME = 'context_compact'
 """Tool name for the synthetic compact tool pair."""
 
+# ── Wire-size safety (gateway HTTP 413) ──────────────────────────────────────
+
+_WIRE_BYTE_SOFT_LIMIT = 4 * 1024 * 1024
+"""Reactive-compact target for the serialized request body, in bytes.
+
+The upstream LLM gateway (openresty at your-llm-gateway.example.com) rejects request
+bodies exceeding its `client_max_body_size` with HTTP 413 BEFORE upstream
+ever tokenizes them.  Our token-count estimate is truthful for upstream
+billing (Claude charges ~(W·H)/750 tokens per image), but blind to the
+wire-byte volume of base64-encoded image_url blocks.  A single 1024×510
+screenshot costs ~706 upstream tokens but ~576 KB on the wire (a ~800×
+ratio).  See debug/probe_image_tokens.py for the empirical numbers.
+
+Reactive compaction treats wire-byte overflow as a separate dimension
+from token overflow.  The target is conservative (4 MB) to leave ample
+headroom below any sane gateway limit."""
+
+_WIRE_IMAGE_KEEP_TAIL = 2
+"""When reactive-stripping images, keep only the N most-recent image_url
+blocks across the whole message list.  Matches `_IMAGE_HOT_TAIL` in
+micro_compact — but here we apply it UNCONDITIONALLY (ignore hot-tail
+protection) because a 413 proves the current payload is already too big
+on the wire regardless of token budget."""
+
 _KEEP_RECENT_PAIRS = 8
 """[DEPRECATED] Legacy pair-count preservation floor.
 
@@ -249,7 +273,14 @@ What the assistant should do next to continue the task.
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _ensure_compaction_tables():
-    """Create compaction-related tables if they don't already exist."""
+    """Create compaction-related tables if they don't already exist.
+
+    NOTE: the canonical schema (including all metadata columns) lives in
+    ``lib/database/_schema_sqlite.py`` and ``_schema_pg.py``. This helper
+    only ensures the base table exists as a safety net for older installs
+    that haven't run the DDL migration yet — the metadata columns are
+    added by the init_db migration block, not here.
+    """
     from lib.database import DOMAIN_CHAT, get_thread_db
     db = get_thread_db(DOMAIN_CHAT)
     db.executescript('''
@@ -285,27 +316,118 @@ def _init_tables():
                          e, exc_info=True)
 
 
-def _archive_transcript(conv_id: str, messages: list, summary: str = ''):
-    """Archive the full message list to DB before summarization."""
+def _archive_transcript(conv_id: str, messages: list, summary: str = '',
+                        *,
+                        trigger: str = 'force',
+                        task: dict | None = None,
+                        round_num: int = 0,
+                        tokens_before: int = 0,
+                        tokens_after: int = 0,
+                        msgs_before: int = 0,
+                        msgs_after: int = 0,
+                        reason: str = '',
+                        emit_event: bool = True) -> int | None:
+    """Archive the full message list to DB before compaction and optionally
+    emit a ``compaction`` SSE event so the frontend can surface an inline
+    marker the user can click to inspect the pre-compaction context.
+
+    Args:
+        conv_id: Conversation id — used as archive key and in the SSE event.
+        messages: Full pre-compaction message list (deep-copyable).
+        summary: Human-readable summary string (may be empty at write time).
+        trigger: What fired this archival — one of
+            ``'force'`` (L3 force-compact threshold),
+            ``'reactive'`` (emergency after API 400/413), or
+            ``'manual'`` (caller-injected).
+        task: Live task dict — used to extract task_id and model for the row.
+        round_num: Zero-based round number (for cross-reference with tool rounds).
+        tokens_before / tokens_after: Heuristic token counts around the compaction.
+        msgs_before / msgs_after: Message-count pair.
+        reason: Short diagnostic string shown in the UI badge
+            (e.g. "prompt too long: 1,310,784 tokens").
+        emit_event: Whether to append a ``compaction`` event to task['events'].
+
+    Returns:
+        The row id of the newly-inserted archive, or ``None`` on failure.
+    """
     _init_tables()
     from lib.database import DOMAIN_CHAT, db_execute_with_retry, get_thread_db
+    task_id = (task.get('id', '') if task else '') or ''
+    model = ''
+    if task:
+        try:
+            model = (task.get('model')
+                     or (task.get('config', {}) or {}).get('model')
+                     or '')
+        except Exception as _m_e:
+            logger.debug('[Compact] model extract failed: %s', _m_e)
+            model = ''
+
+    archive_id: int | None = None
     try:
         db = get_thread_db(DOMAIN_CHAT)
         from lib.database import json_dumps_pg
         messages_json = json_dumps_pg(messages, default=str)
+        # Use a write-then-select pattern (cross-backend safe) to recover
+        # the newly-allocated row id without committing to vendor-specific
+        # RETURNING / lastrowid semantics.
         db_execute_with_retry(db,
             'INSERT INTO transcript_archive '
-            '(conv_id, messages_json, summary) VALUES (?,?,?)',
-            (conv_id, messages_json, summary),
+            '(conv_id, messages_json, summary, trigger, task_id, round_num, '
+            ' model, tokens_before, tokens_after, msgs_before, msgs_after, reason) '
+            'VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+            (conv_id, messages_json, summary or '', trigger, task_id,
+             int(round_num or 0), model,
+             int(tokens_before or 0), int(tokens_after or 0),
+             int(msgs_before or 0), int(msgs_after or 0),
+             (reason or '')[:500]),
         )
-        logger.info('[Compact] Transcript archived conv=%s  '
-                    'messages=%d  size=%s',
+        try:
+            cur = db.execute(
+                'SELECT id FROM transcript_archive WHERE conv_id=? '
+                'ORDER BY id DESC LIMIT 1',
+                (conv_id,),
+            )
+            row = cur.fetchone()
+            if row is not None:
+                archive_id = int(row[0] if not isinstance(row, dict) else row.get('id'))
+        except Exception as e_id:
+            logger.debug('[Compact] Archive id lookup failed: %s', e_id)
+
+        logger.info('[Compact] Transcript archived conv=%s  id=%s  trigger=%s  '
+                    'messages=%d  size=%s  tokens=%d→%d',
                     conv_id[:8] if conv_id else '?',
-                    len(messages),
-                    _human_size(len(messages_json)))
+                    archive_id, trigger,
+                    len(messages), _human_size(len(messages_json)),
+                    int(tokens_before or 0), int(tokens_after or 0))
     except Exception as e:
         logger.warning('[Compact] Transcript archive failed conv=%s: %s',
                        conv_id[:8] if conv_id else '?', e, exc_info=True)
+        return None
+
+    # Emit SSE event so the frontend can render an inline marker.  We guard
+    # against missing task / archive_id so the archival path never breaks
+    # if the live task dict isn't wired through.
+    if emit_event and task is not None and archive_id is not None:
+        try:
+            from lib.tasks_pkg.manager import append_event
+            append_event(task, {
+                'type': 'compaction',
+                'archiveId': archive_id,
+                'convId': conv_id,
+                'trigger': trigger,
+                'roundNum': int(round_num or 0),
+                'tokensBefore': int(tokens_before or 0),
+                'tokensAfter': int(tokens_after or 0),
+                'msgsBefore': int(msgs_before or 0),
+                'msgsAfter': int(msgs_after or 0),
+                'model': model,
+                'reason': (reason or '')[:300],
+                'ts': int(time.time()),
+            })
+        except Exception as e_ev:
+            logger.debug('[Compact] compaction SSE emit failed: %s', e_ev)
+    return archive_id
 
 
 def cleanup_compaction_data(conv_id: str):
@@ -428,6 +550,16 @@ def _persist_to_disk(content: str, tool_name: str, tool_use_id: str = '',
 
     if tool_name == 'grep_search':
         result = _persist_grep_search_split(content, persist_dir, safe_id)
+        if result is not None:
+            return result
+
+    if tool_name == 'fetch_url':
+        result = _persist_fetch_url_split(content, persist_dir, safe_id)
+        if result is not None:
+            return result
+
+    if tool_name == 'find_files':
+        result = _persist_find_files_split(content, persist_dir, safe_id)
         if result is not None:
             return result
 
@@ -689,6 +821,223 @@ def _persist_grep_search_split(content: str, persist_dir: str,
         return None
 
     logger.info('[Persist] grep_search split into %d files in %s',
+                files_written, persist_dir)
+
+    return '\n'.join(index_lines)
+
+
+def _persist_find_files_split(content: str, persist_dir: str,
+                              safe_id: str) -> str | None:
+    """Split batch ``find_files`` results into per-search files.
+
+    Batch ``find_files`` joins per-search sections of the form::
+
+        Files matching "<pattern>"[ in <rel_path>] (<N> found):
+
+        a.py
+        b.py
+        ...
+
+    with a ``\\n\\n`` separator. When the total exceeds the budget,
+    single-file persistence only keeps the first section visible in the
+    2000-char preview — all subsequent searches become invisible.
+
+    This helper writes each search section to its own file and returns
+    an index listing every search's pattern, result count, and file
+    path, mirroring ``_persist_fetch_url_split``.
+
+    Returns None if the content doesn't look like a batch find_files
+    concatenation (falls through to default single-file persistence).
+    """
+    _HEADER_RE = re.compile(
+        r'^Files matching "([^"]+)"(?: in ([^()]+?))? \((\d+) found\):',
+        re.MULTILINE,
+    )
+
+    matches = list(_HEADER_RE.finditer(content))
+    if len(matches) < 2:
+        # Single search or can't parse — use default single-file persist
+        return None
+
+    index_lines = [
+        f'Batch find_files: {len(matches)} searches saved to separate files '
+        f'(total {_human_size(len(content))}). '
+        f'Use read_files to read individual search results.\n'
+    ]
+
+    files_written = 0
+    _SNIPPET_LINES = 5
+
+    for i, m in enumerate(matches, 1):
+        start = m.start()
+        end = matches[i].start() if i < len(matches) else len(content)
+        section = content[start:end].rstrip()
+
+        pattern = m.group(1)
+        in_path = m.group(2) or ''
+        found_count = m.group(3)
+
+        safe_frag = _sanitize_filename(
+            f'{pattern}_{in_path}'.replace('/', '_').replace('\\', '_')
+        )
+        filename = f'find_{safe_id}_{i}_{safe_frag}.txt'
+        filepath = os.path.join(persist_dir, filename)
+
+        try:
+            with open(filepath, 'w', encoding='utf-8') as f:
+                f.write(section)
+            files_written += 1
+        except Exception as e:
+            logger.warning('[Persist] Failed to write split file %s: %s',
+                           filepath, e)
+            continue
+
+        # Preview = first few matching file lines (after the header + blank line)
+        lines = section.split('\n')
+        body_lines = []
+        seen_blank = False
+        for ln in lines[1:]:
+            if not seen_blank:
+                if not ln.strip():
+                    seen_blank = True
+                continue
+            if ln.strip():
+                body_lines.append(ln.strip())
+            if len(body_lines) >= _SNIPPET_LINES:
+                break
+
+        header_display = f'"{pattern}"' + (f' in {in_path.strip()}' if in_path else '')
+        index_lines.append(
+            f'[{i}] {header_display}  ({found_count} found)\n'
+            f'    File: {filepath}'
+        )
+        if body_lines:
+            preview = '\n    '.join(body_lines)
+            index_lines.append(f'    Preview:\n    {preview}')
+
+    if files_written < 2:
+        return None
+
+    logger.info('[Persist] find_files split into %d files in %s',
+                files_written, persist_dir)
+
+    return '\n'.join(index_lines)
+
+
+def _persist_fetch_url_split(content: str, persist_dir: str,
+                             safe_id: str) -> str | None:
+    """Split batch ``fetch_url`` results into per-URL files.
+
+    Batch ``fetch_url`` concatenates sections of the form::
+
+        Content from {url} ({N,NNN} chars):
+
+        <page content…>
+
+        Content from {url2} ({N,NNN} chars):
+
+        …
+
+    (plus ``Failed to fetch {url}.`` for failures). When the total exceeds
+    the budget and gets persisted, the default single-file + 2000-char
+    preview only shows URL #1 — URLs #2, #3, … become invisible to the
+    model, so it can't know which file to ``read_files``.
+
+    This helper splits each URL section into its own file and returns an
+    index listing every URL with file path, char count, and a short
+    snippet, mirroring what ``_persist_web_search_split`` does for
+    ``web_search``.
+
+    Returns None if the content doesn't look like a batch fetch_url
+    concatenation (falls through to default single-file persistence).
+    """
+    # Match "Content from URL (N chars):" OR "Failed to fetch URL." at
+    # the start of a line — these are the section headers produced by
+    # lib/tasks_pkg/handlers/search.py::_handle_fetch_url_batch.
+    _HEADER_RE = re.compile(
+        r'^(?:Content from (\S+) \(([\d,]+) chars\):|Failed to fetch (\S+?)\.)',
+        re.MULTILINE,
+    )
+
+    matches = list(_HEADER_RE.finditer(content))
+    if len(matches) < 2:
+        # Single URL (or can't parse) — use default single-file persist
+        return None
+
+    # Slice content into sections between successive headers
+    sections = []
+    for i, m in enumerate(matches):
+        start = m.start()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(content)
+        section = content[start:end].rstrip()
+        ok_url = m.group(1)
+        reported_chars = m.group(2)
+        fail_url = m.group(3)
+        url = ok_url or fail_url or ''
+        sections.append({
+            'url': url,
+            'ok': bool(ok_url),
+            'reported_chars': reported_chars,
+            'body': section,
+        })
+
+    index_lines = [
+        f'Fetched {len(sections)} URLs saved to separate files '
+        f'(total {_human_size(len(content))}). '
+        f'Use read_files to read individual pages.\n'
+    ]
+
+    files_written = 0
+    _SNIPPET_CHARS = 300
+
+    for i, sec in enumerate(sections, 1):
+        url = sec['url']
+        # Derive a safe, recognisable filename from the URL host + path tail
+        try:
+            from urllib.parse import urlparse
+            u = urlparse(url)
+            host = u.netloc or 'url'
+            path_tail = u.path.rstrip('/').rsplit('/', 1)[-1] if u.path else ''
+            safe_frag = _sanitize_filename(f'{host}_{path_tail}' if path_tail else host)
+        except Exception as e:
+            logger.debug('[Persist] URL parse failed for %s: %s', url[:80], e)
+            safe_frag = _sanitize_filename(url)
+
+        filename = f'fetch_{safe_id}_{i}_{safe_frag}.txt'
+        filepath = os.path.join(persist_dir, filename)
+
+        try:
+            with open(filepath, 'w', encoding='utf-8') as f:
+                f.write(sec['body'])
+            files_written += 1
+        except Exception as e:
+            logger.warning('[Persist] Failed to write split file %s: %s',
+                           filepath, e)
+            continue
+
+        # Snippet = first chunk of body AFTER the header line
+        body = sec['body']
+        nl = body.find('\n\n')
+        snippet_src = body[nl + 2:] if nl >= 0 else body
+        snippet = snippet_src[:_SNIPPET_CHARS].strip()
+        if len(snippet_src) > _SNIPPET_CHARS:
+            snippet += '…'
+
+        status = ('OK, ' + sec['reported_chars'] + ' chars') if sec['ok'] else 'FAILED'
+        index_lines.append(
+            f'[{i}] {url}\n'
+            f'    Status: {status}\n'
+            f'    File: {filepath}'
+        )
+        if snippet:
+            # Preserve newlines but keep indent compact
+            indented = snippet.replace('\n', '\n    ')
+            index_lines.append(f'    Preview: {indented}')
+
+    if files_written < 2:
+        return None
+
+    logger.info('[Persist] fetch_url split into %d files in %s',
                 files_written, persist_dir)
 
     return '\n'.join(index_lines)
@@ -1415,37 +1764,119 @@ _IMAGE_TOKENS_DEFAULT = _IMAGE_TOKENS_HIGH  # conservative default
 
 
 def _estimate_msg_tokens(msg: dict) -> int:
-    """Rough token estimate for a single message.
+    """Rough token estimate for a single message (CJK-aware).
 
-    Text: 1 token ≈ 4 chars.
+    Uses ``lib.token_counter.heuristic.cheap_estimate_text`` which is
+    the same CJK-aware heuristic (1 token per CJK char + 1 token per
+    ~3.5 other chars) that gates the richer counter backends.
+
+    For a bit-exact authoritative count (via tiktoken / Anthropic
+    count_tokens / HF tokenizer), callers should use
+    ``_count_tokens_authoritative()`` below.
+
     Images: fixed estimate per image (NOT base64 length) — the LLM API
     processes images natively and charges ~85-1105 tokens regardless of
     the data-URL size.
     """
-    chars = 0
+    from lib.token_counter.heuristic import cheap_estimate_text
+
+    text_tokens = 0
     image_tokens = 0
     for field in ('content', 'reasoning_content'):
         val = msg.get(field)
         if not val:
             continue
         if isinstance(val, str):
-            chars += len(val)
+            text_tokens += cheap_estimate_text(val)
         elif isinstance(val, list):
             for block in val:
                 if isinstance(block, dict):
                     if block.get('type') == 'text':
-                        chars += len(block.get('text', ''))
+                        text_tokens += cheap_estimate_text(block.get('text', ''))
                     elif block.get('type') == 'image_url':
                         # Count as fixed vision tokens, not base64 chars
                         image_tokens += _IMAGE_TOKENS_DEFAULT
     for tc in msg.get('tool_calls', []):
-        chars += len(tc.get('function', {}).get('arguments', ''))
-    return chars // 4 + image_tokens
+        text_tokens += cheap_estimate_text(tc.get('function', {}).get('arguments', ''))
+    return text_tokens + image_tokens
 
 
 def _estimate_total_tokens(messages: list) -> int:
-    """Sum token estimates across all messages."""
+    """Sum per-message CJK-aware estimates. Fast — never networks."""
     return sum(_estimate_msg_tokens(m) for m in messages)
+
+
+def _count_tokens_authoritative(messages: list, task: dict | None = None) -> tuple[int, str]:
+    """Authoritative token count via ``lib.token_counter.count_tokens``.
+
+    Tries (in order): usage_cache → native count_tokens API →
+    exact offline tokenizer (tiktoken / deepseek / HF) → heuristic.
+
+    Returns ``(tokens, method)`` where method is the backend that
+    produced the count (``'usage_cache' | 'anthropic_api' | 'tiktoken' | …``).
+
+    Callers that only need a decision threshold (``_should_force_compact``)
+    should prefer this over ``_estimate_total_tokens`` — the cost of a
+    usage_cache lookup is microseconds and it's bit-exact when available.
+    """
+    try:
+        from lib.token_counter import count_tokens as _ct_count_tokens
+    except Exception as e:
+        logger.debug('[Compact] token_counter unavailable, using heuristic: %s', e)
+        return _estimate_total_tokens(messages), 'heuristic_fallback'
+
+    cfg = (task or {}).get('config', {}) or {}
+    model = cfg.get('model', '') or ''
+    context_limit = _get_context_limit(task)
+    conv_id = (task or {}).get('convId', '') or ''
+
+    # Dig out API base_url / key so anthropic_api / gemini_api tiers work.
+    # We don't currently thread these from the slot here — leave as None
+    # and let the usage_cache / local tiers handle it. The anthropic_api
+    # tier will simply decline when it has no key, and the resolver will
+    # fall through to the HF/tiktoken tier.
+    try:
+        result = _ct_count_tokens(
+            messages,
+            model=model,
+            conv_id=conv_id or None,
+            context_limit=context_limit,
+        )
+        return int(result.get('tokens', 0)), str(result.get('method', 'unknown'))
+    except Exception as e:
+        logger.warning('[Compact] count_tokens call failed, falling back to '
+                       'heuristic: %s', e)
+        return _estimate_total_tokens(messages), 'heuristic_fallback'
+
+
+# ── Parse Bedrock / Anthropic "prompt too long" error text ─────────────────
+
+_PROMPT_TOO_LONG_RE = re.compile(
+    r'(\d[\d,]*)\s*tokens?\s*(?:>|exceeds?|greater than)?\s*(\d[\d,]*)?\s*(?:maximum|limit)?',
+    re.IGNORECASE,
+)
+
+
+def _parse_reported_token_count(error_text: str) -> int | None:
+    """Extract the N in "prompt is too long: N tokens > M maximum".
+
+    Returns the actual (rejected) token count reported by the upstream
+    API, or None if the error text doesn't match a known shape.
+
+    When available, this is the *authoritative* number the server saw —
+    use it to size head-truncate and reactive-compact instead of our
+    heuristic (which under-counts CJK by ~2.5×).
+    """
+    if not error_text:
+        return None
+    try:
+        m = _PROMPT_TOO_LONG_RE.search(error_text)
+        if not m:
+            return None
+        n = int(m.group(1).replace(',', ''))
+        return n if 0 < n < 50_000_000 else None
+    except (ValueError, AttributeError):
+        return None
 
 
 def _human_size(byte_count: int) -> str:
@@ -1539,18 +1970,22 @@ def _should_force_compact(messages: list, task: dict | None = None) -> bool:
     context_limit = _get_context_limit(task)
     usable = context_limit - _OUTPUT_RESERVE - _COMPACTION_RESERVE
     trigger_threshold = int(usable * _SUMMARY_TRIGGER_RATIO)
-    total_tokens = _estimate_total_tokens(messages)
 
-    logger.debug('[Compact] conv=%s  tokens=%d  threshold=%d  '
+    # Authoritative count first — uses usage_cache (nearly exact, free)
+    # or tiktoken (exact for OpenAI, good for CJK). Falls back to the
+    # CJK-aware heuristic when no better option is available.
+    total_tokens, method = _count_tokens_authoritative(messages, task)
+
+    logger.debug('[Compact] conv=%s  tokens=%d (via %s)  threshold=%d  '
                  'limit=%d  usable=%d',
-                 log_id, total_tokens, trigger_threshold,
+                 log_id, total_tokens, method, trigger_threshold,
                  context_limit, usable)
 
     if total_tokens > trigger_threshold:
         logger.info('[Compact] Force-compact TRIGGERED  conv=%s  '
-                    'tokens=%d > threshold=%d  '
+                    'tokens=%d (via %s) > threshold=%d  '
                     '(limit=%d, usable=%d, ratio=%.0f%%)',
-                    log_id, total_tokens, trigger_threshold,
+                    log_id, total_tokens, method, trigger_threshold,
                     context_limit, usable,
                     _SUMMARY_TRIGGER_RATIO * 100)
         return True
@@ -1984,8 +2419,27 @@ def execute_compact_tool(messages: list, task: dict | None = None, **kwargs) -> 
         _summary_cooldowns[conv_id] = time.time()
 
     # Archive full transcript (safety net for recovery) — only after
-    # we've committed to actually compacting.
-    _archive_transcript(conv_id, messages)
+    # we've committed to actually compacting.  We capture metadata BEFORE
+    # mutating ``messages`` so the archive row faithfully records the
+    # pre-compaction shape; ``tokens_after`` / ``msgs_after`` are filled
+    # in below via a follow-up UPDATE once the new shape is known.
+    #
+    # ``_compaction_skip_archive`` suppresses this write when the caller
+    # (e.g. reactive_compact) has already captured a more faithful
+    # pre-everything snapshot — avoids polluting the viewer with two
+    # "reactive" rows from the same API failure.
+    _archive_id: int | None = None
+    if not kwargs.get('_compaction_skip_archive'):
+        _archive_id = _archive_transcript(
+            conv_id, messages,
+            trigger=kwargs.get('_compaction_trigger') or 'force',
+            task=task,
+            round_num=int((task.get('round_num') if task else 0) or 0),
+            tokens_before=int(tokens_before or 0),
+            msgs_before=int(msg_count_before or 0),
+            reason=kwargs.get('_compaction_reason') or '',
+            emit_event=True,
+        )
 
     old_messages = messages[:boundary]
     recent_messages = messages[boundary:]
@@ -2043,6 +2497,39 @@ def execute_compact_tool(messages: list, task: dict | None = None, **kwargs) -> 
                 msg_count_before, len(messages),
                 boundary - len(system_msgs))
 
+    # ── Update the archive row with post-compaction numbers + the LLM
+    # summary text so the Compaction Viewer can show "before/after" at
+    # a glance.  Errors here are non-fatal — the pre-compact snapshot
+    # is already safely persisted above. ────────────────────────────
+    if _archive_id is not None:
+        try:
+            from lib.database import DOMAIN_CHAT, db_execute_with_retry, get_thread_db
+            db2 = get_thread_db(DOMAIN_CHAT)
+            db_execute_with_retry(db2,
+                'UPDATE transcript_archive SET summary=?, '
+                'tokens_after=?, msgs_after=? WHERE id=?',
+                ((summary_text or '')[:200_000], int(tokens_after),
+                 int(len(messages)), int(_archive_id)),
+            )
+        except Exception as _upd_e:
+            logger.debug('[Compact] archive row update failed: %s', _upd_e)
+
+        # Follow-up SSE event so the frontend marker can upgrade from
+        # "in-progress" to "done" and show the final numbers.
+        if task is not None:
+            try:
+                from lib.tasks_pkg.manager import append_event
+                append_event(task, {
+                    'type': 'compaction_done',
+                    'archiveId': int(_archive_id),
+                    'convId': conv_id,
+                    'tokensAfter': int(tokens_after),
+                    'msgsAfter': int(len(messages)),
+                    'reductionPct': round(reduction_pct, 1),
+                })
+            except Exception as _ev_e:
+                logger.debug('[Compact] compaction_done emit failed: %s', _ev_e)
+
     # Build the tool result — this is what the model sees as the
     # context_compact tool response
     result_parts = [
@@ -2062,7 +2549,8 @@ def execute_compact_tool(messages: list, task: dict | None = None, **kwargs) -> 
 
 def force_compact_if_needed(messages: list, task: dict | None = None,
                             keep_recent_pairs: int | None = None,
-                            preserve_budget_tokens: int | None = None) -> bool:
+                            preserve_budget_tokens: int | None = None,
+                            **kwargs) -> bool:
     """Check token usage and force-inject a context_compact tool round if needed.
 
     This replaces the old ``smart_summary_compact()`` — instead of
@@ -2092,10 +2580,19 @@ def force_compact_if_needed(messages: list, task: dict | None = None,
                 pfx, conv_id[:8] if conv_id else '?')
 
     # Execute the compact logic, passing through the turn-based knobs.
+    _trigger = (kwargs.get('_compaction_trigger')
+                if isinstance(kwargs, dict) else None) or 'force'
+    _reason = (kwargs.get('_compaction_reason')
+               if isinstance(kwargs, dict) else None) or ''
+    _skip_archive = bool(kwargs.get('_compaction_skip_archive')
+                         if isinstance(kwargs, dict) else False)
     compact_result = execute_compact_tool(
         messages, task=task,
         keep_recent_pairs=keep_recent_pairs,
         preserve_budget_tokens=preserve_budget_tokens,
+        _compaction_trigger=_trigger,
+        _compaction_reason=_reason,
+        _compaction_skip_archive=_skip_archive,
     )
 
     # Inject the tool_call + tool_result pair at the end of messages
@@ -2140,15 +2637,108 @@ def smart_summary_compact(messages: list, task: dict | None = None):
 #  a "prompt too long" error, automatically compact and retry.
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def reactive_compact(messages: list, task: dict | None = None) -> bool:
+def _estimate_wire_bytes(messages: list) -> int:
+    """Rough estimate of the serialized JSON body size (UTF-8 bytes).
+
+    Used as an independent safety metric orthogonal to upstream token count,
+    because the gateway's HTTP 413 cap measures bytes, not tokens.
+    Uses separators=(',',':') to match the tightest json.dumps form.
+    """
+    try:
+        # The dispatch layer json.dumps with default separators, but the
+        # difference is negligible (~1%). We use compact form to be
+        # conservative-optimistic (underestimates risk slightly, matches
+        # the actual wire size when requests module uses default=str).
+        return len(json.dumps(messages, ensure_ascii=False).encode('utf-8'))
+    except Exception as e:
+        # Non-serializable content somewhere — fall back to char count
+        logger.debug('[WireSize] json.dumps failed (%s) — falling back to char estimate', e)
+        total = 0
+        for m in messages:
+            try:
+                total += len(str(m))
+            except Exception:
+                pass
+        return total
+
+
+def _strip_images_aggressive(messages: list, keep_tail: int = _WIRE_IMAGE_KEEP_TAIL) -> tuple[int, int]:
+    """Strip all ``image_url`` blocks except the most-recent ``keep_tail``.
+
+    Used by reactive_compact when a 413 has already fired — at that point
+    the normal hot-tail protection is overridden because the gateway has
+    proven the payload is too big. Each stripped image is replaced with a
+    short textual placeholder so the model knows something was there.
+
+    Returns (stripped_count, bytes_freed_estimate).
+    """
+    # Collect (msg_idx, block_idx) pairs for every image_url block in order
+    image_positions: list[tuple[int, int]] = []
+    for mi, msg in enumerate(messages):
+        content = msg.get('content')
+        if not isinstance(content, list):
+            continue
+        for bi, blk in enumerate(content):
+            if isinstance(blk, dict) and blk.get('type') == 'image_url':
+                image_positions.append((mi, bi))
+
+    if len(image_positions) <= keep_tail:
+        return 0, 0
+
+    to_strip = image_positions[:-keep_tail] if keep_tail > 0 else image_positions
+    stripped = 0
+    bytes_freed = 0
+
+    # Strip from end to start within each message so block indices stay valid
+    by_msg: dict[int, list[int]] = {}
+    for mi, bi in to_strip:
+        by_msg.setdefault(mi, []).append(bi)
+
+    for mi, bi_list in by_msg.items():
+        content = messages[mi].get('content')
+        if not isinstance(content, list):
+            continue
+        for bi in sorted(bi_list, reverse=True):
+            if bi >= len(content):
+                continue
+            blk = content[bi]
+            if not (isinstance(blk, dict) and blk.get('type') == 'image_url'):
+                continue
+            url = blk.get('image_url', {}).get('url', '')
+            # Rough byte saving: the base64 data URL dominates the wire size.
+            bytes_freed += len(url)
+            # Replace image with a small textual placeholder
+            content[bi] = {
+                'type': 'text',
+                'text': '[image removed during emergency compaction — ask again if needed]',
+            }
+            stripped += 1
+
+    return stripped, bytes_freed
+
+
+def reactive_compact(messages: list, task: dict | None = None,
+                     *, error_text: str | None = None) -> bool:
     """Emergency compaction triggered when the API rejects a request as too long.
+
+    Handles TWO orthogonal failure modes:
+
+      1. Upstream "prompt too long" (HTTP 400, tokens > context window).
+         Addressed by micro_compact + force_compact (existing logic).
+
+      2. Gateway HTTP 413 "Request Entity Too Large" — raw body bytes exceed
+         openresty's `client_max_body_size` regardless of token count.
+         Almost always caused by large base64 image_url blocks.
+         Addressed by _strip_images_aggressive + wire-byte head-truncate.
 
     Unlike force_compact_if_needed, this:
       1. Ignores the cooldown timer (we MUST compact NOW)
       2. Increases _KEEP_RECENT_PAIRS to 2 (more aggressive)
       3. Runs micro_compact first to squeeze out maximum space
+      4. Strips images and head-truncates by wire-byte target if needed
 
-    Called from the orchestrator when a 400/prompt_too_long error is received.
+    Called from the orchestrator when a 400/prompt_too_long or 413 error is
+    received.
 
     Returns True if compaction was performed, False otherwise.
     """
@@ -2156,9 +2746,91 @@ def reactive_compact(messages: list, task: dict | None = None) -> bool:
     task_id = task.get('id', '')[:8] if task else '?'
     pfx = f'[Task {task_id}]'
 
+    # Parse the authoritative token count from the error message when
+    # available — this is the ONLY bit-exact number we have in a
+    # reactive path, because the upstream API already tokenised the
+    # request and rejected it. Using our own estimate here was the
+    # root cause of the mo4fr5xeup9ogp failure (heuristic said 492k,
+    # reality was 1.3M).
+    reported_tokens = _parse_reported_token_count(error_text or '')
+
+    # An overflow in the usage_cache is now stale — the payload was
+    # rebuilt mid-flight. Drop the entry so we don't reuse wrong data.
+    if conv_id:
+        try:
+            from lib.token_counter import invalidate as _uc_invalidate
+            _uc_invalidate(conv_id)
+        except Exception as e:
+            logger.debug('[Compact] usage_cache invalidate failed: %s', e)
+
+    wire_before = _estimate_wire_bytes(messages)
+    tokens_before_snap = _estimate_total_tokens(messages)
+    msgs_before_snap = len(messages)
     logger.warning('%s [ReactiveCompact] Emergency compaction triggered for conv=%s '
-                   '(API rejected request as too long)',
-                   pfx, conv_id[:8] if conv_id else '?')
+                   '(API rejected request as too long; '
+                   'reported_tokens=%s wire_bytes=%.1fMB)',
+                   pfx, conv_id[:8] if conv_id else '?',
+                   f'{reported_tokens:,}' if reported_tokens else '?',
+                   wire_before / 1048576)
+
+    # ── Proactive archival of the RAW pre-reactive context ────────────
+    # reactive_compact is an emergency flow: we may (a) strip images in
+    # Phase 0, (b) mutate tool-result bodies in Phase 1 micro_compact, or
+    # (c) drop ancient messages in _head_truncate — any of which happens
+    # BEFORE force_compact_if_needed runs (and that path does its own
+    # archival). To guarantee the user can still inspect the original
+    # context regardless of which phase actually reduced the payload, we
+    # snapshot right here. If force_compact later fires, it will write a
+    # SECOND archive row tagged 'force' — that's fine, each row is a
+    # well-defined checkpoint in the reactive pipeline.
+    if reported_tokens:
+        _pre_reason = f'prompt too long: {reported_tokens:,} tokens'
+    elif wire_before > _WIRE_BYTE_SOFT_LIMIT:
+        _pre_reason = f'request body too large: {wire_before / 1048576:.1f} MB'
+    else:
+        _pre_reason = 'API rejected request as too long'
+    try:
+        _archive_transcript(
+            conv_id, messages,
+            trigger='reactive',
+            task=task,
+            round_num=int((task.get('round_num') if task else 0) or 0),
+            tokens_before=tokens_before_snap,
+            msgs_before=msgs_before_snap,
+            reason=_pre_reason,
+            emit_event=True,
+        )
+    except Exception as _ar_e:
+        logger.debug('%s [ReactiveCompact] Pre-snapshot archive failed: %s',
+                     pfx, _ar_e)
+
+    # Phase 0: If wire size is already over the soft limit OR the token
+    # budget is over-limit, images are almost certainly the cause. Strip
+    # them aggressively FIRST (before token-based compaction) because
+    # token-based compaction won't touch base64 blobs.
+    #
+    # The token-over trigger was added 2026-05-04: large Claude/Vertex
+    # base64 images can fit under the wire-byte soft limit (e.g. 2.7MB)
+    # while massively inflating token count (e.g. 1.3M tokens > 1M
+    # context), so the wire-only guard missed that path and left the
+    # request wedged. See task 26204914 / conv mo4fr5xe.
+    tokens_before = _estimate_total_tokens(messages)
+    context_limit_hint = _get_context_limit(task)
+    token_over = tokens_before > int(context_limit_hint * 0.95)
+    over_wire = wire_before > _WIRE_BYTE_SOFT_LIMIT
+    if over_wire or token_over:
+        trigger = 'wire+tokens' if (over_wire and token_over) else (
+            'wire' if over_wire else 'tokens')
+        stripped, freed = _strip_images_aggressive(messages,
+                                                   keep_tail=_WIRE_IMAGE_KEEP_TAIL)
+        if stripped > 0:
+            logger.warning('%s [ReactiveCompact] Stripped %d old images '
+                           '(~%d bytes freed) trigger=%s tokens=%d/%d '
+                           'wire_bytes=%.1fMB (target %.1fMB)',
+                           pfx, stripped, freed, trigger,
+                           tokens_before, context_limit_hint,
+                           _estimate_wire_bytes(messages) / 1048576,
+                           _WIRE_BYTE_SOFT_LIMIT / 1048576)
 
     # Phase 1: Aggressive micro-compact.  Cache is about to be rebuilt
     # wholesale by Phase 3, so turn on every extra-savings phase that's
@@ -2185,35 +2857,83 @@ def reactive_compact(messages: list, task: dict | None = None) -> bool:
     context_limit = _get_context_limit(task)
     usable = context_limit - _OUTPUT_RESERVE - _COMPACTION_RESERVE
     tight_budget = max(1, int(usable * 0.10))  # 10% of usable context
+    # Build a one-line user-visible reason for the archive marker.  We
+    # prefer the upstream-reported token count (bit-exact) and fall back
+    # to wire-byte info — both are far more useful than "API rejected".
+    if reported_tokens:
+        _r_reason = f'prompt too long: {reported_tokens:,} tokens'
+    elif wire_before > _WIRE_BYTE_SOFT_LIMIT:
+        _r_reason = f'request body too large: {wire_before / 1048576:.1f} MB'
+    else:
+        _r_reason = 'API rejected request as too long'
     compacted = force_compact_if_needed(
         messages, task=task,
         preserve_budget_tokens=tight_budget,
         keep_recent_pairs=2,   # also cap turn count for defence-in-depth
+        _compaction_trigger='reactive',
+        _compaction_reason=_r_reason,
+        _compaction_skip_archive=True,  # already archived above
     )
 
-    if not compacted:
-        # Even force_compact didn't think it was needed — try head truncation
+    # Phase 4: Wire-byte guard.  If after Phases 0-3 the body is still over
+    # the soft limit (or we entered reactive mode with wire overflow and
+    # force_compact didn't fire), run a byte-aware head truncate. This is
+    # the defence that was missing and caused conv=mofu0tfayzvuv1's 413
+    # retry to be identical to the first attempt (2026-04-29).
+    wire_after_phases = _estimate_wire_bytes(messages)
+    need_byte_trim = (over_wire and wire_after_phases > _WIRE_BYTE_SOFT_LIMIT)
+
+    if not compacted and not need_byte_trim:
+        # Even force_compact didn't think it was needed — try head truncation.
+        # When the upstream API told us the exact rejected token count,
+        # hand it to _head_truncate so its "60 % of context" stop-condition
+        # is measured against reality, not our under-counting heuristic.
         logger.warning('%s [ReactiveCompact] Force compact did not trigger — '
-                       'attempting head truncation', pfx)
-        _head_truncate(messages, task)
+                       'attempting head truncation (reported=%s)',
+                       pfx, f'{reported_tokens:,}' if reported_tokens else '?')
+        _head_truncate(messages, task, reported_token_count=reported_tokens)
+        compacted = True
+
+    if need_byte_trim:
+        logger.warning('%s [ReactiveCompact] Wire bytes still over limit '
+                       '(%.1fMB > %.1fMB) — running byte-aware head truncate',
+                       pfx, wire_after_phases / 1048576,
+                       _WIRE_BYTE_SOFT_LIMIT / 1048576)
+        _head_truncate(messages, task, byte_target=_WIRE_BYTE_SOFT_LIMIT)
         compacted = True
 
     tokens_after = _estimate_total_tokens(messages)
-    logger.info('%s [ReactiveCompact] Complete — %d messages, ~%d tokens remaining',
-                pfx, len(messages), tokens_after)
+    wire_after = _estimate_wire_bytes(messages)
+    logger.info('%s [ReactiveCompact] Complete — %d messages, ~%d tokens, '
+                '%.1fMB wire (was %.1fMB)',
+                pfx, len(messages), tokens_after,
+                wire_after / 1048576, wire_before / 1048576)
 
     return compacted
 
 
-def _head_truncate(messages: list, task: dict | None = None):
+def _head_truncate(messages: list, task: dict | None = None,
+                   byte_target: int | None = None,
+                   reported_token_count: int | None = None):
     """Last-resort head truncation: drop the oldest non-system messages.
 
-    Only called when reactive_compact's force_compact fails to trigger.
-    Drops messages from the front until we're under 60% of context.
-    """
-    context_limit = _get_context_limit(task)
-    target = int(context_limit * 0.60)
+    Called when force_compact fails to reduce the context enough.
 
+    Args:
+        messages: Message list (mutated in-place).
+        task: Task dict for context-limit lookup.
+        byte_target: If set, drop messages until `_estimate_wire_bytes` is
+            below this byte count (used for HTTP 413 recovery, where
+            token-based estimates don't reflect the actual wire size).
+            If None, drop until we're under 60% of the model's context
+            window measured in tokens (original behavior).
+        reported_token_count: The upstream API's reported token count
+            from the rejecting error, if known. We use this as an
+            authoritative seed: every message we drop is worth its
+            heuristic-estimated share of (reported - target) tokens,
+            which lets us stop dropping once we've shed enough REAL
+            tokens instead of relying on our under-counting estimator.
+    """
     # Preserve system messages
     system_end = 0
     for i, msg in enumerate(messages):
@@ -2222,16 +2942,52 @@ def _head_truncate(messages: list, task: dict | None = None):
         else:
             break
 
-    # Drop oldest non-system messages
+    if byte_target is not None:
+        # Byte-aware mode (HTTP 413 recovery)
+        dropped = 0
+        while (_estimate_wire_bytes(messages) > byte_target
+               and len(messages) > system_end + 4):
+            messages.pop(system_end)
+            dropped += 1
+        if dropped:
+            logger.warning('[HeadTruncate] Dropped %d oldest messages by byte target '
+                           '(wire now %.1fMB, target %.1fMB)',
+                           dropped,
+                           _estimate_wire_bytes(messages) / 1048576,
+                           byte_target / 1048576)
+        return
+
+    # Token-aware mode (original behavior)
+    context_limit = _get_context_limit(task)
+    target = int(context_limit * 0.60)
+
+    if reported_token_count and reported_token_count > target:
+        # We have a bit-exact count of what the upstream saw. Compute
+        # what fraction of the payload must be shed, then drop messages
+        # until our heuristic agrees we've shed that much.
+        est_before = max(1, _estimate_total_tokens(messages))
+        # fraction of tokens the API says we need to remove
+        frac_to_drop = (reported_token_count - target) / reported_token_count
+        heuristic_target = int(est_before * (1 - frac_to_drop))
+        logger.warning('[HeadTruncate] Using upstream-reported count: '
+                       'reported=%d target=%d → shed %.0f%% '
+                       '(heuristic %d → %d)',
+                       reported_token_count, target, frac_to_drop * 100,
+                       est_before, heuristic_target)
+        target_measure = heuristic_target
+    else:
+        target_measure = target
+
     dropped = 0
-    while _estimate_total_tokens(messages) > target and len(messages) > system_end + 4:
+    while _estimate_total_tokens(messages) > target_measure and len(messages) > system_end + 4:
         messages.pop(system_end)
         dropped += 1
 
     if dropped:
         logger.warning('[HeadTruncate] Dropped %d oldest messages to fit context '
-                       '(tokens now ~%d, target %d)',
-                       dropped, _estimate_total_tokens(messages), target)
+                       '(tokens now ~%d, target ~%d, reported_api=%s)',
+                       dropped, _estimate_total_tokens(messages), target_measure,
+                       f'{reported_token_count:,}' if reported_token_count else 'n/a')
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -2271,14 +3027,23 @@ def _reinject_system_contexts_after_compact(messages: list, task: dict | None = 
         else:
             sys_text = sys_content or ''
 
-        # If project context is expected but missing, re-inject
-        if project_enabled and '[PROJECT CO-PILOT MODE]' not in sys_text:
+        # The CC static block lives IN the system message; CLAUDE.md lives
+        # in a separate user _isMeta msg. Use the static-block marker as
+        # the trigger — if it's gone, compaction stripped the system msg
+        # and we need to rebuild everything.  (Do NOT use
+        # '[PROJECT CO-PILOT MODE]' here — that string is in the user
+        # _isMeta msg, not in sys_text, so it would fire every compaction.)
+        from lib.tasks_pkg.system_context import _CC_STATIC_MARKER
+        if _CC_STATIC_MARKER not in sys_text:
             from lib.tasks_pkg.system_context import _inject_system_contexts
             # Re-inject from scratch — the system_context module handles dedup
             _inject_system_contexts(
                 messages, project_path, project_enabled,
                 memory_enabled, search_enabled, swarm_enabled,
                 has_real_tools=True,
+                conv_id=task.get('convId', ''),
+                task=task,
+                model=cfg.get('model', ''),
             )
             logger.info('[PostCompact] Re-injected system contexts after compaction')
 

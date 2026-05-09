@@ -798,9 +798,29 @@ def execute_tool_pipeline(
                                              'code_exec', 'bash_exec', 'run_command'):
                             _invalidate_project_cache(_cache, trigger=fut_fn_name)
                     except Exception as e:
-                        logger.error(
-                            '[Task %s] conv=%s Tool %s (tc_id=%s) execution failed at round %d model=%s',
-                            tid, task.get('convId', ''), fut_fn_name, fut_tc_id, round_num, model, exc_info=True)
+                        # UnknownWorkspaceRootError is the LLM's fault
+                        # (bad root prefix); it's already logged at WARNING
+                        # at the raise site + INFO by executor.  Do not
+                        # re-log as ERROR with traceback here — just record
+                        # the error for the LLM and move on.
+                        _is_unknown_root = False
+                        try:
+                            from lib.project_mod.config import UnknownWorkspaceRootError
+                            _is_unknown_root = isinstance(e, UnknownWorkspaceRootError)
+                        except ImportError as _imp:
+                            logger.debug('[Task %s] UnknownWorkspaceRootError '
+                                         'import failed: %s', tid, _imp)
+                        if _is_unknown_root:
+                            logger.info(
+                                '[Task %s] conv=%s Tool %s (tc_id=%s) '
+                                'recoverable workspace-root error '
+                                'returned to LLM at round %d: %s',
+                                tid, task.get('convId', ''),
+                                fut_fn_name, fut_tc_id, round_num, e)
+                        else:
+                            logger.error(
+                                '[Task %s] conv=%s Tool %s (tc_id=%s) execution failed at round %d model=%s',
+                                tid, task.get('convId', ''), fut_fn_name, fut_tc_id, round_num, model, exc_info=True)
 
                         tool_results[fut_tc_id] = (f'Tool execution error: {e}', False)
             except TimeoutError:

@@ -235,10 +235,7 @@ def search_memories(
     # Filter to only memories with score > 0
     relevant = [(sc, idx) for sc, idx in scores if sc > 0]
     if not relevant:
-        return (
-            f'No memories matched query "{query}". '
-            f'You have {n} memories — try different keywords.'
-        )
+        return f'No memories matched query "{query}".'
 
     results = relevant[:top_k]
     logger.info('[MemorySearch] query="%.80s" → %d/%d matches (showing top %d)',

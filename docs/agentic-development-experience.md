@@ -45,7 +45,7 @@
 │ Layer 2: 静态指导（工具使用指南、输出效率指南）          │  ← 变化频率：零（永不变化）
 │   as_separate_block=True（独立 cache breakpoint）    │
 ├─────────────────────────────────────────────────────┤
-│ Layer 3: Memory 累积指令（紧凑版，~400 chars）         │  ← 变化频率：零
+│ Layer 3: Memory 累积指令 + 计数提示             │  ← 指令零变化，计数在 CRUD 时变化
 ├─────────────────────────────────────────────────────┤
 │ Layer 4: Swarm 并行执行指南（当 swarm 启用时）         │  ← 变化频率：零
 ├─────────────────────────────────────────────────────┤
@@ -59,7 +59,7 @@
 
 1. **变化频率从低到高排列**：静态内容靠前（cache prefix 更稳定），动态内容靠后（变化不会破坏前面的缓存）。
 2. **`as_separate_block=True`**：静态指导内容作为 system message 中的独立 content block 注入。Anthropic 的缓存系统以 content block 为粒度做 breakpoint，独立 block 意味着即使前面的 project context 变化了，静态指导仍可被缓存。
-3. **Memory listing 注入到 user message，而非 system message**：Memory CRUD 操作（创建、更新、删除）会改变 memory 列表。如果注入到 system message，每次 memory 变化都会破坏整个 prompt cache。注入到最后一条 user message，变化只影响 conversation tail，前面的 prefix 不受影响。
+3. **Memory 不再注入为 XML listing，改用工具发现 + prefetch**：早期的 `<available_memories>` 列表注入 user message。后来改为两条路径：显式 `search_memories` 工具（模型主动查） + 隐式 prefetch（round 0 时 BM25→廉价模型筛选→注入 `<relevant_memories>`）。system message 只注入计数提示。
 4. **日期格式的 A/B 测试**：我们做了 4 个 arm 的 A/B 测试：
    - Arm A: 完整日期时间注入 user message → 77.9% cache 命中率，$0.49
    - Arm C: 仅日期注入 system prompt → **85.7% cache 命中率，$0.36**（Winner）
@@ -72,14 +72,20 @@
 **User Message 注入（Round 0 Only）：**
 
 ```python
-# 只在 Round 0 注入 memory listing，后续 round 不再注入
-# （避免 strip+replace 操作改变 prefix bytes）
+# 只在 Round 0（用户新一轮消息）触发 memory prefetch
+# 后续 tool round 不再重复
 if round_num > 0:
     return  # ★ 保持 cache prefix 稳定
 
-# BM25 相关性过滤：只注入与当前 query 最相关的 Top-30 memories
+# Two-stage cascade: BM25 top-N → cheap-LLM top-M
 query_text = _extract_last_user_text(messages)
-memory_ctx = build_memory_context(project_path=pp, query=query_text)
+relevant = prefetch_relevant_memories(
+    project_path=pp,
+    query_text=query_text,
+    recent_turns=_last_k_turns(messages, k=3),
+    task=task,  # for SSE event emission
+)
+inject_relevant_memories_block(messages, relevant)
 ```
 
 ### 1.2 压缩管线 (Compaction Pipeline)
@@ -212,32 +218,46 @@ created: 2026-03-15T10:00:00Z
 When using Flask blueprints with SQLAlchemy models...
 ```
 
-**注入策略**：只注入**紧凑 XML 索引**（name + description），不注入完整内容。模型需要时用 `read_file` 按需加载。这符合 Claude Code 的模式：
+**发现机制**：不再把 memory 列表注入 prompt。模型通过 `search_memories(query)` 工具按需检索；system message 只注入一行计数提示 (`You have N accumulated memories...`)。
 
-```xml
-<available_memories>
-You have 30 accumulated memory(s) from previous sessions.
-To load a memory, use `read_file` on its path. Paths:
-  Global: ~/.chatui/skills/global/{name}.md
-  Project: /path/to/project/.chatui/skills/{name}.md
+**两种发现路径：**
 
-<memory name="flask-migration-fix" description="Fix for circular import..."/>
-<memory name="swarm-race-condition" description="iter_completions race..."/>
-</available_memories>
-```
+1. **显式发现（on-demand）**：模型自己判断当前任务可能需要过往经验，调用 `search_memories(query)`。返回 BM25 top-K 的紧凑索引（name + description + path），再用 `read_files` 加载需要的 memory 全文。
 
-**BM25 相关性过滤**（`relevance.py`）：当 memory 数量超过 30 时，用 BM25 算法对 query 做相关性排序，只注入 Top-30：
+2. **隐式预取（proactive prefetch）**：用户新一轮消息到达时，`lib/memory/prefetch.py` 在后台跑一次级联
+
+   ```
+   BM25 coarse top-N  →  cheap-LLM 精选  →  注入 <relevant_memories> 块
+   ```
+
+   * 构造 query：取最近 K 轮 user+assistant 文本（剥离所有 tool call / tool result / thinking block），与 last user query 拼接。
+   * BM25 在 name+description+tags+body 上打分，取 top-N（默认 40）。
+   * 廉价模型看到候选摘要和最近对话，输出 JSON `[id, ...]`（最多 M 个，默认 5）。目的是 **precision 优先**——宁可返回 `[]` 也不要误召。
+   * 命中的 memory 全文注入最后一条 user message 的 `<relevant_memories>` 块，用 `<system-reminder>` 包裹。
+   * 前端会显示 `🧠 prefetched N memories via MODEL (1.4s)` 指示器，点击可展开查看具体注入了哪些 memory。
+
+**BM25 相关性过滤**（`relevance.py`）：纯 stdlib math 实现，无外部依赖。作为 `search_memories` 工具和 prefetch 级联的共同底层。
 
 ```python
-# 无外部依赖，纯 stdlib math 实现
-def filter_relevant_memories(memories, query, top_k=30):
-    # 对每个 memory 的 name + description + tags 做 tokenize
-    # 计算 BM25 score → 按 score 排序 → 返回 top_k
+def search_memories(query, top_k=30):
+    # 对 name + description + tags + body(前 2KB) tokenize
+    # 计算 BM25 score → 按 score 排序 → 返回 top_k 索引
 ```
 
-**预算管理**（对齐 Claude Code）：
-- Memory listing 占用 context window 的 **1%**（默认 8000 chars）
-- 超预算时渐进降级：完整描述 → 截断描述 → 仅名称
+**两个发现路径的分工：**
+
+| 场景 | 机制 |
+|------|------|
+| 模型已知道自己需要查什么（"this looks like a Flask blueprint issue"） | 显式 `search_memories` |
+| 模型根本没意识到有可用的经验（"saved a trap about cuda_graph_scope last week"） | 隐式 prefetch |
+
+隐式 prefetch 是为了解决"模型不会主动想起来去搜"这个痛点——即使写得再好的 memory，如果模型不搜，也等于不存在。
+
+**成本控制：**
+- 隐式 prefetch 只在 round 0（用户新一轮消息）触发，不在 tool round 重复。
+- 单次调用限时 6-8 秒，超时则 fallback 到 BM25 top-K。
+- BM25 零分时直接跳过 cheap-LLM 步骤。
+- 注入总字节数上限 8KB，最多 5 条 memory。
 
 ### 1.4 Session Memory — 跨压缩的持久状态
 
@@ -492,7 +512,7 @@ register_post_hook(_empty_result_marker_hook)  # 空结果标记
              │  2. Emit phase event                  │
              │  3. run_compaction_pipeline() (§1.2)  │
              │  4. compute_turn_attachments()        │
-             │  5. inject_memory_to_user() (R0 only) │
+             │  5. (legacy memory-to-user removed)   │
              │  6. Emit messages_snapshot (debug)     │
              │  7. sort_tool_results() (cache-aware) │
              │  8. build_body() → body               │

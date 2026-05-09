@@ -1,6 +1,6 @@
 """Playwright visual E2E tests — browser-based UI verification.
 
-Each test navigates to the live ChatUI, performs actions (send messages,
+Each test navigates to the live Tofu, performs actions (send messages,
 toggle modes, open panels), takes screenshots, and optionally runs VLM
 analysis to detect visual anomalies.
 
@@ -96,7 +96,7 @@ def _send_message(page, text: str, *, wait_done: bool = True, timeout: float = 3
 
 
 def _wait_for_app_ready(page, timeout: float = 10000):
-    """Wait for the ChatUI app to be fully loaded and interactive."""
+    """Wait for the Tofu app to be fully loaded and interactive."""
     # Wait for key elements
     page.wait_for_selector("#userInput", state="visible", timeout=timeout)
     page.wait_for_selector("#sendBtn", state="visible", timeout=timeout)

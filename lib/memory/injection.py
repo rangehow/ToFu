@@ -22,18 +22,22 @@ __all__ = [
 
 MEMORY_ACCUMULATION_INSTRUCTIONS = """<memory_accumulation>
 You have memory management tools to maintain a reusable knowledge base across sessions:
-- `search_memories` — Search your memories by keyword (BM25). Call this when past experience might be relevant.
+- `search_memories` — Search your memories by keyword (BM25). Call this when you suspect a project-specific convention or past lesson applies.
 - `create_memory` — Save a NEW memory (accumulated experience).
 - `update_memory` — Update an EXISTING memory's content, description, or tags.
 - `delete_memory` — Remove an outdated or incorrect memory.
 - `merge_memories` — Combine multiple overlapping/related memories into one consolidated memory.
 
-**When to SEARCH memories:**
-- Before starting a complex task — check if you've done something similar before.
-- When debugging a tricky issue — you may have encountered this pattern previously.
-- When working with a specific library/API/framework — search for past quirks and conventions.
-- When unsure about project conventions — search for style rules, patterns, preferences.
-- You can search multiple times with different keywords to find what you need.
+**When to SEARCH memories (narrow triggers):**
+- You suspect this exact project has an established convention you don't remember (style, naming, architecture).
+- You're about to redo something the user has previously corrected you on in this project.
+- You're hitting a tricky bug AND it feels like one you might have logged before.
+
+**When NOT to search memories (use other tools instead):**
+- The user mentions a local file path or directory → use `read_files` / `list_dir` directly. Don't search memory for it.
+- The user asks about an external project, library, product, or service (e.g. claude-code, openclaw, citadel) → use `web_search` and/or read the local copy with `read_files` / `list_dir`. Memory is unlikely to have it.
+- General coding / API knowledge questions → answer from training, or `web_search` for fresh info.
+- A relevant `<relevant_memories>` block was already prefetched and injected this turn → it's already done; don't re-search the same topic.
 
 **When to CREATE a memory:**
 1. Bug pattern discovered — save the root cause and fix pattern.
@@ -58,7 +62,10 @@ Guidelines:
 # Includes search_memories as the primary discovery mechanism.
 MEMORY_ACCUMULATION_INSTRUCTIONS_COMPACT = """<memory_accumulation>
 You have memory tools: search_memories (keyword search), create/update/delete/merge_memories.
-Use search_memories PROACTIVELY when past experience might help — debugging, conventions, APIs.
+Use search_memories when you suspect this project has an established convention or past lesson that applies.
+Don't use it as a generic discovery step: if the user mentions a local path use read_files/list_dir;
+if they ask about an external project/library use web_search. A `<relevant_memories>` block, when present,
+already surfaces likely-relevant memories — don't re-search the same topic.
 Proactively save memories when you discover: bug patterns, project conventions,
 user preferences, complex workflows, or tool/API quirks.
 Keep memories focused, well-described (40-80 chars), scope='project' or 'global'.
@@ -66,8 +73,7 @@ Keep memories focused, well-described (40-80 chars), scope='project' or 'global'
 
 
 
-def build_memory_context(project_path=None, context_window_tokens=None,
-                         query=None):
+def build_memory_context(project_path=None):
     """Build a minimal memory hint for injection.
 
     Since memories are now discovered via the `search_memories` tool,
@@ -76,8 +82,6 @@ def build_memory_context(project_path=None, context_window_tokens=None,
 
     Args:
         project_path: Path to project for project-scoped memories.
-        context_window_tokens: Unused (kept for backward compat).
-        query: Unused (kept for backward compat).
 
     Returns None if no eligible memories exist, otherwise a short hint string.
     """
@@ -87,6 +91,8 @@ def build_memory_context(project_path=None, context_window_tokens=None,
 
     n = len(memories)
     return (
-        f'You have {n} accumulated memories from previous sessions. '
-        f'Use search_memories(query) to find relevant past experience.'
+        f'You have {n} accumulated memories available. '
+        f'A `<relevant_memories>` block is auto-injected when prefetch finds matches; '
+        f'call search_memories(query) only when you specifically suspect a past project '
+        f'convention or logged lesson applies (not as a generic discovery step).'
     )

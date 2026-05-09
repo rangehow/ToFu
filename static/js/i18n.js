@@ -126,7 +126,20 @@ var _i18n = {
   'settings.tabFeishu': { zh: '飞书', en: 'Feishu' },
   'settings.tabOAuth': { zh: '订阅登录', en: 'OAuth Login' },
   'settings.tabMCP': { zh: 'MCP', en: 'MCP' },
+  'settings.tabSkills': { zh: 'Skills', en: 'Skills' },
   'settings.tabAdvanced': { zh: '高级', en: 'Advanced' },
+  'skills.title': { zh: 'Skills', en: 'Skills' },
+  'skills.tabCatalog': { zh: '市场', en: 'Catalog' },
+  'skills.tabInstalled': { zh: '已安装', en: 'Installed' },
+  'skills.searchPh': { zh: '搜索 Skills…', en: 'Search skills…' },
+  'skills.intro': { zh: 'Skills 是 Claude / OpenClaw / AgentSkills 标准的可重用知识包（SKILL.md + references/scripts/）。可拖入 .zip 或一键安装下方推荐。', en: 'Skills are reusable knowledge packs (SKILL.md + references/scripts/) following the Claude / OpenClaw / AgentSkills standard. Drag-and-drop a .zip or one-click install from below.' },
+  'skills.dropZone': { zh: '拖入 .zip 安装本地技能包，或点击选择文件', en: 'Drop a .zip here, or click to choose a file' },
+  'skills.installBtn': { zh: '安装', en: 'Install' },
+  'skills.installedBtn': { zh: '已安装', en: 'Installed' },
+  'skills.uninstallBtn': { zh: '卸载', en: 'Uninstall' },
+  'skills.viewFiles': { zh: '查看文件', en: 'View files' },
+  'skills.openHomepage': { zh: '主页', en: 'Homepage' },
+  'common.close': { zh: '关闭', en: 'Close' },
   'settings.cancel': { zh: '取消', en: 'Cancel' },
   'settings.save': { zh: '保存', en: 'Save' },
 
@@ -145,7 +158,7 @@ var _i18n = {
   'settings.temperature': { zh: '温度 (Temperature)', en: 'Temperature' },
   'settings.maxTokens': { zh: '最大 Token 数', en: 'Max Tokens' },
   'settings.imageMaxWidth': { zh: '图片最大宽度', en: 'Image Max Width' },
-  'settings.imageMaxWidthPh': { zh: '0=不压缩', en: '0=no compression' },
+  'settings.imageMaxWidthPh': { zh: '0=跟随服务器策略', en: '0 = follow server policy' },
   'settings.defaultThinkingDepth': { zh: '默认思维深度 (Thinking Depth)', en: 'Default Thinking Depth' },
   'settings.thinkingOff': { zh: 'Off — 关闭', en: 'Off' },
   'settings.thinkingMedium': { zh: 'Medium — 中等', en: 'Medium' },
@@ -163,6 +176,8 @@ var _i18n = {
   'settings.tradingRestart': { zh: '需要重启服务器才能生效', en: 'Server restart required to take effect' },
   'settings.debugMode': { zh: '调试模式', en: 'Debug Mode' },
   'settings.debugModeDesc': { zh: '显示 trace_id、复制会话 ID 按钮等开发调试信息', en: 'Show trace_id, copy conv ID buttons, and other debug info' },
+  'settings.optimizerModule': { zh: '每日优化器', en: 'Daily Optimizer' },
+  'settings.optimizerModuleDesc': { zh: '每晚 03:30 分析当日日志并自动提出改进建议（如屏蔽垃圾搜索域名）。关闭后不再运行分析，顶栏 OPTIMIZER 徽章隐藏。已应用的改动会保留直到手动撤销。', en: 'Every night at 03:30 local, analyses the day\'s logs and auto-proposes improvements (e.g. blocking spammy search domains). When off, analysis stops and the top-bar OPTIMIZER badge is hidden. Already-applied changes persist until manually reverted.' },
   'settings.keepToolHistory': { zh: '保留工具调用历史', en: 'Keep Tool Call History' },
   'settings.keepToolHistoryDesc': { zh: '多轮对话时保留完整的工具调用记录（搜索内容、网页抓取结果等），模型能看到之前搜过什么，避免重复调用。关闭可节省 token 但模型会丢失工具上下文', en: 'Preserve full tool call records (search results, fetched pages, etc.) across conversation turns. Model can see what was searched before, avoiding redundant calls. Disable to save tokens but model loses tool context' },
   'settings.inputSendMode': { zh: '输入框发送方式', en: 'Input Send Behavior' },
@@ -450,6 +465,10 @@ var _i18n = {
   'memory.tagsPh': { zh: '标签（逗号分隔）', en: 'Tags (comma separated)' },
   'memory.create': { zh: '创建', en: 'Create' },
   'memory.new': { zh: '新建', en: 'New' },
+  'memory.installSkill': { zh: '安装技能包', en: 'Install skill' },
+  'memory.openSkillsStore': { zh: '技能市场', en: 'Skills Store' },
+  'memory.dropTitle': { zh: '松开鼠标以安装技能包', en: 'Drop to install skill package' },
+  'memory.dropHint': { zh: '支持 Claude Skills / OpenClaw / AgentSkills 格式的 .zip', en: 'Accepts Claude Skills / OpenClaw / AgentSkills .zip bundles' },
   'memory.enableMemory': { zh: '启用 Memory', en: 'Enable Memory' },
 
   // ══════════════════════════════════════
@@ -605,6 +624,16 @@ var _i18n = {
   'translate.translatingToCN': { zh: '正在翻译为中文…', en: 'Translating to Chinese…' },
   'translate.original': { zh: '原文', en: 'Original' },
   'translate.translated': { zh: '译文', en: 'Translation' },
+  // Retry/status sub-messages shown below the spinner when the backend reports
+  // a transient issue (rate-limit, empty output, etc.) while retrying.
+  'translate.retry.rate_limited': { zh: '所有密钥被限流，正在重试…', en: 'All keys rate-limited, retrying…' },
+  'translate.retry.dispatch_error': { zh: '接口错误，正在重试…', en: 'Provider error, retrying…' },
+  'translate.retry.dispatch_failed_final': { zh: '接口错误重试已耗尽', en: 'Provider errors exhausted' },
+  'translate.retry.empty_output': { zh: '返回为空，正在换模型重试…', en: 'Empty response, retrying with another model…' },
+  'translate.retry.empty_final': { zh: '多次返回为空', en: 'Empty response after retries' },
+  'translate.retry.truncated': { zh: '输出被截断，正在重试…', en: 'Output truncated, retrying…' },
+  'translate.retry.truncated_final': { zh: '多次截断后返回部分结果', en: 'Output truncated after retries' },
+  'translate.retry.mt_fallback': { zh: '机器翻译失败，已切换到大模型', en: 'MT provider failed, using LLM' },
 
   // ══════════════════════════════════════
   //  Time / Relative
@@ -672,6 +701,127 @@ var _i18n = {
   'batch.allModels': { zh: '全模型', en: 'All models' },
   'batch.multiGen': { zh: '连抽', en: 'multi-gen' },
   'batch.success': { zh: '成功', en: 'success' },
+
+  // ══════════════════════════════════════
+  //  Daily Optimizer panel / badge
+  // ══════════════════════════════════════
+  'optimizer.badgeTitle': { zh: '每日优化器 — 自主改进建议', en: 'Daily Optimizer — autonomous improvement proposals' },
+  'optimizer.panelTitle': { zh: '🧭 每日优化器', en: '🧭 Daily Optimizer' },
+  'optimizer.loading': { zh: '加载中…', en: 'Loading…' },
+  'optimizer.disabled': { zh: '每日优化器已禁用。可在 设置 → 功能模块 中启用。', en: 'Daily Optimizer is disabled. Enable it in Settings → Feature Modules.' },
+  'optimizer.empty': { zh: '每日优化器还没有提出任何建议。它每晚 03:30 本地时间自动运行，分析日志并可能提出或自动应用小改进。', en: "The Daily Optimizer hasn't proposed anything yet. It wakes up nightly at 03:30 local, analyses the day's logs, and may suggest or auto-apply small improvements." },
+  'optimizer.runNow': { zh: '▶ 立即运行', en: '▶ Run now' },
+  'optimizer.runNowTitle': { zh: '同步运行优化器', en: 'Synchronously run the optimiser now' },
+  'optimizer.running': { zh: '⏳ 运行中…', en: '⏳ Running…' },
+  'optimizer.lastRefresh': { zh: '最近刷新：', en: 'Last refresh: ' },
+  'optimizer.appliedToday': { zh: '✅ 今日已应用', en: '✅ Applied today' },
+  'optimizer.pendingReview': { zh: '🟡 等待你审阅', en: '🟡 Pending your review' },
+  'optimizer.revertedToday': { zh: '↩️ 今日已撤销/过期', en: '↩️ Reverted / expired today' },
+  'optimizer.olderProposals': { zh: '📜 更早的建议', en: '📜 Older proposals' },
+  'optimizer.approve': { zh: '✓ 批准', en: '✓ Approve' },
+  'optimizer.approveTitle': { zh: '立即应用此建议', en: 'Apply this proposal now' },
+  'optimizer.reject': { zh: '✗ 拒绝', en: '✗ Reject' },
+  'optimizer.rejectTitle': { zh: '标记为已拒绝', en: 'Mark as rejected' },
+  'optimizer.rejectPrompt': { zh: '拒绝此建议的理由（可选）：', en: 'Reason for rejecting this proposal (optional):' },
+  'optimizer.revert': { zh: '↩ 撤销', en: '↩ Revert' },
+  'optimizer.revertTitle': { zh: '撤销此次变更', en: 'Undo this change' },
+  'optimizer.revertConfirm': { zh: '撤销此次已应用的变更？底层配置将回滚，lib.SKIP_DOMAINS（或类似）会热重载。', en: 'Revert this applied change? The underlying config will be rolled back and lib.SKIP_DOMAINS (or similar) will be hot-reloaded.' },
+  'optimizer.blockSearchDomain': { zh: '🚫 屏蔽搜索域名', en: '🚫 block search domain' },
+  'optimizer.untitled': { zh: '(无标题)', en: '(untitled)' },
+
+  // ══════════════════════════════════════
+  //  Settings — Search/Fetch params (inline labels)
+  // ══════════════════════════════════════
+  'settings.fetchTopNFull': { zh: '抓取前 N 条 <span style="color:var(--text-tertiary);font-weight:normal">（搜索后自动抓取排名靠前的网页）</span>', en: 'Fetch Top N <span style="color:var(--text-tertiary);font-weight:normal">(auto-fetch top-ranked pages after search)</span>' },
+  'settings.fetchTimeoutFull': { zh: '抓取超时 <span style="color:var(--text-tertiary);font-weight:normal">（秒）</span>', en: 'Fetch Timeout <span style="color:var(--text-tertiary);font-weight:normal">(seconds)</span>' },
+  'settings.maxCharsSearchFull': { zh: '最大字符数 <span style="color:var(--text-tertiary);font-weight:normal">（搜索结果页面）</span>', en: 'Max Characters <span style="color:var(--text-tertiary);font-weight:normal">(search result pages)</span>' },
+  'settings.maxCharsDirectFull': { zh: '最大字符数 <span style="color:var(--text-tertiary);font-weight:normal">（直接抓取 URL）</span>', en: 'Max Characters <span style="color:var(--text-tertiary);font-weight:normal">(direct URL fetch)</span>' },
+  'settings.maxCharsPdfFull': { zh: '最大字符数 <span style="color:var(--text-tertiary);font-weight:normal">（PDF 文件，0=不限制）</span>', en: 'Max Characters <span style="color:var(--text-tertiary);font-weight:normal">(PDF files, 0=unlimited)</span>' },
+  'settings.maxBytesFull': { zh: '最大下载大小 <span style="color:var(--text-tertiary);font-weight:normal">（字节，默认 20MB）</span>', en: 'Max Download Size <span style="color:var(--text-tertiary);font-weight:normal">(bytes, default 20MB)</span>' },
+  'settings.maxCharsPdfPh': { zh: '0=不限制', en: '0=unlimited' },
+  'settings.bypassDomainsFull': { zh: '绕过域名 <span style="color:var(--text-tertiary);font-weight:normal">（每行一个，后缀匹配 — 例如 <code>.your-corp.com</code>）</span>', en: 'Bypass Domains <span style="color:var(--text-tertiary);font-weight:normal">(one per line, suffix matching — e.g. <code>.your-corp.com</code>)</span>' },
+  'settings.fallbackModelFull': { zh: '回退模型 <span style="color:var(--text-tertiary);font-weight:normal">（主模型失败时自动切换）</span>', en: 'Fallback Model <span style="color:var(--text-tertiary);font-weight:normal">(auto-switch on primary failure)</span>' },
+  'settings.defaultModelFull': { zh: '默认模型 <span style="color:var(--text-tertiary);font-weight:normal">（LLM_MODEL）</span>', en: 'Default Model <span style="color:var(--text-tertiary);font-weight:normal">(LLM_MODEL)</span>' },
+  'settings.allowedUsersFull': { zh: '允许的用户 <span style="color:var(--text-tertiary);font-weight:normal">（飞书 open_id，每行一个 — 留空表示允许所有人）</span>', en: 'Allowed Users <span style="color:var(--text-tertiary);font-weight:normal">(Feishu open_id, one per line — empty = allow everyone)</span>' },
+
+  // Feishu app ID/secret placeholders
+  'settings.feishuAppIdPh': { zh: 'cli_xxxx（从 open.feishu.cn 获取）', en: 'cli_xxxx (get from open.feishu.cn)' },
+  'settings.feishuAppSecretPh': { zh: '留空则保持不变', en: 'Leave empty to keep unchanged' },
+  'settings.feishuHowto': { zh: '在 <a href="https://open.feishu.cn/app" target="_blank" style="color:var(--accent-color)">open.feishu.cn</a> 创建飞书应用 → 启用机器人能力 → 在上方填写 <strong>App ID</strong> 和 <strong>App Secret</strong>。凭证修改需要重启服务器才能生效。', en: 'Create a Feishu app at <a href="https://open.feishu.cn/app" target="_blank" style="color:var(--accent-color)">open.feishu.cn</a> → enable bot capability → fill in <strong>App ID</strong> and <strong>App Secret</strong> above. Credential changes require a server restart.' },
+
+  // OAuth extended strings
+  'settings.oauthPageDesc': { zh: '使用 ChatGPT Plus / Claude Pro 订阅账号登录，无需 API Key，直接使用订阅额度。', en: 'Log in with ChatGPT Plus / Claude Pro — no API Key needed, use your subscription quota directly.' },
+  'settings.oauthChinaNote': { zh: '⚠️ 中国用户需要全程代理（Clash/VPN），授权弹窗和服务器换 token 都需要能访问外网。建议在<strong>本地浏览器无痕窗口</strong>中完成授权。', en: '⚠️ Users in China need a proxy (Clash/VPN) throughout. Both the auth popup and server-side token exchange require internet access. Use a <strong>local incognito window</strong> to authorize.' },
+  'settings.oauthPopupBlocked': { zh: '如弹窗无法打开，请复制链接到<strong>开了代理的浏览器无痕窗口</strong>中打开：', en: 'If the popup is blocked, copy the link into a <strong>proxy-enabled incognito browser window</strong>:' },
+  'settings.oauthCopyLink': { zh: '复制链接', en: 'Copy Link' },
+  'settings.oauthCopied': { zh: '✓ 已复制', en: '✓ Copied' },
+  'settings.oauthClaudeCodeHint': { zh: '授权成功后页面显示授权码，复制 <strong>code#state</strong> 粘贴到下方：', en: 'After authorization succeeds, the page shows an auth code — copy the <strong>code#state</strong> and paste below:' },
+  'settings.oauthCodexCbHint': { zh: '授权成功后，复制浏览器地址栏中的回调 URL 粘贴到下方：', en: 'After authorization, copy the callback URL from the browser address bar and paste below:' },
+  'settings.oauthClaudePh': { zh: '粘贴 code#state（或完整回调 URL）', en: 'Paste code#state (or full callback URL)' },
+  'settings.oauthCodexPh': { zh: '粘贴回调 URL (http://localhost:1455/auth/callback?code=...)', en: 'Paste callback URL (http://localhost:1455/auth/callback?code=...)' },
+  'settings.oauthSubmit': { zh: '提交', en: 'Submit' },
+  'settings.oauthClaudeDesc': { zh: '登录 Claude 订阅，使用 Sonnet / Opus 等模型，无需 API Key。', en: 'Log in with your Claude subscription to use Sonnet / Opus — no API Key required.' },
+  'settings.oauthCodexDesc': { zh: '登录 ChatGPT 订阅，使用 Codex 模型，请求自动转换为 Responses API 格式。', en: 'Log in with your ChatGPT subscription to use Codex — requests auto-converted to Responses API format.' },
+  'settings.oauthNote1': { zh: '点击登录 → 弹窗打开官方授权页 → 用订阅账号登录并授权', en: 'Click Login → popup opens the official auth page → log in with your subscription account and authorize' },
+  'settings.oauthNote2': { zh: '授权后 Claude 显示 <code>code#state</code>、ChatGPT 自动回调，按提示操作即可', en: 'After authorization Claude shows <code>code#state</code>; ChatGPT auto-callbacks — follow the on-screen hints' },
+  'settings.oauthNote3': { zh: '如弹窗被拦截，点击「复制链接」到<strong>本地浏览器无痕窗口</strong>中打开（避免登录态冲突）', en: 'If the popup is blocked, click "Copy Link" and open it in a <strong>local incognito window</strong> (avoids session conflicts)' },
+  'settings.oauthNote4': { zh: 'Token 过期后自动刷新，无需重新登录', en: 'Tokens auto-refresh on expiry — no need to re-login' },
+
+  // Network proxy: extended body/hint
+  'settings.httpProxyBody': { zh: '配置用于所有出站请求（LLM API、网页搜索、页面抓取）的 HTTP/HTTPS 代理。留空则使用系统环境变量（<code>http_proxy</code> / <code>https_proxy</code>）。修改立即生效，无需重启。', en: 'Configure HTTP/HTTPS proxy for all outbound requests (LLM API, web search, page fetch). Leave empty to use system env vars (<code>http_proxy</code> / <code>https_proxy</code>). Changes take effect immediately.' },
+  'settings.proxyBypassBody': { zh: '在此添加不需要走代理的域名后缀或主机名（每行一个，后缀匹配）。匹配的请求会<strong>完全绕过 HTTP 代理</strong>。', en: 'Add domain suffixes or hostnames that should bypass the proxy (one per line, suffix matching). Matching requests <strong>fully bypass the HTTP proxy</strong>.' },
+  'settings.proxyBypassTipFull': { zh: '<strong>💡 提示：</strong>内网地址和 LLM API 域名都应加在这里。企业/VPN 代理会静默断开长连接（SSE 流），导致 <code>BrokenPipeError</code>，添加对应域名即可解决。也可通过环境变量 <code>PROXY_BYPASS_DOMAINS</code>（逗号分隔）配置，两处合并生效。', en: '<strong>💡 Tip:</strong> Internal addresses and LLM API domains should both be added here. Corporate/VPN proxies silently drop long-lived connections (SSE streams) causing <code>BrokenPipeError</code> — adding the domain here fixes it. You can also set <code>PROXY_BYPASS_DOMAINS</code> (comma-separated) env var; both merge.' },
+
+  // ══════════════════════════════════════
+  //  MCP manual-add form (settings)
+  // ══════════════════════════════════════
+  'mcp.manualAddSummary': { zh: '⚙ 手动添加自定义服务器', en: '⚙ Manually add a custom server' },
+  'mcp.fieldName': { zh: '名称', en: 'Name' },
+  'mcp.fieldTransport': { zh: '传输协议', en: 'Transport' },
+  'mcp.transportStdio': { zh: 'stdio (本地命令)', en: 'stdio (local command)' },
+  'mcp.transportSse': { zh: 'SSE (远程 URL)', en: 'SSE (remote URL)' },
+  'mcp.fieldCommand': { zh: '命令', en: 'Command' },
+  'mcp.fieldArgs': { zh: '参数', en: 'Arguments' },
+  'mcp.fieldArgsHint': { zh: '（每行一个）', en: '(one per line)' },
+  'mcp.fieldEnv': { zh: '环境变量', en: 'Environment Variables' },
+  'mcp.fieldEnvHint': { zh: '（每行 KEY=VALUE）', en: '(KEY=VALUE per line)' },
+  'mcp.fieldDesc': { zh: '描述', en: 'Description' },
+  'mcp.fieldDescHint': { zh: '（可选）', en: '(optional)' },
+  'mcp.saveConnect': { zh: '保存并连接', en: 'Save & Connect' },
+  'mcp.installConnect': { zh: '安装并连接', en: 'Install & Connect' },
+  'mcp.cancel': { zh: '取消', en: 'Cancel' },
+
+  // ══════════════════════════════════════
+  //  Browser bridge modal
+  // ══════════════════════════════════════
+  'browser.stepDownload': { zh: '下载扩展程序', en: 'Download extension' },
+  'browser.stepDownloadDesc': { zh: '点击下方按钮下载 ZIP 文件，然后解压。', en: 'Click the button below to download the ZIP file, then extract it.' },
+  'browser.stepDownloadBtn': { zh: '下载扩展 ZIP', en: 'Download Extension ZIP' },
+  'browser.stepInstall': { zh: '在 Chrome 中安装', en: 'Install in Chrome' },
+  'browser.stepVerify': { zh: '验证连接', en: 'Verify connection' },
+  'browser.stepVerifyDesc': { zh: '点击工具栏中的扩展图标，应显示 <strong>已连接</strong>。然后在此处开启浏览器功能。', en: 'Click the extension icon in the toolbar — it should show <strong>Connected</strong>. Then turn on the browser feature here.' },
+  'browser.capsTitle': { zh: '浏览器桥接的 AI 功能', en: 'Browser bridge AI capabilities' },
+  'browser.capListTabs': { zh: '列出所有打开的标签页（标题、URL）', en: 'List all open tabs (title, URL)' },
+  'browser.capReadTab': { zh: '读取任意标签页的文本内容，或使用 CSS 选择器', en: 'Read text content of any tab, or use CSS selectors' },
+  'browser.capExecJs': { zh: '在任意标签页中执行 JavaScript（点击、填充表单、提取数据）', en: 'Run JavaScript in any tab (click, fill forms, extract data)' },
+  'browser.checkingDots': { zh: '正在检查...', en: 'Checking…' },
+
+  // ══════════════════════════════════════
+  //  Debug / toolbar tooltips
+  // ══════════════════════════════════════
+  'debug.copyAllTooltip': { zh: '复制全部', en: 'Copy all' },
+  'toolbar.aiEnhanceTooltip': { zh: 'AI 增强', en: 'AI Enhance' },
+  'toolbar.externalToolsTooltip': { zh: '外部工具', en: 'External Tools' },
+  'toolbar.execModeTooltip': { zh: '执行模式', en: 'Execution Mode' },
+  'toolbar.moreOptionsTooltip': { zh: '更多选项', en: 'More options' },
+  'toolbar.exitCreativeTooltip': { zh: '退出创作模式 (Esc)', en: 'Exit creative mode (Esc)' },
+  'ig.stdResTooltip': { zh: '1024px · 标准分辨率', en: '1024px · Standard resolution' },
+  'ig.hdResTooltip': { zh: '2048px · 高清分辨率', en: '2048px · HD resolution' },
+  'ig.generateTooltip': { zh: '生成 (Enter)', en: 'Generate (Enter)' },
+  'feishu.statusDotTitle': { zh: '连接状态', en: 'Connection status' },
+  'settings.loadingPricing': { zh: '正在加载价格数据...', en: 'Loading pricing data…' },
+  'settings.feishuBotTitleSuffix': { zh: '飞书 (Lark) 机器人', en: 'Feishu (Lark) Bot' },
+  'browser.stepInstallDesc': { zh: '打开 <code class="copyable-url" data-tooltip="点击复制" style="cursor:pointer;position:relative;border-bottom:1px dashed var(--accent-color)" onclick="_safeClipboardWrite(\'chrome://extensions/\').then(()=>{this.classList.add(\'copied\')}).catch(()=>{})">chrome://extensions/</code> → 启用 <strong>开发者模式</strong> → 点击 <strong>加载已解压的扩展程序</strong> → 选择解压后的 <code>browser_extension</code> 文件夹。', en: 'Open <code class="copyable-url" data-tooltip="Click to copy" style="cursor:pointer;position:relative;border-bottom:1px dashed var(--accent-color)" onclick="_safeClipboardWrite(\'chrome://extensions/\').then(()=>{this.classList.add(\'copied\')}).catch(()=>{})">chrome://extensions/</code> → enable <strong>Developer mode</strong> → click <strong>Load unpacked</strong> → pick the extracted <code>browser_extension</code> folder.' },
 
   // ══════════════════════════════════════
   //  Common
@@ -766,6 +916,9 @@ function _onLanguageChange(lang) {
   // Re-render dynamic content that uses t()
   if (typeof renderConversationList === 'function') renderConversationList();
   if (typeof renderMessages === 'function') renderMessages();
+  if (typeof _refreshOptimizerPanel === 'function') {
+    try { _refreshOptimizerPanel(); } catch (e) { /* panel may not be open */ }
+  }
 }
 
 /** Sync visual language picker cards to the given lang */

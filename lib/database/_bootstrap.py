@@ -5,12 +5,15 @@ Cross-platform: works on Linux, macOS, and Windows.
 """
 
 import getpass
+import json
 import os
 import shutil
 import subprocess
+import threading
 import time
 
 from lib.compat import IS_LINUX, IS_MACOS, IS_WINDOWS
+from lib.env_compat import getenv_compat
 from lib.log import get_logger
 
 logger = get_logger(__name__)
@@ -28,10 +31,383 @@ logger = get_logger(__name__)
 _PG_STARTED_BY_US = False
 
 
-def _mark_pg_owned_locally():
-    """Record that this process is responsible for the local PG."""
+# ─────────────────────────────────────────────────────────────────────
+#  Tofu-level heartbeat
+#
+#  The shared FUSE-mounted pgdata is occasionally inherited from a
+#  previous host that didn't shut down cleanly: its postmaster may still
+#  be TCP-reachable, but no tofu process there is actively using it.
+#  A new server.py on this host would otherwise read .pg_owner_host,
+#  see the remote PG answers, and route every DB call across the
+#  network — only to time out when the abandoned remote eventually
+#  drops or stalls.
+#
+#  The heartbeat file (`pgdata/.tofu_heartbeat`, with `.chatui_heartbeat`
+#  read for back-compat with old peers) is written by the
+#  process that actually owns the local PG, refreshed every
+#  _HEARTBEAT_REFRESH_S seconds, and cleared on clean shutdown. A new
+#  startup considers the previous owner alive iff the heartbeat is
+#  fresher than _HEARTBEAT_TTL_S. Otherwise it auto-heals: clears the
+#  ownership markers and starts PG locally.
+# ─────────────────────────────────────────────────────────────────────
+
+_HEARTBEAT_FILE = '.tofu_heartbeat'
+# Legacy filename — read for back-compat with peers running older code,
+# and clear on shutdown so it doesn't outlive its writer.
+_LEGACY_HEARTBEAT_FILE = '.chatui_heartbeat'
+_HEARTBEAT_TTL_S = 120
+_HEARTBEAT_REFRESH_S = 30
+
+_heartbeat_thread = None
+_heartbeat_stop_event = threading.Event()
+_heartbeat_lock = threading.Lock()
+
+
+# ─────────────────────────────────────────────────────────────────────
+#  Cross-host startup lock (anti-concurrent-pg_ctl race guard)
+#
+#  When two tofu hosts share the same FUSE-mounted pgdata, both can
+#  simultaneously conclude "PG is down, I'll start it" and race to
+#  pg_ctl start. Each new postmaster sees the OTHER host's PID in
+#  postmaster.pid, immediate-shutdowns with "lock file contains wrong
+#  PID", and leaves truncated WAL records — after which every further
+#  startup on either side PANICs with "could not locate a valid
+#  checkpoint record". The heartbeat alone can't prevent this: it only
+#  defends sequential handoff (A dies → B takes over), not concurrent
+#  startup within the same 60–120s window.
+#
+#  The fix: use an advisory POSIX flock() on a lock file INSIDE pgdata.
+#  Since pgdata is the shared FUSE mount, the lock is visible to every
+#  host that could race with us. The lock is acquired BEFORE any
+#  pg_ctl start call and held for the process's lifetime via a retained
+#  file descriptor — a process crash releases it, but no graceful exit
+#  is needed. If another host already holds it, we abort the start
+#  attempt and let the caller fall back to SQLite (or retry next cycle).
+#
+#  flock() over FUSE is best-effort; if the backend doesn't support it
+#  we get IOError/OSError at acquire time and we LOG but do NOT skip
+#  the start — we preserve the pre-fix behavior so hosts without FUSE
+#  flock support aren't newly regressed. Audit-log emits a signal so
+#  multi-host collisions are easy to grep from outside.
+# ─────────────────────────────────────────────────────────────────────
+
+_STARTUP_LOCK_FILE = '.tofu_pg_start.lock'
+# Legacy filename — older peers only flock(2) this file. Acquire it
+# first so an old peer running concurrent startup is still blocked.
+_LEGACY_STARTUP_LOCK_FILE = '.chatui_pg_start.lock'
+_startup_lock_fd = None         # Canonical lock fd, retained for process life
+_legacy_startup_lock_fd = None  # Legacy lock fd, retained for process life
+_startup_lock_mu = threading.Lock()
+
+
+def _startup_lock_path(pgdata):
+    return os.path.join(pgdata, _STARTUP_LOCK_FILE)
+
+
+def _legacy_startup_lock_path(pgdata):
+    return os.path.join(pgdata, _LEGACY_STARTUP_LOCK_FILE)
+
+
+def _try_acquire_startup_lock(pgdata):
+    """Try to acquire an exclusive cross-host lock on the pgdata startup lock.
+
+    Acquires both the canonical (``.tofu_pg_start.lock``) and the legacy
+    (``.chatui_pg_start.lock``) files so peers running older code that
+    only flock(2) the legacy filename still serialize correctly with us.
+
+    Returns:
+        True  — lock held (or flock unsupported / degraded to no-op).
+        False — another host holds the lock; caller MUST NOT call pg_ctl start.
+    """
+    global _startup_lock_fd
+    with _startup_lock_mu:
+        if _startup_lock_fd is not None:
+            # Already held by this process.
+            return True
+
+        path = _startup_lock_path(pgdata)
+        try:
+            os.makedirs(pgdata, exist_ok=True)
+        except OSError as e:
+            logger.warning('[DB] Could not ensure pgdata exists for startup lock: %s', e)
+            return True  # Degrade to pre-fix behavior: let the caller try.
+
+        try:
+            fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o644)
+        except OSError as e:
+            logger.warning('[DB] Could not open startup-lock file %s: %s — '
+                           'proceeding without cross-host lock', path, e)
+            return True
+
+        if IS_WINDOWS:
+            # No portable fcntl.flock on Windows. Windows FUSE shares are
+            # rare for pgdata, so we degrade to no-op rather than ship a
+            # half-reliable msvcrt.locking code path.
+            _startup_lock_fd = fd
+            logger.debug('[DB] Startup lock: Windows — no flock, acquired fd=%d '
+                         'as a no-op placeholder', fd)
+            return True
+
+        try:
+            import fcntl
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except ImportError:
+            # Non-Linux/macOS POSIX without fcntl — degrade to no-op.
+            _startup_lock_fd = fd
+            logger.debug('[DB] Startup lock: fcntl unavailable — degraded to no-op')
+            return True
+        except (OSError, IOError) as e:
+            # Two possible causes:
+            #   1. EWOULDBLOCK — another process (possibly on another
+            #      host) already holds it. Treat as concurrent-start.
+            #   2. ENOLCK / EOPNOTSUPP — FUSE backend doesn't implement
+            #      advisory locks. Degrade to no-op with a warning so the
+            #      pre-fix behavior is preserved on unsupported backends.
+            import errno as _errno
+            err_code = getattr(e, 'errno', None)
+            if err_code in (_errno.EWOULDBLOCK, _errno.EAGAIN, _errno.EACCES):
+                logger.warning('[DB] Startup lock HELD by another process/host '
+                               '(pgdata=%s): %s — skipping our pg_ctl start to '
+                               'avoid WAL race', pgdata, e)
+                try:
+                    os.close(fd)
+                except OSError as _ce:
+                    logger.debug('[DB] Close after lock-contention failed: %s', _ce)
+                try:
+                    from lib.log import audit_log as _audit
+                    _audit('pg_concurrent_start_detected',
+                           pgdata=pgdata, our_host=_get_local_ip(),
+                           err=str(e)[:200])
+                except Exception as _audit_err:
+                    logger.debug('[DB] audit_log for pg_concurrent_start_detected '
+                                 'failed: %s', _audit_err)
+                return False
+            # flock not supported by this FS — keep behavior, log loudly once.
+            logger.warning('[DB] flock() on %s not supported by filesystem '
+                           '(errno=%s: %s) — cross-host race guard DISABLED. '
+                           'Multiple tofu hosts sharing this pgdata may '
+                           'corrupt WAL. Mount pgdata on a filesystem that '
+                           'supports POSIX advisory locks (ext4/xfs/NFSv4/'
+                           'most FUSE) to re-enable.',
+                           path, err_code, e)
+            _startup_lock_fd = fd
+            return True
+
+        _startup_lock_fd = fd
+        logger.info('[DB] Acquired cross-host startup lock on %s', path)
+        # Best-effort: also acquire the legacy lock so older peers that
+        # only know the legacy filename still serialize against us.
+        _try_acquire_legacy_startup_lock(pgdata)
+        return True
+
+
+def _try_acquire_legacy_startup_lock(pgdata):
+    """Acquire the legacy ``.chatui_pg_start.lock`` flock (best-effort)."""
+    global _legacy_startup_lock_fd
+    if _legacy_startup_lock_fd is not None:
+        return
+    legacy_path = _legacy_startup_lock_path(pgdata)
+    try:
+        fd = os.open(legacy_path, os.O_CREAT | os.O_RDWR, 0o644)
+    except OSError as e:
+        logger.debug('[DB] Could not open legacy startup-lock %s: %s', legacy_path, e)
+        return
+    if IS_WINDOWS:
+        _legacy_startup_lock_fd = fd
+        return
+    try:
+        import fcntl
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        _legacy_startup_lock_fd = fd
+        logger.debug('[DB] Acquired legacy cross-host startup lock on %s', legacy_path)
+    except (ImportError, OSError) as e:
+        logger.debug('[DB] Legacy startup-lock acquire failed (harmless): %s', e)
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+
+
+def _release_startup_lock():
+    """Release the startup lock if held. Safe to call multiple times."""
+    global _startup_lock_fd, _legacy_startup_lock_fd
+    with _startup_lock_mu:
+        fd = _startup_lock_fd
+        _startup_lock_fd = None
+        legacy_fd = _legacy_startup_lock_fd
+        _legacy_startup_lock_fd = None
+    for _fd in (fd, legacy_fd):
+        if _fd is None:
+            continue
+        try:
+            if not IS_WINDOWS:
+                try:
+                    import fcntl
+                    fcntl.flock(_fd, fcntl.LOCK_UN)
+                except (ImportError, OSError) as e:
+                    logger.debug('[DB] flock release raised (harmless): %s', e)
+        finally:
+            try:
+                os.close(_fd)
+            except OSError as e:
+                logger.debug('[DB] Close of startup lock fd failed: %s', e)
+
+
+def _heartbeat_path(pgdata):
+    return os.path.join(pgdata, _HEARTBEAT_FILE)
+
+
+def _legacy_heartbeat_path(pgdata):
+    return os.path.join(pgdata, _LEGACY_HEARTBEAT_FILE)
+
+
+def _resolve_heartbeat_path(pgdata):
+    """Return the heartbeat path that exists, preferring the canonical name.
+
+    Falls back to the legacy ``.chatui_heartbeat`` so a new host running
+    Tofu code still notices peers running older code that only writes
+    the legacy file.
+    """
+    canonical = _heartbeat_path(pgdata)
+    if os.path.exists(canonical):
+        return canonical
+    legacy = _legacy_heartbeat_path(pgdata)
+    if os.path.exists(legacy):
+        return legacy
+    return canonical
+
+
+def _read_heartbeat(pgdata):
+    """Return parsed heartbeat dict ({host, pid, ts}) or None."""
+    path = _resolve_heartbeat_path(pgdata)
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            return data
+        logger.debug('[DB] Heartbeat at %s is not a dict', path)
+        return None
+    except FileNotFoundError:
+        return None
+    except (OSError, json.JSONDecodeError) as e:
+        logger.debug('[DB] Could not read heartbeat at %s: %s', path, e)
+        return None
+
+
+def _heartbeat_is_fresh(pgdata, ttl_s=_HEARTBEAT_TTL_S):
+    """Return (fresh, info_dict) — fresh=True if heartbeat exists and is
+    within ttl_s seconds.
+
+    info_dict carries {host, pid, ts, age_s} when the file is present
+    (regardless of freshness) so the caller can log a useful message.
+    """
+    path = _resolve_heartbeat_path(pgdata)
+    try:
+        st = os.stat(path)
+    except FileNotFoundError:
+        return False, None
+    except OSError as e:
+        logger.debug('[DB] stat heartbeat failed: %s', e)
+        return False, None
+
+    age_s = time.time() - st.st_mtime
+    info = _read_heartbeat(pgdata) or {}
+    info = dict(info)
+    info['age_s'] = age_s
+    return age_s <= ttl_s, info
+
+
+def _write_heartbeat(pgdata):
+    """Write/refresh the heartbeat file. Best-effort.
+
+    Writes both canonical and legacy filenames so peers running older
+    code (which only know ``.chatui_heartbeat``) still see us.
+    """
+    payload = {
+        'host': _get_local_ip(),
+        'pid': os.getpid(),
+        'ts': time.time(),
+    }
+    for path in (_heartbeat_path(pgdata), _legacy_heartbeat_path(pgdata)):
+        tmp = path + '.tmp'
+        try:
+            with open(tmp, 'w') as f:
+                json.dump(payload, f)
+            os.replace(tmp, path)
+        except OSError as e:
+            logger.debug('[DB] Could not write heartbeat to %s: %s', path, e)
+
+
+def _clear_heartbeat(pgdata):
+    for path in (_heartbeat_path(pgdata), _legacy_heartbeat_path(pgdata)):
+        try:
+            os.remove(path)
+            logger.debug('[DB] Cleared heartbeat %s', path)
+        except FileNotFoundError:
+            continue
+        except OSError as e:
+            logger.debug('[DB] Could not clear heartbeat at %s: %s', path, e)
+
+
+def _heartbeat_loop(pgdata):
+    logger.info('[DB] Heartbeat thread started (pgdata=%s, refresh=%ds, ttl=%ds)',
+                pgdata, _HEARTBEAT_REFRESH_S, _HEARTBEAT_TTL_S)
+    while not _heartbeat_stop_event.is_set():
+        try:
+            _write_heartbeat(pgdata)
+        except Exception as e:
+            logger.warning('[DB] Heartbeat refresh failed: %s', e)
+        if _heartbeat_stop_event.wait(_HEARTBEAT_REFRESH_S):
+            break
+    logger.info('[DB] Heartbeat thread stopped')
+
+
+def _start_heartbeat_thread(pgdata):
+    """Start the heartbeat refresher (idempotent)."""
+    global _heartbeat_thread
+    with _heartbeat_lock:
+        if _heartbeat_thread is not None and _heartbeat_thread.is_alive():
+            return
+        _heartbeat_stop_event.clear()
+        _write_heartbeat(pgdata)  # immediate first write
+        t = threading.Thread(
+            target=_heartbeat_loop, args=(pgdata,),
+            name='tofu-pg-heartbeat', daemon=True,
+        )
+        t.start()
+        _heartbeat_thread = t
+
+
+def stop_heartbeat(pgdata=None):
+    """Stop the heartbeat refresher and (optionally) clear the file.
+
+    Called from server.py's clean-shutdown hook via _core.stop_local_pg_if_owned.
+    """
+    global _heartbeat_thread
+    with _heartbeat_lock:
+        _heartbeat_stop_event.set()
+        t = _heartbeat_thread
+        _heartbeat_thread = None
+    if t is not None and t.is_alive():
+        try:
+            t.join(timeout=5)
+        except Exception as e:
+            logger.debug('[DB] Heartbeat thread join failed: %s', e)
+    if pgdata is not None:
+        _clear_heartbeat(pgdata)
+
+
+def _mark_pg_owned_locally(pgdata=None):
+    """Record that this process is responsible for the local PG.
+
+    When ``pgdata`` is provided, also starts the heartbeat refresher so
+    other hosts (sharing the same FUSE-mounted pgdata) can tell that a
+    tofu process is actively using this PG.
+    """
     global _PG_STARTED_BY_US
     _PG_STARTED_BY_US = True
+    if pgdata:
+        _start_heartbeat_thread(pgdata)
 
 
 def is_pg_owned_locally():
@@ -378,7 +754,7 @@ def _pg_real_connect_ok(host, port, pg_user, pg_dbname, timeout_s=5):
         conn = psycopg2.connect(
             dsn,
             connect_timeout=timeout_s,
-            application_name='chatui-probe',
+            application_name='tofu-probe',
             gssencmode='disable',
         )
     except Exception as e:
@@ -398,6 +774,101 @@ def _pg_real_connect_ok(host, port, pg_user, pg_dbname, timeout_s=5):
             conn.close()
         except Exception as _e:
             logger.debug('[DB] Real-connect probe close failed: %s', _e)
+
+
+def _verify_pg_after_start(pg_port, pgdata, pg_user, total_wait_s=12):
+    """Verify the PG we just started is truly ours and stays alive.
+
+    pg_ctl start can succeed (rc=0) and yet the postmaster shuts itself
+    down moments later. Three failure modes we must detect here:
+
+    1. WAL recovery PANIC (e.g. "invalid resource manager ID in
+       checkpoint record"). pg_ctl returns 0 because the postmaster
+       process itself launched fine; the startup sub-process aborts
+       seconds later and the postmaster shuts down.
+    2. Concurrent-start race: another host's postmaster wrote a
+       different PID to postmaster.pid AFTER our pg_ctl rc=0 but BEFORE
+       we noticed. Our postmaster will discover this within ~60s and
+       perform an "immediate shutdown because data directory lock file
+       is invalid".
+    3. data_directory mismatch: rare, but if a port collision dance
+       lands us on someone else's PG, we should not declare success.
+
+    Approach: poll over ~total_wait_s. At each tick verify (a) postmaster.pid
+    still references a live local PG process, AND (b) a real psycopg2
+    connect+SELECT 1 succeeds, AND (c) data_directory matches our pgdata.
+    Require two consecutive successful checks before declaring victory.
+
+    Returns True if PG is healthy, False otherwise. On failure the caller
+    is expected to NOT take ownership and to fall back / retry.
+    """
+    deadline = time.monotonic() + total_wait_s
+    consecutive_ok = 0
+    pidfile = os.path.join(pgdata, 'postmaster.pid')
+    last_err = None
+    while time.monotonic() < deadline:
+        # Check 1 — pidfile + PID alive locally
+        try:
+            with open(pidfile) as _f:
+                pid_str = _f.readline().strip()
+            pid = int(pid_str)
+        except FileNotFoundError:
+            last_err = 'postmaster.pid disappeared'
+            consecutive_ok = 0
+            time.sleep(0.5)
+            continue
+        except Exception as e:
+            last_err = f'postmaster.pid unreadable: {e}'
+            consecutive_ok = 0
+            time.sleep(0.5)
+            continue
+        try:
+            from lib.compat import is_process_alive
+            if not is_process_alive(pid):
+                last_err = f'postmaster PID {pid} not alive (likely PANIC during recovery)'
+                consecutive_ok = 0
+                time.sleep(0.5)
+                continue
+        except ImportError as e:
+            logger.debug('[DB] is_process_alive unavailable for verify: %s', e)
+        # Check 2 — real psycopg2 connect + trivial query
+        if not _pg_real_connect_ok('127.0.0.1', pg_port, pg_user, None, timeout_s=3):
+            last_err = 'real psycopg2 SELECT 1 failed'
+            consecutive_ok = 0
+            time.sleep(1.0)
+            continue
+        # Check 3 — data_directory matches ours
+        try:
+            if not _verify_pg_data_directory('127.0.0.1', pg_port, pgdata, pg_user):
+                last_err = 'data_directory mismatch (someone else\'s PG)'
+                consecutive_ok = 0
+                time.sleep(1.0)
+                continue
+        except Exception as e:
+            logger.debug('[DB] _verify_pg_data_directory raised during verify: %s', e)
+            last_err = f'data_directory probe raised: {e}'
+            consecutive_ok = 0
+            time.sleep(1.0)
+            continue
+        consecutive_ok += 1
+        if consecutive_ok >= 2:
+            return True
+        time.sleep(0.5)
+    logger.error('[DB] Post-start verification FAILED after %.1fs: %s',
+                 total_wait_s, last_err)
+    return False
+
+
+def _stop_local_pg_quietly(pgdata):
+    """Best-effort pg_ctl stop -m fast, used to undo a failed start."""
+    try:
+        subprocess.run(
+            [_find_pg_binary('pg_ctl'), '-D', pgdata, 'stop', '-m', 'fast', '-w', '-t', '10'],
+            capture_output=True, text=True, timeout=15
+        )
+        logger.info('[DB] Stopped local PG after failed post-start verification')
+    except Exception as e:
+        logger.debug('[DB] Quiet stop after failed verify raised: %s', e)
 
 
 def _scan_for_our_pg(host, port_range, pgdata, pg_user):
@@ -507,7 +978,7 @@ def _bootstrap_pg(pgdata, base_dir, pg_host, pg_port, pg_user, pg_password, pg_d
     conf_path = os.path.join(pgdata, 'postgresql.conf')
     try:
         with open(conf_path, 'a') as f:
-            f.write('\n# ── ChatUI auto-bootstrap overrides ──\n')
+            f.write('\n# ── Tofu auto-bootstrap overrides ──\n')
             f.write(f'port = {free_port}\n')
             f.write("listen_addresses = '*'\n")
             f.write("unix_socket_directories = ''\n")
@@ -518,7 +989,12 @@ def _bootstrap_pg(pgdata, base_dir, pg_host, pg_port, pg_user, pg_password, pg_d
         logger.error('[DB] Cannot write postgresql.conf: %s', e)
         return None
 
-    # Start PG
+    # Start PG — but first acquire the cross-host startup lock so we
+    # don't race another tofu host that shares this pgdata.
+    if not _try_acquire_startup_lock(pgdata):
+        logger.warning('[DB] Skipping initdb-time pg_ctl start: another host '
+                       'holds the cross-host startup lock. Falling back.')
+        return None
     log_path = os.path.join(base_dir, 'logs', 'postgresql.log')
     pg_ctl_bin = _find_pg_binary('pg_ctl')
     try:
@@ -532,6 +1008,7 @@ def _bootstrap_pg(pgdata, base_dir, pg_host, pg_port, pg_user, pg_password, pg_d
         )
         if result.returncode != 0:
             logger.error('[DB] pg_ctl start failed: %s', result.stderr)
+            _release_startup_lock()
             return None
         logger.info('[DB] PostgreSQL started on port %d', free_port)
     except FileNotFoundError:
@@ -542,9 +1019,20 @@ def _bootstrap_pg(pgdata, base_dir, pg_host, pg_port, pg_user, pg_password, pg_d
             hint = 'install PostgreSQL and add PG bin/ to PATH'
         logger.error('[DB] pg_ctl not found (looked for: %s) — install PostgreSQL '
                      '(e.g. %s)', pg_ctl_bin, hint)
+        _release_startup_lock()
         return None
     except Exception as e:
         logger.error('[DB] pg_ctl start failed: %s', e, exc_info=True)
+        _release_startup_lock()
+        return None
+
+    # Post-start verification: if the postmaster PANIC-shuts within a
+    # few seconds (WAL corruption, concurrent-start race), fail fast.
+    if not _verify_pg_after_start(free_port, pgdata, pg_user, total_wait_s=12):
+        logger.error('[DB] Freshly initdb\'d PG failed post-start verification — '
+                     'stopping it and aborting bootstrap. See logs/postgresql.log.')
+        _stop_local_pg_quietly(pgdata)
+        _release_startup_lock()
         return None
 
     time.sleep(1)
@@ -580,6 +1068,15 @@ def _bootstrap_pg(pgdata, base_dir, pg_host, pg_port, pg_user, pg_password, pg_d
             logger.error('[DB] createdb failed: %s', e, exc_info=True)
             return None
 
+    # ── Restore from pg_backup.sql if export.py left one behind ──
+    # export.py's personal-mode export NEVER raw-copies pgdata/ (hot-copy
+    # across FUSE causes TOAST chunk corruption). Instead it does a
+    # pg_dumpall → data/pg_backup.sql. On the destination's first boot,
+    # we've just finished initdb + createdb above — so this is exactly
+    # the moment to feed the dump into psql. On success we delete the
+    # dump file so subsequent boots skip straight through.
+    _restore_from_sql_dump_if_present(base_dir, free_port, db_user, pg_dbname)
+
     # Build DSN
     dsn = f"host=127.0.0.1 port={free_port} dbname={pg_dbname}"
     if pg_user:
@@ -587,10 +1084,80 @@ def _bootstrap_pg(pgdata, base_dir, pg_host, pg_port, pg_user, pg_password, pg_d
     if pg_password:
         dsn += f" password={pg_password}"
     _write_owner_host(pgdata)
-    _mark_pg_owned_locally()
+    _mark_pg_owned_locally(pgdata)
     logger.info('[DB] Bootstrap complete — DSN: host=127.0.0.1 port=%d dbname=%s',
                 free_port, pg_dbname)
     return {'PG_HOST': '127.0.0.1', 'PG_PORT': free_port, 'PG_DSN': dsn}
+
+
+def _restore_from_sql_dump_if_present(base_dir, pg_port, pg_user, pg_dbname):
+    """If ``data/pg_backup.sql`` exists (left by export.py), restore it.
+
+    The dump was produced by ``pg_dumpall --clean --if-exists`` so it's
+    safe to apply to a freshly-initdb'd cluster that only has the default
+    ``template1`` / ``postgres`` / ``$USER`` databases.
+
+    After a successful restore the dump file is DELETED so we never
+    restore the same snapshot twice (which would clobber any new data
+    written by the user on the destination after the first boot).
+
+    Silent no-op if the dump is missing, empty, or ``psql`` is unavailable.
+    """
+    dump_path = os.path.join(base_dir, 'data', 'pg_backup.sql')
+    if not os.path.isfile(dump_path):
+        return
+    try:
+        size = os.path.getsize(dump_path)
+    except OSError as e:
+        logger.warning('[DB] Could not stat pg_backup.sql: %s — skipping restore', e)
+        return
+    if size == 0:
+        logger.info('[DB] pg_backup.sql is empty — removing and skipping restore')
+        try:
+            os.remove(dump_path)
+        except OSError as _e:
+            logger.debug('[DB] Could not remove empty dump: %s', _e)
+        return
+
+    psql_bin = _find_pg_binary('psql')
+    if not shutil.which(psql_bin) and not os.path.isfile(psql_bin):
+        logger.warning('[DB] psql not found — cannot restore %s '
+                       '(destination will come up with an empty DB). '
+                       'Install PostgreSQL client to enable auto-restore.',
+                       dump_path)
+        return
+
+    logger.info('[DB] Restoring data from %s (%.1f MB) — this may take a moment…',
+                dump_path, size / (1024 * 1024))
+    try:
+        # Connect to the postgres admin DB; pg_dumpall --clean expects
+        # to be able to DROP the target databases before recreating them.
+        # -v ON_ERROR_STOP=1 makes a partial restore fail loudly instead
+        # of leaving a half-restored DB.
+        result = subprocess.run(
+            [psql_bin, '-h', '127.0.0.1', '-p', str(pg_port), '-U', pg_user,
+             '-d', 'postgres', '-v', 'ON_ERROR_STOP=1', '-q', '-f', dump_path],
+            capture_output=True, text=True,
+            env={**os.environ, 'PGCONNECT_TIMEOUT': '10', 'PGGSSENCMODE': 'disable'},
+            # No timeout — large dumps can take minutes on FUSE.
+        )
+    except Exception as e:
+        logger.error('[DB] psql restore invocation failed: %s', e, exc_info=True)
+        return
+
+    if result.returncode != 0:
+        # Leave the dump file in place so the user can retry manually.
+        logger.error('[DB] Restore from %s FAILED (rc=%d). Dump preserved for '
+                     'manual retry. stderr=%.1000s',
+                     dump_path, result.returncode, (result.stderr or '').strip())
+        return
+
+    logger.info('[DB] Restore from %s completed successfully', dump_path)
+    try:
+        os.remove(dump_path)
+        logger.info('[DB] Removed %s (restore complete, one-shot)', dump_path)
+    except OSError as e:
+        logger.warning('[DB] Could not remove restored dump %s: %s', dump_path, e)
 
 
 def _pg_binaries_present():
@@ -626,11 +1193,11 @@ def _ensure_pg_running(pgdata, base_dir, pg_host, pg_port, pg_user, pg_password,
         return dsn
 
     # ── Step 0: Early bail if PG binaries are simply not installed ──
-    # Unless the user has explicitly set CHATUI_PG_HOST to a remote, there's
+    # Unless the user has explicitly set TOFU_PG_HOST to a remote, there's
     # no point probing anything — we can't start, query, or verify PG.
     # This turns a noisy "ERROR: pg_ctl not found" trace into a single
     # friendly INFO line, and the caller seamlessly falls back to SQLite.
-    _explicit_host = os.environ.get('CHATUI_PG_HOST')
+    _explicit_host = getenv_compat('TOFU_PG_HOST', 'CHATUI_PG_HOST')
     _explicit_remote = (_explicit_host
                         and _explicit_host not in ('localhost', '127.0.0.1', '::1'))
     if not _explicit_remote and not _pg_binaries_present():
@@ -644,12 +1211,12 @@ def _ensure_pg_running(pgdata, base_dir, pg_host, pg_port, pg_user, pg_password,
         return None
 
     # ── Step 1: Explicit host/port override ──
-    # When CHATUI_PG_HOST is set to a remote host, OR when CHATUI_PG_PORT is
+    # When TOFU_PG_HOST is set to a remote host, OR when TOFU_PG_PORT is
     # explicitly set (even with localhost), skip local bootstrap and connect
     # directly.  This covers CI service containers, Docker Compose, managed PG,
     # or any external instance the user wants to use.
-    explicit_host = os.environ.get('CHATUI_PG_HOST')
-    explicit_port = os.environ.get('CHATUI_PG_PORT')
+    explicit_host = getenv_compat('TOFU_PG_HOST', 'CHATUI_PG_HOST')
+    explicit_port = getenv_compat('TOFU_PG_PORT', 'CHATUI_PG_PORT', default=None)
     is_explicit_external = (
         (explicit_host and explicit_host not in ('localhost', '127.0.0.1', '::1'))
         or explicit_port is not None  # any explicit port = user-managed PG
@@ -697,7 +1264,7 @@ def _ensure_pg_running(pgdata, base_dir, pg_host, pg_port, pg_user, pg_password,
                     # Already-running local PG on our pgdata — almost
                     # certainly started by a previous server.py on this
                     # host. Take ownership so shutdown_pool stops it.
-                    _mark_pg_owned_locally()
+                    _mark_pg_owned_locally(pgdata)
                     return {'PG_HOST': _local, 'PG_PORT': pg_port,
                             'PG_DSN': _build_dsn(_local, pg_port)}
                 else:
@@ -711,7 +1278,7 @@ def _ensure_pg_running(pgdata, base_dir, pg_host, pg_port, pg_user, pg_password,
                     found_our_port = _scan_for_our_pg(_local, range(15432, 15440), pgdata, pg_user)
                     if found_our_port:
                         _ensure_database_exists(_local, found_our_port, pg_dbname, pg_user, pgdata)
-                        _mark_pg_owned_locally()
+                        _mark_pg_owned_locally(pgdata)
                         return {'PG_HOST': _local, 'PG_PORT': found_our_port,
                                 'PG_DSN': _build_dsn(_local, found_our_port)}
         except Exception as _e:
@@ -725,24 +1292,44 @@ def _ensure_pg_running(pgdata, base_dir, pg_host, pg_port, pg_user, pg_password,
     found_our_port = _scan_for_our_pg(_local, range(15432, 15440), pgdata, pg_user)
     if found_our_port:
         _ensure_database_exists(_local, found_our_port, pg_dbname, pg_user, pgdata)
-        _mark_pg_owned_locally()
+        _mark_pg_owned_locally(pgdata)
         return {'PG_HOST': _local, 'PG_PORT': found_our_port,
                 'PG_DSN': _build_dsn(_local, found_our_port)}
 
     # ── Step 3: Check if another machine owns the pgdata ──
+    #
+    # Defer to the remote ONLY if a fresh tofu heartbeat proves another
+    # tofu process is actively using that PG right now. A bare TCP-alive
+    # postmaster is not enough: it could be the stale tail of a previous,
+    # unclean exit on another host — in which case we must take over
+    # rather than route every DB call across a dying link (see
+    # .tofu/skills/pg-cross-host-heartbeat-takeover.md).
     is_remote, remote_host = _pg_already_running_on_another_machine(pgdata, pg_port)
     if is_remote and remote_host:
-        # Real-connect probe instead of pg_isready — see _pg_real_connect_ok
-        # docstring for why (half-alive container case).
-        remote_ok = _pg_real_connect_ok(remote_host, pg_port, pg_user, pg_dbname, timeout_s=5)
-        if remote_ok:
-            logger.info('[DB] PostgreSQL is running on remote machine %s — connecting as client', remote_host)
-            _ensure_database_exists(remote_host, pg_port, pg_dbname, pg_user, pgdata)
-            return {'PG_HOST': remote_host, 'PG_PORT': pg_port,
-                    'PG_DSN': _build_dsn(remote_host, pg_port)}
+        fresh, hb_info = _heartbeat_is_fresh(pgdata)
+        if fresh:
+            remote_ok = _pg_real_connect_ok(remote_host, pg_port, pg_user, pg_dbname, timeout_s=5)
+            if remote_ok:
+                logger.info('[DB] PostgreSQL is running on remote machine %s '
+                            '(heartbeat fresh, age=%.1fs, pid=%s) — connecting as client',
+                            remote_host, hb_info.get('age_s', -1) if hb_info else -1,
+                            hb_info.get('pid') if hb_info else None)
+                _ensure_database_exists(remote_host, pg_port, pg_dbname, pg_user, pgdata)
+                return {'PG_HOST': remote_host, 'PG_PORT': pg_port,
+                        'PG_DSN': _build_dsn(remote_host, pg_port)}
+            logger.warning('[DB] Heartbeat was fresh but real-connect to %s:%d failed — '
+                          'treating as dead and taking over locally', remote_host, pg_port)
         else:
-            logger.warning('[DB] Remote PG owner %s is NOT reachable on port %d — '
-                          'will try to start PG locally (Step 4)', remote_host, pg_port)
+            if hb_info is None:
+                logger.info('[DB] Remote PG owner %s present but no tofu heartbeat file '
+                            '— previous owner exited uncleanly; taking over locally',
+                            remote_host)
+            else:
+                logger.info('[DB] Remote PG owner %s has a STALE heartbeat '
+                            '(age=%.1fs > ttl=%ds, last_pid=%s) — previous owner is gone; '
+                            'taking over locally',
+                            remote_host, hb_info.get('age_s', -1),
+                            _HEARTBEAT_TTL_S, hb_info.get('pid'))
 
     # ── Step 3b: pgdata ↔ binary major-version sanity check ──
     # If the pgdata directory was created by a different PG major than the
@@ -777,7 +1364,7 @@ def _ensure_pg_running(pgdata, base_dir, pg_host, pg_port, pg_user, pg_password,
                             '— REFUSING to start (would FATAL with config-param errors). '
                             'Falling back to SQLite. To recover: move %s aside (e.g. '
                             '`mv pgdata pgdata.bak`) so a fresh pgdata is initdb\'d, '
-                            'OR install matching PG version, OR set CHATUI_DB_BACKEND=sqlite.',
+                            'OR install matching PG version, OR set TOFU_DB_BACKEND=sqlite.',
                             pgdata_major, _bin_major, pgdata)
                         return None
                     logger.debug('[DB] pgdata major (%s) matches local binary', pgdata_major)
@@ -820,24 +1407,42 @@ def _ensure_pg_running(pgdata, base_dir, pg_host, pg_port, pg_user, pg_password,
         owner_host = _read_pg_host_from_pidfile(pgdata)
         local_ip = _get_local_ip()
         if owner_host and owner_host not in (local_ip, 'localhost', '127.0.0.1'):
-            # Real-connect probe instead of pg_isready — see _pg_real_connect_ok
-            # docstring for why (half-alive container on shared FUSE).
-            remote_alive = _pg_real_connect_ok(owner_host, pg_port, pg_user, pg_dbname, timeout_s=5)
+            # Heartbeat is the authoritative signal: only defer if another
+            # tofu is actively running there. Bare TCP-alive postmaster
+            # is not enough (an unclean exit can leave it answering for
+            # hours).
+            fresh, hb_info = _heartbeat_is_fresh(pgdata)
+            remote_alive = fresh and _pg_real_connect_ok(
+                owner_host, pg_port, pg_user, pg_dbname, timeout_s=5)
             if remote_alive:
                 logger.warning('[DB] Step 4 safety net: postmaster.pid belongs to '
-                               'remote host %s (we are %s) and it is LIVE — '
-                               'refusing to delete. Connecting to remote host.',
-                               owner_host, local_ip)
+                               'remote host %s (we are %s) and tofu heartbeat is '
+                               'fresh (age=%.1fs, pid=%s) — refusing to delete. '
+                               'Connecting to remote host.',
+                               owner_host, local_ip,
+                               hb_info.get('age_s', -1) if hb_info else -1,
+                               hb_info.get('pid') if hb_info else None)
                 _ensure_database_exists(owner_host, pg_port, pg_dbname, pg_user, pgdata)
                 return {'PG_HOST': owner_host, 'PG_PORT': pg_port,
                         'PG_DSN': _build_dsn(owner_host, pg_port)}
-            # Remote is unreachable — previous owner is dead (e.g. old
-            # container gone). Auto-heal: remove both ownership markers and
-            # proceed to start PG locally. Data files are untouched.
-            logger.warning('[DB] Step 4 auto-heal: previous owner %s is unreachable '
-                           '(we are %s) — treating as stale container/host, '
-                           'clearing ownership markers and taking over locally.',
-                           owner_host, local_ip)
+            # Stale or missing heartbeat — previous owner is gone (unclean
+            # exit, container switched, machine rebooted). Auto-heal: remove
+            # ownership markers and proceed to start PG locally. Data
+            # files are untouched.
+            if hb_info is None:
+                logger.warning('[DB] Step 4 auto-heal: previous owner %s exited '
+                               'uncleanly (no heartbeat file) — taking over locally.',
+                               owner_host)
+            elif not fresh:
+                logger.warning('[DB] Step 4 auto-heal: previous owner %s heartbeat is '
+                               'stale (age=%.1fs > ttl=%ds, last_pid=%s) — '
+                               'taking over locally.',
+                               owner_host, hb_info.get('age_s', -1),
+                               _HEARTBEAT_TTL_S, hb_info.get('pid'))
+            else:
+                logger.warning('[DB] Step 4 auto-heal: previous owner %s heartbeat '
+                               'fresh but PG unreachable — taking over locally.',
+                               owner_host)
             owner_file = os.path.join(pgdata, '.pg_owner_host')
             try:
                 if os.path.exists(owner_file):
@@ -845,6 +1450,7 @@ def _ensure_pg_running(pgdata, base_dir, pg_host, pg_port, pg_user, pg_password,
                     logger.info('[DB] Removed stale .pg_owner_host (was %s)', owner_host)
             except Exception as _e:
                 logger.warning('[DB] Could not remove stale .pg_owner_host: %s', _e)
+            _clear_heartbeat(pgdata)
         else:
             logger.warning('[DB] Removing stale postmaster.pid before starting PG '
                           '(owner: %s, us: %s)', owner_host, local_ip)
@@ -880,7 +1486,7 @@ def _ensure_pg_running(pgdata, base_dir, pg_host, pg_port, pg_user, pg_password,
                            '— reusing after pidfile cleanup', conf_port)
                 _ensure_database_exists('127.0.0.1', conf_port, pg_dbname, pg_user, pgdata)
                 _write_owner_host(pgdata)
-                _mark_pg_owned_locally()
+                _mark_pg_owned_locally(pgdata)
                 return {'PG_HOST': '127.0.0.1', 'PG_PORT': conf_port,
                         'PG_DSN': _build_dsn('127.0.0.1', conf_port)}
             # Not ours — reassign to a different port
@@ -910,6 +1516,14 @@ def _ensure_pg_running(pgdata, base_dir, pg_host, pg_port, pg_user, pg_password,
         logger.debug('[DB] Port availability check failed: %s', _e)
 
     logger.info('[DB] Starting PostgreSQL server from %s ...', pgdata)
+    # Cross-host startup lock — prevents two tofu hosts on the same
+    # FUSE-mounted pgdata from racing into pg_ctl start at the same time
+    # (which corrupts WAL with mutual-PID-eviction).
+    if not _try_acquire_startup_lock(pgdata):
+        logger.warning('[DB] Another tofu host is currently starting/owning PG '
+                       'on this pgdata — skipping our pg_ctl start. Caller will '
+                       'fall back to SQLite (or retry next cycle).')
+        return None
     try:
         log_path = os.path.join(base_dir, 'logs', 'postgresql.log')
         result = subprocess.run(
@@ -918,14 +1532,27 @@ def _ensure_pg_running(pgdata, base_dir, pg_host, pg_port, pg_user, pg_password,
         )
         if result.returncode == 0:
             logger.info('[DB] PostgreSQL started successfully on this machine')
-            time.sleep(1)
+            # Verify it stays up — pg_ctl rc=0 does NOT mean recovery
+            # succeeded. If WAL is corrupted or another host's pidfile
+            # races us, the postmaster will shut itself down within
+            # seconds. Catch that here instead of letting the scheduler
+            # storm-retry.
+            if not _verify_pg_after_start(pg_port, pgdata, pg_user, total_wait_s=12):
+                logger.error('[DB] PG started (rc=0) but failed post-start '
+                             'verification — likely WAL corruption or concurrent '
+                             'start by another host. Stopping local PG and '
+                             'falling back. See logs/postgresql.log.')
+                _stop_local_pg_quietly(pgdata)
+                _release_startup_lock()
+                return None
             _ensure_database_exists('127.0.0.1', pg_port, pg_dbname, pg_user, pgdata)
             _write_owner_host(pgdata)
-            _mark_pg_owned_locally()
+            _mark_pg_owned_locally(pgdata)
             return {'PG_HOST': '127.0.0.1', 'PG_PORT': pg_port,
                     'PG_DSN': _build_dsn('127.0.0.1', pg_port)}
         else:
             logger.error('[DB] Failed to start PostgreSQL: %s', result.stderr)
+            _release_startup_lock()
             return None
     except FileNotFoundError as e:
         # pg_ctl / initdb binary not present — PostgreSQL is simply not
@@ -937,14 +1564,19 @@ def _ensure_pg_running(pgdata, base_dir, pg_host, pg_port, pg_user, pg_password,
                     'To enable PG (better concurrency): '
                     '  conda install -c conda-forge postgresql>=18',
                     e)
+        _release_startup_lock()
         return None
     except Exception as e:
         logger.error('[DB] Failed to start PostgreSQL: %s', e, exc_info=True)
+        _release_startup_lock()
         return None
 
 
 def _stop_pg(pgdata):
     """Stop PostgreSQL server on shutdown."""
+    # Stop the heartbeat first so a peer host that starts up during
+    # the pg_ctl stop window sees "no heartbeat" and takes over cleanly.
+    stop_heartbeat(pgdata)
     if os.path.isdir(pgdata):
         try:
             subprocess.run(
@@ -954,3 +1586,7 @@ def _stop_pg(pgdata):
             logger.info('[DB] PostgreSQL stopped')
         except Exception as e:
             logger.warning('[DB] Error stopping PostgreSQL: %s', e)
+    # Always release the cross-host startup lock on shutdown, regardless
+    # of whether pg_ctl stop succeeded — a peer host is better off taking
+    # over a potentially-stuck PG than being locked out forever.
+    _release_startup_lock()

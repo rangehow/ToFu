@@ -329,7 +329,7 @@ class TestVerdictParsing:
         CONTINUE_WORKER lets the worker address the ❌ directly.
         """
         import os
-        os.environ['CHATUI_ENDPOINT_REPLAN'] = '1'
+        os.environ['TOFU_ENDPOINT_REPLAN'] = '1'
         from lib.tasks_pkg.endpoint_review import _parse_verdict
         feedback, phase, defect = _parse_verdict(
             "- ❌ Item 1 still failing\n[VERDICT: STOP]"

@@ -73,7 +73,11 @@ _DISPLAY_HANDLERS = {
         else f'📖 Read {_tab_label(fn_args.get("tabId"))}'
     ),
     'browser_execute_js': lambda fn_args: f'⚡ {_tab_label(fn_args.get("tabId"))}: {fn_args.get("code", "")[:40]}',
-    'browser_screenshot': lambda fn_args: f'📸 Screenshot {_tab_label(fn_args.get("tabId"))}',
+    'browser_screenshot': lambda fn_args: (
+        f'📸 Screenshot (viewport) {_tab_label(fn_args.get("tabId"))}'
+        if fn_args.get('fullPage') is False
+        else f'📸 Screenshot (full page) {_tab_label(fn_args.get("tabId"))}'
+    ),
     'browser_get_cookies': lambda fn_args: f'🍪 Get cookies [{(fn_args.get("domain") or fn_args.get("url", "all"))[:30]}]',
     'browser_get_history': lambda fn_args: f'📜 Search history [{fn_args.get("query", "")[:30] or "all"}]',
     'browser_create_tab': lambda fn_args: f'➕ New tab: {fn_args.get("url", "")[:40]}',

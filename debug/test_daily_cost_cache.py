@@ -7,7 +7,7 @@ Verifies:
   4. INSERT OR REPLACE updates an existing row rather than erroring.
   5. _get_monthly_costs uses the cache (doesn't scan on second call).
 
-Run: CHATUI_DB_BACKEND=sqlite python debug/test_daily_cost_cache.py
+Run: TOFU_DB_BACKEND=sqlite python debug/test_daily_cost_cache.py
 """
 
 import os
@@ -18,8 +18,8 @@ import time as _time
 # Use an isolated SQLite DB for this test so we don't touch real data
 _tmp = tempfile.NamedTemporaryFile(suffix='.db', delete=False)
 _tmp.close()
-os.environ['CHATUI_DB_PATH'] = _tmp.name
-os.environ['CHATUI_DB_BACKEND'] = 'sqlite'
+os.environ['TOFU_DB_PATH'] = _tmp.name
+os.environ['TOFU_DB_BACKEND'] = 'sqlite'
 
 # Ensure project root is on sys.path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

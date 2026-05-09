@@ -11,7 +11,12 @@ import threading
 
 from lib.log import get_logger
 
-from .config import DEFAULT_SLOT_CONFIGS, MODEL_ALIASES, is_model_cheap
+from .config import (
+    DEFAULT_SLOT_CONFIGS,
+    MANAGED_TIER_TAGS,
+    MODEL_ALIASES,
+    get_pricing_tiers,  # kept for backward compat with any external callers
+)
 from .slot import Slot
 
 logger = get_logger(__name__)
@@ -157,9 +162,21 @@ class LLMDispatcher:
     # ── Known provider header migrations ──
     # When custom headers were moved from hardcoded _headers() to per-provider
     # extra_headers, existing saved providers need the headers injected.
-    _HEADER_MIGRATIONS = {
-        # 'your-domain.com': {'X-Custom-Header': 'value'},  # per-provider custom headers
-    }
+    # Populated from the EXTRA_HEADER_MIGRATIONS env var (JSON object
+    # mapping host-suffix → header dict) so internal infrastructure
+    # routing details never leak into open-source builds.
+    @staticmethod
+    def _load_header_migrations() -> dict:
+        raw = os.environ.get('EXTRA_HEADER_MIGRATIONS', '').strip()
+        if not raw:
+            return {}
+        try:
+            return json.loads(raw)
+        except (json.JSONDecodeError, TypeError) as e:
+            logger.warning('[Dispatch] Invalid EXTRA_HEADER_MIGRATIONS JSON: %s', e)
+            return {}
+
+    _HEADER_MIGRATIONS = None  # lazy-loaded in _migrate_provider_extra_headers
 
     def _migrate_provider_extra_headers(self, providers, config):
         """Auto-inject extra_headers for known providers missing them.
@@ -168,13 +185,19 @@ class LLMDispatcher:
         per-provider extra_headers feature was added. Persists the
         updated config so migration only runs once.
         """
+        migrations = type(self)._HEADER_MIGRATIONS
+        if migrations is None:
+            migrations = self._load_header_migrations()
+            type(self)._HEADER_MIGRATIONS = migrations
+        if not migrations:
+            return
         migrated = False
         for p in providers:
             base_url = p.get('base_url', '')
             existing_hdrs = p.get('extra_headers') or {}
             if existing_hdrs:
                 continue  # already has headers — skip
-            for domain_suffix, headers in self._HEADER_MIGRATIONS.items():
+            for domain_suffix, headers in migrations.items():
                 if domain_suffix in base_url:
                     p['extra_headers'] = dict(headers)
                     migrated = True
@@ -256,13 +279,15 @@ class LLMDispatcher:
                     slot_cost = alias_cfg.get('cost', cost)
                     slot_lat = alias_cfg.get('latency', latency)
 
-                    # Auto-tag 'cheap' from real pricing data
-                    # (skip image_gen and embedding models — they aren't chat models)
+                    # Auto-tag managed pricing tiers ('cheap' + any future
+                    # PRICING_TIERS rows) from real pricing data.
+                    # Skip non-chat models — tier tags don't apply.
                     if ('image_gen' not in slot_caps
-                            and 'embedding' not in slot_caps
-                            and 'cheap' not in slot_caps):
-                        if is_model_cheap(mid, fallback_cost_per_1k=slot_cost):
-                            slot_caps.add('cheap')
+                            and 'embedding' not in slot_caps):
+                        tiers = get_pricing_tiers(mid, fallback_cost_per_1k=slot_cost)
+                        # Strip stale managed tags, then apply desired tier tags.
+                        slot_caps -= (MANAGED_TIER_TAGS - tiers)
+                        slot_caps |= tiers
 
                     # Check stream_only flag from default config
                     slot_stream_only = alias_cfg.get('stream_only', default_cfg.get('stream_only', False))
@@ -368,14 +393,15 @@ class LLMDispatcher:
                     # Unknown model — create a basic text slot
                     cfg = {'caps': {'text'}, 'rpm': 30, 'latency': 3000, 'cost': 0.01}
 
-                # Auto-tag 'cheap' from real pricing data
-                # (skip image_gen and embedding models — they aren't chat models)
+                # Auto-tag managed pricing tiers ('cheap' + any future
+                # PRICING_TIERS rows) from real pricing data.
+                # Skip non-chat models — tier tags don't apply.
                 slot_caps = set(cfg['caps'])
                 if ('image_gen' not in slot_caps
-                        and 'embedding' not in slot_caps
-                        and 'cheap' not in slot_caps):
-                    if is_model_cheap(model, fallback_cost_per_1k=cfg.get('cost')):
-                        slot_caps.add('cheap')
+                        and 'embedding' not in slot_caps):
+                    tiers = get_pricing_tiers(model, fallback_cost_per_1k=cfg.get('cost'))
+                    slot_caps -= (MANAGED_TIER_TAGS - tiers)
+                    slot_caps |= tiers
 
                 slot = Slot(
                     key_name=key_name,

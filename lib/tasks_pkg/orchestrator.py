@@ -11,6 +11,7 @@ dict.  ``endpoint.py`` uses it to drive the outer work→review→revise loop.
 from __future__ import annotations
 
 import os
+import threading
 import time
 from typing import Any
 
@@ -53,7 +54,6 @@ from lib.tasks_pkg.stream_handler import analyse_stream_result
 from lib.tasks_pkg.system_context import (
     _inject_system_contexts,
     inject_search_addendum_to_user,
-    inject_memory_to_user,
 )
 from lib.tasks_pkg.server_message_store import (
     rebuild_messages_with_history as _rebuild_messages_with_history,
@@ -445,10 +445,237 @@ def _finalize_and_emit_done(task: dict[str, Any], *, model: str, preset: str, th
         }
 
     # ── Emit done event (unless endpoint-managed) ──
+    #
+    # The file-history snapshot for this round runs in a daemon thread
+    # AFTER ``persist_task_result`` so queue-dispatch is never blocked
+    # by snapshot I/O.  When the snapshot completes we emit a separate
+    # ``round_committed`` SSE event carrying ``snapshotId`` (and the
+    # legacy ``gitSha`` field, kept for frontend backward-compat) plus
+    # any side-channel ``modifiedFileList`` additions discovered by
+    # ``diff_name_status``.
     if task.get('_endpoint_managed'):
+        _spawn_async_commit_round(task, project_enabled, project_path)
         return
     append_event(task, done_evt)
     persist_task_result(task)
+
+    _spawn_async_commit_round(task, project_enabled, project_path)
+
+
+def _spawn_async_commit_round(task: dict, project_enabled: bool, project_path: str | None) -> None:
+    """Run ``file_history.make_snapshot`` in a daemon thread.
+
+    Decoupled from ``_finalize_and_emit_done`` so the snapshot persist
+    cannot block ``persist_task_result`` → ``_dispatch_queued_message``.
+    On success, emits a ``round_committed`` SSE event carrying
+    ``snapshotId`` (and ``gitSha`` for backward-compat) plus any
+    file-history-derived ``modifiedFileList`` additions.
+    """
+    if not (project_enabled and project_path and task.get('id')):
+        return
+    try:
+        threading.Thread(
+            target=_run_commit_round_async,
+            args=(task, project_path),
+            name=f'commit-round-{task["id"][:8]}',
+            daemon=True,
+        ).start()
+    except Exception as e:
+        logger.warning('[Task:%s] failed to spawn async commit thread: %s',
+                       task['id'][:8], e, exc_info=True)
+
+
+def _run_commit_round_async(task: dict, project_path: str) -> None:
+    """Daemon-thread body for the deferred ``make_snapshot`` call.
+
+    Uses the file-history store (lib.file_history) — the previous
+    shadow-git shim was retired in the Tier-3 redesign.  See
+    ``lib/file_history/__init__.py`` for the rationale.
+    """
+    tid = task['id'][:8]
+    try:
+        from lib import file_history as fh
+        from lib.project_mod import get_modifications
+
+        if not fh.is_enabled():
+            return
+
+        # Pull actual tool names (mod['type']) from this task's modifications.
+        _tool_names: list[str] = []
+        _rel_paths: list[str] | None = None
+        try:
+            _turn_mods = [
+                m for m in (get_modifications(project_path, conv_id=task.get('convId')) or [])
+                if m.get('taskId') == task['id']
+            ]
+            _tool_names = [m.get('type') or '' for m in _turn_mods]
+            _tool_names = [t for t in _tool_names if t]
+            _rel_paths = [m.get('path') for m in _turn_mods if m.get('path')]
+        except Exception as _e:
+            logger.debug('[Task:%s] async tool_names/rel_paths extraction failed: %s',
+                         tid, _e)
+
+        # Find the snapshot that was active before this round started, so
+        # diff_name_status can isolate just the round's changes.
+        prev_snap = fh.get_last_snapshot_id(project_path)
+
+        _t0 = time.time()
+        _snap_id = fh.make_snapshot(
+            project_path,
+            task_id=task['id'],
+            conv_id=task.get('convId'),
+            tool_names=_tool_names or None,
+            summary=task.get('toolSummary'),
+            rel_paths=_rel_paths or None,
+        )
+        _elapsed = time.time() - _t0
+        if not _snap_id:
+            logger.debug('[Task:%s] async make_snapshot returned no id (no-op or disabled) elapsed=%.2fs',
+                         tid, _elapsed)
+            return
+        # Keep ``gitSha`` field for backward-compat with the frontend (which
+        # captures it onto _gitSha for prospective undo UI but doesn't
+        # currently consume it).  ``snapshotId`` is the new canonical name.
+        task['snapshotId'] = _snap_id
+        task['gitSha'] = _snap_id
+        if _elapsed > 1.0:
+            logger.info('[Task:%s] async make_snapshot completed in %.2fs id=%s',
+                        tid, _elapsed, _snap_id[:8])
+
+        amend_evt = {'type': 'round_committed',
+                     'snapshotId': _snap_id,
+                     'gitSha': _snap_id,
+                     'taskId': task['id']}
+
+        # File-history-derived additions (run_command / code_exec / MCP side
+        # effects that modifications.py doesn't track) come from
+        # diff_name_status against the prior snapshot.
+        try:
+            fh_changes = fh.diff_name_status(project_path, prev_snap, _snap_id)
+            if fh_changes:
+                existing = list(task.get('modifiedFileList') or [])
+                seen_paths = {
+                    (f.get('root', '') or '', f.get('path', ''))
+                    for f in existing if isinstance(f, dict)
+                }
+                added: list[dict] = []
+                for entry in fh_changes:
+                    key = ('', entry['path'])
+                    if key in seen_paths:
+                        continue
+                    item = {'path': entry['path'], 'action': entry['action']}
+                    existing.append(item)
+                    added.append(item)
+                    seen_paths.add(key)
+                if added:
+                    task['modifiedFileList'] = existing
+                    task['modifiedFiles'] = len(existing)
+                    amend_evt['modifiedFileList'] = existing
+                    amend_evt['modifiedFiles'] = len(existing)
+                    amend_evt['addedByGit'] = added
+                    logger.info('[Task:%s] async file-history modifiedFileList '
+                                'added %d file(s) missed by modifications.py',
+                                tid, len(added))
+        except Exception as _e:
+            logger.debug('[Task:%s] async diff_name_status fallback: %s',
+                         tid, _e)
+
+        # Emit the amend event so any still-connected SSE reader can wire
+        # snapshotId onto the assistant message.
+        try:
+            append_event(task, amend_evt)
+        except Exception as _e:
+            logger.debug('[Task:%s] append_event for round_committed failed: %s',
+                         tid, _e)
+
+        # ── Persist snapshotId to the conversation DB so reloads after
+        #    the SSE reader has closed still see it for the redo UI. ──
+        try:
+            _patch_assistant_message_with_git(task, amend_evt)
+        except Exception as _e:
+            logger.warning('[Task:%s] failed to patch assistant message with snapshotId: %s',
+                           tid, _e, exc_info=True)
+    except Exception as e:
+        logger.warning('[Task:%s] async make_snapshot failed: %s',
+                       tid, e, exc_info=True)
+
+
+def _patch_assistant_message_with_git(task: dict, amend_evt: dict) -> None:
+    """Update the conversation's last assistant message with gitSha + git-derived files.
+
+    Called from the async commit thread after ``persist_task_result`` has
+    already run.  Mirrors the subset of ``_sync_result_to_conversation``
+    that depends on git output.
+    """
+    conv_id = task.get('convId') or ''
+    task_id = task.get('id') or ''
+    git_sha = amend_evt.get('gitSha')
+    if not (conv_id and task_id and git_sha):
+        return
+    try:
+        from lib.database import (DOMAIN_CHAT, db_execute_with_retry,
+                                  get_thread_db, json_dumps_pg)
+    except Exception as _e:
+        logger.debug('[Task:%s] cannot patch gitSha — DB import failed: %s',
+                     task_id[:8], _e)
+        return
+    import json as _json
+
+    db = get_thread_db(DOMAIN_CHAT)
+    row = db.execute(
+        'SELECT messages FROM conversations WHERE id=? AND user_id=1',
+        (conv_id,),
+    ).fetchone()
+    if not row:
+        return
+    try:
+        messages = _json.loads(row['messages'] or '[]')
+    except (ValueError, TypeError) as _e:
+        logger.debug('[Task:%s] gitSha-patch: messages parse failed: %s',
+                     task_id[:8], _e)
+        return
+    if not isinstance(messages, list) or not messages:
+        return
+
+    # Locate the assistant message for this task.  Prefer matching by
+    # _taskId (set by _sync_result_to_conversation); fall back to the
+    # last assistant message if not tagged.
+    target_idx = -1
+    for i in range(len(messages) - 1, -1, -1):
+        m = messages[i]
+        if not isinstance(m, dict):
+            continue
+        if m.get('role') != 'assistant':
+            continue
+        if m.get('_taskId') == task_id:
+            target_idx = i
+            break
+        if target_idx == -1:
+            target_idx = i  # remember last assistant as fallback
+            # Don't break — keep looking for an exact taskId match.
+    if target_idx < 0:
+        return
+    msg = messages[target_idx]
+    msg['_gitSha'] = git_sha
+    msg['_snapshotId'] = amend_evt.get('snapshotId') or git_sha
+    if amend_evt.get('modifiedFileList'):
+        msg['modifiedFileList'] = amend_evt['modifiedFileList']
+    if amend_evt.get('modifiedFiles'):
+        msg['modifiedFiles'] = amend_evt['modifiedFiles']
+
+    try:
+        import time as _time
+        db_execute_with_retry(
+            db,
+            'UPDATE conversations SET messages=?, updated_at=? '
+            'WHERE id=? AND user_id=1',
+            (json_dumps_pg(messages), int(_time.time() * 1000), conv_id),
+        )
+        logger.info('[Task:%s] persisted gitSha=%s to conv=%s msg[%d]',
+                    task_id[:8], git_sha[:12], conv_id[:8], target_idx)
+    except Exception as _e:
+        logger.warning('[Task:%s] gitSha DB write failed: %s',
+                       task_id[:8], _e, exc_info=True)
 
 
 # ══════════════════════════════════════════════════════════
@@ -504,7 +731,68 @@ def run_task(task: dict[str, Any]) -> None:
             # the file tree (path mismatch → no tree in system prompt → LLM
             # doesn't know the project structure → "backend cannot use tools").
             from lib.project_mod import ensure_project_state
-            ensure_project_state(project_path, extra_paths=_extra_paths)
+            # ★ Pass conv_id for per-conversation root isolation (2026-05-05).
+            #   Prevents concurrent tasks from clobbering each other's
+            #   workspace-root namespace when they call set_project with
+            #   different primary paths. See lib/project_mod/config.py
+            #   ::set_conv_roots docstring for background.
+            _conv_id_for_roots = task.get('convId') or task.get('id') or ''
+            ensure_project_state(project_path, extra_paths=_extra_paths,
+                                 conv_id=_conv_id_for_roots)
+            # ── File-history: capture any external (IDE) edits made between rounds.
+            #
+            #   Runs SILENTLY in a background thread: no phase event, no UI
+            #   status — the LLM response starts streaming immediately.  Cost
+            #   is bounded by the size of the tracked-files set (files the
+            #   assistant has touched this session), not the worktree, so
+            #   this is cheap even on slow filesystems.
+            #
+            #   Correctness guard: if the round has already started mutating
+            #   files by the time the probe finishes, we skip the synthetic
+            #   external-edit snapshot to avoid misattribution.  The next
+            #   round's probe catches the drift cleanly on top of a stable
+            #   timeline.
+            try:
+                from lib import file_history as fh
+
+                if fh.is_enabled() and fh.probe_enabled():
+                    def _probe_external_edits():
+                        try:
+                            if task.get('modifiedFileList') or task.get('modifiedFiles'):
+                                logger.debug('[Task:%s] skipping external-edit probe '
+                                             '— round already mutated files',
+                                             task['id'][:8])
+                                return
+                            _ext = fh.detect_external_edits(project_path)
+                            if (task.get('modifiedFileList')
+                                    or task.get('modifiedFiles')):
+                                logger.debug('[Task:%s] external-edit probe '
+                                             'completed after round started '
+                                             'mutating files — not emitting '
+                                             'SSE event (attribution ambiguous)',
+                                             task['id'][:8])
+                                return
+                            if _ext.get('committed'):
+                                append_event(task, {
+                                    'type': 'project_external_edit',
+                                    'files': _ext.get('files', []),
+                                    'sha': _ext.get('snapshotId'),
+                                })
+                                logger.info('[Task:%s] captured %d external edit(s) snap=%s',
+                                            task['id'][:8], len(_ext.get('files', [])),
+                                            (_ext.get('snapshotId') or '')[:8])
+                        except Exception as e:
+                            logger.warning('[Task:%s] external-edit detection failed: %s',
+                                           task['id'][:8], e)
+
+                    threading.Thread(
+                        target=_probe_external_edits,
+                        name=f'ext-edit-probe-{task["id"][:8]}',
+                        daemon=True,
+                    ).start()
+            except Exception as e:
+                logger.warning('[Task:%s] could not start external-edit probe: %s',
+                               task['id'][:8], e)
         code_exec_enabled = mcfg['code_exec_enabled']
         memory_enabled  = mcfg['memory_enabled']
         browser_enabled = mcfg['browser_enabled']
@@ -609,6 +897,7 @@ def run_task(task: dict[str, Any]) -> None:
             has_real_tools,
             conv_id=task.get('convId', ''),
             task=task,
+            model=model,
         )
         # Cleanup prefetch futures (no longer needed)
         task.pop('_prefetch_project', None)
@@ -639,6 +928,29 @@ def run_task(task: dict[str, Any]) -> None:
         if _injected_tool_calls:
             tool_call_happened = True
             tool_round_num = _injected_tool_calls  # offset so new roundNums don't conflict
+
+        # ★ Memory Prefetch (proactive, per-user-turn, round 0 only):
+        #   BM25 coarse → cheap-LLM precision → inject <relevant_memories>.
+        #   This surfaces past lessons even when the model wouldn't have
+        #   thought to call search_memories on its own. Emits SSE
+        #   `memory_prefetch` events so the frontend can show an indicator.
+        #   Skipped if:
+        #     • feature flag disabled
+        #     • continue/resume (tool_history was replayed → not a fresh turn)
+        #     • no real tools (memory tools unavailable anyway)
+        if has_real_tools and not _injected_tool_calls:
+            try:
+                from lib.memory.prefetch import run_memory_prefetch
+                run_memory_prefetch(
+                    messages,
+                    project_path=project_path if project_enabled else None,
+                    task=task,
+                    emit_event=lambda ev: append_event(task, ev),
+                )
+            except Exception as _e:
+                # Advisory path — never block the task on prefetch failure.
+                logger.warning('[Task %s] memory prefetch failed: %s',
+                               task['id'][:8], _e, exc_info=True)
 
         # ★ Apply preserved content prefix from Continue — ensures backend checkpoints
         #   include text the LLM generated alongside completed tool rounds in the prior
@@ -748,20 +1060,6 @@ def run_task(task: dict[str, Any]) -> None:
             #   old-format timestamps get cleaned up for proper cache prefix.
             inject_search_addendum_to_user(messages, search_enabled,
                                            round_num=round_num)
-
-            # ★ Legacy memory cleanup: strip old <available_memories> listings
-            #   from persisted conversation history. Memory count hint is now
-            #   injected into the system message by _inject_system_contexts().
-            inject_memory_to_user(
-                messages,
-                project_path=project_path,
-                project_enabled=project_enabled,
-                memory_enabled=memory_enabled,
-                has_real_tools=has_real_tools,
-                conv_id=task.get('convId', ''),
-                task=task,
-                round_num=round_num,
-            )
 
             _tools_this_round = tool_list if (tool_list and round_num < max_tool_rounds) else None
 

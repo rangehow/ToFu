@@ -1,5 +1,5 @@
 /**
- * ChatUI Browser Bridge — Background Service Worker (v4.1)
+ * Tofu Browser Bridge — Background Service Worker (v4.1)
  *
  * Single-endpoint architecture:
  *   Every poll is a POST to /api/browser/poll with:
@@ -18,6 +18,10 @@ const FETCH_TIMEOUT    = 12000;   // Abort fetch after 12s (server long-polls 8s
 const POLL_INTERVAL    = 100;     // ms between polls (server blocks, so no busy-loop)
 const POLL_RETRY_DELAY = 3000;    // ms to wait after an error before retrying
 const COMMAND_TIMEOUT  = 25000;   // Per-command execution timeout
+// Some commands can legitimately take longer than the default; override here.
+const COMMAND_TIMEOUT_OVERRIDES = {
+  screenshot_tab: 55000,  // full-page CDP capture + lazy-load wait
+};
 
 // ══════════════════════════════════════════
 //  State
@@ -84,7 +88,7 @@ function autoDetectServer() {
       setServer(data.serverUrl);
       return;
     }
-    // Scan open tabs for a ChatUI page
+    // Scan open tabs for a Tofu page
     chrome.tabs.query({}, (tabs) => {
       for (const tab of tabs) {
         if (tab.title && tab.title.includes('Tofu') && tab.url) {
@@ -205,10 +209,11 @@ async function executeAndReport(cmd) {
     console.log(`[Bridge] ▶ ${cmd.type} (${cmd.id.slice(0, 8)})`);
     const start = Date.now();
 
+    const timeoutMs = COMMAND_TIMEOUT_OVERRIDES[cmd.type] || COMMAND_TIMEOUT;
     result = await withTimeout(
       executeCommand(cmd.type, cmd.params || {}),
-      COMMAND_TIMEOUT,
-      `Command '${cmd.type}' timed out after ${COMMAND_TIMEOUT / 1000}s`
+      timeoutMs,
+      `Command '${cmd.type}' timed out after ${timeoutMs / 1000}s`
     );
 
     commandsExecuted++;
@@ -487,26 +492,113 @@ function _executeInPage(code) {
 // ══════════════════════════════════════════
 //  Screenshot
 // ══════════════════════════════════════════
+//
+// Two modes:
+//   fullPage=true  (default) — uses chrome.debugger + CDP Page.captureScreenshot
+//                              with captureBeyondViewport:true. Captures the
+//                              ENTIRE scrollable page in one shot, triggering
+//                              lazy-loaded content as it renders.
+//                              Shows Chrome's "extension is debugging" banner
+//                              while attached (detached immediately after).
+//   fullPage=false — legacy chrome.tabs.captureVisibleTab path (viewport only).
+//                    No debugger banner; used as automatic fallback if CDP
+//                    fails (e.g. DevTools already attached to the tab).
+
+const FULL_PAGE_MAX_HEIGHT_PX = 16000;  // Chrome texture/CDP safety cap
 
 async function cmdScreenshotTab(params) {
-  const format = params.format || 'png';
-  const quality = params.quality || 80;
+  const format   = params.format || 'png';
+  const quality  = params.quality || 80;
+  const fullPage = params.fullPage !== false;  // default true
 
+  // Resolve tabId — CDP requires an explicit tabId, so fetch the active one
+  // if the caller didn't specify.
+  let tabId = params.tabId;
+  if (tabId == null) {
+    const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!activeTab) throw new Error('No active tab available for screenshot');
+    tabId = activeTab.id;
+  }
+
+  if (fullPage) {
+    try {
+      return await _screenshotFullPageCDP(tabId, format, quality);
+    } catch (err) {
+      console.warn('[Screenshot] Full-page CDP failed, falling back to viewport capture:', err && err.message);
+      // Fall through to viewport capture. Record fallbackReason so the
+      // server-side handler/log can surface it.
+      const res = await _screenshotViewport(tabId, format, quality);
+      res.fullPage = false;
+      res.fallbackReason = String((err && err.message) || err || 'unknown');
+      return res;
+    }
+  }
+
+  return await _screenshotViewport(tabId, format, quality);
+}
+
+async function _screenshotFullPageCDP(tabId, format, quality) {
+  const target = { tabId };
+  let attached = false;
+  try {
+    await chrome.debugger.attach(target, '1.3');
+    attached = true;
+
+    // Page domain must be enabled before layout/screenshot commands
+    await chrome.debugger.sendCommand(target, 'Page.enable');
+
+    const metrics = await chrome.debugger.sendCommand(target, 'Page.getLayoutMetrics');
+    // Prefer CSS content size (Chromium 90+); fall back to legacy contentSize.
+    const cs = metrics.cssContentSize || metrics.contentSize || { width: 0, height: 0 };
+    const width  = Math.max(1, Math.ceil(cs.width));
+    const height = Math.max(1, Math.ceil(cs.height));
+    const clipHeight = Math.min(height, FULL_PAGE_MAX_HEIGHT_PX);
+
+    const shotParams = {
+      format,
+      captureBeyondViewport: true,
+      fromSurface: true,
+      clip: { x: 0, y: 0, width, height: clipHeight, scale: 1 },
+    };
+    if (format === 'jpeg') shotParams.quality = quality;
+
+    const shot = await chrome.debugger.sendCommand(target, 'Page.captureScreenshot', shotParams);
+    if (!shot || !shot.data) throw new Error('CDP returned empty screenshot');
+
+    const mime = format === 'jpeg' ? 'image/jpeg' : 'image/png';
+    return {
+      dataUrl: `data:${mime};base64,${shot.data}`,
+      format,
+      fullPage: true,
+      width,
+      height: clipHeight,
+      contentHeight: height,
+      truncatedHeight: height > FULL_PAGE_MAX_HEIGHT_PX,
+    };
+  } finally {
+    if (attached) {
+      try { await chrome.debugger.detach(target); } catch (_) {}
+    }
+  }
+}
+
+async function _screenshotViewport(tabId, format, quality) {
   // Remember which tab was active so we can switch back
   let originalTabId = null;
   let targetWindowId = null;
 
-  if (params.tabId) {
-    // Find the currently active tab in the target tab's window
-    const targetTab = await chrome.tabs.get(params.tabId);
+  if (tabId) {
+    const targetTab = await chrome.tabs.get(tabId);
     targetWindowId = targetTab.windowId;
 
     const [activeTab] = await chrome.tabs.query({ active: true, windowId: targetWindowId });
     if (activeTab) originalTabId = activeTab.id;
 
     // Activate the target tab (required by captureVisibleTab)
-    await chrome.tabs.update(params.tabId, { active: true });
-    await new Promise(r => setTimeout(r, 500));  // Wait for render
+    if (originalTabId !== tabId) {
+      await chrome.tabs.update(tabId, { active: true });
+      await new Promise(r => setTimeout(r, 500));  // Wait for render
+    }
   }
 
   const opts = { format };
@@ -516,14 +608,14 @@ async function cmdScreenshotTab(params) {
     const dataUrl = await chrome.tabs.captureVisibleTab(targetWindowId, opts);
 
     // Switch back to the original tab silently
-    if (originalTabId && originalTabId !== params.tabId) {
+    if (originalTabId && originalTabId !== tabId) {
       await chrome.tabs.update(originalTabId, { active: true });
     }
 
-    return { dataUrl, format };
+    return { dataUrl, format, fullPage: false };
   } catch (err) {
     // Switch back even on error
-    if (originalTabId && originalTabId !== params.tabId) {
+    if (originalTabId && originalTabId !== tabId) {
       try { await chrome.tabs.update(originalTabId, { active: true }); } catch {}
     }
     throw err;
@@ -1623,7 +1715,7 @@ async function cmdNotify(params) {
   const id = await chrome.notifications.create({
     type: 'basic',
     iconUrl: params.iconUrl || 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">✦</text></svg>',
-    title: params.title || 'ChatUI',
+    title: params.title || 'Tofu',
     message: params.message || '',
     priority: params.priority || 0,
   });

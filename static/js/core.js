@@ -215,7 +215,22 @@ async function _migratePinnedToFolder() {
   renderConversationList();
   console.info('[Folders] Migrated %d pinned conversations to "⭐ 置顶" folder', pinnedConvs.length);
 }
-let activeConvId = sessionStorage.getItem('chatui_activeConvId') || null,
+// Migrate legacy sessionStorage keys (chatui_* → tofu_*) once per page load.
+// Keeps users who reload during the rename rollout from losing their active conv.
+(function _migrateLegacyStorageKeys() {
+  try {
+    const _legacyMap = { 'chatui_activeConvId': 'tofu_activeConvId' };
+    for (const [legacy, canonical] of Object.entries(_legacyMap)) {
+      const v = sessionStorage.getItem(legacy);
+      if (v != null && sessionStorage.getItem(canonical) == null) {
+        sessionStorage.setItem(canonical, v);
+        sessionStorage.removeItem(legacy);
+      }
+    }
+  } catch (_e) { /* sessionStorage may be disabled — no-op */ }
+})();
+
+let activeConvId = sessionStorage.getItem('tofu_activeConvId') || null,
   activeStreams = new Map(),
   streamBufs = new Map(),
   pendingImages = [],
@@ -285,7 +300,7 @@ let config = JSON.parse(
       maxTokens: 128000,
       thinkingBudget: 64000,
       thinkingEffort: "medium",
-      imageMaxWidth: 1024,
+      imageMaxWidth: 0,           // 0 = follow server upload-shrink policy (recommended)
       systemPrompt: "",
       model: serverModel,
     }),
@@ -316,6 +331,12 @@ delete config.effort; // clean up legacy key
 delete config.preset; // clean up — no longer used
 if (!config.defaultThinkingDepth) config.defaultThinkingDepth = 'off';  // ★ always set — no downstream || 'medium' needed
 if (!config.thinkingDepth) config.thinkingDepth = config.defaultThinkingDepth;
+// ★ Migrate legacy hardcoded imageMaxWidth=1024 (the bug behind the "uploaded
+// images are blurry" complaint). Old default was 1024+JPEG q=0.85, more
+// aggressive than the backend's 2048+q=0.90 — so the client always won and
+// the backend's better policy never applied. Now: 0 = follow server policy.
+// Users who *intentionally* set a tighter cap keep their value.
+if (config.imageMaxWidth === 1024) config.imageMaxWidth = 0;
 // Auto-translate: send Chinese→English to LLM, show bilingual
 let autoTranslate = JSON.parse(
   localStorage.getItem("claude_auto_translate") || "true",
@@ -443,8 +464,15 @@ const _doubaoPricing = { input: 4.0, output: 16.0 };
 /* ★ Unified pricing lookup by model_id — replaces the old per-preset branches.
  * Looks up MODEL_PRICING (loaded from server), falls back to pricingData. */
 let _modelPricingCache = null;  // populated by loadPricing or /api/server-config
+/* ★ Per-provider pricing overrides — { providerId: { modelId: {input, output, ...} } }.
+ * When a message records a provider_id (set by dispatch), pricing for that
+ * exact (provider, model) pair is preferred over the global MODEL_PRICING
+ * table. Same model_id may sit on multiple gateways at different prices
+ * (e.g. kimi-k2.6 on Moonshot direct vs Tencent TokenHub) — provider scoping
+ * stops one entry from silently mis-billing the other. */
+let _providerPricingCache = null;
 
-function calcCostCny(usage, modelOrPreset) {
+function calcCostCny(usage, modelOrPreset, providerId) {
   if (!usage) return null;
   /* Resolve legacy preset keys to model_id for backward compat */
   let modelId = modelOrPreset || '';
@@ -476,9 +504,16 @@ function calcCostCny(usage, modelOrPreset) {
     };
   }
 
-  /* ★ Generic USD pricing — look up from MODEL_PRICING cache or pricingData */
+  /* ★ Generic USD pricing — provider override wins over global cache. */
   let baseIn, outP, cwMul = 1.25, crMul = 0.10;
-  const mp = _modelPricingCache && _modelPricingCache[modelId];
+  let mp = null;
+  if (providerId && _providerPricingCache
+      && _providerPricingCache[providerId]
+      && _providerPricingCache[providerId][modelId]) {
+    mp = _providerPricingCache[providerId][modelId];
+  } else if (_modelPricingCache) {
+    mp = _modelPricingCache[modelId];
+  }
   if (mp) {
     baseIn = mp.input || 0;
     outP = mp.output || 0;
@@ -551,7 +586,7 @@ function calcConversationCost(conv) {
   const convModel = conv.model || conv.preset || conv.effort || serverModel;
   for (const m of conv.messages) {
     if (m.usage) {
-      const c = calcCostCny(m.usage, m.model || m.preset || m.effort || convModel);
+      const c = calcCostCny(m.usage, m.model || m.preset || m.effort || convModel, m.provider_id || m.providerId);
       if (c) {
         tc += c.costCny;
         tu += c.costUsd;
@@ -1180,6 +1215,8 @@ document.addEventListener("visibilitychange", () => {
           content: buf.content,
           toolRounds: buf.toolRounds,
           phase: buf.phase,
+          _memoryPrefetch: buf._memoryPrefetch,
+          _mcpLoginHint: buf._mcpLoginHint,
         });
         scrollToBottom();
       }
@@ -1903,6 +1940,18 @@ async function loadConversationMessages(convId) {
       conv._serverMsgCount = Math.max(cached.messages.length, conv._serverMsgCount || 0);
       conv._cachedUpdatedAt = cached.updatedAt || 0;
       cacheHit = true;
+      // ★ Re-attach compaction markers (lazy, fire-and-forget) so the
+      //   inline chips reappear after page reload. The viewer module
+      //   handles missing gracefully if not yet loaded.
+      try {
+        if (typeof attachCompactionMarkersToConversation === 'function') {
+          attachCompactionMarkersToConversation(convId, conv.messages).then(() => {
+            if (convId === activeConvId && typeof renderChat === 'function') {
+              renderChat(conv, false);
+            }
+          }).catch(e => console.debug('[compaction] attach (cache) failed:', e));
+        }
+      } catch (e) { console.debug('[compaction] attach (cache) hook error:', e); }
       console.info(`[loadConvMsgs] ⚡ CACHE HIT conv=${convId.slice(0,8)}: ${cached.messages.length} msgs (cachedAt=${new Date(cached.cachedAt).toISOString()})`);
       /* Hydrate images from cache (URLs only, base64 stripped) */
       _hydrateImageBase64(conv);
@@ -2139,6 +2188,19 @@ async function loadConversationMessages(convId) {
 
       /* ★ Update IndexedDB cache with authoritative server data */
       ConvCache.put(conv);
+
+      /* ★ Re-attach compaction markers from transcript_archive — see
+       *    static/js/compaction-viewer.js. Fire-and-forget; the viewer
+       *    will trigger a re-render once markers are populated. */
+      try {
+        if (typeof attachCompactionMarkersToConversation === 'function') {
+          attachCompactionMarkersToConversation(convId, conv.messages).then(() => {
+            if (convId === activeConvId && typeof renderChat === 'function') {
+              renderChat(conv, false);
+            }
+          }).catch(e => console.debug('[compaction] attach (server) failed:', e));
+        }
+      } catch (e) { console.debug('[compaction] attach (server) hook error:', e); }
 
       /* ★ Clear stale "server_offline" errors: if the last assistant message
        *   has finishReason='server_offline' but we just successfully loaded
@@ -3166,6 +3228,8 @@ function _twFlush() {
         content: buf.content,
         toolRounds: buf.toolRounds,
         phase: buf.phase,
+        _memoryPrefetch: buf._memoryPrefetch,
+        _mcpLoginHint: buf._mcpLoginHint,
       });
   }
 }

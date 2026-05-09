@@ -12,7 +12,10 @@ from lib.tasks_pkg.executor import (
     _resolve_content_ref,
     tool_registry,
 )
-from lib.tasks_pkg.handlers.code_exec import _make_stdin_callback
+from lib.tasks_pkg.handlers.code_exec import (
+    _make_run_command_progress_cb,
+    _make_stdin_callback,
+)
 from lib.tools import PROJECT_TOOL_NAMES, build_project_tool_meta
 
 logger = get_logger(__name__)
@@ -56,11 +59,29 @@ def _handle_project_tool(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg
     if fn_name == 'read_files' and not project_path:
         tool_content = execute_tool(fn_name, fn_args, '.', conv_id=task['convId'], task_id=task['id'])
     else:
-        _stdin_cb = _make_stdin_callback(task, rn, round_entry, fn_args.get('command', '')) if fn_name == 'run_command' else None
-        _extra_kw = {'stdin_callback': _stdin_cb} if _stdin_cb else {}
+        _progress_cb = None
+        _extra_kw = {}
         if fn_name == 'run_command':
-            _extra_kw['task'] = task  # enable cooperative abort of subprocesses
-        tool_content = execute_tool(fn_name, fn_args, project_path, conv_id=task['convId'], task_id=task['id'], **_extra_kw) if project_path else 'Error: No project path.'
+            _cmd = fn_args.get('command', '') or ''
+            _stdin_cb = _make_stdin_callback(task, rn, round_entry, _cmd)
+            _progress_cb = _make_run_command_progress_cb(task, rn, round_entry, _cmd)
+            _extra_kw = {
+                'stdin_callback': _stdin_cb,
+                'on_chunk': _progress_cb,
+                'task': task,  # enable cooperative abort of subprocesses
+            }
+        try:
+            tool_content = (execute_tool(fn_name, fn_args, project_path,
+                                         conv_id=task['convId'], task_id=task['id'],
+                                         **_extra_kw)
+                            if project_path else 'Error: No project path.')
+        finally:
+            # Flush any buffered run_command output tail.
+            if _progress_cb is not None:
+                try:
+                    _progress_cb.flush()
+                except Exception as e:
+                    logger.debug('[run_command] progress flush failed: %s', e)
 
     # read_files with absolute image paths returns a batch dict with __batch_images__
     is_batch_image = isinstance(tool_content, dict) and tool_content.get('__batch_images__')

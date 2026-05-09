@@ -4,9 +4,14 @@ Tracks daily request outcomes per (provider_id, key_name) pair and automatically
 disables a key for the rest of the day when it proves unhealthy
 (attempts ≥ MIN_ATTEMPTS and success rate < MIN_SUCCESS_RATE).
 
-Users can also manually toggle a key for the day via the Settings UI
+Users can also manually toggle a key via the Settings UI
 (routes/key_stats_routes). Manual overrides take precedence over auto-disable
-and are reset the following day.
+and PERSIST across day rollovers and process restarts — they are only
+cleared when the user explicitly removes the override (toggles back to
+"auto") via :func:`clear_key_override`. The automatic daily reset applies
+to stats (success/failure/429 counters, the ``exhausted`` flag) but NOT to
+manual overrides, so a key the user disabled yesterday stays disabled
+today.
 
 Rate-limit errors (HTTP 429) are tracked separately because provider 429
 messages are ambiguous — the SAME error body can mean "RPM overrun, retry in
@@ -38,6 +43,9 @@ Persistence:
       "providerId::key_name": true   # true = enabled, false = disabled
     }
   }
+
+  ``overrides`` is **not** scoped to the stored ``day`` — it carries over
+  across day rollovers so manual decisions survive restarts.
 
 Thread-safe. Reads happen on the dispatcher hot path, so an in-memory snapshot
 is kept and only persisted on writes.
@@ -89,7 +97,8 @@ _lock = threading.Lock()
 _cache = {
     'day': '',        # YYYY-MM-DD of currently loaded data
     'stats': {},      # {pair_key: {'success': int, 'failure': int, 'last_error': str}}
-    'overrides': {},  # {pair_key: bool}  # explicit user overrides for today
+    'overrides': {},  # {pair_key: bool}  # explicit user overrides (PERSISTENT
+                      # across day rollovers and restarts)
     'loaded': False,
 }
 
@@ -134,7 +143,7 @@ def _list_siblings(provider_id: str) -> list:
     enumerates ``LLM_API_KEYS`` under the ``'default'`` provider.
 
     Scope = same *provider_id* only.  Cross-provider "last key" counting is
-    deliberately incorrect (a YourProvider key shouldn't be kept alive just because
+    deliberately incorrect (a Meituan key shouldn't be kept alive just because
     the user also has an OpenAI key).
     """
     now = time.monotonic()
@@ -195,19 +204,28 @@ def _load_unlocked():
         data = {}
 
     stored_day = data.get('day') or ''
+    # Manual overrides PERSIST across day rollovers (and process restarts).
+    # Only the daily stats (counters + exhausted flag) reset.
+    persisted_overrides = data.get('overrides') or {}
     if stored_day != today:
-        # Day has rolled over — reset stats and overrides.
-        logger.info('[KeyStats] Day rollover %s -> %s — resetting stats/overrides',
-                    stored_day or '(none)', today)
+        # Day has rolled over — reset stats but KEEP overrides so a key
+        # the user manually disabled yesterday stays disabled today.
+        logger.info(
+            '[KeyStats] Day rollover %s -> %s — resetting stats '
+            '(preserving %d manual override(s))',
+            stored_day or '(none)', today, len(persisted_overrides))
         _cache['day'] = today
         _cache['stats'] = {}
-        _cache['overrides'] = {}
+        _cache['overrides'] = persisted_overrides
         # Reset the "logged once per day" set on rollover.
         _last_resort_logged.clear()
+        # Persist immediately so the on-disk `day` field advances even if
+        # no stats get written today.
+        _save_unlocked()
     else:
         _cache['day'] = stored_day
         _cache['stats'] = data.get('stats') or {}
-        _cache['overrides'] = data.get('overrides') or {}
+        _cache['overrides'] = persisted_overrides
     _cache['loaded'] = True
 
 
@@ -229,17 +247,25 @@ def _save_unlocked():
 
 
 def _ensure_fresh_unlocked():
-    """Make sure cache is loaded and reset if the calendar day has changed."""
+    """Make sure cache is loaded and reset if the calendar day has changed.
+
+    Stats (counters + ``exhausted`` flag) reset at each calendar-day
+    boundary, but manual overrides are PERSISTENT — a key the user
+    explicitly disabled (or enabled) stays that way until they clear
+    the override via the Settings UI.
+    """
     if not _cache['loaded']:
         _load_unlocked()
         return
     today = _today()
     if _cache['day'] != today:
-        logger.info('[KeyStats] Day rollover (in-memory) %s -> %s',
-                    _cache['day'], today)
+        logger.info(
+            '[KeyStats] Day rollover (in-memory) %s -> %s '
+            '(preserving %d manual override(s))',
+            _cache['day'], today, len(_cache.get('overrides') or {}))
         _cache['day'] = today
         _cache['stats'] = {}
-        _cache['overrides'] = {}
+        # DO NOT touch _cache['overrides'] — manual decisions persist.
         _last_resort_logged.clear()
         _save_unlocked()
 
@@ -662,7 +688,12 @@ def get_all_stats() -> dict:
 
 
 def set_key_override(provider_id: str, key_name: str, enabled: bool) -> dict:
-    """Explicit user override for today. Returns the updated stats row.
+    """Explicit, PERSISTENT user override. Returns the updated stats row.
+
+    The override is written to ``data/config/key_stats.json`` and survives
+    day rollovers and process restarts — a key manually disabled today
+    stays disabled until the user explicitly clears the override via
+    :func:`clear_key_override`.
 
     When a user explicitly re-enables a key (enabled=True), we also clear
     the exhausted flag and reset consecutive_429 — otherwise the counter

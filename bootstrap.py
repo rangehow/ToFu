@@ -41,6 +41,61 @@ import urllib.request
 # ══════════════════════════════════════════════════════════
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+# ══════════════════════════════════════════════════════════
+#  Auto-activate Tofu's conda env via .tofu_env.json marker
+# ══════════════════════════════════════════════════════════
+# Mirror of the guard at the top of server.py — runs BEFORE we touch any
+# pip / conda / subprocess logic so the rest of bootstrap.py operates
+# inside the right interpreter (so subprocess [sys.executable, 'server.py']
+# correctly inherits the env's python).
+def _tofu_maybe_reexec_into_env():
+    if os.environ.get('_TOFU_ENV_REEXEC') == '1':
+        return
+    marker = os.path.join(BASE_DIR, '.tofu_env.json')
+    if not os.path.isfile(marker):
+        return
+    try:
+        with open(marker, 'r', encoding='utf-8') as f:
+            cfg = json.load(f)
+    except Exception as e:
+        sys.stderr.write(
+            f'[bootstrap.py] Could not read .tofu_env.json ({e}) — '
+            f'continuing with current python.\n')
+        return
+    target_py = cfg.get('python') or ''
+    env_prefix = cfg.get('env_prefix') or ''
+    if not target_py or not os.access(target_py, os.X_OK):
+        return
+    try:
+        same = os.path.realpath(target_py) == os.path.realpath(sys.executable)
+    except OSError:
+        same = (target_py == sys.executable)
+    if same:
+        return
+    if env_prefix and os.path.isdir(env_prefix):
+        env_lib = os.path.join(env_prefix, 'lib')
+        if os.path.isdir(env_lib):
+            os.environ['LD_LIBRARY_PATH'] = (
+                env_lib + os.pathsep + os.environ.get('LD_LIBRARY_PATH', ''))
+        env_bin = os.path.join(env_prefix, 'bin')
+        if os.path.isdir(env_bin):
+            os.environ['PATH'] = env_bin + os.pathsep + os.environ.get('PATH', '')
+        os.environ.setdefault('CONDA_PREFIX', env_prefix)
+    if cfg.get('env_name'):
+        os.environ.setdefault('CONDA_DEFAULT_ENV', cfg['env_name'])
+    os.environ['_TOFU_ENV_REEXEC'] = '1'
+    sys.stderr.write(f'[bootstrap.py] Re-exec into Tofu env python: {target_py}\n')
+    sys.stderr.flush()
+    try:
+        os.execv(target_py, [target_py, *sys.argv])
+    except OSError as e:
+        sys.stderr.write(f'[bootstrap.py] os.execv failed: {e}\n')
+        os.environ.pop('_TOFU_ENV_REEXEC', None)
+
+
+_tofu_maybe_reexec_into_env()
 MAX_REPAIR_ROUNDS = 10       # give up after this many install→retry cycles
 PIP_TIMEOUT = 300            # per-package install timeout
 # Packages that should never be auto-installed (security / system-level)
@@ -48,6 +103,156 @@ _INSTALL_BLOCKLIST = frozenset({
     'python', 'python3', 'gcc', 'g++', 'make', 'cmake', 'apt', 'yum',
     'brew', 'sudo', 'pip', 'setuptools', 'wheel',
 })
+
+
+# ══════════════════════════════════════════════════════════
+#  Provider templates — reused from Settings UI
+# ══════════════════════════════════════════════════════════
+# The canonical list in static/js/settings.js is ~200 providers and far
+# too large to inline here. We ship a curated subset of the most common
+# public providers so the bootstrap "Configure API" flow has a usable
+# picker even when NO static/provider_templates/*.json file exists.
+#
+# At runtime we ALSO merge in static/provider_templates/*.json (same
+# mechanism as the main Settings UI) so corp-gateway templates like
+# meituan.json automatically appear in the bootstrap picker too.
+#
+# Keep this list short + curated — the goal is unblocking installation,
+# not replicating all of Settings.
+_BUILTIN_PROVIDER_TEMPLATES = [
+    {'key': 'openai', 'brand': 'openai', 'category': 'official',
+     'name': 'OpenAI',
+     'base_url': 'https://api.openai.com/v1',
+     'models': [
+         {'model_id': 'gpt-5.4',      'capabilities': ['text', 'vision', 'thinking']},
+         {'model_id': 'gpt-5.4-mini', 'capabilities': ['text', 'vision', 'thinking', 'cheap']},
+         {'model_id': 'gpt-5.4-nano', 'capabilities': ['text', 'vision', 'cheap']},
+         {'model_id': 'o3',           'capabilities': ['text', 'vision', 'thinking']},
+         {'model_id': 'o4-mini',      'capabilities': ['text', 'vision', 'thinking', 'cheap']},
+         {'model_id': 'gpt-4.1',      'capabilities': ['text', 'vision']},
+         {'model_id': 'gpt-4.1-mini', 'capabilities': ['text', 'vision', 'cheap']},
+     ]},
+    {'key': 'anthropic', 'brand': 'claude', 'category': 'official',
+     'name': 'Anthropic',
+     'base_url': 'https://api.anthropic.com/v1',
+     'models': [
+         {'model_id': 'claude-opus-4-7',   'capabilities': ['text', 'vision', 'thinking']},
+         {'model_id': 'claude-sonnet-4-6', 'capabilities': ['text', 'vision', 'thinking']},
+         {'model_id': 'claude-haiku-4-5',  'capabilities': ['text', 'vision', 'cheap']},
+     ]},
+    {'key': 'deepseek', 'brand': 'deepseek', 'category': 'official',
+     'name': 'DeepSeek',
+     'base_url': 'https://api.deepseek.com',
+     'models': [
+         {'model_id': 'deepseek-v4-pro',   'capabilities': ['text', 'thinking', 'cheap']},
+         {'model_id': 'deepseek-v4-flash', 'capabilities': ['text', 'thinking', 'cheap']},
+         {'model_id': 'deepseek-chat',     'capabilities': ['text', 'cheap']},
+         {'model_id': 'deepseek-reasoner', 'capabilities': ['text', 'thinking', 'cheap']},
+     ]},
+    {'key': 'glm', 'brand': 'glm', 'category': 'official',
+     'name': 'GLM (Zhipu AI)',
+     'base_url': 'https://open.bigmodel.cn/api/paas/v4',
+     'models': [
+         {'model_id': 'glm-5.1',       'capabilities': ['text', 'thinking']},
+         {'model_id': 'glm-4.7',       'capabilities': ['text', 'thinking', 'cheap']},
+         {'model_id': 'glm-4.5-flash', 'capabilities': ['text', 'cheap']},
+     ]},
+    {'key': 'kimi', 'brand': 'kimi', 'category': 'official',
+     'name': 'Moonshot (Kimi)',
+     'base_url': 'https://api.moonshot.ai/v1',
+     'models': [
+         {'model_id': 'kimi-k2.6',        'capabilities': ['text', 'vision', 'thinking', 'cheap']},
+         {'model_id': 'kimi-k2-thinking', 'capabilities': ['text', 'thinking', 'cheap']},
+     ]},
+    {'key': 'qwen', 'brand': 'qwen', 'category': 'official',
+     'name': 'Qwen (DashScope)',
+     'base_url': 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+     'models': [
+         {'model_id': 'qwen3-max',     'capabilities': ['text', 'thinking', 'cheap']},
+         {'model_id': 'qwen-plus',     'capabilities': ['text', 'thinking', 'cheap']},
+         {'model_id': 'qwen-flash',    'capabilities': ['text', 'cheap']},
+     ]},
+    {'key': 'gemini', 'brand': 'gemini', 'category': 'official',
+     'name': 'Google Gemini',
+     'base_url': 'https://generativelanguage.googleapis.com/v1beta/openai',
+     'models': [
+         {'model_id': 'gemini-3.1-pro-preview',        'capabilities': ['text', 'vision', 'thinking']},
+         {'model_id': 'gemini-2.5-pro',                 'capabilities': ['text', 'vision', 'thinking', 'cheap']},
+         {'model_id': 'gemini-2.5-flash',               'capabilities': ['text', 'vision', 'cheap']},
+         {'model_id': 'gemini-3.1-flash-lite-preview',  'capabilities': ['text', 'cheap']},
+     ]},
+    {'key': 'xai', 'brand': 'grok', 'category': 'official',
+     'name': 'xAI (Grok)',
+     'base_url': 'https://api.x.ai/v1',
+     'models': [
+         {'model_id': 'grok-4.20',     'capabilities': ['text', 'vision', 'thinking', 'cheap']},
+         {'model_id': 'grok-4.1-mini', 'capabilities': ['text', 'vision', 'cheap']},
+     ]},
+    {'key': 'doubao', 'brand': 'doubao', 'category': 'official',
+     'name': 'Doubao (Volcengine)',
+     'base_url': 'https://ark.cn-beijing.volces.com/api/v3',
+     'models': [
+         {'model_id': 'doubao-seed-2-0-pro-260215',  'capabilities': ['text', 'vision', 'thinking', 'cheap']},
+         {'model_id': 'doubao-seed-2-0-lite-260215', 'capabilities': ['text', 'cheap']},
+     ]},
+    {'key': 'bedrock', 'brand': 'bedrock', 'category': 'official',
+     'name': 'Amazon Bedrock (OpenAI-compat)',
+     'base_url': 'https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1',
+     'models': [
+         {'model_id': 'us.anthropic.claude-opus-4-7-v1:0',   'capabilities': ['text', 'vision', 'thinking']},
+         {'model_id': 'us.anthropic.claude-sonnet-4-6-v1:0', 'capabilities': ['text', 'vision', 'thinking']},
+         {'model_id': 'us.anthropic.claude-haiku-4-5-v1:0',  'capabilities': ['text', 'vision', 'cheap']},
+     ]},
+    {'key': 'openrouter', 'brand': 'openrouter', 'category': 'relay',
+     'name': 'OpenRouter',
+     'base_url': 'https://openrouter.ai/api/v1',
+     'models': [
+         {'model_id': 'anthropic/claude-sonnet-4.6',    'capabilities': ['text', 'vision', 'thinking']},
+         {'model_id': 'openai/gpt-5.4',                 'capabilities': ['text', 'vision', 'thinking']},
+         {'model_id': 'google/gemini-3.1-pro-preview',  'capabilities': ['text', 'vision', 'thinking', 'cheap']},
+         {'model_id': 'deepseek/deepseek-chat',         'capabilities': ['text', 'cheap']},
+     ]},
+    {'key': 'custom', 'brand': 'custom', 'category': 'custom',
+     'name': 'Custom (OpenAI-compatible)',
+     'base_url': '',
+     'models': [
+         {'model_id': '', 'capabilities': ['text']},
+     ]},
+]
+
+
+def _load_provider_templates() -> list:
+    """Return builtin templates merged with static/provider_templates/*.json.
+
+    Extras from disk override builtins on key conflict (so e.g. meituan.json
+    replaces an inline stub of the same key). Called on every HTTP request
+    so freshly-dropped template files appear without a restart.
+    """
+    out: list = [dict(t) for t in _BUILTIN_PROVIDER_TEMPLATES]
+    extras_dir = os.path.join(BASE_DIR, 'static', 'provider_templates')
+    if not os.path.isdir(extras_dir):
+        return out
+    seen = {t['key']: i for i, t in enumerate(out)}
+    for fname in sorted(os.listdir(extras_dir)):
+        if not fname.endswith('.json'):
+            continue
+        fpath = os.path.join(extras_dir, fname)
+        try:
+            with open(fpath, 'r', encoding='utf-8') as f:
+                tpl = json.load(f)
+        except Exception as e:
+            sys.stderr.write(
+                f'[bootstrap] Could not read template {fname}: {e}\n')
+            continue
+        if not (isinstance(tpl, dict) and tpl.get('key') and tpl.get('models')):
+            continue
+        key = tpl['key']
+        if key in seen:
+            out[seen[key]] = tpl   # override builtin
+        else:
+            out.append(tpl)
+            seen[key] = len(out) - 1
+    return out
 
 
 def _load_dotenv() -> None:
@@ -250,6 +455,7 @@ _CONDA_PYTHON_DEPS = [
     'pillow>=10.0',
     'python-pptx>=0.6.21',
     'lxml>=5.3',
+    'lxml_html_clean>=0.4',
     'mcp>=1.0',
 ]
 
@@ -641,7 +847,7 @@ _STATUS_HTML = r"""<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ChatUI — Starting…</title>
+<title>Tofu — Starting…</title>
 <style>
   :root {
     --bg: #1a1b26; --surface: #24283b; --border: #414868;
@@ -784,7 +990,7 @@ _STATUS_HTML = r"""<!DOCTYPE html>
 </style>
 </head>
 <body>
-  <h1>🔧 ChatUI — Dependency Repair</h1>
+  <h1>🔧 Tofu — Dependency Repair</h1>
   <p class="subtitle">Automatically installing missing packages…</p>
   <div id="badge" class="badge running"><span class="spinner"></span> Working…</div>
   <div id="round-info" class="round-info"></div>
@@ -798,27 +1004,28 @@ _STATUS_HTML = r"""<!DOCTYPE html>
   <div class="api-config-panel">
     <h2>🔑 Configure API Access</h2>
     <p class="hint">
-      ChatUI needs an LLM API key to function. Enter your API credentials below.
-      This will save to your <code>.env</code> file and restart the server.
+      Tofu needs an LLM API key to function. Pick a provider, choose a model,
+      and paste your API key — the values will be saved to your
+      <code>.env</code> and the server will restart.
     </p>
 
-    <div class="provider-templates">
-      <span class="provider-tpl active" onclick="_selectTemplate('openai')">OpenAI</span>
-      <span class="provider-tpl" onclick="_selectTemplate('anthropic')">Anthropic</span>
-      <span class="provider-tpl" onclick="_selectTemplate('bedrock')">Bedrock</span>
-      <span class="provider-tpl" onclick="_selectTemplate('deepseek')">DeepSeek</span>
-      <span class="provider-tpl" onclick="_selectTemplate('openrouter')">OpenRouter</span>
-      <span class="provider-tpl" onclick="_selectTemplate('custom')">Custom</span>
+    <label>Provider</label>
+    <div class="provider-templates" id="providerTemplates">
+      <span class="provider-tpl" style="opacity:0.6">Loading…</span>
     </div>
+
+    <label for="cfgModel">Model</label>
+    <select id="cfgModel" style="margin-bottom:6px;"></select>
+    <div style="display:flex; align-items:center; gap:6px; margin-bottom:6px;">
+      <input type="text" id="cfgModelCustom" placeholder="…or type a custom model id"
+             style="flex:1;">
+    </div>
+
+    <label for="cfgBaseUrl">Base URL</label>
+    <input type="text" id="cfgBaseUrl" placeholder="https://api.openai.com/v1">
 
     <label for="cfgApiKey">API Key <span style="color:var(--red)">*</span></label>
     <input type="password" id="cfgApiKey" placeholder="sk-…" autocomplete="off">
-
-    <label for="cfgBaseUrl">Base URL</label>
-    <input type="text" id="cfgBaseUrl" value="https://api.openai.com/v1" placeholder="https://api.openai.com/v1">
-
-    <label for="cfgModel">Model</label>
-    <input type="text" id="cfgModel" value="gpt-4.1-mini" placeholder="gpt-4.1-mini">
 
     <div class="btn-row">
       <button class="btn-primary" onclick="_saveApiConfig()">💾 Save & Restart</button>
@@ -865,32 +1072,101 @@ function appendLog(text, cls) {
   log.scrollTop = log.scrollHeight;
 }
 
-// ── Provider template presets ──
-const _TEMPLATES = {
-  openai:     { url: 'https://api.openai.com/v1',   model: 'gpt-5.4' },
-  anthropic:  { url: 'https://api.anthropic.com/v1', model: 'claude-opus-4-7' },
-  bedrock:    { url: 'https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1', model: 'us.anthropic.claude-opus-4-7-v1:0' },
-  deepseek:   { url: 'https://api.deepseek.com/v1',  model: 'deepseek-v4-flash' },
-  openrouter: { url: 'https://openrouter.ai/api/v1', model: 'anthropic/claude-sonnet-4.6' },
-  custom:     { url: '',                              model: '' },
-};
-function _selectTemplate(name) {
-  const t = _TEMPLATES[name] || _TEMPLATES.custom;
-  document.getElementById('cfgBaseUrl').value = t.url;
-  document.getElementById('cfgModel').value = t.model;
-  document.querySelectorAll('.provider-tpl').forEach(el => {
-    el.classList.toggle('active', el.textContent.toLowerCase().replace(/\s/g,'') === name);
+// ── Provider templates (fetched from /bootstrap/provider-templates,
+//    which merges bootstrap's builtin list with static/provider_templates/*.json) ──
+let _providerTemplates = [];
+let _currentTplKey = '';
+
+async function _loadProviderTemplates() {
+  try {
+    const r = await fetch('/bootstrap/provider-templates',
+                          { signal: AbortSignal.timeout(5000) });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    _providerTemplates = await r.json();
+  } catch (e) {
+    // Fallback minimal list (should never be hit — the endpoint has a
+    // hardcoded builtin list in the Python side).
+    _providerTemplates = [
+      { key: 'openai',   name: 'OpenAI',   base_url: 'https://api.openai.com/v1',
+        models: [{ model_id: 'gpt-5.4-mini' }] },
+      { key: 'custom',   name: 'Custom',   base_url: '',
+        models: [{ model_id: '' }] },
+    ];
+  }
+  _renderProviderTemplates();
+}
+
+function _renderProviderTemplates() {
+  const container = document.getElementById('providerTemplates');
+  container.innerHTML = '';
+  _providerTemplates.forEach(function(tpl) {
+    const span = document.createElement('span');
+    span.className = 'provider-tpl';
+    span.textContent = tpl.name || tpl.key;
+    span.onclick = function() { _selectTemplate(tpl.key); };
+    span.dataset.key = tpl.key;
+    container.appendChild(span);
+  });
+  // Pick a sensible default
+  const prefer = ['openai', 'anthropic', 'deepseek', 'openrouter', 'custom'];
+  let defaultKey = '';
+  for (const k of prefer) {
+    if (_providerTemplates.find(t => t.key === k)) { defaultKey = k; break; }
+  }
+  if (!defaultKey && _providerTemplates.length) defaultKey = _providerTemplates[0].key;
+  if (defaultKey) _selectTemplate(defaultKey);
+}
+
+function _selectTemplate(key) {
+  const tpl = _providerTemplates.find(t => t.key === key);
+  if (!tpl) return;
+  _currentTplKey = key;
+  document.getElementById('cfgBaseUrl').value = tpl.base_url || '';
+  // Populate model dropdown
+  const sel = document.getElementById('cfgModel');
+  sel.innerHTML = '';
+  const models = (tpl.models || []).filter(m => m && m.model_id);
+  models.forEach(function(m) {
+    const opt = document.createElement('option');
+    opt.value = m.model_id;
+    // Show capability hints where useful
+    const caps = Array.isArray(m.capabilities) ? m.capabilities : [];
+    const flags = [];
+    if (caps.indexOf('thinking') >= 0) flags.push('🧠');
+    if (caps.indexOf('vision')   >= 0) flags.push('👁');
+    if (caps.indexOf('cheap')    >= 0) flags.push('💰');
+    opt.textContent = m.model_id + (flags.length ? '  ' + flags.join('') : '');
+    sel.appendChild(opt);
+  });
+  // Default to a cheap text model when available (users rarely want vision /
+  // image-gen for bootstrap diagnosis; a cheap model keeps diagnosis cost tiny).
+  let defaultIdx = 0;
+  for (let i = 0; i < models.length; i++) {
+    const caps = models[i].capabilities || [];
+    if (caps.indexOf('cheap') >= 0 && caps.indexOf('image_gen') < 0 &&
+        caps.indexOf('embedding') < 0) { defaultIdx = i; break; }
+  }
+  if (sel.options.length > 0) sel.selectedIndex = defaultIdx;
+  document.getElementById('cfgModelCustom').value = '';
+  // Highlight active card
+  document.querySelectorAll('#providerTemplates .provider-tpl').forEach(el => {
+    el.classList.toggle('active', el.dataset.key === key);
   });
 }
+
 function _showApiConfig() {
   document.getElementById('apiConfigOverlay').classList.add('visible');
+  // Lazy-load templates on first open
+  if (_providerTemplates.length === 0) _loadProviderTemplates();
   // Auto-focus the API key field
   setTimeout(() => document.getElementById('cfgApiKey').focus(), 300);
 }
 function _saveApiConfig() {
   const key = document.getElementById('cfgApiKey').value.trim();
   const url = document.getElementById('cfgBaseUrl').value.trim();
-  const model = document.getElementById('cfgModel').value.trim();
+  const customModel = document.getElementById('cfgModelCustom').value.trim();
+  const dropdownModel = document.getElementById('cfgModel').value.trim();
+  const model = customModel || dropdownModel;
   const status = document.getElementById('cfgStatus');
   if (!key) {
     status.textContent = '❌ API Key is required';
@@ -995,7 +1271,7 @@ es.onerror = () => {
   if (_finished) return;
   // SSE disconnected — status server shut down to free port for server.py.
   // Poll until *some* server binds the port again: either the bootstrap
-  // status server (next repair round) or the real ChatUI server.
+  // status server (next repair round) or the real Tofu server.
   es.close();
   badge.className = 'badge running';
   const _startTime = Date.now();
@@ -1021,17 +1297,17 @@ es.onerror = () => {
     }
     fetch('/', { signal: AbortSignal.timeout(3000) }).then(async r => {
       if (!r.ok) return;
-      // VS Code proxy fix: verify this is a real ChatUI response, not a
-      // stale proxy page or VS Code error page.  The real ChatUI and the
+      // VS Code proxy fix: verify this is a real Tofu response, not a
+      // stale proxy page or VS Code error page.  The real Tofu and the
       // bootstrap status page both return text/html — but we check for a
-      // ChatUI-specific marker to avoid reload loops with proxy pages.
+      // Tofu-specific marker to avoid reload loops with proxy pages.
       try {
         const text = await r.text();
-        const isChatUI = text.includes('ChatUI') || text.includes('Tofu')
+        const isTofu = text.includes('Tofu') || text.includes('ChatUI')
                        || text.includes('bootstrap/events');
-        if (isChatUI) {
+        if (isTofu) {
           clearInterval(poll);
-          // If we were handing off and got the real ChatUI, show success briefly
+          // If we were handing off and got the real Tofu, show success briefly
           if (_handingOff && !text.includes('bootstrap/events')) {
             badge.className = 'badge success';
             badge.textContent = '✅ Server ready — redirecting…';
@@ -1071,9 +1347,20 @@ class _BootstrapHandler(http.server.BaseHTTPRequestHandler):
             self._serve_html()
         elif self.path == '/bootstrap/events':
             self._serve_sse()
+        elif self.path == '/bootstrap/provider-templates':
+            self._serve_provider_templates()
         else:
             # Any other path → serve the status page (user might hit /trading.html etc.)
             self._serve_html()
+
+    def _serve_provider_templates(self):
+        """Serve merged provider template list for the API config form."""
+        try:
+            templates = _load_provider_templates()
+        except Exception as e:
+            sys.stderr.write(f'[bootstrap] _load_provider_templates failed: {e}\n')
+            templates = []
+        self._json_response(templates)
 
     def do_POST(self):
         if self.path == '/bootstrap/save-config':
@@ -1286,7 +1573,8 @@ def _try_start_server(first_attempt: bool = False) -> tuple[bool, str, int]:
     This function only returns to the caller when server.py **crashed**.
     """
     env = os.environ.copy()
-    env['_CHATUI_VIA_BOOTSTRAP'] = '1'   # prevent server.py → bootstrap.py re-delegation loop
+    env['_TOFU_VIA_BOOTSTRAP'] = '1'      # prevent server.py → bootstrap.py re-delegation loop
+    env['_CHATUI_VIA_BOOTSTRAP'] = '1'    # legacy alias for older server.py
     proc = subprocess.Popen(
         [sys.executable, os.path.join(BASE_DIR, 'server.py')],
         stdout=sys.stdout,     # always forward stdout transparently
@@ -1522,7 +1810,7 @@ def main():
             print(f'[bootstrap] ⚠ Port {port} in use and no free port found '
                   f'in range {port+1}–{port+20}', file=sys.stderr)
 
-    print(f'[bootstrap] 🚀 Starting ChatUI (host={host}, port={port})…',
+    print(f'[bootstrap] 🚀 Starting Tofu (host={host}, port={port})…',
           file=sys.stderr)
 
     # ── First attempt (fast path — no status page) ──

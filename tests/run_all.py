@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Master test runner for ChatUI.
+"""Master test runner for Tofu.
 
 Usage:
     python tests/run_all.py                  # Run all tests
@@ -47,7 +47,7 @@ def _run_pytest(markers: list[str], extra_args: list[str] = None) -> int:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="ChatUI Test Runner")
+    parser = argparse.ArgumentParser(description="Tofu Test Runner")
     parser.add_argument("--unit", action="store_true", help="Run only unit tests")
     parser.add_argument("--api", action="store_true", help="Run only API tests")
     parser.add_argument("--visual", action="store_true", help="Run only visual E2E tests")
@@ -58,7 +58,7 @@ def main():
     parser.add_argument("-x", "--exitfirst", action="store_true", help="Stop on first failure")
     args = parser.parse_args()
 
-    _banner("ChatUI Test Suite")
+    _banner("Tofu Test Suite")
 
     start = time.time()
     exit_code = 0

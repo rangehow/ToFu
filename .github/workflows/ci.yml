@@ -129,3 +129,29 @@ jobs:
 
       - name: Run healthcheck
         run: python healthcheck.py
+
+  # ── Pricing-Tier Tag Drift Check ────────────────────────────
+  #
+  # Fails the build if any committed `capabilities` array under
+  # static/provider_templates/*.json or lib/llm_dispatch/config.py's
+  # DEFAULT_SLOT_CONFIGS disagrees with what reevaluate_pricing_tags()
+  # would compute from live MODEL_PRICING.  Run locally to fix:
+  #     python3 debug/reeval_pricing_tags.py
+  pricing-tags:
+    name: Pricing-Tier Tag Drift
+    runs-on: ubuntu-latest
+    needs: lint
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Check pricing-tier tags against MODEL_PRICING
+        run: python3 debug/reeval_pricing_tags.py --check

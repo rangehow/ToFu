@@ -739,7 +739,6 @@ CATALOG: list[CatalogEntry] = [
         'featured': True,
     },
 
-
     # ── AI & Reasoning ─────────────────────────────────────
 
     {

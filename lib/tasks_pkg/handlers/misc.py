@@ -33,6 +33,34 @@ def _handle_ask_human(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg, p
     question = fn_args.get('question', '')
     response_type = fn_args.get('response_type', 'free_text')
     options = fn_args.get('options', [])
+    # ★ Defensive: models sometimes return options as a JSON string, a dict,
+    #   or omit it entirely. Normalize to a list of dicts so the frontend's
+    #   options.map(…) call can never crash on a string/object.
+    if isinstance(options, str):
+        try:
+            import json as _json
+            options = _json.loads(options)
+        except (ValueError, TypeError) as _e:
+            logger.warning('[Executor] ask_human: options arrived as a '
+                           'non-JSON string, coercing to []: %s', _e)
+            options = []
+    if not isinstance(options, list):
+        logger.warning('[Executor] ask_human: options not a list '
+                       '(type=%s), coercing to []',
+                       type(options).__name__)
+        options = []
+    # Normalise each option to a dict so the frontend receives a
+    # uniform shape even if the model emitted bare strings.
+    _norm_opts = []
+    for _o in options:
+        if isinstance(_o, dict):
+            _norm_opts.append(_o)
+        elif isinstance(_o, str):
+            _norm_opts.append({'label': _o})
+        else:
+            logger.debug('[Executor] ask_human: dropping non-dict/str '
+                         'option of type=%s', type(_o).__name__)
+    options = _norm_opts
 
     if not question:
         logger.warning('[Executor] ask_human called with empty question, task=%s',
@@ -83,10 +111,23 @@ def _handle_ask_human(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg, p
                     'guidance_id=%s, response_len=%d, task=%s',
                     guidance_id, len(user_response), task.get('id', '?')[:8])
 
+    # ★ No title/snippet truncation: the user specifically flagged that
+    #   "incomplete displays are not allowed" — the original 80-char title
+    #   and 120-char snippet caps were producing cut-off question text
+    #   ending mid-word (e.g. "…exercise t"). Pass the full strings; the
+    #   frontend renderer already word-wraps. We only need a soft upper
+    #   bound so a pathological 100 KB prompt doesn't bloat every SSE
+    #   event — cap at 2000 chars with an ellipsis for safety, which is
+    #   well above any legitimate ask_human question.
+    _FULL_LIMIT = 2000
+    def _clip(s):
+        if not s:
+            return s
+        return s if len(s) <= _FULL_LIMIT else s[:_FULL_LIMIT - 1] + '…'
     meta = _build_simple_meta(
         fn_name, tool_content, source='HumanGuidance',
-        title=f'🙋 {question[:80]}',
-        snippet=(user_response or 'No response')[:120],
+        title=f'🙋 {_clip(question)}',
+        snippet=_clip(user_response or 'No response'),
         badge='✅ answered' if user_response else '⛔ aborted',
         extra={
             'guidanceId': guidance_id,
@@ -119,7 +160,7 @@ def _run_desktop(fn_name, fn_args):
     cmd_type = fn_name.replace('desktop_', '', 1)
     result, error = send_desktop_command(cmd_type, fn_args, timeout=30)
     if error:
-        return f'❌ Desktop Agent Error: {error}'
+        return f'Desktop Agent Error: {error}'
     return format_desktop_result(cmd_type, result)
 
 

@@ -29,7 +29,11 @@ def build_project_tool_meta(fn_name, fn_args, tool_content):
 # ──────────────────────────────────────────────────────────
 
 def _build_read_files(meta, fn_name, fn_args, tool_content, path):
-    reads = fn_args.get('reads', [])
+    reads = fn_args.get('reads')
+    if reads is None and 'path' in fn_args:
+        reads = [fn_args]  # flat-args compat (DeepSeek etc.)
+    if not reads:
+        reads = []
     n_files = len(reads) if reads else 1
     if n_files <= 1:
         first = reads[0] if reads else None
@@ -98,9 +102,15 @@ def _build_grep_search(meta, fn_name, fn_args, tool_content, path):
     meta['badge'] = f'{n} matches'
 
 
+_DIR_LINE_RE = re.compile(r'^  (?P<name>[^/\n]+)/ \(\d', re.MULTILINE)
+_FILE_LINE_RE = re.compile(r'^  (?P<name>[^/\n]+[^/]) \((?:\d+L, )?\d', re.MULTILINE)
+
+
 def _build_list_dir(meta, fn_name, fn_args, tool_content, path):
-    nd = tool_content.count('📁')
-    nf = tool_content.count('📄')
+    # Count listed entries by parsing the plain-text output: directories
+    # have a trailing slash before the `(N items)` suffix; files don't.
+    nd = len(_DIR_LINE_RE.findall(tool_content))
+    nf = len(_FILE_LINE_RE.findall(tool_content))
     meta['snippet'] = f'{path or "."}  {nd} dirs, {nf} files'
     meta['badge'] = f'{nd + nf} items'
 
@@ -127,9 +137,12 @@ def _build_find_files(meta, fn_name, fn_args, tool_content, path):
 
 def _build_write_file(meta, fn_name, fn_args, tool_content, path):
     desc = fn_args.get('description', '')
-    ok = '✅' in tool_content
+    # Success lines start with "File created:" / "File updated:";
+    # failures start with "Write failed:" or "write_file:" (bad path).
+    low = tool_content.lower()
+    ok = low.startswith('file created') or low.startswith('file updated')
     meta['snippet'] = f'{path}' + (f'  {desc}' if desc else '')
-    meta['badge'] = ('created' if ok and 'created' in tool_content.lower()
+    meta['badge'] = ('created' if ok and 'created' in low
                      else ('updated' if ok else 'failed'))
     meta['writeOk'] = ok
 
@@ -148,7 +161,7 @@ def _build_apply_diff(meta, fn_name, fn_args, tool_content, path):
         meta['writeOk'] = ok_n == total_n
     else:
         desc = fn_args.get('description', '')
-        ok = '✅' in tool_content
+        ok = tool_content.lower().startswith('applied diff')
         meta['snippet'] = f'{path}' + (f'  {desc}' if desc else '')
         meta['badge'] = 'patched' if ok else 'failed'
         meta['writeOk'] = ok
@@ -159,7 +172,7 @@ def _build_run_command(meta, fn_name, fn_args, tool_content, path):
     # ★ Must anchor to END — command output may itself contain [exit code: N]
     m = re.search(r'\[exit code: (-?\d+)\]\s*$', tool_content)
     exit_code = m.group(1) if m else '?'
-    timed_out = '⏰' in tool_content
+    timed_out = '[Command timed out]' in tool_content
     prefix = f'$ {cmd}\n'
     if tool_content.startswith(prefix):
         output_text = tool_content[len(prefix):]
@@ -167,20 +180,20 @@ def _build_run_command(meta, fn_name, fn_args, tool_content, path):
         output_lines = tool_content.split('\n', 1)
         output_text = output_lines[1] if len(output_lines) > 1 else ''
     output_text = re.sub(r'\n?\[exit code: -?\d+\]\s*$', '', output_text).strip()
-    output_text = re.sub(r'\n?⏰ Command timed out.*$', '', output_text).strip()
+    output_text = re.sub(r'\n?\[Command timed out\].*$', '', output_text).strip()
     meta['command'] = cmd
     meta['output'] = output_text
     meta['exitCode'] = 'timeout' if timed_out else exit_code
     meta['timedOut'] = timed_out
     if timed_out:
         meta['snippet'] = f'$ {cmd[:120]}'
-        meta['badge'] = '⏰ timeout'
+        meta['badge'] = 'timeout'
     elif exit_code == '0':
         meta['snippet'] = f'$ {cmd[:120]}'
-        meta['badge'] = '✓ done'
+        meta['badge'] = 'done'
     else:
         meta['snippet'] = f'$ {cmd[:120]}'
-        meta['badge'] = f'✗ exit {exit_code}'
+        meta['badge'] = f'exit {exit_code}'
 
 
 
@@ -203,7 +216,7 @@ def _build_insert_content(meta, fn_name, fn_args, tool_content, path):
         meta['writeOk'] = ok_n == total_n
     else:
         desc = fn_args.get('description', '')
-        ok = '✅' in tool_content
+        ok = tool_content.lower().startswith('inserted ')
         position = fn_args.get('position', 'after')
         meta['snippet'] = f'{path} ({position})' + (f'  {desc}' if desc else '')
         meta['badge'] = 'inserted' if ok else 'failed'
@@ -211,7 +224,7 @@ def _build_insert_content(meta, fn_name, fn_args, tool_content, path):
 
 
 def _build_create_project(meta, fn_name, fn_args, tool_content, path):
-    ok = '✅' in tool_content
+    ok = not tool_content.lower().startswith('create_project failed')
     p = fn_args.get('path', '') or path
     name = fn_args.get('name', '')
     if ok:

@@ -349,13 +349,19 @@ def _sync_endpoint_turns_to_conversation(task, endpoint_turns):
 
     This function writes the full multi-turn structure to the DB so it
     survives SSE disconnects, page reloads, and poll fallback recovery.
+
+    Returns the absolute index in the DB ``messages`` array of the LAST
+    appended endpoint turn (i.e. ``endpoint_turns[-1]``), or ``None`` if
+    the sync was skipped or failed.  Callers use this to schedule
+    per-turn auto-translation right after each turn lands, instead of
+    waiting for the end-of-task safety net.
     """
     conv_id = task.get('convId', '')
     tid = task['id'][:8]
     pfx = f'[EndpointSync {tid}]'
 
     if not endpoint_turns:
-        return
+        return None
 
     try:
         db = get_thread_db(DOMAIN_CHAT)
@@ -365,17 +371,17 @@ def _sync_endpoint_turns_to_conversation(task, endpoint_turns):
         ).fetchone()
         if not row:
             logger.warning('%s conv=%s Conversation not found — cannot sync endpoint turns', pfx, conv_id)
-            return
+            return None
 
         try:
             messages = json.loads(row[0] or '[]')
         except (json.JSONDecodeError, TypeError):
             logger.error('%s conv=%s Failed to parse messages JSON', pfx, conv_id, exc_info=True)
-            return
+            return None
 
         if not messages:
             logger.warning('%s conv=%s Conversation has 0 messages — cannot sync', pfx, conv_id)
-            return
+            return None
 
         # Find where the original conversation ends and endpoint turns begin.
         original_end = 0
@@ -433,14 +439,75 @@ def _sync_endpoint_turns_to_conversation(task, endpoint_turns):
                     '(base=%d + endpoint=%d = %d total msgs)',
                     pfx, conv_id, len(endpoint_turns),
                     len(base_messages), len(endpoint_turns), len(new_messages))
+        return len(new_messages) - 1
     except Exception as e:
         logger.error('%s conv=%s ❌ Failed to sync endpoint turns: %s',
                      pfx, conv_id, e, exc_info=True)
+        return None
 
 
 def _store_endpoint_turns_on_task(task, endpoint_turns):
     """Store the endpoint turns snapshot on the task dict for poll access."""
     task['_endpoint_turns'] = list(endpoint_turns)
+
+
+def _trigger_per_turn_auto_translate(task, turn_msg, msg_idx):
+    """Kick off auto-translation for a single endpoint turn that just landed
+    in the conversation.  Lets translations run in parallel with the next
+    LLM phase (pipelined), instead of all firing serially at the end.
+
+    The end-of-task safety net (``_trigger_endpoint_auto_translate``) still
+    runs and dedups against any translate task already in-flight here — so
+    a turn that misses this hook (e.g. exception, missing msg_idx) will
+    still get translated at the end.
+
+    Parameters
+    ----------
+    task : dict
+        Endpoint task dict (needs ``convId``).
+    turn_msg : dict
+        The endpoint turn message that was just appended.
+    msg_idx : int | None
+        Absolute DB index returned by ``_sync_endpoint_turns_to_conversation``.
+        If ``None`` the call is a no-op (sync failed; safety net will retry).
+    """
+    if msg_idx is None:
+        return
+    conv_id = task.get('convId', '')
+    if not conv_id:
+        return
+    content = turn_msg.get('content') or ''
+    if not content:
+        return
+    role = turn_msg.get('role')
+    is_critic = bool(turn_msg.get('_isEndpointReview')) and role == 'user'
+    is_planner_or_worker = role == 'assistant' and (
+        turn_msg.get('_isEndpointPlanner') or turn_msg.get('_epIteration')
+    )
+    if not (is_critic or is_planner_or_worker):
+        return
+
+    try:
+        from lib.tasks_pkg.manager import (
+            _maybe_auto_translate_assistant,
+            _maybe_auto_translate_critic,
+        )
+    except Exception as e:
+        logger.warning('[Endpoint:PerTurnTranslate] task=%s conv=%s '
+                       'helper import failed: %s',
+                       task.get('id', '?')[:8], conv_id[:8], e)
+        return
+
+    try:
+        db = get_thread_db(DOMAIN_CHAT)
+        if is_critic:
+            _maybe_auto_translate_critic(conv_id, content, msg_idx, db)
+        else:
+            _maybe_auto_translate_assistant(conv_id, content, msg_idx, db)
+    except Exception as e:
+        logger.warning('[Endpoint:PerTurnTranslate] task=%s conv=%s msg=%s '
+                       'failed (non-fatal, safety net will retry): %s',
+                       task.get('id', '?')[:8], conv_id[:8], msg_idx, e)
 
 
 def _trigger_endpoint_auto_translate(task, endpoint_turns):
@@ -682,7 +749,8 @@ def run_endpoint_task(task):
 
         # ── Sync to DB after planner ──
         _store_endpoint_turns_on_task(task, endpoint_turns)
-        _sync_endpoint_turns_to_conversation(task, endpoint_turns)
+        _planner_idx = _sync_endpoint_turns_to_conversation(task, endpoint_turns)
+        _trigger_per_turn_auto_translate(task, planner_turn_msg, _planner_idx)
 
         if task.get('aborted'):
             stop_reason = 'aborted'
@@ -703,8 +771,9 @@ def run_endpoint_task(task):
         #   user(original) → planner(assistant) → agent → critic → …
         # But the LLM working messages are:
         #   system → user(planner_content)
-        # The inject_search_addendum_to_user naturally adds timestamps to
-        # the last user message (now the planner-replaced one).
+        # inject_search_addendum_to_user is now a no-op (timestamps moved
+        # to the static system block as date-only) — kept only to strip
+        # legacy 'Current date and time:' lines from resumed conversations.
 
         if planner_content:
             # Rebuild messages: keep system messages, replace the last user
@@ -832,7 +901,8 @@ def run_endpoint_task(task):
 
             # ── Sync to DB after worker turn ──
             _store_endpoint_turns_on_task(task, endpoint_turns)
-            _sync_endpoint_turns_to_conversation(task, endpoint_turns)
+            _worker_idx = _sync_endpoint_turns_to_conversation(task, endpoint_turns)
+            _trigger_per_turn_auto_translate(task, worker_turn_msg, _worker_idx)
 
             if turn_error:
                 logger.warning('[Endpoint] Worker turn %d error: %s',
@@ -899,7 +969,8 @@ def run_endpoint_task(task):
                     'synthetic': True,
                 })
                 _store_endpoint_turns_on_task(task, endpoint_turns)
-                _sync_endpoint_turns_to_conversation(task, endpoint_turns)
+                _synth_idx = _sync_endpoint_turns_to_conversation(task, endpoint_turns)
+                _trigger_per_turn_auto_translate(task, critic_turn_msg, _synth_idx)
 
                 messages.append({
                     'role': 'user',
@@ -1000,7 +1071,8 @@ def run_endpoint_task(task):
 
             # ── Sync to DB after critic review ──
             _store_endpoint_turns_on_task(task, endpoint_turns)
-            _sync_endpoint_turns_to_conversation(task, endpoint_turns)
+            _critic_idx = _sync_endpoint_turns_to_conversation(task, endpoint_turns)
+            _trigger_per_turn_auto_translate(task, critic_turn_msg, _critic_idx)
 
             # ══════════════════════════════════════════════════
             #  Three-way branch on critic verdict
@@ -1129,7 +1201,8 @@ def run_endpoint_task(task):
 
                     # Sync new planner turn to DB
                     _store_endpoint_turns_on_task(task, endpoint_turns)
-                    _sync_endpoint_turns_to_conversation(task, endpoint_turns)
+                    _replan_idx = _sync_endpoint_turns_to_conversation(task, endpoint_turns)
+                    _trigger_per_turn_auto_translate(task, new_planner_turn_msg, _replan_idx)
 
                     # Reset the worker context under the NEW plan, but
                     # carry over a compact progress summary so the worker
@@ -1373,7 +1446,7 @@ def run_task_sync(config: dict, *, timeout: float = 600) -> str:
         task['aborted'] = True
         logger.error('[run_task_sync] Task %s timed out after %.0fs',
                      task['id'][:8], timeout)
-        return f'❌ Task timed out after {timeout:.0f}s'
+        return f'Task timed out after {timeout:.0f}s'
 
     content = result_box[0] if result_box else task.get('content', '')
     if task.get('error'):

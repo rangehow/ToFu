@@ -44,16 +44,34 @@ _BACKEND = 'sqlite'  # default, upgraded to 'pg' below if possible
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# SQLite path (used as fallback)
+# SQLite path (used as fallback). Default file is now ``data/tofu.db``;
+# legacy ``data/chatui.db`` is auto-picked up if present (see below).
+from lib.env_compat import getenv_compat  # noqa: E402
+
 _DB_DIR = os.path.join(BASE_DIR, 'data')
-DB_PATH = os.environ.get('CHATUI_DB_PATH', os.path.join(_DB_DIR, 'chatui.db'))
+_DEFAULT_DB_FILE = os.path.join(_DB_DIR, 'tofu.db')
+_LEGACY_DB_FILE = os.path.join(_DB_DIR, 'chatui.db')
+_explicit_db_path = getenv_compat('TOFU_DB_PATH', 'CHATUI_DB_PATH', default='')
+if _explicit_db_path:
+    DB_PATH = _explicit_db_path
+elif (not os.path.exists(_DEFAULT_DB_FILE)) and os.path.exists(_LEGACY_DB_FILE):
+    # Backward compat: existing installs have data/chatui.db. Keep using it
+    # in place — don't move/rename underneath the user (could break a
+    # running PG cluster's metadata path on some FUSE setups).
+    DB_PATH = _LEGACY_DB_FILE
+else:
+    DB_PATH = _DEFAULT_DB_FILE
 
 # PostgreSQL config
-PG_HOST = os.environ.get('CHATUI_PG_HOST', '127.0.0.1')
-PG_PORT = int(os.environ.get('CHATUI_PG_PORT', '15432'))
-PG_DBNAME = os.environ.get('CHATUI_PG_DBNAME', 'chatui')
-PG_USER = os.environ.get('CHATUI_PG_USER', '')
-PG_PASSWORD = os.environ.get('CHATUI_PG_PASSWORD', '')
+PG_HOST = getenv_compat('TOFU_PG_HOST', 'CHATUI_PG_HOST', default='127.0.0.1')
+PG_PORT = int(getenv_compat('TOFU_PG_PORT', 'CHATUI_PG_PORT', default='15432'))
+# Default DB name stays 'chatui' for now — renaming the live PG database
+# requires a manual migration (CREATE DATABASE tofu + pg_dump|restore) and
+# we don't want to silently make existing deployments lose their data.
+# New users get DB name 'chatui' by default; set TOFU_PG_DBNAME to override.
+PG_DBNAME = getenv_compat('TOFU_PG_DBNAME', 'CHATUI_PG_DBNAME', default='chatui')
+PG_USER = getenv_compat('TOFU_PG_USER', 'CHATUI_PG_USER', default='')
+PG_PASSWORD = getenv_compat('TOFU_PG_PASSWORD', 'CHATUI_PG_PASSWORD', default='')
 
 PG_DSN = f"host={PG_HOST} port={PG_PORT} dbname={PG_DBNAME}"
 if PG_USER:
@@ -82,30 +100,164 @@ _MAX_CONN_AGE_S = 600
 
 # Maximum total application-side connections (semaphore-guarded)
 # Tunable via env vars for high-concurrency deployments (1000+ users)
-_MAX_TOTAL_CONNS = int(os.environ.get('CHATUI_DB_MAX_CONNS', '200'))
-_CONN_ACQUIRE_TIMEOUT_S = int(os.environ.get('CHATUI_DB_ACQUIRE_TIMEOUT', '30'))
+_MAX_TOTAL_CONNS = int(getenv_compat('TOFU_DB_MAX_CONNS', 'CHATUI_DB_MAX_CONNS', default='200'))
+_CONN_ACQUIRE_TIMEOUT_S = int(getenv_compat('TOFU_DB_ACQUIRE_TIMEOUT', 'CHATUI_DB_ACQUIRE_TIMEOUT', default='30'))
 _conn_semaphore = threading.BoundedSemaphore(_MAX_TOTAL_CONNS)
 _conn_count = 0
 _conn_count_lock = threading.Lock()
 
 # ── PG self-heal / auto-rebootstrap state ──
-# When the locally-owned PG crashes silently (symptom: psycopg2
-# OperationalError "Connection refused"), try to re-run
-# ``_ensure_pg_running`` ONCE and retry the connect. Multiple concurrent
-# refused connections are coalesced behind this lock/cooldown so we
-# don't stampede ``pg_ctl start``. Override via
+# When the locally-owned PG crashes silently (symptoms below), try to
+# re-run ``_ensure_pg_running`` ONCE and retry the connect. Multiple
+# concurrent broken connections are coalesced behind this lock/cooldown
+# so we don't stampede ``pg_ctl start``. Override via
 # ``CHATUI_PG_REBOOT_COOLDOWN_S`` env var.
-_PG_REBOOT_COOLDOWN_S = int(os.environ.get('CHATUI_PG_REBOOT_COOLDOWN_S', '60'))
+#
+# Recognised "PG is dead / needs a restart" error signatures:
+#
+#   1. "Connection refused"
+#      Postmaster is completely dead (crash, OOM-kill, host reboot).
+#      Historical case — fixed 2026-04-24.
+#
+#   2. "could not open shared memory segment"  /  "No space left on device"
+#      accompanied by "/PostgreSQL.\d+" path.
+#      Postmaster is ALIVE and TCP-accepts, but every new backend child
+#      FATALs during startup because /dev/shm/PostgreSQL.* has been
+#      wiped (common in containerised deployments where the container's
+#      /dev/shm is cleaned or the container was paused/checkpointed).
+#      Symptom: pg_isready says OK, but every real query raises FATAL.
+#      Recovery: force-stop the zombie postmaster, then start fresh.
+#
+# _PG_DEAD_SIGNATURES lists substrings; any match triggers self-heal.
+# _PG_ZOMBIE_SIGNATURES is the subset that needs a force-stop BEFORE
+# re-ensuring (because the postmaster is still listening on TCP and
+# would otherwise be silently reused by _ensure_pg_running).
+_PG_DEAD_SIGNATURES = (
+    'Connection refused',
+    'could not open shared memory segment',  # /dev/shm wiped
+    'server closed the connection unexpectedly',
+)
+_PG_ZOMBIE_SIGNATURES = (
+    'could not open shared memory segment',
+)
+
+_PG_REBOOT_COOLDOWN_S = int(getenv_compat('TOFU_PG_REBOOT_COOLDOWN_S', 'CHATUI_PG_REBOOT_COOLDOWN_S', default='60'))
+# Exponential backoff: consecutive FAILED reboot attempts escalate the
+# cooldown so a persistent issue (e.g. WAL corruption, another host
+# stomping on our pgdata) doesn't spam pg_ctl start / postgresql.log
+# forever. Resets to 1x on a successful reboot.
+_PG_REBOOT_BACKOFF_MULTIPLIERS = (1, 5, 30, 30)  # 1x, 5x, 30x, 30x+ of base
 _pg_reboot_lock = threading.Lock()
 _last_pg_reboot_attempt_ts = 0.0  # monotonic seconds; 0 = never
+_pg_consecutive_failed_reboots = 0
 
 
-def _maybe_reboot_pg(reason):
+def _pg_error_is_dead(err_txt):
+    """Return True if err_txt matches any known "PG is dead" signature."""
+    if not err_txt:
+        return False
+    return any(sig in err_txt for sig in _PG_DEAD_SIGNATURES)
+
+
+def _pg_error_is_zombie(err_txt):
+    """Return True if err_txt indicates PG is TCP-alive but FATALing queries."""
+    if not err_txt:
+        return False
+    return any(sig in err_txt for sig in _PG_ZOMBIE_SIGNATURES)
+
+
+def _force_stop_zombie_pg():
+    """Force-stop the local postmaster so a fresh one can take over.
+
+    Used when the postmaster is TCP-alive but every backend FATALs on
+    startup (e.g. ``/dev/shm/PostgreSQL.*`` wiped). In that state
+    ``pg_isready`` still returns OK, so plain ``_ensure_pg_running``
+    would silently reuse the zombie. We must kill it first.
+
+    Tries in order:
+      1. ``pg_ctl stop -m immediate`` (clean but forceful)
+      2. Kill the PID from ``postmaster.pid`` directly
+      3. Remove the stale pidfile so the next start isn't blocked
+    """
+    try:
+        from lib.database._bootstrap import _find_pg_binary
+    except ImportError as e:
+        logger.debug('[DB] _find_pg_binary import failed: %s', e)
+        return
+    import subprocess
+    import signal
+    pgdata = _PGDATA
+    # 1. pg_ctl stop -m immediate
+    try:
+        result = subprocess.run(
+            [_find_pg_binary('pg_ctl'), '-D', pgdata, 'stop', '-m', 'immediate', '-w', '-t', '10'],
+            capture_output=True, text=True, timeout=15
+        )
+        if result.returncode == 0:
+            logger.info('[DB] Force-stopped zombie PG via pg_ctl -m immediate')
+            return
+        logger.warning('[DB] pg_ctl stop -m immediate returned rc=%d: %s',
+                       result.returncode, (result.stderr or '').strip()[:300])
+    except FileNotFoundError as e:
+        logger.warning('[DB] pg_ctl not found for zombie-stop: %s', e)
+    except Exception as e:
+        logger.warning('[DB] pg_ctl stop -m immediate failed: %s', e)
+
+    # 2. Fall back to signalling PID from postmaster.pid
+    pidfile = os.path.join(pgdata, 'postmaster.pid')
+    pid = None
+    try:
+        with open(pidfile) as f:
+            pid = int(f.readline().strip())
+    except FileNotFoundError:
+        logger.debug('[DB] No postmaster.pid — zombie PG likely already dead')
+    except Exception as e:
+        logger.warning('[DB] Could not read postmaster.pid for zombie-stop: %s', e)
+    if pid:
+        for sig_name, sig in (('SIGQUIT', signal.SIGQUIT), ('SIGKILL', signal.SIGKILL)):
+            try:
+                os.kill(pid, sig)
+                logger.info('[DB] Sent %s to zombie PG PID=%d', sig_name, pid)
+                time.sleep(1)
+                try:
+                    os.kill(pid, 0)  # still alive?
+                except ProcessLookupError:
+                    logger.info('[DB] Zombie PG PID=%d terminated (%s)', pid, sig_name)
+                    break
+            except ProcessLookupError:
+                logger.debug('[DB] Zombie PG PID=%d already gone', pid)
+                break
+            except PermissionError as e:
+                logger.warning('[DB] Cannot signal PID %d (permission): %s', pid, e)
+                break
+            except Exception as e:
+                logger.warning('[DB] kill(%d, %s) failed: %s', pid, sig_name, e)
+
+    # 3. Remove stale pidfile so _ensure_pg_running doesn't bail
+    try:
+        if os.path.exists(pidfile):
+            os.remove(pidfile)
+            logger.info('[DB] Removed stale postmaster.pid after zombie-stop')
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        logger.warning('[DB] Could not remove postmaster.pid after zombie-stop: %s', e)
+
+
+def _maybe_reboot_pg(reason, force_stop_first=False):
     """Attempt to re-bootstrap the locally-owned PG, guarded by a cooldown.
 
     Only does anything when:
       • Active backend is PG, AND
       • This process OWNS the local PG (started it or attached at import).
+
+    Args:
+        reason: short text (used in logs/audit).
+        force_stop_first: if True, stop the (possibly TCP-alive) zombie
+            postmaster before calling ``_ensure_pg_running``. Required
+            when the failure mode is "postmaster up but backends FATAL"
+            (e.g. missing shared memory segments) because otherwise
+            pg_isready would report OK and the bootstrap would no-op.
 
     Returns:
         True if a reboot attempt was made (whether it succeeded or not),
@@ -114,7 +266,7 @@ def _maybe_reboot_pg(reason):
     Concurrent callers are serialised; only the first one within a
     ``_PG_REBOOT_COOLDOWN_S`` window performs the bootstrap call.
     """
-    global _last_pg_reboot_attempt_ts
+    global _last_pg_reboot_attempt_ts, _pg_consecutive_failed_reboots
     if _BACKEND != 'pg':
         return False
     try:
@@ -123,29 +275,53 @@ def _maybe_reboot_pg(reason):
         logger.debug('[DB] PG bootstrap module import failed during reboot: %s', e)
         return False
     if not is_pg_owned_locally():
-        logger.debug('[DB] Refused PG but not locally-owned — skipping self-heal')
+        logger.debug('[DB] Broken PG but not locally-owned — skipping self-heal')
         return False
 
     now = time.monotonic()
     with _pg_reboot_lock:
+        # Compute current cooldown based on consecutive failed attempts.
+        # 0 failures → 1x base, 1 failure → 5x, 2 failures → 30x, etc.
+        # This keeps log/postgresql.log spam bounded when a deeper
+        # problem (e.g. WAL corruption, another host clobbering our
+        # pgdata) prevents PG from coming up.
+        idx = min(_pg_consecutive_failed_reboots,
+                  len(_PG_REBOOT_BACKOFF_MULTIPLIERS) - 1)
+        effective_cooldown = (_PG_REBOOT_COOLDOWN_S
+                              * _PG_REBOOT_BACKOFF_MULTIPLIERS[idx])
         # Re-check under the lock (double-checked locking pattern)
-        if (now - _last_pg_reboot_attempt_ts) < _PG_REBOOT_COOLDOWN_S:
+        if (now - _last_pg_reboot_attempt_ts) < effective_cooldown:
             logger.debug('[DB] PG self-heal suppressed by cooldown '
-                         '(%.1fs since last attempt, cooldown=%ds)',
+                         '(%.1fs since last attempt, cooldown=%ds, '
+                         'consecutive_failures=%d)',
                          now - _last_pg_reboot_attempt_ts,
-                         _PG_REBOOT_COOLDOWN_S)
+                         effective_cooldown,
+                         _pg_consecutive_failed_reboots)
             return False
         _last_pg_reboot_attempt_ts = now
 
         logger.error('[DB] PG appears dead (%s) — attempting re-bootstrap '
-                     'once (cooldown=%ds)', reason, _PG_REBOOT_COOLDOWN_S)
+                     'once (cooldown=%ds, force_stop=%s, prior_failures=%d)',
+                     reason, effective_cooldown, force_stop_first,
+                     _pg_consecutive_failed_reboots)
         try:
             from lib.log import audit_log as _audit
             _audit('pg_auto_restart', reason=str(reason)[:300],
-                   cooldown_s=_PG_REBOOT_COOLDOWN_S)
+                   cooldown_s=effective_cooldown,
+                   prior_failures=_pg_consecutive_failed_reboots,
+                   force_stop=bool(force_stop_first))
         except Exception as _audit_err:
             logger.debug('[DB] audit_log for pg_auto_restart failed: %s',
                          _audit_err)
+
+        # Zombie case: postmaster TCP-accepts but backends FATAL.
+        # Force-stop it so the subsequent _ensure_pg_running starts fresh.
+        if force_stop_first:
+            try:
+                _force_stop_zombie_pg()
+            except Exception as e:
+                logger.warning('[DB] force_stop_zombie_pg raised: %s', e, exc_info=True)
+
         try:
             from lib.database._bootstrap import _ensure_pg_running
             result = _ensure_pg_running(_PGDATA, BASE_DIR, PG_HOST, PG_PORT,
@@ -153,13 +329,54 @@ def _maybe_reboot_pg(reason):
             if result:
                 logger.info('[DB] PG re-bootstrap succeeded: host=%s port=%s',
                             result.get('PG_HOST'), result.get('PG_PORT'))
+                # Reset the failure counter so the next problem starts
+                # at the normal cooldown.
+                _pg_consecutive_failed_reboots = 0
+                # Also drain the pool — existing pooled connections point
+                # at the dead postmaster and would keep failing.
+                try:
+                    _drain_pg_pool()
+                except Exception as e:
+                    logger.debug('[DB] pool drain after reboot failed: %s', e)
             else:
+                _pg_consecutive_failed_reboots += 1
+                next_idx = min(_pg_consecutive_failed_reboots,
+                               len(_PG_REBOOT_BACKOFF_MULTIPLIERS) - 1)
                 logger.warning('[DB] PG re-bootstrap returned None — PG may '
-                               'still be down')
+                               'still be down (consecutive failures=%d, next '
+                               'attempt allowed in %ds)',
+                               _pg_consecutive_failed_reboots,
+                               _PG_REBOOT_COOLDOWN_S
+                               * _PG_REBOOT_BACKOFF_MULTIPLIERS[next_idx])
             return True
         except Exception as e:
-            logger.error('[DB] PG re-bootstrap raised: %s', e, exc_info=True)
+            _pg_consecutive_failed_reboots += 1
+            logger.error('[DB] PG re-bootstrap raised: %s '
+                         '(consecutive failures=%d)', e,
+                         _pg_consecutive_failed_reboots, exc_info=True)
             return True  # we did ATTEMPT — cooldown still applies
+
+
+def _drain_pg_pool():
+    """Close and discard all pooled PG connections.
+
+    Called after a successful PG re-bootstrap: pooled connections point
+    at the dead/replaced postmaster and would otherwise keep failing.
+    No-op on SQLite backend.
+    """
+    if _BACKEND != 'pg':
+        return
+    drained = 0
+    with _conn_pool_lock:
+        while _conn_pool:
+            c = _conn_pool.pop()
+            try:
+                c.close()
+            except Exception as e:
+                logger.debug('[DB] Error closing pooled conn during drain: %s', e)
+            drained += 1
+    if drained:
+        logger.info('[DB] Drained %d stale pooled connections after PG reboot', drained)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -355,12 +572,12 @@ strip_null_bytes_deep = _strip_null_bytes_noop
 # ═══════════════════════════════════════════════════════════════════════
 
 # SQLite busy timeout — higher values reduce "database is locked" under concurrency
-_BUSY_TIMEOUT_MS = int(os.environ.get('CHATUI_SQLITE_BUSY_TIMEOUT_MS', '30000'))
+_BUSY_TIMEOUT_MS = int(getenv_compat('TOFU_SQLITE_BUSY_TIMEOUT_MS', 'CHATUI_SQLITE_BUSY_TIMEOUT_MS', default='30000'))
 
 # SQLite connection pool (connections are cheap but file-handle churn adds up at 1000 users)
 _sqlite_pool = []
 _sqlite_pool_lock = threading.Lock()
-_SQLITE_POOL_MAX = int(os.environ.get('CHATUI_SQLITE_POOL_MAX', '20'))
+_SQLITE_POOL_MAX = int(getenv_compat('TOFU_SQLITE_POOL_MAX', 'CHATUI_SQLITE_POOL_MAX', default='20'))
 
 
 def _new_sqlite_connection():
@@ -399,7 +616,7 @@ def _new_pg_connection():
         raise RuntimeError(
             'PostgreSQL is not available (bootstrap failed). '
             'Install PostgreSQL (conda install -c conda-forge postgresql>=18) '
-            'or set CHATUI_PG_HOST / CHATUI_PG_PORT to an existing server.'
+            'or set TOFU_PG_HOST / TOFU_PG_PORT to an existing server.'
         )
 
     acquired = _conn_semaphore.acquire(timeout=_CONN_ACQUIRE_TIMEOUT_S)
@@ -413,13 +630,13 @@ def _new_pg_connection():
         logger.error('[DB] Connection semaphore timeout after %ds '
                      '(active=%d, max=%d, pooled=%d, tracked_threads=%d) '
                      '— probable connection leak or insufficient pool size. '
-                     'Tune via CHATUI_DB_MAX_CONNS env var (current=%d).',
+                     'Tune via TOFU_DB_MAX_CONNS env var (current=%d).',
                      _CONN_ACQUIRE_TIMEOUT_S, current, _MAX_TOTAL_CONNS,
                      pooled, tracked, _MAX_TOTAL_CONNS)
         raise RuntimeError(
             f'Database connection pool exhausted ({current}/{_MAX_TOTAL_CONNS} '
             f'connections in use, {pooled} pooled, {tracked} thread-tracked). '
-            f'Increase CHATUI_DB_MAX_CONNS (current={_MAX_TOTAL_CONNS}) or '
+            f'Increase TOFU_DB_MAX_CONNS (current={_MAX_TOTAL_CONNS}) or '
             f'check for unclosed thread-local connections.'
         )
 
@@ -446,7 +663,7 @@ def _new_pg_connection():
         keepalives_idle=_TCP_KEEPALIVES_IDLE_S,
         keepalives_interval=_TCP_KEEPALIVES_INTERVAL_S,
         keepalives_count=_TCP_KEEPALIVES_COUNT,
-        application_name='chatui',
+        application_name='tofu',
         gssencmode='disable',
     )
     try:
@@ -454,11 +671,15 @@ def _new_pg_connection():
             conn = psycopg2.connect(PG_DSN, **_connect_kwargs)
         except psycopg2.OperationalError as e:
             err_txt = str(e)
-            # Only self-heal on the "PG is dead" signature. Anything else
-            # (auth failure, bad host, etc.) re-raises immediately.
-            if 'Connection refused' not in err_txt:
+            # Self-heal on recognised "PG is dead" signatures. Anything
+            # else (auth failure, bad host, etc.) re-raises immediately.
+            if not _pg_error_is_dead(err_txt):
                 raise
-            attempted = _maybe_reboot_pg(err_txt[:200])
+            # Zombie postmaster (shm wiped) needs a force-stop first,
+            # otherwise pg_isready in _ensure_pg_running will report OK
+            # and the bootstrap will silently no-op.
+            is_zombie = _pg_error_is_zombie(err_txt)
+            attempted = _maybe_reboot_pg(err_txt[:200], force_stop_first=is_zombie)
             if not attempted:
                 # Cooldown suppressed reboot OR we don't own PG — re-raise.
                 raise
@@ -579,7 +800,7 @@ def _column_exists(conn, table, column):
 
 _conn_pool = []
 _conn_pool_lock = threading.Lock()
-_CONN_POOL_MAX = int(os.environ.get('CHATUI_DB_POOL_MAX', '50'))
+_CONN_POOL_MAX = int(getenv_compat('TOFU_DB_POOL_MAX', 'CHATUI_DB_POOL_MAX', default='50'))
 
 
 def _pool_get():
@@ -882,6 +1103,188 @@ def close_db(exception):
 #  Warmup
 # ═══════════════════════════════════════════════════════════════════════
 
+def heal_toast_corruption():
+    """Auto-heal TOAST-chunk corruption in the ``conversations`` table.
+
+    Background
+    ----------
+    When a PostgreSQL cluster is copied between machines (e.g. a naïve
+    ``rsync`` / ``tar`` of ``data/pgdata/`` via a FUSE mount) while the
+    source PG is live, the destination can end up with rows whose
+    out-of-line TOAST chunks were never flushed to the destination
+    filesystem.  Any SELECT over the affected row — and, crucially, any
+    INSERT whose index entry points at the missing chunk — fails with:
+
+        ERROR: missing chunk number 0 for toast value N in pg_toast_XXXXX
+
+    INSERTs time out after ``statement_timeout`` seconds (default 120 s),
+    which breaks the user's "Send" button (every ``PUT /api/conversations``
+    ends in 500).  ``export.py`` has been updated to use ``pg_dumpall``
+    instead of raw-copying pgdata/, so this bug should never appear on
+    fresh exports — but existing deployments that were seeded from a
+    hot-copy still carry the damage.  This function detects and repairs
+    it automatically on every startup so the user never notices.
+
+    Strategy
+    --------
+    1.  Probe the table with a fast ``COUNT(*)``.  On success → no
+        corruption, return quietly.
+    2.  On toast failure → iterate all conversation IDs (the id column
+        has no TOAST) and for each one probe a SELECT of the TOASTed
+        columns under a short statement_timeout.  Any row that errors
+        with "missing chunk" is unrecoverable.
+    3.  DELETE unrecoverable rows by id (deletes only touch the heap &
+        index, not the missing TOAST chunk → always succeed).
+    4.  ``VACUUM (FULL) conversations`` + ``REINDEX TABLE conversations``
+        to reclaim space and rebuild indexes free of dangling pointers.
+    5.  ``audit_log`` every deleted id + the summary stats.
+
+    PG-only; silent no-op on SQLite.
+    """
+    if _BACKEND != 'pg':
+        return
+    try:
+        from lib.log import audit_log  # local import — avoid circulars
+    except Exception:  # pragma: no cover
+        audit_log = None
+
+    conn = None
+    try:
+        conn = _new_connection()
+        cur = conn.cursor()
+        # Step 1 — fast health probe. If this succeeds, we're done.
+        try:
+            cur.execute('SELECT COUNT(*) FROM conversations')
+            cur.fetchone()
+            logger.debug('[DB:heal] conversations table is healthy — no TOAST corruption')
+            return
+        except Exception as probe_exc:
+            msg = str(probe_exc)
+            if 'missing chunk' not in msg and 'toast' not in msg.lower():
+                # Some other error — not our problem to fix here.
+                logger.debug('[DB:heal] health probe raised non-TOAST error: %s', probe_exc)
+                return
+            logger.warning('[DB:heal] TOAST corruption detected in conversations: %s — '
+                           'entering self-heal path', msg)
+            # Abort the failed transaction so we can issue new queries.
+            try:
+                conn.rollback()
+            except Exception as _e:
+                logger.debug('[DB:heal] rollback after probe failed: %s', _e)
+
+        # Step 2 — enumerate corrupt rows. Scan ids only (id column never TOASTs),
+        # then probe the TOASTed columns one row at a time under a short
+        # statement_timeout so a hang on a dead row can't stall startup.
+        ids_to_check = []
+        try:
+            cur.execute('SELECT id FROM conversations ORDER BY id')
+            ids_to_check = [row[0] for row in cur.fetchall()]
+        except Exception as e:
+            logger.error('[DB:heal] Could not enumerate conversation ids '
+                         '(very unusual): %s', e, exc_info=True)
+            try:
+                conn.rollback()
+            except Exception as _e:
+                logger.debug('[DB:heal] rollback after id scan failed: %s', _e)
+            return
+
+        logger.info('[DB:heal] Scanning %d conversations for TOAST corruption…',
+                    len(ids_to_check))
+        corrupt_ids = []
+        for cid in ids_to_check:
+            try:
+                cur.execute('SET LOCAL statement_timeout = 5000')  # 5 s
+                cur.execute('SELECT length(messages::text), length(settings::text) '
+                            'FROM conversations WHERE id = %s', (cid,))
+                cur.fetchone()
+                # No error → row is readable.
+                conn.commit()
+            except Exception as row_exc:
+                row_msg = str(row_exc)
+                try:
+                    conn.rollback()
+                except Exception as _e:
+                    logger.debug('[DB:heal] rollback after row probe failed: %s', _e)
+                if 'missing chunk' in row_msg or 'toast' in row_msg.lower():
+                    corrupt_ids.append(cid)
+                    logger.warning('[DB:heal] Corrupt conversation id=%s: %s', cid, row_msg)
+                else:
+                    # Unexpected error — log but don't delete the row.
+                    logger.debug('[DB:heal] Non-TOAST error probing id=%s: %s', cid, row_exc)
+
+        if not corrupt_ids:
+            logger.info('[DB:heal] No individually-corrupt rows found — '
+                        'global probe may have tripped on a transient issue, skipping heal')
+            return
+
+        # Step 3 — delete corrupt rows. DELETE touches the heap tuple + index
+        # entries only, never the missing TOAST chunk, so it always succeeds.
+        logger.warning('[DB:heal] Deleting %d unrecoverable conversations: %s',
+                       len(corrupt_ids), corrupt_ids[:10])
+        deleted = 0
+        for cid in corrupt_ids:
+            try:
+                cur.execute('DELETE FROM conversations WHERE id = %s', (cid,))
+                conn.commit()
+                deleted += 1
+                if audit_log is not None:
+                    try:
+                        audit_log('toast_corruption_heal_delete', conversation_id=cid)
+                    except Exception as _e:
+                        logger.debug('[DB:heal] audit_log failed: %s', _e)
+            except Exception as del_exc:
+                logger.error('[DB:heal] Could not delete corrupt id=%s: %s',
+                             cid, del_exc, exc_info=True)
+                try:
+                    conn.rollback()
+                except Exception as _e:
+                    logger.debug('[DB:heal] rollback after delete failed: %s', _e)
+
+        # Step 4 — reclaim space & rebuild indexes so future INSERTs don't
+        # get stuck on dangling index pointers into the vanished TOAST chunks.
+        # VACUUM FULL requires autocommit mode (no open transaction block),
+        # so we flip the underlying psycopg2 connection's autocommit flag.
+        raw = getattr(conn, 'raw', conn)  # unwrap PgConnection if present
+        prev_autocommit = getattr(raw, 'autocommit', False)
+        try:
+            raw.autocommit = True
+        except Exception as _e:
+            logger.debug('[DB:heal] set autocommit=True failed: %s', _e)
+        try:
+            logger.info('[DB:heal] VACUUM FULL conversations …')
+            cur.execute('VACUUM (FULL) conversations')
+        except Exception as vac_exc:
+            logger.warning('[DB:heal] VACUUM FULL failed: %s — '
+                           'continuing with REINDEX', vac_exc)
+        try:
+            logger.info('[DB:heal] REINDEX TABLE conversations …')
+            cur.execute('REINDEX TABLE conversations')
+        except Exception as rx_exc:
+            logger.warning('[DB:heal] REINDEX failed: %s', rx_exc)
+        try:
+            raw.autocommit = prev_autocommit
+        except Exception as _e:
+            logger.debug('[DB:heal] restore autocommit=%s failed: %s',
+                         prev_autocommit, _e)
+
+        logger.info('[DB:heal] Auto-heal complete: deleted %d corrupt rows, '
+                    'vacuumed+reindexed conversations', deleted)
+        if audit_log is not None:
+            try:
+                audit_log('toast_corruption_heal_complete',
+                          deleted=deleted, total_scanned=len(ids_to_check))
+            except Exception as _e:
+                logger.debug('[DB:heal] audit_log summary failed: %s', _e)
+    except Exception as e:
+        logger.error('[DB:heal] Unexpected failure during TOAST heal: %s', e, exc_info=True)
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception as _e:
+                logger.debug('[DB:heal] close failed: %s', _e)
+
+
 def warmup_db():
     """Verify database connectivity."""
     conn = None
@@ -948,7 +1351,8 @@ def stop_local_pg_if_owned():
     ``lib.database`` (e.g. agent-invoked ``python3 -c ...`` commands) never
     accidentally stop the PG server used by the long-running Flask app.
 
-    Controlled by env var ``CHATUI_STOP_PG_ON_EXIT`` (default ``1``):
+    Controlled by env var ``TOFU_STOP_PG_ON_EXIT`` (legacy:
+    ``CHATUI_STOP_PG_ON_EXIT``; default ``1``):
       - ``1`` / unset: stop local PG when server.py exits
       - ``0``: leave PG running (faster dev-restart cycles, but requires
         manual ``pg_ctl stop`` before switching hosts on shared FUSE pgdata)
@@ -957,19 +1361,34 @@ def stop_local_pg_if_owned():
     """
     if _BACKEND != 'pg':
         return
-    _stop_on_exit = os.environ.get('CHATUI_STOP_PG_ON_EXIT', '1').lower() \
+    _stop_on_exit = getenv_compat('TOFU_STOP_PG_ON_EXIT', 'CHATUI_STOP_PG_ON_EXIT',
+                                  default='1').lower() \
         not in ('0', 'false', 'no', 'off')
-    if not _stop_on_exit:
-        logger.info('[DB] CHATUI_STOP_PG_ON_EXIT=0 — leaving local PG running')
-        return
     try:
         from lib.database._bootstrap import (
             _stop_pg as _boot_stop_pg,
             is_pg_owned_locally,
+            stop_heartbeat,
         )
+    except Exception as e:
+        logger.warning('[DB] Failed to import shutdown helpers: %s', e)
+        return
+
+    if not _stop_on_exit:
+        # PG stays up, but the heartbeat must stop so other hosts on the
+        # same shared pgdata can safely take over if this process exits.
+        logger.info('[DB] TOFU_STOP_PG_ON_EXIT=0 — leaving local PG running, '
+                    'but clearing tofu heartbeat so peers can take over')
+        try:
+            stop_heartbeat(_PGDATA)
+        except Exception as e:
+            logger.warning('[DB] Failed to clear heartbeat on exit: %s', e)
+        return
+
+    try:
         if is_pg_owned_locally():
             logger.info('[DB] Stopping local PostgreSQL (we own it) — '
-                        'set CHATUI_STOP_PG_ON_EXIT=0 to keep it running '
+                        'set TOFU_STOP_PG_ON_EXIT=0 to keep it running '
                         'across server.py restarts')
             _boot_stop_pg(_PGDATA)
         else:
@@ -1000,7 +1419,7 @@ def init_db():
 # ═══════════════════════════════════════════════════════════════════════
 
 # Force SQLite via env var (for testing or explicit preference)
-_FORCE_SQLITE = os.environ.get('CHATUI_DB_BACKEND', '').lower() == 'sqlite'
+_FORCE_SQLITE = getenv_compat('TOFU_DB_BACKEND', 'CHATUI_DB_BACKEND', default='').lower() == 'sqlite'
 
 db_available = False
 pg_available = False
@@ -1010,7 +1429,7 @@ if _FORCE_SQLITE:
     _BACKEND = 'sqlite'
     db_available = True
     pg_available = False
-    logger.info('[DB] SQLite backend (forced via CHATUI_DB_BACKEND=sqlite): %s '
+    logger.info('[DB] SQLite backend (forced via TOFU_DB_BACKEND=sqlite): %s '
                 '(busy_timeout=%dms, pool_max=%d)',
                 DB_PATH, _BUSY_TIMEOUT_MS, _SQLITE_POOL_MAX)
 else:
@@ -1060,7 +1479,7 @@ else:
                         _MAX_TOTAL_CONNS, _CONN_POOL_MAX, _CONN_ACQUIRE_TIMEOUT_S)
             logger.info('[DB] PG self-heal active: _new_pg_connection retries '
                         'once via _ensure_pg_running on "Connection refused" '
-                        '(cooldown=%ds, env=CHATUI_PG_REBOOT_COOLDOWN_S)',
+                        '(cooldown=%ds, env=TOFU_PG_REBOOT_COOLDOWN_S)',
                         _PG_REBOOT_COOLDOWN_S)
 
             # Start the reaper daemon thread (PG only)

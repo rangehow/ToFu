@@ -39,38 +39,50 @@ def _disable_extended_ttl():
 class TestSystemPromptSections:
     """Verify Claude Code-inspired prompt sections exist and are well-formed."""
 
+    # The system_context._FUNCTION_RESULT_CLEARING_SECTION /
+    # _SUMMARIZE_TOOL_RESULTS_SECTION / _TOOL_USAGE_GUIDANCE /
+    # _OUTPUT_EFFICIENCY_GUIDANCE constants were removed when Layout B
+    # (the legacy chatui guidance block) was retired on 2026-05-07.
+    # The same content now lives in `system_prompt_cc.section_*` and
+    # is exercised by the integration tests below.
+
     def test_frc_section_exists(self):
-        from lib.tasks_pkg.system_context import _FUNCTION_RESULT_CLEARING_SECTION
-        assert 'Function Result Clearing' in _FUNCTION_RESULT_CLEARING_SECTION
-        assert 'cleared' in _FUNCTION_RESULT_CLEARING_SECTION.lower()
-        assert 'recent' in _FUNCTION_RESULT_CLEARING_SECTION.lower()
+        from lib.tasks_pkg.system_prompt_cc import section_function_result_clearing
+        section = section_function_result_clearing()
+        assert 'Function Result Clearing' in section
+        assert 'cleared' in section.lower()
+        assert 'recent' in section.lower()
 
     def test_frc_section_references_hot_tail_count(self):
         from lib.tasks_pkg.compaction import MICRO_HOT_TAIL
-        from lib.tasks_pkg.system_context import _FUNCTION_RESULT_CLEARING_SECTION
-        assert str(MICRO_HOT_TAIL) in _FUNCTION_RESULT_CLEARING_SECTION
+        from lib.tasks_pkg.system_prompt_cc import section_function_result_clearing
+        assert str(MICRO_HOT_TAIL) in section_function_result_clearing()
 
     def test_summarize_section_exists(self):
-        from lib.tasks_pkg.system_context import _SUMMARIZE_TOOL_RESULTS_SECTION
-        assert 'important information' in _SUMMARIZE_TOOL_RESULTS_SECTION.lower()
-        assert 'write down' in _SUMMARIZE_TOOL_RESULTS_SECTION.lower()
+        from lib.tasks_pkg.system_prompt_cc import section_summarize_tool_results
+        section = section_summarize_tool_results()
+        assert 'important information' in section.lower()
+        assert 'write down' in section.lower()
 
     def test_tool_usage_guidance_exists(self):
-        from lib.tasks_pkg.system_context import _TOOL_USAGE_GUIDANCE
-        assert 'parallel' in _TOOL_USAGE_GUIDANCE.lower()
-        assert 'read_files' in _TOOL_USAGE_GUIDANCE or 'grep_search' in _TOOL_USAGE_GUIDANCE
-        assert 'apply_diff' in _TOOL_USAGE_GUIDANCE
+        from lib.tasks_pkg.system_prompt_cc import section_using_tools
+        section = section_using_tools()
+        assert 'parallel' in section.lower()
+        assert 'read_files' in section or 'grep_search' in section
+        assert 'apply_diff' in section
 
     def test_tool_usage_guidance_parallel_calls(self):
         """Ensures the guidance tells the model about independent parallel calls."""
-        from lib.tasks_pkg.system_context import _TOOL_USAGE_GUIDANCE
-        assert 'independent' in _TOOL_USAGE_GUIDANCE.lower()
-        assert 'parallel' in _TOOL_USAGE_GUIDANCE.lower()
+        from lib.tasks_pkg.system_prompt_cc import section_using_tools
+        section = section_using_tools()
+        assert 'independent' in section.lower()
+        assert 'parallel' in section.lower()
 
     def test_output_efficiency_guidance_exists(self):
-        from lib.tasks_pkg.system_context import _OUTPUT_EFFICIENCY_GUIDANCE
-        assert 'concise' in _OUTPUT_EFFICIENCY_GUIDANCE.lower()
-        assert 'brief' in _OUTPUT_EFFICIENCY_GUIDANCE.lower()
+        from lib.tasks_pkg.system_prompt_cc import section_output_efficiency
+        section = section_output_efficiency()
+        assert 'concise' in section.lower()
+        assert 'brief' in section.lower()
 
     def test_sections_injected_when_tools_present(self):
         """Verify sections are appended to system message when has_real_tools=True."""
@@ -556,9 +568,22 @@ class TestFullPipelineIntegration:
         assert _has_ultrathink_keyword(user_text)
 
     def test_system_prompt_complete_structure(self):
-        """Verify the complete system prompt structure after injection."""
+        """Verify the complete system prompt structure after injection.
+
+        Under the Claude-Code-style layout the static block from
+        ``system_prompt_cc.build_static_prompt`` orders sections as:
+
+            intro -> # System -> # Doing tasks -> # Executing actions
+            with care -> # Using your tools -> # Tone and style
+            -> # Output efficiency -> # Function Result Clearing
+            -> SUMMARIZE -> system-reminder note -> # Environment
+            -> Notes -> Current date.
+
+        Assert the relevant CC sections appear, in the right relative
+        order — not Layout B's old ordering.
+        """
         from lib.tasks_pkg.system_context import _inject_system_contexts
-        messages = [{'role': 'system', 'content': 'You are a helpful assistant.'}]
+        messages = [{'role': 'system', 'content': 'Pre-existing.'}]
         _inject_system_contexts(
             messages,
             project_path='/tmp/test',
@@ -569,20 +594,21 @@ class TestFullPipelineIntegration:
             has_real_tools=True,
         )
         content = messages[0]['content']
-        # Content may now be list of blocks; extract full text
         if isinstance(content, list):
             full = '\n\n'.join(b['text'] for b in content if isinstance(b, dict))
         else:
             full = content
-        # Should contain all 4 sections in order
-        frc_pos = full.find('Function Result Clearing')
-        summarize_pos = full.find('important information')
         tool_pos = full.find('Using your tools')
         output_pos = full.find('Output efficiency')
-        assert frc_pos > 0
-        assert summarize_pos > frc_pos
-        assert tool_pos > summarize_pos
-        assert output_pos > tool_pos
+        frc_pos = full.find('Function Result Clearing')
+        summarize_pos = full.find('important information')
+        for label, pos in [('Using your tools', tool_pos),
+                            ('Output efficiency', output_pos),
+                            ('Function Result Clearing', frc_pos),
+                            ('important information (summarize)', summarize_pos)]:
+            assert pos >= 0, f'Missing section: {label}'
+        # Section order matches build_static_prompt()'s assembly
+        assert tool_pos < output_pos < frc_pos < summarize_pos
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -600,33 +626,49 @@ class TestSystemReminderAndBlocks:
         assert result == '<system-reminder>\nHello world\n</system-reminder>'
 
     def test_project_context_wrapped(self):
-        """Project context injection wraps in system-reminder tags."""
+        """Project context (CLAUDE.md) is now placed in a USER message with
+        ``_isMeta: True`` and wrapped in <system-reminder> tags. Mirrors
+        Claude Code's ``prependUserContext`` (utils/api.ts:449). The static
+        prompt itself stays in the system message."""
         from lib.tasks_pkg.system_context import _inject_system_contexts
-        messages = [{'role': 'system', 'content': 'Base'}]
+        messages = [{'role': 'system', 'content': 'Base'},
+                    {'role': 'user', 'content': 'hi'}]
         with patch('lib.project_mod.get_context_for_prompt',
                    return_value='Project files: a.py, b.py'):
             _inject_system_contexts(
                 messages, '/tmp', True, False, False, False,
                 has_real_tools=True,
             )
-        content = messages[0]['content']
-        # Content should be list (multi-block) or string with system-reminder
-        if isinstance(content, list):
-            full = '\n\n'.join(b['text'] for b in content if isinstance(b, dict))
+        # Find the prepended user _isMeta message
+        meta_msg = next(
+            (m for m in messages
+             if m.get('role') == 'user' and m.get('_isMeta')), None)
+        assert meta_msg is not None, \
+            f"Expected a user _isMeta message; got {[m.get('role') for m in messages]}"
+        body = meta_msg['content']
+        if isinstance(body, list):
+            body = '\n\n'.join(b.get('text', '') for b in body if isinstance(b, dict))
+        assert '<system-reminder>' in body
+        assert 'Project files: a.py, b.py' in body
+        assert '</system-reminder>' in body
+
+        # Static prompt remains in the system message; CLAUDE.md is NOT in it
+        sys_content = messages[0]['content']
+        if isinstance(sys_content, list):
+            sys_text = '\n\n'.join(b.get('text', '') for b in sys_content
+                                    if isinstance(b, dict))
         else:
-            full = content
-        assert '<system-reminder>' in full
-        assert 'Project files: a.py, b.py' in full
-        assert '</system-reminder>' in full
+            sys_text = sys_content
+        assert 'Project files: a.py, b.py' not in sys_text
 
     def test_skills_context_in_system_message(self):
         """Memory count hint is injected into the system message.
 
         Both compact memory instructions and the dynamic count hint go
-        into the system message. inject_memory_to_user() only handles
-        legacy cleanup of old <available_memories> listings.
+        into the system message. No listing is injected into the user
+        message (on-demand via search_memories tool + memory-prefetch).
         """
-        from lib.tasks_pkg.system_context import _inject_system_contexts, inject_memory_to_user
+        from lib.tasks_pkg.system_context import _inject_system_contexts
         messages = [
             {'role': 'system', 'content': 'Base'},
             {'role': 'user', 'content': 'Hello world'},
@@ -642,6 +684,7 @@ class TestSystemReminderAndBlocks:
         else:
             full = content
         assert '<available_memories>' not in full
+        assert '<available_skills>' not in full
 
         # With has_real_tools=True, the count hint should appear in system msg
         messages2 = [
@@ -662,33 +705,30 @@ class TestSystemReminderAndBlocks:
         assert '10 accumulated memories' in full2
         assert 'memory_accumulation' in full2
 
-        # Legacy cleanup: inject_memory_to_user strips old listings from user msg
-        messages3 = [
-            {'role': 'system', 'content': 'Base'},
-            {'role': 'user', 'content': 'Hello <available_memories>\nOld listing\n</available_memories>'},
-        ]
-        inject_memory_to_user(
-            messages3, memory_enabled=True, has_real_tools=False)
-        user_text = messages3[-1].get('content', '')
-        assert '<available_memories>' not in user_text
-
     def test_static_guidance_as_separate_block(self):
-        """Static guidance sections are injected as a separate text block."""
+        """Static guidance sections are part of the cache-segmented system
+        message. After the Layout A consolidation, the CC static block
+        contains FRC + tool usage + output efficiency, and the memory
+        block (when has_real_tools=True) gets its OWN separate cache block
+        so a memory CRUD doesn't invalidate the FRC/tools/static prefix."""
         from lib.tasks_pkg.system_context import _inject_system_contexts
-        messages = [{'role': 'system', 'content': 'User prompt'}]
+        messages = [{'role': 'system', 'content': 'Pre-existing prompt'}]
         _inject_system_contexts(
             messages, '/tmp', False, False, False, False,
             has_real_tools=True,
         )
         content = messages[0]['content']
-        # Should be a list of blocks: [dynamic, static_guidance]
         assert isinstance(content, list), f"Expected list, got {type(content)}"
         assert len(content) >= 2, f"Expected at least 2 blocks, got {len(content)}"
-        # First block: user prompt + skills instructions
-        # Last block: static guidance (FRC + tool usage + output efficiency)
-        last_block_text = content[-1]['text']
-        assert 'Function Result Clearing' in last_block_text
-        assert 'concise' in last_block_text.lower()
+        full = '\n\n'.join(b.get('text', '') for b in content
+                            if isinstance(b, dict))
+        # Static CC content lives somewhere in the system message blocks
+        assert 'Function Result Clearing' in full
+        assert 'concise' in full.lower()
+        # Memory accumulation reminder gets its own segmented block (last)
+        last_block_text = content[-1].get('text', '')
+        assert '<memory_accumulation>' in last_block_text or \
+               'accumulated memories' in last_block_text
 
     def test_cache_breakpoints_per_block(self):
         """add_cache_breakpoints should cache each text block independently."""

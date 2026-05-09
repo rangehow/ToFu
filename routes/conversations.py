@@ -1,7 +1,6 @@
 """routes/conversations.py — Conversation CRUD endpoints."""
 
 import json
-import re
 import time
 
 import sqlite3
@@ -192,6 +191,14 @@ def save_conv(conv_id):
     title = data.get('title', 'Untitled')
     raw_messages = data.get('messages', [])
     msg_count = len(raw_messages)
+    # Backfill stable per-message IDs.  Once present, _msgId carries
+    # forward in subsequent loads/syncs.  Index-free addressing depends
+    # on every message having an id, so we assign on every write.
+    try:
+        from lib.tasks_pkg.manager import _assign_message_ids as _amid
+        _amid(raw_messages)
+    except Exception as _e:
+        logger.debug('[save_conv] _assign_message_ids unavailable: %s', _e)
     messages = json_dumps_pg(raw_messages)
     created = data.get('createdAt') or data.get('created_at') or int(time.time() * 1000)
     updated = data.get('updatedAt') or data.get('updated_at') or int(time.time() * 1000)
@@ -222,21 +229,27 @@ def save_conv(conv_id):
     existing_count = existing_row[0] if existing_row else 0
 
     if msg_count == 0 and existing_count > 0:
-        logger.warning('[save_conv] ⚠️ BLOCKED overwrite of conv %s — '
-                       'server has %d msgs but client sent 0. '
-                       'This is likely a race condition.',
-                       conv_id[:12], existing_count)
+        # 2026-05-05: this guard fires during NORMAL concurrent syncs
+        # (translate poll racing user edit). Log at INFO — the 409 is
+        # the success signal for the guard, not an error condition.
+        logger.info('[save_conv] BLOCKED overwrite of conv %s — '
+                    'server has %d msgs but client sent 0 '
+                    '(benign: stale concurrent sync).',
+                    conv_id[:12], existing_count)
         return jsonify({'ok': False, 'error': 'blocked_empty_overwrite',
                         'serverMsgCount': existing_count}), 409
 
     if msg_count > 0 and msg_count < existing_count and not allow_truncate:
-        logger.warning('[save_conv] ⚠️ BLOCKED regression of conv %s — '
-                       'server has %d msgs but client sent %d (delta=%d). '
-                       'This is a stale sync from a concurrent async callback '
-                       '(e.g. translate poll). Set allowTruncate=true for '
-                       'intentional truncation (regen/edit).',
-                       conv_id[:12], existing_count, msg_count,
-                       existing_count - msg_count)
+        # 2026-05-05: this guard fires during NORMAL concurrent syncs
+        # (e.g. translate poll). Log at INFO — the 409 already tells the
+        # client to retry with fresh state; not worth an error.log entry.
+        logger.info('[save_conv] BLOCKED regression of conv %s — '
+                    'server has %d msgs but client sent %d (delta=%d). '
+                    'This is a stale sync from a concurrent async callback '
+                    '(e.g. translate poll). Set allowTruncate=true for '
+                    'intentional truncation (regen/edit).',
+                    conv_id[:12], existing_count, msg_count,
+                    existing_count - msg_count)
         return jsonify({'ok': False, 'error': 'blocked_msg_regression',
                         'serverMsgCount': existing_count,
                         'clientMsgCount': msg_count}), 409
@@ -653,6 +666,13 @@ def patch_message(conv_id, msg_idx):
     if 'content' in data and isinstance(data['content'], str):
         _preview = data['content'][:50]
 
+    # Backfill stable per-message IDs for any messages that lack one.
+    try:
+        from lib.tasks_pkg.manager import _assign_message_ids as _amid
+        _amid(messages)
+    except Exception as _e:
+        logger.debug('[patch_msg] _assign_message_ids unavailable: %s', _e)
+
     # Persist — reuse the same pattern as delete_message/save_conv.
     now_ms = int(time.time() * 1000)
     messages_json = json_dumps_pg(messages)
@@ -706,6 +726,122 @@ def patch_message(conv_id, msg_idx):
         'ok': True,
         'msgCount': len(messages),
         'msg': msg,
+    })
+
+
+@conversations_bp.route('/api/conversations/<conv_id>/messages/by-id/<msg_id>', methods=['PATCH'])
+@_db_safe
+def patch_message_by_id(conv_id, msg_id):
+    """Same as patch_message but addresses the target by stable ``_msgId``.
+
+    Index-free addressing — robust against concurrent inserts that would
+    otherwise shift indices.  Returns 404 if no message with that id exists.
+    The whitelist + persistence flow is identical to the index path.
+    """
+    data = request.get_json(silent=True) or {}
+    if not isinstance(data, dict) or not data:
+        return jsonify({'error': 'empty_patch'}), 400
+
+    unknown = [k for k in data.keys() if k not in _PATCH_MSG_WHITELIST]
+    if unknown:
+        logger.warning('[patch_msg_id] conv=%s id=%s REJECTED non-whitelisted keys: %s',
+                       conv_id[:8], msg_id[:8], unknown)
+        return jsonify({'error': 'unsupported_keys', 'keys': unknown}), 400
+
+    db = get_db(DOMAIN_CHAT)
+    row = db.execute(
+        'SELECT messages, title, settings FROM conversations WHERE id=? AND user_id=?',
+        (conv_id, DEFAULT_USER_ID)
+    ).fetchone()
+    if not row:
+        return jsonify({'error': 'Not found'}), 404
+
+    try:
+        messages = json.loads(row['messages'] or '[]')
+    except (json.JSONDecodeError, TypeError) as e:
+        logger.warning('[patch_msg_id] conv=%s failed to parse messages: %s', conv_id[:8], e)
+        return jsonify({'error': 'Failed to parse conversation messages'}), 500
+
+    target_idx = None
+    for i, m in enumerate(messages):
+        if isinstance(m, dict) and m.get('_msgId') == msg_id:
+            target_idx = i
+            break
+    if target_idx is None:
+        logger.info('[patch_msg_id] conv=%s msgId=%s not found in %d messages',
+                    conv_id[:8], msg_id[:8], len(messages))
+        return jsonify({'error': 'Message id not found', 'msgCount': len(messages)}), 404
+
+    msg = messages[target_idx]
+    if not isinstance(msg, dict):
+        return jsonify({'error': 'Target message is not a dict'}), 500
+
+    applied_keys = []
+    for key, value in data.items():
+        if value is None:
+            if key in msg:
+                msg.pop(key, None)
+                applied_keys.append('-' + key)
+        else:
+            msg[key] = value
+            applied_keys.append(key)
+
+    _preview = ''
+    if 'content' in data and isinstance(data['content'], str):
+        _preview = data['content'][:50]
+
+    now_ms = int(time.time() * 1000)
+    messages_json = json_dumps_pg(messages)
+    search_text = build_search_text(messages)
+
+    try:
+        settings = json.loads(row['settings'] or '{}')
+    except (json.JSONDecodeError, TypeError):
+        settings = {}
+    if messages:
+        last = messages[-1]
+        settings['lastMsgRole'] = last.get('role')
+        settings['lastMsgTimestamp'] = last.get('timestamp')
+    settings_json = json.dumps(settings, ensure_ascii=False)
+
+    existing = db.execute(
+        'SELECT created_at FROM conversations WHERE id=? AND user_id=?',
+        (conv_id, DEFAULT_USER_ID)
+    ).fetchone()
+    created_at = existing['created_at'] if existing else now_ms
+    title = row['title']
+
+    db_execute_with_retry(db, '''
+        INSERT OR REPLACE INTO conversations (id, user_id, title, messages, created_at, updated_at,
+                                   settings, msg_count, search_text)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (conv_id, DEFAULT_USER_ID, title, messages_json, created_at, now_ms,
+          settings_json, len(messages), search_text))
+
+    if search_text:
+        try:
+            db.execute(
+                "INSERT OR REPLACE INTO conversations_fts (rowid, search_text) "
+                "SELECT rowid, ? FROM conversations WHERE id = ?",
+                (search_text, conv_id)
+            )
+            db.commit()
+        except Exception as e:
+            logger.debug('[patch_msg_id] FTS update failed (non-fatal): %s', e)
+
+    _invalidate_meta_cache()
+    logger.info('[patch_msg_id] conv=%s id=%s idx=%d keys=%s preview=%.50s',
+                conv_id[:8], msg_id[:8], target_idx, applied_keys, _preview)
+    try:
+        audit_log('msg_patch', conv_id=conv_id, msg_id=msg_id, idx=target_idx, keys=applied_keys)
+    except Exception as e:
+        logger.debug('[patch_msg_id] audit_log failed (non-fatal): %s', e)
+
+    return jsonify({
+        'ok': True,
+        'msgCount': len(messages),
+        'msg': msg,
+        'idx': target_idx,
     })
 
 
@@ -842,108 +978,10 @@ def delete_conv(conv_id):
     return jsonify({'ok': True})
 
 
-@conversations_bp.route('/api/conversations/search', methods=['GET'])
-def search_convs():
-    """Server-side full-text search through conversation messages.
 
-    Two-phase approach:
-      Phase 1: FTS5 MATCH for tokenized word matching (fast via inverted index).
-      Phase 2: If <50 results, LIKE fallback on search_text to catch
-               substring matches that FTS5 tokenization misses.
-
-    Snippets are extracted in Python from the final result set (max 50 rows).
-    """
-    query = (request.args.get('q') or '').strip().lower()
-    if not query or len(query) < 2:
-        return jsonify([])
-
-    t0 = time.monotonic()
-    db = get_db(DOMAIN_CHAT)
-
-    MAX_RESULTS = 50
-    SNIPPET_RADIUS = 40
-
-    # ── Phase 1: FTS5 MATCH search ──
-    # Sanitize query for FTS5: remove special chars, add * for prefix matching
-    _fts_words = re.sub(r'[^\w\s]', '', query, flags=re.UNICODE).split()
-    _fts_query = ' '.join(f'{w}*' for w in _fts_words if w)
-
-    result_ids = []
-    if _fts_query:
-        try:
-            rows = db.execute(
-                """SELECT c.id FROM conversations c
-                   JOIN conversations_fts f ON f.rowid = c.rowid
-                   WHERE c.user_id=? AND f.search_text MATCH ?
-                   ORDER BY c.updated_at DESC LIMIT ?""",
-                (DEFAULT_USER_ID, _fts_query, MAX_RESULTS)
-            ).fetchall()
-            result_ids = [r['id'] for r in rows]
-        except Exception as e:
-            logger.debug('[search_convs] FTS5 query failed (will fallback): %s', e)
-
-    # ── Phase 2: LIKE fallback for substring matches FTS5 misses ──
-    if len(result_ids) < MAX_RESULTS:
-        _like_pattern = '%' + query.replace('%', '\\%').replace('_', '\\_') + '%'
-        remaining = MAX_RESULTS - len(result_ids)
-        try:
-            if result_ids:
-                placeholders = ','.join(['?'] * len(result_ids))
-                rows = db.execute(
-                    f"""SELECT id FROM conversations
-                        WHERE user_id=? AND lower(search_text) LIKE ?
-                          AND id NOT IN ({placeholders})
-                        ORDER BY updated_at DESC LIMIT ?""",
-                    (DEFAULT_USER_ID, _like_pattern, *result_ids, remaining)
-                ).fetchall()
-            else:
-                rows = db.execute(
-                    """SELECT id FROM conversations
-                       WHERE user_id=? AND lower(search_text) LIKE ?
-                       ORDER BY updated_at DESC LIMIT ?""",
-                    (DEFAULT_USER_ID, _like_pattern, remaining)
-                ).fetchall()
-            result_ids.extend(r['id'] for r in rows)
-        except Exception as e:
-            logger.warning('[search_convs] LIKE fallback failed: %s', e)
-
-    if not result_ids:
-        elapsed = time.monotonic() - t0
-        logger.debug('[search_convs] query=%r, results=0, elapsed=%.3fs', query, elapsed)
-        return jsonify([])
-
-    # ── Extract snippets in Python (portable — no PG substring/position) ──
-    placeholders = ','.join(['?'] * len(result_ids))
-    snippet_rows = db.execute(
-        f"SELECT id, search_text FROM conversations WHERE id IN ({placeholders})",
-        tuple(result_ids)
-    ).fetchall()
-
-    snippet_map = {}
-    for r in snippet_rows:
-        text = r['search_text'] or ''
-        pos = text.lower().find(query)
-        if pos >= 0:
-            start = max(0, pos - SNIPPET_RADIUS)
-            end = min(len(text), pos + len(query) + SNIPPET_RADIUS)
-            snip = text[start:end].replace('\n', ' ').strip()
-            if snip:
-                snip = '…' + snip + '…'
-            snippet_map[r['id']] = snip
-        else:
-            snippet_map[r['id']] = ''
-
-    results = [
-        {
-            'id': cid,
-            'matchField': 'content',
-            'matchSnippet': snippet_map.get(cid, ''),
-            'matchRole': 'assistant',
-        }
-        for cid in result_ids
-    ]
-
-    elapsed = time.monotonic() - t0
-    logger.debug('[search_convs] query=%r, results=%d, elapsed=%.3fs',
-                 query, len(results), elapsed)
-    return jsonify(results)
+# ════════════════════════════════════════════════════════════════════════════
+#  Endpoints moved to companion modules
+# ════════════════════════════════════════════════════════════════════════════
+#  /api/conversations/<id>/compactions[/<archive_id>] → routes/conversations_compaction.py
+#  /api/conversations/search                          → routes/conversations_search.py
+# Both register on the same conversations_bp via side-effect imports in routes/__init__.py.

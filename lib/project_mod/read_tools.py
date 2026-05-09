@@ -82,7 +82,7 @@ def tool_list_dir(base, rel_path='.'):
                 except Exception as e:
                     logger.debug('[Tools] child count scan failed for dir %s: %s', name, e, exc_info=True)
                     cc = '?'
-                dirs_out.append(f'  📁 {name}/ ({cc} items)')
+                dirs_out.append(f'  {name}/ ({cc} items)')
         else:
             try:
                 if not entry.is_file(follow_symlinks=False):
@@ -95,9 +95,9 @@ def tool_list_dir(base, rel_path='.'):
             ext = os.path.splitext(name)[1].lower()
             if ext not in BINARY_EXTENSIONS and sz > 0:
                 lc = _estimate_lines(sz, ext)
-                files_out.append(f'  📄 {name} ({lc}L, {_fmt_size(sz)})')
+                files_out.append(f'  {name} ({lc}L, {_fmt_size(sz)})')
             else:
-                files_out.append(f'  📄 {name} ({_fmt_size(sz)})')
+                files_out.append(f'  {name} ({_fmt_size(sz)})')
     result = f'Directory: {rel_path or "."}\n\n'
     if dirs_out:
         result += 'Directories:\n' + '\n'.join(dirs_out) + '\n\n'
@@ -191,7 +191,7 @@ def _read_absolute_file(path: str, start_line=None, end_line=None):
         return result
 
     # For text results, apply line range if requested
-    if isinstance(result, str) and (start_line or end_line) and not result.startswith('❌'):
+    if isinstance(result, str) and (start_line or end_line) and not result.startswith('Error:'):
         lines = result.split('\n')
         total = len(lines)
         s = max(1, start_line or 1) - 1
@@ -335,7 +335,10 @@ def tool_read_files(base, reads):
     ``_read_absolute_file`` and bypass the project sandbox.
     """
     if not reads or not isinstance(reads, list):
-        return 'Error: "reads" must be a non-empty array of {path, start_line?, end_line?} objects.'
+        return (
+            'Error: "reads" must be a non-empty array of {path, start_line?, end_line?} objects. '
+            'Example: {"reads": [{"path": "src/main.py"}]}'
+        )
     MAX_BATCH = 20
     if len(reads) > MAX_BATCH:
         reads = reads[:MAX_BATCH]
@@ -674,23 +677,80 @@ def _gitignore_match(rel_path, is_dir, patterns):
     return ignored
 
 
+def _run_grep_subprocess(cmd, base, io_timeout):
+    """Run a grep-family subprocess and return ``(stdout, timed_out)``.
+
+    On timeout, kills the process and returns whatever stdout has been
+    buffered so far instead of discarding it. The trailing line is
+    dropped because it may be a partial match cut by the kill.
+
+    Returns ``(None, False)`` if the binary is missing.
+    """
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True, cwd=base, errors='replace')
+    except FileNotFoundError:
+        return None, False
+    try:
+        stdout, _ = proc.communicate(timeout=io_timeout)
+        return stdout, False
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        try:
+            stdout, _ = proc.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            stdout = ''
+        # Drop the last (possibly truncated) line — same trick as
+        # claude-code/src/utils/ripgrep.ts so we don't emit a half-line.
+        if stdout:
+            nl = stdout.rfind('\n')
+            stdout = stdout[:nl] if nl != -1 else ''
+        return stdout, True
+
+
+def _format_grep_timeout(base, target, pattern, include, ctx_n, cap, count_only,
+                         io_timeout, partial_stdout, reason):
+    """Build the user-facing message for a timed-out grep run.
+
+    If ``partial_stdout`` has any bytes, formats them as a normal result
+    block and prepends a banner so the model knows to treat them as
+    incomplete. If empty, falls back to the original "Grep timed out"
+    hint.
+    """
+    rel_target = os.path.relpath(target, base) if target != base else '.'
+    footer = ''
+    try:
+        from lib.project_mod.gitignore_suggest import format_footer, record_timeout_and_probe
+        footer = format_footer(record_timeout_and_probe(base, reason=reason))
+    except Exception as e:
+        logger.debug('[Tools] gitignore-suggest probe failed: %s', e, exc_info=True)
+    if partial_stdout and partial_stdout.strip():
+        formatted = _format_grep_output(base, partial_stdout, pattern, include, ctx_n,
+                                        cap, count_only)
+        banner = (f'[partial results — grep timed out after {io_timeout}s '
+                  f'searching "{rel_target}"; some matches may be missing. '
+                  f'Narrow with a subdirectory path or include= glob to get '
+                  f'complete results.]\n\n')
+        return banner + formatted + footer
+    return (f'Grep timed out after {io_timeout}s searching "{rel_target}". '
+            f'Try a more specific subdirectory path or narrower file glob (include parameter).' + footer)
+
+
 def _run_rg(base, target, pattern, include, ctx_n, cap=MAX_GREP_RESULTS, count_only=False):
     """Run ripgrep. Returns formatted string on success, None on binary-not-found."""
     cmd = _build_rg_cmd(base, target, pattern, include, ctx_n, cap, count_only)
     io_timeout = _get_io_timeout(base)
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True,
-                                timeout=io_timeout, cwd=base, errors='replace')
-        return _format_grep_output(base, result.stdout, pattern, include, ctx_n, cap, count_only)
-    except subprocess.TimeoutExpired:
-        logger.warning('[Tools] rg timed out after %ds: pattern=%s target=%s',
-                       io_timeout, pattern[:60], target)
-        rel_target = os.path.relpath(target, base) if target != base else '.'
-        return (f'Grep timed out after {io_timeout}s searching "{rel_target}". '
-                f'Try a more specific subdirectory path or narrower file glob (include parameter).')
-    except FileNotFoundError:
-        logger.warning('[Tools] rg binary not found despite detection at startup')
-        return None
+        stdout, timed_out = _run_grep_subprocess(cmd, base, io_timeout)
+        if stdout is None:
+            logger.warning('[Tools] rg binary not found despite detection at startup')
+            return None
+        if timed_out:
+            logger.warning('[Tools] rg timed out after %ds: pattern=%s target=%s partial_bytes=%d',
+                           io_timeout, pattern[:60], target, len(stdout))
+            return _format_grep_timeout(base, target, pattern, include, ctx_n, cap,
+                                        count_only, io_timeout, stdout, 'rg_timeout')
+        return _format_grep_output(base, stdout, pattern, include, ctx_n, cap, count_only)
     except Exception as e:
         logger.warning('[Tools] rg failed: pattern=%s target=%s: %s', pattern[:40], target, e, exc_info=True)
         return None
@@ -701,18 +761,16 @@ def _run_gnu_grep(base, target, pattern, include, ctx_n, cap=MAX_GREP_RESULTS, c
     cmd = _build_grep_cmd(base, target, pattern, include, ctx_n, cap, count_only)
     io_timeout = _get_io_timeout(base)
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True,
-                                timeout=io_timeout, cwd=base, errors='replace')
-        return _format_grep_output(base, result.stdout, pattern, include, ctx_n, cap, count_only)
-    except subprocess.TimeoutExpired:
-        logger.warning('[Tools] grep timed out after %ds: pattern=%s target=%s',
-                       io_timeout, pattern[:60], target)
-        rel_target = os.path.relpath(target, base) if target != base else '.'
-        return (f'Grep timed out after {io_timeout}s searching "{rel_target}". '
-                f'Try a more specific subdirectory path or narrower file glob (include parameter).')
-    except FileNotFoundError:
-        logger.debug('[Tools] GNU grep binary not found, will try fallback')
-        return None
+        stdout, timed_out = _run_grep_subprocess(cmd, base, io_timeout)
+        if stdout is None:
+            logger.debug('[Tools] GNU grep binary not found, will try fallback')
+            return None
+        if timed_out:
+            logger.warning('[Tools] grep timed out after %ds: pattern=%s target=%s partial_bytes=%d',
+                           io_timeout, pattern[:60], target, len(stdout))
+            return _format_grep_timeout(base, target, pattern, include, ctx_n, cap,
+                                        count_only, io_timeout, stdout, 'grep_timeout')
+        return _format_grep_output(base, stdout, pattern, include, ctx_n, cap, count_only)
     except Exception as e:
         logger.warning('[Tools] grep failed for pattern=%s target=%s: %s', pattern[:40], target, e, exc_info=True)
         return f'Grep error: {e}'

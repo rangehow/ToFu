@@ -14,11 +14,14 @@ __all__ = [
     'TRADING_ENABLED',
     'PPTX_TRANSLATE_ENABLED',
     'DEBUG_MODE',
+    'OPTIMIZER_ENABLED',
     'FETCH_TOP_N', 'FETCH_TIMEOUT',
     'FETCH_MAX_CHARS_SEARCH', 'FETCH_MAX_CHARS_DIRECT',
     'FETCH_MAX_CHARS_PDF', 'FETCH_MAX_BYTES',
     'SKIP_DOMAINS', 'MODEL_PRICING',
     'QWEN_PRICING_CNY', 'DEFAULT_USD_CNY_RATE',
+    'PROVIDER_PRICING', 'lookup_pricing',
+    'set_provider_pricing', 'clear_provider_pricing',
     'MT_PROVIDER_CONFIG',
 ]
 
@@ -41,6 +44,9 @@ def _load_server_config():
 
     This is called ONCE at import time. Auto-migrates from legacy
     ~/.chatui/ path on first run (handled by lib.config_dir import).
+
+    The legacy ``~/.chatui/`` dir name is preserved for back-compat;
+    new installs use ``<project>/data/config/`` exclusively.
     """
     try:
         if os.path.isfile(_SERVER_CONFIG_PATH):
@@ -73,9 +79,7 @@ def _cfg(env_key, saved_key, default):
 # ── API Keys: flat list, all keys are equal ──
 # Preferred: LLM_API_KEYS=key1,key2,key3  (comma-separated, any number)
 # Legacy single-var: LLM_API_KEY still works (for 1 key only)
-_DEFAULT_KEYS = [
-    # Add your API keys here, or set LLM_API_KEYS env var
-]  # No hardcoded keys — set LLM_API_KEYS env var or configure via Settings UI
+_DEFAULT_KEYS = []  # No hardcoded keys — set LLM_API_KEYS env var or configure via Settings UI
 
 def _parse_api_keys():
     """Build a flat list of API keys from environment variables and saved config.
@@ -192,6 +196,10 @@ PPTX_TRANSLATE_ENABLED = _resolve_feature_flag('PPTX_TRANSLATE_ENABLED', 'pptx_t
 DEBUG_MODE = _resolve_feature_flag('DEBUG_MODE', 'debug_mode', False)
 # Cache Extended TTL: 1h TTL for stable prefix (system+tools), 5m for tail
 CACHE_EXTENDED_TTL = _resolve_feature_flag('CACHE_EXTENDED_TTL', 'cache_extended_ttl', True)
+# Daily Optimizer: nightly LLM-driven improvement loop. ON by default —
+# users can disable it in Settings if they don't want autonomous changes
+# (e.g. auto-applied block_search_domain).
+OPTIMIZER_ENABLED = _resolve_feature_flag('OPTIMIZER_ENABLED', 'optimizer_enabled', True)
 
 # ── Fetch / search settings ──
 # Priority: ENV VAR > server_config.json search section > hardcoded default
@@ -234,7 +242,15 @@ if 'llm_content_filter' in _search_cfg:
 
 # ── Model pricing tables — now live in lib/pricing.py ──
 # Imported here for backward compatibility (all consumers use `from lib import MODEL_PRICING`)
-from lib.pricing import DEFAULT_USD_CNY_RATE, MODEL_PRICING, QWEN_PRICING_CNY  # noqa: E402
+from lib.pricing import (  # noqa: E402
+    DEFAULT_USD_CNY_RATE,
+    MODEL_PRICING,
+    PROVIDER_PRICING,
+    QWEN_PRICING_CNY,
+    clear_provider_pricing,
+    lookup_pricing,
+    set_provider_pricing,
+)
 
 
 
@@ -311,6 +327,7 @@ def reload_config():
     _mod.PPTX_TRANSLATE_ENABLED = _resolve_feature_flag('PPTX_TRANSLATE_ENABLED', 'pptx_translate_enabled', False)
     _mod.DEBUG_MODE = _resolve_feature_flag('DEBUG_MODE', 'debug_mode', False)
     _mod.CACHE_EXTENDED_TTL = _resolve_feature_flag('CACHE_EXTENDED_TTL', 'cache_extended_ttl', True)
+    _mod.OPTIMIZER_ENABLED = _resolve_feature_flag('OPTIMIZER_ENABLED', 'optimizer_enabled', True)
 
     # Machine translation provider
     _mod.MT_PROVIDER_CONFIG = _resolve_mt_provider_config()

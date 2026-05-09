@@ -139,11 +139,16 @@ def send_browser_command(cmd_type, params=None, timeout=30, client_id=None):
         with _commands_lock:
             pending_count = sum(1 for c in _commands.values() if not c.get('picked_up'))
             total_count = len(_commands)
-        logger.warning('[Browser] Command %s timed out after %ds (client=%s, picked_up=%s, '
-                       'pending_queue=%d, total_inflight=%d, url=%s) '
-                       '— extension may be overloaded or disconnected',
-                       cmd_type, timeout, (client_id or 'any')[:12], picked,
-                       pending_count, total_count, url_hint)
+        # 2026-05-05 noise-reduction: command-level timeout is routinely
+        # triggered by slow pages / idle extensions; the CALLER (e.g.
+        # try_browser_fetch) already logs its own WARNING / INFO on the
+        # final giveup path. Log at INFO so error.log isn't flooded with
+        # duplicate timeout notices (114+114/day under normal load).
+        logger.info('[Browser] Command %s timed out after %ds (client=%s, picked_up=%s, '
+                    'pending_queue=%d, total_inflight=%d, url=%s) '
+                    '— extension may be overloaded or disconnected',
+                    cmd_type, timeout, (client_id or 'any')[:12], picked,
+                    pending_count, total_count, url_hint)
         return None, f"Browser command '{cmd_type}' timed out after {timeout}s. The extension may be busy or disconnected."
 
     with _commands_lock:

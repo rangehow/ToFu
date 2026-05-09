@@ -643,6 +643,40 @@ def install_playwright(conda: str, env_name: str, py: str):
 
 
 # ═══════════════════════════════════════════════════════════════
+#  Step 8b: Optional — Docling (layout-aware PDF parsing)
+# ═══════════════════════════════════════════════════════════════
+
+def install_docling(py: str):
+    """Install the optional `docling` package into the Tofu env.
+
+    Docling is a layout-aware PDF parser (TableFormer + equation model)
+    that gives noticeably better Markdown output than pymupdf4llm on
+    academic papers. It pulls torch + model weights (~2 GB), so we only
+    install it when the user explicitly opts in via --with-docling.
+
+    We use the CPU-only torch wheel index so machines without CUDA don't
+    pull multi-GB CUDA wheels. Users on GPU boxes can re-install torch
+    from the CUDA index themselves afterwards.
+    """
+    step("Installing optional Docling (layout-aware PDF parsing)")
+    info("This pulls ~2 GB (torch + model weights) — first run only")
+
+    # CPU-only torch index. Works on macOS/Windows too; torch resolves
+    # the right wheel for each platform.
+    extra_index = "https://download.pytorch.org/whl/cpu"
+    cmd = [py, "-m", "pip", "install", "--upgrade",
+           "--extra-index-url", extra_index, "docling>=2.0"]
+    res = run(cmd, check=False, capture=True)
+    if res.returncode == 0:
+        ok("Docling installed — set PDF_TEXT_MODE=structured in .env to enable")
+    else:
+        warn("Docling install failed — server will still run (fallback: pymupdf4llm)")
+        print(res.stdout)
+        print(res.stderr)
+        warn(f"Retry manually: pip install docling --extra-index-url {extra_index}")
+
+
+# ═══════════════════════════════════════════════════════════════
 #  Step 9: Configure .env
 # ═══════════════════════════════════════════════════════════════
 
@@ -788,6 +822,7 @@ def main():
               python install.py --no-update-conda        # Skip conda self-update
               python install.py --docker                 # Use Docker
               python install.py --skip-playwright        # Skip Playwright
+              python install.py --with-docling           # Optional: better PDF parsing (~2 GB)
         """),
     )
     parser.add_argument("--dir", default=None,
@@ -811,6 +846,12 @@ def main():
     parser.add_argument("--reset-env", action="store_true",
                         help="Delete the existing conda env before re-creating it. "
                              "DESTRUCTIVE: wipes any extra packages the user installed.")
+    parser.add_argument("--with-docling", action="store_true",
+                        help="Also install the optional `docling` package for "
+                             "layout-aware PDF parsing (better tables + math on "
+                             "academic PDFs). Adds ~2 GB (pulls torch + model "
+                             "weights). Set PDF_TEXT_MODE=structured in .env to "
+                             "enable after install.")
     args = parser.parse_args()
 
     # ── Banner ──
@@ -852,6 +893,9 @@ def main():
 
     if not args.skip_playwright:
         install_playwright(conda, args.env, py)
+
+    if args.with_docling:
+        install_docling(py)
 
     configure_env_file(install_dir, args.port, args.api_key)
 

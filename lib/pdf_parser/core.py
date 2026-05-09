@@ -24,10 +24,14 @@ def parse_pdf(pdf_bytes: bytes, *,
               min_img_dim: int = 80,
               min_img_bytes: int = 2000,
               progress_callback=None,
+              text_mode: str = 'rich',
 ) -> dict:
     """Full PDF parsing: text extraction + figure/table image extraction.
 
     Args:
+        text_mode: Passed to ``extract_pdf_text(mode=...)``. One of
+            ``'rich'`` (pymupdf4llm, default), ``'structured'`` (docling,
+            opt-in heavy dep), or ``'fast'`` (raw get_text).
         progress_callback: Optional ``Callable[[str, int, int], None]`` invoked
             as ``(stage, done, total)`` where ``stage`` is ``'text'`` during
             text extraction and ``'images'`` during figure clipping. Exceptions
@@ -36,6 +40,12 @@ def parse_pdf(pdf_bytes: bytes, *,
     Returns dict with keys:
         text, images, totalPages, textLength, isScanned, method, warnings
     """
+    # Defensive normalize — accept None / unknown modes gracefully.
+    if text_mode not in ('rich', 'structured', 'fast'):
+        logger.debug('[PDF] parse_pdf: unknown text_mode=%r, coercing to rich',
+                     text_mode)
+        text_mode = 'rich'
+
     max_chars = max_text_chars if max_text_chars > 0 else 999_999_999
 
     # ── Text (opens/closes its own doc internally) ──
@@ -47,14 +57,24 @@ def parse_pdf(pdf_bytes: bytes, *,
         except Exception as e:
             logger.debug('[PDF] progress_callback raised (ignored): %s', e)
 
-    text = extract_pdf_text(pdf_bytes, max_chars, progress_callback=_text_cb) or ''
+    text = extract_pdf_text(pdf_bytes, max_chars,
+                            progress_callback=_text_cb,
+                            mode=text_mode) or ''
 
     doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
     try:
         total_pages = len(doc)
         avg_chars = len(text) / max(total_pages, 1)
         is_scanned = (avg_chars < 50)
-        method = 'pymupdf4llm' if HAS_PYMUPDF4LLM else 'pymupdf_raw'
+        # Method label reflects the winning strategy — docling may have
+        # been requested but silently fallen back to pymupdf4llm.
+        if text_mode == 'structured':
+            # Best-effort: import guard mirrors text.py logic. We don't
+            # track the actual winner from here, so we tag both.
+            from lib.pdf_parser._common import HAS_DOCLING
+            method = 'docling' if HAS_DOCLING else ('pymupdf4llm' if HAS_PYMUPDF4LLM else 'pymupdf_raw')
+        else:
+            method = 'pymupdf4llm' if HAS_PYMUPDF4LLM else 'pymupdf_raw'
 
         warnings = []
         if is_scanned:

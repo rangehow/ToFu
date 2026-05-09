@@ -4,8 +4,19 @@
 var pendingPdfTexts = [];  // shared with main.js — must be var for cross-script access
 
 // ── VLM sessionStorage persistence ──
-// Keys: 'chatui_vlm_pending' → JSON array of {name, text, pages, textLength, isScanned, method, vlmStatus, vlmTaskId, vlmProgress}
-var _VLM_STORAGE_KEY = 'chatui_vlm_pending';
+// Key: 'tofu_vlm_pending' → JSON array of {name, text, pages, textLength, isScanned, method, vlmStatus, vlmTaskId, vlmProgress}
+// Migrate from legacy 'chatui_vlm_pending' once on load so users mid-VLM-batch
+// don't lose their pending state when they refresh after the rename rollout.
+var _VLM_STORAGE_KEY = 'tofu_vlm_pending';
+(function _migrateLegacyVlmKey() {
+  try {
+    const _legacy = sessionStorage.getItem('chatui_vlm_pending');
+    if (_legacy && sessionStorage.getItem(_VLM_STORAGE_KEY) == null) {
+      sessionStorage.setItem(_VLM_STORAGE_KEY, _legacy);
+      sessionStorage.removeItem('chatui_vlm_pending');
+    }
+  } catch (_e) { /* sessionStorage may be disabled — no-op */ }
+})();
 
 /** Save current pendingPdfTexts + VLM task state to sessionStorage. */
 function _vlmSaveState() {
@@ -162,41 +173,95 @@ async function uploadImageToServer(imgObj) {
     debugLog("Image upload failed: " + e.message, "warn");
   }
 }
-function compressImage(file, maxWidth) {
+/**
+ * Client-side image pre-shrink. Mirrors the backend's _shrink_upload_image()
+ * policy (routes/upload.py) exactly — thresholds come from /api/server-config
+ * via window._uploadShrinkPolicy. The client-side pass only exists to cap
+ * the UPLOAD wire (phone photos over mobile data) and avoid hitting Flask's
+ * MAX_CONTENT_LENGTH; the server always runs the same logic again and owns
+ * the final on-disk bytes.
+ *
+ * @param {File}   file
+ * @param {number} userMaxWidth  Optional user override from Settings.
+ *                               `0` / falsy  → follow server policy.
+ *                               `>0`         → TIGHTEN only (min with server cap).
+ */
+function compressImage(file, userMaxWidth) {
+  // ── Resolve policy from server, with safe fallbacks that match the backend
+  //    defaults in routes/upload.py. If the /api/server-config request hasn't
+  //    returned yet, these fallbacks keep us consistent instead of guessing. ──
+  const policy = (typeof window !== 'undefined' && window._uploadShrinkPolicy) || {};
+  const SRV_MAX_PX    = policy.max_long_side_px  || 2048;   // MAX_UPLOAD_LONG_SIDE_PX
+  const SRV_QUALITY   = (policy.jpeg_quality     || 90) / 100;
+  const SKIP_PX       = policy.skip_long_side_px || 1600;   // SHRINK_SKIP_LONG_SIDE_PX
+  const SKIP_BYTES    = policy.skip_max_bytes    || (400 * 1024);
+
+  // User override can only TIGHTEN the cap (smaller = stricter). A 0/negative
+  // value means "trust the server policy" — the new default.
+  const effectiveMaxPx = (userMaxWidth && userMaxWidth > 0)
+    ? Math.min(userMaxWidth, SRV_MAX_PX)
+    : SRV_MAX_PX;
+
   return new Promise((resolve) => {
     const reader = new FileReader();
     reader.onload = (ev) => {
-      if (!maxWidth || maxWidth <= 0) {
-        const b = ev.target.result;
-        resolve({
-          base64: b.split(",")[1],
-          mediaType: file.type,
-          preview: b,
-          sizeKB: Math.round((b.length * 3) / 4 / 1024),
-        });
-        return;
-      }
+      const dataUrl = ev.target.result;
+      const originalBytes = Math.round((dataUrl.length * 3) / 4);
+      const passthrough = () => resolve({
+        base64: dataUrl.split(",")[1],
+        mediaType: file.type,
+        preview: dataUrl,
+        sizeKB: Math.round(originalBytes / 1024),
+      });
+
+      // ── Load image to inspect dimensions ──
       const img = new Image();
       img.onload = () => {
-        let { width: w, height: h } = img;
-        if (w > maxWidth) {
-          h = Math.round((h * maxWidth) / w);
-          w = maxWidth;
+        const { width: origW, height: origH } = img;
+        const longSide = Math.max(origW, origH);
+
+        // Skip rule — mirrors backend: small enough in BOTH dims AND bytes → pass through
+        // untouched (lossless, identical to what the server would keep).
+        if (longSide <= SKIP_PX && originalBytes <= SKIP_BYTES && longSide <= effectiveMaxPx) {
+          passthrough();
+          return;
+        }
+
+        // Resize if over the long-side cap; otherwise keep original dims but still re-encode
+        // only when we have to (i.e., we failed the skip rule above, which means size cap
+        // was exceeded or dims exceed user override).
+        let w = origW, h = origH;
+        if (longSide > effectiveMaxPx) {
+          const scale = effectiveMaxPx / longSide;
+          w = Math.max(1, Math.round(origW * scale));
+          h = Math.max(1, Math.round(origH * scale));
         }
         const canvas = document.createElement("canvas");
         canvas.width = w;
         canvas.height = h;
         canvas.getContext("2d").drawImage(img, 0, 0, w, h);
         const t = file.type === "image/png" ? "image/png" : "image/jpeg";
-        const d = canvas.toDataURL(t, 0.85);
+        const d = canvas.toDataURL(t, SRV_QUALITY);
+
+        // Sanity: if re-encode grew the payload (rare — tiny high-entropy JPEGs),
+        // keep the original. Same guard as the backend.
+        const newBytes = Math.round((d.length * 3) / 4);
+        if (newBytes >= originalBytes && w === origW && h === origH) {
+          passthrough();
+          return;
+        }
         resolve({
           base64: d.split(",")[1],
           mediaType: t,
           preview: d,
-          sizeKB: Math.round((d.length * 3) / 4 / 1024),
+          sizeKB: Math.round(newBytes / 1024),
         });
       };
-      img.src = ev.target.result;
+      img.onerror = () => {
+        // Couldn't decode in browser — just send original, server will re-check.
+        passthrough();
+      };
+      img.src = dataUrl;
     };
     reader.readAsDataURL(file);
   });
@@ -205,7 +270,11 @@ function compressImage(file, maxWidth) {
 // Returns a fully-formed imgObj with base64, mediaType, preview, sizeKB, url.
 // Used by: handleFileUpload, paste handler, drag-drop, edit mode.
 async function processImageFile(file) {
-  const d = await compressImage(file, config.imageMaxWidth || 1024);
+  // ★ imageMaxWidth is now an OPTIONAL user override that can only TIGHTEN
+  // the server's policy (lower = stricter). 0 / unset = follow server.
+  // Legacy default of 1024 was the bug behind the "uploaded image is blurry"
+  // complaint — we no longer hardcode any cap on the client.
+  const d = await compressImage(file, config.imageMaxWidth || 0);
   await uploadImageToServer(d);
   return d;
 }
@@ -259,59 +328,104 @@ function _getFileExt(name) {
 
 async function handleFileUpload(e) {
   const files = Array.from(e.target.files);
-  for (const f of files) {
+  // 2026-05-06 (Option C): launch ALL uploads in parallel. Previously we
+  // serialized via `for...of await` so a slow first PDF blocked everything.
+  // Each call already manages its own UI state, and the server is threaded.
+  const tasks = files.map(f => {
     if (f.type === "application/pdf" || f.name.toLowerCase().endsWith(".pdf"))
-      await handlePDFUpload(f);
-    else if (f.type.startsWith("image/"))
-      await _handleImageDrop(f);
-    else if (_DOC_EXTS.has(_getFileExt(f.name)))
-      await handleDocUpload(f);
+      return handlePDFUpload(f);
+    if (f.type.startsWith("image/"))
+      return _handleImageDrop(f);
+    if (_DOC_EXTS.has(_getFileExt(f.name)))
+      return handleDocUpload(f);
+    return Promise.resolve();
+  });
+  e.target.value = "";  // reset picker immediately so user can queue more
+  await Promise.allSettled(tasks);
+}
+
+// 2026-05-06 (Option C): PDFs upload in PARALLEL. The legacy single-flight
+// `pdfProcessing` mutex serialized N PDFs, so a slow 60-page paper blocked
+// every subsequent upload — making the second card look "stuck" while the
+// first text-extracted. The Werkzeug server is already threaded=True, and
+// each upload runs on its own request thread, so true parallelism is fine.
+// `pdfProcessing` is now an integer counter for "any text parse in flight"
+// (used by sendMessage's precondition + global progress bar). VLM stage is
+// tracked separately via per-entry `vlmStatus`.
+
+/** Returns true while ANY pdf entry is still in the text-extract phase. */
+function _isAnyPdfTextParsing() {
+  return pendingPdfTexts.some(p => p && p.method === 'parsing');
+}
+
+/** Repaint the shared progress bar based on active text-parses. */
+function _refreshPdfProgressBar() {
+  const pEl = document.getElementById("pdfProgress");
+  const pText = document.getElementById("pdfProgressText");
+  const pFill = document.getElementById("pdfProgressFill");
+  if (!pEl || !pText || !pFill) return;
+  const inFlight = pendingPdfTexts.filter(p => p && p.method === 'parsing');
+  if (inFlight.length === 0) return;  // hidden by per-call cleanup
+  pEl.style.display = "flex";
+  if (inFlight.length === 1) {
+    pText.textContent = `Extracting text from "${inFlight[0].name}"…`;
+  } else {
+    const names = inFlight.map(p => p.name.length > 18 ? p.name.slice(0, 16) + '…' : p.name);
+    pText.textContent = `Extracting text from ${inFlight.length} PDFs: ${names.join(', ')}`;
   }
-  e.target.value = "";
+  pFill.style.width = "30%";
 }
 
 async function handlePDFUpload(file) {
-  if (pdfProcessing) return;
-  pdfProcessing = true;
+  // Track via global counter so the send-precondition can still ask
+  // "any text parses in flight?" without being a single-flight gate.
+  if (typeof pdfProcessing !== 'number') pdfProcessing = 0;
+  pdfProcessing += 1;
   const pEl = document.getElementById("pdfProgress"),
     pText = document.getElementById("pdfProgressText"),
     pFill = document.getElementById("pdfProgressFill");
-  pEl.style.display = "flex";
-  pText.textContent = `Uploading "${file.name}" for text extraction...`;
-  pFill.style.width = "5%";
+  // Optimistic placeholder card — appears IMMEDIATELY so the user sees
+  // the second/third PDF acknowledged even while the first is still parsing.
+  const pdfObj = { name: file.name, text: "", pages: 0, textLength: 0, isScanned: false, method: "parsing" };
+  pendingPdfTexts.push(pdfObj);
+  renderImagePreviews();
+  _refreshPdfProgressBar();
   try {
-    const pdfObj = { name: file.name, text: "", pages: 0, textLength: 0, isScanned: false, method: "parsing" };
-    pendingPdfTexts.push(pdfObj);
     const { data } = await parsePdfToServer(file, pdfObj, {
       onUpdate: () => renderImagePreviews(),
       isAlive: () => pdfObj._vlmAlive !== false,
     });
-    pFill.style.width = "80%";
     debugLog(
       `PDF text: ${file.name} — ${data.textLength.toLocaleString()} chars, ${data.totalPages} pages`,
       "success",
     );
     renderImagePreviews();
-    const parts = [];
-    if (data.textLength > 0)
-      parts.push(`${data.textLength.toLocaleString()} chars text`);
-    if (data.isScanned) parts.push("scanned");
-    parts.push(`method: ${data.method}`);
-    if (data.warnings?.length > 0) parts.push(`⚠️ ${data.warnings.join("; ")}`);
-    pText.textContent = `✓ ${file.name}: ${data.totalPages} pages — ${parts.join(" · ")}`;
-    pFill.style.width = "100%";
-    if (data.isScanned && data.textLength < 100)
-      pText.textContent = `⚠️ "${file.name}" is a scanned PDF with minimal extractable text.`;
-    setTimeout(() => {
-      pEl.style.display = "none";
-    }, 3000);
+    // Only print the per-file success line in the global bar if no other
+    // parse is in flight (otherwise the multi-file message takes over).
+    if (!_isAnyPdfTextParsing()) {
+      const parts = [];
+      if (data.textLength > 0)
+        parts.push(`${data.textLength.toLocaleString()} chars text`);
+      if (data.isScanned) parts.push("scanned");
+      parts.push(`method: ${data.method}`);
+      if (data.warnings?.length > 0) parts.push(`⚠️ ${data.warnings.join("; ")}`);
+      pText.textContent = `✓ ${file.name}: ${data.totalPages} pages — ${parts.join(" · ")}`;
+      pFill.style.width = "100%";
+      if (data.isScanned && data.textLength < 100)
+        pText.textContent = `⚠️ "${file.name}" is a scanned PDF with minimal extractable text.`;
+      setTimeout(() => {
+        if (!_isAnyPdfTextParsing()) pEl.style.display = "none";
+      }, 3000);
+    } else {
+      _refreshPdfProgressBar();
+    }
   } catch (err) {
     console.error(
       "[PDF] Backend parse failed for '%s':",
       file.name, err.message, err,
     );
-    // Remove the placeholder entry on failure
-    const failIdx = pendingPdfTexts.findIndex(p => p.name === file.name && p.method === "parsing");
+    // Remove this PDF's placeholder entry on failure
+    const failIdx = pendingPdfTexts.indexOf(pdfObj);
     if (failIdx >= 0) pendingPdfTexts.splice(failIdx, 1);
     renderImagePreviews();
     const is413 = err.message && (err.message.includes('413') || err.message.toLowerCase().includes('too large'));
@@ -319,14 +433,14 @@ async function handlePDFUpload(file) {
       ? 'File too large for server (413)'
       : `Server error: ${err.message}`;
     pFill.style.width = "0%";
-    pText.textContent = `⚠️ PDF parse failed: ${reason}. Please check the server and try again.`;
+    pText.textContent = `⚠️ PDF parse failed for "${file.name}": ${reason}.`;
     console.error("[PDF] Upload failed — reason: %s, file: %s, size: %d bytes", reason, file.name, file.size);
     debugLog(`PDF upload failed: ${file.name} — ${reason}`, "error");
     setTimeout(() => {
-      pEl.style.display = "none";
+      if (!_isAnyPdfTextParsing()) pEl.style.display = "none";
     }, 5000);
   } finally {
-    pdfProcessing = false;
+    pdfProcessing = Math.max(0, (pdfProcessing | 0) - 1);
   }
 }
 

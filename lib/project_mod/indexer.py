@@ -3,10 +3,20 @@
 The LLM relies entirely on tool-based exploration (grep_search, find_files,
 list_dir, read_files) to understand project structure at runtime.
 
-This module provides ``get_context_for_prompt()`` which assembles
-the system-prompt context block (project path, CLAUDE.md, multi-root
-instructions, tool docs).  No file tree is injected — the model
-discovers the project structure on demand via tools.
+This module provides ``get_context_for_prompt()`` which assembles the
+SYSTEM-LEVEL context block: the project header, multi-root workspace topology,
+and any project intelligence file (CLAUDE.md / .cursorrules / AGENTS.md /
+COPILOT.md) that lives in the workspace.
+
+It does NOT enumerate per-tool descriptions — each tool's own usage prose now
+lives in its API-level ``description`` field (see ``lib/tools/*.py``), which
+the model receives as part of the standard ``tools: [...]`` parameter on every
+request.  Cross-cutting routing meta lives in
+``lib.tasks_pkg.system_prompt_cc.section_using_tools``.
+
+This split mirrors Claude Code's architecture (per-tool ``prompt()`` methods +
+small ``getUsingYourToolsSection`` cross-cutting policy) and avoids duplicating
+tool docs in the cache-sensitive system prefix.
 """
 import os
 
@@ -25,10 +35,13 @@ logger = get_logger(__name__)
 # ═══════════════════════════════════════════════════════
 
 def get_context_for_prompt(base_path=None):
-    """Build the system-prompt context block for a project co-pilot session.
+    """Build the system-prompt project-context block for a session.
 
-    Includes: project path, CLAUDE.md, multi-root workspace instructions,
-    and tool documentation.  No file tree is injected.
+    Contains only *system-level* context — the project header, multi-root
+    topology, and auto-detected project intelligence files.  Per-tool usage
+    prose lives in each tool's own ``description`` field (see
+    ``lib/tools/*.py``); cross-cutting routing meta lives in
+    ``lib.tasks_pkg.system_prompt_cc.section_using_tools``.
     """
     with _lock:
         path = base_path or _state['path']
@@ -44,55 +57,6 @@ def get_context_for_prompt(base_path=None):
 
     logger.debug('[Context] Building prompt for path=%s, extra_roots=%s',
                  path, list(extra_roots.keys()) if extra_roots else '[]')
-
-    tools_section = """
-Tools for code exploration:
-- list_dir(path) — List directory contents
-- read_files(reads) — Read one or more files/ranges in a single call (up to 20). Each entry: {path, start_line?, end_line?}
-- grep_search(pattern, path?, include?) — Search patterns (regex) across files
-- find_files(pattern, path?) — Find files by name glob
-
-Tools for code modification:
-- write_file(path, content, description?) — Write/create a file (overwrites entirely)
-- apply_diff(path, search, replace, description?, replace_all?) — Apply targeted search-and-replace edit
-  Set replace_all=true to replace ALL occurrences (default: errors on multiple matches for safety).
-  For MULTIPLE edits, pass an 'edits' array: apply_diff(edits=[{path, search, replace, replace_all?, description?}, ...])
-  Edits are applied sequentially so later edits see earlier changes. Much faster than separate calls.
-- insert_content(path, anchor, content, position?, description?) — Insert new content before or after an anchor string without replacing it.
-  The 'anchor' must match exactly once (errors on 0 or multiple matches, like apply_diff's search).
-  position='before' or 'after' (default: 'after'). For MULTIPLE insertions, pass an 'edits' array.
-- create_project(path, name?, overwrite?) — Create a NEW project directory at the given absolute/~-prefixed path and
-  register it as an EXTRA workspace root. REQUIRED before writing files that live OUTSIDE the currently-open project
-  (e.g. "generate a complete new repo at /some/path while referencing this one"). After calling this, address the new
-  project via '<rootName>:<rel/path>' (preferred) or an absolute path under it. The currently-open project is NOT
-  replaced — it remains available for reading as reference. System paths like /etc, /usr, $HOME are rejected.
-- run_command(command, timeout?, working_dir?) — Execute shell command. In multi-root workspaces, use working_dir='rootname:' to run in a specific root.
-
-Token-saving tools (use these to avoid re-generating existing content):
-- emit_to_user(comment) — TERMINAL: end your turn by pointing the user to the most recent tool result they can already see, instead of re-outputting it.
-  Use when a tool's raw output fully answers the question (e.g. command output, file contents, search results).
-  The user sees all tool results in expandable panels. Just add a brief comment — do NOT repeat the output.
-  This is a TERMINAL tool — calling it ends your turn immediately. Do NOT call other tools after this.
-- write_file supports content_ref={tool_round, start?, end?} INSTEAD of content — to write a previous tool result to a file without regenerating it.
-  Example: write_file(path="output.txt", content_ref={"tool_round": 3}) writes round 3's output to the file.
-  Use content_ref whenever you need to save/copy content that already exists as a tool result from an earlier round.
-
-Strategy:
-1. Start with list_dir('.') to understand project structure, then use find_files() for specific files
-2. Use grep_search to locate relevant code
-3. Use read_files to examine files — batch multiple paths/ranges into ONE call to minimize round-trips
-4. Provide answers with specific file paths and line numbers
-5. When suggesting changes, show exact code with file path
-6. Use apply_diff for small targeted edits, write_file for new files or major rewrites
-7. When making multiple edits, prefer batch apply_diff(edits=[...]) over separate calls — this dramatically reduces round trips
-8. **Prefer insert_content over apply_diff when the change is purely additive** (adding new lines without modifying existing ones). Examples: adding an import, appending to end of file, inserting a new function/method/block before or after existing code. insert_content is simpler (no need to repeat the anchor in both search and replace) and less error-prone.
-
-⚠️ IMPORTANT — read WIDE, not narrow:
-- When reading a function or class, read 200+ lines in one shot — don't read 50-line fragments and come back for more
-- Prefer reading the WHOLE file (omit start_line/end_line) for files under 500 lines
-- The server auto-expands to whole-file for files under ~40KB regardless of range, so don't worry about requesting too much
-
-"""
 
     ctx = (f"[PROJECT CO-PILOT MODE]\n"
            f"Project: {path}\n\n")
@@ -180,5 +144,4 @@ Strategy:
                 logger.warning('[Context] Failed to read project intelligence file %s: %s',
                                intel_path, e)
 
-    ctx += tools_section
     return ctx

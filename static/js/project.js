@@ -455,7 +455,14 @@ async function mpApplyFolders() {
     if (!resp.ok) throw new Error(data.error || "Failed");
     _applyProjectData(data);
     _saveConvProjectPath(data.path, _mpFolders.slice(1));
-    saveRecentProject(data.path);
+    // ★ Save EVERY applied folder to recent projects — not just the primary.
+    // Previously extras never showed up in the recent list because only
+    // `data.path` was saved. Each path gets its own row (de-duped by the
+    // UPSERT in save_recent_project), so typing an extra root into the
+    // modal and clicking Apply now makes it appear at the top next time.
+    for (const p of _mpFolders) {
+      if (p) saveRecentProject(p);
+    }
 
     closeProjectModal();
     const nExtras = _mpFolders.length - 1;

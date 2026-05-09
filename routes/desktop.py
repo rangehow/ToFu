@@ -7,13 +7,13 @@ Mirrors the architecture of routes/browser.py:
 """
 
 import json
-import os
 import threading
 import time
 import uuid
 
 from flask import Blueprint, jsonify, request
 
+from lib.env_compat import getenv_compat
 from lib.log import get_logger
 
 logger = get_logger(__name__)
@@ -28,7 +28,7 @@ def _check_bridge_auth(kind: str = 'desktop') -> bool:
     mismatch but does not yet reject. Full enforcement lands in Phase C
     (SECURITY_AUDIT_REPORT A3/A4). See the twin in routes/browser.py.
     """
-    expected = (os.environ.get('CHATUI_BRIDGE_SECRET', '') or '').strip()
+    expected = (getenv_compat('TOFU_BRIDGE_SECRET', 'CHATUI_BRIDGE_SECRET') or '').strip()
     if not expected:
         return True
     provided = request.headers.get('X-Bridge-Secret', '')
@@ -101,7 +101,7 @@ def format_desktop_result(cmd_type, result):
         if 'image_base64' in result:
             w = result.get('width', '?')
             h = result.get('height', '?')
-            return f'📸 Screenshot captured ({w}×{h})'
+            return f'Screenshot captured ({w}x{h})'
         # System info, process list, etc.
         parts = []
         for k, v in result.items():
@@ -120,7 +120,7 @@ def format_desktop_result(cmd_type, result):
                 name = item.get('name', str(item))
                 is_dir = item.get('is_dir', False)
                 size = item.get('size', '')
-                prefix = '📁 ' if is_dir else '📄 '
+                prefix = '[DIR] ' if is_dir else '[FILE] '
                 suffix = f'  ({size} bytes)' if size and not is_dir else ''
                 lines.append(f'{prefix}{name}{suffix}')
             else:
@@ -207,7 +207,7 @@ def execute_desktop_tool(fn_name, fn_args):
 
     if not is_desktop_agent_connected():
         logger.warning('[Desktop] tool %s called but agent not connected', fn_name)
-        return '❌ Desktop Agent not connected. Start it with: python lib/desktop_agent.py --server http://your-server:5000'
+        return 'Error: Desktop Agent not connected. Start it with: python lib/desktop_agent.py --server http://your-server:5000'
 
     # Map LLM tool names to agent command types
     cmd_type = fn_name  # e.g. "desktop_list_files"
@@ -218,32 +218,32 @@ def execute_desktop_tool(fn_name, fn_args):
 
     if error:
         logger.error('[Desktop] tool %s error: %s', fn_name, error)
-        return f'❌ Desktop Agent error: {error}'
+        return f'Error: Desktop Agent error: {error}'
 
     if result is None:
-        return '❌ Desktop Agent returned empty result'
+        return 'Error: Desktop Agent returned empty result'
 
     if isinstance(result, dict):
         if result.get('error'):
-            return f'❌ {result["error"]}'
+            return f'Error: {result["error"]}'
 
         # Special formatting for common results
         if 'entries' in result:
             # File listing
-            lines = [f'📁 {result.get("path", "")} ({result.get("total", 0)} items):\n']
+            lines = [f'{result.get("path", "")} ({result.get("total", 0)} items):\n']
             for e in result['entries'][:100]:
-                icon = '📁' if e['type'] == 'dir' else '📄'
+                tag = '[DIR]' if e['type'] == 'dir' else '[FILE]'
                 size = f' ({e["size"]:,}B)' if e.get('size') is not None else ''
-                lines.append(f'  {icon} {e["name"]}{size}  {e.get("modified", "")}')
+                lines.append(f'  {tag} {e["name"]}{size}  {e.get("modified", "")}')
             return '\n'.join(lines)
 
         if 'content' in result and 'path' in result:
             # File content
-            return f'📄 {result["path"]} ({result.get("size", 0):,} bytes):\n\n{result["content"]}'
+            return f'{result["path"]} ({result.get("size", 0):,} bytes):\n\n{result["content"]}'
 
         if 'base64' in result:
             # Screenshot — return metadata, actual image handled separately
-            return f'📸 Desktop screenshot: {result.get("width")}x{result.get("height")} ({result.get("size_bytes", 0):,} bytes JPEG)'
+            return f'Desktop screenshot: {result.get("width")}x{result.get("height")} ({result.get("size_bytes", 0):,} bytes JPEG)'
 
         if 'stdout' in result:
             # Command output

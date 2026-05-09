@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """debug/triage_errors.py — Cluster error-log signatures.
 
-Reads ``logs/error.log`` (override with ``CHATUI_LOG_DIR``), groups lines by
+Reads ``logs/error.log`` (override with ``TOFU_LOG_DIR`` / legacy ``CHATUI_LOG_DIR``), groups lines by
 well-known signatures, and prints a top-N table with counts, first-seen /
 last-seen timestamps, and a representative example per signature.
 
@@ -200,7 +200,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description='Cluster logs/error.log by known failure signatures.')
     parser.add_argument('--log', default=None,
-                        help='Path to error log (default: $CHATUI_LOG_DIR/error.log '
+                        help='Path to error log (default: $TOFU_LOG_DIR/error.log '
                              'or logs/error.log)')
     parser.add_argument('--top', type=int, default=15,
                         help='Show only the top-N clusters by count (default: 15, '
@@ -210,11 +210,12 @@ def main(argv: list[str] | None = None) -> int:
                              'Lines without parseable timestamps are always included.')
     args = parser.parse_args(argv)
 
-    # Resolve log path: explicit --log > $CHATUI_LOG_DIR/error.log > ./logs/error.log
+    # Resolve log path: explicit --log > $TOFU_LOG_DIR/error.log > ./logs/error.log
     if args.log:
         log_path = args.log
     else:
-        log_dir = os.environ.get('CHATUI_LOG_DIR', '').strip()
+        log_dir = (os.environ.get('TOFU_LOG_DIR', '')
+                   or os.environ.get('CHATUI_LOG_DIR', '')).strip()
         if not log_dir:
             # Anchor relative to this script's repo, not the cwd
             repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

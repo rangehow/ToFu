@@ -183,7 +183,12 @@ def _llm_call_with_fallback(task, body, model, round_num, max_tokens,
                     tid, round_num, _attempts + 1, _REACTIVE_COMPACT_MAX_RETRIES, model)
 
                 from lib.tasks_pkg.compaction import reactive_compact
-                reactive_compact(messages, task=task)
+                # Pass the raw error text so reactive_compact can extract
+                # the upstream-reported token count ("N tokens > M maximum")
+                # and use it as the authoritative seed for head-truncate
+                # sizing. Without this we fall back to our under-counting
+                # heuristic and shed ~5 % when we actually need to shed ~30 %.
+                reactive_compact(messages, task=task, error_text=str(e))
 
                 # Rebuild body with compressed messages
                 _tools_this_round = tool_list if (tool_list and round_num < max_tool_rounds) else None

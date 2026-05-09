@@ -91,7 +91,7 @@ def read_local_file(path: str) -> dict | str:
     path = os.path.abspath(path)
 
     if not os.path.isfile(path):
-        return f'❌ File not found: {path}'
+        return f'Error: File not found: {path}'
 
     file_size = os.path.getsize(path)
     filename = os.path.basename(path)
@@ -119,7 +119,7 @@ def read_local_file(path: str) -> dict | str:
 def _read_image(path: str, ext: str, file_size: int) -> dict | str:
     """Read an image file and return a VLM-compatible dict."""
     if file_size > MAX_IMAGE_BYTES:
-        return (f'❌ Image too large: {file_size:,} bytes '
+        return (f'Error: Image too large: {file_size:,} bytes '
                 f'(max {MAX_IMAGE_BYTES // (1024*1024)} MB)')
 
     try:
@@ -127,7 +127,7 @@ def _read_image(path: str, ext: str, file_size: int) -> dict | str:
             raw = f.read()
     except Exception as e:
         logger.error('[FileReader] Failed to read image %s: %s', path, e, exc_info=True)
-        return f'❌ Failed to read image: {e}'
+        return f'Error: Failed to read image: {e}'
 
     # Detect MIME from magic bytes, fall back to extension
     mime = None
@@ -166,7 +166,7 @@ def _read_image(path: str, ext: str, file_size: int) -> dict | str:
         'compressedSize': len(raw),
         'compressionApplied': compressed,
         '_text_fallback': (
-            f'📄 Image file: {filename} ({fmt}, {len(raw):,} bytes). '
+            f'Image file: {filename} ({fmt}, {len(raw):,} bytes). '
             f'The image is displayed above — analyze it visually.'
         ),
     }
@@ -219,7 +219,7 @@ def _compress_image(raw: bytes, max_kb: int = 1024) -> tuple:
 def _read_pdf(path: str, file_size: int) -> str:
     """Read a PDF file and extract text."""
     if file_size > MAX_FILE_BYTES:
-        return (f'❌ PDF too large: {file_size:,} bytes '
+        return (f'Error: PDF too large: {file_size:,} bytes '
                 f'(max {MAX_FILE_BYTES // (1024*1024)} MB)')
 
     try:
@@ -227,27 +227,27 @@ def _read_pdf(path: str, file_size: int) -> str:
             pdf_bytes = f.read()
     except Exception as e:
         logger.error('[FileReader] Failed to read PDF %s: %s', path, e, exc_info=True)
-        return f'❌ Failed to read PDF: {e}'
+        return f'Error: Failed to read PDF: {e}'
 
     try:
         from lib.pdf_parser import extract_pdf_text
         text = extract_pdf_text(pdf_bytes, MAX_TEXT_CHARS)
         if not text:
-            return f'❌ PDF appears to be scanned/image-only — no text could be extracted from: {os.path.basename(path)}'
+            return f'Error: PDF appears to be scanned/image-only — no text could be extracted from: {os.path.basename(path)}'
 
         filename = os.path.basename(path)
         logger.info('[FileReader] PDF extracted: %s → %s chars', filename, f'{len(text):,}')
-        return (f'📄 PDF: {filename} ({file_size:,} bytes)\n\n'
+        return (f'PDF: {filename} ({file_size:,} bytes)\n\n'
                 f'{text}')
     except Exception as e:
         logger.error('[FileReader] PDF parsing failed for %s: %s', path, e, exc_info=True)
-        return f'❌ PDF parsing failed: {e}'
+        return f'Error: PDF parsing failed: {e}'
 
 
 def _read_office(path: str, filename: str, file_size: int) -> str:
     """Read an Office document and extract text."""
     if file_size > MAX_FILE_BYTES:
-        return (f'❌ Document too large: {file_size:,} bytes '
+        return (f'Error: Document too large: {file_size:,} bytes '
                 f'(max {MAX_FILE_BYTES // (1024*1024)} MB)')
 
     try:
@@ -255,33 +255,33 @@ def _read_office(path: str, filename: str, file_size: int) -> str:
             file_bytes = f.read()
     except Exception as e:
         logger.error('[FileReader] Failed to read document %s: %s', path, e, exc_info=True)
-        return f'❌ Failed to read document: {e}'
+        return f'Error: Failed to read document: {e}'
 
     try:
         from lib.doc_parser import extract_document_text
         result = extract_document_text(file_bytes, filename, max_chars=MAX_TEXT_CHARS)
         text = result.get('text', '')
         if not text:
-            return f'❌ No text could be extracted from: {filename}'
+            return f'Error: No text could be extracted from: {filename}'
 
         method = result.get('method', '?')
         warnings = result.get('warnings', [])
-        header = f'📄 Document: {filename} ({file_size:,} bytes, method={method})'
+        header = f'Document: {filename} ({file_size:,} bytes, method={method})'
         if warnings:
-            header += f'\n⚠️ Warnings: {"; ".join(warnings)}'
+            header += f'\nWarnings: {"; ".join(warnings)}'
 
         logger.info('[FileReader] Document extracted: %s → %s chars (method=%s)',
                     filename, f'{len(text):,}', method)
         return f'{header}\n\n{text}'
     except Exception as e:
         logger.error('[FileReader] Document parsing failed for %s: %s', path, e, exc_info=True)
-        return f'❌ Document parsing failed: {e}'
+        return f'Error: Document parsing failed: {e}'
 
 
 def _read_text(path: str, filename: str, file_size: int) -> str:
     """Read a text file with encoding detection."""
     if file_size > MAX_FILE_BYTES:
-        return (f'❌ File too large: {file_size:,} bytes '
+        return (f'Error: File too large: {file_size:,} bytes '
                 f'(max {MAX_FILE_BYTES // (1024*1024)} MB)')
 
     # Quick binary check — read first 8KB to detect binary
@@ -290,13 +290,13 @@ def _read_text(path: str, filename: str, file_size: int) -> str:
             header = f.read(8192)
     except Exception as e:
         logger.error('[FileReader] Failed to read %s: %s', path, e, exc_info=True)
-        return f'❌ Failed to read file: {e}'
+        return f'Error: Failed to read file: {e}'
 
     # If more than 30% non-printable bytes, it's likely binary
     if header:
         non_text = sum(1 for b in header if b < 8 or (b > 13 and b < 32 and b != 27))
         if non_text > len(header) * 0.3:
-            return (f'❌ File appears to be binary: {filename} ({file_size:,} bytes). '
+            return (f'Error: File appears to be binary: {filename} ({file_size:,} bytes). '
                     f'Cannot read as text. Supported binary formats: '
                     f'images ({", ".join(sorted(IMAGE_EXTENSIONS))}), '
                     f'PDF (.pdf), Office ({", ".join(sorted(OFFICE_EXTENSIONS))})')
@@ -325,7 +325,7 @@ def _read_text(path: str, filename: str, file_size: int) -> str:
                 filename, ext, f'{len(text):,}',
                 ', truncated' if truncated else '')
 
-    header = f'📄 File: {filename} ({file_size:,} bytes)'
+    header = f'File: {filename} ({file_size:,} bytes)'
     if truncated:
         header += f' [truncated at {MAX_TEXT_CHARS:,} chars]'
     return f'{header}\n\n{text}'

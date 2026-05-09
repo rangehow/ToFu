@@ -102,6 +102,39 @@ def abort_running_tasks_for_conv(conv_id: str, exclude_task_id: str | None = Non
     return aborted
 
 
+def _assign_message_ids(messages):
+    """Ensure every message has a stable ``_msgId`` (UUID).
+
+    Idempotent: messages that already have an id keep theirs.  Returns True
+    if any id was newly assigned, so callers can decide whether to write back.
+
+    Stable per-message IDs are the foundation for index-free addressing
+    (translate, edit, regenerate, branches).  See docs/ARCHITECTURE.md
+    \u00a76 \"Messages-as-Rows roadmap\" \u2014 this is the bridge from JSONB
+    array to the per-message-row schema.
+    """
+    if not isinstance(messages, list):
+        return False
+    changed = False
+    for m in messages:
+        if not isinstance(m, dict):
+            continue
+        if not m.get('_msgId'):
+            m['_msgId'] = str(uuid.uuid4())
+            changed = True
+    return changed
+
+
+def find_message_by_id(messages, msg_id):
+    """Locate a message by ``_msgId``. Returns (idx, msg) or (None, None)."""
+    if not msg_id or not isinstance(messages, list):
+        return None, None
+    for i, m in enumerate(messages):
+        if isinstance(m, dict) and m.get('_msgId') == msg_id:
+            return i, m
+    return None, None
+
+
 def _strip_base64_for_snapshot(messages):
     """Strip large base64 data from messages for debug snapshot (keep structure, save bandwidth)."""
     stripped = []
@@ -140,6 +173,7 @@ def _strip_base64_for_snapshot(messages):
 def append_event(task, event):
     with task['events_lock']:
         task['events'].append(event)
+        event_id = len(task['events']) - 1  # mirrors SSE 'id:' assigned by chat_stream
     # ★ Track phase in task for polling fallback
     if event.get('type') == 'phase':
         p = {'phase': event['phase'], 'detail': event.get('detail', '')}
@@ -149,6 +183,17 @@ def append_event(task, event):
         task['phase'] = p
     elif event.get('type') == 'delta':
         task['phase'] = None  # Clear phase when LLM starts producing tokens
+
+    # ★ Persist to task_events table for durable Last-Event-ID replay.
+    #   This survives cleanup_old_tasks AND server restart, eliminating the
+    #   "tool list disappeared after I came back" class of bugs.
+    try:
+        from lib.tasks_pkg.event_log import append_persistent_event, flush_pending
+        append_persistent_event(task['id'], event_id, event)
+        if event.get('type') == 'done':
+            flush_pending(task['id'])
+    except Exception as e:
+        logger.debug('[Manager] append_persistent_event failed (non-fatal): %s', e)
 
 def persist_task_result(task):
     content_len = len(task.get('content') or '')
@@ -500,6 +545,8 @@ def _sync_result_to_conversation(task, meta):
                 last_msg['usage'] = meta['usage']
             if meta.get('model') and not last_msg.get('model'):
                 last_msg['model'] = meta['model']
+            if meta.get('provider_id') and not last_msg.get('provider_id'):
+                last_msg['provider_id'] = meta['provider_id']
             if _tr_updated or meta.get('finishReason'):
                 logger.info('%s conv=%s Content guard: existing=%d+%d > new=%d+%d, '
                            'but still updating toolRounds=%s metadata=%s',
@@ -522,7 +569,11 @@ def _sync_result_to_conversation(task, meta):
             if error:
                 last_msg['error'] = error
 
-        # Copy metadata fields that the frontend would normally set
+        # Copy metadata fields that the frontend would normally set.
+        # Terminal metadata is backend-authoritative — once the task reaches
+        # this code path the backend has the truth, and any earlier value
+        # the frontend sync may have written (e.g. 'interrupted' before the
+        # final 'stop' arrived) is superseded.
         if tool_rounds:
             last_msg['toolRounds'] = tool_rounds
         if meta.get('finishReason'):
@@ -535,6 +586,8 @@ def _sync_result_to_conversation(task, meta):
             last_msg['toolSummary'] = meta['toolSummary']
         if meta.get('model'):
             last_msg['model'] = meta['model']
+        if meta.get('provider_id'):
+            last_msg['provider_id'] = meta['provider_id']
         if meta.get('fallbackModel'):
             last_msg['fallbackModel'] = meta['fallbackModel']
             last_msg['fallbackFrom'] = meta.get('fallbackFrom', '')
@@ -545,11 +598,25 @@ def _sync_result_to_conversation(task, meta):
         if meta.get('modifiedFileList'):
             last_msg['modifiedFileList'] = meta['modifiedFileList']
 
+        # Backfill stable per-message IDs.  Newly created messages get a
+        # UUID; existing messages keep theirs.  Index-free addressing is
+        # what makes routes/translate.py and PATCH /messages/by-id/<mid>
+        # robust against concurrent inserts.
+        _assign_message_ids(messages)
+
         # emit_to_user: persist emitted tool content for inline display
         if task.get('_emitContent'):
             last_msg['_emitContent'] = task['_emitContent']
         if task.get('_emitToolName'):
             last_msg['_emitToolName'] = task['_emitToolName']
+
+        # memory prefetch: persist indicator payload for reload visibility
+        if task.get('_memoryPrefetch'):
+            last_msg['_memoryPrefetch'] = task['_memoryPrefetch']
+
+        # git-shim: persist the round commit sha for redo/diff references.
+        if task.get('gitSha'):
+            last_msg['_gitSha'] = task['gitSha']
 
         # Serialize and write back — json_dumps_pg strips null bytes from
         # raw data AND removes \u0000 escapes from the JSON text.
@@ -878,11 +945,16 @@ def checkpoint_task_partial(task):
 
 
 def _sync_partial_to_conversation(task):
-    """Write partial streaming content into the conversation's last assistant message.
+    """Write partial streaming state into the conversation's last assistant message.
 
-    Similar to _sync_result_to_conversation but lighter — only updates content
-    and thinking, doesn't touch metadata/finishReason/usage since they're not
-    final yet.
+    Comprehensive checkpoint: writes content, thinking, toolRounds, and
+    structural metadata (model, modifiedFileList, _emitContent, _memoryPrefetch,
+    gitSha) so a page reload mid-stream reconstructs the same UI the user
+    saw before the disconnect — without depending on the in-memory task
+    object, the activeTaskId stash, or poll fallback.
+
+    Skips terminal-only fields (finishReason, usage, toolSummary) since they
+    aren't final until the task completes.
     """
     conv_id = task.get('convId', '')
     content = task.get('content') or ''
@@ -899,97 +971,138 @@ def _sync_partial_to_conversation(task):
                          conv_id[:8], task['id'][:8], latest[:8])
             return
 
-    db = None
-    try:
-        db = get_thread_db(DOMAIN_CHAT)
-        row = db.execute(
-            'SELECT messages FROM conversations WHERE id=? AND user_id=1',
-            (conv_id,)
-        ).fetchone()
-        if not row:
-            return
+    # ★ Merge checkpoint toolRounds for continue flow
+    _cp_tr = task.get('_checkpointToolRounds') or []
+    _cur_tr = task.get('toolRounds') or []
+    tool_rounds = (list(_cp_tr) + _cur_tr) if _cp_tr else _cur_tr
 
+    # Bounded CAS retry — under contention with the frontend or other writers
+    # we re-read and try again rather than silently dropping the checkpoint.
+    MAX_CAS = 3
+    last_err = None
+    for attempt in range(MAX_CAS):
         try:
-            messages = json.loads(row[0] or '[]')
-        except (json.JSONDecodeError, TypeError) as exc:
-            logger.warning('[Manager] Unparseable conversation messages for conv=%s: %s', conv_id, exc, exc_info=True)
-            return
+            db = get_thread_db(DOMAIN_CHAT)
+            row = db.execute(
+                'SELECT messages, updated_at FROM conversations WHERE id=? AND user_id=1',
+                (conv_id,)
+            ).fetchone()
+            if not row:
+                return
 
-        if not messages:
-            return
-
-        last_msg = messages[-1]
-        if last_msg.get('role') != 'assistant':
-            last_msg = {'role': 'assistant', 'content': '', 'thinking': ''}
-            messages.append(last_msg)
-
-        # Also write toolRounds if available
-        # ★ Merge checkpoint toolRounds for continue flow
-        _cp_tr = task.get('_checkpointToolRounds') or []
-        _cur_tr = task.get('toolRounds') or []
-        tool_rounds = (list(_cp_tr) + _cur_tr) if _cp_tr else _cur_tr
-
-        # Only update if we have MORE content than what's already in DB
-        existing_content_len = len(last_msg.get('content') or '')
-        existing_thinking_len = len(last_msg.get('thinking') or '')
-        if len(content) <= existing_content_len and len(thinking) <= existing_thinking_len:
-            # ★ FIX: Even when content didn't grow, still update toolRounds
-            #   if the backend has richer data (toolContent).  This prevents
-            #   the frontend's stale sync from permanently losing tool content.
-            if tool_rounds and len(tool_rounds) > len(last_msg.get('toolRounds') or []):
-                last_msg['toolRounds'] = tool_rounds
-            else:
-                return  # DB already has equal or more — skip
-
-        if content and len(content) > existing_content_len:
-            last_msg['content'] = content
-        if thinking and len(thinking) > existing_thinking_len:
-            last_msg['thinking'] = thinking
-
-        if tool_rounds:
-            last_msg['toolRounds'] = tool_rounds
-
-        from routes.conversations import build_search_text
-        messages_json = json_dumps_pg(messages)
-        search_text = build_search_text(messages)
-        now_ms = int(time.time() * 1000)
-        # ★ FIX: Use optimistic locking (CAS via updated_at) — same as
-        #   _sync_result_to_conversation — to avoid clobbering fresher data
-        #   written by the frontend's syncConversationToServer.
-        cur_row = db.execute(
-            'SELECT updated_at FROM conversations WHERE id=? AND user_id=1',
-            (conv_id,)
-        ).fetchone()
-        if not cur_row:
-            return
-        cur_updated_at = cur_row[0]
-        rc = db_execute_with_retry(
-            db,
-            '''UPDATE conversations SET messages=?, updated_at=?, msg_count=?, search_text=?
-               WHERE id=? AND user_id=1 AND updated_at=?''',
-            (messages_json, now_ms, len(messages), search_text, conv_id, cur_updated_at)
-        )
-        # Update FTS5 index
-        if search_text:
             try:
-                db.execute(
-                    "INSERT OR REPLACE INTO conversations_fts (rowid, search_text) "
-                    "SELECT rowid, ? FROM conversations WHERE id = ?",
-                    (search_text, conv_id)
+                messages = json.loads(row[0] or '[]')
+            except (json.JSONDecodeError, TypeError) as exc:
+                logger.warning('[Manager] Unparseable conversation messages for conv=%s: %s', conv_id, exc)
+                return
+
+            if not messages:
+                return
+
+            cur_updated_at = row[1]
+
+            last_msg = messages[-1]
+            if last_msg.get('role') != 'assistant':
+                last_msg = {'role': 'assistant', 'content': '', 'thinking': ''}
+                messages.append(last_msg)
+
+            existing_content_len = len(last_msg.get('content') or '')
+            existing_thinking_len = len(last_msg.get('thinking') or '')
+
+            # Track whether anything actually changed; we skip the UPDATE if
+            # content didn't grow AND no new structural data is available.
+            mutated = False
+
+            if content and len(content) > existing_content_len:
+                last_msg['content'] = content
+                mutated = True
+            if thinking and len(thinking) > existing_thinking_len:
+                last_msg['thinking'] = thinking
+                mutated = True
+
+            if tool_rounds:
+                _existing_tr = last_msg.get('toolRounds') or []
+                # Replace if we have more rounds OR existing rounds lack toolContent
+                # (frontend race may have synced an earlier tool-result without it).
+                _existing_done_have_tc = all(
+                    r.get('toolContent') for r in _existing_tr if r.get('status') == 'done'
                 )
-                db.commit()
-            except Exception as _fts_err:
-                logger.debug('[Checkpoint] FTS update failed (non-fatal): %s', _fts_err)
-        if hasattr(rc, 'rowcount') and rc.rowcount == 0:
-            logger.debug('[Checkpoint] conv=%s CAS conflict — another writer updated first, skipping',
-                         conv_id)
+                _new_done_have_tc = any(
+                    r.get('toolContent') for r in tool_rounds if r.get('status') == 'done'
+                )
+                if (len(tool_rounds) > len(_existing_tr)
+                        or (not _existing_done_have_tc and _new_done_have_tc)):
+                    last_msg['toolRounds'] = tool_rounds
+                    mutated = True
+
+            # Structural metadata that is meaningful BEFORE final completion.
+            # Backend is authoritative for these; only fill if frontend hasn't.
+            for src_key, dst_key in (
+                ('model', 'model'),
+                ('provider_id', 'provider_id'),
+                ('preset', 'preset'),
+                ('modifiedFiles', 'modifiedFiles'),
+                ('modifiedFileList', 'modifiedFileList'),
+                ('apiRounds', 'apiRounds'),
+                ('_emitContent', '_emitContent'),
+                ('_emitToolName', '_emitToolName'),
+                ('_memoryPrefetch', '_memoryPrefetch'),
+            ):
+                v = task.get(src_key)
+                if v and not last_msg.get(dst_key):
+                    last_msg[dst_key] = v
+                    mutated = True
+            git_sha = task.get('gitSha')
+            if git_sha and not last_msg.get('_gitSha'):
+                last_msg['_gitSha'] = git_sha
+                mutated = True
+
+            # Backfill stable IDs onto every message — pure write-side hook.
+            if _assign_message_ids(messages):
+                mutated = True
+
+            if not mutated:
+                return
+
+            from routes.conversations import build_search_text
+            messages_json = json_dumps_pg(messages)
+            search_text = build_search_text(messages)
+            now_ms = int(time.time() * 1000)
+            cur = db.execute(
+                'UPDATE conversations SET messages=?, updated_at=?, msg_count=?, search_text=? '
+                'WHERE id=? AND user_id=1 AND updated_at=?',
+                (messages_json, now_ms, len(messages), search_text, conv_id, cur_updated_at)
+            )
+            db.commit()
+            rowcount = getattr(cur, 'rowcount', None)
+            if rowcount == 0:
+                # CAS miss — retry with a fresh read.
+                logger.debug('[Checkpoint] conv=%s CAS miss attempt %d/%d — re-reading',
+                             conv_id[:8], attempt + 1, MAX_CAS)
+                time.sleep(0.02 * (attempt + 1))
+                continue
+            if search_text:
+                try:
+                    db.execute(
+                        "INSERT OR REPLACE INTO conversations_fts (rowid, search_text) "
+                        "SELECT rowid, ? FROM conversations WHERE id = ?",
+                        (search_text, conv_id)
+                    )
+                    db.commit()
+                except Exception as _fts_err:
+                    logger.debug('[Checkpoint] FTS update failed (non-fatal): %s', _fts_err)
+            logger.debug('[Checkpoint] conv=%s Synced partial: content=%d→%d thinking=%d→%d tools=%d',
+                         conv_id, existing_content_len, len(content),
+                         existing_thinking_len, len(thinking), len(tool_rounds or []))
             return
-        logger.debug('[Checkpoint] conv=%s Synced partial to conversation: content=%d→%d thinking=%d→%d',
-                     conv_id, existing_content_len, len(content),
-                     existing_thinking_len, len(thinking))
-    except Exception as e:
-        logger.debug('[Checkpoint] conv=%s Failed to sync partial to conversation: %s',
-                     conv_id, e, exc_info=True)
+        except Exception as e:
+            last_err = e
+            logger.debug('[Checkpoint] conv=%s partial sync attempt %d/%d failed: %s',
+                         conv_id, attempt + 1, MAX_CAS, e)
+            time.sleep(0.05 * (attempt + 1))
+    if last_err is not None:
+        logger.debug('[Checkpoint] conv=%s gave up after %d attempts: %s',
+                     conv_id, MAX_CAS, last_err)
 
 
 
@@ -1224,14 +1337,30 @@ def stream_llm_response(task, body, tag='', on_tool_call_ready=None):
         _maybe_checkpoint_during_stream()
 
     def _on_retry(attempt, reason='', status_code=0):
-        """Emit SSE phase event so user sees retry status instead of 'Waiting…'."""
-        detail = f'Retrying… {reason}' if reason else 'Retrying…'
+        """Emit SSE phase event so user sees retry status instead of 'Waiting…'.
+
+        We attach the MODEL name and current cycle count so a long wait
+        reveals exactly which key/model is being throttled instead of a
+        generic spinner.  Previously users just saw "Waiting…" for 60-120s
+        during 429 cycling with no indication that the server was alive
+        and actively retrying.
+        """
+        if status_code == 429:
+            # Rate-limit: surface the model clearly and phrase it as a
+            # queue wait rather than an error.
+            detail = (f'⏳ 模型 {model} 限流中，正在排队重试 '
+                      f'(第 {attempt} 次)…')
+        elif reason:
+            detail = f'Retrying… {reason} ({model}, attempt {attempt})'
+        else:
+            detail = f'Retrying {model}… (attempt {attempt})'
         append_event(task, {
             'type': 'phase',
             'phase': 'retrying',
             'detail': detail,
             'attempt': attempt,
             'statusCode': status_code,
+            'model': model,
         })
 
     msg, finish_reason, usage = dispatch_stream(
@@ -1278,5 +1407,37 @@ def stream_llm_response(task, body, tag='', on_tool_call_ready=None):
                 'provider=%s content=%dchars thinking=%dchars tool_calls=%d',
                 pfx, task.get('convId', ''), finish_reason, model,
                 _provider, _content_len, _thinking_len, _tool_calls)
+
+    # ★ Feed authoritative prompt_tokens into the usage cache so the NEXT
+    #   round's compaction check returns a bit-exact number instead of
+    #   falling back to the CJK-aware heuristic. Inspired by OpenCode's
+    #   MessageV2.Assistant.tokens — the provider already told us the
+    #   truth, so trust it instead of re-estimating.
+    try:
+        conv_id = task.get('convId', '') or ''
+        # prompt_tokens is OpenAI-shape; Anthropic returns input_tokens.
+        _prompt_tokens = 0
+        if isinstance(usage, dict):
+            _prompt_tokens = int(
+                usage.get('prompt_tokens')
+                or usage.get('input_tokens')
+                or 0
+            )
+        if conv_id and _prompt_tokens > 0:
+            from lib.token_counter import record_usage
+            # ``body['messages']`` is the exact list we sent. Recording it
+            # lets the cache detect edit/regenerate (prefix changed →
+            # invalidate) vs append-only (reuse + delta).
+            record_usage(
+                conv_id,
+                prompt_tokens=_prompt_tokens,
+                model=model,
+                message_count=len(body.get('messages') or []),
+                messages=body.get('messages'),
+            )
+    except Exception as e:
+        # Usage-cache is a best-effort optimisation — never let a bug
+        # here break the LLM return path.
+        logger.debug('%s record_usage failed (non-fatal): %s', pfx, e)
 
     return msg, finish_reason, usage

@@ -590,12 +590,39 @@ def _execute_tool_one(
                 logger.debug('[Executor] fn_args dump failed for %s: %s',
                              fn_name, _dump_err)
                 _arg_preview = repr(fn_args)[:300]
-            logger.error(
-                '[Executor] Tool handler %s raised %s (tc_id=%s args=%.300s) — '
-                'returning error to LLM so it can retry',
-                fn_name, type(e).__name__, tc_id[:8], _arg_preview,
-                exc_info=True,
-            )
+            # ValueError from a tool handler is the LLM's fault (bad/unknown
+            # root prefix, wrong arg type, etc.) — it is cleanly converted
+            # into a tool-result and the LLM retries.  Do NOT flood error.log
+            # with tracebacks for this recoverable path; other exception
+            # types still get full ERROR + traceback so real bugs surface.
+            #
+            # Special case — UnknownWorkspaceRootError: already logged ONCE
+            # as WARNING at the raise site (lib/project_mod/tools.py). Do
+            # NOT re-log as WARNING here (would quadruple-log the same
+            # event across executor + streaming_tool_executor + tool_dispatch
+            # + the raise site — ~492 lines/day in error.log per §1 of the
+            # log-noise audit). Log at INFO so the LLM-facing recovery is
+            # still visible in app.log without bloating error.log.
+            from lib.project_mod.config import UnknownWorkspaceRootError
+            if isinstance(e, UnknownWorkspaceRootError):
+                logger.info(
+                    '[Tool:%s] recoverable workspace-root error returned '
+                    'to LLM: %s (tc_id=%s)',
+                    fn_name, e, tc_id[:8],
+                )
+            elif isinstance(e, ValueError):
+                logger.warning(
+                    '[Tool:%s] recoverable ValueError (returned to LLM): %s '
+                    '(tc_id=%s args=%.300s)',
+                    fn_name, e, tc_id[:8], _arg_preview,
+                )
+            else:
+                logger.error(
+                    '[Executor] Tool handler %s raised %s (tc_id=%s args=%.300s) — '
+                    'returning error to LLM so it can retry',
+                    fn_name, type(e).__name__, tc_id[:8], _arg_preview,
+                    exc_info=True,
+                )
             err_msg = (
                 f'Error: tool "{fn_name}" execution failed with '
                 f'{type(e).__name__}: {e}. Check the parameter schema '

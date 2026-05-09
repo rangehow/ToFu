@@ -37,6 +37,7 @@ const _BRAND_ICONS = {
   shubiaobiao: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="11" fill="currentColor" opacity=".15"/><circle cx="12" cy="12" r="11" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 5a7 7 0 100 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M12 9a3 3 0 110 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="1" fill="currentColor"/></svg>',
   baiducloud: '<svg viewBox="0 0 24 24"><path d="M21.715 5.61l-3.983 2.31a.903.903 0 01-.896 0L12.44 5.384a.903.903 0 00-.897 0L7.156 7.92a.903.903 0 01-.896 0L2.276 5.617 12.002 0l9.713 5.61z"/><path d="M18.641 9.467a.89.89 0 00-.438.77v5.072a.896.896 0 01-.445.77l-4.428 2.51a.884.884 0 00-.445.777v4.607l4.429-2.536 5.31-3.047V7.157l-3.983 2.31z"/><path d="M10.98 18.941a.936.936 0 00-.305-.352l-4.429-2.516a.903.903 0 01-.431-.764v-5.078a.89.89 0 00-.452-.757l-.451-.26L1.38 7.158V18.39l5.311 3.047L11.126 24v-4.608a.881.881 0 00-.146-.45z"/></svg>',
   bedrock: '<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="lobe-icons-bedrock-grad" x1="80%" x2="20%" y1="20%" y2="80%"><stop offset="0%" stop-color="#6350FB"/><stop offset="50%" stop-color="#3D8FFF"/><stop offset="100%" stop-color="#9AD8F8"/></linearGradient></defs><path d="M13.05 15.513h3.08c.214 0 .389.177.389.394v1.82a1.704 1.704 0 011.296 1.661c0 .943-.755 1.708-1.685 1.708-.931 0-1.686-.765-1.686-1.708 0-.807.554-1.484 1.297-1.662v-1.425h-2.69v4.663a.395.395 0 01-.188.338l-2.69 1.641a.385.385 0 01-.405-.002l-4.926-3.086a.395.395 0 01-.185-.336V16.3L2.196 14.87A.395.395 0 012 14.555L2 14.528V9.406c0-.14.073-.27.192-.34l2.465-1.462V4.448c0-.129.062-.249.165-.322l.021-.014L9.77 1.058a.385.385 0 01.407 0l2.69 1.675a.395.395 0 01.185.336V7.6h3.856V5.683a1.704 1.704 0 01-1.296-1.662c0-.943.755-1.708 1.685-1.708.931 0 1.685.765 1.685 1.708 0 .807-.553 1.484-1.296 1.662v2.311a.391.391 0 01-.389.394h-4.245v1.806h6.624a1.69 1.69 0 011.64-1.313c.93 0 1.685.764 1.685 1.707 0 .943-.754 1.708-1.685 1.708a1.69 1.69 0 01-1.64-1.314H13.05v1.937h4.953l.915 1.18a1.66 1.66 0 01.84-.227c.931 0 1.685.764 1.685 1.707 0 .943-.754 1.708-1.685 1.708-.93 0-1.685-.765-1.685-1.708 0-.346.102-.668.276-.937l-.724-.935H13.05v1.806zM9.973 1.856L7.93 3.122V6.09h-.778V3.604L5.435 4.669v2.945l2.11 1.36L9.712 7.61V5.334h.778V7.83c0 .136-.07.263-.184.335L7.963 9.638v2.081l1.422 1.009-.446.646-1.406-.998-1.53 1.005-.423-.66 1.605-1.055v-1.99L5.038 8.29l-2.26 1.34v1.676l1.972-1.189.398.677-2.37 1.429V14.3l2.166 1.258 2.27-1.368.397.677-2.176 1.311V19.3l1.876 1.175 2.365-1.426.398.678-2.017 1.216 1.918 1.201 2.298-1.403v-5.78l-4.758 2.893-.4-.675 5.158-3.136V3.289L9.972 1.856zM16.13 18.47a.913.913 0 00-.908.92c0 .507.406.918.908.918a.913.913 0 00.907-.919.913.913 0 00-.907-.92zm3.63-3.81a.913.913 0 00-.908.92c0 .508.406.92.907.92a.913.913 0 00.908-.92.913.913 0 00-.908-.92zm1.555-4.99a.913.913 0 00-.908.92c0 .507.407.918.908.918a.913.913 0 00.907-.919.913.913 0 00-.907-.92zM17.296 3.1a.913.913 0 00-.907.92c0 .508.406.92.907.92a.913.913 0 00.908-.92.913.913 0 00-.908-.92z" fill="url(#lobe-icons-bedrock-grad)" fill-rule="nonzero"/></svg>',
+  hunyuan: '<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><g fill="none" fill-rule="evenodd"><circle cx="12" cy="12" fill="#0055E9" r="12"/><path d="M12 0c.518 0 1.028.033 1.528.096A6.188 6.188 0 0112.12 12.28l-.12.001c-2.99 0-5.242 2.179-5.554 5.11-.223 2.086.353 4.412 2.242 6.146C3.672 22.1 0 17.479 0 12 0 5.373 5.373 0 12 0z" fill="#A8DFF5"/><path d="M5.286 5a2.438 2.438 0 01.682 3.38c-3.962 5.966-3.215 10.743 2.648 15.136C3.636 22.056 0 17.452 0 12c0-1.787.39-3.482 1.09-5.006.253-.435.525-.872.817-1.311A2.438 2.438 0 015.286 5z" fill="#0055E9"/><path d="M12.98.04c.272.021.543.053.81.093.583.106 1.117.254 1.538.44 6.638 2.927 8.07 10.052 1.748 15.642a4.125 4.125 0 01-5.822-.358c-1.51-1.706-1.3-4.184.357-5.822.858-.848 3.108-1.223 4.045-2.441 1.257-1.634 2.122-6.009-2.523-7.506L12.98.039z" fill="#00BCFF"/><path d="M13.528.096A6.187 6.187 0 0112 12.281a5.75 5.75 0 00-1.71.255c.147-.905.595-1.784 1.321-2.501.858-.848 3.108-1.223 4.045-2.441 1.27-1.651 2.14-6.104-2.676-7.554.184.014.367.033.548.056z" fill="#ECECEE"/></g></svg>',
   generic: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="4"/><circle cx="9" cy="10" r="1.5" fill="currentColor" stroke="none"/><circle cx="15" cy="10" r="1.5" fill="currentColor" stroke="none"/><path d="M8.5 15.5c1 1.5 6 1.5 7 0" stroke-linecap="round"/></svg>',
 };
 
@@ -46,7 +47,7 @@ const _BRAND_COLORS = {
   doubao: '#3B82F6', minimax: '#ef4444', deepseek: '#4D6BFE', grok: '#aaa',
   mistral: '#F7D046', glm: '#3859FF', meituan: '#FFC300', tsinghua: '#82318E',
   kimi: '#ccc', openrouter: '#6566F1', mimo: '#FF6A00', baiducloud: '#2932E1',
-  shubiaobiao: '#E87A7A', bedrock: '#3D8FFF', generic: '#888',
+  shubiaobiao: '#E87A7A', bedrock: '#3D8FFF', hunyuan: '#0055E9', generic: '#888',
 };
 
 const _BRAND_PATTERNS = [
@@ -58,6 +59,7 @@ const _BRAND_PATTERNS = [
   [/mimo|xiaomi/i,                         'mimo'],
   [/shubiaobiao|数标标/i,                      'shubiaobiao'],
   [/qianfan|ernie|baidu|wenxin|文心/i,       'baiducloud'],
+  [/hunyuan|^hy\d|tencent|腾讯|混元/i,        'hunyuan'],
   // Bedrock must come before claude — Bedrock endpoints host Claude models
   // but the provider identity is AWS/Bedrock.
   [/bedrock|bedrock-runtime|amazonaws\.com\/openai|^us\.anthropic\.|^us\.amazon\.|amazon\.titan|amazon\.nova/i, 'bedrock'],
@@ -113,7 +115,7 @@ function _brandSvg(brand, size) {
 // Generate new icons: python3 scripts/gen_tofu_icons.py
 // Convert PNG→SVG:    python3 scripts/png_to_svg.py
 
-const _ICON_V = '0.9.3';  // cache-bust version — bump when icons change
+const _ICON_V = '0.10.0';  // cache-bust version — bump when icons change
 const _ICON_BASE = (typeof BASE_PATH!=='undefined'?BASE_PATH:'') + '/static/icons';
 
 const _TOFU_PLANNER_SVG = `<img src="${_ICON_BASE}/tofu-planner.svg?v=${_ICON_V}" alt="Planner" style="width:100%;height:100%;display:block">`;
@@ -132,14 +134,14 @@ const _PROVIDER_TEMPLATES = [
     base_url: 'https://api.minimax.chat/v1',
     balance_url: '',
     models: [
-      { model_id: 'MiniMax-M2.7',           capabilities: ['text', 'thinking'],  rpm: 60,  cost: 0.001 },
-      { model_id: 'MiniMax-M2.7-highspeed', capabilities: ['text', 'thinking'],  rpm: 60,  cost: 0.001 },
-      { model_id: 'MiniMax-M2.5',           capabilities: ['text', 'thinking'],  rpm: 60,  cost: 0.001 },
-      { model_id: 'MiniMax-M2.5-highspeed', capabilities: ['text', 'thinking'],  rpm: 60,  cost: 0.001 },
-      { model_id: 'MiniMax-M2.1',           capabilities: ['text', 'thinking'],  rpm: 60,  cost: 0.001 },
-      { model_id: 'MiniMax-M2.1-highspeed', capabilities: ['text', 'thinking'],  rpm: 60,  cost: 0.002 },
-      { model_id: 'MiniMax-M2',             capabilities: ['text', 'vision'],    rpm: 60,  cost: 0.001 },
-      { model_id: 'M2-her',                 capabilities: ['text'],              rpm: 60,  cost: 0.001 },
+      { model_id: 'MiniMax-M2.7',           capabilities: ['text', 'thinking', 'cheap'],  rpm: 60,  cost: 0.001 },
+      { model_id: 'MiniMax-M2.7-highspeed', capabilities: ['text', 'thinking', 'cheap'],  rpm: 60,  cost: 0.001 },
+      { model_id: 'MiniMax-M2.5',           capabilities: ['text', 'thinking', 'cheap'],  rpm: 60,  cost: 0.001 },
+      { model_id: 'MiniMax-M2.5-highspeed', capabilities: ['text', 'thinking', 'cheap'],  rpm: 60,  cost: 0.001 },
+      { model_id: 'MiniMax-M2.1',           capabilities: ['text', 'thinking', 'cheap'],  rpm: 60,  cost: 0.001 },
+      { model_id: 'MiniMax-M2.1-highspeed', capabilities: ['text', 'thinking', 'cheap'],  rpm: 60,  cost: 0.002 },
+      { model_id: 'MiniMax-M2',             capabilities: ['text', 'vision', 'cheap'],    rpm: 60,  cost: 0.001 },
+      { model_id: 'M2-her',                 capabilities: ['text', 'cheap'],              rpm: 60,  cost: 0.001 },
     ],
   },
   {
@@ -150,7 +152,7 @@ const _PROVIDER_TEMPLATES = [
     models: [
       { model_id: 'glm-5.1',         capabilities: ['text', 'thinking'],  rpm: 60,  cost: 0.004 },
       { model_id: 'glm-5',           capabilities: ['text', 'thinking'],  rpm: 60,  cost: 0.004 },
-      { model_id: 'glm-4.7',         capabilities: ['text', 'thinking'],  rpm: 60,  cost: 0.002 },
+      { model_id: 'glm-4.7',         capabilities: ['text', 'thinking', 'cheap'],  rpm: 60,  cost: 0.002 },
       { model_id: 'glm-4.5-air',     capabilities: ['text', 'cheap'],     rpm: 120, cost: 0.001 },
       { model_id: 'glm-4.5-flash',   capabilities: ['text', 'cheap'],     rpm: 200, cost: 0.0 },
     ],
@@ -161,13 +163,13 @@ const _PROVIDER_TEMPLATES = [
     base_url: 'https://api.moonshot.ai/v1',
     balance_url: '',
     models: [
-      { model_id: 'kimi-k2.6',                capabilities: ['text', 'vision', 'thinking'],  rpm: 60,  cost: 0.0017 },
-      { model_id: 'kimi-k2.5',                capabilities: ['text', 'vision', 'thinking'],  rpm: 60,  cost: 0.003 },
-      { model_id: 'kimi-k2-0905-preview',     capabilities: ['text', 'thinking'],            rpm: 60,  cost: 0.003 },
-      { model_id: 'kimi-k2-thinking',         capabilities: ['text', 'thinking'],            rpm: 60,  cost: 0.003 },
-      { model_id: 'kimi-k2-turbo-preview',    capabilities: ['text'],                        rpm: 60,  cost: 0.008 },
-      { model_id: 'kimi-k2-thinking-turbo',   capabilities: ['text', 'thinking'],            rpm: 60,  cost: 0.008 },
-      { model_id: 'kimi-k2-0711-preview',     capabilities: ['text'],                        rpm: 60,  cost: 0.003 },
+      { model_id: 'kimi-k2.6',                capabilities: ['text', 'vision', 'thinking', 'cheap'],  rpm: 60,  cost: 0.0017 },
+      { model_id: 'kimi-k2.5',                capabilities: ['text', 'vision', 'thinking', 'cheap'],  rpm: 60,  cost: 0.003 },
+      { model_id: 'kimi-k2-0905-preview',     capabilities: ['text', 'thinking', 'cheap'],            rpm: 60,  cost: 0.003 },
+      { model_id: 'kimi-k2-thinking',         capabilities: ['text', 'thinking', 'cheap'],            rpm: 60,  cost: 0.003 },
+      { model_id: 'kimi-k2-turbo-preview',    capabilities: ['text', 'cheap'],                        rpm: 60,  cost: 0.008 },
+      { model_id: 'kimi-k2-thinking-turbo',   capabilities: ['text', 'thinking', 'cheap'],            rpm: 60,  cost: 0.008 },
+      { model_id: 'kimi-k2-0711-preview',     capabilities: ['text', 'cheap'],                        rpm: 60,  cost: 0.003 },
     ],
   },
   {
@@ -180,8 +182,8 @@ const _PROVIDER_TEMPLATES = [
     models: [
       { model_id: 'deepseek-v4-pro',   capabilities: ['text', 'thinking', 'cheap'],  rpm: 30,  cost: 0.003 },
       { model_id: 'deepseek-v4-flash', capabilities: ['text', 'thinking', 'cheap'],  rpm: 60,  cost: 0.0002 },
-      { model_id: 'deepseek-chat',     capabilities: ['text'],                       rpm: 60,  cost: 0.001 },
-      { model_id: 'deepseek-reasoner', capabilities: ['text', 'thinking'],           rpm: 30,  cost: 0.002 },
+      { model_id: 'deepseek-chat',     capabilities: ['text', 'cheap'],                       rpm: 60,  cost: 0.001 },
+      { model_id: 'deepseek-reasoner', capabilities: ['text', 'thinking', 'cheap'],           rpm: 30,  cost: 0.002 },
     ],
   },
   {
@@ -191,11 +193,11 @@ const _PROVIDER_TEMPLATES = [
     balance_url: 'https://api.openai.com/v1/dashboard/billing/subscription',
     models: [
       { model_id: 'gpt-5.4',       capabilities: ['text', 'vision', 'thinking'],   rpm: 30,  cost: 0.015 },
-      { model_id: 'gpt-5.4-mini',  capabilities: ['text', 'vision', 'thinking'],   rpm: 60,  cost: 0.005 },
+      { model_id: 'gpt-5.4-mini',  capabilities: ['text', 'vision', 'thinking', 'cheap'],   rpm: 60,  cost: 0.005 },
       { model_id: 'gpt-5.4-nano',  capabilities: ['text', 'vision', 'cheap'],      rpm: 200, cost: 0.001 },
-      { model_id: 'o3',            capabilities: ['text', 'vision', 'thinking'],   rpm: 30,  cost: 0.010 },
-      { model_id: 'o4-mini',       capabilities: ['text', 'vision', 'thinking'],   rpm: 30,  cost: 0.005 },
-      { model_id: 'gpt-4.1',       capabilities: ['text', 'vision'],               rpm: 30,  cost: 0.010 },
+      { model_id: 'o3',            capabilities: ['text', 'vision', 'thinking', 'cheap'],   rpm: 30,  cost: 0.010 },
+      { model_id: 'o4-mini',       capabilities: ['text', 'vision', 'thinking', 'cheap'],   rpm: 30,  cost: 0.005 },
+      { model_id: 'gpt-4.1',       capabilities: ['text', 'vision', 'cheap'],               rpm: 30,  cost: 0.010 },
       { model_id: 'gpt-4.1-mini',  capabilities: ['text', 'vision', 'cheap'],      rpm: 60,  cost: 0.002 },
       // ── Image generation ──
       { model_id: 'gpt-image-2',   capabilities: ['image_gen'],                    rpm: 10,  cost: 0.065 },
@@ -243,12 +245,12 @@ const _PROVIDER_TEMPLATES = [
     base_url: 'https://ark.cn-beijing.volces.com/api/v3',
     balance_url: 'https://ark.cn-beijing.volces.com/api/v3/dashboard/billing/subscription',
     models: [
-      { model_id: 'doubao-seed-2-0-pro-260215',           capabilities: ['text', 'vision', 'thinking'], rpm: 60,  cost: 0.002 },
+      { model_id: 'doubao-seed-2-0-pro-260215',           capabilities: ['text', 'vision', 'thinking', 'cheap'], rpm: 60,  cost: 0.002 },
       { model_id: 'doubao-seed-2-0-lite-260215',          capabilities: ['text', 'cheap'],              rpm: 120, cost: 0.001 },
-      { model_id: 'doubao-seed-2-0-code-preview-260215',  capabilities: ['text', 'thinking'],           rpm: 60,  cost: 0.002 },
-      { model_id: 'doubao-seed-1.8-thinking',              capabilities: ['text', 'thinking'],           rpm: 60,  cost: 0.002 },
-      { model_id: 'doubao-seed-1.6-thinking',              capabilities: ['text', 'thinking'],           rpm: 60,  cost: 0.001 },
-      { model_id: 'doubao-seed-1.6',                       capabilities: ['text'],                       rpm: 120, cost: 0.001 },
+      { model_id: 'doubao-seed-2-0-code-preview-260215',  capabilities: ['text', 'thinking', 'cheap'],           rpm: 60,  cost: 0.002 },
+      { model_id: 'doubao-seed-1.8-thinking',              capabilities: ['text', 'thinking', 'cheap'],           rpm: 60,  cost: 0.002 },
+      { model_id: 'doubao-seed-1.6-thinking',              capabilities: ['text', 'thinking', 'cheap'],           rpm: 60,  cost: 0.001 },
+      { model_id: 'doubao-seed-1.6',                       capabilities: ['text', 'cheap'],                       rpm: 120, cost: 0.001 },
     ],
   },
   {
@@ -257,9 +259,9 @@ const _PROVIDER_TEMPLATES = [
     base_url: 'https://api.mistral.ai/v1',
     balance_url: 'https://api.mistral.ai/v1/dashboard/billing/subscription',
     models: [
-      { model_id: 'mistral-large-latest',   capabilities: ['text', 'vision', 'thinking'], rpm: 30,  cost: 0.008 },
+      { model_id: 'mistral-large-latest',   capabilities: ['text', 'vision', 'thinking', 'cheap'], rpm: 30,  cost: 0.008 },
       { model_id: 'mistral-small-latest',   capabilities: ['text', 'cheap'],              rpm: 60,  cost: 0.001 },
-      { model_id: 'codestral-latest',       capabilities: ['text'],                       rpm: 60,  cost: 0.003 },
+      { model_id: 'codestral-latest',       capabilities: ['text', 'cheap'],                       rpm: 60,  cost: 0.003 },
     ],
   },
   {
@@ -268,9 +270,9 @@ const _PROVIDER_TEMPLATES = [
     base_url: 'https://api.x.ai/v1',
     balance_url: 'https://api.x.ai/v1/dashboard/billing/subscription',
     models: [
-      { model_id: 'grok-4.20',      capabilities: ['text', 'vision', 'thinking'], rpm: 30,  cost: 0.006 },
-      { model_id: 'grok-4',         capabilities: ['text', 'vision', 'thinking'], rpm: 30,  cost: 0.006 },
-      { model_id: 'grok-4.1',       capabilities: ['text', 'vision', 'thinking'], rpm: 30,  cost: 0.005 },
+      { model_id: 'grok-4.20',      capabilities: ['text', 'vision', 'thinking', 'cheap'], rpm: 30,  cost: 0.006 },
+      { model_id: 'grok-4',         capabilities: ['text', 'vision', 'thinking', 'cheap'], rpm: 30,  cost: 0.006 },
+      { model_id: 'grok-4.1',       capabilities: ['text', 'vision', 'thinking', 'cheap'], rpm: 30,  cost: 0.005 },
       { model_id: 'grok-4.1-mini',  capabilities: ['text', 'vision', 'cheap'],    rpm: 60,  cost: 0.001 },
       { model_id: 'grok-3',         capabilities: ['text', 'thinking'],           rpm: 30,  cost: 0.010 },
       { model_id: 'grok-3-mini',    capabilities: ['text', 'thinking', 'cheap'],  rpm: 60,  cost: 0.003 },
@@ -282,10 +284,10 @@ const _PROVIDER_TEMPLATES = [
     base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
     balance_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1/dashboard/billing/subscription',
     models: [
-      { model_id: 'qwen3-max',              capabilities: ['text', 'thinking'],                rpm: 30,   cost: 0.004 },
-      { model_id: 'qwen-plus',              capabilities: ['text', 'thinking'],                rpm: 60,   cost: 0.002 },
-      { model_id: 'qwen-max',               capabilities: ['text'],                            rpm: 30,   cost: 0.004 },
-      { model_id: 'qwq-plus',               capabilities: ['text', 'thinking'],                rpm: 60,   cost: 0.002 },
+      { model_id: 'qwen3-max',              capabilities: ['text', 'thinking', 'cheap'],                rpm: 30,   cost: 0.004 },
+      { model_id: 'qwen-plus',              capabilities: ['text', 'thinking', 'cheap'],                rpm: 60,   cost: 0.002 },
+      { model_id: 'qwen-max',               capabilities: ['text', 'cheap'],                            rpm: 30,   cost: 0.004 },
+      { model_id: 'qwq-plus',               capabilities: ['text', 'thinking', 'cheap'],                rpm: 60,   cost: 0.002 },
       { model_id: 'qwen-turbo',             capabilities: ['text', 'cheap'],                   rpm: 200,  cost: 0.001 },
       { model_id: 'MiniMax-M2.1',           capabilities: ['cheap', 'text'],                   rpm: 120,  cost: 0.0006 },
       { model_id: 'MiniMax-M2.5',           capabilities: ['cheap', 'text'],                   rpm: 120,  cost: 0.0006 },
@@ -308,8 +310,8 @@ const _PROVIDER_TEMPLATES = [
       { model_id: 'deepseek-v3.1',          capabilities: ['cheap', 'text'],                   rpm: 60,   cost: 0.0003 },
       { model_id: 'deepseek-v3.2',          capabilities: ['cheap', 'text'],                   rpm: 60,   cost: 0.0003 },
       { model_id: 'glm-4.7',                capabilities: ['cheap', 'text'],                   rpm: 60,   cost: 0.0011 },
-      { model_id: 'glm-5',                  capabilities: ['cheap', 'text'],                   rpm: 60,   cost: 0.0015 },
-      { model_id: 'gui-plus',               capabilities: ['text'],                            rpm: 60,   cost: 0.005 },
+      { model_id: 'glm-5',                  capabilities: ['text'],                   rpm: 60,   cost: 0.0015 },
+      { model_id: 'gui-plus',               capabilities: ['text', 'cheap'],                            rpm: 60,   cost: 0.005 },
       { model_id: 'kimi-k2-thinking',       capabilities: ['cheap', 'text', 'thinking'],       rpm: 60,   cost: 0.0012 },
       { model_id: 'kimi-k2.5',              capabilities: ['cheap', 'text'],                   rpm: 60,   cost: 0.0011 },
       { model_id: 'kimi/kimi-k2.5',         capabilities: ['cheap', 'text'],                   rpm: 60,   cost: 0.0011 },
@@ -329,7 +331,7 @@ const _PROVIDER_TEMPLATES = [
       { model_id: 'qwen-coder-turbo-0919',  capabilities: ['cheap', 'text'],                   rpm: 200,  cost: 0.0004 },
       { model_id: 'qwen-coder-turbo-latest', capabilities: ['cheap', 'text'],                   rpm: 200,  cost: 0.0004 },
       { model_id: 'qwen-deep-research-2025-12-15', capabilities: ['cheap', 'text'],                   rpm: 60,   cost: 0.0009 },
-      { model_id: 'qwen-deep-search-planning', capabilities: ['text'],                            rpm: 60,   cost: 0.005 },
+      { model_id: 'qwen-deep-search-planning', capabilities: ['text', 'cheap'],                            rpm: 60,   cost: 0.005 },
       { model_id: 'qwen-flash',             capabilities: ['cheap', 'text'],                   rpm: 100,  cost: 0.0002 },
       { model_id: 'qwen-flash-character',   capabilities: ['cheap', 'text'],                   rpm: 100,  cost: 0.0002 },
       { model_id: 'qwen-flash-character-2026-02-26', capabilities: ['cheap', 'text'],                   rpm: 100,  cost: 0.0002 },
@@ -404,7 +406,7 @@ const _PROVIDER_TEMPLATES = [
       { model_id: 'qwen2.5-math-72b-instruct', capabilities: ['cheap', 'text'],                   rpm: 60,   cost: 0.0008 },
       { model_id: 'qwen2.5-math-7b-instruct', capabilities: ['cheap', 'text'],                   rpm: 60,   cost: 0.0001 },
       { model_id: 'qwen2.5-vl-32b-instruct', capabilities: ['cheap', 'text', 'vision'],         rpm: 60,   cost: 0.0004 },
-      { model_id: 'qwen3-0.6b',             capabilities: ['text'],                            rpm: 60,   cost: 0.005 },
+      { model_id: 'qwen3-0.6b',             capabilities: ['text', 'cheap'],                            rpm: 60,   cost: 0.005 },
       { model_id: 'qwen3-1.7b',             capabilities: ['cheap', 'text'],                   rpm: 60,   cost: 0.0002 },
       { model_id: 'qwen3-14b',              capabilities: ['cheap', 'text'],                   rpm: 60,   cost: 0.0001 },
       { model_id: 'qwen3-235b-a22b',        capabilities: ['cheap', 'text'],                   rpm: 60,   cost: 0.0011 },
@@ -414,7 +416,7 @@ const _PROVIDER_TEMPLATES = [
       { model_id: 'qwen3-30b-a3b-instruct-2507', capabilities: ['cheap', 'text'],                   rpm: 60,   cost: 0.0002 },
       { model_id: 'qwen3-30b-a3b-thinking-2507', capabilities: ['cheap', 'text', 'thinking'],       rpm: 60,   cost: 0.0002 },
       { model_id: 'qwen3-32b',              capabilities: ['cheap', 'text'],                   rpm: 60,   cost: 0.0002 },
-      { model_id: 'qwen3-4b',               capabilities: ['text'],                            rpm: 60,   cost: 0.005 },
+      { model_id: 'qwen3-4b',               capabilities: ['text', 'cheap'],                            rpm: 60,   cost: 0.005 },
       { model_id: 'qwen3-8b',               capabilities: ['cheap', 'text'],                   rpm: 60,   cost: 0.0002 },
       { model_id: 'qwen3-asr-flash-2026-02-10', capabilities: ['cheap', 'text'],                   rpm: 100,  cost: 0.0002 },
       { model_id: 'qwen3-asr-flash-realtime', capabilities: ['cheap', 'text'],                   rpm: 100,  cost: 0.0002 },
@@ -452,11 +454,11 @@ const _PROVIDER_TEMPLATES = [
       { model_id: 'qwen3-tts-instruct-flash-2026-01-26', capabilities: ['cheap', 'text'],                   rpm: 100,  cost: 0.0002 },
       { model_id: 'qwen3-tts-instruct-flash-realtime', capabilities: ['cheap', 'text'],                   rpm: 100,  cost: 0.0002 },
       { model_id: 'qwen3-tts-instruct-flash-realtime-2026-01-22', capabilities: ['cheap', 'text'],                   rpm: 100,  cost: 0.0002 },
-      { model_id: 'qwen3-tts-vc-2026-01-22', capabilities: ['text'],                            rpm: 60,   cost: 0.005 },
-      { model_id: 'qwen3-tts-vc-realtime-2025-11-27', capabilities: ['text'],                            rpm: 60,   cost: 0.005 },
+      { model_id: 'qwen3-tts-vc-2026-01-22', capabilities: ['text', 'cheap'],                            rpm: 60,   cost: 0.005 },
+      { model_id: 'qwen3-tts-vc-realtime-2025-11-27', capabilities: ['text', 'cheap'],                            rpm: 60,   cost: 0.005 },
       { model_id: 'qwen3-tts-vc-realtime-2026-01-15', capabilities: ['cheap', 'text'],                   rpm: 60,   cost: 0.0009 },
-      { model_id: 'qwen3-tts-vd-2026-01-26', capabilities: ['text'],                            rpm: 60,   cost: 0.005 },
-      { model_id: 'qwen3-tts-vd-realtime-2025-12-16', capabilities: ['text'],                            rpm: 60,   cost: 0.005 },
+      { model_id: 'qwen3-tts-vd-2026-01-26', capabilities: ['text', 'cheap'],                            rpm: 60,   cost: 0.005 },
+      { model_id: 'qwen3-tts-vd-realtime-2025-12-16', capabilities: ['text', 'cheap'],                            rpm: 60,   cost: 0.005 },
       { model_id: 'qwen3-tts-vd-realtime-2026-01-15', capabilities: ['cheap', 'text'],                   rpm: 60,   cost: 0.0009 },
       { model_id: 'qwen3-vl-flash',         capabilities: ['cheap', 'text', 'vision'],         rpm: 100,  cost: 0.0002 },
       { model_id: 'qwen3-vl-flash-2025-10-15', capabilities: ['cheap', 'text', 'vision'],         rpm: 100,  cost: 0.0002 },
@@ -504,10 +506,10 @@ const _PROVIDER_TEMPLATES = [
     base_url: 'https://generativelanguage.googleapis.com/v1beta/openai',
     balance_url: '',
     models: [
-      { model_id: 'gemini-3.1-pro-preview',       capabilities: ['text', 'vision', 'thinking'], rpm: 15,  cost: 0.005 },
-      { model_id: 'gemini-3-flash-preview',        capabilities: ['text', 'vision', 'thinking'], rpm: 30,  cost: 0.002 },
+      { model_id: 'gemini-3.1-pro-preview',       capabilities: ['text', 'vision', 'thinking', 'cheap'], rpm: 15,  cost: 0.005 },
+      { model_id: 'gemini-3-flash-preview',        capabilities: ['text', 'vision', 'thinking', 'cheap'], rpm: 30,  cost: 0.002 },
       { model_id: 'gemini-3.1-flash-lite-preview', capabilities: ['text', 'cheap'],              rpm: 200, cost: 0.001 },
-      { model_id: 'gemini-2.5-pro',                capabilities: ['text', 'vision', 'thinking'], rpm: 30,  cost: 0.005 },
+      { model_id: 'gemini-2.5-pro',                capabilities: ['text', 'vision', 'thinking', 'cheap'], rpm: 30,  cost: 0.005 },
       { model_id: 'gemini-2.5-flash',              capabilities: ['text', 'vision', 'cheap'],    rpm: 100, cost: 0.001 },
       { model_id: 'gemini-2.5-flash-lite',         capabilities: ['text', 'cheap'],              rpm: 200, cost: 0.001 },
     ],
@@ -521,12 +523,12 @@ const _PROVIDER_TEMPLATES = [
       { model_id: 'anthropic/claude-opus-4.6',       capabilities: ['text', 'vision', 'thinking'], rpm: 30,  cost: 0.025 },
       { model_id: 'anthropic/claude-sonnet-4.6',      capabilities: ['text', 'vision', 'thinking'], rpm: 50,  cost: 0.015 },
       { model_id: 'openai/gpt-5.4',                   capabilities: ['text', 'vision', 'thinking'], rpm: 30,  cost: 0.015 },
-      { model_id: 'google/gemini-3.1-pro-preview',    capabilities: ['text', 'vision', 'thinking'], rpm: 15,  cost: 0.005 },
+      { model_id: 'google/gemini-3.1-pro-preview',    capabilities: ['text', 'vision', 'thinking', 'cheap'], rpm: 15,  cost: 0.005 },
       { model_id: 'google/gemini-2.5-flash',          capabilities: ['text', 'vision', 'cheap'],    rpm: 100, cost: 0.001 },
-      { model_id: 'x-ai/grok-4.20',                   capabilities: ['text', 'vision', 'thinking'], rpm: 30,  cost: 0.006 },
-      { model_id: 'x-ai/grok-4',                      capabilities: ['text', 'vision', 'thinking'], rpm: 30,  cost: 0.006 },
-      { model_id: 'deepseek/deepseek-chat',           capabilities: ['text'],                        rpm: 60,  cost: 0.001 },
-      { model_id: 'deepseek/deepseek-r1',             capabilities: ['text', 'thinking'],            rpm: 30,  cost: 0.002 },
+      { model_id: 'x-ai/grok-4.20',                   capabilities: ['text', 'vision', 'thinking', 'cheap'], rpm: 30,  cost: 0.006 },
+      { model_id: 'x-ai/grok-4',                      capabilities: ['text', 'vision', 'thinking', 'cheap'], rpm: 30,  cost: 0.006 },
+      { model_id: 'deepseek/deepseek-chat',           capabilities: ['text', 'cheap'],                        rpm: 60,  cost: 0.001 },
+      { model_id: 'deepseek/deepseek-r1',             capabilities: ['text', 'thinking', 'cheap'],            rpm: 30,  cost: 0.002 },
       { model_id: 'openai/o3',                         capabilities: ['text', 'vision', 'thinking'], rpm: 30,  cost: 0.010 },
       { model_id: 'openai/gpt-5.4-mini',               capabilities: ['text', 'vision', 'cheap'],    rpm: 60,  cost: 0.005 },
       // ── Image generation ──
@@ -543,8 +545,8 @@ const _PROVIDER_TEMPLATES = [
     base_url: 'https://api.xiaomimimo.com/v1',
     balance_url: 'https://api.xiaomimimo.com/v1/dashboard/billing/subscription',
     models: [
-      { model_id: 'MiMo-V2-Pro',    capabilities: ['text', 'vision', 'thinking'], rpm: 30,  cost: 0.003 },
-      { model_id: 'MiMo-V2-Omni',   capabilities: ['text', 'vision'],             rpm: 60,  cost: 0.002 },
+      { model_id: 'MiMo-V2-Pro',    capabilities: ['text', 'vision', 'thinking', 'cheap'], rpm: 30,  cost: 0.003 },
+      { model_id: 'MiMo-V2-Omni',   capabilities: ['text', 'vision', 'cheap'],             rpm: 60,  cost: 0.002 },
       { model_id: 'MiMo-V2-Flash',  capabilities: ['text', 'cheap'],              rpm: 200, cost: 0.001 },
     ],
   },
@@ -555,28 +557,28 @@ const _PROVIDER_TEMPLATES = [
     balance_url: '',
     models: [
       // ── ERNIE flagship ──
-      { model_id: 'ernie-5.0',                       capabilities: ['text', 'vision', 'thinking'],  rpm: 60,   cost: 0.004 },
-      { model_id: 'ernie-5.0-thinking-preview',      capabilities: ['text', 'vision', 'thinking'],  rpm: 60,   cost: 0.004 },
-      { model_id: 'ernie-x1.1',                      capabilities: ['text', 'thinking'],            rpm: 300,  cost: 0.003 },
-      { model_id: 'ernie-x1-turbo-32k',              capabilities: ['text', 'thinking'],            rpm: 900,  cost: 0.001 },
-      { model_id: 'ernie-4.5-turbo-128k',            capabilities: ['text'],                        rpm: 5000, cost: 0.001 },
-      { model_id: 'ernie-4.5-turbo-vl',              capabilities: ['text', 'vision'],              rpm: 1000, cost: 0.001 },
+      { model_id: 'ernie-5.0',                       capabilities: ['text', 'vision', 'thinking', 'cheap'],  rpm: 60,   cost: 0.004 },
+      { model_id: 'ernie-5.0-thinking-preview',      capabilities: ['text', 'vision', 'thinking', 'cheap'],  rpm: 60,   cost: 0.004 },
+      { model_id: 'ernie-x1.1',                      capabilities: ['text', 'thinking', 'cheap'],            rpm: 300,  cost: 0.003 },
+      { model_id: 'ernie-x1-turbo-32k',              capabilities: ['text', 'thinking', 'cheap'],            rpm: 900,  cost: 0.001 },
+      { model_id: 'ernie-4.5-turbo-128k',            capabilities: ['text', 'cheap'],                        rpm: 5000, cost: 0.001 },
+      { model_id: 'ernie-4.5-turbo-vl',              capabilities: ['text', 'vision', 'cheap'],              rpm: 1000, cost: 0.001 },
       // ── ERNIE lightweight ──
       { model_id: 'ernie-speed-pro-128k',             capabilities: ['text', 'cheap'],               rpm: 10000, cost: 0.0005 },
       { model_id: 'ernie-lite-pro-128k',              capabilities: ['text', 'cheap'],               rpm: 10000, cost: 0.0003 },
       // ── DeepSeek on Qianfan ──
-      { model_id: 'deepseek-r1',                      capabilities: ['text', 'thinking'],            rpm: 5000, cost: 0.001 },
-      { model_id: 'deepseek-v3',                      capabilities: ['text'],                        rpm: 5000, cost: 0.001 },
-      { model_id: 'deepseek-v3.2',                    capabilities: ['text'],                        rpm: 5000, cost: 0.001 },
-      { model_id: 'deepseek-v3.2-think',              capabilities: ['text', 'thinking'],            rpm: 60,   cost: 0.002 },
+      { model_id: 'deepseek-r1',                      capabilities: ['text', 'thinking', 'cheap'],            rpm: 5000, cost: 0.001 },
+      { model_id: 'deepseek-v3',                      capabilities: ['text', 'cheap'],                        rpm: 5000, cost: 0.001 },
+      { model_id: 'deepseek-v3.2',                    capabilities: ['text', 'cheap'],                        rpm: 5000, cost: 0.001 },
+      { model_id: 'deepseek-v3.2-think',              capabilities: ['text', 'thinking', 'cheap'],            rpm: 60,   cost: 0.002 },
       // ── Qwen on Qianfan ──
-      { model_id: 'qwen3.5-397b-a17b',               capabilities: ['text', 'thinking'],            rpm: 60,   cost: 0.002 },
-      { model_id: 'qwen3-235b-a22b-instruct-2507',   capabilities: ['text'],                        rpm: 60,   cost: 0.001 },
-      { model_id: 'qwen3-coder-480b-a35b-instruct',  capabilities: ['text'],                        rpm: 60,   cost: 0.001 },
+      { model_id: 'qwen3.5-397b-a17b',               capabilities: ['text', 'thinking', 'cheap'],            rpm: 60,   cost: 0.002 },
+      { model_id: 'qwen3-235b-a22b-instruct-2507',   capabilities: ['text', 'cheap'],                        rpm: 60,   cost: 0.001 },
+      { model_id: 'qwen3-coder-480b-a35b-instruct',  capabilities: ['text', 'cheap'],                        rpm: 60,   cost: 0.001 },
       // ── Other hosted models ──
       { model_id: 'glm-5.1',                          capabilities: ['text', 'thinking'],            rpm: 60,   cost: 0.003 },
-      { model_id: 'kimi-k2.5',                        capabilities: ['text', 'thinking'],            rpm: 60,   cost: 0.002 },
-      { model_id: 'minimax-m2.5',                     capabilities: ['text', 'thinking'],            rpm: 60,   cost: 0.002 },
+      { model_id: 'kimi-k2.5',                        capabilities: ['text', 'thinking', 'cheap'],            rpm: 60,   cost: 0.002 },
+      { model_id: 'minimax-m2.5',                     capabilities: ['text', 'thinking', 'cheap'],            rpm: 60,   cost: 0.002 },
       // ── Embeddings ──
       { model_id: 'qwen3-embedding-8b',               capabilities: ['embedding'],                   rpm: 60,   cost: 0.001 },
       { model_id: 'bge-large-zh',                     capabilities: ['embedding'],                   rpm: 60,   cost: 0.001 },
@@ -589,11 +591,11 @@ const _PROVIDER_TEMPLATES = [
     balance_url: '',
     models: [
       // ── DeepSeek ──
-      { model_id: 'deepseek-r1',                     capabilities: ['text', 'thinking'],             rpm: 60,  cost: 0.002 },
-      { model_id: 'deepseek-v3',                     capabilities: ['text'],                         rpm: 60,  cost: 0.001 },
-      { model_id: 'deepseek-chat',                   capabilities: ['text'],                         rpm: 60,  cost: 0.001 },
+      { model_id: 'deepseek-r1',                     capabilities: ['text', 'thinking', 'cheap'],             rpm: 60,  cost: 0.002 },
+      { model_id: 'deepseek-v3',                     capabilities: ['text', 'cheap'],                         rpm: 60,  cost: 0.001 },
+      { model_id: 'deepseek-chat',                   capabilities: ['text', 'cheap'],                         rpm: 60,  cost: 0.001 },
       // ── GPT ──
-      { model_id: 'gpt-4o',                          capabilities: ['text', 'vision'],               rpm: 60,  cost: 0.005 },
+      { model_id: 'gpt-4o',                          capabilities: ['text', 'vision', 'cheap'],               rpm: 60,  cost: 0.005 },
       { model_id: 'gpt-4o-mini',                     capabilities: ['text', 'vision', 'cheap'],      rpm: 120, cost: 0.001 },
       { model_id: 'gpt-4.5-preview',                 capabilities: ['text', 'vision'],               rpm: 30,  cost: 0.010 },
       { model_id: 'gpt-4-turbo',                     capabilities: ['text', 'vision'],               rpm: 30,  cost: 0.010 },
@@ -607,11 +609,11 @@ const _PROVIDER_TEMPLATES = [
       { model_id: 'claude-sonnet-4-5',               capabilities: ['text', 'vision', 'thinking'],   rpm: 50,  cost: 0.009 },
       { model_id: 'claude-haiku-4-5',                capabilities: ['text', 'vision', 'cheap'],      rpm: 100, cost: 0.003 },
       // ── Gemini ──
-      { model_id: 'gemini-2.5-pro',                  capabilities: ['text', 'vision', 'thinking'],   rpm: 30,  cost: 0.005 },
+      { model_id: 'gemini-2.5-pro',                  capabilities: ['text', 'vision', 'thinking', 'cheap'],   rpm: 30,  cost: 0.005 },
       { model_id: 'gemini-2.5-flash',                capabilities: ['text', 'vision', 'cheap'],      rpm: 120, cost: 0.001 },
       // ── Grok ──
-      { model_id: 'grok-4.20',                       capabilities: ['text', 'vision', 'thinking'],   rpm: 30,  cost: 0.006 },
-      { model_id: 'grok-4',                          capabilities: ['text', 'vision', 'thinking'],   rpm: 30,  cost: 0.006 },
+      { model_id: 'grok-4.20',                       capabilities: ['text', 'vision', 'thinking', 'cheap'],   rpm: 30,  cost: 0.006 },
+      { model_id: 'grok-4',                          capabilities: ['text', 'vision', 'thinking', 'cheap'],   rpm: 30,  cost: 0.006 },
     ],
   },
   // Meituan template loaded from static/provider_templates/meituan.json (if present)
@@ -628,7 +630,7 @@ const _PROVIDER_TEMPLATES = [
       { model_id: 'gpt-5.4-pro',                     capabilities: ['text', 'vision', 'thinking'],   rpm: 20,  cost: 0.020 },
       { model_id: 'gpt-5.4-mini',                    capabilities: ['text', 'vision', 'cheap'],      rpm: 120, cost: 0.003 },
       { model_id: 'gpt-5.4-nano',                    capabilities: ['text', 'cheap'],                rpm: 200, cost: 0.001 },
-      { model_id: 'gemini-3.1-pro-preview-thinking',  capabilities: ['text', 'vision', 'thinking'],   rpm: 30,  cost: 0.005 },
+      { model_id: 'gemini-3.1-pro-preview-thinking',  capabilities: ['text', 'vision', 'thinking', 'cheap'],   rpm: 30,  cost: 0.005 },
       { model_id: 'gemini-3.1-flash-lite-preview',    capabilities: ['text', 'cheap'],                rpm: 200, cost: 0.001 },
       // ── Image generation ──
       { model_id: 'gemini-3-pro-image-preview',       capabilities: ['image_gen'],                    rpm: 10,  cost: 0.020 },
@@ -914,7 +916,10 @@ function openSettings() {
   document.getElementById("settingTemp").value = config.temperature;
   document.getElementById("tempVal").textContent = config.temperature;
   document.getElementById("settingMaxTokens").value = config.maxTokens;
-  document.getElementById("settingImageMaxWidth").value = config.imageMaxWidth || 1024;
+  // imageMaxWidth: 0 = follow server policy (recommended). >0 = user override that
+  // can only TIGHTEN the server cap. Show 0 in the field for users on the new default.
+  document.getElementById("settingImageMaxWidth").value =
+    (typeof config.imageMaxWidth === 'number' ? config.imageMaxWidth : 0);
   document.getElementById("settingSystem").value = config.systemPrompt || "";
 
   // Default thinking depth
@@ -946,6 +951,13 @@ function openSettings() {
   var debugCb = document.getElementById('settingDebugMode');
   if (debugCb) {
     debugCb.checked = !!(typeof _featureFlags !== 'undefined' && _featureFlags.debug_mode);
+  }
+
+  // Daily Optimizer toggle — default ON when flag not yet in features.json
+  var optCb = document.getElementById('settingOptimizerEnabled');
+  if (optCb) {
+    var _optFlag = (typeof _featureFlags !== 'undefined') ? _featureFlags.optimizer_enabled : undefined;
+    optCb.checked = (_optFlag === undefined) ? true : !!_optFlag;
   }
 
   // Keep Tool History toggle — defaults to true
@@ -1015,6 +1027,7 @@ function openSettings() {
     _populateFeishuTab(cfg);
     _populateMtProviderSection(cfg);
     _populateMcpTab();
+    if (typeof _populateSkillsTab === 'function') _populateSkillsTab();
   });
 }
 
@@ -1910,6 +1923,82 @@ async function _showTemplateMenu(btn) {
   }, 0);
 }
 
+// ══════════════════════════════════════════════════════
+//  Client-side pricing-tier tag normalization
+// ══════════════════════════════════════════════════════
+//
+// Mirrors lib.llm_dispatch.config.reevaluate_pricing_tags() on the
+// client so templates applied from _PROVIDER_TEMPLATES get correct
+// 'cheap' / future-tier tags even when the hardcoded JS literal is
+// stale.  Defence in depth — the static rewriter in
+// debug/reeval_pricing_tags.py + CI check is still the primary
+// defense; this ensures the UI never SHOWS a stale tag even if
+// someone hand-edits the JS template and forgets to run the rewriter.
+//
+// Keeps the single threshold pair in sync with the backend:
+//   'cheap': input < $3/1M AND output < $15/1M  (strict)
+// Add future tiers here AND in lib/llm_dispatch/config.py::PRICING_TIERS.
+
+var _PRICING_TIERS_JS = [
+  // [tag, input_max, output_max]  — per $/1M tokens
+  ['cheap', 3.0, 15.0],
+];
+var _MANAGED_TIER_TAGS_JS = new Set(_PRICING_TIERS_JS.map(function(t) { return t[0]; }));
+
+/**
+ * Return the set of pricing-tier tags that apply to *modelId*.
+ * Uses _modelPricingCache (populated from /api/server-config) for real
+ * input/output prices.  Falls back to `blendedCostPer1k * 1000` against
+ * the midpoint threshold when only a blended cost is available.
+ *
+ * Returns an Array (callers typically merge it into a capabilities set).
+ */
+function _getPricingTiersJS(modelId, blendedCostPer1k) {
+  var mp = (typeof _modelPricingCache !== 'undefined' && _modelPricingCache)
+    ? _modelPricingCache[modelId] : null;
+  var inp = mp && mp.input != null ? +mp.input : null;
+  var out = mp && mp.output != null ? +mp.output : null;
+  var tags = [];
+  for (var i = 0; i < _PRICING_TIERS_JS.length; i++) {
+    var tier = _PRICING_TIERS_JS[i];
+    var tag = tier[0], inMax = tier[1], outMax = tier[2];
+    if (inp != null && out != null) {
+      if (inp < inMax && out < outMax) tags.push(tag);
+    } else if (blendedCostPer1k != null && blendedCostPer1k > 0) {
+      var blended1m = blendedCostPer1k * 1000.0;
+      if (blended1m <= (inMax + outMax) / 2.0) tags.push(tag);
+    }
+  }
+  return tags;
+}
+
+/**
+ * Normalize pricing-tier tags on a model dict shaped like
+ * ``{model_id, capabilities, cost, ...}``.  Mutates the capabilities
+ * array in place: strips stale managed tags, adds desired ones.
+ * Skips non-chat models (image_gen / embedding).
+ */
+function _normalizeModelPricingTags(m) {
+  if (!m || !m.model_id) return;
+  var caps = new Set(m.capabilities || []);
+  if (caps.has('image_gen') || caps.has('embedding')) return;
+  var desired = new Set(_getPricingTiersJS(m.model_id, m.cost));
+  var changed = false;
+  _MANAGED_TIER_TAGS_JS.forEach(function(tag) {
+    if (caps.has(tag) && !desired.has(tag)) { caps.delete(tag); changed = true; }
+    if (!caps.has(tag) && desired.has(tag)) { caps.add(tag); changed = true; }
+  });
+  if (changed) m.capabilities = Array.from(caps);
+}
+
+/**
+ * Apply _normalizeModelPricingTags to every model in an array.
+ */
+function _normalizeModelsPricingTags(models) {
+  if (!Array.isArray(models)) return;
+  for (var i = 0; i < models.length; i++) _normalizeModelPricingTags(models[i]);
+}
+
 /**
  * Add a pre-configured provider from a template.
  * Pre-fills base_url and models; user just needs to add their API key.
@@ -1934,12 +2023,16 @@ function addProviderFromTemplate(templateKey) {
     return {
       model_id: m.model_id,
       aliases: m.aliases || [],
-      capabilities: m.capabilities || ['text'],
+      capabilities: (m.capabilities || ['text']).slice(),
       rpm: m.rpm || 30,
       cost: m.cost || 0.01,
       thinking_default: (m.capabilities || []).indexOf('thinking') >= 0,
     };
   });
+  // Defense-in-depth: re-evaluate pricing-tier tags against live pricing
+  // so a stale hardcoded template can't sneak an incorrect 'cheap' tag
+  // (or a missing one) into a new provider card.
+  _normalizeModelsPricingTags(models);
 
   var newProv = {
     id: id, name: tpl.name, base_url: tpl.base_url,
@@ -2046,6 +2139,10 @@ async function _syncFromTemplate(provIdx) {
     });
     added++;
   }
+  // Defense-in-depth: re-evaluate pricing-tier tags on the entire
+  // provider after merge.  Catches both newly-added entries and any
+  // existing entries whose caps were overwritten above.
+  _normalizeModelsPricingTags(p.models);
   _renderProvidersTab();
   _renderPresetsTab(_serverConfig);
   var msg = '模板同步完成：';
@@ -3019,6 +3116,29 @@ function saveSettings() {
     }
   }
 
+  // 2d. Daily Optimizer toggle
+  var optCb = document.getElementById('settingOptimizerEnabled');
+  if (optCb) {
+    var newOpt = optCb.checked;
+    var _curFlag = (typeof _featureFlags !== 'undefined') ? _featureFlags.optimizer_enabled : undefined;
+    var curOpt = (_curFlag === undefined) ? true : !!_curFlag;
+    if (newOpt !== curOpt) {
+      fetch(apiUrl('/api/features'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ optimizer_enabled: newOpt }),
+      }).then(function(r) { return r.json(); }).then(function(data) {
+        if (data.ok) {
+          debugLog('Daily Optimizer ' + (newOpt ? 'enabled' : 'disabled'), 'success');
+          if (typeof _featureFlags !== 'undefined') _featureFlags.optimizer_enabled = newOpt;
+          // Show/hide the topbar badge immediately.
+          var badge = document.getElementById('optimizerBadge');
+          if (badge) badge.style.display = newOpt ? 'inline-flex' : 'none';
+        }
+      }).catch(function(e) { debugLog('Feature flag save failed: ' + e.message, 'error'); });
+    }
+  }
+
   // 3. Server config (Providers / Presets / Search)
   if (_serverConfig) {
     _saveServerConfig();
@@ -3114,7 +3234,7 @@ function exportServerConfig() {
     var blob = new Blob([JSON.stringify(cfg, null, 2)], { type: 'application/json' });
     var a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = 'chatui-config-' + new Date().toISOString().slice(0, 10) + '.json';
+    a.download = 'tofu-config-' + new Date().toISOString().slice(0, 10) + '.json';
     a.click();
     URL.revokeObjectURL(a.href);
     debugLog('[Settings] Config exported', 'success');
@@ -3650,6 +3770,9 @@ function _renderMcpCatalog() {
     }
     html += '<div class="mcp-app-action">';
     if (connected) {
+      if (e.server_version) {
+        html += '<span class="mcp-app-version" title="' + escapeHtml((e.server_impl_name || e.id) + ' v' + e.server_version) + '">v' + escapeHtml(e.server_version) + '</span>';
+      }
       if (e.tools_count) {
         html += '<span class="mcp-app-tools-count">' + (e.tools_count || 0) + ' tools</span>';
       }

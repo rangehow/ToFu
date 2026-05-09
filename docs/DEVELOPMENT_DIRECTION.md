@@ -105,7 +105,7 @@ Recurring signatures in `logs/error.log` (4489 lines in current slice):
 | Signature | Count (captured window) | Source |
 |---|---|---|
 | `PREFIX MUTATION DETECTED … This will cause a cache miss` | **140** | `lib/tasks_pkg/cache_tracking.py` |
-| `429 rate-limited on example-corp_key_0:…` | **187** | `lib/llm_dispatch/api.py` |
+| `429 rate-limited on sankuai_key_0:…` | **187** | `lib/llm_dispatch/api.py` |
 | `NoneType` / `AttributeError` / `Traceback` | **126** | various |
 | `⚠ PREMATURE STREAM CLOSE: Server never sent [DONE]` | **17** | `lib/llm_client.py` |
 | `run_command timed out after 60s (interactive)` | **25** | `lib/project_mod/tools.py` |
@@ -201,7 +201,7 @@ dedicated test file — the obvious coverage gaps:
 | Axis | Values |
 |---|---|
 | DB backend | `CHATUI_DB_BACKEND=sqlite` · `=postgres` (both must pass — CLAUDE.md §10.3 invariant) |
-| LLM provider adapter | OpenAI · Anthropic · YourProvider · Qwen · Doubao · DeepSeek · one local (vLLM/Ollama) |
+| LLM provider adapter | OpenAI · Anthropic · Meituan · Qwen · Doubao · DeepSeek · one local (vLLM/Ollama) |
 | Agent backend | builtin · Claude Code · Codex (`lib/agent_backends/`) |
 | OS | Linux · macOS · Windows (memory `cross-platform-compat` already codifies this) |
 

@@ -396,11 +396,33 @@ class TestConcurrencyPartitioning:
 class TestMemoryPrefetch:
     """Test memory prefetch integration in system context injection."""
 
+    @staticmethod
+    def _all_text(messages):
+        """Concatenate every text block across every message (system + user
+        _isMeta + user). Used to assert that injected project context lands
+        SOMEWHERE in the prompt without binding the test to whichever role
+        currently carries CLAUDE.md.
+        """
+        out = []
+        for m in messages:
+            c = m.get('content', '')
+            if isinstance(c, str):
+                out.append(c)
+            elif isinstance(c, list):
+                for b in c:
+                    if isinstance(b, dict) and b.get('type') == 'text':
+                        out.append(b.get('text', ''))
+        return '\n\n'.join(out)
+
     def test_prefetch_consumed_when_ready(self):
-        """Prefetch future result is consumed instead of calling fallback."""
+        """Prefetch future result is consumed instead of calling fallback.
+
+        CLAUDE.md project context now lands in a user _isMeta msg under
+        the Claude-Code-style layout, not the system message — so we
+        check the entire prompt (all messages) rather than just sys[0].
+        """
         from lib.tasks_pkg.system_context import _inject_system_contexts
 
-        # Create a completed future
         future = Future()
         future.set_result("Prefetched project context here")
 
@@ -419,19 +441,12 @@ class TestMemoryPrefetch:
             task=task,
         )
 
-        # Project context should be prepended
-        sys_content = messages[0]['content']
-        if isinstance(sys_content, list):
-            sys_text = '\n\n'.join(b['text'] for b in sys_content if isinstance(b, dict))
-        else:
-            sys_text = sys_content
-        assert 'Prefetched project context here' in sys_text
+        assert 'Prefetched project context here' in self._all_text(messages)
 
     def test_prefetch_fallback_on_failure(self):
         """When prefetch future failed, fallback function is called."""
         from lib.tasks_pkg.system_context import _inject_system_contexts
 
-        # Create a failed future
         future = Future()
         future.set_exception(RuntimeError("FUSE timeout"))
 
@@ -442,7 +457,6 @@ class TestMemoryPrefetch:
 
         messages = [{'role': 'system', 'content': 'Base prompt'}]
 
-        # The fallback should be called — mock it
         with patch('lib.project_mod.get_context_for_prompt',
                    return_value='Fallback project ctx') as mock_fn:
             _inject_system_contexts(
@@ -452,20 +466,14 @@ class TestMemoryPrefetch:
                 conv_id='',
                 task=task,
             )
-
-        sys_content = messages[0]['content']
-        if isinstance(sys_content, list):
-            sys_text = '\n\n'.join(b['text'] for b in sys_content if isinstance(b, dict))
-        else:
-            sys_text = sys_content
-        assert 'Fallback project ctx' in sys_text
+        assert mock_fn.called
+        assert 'Fallback project ctx' in self._all_text(messages)
 
     def test_prefetch_fallback_when_not_done(self):
         """When prefetch future is not done, fallback function is called."""
         from lib.tasks_pkg.system_context import _inject_system_contexts
 
-        # Create a future that will never complete
-        future = Future()  # not set_result'd, not done
+        future = Future()  # not set_result'd, never done
 
         task = {
             '_prefetch_project': future,
@@ -483,13 +491,8 @@ class TestMemoryPrefetch:
                 conv_id='',
                 task=task,
             )
-
-        sys_content = messages[0]['content']
-        if isinstance(sys_content, list):
-            sys_text = '\n\n'.join(b['text'] for b in sys_content if isinstance(b, dict))
-        else:
-            sys_text = sys_content
-        assert 'Sync fallback ctx' in sys_text
+        assert mock_fn.called
+        assert 'Sync fallback ctx' in self._all_text(messages)
 
     def test_no_prefetch_when_task_is_none(self):
         """When task is None, normal synchronous loading is used."""
@@ -513,9 +516,10 @@ class TestMemoryPrefetch:
 
         After the refactor, both compact memory instructions AND the dynamic
         count hint ("You have N memories...") go into the system message.
-        inject_memory_to_user() only handles legacy cleanup.
+        No listing is injected into the user message (on-demand via
+        `search_memories` tool + per-turn memory-prefetch).
         """
-        from lib.tasks_pkg.system_context import _inject_system_contexts, inject_memory_to_user
+        from lib.tasks_pkg.system_context import _inject_system_contexts
 
         # Create completed futures
         proj_future = Future()
@@ -550,19 +554,9 @@ class TestMemoryPrefetch:
         assert 'memory_accumulation' in sys_text
         assert '42 accumulated memories' in sys_text
         assert '<available_memories>' not in sys_text
+        assert '<available_skills>' not in sys_text
 
-        # inject_memory_to_user should NOT add anything to user message
-        # (it only handles legacy cleanup now)
-        inject_memory_to_user(
-            messages,
-            project_path='/tmp/proj',
-            project_enabled=True,
-            memory_enabled=True,
-            has_real_tools=True,
-            conv_id='test-conv',
-        )
-
-        # User message should NOT contain the memory hint (it's in system now)
+        # User message should NOT contain the memory count hint (it's in system now)
         user_msg = messages[-1]
         assert user_msg['role'] == 'user'
         user_text = user_msg.get('content', '')

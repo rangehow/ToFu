@@ -38,7 +38,7 @@ body = build_body(
     thinking_enabled=True,
     thinking_depth='max',
     stream=True,
-    provider_id='default',
+    provider_id='sankuai',
 )
 
 print(f'=== Outgoing body (summary) ===')

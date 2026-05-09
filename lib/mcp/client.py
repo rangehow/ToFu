@@ -60,6 +60,92 @@ _LAUNCHER_HINTS = {
 }
 
 
+def _coerce_one(value: Any, schema: dict[str, Any]) -> Any:
+    """Best-effort coerce ``value`` to match ``schema``'s declared type.
+
+    Handles the most common LLM-shaped mistakes: strings-instead-of-ints,
+    strings-instead-of-bools, and single-value-instead-of-array. Unknown
+    / unparseable values are returned unchanged so downstream jsonschema
+    validation still surfaces a clear error for genuine type mismatches.
+
+    Supports JSON Schema ``type`` as either a single string or a list
+    (e.g. ``["integer","null"]``) — the first non-null entry is used.
+    """
+    if not isinstance(schema, dict):
+        return value
+    t = schema.get('type')
+    # resolve `type: ["integer", "null"]` → "integer"
+    if isinstance(t, list):
+        t = next((x for x in t if x != 'null'), None)
+
+    # anyOf / oneOf: try each branch, return the first that produces a
+    # value whose Python type matches the branch. Keeps the behavior
+    # conservative — if none match, fall through.
+    for key in ('anyOf', 'oneOf'):
+        branches = schema.get(key)
+        if isinstance(branches, list) and branches:
+            for branch in branches:
+                coerced = _coerce_one(value, branch)
+                if coerced is not value:
+                    return coerced
+            return value
+
+    if t == 'integer' and isinstance(value, str):
+        s = value.strip()
+        if s and (s.lstrip('-').isdigit()):
+            try:
+                return int(s)
+            except ValueError:
+                return value
+    elif t == 'number' and isinstance(value, str):
+        s = value.strip()
+        try:
+            return float(s)
+        except ValueError:
+            return value
+    elif t == 'boolean' and isinstance(value, str):
+        s = value.strip().lower()
+        if s in ('true', '1', 'yes', 'y'):
+            return True
+        if s in ('false', '0', 'no', 'n'):
+            return False
+    elif t == 'array':
+        items_schema = schema.get('items') or {}
+        # Wrap scalar-instead-of-array.
+        if not isinstance(value, list):
+            value = [value]
+        if isinstance(items_schema, dict):
+            return [_coerce_one(v, items_schema) for v in value]
+        return value
+    elif t == 'object' and isinstance(value, dict):
+        props = schema.get('properties') or {}
+        if isinstance(props, dict):
+            return {
+                k: (_coerce_one(v, props[k]) if k in props else v)
+                for k, v in value.items()
+            }
+    return value
+
+
+def _coerce_args_to_schema(
+    arguments: dict[str, Any], schema: dict[str, Any],
+) -> dict[str, Any]:
+    """Walk a tool-call arg dict and coerce each entry per the tool's input schema."""
+    if not isinstance(arguments, dict) or not isinstance(schema, dict):
+        return arguments
+    props = schema.get('properties')
+    if not isinstance(props, dict):
+        return arguments
+    out: dict[str, Any] = {}
+    for k, v in arguments.items():
+        sub = props.get(k)
+        if isinstance(sub, dict):
+            out[k] = _coerce_one(v, sub)
+        else:
+            out[k] = v
+    return out
+
+
 def _launcher_install_hint(command: str) -> str:
     """Return an actionable install hint for a missing launcher binary."""
     base = command.rsplit('/', 1)[-1]
@@ -88,6 +174,7 @@ class _MCPServerHandle:
 
     __slots__ = (
         'name', 'config', 'session', 'tools',
+        'server_name', 'server_version',  # from InitializeResult.serverInfo
         '_shutdown_event',   # asyncio.Event — set() to request shutdown
         '_ready_future',     # asyncio.Future[list[Tool]] — resolved when init+list_tools done
         '_closed_future',    # asyncio.Future[None] — resolved when owner task exits
@@ -99,6 +186,8 @@ class _MCPServerHandle:
         self.config = config
         self.session = None       # mcp.ClientSession (set after connect)
         self.tools: list = []     # list of mcp.types.Tool
+        self.server_name = ''     # reported by server via InitializeResult.serverInfo.name
+        self.server_version = ''  # reported by server via InitializeResult.serverInfo.version
         self._shutdown_event = None
         self._ready_future = None
         self._closed_future = None
@@ -360,9 +449,25 @@ class MCPBridge:
                 session = await stack.enter_async_context(
                     ClientSession(read, write)
                 )
-                await asyncio.wait_for(
+                init_result = await asyncio.wait_for(
                     session.initialize(), timeout=MCP_CONNECT_TIMEOUT
                 )
+                # Harvest serverInfo.name / serverInfo.version so the UI
+                # can surface the upstream MCP server's own version (not
+                # Tofu's or the launcher's). This comes from the MCP
+                # handshake — see mcp.types.Implementation.
+                try:
+                    srv_info = getattr(init_result, 'serverInfo', None)
+                    if srv_info is not None:
+                        handle.server_name = str(getattr(srv_info, 'name', '') or '')
+                        handle.server_version = str(getattr(srv_info, 'version', '') or '')
+                        if handle.server_version:
+                            logger.info(
+                                '[MCP] Server %s reports version %s (impl=%s)',
+                                name, handle.server_version, handle.server_name or '?',
+                            )
+                except Exception as e:
+                    logger.debug('[MCP] Could not parse serverInfo for %s: %s', name, e)
 
                 # Discover tools
                 response = await asyncio.wait_for(
@@ -566,6 +671,8 @@ class MCPBridge:
                     'tool_names': [t.name for t in handle.tools],
                     'description': handle.config.get('description', ''),
                     'transport': handle.config.get('transport', 'stdio'),
+                    'server_version': handle.server_version,
+                    'server_impl_name': handle.server_name,
                 })
             return result
 
@@ -594,6 +701,16 @@ class MCPBridge:
             handle = self._servers.get(server_name)
             if handle is None:
                 raise ValueError(f'MCP server not connected: {server_name}')
+
+        # Coerce LLM-provided strings to the schema's declared types.
+        # LLMs that don't strictly honor the JSON schema (esp. weaker models)
+        # frequently emit `"step_version": "1"` for an integer field, which
+        # the MCP server's jsonschema validator then rejects with
+        # `'1' is not of type 'integer'`. Best-effort coerce so the call
+        # actually reaches the server.
+        info = self._tool_index.get(namespaced_name)
+        if info is not None:
+            arguments = _coerce_args_to_schema(arguments, info['input_schema'])
 
         timeout = handle.config.get('timeout', MCP_CALL_TIMEOUT)
         logger.info('[MCP:Call] %s.%s(args=%s) timeout=%ds',
@@ -635,7 +752,7 @@ class MCPBridge:
         if result.isError:
             # MCP reports an error from the tool
             error_text = self._extract_text(result)
-            return f'❌ MCP Error: {error_text}'
+            return f'MCP Error: {error_text}'
 
         text = self._extract_text(result)
 

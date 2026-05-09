@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-healthcheck.py — Automated project diagnostics for chatui.
+healthcheck.py — Automated project diagnostics for tofu.
 
 Run:  python3 healthcheck.py
 Exit code 0 = all green, 1 = issues found.

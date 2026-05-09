@@ -13,6 +13,7 @@ All LLM API request logic in one place:
 To adapt to a different API endpoint, only this file needs to change.
 """
 
+import collections
 import json
 import os
 import random
@@ -21,7 +22,6 @@ import time
 import uuid
 
 import requests
-from requests.exceptions import ChunkedEncodingError, ConnectionError
 
 import lib as _lib  # module ref for hot-reload (Settings changes take effect without restart)
 from lib.log import get_logger
@@ -41,6 +41,12 @@ logger = get_logger(__name__)
 # Never logs Authorization headers or API keys.
 _RAW_SSE_FILTER = os.environ.get('LLM_DEBUG_RAW_SSE', '').strip()
 
+# Anomaly buffer: cap how many raw SSE lines we keep in memory per request,
+# so an unboundedly long stream never blows up RAM.  When an anomaly fires
+# we dump up to this many of the most-recent lines to logs/raw_sse_anomaly.log.
+_ANOMALY_RING_LINES = 400
+_ANOMALY_RING_BYTES = 256 * 1024  # 256 KB cap regardless of line count
+
 
 def _raw_sse_enabled(model: str) -> bool:
     """Check whether raw SSE dumping is enabled for this model."""
@@ -52,13 +58,28 @@ def _raw_sse_enabled(model: str) -> bool:
 
 
 class _RawSSEDumper:
-    """Appends request+SSE transcripts to logs/raw_sse.log. No-op if disabled.
+    """Captures raw SSE traffic for diagnostics.
+
+    Two output paths:
+
+    - ``logs/raw_sse.log`` — opt-in, full transcript of every request.
+      Activated via ``LLM_DEBUG_RAW_SSE`` env (see top of file).  When
+      ``self.enabled`` is False this path is a no-op.
+
+    - ``logs/raw_sse_anomaly.log`` — ALWAYS on.  Each instance keeps a
+      bounded ring buffer of the most recent raw SSE lines (no I/O until
+      anomaly fires); on anomaly the buffer is flushed to disk along with
+      a request snapshot and the reason.  Lets us inspect what the
+      gateway actually sent on rounds that triggered _empty_stop /
+      _missing_done / _missing_finish_reason / consecutive parse errors,
+      without needing to enable the env var ahead of time.
 
     Usage:
         dumper = _RawSSEDumper(model, trace_id, body)
-        dumper.start()           # writes request header
-        dumper.line(sse_line)    # writes each SSE line
-        dumper.finish(summary)   # writes footer
+        dumper.start()                  # writes request header (if enabled)
+        dumper.line(sse_line)           # always — feeds ring buffer
+        dumper.finish(summary)          # writes footer (if enabled)
+        dumper.dump_anomaly('empty_stop', chunks=N, ...)  # always available
     """
 
     def __init__(self, model: str, trace_id: str, body: dict):
@@ -70,6 +91,12 @@ class _RawSSEDumper:
         self.chunk_count = 0
         self.byte_count = 0
         self._fh = None
+        # Ring buffer for anomaly post-mortem.  Always on; bounded by
+        # both line count and total bytes to keep memory predictable.
+        self._ring = collections.deque(maxlen=_ANOMALY_RING_LINES)
+        self._ring_bytes = 0
+        self._anomaly_dumped = False  # only dump once per request
+        self._t0_wall = time.time()
 
     def _open(self):
         if self._fh is not None:
@@ -106,6 +133,23 @@ class _RawSSEDumper:
             logger.warning('[RawSSE] Failed to write header: %s', e)
 
     def line(self, sse_line: str):
+        # Always feed the ring buffer (cheap, in-memory, bounded), so an
+        # anomaly downstream can dump real bytes even when env was off.
+        if sse_line is None:
+            sse_line = ''
+        try:
+            self._ring.append(sse_line)
+            self._ring_bytes += len(sse_line)
+            # Trim from the left until we're under the byte cap.  deque
+            # already trims by line count; this caps the byte total even
+            # if individual lines are huge.
+            while self._ring_bytes > _ANOMALY_RING_BYTES and self._ring:
+                _evicted = self._ring.popleft()
+                self._ring_bytes -= len(_evicted)
+        except Exception as e:
+            logger.debug('[RawSSE] Failed to ring-buffer line: %s', e)
+
+        # Optional full transcript path (env-gated).
         if not self.enabled or not self._fh:
             return
         try:
@@ -115,6 +159,49 @@ class _RawSSEDumper:
             self.byte_count += len(sse_line)
         except Exception as e:
             logger.debug('[RawSSE] Failed to write line: %s', e)
+
+    def dump_anomaly(self, reason: str, **summary):
+        """Flush the ring buffer to logs/raw_sse_anomaly.log.
+
+        Always writes regardless of ``self.enabled``.  Idempotent — only
+        dumps once per request even if multiple anomaly conditions hit.
+        ``reason`` is a short tag (e.g. ``empty_stop``,
+        ``missing_done``, ``parse_error``) that goes in the header.
+        ``summary`` is logged verbatim as a key=value summary line.
+        """
+        if self._anomaly_dumped:
+            return
+        self._anomaly_dumped = True
+        try:
+            import pathlib
+            log_dir = pathlib.Path('logs')
+            log_dir.mkdir(parents=True, exist_ok=True)
+            path = log_dir / 'raw_sse_anomaly.log'
+            ts = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
+            elapsed = time.time() - self._t0_wall
+            _keys = ('model', 'thinking', 'effort', 'temperature', 'top_p',
+                     'top_k', 'max_tokens', 'stream', 'reasoning_split')
+            snapshot = {k: self.body.get(k) for k in _keys if k in self.body}
+            snapshot['_messages_count'] = len(self.body.get('messages', []))
+            snapshot['_tools_count'] = len(self.body.get('tools', []) or [])
+            with open(path, 'a', encoding='utf-8') as fh:
+                fh.write(f'\n{"=" * 80}\n')
+                fh.write(f'[{ts}] ANOMALY reason={reason} model={self.model} '
+                         f'trace={self.trace_id} elapsed={elapsed:.2f}s\n')
+                fh.write(f'body={json.dumps(snapshot, ensure_ascii=False)}\n')
+                fh.write(f'summary={json.dumps(summary, ensure_ascii=False, default=str)}\n')
+                fh.write(f'ring_lines={len(self._ring)} ring_bytes={self._ring_bytes}\n')
+                fh.write(f'{"-" * 80}\n')
+                for raw_line in self._ring:
+                    fh.write(raw_line)
+                    fh.write('\n')
+                fh.write(f'{"=" * 80}\n')
+            logger.warning('[RawSSE] Anomaly dump written: reason=%s trace=%s '
+                           'lines=%d bytes=%d → %s',
+                           reason, self.trace_id, len(self._ring),
+                           self._ring_bytes, path)
+        except Exception as e:
+            logger.warning('[RawSSE] Failed to dump anomaly buffer: %s', e, exc_info=True)
 
     def finish(self, **summary):
         if not self.enabled or not self._fh:
@@ -157,294 +244,36 @@ def _abortable_sleep(seconds: float, abort_check=None, interval: float = 0.5):
         remaining = deadline - time.monotonic()
         time.sleep(min(interval, max(0, remaining)))
 
-class RetryableAPIError(Exception):
-    """HTTP 5xx from the API gateway — worth retrying on the same key."""
-    def __init__(self, msg='', status_code=0):
-        super().__init__(msg)
-        self.status_code = status_code
-
-class RateLimitError(Exception):
-    """HTTP 429 — should NOT retry on the same key; bubble up to dispatch layer to switch keys.
-
-    Attributes:
-        is_quota: True when the 429 indicates a PERSISTENT billing/quota problem
-            (e.g. OpenAI ``insufficient_quota``, DeepSeek ``Insufficient Balance``,
-            Anthropic ``credit_balance_too_low``).  These are NOT transient — no
-            amount of waiting will fix them, so the dispatch layer should mark
-            the entire KEY as exhausted for the day instead of cycling to it
-            again after a brief cooldown.
-        reason: Short human-readable reason (first ~200 chars of the error body).
-    """
-    def __init__(self, msg='', *, is_quota=False, reason=''):
-        super().__init__(msg)
-        self.is_quota = bool(is_quota)
-        self.reason = (reason or (str(msg) if msg else ''))[:200]
-
-class PermissionError_(Exception):
-    """HTTP 401/403 — should NOT retry on the same key; bubble up to dispatch layer to switch keys."""
-    pass
-
-class ContentFilterError(Exception):
-    """HTTP 450 — content policy violation. Should NOT fallback to another model (same content = same filter)."""
-    pass
-
-class AbortedError(Exception):
-    """User requested abort — stop all retries immediately."""
-    pass
-
-class ModelLimitError(Exception):
-    """HTTP 400 indicating max_tokens exceeds model's limit — auto-learnable.
-
-    Carries the detected limit so callers can auto-correct and retry.
-    """
-    def __init__(self, message, model, detected_limit, requested_limit):
-        super().__init__(message)
-        self.model = model
-        self.detected_limit = detected_limit
-        self.requested_limit = requested_limit
-
-
-class PromptTooLongError(Exception):
-    """HTTP 400 indicating the prompt/context exceeds the model's input limit.
-
-    Triggers reactive compaction in the orchestrator — the conversation is
-    compressed and the LLM call is retried automatically.
-    """
-    pass
-
-
-class InvalidImageError(Exception):
-    """HTTP 400 indicating image content is invalid (too large, corrupt, etc.).
-
-    Same payload = same rejection on ALL keys/endpoints → should NOT retry.
-    Bubbles up to the user with a descriptive message.
-    """
-    pass
-
-
-class StreamOnlyError(Exception):
-    """HTTP 400 indicating the model only supports stream mode.
-
-    Should NOT retry on the same model — bubble up to dispatch layer to
-    exclude this model and try a different one.
-    """
-    def __init__(self, message, model):
-        super().__init__(message)
-        self.model = model
-
-# Patterns in HTTP 400 that indicate an image content error (not retryable)
-_IMAGE_ERROR_PATTERNS = [
-    'image dimensions exceed',
-    'exceed max allowed size',
-    'could not process image',
-    'invalid image',
-    'image is too large',
-    'image resolution exceed',
-]
-
-def _is_image_error(err_msg: str) -> bool:
-    """Check if an HTTP 400 error is about invalid image content."""
-    lower = err_msg.lower()
-    return any(p in lower for p in _IMAGE_ERROR_PATTERNS)
-
-# Patterns in HTTP 400 / SSE errors that indicate the prompt exceeds the model's input limit
-_PROMPT_TOO_LONG_PATTERNS = [
-    'prompt is too long', 'context length exceeded',
-    'maximum context length', 'prompt too long',
-    'input too long', 'exceeds the model',
-    'token limit', 'context_length_exceeded',
-    'max_prompt_tokens', 'request too large',
-]
-
-def _is_prompt_too_long(err_msg: str) -> bool:
-    """Check if an error message indicates the prompt exceeds model limits."""
-    lower = err_msg.lower()
-    return any(p in lower for p in _PROMPT_TOO_LONG_PATTERNS)
-
-
-# Patterns that indicate a PERSISTENT quota / billing / balance exhaustion.
-# These typically come back as HTTP 429 (OpenAI-style) or HTTP 402 (DeepSeek,
-# Anthropic billing). Unlike transient RPM/TPM rate-limits, no amount of
-# retrying or waiting will resolve them — the key needs a top-up.
-#
-# Keep the list conservative: only match phrases that UNAMBIGUOUSLY mean
-# "pay more money", not phrases that could mean "wait a bit" (e.g. "rate
-# limit exceeded", "requests per minute").
-_QUOTA_EXHAUSTED_PATTERNS = [
-    'insufficient_quota',           # OpenAI error code (billing)
-    'insufficient quota',           # OpenAI (human text)
-    'exceeded your current quota',  # OpenAI canonical message
-    'check your plan and billing',  # OpenAI canonical message
-    'insufficient_balance',         # DeepSeek error code
-    'insufficient balance',         # DeepSeek / generic (human text)
-    'credit_balance_too_low',       # Anthropic (billing)
-    'credit balance is too low',    # Anthropic (human text)
-    'billing_not_active',           # OpenAI billing suspension
-    'account_deactivated',          # various
-    'quota_exceeded',               # Azure / generic (billing context)
-    'payment required',             # HTTP 402 literal
-    'out of credits',               # various
-    '余额不足',                       # DeepSeek / 国内服务商 (Chinese: insufficient balance)
-    '额度不足',                       # Chinese: insufficient quota
-    '余额为零',                       # Chinese: zero balance
-    '欠费',                           # Chinese: in arrears
-]
-
-
-def _is_quota_exhausted(err_msg: str) -> bool:
-    """Return True if *err_msg* indicates a persistent billing/quota problem.
-
-    Used to distinguish fatal "this key is out of money" 429s from transient
-    "slow down, try again" 429s. A quota-exhausted key should be disabled
-    for the day (via the daily key-stats tracker), not just cooled down for
-    0.5s and retried.
-    """
-    if not err_msg:
-        return False
-    lower = err_msg.lower()
-    return any(p in lower for p in _QUOTA_EXHAUSTED_PATTERNS)
-
-
-def _classify_http_error(status_code: int, err_msg: str, model: str,
-                         log_prefix: str, *, max_tokens: int = 0) -> None:
-    """Classify an HTTP error and raise the appropriate exception.
-
-    Centralizes the error-classification chain shared by ``chat()`` and
-    ``_stream_chat_once()``.  Always raises — never returns normally.
-
-    Raises:
-        RateLimitError, ContentFilterError, PermissionError_,
-        PromptTooLongError, ModelLimitError, InvalidImageError,
-        StreamOnlyError, RetryableAPIError, or generic Exception.
-    """
-    if status_code == 429:
-        # ★ Distinguish fatal billing 429s from transient rate-limit 429s.
-        #   OpenAI returns HTTP 429 with code="insufficient_quota" for
-        #   expired-balance keys — retrying on the same key is futile.
-        if _is_quota_exhausted(err_msg):
-            logger.warning('%s Quota exhausted (HTTP 429, persistent billing): %s',
-                           log_prefix, err_msg[:300])
-            raise RateLimitError(err_msg, is_quota=True, reason=err_msg[:200])
-        raise RateLimitError(err_msg)
-    if status_code == 402:
-        # ★ HTTP 402 Payment Required — DeepSeek and some providers return
-        #   this for exhausted-balance keys. Treat identically to a quota-
-        #   exhausted 429 so it hard-disables the key for the day.
-        logger.warning('%s Payment required (HTTP 402): %s',
-                       log_prefix, err_msg[:300])
-        raise RateLimitError(err_msg, is_quota=True, reason=err_msg[:200])
-    if status_code == 450:
-        logger.warning('%s Content filter triggered (HTTP 450)', log_prefix)
-        raise ContentFilterError(err_msg)
-    if status_code in _PERMISSION_STATUS_CODES:
-        logger.warning('%s Permission error (HTTP %d)', log_prefix, status_code)
-        raise PermissionError_(err_msg)
-    if status_code == 413:
-        logger.warning('%s Request entity too large (HTTP 413) — '
-                       'treating as prompt-too-long: %s', log_prefix, err_msg[:300])
-        raise PromptTooLongError(err_msg)
-    if status_code == 400:
-        _detected_limit = _parse_token_limit_from_error(err_msg, model)
-        if _detected_limit:
-            _learn_model_limit(model, _detected_limit)
-            raise ModelLimitError(err_msg, model, _detected_limit, max_tokens)
-        if _is_image_error(err_msg):
-            logger.warning('%s Image content error (HTTP 400): %s',
-                           log_prefix, err_msg[:300])
-            raise InvalidImageError(err_msg)
-        if _is_prompt_too_long(err_msg):
-            logger.warning('%s Prompt too long detected (HTTP 400): %s',
-                           log_prefix, err_msg[:300])
-            raise PromptTooLongError(err_msg)
-        if _is_stream_only_error(err_msg):
-            logger.warning('%s Model %s only supports stream mode — '
-                           'non-streaming request rejected', log_prefix, model)
-            raise StreamOnlyError(err_msg, model)
-    if status_code in _GATEWAY_THROTTLE_STATUS:
-        # ★ 502/503/504 from the gateway = upstream overload or transient
-        #   backend failure. Treat identically to 429: bubble to dispatch
-        #   layer, cooldown this slot 0.5s, rotate to another slot, retry
-        #   indefinitely. Retrying on the SAME key is futile — another
-        #   slot (different key/model/backend pool) is far more likely to
-        #   succeed. See CLAUDE.md §10.1 for the approved change history.
-        logger.warning('%s Gateway throttle (HTTP %d) — escalating to dispatch '
-                       'layer for slot rotation: %.200s',
-                       log_prefix, status_code, err_msg)
-        raise RateLimitError(err_msg, reason=f'HTTP {status_code}: {err_msg[:180]}')
-    if status_code in _RETRYABLE_STATUS_CODES:
-        # ★ Detect wrapped overload / rate-limit inside a generic 500.
-        #   Some gateways receive 429 or 529 from the model server but
-        #   can't map it, so they wrap it as HTTP 500 with a body like:
-        #     {"status":500,"data":"No matching constant for [529]"}
-        #   Retrying on the same key is futile — escalate to dispatch.
-        if status_code == 500 and _is_wrapped_overload(err_msg):
-            logger.warning('%s Gateway wrapped overload/rate-limit in HTTP 500 '
-                           '— escalating to dispatch layer: %.200s',
-                           log_prefix, err_msg)
-            raise RateLimitError(err_msg)
-        raise RetryableAPIError(err_msg, status_code=status_code)
-    logger.error('%s Non-retryable API error (HTTP %d): %s',
-                 log_prefix, status_code, err_msg[:300])
-    raise Exception(err_msg)
-
-# Status codes that indicate a transient server-side issue (retry on same key).
-# NOTE: 429 is NOT here — it gets RateLimitError which escapes to dispatch layer.
-# NOTE: 502/503/504 are handled via _GATEWAY_THROTTLE_STATUS below (treated like
-#   429 — slot rotation instead of same-key retry) since the gateway in this
-#   project is stable and a 5xx almost always means upstream overload rather
-#   than a real outage. See CLAUDE.md §10.1 change log.
-_RETRYABLE_STATUS_CODES = {500, 529}
-
-# Status codes that indicate gateway-side throttling / upstream overload.
-# These are raised as RateLimitError so the dispatch layer rotates slots
-# (0.5s cooldown + rotate) instead of burning 5 same-key retries with up
-# to 24s exponential backoff. Effectively treats them identically to HTTP 429.
-_GATEWAY_THROTTLE_STATUS = {502, 503, 504}
-
-# Permission error status codes — escape immediately to dispatch layer
-_PERMISSION_STATUS_CODES = {401, 403}
-
-# Errors considered transient and worth retrying ON THE SAME KEY
-
-# Regex to detect embedded overload/rate-limit status codes in gateway error bodies.
-# Matches patterns like: "No matching constant for [529]", "status_code: 429"
-_WRAPPED_OVERLOAD_RE = re.compile(
-    r'(?:'
-    r'No matching constant for \[(?:429|529)\]'  # gateway can't map 429/529
-    r'|"status"\s*:\s*(?:429|529)'               # JSON {"status": 529}
-    r'|status[_\s]*code["\s:]*(?:429|529)'        # status_code: 429
-    r')',
-    re.IGNORECASE,
+# ══════════════════════════════════════════════════════════
+#  Exceptions + HTTP error classifier (extracted to lib/llm_errors.py)
+#  Re-exported here for backward compatibility with all existing
+#  ``from lib.llm_client import RateLimitError`` etc. callers.
+# ══════════════════════════════════════════════════════════
+from lib.llm_errors import (  # noqa: F401
+    AbortedError,
+    ContentFilterError,
+    InvalidImageError,
+    ModelLimitError,
+    PermissionError_,
+    PromptTooLongError,
+    RateLimitError,
+    RetryableAPIError,
+    StreamOnlyError,
+    _GATEWAY_THROTTLE_STATUS,
+    _IMAGE_ERROR_PATTERNS,
+    _PERMISSION_STATUS_CODES,
+    _PROMPT_TOO_LONG_PATTERNS,
+    _QUOTA_EXHAUSTED_PATTERNS,
+    _RETRYABLE,
+    _RETRYABLE_STATUS_CODES,
+    _WRAPPED_OVERLOAD_RE,
+    _classify_http_error,
+    _is_image_error,
+    _is_prompt_too_long,
+    _is_quota_exhausted,
+    _is_stream_only_error,
+    _is_wrapped_overload,
 )
-
-
-def _is_wrapped_overload(error_text: str) -> bool:
-    """Detect if an HTTP 500 error body contains an embedded 429/529 overload.
-
-    Some API gateways receive a 429 (rate limit) or 529 (overloaded) from
-    the model server but cannot map it to a standard HTTP status, so they
-    wrap it as a generic HTTP 500 with the original status in the body.
-    Retrying on the same key is futile for overload — escalate to dispatch.
-    """
-    return bool(_WRAPPED_OVERLOAD_RE.search(error_text))
-
-
-_RETRYABLE = (ConnectionError, ChunkedEncodingError, BrokenPipeError,
-              ConnectionResetError, RetryableAPIError)
-
-
-def _is_stream_only_error(error_text: str) -> bool:
-    """Detect if an API error indicates the model only supports streaming.
-
-    Recognizes error messages like:
-      - "This model only support stream mode"
-      - "please enable the stream parameter"
-    """
-    _lower = error_text.lower()
-    return ('only support stream' in _lower
-            or 'only supports stream' in _lower
-            or 'enable the stream parameter' in _lower
-            or 'stream mode only' in _lower)
 
 
 # ── Proxy bypass for internal endpoints ──
@@ -498,20 +327,18 @@ def _chat_url():
 # ══════════════════════════════════════════════════════════
 #  Request Body Construction
 # ══════════════════════════════════════════════════════════
-
-# Fields that are valid in OpenAI-compatible chat/completions API messages.
-# Everything else is frontend/display metadata and must be stripped to avoid
-# bloating the request body (toolRounds alone can be >1 MB).
-_API_MESSAGE_FIELDS = frozenset({
-    'role', 'content', 'name',              # standard OpenAI
-    'tool_calls', 'tool_call_id',           # tool use
-    'reasoning_content',                    # thinking models (vendor extension)
-    'thinking_signature',                   # Claude extended-thinking block signature
-                                            # — needed on Continue replay so the
-                                            # Anthropic proxy can re-attach a signed
-                                            # thinking block to the assistant turn.
-    'cache_control',                        # Anthropic prompt caching
-})
+# Message-list sanitization helpers extracted to lib/llm_sanitize.py.
+# Re-exported here for backward compatibility.
+from lib.llm_sanitize import (  # noqa: F401
+    _API_MESSAGE_FIELDS,
+    _GATEWAY_BLOCKED_TERMS,
+    _fix_orphaned_tool_calls,
+    _fix_tool_call_adjacency,
+    _merge_consecutive_same_role,
+    _sanitize_gateway_content,
+    _sanitize_messages,
+    _strip_non_api_fields,
+)
 
 
 def _validate_image_blocks(messages: list) -> list:
@@ -783,352 +610,6 @@ def _downscale_oversized_images(messages: list, model: str) -> None:
         logger.info('[ImageDownscale] Resized %d oversized image(s) for model %s '
                     '(limit=%dpx, total_images=%d)', _resized, model, max_px, total_images)
 
-
-
-def _fix_orphaned_tool_calls(messages: list) -> list:
-    """Remove or fix assistant messages with tool_calls that lack matching tool_results.
-
-    Claude/Anthropic API requires every tool_use block to have a corresponding
-    tool_result in the immediately following message.  If a task was aborted
-    mid-tool-call, the stored/persisted messages may contain orphaned tool_use
-    blocks.  This causes HTTP 400:
-      "tool_use ids were found without tool_result blocks immediately after"
-
-    Strategy:
-      1. Collect all tool_call IDs from assistant messages
-      2. Collect all tool_call_ids from tool-role messages
-      3. For any assistant message whose tool_calls ALL lack matching tool_results,
-         strip the tool_calls (keep content if any, else remove the message)
-      4. Remove any tool-role messages that reference non-existent tool_calls
-      5. Validate adjacency: tool results must immediately follow their tool_calls
-         (Anthropic requires this, even if matching IDs exist elsewhere)
-
-    Returns a new list (non-mutating).
-    """
-    if not messages:
-        return messages
-
-    # ── Pass 1: Collect all tool_call IDs and tool_result IDs ──
-    tool_call_ids = set()
-    tool_result_ids = set()
-    for msg in messages:
-        if msg.get('role') == 'tool' and msg.get('tool_call_id'):
-            tool_result_ids.add(msg['tool_call_id'])
-        tcs = msg.get('tool_calls')
-        if tcs and msg.get('role') == 'assistant':
-            for tc in tcs:
-                if tc.get('id'):
-                    tool_call_ids.add(tc['id'])
-
-    # ── Pass 2: Strip orphaned tool_calls and orphaned tool_results ──
-    fixed = []
-    orphan_tc_count = 0
-    orphan_tr_count = 0
-    for msg in messages:
-        # Remove orphaned tool results (role=tool without matching tool_call)
-        if msg.get('role') == 'tool':
-            tcid = msg.get('tool_call_id')
-            if tcid and tcid not in tool_call_ids:
-                orphan_tr_count += 1
-                logger.debug('[build_body] Dropping orphaned tool_result tc_id=%.16s '
-                             '(no matching tool_call)', tcid)
-                continue
-            fixed.append(msg)
-            continue
-
-        tcs = msg.get('tool_calls')
-        if not tcs or msg.get('role') != 'assistant':
-            fixed.append(msg)
-            continue
-
-        # Separate matched vs orphaned tool_calls
-        matched_tcs = [tc for tc in tcs if tc.get('id') in tool_result_ids]
-        orphaned_tcs = [tc for tc in tcs if tc.get('id') not in tool_result_ids]
-
-        if not orphaned_tcs:
-            # All tool_calls have results — keep as-is
-            fixed.append(msg)
-        elif matched_tcs:
-            # Some matched, some orphaned — keep only matched
-            new_msg = dict(msg)
-            new_msg['tool_calls'] = matched_tcs
-            fixed.append(new_msg)
-            orphan_tc_count += len(orphaned_tcs)
-        else:
-            # ALL tool_calls are orphaned — strip tool_calls entirely
-            content = msg.get('content')
-            if content:
-                fixed.append({'role': 'assistant', 'content': content})
-            # If no content either, we drop the message entirely
-            orphan_tc_count += len(orphaned_tcs)
-
-    if orphan_tc_count:
-        logger.warning(
-            '[build_body] Fixed %d orphaned tool_call(s) without matching tool_result '
-            '— stripped to prevent Claude HTTP 400', orphan_tc_count)
-    if orphan_tr_count:
-        logger.warning(
-            '[build_body] Removed %d orphaned tool_result(s) without matching tool_call',
-            orphan_tr_count)
-
-    # ── Pass 3: Validate adjacency ──
-    # Anthropic requires tool_result blocks to be immediately after the
-    # assistant message containing the corresponding tool_use.  If an
-    # assistant message with tool_calls is NOT immediately followed by
-    # tool-role messages with matching IDs, fix by reordering or stripping.
-    fixed = _fix_tool_call_adjacency(fixed)
-
-    return fixed
-
-
-def _fix_tool_call_adjacency(messages: list) -> list:
-    """Ensure tool results immediately follow their assistant tool_calls.
-
-    Anthropic requires tool_result blocks in the message immediately after
-    the tool_use.  OpenAI is more lenient (results can be anywhere after).
-    This function validates and fixes adjacency:
-      - For each assistant message with tool_calls, check that the next N
-        messages (where N = number of tool_calls) are role=tool with matching IDs.
-      - If tool results are present but out of order, reorder them.
-      - If tool results are missing from the immediately following position,
-        strip the tool_calls from the assistant message.
-
-    Returns a new list.
-    """
-    if not messages:
-        return messages
-
-    result = list(messages)
-    fix_count = 0
-
-    i = 0
-    while i < len(result):
-        msg = result[i]
-        tcs = msg.get('tool_calls')
-        if not tcs or msg.get('role') != 'assistant':
-            i += 1
-            continue
-
-        # Collect expected tool_call IDs
-        expected_ids = {tc.get('id') for tc in tcs if tc.get('id')}
-        if not expected_ids:
-            i += 1
-            continue
-
-        # Check the next N messages are tool results with matching IDs
-        n_expected = len(expected_ids)
-        following_tool_ids = set()
-        j = i + 1
-        while j < len(result) and j - i - 1 < n_expected:
-            fmsg = result[j]
-            if fmsg.get('role') != 'tool':
-                break
-            tcid = fmsg.get('tool_call_id')
-            if tcid in expected_ids:
-                following_tool_ids.add(tcid)
-            j += 1
-
-        missing_ids = expected_ids - following_tool_ids
-        if not missing_ids:
-            # All tool results are adjacent — good
-            i = j
-            continue
-
-        # Some tool results are not adjacent — search for them elsewhere
-        found_elsewhere = {}
-        for k in range(j, len(result)):
-            if result[k].get('role') == 'tool':
-                tcid = result[k].get('tool_call_id')
-                if tcid in missing_ids:
-                    found_elsewhere[tcid] = k
-
-        if found_elsewhere:
-            # Move misplaced tool results to the correct position
-            # Remove from original positions (in reverse order to preserve indices)
-            moved_msgs = []
-            for _idx in sorted(found_elsewhere.values(), reverse=True):
-                moved_msgs.insert(0, result.pop(_idx))
-            # Insert them right after the assistant message (after existing adjacent tools)
-            insert_pos = i + 1 + len(following_tool_ids)
-            for m in moved_msgs:
-                result.insert(insert_pos, m)
-                insert_pos += 1
-            fix_count += len(moved_msgs)
-            logger.warning(
-                '[build_body] Reordered %d tool_result(s) to be adjacent to '
-                'their tool_calls (Anthropic adjacency fix)',
-                len(moved_msgs))
-        else:
-            # Tool results genuinely missing — strip orphaned tool_calls
-            still_matched = [tc for tc in tcs if tc.get('id') not in missing_ids]
-            if still_matched:
-                result[i] = dict(msg)
-                result[i]['tool_calls'] = still_matched
-            else:
-                content = msg.get('content')
-                if content:
-                    result[i] = {'role': 'assistant', 'content': content}
-                else:
-                    result.pop(i)
-                    continue  # Don't increment i
-            fix_count += len(missing_ids)
-            logger.warning(
-                '[build_body] Stripped %d tool_call(s) with non-adjacent results '
-                '(Anthropic adjacency requirement)', len(missing_ids))
-
-        i += 1
-
-    if fix_count:
-        logger.info('[build_body] Tool adjacency fixes applied: %d total', fix_count)
-
-    return result
-
-
-def _merge_consecutive_same_role(messages: list) -> list:
-    """Merge consecutive messages with the same role (except system/tool).
-
-    Endpoint mode can produce consecutive assistant messages (planner + worker)
-    in the DB conversation.  If the frontend fails to filter the planner message,
-    this backend defense-in-depth merges them by concatenating content.
-
-    Rules:
-      - system messages: never merged (each has distinct purpose)
-      - tool messages: never merged (each maps to a specific tool_call_id)
-      - user/assistant: consecutive same-role messages are merged with \\n\\n separator
-      - Messages with tool_calls are never merged (they are function-call requests)
-
-    Mutates nothing — returns a new list.
-    """
-    if not messages or len(messages) < 2:
-        return list(messages)
-
-    merged = [messages[0]]
-    merge_count = 0
-    for msg in messages[1:]:
-        role = msg.get('role', '')
-        prev_role = merged[-1].get('role', '')
-
-        # Never merge system, tool, or messages with tool_calls
-        if (role == prev_role
-                and role in ('user', 'assistant')
-                and not msg.get('tool_calls')
-                and not merged[-1].get('tool_calls')):
-            # Merge content by concatenation
-            prev_content = merged[-1].get('content', '') or ''
-            new_content = msg.get('content', '') or ''
-            # Handle multimodal content (list of blocks)
-            if isinstance(prev_content, list) or isinstance(new_content, list):
-                # Convert both to list form and concatenate
-                if isinstance(prev_content, str):
-                    prev_content = [{'type': 'text', 'text': prev_content}] if prev_content else []
-                if isinstance(new_content, str):
-                    new_content = [{'type': 'text', 'text': new_content}] if new_content else []
-                merged[-1] = dict(merged[-1])
-                merged[-1]['content'] = prev_content + new_content
-            else:
-                separator = '\n\n' if prev_content and new_content else ''
-                merged[-1] = dict(merged[-1])
-                merged[-1]['content'] = prev_content + separator + new_content
-            merge_count += 1
-        else:
-            merged.append(msg)
-
-    if merge_count:
-        logger.info('[build_body] Merged %d consecutive same-role message(s) '
-                    '(%d → %d messages)', merge_count, len(messages), len(merged))
-    return merged
-
-
-# ══════════════════════════════════════════════════════════
-#  Gateway Content Sanitization
-# ══════════════════════════════════════════════════════════
-# The corporate gateway (your-llm-gateway.example.com) applies keyword-level content
-# filters that block entire requests when specific strings appear in the
-# prompt — even in benign contexts (e.g. news headlines, economic reports).
-# These are gateway-level blocks (HTTP 450) that cannot be bypassed.
-#
-# The filter is key-specific (key_1 only) but since dispatch rotates keys,
-# any request containing blocked terms will intermittently fail.
-#
-# Strategy: replace blocked exact strings with semantically-equivalent
-# alternatives that the LLM understands identically.
-#
-# Discovered via binary search probing (2026-04-03):
-_GATEWAY_BLOCKED_TERMS = {
-    '习近平':  '习主席',     # Xi Jinping → Chairman Xi
-    '习总书记': '习主席',     # General Secretary Xi → Chairman Xi
-    '江泽民':  '江主席',     # Jiang Zemin → Chairman Jiang
-    '赵紫阳':  '赵总理',     # Zhao Ziyang → Premier Zhao
-    '法轮功':  'FLG',       # Falun Gong → abbreviation
-    '法轮大法': 'FLG',       # Falun Dafa → abbreviation
-    '全能神':  'QNS',       # Eastern Lightning → abbreviation
-}
-
-
-def _sanitize_gateway_content(text: str) -> str:
-    """Replace gateway-blocked keywords with safe equivalents.
-
-    Applied to message content before sending to the LLM API to prevent
-    HTTP 450 content filter blocks on the corporate gateway.
-    Only replaces exact substring matches — no regex, no false positives.
-
-    Returns:
-        Sanitized text. If no replacements were made, returns original string.
-    """
-    if not text:
-        return text
-    replaced = []
-    for blocked, safe in _GATEWAY_BLOCKED_TERMS.items():
-        if blocked in text:
-            text = text.replace(blocked, safe)
-            replaced.append(f'{blocked}→{safe}')
-    if replaced:
-        logger.debug('[Sanitize] Replaced %d gateway-blocked term(s): %s',
-                     len(replaced), ', '.join(replaced))
-    return text
-
-
-def _sanitize_messages(messages: list) -> list:
-    """Apply gateway content sanitization to all message text content.
-
-    Handles both string content and list-of-blocks content format.
-    Mutates messages in-place (called after _strip_non_api_fields which
-    already returns copies).
-    """
-    for msg in messages:
-        content = msg.get('content')
-        if isinstance(content, str):
-            msg['content'] = _sanitize_gateway_content(content)
-        elif isinstance(content, list):
-            for block in content:
-                if isinstance(block, dict) and block.get('type') == 'text':
-                    block['text'] = _sanitize_gateway_content(block.get('text', ''))
-    return messages
-
-
-def _strip_non_api_fields(messages: list) -> list:
-    """Return a new message list with only API-relevant fields.
-
-    Strips frontend metadata (toolRounds, thinking, translatedContent,
-    apiRounds, toolSummary, usage, timestamp, images, originalContent, …)
-    that inflate the JSON body sent to the LLM gateway.
-
-    Does NOT mutate the original messages — returns shallow copies.
-    """
-    cleaned = []
-    stripped_keys = set()
-    for msg in messages:
-        clean = {}
-        for k, v in msg.items():
-            if k in _API_MESSAGE_FIELDS:
-                clean[k] = v
-            else:
-                stripped_keys.add(k)
-        cleaned.append(clean)
-    if stripped_keys:
-        logger.debug('[build_body] Stripped non-API fields from %d messages: %s',
-                     len(messages), ', '.join(sorted(stripped_keys)))
-    return cleaned
 
 
 def build_body(model, messages, *, max_tokens=128000, temperature=1.0,
@@ -1466,6 +947,50 @@ def _strip_trailing_assistant_for_claude(messages: list, model: str = ''):
 #  Anthropic Prompt Caching  (cache breakpoints)
 # ══════════════════════════════════════════════════════════
 
+# ── Cache-marker capability matrix ────────────────────────────────────
+# Empirically probed on the example-corp gateway (2026-05-03, see
+# debug/probe_nonclaude_cache.py). Three distinct gateway behaviors:
+#
+#   1. Needs markers       → claude, glm-5, qwen, deepseek
+#      Gateway caches ONLY when cache_control: ephemeral is attached.
+#      Extending markers to these models is free money (5× input discount).
+#
+#   2. Auto-caches (markers no-op or harmful) → minimax, doubao
+#      Gateway caches by prefix hash without any markers. For MiniMax the
+#      markers are roughly neutral; for Doubao adding markers BREAKS the
+#      auto-cache path (100% hit → 0% hit). Safest action: skip markers.
+#
+#   3. Unknown / inconclusive → longcat, and any model not listed.
+#      Default to NO markers to avoid group-2-style regressions.
+#
+# Kill switch: TOFU_CACHE_MARKERS_NONCLAUDE=0 (legacy:
+# CHATUI_CACHE_MARKERS_NONCLAUDE=0) downgrades this to the legacy
+# "Claude-only" behavior without a code change. Use for hot rollback
+# if the example-corp gateway's behavior changes under us.
+_CACHE_MARKERS_HELP = ('glm-5', 'qwen', 'deepseek')
+
+
+def _gateway_honors_cache_markers(model: str) -> bool:
+    """Return True if attaching cache_control markers helps this model.
+
+    Claude is always True (Anthropic native + AWS Bedrock honor markers).
+    For non-Claude models on the example-corp gateway, consult the
+    _CACHE_MARKERS_HELP allow-list.  The env-var kill switch
+    TOFU_CACHE_MARKERS_NONCLAUDE (legacy CHATUI_CACHE_MARKERS_NONCLAUDE;
+    default "1") downgrades to Claude-only.
+    """
+    if is_claude(model):
+        return True
+    # Kill switch — treat anything falsy as disabled.
+    from lib.env_compat import getenv_compat
+    enabled = getenv_compat('TOFU_CACHE_MARKERS_NONCLAUDE',
+                            'CHATUI_CACHE_MARKERS_NONCLAUDE', default='1')
+    if enabled.strip().lower() in ('0', 'false', 'no', 'off', ''):
+        return False
+    lowered = (model or '').lower()
+    return any(k in lowered for k in _CACHE_MARKERS_HELP)
+
+
 def add_cache_breakpoints(body, log_prefix=''):
     """Add Anthropic-style ephemeral cache breakpoints with mixed TTL.
 
@@ -1500,7 +1025,7 @@ def add_cache_breakpoints(body, log_prefix=''):
         log_prefix: Prefix for log messages.
     """
     model = body.get('model', '')
-    if not is_claude(model):
+    if not _gateway_honors_cache_markers(model):
         return
 
     # ★ Session-stable TTL latch: once a task starts with extended TTL on/off,
@@ -1514,6 +1039,14 @@ def add_cache_breakpoints(body, log_prefix=''):
     else:
         import lib as _lib
         use_extended_ttl = getattr(_lib, 'CACHE_EXTENDED_TTL', False)
+
+    # ★ Extended (1h) TTL requires the Anthropic-specific
+    #   ``anthropic-beta: extended-cache-ttl-2025-04-11`` header, which we
+    #   only inject for Claude models.  For non-Claude models on the
+    #   example-corp gateway (GLM / Qwen / DeepSeek), force 5-minute TTL to
+    #   avoid gateway rejections of an un-beta-gated 1h request.
+    if not is_claude(model):
+        use_extended_ttl = False
 
     # cache_control dicts for stable prefix (BP1-BP3) and tail (BP4)
     if use_extended_ttl:
@@ -2023,15 +1556,24 @@ def _stream_chat_once(body, *, on_thinking=None, on_content=None,
                 _aborted_by_client = True
                 logger.debug('%s Stream aborted by client (abort_check=True) after %d chunks', log_prefix, _chunk_count)
                 break
-            # ★ Raw dump: capture EVERY line verbatim (incl. event: lines, blanks)
-            if _raw_dumper.enabled:
-                _raw_dumper.line(line if line is not None else '')
-            if not line or not line.startswith('data: '):
+            # ★ Raw dump: capture EVERY line verbatim (incl. event: lines, blanks).
+            # Always called — feeds the in-memory anomaly ring buffer regardless
+            # of LLM_DEBUG_RAW_SSE; only writes to disk when env-gated transcript
+            # is enabled.
+            _raw_dumper.line(line if line is not None else '')
+            if not line or not line.startswith('data:'):
                 continue
-            data_str = line[6:].strip()
+            # ★ Tolerate both 'data: {json}' (OpenAI/Anthropic standard) and
+            #   'data:{json}' (Sankuai AIGC gateway — no space after colon).
+            #   .strip() also absorbs any trailing CR/whitespace.
+            data_str = line[5:].strip()
             if data_str == '[DONE]':
                 _saw_done = True
                 break
+            # ★ Empty data line (e.g. SSE keepalive via 'data:\n\n') —
+            #   skip silently; do NOT count toward the parse-error budget.
+            if not data_str:
+                continue
             _chunk_count += 1
 
             # ── Codex SSE translation: Responses API → Chat Completions ──
@@ -2093,6 +1635,13 @@ def _stream_chat_once(body, *, on_thinking=None, on_content=None,
                                log_prefix, _chunk_count, _consecutive_parse_errors,
                                body.get('model', '?'), trace_id, data_str[:200], e, exc_info=True)
                 if _consecutive_parse_errors >= _MAX_CONSECUTIVE_PARSE_ERRORS:
+                    _raw_dumper.dump_anomaly(
+                        'parse_error',
+                        consecutive_errors=_consecutive_parse_errors,
+                        chunk_count=_chunk_count,
+                        last_data_preview=data_str[:200],
+                        model=body.get('model', '?'),
+                    )
                     raise RetryableAPIError(
                         f'{_consecutive_parse_errors} consecutive SSE parse errors — stream appears corrupt') from e
                 continue
@@ -2405,6 +1954,17 @@ def _stream_chat_once(body, *, on_thinking=None, on_content=None,
                 _saw_finish_reason, finish_reason,
                 len(content), len(thinking_text),
                 len(tool_calls_acc), body.get('model', '?'), url)
+            _raw_dumper.dump_anomaly(
+                'missing_done',
+                elapsed_s=round(_stream_elapsed_s, 2),
+                chunks=_chunk_count,
+                saw_finish_reason=_saw_finish_reason,
+                finish_reason=finish_reason,
+                content_len=len(content),
+                thinking_len=len(thinking_text),
+                tool_calls=len(tool_calls_acc),
+                resp_trace=resp_trace or 'none',
+            )
         elif not _aborted_by_client and not _saw_finish_reason and _chunk_count > 0:
             logger.warning(
                 '%s ⚠ MISSING FINISH_REASON: '
@@ -2415,6 +1975,14 @@ def _stream_chat_once(body, *, on_thinking=None, on_content=None,
                 log_prefix, trace_id, _stream_elapsed_s,
                 finish_reason, _chunk_count,
                 len(content), body.get('model', '?'))
+            _raw_dumper.dump_anomaly(
+                'missing_finish_reason',
+                elapsed_s=round(_stream_elapsed_s, 2),
+                chunks=_chunk_count,
+                content_len=len(content),
+                thinking_len=len(thinking_text),
+                tool_calls=len(tool_calls_acc),
+            )
 
         # ★ DIAGNOSTIC: detect suspiciously empty responses
         if (not _aborted_by_client and finish_reason == 'stop'
@@ -2428,6 +1996,14 @@ def _stream_chat_once(body, *, on_thinking=None, on_content=None,
                 log_prefix, trace_id, _stream_elapsed_s,
                 _chunk_count, len(thinking_text),
                 body.get('model', '?'))
+            _raw_dumper.dump_anomaly(
+                'empty_stop',
+                elapsed_s=round(_stream_elapsed_s, 2),
+                chunks=_chunk_count,
+                thinking_len=len(thinking_text),
+                finish_reason=finish_reason,
+                resp_trace=resp_trace or 'none',
+            )
 
         # ★ Inject trace_id and timing into usage so it flows to api_rounds → frontend
         if usage is None:

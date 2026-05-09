@@ -251,7 +251,7 @@ async function generateImageDirect() {
              activeTaskId: null };
     conversations.unshift(conv);
     activeConvId = conv.id;
-    sessionStorage.setItem('chatui_activeConvId', conv.id);
+    sessionStorage.setItem('tofu_activeConvId', conv.id);
     _saveConvToolState();
     if (typeof renderConversationList === 'function') renderConversationList();
   }
@@ -624,6 +624,12 @@ async function _igGenerateBatch(prompt, count) {
   const genBtn = document.getElementById('igGenerateBtn');
   if (genBtn) genBtn.disabled = true;
 
+  // ★ Wrap the entire batch body in try/finally so that if ANY step throws
+  //   (renderChat, DOM ops, saveConversations, a .then handler re-throw, etc.)
+  //   we still release _igGenerating and re-enable the button.  Without this,
+  //   a single exception would leave the button stuck in cursor:not-allowed
+  //   state, requiring a page refresh.
+  try {
   // ── Ensure conversation exists (manual creation — same as generateImageDirect) ──
   let conv = getActiveConv();
   if (!conv) {
@@ -633,7 +639,7 @@ async function _igGenerateBatch(prompt, count) {
              activeTaskId: null };
     conversations.unshift(conv);
     activeConvId = conv.id;
-    sessionStorage.setItem('chatui_activeConvId', conv.id);
+    sessionStorage.setItem('tofu_activeConvId', conv.id);
     _saveConvToolState();
     if (typeof renderConversationList === 'function') renderConversationList();
   }
@@ -860,14 +866,21 @@ async function _igGenerateBatch(prompt, count) {
   saveConversations(conv.id);
   syncConversationToServer(conv);
 
-  // ── Cleanup ──
-  _igGenerating = false;
-  _igAbortControllers = [];
-  if (genBtn) genBtn.disabled = false;
+  // ── Cleanup (happy path) ──
   if (conv.id === activeConvId && chatDiv) chatDiv.scrollTop = chatDiv.scrollHeight;
 
   const anyOk = okResults.length > 0;
   debugLog(`Batch generation complete: ${okResults.length}/${count} succeeded`, anyOk ? 'success' : 'warning');
+  } catch (err) {
+    // ★ Log but don't rethrow — button-unlock happens in finally.
+    console.error('[ImageGen] _igGenerateBatch threw:', err);
+    debugLog(`Batch generation error: ${err?.message || err}`, 'error');
+  } finally {
+    // ★ ALWAYS release the lock and re-enable the button, even on throw.
+    _igGenerating = false;
+    _igAbortControllers = [];
+    if (genBtn) genBtn.disabled = false;
+  }
 }
 
 /** Format file size as human-readable string */

@@ -25,6 +25,7 @@ __all__ = [
     # Modifications / Undo
     'get_modifications', 'get_conv_ids_with_modifications',
     'undo_conv_modifications', 'undo_task_modifications', 'undo_all_modifications',
+    'redo_task_modifications',
     '_record_modification',
     # Scanner
     'set_project', 'set_project_paths', 'ensure_project_state', 'clear_project', 'rescan',
@@ -34,6 +35,8 @@ __all__ = [
     # Multi-Root Config
     '_roots', '_make_root_state', 'resolve_namespaced_path',
     'get_roots', 'get_root_path',
+    # Per-conversation root registry (2026-05-05)
+    'set_conv_roots', 'clear_conv_state', 'get_conv_roots',
     # Tools
     'tool_list_dir', 'tool_read_files', 'tool_grep', 'tool_grep_batch',
     'tool_find_files', 'tool_find_files_batch',
@@ -69,7 +72,9 @@ from lib.project_mod.config import (
     _make_root_state,
     _roots,
     _state,
+    clear_conv_state,
     clear_recent_projects,
+    get_conv_roots,
     get_project_path,
     get_recent_projects,
     get_root_path,
@@ -77,6 +82,7 @@ from lib.project_mod.config import (
     get_state,
     resolve_namespaced_path,
     save_recent_project,
+    set_conv_roots,
 )
 
 # ── Context ──
@@ -89,6 +95,7 @@ from lib.project_mod.modifications import (
     _record_modification,
     get_conv_ids_with_modifications,
     get_modifications,
+    redo_task_modifications,
     undo_all_modifications,
     undo_conv_modifications,
     undo_task_modifications,

@@ -8,6 +8,13 @@ import lib as _lib
 
 from .browser import browser_bp
 from .chat import chat_bp
+# Side-effect imports: each registers additional routes on chat_bp.
+from . import chat_queue  # noqa: F401  — /api/chat/queue/*
+from . import chat_human_io  # noqa: F401  — /api/chat/{stdin,human}_response
+from . import chat_tool_state  # noqa: F401  — /api/chat/tool-state/<id>
+from . import conversations_search  # noqa: F401  — /api/conversations/search
+from . import conversations_compaction  # noqa: F401  — /api/conversations/<id>/compactions[/<id>]
+from . import translate_mt_test  # noqa: F401  — /api/translate/mt-test
 from .common import common_bp
 from .config import config_bp
 from .conversations import conversations_bp
@@ -24,6 +31,7 @@ from .upload import upload_bp
 from .agent_backends import agent_backends_bp
 from .folders import folders_bp
 from .mcp import mcp_bp
+from .optimizer import optimizer_bp
 from .paper import paper_bp
 
 # ── Core (always-on) blueprints ──
@@ -46,6 +54,7 @@ ALL_BLUEPRINTS = [
     agent_backends_bp,
     folders_bp,
     mcp_bp,
+    optimizer_bp,
     paper_bp,
 ]
 

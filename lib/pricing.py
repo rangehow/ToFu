@@ -5,11 +5,29 @@ Consolidated from lib/__init__.py (static tables) and server.py (dynamic fetcher
 to keep all pricing data and logic in one place.
 
 Public API (re-exported by lib/__init__):
-    MODEL_PRICING          — {model_id: {input, output, cacheWriteMul, cacheReadMul, name}}
-    QWEN_PRICING_CNY       — {model_id: {input: [(threshold, cny_price)], output: [...]}}
-    DEFAULT_USD_CNY_RATE   — float
-    get_pricing_data()     — thread-safe copy of live pricing state
-    refresh_pricing_async() — trigger background pricing refresh
+    MODEL_PRICING            — {model_id: {input, output, cacheWriteMul, cacheReadMul, name}}
+    QWEN_PRICING_CNY         — {model_id: {input: [(threshold, cny_price)], output: [...]}}
+    PROVIDER_PRICING         — {provider_id: {model_id: {input, output, ...}}} per-provider override
+    DEFAULT_USD_CNY_RATE     — float
+    get_pricing_data()       — thread-safe copy of live pricing state
+    lookup_pricing(model, provider_id=None) — provider-scoped pricing resolution
+    set_provider_pricing(provider_id, model_id, info) — register one override
+    refresh_pricing_async()  — trigger background pricing refresh
+
+Provider-scoped pricing
+=======================
+The same model_id can be exposed by multiple providers at different prices
+(e.g. ``kimi-k2.6`` is ¥4/¥18 on Moonshot direct but ¥6.5/¥27 on Tencent
+TokenHub). The flat ``MODEL_PRICING`` table can only carry one price per
+model_id, which would silently mis-bill any second provider hosting the
+same model.
+
+To avoid that, provider templates may declare a per-row ``pricing`` field
+(same shape as a ``MODEL_PRICING`` value). Loading code calls
+:func:`set_provider_pricing` to register it; cost-calculation paths use
+:func:`lookup_pricing` (model_id, provider_id) which prefers the
+provider-scoped entry over the global table. When the provider is unknown
+or has no override, lookup transparently falls back to ``MODEL_PRICING``.
 """
 
 import json
@@ -64,10 +82,10 @@ MODEL_PRICING = {
     # cacheReadMul derived from disclosed cache-hit pricing: Pro $0.145 / $1.74 ≈ 0.083, Flash $0.028 / $0.14 = 0.20.
     'deepseek-v4-pro':           {'input': 1.74,  'output': 3.48,  'cacheWriteMul': 1.00, 'cacheReadMul': 0.083, 'name': 'DeepSeek V4 Pro'},
     'deepseek-v4-flash':         {'input': 0.14,  'output': 0.28,  'cacheWriteMul': 1.00, 'cacheReadMul': 0.20,  'name': 'DeepSeek V4 Flash'},
-    # YourProvider gateway Huawei-cloud mirror for DeepSeek V4 Flash — same pricing.
+    # Meituan gateway Huawei-cloud mirror for DeepSeek V4 Flash — same pricing.
     'deepseek-v4-flash-huawei':  {'input': 0.14,  'output': 0.28,  'cacheWriteMul': 1.00, 'cacheReadMul': 0.20,  'name': 'DeepSeek V4 Flash (Huawei)'},
     'deepseek-v3.2':             {'input': 0.28,  'output': 0.41,  'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'DeepSeek V3.2'},  # ¥2/¥3 per 1M
-    # DeepSeek V3.2 mirrors on YourProvider gateway — tiered ¥2/¥4 input, ¥4/¥6 output at 32K (cheapest tier in USD)
+    # DeepSeek V3.2 mirrors on Meituan gateway — tiered ¥2/¥4 input, ¥4/¥6 output at 32K (cheapest tier in USD)
     'deepseek-v3.2-tencent':     {'input': 0.28,  'output': 0.55,  'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'DeepSeek V3.2 (Tencent)'},  # ¥2/¥4 per 1M ≤32K
     'deepseek-v3.2-baidu':       {'input': 0.28,  'output': 0.55,  'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'DeepSeek V3.2 (Baidu)'},    # ¥2/¥4 per 1M ≤32K
     'deepseek-v3.2-huawei':      {'input': 0.28,  'output': 0.55,  'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'DeepSeek V3.2 (Huawei)'},   # ¥2/¥4 per 1M ≤32K
@@ -106,7 +124,7 @@ MODEL_PRICING = {
     'gemini-2.5-flash-image':        {'input': 0.15, 'output': 0.60, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.25, 'name': 'Gemini 2.5 Flash Image'},
     'gemini-2.0-flash-preview-image-generation': {'input': 0.10, 'output': 0.40, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.25, 'name': 'Gemini 2.0 Flash Image'},
     'gpt-image-1.5':                 {'input': 0.0,  'output': 0.0,  'cacheWriteMul': 0, 'cacheReadMul': 0, 'name': 'GPT Image 1.5'},
-    # GPT Image 2 — token-priced (YourProvider): text in ¥36/M ($4.97), image in ¥57.6/M ($7.96), image out ¥216/M ($29.83).
+    # GPT Image 2 — token-priced (Meituan): text in ¥36/M ($4.97), image in ¥57.6/M ($7.96), image out ¥216/M ($29.83).
     'gpt-image-2':                   {'input': 4.97, 'output': 29.83,'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'GPT Image 2'},
     'gpt-image-1':                   {'input': 0.0,  'output': 0.0,  'cacheWriteMul': 0, 'cacheReadMul': 0, 'name': 'GPT Image 1'},
     'gpt-image-1-mini':              {'input': 0.0,  'output': 0.0,  'cacheWriteMul': 0, 'cacheReadMul': 0, 'name': 'GPT Image 1 Mini'},
@@ -169,6 +187,8 @@ MODEL_PRICING = {
     'grok-3-mini':               {'input': 0.30, 'output': 0.50, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'Grok 3 Mini'},
     # ── Moonshot (Kimi) — per OpenRouter (2026-04-20 release) ──
     'kimi-k2.6':                 {'input': 0.60, 'output': 2.80, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'Kimi K2.6'},
+    # ── Tencent Hunyuan ── cheapest tier (≤16K): ¥1.2/¥4 per 1M = $0.166/$0.553 @ 7.24
+    'hy3-preview':               {'input': 0.166,'output': 0.553,'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'Hunyuan HY3 Preview'},
 }
 
 # ── Qwen tiered pricing (CNY per 1M tokens) ──
@@ -194,15 +214,18 @@ QWEN_PRICING_CNY = {
     'qwen-vl-max':      {'input': [(1_000_000, 1.6)],  'output': [(1_000_000, 4.0)]},
     'qwen-vl-plus':     {'input': [(1_000_000, 0.8)],  'output': [(1_000_000, 2.0)]},
     'deepseek-v3.2':    {'input': [(1_000_000, 2.0)],  'output': [(1_000_000, 3.0)]},
-    # YourProvider mirrors: ¥2/¥4 input, ¥4/¥6 output, split at 32K context
+    # Meituan mirrors: ¥2/¥4 input, ¥4/¥6 output, split at 32K context
     'deepseek-v3.2-tencent': {'input': [(32_000, 2.0), (1_000_000, 4.0)], 'output': [(32_000, 4.0), (1_000_000, 6.0)]},
     'deepseek-v3.2-baidu':   {'input': [(32_000, 2.0), (1_000_000, 4.0)], 'output': [(32_000, 4.0), (1_000_000, 6.0)]},
     'deepseek-v3.2-huawei':  {'input': [(32_000, 2.0), (1_000_000, 4.0)], 'output': [(32_000, 4.0), (1_000_000, 6.0)]},
     'deepseek-v3.2-doubao':  {'input': [(32_000, 2.0), (1_000_000, 4.0)], 'output': [(32_000, 4.0), (1_000_000, 6.0)]},
-    # DeepSeek V4 on YourProvider: flat ¥1/¥2 (flash) and ¥12/¥24 (pro) per 1M tokens.
+    # DeepSeek V4 on Meituan: flat ¥1/¥2 (flash) and ¥12/¥24 (pro) per 1M tokens.
     'deepseek-v4-flash':        {'input': [(1_000_000, 1.0)],  'output': [(1_000_000, 2.0)]},
     'deepseek-v4-flash-huawei': {'input': [(1_000_000, 1.0)],  'output': [(1_000_000, 2.0)]},
     'deepseek-v4-pro':          {'input': [(1_000_000, 12.0)], 'output': [(1_000_000, 24.0)]},
+    # Tencent Hunyuan HY3 — tiered pricing on 16K / 32K / 256K context boundaries
+    'hy3-preview':              {'input': [(16_000, 1.2), (32_000, 1.6), (256_000, 2.0)],
+                                 'output': [(16_000, 4.0), (32_000, 6.4), (256_000, 8.0)]},
     'deepseek-r1':      {'input': [(1_000_000, 4.0)],  'output': [(1_000_000, 16.0)]},
     'glm-5v-turbo':     {'input': [(32_000, 5.0), (1_000_000, 7.0)],  'output': [(32_000, 22.0), (1_000_000, 26.0)]},
     '_default':         {'input': [(128_000, 0.8), (256_000, 2.0), (1_000_000, 4.0)], 'output': [(128_000, 4.8), (256_000, 12.0), (1_000_000, 24.0)]},
@@ -211,6 +234,63 @@ QWEN_PRICING_CNY = {
 # ══════════════════════════════════════════════════════
 #  Shared State
 # ══════════════════════════════════════════════════════
+
+# Per-provider pricing overrides: PROVIDER_PRICING[provider_id][model_id] = {input, output, ...}
+# Populated at server-config load time from each provider template's per-model `pricing` field.
+PROVIDER_PRICING = {}
+_provider_pricing_lock = threading.Lock()
+
+
+def set_provider_pricing(provider_id, model_id, info):
+    """Register a provider-scoped pricing override.
+
+    Args:
+        provider_id: Provider identifier (matches ``slot.provider_id``).
+        model_id: Model id as exposed by that provider.
+        info: Dict with at least ``input`` and ``output`` (USD per 1M tokens).
+            May also include ``cacheWriteMul``, ``cacheReadMul``, ``name``.
+            Pass ``None`` to clear the override.
+    """
+    if not provider_id or not model_id:
+        return
+    with _provider_pricing_lock:
+        if info is None:
+            PROVIDER_PRICING.get(provider_id, {}).pop(model_id, None)
+            return
+        PROVIDER_PRICING.setdefault(provider_id, {})[model_id] = dict(info)
+
+
+def clear_provider_pricing(provider_id):
+    """Drop all overrides for one provider — used when the provider is removed/disabled."""
+    with _provider_pricing_lock:
+        PROVIDER_PRICING.pop(provider_id, None)
+
+
+def lookup_pricing(model_id, provider_id=None):
+    """Resolve pricing for a (model, provider) pair.
+
+    Resolution order:
+      1. ``PROVIDER_PRICING[provider_id][model_id]`` if present.
+      2. ``MODEL_PRICING[model_id]`` global fallback.
+      3. ``None`` if neither knows about the model.
+
+    Returns a *copy* of the dict so callers can mutate freely.
+    """
+    if provider_id:
+        with _provider_pricing_lock:
+            prov = PROVIDER_PRICING.get(provider_id)
+            if prov and model_id in prov:
+                return dict(prov[model_id])
+    info = MODEL_PRICING.get(model_id)
+    return dict(info) if info else None
+
+
+def get_provider_pricing_snapshot():
+    """Thread-safe snapshot of the full per-provider override map."""
+    with _provider_pricing_lock:
+        return {pid: {mid: dict(v) for mid, v in mp.items()}
+                for pid, mp in PROVIDER_PRICING.items()}
+
 
 _pricing_lock = threading.Lock()
 _refresh_lock = threading.Lock()  # Guards refresh dedup — acquire(blocking=False) for non-blocking skip

@@ -111,12 +111,14 @@ def _infer_capabilities(model_id: str, model_meta: dict = None) -> set:
     if _VISION_PAT.search(mid_lower):
         caps.add('vision')
 
-    # ── Pricing-based cheap tag ──
-    from lib.llm_dispatch.config import is_model_cheap
-    if is_model_cheap(model_id):
-        caps.add('cheap')
+    # ── Pricing-based tier tags (cheap, plus any future PRICING_TIERS rows) ──
+    # Driven by a single table in lib/llm_dispatch/config.py so the same
+    # rule applies everywhere (discovery, Settings UI load, provider
+    # templates, static rewriter).
+    from lib.llm_dispatch.config import get_pricing_tiers
+    caps |= get_pricing_tiers(model_id)
     # Note: name-heuristic fallback (_CHEAP_HINT_PAT) is intentionally removed.
-    # cheap tag should only come from real pricing data to avoid false positives.
+    # Tier tags come only from real pricing data to avoid false positives.
 
     return caps
 
@@ -193,7 +195,7 @@ def discover_models(base_url: str, api_key: str,
     """
     # Normalize URL to /models endpoint
     # If the user specified a custom models_path, use it; otherwise default
-    # to appending /models.  Gateways like YourProvider may use non-standard
+    # to appending /models.  Gateways like Meituan may use non-standard
     # paths (e.g. /v1/openai/native/models).
     if models_path:
         # User-supplied path — join with base URL origin
@@ -344,7 +346,7 @@ def enrich_models_with_pricing(models: list[dict]) -> list[dict]:
             or_lookup[short.lower()] = data
             or_lookup[mid.lower()] = data
 
-        from lib.llm_dispatch.config import is_model_cheap
+        from lib.llm_dispatch.config import reevaluate_pricing_tags
 
         updated = 0
         for model in models:
@@ -377,16 +379,12 @@ def enrich_models_with_pricing(models: list[dict]) -> list[dict]:
                 # Preserve real input/output pricing ($/1M tokens)
                 model['input_price'] = round(inp_1m, 4)
                 model['output_price'] = round(out_1m, 4)
-                caps = set(model['capabilities'])
-                cheap = is_model_cheap(model['model_id'],
-                                       input_price=inp_1m, output_price=out_1m)
-                if cheap and 'cheap' not in caps:
-                    caps.add('cheap')
-                    model['capabilities'] = sorted(caps)
-                elif not cheap and 'cheap' in caps:
-                    caps.discard('cheap')
-                    model['capabilities'] = sorted(caps)
                 updated += 1
+
+        # Re-evaluate pricing-tier tags in one pass using the enriched
+        # input_price / output_price / cost fields.  Covers 'cheap' today
+        # and any future tier added to PRICING_TIERS.
+        reevaluate_pricing_tags(models, log_prefix='openrouter-enrich')
 
         logger.info('[Discovery] Enriched %d/%d models with OpenRouter pricing',
                    updated, len(models))

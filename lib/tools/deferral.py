@@ -81,11 +81,12 @@ DEFERRED_TOOL_HINTS: dict[str, str] = {
     'desktop_clipboard':     'desktop clipboard read write copy paste',
     'desktop_system_info':   'desktop system info cpu memory disk processes kill',
 
-    # Memory tools
-    'create_memory':         'memory create save accumulate knowledge',
+    # Memory tools — search/update/delete may be deferred under token
+    # pressure; create_memory + merge_memories are permanently in
+    # _NEVER_DEFER below (they MUST be always-available so the model can
+    # save lessons proactively without round-tripping through tool_search).
     'update_memory':         'memory update modify edit',
     'delete_memory':         'memory delete remove',
-    'merge_memories':        'memory merge combine consolidate',
     'search_memories':       'memory search find query past experience',
 
     # Conversation reference tools (real names from lib/tools/conversation.py)
@@ -159,15 +160,30 @@ def _estimate_tool_tokens(tool_list: list) -> int:
     """Estimate the total token count for tool definitions.
 
     Each tool definition's JSON schema contributes to the context window.
-    Rough heuristic: serialize to JSON, count chars, divide by 4.
+    We serialize to JSON and pass through ``lib.token_counter.count_text``
+    which picks the best available tokenizer (``tiktoken`` for OpenAI-
+    family, CJK-aware heuristic otherwise). Tool schemas are almost
+    entirely ASCII JSON, so tiktoken is effectively exact here.
     """
     import json
     try:
-        total = len(json.dumps(tool_list, ensure_ascii=False))
-        return total // 4
+        blob = json.dumps(tool_list, ensure_ascii=False)
     except (TypeError, ValueError) as e:
-        logger.debug('[Deferral] JSON serialization of tool list failed, using str fallback: %s', e)
-        return len(str(tool_list)) // 4
+        logger.debug('[Deferral] JSON serialization of tool list failed, '
+                     'using str fallback: %s', e)
+        blob = str(tool_list)
+    try:
+        from lib.token_counter import count_text
+        # Tool schemas don't depend on model — pass empty string so the
+        # default cl100k encoding is used (good for all families).
+        n = count_text(blob, model='')
+        if n > 0:
+            return n
+    except Exception as e:
+        logger.debug('[Deferral] count_text failed, using char heuristic: %s', e)
+    # Final fallback: 1 token ≈ 4 chars. Only reachable when both
+    # tiktoken and the heuristic counter are unavailable.
+    return len(blob) // 4
 
 
 # Context-aware deferral threshold — inspired by Claude Code's tst-auto mode.
@@ -219,6 +235,11 @@ def partition_tools(tool_list: list,
             'read_files', 'list_dir', 'grep_search', 'find_files',
             'write_file', 'apply_diff', 'insert_content', 'create_project', 'run_command',
             'web_search', 'fetch_url', 'emit_to_user',
+            # Memory write tools — must be always-available so the model
+            # can save lessons proactively. Without these in NEVER_DEFER,
+            # they get demoted under token pressure and the model has to
+            # tool_search() before saving (extra round-trip, often skipped).
+            'create_memory', 'merge_memories',
         })
         deferrable = []
         kept = []

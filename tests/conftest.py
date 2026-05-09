@@ -4,7 +4,7 @@ Provides the ``flask_client`` fixture consumed by ``tests/test_api_integration.p
 and ``tests/test_conversation_search.py``.
 
 Design:
-  * Each test session gets a fresh, isolated SQLite database via ``CHATUI_DB_PATH``
+  * Each test session gets a fresh, isolated SQLite database via ``TOFU_DB_PATH``
     pointing at a temp file — no PostgreSQL required, no cross-test contamination.
   * The Flask ``app`` is imported lazily AFTER env-vars are set so
     ``lib.database._core`` picks the right backend at import time.
@@ -20,6 +20,36 @@ import tempfile
 import pytest
 
 
+# ─── Module-load: shim werkzeug.__version__ if missing ────────────────
+#
+# Werkzeug 3.x no longer exposes ``werkzeug.__version__`` as a module
+# attribute, but older Flask checkouts (e.g. an editable install of
+# Flask 2.3.0.dev0 pinned by a swebench workspace) still reference it
+# from ``flask.testing`` and ``flask.helpers``. When that combination is
+# present, ``app.test_client()`` raises ``AttributeError: module
+# 'werkzeug' has no attribute '__version__'`` before any test even
+# runs.
+#
+# Populate the attribute from package metadata so the legacy Flask path
+# works without modifying the shared environment. No-op on installations
+# where Werkzeug already exports it.
+def _ensure_werkzeug_version():
+    try:
+        import werkzeug
+    except ImportError:
+        return
+    if getattr(werkzeug, '__version__', None):
+        return
+    try:
+        from importlib.metadata import version as _pkg_version
+        werkzeug.__version__ = _pkg_version('werkzeug')
+    except Exception:
+        werkzeug.__version__ = '0+unknown'
+
+
+_ensure_werkzeug_version()
+
+
 # ─── Session-level: one SQLite DB per pytest run ──────────────────────
 @pytest.fixture(scope="session", autouse=True)
 def _configure_test_env():
@@ -28,10 +58,10 @@ def _configure_test_env():
     to keep the surface area small.
     """
     tmpdir = tempfile.mkdtemp(prefix="tofu-test-")
-    db_path = os.path.join(tmpdir, "chatui-test.db")
+    db_path = os.path.join(tmpdir, "tofu-test.db")
 
-    os.environ.setdefault("CHATUI_DB_BACKEND", "sqlite")
-    os.environ.setdefault("CHATUI_DB_PATH", db_path)
+    os.environ.setdefault("TOFU_DB_BACKEND", "sqlite")
+    os.environ.setdefault("TOFU_DB_PATH", db_path)
     os.environ.setdefault("TRADING_ENABLED", "0")
     os.environ.setdefault("PPTX_TRANSLATE_ENABLED", "0")
     # Avoid accidental real LLM calls in CI.

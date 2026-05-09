@@ -323,8 +323,8 @@ def _handle_spawn_agents(fn_args: dict, *, task_id: str, task: dict,
 
     _emit_structured({
         'type': 'swarm_phase', 'phase': 'spawning',
-        'content': (f'🚀 Spawning {len(specs)} agents:\n'
-                    + '\n'.join(f'  • {s.role}: {s.objective[:50]}' for s in specs)),
+        'content': (f'Spawning {len(specs)} agents:\n'
+                    + '\n'.join(f'  - {s.role}: {s.objective[:50]}' for s in specs)),
         'agents': [
             {'agentId': s.id, 'role': s.role,
              'objective': s.objective[:200],
@@ -451,7 +451,7 @@ def _handle_spawn_more_agents(fn_args: dict, *, task_id: str, task: dict,
         # Build result summary
         results_summary = []
         for spec, result in session._results[-len(new_specs):]:
-            status = '✅' if result.status == SubAgentStatus.COMPLETED.value else '❌'
+            status = '[OK]' if result.status == SubAgentStatus.COMPLETED.value else '[FAIL]'
             results_summary.append(
                 f'{status} [{spec.role}] {spec.objective[:60]}: '
                 f'{result.final_answer[:200] if result.final_answer else result.error_message[:200]}'
@@ -492,10 +492,10 @@ def _handle_check_agents(task_id: str) -> str:
 
     for sid, info in status.items():
         agent_status = info.get('status', '')
-        icon = {'completed': '✅', 'running': '🔄', 'failed': '❌',
-                'pending': '⏳', 'cancelled': '🚫'}.get(agent_status, '❓')
+        tag = {'completed': '[OK]', 'running': '[RUN]', 'failed': '[FAIL]',
+               'pending': '[PENDING]', 'cancelled': '[CANCELLED]'}.get(agent_status, '[?]')
         lines.append(
-            f'{icon} [{info.get("role", "?")}] {info.get("objective", "")[:60]} '
+            f'{tag} [{info.get("role", "?")}] {info.get("objective", "")[:60]} '
             f'— {agent_status} '
             f'(round {info.get("round", 0)}/{info.get("max_rounds", 0)})'
         )
@@ -511,7 +511,7 @@ def _handle_check_agents(task_id: str) -> str:
             pending += 1
 
     # Dashboard summary
-    lines.insert(1, f'📊 Dashboard: {total} total | '
+    lines.insert(1, f'Dashboard: {total} total | '
                     f'{completed} completed | {running} running | '
                     f'{failed} failed | {pending} pending\n')
 
@@ -521,14 +521,14 @@ def _handle_check_agents(task_id: str) -> str:
     if ts:
         elapsed = time.time() - ts
         mins, secs = divmod(int(elapsed), 60)
-        lines.append(f'\n⏱️ Session uptime: {mins}m {secs}s')
+        lines.append(f'\nSession uptime: {mins}m {secs}s')
 
     # Also show artifact store info
     artifacts = session.get_artifacts()
     if artifacts:
         lines.append(f'\n# Shared Artifacts ({len(artifacts)} items)')
         for key in artifacts:
-            lines.append(f'  • {key}')
+            lines.append(f'  - {key}')
 
     return '\n'.join(lines)
 

@@ -6,7 +6,6 @@ News gathering has been moved to ``lib/trading/news_gathering.py``.
 
 Remaining endpoints:
   - GET  /api/trading/briefing          — cached daily briefing
-  - POST /api/trading/briefing/refresh  — redirects to brain stream
   - GET  /api/trading/decisions         — decision history
   - POST /api/trading/decisions/<id>/results — record actual results
   - GET  /api/trading/trades            — trade queue listing
@@ -30,11 +29,6 @@ from lib.log import get_logger
 logger = get_logger(__name__)
 
 trading_decision_bp = Blueprint('trading_decision', __name__)
-
-
-# ── Re-export for backward compatibility ──
-# Some modules still do `from .trading_decision import _gather_news_cached`
-from lib.trading.news_gathering import gather_news_cached as _gather_news_cached  # noqa: F401
 
 
 def _auto_save_strategies(db, content):
@@ -113,13 +107,6 @@ def _extract_and_queue_trades(db, content):
 
 
 # ── Route handlers ──
-
-@trading_decision_bp.route('/api/trading/briefing/refresh', methods=['POST'])
-def asset_briefing_refresh():
-    """Redirect to brain streaming analysis."""
-    # The frontend uses brain/stream directly; this is for backward compat
-    return jsonify({'error': 'Use /api/trading/brain/stream instead'}), 301
-
 
 @trading_decision_bp.route('/api/trading/briefing', methods=['GET'])
 def asset_briefing_get():

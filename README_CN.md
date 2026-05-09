@@ -55,7 +55,7 @@ python install.py
 
 > 🐍 **基于 conda 的安装器。** 安装器**完全使用 conda-forge** —— 如果没装 conda，会自动安装 [Miniforge](https://github.com/conda-forge/miniforge)；然后先升级 conda（旧版 conda 是求解器卡死的头号原因），装上 `libmamba` 求解器，再创建 `tofu` 环境（Python 3.12）并安装所有依赖（含 `lxml`、`playwright`、`postgresql`）。这样可以避开 pip 的 manylinux wheel 在旧主机（CentOS 7 / glibc 2.17）上触发的 GLIBC 不兼容问题。
 
-> 💾 **数据库：无需配置。** Tofu 默认使用 **SQLite**（Python 内置）。如果环境里有 `postgresql`（安装器会从 conda-forge 装上），Tofu 会自动启动一个用户态、免 root 的 PG 实例，为 100+ 用户提供更好的并发。设置 `CHATUI_DB_BACKEND=sqlite` 即可强制 SQLite。
+> 💾 **数据库：无需配置。** Tofu 默认使用 **SQLite**（Python 内置）。如果环境里有 `postgresql`（安装器会从 conda-forge 装上），Tofu 会自动启动一个用户态、免 root 的 PG 实例，为 100+ 用户提供更好的并发。设置 `TOFU_DB_BACKEND=sqlite` （老名称 `CHATUI_DB_BACKEND=sqlite` 仍可用）即可强制 SQLite。
 
 ```bash
 # 预配置 API 密钥和端口
@@ -147,7 +147,7 @@ python server.py
 
 </details>
 
-> **数据库自动检测：**首次启动时，Tofu 优先尝试 PostgreSQL（更好的并发性）；如 PG 不可用则自动回退到 **SQLite** —— 你无需任何操作。PostgreSQL 如存在会以本地用户态进程运行（无需 `sudo`，无需系统服务）。设置 `CHATUI_DB_BACKEND=sqlite` 即可强制使用 SQLite。
+> **数据库自动检测：**首次启动时，Tofu 优先尝试 PostgreSQL（更好的并发性）；如 PG 不可用则自动回退到 **SQLite** —— 你无需任何操作。PostgreSQL 如存在会以本地用户态进程运行（无需 `sudo`，无需系统服务）。设置 `TOFU_DB_BACKEND=sqlite` （老名称 `CHATUI_DB_BACKEND=sqlite` 仍可用）即可强制使用 SQLite。
 
 > **缺少依赖？** 如果任何依赖缺失，`server.py` 会自动委托给 `bootstrap.py`：若当前在 conda env 内，会优先用 `conda install -c conda-forge` 修复（绕开 GLIBC 陷阱），否则回退到 LLM 引导的 `pip install`。
 
@@ -405,6 +405,26 @@ python lib/desktop_agent.py --server http://your-server:15000 --allow-write --al
 
 > ⚠️ **Beta：** 论文阅读模式正在持续迭代中，欢迎在 [GitHub Issues](https://github.com/rangehow/ToFu/issues) 反馈。
 
+#### 可选：使用 Docling 进行版面感知的 PDF 解析
+
+默认的 PDF 解析管线（`pymupdf4llm`）在大多数论文上表现良好，但在 ML / 理论 CS 论文中常见的**无框表格**和**复杂数学公式**上效果较差。对于这类论文，Tofu 可以路由到
+[**Docling**](https://github.com/docling-project/docling)（IBM）——一个版面感知的模型，使用 TableFormer 处理表格，内置方程模型处理公式，输出更干净的 Markdown。
+
+**权衡：** Docling 会拉入 PyTorch + 约 2 GB 的模型权重，所以是**可选安装**。
+
+```bash
+# 安装时
+./install.sh --with-docling
+# 或：
+python install.py --with-docling
+
+# 也可以事后安装：
+pip install docling --extra-index-url https://download.pytorch.org/whl/cpu
+```
+
+然后在 `.env` 中设置 `PDF_TEXT_MODE=structured`，或者在 `/api/pdf/parse` 请求中通过表单字段 `textMode=structured` 单次启用。
+如果请求 `structured` 但 Docling 未安装，服务器会自动回退到 `pymupdf4llm` —— 上传不会失败。
+
 ---
 
 ### 🖼️ 图片生成
@@ -544,6 +564,9 @@ vim .env   # 填入你的值
 | `BIND_HOST` | 绑定地址 | `0.0.0.0` |
 | `TUNNEL_TOKEN` | 公网隧道访问认证令牌 | *（关闭）* |
 | `TRADING_ENABLED` | 启用交易模块（`1`/`0`） | `0` |
+| `PDF_TEXT_MODE` | 默认 PDF 文本提取策略：`rich`（pymupdf4llm，默认）、`structured`（Docling，需 `pip install docling`）、`fast` | `rich` |
+| `PDF_VLM_BATCH_PAGES` | VLM 单次调用的页数（1–16） | `4` |
+| `PDF_VLM_MAX_WORKERS` | 并发 VLM 调用上限（共享密钥时调小可避免 429 风暴） | 不限 |
 
 > **优先级：** 设置界面 > `.env` 文件 > 系统环境变量 > 默认值。你也可以直接用 `export` 设置变量——`.env` 只是一种便捷方式。
 

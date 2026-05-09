@@ -729,6 +729,13 @@ async function _branchStreamSSE(conv, msgIdx, branchIdx, branch, assistantMsg, t
         results: [],
       });
       _updateBranchStreamingUI(msgIdx, branchIdx, assistantMsg);
+    } else if (ev.type === "tool_progress") {
+      const r = (assistantMsg.toolRounds || []).find(r => r.roundNum === ev.roundNum);
+      if (r) {
+        if (typeof r._partialOutput !== "string") r._partialOutput = "";
+        r._partialOutput += (ev.chunk || "");
+      }
+      _updateBranchStreamingUI(msgIdx, branchIdx, assistantMsg);
     } else if (ev.type === "tool_result") {
       const r = (assistantMsg.toolRounds || []).find(r => r.roundNum === ev.roundNum);
       if (r) {
@@ -766,6 +773,17 @@ async function _branchStreamSSE(conv, msgIdx, branchIdx, branch, assistantMsg, t
       assistantMsg._emitContent = ev.emitContent || '';
       assistantMsg._emitToolName = ev.emitToolName || '';
       _updateBranchStreamingUI(msgIdx, branchIdx, assistantMsg);
+    } else if (ev.type === "project_external_edit") {
+      // ★ Git-shim: external edits captured outside Tofu round boundary.
+      const files = ev.files || [];
+      const sha = (ev.sha || '').slice(0, 7);
+      try {
+        if (typeof showToast === 'function') {
+          const preview = files.slice(0, 3).join(', ') + (files.length > 3 ? ` +${files.length - 3} more` : '');
+          showToast(`📝 Captured ${files.length} external edit(s) — ${preview}${sha ? ' · ' + sha : ''}`, 'info');
+        }
+      } catch (e) { console.warn('[branch.project_external_edit] toast failed', e); }
+      console.log('[branch.project_external_edit]', { sha, files });
     } else if (ev.type === "approval_required") {
       assistantMsg.approvalRequired = true;
       // Targeted update: rebuild only the branch panel to show approval buttons
@@ -792,6 +810,8 @@ async function _branchStreamSSE(conv, msgIdx, branchIdx, branch, assistantMsg, t
       if (ev.thinkingDepth) assistantMsg.thinkingDepth = ev.thinkingDepth;
       if (ev.toolSummary) assistantMsg.toolSummary = ev.toolSummary;
       if (ev.usage) assistantMsg.usage = ev.usage;
+      /* ★ git-shim: round commit sha for redo/diff references */
+      if (ev.gitSha) assistantMsg._gitSha = ev.gitSha;
       assistantMsg.approvalRequired = false;
       return "done";
     } else if (ev.type === "error") {

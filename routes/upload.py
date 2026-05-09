@@ -1,6 +1,7 @@
 """routes/upload.py — Image upload/serve, image generation, PDF parsing endpoints."""
 
 import base64
+import io
 import os
 import time
 
@@ -32,6 +33,181 @@ upload_bp = Blueprint('upload', __name__)
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 UPLOAD_DIR = os.path.join(BASE_DIR, 'uploads', 'images')
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+
+# ══════════════════════════════════════════════════════
+#  Upload-time image shrink
+# ══════════════════════════════════════════════════════
+# Motivation: The upstream LLM gateway (openresty) rejects request bodies
+# that exceed its `client_max_body_size` with HTTP 413, regardless of how
+# few upstream *tokens* the images actually cost. Claude's vision tokenizer
+# internally downsamples to ~1568 px long side anyway, so sending 4K photos
+# is pure wire-size waste. Re-encode oversized uploads ONCE on disk.
+#
+# The real-world 413 offender (conv=mofu0tfayzvuv1, 2026-04-29) was a
+# 1024×510 screenshot at 442 KB PNG — would easily drop to ~100 KB after
+# this step with no visible quality loss.
+#
+# See §10.1: these constants are tuned conservatively to preserve quality.
+MAX_UPLOAD_LONG_SIDE_PX = 2048
+"""Maximum long-side pixel dimension. Above this, images are downscaled.
+Claude internally resizes to ~1568 px, so 2048 leaves a small quality buffer."""
+
+JPEG_REENCODE_QUALITY = 90
+"""JPEG quality when re-encoding non-alpha images. q=90 preserves text-on-
+screenshot fidelity while still shrinking 4-5× vs raw PNG."""
+
+SHRINK_SKIP_LONG_SIDE_PX = 1600
+"""If the image is already ≤ this long side AND ≤ SHRINK_SKIP_MAX_BYTES,
+skip re-encoding entirely (preserves original perfect quality)."""
+
+SHRINK_SKIP_MAX_BYTES = 400 * 1024
+"""Skip re-encoding if already under this byte size (and within dims)."""
+
+
+def get_upload_policy() -> dict:
+    """Public view of the upload-shrink constants.
+
+    The frontend's ``compressImage()`` mirrors this exact policy so both
+    sides agree on when to re-encode and at what quality. Returned fields:
+
+    * ``max_long_side_px`` — hard cap on long side; larger images are
+      LANCZOS-downscaled before re-encode.
+    * ``jpeg_quality`` — JPEG quality (1-100) used when re-encoding opaque
+      images.
+    * ``skip_long_side_px`` / ``skip_max_bytes`` — if an image is already
+      smaller than BOTH, it passes through untouched (lossless preservation).
+    """
+    return {
+        'max_long_side_px': MAX_UPLOAD_LONG_SIDE_PX,
+        'jpeg_quality': JPEG_REENCODE_QUALITY,
+        'skip_long_side_px': SHRINK_SKIP_LONG_SIDE_PX,
+        'skip_max_bytes': SHRINK_SKIP_MAX_BYTES,
+    }
+
+
+def _shrink_upload_image(img_bytes: bytes, detected_fmt: str) -> tuple[bytes, str, dict]:
+    """Downscale + re-encode an uploaded image if it exceeds wire-size targets.
+
+    Never modifies GIFs (they may be animated) or BMPs (edge case, rare).
+    Preserves PNG format when the source has an alpha channel; otherwise
+    re-encodes photographic/opaque content as JPEG q=90 for better wire size.
+
+    Returns:
+        (new_bytes, new_ext, info_dict). If unchanged, returns the original
+        bytes, the original extension, and info with ``shrunk=False``.
+    """
+    info = {'shrunk': False, 'reason': '', 'original_bytes': len(img_bytes)}
+
+    # Never touch GIF (animated) or BMP (uncommon, tiny population)
+    if detected_fmt in ('gif', 'bmp'):
+        info['reason'] = f'format={detected_fmt} skipped'
+        ext = '.' + ('jpg' if detected_fmt == 'jpeg' else detected_fmt)
+        return img_bytes, ext, info
+
+    try:
+        from PIL import Image
+    except ImportError:
+        info['reason'] = 'pillow_missing'
+        ext = '.' + ('jpg' if detected_fmt == 'jpeg' else detected_fmt)
+        return img_bytes, ext, info
+
+    try:
+        img = Image.open(io.BytesIO(img_bytes))
+        img.load()  # force full decode so we catch corrupt files here
+    except Exception as e:
+        logger.warning('[UploadShrink] PIL open failed (%s) — keeping original', e)
+        info['reason'] = f'pil_error:{e}'
+        ext = '.' + ('jpg' if detected_fmt == 'jpeg' else detected_fmt)
+        return img_bytes, ext, info
+
+    w, h = img.size
+    long_side = max(w, h)
+    has_alpha = (img.mode in ('RGBA', 'LA')) or (
+        img.mode == 'P' and 'transparency' in img.info
+    )
+
+    # Screenshots are frequently saved as RGBA but with a fully-opaque alpha
+    # channel (e.g. macOS screen-capture). The alpha is useless, and keeping
+    # PNG-with-alpha means we lose the ~3× JPEG wire-size win.  Detect a
+    # degenerate alpha channel and treat the image as opaque.
+    if has_alpha:
+        try:
+            probe = img if img.mode in ('RGBA', 'LA') else img.convert('RGBA')
+            alpha_channel = probe.split()[-1]
+            alpha_min, alpha_max = alpha_channel.getextrema()
+            if alpha_min == 255 and alpha_max == 255:
+                has_alpha = False
+                # Strip the redundant alpha so the JPEG branch below works
+                img = img.convert('RGB')
+        except Exception as e:
+            logger.debug('[UploadShrink] alpha probe failed (%s) — keeping alpha path', e)
+
+    # Skip if already small enough
+    if long_side <= SHRINK_SKIP_LONG_SIDE_PX and len(img_bytes) <= SHRINK_SKIP_MAX_BYTES:
+        info['reason'] = (f'already_small dims={w}x{h} bytes={len(img_bytes)}')
+        ext = '.' + ('jpg' if detected_fmt == 'jpeg' else detected_fmt)
+        return img_bytes, ext, info
+
+    # Downscale if over the long-side limit
+    new_w, new_h = w, h
+    if long_side > MAX_UPLOAD_LONG_SIDE_PX:
+        scale = MAX_UPLOAD_LONG_SIDE_PX / long_side
+        new_w = max(1, int(round(w * scale)))
+        new_h = max(1, int(round(h * scale)))
+        try:
+            img = img.resize((new_w, new_h), Image.LANCZOS)
+        except Exception as e:
+            logger.warning('[UploadShrink] resize failed (%s) — keeping original', e)
+            info['reason'] = f'resize_error:{e}'
+            ext = '.' + ('jpg' if detected_fmt == 'jpeg' else detected_fmt)
+            return img_bytes, ext, info
+
+    # Re-encode
+    buf = io.BytesIO()
+    try:
+        if has_alpha:
+            # Preserve alpha → stay PNG. optimize=True strips metadata + picks
+            # best filters; typically cuts screenshot PNGs by 30-50%.
+            if img.mode == 'P':
+                img = img.convert('RGBA')
+            img.save(buf, format='PNG', optimize=True)
+            new_ext = '.png'
+            new_fmt = 'png'
+        else:
+            # No alpha → JPEG q=90 gives best shrink ratio at invisible quality loss
+            if img.mode != 'RGB':
+                img = img.convert('RGB')
+            img.save(buf, format='JPEG', quality=JPEG_REENCODE_QUALITY,
+                     optimize=True, progressive=True)
+            new_ext = '.jpg'
+            new_fmt = 'jpeg'
+    except Exception as e:
+        logger.warning('[UploadShrink] re-encode failed (%s) — keeping original', e)
+        info['reason'] = f'encode_error:{e}'
+        ext = '.' + ('jpg' if detected_fmt == 'jpeg' else detected_fmt)
+        return img_bytes, ext, info
+
+    new_bytes = buf.getvalue()
+
+    # Sanity check: if re-encode somehow got LARGER (rare — tiny already-JPEGs
+    # with high-entropy noise), keep original.
+    if len(new_bytes) >= len(img_bytes) and (new_w, new_h) == (w, h):
+        info['reason'] = f'reencode_bigger {len(new_bytes)}>={len(img_bytes)}'
+        ext = '.' + ('jpg' if detected_fmt == 'jpeg' else detected_fmt)
+        return img_bytes, ext, info
+
+    info.update({
+        'shrunk': True,
+        'reason': 'resized' if (new_w, new_h) != (w, h) else 'reencoded',
+        'from_dims': f'{w}x{h}',
+        'to_dims': f'{new_w}x{new_h}',
+        'from_fmt': detected_fmt,
+        'to_fmt': new_fmt,
+        'new_bytes': len(new_bytes),
+        'ratio': round(len(new_bytes) / max(1, len(img_bytes)), 3),
+    })
+    return new_bytes, new_ext, info
 
 
 # ══════════════════════════════════════════════════════
@@ -70,6 +246,15 @@ def upload_image():
             logger.warning('[upload_image] Magic-bytes check failed: media_type=%s detected=%s len=%d',
                            media_type, detected, len(img_bytes))
             return jsonify({'error': 'Payload does not match any supported image format'}), 400
+
+        # Wire-size shrink (see module-level _shrink_upload_image docstring)
+        try:
+            img_bytes, ext, shrink_info = _shrink_upload_image(img_bytes, detected)
+        except Exception as e:
+            logger.warning('[upload_image] shrink unexpectedly raised: %s — keeping original',
+                           e, exc_info=True)
+            shrink_info = {'shrunk': False, 'reason': f'exc:{e}'}
+
         filename = f"{int(time.time()*1000)}{ext}"
         filepath = os.path.join(UPLOAD_DIR, filename)
         try:
@@ -78,8 +263,15 @@ def upload_image():
         except Exception as e:
             logger.error('[Common] image upload (base64) save failed: %s', e, exc_info=True)
             return jsonify({'error': 'internal_error'}), 500
-        logger.info('[upload_image] Saved %s (%d bytes) from base64 (detected=%s)',
-                    filename, len(img_bytes), detected)
+        if shrink_info.get('shrunk'):
+            logger.info('[upload_image] Saved %s — shrunk %s→%s, %d→%d bytes (ratio=%.2f, %s→%s)',
+                        filename, shrink_info.get('from_dims'), shrink_info.get('to_dims'),
+                        shrink_info.get('original_bytes'), shrink_info.get('new_bytes'),
+                        shrink_info.get('ratio'),
+                        shrink_info.get('from_fmt'), shrink_info.get('to_fmt'))
+        else:
+            logger.info('[upload_image] Saved %s (%d bytes) from base64 (detected=%s, shrink_skipped=%s)',
+                        filename, len(img_bytes), detected, shrink_info.get('reason', '?'))
         return jsonify({'ok': True, 'url': f'/api/images/{filename}', 'filename': filename})
 
     # ── Multipart form upload (traditional file upload) ──
@@ -102,14 +294,41 @@ def upload_image():
     if detected not in ('png', 'jpeg', 'gif', 'webp', 'bmp'):
         logger.warning('[upload_image] Magic-bytes check failed: ext=%s detected=%s', ext, detected)
         return jsonify({'error': 'Payload does not match any supported image format'}), 400
-    filename = f"{int(time.time()*1000)}_{file.filename}"
+
+    # Read full bytes so we can run the wire-size shrink before writing to disk
     try:
-        file.save(os.path.join(UPLOAD_DIR, filename))
+        file.stream.seek(0)
+        raw_bytes = file.stream.read()
+    except Exception as e:
+        logger.error('[upload_image] failed to read uploaded stream: %s', e, exc_info=True)
+        return jsonify({'error': 'internal_error'}), 500
+
+    try:
+        new_bytes, new_ext, shrink_info = _shrink_upload_image(raw_bytes, detected)
+    except Exception as e:
+        logger.warning('[upload_image] shrink unexpectedly raised: %s — keeping original',
+                       e, exc_info=True)
+        new_bytes, new_ext, shrink_info = raw_bytes, ext, {'shrunk': False, 'reason': f'exc:{e}'}
+
+    # Preserve user-supplied filename stem but use the (possibly new) extension
+    stem = os.path.splitext(file.filename)[0]
+    filename = f"{int(time.time()*1000)}_{stem}{new_ext}"
+    filepath = os.path.join(UPLOAD_DIR, filename)
+    try:
+        with open(filepath, 'wb') as f:
+            f.write(new_bytes)
     except Exception as e:
         logger.error('[Common] image upload save failed: %s', e, exc_info=True)
         return jsonify({'error': 'internal_error'}), 500
-    logger.info('[upload_image] Saved %s (%d bytes) detected=%s', filename,
-                os.path.getsize(os.path.join(UPLOAD_DIR, filename)), detected)
+    if shrink_info.get('shrunk'):
+        logger.info('[upload_image] Saved %s — shrunk %s→%s, %d→%d bytes (ratio=%.2f, %s→%s)',
+                    filename, shrink_info.get('from_dims'), shrink_info.get('to_dims'),
+                    shrink_info.get('original_bytes'), shrink_info.get('new_bytes'),
+                    shrink_info.get('ratio'),
+                    shrink_info.get('from_fmt'), shrink_info.get('to_fmt'))
+    else:
+        logger.info('[upload_image] Saved %s (%d bytes) detected=%s shrink_skipped=%s',
+                    filename, len(new_bytes), detected, shrink_info.get('reason', '?'))
     return jsonify({'ok': True, 'url': f'/api/images/{filename}', 'filename': filename})
 
 
@@ -203,6 +422,18 @@ def generate_image_route():
             error_type = 'timeout'
         elif 'no image_gen slot' in (result.get('error') or '').lower() or 'no image generation model' in (result.get('error') or '').lower():
             error_type = 'no_slot'
+        # Pick HTTP status code:
+        # - 4xx from provider (client_error True) → surface as 400 (bad prompt/params).
+        # - rate_limited → 503 (service unavailable, retry later).
+        # - otherwise 500.
+        if result.get('client_error'):
+            status_code = 400
+            if not error_type or error_type == 'generation_failed':
+                error_type = 'client_error'
+        elif result.get('rate_limited'):
+            status_code = 503
+        else:
+            status_code = 500
         return jsonify({
             'ok': False,
             'error': result.get('error', 'Unknown error'),
@@ -211,7 +442,8 @@ def generate_image_route():
             'block_reason': result.get('block_reason', ''),
             'text': result.get('text', ''),
             'history_resolved': len(history) if history else 0,
-        }), 503 if result.get('rate_limited') else 500
+            'provider_status_code': result.get('status_code'),
+        }), status_code
 
     image_b64 = result.get('image_b64', '')
     image_url = result.get('image_url', '')
@@ -419,6 +651,20 @@ def parse_pdf():
     except (ValueError, TypeError) as e:
         logger.warning('[parse_pdf] Invalid numeric parameter: %s', e, exc_info=True)
         return jsonify({'error': f'Invalid numeric parameter: {e}'}), 400
+
+    # ── Text-extract strategy ──
+    # Per-request override via form field `textMode`, else global env default.
+    # `structured` → docling (opt-in heavy dep, falls back to pymupdf4llm if
+    #                 docling is not installed or fails).
+    # `rich` (default) → pymupdf4llm.
+    # `fast` → raw get_text (not used by upload, kept for completeness).
+    _requested_mode = (request.form.get('textMode') or
+                       os.environ.get('PDF_TEXT_MODE') or
+                       'rich').strip().lower()
+    if _requested_mode not in ('rich', 'structured', 'fast'):
+        logger.debug('[parse_pdf] Unknown textMode=%r, using rich', _requested_mode)
+        _requested_mode = 'rich'
+
     t0 = time.time()
     try:
         result = _parse_pdf(
@@ -426,7 +672,7 @@ def parse_pdf():
             max_text_chars=max_text_chars,
             max_image_width=max_image_width,
             max_images=max_images,
-
+            text_mode=_requested_mode,
         )
     except Exception as e:
         elapsed = time.time() - t0

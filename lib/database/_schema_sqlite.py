@@ -15,7 +15,7 @@ logger = get_logger(__name__)
 #  Schema Version Cache — Skip redundant DDL on subsequent startups
 # ═══════════════════════════════════════════════════════════════════════
 
-_SCHEMA_VERSION = 12  # Increment when tables/columns/indexes change
+_SCHEMA_VERSION = 17  # Increment when tables/columns/indexes change
 
 
 def _column_exists(conn, table, column):
@@ -146,16 +146,56 @@ def _init_chat_schema(conn):
     cur.execute('CREATE INDEX IF NOT EXISTS idx_task_conv ON task_results(conv_id)')
     cur.execute('CREATE INDEX IF NOT EXISTS idx_task_created ON task_results(created_at)')
 
+    # ── task_events: persisted SSE event log (durable Last-Event-ID resumption) ──
+    # Replaces in-memory task['events'] for cross-restart and post-cleanup
+    # replay. event_id is monotonic per task, mirrored in the SSE 'id:' field.
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS task_events (
+            task_id    TEXT    NOT NULL,
+            event_id   INTEGER NOT NULL,
+            ts_ms      INTEGER NOT NULL,
+            type       TEXT    NOT NULL,
+            payload    TEXT    NOT NULL,
+            PRIMARY KEY (task_id, event_id)
+        )
+    ''')
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_task_events_ts ON task_events(ts_ms)')
+
     cur.execute('''
         CREATE TABLE IF NOT EXISTS transcript_archive (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             conv_id TEXT NOT NULL,
             messages_json TEXT NOT NULL,
             summary TEXT NOT NULL DEFAULT '',
-            created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+            created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+            trigger TEXT NOT NULL DEFAULT 'force',
+            task_id TEXT NOT NULL DEFAULT '',
+            round_num INTEGER NOT NULL DEFAULT 0,
+            model TEXT NOT NULL DEFAULT '',
+            tokens_before INTEGER NOT NULL DEFAULT 0,
+            tokens_after INTEGER NOT NULL DEFAULT 0,
+            msgs_before INTEGER NOT NULL DEFAULT 0,
+            msgs_after INTEGER NOT NULL DEFAULT 0,
+            reason TEXT NOT NULL DEFAULT ''
         )
     ''')
     cur.execute('CREATE INDEX IF NOT EXISTS idx_ta_conv ON transcript_archive(conv_id)')
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_ta_conv_created ON transcript_archive(conv_id, created_at DESC)')
+    # Migrations — extend existing transcript_archive with metadata columns
+    for col, sql in {
+        'trigger':       "ALTER TABLE transcript_archive ADD COLUMN trigger TEXT NOT NULL DEFAULT 'force'",
+        'task_id':       "ALTER TABLE transcript_archive ADD COLUMN task_id TEXT NOT NULL DEFAULT ''",
+        'round_num':     "ALTER TABLE transcript_archive ADD COLUMN round_num INTEGER NOT NULL DEFAULT 0",
+        'model':         "ALTER TABLE transcript_archive ADD COLUMN model TEXT NOT NULL DEFAULT ''",
+        'tokens_before': "ALTER TABLE transcript_archive ADD COLUMN tokens_before INTEGER NOT NULL DEFAULT 0",
+        'tokens_after':  "ALTER TABLE transcript_archive ADD COLUMN tokens_after INTEGER NOT NULL DEFAULT 0",
+        'msgs_before':   "ALTER TABLE transcript_archive ADD COLUMN msgs_before INTEGER NOT NULL DEFAULT 0",
+        'msgs_after':    "ALTER TABLE transcript_archive ADD COLUMN msgs_after INTEGER NOT NULL DEFAULT 0",
+        'reason':        "ALTER TABLE transcript_archive ADD COLUMN reason TEXT NOT NULL DEFAULT ''",
+    }.items():
+        if not _column_exists(conn, 'transcript_archive', col):
+            cur.execute(sql)
+            logger.info('[DB] Migration: added column %s to transcript_archive', col)
 
     # Migrations — check columns
     for col, sql in {
@@ -761,6 +801,15 @@ def _init_system_schema(conn):
         ('execution_count', "INTEGER NOT NULL DEFAULT 0"),
         ('max_executions', "INTEGER NOT NULL DEFAULT 0"),
         ('expires_at', "TEXT DEFAULT ''"),
+        # Defensive: these are created by the canonical CREATE TABLE above,
+        # but older installs may have had a minimal version.
+        ('description', "TEXT DEFAULT ''"),
+        ('notify_on_failure', "INTEGER NOT NULL DEFAULT 1"),
+        ('notify_on_success', "INTEGER NOT NULL DEFAULT 0"),
+        ('max_runtime', "INTEGER NOT NULL DEFAULT 300"),
+        ('last_result', "TEXT"),
+        ('run_count', "INTEGER NOT NULL DEFAULT 0"),
+        ('fail_count', "INTEGER NOT NULL DEFAULT 0"),
     ]
     for col_name, col_def in _proactive_cols:
         if not _column_exists(conn, 'scheduled_tasks', col_name):
@@ -806,6 +855,43 @@ def _init_system_schema(conn):
         )
     ''')
     cur.execute('CREATE INDEX IF NOT EXISTS idx_timer_poll_log ON timer_poll_log(timer_id, poll_time DESC)')
+
+    # ── Daily Optimizer tables (see lib/optimizer/) ──
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS optimizer_proposals (
+            id TEXT PRIMARY KEY,
+            created_at TEXT NOT NULL,
+            title TEXT NOT NULL,
+            rationale TEXT NOT NULL,
+            action_type TEXT NOT NULL,
+            action_args TEXT NOT NULL,
+            severity TEXT NOT NULL DEFAULT 'low',
+            confidence REAL NOT NULL DEFAULT 0,
+            evidence TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'pending_review',
+            status_reason TEXT NOT NULL DEFAULT ''
+        )
+    ''')
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_opt_prop_created ON optimizer_proposals(created_at DESC)')
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_opt_prop_status ON optimizer_proposals(status)')
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_opt_prop_action ON optimizer_proposals(action_type)')
+
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS optimizer_action_log (
+            id TEXT PRIMARY KEY,
+            proposal_id TEXT NOT NULL,
+            applied_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL DEFAULT '',
+            pre_metric TEXT NOT NULL DEFAULT '',
+            outcome_metric TEXT NOT NULL DEFAULT '',
+            outcome_recorded_at TEXT NOT NULL DEFAULT '',
+            reverted_at TEXT NOT NULL DEFAULT '',
+            revert_reason TEXT NOT NULL DEFAULT ''
+        )
+    ''')
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_opt_actlog_proposal ON optimizer_action_log(proposal_id)')
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_opt_actlog_applied ON optimizer_action_log(applied_at DESC)')
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_opt_actlog_expires ON optimizer_action_log(expires_at)')
 
     conn._conn.commit()
 

@@ -16,7 +16,7 @@ import threading
 import time
 
 # Force sqlite for testing by default
-os.environ.setdefault('CHATUI_DB_BACKEND', 'sqlite')
+os.environ.setdefault('TOFU_DB_BACKEND', 'sqlite')
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -27,8 +27,8 @@ def run_test(num_threads, ops_per_thread, backend):
     if backend == 'sqlite':
         tmpdir = tempfile.mkdtemp()
         test_db = os.path.join(tmpdir, 'stress_test.db')
-        os.environ['CHATUI_DB_PATH'] = test_db
-        os.environ['CHATUI_DB_BACKEND'] = 'sqlite'
+        os.environ['TOFU_DB_PATH'] = test_db
+        os.environ['TOFU_DB_BACKEND'] = 'sqlite'
 
     # Import after env setup
     from lib.database._core import (

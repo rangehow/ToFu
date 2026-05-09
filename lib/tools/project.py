@@ -4,7 +4,14 @@ PROJECT_TOOL_LIST_DIR = {
     "type": "function",
     "function": {
         "name": "list_dir",
-        "description": "List contents of a directory in the project. Shows files with line counts and sizes, and subdirectories with item counts.",
+        "description": (
+            "List contents of a directory in the project. Shows files with line counts "
+            "and sizes, and subdirectories with item counts.\n\n"
+            "Flags data/binary files and notes size + line count per entry; use this "
+            "before reading to avoid pulling a 20 MB file into context.\n\n"
+            "Typical workflow: start a new task with list_dir('.') to map the project, "
+            "then narrow with find_files / grep_search before reading specific files."
+        ),
         "parameters": {
             "type": "object",
             "properties": {
@@ -20,15 +27,19 @@ PROJECT_TOOL_GREP = {
     "function": {
         "name": "grep_search",
         "description": (
-            "Search for a pattern across project files. Returns matching lines with file paths and line numbers. "
-            "Very useful for finding function definitions, imports, usages, etc.\n"
-            "Search is case-insensitive. Uses ripgrep internally (5x faster than grep).\n"
-            "Supports max_results to limit output (like head -n) and count_only for fast counting (like grep -c).\n"
-            "Use simple, short patterns for best results — "
-            "e.g. 'handleRequest' instead of 'def handle_.*request'. "
-            "If unsure of naming, search for a core keyword substring.\n"
-            "For MULTIPLE searches, provide a 'searches' array — each entry has the same fields as the top-level parameters. "
-            "This is much faster than multiple separate grep_search calls."
+            "Search for a pattern across project files. Returns matching lines with file "
+            "paths and line numbers. Very useful for finding function definitions, imports, "
+            "usages, etc.\n\n"
+            "**Prefer this over ``run_command grep/rg``** — grep_search uses ripgrep "
+            "internally (5x faster than grep), auto-skips ignored dirs, and is "
+            "case-insensitive by default. Supports ``max_results`` (like head -n) and "
+            "``count_only`` (like grep -c).\n\n"
+            "Use simple, short patterns for best results — e.g. 'handleRequest' instead "
+            "of 'def handle_.*request'. If unsure of naming, search for a core keyword "
+            "substring. Regex is supported but rarely needed.\n\n"
+            "For MULTIPLE searches, provide a 'searches' array — each entry has the same "
+            "fields as the top-level parameters. Batch mode runs them together and cuts "
+            "round trips."
         ),
         "parameters": {
             "type": "object",
@@ -65,9 +76,12 @@ PROJECT_TOOL_FIND = {
     "function": {
         "name": "find_files",
         "description": (
-            "Find files by name pattern (glob) in the project. Useful for discovering test files, configs, etc.\n"
-            "For MULTIPLE searches, provide a 'searches' array — each entry has the same fields as the top-level parameters. "
-            "This is much faster than multiple separate find_files calls."
+            "Find files by name pattern (glob) in the project. Useful for discovering "
+            "test files, configs, etc.\n\n"
+            "**Prefer this over ``run_command find``** — find_files supports "
+            "``max_results`` and auto-filters ignored dirs (node_modules, .venv, etc.).\n\n"
+            "For MULTIPLE searches, provide a 'searches' array — each entry has the same "
+            "fields as the top-level parameters. Batch mode cuts round trips."
         ),
         "parameters": {
             "type": "object",
@@ -98,10 +112,16 @@ PROJECT_TOOL_WRITE_FILE = {
     "function": {
         "name": "write_file",
         "description": (
-            "Write content to a file in the project. Creates the file if it doesn't exist. "
-            "Overwrites the entire file. Use apply_diff for partial changes.\n"
-            "IMPORTANT: Always read_files first to understand existing code before writing. "
-            "Include ALL content — not just the changed parts."
+            "Write content to a file in the project. Creates the file if it doesn't "
+            "exist. Overwrites the entire file.\n\n"
+            "**When to use which write tool:**\n"
+            "  • write_file — new files, or major rewrites of an entire file\n"
+            "  • apply_diff — small targeted changes to part of an existing file\n"
+            "  • insert_content — purely additive changes (new import, new function, "
+            "new config entry) where existing code is left intact\n\n"
+            "IMPORTANT: Always read_files first to understand existing code before "
+            "writing. Include ALL content — not just the changed parts. Otherwise the "
+            "rest of the file is lost."
         ),
         "parameters": {
             "type": "object",
@@ -134,13 +154,16 @@ PROJECT_TOOL_APPLY_DIFF = {
     "function": {
         "name": "apply_diff",
         "description": (
-            "Apply targeted search-and-replace edit(s) to file(s). "
-            "The 'search' string must match EXACTLY (including whitespace/indentation) in the file. "
-            "Use read_files first to get the exact content.\n"
-            "For a SINGLE edit, provide path/search/replace at the top level.\n"
-            "For MULTIPLE edits (same or different files), provide an 'edits' array — "
-            "edits are applied sequentially so later edits see earlier changes. "
-            "This is much faster than multiple separate apply_diff calls."
+            "Apply targeted search-and-replace edit(s) to file(s). The 'search' string "
+            "must match EXACTLY (including whitespace/indentation) in the file. Use "
+            "read_files first to get the exact content.\n\n"
+            "**Use apply_diff for small, targeted edits.** For new files or whole-file "
+            "rewrites use write_file; for purely additive changes (adding a new function "
+            "next to existing code without modifying it) prefer insert_content.\n\n"
+            "**Batch your edits.** For a single edit, provide path/search/replace at the "
+            "top level. For MULTIPLE edits (same or different files), provide an 'edits' "
+            "array — edits are applied sequentially so later edits see earlier changes. "
+            "Batched edits cut round trips dramatically — ~5x faster than separate calls."
         ),
         "parameters": {
             "type": "object",
@@ -178,15 +201,21 @@ PROJECT_TOOL_INSERT_CONTENT = {
     "function": {
         "name": "insert_content",
         "description": (
-            "Insert new content before or after an anchor string in a file. "
-            "Unlike apply_diff (search-and-replace), this tool ADDS content without removing the anchor.\n"
-            "Use this when you need to add new code (imports, functions, config entries) "
-            "next to existing code without replacing it.\n"
-            "The 'anchor' string must match EXACTLY once in the file (like apply_diff's search). "
-            "If it matches multiple locations, the tool errors — make the anchor more specific.\n"
-            "For a SINGLE insertion, provide path/anchor/content/position at the top level.\n"
-            "For MULTIPLE insertions (same or different files), provide an 'edits' array — "
-            "edits are applied sequentially so later edits see earlier changes."
+            "Insert new content before or after an anchor string in a file. Unlike "
+            "apply_diff (search-and-replace), this tool ADDS content without removing "
+            "the anchor.\n\n"
+            "**Prefer insert_content over apply_diff when the change is purely "
+            "additive** (adding new lines without modifying existing ones). Examples: "
+            "adding an import, appending a new function/method/block before or after "
+            "existing code, inserting a config entry. insert_content is simpler — no "
+            "need to repeat the anchor in both search and replace — and less error-prone.\n\n"
+            "The 'anchor' string must match EXACTLY once in the file (like apply_diff's "
+            "search). If it matches multiple locations, the tool errors — make the "
+            "anchor more specific.\n\n"
+            "For a SINGLE insertion, provide path/anchor/content/position at the top "
+            "level. For MULTIPLE insertions (same or different files), provide an "
+            "'edits' array — edits are applied sequentially so later edits see earlier "
+            "changes."
         ),
         "parameters": {
             "type": "object",
@@ -231,18 +260,23 @@ PROJECT_TOOL_RUN_COMMAND = {
     "function": {
         "name": "run_command",
         "description": (
-            "Execute a shell command in the project directory and return its output (stdout + stderr). "
-            "Use this for running tests, linting, building, checking git status, installing packages, etc.\n"
-            "The command runs with the project root as working directory.\n"
-            "Commands run without a timeout by default — long-running processes are OK. "
-            "Avoid interactive commands that require stdin input.\n\n"
-            "WHEN TO USE run_command vs other tools:\n"
-            "• Prefer run_command for: building/testing (npm, pytest), "
-            "installing packages, git operations, and any task where a Unix pipeline is natural.\n"
-            "• ALWAYS use grep_search instead of 'run_command grep/rg': it uses ripgrep internally (5x faster), "
-            "auto-skips ignored dirs, and supports max_results (like head -n) and count_only (like wc -l).\n"
-            "• ALWAYS use find_files instead of 'run_command find': it supports max_results and auto-filters ignored dirs.\n"
-            "• Prefer read_files for: understanding code (returns with line numbers, supports batch reads of 20 files)."
+            "Execute a shell command in the project directory and return its output "
+            "(stdout + stderr). Use this for running tests, linting, building, checking "
+            "git status, installing packages — anything that needs a real shell.\n\n"
+            "The command runs with the project root as working directory. Commands run "
+            "without a timeout by default — long-running processes are OK. Avoid "
+            "interactive commands that require stdin input (they will hang).\n\n"
+            "**WHEN TO USE run_command vs the dedicated tools:**\n"
+            "  • Building / testing (`npm test`, `pytest`, `cargo build`) — use run_command\n"
+            "  • Installing packages (`pip install`, `npm install`) — use run_command\n"
+            "  • Git operations (`git status`, `git log`, `git push`) — use run_command\n"
+            "  • Any natural Unix pipeline (`foo | grep | wc`) — use run_command\n\n"
+            "**Do NOT use run_command for these — use the dedicated tools instead:**\n"
+            "  • Reading files → use **read_files** (line numbers, batch reads, auto image/PDF/Office support)\n"
+            "  • Searching file content → use **grep_search** (5x faster, ignores noise dirs, batch mode)\n"
+            "  • Finding files by name → use **find_files** (max_results, ignored-dir filter)\n"
+            "  • Editing files → use **apply_diff / insert_content / write_file**\n"
+            "Reaching for `cat` / `grep` / `find` / `sed` / `awk` is almost always a smell — there is a dedicated tool that's faster, safer, and easier for the user to review."
         ),
         "parameters": {
             "type": "object",
@@ -270,7 +304,7 @@ PROJECT_TOOL_CREATE_PROJECT = {
     "function": {
         "name": "create_project",
         "description": (
-            "Create a new, initially-empty project directory at the given path and register it "
+            "create_project: Create a new, initially-empty project directory at the given path and register it "
             "as an EXTRA workspace root so subsequent write_file / apply_diff / insert_content / "
             "run_command / read_files calls can target it.\n\n"
             "Use this BEFORE trying to write any file that lives OUTSIDE the currently-open "
@@ -330,21 +364,29 @@ READ_FILES_TOOL = {
     "function": {
         "name": "read_files",
         "description": (
-            "Read the contents of one or more files. Can read specific line ranges for large files. "
-            "Returns file content with line numbers.\n"
-            "Each entry in the 'reads' array has 'path' (required), 'start_line' and 'end_line' (optional).\n"
-            "When you need to read multiple files, put them all in one call — maximum 20 files per batch.\n"
-            "Files under ~40KB are auto-expanded to whole-file regardless of range specified.\n\n"
-            "Supports BOTH relative project paths AND absolute paths:\n"
-            "• Relative paths (e.g. 'src/main.py') are resolved within the project.\n"
-            "• Absolute paths (e.g. '/home/user/report.pdf', '~/Documents/photo.png') "
+            "Read the contents of one or more files. Returns file content with line "
+            "numbers. Can read specific line ranges for large files.\n\n"
+            "**Read WIDE, not narrow.** When examining a function or class, read 200+ "
+            "lines in one shot — don't read 50-line fragments and come back for more. "
+            "Prefer reading the WHOLE file (omit start_line / end_line) for files "
+            "under 500 lines. Files under ~40 KB auto-expand to whole-file regardless "
+            "of range, so don't worry about over-requesting.\n\n"
+            "**Batch your reads.** When you need multiple files, put them all in one "
+            "call — maximum 20 entries per batch. Each entry: ``{path, start_line?, "
+            "end_line?}``. Batched reads cut round trips dramatically.\n\n"
+            "**Prefer this over ``run_command cat/head/tail/sed``.** Dedicated reading "
+            "is faster, includes line numbers, and lets the UI display the file nicely.\n\n"
+            "**Supports BOTH relative project paths AND absolute paths:**\n"
+            "  • Relative paths (e.g. 'src/main.py') resolve within the project.\n"
+            "  • Absolute paths (e.g. '/home/user/report.pdf', '~/Documents/photo.png') "
             "read from the local filesystem with format auto-detection:\n"
-            "  - **Images** (.png, .jpg, .gif, .webp, .bmp): Uploaded natively as an image — "
-            "you will SEE the image visually and can analyze its content.\n"
-            "  - **PDFs** (.pdf): Extracts text content with layout preservation.\n"
-            "  - **Office docs** (.docx, .xlsx, .pptx): Extracts text and tables as Markdown.\n"
-            "  - **Text files**: Reads with auto encoding detection.\n"
-            "Also handles file:// URIs — strip the file:// prefix and pass just the path."
+            "    – **Images** (.png, .jpg, .gif, .webp, .bmp): Uploaded natively — you "
+            "will SEE the image and can analyze its content.\n"
+            "    – **PDFs** (.pdf): Extracts text with layout preservation.\n"
+            "    – **Office docs** (.docx, .xlsx, .pptx): Extracts text and tables as "
+            "Markdown.\n"
+            "    – **Text files**: Reads with auto encoding detection.\n"
+            "Also handles ``file://`` URIs — strip the prefix and pass the path."
         ),
         "parameters": {
             "type": "object",
@@ -379,6 +421,14 @@ READ_FILES_TOOL = {
 #   — it's a global tool registered unconditionally by the orchestrator
 #   so absolute-path file reads work regardless of project mode.
 #   See READ_FILES_TOOL above.
+#
+# Note: project_history / project_diff / project_blame were retired in the
+# Tier-3 redesign (2026-05-08).  Their shadow-git backend was replaced by
+# the file-history copy-backup store (lib/file_history/), and the LLM-facing
+# tools were dropped because the model rarely invoked them and the same
+# information is available via reading conversation history (which the
+# model already does).  Per-round undo/redo of file changes still works
+# end-to-end through the file-history store.
 PROJECT_TOOLS = [
     PROJECT_TOOL_LIST_DIR,
     PROJECT_TOOL_GREP, PROJECT_TOOL_FIND,

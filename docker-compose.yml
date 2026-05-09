@@ -39,8 +39,8 @@ services:
       - LLM_API_KEYS=${LLM_API_KEYS:-}
       - LLM_BASE_URL=${LLM_BASE_URL:-}
       - LLM_MODEL=${LLM_MODEL:-}
-      # ── Database (optional — defaults to data/chatui.db) ──
-      - CHATUI_DB_PATH=${CHATUI_DB_PATH:-}
+      # ── Database (optional — defaults to data/tofu.db; legacy data/chatui.db auto-picked up) ──
+      - TOFU_DB_PATH=${TOFU_DB_PATH:-${CHATUI_DB_PATH:-}}
       # ── Proxy (if needed) ──
       - HTTP_PROXY=${HTTP_PROXY:-}
       - HTTPS_PROXY=${HTTPS_PROXY:-}

@@ -10,61 +10,32 @@ the text.  This is necessary because each task receives a *fresh* message list
 from the frontend — the system message does NOT carry over project/memory
 context from the previous task.
 
-Includes Claude Code-inspired prompt sections:
-  - Function Result Clearing notification (tells model old results are auto-cleared)
-  - Tool result summarization guidance (tells model to write down important info)
-  - Tool usage guidance (parallel calls, prefer dedicated tools)
-  - Output efficiency guidance (concise, direct output)
+**Claude-Code-style layout** (the only layout — no kill switch).
+
+Static prompt sections (``# System``, ``# Doing tasks``, ``# Executing actions
+with care``, ``# Using your tools``, ``# Tone and style``, ``# Output
+efficiency``, ``# Environment``, etc.) are assembled by
+``lib.tasks_pkg.system_prompt_cc.build_static_prompt`` as ONE cache-stable
+block in the system message.  CLAUDE.md / project-intelligence content is
+**NOT** placed in the system message — it goes into a prepended user message
+with ``_isMeta: True`` wrapped in ``<system-reminder>`` tags (mirroring
+Claude Code's ``prependUserContext`` in ``utils/api.ts:449``).  A/B-validated
+to save 18% cost / +49% cache hit — see
+``.chatui/skills/claudemd-placement-ab-test-results.md``.
+
+Historical note: a ``CHATUI_CC_SYSPROMPT`` env-var kill switch used to toggle
+a legacy layout where project context was prepended into the system message.
+It was removed on 2026-05-07 after an empty-string env-var value silently
+flipped the layout in production — see the commit that touched this line.
 """
 
 import hashlib
-from datetime import datetime, timezone
 
 from lib.log import get_logger
 
 logger = get_logger(__name__)
 
-from lib.tasks_pkg.compaction import MICRO_HOT_TAIL
-
-# ═══════════════════════════════════════════════════════════════════════════════
-#  Claude Code-inspired system prompt sections
-# ═══════════════════════════════════════════════════════════════════════════════
-
-_FUNCTION_RESULT_CLEARING_SECTION = f"""\
-# Function Result Clearing
-
-Old tool results will be automatically cleared from context to free up space. \
-The {MICRO_HOT_TAIL} most recent results are always kept."""
-
-_SUMMARIZE_TOOL_RESULTS_SECTION = """\
-When working with tool results, write down any important information you \
-might need later in your response, as the original tool result may be \
-cleared later."""
-
-_TOOL_USAGE_GUIDANCE = """\
-# Using your tools
- - In general, do not propose changes to code you haven't read. If a user asks about or wants you to modify a file, read it first. Understand existing code before suggesting modifications.
- - You can call multiple tools in a single response. If you intend to call multiple tools and there are no dependencies between them, make all independent tool calls in parallel. Maximize use of parallel tool calls where possible to increase efficiency. However, if some tool calls depend on previous calls to inform dependent values, do NOT call these tools in parallel and instead call them sequentially.
- - When using web_search and fetch_url, review search result summaries first before deciding what to fetch. Use fetch_url on the 1-2 most promising URLs to read full content.
- - Prefer grep_search for finding code patterns (built-in fuzzy hints, context lines, case-insensitive). Prefer read_files for understanding code (returns with line numbers, supports batch reads). Prefer run_command for shell operations (counting, testing, building).
- - Use apply_diff for small targeted edits, write_file for new files or major rewrites. When making multiple edits, prefer batch apply_diff(edits=[...]) over separate calls — this dramatically reduces round trips.
- - Use insert_content to add new code (imports, functions, config entries) next to existing code without replacing it. Provide an anchor string to locate the insertion point and specify position='before' or 'after'. If the anchor matches multiple locations, make it more specific.
- - **Prefer insert_content over apply_diff when the change is purely additive** (adding new lines without modifying existing ones). Examples: adding an import, appending to end of file, inserting a new function/method/block before or after existing code. insert_content is simpler (no need to repeat the anchor in both search and replace) and less error-prone.
- - If an approach fails, diagnose why before switching tactics — read the error, check your assumptions, try a focused fix. Don't retry the identical action blindly, but don't abandon a viable approach after a single failure either."""
-
-_OUTPUT_EFFICIENCY_GUIDANCE = """\
-# Output efficiency
-
-Go straight to the point. Try the simplest approach first without going in circles. Do not overdo it. Be extra concise.
-
-Keep your text output brief and direct. Lead with the answer or action, not the reasoning. Skip filler words, preamble, and unnecessary transitions. Do not restate what the user said — just do it.
-
-Focus text output on:
-- Decisions that need the user's input
-- High-level status updates at natural milestones
-- Errors or blockers that change the plan
-
-If you can say it in one sentence, don't use three. Prefer short, direct sentences over long explanations. This does not apply to code or tool calls."""
+from lib.tasks_pkg import system_prompt_cc
 
 # ── Delta attachment tracking ──
 # Cache of (hash, text) per category per conv_id.
@@ -210,22 +181,61 @@ def _append_to_system_message(messages, text, *, as_separate_block=False):
                 else:
                     messages[0]['content'].append({'type': 'text', 'text': text})
     else:
-        messages.insert(0, {'role': 'system', 'content': text.strip()})
+        # No system message yet — create one.
+        # Respect as_separate_block so callers that want downstream cache
+        # segmentation don't get stuck with a string content.
+        if as_separate_block:
+            messages.insert(0, {'role': 'system',
+                                'content': [{'type': 'text', 'text': text}]})
+        else:
+            messages.insert(0, {'role': 'system', 'content': text.strip()})
 
 
-def _prepend_to_system_message(messages, text):
-    """Prepend text before the first system message content, or create one.
+def _insert_user_context_message(messages, body: str) -> None:
+    """Insert a Claude-Code-style ``<system-reminder>`` user message.
 
-    Used for project context which should appear *before* the user's system prompt.
+    Inserted RIGHT AFTER the last system message (or at index 0 if no
+    system message), BEFORE the first real user message.  Matches Claude
+    Code's ``prependUserContext`` behavior — see ``utils/api.ts:449``.
+
+    Marked with ``_isMeta: True`` so chatui's debug panel / token
+    counter / persistence layers can recognize it as synthetic.
+
+    Idempotency: skip if any existing user message already contains the
+    ``<system-reminder>`` claudeMd marker — Critic mode reuses worker
+    messages and re-injecting would duplicate.
     """
-    if messages and messages[0].get('role') == 'system':
-        sc = messages[0].get('content', '')
-        if isinstance(sc, str):
-            messages[0]['content'] = text + '\n\n' + sc
-        elif isinstance(sc, list):
-            messages[0]['content'] = [{'type': 'text', 'text': text}] + sc
+    # Find the first non-system slot
+    insert_idx = 0
+    for i, m in enumerate(messages):
+        if m.get('role') != 'system':
+            insert_idx = i
+            break
     else:
-        messages.insert(0, {'role': 'system', 'content': text})
+        # All system → append
+        insert_idx = len(messages)
+
+    # Idempotency: if a previous _isMeta user message with the same
+    # marker already exists, don't double-inject.
+    for m in messages:
+        if m.get('role') != 'user' or not m.get('_isMeta'):
+            continue
+        c = m.get('content', '')
+        if isinstance(c, str) and '[PROJECT CO-PILOT MODE]' in c:
+            logger.debug('[Inject] CC user-context already present, skipping')
+            return
+        if isinstance(c, list):
+            for blk in c:
+                if isinstance(blk, dict) and blk.get('type') == 'text' \
+                        and '[PROJECT CO-PILOT MODE]' in blk.get('text', ''):
+                    logger.debug('[Inject] CC user-context already present, skipping')
+                    return
+
+    messages.insert(insert_idx, {
+        'role': 'user',
+        'content': body,
+        '_isMeta': True,  # synthetic marker — see Claude Code's isMeta flag
+    })
 
 
 def _system_text(messages) -> str:
@@ -251,45 +261,44 @@ def _system_text(messages) -> str:
     return ''
 
 
+# Marker embedded in the Claude-Code static block. Used as the idempotency
+# probe that says "the CC static prompt is already in the system message".
+_CC_STATIC_MARKER = "IMPORTANT: You must NEVER generate or guess URLs"
+
+
 def _inject_system_contexts(messages, project_path, project_enabled,
                              memory_enabled, search_enabled, swarm_enabled,
                              has_real_tools, conv_id: str = '',
-                             task: dict = None):
-    """Inject project, swarm, and static contexts into the system message.
+                             task: dict = None, model: str = ''):
+    """Inject the Claude-Code-style system + user contexts into *messages*.
 
-    Modifies the messages list directly. Contexts are layered onto the system
-    message in a consistent order optimized for **cache stability**:
+    Modifies the messages list directly. Final shape:
 
-      1. Project context (CLAUDE.md, file tree) — prepended, changes on file edits
-      2. Static guidance (FRC, tool usage, output) — SEPARATE BLOCK, never changes
-      3. Memory count hint + compact instructions — count is dynamic, instructions static
-      4. Swarm prompt — static when swarm is enabled
-      5. Session memory — changes across turns (least cacheable)
+      System message (one cache-stable block per entry):
+        1. Static Claude-Code-style prompt
+           (intro / # System / # Doing tasks / # Executing actions with care
+            / # Using your tools / # Tone and style / # Output efficiency
+            / # Function Result Clearing / SUMMARIZE / system-reminder note
+            / # Environment / Notes: / Current date)
+        2. (optional) Memory accumulation instructions + count hint
+        3. (optional) Swarm / parallel-execution prompt
 
-    The memory count hint (e.g. "You have 30 accumulated memories...") is
-    injected here in the system message alongside compact memory instructions,
-    NOT in the user message.
-
-    IMPORTANT: Context is ALWAYS injected into the system message.  Each task
-    receives fresh messages from the frontend (which only has the user's custom
-    system prompt — no project/memory context).  Delta tracking is used solely
-    to skip expensive FUSE I/O when the context hasn't changed since the last
-    task in this conversation — the *text* is still injected from cache.
+      User message at index 1 (prepended before real user turn):
+        <system-reminder> CLAUDE.md / project-intelligence </system-reminder>
+        with ``_isMeta: True`` — matches Claude Code's ``prependUserContext``.
 
     Memory prefetch support: if ``task`` is provided and contains
     ``_prefetch_project`` / ``_prefetch_memory`` futures, their already-
     completed results are consumed instead of re-computing (saving FUSE I/O
-    latency).  Inspired by Claude Code's ``startRelevantMemoryPrefetch()``.
+    latency).
 
-    **Idempotency.**  This function is called once per ``run_task`` invocation.
-    In endpoint mode (``lib.tasks_pkg.endpoint``) the SAME task runs the
-    orchestrator three times — Planner, Worker, Critic — and the Critic
-    reuses ``worker_messages`` which already has contexts injected by the
-    orchestrator's previous call.  Re-injecting would double the project
-    CLAUDE.md block, the static guidance block, the memory hint, and the
-    date line — producing the "messages duplicated twice in the debug
-    panel" symptom.  Each section below checks for its own marker via
-    ``_system_text(messages)`` and skips if already present.
+    **Idempotency.**  Each section checks for its own marker via
+    ``_system_text(messages)`` and skips if already present — required for
+    endpoint-mode (Planner / Worker / Critic share the same messages) and
+    for post-compaction re-injection.
+
+    Args:
+        model: Model ID for the ``# Environment`` section.
     """
     _cid = conv_id or ''
 
@@ -313,49 +322,76 @@ def _inject_system_contexts(messages, project_path, project_enabled,
                 logger.debug('[MemPrefetch] %s not done yet, falling back', key)
         return fallback_fn()
 
-    # ★ 1. Project context injection (prepended — appears first after user system prompt)
+    # ── Load project context (CLAUDE.md) once ──
+    proj_ctx = ''
     if project_enabled:
-        # Idempotency guard — skip if project CLAUDE.md already present
-        # (endpoint-mode Critic reuses the Worker's post-injection messages).
-        if '[PROJECT CO-PILOT MODE]' in _existing:
-            logger.debug('[Inject] Project context already present, skipping '
-                         'prepend (conv=%s)', _cid[:8] if _cid else '?')
+        def _load_project():
+            from lib.project_mod import get_context_for_prompt
+            return get_context_for_prompt(project_path)
+
+        if _cid:
+            proj_ctx = _get_cached_or_compute(
+                _cid, 'project',
+                lambda: _get_prefetched('_prefetch_project', _load_project),
+            ) or ''
         else:
-            def _load_project():
-                from lib.project_mod import get_context_for_prompt
-                return get_context_for_prompt(project_path)
+            proj_ctx = _get_prefetched('_prefetch_project', _load_project) or ''
 
-            if _cid:
-                # Delta path: use cache to skip FUSE I/O when content unchanged
-                proj_ctx = _get_cached_or_compute(
-                    _cid, 'project',
-                    lambda: _get_prefetched('_prefetch_project', _load_project),
-                )
-            else:
-                proj_ctx = _get_prefetched('_prefetch_project', _load_project)
+    logger.info('[Inject] conv=%s proj_enabled=%s proj_ctx_len=%d '
+                'has_real_tools=%s',
+                (_cid or '?')[:8], project_enabled, len(proj_ctx or ''),
+                has_real_tools)
 
-            if proj_ctx:
-                _prepend_to_system_message(messages, _wrap_system_reminder(proj_ctx))
-                # Refresh probe after mutation so later steps see the update.
-                _existing = _system_text(messages)
+    # ★ 1. Static Claude-Code block — append as separate cache-stable block.
+    #      Injected ONCE; marker guards against endpoint-mode re-entry.
+    if _CC_STATIC_MARKER not in _existing:
+        _cwd = project_path or ''
+        try:
+            import os as _os
+            _is_git = bool(_cwd and _os.path.isdir(_os.path.join(_cwd, '.git')))
+        except Exception as e:
+            logger.debug('[SysPrompt] is_git probe failed: %s', e)
+            _is_git = False
 
-    # ★ 2. Static guidance sections (SEPARATE BLOCK — never changes, maximizes cache prefix)
-    #   Injected BEFORE any dynamic content so the cache-stable prefix is as
-    #   long as possible: [user system prompt] → [project CLAUDE.md] → [static guidance]
-    if has_real_tools:
-        if '# Function Result Clearing' in _existing:
-            logger.debug('[Inject] Static guidance already present, skipping '
-                         'append (conv=%s)', _cid[:8] if _cid else '?')
-        else:
-            _static_guidance = '\n\n'.join([
-                _FUNCTION_RESULT_CLEARING_SECTION,
-                _SUMMARIZE_TOOL_RESULTS_SECTION,
-                _TOOL_USAGE_GUIDANCE,
-                _OUTPUT_EFFICIENCY_GUIDANCE,
-            ])
-            _append_to_system_message(messages, _static_guidance,
-                                      as_separate_block=True)
-            _existing = _system_text(messages)
+        # Extra-roots (multi-root workspace) — reuse project_mod snapshot.
+        _extra_roots = []
+        try:
+            from lib.project_mod.config import _roots, _lock
+            with _lock:
+                for _rn, _rs in _roots.items():
+                    if _rs.get('path') and _rs['path'] != _cwd:
+                        _extra_roots.append(f"{_rn} → {_rs['path']}")
+        except Exception as e:
+            logger.debug('[SysPrompt] extra-roots probe failed: %s', e)
+
+        _static_block = system_prompt_cc.build_static_prompt(
+            cwd=_cwd, is_git=_is_git, model=model,
+            extra_roots=_extra_roots or None,
+            has_real_tools=has_real_tools,
+        )
+        _append_to_system_message(messages, _static_block,
+                                   as_separate_block=True)
+        _existing = _system_text(messages)
+
+    # ★ 2. Project CLAUDE.md → prepended user _isMeta message (cache-friendly).
+    if proj_ctx and '[PROJECT CO-PILOT MODE]' not in _existing:
+        _reminder = system_prompt_cc.build_user_context_reminder(
+            claude_md=proj_ctx, current_date=None,
+        )
+        if _reminder:
+            _insert_user_context_message(messages, _reminder)
+            logger.info('[Inject] conv=%s CLAUDE.md inserted as user '
+                        '_isMeta msg (len=%d)',
+                        (_cid or '?')[:8], len(_reminder))
+    elif proj_ctx:
+        # CLAUDE.md is already IN the system message — shouldn't happen under
+        # the single-layout design.  Left as a warning so stale snapshots /
+        # external injections are surfaced.
+        logger.warning('[Inject] conv=%s CLAUDE.md marker found in system '
+                       'text — something is placing it in system instead of '
+                       'as a user _isMeta msg. Check endpoint re-entry / '
+                       'stale legacy code paths.',
+                       (_cid or '?')[:8])
 
     # ★ 3. Compact memory accumulation instructions + memory count hint
     #   Both the HOW-TO-USE instructions and the dynamic count hint
@@ -383,12 +419,16 @@ def _inject_system_contexts(messages, project_path, project_enabled,
             if _mem_hint:
                 _mem_block = _mem_hint + '\n\n' + _mem_block
 
+            # Separate cache-block: the memory count in _mem_hint changes
+            # whenever memories are CRUD'd, so we want its BP independent
+            # from the static CC block's BP.
             _append_to_system_message(
                 messages,
-                _wrap_system_reminder(_mem_block))
+                _wrap_system_reminder(_mem_block),
+                as_separate_block=True)
             _existing = _system_text(messages)
 
-    # ★ 4. Swarm system prompt injection
+    # ★ 4. Swarm system prompt injection (only when swarm is enabled)
     if swarm_enabled and project_enabled and '<parallel_execution>' not in _existing:
         swarm_prompt = """
 <parallel_execution>
@@ -418,34 +458,26 @@ Sub-tasks run in parallel with full tool access. Results come back together. You
 Use `depends_on: [0]` only when a task truly needs another's output (rare — prefer maximum parallelism).
 </parallel_execution>
 """
-        _append_to_system_message(messages, _wrap_system_reminder(swarm_prompt))
+        _append_to_system_message(messages,
+                                   _wrap_system_reminder(swarm_prompt),
+                                   as_separate_block=True)
 
-    # ★ 4.5. Current date (date-only, changes once per UTC day → cache-stable)
-    #   A/B tested: date-only in system prompt (Arm C) was the clear winner:
-    #     - 85.7% avg cache hit, $0.36 total
-    #     - vs full datetime in user msg every round (Arm A): 77.9%, $0.49
-    #     - vs full datetime in system prompt (Arm D): 12.4%, $1.55 (CATASTROPHIC)
-    #   Date-only changes once per day so BP1-BP2 (1h TTL) stay perfectly stable.
-    #   Decoupled from search_enabled — model always knows today's date.
-    _date_str = datetime.now(timezone.utc).strftime('%Y-%m-%d')
-    # Idempotency guard — avoid appending "Current date:" twice when the
-    # endpoint loop re-enters _inject_system_contexts on the critic turn.
-    if f'Current date: {_date_str}' not in _existing:
-        _append_to_system_message(
-            messages, f'Current date: {_date_str}')
+    # Current date is already inlined by build_static_prompt()'s
+    # section_current_date — do NOT append it here or it duplicates.
 
 
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  Memory-to-user-message injection
+#  Last-user-text extraction (shared helper)
 # ═══════════════════════════════════════════════════════════════════════════════
-
-_MEMORY_MARKER = '<available_memories>'  # Legacy marker for stripping old listings
-
 
 def _extract_last_user_text(messages: list) -> str:
-    """Extract the text content of the last user message for BM25 query."""
+    """Extract the text content of the last user message.
+
+    Used by memory-prefetch to build a BM25 query from the conversational
+    surface of the last turn.
+    """
     for i in range(len(messages) - 1, -1, -1):
         if messages[i].get('role') == 'user':
             content = messages[i].get('content', '')
@@ -458,65 +490,3 @@ def _extract_last_user_text(messages: list) -> str:
                         parts.append(block.get('text', ''))
                 return ' '.join(parts)
     return ''
-
-
-def _strip_old_memory_listing(text: str) -> str:
-    """Remove a previously injected memory listing from text.
-
-    Prevents accumulation across rounds — strips everything from
-    <available_memories> to </available_memories> inclusive.
-    """
-    if _MEMORY_MARKER not in text:
-        return text
-    import re
-    cleaned = re.sub(
-        r'\n*<available_memories>.*?</available_memories>\n*',
-        '\n',
-        text,
-        flags=re.DOTALL,
-    )
-    return cleaned.rstrip()
-
-
-def inject_memory_to_user(messages: list, project_path: str = None,
-                           project_enabled: bool = False,
-                           memory_enabled: bool = False,
-                           has_real_tools: bool = False,
-                           conv_id: str = '',
-                           task: dict = None,
-                           round_num: int = 0):
-    """Strip legacy <available_memories> listings from user messages.
-
-    Memory count hint is now injected into the system message by
-    _inject_system_contexts() (step 3).  This function only handles
-    backward-compat cleanup of old-format listings that may exist in
-    persisted conversation history.
-
-    Args:
-        messages: The messages list (mutated in-place).
-        project_path: Unused (kept for backward compat).
-        project_enabled: Unused (kept for backward compat).
-        memory_enabled: Whether memory is enabled in settings.
-        has_real_tools: Whether the task has real tools.
-        conv_id: Unused (kept for backward compat).
-        task: Unused (kept for backward compat).
-        round_num: Current round within the task (0-based).
-    """
-    if not memory_enabled and not has_real_tools:
-        return
-    if round_num > 0:
-        return
-
-    # Legacy cleanup only: strip old <available_memories> listings
-    for i in range(len(messages) - 1, -1, -1):
-        if messages[i].get('role') == 'user':
-            content = messages[i].get('content', '')
-            if isinstance(content, str) and _MEMORY_MARKER in content:
-                messages[i]['content'] = _strip_old_memory_listing(content)
-            elif isinstance(content, list):
-                messages[i]['content'] = [
-                    b for b in content
-                    if not (isinstance(b, dict) and b.get('type') == 'text'
-                            and _MEMORY_MARKER in b.get('text', ''))
-                ]
-            return

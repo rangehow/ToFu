@@ -40,14 +40,18 @@ def list_servers():
     servers = []
     for name, srv_cfg in config.items():
         is_connected = name in connected_servers
-        # Get tool count if connected
+        # Get tool count + server version if connected
         tools_count = 0
         tool_names = []
+        server_version = ''
+        server_impl_name = ''
         if is_connected:
             for s in bridge.list_servers():
                 if s['name'] == name:
                     tools_count = s['tools_count']
                     tool_names = s['tool_names']
+                    server_version = s.get('server_version', '') or ''
+                    server_impl_name = s.get('server_impl_name', '') or ''
                     break
         servers.append({
             'name': name,
@@ -57,6 +61,8 @@ def list_servers():
             'connected': is_connected,
             'tools_count': tools_count,
             'tool_names': tool_names,
+            'server_version': server_version,
+            'server_impl_name': server_impl_name,
         })
 
     return jsonify({'ok': True, 'servers': servers})
@@ -269,12 +275,20 @@ def get_catalog():
         installed = sid in config
         connected = sid in connected_names
 
-        # Get tool count if connected
+        # Get tool count + server-reported version if connected.
+        # ``server_version`` comes from the upstream MCP server's own
+        # InitializeResult.serverInfo (see lib/mcp/client.py) — it is the
+        # version of the MCP server implementation itself, not Tofu or
+        # the launcher (e.g. ``overleaf-mcp-plus@0.1.3``).
         tools_count = 0
+        server_version = ''
+        server_impl_name = ''
         if connected:
             for s in bridge.list_servers():
                 if s['name'] == sid:
                     tools_count = s['tools_count']
+                    server_version = s.get('server_version', '') or ''
+                    server_impl_name = s.get('server_impl_name', '') or ''
                     break
 
         # Report which env keys already have a stored non-empty value
@@ -290,6 +304,8 @@ def get_catalog():
             'installed': installed,
             'connected': connected,
             'tools_count': tools_count,
+            'server_version': server_version,
+            'server_impl_name': server_impl_name,
             'stored_env_keys': stored_env_keys,
         })
 

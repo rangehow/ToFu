@@ -10,32 +10,65 @@
 #    curl -fsSL ... | bash -s -- --port 8080 --api-key sk-xxx
 #
 #  Options:
-#    --dir <path>       Install directory (default: ~/tofu)
-#    --env <name>       Conda env name (default: tofu)
-#    --port <n>         Server port (default: 15000)
-#    --api-key <key>    Pre-configure LLM API key
-#    --no-launch        Install only, don't start
-#    --skip-playwright  Skip Playwright browser install
-#    --no-update-conda  Skip conda self-update
-#    --reset-env        Delete the existing conda env and recreate from scratch
-#                       (⚠️  DESTRUCTIVE: removes ANY extra packages the user
-#                        installed into this env. Only use for your own env.)
-#    --force-sqlite     Skip PostgreSQL install + bootstrap entirely and pin
-#                       CHATUI_DB_BACKEND=sqlite in .env. Use this when the
-#                       host's conda-forge snapshot can't satisfy PG deps
-#                       (e.g. icu/libxml2 pin conflicts) — SQLite is fine for
-#                       single-user / <100 concurrent use.
-#    --pg-major <N>     Force a specific PG major version (e.g. 17). Default
-#                       tries 18 → 17 → 16 in order, picking the first one
-#                       whose solve succeeds on this host.
-#    --reinit-pgdata    If data/pgdata exists but was created by a different
-#                       PG major than the one we install, back it up and
-#                       re-initdb. WITHOUT this flag we auto-detect the
-#                       mismatch and fall back to SQLite (data preserved).
+#    --dir <path>          Install directory (default: ~/tofu)
+#    --env <name>          Conda env name (default: tofu)
+#    --port <n>            Server port (default: 15000)
+#    --api-key <key>       Pre-configure LLM API key
+#    --no-launch           Install only, don't start
+#    --skip-playwright     Skip Playwright browser install
+#    --no-update-conda     Skip conda self-update (only relevant when we
+#                          install our OWN sibling Miniforge — we never
+#                          touch a pre-existing conda the user owns)
+#    --reset-env           Delete the existing conda env and recreate from scratch
+#                          (⚠️  DESTRUCTIVE: removes ANY extra packages the user
+#                           installed into this env. Only use for your own env.)
+#    --force-sqlite        Skip PostgreSQL install + bootstrap entirely and pin
+#                          TOFU_DB_BACKEND=sqlite in .env. Use this when the
+#                          host's conda-forge snapshot can't satisfy PG deps
+#                          (e.g. icu/libxml2 pin conflicts) — SQLite is fine for
+#                          single-user / <100 concurrent use.
+#    --pg-major <N>        Force a specific PG major version (e.g. 17). Default
+#                          tries 18 → 17 → 16 in order, picking the first one
+#                          whose solve succeeds on this host.
+#    --reinit-pgdata       If data/pgdata exists but was created by a different
+#                          PG major than the one we install, back it up and
+#                          re-initdb. WITHOUT this flag we auto-detect the
+#                          mismatch and fall back to SQLite (data preserved).
+#    --min-conda <N>       Minimum acceptable conda MAJOR version (default 24).
+#                          If the user's conda is older we install a private
+#                          sibling Miniforge instead of touching theirs.
+#    --force-sibling-conda Always install our own sibling Miniforge, even
+#                          when an existing conda is new enough.
+#    --with-docling        ALSO install the optional `docling` package for
+#                          layout-aware PDF parsing (better tables + math
+#                          formulas on academic PDFs). Adds ~2 GB (pulls
+#                          torch + model weights). Opt-in because the base
+#                          install works fine with pymupdf4llm alone.
+#                          After install, set PDF_TEXT_MODE=structured in
+#                          your .env (or per-request textMode=structured)
+#                          to route /api/pdf/parse through docling.
+#
+#  Conda discovery & "don't break the user's setup" policy
+#  ────────────────────────────────────────────────────────
+#  1. We look for an existing conda. If one is found AND its major version
+#     is >= --min-conda, we USE IT AS-IS — no `conda update`, no `conda init`,
+#     no `conda config` writes (those would mutate the user's ~/.condarc and
+#     ~/.bashrc). All env operations are scoped to the Tofu env we create.
+#  2. Otherwise we install Miniforge as a SIBLING of the project directory:
+#        <parent of INSTALL_DIR>/tofu-miniforge3/
+#     Sibling (not nested) so `git clean -fdx` inside the project doesn't
+#     wipe it. We use the parent of INSTALL_DIR (NOT $HOME) because users
+#     on shared filesystems / codelab containers often lack write access to
+#     their own $HOME, but DO own the project parent. This way the Miniforge
+#     install lives at the same permission level as the project.
+#  3. After env creation we write <INSTALL_DIR>/.tofu_env.json — a marker
+#     read by server.py / bootstrap.py to re-exec into the right interpreter
+#     when the user runs `python server.py` from a shell where the Tofu env
+#     wasn't `conda activate`d. This avoids any need to mutate ~/.bashrc.
 #
 #  This script relies ENTIRELY on conda (conda-forge). It:
-#    1. Installs Miniforge if no conda is found
-#    2. Updates conda itself (outdated conda causes many solver issues)
+#    1. Locates an acceptable conda OR installs a sibling Miniforge
+#    2. (Sibling installs only) updates conda itself for solver fixes
 #    3. Clones the repo if needed
 #    4. Creates a fresh conda env with Python 3.10+
 #    5. Installs ALL Python dependencies from conda-forge (no pip)
@@ -43,7 +76,8 @@
 #    7. Installs PostgreSQL with layered fallback (18 → 17 → 16 → SQLite)
 #    8. Validates data/pgdata/ matches installed PG major (auto-heals)
 #    9. Installs the Playwright Chromium browser binary
-#   10. Launches the server
+#   10. Writes .tofu_env.json marker so server.py/bootstrap.py auto-activate
+#   11. Launches the server
 #
 #  For Windows, use install.ps1 instead.
 # ═══════════════════════════════════════════════════════════════
@@ -78,6 +112,9 @@ FORCE_SQLITE=0
 PG_MAJOR=""         # empty = auto-pick from PG_MAJOR_CANDIDATES
 REINIT_PGDATA=0
 PG_MAJOR_CANDIDATES=(18 17 16)
+MIN_CONDA_MAJOR=24          # minimum acceptable major version of an existing conda
+FORCE_SIBLING_CONDA=0       # 1 = always install our own sibling Miniforge
+WITH_DOCLING=0              # 1 = also install the optional `docling` package
 
 # ── Parse arguments ─────────────────────────────────────────
 FORWARD_ARGS=()
@@ -95,6 +132,9 @@ while [[ $# -gt 0 ]]; do
         --force-sqlite)     FORCE_SQLITE=1; shift ;;
         --pg-major)         PG_MAJOR="$2"; shift 2 ;;
         --reinit-pgdata)    REINIT_PGDATA=1; shift ;;
+        --min-conda)        MIN_CONDA_MAJOR="$2"; shift 2 ;;
+        --force-sibling-conda) FORCE_SIBLING_CONDA=1; shift ;;
+        --with-docling)     WITH_DOCLING=1; shift ;;
         *)  FORWARD_ARGS+=("$1"); shift ;;
     esac
 done
@@ -126,7 +166,14 @@ TOFU_INSTALL_LOG="${_TOFU_LOG_DIR}/install-$(date +%Y%m%d_%H%M%S).log"
 # stdbuf -oL keeps stdout line-buffered so progress shows up immediately
 # even when piped to tee (solves the "nothing prints for 30s" issue
 # during long conda solves).
-exec > >(stdbuf -oL tee -a "$TOFU_INSTALL_LOG") 2>&1
+# Strip ANSI colour escapes BEFORE tee'ing into the file so the log is
+# readable as plain text (terminals still see the coloured stream).
+# Uses process substitution: terminal gets raw, log gets sed-stripped.
+if command -v sed &>/dev/null; then
+    exec > >(stdbuf -oL tee >(stdbuf -oL sed -u $'s/\x1b\\[[0-9;]*[a-zA-Z]//g' >> "$TOFU_INSTALL_LOG")) 2>&1
+else
+    exec > >(stdbuf -oL tee -a "$TOFU_INSTALL_LOG") 2>&1
+fi
 # Record key metadata at the top of the log for future debugging.
 {
     echo "──────────────────────────────────────────────"
@@ -165,70 +212,303 @@ esac
 info "Platform: $OS $ARCH"
 
 # ═══════════════════════════════════════════════════════════════
-#  Step 1: Locate or install conda (Miniforge)
+#  Step 1: Locate, version-check, or install conda (Miniforge)
+#
+#  POLICY: never mutate a conda the user already owns. We only "manage"
+#  conda when WE installed it (sibling Miniforge under the project parent).
 # ═══════════════════════════════════════════════════════════════
 step "Locating conda"
 
+# Resolve project parent so we can compute the sibling Miniforge path.
+# At this point INSTALL_DIR may not exist yet (first-time clone) — that's
+# fine, we just need its parent directory string.
+_INSTALL_PARENT="$(cd "$(dirname "${INSTALL_DIR}")" 2>/dev/null && pwd)"
+if [[ -z "$_INSTALL_PARENT" ]]; then
+    # Parent doesn't exist either — fall back to dirname of the literal path
+    _INSTALL_PARENT="$(dirname "${INSTALL_DIR}")"
+fi
+SIBLING_CONDA_DIR="${_INSTALL_PARENT}/tofu-miniforge3"
+
+# Returns 0 if "$1" >= MIN_CONDA_MAJOR, else 1. "$1" is conda --version output
+# like "conda 24.7.1" or just "24.7.1". Accepts unknown/blank as a fail.
+_conda_version_ok() {
+    local raw="${1:-}"
+    [[ -n "$raw" ]] || return 1
+    # Extract first dotted version-looking token
+    local ver
+    ver="$(echo "$raw" | grep -oE '[0-9]+(\.[0-9]+)+' | head -n1)"
+    [[ -n "$ver" ]] || return 1
+    local major="${ver%%.*}"
+    [[ "$major" =~ ^[0-9]+$ ]] || return 1
+    [[ "$major" -ge "$MIN_CONDA_MAJOR" ]]
+}
+
+# Probe an arbitrary conda binary for its version. Echoes raw output.
+_probe_conda_version() {
+    local bin="$1"
+    [[ -x "$bin" ]] || { echo ""; return; }
+    "$bin" --version 2>/dev/null || echo ""
+}
+
 CONDA_BIN=""
+CONDA_OWNED_BY_US=0   # 1 = we installed this conda (sibling); we may update it.
+                      # 0 = pre-existing user conda; HANDS OFF (no update / init / config).
+
+# 1. Existing user conda — accept only if version >= MIN_CONDA_MAJOR.
+_existing_conda_candidates=()
 if command -v conda &>/dev/null; then
-    CONDA_BIN="$(command -v conda)"
-    ok "Found conda at $CONDA_BIN"
-elif command -v mamba &>/dev/null; then
-    # If mamba is on PATH without conda, find the base conda it shipped with
-    CONDA_BIN="$(command -v mamba)"
-    ok "Found mamba at $CONDA_BIN (will use with conda fallback)"
-elif [[ -x "${HOME}/miniforge3/bin/conda" ]]; then
-    CONDA_BIN="${HOME}/miniforge3/bin/conda"
-    ok "Found existing Miniforge at ${HOME}/miniforge3"
-elif [[ -x "${HOME}/miniconda3/bin/conda" ]]; then
-    CONDA_BIN="${HOME}/miniconda3/bin/conda"
-    ok "Found existing Miniconda at ${HOME}/miniconda3"
-elif [[ -x "${HOME}/anaconda3/bin/conda" ]]; then
-    CONDA_BIN="${HOME}/anaconda3/bin/conda"
-    ok "Found existing Anaconda at ${HOME}/anaconda3"
+    _existing_conda_candidates+=("$(command -v conda)")
+fi
+for _cand in \
+    "${HOME}/miniforge3/bin/conda" \
+    "${HOME}/miniconda3/bin/conda" \
+    "${HOME}/anaconda3/bin/conda" \
+    "/opt/conda/bin/conda" \
+    "/opt/miniforge3/bin/conda"; do
+    [[ -x "$_cand" ]] && _existing_conda_candidates+=("$_cand")
+done
+
+if [[ "$FORCE_SIBLING_CONDA" -eq 1 ]]; then
+    info "--force-sibling-conda: ignoring any pre-existing conda"
 else
-    info "No conda found — installing Miniforge (conda-forge by default)..."
-    MINIFORGE_DIR="${HOME}/miniforge3"
-    MF_URL="https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-${PLATFORM}-${ARCH}.sh"
-    TMP_INSTALLER="$(mktemp -t miniforge.XXXXXX.sh)"
-    trap 'rm -f "$TMP_INSTALLER"' EXIT
-
-    info "Downloading $MF_URL"
-    if command -v curl &>/dev/null; then
-        curl -fsSL "$MF_URL" -o "$TMP_INSTALLER"
-    elif command -v wget &>/dev/null; then
-        wget -q "$MF_URL" -O "$TMP_INSTALLER"
-    else
-        fail "Need curl or wget to download Miniforge"
-    fi
-
-    bash "$TMP_INSTALLER" -b -p "$MINIFORGE_DIR"
-    CONDA_BIN="${MINIFORGE_DIR}/bin/conda"
-    [[ -x "$CONDA_BIN" ]] || fail "Miniforge install did not produce $CONDA_BIN"
-    ok "Miniforge installed at $MINIFORGE_DIR"
+    for _cand in "${_existing_conda_candidates[@]}"; do
+        _ver_raw="$(_probe_conda_version "$_cand")"
+        if _conda_version_ok "$_ver_raw"; then
+            CONDA_BIN="$_cand"
+            ok "Using existing conda: $CONDA_BIN (${_ver_raw})"
+            info "(version satisfies --min-conda=${MIN_CONDA_MAJOR} — leaving it untouched)"
+            break
+        else
+            warn "Existing conda at $_cand is too old: ${_ver_raw:-unknown} (need major >= ${MIN_CONDA_MAJOR})"
+        fi
+    done
 fi
 
-# Activate conda for this shell (needed for `conda activate`)
+# 2. If a sibling Miniforge from a previous Tofu install exists and passes
+#    the version check, prefer it (we own it, so we can manage it).
+if [[ -z "$CONDA_BIN" && -x "${SIBLING_CONDA_DIR}/bin/conda" ]]; then
+    _ver_raw="$(_probe_conda_version "${SIBLING_CONDA_DIR}/bin/conda")"
+    if _conda_version_ok "$_ver_raw"; then
+        CONDA_BIN="${SIBLING_CONDA_DIR}/bin/conda"
+        CONDA_OWNED_BY_US=1
+        ok "Reusing prior sibling Miniforge: ${SIBLING_CONDA_DIR} (${_ver_raw})"
+    else
+        warn "Sibling Miniforge at ${SIBLING_CONDA_DIR} is too old (${_ver_raw:-unknown}) — will refresh"
+    fi
+fi
+
+# 3. Install a fresh sibling Miniforge if needed.
+if [[ -z "$CONDA_BIN" ]]; then
+    info "Installing private Miniforge as project sibling: ${SIBLING_CONDA_DIR}"
+    info "(rationale: we need conda >= ${MIN_CONDA_MAJOR}; not touching any existing conda you may have)"
+
+    # Pick the first writable install location:
+    #   1. <parent of INSTALL_DIR>/tofu-miniforge3   (preferred — same level as project)
+    #   2. <INSTALL_DIR>/.miniforge3                  (nested — last resort)
+    #   3. $HOME/.tofu-miniforge3                     (only if both above fail)
+    _CHOSEN=""
+    for _try in \
+        "${SIBLING_CONDA_DIR}" \
+        "${INSTALL_DIR}/.miniforge3" \
+        "${HOME}/.tofu-miniforge3"; do
+        _try_parent="$(dirname "$_try")"
+        # Make sure parent exists and is writable
+        if [[ ! -d "$_try_parent" ]]; then
+            mkdir -p "$_try_parent" 2>/dev/null || continue
+        fi
+        if [[ -w "$_try_parent" ]]; then
+            _CHOSEN="$_try"
+            break
+        fi
+    done
+    [[ -n "$_CHOSEN" ]] || fail "No writable parent dir for Miniforge install (tried sibling, nested, \$HOME)"
+    SIBLING_CONDA_DIR="$_CHOSEN"
+
+    # Pre-downloaded installer escape hatch: if the user set
+    # TOFU_MINIFORGE_LOCAL=/path/to/Miniforge3-...-.sh, skip the network
+    # dance entirely.  Useful for offline / air-gapped corp hosts where
+    # neither github.com nor any mirror is reachable.
+    if [[ -n "${TOFU_MINIFORGE_LOCAL:-}" && -f "${TOFU_MINIFORGE_LOCAL}" ]]; then
+        info "Using pre-downloaded Miniforge installer: ${TOFU_MINIFORGE_LOCAL}"
+        bash "${TOFU_MINIFORGE_LOCAL}" -b -p "$SIBLING_CONDA_DIR"
+        CONDA_BIN="${SIBLING_CONDA_DIR}/bin/conda"
+        [[ -x "$CONDA_BIN" ]] || fail "Miniforge install did not produce $CONDA_BIN"
+        CONDA_OWNED_BY_US=1
+        ok "Miniforge installed at $SIBLING_CONDA_DIR (from local installer)"
+        _ver_raw="$(_probe_conda_version "$CONDA_BIN")"
+        if _conda_version_ok "$_ver_raw"; then
+            ok "Conda version OK: ${_ver_raw}"
+        else
+            warn "Freshly installed Miniforge reports version ${_ver_raw:-unknown}"
+        fi
+        # Skip the download+mirror path below.
+        _SKIP_MINIFORGE_DOWNLOAD=1
+    fi
+
+    # Mirror fallback chain — corp proxies often block github.com release
+    # asset downloads (returning 403 from objects.githubusercontent.com),
+    # so try the official URL first, then well-known China mirrors, and
+    # finally the Sankuai-internal Miniconda mirror as last-resort fallback
+    # (same conda binary; we use --override-channels later so the default
+    # channel set doesn't matter).
+    # Override / extend with TOFU_MINIFORGE_MIRRORS="url1 url2 ..." env var.
+    MF_FILE="Miniforge3-${PLATFORM}-${ARCH}.sh"
+    # Sankuai mirror uses Anaconda's Miniconda filename pattern instead of
+    # Miniforge's. PLATFORM is "Linux"/"MacOSX" and ARCH matches both.
+    MC_FILE="Miniconda3-latest-${PLATFORM}-${ARCH}.sh"
+    MF_URLS=(
+        "https://github.com/conda-forge/miniforge/releases/latest/download/${MF_FILE}"
+        "https://mirrors.tuna.tsinghua.edu.cn/github-release/conda-forge/miniforge/LatestRelease/${MF_FILE}"
+        "https://mirrors.bfsu.edu.cn/github-release/conda-forge/miniforge/LatestRelease/${MF_FILE}"
+        "https://mirror.nju.edu.cn/github-release/conda-forge/miniforge/LatestRelease/${MF_FILE}"
+        "https://mirrors.internal.example.com/conda/miniconda/${MC_FILE}"
+    )
+    if [[ -n "${TOFU_MINIFORGE_MIRRORS:-}" ]]; then
+        # User-supplied mirrors take priority.
+        read -r -a _USER_MIRRORS <<< "${TOFU_MINIFORGE_MIRRORS}"
+        MF_URLS=("${_USER_MIRRORS[@]}" "${MF_URLS[@]}")
+    fi
+    if [[ "${_SKIP_MINIFORGE_DOWNLOAD:-0}" -ne 1 ]]; then
+    TMP_INSTALLER="$(mktemp -t miniforge.XXXXXX.sh)"
+    # Don't override the global EXIT trap (which is the install-log reminder);
+    # use a RETURN-style cleanup at the end of this branch.
+    # Force IPv4 — many corp networks return AAAA records but have no v6
+    # routing, so the default dual-stack connect hangs/fails with
+    # "Network is unreachable" on the v6 address.
+    _DOWNLOADED=0
+    for _MF_URL in "${MF_URLS[@]}"; do
+        info "Downloading $_MF_URL"
+        if command -v curl &>/dev/null; then
+            if curl -4 -fsSL --connect-timeout 15 --max-time 600 "$_MF_URL" -o "$TMP_INSTALLER"; then
+                _DOWNLOADED=1
+                break
+            fi
+            warn "curl failed for $_MF_URL — trying next mirror"
+        elif command -v wget &>/dev/null; then
+            if wget -4 -q --timeout=600 "$_MF_URL" -O "$TMP_INSTALLER"; then
+                _DOWNLOADED=1
+                break
+            fi
+            warn "wget failed for $_MF_URL — trying next mirror"
+        else
+            rm -f "$TMP_INSTALLER"
+            fail "Need curl or wget to download Miniforge"
+        fi
+        # Clean up any partial file before retrying the next mirror.
+        : > "$TMP_INSTALLER"
+    done
+    if [[ "$_DOWNLOADED" -ne 1 ]]; then
+        rm -f "$TMP_INSTALLER"
+        warn "All Miniforge mirrors failed (tried ${#MF_URLS[@]})."
+        warn "Workaround: manually download Miniforge3-${PLATFORM}-${ARCH}.sh on a machine"
+        warn "  with network access, copy it to this host, then re-run:"
+        warn "    TOFU_MINIFORGE_LOCAL=/path/to/Miniforge3-${PLATFORM}-${ARCH}.sh bash install.sh"
+        warn "Or override the mirror list:"
+        warn "    TOFU_MINIFORGE_MIRRORS=\"<url1> <url2>\" bash install.sh"
+        fail "All Miniforge mirrors failed — see workarounds above."
+    fi
+
+    # `-b` batch (no prompts), `-p` install prefix. Note: NO `conda init`.
+    # Running `conda init` would mutate the caller's ~/.bashrc — we never
+    # want that, especially not in shared-codelab containers where bashrc
+    # belongs to whoever's session this is. Activation is handled by the
+    # .tofu_env.json marker (read by server.py / bootstrap.py).
+    bash "$TMP_INSTALLER" -b -p "$SIBLING_CONDA_DIR"
+    rm -f "$TMP_INSTALLER"
+
+    CONDA_BIN="${SIBLING_CONDA_DIR}/bin/conda"
+    [[ -x "$CONDA_BIN" ]] || fail "Miniforge install did not produce $CONDA_BIN"
+    CONDA_OWNED_BY_US=1
+    ok "Miniforge installed at $SIBLING_CONDA_DIR (we own this — safe to manage)"
+
+    # Verify it actually meets the version bar.
+    _ver_raw="$(_probe_conda_version "$CONDA_BIN")"
+    if ! _conda_version_ok "$_ver_raw"; then
+        warn "Freshly installed Miniforge reports version ${_ver_raw:-unknown}"
+        warn "(expected major >= ${MIN_CONDA_MAJOR}; will try to update below)"
+    else
+        ok "Conda version OK: ${_ver_raw}"
+    fi
+    fi  # _SKIP_MINIFORGE_DOWNLOAD guard
+fi
+
+# Activate conda for this shell only (needed for `conda activate <env>`).
+# This sources profile.d/conda.sh into the CURRENT shell ONLY — does not
+# mutate ~/.bashrc, ~/.zshrc, or any persistent shell state.
 CONDA_BASE="$("$CONDA_BIN" info --base 2>/dev/null)"
 [[ -n "$CONDA_BASE" ]] || fail "Could not determine conda base directory"
 # shellcheck disable=SC1091
 source "${CONDA_BASE}/etc/profile.d/conda.sh"
+info "Conda base: $CONDA_BASE  (owned-by-us=${CONDA_OWNED_BY_US})"
 
 # ═══════════════════════════════════════════════════════════════
-#  Step 2: Update conda FIRST (outdated conda = solver hangs)
+#  Step 1.5: If TOFU_CONDA_MIRROR is set, redirect conda-forge to it
 #
-#  This MUST run before any other conda command touches an env.
-#  Classic symptoms of an outdated conda:
-#    - "Solving environment: \\ " spinning forever
-#    - "PackagesNotFoundError" for packages that clearly exist
-#    - libmamba plugin errors
+#  Many corp networks (e.g. YourProvider) use an HTTP proxy that 403s
+#  `conda.anaconda.org` even though it allows the rest of the internet.
+#  When that's the case, set TOFU_CONDA_MIRROR to a base URL whose
+#  `<base>/conda-forge/<arch>/repodata.json` is reachable.
+#
+#  For YourProvider hosts, the export's bake-proxy step also writes
+#  `TOFU_CONDA_MIRROR=https://mirrors.internal.example.com/conda/cloud` so this
+#  block kicks in automatically.  Vanilla / public installs are
+#  unaffected — the variable is empty and we never touch .condarc.
+#
+#  We write to the SIBLING-conda's .condarc only (CONDA_BASE/.condarc),
+#  never the user's global ~/.condarc.  Skipped entirely when
+#  CONDA_OWNED_BY_US=0 (we don't touch a pre-existing user conda).
 # ═══════════════════════════════════════════════════════════════
-if [[ "$NO_UPDATE_CONDA" -eq 0 ]]; then
-    step "Updating conda (MUST happen before anything else)"
+if [[ "$CONDA_OWNED_BY_US" -eq 1 && -n "${TOFU_CONDA_MIRROR:-}" ]]; then
+    info "Configuring conda-forge mirror: ${TOFU_CONDA_MIRROR}"
+    cat > "${CONDA_BASE}/.condarc" <<EOF
+channels:
+  - conda-forge
+custom_channels:
+  conda-forge: ${TOFU_CONDA_MIRROR}
+default_channels:
+  - ${TOFU_CONDA_MIRROR}/conda-forge
+ssl_verify: true
+remote_connect_timeout_secs: 30
+remote_read_timeout_secs: 60
+remote_max_retries: 3
+# Empty proxy_servers tells conda to ignore HTTP(S)_PROXY env vars,
+# which on this host 403 conda.anaconda.org.  The mirror host is
+# already in no_proxy via .internal.example.com (or whatever bypass list the
+# export injected), so requests go DIRECT.
+proxy_servers: {}
+EOF
+    ok "Wrote ${CONDA_BASE}/.condarc (conda-forge → ${TOFU_CONDA_MIRROR}/conda-forge)"
+fi
+
+# Similarly for pip: if TOFU_PYPI_INDEX is set (by export, for corp hosts),
+# configure the sibling env's pip to use it.  pip.conf is scoped to this
+# user/home; put it in $HOME/.config/pip/pip.conf IF not already present,
+# but prefer the per-conda-env pip.conf if we can determine the env path.
+# (We actually write it after the env is created — see later.)
+if [[ -n "${TOFU_PYPI_INDEX:-}" ]]; then
+    info "PyPI index override: ${TOFU_PYPI_INDEX}"
+    # Export PIP_INDEX_URL for any pip invocation during install.sh.
+    # The pip-stanza writer lower in the script picks up this variable
+    # too, so the env's pip.conf is permanently pinned.
+    export PIP_INDEX_URL="${TOFU_PYPI_INDEX}"
+    # Trust the mirror host (common for corp http mirrors without TLS).
+    _PYPI_HOST="$(printf '%s' "$TOFU_PYPI_INDEX" | sed -E 's|^https?://([^/:]+).*|\1|')"
+    export PIP_TRUSTED_HOST="${_PYPI_HOST}"
+fi
+
+# ═══════════════════════════════════════════════════════════════
+#  Step 2: Update conda — ONLY if it's the sibling we own
+#
+#  Outdated conda causes solver hangs and "PackagesNotFoundError" for
+#  packages that clearly exist. But updating someone ELSE's conda would
+#  be invasive — we never do that. The user-owned path was already
+#  version-checked above and rejected if too old.
+# ═══════════════════════════════════════════════════════════════
+if [[ "$CONDA_OWNED_BY_US" -eq 1 && "$NO_UPDATE_CONDA" -eq 0 ]]; then
+    step "Updating sibling conda (we own it)"
     OLD_VER="$(conda --version 2>/dev/null || echo unknown)"
     info "Current version: ${OLD_VER}"
 
-    # Always update from conda-forge to get latest solver (libmamba) fixes.
     if conda update -n base -c conda-forge --override-channels -y conda; then
         NEW_VER="$(conda --version 2>/dev/null || echo unknown)"
         if [[ "$OLD_VER" == "$NEW_VER" ]]; then
@@ -238,23 +518,26 @@ if [[ "$NO_UPDATE_CONDA" -eq 0 ]]; then
         fi
     else
         warn "conda self-update failed — this is NOT fatal but may cause solver issues later"
-        warn "If the next steps hang on 'Solving environment', re-run with updated conda:"
-        warn "  conda update -n base -c conda-forge --override-channels -y conda"
     fi
 
-    # Ensure libmamba solver is installed and set as default — it's 10x faster
-    # and avoids many classic-solver hangs/failures. This is CRITICAL on
-    # large conda-forge envs (hundreds of packages with interlocking deps).
-    info "Ensuring libmamba solver is installed..."
+    # libmamba solver — 10x faster, avoids classic solver hangs.
+    # Set as default ONLY for the sibling conda we own (.condarc lives in
+    # CONDA_BASE since we never ran `conda init`). This does NOT touch the
+    # user's global ~/.condarc.
+    info "Ensuring libmamba solver is installed (sibling conda only)..."
     if conda install -n base -c conda-forge --override-channels -y conda-libmamba-solver >/dev/null 2>&1; then
-        conda config --set solver libmamba || true
-        ok "libmamba solver active (10x faster than classic)"
+        # Write to the sibling's .condarc (CONDA_BASE/.condarc), not ~/.condarc.
+        CONDA_ROOT_PREFIX="$CONDA_BASE" conda config --file "${CONDA_BASE}/.condarc" --set solver libmamba || true
+        ok "libmamba solver active for sibling conda (10x faster than classic)"
     else
         warn "Could not install libmamba solver — using classic (slower)"
     fi
-else
+elif [[ "$CONDA_OWNED_BY_US" -eq 0 ]]; then
+    info "Skipping conda self-update (using your existing conda — leaving it alone)"
+    info "If you ever hit solver hangs, you can manually run:"
+    info "  conda update -n base -c conda-forge --override-channels -y conda"
+elif [[ "$NO_UPDATE_CONDA" -eq 1 ]]; then
     warn "Skipping conda self-update (--no-update-conda)"
-    warn "If you hit solver hangs or 'PackagesNotFoundError', remove --no-update-conda and retry."
 fi
 
 # ═══════════════════════════════════════════════════════════════
@@ -315,6 +598,52 @@ conda activate "$ENV_NAME"
 PY="$(command -v python)"
 ok "Using Python: $PY ($(python --version 2>&1))"
 
+# ─────────────────────────────────────────────────────────────
+#  Write .tofu_env.json marker
+#
+#  This is the bridge between install.sh and server.py / bootstrap.py.
+#  When the user later runs `python server.py` from a shell that does NOT
+#  have this conda env activated (very common — they may have just opened
+#  a new terminal, or a system /usr/bin/python is on PATH first), the
+#  re-exec guard at the top of server.py reads this file and re-execs
+#  into the right interpreter via os.execv. No `conda init` required, no
+#  shell rc-file mutation, no PATH games — just a single JSON file inside
+#  the project that tells server.py "use THIS python".
+#
+#  Robust > dynamic-write-into-server.py because:
+#    • git pull never conflicts with us
+#    • export.py just gitignores one file (already added to .gitignore)
+#    • multiple Tofu checkouts on the same machine each get their own
+#      independent marker pointing at their own env
+# ─────────────────────────────────────────────────────────────
+ENV_PREFIX="${CONDA_BASE}/envs/${ENV_NAME}"
+ENV_PYTHON="${ENV_PREFIX}/bin/python"
+[[ -x "$ENV_PYTHON" ]] || fail "Env python not found at $ENV_PYTHON after conda activate"
+
+# Use Python to write JSON safely (no shell quoting traps with paths
+# containing spaces / unicode).
+"$ENV_PYTHON" - "$INSTALL_DIR" "$CONDA_BASE" "$ENV_NAME" "$ENV_PREFIX" "$ENV_PYTHON" "$CONDA_OWNED_BY_US" <<'PYEOF'
+import json, os, sys, time
+install_dir, conda_base, env_name, env_prefix, env_python, owned = sys.argv[1:7]
+marker = {
+    'schema': 1,
+    'created_at': int(time.time()),
+    'conda_base':   conda_base,
+    'env_name':     env_name,
+    'env_prefix':   env_prefix,
+    'python':       env_python,
+    'owned_by_tofu_install': owned == '1',
+    'note': ('Written by install.sh. Read by server.py / bootstrap.py to '
+             're-exec into the correct interpreter. Safe to delete to disable '
+             'auto-activation. NOT exported (gitignored).'),
+}
+out = os.path.join(install_dir, '.tofu_env.json')
+with open(out, 'w', encoding='utf-8') as f:
+    json.dump(marker, f, indent=2)
+print(f'  ✓ Wrote {out}')
+PYEOF
+ok ".tofu_env.json marker written (server.py will auto-activate this env)"
+
 # ═══════════════════════════════════════════════════════════════
 #  Step 5: Install Python dependencies via conda-forge
 # ═══════════════════════════════════════════════════════════════
@@ -374,6 +703,10 @@ CONDA_PKGS=(
 # with --no-deps below (to prevent pip from pulling an old lxml that
 # shadows our conda lxml 6). Without these, importing trafilatura fails
 # with "ModuleNotFoundError: No module named 'justext'" etc.
+# NOTE: `docling` (optional, layout-aware PDF parsing — better tables/math on
+# academic PDFs) is NOT in this list. It's installed separately later when
+# --with-docling is passed, because it pulls ~2 GB of torch + model weights
+# and most users don't need it (pymupdf4llm covers the common case).
 PIP_ONLY_PKGS=(
     "pymupdf4llm>=0.0.17"
     "trafilatura>=1.6"
@@ -381,6 +714,10 @@ PIP_ONLY_PKGS=(
     # trafilatura's pure-Python deps (from its pyproject.toml).
     # certifi/urllib3 are already pulled in by requests via conda.
     "justext>=3.0.1"
+    # justext still imports lxml.html.clean, which was extracted into a
+    # separate package in lxml 5.2+. Pinning it explicitly keeps imports
+    # working regardless of which lxml major version conda installs.
+    "lxml_html_clean>=0.4"
     "courlan>=1.3.2"
     "charset-normalizer>=3.4.0"
     # htmldate's pure-Python deps.
@@ -543,6 +880,63 @@ if [[ ${#PIP_ONLY_PKGS[@]} -gt 0 ]]; then
     fi
 fi
 
+# ── Optional: bundled internal MCP servers (hope-mcp, xuecheng-mcp) ──
+# personal/internal exports include sibling repos under vendor/<name>/.
+# Install them so the MCP tab's "Install" button (which spawns
+# `<name>-mcp` on PATH) works out of the box. Skipped silently if
+# vendor/ doesn't exist (opensource exports / fresh git clone).
+if [[ -d "${INSTALL_DIR}/vendor" ]]; then
+    step "Installing bundled internal MCP servers"
+    _BUNDLED_MCPS=()
+    for _mcp in hope-mcp xuecheng-mcp; do
+        _path="${INSTALL_DIR}/vendor/${_mcp}"
+        if [[ -d "$_path" && -f "$_path/pyproject.toml" ]]; then
+            _BUNDLED_MCPS+=("$_path")
+        fi
+    done
+    if [[ ${#_BUNDLED_MCPS[@]} -eq 0 ]]; then
+        info "No bundled MCP repos under vendor/ — skipping"
+    elif ! python -c "import pip" 2>/dev/null; then
+        warn "pip not available — cannot install bundled MCP servers"
+        warn "Manual recovery later: pip install ${_BUNDLED_MCPS[*]}"
+    else
+        info "Installing: ${_BUNDLED_MCPS[*]}"
+        if python -m pip install --upgrade "${_BUNDLED_MCPS[@]}"; then
+            ok "Bundled MCP servers installed (hope-mcp / xuecheng-mcp now on PATH)"
+        else
+            warn "Bundled MCP install failed — Settings → MCP install buttons may fail"
+            warn "Retry manually: pip install ${_BUNDLED_MCPS[*]}"
+        fi
+    fi
+fi
+
+# ── Optional: Docling (layout-aware PDF parsing) ──
+# Opt-in via --with-docling. Adds ~2 GB to the env (pulls torch + downloads
+# model weights on first use). Not installed by default because the base
+# pymupdf4llm path already gives a good Markdown render for most PDFs —
+# docling shines on academic papers with borderless tables and math.
+if [[ "$WITH_DOCLING" -eq 1 ]]; then
+    step "Installing optional Docling (layout-aware PDF parsing)..."
+    if python -c "import pip" 2>/dev/null; then
+        # Use the CPU-only torch wheel index by default so we don't pull
+        # the multi-GB CUDA wheels on machines that won't use them. Users
+        # on GPU boxes can just `pip install docling` themselves afterwards
+        # to replace torch with the GPU variant.
+        _DOCLING_INDEX="https://download.pytorch.org/whl/cpu"
+        info "  pip install docling (--extra-index-url ${_DOCLING_INDEX})"
+        if python -m pip install --upgrade \
+             --extra-index-url "${_DOCLING_INDEX}" \
+             "docling>=2.0"; then
+            ok "Docling installed — set PDF_TEXT_MODE=structured in .env to enable"
+        else
+            warn "Docling install failed — the server will still run (fallback: pymupdf4llm)"
+            warn "You can retry manually: pip install docling --extra-index-url ${_DOCLING_INDEX}"
+        fi
+    else
+        warn "pip not available — cannot install docling. Skipping."
+    fi
+fi
+
 # ── Install PostgreSQL + psycopg2 from conda-forge (optional but recommended) ──
 # tofu uses PG for better concurrency (100+ concurrent users), auto-falls back
 # to SQLite if PG is missing.
@@ -637,7 +1031,7 @@ fi
 # This runs the same chain that server.py will run at startup, so any
 # ModuleNotFoundError here surfaces BEFORE the user hits it.
 info "Verifying lxml + trafilatura + htmldate + justext import correctly..."
-if python -c "import lxml.etree, trafilatura, htmldate, justext, courlan, dateparser; print('lxml', lxml.__version__, 'trafilatura', trafilatura.__version__, 'htmldate', htmldate.__version__, 'justext', justext.__version__)"; then
+if python -c "import lxml.etree, lxml_html_clean, trafilatura, htmldate, justext, courlan, dateparser; print('lxml', lxml.__version__, 'trafilatura', trafilatura.__version__, 'htmldate', htmldate.__version__, 'justext', justext.__version__)"; then
     ok "Import check passed"
 else
     warn "One of lxml/trafilatura/htmldate/justext/courlan/dateparser failed to import."
@@ -717,8 +1111,8 @@ fi
 #    - No pgdata/ yet           → nothing to check, PG bootstrap will initdb later.
 #    - pgdata major == installed major → OK, reuse.
 #    - mismatch + --reinit-pgdata     → back up pgdata, let PG bootstrap re-initdb.
-#    - mismatch without --reinit-pgdata → pin CHATUI_DB_BACKEND=sqlite (data preserved).
-#    - pgdata exists but no PG installed locally → pin CHATUI_DB_BACKEND=sqlite.
+#    - mismatch without --reinit-pgdata → pin TOFU_DB_BACKEND=sqlite (data preserved).
+#    - pgdata exists but no PG installed locally → pin TOFU_DB_BACKEND=sqlite.
 # ═══════════════════════════════════════════════════════════════
 step "Validating data/pgdata/ (version compatibility)"
 
@@ -741,7 +1135,7 @@ elif [[ -z "$PG_INSTALLED_MAJOR" ]]; then
     # PG never got installed
     if [[ -n "$PGDATA_MAJOR" ]]; then
         warn "pgdata exists (PG ${PGDATA_MAJOR}) but no PG binaries installed in env"
-        warn "Would cause scheduler/db retry storms \u2014 pinning CHATUI_DB_BACKEND=sqlite"
+        warn "Would cause scheduler/db retry storms \u2014 pinning TOFU_DB_BACKEND=sqlite"
     else
         info "No PG installed \u2014 tofu will use SQLite"
     fi
@@ -758,7 +1152,7 @@ elif [[ -n "$PGDATA_MAJOR" && "$PGDATA_MAJOR" != "$PG_INSTALLED_MAJOR" ]]; then
         # SQLite is independent, leave it alone.
     else
         warn "Re-run with --reinit-pgdata to auto-initdb (existing PG data will be backed up)"
-        warn "For now, pinning CHATUI_DB_BACKEND=sqlite so scheduler doesn't spin"
+        warn "For now, pinning TOFU_DB_BACKEND=sqlite so scheduler doesn't spin"
         DB_BACKEND_CHOICE="sqlite"
     fi
 elif [[ -n "$PGDATA_MAJOR" ]]; then
@@ -787,7 +1181,7 @@ if [[ -z "$DB_BACKEND_CHOICE" && -n "$PG_INSTALLED_MAJOR" && -d "$PGDATA_DIR" ]]
         "$_PG_CTL" -D "$PGDATA_DIR" stop -m fast >/dev/null 2>&1 || true
     else
         warn "PG failed to start during smoke test \u2014 see ${_PG_LOG_DIR}/postgresql.log"
-        warn "Pinning CHATUI_DB_BACKEND=sqlite to avoid scheduler retry storms"
+        warn "Pinning TOFU_DB_BACKEND=sqlite to avoid scheduler retry storms"
         warn "Re-run with --reinit-pgdata after moving ${PGDATA_DIR} aside if you want fresh PG"
         DB_BACKEND_CHOICE="sqlite"
     fi
@@ -838,11 +1232,11 @@ fi
 # Write DB backend decision into .env so server.py knows exactly which
 # backend to use (no silent PG-then-fallback retry storms at startup).
 if [[ "$DB_BACKEND_CHOICE" == "sqlite" ]]; then
-    _set_env_var "CHATUI_DB_BACKEND" "sqlite" "$ENV_FILE"
-    info "CHATUI_DB_BACKEND=sqlite pinned in .env"
+    _set_env_var "TOFU_DB_BACKEND" "sqlite" "$ENV_FILE"
+    info "TOFU_DB_BACKEND=sqlite pinned in .env"
 elif [[ -n "$PG_INSTALLED_MAJOR" ]]; then
-    _set_env_var "CHATUI_DB_BACKEND" "postgres" "$ENV_FILE"
-    info "CHATUI_DB_BACKEND=postgres pinned in .env (PG ${PG_INSTALLED_MAJOR})"
+    _set_env_var "TOFU_DB_BACKEND" "postgres" "$ENV_FILE"
+    info "TOFU_DB_BACKEND=postgres pinned in .env (PG ${PG_INSTALLED_MAJOR})"
 fi
 
 ok ".env ready (PORT=${PORT})"
@@ -853,10 +1247,17 @@ ok ".env ready (PORT=${PORT})"
 echo ""
 ok "Installation complete!"
 echo ""
-echo "  To activate this env later:"
-echo "    conda activate ${ENV_NAME}"
-echo "    cd ${INSTALL_DIR}"
-echo "    python server.py"
+echo "  To start Tofu later, any of these work (.tofu_env.json auto-activates):"
+echo "    cd ${INSTALL_DIR} && python server.py"
+if [[ "$CONDA_OWNED_BY_US" -eq 1 ]]; then
+    echo ""
+    echo "  (Optional, if you want the env on your PATH for other tools too:)"
+    echo "    source \"${CONDA_BASE}/etc/profile.d/conda.sh\" && conda activate ${ENV_NAME}"
+else
+    echo ""
+    echo "  (Optional, to explicitly activate — not required thanks to .tofu_env.json:)"
+    echo "    conda activate ${ENV_NAME}"
+fi
 echo ""
 info "Full install log: $TOFU_INSTALL_LOG"
 echo ""

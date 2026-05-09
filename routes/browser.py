@@ -7,6 +7,7 @@ import zipfile
 
 from flask import Blueprint, jsonify, request, send_file
 
+from lib.env_compat import getenv_compat
 from lib.log import get_logger
 
 logger = get_logger(__name__)
@@ -28,7 +29,7 @@ def _check_bridge_auth(kind: str = 'browser') -> bool:
     Returns True when auth check is disabled or passes; False would mean
     fail-closed once Phase C lands.
     """
-    expected = (os.environ.get('CHATUI_BRIDGE_SECRET', '') or '').strip()
+    expected = (getenv_compat('TOFU_BRIDGE_SECRET', 'CHATUI_BRIDGE_SECRET') or '').strip()
     if not expected:
         return True  # not configured — skip (current behaviour)
     provided = request.headers.get('X-Bridge-Secret', '')

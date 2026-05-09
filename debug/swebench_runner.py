@@ -99,7 +99,7 @@ CONDA_ENV_PREFIX = Path(os.environ.get(
     str(_PROJECT_ROOT / 'swebench_workdir' / 'conda_envs'),
 ))
 
-# Default pricing (Opus via example-corp gateway — Anthropic convention)
+# Default pricing (Opus via sankuai gateway — Anthropic convention)
 PRICE_INPUT_PER_1K = 0.015
 PRICE_OUTPUT_PER_1K = 0.075
 PRICE_CACHE_READ_PER_1K = 0.0015
@@ -739,7 +739,7 @@ def run_tofu_inference(inst: SWEInstance, workspace: Path,
                 else:
                     raise  # final attempt — let outer handler catch it
         if not task_id:
-            result.error = 'Failed to get task_id after 3 attempts'
+            result.error = 'Failed to get task_id after 10 attempts'
             result.duration_s = time.time() - t0
             return result
 
@@ -749,10 +749,50 @@ def run_tofu_inference(inst: SWEInstance, workspace: Path,
             elapsed = time.time() - t0
             if elapsed > INFERENCE_SAFETY_TIMEOUT:
                 result.error = f'Safety timeout after {elapsed:.0f}s'
+                result.duration_s = elapsed  # ★ don't leave duration=0 — we ran for hours
+                # ★ One last poll to harvest partial usage BEFORE aborting.
+                #   Without this, a run that was one turn away from completion
+                #   gets recorded as 0 turns / 0 tokens / 0 cost and is
+                #   indistinguishable from a never-started run.
+                try:
+                    last = requests.get(
+                        f'{TOFU_BASE_URL}/api/chat/poll/{task_id}', timeout=10,
+                    )
+                    if last.status_code == 200:
+                        _data = last.json()
+                        _rounds = _data.get('apiRounds') or []
+                        if isinstance(_rounds, list):
+                            result.num_turns = len(_rounds)
+                            for _rd in _rounds:
+                                _ru = _rd.get('usage', {}) or {}
+                                # Same dual-convention handling as the main path.
+                                _pt = _ru.get('prompt_tokens', 0) or 0
+                                _cr_a = _ru.get('cache_read_tokens', 0) or 0
+                                _cw_a = _ru.get('cache_write_tokens', 0) or 0
+                                _det = _ru.get('prompt_tokens_details') or {}
+                                _cr_o = (_det.get('cached_tokens', 0) or 0) if isinstance(_det, dict) else 0
+                                _cr = max(_cr_a, _cr_o)
+                                _uncached = max(_pt - _cr_o, 0) if (_cr_o > 0 and _cr_a == 0) else _pt
+                                result.input_tokens       += _uncached
+                                result.output_tokens      += _ru.get('completion_tokens', 0) or 0
+                                result.cache_read_tokens  += _cr
+                                result.cache_write_tokens += _cw_a
+                            result.cost_usd = _compute_cost(result, mcfg)
+                            log.warning('[%s] %s safety-timeout partial harvest: '
+                                        '%d turns, %d in / %d out tokens, $%.3f',
+                                        tool_name, inst.instance_id,
+                                        result.num_turns,
+                                        result.input_tokens,
+                                        result.output_tokens,
+                                        result.cost_usd)
+                except Exception as _e:
+                    log.warning('[%s] Safety-timeout last-poll failed: %s',
+                                tool_name, _e)
                 try:
                     requests.post(f'{TOFU_BASE_URL}/api/chat/abort/{task_id}', timeout=5)
-                except Exception:
-                    pass
+                except Exception as _e:
+                    log.debug('[%s] abort call failed (non-fatal): %s',
+                              tool_name, _e)
                 break
 
             time.sleep(poll_interval)
@@ -783,16 +823,41 @@ def run_tofu_inference(inst: SWEInstance, workspace: Path,
             if status in ('done', 'error', 'interrupted'):
                 result.duration_s = time.time() - t0
 
-                # Parse usage from apiRounds
+                # Parse usage from apiRounds.
+                # Sankuai gateway reports cache in TWO different conventions:
+                #  • Anthropic:  usage.cache_read_tokens / cache_write_tokens
+                #                — used by Claude family
+                #  • OpenAI:     usage.prompt_tokens_details.cached_tokens
+                #                — used by GLM / MiniMax / Doubao / etc.
+                # We accept BOTH. For the OpenAI convention the cached tokens
+                # are ALREADY included in prompt_tokens (not additive), so we
+                # subtract them when moving cached→cache_read to avoid double
+                # counting at pricing time.
                 api_rounds = data.get('apiRounds', [])
                 if isinstance(api_rounds, list):
                     result.num_turns = len(api_rounds)
                     for rd in api_rounds:
-                        ru = rd.get('usage', {})
-                        result.input_tokens += ru.get('prompt_tokens', 0)
-                        result.output_tokens += ru.get('completion_tokens', 0)
-                        result.cache_read_tokens += ru.get('cache_read_tokens', 0)
-                        result.cache_write_tokens += ru.get('cache_write_tokens', 0)
+                        ru = rd.get('usage', {}) or {}
+                        _prompt      = ru.get('prompt_tokens',     0) or 0
+                        _compl       = ru.get('completion_tokens', 0) or 0
+                        _cr_anthro   = ru.get('cache_read_tokens',  0) or 0
+                        _cw_anthro   = ru.get('cache_write_tokens', 0) or 0
+                        _pt_details  = ru.get('prompt_tokens_details') or {}
+                        _cr_openai   = (_pt_details.get('cached_tokens', 0) or 0) if isinstance(_pt_details, dict) else 0
+
+                        # Merge cache_read from both conventions.
+                        _cr = max(_cr_anthro, _cr_openai)
+                        # If OpenAI-style (cached is part of prompt_tokens),
+                        # subtract the cached portion so we don't double-bill.
+                        if _cr_openai > 0 and _cr_anthro == 0:
+                            _uncached_prompt = max(_prompt - _cr_openai, 0)
+                        else:
+                            _uncached_prompt = _prompt
+
+                        result.input_tokens       += _uncached_prompt
+                        result.output_tokens      += _compl
+                        result.cache_read_tokens  += _cr
+                        result.cache_write_tokens += _cw_anthro
 
                 result.cost_usd = _compute_cost(result, mcfg)
 
@@ -1300,24 +1365,80 @@ def evaluate_patch(
         specs = MAP_REPO_VERSION_TO_SPECS[inst.repo].get(inst.version, {})
 
     # --- Workspace setup ---
+    # ★ Eval is FUSE-heavy under concurrency: 9 parallel evals + conda_envs
+    #   + inference workspaces all hit the same shared filesystem. 30s was
+    #   too tight — previous run saw 46/77 (60%) of failures as checkout
+    #   timeouts, leaving orphan .git/index.lock files and scoring real
+    #   patches as patch_applies=False.
+    #
+    #   Fix: larger timeouts + retry-with-cleanup on git lock.
     eval_ws = base_dir / 'eval' / f'{inst.instance_id}__{tool}'
     if eval_ws.exists():
         shutil.rmtree(eval_ws)
+
+    _GIT_CHECKOUT_TIMEOUT = int(os.environ.get('SWEBENCH_GIT_CHECKOUT_TIMEOUT', '300'))
+    _GIT_CLEAN_TIMEOUT    = int(os.environ.get('SWEBENCH_GIT_CLEAN_TIMEOUT',    '120'))
+    _GIT_CLONE_TIMEOUT    = int(os.environ.get('SWEBENCH_GIT_CLONE_TIMEOUT',    '600'))
+
+    def _clear_stale_git_lock(ws: Path):
+        """Remove any orphan .git/index.lock from a timed-out prior git op."""
+        lock = ws / '.git' / 'index.lock'
+        if lock.exists():
+            try:
+                lock.unlink()
+                log.info('[eval] Cleared stale .git/index.lock in %s', ws.name)
+            except OSError as _e:
+                log.warning('[eval] Failed to clear %s: %s', lock, _e)
+
+    def _git_run(args: list, ws: Path, timeout: int, retries: int = 2):
+        """Run a git command with retries + stale-lock cleanup on timeout."""
+        last_exc = None
+        for attempt in range(retries + 1):
+            _clear_stale_git_lock(ws)
+            try:
+                return subprocess.run(
+                    args, capture_output=True, text=True,
+                    timeout=timeout, cwd=str(ws), check=True,
+                )
+            except subprocess.TimeoutExpired as e:
+                last_exc = e
+                log.warning('[eval] git %s timed out (%ds) in %s (attempt %d/%d)',
+                            args[1], timeout, ws.name, attempt + 1, retries + 1)
+                # Kill any lingering git process in the workspace
+                try:
+                    subprocess.run(
+                        ['pkill', '-f', f'git.*{ws.name}'],
+                        capture_output=True, timeout=5,
+                    )
+                except Exception as _e:
+                    log.debug('[eval] pkill lingering git failed: %s', _e)
+            except subprocess.CalledProcessError as e:
+                last_exc = e
+                log.warning('[eval] git %s failed rc=%d in %s: %s',
+                            args[1], e.returncode, ws.name,
+                            (e.stderr or '')[:200])
+                break  # hard failure, don't retry
+        raise last_exc if last_exc else RuntimeError(f'git {args[1]} failed')
 
     try:
         repo_path = get_repo_path(inst.repo)
         subprocess.run(
             ['git', 'clone', '--quiet', '--shared', str(repo_path), str(eval_ws)],
-            capture_output=True, text=True, timeout=300, check=True,
+            capture_output=True, text=True, timeout=_GIT_CLONE_TIMEOUT, check=True,
         )
-        subprocess.run(
-            ['git', 'checkout', '--quiet', inst.base_commit],
-            capture_output=True, text=True, timeout=30, cwd=str(eval_ws), check=True,
-        )
-        subprocess.run(
-            ['git', 'clean', '-fdx', '--quiet'],
-            capture_output=True, text=True, timeout=30, cwd=str(eval_ws),
-        )
+        _git_run(['git', 'checkout', '--quiet', inst.base_commit],
+                 eval_ws, _GIT_CHECKOUT_TIMEOUT)
+        # git clean is best-effort — don't fail the eval on it
+        try:
+            _clear_stale_git_lock(eval_ws)
+            subprocess.run(
+                ['git', 'clean', '-fdx', '--quiet'],
+                capture_output=True, text=True,
+                timeout=_GIT_CLEAN_TIMEOUT, cwd=str(eval_ws),
+            )
+        except subprocess.TimeoutExpired as _e:
+            log.warning('[eval] git clean timed out in %s (non-fatal): %s',
+                        eval_ws.name, _e)
     except Exception as e:
         result.error = f'Workspace setup failed: {e}'
         return result

@@ -33,12 +33,15 @@ SEARCH_TOOL_MULTI = {
         "name": "web_search",
         "description": (
             "Search the web. You may call this multiple times with different queries. "
-            "Strategy: search → review summaries → fetch_url most relevant pages → "
-            "refine with another search if needed. "
-            "Prefer fewer, targeted searches over many broad ones.\n"
-            "For MULTIPLE searches in one call, provide a 'queries' array — "
-            "each entry has {query}. All queries run concurrently. "
-            "This is much faster than multiple separate web_search calls."
+            "You will receive summaries and partial content of the top results.\n\n"
+            "**Recommended strategy: search → review the summaries first → fetch_url "
+            "the 1-2 most promising pages in full → refine with another search only "
+            "if needed.** Don't fetch every result; the summaries usually decide which "
+            "pages are worth reading. Prefer fewer, targeted searches over many broad "
+            "ones.\n\n"
+            "For MULTIPLE searches in one call, provide a 'queries' array — each entry "
+            "has ``{query}``. All queries run concurrently and this is much faster than "
+            "multiple separate web_search calls."
         ),
         "parameters": {
             "type": "object",

@@ -1526,6 +1526,18 @@ function _applyReportEvent(s, ev) {
       return true;
     }
 
+    case 'tool_progress': {
+      var rp = null;
+      for (var j = 0; j < s.toolRounds.length; j++) {
+        if (s.toolRounds[j].roundNum === ev.roundNum) { rp = s.toolRounds[j]; break; }
+      }
+      if (rp) {
+        if (typeof rp._partialOutput !== 'string') rp._partialOutput = '';
+        rp._partialOutput += (ev.chunk || '');
+      }
+      return true;
+    }
+
     case 'delta':
       s.fullText += (ev.delta || '');
       s.contentStarted = true;

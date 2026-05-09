@@ -160,11 +160,14 @@ SEARCH_MEMORIES_TOOL = {
         "name": "search_memories",
         "description": (
             "Search your accumulated memories (past experiences, bug patterns, "
-            "project conventions, workflow recipes) by keyword. Use this when you "
-            "encounter a situation where past experience might be relevant — e.g. "
-            "debugging a tricky issue, working with a specific library/API, or "
-            "following project conventions. You can call this multiple times with "
-            "different keywords to refine your search."
+            "project conventions, workflow recipes) by keyword. "
+            "Use this NARROWLY: when you suspect THIS project has an established "
+            "convention you've forgotten, or a logged lesson applies to the current "
+            "problem. Do NOT use this as a generic discovery step — if the user "
+            "mentions a local file path, use read_files/list_dir; if they ask about "
+            "an external project / library / product, use web_search or read its "
+            "local copy. A `<relevant_memories>` block, when present, was already "
+            "prefetched for this turn — don't re-search the same topic."
         ),
         "parameters": {
             "type": "object",

@@ -56,6 +56,8 @@ from lib.database._core import (  # noqa: F401
     translate_sql,
     # Warmup
     warmup_db,
+    # TOAST corruption self-heal (PG-only, silent on SQLite)
+    heal_toast_corruption,
     # Graceful shutdown
     shutdown_pool,
 )
@@ -71,6 +73,7 @@ __all__ = [
     'get_db', 'get_thread_db', 'close_db',
     'db_execute_with_retry',
     'warmup_db',
+    'heal_toast_corruption',
     'init_db',
     '_column_exists',
     'db_available', 'pg_available',

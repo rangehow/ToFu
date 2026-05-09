@@ -29,7 +29,7 @@ from lib.tools import (
 def _build_search_addendum() -> str:
     """Build a minimal timestamp string so the model knows 'now'.
 
-    Static search guidance lives in _TOOL_USAGE_GUIDANCE (system_context.py)
+    Static search guidance lives in system_prompt_cc.section_using_tools
     and does NOT belong here — putting it here caused it to be injected into
     every user message on every round, bloating the conversation.
     """

@@ -939,6 +939,27 @@ def generate_image(
             continue  # does NOT increment hard_attempts
 
         except _HttpError as he:
+            # ── Deterministic client errors (400 safety violation / invalid
+            #    prompt / bad param) are NOT worth retrying — the prompt is
+            #    the problem, not the slot.  Retrying just burns latency and
+            #    penalizes a healthy slot, causing follow-up requests to
+            #    hit exponential cooldowns and eventually time out.
+            _body_lc = (he.body or '').lower()
+            # 4xx (except 429 which is handled as _RateLimitError) is a
+            # PERMANENT client-side error — bad prompt, bad params, auth
+            # failure, quota, etc.  Retrying burns 5-8 min of latency and
+            # still ends in HTTP 500 for the user.  Fail fast for ANY 4xx;
+            # surface the provider body so the route handler can return 400.
+            is_client_4xx = 400 <= he.status_code < 500 and he.status_code != 429
+            is_deterministic_400 = (
+                he.status_code == 400 and (
+                    'safety' in _body_lc
+                    or 'safety_violations' in _body_lc
+                    or 'content policy' in _body_lc
+                    or 'invalid_request' in _body_lc
+                    or 'image_generation_user_error' in _body_lc
+                )
+            )
             if slot:
                 # 401/403 = permanent auth failure — exclude this slot aggressively
                 if he.status_code in (401, 403):
@@ -946,6 +967,14 @@ def generate_image(
                     slot.record_error()  # double-penalize to push it far down
                     logger.warning('[ImageGen] Auth failure (HTTP %d) for model=%s provider=%s — slot penalized',
                                    he.status_code, use_model, slot.provider_id if slot else '?')
+                elif is_deterministic_400:
+                    # Do NOT record_error — the slot is healthy; this is a user-prompt issue.
+                    logger.info('[ImageGen] Skipping slot penalty for deterministic HTTP 400 (model=%s)',
+                                use_model)
+                elif is_client_4xx:
+                    # Other 4xx — don't penalize slot for a client-side bug either.
+                    logger.info('[ImageGen] Skipping slot penalty for client HTTP %d (model=%s)',
+                                he.status_code, use_model)
                 else:
                     slot.record_error()
             logger.error('[ImageGen] HTTP %d model=%s (%.1fs): %s',
@@ -953,6 +982,19 @@ def generate_image(
             last_error = f'HTTP {he.status_code}: {he.body}'
             if not first_real_error:
                 first_real_error = last_error
+            if is_client_4xx:
+                logger.warning('[ImageGen] Fail-fast on client HTTP %d — no retry. model=%s body=%.200s',
+                               he.status_code, use_model, he.body)
+                return {
+                    'ok': False,
+                    'error': last_error,
+                    'model': use_model,
+                    'status_code': he.status_code,
+                    'client_error': True,
+                    'safety_blocked': is_deterministic_400 and (
+                        'safety' in _body_lc or 'image_generation_user_error' in _body_lc
+                    ),
+                }
             hard_attempts += 1
             if hard_attempts <= max_retries:
                 time.sleep(1)

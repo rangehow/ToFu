@@ -303,6 +303,10 @@ def _record_modification(base_path, mod_type, path, original_content=None, rever
             mod['existed'] = False
     elif mod_type == 'apply_diff':
         mod['reversePatch'] = reverse_patch  # {search, replace}
+        if original_content is not None:
+            # Pre-image is also stored as a backup blob (when small enough)
+            # so undo can use the deterministic file-history restore path.
+            mod['existed'] = True
     elif mod_type == 'run_command':
         # run_command changes: original_content=None means file was created
         # (didn't exist), original_content=<str|bytes> means file was deleted
@@ -312,6 +316,22 @@ def _record_modification(base_path, mod_type, path, original_content=None, rever
             mod['existed'] = True
         else:
             mod['existed'] = False
+
+    # ── File-history: capture the PRE-write contents as a backup version
+    #    so undo can restore byte-for-byte.  Note we run AFTER the write
+    #    tool has already overwritten the file on disk, so we MUST pass
+    #    ``original_content`` explicitly — reading from disk would just
+    #    capture the post-image.  Silent no-op when the store is disabled
+    #    or when we have no pre-image (mod['existed'] = False).
+    try:
+        if mod.get('existed', True) and original_content is not None:
+            from lib import file_history as fh
+            v = fh.track_edit(base_path, path, message_id=task_id,
+                              pre_content=original_content)
+            if v is not None:
+                mod['fhVersion'] = v
+    except Exception as e:
+        logger.debug('[Modifications] file-history track_edit failed for %s: %s', path, e)
 
     def _append(mods):
         mods.append(mod)
@@ -355,10 +375,41 @@ def _undo_modifications_list(base_path, modifications):
     """Internal: undo a list of modifications in reverse order. Returns (undone, failed)."""
     undone = []
     failed = []
+    # Optional file-history short-circuit: if the mod carries a backup
+    # version we can restore deterministically from the backup blob.
+    try:
+        from lib import file_history as fh
+        from lib.file_history.store import read_blob as _fh_read_blob
+    except Exception as e:  # pragma: no cover — defensive
+        logger.debug('[Modifications] file_history import failed: %s', e)
+        fh = None
+        _fh_read_blob = None
     for mod in reversed(modifications):
         mod_type = mod['type']
         path = mod['path']
         target = os.path.join(base_path, path) if not os.path.isabs(path) else path
+        # ── Preferred path: file-history blob restore (works for any mod_type) ──
+        try:
+            v = mod.get('fhVersion')
+            if (v and mod.get('existed', True)
+                    and fh and fh.is_enabled() and _fh_read_blob):
+                blob = _fh_read_blob(base_path, path, int(v))
+                if blob is not None:
+                    parent_dir = os.path.dirname(target)
+                    if parent_dir and not os.path.isdir(parent_dir):
+                        os.makedirs(parent_dir, exist_ok=True)
+                    tmp = target + '.fh.tmp'
+                    with open(tmp, 'wb') as f:
+                        f.write(blob)
+                        f.flush()
+                        os.fsync(f.fileno())
+                    os.replace(tmp, target)
+                    _nudge_vscode(target)
+                    undone.append({'type': 'fh_restore', 'path': path})
+                    logger.info('Undo: restored %s via fh@v%s', path, v)
+                    continue
+        except Exception as e:
+            logger.debug('[Modifications] fh undo fallback for %s: %s', path, e)
         try:
             if mod_type == 'write_file':
                 if not mod.get('existed', True):
@@ -499,6 +550,49 @@ def undo_task_modifications(base_path, task_id):
         'failed': len(failed),
         'taskId': task_id,
         'details': {'undone': undone, 'failed': failed},
+    }
+
+
+def redo_task_modifications(base_path, task_id):
+    """Re-apply a previously-undone round via the file-history snapshot.
+
+    Unlike undo_*, this does NOT replay individual modification records —
+    instead it locates the snapshot tagged with ``task_id`` and calls
+    :func:`lib.file_history.restore_from` to re-apply the full set of
+    file versions atomically.  Returns the same shape as
+    :func:`undo_task_modifications` so the frontend can reuse display code.
+    """
+    try:
+        from lib import file_history as fh
+    except Exception as e:
+        logger.warning('[Modifications] redo requires file_history: %s', e)
+        return {'ok': False, 'error': f'file_history unavailable: {e}'}
+    if not fh.is_enabled():
+        return {'ok': False, 'error': 'File-history disabled (TOFU_FILE_HISTORY=0)'}
+    if not task_id:
+        return {'ok': False, 'error': 'taskId is required'}
+    snap_id = None
+    for entry in fh.list_history(base_path, limit=200):
+        if entry.get('taskId') == task_id:
+            snap_id = entry.get('id')
+            break
+    if not snap_id:
+        return {'ok': False, 'taskId': task_id,
+                'error': 'No snapshot found for this task (was it ever committed?)'}
+    result = fh.restore_from(base_path, snap_id)
+    if not result.get('ok'):
+        return {'ok': False, 'taskId': task_id,
+                'error': result.get('error') or 'restore failed'}
+    files = [f.get('path') for f in result.get('files', []) if f.get('path')]
+    logger.info('[Modifications] redo task=%s files=%d snap=%s',
+                task_id, len(files), snap_id[:8])
+    return {
+        'ok': True,
+        'taskId': task_id,
+        'redone': len(files),
+        'files': files,
+        'sha': result.get('newSnapshotId'),
+        'snapshotId': result.get('newSnapshotId'),
     }
 
 

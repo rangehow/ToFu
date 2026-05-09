@@ -3,6 +3,11 @@
 .env.*
 !.env.example
 
+# ── Per-host env marker (written by install.sh, read by server.py
+#    / bootstrap.py to re-exec into the correct conda interpreter).
+#    Contains absolute paths — machine-specific, never commit. ──
+.tofu_env.json
+
 # ── Migration backups ──
 .migrate_backup/
 load_env.py
@@ -25,6 +30,7 @@ data/
 
 # ── SWE-bench workdir (large, causes FUSE timeouts) ──
 swebench_workdir/
+swebench_rerun_workdir/
 
 # ── Test coverage ──
 .coverage

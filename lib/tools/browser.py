@@ -94,24 +94,30 @@ BROWSER_TOOL_SCREENSHOT = {
     "function": {
         "name": "browser_screenshot",
         "description": (
-            "Capture a screenshot of the currently visible tab in the user's browser. "
+            "Capture a screenshot of a browser tab. By default returns a FULL-PAGE screenshot "
+            "of the entire scrollable content (not just the visible viewport) — captured in one shot "
+            "via the Chrome DevTools Protocol, which also triggers lazy-loaded content.\n"
             "Returns the screenshot as an IMAGE you can actually SEE and analyze visually (not base64 text!).\n"
             "Use this to: 1) Understand page layout; 2) See Canvas-rendered content (charts, graphs, DAG diagrams); "
             "3) Verify click/navigation results; 4) Read text from images when DOM extraction fails.\n"
-            "STRATEGY: First-time page visit → start with browser_screenshot. If browser_read_tab returns sparse text, "
-            "the page uses Canvas/SVG/WebGL — screenshot is your primary tool. Large images are auto-compressed to JPEG."
+            "Set fullPage=false for a fast viewport-only capture (no debugger banner, useful for repeated snapshots). "
+            "Large images are auto-compressed to JPEG."
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "tabId": {
                     "type": "integer",
-                    "description": "Tab ID to screenshot (activates the tab first). If omitted, captures the currently active tab."
+                    "description": "Tab ID to screenshot. If omitted, captures the currently active tab."
                 },
                 "format": {
                     "type": "string",
                     "enum": ["png", "jpeg"],
                     "description": "Image format (default: png)"
+                },
+                "fullPage": {
+                    "type": "boolean",
+                    "description": "If true (default), capture the entire scrollable page. If false, capture only the visible viewport."
                 }
             },
         }

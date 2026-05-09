@@ -59,6 +59,7 @@ def _get_pk_columns(table_name):
     _PK_MAP = {
         'conversations':              ['id', 'user_id'],
         'task_results':               ['task_id'],
+        'task_events':                ['task_id', 'event_id'],
         'users':                      ['id'],
         'pricing_cache':              ['key'],
         'recent_projects':            ['path'],

@@ -14,6 +14,10 @@ playwright>=1.40
 Pillow>=10.0
 python-pptx>=0.6.21
 lxml>=4.9
+# lxml.html.clean was extracted into a separate package in lxml 5.2+;
+# justext (a trafilatura dep) still does `from lxml.html.clean import Cleaner`,
+# so we must ensure the extracted package is present.
+lxml_html_clean>=0.4
 # BeautifulSoup — HTML fallback parser in lib/fetch/html_extract.py.
 # Usually pulled in transitively by trafilatura, but listed here so it's
 # guaranteed even if trafilatura's deps change.

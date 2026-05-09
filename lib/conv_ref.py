@@ -119,7 +119,7 @@ def get_conversation(conversation_id, include_tool_details=True, current_conv_id
     # Build formatted output
     parts = []
     parts.append(f"{'═' * 60}")
-    parts.append(f"📋 Referenced Conversation: \"{title}\"")
+    parts.append(f"Referenced Conversation: \"{title}\"")
     parts.append(f"   ID: {conversation_id}")
     if settings.get('preset'):
         parts.append(f"   Model preset: {settings['preset']}")
@@ -206,7 +206,7 @@ def _format_tool_rounds(rounds, include_details=True):
     if not rounds:
         return ""
 
-    parts = ["\n  📦 Tool Calls:"]
+    parts = ["\n  Tool Calls:"]
     for j, rnd in enumerate(rounds):
         tool_name = rnd.get('toolName', rnd.get('tool_name', 'unknown'))
         status = rnd.get('status', 'done')

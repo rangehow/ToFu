@@ -243,16 +243,16 @@ def scenario_e():
     print('\n[e] cross-provider isolation')
     _reset_state()
     _patch_siblings({
-        'p_your-provider': ['p_your-provider_key_0'],
+        'p_meituan': ['p_meituan_key_0'],
         'p_openai':  ['p_openai_key_0', 'p_openai_key_1'],
     })
     _force_exhaust('p_openai', 'p_openai_key_0')
     # OpenAI still has key_1, so key_0 must stay disabled.
     _assert(ks.is_key_enabled('p_openai', 'p_openai_key_0') is False,
             'openai key_0 disabled (key_1 healthy)')
-    # YourProvider is untouched by OpenAI's state.
-    _assert(ks.is_key_enabled('p_your-provider', 'p_your-provider_key_0') is True,
-            'your-provider key unaffected by openai state')
+    # Meituan is untouched by OpenAI's state.
+    _assert(ks.is_key_enabled('p_meituan', 'p_meituan_key_0') is True,
+            'meituan key unaffected by openai state')
 
 
 def main():

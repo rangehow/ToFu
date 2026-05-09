@@ -13,221 +13,6 @@
 /* ── Race-condition guard: incremented on every send or conversation switch ── */
 let _sendGeneration = 0;
 
-/* ═══════════════════════════════════════════
-   Agent Backend Selection
-   ═══════════════════════════════════════════ */
-let activeAgentBackend = 'builtin';       // 'builtin' | 'claude-code' | 'codex'
-let _agentBackendCapabilities = null;     // BackendCapabilities from server
-let _agentBackendCache = null;            // Cached /api/agent-backends/status result
-
-/**
- * Fetch backend status from server and cache it.
- * @returns {Promise<Array>} List of backend info objects.
- */
-async function _fetchAgentBackends() {
-  try {
-    const resp = await fetch(apiUrl('/api/agent-backends/status'));
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    const data = await resp.json();
-    _agentBackendCache = data.backends || [];
-    return _agentBackendCache;
-  } catch (e) {
-    console.error('[AgentBackends] Failed to fetch status:', e);
-    return _agentBackendCache || [];
-  }
-}
-
-/**
- * Switch the active agent backend.
- * @param {string} backendName - 'builtin', 'claude-code', or 'codex'
- */
-async function switchAgentBackend(backendName) {
-  if (backendName === activeAgentBackend) return;
-
-  // Validate availability
-  const backends = _agentBackendCache || await _fetchAgentBackends();
-  const backend = backends.find(b => b.name === backendName);
-  if (!backend) {
-    if (typeof debugLog === 'function') debugLog(`Unknown backend: ${backendName}`, 'error');
-    return;
-  }
-  if (!backend.available) {
-    if (typeof debugLog === 'function')
-      debugLog(`${backend.displayName || backendName} is not installed`, 'error');
-    return;
-  }
-  if (!backend.authenticated) {
-    if (typeof debugLog === 'function')
-      debugLog(`${backend.displayName || backendName} is not authenticated. Run the CLI and log in first.`, 'error');
-    return;
-  }
-
-  activeAgentBackend = backendName;
-  _agentBackendCapabilities = backend.capabilities || {};
-
-  // Update UI
-  _applyAgentBackendUI();
-  _applyBackendCapabilities();
-  _saveConvToolState();
-
-  if (typeof debugLog === 'function')
-    debugLog(`Switched to ${backend.displayName || backendName}`, 'success');
-}
-
-/**
- * Update the backend selector button states.
- */
-function _applyAgentBackendUI() {
-  document.querySelectorAll('.agent-backend-btn').forEach(btn => {
-    btn.classList.toggle('active', btn.dataset.backend === activeAgentBackend);
-  });
-  // Show backend indicator in header
-  const indicator = document.getElementById('backendIndicator');
-  if (indicator) {
-    if (activeAgentBackend === 'builtin') {
-      indicator.style.display = 'none';
-    } else {
-      const backends = _agentBackendCache || [];
-      const b = backends.find(x => x.name === activeAgentBackend);
-      indicator.textContent = b ? b.displayName : activeAgentBackend;
-      indicator.style.display = 'inline-block';
-    }
-  }
-}
-
-/**
- * Show/hide/grey UI controls based on backend capabilities.
- * When using an external backend, Tofu-only features are greyed out
- * and config controls the backend handles itself are hidden.
- */
-function _applyBackendCapabilities() {
-  const caps = _agentBackendCapabilities || {};
-  const isExternal = activeAgentBackend !== 'builtin';
-
-  // Model selector — hide when external backend handles it
-  const modelGroup = document.getElementById('modelGroup');
-  if (modelGroup) modelGroup.style.display = caps.modelSelector === false ? 'none' : '';
-  // Thinking depth — only HIDE when external backend explicitly disables it.
-  // Do NOT set display='' here — that clobbers _applyModelUI's inline display:flex,
-  // reverting to the CSS default (display:none) and the perf cache in _applyModelUI
-  // won't re-apply it since it thinks nothing changed.
-  // When switching BACK from an external backend, invalidate the perf cache so
-  // _applyModelUI re-applies the depth bar's correct visibility on its next call.
-  const depthBar = document.getElementById('thinkingDepthSection');
-  if (caps.thinkingDepth === false) {
-    if (depthBar) depthBar.style.display = 'none';
-  } else if (depthBar && depthBar.style.display === 'none') {
-    // Depth bar was hidden by a previous external backend — invalidate the perf cache
-    // so the next _applyModelUI call (from _resetToolsToDefaults) does a full DOM update.
-    _lastAppliedModelId = null;
-  }
-
-  // Search toggle — hide when external backend has its own search
-  const searchToggle = document.getElementById('searchModeToggle');
-  if (searchToggle) searchToggle.style.display = caps.searchToggle === false ? 'none' : '';
-
-  // Preset selector — hide for external backends
-  const presetSelect = document.getElementById('presetSelect');
-  if (presetSelect) {
-    const presetParent = presetSelect.closest('.preset-group') || presetSelect.parentElement;
-    if (presetParent) presetParent.style.display = caps.presetSelector === false ? 'none' : '';
-  }
-
-  // Tofu-only feature toggles — grey out when unavailable
-  const _toggleMap = {
-    'browserToggle':  caps.hasBrowserExt !== false,
-    'desktopToggle':  caps.hasDesktopAgent !== false,
-    'imageGenToggle': caps.hasImageGen !== false,
-    'swarmToggle':    caps.hasSwarm !== false,
-    'schedulerToggle': caps.hasScheduler !== false,
-    'humanGuidanceToggle': caps.hasHumanGuidance !== false,
-  };
-  for (const [id, enabled] of Object.entries(_toggleMap)) {
-    const el = document.getElementById(id);
-    if (el) {
-      el.style.opacity = enabled ? '' : '0.35';
-      el.style.pointerEvents = enabled ? '' : 'none';
-      if (!enabled) el.classList.remove('active');
-    }
-  }
-
-  // Endpoint mode — hide if not supported
-  const endpointToggle = document.getElementById('endpointToggle');
-  if (endpointToggle) {
-    endpointToggle.style.opacity = caps.endpointMode !== false ? '' : '0.35';
-    endpointToggle.style.pointerEvents = caps.endpointMode !== false ? '' : 'none';
-  }
-}
-
-/** Toggle the agent backend dropdown visibility. */
-function _toggleBackendDropdown() {
-  const dd = document.getElementById('agentBackendDropdown');
-  if (!dd) return;
-  const isVisible = dd.style.display !== 'none';
-  dd.style.display = isVisible ? 'none' : 'block';
-
-  // Fetch fresh status when opening
-  if (!isVisible) {
-    _refreshBackendStatuses();
-  }
-
-  // Close dropdown when clicking outside
-  if (!isVisible) {
-    const _closeHandler = (e) => {
-      if (!dd.contains(e.target) && e.target.id !== 'agentBackendTrigger' &&
-          !e.target.closest('.agent-backend-trigger')) {
-        dd.style.display = 'none';
-        document.removeEventListener('click', _closeHandler);
-      }
-    };
-    // Delay adding the listener so this click doesn't immediately close it
-    setTimeout(() => document.addEventListener('click', _closeHandler), 0);
-  }
-}
-
-/** Refresh backend status indicators in the dropdown. */
-async function _refreshBackendStatuses() {
-  const backends = await _fetchAgentBackends();
-  for (const b of backends) {
-    if (b.name === 'builtin') continue;
-
-    const statusEl = b.name === 'claude-code'
-      ? document.getElementById('ccStatus')
-      : document.getElementById('codexStatus');
-    const iconEl = b.name === 'claude-code'
-      ? document.getElementById('ccStatusIcon')
-      : document.getElementById('codexStatusIcon');
-    const btnEl = document.querySelector(`.agent-backend-btn[data-backend="${b.name}"]`);
-
-    if (statusEl) {
-      if (!b.available) {
-        statusEl.textContent = 'Not installed';
-        statusEl.style.color = 'var(--text-tertiary)';
-      } else if (!b.authenticated) {
-        statusEl.textContent = 'Not authenticated';
-        statusEl.style.color = '#f59e0b';
-      } else {
-        statusEl.textContent = b.version || 'Ready';
-        statusEl.style.color = '#22c55e';
-      }
-    }
-    if (iconEl) {
-      if (!b.available) {
-        iconEl.textContent = '✗';
-        iconEl.className = 'ab-status ab-unavailable';
-      } else if (!b.authenticated) {
-        iconEl.textContent = '!';
-        iconEl.className = 'ab-status ab-not-auth';
-      } else {
-        iconEl.textContent = '✓';
-        iconEl.className = 'ab-status ab-ready';
-      }
-    }
-    if (btnEl) {
-      btnEl.disabled = !b.available || !b.authenticated;
-    }
-  }
-}
 
 // ── Conversation CRUD ──
 function _purgeEmptyConvs() {
@@ -905,7 +690,7 @@ function newChat() {
     pendingPdfTexts.length > 0 ||
     (_pendingLogClean && _pendingLogClean.originalText);
   activeConvId = null;
-  sessionStorage.removeItem('chatui_activeConvId');
+  sessionStorage.removeItem('tofu_activeConvId');
   _lastRenderedFingerprint = "";
   /* ★ Show folder context in topbar when creating a new chat from folder view */
   const _newChatFolderId = typeof getActiveFolderId === 'function' ? getActiveFolderId() : null;
@@ -988,7 +773,7 @@ function loadConversation(id) {
     _needsDeferredSave = true;
   }
   activeConvId = id;
-  sessionStorage.setItem('chatui_activeConvId', id);
+  sessionStorage.setItem('tofu_activeConvId', id);
   /* ★ If loading a conv that doesn't belong to the active folder view, exit it */
   if (typeof getActiveFolderId === 'function' && getActiveFolderId()) {
     const _loadedConv = conversations.find(c => c.id === id);
@@ -1263,26 +1048,92 @@ function _buildConvSettings(conv) {
  * Render a translating indicator bubble in the chat DOM.
  * Shown while the server translates the user's message before starting the agent.
  * Removed when the real streaming bubble appears.
+ *
+ * When ``convId`` is provided, the bubble also starts polling
+ * /api/chat/send-translate-status/<convId> to surface transient retry
+ * reasons (429 rate-limit, empty output, etc.) underneath the spinner.
  */
-function _renderTranslatingBubble() {
+function _renderTranslatingBubble(convId) {
   const inner = document.getElementById("chatInner");
   if (!inner) return;
-  // Remove any previous translating bubble
-  const old = document.getElementById("translating-msg");
-  if (old) old.remove();
+  // Remove any previous translating bubble (also stops any prior poller)
+  _removeTranslatingBubble();
   const el = document.createElement("div");
   el.className = "message message-new";
   el.addEventListener('animationend', () => el.classList.remove('message-new'), { once: true });
   el.id = "translating-msg";
   const avatar = (typeof _TOFU_WORKER_SVG !== 'undefined') ? _TOFU_WORKER_SVG : '✦';
-  el.innerHTML = `<div class="message-avatar">${avatar}</div><div class="message-content"><div class="message-header"><span class="message-role">Agent</span><span class="message-time">${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span></div><div class="message-body"><div class="stream-status"><div class="pulse"></div> ${t('sidebar.translating')}</div></div></div>`;
+  el.innerHTML = `<div class="message-avatar">${avatar}</div>
+    <div class="message-content">
+      <div class="message-header">
+        <span class="message-role">Agent</span>
+        <span class="message-time">${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+      </div>
+      <div class="message-body">
+        <div class="stream-status"><div class="pulse"></div> ${t('sidebar.translating')}</div>
+        <div class="translating-status-sub" id="translating-status-sub" style="display:none;font-size:11px;color:#f59e0b;margin-top:6px"></div>
+      </div>
+    </div>`;
   inner.appendChild(el);
   scrollToBottom();
+
+  // Start polling for retry-status updates (429 / empty-output / etc.).
+  if (convId) _startSendTranslateStatusPoll(convId);
 }
 
 function _removeTranslatingBubble() {
+  _stopSendTranslateStatusPoll();
   const el = document.getElementById("translating-msg");
   if (el) el.remove();
+}
+
+// ─── Poll loop for send-path translate retry status ───
+// The /api/chat/send handler translates synchronously and blocks its HTTP
+// response until translation succeeds or times out.  During that window the
+// backend may be retrying (429 rate-limit, empty output, etc.) — we poll a
+// tiny side-channel endpoint to surface the current reason under the
+// "Translating…" bubble so the user knows something is actually happening.
+let _sendTranslateStatusTimer = null;
+
+function _startSendTranslateStatusPoll(convId) {
+  _stopSendTranslateStatusPoll();
+  let lastMsg = '';
+  const tick = async () => {
+    const sub = document.getElementById("translating-status-sub");
+    if (!sub) {  // bubble removed — stop polling
+      _stopSendTranslateStatusPoll();
+      return;
+    }
+    try {
+      const r = await fetch(apiUrl(`/api/chat/send-translate-status/${convId}`));
+      if (r.ok) {
+        const d = await r.json();
+        if (d && d.statusMessage) {
+          if (d.statusMessage !== lastMsg) {
+            lastMsg = d.statusMessage;
+            // Prefer a localized label by kind, fall back to the raw server string.
+            const kind = d.statusKind || '';
+            const i18nKey = kind ? `translate.retry.${kind}` : '';
+            const localized = (i18nKey && typeof t === 'function') ? t(i18nKey) : '';
+            const display = (localized && localized !== i18nKey) ? localized : d.statusMessage;
+            sub.style.display = '';
+            sub.title = d.statusMessage;
+            sub.textContent = '⚠ ' + display;
+          }
+        }
+      }
+    } catch (e) { /* ignore transient fetch errors */ }
+  };
+  // First poll after a short delay (first retry usually takes a few seconds)
+  _sendTranslateStatusTimer = setInterval(tick, 1500);
+  setTimeout(tick, 500);
+}
+
+function _stopSendTranslateStatusPoll() {
+  if (_sendTranslateStatusTimer) {
+    clearInterval(_sendTranslateStatusTimer);
+    _sendTranslateStatusTimer = null;
+  }
 }
 
 /**
@@ -1458,7 +1309,17 @@ async function sendMessage() {
   const text = input.value.trim();
   if (!text && pendingImages.length === 0 && pendingPdfTexts.length === 0)
     return;
-  if (pdfProcessing) return;
+  // 2026-05-06 (Option C): `pdfProcessing` is now a COUNTER (# of in-flight
+  // text-extract calls), not a single-flight mutex. Don't silently drop the
+  // send when text parses are still running — instead, the VLM-wait loop
+  // downstream will block once entries also have vlmStatus='parsing'. But
+  // if text parse itself is still running (no vlmStatus yet set), we poll
+  // until every entry has either text or a failed state.
+  if ((pdfProcessing | 0) > 0 || pendingPdfTexts.some(p => p && p.method === 'parsing')) {
+    // Non-blocking: let sendMessage proceed; _waitForPdfTextThenVlm below will
+    // await both stages. We annotate the input UI so the user sees the wait.
+    debugLog(`[Upload] Waiting for ${pendingPdfTexts.filter(p => p.method === 'parsing').length} PDF text parse(s) to finish before sending…`, 'info');
+  }
   // If log noise banner is showing, ask user first
   if (_pendingLogClean) {
     const r = _pendingLogClean;
@@ -1526,7 +1387,7 @@ async function sendMessage() {
     if (_curFolderId) conv.folderId = _curFolderId;
     conversations.unshift(conv);
     activeConvId = conv.id;
-    sessionStorage.setItem('chatui_activeConvId', conv.id);
+    sessionStorage.setItem('tofu_activeConvId', conv.id);
     _saveConvToolState();
     renderConversationList();
   }
@@ -1559,12 +1420,11 @@ async function sendMessage() {
   const _curFolderId = typeof getActiveFolderId === 'function' ? getActiveFolderId() : null;
   if (_curFolderId) msgPayload.folderId = _curFolderId;
 
-  // ── Wait for VLM parsing before sending ──
-  const _tempUserMsg = { pdfTexts: msgPayload.pdfTexts };
-  await _waitForVlmParsing(_tempUserMsg, convId, -1);
-  msgPayload.pdfTexts = _tempUserMsg.pdfTexts;
-
   // ── Optimistic UI: render user message immediately ──
+  // NOTE: We render the user bubble and dismiss the welcome card BEFORE the
+  // VLM wait loop. The wait indicator then lives inside a normal conversation
+  // view instead of floating under the welcome screen (which looked like the
+  // welcome page itself was frozen parsing). See bug fix 2026-05-06.
   const userMsg = {
     role: "user",
     content: finalText,
@@ -1605,6 +1465,10 @@ async function sendMessage() {
     scrollToBottom(true);
   }
 
+  // ── Wait for VLM parsing before sending (after user bubble is visible) ──
+  await _waitForVlmParsing(userMsg, convId, userMsgIdx);
+  msgPayload.pdfTexts = userMsg.pdfTexts;
+
   // ── Atomic backend call: message creation + translate + task start ──
   const _sendConfig = _buildConvConfig(conv);
 
@@ -1619,7 +1483,7 @@ async function sendMessage() {
     conv._translateAbortCtrl = _sendAbortCtrl;
     updateSendButton();
     renderConversationList();
-    if (activeConvId === convId) _renderTranslatingBubble();
+    if (activeConvId === convId) _renderTranslatingBubble(convId);
   }
 
   try {
@@ -1804,6 +1668,18 @@ async function sendMessage() {
  */
 async function _waitForVlmParsing(userMsg, convId, userMsgIdx) {
   if (!userMsg.pdfTexts || userMsg.pdfTexts.length === 0) return;
+  // 2026-05-06 (Option C): with parallel uploads, some entries may still be
+  // in the TEXT-parse phase when sendMessage fires. Wait for those first —
+  // `method === 'parsing'` means the text-extract call is still in flight.
+  const MAX_TEXT_WAIT = 300; // 5 min safety cap (large PDFs can take 2 min)
+  for (let i = 0; i < MAX_TEXT_WAIT; i++) {
+    const stillExtracting = userMsg.pdfTexts.filter(p => p && p.method === 'parsing');
+    if (stillExtracting.length === 0) break;
+    if (i === 0) {
+      console.log(`%c[Upload-Wait] Waiting for ${stillExtracting.length} PDF text-parse(s)…`, 'color:#f59e0b;font-weight:bold');
+    }
+    await new Promise(r => setTimeout(r, 1000));
+  }
   // Check if any PDFs are still VLM-parsing
   const parsing = userMsg.pdfTexts.filter(p => p.vlmStatus === 'parsing');
   if (parsing.length === 0) {
@@ -1984,14 +1860,30 @@ async function _checkForQueuedTask(convId, _retryCount = 0) {
       // Only retry if there are actually queued items — avoids noisy polling
       // after a simple stop (no queue).
       const _hasQueueItems = pendingMessageQueue.has(convId) && pendingMessageQueue.get(convId).length > 0;
-      if (_hasQueueItems && _retryCount < 3) {
-        const _delay = [800, 1500, 3000][_retryCount];
+      // ★ Extended retry schedule — covers slow aborts (mid-tool, slow LLM
+      //   abort propagation). Previous [800,1500,3000] = ~5.3s total was too
+      //   short when a run_task loop was in the middle of a long tool call
+      //   at the moment Stop was clicked, leaving the queued message
+      //   silently orphaned on the backend.  ~15s total is enough to cover
+      //   almost any realistic abort latency.
+      const _retryDelays = [300, 600, 1200, 2400, 4000, 6000];
+      if (_hasQueueItems && _retryCount < _retryDelays.length) {
+        const _delay = _retryDelays[_retryCount];
         console.log(`%c[Queue] No dispatched task yet for conv=${convId.slice(0,8)}, retry #${_retryCount + 1} in ${_delay}ms`, 'color:#a78bfa');
         setTimeout(() => _checkForQueuedTask(convId, _retryCount + 1), _delay);
         return;
       }
       // No new task after retries (or no queue) — refresh queue UI
       _refreshServerQueue(convId);
+      // ★ Clean up the optimistic "Dispatching queued message…" placeholder
+      //   inserted by finishStream().  If we never found a dispatched task,
+      //   the placeholder would otherwise stay on screen forever.
+      if (_hasQueueItems && activeConvId === convId) {
+        try {
+          const _ghost = document.getElementById('streaming-msg');
+          if (_ghost) _ghost.remove();
+        } catch (e) { /* ignore */ }
+      }
       return;
     }
     console.log(
@@ -2001,6 +1893,19 @@ async function _checkForQueuedTask(convId, _retryCount = 0) {
 
     const conv = conversations.find(c => c.id === convId);
     if (!conv) return;
+
+    // ★ Remove the optimistic "Dispatching queued message…" placeholder
+    //   inserted by finishStream().  renderChat will re-render everything
+    //   below, and connectToTask will insert a fresh streaming bubble for
+    //   the new task.  If we leave the placeholder in place, renderChat
+    //   strips it but connectToTask's `existing` lookup on #streaming-msg
+    //   sees the new bubble as already present in some race windows.
+    if (activeConvId === convId) {
+      try {
+        const _ghost = document.getElementById('streaming-msg');
+        if (_ghost) _ghost.remove();
+      } catch (e) { /* ignore */ }
+    }
 
     // Reload messages from server to pick up the queued user message
     await loadConversationMessages(convId);
@@ -2145,7 +2050,7 @@ async function regenerateFromUser(idx) {
     conv._translateAbortCtrl = _regenAbortCtrl;
     updateSendButton();
     renderConversationList();
-    if (activeConvId === convId) _renderTranslatingBubble();
+    if (activeConvId === convId) _renderTranslatingBubble(convId);
   }
 
   try {
@@ -2730,6 +2635,17 @@ function _loadServerConfigAndPopulate() {
       /* Build pricing cache from models data if available */
       if (data.model_pricing) {
         _modelPricingCache = data.model_pricing;
+      }
+      /* Per-provider pricing overrides (Tencent/Meituan/etc may charge different
+         rates for the same model_id) — see calcCostCny() in core.js. */
+      if (data.provider_pricing) {
+        _providerPricingCache = data.provider_pricing;
+      }
+      /* Capture upload-shrink policy so compressImage() mirrors the backend.
+       * See routes/upload.py:get_upload_policy(). Single source of truth — no
+       * more frontend-vs-backend threshold drift (was 1024/q=0.85 vs 2048/q=0.90). */
+      if (data.upload && typeof data.upload === 'object') {
+        window._uploadShrinkPolicy = data.upload;
       }
       /* Load hidden models from server config */
       _hiddenModels = new Set(data.hidden_models || []);
@@ -3865,6 +3781,14 @@ function _doSendOrGenerate() {
 }
 
 function handleKeyDown(e) {
+  // IME composition guard: when an IME (e.g. Chinese pinyin) is composing,
+  // pressing Enter is meant to commit the candidate / pending input — NOT
+  // to send the message. Browsers expose this via `e.isComposing` and the
+  // legacy `keyCode === 229` sentinel. Bail out early so the IME handles
+  // the keystroke naturally. Matches IM conventions (Feishu / WeChat etc).
+  if (e.key === "Enter" && (e.isComposing || e.keyCode === 229)) {
+    return;
+  }
   // Shift+Enter ALWAYS inserts a newline (let browser default run).
   if (e.key === "Enter" && e.shiftKey && !e.ctrlKey) {
     return;
@@ -4049,7 +3973,7 @@ async function initActiveTasks() {
     /* Pass activeConvId (or restored conv from sessionStorage) to prefetch
        its messages in the same request, eliminating the second round-trip
        that shows "loading..." */
-    const prefetchTarget = activeConvId || sessionStorage.getItem('chatui_activeConvId') || null;
+    const prefetchTarget = activeConvId || sessionStorage.getItem('tofu_activeConvId') || null;
     const [, , activeResp] = await Promise.all([
       loadConversationsFromServer(prefetchTarget),
       typeof loadFolders === 'function' ? loadFolders() : Promise.resolve(),
@@ -4103,6 +4027,33 @@ async function initActiveTasks() {
     for (const conv of conversations) {
       /* Case A: conv has activeTaskId and that task is still running → reconnect */
       if (conv.activeTaskId && runIds.has(conv.activeTaskId)) {
+        /* ★ Maintain the invariant "running task ⇒ trailing empty assistant
+         *   placeholder".  After loadConversationsFromServer / Phase-2 message
+         *   loads, conv.messages[-1] may be the previous (completed) assistant
+         *   turn rather than an empty placeholder.  Without a fresh slot the
+         *   SSE state-snapshot replay overwrites the prior turn's content into
+         *   the bubble, producing the "old turn re-streams into the new one"
+         *   visual bug.  Mirrors the Case C placeholder logic but gated on
+         *   "last assistant belongs to a different / finished task". */
+        const _amA = conv.messages[conv.messages.length - 1];
+        const _staleTail = _amA && _amA.role === 'assistant'
+          && !_amA._epIteration && !_amA._isEndpointReview && !_amA._isEndpointPlanner
+          && ((_amA._taskId && _amA._taskId !== conv.activeTaskId) || !!_amA.finishReason);
+        if (_staleTail) {
+          console.info(
+            `[initActiveTasks CaseA] Pushing fresh assistant placeholder for conv=${conv.id.slice(0,8)} ` +
+            `(stale tail _taskId=${_amA._taskId?.slice(0,8)||'none'} ≠ activeTaskId=${conv.activeTaskId.slice(0,8)}, ` +
+            `finishReason=${_amA.finishReason||'none'})`
+          );
+          conv.messages.push({
+            role: 'assistant',
+            content: '',
+            thinking: '',
+            timestamp: Date.now(),
+            toolRounds: [],
+            model: conv.model || config.model || serverModel,
+          });
+        }
         toRecon.push({ convId: conv.id, taskId: conv.activeTaskId });
         continue;
       }
@@ -4804,7 +4755,7 @@ function _ensureNewest() {
   /* ★ Restore last active conversation from sessionStorage (if any).
    *   If the conv exists on the server, we'll navigate to it after loading.
    *   Otherwise, fall back to the most recent conversation. */
-  const _restoredConvId = sessionStorage.getItem('chatui_activeConvId') || null;
+  const _restoredConvId = sessionStorage.getItem('tofu_activeConvId') || null;
   newChat();  /* show welcome screen immediately */
   {
     const convList = document.getElementById('conversationList');

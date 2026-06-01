@@ -265,6 +265,11 @@ single source of truth is [`lib/agent_core/events.py`](../lib/agent_core/events.
 it is served as the `events` block of `GET /api/v1/capabilities`, so a client
 can auto-configure without hardcoding:
 
+> **Contributing to the backend?** If you are *emitting* events (not consuming
+> them), see [`EVENTS.md`](EVENTS.md) — the required `build_event` / `EventType`
+> discipline, how to add a new event type, and the drift guards. Raw
+> `{'type': ...}` dict literals are forbidden.
+
 ```jsonc
 GET /api/v1/capabilities
 → { …, "events": {

@@ -104,8 +104,12 @@ class EventSpec:
 class EventType:
     """Canonical event ``type`` string constants.
 
-    Reference these instead of bare strings in emission code, e.g.
-    ``append_event(task, {'type': EventType.PHASE, ...})``.
+    Reference these instead of bare strings in emission code, via the typed
+    constructor — never a raw ``{'type': ...}`` dict literal::
+
+        append_event(task, build_event(EventType.PHASE, phase='working'))
+
+    See ``docs/EVENTS.md`` for the full emit discipline.
     """
 
     # ── lifecycle ──

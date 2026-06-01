@@ -84,6 +84,7 @@ _BUNDLE_FILES = [
     'skills.js',
     'scheduler.js',
     'optimizer.js',
+    'update.js',
     'timer.js',
     'myday.js',
     # settings.js is now a slim head (var _serverConfig = null;

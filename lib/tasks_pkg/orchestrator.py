@@ -33,6 +33,7 @@ from lib.tasks_pkg.cache_tracking import (
     release_ttl_latch,
     sort_tool_results,
 )
+from lib.agent_core.events import EventType, build_event
 from lib.tasks_pkg.compaction import run_compaction_pipeline
 from lib.tasks_pkg.executor import (
     _generate_tool_summary,
@@ -126,18 +127,18 @@ from lib.utils import repair_json as _repair_json  # noqa: F401
 def _emit_tool_round_phase(task, assistant_msg, round_num):
     """Emit a 'phase' event describing the current tool round for the frontend."""
     if round_num == 0:
-        append_event(task, {'type': 'phase', 'phase': 'llm_thinking', 'detail': 'Generating response…', 'round': 1})
+        append_event(task, build_event(EventType.PHASE, phase='llm_thinking', detail='Generating response…', round=1))
     else:
         tool_names = [tc['function']['name'] for tc in assistant_msg.get('tool_calls', [])]
         unique_names = list(dict.fromkeys(tool_names))
         labeled = [tool_label(n) for n in unique_names]
         summary = ', '.join(labeled)
-        append_event(task, {
-            'type': 'phase', 'phase': 'llm_thinking',
-            'detail': f'Analyzing results and planning next step… (round {round_num+1})',
-            'toolContext': summary,
-            'round': round_num + 1,
-        })
+        append_event(task, build_event(
+            EventType.PHASE, phase='llm_thinking',
+            detail=f'Analyzing results and planning next step… (round {round_num+1})',
+            toolContext=summary,
+            round=round_num + 1,
+        ))
 
 
 def _finalize_and_emit_done(task: dict[str, Any], *, model: str, preset: str, thinking_depth: str | None, cfg: dict[str, Any],
@@ -162,7 +163,7 @@ def _finalize_and_emit_done(task: dict[str, Any], *, model: str, preset: str, th
         fb.append({'role':'user','content':f'Here are fetched contents:\n\n{combined}\n\nProvide a comprehensive answer. Cite sources.'})
         try:
             snapshot = _strip_base64_for_snapshot(fb)
-            append_event(task, {'type': 'messages_snapshot', 'round': 'fallback', 'label': f'Fallback · {len(fb)}条', 'messages': snapshot})
+            append_event(task, build_event(EventType.MESSAGES_SNAPSHOT, round='fallback', label=f'Fallback · {len(fb)}条', messages=snapshot))
         except Exception as e:
             logger.warning('[Task %s] messages_snapshot fallback failed, model=%s: %s', tid, model, e, exc_info=True)
         body = build_body(
@@ -355,7 +356,7 @@ def _finalize_and_emit_done(task: dict[str, Any], *, model: str, preset: str, th
     )
 
     # ── Build done event ──
-    done_evt = {'type': 'done'}
+    done_evt = build_event(EventType.DONE)
     if last_finish_reason: done_evt['finishReason'] = last_finish_reason
     final_usage = accumulated_usage if accumulated_usage else last_usage
     if final_usage: done_evt['usage'] = final_usage
@@ -689,10 +690,10 @@ def _run_commit_round_async(task: dict, project_path: str) -> None:
             logger.info('[Task:%s] async make_snapshot completed in %.2fs id=%s',
                         tid, _elapsed, _snap_id[:8])
 
-        amend_evt = {'type': 'round_committed',
-                     'snapshotId': _snap_id,
-                     'gitSha': _snap_id,
-                     'taskId': task['id']}
+        amend_evt = build_event(EventType.ROUND_COMMITTED,
+                                snapshotId=_snap_id,
+                                gitSha=_snap_id,
+                                taskId=task['id'])
 
         # File-history-derived additions (run_command / code_exec / MCP side
         # effects that modifications.py doesn't track) come from
@@ -995,11 +996,11 @@ def run_task(task: dict[str, Any]) -> None:
                                              task['id'][:8])
                                 return
                             if _ext.get('committed'):
-                                append_event(task, {
-                                    'type': 'project_external_edit',
-                                    'files': _ext.get('files', []),
-                                    'sha': _ext.get('snapshotId'),
-                                })
+                                append_event(task, build_event(
+                                    EventType.PROJECT_EXTERNAL_EDIT,
+                                    files=_ext.get('files', []),
+                                    sha=_ext.get('snapshotId'),
+                                ))
                                 logger.info('[Task:%s] captured %d external edit(s) snap=%s',
                                             task['id'][:8], len(_ext.get('files', [])),
                                             (_ext.get('snapshotId') or '')[:8])
@@ -1104,13 +1105,13 @@ def run_task(task: dict[str, Any]) -> None:
                 messages = rebuilt
                 original_messages = list(messages)
                 # Emit a diagnostic event for the debug panel
-                append_event(task, {
-                    'type': 'phase',
-                    'phase': 'tool_history_restored',
-                    'detail': f'Restored {_rebuild_stats["tool_msgs_restored"]} tool messages from server store',
-                    'stats': _rebuild_stats,
-                    'overhead': _oh,
-                })
+                append_event(task, build_event(
+                    EventType.PHASE,
+                    phase='tool_history_restored',
+                    detail=f'Restored {_rebuild_stats["tool_msgs_restored"]} tool messages from server store',
+                    stats=_rebuild_stats,
+                    overhead=_oh,
+                ))
             else:
                 logger.debug('[%s] conv=%s keepToolHistory enabled but no stored messages found',
                              tid, _conv_id[:8])
@@ -1339,14 +1340,14 @@ def run_task(task: dict[str, Any]) -> None:
                                 '[Task %s] injected %d swarm-update item(s) '
                                 'as 1 user message at round %d',
                                 tid, len(_payloads), round_num + 1)
-                            append_event(task, {
-                                'type':     'swarm_inbox_inject',
-                                'round':    round_num + 1,
-                                'count':    len(_payloads),
-                                'agentIds': [it.get('agent_id', '')
-                                             for it in _inbox_items
-                                             if it.get('value')],
-                            })
+                            append_event(task, build_event(
+                                EventType.SWARM_INBOX_INJECT,
+                                round=round_num + 1,
+                                count=len(_payloads),
+                                agentIds=[it.get('agent_id', '')
+                                          for it in _inbox_items
+                                          if it.get('value')],
+                            ))
             except Exception as _e:
                 logger.error(
                     '[Task %s] swarm inbox drain/inject failed at round %d: %s '
@@ -1358,12 +1359,12 @@ def run_task(task: dict[str, Any]) -> None:
             # ★ Emit messages snapshot for debug panel (before LLM call)
             try:
                 snapshot = _strip_base64_for_snapshot(messages)
-                snap_evt = {
-                    'type': 'messages_snapshot',
-                    'round': round_num + 1,
-                    'label': f'Round {round_num + 1} 请求前 · {len(messages)}条',
-                    'messages': snapshot,
-                }
+                snap_evt = build_event(
+                    EventType.MESSAGES_SNAPSHOT,
+                    round=round_num + 1,
+                    label=f'Round {round_num + 1} 请求前 · {len(messages)}条',
+                    messages=snapshot,
+                )
                 if _tools_this_round:
                     snap_evt['tools'] = _tools_this_round
                 append_event(task, snap_evt)
@@ -1756,7 +1757,7 @@ def run_task(task: dict[str, Any]) -> None:
         task['error'] = _user_err; task['status'] = 'error'; task['finishReason'] = 'error'
         if task.get('_endpoint_managed'):
             return   # let endpoint.py handle the error
-        append_event(task, {'type': 'done', 'error': _user_err, 'finishReason': 'error'})
+        append_event(task, build_event(EventType.DONE, error=_user_err, finishReason='error'))
         persist_task_result(task)
 
 

@@ -16,6 +16,7 @@ import time
 import uuid
 from datetime import datetime
 
+from lib.agent_core.events import EventType, build_event
 from lib.database import DOMAIN_CHAT, db_execute_with_retry, get_thread_db, json_dumps_pg
 from lib.error_envelope import to_json as _err_to_json
 from lib.llm_dispatch import dispatch_stream
@@ -473,14 +474,28 @@ def _sync_result_to_conversation(task, meta):
             latest = _conv_latest_task.get(conv_id)
         if latest and latest != task['id']:
             _abort_reason = task.get('_abort_reason', '')
-            logger.warning(
-                '%s conv=%s ⛔ STALE TASK — refusing conv sync. '
-                'This task (%s) was superseded by task %s. '
-                'abort_reason=%s content=%dchars. '
-                'Without this guard, old task data would overwrite the new task\'s content.',
-                pfx, conv_id[:8], task_id_short, latest[:8],
-                _abort_reason, len(content),
-            )
+            if task.get('aborted') or _abort_reason:
+                # Expected path: the user started a newer task (e.g. Stop →
+                # Edit → Regenerate) for this conv, so this task was aborted
+                # and is now finishing its in-flight work. Cooperative abort
+                # means it only stops at the next checkpoint, so it can reach
+                # this point with stale content. Skipping the write is correct
+                # and routine — not an error.
+                logger.debug(
+                    '%s conv=%s skipping conv sync: superseded by newer task %s '
+                    '(this task aborted, reason=%s, %dchars stale content discarded)',
+                    pfx, conv_id[:8], latest[:8], _abort_reason or 'superseded', len(content),
+                )
+            else:
+                # Unexpected: a task that was never aborted is no longer the
+                # latest for its conv. This shouldn't normally happen and may
+                # point to a missing abort path — worth a look.
+                logger.warning(
+                    '%s conv=%s skipping conv sync: superseded by newer task %s, '
+                    'but this task was never aborted (%dchars discarded). '
+                    'Unexpected — a new task replaced this one without aborting it.',
+                    pfx, conv_id[:8], latest[:8], len(content),
+                )
             return
 
     # ── External-caller short-circuit ──
@@ -1495,13 +1510,13 @@ def stream_llm_response(task, body, tag='', on_tool_call_ready=None):
     def _on_thinking(td):
         with task['content_lock']:
             task['thinking'] += td
-        append_event(task, {'type': 'delta', 'thinking': td})
+        append_event(task, build_event(EventType.DELTA, thinking=td))
         _maybe_checkpoint_during_stream()
 
     def _on_content(cd):
         with task['content_lock']:
             task['content'] += cd
-        append_event(task, {'type': 'delta', 'content': cd})
+        append_event(task, build_event(EventType.DELTA, content=cd))
         _maybe_checkpoint_during_stream()
 
     def _on_retry(attempt, reason='', status_code=0):
@@ -1522,14 +1537,14 @@ def stream_llm_response(task, body, tag='', on_tool_call_ready=None):
             detail = f'Retrying… {reason} ({model}, attempt {attempt})'
         else:
             detail = f'Retrying {model}… (attempt {attempt})'
-        append_event(task, {
-            'type': 'phase',
-            'phase': 'retrying',
-            'detail': detail,
-            'attempt': attempt,
-            'statusCode': status_code,
-            'model': model,
-        })
+        append_event(task, build_event(
+            EventType.PHASE,
+            phase='retrying',
+            detail=detail,
+            attempt=attempt,
+            statusCode=status_code,
+            model=model,
+        ))
 
     # ── Consume zero-byte force-rotate signal ──
     # If the previous round zero-byte'd, ``analyse_stream_result`` set
@@ -1572,13 +1587,13 @@ def stream_llm_response(task, body, tag='', on_tool_call_ready=None):
     if _limit_info:
         # Notify via phase event (transient UI status, does NOT pollute
         # assistantMsg.content).  The limit is persisted automatically.
-        append_event(task, {
-            'type': 'phase',
-            'phase': 'retrying',
-            'detail': (f'⚙️ Auto-detected model limit: {_limit_info["model"]} '
-                       f'max_tokens={_limit_info["new_limit"]:,} '
-                       f'(was {_limit_info["old_limit"]:,})'),
-        })
+        append_event(task, build_event(
+            EventType.PHASE,
+            phase='retrying',
+            detail=(f'⚙️ Auto-detected model limit: {_limit_info["model"]} '
+                    f'max_tokens={_limit_info["new_limit"]:,} '
+                    f'(was {_limit_info["old_limit"]:,})'),
+        ))
         logger.info('%s ⚙️ Model limit auto-learned and user notified: %s max_tokens=%d',
                     pfx, _limit_info['model'], _limit_info['new_limit'])
 
@@ -1648,16 +1663,16 @@ def stream_llm_response(task, body, tag='', on_tool_call_ready=None):
                 preset_limit=_prior_limit,
             )
             if _expand_info:
-                append_event(task, {
-                    'type': 'phase',
-                    'phase': 'retrying',
-                    'detail': (
+                append_event(task, build_event(
+                    EventType.PHASE,
+                    phase='retrying',
+                    detail=(
                         f'⚙️ Auto-detected larger context window for '
                         f'{model}: '
                         f'{_expand_info["new_limit"]:,} tokens '
                         f'(was {_expand_info["old_limit"]:,})'
                     ),
-                })
+                ))
                 logger.info('%s ⚙️ Context limit expanded: %s %d → %d '
                             '(observed prompt=%d)',
                             pfx, model, _expand_info['old_limit'],

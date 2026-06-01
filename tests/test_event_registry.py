@@ -66,6 +66,11 @@ _NOT_SSE_EVENT_TYPES = frozenset({
 # Match ``'type': 'value'`` or ``'type':'value'`` (single or double quotes).
 _TYPE_RE = re.compile(r"""['"]type['"]\s*:\s*['"]([a-z_]+)['"]""")
 
+# Match typed emissions: ``EventType.PHASE`` / ``build_event(EventType.DONE``.
+# Resolved to the underlying string via the EventType class so typed call
+# sites are scanned exactly like literal ones (item-2 unification).
+_EVENTTYPE_RE = re.compile(r"""\bEventType\.([A-Z_][A-Z0-9_]*)\b""")
+
 # Match ``ev.type === "value"`` / ``frame.type === 'value'`` in JS.
 _JS_TYPE_RE = re.compile(r"""\.type\s*===\s*['"]([a-z_]+)['"]""")
 
@@ -82,15 +87,23 @@ def _read(rel: str) -> str:
 
 
 def _backend_emitted_types() -> set[str]:
+    from lib.agent_core.events import EventType
     found: set[str] = set()
     for rel in _BACKEND_FILES:
         path = os.path.join(REPO, rel)
         if not os.path.isfile(path):
             continue
-        for m in _TYPE_RE.finditer(_read(rel)):
+        src = _read(rel)
+        # Literal ``'type': 'x'`` emissions.
+        for m in _TYPE_RE.finditer(src):
             t = m.group(1)
             if t not in _NOT_SSE_EVENT_TYPES:
                 found.add(t)
+        # Typed ``EventType.CONST`` emissions (build_event / emit call sites).
+        for m in _EVENTTYPE_RE.finditer(src):
+            val = getattr(EventType, m.group(1), None)
+            if isinstance(val, str):
+                found.add(val)
     return found
 
 

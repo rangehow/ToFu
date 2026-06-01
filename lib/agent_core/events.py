@@ -18,8 +18,13 @@ What it is / is NOT
 -------------------
 * It is a *descriptive* registry — a catalogue of every event the runtime can
   emit, each with its category, terminal-ness, a one-line purpose, and the key
-  payload fields.  Emission code may reference ``EventType.PHASE`` instead of
-  the bare string ``'phase'``.
+  payload fields.
+* It is also the *generative* chokepoint: the built-in orchestrator emits via
+  :func:`build_event` / :func:`emit` (with :class:`EventType` constants) rather
+  than bare-string dict literals, so there is ONE typed event model.
+  ``build_event(EventType.PHASE, phase='x')`` is byte-for-byte identical to the
+  old ``{'type': 'phase', 'phase': 'x'}`` literal (kwargs preserve order) —
+  the conversion changed no wire output, only the construction site.
 * It is NOT a validator that rejects unknown events at runtime — the wire stays
   permissive (forward-compatible).  Drift is caught at TEST time by
   ``tests/test_event_registry.py``, which asserts (a) every ``'type':`` string
@@ -318,6 +323,48 @@ _BY_TYPE: dict[str, EventSpec] = {s.type: s for s in _SPECS}
 TRANSPORT_TYPES: frozenset[str] = frozenset({EventType.PING, EventType.SSE_TIMEOUT})
 
 
+def build_event(type_: str, **fields: Any) -> dict[str, Any]:
+    """Construct a wire event dict ``{'type': type_, **fields}``.
+
+    The typed constructor for the streaming contract.  Equivalent — byte for
+    byte — to writing the literal ``{'type': type_, 'k': v, ...}``: Python
+    preserves keyword-argument insertion order, so
+    ``build_event(EventType.PHASE, phase='x', detail='y')`` yields exactly
+    ``{'type': 'phase', 'phase': 'x', 'detail': 'y'}``.
+
+    Use this (with :class:`EventType` constants) instead of bare-string dict
+    literals so every emission references the declared vocabulary.  For an
+    event whose fields are built up conditionally, call ``build_event(TYPE)``
+    and mutate the returned dict exactly as before.
+
+    Unregistered types are allowed (the wire stays forward-compatible) but log
+    a debug line — the drift test is what enforces registration at CI time.
+    """
+    if type_ not in _BY_TYPE:
+        logger.debug('[events] build_event for unregistered type=%r '
+                     '(add an EventSpec to lib/agent_core/events.py)', type_)
+    return {'type': type_, **fields}
+
+
+def emit(task: Any, type_: str, **fields: Any) -> Any:
+    """Build a typed event and deliver it through the task event chokepoint.
+
+    Thin convenience over ``build_event`` + ``append_event`` — the one place
+    the built-in orchestrator routes emissions, so the event MODEL is unified
+    even though delivery still flows through the existing
+    ``lib.tasks_pkg.manager.append_event`` (phase tracking + persistence +
+    push fan-out).  Returns whatever ``append_event`` returns (the seq, or
+    ``None``).
+
+    ``append_event`` is imported lazily: ``events.py`` is part of the agent
+    core, and importing the manager at module load would invert the dependency
+    direction (and is unnecessary — delivery is a runtime concern).
+    """
+    event = build_event(type_, **fields)
+    from lib.tasks_pkg.manager import append_event
+    return append_event(task, event)
+
+
 def all_event_specs() -> tuple[EventSpec, ...]:
     """Return every registered :class:`EventSpec`."""
     return _SPECS
@@ -384,6 +431,8 @@ __all__ = [
     'EventSpec',
     'EventType',
     'TRANSPORT_TYPES',
+    'build_event',
+    'emit',
     'all_event_specs',
     'event_types',
     'get_event_spec',

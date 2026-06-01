@@ -242,6 +242,8 @@ var _i18n = {
   'update.applying': { zh: '正在拉取…', en: 'Pulling…' },
   'update.applyFailed': { zh: '更新失败。', en: 'Update failed.' },
   'update.pulled': { zh: '已更新到 %s。需要重启服务器以生效。', en: 'Updated to %s. A restart is required to apply it.' },
+  'update.depsInstalled': { zh: '✅ 已安装新的依赖包。', en: '✅ New dependencies installed.' },
+  'update.depsFailed': { zh: '⚠️ 已更新到 %s，但安装新依赖失败。请手动运行 pip install -r requirements.txt 后再重启。', en: '⚠️ Updated to %s, but installing new dependencies failed. Run "pip install -r requirements.txt" manually, then restart.' },
   'update.restartBtn': { zh: '立即重启', en: 'Restart now' },
   'update.restarting': { zh: '正在重启…', en: 'Restarting…' },
   'update.restartHint': { zh: '重启期间页面会短暂不可用，完成后会自动刷新。', en: 'The page will be briefly unavailable and will auto-refresh once back.' },

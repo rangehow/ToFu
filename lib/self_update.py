@@ -40,6 +40,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import sys
 from typing import Optional
 
 import lib as _lib
@@ -58,6 +59,8 @@ UPDATE_BRANCH = os.environ.get('TOFU_UPDATE_BRANCH', 'main')
 
 _TAGS_URL = f'https://api.github.com/repos/{UPDATE_REPO}/tags'
 _GIT_TIMEOUT = 120  # seconds — fetch/pull on a slow corp network
+_PIP_TIMEOUT = 600  # seconds — pip install can be slow on a fresh env
+_REQUIREMENTS = 'requirements.txt'
 
 # ── Tracked paths that legitimately mutate at runtime. Changes confined
 #    to these do NOT count as a blocking dirty tree (see module docstring). ──
@@ -251,6 +254,80 @@ def check_for_update() -> dict:
     return payload
 
 
+def _head_sha() -> Optional[str]:
+    """Current HEAD commit SHA, or None if it can't be read."""
+    try:
+        cp = _run_git(['rev-parse', 'HEAD'])
+        if cp.returncode == 0:
+            return cp.stdout.strip()
+    except (FileNotFoundError, subprocess.SubprocessError) as e:
+        logger.warning('[Update] rev-parse HEAD failed: %s', e)
+    return None
+
+
+def _requirements_changed(before_sha: Optional[str],
+                          after_sha: Optional[str]) -> bool:
+    """True if ``requirements.txt`` differs between two commits.
+
+    Compares by SHA range rather than scraping ``git pull`` output, which
+    is locale-dependent and unreliable. If either SHA is missing or the
+    diff can't be computed, returns True (install defensively rather than
+    silently skip a needed dependency).
+    """
+    if before_sha and after_sha and before_sha == after_sha:
+        return False  # nothing was pulled
+    if not before_sha or not after_sha:
+        logger.warning('[Update] missing commit SHA — will install '
+                       'dependencies defensively')
+        return True
+    try:
+        cp = _run_git(['diff', '--name-only', before_sha, after_sha])
+    except (FileNotFoundError, subprocess.SubprocessError) as e:
+        logger.warning('[Update] requirements diff failed (%s) — will '
+                       'install defensively', e)
+        return True
+    if cp.returncode != 0:
+        logger.warning('[Update] requirements diff returned %d — will '
+                       'install defensively', cp.returncode)
+        return True
+    changed = [p.strip() for p in cp.stdout.splitlines() if p.strip()]
+    return _REQUIREMENTS in changed
+
+
+def _install_requirements() -> dict:
+    """Run ``pip install -r requirements.txt`` with the current interpreter.
+
+    Returns ``{'ok': bool, 'detail': str}``. Uses ``sys.executable -m pip``
+    so the install targets the SAME interpreter the server runs under
+    (critical inside a conda env). Never raises — failures are captured.
+    """
+    req_path = os.path.join(_ROOT, _REQUIREMENTS)
+    if not os.path.isfile(req_path):
+        logger.info('[Update] No %s — skipping dependency install',
+                    _REQUIREMENTS)
+        return {'ok': True, 'detail': 'no requirements.txt'}
+
+    cmd = [sys.executable, '-m', 'pip', 'install', '-r', req_path]
+    logger.info('[Update] Installing dependencies: %s', ' '.join(cmd))
+    with log_context('self_update.pip_install', logger=logger):
+        try:
+            cp = subprocess.run(cmd, cwd=_ROOT, capture_output=True,
+                                text=True, timeout=_PIP_TIMEOUT)
+        except (FileNotFoundError, subprocess.TimeoutExpired,
+                subprocess.SubprocessError) as e:
+            logger.error('[Update] pip install errored: %s', e, exc_info=True)
+            return {'ok': False, 'detail': str(e)[:500]}
+
+    if cp.returncode != 0:
+        tail = (cp.stderr or cp.stdout or '')[-500:]
+        logger.error('[Update] pip install failed (exit %d): %s',
+                     cp.returncode, tail)
+        return {'ok': False, 'detail': tail}
+
+    logger.info('[Update] Dependencies installed successfully')
+    return {'ok': True, 'detail': (cp.stdout or '')[-300:]}
+
+
 def apply_update() -> dict:
     """Run ``git fetch`` + ``git pull --ff-only``. Returns a result dict.
 
@@ -258,16 +335,24 @@ def apply_update() -> dict:
       * git is unavailable, or
       * the working tree has blocking (non-runtime) changes.
 
+    On a successful pull that touched ``requirements.txt``, also runs
+    ``pip install -r requirements.txt`` against the running interpreter so
+    the update is self-contained — the outcome does NOT depend on the
+    launcher (bootstrap.py) nor on a crash-and-recover restart.
+
     Returns::
 
         {'ok': bool, 'old_version': str, 'new_version': str,
          'changed': bool, 'needs_restart': bool, 'error': str|None,
-         'detail': str}
+         'detail': str, 'deps_changed': bool, 'deps_installed': bool,
+         'deps_detail': str}
     """
     old = current_version()
     result = {'ok': False, 'old_version': old, 'new_version': old,
               'changed': False, 'needs_restart': False,
-              'error': None, 'detail': ''}
+              'error': None, 'detail': '',
+              'deps_changed': False, 'deps_installed': False,
+              'deps_detail': ''}
 
     if not git_available():
         result['error'] = ('Not a git checkout — in-place update requires '
@@ -285,6 +370,8 @@ def apply_update() -> dict:
         logger.warning('[Update] apply refused: dirty tree (%d blocking) — %s',
                        len(status['blocking']), sample)
         return result
+
+    before_sha = _head_sha()
 
     with log_context('self_update.git_pull', logger=logger):
         try:
@@ -328,12 +415,36 @@ def apply_update() -> dict:
     # Any successful pull that changed files needs a restart to take effect.
     result['needs_restart'] = result['changed']
 
+    # ── Install new dependencies if the pull touched requirements.txt ──
+    # This makes the update self-contained: it does not rely on the
+    # launcher (bootstrap.py) nor on server.py's ImportError-triggered
+    # re-exec into bootstrap. A failed install does NOT revert the pull —
+    # the code is already updated — but it DOES flip ok=False so the UI
+    # tells the user to fix deps before restarting (a restart into a
+    # missing-import state would just bounce through bootstrap anyway).
+    if result['changed']:
+        after_sha = _head_sha()
+        result['deps_changed'] = _requirements_changed(before_sha, after_sha)
+        if result['deps_changed']:
+            dep = _install_requirements()
+            result['deps_installed'] = dep['ok']
+            result['deps_detail'] = dep['detail']
+            if not dep['ok']:
+                result['ok'] = False
+                result['error'] = (
+                    'Code updated, but installing new dependencies failed. '
+                    'Run "pip install -r requirements.txt" manually, then '
+                    'restart.')
+
     audit_log('self_update',
               old_version=old, new_version=new,
               changed=result['changed'], remote=UPDATE_REMOTE,
-              branch=UPDATE_BRANCH)
-    logger.info('[Update] applied: %s → %s (changed=%s)',
-                old, new, result['changed'])
+              branch=UPDATE_BRANCH,
+              deps_changed=result['deps_changed'],
+              deps_installed=result['deps_installed'])
+    logger.info('[Update] applied: %s → %s (changed=%s deps_changed=%s '
+                'deps_installed=%s)', old, new, result['changed'],
+                result['deps_changed'], result['deps_installed'])
     return result
 
 

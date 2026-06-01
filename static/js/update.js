@@ -110,9 +110,17 @@ async function applyUpdate() {
   try {
     r = await Api.update.apply();
   } catch (e) {
-    // 409 (dirty / no-git) and 5xx surface here as ApiError.
-    const msg = (e && e.body && e.body.error) ? e.body.error : (e && e.message) || t('update.applyFailed');
-    if (area) area.innerHTML = '<p class="upd-error">' + escapeHtml(String(msg)) + '</p>';
+    // 409 (dirty / no-git / deps-failed) and 5xx surface here as ApiError.
+    const b = (e && e.body) || {};
+    const msg = b.error || (e && e.message) || t('update.applyFailed');
+    // Special case: code WAS pulled but `pip install` failed (changed=true).
+    // Offer a restart anyway — the running interpreter's missing imports
+    // are recoverable via the launcher — but make the dep failure explicit.
+    if (b.changed && b.deps_changed && !b.deps_installed) {
+      _renderDepsFailed(b);
+    } else if (area) {
+      area.innerHTML = '<p class="upd-error">' + escapeHtml(String(msg)) + '</p>';
+    }
     if (typeof debugLog === 'function') debugLog('[Update] apply failed: ' + msg, 'error');
     _updateBusy = false;
     return;
@@ -131,13 +139,30 @@ async function applyUpdate() {
   }
 
   // Pulled new code — needs an explicit restart to take effect.
+  const depsNote = (r.deps_changed && r.deps_installed)
+    ? '<p class="upd-uptodate">' + escapeHtml(t('update.depsInstalled')) + '</p>'
+    : '';
   if (area) {
     area.innerHTML =
       '<p class="upd-ready">' + escapeHtml(t('update.pulled').replace('%s', 'v' + (r.new_version || ''))) + '</p>' +
+      depsNote +
       '<button class="upd-apply-btn" id="updateRestartBtn" onclick="restartServer()">' +
       escapeHtml(t('update.restartBtn')) + '</button>' +
       '<p class="upd-hint">' + escapeHtml(t('update.restartHint')) + '</p>';
   }
+}
+
+/** Code was pulled but pip install failed — explain + still allow restart. */
+function _renderDepsFailed(b) {
+  const area = document.getElementById('updateActionArea');
+  if (!area) return;
+  const detail = (b.deps_detail || '').slice(-600);
+  area.innerHTML =
+    '<p class="upd-warn">' + escapeHtml(t('update.depsFailed').replace('%s', 'v' + (b.new_version || ''))) + '</p>' +
+    (detail ? '<pre class="upd-files">' + escapeHtml(detail) + '</pre>' : '') +
+    '<button class="upd-apply-btn" id="updateRestartBtn" onclick="restartServer()">' +
+    escapeHtml(t('update.restartBtn')) + '</button>' +
+    '<p class="upd-hint">' + escapeHtml(t('update.restartHint')) + '</p>';
 }
 
 /** Explicit restart — re-execs the server, then waits for it to come back. */

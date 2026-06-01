@@ -68,8 +68,10 @@ def update_check():
         'Refuses (without mutating anything) if git is unavailable or the '
         'working tree has tracked-source changes — it never auto-stashes '
         'or force-resets. User settings live outside tracked code and are '
-        'never touched. Returns needs_restart=true when files changed; the '
-        'caller must POST /api/v1/update/restart to apply them.'
+        'never touched. If the pull touches requirements.txt, runs pip '
+        'install -r requirements.txt against the running interpreter so '
+        'the update is self-contained. Returns needs_restart=true when '
+        'files changed; the caller must POST /api/v1/update/restart.'
     ),
     tags=['system'],
 )
@@ -82,13 +84,16 @@ def update_apply():
         return api_internal_error(e, context='update_apply',
                                   source='api_v1.update.apply')
     if not result.get('ok'):
-        # Distinguish a refusal (dirty/no-git) from a server fault: both are
-        # client-actionable, so 409 Conflict with the reason in the body.
+        # Two failure shapes, both client-actionable → 409 Conflict:
+        #   * refused (dirty tree / no git): changed=False, nothing happened.
+        #   * pulled but deps install failed: changed=True, code IS updated;
+        #     the body's deps_* fields let the UI tell the user to fix deps.
         return api_error(result.get('error') or 'Update could not be applied.',
                          status=409, detail=result.get('detail', ''),
                          **{k: result[k] for k in
                             ('old_version', 'new_version', 'changed',
-                             'needs_restart') if k in result})
+                             'needs_restart', 'deps_changed',
+                             'deps_installed', 'deps_detail') if k in result})
     return api_ok(result)
 
 

@@ -172,6 +172,21 @@ def _config_schema() -> dict:
     }
 
 
+def _events_contract() -> dict:
+    """Declared streaming-event contract (the frontend↔backend sync interface).
+
+    Sourced from ``lib.agent_core.events`` — the single registry of every
+    SSE/push event the runtime emits. Lets a foreign frontend discover the
+    event vocabulary without reading our JS.
+    """
+    try:
+        from lib.agent_core.events import to_capabilities_dict
+        return to_capabilities_dict()
+    except Exception as e:
+        logger.debug('[capabilities] events contract unavailable: %s', e)
+        return {}
+
+
 def _presets() -> list[str]:
     return ['off', 'medium', 'high', 'xhigh', 'max']
 
@@ -217,6 +232,7 @@ def capabilities():
         'backends': _backends(),
         'scopes': sorted(ALL_SCOPES),
         'config_schema': _config_schema(),
+        'events': _events_contract(),
         'compat': {
             'openai_chat_completions': '/v1/chat/completions',
             'openai_models': '/v1/models',

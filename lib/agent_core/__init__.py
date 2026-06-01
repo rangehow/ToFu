@@ -76,6 +76,14 @@ CORE_MEMBERS: dict[str, str] = {
     'get_profile':             'lib.agent_core.profiles',
     'list_profiles':           'lib.agent_core.profiles',
     'resolve_profile_name':    'lib.agent_core.profiles',
+    # Streaming-event contract (the frontend↔backend sync interface)
+    'EventType':               'lib.agent_core.events',
+    'EventSpec':               'lib.agent_core.events',
+    'EventCategory':           'lib.agent_core.events',
+    'event_types':             'lib.agent_core.events',
+    'get_event_spec':          'lib.agent_core.events',
+    'all_event_specs':         'lib.agent_core.events',
+    'EVENT_CONTRACT_VERSION':  'lib.agent_core.events',
     # Registry seams (the only bridge core uses to reach plugins)
     'ToolSpec':                'lib.tools.registry',
     'ToolContext':             'lib.tools.registry',

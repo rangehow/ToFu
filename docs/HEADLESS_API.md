@@ -250,7 +250,99 @@ Verify with the per-subscription `secret` (returned ONCE on creation).
 If you want a single WebSocket multiplexing every channel/task, this
 is the same socket the UI uses. Send `{"action":"subscribe", "channel":"chat", "taskId":"…"}`
 and the server pushes every event for that task. See
-[`lib/push.py`](../lib/push.py) for the full protocol.
+[`lib/agent_core/push.py`](../lib/agent_core/push.py) for the full protocol
+(`lib/push.py` remains as a re-export shim).
+
+### 3.6.1 Streaming event contract — the frontend↔backend sync interface
+
+> **If you are building your own frontend, this is the section you read.**
+> The agent runtime emits a fixed vocabulary of JSON events. They flow over
+> the SSE chat stream, the `/api/v1/tasks/{id}/stream` replay stream, and the
+> `/api/push` WebSocket — the same events, regardless of transport.
+
+The vocabulary is **declared, versioned, and machine-discoverable**. The
+single source of truth is [`lib/agent_core/events.py`](../lib/agent_core/events.py);
+it is served as the `events` block of `GET /api/v1/capabilities`, so a client
+can auto-configure without hardcoding:
+
+```jsonc
+GET /api/v1/capabilities
+→ { …, "events": {
+    "contract_version": 1,
+    "transports": {
+      "sse": ["/api/chat/stream/<task_id>", "/api/v1/tasks/<task_id>/stream"],
+      "websocket": "/api/push",
+      "cursor_replay": "/api/v1/tasks/<task_id>/events?cursor=N"
+    },
+    "terminal_types": ["done"],
+    "interaction_types": ["approval_required","human_guidance_request",
+                          "stdin_request","write_approval_request"],
+    "categories": {
+      "lifecycle": [{"type":"phase","purpose":"…","terminal":false,
+                     "requires_response":false,"fields":{…},"since":1}, …],
+      "content":   [{"type":"delta", …}],
+      "tool":      [{"type":"tool_start", …}, …],
+      …
+    }
+  } }
+```
+
+**Every event** is a JSON object with a `type` field plus the fields listed in
+its spec. The categories and the most important events:
+
+| Category | Events | Notes |
+|----------|--------|-------|
+| `lifecycle` | `state`, `phase`, `done`, `error` | `state` is the full snapshot sent first on (re)connect; `done` is the **only terminal** event |
+| `content` | `delta` | Incremental assistant output (`content` and/or `thinking`) — append to the live bubble |
+| `tool` | `tool_start`, `tool_progress`, `tool_result`, `tool_complete`, `tool_compacted` | Keyed by `toolCallId` + `roundNum` |
+| `context` | `round_usage`, `round_committed`, `messages_snapshot`, `compaction`, `compaction_done`, `memory_prefetch`, `project_external_edit` | Token accounting, durable checkpoints, context-window mgmt |
+| `interaction` | `human_guidance_request`, `write_approval_request`, `approval_required`, `stdin_request`, `stdin_resolved` | **Require a client response** before the task proceeds (see below) |
+| `endpoint` | `endpoint_iteration`, `endpoint_planner_done`, `endpoint_critic_msg`, `endpoint_new_turn`, `endpoint_complete` | Planner→Worker→Critic loop |
+| `swarm` | `swarm_phase`, `swarm_inbox_inject`, `swarm_agent_phase`, `swarm_agent_progress`, `swarm_agent_complete`, `swarm_agent_error`, `swarm_agent_tool_call` | Multi-agent orchestration |
+| `autopilot` | `autopilot_vu_event`, `autopilot_vu_done`, `autopilot_vu_cancel` | Autonomous-loop value units |
+| `artifact` / `scheduler` / `transport` | `artifact`, `timer_poll_check`, `sse_timeout`, `ping` | `ping` (WS keepalive) and `sse_timeout` are transport signals — ignore them |
+
+**Minimal consumer** — the only events a basic frontend MUST handle:
+
+```
+state      → render the snapshot (messages, tool rounds)
+delta      → append .content / .thinking to the current assistant message
+phase      → optional: show a status spinner
+tool_start → optional: show "running <toolName>"
+tool_complete → optional: show the tool result
+done       → finalize; if .error present, render the failure. STOP.
+```
+
+**Ordering & guarantees:**
+
+- A stream begins with a `state` snapshot, then a mix of `phase` / `delta` /
+  tool events, and ends with **exactly one** terminal `done` (its `error`
+  field is set on failure; non-fatal issues arrive as inline `error` events).
+- `tool_start` precedes the `tool_result` / `tool_complete` carrying the same
+  `toolCallId`.
+- Every event on the SSE/replay stream carries a monotonic `seq`; reconnect via
+  `/api/v1/tasks/{id}/events?cursor=<last_seq>` (or `/stream`) to resume with
+  no loss.
+
+**Interaction events** pause the task until the client replies. Each carries a
+correlation id you echo back to the matching endpoint:
+
+| Event | Correlation id | Reply via |
+|-------|----------------|-----------|
+| `human_guidance_request` | `guidanceId` | `POST /api/v1/chat/human-response` — `{guidanceId, response}` |
+| `stdin_request` | `stdinId` | `POST /api/v1/chat/stdin-response` — `{stdinId, input, eof?}` |
+| `write_approval_request` | `approvalId` | `POST /api/v1/project/write-approval` — `{approvalId, approved}` |
+
+A `stdin_resolved` event clears a pending `stdin_request` prompt. The
+`approval_required` event is a generic gate emitted by mode-based external
+backends; resolve it through the same write-approval endpoint.
+
+**Versioning:** `contract_version` bumps only on a *breaking* change to an
+existing event's shape (a field removed/renamed/retyped). New event types and
+new optional fields are additive and do **not** bump it — clients should ignore
+unknown event types and unknown fields. A server-side drift test
+(`tests/test_event_registry.py`) guarantees the registry stays in lockstep with
+what the runtime actually emits and what the bundled frontend consumes.
 
 ### 3.7 Bring Your Own Model (BYOM)
 

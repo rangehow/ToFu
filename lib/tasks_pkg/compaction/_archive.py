@@ -189,21 +189,22 @@ def _archive_transcript(conv_id: str, messages: list, summary: str = '',
     # if the live task dict isn't wired through.
     if emit_event and task is not None and archive_id is not None:
         try:
+            from lib.agent_core.events import EventType, build_event
             from lib.tasks_pkg.manager import append_event
-            append_event(task, {
-                'type': 'compaction',
-                'archiveId': archive_id,
-                'convId': conv_id,
-                'trigger': trigger,
-                'roundNum': int(round_num or 0),
-                'tokensBefore': int(tokens_before or 0),
-                'tokensAfter': int(tokens_after or 0),
-                'msgsBefore': int(msgs_before or 0),
-                'msgsAfter': int(msgs_after or 0),
-                'model': model,
-                'reason': (reason or '')[:300],
-                'ts': int(time.time()),
-            })
+            append_event(task, build_event(
+                EventType.COMPACTION,
+                archiveId=archive_id,
+                convId=conv_id,
+                trigger=trigger,
+                roundNum=int(round_num or 0),
+                tokensBefore=int(tokens_before or 0),
+                tokensAfter=int(tokens_after or 0),
+                msgsBefore=int(msgs_before or 0),
+                msgsAfter=int(msgs_after or 0),
+                model=model,
+                reason=(reason or '')[:300],
+                ts=int(time.time()),
+            ))
         except Exception as e_ev:
             logger.debug('[Compact] compaction SSE emit failed: %s', e_ev)
     return archive_id

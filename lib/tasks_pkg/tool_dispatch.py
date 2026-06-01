@@ -18,6 +18,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
+from lib.agent_core.events import EventType, build_event
 from lib.log import get_logger
 from lib.protocols import TaskEventSink
 
@@ -534,12 +535,12 @@ def emit_tool_exec_phase(
         detail = f'Executing {n} tools: {", ".join(labeled)}'
 
     _append = event_sink.append_event if event_sink is not None else append_event
-    _append(task, {
-        'type': 'phase',
-        'phase': 'tool_exec',
-        'detail': detail,
-        'tools': tool_names_list,
-    })
+    _append(task, build_event(
+        EventType.PHASE,
+        phase='tool_exec',
+        detail=detail,
+        tools=tool_names_list,
+    ))
 
 
 # ── Serial-dispatch config for long-blocking tools ──────────────────────
@@ -952,13 +953,13 @@ def execute_tool_pipeline(
                 tc_content_str = tool_content.get('_text_fallback', '') or 'Image captured.'
                 if round_entry:
                     round_entry['toolContent'] = tc_content_str
-                append_event(task, {
-                    'type': 'tool_complete',
-                    'roundNum': rn,
-                    'toolCallId': tc_id,
-                    'toolName': fn_name,
-                    'toolContent': tc_content_str,
-                })
+                append_event(task, build_event(
+                    EventType.TOOL_COMPLETE,
+                    roundNum=rn,
+                    toolCallId=tc_id,
+                    toolName=fn_name,
+                    toolContent=tc_content_str,
+                ))
             except Exception as e:
                 logger.warning(
                     '[Task %s] tool_complete event error for tool=%s at round %d (non-fatal): %s',
@@ -1030,13 +1031,13 @@ def execute_tool_pipeline(
                 if round_entry and _tc_tokens > 0:
                     round_entry['toolTokens'] = _tc_tokens
 
-                _evt = {
-                    'type': 'tool_complete',
-                    'roundNum': rn,
-                    'toolCallId': tc_id,
-                    'toolName': fn_name,
-                    'toolContent': tc_content_str,
-                }
+                _evt = build_event(
+                    EventType.TOOL_COMPLETE,
+                    roundNum=rn,
+                    toolCallId=tc_id,
+                    toolName=fn_name,
+                    toolContent=tc_content_str,
+                )
                 if _tc_tokens > 0:
                     _evt['toolTokens'] = _tc_tokens
                 if round_entry and round_entry.get('compactionLayer'):
@@ -1096,17 +1097,17 @@ def execute_tool_pipeline(
                                         _re['toolTokens'] = _safe_count_tokens(
                                             _tc_str, model=task.get('model', '') if task else '')
                                         try:
-                                            append_event(task, {
-                                                'type': 'tool_compacted',
-                                                'roundNum': _re_rn,
-                                                'toolCallId': _tc_id,
-                                                'toolName': _re_fn,
-                                                'compactionLayer': 'L0',
-                                                'compactedFromChars': _pre,
-                                                'compactedToChars': _post,
-                                                'toolTokens': _re.get('toolTokens', 0),
-                                                'compactedContent': _tc_str,
-                                            })
+                                            append_event(task, build_event(
+                                                EventType.TOOL_COMPACTED,
+                                                roundNum=_re_rn,
+                                                toolCallId=_tc_id,
+                                                toolName=_re_fn,
+                                                compactionLayer='L0',
+                                                compactedFromChars=_pre,
+                                                compactedToChars=_post,
+                                                toolTokens=_re.get('toolTokens', 0),
+                                                compactedContent=_tc_str,
+                                            ))
                                             # Diagnostic — see matching log in
                                             # compaction.py:_stamp_l1 for the rationale.
                                             logger.info(
@@ -1128,12 +1129,12 @@ def execute_tool_pipeline(
     # Emit snapshot AFTER tool results appended
     try:
         snapshot = _strip_base64_for_snapshot(messages)
-        snap_evt = {
-            'type': 'messages_snapshot',
-            'round': round_num + 1,
-            'label': f'Round {round_num + 1} 工具结果后 · {len(messages)}条',
-            'messages': snapshot,
-        }
+        snap_evt = build_event(
+            EventType.MESSAGES_SNAPSHOT,
+            round=round_num + 1,
+            label=f'Round {round_num + 1} 工具结果后 · {len(messages)}条',
+            messages=snapshot,
+        )
         if tool_list:
             snap_evt['tools'] = tool_list
         append_event(task, snap_evt)
@@ -1328,12 +1329,12 @@ def _handle_approval(
     round_entry['status'] = 'pending_approval'
     round_entry['approvalId'] = approval_id
     round_entry['approvalMeta'] = approval_meta
-    append_event(task, {
-        'type': 'write_approval_request',
-        'roundNum': rn,
-        'approvalId': approval_id,
-        'meta': approval_meta,
-    })
+    append_event(task, build_event(
+        EventType.WRITE_APPROVAL_REQUEST,
+        roundNum=rn,
+        approvalId=approval_id,
+        meta=approval_meta,
+    ))
     logger.debug(
         '[Task %s] Waiting for write approval: tool=%s path=%s round=%d model=%s',
         tid, fn_name, fn_args.get('path', ''), round_num, model,

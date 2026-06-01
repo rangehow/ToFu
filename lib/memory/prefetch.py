@@ -674,7 +674,8 @@ def run_memory_prefetch(messages: list,
         payload = {'phase': phase, **kw}
         if emit_event:
             try:
-                emit_event({'type': 'memory_prefetch', **payload})
+                from lib.agent_core.events import EventType, build_event
+                emit_event(build_event(EventType.MEMORY_PREFETCH, **payload))
             except Exception as e:  # pragma: no cover
                 logger.debug('[MemPrefetch] emit_event failed: %s', e)
         if task is not None:

@@ -211,13 +211,19 @@ class TestArchiveIsTheOnlyEventEmitter:
         all_src = '\n'.join(sources)
 
         # The 'compaction' SSE emit MUST exist somewhere in the package.
+        # Emissions now flow through the typed constructor
+        # ``build_event(EventType.COMPACTION, ...)`` (item-2 unification,
+        # 2026-06) — accept either the typed form or the legacy literal.
         assert ("'type': 'compaction'" in all_src
-                or '"type": "compaction"' in all_src), (
+                or '"type": "compaction"' in all_src
+                or 'EventType.COMPACTION' in all_src), (
             "expected at least one 'compaction' SSE emit in the package; "
             "split must preserve the SSE-emit boundary in _archive"
         )
-        # Ensure the post-summary 'compaction_done' event is also present.
-        assert ('compaction_done' in all_src), (
+        # Ensure the post-summary 'compaction_done' event is also present
+        # (literal reference or typed EventType.COMPACTION_DONE).
+        assert ('compaction_done' in all_src
+                or 'EventType.COMPACTION_DONE' in all_src), (
             "expected 'compaction_done' event reference in the package"
         )
 

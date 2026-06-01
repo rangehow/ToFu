@@ -6,6 +6,7 @@ from __future__ import annotations
 import os
 import threading
 
+from lib.agent_core.events import EventType, build_event
 from lib.log import get_logger
 
 logger = get_logger(__name__)
@@ -587,8 +588,8 @@ def register_image_gen_handler(tool_registry, IMAGE_GEN_TOOL_NAMES, _finalize_to
             'imageAspectRatio': aspect_ratio, 'imageResolution': resolution,
             'badge': badge_text,
         }]
-        append_event(task, {'type': 'tool_result', 'roundNum': rn,
-                            'query': round_entry['query'], 'results': round_entry['results']})
+        append_event(task, build_event(EventType.TOOL_RESULT, roundNum=rn,
+                            query=round_entry['query'], results=round_entry['results']))
 
         # ── Extract image gen history ──
         history = _extract_image_gen_history(task, messages=task.get('messages'))
@@ -610,8 +611,8 @@ def register_image_gen_handler(tool_registry, IMAGE_GEN_TOOL_NAMES, _finalize_to
                 'imageAspectRatio': aspect_ratio, 'imageResolution': resolution,
                 'badge': badge_429,
             }]
-            append_event(task, {'type': 'tool_result', 'roundNum': rn,
-                                'query': round_entry['query'], 'results': round_entry['results']})
+            append_event(task, build_event(EventType.TOOL_RESULT, roundNum=rn,
+                                query=round_entry['query'], results=round_entry['results']))
 
         try:
             with log_context('generate_image_tool', logger=logger):

@@ -193,6 +193,7 @@ def micro_compact(messages: list, conv_id: str = '', task: dict | None = None,
             logger.debug('[L1] count_text failed for tc_id=%s: %s', tc_id[:8], _e)
             round_entry['toolTokens'] = max(1, after_chars // 4)
         try:
+            from lib.agent_core.events import EventType, build_event
             from lib.tasks_pkg.manager import append_event
             # ★ Carry the placeholder content on the SSE event itself so the
             # frontend debug panel can patch its cached api-form snapshot
@@ -201,17 +202,17 @@ def micro_compact(messages: list, conv_id: str = '', task: dict | None = None,
             # blob until the next round, even though the chip already flipped
             # to COMPACTED — see "debug panel alignment" trail (2026-05-13).
             _placeholder = msg.get('content', '') if isinstance(msg.get('content'), str) else ''
-            append_event(task, {
-                'type': 'tool_compacted',
-                'roundNum': round_entry.get('roundNum'),
-                'toolCallId': tc_id,
-                'toolName': round_entry.get('toolName', ''),
-                'compactionLayer': 'L1',
-                'compactedFromChars': before_chars,
-                'compactedToChars': after_chars,
-                'toolTokens': round_entry.get('toolTokens', 0),
-                'compactedContent': _placeholder,
-            })
+            append_event(task, build_event(
+                EventType.TOOL_COMPACTED,
+                roundNum=round_entry.get('roundNum'),
+                toolCallId=tc_id,
+                toolName=round_entry.get('toolName', ''),
+                compactionLayer='L1',
+                compactedFromChars=before_chars,
+                compactedToChars=after_chars,
+                toolTokens=round_entry.get('toolTokens', 0),
+                compactedContent=_placeholder,
+            ))
             # ── Diagnostic emit log ──
             # The tool_compacted SSE handler had a cross-message bug
             # (fixed 2026-05-12) where stamps for cold rounds were

@@ -538,15 +538,16 @@ def execute_compact_tool(messages: list, task: dict | None = None, **kwargs) -> 
 
         if task is not None:
             try:
+                from lib.agent_core.events import EventType, build_event
                 from lib.tasks_pkg.manager import append_event
-                append_event(task, {
-                    'type': 'compaction_done',
-                    'archiveId': int(_archive_id),
-                    'convId': conv_id,
-                    'tokensAfter': int(tokens_after),
-                    'msgsAfter': int(len(messages)),
-                    'reductionPct': round(reduction_pct, 1),
-                })
+                append_event(task, build_event(
+                    EventType.COMPACTION_DONE,
+                    archiveId=int(_archive_id),
+                    convId=conv_id,
+                    tokensAfter=int(tokens_after),
+                    msgsAfter=int(len(messages)),
+                    reductionPct=round(reduction_pct, 1),
+                ))
             except Exception as _ev_e:
                 logger.debug('[Compact] compaction_done emit failed: %s', _ev_e)
 

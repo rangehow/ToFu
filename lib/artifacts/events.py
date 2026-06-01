@@ -36,24 +36,25 @@ logger = get_logger(__name__)
 
 def _build_event(artifact_meta: dict) -> dict:
     """Translate a ``create_artifact`` return value into an SSE payload."""
+    from lib.agent_core.events import EventType, build_event
     aid = artifact_meta.get('id', '')
-    return {
-        'type':       'artifact',
-        'id':         aid,
-        'conv_id':    artifact_meta.get('conv_id', ''),
-        'task_id':    artifact_meta.get('task_id', ''),
-        'msg_id':     artifact_meta.get('msg_id', ''),
-        'source':     artifact_meta.get('source', ''),
-        'source_ref': artifact_meta.get('source_ref', {}),
-        'format':     artifact_meta.get('format', ''),
-        'title':      artifact_meta.get('title', ''),
-        'size_bytes': int(artifact_meta.get('size_bytes', 0)),
-        'version':    int(artifact_meta.get('version', 1)),
-        'parent_id':  artifact_meta.get('parent_id', ''),
-        'pinned':     bool(artifact_meta.get('pinned', False)),
-        'created_at': int(artifact_meta.get('created_at', 0)),
-        'url':        f'/api/artifacts/{aid}/raw' if aid else '',
-    }
+    return build_event(
+        EventType.ARTIFACT,
+        id=aid,
+        conv_id=artifact_meta.get('conv_id', ''),
+        task_id=artifact_meta.get('task_id', ''),
+        msg_id=artifact_meta.get('msg_id', ''),
+        source=artifact_meta.get('source', ''),
+        source_ref=artifact_meta.get('source_ref', {}),
+        format=artifact_meta.get('format', ''),
+        title=artifact_meta.get('title', ''),
+        size_bytes=int(artifact_meta.get('size_bytes', 0)),
+        version=int(artifact_meta.get('version', 1)),
+        parent_id=artifact_meta.get('parent_id', ''),
+        pinned=bool(artifact_meta.get('pinned', False)),
+        created_at=int(artifact_meta.get('created_at', 0)),
+        url=f'/api/artifacts/{aid}/raw' if aid else '',
+    )
 
 
 def emit_artifact_event(task: Any, artifact_meta: dict) -> None:

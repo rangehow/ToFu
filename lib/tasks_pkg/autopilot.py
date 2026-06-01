@@ -74,6 +74,7 @@ import threading
 import time
 import uuid
 
+from lib.agent_core.events import EventType, build_event
 from lib.log import audit_log, get_logger
 
 logger = get_logger(__name__)
@@ -219,25 +220,25 @@ class _VUEventForwarder(list):
         # chip below as well; the two are not mutually exclusive (one
         # paints the VU bubble, the other annotates the parent's chip).
         if et in _VU_FORWARD_TYPES:
-            _ap_event(self._parent, {
-                'type': 'autopilot_vu_event',
-                'vuMsgId': self._vu_msg_id,
-                'inner': ev,
-            })
+            _ap_event(self._parent, build_event(
+                EventType.AUTOPILOT_VU_EVENT,
+                vuMsgId=self._vu_msg_id,
+                inner=ev,
+            ))
 
         if et == 'tool_start':
             label = _summarize_vu_tool_event(ev)
-            _ap_event(self._parent, {
-                'type': 'phase',
-                'phase': 'autopilot_thinking',
-                'detail': f'Autopilot investigating · {label}',
-            })
+            _ap_event(self._parent, build_event(
+                EventType.PHASE,
+                phase='autopilot_thinking',
+                detail=f'Autopilot investigating · {label}',
+            ))
         elif et == 'tool_result':
-            _ap_event(self._parent, {
-                'type': 'phase',
-                'phase': 'autopilot_thinking',
-                'detail': 'Autopilot is generating the next user reply…',
-            })
+            _ap_event(self._parent, build_event(
+                EventType.PHASE,
+                phase='autopilot_thinking',
+                detail='Autopilot is generating the next user reply…',
+            ))
 
 
 def run_virtual_user(task: dict, vu_msg_id: str | None = None) -> dict | None:
@@ -694,11 +695,11 @@ def maybe_run_autopilot(task: dict) -> dict | None:
     # Surface the parent-bubble phase chip so the user has SOME signal
     # that autopilot is running, even before the VU produces output.
     try:
-        append_event(task, {
-            'type': 'phase',
-            'phase': 'autopilot_thinking',
-            'detail': 'Autopilot is generating the next user reply…',
-        })
+        append_event(task, build_event(
+            EventType.PHASE,
+            phase='autopilot_thinking',
+            detail='Autopilot is generating the next user reply…',
+        ))
     except Exception as e:
         logger.debug('[Autopilot %s] phase emit failed: %s', tid, e)
 
@@ -709,10 +710,10 @@ def maybe_run_autopilot(task: dict) -> dict | None:
         # have lazily created from inner stream events; nothing was
         # ever persisted.
         try:
-            append_event(task, {
-                'type': 'autopilot_vu_cancel',
-                'vuMsgId': vu_msg_id,
-            })
+            append_event(task, build_event(
+                EventType.AUTOPILOT_VU_CANCEL,
+                vuMsgId=vu_msg_id,
+            ))
         except Exception as e:
             logger.debug('[Autopilot %s] vu_cancel emit failed: %s', tid, e)
         return None
@@ -726,16 +727,16 @@ def maybe_run_autopilot(task: dict) -> dict | None:
         logger.info('[Autopilot %s] Real user message arrived during VU '
                     'call — deferring to queue', tid)
         try:
-            append_event(task, {'type': 'autopilot_vu_cancel',
-                                 'vuMsgId': vu_msg_id})
+            append_event(task, build_event(EventType.AUTOPILOT_VU_CANCEL,
+                                 vuMsgId=vu_msg_id))
         except Exception as e:
             logger.debug('[Autopilot %s] vu_cancel emit failed: %s', tid, e)
         return None
     if task.get('aborted'):
         logger.info('[Autopilot %s] Aborted while VU was running — stopping', tid)
         try:
-            append_event(task, {'type': 'autopilot_vu_cancel',
-                                 'vuMsgId': vu_msg_id})
+            append_event(task, build_event(EventType.AUTOPILOT_VU_CANCEL,
+                                 vuMsgId=vu_msg_id))
         except Exception as e:
             logger.debug('[Autopilot %s] vu_cancel emit failed: %s', tid, e)
         return None
@@ -752,11 +753,11 @@ def maybe_run_autopilot(task: dict) -> dict | None:
     # from streaming deltas — or one that missed them entirely (cold
     # replay, late connect) — can reconcile in one shot.
     try:
-        append_event(task, {
-            'type': 'autopilot_vu_done',
-            'vuMsgId': vu_msg_id,
-            'vuMessage': vu_msg,
-        })
+        append_event(task, build_event(
+            EventType.AUTOPILOT_VU_DONE,
+            vuMsgId=vu_msg_id,
+            vuMessage=vu_msg,
+        ))
     except Exception as e:
         logger.debug('[Autopilot %s] vu_done emit failed: %s', tid, e)
 

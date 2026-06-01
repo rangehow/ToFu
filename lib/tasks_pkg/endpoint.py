@@ -65,6 +65,7 @@ from lib.tasks_pkg.endpoint_review import (
     _run_critic_turn,
     _run_planner_turn,
 )
+from lib.agent_core.events import EventType, build_event
 from lib.tasks_pkg.manager import append_event, create_task, persist_task_result
 from lib.tasks_pkg.orchestrator import _run_single_turn, run_task
 
@@ -701,11 +702,11 @@ def run_endpoint_task(task):
 
         task['_endpoint_phase'] = 'planning'
         task['_endpoint_iteration'] = 0
-        append_event(task, {
-            'type': 'endpoint_iteration',
-            'iteration': 0,
-            'phase': 'planning',
-        })
+        append_event(task, build_event(
+            EventType.ENDPOINT_ITERATION,
+            iteration=0,
+            phase='planning',
+        ))
         # Per-phase retry counter starts fresh for the Planner turn (PR3b).
         task['_premature_retry_count_phase'] = 0
 
@@ -746,12 +747,12 @@ def run_endpoint_task(task):
         endpoint_turns.append(planner_turn_msg)
 
         # ── Emit planner done event ──
-        append_event(task, {
-            'type': 'endpoint_planner_done',
-            'content': planner_content,
-            'thinking': planner_result.get('thinking', ''),
-            'usage': planner_result.get('usage', {}),
-        })
+        append_event(task, build_event(
+            EventType.ENDPOINT_PLANNER_DONE,
+            content=planner_content,
+            thinking=planner_result.get('thinking', ''),
+            usage=planner_result.get('usage', {}),
+        ))
 
         # ── Sync to DB after planner ──
         _store_endpoint_turns_on_task(task, endpoint_turns)
@@ -829,11 +830,11 @@ def run_endpoint_task(task):
             # ── Emit: iteration started (Worker phase) ──
             task['_endpoint_phase'] = 'working'
             task['_endpoint_iteration'] = iteration
-            append_event(task, {
-                'type': 'endpoint_iteration',
-                'iteration': iteration,
-                'phase': 'working',
-            })
+            append_event(task, build_event(
+                EventType.ENDPOINT_ITERATION,
+                iteration=iteration,
+                phase='working',
+            ))
 
             # ── Phase 1: WORKER ──
             accumulated_content = ''
@@ -967,15 +968,15 @@ def run_endpoint_task(task):
                     'done': True,
                 }
                 endpoint_turns.append(critic_turn_msg)
-                append_event(task, {
-                    'type': 'endpoint_critic_msg',
-                    'iteration': iteration,
-                    'content': synthetic_feedback,
-                    'next_phase': 'worker',
-                    'should_stop': False,
-                    'is_stuck': False,
-                    'synthetic': True,
-                })
+                append_event(task, build_event(
+                    EventType.ENDPOINT_CRITIC_MSG,
+                    iteration=iteration,
+                    content=synthetic_feedback,
+                    next_phase='worker',
+                    should_stop=False,
+                    is_stuck=False,
+                    synthetic=True,
+                ))
                 _store_endpoint_turns_on_task(task, endpoint_turns)
                 _synth_idx = _sync_endpoint_turns_to_conversation(task, endpoint_turns)
                 _trigger_per_turn_auto_translate(task, critic_turn_msg, _synth_idx)
@@ -997,19 +998,19 @@ def run_endpoint_task(task):
                     logger.info('[Endpoint] Max iterations after '
                                 'zero-deliverable guard, stopping')
                     break
-                append_event(task, {
-                    'type': 'endpoint_new_turn',
-                    'iteration': iteration + 1,
-                })
+                append_event(task, build_event(
+                    EventType.ENDPOINT_NEW_TURN,
+                    iteration=iteration + 1,
+                ))
                 continue
 
             # ── Phase 2: CRITIC ──
             task['_endpoint_phase'] = 'reviewing'
-            append_event(task, {
-                'type': 'endpoint_iteration',
-                'iteration': iteration,
-                'phase': 'reviewing',
-            })
+            append_event(task, build_event(
+                EventType.ENDPOINT_ITERATION,
+                iteration=iteration,
+                phase='reviewing',
+            ))
             # Per-phase retry counter resets for the Critic turn.
             task['_premature_retry_count_phase'] = 0
 
@@ -1068,16 +1069,16 @@ def run_endpoint_task(task):
             endpoint_turns.append(critic_turn_msg)
 
             # ── Emit critic feedback event ──
-            append_event(task, {
-                'type': 'endpoint_critic_msg',
-                'iteration': iteration,
-                'content': feedback,
+            append_event(task, build_event(
+                EventType.ENDPOINT_CRITIC_MSG,
+                iteration=iteration,
+                content=feedback,
                 # New field — drives frontend placeholder creation:
-                'next_phase': next_phase,
+                next_phase=next_phase,
                 # Legacy mirror for any clients that haven't upgraded yet:
-                'should_stop': should_stop,
-                'is_stuck': is_stuck,
-            })
+                should_stop=should_stop,
+                is_stuck=is_stuck,
+            ))
 
             # ── Sync to DB after critic review ──
             _store_endpoint_turns_on_task(task, endpoint_turns)
@@ -1117,12 +1118,12 @@ def run_endpoint_task(task):
 
                 # Emit planning phase + frontend placeholder event.
                 task['_endpoint_phase'] = 'planning'
-                append_event(task, {
-                    'type': 'endpoint_iteration',
-                    'iteration': iteration,
-                    'phase': 'planning',
-                    'replan': True,
-                })
+                append_event(task, build_event(
+                    EventType.ENDPOINT_ITERATION,
+                    iteration=iteration,
+                    phase='planning',
+                    replan=True,
+                ))
 
                 # Run the new planner turn.  The planner now sees:
                 #   - the PLAN_DEFECT reason (hard structural diagnosis)
@@ -1203,13 +1204,13 @@ def run_endpoint_task(task):
                         new_planner_turn_msg['usage'] = replan_result['usage']
                     endpoint_turns.append(new_planner_turn_msg)
 
-                    append_event(task, {
-                        'type': 'endpoint_planner_done',
-                        'content': new_plan,
-                        'thinking': replan_result.get('thinking', ''),
-                        'usage': replan_result.get('usage', {}),
-                        'plannerIteration': planner_iteration_counter,
-                    })
+                    append_event(task, build_event(
+                        EventType.ENDPOINT_PLANNER_DONE,
+                        content=new_plan,
+                        thinking=replan_result.get('thinking', ''),
+                        usage=replan_result.get('usage', {}),
+                        plannerIteration=planner_iteration_counter,
+                    ))
 
                     # Sync new planner turn to DB
                     _store_endpoint_turns_on_task(task, endpoint_turns)
@@ -1254,10 +1255,10 @@ def run_endpoint_task(task):
                         break
 
                     # Tell frontend to start a new worker turn under the new plan
-                    append_event(task, {
-                        'type': 'endpoint_new_turn',
-                        'iteration': iteration + 1,
-                    })
+                    append_event(task, build_event(
+                        EventType.ENDPOINT_NEW_TURN,
+                        iteration=iteration + 1,
+                    ))
                     logger.info(
                         '[Endpoint] Iteration %d: CONTINUE_PLANNER — new plan '
                         '(%d chars, defect=%r), replan_count=%d',
@@ -1289,10 +1290,10 @@ def run_endpoint_task(task):
                 break
 
             # ── Tell frontend to start new worker turn ──
-            append_event(task, {
-                'type': 'endpoint_new_turn',
-                'iteration': iteration + 1,
-            })
+            append_event(task, build_event(
+                EventType.ENDPOINT_NEW_TURN,
+                iteration=iteration + 1,
+            ))
 
             logger.debug('[Endpoint] Iteration %d: CONTINUE_WORKER, injecting '
                          'critic feedback (%d chars)', iteration, len(feedback))
@@ -1323,7 +1324,7 @@ def run_endpoint_task(task):
         task['finishReason'] = 'error'
         with task['content_lock']:
             task['content'] = accumulated_content
-        err_done = {'type': 'done', 'error': envelope, 'finishReason': 'error'}
+        err_done = build_event(EventType.DONE, error=envelope, finishReason='error')
         if task.get('preset'): err_done['preset'] = task['preset']
         if task.get('model'):  err_done['model']  = task['model']
         append_event(task, err_done)
@@ -1361,20 +1362,20 @@ def _finalize(task, accumulated_content, total_usage, iteration,
     task['_endpoint_phase'] = 'done'
     task['_endpoint_stop_reason'] = stop_reason
 
-    complete_evt = {
-        'type': 'endpoint_complete',
-        'totalIterations': min(iteration, MAX_ITERATIONS),
-        'reason': stop_reason,
-        'replanCount': replan_count,
-    }
+    complete_evt = build_event(
+        EventType.ENDPOINT_COMPLETE,
+        totalIterations=min(iteration, MAX_ITERATIONS),
+        reason=stop_reason,
+        replanCount=replan_count,
+    )
     append_event(task, complete_evt)
 
-    done_evt = {
-        'type': 'done',
-        'usage': total_usage,
-        'finishReason': 'stop',
-        'endpointReason': stop_reason,
-    }
+    done_evt = build_event(
+        EventType.DONE,
+        usage=total_usage,
+        finishReason='stop',
+        endpointReason=stop_reason,
+    )
     if task.get('preset'):
         done_evt['preset'] = task['preset']
     if task.get('model'):

@@ -474,6 +474,7 @@ def _sync_result_to_conversation(task, meta):
             latest = _conv_latest_task.get(conv_id)
         if latest and latest != task['id']:
             _abort_reason = task.get('_abort_reason', '')
+            _autopilot_child = task.get('_autopilot_spawned_followup')
             if task.get('aborted') or _abort_reason:
                 # Expected path: the user started a newer task (e.g. Stop →
                 # Edit → Regenerate) for this conv, so this task was aborted
@@ -485,6 +486,19 @@ def _sync_result_to_conversation(task, meta):
                     '%s conv=%s skipping conv sync: superseded by newer task %s '
                     '(this task aborted, reason=%s, %dchars stale content discarded)',
                     pfx, conv_id[:8], latest[:8], _abort_reason or 'superseded', len(content),
+                )
+            elif _autopilot_child:
+                # Expected path: this task's OWN autopilot hook spawned a
+                # follow-up task (the virtual-user turn) before persist ran,
+                # so the follow-up is now 'latest' for the conv. This task was
+                # not aborted — it finished normally and was superseded by its
+                # own child. The follow-up rebuilt the conversation from the DB
+                # (including this task's answer), so skipping the write here is
+                # correct — the autopilot append path owns the DB write.
+                logger.debug(
+                    '%s conv=%s skipping conv sync: superseded by own autopilot '
+                    'follow-up %s (%dchars; autopilot owns the DB write)',
+                    pfx, conv_id[:8], _autopilot_child[:8], len(content),
                 )
             else:
                 # Unexpected: a task that was never aborted is no longer the

@@ -54,6 +54,7 @@ _BACKEND_FILES = [
     'lib/scheduler/executor.py',
     'lib/artifacts/events.py',
     'lib/swarm/events.py',
+    'lib/agent_backends/sse_bridge.py',
 ]
 
 # ``'type': 'X'`` strings that are NOT SSE events — message-content blocks

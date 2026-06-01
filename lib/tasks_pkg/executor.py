@@ -10,6 +10,7 @@ import lib as _lib  # module ref for hot-reload
 from lib.fetch import extract_urls_from_text, fetch_urls
 from lib.fetch.content_filter import filter_web_contents_batch
 from lib.log import get_logger
+from lib.agent_core.events import EventType, build_event
 from lib.protocols import FetchService, ToolHandler
 from lib.swarm.tools import SWARM_TOOL_NAMES  # noqa: F401 — re-exported for tool_dispatch/tool_display
 from lib.tasks_pkg.manager import append_event
@@ -287,12 +288,12 @@ def _finalize_tool_round(
     """
     round_entry['results'] = results
     round_entry['status'] = 'done'
-    event = {
-        'type': 'tool_result',
-        'roundNum': rn,
-        'query': query_override or round_entry['query'],
-        'results': results,
-    }
+    event = build_event(
+        EventType.TOOL_RESULT,
+        roundNum=rn,
+        query=query_override or round_entry['query'],
+        results=results,
+    )
     if extra_event_fields:
         event.update(extra_event_fields)
     append_event(task, event)
@@ -503,7 +504,7 @@ def _prefetch_user_urls(
         entry = {'roundNum': rn, 'query': f'📄 {url}', 'results': None, 'status': 'searching', 'toolName': 'fetch_url'}
         task['toolRounds'].append(entry)
         round_entries.append((url, entry, rn))
-        append_event(task, {'type': 'tool_start', 'roundNum': rn, 'query': f'Fetching {url[:80]}', 'toolName': 'fetch_url'})
+        append_event(task, build_event(EventType.TOOL_START, roundNum=rn, query=f'Fetching {url[:80]}', toolName='fetch_url'))
     # Dispatch through protocol or concrete import
     _fetch_urls = fetch_service.fetch_urls if fetch_service is not None else fetch_urls
     fetched = _fetch_urls(urls, max_chars=_lib.FETCH_MAX_CHARS_DIRECT, pdf_max_chars=_lib.FETCH_MAX_CHARS_PDF, timeout=_lib.FETCH_TIMEOUT)
@@ -530,7 +531,7 @@ def _prefetch_user_urls(
             'url': url, 'source': 'PDF' if is_pdf else 'Direct Fetch',
             'fetched': bool(content), 'fetchedChars': len(content) if content else 0}]
         entry['status'] = 'done'
-        append_event(task, {'type': 'tool_result', 'roundNum': rn, 'query': f'📄 {url}', 'results': entry['results']})
+        append_event(task, build_event(EventType.TOOL_RESULT, roundNum=rn, query=f'📄 {url}', results=entry['results']))
     return [(url, fetched[url]) for url in urls if url in fetched]
 
 

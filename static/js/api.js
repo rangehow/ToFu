@@ -443,6 +443,16 @@
       post('/api/v1/chat/human-response', { guidanceId, response }),
   };
 
+  // update (self-update via git pull) -------------------------------
+  // check:   GET  — compare local VERSION vs latest GitHub release tag
+  // apply:   POST — git pull --ff-only (409 on dirty tree / no git)
+  // restart: POST — re-exec the server process (explicit, admin-only)
+  const update = {
+    check:   ()  => get('/api/v1/update/check', { onError: 'null' }),
+    apply:   ()  => post('/api/v1/update/apply', {}, { timeout: 180000 }),
+    restart: ()  => post('/api/v1/update/restart', {}, { onError: 'null' }),
+  };
+
   // health / status -------------------------------------------------
   const health = {
     // Returns Response so callers can inspect resp.ok cheaply.
@@ -766,7 +776,7 @@
     folders, memory, timer, scheduler, optimizer, agentBackends, compactions,
     conversations, text, translate, chat, images, pdf, doc, artifacts,
     health, pricing, clientError, serverConfig, browser, project, daily, paper,
-    features, providers, dispatch, oauth, mcp,
+    features, providers, dispatch, oauth, mcp, update,
   };
 
   global.Api = Api;

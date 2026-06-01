@@ -1538,6 +1538,19 @@
   </div>
 </div>
 
+<!-- Update Modal — self-update via git pull -->
+<div class="modal-overlay" id="updateModal" onclick="if(event.target===this)closeUpdateModal()">
+  <div class="modal update-modal">
+    <div class="update-modal-header">
+      <h3 data-i18n="update.title">软件更新</h3>
+      <button class="modal-close-btn" onclick="closeUpdateModal()" aria-label="Close">&times;</button>
+    </div>
+    <div class="update-modal-body" id="updateModalBody">
+      <p class="upd-loading" data-i18n="update.checking">正在检查更新…</p>
+    </div>
+  </div>
+</div>
+
 <!-- ★ My Day — Neo-Brutalist Tofu Block -->
 <div class="modal-overlay" id="dailyReportModal" onclick="if(event.target===this)closeDailyReport()">
   <div class="modal myday-modal">
@@ -2004,6 +2017,7 @@
 <script defer src="static/js/skills.js?v=20260528a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
 <script defer src="static/js/scheduler.js?v=20260528a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
 <script defer src="static/js/optimizer.js?v=20260528a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
+<script defer src="static/js/update.js?v=20260601a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
 <script defer src="static/js/timer.js?v=20260528a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
 <script defer src="static/js/myday.js?v=20260528a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
 <script defer src="static/js/settings.js?v=20260528a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>

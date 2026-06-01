@@ -58,6 +58,7 @@ from .providers import api_v1_providers_bp
 from .webhooks import api_v1_webhooks_bp
 from .usage import api_v1_usage_bp
 from .logs import api_v1_logs_bp
+from .update import api_v1_update_bp
 
 
 ALL_V1_BLUEPRINTS = [
@@ -94,4 +95,5 @@ ALL_V1_BLUEPRINTS = [
     api_v1_webhooks_bp,
     api_v1_usage_bp,
     api_v1_logs_bp,
+    api_v1_update_bp,
 ]

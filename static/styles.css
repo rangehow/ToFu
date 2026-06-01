@@ -241,6 +241,28 @@ textarea::placeholder{color:var(--text-tertiary)}
 .action-btn{width:32px;height:32px;background:none;border:none;border-radius:8px;cursor:pointer;display:flex;align-items:center;justify-content:center;color:var(--text-tertiary);transition:color .15s ease,background-color .15s ease,box-shadow .15s ease;font-size:15px;position:relative;flex-shrink:0}
 .action-btn:hover{color:var(--text-primary);background:var(--bg-hover)}
 .action-btn.active{color:var(--accent);background:var(--accent-subtle);box-shadow:0 0 0 1px var(--accent-subtle)}
+
+/* ── Update button + dot badge ── */
+.update-btn{position:relative}
+.update-btn.has-update::after{content:"";position:absolute;top:4px;right:4px;width:7px;height:7px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 2px var(--bg-primary)}
+/* ── Update modal ── */
+.update-modal{width:440px;max-width:92vw;padding:0;display:flex;flex-direction:column}
+.update-modal-header{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--border)}
+.update-modal-header h3{margin:0;font-size:16px;font-weight:600;color:var(--text-primary)}
+.update-modal-body{padding:20px}
+.upd-rows{display:flex;flex-direction:column;gap:8px;margin-bottom:16px}
+.upd-row{display:flex;align-items:center;justify-content:space-between;font-size:14px}
+.upd-label{color:var(--text-tertiary)}
+.upd-val{color:var(--text-primary);font-weight:600;font-variant-numeric:tabular-nums}
+.upd-loading,.upd-checking{color:var(--text-tertiary);font-size:14px}
+.upd-error{color:var(--error-text);font-size:14px}
+.upd-warn{color:var(--text-primary);font-size:13px;line-height:1.5}
+.upd-uptodate,.upd-ready{color:var(--text-primary);font-size:14px;line-height:1.5}
+.upd-hint{color:var(--text-tertiary);font-size:12px;margin-top:8px;line-height:1.4}
+.upd-files{margin-top:8px;padding:8px 10px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;font-size:12px;font-family:var(--font-mono,monospace);color:var(--text-secondary);max-height:160px;overflow:auto;white-space:pre-wrap}
+.upd-apply-btn{margin-top:12px;padding:8px 16px;background:var(--accent);color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;transition:opacity .15s ease}
+.upd-apply-btn:hover{opacity:.9}
+.upd-apply-btn:disabled{opacity:.5;cursor:default}
 /* ── Attach file button (+) — hidden on desktop, shown on mobile as flex child in input-row ── */
 .attach-btn{display:none;width:34px;height:34px;min-width:34px;background:none;border:none;border-radius:10px;cursor:pointer;align-items:center;justify-content:center;color:var(--text-tertiary);transition:color .2s,background-color .2s,transform .15s;flex-shrink:0;padding:0;-webkit-tap-highlight-color:transparent}
 .attach-btn:hover{color:var(--text-primary);background:var(--bg-hover)}
@@ -2828,20 +2850,38 @@ input.settings-mono {
 .stg-keys-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
 }
 
-/* ── Merged API-key card: editor row + today's runtime stats row ── */
+/* ── Merged API-key card: editor row + today's runtime stats row ──
+   Matches the neo-brutalist house style of .stg-mcard / .stg-provider-card:
+   square corners, solid ink border, hard offset shadow, and a solid
+   colored accent bar on the left that encodes the key's health state. */
 .stg-key-card {
+  position: relative;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  background: var(--s-cream);
-  border: var(--s-border);
-  border-left: 4px solid var(--s-border-color, rgba(0, 0, 0, 0.18));
+  gap: 8px;
+  background: var(--s-white);
+  border: 1.5px solid var(--s-ink);
+  box-shadow: var(--s-shadow-xs);
   border-radius: var(--s-radius);
-  padding: 8px 10px;
-  transition: border-color 0.15s ease, background 0.15s ease;
+  padding: 9px 11px 9px 14px;
+  transition: transform 0.1s, box-shadow 0.1s;
+}
+.stg-key-card:hover {
+  transform: translate(-1px, -1px);
+  box-shadow: 4px 4px 0 var(--s-ink);
+}
+/* Solid left accent bar — recolored per state below. */
+.stg-key-card::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  background: var(--s-skin);
 }
 .stg-key-card-edit {
   display: flex;
@@ -2855,56 +2895,60 @@ input.settings-mono {
   flex-wrap: wrap;
   min-width: 0;
   font-size: 12px;
-  /* Indent past the #N column so metrics line up with the input. */
-  padding-left: 34px;
+  /* Align metrics under the input, past the #N column. */
+  padding-left: 36px;
+  padding-top: 8px;
+  border-top: 1.5px dashed rgba(26, 24, 20, 0.18);
 }
 .stg-key-card--blank .stg-key-card-stats { display: none; }
+/* Square "i" info chip — mirrors .stg-cap / .stg-badge brutalist chips. */
 .stg-keys-info {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 16px;
-  height: 16px;
-  margin-left: 4px;
-  border-radius: 50%;
-  background: rgba(0, 0, 0, 0.06);
-  color: var(--s-ink-soft);
+  width: 15px;
+  height: 15px;
+  margin-left: 5px;
+  border: 1.5px solid var(--s-ink);
+  border-radius: var(--s-radius);
+  background: var(--s-cream);
+  color: var(--s-ink);
+  font-family: Georgia, 'Times New Roman', serif;
+  font-style: italic;
   font-size: 11px;
   font-weight: 700;
+  line-height: 1;
   cursor: help;
   user-select: none;
   vertical-align: middle;
+  text-transform: none;
+  letter-spacing: 0;
 }
 .stg-keys-info:hover, .stg-keys-info:focus {
-  background: rgba(0, 0, 0, 0.12);
-  color: var(--s-ink);
+  background: var(--s-gold);
+  color: var(--s-white);
   outline: none;
 }
 .stg-keys-empty {
   background: var(--s-cream);
-  border: 1px dashed rgba(0, 0, 0, 0.18);
+  border: 1.5px dashed var(--s-ink);
   border-radius: var(--s-radius);
-  padding: 10px 12px;
+  padding: 11px 12px;
   font-size: 12px;
   color: var(--s-ink-soft);
   font-style: italic;
-}
-.stg-keys-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
 }
 .stg-keys-idx {
   flex: 0 0 auto;
   font-family: ui-monospace, 'JetBrains Mono', monospace;
   font-size: 11px;
-  font-weight: 700;
+  font-weight: 800;
   color: var(--s-ink-soft);
   min-width: 26px;
   text-align: right;
   user-select: none;
 }
-.stg-keys-row > input.stg-keys-input {
+.stg-key-card-edit > input.stg-keys-input {
   flex: 1 1 0;
   min-width: 0;
   font-family: ui-monospace, 'JetBrains Mono', monospace;
@@ -2912,44 +2956,47 @@ input.settings-mono {
   height: 32px;
   padding: 0 10px;
   margin-bottom: 0;
-  border: var(--s-border);
-  background: var(--s-white);
-  border-radius: 4px;
+  border: 1.5px solid var(--s-ink);
+  background: var(--s-cream);
+  border-radius: var(--s-radius);
   color: var(--s-ink);
   outline: none;
   letter-spacing: 0.02em;
+  transition: background 0.1s, border-color 0.1s;
 }
-.stg-keys-row > input.stg-keys-input:focus {
-  background: #fffef5;
-  box-shadow: none;
+.stg-key-card-edit > input.stg-keys-input:focus {
+  background: var(--s-white);
+  box-shadow: inset 2px 2px 0 var(--s-gold-glow);
   transform: none;
   border-color: var(--s-gold);
 }
 .stg-keys-btn {
   flex: 0 0 auto;
-  width: 28px;
-  height: 28px;
-  border: var(--s-border);
+  width: 30px;
+  height: 30px;
+  border: 1.5px solid var(--s-ink);
   background: var(--s-white);
   color: var(--s-ink);
-  border-radius: 4px;
+  border-radius: var(--s-radius);
+  box-shadow: var(--s-shadow-xs);
   cursor: pointer;
   font-size: 12px;
   line-height: 1;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  transition: background 0.1s, transform 0.1s;
+  transition: background 0.1s, transform 0.1s, box-shadow 0.1s;
 }
 .stg-keys-btn:hover {
   background: var(--s-cream);
   transform: translate(-1px, -1px);
+  box-shadow: 3px 3px 0 var(--s-ink);
 }
-.stg-keys-btn:active { transform: translate(1px, 1px); }
+.stg-keys-btn:active { transform: translate(1px, 1px); box-shadow: 1px 1px 0 var(--s-ink); }
 .stg-keys-btn.danger:hover {
-  background: rgba(208, 72, 72, 0.08);
-  border-color: #d04848;
-  color: #d04848;
+  background: rgba(248, 113, 113, 0.14);
+  border-color: var(--s-blocked);
+  color: #c0392b;
 }
 
 /* ══════════════════════════════════════
@@ -3064,87 +3111,206 @@ input.settings-mono {
 .stg-balance-err { color: var(--s-blocked); font-weight: 800; }
 
 
-/* ── Per-key Daily Success Stats (Settings > Providers) ───────────────── */
+/* ── Per-key Daily Success Stats (Settings > Providers) ─────────────────
+   Rendered as the second row of every .stg-key-card. Metrics are grouped
+   in .stg-keystat-metrics; status flags use the same square, solid-bordered
+   chip language as .stg-cap on the model cards. */
+.stg-keystat-metrics {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
 .stg-keystat-rate {
   font-weight: 800;
-  min-width: 36px;
+  min-width: 34px;
   font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
 }
 .stg-keystat-count {
   color: var(--s-ink-soft);
   font-variant-numeric: tabular-nums;
+  font-size: 11px;
 }
 .stg-keystat-fail {
-  color: var(--s-blocked);
-  font-weight: 700;
+  color: #c0392b;
+  font-weight: 800;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
 }
 .stg-keystat-429 {
   color: #9a3412;
-  font-weight: 600;
+  font-weight: 800;
   font-variant-numeric: tabular-nums;
-  font-size: 11px;
-  padding: 1px 5px;
-  background: rgba(234, 88, 12, 0.08);
-  border-radius: 3px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 1px 6px;
+  background: rgba(234, 88, 12, 0.12);
+  border: 1px solid #c2410c;
+  border-radius: var(--s-radius);
 }
 .stg-keystat-err {
-  color: var(--s-blocked);
+  color: #c0392b;
   font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
   text-decoration: underline dotted;
   cursor: help;
 }
+/* Status chips — same brutalist footprint as .stg-cap (square, solid border). */
 .stg-keystat-badge {
   display: inline-block;
-  padding: 1px 6px;
-  border-radius: 10px;
+  padding: 1px 7px;
+  border-radius: var(--s-radius);
+  border: 1px solid var(--s-ink);
   font-size: 10px;
   font-weight: 700;
-  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
 }
-.stg-keystat-badge.on { background: rgba(16, 185, 129, 0.14); color: #047857; }
-.stg-keystat-badge.off { background: rgba(107, 114, 128, 0.18); color: #4b5563; }
-.stg-keystat-badge.warn { background: rgba(234, 88, 12, 0.14); color: #9a3412; }
+.stg-keystat-badge.on   { background: rgba(74, 222, 128, 0.16); color: #15803d; border-color: #16a34a; }
+.stg-keystat-badge.off  { background: rgba(107, 114, 128, 0.16); color: #4b5563; border-color: #6b7280; }
+.stg-keystat-badge.warn { background: rgba(251, 146, 60, 0.16); color: #9a3412; border-color: #c2410c; }
 .stg-keystat-actions {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   margin-left: auto;
   flex: 0 0 auto;
 }
+/* Compact per-key toggle (smaller than the standard 44×24 provider switch). */
+.stg-key-toggle .stg-toggle-track { width: 34px; height: 20px; }
+.stg-key-toggle .stg-toggle-thumb { width: 14px; height: 14px; top: 1px; left: 2px; }
+.stg-key-toggle input:checked ~ .stg-toggle-track .stg-toggle-thumb { left: 16px; }
 .stg-btn-link {
   background: none;
   border: none;
-  color: var(--s-gold, #b77f00);
-  font-size: 11px;
+  color: var(--s-gold-dim);
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
   cursor: pointer;
-  padding: 2px 4px;
+  padding: 2px 2px;
   text-decoration: underline;
 }
 .stg-btn-link:hover { color: var(--s-ink); }
 
-/* State-based card tinting (drives the merged card's left colour bar). */
-.stg-key-card.stg-keystat-good { border-left-color: rgba(16, 185, 129, 0.65); }
-.stg-key-card.stg-keystat-good .stg-keystat-rate { color: #047857; }
-.stg-key-card.stg-keystat-ok   { border-left-color: rgba(16, 185, 129, 0.35); }
+/* State accent bar (the ::before strip) + numeric accent per health state. */
+.stg-key-card.stg-keystat-good::before { background: #16a34a; }
+.stg-key-card.stg-keystat-good .stg-keystat-rate { color: #15803d; }
+.stg-key-card.stg-keystat-ok::before   { background: var(--s-gold); }
 .stg-key-card.stg-keystat-ok   .stg-keystat-rate { color: var(--s-ink); }
-.stg-key-card.stg-keystat-warn {
-  border-left-color: rgba(234, 88, 12, 0.65);
-  background: rgba(234, 88, 12, 0.05);
-}
+.stg-key-card.stg-keystat-warn::before { background: #c2410c; }
 .stg-key-card.stg-keystat-warn .stg-keystat-rate { color: #9a3412; }
 .stg-key-card.stg-keystat-disabled {
-  opacity: 0.7;
-  border-left-color: rgba(107, 114, 128, 0.5);
-  background: rgba(107, 114, 128, 0.06);
+  opacity: 0.65;
+  background: var(--s-cream);
 }
+.stg-key-card.stg-keystat-disabled::before { background: #6b7280; }
 .stg-key-card.stg-keystat-disabled .stg-keystat-rate { color: #6b7280; }
-.stg-key-card.stg-keystat-idle { border-left-color: rgba(0, 0, 0, 0.18); }
+.stg-key-card.stg-keystat-idle::before { background: var(--s-skin); }
 .stg-key-card.stg-keystat-idle .stg-keystat-rate { color: var(--s-ink-soft); }
 .stg-key-card.stg-keystat-exhausted {
-  background: rgba(220, 38, 38, 0.07);
-  border-left-color: rgba(220, 38, 38, 0.7);
+  background: rgba(220, 38, 38, 0.06);
 }
+.stg-key-card.stg-keystat-exhausted::before { background: #dc2626; }
 .stg-key-card.stg-keystat-exhausted .stg-keystat-rate { color: #b91c1c; }
+
+/* ══════════════════════════════════════
+   Headless API-Keys tab + Relay-Admin tables
+   (#settingsTab_apikeys / .relay-admin-tab — rendered by
+   static/js/api-keys.js and static/js/relay-admin.js).
+   These panels were authored with a class vocabulary
+   (.settings-input / .settings-label / .settings-checkbox-list /
+   .settings-table) that had no rules, so they rendered with raw
+   browser defaults. Bring them into the brutalist house style.
+   ══════════════════════════════════════ */
+.settings-label {
+  display: block;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--s-ink-soft);
+  margin-bottom: 5px;
+}
+.settings-panel input.settings-input {
+  width: 100%;
+  height: 34px;
+  padding: 0 10px;
+  font-family: inherit;
+  font-size: 12.5px;
+  border: var(--s-border-sm);
+  border-radius: var(--s-radius);
+  background: var(--s-cream);
+  color: var(--s-ink);
+  box-shadow: var(--s-shadow-xs);
+  outline: none;
+  transition: background 0.1s, border-color 0.1s, box-shadow 0.1s;
+}
+.settings-panel input.settings-input:focus {
+  background: var(--s-white);
+  border-color: var(--s-gold);
+  box-shadow: inset 2px 2px 0 var(--s-gold-glow);
+}
+
+/* Scope checkboxes — wrap as flowing chips */
+.settings-checkbox-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 2px;
+  align-items: center;
+  padding: 9px 11px;
+  border: var(--s-border-sm);
+  border-radius: var(--s-radius);
+  background: var(--s-cream);
+  box-shadow: var(--s-shadow-xs);
+}
+.settings-checkbox-list label { cursor: pointer; }
+.settings-checkbox-list input[type="checkbox"] { cursor: pointer; accent-color: var(--s-gold); }
+
+/* Issued-keys / relay-admin tables */
+.settings-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  border: var(--s-border-sm);
+  background: var(--s-white);
+  box-shadow: var(--s-shadow-xs);
+}
+.settings-table thead th {
+  text-align: left;
+  padding: 8px 10px;
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--s-ink-soft);
+  background: var(--s-cream);
+  border-bottom: var(--s-border-sm);
+  white-space: nowrap;
+}
+.settings-table tbody td {
+  padding: 8px 10px;
+  border-bottom: 1.5px dashed rgba(26, 24, 20, 0.18);
+  vertical-align: middle;
+  color: var(--s-ink);
+}
+.settings-table tbody tr:last-child td { border-bottom: none; }
+.settings-table tbody tr:hover { background: var(--s-cream); }
+
+/* Revoke button — .btn-danger has no global rule; give it one inside
+   the settings panel so destructive actions read as red. */
+.settings-panel .btn-danger {
+  background: var(--s-blocked);
+  color: var(--s-white);
+  border: var(--s-border-sm);
+}
+.settings-panel .btn-danger:hover { background: #dc2626; }
 .stg-balance-raw {
   color: var(--s-ink-soft);
   font-family: 'JetBrains Mono', monospace;

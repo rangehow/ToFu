@@ -279,8 +279,13 @@ def test_cross_talk_iteration():
 
 
 def test_push_channel_integration():
-    """append_event auto-pushes to lib.push channel='chat'."""
-    from lib import push as push_module
+    """append_event auto-pushes to channel='chat'.
+
+    The chat runtime (TaskRuntime) resolves push_event from its canonical
+    home lib.agent_core.push after the 2026-06 leaf relocation, so the
+    capture patch targets that module (lib.push remains a re-export shim).
+    """
+    from lib.agent_core import push as push_module
     from lib.tasks_pkg.manager import create_task, append_event
     received = []
 

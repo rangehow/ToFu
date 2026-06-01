@@ -5,18 +5,29 @@ This module is **documentation that executes**.  It names which parts of
 swarm scheduling, context compaction, push, task runtime) versus which parts
 are *plugins* (concrete tools, concrete provider dialects).
 
-Why a manifest instead of a directory move?
---------------------------------------------
+Manifest first, directory second
+--------------------------------
 The base is what makes Tofu reusable across projects: the run loop, the
 Planner→Worker→Critic endpoint mode, swarm scheduling, compaction, the push
 hub.  Plugins are the swappable bits: individual tools and provider body
 dialects.  The *guarantee* that the base never reaches back into a concrete
-plugin is what keeps it a clean foundation.
+plugin is what keeps it a clean foundation — and that guarantee is enforced by
+the AST test, not by the folder layout.
 
-Physically relocating ~960 import sites into a ``lib/agent_core/`` package
-would be enormous churn for zero added guarantee — a folder can't stop an
-import.  What actually enforces the boundary is the AST test
-``tests/test_agent_core_boundary.py``, which reads THIS manifest and asserts:
+The directory IS being migrated to mirror this manifest, in stages:
+* **Stage 1 (done, 2026-06):** self-contained leaves with no core-sibling
+  back-imports — ``push.py``, ``task_runtime.py``, ``profiles.py`` — physically
+  moved into ``lib/agent_core/``.  Thin shims at the old paths
+  (``lib.push``, ``lib.task_runtime``, ``lib.agent_profiles``) re-export from
+  the new homes, so existing call sites are unaffected.
+* **Later stages:** the cross-cutting members (orchestrator, model_config,
+  endpoint, …) stay named-in-place for now — moving them naively would create
+  ``agent_core → tasks_pkg`` back-imports and rewrite ~960 import sites.  They
+  migrate only when their sibling coupling is untangled.
+
+Either way a folder can't stop an import — what enforces the boundary is the
+AST test ``tests/test_agent_core_boundary.py``, which reads THIS manifest and
+asserts:
 
     No CORE_MODULES file imports a CONCRETE_PLUGIN_MODULE.
 

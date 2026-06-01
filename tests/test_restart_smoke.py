@@ -201,7 +201,9 @@ def test_task_runtime_lifecycle_pushes_events(monkeypatch, server_module):
     """create → append_event → finish must walk through the runtime AND
     fire push_event so frontend WS subscribers receive frames.
     """
-    from lib import push as push_mod
+    # TaskRuntime.append_event resolves push_event from its canonical home
+    # (lib.agent_core.push) after the 2026-06 leaf relocation, so patch there.
+    from lib.agent_core import push as push_mod
     from lib.task_runtime import TaskRuntime
 
     captured: list[tuple] = []

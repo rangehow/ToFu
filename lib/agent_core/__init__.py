@@ -2,80 +2,64 @@
 
 What this is
 ------------
-``lib/agent_core/`` is the **human-readable mirror** of the core/plugin
-boundary declared in :mod:`lib.agent_core_manifest`.  Open this package and you
-see, in one place, exactly what constitutes Tofu's reusable foundation — the
-run loop, model dispatch, swarm scheduling, the Planner→Worker→Critic endpoint
-loop, context compaction, the push hub, the background-task runtime, and
-capability profiles — together with the two registry seams through which the
-base reaches plugins.
+``lib/agent_core/`` is the home + browsable surface of Tofu's reusable
+foundation: the run loop, model dispatch, swarm scheduling, the
+Planner→Worker→Critic endpoint loop, context compaction, the push hub, the
+background-task runtime, and capability profiles — together with the two
+registry seams through which the base reaches plugins.
 
-Why a facade instead of physically moving the files
-----------------------------------------------------
-The core is a *cross-cutting subset* of code that lives inside packages
-(``tasks_pkg``, ``llm_dispatch``, ``swarm``) which also hold non-core
-siblings.  A literal file move would either (a) leave ``agent_core →
-tasks_pkg`` back-imports — inverting the very dependency direction the split
-advertises — or (b) drag the whole sibling graph along until "core" stops
-mirroring the manifest.  And it would rewrite ~960 import sites.
+Two kinds of member
+-------------------
+1. **Relocated leaves** — self-contained base modules that physically live
+   here now: ``push.py``, ``task_runtime.py``, ``profiles.py``.  Old import
+   paths (``lib.push``, ``lib.task_runtime``, ``lib.agent_profiles``) still
+   work via thin compatibility shims that re-export from here.
+2. **Named-in-place members** — the rest of the base is a *cross-cutting
+   subset* of code inside ``tasks_pkg`` / ``llm_dispatch`` / ``swarm`` that
+   would create back-imports (and ~960 import-site rewrites) if force-moved.
+   Those stay where they are; this facade *names* them via re-export.
 
-So the base keeps living where it is, and THIS package re-exports its public
-surface.  Anyone browsing ``lib/`` learns the base/plugin split immediately;
-existing imports keep working unchanged; the machine-readable source of truth
-stays :mod:`lib.agent_core_manifest`, enforced by
-``tests/test_agent_core_boundary.py``.
+Lazy by design
+--------------
+Imports are resolved lazily through :pep:`562` ``__getattr__`` against
+``CORE_MEMBERS``.  This matters: importing a relocated leaf submodule —
+``from lib.agent_core.push import hub`` — must NOT drag in the heavy
+``orchestrator → manager → ...`` chain.  With lazy resolution, ``import
+lib.agent_core`` is cheap, and ``lib.agent_core.run_task`` only pulls the
+orchestrator when first accessed.
 
-Recommended usage
------------------
-New base-level call sites may import from here for clarity::
+Membership / boundary
+---------------------
+``CORE_MEMBERS`` maps each public symbol → its defining module.  It is kept
+consistent with :data:`lib.agent_core_manifest.CORE_MODULES` and verified by
+``tests/test_agent_core_boundary.py`` (which also enforces that no core module
+imports a concrete plugin).
+
+Usage::
 
     from lib.agent_core import run_task, dispatch_chat, apply_profile
-
-The underlying modules (``lib.tasks_pkg.orchestrator`` etc.) remain valid and
-are what the rest of the codebase already uses — this facade does not replace
-them, it *names* them.
-
-Membership
-----------
-``CORE_MEMBERS`` below maps each public symbol to its defining module, so the
-mapping is introspectable and testable.  It is kept consistent with
-:data:`lib.agent_core_manifest.CORE_MODULES` by
-``tests/test_agent_core_boundary.py``.
+    from lib.agent_core.push import hub          # cheap — no orchestrator pulled
 """
 
 from __future__ import annotations
+
+import importlib
+from typing import Any
 
 from lib.log import get_logger
 
 logger = get_logger(__name__)
 
-# ── Orchestration: the run loop + endpoint (Planner→Worker→Critic) ──
-from lib.tasks_pkg.orchestrator import run_task
-from lib.tasks_pkg.model_config import _assemble_tool_list
-from lib.tasks_pkg.compaction import run_compaction_pipeline
-
-# ── Model communication + routing / load balancing ──
-from lib.llm import build_body, chat, stream_chat
-from lib.llm_dispatch import dispatch_chat, dispatch_stream, get_dispatcher, reset_dispatcher
-
-# ── Background-task runtime + real-time push hub ──
-from lib.task_runtime import TaskRuntime
-from lib.push import hub, push_event
-
-# ── Capability profiles ──
-from lib.agent_profiles import apply_profile, get_profile, list_profiles, resolve_profile_name
-
-# ── Registry seams: how the base reaches plugins (no concrete plugin imports) ──
-from lib.tools.registry import ToolContext, ToolSpec, assemble_tool_list, register_tool_spec
-from lib.llm_dispatch.provider_registry import BodyDialect, register_dialect
-
-
 # ── Introspectable membership map (symbol → defining module) ──
-# Kept in lockstep with lib.agent_core_manifest.CORE_MODULES by the boundary test.
+# Kept in lockstep with lib.agent_core_manifest.CORE_MODULES by the boundary
+# test.  Relocated leaves point at their new in-package homes; named-in-place
+# members point at their existing modules.
 CORE_MEMBERS: dict[str, str] = {
+    # Orchestration: run loop + endpoint (Planner→Worker→Critic) + compaction
     'run_task':                'lib.tasks_pkg.orchestrator',
     '_assemble_tool_list':     'lib.tasks_pkg.model_config',
     'run_compaction_pipeline': 'lib.tasks_pkg.compaction',
+    # Model communication + routing / load balancing
     'build_body':              'lib.llm',
     'chat':                    'lib.llm',
     'stream_chat':             'lib.llm',
@@ -83,13 +67,15 @@ CORE_MEMBERS: dict[str, str] = {
     'dispatch_stream':         'lib.llm_dispatch',
     'get_dispatcher':          'lib.llm_dispatch',
     'reset_dispatcher':        'lib.llm_dispatch',
-    'TaskRuntime':             'lib.task_runtime',
-    'hub':                     'lib.push',
-    'push_event':              'lib.push',
-    'apply_profile':           'lib.agent_profiles',
-    'get_profile':             'lib.agent_profiles',
-    'list_profiles':           'lib.agent_profiles',
-    'resolve_profile_name':    'lib.agent_profiles',
+    # Relocated leaves — now physically in this package
+    'TaskRuntime':             'lib.agent_core.task_runtime',
+    'hub':                     'lib.agent_core.push',
+    'push_event':              'lib.agent_core.push',
+    'broadcast':               'lib.agent_core.push',
+    'apply_profile':           'lib.agent_core.profiles',
+    'get_profile':             'lib.agent_core.profiles',
+    'list_profiles':           'lib.agent_core.profiles',
+    'resolve_profile_name':    'lib.agent_core.profiles',
     # Registry seams (the only bridge core uses to reach plugins)
     'ToolSpec':                'lib.tools.registry',
     'ToolContext':             'lib.tools.registry',
@@ -100,3 +86,28 @@ CORE_MEMBERS: dict[str, str] = {
 }
 
 __all__ = list(CORE_MEMBERS.keys())
+
+
+def __getattr__(name: str) -> Any:
+    """PEP 562 lazy attribute resolution against CORE_MEMBERS.
+
+    Resolves a facade symbol to the real object only on first access, so
+    ``import lib.agent_core`` (and importing relocated leaf submodules) stays
+    cheap and avoids eagerly pulling the orchestrator dependency chain.
+    """
+    module_path = CORE_MEMBERS.get(name)
+    if module_path is None:
+        raise AttributeError(f'module {__name__!r} has no attribute {name!r}')
+    try:
+        module = importlib.import_module(module_path)
+        value = getattr(module, name)
+    except Exception as e:
+        logger.error('[agent_core] failed to resolve %s from %s: %s',
+                     name, module_path, e, exc_info=True)
+        raise
+    globals()[name] = value  # cache so subsequent access skips __getattr__
+    return value
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(CORE_MEMBERS))

@@ -423,8 +423,14 @@ def test_concurrent_append_events():
 
 
 def test_push_integration():
-    """Verify events are pushed to lib.push.push_event when push_channel set."""
-    from lib import push as push_module
+    """Verify events are pushed to push_event when push_channel set.
+
+    TaskRuntime.append_event imports push_event from its canonical home
+    (lib.agent_core.push) — the leaf was relocated there 2026-06, with
+    lib.push kept as a re-export shim — so the capture patch targets that
+    module.
+    """
+    from lib.agent_core import push as push_module
     received = []
 
     # Monkey-patch push_event to capture calls

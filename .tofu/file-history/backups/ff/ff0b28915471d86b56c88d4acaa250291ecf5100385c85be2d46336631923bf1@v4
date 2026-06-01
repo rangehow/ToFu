@@ -1,0 +1,439 @@
+#!/usr/bin/env python3
+"""Find functions that are never called and classify them.
+
+Walks the project's source tree, collects every ``def`` / ``async def``
+(top-level and method) under code roots like ``lib/``, ``routes/``,
+``server.py``, ``export.py``, ``scripts/`` and ``tools/``, then for each
+definition checks whether its name appears anywhere else in the codebase
+(Python, JS, HTML, JSON, Markdown).  Names with zero outside references
+are reported and classified as one of:
+
+* ``framework_called``   — Flask route handler, decorator, dunder method,
+                            pytest test, CLI ``main``, listed in ``__all__``.
+                            Likely called by a framework — not flagged.
+* ``deprecated``         — Module/function docstring or surrounding
+                            comments mention "deprecated", "legacy",
+                            "dead code", "retired", "obsolete" → safe to
+                            consider for removal.
+* ``forgotten``          — No deprecation hint and no callers — looks like
+                            an integration was forgotten.  Worth a human
+                            look.
+
+Usage:
+    python3 scripts/find_dead_functions.py
+    python3 scripts/find_dead_functions.py --json out.json
+    python3 scripts/find_dead_functions.py --root lib/trading
+    python3 scripts/find_dead_functions.py --include-private
+
+Notes:
+    The analyzer is intentionally conservative.  Dynamic dispatch
+    (``getattr(mod, name)``, string-based plugin registries, RPC/JSON-RPC
+    method tables) cannot be detected statically, so every reported
+    "forgotten" entry MUST be manually verified before deletion.
+"""
+
+import argparse
+import ast
+import json
+import os
+import re
+import sys
+from collections import defaultdict
+from dataclasses import dataclass, field, asdict
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+DEFAULT_CODE_ROOTS = ['lib', 'routes', 'scripts', 'tools']
+DEFAULT_TOP_LEVEL_FILES = ['server.py', 'export.py', 'bootstrap.py',
+                            'healthcheck.py']
+
+# Roots searched for *references* (in addition to code roots).
+REFERENCE_ROOTS = DEFAULT_CODE_ROOTS + [
+    'static', 'tests', 'debug', 'benchmarks', 'desktop', 'clients',
+    'browser_extension', 'docs',
+]
+REFERENCE_FILES = DEFAULT_TOP_LEVEL_FILES + ['index.html', 'trading.html']
+
+# File extensions where a function NAME is meaningful as a reference.
+TEXT_EXTS = ('.py', '.js', '.mjs', '.cjs', '.ts', '.tsx', '.html',
+             '.json', '.md', '.yaml', '.yml', '.toml', '.cfg', '.ini',
+             '.sh', '.bat', '.ps1')
+
+# Decorators whose presence means the function is called by a framework.
+FRAMEWORK_DECORATORS = {
+    'route', 'get', 'post', 'put', 'delete', 'patch',
+    'before_request', 'after_request', 'errorhandler',
+    'before_app_request', 'before_first_request', 'teardown_request',
+    'websocket', 'cli', 'command',
+    'fixture', 'parametrize', 'mark', 'hookimpl', 'hookspec',
+    'app.route', 'app.get', 'app.post',
+    'register', 'register_tool', 'register_handler',
+    'tool', 'function_tool', 'safe_route', 'log_route',
+    'click.command', 'click.group',
+    'task', 'shared_task', 'periodic_task',
+    'property', 'staticmethod', 'classmethod', 'cached_property',
+    'lru_cache', 'cache', 'singledispatch',
+    'dataclass', 'contextmanager', 'asynccontextmanager',
+    'pytest.fixture', 'pytest.mark', 'pytest.parametrize',
+}
+
+DEPRECATION_HINTS = re.compile(
+    r'\b(deprecated|legacy|dead\s*code|retired|obsolete|do\s*not\s*use|'
+    r'kept\s+for\s+(?:backward[s]?\s*)?compat|backwards?\s*-?\s*compat|'
+    r'unused|to\s+be\s+removed)\b',
+    re.IGNORECASE,
+)
+
+
+@dataclass
+class FuncDef:
+    name: str
+    qualname: str
+    file: str
+    lineno: int
+    is_method: bool
+    decorators: list = field(default_factory=list)
+    docstring: str = ''
+    in_dunder_all: bool = False
+    is_dunder: bool = False
+    is_private: bool = False
+    is_test: bool = False
+    enclosing_class: str = ''
+
+
+@dataclass
+class Report:
+    name: str
+    qualname: str
+    file: str
+    lineno: int
+    classification: str
+    reason: str
+
+
+# ── 1. Collect definitions ─────────────────────────────────────────────
+
+def _walk_python_files(roots, files):
+    for f in files:
+        full = os.path.join(PROJECT_ROOT, f)
+        if os.path.isfile(full):
+            yield full
+    for root in roots:
+        full_root = os.path.join(PROJECT_ROOT, root)
+        if not os.path.isdir(full_root):
+            continue
+        for dirpath, dirnames, filenames in os.walk(full_root):
+            dirnames[:] = [d for d in dirnames
+                           if not d.startswith('.')
+                           and d not in ('__pycache__', 'node_modules',
+                                         '.venv', 'venv', 'dist', 'build')]
+            for name in filenames:
+                if name.endswith('.py'):
+                    yield os.path.join(dirpath, name)
+
+
+def _decorator_name(node: ast.expr) -> str:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        parts = []
+        cur = node
+        while isinstance(cur, ast.Attribute):
+            parts.append(cur.attr)
+            cur = cur.value
+        if isinstance(cur, ast.Name):
+            parts.append(cur.id)
+        return '.'.join(reversed(parts))
+    if isinstance(node, ast.Call):
+        return _decorator_name(node.func)
+    return ''
+
+
+def _extract_dunder_all(tree: ast.AST) -> set:
+    names = set()
+    for node in tree.body if hasattr(tree, 'body') else []:
+        if isinstance(node, ast.Assign):
+            for tgt in node.targets:
+                if isinstance(tgt, ast.Name) and tgt.id == '__all__':
+                    if isinstance(node.value, (ast.List, ast.Tuple, ast.Set)):
+                        for elt in node.value.elts:
+                            if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
+                                names.add(elt.value)
+    return names
+
+
+def collect_definitions(py_files):
+    """Return a dict name -> list[FuncDef]."""
+    defs_by_name = defaultdict(list)
+    for path in py_files:
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                src = f.read()
+            tree = ast.parse(src, filename=path)
+        except (SyntaxError, UnicodeDecodeError) as e:
+            print(f'! Skipping {path}: {e}', file=sys.stderr)
+            continue
+
+        all_names = _extract_dunder_all(tree)
+        rel = os.path.relpath(path, PROJECT_ROOT)
+
+        class _Visitor(ast.NodeVisitor):
+            def __init__(self):
+                self.class_stack = []
+
+            def visit_ClassDef(self, node):
+                self.class_stack.append(node.name)
+                self.generic_visit(node)
+                self.class_stack.pop()
+
+            def _record(self, node):
+                name = node.name
+                cls = self.class_stack[-1] if self.class_stack else ''
+                qualname = f'{cls}.{name}' if cls else name
+                decos = [_decorator_name(d) for d in node.decorator_list]
+                fd = FuncDef(
+                    name=name,
+                    qualname=qualname,
+                    file=rel,
+                    lineno=node.lineno,
+                    is_method=bool(self.class_stack),
+                    decorators=[d for d in decos if d],
+                    docstring=ast.get_docstring(node) or '',
+                    in_dunder_all=name in all_names,
+                    is_dunder=name.startswith('__') and name.endswith('__'),
+                    is_private=name.startswith('_') and not (
+                        name.startswith('__') and name.endswith('__')),
+                    is_test=name.startswith('test_'),
+                    enclosing_class=cls,
+                )
+                defs_by_name[name].append(fd)
+
+            def visit_FunctionDef(self, node):
+                self._record(node)
+                self.generic_visit(node)
+
+            def visit_AsyncFunctionDef(self, node):
+                self._record(node)
+                self.generic_visit(node)
+
+        _Visitor().visit(tree)
+    return defs_by_name
+
+
+# ── 2. Build a reference index ─────────────────────────────────────────
+
+def _walk_reference_files(roots, files):
+    for f in files:
+        full = os.path.join(PROJECT_ROOT, f)
+        if os.path.isfile(full):
+            yield full
+    for root in roots:
+        full_root = os.path.join(PROJECT_ROOT, root)
+        if not os.path.isdir(full_root):
+            continue
+        for dirpath, dirnames, filenames in os.walk(full_root):
+            dirnames[:] = [d for d in dirnames
+                           if not d.startswith('.')
+                           and d not in ('__pycache__', 'node_modules',
+                                         '.venv', 'venv', 'dist', 'build')]
+            for name in filenames:
+                if name.endswith(TEXT_EXTS):
+                    yield os.path.join(dirpath, name)
+
+
+def build_reference_index(ref_files, names):
+    """Return ``{name: [(file, lineno), ...]}`` of textual occurrences.
+
+    Counts every plain identifier match (``\\bname\\b``) — the caller
+    later subtracts the definition site itself.  Cross-language refs
+    (a Python function name appearing in JS or HTML) DO count.
+    """
+    name_set = set(names)
+    pattern = re.compile(r'\b(' + '|'.join(re.escape(n) for n in name_set) + r')\b')
+    refs = defaultdict(list)
+    for path in ref_files:
+        try:
+            with open(path, 'r', encoding='utf-8', errors='replace') as f:
+                for lineno, line in enumerate(f, start=1):
+                    for m in pattern.finditer(line):
+                        refs[m.group(1)].append(
+                            (os.path.relpath(path, PROJECT_ROOT), lineno))
+        except (OSError, UnicodeDecodeError) as e:
+            print(f'! Could not read {path}: {e}', file=sys.stderr)
+    return refs
+
+
+# ── 3. Classify ────────────────────────────────────────────────────────
+
+def _is_framework_called(fd: FuncDef) -> bool:
+    if fd.is_dunder:
+        return True
+    if fd.in_dunder_all:
+        return True
+    if fd.is_test:
+        return True
+    if fd.name == 'main':
+        return True
+    # ast.NodeVisitor / generic visitor pattern — visit_* methods are
+    # invoked by name via getattr.
+    if fd.is_method and fd.name.startswith('visit_'):
+        return True
+    # do_GET / do_POST style HTTP request handlers.
+    if fd.is_method and fd.name.startswith('do_') and fd.name[3:].isupper():
+        return True
+    # setUp/tearDown — unittest lifecycle.
+    if fd.is_method and fd.name in ('setUp', 'tearDown', 'setUpClass',
+                                      'tearDownClass', 'setUpModule',
+                                      'tearDownModule', 'asyncSetUp',
+                                      'asyncTearDown'):
+        return True
+    for d in fd.decorators:
+        if d in FRAMEWORK_DECORATORS:
+            return True
+        # Catch e.g. "my_bp.route", "app.before_request", "x.command".
+        tail = d.rsplit('.', 1)[-1]
+        if tail in FRAMEWORK_DECORATORS:
+            return True
+    return False
+
+
+def _is_deprecated(fd: FuncDef, file_docstrings: dict) -> bool:
+    if fd.docstring and DEPRECATION_HINTS.search(fd.docstring):
+        return True
+    mod_doc = file_docstrings.get(fd.file, '')
+    if mod_doc and DEPRECATION_HINTS.search(mod_doc):
+        return True
+    return False
+
+
+def _module_docstrings(py_files):
+    out = {}
+    for path in py_files:
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                src = f.read()
+            tree = ast.parse(src)
+            out[os.path.relpath(path, PROJECT_ROOT)] = ast.get_docstring(tree) or ''
+        except Exception:
+            out[os.path.relpath(path, PROJECT_ROOT)] = ''
+    return out
+
+
+def classify(defs_by_name, refs, file_docstrings, include_private=False):
+    """Return a list of Report rows for every def with no external caller."""
+    reports = []
+    for name, fds in defs_by_name.items():
+        for fd in fds:
+            if not include_private and fd.is_private:
+                # Private helpers are noisy — skip unless asked.
+                continue
+            if _is_framework_called(fd):
+                continue
+
+            # Subtract the def site itself from references.
+            occurrences = refs.get(name, [])
+            external = [
+                (f, ln) for (f, ln) in occurrences
+                if not (f == fd.file and ln == fd.lineno)
+            ]
+            # Heuristic: also drop occurrences ON the def line of any
+            # overload (same name elsewhere) — they are def lines too.
+            def_lines = {(d.file, d.lineno) for d in fds}
+            external = [t for t in external if t not in def_lines]
+
+            if external:
+                continue  # someone references it
+
+            cls = 'deprecated' if _is_deprecated(fd, file_docstrings) else 'forgotten'
+            reason = 'docstring/module mentions deprecation' if cls == 'deprecated' \
+                else 'no callers found anywhere in tracked sources'
+            reports.append(Report(
+                name=name,
+                qualname=fd.qualname,
+                file=fd.file,
+                lineno=fd.lineno,
+                classification=cls,
+                reason=reason,
+            ))
+    return reports
+
+
+# ── 4. CLI ─────────────────────────────────────────────────────────────
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                  formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument('--root', action='append', default=None,
+                    help='Code root to scan (default: lib routes scripts tools). '
+                         'Repeatable.')
+    ap.add_argument('--include-private',
+                    action='store_true',
+                    help='Also report _private helpers (default: skipped).')
+    ap.add_argument('--json', metavar='PATH',
+                    help='Write the full report as JSON to PATH.')
+    ap.add_argument('--max-per-file', type=int, default=0,
+                    help='Cap reports per source file in the text output '
+                         '(0 = no cap).')
+    args = ap.parse_args()
+
+    code_roots = args.root if args.root else DEFAULT_CODE_ROOTS
+    py_files = list(_walk_python_files(code_roots, DEFAULT_TOP_LEVEL_FILES))
+    print(f'Scanning {len(py_files)} Python files for definitions…')
+
+    defs_by_name = collect_definitions(py_files)
+    n_defs = sum(len(v) for v in defs_by_name.values())
+    print(f'Collected {n_defs} function definitions ({len(defs_by_name)} unique names).')
+
+    ref_files = list(_walk_reference_files(REFERENCE_ROOTS, REFERENCE_FILES))
+    print(f'Indexing references across {len(ref_files)} text files…')
+    refs = build_reference_index(ref_files, defs_by_name.keys())
+
+    file_docstrings = _module_docstrings(py_files)
+    reports = classify(defs_by_name, refs, file_docstrings,
+                        include_private=args.include_private)
+
+    deprecated = [r for r in reports if r.classification == 'deprecated']
+    forgotten = [r for r in reports if r.classification == 'forgotten']
+
+    print()
+    print('=' * 72)
+    print(f' Summary: {len(reports)} unreferenced functions found')
+    print(f'   {len(deprecated):4d} marked deprecated/legacy → safe to consider removing')
+    print(f'   {len(forgotten):4d} no caller AND no deprecation hint → '
+          f'check if integration was forgotten')
+    print('=' * 72)
+
+    def _print_group(title, rows):
+        print(f'\n## {title} ({len(rows)})\n')
+        per_file = defaultdict(list)
+        for r in rows:
+            per_file[r.file].append(r)
+        for f in sorted(per_file):
+            items = sorted(per_file[f], key=lambda r: r.lineno)
+            if args.max_per_file > 0:
+                items = items[:args.max_per_file]
+            print(f'  {f}')
+            for r in items:
+                print(f'    L{r.lineno:>5}  {r.qualname}')
+
+    _print_group('Likely deprecated / removable', deprecated)
+    _print_group('No caller found — possibly forgotten integration', forgotten)
+
+    if args.json:
+        out = {
+            'summary': {
+                'total': len(reports),
+                'deprecated': len(deprecated),
+                'forgotten': len(forgotten),
+                'roots': code_roots,
+                'include_private': args.include_private,
+            },
+            'reports': [asdict(r) for r in reports],
+        }
+        with open(args.json, 'w', encoding='utf-8') as f:
+            json.dump(out, f, ensure_ascii=False, indent=2)
+        print(f'\nFull report written to {args.json}')
+
+
+if __name__ == '__main__':
+    main()

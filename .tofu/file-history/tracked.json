@@ -1,0 +1,4559 @@
+{
+  "debug/swebench_abtest_minimal_edit_prompt.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1778304386.0,
+    "size": 16725,
+    "first_seen": 1778304386.0800853
+  },
+  "lib/feishu/_state.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1778304386.0,
+    "size": 2508,
+    "first_seen": 1778304386.1516848
+  },
+  "index.html": {
+    "latest_version": 99,
+    "deleted": false,
+    "mtime": 1780282678.0,
+    "size": 175839,
+    "first_seen": 1778304386.2150645,
+    "last_writer_task_id": ""
+  },
+  "export.py": {
+    "latest_version": 18,
+    "deleted": false,
+    "mtime": 1779412772.0,
+    "size": 107027,
+    "first_seen": 1778304386.2771254,
+    "last_writer_task_id": ""
+  },
+  "routes/translate.py": {
+    "latest_version": 59,
+    "deleted": false,
+    "mtime": 1780025867.0,
+    "size": 6033,
+    "first_seen": 1778304973.752869,
+    "last_writer_task_id": ""
+  },
+  "static/js/translation.js": {
+    "latest_version": 34,
+    "deleted": false,
+    "mtime": 1780015134.0,
+    "size": 31494,
+    "first_seen": 1778306017.6844943,
+    "last_writer_task_id": "7bd50f5b-ee2a-4799-b0bc-d633544471b1"
+  },
+  "static/js/ui.js": {
+    "latest_version": 236,
+    "deleted": true,
+    "mtime": 0,
+    "size": 0,
+    "first_seen": 1778306089.217679,
+    "last_writer_task_id": ""
+  },
+  "lib/database/_schema_pg.py": {
+    "latest_version": 21,
+    "deleted": false,
+    "mtime": 1779881025.0,
+    "size": 55292,
+    "first_seen": 1778306605.6694984,
+    "last_writer_task_id": "90707597-2e91-4e86-b06f-d2c87397e18b"
+  },
+  "lib/database/_schema_sqlite.py": {
+    "latest_version": 21,
+    "deleted": false,
+    "mtime": 1779881025.0,
+    "size": 50271,
+    "first_seen": 1778306605.758059,
+    "last_writer_task_id": "90707597-2e91-4e86-b06f-d2c87397e18b"
+  },
+  "lib/tasks_pkg/event_log.py": {
+    "latest_version": 15,
+    "deleted": false,
+    "mtime": 1780196676.0,
+    "size": 9826,
+    "first_seen": 1778306693.754538,
+    "last_writer_task_id": "d2b4628d-86b6-4084-98da-108d0989b4ba"
+  },
+  "lib/database/_sql_translate.py": {
+    "latest_version": 9,
+    "deleted": false,
+    "mtime": 1779452983.0,
+    "size": 8843,
+    "first_seen": 1778306727.5110097,
+    "last_writer_task_id": ""
+  },
+  "lib/tasks_pkg/manager.py": {
+    "latest_version": 55,
+    "deleted": false,
+    "mtime": 1780196414.0,
+    "size": 83439,
+    "first_seen": 1778306747.0179868,
+    "last_writer_task_id": "d2b4628d-86b6-4084-98da-108d0989b4ba"
+  },
+  "routes/chat.py": {
+    "latest_version": 83,
+    "deleted": false,
+    "mtime": 1780285881.0,
+    "size": 108464,
+    "first_seen": 1778306870.2278194,
+    "last_writer_task_id": ""
+  },
+  "lib/database/_core.py": {
+    "latest_version": 26,
+    "deleted": false,
+    "mtime": 1780280846.0,
+    "size": 65374,
+    "first_seen": 1778306922.6553438,
+    "last_writer_task_id": ""
+  },
+  "routes/conversations.py": {
+    "latest_version": 23,
+    "deleted": false,
+    "mtime": 1780241610.0,
+    "size": 45282,
+    "first_seen": 1778306995.843558,
+    "last_writer_task_id": ""
+  },
+  "lib/database/_bootstrap.py": {
+    "latest_version": 29,
+    "deleted": false,
+    "mtime": 1780280886.0,
+    "size": 68901,
+    "first_seen": 1778307065.7088554,
+    "last_writer_task_id": ""
+  },
+  "routes/browser.py": {
+    "latest_version": 10,
+    "deleted": false,
+    "mtime": 1780281099.0,
+    "size": 7045,
+    "first_seen": 1778307359.5857046,
+    "last_writer_task_id": ""
+  },
+  "routes/desktop.py": {
+    "latest_version": 12,
+    "deleted": false,
+    "mtime": 1780281098.0,
+    "size": 11056,
+    "first_seen": 1778307359.740527,
+    "last_writer_task_id": ""
+  },
+  "lib/translate_cache.py": {
+    "latest_version": 6,
+    "deleted": false,
+    "mtime": 1780281097.0,
+    "size": 6123,
+    "first_seen": 1778307359.889298,
+    "last_writer_task_id": ""
+  },
+  "lib/llm_client.py": {
+    "latest_version": 16,
+    "deleted": true,
+    "mtime": 0,
+    "size": 0,
+    "first_seen": 1778307375.4383457,
+    "last_writer_task_id": ""
+  },
+  "server.py": {
+    "latest_version": 72,
+    "deleted": false,
+    "mtime": 1780281099.0,
+    "size": 50187,
+    "first_seen": 1778307403.842251,
+    "last_writer_task_id": ""
+  },
+  "bootstrap.py": {
+    "latest_version": 17,
+    "deleted": false,
+    "mtime": 1780281829.0,
+    "size": 90924,
+    "first_seen": 1778307464.3732784,
+    "last_writer_task_id": ""
+  },
+  "lib/__init__.py": {
+    "latest_version": 7,
+    "deleted": false,
+    "mtime": 1780281649.0,
+    "size": 15625,
+    "first_seen": 1778307482.098125,
+    "last_writer_task_id": ""
+  },
+  "routes/daily_report.py": {
+    "latest_version": 7,
+    "deleted": true,
+    "mtime": 0,
+    "size": 0,
+    "first_seen": 1778307497.8527043,
+    "last_writer_task_id": ""
+  },
+  "docs/ARCHITECTURE.md": {
+    "latest_version": 21,
+    "deleted": false,
+    "mtime": 1780288393.0,
+    "size": 23520,
+    "first_seen": 1778307538.9225886,
+    "last_writer_task_id": ""
+  },
+  "lib/desktop_agent.py": {
+    "latest_version": 11,
+    "deleted": false,
+    "mtime": 1780281100.0,
+    "size": 24248,
+    "first_seen": 1778307543.4704108,
+    "last_writer_task_id": ""
+  },
+  "lib/code_server_excludes.py": {
+    "latest_version": 5,
+    "deleted": false,
+    "mtime": 1779452796.0,
+    "size": 17277,
+    "first_seen": 1778307553.4802854,
+    "last_writer_task_id": ""
+  },
+  "debug/triage_errors.py": {
+    "latest_version": 4,
+    "deleted": false,
+    "mtime": 1778307584.0,
+    "size": 9069,
+    "first_seen": 1778307584.5588062
+  },
+  "scripts/pg_ctl.sh": {
+    "latest_version": 7,
+    "deleted": false,
+    "mtime": 1780280847.0,
+    "size": 1997,
+    "first_seen": 1778307594.5596688,
+    "last_writer_task_id": ""
+  },
+  "debug/test_event_log_and_msgid.py": {
+    "latest_version": 9,
+    "deleted": false,
+    "mtime": 1779796131.0,
+    "size": 8766,
+    "first_seen": 1778307653.8553774,
+    "last_writer_task_id": "1d5012ef-6890-4deb-ae97-a05ab9360477"
+  },
+  "docker-compose.yml": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1778307724.0,
+    "size": 2288,
+    "first_seen": 1778307724.4734275
+  },
+  "install.sh": {
+    "latest_version": 30,
+    "deleted": false,
+    "mtime": 1780280378.0,
+    "size": 71292,
+    "first_seen": 1778307745.4256158,
+    "last_writer_task_id": "c2c9af6a-1a9d-4aa2-a02b-cb8b625272ff"
+  },
+  "healthcheck.py": {
+    "latest_version": 4,
+    "deleted": false,
+    "mtime": 1779411681.0,
+    "size": 17897,
+    "first_seen": 1778307778.6313934
+  },
+  "static/js/core.js": {
+    "latest_version": 78,
+    "deleted": false,
+    "mtime": 1780282678.0,
+    "size": 8806,
+    "first_seen": 1778307846.8543591,
+    "last_writer_task_id": ""
+  },
+  "static/js/upload.js": {
+    "latest_version": 10,
+    "deleted": false,
+    "mtime": 1779943278.0,
+    "size": 33144,
+    "first_seen": 1778307979.0711858,
+    "last_writer_task_id": ""
+  },
+  "static/js/settings.js": {
+    "latest_version": 97,
+    "deleted": false,
+    "mtime": 1779951981.0,
+    "size": 1551,
+    "first_seen": 1778308019.328267,
+    "last_writer_task_id": ""
+  },
+  "static/js/export-images.js": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1778308053.0,
+    "size": 20818,
+    "first_seen": 1778308053.6086
+  },
+  "static/js/idb-cache.js": {
+    "latest_version": 11,
+    "deleted": false,
+    "mtime": 1780281828.0,
+    "size": 26096,
+    "first_seen": 1778308110.045853,
+    "last_writer_task_id": ""
+  },
+  "browser_extension/background.js": {
+    "latest_version": 9,
+    "deleted": false,
+    "mtime": 1779252409.0,
+    "size": 64239,
+    "first_seen": 1778308172.676574,
+    "last_writer_task_id": ""
+  },
+  "browser_extension/manifest.json": {
+    "latest_version": 3,
+    "deleted": false,
+    "mtime": 1778308172.0,
+    "size": 894,
+    "first_seen": 1778308172.8706367
+  },
+  "browser_extension/popup.js": {
+    "latest_version": 5,
+    "deleted": false,
+    "mtime": 1779252435.0,
+    "size": 3128,
+    "first_seen": 1778308173.0056953,
+    "last_writer_task_id": ""
+  },
+  "browser_extension/popup.html": {
+    "latest_version": 4,
+    "deleted": false,
+    "mtime": 1779252416.0,
+    "size": 3082,
+    "first_seen": 1778308173.0689712,
+    "last_writer_task_id": ""
+  },
+  "CLAUDE.md": {
+    "latest_version": 48,
+    "deleted": false,
+    "mtime": 1780024189.0,
+    "size": 69176,
+    "first_seen": 1778308405.8918307,
+    "last_writer_task_id": ""
+  },
+  "README.md": {
+    "latest_version": 19,
+    "deleted": false,
+    "mtime": 1780280301.0,
+    "size": 34479,
+    "first_seen": 1778308674.8177207,
+    "last_writer_task_id": ""
+  },
+  "README_CN.md": {
+    "latest_version": 20,
+    "deleted": false,
+    "mtime": 1780280301.0,
+    "size": 33375,
+    "first_seen": 1778308674.9646952,
+    "last_writer_task_id": ""
+  },
+  "CONTRIBUTING.md": {
+    "latest_version": 10,
+    "deleted": false,
+    "mtime": 1779412772.0,
+    "size": 44687,
+    "first_seen": 1778308716.5554411,
+    "last_writer_task_id": ""
+  },
+  "tests/conftest.py": {
+    "latest_version": 13,
+    "deleted": false,
+    "mtime": 1780027655.0,
+    "size": 6021,
+    "first_seen": 1778308758.0273929,
+    "last_writer_task_id": ""
+  },
+  "debug/test_chatinner_endpoints.py": {
+    "latest_version": 4,
+    "deleted": false,
+    "mtime": 1779796130.0,
+    "size": 8919,
+    "first_seen": 1778308846.78971,
+    "last_writer_task_id": "1d5012ef-6890-4deb-ae97-a05ab9360477"
+  },
+  "debug/test_daily_cost_cache.py": {
+    "latest_version": 5,
+    "deleted": false,
+    "mtime": 1780024911.0,
+    "size": 6089,
+    "first_seen": 1778308846.878397,
+    "last_writer_task_id": ""
+  },
+  "debug/test_db_concurrency.py": {
+    "latest_version": 3,
+    "deleted": false,
+    "mtime": 1778308847.0,
+    "size": 6715,
+    "first_seen": 1778308847.0219045
+  },
+  "debug/test_optimizer.py": {
+    "latest_version": 3,
+    "deleted": false,
+    "mtime": 1778308847.0,
+    "size": 8046,
+    "first_seen": 1778308847.687656
+  },
+  "debug/test_endpoint_replan_loop.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1778308848.0,
+    "size": 11444,
+    "first_seen": 1778308848.1575775
+  },
+  "debug/test_endpoint_verdict.py": {
+    "latest_version": 7,
+    "deleted": false,
+    "mtime": 1778308913.0,
+    "size": 5980,
+    "first_seen": 1778308848.3800774
+  },
+  "debug/test_file_history.py": {
+    "latest_version": 5,
+    "deleted": false,
+    "mtime": 1778308881.0,
+    "size": 13330,
+    "first_seen": 1778308848.7633283
+  },
+  "tests/test_endpoint_messages.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1778308941.0,
+    "size": 56495,
+    "first_seen": 1778308941.7854645
+  },
+  "lib/log.py": {
+    "latest_version": 4,
+    "deleted": false,
+    "mtime": 1779382274.0,
+    "size": 15988,
+    "first_seen": 1778309096.2548738,
+    "last_writer_task_id": ""
+  },
+  "debug/bench_grep_vs_rg.py": {
+    "latest_version": 3,
+    "deleted": false,
+    "mtime": 1780281829.0,
+    "size": 10137,
+    "first_seen": 1778309119.501784,
+    "last_writer_task_id": ""
+  },
+  "debug/benchmark_tofu_vs_cc.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1778309129.0,
+    "size": 64216,
+    "first_seen": 1778309129.4773161
+  },
+  "tests/run_all.py": {
+    "latest_version": 4,
+    "deleted": false,
+    "mtime": 1778309151.0,
+    "size": 4425,
+    "first_seen": 1778309137.8721073
+  },
+  "tests/test_visual_e2e.py": {
+    "latest_version": 3,
+    "deleted": false,
+    "mtime": 1778309151.0,
+    "size": 28458,
+    "first_seen": 1778309151.155986
+  },
+  "lib/file_history/api.py": {
+    "latest_version": 9,
+    "deleted": false,
+    "mtime": 1780281646.0,
+    "size": 26132,
+    "first_seen": 1778309214.9348812,
+    "last_writer_task_id": ""
+  },
+  "lib/file_history/__init__.py": {
+    "latest_version": 3,
+    "deleted": false,
+    "mtime": 1780281101.0,
+    "size": 3023,
+    "first_seen": 1778309215.0237877,
+    "last_writer_task_id": ""
+  },
+  "lib/project_mod/modifications.py": {
+    "latest_version": 5,
+    "deleted": false,
+    "mtime": 1779835254.0,
+    "size": 25956,
+    "first_seen": 1778309215.1114616,
+    "last_writer_task_id": ""
+  },
+  "lib/env_compat.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1780280844.0,
+    "size": 935,
+    "first_seen": 1778309644.1577387,
+    "last_writer_task_id": ""
+  },
+  "routes/trading_decision.py": {
+    "latest_version": 6,
+    "deleted": false,
+    "mtime": 1780028949.0,
+    "size": 15859,
+    "first_seen": 1778309651.1854224,
+    "last_writer_task_id": ""
+  },
+  "lib/memory/injection.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1778309674.0,
+    "size": 5202,
+    "first_seen": 1778309674.8268807
+  },
+  "a.md": {
+    "latest_version": 2,
+    "deleted": true,
+    "mtime": 0,
+    "size": 0,
+    "first_seen": 1778309690.6763465
+  },
+  "static/js/bundle-3ca882fe.js": {
+    "latest_version": 0,
+    "deleted": true,
+    "mtime": 0,
+    "size": 0,
+    "first_seen": 1778309785.5832655
+  },
+  "routes/__init__.py": {
+    "latest_version": 71,
+    "deleted": false,
+    "mtime": 1780046383.0,
+    "size": 4989,
+    "first_seen": 1778311028.8617363,
+    "last_writer_task_id": ""
+  },
+  "tests/test_cache_breakpoints.py": {
+    "latest_version": 5,
+    "deleted": false,
+    "mtime": 1779412797.0,
+    "size": 52379,
+    "first_seen": 1778311324.345475,
+    "last_writer_task_id": ""
+  },
+  "routes/chat_queue.py": {
+    "latest_version": 5,
+    "deleted": false,
+    "mtime": 1780028730.0,
+    "size": 2545,
+    "first_seen": 1778312477.6010795,
+    "last_writer_task_id": ""
+  },
+  "routes/chat_human_io.py": {
+    "latest_version": 4,
+    "deleted": false,
+    "mtime": 1780028730.0,
+    "size": 3817,
+    "first_seen": 1778312477.6621287,
+    "last_writer_task_id": ""
+  },
+  "routes/chat_tool_state.py": {
+    "latest_version": 5,
+    "deleted": false,
+    "mtime": 1780028730.0,
+    "size": 2569,
+    "first_seen": 1778312477.6852837,
+    "last_writer_task_id": ""
+  },
+  "lib/js_bundler.py": {
+    "latest_version": 32,
+    "deleted": false,
+    "mtime": 1780281650.0,
+    "size": 10084,
+    "first_seen": 1778316126.939213,
+    "last_writer_task_id": ""
+  },
+  "lib/llm_errors.py": {
+    "latest_version": 3,
+    "deleted": false,
+    "mtime": 1779382254.0,
+    "size": 16774,
+    "first_seen": 1778316311.8523765,
+    "last_writer_task_id": ""
+  },
+  "lib/llm_sanitize.py": {
+    "latest_version": 9,
+    "deleted": false,
+    "mtime": 1779421556.0,
+    "size": 19978,
+    "first_seen": 1778316311.900231,
+    "last_writer_task_id": ""
+  },
+  "routes/conversations_search.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1780026742.0,
+    "size": 4619,
+    "first_seen": 1778316311.9283502,
+    "last_writer_task_id": ""
+  },
+  "routes/conversations_compaction.py": {
+    "latest_version": 4,
+    "deleted": false,
+    "mtime": 1780026742.0,
+    "size": 6477,
+    "first_seen": 1778316311.948579,
+    "last_writer_task_id": ""
+  },
+  "routes/translate_mt_test.py": {
+    "latest_version": 4,
+    "deleted": true,
+    "mtime": 0,
+    "size": 0,
+    "first_seen": 1778316311.9945323,
+    "last_writer_task_id": ""
+  },
+  "static/js/bundle-e4ce3f37.js": {
+    "latest_version": 7,
+    "deleted": true,
+    "mtime": 0,
+    "size": 0,
+    "first_seen": 1778316312.1004999
+  },
+  "CHANGELOG.md": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1778320094.0,
+    "size": 5003,
+    "first_seen": 1778320094.6788776
+  },
+  "VERSION": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1778324097.0,
+    "size": 7,
+    "first_seen": 1778324097.759763
+  },
+  "lib/fs_keepalive.py": {
+    "latest_version": 3,
+    "deleted": false,
+    "mtime": 1779835254.0,
+    "size": 9716,
+    "first_seen": 1778324665.180144,
+    "last_writer_task_id": ""
+  },
+  "lib/llm_dispatch/dispatcher.py": {
+    "latest_version": 16,
+    "deleted": false,
+    "mtime": 1780195114.0,
+    "size": 40257,
+    "first_seen": 1778324665.266578,
+    "last_writer_task_id": "5b881874-7a06-4538-96ea-ed77bdb89c8c"
+  },
+  "debug/bench_thinking_throughput.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1778324696.0,
+    "size": 21828,
+    "first_seen": 1778324696.951356
+  },
+  "debug/test_token_counter.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1778324697.0,
+    "size": 7697,
+    "first_seen": 1778324697.0490735
+  },
+  "debug/probe_image_tokens.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1778324697.0,
+    "size": 7177,
+    "first_seen": 1778324697.1448653
+  },
+  "debug/probe_nonclaude_cache.py": {
+    "latest_version": 5,
+    "deleted": false,
+    "mtime": 1779412882.0,
+    "size": 17660,
+    "first_seen": 1778324697.2381434,
+    "last_writer_task_id": ""
+  },
+  "debug/test_paired_compact_live.py": {
+    "latest_version": 3,
+    "deleted": false,
+    "mtime": 1779382195.0,
+    "size": 23406,
+    "first_seen": 1778324697.341344,
+    "last_writer_task_id": ""
+  },
+  "lib/optimizer/actions/__init__.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1778324752.0,
+    "size": 2777,
+    "first_seen": 1778324752.7722404
+  },
+  "lib/mcp/client.py": {
+    "latest_version": 18,
+    "deleted": false,
+    "mtime": 1780024531.0,
+    "size": 42260,
+    "first_seen": 1778393997.6301026,
+    "last_writer_task_id": ""
+  },
+  "routes/mcp.py": {
+    "latest_version": 6,
+    "deleted": true,
+    "mtime": 0,
+    "size": 0,
+    "first_seen": 1778394074.1157835,
+    "last_writer_task_id": ""
+  },
+  "data/config/mcp_servers.json": {
+    "latest_version": 13,
+    "deleted": false,
+    "mtime": 1779847478.0,
+    "size": 2304,
+    "first_seen": 1778396880.9759877,
+    "last_writer_task_id": "c5b083b1-51ca-4d4c-95ad-894bf06a447f"
+  },
+  "lib/mcp/types.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1778397177.0,
+    "size": 2923,
+    "first_seen": 1778397177.1908257
+  },
+  "docs/INSTALL.md": {
+    "latest_version": 6,
+    "deleted": false,
+    "mtime": 1780280315.0,
+    "size": 4350,
+    "first_seen": 1778426917.7945013,
+    "last_writer_task_id": "c2c9af6a-1a9d-4aa2-a02b-cb8b625272ff"
+  },
+  "lib/tasks_pkg/orchestrator.py": {
+    "latest_version": 69,
+    "deleted": false,
+    "mtime": 1780287511.0,
+    "size": 94634,
+    "first_seen": 1778427940.6239343,
+    "last_writer_task_id": ""
+  },
+  "lib/tasks_pkg/system_context.py": {
+    "latest_version": 13,
+    "deleted": false,
+    "mtime": 1780281647.0,
+    "size": 26215,
+    "first_seen": 1778428006.8852358,
+    "last_writer_task_id": ""
+  },
+  "lib/memory/prefetch.py": {
+    "latest_version": 12,
+    "deleted": false,
+    "mtime": 1779835254.0,
+    "size": 33575,
+    "first_seen": 1778428087.9164436,
+    "last_writer_task_id": ""
+  },
+  "tests/test_cc_alignment.py": {
+    "latest_version": 13,
+    "deleted": false,
+    "mtime": 1779382193.0,
+    "size": 23777,
+    "first_seen": 1778428278.0225894,
+    "last_writer_task_id": ""
+  },
+  "lib/project_mod/read_tools.py": {
+    "latest_version": 6,
+    "deleted": false,
+    "mtime": 1779835254.0,
+    "size": 46254,
+    "first_seen": 1778429000.730828,
+    "last_writer_task_id": ""
+  },
+  "static/js/i18n.js": {
+    "latest_version": 29,
+    "deleted": false,
+    "mtime": 1780217966.0,
+    "size": 90778,
+    "first_seen": 1778432079.7246501,
+    "last_writer_task_id": "ce217973-6aae-44c6-bc58-cdba7a0cbcd2"
+  },
+  "static/styles.css": {
+    "latest_version": 180,
+    "deleted": false,
+    "mtime": 1780283016.0,
+    "size": 647181,
+    "first_seen": 1778432095.3395398,
+    "last_writer_task_id": ""
+  },
+  "gitignore": {
+    "latest_version": 6,
+    "deleted": true,
+    "mtime": 0,
+    "size": 0,
+    "first_seen": 1778432129.2963245,
+    "last_writer_task_id": ""
+  },
+  "lib/tasks_pkg/streaming_tool_executor.py": {
+    "latest_version": 10,
+    "deleted": false,
+    "mtime": 1779835255.0,
+    "size": 31596,
+    "first_seen": 1778432254.970965,
+    "last_writer_task_id": ""
+  },
+  "lib/tasks_pkg/executor_image.py": {
+    "latest_version": 8,
+    "deleted": false,
+    "mtime": 1780282049.0,
+    "size": 31799,
+    "first_seen": 1778432328.4837725,
+    "last_writer_task_id": ""
+  },
+  "chatui:static/posters/neu_lawn_music_festival.png": {
+    "latest_version": 0,
+    "deleted": true,
+    "mtime": 0,
+    "size": 0,
+    "first_seen": 1778432610.2645822
+  },
+  "chatui:static/posters/neu_lawn_music_festival_blank.png": {
+    "latest_version": 0,
+    "deleted": true,
+    "mtime": 0,
+    "size": 0,
+    "first_seen": 1778432610.271081
+  },
+  "chatui:static/posters/neu_lawn_music_festival_v2.png": {
+    "latest_version": 0,
+    "deleted": true,
+    "mtime": 0,
+    "size": 0,
+    "first_seen": 1778432610.277655
+  },
+  "static/posters/neu_lawn_music_festival.png": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1777964483.0,
+    "size": 2231246,
+    "first_seen": 1778432610.4790466
+  },
+  "static/posters/neu_lawn_music_festival_blank.png": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1777964540.0,
+    "size": 1863155,
+    "first_seen": 1778432610.6144536
+  },
+  "static/posters/neu_lawn_music_festival_v2.png": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1777964512.0,
+    "size": 1844719,
+    "first_seen": 1778432610.7775183
+  },
+  "lib/tasks_pkg/tool_display.py": {
+    "latest_version": 23,
+    "deleted": false,
+    "mtime": 1779899165.0,
+    "size": 34585,
+    "first_seen": 1778433661.9457188,
+    "last_writer_task_id": ""
+  },
+  "lib/tasks_pkg/tool_dispatch.py": {
+    "latest_version": 30,
+    "deleted": false,
+    "mtime": 1780286214.0,
+    "size": 67866,
+    "first_seen": 1778433744.7882771,
+    "last_writer_task_id": ""
+  },
+  "data/config/server_config.json": {
+    "latest_version": 39,
+    "deleted": false,
+    "mtime": 1780283789.0,
+    "size": 11426,
+    "first_seen": 1778466215.7729876,
+    "last_writer_task_id": ""
+  },
+  "lib/tools/project.py": {
+    "latest_version": 36,
+    "deleted": false,
+    "mtime": 1779419669.0,
+    "size": 29714,
+    "first_seen": 1778467070.8331127,
+    "last_writer_task_id": ""
+  },
+  "lib/project_mod/tools.py": {
+    "latest_version": 38,
+    "deleted": false,
+    "mtime": 1780282048.0,
+    "size": 108319,
+    "first_seen": 1778469160.6653407,
+    "last_writer_task_id": ""
+  },
+  "lib/tools/image_gen.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1778473142.0,
+    "size": 5380,
+    "first_seen": 1778473142.4755118
+  },
+  "lib/tools/code_exec.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1778473161.0,
+    "size": 1127,
+    "first_seen": 1778473161.6245077
+  },
+  "lib/tools/human_guidance.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1778473218.0,
+    "size": 3529,
+    "first_seen": 1778473218.4673223
+  },
+  "lib/tools/emit.py": {
+    "latest_version": 2,
+    "deleted": true,
+    "mtime": 0,
+    "size": 0,
+    "first_seen": 1778473383.9495184
+  },
+  "lib/tools/__init__.py": {
+    "latest_version": 8,
+    "deleted": false,
+    "mtime": 1780286748.0,
+    "size": 1941,
+    "first_seen": 1778473402.4884267,
+    "last_writer_task_id": ""
+  },
+  "lib/tasks_pkg/model_config.py": {
+    "latest_version": 14,
+    "deleted": false,
+    "mtime": 1780286183.0,
+    "size": 10300,
+    "first_seen": 1778473412.4733763,
+    "last_writer_task_id": ""
+  },
+  "lib/tasks_pkg/handlers/misc.py": {
+    "latest_version": 7,
+    "deleted": false,
+    "mtime": 1779898350.0,
+    "size": 12337,
+    "first_seen": 1778473432.3324177,
+    "last_writer_task_id": ""
+  },
+  "lib/tools/deferral.py": {
+    "latest_version": 4,
+    "deleted": true,
+    "mtime": 0,
+    "size": 0,
+    "first_seen": 1778473458.232721,
+    "last_writer_task_id": "9853b02b-20c8-4eef-897f-68741c9fd958"
+  },
+  "static/js/branch.js": {
+    "latest_version": 27,
+    "deleted": false,
+    "mtime": 1779943354.0,
+    "size": 56219,
+    "first_seen": 1778473576.0760164,
+    "last_writer_task_id": ""
+  },
+  "static/js/main.js": {
+    "latest_version": 95,
+    "deleted": false,
+    "mtime": 1779951360.0,
+    "size": 44026,
+    "first_seen": 1778473576.1784496,
+    "last_writer_task_id": ""
+  },
+  "lib/scheduler/timer.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1778473663.0,
+    "size": 32179,
+    "first_seen": 1778473663.6161237
+  },
+  "docs/architecture_harness.html": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1778473723.0,
+    "size": 16105,
+    "first_seen": 1778473723.318993
+  },
+  "docs/agentic-development-experience.md": {
+    "latest_version": 4,
+    "deleted": false,
+    "mtime": 1778473740.0,
+    "size": 40417,
+    "first_seen": 1778473740.2950287
+  },
+  "static/js/context-bar.js": {
+    "latest_version": 67,
+    "deleted": false,
+    "mtime": 1778561306.0,
+    "size": 25208,
+    "first_seen": 1778474623.2227983
+  },
+  "chatui/skills/tofu-context-health-bar.md": {
+    "latest_version": 2,
+    "deleted": true,
+    "mtime": 0,
+    "size": 0,
+    "first_seen": 1778475292.9787862
+  },
+  "static/js/optimizer.js": {
+    "latest_version": 9,
+    "deleted": false,
+    "mtime": 1779942811.0,
+    "size": 13278,
+    "first_seen": 1778475424.9899683,
+    "last_writer_task_id": ""
+  },
+  "static/js/compaction-viewer.js": {
+    "latest_version": 4,
+    "deleted": false,
+    "mtime": 1779942719.0,
+    "size": 25528,
+    "first_seen": 1778479916.019906,
+    "last_writer_task_id": ""
+  },
+  "lib/tasks_pkg/llm_fallback.py": {
+    "latest_version": 25,
+    "deleted": false,
+    "mtime": 1779414571.0,
+    "size": 27167,
+    "first_seen": 1778481748.465821,
+    "last_writer_task_id": ""
+  },
+  "lib/tasks_pkg/compaction.py": {
+    "latest_version": 24,
+    "deleted": true,
+    "mtime": 0,
+    "size": 0,
+    "first_seen": 1778486298.5944061,
+    "last_writer_task_id": ""
+  },
+  "routes/config.py": {
+    "latest_version": 13,
+    "deleted": false,
+    "mtime": 1780195121.0,
+    "size": 46808,
+    "first_seen": 1778552428.8617163,
+    "last_writer_task_id": "5b881874-7a06-4538-96ea-ed77bdb89c8c"
+  },
+  "lib/context_limits.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1778552344.0,
+    "size": 11725,
+    "first_seen": 1778552588.6976333
+  },
+  "routes/common.py": {
+    "latest_version": 26,
+    "deleted": false,
+    "mtime": 1780028015.0,
+    "size": 35978,
+    "first_seen": 1778553400.5328994,
+    "last_writer_task_id": ""
+  },
+  "lib/css_bundler.py": {
+    "latest_version": 4,
+    "deleted": false,
+    "mtime": 1778553538.0,
+    "size": 3416,
+    "first_seen": 1778553514.3878036
+  },
+  "lib/fetch/playwright_pool.py": {
+    "latest_version": 14,
+    "deleted": false,
+    "mtime": 1778689780.0,
+    "size": 19051,
+    "first_seen": 1778556669.943249,
+    "last_writer_task_id": ""
+  },
+  "tests/test_tool_input_repair.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1778563860.0,
+    "size": 4670,
+    "first_seen": 1778563860.7050269
+  },
+  "lib/tool_input_repair.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1779835255.0,
+    "size": 11487,
+    "first_seen": 1778563915.763118,
+    "last_writer_task_id": ""
+  },
+  "chatui/skills/soyoung-clinic-tools/SKILL.md": {
+    "latest_version": 0,
+    "deleted": true,
+    "mtime": 0,
+    "size": 0,
+    "first_seen": 1778565990.8051724
+  },
+  "chatui/skills/soyoung-clinic-tools/references/api-spec.md": {
+    "latest_version": 0,
+    "deleted": true,
+    "mtime": 0,
+    "size": 0,
+    "first_seen": 1778565990.8127258
+  },
+  "chatui/skills/soyoung-clinic-tools/references/store-directory.md": {
+    "latest_version": 0,
+    "deleted": true,
+    "mtime": 0,
+    "size": 0,
+    "first_seen": 1778565990.8200986
+  },
+  "chatui/skills/soyoung-clinic-tools/references/keywords.md": {
+    "latest_version": 0,
+    "deleted": true,
+    "mtime": 0,
+    "size": 0,
+    "first_seen": 1778565990.8273993
+  },
+  "lib/tasks_pkg/stream_handler.py": {
+    "latest_version": 28,
+    "deleted": false,
+    "mtime": 1779414591.0,
+    "size": 26095,
+    "first_seen": 1778566675.8631277,
+    "last_writer_task_id": ""
+  },
+  "tests/test_zero_byte_round0_retry.py": {
+    "latest_version": 6,
+    "deleted": false,
+    "mtime": 1779415287.0,
+    "size": 6589,
+    "first_seen": 1778566747.7409446,
+    "last_writer_task_id": ""
+  },
+  "tests/test_zero_byte_backoff.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1778570302.0,
+    "size": 7333,
+    "first_seen": 1778570372.828161
+  },
+  "debug/test_l1_compact_cache_tradeoff.py": {
+    "latest_version": 5,
+    "deleted": false,
+    "mtime": 1778571098.0,
+    "size": 17039,
+    "first_seen": 1778570995.8831577
+  },
+  "debug/test_l1_prefix_skip_vs_aggressive.py": {
+    "latest_version": 5,
+    "deleted": false,
+    "mtime": 1778580297.0,
+    "size": 18672,
+    "first_seen": 1778580274.5828545
+  },
+  "debug/test_l1_skip_vs_aggressive_v2.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1778583494.0,
+    "size": 17031,
+    "first_seen": 1778584035.1484604
+  },
+  "tests/__init__.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1778584554.0,
+    "size": 0,
+    "first_seen": 1778584554.7828414
+  },
+  "lib/llm_dispatch/discovery.py": {
+    "latest_version": 23,
+    "deleted": false,
+    "mtime": 1780020792.0,
+    "size": 35628,
+    "first_seen": 1778645281.3010194,
+    "last_writer_task_id": ""
+  },
+  "lib/llm_dispatch/health_local.py": {
+    "latest_version": 9,
+    "deleted": false,
+    "mtime": 1780195140.0,
+    "size": 13750,
+    "first_seen": 1778645412.8143852,
+    "last_writer_task_id": "5b881874-7a06-4538-96ea-ed77bdb89c8c"
+  },
+  "chatui/file-history/tracked.json": {
+    "latest_version": 2,
+    "deleted": true,
+    "mtime": 0,
+    "size": 0,
+    "first_seen": 1778645427.7581642
+  },
+  "chatui/file-history/backups/bd/bdeffa1346f7c3bae2ec8b4f14aa1ef0133eb9ac1269fe723c2d7c20a97bd41e@v1": {
+    "latest_version": 0,
+    "deleted": true,
+    "mtime": 0,
+    "size": 0,
+    "first_seen": 1778645491.4421933
+  },
+  "swebench_rerun_workdir/eval/django__django-10097__tofu-minimax/django/views/generic/base.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1777906384.0,
+    "size": 7402,
+    "first_seen": 1778645491.5006177
+  },
+  "static/provider_templates/local.json": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1778645253.0,
+    "size": 382,
+    "first_seen": 1778645740.255689
+  },
+  "lib/proxy.py": {
+    "latest_version": 5,
+    "deleted": false,
+    "mtime": 1779549240.0,
+    "size": 11646,
+    "first_seen": 1778646197.6568847,
+    "last_writer_task_id": ""
+  },
+  "lib/file_history/store.py": {
+    "latest_version": 7,
+    "deleted": false,
+    "mtime": 1780281828.0,
+    "size": 20182,
+    "first_seen": 1778647757.4121208,
+    "last_writer_task_id": ""
+  },
+  "debug/test_concurrent_fh_attribution.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1778647889.0,
+    "size": 6795,
+    "first_seen": 1778647939.5942302
+  },
+  "lib/llm_dispatch/slot.py": {
+    "latest_version": 12,
+    "deleted": false,
+    "mtime": 1780287161.0,
+    "size": 17986,
+    "first_seen": 1778652602.159118,
+    "last_writer_task_id": ""
+  },
+  "lib/llm_dispatch/api.py": {
+    "latest_version": 53,
+    "deleted": false,
+    "mtime": 1780287139.0,
+    "size": 63076,
+    "first_seen": 1778652674.7632315,
+    "last_writer_task_id": ""
+  },
+  "chatui/skills/settings-local-endpoint-rows.md": {
+    "latest_version": 2,
+    "deleted": true,
+    "mtime": 0,
+    "size": 0,
+    "first_seen": 1778653301.4401321,
+    "last_writer_task_id": "a3f979c4-8922-43e6-9cf0-df278cfbb13f"
+  },
+  "lib/tasks_pkg/attachments.py": {
+    "latest_version": 11,
+    "deleted": false,
+    "mtime": 1780282048.0,
+    "size": 8126,
+    "first_seen": 1778683769.2605317,
+    "last_writer_task_id": ""
+  },
+  "lib/artifacts/core.py": {
+    "latest_version": 9,
+    "deleted": false,
+    "mtime": 1779835253.0,
+    "size": 20768,
+    "first_seen": 1778686834.4407458,
+    "last_writer_task_id": ""
+  },
+  "lib/artifacts/__init__.py": {
+    "latest_version": 5,
+    "deleted": false,
+    "mtime": 1778689718.0,
+    "size": 2265,
+    "first_seen": 1778687016.1610527,
+    "last_writer_task_id": ""
+  },
+  "lib/artifacts/events.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1778686694.0,
+    "size": 3373,
+    "first_seen": 1778687016.2234545,
+    "last_writer_task_id": "4bb08432-bdf9-468b-bf54-5d2acf601b54"
+  },
+  "routes/artifacts.py": {
+    "latest_version": 25,
+    "deleted": false,
+    "mtime": 1780026248.0,
+    "size": 14982,
+    "first_seen": 1778687016.252441,
+    "last_writer_task_id": ""
+  },
+  "tests/test_artifacts_api.py": {
+    "latest_version": 5,
+    "deleted": false,
+    "mtime": 1778730052.0,
+    "size": 19781,
+    "first_seen": 1778687016.3104544,
+    "last_writer_task_id": "4423ae69-6e7b-4da4-9ce5-d5b1812a293f"
+  },
+  "lib/tasks_pkg/handlers/project.py": {
+    "latest_version": 14,
+    "deleted": false,
+    "mtime": 1779364346.0,
+    "size": 13950,
+    "first_seen": 1778687371.0681646,
+    "last_writer_task_id": ""
+  },
+  "static/js/artifacts.js": {
+    "latest_version": 36,
+    "deleted": false,
+    "mtime": 1780026609.0,
+    "size": 43785,
+    "first_seen": 1778687976.4565363,
+    "last_writer_task_id": ""
+  },
+  "tests/test_artifacts_producer_write_file.py": {
+    "latest_version": 7,
+    "deleted": false,
+    "mtime": 1778825650.0,
+    "size": 8617,
+    "first_seen": 1778687976.772594,
+    "last_writer_task_id": ""
+  },
+  "tests/test_artifacts_bundle_registration.py": {
+    "latest_version": 3,
+    "deleted": false,
+    "mtime": 1779958840.0,
+    "size": 2986,
+    "first_seen": 1778687976.7980368,
+    "last_writer_task_id": "ed241a9d-6b62-42d6-9b98-e50888b0f82b"
+  },
+  "tests/test_artifacts_scanner.py": {
+    "latest_version": 6,
+    "deleted": false,
+    "mtime": 1778731815.0,
+    "size": 12867,
+    "first_seen": 1778689001.8884456,
+    "last_writer_task_id": ""
+  },
+  "lib/tasks_pkg/autopilot.py": {
+    "latest_version": 43,
+    "deleted": false,
+    "mtime": 1779835254.0,
+    "size": 33394,
+    "first_seen": 1778689331.0785782,
+    "last_writer_task_id": ""
+  },
+  "lib/artifacts/scanner.py": {
+    "latest_version": 7,
+    "deleted": false,
+    "mtime": 1779835253.0,
+    "size": 14916,
+    "first_seen": 1778689353.0379543,
+    "last_writer_task_id": ""
+  },
+  "lib/artifacts/pdf_export.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1778689752.0,
+    "size": 7805,
+    "first_seen": 1778690565.481135,
+    "last_writer_task_id": "d4d2e3a2-0bad-41e2-a37a-e7000149fa83"
+  },
+  "tests/test_artifacts_versioning.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1778689942.0,
+    "size": 8677,
+    "first_seen": 1778690565.5284653,
+    "last_writer_task_id": "d4d2e3a2-0bad-41e2-a37a-e7000149fa83"
+  },
+  "tests/test_artifacts_pdf_export.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1778689996.0,
+    "size": 4284,
+    "first_seen": 1778690565.5547838,
+    "last_writer_task_id": "d4d2e3a2-0bad-41e2-a37a-e7000149fa83"
+  },
+  "tests/test_playwright_pool_dispatch.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1778690035.0,
+    "size": 1971,
+    "first_seen": 1778690565.5868893,
+    "last_writer_task_id": "d4d2e3a2-0bad-41e2-a37a-e7000149fa83"
+  },
+  "static/vendor/katex/tofu-auto-render.js": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1778729904.0,
+    "size": 5501,
+    "first_seen": 1778730349.6151092,
+    "last_writer_task_id": "4423ae69-6e7b-4da4-9ce5-d5b1812a293f"
+  },
+  "lib/tasks_pkg/handlers/search.py": {
+    "latest_version": 15,
+    "deleted": false,
+    "mtime": 1779430081.0,
+    "size": 19789,
+    "first_seen": 1778770543.4114182,
+    "last_writer_task_id": ""
+  },
+  "install.py": {
+    "latest_version": 5,
+    "deleted": true,
+    "mtime": 0,
+    "size": 0,
+    "first_seen": 1778772143.1710289,
+    "last_writer_task_id": "c2c9af6a-1a9d-4aa2-a02b-cb8b625272ff"
+  },
+  "static/js/image-gen.js": {
+    "latest_version": 16,
+    "deleted": false,
+    "mtime": 1780027795.0,
+    "size": 43990,
+    "first_seen": 1778819506.1663804,
+    "last_writer_task_id": ""
+  },
+  "static/js/conv_view.js": {
+    "latest_version": 3,
+    "deleted": false,
+    "mtime": 1780221470.0,
+    "size": 11219,
+    "first_seen": 1778819984.3658292,
+    "last_writer_task_id": "c9938f75-f41c-4660-9cf4-4e7cd66f063a"
+  },
+  "chatui/skills/artifacts-subsystem.md": {
+    "latest_version": 3,
+    "deleted": true,
+    "mtime": 0,
+    "size": 0,
+    "first_seen": 1778826433.3096352,
+    "last_writer_task_id": ""
+  },
+  "lib/tasks_pkg/endpoint_review.py": {
+    "latest_version": 7,
+    "deleted": false,
+    "mtime": 1780281098.0,
+    "size": 28646,
+    "first_seen": 1778841048.118636,
+    "last_writer_task_id": ""
+  },
+  "lib/tasks_pkg/endpoint.py": {
+    "latest_version": 20,
+    "deleted": false,
+    "mtime": 1780281647.0,
+    "size": 67726,
+    "first_seen": 1778841080.972928,
+    "last_writer_task_id": ""
+  },
+  "chatui/skills/continue-checkpoint-based-resumption.md": {
+    "latest_version": 2,
+    "deleted": true,
+    "mtime": 0,
+    "size": 0,
+    "first_seen": 1778933250.5187988,
+    "last_writer_task_id": ""
+  },
+  "tests/test_new_features.py": {
+    "latest_version": 5,
+    "deleted": false,
+    "mtime": 1779382193.0,
+    "size": 20611,
+    "first_seen": 1778984581.994395,
+    "last_writer_task_id": ""
+  },
+  "lib/tasks_pkg/conv_message_builder.py": {
+    "latest_version": 5,
+    "deleted": false,
+    "mtime": 1779835254.0,
+    "size": 27527,
+    "first_seen": 1778984626.9425585,
+    "last_writer_task_id": ""
+  },
+  "tests/test_refactored_utils.py": {
+    "latest_version": 7,
+    "deleted": false,
+    "mtime": 1779412797.0,
+    "size": 12544,
+    "first_seen": 1778984646.94555,
+    "last_writer_task_id": ""
+  },
+  "lib/tasks_pkg/message_builder.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1778984665.0,
+    "size": 13484,
+    "first_seen": 1778984665.341218,
+    "last_writer_task_id": ""
+  },
+  "lib/token_counter/api.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1778984679.0,
+    "size": 6256,
+    "first_seen": 1778984679.8390682,
+    "last_writer_task_id": "9853b02b-20c8-4eef-897f-68741c9fd958"
+  },
+  "docs/CLAUDE_CODE_ALIGNMENT.md": {
+    "latest_version": 5,
+    "deleted": false,
+    "mtime": 1778984699.0,
+    "size": 11373,
+    "first_seen": 1778984699.5031788,
+    "last_writer_task_id": "9853b02b-20c8-4eef-897f-68741c9fd958"
+  },
+  "debug/repro_stream_anomaly.py": {
+    "latest_version": 8,
+    "deleted": false,
+    "mtime": 1779119695.0,
+    "size": 9448,
+    "first_seen": 1779119513.5398219,
+    "last_writer_task_id": "ca46c265-3fad-4046-8dae-48a3439fd21f"
+  },
+  "tests/test_stream_anomaly_retry_widening.py": {
+    "latest_version": 5,
+    "deleted": false,
+    "mtime": 1779415287.0,
+    "size": 7914,
+    "first_seen": 1779120122.1075652,
+    "last_writer_task_id": ""
+  },
+  "static/js/paper-reader.js": {
+    "latest_version": 64,
+    "deleted": false,
+    "mtime": 1780027248.0,
+    "size": 94536,
+    "first_seen": 1779205806.7983353,
+    "last_writer_task_id": ""
+  },
+  "routes/paper.py": {
+    "latest_version": 116,
+    "deleted": false,
+    "mtime": 1780027191.0,
+    "size": 65491,
+    "first_seen": 1779206959.0273807,
+    "last_writer_task_id": ""
+  },
+  "requirements.txt": {
+    "latest_version": 8,
+    "deleted": false,
+    "mtime": 1780280378.0,
+    "size": 2499,
+    "first_seen": 1779207227.0425482,
+    "last_writer_task_id": "c2c9af6a-1a9d-4aa2-a02b-cb8b625272ff"
+  },
+  "env.example": {
+    "latest_version": 14,
+    "deleted": true,
+    "mtime": 0,
+    "size": 0,
+    "first_seen": 1779252488.430594,
+    "last_writer_task_id": "97a13440-c6f4-4818-ad45-39c614add1f9"
+  },
+  "docs/SECURITY_AUDIT_REPORT.md": {
+    "latest_version": 5,
+    "deleted": false,
+    "mtime": 1779260563.0,
+    "size": 22492,
+    "first_seen": 1779252516.566229,
+    "last_writer_task_id": ""
+  },
+  "tests/test_bridge_auth.py": {
+    "latest_version": 14,
+    "deleted": false,
+    "mtime": 1780281697.0,
+    "size": 8297,
+    "first_seen": 1779252642.64512,
+    "last_writer_task_id": ""
+  },
+  "lib/tasks_pkg/system_prompt_cc.py": {
+    "latest_version": 5,
+    "deleted": false,
+    "mtime": 1780282049.0,
+    "size": 35822,
+    "first_seen": 1779254596.49281,
+    "last_writer_task_id": ""
+  },
+  "lib/pdf_parser/docling.py": {
+    "latest_version": 9,
+    "deleted": false,
+    "mtime": 1779835254.0,
+    "size": 9762,
+    "first_seen": 1779257499.2271736,
+    "last_writer_task_id": ""
+  },
+  "lib/pdf_parser/_common.py": {
+    "latest_version": 8,
+    "deleted": false,
+    "mtime": 1779835254.0,
+    "size": 5131,
+    "first_seen": 1779257667.6453624,
+    "last_writer_task_id": ""
+  },
+  "lib/pdf_parser/images.py": {
+    "latest_version": 21,
+    "deleted": false,
+    "mtime": 1779610074.0,
+    "size": 24291,
+    "first_seen": 1779258546.3426845,
+    "last_writer_task_id": "3bf68dbd-c109-4cfb-8142-17391630428d"
+  },
+  "routes/upload.py": {
+    "latest_version": 9,
+    "deleted": false,
+    "mtime": 1780281098.0,
+    "size": 42774,
+    "first_seen": 1779261017.5463428,
+    "last_writer_task_id": ""
+  },
+  "tests/test_image_fetch_ssrf.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1780281697.0,
+    "size": 10034,
+    "first_seen": 1779261470.3819368,
+    "last_writer_task_id": ""
+  },
+  "tests/test_features_needs_restart.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779261219.0,
+    "size": 2726,
+    "first_seen": 1779261470.4002192,
+    "last_writer_task_id": "7ea9e172-f452-4e18-8dd0-1a6658e6b39a"
+  },
+  "lib/tasks_pkg/handlers/_read_gate.py": {
+    "latest_version": 8,
+    "deleted": false,
+    "mtime": 1779835254.0,
+    "size": 12169,
+    "first_seen": 1779261601.9088435,
+    "last_writer_task_id": ""
+  },
+  "tests/test_read_before_edit_gate.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779261267.0,
+    "size": 8391,
+    "first_seen": 1779261919.142198,
+    "last_writer_task_id": "eeb61680-b718-485c-8cae-cf93874b3870"
+  },
+  "docs/RATE_LIMITING_DOS_AUDIT_REPORT.md": {
+    "latest_version": 5,
+    "deleted": false,
+    "mtime": 1779269035.0,
+    "size": 11353,
+    "first_seen": 1779263016.4449642,
+    "last_writer_task_id": ""
+  },
+  "tests/test_proxy_trust.py": {
+    "latest_version": 3,
+    "deleted": false,
+    "mtime": 1780281697.0,
+    "size": 8648,
+    "first_seen": 1779263080.8319921,
+    "last_writer_task_id": ""
+  },
+  "tests/test_retry_budget_envelope.py": {
+    "latest_version": 5,
+    "deleted": false,
+    "mtime": 1779424060.0,
+    "size": 10399,
+    "first_seen": 1779267933.3928251,
+    "last_writer_task_id": ""
+  },
+  "lib/rate_limiter.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1779268678.0,
+    "size": 1739,
+    "first_seen": 1779268678.6470811,
+    "last_writer_task_id": ""
+  },
+  "lib/rate_limit_store.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1780281097.0,
+    "size": 10723,
+    "first_seen": 1779270021.1429,
+    "last_writer_task_id": ""
+  },
+  "tests/test_rate_limit_store.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1780281698.0,
+    "size": 10738,
+    "first_seen": 1779270021.1842256,
+    "last_writer_task_id": ""
+  },
+  "tests/test_compaction_invariants.py": {
+    "latest_version": 13,
+    "deleted": false,
+    "mtime": 1780241607.0,
+    "size": 28686,
+    "first_seen": 1779272338.3000994,
+    "last_writer_task_id": ""
+  },
+  "lib/tasks_pkg/compaction/__init__.py": {
+    "latest_version": 16,
+    "deleted": false,
+    "mtime": 1780241606.0,
+    "size": 6722,
+    "first_seen": 1779272979.0617468,
+    "last_writer_task_id": ""
+  },
+  "lib/tasks_pkg/compaction/_constants.py": {
+    "latest_version": 3,
+    "deleted": false,
+    "mtime": 1780241606.0,
+    "size": 12047,
+    "first_seen": 1779273524.895115,
+    "last_writer_task_id": ""
+  },
+  "lib/tasks_pkg/compaction/_archive.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779273282.0,
+    "size": 10206,
+    "first_seen": 1779273524.9217196,
+    "last_writer_task_id": "e8767ebe-18e3-4619-9c88-4fa7be9a9d63"
+  },
+  "lib/tasks_pkg/compaction/_reactive.py": {
+    "latest_version": 4,
+    "deleted": false,
+    "mtime": 1779834892.0,
+    "size": 13131,
+    "first_seen": 1779275007.5956576,
+    "last_writer_task_id": ""
+  },
+  "lib/tasks_pkg/compaction/_layer1.py": {
+    "latest_version": 12,
+    "deleted": false,
+    "mtime": 1779359334.0,
+    "size": 34635,
+    "first_seen": 1779359284.6473393,
+    "last_writer_task_id": ""
+  },
+  "lib/utils.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1779360721.0,
+    "size": 4393,
+    "first_seen": 1779360721.5796232,
+    "last_writer_task_id": ""
+  },
+  "lib/tasks_pkg/compaction/_layer2.py": {
+    "latest_version": 8,
+    "deleted": false,
+    "mtime": 1780241606.0,
+    "size": 25088,
+    "first_seen": 1779364506.412669,
+    "last_writer_task_id": ""
+  },
+  "lib/swarm/registry.py": {
+    "latest_version": 8,
+    "deleted": false,
+    "mtime": 1779960343.0,
+    "size": 17350,
+    "first_seen": 1779364532.5943897,
+    "last_writer_task_id": ""
+  },
+  "lib/tools/meta.py": {
+    "latest_version": 5,
+    "deleted": false,
+    "mtime": 1779419386.0,
+    "size": 13972,
+    "first_seen": 1779364532.6879592,
+    "last_writer_task_id": ""
+  },
+  "tests/test_budget_grace.py": {
+    "latest_version": 3,
+    "deleted": true,
+    "mtime": 0,
+    "size": 0,
+    "first_seen": 1779372636.3943453,
+    "last_writer_task_id": ""
+  },
+  "lib/fetch/html_extract.py": {
+    "latest_version": 9,
+    "deleted": false,
+    "mtime": 1779549002.0,
+    "size": 16864,
+    "first_seen": 1779377661.8021193,
+    "last_writer_task_id": "1c176202-8b64-447c-97c6-57499b7b9b47"
+  },
+  "lib/fetch/utils.py": {
+    "latest_version": 5,
+    "deleted": false,
+    "mtime": 1779380072.0,
+    "size": 26698,
+    "first_seen": 1779377667.980897,
+    "last_writer_task_id": ""
+  },
+  "lib/fetch/core.py": {
+    "latest_version": 4,
+    "deleted": false,
+    "mtime": 1779450662.0,
+    "size": 22632,
+    "first_seen": 1779377684.0431988,
+    "last_writer_task_id": ""
+  },
+  "lib/fetch/http.py": {
+    "latest_version": 5,
+    "deleted": false,
+    "mtime": 1779380072.0,
+    "size": 12016,
+    "first_seen": 1779377701.139746,
+    "last_writer_task_id": ""
+  },
+  "lib/swarm/agent.py": {
+    "latest_version": 12,
+    "deleted": false,
+    "mtime": 1780109385.0,
+    "size": 41817,
+    "first_seen": 1779381932.989338,
+    "last_writer_task_id": "94b89bc3-d409-48e8-a8e0-4b2d3d830a77"
+  },
+  "lib/swarm/planner.py": {
+    "latest_version": 4,
+    "deleted": false,
+    "mtime": 1779898239.0,
+    "size": 2843,
+    "first_seen": 1779381933.0901935,
+    "last_writer_task_id": ""
+  },
+  "lib/swarm/review.py": {
+    "latest_version": 3,
+    "deleted": true,
+    "mtime": 0,
+    "size": 0,
+    "first_seen": 1779381933.1926606,
+    "last_writer_task_id": ""
+  },
+  "lib/swarm/synthesis.py": {
+    "latest_version": 3,
+    "deleted": true,
+    "mtime": 0,
+    "size": 0,
+    "first_seen": 1779381933.2925992,
+    "last_writer_task_id": ""
+  },
+  "lib/llm_error_format.py": {
+    "latest_version": 6,
+    "deleted": false,
+    "mtime": 1779414472.0,
+    "size": 1821,
+    "first_seen": 1779381984.9268997,
+    "last_writer_task_id": ""
+  },
+  "lib/fetch/content_filter.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1779381985.0,
+    "size": 14129,
+    "first_seen": 1779381985.0347528,
+    "last_writer_task_id": ""
+  },
+  "lib/trading_autopilot/cycle.py": {
+    "latest_version": 5,
+    "deleted": false,
+    "mtime": 1779835255.0,
+    "size": 23961,
+    "first_seen": 1779381985.1333263,
+    "last_writer_task_id": ""
+  },
+  "lib/trading/brain/pipeline.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1779381985.0,
+    "size": 24054,
+    "first_seen": 1779381985.247844,
+    "last_writer_task_id": ""
+  },
+  "lib/llm/_transport.py": {
+    "latest_version": 6,
+    "deleted": false,
+    "mtime": 1779432344.0,
+    "size": 2244,
+    "first_seen": 1779382152.793874,
+    "last_writer_task_id": "56fb7008-b94b-44c7-94df-3af00102d595"
+  },
+  "lib/llm/diagnostics.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779381437.0,
+    "size": 6426,
+    "first_seen": 1779382152.8091478,
+    "last_writer_task_id": "fcdd10cc-12f3-46f6-85b1-7e02e1444944"
+  },
+  "lib/llm/body.py": {
+    "latest_version": 15,
+    "deleted": false,
+    "mtime": 1780287130.0,
+    "size": 21071,
+    "first_seen": 1779382152.8250942,
+    "last_writer_task_id": ""
+  },
+  "lib/llm/cache.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1780281098.0,
+    "size": 5532,
+    "first_seen": 1779382152.8397071,
+    "last_writer_task_id": ""
+  },
+  "lib/llm/chat.py": {
+    "latest_version": 4,
+    "deleted": false,
+    "mtime": 1779550137.0,
+    "size": 8090,
+    "first_seen": 1779382152.8542795,
+    "last_writer_task_id": ""
+  },
+  "lib/llm/stream.py": {
+    "latest_version": 7,
+    "deleted": false,
+    "mtime": 1779940263.0,
+    "size": 29985,
+    "first_seen": 1779382152.8694148,
+    "last_writer_task_id": "e9199b09-2e95-48e4-9f4d-04d78ae668ab"
+  },
+  "lib/llm/__init__.py": {
+    "latest_version": 9,
+    "deleted": false,
+    "mtime": 1779432491.0,
+    "size": 3354,
+    "first_seen": 1779382152.8841195,
+    "last_writer_task_id": "56fb7008-b94b-44c7-94df-3af00102d595"
+  },
+  "lib/tests/validate_imports.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1779382232.0,
+    "size": 2681,
+    "first_seen": 1779382232.7814362,
+    "last_writer_task_id": ""
+  },
+  "lib/protocols.py": {
+    "latest_version": 3,
+    "deleted": false,
+    "mtime": 1779382254.0,
+    "size": 12544,
+    "first_seen": 1779382254.7795475,
+    "last_writer_task_id": ""
+  },
+  "tests/test_smoke.py": {
+    "latest_version": 3,
+    "deleted": false,
+    "mtime": 1780281733.0,
+    "size": 7406,
+    "first_seen": 1779382302.4381545,
+    "last_writer_task_id": ""
+  },
+  "debug/test_raw_sse_e2e.py": {
+    "latest_version": 5,
+    "deleted": false,
+    "mtime": 1779412730.0,
+    "size": 3521,
+    "first_seen": 1779412707.9445543,
+    "last_writer_task_id": ""
+  },
+  "debug/test_raw_sse_anomaly_dump.py": {
+    "latest_version": 7,
+    "deleted": false,
+    "mtime": 1779412730.0,
+    "size": 6089,
+    "first_seen": 1779412708.2338283,
+    "last_writer_task_id": ""
+  },
+  "ROADMAP.md": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1779412771.0,
+    "size": 3322,
+    "first_seen": 1779412771.8177743,
+    "last_writer_task_id": ""
+  },
+  "lib/model_info.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1779412772.0,
+    "size": 18161,
+    "first_seen": 1779412772.519014,
+    "last_writer_task_id": ""
+  },
+  "lib/token_counter/usage_cache.py": {
+    "latest_version": 3,
+    "deleted": false,
+    "mtime": 1779412772.0,
+    "size": 9184,
+    "first_seen": 1779412772.617949,
+    "last_writer_task_id": ""
+  },
+  "lib/token_counter/__init__.py": {
+    "latest_version": 3,
+    "deleted": false,
+    "mtime": 1780281646.0,
+    "size": 3085,
+    "first_seen": 1779412772.8149378,
+    "last_writer_task_id": ""
+  },
+  "tests/test_backend_unit.py": {
+    "latest_version": 8,
+    "deleted": false,
+    "mtime": 1780107395.0,
+    "size": 23269,
+    "first_seen": 1779412797.112585,
+    "last_writer_task_id": ""
+  },
+  "benchmarks/candidate_models_bench.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1779412882.0,
+    "size": 35511,
+    "first_seen": 1779412882.5349832,
+    "last_writer_task_id": ""
+  },
+  "debug/test_glm5_thinking.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1779412882.0,
+    "size": 14484,
+    "first_seen": 1779412882.8292882,
+    "last_writer_task_id": ""
+  },
+  "debug/test_1m_context.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1779412882.0,
+    "size": 13066,
+    "first_seen": 1779412882.927698,
+    "last_writer_task_id": ""
+  },
+  "debug/test_opus47_raw_sse.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1779412883.0,
+    "size": 2763,
+    "first_seen": 1779412883.0244758,
+    "last_writer_task_id": ""
+  },
+  "docs/refactor_inventory.md": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1779412883.0,
+    "size": 9916,
+    "first_seen": 1779412883.1304781,
+    "last_writer_task_id": ""
+  },
+  "docs/refactor_decomposition_proposal.md": {
+    "latest_version": 4,
+    "deleted": false,
+    "mtime": 1779412883.0,
+    "size": 12716,
+    "first_seen": 1779412883.2600389,
+    "last_writer_task_id": ""
+  },
+  "docs/DEVELOPMENT_DIRECTION.md": {
+    "latest_version": 7,
+    "deleted": false,
+    "mtime": 1779412884.0,
+    "size": 28141,
+    "first_seen": 1779412883.5507727,
+    "last_writer_task_id": ""
+  },
+  "lib/message_queue.py": {
+    "latest_version": 9,
+    "deleted": false,
+    "mtime": 1780286262.0,
+    "size": 17258,
+    "first_seen": 1779414637.4818532,
+    "last_writer_task_id": ""
+  },
+  "lib/error_envelope.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1779835253.0,
+    "size": 20137,
+    "first_seen": 1779415429.5929005,
+    "last_writer_task_id": ""
+  },
+  "routes/trading_simulator.py": {
+    "latest_version": 13,
+    "deleted": false,
+    "mtime": 1780241672.0,
+    "size": 17405,
+    "first_seen": 1779415536.70589,
+    "last_writer_task_id": ""
+  },
+  "static/js/trading/simulator.js": {
+    "latest_version": 3,
+    "deleted": false,
+    "mtime": 1779415610.0,
+    "size": 75068,
+    "first_seen": 1779415610.398097,
+    "last_writer_task_id": ""
+  },
+  "static/js/trading/tasks.js": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1779415610.0,
+    "size": 21419,
+    "first_seen": 1779415610.6003513,
+    "last_writer_task_id": ""
+  },
+  "lib/memory/tools.py": {
+    "latest_version": 8,
+    "deleted": false,
+    "mtime": 1779419853.0,
+    "size": 7791,
+    "first_seen": 1779419669.3225124,
+    "last_writer_task_id": ""
+  },
+  "Makefile": {
+    "latest_version": 7,
+    "deleted": false,
+    "mtime": 1780108818.0,
+    "size": 4390,
+    "first_seen": 1779420306.367993,
+    "last_writer_task_id": ""
+  },
+  "scripts/gen_desktop_icons.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779420152.0,
+    "size": 1938,
+    "first_seen": 1779420378.1120105,
+    "last_writer_task_id": "8108505a-400a-4652-aeac-431e75a4f961"
+  },
+  "desktop/launcher.py": {
+    "latest_version": 5,
+    "deleted": false,
+    "mtime": 1779433929.0,
+    "size": 6410,
+    "first_seen": 1779420378.1273048,
+    "last_writer_task_id": ""
+  },
+  "desktop/__init__.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779420189.0,
+    "size": 0,
+    "first_seen": 1779420378.1413088,
+    "last_writer_task_id": "8108505a-400a-4652-aeac-431e75a4f961"
+  },
+  "tofu.spec": {
+    "latest_version": 6,
+    "deleted": false,
+    "mtime": 1779433956.0,
+    "size": 4961,
+    "first_seen": 1779420378.1645522,
+    "last_writer_task_id": ""
+  },
+  "github/workflows/build-desktop.yml": {
+    "latest_version": 5,
+    "deleted": true,
+    "mtime": 0,
+    "size": 0,
+    "first_seen": 1779420378.1732335,
+    "last_writer_task_id": ""
+  },
+  "desktop/requirements-desktop.txt": {
+    "latest_version": 3,
+    "deleted": false,
+    "mtime": 1779434014.0,
+    "size": 127,
+    "first_seen": 1779420378.1888664,
+    "last_writer_task_id": ""
+  },
+  "desktop/README.md": {
+    "latest_version": 3,
+    "deleted": false,
+    "mtime": 1779433987.0,
+    "size": 4185,
+    "first_seen": 1779420378.203336,
+    "last_writer_task_id": ""
+  },
+  "lib/optimizer/analyzer.py": {
+    "latest_version": 3,
+    "deleted": false,
+    "mtime": 1779835254.0,
+    "size": 25809,
+    "first_seen": 1779421574.291421,
+    "last_writer_task_id": ""
+  },
+  "lib/optimizer/applier.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1779421574.0,
+    "size": 5805,
+    "first_seen": 1779421574.393475,
+    "last_writer_task_id": ""
+  },
+  "lib/optimizer/orchestrator.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1779421574.0,
+    "size": 4668,
+    "first_seen": 1779421574.496163,
+    "last_writer_task_id": ""
+  },
+  "lib/optimizer/proposer.py": {
+    "latest_version": 3,
+    "deleted": false,
+    "mtime": 1780282048.0,
+    "size": 12136,
+    "first_seen": 1779421574.5972614,
+    "last_writer_task_id": ""
+  },
+  "lib/token_counter/resolver.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1779421574.0,
+    "size": 5194,
+    "first_seen": 1779421574.9392576,
+    "last_writer_task_id": ""
+  },
+  "routes/optimizer.py": {
+    "latest_version": 6,
+    "deleted": true,
+    "mtime": 0,
+    "size": 0,
+    "first_seen": 1779421575.2487683,
+    "last_writer_task_id": ""
+  },
+  "tests/test_server_async.py": {
+    "latest_version": 10,
+    "deleted": false,
+    "mtime": 1779770754.0,
+    "size": 10253,
+    "first_seen": 1779421922.4158545,
+    "last_writer_task_id": ""
+  },
+  "server_async.py": {
+    "latest_version": 19,
+    "deleted": true,
+    "mtime": 0,
+    "size": 0,
+    "first_seen": 1779422173.6649878,
+    "last_writer_task_id": ""
+  },
+  "lib/search/engines/brave.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1779427605.0,
+    "size": 2844,
+    "first_seen": 1779427605.2097874,
+    "last_writer_task_id": "b5c0af8e-5457-48e0-9939-4ae63b6de852"
+  },
+  "lib/search/engines/bing.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1779427605.0,
+    "size": 2927,
+    "first_seen": 1779427605.3213472,
+    "last_writer_task_id": "b5c0af8e-5457-48e0-9939-4ae63b6de852"
+  },
+  "lib/search/engines/ddg.py": {
+    "latest_version": 3,
+    "deleted": false,
+    "mtime": 1779427605.0,
+    "size": 4327,
+    "first_seen": 1779427605.4295764,
+    "last_writer_task_id": "b5c0af8e-5457-48e0-9939-4ae63b6de852"
+  },
+  "lib/search/engines/searxng.py": {
+    "latest_version": 4,
+    "deleted": false,
+    "mtime": 1779427943.0,
+    "size": 6569,
+    "first_seen": 1779427605.6415498,
+    "last_writer_task_id": "b5c0af8e-5457-48e0-9939-4ae63b6de852"
+  },
+  "lib/search/orchestrator.py": {
+    "latest_version": 16,
+    "deleted": false,
+    "mtime": 1779765740.0,
+    "size": 23030,
+    "first_seen": 1779427623.6821744,
+    "last_writer_task_id": "f687777a-74c0-4c87-954a-8ae0aff87582"
+  },
+  "lib/tools/search.py": {
+    "latest_version": 3,
+    "deleted": false,
+    "mtime": 1779428002.0,
+    "size": 6810,
+    "first_seen": 1779427646.9532225,
+    "last_writer_task_id": "b5c0af8e-5457-48e0-9939-4ae63b6de852"
+  },
+  "lib/search/__init__.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1779427724.0,
+    "size": 828,
+    "first_seen": 1779427724.2677968,
+    "last_writer_task_id": "b5c0af8e-5457-48e0-9939-4ae63b6de852"
+  },
+  "lib/search/vertical.py": {
+    "latest_version": 7,
+    "deleted": false,
+    "mtime": 1779834877.0,
+    "size": 26046,
+    "first_seen": 1779427877.926855,
+    "last_writer_task_id": ""
+  },
+  "debug/test_vertical_search.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779430159.0,
+    "size": 12794,
+    "first_seen": 1779430213.573002,
+    "last_writer_task_id": "306a7145-c2dd-40cb-aee8-80c7566006f7"
+  },
+  "lib/pdf_parser/text.py": {
+    "latest_version": 4,
+    "deleted": false,
+    "mtime": 1779431936.0,
+    "size": 9466,
+    "first_seen": 1779431936.4206994,
+    "last_writer_task_id": "b8c30378-b634-4790-af8c-e1a5c62a21d9"
+  },
+  "lib/pdf_parser/core.py": {
+    "latest_version": 3,
+    "deleted": false,
+    "mtime": 1779431973.0,
+    "size": 4871,
+    "first_seen": 1779431973.0942543,
+    "last_writer_task_id": "b8c30378-b634-4790-af8c-e1a5c62a21d9"
+  },
+  "lib/llm/astream.py": {
+    "latest_version": 5,
+    "deleted": false,
+    "mtime": 1779833884.0,
+    "size": 36466,
+    "first_seen": 1779432568.255075,
+    "last_writer_task_id": ""
+  },
+  "lib/tasks_pkg/__init__.py": {
+    "latest_version": 11,
+    "deleted": false,
+    "mtime": 1779835311.0,
+    "size": 6130,
+    "first_seen": 1779432749.0639927,
+    "last_writer_task_id": ""
+  },
+  "lib/agent_backends/builtin.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1779432829.0,
+    "size": 7240,
+    "first_seen": 1779432829.9869545,
+    "last_writer_task_id": "05cc217a-47c4-4409-bb42-4bd688cf0946"
+  },
+  "desktop/post_install.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779433902.0,
+    "size": 12976,
+    "first_seen": 1779434076.404052,
+    "last_writer_task_id": "89170b85-2c8d-454b-897f-ea05c939c4ae"
+  },
+  "lib/push.py": {
+    "latest_version": 10,
+    "deleted": false,
+    "mtime": 1779835254.0,
+    "size": 7532,
+    "first_seen": 1779442042.8037071,
+    "last_writer_task_id": ""
+  },
+  "routes/push.py": {
+    "latest_version": 3,
+    "deleted": false,
+    "mtime": 1779770861.0,
+    "size": 3958,
+    "first_seen": 1779442043.0672867,
+    "last_writer_task_id": ""
+  },
+  "static/js/push.js": {
+    "latest_version": 7,
+    "deleted": false,
+    "mtime": 1780196557.0,
+    "size": 6866,
+    "first_seen": 1779442043.6677778,
+    "last_writer_task_id": "d2b4628d-86b6-4084-98da-108d0989b4ba"
+  },
+  "tests/test_trading_simulator_migration.py": {
+    "latest_version": 5,
+    "deleted": false,
+    "mtime": 1780241672.0,
+    "size": 9687,
+    "first_seen": 1779443485.9656122,
+    "last_writer_task_id": ""
+  },
+  "lib/task_runtime.py": {
+    "latest_version": 6,
+    "deleted": false,
+    "mtime": 1779835254.0,
+    "size": 13336,
+    "first_seen": 1779443740.5754378,
+    "last_writer_task_id": ""
+  },
+  "tests/test_task_runtime.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779443154.0,
+    "size": 16623,
+    "first_seen": 1779443740.5917351,
+    "last_writer_task_id": "cf0e716e-3914-4ff6-bf38-275868b2cd27"
+  },
+  "routes/_task_routes.py": {
+    "latest_version": 7,
+    "deleted": false,
+    "mtime": 1779835255.0,
+    "size": 3753,
+    "first_seen": 1779443740.608756,
+    "last_writer_task_id": ""
+  },
+  "tests/test_translate_migration.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779444082.0,
+    "size": 11753,
+    "first_seen": 1779445064.1545746,
+    "last_writer_task_id": "cc33eb57-02f1-4eed-9f3b-905ee7ad7d03"
+  },
+  "tests/test_paper_migration.py": {
+    "latest_version": 11,
+    "deleted": false,
+    "mtime": 1780027681.0,
+    "size": 13902,
+    "first_seen": 1779445064.1784415,
+    "last_writer_task_id": ""
+  },
+  "tests/test_chat_manager_migration.py": {
+    "latest_version": 4,
+    "deleted": false,
+    "mtime": 1779851046.0,
+    "size": 17030,
+    "first_seen": 1779446165.3286612,
+    "last_writer_task_id": "8774903e-633e-43b8-ba00-5244dfc0591a"
+  },
+  "static/provider_templates/meituan.json": {
+    "latest_version": 3,
+    "deleted": false,
+    "mtime": 1780282591.0,
+    "size": 4229,
+    "first_seen": 1779451142.4243178,
+    "last_writer_task_id": ""
+  },
+  "lib/pricing.py": {
+    "latest_version": 4,
+    "deleted": false,
+    "mtime": 1780282591.0,
+    "size": 34015,
+    "first_seen": 1779451142.5353591,
+    "last_writer_task_id": ""
+  },
+  "lib/llm_dispatch/config.py": {
+    "latest_version": 3,
+    "deleted": false,
+    "mtime": 1780282592.0,
+    "size": 30364,
+    "first_seen": 1779451142.6389742,
+    "last_writer_task_id": ""
+  },
+  "tests/test_api_response.py": {
+    "latest_version": 5,
+    "deleted": false,
+    "mtime": 1780140621.0,
+    "size": 17326,
+    "first_seen": 1779452067.6004374,
+    "last_writer_task_id": "451a787d-39af-44c3-b73b-e659e84a3e6a"
+  },
+  "tests/_migrate_api_response.py": {
+    "latest_version": 9,
+    "deleted": false,
+    "mtime": 1779452463.0,
+    "size": 11855,
+    "first_seen": 1779452352.5540674,
+    "last_writer_task_id": ""
+  },
+  "lib/optimizer/actions/block_search_domain.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1779452731.0,
+    "size": 6277,
+    "first_seen": 1779452731.4378498,
+    "last_writer_task_id": ""
+  },
+  "lib/feishu/events.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1779453007.0,
+    "size": 7084,
+    "first_seen": 1779453007.121796,
+    "last_writer_task_id": ""
+  },
+  "lib/trading/market.py": {
+    "latest_version": 3,
+    "deleted": false,
+    "mtime": 1779453129.0,
+    "size": 25616,
+    "first_seen": 1779453106.2464786,
+    "last_writer_task_id": ""
+  },
+  "lib/trading/screening.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1779453138.0,
+    "size": 66596,
+    "first_seen": 1779453138.8592458,
+    "last_writer_task_id": ""
+  },
+  "lib/trading/nav.py": {
+    "latest_version": 5,
+    "deleted": false,
+    "mtime": 1779453250.0,
+    "size": 14620,
+    "first_seen": 1779453162.4824,
+    "last_writer_task_id": ""
+  },
+  "lib/api_response.py": {
+    "latest_version": 13,
+    "deleted": false,
+    "mtime": 1780140608.0,
+    "size": 11095,
+    "first_seen": 1779453430.1621647,
+    "last_writer_task_id": "451a787d-39af-44c3-b73b-e659e84a3e6a"
+  },
+  "lib/json_store.py": {
+    "latest_version": 4,
+    "deleted": false,
+    "mtime": 1779835254.0,
+    "size": 9804,
+    "first_seen": 1779453430.1859784,
+    "last_writer_task_id": ""
+  },
+  "tests/test_json_store.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779452699.0,
+    "size": 10915,
+    "first_seen": 1779453430.2016783,
+    "last_writer_task_id": "e038df25-d208-4244-9d54-6dcc9aeef38c"
+  },
+  "lib/ttl_cache.py": {
+    "latest_version": 9,
+    "deleted": false,
+    "mtime": 1779551171.0,
+    "size": 9679,
+    "first_seen": 1779453430.222843,
+    "last_writer_task_id": ""
+  },
+  "tests/test_ttl_cache.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779452924.0,
+    "size": 9190,
+    "first_seen": 1779453430.2379181,
+    "last_writer_task_id": "e038df25-d208-4244-9d54-6dcc9aeef38c"
+  },
+  "debug/test_opus_46b.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779547923.0,
+    "size": 3690,
+    "first_seen": 1779548076.9270418,
+    "last_writer_task_id": "10a09eae-959b-44aa-a6b9-91f118003865"
+  },
+  "lib/request_parser.py": {
+    "latest_version": 7,
+    "deleted": false,
+    "mtime": 1779551255.0,
+    "size": 10889,
+    "first_seen": 1779548647.2475023,
+    "last_writer_task_id": ""
+  },
+  "tests/test_request_parser.py": {
+    "latest_version": 5,
+    "deleted": false,
+    "mtime": 1779548871.0,
+    "size": 15868,
+    "first_seen": 1779548726.3942962,
+    "last_writer_task_id": ""
+  },
+  "tests/_migrate_http_client.py": {
+    "latest_version": 4,
+    "deleted": false,
+    "mtime": 1779550200.0,
+    "size": 7972,
+    "first_seen": 1779549932.6244934,
+    "last_writer_task_id": ""
+  },
+  "lib/http_client.py": {
+    "latest_version": 7,
+    "deleted": false,
+    "mtime": 1779833963.0,
+    "size": 11091,
+    "first_seen": 1779550614.7906737,
+    "last_writer_task_id": ""
+  },
+  "tests/test_http_client.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779548998.0,
+    "size": 10911,
+    "first_seen": 1779550614.8154507,
+    "last_writer_task_id": "0120411e-687c-4bc1-8e60-457551794aa7"
+  },
+  "tests/_migrate_request_parser.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779549341.0,
+    "size": 4229,
+    "first_seen": 1779550614.8322537,
+    "last_writer_task_id": "0120411e-687c-4bc1-8e60-457551794aa7"
+  },
+  "debug/test_key1_models.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779550804.0,
+    "size": 2771,
+    "first_seen": 1779550878.9785776,
+    "last_writer_task_id": "d9fa0c47-4319-48dd-8e89-ef9288724a48"
+  },
+  "debug/test_two_keys_47.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1779582239.0,
+    "size": 2565,
+    "first_seen": 1779582239.7889166,
+    "last_writer_task_id": "373b7e9b-7ee8-4ee6-894b-70fef651aa9a"
+  },
+  "debug/test_opus_47_nova04.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779583024.0,
+    "size": 2815,
+    "first_seen": 1779583117.5631168,
+    "last_writer_task_id": "a7c5bcd8-a5d9-4120-8362-3e8ee3fafe4e"
+  },
+  "routes/api_v1/auth.py": {
+    "latest_version": 40,
+    "deleted": false,
+    "mtime": 1779948862.0,
+    "size": 18759,
+    "first_seen": 1779692416.5506754,
+    "last_writer_task_id": ""
+  },
+  "routes/api_v1/agents.py": {
+    "latest_version": 31,
+    "deleted": false,
+    "mtime": 1779835255.0,
+    "size": 24067,
+    "first_seen": 1779692525.7453468,
+    "last_writer_task_id": ""
+  },
+  "routes/compat_anthropic.py": {
+    "latest_version": 7,
+    "deleted": false,
+    "mtime": 1779698812.0,
+    "size": 5119,
+    "first_seen": 1779692806.9261937,
+    "last_writer_task_id": "7460e9b4-c9d5-4158-8360-b6f6e743351d"
+  },
+  "routes/compat_openai.py": {
+    "latest_version": 12,
+    "deleted": false,
+    "mtime": 1779948889.0,
+    "size": 8726,
+    "first_seen": 1779692826.809393,
+    "last_writer_task_id": ""
+  },
+  "debug/test_opus_47_nova04_anthropic.py": {
+    "latest_version": 4,
+    "deleted": false,
+    "mtime": 1779693378.0,
+    "size": 2687,
+    "first_seen": 1779692893.9260166,
+    "last_writer_task_id": "463c6bdc-ba34-4499-ad03-b74ce86386b6"
+  },
+  "routes/api_v1/tasks.py": {
+    "latest_version": 5,
+    "deleted": false,
+    "mtime": 1779835255.0,
+    "size": 9604,
+    "first_seen": 1779692910.050677,
+    "last_writer_task_id": ""
+  },
+  "routes/api_v1/conversations.py": {
+    "latest_version": 22,
+    "deleted": false,
+    "mtime": 1780026866.0,
+    "size": 14382,
+    "first_seen": 1779692921.818513,
+    "last_writer_task_id": ""
+  },
+  "tests/test_rate_limit_api.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1779693679.0,
+    "size": 3863,
+    "first_seen": 1779693679.5513632,
+    "last_writer_task_id": ""
+  },
+  "tests/test_idempotency.py": {
+    "latest_version": 4,
+    "deleted": false,
+    "mtime": 1779694842.0,
+    "size": 2152,
+    "first_seen": 1779693711.8846002,
+    "last_writer_task_id": "32bd6869-9698-4e3f-b5d2-3361ba7337dd"
+  },
+  "lib/idempotency.py": {
+    "latest_version": 19,
+    "deleted": false,
+    "mtime": 1779849782.0,
+    "size": 10360,
+    "first_seen": 1779693751.2708187,
+    "last_writer_task_id": ""
+  },
+  "tests/test_api_v1_integration.py": {
+    "latest_version": 84,
+    "deleted": false,
+    "mtime": 1780046404.0,
+    "size": 43643,
+    "first_seen": 1779694191.8337536,
+    "last_writer_task_id": ""
+  },
+  "lib/api_keys.py": {
+    "latest_version": 17,
+    "deleted": false,
+    "mtime": 1779947689.0,
+    "size": 16992,
+    "first_seen": 1779695229.1324234,
+    "last_writer_task_id": ""
+  },
+  "lib/rate_limit_api.py": {
+    "latest_version": 3,
+    "deleted": false,
+    "mtime": 1779849776.0,
+    "size": 7997,
+    "first_seen": 1779695229.1504786,
+    "last_writer_task_id": ""
+  },
+  "lib/openapi.py": {
+    "latest_version": 4,
+    "deleted": false,
+    "mtime": 1779800542.0,
+    "size": 20785,
+    "first_seen": 1779695229.169148,
+    "last_writer_task_id": "af71da20-7e09-434b-bbcf-32427b2d7b25"
+  },
+  "routes/api_v1/__init__.py": {
+    "latest_version": 72,
+    "deleted": false,
+    "mtime": 1780028324.0,
+    "size": 3194,
+    "first_seen": 1779695229.1871572,
+    "last_writer_task_id": ""
+  },
+  "routes/api_v1/chat.py": {
+    "latest_version": 25,
+    "deleted": false,
+    "mtime": 1780107304.0,
+    "size": 26570,
+    "first_seen": 1779695229.2042766,
+    "last_writer_task_id": ""
+  },
+  "routes/api_v1/capabilities.py": {
+    "latest_version": 5,
+    "deleted": false,
+    "mtime": 1779834934.0,
+    "size": 8948,
+    "first_seen": 1779695229.2214794,
+    "last_writer_task_id": ""
+  },
+  "routes/api_v1/keys.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779692056.0,
+    "size": 7527,
+    "first_seen": 1779695229.2382445,
+    "last_writer_task_id": "32bd6869-9698-4e3f-b5d2-3361ba7337dd"
+  },
+  "routes/api_v1/webhooks.py": {
+    "latest_version": 8,
+    "deleted": false,
+    "mtime": 1779834360.0,
+    "size": 8409,
+    "first_seen": 1779695229.2562704,
+    "last_writer_task_id": ""
+  },
+  "routes/api_docs.py": {
+    "latest_version": 4,
+    "deleted": false,
+    "mtime": 1779706703.0,
+    "size": 2711,
+    "first_seen": 1779695229.2728736,
+    "last_writer_task_id": "7a2f19d0-df02-4672-833e-97a79db2ced3"
+  },
+  "lib/compat/__init__.py": {
+    "latest_version": 3,
+    "deleted": false,
+    "mtime": 1779772450.0,
+    "size": 1309,
+    "first_seen": 1779695229.2890623,
+    "last_writer_task_id": "f3af9c69-f5ba-48f8-a6ea-f5ea24592fb9"
+  },
+  "lib/compat/openai.py": {
+    "latest_version": 6,
+    "deleted": false,
+    "mtime": 1779948880.0,
+    "size": 11213,
+    "first_seen": 1779695229.3064468,
+    "last_writer_task_id": ""
+  },
+  "lib/compat/anthropic.py": {
+    "latest_version": 4,
+    "deleted": false,
+    "mtime": 1779835311.0,
+    "size": 10120,
+    "first_seen": 1779695229.3242927,
+    "last_writer_task_id": ""
+  },
+  "docs/HEADLESS_API.md": {
+    "latest_version": 15,
+    "deleted": false,
+    "mtime": 1780107464.0,
+    "size": 26693,
+    "first_seen": 1779695229.3569043,
+    "last_writer_task_id": ""
+  },
+  "docs/COMPAT_OPENAI.md": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779693099.0,
+    "size": 2912,
+    "first_seen": 1779695229.3768282,
+    "last_writer_task_id": "32bd6869-9698-4e3f-b5d2-3361ba7337dd"
+  },
+  "docs/COMPAT_ANTHROPIC.md": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779693142.0,
+    "size": 3560,
+    "first_seen": 1779695229.3935606,
+    "last_writer_task_id": "32bd6869-9698-4e3f-b5d2-3361ba7337dd"
+  },
+  "docs/JS_LEAK_AUDIT.md": {
+    "latest_version": 22,
+    "deleted": false,
+    "mtime": 1779769936.0,
+    "size": 13339,
+    "first_seen": 1779695229.4104605,
+    "last_writer_task_id": "73166e89-57be-4a0f-b6dc-c59003166bc9"
+  },
+  "clients/python/tofu_sdk/__init__.py": {
+    "latest_version": 12,
+    "deleted": false,
+    "mtime": 1779769242.0,
+    "size": 22539,
+    "first_seen": 1779695229.4287467,
+    "last_writer_task_id": "73166e89-57be-4a0f-b6dc-c59003166bc9"
+  },
+  "clients/python/setup.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779693319.0,
+    "size": 688,
+    "first_seen": 1779695229.446518,
+    "last_writer_task_id": "32bd6869-9698-4e3f-b5d2-3361ba7337dd"
+  },
+  "clients/python/tofu_sdk/_cli.py": {
+    "latest_version": 4,
+    "deleted": false,
+    "mtime": 1779769741.0,
+    "size": 13567,
+    "first_seen": 1779695229.4633133,
+    "last_writer_task_id": "73166e89-57be-4a0f-b6dc-c59003166bc9"
+  },
+  "clients/python/README.md": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779693384.0,
+    "size": 2592,
+    "first_seen": 1779695229.4837706,
+    "last_writer_task_id": "32bd6869-9698-4e3f-b5d2-3361ba7337dd"
+  },
+  "tests/test_api_keys.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779693429.0,
+    "size": 4985,
+    "first_seen": 1779695229.5018318,
+    "last_writer_task_id": "32bd6869-9698-4e3f-b5d2-3361ba7337dd"
+  },
+  "tests/test_compat_openai.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779693487.0,
+    "size": 4778,
+    "first_seen": 1779695229.5204952,
+    "last_writer_task_id": "32bd6869-9698-4e3f-b5d2-3361ba7337dd"
+  },
+  "tests/test_compat_anthropic.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779693505.0,
+    "size": 4323,
+    "first_seen": 1779695229.5379813,
+    "last_writer_task_id": "32bd6869-9698-4e3f-b5d2-3361ba7337dd"
+  },
+  "tests/test_openapi_spec.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779693535.0,
+    "size": 4846,
+    "first_seen": 1779695229.554164,
+    "last_writer_task_id": "32bd6869-9698-4e3f-b5d2-3361ba7337dd"
+  },
+  "tests/test_api_v1_chat_route.py": {
+    "latest_version": 11,
+    "deleted": false,
+    "mtime": 1779697897.0,
+    "size": 7112,
+    "first_seen": 1779696331.0759509,
+    "last_writer_task_id": "bbf44779-6347-4aab-9fec-739ec9e6311b"
+  },
+  "tests/test_explicit_tools_passthrough.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779696203.0,
+    "size": 4004,
+    "first_seen": 1779698209.7670653,
+    "last_writer_task_id": "bbf44779-6347-4aab-9fec-739ec9e6311b"
+  },
+  "lib/usage_tracker.py": {
+    "latest_version": 5,
+    "deleted": false,
+    "mtime": 1779699464.0,
+    "size": 7276,
+    "first_seen": 1779699435.112471,
+    "last_writer_task_id": "7460e9b4-c9d5-4158-8360-b6f6e743351d"
+  },
+  "tests/test_usage_tracker.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1779699474.0,
+    "size": 4560,
+    "first_seen": 1779699474.2510362,
+    "last_writer_task_id": "7460e9b4-c9d5-4158-8360-b6f6e743351d"
+  },
+  "tests/test_usage_and_metrics_routes.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1779699592.0,
+    "size": 7186,
+    "first_seen": 1779699592.9259272,
+    "last_writer_task_id": "7460e9b4-c9d5-4158-8360-b6f6e743351d"
+  },
+  "routes/api_v1/usage.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1779835255.0,
+    "size": 2968,
+    "first_seen": 1779702079.0169938,
+    "last_writer_task_id": ""
+  },
+  "routes/metrics.py": {
+    "latest_version": 4,
+    "deleted": false,
+    "mtime": 1779834704.0,
+    "size": 7097,
+    "first_seen": 1779702079.0329046,
+    "last_writer_task_id": ""
+  },
+  "static/js/api-keys.js": {
+    "latest_version": 3,
+    "deleted": false,
+    "mtime": 1779850286.0,
+    "size": 15531,
+    "first_seen": 1779702079.2718027,
+    "last_writer_task_id": ""
+  },
+  "clients/typescript/package.json": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779700670.0,
+    "size": 448,
+    "first_seen": 1779702079.3235476,
+    "last_writer_task_id": "7460e9b4-c9d5-4158-8360-b6f6e743351d"
+  },
+  "clients/typescript/tsconfig.json": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779700676.0,
+    "size": 292,
+    "first_seen": 1779702079.3408647,
+    "last_writer_task_id": "7460e9b4-c9d5-4158-8360-b6f6e743351d"
+  },
+  "clients/typescript/src/index.ts": {
+    "latest_version": 10,
+    "deleted": false,
+    "mtime": 1779769352.0,
+    "size": 18989,
+    "first_seen": 1779702079.3595667,
+    "last_writer_task_id": "73166e89-57be-4a0f-b6dc-c59003166bc9"
+  },
+  "clients/typescript/README.md": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779701007.0,
+    "size": 3655,
+    "first_seen": 1779702079.3767998,
+    "last_writer_task_id": "7460e9b4-c9d5-4158-8360-b6f6e743351d"
+  },
+  "tests/test_e2e_headless_api.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779706353.0,
+    "size": 42152,
+    "first_seen": 1779707320.9218118,
+    "last_writer_task_id": "7a2f19d0-df02-4672-833e-97a79db2ced3"
+  },
+  "tests/test_sdk_e2e.py": {
+    "latest_version": 7,
+    "deleted": false,
+    "mtime": 1779769780.0,
+    "size": 9938,
+    "first_seen": 1779707320.97311,
+    "last_writer_task_id": "73166e89-57be-4a0f-b6dc-c59003166bc9"
+  },
+  "tests/test_ecosystem_sdk_compat.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779707108.0,
+    "size": 5425,
+    "first_seen": 1779707320.989322,
+    "last_writer_task_id": "7a2f19d0-df02-4672-833e-97a79db2ced3"
+  },
+  "tests/test_log_clean.py": {
+    "latest_version": 3,
+    "deleted": false,
+    "mtime": 1779754154.0,
+    "size": 12144,
+    "first_seen": 1779754154.4975345,
+    "last_writer_task_id": "5d58b231-b049-497b-85b5-7b6d7099a673"
+  },
+  "static/js/log-clean.js": {
+    "latest_version": 5,
+    "deleted": false,
+    "mtime": 1780028088.0,
+    "size": 11064,
+    "first_seen": 1779754243.296841,
+    "last_writer_task_id": ""
+  },
+  "lib/log_clean.py": {
+    "latest_version": 4,
+    "deleted": false,
+    "mtime": 1779835311.0,
+    "size": 21219,
+    "first_seen": 1779754654.1935685,
+    "last_writer_task_id": ""
+  },
+  "routes/api_v1/logs.py": {
+    "latest_version": 20,
+    "deleted": false,
+    "mtime": 1780049500.0,
+    "size": 12659,
+    "first_seen": 1779754654.229029,
+    "last_writer_task_id": "093a452b-e3cd-4db2-b383-0f0f48fc0058"
+  },
+  "tests/test_logs_clean_route.py": {
+    "latest_version": 6,
+    "deleted": false,
+    "mtime": 1779755631.0,
+    "size": 7072,
+    "first_seen": 1779754654.4739256,
+    "last_writer_task_id": ""
+  },
+  "tests/test_tool_changes.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1779755330.0,
+    "size": 12227,
+    "first_seen": 1779755330.3094845,
+    "last_writer_task_id": ""
+  },
+  "static/js/project.js": {
+    "latest_version": 28,
+    "deleted": false,
+    "mtime": 1780045388.0,
+    "size": 41151,
+    "first_seen": 1779756435.6245954,
+    "last_writer_task_id": ""
+  },
+  "lib/tool_changes.py": {
+    "latest_version": 4,
+    "deleted": false,
+    "mtime": 1779835312.0,
+    "size": 9553,
+    "first_seen": 1779756556.2942345,
+    "last_writer_task_id": ""
+  },
+  "lib/branch_meta.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779756823.0,
+    "size": 3185,
+    "first_seen": 1779757370.4394162,
+    "last_writer_task_id": "ba30a8ee-cb13-4dee-89e7-1ae7d0bbc2f4"
+  },
+  "tests/test_branch_meta.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779756900.0,
+    "size": 5327,
+    "first_seen": 1779757370.4739637,
+    "last_writer_task_id": "ba30a8ee-cb13-4dee-89e7-1ae7d0bbc2f4"
+  },
+  "tests/test_text_lang.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1779758730.0,
+    "size": 4488,
+    "first_seen": 1779758730.6603074,
+    "last_writer_task_id": "8284f001-cf98-4482-9447-bcb50ec37e0e"
+  },
+  "tools/github-batch-mcp/pyproject.toml": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779758310.0,
+    "size": 497,
+    "first_seen": 1779758862.1262004,
+    "last_writer_task_id": "6adf82c5-aa62-489a-b35b-d218a751e477"
+  },
+  "tools/github-batch-mcp/github_batch_mcp/__init__.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779758315.0,
+    "size": 273,
+    "first_seen": 1779758862.1436563,
+    "last_writer_task_id": "6adf82c5-aa62-489a-b35b-d218a751e477"
+  },
+  "tools/github-batch-mcp/github_batch_mcp/server.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779758358.0,
+    "size": 10898,
+    "first_seen": 1779758862.1602123,
+    "last_writer_task_id": "6adf82c5-aa62-489a-b35b-d218a751e477"
+  },
+  "tools/github-batch-mcp/README.md": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779758377.0,
+    "size": 2914,
+    "first_seen": 1779758862.1763325,
+    "last_writer_task_id": "6adf82c5-aa62-489a-b35b-d218a751e477"
+  },
+  "lib/text_lang.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779758584.0,
+    "size": 3369,
+    "first_seen": 1779759061.189294,
+    "last_writer_task_id": "8284f001-cf98-4482-9447-bcb50ec37e0e"
+  },
+  "tests/test_cost.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1779761223.0,
+    "size": 6652,
+    "first_seen": 1779761223.1425135,
+    "last_writer_task_id": "ca1129f6-cafd-4499-849e-6b71822b80ad"
+  },
+  "lib/conv_config.py": {
+    "latest_version": 7,
+    "deleted": false,
+    "mtime": 1779764374.0,
+    "size": 12726,
+    "first_seen": 1779761923.932796,
+    "last_writer_task_id": ""
+  },
+  "tests/test_conv_config.py": {
+    "latest_version": 5,
+    "deleted": false,
+    "mtime": 1779764896.0,
+    "size": 12661,
+    "first_seen": 1779761923.9505715,
+    "last_writer_task_id": "e59f52c9-8cd3-4de3-9368-f1f3a6d5540e"
+  },
+  "tests/test_conv_config_route.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779760787.0,
+    "size": 5811,
+    "first_seen": 1779761924.1481981,
+    "last_writer_task_id": "ca1129f6-cafd-4499-849e-6b71822b80ad"
+  },
+  "lib/cost.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779761163.0,
+    "size": 7685,
+    "first_seen": 1779761924.1646585,
+    "last_writer_task_id": "ca1129f6-cafd-4499-849e-6b71822b80ad"
+  },
+  "tests/test_branch_routes.py": {
+    "latest_version": 9,
+    "deleted": false,
+    "mtime": 1780281696.0,
+    "size": 11247,
+    "first_seen": 1779762666.1935782,
+    "last_writer_task_id": ""
+  },
+  "debug/test_search_api.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779766225.0,
+    "size": 6490,
+    "first_seen": 1779766418.0264492,
+    "last_writer_task_id": "f687777a-74c0-4c87-954a-8ae0aff87582"
+  },
+  "tests/test_agent_poll_routes.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779766457.0,
+    "size": 7786,
+    "first_seen": 1779766650.5810199,
+    "last_writer_task_id": "1d96438b-b247-4f9a-bfb1-37cda66ff564"
+  },
+  "tests/test_sdk_sse_parser.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779769828.0,
+    "size": 4742,
+    "first_seen": 1779769997.7997565,
+    "last_writer_task_id": "73166e89-57be-4a0f-b6dc-c59003166bc9"
+  },
+  "tests/test_restart_smoke.py": {
+    "latest_version": 20,
+    "deleted": false,
+    "mtime": 1779796329.0,
+    "size": 19738,
+    "first_seen": 1779771149.484966,
+    "last_writer_task_id": "1d5012ef-6890-4deb-ae97-a05ab9360477"
+  },
+  "lib/compat.py": {
+    "latest_version": 0,
+    "deleted": true,
+    "mtime": 0,
+    "size": 0,
+    "first_seen": 1779772671.7800736,
+    "last_writer_task_id": "f3af9c69-f5ba-48f8-a6ea-f5ea24592fb9"
+  },
+  "lib/compat/_platform.py": {
+    "latest_version": 6,
+    "deleted": false,
+    "mtime": 1779835253.0,
+    "size": 13400,
+    "first_seen": 1779772673.5949636,
+    "last_writer_task_id": ""
+  },
+  "scripts/find_dead_functions.py": {
+    "latest_version": 4,
+    "deleted": false,
+    "mtime": 1780280378.0,
+    "size": 17240,
+    "first_seen": 1779794768.7860422,
+    "last_writer_task_id": "c2c9af6a-1a9d-4aa2-a02b-cb8b625272ff"
+  },
+  "lib/agent_options.py": {
+    "latest_version": 8,
+    "deleted": false,
+    "mtime": 1780287526.0,
+    "size": 17234,
+    "first_seen": 1779800888.3780503,
+    "last_writer_task_id": ""
+  },
+  "tests/test_agent_options.py": {
+    "latest_version": 3,
+    "deleted": false,
+    "mtime": 1779805900.0,
+    "size": 7392,
+    "first_seen": 1779800888.3949077,
+    "last_writer_task_id": ""
+  },
+  "lib/tasks_pkg/tool_hooks.py": {
+    "latest_version": 3,
+    "deleted": false,
+    "mtime": 1779801508.0,
+    "size": 11896,
+    "first_seen": 1779801507.9714692,
+    "last_writer_task_id": ""
+  },
+  "lib/tasks_pkg/compaction/_pipeline.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1779801592.0,
+    "size": 6697,
+    "first_seen": 1779801592.024889,
+    "last_writer_task_id": ""
+  },
+  "tests/test_hook_taxonomy.py": {
+    "latest_version": 9,
+    "deleted": false,
+    "mtime": 1779809626.0,
+    "size": 6542,
+    "first_seen": 1779803167.8859854,
+    "last_writer_task_id": "f37d28fc-8590-4551-8cc2-c477042f75f0"
+  },
+  "lib/cost_estimator.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1779835253.0,
+    "size": 5435,
+    "first_seen": 1779803167.9027748,
+    "last_writer_task_id": ""
+  },
+  "tests/test_cost_estimator.py": {
+    "latest_version": 3,
+    "deleted": false,
+    "mtime": 1779805901.0,
+    "size": 5329,
+    "first_seen": 1779803168.0221596,
+    "last_writer_task_id": ""
+  },
+  "tests/test_sdk_parity_e2e.py": {
+    "latest_version": 4,
+    "deleted": false,
+    "mtime": 1779809400.0,
+    "size": 11706,
+    "first_seen": 1779805901.1452615,
+    "last_writer_task_id": "f37d28fc-8590-4551-8cc2-c477042f75f0"
+  },
+  "debug/audit_logging.py": {
+    "latest_version": 14,
+    "deleted": false,
+    "mtime": 1779834906.0,
+    "size": 14457,
+    "first_seen": 1779833353.683225,
+    "last_writer_task_id": ""
+  },
+  "lib/doc_parser.py": {
+    "latest_version": 4,
+    "deleted": false,
+    "mtime": 1779835253.0,
+    "size": 25591,
+    "first_seen": 1779834781.3692572,
+    "last_writer_task_id": ""
+  },
+  "lib/pptx_translator.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1779834846.0,
+    "size": 23643,
+    "first_seen": 1779834846.0337634,
+    "last_writer_task_id": ""
+  },
+  "routes/oauth.py": {
+    "latest_version": 4,
+    "deleted": false,
+    "mtime": 1780025112.0,
+    "size": 5508,
+    "first_seen": 1779834963.413049,
+    "last_writer_task_id": ""
+  },
+  "lib/token_counter/config.py": {
+    "latest_version": 3,
+    "deleted": false,
+    "mtime": 1780281647.0,
+    "size": 2221,
+    "first_seen": 1779835311.951073,
+    "last_writer_task_id": ""
+  },
+  "tests/test_code_quality.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1779839202.0,
+    "size": 11741,
+    "first_seen": 1779839202.3704348,
+    "last_writer_task_id": ""
+  },
+  "tests/test_auth_mode.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1779850430.0,
+    "size": 5719,
+    "first_seen": 1779850430.9731023,
+    "last_writer_task_id": ""
+  },
+  "lib/auth_mode.py": {
+    "latest_version": 3,
+    "deleted": false,
+    "mtime": 1780241241.0,
+    "size": 7951,
+    "first_seen": 1779851590.295461,
+    "last_writer_task_id": ""
+  },
+  "routes/api_v1/auth_mode.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779849926.0,
+    "size": 4875,
+    "first_seen": 1779851590.3338494,
+    "last_writer_task_id": "8774903e-633e-43b8-ba00-5244dfc0591a"
+  },
+  "tests/test_billing.py": {
+    "latest_version": 9,
+    "deleted": false,
+    "mtime": 1779855712.0,
+    "size": 8722,
+    "first_seen": 1779855172.8250215,
+    "last_writer_task_id": "fd73d05d-d882-453c-8917-80e022d09e0d"
+  },
+  "lib/billing/users.py": {
+    "latest_version": 15,
+    "deleted": false,
+    "mtime": 1780241157.0,
+    "size": 10184,
+    "first_seen": 1779855221.1330905,
+    "last_writer_task_id": ""
+  },
+  "lib/billing/ledger.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1779855248.0,
+    "size": 6960,
+    "first_seen": 1779855248.245114,
+    "last_writer_task_id": ""
+  },
+  "lib/billing/wallet.py": {
+    "latest_version": 6,
+    "deleted": false,
+    "mtime": 1779864677.0,
+    "size": 12398,
+    "first_seen": 1779855248.3733897,
+    "last_writer_task_id": "6be8a8d5-25f9-4868-ba9c-441475ecbb6d"
+  },
+  "lib/billing/__init__.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779854637.0,
+    "size": 3054,
+    "first_seen": 1779855881.6834695,
+    "last_writer_task_id": "fd73d05d-d882-453c-8917-80e022d09e0d"
+  },
+  "lib/billing/pricing.py": {
+    "latest_version": 3,
+    "deleted": false,
+    "mtime": 1780241158.0,
+    "size": 7629,
+    "first_seen": 1779855881.7050197,
+    "last_writer_task_id": ""
+  },
+  "lib/billing/cost.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779854693.0,
+    "size": 4763,
+    "first_seen": 1779855881.7248273,
+    "last_writer_task_id": "fd73d05d-d882-453c-8917-80e022d09e0d"
+  },
+  "routes/api_v1/billing.py": {
+    "latest_version": 5,
+    "deleted": false,
+    "mtime": 1779864374.0,
+    "size": 21385,
+    "first_seen": 1779855881.7524397,
+    "last_writer_task_id": "6be8a8d5-25f9-4868-ba9c-441475ecbb6d"
+  },
+  "static/dashboard.html": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779855080.0,
+    "size": 22863,
+    "first_seen": 1779855881.787112,
+    "last_writer_task_id": "fd73d05d-d882-453c-8917-80e022d09e0d"
+  },
+  "routes/api_v1/users.py": {
+    "latest_version": 3,
+    "deleted": false,
+    "mtime": 1779864312.0,
+    "size": 14680,
+    "first_seen": 1779857210.0956933,
+    "last_writer_task_id": "6be8a8d5-25f9-4868-ba9c-441475ecbb6d"
+  },
+  "lib/billing/janitor.py": {
+    "latest_version": 3,
+    "deleted": false,
+    "mtime": 1780284589.0,
+    "size": 7671,
+    "first_seen": 1779857210.2417564,
+    "last_writer_task_id": ""
+  },
+  "lib/billing/payments/__init__.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779856742.0,
+    "size": 1781,
+    "first_seen": 1779857210.2961981,
+    "last_writer_task_id": "98a39fd1-5cf0-4ab5-8315-e305c75fc5b4"
+  },
+  "lib/billing/payments/_common.py": {
+    "latest_version": 4,
+    "deleted": false,
+    "mtime": 1780241158.0,
+    "size": 8786,
+    "first_seen": 1779857210.3358278,
+    "last_writer_task_id": ""
+  },
+  "lib/billing/payments/stripe.py": {
+    "latest_version": 5,
+    "deleted": false,
+    "mtime": 1780241158.0,
+    "size": 5968,
+    "first_seen": 1779857210.3528967,
+    "last_writer_task_id": ""
+  },
+  "lib/billing/payments/alipay.py": {
+    "latest_version": 5,
+    "deleted": false,
+    "mtime": 1780241158.0,
+    "size": 7635,
+    "first_seen": 1779857210.3705316,
+    "last_writer_task_id": ""
+  },
+  "static/js/relay-admin.js": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779856971.0,
+    "size": 15960,
+    "first_seen": 1779857210.500583,
+    "last_writer_task_id": "98a39fd1-5cf0-4ab5-8315-e305c75fc5b4"
+  },
+  "static/login.html": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779857035.0,
+    "size": 5871,
+    "first_seen": 1779857210.6292384,
+    "last_writer_task_id": "98a39fd1-5cf0-4ab5-8315-e305c75fc5b4"
+  },
+  "tests/test_billing_phase2.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779857087.0,
+    "size": 11944,
+    "first_seen": 1779857210.7402177,
+    "last_writer_task_id": "98a39fd1-5cf0-4ab5-8315-e305c75fc5b4"
+  },
+  "lib/config_dir.py": {
+    "latest_version": 3,
+    "deleted": false,
+    "mtime": 1780281649.0,
+    "size": 2263,
+    "first_seen": 1779864600.33952,
+    "last_writer_task_id": ""
+  },
+  "docs/async_swarm_design_report.html": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779888079.0,
+    "size": 46245,
+    "first_seen": 1779888091.9056053,
+    "last_writer_task_id": "a5c61689-e51b-4816-85bf-760fc213e50e"
+  },
+  "tests/test_agent_inbox.py": {
+    "latest_version": 5,
+    "deleted": false,
+    "mtime": 1779940459.0,
+    "size": 8887,
+    "first_seen": 1779897949.0625265,
+    "last_writer_task_id": ""
+  },
+  "lib/swarm/tools.py": {
+    "latest_version": 4,
+    "deleted": false,
+    "mtime": 1779960394.0,
+    "size": 16774,
+    "first_seen": 1779898000.3180268,
+    "last_writer_task_id": ""
+  },
+  "lib/swarm/__init__.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1779898082.0,
+    "size": 5215,
+    "first_seen": 1779898082.961925,
+    "last_writer_task_id": ""
+  },
+  "lib/swarm/master.py": {
+    "latest_version": 21,
+    "deleted": false,
+    "mtime": 1780023501.0,
+    "size": 29211,
+    "first_seen": 1779898201.3729768,
+    "last_writer_task_id": ""
+  },
+  "lib/swarm/integration.py": {
+    "latest_version": 18,
+    "deleted": false,
+    "mtime": 1780241198.0,
+    "size": 21444,
+    "first_seen": 1779898295.157469,
+    "last_writer_task_id": ""
+  },
+  "lib/swarm/scheduler.py": {
+    "latest_version": 6,
+    "deleted": false,
+    "mtime": 1779940324.0,
+    "size": 27295,
+    "first_seen": 1779898570.3818252,
+    "last_writer_task_id": ""
+  },
+  "tests/test_swarm_async.py": {
+    "latest_version": 10,
+    "deleted": false,
+    "mtime": 1779967899.0,
+    "size": 24168,
+    "first_seen": 1779898584.0754018,
+    "last_writer_task_id": ""
+  },
+  "lib/agent_inbox.py": {
+    "latest_version": 10,
+    "deleted": false,
+    "mtime": 1780241158.0,
+    "size": 12639,
+    "first_seen": 1779898959.1374843,
+    "last_writer_task_id": ""
+  },
+  "tests/test_swarm_tool_scoping.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779898031.0,
+    "size": 3114,
+    "first_seen": 1779898959.1649022,
+    "last_writer_task_id": "97a964f2-1b61-4edd-b682-2ea8c4293135"
+  },
+  "static/js/api.js": {
+    "latest_version": 88,
+    "deleted": false,
+    "mtime": 1780049530.0,
+    "size": 42847,
+    "first_seen": 1779941427.2760417,
+    "last_writer_task_id": "093a452b-e3cd-4db2-b383-0f0f48fc0058"
+  },
+  "tests/test_frontend_api_isolation.py": {
+    "latest_version": 22,
+    "deleted": false,
+    "mtime": 1779950742.0,
+    "size": 6457,
+    "first_seen": 1779941569.7167096,
+    "last_writer_task_id": ""
+  },
+  "docs/api_client.md": {
+    "latest_version": 8,
+    "deleted": false,
+    "mtime": 1780024190.0,
+    "size": 7391,
+    "first_seen": 1779941714.9673648,
+    "last_writer_task_id": ""
+  },
+  "static/js/agent-backend.js": {
+    "latest_version": 4,
+    "deleted": false,
+    "mtime": 1780021943.0,
+    "size": 8432,
+    "first_seen": 1779942708.9973037,
+    "last_writer_task_id": ""
+  },
+  "static/js/timer.js": {
+    "latest_version": 4,
+    "deleted": false,
+    "mtime": 1779942748.0,
+    "size": 7395,
+    "first_seen": 1779942727.1275487,
+    "last_writer_task_id": ""
+  },
+  "static/js/scheduler.js": {
+    "latest_version": 3,
+    "deleted": false,
+    "mtime": 1779942768.0,
+    "size": 6906,
+    "first_seen": 1779942756.1878266,
+    "last_writer_task_id": ""
+  },
+  "static/js/memory.js": {
+    "latest_version": 6,
+    "deleted": false,
+    "mtime": 1779942861.0,
+    "size": 20704,
+    "first_seen": 1779942821.0912924,
+    "last_writer_task_id": ""
+  },
+  "static/js/skills.js": {
+    "latest_version": 9,
+    "deleted": false,
+    "mtime": 1780024190.0,
+    "size": 20003,
+    "first_seen": 1779943068.7369778,
+    "last_writer_task_id": ""
+  },
+  "static/js/myday.js": {
+    "latest_version": 16,
+    "deleted": false,
+    "mtime": 1779944252.0,
+    "size": 51484,
+    "first_seen": 1779944250.586811,
+    "last_writer_task_id": ""
+  },
+  "lib/translate/constants.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779946941.0,
+    "size": 460,
+    "first_seen": 1779947702.8168123,
+    "last_writer_task_id": "0facaf9b-117c-4cdc-b695-2b609439c1e1"
+  },
+  "lib/translate/prompt.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779946970.0,
+    "size": 2949,
+    "first_seen": 1779947702.837153,
+    "last_writer_task_id": "0facaf9b-117c-4cdc-b695-2b609439c1e1"
+  },
+  "lib/translate/notranslate.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779947004.0,
+    "size": 4796,
+    "first_seen": 1779947702.8578575,
+    "last_writer_task_id": "0facaf9b-117c-4cdc-b695-2b609439c1e1"
+  },
+  "lib/translate/chunking.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779947020.0,
+    "size": 1343,
+    "first_seen": 1779947702.8802586,
+    "last_writer_task_id": "0facaf9b-117c-4cdc-b695-2b609439c1e1"
+  },
+  "lib/translate/dedup.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779947086.0,
+    "size": 7997,
+    "first_seen": 1779947702.9001799,
+    "last_writer_task_id": "0facaf9b-117c-4cdc-b695-2b609439c1e1"
+  },
+  "lib/translate/status.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779947103.0,
+    "size": 1739,
+    "first_seen": 1779947702.9199932,
+    "last_writer_task_id": "0facaf9b-117c-4cdc-b695-2b609439c1e1"
+  },
+  "lib/translate/engine.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779947193.0,
+    "size": 21132,
+    "first_seen": 1779947702.939767,
+    "last_writer_task_id": "0facaf9b-117c-4cdc-b695-2b609439c1e1"
+  },
+  "lib/translate/commit.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779947235.0,
+    "size": 8787,
+    "first_seen": 1779947702.9597235,
+    "last_writer_task_id": "0facaf9b-117c-4cdc-b695-2b609439c1e1"
+  },
+  "lib/translate/runtime.py": {
+    "latest_version": 5,
+    "deleted": false,
+    "mtime": 1780015065.0,
+    "size": 10798,
+    "first_seen": 1779947702.981569,
+    "last_writer_task_id": "7bd50f5b-ee2a-4799-b0bc-d633544471b1"
+  },
+  "lib/translate/pptx.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779947306.0,
+    "size": 4737,
+    "first_seen": 1779947703.008272,
+    "last_writer_task_id": "0facaf9b-117c-4cdc-b695-2b609439c1e1"
+  },
+  "tests/test_byo_providers.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1779948027.0,
+    "size": 8089,
+    "first_seen": 1779948027.5266602,
+    "last_writer_task_id": "dc30e14a-61ae-4cbc-a303-335d926365a9"
+  },
+  "lib/daily_report/storage.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1779948041.0,
+    "size": 4261,
+    "first_seen": 1779948041.772258,
+    "last_writer_task_id": ""
+  },
+  "lib/daily_report/__init__.py": {
+    "latest_version": 3,
+    "deleted": false,
+    "mtime": 1779948066.0,
+    "size": 3240,
+    "first_seen": 1779948054.9800327,
+    "last_writer_task_id": ""
+  },
+  "lib/llm_dispatch/ephemeral.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779947585.0,
+    "size": 10744,
+    "first_seen": 1779948294.3892713,
+    "last_writer_task_id": "dc30e14a-61ae-4cbc-a303-335d926365a9"
+  },
+  "lib/byo_providers.py": {
+    "latest_version": 8,
+    "deleted": false,
+    "mtime": 1780287170.0,
+    "size": 14119,
+    "first_seen": 1779948294.4107056,
+    "last_writer_task_id": ""
+  },
+  "lib/trajectory.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779947678.0,
+    "size": 8643,
+    "first_seen": 1779948294.4349015,
+    "last_writer_task_id": "dc30e14a-61ae-4cbc-a303-335d926365a9"
+  },
+  "routes/api_v1/providers.py": {
+    "latest_version": 11,
+    "deleted": false,
+    "mtime": 1780107275.0,
+    "size": 16772,
+    "first_seen": 1779948294.4602137,
+    "last_writer_task_id": ""
+  },
+  "routes/api_v1/agent_run.py": {
+    "latest_version": 11,
+    "deleted": false,
+    "mtime": 1780241199.0,
+    "size": 28026,
+    "first_seen": 1779948294.517133,
+    "last_writer_task_id": ""
+  },
+  "tests/test_ephemeral_slot.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779948057.0,
+    "size": 3745,
+    "first_seen": 1779948294.7010734,
+    "last_writer_task_id": "dc30e14a-61ae-4cbc-a303-335d926365a9"
+  },
+  "tests/test_trajectory.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779948090.0,
+    "size": 5551,
+    "first_seen": 1779948294.7208245,
+    "last_writer_task_id": "dc30e14a-61ae-4cbc-a303-335d926365a9"
+  },
+  "tests/test_api_v1_agent_run.py": {
+    "latest_version": 8,
+    "deleted": false,
+    "mtime": 1779948977.0,
+    "size": 16832,
+    "first_seen": 1779948294.739078,
+    "last_writer_task_id": ""
+  },
+  "lib/daily_report/prompts.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779948009.0,
+    "size": 5718,
+    "first_seen": 1779948684.2957788,
+    "last_writer_task_id": "9e2adbf4-c164-4cf8-9f14-0d2c2cd1559f"
+  },
+  "lib/daily_report/cost.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779948149.0,
+    "size": 19054,
+    "first_seen": 1779948684.3206995,
+    "last_writer_task_id": "9e2adbf4-c164-4cf8-9f14-0d2c2cd1559f"
+  },
+  "lib/daily_report/todos.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779948199.0,
+    "size": 12065,
+    "first_seen": 1779948684.3405845,
+    "last_writer_task_id": "9e2adbf4-c164-4cf8-9f14-0d2c2cd1559f"
+  },
+  "lib/daily_report/llm.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779948237.0,
+    "size": 6471,
+    "first_seen": 1779948684.3605142,
+    "last_writer_task_id": "9e2adbf4-c164-4cf8-9f14-0d2c2cd1559f"
+  },
+  "lib/daily_report/conversations.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779948326.0,
+    "size": 20109,
+    "first_seen": 1779948684.3772998,
+    "last_writer_task_id": "9e2adbf4-c164-4cf8-9f14-0d2c2cd1559f"
+  },
+  "lib/daily_report/generator.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779948350.0,
+    "size": 3938,
+    "first_seen": 1779948684.3959358,
+    "last_writer_task_id": "9e2adbf4-c164-4cf8-9f14-0d2c2cd1559f"
+  },
+  "lib/daily_report/scheduler.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779948371.0,
+    "size": 2673,
+    "first_seen": 1779948684.414596,
+    "last_writer_task_id": "9e2adbf4-c164-4cf8-9f14-0d2c2cd1559f"
+  },
+  "tests/test_api_v1_byo_surface_polish.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1779949084.0,
+    "size": 9716,
+    "first_seen": 1779949084.8592765,
+    "last_writer_task_id": ""
+  },
+  "lib/paper/report_runtime.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1779949591.0,
+    "size": 4604,
+    "first_seen": 1779949591.9137988,
+    "last_writer_task_id": ""
+  },
+  "lib/paper/hashing.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779948994.0,
+    "size": 1116,
+    "first_seen": 1779950192.5880952,
+    "last_writer_task_id": "42528ed0-207b-4268-9c08-e7eb25ffb9ad"
+  },
+  "lib/paper/prompts.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779949196.0,
+    "size": 25448,
+    "first_seen": 1779950192.6063948,
+    "last_writer_task_id": "42528ed0-207b-4268-9c08-e7eb25ffb9ad"
+  },
+  "lib/paper/llm_stream.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779949218.0,
+    "size": 2014,
+    "first_seen": 1779950192.6253524,
+    "last_writer_task_id": "42528ed0-207b-4268-9c08-e7eb25ffb9ad"
+  },
+  "lib/paper/tools.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779949251.0,
+    "size": 6292,
+    "first_seen": 1779950192.6425912,
+    "last_writer_task_id": "42528ed0-207b-4268-9c08-e7eb25ffb9ad"
+  },
+  "lib/paper/images.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779949493.0,
+    "size": 17311,
+    "first_seen": 1779950192.6638856,
+    "last_writer_task_id": "42528ed0-207b-4268-9c08-e7eb25ffb9ad"
+  },
+  "lib/paper/arxiv.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779949515.0,
+    "size": 1045,
+    "first_seen": 1779950192.6837595,
+    "last_writer_task_id": "42528ed0-207b-4268-9c08-e7eb25ffb9ad"
+  },
+  "lib/paper/library.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779949537.0,
+    "size": 1896,
+    "first_seen": 1779950192.7015128,
+    "last_writer_task_id": "42528ed0-207b-4268-9c08-e7eb25ffb9ad"
+  },
+  "lib/paper/report_engine.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779949654.0,
+    "size": 13410,
+    "first_seen": 1779950192.7223356,
+    "last_writer_task_id": "42528ed0-207b-4268-9c08-e7eb25ffb9ad"
+  },
+  "lib/paper/translate_runtime.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779949683.0,
+    "size": 3264,
+    "first_seen": 1779950192.739861,
+    "last_writer_task_id": "42528ed0-207b-4268-9c08-e7eb25ffb9ad"
+  },
+  "lib/paper/translate_engine.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779949717.0,
+    "size": 5995,
+    "first_seen": 1779950192.798073,
+    "last_writer_task_id": "42528ed0-207b-4268-9c08-e7eb25ffb9ad"
+  },
+  "lib/paper/__init__.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779949752.0,
+    "size": 3667,
+    "first_seen": 1779950192.8161998,
+    "last_writer_task_id": "42528ed0-207b-4268-9c08-e7eb25ffb9ad"
+  },
+  "static/js/ui/streaming_ui.js": {
+    "latest_version": 18,
+    "deleted": false,
+    "mtime": 1780280152.0,
+    "size": 72759,
+    "first_seen": 1779969457.1309824,
+    "last_writer_task_id": ""
+  },
+  "claude_code_run_command_report.html": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1779983219.0,
+    "size": 25953,
+    "first_seen": 1779983233.1293242,
+    "last_writer_task_id": "fd2c0fd0-6a2d-432a-b1d9-cfcf9e07f923"
+  },
+  "docs/legacy_api_migration.md": {
+    "latest_version": 71,
+    "deleted": false,
+    "mtime": 1780029088.0,
+    "size": 38211,
+    "first_seen": 1780021723.6119554,
+    "last_writer_task_id": ""
+  },
+  "lib/agent_backends/detection.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1780021958.0,
+    "size": 7590,
+    "first_seen": 1780021958.31544,
+    "last_writer_task_id": ""
+  },
+  "routes/api_v1/agent_backends.py": {
+    "latest_version": 3,
+    "deleted": false,
+    "mtime": 1780022066.0,
+    "size": 1889,
+    "first_seen": 1780022059.4490602,
+    "last_writer_task_id": ""
+  },
+  "routes/agent_backends.py": {
+    "latest_version": 0,
+    "deleted": true,
+    "mtime": 0,
+    "size": 0,
+    "first_seen": 1780022230.8485463,
+    "last_writer_task_id": "bed89312-9835-4e00-b435-2cead4861200"
+  },
+  "routes/api_v1/folders.py": {
+    "latest_version": 6,
+    "deleted": false,
+    "mtime": 1780022445.0,
+    "size": 7453,
+    "first_seen": 1780022314.1958697,
+    "last_writer_task_id": ""
+  },
+  "routes/folders.py": {
+    "latest_version": 0,
+    "deleted": true,
+    "mtime": 0,
+    "size": 0,
+    "first_seen": 1780022694.474236,
+    "last_writer_task_id": "7da2eeba-504a-4900-92d0-a3a42ff70d3e"
+  },
+  "routes/api_v1/optimizer.py": {
+    "latest_version": 8,
+    "deleted": false,
+    "mtime": 1780241671.0,
+    "size": 12474,
+    "first_seen": 1780022930.8631349,
+    "last_writer_task_id": ""
+  },
+  "lib/scheduler/manager.py": {
+    "latest_version": 7,
+    "deleted": false,
+    "mtime": 1780284682.0,
+    "size": 27603,
+    "first_seen": 1780023009.2754903,
+    "last_writer_task_id": ""
+  },
+  "routes/api_v1/scheduler.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1780023041.0,
+    "size": 10464,
+    "first_seen": 1780023171.2218359,
+    "last_writer_task_id": "407b07bf-6519-49df-be7d-886e16f50826"
+  },
+  "routes/scheduler.py": {
+    "latest_version": 0,
+    "deleted": true,
+    "mtime": 0,
+    "size": 0,
+    "first_seen": 1780023171.2411203,
+    "last_writer_task_id": "407b07bf-6519-49df-be7d-886e16f50826"
+  },
+  "static/js/main/main_send_pipeline.js": {
+    "latest_version": 14,
+    "deleted": false,
+    "mtime": 1780285708.0,
+    "size": 51571,
+    "first_seen": 1780023291.0323038,
+    "last_writer_task_id": "2f7149c9-ff26-44da-ad58-f1f1ac3900bf"
+  },
+  "routes/api_v1/endpoint.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1780023277.0,
+    "size": 6238,
+    "first_seen": 1780023385.1486382,
+    "last_writer_task_id": "38f151e8-0c66-4fdc-81ed-5efe00be3613"
+  },
+  "routes/api_v1/swarm.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1780023448.0,
+    "size": 3672,
+    "first_seen": 1780023628.1840444,
+    "last_writer_task_id": "dda34f36-7ef6-498d-9c63-597a77d32618"
+  },
+  "routes/swarm.py": {
+    "latest_version": 0,
+    "deleted": true,
+    "mtime": 0,
+    "size": 0,
+    "first_seen": 1780023628.2005508,
+    "last_writer_task_id": "dda34f36-7ef6-498d-9c63-597a77d32618"
+  },
+  "routes/api_v1/desktop.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1780023692.0,
+    "size": 1507,
+    "first_seen": 1780023815.0894055,
+    "last_writer_task_id": "dcd941ba-e080-417d-bafa-1aa42de15350"
+  },
+  "routes/api_v1/browser.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1780023871.0,
+    "size": 4002,
+    "first_seen": 1780024040.3927734,
+    "last_writer_task_id": "d5717fde-a2c9-41bd-90f4-3dc322199bbb"
+  },
+  "routes/api_v1/memory.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1780024124.0,
+    "size": 15581,
+    "first_seen": 1780024282.9516194,
+    "last_writer_task_id": "64bd481e-853e-4c06-8f50-5ebaf9c8956b"
+  },
+  "routes/memory.py": {
+    "latest_version": 0,
+    "deleted": true,
+    "mtime": 0,
+    "size": 0,
+    "first_seen": 1780024282.9704015,
+    "last_writer_task_id": "64bd481e-853e-4c06-8f50-5ebaf9c8956b"
+  },
+  "routes/api_v1/mcp.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1780024409.0,
+    "size": 17122,
+    "first_seen": 1780024649.621199,
+    "last_writer_task_id": "2e7a066b-835f-4768-8276-eea25342cca1"
+  },
+  "routes/api_v1/oauth.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1780025077.0,
+    "size": 4201,
+    "first_seen": 1780025208.6502635,
+    "last_writer_task_id": "2af75a16-c796-4bfd-98be-74885c35dad4"
+  },
+  "routes/api_v1/project.py": {
+    "latest_version": 5,
+    "deleted": false,
+    "mtime": 1780025717.0,
+    "size": 16044,
+    "first_seen": 1780025393.528017,
+    "last_writer_task_id": ""
+  },
+  "routes/project.py": {
+    "latest_version": 0,
+    "deleted": true,
+    "mtime": 0,
+    "size": 0,
+    "first_seen": 1780025597.7829967,
+    "last_writer_task_id": "d02749a4-b15f-4390-9115-80668ef64831"
+  },
+  "static/js/settings/other_tabs.js": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1780025952.0,
+    "size": 12586,
+    "first_seen": 1780025952.2338672,
+    "last_writer_task_id": ""
+  },
+  "routes/api_v1/translate.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1780025833.0,
+    "size": 9595,
+    "first_seen": 1780026081.4037452,
+    "last_writer_task_id": "70509109-77b4-4ae0-82b3-75a2c593b344"
+  },
+  "routes/api_v1/artifacts.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1780026211.0,
+    "size": 7181,
+    "first_seen": 1780026388.4957087,
+    "last_writer_task_id": "aa33d649-c294-45fd-b593-12bb3039c9ae"
+  },
+  "static/js/core/conversations.js": {
+    "latest_version": 5,
+    "deleted": false,
+    "mtime": 1780282440.0,
+    "size": 59804,
+    "first_seen": 1780026945.1415179,
+    "last_writer_task_id": ""
+  },
+  "routes/api_v1/paper.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1780027170.0,
+    "size": 1544,
+    "first_seen": 1780027615.9827123,
+    "last_writer_task_id": "674e764c-baa0-4159-8942-27fa29101118"
+  },
+  "routes/api_v1/uploads.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1780027740.0,
+    "size": 1009,
+    "first_seen": 1780027948.2923553,
+    "last_writer_task_id": "ce0918c3-32fc-417c-9c1c-6f6be29424b6"
+  },
+  "static/js/settings/key_stats.js": {
+    "latest_version": 6,
+    "deleted": false,
+    "mtime": 1780282866.0,
+    "size": 11051,
+    "first_seen": 1780028088.6957583,
+    "last_writer_task_id": ""
+  },
+  "routes/api_v1/common.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1780027990.0,
+    "size": 1782,
+    "first_seen": 1780028226.430482,
+    "last_writer_task_id": "be62fb44-f34b-4935-89ff-aa874c869aa1"
+  },
+  "static/js/settings/core_panel.js": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1780028372.0,
+    "size": 8857,
+    "first_seen": 1780028372.7537255,
+    "last_writer_task_id": ""
+  },
+  "routes/api_v1/config.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1780028312.0,
+    "size": 1310,
+    "first_seen": 1780028503.4298768,
+    "last_writer_task_id": "c05ce4a6-b56f-4c9d-988e-3c8f387ba80d"
+  },
+  "static/js/trading/state.js": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1780028971.0,
+    "size": 4162,
+    "first_seen": 1780028971.2037957,
+    "last_writer_task_id": ""
+  },
+  "tests/test_legacy_api_removed.py": {
+    "latest_version": 3,
+    "deleted": false,
+    "mtime": 1780046412.0,
+    "size": 6025,
+    "first_seen": 1780029175.8586118,
+    "last_writer_task_id": ""
+  },
+  "static/js/ui/sse_pipeline.js": {
+    "latest_version": 15,
+    "deleted": false,
+    "mtime": 1780196587.0,
+    "size": 139484,
+    "first_seen": 1780046061.455062,
+    "last_writer_task_id": "d2b4628d-86b6-4084-98da-108d0989b4ba"
+  },
+  "routes/legacy_redirects.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1780046377.0,
+    "size": 1900,
+    "first_seen": 1780046501.0283453,
+    "last_writer_task_id": "c54d72f1-9ec5-4070-be6b-9aa872af471e"
+  },
+  "static/js/core/cost.js": {
+    "latest_version": 5,
+    "deleted": false,
+    "mtime": 1780110908.0,
+    "size": 12622,
+    "first_seen": 1780048906.2433002,
+    "last_writer_task_id": "2d96ff3e-6b22-4e1e-965f-5417fb859d64"
+  },
+  "static/js/ui/chat_render.js": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1780049555.0,
+    "size": 50233,
+    "first_seen": 1780049555.1675556,
+    "last_writer_task_id": "093a452b-e3cd-4db2-b383-0f0f48fc0058"
+  },
+  "static/js/ui/finish_info.js": {
+    "latest_version": 6,
+    "deleted": false,
+    "mtime": 1780110890.0,
+    "size": 23946,
+    "first_seen": 1780049572.3685396,
+    "last_writer_task_id": "2d96ff3e-6b22-4e1e-965f-5417fb859d64"
+  },
+  "static/js/settings/provider_render.js": {
+    "latest_version": 14,
+    "deleted": false,
+    "mtime": 1780282810.0,
+    "size": 34604,
+    "first_seen": 1780191358.6273036,
+    "last_writer_task_id": ""
+  },
+  "static/js/settings/model_edit.js": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1780195059.0,
+    "size": 7948,
+    "first_seen": 1780195059.8400712,
+    "last_writer_task_id": ""
+  },
+  "lib/token_counter/anthropic_api.py": {
+    "latest_version": 5,
+    "deleted": false,
+    "mtime": 1780241608.0,
+    "size": 6325,
+    "first_seen": 1780241608.0060954,
+    "last_writer_task_id": ""
+  },
+  "lib/token_counter/gemini_api.py": {
+    "latest_version": 5,
+    "deleted": false,
+    "mtime": 1780241609.0,
+    "size": 4732,
+    "first_seen": 1780241608.5725765,
+    "last_writer_task_id": ""
+  },
+  "tests/test_compaction_improvements.py": {
+    "latest_version": 3,
+    "deleted": false,
+    "mtime": 1780241711.0,
+    "size": 84464,
+    "first_seen": 1780241711.4025986,
+    "last_writer_task_id": ""
+  },
+  "static/js/ui/tool_rounds.js": {
+    "latest_version": 4,
+    "deleted": false,
+    "mtime": 1780282049.0,
+    "size": 71508,
+    "first_seen": 1780280165.0225987,
+    "last_writer_task_id": ""
+  },
+  "install.ps1": {
+    "latest_version": 2,
+    "deleted": true,
+    "mtime": 0,
+    "size": 0,
+    "first_seen": 1780280324.6360679,
+    "last_writer_task_id": "c2c9af6a-1a9d-4aa2-a02b-cb8b625272ff"
+  },
+  "lib/memory/installer.py": {
+    "latest_version": 3,
+    "deleted": false,
+    "mtime": 1780281101.0,
+    "size": 14444,
+    "first_seen": 1780280378.8756611,
+    "last_writer_task_id": ""
+  },
+  "promo/6-setup.html": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1780280379.0,
+    "size": 2010,
+    "first_seen": 1780280379.0172954,
+    "last_writer_task_id": "c2c9af6a-1a9d-4aa2-a02b-cb8b625272ff"
+  },
+  "scripts/migrate_chatui_to_tofu.py": {
+    "latest_version": 4,
+    "deleted": false,
+    "mtime": 1780285228.0,
+    "size": 6859,
+    "first_seen": 1780284846.58726,
+    "last_writer_task_id": "34a12331-0ee3-4a15-9ecb-84e086e1f760"
+  },
+  "static/js/main/main_regen_continue.js": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1780285245.0,
+    "size": 28831,
+    "first_seen": 1780285245.019229,
+    "last_writer_task_id": "f7f7fc21-1003-41e5-8408-b2b207e72ee9"
+  },
+  "static/js/ui/edit_message.js": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1780285255.0,
+    "size": 22247,
+    "first_seen": 1780285255.0471263,
+    "last_writer_task_id": "f7f7fc21-1003-41e5-8408-b2b207e72ee9"
+  },
+  "lib/tools/registry.py": {
+    "latest_version": 6,
+    "deleted": false,
+    "mtime": 1780286727.0,
+    "size": 25584,
+    "first_seen": 1780286568.3810456,
+    "last_writer_task_id": ""
+  },
+  "tests/test_tool_registry.py": {
+    "latest_version": 3,
+    "deleted": false,
+    "mtime": 1780286782.0,
+    "size": 9341,
+    "first_seen": 1780286568.4029102,
+    "last_writer_task_id": ""
+  },
+  "tests/test_core_tool_isolation.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1780286339.0,
+    "size": 3861,
+    "first_seen": 1780286568.4215305,
+    "last_writer_task_id": "8747da27-7a9b-43d7-a4bb-cc77279fc81b"
+  },
+  "lib/tasks_pkg/executor.py": {
+    "latest_version": 2,
+    "deleted": false,
+    "mtime": 1780286739.0,
+    "size": 28379,
+    "first_seen": 1780286739.0306427,
+    "last_writer_task_id": ""
+  },
+  "lib/llm_dispatch/provider_registry.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1780287099.0,
+    "size": 8025,
+    "first_seen": 1780287344.0653808,
+    "last_writer_task_id": "cad5803a-d2c4-4920-8ec1-a5bc3ba625d7"
+  },
+  "tests/test_provider_registry.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1780287233.0,
+    "size": 6420,
+    "first_seen": 1780287344.0903034,
+    "last_writer_task_id": "cad5803a-d2c4-4920-8ec1-a5bc3ba625d7"
+  },
+  "lib/agent_profiles.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1780287501.0,
+    "size": 6389,
+    "first_seen": 1780287795.804862,
+    "last_writer_task_id": "4773e262-9030-422e-887c-c74d514e76bd"
+  },
+  "lib/agent_core_manifest.py": {
+    "latest_version": 5,
+    "deleted": false,
+    "mtime": 1780288342.0,
+    "size": 5164,
+    "first_seen": 1780287795.8256955,
+    "last_writer_task_id": ""
+  },
+  "tests/test_agent_core_boundary.py": {
+    "latest_version": 3,
+    "deleted": false,
+    "mtime": 1780288121.0,
+    "size": 5749,
+    "first_seen": 1780287795.8425195,
+    "last_writer_task_id": ""
+  },
+  "lib/agent_core/__init__.py": {
+    "latest_version": 1,
+    "deleted": false,
+    "mtime": 1780288079.0,
+    "size": 4660,
+    "first_seen": 1780288477.3854072,
+    "last_writer_task_id": "1714f4ab-63f0-49cf-883b-d69fbc7feb62"
+  }
+}

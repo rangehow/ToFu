@@ -1,0 +1,290 @@
+"""lib/swarm/tools.py — Tool definitions for the async swarm protocol.
+
+Two levels of swarm tools:
+
+  1. **MASTER_TOOLS** — exposed to the main orchestrator LLM.
+
+     • ``spawn_agents``      — fire-and-forget; returns a handle immediately
+     • ``await_agents``      — block until ≥1 / all listed agents complete
+     • ``get_agent_result``  — fetch one agent's full result
+     • ``store_artifact`` / ``read_artifact`` / ``list_artifacts``
+                             — shared key-value store
+
+     Sub-agent results arrive as ``<swarm-update>...</swarm-update>`` user
+     messages auto-injected at round boundaries (see ``lib/agent_inbox.py``).
+     The model never has to poll.
+
+  2. **SUB_AGENT_TOOLS** — granted to each sub-agent ON TOP of its
+     role-scoped tool list. These are strictly the artifact tools:
+     sub-agents can store/read/list, but **cannot** spawn, await, or
+     query siblings — they have no view of the swarm at all.
+
+Removed in the async migration (no longer exist):
+  • ``check_agents``       — async push removes the need to poll status
+  • ``spawn_more_agents``  — main agent uses ``spawn_agents`` again instead
+  • ``swarm_done``          — async swarm has no internal mini-master to "stop"
+"""
+
+
+# ═══════════════════════════════════════════════════════════
+#  MASTER — spawn_agents (async)
+# ═══════════════════════════════════════════════════════════
+
+SPAWN_AGENTS_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "spawn_agents",
+        "description": (
+            "Launch one or more sub-agents IN PARALLEL and return immediately. "
+            "Each sub-agent runs as an isolated worker with its own LLM session "
+            "and tool access. This call DOES NOT BLOCK: it returns a handle "
+            "(swarm_id + agent ids + per-agent output_file paths) instantly, "
+            "and you continue with other work.\n\n"
+            "Sub-agent completions arrive automatically as `<swarm-update>` "
+            "user messages on subsequent turns — DO NOT POLL, DO NOT SLEEP. "
+            "If you genuinely have nothing else to do, call `await_agents`. "
+            "If a `<swarm-update>` preview is too short, call "
+            "`get_agent_result(id)` for the full body. Never read or tail "
+            "an `output_file` unless the user explicitly asks for a progress "
+            "check; trust the notifications.\n\n"
+            "ALWAYS prefer spawning over sequential work when a task has 2+ "
+            "independent parts. Use `depends_on` only when one task truly "
+            "needs another's result — prefer maximum parallelism."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "agents": {
+                    "type": "array",
+                    "description": "List of sub-tasks to execute in parallel",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "objective": {
+                                "type": "string",
+                                "description": "Clear, specific task description — what this agent should accomplish",
+                            },
+                            "context": {
+                                "type": "string",
+                                "description": "Any relevant context: file paths, data, constraints, etc.",
+                            },
+                            "role": {
+                                "type": "string",
+                                "description": "Optional role hint (researcher / coder / analyst / browser / reviewer / writer / general)",
+                            },
+                            "depends_on": {
+                                "type": "array",
+                                "items": {"type": "integer"},
+                                "description": "Indices (0-based) of agents that must complete first (use sparingly)",
+                            },
+                        },
+                        "required": ["objective"],
+                    },
+                },
+            },
+            "required": ["agents"],
+        },
+    },
+}
+
+
+# ═══════════════════════════════════════════════════════════
+#  MASTER — await_agents (block until ≥1 / all complete)
+# ═══════════════════════════════════════════════════════════
+
+AWAIT_AGENTS_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "await_agents",
+        "description": (
+            "Block this turn until sub-agents complete. Use ONLY when you "
+            "genuinely have no other work to do — otherwise let the swarm "
+            "run in the background and continue with other tools.\n\n"
+            "Returns the same `<swarm-update>` summaries that would have "
+            "auto-injected on a later turn, batched together. Hard cap is "
+            "120 seconds; if more agents are still running when the timeout "
+            "elapses, the call returns what's done plus a list of stragglers."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Optional: specific agent ids to wait on. "
+                        "If omitted, waits for ALL currently-running agents."
+                    ),
+                },
+                "mode": {
+                    "type": "string",
+                    "enum": ["any", "all"],
+                    "description": (
+                        "'any' returns when at least one matching agent "
+                        "completes (default). 'all' waits for every match."
+                    ),
+                },
+                "timeout_seconds": {
+                    "type": "integer",
+                    "description": (
+                        "Max wait in seconds (default 60, hard cap 120). "
+                        "On timeout, returns partial results + still-running list."
+                    ),
+                },
+            },
+        },
+    },
+}
+
+
+# ═══════════════════════════════════════════════════════════
+#  MASTER — get_agent_result
+# ═══════════════════════════════════════════════════════════
+
+GET_AGENT_RESULT_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "get_agent_result",
+        "description": (
+            "Fetch the FULL final answer of a completed sub-agent. Use this "
+            "when a `<swarm-update>` preview was insufficient and you need "
+            "the agent's complete output (not just the truncated 200-char "
+            "preview). For agents that are still running, returns a "
+            "running-status notice. For unknown ids, returns an error."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "agent_id": {
+                    "type": "string",
+                    "description": "The agent id from a `<swarm-update>` payload or the spawn_agents handle.",
+                },
+            },
+            "required": ["agent_id"],
+        },
+    },
+}
+
+
+# ═══════════════════════════════════════════════════════════
+#  Artifact tools — shared between master and sub-agents
+# ═══════════════════════════════════════════════════════════
+
+STORE_ARTIFACT_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "store_artifact",
+        "description": (
+            "Store data in the shared artifact store for other agents to read. "
+            "Use for intermediate results, extracted data, or analysis that "
+            "downstream agents will need."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "key": {
+                    "type": "string",
+                    "description": "Unique key for the artifact (e.g. 'file_analysis_results')",
+                },
+                "content": {
+                    "type": "string",
+                    "description": "The artifact content to store",
+                },
+                "tags": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional tags for categorization",
+                },
+            },
+            "required": ["key", "content"],
+        },
+    },
+}
+
+READ_ARTIFACT_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "read_artifact",
+        "description": (
+            "Read data from the shared artifact store. Use to access "
+            "intermediate results stored by other agents."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "key": {
+                    "type": "string",
+                    "description": "Key of the artifact to read",
+                },
+            },
+            "required": ["key"],
+        },
+    },
+}
+
+LIST_ARTIFACTS_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "list_artifacts",
+        "description": "List all available artifacts in the shared store.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "tag": {
+                    "type": "string",
+                    "description": "Optional tag to filter artifacts",
+                },
+            },
+        },
+    },
+}
+
+ARTIFACT_TOOLS = [STORE_ARTIFACT_TOOL, READ_ARTIFACT_TOOL, LIST_ARTIFACTS_TOOL]
+
+
+# ═══════════════════════════════════════════════════════════
+#  Bundles
+# ═══════════════════════════════════════════════════════════
+
+#: What the main orchestrator LLM sees.
+MASTER_TOOLS = [
+    SPAWN_AGENTS_TOOL,
+    AWAIT_AGENTS_TOOL,
+    GET_AGENT_RESULT_TOOL,
+    STORE_ARTIFACT_TOOL,
+    READ_ARTIFACT_TOOL,
+    LIST_ARTIFACTS_TOOL,
+]
+
+#: What sub-agents may use IN ADDITION to their role-scoped tools.
+#: Strictly the artifact tools — sub-agents have no swarm-control surface.
+SUB_AGENT_TOOLS = list(ARTIFACT_TOOLS)
+
+
+# ═══════════════════════════════════════════════════════════
+#  Names — for routing & scoping
+# ═══════════════════════════════════════════════════════════
+
+#: All swarm-control tool names (routed by the executor's swarm dispatch).
+#: Excludes artifact tools because those are handled inside SubAgent.
+SWARM_CONTROL_TOOL_NAMES = frozenset({
+    'spawn_agents',
+    'await_agents',
+    'get_agent_result',
+})
+
+#: Every name routed through ``execute_swarm_tool`` (control + artifact).
+SWARM_TOOL_NAMES = frozenset({
+    'spawn_agents', 'await_agents', 'get_agent_result',
+    'store_artifact', 'read_artifact', 'list_artifacts',
+})
+
+#: Names that MUST be stripped from sub-agents' tool lists. The master may
+#: spawn / await / inspect; sub-agents may not. ``ask_human`` is also stripped
+#: because sub-agents are not interactive.
+SUB_AGENT_DENYLIST = frozenset({
+    'spawn_agents',
+    'await_agents',
+    'get_agent_result',
+    'ask_human',
+})

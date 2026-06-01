@@ -1,0 +1,167 @@
+/* ═══════════════════════════════════════════════════════════
+   push.js — Unified Server-Push Channel (WebSocket)
+   ═══════════════════════════════════════════════════════════
+
+   Single global WebSocket connection that replaces:
+   - Per-task /api/chat/ws/<task_id> connections
+   - Paper report setTimeout polling loops
+   - Translation setTimeout polling loops
+
+   Usage:
+     pushSubscribe('chat', taskId, handler)    — start receiving events
+     pushUnsubscribe('chat', taskId)           — stop receiving events
+     pushSend({action: 'abort', channel: 'chat', taskId})  — send command
+
+   Handler signature:
+     function handler(event) { ... }
+     event = {channel, taskId, type, ...payload}
+*/
+
+const _push = (() => {
+  let _ws = null;
+  let _reconnectTimer = null;
+  let _handlers = new Map();       // key: `${channel}:${taskId}` → Set<fn>
+  let _globalHandlers = new Map(); // key: channel → Set<fn>
+  let _connected = false;
+  let _reconnectAttempt = 0;
+  let _pendingSubscriptions = [];  // queued before connection established
+
+  function _key(channel, taskId) { return `${channel}:${taskId}`; }
+
+  function _buildUrl() {
+    const loc = window.location;
+    const proto = loc.protocol === 'https:' ? 'wss:' : 'ws:';
+    return `${proto}//${loc.host}${apiUrl('/api/push')}`;
+  }
+
+  function connect() {
+    if (_ws && (_ws.readyState === WebSocket.OPEN || _ws.readyState === WebSocket.CONNECTING)) {
+      return;
+    }
+
+    const url = _buildUrl();
+    try {
+      _ws = new WebSocket(url);
+    } catch (e) {
+      console.warn('[Push] WebSocket constructor failed:', e.message);
+      _scheduleReconnect();
+      return;
+    }
+
+    _ws.onopen = () => {
+      _connected = true;
+      _reconnectAttempt = 0;
+      console.info('[Push] ✓ Connected');
+
+      // Replay pending subscriptions
+      for (const sub of _pendingSubscriptions) {
+        _ws.send(JSON.stringify(sub));
+      }
+      _pendingSubscriptions = [];
+
+      // Re-subscribe all active handlers
+      for (const [key] of _handlers) {
+        const [channel, taskId] = key.split(':');
+        _ws.send(JSON.stringify({action: 'subscribe', channel, taskId}));
+      }
+    };
+
+    _ws.onmessage = (event) => {
+      let frame;
+      try { frame = JSON.parse(event.data); } catch { return; }
+
+      const channel = frame.channel;
+      const taskId = frame.taskId;
+
+      if (frame.type === 'ping') return;
+
+      // Route to specific task handlers
+      const key = _key(channel, taskId);
+      const handlers = _handlers.get(key);
+      if (handlers) {
+        for (const fn of handlers) {
+          try { fn(frame); } catch (e) { console.error('[Push] Handler error:', e); }
+        }
+      }
+
+      // Route to channel-wide handlers (subscribed with taskId='*')
+      const globalKey = _key(channel, '*');
+      const globalHandlers = _handlers.get(globalKey);
+      if (globalHandlers) {
+        for (const fn of globalHandlers) {
+          try { fn(frame); } catch (e) { console.error('[Push] Global handler error:', e); }
+        }
+      }
+    };
+
+    _ws.onerror = () => {
+      console.debug('[Push] Connection error');
+    };
+
+    _ws.onclose = (e) => {
+      _connected = false;
+      _ws = null;
+      if (e.code !== 1000) {
+        _scheduleReconnect();
+      }
+    };
+  }
+
+  function _scheduleReconnect() {
+    if (_reconnectTimer) return;
+    const delay = Math.min(1000 * Math.pow(1.5, _reconnectAttempt), 30000);
+    _reconnectAttempt++;
+    _reconnectTimer = setTimeout(() => {
+      _reconnectTimer = null;
+      connect();
+    }, delay);
+  }
+
+  function subscribe(channel, taskId, handler) {
+    const key = _key(channel, taskId);
+    if (!_handlers.has(key)) _handlers.set(key, new Set());
+    _handlers.get(key).add(handler);
+
+    const msg = {action: 'subscribe', channel, taskId};
+    if (_connected && _ws) {
+      _ws.send(JSON.stringify(msg));
+    } else {
+      _pendingSubscriptions.push(msg);
+      connect();
+    }
+  }
+
+  function unsubscribe(channel, taskId, handler) {
+    const key = _key(channel, taskId);
+    const set = _handlers.get(key);
+    if (set) {
+      if (handler) {
+        set.delete(handler);
+        if (set.size === 0) _handlers.delete(key);
+      } else {
+        _handlers.delete(key);
+      }
+    }
+
+    if (_connected && _ws) {
+      _ws.send(JSON.stringify({action: 'unsubscribe', channel, taskId}));
+    }
+  }
+
+  function send(msg) {
+    if (_connected && _ws) {
+      _ws.send(JSON.stringify(msg));
+    }
+  }
+
+  function isConnected() { return _connected; }
+
+  return { connect, subscribe, unsubscribe, send, isConnected };
+})();
+
+// Public API
+function pushSubscribe(channel, taskId, handler) { _push.subscribe(channel, taskId, handler); }
+function pushUnsubscribe(channel, taskId, handler) { _push.unsubscribe(channel, taskId, handler); }
+function pushSend(msg) { _push.send(msg); }
+function pushConnect() { _push.connect(); }
+function pushIsConnected() { return _push.isConnected(); }

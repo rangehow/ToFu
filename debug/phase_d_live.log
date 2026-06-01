@@ -1,0 +1,18 @@
+
+██████████████████████████████████████████████████████████████████████
+  PHASE D ASSISTANT COMPACTION — A/B TEST
+  Model: aws.claude-sonnet-4.6
+  Date: 2026-04-26 15:45:45 UTC
+  Rounds: 6
+  Dry run: False
+██████████████████████████████████████████████████████████████████████
+
+  ════════════════════════════════════════════════════════════
+  BASELINE — Phase D DISABLED
+  ════════════════════════════════════════════════════════════
+
+  ── R1/6 ── msgs=5 tokens=1485→1485 (saved ~0)
+    ⏳ Rate limited, waiting 15s (attempt 1/5)...
+    ⏳ Rate limited, waiting 30s (attempt 2/5)...
+    ⏳ Rate limited, waiting 45s (attempt 3/5)...
+    ⏳ Rate limited, waiting 60s (attempt 4/5)...

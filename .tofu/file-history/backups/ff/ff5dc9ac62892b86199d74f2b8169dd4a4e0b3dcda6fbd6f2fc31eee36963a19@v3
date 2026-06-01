@@ -1,0 +1,194 @@
+"""lib/idempotency.py — Idempotency-Key support for POST endpoints.
+
+Clients send ``Idempotency-Key: <client-uuid>`` on POST requests that
+create resources (chat tasks, paper reports, etc.). If a duplicate
+arrives within the TTL, we return the cached response instead of
+re-running the side effect.
+
+Backed by ``lib.ttl_cache.TTLCache`` (24-hour TTL by default).
+
+Usage in routes::
+
+    from lib.idempotency import idempotent_post
+
+    @bp.route('/api/v1/tasks', methods=['POST'])
+    @idempotent_post()
+    def start_task():
+        ...
+        return api_ok(taskId=tid)
+
+The decorator looks for the ``Idempotency-Key`` header on the inbound
+request, salts it with the authenticated key_id (so two different API
+keys can't collide), and if a hit exists, returns the cached response
+WITHOUT calling the route body.
+"""
+
+from __future__ import annotations
+
+import functools
+import json
+
+from flask import Response, jsonify, request
+
+from lib.log import get_logger
+from lib.ttl_cache import TTLCache
+
+logger = get_logger(__name__)
+
+_DEFAULT_TTL = 86400  # 24h
+_DEFAULT_MAX = 10_000
+
+_cache = TTLCache(ttl=_DEFAULT_TTL, max_size=_DEFAULT_MAX,
+                   name='idempotency')
+
+
+def _cache_key(idem_key: str) -> str:
+    """Salt the idempotency key with the authenticated principal so keys
+    can't collide across tenants.
+
+    Reads ``g.auth_ctx`` (set by the Bearer auth middleware) when
+    available; falls back to a generic ``'_'`` namespace.
+    """
+    try:
+        from quart import g  # type: ignore
+        ctx = getattr(g, 'auth_ctx', None)
+        if ctx is not None and getattr(ctx, 'key_id', ''):
+            return f'k:{ctx.key_id}:{idem_key}'
+        if ctx is not None and getattr(ctx, 'via_tunnel_token', False):
+            return f'tun:{idem_key}'
+    except Exception as e:
+        logger.debug('[Idempotency] auth_ctx lookup failed: %s', e)
+    return f'_:{idem_key}'
+
+
+def _serialise_response(rv) -> dict:
+    """Convert a route's return value into a JSON-serialisable cached blob."""
+    if isinstance(rv, tuple):
+        body = rv[0]
+        status = rv[1] if len(rv) > 1 else 200
+        headers = rv[2] if len(rv) > 2 else {}
+    elif isinstance(rv, Response):
+        # Read the bytes — we'll reconstruct fresh on replay.
+        body = rv.get_data(as_text=True)
+        status = rv.status_code
+        headers = dict(rv.headers)
+    else:
+        body = rv
+        status = 200
+        headers = {}
+    if isinstance(body, Response):
+        text = body.get_data(as_text=True)
+        return {'kind': 'raw', 'body': text, 'status': status,
+                'content_type': body.content_type or 'application/json',
+                'headers': dict(headers) if headers else {}}
+    if isinstance(body, (dict, list)):
+        return {'kind': 'json', 'body': body, 'status': status,
+                'headers': dict(headers) if headers else {}}
+    if isinstance(body, str):
+        return {'kind': 'text', 'body': body, 'status': status,
+                'headers': dict(headers) if headers else {}}
+    return {'kind': 'json', 'body': str(body), 'status': status,
+            'headers': dict(headers) if headers else {}}
+
+
+def _replay(blob: dict):
+    """Reconstruct a Flask/Quart response from a cached blob."""
+    headers = dict(blob.get('headers') or {})
+    headers['Idempotency-Replay'] = 'true'
+    if blob['kind'] == 'json':
+        resp = jsonify(blob['body'])
+        for k, v in headers.items():
+            resp.headers[k] = v
+        return resp, blob['status']
+    if blob['kind'] == 'text':
+        return blob['body'], blob['status'], headers
+    # raw
+    resp = Response(blob['body'], status=blob['status'],
+                     content_type=blob.get('content_type', 'application/json'))
+    for k, v in headers.items():
+        resp.headers[k] = v
+    return resp
+
+
+def idempotent_post(*, ttl: int = _DEFAULT_TTL):
+    """Decorator: cache the response for ``Idempotency-Key`` POSTs.
+
+    Works on both sync and ``async def`` route handlers. No-op when the
+    header is absent. Must be applied AFTER the route decorator (so the
+    cache check runs inside the request context).
+    """
+    del ttl  # reserved
+
+    def _maybe_cache(rv, ck):
+        try:
+            blob = _serialise_response(rv)
+            if 200 <= int(blob.get('status', 200)) < 300:
+                _cache.set(ck, blob)
+        except Exception as e:
+            logger.debug('[Idempotency] cache store failed: %s', e)
+
+    def decorator(fn):
+        import inspect
+        is_async = inspect.iscoroutinefunction(fn)
+
+        if is_async:
+            @functools.wraps(fn)
+            async def async_wrapper(*args, **kwargs):
+                logger.debug('[Idempotency] async_wrapper invoked for %s',
+                             fn.__name__)
+                try:
+                    idem = (request.headers.get('Idempotency-Key') or '').strip()
+                except RuntimeError as e:
+                    logger.debug('[Idempotency] outside request context: %s', e)
+                    return await fn(*args, **kwargs)
+                if not idem:
+                    return await fn(*args, **kwargs)
+                ck = _cache_key(idem)
+                cached = _cache.get(ck)
+                if cached is not None:
+                    logger.info('[Idempotency] HIT key=%s — replaying',
+                                idem[:8])
+                    try:
+                        return _replay(cached)
+                    except Exception as e:
+                        logger.warning('[Idempotency] replay failed for %s: %s',
+                                       idem[:8], e)
+                rv = await fn(*args, **kwargs)
+                _maybe_cache(rv, ck)
+                return rv
+            return async_wrapper
+
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            try:
+                idem = (request.headers.get('Idempotency-Key') or '').strip()
+            except RuntimeError as e:
+                logger.debug('[Idempotency] outside request context: %s', e)
+                return fn(*args, **kwargs)
+            if not idem:
+                return fn(*args, **kwargs)
+            ck = _cache_key(idem)
+            cached = _cache.get(ck)
+            if cached is not None:
+                logger.info('[Idempotency] HIT key=%s — replaying cached '
+                            'response', idem[:8])
+                try:
+                    return _replay(cached)
+                except Exception as e:
+                    logger.warning('[Idempotency] replay failed for %s: %s '
+                                   '— re-running handler', idem[:8], e)
+            rv = fn(*args, **kwargs)
+            _maybe_cache(rv, ck)
+            return rv
+
+        return wrapper
+
+    return decorator
+
+
+def cache_stats() -> dict:
+    """Expose underlying cache stats for /metrics."""
+    return _cache.stats()
+
+
+__all__ = ['idempotent_post', 'cache_stats']

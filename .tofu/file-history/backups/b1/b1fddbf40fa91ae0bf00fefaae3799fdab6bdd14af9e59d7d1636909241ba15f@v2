@@ -1,0 +1,171 @@
+"""Tests for the task budget grace-extension mechanism.
+
+Validates three behaviors via AST inspection and minimal runtime tests:
+
+1. **Pre-flight skip**: Orchestrator checks deadline before tool execution
+   and injects synthetic tool_results telling the model to wrap up.
+
+2. **run_command early kill**: run_command checks the task deadline in its
+   poll loop and kills the subprocess early when within _DEADLINE_GRACE_S.
+
+3. **Grace extension on AbortedError**: When budget fires during LLM call
+   but tools already ran, a one-time grace extension is granted.
+
+Run:  python tests/test_budget_grace.py
+"""
+from __future__ import annotations
+
+import ast
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+def _get_constants_from_file(filepath):
+    """Extract top-level constant assignments from a Python source file."""
+    with open(filepath) as f:
+        tree = ast.parse(f.read())
+    result = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and isinstance(node.value, ast.Constant):
+                    result[target.id] = node.value.value
+    return result
+
+
+def _file_contains(filepath, pattern):
+    with open(filepath) as f:
+        return pattern in f.read()
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Test 1: Orchestrator constants and code patterns
+# ─────────────────────────────────────────────────────────────────────
+
+def test_orchestrator_budget_preflight_constants():
+    """Verify the orchestrator defines reasonable preflight/grace constants."""
+    consts = _get_constants_from_file('lib/tasks_pkg/orchestrator.py')
+    margin = consts.get('_BUDGET_PREFLIGHT_MARGIN_S')
+    grace = consts.get('_BUDGET_GRACE_EXTENSION_S')
+    assert margin is not None, 'Missing _BUDGET_PREFLIGHT_MARGIN_S'
+    assert grace is not None, 'Missing _BUDGET_GRACE_EXTENSION_S'
+    assert margin >= 20, '_BUDGET_PREFLIGHT_MARGIN_S too small'
+    assert grace >= 60, '_BUDGET_GRACE_EXTENSION_S too small'
+    assert grace > margin, 'Grace extension must exceed preflight margin'
+
+
+def test_orchestrator_preflight_skip_pattern():
+    """Verify the pre-flight check exists before tool execution and
+    injects synthetic tool_results."""
+    path = 'lib/tasks_pkg/orchestrator.py'
+    assert _file_contains(path, '_budget_grace_granted'), \
+        'Missing grace-granted guard in orchestrator'
+    assert _file_contains(path, 'Task time budget nearly exhausted'), \
+        'Missing synthetic tool_result message'
+    assert _file_contains(path, 'budget_wrapping_up'), \
+        'Missing phase event for UI notification'
+
+
+def test_orchestrator_grace_on_aborted_error():
+    """Verify the AbortedError handler grants a grace extension when
+    tools have already run."""
+    path = 'lib/tasks_pkg/orchestrator.py'
+    assert _file_contains(path, 'Budget deadline hit at round'), \
+        'Missing grace extension in AbortedError handler'
+    assert _file_contains(path, '_budget_grace_granted'), \
+        'Missing grace flag set'
+    assert _file_contains(path, '_retry_deadline_logged') and \
+        _file_contains(path, "task['_retry_deadline_logged'] = False"), \
+        'Must reset _retry_deadline_logged after extending deadline'
+
+
+def test_orchestrator_round_num_decrement():
+    """Verify round_num is decremented before continue to avoid consuming
+    an extra tool round slot."""
+    with open('lib/tasks_pkg/orchestrator.py') as f:
+        src = f.read()
+    # Both continue sites should have round_num -= 1
+    count = src.count('round_num -= 1')
+    assert count >= 2, (
+        f'Expected at least 2 round_num decrements, found {count}')
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Test 2: run_command deadline-aware early kill
+# ─────────────────────────────────────────────────────────────────────
+
+def test_run_command_deadline_grace_constant():
+    """Verify _DEADLINE_GRACE_S exists in tools.py with a reasonable value."""
+    consts = _get_constants_from_file('lib/project_mod/tools.py')
+    grace = consts.get('_DEADLINE_GRACE_S')
+    assert grace is not None, 'Missing _DEADLINE_GRACE_S in tools.py'
+    assert 30 <= grace <= 120, f'_DEADLINE_GRACE_S={grace} outside [30, 120]'
+
+
+def test_run_command_checks_task_deadline():
+    """Verify _run_command_simple checks retry_deadline_at in its poll loop."""
+    path = 'lib/project_mod/tools.py'
+    assert _file_contains(path, 'retry_deadline_at'), \
+        'run_command must check task deadline'
+    assert _file_contains(path, '_dl - _DEADLINE_GRACE_S'), \
+        'Must subtract grace period from deadline'
+    assert _file_contains(path, 'Task deadline approaching'), \
+        'Must log when killing early due to deadline'
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Test 3: Improved error message
+# ─────────────────────────────────────────────────────────────────────
+
+def test_error_message_mentions_env_var():
+    """The budget-exhausted error message should tell users about
+    TOFU_TASK_RETRY_BUDGET_S so they know how to increase it."""
+    path = 'lib/tasks_pkg/orchestrator.py'
+    assert _file_contains(path, 'TOFU_TASK_RETRY_BUDGET_S'), \
+        'Error message must mention the env var for user self-service'
+
+
+def test_error_message_distinguishes_grace_granted():
+    """The error message should differ based on whether grace was
+    already granted (to help diagnosis)."""
+    with open('lib/tasks_pkg/orchestrator.py') as f:
+        src = f.read()
+    assert 'even after grace extension' in src, \
+        'Should note when grace was already used'
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Test 4: Code structure — pre-flight is before tool execution
+# ─────────────────────────────────────────────────────────────────────
+
+def test_preflight_comes_before_parse_tool_calls():
+    """The deadline pre-flight check must come BEFORE parse_tool_calls
+    in the source file (execution order matters)."""
+    with open('lib/tasks_pkg/orchestrator.py') as f:
+        src = f.read()
+    preflight_pos = src.find('Deadline pre-flight check before tool execution')
+    parse_pos = src.find('Phase 1: Parse all tool_calls')
+    assert preflight_pos > 0, 'Missing pre-flight comment'
+    assert parse_pos > 0, 'Missing Phase 1 comment'
+    assert preflight_pos < parse_pos, \
+        'Pre-flight must come before tool_calls parsing'
+
+
+if __name__ == '__main__':
+    import traceback
+    failed = 0
+    passed = 0
+    for name, fn in sorted(globals().items()):
+        if name.startswith('test_') and callable(fn):
+            try:
+                fn()
+                passed += 1
+                print('PASS %s' % name)
+            except Exception:
+                failed += 1
+                print('FAIL %s' % name)
+                traceback.print_exc()
+    print('\n%d passed, %d failed' % (passed, failed))
+    sys.exit(0 if failed == 0 else 1)

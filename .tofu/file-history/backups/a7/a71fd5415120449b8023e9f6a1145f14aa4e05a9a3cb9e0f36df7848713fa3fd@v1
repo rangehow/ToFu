@@ -1,0 +1,113 @@
+"""routes/api_v1/conversations.py — Conversation CRUD over the v1 surface.
+
+Most of the heavy lifting (loading messages from DB, search, branches,
+compaction) lives in ``routes/conversations.py`` and its sibling
+modules. This blueprint just exposes a stable, scope-gated surface.
+
+Note: the existing routes (``/api/conversations/...``) remain intact for
+the UI. New headless callers should use ``/api/v1/conversations/...``.
+For now we proxy to the legacy implementations to avoid duplicating
+the logic — the migration plan calls for those legacy routes to move
+their primary registration here once the JS leak audit is complete.
+"""
+
+from __future__ import annotations
+
+from flask import Blueprint, request
+
+from lib.api_response import api_not_found, api_ok
+from lib.log import get_logger
+from lib.openapi import api_meta
+from lib.request_parser import optional_int, optional_str, parse_body
+
+from .auth import require_scope
+
+logger = get_logger(__name__)
+
+api_v1_conversations_bp = Blueprint('api_v1_conversations', __name__)
+
+
+def _load_legacy_module():
+    try:
+        return __import__('routes.conversations', fromlist=['*'])
+    except Exception as e:
+        logger.warning('[api_v1.conv] legacy module load failed: %s', e)
+        return None
+
+
+@api_v1_conversations_bp.route('/api/v1/conversations', methods=['GET'])
+@require_scope('conversations')
+@api_meta(summary='List conversations', tags=['conversations'],
+          scope='conversations',
+          parameters=[
+              {'name': 'limit', 'in': 'query',
+               'schema': {'type': 'integer', 'default': 50}},
+              {'name': 'offset', 'in': 'query',
+               'schema': {'type': 'integer', 'default': 0}},
+          ])
+def list_conversations():
+    legacy = _load_legacy_module()
+    if legacy is None or not hasattr(legacy, 'get_conversations'):
+        return api_ok(conversations=[])
+    try:
+        return legacy.get_conversations()
+    except Exception as e:
+        logger.warning('[api_v1.conv] proxy list failed: %s', e)
+        return api_ok(conversations=[])
+
+
+@api_v1_conversations_bp.route('/api/v1/conversations/<conv_id>',
+                                methods=['GET'])
+@require_scope('conversations')
+@api_meta(summary='Get a conversation', tags=['conversations'],
+          scope='conversations')
+def get_conversation(conv_id):
+    legacy = _load_legacy_module()
+    if legacy and hasattr(legacy, 'get_conversation'):
+        try:
+            return legacy.get_conversation(conv_id)
+        except Exception as e:
+            logger.warning('[api_v1.conv] proxy get failed: %s', e)
+    return api_not_found('Conversation not found')
+
+
+@api_v1_conversations_bp.route('/api/v1/conversations/<conv_id>',
+                                methods=['DELETE'])
+@require_scope('conversations')
+@api_meta(summary='Delete a conversation', tags=['conversations'],
+          scope='conversations')
+def delete_conversation(conv_id):
+    legacy = _load_legacy_module()
+    if legacy and hasattr(legacy, 'delete_conversation'):
+        try:
+            return legacy.delete_conversation(conv_id)
+        except Exception as e:
+            logger.warning('[api_v1.conv] proxy delete failed: %s', e)
+    return api_not_found('Conversation not found')
+
+
+@api_v1_conversations_bp.route('/api/v1/conversations/search', methods=['GET'])
+@require_scope('conversations')
+@api_meta(summary='Search conversations',
+          tags=['conversations'], scope='conversations',
+          parameters=[
+              {'name': 'q', 'in': 'query', 'required': True,
+               'schema': {'type': 'string'}},
+              {'name': 'limit', 'in': 'query',
+               'schema': {'type': 'integer', 'default': 30}},
+          ])
+def search_conversations():
+    legacy = None
+    try:
+        legacy = __import__('routes.conversations_search', fromlist=['*'])
+    except Exception as e:
+        logger.debug('[api_v1.conv] search module load failed: %s', e)
+    if legacy and hasattr(legacy, 'search_conversations'):
+        try:
+            return legacy.search_conversations()
+        except Exception as e:
+            logger.warning('[api_v1.conv] proxy search failed: %s', e)
+    return api_ok(results=[])
+
+
+__all__ = ['api_v1_conversations_bp']

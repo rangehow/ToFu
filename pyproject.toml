@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "tofu"
+version = "0.5.1"
+description = "Tofu (豆腐) — Self-hosted AI assistant with Flask backend and vanilla JS frontend"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "ruff",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"
+addopts = "-v --tb=short"
+markers = [
+    "unit: Pure unit tests (no server, no DB)",
+    "api: API integration tests (requires PostgreSQL)",
+    "visual: Visual E2E tests (requires live server + Chromium)",
+    "slow: Long-running tests (opt-in)",
+]

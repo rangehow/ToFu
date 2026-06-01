@@ -1,0 +1,111 @@
+{
+  "model": "claude-sonnet-4-20250514",
+  "timestamp": "2026-03-20T14:21:55.404773",
+  "tasks": [
+    "find_imports",
+    "loc_by_language",
+    "precise_read"
+  ],
+  "results_a": [
+    {
+      "mode": "A",
+      "task_id": "find_imports",
+      "category": "retrieval",
+      "difficulty": "easy",
+      "rounds": 1,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "thinking_tokens": 0,
+      "latency_s": 0.12,
+      "error_count": 1,
+      "tool_calls_log": [],
+      "final_answer": ""
+    },
+    {
+      "mode": "A",
+      "task_id": "loc_by_language",
+      "category": "composition",
+      "difficulty": "easy_for_cli",
+      "rounds": 1,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "thinking_tokens": 0,
+      "latency_s": 0.12,
+      "error_count": 1,
+      "tool_calls_log": [],
+      "final_answer": ""
+    },
+    {
+      "mode": "A",
+      "task_id": "precise_read",
+      "category": "precision",
+      "difficulty": "easy_for_structured",
+      "rounds": 1,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "thinking_tokens": 0,
+      "latency_s": 0.11,
+      "error_count": 1,
+      "tool_calls_log": [],
+      "final_answer": ""
+    }
+  ],
+  "results_b": [
+    {
+      "mode": "B",
+      "task_id": "find_imports",
+      "category": "retrieval",
+      "difficulty": "easy",
+      "rounds": 1,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "thinking_tokens": 0,
+      "latency_s": 0.11,
+      "error_count": 1,
+      "tool_calls_log": [],
+      "final_answer": ""
+    },
+    {
+      "mode": "B",
+      "task_id": "loc_by_language",
+      "category": "composition",
+      "difficulty": "easy_for_cli",
+      "rounds": 1,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "thinking_tokens": 0,
+      "latency_s": 0.11,
+      "error_count": 1,
+      "tool_calls_log": [],
+      "final_answer": ""
+    },
+    {
+      "mode": "B",
+      "task_id": "precise_read",
+      "category": "precision",
+      "difficulty": "easy_for_structured",
+      "rounds": 1,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "thinking_tokens": 0,
+      "latency_s": 0.11,
+      "error_count": 1,
+      "tool_calls_log": [],
+      "final_answer": ""
+    }
+  ],
+  "judgments": {
+    "find_imports": {
+      "winner": "unknown",
+      "reasoning": "API HTTP 500: {\"status\":500,\"message\":\"请求异常\",\"data\":null}"
+    },
+    "loc_by_language": {
+      "winner": "unknown",
+      "reasoning": "API HTTP 500: {\"status\":500,\"message\":\"请求异常\",\"data\":null}"
+    },
+    "precise_read": {
+      "winner": "unknown",
+      "reasoning": "API HTTP 500: {\"status\":500,\"message\":\"请求异常\",\"data\":null}"
+    }
+  }
+}

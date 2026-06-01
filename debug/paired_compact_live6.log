@@ -1,0 +1,91 @@
+
+██████████████████████████████████████████████████████████████████████
+  PAIRED-COMPACT (PHASE B2) — LIVE API A/B TEST (incremental)
+  Model: aws.claude-opus-4.7   Key: sankuai_key_0 (direct HTTP)
+  Rounds: 8  Interval: 10s
+  HOT_TAIL: 3  COMPACT_THRESHOLD: 500
+  Date: 2026-04-26 23:53:49 UTC
+██████████████████████████████████████████████████████████████████████
+
+  ══ ARM A: BASELINE (Phase B only) ═════════════════════════
+    [R1/8] BASELINE  msgs=4 est=429→429 saved=~0 first_break=None
+      ⏱ 2.3s | MISS  pt=1,867  cr=0  cw=0  out=82
+    [R2/8] BASELINE  msgs=6 est=1060→1060 saved=~0 first_break=None
+      ⏱ 6.7s | MISS  pt=2,882  cr=0  cw=0  out=239
+    [R3/8] BASELINE  msgs=8 est=2072→2072 saved=~0 first_break=None
+      ⏱ 5.4s | WRITE  pt=0  cr=0  cw=4,876  out=256
+    [R4/8] BASELINE  msgs=10 est=2693→2438 saved=~255 first_break=3
+      ⏱ 38.5s | WRITE  pt=0  cr=0  cw=5,245  out=149
+    [R5/8] BASELINE  msgs=12 est=2781→2265 saved=~516 first_break=5
+      ⏱ 22.0s | WRITE  pt=0  cr=0  cw=5,273  out=229
+    [R6/8] BASELINE  msgs=14 est=3265→2368 saved=~897 first_break=7
+      ⏱ 5.0s | WRITE  pt=0  cr=0  cw=5,481  out=234
+    [R7/8] BASELINE  msgs=16 est=2976→2459 saved=~517 first_break=9
+      ⏱ 23.0s | WRITE  pt=0  cr=0  cw=5,669  out=256
+    [R8/8] BASELINE  msgs=18 est=2802→2548 saved=~254 first_break=11
+      ⏱ 8.2s | WRITE  pt=0  cr=0  cw=5,858  out=256
+
+  ══ ARM B: PAIRED (Phase B + B2) ═══════════════════════════
+    [R1/8] PAIRED    msgs=4 est=429→429 saved=~0 first_break=None
+      ⏱ 2.1s | MISS  pt=1,868  cr=0  cw=0  out=82
+    [R2/8] PAIRED    msgs=6 est=1060→1060 saved=~0 first_break=None
+      ⏱ 3.9s | MISS  pt=2,883  cr=0  cw=0  out=233
+    [R3/8] PAIRED    msgs=8 est=2072→2072 saved=~0 first_break=None
+      ⏱ 5.6s | WRITE  pt=0  cr=0  cw=4,877  out=256
+    [R4/8] PAIRED    msgs=10 est=2693→2403 saved=~290 first_break=2
+      ⏱ 3.2s | WRITE  pt=0  cr=0  cw=5,219  out=114
+    [R5/8] PAIRED    msgs=12 est=2746→2190 saved=~556 first_break=4
+      ⏱ 5.0s | WRITE  pt=0  cr=0  cw=5,207  out=256
+    [R6/8] PAIRED    msgs=14 est=3190→2262 saved=~928 first_break=6
+      ⏱ 16.6s | WRITE  pt=0  cr=0  cw=5,386  out=256
+    [R7/8] PAIRED    msgs=16 est=2869→2323 saved=~546 first_break=8
+      ⏱ 3.3s | WRITE  pt=0  cr=0  cw=5,543  out=183
+    [R8/8] PAIRED    msgs=18 est=2666→2390 saved=~276 first_break=10
+      ⏱ 4.7s | WRITE  pt=0  cr=0  cw=5,710  out=256
+
+  ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
+  PAIRED-COMPACT (PHASE B2) — LIVE A/B RESULTS
+  ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
+
+  ── BASELINE ──
+  Rnd │ Msgs │ EstSvd │  FB │  Prompt │  CacheR │  CacheW │   Out │     Status
+  ────┼──────┼────────┼─────┼─────────┼─────────┼─────────┼───────┼───────────
+    1 │    4 │      0 │   - │   1,867 │       0 │       0 │    82 │       MISS
+    2 │    6 │      0 │   - │   2,882 │       0 │       0 │   239 │       MISS
+    3 │    8 │      0 │   - │       0 │       0 │   4,876 │   256 │      WRITE
+    4 │   10 │    255 │   3 │       0 │       0 │   5,245 │   149 │      WRITE
+    5 │   12 │    516 │   5 │       0 │       0 │   5,273 │   229 │      WRITE
+    6 │   14 │    897 │   7 │       0 │       0 │   5,481 │   234 │      WRITE
+    7 │   16 │    517 │   9 │       0 │       0 │   5,669 │   256 │      WRITE
+    8 │   18 │    254 │  11 │       0 │       0 │   5,858 │   256 │      WRITE
+
+  ── PAIRED ──
+  Rnd │ Msgs │ EstSvd │  FB │  Prompt │  CacheR │  CacheW │   Out │     Status
+  ────┼──────┼────────┼─────┼─────────┼─────────┼─────────┼───────┼───────────
+    1 │    4 │      0 │   - │   1,868 │       0 │       0 │    82 │       MISS
+    2 │    6 │      0 │   - │   2,883 │       0 │       0 │   233 │       MISS
+    3 │    8 │      0 │   - │       0 │       0 │   4,877 │   256 │      WRITE
+    4 │   10 │    290 │   2 │       0 │       0 │   5,219 │   114 │      WRITE
+    5 │   12 │    556 │   4 │       0 │       0 │   5,207 │   256 │      WRITE
+    6 │   14 │    928 │   6 │       0 │       0 │   5,386 │   256 │      WRITE
+    7 │   16 │    546 │   8 │       0 │       0 │   5,543 │   183 │      WRITE
+    8 │   18 │    276 │  10 │       0 │       0 │   5,710 │   256 │      WRITE
+
+  (Compared across 8 round-pairs where both arms succeeded)
+  Metric                           │     BASELINE │       PAIRED │            Δ
+  ─────────────────────────────────┼──────────────┼──────────────┼─────────────
+  Est tokens saved (B vs B+B2)     │        2,439 │        2,596 │      +6.4% ✅
+  Uncached prompt (tokens)         │        4,749 │        4,751 │      +0.0% ➖
+  Cache reads (tokens)             │            0 │            0 │          N/A
+  Cache writes (tokens)            │       32,402 │       31,942 │      -1.4% ✅
+  Output (tokens)                  │        1,701 │        1,636 │      -3.8% ✅
+  ─────────────────────────────────┼──────────────┼──────────────┼─────────────
+  TOTAL COST                       │ $     0.1613 │ $     0.1586 │      -1.7% ✅
+
+  HYPOTHESIS 1 — B2 saves more tokens: ✅ YES (extra 157 tokens saved pre-API)
+  HYPOTHESIS 2 — B2 is cache-neutral:  ✅ YES (Δcache_write=-460 within ±1620 tolerance)
+
+  💰 PAIRED cheaper by $0.0027 (1.7%)
+
+📁 Saved: debug/paired_compact_live_20260427_075349.json
+██████████████████████████████████████████████████████████████████████

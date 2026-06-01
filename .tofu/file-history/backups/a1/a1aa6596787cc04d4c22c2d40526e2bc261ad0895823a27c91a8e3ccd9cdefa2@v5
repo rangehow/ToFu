@@ -1,0 +1,85 @@
+# ── Secrets & Environment ──
+.env
+.env.*
+!.env.example
+
+# ── Per-host env marker (written by install.sh, read by server.py
+#    / bootstrap.py to re-exec into the correct conda interpreter).
+#    Contains absolute paths — machine-specific, never commit. ──
+.tofu_env.json
+
+# ── Migration backups ──
+.migrate_backup/
+load_env.py
+
+# ── Python ──
+__pycache__/
+*.pyc
+*.pyo
+
+
+# ── Runtime data (auto-created, contains databases, configs, temp files) ──
+data/
+# ── Database ──
+*.db
+
+# ── Internal analysis (not part of the app) ──
+/analysis_scripts/
+/sundries/
+/tools/
+
+# ── Eval / bench workdirs (large, causes FUSE timeouts) ──
+swebench_workdir/
+swebench_rerun_workdir/
+abtest_workdir/
+
+# ── Test coverage ──
+.coverage
+
+# ── Debug artifacts (developer-only, may contain API endpoints/keys) ──
+debug/benchmark_results.json
+debug/benchmark_speed_results.json
+debug/prompt_output.txt
+debug/ask.txt
+
+# ── Logs ──
+logs/
+
+# ── JS bundle (auto-generated at startup) ──
+static/js/bundle-*.js
+
+# ── Linting ──
+.ruff_cache/
+
+# ── IDE ──
+# Keep shared workspace settings (settings.json, extensions.json) committed so
+# every collaborator gets the same file-watcher / search excludes — this is
+# what prevents code-server / web-VSCode from spawning multi-GB fileWatcher
+# processes on FUSE-mounted repos (see CLAUDE.md §9 cross-DC notes).
+# Personal files (launch.json, tasks.json, *.code-workspace) stay ignored.
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+!.vscode/README.md
+.idea/
+
+# ── OS ──
+.DS_Store
+Thumbs.db
+
+# ── Sessions & caches (auto-generated, may contain sensitive context) ──
+**/.project_sessions/
+**/.project_indexes/
+.chatui/
+
+# ── Sensitive reports (moved to docs/ but should not be published) ──
+docs/SECURITY_AUDIT_REPORT.md
+docs/RATE_LIMITING_DOS_AUDIT_REPORT.md
+
+# ── Uploads ──
+uploads/images/*
+!uploads/images/.gitkeep
+uploads/pptx/
+
+# ── Model-generated posters (output of generate_image into project) ──
+static/posters/

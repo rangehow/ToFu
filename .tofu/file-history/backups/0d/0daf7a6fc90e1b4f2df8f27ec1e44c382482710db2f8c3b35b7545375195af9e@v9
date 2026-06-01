@@ -1,0 +1,246 @@
+"""routes/api_v1/auth.py — Bearer-token middleware for the v1 API.
+
+Registered as a ``before_request`` hook in ``routes/__init__.py``. Runs
+AFTER the existing ``tunnel_auth`` middleware so the cookie/UI path is
+fully preserved.
+
+Behaviour:
+  * If ``Authorization: Bearer tofu_live_…`` (or ``tofu_admin_…``) is
+    present and matches a key in ``data/config/api_keys.json``, attach
+    an ``AuthContext`` to ``g.auth_ctx`` and proceed.
+  * If the existing tunnel-auth middleware already accepted the request
+    (cookie/header), attach a "tunnel" AuthContext (full admin scope)
+    so route guards work uniformly.
+  * Otherwise leave ``g.auth_ctx`` unset. Routes that want auth use
+    ``@require_scope(...)`` which 401s on missing context.
+
+Rate limiting is wired here so every authenticated request gets pre-flight
+checked against the per-key buckets, and standard headers are attached
+in an after_request hook.
+"""
+
+from __future__ import annotations
+
+import functools
+import hashlib
+import logging
+import os
+from typing import Optional
+
+from flask import jsonify, request
+from quart import g
+
+from lib.api_keys import AuthContext, touch_key, validate_token
+from lib.api_response import api_forbidden, api_unauthorized
+from lib.log import audit_log, get_logger
+from lib.rate_limit_api import RateDecision, apply_headers, check_request
+from lib.usage_tracker import record as record_usage
+
+logger = get_logger(__name__)
+_auth_log = logging.getLogger('server.auth')
+
+# Path prefixes that participate in the API auth/rate-limit contract.
+# Anything else (HTML, /static, legacy /api/* like /api/chat/poll) keeps
+# its existing behaviour driven by tunnel_auth alone.
+_API_PREFIXES = ('/api/v1/', '/v1/', '/metrics')
+
+# Paths inside /api/v1/* that are intentionally public — clients call
+# them to discover the deployment before they have a key. Capabilities
+# is the canonical example; the OpenAPI viewers are served from a
+# different prefix so they don't need an entry here.
+_PUBLIC_API_PATHS = (
+    '/api/v1/capabilities',
+    '/api/v1/keys/whoami',  # returns {authenticated:false} for callers w/o auth
+)
+
+
+def _is_api_path(path: str) -> bool:
+    return any(path.startswith(p) for p in _API_PREFIXES)
+
+
+def _is_public_api_path(path: str) -> bool:
+    return any(path == p or path.startswith(p + '?')
+                for p in _PUBLIC_API_PATHS)
+
+
+def _extract_bearer_token() -> str:
+    auth = request.headers.get('Authorization', '') or ''
+    if auth:
+        parts = auth.split(None, 1)
+        if len(parts) == 2 and parts[0].lower() == 'bearer':
+            tok = parts[1].strip()
+            if tok:
+                return tok
+    # Anthropic SDK uses `x-api-key`. Honour it for compat callers.
+    x_api_key = (request.headers.get('x-api-key') or '').strip()
+    if x_api_key.startswith(('tofu_live_', 'tofu_admin_')):
+        return x_api_key
+    return ''
+
+
+def _tunnel_auth_passed() -> bool:
+    """Best-effort detection that ``tunnel_auth`` accepted this request.
+
+    Mirrors the cookie+header logic in ``server.py:tunnel_auth`` so we
+    can decide whether to attach an admin-scoped AuthContext.
+    """
+    tt = os.environ.get('TUNNEL_TOKEN', '')
+    if not tt:
+        # No tunnel token configured → all requests are implicitly
+        # accepted; there's nothing to gate against.
+        return True
+    cookie_val = request.cookies.get('_tunnel_auth') or ''
+    expected = hashlib.sha256(tt.encode()).hexdigest()[:32]
+    if cookie_val == expected:
+        return True
+    if request.headers.get('X-Tunnel-Token', '') == tt:
+        return True
+    return False
+
+
+async def bearer_auth_before_request():
+    """Attach ``g.auth_ctx`` based on Authorization: Bearer <tofu_…>.
+
+    Registered globally — runs for every request, but only enforces / 401s
+    on ``/api/v1/*`` and ``/v1/*`` paths. Other paths continue to be
+    governed by ``tunnel_auth`` alone.
+    """
+    path = request.path
+    g.auth_ctx = None
+    g.rate_decision = None
+
+    token = _extract_bearer_token()
+    ctx: Optional[AuthContext] = None
+    if token:
+        ctx = validate_token(token)
+        if ctx is None:
+            if _is_api_path(path):
+                _auth_log.warning('Bearer auth: rejected token (path=%s '
+                                   'remote=%s)', path, request.remote_addr)
+                return jsonify({
+                    'ok': False,
+                    'error': {'kind': 'unauthorized',
+                              'detail': 'Invalid or expired API key'},
+                }), 401
+        else:
+            touch_key(ctx.key_id)
+            audit_log('api_request_auth', key_id=ctx.key_id,
+                      name=ctx.name, path=path)
+
+    if ctx is None and _tunnel_auth_passed():
+        # Cookie/UI path — give the request full privileges so the same
+        # routes work from both surfaces. The actual gate is still
+        # ``tunnel_auth``; we just record the result here.
+        ctx = AuthContext(
+            key_id='', name='tunnel', scopes=frozenset({'admin'}),
+            rate_limit_rpm=0, rate_limit_tpd=0, via_tunnel_token=True,
+        )
+
+    g.auth_ctx = ctx
+
+    if _is_api_path(path):
+        if _is_public_api_path(path):
+            # Capabilities / whoami: callable without auth.  No
+            # rate-limit pre-flight either — these are designed for
+            # auto-config on bootstrap.
+            return None
+        if ctx is None or not ctx.is_authenticated:
+            return jsonify({
+                'ok': False,
+                'error': {'kind': 'unauthorized',
+                          'detail': 'API key required. Send '
+                                    'Authorization: Bearer tofu_live_…'},
+            }), 401
+
+        # Rate-limit pre-flight — only for keyed callers; tunnel/UI bypasses.
+        decision: RateDecision = check_request(ctx)
+        g.rate_decision = decision
+        if not decision.allowed:
+            resp = jsonify({
+                'ok': False,
+                'error': {'kind': 'rate_limited',
+                          'detail': f'Rate limit exceeded ({decision.reason})',
+                          'retry_after_s': round(decision.retry_after_s, 2)},
+            })
+            apply_headers(resp, decision)
+            return resp, 429
+        # Record one request against the per-key counter. Tokens are
+        # recorded post-hoc by the route via record_usage(...).
+        try:
+            record_usage(ctx.key_id, request_count=1)
+        except Exception as e:
+            logger.debug('[Auth] usage record failed: %s', e)
+    return None
+
+
+async def attach_rate_headers(response):
+    """After-request hook: copy bucket state onto the outgoing response."""
+    try:
+        decision = getattr(g, 'rate_decision', None)
+        if decision is not None:
+            apply_headers(response, decision)
+    except Exception as e:
+        logger.debug('[Auth] rate-header hook failed: %s', e)
+    return response
+
+
+def current_auth() -> Optional[AuthContext]:
+    """Return the ``AuthContext`` for the current request (or None)."""
+    try:
+        return getattr(g, 'auth_ctx', None)
+    except Exception:
+        return None
+
+
+def require_auth(fn):
+    """Decorator: 401 if no AuthContext is attached.
+
+    Most routes prefer ``@require_scope('…')`` which implies auth.
+    """
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        ctx = current_auth()
+        if ctx is None or not ctx.is_authenticated:
+            return api_unauthorized('API key required')
+        return fn(*args, **kwargs)
+    return wrapper
+
+
+def require_scope(*scopes: str):
+    """Decorator: require ALL given scopes (or admin) on the current key.
+
+    Tunnel/UI callers pass implicitly (full admin). Headless callers
+    must have every listed scope on their key.
+    """
+    if not scopes:
+        raise ValueError('require_scope needs at least one scope')
+
+    def decorator(fn):
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            ctx = current_auth()
+            if ctx is None or not ctx.is_authenticated:
+                return api_unauthorized('API key required')
+            for sc in scopes:
+                if not ctx.has_scope(sc):
+                    audit_log('api_forbidden', key_id=ctx.key_id,
+                              name=ctx.name, missing_scope=sc,
+                              path=request.path)
+                    return api_forbidden(
+                        f'Missing required scope: {sc}',
+                        required_scopes=list(scopes),
+                    )
+            return fn(*args, **kwargs)
+        # expose for openapi introspection
+        wrapper._required_scopes = list(scopes)
+        return wrapper
+    return decorator
+
+
+__all__ = [
+    'bearer_auth_before_request',
+    'attach_rate_headers',
+    'require_auth',
+    'require_scope',
+    'current_auth',
+]

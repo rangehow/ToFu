@@ -1,0 +1,615 @@
+# ChatUI 安全审计报告
+
+**审计日期**: 2025-07-14  
+**审计范围**: 全项目 (`lib/`, `routes/`, `server.py`, `browser_extension/`, `static/`)  
+**审计方法**: 静态代码分析 + 架构审查
+
+---
+
+## 一、认证与授权 (Authentication & Authorization)
+
+### 评分: 3/10 ⚠️ 高风险
+
+| # | 风险等级 | 文件位置 | 发现描述 |
+|---|---------|---------|---------|
+| A1 | 🔴 高 | `routes/common.py:17-19` | **认证完全为硬编码桩** — `/api/me` 直接返回固定用户，无实际认证 |
+| A2 | 🔴 高 | `server.py:215-260` | **Tunnel Token 可为空** — `TUNNEL_TOKEN` 默认空字符串时跳过所有认证检查 |
+| A3 | ✅ 已修复 | `routes/browser.py` | **浏览器桥接无认证** — 已加 `X-Bridge-Secret` 强制校验（`TOFU_BRIDGE_SECRET` 配置时启用），CORS 通配 `*` 已移除 |
+| A4 | ✅ 已修复 | `routes/desktop.py` | **桌面代理桥接无认证** — `/api/desktop/poll` 现要求 `X-Bridge-Secret` 头匹配 `TOFU_BRIDGE_SECRET` |
+| A5 | 🟡 中 | `routes/scheduler.py` (全文件) | **调度器管理接口无认证** — 任何人可列出、暂停、删除定时任务 |
+
+#### A1: 认证硬编码桩 — 无实际认证机制
+
+**位置**: `routes/common.py:17-19`
+
+```python
+@common_bp.route('/api/me')
+def me():
+    return jsonify({'authenticated': True, 'username': 'default', 'displayName': 'User'})
+```
+
+**风险**: 任何人都被视为已认证用户，所有 API 端点对外完全开放。
+
+**修复建议**: 添加基于 Token 或 Session 的认证中间件：
+
+```python
+import functools, hmac, hashlib
+from flask import request, jsonify, abort
+
+AUTH_TOKEN = os.environ.get('CHATUI_AUTH_TOKEN', '')
+
+def require_auth(f):
+    @functools.wraps(f)
+    def decorated(*args, **kwargs):
+        if not AUTH_TOKEN:
+            return f(*args, **kwargs)  # 本地开发免认证
+        token = request.headers.get('Authorization', '').removeprefix('Bearer ')
+        if not token or not hmac.compare_digest(token, AUTH_TOKEN):
+            abort(401)
+        return f(*args, **kwargs)
+    return decorated
+```
+
+---
+
+#### A2: Tunnel Token 可为空时跳过认证
+
+**位置**: `server.py:215-260`
+
+```python
+TUNNEL_TOKEN = os.environ.get('TUNNEL_TOKEN', '')  # set to enable auth
+
+@app.before_request
+def tunnel_auth():
+    if not TUNNEL_TOKEN:          # ← 空字符串 = 完全跳过
+        return None
+    # ... 后续认证逻辑 ...
+```
+
+**风险**: 生产部署忘记设置环境变量时，全站暴露。
+
+**修复建议**: 当检测到公网环境时强制要求 Token：
+
+```python
+@app.before_request
+def tunnel_auth():
+    # 私有网段免认证
+    if request.remote_addr and request.remote_addr.startswith(('127.', '10.', '192.168.')):
+        return None
+    if not TUNNEL_TOKEN:
+        logger.warning('⚠️ No TUNNEL_TOKEN set but received external request from %s', request.remote_addr)
+        abort(403, description='Auth token not configured for external access')
+    # ...existing token check...
+```
+
+---
+
+#### A3: 浏览器桥接 CORS 通配 + 无认证
+
+**位置**: `routes/browser.py:12-18` + `routes/browser.py:22-33`
+
+```python
+# CORS headers — 任意域名都可跨域请求
+response.headers['Access-Control-Allow-Origin'] = '*'
+
+# Poll端点 — 无认证
+@browser_bp.route('/api/browser/poll', methods=['POST', 'OPTIONS'])
+def browser_poll():
+    # 直接处理，无身份校验
+```
+
+**风险**: 恶意网页可通过 CORS 直接向 ChatUI 发送请求，控制用户浏览器操作。
+
+**修复建议**: 限制 CORS 来源 + 添加共享密钥认证：
+
+```python
+BROWSER_BRIDGE_SECRET = os.environ.get('BROWSER_BRIDGE_SECRET', '')
+ALLOWED_ORIGINS = os.environ.get('CORS_ALLOWED_ORIGINS', 'chrome-extension://*').split(',')
+
+@browser_bp.after_request
+def _browser_cors(response):
+    origin = request.headers.get('Origin', '')
+    if any(fnmatch.fnmatch(origin, pat) for pat in ALLOWED_ORIGINS):
+        response.headers['Access-Control-Allow-Origin'] = origin
+    return response
+
+@browser_bp.route('/api/browser/poll', methods=['POST', 'OPTIONS'])
+def browser_poll():
+    if BROWSER_BRIDGE_SECRET:
+        if request.headers.get('X-Bridge-Secret') != BROWSER_BRIDGE_SECRET:
+            return jsonify({'error': 'Unauthorized'}), 401
+    # ...
+```
+
+---
+
+## 二、注入攻击面 (Injection Attack Surface)
+
+### 评分: 4/10 ⚠️ 高风险
+
+| # | 风险等级 | 文件位置 | 发现描述 |
+|---|---------|---------|---------|
+| I1 | 🔴 高 | `lib/scheduler.py:328-335` | **命令注入** — `subprocess.run(command, shell=True)` 直接执行用户可控的命令字符串 |
+| I2 | 🔴 高 | `lib/project_mod/tools.py:437-466` | **命令注入** — `tool_run_command` 使用 `shell=True` 执行来自 LLM 的命令 |
+| I3 | 🔴 高 | `lib/desktop_agent.py:155-175` | **远程命令执行** — `cmd_run_local` 无沙箱直接 `shell=True` 执行命令 |
+| I4 | 🟡 中 | `lib/desktop_agent.py:142-152` | **任意文件写入** — `cmd_open_app` 可启动任意程序，`cmd_write_file` 无路径限制 |
+| I5 | 🟢 低 | `routes/common.py:120-134` | **SQL 注入风险低** — 全项目使用参数化查询，但需确认无字符串拼接遗漏 |
+
+#### I1: Scheduler 命令注入（最高风险）
+
+**位置**: `lib/scheduler.py:328-355`
+
+```python
+def _execute_task(self, task):
+    if task_type == 'command':
+        result = subprocess.run(
+            command, shell=True,           # ← shell=True, command来自数据库
+            capture_output=True, text=True,
+            timeout=max_runtime,
+        )
+    elif task_type == 'python':
+        result = subprocess.run(
+            [sys.executable, '-c', command],  # ← 执行任意 Python 代码
+            capture_output=True, text=True,
+            timeout=max_runtime,
+        )
+```
+
+**风险**: Scheduler 任务存储在 SQLite 中，若有接口允许创建任务（LLM 工具调用），攻击者可注入恶意命令。`python` 类型甚至直接执行任意 Python 代码。
+
+**修复建议**: 
+
+```python
+import shlex
+
+ALLOWED_COMMANDS_RE = re.compile(
+    r'^(python3?|node|curl|git|ls|cat|grep|wc|df|date|echo)\b'
+)
+
+def _execute_task(self, task):
+    command = task['command']
+    
+    # 1) 白名单校验
+    if not ALLOWED_COMMANDS_RE.match(command.strip()):
+        return False, f'Command blocked by whitelist: {command[:80]}'
+    
+    # 2) 避免 shell=True，使用 shlex.split
+    if task_type == 'command':
+        result = subprocess.run(
+            shlex.split(command),   # ← 不使用 shell=True
+            capture_output=True, text=True,
+            timeout=max_runtime,
+            env={**os.environ, 'PATH': '/usr/bin:/bin'},  # 限制 PATH
+        )
+```
+
+---
+
+#### I2: Project Co-Pilot `run_command` 命令注入
+
+**位置**: `lib/project_mod/tools.py:410-466`
+
+```python
+def tool_run_command(base, command, timeout=None):
+    # DANGEROUS_PATTERNS 黑名单检查 (可绕过)
+    for pat in DANGEROUS_PATTERNS:
+        if re.search(pat, command, re.IGNORECASE):
+            return f'❌ Blocked: matches dangerous pattern ...'
+    
+    result = subprocess.run(
+        command, shell=True,      # ← shell=True
+        capture_output=True, text=True,
+        timeout=timeout,
+        cwd=base,
+    )
+```
+
+**优点**: 已有 `DANGEROUS_PATTERNS` 黑名单 (`lib/project_mod/config.py:64-75`)。  
+**风险**: 黑名单模式容易绕过。例如 `r'\brm\s+-rf\s+/'` 不能拦截 `rm -r -f /`、`rm --recursive --force /` 或 `find / -delete`。
+
+**修复建议**: 改为白名单 + 沙箱：
+
+```python
+# 加强 DANGEROUS_PATTERNS
+DANGEROUS_PATTERNS = [
+    r'\brm\b.*(-r|-f|--force|--recursive)',  # 更广的rm检测
+    r'\bmkfs\b',
+    r'\bdd\b\s+',
+    r'>\s*/dev/',
+    r':\(\)\s*\{',                # fork bomb
+    r'\b(shutdown|reboot|halt|poweroff|init)\b',
+    r'\bcurl\b.*\|\s*(ba)?sh',    # curl | sh 模式
+    r'\bwget\b.*\|\s*(ba)?sh',
+    r'\bchmod\b.*777',
+    r'\bchown\b.*root',
+    r'\bnc\b.*-[le]',            # netcat reverse shell
+    r'\bpython\b.*-c\s',         # python -c 可执行任意代码
+]
+
+# 最佳方案：使用 subprocess 的 list 形式 + 不使用 shell
+import shlex
+result = subprocess.run(
+    shlex.split(command),
+    capture_output=True, text=True,
+    timeout=timeout,
+    cwd=base,
+)
+```
+
+---
+
+#### I3: Desktop Agent 无限制命令执行
+
+**位置**: `lib/desktop_agent.py:155-175`
+
+```python
+def cmd_run_local(params):
+    command = params.get('command', '')
+    result = subprocess.run(
+        command, shell=True,         # ← 完全无过滤
+        capture_output=True, text=True,
+        timeout=timeout,
+    )
+```
+
+以及 `cmd_open_app` (`lib/desktop_agent.py:148-153`):
+
+```python
+def cmd_open_app(params):
+    app = params.get('app', '')
+    args = params.get('args', [])
+    subprocess.Popen([app] + args)    # ← 启动任意程序
+```
+
+**风险**: Desktop Agent 设计上就是信任的本地组件，但如果 ChatUI 服务器被攻破，攻击者可通过 Desktop Agent 在用户本机执行任意命令。
+
+**修复建议**: 添加命令确认机制：
+
+```python
+# Desktop Agent 端添加高危操作确认
+HIGH_RISK_PATTERNS = [r'\brm\b', r'\bformat\b', r'\bdel\b', r'\bsudo\b']
+
+def cmd_run_local(params):
+    command = params.get('command', '')
+    for pat in HIGH_RISK_PATTERNS:
+        if re.search(pat, command, re.IGNORECASE):
+            # 弹出本地确认对话框
+            if not confirm_with_user(f'⚠️ 高风险命令: {command}\n确认执行?'):
+                return {'error': 'Blocked by user', 'command': command}
+    # ...
+```
+
+---
+
+## 三、信息泄露 (Information Leakage)
+
+### 评分: 4/10 ⚠️ 中-高风险
+
+| # | 风险等级 | 文件位置 | 发现描述 |
+|---|---------|---------|---------|
+| L1 | 🔴 高 | `lib/feishu_bot.py:43-44` | **硬编码 APP_SECRET** — Feishu 应用凭证在源码中明文写入 |
+| L2 | 🔴 高 | `server.py:179` | **Flask Secret Key 硬编码** — `'not-needed-single-user'` 使 session 签名可被伪造 |
+| L3 | 🟡 中 | `routes/common.py:116`, `routes/trading_intel.py` 等 | **异常堆栈泄露** — `jsonify({'error': str(e)})` 将内部异常信息返回给客户端 |
+| L4 | 🟡 中 | `lib/llm_dispatch.py:270-271` | **日志中打印 Key 名称** — 虽用别名但泄露 slot 架构和模型配置 |
+| L5 | 🟢 低 | `routes/browser.py:83-89` | **调试端点暴露内部状态** — `/api/browser/test` 泄露 pending commands 信息 |
+
+#### L1: Feishu 应用凭证硬编码在源码中
+
+**位置**: `lib/feishu_bot.py:43-44`
+
+```python
+APP_ID     = os.environ.get('FEISHU_APP_ID')     or 'cli_a924e60a7cb85bcc'
+APP_SECRET = os.environ.get('FEISHU_APP_SECRET')  or 'q2E1KDjuDhasILLK0urXCgqbss6vhmXf'
+```
+
+**风险**: **严重** — 任何能访问仓库的人都能获取 Feishu 应用凭证，可冒充应用发送消息。这是最常见的安全漏洞之一。
+
+**修复建议**: 
+
+```python
+# 1) 立即轮换已泄露的凭证
+# 2) 仅从环境变量读取，无 fallback
+APP_ID     = os.environ.get('FEISHU_APP_ID', '')
+APP_SECRET = os.environ.get('FEISHU_APP_SECRET', '')
+
+if not APP_ID or not APP_SECRET:
+    logger.warning('Feishu bot disabled: FEISHU_APP_ID / FEISHU_APP_SECRET not set')
+    ENABLED = False
+else:
+    ENABLED = True
+
+# 3) 添加 .env 到 .gitignore，使用 .env.example 作为模板
+```
+
+---
+
+#### L2: Flask Secret Key 为固定已知值
+
+**位置**: `server.py:179`
+
+```python
+app.secret_key = 'not-needed-single-user'
+```
+
+**风险**: Flask session cookie 使用此 key 签名。由于 key 已知，攻击者可伪造任意 session。即使当前是单用户模式，未来扩展时将成为严重隐患。
+
+**修复建议**:
+
+```python
+app.secret_key = os.environ.get('FLASK_SECRET_KEY') or os.urandom(32).hex()
+```
+
+---
+
+#### L3: 异常信息直接返回客户端
+
+**位置**: 共 10+ 处，包括:
+- `routes/common.py:116`: `return jsonify({'error': str(e)}), 500`
+- `routes/common.py:402`: `return jsonify({'error': str(e)}), 500`
+- `routes/common.py:475`: `return jsonify({'error': str(e)}), 500`
+- `routes/trading_intel.py` 多处
+- `routes/trading_decision.py` 多处
+
+```python
+except Exception as e:
+    return jsonify({'error': str(e)}), 500
+    # ↑ 可能泄露: 文件路径、数据库结构、第三方 API URL、内部 IP 等
+```
+
+**风险**: Python 异常消息通常包含文件路径、行号、内部模块名，攻击者可据此分析系统结构。
+
+**修复建议**: 使用统一的错误处理器：
+
+```python
+import traceback
+
+@app.errorhandler(500)
+def handle_500(e):
+    # 仅在日志中记录详细信息
+    logger.error('Internal error: %s\n%s', e, traceback.format_exc())
+    # 返回通用错误消息给客户端
+    return jsonify({'error': 'Internal server error'}), 500
+
+# 在各路由中:
+except Exception as e:
+    logger.exception('Failed to process request: %s %s', request.method, request.path)
+    return jsonify({'error': 'Operation failed. Please try again.'}), 500
+```
+
+---
+
+#### L4: 日志泄露 API 配置架构
+
+**位置**: `lib/llm_dispatch.py:270-271`
+
+```python
+logger.info(f'  {s.key_name}:{s.model} rpm={s.rpm_limit:.0f} '
+      f'lat={s.latency_ema:.0f}ms caps=[{caps}]')
+```
+
+**风险**: 日志包含所有 API Key 别名和模型 RPM 配额，若日志被窃取可精准探测系统容量。
+
+**修复建议**: 降低为 DEBUG 级别，在生产环境不输出：
+
+```python
+logger.debug(f'  slot[{i}] rpm={s.rpm_limit:.0f} lat={s.latency_ema:.0f}ms')
+```
+
+---
+
+## 四、DoS / 资源耗尽 (Denial of Service / Resource Exhaustion)
+
+### 评分: 5/10 ⚠️ 中风险
+
+| # | 风险等级 | 文件位置 | 发现描述 |
+|---|---------|---------|---------|
+| D1 | 🟡 中 | `lib/rate_limiter.py` (全文件) | **Rate Limiter 基于内存** — 多进程/多实例部署时无效，且无持久化 |
+| D2 | 🟡 中 | 多个路由无 `@rate_limit` | **大量端点无速率限制** — 仅 `chat.py`, `endpoint.py`, `project.py` 有限流 |
+| D3 | 🟡 中 | `routes/common.py:238-275` | **图片上传无文件类型严格校验** — 仅依赖 `secure_filename`，无 MIME 验证 |
+| D4 | 🟡 中 | `lib/project_mod/tools.py:437` | **`run_command` 默认超时过长** — FS-heavy 60s/其他 300s，可用于资源耗尽 |
+| D5 | 🟢 低 | `server.py:180` | **`MAX_CONTENT_LENGTH` 16MB** — 对于 API 请求偏大，可用于内存耗尽 |
+
+#### D1: Rate Limiter 内存单例，无法横向扩展
+
+**位置**: `lib/rate_limiter.py:1-43`
+
+```python
+_store = {}  # { "ip:endpoint": [timestamp, ...] }
+
+def rate_limit(limit=5, per=60):
+    def decorator(f):
+        @functools.wraps(f)
+        def wrapper(*args, **kwargs):
+            key = f"{request.remote_addr}:{request.endpoint}"
+            now = time.time()
+            hits = _store.get(key, [])
+            hits = [t for t in hits if now - t < per]
+            if len(hits) >= limit:
+                return jsonify({'error': 'Rate limit exceeded'}), 429
+            hits.append(now)
+            _store[key] = hits
+            return f(*args, **kwargs)
+        return wrapper
+    return decorator
+```
+
+**风险**: 
+1. Gunicorn 多 worker 模式下每个 worker 独立计数，实际限流效果是配置值的 N 倍
+2. 无内存清理机制，`_store` 会持续增长（虽然旧条目会被过滤，但 key 永不删除）
+3. 依赖 `request.remote_addr`，如果在反向代理后面，所有用户共享一个 IP
+
+**修复建议**:
+
+```python
+import time, functools, threading
+from flask import request, jsonify
+
+_store = {}
+_lock = threading.Lock()
+_CLEANUP_INTERVAL = 300  # 5分钟清理一次
+_last_cleanup = time.time()
+
+def _maybe_cleanup():
+    global _last_cleanup
+    now = time.time()
+    if now - _last_cleanup < _CLEANUP_INTERVAL:
+        return
+    _last_cleanup = now
+    stale = [k for k, v in _store.items() if not v or now - v[-1] > 300]
+    for k in stale:
+        _store.pop(k, None)
+
+def rate_limit(limit=5, per=60):
+    def decorator(f):
+        @functools.wraps(f)
+        def wrapper(*args, **kwargs):
+            # 优先使用 X-Forwarded-For
+            ip = request.headers.get('X-Forwarded-For', request.remote_addr).split(',')[0].strip()
+            key = f"{ip}:{f.__name__}"
+            now = time.time()
+            with _lock:
+                _maybe_cleanup()
+                hits = [t for t in _store.get(key, []) if now - t < per]
+                if len(hits) >= limit:
+                    return jsonify({'error': 'Rate limit exceeded', 'retry_after': per}), 429
+                hits.append(now)
+                _store[key] = hits
+            return f(*args, **kwargs)
+        return wrapper
+    return decorator
+```
+
+---
+
+#### D2: 大量端点缺少速率限制
+
+已有限流的端点:
+- ✅ `routes/chat.py:52` — `@rate_limit(limit=10, per=60)`
+- ✅ `routes/endpoint.py:23` — `@rate_limit(limit=10, per=60)`
+- ✅ `routes/project.py` — `@rate_limit(limit=5, per=60)`
+
+**缺少限流的关键端点**:
+- ❌ `routes/common.py` — 图片上传、PDF 解析、会话 CRUD
+- ❌ `routes/browser.py` — 浏览器桥接（可被高频轮询攻击）
+- ❌ `routes/desktop.py` — 桌面控制
+- ❌ `routes/trading_*.py` — 全部交易相关端点
+- ❌ `routes/scheduler.py` — 任务管理
+- ❌ `routes/memory.py` — 技能管理
+
+**修复建议**: 为高危端点添加限流，或在 `server.py` 中添加全局限流：
+
+```python
+# server.py — 全局兜底限流
+@app.before_request
+def global_rate_limit():
+    """全局限流: 每 IP 每分钟最多 120 个请求"""
+    if request.path.startswith('/static/'):
+        return None
+    ip = request.headers.get('X-Forwarded-For', request.remote_addr).split(',')[0].strip()
+    key = f"global:{ip}"
+    now = time.time()
+    hits = [t for t in _global_store.get(key, []) if now - t < 60]
+    if len(hits) >= 120:
+        return jsonify({'error': 'Too many requests'}), 429
+    hits.append(now)
+    _global_store[key] = hits
+```
+
+---
+
+#### D3: 图片上传缺乏严格校验
+
+**位置**: `routes/common.py:238-275`
+
+```python
+@common_bp.route('/api/images/upload', methods=['POST'])
+def upload_image():
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file'}), 400
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'error': 'No file selected'}), 400
+    
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext not in ('.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg'):
+        return jsonify({'error': f'Unsupported format: {ext}'}), 400
+    
+    name = f'{uuid.uuid4().hex}{ext}'
+    path = os.path.join(UPLOAD_DIR, name)
+    file.save(path)
+```
+
+**风险**: 
+1. **SVG XSS** — 允许 `.svg` 上传，SVG 可包含 `<script>` 标签实现 XSS 攻击
+2. 仅检查扩展名，未验证 MIME type / magic bytes，可上传伪装文件
+3. 无文件大小单独限制（仅依赖全局 16MB）
+
+**修复建议**:
+
+```python
+import imghdr
+
+ALLOWED_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.gif', '.webp'}
+MAX_IMAGE_SIZE = 5 * 1024 * 1024  # 5MB
+
+@common_bp.route('/api/images/upload', methods=['POST'])
+def upload_image():
+    file = request.files.get('file')
+    if not file or file.filename == '':
+        return jsonify({'error': 'No file'}), 400
+    
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext not in ALLOWED_EXTENSIONS:  # ← 移除 .svg
+        return jsonify({'error': f'Unsupported format: {ext}'}), 400
+    
+    data = file.read()
+    if len(data) > MAX_IMAGE_SIZE:
+        return jsonify({'error': 'File too large (max 5MB)'}), 400
+    
+    # 验证真实图片类型
+    img_type = imghdr.what(None, h=data)
+    if img_type not in ('png', 'jpeg', 'gif', 'webp'):
+        return jsonify({'error': 'Invalid image data'}), 400
+    
+    name = f'{uuid.uuid4().hex}{ext}'
+    path = os.path.join(UPLOAD_DIR, name)
+    with open(path, 'wb') as f:
+        f.write(data)
+    return jsonify({'url': f'/api/images/{name}', 'filename': name})
+```
+
+---
+
+## 汇总评分
+
+| 维度 | 评分 | 状态 | 核心问题 |
+|-----|------|------|---------|
+| **认证与授权** | **3/10** | 🔴 高风险 | 无实际认证、桥接端点完全暴露、Token 默认空 |
+| **注入攻击面** | **4/10** | 🔴 高风险 | 3 处 `shell=True` 命令注入点、黑名单易绕过 |
+| **信息泄露** | **4/10** | 🟡 中-高风险 | 源码硬编码 APP_SECRET、异常堆栈泄露、固定 secret_key |
+| **DoS/资源耗尽** | **5/10** | 🟡 中风险 | 多数端点无限流、SVG XSS、Rate Limiter 架构局限 |
+| **综合评分** | **4/10** | 🔴 **需要整改** | |
+
+---
+
+## 优先级排序的修复路线图
+
+### P0 — 立即修复（本周）
+1. **轮换 Feishu APP_SECRET**，从源码中删除硬编码凭证 → `lib/feishu_bot.py:43-44`
+2. **为 Browser/Desktop 桥接添加认证** → `routes/browser.py`, `routes/desktop.py`
+3. **移除 SVG 上传支持** → `routes/common.py:249`
+
+### P1 — 短期修复（两周内）
+4. **加强 `DANGEROUS_PATTERNS`** 命令黑名单 → `lib/project_mod/config.py:64-75`
+5. **统一异常处理**，不再向客户端返回 `str(e)` → 全项目 10+ 处
+6. **生成随机 Flask secret_key** → `server.py:179`
+
+### P2 — 中期改进（一个月内）
+7. **全局速率限制** 兜底 → `server.py`
+8. **Scheduler 命令白名单** → `lib/scheduler.py:328`
+9. **Rate Limiter 支持反向代理 IP** → `lib/rate_limiter.py`
+10. **图片上传添加 magic bytes 校验** → `routes/common.py:238`
+
+---
+
+*审计结论: 本项目设计为单用户内部工具，多数安全假设合理，但随着部署到公网（Tunnel 模式）和集成更多桥接组件，攻击面已显著扩大。建议按上述路线图优先处理 P0 级别问题。*

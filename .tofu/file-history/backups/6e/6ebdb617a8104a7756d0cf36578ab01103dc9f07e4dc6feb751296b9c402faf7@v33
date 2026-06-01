@@ -1,0 +1,1075 @@
+# CLAUDE.md — Project Intelligence for AI Assistants
+
+> **This file is the single source of truth for all AI-assisted code modifications.**
+> Every change MUST comply with these rules. No exceptions.
+
+---
+
+## 1. Project Overview
+
+**Tofu (豆腐)** is a self-hosted AI assistant with a **Quart** (async Flask)
+backend and vanilla JS frontend, served via **Hypercorn** (ASGI). All
+existing Flask-style sync route handlers run unchanged in a thread pool;
+new endpoints can be `async def` for native async I/O.
+
+> **📐 Full architecture panorama** lives at [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+> (drift-checked directory map + Mermaid) and [`docs/architecture.html`](docs/architecture.html)
+> (single-file visual diagram in Claude-Code-style layered cards).  Re-scan those
+> files whenever you add a new sub-package or Blueprint.
+
+```
+bootstrap.py           — Smart launcher: auto-installs missing pip packages via LLM diagnosis
+server.py              — App entry (Quart + Hypercorn), Flask→Quart shim, middleware,
+                         logging bootstrap, auto-TLS for HTTP/2, VS Code proxy detection
+export.py              — Three-level sanitization export (personal / internal / opensource) — see §11
+lib/                   — Core business logic
+  log.py               — Centralized logging utilities (get_logger, log_exception, audit_log, log_context)
+  # ── Shared infrastructure (used everywhere; see §4.6) ──
+  api_response.py      — Unified jsonify helpers: api_ok / api_error / api_not_found /
+                         @safe_route — replaces 446 ad-hoc `return jsonify(...)` patterns
+  request_parser.py    — Typed JSON body extraction: parse_body / require_str / require_int /
+                         optional_list / etc. — raises BadRequest auto-converted to 400
+  http_client.py       — Sync (requests) + async (httpx) HTTP with auto-applied proxy.
+                         Public helpers: http_get / http_post / http_stream /
+                         async_http_get / async_http_post / async_http_stream
+  json_store.py        — Atomic JSON file I/O with per-path locking and JSONC tolerance:
+                         read_json / write_json_atomic / update_json_atomic / write_text_atomic
+  ttl_cache.py         — Generic in-memory TTL cache with LRU eviction +
+                         get_or_compute serialization (TTLCache class)
+  task_runtime.py      — Single source of truth for background async tasks
+                         (chat / paper-report / paper-translate / translate / trading-sim).
+                         See §14 for usage.
+  push.py              — Unified server-push hub: PushHub + push_event() — backs the
+                         /api/push WebSocket multiplexer (see §4.7)
+  llm/                 — LLM API communication (package)
+    __init__.py        — Public facade re-exporting all symbols
+    body.py            — Model-aware build_body(), image validation/downscaling
+    cache.py           — Anthropic prompt-cache breakpoints
+    chat.py            — Non-streaming chat() entry point
+    stream.py          — SSE streaming + tool-call accumulation
+    diagnostics.py     — RawSSEDumper (anomaly ring buffer + opt-in transcript)
+    _transport.py      — Retry config, headers(), chat_url(), abortable_sleep()
+  llm_errors.py        — Exception classes + HTTP error classifier
+  llm_sanitize.py      — Message sanitization (gateway terms, orphan tool calls, role merging)
+  llm_dispatch/        — Dynamic model routing / load balancing (package)
+    api.py             — High-level dispatch_chat / dispatch_stream entry points
+    config.py          — Model alias + routing tables
+    discovery.py       — Model capability discovery
+    dispatcher.py      — Core dispatch loop, fallback chains
+    factory.py         — Client/provider factory
+    slot.py            — Slot / key-pool state management
+  model_info.py        — Per-model capabilities + _clamp_max_tokens (see §13)
+  tools/               — Tool definitions (package)
+    project.py         — list_dir, read_files, grep_search, find_files, write_file, apply_diff, …
+    search.py          — web_search
+    browser.py         — fetch_url, browser automation
+    meta.py            — meta/planning tools (create_plan, etc.)
+    human_guidance.py  — ask_user / request_human_input
+    image_gen.py       — image generation tool wrappers
+    code_exec.py       — sandboxed code execution
+    conversation.py    — conversation-control tools
+  tasks_pkg/           — Task orchestration, compaction, execution
+    orchestrator.py    — Main run_task loop, SSE event emission
+    manager.py         — Task registry + lifecycle
+    executor.py        — Tool execution entry (+ content_ref resolution)
+    executor_image.py  — Image-gen tool execution path
+    streaming_tool_executor.py — Streaming-tool variant
+    tool_dispatch.py   — Tool-name → handler routing
+    tool_display.py, tool_hooks.py — Tool UX + before/after hooks
+    endpoint.py        — Endpoint mode (Planner→Worker→Critic loop)
+    endpoint_prompts.py, endpoint_review.py — Prompts + verdict parser
+    compaction.py      — Context-window compaction (3-layer)
+    cache_tracking.py, llm_fallback.py, stream_handler.py — Prompt-cache
+                         tracking, model-swap fallback, stream classifier
+    system_context.py, message_builder.py, conv_message_builder.py,
+    server_message_store.py, model_config.py, attachments.py — Context
+                         assembly, message transforms, per-turn file injection
+    approval.py, human_guidance.py, stdin_handler.py — Write-approval,
+                         ask_user, blocking stdin requests
+    handlers/          — Per-tool execution handlers (misc, project, search, browser, mcp, memory, code_exec, _adapter)
+  project_mod/         — Project file tools (list/read/write/grep/run)
+    tools.py           — Public tool entry points
+    read_tools.py      — Absolute + project file reading (images/PDF/Office)
+    write_tools.py     — write_file / apply_diff / insert_content
+    indexer.py, scanner.py, modifications.py, config.py
+  swarm/               — Multi-agent orchestration (master, agent, scheduler, planner, review, registry, rate_limiter, artifact_store, synthesis, integration, events, tools, types, …)
+  optimizer/           — Nightly self-tuning loop: analyzer → proposer (LLM)
+                         → applier → storage. Whitelist auto-apply + ttl_days
+                         revert. See routes/optimizer.py (exposed as a route)
+                         and lib/optimizer/actions/ for the action registry.
+  browser/             — Browser automation (advanced, playwright pool, queue, handlers)
+  fetch/               — Web fetch pipeline (HTTP, HTML/PDF extraction, playwright pool, content filter)
+  search/              — Search orchestration + rerank + dedup (engines/ sub-package)
+  agent_backends/      — Pluggable agent backends (builtin, codex, claude_code) + SSE bridge
+  mcp/                 — Model Context Protocol client, registry, config
+  memory/              — Memory / stored-notes layer (storage, relevance, injection, tools)
+  oauth/               — OAuth flows (Claude, Codex, manager, PKCE, token store)
+  feishu/              — Feishu/Lark bot pipeline, events, messaging
+  scheduler/           — Cron + timer + proactive agent scheduler
+  pdf_parser/          — PDF parsing (text, images, math, VLM, postprocess)
+  cross_dc.py          — Cross-DC FUSE latency detection (env-var driven, auto-benchmarks)
+  compat.py            — Cross-platform shim (Linux/macOS/Windows)
+  fs_keepalive.py      — Linux-only FUSE/NFS mount keepalive
+  trading/             — Trading package (info, intel, market, screening, historical_data, nav, …)
+  trading_autopilot/   — Autonomous trading loop
+  trading_backtest_engine/ — Backtest simulator
+  trading_strategy_engine/ — Strategy DSL + runner
+  trading_signals.py, trading_risk.py, trading_tasks.py — Top-level trading helpers
+  database/            — Dual-backend DB layer (PostgreSQL primary, SQLite fallback)
+    _core.py           — Connection factory, pool, config (PG_* / TOFU_DB_PATH; legacy CHATUI_DB_PATH still honored)
+    _bootstrap.py      — Auto-bootstrap local userspace PG; fallback to SQLite
+    _schema_pg.py      — PG DDL / migrations
+    _schema_sqlite.py  — SQLite DDL / migrations
+    _sql_translate.py  — Translate SQLite-flavored SQL to PG at the wrapper layer
+    _wrappers.py       — Uniform execute() / fetchone() / fetchall() API
+routes/                — Quart Blueprints (28 modules, 243+ routes total)
+                         Core: chat, conversations, common, config, upload, translate, project,
+                               browser, desktop, endpoint, swarm, scheduler, memory, folders,
+                               agent_backends, mcp, oauth, daily_report, optimizer, paper, push
+                         Trading (conditional on TRADING_ENABLED):
+                               trading_autopilot, trading_brain, trading_decision,
+                               trading_holdings, trading_intel, trading_simulator, trading_tasks
+                         _task_routes.py — register_task_routes() factory: auto-generates
+                                          /poll/<id> + /abort/<id> from a TaskRuntime
+static/js/             — Frontend (core.js, main.js, ui.js, settings.js, paper-reader.js,
+                         memory.js, project.js, scheduler.js, timer.js, image-gen.js,
+                         upload.js, translation.js, i18n.js, branch.js, myday.js,
+                         optimizer.js, log-clean.js, export-images.js, idb-cache.js,
+                         push.js, trading/*.js)
+static/                — CSS (styles.css, trading.css)
+debug/                 — Standalone test/benchmark scripts
+tests/                 — pytest-style suites + standalone runners. Suites for the
+                         shared infrastructure modules:
+                           test_api_response.py, test_json_store.py, test_ttl_cache.py,
+                           test_request_parser.py, test_http_client.py,
+                           test_task_runtime.py, test_server_async.py,
+                           test_chat_manager_migration.py, test_paper_migration.py,
+                           test_translate_migration.py,
+                           test_trading_simulator_migration.py
+                         Migration scripts (one-shot, idempotent, dry-run-safe):
+                           _migrate_api_response.py, _migrate_request_parser.py,
+                           _migrate_http_client.py — see §15 for usage rules
+logs/
+  app.log              — Business logic only (lib.*, routes.*, server) INFO+, daily rotation, 30 days
+  access.log           — HTTP request log (werkzeug), daily rotation, 14 days
+  error.log            — WARNING/ERROR/CRITICAL from ALL sources (5 MB × 10)
+  vendor.log           — Third-party libraries WARNING+ (5 MB × 3)
+  audit.log            — Structured JSON audit trail
+```
+
+---
+
+## 2. ⚠️ MANDATORY: Logging Discipline
+
+> **The #1 rule of this project: every code path that can fail MUST leave a trace in the log file.**
+> Silent failures are the enemy. If a bug happens in production, `logs/error.log` (for errors) and `logs/app.log` (for business context) must contain enough information to diagnose it without a debugger.
+
+### 2.1 Every Python file MUST have a logger
+
+```python
+# At the top of every .py file in lib/ and routes/:
+from lib.log import get_logger
+logger = get_logger(__name__)
+```
+
+**Never use `print()` for diagnostics.** Always use the logger — it provides level, module name, thread info, and routes to the correct log file.
+
+### 2.2 Exception handling — ZERO silent catches
+
+```python
+# ❌ FORBIDDEN — silent catch
+try:
+    result = do_something()
+except Exception:
+    pass
+
+# ❌ FORBIDDEN — catch-and-return without logging
+try:
+    result = do_something()
+except Exception:
+    return None
+
+# ✅ CORRECT — always log, then handle
+try:
+    result = do_something()
+except Exception as e:
+    logger.warning('do_something failed: %s', e)
+    return None
+
+# ✅ CORRECT — for truly expected/harmless exceptions, use debug level
+try:
+    count = int(maybe_string)
+except (ValueError, TypeError) as e:
+    logger.debug('Non-numeric value, defaulting to 0: %s', e)
+    count = 0
+
+# ✅ CORRECT — for unexpected errors, use error + traceback
+try:
+    data = complex_operation()
+except Exception as e:
+    logger.error('complex_operation failed: %s', e, exc_info=True)
+    raise
+```
+
+**Rules:**
+| Scenario | Level | `exc_info` | Example |
+|---|---|---|---|
+| Expected / harmless fallback | `debug` | optional | Parse int, optional file |
+| Unexpected but recoverable | `warning` | `False` | API timeout, retry |
+| Unexpected, degraded behavior | `error` | `True` | Tool execution failure |
+| Fatal / unrecoverable | `critical` | `True` | DB corruption |
+| Retry loop (each attempt) | `warning` | `False` | Stream retry |
+| Retry loop (final failure) | `error` | `True` | All retries exhausted |
+
+### 2.3 Use `log_context` for operations > 1 second
+
+```python
+from lib.log import log_context
+
+# Automatically logs start, duration, and any exception
+with log_context('rebuild_project_index', logger=logger):
+    indexer.rebuild()
+```
+
+### 2.4 Use `log_exception` for catch-and-reraise
+
+```python
+from lib.log import log_exception
+
+try:
+    process(data)
+except Exception:
+    log_exception(logger, 'Failed to process data for conv=%s', conv_id)
+    raise
+```
+
+### 2.5 Use `audit_log` for significant state changes
+
+```python
+from lib.log import audit_log
+
+audit_log('model_switch', old_model=old, new_model=new, reason='rate_limit')
+audit_log('task_complete', task_id=tid, tokens_used=usage)
+```
+
+### 2.6 Log content guidelines
+
+- **Include context**: conv_id, task_id, model name, URL, file path — whatever helps grep.
+- **Use %-style formatting** (lazy evaluation): `logger.info('Fetched %s in %.1fs', url, elapsed)` — NOT f-strings.
+- **Sanitize secrets**: never log API keys, tokens, or full request bodies with credentials.
+- **Truncate large data**: `logger.debug('Response preview: %.500s', body)` — don't dump 100 KB into the log.
+- **Structured prefix**: Use `[Module]` or `[op:name]` prefix for easy grepping: `logger.info('[LLM] Streaming started model=%s', model)`.
+
+---
+
+## 3. Code Style & Conventions
+
+### 3.1 Python
+
+- **Imports**: stdlib → third-party → `lib.*` → `routes.*`, blank line between groups.
+- **Logger init**: Always `from lib.log import get_logger; logger = get_logger(__name__)`, placed right after imports.
+- **Type hints**: Encouraged on public functions; optional on internal helpers.
+- **Docstrings**: Required on modules and public functions. Use Google-style:
+  ~~~python
+  def fetch_page(url: str, timeout: int = 15) -> str:
+      """Fetch a web page and return its text content.
+
+      Args:
+          url: The URL to fetch.
+          timeout: Request timeout in seconds.
+
+      Returns:
+          Extracted text content, or empty string on failure.
+      """
+  ~~~
+- **Constants**: UPPER_SNAKE_CASE at module level.
+- **Private helpers**: Prefix with `_` (e.g., `_parse_sse_line()`).
+
+### 3.2 JavaScript (static/js/)
+
+- Vanilla JS only — no frameworks, no build step.
+- Module pattern: each file exposes functions via `window.*` or direct calls in `main.js`.
+- Use `console.warn` / `console.error` sparingly for client-side diagnostics.
+
+#### 3.2.1 ⚠️ JS Bundler Allowlist — DO NOT FORGET
+
+> **Every new top-level `static/js/*.js` file MUST be added to `_BUNDLE_FILES`
+> in `lib/js_bundler.py`. Otherwise it loads as a silent no-op in production.**
+
+`routes/common.py` rewrites `index.html` on every `GET /` and replaces all
+individual `<script defer src="static/js/*.js">` tags with a single
+`bundle-<hash>.js` tag. The bundle is built by concatenating only the files
+listed in `_BUNDLE_FILES` (in order). Files NOT in that list are still
+**stripped** from the served HTML by the `_APP_SCRIPTS_RE` regex
+(`routes/common.py:371-405`), but never **added back** by the bundler →
+the `<script>` tag silently disappears, no 404, no console error.
+
+**Symptom**: file exists on disk, `<script>` tag in your local
+`index.html`, but `typeof window.yourFunction === 'undefined'` in the
+browser and `document.getElementById('yourElement')` returns `null`.
+
+**Fix when adding a new top-level JS module:**
+1. Add the filename to `_BUNDLE_FILES` in `lib/js_bundler.py` in the
+   correct dependency order. Hard rules:
+   - `i18n.js` MUST stay first (`t()` is used everywhere).
+   - `main.js` MUST stay last (it boots the app).
+   - Files that read globals declared in `main.js` (e.g. `conversations`,
+     `activeConvId`, `config`) at IIFE-load time go AFTER `main.js`.
+   - Files referenced only at runtime (inside function bodies) can go
+     anywhere before `main.js`.
+2. Keep the `<script defer src="static/js/foo.js?v=...">` tag in
+   `index.html` for the dev-mode fallback (when bundling fails the
+   original tags are served — see `routes/common.py:380-384`).
+3. Restart the server (the bundler is pure-Python, no hot-reload). On
+   startup, the log line `[Bundle] Built bundle-XXXXXXXX.js (N files, ...)`
+   should show `N` increased by 1.
+4. Hard-refresh the browser — the bundle filename changes via content
+   hash, so a soft reload would re-use the cached old bundle.
+
+**Audit command** (lists files referenced in `index.html` but missing
+from `_BUNDLE_FILES`):
+```bash
+diff <(grep -oE 'static/js/[a-z_-]+\.js' index.html | sed 's|static/js/||' | sort -u) \
+     <(python3 -c "from lib.js_bundler import _BUNDLE_FILES; [print(f) for f in _BUNDLE_FILES]" | sort)
+```
+
+### 3.3 HTML/CSS
+
+- `index.html` and `trading.html` are single-page apps with inline structure.
+- CSS is in `static/styles.css` (main) and `static/trading.css` (trading page).
+- Dark theme with CSS variables at `:root`.
+
+### 3.4 Icons — Real Brand Icons, NOT Emoji
+
+> **When an icon represents a real-world product, service, or brand (e.g. Feishu/Lark, Google, GitHub),
+> you MUST use the actual official SVG logo — never substitute with a generic emoji.**
+
+**Rules:**
+- **Search first**: Before adding any brand icon, search the web for the official SVG (check sources like
+  [dashboard-icons](https://github.com/homarr-labs/dashboard-icons),
+  [Simple Icons](https://simpleicons.org/), or the brand's own asset page).
+- **Inline SVG preferred**: Embed the SVG inline in HTML for color control and no external dependency.
+- **Size to context**: Use `width`/`height` attributes matching the surrounding text size (e.g. 15×15 for tab buttons, 20×16 for section titles).
+- **Emoji OK for generic concepts**: Emojis like 🔑, 📂, 👥 are fine for abstract concepts (credentials, workspace, access control) — but NOT for representing a specific product.
+- **Never use**: 💬 for Feishu, 🔍 for Google, 🐙 for GitHub, etc. — always use the real logo.
+
+### 3.5 No Hardcoded Environment-Specific Values
+
+> **This project is open-source. Never hardcode paths, hostnames, datacenter names,
+> cluster identifiers, internal domain names, or any environment-specific values directly in code.**
+
+**Rules:**
+- **Use environment variables** for anything that varies between deployments (storage paths, IDC names, cluster endpoints).
+- **Use config files** (`data/config/*.json`) for values that users should be able to tune without editing code.
+- **Provide sensible defaults** that work on a vanilla machine (or gracefully disable the feature if no env var is set).
+- **Document the env vars** in docstrings, not in hardcoded examples with real values.
+- **Probe / auto-detect** at runtime where possible (e.g., benchmark latency instead of maintaining a list of "known remote datacenters").
+- **In docstrings and comments**, use generic placeholder names (`cluster-A`, `/mnt/storage/...`, `datacenter-X`) — never real infrastructure names.
+
+```python
+# ❌ FORBIDDEN — hardcoded infrastructure
+REMOTE_CLUSTERS = ['sh02-training', 'hldy-training']  # Shanghai, Hailidao
+if hostname.startswith('set-zw05'):
+    local_dc = 'beijing'
+
+# ✅ CORRECT — environment-driven, auto-detected
+_CLUSTER_MOUNTS_ENV = os.environ.get('CROSS_DC_CLUSTER_MOUNTS', '')
+_LOCAL_IDC = os.environ.get('CROSS_DC_LOCAL_IDC', '')
+# Benchmark latency at startup to classify local vs remote
+```
+
+---
+
+## 4. Architecture Patterns
+
+### 4.1 Flask Blueprint registration
+
+All routes live in `routes/*.py` as Blueprints. `routes/__init__.py` → `register_all(app)` wires them.
+The authoritative blueprint list is `ALL_BLUEPRINTS` in `routes/__init__.py`; trading blueprints
+are appended only when `lib.TRADING_ENABLED` is truthy.
+
+```python
+# routes/my_feature.py
+from flask import Blueprint
+my_bp = Blueprint('my_feature', __name__)
+
+@my_bp.route('/api/my-feature', methods=['POST'])
+def handle():
+    ...
+```
+
+### 4.2 Task lifecycle (SSE streaming)
+
+1. Client POSTs to `/api/chat/start` → creates a task dict in memory.
+2. Background thread runs `orchestrator.run_task(task)`.
+3. Task appends SSE events via `append_event(task, ...)`.
+4. Client polls `/api/chat/stream/<id>` for SSE events.
+5. On completion, result is persisted to the database (PG if available, else SQLite) via `persist_task_result()`.
+
+**Logging checkpoint**: every stage transition MUST be logged:
+```python
+logger.info('[Task:%s] status=%s → %s', task_id, old_status, new_status)
+```
+
+**Endpoint mode (Planner → Worker → Critic)** — `lib/tasks_pkg/endpoint.py`
+runs a three-way critic verdict loop:
+- **`[VERDICT: STOP]`** → terminate (approved).
+- **`[VERDICT: CONTINUE_WORKER]`** → inject critic feedback as a user
+  message, back to the Worker with the SAME plan.
+- **`[VERDICT: CONTINUE_PLANNER]`** → run a fresh Planner turn, reset
+  the Worker context to `[system, user(new plan)]`, then back to the
+  Worker. Guarded by `MAX_REPLANS=3`.
+- A defense-in-depth guard in `_parse_verdict` (`endpoint_review.py`)
+  automatically overrides STOP→CONTINUE_PLANNER if the feedback body
+  still contains `❌` / "NOT met" / "still failing" / "unresolved".
+- Kill switch: `TOFU_ENDPOINT_REPLAN=0` (legacy `CHATUI_ENDPOINT_REPLAN=0`)
+  downgrades CONTINUE_PLANNER to CONTINUE_WORKER and disables the override guard.
+- SSE event `endpoint_critic_msg` carries `next_phase` (new) and mirrors
+  `should_stop` (legacy). Frontend reads `next_phase` and creates a
+  replan Planner placeholder when `'planner'`.
+
+### 4.3 LLM client flow
+
+`lib/llm/body.py::build_body()` constructs model-specific payloads.
+`lib/llm/stream.py::stream_chat()` handles SSE streaming with retry logic.
+High-level `dispatch_chat` / `dispatch_stream` in `lib/llm_dispatch/api.py`
+wrap this with model routing, fallback chains, and per-model clamping.
+
+All consumers import from the package facade:
+
+```python
+from lib.llm import build_body, stream_chat, chat, add_cache_breakpoints
+from lib.llm import RateLimitError, AbortedError, is_claude
+```
+
+**Logging checkpoints:**
+- Log model, token count estimate before each API call.
+- Log each retry attempt with reason.
+- Log final outcome (success/failure, usage stats).
+
+### 4.4 Tool execution
+
+Tools are defined in the `lib/tools/` package — one submodule per tool family
+(`emit.py`, `project.py`, `search.py`, `browser.py`, `meta.py`,
+`human_guidance.py`, `image_gen.py`, `code_exec.py`, `conversation.py`). Execution
+is split across `lib/tasks_pkg/`:
+
+- `tool_dispatch.py` — name → handler routing
+- `executor.py` — main execution entry + `_resolve_content_ref()`
+- `streaming_tool_executor.py` — streaming variant
+- `executor_image.py` — image-generation path
+- `handlers/` sub-package — per-family handlers (`misc.py`, `project.py`,
+  `search.py`, `browser.py`, `mcp.py`, `memory.py`, `code_exec.py`, `_adapter.py`)
+
+**Logging checkpoint**: every tool call MUST log:
+```python
+logger.info('[Tool:%s] called with args=%s', tool_name, truncated_args)
+logger.info('[Tool:%s] returned %d chars in %.1fs', tool_name, len(result), elapsed)
+# On failure:
+logger.error('[Tool:%s] failed: %s', tool_name, error, exc_info=True)
+```
+
+### 4.5 Token-saving tool — `content_ref`
+
+**`content_ref` on `write_file`** — Optional parameter (`{tool_round, start?, end?}`) that writes a previous tool result's content to a file, instead of the model re-generating it. Resolved by `_resolve_content_ref()` in executor.py.
+
+### 4.6 Shared infrastructure modules — use these, not raw primitives
+
+> **New code MUST go through the shared modules below for the patterns
+> they own. They each replaced 50–500+ ad-hoc copies and exist precisely
+> so we never re-grow that duplication.**
+
+| Pattern | Use this | Don't write |
+|---|---|---|
+| Returning JSON from a route | `lib.api_response.api_ok / api_error / api_not_found / api_bad_request / @safe_route` | `return jsonify({...}), N` for the 4 helper-covered shapes (still fine for genuinely custom multi-key responses — see §4.6.1) |
+| Parsing a JSON request body | `lib.request_parser.parse_body() + require_str / require_int / optional_list / …` (raises `BadRequest` → auto 400) | `data = request.get_json(silent=True) or {}` followed by manual `.get()` |
+| Outbound HTTP (sync) | `lib.http_client.http_get / http_post / http_stream` — auto-applies proxy + 30s timeout + Tofu UA | `requests.get(url, ..., proxies=proxies_for(url), timeout=...)` |
+| Outbound HTTP (async, in `async def` routes) | `await async_http_get / async_http_post / async with async_http_stream(...)` | bare `httpx.AsyncClient` per call |
+| Reading/writing JSON files | `lib.json_store.read_json / write_json_atomic / update_json_atomic` | hand-rolled `tempfile.mkstemp + os.replace`, `json.load/dump` |
+| Background TTL caches | `lib.ttl_cache.TTLCache(ttl=..., max_size=..., name=...)` | hand-rolled `_cache = {}` + `_cache_lock = threading.Lock()` |
+| Background tasks (chat / paper / translate / trading-sim style) | `lib.task_runtime.TaskRuntime` (one instance per task kind) — see §14 | local `_tasks = {}` registry with custom append/poll/abort logic |
+| Server-side push (real-time event channel) | `lib.push.push_event(channel, task_id, event)` (auto-fired from `TaskRuntime.append_event`) — see §4.7 | per-feature WebSocket endpoints |
+
+#### 4.6.1 Carve-outs — modules that intentionally bypass the shared layer
+
+These are **not** sloppiness; they have specific reasons to keep their
+own implementations. Don't migrate them without a strong cause.
+
+- `lib/fetch/utils.py` — specialised session pool with circuit breaker,
+  per-status retry strategy, and multiple SSL fallback sessions. Keeps
+  its own `requests.Session()` instances.
+- `lib/llm/stream.py`, `lib/llm/astream.py` — custom SSE streaming with
+  retry / 429 cycling / cache-breakpoint injection. Wrap via
+  `lib.llm` package facade, not `http_client`.
+- `lib/token_counter/usage_cache.py` — structured `_UsageEntry` dataclass +
+  signature-based staleness + model-family validation. Not a plain
+  key-value cache; deliberately separate from `TTLCache`.
+- 44 multi-key/multi-line `return jsonify({...})` sites in routes/ —
+  not boilerplate, they produce distinct response shapes; left as-is.
+
+#### 4.6.2 Logging integration
+
+All shared modules log to the standard `lib.log.get_logger(__name__)`
+sink. They do NOT swallow errors silently:
+
+- `json_store` — read failures log `WARNING` and return the default;
+  write failures raise.
+- `request_parser.parse_body` — unexpected `get_json()` errors log at
+  `DEBUG` (outside-context misuse is the expected case) and return `{}`.
+- `api_response.api_internal_error` — auto-logs the exception at
+  `ERROR` with traceback so 500s never go undocumented.
+- `http_client` — does NOT auto-`raise_for_status()`; caller logs and
+  decides what to do with non-2xx (matches `requests`'s contract).
+
+### 4.7 Unified push channel — `/api/push` WebSocket
+
+A single global WebSocket multiplexes all real-time events for a client:
+
+```
+Frontend                         Backend
+pushSubscribe('chat', taskId)    push_event('chat', task_id, event)
+pushSubscribe('paper', tid)      push_event('paper', task_id, event)
+pushSubscribe('translate', tid)  push_event('translate', task_id, event)
+```
+
+- Backend hub: `lib/push.py::PushHub` (singleton `hub`) — thread-safe;
+  call `push_event(channel, task_id, dict)` from any thread.
+- WebSocket endpoint: `routes/push.py::/api/push` — handles
+  subscribe/unsubscribe/abort frames; per-client async queue.
+- `TaskRuntime.append_event()` automatically pushes to the configured
+  `push_channel` — most consumers don't call `push_event()` directly.
+- Frontend client: `static/js/push.js` (`pushSubscribe`,
+  `pushUnsubscribe`, `pushSend`) with auto-reconnect + exponential
+  backoff. MUST be in `_BUNDLE_FILES` (already is, after `core.js`).
+
+---
+
+## 5. Error Handling Patterns
+
+### 5.1 API / Network calls
+
+```python
+try:
+    resp = requests.get(url, timeout=FETCH_TIMEOUT)
+    resp.raise_for_status()
+except requests.Timeout:
+    logger.warning('[Fetch] Timeout after %ds: %s', FETCH_TIMEOUT, url)
+    return ''
+except requests.RequestException as e:
+    logger.warning('[Fetch] Request failed for %s: %s', url, e)
+    return ''
+```
+
+### 5.2 JSON parsing
+
+```python
+try:
+    data = json.loads(raw)
+except (json.JSONDecodeError, TypeError) as e:
+    logger.warning('Invalid JSON (len=%d): %s — preview: %.200s', len(raw), e, raw)
+    data = {}
+```
+
+### 5.3 Database operations
+
+```python
+try:
+    db.execute(sql, params)
+    db.commit()
+except Exception as e:
+    logger.error('DB write failed: %s — sql=%.200s params=%s', e, sql, params, exc_info=True)
+    db.rollback()
+    raise
+```
+
+### 5.4 Background threads
+
+Background threads MUST wrap their entire run loop in try/except to prevent silent death:
+
+```python
+def _worker_loop():
+    logger.info('[Worker] Started')
+    while running:
+        try:
+            _do_one_cycle()
+        except Exception as e:
+            logger.error('[Worker] Cycle failed: %s', e, exc_info=True)
+            time.sleep(60)  # back off on error
+    logger.info('[Worker] Stopped')
+```
+
+---
+
+## 6. File Modification Checklist
+
+Before submitting any code change, verify:
+
+- [ ] **Logger present**: File has `from lib.log import get_logger; logger = get_logger(__name__)`.
+- [ ] **No silent catches**: Every `except` block logs something (debug at minimum).
+- [ ] **Context in logs**: Log messages include relevant IDs (conv_id, task_id, url, model, etc.).
+- [ ] **Tracebacks on errors**: `exc_info=True` on `logger.error()` for unexpected exceptions.
+- [ ] **`log_context` for slow ops**: Operations that may take > 1s use `with log_context(...)`.
+- [ ] **No f-strings in log calls**: Use `logger.info('x=%s', x)` not `logger.info(f'x={x}')`.
+- [ ] **Secrets not logged**: API keys, tokens, passwords never appear in log output.
+- [ ] **Large data truncated**: Use `%.500s` or `[:500]` to cap logged payloads.
+- [ ] **No hardcoded env values**: No hardcoded paths, hostnames, cluster names, or datacenter IDs — use env vars or config files (see §3.5).
+- [ ] **Use the shared infrastructure** (see §4.6): new routes use `api_ok` / `api_error` / `parse_body`; new outbound HTTP uses `http_client.http_get / http_post`; new JSON-on-disk uses `json_store`; new background tasks use `TaskRuntime` (§14); new TTL caches use `TTLCache`. Don't re-grow the patterns we just deleted.
+- [ ] **Export sync**: If this change adds/modifies secrets, endpoints, credentials, data dirs, or internal identifiers → update `export.py` (see §11.3).
+
+---
+
+## 7. Testing
+
+- Test scripts live in `debug/` (e.g., `debug/test_build_body.py`, `debug/test_swarm.py`,
+  `debug/test_cross_platform.py`). Also `tests/` for pytest-style tests.
+- Run a specific test: `python debug/test_swarm.py` or `pytest tests/`.
+- The legacy `_fix_silent_catches.py` helper has been retired. To audit for silent
+  exception handlers, use `grep_search` on `except` blocks in `lib/` and `routes/`
+  and confirm each has a matching `logger.*` call — see §2.2.
+
+---
+
+## 8. Key Files Quick Reference
+
+| Need to… | Look at… |
+|---|---|
+| Return JSON from a route | `lib/api_response.py` — `api_ok` / `api_error` / `api_not_found` / `@safe_route` (§4.6) |
+| Parse a JSON request body with type checks | `lib/request_parser.py` — `parse_body` + `require_str` / `require_int` / `optional_list` … (§4.6) |
+| Make an outbound HTTP call (sync or async) | `lib/http_client.py` — `http_get` / `http_post` / `async_http_get` / `async_http_post` / `http_stream` / `async_http_stream` (§4.6) |
+| Read/write a JSON file safely | `lib/json_store.py` — `read_json` / `write_json_atomic` / `update_json_atomic` (§4.6) |
+| Add an in-memory TTL cache | `lib/ttl_cache.py` — `TTLCache(ttl=, max_size=, name=)` (§4.6) |
+| Add a background task (poll/abort/events) | `lib/task_runtime.py` — `TaskRuntime` + `routes/_task_routes.py::register_task_routes` (§14) |
+| Push a real-time event to the frontend | `lib/push.py::push_event(channel, task_id, event)` — auto-fired by `TaskRuntime.append_event` (§4.7) |
+| Change LLM behavior | `lib/llm/` (package), `lib/llm_dispatch/` (package) |
+| Adjust per-model token caps | `lib/model_info.py` (`_clamp_max_tokens`) |
+| Add a new tool | Define in `lib/tools/` (pick the right submodule or add one) → register routing in `lib/tasks_pkg/tool_dispatch.py` → add handler in `lib/tasks_pkg/handlers/` |
+| Add a new API endpoint | `routes/` (create Blueprint) → `routes/__init__.py` (import + append to `ALL_BLUEPRINTS`); use `api_ok` / `api_error` from §4.6 instead of raw `jsonify` |
+| Fix streaming issues | `lib/llm/stream.py` (SSE) → `routes/chat.py` (delivery) |
+| Debug task flow | `lib/tasks_pkg/orchestrator.py`, `lib/tasks_pkg/manager.py` |
+| Debug endpoint (Planner/Worker/Critic) | `lib/tasks_pkg/endpoint.py`, `endpoint_prompts.py`, `endpoint_review.py` |
+| Change project file tools | `lib/project_mod/tools.py`, `lib/project_mod/read_tools.py`, `lib/project_mod/write_tools.py` |
+| Read local files (images/PDF/Office) | `lib/file_reader.py` (core) → `lib/project_mod/read_tools.py` (`_read_absolute_file`) |
+| Manage memory / stored notes (legacy "skills") | `lib/memory/storage.py`, `lib/memory/tools.py`, `routes/memory.py`, on-disk `<project>/.chatui/skills/` |
+| Install Anthropic / OpenClaw / AgentSkills `.zip` packages (drag-and-drop) | `lib/memory/installer.py` → `POST /api/memory/install` (multipart). Packages live as `<.chatui/skills>/<name>/SKILL.md` + references/ + scripts/. Treated identically to flat `.md` memories by BM25 / search_memories — frontend marks them with a `SKILL` badge. `install.sh` is **never auto-executed**; surfaced as `install_hints`. |
+| Skills store / curated catalog / file browser | `lib/memory/catalog.py` (curated `SkillCatalogEntry` list), `routes/memory.py` (`/api/memory/catalog`, `/api/memory/catalog/install`, `/api/memory/<id>/files`), `static/js/skills.js`, Settings → **Skills** tab. App-Store layout mirrors the MCP tab: search + scope tabs (Catalog / Installed) + category pills + grid + drag-drop zone. Catalog one-click installs download a `.zip` over HTTPS (capped at 50 MB) and feed it to `install_skill_package`. |
+| Modify trading features | `lib/trading/` (package), `lib/trading_autopilot/`, `lib/trading_backtest_engine/`, `lib/trading_strategy_engine/`, `lib/trading_signals.py`, `lib/trading_risk.py`, `lib/trading_tasks.py`, `routes/trading_*.py` |
+| Paper / Reading Mode (reports, Q&A, translate) | `routes/paper.py` (incl. `_run_report_task`), `static/js/paper-reader.js` |
+| Daily report subsystem | `routes/daily_report.py`, `lib/scheduler/` |
+| Scheduled / proactive agents, cron, timers | `lib/scheduler/` (manager, executor, cron, timer, proactive), `routes/scheduler.py` |
+| MCP (Model Context Protocol) | `lib/mcp/` (client, registry, config), `routes/mcp.py`, `lib/tasks_pkg/handlers/mcp.py` |
+| Agent backends (Codex, Claude Code, builtin) | `lib/agent_backends/`, `routes/agent_backends.py` |
+| OAuth flows (Claude / Codex) | `lib/oauth/`, `routes/oauth.py` |
+| PDF parsing (text, images, math, VLM) | `lib/pdf_parser/` |
+| Web fetch / browser automation | `lib/fetch/`, `lib/browser/`, `routes/browser.py` |
+| Web search orchestration | `lib/search/` (orchestrator, engines, rerank, dedup) |
+| Feishu / Lark bot | `lib/feishu/` |
+| Swarm (multi-agent) | `lib/swarm/` (master, agent, scheduler, planner, review, registry, rate_limiter, artifact_store, synthesis, integration, events, tools, types), `routes/swarm.py` |
+| Nightly optimizer (self-tuning) | `lib/optimizer/` (orchestrator, analyzer, proposer, applier, storage, actions/), `routes/optimizer.py`, `static/js/optimizer.js` |
+| Folder / conversation organization | `routes/folders.py`, `routes/conversations.py` |
+| Check recent errors | `tail -f logs/error.log` or `grep_search` the `logs/` directory |
+| Export / sanitize project | `export.py` (three modes: `--mode personal` / `--mode internal` / `--mode opensource`) — see §11 |
+| Cross-platform compat | `lib/compat.py` (core) → `debug/test_cross_platform.py` (smoke test) |
+| Cross-DC FUSE latency | `lib/cross_dc.py` (detection) → `data/config/cross_dc.json` (config) |
+
+---
+
+## 9. Environment
+
+- Python 3.10+
+- **ASGI stack**: Quart (async Flask, same Pallets API) + Hypercorn (HTTP/2-capable
+  ASGI server). The `flask` import name is shimmed to `quart` at startup
+  (`server.py::_install_flask_shim`) so all `from flask import …` works unchanged.
+  Key dependencies in `requirements.txt`: `quart`, `hypercorn`, `httpx`,
+  `cryptography` (for auto-TLS — see below).
+- **Auto-TLS for HTTP/2**: on first run, `cryptography` programmatically
+  generates a self-signed cert at `data/certs/tofu.{pem,key}` (no openssl CLI
+  required). Browsers see HTTPS + HTTP/2 directly; warning is one-time-click.
+  Auto-DISABLED when `VSCODE_PROXY_URI` / `CODESPACES` / `GITPOD_WORKSPACE_URL`
+  is set (the proxy already provides HTTPS + HTTP/2). Override with
+  `TOFU_TLS=1` (force on) or `TOFU_TLS=0` / `--no-tls` (force off).
+- **Critical Quart timeouts** (configured at boot in `server.py`):
+  `RESPONSE_TIMEOUT = None` and `BODY_TIMEOUT = None` — Quart's defaults
+  of 60s would silently kill long SSE streams (chat tasks routinely run 5+
+  minutes). `keep_alive_timeout = 600` on the Hypercorn config.
+- **Dual-backend database** (`lib/database/`): tries PostgreSQL 18+ first (better concurrency for 100+ users, JSONB, tsvector); auto-falls-back to SQLite (`data/tofu.db`; legacy `data/chatui.db` is still picked up if present) if PG is unavailable. Force SQLite with `TOFU_DB_BACKEND=sqlite` (legacy `CHATUI_DB_BACKEND=sqlite` still honored). PG is optional — runs as a local userspace process (no `sudo`), auto-bootstrapped via conda when missing.
+- Logging: multi-file architecture configured in `server.py`, utilities in `lib/log.py`:
+  - `logs/app.log` — Business logic (`TimedRotatingFileHandler`, daily, 30 days)
+  - `logs/access.log` — HTTP requests (`TimedRotatingFileHandler`, daily, 14 days)
+  - `logs/error.log` — All warnings/errors (`RotatingFileHandler`, 5 MB × 10)
+  - `logs/vendor.log` — Third-party libs (`RotatingFileHandler`, 5 MB × 3)
+  - `logs/audit.log` — Structured JSON audit trail
+- **Per-project config isolation**: All settings (providers, models, features) are stored in
+  `data/config/` within the project directory — NOT in `~/.chatui/` (legacy global). This means
+  multiple copies on the same machine have fully independent configs, databases, and API keys.
+  Config files: `data/config/server_config.json`, `data/config/features.json`, `data/config/daily_reports/`.
+  Memory / skill notes (both global and project-scoped) are stored under
+  `<project>/.chatui/skills/` (the directory name is preserved for back-compat with
+  existing memory files; renaming would orphan every saved memory).
+  Auto-migration: on first run, if `data/config/server_config.json` doesn't exist but `~/.chatui/server_config.json` does, it's copied once.
+- Key env vars for initial setup:
+  - `LLM_API_KEYS` — comma-separated API keys (or configure via Settings UI)
+  - `LLM_BASE_URL` — LLM endpoint (default: `https://api.openai.com/v1`)
+  - `LLM_MODEL` — default model (default: `gpt-4o`)
+  - `TOFU_DB_PATH` (legacy `CHATUI_DB_PATH`) — SQLite database file path (default: `data/tofu.db`; legacy `data/chatui.db` auto-picked up)
+  - `TOFU_DB_BACKEND` (legacy `CHATUI_DB_BACKEND`) — force backend choice: `sqlite` or `postgres` (default: auto-detect, prefer PG)
+  - `TOFU_PG_HOST` / `TOFU_PG_PORT` / `TOFU_PG_DBNAME` / `TOFU_PG_USER` / `TOFU_PG_PASSWORD` (legacy `CHATUI_PG_*`) — PostgreSQL DSN overrides (defaults: `127.0.0.1:15432/chatui`, no auth — matches the auto-bootstrapped userspace instance; live deployments still use DB name `chatui` for back-compat)
+  - `TOFU_DB_MAX_CONNS` / `TOFU_DB_ACQUIRE_TIMEOUT` (legacy `CHATUI_*`) — PG connection pool tuning
+  - `PROXY_BYPASS_DOMAINS` — comma-separated domain suffixes for proxy bypass (e.g. `.internal.example.com`)
+  - `CROSS_DC_CLUSTER_MOUNTS` — cluster mount map for FUSE latency detection (format: `cluster1:/path/a,cluster2:/path/b`)
+  - `CROSS_DC_LOCAL_IDC` — local datacenter identifier for cross-DC classification
+  - `TOFU_ENDPOINT_REPLAN` (legacy `CHATUI_ENDPOINT_REPLAN`) — endpoint-mode three-way Critic kill switch (`1` default / `0` to disable). When `0`, the Critic's `[VERDICT: CONTINUE_PLANNER]` is silently downgraded to `[VERDICT: CONTINUE_WORKER]` and the STOP-with-❌ override guard is disabled. Use for hot rollback of the replan redesign without a code change.
+  - `TRADING_ENABLED` — gate for the trading subsystem (default off; also togglable via Settings UI)
+- Proxy bypass unified: Settings UI bypass domains auto-sync to both `proxies_for()` per-request bypass and `no_proxy` env var (see `lib/proxy.py`)
+- Provider templates in Settings UI for one-click provider setup (OpenAI, Anthropic, Meituan, etc.)
+- Trading module disabled by default (enable via `TRADING_ENABLED=1` env-var or Settings UI)
+- **Cross-platform support** (Linux, macOS, Windows):
+  - All platform-specific code is in `lib/compat.py` — use its helpers instead of direct `fcntl`, `select`, `/proc` access.
+  - FS keepalive (`lib/fs_keepalive.py`) is Linux-only; graceful no-op on other platforms.
+  - Interactive stdin detection in `run_command` is Linux-only (requires `/proc`); degrades to non-interactive on macOS/Windows.
+  - `DANGEROUS_PATTERNS` in `lib/project_mod/config.py` include both Unix and Windows equivalents.
+  - Smoke test: `python debug/test_cross_platform.py` validates compat layer on any platform.
+
+---
+
+## 10. 🚫 Change Approval Requirements — ASK BEFORE MODIFYING
+
+> **The following categories of changes require explicit user approval.**
+> Do NOT modify these autonomously — always present the proposed change,
+> explain the rationale, and **wait for confirmation** before applying.
+
+### 10.1 Hyperparameter & Configuration Changes
+Any numeric/boolean constant that affects model behavior or system performance:
+- **LLM parameters**: temperature, top_p, top_k, max_tokens, frequency_penalty, presence_penalty, stop sequences
+- **Retry & timeout settings**: retry counts, backoff multipliers, request timeouts, SSE timeouts
+- **Token budgets**: context window sizes, compaction thresholds, layer boundaries, max tool result lengths
+- **Rate limiter settings**: RPM, TPM, concurrency caps, cooldown periods
+- **Batch/queue sizes**: thread pool sizes, chunk sizes, polling intervals
+
+### 10.2 Model Routing & Dispatch Logic
+- Default model assignments or model aliases
+- API key rotation rules or priority ordering
+- Fallback chains or model capability mappings
+- Any change to `lib/llm_dispatch/` routing tables (esp. `config.py`, `dispatcher.py`)
+
+### 10.3 Database Schema Changes
+- Any `ALTER TABLE`, new tables, new indexes, or column changes to the schema — **must be applied to BOTH `lib/database/_schema_pg.py` AND `lib/database/_schema_sqlite.py`** to keep backends in sync
+- Changes to migration scripts or DB initialization logic
+- Changes to `lib/database/_sql_translate.py` (SQLite→PG SQL translation rules)
+
+### 10.4 Security-Sensitive Changes
+- Authentication/authorization logic
+- CORS, CSP, or proxy configurations
+- API key handling or storage
+- File system access permissions in `lib/project_mod/`
+
+### 10.5 How to Comply
+When a task touches any of the above:
+1. **Stop** before making the change.
+2. **Present** the current value, proposed new value, and reasoning.
+3. **Wait** for explicit user approval (e.g., "yes", "go ahead", "approved").
+4. **Log** the change with `audit_log('config_change', param=name, old=old_val, new=new_val, approved_by='user')`.
+
+---
+
+## 11. ⚠️ MANDATORY: Export Sanitization & Sensitive Data Sync
+
+> **Whenever you add, move, or modify ANY sensitive data in the codebase, you MUST
+> also update `export.py` to ensure it is properly sanitized on export.**
+> Failure to keep `export.py` in sync means secrets will leak to colleagues or the public.
+
+### 11.1 What `export.py` does
+
+`export.py` copies the project to a clean destination with three sanitization levels:
+
+```bash
+# Personal: self-use copy, no sanitization, just skip bulky junk
+python3 export.py --mode personal --dest ~/tofu-backup
+
+# Company-internal: keeps API keys & endpoints, strips personal data
+python3 export.py --mode internal --dest ~/tofu-team
+
+# Open-source: strips ALL secrets, keys, internal domains, paths
+python3 export.py --mode opensource --dest ~/tofu-public
+
+# Preview without writing
+python3 export.py --mode opensource --dry-run
+```
+
+### 11.2 Sanitization matrix
+
+| Data category | `personal` | `internal` | `opensource` | Where defined in export.py |
+|---|---|---|---|---|
+| Source code & configs | ✓ kept | ✓ kept | ✓ sanitized | `_sanitize_source_opensource()` |
+| Skills (`.chatui/`) | ✓ kept | ✗ removed | ✗ removed | `ALWAYS_EXCLUDE_DIRS` |
+| Uploads (`uploads/`) | ✓ kept | ✗ removed | ✗ removed | `ALWAYS_EXCLUDE_DIRS` |
+| Session caches (`.project_sessions/`) | ✓ kept | ✗ removed | ✗ removed | `ALWAYS_EXCLUDE_DIRS` |
+| Data configs (`data/config/`) | ✓ kept | ✗ removed | ✗ removed | `ALWAYS_EXCLUDE_DIRS` |
+| Databases (`*.db`) | ✗ removed | ✗ removed | ✗ removed | `PERSONAL_EXCLUDE_GLOBS_HEAVY`, `ALWAYS_EXCLUDE_DIRS` |
+| Logs (`logs/`, `*.log`) | ✗ removed | ✗ removed | ✗ removed | `PERSONAL_EXCLUDE_DIRS`, `ALWAYS_EXCLUDE_DIRS` |
+| `__pycache__`, `.git` | ✗ removed | ✗ removed | ✗ removed | All levels |
+| Scratch files (`a.md`, `o.md`, etc.) | ✓ kept | ✗ removed | ✗ removed | `ALWAYS_EXCLUDE_FILES` |
+| API keys (hardcoded in `lib/__init__.py`) | ✓ kept | ✓ kept | ✗ → placeholder | `_SECRETS` dict |
+| Internal endpoints (`aigc.sankuai.com`) | ✓ kept | ✓ kept | ✗ → `api.openai.com` | `_ENDPOINTS` dict |
+| Feishu credentials | ✓ kept | ✓ kept | ✗ → empty | `_SECRETS` dict |
+| Internal domains (`.sankuai.com`) | ✓ kept | ✓ kept | ✗ → `.internal.example.com` | `_INTERNAL_DOMAIN_LITERALS` |
+| Provider ID (`'sankuai'`) | ✓ kept | ✓ kept | ✗ → `'default'` | `_sanitize_source_opensource()` §10 |
+| Absolute paths (`/mnt/dolphinfs/...`) | ✓ kept | ✓ kept | ✗ → `/path/to/your/project` | `_sanitize_source_opensource()` §8 |
+| Trading module (`TRADING_ENABLED`) | ✓ kept | ✗ OFF via `.env` | ✗ OFF via `.env` | `_create_skeleton()` writes `.env` |
+| Thinking Depth default | ✓ `medium` | ✗ → `off` | ✗ → `off` | `_sanitize_defaults_for_export()` |
+| Security audit reports | ✓ kept | ✓ kept | ✗ removed | `OPENSOURCE_EXTRA_EXCLUDE_FILES` |
+| `export.py` itself | ✓ kept | ✗ removed | ✗ removed | `ALWAYS_EXCLUDE_FILES` |
+| `CLAUDE.md` | ✓ kept | ✗ removed | ✗ removed | `ALWAYS_EXCLUDE_FILES` |
+
+### 11.3 ⚠️ When to update `export.py` — MANDATORY triggers
+
+You **MUST** update `export.py` when any of the following happens:
+
+| Change | What to update in `export.py` |
+|---|---|
+| **New API key or credential hardcoded** | Add to `_SECRETS` dict |
+| **New internal endpoint/URL added** | Add to `_ENDPOINTS` dict |
+| **New internal domain referenced** | Add to `_INTERNAL_DOMAIN_LITERALS` list |
+| **New personal/runtime data directory** | Add to `ALWAYS_EXCLUDE_DIRS` |
+| **New scratch/temp file pattern** | Add to `ALWAYS_EXCLUDE_FILES` or `ALWAYS_EXCLUDE_GLOBS` |
+| **New file with hardcoded secrets** | Add file-specific sanitization in `_sanitize_source_opensource()` |
+| **New provider/vendor with internal identity** | Add provider ID replacement in `_sanitize_source_opensource()` |
+| **New security-sensitive report** | Add to `OPENSOURCE_EXTRA_EXCLUDE_FILES` |
+| **New hardcoded absolute path pattern** | Add regex to path-cleaning block in `_sanitize_source_opensource()` |
+| **New `.env` variable with secret default** | Ensure `.env` is excluded (already is) and `.env.example` uses placeholders |
+| **New feature flag that should be OFF in exports** | Add to the `.env` written by `_create_skeleton()` in `export.py` |
+
+### 11.4 How to comply
+
+When making a code change that introduces sensitive data:
+
+1. **Make your primary code change** as normal.
+2. **Immediately open `export.py`** and add the corresponding sanitization.
+3. **Verify** with `python3 export.py --mode opensource --dry-run` — check the file shows as "would sanitize".
+4. **Run a full export** periodically and check the post-export secret scan passes (0 leaks).
+
+```python
+# Example: you added a new API key in lib/config.py
+# Step 1: your code change
+NEW_SERVICE_KEY = 'abc123secret'
+
+# Step 2: update export.py
+# In _SECRETS dict:
+_SECRETS = {
+    ...existing...,
+    'abc123secret': 'YOUR_NEW_SERVICE_KEY',  # ← add this
+}
+```
+
+### 11.5 Post-export verification
+
+The `opensource` mode automatically runs `_verify_opensource()` after export, which scans
+all text files for known secret patterns. If any leak is detected, it prints file:line
+details and a warning. **Do NOT publish until 0 leaks are confirmed.**
+
+To add new patterns to the verifier, update the `leak_patterns` list in `_verify_opensource()`.
+
+---
+
+### 11.6 Database auto-creation on exported copies
+
+Exported projects ship with no database file or PG data directory. On first
+`python3 server.py` the dual-backend layer (`lib/database/`) will:
+
+1. Try to bootstrap/connect to a local PostgreSQL 18+ (userspace, no `sudo`).
+   If PG binaries are missing, `bootstrap.py` will offer to `conda install -c conda-forge postgresql>=18`.
+2. If PG is unavailable or the user sets `TOFU_DB_BACKEND=sqlite`, fall back
+   to SQLite — `data/tofu.db` is auto-created (built into Python, zero install).
+
+Either way, colleagues can `cd tofu-team && python3 server.py` with zero manual DB setup.
+
+---
+
+## 12. ⚠️ Process Safety
+
+Unless explicitly requested, do not kill server.py on your own.
+
+---
+
+## 13. ⚠️ MANDATORY: No Artificial `max_tokens` Cap on Long-Form Generation
+
+> **For long-form generation (paper reports, deep analyses, full translations,
+> multi-section writeups), NEVER hardcode a small `max_tokens` value.**
+> The output must be allowed to run to the model's native ceiling so the
+> content is not silently truncated mid-section.
+
+### 13.1 The rule
+
+- **Pass a very large ceiling** (use `128000` as the convention) to
+  `dispatch_stream(...)` / `dispatch_chat(...)` / `_stream_llm_sse(...)` for
+  any long-form task.
+- `_clamp_max_tokens()` in `lib/model_info.py` automatically reduces this to
+  each model's actual API limit (GPT=32k, Claude=128k, Qwen per-model
+  16–64k, Doubao=16k, etc.). This is the correct way to say
+  **"use as much as the model allows, no artificial cap"**.
+- **Never hardcode `max_tokens=4096`** (or any small value) for user-facing
+  long-form output. 4096 tokens ≈ 3k words — it truncates complex reports
+  (e.g. Reading Mode's 9-section paper report) mid-Technical-Reference.
+
+### 13.2 Why this exists
+
+- Users reported that Reading Mode reports were silently cut off before the
+  last sections (Research Landscape, Technical Reference, Reproducibility
+  Checklist) because `_run_report_task` relied on `dispatch_stream`'s
+  default `max_tokens=4096`.
+- The fix is to pass a large ceiling and let `_clamp_max_tokens` do its job
+  per model, rather than picking any magic number.
+
+### 13.3 Where this applies
+
+| Code path | Required behavior |
+|---|---|
+| `routes/paper.py` → `_run_report_task` (report generation) | `max_tokens=128000` |
+| `routes/paper.py` → `_stream_llm_sse` (Q&A, translate) | `max_tokens=128000` default |
+| Any future "generate a complete/full/comprehensive X" tool | `max_tokens=128000` |
+| Short, bounded outputs (e.g. title summarization, 1-line labels) | Small cap is fine (explain why in a comment) |
+
+### 13.4 How to comply
+
+- When adding a new long-form generation path, grep for `max_tokens=` in
+  the existing file and set it to `128000` (or document why a smaller
+  value is correct for that specific path).
+- **Note on §10.1**: Bumping `max_tokens` caps for long-form generation
+  to follow this rule is NOT a hyperparameter tuning change — it is a
+  correctness fix to prevent truncation, and does not require separate
+  approval. Reducing it back to a small cap, however, does require
+  approval.
+
+---
+
+## 14. Background tasks — `TaskRuntime` and `spawn_task`
+
+`lib/task_runtime.py::TaskRuntime` is the **single source of truth** for
+every server-side background task pattern. Five legacy registries (chat,
+paper-report, paper-translate, translate, trading-sim) were unified onto
+it; new code must follow suit.
+
+### 14.1 Standard task dict
+
+```python
+{
+  'id': str, 'kind': str,
+  'status': 'pending' | 'running' | 'done' | 'error' | 'aborted',
+  'events': [...], 'events_lock': Lock, 'abort_event': threading.Event,
+  'result': Any, 'error': dict | None,   # error envelope
+  'created_at': float, 'finished_at': float | None,
+  'meta': {...},                          # caller-supplied custom fields
+}
+```
+
+Custom fields go in `meta` (or, for legacy compatibility, augment the
+dict directly after `runtime.create()` — chat does this for `convId`,
+`messages`, `content_lock`, etc.).
+
+### 14.2 Adding a new task kind
+
+```python
+# lib/foo.py
+from lib.task_runtime import TaskRuntime
+_foo_runtime = TaskRuntime(
+    'foo', ttl=3600,
+    push_channel='foo',           # auto-broadcasts append_event over WebSocket
+    error_source='lib.foo',       # used in error envelopes
+)
+
+def start(payload):
+    task = _foo_runtime.create(meta={'payload': payload})
+    _foo_runtime.spawn(task['id'], _worker, task)
+    return task['id']
+
+def _worker(task):
+    try:
+        for chunk in slow_thing(task['meta']['payload']):
+            if task['abort_event'].is_set():
+                _foo_runtime.finish(task['id']); return
+            _foo_runtime.append_event(task['id'], {'type': 'chunk', 'data': chunk})
+        _foo_runtime.finish(task['id'], result={'output': 42})
+    except Exception as e:
+        _foo_runtime.finish(task['id'], error=e)
+```
+
+Then expose poll/abort routes by calling
+`routes._task_routes.register_task_routes(bp, _foo_runtime, url_prefix='/api/foo')`
+and writing only the start handler by hand.
+
+### 14.3 Spawning rules
+
+- **Use `runtime.spawn(task_id, fn, *args)`** — picks `asyncio.to_thread`
+  inside the event loop or a daemon thread outside. NEVER use raw
+  `threading.Thread(target=worker)` for new code.
+- For chat tasks specifically: use `from lib.tasks_pkg import spawn_task`
+  (the chat-orchestrator entry point) — it wires the orchestrator's
+  `run_task` correctly. There are 6 historical spawn sites (chat × 3,
+  message_queue, agent_backends, autopilot) all routed through
+  `spawn_task`.
+
+### 14.4 Aborting
+
+- Workers MUST poll `task['abort_event'].is_set()` at safe checkpoints
+  and call `runtime.finish(id)` (no `error=`) when they observe it —
+  the runtime then promotes the status to `'aborted'`.
+- If a worker calls `finish(error=)` while `abort_event` is set, the
+  error wins (matches the legacy behaviour).
+- `runtime.finish` is idempotent — second call returns `False`.
+
+### 14.5 Why this matters
+
+The five legacy registries each had subtly different semantics
+(cursor-based polling, dedup-by-tuple, per-channel push). Migrating them
+revealed real bugs (dropped events on cleanup, missing terminal events,
+unbounded TTL growth). Don't re-grow that surface area — `TaskRuntime`
+is battle-tested with 28 unit tests + 5 migration test suites.
+
+---
+
+## 15. Migration scripts in `tests/_migrate_*.py`
+
+Three checked-in **one-shot** migration scripts exist in `tests/`:
+
+| Script | Maps |
+|---|---|
+| `tests/_migrate_api_response.py` | raw `jsonify({...})` → `api_ok / api_error / api_not_found / …` |
+| `tests/_migrate_request_parser.py` | `data = request.get_json(silent=True) or {}` → `data = parse_body()` |
+| `tests/_migrate_http_client.py` | `requests.X(url, ..., proxies=_proxies_for(url), ...)` → `http_X(url, ...)` |
+
+### 15.1 Common contract
+
+- **Dry-run by default** (`python tests/_migrate_X.py`); pass `--apply`
+  to write changes; pass `--file BASENAME` to restrict (api_response
+  + request_parser only).
+- **Conservative** — only rewrite single-line patterns the regex fully
+  understands; skip multi-line dict literals, unknown statuses,
+  matches inside triple-quoted docstrings.
+- **Idempotent** — running again finds nothing to rewrite.
+- **Auto-imports** — when a rewrite needs a helper not yet imported,
+  the script extends `from lib.X import …` or inserts a fresh import
+  line in the right group.
+
+### 15.2 When to run
+
+These were applied once during the initial migration and shouldn't
+need re-running. But if you write new code in the legacy patterns by
+mistake, running the dry-run is a quick way to see what would
+collapse. **Always inspect the dry-run diff before `--apply`** — the
+scripts skip docstrings and unknown statuses but cannot detect
+semantic edge cases (e.g. a route that intentionally uses a custom
+response shape).
+
+### 15.3 Don't add new scripts in this style
+
+If you're tempted to write a fourth `_migrate_X.py`, the right move is
+usually:
+
+1. Build the unified module + tests first.
+2. Migrate a single small file by hand to validate the recipe.
+3. Only if there are 50+ near-identical sites left, write the regex
+   script (and treat it as code: needs a `--apply` gate, docstring
+   awareness, and inspection of every dry-run diff before write).
+
+---
+
+*Last updated: 2026-05-22 — Major refactor wave: Flask→Quart+Hypercorn migration (server.py is now ASGI; all sync routes still work via thread pool); WebSocket transport at `/api/chat/ws/<id>` with `/api/push` global multiplexer; six new shared infrastructure modules (`api_response`, `request_parser`, `http_client`, `json_store`, `ttl_cache`, `task_runtime`); 5 task registries unified onto `TaskRuntime`; 446+101+23 ad-hoc patterns mechanically replaced via `tests/_migrate_*.py` scripts. New §4.6/4.7 (shared infrastructure + push channel), §14 (TaskRuntime), §15 (migration scripts). 206 unit/migration tests gate the contracts.*

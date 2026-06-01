@@ -1,0 +1,43 @@
+# ── Runtime data (created at runtime, not shipped in image) ──
+data/
+logs/
+uploads/
+*.db
+
+# ── Development & CI ──
+.git
+.github
+.chatui/
+.project_sessions/
+__pycache__
+*.pyc
+.pytest_cache
+.ruff_cache
+debug/
+tests/
+
+# ── Documentation & meta ──
+CLAUDE.md
+CONTRIBUTING.md
+export.py
+install.py
+install.sh
+install.ps1
+*.md
+!README.md
+
+# ── Environment files (secrets) ──
+.env
+.env.*
+!.env.example
+
+# ── OS junk ──
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# ── Scratch files ──
+a.md
+o.md

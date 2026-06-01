@@ -1,0 +1,327 @@
+"""tofu_sdk — Python client for the Tofu headless API.
+
+Quick start
+-----------
+
+    from tofu_sdk import Tofu
+
+    client = Tofu(base_url="https://your-tofu", api_key="tofu_live_…")
+
+    # Sync chat
+    resp = client.chat(model="claude-opus-4-7",
+                       messages=[{"role":"user","content":"Hi"}])
+    print(resp["choices"][0]["message"]["content"])
+
+    # Streaming
+    for ev in client.stream(model="claude-opus-4-7",
+                             messages=[{"role":"user","content":"Hi"}]):
+        if ev.get("choices", [{}])[0].get("delta", {}).get("content"):
+            print(ev["choices"][0]["delta"]["content"], end="", flush=True)
+
+    # Generic task
+    task = client.tasks.start(kind="paper-report",
+                               params={"paper_text": "...", "lang": "zh"})
+    for ev in client.tasks.stream(task["task_id"]):
+        print(ev)
+
+The SDK is intentionally small (~250 lines) and depends only on
+``requests`` (sync) and the optional ``httpx`` (async). It mirrors
+the public REST surface 1:1 — every method documents which endpoint
+it calls.
+"""
+
+from __future__ import annotations
+
+import json
+import time
+from typing import Any, Iterator, Optional
+
+import requests
+
+
+__version__ = '1.0.0'
+
+
+class TofuError(RuntimeError):
+    """Raised when Tofu returns a non-2xx status."""
+    def __init__(self, status: int, body: Any):
+        super().__init__(f'Tofu API error {status}: {body!r}')
+        self.status = status
+        self.body = body
+
+
+class Tofu:
+    """Synchronous Tofu API client."""
+
+    def __init__(self, *, base_url: str, api_key: str,
+                 timeout: float = 600.0, verify: bool = True,
+                 user_agent: str = f'tofu-sdk-python/{__version__}'):
+        if not base_url:
+            raise ValueError('base_url required')
+        if not api_key:
+            raise ValueError('api_key required')
+        self.base_url = base_url.rstrip('/')
+        self.api_key = api_key
+        self.timeout = timeout
+        self.verify = verify
+        self._session = requests.Session()
+        self._session.headers.update({
+            'Authorization': f'Bearer {api_key}',
+            'User-Agent': user_agent,
+            'Accept': 'application/json',
+        })
+        self.tasks = _TasksAPI(self)
+        self.agents = _AgentsAPI(self)
+        self.keys = _KeysAPI(self)
+        self.webhooks = _WebhooksAPI(self)
+
+    # ── HTTP helpers ─────────────────────────────────────────────
+
+    def _url(self, path: str) -> str:
+        if path.startswith(('http://', 'https://')):
+            return path
+        return self.base_url + (path if path.startswith('/') else '/' + path)
+
+    def _request(self, method: str, path: str, *,
+                  json_body: Any = None, params: Optional[dict] = None,
+                  headers: Optional[dict] = None,
+                  stream: bool = False, timeout: Optional[float] = None):
+        h = dict(headers or {})
+        resp = self._session.request(
+            method, self._url(path),
+            json=json_body, params=params, headers=h,
+            stream=stream, timeout=timeout or self.timeout,
+            verify=self.verify,
+        )
+        return resp
+
+    def _json(self, method: str, path: str, **kwargs):
+        resp = self._request(method, path, **kwargs)
+        if not (200 <= resp.status_code < 300):
+            try:
+                body = resp.json()
+            except Exception:
+                body = resp.text
+            raise TofuError(resp.status_code, body)
+        if resp.headers.get('content-type', '').startswith('application/json'):
+            return resp.json()
+        return resp.text
+
+    # ── Capabilities ─────────────────────────────────────────────
+
+    def capabilities(self) -> dict:
+        """``GET /api/v1/capabilities`` — runtime registry."""
+        return self._json('GET', '/api/v1/capabilities')
+
+    # ── Chat ─────────────────────────────────────────────────────
+
+    def chat(self, *, messages: list, model: str = '',
+              config: Optional[dict] = None, **kwargs) -> dict:
+        """Sync chat completion via ``POST /api/v1/chat/completions``."""
+        body = {'messages': messages}
+        if model:
+            body['model'] = model
+        if config:
+            body['config'] = config
+        for k in ('temperature', 'max_tokens', 'top_p', 'stop',
+                   'tools', 'tool_choice', 'response_format',
+                   'idempotency_key', 'conversation_id', 'timeout_s'):
+            if k in kwargs:
+                body[k] = kwargs[k]
+        return self._json('POST', '/api/v1/chat/completions', json_body=body)
+
+    def stream(self, *, messages: list, model: str = '',
+                config: Optional[dict] = None, **kwargs
+                ) -> Iterator[dict]:
+        """Streaming chat completion. Yields parsed SSE event payloads."""
+        body = {'messages': messages, 'stream': True}
+        if model:
+            body['model'] = model
+        if config:
+            body['config'] = config
+        for k in ('temperature', 'max_tokens', 'top_p', 'stop',
+                   'tools', 'tool_choice', 'idempotency_key',
+                   'conversation_id'):
+            if k in kwargs:
+                body[k] = kwargs[k]
+        resp = self._request('POST', '/api/v1/chat/completions',
+                              json_body=body, stream=True,
+                              headers={'Accept': 'text/event-stream'})
+        if not (200 <= resp.status_code < 300):
+            try:
+                err = resp.json()
+            except Exception:
+                err = resp.text
+            raise TofuError(resp.status_code, err)
+        yield from _parse_sse(resp)
+
+
+class _TasksAPI:
+    def __init__(self, client: Tofu):
+        self._c = client
+
+    def start(self, *, kind: str, params: Optional[dict] = None,
+               **kwargs) -> dict:
+        """Start any task kind via the agent-specific endpoint.
+
+        Maps kind → endpoint:
+          'chat'          → POST /api/v1/chat/completions
+          'paper-report'  → POST /api/v1/agents/paper/report
+          'translate'     → POST /api/v1/agents/translate
+          ...
+        """
+        ROUTES = {
+            'paper-report': '/api/v1/agents/paper/report',
+            'paper-translate': '/api/v1/agents/paper/translate',
+            'translate': '/api/v1/agents/translate',
+            'image-gen': '/api/v1/agents/image-gen',
+            'memory-search': '/api/v1/agents/memory/search',
+        }
+        path = ROUTES.get(kind)
+        if path is None:
+            raise ValueError(f'Unknown task kind: {kind}')
+        return self._c._json('POST', path, json_body=params or {})
+
+    def get(self, task_id: str) -> dict:
+        return self._c._json('GET', f'/api/v1/tasks/{task_id}')
+
+    def list(self, *, kind: str = '', status: str = '',
+              limit: int = 50) -> dict:
+        params = {'limit': limit}
+        if kind:
+            params['kind'] = kind
+        if status:
+            params['status'] = status
+        return self._c._json('GET', '/api/v1/tasks', params=params)
+
+    def events(self, task_id: str, *, cursor: int = 0) -> dict:
+        return self._c._json(
+            'GET', f'/api/v1/tasks/{task_id}/events',
+            params={'cursor': cursor})
+
+    def stream(self, task_id: str, *, cursor: int = 0) -> Iterator[dict]:
+        resp = self._c._request('GET', f'/api/v1/tasks/{task_id}/stream',
+                                  params={'cursor': cursor},
+                                  stream=True,
+                                  headers={'Accept': 'text/event-stream'})
+        if not (200 <= resp.status_code < 300):
+            raise TofuError(resp.status_code, resp.text)
+        yield from _parse_sse(resp)
+
+    def abort(self, task_id: str) -> dict:
+        return self._c._json('POST', f'/api/v1/tasks/{task_id}/abort')
+
+    def wait(self, task_id: str, *, poll_interval: float = 1.0,
+              timeout: float = 600.0) -> dict:
+        """Poll until terminal; return the final task state."""
+        deadline = time.time() + timeout
+        while True:
+            t = self.get(task_id)
+            if t.get('status') in ('done', 'error', 'aborted'):
+                return t
+            if time.time() >= deadline:
+                raise TimeoutError(f'task {task_id} did not finish')
+            time.sleep(poll_interval)
+
+
+class _AgentsAPI:
+    def __init__(self, client: Tofu):
+        self._c = client
+
+    def paper_report(self, **params) -> dict:
+        return self._c._json('POST', '/api/v1/agents/paper/report',
+                              json_body=params)
+
+    def paper_translate(self, **params) -> dict:
+        return self._c._json('POST', '/api/v1/agents/paper/translate',
+                              json_body=params)
+
+    def translate(self, *, text: str, target_lang: str = 'zh',
+                   **kwargs) -> dict:
+        body = {'text': text, 'target_lang': target_lang, **kwargs}
+        return self._c._json('POST', '/api/v1/agents/translate',
+                              json_body=body)
+
+    def image_gen(self, *, prompt: str, **kwargs) -> dict:
+        body = {'prompt': prompt, **kwargs}
+        return self._c._json('POST', '/api/v1/agents/image-gen',
+                              json_body=body)
+
+    def memory_search(self, *, query: str, top_k: int = 30) -> dict:
+        return self._c._json('POST', '/api/v1/agents/memory/search',
+                              json_body={'query': query, 'top_k': top_k})
+
+    def fetch(self, *, url: str) -> dict:
+        return self._c._json('POST', '/api/v1/agents/browser/fetch',
+                              json_body={'url': url})
+
+
+class _KeysAPI:
+    def __init__(self, client: Tofu):
+        self._c = client
+
+    def whoami(self) -> dict:
+        return self._c._json('GET', '/api/v1/keys/whoami')
+
+    def list(self) -> dict:
+        return self._c._json('GET', '/api/v1/keys')
+
+    def create(self, *, name: str, scopes: list, **kwargs) -> dict:
+        body = {'name': name, 'scopes': scopes, **kwargs}
+        return self._c._json('POST', '/api/v1/keys', json_body=body)
+
+    def revoke(self, key_id: str) -> dict:
+        return self._c._json('DELETE', f'/api/v1/keys/{key_id}')
+
+
+class _WebhooksAPI:
+    def __init__(self, client: Tofu):
+        self._c = client
+
+    def list(self) -> dict:
+        return self._c._json('GET', '/api/v1/webhooks')
+
+    def subscribe(self, *, url: str, channel: str = '',
+                   event_types: Optional[list] = None,
+                   task_id: str = '*') -> dict:
+        body = {'url': url, 'channel': channel,
+                'event_types': event_types or [], 'task_id': task_id}
+        return self._c._json('POST', '/api/v1/webhooks', json_body=body)
+
+    def unsubscribe(self, sub_id: str) -> dict:
+        return self._c._json('DELETE', f'/api/v1/webhooks/{sub_id}')
+
+
+# ── SSE parser ────────────────────────────────────────────────────
+
+def _parse_sse(resp) -> Iterator[dict]:
+    """Yield JSON-decoded SSE events from a streaming response.
+
+    Supports both raw `data:` lines (OpenAI style) and named-event lines
+    (`event:` + `data:`, Anthropic style). Plain `[DONE]` marker ends
+    the stream.
+    """
+    buffer = ''
+    for line in resp.iter_lines(decode_unicode=True):
+        if line is None:
+            continue
+        if line == '':
+            # End of an SSE message — try to flush.
+            buffer = ''
+            continue
+        if line.startswith(':'):
+            continue
+        if line.startswith('data:'):
+            data = line[5:].strip()
+            if data == '[DONE]':
+                return
+            if not data:
+                continue
+            try:
+                yield json.loads(data)
+            except (ValueError, json.JSONDecodeError):
+                # Unparseable chunk — ignore.
+                continue
+
+
+__all__ = ['Tofu', 'TofuError', '__version__']

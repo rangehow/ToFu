@@ -1,0 +1,182 @@
+"""Tests for the X-Bridge-Secret enforcement on browser/desktop bridges.
+
+Covers B3 (CORS wildcard removal) and B4 (auth enforcement) from the
+Phase 2 inventory. Both browser and desktop bridges share the same gate
+shape, so they're tested side by side.
+
+Run:  pytest tests/test_bridge_auth.py -m unit -v
+"""
+from __future__ import annotations
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _fast_browser_poll(monkeypatch):
+    """Stub the 8-second long-poll so auth tests run fast.
+
+    The auth gate is checked BEFORE wait_for_commands runs, so for
+    accept-path tests we replace wait_for_commands with an instant []
+    return. Reject-path tests never reach this code anyway.
+    """
+    import lib.browser as _b
+    monkeypatch.setattr(_b, 'wait_for_commands', lambda *a, **kw: [])
+    monkeypatch.setattr(_b, 'mark_poll', lambda *a, **kw: None)
+    monkeypatch.setattr(_b, 'resolve_batch', lambda *a, **kw: None)
+
+
+@pytest.mark.unit
+class TestBridgeAuthBrowser:
+    """X-Bridge-Secret gate on /api/browser/poll, /commands, /result.
+
+    UI/operator endpoints (/api/browser/status, /clients, /test, /download)
+    are intentionally NOT gated — the same-origin Tofu UI calls them.
+    """
+
+    def test_unset_env_allows_request(self, flask_client, monkeypatch):
+        monkeypatch.delenv('TOFU_BRIDGE_SECRET', raising=False)
+        monkeypatch.delenv('CHATUI_BRIDGE_SECRET', raising=False)
+        # Poll long-polls 8s server-side; we just need to confirm we got past
+        # the auth gate, which means anything other than 401 is OK here.
+        resp = flask_client.post('/api/browser/poll', json={'results': []})
+        assert resp.status_code != 401
+
+    def test_set_env_missing_header_rejects(self, flask_client, monkeypatch):
+        monkeypatch.setenv('TOFU_BRIDGE_SECRET', 's3cret-value')
+        resp = flask_client.post('/api/browser/poll', json={'results': []})
+        assert resp.status_code == 401
+        body = resp.get_json()
+        assert body['error'] == 'bridge_auth_required'
+
+    def test_set_env_wrong_header_rejects(self, flask_client, monkeypatch):
+        monkeypatch.setenv('TOFU_BRIDGE_SECRET', 's3cret-value')
+        resp = flask_client.post('/api/browser/poll',
+                                 json={'results': []},
+                                 headers={'X-Bridge-Secret': 'wrong'})
+        assert resp.status_code == 401
+
+    def test_set_env_correct_header_accepts(self, flask_client, monkeypatch):
+        monkeypatch.setenv('TOFU_BRIDGE_SECRET', 's3cret-value')
+        resp = flask_client.post('/api/browser/poll',
+                                 json={'results': []},
+                                 headers={'X-Bridge-Secret': 's3cret-value'})
+        assert resp.status_code != 401
+
+    def test_legacy_chatui_env_var_honored(self, flask_client, monkeypatch):
+        monkeypatch.delenv('TOFU_BRIDGE_SECRET', raising=False)
+        monkeypatch.setenv('CHATUI_BRIDGE_SECRET', 'legacy-secret')
+        # Wrong header should still be rejected via the legacy fallback
+        resp = flask_client.post('/api/browser/poll',
+                                 json={'results': []},
+                                 headers={'X-Bridge-Secret': 'nope'})
+        assert resp.status_code == 401
+
+    def test_status_endpoint_not_gated(self, flask_client, monkeypatch):
+        # The UI calls /status without a bridge secret — must not be gated.
+        monkeypatch.setenv('TOFU_BRIDGE_SECRET', 's3cret-value')
+        resp = flask_client.get('/api/browser/status')
+        assert resp.status_code == 200
+
+    def test_download_endpoint_not_gated(self, flask_client, monkeypatch):
+        # Operator endpoint — UI launches the extension download from here.
+        monkeypatch.setenv('TOFU_BRIDGE_SECRET', 's3cret-value')
+        resp = flask_client.get('/api/browser/download')
+        # Either 200 (extension dir present) or 404 (dir absent in test env).
+        # Either way: not 401.
+        assert resp.status_code in (200, 404)
+
+    def test_commands_endpoint_gated(self, flask_client, monkeypatch):
+        monkeypatch.setenv('TOFU_BRIDGE_SECRET', 's3cret-value')
+        resp = flask_client.get('/api/browser/commands')
+        assert resp.status_code == 401
+
+    def test_result_endpoint_gated(self, flask_client, monkeypatch):
+        monkeypatch.setenv('TOFU_BRIDGE_SECRET', 's3cret-value')
+        resp = flask_client.post('/api/browser/result', json={'id': 'x'})
+        assert resp.status_code == 401
+
+
+@pytest.mark.unit
+class TestBridgeAuthDesktop:
+    """X-Bridge-Secret gate on /api/desktop/poll."""
+
+    def test_unset_env_allows_request(self, flask_client, monkeypatch):
+        monkeypatch.delenv('TOFU_BRIDGE_SECRET', raising=False)
+        monkeypatch.delenv('CHATUI_BRIDGE_SECRET', raising=False)
+        resp = flask_client.post('/api/desktop/poll', json={'results': []})
+        assert resp.status_code == 200
+
+    def test_set_env_missing_header_rejects(self, flask_client, monkeypatch):
+        monkeypatch.setenv('TOFU_BRIDGE_SECRET', 'desktop-secret')
+        resp = flask_client.post('/api/desktop/poll', json={'results': []})
+        assert resp.status_code == 401
+
+    def test_set_env_correct_header_accepts(self, flask_client, monkeypatch):
+        monkeypatch.setenv('TOFU_BRIDGE_SECRET', 'desktop-secret')
+        resp = flask_client.post('/api/desktop/poll',
+                                 json={'results': []},
+                                 headers={'X-Bridge-Secret': 'desktop-secret'})
+        assert resp.status_code == 200
+
+    def test_status_endpoint_not_gated(self, flask_client, monkeypatch):
+        monkeypatch.setenv('TOFU_BRIDGE_SECRET', 'desktop-secret')
+        resp = flask_client.get('/api/desktop/status')
+        assert resp.status_code == 200
+
+
+@pytest.mark.unit
+class TestBridgeCors:
+    """B3: /api/browser/* must NOT echo Access-Control-Allow-Origin: *.
+
+    Chrome extensions reach the server via host_permissions, which does
+    not require server-sent CORS headers. Dropping the wildcard removes
+    a defence-in-depth gap (any cross-origin page could probe the bridge
+    when the gate is unset, e.g. on LAN deployments).
+    """
+
+    def test_no_wildcard_origin_on_status(self, flask_client):
+        resp = flask_client.get('/api/browser/status')
+        assert resp.headers.get('Access-Control-Allow-Origin') != '*'
+
+    def test_no_wildcard_origin_on_poll(self, flask_client, monkeypatch):
+        monkeypatch.delenv('TOFU_BRIDGE_SECRET', raising=False)
+        monkeypatch.delenv('CHATUI_BRIDGE_SECRET', raising=False)
+        resp = flask_client.post('/api/browser/poll', json={'results': []})
+        assert resp.headers.get('Access-Control-Allow-Origin') != '*'
+
+    def test_no_wildcard_origin_on_options_preflight(self, flask_client):
+        resp = flask_client.options('/api/browser/poll')
+        assert resp.headers.get('Access-Control-Allow-Origin') != '*'
+
+
+@pytest.mark.unit
+class TestBridgeAuthInternals:
+    """Hot-reload + timing-safe compare contracts."""
+
+    def test_uses_hmac_compare_digest(self):
+        """Constant-time compare prevents header timing oracles."""
+        import inspect
+
+        from routes import browser as browser_mod
+        from routes import desktop as desktop_mod
+        for mod in (browser_mod, desktop_mod):
+            src = inspect.getsource(mod._check_bridge_auth)
+            assert 'hmac.compare_digest' in src, (
+                f'{mod.__name__}._check_bridge_auth must use hmac.compare_digest, '
+                f'not == comparison (header timing oracle).'
+            )
+
+    def test_secret_read_at_call_time(self, flask_client, monkeypatch):
+        """Hot-reload: changing the env between requests must take effect.
+
+        Mirrors the lib.proxy / lib.config_dir hot-reload contract.
+        """
+        # First request: no secret set, allowed.
+        monkeypatch.delenv('TOFU_BRIDGE_SECRET', raising=False)
+        monkeypatch.delenv('CHATUI_BRIDGE_SECRET', raising=False)
+        r1 = flask_client.post('/api/desktop/poll', json={'results': []})
+        assert r1.status_code == 200
+        # Now set the secret without restarting; next request must be gated.
+        monkeypatch.setenv('TOFU_BRIDGE_SECRET', 'fresh-secret')
+        r2 = flask_client.post('/api/desktop/poll', json={'results': []})
+        assert r2.status_code == 401

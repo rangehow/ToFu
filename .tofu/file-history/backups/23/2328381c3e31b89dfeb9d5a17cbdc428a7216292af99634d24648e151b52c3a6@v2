@@ -1,0 +1,40 @@
+{
+  "key": "meituan",
+  "brand": "meituan",
+  "category": "official",
+  "name": "Meituan (AIGC Gateway)",
+  "base_url": "https://aigc.sankuai.com/v1/openai/native",
+  "extra_headers": {
+    "M-TransferContext-INF-CELL": "gray-release-ai-gpt-test"
+  },
+  "thinking_format": "enable_thinking",
+  "models": [
+    { "model_id": "aws.claude-opus-4.7",     "capabilities": ["text", "vision", "thinking"], "rpm": 30,  "cost": 0.045 },
+    { "model_id": "aws.claude-opus-4.6",     "aliases": ["aws.claude-opus-4.6-b", "vertex.claude-opus-4.6"], "capabilities": ["text", "vision", "thinking"], "rpm": 30,  "cost": 0.045 },
+    { "model_id": "aws.claude-sonnet-4.6",   "capabilities": ["text", "vision", "thinking"],                 "rpm": 50,  "cost": 0.009 },
+    { "model_id": "LongCat-Flash-Thinking-2601", "capabilities": ["text", "thinking", "cheap"],                       "rpm": 60,  "cost": 0.0 },
+    { "model_id": "gemini-2.5-pro",          "capabilities": ["text", "vision", "thinking", "cheap"],                 "rpm": 100, "cost": 0.005 },
+    { "model_id": "gemini-2.5-flash",        "capabilities": ["text", "vision", "cheap"],                    "rpm": 200, "cost": 0.001 },
+    { "model_id": "gemini-3.1-flash-lite-preview", "capabilities": ["text", "vision", "cheap"],              "rpm": 30,  "cost": 0.001 },
+    { "model_id": "gemini-3.1-pro-preview",  "capabilities": ["text", "vision", "thinking", "cheap"],                 "rpm": 5,   "cost": 0.006 },
+    { "model_id": "gemini-3-flash-preview",  "capabilities": ["text", "vision", "thinking", "cheap"],                 "rpm": 60,  "cost": 0.001 },
+    { "model_id": "gemini-3.5-flash",        "capabilities": ["text", "vision", "thinking", "cheap"],                 "rpm": 30,  "cost": 0.005 },
+    { "model_id": "qwen3.5-plus",            "capabilities": ["text", "vision", "thinking", "cheap"],                 "rpm": 60,  "cost": 0.001 },
+    { "model_id": "MiniMax-M2.7",            "capabilities": ["text", "cheap"],                                       "rpm": 90,  "cost": 0.001 },
+    { "model_id": "MiniMax-M2.5",            "capabilities": ["text", "thinking", "cheap"],                            "rpm": 60,  "cost": 0.001 },
+    { "model_id": "gpt-4.1-mini",            "capabilities": ["text", "vision", "cheap"],                    "rpm": 60,  "cost": 0.001 },
+    { "model_id": "glm-5.1",                "capabilities": ["text", "thinking"],                             "rpm": 60,  "cost": 0.004 },
+    { "model_id": "glm-5v-turbo",            "capabilities": ["text", "vision", "cheap"],                              "rpm": 60,  "cost": 0.002 },
+    { "model_id": "Doubao-Seed-2.0-pro",     "capabilities": ["text", "vision", "thinking", "cheap"],                 "rpm": 60,  "cost": 0.002 },
+    { "model_id": "deepseek-v3.2-tencent",   "aliases": ["deepseek-v3.2-baidu", "deepseek-v3.2-huawei", "deepseek-v3.2-doubao"], "capabilities": ["text", "cheap"], "rpm": 60, "cost": 0.0006 },
+    { "model_id": "deepseek-v4-pro",         "capabilities": ["text", "thinking", "cheap"],                  "rpm": 30,  "cost": 0.003 },
+    { "model_id": "hy3-preview",              "capabilities": ["text", "thinking", "cheap"],                  "rpm": 30,  "cost": 0.002 },
+    { "model_id": "deepseek-v4-flash",       "aliases": ["deepseek-v4-flash-huawei"], "capabilities": ["text", "thinking", "cheap"], "rpm": 60,  "cost": 0.0002 },
+    { "model_id": "gemini-3.1-flash-image-preview", "capabilities": ["image_gen"],                            "rpm": 10,  "cost": 0.015 },
+    { "model_id": "gpt-image-1.5",           "capabilities": ["image_gen"],                                  "rpm": 10,  "cost": 0.043 },
+    { "model_id": "gpt-image-2",             "capabilities": ["image_gen"],                                  "rpm": 10,  "cost": 0.065 },
+    { "model_id": "text-embedding-v4",        "capabilities": ["embedding"],                                  "rpm": 100, "cost": 0.001 },
+    { "model_id": "text-embedding-3-small",   "capabilities": ["embedding"],                                  "rpm": 60,  "cost": 0.001 }
+  ]
+}
+

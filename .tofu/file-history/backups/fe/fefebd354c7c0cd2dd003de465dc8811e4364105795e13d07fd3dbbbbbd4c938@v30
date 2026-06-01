@@ -1,0 +1,481 @@
+/* ═══════════════════════════════════════════════════════════════════
+   context-bar.js — Tofu Context Health Bar (the "tofu plank")
+
+   A small status chip on the left flank of `.chat-wrapper` that shows
+   the current conversation's prompt-token usage as a percentage of
+   the active model's context window.
+
+   The chip is shaped like a horizontal slab of tofu on a cutting
+   board: a rounded cream-colored plank whose marinade-tinted fill
+   grows from the left as context fills up.  A thin glossy sheen runs
+   along the top edge (the "freshness" cue).  As usage climbs into
+   warn/hot/crit zones, the fill warms toward amber → orange → red as
+   if the tofu is being seared.
+
+   The plank also serves as a TIMELINE: one vertical knife-cut score
+   per past compaction in the active conversation, placed at the X
+   position where the gauge stood (tokensBefore / limit) when that
+   compaction fired.  Clicking the chip opens the Compaction Viewer
+   drawer (compaction-viewer.js); clicking a specific cut jumps
+   straight to that archive.  Hovering either side cross-highlights
+   the matching marker chip in the chat.
+
+   ── Anti-flicker invariants (DO NOT regress) ──
+   1. Every node is CREATED ONCE in `_ensureBar()` and cached on the
+      element via `_state`.  Subsequent updates only set CSS custom
+      properties / set `textContent` / set `dataset.zone`.  NO
+      `innerHTML` rebuilds, NO `appendChild`/`removeChild` on the hot
+      path EXCEPT the ticks layer, which is rebuilt only when its
+      memoized signature changes (typical: 0–3 ticks per conv).
+   2. Property writes are no-ops if the value is unchanged.
+   3. No idle CSS animation loops.  The only motion is the marinade
+      fill's width growing on actual value change, animated via the
+      `--ctx-arc-pct` `@property` transition.  Cut highlight and
+      "fresh-cut" land cues are discrete one-shot responses to events,
+      not ambient loops.
+   4. No `@media` opacity rules.  The chip stays at full opacity at
+      every desktop width (>900 px); below 900 px it's hidden.
+
+   Public API:
+     window.updateContextBar()        — recompute + repaint (rAF-coalesced).
+     window.flashGaugeForArchive(id)  — discrete cue when a new compaction
+                                        lands; pulses the matching tick.
+     window._resolveContextLimit()    — exported for debug.
+   ═══════════════════════════════════════════════════════════════════ */
+(function () {
+  'use strict';
+
+  /* ── Model → context-window table.  Mirrors lib/tasks_pkg/compaction.py
+   *    `_get_context_limit()` so client-side estimates match server-side
+   *    compaction triggers.  Order matters: more-specific keys first. */
+  const _CONTEXT_LIMITS = [
+    /* Claude 4.6+ Opus / Sonnet ship with 1M context (GA 2026-03-13). */
+    [/(?:claude|anthropic).*opus[-_.]?(\d+)[-_.](\d+)/i, (m) =>
+      (parseInt(m[1], 10) >= 4 && parseInt(m[2], 10) >= 6) || parseInt(m[1], 10) > 4 ? 1_000_000 : 200_000],
+    [/(?:claude|anthropic).*sonnet[-_.]?(\d+)[-_.](\d+)/i, (m) =>
+      (parseInt(m[1], 10) >= 4 && parseInt(m[2], 10) >= 6) || parseInt(m[1], 10) > 4 ? 1_000_000 : 200_000],
+    [/claude-opus-4\.6|claude-sonnet-4\.6/i, 1_000_000],
+    [/claude/i, 200_000],
+    [/gpt-4o|gpt-4-turbo/i, 128_000],
+    [/gpt-4|gpt-3\.5/i, 128_000],
+    [/o1|o3|o4/i, 200_000],
+    [/gemini/i, 1_000_000],
+    [/qwen/i, 128_000],
+    [/deepseek/i, 128_000],
+    [/doubao/i, 128_000],
+    [/minimax/i, 1_000_000],
+  ];
+  const _DEFAULT_LIMIT = 200_000;
+
+  /* 82 % matches lib/tasks_pkg/compaction.py:_SUMMARY_TRIGGER_RATIO —
+   * once we cross this, the server compacts on the next call. */
+  const _COMPACT_THRESHOLD = 0.82;
+  const _CRIT_THRESHOLD    = 0.95;
+
+  function _resolveContextLimit(modelId) {
+    if (!modelId) return _DEFAULT_LIMIT;
+    for (const [re, val] of _CONTEXT_LIMITS) {
+      const m = modelId.match(re);
+      if (!m) continue;
+      return typeof val === 'function' ? val(m) : val;
+    }
+    return _DEFAULT_LIMIT;
+  }
+
+  function _activeConv() {
+    if (typeof conversations === 'undefined' || !Array.isArray(conversations)) return null;
+    if (typeof activeConvId === 'undefined' || !activeConvId) return null;
+    return conversations.find((c) => c && c.id === activeConvId) || null;
+  }
+
+  function _activeModel(conv) {
+    if (conv && conv.model) return conv.model;
+    if (typeof config !== 'undefined' && config && config.model) return config.model;
+    if (typeof serverModel !== 'undefined' && serverModel) return serverModel;
+    return '';
+  }
+
+  /* Reduce a single usage dict (one API round) to "total prompt tokens
+   * sent on that round".  Anthropic convention: prompt_tokens is the
+   * uncached residual only — when cache_* are non-zero and the residual
+   * is <= cache, the real total is inp + cw + cr.  Otherwise (OpenAI
+   * convention) prompt_tokens already includes cache. Mirrors ui.js:1853. */
+  function _promptTokensFromUsage(u) {
+    if (!u) return 0;
+    const inp = u.prompt_tokens || u.input_tokens || 0;
+    const cw  = u.cache_write_tokens || u.cache_creation_input_tokens || 0;
+    const cr  = u.cache_read_tokens  || u.cache_read_input_tokens  || 0;
+    if ((cw > 0 || cr > 0) && inp <= cw + cr) return inp + cw + cr;
+    return inp;
+  }
+
+  /* Estimate the size of the prompt the model JUST received — the
+   * closest available proxy for what the NEXT request will look like.
+   * Source priority (most → least live):
+   *
+   *   1. `msg._liveLastRoundUsage.tokensIn` — populated by the
+   *      `round_usage` SSE event (lib/tasks_pkg/llm_fallback.py
+   *      :_emit_round_usage) the moment each LLM round lands.  This is
+   *      what makes the gauge move between tool rounds, BEFORE the
+   *      `done` event arrives.  Server-side already normalized
+   *      Anthropic-vs-OpenAI cache convention into a single number.
+   *   2. `msg.apiRounds[-1].usage` — populated by the `done` event at
+   *      the end of a turn.  Used for completed messages on reload
+   *      (when `_liveLastRoundUsage` is gone) and at the moment a
+   *      task transitions from streaming to done.
+   *   3. `msg.usage / N` — fallback for legacy conversations that
+   *      pre-date `apiRounds`.  `msg.usage` is the per-message
+   *      ACCUMULATED sum across all rounds (see
+   *      lib/tasks_pkg/llm_fallback.py:144), so it's tokens BILLED,
+   *      not tokens currently in the prompt — divide by round count
+   *      to get a usable average.
+   *
+   * Walks assistant messages newest-first and returns the first usable
+   * reading. Skips zero readings so an in-flight bubble with no usage
+   * yet doesn't shadow the previous turn's number. */
+  function _lastUsageTokens(conv) {
+    if (!conv || !Array.isArray(conv.messages)) return 0;
+    for (let i = conv.messages.length - 1; i >= 0; i--) {
+      const m = conv.messages[i];
+      if (!m || m.role !== 'assistant') continue;
+      // 1. Live in-flight reading from the round_usage SSE event.
+      if (m._liveLastRoundUsage && m._liveLastRoundUsage.tokensIn > 0) {
+        return m._liveLastRoundUsage.tokensIn;
+      }
+      // 2. Final apiRounds breakdown (post-done event).
+      if (Array.isArray(m.apiRounds) && m.apiRounds.length) {
+        for (let j = m.apiRounds.length - 1; j >= 0; j--) {
+          const t = _promptTokensFromUsage(m.apiRounds[j] && m.apiRounds[j].usage);
+          if (t > 0) return t;
+        }
+      }
+      // 3. Legacy fallback — accumulated usage divided by round count.
+      if (m.usage) {
+        const t = _promptTokensFromUsage(m.usage);
+        const n = (Array.isArray(m.apiRounds) && m.apiRounds.length) || 1;
+        if (t > 0) return n > 1 ? Math.round(t / n) : t;
+      }
+    }
+    return 0;
+  }
+
+  /* Walk every assistant message in the active conv and collect compaction
+   * markers (the same `_compactions[]` array that ui.js:1402 renders as
+   * inline chips).  Returned in chronological order (DB id ascending). */
+  function _collectCompactions(conv) {
+    if (!conv || !Array.isArray(conv.messages)) return [];
+    const out = [];
+    for (const m of conv.messages) {
+      if (!m || m.role !== 'assistant' || !Array.isArray(m._compactions)) continue;
+      for (const c of m._compactions) {
+        if (!c || c.archiveId == null) continue;
+        out.push(c);
+      }
+    }
+    out.sort((a, b) => (a.archiveId || 0) - (b.archiveId || 0));
+    return out;
+  }
+
+  function _formatTokens(n) {
+    if (n >= 1_000_000) return (n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1) + 'M';
+    if (n >= 1_000)     return (n / 1_000).toFixed(n >= 10_000 ? 0 : 1) + 'k';
+    return String(n);
+  }
+
+  /* SVG namespace used when building the knife-cut layer.  The cuts are
+   * vertical lines drawn into a 100×24 viewBox stretched to fill the
+   * plank — viewBox X coordinates map directly to fill percentage. */
+  const _SVG_NS = 'http://www.w3.org/2000/svg';
+
+  /* ── _state: per-bar cached node references, populated by `_ensureBar`.
+   *    Hot-path updates only touch these — no new DOM is ever created. */
+  let _state = null;
+
+  function _ensureBar() {
+    if (_state && _state.el && _state.el.isConnected) return _state;
+    const existing = document.getElementById('contextHealthBar');
+    if (existing && _state && _state.el === existing) return _state;
+    const wrapper = document.querySelector('.chat-wrapper');
+    if (!wrapper) return null;
+    const el = existing || document.createElement('aside');
+    if (!existing) {
+      el.id = 'contextHealthBar';
+      el.className = 'ctx-health-bar';
+      el.setAttribute('aria-label', 'Context usage');
+      wrapper.appendChild(el);
+    }
+    /* One-shot DOM build — never rebuilt on hot path.
+     *
+     * Geometry: a chip whose primary visual is a 56×16 horizontal "tofu
+     * plank" (.ctx-bar-plank).  Inside the plank, in z-order:
+     *   - .ctx-plank-fill   : marinade fill that grows from the left
+     *   - .ctx-plank-sheen  : thin glossy highlight on the top edge
+     *   - .ctx-plank-cuts   : SVG layer with one vertical knife-cut
+     *                          line per past compaction
+     *   - .ctx-bar-counter  : tiny numeric badge for compaction count
+     * Followed by "34%" / "1M" text to the right of the plank. */
+    el.innerHTML =
+      '<div class="ctx-bar-plank" aria-hidden="true">' +
+        '<div class="ctx-plank-fill"></div>' +
+        '<div class="ctx-plank-sheen"></div>' +
+        '<svg class="ctx-bar-ticks ctx-plank-cuts" viewBox="0 0 100 24" preserveAspectRatio="none"></svg>' +
+        '<div class="ctx-bar-counter" aria-hidden="true"></div>' +
+      '</div>' +
+      '<div class="ctx-bar-pct">0%</div>' +
+      '<div class="ctx-bar-cap">—</div>';
+    _state = {
+      el,
+      /* `railNode` is kept as the alias-name used by --ctx-arc-pct
+       * writes — it now points to the plank.  `ticksNode` is the SVG
+       * layer that holds the knife-cut lines. */
+      railNode:    el.querySelector('.ctx-bar-plank'),
+      ticksNode:   el.querySelector('.ctx-plank-cuts'),
+      counterNode: el.querySelector('.ctx-bar-counter'),
+      pctNode:     el.querySelector('.ctx-bar-pct'),
+      capNode:     el.querySelector('.ctx-bar-cap'),
+      lastZone: '',
+      lastPctText: '',
+      lastCapText: '',
+      lastTitle: '',
+      lastFillPct: -1,
+      lastTicksSig: '',
+      lastCounterText: '',
+      lastClickable: null,
+      compactions: [],
+    };
+    /* Click on chip body (NOT on a tick) → open viewer for active conv,
+     * letting the drawer auto-select the most recent archive. */
+    el.addEventListener('click', (e) => {
+      if (e.target && e.target.closest && e.target.closest('.ctx-bar-tick')) return;
+      if (!_state || !_state.compactions.length) return;
+      if (typeof activeConvId === 'undefined' || !activeConvId) return;
+      if (typeof window.openCompactionViewer === 'function') {
+        window.openCompactionViewer(activeConvId);
+      }
+    });
+    /* Hover on a tick → highlight the matching inline chip in the chat. */
+    el.addEventListener('mouseover', (e) => {
+      const t = e.target && e.target.closest && e.target.closest('.ctx-bar-tick');
+      if (!t) return;
+      const aid = t.getAttribute('data-archive-id');
+      if (!aid) return;
+      _setMarkerFocus(aid, true);
+    });
+    el.addEventListener('mouseout', (e) => {
+      const t = e.target && e.target.closest && e.target.closest('.ctx-bar-tick');
+      if (!t) return;
+      const aid = t.getAttribute('data-archive-id');
+      if (!aid) return;
+      _setMarkerFocus(aid, false);
+    });
+    return _state;
+  }
+
+  /* Cross-highlight: hovering a tick lifts the matching .compaction-marker.
+   * Inverse direction (hovering a marker → lifting a tick) is wired via a
+   * delegated mouseover listener installed on first call. */
+  function _setMarkerFocus(archiveId, on) {
+    const sel = `.compaction-marker[data-archive-id="${CSS.escape(String(archiveId))}"]`;
+    document.querySelectorAll(sel).forEach((node) => {
+      node.classList.toggle('is-focused', !!on);
+    });
+  }
+  function _setTickFocus(archiveId, on) {
+    if (!_state) return;
+    const t = _state.ticksNode.querySelector(
+      `.ctx-bar-tick[data-archive-id="${CSS.escape(String(archiveId))}"]`
+    );
+    if (t) t.classList.toggle('is-focused', !!on);
+  }
+  let _markerHoverWired = false;
+  function _wireMarkerHoverOnce() {
+    if (_markerHoverWired) return;
+    _markerHoverWired = true;
+    document.addEventListener('mouseover', (e) => {
+      const m = e.target && e.target.closest && e.target.closest('.compaction-marker');
+      if (!m) return;
+      const aid = m.getAttribute('data-archive-id');
+      if (aid) _setTickFocus(aid, true);
+    });
+    document.addEventListener('mouseout', (e) => {
+      const m = e.target && e.target.closest && e.target.closest('.compaction-marker');
+      if (!m) return;
+      const aid = m.getAttribute('data-archive-id');
+      if (aid) _setTickFocus(aid, false);
+    });
+  }
+
+  let _scheduled = false;
+
+  function updateContextBar() {
+    if (_scheduled) return;
+    _scheduled = true;
+    requestAnimationFrame(() => {
+      _scheduled = false;
+      _doUpdate();
+    });
+  }
+
+  function _doUpdate() {
+    const s = _ensureBar();
+    if (!s) return;
+    _wireMarkerHoverOnce();
+    const conv  = _activeConv();
+    const model = _activeModel(conv);
+    const limit = _resolveContextLimit(model);
+    const used  = _lastUsageTokens(conv);
+    const pct   = limit > 0 ? Math.min(1, used / limit) : 0;
+    const pctRounded = Math.round(pct * 100);
+
+    let zone = 'ok';
+    if      (pct >= _CRIT_THRESHOLD)    zone = 'crit';
+    else if (pct >= _COMPACT_THRESHOLD) zone = 'hot';
+    else if (pct >= 0.60)               zone = 'warn';
+
+    /* ── Surgical writes: only touch the DOM when a value actually changed. */
+    if (s.lastZone !== zone) {
+      s.el.dataset.zone = zone;
+      s.lastZone = zone;
+    }
+    if (s.lastFillPct !== pct) {
+      /* The CSS reads --ctx-arc-pct on the plank to size the marinade
+       * fill (.ctx-plank-fill width).  Setting it on the plank (not
+       * the host) lets the @property transition animate cleanly. */
+      s.railNode.style.setProperty('--ctx-arc-pct', (pct * 100).toFixed(2) + '%');
+      s.lastFillPct = pct;
+    }
+
+    const pctText = used > 0 ? pctRounded + '%' : '—';
+    if (s.lastPctText !== pctText) {
+      s.pctNode.textContent = pctText;
+      s.lastPctText = pctText;
+    }
+    const capText = _formatTokens(limit);
+    if (s.lastCapText !== capText) {
+      s.capNode.textContent = capText;
+      s.lastCapText = capText;
+    }
+
+    /* ── Compactions → ticks + counter + clickability ───────────── */
+    const comps = _collectCompactions(conv);
+    s.compactions = comps;
+    /* Memoize tick layer by (archiveId, beforePct) tuples so we only
+     * touch the DOM when the set actually changes. */
+    const sig = comps.map((c) => {
+      const beforePct = (c.tokensBefore && limit > 0)
+        ? Math.min(1, c.tokensBefore / limit) : 0;
+      return c.archiveId + ':' + beforePct.toFixed(4) + ':' + (c.status || 'done');
+    }).join('|');
+    if (s.lastTicksSig !== sig) {
+      _renderTicks(s, comps, limit);
+      s.lastTicksSig = sig;
+    }
+    const counterText = comps.length > 0 ? String(comps.length) : '';
+    if (s.lastCounterText !== counterText) {
+      s.counterNode.textContent = counterText;
+      s.counterNode.classList.toggle('has-count', comps.length > 0);
+      s.lastCounterText = counterText;
+    }
+    const clickable = comps.length > 0;
+    if (s.lastClickable !== clickable) {
+      s.el.classList.toggle('is-clickable', clickable);
+      s.lastClickable = clickable;
+    }
+
+    const modelLabel = model || 'unknown';
+    const tip = used > 0
+      ? modelLabel + '\n' + _formatTokens(used) + ' / ' + capText +
+        ' tokens (' + pctRounded + '%) — last round prompt' +
+        (zone === 'hot'  ? '\nApproaching auto-compact threshold' : '') +
+        (zone === 'crit' ? '\nCritical — compaction imminent'      : '') +
+        (comps.length    ? '\n' + comps.length + ' compaction' +
+                           (comps.length === 1 ? '' : 's') +
+                           ' in this conversation · click to inspect' : '')
+      : modelLabel + '\nContext window: ' + capText + ' tokens' +
+        (comps.length    ? '\n' + comps.length + ' compaction' +
+                           (comps.length === 1 ? '' : 's') +
+                           ' in this conversation · click to inspect' : '');
+    if (s.lastTitle !== tip) {
+      s.el.title = tip;
+      s.lastTitle = tip;
+    }
+  }
+
+  /* Replace the SVG children with one VERTICAL knife-cut line per
+   * compaction, scored across the plank.  X is in viewBox units 0..100
+   * (== fill percentage), Y spans the plank height.  The parent
+   * ticksNode and all other chip nodes are never touched, so this
+   * respects the anti-flicker contract for everything outside the
+   * cuts layer. */
+  function _renderTicks(s, comps, limit) {
+    while (s.ticksNode.firstChild) s.ticksNode.removeChild(s.ticksNode.firstChild);
+    if (!comps.length || limit <= 0) return;
+    /* viewBox is 100×24 (preserveAspectRatio="none" — X stretches with
+     * the plank width).  Cuts run nearly the full plank height, with a
+     * tiny inset top/bottom so they read as scored marks rather than
+     * full-bleed dividers. */
+    for (const c of comps) {
+      const beforePct = (c.tokensBefore && limit > 0)
+        ? Math.min(1, c.tokensBefore / limit) : 0;
+      const x = (beforePct * 100).toFixed(2);
+      const line = document.createElementNS(_SVG_NS, 'line');
+      line.setAttribute('x1', x);
+      line.setAttribute('y1', '3');
+      line.setAttribute('x2', x);
+      line.setAttribute('y2', '21');
+      line.setAttribute('class',
+        'ctx-bar-tick' +
+        (c.status === 'in_progress' ? ' is-progress' : '') +
+        (c.trigger === 'reactive'   ? ' is-reactive'  : ''));
+      line.setAttribute('data-archive-id', String(c.archiveId));
+      const beforeFmt = c.tokensBefore ? _formatTokens(c.tokensBefore) : '?';
+      const afterFmt  = c.tokensAfter  ? _formatTokens(c.tokensAfter)  : '?';
+      const trigLabel = c.trigger === 'reactive' ? '⚡ reactive'
+                       : (c.trigger === 'manual' ? '🔧 manual' : '🗜️ auto');
+      const tipEl = document.createElementNS(_SVG_NS, 'title');
+      tipEl.textContent = `Compaction #${c.archiveId} · ${trigLabel}\n` +
+                          `${beforeFmt} → ${afterFmt} tokens · click to inspect`;
+      line.appendChild(tipEl);
+      /* Click → open viewer on this exact archive.  Stop propagation so
+       * the chip-level "open most recent" handler doesn't double-fire. */
+      line.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        if (typeof activeConvId === 'undefined' || !activeConvId) return;
+        if (typeof window.openCompactionViewer === 'function') {
+          window.openCompactionViewer(activeConvId, c.archiveId);
+        }
+      });
+      s.ticksNode.appendChild(line);
+    }
+  }
+
+  /* Discrete one-shot cue: when a brand-new compaction lands, briefly
+   * highlight its tick.  Implemented via class toggle (no idle loop) —
+   * removed after a single 1.4 s window via setTimeout so the gauge
+   * returns to its quiet steady state. */
+  function flashGaugeForArchive(archiveId) {
+    if (!_state || archiveId == null) return;
+    /* The ticks layer may not yet contain this archive (the SSE event
+     * fires before _collectCompactions sees it).  Force a recompute
+     * first so the new tick exists, then schedule the flash. */
+    updateContextBar();
+    requestAnimationFrame(() => {
+      const t = _state && _state.ticksNode.querySelector(
+        `.ctx-bar-tick[data-archive-id="${CSS.escape(String(archiveId))}"]`
+      );
+      if (!t) return;
+      t.classList.add('is-landing');
+      setTimeout(() => { t.classList.remove('is-landing'); }, 1400);
+    });
+  }
+
+  window.updateContextBar = updateContextBar;
+  window.flashGaugeForArchive = flashGaugeForArchive;
+  window._resolveContextLimit = _resolveContextLimit;
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', updateContextBar, { once: true });
+  } else {
+    updateContextBar();
+  }
+})();

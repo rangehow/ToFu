@@ -1,0 +1,1695 @@
+{
+  "timestamp": "2026-03-21T08:32:32.758775",
+  "judge_model": "gemini-2.5-flash",
+  "quick_mode": true,
+  "n_translation_samples": 6,
+  "n_vision_samples": 5,
+  "translation_aggregated": [
+    {
+      "model": "GLM-4-Flash",
+      "model_id": "glm-4-flash",
+      "task": "translation",
+      "n_total": 6,
+      "n_success": 6,
+      "n_errors": 0,
+      "avg_bleu": 53.36,
+      "avg_judge_score": 0,
+      "avg_latency_ms": 1787.4,
+      "p50_latency_ms": 2115.5,
+      "total_input_tokens": 316,
+      "total_output_tokens": 269,
+      "est_cost_cny": 0.0,
+      "bleu_scores": [
+        65.86,
+        35.65,
+        63.44,
+        66.88,
+        24.49,
+        63.84
+      ],
+      "judge_scores": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "error_details": []
+    },
+    {
+      "model": "Doubao-1.5-lite-32k",
+      "model_id": "Doubao-1.5-lite-32k",
+      "task": "translation",
+      "n_total": 6,
+      "n_success": 6,
+      "n_errors": 0,
+      "avg_bleu": 48.35,
+      "avg_judge_score": 0,
+      "avg_latency_ms": 1711.9,
+      "p50_latency_ms": 1796.0,
+      "total_input_tokens": 344,
+      "total_output_tokens": 298,
+      "est_cost_cny": 0.000282,
+      "bleu_scores": [
+        70.25,
+        47.57,
+        68.21,
+        59.37,
+        9.26,
+        35.42
+      ],
+      "judge_scores": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "error_details": []
+    },
+    {
+      "model": "Doubao-Seed-1.6-flash",
+      "model_id": "Doubao-Seed-1.6-flash",
+      "task": "translation",
+      "n_total": 6,
+      "n_success": 6,
+      "n_errors": 0,
+      "avg_bleu": 46.52,
+      "avg_judge_score": 0,
+      "avg_latency_ms": 742.4,
+      "p50_latency_ms": 827.0,
+      "total_input_tokens": 344,
+      "total_output_tokens": 281,
+      "est_cost_cny": 0.000946,
+      "bleu_scores": [
+        83.09,
+        49.32,
+        45.55,
+        55.08,
+        20.01,
+        26.1
+      ],
+      "judge_scores": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "error_details": []
+    },
+    {
+      "model": "GPT-4.1-Nano",
+      "model_id": "gpt-4.1-nano",
+      "task": "translation",
+      "n_total": 6,
+      "n_success": 6,
+      "n_errors": 0,
+      "avg_bleu": 54.45,
+      "avg_judge_score": 0,
+      "avg_latency_ms": 1358.9,
+      "p50_latency_ms": 1206.0,
+      "total_input_tokens": 398,
+      "total_output_tokens": 266,
+      "est_cost_cny": 0.001053,
+      "bleu_scores": [
+        71.11,
+        65.57,
+        59.35,
+        55.27,
+        29.9,
+        45.48
+      ],
+      "judge_scores": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "error_details": []
+    },
+    {
+      "model": "GLM-4.6V",
+      "model_id": "glm-4.6v",
+      "task": "translation",
+      "n_total": 6,
+      "n_success": 5,
+      "n_errors": 1,
+      "avg_bleu": 23.86,
+      "avg_judge_score": 0,
+      "avg_latency_ms": 16903.6,
+      "p50_latency_ms": 20489.6,
+      "total_input_tokens": 273,
+      "total_output_tokens": 3593,
+      "est_cost_cny": 0.011052,
+      "bleu_scores": [
+        0,
+        0.0,
+        83.65,
+        0.0,
+        0.0,
+        59.48
+      ],
+      "judge_scores": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "error_details": [
+        "HTTP 400: {\"error\":{\"message\":\"系统检测到输入或生成内容可能包含不安全或敏感内容，请您避免输入易产生敏感内容的提示语，感谢您的配合。\",\"type\":\"sever_error\",\"code\":\"1301\"}}"
+      ]
+    },
+    {
+      "model": "Doubao-Seed-1.8",
+      "model_id": "Doubao-Seed-1.8",
+      "task": "translation",
+      "n_total": 6,
+      "n_success": 6,
+      "n_errors": 0,
+      "avg_bleu": 46.73,
+      "avg_judge_score": 0,
+      "avg_latency_ms": 2093.2,
+      "p50_latency_ms": 2039.1,
+      "total_input_tokens": 560,
+      "total_output_tokens": 292,
+      "est_cost_cny": 0.002784,
+      "bleu_scores": [
+        57.74,
+        57.46,
+        47.79,
+        43.39,
+        20.81,
+        53.19
+      ],
+      "judge_scores": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "error_details": []
+    },
+    {
+      "model": "DeepSeek-Chat",
+      "model_id": "deepseek-chat",
+      "task": "translation",
+      "n_total": 6,
+      "n_success": 6,
+      "n_errors": 0,
+      "avg_bleu": 56.9,
+      "avg_judge_score": 0,
+      "avg_latency_ms": 2033.0,
+      "p50_latency_ms": 2134.9,
+      "total_input_tokens": 308,
+      "total_output_tokens": 269,
+      "est_cost_cny": 0.001423,
+      "bleu_scores": [
+        71.11,
+        64.26,
+        76.2,
+        58.02,
+        14.4,
+        57.4
+      ],
+      "judge_scores": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "error_details": []
+    },
+    {
+      "model": "Kimi-K2.5",
+      "model_id": "kimi-k2.5",
+      "task": "translation",
+      "n_total": 6,
+      "n_success": 6,
+      "n_errors": 0,
+      "avg_bleu": 43.93,
+      "avg_judge_score": 0,
+      "avg_latency_ms": 23591.2,
+      "p50_latency_ms": 29559.5,
+      "total_input_tokens": 304,
+      "total_output_tokens": 4706,
+      "est_cost_cny": 0.099039,
+      "bleu_scores": [
+        93.06,
+        63.41,
+        0.0,
+        54.56,
+        0.0,
+        52.56
+      ],
+      "judge_scores": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "error_details": []
+    },
+    {
+      "model": "GPT-4.1-Mini",
+      "model_id": "gpt-4.1-mini",
+      "task": "translation",
+      "n_total": 6,
+      "n_success": 6,
+      "n_errors": 0,
+      "avg_bleu": 56.79,
+      "avg_judge_score": 0,
+      "avg_latency_ms": 1837.8,
+      "p50_latency_ms": 2006.7,
+      "total_input_tokens": 398,
+      "total_output_tokens": 269,
+      "est_cost_cny": 0.004245,
+      "bleu_scores": [
+        77.57,
+        57.09,
+        68.82,
+        47.68,
+        27.27,
+        62.29
+      ],
+      "judge_scores": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "error_details": []
+    },
+    {
+      "model": "GLM-4.7",
+      "model_id": "glm-4.7",
+      "task": "translation",
+      "n_total": 6,
+      "n_success": 6,
+      "n_errors": 0,
+      "avg_bleu": 24.12,
+      "avg_judge_score": 0,
+      "avg_latency_ms": 8814.8,
+      "p50_latency_ms": 9740.1,
+      "total_input_tokens": 316,
+      "total_output_tokens": 5816,
+      "est_cost_cny": 0.082372,
+      "bleu_scores": [
+        75.81,
+        68.94,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "judge_scores": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "error_details": []
+    }
+  ],
+  "vision_aggregated": [
+    {
+      "model": "GLM-4-Flash",
+      "model_id": "glm-4-flash",
+      "task": "vision_latex",
+      "n_total": 0,
+      "n_success": 0,
+      "n_errors": 0,
+      "skipped": true,
+      "reason": "No vision capability"
+    },
+    {
+      "model": "Doubao-1.5-lite-32k",
+      "model_id": "Doubao-1.5-lite-32k",
+      "task": "vision_latex",
+      "n_total": 0,
+      "n_success": 0,
+      "n_errors": 0,
+      "skipped": true,
+      "reason": "No vision capability"
+    },
+    {
+      "model": "Doubao-Seed-1.6-flash",
+      "model_id": "Doubao-Seed-1.6-flash",
+      "task": "vision_latex",
+      "n_total": 5,
+      "n_success": 5,
+      "n_errors": 0,
+      "avg_edit_dist": 0.4403,
+      "avg_judge_score": 0,
+      "avg_latency_ms": 751.6,
+      "p50_latency_ms": 721.8,
+      "total_input_tokens": 402,
+      "total_output_tokens": 190,
+      "est_cost_cny": 0.000691,
+      "edit_distances": [
+        0.4017,
+        0.525,
+        0.4607,
+        0.4615,
+        0.3524
+      ],
+      "judge_scores": [],
+      "error_details": []
+    },
+    {
+      "model": "GPT-4.1-Nano",
+      "model_id": "gpt-4.1-nano",
+      "task": "vision_latex",
+      "n_total": 5,
+      "n_success": 5,
+      "n_errors": 0,
+      "avg_edit_dist": 0.4225,
+      "avg_judge_score": 0,
+      "avg_latency_ms": 1633.1,
+      "p50_latency_ms": 1381.1,
+      "total_input_tokens": 566,
+      "total_output_tokens": 250,
+      "est_cost_cny": 0.001128,
+      "edit_distances": [
+        0.5436,
+        0.4375,
+        0.6069,
+        0.3939,
+        0.1308
+      ],
+      "judge_scores": [],
+      "error_details": []
+    },
+    {
+      "model": "GLM-4.6V",
+      "model_id": "glm-4.6v",
+      "task": "vision_latex",
+      "n_total": 5,
+      "n_success": 5,
+      "n_errors": 0,
+      "avg_edit_dist": 0.4673,
+      "avg_judge_score": 0,
+      "avg_latency_ms": 9880.5,
+      "p50_latency_ms": 8859.9,
+      "total_input_tokens": 425,
+      "total_output_tokens": 1684,
+      "est_cost_cny": 0.005477,
+      "edit_distances": [
+        1.0,
+        0.375,
+        0.2826,
+        0.3208,
+        0.3579
+      ],
+      "judge_scores": [],
+      "error_details": []
+    },
+    {
+      "model": "Doubao-Seed-1.8",
+      "model_id": "Doubao-Seed-1.8",
+      "task": "vision_latex",
+      "n_total": 5,
+      "n_success": 5,
+      "n_errors": 0,
+      "avg_edit_dist": 0.4192,
+      "avg_judge_score": 0,
+      "avg_latency_ms": 1881.1,
+      "p50_latency_ms": 1856.4,
+      "total_input_tokens": 535,
+      "total_output_tokens": 195,
+      "est_cost_cny": 0.001988,
+      "edit_distances": [
+        0.3187,
+        0.575,
+        0.4159,
+        0.4286,
+        0.3578
+      ],
+      "judge_scores": [],
+      "error_details": []
+    },
+    {
+      "model": "DeepSeek-Chat",
+      "model_id": "deepseek-chat",
+      "task": "vision_latex",
+      "n_total": 0,
+      "n_success": 0,
+      "n_errors": 0,
+      "skipped": true,
+      "reason": "No vision capability"
+    },
+    {
+      "model": "Kimi-K2.5",
+      "model_id": "kimi-k2.5",
+      "task": "vision_latex",
+      "n_total": 5,
+      "n_success": 5,
+      "n_errors": 0,
+      "avg_edit_dist": 0.8346,
+      "avg_judge_score": 0,
+      "avg_latency_ms": 23940.8,
+      "p50_latency_ms": 24695.1,
+      "total_input_tokens": 434,
+      "total_output_tokens": 2278,
+      "est_cost_cny": 0.048142,
+      "edit_distances": [
+        1.0,
+        1.0,
+        1.0,
+        0.1731,
+        1.0
+      ],
+      "judge_scores": [],
+      "error_details": []
+    },
+    {
+      "model": "GPT-4.1-Mini",
+      "model_id": "gpt-4.1-mini",
+      "task": "vision_latex",
+      "n_total": 5,
+      "n_success": 5,
+      "n_errors": 0,
+      "avg_edit_dist": 0.2676,
+      "avg_judge_score": 0,
+      "avg_latency_ms": 1992.7,
+      "p50_latency_ms": 1985.1,
+      "total_input_tokens": 485,
+      "total_output_tokens": 220,
+      "est_cost_cny": 0.003931,
+      "edit_distances": [
+        0.3571,
+        0.3625,
+        0.1461,
+        0.2642,
+        0.2083
+      ],
+      "judge_scores": [],
+      "error_details": []
+    },
+    {
+      "model": "GLM-4.7",
+      "model_id": "glm-4.7",
+      "task": "vision_latex",
+      "n_total": 0,
+      "n_success": 0,
+      "n_errors": 0,
+      "skipped": true,
+      "reason": "No vision capability"
+    }
+  ],
+  "combined_ranking": [
+    {
+      "model": "GLM-4-Flash",
+      "model_id": "glm-4-flash",
+      "trans_bleu": 53.36,
+      "trans_judge": 0,
+      "trans_latency": 1787.4,
+      "trans_cost": 0.0,
+      "trans_errors": 0,
+      "vision_edit_dist": "—",
+      "vision_judge": "—",
+      "vision_latency": "—",
+      "vision_cost": 0,
+      "composite": 0.4106
+    },
+    {
+      "model": "Doubao-1.5-lite-32k",
+      "model_id": "Doubao-1.5-lite-32k",
+      "trans_bleu": 48.35,
+      "trans_judge": 0,
+      "trans_latency": 1711.9,
+      "trans_cost": 0.000282,
+      "trans_errors": 0,
+      "vision_edit_dist": "—",
+      "vision_judge": "—",
+      "vision_latency": "—",
+      "vision_cost": 0,
+      "composite": 0.4074
+    },
+    {
+      "model": "DeepSeek-Chat",
+      "model_id": "deepseek-chat",
+      "trans_bleu": 56.9,
+      "trans_judge": 0,
+      "trans_latency": 2033.0,
+      "trans_cost": 0.001423,
+      "trans_errors": 0,
+      "vision_edit_dist": "—",
+      "vision_judge": "—",
+      "vision_latency": "—",
+      "vision_cost": 0,
+      "composite": 0.3628
+    },
+    {
+      "model": "Doubao-Seed-1.6-flash",
+      "model_id": "Doubao-Seed-1.6-flash",
+      "trans_bleu": 46.52,
+      "trans_judge": 0,
+      "trans_latency": 742.4,
+      "trans_cost": 0.000946,
+      "trans_errors": 0,
+      "vision_edit_dist": 0.4403,
+      "vision_judge": 0,
+      "vision_latency": 751.6,
+      "vision_cost": 0.000691,
+      "vision_errors": 0,
+      "composite": 0.3376
+    },
+    {
+      "model": "GPT-4.1-Nano",
+      "model_id": "gpt-4.1-nano",
+      "trans_bleu": 54.45,
+      "trans_judge": 0,
+      "trans_latency": 1358.9,
+      "trans_cost": 0.001053,
+      "trans_errors": 0,
+      "vision_edit_dist": 0.4225,
+      "vision_judge": 0,
+      "vision_latency": 1633.1,
+      "vision_cost": 0.001128,
+      "vision_errors": 0,
+      "composite": 0.302
+    },
+    {
+      "model": "Doubao-Seed-1.8",
+      "model_id": "Doubao-Seed-1.8",
+      "trans_bleu": 46.73,
+      "trans_judge": 0,
+      "trans_latency": 2093.2,
+      "trans_cost": 0.002784,
+      "trans_errors": 0,
+      "vision_edit_dist": 0.4192,
+      "vision_judge": 0,
+      "vision_latency": 1881.1,
+      "vision_cost": 0.001988,
+      "vision_errors": 0,
+      "composite": 0.2208
+    },
+    {
+      "model": "GPT-4.1-Mini",
+      "model_id": "gpt-4.1-mini",
+      "trans_bleu": 56.79,
+      "trans_judge": 0,
+      "trans_latency": 1837.8,
+      "trans_cost": 0.004245,
+      "trans_errors": 0,
+      "vision_edit_dist": 0.2676,
+      "vision_judge": 0,
+      "vision_latency": 1992.7,
+      "vision_cost": 0.003931,
+      "vision_errors": 0,
+      "composite": 0.163
+    },
+    {
+      "model": "GLM-4.6V",
+      "model_id": "glm-4.6v",
+      "trans_bleu": 23.86,
+      "trans_judge": 0,
+      "trans_latency": 16903.6,
+      "trans_cost": 0.011052,
+      "trans_errors": 1,
+      "vision_edit_dist": 0.4673,
+      "vision_judge": 0,
+      "vision_latency": 9880.5,
+      "vision_cost": 0.005477,
+      "vision_errors": 0,
+      "composite": 0.0
+    },
+    {
+      "model": "Kimi-K2.5",
+      "model_id": "kimi-k2.5",
+      "trans_bleu": 43.93,
+      "trans_judge": 0,
+      "trans_latency": 23591.2,
+      "trans_cost": 0.099039,
+      "trans_errors": 0,
+      "vision_edit_dist": 0.8346,
+      "vision_judge": 0,
+      "vision_latency": 23940.8,
+      "vision_cost": 0.048142,
+      "vision_errors": 0,
+      "composite": 0.0
+    },
+    {
+      "model": "GLM-4.7",
+      "model_id": "glm-4.7",
+      "trans_bleu": 24.12,
+      "trans_judge": 0,
+      "trans_latency": 8814.8,
+      "trans_cost": 0.082372,
+      "trans_errors": 0,
+      "vision_edit_dist": "—",
+      "vision_judge": "—",
+      "vision_latency": "—",
+      "vision_cost": 0,
+      "composite": 0.0
+    }
+  ],
+  "translation_raw": {
+    "glm-4-flash": [
+      {
+        "sample_id": "t01",
+        "domain": "news",
+        "direction": "zh→en",
+        "translation": "President Xi Jinping of China delivered a speech at the G20 Leaders' Summit, calling on countries to join hands in tackling global challenges and promote the construction of a community with a shared future for mankind.",
+        "reference": "Chinese President Xi Jinping delivered a speech at the G20 Leaders' Summit, calling on all countries to join hands in addressing global challenges and promoting the building of a community with a shared future for mankind.",
+        "source": "中国国家主席习近平在二十国集团领导人峰会上发表讲话，呼吁各国携手应对全球性挑战，推动构建人类命运共同体。",
+        "latency_ms": 2171.6,
+        "input_tokens": 48,
+        "output_tokens": 42,
+        "error": null
+      },
+      {
+        "sample_id": "t02",
+        "domain": "economics",
+        "direction": "zh→en",
+        "translation": "According to the National Bureau of Statistics data, the year-on-year growth rate of GDP in the third quarter of this year was 4.9%, exceeding market expectations, showing a continuous recovery and improvement in the Chinese economy.",
+        "reference": "According to data from the National Bureau of Statistics, GDP grew by 4.9% year-on-year in the third quarter of this year, exceeding market expectations and demonstrating China's economy continues its trend of recovery and improvement.",
+        "source": "据国家统计局数据显示，今年第三季度国内生产总值同比增长4.9%，超出市场预期，显示出中国经济持续恢复向好的态势。",
+        "latency_ms": 1335.4,
+        "input_tokens": 47,
+        "output_tokens": 47,
+        "error": null
+      },
+      {
+        "sample_id": "t03",
+        "domain": "technology",
+        "direction": "zh→en",
+        "translation": "Quantum computing uses the superposition and entanglement states of qubits for information processing, theoretically achieving exponential acceleration on certain specific problems, thereby solving complex issues that traditional computers cannot handle.",
+        "reference": "Quantum computing utilizes the superposition and entanglement states of qubits for information processing, and can theoretically achieve exponential speedup on certain specific problems, thereby solving complex problems that traditional computers cannot handle.",
+        "source": "量子计算利用量子比特的叠加态和纠缠态进行信息处理，理论上能够在某些特定问题上实现指数级的加速，从而解决传统计算机无法处理的复杂问题。",
+        "latency_ms": 1291.4,
+        "input_tokens": 55,
+        "output_tokens": 40,
+        "error": null
+      },
+      {
+        "sample_id": "t04",
+        "domain": "science",
+        "direction": "zh→en",
+        "translation": "Researchers have found that precise modification of the rice genome through CRISPR-Cas9 gene editing technology can significantly improve the drought resistance and yield of rice, providing new ideas for ensuring food security.",
+        "reference": "Researchers have found that making precise modifications to the rice genome through CRISPR-Cas9 gene editing technology can significantly improve drought resistance and yield of rice, providing new approaches to ensuring food security.",
+        "source": "研究人员发现，通过CRISPR-Cas9基因编辑技术对水稻基因组进行精确修改，可以显著提高水稻的抗旱性能和产量，为保障粮食安全提供了新思路。",
+        "latency_ms": 1626.8,
+        "input_tokens": 59,
+        "output_tokens": 42,
+        "error": null
+      },
+      {
+        "sample_id": "t05",
+        "domain": "poetry",
+        "direction": "zh→en",
+        "translation": "The moon sets, crows cry, frost covers the sky; the fishing boat's light faces the sleepless night. Outside Suzhou City, the Cold Mountain Temple, at midnight, its bell sounds to the guest ship.",
+        "reference": "The moon sets, crows cry in the frosty sky; by the river, maples and fishing lights face my sleepless sorrow. Outside Suzhou city, from Cold Mountain Temple, the midnight bell reaches the traveler's boat.",
+        "source": "月落乌啼霜满天，江枫渔火对愁眠。姑苏城外寒山寺，夜半钟声到客船。",
+        "latency_ms": 2115.5,
+        "input_tokens": 52,
+        "output_tokens": 47,
+        "error": null
+      },
+      {
+        "sample_id": "t06",
+        "domain": "culture",
+        "direction": "zh→en",
+        "translation": "This ancient town retains the architectural style of the Ming and Qing dynasties, with bluish bricks and tiles, small bridges over flowing water, exuding the charm of the Jiangnan water town, attracting millions of tourists to visit every year.",
+        "reference": "This ancient town has preserved the architectural style of the Ming and Qing dynasties, with gray bricks and dark tiles, small bridges over flowing water, exuding the charm of a Jiangnan water town everywhere, attracting millions of tourists every year.",
+        "source": "这座古镇保留了明清时期的建筑风格，青砖黛瓦、小桥流水，处处透露着江南水乡的韵味，每年吸引数百万游客前来观光。",
+        "latency_ms": 2183.6,
+        "input_tokens": 55,
+        "output_tokens": 51,
+        "error": null
+      }
+    ],
+    "Doubao-1.5-lite-32k": [
+      {
+        "sample_id": "t01",
+        "domain": "news",
+        "direction": "zh→en",
+        "translation": "Chinese President Xi Jinping delivered a speech at the G20 Summit, calling on all countries to work together to address global challenges and promote the building of a community with a shared future for mankind.",
+        "reference": "Chinese President Xi Jinping delivered a speech at the G20 Leaders' Summit, calling on all countries to join hands in addressing global challenges and promoting the building of a community with a shared future for mankind.",
+        "source": "中国国家主席习近平在二十国集团领导人峰会上发表讲话，呼吁各国携手应对全球性挑战，推动构建人类命运共同体。",
+        "latency_ms": 1515.5,
+        "input_tokens": 52,
+        "output_tokens": 40,
+        "error": null
+      },
+      {
+        "sample_id": "t02",
+        "domain": "economics",
+        "direction": "zh→en",
+        "translation": "According to data from the National Bureau of Statistics, the gross domestic product (GDP) in the third quarter of this year increased by 4.9% year-on-year, exceeding market expectations, indicating that China's economy continues to recover and improve.",
+        "reference": "According to data from the National Bureau of Statistics, GDP grew by 4.9% year-on-year in the third quarter of this year, exceeding market expectations and demonstrating China's economy continues its trend of recovery and improvement.",
+        "source": "据国家统计局数据显示，今年第三季度国内生产总值同比增长4.9%，超出市场预期，显示出中国经济持续恢复向好的态势。",
+        "latency_ms": 1909.3,
+        "input_tokens": 57,
+        "output_tokens": 51,
+        "error": null
+      },
+      {
+        "sample_id": "t03",
+        "domain": "technology",
+        "direction": "zh→en",
+        "translation": "Quantum computing uses the superposition and entanglement states of qubits for information processing, and theoretically can achieve exponential acceleration on certain specific problems, thus solving complex problems that traditional computers cannot handle.",
+        "reference": "Quantum computing utilizes the superposition and entanglement states of qubits for information processing, and can theoretically achieve exponential speedup on certain specific problems, thereby solving complex problems that traditional computers cannot handle.",
+        "source": "量子计算利用量子比特的叠加态和纠缠态进行信息处理，理论上能够在某些特定问题上实现指数级的加速，从而解决传统计算机无法处理的复杂问题。",
+        "latency_ms": 1326.2,
+        "input_tokens": 64,
+        "output_tokens": 38,
+        "error": null
+      },
+      {
+        "sample_id": "t04",
+        "domain": "science",
+        "direction": "zh→en",
+        "translation": "Researchers have found that precise modification of the rice genome through the CRISPR-Cas9 gene editing technology can significantly improve the drought resistance and yield of rice, providing new ideas for ensuring food security.",
+        "reference": "Researchers have found that making precise modifications to the rice genome through CRISPR-Cas9 gene editing technology can significantly improve drought resistance and yield of rice, providing new approaches to ensuring food security.",
+        "source": "研究人员发现，通过CRISPR-Cas9基因编辑技术对水稻基因组进行精确修改，可以显著提高水稻的抗旱性能和产量，为保障粮食安全提供了新思路。",
+        "latency_ms": 1405.0,
+        "input_tokens": 63,
+        "output_tokens": 41,
+        "error": null
+      },
+      {
+        "sample_id": "t05",
+        "domain": "poetry",
+        "direction": "zh→en",
+        "translation": "The moon is setting, crows are cawing, and frost fills the sky.\nFacing the maple trees by the river and the fishing-boat lights, I lie awake with sorrow.\nOutside the city of Suzhou, there's Cold Mountain Temple.\nAt midnight, the sound of its bell reaches the passenger boat.",
+        "reference": "The moon sets, crows cry in the frosty sky; by the river, maples and fishing lights face my sleepless sorrow. Outside Suzhou city, from Cold Mountain Temple, the midnight bell reaches the traveler's boat.",
+        "source": "月落乌啼霜满天，江枫渔火对愁眠。姑苏城外寒山寺，夜半钟声到客船。",
+        "latency_ms": 2319.5,
+        "input_tokens": 51,
+        "output_tokens": 69,
+        "error": null
+      },
+      {
+        "sample_id": "t06",
+        "domain": "culture",
+        "direction": "zh→en",
+        "translation": "This ancient town retains the architectural style of the Ming and Qing dynasties. With black bricks, grey tiles, small bridges and flowing waters, it reveals the charm of the water town in the south of the Yangtze River everywhere, attracting millions of tourists to come and visit every year.",
+        "reference": "This ancient town has preserved the architectural style of the Ming and Qing dynasties, with gray bricks and dark tiles, small bridges over flowing water, exuding the charm of a Jiangnan water town everywhere, attracting millions of tourists every year.",
+        "source": "这座古镇保留了明清时期的建筑风格，青砖黛瓦、小桥流水，处处透露着江南水乡的韵味，每年吸引数百万游客前来观光。",
+        "latency_ms": 1796.0,
+        "input_tokens": 57,
+        "output_tokens": 59,
+        "error": null
+      }
+    ],
+    "Doubao-Seed-1.6-flash": [
+      {
+        "sample_id": "t01",
+        "domain": "news",
+        "direction": "zh→en",
+        "translation": "Chinese President Xi Jinping delivered a speech at the G20 Leaders' Summit, calling on all countries to join hands to address global challenges and promote the building of a community with a shared future for mankind.",
+        "reference": "Chinese President Xi Jinping delivered a speech at the G20 Leaders' Summit, calling on all countries to join hands in addressing global challenges and promoting the building of a community with a shared future for mankind.",
+        "source": "中国国家主席习近平在二十国集团领导人峰会上发表讲话，呼吁各国携手应对全球性挑战，推动构建人类命运共同体。",
+        "latency_ms": 576.8,
+        "input_tokens": 52,
+        "output_tokens": 42,
+        "error": null
+      },
+      {
+        "sample_id": "t02",
+        "domain": "economics",
+        "direction": "zh→en",
+        "translation": "Data from the National Bureau of Statistics show that China's GDP grew by 4.9% year-on-year in the third quarter this year, exceeding market expectations, indicating that China's economy is continuing to recover and improve.",
+        "reference": "According to data from the National Bureau of Statistics, GDP grew by 4.9% year-on-year in the third quarter of this year, exceeding market expectations and demonstrating China's economy continues its trend of recovery and improvement.",
+        "source": "据国家统计局数据显示，今年第三季度国内生产总值同比增长4.9%，超出市场预期，显示出中国经济持续恢复向好的态势。",
+        "latency_ms": 861.9,
+        "input_tokens": 57,
+        "output_tokens": 45,
+        "error": null
+      },
+      {
+        "sample_id": "t03",
+        "domain": "technology",
+        "direction": "zh→en",
+        "translation": "Quantum computing uses the superposition and entanglement states of qubits to process information. Theoretically, it can achieve exponential acceleration in some specific problems, thus solving complex problems that traditional computers cannot handle.",
+        "reference": "Quantum computing utilizes the superposition and entanglement states of qubits for information processing, and can theoretically achieve exponential speedup on certain specific problems, thereby solving complex problems that traditional computers cannot handle.",
+        "source": "量子计算利用量子比特的叠加态和纠缠态进行信息处理，理论上能够在某些特定问题上实现指数级的加速，从而解决传统计算机无法处理的复杂问题。",
+        "latency_ms": 692.4,
+        "input_tokens": 64,
+        "output_tokens": 39,
+        "error": null
+      },
+      {
+        "sample_id": "t04",
+        "domain": "science",
+        "direction": "zh→en",
+        "translation": "Researchers have found that precise modification of the rice genome through the CRISPR-Cas9 gene editing technology can significantly improve the drought resistance and yield of rice, providing a new idea for ensuring food security.",
+        "reference": "Researchers have found that making precise modifications to the rice genome through CRISPR-Cas9 gene editing technology can significantly improve drought resistance and yield of rice, providing new approaches to ensuring food security.",
+        "source": "研究人员发现，通过CRISPR-Cas9基因编辑技术对水稻基因组进行精确修改，可以显著提高水稻的抗旱性能和产量，为保障粮食安全提供了新思路。",
+        "latency_ms": 638.6,
+        "input_tokens": 63,
+        "output_tokens": 41,
+        "error": null
+      },
+      {
+        "sample_id": "t05",
+        "domain": "poetry",
+        "direction": "zh→en",
+        "translation": "The moon sets, crows cry, frost fills the sky; By riverside maples and fishing lights, I lie sleepless, weighed down by woe. Outside Gusu City, Hanshan Temple stands; At midnight, its bell tolls reach the passenger boat.",
+        "reference": "The moon sets, crows cry in the frosty sky; by the river, maples and fishing lights face my sleepless sorrow. Outside Suzhou city, from Cold Mountain Temple, the midnight bell reaches the traveler's boat.",
+        "source": "月落乌啼霜满天，江枫渔火对愁眠。姑苏城外寒山寺，夜半钟声到客船。",
+        "latency_ms": 857.6,
+        "input_tokens": 51,
+        "output_tokens": 55,
+        "error": null
+      },
+      {
+        "sample_id": "t06",
+        "domain": "culture",
+        "direction": "zh→en",
+        "translation": "This ancient town retains the architectural style of the Ming and Qing dynasties. The blue bricks and black tiles, the small bridges and flowing waters, all reveal the charm of the water town in the south of the Yangtze River. It attracts millions of tourists to come for sightseeing every year.",
+        "reference": "This ancient town has preserved the architectural style of the Ming and Qing dynasties, with gray bricks and dark tiles, small bridges over flowing water, exuding the charm of a Jiangnan water town everywhere, attracting millions of tourists every year.",
+        "source": "这座古镇保留了明清时期的建筑风格，青砖黛瓦、小桥流水，处处透露着江南水乡的韵味，每年吸引数百万游客前来观光。",
+        "latency_ms": 827.0,
+        "input_tokens": 57,
+        "output_tokens": 59,
+        "error": null
+      }
+    ],
+    "gpt-4.1-nano": [
+      {
+        "sample_id": "t01",
+        "domain": "news",
+        "direction": "zh→en",
+        "translation": "Chinese President Xi Jinping delivered a speech at the G20 Leaders' Summit, calling on countries to work together to address global challenges and promote the building of a community with a shared future for mankind.",
+        "reference": "Chinese President Xi Jinping delivered a speech at the G20 Leaders' Summit, calling on all countries to join hands in addressing global challenges and promoting the building of a community with a shared future for mankind.",
+        "source": "中国国家主席习近平在二十国集团领导人峰会上发表讲话，呼吁各国携手应对全球性挑战，推动构建人类命运共同体。",
+        "latency_ms": 2085.9,
+        "input_tokens": 62,
+        "output_tokens": 40,
+        "error": null
+      },
+      {
+        "sample_id": "t02",
+        "domain": "economics",
+        "direction": "zh→en",
+        "translation": "According to data from the National Bureau of Statistics, the gross domestic product (GDP) grew by 4.9% year-on-year in the third quarter of this year, exceeding market expectations and demonstrating China's continued economic recovery and positive trend.",
+        "reference": "According to data from the National Bureau of Statistics, GDP grew by 4.9% year-on-year in the third quarter of this year, exceeding market expectations and demonstrating China's economy continues its trend of recovery and improvement.",
+        "source": "据国家统计局数据显示，今年第三季度国内生产总值同比增长4.9%，超出市场预期，显示出中国经济持续恢复向好的态势。",
+        "latency_ms": 924.6,
+        "input_tokens": 58,
+        "output_tokens": 49,
+        "error": null
+      },
+      {
+        "sample_id": "t03",
+        "domain": "technology",
+        "direction": "zh→en",
+        "translation": "Quantum computing uses the superposition and entanglement states of qubits to process information, theoretically achieving exponential speedup for certain specific problems, thereby solving complex problems that traditional computers cannot handle.",
+        "reference": "Quantum computing utilizes the superposition and entanglement states of qubits for information processing, and can theoretically achieve exponential speedup on certain specific problems, thereby solving complex problems that traditional computers cannot handle.",
+        "source": "量子计算利用量子比特的叠加态和纠缠态进行信息处理，理论上能够在某些特定问题上实现指数级的加速，从而解决传统计算机无法处理的复杂问题。",
+        "latency_ms": 1206.0,
+        "input_tokens": 73,
+        "output_tokens": 39,
+        "error": null
+      },
+      {
+        "sample_id": "t04",
+        "domain": "science",
+        "direction": "zh→en",
+        "translation": "Researchers have found that precise modification of the rice genome using CRISPR-Cas9 gene editing technology can significantly improve drought resistance and yield in rice, providing new ideas for ensuring food security.",
+        "reference": "Researchers have found that making precise modifications to the rice genome through CRISPR-Cas9 gene editing technology can significantly improve drought resistance and yield of rice, providing new approaches to ensuring food security.",
+        "source": "研究人员发现，通过CRISPR-Cas9基因编辑技术对水稻基因组进行精确修改，可以显著提高水稻的抗旱性能和产量，为保障粮食安全提供了新思路。",
+        "latency_ms": 953.7,
+        "input_tokens": 74,
+        "output_tokens": 39,
+        "error": null
+      },
+      {
+        "sample_id": "t05",
+        "domain": "poetry",
+        "direction": "zh→en",
+        "translation": "The moon sets, crows cry, frost fills the sky; by the river, maple trees and fishing lights make it hard to sleep. Outside Gusu City, Cold Mountain Temple; at midnight, the bell's sound reaches the guest boat.",
+        "reference": "The moon sets, crows cry in the frosty sky; by the river, maples and fishing lights face my sleepless sorrow. Outside Suzhou city, from Cold Mountain Temple, the midnight bell reaches the traveler's boat.",
+        "source": "月落乌啼霜满天，江枫渔火对愁眠。姑苏城外寒山寺，夜半钟声到客船。",
+        "latency_ms": 858.3,
+        "input_tokens": 60,
+        "output_tokens": 50,
+        "error": null
+      },
+      {
+        "sample_id": "t06",
+        "domain": "culture",
+        "direction": "zh→en",
+        "translation": "This ancient town retains the architectural style of the Ming and Qing Dynasties, with blue bricks, dark tiles, small bridges, and flowing water, revealing the charm of the Jiangnan water town. It attracts millions of tourists every year.",
+        "reference": "This ancient town has preserved the architectural style of the Ming and Qing dynasties, with gray bricks and dark tiles, small bridges over flowing water, exuding the charm of a Jiangnan water town everywhere, attracting millions of tourists every year.",
+        "source": "这座古镇保留了明清时期的建筑风格，青砖黛瓦、小桥流水，处处透露着江南水乡的韵味，每年吸引数百万游客前来观光。",
+        "latency_ms": 2125.1,
+        "input_tokens": 71,
+        "output_tokens": 49,
+        "error": null
+      }
+    ],
+    "glm-4.6v": [
+      {
+        "sample_id": "t01",
+        "domain": "news",
+        "direction": "zh→en",
+        "translation": "",
+        "reference": "Chinese President Xi Jinping delivered a speech at the G20 Leaders' Summit, calling on all countries to join hands in addressing global challenges and promoting the building of a community with a shared future for mankind.",
+        "source": "中国国家主席习近平在二十国集团领导人峰会上发表讲话，呼吁各国携手应对全球性挑战，推动构建人类命运共同体。",
+        "latency_ms": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "error": "HTTP 400: {\"error\":{\"message\":\"系统检测到输入或生成内容可能包含不安全或敏感内容，请您避免输入易产生敏感内容的提示语，感谢您的配合。\",\"type\":\"sever_error\",\"code\":\"1301\"}}"
+      },
+      {
+        "sample_id": "t02",
+        "domain": "economics",
+        "direction": "zh→en",
+        "translation": "",
+        "reference": "According to data from the National Bureau of Statistics, GDP grew by 4.9% year-on-year in the third quarter of this year, exceeding market expectations and demonstrating China's economy continues its trend of recovery and improvement.",
+        "source": "据国家统计局数据显示，今年第三季度国内生产总值同比增长4.9%，超出市场预期，显示出中国经济持续恢复向好的态势。",
+        "latency_ms": 26007.4,
+        "input_tokens": 48,
+        "output_tokens": 1024,
+        "error": null
+      },
+      {
+        "sample_id": "t03",
+        "domain": "technology",
+        "direction": "zh→en",
+        "translation": "Quantum computing utilizes the superposition and entanglement states of qubits for information processing, and theoretically can achieve exponential acceleration on certain specific problems, thereby solving complex problems that traditional computers cannot handle.",
+        "reference": "Quantum computing utilizes the superposition and entanglement states of qubits for information processing, and can theoretically achieve exponential speedup on certain specific problems, thereby solving complex problems that traditional computers cannot handle.",
+        "source": "量子计算利用量子比特的叠加态和纠缠态进行信息处理，理论上能够在某些特定问题上实现指数级的加速，从而解决传统计算机无法处理的复杂问题。",
+        "latency_ms": 6164.4,
+        "input_tokens": 56,
+        "output_tokens": 275,
+        "error": null
+      },
+      {
+        "sample_id": "t04",
+        "domain": "science",
+        "direction": "zh→en",
+        "translation": "",
+        "reference": "Researchers have found that making precise modifications to the rice genome through CRISPR-Cas9 gene editing technology can significantly improve drought resistance and yield of rice, providing new approaches to ensuring food security.",
+        "source": "研究人员发现，通过CRISPR-Cas9基因编辑技术对水稻基因组进行精确修改，可以显著提高水稻的抗旱性能和产量，为保障粮食安全提供了新思路。",
+        "latency_ms": 23927.8,
+        "input_tokens": 60,
+        "output_tokens": 1024,
+        "error": null
+      },
+      {
+        "sample_id": "t05",
+        "domain": "poetry",
+        "direction": "zh→en",
+        "translation": "",
+        "reference": "The moon sets, crows cry in the frosty sky; by the river, maples and fishing lights face my sleepless sorrow. Outside Suzhou city, from Cold Mountain Temple, the midnight bell reaches the traveler's boat.",
+        "source": "月落乌啼霜满天，江枫渔火对愁眠。姑苏城外寒山寺，夜半钟声到客船。",
+        "latency_ms": 20489.6,
+        "input_tokens": 53,
+        "output_tokens": 1024,
+        "error": null
+      },
+      {
+        "sample_id": "t06",
+        "domain": "culture",
+        "direction": "zh→en",
+        "translation": "This ancient town preserves the architectural style of the Ming and Qing dynasties, with gray bricks, dark tiles, small bridges, and flowing water, everywhere revealing the charm of a Jiangnan water town, attracting millions of tourists to visit each year.",
+        "reference": "This ancient town has preserved the architectural style of the Ming and Qing dynasties, with gray bricks and dark tiles, small bridges over flowing water, exuding the charm of a Jiangnan water town everywhere, attracting millions of tourists every year.",
+        "source": "这座古镇保留了明清时期的建筑风格，青砖黛瓦、小桥流水，处处透露着江南水乡的韵味，每年吸引数百万游客前来观光。",
+        "latency_ms": 7929.0,
+        "input_tokens": 56,
+        "output_tokens": 246,
+        "error": null
+      }
+    ],
+    "Doubao-Seed-1.8": [
+      {
+        "sample_id": "t01",
+        "domain": "news",
+        "direction": "zh→en",
+        "translation": "Xi Jinping, President of the People's Republic of China, delivered a speech at the G20 Leaders' Summit, calling on all countries to work together to address global challenges and promote the building of a community with a shared future for mankind.",
+        "reference": "Chinese President Xi Jinping delivered a speech at the G20 Leaders' Summit, calling on all countries to join hands in addressing global challenges and promoting the building of a community with a shared future for mankind.",
+        "source": "中国国家主席习近平在二十国集团领导人峰会上发表讲话，呼吁各国携手应对全球性挑战，推动构建人类命运共同体。",
+        "latency_ms": 1932.5,
+        "input_tokens": 88,
+        "output_tokens": 50,
+        "error": null
+      },
+      {
+        "sample_id": "t02",
+        "domain": "economics",
+        "direction": "zh→en",
+        "translation": "According to data from the National Bureau of Statistics, China's gross domestic product (GDP) grew by 4.9% year-on-year in the third quarter of this year, exceeding market expectations and indicating a sustained recovery and positive momentum of the Chinese economy.",
+        "reference": "According to data from the National Bureau of Statistics, GDP grew by 4.9% year-on-year in the third quarter of this year, exceeding market expectations and demonstrating China's economy continues its trend of recovery and improvement.",
+        "source": "据国家统计局数据显示，今年第三季度国内生产总值同比增长4.9%，超出市场预期，显示出中国经济持续恢复向好的态势。",
+        "latency_ms": 2039.1,
+        "input_tokens": 93,
+        "output_tokens": 52,
+        "error": null
+      },
+      {
+        "sample_id": "t03",
+        "domain": "technology",
+        "direction": "zh→en",
+        "translation": "Quantum computing leverages the superposition and entanglement states of qubits for information processing. Theoretically, it can achieve exponential speedup in certain specific problems, thereby solving complex issues that traditional computers are incapable of handling.",
+        "reference": "Quantum computing utilizes the superposition and entanglement states of qubits for information processing, and can theoretically achieve exponential speedup on certain specific problems, thereby solving complex problems that traditional computers cannot handle.",
+        "source": "量子计算利用量子比特的叠加态和纠缠态进行信息处理，理论上能够在某些特定问题上实现指数级的加速，从而解决传统计算机无法处理的复杂问题。",
+        "latency_ms": 2068.7,
+        "input_tokens": 100,
+        "output_tokens": 43,
+        "error": null
+      },
+      {
+        "sample_id": "t04",
+        "domain": "science",
+        "direction": "zh→en",
+        "translation": "Researchers have found that precise modifications to the rice genome using the CRISPR-Cas9 gene-editing technology can significantly enhance rice's drought resistance and yield, providing a new approach to ensuring food security.",
+        "reference": "Researchers have found that making precise modifications to the rice genome through CRISPR-Cas9 gene editing technology can significantly improve drought resistance and yield of rice, providing new approaches to ensuring food security.",
+        "source": "研究人员发现，通过CRISPR-Cas9基因编辑技术对水稻基因组进行精确修改，可以显著提高水稻的抗旱性能和产量，为保障粮食安全提供了新思路。",
+        "latency_ms": 1978.1,
+        "input_tokens": 99,
+        "output_tokens": 41,
+        "error": null
+      },
+      {
+        "sample_id": "t05",
+        "domain": "poetry",
+        "direction": "zh→en",
+        "translation": "The moon goes down, crows caw, frost fills the sky;\nMaples by the river, fishing lamps face my sleepless grief.\nOutside Gusu City, the Cold Mountain Temple;\nMidnight bell tones reach the traveler's boat.",
+        "reference": "The moon sets, crows cry in the frosty sky; by the river, maples and fishing lights face my sleepless sorrow. Outside Suzhou city, from Cold Mountain Temple, the midnight bell reaches the traveler's boat.",
+        "source": "月落乌啼霜满天，江枫渔火对愁眠。姑苏城外寒山寺，夜半钟声到客船。",
+        "latency_ms": 2662.2,
+        "input_tokens": 87,
+        "output_tokens": 52,
+        "error": null
+      },
+      {
+        "sample_id": "t06",
+        "domain": "culture",
+        "direction": "zh→en",
+        "translation": "This ancient town has preserved the architectural style of the Ming and Qing dynasties. With grey bricks, black tiles, small bridges and flowing water, it exudes the charm of a water town in the Jiangnan region everywhere, attracting millions of tourists every year for sightseeing.",
+        "reference": "This ancient town has preserved the architectural style of the Ming and Qing dynasties, with gray bricks and dark tiles, small bridges over flowing water, exuding the charm of a Jiangnan water town everywhere, attracting millions of tourists every year.",
+        "source": "这座古镇保留了明清时期的建筑风格，青砖黛瓦、小桥流水，处处透露着江南水乡的韵味，每年吸引数百万游客前来观光。",
+        "latency_ms": 1878.6,
+        "input_tokens": 93,
+        "output_tokens": 54,
+        "error": null
+      }
+    ],
+    "deepseek-chat": [
+      {
+        "sample_id": "t01",
+        "domain": "news",
+        "direction": "zh→en",
+        "translation": "Chinese President Xi Jinping delivered a speech at the G20 Leaders' Summit, calling on countries to work together to address global challenges and promote the building of a community with a shared future for mankind.",
+        "reference": "Chinese President Xi Jinping delivered a speech at the G20 Leaders' Summit, calling on all countries to join hands in addressing global challenges and promoting the building of a community with a shared future for mankind.",
+        "source": "中国国家主席习近平在二十国集团领导人峰会上发表讲话，呼吁各国携手应对全球性挑战，推动构建人类命运共同体。",
+        "latency_ms": 1781.8,
+        "input_tokens": 48,
+        "output_tokens": 40,
+        "error": null
+      },
+      {
+        "sample_id": "t02",
+        "domain": "economics",
+        "direction": "zh→en",
+        "translation": "According to data from the National Bureau of Statistics, China's gross domestic product grew by 4.9% year-on-year in the third quarter of this year, exceeding market expectations and indicating a sustained and positive trend of economic recovery.",
+        "reference": "According to data from the National Bureau of Statistics, GDP grew by 4.9% year-on-year in the third quarter of this year, exceeding market expectations and demonstrating China's economy continues its trend of recovery and improvement.",
+        "source": "据国家统计局数据显示，今年第三季度国内生产总值同比增长4.9%，超出市场预期，显示出中国经济持续恢复向好的态势。",
+        "latency_ms": 2134.9,
+        "input_tokens": 47,
+        "output_tokens": 47,
+        "error": null
+      },
+      {
+        "sample_id": "t03",
+        "domain": "technology",
+        "direction": "zh→en",
+        "translation": "Quantum computing utilizes the superposition and entanglement states of qubits for information processing, theoretically enabling exponential speedup on certain specific problems, thereby solving complex issues that traditional computers cannot handle.",
+        "reference": "Quantum computing utilizes the superposition and entanglement states of qubits for information processing, and can theoretically achieve exponential speedup on certain specific problems, thereby solving complex problems that traditional computers cannot handle.",
+        "source": "量子计算利用量子比特的叠加态和纠缠态进行信息处理，理论上能够在某些特定问题上实现指数级的加速，从而解决传统计算机无法处理的复杂问题。",
+        "latency_ms": 1729.4,
+        "input_tokens": 54,
+        "output_tokens": 35,
+        "error": null
+      },
+      {
+        "sample_id": "t04",
+        "domain": "science",
+        "direction": "zh→en",
+        "translation": "Researchers have found that precise modifications to the rice genome using CRISPR-Cas9 gene-editing technology can significantly enhance the drought resistance and yield of rice, offering new approaches to ensuring food security.",
+        "reference": "Researchers have found that making precise modifications to the rice genome through CRISPR-Cas9 gene editing technology can significantly improve drought resistance and yield of rice, providing new approaches to ensuring food security.",
+        "source": "研究人员发现，通过CRISPR-Cas9基因编辑技术对水稻基因组进行精确修改，可以显著提高水稻的抗旱性能和产量，为保障粮食安全提供了新思路。",
+        "latency_ms": 2071.9,
+        "input_tokens": 56,
+        "output_tokens": 38,
+        "error": null
+      },
+      {
+        "sample_id": "t05",
+        "domain": "poetry",
+        "direction": "zh→en",
+        "translation": "The moon is setting, crows caw, and frost fills the sky; River maples, fishing lamps, and troubled sleep lie against the night. Beyond the walls of Suzhou, from the Cold Mountain Temple, The midnight bell rings, reaching the traveler's boat.",
+        "reference": "The moon sets, crows cry in the frosty sky; by the river, maples and fishing lights face my sleepless sorrow. Outside Suzhou city, from Cold Mountain Temple, the midnight bell reaches the traveler's boat.",
+        "source": "月落乌啼霜满天，江枫渔火对愁眠。姑苏城外寒山寺，夜半钟声到客船。",
+        "latency_ms": 2299.7,
+        "input_tokens": 50,
+        "output_tokens": 55,
+        "error": null
+      },
+      {
+        "sample_id": "t06",
+        "domain": "culture",
+        "direction": "zh→en",
+        "translation": "This ancient town preserves the architectural style of the Ming and Qing dynasties, with its blue bricks, dark tiles, small bridges, and flowing water, exuding the charm of a Jiangnan water town at every turn, attracting millions of tourists each year for sightseeing.",
+        "reference": "This ancient town has preserved the architectural style of the Ming and Qing dynasties, with gray bricks and dark tiles, small bridges over flowing water, exuding the charm of a Jiangnan water town everywhere, attracting millions of tourists every year.",
+        "source": "这座古镇保留了明清时期的建筑风格，青砖黛瓦、小桥流水，处处透露着江南水乡的韵味，每年吸引数百万游客前来观光。",
+        "latency_ms": 2180.6,
+        "input_tokens": 53,
+        "output_tokens": 54,
+        "error": null
+      }
+    ],
+    "kimi-k2.5": [
+      {
+        "sample_id": "t01",
+        "domain": "news",
+        "direction": "zh→en",
+        "translation": "Chinese President Xi Jinping delivered a speech at the G20 Leaders' Summit, calling on countries to join hands in addressing global challenges and promoting the building of a community with a shared future for mankind.",
+        "reference": "Chinese President Xi Jinping delivered a speech at the G20 Leaders' Summit, calling on all countries to join hands in addressing global challenges and promoting the building of a community with a shared future for mankind.",
+        "source": "中国国家主席习近平在二十国集团领导人峰会上发表讲话，呼吁各国携手应对全球性挑战，推动构建人类命运共同体。",
+        "latency_ms": 18677.8,
+        "input_tokens": 46,
+        "output_tokens": 748,
+        "error": null
+      },
+      {
+        "sample_id": "t02",
+        "domain": "economics",
+        "direction": "zh→en",
+        "translation": "According to data from the National Bureau of Statistics, China's GDP grew 4.9% year-on-year in the third quarter of this year, exceeding market expectations and showing that the Chinese economy continues to recover and improve.",
+        "reference": "According to data from the National Bureau of Statistics, GDP grew by 4.9% year-on-year in the third quarter of this year, exceeding market expectations and demonstrating China's economy continues its trend of recovery and improvement.",
+        "source": "据国家统计局数据显示，今年第三季度国内生产总值同比增长4.9%，超出市场预期，显示出中国经济持续恢复向好的态势。",
+        "latency_ms": 26240.9,
+        "input_tokens": 45,
+        "output_tokens": 925,
+        "error": null
+      },
+      {
+        "sample_id": "t03",
+        "domain": "technology",
+        "direction": "zh→en",
+        "translation": "",
+        "reference": "Quantum computing utilizes the superposition and entanglement states of qubits for information processing, and can theoretically achieve exponential speedup on certain specific problems, thereby solving complex problems that traditional computers cannot handle.",
+        "source": "量子计算利用量子比特的叠加态和纠缠态进行信息处理，理论上能够在某些特定问题上实现指数级的加速，从而解决传统计算机无法处理的复杂问题。",
+        "latency_ms": 29559.5,
+        "input_tokens": 57,
+        "output_tokens": 1024,
+        "error": null
+      },
+      {
+        "sample_id": "t04",
+        "domain": "science",
+        "direction": "zh→en",
+        "translation": "Researchers have found that precise modifications to the rice genome using CRISPR-Cas9 gene editing technology can significantly enhance drought resistance and yield, providing new approaches for ensuring food security.",
+        "reference": "Researchers have found that making precise modifications to the rice genome through CRISPR-Cas9 gene editing technology can significantly improve drought resistance and yield of rice, providing new approaches to ensuring food security.",
+        "source": "研究人员发现，通过CRISPR-Cas9基因编辑技术对水稻基因组进行精确修改，可以显著提高水稻的抗旱性能和产量，为保障粮食安全提供了新思路。",
+        "latency_ms": 29946.7,
+        "input_tokens": 58,
+        "output_tokens": 885,
+        "error": null
+      },
+      {
+        "sample_id": "t05",
+        "domain": "poetry",
+        "direction": "zh→en",
+        "translation": "",
+        "reference": "The moon sets, crows cry in the frosty sky; by the river, maples and fishing lights face my sleepless sorrow. Outside Suzhou city, from Cold Mountain Temple, the midnight bell reaches the traveler's boat.",
+        "source": "月落乌啼霜满天，江枫渔火对愁眠。姑苏城外寒山寺，夜半钟声到客船。",
+        "latency_ms": 33290.4,
+        "input_tokens": 49,
+        "output_tokens": 1024,
+        "error": null
+      },
+      {
+        "sample_id": "t06",
+        "domain": "culture",
+        "direction": "zh→en",
+        "translation": "This ancient town preserves the architectural style of the Ming and Qing dynasties, featuring blue bricks, black tiles, small bridges, and flowing water, exuding the charm of Jiangnan water towns everywhere, attracting millions of tourists to visit annually.",
+        "reference": "This ancient town has preserved the architectural style of the Ming and Qing dynasties, with gray bricks and dark tiles, small bridges over flowing water, exuding the charm of a Jiangnan water town everywhere, attracting millions of tourists every year.",
+        "source": "这座古镇保留了明清时期的建筑风格，青砖黛瓦、小桥流水，处处透露着江南水乡的韵味，每年吸引数百万游客前来观光。",
+        "latency_ms": 3831.8,
+        "input_tokens": 49,
+        "output_tokens": 100,
+        "error": null
+      }
+    ],
+    "gpt-4.1-mini": [
+      {
+        "sample_id": "t01",
+        "domain": "news",
+        "direction": "zh→en",
+        "translation": "Chinese President Xi Jinping delivered a speech at the G20 Leaders' Summit, calling on all countries to work together to address global challenges and promote the building of a community with a shared future for mankind.",
+        "reference": "Chinese President Xi Jinping delivered a speech at the G20 Leaders' Summit, calling on all countries to join hands in addressing global challenges and promoting the building of a community with a shared future for mankind.",
+        "source": "中国国家主席习近平在二十国集团领导人峰会上发表讲话，呼吁各国携手应对全球性挑战，推动构建人类命运共同体。",
+        "latency_ms": 1961.4,
+        "input_tokens": 62,
+        "output_tokens": 41,
+        "error": null
+      },
+      {
+        "sample_id": "t02",
+        "domain": "economics",
+        "direction": "zh→en",
+        "translation": "According to data from the National Bureau of Statistics, the GDP in the third quarter of this year grew by 4.9% year-on-year, exceeding market expectations and showing a continued positive trend in China's economic recovery.",
+        "reference": "According to data from the National Bureau of Statistics, GDP grew by 4.9% year-on-year in the third quarter of this year, exceeding market expectations and demonstrating China's economy continues its trend of recovery and improvement.",
+        "source": "据国家统计局数据显示，今年第三季度国内生产总值同比增长4.9%，超出市场预期，显示出中国经济持续恢复向好的态势。",
+        "latency_ms": 2385.8,
+        "input_tokens": 58,
+        "output_tokens": 45,
+        "error": null
+      },
+      {
+        "sample_id": "t03",
+        "domain": "technology",
+        "direction": "zh→en",
+        "translation": "Quantum computing uses the superposition and entanglement states of qubits for information processing, and in theory, it can achieve exponential speedup in certain specific problems, thereby solving complex problems that traditional computers cannot handle.",
+        "reference": "Quantum computing utilizes the superposition and entanglement states of qubits for information processing, and can theoretically achieve exponential speedup on certain specific problems, thereby solving complex problems that traditional computers cannot handle.",
+        "source": "量子计算利用量子比特的叠加态和纠缠态进行信息处理，理论上能够在某些特定问题上实现指数级的加速，从而解决传统计算机无法处理的复杂问题。",
+        "latency_ms": 2069.3,
+        "input_tokens": 73,
+        "output_tokens": 44,
+        "error": null
+      },
+      {
+        "sample_id": "t04",
+        "domain": "science",
+        "direction": "zh→en",
+        "translation": "Researchers have found that precise modification of the rice genome using CRISPR-Cas9 gene editing technology can significantly improve rice drought resistance and yield, providing a new approach to ensuring food security.",
+        "reference": "Researchers have found that making precise modifications to the rice genome through CRISPR-Cas9 gene editing technology can significantly improve drought resistance and yield of rice, providing new approaches to ensuring food security.",
+        "source": "研究人员发现，通过CRISPR-Cas9基因编辑技术对水稻基因组进行精确修改，可以显著提高水稻的抗旱性能和产量，为保障粮食安全提供了新思路。",
+        "latency_ms": 2006.7,
+        "input_tokens": 74,
+        "output_tokens": 39,
+        "error": null
+      },
+      {
+        "sample_id": "t05",
+        "domain": "poetry",
+        "direction": "zh→en",
+        "translation": "The moon sets, crows cry, frost fills the sky;  \nBy the river maples and fishing lights, I sorrowfully lie.  \nOutside Gusu City stands Cold Mountain Temple;  \nAt midnight, its bell reaches the traveler’s boat.",
+        "reference": "The moon sets, crows cry in the frosty sky; by the river, maples and fishing lights face my sleepless sorrow. Outside Suzhou city, from Cold Mountain Temple, the midnight bell reaches the traveler's boat.",
+        "source": "月落乌啼霜满天，江枫渔火对愁眠。姑苏城外寒山寺，夜半钟声到客船。",
+        "latency_ms": 1153.2,
+        "input_tokens": 60,
+        "output_tokens": 51,
+        "error": null
+      },
+      {
+        "sample_id": "t06",
+        "domain": "culture",
+        "direction": "zh→en",
+        "translation": "This ancient town preserves the architectural style of the Ming and Qing dynasties, with blue bricks and black tiles, small bridges and flowing water, exuding the charm of the Jiangnan water towns everywhere, attracting millions of tourists every year.",
+        "reference": "This ancient town has preserved the architectural style of the Ming and Qing dynasties, with gray bricks and dark tiles, small bridges over flowing water, exuding the charm of a Jiangnan water town everywhere, attracting millions of tourists every year.",
+        "source": "这座古镇保留了明清时期的建筑风格，青砖黛瓦、小桥流水，处处透露着江南水乡的韵味，每年吸引数百万游客前来观光。",
+        "latency_ms": 1450.1,
+        "input_tokens": 71,
+        "output_tokens": 49,
+        "error": null
+      }
+    ],
+    "glm-4.7": [
+      {
+        "sample_id": "t01",
+        "domain": "news",
+        "direction": "zh→en",
+        "translation": "Chinese President Xi Jinping delivered a speech at the G20 Leaders' Summit, calling on countries to join hands to address global challenges and promote the building of a community with a shared future for mankind.",
+        "reference": "Chinese President Xi Jinping delivered a speech at the G20 Leaders' Summit, calling on all countries to join hands in addressing global challenges and promoting the building of a community with a shared future for mankind.",
+        "source": "中国国家主席习近平在二十国集团领导人峰会上发表讲话，呼吁各国携手应对全球性挑战，推动构建人类命运共同体。",
+        "latency_ms": 6234.7,
+        "input_tokens": 48,
+        "output_tokens": 746,
+        "error": null
+      },
+      {
+        "sample_id": "t02",
+        "domain": "economics",
+        "direction": "zh→en",
+        "translation": "According to data from the National Bureau of Statistics, China's GDP grew by 4.9% year-on-year in the third quarter of this year, exceeding market expectations and indicating a sustained momentum of recovery and improvement in the Chinese economy.",
+        "reference": "According to data from the National Bureau of Statistics, GDP grew by 4.9% year-on-year in the third quarter of this year, exceeding market expectations and demonstrating China's economy continues its trend of recovery and improvement.",
+        "source": "据国家统计局数据显示，今年第三季度国内生产总值同比增长4.9%，超出市场预期，显示出中国经济持续恢复向好的态势。",
+        "latency_ms": 11006.2,
+        "input_tokens": 47,
+        "output_tokens": 974,
+        "error": null
+      },
+      {
+        "sample_id": "t03",
+        "domain": "technology",
+        "direction": "zh→en",
+        "translation": "",
+        "reference": "Quantum computing utilizes the superposition and entanglement states of qubits for information processing, and can theoretically achieve exponential speedup on certain specific problems, thereby solving complex problems that traditional computers cannot handle.",
+        "source": "量子计算利用量子比特的叠加态和纠缠态进行信息处理，理论上能够在某些特定问题上实现指数级的加速，从而解决传统计算机无法处理的复杂问题。",
+        "latency_ms": 6630.8,
+        "input_tokens": 55,
+        "output_tokens": 1024,
+        "error": null
+      },
+      {
+        "sample_id": "t04",
+        "domain": "science",
+        "direction": "zh→en",
+        "translation": "",
+        "reference": "Researchers have found that making precise modifications to the rice genome through CRISPR-Cas9 gene editing technology can significantly improve drought resistance and yield of rice, providing new approaches to ensuring food security.",
+        "source": "研究人员发现，通过CRISPR-Cas9基因编辑技术对水稻基因组进行精确修改，可以显著提高水稻的抗旱性能和产量，为保障粮食安全提供了新思路。",
+        "latency_ms": 9745.4,
+        "input_tokens": 59,
+        "output_tokens": 1024,
+        "error": null
+      },
+      {
+        "sample_id": "t05",
+        "domain": "poetry",
+        "direction": "zh→en",
+        "translation": "",
+        "reference": "The moon sets, crows cry in the frosty sky; by the river, maples and fishing lights face my sleepless sorrow. Outside Suzhou city, from Cold Mountain Temple, the midnight bell reaches the traveler's boat.",
+        "source": "月落乌啼霜满天，江枫渔火对愁眠。姑苏城外寒山寺，夜半钟声到客船。",
+        "latency_ms": 9531.7,
+        "input_tokens": 52,
+        "output_tokens": 1024,
+        "error": null
+      },
+      {
+        "sample_id": "t06",
+        "domain": "culture",
+        "direction": "zh→en",
+        "translation": "",
+        "reference": "This ancient town has preserved the architectural style of the Ming and Qing dynasties, with gray bricks and dark tiles, small bridges over flowing water, exuding the charm of a Jiangnan water town everywhere, attracting millions of tourists every year.",
+        "source": "这座古镇保留了明清时期的建筑风格，青砖黛瓦、小桥流水，处处透露着江南水乡的韵味，每年吸引数百万游客前来观光。",
+        "latency_ms": 9740.1,
+        "input_tokens": 55,
+        "output_tokens": 1024,
+        "error": null
+      }
+    ]
+  },
+  "vision_raw": {
+    "glm-4-flash": [],
+    "Doubao-1.5-lite-32k": [],
+    "Doubao-Seed-1.6-flash": [
+      {
+        "sample_idx": 0,
+        "prediction": "-\\div\\left(y^{1 - 2m}\\nabla u\\right)=0\\text{in}\\mathbb{R}^n\\times\\mathbb{R}_{+};\\left.u\\right|_{y = 0}=\\left|u\\right|",
+        "ground_truth": "-\\div (y^{1-2m}\\nabla w)=0\\mbox{in}\\mathbb R^n\\times\\mathbb R_+;w\\big|_{y=0}=|u|",
+        "latency_ms": 692.8,
+        "input_tokens": 82,
+        "output_tokens": 49,
+        "error": null
+      },
+      {
+        "sample_idx": 1,
+        "prediction": "\\frac{d \\vec{X}}{d t}=\\vec{\\Im}(\\vec{X})",
+        "ground_truth": "\\frac{{\\rm d}\\vec{X}}{{\\rm d}t} = \\vec{\\Im} \\left( \\displaystyle \\vec{X} \\right)",
+        "latency_ms": 749.7,
+        "input_tokens": 80,
+        "output_tokens": 19,
+        "error": null
+      },
+      {
+        "sample_idx": 2,
+        "prediction": "L_{X} \\phi(\\bar{X})=\\operatorname{Tr}[L \\rho(\\bar{X})+P(\\vec{\\nabla} \\cdot \\vec{\\gamma})]",
+        "ground_truth": "L_{\\vec{X}} \\phi (\\vec{X}) = \\mbox{Tr}[J] \\phi (\\vec{X}) + P (\\vec{V} \\cdot \\vec{\\gamma})",
+        "latency_ms": 721.8,
+        "input_tokens": 75,
+        "output_tokens": 40,
+        "error": null
+      },
+      {
+        "sample_idx": 3,
+        "prediction": "z_{k}=\\left(z_{1, k}, z_{2, k}\\right) \\in Z, \\quad k=1, \\ldots, K",
+        "ground_truth": "z_k = (z_{1,k}, z_{2,k})\\in Z, \\ \\ \\ \\ k=1,..., K,",
+        "latency_ms": 877.5,
+        "input_tokens": 77,
+        "output_tokens": 35,
+        "error": null
+      },
+      {
+        "sample_idx": 4,
+        "prediction": "(\\mu_{\\bullet}\\cdot\\Phi)(A,U)=\\int_{P}(\\mu_{\\bullet}\\cdot\\Phi)(A\\cap\\varphi_{P}(X),U\\cap\\varphi_{P}(X))dp",
+        "ground_truth": "(\\nu_\\mu\\cdot \\Phi)(A,U) = \\int_P (\\mu\\cdot \\Phi)(A\\cap \\varphi_p(X), U\\cap \\varphi_p(X)) \\, dp",
+        "latency_ms": 716.0,
+        "input_tokens": 88,
+        "output_tokens": 47,
+        "error": null
+      }
+    ],
+    "gpt-4.1-nano": [
+      {
+        "sample_idx": 0,
+        "prediction": "- \\frac{\\partial}{\\partial t} \\left( y^{1 - 2m} \\nabla w \\right) = 0 \\quad \\text{in} \\quad \\mathbb{R}^n \\times \\mathbb{R}^+ ; \\quad w|_{y=0} = |u| \\]",
+        "ground_truth": "-\\div (y^{1-2m}\\nabla w)=0\\mbox{in}\\mathbb R^n\\times\\mathbb R_+;w\\big|_{y=0}=|u|",
+        "latency_ms": 2061.4,
+        "input_tokens": 120,
+        "output_tokens": 75,
+        "error": null
+      },
+      {
+        "sample_idx": 1,
+        "prediction": "\\frac{d \\vec{x}}{dt} = \\nabla \\left( \\vec{X} \\right)",
+        "ground_truth": "\\frac{{\\rm d}\\vec{X}}{{\\rm d}t} = \\vec{\\Im} \\left( \\displaystyle \\vec{X} \\right)",
+        "latency_ms": 936.0,
+        "input_tokens": 102,
+        "output_tokens": 27,
+        "error": null
+      },
+      {
+        "sample_idx": 2,
+        "prediction": "L_{X} \\phi (\\mathbf{X}) = \\operatorname{Tr} \\left[ J \\left[ \\phi (\\mathbf{X}) \\right] \\right] + P \\left( \\nabla \\cdot \\boldsymbol{\\gamma} \\right)",
+        "ground_truth": "L_{\\vec{X}} \\phi (\\vec{X}) = \\mbox{Tr}[J] \\phi (\\vec{X}) + P (\\vec{V} \\cdot \\vec{\\gamma})",
+        "latency_ms": 2663.6,
+        "input_tokens": 105,
+        "output_tokens": 59,
+        "error": null
+      },
+      {
+        "sample_idx": 3,
+        "prediction": "z_{k} = (z_{1,k}, z_{2,k}) \\in \\mathbb{Z}, \\quad k = 1, \\ldots, K,",
+        "ground_truth": "z_k = (z_{1,k}, z_{2,k})\\in Z, \\ \\ \\ \\ k=1,..., K,",
+        "latency_ms": 1123.6,
+        "input_tokens": 110,
+        "output_tokens": 38,
+        "error": null
+      },
+      {
+        "sample_idx": 4,
+        "prediction": "(\\nu_\\mu \\cdot \\Phi)(A,U) = \\int_{P} (\\mu \\cdot \\Phi)(A \\cap \\varphi_\\rho(X), U \\cap \\varphi_\\rho(X)) \\, dp",
+        "ground_truth": "(\\nu_\\mu\\cdot \\Phi)(A,U) = \\int_P (\\mu\\cdot \\Phi)(A\\cap \\varphi_p(X), U\\cap \\varphi_p(X)) \\, dp",
+        "latency_ms": 1381.1,
+        "input_tokens": 129,
+        "output_tokens": 51,
+        "error": null
+      }
+    ],
+    "glm-4.6v": [
+      {
+        "sample_idx": 0,
+        "prediction": "",
+        "ground_truth": "-\\div (y^{1-2m}\\nabla w)=0\\mbox{in}\\mathbb R^n\\times\\mathbb R_+;w\\big|_{y=0}=|u|",
+        "latency_ms": 13743.8,
+        "input_tokens": 85,
+        "output_tokens": 512,
+        "error": null
+      },
+      {
+        "sample_idx": 1,
+        "prediction": "\\frac{d\\vec{X}}{dt} = \\vec{3}\\left( \\vec{X} \\right)",
+        "ground_truth": "\\frac{{\\rm d}\\vec{X}}{{\\rm d}t} = \\vec{\\Im} \\left( \\displaystyle \\vec{X} \\right)",
+        "latency_ms": 4763.5,
+        "input_tokens": 85,
+        "output_tokens": 163,
+        "error": null
+      },
+      {
+        "sample_idx": 2,
+        "prediction": "\\( L_X \\phi(\\vec{X}) = \\operatorname{Tr}[J] \\phi(\\vec{X}) + P(\\vec{V} \\cdot \\vec{\\gamma}) \\)",
+        "ground_truth": "L_{\\vec{X}} \\phi (\\vec{X}) = \\mbox{Tr}[J] \\phi (\\vec{X}) + P (\\vec{V} \\cdot \\vec{\\gamma})",
+        "latency_ms": 8859.9,
+        "input_tokens": 83,
+        "output_tokens": 288,
+        "error": null
+      },
+      {
+        "sample_idx": 3,
+        "prediction": "z_k = (z_{1k}, z_{2k}) \\in Z, \\quad k = 1, \\ldots, K,",
+        "ground_truth": "z_k = (z_{1,k}, z_{2,k})\\in Z, \\ \\ \\ \\ k=1,..., K,",
+        "latency_ms": 8582.0,
+        "input_tokens": 83,
+        "output_tokens": 243,
+        "error": null
+      },
+      {
+        "sample_idx": 4,
+        "prediction": "(ν_μ \\cdot Φ)(A, U) = \\int_P (μ \\cdot Φ)(A \\cap φ_p(X), U \\cap φ_p(X)) \\, dp",
+        "ground_truth": "(\\nu_\\mu\\cdot \\Phi)(A,U) = \\int_P (\\mu\\cdot \\Phi)(A\\cap \\varphi_p(X), U\\cap \\varphi_p(X)) \\, dp",
+        "latency_ms": 13453.4,
+        "input_tokens": 89,
+        "output_tokens": 478,
+        "error": null
+      }
+    ],
+    "Doubao-Seed-1.8": [
+      {
+        "sample_idx": 0,
+        "prediction": "- \\div (g^{1-2m}\\nabla u) = 0 \\text{in} \\mathbb{R}^n \\setminus \\mathbb{R}_+; u|_{y=0} = |u|",
+        "ground_truth": "-\\div (y^{1-2m}\\nabla w)=0\\mbox{in}\\mathbb R^n\\times\\mathbb R_+;w\\big|_{y=0}=|u|",
+        "latency_ms": 1898.9,
+        "input_tokens": 108,
+        "output_tokens": 47,
+        "error": null
+      },
+      {
+        "sample_idx": 1,
+        "prediction": "\\frac{d\\vec{X}}{dt} = \\mathfrak{S}(\\vec{X})",
+        "ground_truth": "\\frac{{\\rm d}\\vec{X}}{{\\rm d}t} = \\vec{\\Im} \\left( \\displaystyle \\vec{X} \\right)",
+        "latency_ms": 1420.1,
+        "input_tokens": 106,
+        "output_tokens": 20,
+        "error": null
+      },
+      {
+        "sample_idx": 2,
+        "prediction": "L_{\\vec{\\varphi}}(\\vec{X})=\\operatorname{Tr}\\left[J_{\\vec{\\varphi}}(\\vec{X})+P(\\vec{V} \\cdot \\vec{\\gamma})\\right]",
+        "ground_truth": "L_{\\vec{X}} \\phi (\\vec{X}) = \\mbox{Tr}[J] \\phi (\\vec{X}) + P (\\vec{V} \\cdot \\vec{\\gamma})",
+        "latency_ms": 2518.2,
+        "input_tokens": 106,
+        "output_tokens": 47,
+        "error": null
+      },
+      {
+        "sample_idx": 3,
+        "prediction": "z_{k} = (z_{1k}, z_{2k}) \\in \\mathbb{Z}, \\quad k = 1, \\dots, K,",
+        "ground_truth": "z_k = (z_{1,k}, z_{2,k})\\in Z, \\ \\ \\ \\ k=1,..., K,",
+        "latency_ms": 1712.1,
+        "input_tokens": 106,
+        "output_tokens": 35,
+        "error": null
+      },
+      {
+        "sample_idx": 4,
+        "prediction": "\\langle v_{\\mu}, \\Phi(A), U\\rangle=\\int_{P}(\\mu \\cdot \\Phi)(A \\cap \\varphi_{P}(X), U \\cap \\varphi_{P}(X)) d p",
+        "ground_truth": "(\\nu_\\mu\\cdot \\Phi)(A,U) = \\int_P (\\mu\\cdot \\Phi)(A\\cap \\varphi_p(X), U\\cap \\varphi_p(X)) \\, dp",
+        "latency_ms": 1856.4,
+        "input_tokens": 109,
+        "output_tokens": 46,
+        "error": null
+      }
+    ],
+    "deepseek-chat": [],
+    "kimi-k2.5": [
+      {
+        "sample_idx": 0,
+        "prediction": "",
+        "ground_truth": "-\\div (y^{1-2m}\\nabla w)=0\\mbox{in}\\mathbb R^n\\times\\mathbb R_+;w\\big|_{y=0}=|u|",
+        "latency_ms": 24695.1,
+        "input_tokens": 88,
+        "output_tokens": 512,
+        "error": null
+      },
+      {
+        "sample_idx": 1,
+        "prediction": "",
+        "ground_truth": "\\frac{{\\rm d}\\vec{X}}{{\\rm d}t} = \\vec{\\Im} \\left( \\displaystyle \\vec{X} \\right)",
+        "latency_ms": 27868.4,
+        "input_tokens": 88,
+        "output_tokens": 512,
+        "error": null
+      },
+      {
+        "sample_idx": 2,
+        "prediction": "",
+        "ground_truth": "L_{\\vec{X}} \\phi (\\vec{X}) = \\mbox{Tr}[J] \\phi (\\vec{X}) + P (\\vec{V} \\cdot \\vec{\\gamma})",
+        "latency_ms": 23512.9,
+        "input_tokens": 82,
+        "output_tokens": 512,
+        "error": null
+      },
+      {
+        "sample_idx": 3,
+        "prediction": "z_k = (z_{1,k}, z_{2,k}) \\in Z, \\quad k = 1, ..., K,",
+        "ground_truth": "z_k = (z_{1,k}, z_{2,k})\\in Z, \\ \\ \\ \\ k=1,..., K,",
+        "latency_ms": 15951.6,
+        "input_tokens": 84,
+        "output_tokens": 230,
+        "error": null
+      },
+      {
+        "sample_idx": 4,
+        "prediction": "",
+        "ground_truth": "(\\nu_\\mu\\cdot \\Phi)(A,U) = \\int_P (\\mu\\cdot \\Phi)(A\\cap \\varphi_p(X), U\\cap \\varphi_p(X)) \\, dp",
+        "latency_ms": 27675.8,
+        "input_tokens": 92,
+        "output_tokens": 512,
+        "error": null
+      }
+    ],
+    "gpt-4.1-mini": [
+      {
+        "sample_idx": 0,
+        "prediction": "\\div \\left(y^{1-2m} \\nabla w \\right) = 0 \\text{ in } \\mathbb{R}^n \\times \\mathbb{R}_+; \\quad w \\big|_{y=0} = |u|",
+        "ground_truth": "-\\div (y^{1-2m}\\nabla w)=0\\mbox{in}\\mathbb R^n\\times\\mathbb R_+;w\\big|_{y=0}=|u|",
+        "latency_ms": 2276.5,
+        "input_tokens": 101,
+        "output_tokens": 60,
+        "error": null
+      },
+      {
+        "sample_idx": 1,
+        "prediction": "\\frac{d\\vec{X}}{dt} = \\vec{\\Im}\\left(\\vec{X}\\right)",
+        "ground_truth": "\\frac{{\\rm d}\\vec{X}}{{\\rm d}t} = \\vec{\\Im} \\left( \\displaystyle \\vec{X} \\right)",
+        "latency_ms": 1985.1,
+        "input_tokens": 90,
+        "output_tokens": 27,
+        "error": null
+      },
+      {
+        "sample_idx": 2,
+        "prediction": "L_{\\vec{X}}\\phi(\\vec{X}) = \\mathrm{Tr}[J]\\phi(\\vec{X}) + P(\\vec{V} \\cdot \\vec{\\nabla})",
+        "ground_truth": "L_{\\vec{X}} \\phi (\\vec{X}) = \\mbox{Tr}[J] \\phi (\\vec{X}) + P (\\vec{V} \\cdot \\vec{\\gamma})",
+        "latency_ms": 1418.4,
+        "input_tokens": 91,
+        "output_tokens": 43,
+        "error": null
+      },
+      {
+        "sample_idx": 3,
+        "prediction": "z_k = (z_{1,k}, z_{2,k}) \\in Z, \\quad k=1, \\ldots, K,",
+        "ground_truth": "z_k = (z_{1,k}, z_{2,k})\\in Z, \\ \\ \\ \\ k=1,..., K,",
+        "latency_ms": 1886.9,
+        "input_tokens": 95,
+        "output_tokens": 31,
+        "error": null
+      },
+      {
+        "sample_idx": 4,
+        "prediction": "(\\nu_{\\mu} \\cdot \\Phi)(A,U) = \\int_{P} \\left( \\mu \\cdot \\Phi \\right)(A \\cap \\varphi_{p}(X), U \\cap \\varphi_{p}(X)) \\, dp",
+        "ground_truth": "(\\nu_\\mu\\cdot \\Phi)(A,U) = \\int_P (\\mu\\cdot \\Phi)(A\\cap \\varphi_p(X), U\\cap \\varphi_p(X)) \\, dp",
+        "latency_ms": 2396.5,
+        "input_tokens": 108,
+        "output_tokens": 59,
+        "error": null
+      }
+    ],
+    "glm-4.7": []
+  }
+}

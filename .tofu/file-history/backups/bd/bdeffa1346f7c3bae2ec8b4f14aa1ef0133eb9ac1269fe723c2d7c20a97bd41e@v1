@@ -1,0 +1,303 @@
+"""lib/llm_dispatch/health_local.py — Background health checker for local endpoints.
+
+Self-hosted vLLM / SGLang / Ollama boxes have no SLA — they restart, swap
+models, and die. This module runs a small background thread that, for every
+provider tagged as a local endpoint:
+
+  1. GETs ``{base_url}/models`` every ``HEALTH_INTERVAL`` seconds.
+  2. On failure → cools down all matching slots for ``COOLDOWN_ON_DEAD`` so
+     the dispatcher steers around the dead box without waiting for an
+     organic request to fail.
+  3. On success, if the provider's model list is empty (e.g. it was down
+     when the user added it) or the served model set has changed, re-runs
+     the discovery pass and patches ``server_config.json`` + the live slot
+     pool. Newly-served models therefore appear automatically.
+
+Cloud providers are NOT polled — that would waste quota and leak hosts.
+"""
+
+import os
+import threading
+import time
+
+import requests
+
+from lib.log import audit_log, get_logger
+from lib.proxy import proxies_for as _proxies_for
+
+from .discovery import discover_models, is_local_endpoint
+
+logger = get_logger(__name__)
+
+__all__ = [
+    'start_local_health_checker',
+    'check_once',
+]
+
+# Tuneable via env so deployments don't have to fork code to dial them in.
+HEALTH_INTERVAL = int(os.environ.get('TOFU_LOCAL_HEALTH_INTERVAL', '60'))
+PROBE_TIMEOUT = int(os.environ.get('TOFU_LOCAL_HEALTH_TIMEOUT', '4'))
+COOLDOWN_ON_DEAD = int(os.environ.get('TOFU_LOCAL_HEALTH_COOLDOWN', '60'))
+# How often (in successful health checks) we re-run full model discovery.
+RESYNC_EVERY = int(os.environ.get('TOFU_LOCAL_HEALTH_RESYNC', '10'))
+
+_thread = None
+_stop_event = threading.Event()
+# Per-provider counter so RESYNC_EVERY is provider-local, not global.
+_success_streak: dict[str, int] = {}
+
+
+def _provider_models_url(prov: dict) -> str:
+    base = (prov.get('base_url') or '').rstrip('/')
+    if not base:
+        return ''
+    return base + '/models'
+
+
+def _get_dispatcher():
+    """Return the live dispatcher singleton, or None if not yet built."""
+    try:
+        from lib.llm_dispatch.api import get_dispatcher
+        return get_dispatcher()
+    except Exception as e:
+        logger.debug('[HealthLocal] Dispatcher unavailable: %s', e)
+        return None
+
+
+def _cooldown_provider_slots(prov_id: str, seconds: int) -> int:
+    disp = _get_dispatcher()
+    if not disp:
+        return 0
+    deadline = time.time() + seconds
+    n = 0
+    for slot in list(disp.slots):
+        if slot.provider_id != prov_id:
+            continue
+        with slot._lock:
+            if slot.cooldown_until < deadline:
+                slot.cooldown_until = deadline
+                n += 1
+    return n
+
+
+def _clear_provider_cooldowns(prov_id: str) -> int:
+    disp = _get_dispatcher()
+    if not disp:
+        return 0
+    n = 0
+    now = time.time()
+    for slot in list(disp.slots):
+        if slot.provider_id != prov_id:
+            continue
+        with slot._lock:
+            if slot.cooldown_until > now:
+                slot.cooldown_until = 0.0
+                slot.consecutive_errors = 0
+                n += 1
+    return n
+
+
+def _persist_provider_models(prov_id: str, models: list[dict]) -> bool:
+    """Update server_config.json with refreshed model list for one provider."""
+    try:
+        import json as _json
+
+        from lib import _SERVER_CONFIG_PATH, _load_server_config
+
+        cfg = _load_server_config()
+        providers = cfg.get('providers') or []
+        for p in providers:
+            if p.get('id') == prov_id:
+                p['models'] = models
+                break
+        else:
+            return False
+        os.makedirs(os.path.dirname(_SERVER_CONFIG_PATH), exist_ok=True)
+        with open(_SERVER_CONFIG_PATH, 'w') as f:
+            _json.dump(cfg, f, indent=2, ensure_ascii=False)
+        return True
+    except Exception as e:
+        logger.warning('[HealthLocal] Failed to persist models for %s: %s',
+                       prov_id, e, exc_info=True)
+        return False
+
+
+def _rebuild_dispatcher_slots():
+    """Re-create the slot pool from the (now-updated) server_config.json.
+
+    Cheaper than restarting the process — slot stats reset, but for a
+    box that just came back up that's actually what we want.
+    """
+    disp = _get_dispatcher()
+    if not disp:
+        return
+    try:
+        with disp._lock:
+            disp.slots.clear()
+            disp._initialized = False
+        disp.initialize()
+        logger.info('[HealthLocal] Rebuilt dispatcher: %d slots', len(disp.slots))
+    except Exception as e:
+        logger.error('[HealthLocal] Slot rebuild failed: %s', e, exc_info=True)
+
+
+def _check_provider(prov: dict) -> dict:
+    """Return ``{ok, status, served_models}`` for one provider."""
+    url = _provider_models_url(prov)
+    if not url:
+        return {'ok': False, 'status': 'no-url'}
+
+    api_keys = prov.get('api_keys') or []
+    headers = {'User-Agent': 'Tofu/1.0'}
+    if api_keys:
+        headers['Authorization'] = 'Bearer %s' % api_keys[0]
+
+    try:
+        resp = requests.get(url, headers=headers, timeout=PROBE_TIMEOUT,
+                            proxies=_proxies_for(url))
+    except requests.Timeout:
+        return {'ok': False, 'status': 'timeout'}
+    except requests.RequestException as e:
+        return {'ok': False, 'status': 'unreachable: %s' % e}
+
+    if not resp.ok:
+        return {'ok': False, 'status': 'http-%d' % resp.status_code}
+
+    try:
+        data = resp.json()
+    except (ValueError, TypeError) as e:
+        return {'ok': False, 'status': 'bad-json: %s' % e}
+
+    served = []
+    for m in (data.get('data') or []):
+        mid = (m.get('id') or '').strip()
+        if mid:
+            served.append(mid)
+    return {'ok': True, 'status': 'ok', 'served_models': set(served)}
+
+
+def check_once() -> dict:
+    """Run one pass over all local providers. Returns a stats dict for testing."""
+    try:
+        from lib import _load_server_config
+    except Exception as e:
+        logger.debug('[HealthLocal] Cannot load server config: %s', e)
+        return {'providers': 0, 'ok': 0, 'cooldowns': 0, 'resynced': 0}
+
+    cfg = _load_server_config()
+    providers = cfg.get('providers') or []
+    locals_ = [p for p in providers
+               if p.get('enabled', True)
+               and (p.get('brand') == 'local' or is_local_endpoint(p.get('base_url') or ''))]
+
+    if not locals_:
+        return {'providers': 0, 'ok': 0, 'cooldowns': 0, 'resynced': 0}
+
+    n_ok = 0
+    n_cooldown = 0
+    n_resynced = 0
+    rebuilt = False
+
+    for prov in locals_:
+        prov_id = prov.get('id') or 'unknown'
+        result = _check_provider(prov)
+
+        if not result['ok']:
+            _success_streak[prov_id] = 0
+            cooled = _cooldown_provider_slots(prov_id, COOLDOWN_ON_DEAD)
+            if cooled:
+                n_cooldown += cooled
+                logger.warning('[HealthLocal] Provider %s %s — cooled %d slot(s)',
+                               prov_id, result['status'], cooled)
+                audit_log('local_endpoint_down', provider_id=prov_id,
+                          base_url=prov.get('base_url'), reason=result['status'])
+            continue
+
+        n_ok += 1
+        served = result['served_models']
+        configured_ids = {m.get('model_id') for m in (prov.get('models') or []) if m.get('model_id')}
+
+        # Recovered from a recent failure → clear stale cooldowns.
+        cleared = _clear_provider_cooldowns(prov_id)
+        if cleared:
+            logger.info('[HealthLocal] Provider %s recovered — cleared %d cooldown(s)',
+                        prov_id, cleared)
+            audit_log('local_endpoint_recovered', provider_id=prov_id,
+                      base_url=prov.get('base_url'))
+
+        streak = _success_streak.get(prov_id, 0) + 1
+        _success_streak[prov_id] = streak
+
+        # Trigger a full re-discovery when:
+        #   • the provider has zero models (was probably down at first add), OR
+        #   • the served-model set has drifted from configured, OR
+        #   • we hit the periodic resync threshold.
+        needs_resync = (
+            not configured_ids
+            or served != configured_ids
+            or (streak % RESYNC_EVERY == 0)
+        )
+        if not needs_resync:
+            continue
+
+        api_key = (prov.get('api_keys') or [''])[0]
+        try:
+            new_models = discover_models(prov.get('base_url') or '', api_key)
+        except Exception as e:
+            logger.warning('[HealthLocal] Discovery failed for %s: %s',
+                           prov_id, e, exc_info=True)
+            continue
+        if not new_models:
+            continue
+
+        new_ids = {m['model_id'] for m in new_models}
+        if new_ids == configured_ids:
+            continue
+
+        if _persist_provider_models(prov_id, new_models):
+            n_resynced += 1
+            rebuilt = True
+            added = sorted(new_ids - configured_ids)
+            removed = sorted(configured_ids - new_ids)
+            logger.info('[HealthLocal] Provider %s model list updated '
+                        '(+%d / -%d): added=%s removed=%s',
+                        prov_id, len(added), len(removed),
+                        added[:5], removed[:5])
+            audit_log('local_endpoint_models_updated', provider_id=prov_id,
+                      added=added, removed=removed)
+
+    if rebuilt:
+        _rebuild_dispatcher_slots()
+
+    return {
+        'providers': len(locals_),
+        'ok': n_ok,
+        'cooldowns': n_cooldown,
+        'resynced': n_resynced,
+    }
+
+
+def _loop():
+    logger.info('[HealthLocal] Worker started (interval=%ds, timeout=%ds)',
+                HEALTH_INTERVAL, PROBE_TIMEOUT)
+    # First pass — short delay so the dispatcher has time to finish booting.
+    if _stop_event.wait(5):
+        return
+    while not _stop_event.is_set():
+        try:
+            check_once()
+        except Exception as e:
+            logger.error('[HealthLocal] Cycle failed: %s', e, exc_info=True)
+        if _stop_event.wait(HEALTH_INTERVAL):
+            break
+    logger.info('[HealthLocal] Worker stopped')
+
+
+def start_local_health_checker():
+    """Idempotent: spawn the background health-check thread (no-op if running)."""
+    global _thread
+    if _thread is not None and _thread.is_alive():
+        return
+    _stop_event.clear()
+    _thread = threading.Thread(target=_loop, name='local-health', daemon=True)
+    _thread.start()

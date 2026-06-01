@@ -1,0 +1,169 @@
+"""Tests for the task budget grace-extension mechanism.
+
+Verifies three behaviors:
+
+1. **Pre-flight skip**: When the deadline is within _BUDGET_PREFLIGHT_MARGIN_S
+   before tool execution, tools are skipped and synthetic tool_results are
+   injected telling the model to wrap up.
+
+2. **run_command early kill**: When the task deadline is within _DEADLINE_GRACE_S,
+   the subprocess is killed early so the model can see partial output.
+
+3. **Grace extension on AbortedError**: When the budget deadline fires during
+   an LLM call but tools already ran, a one-time grace extension is granted.
+
+Run:  python tests/test_budget_grace.py
+"""
+from __future__ import annotations
+
+import os
+import sys
+import threading
+import time
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+def _make_task(deadline_offset_s: float = 300):
+    """Create a minimal task dict with a deadline."""
+    return {
+        'id': 'grace-test-12345678',
+        'convId': 'conv-test',
+        'aborted': False,
+        'content': '',
+        'thinking': '',
+        'error': None,
+        'events': [],
+        'events_lock': threading.Lock(),
+        'content_lock': threading.Lock(),
+        'retry_deadline_at': time.time() + deadline_offset_s,
+        '_premature_retry_count_phase': 0,
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Test 1: run_command deadline-aware early kill
+# ─────────────────────────────────────────────────────────────────────
+
+def test_run_command_kills_early_on_deadline():
+    """When task deadline is within _DEADLINE_GRACE_S, run_command should
+    kill the subprocess early and return a timeout result."""
+    from lib.project_mod.tools import _DEADLINE_GRACE_S
+
+    # Create a task with deadline that's already within grace period
+    task = _make_task(deadline_offset_s=_DEADLINE_GRACE_S - 5)
+
+    # Run a command that would normally take much longer
+    from lib.project_mod.tools import _run_command_simple
+    result = _run_command_simple(
+        'sleep 300', 'bash -c sleep 300',
+        timeout=None,  # no own timeout
+        base='/tmp',
+        task=task,
+        on_chunk=None,
+    )
+    assert '[Command timed out]' in result or 'timed out' in result.lower(), (
+        f'Expected timeout result but got: {result[:200]}')
+    print(f'  Killed early, result preview: {result[:100]}')
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Test 2: _DEADLINE_GRACE_S constant is reasonable
+# ─────────────────────────────────────────────────────────────────────
+
+def test_deadline_grace_constant():
+    """Verify the constant exists and is reasonable."""
+    from lib.project_mod.tools import _DEADLINE_GRACE_S
+    assert isinstance(_DEADLINE_GRACE_S, (int, float))
+    assert 30 <= _DEADLINE_GRACE_S <= 120, (
+        f'_DEADLINE_GRACE_S={_DEADLINE_GRACE_S} is outside reasonable range')
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Test 3: Budget preflight constants
+# ─────────────────────────────────────────────────────────────────────
+
+def test_budget_preflight_constants():
+    """Verify the orchestrator constants exist and are reasonable."""
+    # Can't import orchestrator directly (needs flask), so parse the source
+    import ast
+    with open('lib/tasks_pkg/orchestrator.py') as f:
+        src = f.read()
+    tree = ast.parse(src)
+
+    found = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id in (
+                    '_BUDGET_PREFLIGHT_MARGIN_S', '_BUDGET_GRACE_EXTENSION_S'
+                ):
+                    if isinstance(node.value, ast.Constant):
+                        found[target.id] = node.value.value
+
+    assert '_BUDGET_PREFLIGHT_MARGIN_S' in found, 'Missing preflight margin constant'
+    assert '_BUDGET_GRACE_EXTENSION_S' in found, 'Missing grace extension constant'
+    assert found['_BUDGET_PREFLIGHT_MARGIN_S'] >= 20, 'Preflight margin too small'
+    assert found['_BUDGET_GRACE_EXTENSION_S'] >= 60, 'Grace extension too small'
+    assert found['_BUDGET_GRACE_EXTENSION_S'] > found['_BUDGET_PREFLIGHT_MARGIN_S'], (
+        'Grace extension must be larger than preflight margin')
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Test 4: run_command does NOT kill early when deadline is far away
+# ─────────────────────────────────────────────────────────────────────
+
+def test_run_command_no_early_kill_when_budget_ok():
+    """When task deadline is far in the future, run_command should
+    complete normally (not trigger early kill)."""
+    task = _make_task(deadline_offset_s=3600)  # 1 hour away
+
+    from lib.project_mod.tools import _run_command_simple
+    result = _run_command_simple(
+        'echo hello', 'bash -c "echo hello"',
+        timeout=10,
+        base='/tmp',
+        task=task,
+        on_chunk=None,
+    )
+    assert 'hello' in result
+    assert '[Command timed out]' not in result
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Test 5: run_command with deadline disabled (0)
+# ─────────────────────────────────────────────────────────────────────
+
+def test_run_command_no_early_kill_when_deadline_disabled():
+    """When retry_deadline_at is 0 (disabled), no early kill."""
+    task = _make_task(deadline_offset_s=0)
+    task['retry_deadline_at'] = 0  # disabled
+
+    from lib.project_mod.tools import _run_command_simple
+    result = _run_command_simple(
+        'echo world', 'bash -c "echo world"',
+        timeout=10,
+        base='/tmp',
+        task=task,
+        on_chunk=None,
+    )
+    assert 'world' in result
+    assert '[Command timed out]' not in result
+
+
+if __name__ == '__main__':
+    import traceback
+    failed = 0
+    passed = 0
+    for name, fn in sorted(globals().items()):
+        if name.startswith('test_') and callable(fn):
+            try:
+                fn()
+                passed += 1
+                print(f'PASS {name}')
+            except Exception:
+                failed += 1
+                print(f'FAIL {name}')
+                traceback.print_exc()
+    print(f'\n{passed} passed, {failed} failed')
+    sys.exit(0 if failed == 0 else 1)

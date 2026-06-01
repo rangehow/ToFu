@@ -1,0 +1,2078 @@
+
+██████████████████████████████████████████████████████████████████████
+  CACHE BEHAVIOR VALIDATION — 5-ARM TEST
+  Model: aws.claude-opus-4.6
+  Date: 2026-04-04 21:03:28 UTC
+  Scenarios: A, B, C, D
+  Arms: OLD, NEW, NEW_1h, SINGLE, SINGLE_1h
+  Rounds per arm: 12
+  Dry run: False
+             OLD: 4 BPs, BP4=msg[-2], 5m TTL
+             NEW: 4 BPs, BP4=msg[-1], 5m TTL
+          NEW_1h: 4 BPs, BP4=msg[-1], mixed TTL
+          SINGLE: 1 BP on msg[-1], 5m TTL (CC)
+       SINGLE_1h: 1 BP on msg[-1], 1h TTL (CC+1h)
+██████████████████████████████████████████████████████████████████████
+
+
+▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
+  SCENARIO A: Single query → multi-round tool exploration
+  Arms: OLD → NEW → NEW_1h → SINGLE → SINGLE_1h
+▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
+
+  ════════════════════════════════════════════════════════════
+  OLD — Scenario A
+  Strategy: 4 BPs, BP4=msg[-2], 5m TTL
+  ════════════════════════════════════════════════════════════
+
+  ── R1/12 ── msgs=2 (SU) empty_asst=0
+    ⏱ 4.4s (TTFT: 4.4s) | MISS
+    📊 pt=2,607  cr=0  cw=0  out=175
+    🔧 tools=3  finish=tool_calls
+       → grep_search: 730 chars
+       → find_files: 382 chars
+       → grep_search: 730 chars
+
+  ── R2/12 ── msgs=6 (SUATTT) empty_asst=1
+    ⏱ 4.4s (TTFT: 4.4s) | MISS
+    📊 pt=3,474  cr=0  cw=0  out=178
+    🔧 tools=1  finish=tool_calls
+       → read_files: 1002 chars
+
+  ── R3/12 ── msgs=8 (SUATTTAT) empty_asst=2
+    ⏱ 3.7s (TTFT: 3.7s) | MISS
+    📊 pt=3,954  cr=0  cw=0  out=115
+    🔧 tools=1  finish=tool_calls
+       → read_files: 1002 chars
+
+  ── R4/12 ── msgs=10 (ATTTATAT) empty_asst=3
+    ⏱ 4.5s (TTFT: 3.1s) | MISS
+    📊 pt=4,403  cr=0  cw=0  out=158
+    🔧 tools=1  finish=tool_calls
+       → read_files: 1002 chars
+
+  ── R5/12 ── msgs=12 (TTATATAT) empty_asst=3
+    ⏱ 4.7s (TTFT: 3.0s) | WRITE
+    📊 pt=482  cr=0  cw=4,413  out=87
+    🔧 tools=1  finish=tool_calls
+       → read_files: 1002 chars
+
+  ── R6/12 ── msgs=14 (ATATATAT) empty_asst=3
+    ⏱ 3.6s (TTFT: 3.6s) | HIT
+    📊 pt=405  cr=4,413  cw=498  out=64
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  ── R7/12 ── msgs=16 (ATATATAT) empty_asst=4
+    ⏱ 3.5s (TTFT: 3.5s) | HIT
+    📊 pt=120  cr=4,911  cw=404  out=66
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  ── R8/12 ── msgs=18 (ATATATAT) empty_asst=5
+    ⏱ 3.9s (TTFT: 3.9s) | HIT
+    📊 pt=122  cr=5,315  cw=119  out=83
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  ── R9/12 ── msgs=20 (ATATATAT) empty_asst=6
+    ⏱ 5.1s (TTFT: 5.1s) | HIT
+    📊 pt=139  cr=5,434  cw=121  out=112
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  ── R10/12 ── msgs=22 (ATATATAT) empty_asst=7
+    ⏱ 3.9s (TTFT: 3.3s) | HIT
+    📊 pt=168  cr=5,555  cw=138  out=84
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  ── R11/12 ── msgs=24 (ATATATAT) empty_asst=7
+    ⏱ 4.0s (TTFT: 4.0s) | HIT
+    📊 pt=122  cr=5,693  cw=185  out=57
+    🔧 tools=1  finish=tool_calls
+       → list_dir: 326 chars
+
+  ── R12/12 ── msgs=26 (ATATATAT) empty_asst=8
+    ⏱ 4.5s (TTFT: 4.5s) | HIT
+    📊 pt=248  cr=5,878  cw=121  out=57
+    🔧 tools=1  finish=tool_calls
+
+  ⏳ Waiting 20s between arms...
+
+  ════════════════════════════════════════════════════════════
+  NEW — Scenario A
+  Strategy: 4 BPs, BP4=msg[-1], 5m TTL
+  ════════════════════════════════════════════════════════════
+
+  ── R1/12 ── msgs=2 (SU) empty_asst=0
+    ⏱ 4.9s (TTFT: 3.0s) | MISS
+    📊 pt=2,607  cr=0  cw=0  out=232
+    🔧 tools=4  finish=tool_calls
+       → grep_search: 730 chars
+       → grep_search: 730 chars
+       → find_files: 382 chars
+       → find_files: 382 chars
+
+  ── R2/12 ── msgs=7 (SUATTTT) empty_asst=0
+    ⏱ 5.1s (TTFT: 3.3s) | MISS
+    📊 pt=3,696  cr=0  cw=0  out=195
+    🔧 tools=1  finish=tool_calls
+       → read_files: 1002 chars
+
+  ── R3/12 ── msgs=9 (UATTTTAT) empty_asst=0
+    ⏱ 4.6s (TTFT: 3.2s) | WRITE
+    📊 pt=1  cr=0  cw=4,191  out=129
+    🔧 tools=1  finish=tool_calls
+       → read_files: 1002 chars
+
+  ── R4/12 ── msgs=11 (TTTTATAT) empty_asst=0
+    ⏱ 37.8s (TTFT: 33.9s) | HIT
+    📊 pt=1  cr=4,191  cw=463  out=162
+    🔧 tools=1  finish=tool_calls
+       → read_files: 1002 chars
+
+  ── R5/12 ── msgs=13 (TTATATAT) empty_asst=0
+    ⏱ 4.0s (TTFT: 3.6s) | HIT
+    📊 pt=1  cr=4,654  cw=496  out=88
+    🔧 tools=1  finish=tool_calls
+       → read_files: 1002 chars
+
+  ── R6/12 ── msgs=15 (ATATATAT) empty_asst=0
+    ⏱ 16.5s (TTFT: 15.7s) | HIT
+    📊 pt=1  cr=5,150  cw=422  out=92
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  ── R7/12 ── msgs=17 (ATATATAT) empty_asst=0
+    ⏱ 3.5s (TTFT: 3.5s) | HIT
+    📊 pt=1  cr=5,572  cw=147  out=66
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  ── R8/12 ── msgs=19 (ATATATAT) empty_asst=1
+    ⏱ 3.9s (TTFT: 3.9s) | HIT
+    📊 pt=1  cr=5,719  cw=121  out=83
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  ── R9/12 ── msgs=21 (ATATATAT) empty_asst=2
+    ⏱ 4.5s (TTFT: 3.1s) | HIT
+    📊 pt=1  cr=5,840  cw=138  out=130
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  ── R10/12 ── msgs=23 (ATATATAT) empty_asst=2
+    ⏱ 3.9s (TTFT: 3.9s) | HIT
+    📊 pt=1  cr=5,978  cw=185  out=66
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  ── R11/12 ── msgs=25 (ATATATAT) empty_asst=3
+    ⏱ 5.2s (TTFT: 3.1s) | HIT
+    📊 pt=1  cr=6,163  cw=121  out=112
+    🔧 tools=1  finish=tool_calls
+       → read_files: 1002 chars
+
+  ── R12/12 ── msgs=27 (ATATATAT) empty_asst=3
+    ⏱ 6.0s (TTFT: 4.1s) | HIT+WRITE
+    📊 pt=1  cr=6,284  cw=892  out=282
+    🔧 tools=3  finish=tool_calls
+
+  ⏳ Waiting 20s between arms...
+
+  ════════════════════════════════════════════════════════════
+  NEW_1h — Scenario A
+  Strategy: 4 BPs, BP4=msg[-1], mixed TTL
+  ════════════════════════════════════════════════════════════
+
+  ── R1/12 ── msgs=2 (SU) empty_asst=0
+    ⏱ 5.2s (TTFT: 3.3s) | MISS
+    📊 pt=2,607  cr=0  cw=0  out=231
+    🔧 tools=4  finish=tool_calls
+       → grep_search: 730 chars
+       → find_files: 382 chars
+       → grep_search: 730 chars
+       → grep_search: 730 chars
+
+  ── R2/12 ── msgs=7 (SUATTTT) empty_asst=0
+    ⏱ 5.0s (TTFT: 3.2s) | MISS
+    📊 pt=3,804  cr=0  cw=0  out=199
+    🔧 tools=1  finish=tool_calls
+       → read_files: 1002 chars
+
+  ── R3/12 ── msgs=9 (UATTTTAT) empty_asst=0
+    ⏱ 9.1s (TTFT: 9.1s) | WRITE
+    📊 pt=1  cr=0  cw=4,303  out=83
+    🔧 tools=1  finish=tool_calls
+       → read_files: 1002 chars
+
+  ── R4/12 ── msgs=11 (TTTTATAT) empty_asst=1
+    ⏱ 4.6s (TTFT: 3.1s) | HIT
+    📊 pt=1  cr=4,303  cw=417  out=162
+    🔧 tools=1  finish=tool_calls
+       → read_files: 1002 chars
+
+  ── R5/12 ── msgs=13 (TTATATAT) empty_asst=1
+    ⏱ 4.9s (TTFT: 3.2s) | HIT
+    📊 pt=1  cr=4,720  cw=496  out=123
+    🔧 tools=1  finish=tool_calls
+       → grep_search: 730 chars
+
+  ── R6/12 ── msgs=15 (ATATATAT) empty_asst=1
+    ⏱ 3.5s (TTFT: 3.5s) | HIT
+    📊 pt=1  cr=5,216  cw=386  out=71
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  ── R7/12 ── msgs=17 (ATATATAT) empty_asst=2
+    ⏱ 3.5s (TTFT: 3.5s) | HIT
+    📊 pt=1  cr=5,602  cw=126  out=71
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  ── R8/12 ── msgs=19 (ATATATAT) empty_asst=3
+    ⏱ 3.6s (TTFT: 3.6s) | HIT
+    📊 pt=1  cr=5,728  cw=126  out=71
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  ── R9/12 ── msgs=21 (ATATATAT) empty_asst=4
+    ⏱ 4.5s (TTFT: 4.5s) | HIT
+    📊 pt=1  cr=5,854  cw=126  out=124
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  ── R10/12 ── msgs=23 (ATATATAT) empty_asst=5
+    ⏱ 3.9s (TTFT: 3.9s) | HIT
+    📊 pt=1  cr=5,980  cw=179  out=81
+    🔧 tools=1  finish=tool_calls
+       → grep_search: 730 chars
+
+  ── R11/12 ── msgs=25 (ATATATAT) empty_asst=6
+    ⏱ 4.1s (TTFT: 4.1s) | HIT
+    📊 pt=1  cr=6,159  cw=344  out=80
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  ── R12/12 ── msgs=27 (ATATATAT) empty_asst=7
+    ⏱ 5.0s (TTFT: 5.0s) | HIT
+    📊 pt=1  cr=6,503  cw=135  out=95
+    🔧 tools=1  finish=tool_calls
+
+  ⏳ Waiting 20s between arms...
+
+  ════════════════════════════════════════════════════════════
+  SINGLE — Scenario A
+  Strategy: 1 BP on msg[-1], 5m TTL (CC)
+  ════════════════════════════════════════════════════════════
+
+  ── R1/12 ── msgs=2 (SU) empty_asst=0
+    ⏱ 4.9s (TTFT: 3.4s) | MISS
+    📊 pt=2,607  cr=0  cw=0  out=178
+    🔧 tools=3  finish=tool_calls
+       → grep_search: 730 chars
+       → find_files: 382 chars
+       → grep_search: 730 chars
+
+  ── R2/12 ── msgs=6 (SUATTT) empty_asst=0
+    ⏱ 5.2s (TTFT: 3.3s) | MISS
+    📊 pt=3,487  cr=0  cw=0  out=218
+    🔧 tools=1  finish=tool_calls
+       → read_files: 1002 chars
+
+  ── R3/12 ── msgs=8 (SUATTTAT) empty_asst=0
+    ⏱ 4.7s (TTFT: 3.1s) | MISS
+    📊 pt=4,004  cr=0  cw=0  out=139
+    🔧 tools=1  finish=tool_calls
+       → read_files: 1002 chars
+
+  ── R4/12 ── msgs=10 (ATTTATAT) empty_asst=0
+    ⏱ 4.1s (TTFT: 3.1s) | WRITE
+    📊 pt=1  cr=0  cw=4,476  out=99
+    🔧 tools=1  finish=tool_calls
+       → read_files: 1002 chars
+
+  ── R5/12 ── msgs=12 (TTATATAT) empty_asst=0
+    ⏱ 4.4s (TTFT: 3.5s) | HIT+WRITE
+    📊 pt=1  cr=4,476  cw=866  out=131
+    🔧 tools=1  finish=tool_calls
+       → read_files: 1002 chars
+
+  ── R6/12 ── msgs=14 (ATATATAT) empty_asst=0
+    ⏱ 4.9s (TTFT: 4.0s) | HIT+WRITE
+    📊 pt=1  cr=4,909  cw=860  out=151
+    🔧 tools=1  finish=tool_calls
+       → read_files: 1002 chars
+
+  ── R7/12 ── msgs=16 (ATATATAT) empty_asst=0
+    ⏱ 5.3s (TTFT: 3.1s) | HIT
+    📊 pt=1  cr=5,339  cw=439  out=201
+    🔧 tools=3  finish=tool_calls
+       → run_command: 83 chars
+       → run_command: 83 chars
+       → run_command: 83 chars
+
+  ── R8/12 ── msgs=20 (ATATATTT) empty_asst=0
+    ⏱ 5.4s (TTFT: 4.5s) | HIT+WRITE
+    📊 pt=1  cr=5,778  cw=836  out=142
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  ── R9/12 ── msgs=22 (ATATTTAT) empty_asst=0
+    ⏱ 6.1s (TTFT: 6.1s) | HIT
+    📊 pt=1  cr=6,196  cw=292  out=203
+    🔧 tools=1  finish=tool_calls
+       → read_files: 1002 chars
+
+  ── R10/12 ── msgs=24 (ATTTATAT) empty_asst=1
+    ⏱ 6.2s (TTFT: 5.5s) | HIT+WRITE
+    📊 pt=1  cr=6,342  cw=834  out=198
+    🔧 tools=1  finish=tool_calls
+       → read_files: 1002 chars
+
+  ── R11/12 ── msgs=26 (TTATATAT) empty_asst=1
+    ⏱ 7.7s (TTFT: 5.0s) | HIT+WRITE
+    📊 pt=1  cr=6,759  cw=850  out=311
+    🔧 tools=2  finish=tool_calls
+       → grep_search: 730 chars
+       → grep_search: 730 chars
+
+  ── R12/12 ── msgs=29 (TATATATT) empty_asst=1
+    ⏱ 7.3s (TTFT: 5.4s) | HIT+WRITE
+    📊 pt=1  cr=7,184  cw=1,586  out=228
+    🔧 tools=3  finish=tool_calls
+
+  ⏳ Waiting 20s between arms...
+
+  ════════════════════════════════════════════════════════════
+  SINGLE_1h — Scenario A
+  Strategy: 1 BP on msg[-1], 1h TTL (CC+1h)
+  ════════════════════════════════════════════════════════════
+
+  ── R1/12 ── msgs=2 (SU) empty_asst=0
+    ⏱ 4.6s (TTFT: 4.6s) | MISS
+    📊 pt=2,607  cr=0  cw=0  out=177
+    🔧 tools=3  finish=tool_calls
+       → grep_search: 730 chars
+       → find_files: 382 chars
+       → find_files: 382 chars
+
+  ── R2/12 ── msgs=6 (SUATTT) empty_asst=1
+    ⏱ 4.6s (TTFT: 4.6s) | MISS
+    📊 pt=3,367  cr=0  cw=0  out=121
+    🔧 tools=1  finish=tool_calls
+       → read_files: 1002 chars
+
+  ── R3/12 ── msgs=8 (SUATTTAT) empty_asst=2
+    ⏱ 4.2s (TTFT: 4.2s) | MISS
+    📊 pt=3,817  cr=0  cw=0  out=83
+    🔧 tools=1  finish=tool_calls
+       → read_files: 1002 chars
+
+  ── R4/12 ── msgs=10 (ATTTATAT) empty_asst=3
+    ⏱ 4.1s (TTFT: 4.1s) | WRITE
+    📊 pt=1  cr=0  cw=8,466  out=110
+    🔧 tools=1  finish=tool_calls
+       → read_files: 1002 chars
+
+  ── R5/12 ── msgs=12 (TTATATAT) empty_asst=4
+    ⏱ 4.2s (TTFT: 2.8s) | HIT
+    📊 pt=1  cr=4,233  cw=417  out=93
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  ── R6/12 ── msgs=14 (ATATATAT) empty_asst=4
+    ⏱ 4.3s (TTFT: 4.3s) | HIT
+    📊 pt=1  cr=4,650  cw=148  out=73
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  ── R7/12 ── msgs=16 (ATATATAT) empty_asst=5
+    ⏱ 3.8s (TTFT: 3.8s) | HIT
+    📊 pt=1  cr=4,798  cw=128  out=75
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  ── R8/12 ── msgs=18 (ATATATAT) empty_asst=6
+    ⏱ 4.9s (TTFT: 4.9s) | HIT
+    📊 pt=1  cr=4,926  cw=130  out=122
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  ── R9/12 ── msgs=20 (ATATATAT) empty_asst=7
+    ⏱ 4.4s (TTFT: 4.4s) | HIT
+    📊 pt=1  cr=5,056  cw=177  out=68
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  ── R10/12 ── msgs=22 (ATATATAT) empty_asst=8
+    ⏱ 5.1s (TTFT: 3.4s) | HIT
+    📊 pt=1  cr=5,233  cw=123  out=100
+    🔧 tools=1  finish=tool_calls
+       → read_files: 1002 chars
+
+  ── R11/12 ── msgs=24 (ATATATAT) empty_asst=8
+    ⏱ 4.7s (TTFT: 3.7s) | HIT
+    📊 pt=1  cr=5,356  cw=434  out=100
+    🔧 tools=1  finish=tool_calls
+       → grep_search: 730 chars
+
+  ── R12/12 ── msgs=26 (ATATATAT) empty_asst=8
+    ⏱ 4.5s (TTFT: 4.5s) | HIT
+    📊 pt=1  cr=5,790  cw=363  out=97
+    🔧 tools=1  finish=tool_calls
+
+
+  ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
+  SCENARIO A — 5-ARM COMPARISON
+  ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
+
+  ┌─ OLD: 4 BPs, BP4=msg[-2], 5m TTL ─────────────┐
+
+  Rnd │   Prompt │  CacheRead │  CacheWrite │  Output │     Status │ Tools │  TTFT │ Total
+  ────┼──────────┼────────────┼─────────────┼─────────┼────────────┼───────┼───────┼──────
+    1 │    2,607 │          0 │           0 │     175 │       MISS │     3 │   4.4s │   4.4s
+    2 │    3,474 │          0 │           0 │     178 │       MISS │     1 │   4.4s │   4.4s
+    3 │    3,954 │          0 │           0 │     115 │       MISS │     1 │   3.7s │   3.7s
+    4 │    4,403 │          0 │           0 │     158 │       MISS │     1 │   3.1s │   4.5s
+    5 │      482 │          0 │       4,413 │      87 │      WRITE │     1 │   3.0s │   4.7s
+    6 │      405 │      4,413 │         498 │      64 │        HIT │     1 │   3.6s │   3.6s
+    7 │      120 │      4,911 │         404 │      66 │        HIT │     1 │   3.5s │   3.5s
+    8 │      122 │      5,315 │         119 │      83 │        HIT │     1 │   3.9s │   3.9s
+    9 │      139 │      5,434 │         121 │     112 │        HIT │     1 │   5.1s │   5.1s
+   10 │      168 │      5,555 │         138 │      84 │        HIT │     1 │   3.3s │   3.9s
+   11 │      122 │      5,693 │         185 │      57 │        HIT │     1 │   4.0s │   4.0s
+   12 │      248 │      5,878 │         121 │      57 │        HIT │     1 │   4.5s │   4.5s
+
+  ┌─ NEW: 4 BPs, BP4=msg[-1], 5m TTL ─────────────┐
+
+  Rnd │   Prompt │  CacheRead │  CacheWrite │  Output │     Status │ Tools │  TTFT │ Total
+  ────┼──────────┼────────────┼─────────────┼─────────┼────────────┼───────┼───────┼──────
+    1 │    2,607 │          0 │           0 │     232 │       MISS │     4 │   3.0s │   4.9s
+    2 │    3,696 │          0 │           0 │     195 │       MISS │     1 │   3.3s │   5.1s
+    3 │        1 │          0 │       4,191 │     129 │      WRITE │     1 │   3.2s │   4.6s
+    4 │        1 │      4,191 │         463 │     162 │        HIT │     1 │  33.9s │  37.8s
+    5 │        1 │      4,654 │         496 │      88 │        HIT │     1 │   3.6s │   4.0s
+    6 │        1 │      5,150 │         422 │      92 │        HIT │     1 │  15.7s │  16.5s
+    7 │        1 │      5,572 │         147 │      66 │        HIT │     1 │   3.5s │   3.5s
+    8 │        1 │      5,719 │         121 │      83 │        HIT │     1 │   3.9s │   3.9s
+    9 │        1 │      5,840 │         138 │     130 │        HIT │     1 │   3.1s │   4.5s
+   10 │        1 │      5,978 │         185 │      66 │        HIT │     1 │   3.9s │   3.9s
+   11 │        1 │      6,163 │         121 │     112 │        HIT │     1 │   3.1s │   5.2s
+   12 │        1 │      6,284 │         892 │     282 │  HIT+WRITE │     3 │   4.1s │   6.0s
+
+  ┌─ NEW_1h: 4 BPs, BP4=msg[-1], mixed TTL ─────────────┐
+
+  Rnd │   Prompt │  CacheRead │  CacheWrite │  Output │     Status │ Tools │  TTFT │ Total
+  ────┼──────────┼────────────┼─────────────┼─────────┼────────────┼───────┼───────┼──────
+    1 │    2,607 │          0 │           0 │     231 │       MISS │     4 │   3.3s │   5.2s
+    2 │    3,804 │          0 │           0 │     199 │       MISS │     1 │   3.2s │   5.0s
+    3 │        1 │          0 │       4,303 │      83 │      WRITE │     1 │   9.1s │   9.1s
+    4 │        1 │      4,303 │         417 │     162 │        HIT │     1 │   3.1s │   4.6s
+    5 │        1 │      4,720 │         496 │     123 │        HIT │     1 │   3.2s │   4.9s
+    6 │        1 │      5,216 │         386 │      71 │        HIT │     1 │   3.5s │   3.5s
+    7 │        1 │      5,602 │         126 │      71 │        HIT │     1 │   3.5s │   3.5s
+    8 │        1 │      5,728 │         126 │      71 │        HIT │     1 │   3.6s │   3.6s
+    9 │        1 │      5,854 │         126 │     124 │        HIT │     1 │   4.5s │   4.5s
+   10 │        1 │      5,980 │         179 │      81 │        HIT │     1 │   3.9s │   3.9s
+   11 │        1 │      6,159 │         344 │      80 │        HIT │     1 │   4.1s │   4.1s
+   12 │        1 │      6,503 │         135 │      95 │        HIT │     1 │   5.0s │   5.0s
+
+  ┌─ SINGLE: 1 BP on msg[-1], 5m TTL (CC) ─────────────┐
+
+  Rnd │   Prompt │  CacheRead │  CacheWrite │  Output │     Status │ Tools │  TTFT │ Total
+  ────┼──────────┼────────────┼─────────────┼─────────┼────────────┼───────┼───────┼──────
+    1 │    2,607 │          0 │           0 │     178 │       MISS │     3 │   3.4s │   4.9s
+    2 │    3,487 │          0 │           0 │     218 │       MISS │     1 │   3.3s │   5.2s
+    3 │    4,004 │          0 │           0 │     139 │       MISS │     1 │   3.1s │   4.7s
+    4 │        1 │          0 │       4,476 │      99 │      WRITE │     1 │   3.1s │   4.1s
+    5 │        1 │      4,476 │         866 │     131 │  HIT+WRITE │     1 │   3.5s │   4.4s
+    6 │        1 │      4,909 │         860 │     151 │  HIT+WRITE │     1 │   4.0s │   4.9s
+    7 │        1 │      5,339 │         439 │     201 │        HIT │     3 │   3.1s │   5.3s
+    8 │        1 │      5,778 │         836 │     142 │  HIT+WRITE │     1 │   4.5s │   5.4s
+    9 │        1 │      6,196 │         292 │     203 │        HIT │     1 │   6.1s │   6.1s
+   10 │        1 │      6,342 │         834 │     198 │  HIT+WRITE │     1 │   5.5s │   6.2s
+   11 │        1 │      6,759 │         850 │     311 │  HIT+WRITE │     2 │   5.0s │   7.7s
+   12 │        1 │      7,184 │       1,586 │     228 │  HIT+WRITE │     3 │   5.4s │   7.3s
+
+  ┌─ SINGLE_1h: 1 BP on msg[-1], 1h TTL (CC+1h) ─────────────┐
+
+  Rnd │   Prompt │  CacheRead │  CacheWrite │  Output │     Status │ Tools │  TTFT │ Total
+  ────┼──────────┼────────────┼─────────────┼─────────┼────────────┼───────┼───────┼──────
+    1 │    2,607 │          0 │           0 │     177 │       MISS │     3 │   4.6s │   4.6s
+    2 │    3,367 │          0 │           0 │     121 │       MISS │     1 │   4.6s │   4.6s
+    3 │    3,817 │          0 │           0 │      83 │       MISS │     1 │   4.2s │   4.2s
+    4 │        1 │          0 │       8,466 │     110 │      WRITE │     1 │   4.1s │   4.1s
+    5 │        1 │      4,233 │         417 │      93 │        HIT │     1 │   2.8s │   4.2s
+    6 │        1 │      4,650 │         148 │      73 │        HIT │     1 │   4.3s │   4.3s
+    7 │        1 │      4,798 │         128 │      75 │        HIT │     1 │   3.8s │   3.8s
+    8 │        1 │      4,926 │         130 │     122 │        HIT │     1 │   4.9s │   4.9s
+    9 │        1 │      5,056 │         177 │      68 │        HIT │     1 │   4.4s │   4.4s
+   10 │        1 │      5,233 │         123 │     100 │        HIT │     1 │   3.4s │   5.1s
+   11 │        1 │      5,356 │         434 │     100 │        HIT │     1 │   3.7s │   4.7s
+   12 │        1 │      5,790 │         363 │      97 │        HIT │     1 │   4.5s │   4.5s
+
+  Metric                              │         OLD │         NEW │      NEW_1h │      SINGLE │   SINGLE_1h
+  ────────────────────────────────────┼─────────────┼─────────────┼─────────────┼─────────────┼────────────
+  Rounds completed                    │          12 │          12 │          12 │          12 │          12
+  Uncached (tokens)                   │      16,244 │       6,313 │       6,421 │      10,107 │       9,800
+  Cache reads (tokens)                │      37,199 │      49,551 │      50,065 │      46,983 │      40,042
+  Cache writes (tokens)               │       5,999 │       7,176 │       6,638 │      11,039 │      10,386
+  Output (tokens)                     │       1,236 │       1,637 │       1,391 │       2,199 │       1,219
+  Total input (tokens)                │      59,442 │      63,040 │      63,124 │      68,129 │      60,228
+  ────────────────────────────────────┼─────────────┼─────────────┼─────────────┼─────────────┼────────────
+  Uncached input cost                 │ $    0.2437 │ $    0.0947 │ $    0.0963 │ $    0.1516 │ $    0.1470
+  Cache read cost                     │ $    0.0558 │ $    0.0743 │ $    0.0751 │ $    0.0705 │ $    0.0601
+  Cache write cost                    │ $    0.1125 │ $    0.1346 │ $    0.1245 │ $    0.2070 │ $    0.1947
+  Output cost                         │ $    0.0927 │ $    0.1228 │ $    0.1043 │ $    0.1649 │ $    0.0914
+  TOTAL COST                          │ $    0.5046 │ $    0.4263 │ $    0.4002 │ $    0.5940 │ $    0.4932
+  No-cache baseline                   │ $    0.9843 │ $    1.0684 │ $    1.0512 │ $    1.1869 │ $    0.9948
+  Cache savings ($)                   │ $    0.4797 │ $    0.6420 │ $    0.6510 │ $    0.5929 │ $    0.5016
+  Cache savings (%)                   │       48.7% │       60.1% │       61.9% │       50.0% │       50.4%
+  ────────────────────────────────────┼─────────────┼─────────────┼─────────────┼─────────────┼────────────
+  Avg TTFT (s)                        │         3.9 │         7.0 │         4.2 │         4.2 │         4.1
+  Avg round time (s)                  │         4.2 │         8.3 │         4.7 │         5.5 │         4.4
+
+  Cost comparison matrix (row saves vs column):
+               │        OLD │        NEW │     NEW_1h │     SINGLE │  SINGLE_1h
+  ─────────────┼────────────┼────────────┼────────────┼────────────┼───────────
+           OLD │          — │   -18.4%🔴 │   -26.1%🔴 │   +15.0%✅ │    -2.3%➖
+           NEW │   +15.5%✅ │          — │    -6.5%🔴 │   +28.2%✅ │   +13.6%✅
+        NEW_1h │   +20.7%✅ │    +6.1%✅ │          — │   +32.6%✅ │   +18.9%✅
+        SINGLE │   -17.7%🔴 │   -39.3%🔴 │   -48.4%🔴 │          — │   -20.4%🔴
+     SINGLE_1h │    +2.3%➖ │   -15.7%🔴 │   -23.2%🔴 │   +17.0%✅ │          —
+  (positive = row is cheaper than column)
+
+  🔍 OLD Anomalies:
+     ⚠️ Unusual prompt_tokens range: avg=189 (expected ~1-5 for Anthropic or ~10k+ for OpenAI)
+     ⚠️ Full re-cache on rounds: [5] (server-side TTL eviction)
+
+  🔍 NEW Anomalies:
+     ⚠️ Full re-cache on rounds: [3] (server-side TTL eviction)
+
+  🔍 NEW_1h Anomalies:
+     ⚠️ Full re-cache on rounds: [3] (server-side TTL eviction)
+
+  🔍 SINGLE Anomalies:
+     ⚠️ Full re-cache on rounds: [4] (server-side TTL eviction)
+
+  🔍 SINGLE_1h Anomalies:
+     ⚠️ Full re-cache on rounds: [4] (server-side TTL eviction)
+
+  🏆 Best: NEW_1h ($0.4002)
+  💸 Worst: SINGLE ($0.5940)
+  📊 Gap: $0.1938 (32.6%)
+
+  ⏳ Waiting 20s between scenarios...
+
+
+▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
+  SCENARIO B: Multi-turn user conversation with tool calls
+  Arms: OLD → NEW → NEW_1h → SINGLE → SINGLE_1h
+▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
+
+  ════════════════════════════════════════════════════════════
+  OLD — Scenario B
+  Strategy: 4 BPs, BP4=msg[-2], 5m TTL
+  ════════════════════════════════════════════════════════════
+
+  ── R1/12 ── msgs=2 (SU) empty_asst=0
+    ⏱ 3.6s (TTFT: 3.6s) | MISS
+    📊 pt=2,541  cr=0  cw=0  out=85
+    🔧 tools=1  finish=tool_calls
+       → list_dir: 326 chars
+
+  ── R2/12 ── msgs=4 (SUAT) empty_asst=1
+    ⏱ 4.2s (TTFT: 4.2s) | MISS
+    📊 pt=2,784  cr=0  cw=0  out=234
+    🔧 tools=6  finish=tool_calls
+       → list_dir: 326 chars
+       → list_dir: 326 chars
+       → list_dir: 326 chars
+       → list_dir: 326 chars
+       → list_dir: 326 chars
+       → list_dir: 326 chars
+
+  ── R3/12 ── msgs=11 (TATTTTTT) empty_asst=2
+    ⏱ 6.1s (TTFT: 3.5s) | MISS
+    📊 pt=4,249  cr=0  cw=0  out=399
+    🔧 tools=6  finish=tool_calls
+       → find_files: 382 chars
+       → find_files: 382 chars
+       → find_files: 382 chars
+       → find_files: 382 chars
+       → find_files: 382 chars
+       → find_files: 382 chars
+
+  ── R4/12 ── msgs=18 (TATTTTTT) empty_asst=2
+    ⏱ 5.6s (TTFT: 4.9s) | WRITE
+    📊 pt=174  cr=0  cw=10,892  out=173
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  👤 User follow-up injected at round 5
+
+  ── R5/12 ── msgs=21 (TTTTTATU) empty_asst=2
+    ⏱ 5.8s (TTFT: 5.8s) | HIT+WRITE
+    📊 pt=26  cr=5,446  cw=704  out=110
+    🔧 tools=1  finish=tool_calls
+       → read_files: 1002 chars
+
+  ── R6/12 ── msgs=23 (TTTATUAT) empty_asst=3
+    ⏱ 4.8s (TTFT: 4.8s) | HIT
+    📊 pt=405  cr=5,798  cw=46  out=130
+    🔧 tools=1  finish=tool_calls
+       → grep_search: 730 chars
+
+  ── R7/12 ── msgs=25 (TATUATAT) empty_asst=4
+    ⏱ 4.3s (TTFT: 4.3s) | HIT
+    📊 pt=344  cr=5,821  cw=404  out=80
+    🔧 tools=1  finish=tool_calls
+       → grep_search: 730 chars
+
+  ── R8/12 ── msgs=27 (TUATATAT) empty_asst=5
+    ⏱ 3.9s (TTFT: 3.9s) | HIT
+    📊 pt=344  cr=6,225  cw=343  out=71
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  👤 User follow-up injected at round 9
+
+  ── R9/12 ── msgs=30 (TATATATU) empty_asst=6
+    ⏱ 4.8s (TTFT: 4.8s) | HIT+WRITE
+    📊 pt=24  cr=6,568  cw=938  out=121
+    🔧 tools=1  finish=tool_calls
+       → read_files: 1002 chars
+
+  ── R10/12 ── msgs=32 (TATATUAT) empty_asst=7
+    ⏱ 5.1s (TTFT: 3.7s) | HIT
+    📊 pt=407  cr=7,037  cw=42  out=115
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  ── R11/12 ── msgs=34 (TATUATAT) empty_asst=7
+    ⏱ 4.2s (TTFT: 4.2s) | HIT
+    📊 pt=119  cr=7,058  cw=425  out=81
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  ── R12/12 ── msgs=36 (TUATATAT) empty_asst=8
+    ⏱ 4.2s (TTFT: 4.2s) | HIT
+    📊 pt=137  cr=7,483  cw=118  out=57
+    🔧 tools=1  finish=tool_calls
+
+  ⏳ Waiting 20s between arms...
+
+  ════════════════════════════════════════════════════════════
+  NEW — Scenario B
+  Strategy: 4 BPs, BP4=msg[-1], 5m TTL
+  ════════════════════════════════════════════════════════════
+
+  ── R1/12 ── msgs=2 (SU) empty_asst=0
+    ⏱ 3.5s (TTFT: 3.5s) | MISS
+    📊 pt=2,541  cr=0  cw=0  out=85
+    🔧 tools=1  finish=tool_calls
+       → list_dir: 326 chars
+
+  ── R2/12 ── msgs=4 (SUAT) empty_asst=1
+    ⏱ 4.4s (TTFT: 4.4s) | MISS
+    📊 pt=2,784  cr=0  cw=0  out=234
+    🔧 tools=6  finish=tool_calls
+       → list_dir: 326 chars
+       → list_dir: 326 chars
+       → list_dir: 326 chars
+       → list_dir: 326 chars
+       → list_dir: 326 chars
+       → list_dir: 326 chars
+
+  ── R3/12 ── msgs=11 (TATTTTTT) empty_asst=2
+    ⏱ 4.7s (TTFT: 4.7s) | HIT
+    📊 pt=1  cr=4,248  cw=0  out=154
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  ── R4/12 ── msgs=13 (TTTTTTAT) empty_asst=3
+    ⏱ 3.8s (TTFT: 3.8s) | HIT
+    📊 pt=1  cr=4,248  cw=157  out=89
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  👤 User follow-up injected at round 5
+
+  ── R5/12 ── msgs=16 (TTTATATU) empty_asst=4
+    ⏱ 4.3s (TTFT: 4.3s) | HIT
+    📊 pt=3  cr=4,405  cw=334  out=116
+    🔧 tools=1  finish=tool_calls
+       → grep_search: 730 chars
+
+  ── R6/12 ── msgs=18 (TATATUAT) empty_asst=5
+    ⏱ 3.9s (TTFT: 3.9s) | HIT
+    📊 pt=1  cr=4,572  cw=339  out=80
+    🔧 tools=1  finish=tool_calls
+       → grep_search: 730 chars
+
+  ── R7/12 ── msgs=20 (TATUATAT) empty_asst=6
+    ⏱ 3.8s (TTFT: 3.0s) | HIT
+    📊 pt=1  cr=4,911  cw=343  out=80
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  ── R8/12 ── msgs=22 (TUATATAT) empty_asst=6
+    ⏱ 3.7s (TTFT: 3.7s) | HIT
+    📊 pt=1  cr=5,254  cw=135  out=71
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  👤 User follow-up injected at round 9
+
+  ── R9/12 ── msgs=25 (TATATATU) empty_asst=7
+    ⏱ 4.3s (TTFT: 4.3s) | HIT
+    📊 pt=3  cr=5,389  cw=294  out=121
+    🔧 tools=1  finish=tool_calls
+       → read_files: 1002 chars
+
+  ── R10/12 ── msgs=27 (TATATUAT) empty_asst=8
+    ⏱ 4.5s (TTFT: 3.3s) | HIT
+    📊 pt=1  cr=5,536  cw=406  out=87
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  ── R11/12 ── msgs=29 (TATUATAT) empty_asst=8
+    ⏱ 3.6s (TTFT: 3.6s) | HIT
+    📊 pt=1  cr=5,942  cw=142  out=63
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  ── R12/12 ── msgs=31 (TUATATAT) empty_asst=9
+    ⏱ 4.5s (TTFT: 4.5s) | HIT
+    📊 pt=1  cr=6,084  cw=118  out=57
+    🔧 tools=1  finish=tool_calls
+
+  ⏳ Waiting 20s between arms...
+
+  ════════════════════════════════════════════════════════════
+  NEW_1h — Scenario B
+  Strategy: 4 BPs, BP4=msg[-1], mixed TTL
+  ════════════════════════════════════════════════════════════
+
+  ── R1/12 ── msgs=2 (SU) empty_asst=0
+    ⏱ 4.0s (TTFT: 4.0s) | MISS
+    📊 pt=2,541  cr=0  cw=0  out=85
+    🔧 tools=1  finish=tool_calls
+       → list_dir: 326 chars
+
+  ── R2/12 ── msgs=4 (SUAT) empty_asst=1
+    ⏱ 4.5s (TTFT: 4.5s) | MISS
+    📊 pt=2,784  cr=0  cw=0  out=234
+    🔧 tools=6  finish=tool_calls
+       → list_dir: 326 chars
+       → list_dir: 326 chars
+       → list_dir: 326 chars
+       → list_dir: 326 chars
+       → list_dir: 326 chars
+       → list_dir: 326 chars
+
+  ── R3/12 ── msgs=11 (TATTTTTT) empty_asst=2
+    ⏱ 4.9s (TTFT: 3.6s) | HIT
+    📊 pt=1  cr=4,248  cw=0  out=150
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  ── R4/12 ── msgs=13 (TTTTTTAT) empty_asst=2
+    ⏱ 3.5s (TTFT: 3.5s) | HIT
+    📊 pt=1  cr=4,248  cw=162  out=73
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  👤 User follow-up injected at round 5
+
+  ── R5/12 ── msgs=16 (TTTATATU) empty_asst=3
+    ⏱ 5.0s (TTFT: 5.0s) | HIT
+    📊 pt=3  cr=4,410  cw=302  out=154
+    🔧 tools=1  finish=tool_calls
+       → grep_search: 730 chars
+
+  ── R6/12 ── msgs=18 (TATATUAT) empty_asst=4
+    ⏱ 4.2s (TTFT: 4.2s) | HIT
+    📊 pt=1  cr=4,561  cw=346  out=83
+    🔧 tools=1  finish=tool_calls
+       → read_files: 1002 chars
+
+  ── R7/12 ── msgs=20 (TATUATAT) empty_asst=5
+    ⏱ 3.5s (TTFT: 3.5s) | HIT
+    📊 pt=1  cr=4,907  cw=417  out=73
+    🔧 tools=1  finish=tool_calls
+       → grep_search: 730 chars
+
+  ── R8/12 ── msgs=22 (TUATATAT) empty_asst=6
+    ⏱ 4.3s (TTFT: 4.3s) | HIT
+    📊 pt=1  cr=5,324  cw=336  out=71
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  👤 User follow-up injected at round 9
+
+  ── R9/12 ── msgs=25 (TATATATU) empty_asst=7
+    ⏱ 3.8s (TTFT: 3.8s) | HIT
+    📊 pt=3  cr=5,660  cw=294  out=98
+    🔧 tools=1  finish=tool_calls
+       → read_files: 1002 chars
+
+  ── R10/12 ── msgs=27 (TATATUAT) empty_asst=8
+    ⏱ 4.9s (TTFT: 4.0s) | HIT+WRITE
+    📊 pt=1  cr=5,807  cw=812  out=131
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  ── R11/12 ── msgs=29 (TATUATAT) empty_asst=8
+    ⏱ 4.2s (TTFT: 4.2s) | HIT
+    📊 pt=1  cr=6,213  cw=136  out=81
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  ── R12/12 ── msgs=31 (TUATATAT) empty_asst=9
+    ⏱ 3.4s (TTFT: 3.4s) | HIT
+    📊 pt=1  cr=6,349  cw=136  out=57
+    🔧 tools=1  finish=tool_calls
+
+  ⏳ Waiting 20s between arms...
+
+  ════════════════════════════════════════════════════════════
+  SINGLE — Scenario B
+  Strategy: 1 BP on msg[-1], 5m TTL (CC)
+  ════════════════════════════════════════════════════════════
+
+  ── R1/12 ── msgs=2 (SU) empty_asst=0
+    ⏱ 3.5s (TTFT: 3.5s) | MISS
+    📊 pt=2,541  cr=0  cw=0  out=85
+    🔧 tools=1  finish=tool_calls
+       → list_dir: 326 chars
+
+  ── R2/12 ── msgs=4 (SUAT) empty_asst=1
+    ⏱ 4.7s (TTFT: 4.7s) | MISS
+    📊 pt=2,784  cr=0  cw=0  out=234
+    🔧 tools=6  finish=tool_calls
+       → list_dir: 326 chars
+       → list_dir: 326 chars
+       → list_dir: 326 chars
+       → list_dir: 326 chars
+       → list_dir: 326 chars
+       → list_dir: 326 chars
+
+  ── R3/12 ── msgs=11 (TATTTTTT) empty_asst=2
+    ⏱ 9.9s (TTFT: 8.6s) | WRITE
+    📊 pt=1  cr=0  cw=8,496  out=161
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  ── R4/12 ── msgs=13 (TTTTTTAT) empty_asst=2
+    ⏱ 3.8s (TTFT: 3.8s) | HIT
+    📊 pt=1  cr=4,248  cw=178  out=89
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  👤 User follow-up injected at round 5
+
+  ── R5/12 ── msgs=16 (TTTATATU) empty_asst=3
+    ⏱ 4.2s (TTFT: 4.2s) | HIT
+    📊 pt=3  cr=4,426  cw=334  out=116
+    🔧 tools=1  finish=tool_calls
+       → grep_search: 730 chars
+
+  ── R6/12 ── msgs=18 (TATATUAT) empty_asst=4
+    ⏱ 3.9s (TTFT: 3.9s) | HIT
+    📊 pt=1  cr=4,593  cw=339  out=73
+    🔧 tools=1  finish=tool_calls
+       → grep_search: 730 chars
+
+  ── R7/12 ── msgs=20 (TATUATAT) empty_asst=5
+    ⏱ 3.5s (TTFT: 3.5s) | HIT
+    📊 pt=1  cr=4,932  cw=336  out=69
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  ── R8/12 ── msgs=22 (TUATATAT) empty_asst=6
+    ⏱ 3.9s (TTFT: 3.9s) | HIT
+    📊 pt=1  cr=5,268  cw=124  out=71
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  👤 User follow-up injected at round 9
+
+  ── R9/12 ── msgs=25 (TATATATU) empty_asst=7
+    ⏱ 4.5s (TTFT: 4.5s) | HIT
+    📊 pt=3  cr=5,392  cw=294  out=95
+    🔧 tools=1  finish=tool_calls
+       → read_files: 1002 chars
+
+  ── R10/12 ── msgs=27 (TATATUAT) empty_asst=8
+    ⏱ 4.6s (TTFT: 4.1s) | HIT+WRITE
+    📊 pt=1  cr=5,539  cw=812  out=124
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  ── R11/12 ── msgs=29 (TATUATAT) empty_asst=8
+    ⏱ 4.0s (TTFT: 4.0s) | HIT
+    📊 pt=1  cr=5,945  cw=130  out=81
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  ── R12/12 ── msgs=31 (TUATATAT) empty_asst=9
+    ⏱ 3.7s (TTFT: 3.7s) | HIT
+    📊 pt=1  cr=6,075  cw=136  out=56
+    🔧 tools=1  finish=tool_calls
+
+  ⏳ Waiting 20s between arms...
+
+  ════════════════════════════════════════════════════════════
+  SINGLE_1h — Scenario B
+  Strategy: 1 BP on msg[-1], 1h TTL (CC+1h)
+  ════════════════════════════════════════════════════════════
+
+  ── R1/12 ── msgs=2 (SU) empty_asst=0
+    ⏱ 3.4s (TTFT: 3.4s) | MISS
+    📊 pt=2,541  cr=0  cw=0  out=85
+    🔧 tools=1  finish=tool_calls
+       → list_dir: 326 chars
+
+  ── R2/12 ── msgs=4 (SUAT) empty_asst=1
+    ⏱ 4.2s (TTFT: 4.2s) | MISS
+    📊 pt=2,784  cr=0  cw=0  out=234
+    🔧 tools=6  finish=tool_calls
+       → list_dir: 326 chars
+       → list_dir: 326 chars
+       → list_dir: 326 chars
+       → list_dir: 326 chars
+       → list_dir: 326 chars
+       → list_dir: 326 chars
+
+  ── R3/12 ── msgs=11 (TATTTTTT) empty_asst=2
+    ⏱ 5.8s (TTFT: 4.0s) | HIT
+    📊 pt=1  cr=4,248  cw=0  out=189
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  ── R4/12 ── msgs=13 (TTTTTTAT) empty_asst=2
+    ⏱ 4.5s (TTFT: 4.5s) | WRITE
+    📊 pt=1  cr=0  cw=4,450  out=92
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  👤 User follow-up injected at round 5
+
+  ── R5/12 ── msgs=16 (TTTATATU) empty_asst=3
+    ⏱ 5.0s (TTFT: 5.0s) | HIT
+    📊 pt=3  cr=4,450  cw=340  out=143
+    🔧 tools=1  finish=tool_calls
+       → grep_search: 730 chars
+
+  ── R6/12 ── msgs=18 (TATATUAT) empty_asst=4
+    ⏱ 3.7s (TTFT: 3.7s) | HIT
+    📊 pt=1  cr=4,620  cw=346  out=73
+    🔧 tools=1  finish=tool_calls
+       → grep_search: 730 chars
+
+  ── R7/12 ── msgs=20 (TATUATAT) empty_asst=5
+    ⏱ 4.1s (TTFT: 4.1s) | HIT
+    📊 pt=1  cr=4,966  cw=336  out=71
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  ── R8/12 ── msgs=22 (TUATATAT) empty_asst=6
+    ⏱ 3.7s (TTFT: 3.7s) | HIT
+    📊 pt=1  cr=5,302  cw=126  out=81
+    🔧 tools=1  finish=tool_calls
+       → grep_search: 730 chars
+
+  👤 User follow-up injected at round 9
+
+  ── R9/12 ── msgs=25 (TATATATU) empty_asst=7
+    ⏱ 5.3s (TTFT: 5.3s) | HIT+WRITE
+    📊 pt=3  cr=5,428  cw=730  out=109
+    🔧 tools=1  finish=tool_calls
+       → read_files: 1002 chars
+
+  ── R10/12 ── msgs=27 (TATATUAT) empty_asst=8
+    ⏱ 4.4s (TTFT: 3.8s) | HIT+WRITE
+    📊 pt=1  cr=5,793  cw=812  out=109
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  ── R11/12 ── msgs=29 (TATUATAT) empty_asst=8
+    ⏱ 4.4s (TTFT: 4.4s) | HIT
+    📊 pt=1  cr=6,199  cw=130  out=81
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  ── R12/12 ── msgs=31 (TUATATAT) empty_asst=9
+    ⏱ 5.0s (TTFT: 4.0s) | HIT
+    📊 pt=1  cr=6,329  cw=272  out=118
+    🔧 tools=1  finish=tool_calls
+
+
+  ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
+  SCENARIO B — 5-ARM COMPARISON
+  ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
+
+  ┌─ OLD: 4 BPs, BP4=msg[-2], 5m TTL ─────────────┐
+
+  Rnd │   Prompt │  CacheRead │  CacheWrite │  Output │     Status │ Tools │  TTFT │ Total
+  ────┼──────────┼────────────┼─────────────┼─────────┼────────────┼───────┼───────┼──────
+    1 │    2,541 │          0 │           0 │      85 │       MISS │     1 │   3.6s │   3.6s
+    2 │    2,784 │          0 │           0 │     234 │       MISS │     6 │   4.2s │   4.2s
+    3 │    4,249 │          0 │           0 │     399 │       MISS │     6 │   3.5s │   6.1s
+    4 │      174 │          0 │      10,892 │     173 │      WRITE │     1 │   4.9s │   5.6s
+    5 │       26 │      5,446 │         704 │     110 │  HIT+WRITE │     1 │   5.8s │   5.8s
+    6 │      405 │      5,798 │          46 │     130 │        HIT │     1 │   4.8s │   4.8s
+    7 │      344 │      5,821 │         404 │      80 │        HIT │     1 │   4.3s │   4.3s
+    8 │      344 │      6,225 │         343 │      71 │        HIT │     1 │   3.9s │   3.9s
+    9 │       24 │      6,568 │         938 │     121 │  HIT+WRITE │     1 │   4.8s │   4.8s
+   10 │      407 │      7,037 │          42 │     115 │        HIT │     1 │   3.7s │   5.1s
+   11 │      119 │      7,058 │         425 │      81 │        HIT │     1 │   4.2s │   4.2s
+   12 │      137 │      7,483 │         118 │      57 │        HIT │     1 │   4.2s │   4.2s
+
+  ┌─ NEW: 4 BPs, BP4=msg[-1], 5m TTL ─────────────┐
+
+  Rnd │   Prompt │  CacheRead │  CacheWrite │  Output │     Status │ Tools │  TTFT │ Total
+  ────┼──────────┼────────────┼─────────────┼─────────┼────────────┼───────┼───────┼──────
+    1 │    2,541 │          0 │           0 │      85 │       MISS │     1 │   3.5s │   3.5s
+    2 │    2,784 │          0 │           0 │     234 │       MISS │     6 │   4.4s │   4.4s
+    3 │        1 │      4,248 │           0 │     154 │        HIT │     1 │   4.7s │   4.7s
+    4 │        1 │      4,248 │         157 │      89 │        HIT │     1 │   3.8s │   3.8s
+    5 │        3 │      4,405 │         334 │     116 │        HIT │     1 │   4.3s │   4.3s
+    6 │        1 │      4,572 │         339 │      80 │        HIT │     1 │   3.9s │   3.9s
+    7 │        1 │      4,911 │         343 │      80 │        HIT │     1 │   3.0s │   3.8s
+    8 │        1 │      5,254 │         135 │      71 │        HIT │     1 │   3.7s │   3.7s
+    9 │        3 │      5,389 │         294 │     121 │        HIT │     1 │   4.3s │   4.3s
+   10 │        1 │      5,536 │         406 │      87 │        HIT │     1 │   3.3s │   4.5s
+   11 │        1 │      5,942 │         142 │      63 │        HIT │     1 │   3.6s │   3.6s
+   12 │        1 │      6,084 │         118 │      57 │        HIT │     1 │   4.5s │   4.5s
+
+  ┌─ NEW_1h: 4 BPs, BP4=msg[-1], mixed TTL ─────────────┐
+
+  Rnd │   Prompt │  CacheRead │  CacheWrite │  Output │     Status │ Tools │  TTFT │ Total
+  ────┼──────────┼────────────┼─────────────┼─────────┼────────────┼───────┼───────┼──────
+    1 │    2,541 │          0 │           0 │      85 │       MISS │     1 │   4.0s │   4.0s
+    2 │    2,784 │          0 │           0 │     234 │       MISS │     6 │   4.5s │   4.5s
+    3 │        1 │      4,248 │           0 │     150 │        HIT │     1 │   3.6s │   4.9s
+    4 │        1 │      4,248 │         162 │      73 │        HIT │     1 │   3.5s │   3.5s
+    5 │        3 │      4,410 │         302 │     154 │        HIT │     1 │   5.0s │   5.0s
+    6 │        1 │      4,561 │         346 │      83 │        HIT │     1 │   4.2s │   4.2s
+    7 │        1 │      4,907 │         417 │      73 │        HIT │     1 │   3.5s │   3.5s
+    8 │        1 │      5,324 │         336 │      71 │        HIT │     1 │   4.3s │   4.3s
+    9 │        3 │      5,660 │         294 │      98 │        HIT │     1 │   3.8s │   3.8s
+   10 │        1 │      5,807 │         812 │     131 │  HIT+WRITE │     1 │   4.0s │   4.9s
+   11 │        1 │      6,213 │         136 │      81 │        HIT │     1 │   4.2s │   4.2s
+   12 │        1 │      6,349 │         136 │      57 │        HIT │     1 │   3.4s │   3.4s
+
+  ┌─ SINGLE: 1 BP on msg[-1], 5m TTL (CC) ─────────────┐
+
+  Rnd │   Prompt │  CacheRead │  CacheWrite │  Output │     Status │ Tools │  TTFT │ Total
+  ────┼──────────┼────────────┼─────────────┼─────────┼────────────┼───────┼───────┼──────
+    1 │    2,541 │          0 │           0 │      85 │       MISS │     1 │   3.5s │   3.5s
+    2 │    2,784 │          0 │           0 │     234 │       MISS │     6 │   4.7s │   4.7s
+    3 │        1 │          0 │       8,496 │     161 │      WRITE │     1 │   8.6s │   9.9s
+    4 │        1 │      4,248 │         178 │      89 │        HIT │     1 │   3.8s │   3.8s
+    5 │        3 │      4,426 │         334 │     116 │        HIT │     1 │   4.2s │   4.2s
+    6 │        1 │      4,593 │         339 │      73 │        HIT │     1 │   3.9s │   3.9s
+    7 │        1 │      4,932 │         336 │      69 │        HIT │     1 │   3.5s │   3.5s
+    8 │        1 │      5,268 │         124 │      71 │        HIT │     1 │   3.9s │   3.9s
+    9 │        3 │      5,392 │         294 │      95 │        HIT │     1 │   4.5s │   4.5s
+   10 │        1 │      5,539 │         812 │     124 │  HIT+WRITE │     1 │   4.1s │   4.6s
+   11 │        1 │      5,945 │         130 │      81 │        HIT │     1 │   4.0s │   4.0s
+   12 │        1 │      6,075 │         136 │      56 │        HIT │     1 │   3.7s │   3.7s
+
+  ┌─ SINGLE_1h: 1 BP on msg[-1], 1h TTL (CC+1h) ─────────────┐
+
+  Rnd │   Prompt │  CacheRead │  CacheWrite │  Output │     Status │ Tools │  TTFT │ Total
+  ────┼──────────┼────────────┼─────────────┼─────────┼────────────┼───────┼───────┼──────
+    1 │    2,541 │          0 │           0 │      85 │       MISS │     1 │   3.4s │   3.4s
+    2 │    2,784 │          0 │           0 │     234 │       MISS │     6 │   4.2s │   4.2s
+    3 │        1 │      4,248 │           0 │     189 │        HIT │     1 │   4.0s │   5.8s
+    4 │        1 │          0 │       4,450 │      92 │      WRITE │     1 │   4.5s │   4.5s
+    5 │        3 │      4,450 │         340 │     143 │        HIT │     1 │   5.0s │   5.0s
+    6 │        1 │      4,620 │         346 │      73 │        HIT │     1 │   3.7s │   3.7s
+    7 │        1 │      4,966 │         336 │      71 │        HIT │     1 │   4.1s │   4.1s
+    8 │        1 │      5,302 │         126 │      81 │        HIT │     1 │   3.7s │   3.7s
+    9 │        3 │      5,428 │         730 │     109 │  HIT+WRITE │     1 │   5.3s │   5.3s
+   10 │        1 │      5,793 │         812 │     109 │  HIT+WRITE │     1 │   3.8s │   4.4s
+   11 │        1 │      6,199 │         130 │      81 │        HIT │     1 │   4.4s │   4.4s
+   12 │        1 │      6,329 │         272 │     118 │        HIT │     1 │   4.0s │   5.0s
+
+  Metric                              │         OLD │         NEW │      NEW_1h │      SINGLE │   SINGLE_1h
+  ────────────────────────────────────┼─────────────┼─────────────┼─────────────┼─────────────┼────────────
+  Rounds completed                    │          12 │          12 │          12 │          12 │          12
+  Uncached (tokens)                   │      11,554 │       5,339 │       5,339 │       5,339 │       5,339
+  Cache reads (tokens)                │      51,436 │      50,589 │      51,727 │      46,418 │      47,335
+  Cache writes (tokens)               │      13,912 │       2,268 │       2,941 │      11,179 │       7,542
+  Output (tokens)                     │       1,656 │       1,237 │       1,290 │       1,254 │       1,385
+  Total input (tokens)                │      76,902 │      58,196 │      60,007 │      62,936 │      60,216
+  ────────────────────────────────────┼─────────────┼─────────────┼─────────────┼─────────────┼────────────
+  Uncached input cost                 │ $    0.1733 │ $    0.0801 │ $    0.0801 │ $    0.0801 │ $    0.0801
+  Cache read cost                     │ $    0.0772 │ $    0.0759 │ $    0.0776 │ $    0.0696 │ $    0.0710
+  Cache write cost                    │ $    0.2609 │ $    0.0425 │ $    0.0551 │ $    0.2096 │ $    0.1414
+  Output cost                         │ $    0.1242 │ $    0.0928 │ $    0.0968 │ $    0.0940 │ $    0.1039
+  TOTAL COST                          │ $    0.6355 │ $    0.2913 │ $    0.3096 │ $    0.4534 │ $    0.3964
+  No-cache baseline                   │ $    1.2777 │ $    0.9657 │ $    0.9969 │ $    1.0381 │ $    1.0071
+  Cache savings ($)                   │ $    0.6422 │ $    0.6744 │ $    0.6873 │ $    0.5847 │ $    0.6107
+  Cache savings (%)                   │       50.3% │       69.8% │       68.9% │       56.3% │       60.6%
+  ────────────────────────────────────┼─────────────┼─────────────┼─────────────┼─────────────┼────────────
+  Avg TTFT (s)                        │         4.3 │         3.9 │         4.0 │         4.4 │         4.2
+  Avg round time (s)                  │         4.7 │         4.1 │         4.2 │         4.5 │         4.4
+
+  Cost comparison matrix (row saves vs column):
+               │        OLD │        NEW │     NEW_1h │     SINGLE │  SINGLE_1h
+  ─────────────┼────────────┼────────────┼────────────┼────────────┼───────────
+           OLD │          — │  -118.2%🔴 │  -105.3%🔴 │   -40.2%🔴 │   -60.3%🔴
+           NEW │   +54.2%✅ │          — │    +5.9%✅ │   +35.8%✅ │   +26.5%✅
+        NEW_1h │   +51.3%✅ │    -6.3%🔴 │          — │   +31.7%✅ │   +21.9%✅
+        SINGLE │   +28.7%✅ │   -55.7%🔴 │   -46.5%🔴 │          — │   -14.4%🔴
+     SINGLE_1h │   +37.6%✅ │   -36.1%🔴 │   -28.0%🔴 │   +12.6%✅ │          —
+  (positive = row is cheaper than column)
+
+  🔍 OLD Anomalies:
+     ⚠️ Unusual prompt_tokens range: avg=226 (expected ~1-5 for Anthropic or ~10k+ for OpenAI)
+     ⚠️ Full re-cache on rounds: [4] (server-side TTL eviction)
+
+  🔍 SINGLE Anomalies:
+     ⚠️ Full re-cache on rounds: [3] (server-side TTL eviction)
+
+  🔍 SINGLE_1h Anomalies:
+     ⚠️ Full re-cache on rounds: [4] (server-side TTL eviction)
+
+  🏆 Best: NEW ($0.2913)
+  💸 Worst: OLD ($0.6355)
+  📊 Gap: $0.3442 (54.2%)
+
+  ⏳ Waiting 20s between scenarios...
+
+
+▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
+  SCENARIO C: Parallel tool calls (batched)
+  Arms: OLD → NEW → NEW_1h → SINGLE → SINGLE_1h
+▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
+
+  ════════════════════════════════════════════════════════════
+  OLD — Scenario C
+  Strategy: 4 BPs, BP4=msg[-2], 5m TTL
+  ════════════════════════════════════════════════════════════
+
+  ── R1/12 ── msgs=2 (SU) empty_asst=0
+    ⏱ 6.0s (TTFT: 3.4s) | MISS
+    📊 pt=2,591  cr=0  cw=0  out=245
+    🔧 tools=4  finish=tool_calls
+       → list_dir: 326 chars
+       → grep_search: 730 chars
+       → grep_search: 730 chars
+       → find_files: 382 chars
+
+  ── R2/12 ── msgs=7 (SUATTTT) empty_asst=0
+    ⏱ 6.4s (TTFT: 3.9s) | MISS
+    📊 pt=3,740  cr=0  cw=0  out=242
+    🔧 tools=3  finish=tool_calls
+       → grep_search: 730 chars
+       → grep_search: 730 chars
+       → list_dir: 326 chars
+
+  ── R3/12 ── msgs=11 (TTTTATTT) empty_asst=0
+    ⏱ 5.9s (TTFT: 4.4s) | WRITE
+    📊 pt=210  cr=0  cw=8,958  out=229
+    🔧 tools=3  finish=tool_calls
+       → run_command: 83 chars
+       → run_command: 83 chars
+       → run_command: 83 chars
+
+  ── R4/12 ── msgs=15 (ATTTATTT) empty_asst=0
+    ⏱ 13.9s (TTFT: 4.5s) | HIT+WRITE
+    📊 pt=75  cr=4,479  cw=1,090  out=662
+    🔧 tools=0  finish=stop
+    ✅ Complete (no tool calls)
+
+  ⏳ Waiting 20s between arms...
+
+  ════════════════════════════════════════════════════════════
+  NEW — Scenario C
+  Strategy: 4 BPs, BP4=msg[-1], 5m TTL
+  ════════════════════════════════════════════════════════════
+
+  ── R1/12 ── msgs=2 (SU) empty_asst=0
+    ⏱ 5.1s (TTFT: 3.3s) | MISS
+    📊 pt=2,591  cr=0  cw=0  out=248
+    🔧 tools=4  finish=tool_calls
+       → list_dir: 326 chars
+       → grep_search: 730 chars
+       → grep_search: 730 chars
+       → find_files: 382 chars
+
+  ── R2/12 ── msgs=7 (SUATTTT) empty_asst=0
+    ⏱ 6.2s (TTFT: 4.1s) | MISS
+    📊 pt=3,740  cr=0  cw=0  out=265
+    🔧 tools=3  finish=tool_calls
+       → grep_search: 730 chars
+       → grep_search: 730 chars
+       → list_dir: 326 chars
+
+  ── R3/12 ── msgs=11 (TTTTATTT) empty_asst=0
+    ⏱ 6.4s (TTFT: 4.3s) | WRITE
+    📊 pt=1  cr=0  cw=9,398  out=265
+    🔧 tools=3  finish=tool_calls
+       → run_command: 83 chars
+       → run_command: 83 chars
+       → run_command: 83 chars
+
+  ── R4/12 ── msgs=15 (ATTTATTT) empty_asst=0
+    ⏱ 5.3s (TTFT: 4.5s) | HIT+WRITE
+    📊 pt=1  cr=4,699  cw=828  out=131
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  ── R5/12 ── msgs=17 (TTATTTAT) empty_asst=0
+    ⏱ 3.6s (TTFT: 3.6s) | HIT
+    📊 pt=1  cr=5,113  cw=141  out=71
+    🔧 tools=1  finish=tool_calls
+       → find_files: 382 chars
+
+  ── R6/12 ── msgs=19 (ATTTATAT) empty_asst=1
+    ⏱ 13.2s (TTFT: 5.9s) | HIT
+    📊 pt=1  cr=5,254  cw=450  out=525
+    🔧 tools=0  finish=stop
+    ✅ Complete (no tool calls)
+
+  ⏳ Waiting 20s between arms...
+
+  ════════════════════════════════════════════════════════════
+  NEW_1h — Scenario C
+  Strategy: 4 BPs, BP4=msg[-1], mixed TTL
+  ════════════════════════════════════════════════════════════
+
+  ── R1/12 ── msgs=2 (SU) empty_asst=0
+    ⏱ 4.9s (TTFT: 3.0s) | MISS
+    📊 pt=2,591  cr=0  cw=0  out=248
+    🔧 tools=4  finish=tool_calls
+       → list_dir: 326 chars
+       → grep_search: 730 chars
+       → grep_search: 730 chars
+       → find_files: 382 chars
+
+  ── R2/12 ── msgs=7 (SUATTTT) empty_asst=0
+    ⏱ 6.5s (TTFT: 5.5s) | MISS
+    📊 pt=3,740  cr=0  cw=0  out=260
+    🔧 tools=3  finish=tool_calls
+       → grep_search: 730 chars
+       → grep_search: 730 chars
+       → list_dir: 326 chars
+
+  ── R3/12 ── msgs=11 (TTTTATTT) empty_asst=0
+    ⏱ 6.5s (TTFT: 4.1s) | WRITE
+    📊 pt=1  cr=0  cw=9,378  out=259
+    🔧 tools=3  finish=tool_calls
+       → run_command: 83 chars
+       → run_command: 83 chars
+       → run_command: 83 chars
+
+  ── R4/12 ── msgs=15 (ATTTATTT) empty_asst=0
+    ⏱ 12.3s (TTFT: 4.9s) | HIT+WRITE
+    📊 pt=1  cr=4,689  cw=860  out=543
+    🔧 tools=0  finish=stop
+    ✅ Complete (no tool calls)
+
+  ⏳ Waiting 20s between arms...
+
+  ════════════════════════════════════════════════════════════
+  SINGLE — Scenario C
+  Strategy: 1 BP on msg[-1], 5m TTL (CC)
+  ════════════════════════════════════════════════════════════
+
+  ── R1/12 ── msgs=2 (SU) empty_asst=0
+    ⏱ 5.5s (TTFT: 3.3s) | MISS
+    📊 pt=2,591  cr=0  cw=0  out=231
+    🔧 tools=4  finish=tool_calls
+       → list_dir: 326 chars
+       → grep_search: 730 chars
+       → grep_search: 730 chars
+       → list_dir: 326 chars
+
+  ── R2/12 ── msgs=7 (SUATTTT) empty_asst=0
+    ⏱ 6.4s (TTFT: 4.2s) | MISS
+    📊 pt=3,759  cr=0  cw=0  out=245
+    🔧 tools=3  finish=tool_calls
+       → grep_search: 730 chars
+       → grep_search: 730 chars
+       → find_files: 382 chars
+
+  ── R3/12 ── msgs=11 (TTTTATTT) empty_asst=0
+    ⏱ 6.7s (TTFT: 4.9s) | WRITE
+    📊 pt=1  cr=0  cw=9,340  out=273
+    🔧 tools=3  finish=tool_calls
+       → run_command: 83 chars
+       → run_command: 83 chars
+       → run_command: 83 chars
+
+  ── R4/12 ── msgs=15 (ATTTATTT) empty_asst=0
+    ⏱ 7.6s (TTFT: 4.0s) | HIT+WRITE
+    📊 pt=1  cr=4,670  cw=824  out=201
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  ── R5/12 ── msgs=17 (TTATTTAT) empty_asst=0
+    ⏱ 7.4s (TTFT: 5.7s) | HIT
+    📊 pt=1  cr=5,082  cw=442  out=276
+    🔧 tools=3  finish=tool_calls
+       → find_files: 382 chars
+       → list_dir: 326 chars
+       → list_dir: 326 chars
+
+  ── R6/12 ── msgs=21 (TTATATTT) empty_asst=0
+    ⏱ 14.6s (TTFT: 4.6s) | HIT+WRITE
+    📊 pt=1  cr=5,303  cw=1,502  out=723
+    🔧 tools=0  finish=stop
+    ✅ Complete (no tool calls)
+
+  ⏳ Waiting 20s between arms...
+
+  ════════════════════════════════════════════════════════════
+  SINGLE_1h — Scenario C
+  Strategy: 1 BP on msg[-1], 1h TTL (CC+1h)
+  ════════════════════════════════════════════════════════════
+
+  ── R1/12 ── msgs=2 (SU) empty_asst=0
+    ⏱ 5.1s (TTFT: 3.4s) | MISS
+    📊 pt=2,591  cr=0  cw=0  out=250
+    🔧 tools=4  finish=tool_calls
+       → list_dir: 326 chars
+       → grep_search: 730 chars
+       → grep_search: 730 chars
+       → find_files: 382 chars
+
+  ── R2/12 ── msgs=7 (SUATTTT) empty_asst=0
+    ⏱ 6.6s (TTFT: 4.7s) | MISS
+    📊 pt=3,742  cr=0  cw=0  out=307
+    🔧 tools=4  finish=tool_calls
+       → grep_search: 730 chars
+       → grep_search: 730 chars
+       → list_dir: 326 chars
+       → find_files: 382 chars
+
+  ── R3/12 ── msgs=12 (TTTATTTT) empty_asst=0
+    ⏱ 6.2s (TTFT: 4.2s) | WRITE
+    📊 pt=1  cr=0  cw=9,772  out=254
+    🔧 tools=3  finish=tool_calls
+       → run_command: 83 chars
+       → run_command: 83 chars
+       → run_command: 83 chars
+
+  ── R4/12 ── msgs=16 (TTTTATTT) empty_asst=0
+    ⏱ 5.8s (TTFT: 4.0s) | HIT+WRITE
+    📊 pt=1  cr=4,886  cw=818  out=208
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  ── R5/12 ── msgs=18 (TTATTTAT) empty_asst=0
+    ⏱ 11.1s (TTFT: 3.9s) | HIT
+    📊 pt=1  cr=5,295  cw=426  out=519
+    🔧 tools=0  finish=stop
+    ✅ Complete (no tool calls)
+
+
+  ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
+  SCENARIO C — 5-ARM COMPARISON
+  ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
+
+  ┌─ OLD: 4 BPs, BP4=msg[-2], 5m TTL ─────────────┐
+
+  Rnd │   Prompt │  CacheRead │  CacheWrite │  Output │     Status │ Tools │  TTFT │ Total
+  ────┼──────────┼────────────┼─────────────┼─────────┼────────────┼───────┼───────┼──────
+    1 │    2,591 │          0 │           0 │     245 │       MISS │     4 │   3.4s │   6.0s
+    2 │    3,740 │          0 │           0 │     242 │       MISS │     3 │   3.9s │   6.4s
+    3 │      210 │          0 │       8,958 │     229 │      WRITE │     3 │   4.4s │   5.9s
+    4 │       75 │      4,479 │       1,090 │     662 │  HIT+WRITE │     0 │   4.5s │  13.9s
+
+  ┌─ NEW: 4 BPs, BP4=msg[-1], 5m TTL ─────────────┐
+
+  Rnd │   Prompt │  CacheRead │  CacheWrite │  Output │     Status │ Tools │  TTFT │ Total
+  ────┼──────────┼────────────┼─────────────┼─────────┼────────────┼───────┼───────┼──────
+    1 │    2,591 │          0 │           0 │     248 │       MISS │     4 │   3.3s │   5.1s
+    2 │    3,740 │          0 │           0 │     265 │       MISS │     3 │   4.1s │   6.2s
+    3 │        1 │          0 │       9,398 │     265 │      WRITE │     3 │   4.3s │   6.4s
+    4 │        1 │      4,699 │         828 │     131 │  HIT+WRITE │     1 │   4.5s │   5.3s
+    5 │        1 │      5,113 │         141 │      71 │        HIT │     1 │   3.6s │   3.6s
+    6 │        1 │      5,254 │         450 │     525 │        HIT │     0 │   5.9s │  13.2s
+
+  ┌─ NEW_1h: 4 BPs, BP4=msg[-1], mixed TTL ─────────────┐
+
+  Rnd │   Prompt │  CacheRead │  CacheWrite │  Output │     Status │ Tools │  TTFT │ Total
+  ────┼──────────┼────────────┼─────────────┼─────────┼────────────┼───────┼───────┼──────
+    1 │    2,591 │          0 │           0 │     248 │       MISS │     4 │   3.0s │   4.9s
+    2 │    3,740 │          0 │           0 │     260 │       MISS │     3 │   5.5s │   6.5s
+    3 │        1 │          0 │       9,378 │     259 │      WRITE │     3 │   4.1s │   6.5s
+    4 │        1 │      4,689 │         860 │     543 │  HIT+WRITE │     0 │   4.9s │  12.3s
+
+  ┌─ SINGLE: 1 BP on msg[-1], 5m TTL (CC) ─────────────┐
+
+  Rnd │   Prompt │  CacheRead │  CacheWrite │  Output │     Status │ Tools │  TTFT │ Total
+  ────┼──────────┼────────────┼─────────────┼─────────┼────────────┼───────┼───────┼──────
+    1 │    2,591 │          0 │           0 │     231 │       MISS │     4 │   3.3s │   5.5s
+    2 │    3,759 │          0 │           0 │     245 │       MISS │     3 │   4.2s │   6.4s
+    3 │        1 │          0 │       9,340 │     273 │      WRITE │     3 │   4.9s │   6.7s
+    4 │        1 │      4,670 │         824 │     201 │  HIT+WRITE │     1 │   4.0s │   7.6s
+    5 │        1 │      5,082 │         442 │     276 │        HIT │     3 │   5.7s │   7.4s
+    6 │        1 │      5,303 │       1,502 │     723 │  HIT+WRITE │     0 │   4.6s │  14.6s
+
+  ┌─ SINGLE_1h: 1 BP on msg[-1], 1h TTL (CC+1h) ─────────────┐
+
+  Rnd │   Prompt │  CacheRead │  CacheWrite │  Output │     Status │ Tools │  TTFT │ Total
+  ────┼──────────┼────────────┼─────────────┼─────────┼────────────┼───────┼───────┼──────
+    1 │    2,591 │          0 │           0 │     250 │       MISS │     4 │   3.4s │   5.1s
+    2 │    3,742 │          0 │           0 │     307 │       MISS │     4 │   4.7s │   6.6s
+    3 │        1 │          0 │       9,772 │     254 │      WRITE │     3 │   4.2s │   6.2s
+    4 │        1 │      4,886 │         818 │     208 │  HIT+WRITE │     1 │   4.0s │   5.8s
+    5 │        1 │      5,295 │         426 │     519 │        HIT │     0 │   3.9s │  11.1s
+
+  Metric                              │         OLD │         NEW │      NEW_1h │      SINGLE │   SINGLE_1h
+  ────────────────────────────────────┼─────────────┼─────────────┼─────────────┼─────────────┼────────────
+  Rounds completed                    │           4 │           6 │           4 │           6 │           5
+  Uncached (tokens)                   │       6,616 │       6,335 │       6,333 │       6,354 │       6,336
+  Cache reads (tokens)                │       4,479 │      15,066 │       4,689 │      15,055 │      10,181
+  Cache writes (tokens)               │      10,048 │      10,817 │      10,238 │      12,108 │      11,016
+  Output (tokens)                     │       1,378 │       1,505 │       1,310 │       1,949 │       1,538
+  Total input (tokens)                │      21,143 │      32,218 │      21,260 │      33,517 │      27,533
+  ────────────────────────────────────┼─────────────┼─────────────┼─────────────┼─────────────┼────────────
+  Uncached input cost                 │ $    0.0992 │ $    0.0950 │ $    0.0950 │ $    0.0953 │ $    0.0950
+  Cache read cost                     │ $    0.0067 │ $    0.0226 │ $    0.0070 │ $    0.0226 │ $    0.0153
+  Cache write cost                    │ $    0.1884 │ $    0.2028 │ $    0.1920 │ $    0.2270 │ $    0.2066
+  Output cost                         │ $    0.1033 │ $    0.1129 │ $    0.0983 │ $    0.1462 │ $    0.1153
+  TOTAL COST                          │ $    0.3977 │ $    0.4333 │ $    0.3922 │ $    0.4911 │ $    0.4322
+  No-cache baseline                   │ $    0.4205 │ $    0.5961 │ $    0.4172 │ $    0.6489 │ $    0.5283
+  Cache savings ($)                   │ $    0.0228 │ $    0.1628 │ $    0.0249 │ $    0.1578 │ $    0.0961
+  Cache savings (%)                   │        5.4% │       27.3% │        6.0% │       24.3% │       18.2%
+  ────────────────────────────────────┼─────────────┼─────────────┼─────────────┼─────────────┼────────────
+  Avg TTFT (s)                        │         4.0 │         4.3 │         4.4 │         4.5 │         4.0
+  Avg round time (s)                  │         8.0 │         6.6 │         7.5 │         8.0 │         6.9
+
+  Cost comparison matrix (row saves vs column):
+               │        OLD │        NEW │     NEW_1h │     SINGLE │  SINGLE_1h
+  ─────────────┼────────────┼────────────┼────────────┼────────────┼───────────
+           OLD │          — │    +8.2%✅ │    -1.4%➖ │   +19.0%✅ │    +8.0%✅
+           NEW │    -9.0%🔴 │          — │   -10.5%🔴 │   +11.8%✅ │    -0.3%➖
+        NEW_1h │    +1.4%➖ │    +9.5%✅ │          — │   +20.1%✅ │    +9.2%✅
+        SINGLE │   -23.5%🔴 │   -13.3%🔴 │   -25.2%🔴 │          — │   -13.6%🔴
+     SINGLE_1h │    -8.7%🔴 │    +0.3%➖ │   -10.2%🔴 │   +12.0%✅ │          —
+  (positive = row is cheaper than column)
+
+  🔍 OLD Anomalies:
+     ⚠️ Unusual prompt_tokens range: avg=75 (expected ~1-5 for Anthropic or ~10k+ for OpenAI)
+     ⚠️ Full re-cache on rounds: [3] (server-side TTL eviction)
+
+  🔍 NEW Anomalies:
+     ⚠️ Full re-cache on rounds: [3] (server-side TTL eviction)
+
+  🔍 NEW_1h Anomalies:
+     ⚠️ Full re-cache on rounds: [3] (server-side TTL eviction)
+
+  🔍 SINGLE Anomalies:
+     ⚠️ Full re-cache on rounds: [3] (server-side TTL eviction)
+
+  🔍 SINGLE_1h Anomalies:
+     ⚠️ Full re-cache on rounds: [3] (server-side TTL eviction)
+
+  🏆 Best: NEW_1h ($0.3922)
+  💸 Worst: SINGLE ($0.4911)
+  📊 Gap: $0.0989 (20.1%)
+
+  ⏳ Waiting 20s between scenarios...
+
+
+▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
+  SCENARIO D: Mixed content assistants (text + empty)
+  Arms: OLD → NEW → NEW_1h → SINGLE → SINGLE_1h
+▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
+
+  ════════════════════════════════════════════════════════════
+  OLD — Scenario D
+  Strategy: 4 BPs, BP4=msg[-2], 5m TTL
+  ════════════════════════════════════════════════════════════
+
+  ── R1/12 ── msgs=2 (SU) empty_asst=0
+    ⏱ 4.4s (TTFT: 3.4s) | MISS
+    📊 pt=2,567  cr=0  cw=0  out=177
+    🔧 tools=2  finish=tool_calls
+       → list_dir: 326 chars
+       → grep_search: 730 chars
+
+  ── R2/12 ── msgs=5 (SUATT) empty_asst=0
+    ⏱ 3.9s (TTFT: 3.9s) | MISS
+    📊 pt=3,180  cr=0  cw=0  out=155
+    🔧 tools=2  finish=tool_calls
+       → read_files: 1002 chars
+       → grep_search: 730 chars
+
+  ── R3/12 ── msgs=8 (SUATTATT) empty_asst=1
+    ⏱ 4.3s (TTFT: 4.3s) | MISS
+    📊 pt=3,971  cr=0  cw=0  out=99
+    🔧 tools=1  finish=tool_calls
+       → read_files: 1002 chars
+
+  ── R4/12 ── msgs=10 (ATTATTAT) empty_asst=2
+    ⏱ 4.0s (TTFT: 3.0s) | MISS
+    📊 pt=4,404  cr=0  cw=0  out=102
+    🔧 tools=1  finish=tool_calls
+       → read_files: 1002 chars
+
+  ── R5/12 ── msgs=12 (TATTATAT) empty_asst=2
+    ⏱ 3.9s (TTFT: 3.0s) | WRITE
+    📊 pt=418  cr=0  cw=4,422  out=83
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  ── R6/12 ── msgs=14 (TTATATAT) empty_asst=2
+    ⏱ 3.5s (TTFT: 3.5s) | HIT
+    📊 pt=125  cr=4,422  cw=431  out=73
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  ── R7/12 ── msgs=16 (ATATATAT) empty_asst=3
+    ⏱ 3.8s (TTFT: 3.8s) | HIT
+    📊 pt=129  cr=4,853  cw=124  out=75
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  ── R8/12 ── msgs=18 (ATATATAT) empty_asst=4
+    ⏱ 4.0s (TTFT: 2.9s) | HIT
+    📊 pt=131  cr=4,977  cw=128  out=102
+    🔧 tools=1  finish=tool_calls
+       → read_files: 1002 chars
+
+  ── R9/12 ── msgs=20 (ATATATAT) empty_asst=4
+    ⏱ 4.8s (TTFT: 3.2s) | HIT
+    📊 pt=418  cr=5,105  cw=149  out=119
+    🔧 tools=1  finish=tool_calls
+       → read_files: 1002 chars
+
+  ── R10/12 ── msgs=22 (ATATATAT) empty_asst=4
+    ⏱ 4.2s (TTFT: 3.1s) | HIT
+    📊 pt=421  cr=5,254  cw=450  out=107
+    🔧 tools=1  finish=tool_calls
+       → read_files: 1002 chars
+
+  ── R11/12 ── msgs=24 (ATATATAT) empty_asst=4
+    ⏱ 6.5s (TTFT: 4.3s) | HIT+WRITE
+    📊 pt=421  cr=5,704  cw=882  out=296
+    🔧 tools=2  finish=tool_calls
+       → grep_search: 730 chars
+       → grep_search: 730 chars
+
+  ── R12/12 ── msgs=27 (TATATATT) empty_asst=4
+    ⏱ 4.6s (TTFT: 3.4s) | HIT+WRITE
+    📊 pt=283  cr=6,145  cw=943  out=120
+    🔧 tools=1  finish=tool_calls
+
+  ⏳ Waiting 20s between arms...
+
+  ════════════════════════════════════════════════════════════
+  NEW — Scenario D
+  Strategy: 4 BPs, BP4=msg[-1], 5m TTL
+  ════════════════════════════════════════════════════════════
+
+  ── R1/12 ── msgs=2 (SU) empty_asst=0
+    ⏱ 5.1s (TTFT: 3.8s) | MISS
+    📊 pt=2,567  cr=0  cw=0  out=205
+    🔧 tools=3  finish=tool_calls
+       → list_dir: 326 chars
+       → grep_search: 730 chars
+       → grep_search: 730 chars
+
+  ── R2/12 ── msgs=6 (SUATTT) empty_asst=0
+    ⏱ 3.7s (TTFT: 3.7s) | MISS
+    📊 pt=3,483  cr=0  cw=0  out=121
+    🔧 tools=1  finish=tool_calls
+       → read_files: 1002 chars
+
+  ── R3/12 ── msgs=8 (SUATTTAT) empty_asst=1
+    ⏱ 3.4s (TTFT: 3.4s) | MISS
+    📊 pt=3,932  cr=0  cw=0  out=83
+    🔧 tools=1  finish=tool_calls
+       → read_files: 1002 chars
+
+  ── R4/12 ── msgs=10 (ATTTATAT) empty_asst=2
+    ⏱ 4.2s (TTFT: 4.1s) | WRITE
+    📊 pt=1  cr=0  cw=4,348  out=92
+    🔧 tools=1  finish=tool_calls
+       → read_files: 1002 chars
+
+  ── R5/12 ── msgs=12 (TTATATAT) empty_asst=2
+    ⏱ 4.2s (TTFT: 3.1s) | HIT
+    📊 pt=1  cr=4,348  cw=426  out=102
+    🔧 tools=1  finish=tool_calls
+       → grep_search: 730 chars
+
+  ── R6/12 ── msgs=14 (ATATATAT) empty_asst=2
+    ⏱ 4.0s (TTFT: 4.0s) | HIT
+    📊 pt=1  cr=4,774  cw=365  out=97
+    🔧 tools=1  finish=tool_calls
+       → grep_search: 730 chars
+
+  ── R7/12 ── msgs=16 (ATATATAT) empty_asst=3
+    ⏱ 3.9s (TTFT: 3.9s) | HIT
+    📊 pt=1  cr=5,139  cw=360  out=71
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  ── R8/12 ── msgs=18 (ATATATAT) empty_asst=4
+    ⏱ 3.0s (TTFT: 3.0s) | HIT
+    📊 pt=1  cr=5,499  cw=126  out=71
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  ── R9/12 ── msgs=20 (ATATATAT) empty_asst=5
+    ⏱ 4.7s (TTFT: 4.7s) | HIT
+    📊 pt=1  cr=5,625  cw=126  out=71
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  ── R10/12 ── msgs=22 (ATATATAT) empty_asst=6
+    ⏱ 4.4s (TTFT: 4.4s) | HIT
+    📊 pt=1  cr=5,751  cw=126  out=78
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  ── R11/12 ── msgs=24 (ATATATAT) empty_asst=7
+    ⏱ 4.6s (TTFT: 4.6s) | HIT
+    📊 pt=1  cr=5,877  cw=133  out=124
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  ── R12/12 ── msgs=26 (ATATATAT) empty_asst=8
+    ⏱ 4.2s (TTFT: 4.2s) | HIT
+    📊 pt=1  cr=6,010  cw=179  out=128
+    🔧 tools=1  finish=tool_calls
+
+  ⏳ Waiting 20s between arms...
+
+  ════════════════════════════════════════════════════════════
+  NEW_1h — Scenario D
+  Strategy: 4 BPs, BP4=msg[-1], mixed TTL
+  ════════════════════════════════════════════════════════════
+
+  ── R1/12 ── msgs=2 (SU) empty_asst=0
+    ⏱ 4.8s (TTFT: 3.6s) | MISS
+    📊 pt=2,567  cr=0  cw=0  out=201
+    🔧 tools=3  finish=tool_calls
+       → list_dir: 326 chars
+       → grep_search: 730 chars
+       → grep_search: 730 chars
+
+  ── R2/12 ── msgs=6 (SUATTT) empty_asst=0
+    ⏱ 4.1s (TTFT: 4.1s) | MISS
+    📊 pt=3,481  cr=0  cw=0  out=145
+    🔧 tools=1  finish=tool_calls
+       → read_files: 1002 chars
+
+  ── R3/12 ── msgs=8 (SUATTTAT) empty_asst=1
+    ⏱ 3.3s (TTFT: 3.3s) | MISS
+    📊 pt=3,930  cr=0  cw=0  out=83
+    🔧 tools=1  finish=tool_calls
+       → read_files: 1002 chars
+
+  ── R4/12 ── msgs=10 (ATTTATAT) empty_asst=2
+    ⏱ 3.8s (TTFT: 2.9s) | WRITE
+    📊 pt=1  cr=0  cw=4,346  out=93
+    🔧 tools=1  finish=tool_calls
+       → read_files: 1002 chars
+
+  ── R5/12 ── msgs=12 (TTATATAT) empty_asst=2
+    ⏱ 4.5s (TTFT: 3.3s) | HIT
+    📊 pt=1  cr=4,346  cw=427  out=99
+    🔧 tools=1  finish=tool_calls
+       → read_files: 1002 chars
+
+  ── R6/12 ── msgs=14 (ATATATAT) empty_asst=2
+    ⏱ 4.1s (TTFT: 2.9s) | HIT
+    📊 pt=1  cr=4,773  cw=433  out=97
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  ── R7/12 ── msgs=16 (ATATATAT) empty_asst=2
+    ⏱ 3.7s (TTFT: 3.7s) | HIT
+    📊 pt=1  cr=5,206  cw=152  out=73
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  ── R8/12 ── msgs=18 (ATATATAT) empty_asst=3
+    ⏱ 3.4s (TTFT: 3.4s) | HIT
+    📊 pt=1  cr=5,358  cw=128  out=75
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  ── R9/12 ── msgs=20 (ATATATAT) empty_asst=4
+    ⏱ 4.1s (TTFT: 4.1s) | HIT
+    📊 pt=1  cr=5,486  cw=130  out=107
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  ── R10/12 ── msgs=22 (ATATATAT) empty_asst=5
+    ⏱ 4.4s (TTFT: 3.4s) | HIT
+    📊 pt=1  cr=5,616  cw=162  out=88
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  ── R11/12 ── msgs=24 (ATATATAT) empty_asst=5
+    ⏱ 4.1s (TTFT: 4.1s) | HIT
+    📊 pt=1  cr=5,778  cw=143  out=74
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  ── R12/12 ── msgs=26 (ATATATAT) empty_asst=6
+    ⏱ 4.9s (TTFT: 3.6s) | HIT
+    📊 pt=1  cr=5,921  cw=129  out=134
+    🔧 tools=1  finish=tool_calls
+
+  ⏳ Waiting 20s between arms...
+
+  ════════════════════════════════════════════════════════════
+  SINGLE — Scenario D
+  Strategy: 1 BP on msg[-1], 5m TTL (CC)
+  ════════════════════════════════════════════════════════════
+
+  ── R1/12 ── msgs=2 (SU) empty_asst=0
+    ⏱ 4.5s (TTFT: 3.4s) | MISS
+    📊 pt=2,567  cr=0  cw=0  out=205
+    🔧 tools=3  finish=tool_calls
+       → list_dir: 326 chars
+       → grep_search: 730 chars
+       → grep_search: 730 chars
+
+  ── R2/12 ── msgs=6 (SUATTT) empty_asst=0
+    ⏱ 3.4s (TTFT: 3.4s) | MISS
+    📊 pt=3,483  cr=0  cw=0  out=94
+    🔧 tools=2  finish=tool_calls
+       → grep_search: 730 chars
+       → grep_search: 730 chars
+
+  ── R3/12 ── msgs=9 (UATTTATT) empty_asst=1
+    ⏱ 3.7s (TTFT: 3.7s) | WRITE
+    📊 pt=1  cr=0  cw=4,141  out=129
+    🔧 tools=2  finish=tool_calls
+       → grep_search: 730 chars
+       → grep_search: 730 chars
+
+  ── R4/12 ── msgs=12 (TTATTATT) empty_asst=2
+    ⏱ 4.8s (TTFT: 3.0s) | HIT+WRITE
+    📊 pt=1  cr=4,141  cw=694  out=141
+    🔧 tools=1  finish=tool_calls
+       → read_files: 1002 chars
+
+  ── R5/12 ── msgs=14 (ATTATTAT) empty_asst=2
+    ⏱ 4.0s (TTFT: 4.0s) | HIT
+    📊 pt=1  cr=4,835  cw=469  out=83
+    🔧 tools=1  finish=tool_calls
+       → read_files: 1002 chars
+
+  ── R6/12 ── msgs=16 (TATTATAT) empty_asst=3
+    ⏱ 4.0s (TTFT: 3.0s) | HIT
+    📊 pt=1  cr=5,304  cw=417  out=102
+    🔧 tools=1  finish=tool_calls
+       → read_files: 1002 chars
+
+  ── R7/12 ── msgs=18 (TTATATAT) empty_asst=3
+    ⏱ 4.6s (TTFT: 3.4s) | HIT
+    📊 pt=1  cr=5,721  cw=436  out=109
+    🔧 tools=1  finish=tool_calls
+       → read_files: 1002 chars
+
+  ── R8/12 ── msgs=20 (ATATATAT) empty_asst=3
+    ⏱ 5.1s (TTFT: 3.4s) | HIT
+    📊 pt=1  cr=6,157  cw=443  out=96
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  ── R9/12 ── msgs=22 (ATATATAT) empty_asst=3
+    ⏱ 4.1s (TTFT: 4.1s) | HIT
+    📊 pt=1  cr=6,600  cw=151  out=76
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  ── R10/12 ── msgs=24 (ATATATAT) empty_asst=4
+    ⏱ 4.0s (TTFT: 4.0s) | HIT
+    📊 pt=1  cr=6,751  cw=131  out=75
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  ── R11/12 ── msgs=26 (ATATATAT) empty_asst=5
+    ⏱ 5.9s (TTFT: 5.9s) | HIT
+    📊 pt=1  cr=6,882  cw=130  out=122
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  ── R12/12 ── msgs=28 (ATATATAT) empty_asst=6
+    ⏱ 4.4s (TTFT: 3.2s) | HIT
+    📊 pt=1  cr=7,012  cw=177  out=86
+    🔧 tools=1  finish=tool_calls
+
+  ⏳ Waiting 20s between arms...
+
+  ════════════════════════════════════════════════════════════
+  SINGLE_1h — Scenario D
+  Strategy: 1 BP on msg[-1], 1h TTL (CC+1h)
+  ════════════════════════════════════════════════════════════
+
+  ── R1/12 ── msgs=2 (SU) empty_asst=0
+    ⏱ 4.7s (TTFT: 3.7s) | MISS
+    📊 pt=2,567  cr=0  cw=0  out=177
+    🔧 tools=2  finish=tool_calls
+       → list_dir: 326 chars
+       → grep_search: 730 chars
+
+  ── R2/12 ── msgs=5 (SUATT) empty_asst=0
+    ⏱ 3.9s (TTFT: 3.9s) | MISS
+    📊 pt=3,180  cr=0  cw=0  out=160
+    🔧 tools=2  finish=tool_calls
+       → read_files: 1002 chars
+       → grep_search: 730 chars
+
+  ── R3/12 ── msgs=8 (SUATTATT) empty_asst=1
+    ⏱ 4.1s (TTFT: 4.1s) | MISS
+    📊 pt=3,971  cr=0  cw=0  out=115
+    🔧 tools=1  finish=tool_calls
+       → read_files: 1002 chars
+
+  ── R4/12 ── msgs=10 (ATTATTAT) empty_asst=2
+    ⏱ 4.4s (TTFT: 3.4s) | WRITE
+    📊 pt=1  cr=0  cw=4,419  out=102
+    🔧 tools=1  finish=tool_calls
+       → read_files: 1002 chars
+
+  ── R5/12 ── msgs=12 (TATTATAT) empty_asst=2
+    ⏱ 4.2s (TTFT: 3.4s) | HIT
+    📊 pt=1  cr=4,419  cw=436  out=104
+    🔧 tools=1  finish=tool_calls
+       → read_files: 1002 chars
+
+  ── R6/12 ── msgs=14 (TTATATAT) empty_asst=2
+    ⏱ 4.1s (TTFT: 3.0s) | HIT
+    📊 pt=1  cr=4,855  cw=438  out=92
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  ── R7/12 ── msgs=16 (ATATATAT) empty_asst=2
+    ⏱ 3.7s (TTFT: 3.7s) | HIT
+    📊 pt=1  cr=5,293  cw=147  out=73
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  ── R8/12 ── msgs=18 (ATATATAT) empty_asst=3
+    ⏱ 3.5s (TTFT: 3.5s) | HIT
+    📊 pt=1  cr=5,440  cw=128  out=75
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  ── R9/12 ── msgs=20 (ATATATAT) empty_asst=4
+    ⏱ 4.3s (TTFT: 4.3s) | HIT
+    📊 pt=1  cr=5,568  cw=130  out=122
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  ── R10/12 ── msgs=22 (ATATATAT) empty_asst=5
+    ⏱ 4.1s (TTFT: 3.0s) | HIT
+    📊 pt=1  cr=5,698  cw=177  out=85
+    🔧 tools=1  finish=tool_calls
+       → run_command: 83 chars
+
+  ── R11/12 ── msgs=24 (ATATATAT) empty_asst=5
+    ⏱ 4.3s (TTFT: 3.3s) | HIT
+    📊 pt=1  cr=5,875  cw=140  out=110
+    🔧 tools=1  finish=tool_calls
+       → read_files: 1002 chars
+
+  ── R12/12 ── msgs=26 (ATATATAT) empty_asst=5
+    ⏱ 4.3s (TTFT: 2.3s) | HIT
+    📊 pt=1  cr=6,015  cw=444  out=140
+    🔧 tools=1  finish=tool_calls
+
+
+  ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
+  SCENARIO D — 5-ARM COMPARISON
+  ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
+
+  ┌─ OLD: 4 BPs, BP4=msg[-2], 5m TTL ─────────────┐
+
+  Rnd │   Prompt │  CacheRead │  CacheWrite │  Output │     Status │ Tools │  TTFT │ Total
+  ────┼──────────┼────────────┼─────────────┼─────────┼────────────┼───────┼───────┼──────
+    1 │    2,567 │          0 │           0 │     177 │       MISS │     2 │   3.4s │   4.4s
+    2 │    3,180 │          0 │           0 │     155 │       MISS │     2 │   3.9s │   3.9s
+    3 │    3,971 │          0 │           0 │      99 │       MISS │     1 │   4.3s │   4.3s
+    4 │    4,404 │          0 │           0 │     102 │       MISS │     1 │   3.0s │   4.0s
+    5 │      418 │          0 │       4,422 │      83 │      WRITE │     1 │   3.0s │   3.9s
+    6 │      125 │      4,422 │         431 │      73 │        HIT │     1 │   3.5s │   3.5s
+    7 │      129 │      4,853 │         124 │      75 │        HIT │     1 │   3.8s │   3.8s
+    8 │      131 │      4,977 │         128 │     102 │        HIT │     1 │   2.9s │   4.0s
+    9 │      418 │      5,105 │         149 │     119 │        HIT │     1 │   3.2s │   4.8s
+   10 │      421 │      5,254 │         450 │     107 │        HIT │     1 │   3.1s │   4.2s
+   11 │      421 │      5,704 │         882 │     296 │  HIT+WRITE │     2 │   4.3s │   6.5s
+   12 │      283 │      6,145 │         943 │     120 │  HIT+WRITE │     1 │   3.4s │   4.6s
+
+  ┌─ NEW: 4 BPs, BP4=msg[-1], 5m TTL ─────────────┐
+
+  Rnd │   Prompt │  CacheRead │  CacheWrite │  Output │     Status │ Tools │  TTFT │ Total
+  ────┼──────────┼────────────┼─────────────┼─────────┼────────────┼───────┼───────┼──────
+    1 │    2,567 │          0 │           0 │     205 │       MISS │     3 │   3.8s │   5.1s
+    2 │    3,483 │          0 │           0 │     121 │       MISS │     1 │   3.7s │   3.7s
+    3 │    3,932 │          0 │           0 │      83 │       MISS │     1 │   3.4s │   3.4s
+    4 │        1 │          0 │       4,348 │      92 │      WRITE │     1 │   4.1s │   4.2s
+    5 │        1 │      4,348 │         426 │     102 │        HIT │     1 │   3.1s │   4.2s
+    6 │        1 │      4,774 │         365 │      97 │        HIT │     1 │   4.0s │   4.0s
+    7 │        1 │      5,139 │         360 │      71 │        HIT │     1 │   3.9s │   3.9s
+    8 │        1 │      5,499 │         126 │      71 │        HIT │     1 │   3.0s │   3.0s
+    9 │        1 │      5,625 │         126 │      71 │        HIT │     1 │   4.7s │   4.7s
+   10 │        1 │      5,751 │         126 │      78 │        HIT │     1 │   4.4s │   4.4s
+   11 │        1 │      5,877 │         133 │     124 │        HIT │     1 │   4.6s │   4.6s
+   12 │        1 │      6,010 │         179 │     128 │        HIT │     1 │   4.2s │   4.2s
+
+  ┌─ NEW_1h: 4 BPs, BP4=msg[-1], mixed TTL ─────────────┐
+
+  Rnd │   Prompt │  CacheRead │  CacheWrite │  Output │     Status │ Tools │  TTFT │ Total
+  ────┼──────────┼────────────┼─────────────┼─────────┼────────────┼───────┼───────┼──────
+    1 │    2,567 │          0 │           0 │     201 │       MISS │     3 │   3.6s │   4.8s
+    2 │    3,481 │          0 │           0 │     145 │       MISS │     1 │   4.1s │   4.1s
+    3 │    3,930 │          0 │           0 │      83 │       MISS │     1 │   3.3s │   3.3s
+    4 │        1 │          0 │       4,346 │      93 │      WRITE │     1 │   2.9s │   3.8s
+    5 │        1 │      4,346 │         427 │      99 │        HIT │     1 │   3.3s │   4.5s
+    6 │        1 │      4,773 │         433 │      97 │        HIT │     1 │   2.9s │   4.1s
+    7 │        1 │      5,206 │         152 │      73 │        HIT │     1 │   3.7s │   3.7s
+    8 │        1 │      5,358 │         128 │      75 │        HIT │     1 │   3.4s │   3.4s
+    9 │        1 │      5,486 │         130 │     107 │        HIT │     1 │   4.1s │   4.1s
+   10 │        1 │      5,616 │         162 │      88 │        HIT │     1 │   3.4s │   4.4s
+   11 │        1 │      5,778 │         143 │      74 │        HIT │     1 │   4.1s │   4.1s
+   12 │        1 │      5,921 │         129 │     134 │        HIT │     1 │   3.6s │   4.9s
+
+  ┌─ SINGLE: 1 BP on msg[-1], 5m TTL (CC) ─────────────┐
+
+  Rnd │   Prompt │  CacheRead │  CacheWrite │  Output │     Status │ Tools │  TTFT │ Total
+  ────┼──────────┼────────────┼─────────────┼─────────┼────────────┼───────┼───────┼──────
+    1 │    2,567 │          0 │           0 │     205 │       MISS │     3 │   3.4s │   4.5s
+    2 │    3,483 │          0 │           0 │      94 │       MISS │     2 │   3.4s │   3.4s
+    3 │        1 │          0 │       4,141 │     129 │      WRITE │     2 │   3.7s │   3.7s
+    4 │        1 │      4,141 │         694 │     141 │  HIT+WRITE │     1 │   3.0s │   4.8s
+    5 │        1 │      4,835 │         469 │      83 │        HIT │     1 │   4.0s │   4.0s
+    6 │        1 │      5,304 │         417 │     102 │        HIT │     1 │   3.0s │   4.0s
+    7 │        1 │      5,721 │         436 │     109 │        HIT │     1 │   3.4s │   4.6s
+    8 │        1 │      6,157 │         443 │      96 │        HIT │     1 │   3.4s │   5.1s
+    9 │        1 │      6,600 │         151 │      76 │        HIT │     1 │   4.1s │   4.1s
+   10 │        1 │      6,751 │         131 │      75 │        HIT │     1 │   4.0s │   4.0s
+   11 │        1 │      6,882 │         130 │     122 │        HIT │     1 │   5.9s │   5.9s
+   12 │        1 │      7,012 │         177 │      86 │        HIT │     1 │   3.2s │   4.4s
+
+  ┌─ SINGLE_1h: 1 BP on msg[-1], 1h TTL (CC+1h) ─────────────┐
+
+  Rnd │   Prompt │  CacheRead │  CacheWrite │  Output │     Status │ Tools │  TTFT │ Total
+  ────┼──────────┼────────────┼─────────────┼─────────┼────────────┼───────┼───────┼──────
+    1 │    2,567 │          0 │           0 │     177 │       MISS │     2 │   3.7s │   4.7s
+    2 │    3,180 │          0 │           0 │     160 │       MISS │     2 │   3.9s │   3.9s
+    3 │    3,971 │          0 │           0 │     115 │       MISS │     1 │   4.1s │   4.1s
+    4 │        1 │          0 │       4,419 │     102 │      WRITE │     1 │   3.4s │   4.4s
+    5 │        1 │      4,419 │         436 │     104 │        HIT │     1 │   3.4s │   4.2s
+    6 │        1 │      4,855 │         438 │      92 │        HIT │     1 │   3.0s │   4.1s
+    7 │        1 │      5,293 │         147 │      73 │        HIT │     1 │   3.7s │   3.7s
+    8 │        1 │      5,440 │         128 │      75 │        HIT │     1 │   3.5s │   3.5s
+    9 │        1 │      5,568 │         130 │     122 │        HIT │     1 │   4.3s │   4.3s
+   10 │        1 │      5,698 │         177 │      85 │        HIT │     1 │   3.0s │   4.1s
+   11 │        1 │      5,875 │         140 │     110 │        HIT │     1 │   3.3s │   4.3s
+   12 │        1 │      6,015 │         444 │     140 │        HIT │     1 │   2.3s │   4.3s
+
+  Metric                              │         OLD │         NEW │      NEW_1h │      SINGLE │   SINGLE_1h
+  ────────────────────────────────────┼─────────────┼─────────────┼─────────────┼─────────────┼────────────
+  Rounds completed                    │          12 │          12 │          12 │          12 │          12
+  Uncached (tokens)                   │      16,468 │       9,991 │       9,987 │       6,060 │       9,727
+  Cache reads (tokens)                │      36,460 │      43,023 │      42,484 │      53,403 │      43,163
+  Cache writes (tokens)               │       7,529 │       6,189 │       6,050 │       7,189 │       6,459
+  Output (tokens)                     │       1,508 │       1,243 │       1,269 │       1,318 │       1,355
+  Total input (tokens)                │      60,457 │      59,203 │      58,521 │      66,652 │      59,349
+  ────────────────────────────────────┼─────────────┼─────────────┼─────────────┼─────────────┼────────────
+  Uncached input cost                 │ $    0.2470 │ $    0.1499 │ $    0.1498 │ $    0.0909 │ $    0.1459
+  Cache read cost                     │ $    0.0547 │ $    0.0645 │ $    0.0637 │ $    0.0801 │ $    0.0647
+  Cache write cost                    │ $    0.1412 │ $    0.1160 │ $    0.1134 │ $    0.1348 │ $    0.1211
+  Output cost                         │ $    0.1131 │ $    0.0932 │ $    0.0952 │ $    0.0988 │ $    0.1016
+  TOTAL COST                          │ $    0.5560 │ $    0.4237 │ $    0.4221 │ $    0.4046 │ $    0.4334
+  No-cache baseline                   │ $    1.0200 │ $    0.9813 │ $    0.9730 │ $    1.0986 │ $    0.9919
+  Cache savings ($)                   │ $    0.4640 │ $    0.5576 │ $    0.5508 │ $    0.6940 │ $    0.5585
+  Cache savings (%)                   │       45.5% │       56.8% │       56.6% │       63.2% │       56.3%
+  ────────────────────────────────────┼─────────────┼─────────────┼─────────────┼─────────────┼────────────
+  Avg TTFT (s)                        │         3.5 │         3.9 │         3.5 │         3.7 │         3.5
+  Avg round time (s)                  │         4.3 │         4.1 │         4.1 │         4.4 │         4.1
+
+  Cost comparison matrix (row saves vs column):
+               │        OLD │        NEW │     NEW_1h │     SINGLE │  SINGLE_1h
+  ─────────────┼────────────┼────────────┼────────────┼────────────┼───────────
+           OLD │          — │   -31.2%🔴 │   -31.7%🔴 │   -37.4%🔴 │   -28.3%🔴
+           NEW │   +23.8%✅ │          — │    -0.4%➖ │    -4.7%➖ │    +2.2%➖
+        NEW_1h │   +24.1%✅ │    +0.4%➖ │          — │    -4.3%➖ │    +2.6%➖
+        SINGLE │   +27.2%✅ │    +4.5%➖ │    +4.1%➖ │          — │    +6.6%✅
+     SINGLE_1h │   +22.1%✅ │    -2.3%➖ │    -2.7%➖ │    -7.1%🔴 │          —
+  (positive = row is cheaper than column)
+
+  🔍 OLD Anomalies:
+     ⚠️ Unusual prompt_tokens range: avg=275 (expected ~1-5 for Anthropic or ~10k+ for OpenAI)
+     ⚠️ Full re-cache on rounds: [5] (server-side TTL eviction)
+
+  🔍 NEW Anomalies:
+     ⚠️ Full re-cache on rounds: [4] (server-side TTL eviction)
+
+  🔍 NEW_1h Anomalies:
+     ⚠️ Full re-cache on rounds: [4] (server-side TTL eviction)
+
+  🔍 SINGLE Anomalies:
+     ⚠️ Full re-cache on rounds: [3] (server-side TTL eviction)
+
+  🔍 SINGLE_1h Anomalies:
+     ⚠️ Full re-cache on rounds: [4] (server-side TTL eviction)
+
+  🏆 Best: SINGLE ($0.4046)
+  💸 Worst: OLD ($0.5560)
+  📊 Gap: $0.1513 (27.2%)
+
+
+██████████████████████████████████████████████████████████████████████
+  FINAL SUMMARY — ALL SCENARIOS × ALL ARMS
+██████████████████████████████████████████████████████████████████████
+
+  Scenario A:
+             OLD: $0.5046  (uncached=16,244  cw_ratio=10%  savings=49%)
+             NEW: $0.4263  (uncached= 6,313  cw_ratio=11%  savings=60%)
+          NEW_1h: $0.4002  (uncached= 6,421  cw_ratio=11%  savings=62%) 🏆
+          SINGLE: $0.5940  (uncached=10,107  cw_ratio=16%  savings=50%)
+       SINGLE_1h: $0.4932  (uncached= 9,800  cw_ratio=17%  savings=50%)
+
+  Scenario B:
+             OLD: $0.6355  (uncached=11,554  cw_ratio=18%  savings=50%)
+             NEW: $0.2913  (uncached= 5,339  cw_ratio=4%  savings=70%) 🏆
+          NEW_1h: $0.3096  (uncached= 5,339  cw_ratio=5%  savings=69%)
+          SINGLE: $0.4534  (uncached= 5,339  cw_ratio=18%  savings=56%)
+       SINGLE_1h: $0.3964  (uncached= 5,339  cw_ratio=13%  savings=61%)
+
+  Scenario C:
+             OLD: $0.3977  (uncached= 6,616  cw_ratio=48%  savings=5%)
+             NEW: $0.4333  (uncached= 6,335  cw_ratio=34%  savings=27%)
+          NEW_1h: $0.3922  (uncached= 6,333  cw_ratio=48%  savings=6%) 🏆
+          SINGLE: $0.4911  (uncached= 6,354  cw_ratio=36%  savings=24%)
+       SINGLE_1h: $0.4322  (uncached= 6,336  cw_ratio=40%  savings=18%)
+
+  Scenario D:
+             OLD: $0.5560  (uncached=16,468  cw_ratio=12%  savings=45%)
+             NEW: $0.4237  (uncached= 9,991  cw_ratio=10%  savings=57%)
+          NEW_1h: $0.4221  (uncached= 9,987  cw_ratio=10%  savings=57%)
+          SINGLE: $0.4046  (uncached= 6,060  cw_ratio=11%  savings=63%) 🏆
+       SINGLE_1h: $0.4334  (uncached= 9,727  cw_ratio=11%  savings=56%)
+
+  ────────────────────────────────────────────────────────────
+  OVERALL RANKING (lower cost = better):
+  🥇       NEW_1h: $1.5242  (2/4 wins, saves 27.2% vs worst) — 4 BPs, BP4=msg[-1], mixed TTL
+  🥈          NEW: $1.5746  (1/4 wins, saves 24.8% vs worst) — 4 BPs, BP4=msg[-1], 5m TTL
+  🥉    SINGLE_1h: $1.7552  (0/4 wins, saves 16.2% vs worst) — 1 BP on msg[-1], 1h TTL (CC+1h)
+  4️⃣       SINGLE: $1.9431  (1/4 wins, saves 7.2% vs worst) — 1 BP on msg[-1], 5m TTL (CC)
+  5️⃣          OLD: $2.0938  (0/4 wins, saves 0.0% vs worst) — 4 BPs, BP4=msg[-2], 5m TTL
+
+  💡 RECOMMENDATION:
+     Use NEW_1h — modestly better (3.3% cheaper than NEW)
+██████████████████████████████████████████████████████████████████████
+
+📁 Results saved to: debug/cache_validation_20260405_052656.json

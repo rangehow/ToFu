@@ -1,0 +1,472 @@
+"""Autopilot mode — virtual user that auto-replies when the LLM stops.
+
+When the model would normally hand control back to the user (either by
+calling ``ask_human`` or by emitting a final assistant message with
+``finish_reason='stop'``), Autopilot runs a one-shot LLM as the *user*
+and feeds its reply back to the orchestrator as a brand-new turn.
+
+Design constraints (locked in by the user, do not relax silently):
+
+  • **Independent of endpoint mode.**  Autopilot and endpoint mode are
+    mutually exclusive — both share the same termination boundary
+    ("the model stopped") so running them together would double-loop.
+    The frontend hides one toggle when the other is on; this module
+    additionally bails out when ``task['_endpoint_managed']`` is set.
+
+  • **Reuse the conversation's main model.**  No separate VU model.
+
+  • **Last N turns of context only.**  Default N=8, override via
+    ``TOFU_AUTOPILOT_CONTEXT_TURNS``.  Roles are swapped (assistant→user,
+    user→assistant) so the VU sees itself "as the user".
+
+  • **No turn cap, no state-change watchdog.**  The only graceful stop
+    signal is the VU itself emitting ``[VU: TASK_DONE]``.  Other stops
+    are: real-user abort, real-user sending a new message (handled
+    automatically by ``abort_running_tasks_for_conv``), an error path,
+    or the queue having a real queued message waiting (deferred to).
+
+  • **Empty VU output does NOT stop the loop.**  An empty reply is
+    treated as a valid "yeah, keep going" — the orchestrator just
+    starts a fresh turn with that empty user message.  This is the
+    user's explicit choice — see the design discussion in
+    docs/ARCHITECTURE.md if rebooting decisions.
+
+The "don't stop on empty output" rule means the only correctness escape
+hatch is the real user clicking Stop or sending a new message.  Both are
+already wired through ``task['aborted']`` and the freshness guard in
+``manager._conv_latest_task``, so we don't need extra plumbing here.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import threading
+import time
+import uuid
+from typing import Any
+
+from lib.log import audit_log, get_logger
+
+logger = get_logger(__name__)
+
+
+_VU_DONE_SENTINEL = '[VU: TASK_DONE]'
+
+
+# Bounded context: history grows unbounded otherwise.  Tuned via env so
+# operators can dial it up for power users without a code change.
+def _context_turns() -> int:
+    try:
+        return max(1, int(os.environ.get('TOFU_AUTOPILOT_CONTEXT_TURNS', '8')))
+    except (ValueError, TypeError):
+        return 8
+
+
+_VU_SYSTEM_PROMPT = (
+    'You are simulating the user in a chat with an AI assistant.\n'
+    'Reply briefly, in the first person, as if you were the user.\n\n'
+    'Decision rules:\n'
+    '- For code / engineering tasks: pick the most robust long-term '
+    'solution. Do not optimize for cost, implementation speed, or '
+    'backward compatibility. Prefer fixing root causes over patches.\n'
+    '- For open-ended discussion: use your own judgment, stay concrete, '
+    'pick a direction instead of asking more questions.\n'
+    '- If the assistant has clearly finished the task and is just '
+    'signing off (no question pending, no proposal awaiting review), '
+    f'reply EXACTLY: {_VU_DONE_SENTINEL}\n'
+    '- Never invent product requirements the real user never mentioned.\n'
+    '- Keep replies to 1-3 sentences unless the assistant explicitly '
+    'asked for detail.\n'
+    '- Reply in the same language the assistant used.\n'
+    '- Output ONLY the reply text — no quotation marks, no role labels, '
+    f'no preamble. The {_VU_DONE_SENTINEL} sentinel must appear on its '
+    'own when used.'
+)
+
+
+def is_autopilot_enabled(task: dict) -> bool:
+    """True iff autopilot is on AND endpoint mode is not also on.
+
+    The mutual-exclusion check is defense in depth — the frontend
+    already gates one toggle on the other.
+    """
+    cfg = task.get('config') or {}
+    if not cfg.get('autopilot'):
+        return False
+    if cfg.get('endpointMode') or task.get('_endpoint_managed'):
+        return False
+    return True
+
+
+def _extract_text_history(messages: list[dict]) -> list[dict]:
+    """Flatten messages → list of {role, content} for user/assistant only.
+
+    Multimodal blocks are collapsed to their text portions.  Tool
+    schema messages (role='tool', tool_calls) are dropped — the VU
+    doesn't need to see raw tool invocations to play the user.
+    """
+    out: list[dict] = []
+    for m in messages or []:
+        role = m.get('role')
+        if role not in ('user', 'assistant'):
+            continue
+        # Drop assistant turns that are pure tool_calls without text — they
+        # carry no narrative the VU can react to.
+        if role == 'assistant' and m.get('tool_calls') and not m.get('content'):
+            continue
+        content = m.get('content')
+        if isinstance(content, list):
+            parts = []
+            for blk in content:
+                if isinstance(blk, dict) and blk.get('type') == 'text':
+                    parts.append(blk.get('text', ''))
+            content = '\n'.join(p for p in parts if p)
+        if not isinstance(content, str):
+            continue
+        if not content.strip() and role == 'assistant':
+            # Allow empty user messages (the prior VU may have replied
+            # empty intentionally), but drop empty assistant turns to
+            # avoid feeding the VU a meaningless gap.
+            continue
+        out.append({'role': role, 'content': content})
+    return out
+
+
+def run_virtual_user(task: dict) -> str | None:
+    """Run the VU LLM and return its reply text.
+
+    Returns ``None`` when the loop should stop — either because the VU
+    emitted ``[VU: TASK_DONE]``, the LLM call failed, or the task was
+    aborted while the VU was thinking.  An empty string is a valid
+    "keep going" reply and is returned as ``''`` (NOT ``None``).
+    """
+    tid = task['id'][:8]
+    cfg = task.get('config') or {}
+    if task.get('aborted'):
+        logger.info('[Autopilot %s] Skip — task aborted', tid)
+        return None
+
+    model = task.get('model') or cfg.get('model') or ''
+    history = _extract_text_history(task.get('messages') or [])
+    if not history:
+        logger.warning('[Autopilot %s] No usable history — stopping', tid)
+        return None
+
+    # Take the last N turns (N user + N assistant) so prefix-cache is
+    # somewhat stable across turns when the conv hasn't drifted much.
+    n = _context_turns()
+    trimmed = history[-(n * 2):]
+
+    # Role swap: from the VU's perspective, the assistant *is* speaking
+    # to it (so assistant turns become role='user' inputs), and the
+    # original user's prior messages are the VU's own past replies.
+    swapped: list[dict] = []
+    for m in trimmed:
+        swapped.append({
+            'role': 'assistant' if m['role'] == 'user' else 'user',
+            'content': m['content'],
+        })
+
+    # Defensive guard: dispatch_chat requires the conversation to end on
+    # a user turn (Anthropic strict).  After role swap, the last entry
+    # corresponds to the original assistant's stop point — so it's
+    # already role='user'.  But if the trimmed slice happens to end on
+    # an empty / dropped turn the swap may leave us with an assistant
+    # tail, which would 400 on Anthropic.  Drop trailing assistants.
+    while swapped and swapped[-1]['role'] == 'assistant':
+        swapped.pop()
+    if not swapped:
+        logger.warning('[Autopilot %s] After role-swap, no user turn to '
+                       'reply to — stopping', tid)
+        return None
+
+    vu_messages = [{'role': 'system', 'content': _VU_SYSTEM_PROMPT}, *swapped]
+
+    try:
+        from lib.llm_dispatch import dispatch_chat
+        content, _usage = dispatch_chat(
+            vu_messages,
+            max_tokens=512,
+            temperature=0.7,
+            preset='low',
+            prefer_model=model or None,
+            log_prefix=f'[Autopilot {tid}]',
+            timeout=60,
+            max_retries=2,
+        )
+    except Exception as e:
+        logger.warning('[Autopilot %s] VU dispatch_chat failed: %s — '
+                       'stopping autopilot for this conv', tid, e,
+                       exc_info=True)
+        return None
+
+    if task.get('aborted'):
+        logger.info('[Autopilot %s] Aborted during VU call — stopping', tid)
+        return None
+
+    text = (content or '').strip()
+    if _VU_DONE_SENTINEL in text:
+        logger.info('[Autopilot %s] VU emitted TASK_DONE — stopping loop', tid)
+        audit_log('autopilot_stop',
+                  task_id=task.get('id', ''),
+                  conv_id=task.get('convId', ''),
+                  reason='vu_task_done')
+        return None
+
+    logger.info('[Autopilot %s] VU reply: %.200s%s',
+                tid, text, ' …' if len(text) > 200 else '')
+    return text
+
+
+# ──────────────────────────────────────────────────────────────────
+#  Follow-up scheduling — append a synthetic user msg + start a task
+# ──────────────────────────────────────────────────────────────────
+
+def _has_pending_real_message(conv_id: str) -> bool:
+    """True if a real user message is queued — autopilot must defer."""
+    if not conv_id:
+        return False
+    try:
+        from lib.message_queue import get_queue_depth
+        return get_queue_depth(conv_id) > 0
+    except Exception as e:
+        logger.debug('[Autopilot] queue depth probe failed (non-fatal): %s', e)
+        return False
+
+
+def _successor_already_running(task: dict, conv_id: str) -> bool:
+    """True if another task has already taken over for this conversation.
+
+    ``persist_task_result`` runs ``_dispatch_queued_message`` before our
+    hook fires, so a queued real-user message will already have spawned
+    its own follow-up task.  Spawning a VU follow-up on top of that
+    would (a) abort the queued task via ``abort_running_tasks_for_conv``
+    and (b) clobber the user's actual question.  Detect this by looking
+    at the latest-task registry.
+    """
+    if not conv_id:
+        return False
+    try:
+        from lib.tasks_pkg.manager import (
+            _conv_latest_task,
+            _conv_latest_task_lock,
+        )
+        with _conv_latest_task_lock:
+            latest = _conv_latest_task.get(conv_id)
+        return bool(latest) and latest != task.get('id')
+    except Exception as e:
+        logger.debug('[Autopilot] latest-task probe failed (non-fatal): %s', e)
+        return False
+
+
+def _append_vu_message_to_conv(conv_id: str, text: str) -> bool:
+    """Persist the VU's reply as a user message in the conversation DB.
+
+    Returns True on success.  Marked with ``_isVirtualUser: true`` so the
+    frontend renders it with the autopilot avatar + style and the
+    server-side message builder passes it through unchanged.
+    """
+    try:
+        from lib.database import (
+            DOMAIN_CHAT,
+            db_execute_with_retry,
+            get_thread_db,
+            json_dumps_pg,
+        )
+    except Exception as e:
+        logger.warning('[Autopilot] DB import failed: %s', e)
+        return False
+
+    try:
+        db = get_thread_db(DOMAIN_CHAT)
+        row = db.execute(
+            'SELECT messages FROM conversations WHERE id=? AND user_id=1',
+            (conv_id,)
+        ).fetchone()
+        if not row:
+            logger.warning('[Autopilot] conv=%s not found — cannot append',
+                           conv_id[:8])
+            return False
+        try:
+            messages = json.loads(row[0] or '[]')
+        except (json.JSONDecodeError, TypeError) as e:
+            logger.warning('[Autopilot] conv=%s messages parse failed: %s',
+                           conv_id[:8], e)
+            return False
+
+        vu_msg = {
+            'role': 'user',
+            'content': text,
+            'timestamp': int(time.time() * 1000),
+            '_msgId': str(uuid.uuid4()),
+            '_isVirtualUser': True,
+        }
+        messages.append(vu_msg)
+
+        now_ms = int(time.time() * 1000)
+        try:
+            from routes.conversations import build_search_text
+            search_text = build_search_text(messages)
+        except Exception as e:
+            logger.debug('[Autopilot] build_search_text failed: %s', e)
+            search_text = ''
+
+        db_execute_with_retry(
+            db,
+            '''UPDATE conversations
+                  SET messages=?, updated_at=?, msg_count=?, search_text=?
+                  WHERE id=? AND user_id=1''',
+            (json_dumps_pg(messages), now_ms, len(messages), search_text,
+             conv_id),
+        )
+        logger.info('[Autopilot] conv=%s ✅ Appended VU message (%d chars)',
+                    conv_id[:8], len(text))
+        return True
+    except Exception as e:
+        logger.error('[Autopilot] conv=%s append failed: %s',
+                     conv_id[:8], e, exc_info=True)
+        return False
+
+
+def _start_followup_task(task: dict, conv_id: str) -> str | None:
+    """Build api_messages from the conversation and spawn a new task.
+
+    Mirrors what ``_start_task_for_conv`` does, but inlined to avoid
+    importing from ``routes`` (orchestrator must not pull route-layer
+    code at module scope — circular).
+    """
+    from lib.tasks_pkg import create_task, run_task as _run_task
+    from lib.tasks_pkg.conv_message_builder import build_api_messages_from_db
+    from lib.tasks_pkg.manager import abort_running_tasks_for_conv
+
+    cfg = dict(task.get('config') or {})
+    # Strip checkpoint / continue flags so the follow-up runs fresh.
+    for stale_key in (
+        'excludeLast', 'toolHistory', 'contentPrefix',
+        'checkpointToolRounds', 'checkpointUsage', 'checkpointApiRounds',
+        'checkpointModifiedFiles', 'checkpointModifiedFileList',
+    ):
+        cfg.pop(stale_key, None)
+
+    api_messages = build_api_messages_from_db(conv_id, cfg)
+    if not api_messages:
+        logger.warning('[Autopilot] conv=%s build_api_messages returned '
+                       'empty — cannot start follow-up', conv_id[:8])
+        return None
+
+    # Belt-and-braces: any other still-running task for this conv is
+    # superseded by this autopilot follow-up, same as a real user send.
+    abort_running_tasks_for_conv(conv_id)
+
+    new_task = create_task(conv_id, api_messages, cfg)
+    new_task_id = new_task['id']
+    new_task['_autopilotParent'] = task.get('id')
+
+    logger.info('[Autopilot] Spawning follow-up task %s for conv=%s '
+                '(parent=%s)', new_task_id[:8], conv_id[:8],
+                task.get('id', '?')[:8])
+    audit_log('autopilot_followup',
+              parent_task_id=task.get('id', ''),
+              new_task_id=new_task_id,
+              conv_id=conv_id)
+
+    try:
+        threading.Thread(target=_run_task, args=(new_task,),
+                         name=f'autopilot-{new_task_id[:8]}',
+                         daemon=True).start()
+    except Exception as e:
+        logger.error('[Autopilot] Failed to start follow-up thread: %s',
+                     e, exc_info=True)
+        new_task['status'] = 'error'
+        new_task['error'] = 'Autopilot failed to spawn follow-up thread'
+        return None
+
+    # Update conversation settings.activeTaskId so reload still finds the
+    # live task.  Best-effort — failure here doesn't break the loop.
+    try:
+        from lib.database import (
+            DOMAIN_CHAT,
+            db_execute_with_retry,
+            get_thread_db,
+        )
+        db = get_thread_db(DOMAIN_CHAT)
+        srow = db.execute(
+            'SELECT settings FROM conversations WHERE id=? AND user_id=1',
+            (conv_id,)
+        ).fetchone()
+        if srow:
+            try:
+                settings = json.loads(srow[0] or '{}')
+            except (json.JSONDecodeError, TypeError):
+                settings = {}
+            settings['activeTaskId'] = new_task_id
+            db_execute_with_retry(
+                db,
+                'UPDATE conversations SET settings=? WHERE id=? AND user_id=1',
+                (json.dumps(settings, ensure_ascii=False), conv_id),
+            )
+    except Exception as e:
+        logger.debug('[Autopilot] activeTaskId update skipped: %s', e)
+
+    try:
+        from routes.common import _invalidate_meta_cache
+        _invalidate_meta_cache()
+    except Exception as e:
+        logger.debug('[Autopilot] meta cache invalidation skipped: %s', e)
+
+    return new_task_id
+
+
+def maybe_run_autopilot(task: dict) -> str | None:
+    """End-of-turn hook: run the VU and spawn a follow-up task if eligible.
+
+    Called from ``orchestrator.run_task`` right after
+    ``_finalize_and_emit_done`` so the UI has already received the
+    ``done`` event for the *current* turn before the next one starts
+    streaming.
+
+    Returns the new task_id when a follow-up was spawned, ``None``
+    otherwise.  Callers do not need to do anything with the return
+    value — it's purely diagnostic / for tests.
+    """
+    if not is_autopilot_enabled(task):
+        return None
+
+    tid = task['id'][:8]
+    conv_id = task.get('convId') or ''
+    if not conv_id or task.get('_inline_messages'):
+        logger.debug('[Autopilot %s] Skip — no DB-backed conversation', tid)
+        return None
+    if task.get('aborted'):
+        logger.info('[Autopilot %s] Skip — task aborted before VU could run', tid)
+        return None
+    if task.get('error'):
+        logger.info('[Autopilot %s] Skip — task ended in error: %.120s',
+                    tid, str(task.get('error')))
+        return None
+    if task.get('finishReason') == 'tool_rounds_exhausted':
+        # Hard tool-budget hit means the orchestrator already injected a
+        # user-facing warning; bouncing back through the VU would just
+        # burn the next budget too.  Stop here.
+        logger.info('[Autopilot %s] Skip — tool rounds exhausted', tid)
+        return None
+
+    if _has_pending_real_message(conv_id):
+        logger.info('[Autopilot %s] Skip — real user message queued '
+                    '(it takes priority)', tid)
+        return None
+    if _successor_already_running(task, conv_id):
+        logger.info('[Autopilot %s] Skip — another task already took over '
+                    'for conv=%s (queued real message dispatched first)',
+                    tid, conv_id[:8])
+        return None
+
+    vu_text = run_virtual_user(task)
+    if vu_text is None:
+        return None
+
+    if not _append_vu_message_to_conv(conv_id, vu_text):
+        return None
+
+    return _start_followup_task(task, conv_id)

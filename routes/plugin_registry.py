@@ -50,6 +50,12 @@ _ENTRY_POINT_GROUP = 'tofu.blueprints'
 # ``register_all`` after all blueprints are mounted.
 _STARTUP_GROUP = 'tofu.startup'
 
+# Entry-point group for plugin TaskRuntime instances, so the generic
+# /api/v1/tasks lifecycle endpoints can discover a plugin's background-task
+# kinds (e.g. trading-sim) without core naming them. Each loads to a callable
+# returning a TaskRuntime or a list of them.
+_TASK_RUNTIME_GROUP = 'tofu.task_runtimes'
+
 
 def discover_blueprint_plugins() -> list:
     """Load Blueprints contributed via the ``tofu.blueprints`` entry-point group.
@@ -137,4 +143,52 @@ def run_startup_hooks(app) -> int:
     return ran
 
 
-__all__ = ['discover_blueprint_plugins', 'run_startup_hooks']
+def discover_task_runtime_plugins() -> list:
+    """Load plugin ``TaskRuntime`` instances from ``tofu.task_runtimes``.
+
+    A plugin declares in its ``pyproject.toml``::
+
+        [project.entry-points."tofu.task_runtimes"]
+        trading = "tofu_trading.web:get_task_runtimes"
+
+    where the loaded callable returns a ``TaskRuntime`` or a list of them.
+    Used by ``routes/api_v1/tasks.py::_registries`` so the generic task
+    endpoints surface plugin task kinds. Fail-soft: a broken plugin is logged
+    and skipped.
+
+    Returns:
+        A flat list of TaskRuntime instances (possibly empty).
+    """
+    runtimes: list = []
+    try:
+        from importlib.metadata import entry_points
+    except Exception as e:  # pragma: no cover
+        logger.debug('[BlueprintRegistry] importlib.metadata unavailable: %s', e)
+        return runtimes
+    try:
+        eps = entry_points(group=_TASK_RUNTIME_GROUP)
+    except TypeError:
+        eps = entry_points().get(_TASK_RUNTIME_GROUP, [])  # type: ignore[attr-defined]
+    except Exception as e:
+        logger.debug('[BlueprintRegistry] task-runtime entry_points lookup failed: %s', e)
+        return runtimes
+    for ep in eps:
+        name = getattr(ep, 'name', '?')
+        try:
+            fn = ep.load()
+            result = fn()
+            if result is None:
+                continue
+            if isinstance(result, (list, tuple)):
+                runtimes.extend(result)
+            else:
+                runtimes.append(result)
+            logger.info('[BlueprintRegistry] loaded task runtime(s) from plugin %r', name)
+        except Exception as e:
+            logger.warning('[BlueprintRegistry] task-runtime plugin %r failed: %s',
+                           name, e, exc_info=True)
+    return runtimes
+
+
+__all__ = ['discover_blueprint_plugins', 'run_startup_hooks',
+           'discover_task_runtime_plugins']

@@ -78,10 +78,10 @@ def _tools_summary() -> list[dict]:
         from lib.tools import (
             BROWSER_TOOLS, CODE_EXEC_TOOL, FETCH_URL_TOOL,
             PROJECT_TOOLS, READ_FILES_TOOL,
-            SEARCH_TOOL_MULTI, SEARCH_TOOL_SINGLE,
+            SEARCH_TOOL_MULTI,
         )
         groups = {
-            'search': [SEARCH_TOOL_SINGLE, SEARCH_TOOL_MULTI],
+            'search': [SEARCH_TOOL_MULTI],
             'fetch': [FETCH_URL_TOOL],
             'project': [READ_FILES_TOOL] + list(PROJECT_TOOLS),
             'code_exec': [CODE_EXEC_TOOL],
@@ -165,7 +165,14 @@ def _config_schema() -> dict:
             'endpointMode': {'type': 'boolean',
                               'description': 'Planner→Worker→Critic loop'},
             'autopilot': {'type': 'boolean'},
-            'fallbackModel': {'type': 'string'},
+            'disableModelFallback': {
+                'type': 'boolean', 'default': False,
+                'description': 'Opt OUT of automatic model fallback for this '
+                               'request. The fallback TARGET model is a global '
+                               'server setting (admin-only); this flag only '
+                               'lets a caller suppress the silent switch so a '
+                               'primary-model error surfaces instead '
+                               '(error envelope context="fallback-disabled").'},
             'systemPrompt': {'type': 'string'},
             'tools': {'type': 'array', 'items': {'type': 'object'}},
         },
@@ -198,13 +205,21 @@ def _backends() -> list[str]:
 def _features() -> dict:
     try:
         import lib as _lib  # type: ignore
-        return {
-            'trading_enabled': bool(getattr(_lib, 'TRADING_ENABLED', False)),
+        feats = {
             'optimizer_enabled': bool(getattr(_lib, 'OPTIMIZER_ENABLED', False)),
             'artifacts_enabled': bool(getattr(_lib, 'ARTIFACTS_ENABLED', False)),
             'pptx_translate_enabled': bool(
                 getattr(_lib, 'PPTX_TRANSLATE_ENABLED', False)),
         }
+        # Registered plugin flags (e.g. trading_enabled when tofu-trading is
+        # installed) are added dynamically so core names no optional feature.
+        try:
+            from lib.feature_registry import registered_flags
+            for f in registered_flags():
+                feats[f.json_key] = bool(getattr(_lib, f.env_key, f.default))
+        except Exception as _pe:
+            logger.debug('[capabilities] plugin flags unavailable: %s', _pe)
+        return feats
     except Exception as e:
         logger.debug('[capabilities] features lookup failed: %s', e)
         return {}
@@ -214,7 +229,7 @@ def _features() -> dict:
 @api_meta(summary='Capabilities — runtime model/tool/agent registry',
           description='Public endpoint. Use for client auto-config.',
           tags=['capabilities'], public=True)
-def capabilities():
+async def capabilities():
     from lib.api_keys import ALL_SCOPES
     try:
         from lib.version import __version__ as ver

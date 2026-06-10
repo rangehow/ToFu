@@ -144,11 +144,15 @@ PERSONAL_EXCLUDE_DIRS = {
     'overleaf_cache',              # Overleaf project cache (~89MB, regenerable)
     'niumark',                     # unrelated project (not part of tofu)
     'propaganda',                  # unrelated project (not part of tofu)
+    'outputs',                     # smoke-test / eval output (thousands of files, transient)
+    'promo',                       # promotional slides/screenshots (~10MB, not runtime)
+    'django',                      # stray empty dir (not part of tofu)
 }
 
 # Dirs excluded ONLY at the project root (not inside subdirs like lib/)
 _TOP_LEVEL_ONLY_EXCLUDE_DIRS = {
     'tools',                       # separate project (md2cards), NOT lib/tools/
+    'paper',                       # academic paper draft, NOT lib/paper/ (core package)
 }
 
 PERSONAL_EXCLUDE_GLOBS = {
@@ -187,6 +191,7 @@ ALWAYS_EXCLUDE_DIRS = {
     'data',                        # databases (*.db), configs, runtime state
     'logs',                        # application logs (contain queries, API calls, personal content)
     '.chatui',                     # skills, error resolutions (personal)
+    '.tofu',                       # agent state: file-history undo store, skills, error resolutions (personal)
     '.project_sessions',           # session caches (contain conversation context)
     '.project_indexes',            # project index caches
     'uploads',                     # uploaded images (personal)
@@ -205,6 +210,9 @@ ALWAYS_EXCLUDE_DIRS = {
     'overleaf_cache',              # Overleaf project cache (~89MB, regenerable)
     'niumark',                     # unrelated project (not part of tofu)
     'propaganda',                  # unrelated project (not part of tofu)
+    'outputs',                     # smoke-test / eval output (thousands of files, transient)
+    'promo',                       # promotional slides/screenshots (~10MB, not runtime)
+    'django',                      # stray empty dir (not part of tofu)
 }
 
 ALWAYS_EXCLUDE_FILES = {
@@ -240,10 +248,19 @@ ALWAYS_EXCLUDE_FILES = {
     '.tofu_env.json',     # per-host conda env marker (absolute paths inside)
     'load_env.py',
     'copy_pid.txt',
+    # NOTE: setup_bashrc.sh is intentionally NOT excluded here — it's kept for
+    # personal + internal exports (proxy + conda auto-activate helper). It IS
+    # stripped from opensource via OPENSOURCE_EXTRA_EXCLUDE_FILES (hardcoded
+    # corp proxy IP must not ship publicly).
+    'copy_to_dst.sh',     # per-host copy helper (hardcoded internal mount paths)
     'server.log',
     'server.log.1',
     'prompt_output.txt',
     'nohup.out',
+    # Scratch / personal artifacts
+    'overleaf-mcp:cat_dog_manor.png',          # stray scratch image
+    'claude_code_run_command_report.html',     # generated scratch report
+    'thesis_references.bib',                   # personal academic file
 }
 
 # Glob patterns always excluded
@@ -260,6 +277,8 @@ ALWAYS_EXCLUDE_GLOBS = {
     '*.db.corrupted_*',
     'dump.sql',
     '*.log',
+    '.coverage',      # pytest coverage DB (regenerable)
+    '*.bib',          # personal bibliography files
 }
 
 # Level 2: Additional exclusions for opensource only
@@ -277,10 +296,22 @@ OPENSOURCE_EXTRA_EXCLUDE_DIRS = {
     'scripts',                  # bench_real_datasets.py etc. with hardcoded internal paths
     'benchmarks',               # benchmark scripts with internal API keys
     'outputs',                  # evaluation reports
+    'posters',                  # personal scratch poster images (not part of the app)
+}
+
+# Files that live INSIDE an opensource-excluded dir but are still required by
+# the public build (e.g. the desktop-installer CI calls
+# ``python scripts/gen_desktop_icons.py``). The whole dir is excluded for
+# safety, then these specific files are restored verbatim after the tar copy.
+# Each entry MUST be a project-root-relative path that is verified clean of
+# secrets/internal paths before being added here.
+_OPENSOURCE_KEEP_FILES = {
+    'scripts/gen_desktop_icons.py',   # CI icon generation (PIL only, no secrets)
 }
 
 OPENSOURCE_EXTRA_EXCLUDE_FILES = OPENSOURCE_EXTRA_EXCLUDE_FILES | {
     'meituan.json',             # internal provider template with corp gateway URL
+    'setup_bashrc.sh',          # per-host .bashrc helper (hardcoded corp proxy IP)
 }
 
 
@@ -1039,7 +1070,7 @@ def _rg_excluded_globs() -> list[str]:
                   '.project_sessions', '.project_indexes', '.chatui',
                   'node_modules', '__pycache__', '.pytest_cache',
                   '.ruff_cache', 'swebench_workdir', 'swebench_full',
-                  'paper', 'overleaf_cache', 'sundries')
+                  './paper', 'overleaf_cache', 'sundries')
     globs = [f'!{d}/**' for d in heavy_dirs] + [f'!{d}' for d in heavy_dirs]
     for ext in ('*.png', '*.jpg', '*.jpeg', '*.gif', '*.zip', '*.pdf',
                 '*.db', '*.db-*', '*.log', '*.pyc', '*.pyo',
@@ -1106,15 +1137,14 @@ def _post_copy_sanitize(dest: Path, mode: str) -> dict:
 #   - index.html   (<select> default)
 #
 # The explicit filenames are known; cache-buster patterns live in any HTML/JS
-# that imports static assets (currently just index.html + trading.html). We
-# build the candidate set directly and avoid a full-tree search.
+# that imports static assets (currently just index.html). We build the
+# candidate set directly and avoid a full-tree search.
 
 _INTERNAL_FIXED_CANDIDATES = (
     'static/js/core.js',
     'static/js/settings.js',
     'lib/tasks_pkg/model_config.py',
     'index.html',
-    'trading.html',
 )
 
 
@@ -1134,8 +1164,8 @@ def _collect_internal_candidates(dest: Path) -> set[str]:
             out.add(str(p.relative_to(dest)))
         for p in sub_dir.rglob('*.html'):
             out.add(str(p.relative_to(dest)))
-    # Top-level HTML files (index.html, trading.html) — already in fixed set
-    # but rglob above misses them since they live at the root.
+    # Top-level HTML files (index.html) — already in fixed set but rglob above
+    # misses them since they live at the root.
     for p in dest.glob('*.html'):
         out.add(str(p.relative_to(dest)))
     return out
@@ -1509,7 +1539,8 @@ def _bundle_internal_mcp_repos(dest: Path, mode: str):
             for n in names:
                 if n in {'__pycache__', '.git', '.venv', 'venv', 'dist',
                           'build', '.pytest_cache', '.mypy_cache',
-                          '.tox', 'node_modules', '.eggs'}:
+                          '.tox', 'node_modules', '.eggs',
+                          '.chatui', '.tofu'}:  # per-host agent state / file-history
                     drop.add(n)
                 elif n.endswith(('.pyc', '.pyo', '.egg-info')):
                     drop.add(n)
@@ -1525,6 +1556,66 @@ def _bundle_internal_mcp_repos(dest: Path, mode: str):
     if bundled:
         print(f"  {C_GREEN}📦 Bundled internal MCP repos → vendor/{C_END}")
         print(f"     {C_DIM}{', '.join(bundled)}{C_END}")
+
+
+def _portablize_bundled_mcp_config(dest: Path, mode: str):
+    """Rewrite hope/xuecheng entries in the exported ``mcp_servers.json``.
+
+    Personal mode copies the live ``data/config/mcp_servers.json`` verbatim,
+    and on the source machine those two servers are pinned to absolute
+    ``uvx --from /mnt/.../hope-mcp`` paths.  Those paths don't exist on a
+    different destination machine, so the launch fails there even though
+    ``install.sh`` pip-installs the bundled ``vendor/`` repos and puts bare
+    ``hope-mcp`` / ``xuecheng-mcp`` launchers on PATH.
+
+    Rewrite the entries to the bare command (matching the registry default
+    and the vendor install) so the export is portable to any machine. The
+    ``env`` block (credentials) is preserved untouched.
+
+    Only runs for ``personal`` and ``internal`` modes — opensource never
+    bundles these repos.
+    """
+    if mode not in ('personal', 'internal'):
+        return
+
+    cfg_path = dest / 'data' / 'config' / 'mcp_servers.json'
+    if not cfg_path.exists():
+        return
+
+    try:
+        config = json.loads(cfg_path.read_text(encoding='utf-8'))
+    except (json.JSONDecodeError, OSError) as e:
+        logger.warning('Could not read %s for MCP portablization: %s', cfg_path, e)
+        return
+
+    if not isinstance(config, dict):
+        return
+
+    rewritten = []
+    for name in ('hope', 'xuecheng'):
+        entry = config.get(name)
+        if not isinstance(entry, dict):
+            continue
+        bare_cmd = f'{name}-mcp'
+        if entry.get('command') == bare_cmd and not entry.get('args'):
+            continue
+        entry['command'] = bare_cmd
+        entry['args'] = []
+        rewritten.append(name)
+
+    if not rewritten:
+        return
+
+    try:
+        cfg_path.write_text(
+            json.dumps(config, indent=2, ensure_ascii=False), encoding='utf-8')
+    except OSError as e:
+        logger.warning('Could not write portablized MCP config %s: %s', cfg_path, e)
+        return
+
+    logger.info('Portablized bundled MCP config entries: %s', ', '.join(rewritten))
+    print(f"  {C_GREEN}🔧 Made bundled MCP config portable → bare launchers{C_END}")
+    print(f"     {C_DIM}{', '.join(rewritten)}{C_END}")
 
 
 def _purge_runtime_artifacts(dest: Path):
@@ -1605,6 +1696,12 @@ def _create_skeleton(dest: Path, mode: str):
     # Opensource mode skips this entirely (repos are internal-only).
     _bundle_internal_mcp_repos(dest, mode)
 
+    # ── Personal & internal: rewrite hope/xuecheng entries in the copied
+    # mcp_servers.json from absolute source-machine `uvx --from /path` to
+    # bare `hope-mcp` / `xuecheng-mcp` launchers, so the persisted config
+    # matches the vendor/ pip-install and works on any destination machine.
+    _portablize_bundled_mcp_config(dest, mode)
+
     # ── Personal & internal: bake corp proxy into install.sh ──
     # install.sh runs BEFORE server.py boots and can't read server_config.json,
     # but every step needs outbound HTTPS.  Inject the proxy env-vars near the
@@ -1623,25 +1720,20 @@ def _create_skeleton(dest: Path, mode: str):
         if not gi_ss.exists():
             gi_ss.write_text('*.png\n')
 
-    # ── Create .env with trading OFF ──
-    # Trading module is disabled by default in exports.  The .env file is
-    # loaded by server.py's _load_dotenv() and env-vars take highest priority
-    # over ~/.chatui/features.json, so this guarantees trading is off even
-    # if the user's home-dir features.json has it enabled.
+    # ── Create .env ──
+    # The trading module is no longer part of core (it ships as the separate
+    # ``tofu-trading`` package); exports therefore no longer set
+    # TRADING_ENABLED. Optional core modules default OFF here.
     env_file = dest / '.env'
     env_lines = [
         '# Auto-generated by export.py',
-        '# Trading module (investment/fund features) is OFF by default.',
-        '# Set TRADING_ENABLED=1 to enable it.',
-        'TRADING_ENABLED=0',
-        '',
         '# PPTX translation module is OFF by default.',
         '# Set PPTX_TRANSLATE_ENABLED=1 to enable it.',
         'PPTX_TRANSLATE_ENABLED=0',
         '',
     ]
     env_file.write_text('\n'.join(env_lines))
-    logger.info('Created .env with TRADING_ENABLED=0')
+    logger.info('Created .env (PPTX_TRANSLATE_ENABLED=0)')
 
     # .env.example should have been copied from source.  Create a minimal
     # fallback only if the copy is missing (e.g. excluded by a filter).
@@ -1673,7 +1765,7 @@ def _create_skeleton(dest: Path, mode: str):
             "name": "OpenAI",
             "base_url": "https://api.openai.com/v1",
             "models": [
-                {"model_id": "gpt-4.1",      "capabilities": ["text", "vision", "thinking"], "rpm": 30,  "cost": 0.008},
+                {"model_id": "gpt-4.1",      "capabilities": ["text", "vision", "thinking", "cheap"], "rpm": 30,  "cost": 0.008},
                 {"model_id": "gpt-4.1-mini",  "capabilities": ["text", "vision", "cheap"],    "rpm": 100, "cost": 0.002},
                 {"model_id": "gpt-4.1-nano",  "capabilities": ["text", "cheap"],              "rpm": 200, "cost": 0.001},
                 {"model_id": "gpt-image-2",   "capabilities": ["image_gen"],                  "rpm": 10,  "cost": 0.065},
@@ -1894,6 +1986,14 @@ def export_project(mode: str, dest: Path, dry_run: bool = False,
             stats = _export_personal_via_tar(dest)
             excluded_log: list = []
             _all_excluded_dirs = PERSONAL_EXCLUDE_DIRS
+            # Personal mode skips _create_skeleton (it mirrors source data/
+            # verbatim), but the sibling MCP repos live OUTSIDE the source
+            # tree (ROOT.parent) so the tar copy never picks them up. Bundle
+            # them explicitly, then rewrite the copied mcp_servers.json from
+            # absolute `uvx --from /path` entries to bare launchers so it's
+            # portable to another machine.
+            _bundle_internal_mcp_repos(dest, mode)
+            _portablize_bundled_mcp_config(dest, mode)
         else:
             stats = _export_via_tar_with_sanitize(mode, dest)
             excluded_log = []
@@ -1912,6 +2012,7 @@ def export_project(mode: str, dest: Path, dry_run: bool = False,
 
         # Post-export tasks: lint (opensource only), verify, push.
         if mode == 'opensource':
+            _restore_opensource_kept_files(dest)
             _run_ruff_autofix(dest)
             _verify_opensource(dest)
         if push:
@@ -1960,8 +2061,6 @@ def export_project(mode: str, dest: Path, dry_run: bool = False,
                 excluded_log.append((relpath, reason))
                 continue
 
-            dst_path = dest / relpath
-
             # Dry-run only: show what would happen without writing.
             if mode in ('internal', 'opensource') and _is_text_file(str(src_path)):
                 try:
@@ -1992,6 +2091,32 @@ def export_project(mode: str, dest: Path, dry_run: bool = False,
                                      key=lambda x: -x[1]):
             print(f"    {C_DIM}{reason}: {count}{C_END}")
     print(f"\n  {C_CYAN}Dry run complete \u2014 no files written.{C_END}\n")
+
+
+def _restore_opensource_kept_files(dest: Path):
+    """Copy whitelisted build-required files back into an opensource export.
+
+    The opensource tar copy excludes whole dirs like ``scripts/`` (they
+    contain benchmark scripts with internal paths/keys). But a few files in
+    those dirs ARE needed by the public build — see ``_OPENSOURCE_KEEP_FILES``.
+    Restore each one verbatim from the source tree after the tar copy.
+    """
+    restored = []
+    for rel in sorted(_OPENSOURCE_KEEP_FILES):
+        src = ROOT / rel
+        if not src.is_file():
+            logger.warning('Keep-file missing from source, skipping: %s', rel)
+            continue
+        target = dest / rel
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, target)
+            restored.append(rel)
+        except OSError as e:
+            logger.warning('Failed to restore keep-file %s: %s', rel, e)
+    if restored:
+        print(f"  {C_GREEN}📌 Restored build-required files (opensource){C_END}")
+        print(f"     {C_DIM}{', '.join(restored)}{C_END}")
 
 
 def _run_ruff_autofix(dest: Path):

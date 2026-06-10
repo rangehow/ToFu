@@ -20,7 +20,6 @@ import sys
 import json
 import logging
 import time
-import hashlib
 import signal
 import faulthandler
 
@@ -32,6 +31,12 @@ import faulthandler
 # even when stderr is the controlling terminal of a process that's about
 # to die. all_threads=True captures every Python thread, not just the
 # crashing one — essential for diagnosing concurrent-fetch races.
+#
+# Dual-sink strategy: write to BOTH the FUSE-backed logs/ (durable across
+# box restarts, but may be truncated by the very FUSE stall that caused the
+# crash) AND a tmpfs mirror in /dev/shm (immune to FUSE stalls, but lost on
+# box reboot). On crash, check /dev/shm first for the clean copy.
+_fault_log = None
 try:
     _FAULT_LOG_PATH = os.path.join(
         os.path.dirname(os.path.abspath(__file__)), 'logs', 'faulthandler.log')
@@ -39,10 +44,55 @@ try:
     _fault_log = open(_FAULT_LOG_PATH, 'a', buffering=1)  # line-buffered
     _fault_log.write('\n=== faulthandler armed pid=%d at %s ===\n'
                      % (os.getpid(), time.strftime('%Y-%m-%d %H:%M:%S')))
-    faulthandler.enable(file=_fault_log, all_threads=True)
 except OSError:
-    # Fall back to stderr if logs/ is unwritable — better than no handler.
-    faulthandler.enable(all_threads=True)
+    pass
+
+# Prefer tmpfs for the live faulthandler sink (survives FUSE stalls intact);
+# fall back to the FUSE log, then stderr.
+_fault_shm_log = None
+try:
+    _FAULT_SHM_PATH = '/dev/shm/tofu_faulthandler_%d.log' % os.getpid()
+    _fault_shm_log = open(_FAULT_SHM_PATH, 'w', buffering=1)
+    _fault_shm_log.write('=== faulthandler armed pid=%d at %s ===\n'
+                         % (os.getpid(), time.strftime('%Y-%m-%d %H:%M:%S')))
+    faulthandler.enable(file=_fault_shm_log, all_threads=True)
+except OSError:
+    _fault_shm_log = None
+
+if _fault_shm_log is None:
+    # tmpfs unavailable — use the FUSE log (better than nothing)
+    if _fault_log is not None:
+        faulthandler.enable(file=_fault_log, all_threads=True)
+    else:
+        faulthandler.enable(all_threads=True)
+
+# ── Pin mapped pages into RAM (FUSE SIGBUS mitigation) ──
+# All .so files (C extensions, libpython, libc) are dlopen'd via mmap with
+# demand-paged code segments. When those files live on a FUSE mount, a
+# transient stall during a lazy page-in delivers SIGBUS (unrecoverable).
+# MCL_CURRENT pins already-mapped pages; MCL_FUTURE pins every future mmap
+# at load time, collapsing the dangerous demand-fault window to zero.
+try:
+    import ctypes as _ctypes
+    _MCL_CURRENT, _MCL_FUTURE = 1, 2
+    _libc = _ctypes.CDLL('libc.so.6', use_errno=True)
+    if _libc.mlockall(_MCL_CURRENT | _MCL_FUTURE) != 0:
+        import errno as _errno
+        _mlk_err = _ctypes.get_errno()
+        # ENOMEM (12) = memlock rlimit too low — common in containers
+        if _mlk_err == _errno.ENOMEM:
+            os.write(2, b'[boot] mlockall skipped: memlock rlimit too low\n')
+        else:
+            os.write(2, (b'[boot] mlockall failed errno=%d\n' % _mlk_err))
+    else:
+        os.write(2, b'[boot] mlockall(MCL_CURRENT|MCL_FUTURE) OK '
+                    b'\xe2\x80\x94 pages pinned\n')
+except Exception as _mlk_exc:
+    try:
+        os.write(2, (b'[boot] mlockall unavailable: %s\n'
+                     % str(_mlk_exc).encode(errors='replace')))
+    except OSError:
+        pass
 
 # ── Record process start time (same as server.py) ──
 _PROC_T0 = time.time()
@@ -147,14 +197,25 @@ def _install_flask_shim():
     import functools
     import inspect
 
-    # Wrap async-only Quart helpers so they work from sync route handlers.
-    # When called from a sync function running in Quart's thread pool,
-    # there IS a running event loop (the main Quart loop) but we're in
-    # a different thread. We use asyncio.run_coroutine_threadsafe to
-    # schedule the coroutine on the main loop and wait for the result.
-    _orig_send_from_directory = quart.send_from_directory
-    _orig_send_file = quart.send_file
-    _orig_make_response = quart.make_response
+    # Recover the GENUINE async helpers. If server.py is imported/exec'd
+    # more than once in the same process (e.g. a test re-imports it via
+    # importlib), ``quart.make_response`` etc. are already our sync-safe
+    # wrappers from the first install. Capturing those as the "originals"
+    # and wrapping them again would corrupt ``_orig_make_response_async``
+    # (it would point at a sync-safe wrapper instead of the real async
+    # ``quart.make_response``), so error handlers that
+    # ``await _orig_make_response_async(...)`` would route through the
+    # thread-bridge and deadlock. ``_sync_safe`` stashes the genuine async
+    # function on ``.__wrapped__``; unwrap through it so a re-install
+    # always starts from the real async helpers.
+    def _genuine(fn):
+        while getattr(fn, '_quart_async_wrapper', False):
+            fn = getattr(fn, '__wrapped__', fn)
+        return fn
+
+    _orig_send_from_directory = _genuine(quart.send_from_directory)
+    _orig_send_file = _genuine(quart.send_file)
+    _orig_make_response = _genuine(quart.make_response)
 
     def _sync_safe(async_fn):
         """Wrap an async function to be callable from sync code in a thread."""
@@ -169,7 +230,6 @@ def _install_flask_shim():
                 # We're in a thread with an event loop running elsewhere.
                 # Use the Quart-provided mechanism to run coroutines from
                 # sync code within a request context.
-                import concurrent.futures
                 future = asyncio.run_coroutine_threadsafe(coro, loop)
                 return future.result(timeout=30)
             else:
@@ -226,6 +286,12 @@ def _install_flask_shim():
     def _sync_safe_get_json(self, *args, **kwargs):
         return _run_coro_sync(_orig_get_json(self, *args, **kwargs))
 
+    # Stash the genuine async original ON the wrapper so async handlers can
+    # recover it regardless of how many times the shim is (re)installed or
+    # which module object holds it (test harnesses sometimes exec server.py as
+    # a second module). Always unwrap to the FIRST genuine coroutine fn.
+    _genuine_get_json = getattr(_orig_get_json, '_genuine_async_get_json', _orig_get_json)
+    _sync_safe_get_json._genuine_async_get_json = _genuine_get_json
     _QuartRequest.get_json = _sync_safe_get_json
 
     # Patch async properties: form, files, data, json
@@ -271,9 +337,8 @@ _install_flask_shim()
 
 
 # ── Now safe to import Quart (which the routes will see as 'flask') ──
-import quart
-from quart import Quart, request, make_response, redirect, jsonify, g
-import io
+import quart  # noqa: F401  — kept so quart.* monkeypatches in _install_flask_shim resolve
+from quart import Quart, request
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Logging (reuse server.py's architecture)
@@ -499,7 +564,11 @@ async def _compress_response(response):
     data = await response.get_data()
     if len(data) < _COMPRESS_MIN_SIZE:
         return response
-    compressed = _gzip.compress(data, compresslevel=6)
+    # gzip is CPU-bound; running it inline would block the event loop (and
+    # every other connection / SSE keepalive) for the duration. Offload to
+    # the sync executor so a multi-MB body doesn't stall the whole server.
+    loop = asyncio.get_running_loop()
+    compressed = await loop.run_in_executor(None, _gzip.compress, data, 6)
     if len(compressed) >= len(data):
         return response
     response.set_data(compressed)
@@ -854,19 +923,85 @@ def _validate_imports():
         raise ImportError('Missing dependencies:\n' + '\n'.join(msgs))
     _boot('All critical imports validated.')
 
+    # ── Eager-load heavy C extensions so mlockall pins their pages ──
+    # These are the .so modules seen in past SIGBUS faulthandler dumps.
+    # Loading them now (under mlockall MCL_FUTURE) ensures their code
+    # pages are resident before any request arrives — the demand-fault
+    # window that causes Bus errors on FUSE is eliminated.
+    _NATIVE_PRELOADS = [
+        'PIL._imaging',
+        'lxml.etree',
+        'greenlet._greenlet',
+        'yaml._yaml',
+        'numpy.core._multiarray_umath',
+        'markupsafe._speedups',
+        'charset_normalizer.md',
+    ]
+    # These are optional — may not be installed in all environments
+    _NATIVE_PRELOADS_OPTIONAL = [
+        'pymupdf._extra',
+        'psycopg2._psycopg',
+    ]
+    _boot('Eager-loading native extensions (FUSE SIGBUS mitigation)…')
+    for _mod in _NATIVE_PRELOADS:
+        try:
+            __import__(_mod)
+        except ImportError as _ie:
+            _server_log.warning('Native preload failed (required): %s — %s', _mod, _ie)
+    for _mod in _NATIVE_PRELOADS_OPTIONAL:
+        try:
+            __import__(_mod)
+        except ImportError:
+            pass  # optional — not all deployments have these
+    _boot('Native extensions preloaded.')
+
 
 def _start_background_workers():
-    """Launch background threads (same as server.py)."""
-    from lib import TRADING_ENABLED
-    if not TRADING_ENABLED:
-        return
-    try:
-        from routes.trading_intel import start_intel_worker
-        start_intel_worker(app)
-        from routes.trading_autopilot import start_autopilot_worker
-        start_autopilot_worker()
-    except Exception as e:
-        _server_log.error('Failed to start background workers: %s', e, exc_info=True)
+    """Launch optional background threads.
+
+    Feature background workers (e.g. the trading intel + autopilot threads)
+    now start via the ``tofu.startup`` entry-point group, run from
+    ``routes.register_all`` after blueprints are mounted. Core no longer
+    imports any optional feature here.
+    """
+    return
+
+
+def _detect_reverse_proxy():
+    """Detect whether we're running behind an HTTPS-terminating reverse proxy.
+
+    Cloud IDEs / notebook platforms (VS Code port forwarding, GitHub
+    Codespaces, Gitpod, JupyterHub-fronted environments like Meituan
+    Codelab) expose the server on a public ``https://`` URL while talking
+    to our backend over plain HTTP. If we also enable TLS on our side the
+    proxy's plain-HTTP request hits our TLS listener and the connection is
+    reset — the browser/proxy reports ``socket hang up``.
+
+    Detection is signal-based, not host-name based, so it survives exports
+    to any host: we look for env vars these platforms inject into the
+    launch environment. Returns ``(behind_proxy: bool, proxy_name: str)``;
+    ``proxy_name`` is ``''`` when nothing is detected.
+    """
+    # Ordered most-specific → most-generic so the friendliest name wins.
+    if os.environ.get('VSCODE_PROXY_URI'):
+        return True, 'VS Code'
+    if os.environ.get('CODESPACES'):
+        return True, 'Codespaces'
+    if os.environ.get('GITPOD_WORKSPACE_URL'):
+        return True, 'Gitpod'
+    # JupyterHub-fronted platforms (Meituan Codelab, Binder, generic
+    # JupyterHub) always terminate HTTPS at the hub and proxy plain HTTP
+    # to single-user servers. JUPYTERHUB_* is set by the hub spawner;
+    # JUPYTER_SERVER_URL / JPY_* cover bare notebook/lab proxying.
+    if (os.environ.get('JUPYTERHUB_USER')
+            or os.environ.get('JUPYTERHUB_SERVICE_PREFIX')
+            or os.environ.get('JUPYTERHUB_API_URL')):
+        return True, 'JupyterHub'
+    # Codelab-specific belt-and-suspenders: the hub injects CODELAB_API_URL
+    # even in shells where JUPYTERHUB_* was not exported.
+    if os.environ.get('CODELAB_API_URL'):
+        return True, 'Codelab'
+    return False, ''
 
 
 def _find_free_port(start=15000, end=15100):
@@ -1060,11 +1195,23 @@ if __name__ == '__main__':
     _boot('Instance lock acquired (PID=%d)', os.getpid())
 
     # ── SIGTERM → graceful shutdown ──
+    # Set a shutdown flag instead of calling sys.exit(0) from the signal
+    # handler. sys.exit raises SystemExit in the main thread, which aborts
+    # Hypercorn mid-serve and skips connection draining (graceful_timeout).
+    # The flag is consumed by an asyncio.Event created inside the serving
+    # loop (see _serve) and handed to hypercorn_serve(shutdown_trigger=…)
+    # so in-flight requests / SSE streams drain cleanly.
+    import threading as _threading
+    _shutdown_requested = _threading.Event()
     from lib.compat import safe_signal
-    def _sigterm_handler(signum, frame):
-        _server_log.info('[Server] Received SIGTERM — shutting down…')
-        sys.exit(0)
-    safe_signal(signal.SIGTERM, _sigterm_handler)
+    def _signal_shutdown(signum, frame):
+        _server_log.info('[Server] Received signal %s — shutting down…', signum)
+        _shutdown_requested.set()
+    # Passing a custom shutdown_trigger to hypercorn_serve suppresses
+    # Hypercorn's own signal handlers, so we own BOTH signals here and
+    # funnel them into the same graceful-drain flag.
+    safe_signal(signal.SIGTERM, _signal_shutdown)
+    safe_signal(signal.SIGINT, _signal_shutdown)
 
     # ── PG shutdown hook ──
     try:
@@ -1083,29 +1230,24 @@ if __name__ == '__main__':
     _force_tls = (getenv_compat('TOFU_TLS') or '').strip() == '1'
     _force_no_tls = (args.no_tls
                      or (getenv_compat('TOFU_TLS') or '').strip() == '0')
-    # Auto-detect VS Code port forwarding / proxy environments.
+    # Auto-detect cloud-IDE / notebook reverse-proxy environments.
     # These proxies provide their own HTTPS+HTTP/2 on the public URL and
     # connect to our backend over plain HTTP. Adding TLS on our side causes
     # "socket hang up" because the proxy doesn't expect a TLS handshake.
+    _behind_proxy, _proxy_name = _detect_reverse_proxy()
     _vscode_proxy = os.environ.get('VSCODE_PROXY_URI', '')
-    _behind_proxy = bool(_vscode_proxy
-                         or os.environ.get('CODESPACES', '')
-                         or os.environ.get('GITPOD_WORKSPACE_URL', ''))
 
     if _force_no_tls:
         _tls_cert, _tls_key = None, None
         _boot('TLS disabled (--no-tls or TOFU_TLS=0).')
     elif _behind_proxy and not _force_tls:
         _tls_cert, _tls_key = None, None
-        _proxy_name = 'VS Code' if _vscode_proxy else 'cloud IDE'
         _boot('TLS auto-disabled — %s proxy detected (provides its own HTTPS). '
-              'Force with TOFU_TLS=1.', _proxy_name)
+              'Force with TOFU_TLS=1.', _proxy_name or 'cloud IDE')
     else:
         _tls_cert, _tls_key = _ensure_tls_certs(args.certfile, args.keyfile)
 
     # ── Init DB + validate imports in app context ──
-    import asyncio
-
     async def _startup():
         async with app.app_context():
             _init_database()
@@ -1167,10 +1309,9 @@ if __name__ == '__main__':
 
             return mcp_config, feishu_ok
 
-    mcp_config, feishu_ok = asyncio.get_event_loop().run_until_complete(_startup())
+    mcp_config, feishu_ok = asyncio.run(_startup())
 
     # ── Banner ──
-    from lib import TRADING_ENABLED as _trading_on
     from lib.version import __version__ as _ver
     _mcp_count = len(mcp_config)
     _has_tls = bool(_tls_cert and _tls_key)
@@ -1193,12 +1334,10 @@ if __name__ == '__main__':
     _banner_lines.extend([
         f'  {_proto}://{host}:{port}',
         f'  Protocol: {_h2_status}',
-        f'  Server: Hypercorn (ASGI)',
+        '  Server: Hypercorn (ASGI)',
     ])
     if _has_tls and not args.certfile:
         _banner_lines.append('  🔐  Self-signed cert (accept once in browser)')
-    if _trading_on:
-        _banner_lines.append('  Trading Advisor:  /trading.html')
     if feishu_ok:
         _banner_lines.append('  💬  Feishu Bot: ON')
     if _mcp_count > 0:
@@ -1227,6 +1366,8 @@ if __name__ == '__main__':
             f'      Open: {_proto}://{host}:{port}/?token={_BOOTSTRAP_TOKEN}')
         _banner_lines.append(
             '      Saved to data/config/.first_run_token (chmod 0600)')
+        _banner_lines.append(
+            '      (auto-cleared when this bootstrap key is revoked)')
     _banner_lines.append('  ⏱  Boot time: %.1fs' % (time.time() - _BOOT_T0))
     _banner_lines.append('=' * 56)
     _banner = '\n'.join(_banner_lines)
@@ -1253,8 +1394,41 @@ if __name__ == '__main__':
 
     # ── Run ──
     async def _serve():
-        from lib.push import hub as _push_hub
-        _push_hub.set_loop(asyncio.get_running_loop())
-        await hypercorn_serve(app, hconfig)
+        loop = asyncio.get_running_loop()
 
-    asyncio.run(_serve())
+        # ── Size the default executor ──
+        # Every sync route handler runs in this loop's default executor via
+        # Quart's run_sync. Python's default ThreadPoolExecutor is capped at
+        # min(32, os.cpu_count()+4) — too small once long-lived sync handlers
+        # (chat_send, upload, PDF parse) and per-stream poll storms coexist:
+        # the pool saturates and new requests queue behind it. Size it
+        # explicitly. Override via TOFU_SYNC_WORKERS.
+        from concurrent.futures import ThreadPoolExecutor
+        try:
+            _sync_workers = int(os.environ.get('TOFU_SYNC_WORKERS', '0') or '0')
+        except (ValueError, TypeError):
+            _sync_workers = 0
+        if _sync_workers <= 0:
+            _sync_workers = min(128, (os.cpu_count() or 4) * 8)
+        _executor = ThreadPoolExecutor(max_workers=_sync_workers,
+                                       thread_name_prefix='tofu-sync')
+        loop.set_default_executor(_executor)
+        _server_log.info('[Server] Sync route executor sized to %d threads', _sync_workers)
+
+        from lib.push import hub as _push_hub
+        _push_hub.set_loop(loop)
+
+        # Bridge the SIGTERM threading.Event to an async trigger Hypercorn
+        # awaits. When set, Hypercorn stops accepting new connections and
+        # drains in-flight ones within graceful_timeout. Poll cheaply (the
+        # signal handler can't touch loop state directly from a thread).
+        async def _shutdown_trigger():
+            while not _shutdown_requested.is_set():
+                await asyncio.sleep(0.25)
+
+        await hypercorn_serve(app, hconfig, shutdown_trigger=_shutdown_trigger)
+
+    try:
+        asyncio.run(_serve())
+    except KeyboardInterrupt:
+        _server_log.info('[Server] Received SIGINT — shutting down…')

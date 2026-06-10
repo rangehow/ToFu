@@ -15,7 +15,7 @@ logger = get_logger(__name__)
 #  Schema Version Cache — Skip redundant DDL on subsequent startups
 # ═══════════════════════════════════════════════════════════════════════
 
-_SCHEMA_VERSION = 21  # Increment when tables/columns/indexes change
+_SCHEMA_VERSION = 22  # Increment when tables/columns/indexes change
 
 
 def _column_exists(conn, table, column):
@@ -33,33 +33,68 @@ def _table_exists(conn, table):
     return cur.fetchone() is not None
 
 
-def _get_schema_version(conn):
-    """Read current schema version from DB."""
+def _read_meta(conn, key):
+    """Read a value from the core-owned ``schema_meta`` table.
+
+    Returns the string value, or None if the table or key is absent.
+
+    The version cache lived in ``trading_config`` historically; it moved to the
+    core-owned ``schema_meta`` table (schema v22) so the fast-startup cache
+    survives when the trading domain is disabled or extracted.
+    """
     try:
-        if not _table_exists(conn, 'trading_config'):
+        if not _table_exists(conn, 'schema_meta'):
             return None
         cur = conn._conn.cursor()
-        cur.execute("SELECT value FROM trading_config WHERE key = '_schema_version'")
+        cur.execute("SELECT value FROM schema_meta WHERE key = ?", (key,))
         row = cur.fetchone()
-        if row:
-            return int(row[0])
-        return None
+        return row[0] if row else None
     except Exception as e:
-        logger.debug('[DB] Could not read schema version (expected on first run): %s', e)
+        logger.debug('[DB] Could not read schema_meta[%s] (expected on first run): %s', key, e)
+        return None
+
+
+def _write_meta(conn, key, value):
+    """Write a key/value into the core-owned ``schema_meta`` table."""
+    conn._conn.execute(
+        "INSERT OR REPLACE INTO schema_meta (key, value) VALUES (?, ?)",
+        (key, str(value)),
+    )
+    conn._conn.commit()
+
+
+def _get_schema_version(conn):
+    """Read current schema version from DB."""
+    val = _read_meta(conn, '_schema_version')
+    if val is None:
+        return None
+    try:
+        return int(val)
+    except (ValueError, TypeError) as e:
+        logger.debug('[DB] Non-integer schema version %r: %s', val, e)
         return None
 
 
 def _set_schema_version(conn, version):
     """Write schema version to DB after successful DDL."""
     try:
-        conn._conn.execute(
-            "INSERT OR REPLACE INTO trading_config (key, value) VALUES ('_schema_version', ?)",
-            (str(version),)
-        )
-        conn._conn.commit()
+        _write_meta(conn, '_schema_version', version)
         logger.info('[DB] Schema version updated to %d', version)
     except Exception as e:
         logger.warning('[DB] Failed to write schema version: %s', e)
+
+
+def _get_schema_domains(conn):
+    """Read the persisted optional-domain set (comma-joined), or None if unset."""
+    return _read_meta(conn, '_schema_domains')
+
+
+def _set_schema_domains(conn, domains):
+    """Persist the active optional-domain set as a comma-joined string."""
+    try:
+        _write_meta(conn, '_schema_domains', ','.join(domains))
+    except Exception as e:
+        logger.warning('[DB] Failed to write schema domains: %s', e)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -69,7 +104,7 @@ def _set_schema_version(conn, version):
 def _backfill_search_fts(conn):
     """One-time migration: populate FTS5 table from existing conversations."""
     import json
-    from routes.conversations import build_search_text
+    from lib.conversations import build_search_text
 
     cur = conn._conn.cursor()
     cur.execute("SELECT id, messages FROM conversations WHERE search_text = '' AND msg_count > 0")
@@ -397,367 +432,6 @@ def _init_chat_schema(conn):
 
 
 # ═══════════════════════════════════════════════════════════════════════
-#  Trading Schema
-# ═══════════════════════════════════════════════════════════════════════
-
-def _init_trading_schema(conn):
-    """Create trading domain tables and run migrations."""
-    cur = conn._conn.cursor()
-
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS trading_price_cache (
-            symbol TEXT PRIMARY KEY,
-            asset_name TEXT NOT NULL DEFAULT '',
-            nav REAL NOT NULL DEFAULT 0,
-            nav_date TEXT NOT NULL DEFAULT '',
-            source TEXT NOT NULL DEFAULT 'api',
-            updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000)
-        )
-    ''')
-
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS trading_holdings (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            symbol TEXT NOT NULL,
-            asset_name TEXT NOT NULL DEFAULT '',
-            shares REAL NOT NULL DEFAULT 0,
-            buy_price REAL NOT NULL DEFAULT 0,
-            buy_date TEXT NOT NULL DEFAULT '',
-            note TEXT NOT NULL DEFAULT '',
-            created_at INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000),
-            updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000)
-        )
-    ''')
-
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS trading_config (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL DEFAULT ''
-        )
-    ''')
-
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS trading_recommendations (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            content TEXT NOT NULL DEFAULT '',
-            market_context TEXT NOT NULL DEFAULT '',
-            adopted INTEGER NOT NULL DEFAULT 0,
-            actual_result TEXT NOT NULL DEFAULT '',
-            created_at INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000)
-        )
-    ''')
-
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS trading_transactions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            symbol TEXT NOT NULL,
-            asset_name TEXT NOT NULL DEFAULT '',
-            type TEXT NOT NULL DEFAULT 'buy',
-            shares REAL NOT NULL DEFAULT 0,
-            price REAL NOT NULL DEFAULT 0,
-            amount REAL NOT NULL DEFAULT 0,
-            note TEXT NOT NULL DEFAULT '',
-            tx_date TEXT NOT NULL DEFAULT '',
-            created_at INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000)
-        )
-    ''')
-
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS trading_strategies (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL DEFAULT '',
-            type TEXT NOT NULL DEFAULT 'observation',
-            status TEXT NOT NULL DEFAULT 'active',
-            logic TEXT NOT NULL DEFAULT '',
-            scenario TEXT NOT NULL DEFAULT '',
-            assets TEXT NOT NULL DEFAULT '',
-            result TEXT NOT NULL DEFAULT '',
-            source TEXT NOT NULL DEFAULT 'manual',
-            created_at TEXT NOT NULL DEFAULT '',
-            updated_at TEXT NOT NULL DEFAULT ''
-        )
-    ''')
-
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS trading_daily_briefing (
-            date TEXT PRIMARY KEY,
-            content TEXT NOT NULL DEFAULT '',
-            news_json TEXT NOT NULL DEFAULT '[]',
-            created_at TEXT NOT NULL DEFAULT ''
-        )
-    ''')
-
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS trading_strategy_groups (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL UNIQUE,
-            description TEXT NOT NULL DEFAULT '',
-            strategy_ids TEXT NOT NULL DEFAULT '[]',
-            risk_level TEXT NOT NULL DEFAULT 'medium',
-            created_at TEXT NOT NULL DEFAULT '',
-            updated_at TEXT NOT NULL DEFAULT ''
-        )
-    ''')
-
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS trading_intel_cache (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            category TEXT NOT NULL DEFAULT 'market',
-            title TEXT NOT NULL DEFAULT '',
-            summary TEXT NOT NULL DEFAULT '',
-            raw_content TEXT NOT NULL DEFAULT '',
-            source_url TEXT NOT NULL DEFAULT '',
-            source_name TEXT NOT NULL DEFAULT '',
-            analysis TEXT NOT NULL DEFAULT '',
-            relevance_score REAL NOT NULL DEFAULT 0,
-            sentiment TEXT NOT NULL DEFAULT '',
-            published_at TEXT NOT NULL DEFAULT '',
-            fetched_at TEXT NOT NULL DEFAULT '',
-            analyzed_at TEXT NOT NULL DEFAULT '',
-            expires_at TEXT NOT NULL DEFAULT '',
-            published_date TEXT NOT NULL DEFAULT '',
-            date_source TEXT NOT NULL DEFAULT '',
-            content_simhash INTEGER NOT NULL DEFAULT 0
-        )
-    ''')
-    cur.execute('CREATE INDEX IF NOT EXISTS idx_intel_cache_expires ON trading_intel_cache(expires_at)')
-    cur.execute('CREATE INDEX IF NOT EXISTS idx_intel_cache_fetched ON trading_intel_cache(fetched_at)')
-    cur.execute('CREATE INDEX IF NOT EXISTS idx_intel_cache_category ON trading_intel_cache(category)')
-
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS trading_trade_queue (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            batch_id TEXT NOT NULL DEFAULT '',
-            symbol TEXT NOT NULL,
-            asset_name TEXT NOT NULL DEFAULT '',
-            action TEXT NOT NULL DEFAULT 'buy',
-            shares REAL NOT NULL DEFAULT 0,
-            amount REAL NOT NULL DEFAULT 0,
-            price REAL NOT NULL DEFAULT 0,
-            est_fee REAL NOT NULL DEFAULT 0,
-            fee_detail TEXT NOT NULL DEFAULT '',
-            reason TEXT NOT NULL DEFAULT '',
-            status TEXT NOT NULL DEFAULT 'pending',
-            created_at TEXT NOT NULL DEFAULT '',
-            executed_at TEXT NOT NULL DEFAULT '',
-            rolled_back_at TEXT NOT NULL DEFAULT ''
-        )
-    ''')
-
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS trading_fee_rules (
-            symbol TEXT PRIMARY KEY,
-            asset_name TEXT NOT NULL DEFAULT '',
-            buy_fee_rate REAL NOT NULL DEFAULT 0.0015,
-            sell_fee_rules TEXT NOT NULL DEFAULT '[]',
-            management_fee REAL NOT NULL DEFAULT 0,
-            custody_fee REAL NOT NULL DEFAULT 0,
-            data_source TEXT NOT NULL DEFAULT '',
-            updated_at TEXT NOT NULL DEFAULT ''
-        )
-    ''')
-
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS trading_intel_crawl_log (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            crawl_date TEXT NOT NULL,
-            category TEXT NOT NULL DEFAULT 'market',
-            source_key TEXT NOT NULL DEFAULT '',
-            items_fetched INTEGER NOT NULL DEFAULT 0,
-            status TEXT NOT NULL DEFAULT 'ok',
-            started_at TEXT NOT NULL DEFAULT '',
-            finished_at TEXT NOT NULL DEFAULT ''
-        )
-    ''')
-    cur.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_crawl_log_unique ON trading_intel_crawl_log(crawl_date, category, source_key)')
-
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS trading_strategy_performance (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            strategy_id INTEGER NOT NULL,
-            strategy_group_id INTEGER,
-            period_start TEXT NOT NULL DEFAULT '',
-            period_end TEXT NOT NULL DEFAULT '',
-            return_pct REAL NOT NULL DEFAULT 0,
-            benchmark_return_pct REAL NOT NULL DEFAULT 0,
-            max_drawdown REAL NOT NULL DEFAULT 0,
-            sharpe_ratio REAL,
-            win_rate REAL,
-            trade_count INTEGER NOT NULL DEFAULT 0,
-            source TEXT NOT NULL DEFAULT 'live',
-            detail_json TEXT NOT NULL DEFAULT '{}',
-            created_at TEXT NOT NULL DEFAULT '',
-            decision_id INTEGER,
-            actual_outcome TEXT NOT NULL DEFAULT '',
-            lesson TEXT NOT NULL DEFAULT '',
-            evaluated_at TEXT NOT NULL DEFAULT ''
-        )
-    ''')
-    cur.execute('CREATE INDEX IF NOT EXISTS idx_strat_perf ON trading_strategy_performance(strategy_id)')
-
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS trading_decision_history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            batch_id TEXT NOT NULL DEFAULT '',
-            strategy_group_id INTEGER,
-            strategy_group_name TEXT NOT NULL DEFAULT '',
-            briefing_content TEXT NOT NULL DEFAULT '',
-            recommendation_content TEXT NOT NULL DEFAULT '',
-            trades_json TEXT NOT NULL DEFAULT '[]',
-            status TEXT NOT NULL DEFAULT 'generated',
-            applied_at TEXT NOT NULL DEFAULT '',
-            rolled_back_at TEXT NOT NULL DEFAULT '',
-            performance_json TEXT NOT NULL DEFAULT '{}',
-            created_at TEXT NOT NULL DEFAULT ''
-        )
-    ''')
-
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS trading_intel_analysis (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            intel_id INTEGER,
-            analysis_type TEXT NOT NULL DEFAULT 'summary',
-            content TEXT NOT NULL DEFAULT '',
-            metrics_json TEXT NOT NULL DEFAULT '{}',
-            created_at TEXT NOT NULL DEFAULT ''
-        )
-    ''')
-
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS trading_autopilot_cycles (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            cycle_id TEXT NOT NULL UNIQUE,
-            cycle_number INTEGER NOT NULL DEFAULT 1,
-            analysis_content TEXT NOT NULL DEFAULT '',
-            structured_result TEXT NOT NULL DEFAULT '{}',
-            kpi_evaluations TEXT NOT NULL DEFAULT '{}',
-            correlations TEXT NOT NULL DEFAULT '[]',
-            confidence_score REAL NOT NULL DEFAULT 0,
-            market_outlook TEXT NOT NULL DEFAULT 'unknown',
-            status TEXT NOT NULL DEFAULT 'running',
-            created_at TEXT NOT NULL DEFAULT ''
-        )
-    ''')
-    cur.execute('CREATE INDEX IF NOT EXISTS idx_autopilot_cycle ON trading_autopilot_cycles(cycle_id)')
-    cur.execute('CREATE INDEX IF NOT EXISTS idx_autopilot_date ON trading_autopilot_cycles(created_at)')
-
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS trading_autopilot_recommendations (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            cycle_id TEXT NOT NULL DEFAULT '',
-            symbol TEXT NOT NULL DEFAULT '',
-            asset_name TEXT NOT NULL DEFAULT '',
-            action TEXT NOT NULL DEFAULT 'hold',
-            amount REAL NOT NULL DEFAULT 0,
-            confidence REAL NOT NULL DEFAULT 0,
-            reason TEXT NOT NULL DEFAULT '',
-            status TEXT NOT NULL DEFAULT 'pending',
-            actual_return REAL,
-            evaluated_at TEXT,
-            created_at TEXT NOT NULL DEFAULT ''
-        )
-    ''')
-    cur.execute('CREATE INDEX IF NOT EXISTS idx_autopilot_rec_cycle ON trading_autopilot_recommendations(cycle_id)')
-
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS trading_bg_tasks (
-            task_id TEXT PRIMARY KEY,
-            task_type TEXT NOT NULL DEFAULT '',
-            status TEXT NOT NULL DEFAULT 'running',
-            params_json TEXT NOT NULL DEFAULT '{}',
-            result_json TEXT NOT NULL DEFAULT '{}',
-            thinking TEXT NOT NULL DEFAULT '',
-            error TEXT NOT NULL DEFAULT '',
-            created_at TEXT NOT NULL DEFAULT '',
-            finished_at TEXT NOT NULL DEFAULT ''
-        )
-    ''')
-    cur.execute('CREATE INDEX IF NOT EXISTS idx_bg_task_status ON trading_bg_tasks(status)')
-    cur.execute('CREATE INDEX IF NOT EXISTS idx_bg_task_created ON trading_bg_tasks(created_at)')
-
-    # Migrations
-    for col, sql in {
-        'published_at':    "ALTER TABLE trading_intel_cache ADD COLUMN published_at TEXT NOT NULL DEFAULT ''",
-        'sentiment':       "ALTER TABLE trading_intel_cache ADD COLUMN sentiment TEXT NOT NULL DEFAULT ''",
-        'published_date':  "ALTER TABLE trading_intel_cache ADD COLUMN published_date TEXT NOT NULL DEFAULT ''",
-        'date_source':     "ALTER TABLE trading_intel_cache ADD COLUMN date_source TEXT NOT NULL DEFAULT ''",
-        'content_simhash': "ALTER TABLE trading_intel_cache ADD COLUMN content_simhash INTEGER NOT NULL DEFAULT 0",
-    }.items():
-        if not _column_exists(conn, 'trading_intel_cache', col):
-            cur.execute(sql)
-            logger.info('[DB] Migration: added column %s to trading_intel_cache', col)
-
-    for col, sql in {
-        'decision_id':    "ALTER TABLE trading_strategy_performance ADD COLUMN decision_id INTEGER",
-        'actual_outcome': "ALTER TABLE trading_strategy_performance ADD COLUMN actual_outcome TEXT NOT NULL DEFAULT ''",
-        'lesson':         "ALTER TABLE trading_strategy_performance ADD COLUMN lesson TEXT NOT NULL DEFAULT ''",
-        'evaluated_at':   "ALTER TABLE trading_strategy_performance ADD COLUMN evaluated_at TEXT NOT NULL DEFAULT ''",
-    }.items():
-        if not _column_exists(conn, 'trading_strategy_performance', col):
-            cur.execute(sql)
-            logger.info('[DB] Migration: added column %s to trading_strategy_performance', col)
-
-    # Meta-Strategy & Strategy Learner tables
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS trading_strategy_deployments (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            cycle_id TEXT NOT NULL DEFAULT '',
-            market_condition_json TEXT NOT NULL DEFAULT '{}',
-            strategy_ids_json TEXT NOT NULL DEFAULT '[]',
-            strategy_names_json TEXT NOT NULL DEFAULT '[]',
-            deployed_at TEXT NOT NULL DEFAULT ''
-        )
-    ''')
-    cur.execute('CREATE INDEX IF NOT EXISTS idx_deploy_cycle ON trading_strategy_deployments(cycle_id)')
-
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS trading_strategy_combo_outcomes (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            cycle_id TEXT NOT NULL DEFAULT '',
-            strategy_ids_json TEXT NOT NULL DEFAULT '[]',
-            market_regime TEXT NOT NULL DEFAULT 'unknown',
-            actual_return_pct REAL NOT NULL DEFAULT 0,
-            benchmark_return_pct REAL NOT NULL DEFAULT 0,
-            excess_return_pct REAL NOT NULL DEFAULT 0,
-            outcome TEXT NOT NULL DEFAULT '',
-            outcome_notes TEXT NOT NULL DEFAULT '',
-            evaluated_at TEXT NOT NULL DEFAULT ''
-        )
-    ''')
-    cur.execute('CREATE INDEX IF NOT EXISTS idx_combo_cycle ON trading_strategy_combo_outcomes(cycle_id)')
-    cur.execute('CREATE INDEX IF NOT EXISTS idx_combo_outcome ON trading_strategy_combo_outcomes(outcome)')
-
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS trading_strategy_compatibility (
-            pair_key TEXT PRIMARY KEY,
-            strategy_id_a INTEGER NOT NULL,
-            strategy_id_b INTEGER NOT NULL,
-            compatibility_score REAL NOT NULL DEFAULT 0,
-            sample_count INTEGER NOT NULL DEFAULT 0,
-            updated_at TEXT NOT NULL DEFAULT ''
-        )
-    ''')
-
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS trading_strategy_failures (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            strategy_id INTEGER NOT NULL,
-            strategy_name TEXT NOT NULL DEFAULT '',
-            cycle_id TEXT NOT NULL DEFAULT '',
-            market_regime TEXT NOT NULL DEFAULT 'unknown',
-            actual_return_pct REAL NOT NULL DEFAULT 0,
-            excess_return_pct REAL NOT NULL DEFAULT 0,
-            failure_notes TEXT NOT NULL DEFAULT '',
-            created_at TEXT NOT NULL DEFAULT ''
-        )
-    ''')
-    cur.execute('CREATE INDEX IF NOT EXISTS idx_failure_strategy ON trading_strategy_failures(strategy_id)')
-    cur.execute('CREATE INDEX IF NOT EXISTS idx_failure_regime ON trading_strategy_failures(market_regime)')
-
-    conn._conn.commit()
-
-
-# ═══════════════════════════════════════════════════════════════════════
 #  System Schema
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -765,21 +439,18 @@ def _init_system_schema(conn):
     """Create system domain tables."""
     cur = conn._conn.cursor()
 
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS pricing_cache (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL,
-            updated_at INTEGER NOT NULL
-        )
-    ''')
-
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS recent_projects (
-            path TEXT PRIMARY KEY,
-            count INTEGER NOT NULL DEFAULT 1,
-            last_used INTEGER NOT NULL
-        )
-    ''')
+    # pricing_cache + recent_projects: migrated onto Core definitions
+    # (lib/database/_core_schema.py). _table_exists guard is REQUIRED on the
+    # SQLite path (bare execute, no savepoint tolerance; Core DDL has no
+    # IF NOT EXISTS). See tests/test_core_schema_parity.py.
+    from lib.database._core_schema import (
+        PRICING_CACHE, RECENT_PROJECTS, SCHEMA_META, create_if_absent,
+    )
+    # schema_meta is core-owned and holds the fast-startup version cache; it
+    # MUST exist independently of the (optional) trading domain.
+    create_if_absent(conn, SCHEMA_META, table_exists=_table_exists)
+    create_if_absent(conn, PRICING_CACHE, table_exists=_table_exists)
+    create_if_absent(conn, RECENT_PROJECTS, table_exists=_table_exists)
 
     cur.execute('''
         CREATE TABLE IF NOT EXISTS scheduled_tasks (
@@ -1078,26 +749,44 @@ def init_db(_new_connection):
     try:
         conn = _new_connection()
 
-        # ── Fast path: check if schema is already at current version ──
+        # ── Fast path: version AND optional-domain set both unchanged.
+        #    The domain set is part of the cache key so enabling a new domain
+        #    (e.g. trading) re-triggers its DDL instead of being skipped.
+        from lib.database.schema_registry import active_domains
         t0 = time.monotonic()
         current_version = _get_schema_version(conn)
-        if current_version == _SCHEMA_VERSION:
+        current_domains = _get_schema_domains(conn)
+        want_domains = ','.join(active_domains())
+        if current_version == _SCHEMA_VERSION and current_domains == want_domains:
             elapsed = time.monotonic() - t0
-            logger.info('[DB] Schema version %d is current — skipping DDL '
-                        '(fast startup, checked in %.2fs)', _SCHEMA_VERSION, elapsed)
+            logger.info('[DB] Schema version %d + domains [%s] current — skipping '
+                        'DDL (fast startup, checked in %.2fs)',
+                        _SCHEMA_VERSION, want_domains, elapsed)
             return
 
-        logger.info('[DB] Schema version %s → %d — running full DDL migration',
-                    current_version, _SCHEMA_VERSION)
+        logger.info('[DB] Schema version %s → %d, domains [%s] → [%s] — running '
+                    'full DDL migration', current_version, _SCHEMA_VERSION,
+                    current_domains, want_domains)
 
         _init_chat_schema(conn)
         logger.info('[DB] Chat schema initialized')
-        _init_trading_schema(conn)
-        logger.info('[DB] Trading schema initialized')
+        # system schema first — it creates the core-owned schema_meta table
+        # the version/domain cache writes into below.
         _init_system_schema(conn)
         logger.info('[DB] System schema initialized')
+        # Optional domains (e.g. trading) register their initializers via
+        # lib/database/schema_registry.py — in-tree shim or tofu.schema plugin.
+        from lib.database.schema_registry import run_registered
+        run_registered(conn)
 
         _set_schema_version(conn, _SCHEMA_VERSION)
+        _set_schema_domains(conn, active_domains())
+        try:
+            from lib.log import audit_log
+            audit_log('db_schema_init', backend='sqlite', version=_SCHEMA_VERSION,
+                      domains=want_domains, prev_version=current_version)
+        except Exception as _ae:
+            logger.debug('[DB] audit_log db_schema_init failed: %s', _ae)
 
         elapsed = time.monotonic() - t0
         logger.info('[DB] Schema initialization complete in %.1fs (version %d)',

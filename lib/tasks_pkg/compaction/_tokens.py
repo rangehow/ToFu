@@ -111,18 +111,83 @@ _PROMPT_TOO_LONG_RE = re.compile(
 
 
 def _parse_reported_token_count(error_text: str) -> int | None:
-    """Extract the N in "prompt is too long: N tokens > M maximum"."""
+    """Extract the requested size N from an overflow error.
+
+    Handles both "prompt is too long: N tokens > M maximum" (N first) and
+    "maximum context length is M tokens … you requested N tokens" (M first)
+    by delegating to :func:`_parse_context_overflow` and returning N.
+    """
+    requested, _stated_max = _parse_context_overflow(error_text)
+    return requested
+
+
+# Gateway/provider-stated ceiling, e.g.
+#   "This model's maximum context length is 1048565 tokens"
+#   "... > 200000 maximum"
+_STATED_MAX_RE = re.compile(
+    r'(?:maximum\s+context\s+length\s+is|context\s+length\s+is|'
+    r'maximum\s+(?:is|of)|max(?:imum)?\s+tokens?\s+(?:is|of)?)\s*(\d[\d,]*)',
+    re.IGNORECASE,
+)
+_STATED_MAX_TRAILING_RE = re.compile(r'>\s*(\d[\d,]*)\s*(?:tokens?\s*)?(?:maximum|limit)',
+                                     re.IGNORECASE)
+# Explicitly-requested size, e.g. "you requested 1076791 tokens".
+_REQUESTED_RE = re.compile(r'(?:you\s+)?requested\s+(\d[\d,]*)', re.IGNORECASE)
+
+
+def _parse_context_overflow(error_text: str) -> tuple[int | None, int | None]:
+    """Parse an overflow error into ``(requested_tokens, stated_maximum)``.
+
+    Either element may be ``None`` if absent. ``stated_maximum`` is the
+    authoritative ceiling the gateway named (preferred for learning a shrunk
+    limit); ``requested_tokens`` is the size of the rejected prompt (a lower
+    bound used only when no maximum was stated).
+
+    Examples
+    --------
+    "prompt is too long: 210819 tokens > 200000 maximum"
+        → (210819, 200000)
+    "maximum context length is 1048565 tokens. However, you requested 1076791 tokens"
+        → (1076791, 1048565)
+    """
     if not error_text:
-        return None
-    try:
-        m = _PROMPT_TOO_LONG_RE.search(error_text)
-        if not m:
+        return None, None
+
+    def _coerce(s: str | None) -> int | None:
+        if not s:
             return None
-        n = int(m.group(1).replace(',', ''))
+        try:
+            n = int(s.replace(',', ''))
+        except (ValueError, AttributeError):
+            return None
         return n if 0 < n < 50_000_000 else None
-    except (ValueError, AttributeError) as _e_audit:
-        logger.debug('[_tokens] _parse_reported_token_count caught %s: %s', type(_e_audit).__name__, _e_audit)
-        return None
+
+    stated_max = None
+    try:
+        m = _STATED_MAX_RE.search(error_text)
+        if m:
+            stated_max = _coerce(m.group(1))
+        if stated_max is None:
+            m = _STATED_MAX_TRAILING_RE.search(error_text)
+            if m:
+                stated_max = _coerce(m.group(1))
+    except (ValueError, AttributeError) as e:
+        logger.debug('[_tokens] stated-max parse caught %s: %s', type(e).__name__, e)
+
+    requested = None
+    try:
+        m = _REQUESTED_RE.search(error_text)
+        if m:
+            requested = _coerce(m.group(1))
+        if requested is None:
+            # Fall back to the leading "N tokens" of the classic shape.
+            m = _PROMPT_TOO_LONG_RE.search(error_text)
+            if m:
+                requested = _coerce(m.group(1))
+    except (ValueError, AttributeError) as e:
+        logger.debug('[_tokens] requested parse caught %s: %s', type(e).__name__, e)
+
+    return requested, stated_max
 
 
 def _human_size(byte_count: int) -> str:
@@ -176,6 +241,13 @@ def _get_static_context_limit(task: dict | None = None) -> int:
             'o4':       200_000,
             'gemini':   1_000_000,
             'qwen':     128_000,
+            # DeepSeek V4 family (pro + flash) is a true 1M-context model.
+            # These MUST precede the generic 'deepseek' key below: lookup is
+            # substring-match in dict-insertion order, so the specific V4
+            # entries win while older deepseek-chat/v3.x/reasoner still fall
+            # through to the 128k default.
+            'deepseek-v4-pro':   1_000_000,
+            'deepseek-v4-flash': 1_000_000,
             'deepseek': 128_000,
             'doubao':   128_000,
             'minimax':  1_000_000,
@@ -184,6 +256,35 @@ def _get_static_context_limit(task: dict | None = None) -> int:
             if key in model:
                 return limit
     return _DEFAULT_CONTEXT_LIMIT
+
+
+_MIN_USABLE_RATIO = 0.7
+"""Floor for usable context as a fraction of the model's window.
+
+``_OUTPUT_RESERVE`` is a fixed absolute tuned for the 1M-context Claude
+family (its 128K max-output cap).  On a small-window model (e.g. a 128K
+gpt-4/qwen/deepseek) that fixed reserve can equal or exceed the whole
+window, driving ``limit - reserves`` to zero or negative.  A non-positive
+``usable`` makes the force-compact trigger threshold non-positive too, so
+L2 summary compaction fires on *every* request regardless of size.
+
+Clamp ``usable`` to at least this fraction of the window so reserves can
+never consume more than ``1 - _MIN_USABLE_RATIO`` (30%) of the context.
+0.7 preserves the historical small-model behaviour: before the 2026-06-02
+``_OUTPUT_RESERVE`` 32K→128K bump, a 128K window had
+``usable = (128000-32000-8000)/128000 ≈ 0.69``.  The frontend
+(``static/js/context-bar.js``) applies the same floor."""
+
+
+def _usable_context(context_limit: int) -> int:
+    """Usable context tokens after output + compaction reserves.
+
+    Floored at ``_MIN_USABLE_RATIO`` of ``context_limit`` so an oversized
+    fixed reserve (see ``_MIN_USABLE_RATIO``) can never produce a
+    zero/negative budget on small-window models.
+    """
+    raw = context_limit - _OUTPUT_RESERVE - _COMPACTION_RESERVE
+    return max(raw, int(context_limit * _MIN_USABLE_RATIO))
 
 
 def _get_context_limit(task: dict | None = None) -> int:
@@ -201,6 +302,50 @@ def _get_context_limit(task: dict | None = None) -> int:
     except Exception as e:
         logger.debug('[Compact] context_limits lookup failed: %s', e)
     return static_limit
+
+
+def resolve_model_context_limit(model: str, provider_id: str = '') -> int:
+    """Effective context window for a bare ``(model, provider_id)`` pair.
+
+    Frontend-facing sibling of :func:`_get_context_limit` that doesn't need a
+    full task dict — used to build the per-model limit map served in
+    ``/api/v1/server-config`` so the Context Health Bar reads exact numbers
+    (static preset + any auto-learned override) instead of re-deriving them.
+    """
+    synthetic = {'config': {'model': model or ''}, 'provider_id': provider_id or ''}
+    return _get_context_limit(synthetic)
+
+
+def build_context_policy() -> dict:
+    """Return the authoritative context-window policy for frontend consumers.
+
+    The Context Health Bar (``static/js/context-bar.js``) used to hard-code
+    a copy of these constants — guaranteed to drift from the Python source.
+    Serving them through ``/api/v1/server-config`` makes this module the
+    single source of truth: the gauge reads numbers, never re-derives them.
+
+    All values are the same constants the orchestrator uses to decide when
+    to force-compact, so the bar's "hot" zone lines up exactly with the
+    server's trigger:
+
+        usable  = context_limit - output_reserve - compaction_reserve
+        trigger = usable * summary_trigger_ratio   (tokens)
+
+    On small-window models a fixed ``output_reserve`` can exceed the whole
+    window, so ``usable`` is floored at ``min_usable_ratio`` of the limit
+    (see :func:`_usable_context`).  The frontend MUST apply the same floor.
+
+    Returns:
+        Dict with ``default_limit``, ``output_reserve``, ``compaction_reserve``,
+        ``summary_trigger_ratio`` and ``min_usable_ratio``.
+    """
+    return {
+        'default_limit': _DEFAULT_CONTEXT_LIMIT,
+        'output_reserve': _OUTPUT_RESERVE,
+        'compaction_reserve': _COMPACTION_RESERVE,
+        'summary_trigger_ratio': _SUMMARY_TRIGGER_RATIO,
+        'min_usable_ratio': _MIN_USABLE_RATIO,
+    }
 
 
 def _should_force_compact(messages: list, task: dict | None = None) -> bool:
@@ -221,7 +366,7 @@ def _should_force_compact(messages: list, task: dict | None = None) -> bool:
             return False
 
     context_limit = _get_context_limit(task)
-    usable = context_limit - _OUTPUT_RESERVE - _COMPACTION_RESERVE
+    usable = _usable_context(context_limit)
     trigger_threshold = int(usable * _SUMMARY_TRIGGER_RATIO)
 
     total_tokens, method = _count_tokens_authoritative(messages, task)

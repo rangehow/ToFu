@@ -40,6 +40,15 @@ CHINESE_RATIO_THRESHOLD = 0.30
 ENGLISH_RATIO_THRESHOLD = 0.55
 MIN_CHARS_FOR_DETECTION = 8
 
+# A translation produced from mid-stream PARTIAL content tends to be a tiny
+# fraction of the (now-final) source length. When the persisted translation
+# is shorter than this fraction of the source AND the source is non-trivial,
+# we treat it as stale and re-translate. This is a data-quality policy, so it
+# lives here (not hard-coded in static/js/translation.js, where it silently
+# drifted). Served to the frontend via /api/v1/server-config → `translation`.
+STALE_TRANSLATION_FRAC = 0.15
+STALE_TRANSLATION_MIN_SOURCE_CHARS = 500
+
 
 def cjk_ratio(text: str) -> float:
     """Return the fraction of non-whitespace characters that are CJK.
@@ -63,6 +72,40 @@ def is_predominantly_chinese(text: str) -> bool:
     Direct port of the JS ``_isAlreadyChinese`` policy.
     """
     return cjk_ratio(text) >= CHINESE_RATIO_THRESHOLD
+
+
+def is_predominantly_english(text: str) -> bool:
+    """True when ``latin_ratio(text) >= ENGLISH_RATIO_THRESHOLD``.
+
+    Mirror of :func:`is_predominantly_chinese` for the reverse direction:
+    used to decide "this text is already English, skip translating it to
+    English" — the language-agnostic generalisation of the old
+    Chinese-only ``has_chinese`` gate.
+    """
+    return latin_ratio(text) >= ENGLISH_RATIO_THRESHOLD
+
+
+def is_stale_partial_translation(source: str, translated: str) -> bool:
+    """True when ``translated`` looks like a stale mid-stream partial.
+
+    A translation is stale when the source is non-trivial
+    (>= ``STALE_TRANSLATION_MIN_SOURCE_CHARS``) yet the translation came out
+    shorter than ``STALE_TRANSLATION_FRAC`` of it — the signature of a
+    translation captured before the source finished streaming.
+    """
+    if not isinstance(source, str) or not isinstance(translated, str):
+        return False
+    if len(source) <= STALE_TRANSLATION_MIN_SOURCE_CHARS or not translated:
+        return False
+    return len(translated) < len(source) * STALE_TRANSLATION_FRAC
+
+
+def stale_translation_policy() -> dict:
+    """Frontend-facing policy blob for the stale-partial heuristic."""
+    return {
+        'stale_frac': STALE_TRANSLATION_FRAC,
+        'min_source_chars': STALE_TRANSLATION_MIN_SOURCE_CHARS,
+    }
 
 
 def latin_ratio(text: str) -> float:
@@ -103,6 +146,9 @@ def guess_language(text: str) -> str:
 __all__ = [
     'CHINESE_RATIO_THRESHOLD', 'ENGLISH_RATIO_THRESHOLD',
     'MIN_CHARS_FOR_DETECTION',
+    'STALE_TRANSLATION_FRAC', 'STALE_TRANSLATION_MIN_SOURCE_CHARS',
     'cjk_ratio', 'latin_ratio', 'is_predominantly_chinese',
+    'is_predominantly_english',
+    'is_stale_partial_translation', 'stale_translation_policy',
     'guess_language',
 ]

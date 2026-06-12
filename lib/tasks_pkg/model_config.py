@@ -83,6 +83,7 @@ def _resolve_model_config(cfg, task_id):
     temperature = cfg.get('temperature', 1.0)
     thinking_enabled = cfg.get('thinkingEnabled', False)
     search_mode = cfg.get('searchMode', 'multi')
+    response_format = cfg.get('responseFormat')
     thinking_depth = cfg.get('thinkingDepth', None)
     _default_depth = cfg.get('defaultThinkingDepth', 'medium')  # user-configured default
 
@@ -152,6 +153,7 @@ def _resolve_model_config(cfg, task_id):
         'preset': preset,
         'max_tokens': max_tokens,
         'temperature': temperature,
+        'response_format': response_format,
         'search_mode': search_mode,
         'search_enabled': search_enabled,
         'fetch_enabled': fetch_enabled,

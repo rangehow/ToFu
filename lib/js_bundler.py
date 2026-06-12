@@ -35,6 +35,7 @@ _BUNDLE_FILES = [
     'core/cost.js',
     'core/debug_panel.js',
     'core/escape_html.js',
+    'core/safe_html.js',   # after escape_html.js (uses escapeHtml), before ui/ consumers
     'core/error_envelope.js',
     'core/cross_tab_sync.js',
     'core/conversations.js',
@@ -42,6 +43,7 @@ _BUNDLE_FILES = [
     'core/markdown.js',
     'core/health_stream_timer.js',
     'core/toast.js',
+    'core/dialog.js',  # themed confirm/alert/prompt — after toast (same window scope)
     # Unified API client — owns every backend HTTP call. Depends on
     # apiUrl() from core.js, consumed by every feature module below.
     'api.js',
@@ -67,7 +69,25 @@ _BUNDLE_FILES = [
     'ui/edit_message.js',
     'ui/turn_nav.js',
     'ui/streaming_ui.js',
+    # Property-only SSE handlers extracted from dispatchSSEEvent (2026-06).
+    # Plain hoisted functions taking (ev, ctx-snapshot); the dispatcher in
+    # sse_pipeline.js calls them. Load BEFORE sse_pipeline.js for clear intent.
+    'ui/sse_handlers_tool.js',
+    'ui/sse_handlers_swarm.js',
+    'ui/sse_handlers_io.js',
+    'ui/sse_handlers_misc.js',
+    'ui/sse_handlers_lifecycle.js',
     'ui/sse_pipeline.js',
+    # Split out of sse_pipeline.js (2026-06): window-scope siblings with no
+    # _trySSE closure capture. Load AFTER sse_pipeline.js (connectToTask
+    # calls _pollFallback at runtime; updateSendButton is global).
+    'ui/sse_poll_fallback.js',
+    # Cross-turn swarm panel updates via /api/push (settles the "N running
+    # async" badge after the spawning turn ends). Needs the swarm SSE
+    # handlers (sse_handlers_swarm.js) + pushSubscribe (push.js) + renderChat
+    # (ui/chat_render.js) — all loaded above. Pure runtime subscriber.
+    'ui/swarm_push.js',
+    'ui/send_button.js',
     # Unified chatInner controller — depends on renderMessage,
     # _surgicalTruncateDOM, _convRenderFingerprint, renderChat from
     # the ui/ subpackage plus _ensureMsgId from core.js, so it MUST
@@ -82,6 +102,7 @@ _BUNDLE_FILES = [
     'project.js',
     'memory.js',
     'skills.js',
+    'orchestration.js',
     'scheduler.js',
     'optimizer.js',
     'update.js',
@@ -107,14 +128,14 @@ _BUNDLE_FILES = [
     'settings/balance.js',
     'settings/template_actions.js',
     'settings/model_edit.js',
+    'settings/access_matrix.js',
     'settings/visibility_defaults.js',
+    'settings/chip_input.js',
     'settings/other_tabs.js',
+    'settings/auth_sources.js',
     'settings/save_export.js',
     'settings/oauth.js',
     'settings/mcp.js',
-    # API key management UI — depends on switchSettingsTab from
-    # settings.js; auto-loads when the API Keys tab is activated.
-    'api-keys.js',
     # Agent backend selection (depends on apiUrl/debugLog from core+ui;
     # must come BEFORE main.js because main.js references its functions
     # like _saveConvToolState ↔ _applyAgentBackendUI bidirectionally,
@@ -186,6 +207,7 @@ def build_bundle():
     total_size = 0
     missing = []
 
+    included = 0
     for name in _BUNDLE_FILES:
         path = os.path.join(JS_DIR, name)
         try:
@@ -197,13 +219,27 @@ def build_bundle():
             parts.append(content)
             parts.append('\n')
             total_size += len(content)
+            included += 1
         except OSError as e:
             logger.warning('[Bundle] Missing source file %s: %s', name, e)
             missing.append(name)
 
+    # A missing file is almost always a stale manifest entry (a JS file
+    # renamed / removed without updating _BUNDLE_FILES). We deliberately
+    # DON'T abort the whole bundle for that — returning None forces the
+    # dev-fallback path in routes/common.py, which strips every app
+    # <script> tag and ships a blank UI. Instead we skip the missing
+    # files (loud WARNING above) and bundle whatever remains, so one
+    # stale entry degrades to "that one module is absent" rather than
+    # "the entire app fails to boot". The manifest↔index.html parity
+    # tests (tests/test_artifacts_bundle_registration.py) catch genuine
+    # omissions at test time. Only a totally empty result is fatal.
     if missing:
-        logger.error('[Bundle] Cannot build bundle — %d file(s) missing: %s',
-                      len(missing), ', '.join(missing))
+        logger.error('[Bundle] %d file(s) missing from _BUNDLE_FILES, '
+                     'building without them: %s',
+                     len(missing), ', '.join(missing))
+    if included == 0:
+        logger.error('[Bundle] Cannot build bundle — no source files found')
         return None
 
     bundle_content = ''.join(parts)

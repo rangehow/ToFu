@@ -36,11 +36,18 @@ lib/                   — Core business logic
                          read_json / write_json_atomic / update_json_atomic / write_text_atomic
   ttl_cache.py         — Generic in-memory TTL cache with LRU eviction +
                          get_or_compute serialization (TTLCache class)
-  task_runtime.py      — Single source of truth for background async tasks
-                         (chat / paper-report / paper-translate / translate / trading-sim).
-                         See §14 for usage.
-  push.py              — Unified server-push hub: PushHub + push_event() — backs the
-                         /api/push WebSocket multiplexer (see §4.7)
+  task_runtime.py      — Compatibility shim → re-exports TaskRuntime from
+                         lib/agent_core/task_runtime.py (relocated 2026-06). See §14.
+  push.py              — Compatibility shim → re-exports PushHub + push_event() from
+                         lib/agent_core/push.py — backs the /api/push WebSocket multiplexer (see §4.7)
+  agent_core/          — Reusable agent base, as one browsable package (relocated 2026-06):
+                         run loop, dispatch, endpoint loop, compaction, push hub,
+                         TaskRuntime, capability profiles, streaming-event contract.
+    __init__.py        — Lazy (PEP 562) facade; CORE_MEMBERS maps symbol → defining module
+    task_runtime.py    — TaskRuntime implementation (real home; lib/task_runtime.py shims it)
+    push.py            — PushHub + push_event() (real home; lib/push.py shims it)
+    events.py          — EventType / EventSpec streaming-event contract
+    profiles.py        — Agent capability profiles (apply_profile / get_profile)
   llm/                 — LLM API communication (package)
     __init__.py        — Public facade re-exporting all symbols
     body.py            — Model-aware build_body(), image validation/downscaling
@@ -110,11 +117,13 @@ lib/                   — Core business logic
   cross_dc.py          — Cross-DC FUSE latency detection (env-var driven, auto-benchmarks)
   compat.py            — Cross-platform shim (Linux/macOS/Windows)
   fs_keepalive.py      — Linux-only FUSE/NFS mount keepalive
-  trading/             — Trading package (info, intel, market, screening, historical_data, nav, …)
-  trading_autopilot/   — Autonomous trading loop
-  trading_backtest_engine/ — Backtest simulator
-  trading_strategy_engine/ — Strategy DSL + runner
-  trading_signals.py, trading_risk.py, trading_tasks.py — Top-level trading helpers
+  billing/             — Wallet / ledger / pricing / per-user cost accounting (payments/ sub-pkg)
+  paper/               — Reading-Mode engine extracted from routes/paper.py:
+                         report_engine, translate_engine, prompts, images, arxiv, tools
+  # NOTE: the trading subsystem was EXTRACTED to a standalone `tofu-trading`
+  # package (2026-06) and is no longer in-tree. It mounts via the
+  # `tofu.blueprints` / `tofu.startup` entry-point groups (see routes/plugin_registry.py).
+  # The empty lib/trading*/ dirs are vestigial.
   database/            — Dual-backend DB layer (PostgreSQL primary, SQLite fallback)
     _core.py           — Connection factory, pool, config (PG_* / TOFU_DB_PATH; legacy CHATUI_DB_PATH still honored)
     _bootstrap.py      — Auto-bootstrap local userspace PG; fallback to SQLite
@@ -122,20 +131,31 @@ lib/                   — Core business logic
     _schema_sqlite.py  — SQLite DDL / migrations
     _sql_translate.py  — Translate SQLite-flavored SQL to PG at the wrapper layer
     _wrappers.py       — Uniform execute() / fetchone() / fetchall() API
-routes/                — Quart Blueprints (28 modules, 243+ routes total)
-                         Core: chat, conversations, common, config, upload, translate, project,
-                               browser, desktop, endpoint, swarm, scheduler, memory, folders,
-                               agent_backends, mcp, oauth, daily_report, optimizer, paper, push
-                         Trading (conditional on TRADING_ENABLED):
-                               trading_autopilot, trading_brain, trading_decision,
-                               trading_holdings, trading_intel, trading_simulator, trading_tasks
-                         _task_routes.py — register_task_routes() factory: auto-generates
-                                          /poll/<id> + /abort/<id> from a TaskRuntime
-static/js/             — Frontend (core.js, main.js, ui.js, settings.js, paper-reader.js,
-                         memory.js, project.js, scheduler.js, timer.js, image-gen.js,
-                         upload.js, translation.js, i18n.js, branch.js, myday.js,
-                         optimizer.js, log-clean.js, export-images.js, idb-cache.js,
-                         push.js, trading/*.js)
+routes/                — Quart Blueprints. Top-level: chat (+ chat_queue / chat_human_io /
+                         chat_tool_state side-effect modules), conversations (+ _search /
+                         _compaction), common, desktop, oauth, translate, upload, artifacts,
+                         paper, push, compat_openai, compat_anthropic, api_docs, metrics,
+                         legacy_redirects.
+  api_v1/              — Headless `/api/v1/*` surface (the canonical API — see §16):
+                         agents, agent_run, auth, billing, capabilities, chat,
+                         conversations, daily_report, folders, keys, logs, mcp, memory,
+                         oauth, optimizer, orchestrations, paper, project, providers,
+                         scheduler, swarm, tasks, translate, update, users, webhooks, …
+  __init__.py          — ALL_BLUEPRINTS + register_all(); plugin blueprints mount via
+                         routes/plugin_registry.py (entry-point groups — see §4.1)
+  plugin_registry.py   — Pluggable Blueprint / startup-hook / TaskRuntime discovery
+  _task_routes.py      — register_task_routes() factory: auto-generates /poll + /abort
+static/js/             — Frontend (vanilla JS). Unified API client api.js (§3.2.0); large
+                         monoliths decomposed (2026-05-28) into subpackages:
+                         core/ (folders, conversations, markdown, safe_html, …),
+                         ui/ (chat_render, streaming_render, sse_* handlers + pipeline, …),
+                         main/ (send pipeline, conv lifecycle, init, …),
+                         settings/ (provider_render, key_stats, mcp, oauth, …).
+                         Feature modules: paper-reader, project, memory, skills, orchestration,
+                         translation, upload, image-gen, artifacts, branch, myday, optimizer,
+                         scheduler, timer, update, relay-admin, compaction-viewer, context-bar,
+                         push, idb-cache, export-images, log-clean, i18n. Bundled by
+                         lib/js_bundler.py (_BUNDLE_FILES — see §3.2.1).
 static/                — CSS (styles.css, trading.css)
 debug/                 — Standalone test/benchmark scripts
 tests/                 — pytest-style suites + standalone runners. Suites for the
@@ -413,8 +433,11 @@ _LOCAL_IDC = os.environ.get('CROSS_DC_LOCAL_IDC', '')
 ### 4.1 Flask Blueprint registration
 
 All routes live in `routes/*.py` as Blueprints. `routes/__init__.py` → `register_all(app)` wires them.
-The authoritative blueprint list is `ALL_BLUEPRINTS` in `routes/__init__.py`; trading blueprints
-are appended only when `lib.TRADING_ENABLED` is truthy.
+The authoritative core list is `ALL_BLUEPRINTS` in `routes/__init__.py`. Optional feature bundles
+(e.g. the now-external `tofu-trading` package) are NOT imported here — they mount via the
+`tofu.blueprints` / `tofu.startup` entry-point groups discovered by `routes/plugin_registry.py`.
+The canonical API surface is `/api/v1/*` (`routes/api_v1/`); legacy `/api/*` routes redirect there
+(see §16). New endpoints land on `/api/v1/*` first.
 
 ```python
 # routes/my_feature.py
@@ -523,9 +546,6 @@ logger.error('[Tool:%s] failed: %s', tool_name, error, exc_info=True)
 These are **not** sloppiness; they have specific reasons to keep their
 own implementations. Don't migrate them without a strong cause.
 
-- `lib/fetch/utils.py` — specialised session pool with circuit breaker,
-  per-status retry strategy, and multiple SSL fallback sessions. Keeps
-  its own `requests.Session()` instances.
 - `lib/llm/stream.py`, `lib/llm/astream.py` — custom SSE streaming with
   retry / 429 cycling / cache-breakpoint injection. Wrap via
   `lib.llm` package facade, not `http_client`.
@@ -648,9 +668,14 @@ Before submitting any code change, verify:
 
 ## 7. Testing
 
-- Test scripts live in `debug/` (e.g., `debug/test_build_body.py`, `debug/test_swarm.py`,
-  `debug/test_cross_platform.py`). Also `tests/` for pytest-style tests.
-- Run a specific test: `python debug/test_swarm.py` or `pytest tests/`.
+- Test workflow is **Makefile-driven** (pytest markers under the hood):
+  - `make lint` — ruff check (blocks CI); `make lint-fix` to auto-fix; `make typecheck` runs `tsc --checkJs` over the vanilla-JS frontend (no build step).
+  - `make test-unit` (`-m unit`) / `make test-api` (`-m api`) / `make test-visual` (Playwright) / `make test-all`.
+  - `make ci` = lint + unit + api + healthcheck; `make smoke` for import/syntax validation.
+- pytest suites live in `tests/`; ad-hoc/benchmark scripts in `debug/`.
+- Frontend contracts are gated by ratchet tests: `tests/test_frontend_api_isolation.py`
+  (raw `/api/*` fetch count must monotonically decrease — §3.2.0) and
+  `tests/test_frontend_typecheck.py` (tsc error budget).
 - The legacy `_fix_silent_catches.py` helper has been retired. To audit for silent
   exception handlers, use `grep_search` on `except` blocks in `lib/` and `routes/`
   and confirm each has a matching `logger.*` call — see §2.2.
@@ -671,7 +696,8 @@ Before submitting any code change, verify:
 | Change LLM behavior | `lib/llm/` (package), `lib/llm_dispatch/` (package) |
 | Adjust per-model token caps | `lib/model_info.py` (`_clamp_max_tokens`) |
 | Add a new tool | Define in `lib/tools/` (pick the right submodule or add one) → register routing in `lib/tasks_pkg/tool_dispatch.py` → add handler in `lib/tasks_pkg/handlers/` |
-| Add a new API endpoint | `routes/` (create Blueprint) → `routes/__init__.py` (import + append to `ALL_BLUEPRINTS`); use `api_ok` / `api_error` from §4.6 instead of raw `jsonify` |
+| Add a new API endpoint | Land it on `/api/v1/*` first: `routes/api_v1/` (Blueprint) → `routes/api_v1/__init__.py` (`ALL_V1_BLUEPRINTS`); use `api_ok` / `api_error` (§4.6) + `@require_scope` + `@api_meta` (§16) |
+| Mount an optional feature bundle (e.g. trading) | `routes/plugin_registry.py` — `tofu.blueprints` / `tofu.startup` / `tofu.task_runtimes` entry-point groups |
 | Fix streaming issues | `lib/llm/stream.py` (SSE) → `routes/chat.py` (delivery) |
 | Debug task flow | `lib/tasks_pkg/orchestrator.py`, `lib/tasks_pkg/manager.py` |
 | Debug endpoint (Planner/Worker/Critic) | `lib/tasks_pkg/endpoint.py`, `endpoint_prompts.py`, `endpoint_review.py` |
@@ -680,16 +706,19 @@ Before submitting any code change, verify:
 | Manage memory / stored notes (legacy "skills") | `lib/memory/storage.py`, `lib/memory/tools.py`, `routes/memory.py`, on-disk `<project>/.chatui/skills/` |
 | Install Anthropic / OpenClaw / AgentSkills `.zip` packages (drag-and-drop) | `lib/memory/installer.py` → `POST /api/v1/memory/install` (multipart). Packages live as `<.chatui/skills>/<name>/SKILL.md` + references/ + scripts/. Treated identically to flat `.md` memories by BM25 / search_memories — frontend marks them with a `SKILL` badge. `install.sh` is **never auto-executed**; surfaced as `install_hints`. |
 | Skills store / curated catalog / file browser | `lib/memory/catalog.py` (curated `SkillCatalogEntry` list), `routes/api_v1/memory.py` (`/api/v1/memory/catalog`, `/api/v1/memory/catalog/install`, `/api/v1/memory/<id>/files`), `static/js/skills.js`, Settings → **Skills** tab. App-Store layout mirrors the MCP tab: search + scope tabs (Catalog / Installed) + category pills + grid + drag-drop zone. Catalog one-click installs download a `.zip` over HTTPS (capped at 50 MB) and feed it to `install_skill_package`. |
-| Modify trading features | `lib/trading/` (package), `lib/trading_autopilot/`, `lib/trading_backtest_engine/`, `lib/trading_strategy_engine/`, `lib/trading_signals.py`, `lib/trading_risk.py`, `lib/trading_tasks.py`, `routes/trading_*.py` |
-| Paper / Reading Mode (reports, Q&A, translate) | `routes/paper.py` (incl. `_run_report_task`), `static/js/paper-reader.js` |
+| Modify trading features | External `tofu-trading` package (extracted 2026-06) — mounts via `tofu.blueprints` entry point; not in this repo |
+| Reusable agent base (run loop, dispatch, TaskRuntime, push, profiles) | `lib/agent_core/` (facade `__init__.py`; `task_runtime.py`, `push.py`, `events.py`, `profiles.py`) |
+| Per-user billing / wallet / cost ledger | `lib/billing/` (wallet, ledger, pricing, users, payments/), `routes/api_v1/billing.py` |
+| Declarative multi-agent orchestration (Studio) | `lib/orchestration.py` (schema + validator), `lib/orchestration_engine.py`, `routes/api_v1/orchestrations.py`, `static/js/orchestration.js` |
+| Paper / Reading Mode (reports, Q&A, translate) | `lib/paper/` (report_engine, translate_engine, prompts), `routes/paper.py`, `static/js/paper-reader.js` |
 | Daily report subsystem | `routes/daily_report.py`, `lib/scheduler/` |
 | Scheduled / proactive agents, cron, timers | `lib/scheduler/` (manager, executor, cron, timer, proactive), `routes/scheduler.py` |
 | MCP (Model Context Protocol) | `lib/mcp/` (client, registry, config), `routes/mcp.py`, `lib/tasks_pkg/handlers/mcp.py` |
 | Agent backends (Codex, Claude Code, builtin) | `lib/agent_backends/`, `routes/agent_backends.py` |
 | OAuth flows (Claude / Codex) | `lib/oauth/`, `routes/oauth.py` |
 | PDF parsing (text, images, math, VLM) | `lib/pdf_parser/` |
-| Web fetch / browser automation | `lib/fetch/`, `lib/browser/`, `routes/browser.py` |
-| Web search orchestration | `lib/search/` (orchestrator, engines, rerank, dedup) |
+| Web fetch / browser automation | `tofu_search.fetch` (external pkg), `lib/browser/`, `routes/browser.py` |
+| Web search orchestration | `tofu_search.search` (external pkg — orchestrator, engines, rerank, dedup); chatui seams via `lib/search_bridge.py` |
 | Feishu / Lark bot | `lib/feishu/` |
 | Swarm (multi-agent) | `lib/swarm/` (master, agent, scheduler, planner, review, registry, rate_limiter, artifact_store, synthesis, integration, events, tools, types), `routes/api_v1/swarm.py` |
 | Nightly optimizer (self-tuning) | `lib/optimizer/` (orchestrator, analyzer, proposer, applier, storage, actions/), `routes/api_v1/optimizer.py`, `static/js/optimizer.js` |
@@ -746,10 +775,10 @@ Before submitting any code change, verify:
   - `CROSS_DC_CLUSTER_MOUNTS` — cluster mount map for FUSE latency detection (format: `cluster1:/path/a,cluster2:/path/b`)
   - `CROSS_DC_LOCAL_IDC` — local datacenter identifier for cross-DC classification
   - `TOFU_ENDPOINT_REPLAN` (legacy `CHATUI_ENDPOINT_REPLAN`) — endpoint-mode three-way Critic kill switch (`1` default / `0` to disable). When `0`, the Critic's `[VERDICT: CONTINUE_PLANNER]` is silently downgraded to `[VERDICT: CONTINUE_WORKER]` and the STOP-with-❌ override guard is disabled. Use for hot rollback of the replan redesign without a code change.
-  - `TRADING_ENABLED` — gate for the trading subsystem (default off; also togglable via Settings UI)
+  - `TRADING_ENABLED` — gate honored by the external `tofu-trading` plugin (extracted 2026-06); its `register()` returns no Blueprints when unset. No effect on a vanilla core install where the plugin isn't installed.
 - Proxy bypass unified: Settings UI bypass domains auto-sync to both `proxies_for()` per-request bypass and `no_proxy` env var (see `lib/proxy.py`)
 - Provider templates in Settings UI for one-click provider setup (OpenAI, Anthropic, Meituan, etc.)
-- Trading module disabled by default (enable via `TRADING_ENABLED=1` env-var or Settings UI)
+- Trading is now an external plugin (`tofu-trading`), not bundled with core; install it + set `TRADING_ENABLED=1` to mount its Blueprints (see `routes/plugin_registry.py`)
 - **Cross-platform support** (Linux, macOS, Windows):
   - All platform-specific code is in `lib/compat.py` — use its helpers instead of direct `fcntl`, `select`, `/proc` access.
   - FS keepalive (`lib/fs_keepalive.py`) is Linux-only; graceful no-op on other platforms.
@@ -971,10 +1000,13 @@ Unless explicitly requested, do not kill server.py on your own.
 
 ## 14. Background tasks — `TaskRuntime` and `spawn_task`
 
-`lib/task_runtime.py::TaskRuntime` is the **single source of truth** for
-every server-side background task pattern. Five legacy registries (chat,
-paper-report, paper-translate, translate, trading-sim) were unified onto
-it; new code must follow suit.
+`TaskRuntime` is the **single source of truth** for every server-side
+background task pattern. Five legacy registries (chat, paper-report,
+paper-translate, translate, trading-sim) were unified onto it; new code
+must follow suit. It now lives in `lib/agent_core/task_runtime.py`
+(relocated 2026-06); `lib/task_runtime.py` is a compatibility shim, so
+`from lib.task_runtime import TaskRuntime` still works. New code may
+import `from lib.agent_core import TaskRuntime`.
 
 ### 14.1 Standard task dict
 
@@ -997,7 +1029,7 @@ dict directly after `runtime.create()` — chat does this for `convId`,
 
 ```python
 # lib/foo.py
-from lib.task_runtime import TaskRuntime
+from lib.agent_core import TaskRuntime  # (lib.task_runtime shim also works)
 _foo_runtime = TaskRuntime(
     'foo', ttl=3600,
     push_channel='foo',           # auto-broadcasts append_event over WebSocket
@@ -1286,4 +1318,4 @@ in `lib/js_bundler.py` (see §3.2.1) — that hasn't changed.
 
 ---
 
-*Last updated: 2026-05-22 — Major refactor wave: Flask→Quart+Hypercorn migration (server.py is now ASGI; all sync routes still work via thread pool); WebSocket transport at `/api/chat/ws/<id>` with `/api/push` global multiplexer; six new shared infrastructure modules (`api_response`, `request_parser`, `http_client`, `json_store`, `ttl_cache`, `task_runtime`); 5 task registries unified onto `TaskRuntime`; 446+101+23 ad-hoc patterns mechanically replaced via `tests/_migrate_*.py` scripts. New §4.6/4.7 (shared infrastructure + push channel), §14 (TaskRuntime), §15 (migration scripts). 206 unit/migration tests gate the contracts.*
+*Last updated: 2026-06-11 — Directory-map refresh after the agent-base relocation + trading extraction. `lib/agent_core/` is now the browsable home of the reusable base (run loop, dispatch, endpoint loop, compaction, push hub, `TaskRuntime`, profiles, streaming-event contract); `lib/task_runtime.py` and `lib/push.py` are compatibility shims re-exporting from it. The trading subsystem was extracted to a standalone `tofu-trading` package and now mounts via the `tofu.blueprints` / `tofu.startup` / `tofu.task_runtimes` entry-point groups (`routes/plugin_registry.py`) — no longer in-tree. New in-tree packages: `lib/paper/` (Reading-Mode engine), `lib/billing/` (per-user wallet/ledger/pricing), `lib/orchestration*.py` (declarative multi-agent Studio). Routes reorganized under `routes/api_v1/` as the canonical surface. Frontend monoliths (core.js / ui.js / main.js / settings.js) decomposed into `core/` `ui/` `main/` `settings/` subpackages, with unified `static/js/api.js` as the single backend seam. Prior wave (2026-05-22): Flask→Quart+Hypercorn ASGI migration; `/api/push` WebSocket multiplexer; six shared infrastructure modules; 5 task registries unified onto `TaskRuntime`. Test workflow is now Makefile-driven (`make lint` / `test-unit` / `test-api` / `ci`).*

@@ -47,6 +47,22 @@ class OpenAITranslateTest(unittest.TestCase):
         self.assertFalse(cfg['memoryEnabled'])
         self.assertFalse(cfg['mcpEnabled'])
 
+    def test_response_format_maps_to_cfg(self):
+        from lib.compat.openai import translate_openai_request
+        rf = {'type': 'json_object'}
+        _msgs, cfg, _opts = translate_openai_request({
+            'model': 'gpt-x', 'messages': [],
+            'response_format': rf,
+        })
+        self.assertEqual(cfg['responseFormat'], rf)
+
+    def test_response_format_absent_when_not_requested(self):
+        from lib.compat.openai import translate_openai_request
+        _msgs, cfg, _opts = translate_openai_request({
+            'model': 'gpt-x', 'messages': [],
+        })
+        self.assertNotIn('responseFormat', cfg)
+
     def test_reasoning_effort_maps_to_thinking_depth(self):
         from lib.compat.openai import translate_openai_request
         _m, cfg, _o = translate_openai_request({

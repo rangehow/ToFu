@@ -221,7 +221,15 @@ class TestDecoratorIntegration:
     counter increments."""
 
     def test_decorator_calls_store(self, monkeypatch):
-        from flask import Flask
+        import asyncio
+
+        # ``lib.rate_limiter`` does ``from flask import request`` at module
+        # top, which under the test suite's flask→quart shim binds to Quart's
+        # request proxy. The app under test must therefore be a Quart app (a
+        # real-Flask app would push a Flask request context the decorator
+        # can't see → "Not within a request context"). Quart's test client is
+        # async, so drive it on a private event loop.
+        import quart
 
         from lib.rate_limiter import rate_limit
 
@@ -229,24 +237,35 @@ class TestDecoratorIntegration:
         reset_for_test()
         store = get_store()
 
-        app = Flask(__name__)
+        app = quart.Quart(__name__)
 
         @app.route('/limited')
         @rate_limit(limit=2, per=60)
         def _limited():
             return {'ok': True}
 
-        with app.test_client() as c:
-            r1 = c.get('/limited')
-            r2 = c.get('/limited')
-            r3 = c.get('/limited')
+        async def _hit():
+            client = app.test_client()
+            r1 = await client.get('/limited')
+            r2 = await client.get('/limited')
+            r3 = await client.get('/limited')
+            return r1.status_code, r2.status_code, r3.status_code
 
-        assert r1.status_code == 200
-        assert r2.status_code == 200
-        assert r3.status_code == 429
+        loop = asyncio.new_event_loop()
+        try:
+            s1, s2, s3 = loop.run_until_complete(_hit())
+        finally:
+            loop.close()
 
-        # The store knows about the bucket too.
-        # (test_client uses the loopback peer; key under that IP.)
-        peer = '127.0.0.1'
-        # Counter snapshot via direct inspection:
-        assert len(store._counts['/limited'][peer]) == 2  # only the 2 allowed
+        assert s1 == 200
+        assert s2 == 200
+        assert s3 == 429
+
+        # The store knows about the bucket too. The exact peer key depends on
+        # the test client (Quart reports ``<local>``; Werkzeug ``127.0.0.1``),
+        # so assert on the single bucket the decorator created rather than
+        # hardcoding the IP.
+        buckets = store._counts['/limited']
+        assert len(buckets) == 1, f'expected one peer bucket, got {dict(buckets)}'
+        (peer_hits,) = buckets.values()
+        assert len(peer_hits) == 2  # only the 2 allowed requests recorded

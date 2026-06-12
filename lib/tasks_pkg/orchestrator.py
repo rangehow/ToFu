@@ -173,6 +173,7 @@ def _finalize_and_emit_done(task: dict[str, Any], *, model: str, preset: str, th
             thinking_enabled=thinking_enabled,
             preset=preset,
             thinking_depth=thinking_depth,
+            response_format=cfg.get('responseFormat'),
             stream=True,
         )
         try:
@@ -243,6 +244,32 @@ def _finalize_and_emit_done(task: dict[str, Any], *, model: str, preset: str, th
     task['usage'] = accumulated_usage if accumulated_usage else last_usage
     task['preset'] = cfg.get('preset') or cfg.get('effort', 'medium')
 
+    # ── Fold in compaction's OWN LLM usage ──
+    # L2 smart-summary and the advanced-host summarizers (OpenCode/Hermes/
+    # OpenClaw arms) call the LLM but historically discarded that usage, so
+    # task['usage'] (→ reported cost) under-counted exactly the summary-based
+    # strategies. Drain the per-conv accumulator and add it in, while also
+    # exposing it separately so a cost breakdown can show compaction overhead.
+    try:
+        from lib.tasks_pkg.compaction._compaction_usage import pop_compaction_usage
+        _comp_usage = pop_compaction_usage(task.get('convId', ''))
+        if _comp_usage:
+            task['compactionUsage'] = _comp_usage
+            _u = task['usage'] or {}
+            for _k, _v in _comp_usage.items():
+                if _k == 'n_calls':
+                    continue
+                if isinstance(_v, (int, float)) and isinstance(_u.get(_k), (int, float)):
+                    _u[_k] = _u[_k] + _v
+                elif isinstance(_v, (int, float)) and _k not in _u:
+                    _u[_k] = _v
+            task['usage'] = _u
+            logger.info('[Usage] conv=%s folded compaction usage (%d calls) into total: %s',
+                        (task.get('convId') or '')[:8], _comp_usage.get('n_calls', 0),
+                        {k: v for k, v in _comp_usage.items() if k != 'n_calls'})
+    except Exception as _cu_e:
+        logger.debug('[Usage] compaction-usage fold failed: %s', _cu_e)
+
     # ── Generate tool summary for cross-turn context (non-blocking) ──
     if tool_call_happened and not task['aborted']:
         try:
@@ -253,6 +280,19 @@ def _finalize_and_emit_done(task: dict[str, Any], *, model: str, preset: str, th
             logger.warning('[Task %s] Tool summary generation failed model=%s (non-fatal): %s', task['id'][:8], model, e, exc_info=True)
 
     if not task.get('_endpoint_managed'):
+        # Latch the autopilot decision window BEFORE flipping status to 'done'.
+        # The status flip makes _task_terminal() true for the SSE generator and
+        # chat_poll; setting the marker first closes the gap where they'd
+        # observe 'done' before the autopilot hook (which can take several
+        # seconds for the VU LLM call) has a chance to set it — otherwise a
+        # late synthetic done closes the stream without the follow-up baton.
+        try:
+            from lib.tasks_pkg.autopilot import is_autopilot_enabled
+            if is_autopilot_enabled(task):
+                task['_autopilot_deciding'] = True
+        except Exception as _ap_latch_err:
+            logger.debug('[Autopilot] pre-flip decision latch skipped: %s',
+                         _ap_latch_err)
         task['status'] = 'done'
 
     # ── Cleanup reactive compact tracking (prevent memory leak) ──
@@ -262,19 +302,41 @@ def _finalize_and_emit_done(task: dict[str, Any], *, model: str, preset: str, th
     # ── Release session-stable TTL latch (prevent memory leak) ──
     release_ttl_latch(task.get('id', ''))
 
-    # ── Tear down any active swarm session + drop unread inbox items ──
+    # ── Swarm session teardown (Option A — conversation-scoped) ──
+    #
+    # A swarm now outlives the single turn that spawned it: its lifetime is
+    # bounded by the CONVERSATION, not this task. So on a NORMAL turn end we
+    # must NOT abort a swarm whose agents are still running — the user's
+    # background work would be discarded (the exact bug this fixes). We only
+    # tear down when:
+    #   (a) the user explicitly aborted this task (Stop button), OR
+    #   (b) the swarm has already terminated on its own.
+    # Otherwise we DETACH: leave the live session + its inbox intact so the
+    # next turn in this conversation drains pending <swarm-update>s and can
+    # await / fetch results. TTL eviction (conv-aware ``_key_is_live``)
+    # reaps it only once the conversation goes quiet.
     try:
         from lib.agent_inbox import clear as _clear_inbox
         from lib.swarm.integration import _remove_session as _remove_swarm_session
         from lib.swarm.integration import get_active_session as _get_swarm_session
-        _swarm_sess = _get_swarm_session(task.get('id', ''))
-        if _swarm_sess is not None:
+        from lib.swarm.integration import swarm_key_for as _swarm_key_for
+        _swarm_key = _swarm_key_for(task)
+        _swarm_sess = _get_swarm_session(_swarm_key)
+        _user_aborted = bool(task.get('aborted'))
+        if _swarm_sess is not None and (_user_aborted or _swarm_sess.is_terminated):
             try:
                 _swarm_sess.abort()
             except Exception as _e:
                 logger.debug('[Orchestrator] swarm abort on task end: %s', _e)
-            _remove_swarm_session(task.get('id', ''))
-        _clear_inbox(task.get('id', ''))
+            _remove_swarm_session(_swarm_key)
+            _clear_inbox(_swarm_key)
+            logger.info('[Orchestrator] swarm torn down on task end '
+                        '(key=%s reason=%s)', _swarm_key,
+                        'user_abort' if _user_aborted else 'terminated')
+        elif _swarm_sess is not None:
+            logger.info('[Orchestrator] swarm DETACHED on normal turn end — '
+                        'still running, will deliver on later turns (key=%s)',
+                        _swarm_key)
     except Exception as _e:
         logger.warning('[Orchestrator] swarm/inbox cleanup on task end failed: %s', _e, exc_info=True)
 
@@ -374,6 +436,10 @@ def _finalize_and_emit_done(task: dict[str, Any], *, model: str, preset: str, th
     if task.get('_fallback_model'):
         done_evt['fallbackModel'] = task['_fallback_model']
         done_evt['fallbackFrom'] = task.get('_fallback_from', '')
+        if task.get('_fallback_reason'):
+            done_evt['fallbackReason'] = task['_fallback_reason']
+        if task.get('_fallback_kind'):
+            done_evt['fallbackKind'] = task['_fallback_kind']
     if project_enabled and task['convId']:
         try:
             from lib.project_mod import get_modifications
@@ -517,16 +583,55 @@ def _finalize_and_emit_done(task: dict[str, Any], *, model: str, preset: str, th
     #    message to the conversation DB and spawns the follow-up task.
     #    The frontend reads ``autopilotNextTaskId`` + ``autopilotVuMessage``
     #    from the done event and connects directly — no polling race.
+    # ``task['status']`` was flipped to 'done' before this hook (see the
+    # _run_loop tail), but the VU LLM call below can take several seconds.
+    # Mark the autopilot decision as in-flight so chat_poll keeps reporting
+    # 'running' until the baton exists — otherwise a poll landing in this
+    # window would finalize the stream WITHOUT the follow-up handoff and
+    # strand the already-spawned successor task.
+    #
+    # ── Commit the parent's FINAL assistant message to the conversation
+    #    DB BEFORE running autopilot.  The autopilot hook appends the
+    #    virtual-user turn AND spawns the follow-up task, which registers
+    #    as the conversation's latest task and rebuilds its context from
+    #    the DB.  The trailing persist_task_result → _sync_result_to_conversation
+    #    would then be REJECTED by the freshness guard (superseded by the
+    #    autopilot follow-up), freezing the parent reply at its last
+    #    streaming checkpoint (truncated content, finishReason=None) and
+    #    feeding that truncated copy to the follow-up.  Syncing here first
+    #    makes the VU and follow-up layer on top of the complete reply; the
+    #    later persist sync becomes a harmless no-op skip.
+    from lib.tasks_pkg.autopilot import is_autopilot_enabled
+    if is_autopilot_enabled(task) and task.get('convId'):
+        try:
+            from lib.tasks_pkg.manager import (
+                _sync_result_to_conversation,
+                build_result_meta,
+            )
+            _sync_result_to_conversation(task, build_result_meta(task))
+        except Exception as _pre_ap_err:
+            logger.warning('[Autopilot] pre-hook conv sync failed: %s — '
+                           'follow-up may see a truncated parent reply',
+                           _pre_ap_err, exc_info=True)
+    task['_autopilot_deciding'] = True
     try:
         from lib.tasks_pkg.autopilot import maybe_run_autopilot
         ap_result = maybe_run_autopilot(task)
         if ap_result:
             done_evt['autopilotNextTaskId'] = ap_result['next_task_id']
             done_evt['autopilotVuMessage'] = ap_result['vu_msg']
+            # Stash on the task dict too so the baton is transport-agnostic:
+            # the poll route surfaces the SAME handoff, so a client that fell
+            # back to /api/chat/poll (SSE stripped / timed out) still attaches
+            # to the follow-up instead of stranding it (sidebar dot / pause
+            # button / translation desync until manual refresh).
+            task['_autopilot_followup'] = ap_result
     except Exception as _ap_err:
         logger.warning('[Autopilot] hook raised: %s — continuing without '
                        'follow-up (this turn will still be persisted)',
                        _ap_err, exc_info=True)
+    finally:
+        task['_autopilot_deciding'] = False
 
     # ── Stamp cost snapshot on the done event ──
     # Mirrors the persisted-cost write in
@@ -707,22 +812,60 @@ def _run_commit_round_async(task: dict, project_path: str) -> None:
         # Paths with no writer attribution (legacy entries from before
         # this fix, or external-edit drift snapshots) keep the prior
         # behaviour and are still reported.
+        # Did THIS round run any tool capable of writing to the
+        # filesystem?  The fh side-channel legitimately catches edits
+        # made by run_command / code_exec / MCP tools (which
+        # modifications.py can't track), so the empty-``last_writer_task_id``
+        # escape hatch below must stay open for those rounds.  But a round
+        # that ran ONLY read-only tools (or no tools at all) cannot have
+        # produced any real edit — so any unattributed diff path it picks
+        # up is external-edit drift or a concurrent conversation's write
+        # that simply wasn't stamped.  Reporting those is the residual
+        # cross-conversation leak.  Use a read-only WHITELIST so unknown
+        # tools (e.g. arbitrary MCP tools) are treated as write-capable
+        # and never suppress a genuine side-channel edit.
+        _READ_ONLY_TOOLS = frozenset({
+            'list_dir', 'read_files', 'grep_search', 'find_files',
+            'web_search', 'fetch_url',
+        })
+        _round_can_write = False
+        try:
+            for _r in (task.get('toolRounds') or []):
+                if not isinstance(_r, dict):
+                    continue
+                _tn = _r.get('toolName') or _r.get('tool_name') or ''
+                if _tn and _tn not in _READ_ONLY_TOOLS:
+                    _round_can_write = True
+                    break
+        except Exception as _e:
+            logger.debug('[Task:%s] fh write-capability probe failed: %s', tid, _e)
+            _round_can_write = True  # fail open — never over-suppress
+
         try:
             if fh_changes:
                 _own_task_id = task.get('id') or ''
                 _filtered: list[dict] = []
                 _dropped = 0
+                _dropped_drift = 0
                 for entry in fh_changes:
                     _writer = (tracked_index.get(entry.get('path'), {})
                                .get('last_writer_task_id') or '')
-                    if not _writer or _writer == _own_task_id:
-                        _filtered.append(entry)
-                    else:
+                    if _writer and _writer != _own_task_id:
+                        # Attributed to another concurrent task — always drop.
                         _dropped += 1
+                    elif not _writer and not _round_can_write:
+                        # Unattributed drift on a round that ran no
+                        # write-capable tool — drop to close the leak.
+                        _dropped_drift += 1
+                    else:
+                        _filtered.append(entry)
                 if _dropped:
                     logger.info('[Task:%s] fh side-channel dropped %d path(s) '
                                 'attributable to other concurrent task(s)',
                                 tid, _dropped)
+                if _dropped_drift:
+                    logger.info('[Task:%s] fh side-channel dropped %d unattributed '
+                                'drift path(s) on a read-only round', tid, _dropped_drift)
                 fh_changes = _filtered
         except Exception as _e:
             logger.debug('[Task:%s] fh attribution filter failed: %s', tid, _e)
@@ -824,28 +967,12 @@ def _patch_assistant_message_with_git(task: dict, amend_evt: dict) -> None:
     git_sha = amend_evt.get('gitSha')
     if not (conv_id and task_id and git_sha):
         return
-    try:
-        from lib.database import (DOMAIN_CHAT, db_execute_with_retry,
-                                  get_thread_db, json_dumps_pg)
-    except Exception as _e:
-        logger.debug('[Task:%s] cannot patch gitSha — DB import failed: %s',
-                     task_id[:8], _e)
+    from lib.agent_core.store import get_conversation_store
+    store = get_conversation_store()
+    loaded = store.load_conversation_messages(conv_id)
+    if loaded is None:
         return
-    import json as _json
-
-    db = get_thread_db(DOMAIN_CHAT)
-    row = db.execute(
-        'SELECT messages FROM conversations WHERE id=? AND user_id=1',
-        (conv_id,),
-    ).fetchone()
-    if not row:
-        return
-    try:
-        messages = _json.loads(row['messages'] or '[]')
-    except (ValueError, TypeError) as _e:
-        logger.debug('[Task:%s] gitSha-patch: messages parse failed: %s',
-                     task_id[:8], _e)
-        return
+    messages, _updated_at = loaded
     if not isinstance(messages, list) or not messages:
         return
 
@@ -876,13 +1003,7 @@ def _patch_assistant_message_with_git(task: dict, amend_evt: dict) -> None:
         msg['modifiedFiles'] = amend_evt['modifiedFiles']
 
     try:
-        import time as _time
-        db_execute_with_retry(
-            db,
-            'UPDATE conversations SET messages=?, updated_at=? '
-            'WHERE id=? AND user_id=1',
-            (json_dumps_pg(messages), int(_time.time() * 1000), conv_id),
-        )
+        store.save_conversation_messages(conv_id, messages)
         logger.info('[Task:%s] persisted gitSha=%s to conv=%s msg[%d]',
                     task_id[:8], git_sha[:12], conv_id[:8], target_idx)
     except Exception as _e:
@@ -905,15 +1026,37 @@ def run_task(task: dict[str, Any]) -> None:
     if 'id' not in task:
         raise ValueError("run_task called with a task dict missing 'id' — did you forget to use create_task()?")
     tid = task['id'][:8]
+    # ★ Timing: thread picked the task up. Compare against '_t_created'
+    #   (set in create_task) to measure how long the user "waited" before the
+    #   background worker even started — i.e. thread-pool / queue latency.
+    _t_run_start = time.time()
+    _t_created = task.get('_t_created')
+    if _t_created:
+        logger.info('[Timing:%s] queue_wait=%.3fs (create→run_task)',
+                    tid, _t_run_start - _t_created)
     try:
         cfg = task['config']
+
+        # ── Reset swarm auto-continue chain on HUMAN turns ──
+        # A human-initiated turn (NOT itself a swarm auto-continuation) means
+        # the user is back in the loop, so the consecutive-auto-continue
+        # ceiling should start fresh. Auto-continue turns carry
+        # ``_swarmAutoContinue`` and must NOT reset the counter (that's what
+        # bounds a runaway unattended loop). See lib/swarm/integration.py.
+        if not cfg.get('_swarmAutoContinue'):
+            try:
+                from lib.swarm.integration import (reset_autocontinue_chain,
+                                                    swarm_key_for)
+                reset_autocontinue_chain(swarm_key_for(task))
+            except Exception as _e:
+                logger.debug('[Task %s] autocontinue chain reset failed: %s', tid, _e)
 
         # ── Capability profile: merge named profile defaults UNDER the
         #    explicit cfg (explicit caller values always win).  No-op when
         #    cfg has no 'profile' key or selects the empty 'default'.  Applied
         #    here — before model resolution + tool assembly — so every
-        #    downstream consumer sees the merged values.  See lib/agent_profiles.py.
-        from lib.agent_profiles import apply_profile, resolve_profile_name
+        #    downstream consumer sees the merged values.
+        from lib.agent_core.profiles import apply_profile, resolve_profile_name
         _profile_name = resolve_profile_name(cfg)
         if _profile_name != 'default':
             cfg = apply_profile(cfg)
@@ -937,6 +1080,7 @@ def run_task(task: dict[str, Any]) -> None:
         max_tokens      = mcfg['max_tokens']
         temperature     = mcfg['temperature']
         search_mode     = mcfg['search_mode']
+        response_format = mcfg.get('response_format')
         search_enabled  = mcfg['search_enabled']
         fetch_enabled   = mcfg['fetch_enabled']
         project_path    = mcfg['project_path']
@@ -946,8 +1090,14 @@ def run_task(task: dict[str, Any]) -> None:
             #   projectPaths[0] = primary (same as projectPath), rest are extras.
             _all_paths = cfg.get('projectPaths') or []
             _extra_paths = [p for p in _all_paths[1:] if p and p != project_path] if len(_all_paths) > 1 else []
-            logger.info('[Task:%s] project_path=%s extra_roots=%d',
-                        task['id'], project_path, len(_extra_paths))
+            # ★ Read-only roots: a subset of the configured paths the user
+            #   attached for reference only. Writes/edits/create_project and
+            #   destructive run_command targeting these are refused; reads are
+            #   always allowed. Empty list = today's all-writable behaviour.
+            _readonly_paths = [p for p in (cfg.get('readOnlyPaths') or []) if p]
+            logger.info('[Task:%s] project_path=%s extra_roots=%d readonly=%d',
+                        task['id'], project_path, len(_extra_paths),
+                        len(_readonly_paths))
             # ★ Ensure the server's global project state matches this task's
             # project path + extras.  Another conversation may have switched the
             # server to a different project, causing get_context_for_prompt to miss
@@ -961,7 +1111,8 @@ def run_task(task: dict[str, Any]) -> None:
             #   ::set_conv_roots docstring for background.
             _conv_id_for_roots = task.get('convId') or task.get('id') or ''
             ensure_project_state(project_path, extra_paths=_extra_paths,
-                                 conv_id=_conv_id_for_roots)
+                                 conv_id=_conv_id_for_roots,
+                                 readonly_paths=_readonly_paths)
             # ── File-history: capture any external (IDE) edits made between rounds.
             #
             #   Runs SILENTLY in a background thread: no phase event, no UI
@@ -1034,9 +1185,11 @@ def run_task(task: dict[str, Any]) -> None:
         _prefetch_memory_future = None
 
         if project_enabled and project_path:
+            _prefetch_conv_id = task.get('convId') or task.get('id') or ''
             def _prefetch_project():
                 from lib.project_mod import get_context_for_prompt
-                return get_context_for_prompt(project_path)
+                return get_context_for_prompt(project_path,
+                                              conv_id=_prefetch_conv_id or None)
             _prefetch_project_future = _prefetch_executor.submit(_prefetch_project)
 
         # Simple heuristic: if any tool-providing feature is enabled, we'll
@@ -1129,6 +1282,17 @@ def run_task(task: dict[str, Any]) -> None:
         task.pop('_prefetch_project', None)
         task.pop('_prefetch_memory', None)
         _prefetch_executor.shutdown(wait=False)
+
+        # ★ Timing: context assembly complete (config/model resolution, tool
+        #   assembly, tool-history restoration, system-context injection — incl.
+        #   the FUSE-slow memory/project prefetch). This is the bulk of the
+        #   pre-LLM "waiting" window. Stash the anchor on the task so
+        #   stream_llm_response can compute time-to-first-token (TTFT).
+        _t_prep_done = time.time()
+        task['_t_prep_done'] = _t_prep_done
+        logger.info('[Timing:%s] prep=%.3fs (run_task→context-ready, '
+                    'model=%s) — about to build first LLM request',
+                    tid, _t_prep_done - _t_run_start, model)
 
         # NOTE: Auto-prefetch disabled — the model can fetch URLs on demand
         # via the fetch_url tool call when it deems them relevant, rather than
@@ -1317,7 +1481,15 @@ def run_task(task: dict[str, Any]) -> None:
                 )
                 if not _has_unmatched_tool_call:
                     from lib.agent_inbox import drain as _drain_inbox
-                    _inbox_items = _drain_inbox(tid)
+                    from lib.swarm.integration import swarm_key_for as _swarm_key_for
+                    # NOTE: drain with the conversation-scoped SWARM KEY — the
+                    # inbox is keyed by ``swarm_key_for(task)`` (conv id when
+                    # present, else task id) so <swarm-update>s enqueued by a
+                    # PRIOR turn's background agents are still drained on a
+                    # later "continue" turn of the same conversation. (Before
+                    # Option A this used ``task['id']`` and cross-turn updates
+                    # were stranded.) ``tid`` is just the 8-char log prefix.
+                    _inbox_items = _drain_inbox(_swarm_key_for(task))
                     if _inbox_items:
                         # Coalesce ALL drained items into a single user
                         # message — one message with N <swarm-update>
@@ -1347,6 +1519,14 @@ def run_task(task: dict[str, Any]) -> None:
                                 agentIds=[it.get('agent_id', '')
                                           for it in _inbox_items
                                           if it.get('value')],
+                                # ★ Carry the actual <swarm-update> payloads
+                                #   (truncated) so the frontend can render an
+                                #   in-timeline ptool-panel row showing exactly
+                                #   what the model received — not just a count.
+                                previews=[{
+                                    'agentId': it.get('agent_id', ''),
+                                    'text': (it.get('value') or '')[:1200],
+                                } for it in _inbox_items if it.get('value')],
                             ))
             except Exception as _e:
                 logger.error(
@@ -1384,6 +1564,7 @@ def run_task(task: dict[str, Any]) -> None:
                 preset=preset,
                 thinking_depth=thinking_depth,
                 tools=_tools_this_round,
+                response_format=response_format,
                 stream=True,
             )
             # ★ Attach task_id for session-stable TTL latch in
@@ -1526,6 +1707,11 @@ def run_task(task: dict[str, Any]) -> None:
             clean_msg['tool_calls'] = assistant_msg['tool_calls']
             if assistant_msg.get('content'): clean_msg['content'] = assistant_msg['content']
             if assistant_msg.get('reasoning_content'): clean_msg['reasoning_content'] = assistant_msg['reasoning_content']
+            # ★ Carry the Claude thinking-block signature so the NEXT tool-loop
+            #   turn replays a signed thinking block (build_body rebuilds
+            #   reasoning_details from it). Without this, every in-loop turn
+            #   after the first is a lossy continuation against Claude.
+            if assistant_msg.get('thinking_signature'): clean_msg['thinking_signature'] = assistant_msg['thinking_signature']
             messages.append(clean_msg)
 
             # ★ Expose live messages to context_compact tool handler
@@ -1617,23 +1803,6 @@ def run_task(task: dict[str, Any]) -> None:
 
             # Clean up live messages ref after tool execution
             task.pop('_compact_messages', None)
-
-            # ── Phase 4: search_mode='single' — enforce one-shot promise ──
-            # SEARCH_TOOL_SINGLE's description says "you can only search ONCE",
-            # so after the first successful web_search call, strip it from
-            # the tool list for subsequent rounds. fetch_url stays available
-            # so the model can still read individual pages it found.
-            if search_mode == 'single' and tool_list:
-                _ws_ran = any(_ptc[1] == 'web_search' for _ptc in parsed_tcs)
-                if _ws_ran:
-                    _before = len(tool_list)
-                    tool_list = [t for t in tool_list
-                                 if t.get('function', {}).get('name') != 'web_search']
-                    if len(tool_list) < _before:
-                        logger.info(
-                            '[%s] conv=%s search_mode=single — web_search stripped '
-                            'after first call (tool_list %d → %d)',
-                            tid, task.get('convId', ''), _before, len(tool_list))
 
             # ── Phase 4b: Consecutive tool-timeout circuit breaker ──
             if _tool_timed_out:
@@ -1759,6 +1928,19 @@ def run_task(task: dict[str, Any]) -> None:
             return   # let endpoint.py handle the error
         append_event(task, build_event(EventType.DONE, error=_user_err, finishReason='error'))
         persist_task_result(task)
+    finally:
+        # ── Release this worker thread's thread-local DB connection back to
+        #    the shared pool.  run_task runs on long-lived threads (the
+        #    asyncio.to_thread default pool, or daemon task threads); without
+        #    this each one would pin a PG connection for its entire lifetime,
+        #    exhausting the connection semaphore under high concurrency
+        #    (see the "pool exhausted / tracked_threads ≫ active" symptom). ──
+        try:
+            from lib.agent_core.store import get_conversation_store
+            get_conversation_store().release_connection()
+        except Exception as _ctd_err:
+            logger.debug('[Task:%s] release_connection on task end failed: %s',
+                         tid, _ctd_err)
 
 
 # ══════════════════════════════════════════════════════════
@@ -1832,6 +2014,10 @@ def _run_single_turn(
     if task.get('_fallback_model'):
         result['fallbackModel'] = task['_fallback_model']
         result['fallbackFrom']  = task.get('_fallback_from', '')
+        if task.get('_fallback_reason'):
+            result['fallbackReason'] = task['_fallback_reason']
+        if task.get('_fallback_kind'):
+            result['fallbackKind'] = task['_fallback_kind']
 
     logger.debug('[Endpoint] _run_single_turn %s → %d chars, finish=%s',
                  tid, len(result['content']), result['finishReason'])

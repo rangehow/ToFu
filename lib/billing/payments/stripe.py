@@ -29,7 +29,7 @@ import hashlib
 import hmac
 import json
 import time
-from typing import Optional, Tuple
+from typing import Tuple
 
 from lib.log import get_logger
 

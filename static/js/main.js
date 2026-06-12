@@ -336,16 +336,17 @@ function _updateDepthButtons(activeDepth) {
 }
 let _depthButtonsCache = null;
 function _applySearchModeUI(mode) {
-  const modes = ["off", "single", "multi"];
+  // 'single' is a retired mode — fold legacy values into 'multi'.
+  if (mode === "single") mode = "multi";
+  const modes = ["off", "multi"];
   if (!modes.includes(mode)) mode = "off";
   searchMode = mode;
   const titles = {
     off: "Search",
-    single: "Search",
     multi: "Search",
   };
-  const labels = { off: "OFF", single: "1×", multi: "∞" };
-  const badgeTexts = { single: "1× SEARCH", multi: "∞ MULTI SEARCH" };
+  const labels = { off: "OFF", multi: "∞" };
+  const badgeTexts = { multi: "∞ MULTI SEARCH" };
   const toggle = document.getElementById("searchModeToggle");
   if (toggle) {
     toggle.setAttribute("data-mode", searchMode);
@@ -638,7 +639,7 @@ function _resetToolsToDefaults() {
   _applyCodeExecUI(false);
   _applyBrowserUI(false);
   _applyMemoryUI(true);
-  _applySwarmUI(false);
+  _applySwarmUI(true);
   _applyEndpointUI(false);
   _applyImageGenToolUI(false);
   _applyImageGenUI(false);
@@ -700,6 +701,14 @@ function _resetToolsToDefaults() {
   document
     .getElementById("memoryBadge")
     ?.classList.toggle("visible", memoryEnabled);
+  document
+    .getElementById("swarmToggle")
+    ?.classList.toggle("active", swarmEnabled);
+  {
+    const _swarmBadge = document.getElementById("swarmBadge");
+    if (_swarmBadge) _swarmBadge.style.display = swarmEnabled ? "" : "none";
+  }
+  if (typeof updateSubmenuCounts === "function") updateSubmenuCounts();
   renderConversationList();
   function _handleConvClick(e) {
     const cpBtn = e.target.closest(".conv-copy-id");
@@ -730,6 +739,13 @@ function _resetToolsToDefaults() {
       return;
     }
     /* pin button removed — pinning replaced by folders */
+    // ★ Rename conversation button — inline title edit dialog
+    const rename = e.target.closest(".conv-rename");
+    if (rename) {
+      e.stopPropagation();
+      if (rename.dataset.convId) _promptRenameConversation(rename.dataset.convId);
+      return;
+    }
     // ★ @ reference button — add conversation reference chip
     const ref = e.target.closest(".conv-ref");
     if (ref) {
@@ -758,9 +774,21 @@ function _resetToolsToDefaults() {
   // ── Folder tab bar click + context menu ──
   _initFolderTabs();
   const ta = document.getElementById("userInput");
-  ta.addEventListener("input", () => {
+  /* ★ PERF (INP): autosize forces a synchronous layout (set height=auto, read
+   * scrollHeight). Doing it inline on every keystroke thrashes layout and shows
+   * up as a long "pointer/keydown" task. Coalesce the read+write into a single
+   * rAF so rapid typing batches to one layout pass per frame. */
+  let _taResizePending = false;
+  const _autosizeTextarea = () => {
+    _taResizePending = false;
     ta.style.height = "auto";
     ta.style.height = Math.min(ta.scrollHeight, 200) + "px";
+  };
+  ta.addEventListener("input", () => {
+    if (!_taResizePending) {
+      _taResizePending = true;
+      requestAnimationFrame(_autosizeTextarea);
+    }
     if (_pendingLogClean && !ta.value.includes(_pendingLogClean.originalText))
       hideLogCleanBanner();
   });
@@ -981,8 +1009,16 @@ function _resetToolsToDefaults() {
   _updateAutoApplyUI();
   _applyAutoTranslateUI();
   setInterval(() => {
-    if (document.visibilityState === "visible" && _editingMsgIdx === null)
-      loadConversationsFromServer();
+    if (document.visibilityState !== "visible" || _editingMsgIdx !== null) return;
+    /* Yield to pending input: the merge + conv-list rebuild is ~tens of ms of
+     * main-thread work; running it on a bare timer adds input delay (poor INP)
+     * when a click lands mid-poll. requestIdleCallback defers it until the main
+     * thread is free. Fallback to a plain call where rIC is unavailable. */
+    const _poll = () => loadConversationsFromServer();
+    if (typeof requestIdleCallback === "function")
+      requestIdleCallback(_poll, { timeout: 5000 });
+    else
+      _poll();
   }, 60000);
   // ── Tab visibility: resume pending translations when user switches back ──
   document.addEventListener('visibilitychange', () => {

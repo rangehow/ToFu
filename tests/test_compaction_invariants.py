@@ -497,10 +497,16 @@ class TestMicroCompactDurablePersistence:
         assert 'toolContent' in src, (
             "micro_compact no longer mutates toolContent for durability"
         )
-        # CAS-style UPDATE on conversations table:
-        assert 'UPDATE conversations' in src, (
-            "micro_compact lost the conversations table UPDATE — "
-            "placeholders will not survive next build_api_messages_from_db"
+        # CAS-style persist of the conversation row. The literal
+        # ``UPDATE conversations`` SQL moved behind the ConversationStore
+        # seam (2026-06 persistence-decoupling); accept either the inline
+        # SQL (legacy) or the seam call so the invariant tracks behaviour,
+        # not the layer the SQL happens to live in.
+        assert ('UPDATE conversations' in src
+                or 'cas_update_conversation_messages' in src), (
+            "micro_compact lost its CAS conversation persist (inline UPDATE "
+            "or store.cas_update_conversation_messages) — placeholders will "
+            "not survive next build_api_messages_from_db"
         )
 
 
@@ -585,6 +591,49 @@ class TestFacadeExportList:
 # ═══════════════════════════════════════════════════════════════════════
 #  8. Import-graph guards (post-split boundary enforcement)
 # ═══════════════════════════════════════════════════════════════════════
+
+@pytest.mark.unit
+class TestUsableContextFloor:
+    """Regression: a fixed ``_OUTPUT_RESERVE`` (tuned for the 1M-context
+    Claude family) must not drive ``usable`` to zero/negative on a
+    small-window model.  Before the floor, a 128K model gave
+    ``usable = 128000 - 128000 - 8000 = -8000`` → negative force-compact
+    threshold → L2 summary fired on EVERY request.  ``_usable_context``
+    floors usable at ``_MIN_USABLE_RATIO`` of the window."""
+
+    def test_small_window_usable_is_positive(self):
+        from lib.tasks_pkg.compaction._tokens import (
+            _MIN_USABLE_RATIO, _usable_context,
+        )
+        for limit in (128_000, 200_000):
+            usable = _usable_context(limit)
+            assert usable >= int(limit * _MIN_USABLE_RATIO), (
+                f'usable={usable} below floor for {limit}-token window'
+            )
+            assert usable > 0
+
+    def test_large_window_unaffected_by_floor(self):
+        """1M-context models keep the literal reserve subtraction — the
+        floor only kicks in when reserves would over-eat the window."""
+        from lib.tasks_pkg.compaction._constants import (
+            _COMPACTION_RESERVE, _OUTPUT_RESERVE,
+        )
+        from lib.tasks_pkg.compaction._tokens import _usable_context
+        limit = 1_000_000
+        assert _usable_context(limit) == limit - _OUTPUT_RESERVE - _COMPACTION_RESERVE
+
+    def test_small_window_does_not_force_compact_tiny_convo(self):
+        """End-to-end: a 3-message conversation on a 128K model must NOT
+        trip the force-compact threshold."""
+        from lib.tasks_pkg.compaction._tokens import _should_force_compact
+        task = {'convId': 'floor-test', 'config': {'model': 'gpt-4'}}
+        messages = [
+            {'role': 'system', 'content': 'System'},
+            {'role': 'user', 'content': 'Hello'},
+            {'role': 'assistant', 'content': 'Hi there!'},
+        ]
+        assert _should_force_compact(messages, task) is False
+
 
 @pytest.mark.unit
 class TestImportGraphGuards:

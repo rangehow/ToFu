@@ -5,13 +5,12 @@ The handlers register on the same ``chat_bp`` Blueprint (imported here)
 to keep the public URLs unchanged.
 """
 
-from flask import jsonify, request
+from flask import jsonify
 
 from lib.log import get_logger
-from lib.api_response import api_bad_request, api_not_found, api_ok
-from lib.request_parser import parse_body
-from routes.chat import chat_bp  # legacy bp (still used for /api/chat/stream)
+from lib.api_response import api_not_found, api_ok
 from routes.api_v1.chat import api_v1_chat_bp  # noqa: E402
+from routes.api_v1.auth import require_scope
 
 logger = get_logger(__name__)
 
@@ -22,6 +21,7 @@ logger = get_logger(__name__)
 
 
 @api_v1_chat_bp.route('/api/v1/chat/queue/<conv_id>', methods=['GET'], endpoint='ui_chat_queue_get')
+@require_scope('chat')
 def chat_queue_get(conv_id):
     """Get all queued messages for a conversation.
 
@@ -45,6 +45,7 @@ def chat_queue_get(conv_id):
 
 
 @api_v1_chat_bp.route('/api/v1/chat/queue/<conv_id>/<queue_id>', methods=['DELETE'], endpoint='ui_chat_queue_remove')
+@require_scope('chat')
 def chat_queue_remove(conv_id, queue_id):
     """Remove a specific message from the queue."""
     from lib.message_queue import remove_from_queue
@@ -53,6 +54,7 @@ def chat_queue_remove(conv_id, queue_id):
         return api_not_found('Not found')
     return api_ok()
 @api_v1_chat_bp.route('/api/v1/chat/queue/<conv_id>', methods=['DELETE'], endpoint='ui_chat_queue_clear')
+@require_scope('chat')
 def chat_queue_clear(conv_id):
     """Clear all queued messages for a conversation."""
     from lib.message_queue import clear_queue

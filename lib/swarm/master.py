@@ -25,10 +25,12 @@ import threading
 import time
 from collections.abc import Callable
 
+from lib.agent_inbox import consume as inbox_consume
 from lib.agent_inbox import enqueue as inbox_enqueue
 from lib.agent_inbox import format_swarm_update
 from lib.log import get_logger
 from lib.swarm.agent import SubAgent
+from lib.swarm.registry import get_role_model_hint, resolve_model_for_tier
 from lib.swarm.protocol import (
     ArtifactStore,
     SubAgentResult,
@@ -39,6 +41,30 @@ from lib.swarm.rate_limiter import RateLimiter
 from lib.swarm.scheduler import StreamingScheduler
 
 logger = get_logger(__name__)
+
+#: Tool names that mutate files on disk. Used to flag sub-agents that
+#: modified the workspace so the UI can mark them for closer review.
+#: ``run_command`` is intentionally excluded — it CAN write but is also
+#: used for read-only commands (git status, tests), so counting it would
+#: over-flag. We count only the unambiguous write tools.
+_FILE_WRITE_TOOLS = frozenset({
+    'write_file', 'apply_diff', 'apply_diffs',
+    'insert_content', 'insert_contents',
+})
+
+
+def _count_file_writes(tool_log: list) -> int:
+    """Count file-mutating tool calls in a sub-agent's ``tool_log``.
+
+    Each tool_log entry is ``{round, tool, args_brief, timestamp}``; we
+    tally entries whose ``tool`` is one of ``_FILE_WRITE_TOOLS``. A batch
+    tool (apply_diffs / insert_contents) counts as one call here — the
+    point is to flag "this agent touched files", not exact edit count.
+    """
+    if not tool_log:
+        return 0
+    return sum(1 for e in tool_log
+               if isinstance(e, dict) and e.get('tool') in _FILE_WRITE_TOOLS)
 
 
 # ═══════════════════════════════════════════════════════════
@@ -100,9 +126,23 @@ class MasterOrchestrator:
                  max_parallel: int = 8,
                  max_retries: int = 1,
                  output_dir: str = '',
-                 parent_config: dict | None = None):
+                 parent_config: dict | None = None,
+                 inbox_key: str = '',
+                 on_settled: Callable | None = None):
         self.task_id = task_id
         self.conv_id = conv_id
+        # Fired ONCE from the driver thread when the swarm terminates (all
+        # agents done / aborted). ``integration`` uses it to auto-continue the
+        # main agent when the spawning turn already ended but pending
+        # <swarm-update>s would otherwise sit unread in the inbox. Must never
+        # raise into the driver loop.
+        self.on_settled = on_settled
+        # The model-facing inbox is keyed by the STABLE swarm key (conv id
+        # when available) so <swarm-update>s enqueued by background agents
+        # survive into later turns of the same conversation. Defaults to
+        # conv_id, then task_id. ``integration._handle_spawn_agents`` passes
+        # this explicitly via ``swarm_key_for(task)``.
+        self.inbox_key = inbox_key or conv_id or task_id
         self.specs = list(specs)
         self.project_path = project_path
         self.model = model
@@ -167,6 +207,21 @@ class MasterOrchestrator:
         self._driver_thread: threading.Thread | None = None
         self._terminated = False  # set when driver thread exits
 
+    # ── Model resolution (mirrors SubAgent._resolve_model) ──
+
+    def _resolve_spec_model(self, spec: SubTaskSpec) -> str:
+        """Resolve the concrete model a spec will run on, for UI display.
+
+        Mirrors ``SubAgent._resolve_model`` (spec override → role tier
+        hint → parent default) so the swarm panel can show the actual
+        model BEFORE the SubAgent is constructed (the start event fires
+        ahead of the agent factory).
+        """
+        if spec.model_override:
+            return spec.model_override
+        tier = get_role_model_hint(spec.role)
+        return resolve_model_for_tier(tier, self.model)
+
     # ── Agent factory used by StreamingScheduler ──────
 
     def _make_agent(self, spec: SubTaskSpec) -> SubAgent:
@@ -207,6 +262,7 @@ class MasterOrchestrator:
                 'content': f'▶️ Starting [{spec.role}]: {spec.objective[:60]}',
                 'agentId': spec.id, 'role': spec.role,
                 'objective': spec.objective,
+                'model': self._resolve_spec_model(spec),
             })
 
     def _on_agent_complete_callback(self, spec: SubTaskSpec,
@@ -219,16 +275,23 @@ class MasterOrchestrator:
         # ``objective`` is the agent-card body — full text, no truncation.
         # ``summary`` is the per-card preview line, capped at 200 chars
         # because that's what fits visually before the user clicks open.
+        modified_files = _count_file_writes(result.tool_log)
         if self.on_progress:
             self.on_progress({
                 'type':      'swarm_agent_complete',
                 'agentId':   spec.id,
                 'role':      spec.role,
                 'objective': spec.objective,
+                'model':     (getattr(self._agents.get(spec.id), 'model', '')
+                              or self._resolve_spec_model(spec)),
                 'status':    result.status,
                 'elapsed':   round(result.elapsed_seconds, 1),
                 'tokens':    result.total_tokens,
-                'summary':   (result.final_answer or '')[:200],
+                'summary':   (result.final_answer or '')[:600],
+                # ★ Number of file-mutating tool calls this agent made.
+                #   Surfaced in the UI so agents that edited the workspace
+                #   are flagged for closer review.
+                'modifiedFiles': modified_files,
                 'content': (
                     f'{"✅" if result.status == SubAgentStatus.COMPLETED.value else "❌"} '
                     f'[{spec.role}] Done in {result.elapsed_seconds:.1f}s'
@@ -261,7 +324,7 @@ class MasterOrchestrator:
                 remaining_pending=pending,
                 error=(result.error_message or '') if result.status != SubAgentStatus.COMPLETED.value else '',
             )
-            inbox_enqueue(self.task_id, payload,
+            inbox_enqueue(self.inbox_key, payload,
                           priority='later',
                           mode='swarm-update',
                           agent_id=spec.id)
@@ -328,6 +391,7 @@ class MasterOrchestrator:
                 'agents': [
                     {'agentId': s.id, 'role': s.role,
                      'objective': s.objective,
+                     'model': self._resolve_spec_model(s),
                      'depends_on': list(s.depends_on or [])}
                     for s in self.specs
                 ],
@@ -373,6 +437,18 @@ class MasterOrchestrator:
                         'failedCount': failed,
                         'totalTokens': total_tokens,
                     })
+
+                # ── Settle hook: may auto-continue the main agent ──
+                # Fires AFTER the terminal UI event so the panel reads as
+                # complete before a continuation turn (if any) starts. The
+                # callback decides whether to wake the main agent — it must
+                # not raise into the driver thread.
+                if self.on_settled:
+                    try:
+                        self.on_settled()
+                    except Exception as e:
+                        logger.error('%s on_settled hook failed: %s',
+                                     log_prefix, e, exc_info=True)
 
         self._driver_thread = threading.Thread(
             target=_driver, name=f'swarm-driver-{self.task_id}', daemon=True,
@@ -425,14 +501,17 @@ class MasterOrchestrator:
 
             if ids:
                 requested = set(str(x) for x in ids)
-                already_done = requested & done_ids
-                to_wait = requested & (running_ids | pending_ids)
-                unknown = requested - done_ids - running_ids - pending_ids
             else:
-                requested = running_ids | pending_ids
-                already_done = set()  # only return fresh completions
-                to_wait = set(requested)
-                unknown = set()
+                # No ids → "every agent this session knows about". MUST
+                # include already-finished agents: otherwise an agent that
+                # completed BEFORE this await call is in neither already_done
+                # nor to_wait, so it can never be reported and mode='all'
+                # silently evaluates "all" over only the still-in-flight
+                # subset — yielding k/N < total while the panel shows N/N.
+                requested = done_ids | running_ids | pending_ids
+            already_done = requested & done_ids
+            to_wait = requested & (running_ids | pending_ids)
+            unknown = requested - done_ids - running_ids - pending_ids
 
         # ── Special case: nothing to wait for ──────────────────────────
         # Either the caller asked for ids that are all already done, or
@@ -462,7 +541,7 @@ class MasterOrchestrator:
         while True:
             with self._lock:
                 done_now = set(self._results_by_id.keys())
-                if mode == 'any' and (to_wait & done_now):
+                if mode == 'any' and (already_done or (to_wait & done_now)):
                     break
                 if mode == 'all' and to_wait.issubset(done_now):
                     break
@@ -515,6 +594,23 @@ class MasterOrchestrator:
                     'error':        result.error_message
                                     if result.status != SubAgentStatus.COMPLETED.value else '',
                 })
+        # When the wait hit the hard cap before the mode condition was met,
+        # synthesise an explicit, actionable note (the caller passes note=''
+        # on the timeout path). Without this the model just sees
+        # ``timed_out:true`` with no guidance on what to do next.
+        if timed_out and not note:
+            n_done = len(completed_payloads)
+            n_left = len(still_running)
+            note = (
+                f'Timed out waiting for the await window to satisfy mode={mode!r}: '
+                f'{n_done} agent(s) done, {n_left} still running '
+                f'({", ".join(still_running) or "none"}). '
+                f'The running agents are NOT cancelled — they keep going in the '
+                f'background and you will receive their <swarm-update> on a later '
+                f'round. Continue with other work, or call await_agents again to '
+                f'keep waiting.'
+            )
+
         out = {
             'completed':     completed_payloads,
             'still_running': still_running,
@@ -525,6 +621,18 @@ class MasterOrchestrator:
             out['unknown'] = unknown
         if note:
             out['note'] = note
+
+        # ── De-dup channel: the agents we just returned synchronously must
+        #    NOT also be injected as <swarm-update> user messages on the next
+        #    round. Drop their (now-redundant) inbox items. The model still
+        #    sees every completion exactly once — here, in the tool return.
+        if completed_payloads:
+            try:
+                inbox_consume(self.inbox_key,
+                              [p['agent_id'] for p in completed_payloads])
+            except Exception as e:
+                logger.warning('[Master:%s] inbox consume after await failed: %s',
+                               self.task_id, e)
         return out
 
     # ── get_agent_result ──────────────────────────────
@@ -534,7 +642,7 @@ class MasterOrchestrator:
         with self._lock:
             if agent_id in self._results_by_id:
                 spec, result = self._results_by_id[agent_id]
-                return {
+                payload = {
                     'found':         True,
                     'agent_id':      agent_id,
                     'role':          spec.role,
@@ -549,6 +657,14 @@ class MasterOrchestrator:
                     'output_file':   os.path.join(self.output_dir, f'{agent_id}.log')
                                      if self.output_dir else '',
                 }
+                # De-dup: the full answer is now in the tool return — drop the
+                # pending <swarm-update> for this agent so it isn't injected again.
+                try:
+                    inbox_consume(self.inbox_key, [agent_id])
+                except Exception as e:
+                    logger.warning('[Master:%s] inbox consume after get_agent_result '
+                                   'failed: %s', self.task_id, e)
+                return payload
             running_ids = (set(self._scheduler._running.keys())
                            if self._scheduler else set())
             pending_ids = ({s.id for s in self._scheduler._pending}

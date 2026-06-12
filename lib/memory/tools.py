@@ -22,7 +22,7 @@ CREATE_MEMORY_TOOL = {
             "properties": {
                 "description": {
                     "type": "string",
-                    "description": "One-line description of what this memory captures (generated FIRST, before writing body)"
+                    "description": "Generated FIRST. ONE dense ~120-char sentence that front-loads the concrete search triggers (symptom, the symbol/file name, the fix or rule). This is the primary signal for both search_memories and per-turn prefetch ranking — vague summaries like 'fixes a bug' are useless. Don't pad to a fixed length; pack signal."
                 },
                 "name": {
                     "type": "string",
@@ -30,7 +30,7 @@ CREATE_MEMORY_TOOL = {
                 },
                 "body": {
                     "type": "string",
-                    "description": "The full memory content in Markdown — instructions, patterns, conventions, code examples"
+                    "description": "The full memory content as skimmable Markdown, not a conversation recap. Suggested skeleton: '## Symptom/Why' (what goes wrong, how to recognise it) → '## Fix/What' (the concrete change with file:line and code/commands) → '## Guardrail' (the rule for next time + any covering test)."
                 },
                 "tags": {
                     "type": "array",
@@ -62,7 +62,7 @@ UPDATE_MEMORY_TOOL = {
             "properties": {
                 "description": {
                     "type": "string",
-                    "description": "New one-line description (generated FIRST, before writing body)"
+                    "description": "Generated FIRST. New ONE dense ~120-char sentence front-loading search triggers (symptom, symbol/file, fix/rule) — the primary ranking signal for search and prefetch."
                 },
                 "memory_id": {
                     "type": "string",
@@ -128,7 +128,7 @@ MERGE_MEMORY_TOOL = {
                 },
                 "description": {
                     "type": "string",
-                    "description": "One-line description for the merged memory (generated FIRST, before writing body)"
+                    "description": "Generated FIRST. ONE dense ~120-char sentence front-loading the merged memory's search triggers (symptom, symbol/file, fix/rule) — the primary ranking signal for search and prefetch."
                 },
                 "name": {
                     "type": "string",

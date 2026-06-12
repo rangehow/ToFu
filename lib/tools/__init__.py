@@ -41,7 +41,7 @@ build_facade(__all__, search, browser, code_exec, conversation, image_gen, meta,
 
 # ── Declarative tool-assembly registry (imported last: its built-in spec
 #    builders lazily reference the schema constants above at request time) ──
-from . import registry  # noqa: E402
+from . import registry  # noqa: E402,F401  — side-effect import (registers specs)
 from .registry import (  # noqa: E402,F401
     ToolContext,
     ToolSpec,

@@ -35,7 +35,6 @@ import re
 import threading
 import time
 
-import requests  # noqa: E402  (lazy-loaded in functions for proxy/lib/db)
 
 from lib.log import get_logger
 from lib.http_client import http_get
@@ -83,8 +82,9 @@ MODEL_PRICING = {
     'gpt-4-turbo':               {'input': 10.0,  'output': 30.0,  'cacheWriteMul': 1.00, 'cacheReadMul': 0.50, 'name': 'GPT-4 Turbo'},
     'deepseek-chat':             {'input': 0.27,  'output': 1.10,  'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'DeepSeek V3'},
     # DeepSeek V4 (2026-04-24) — both models have 1M ctx, dual Thinking / Non-Thinking modes.
-    # cacheReadMul derived from disclosed cache-hit pricing: Pro $0.145 / $1.74 ≈ 0.083, Flash $0.028 / $0.14 = 0.20.
-    'deepseek-v4-pro':           {'input': 1.74,  'output': 3.48,  'cacheWriteMul': 1.00, 'cacheReadMul': 0.083, 'name': 'DeepSeek V4 Pro'},
+    # Pro: 75% price cut made permanent 2026-05-22 ($1.74/$3.48 → $0.435/$0.87); cached input $0.003625 → cacheReadMul ≈ 0.0083.
+    # Flash cacheReadMul from disclosed cache-hit pricing: $0.028 / $0.14 = 0.20.
+    'deepseek-v4-pro':           {'input': 0.435, 'output': 0.87,  'cacheWriteMul': 1.00, 'cacheReadMul': 0.0083, 'name': 'DeepSeek V4 Pro'},
     'deepseek-v4-flash':         {'input': 0.14,  'output': 0.28,  'cacheWriteMul': 1.00, 'cacheReadMul': 0.20,  'name': 'DeepSeek V4 Flash'},
     # Meituan gateway Huawei-cloud mirror for DeepSeek V4 Flash — same pricing.
     'deepseek-v4-flash-huawei':  {'input': 0.14,  'output': 0.28,  'cacheWriteMul': 1.00, 'cacheReadMul': 0.20,  'name': 'DeepSeek V4 Flash (Huawei)'},
@@ -164,6 +164,9 @@ MODEL_PRICING = {
     'claude-opus-4-20250514':    {'input': 15.0,  'output': 75.0,  'cacheWriteMul': 1.25, 'cacheReadMul': 0.10, 'name': 'Claude Opus 4'},
     'claude-sonnet-4-20250514':  {'input': 3.0,   'output': 15.0,  'cacheWriteMul': 1.25, 'cacheReadMul': 0.10, 'name': 'Claude Sonnet 4'},
     # ── MiniMax ──
+    # M3 (2026-06-01) — new flagship: MSA sparse attn, 1M ctx, native multimodal (image+video in).
+    # Standard rate $0.60/$2.40; launch promo halves it to $0.30/$1.20 (temporary — not stored).
+    'MiniMax-M3':                {'input': 0.60, 'output': 2.40, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'MiniMax M3'},
     'MiniMax-M2':                {'input': 0.30, 'output': 1.20, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'MiniMax M2'},
     'MiniMax-M2.1':              {'input': 0.30, 'output': 1.20, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'MiniMax M2.1'},
     'MiniMax-M2.1-highspeed':    {'input': 0.30, 'output': 2.40, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'MiniMax M2.1 HS'},
@@ -174,6 +177,7 @@ MODEL_PRICING = {
     'M2-her':                    {'input': 0.30, 'output': 1.20, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'MiniMax M2-her'},
     # ── GLM (Zhipu AI) — converted from CNY at 7.24 ──
     'glm-5.1':                   {'input': 3.45, 'output': 13.81, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'GLM-5.1'},
+    'glm-5.1-huawei':            {'input': 3.45, 'output': 13.81, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'GLM-5.1 (Huawei)'},
     'glm-5':                     {'input': 3.45, 'output': 13.81, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'GLM-5'},
     'glm-5v-turbo':              {'input': 0.69, 'output': 3.04, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'GLM-5V Turbo'},
     'glm-4.7':                   {'input': 0.69, 'output': 0.69, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'GLM-4.7'},
@@ -334,7 +338,6 @@ def refresh_pricing_async():
 # ══════════════════════════════════════════════════════
 
 def _fetch_exchange_rate():
-    from lib.proxy import proxies_for as _proxies_for
     apis = [
         ('https://api.exchangerate-api.com/v4/latest/USD', lambda d: d.get('rates', {}).get('CNY')),
         ('https://open.er-api.com/v6/latest/USD', lambda d: d.get('rates', {}).get('CNY')),
@@ -352,7 +355,6 @@ def _fetch_exchange_rate():
     return None
 
 def _fetch_model_pricing_online(model_name):
-    from lib.proxy import proxies_for as _proxies_for
     try:
         norm = model_name.lower()
         for prefix in ('aws.', 'gcp.', 'azure.', 'bedrock.'):
@@ -421,12 +423,13 @@ def _do_update_pricing():
     db = None
     try:
         from lib.database import DOMAIN_SYSTEM, get_thread_db
+        from lib.database._core_schema import PRICING_CACHE, upsert
         db = get_thread_db(DOMAIN_SYSTEM)
-        db.execute(
-            'INSERT OR REPLACE INTO pricing_cache (key, value, updated_at) VALUES (?, ?, ?)',
-            ('pricing', json.dumps(data_copy), now_ms),
-        )
-        db.commit()
+        # Backend-agnostic UPSERT (replaces INSERT OR REPLACE + _PK_MAP regex
+        # translation). conflict_cols defaults to the PK ('key').
+        upsert(db, PRICING_CACHE,
+               {'key': 'pricing', 'value': json.dumps(data_copy), 'updated_at': now_ms},
+               commit=True)
     except Exception as e:
         logger.warning('[Pricing] failed to persist pricing to DB: %s', e, exc_info=True)
 

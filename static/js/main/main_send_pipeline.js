@@ -192,8 +192,9 @@ async function sendMessage() {
   if (_pendingLogClean) {
     const r = _pendingLogClean;
     const opsDesc = r.ops.map((o) => o.desc).join("、");
-    const doClean = confirm(
+    const doClean = await showConfirm(
       `检测到日志噪音，可节省 ${r.savedChars.toLocaleString()} 字符（${r.savedPct}%）\n\n清理项: ${opsDesc}\n\n点击「确定」清理后发送，「取消」保持原文发送。`,
+      { okText: '清理并发送', cancelText: '保持原文' },
     );
     if (doClean) {
       input.value = input.value.replace(r.originalText, r.cleanedText);
@@ -515,7 +516,7 @@ async function sendMessage() {
       let errMsg;
       if (e.name === 'AbortError' && _sendAbortReason === 'timeout') {
         errMsg = _willTranslate
-          ? 'Translation took too long and was cancelled. The server may be overloaded — try again, or disable auto-translate in Settings.'
+          ? 'The server took too long to respond and the request was cancelled — it may be overloaded. Please try again; if this keeps happening with Chinese input, disabling auto-translate in Settings can reduce the delay.'
           : 'Request timed out — the server took too long to respond.';
       } else if (e.name === 'TimeoutError') {
         errMsg = 'Request timed out — server may be overloaded.';

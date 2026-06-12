@@ -1,92 +1,31 @@
 ---
 name: chatui-security-audit-findings
-description: Tofu security audit: tri-state auth_mode (open default 2026-05-27); shell=True + Feishu hardcoded secrets remain
+description: Tofu security FIXED 2026-06-09: BYO SSRF egress guard, abs-path sandbox, open-mode loopback gate, const-time compare; test bugs (Quart default_config + http_get mock target) also fixed
 enabled: true
 tags: [security, audit, authentication, injection]
 created: 2026-03-17T09:22:58Z
-updated: 2026-05-27T03:57:39Z
+updated: 2026-06-09T03:04:28Z
 ---
 
-# Tofu Security Audit — Key Findings & Status
+## Resolved (verified 2026-06-09)
+- Feishu APP_SECRET env-only fail-closed; no server-side shell=True; injection hunt clean (parameterized SQL); upload XSS safe (SVG blocked + Pillow re-encode); update_key admin-escalation guard sound.
 
-## Resolved
-1. **No real authentication** — RESOLVED (2026-05-26 unification). Single global
-   `auth_before_request` gate in `routes/api_v1/auth.py` covers ALL non-public
-   routes. Tokens accepted via `Authorization: Bearer`, `x-api-key`,
-   `tofu_session` HttpOnly cookie, `?token=` query string, or legacy
-   `TUNNEL_TOKEN` (deprecated). `lib/api_keys.bootstrap_personal_key()`
-   persists plaintext at `data/config/.first_run_token` (0600).
-2. **Auth-mode tri-state** (2026-05-27): `lib/auth_mode.py` adds
-   `open` / `private` / `multi-user`, persisted at `data/config/auth.json`,
-   env-lockable via `TOFU_AUTH_MODE`. `open` is now the DEFAULT for personal
-   installs (paired with default bind `127.0.0.1`). `open` mode passes through
-   with a synthetic local-admin AuthContext (`via_open_mode=True`); rate
-   limits + idempotency bypass that synthetic principal. `private` is today's
-   gate; `multi-user` is the same gate semantically reserved for relay
-   deployments. UI mode switch lives in Settings → API Keys.
-3. **`/api/me` hardcoded stub** — STILL stubbed in `routes/common.py:114`, but
-   sits behind the unified gate so unauthenticated callers in `private`/
-   `multi-user` get 401, never the stub.
+### FIXED 2026-06-09 — the three criticals + 2 mediums
+1. **BYO SSRF** → new `lib/byo_egress.py` (`validate_egress_url`/`is_egress_allowed`/`EgressDenied`). Always denies link-local (169.254/16 metadata), multicast, reserved, unspecified, bad scheme, DNS-failure. Loopback + RFC1918 allowed BY DEFAULT (self-hosted LLM case) — lock down with `TOFU_BYO_BLOCK_LOOPBACK=1` / `TOFU_BYO_BLOCK_PRIVATE=1`; bypass with `TOFU_BYO_ALLOW_HOSTS=h1,h2`. Resolves ALL IPs (getaddrinfo) to defeat DNS rebinding. Wired: registration `byo_providers._validate_base_url`; use-time `discovery.discover_models` + `_probe_balance_url`; **proxy choke point `llm_dispatch/ephemeral._normalise_base_url`** (covers native chat + agent/run + both compat adapters + inline blocks, at USE time → beats post-registration rebind). Tests: `tests/test_byo_egress.py` (10).
+2. **Abs-path sandbox** → new `lib/project_mod/abs_path_guard.py`. ContextVar `_restrict_abs_paths` (default False = local/CLI/cookie unaffected). `enforce_abs_read` (read_tools._read_absolute_file) + `enforce_abs_write` (write_tools._resolve_write_path, BEFORE auto-register) require realpath-containment in a registered root (symlink escape denied). Activated per-task in `lib/tasks_pkg/handlers/project.py` via `set_restricted(task_is_remote(task))` in try/finally. `task_is_remote` = `_via_agent_run`/`_compat_openai`/`_compat_anthropic`/non-empty `_api_key_id`. Tests: `tests/test_abs_path_guard.py` (6).
+3. **Open-mode loopback gate** → `routes/api_v1/auth.py`: synthetic local-admin only when `_remote_is_loopback()` (request.remote_addr, NOT spoofable XFF; Quart `<local>` sentinel = loopback) OR `TOFU_OPEN_MODE_ALLOW_REMOTE=1`. Non-loopback open-mode falls through to credential gate.
+4. **Const-time compare**: `api_keys.validate_token` `hmac.compare_digest`; `auth._legacy_tunnel_token_passes` all 3 paths.
 
-## Still Open
-- **3 shell=True injection points**: `lib/scheduler.py:328`,
-  `lib/project_mod/tools.py:437`, `lib/desktop_agent.py:155` — gated by auth
-  now, but still subprocess-via-shell. Refactor to `shlex.split` + list args.
-- **Hardcoded Feishu APP_SECRET** in `lib/feishu_bot.py:43-44` with fallback
-  values in source code. Move to env-only, fail-closed.
-- **Flask secret_key** is `_load_or_create_flask_secret_key()` in `server.py`
-  — generates per-install random key at `data/config/flask_secret_key`.
-- **Browser/Desktop bridge endpoints**: still go through unified gate; verify
-  the local browser extension still authenticates correctly under the new
-  `open` default.
-- **SVG upload allowed** in `routes/common.py:249` — XSS risk; serve with
-  `Content-Disposition: attachment` or strip `<script>` on upload.
+### Test failures — ALL FIXED 2026-06-09 (were real bugs, NOT environmental)
+- **Quart `KeyError: PROVIDE_AUTOMATIC_OPTIONS`** in `test_api_v1_agent_run.py` + `test_api_v1_byo_surface_polish.py`: bare `Quart(__name__)` in setUpClass; this Quart's `default_config` lacks the key that Flask sansio `add_url_rule` reads. CANONICAL FIX (already in `server.py:478-480` + `test_api_response.py:_make_app_ctx`): `Quart.default_config = {**Quart.default_config, 'PROVIDE_AUTOMATIC_OPTIONS': True}` before construction. Added to each file's `_install_shim()`.
+- **`test_image_fetch_ssrf.py` 4 failures**: tests mocked `requests.get`, but `_safe_image_fetch` does a function-local `from lib.http_client import http_get` → `requests.request`. Mock the real seam `patch('lib.http_client.http_get')`. (For function-local imports, patch the SOURCE module, not `routes.upload.http_get` which doesn't exist as an attr.)
+- Guardrail: whole touched-area suite green — `pytest tests/test_image_fetch_ssrf.py tests/test_api_v1_agent_run.py tests/test_api_v1_byo_surface_polish.py tests/test_byo_egress.py tests/test_abs_path_guard.py tests/test_byo_providers.py tests/test_api_keys.py tests/test_auth_mode.py tests/test_e2e_headless_api.py tests/test_rate_limit_api.py` = 143 passed.
 
-## Rate Limiting
-- `routes/api_v1/auth.py` runs pre-flight bucket check (`lib/rate_limit_api.py`)
-  for every authenticated API request. Standard `X-RateLimit-*` headers
-  attached even on public paths when a Bearer key is present.
-- Cookie-auth UI calls, tunnel calls, AND `via_open_mode` synthetic contexts
-  bypass the bucket.
+### Test-fixture note
+`tests/test_byo_providers.py` uses `http://127.0.0.1:PORT` (not `http://h:PORT`) — egress guard denies unresolvable hosts (DNS-fail=deny). Use loopback/raw-IP in BYO fixtures, or set `TOFU_BYO_ALLOW_HOSTS`. Real private IPs (10.x, 127.0.0.1:1) are fine by default.
 
-## Relay/Billing Status (2026-05-27)
-- Foundations exist: `lib/api_keys.py`, `lib/rate_limit_api.py` (RPM+TPD),
-  `lib/usage_tracker.py` (per-key daily counters), `lib/idempotency.py`,
-  audit log, OpenAPI 3.1, OpenAI/Anthropic compat surfaces, Settings →
-  API Keys UI.
-- NOT YET BUILT (planned): `lib/billing/{pricing,cost,wallet,ledger}.py`,
-  payments (Stripe/Alipay), users table, admin console at `/admin/*`,
-  customer dashboard at `/dashboard/*`. Reference architecture for the
-  build-out: `songquanpeng/one-api` (NewAPI). See discussion in
-  conversation history for phased roll-out plan.
-
-## Auth Test Coverage (2026-05-27)
-- `tests/test_auth_mode.py` (8) — unit + open-mode E2E.
-- `tests/test_e2e_headless_api.py` (36): private-mode auth + scopes.
-- `tests/test_api_keys.py` (12), `tests/test_rate_limit_api.py` (9).
-- `tests/conftest.py` pins `TOFU_AUTH_MODE=private` for the suite.
-
-## Security Invariants (don't break)
-1. In `private` / `multi-user` modes, every `/api/*`, `/v1/*`, `/metrics`
-   request not in `_PUBLIC_EXACT` / `_PUBLIC_PREFIXES` returns 401 without
-   a credential. Within those modes, NO env var changes this.
-2. `open` mode is a deliberate, persisted policy choice (default for
-   personal installs). It is NOT a hidden bypass — it is documented in
-   `data/config/auth.json` and surfaced in the boot banner.
-3. Bootstrap NEVER mints a key when `TUNNEL_TOKEN` is set or when the
-   mode is `open`.
-4. `?token=` is stripped + redirected before any route sees it (private/
-   multi-user mode only).
-5. The public allow-list (`_PUBLIC_EXACT` in `routes/api_v1/auth.py`) is
-   short by design — every entry is a potential information leak. Adding
-   one requires a justification comment.
-
-## Good Practices Already Present
-- Parameterized SQL queries throughout (no SQL injection)
-- `DANGEROUS_PATTERNS` blocklist for project commands (though bypassable)
-- File upload extension whitelist (still needs magic bytes validation)
-- `MAX_CONTENT_LENGTH = 50MB` set globally (`server.py:447`)
-- `audit.log` logs every auth event (`api_request_auth`, `api_forbidden`,
-  `api_key_bootstrap`, `api_key_created/revoked/updated`,
-  `auth_mode_changed`)
+## Still OPEN (lower priority)
+- `?token=` not stripped in open mode (URL/referer/log leak).
+- `_PUBLIC_PREFIXES` startswith on un-normalized request.path (normalize + reject `..`//`//`).
+- Cookie `secure=request.is_secure` → honor X-Forwarded-Proto behind TLS proxy.
 

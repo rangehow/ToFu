@@ -1,10 +1,10 @@
 ---
 name: tool-spec-registry-plugin-seam
-description: Agent-base architecture: tofu.tools/tofu.providers seams, profiles, lib/agent_core facade + manifest, AST boundary test — all guarded
+description: Agent-base architecture: tofu.tools/tofu.providers seams, profiles, lib/agent_core (Stage-1 leaves relocated + facade), AST boundary test — guarded
 enabled: true
 tags: [tools, architecture, plugin, convention]
 created: 2026-06-01T04:02:21Z
-updated: 2026-06-01T04:34:01Z
+updated: 2026-06-01T04:50:23Z
 ---
 
 # Agent-Base Architecture — plugin seams, profiles, core boundary
@@ -12,82 +12,77 @@ updated: 2026-06-01T04:34:01Z
 As of 2026-06, Tofu is a clean agent base: large capabilities (orchestration,
 swarm scheduling, endpoint Planner→Worker→Critic loop, compaction, push) +
 base tools are reusable; tools, model backends, and capability bundles are
-declarative drop-ins. Five pieces, all test-guarded:
+declarative drop-ins. Repo is now a git repo (init'd 2026-06 for reversibility).
 
 ## 1. Tools — `lib/tools/registry.py` (entry-point group `tofu.tools`)
 - `ToolSpec(key, build, phase, provides, write_tools, idempotent_tools,
   category, description, handler, handler_names, handler_special)` +
-  `ToolContext` + `assemble_tool_list(ctx)`.
-- Built-ins register via `_register_builtins()` in cache-stable order: search →
-  fetch → read_files → project|code_exec → browser → desktop → image_gen →
-  conv_ref → human_guidance → ⟨base/capability boundary⟩ → memory → scheduler →
-  swarm → mcp. Two phases; `phase='base'` counted toward `has_real_tools`
-  (snapshotted into `ctx.has_base_tools`); capability phase self-gates.
-- `build(ctx)` called at REQUEST time → lazy imports inside.
-- **Schema+gate+handler from ONE external package**: attach `handler=`. Executor
-  calls `sync_spec_handlers(tool_registry)` at startup; late plugins self-sync
-  via `register_tool_spec`→`_sync_one`. `handler_special` → special dispatch key.
-- `_assemble_tool_list` legacy signature kept (swarm tests/autopilot). Caller
-  `cfg['tools']` override → early return.
-- `tool_dispatch._WRITE_TOOLS`/`_IDEMPOTENT_TOOLS` = base set UNION spec flags.
+  `ToolContext` + `assemble_tool_list(ctx)`. Cache-stable order: search→fetch→
+  read_files→project|code_exec→browser→desktop→image_gen→conv_ref→
+  human_guidance→⟨boundary⟩→memory→scheduler→swarm→mcp. `build(ctx)` lazy.
+- Schema+gate+handler from ONE package via `handler=`; executor calls
+  `sync_spec_handlers(tool_registry)` at startup, late plugins self-sync.
+- `_assemble_tool_list` legacy signature kept; caller `cfg['tools']`→early return.
+- `tool_dispatch._WRITE_TOOLS`/`_IDEMPOTENT_TOOLS` = base UNION spec flags.
 
-## 2. Providers — `lib/llm_dispatch/provider_registry.py` (group `tofu.providers`)
+## 2. Providers — `lib/llm_dispatch/provider_registry.py` (`tofu.providers`)
 - Pluggable axis = body dialect (`Slot.thinking_format`).
-  `BodyDialect(key, apply_build, apply_readjust)`.
-- Registry holds PLUGIN dialects only. Built-ins (`''`,`none`,`enable_thinking`,
-  `thinking_type`,`chat_template_kwargs`) stay in the ladders in `lib/llm/body.py`
-  + `lib/llm_dispatch/api.py`. Registry consulted as FIRST branch; built-ins
-  return None → fall through → BYTE-IDENTICAL (characterization-tested).
-- `is_valid_thinking_format(v)` = built-in OR plugin. Used by `Slot.__post_init__`
-  (via `_is_valid_thinking_format` w/ fallback) + `byo_providers._validate_thinking_format`. Typos still raise.
+  `BodyDialect(key, apply_build, apply_readjust)`. Registry holds PLUGIN dialects
+  only; built-ins stay in `lib/llm/body.py` + `lib/llm_dispatch/api.py` ladders
+  (registry first branch, built-ins fall through → BYTE-IDENTICAL).
+- `is_valid_thinking_format` used by `Slot.__post_init__` + byo validator; typos raise.
 
-## 3. Capability profiles — `lib/agent_profiles.py`
-- Profile = named cfg-default bundle. `apply_profile(cfg)` = `{**defaults, **cfg}`
-  → explicit cfg ALWAYS wins, profile fills gaps.
-- Selected via `cfg['profile']` (wire key `profile`, in `lib/agent_options.py`
-  `_FIELDS` + `TofuOptions.profile`).
-- Built-ins: `default`(no-op), `research`, `coding`, `minimal`. Operators
-  add/override via `data/config/profiles/<name>.json` (camelCase; filename ==
-  profile name replaces built-in).
-- Applied ONCE in `orchestrator.run_task` right after `cfg = task['config']`,
-  BEFORE `_resolve_model_config` + tool assembly. No-op when absent/'default'.
+## 3. Capability profiles — `lib/agent_core/profiles.py` (shim: `lib/agent_profiles.py`)
+- Profile = named cfg-default bundle. `apply_profile(cfg)`={**defaults,**cfg}
+  → explicit cfg wins. Selected via `cfg['profile']` (in agent_options _FIELDS +
+  TofuOptions.profile). Built-ins default/research/coding/minimal +
+  `data/config/profiles/*.json`. Applied once in run_task after cfg=task['config'].
 
 ## 4. Core/plugin boundary — `lib/agent_core_manifest.py` + AST test
-- Boundary is a DECLARED manifest: `CORE_MODULES`, `REGISTRY_SEAMS`,
-  `CONCRETE_PLUGIN_MODULES`. `is_core_module()` also accepts REGISTRY_SEAMS +
-  `_CORE_PACKAGE_FACADES` (`lib.llm`, `lib.llm_dispatch`).
-- `tests/test_agent_core_boundary.py` (AST, 4 tests): (a) CORE_MODULES resolve
-  to files; (b) NO core file imports a concrete plugin (only seams
-  `lib.tools.registry`/`lib.llm_dispatch.provider_registry`); (c) facade members
-  are within core; (d) facade __all__ all importable.
+- Manifest: `CORE_MODULES`, `REGISTRY_SEAMS`, `CONCRETE_PLUGIN_MODULES`.
+  `is_core_module` also accepts REGISTRY_SEAMS + `_CORE_PACKAGE_FACADES` (lib.llm,
+  lib.llm_dispatch). `tests/test_agent_core_boundary.py` (4 tests): CORE resolves
+  to files; NO core file imports concrete plugin; facade members within core;
+  facade __all__ importable.
 
-## 5. Browsable facade — `lib/agent_core/__init__.py` (added 2026-06)
-- We did NOT physically move files (~960 import sites; not a git repo → no
-  undo; core is a CROSS-CUTTING subset of tasks_pkg/llm_dispatch/swarm, so a
-  literal move would create `agent_core→tasks_pkg` back-imports that INVERT the
-  dependency direction). Instead: a FACADE package that re-exports the base
-  public surface (`run_task`, `_assemble_tool_list`, `run_compaction_pipeline`,
-  `build_body`/`chat`/`stream_chat`, `dispatch_chat`/`dispatch_stream`/
-  `get_dispatcher`/`reset_dispatcher`, `TaskRuntime`, `hub`/`push_event`,
-  `apply_profile`/`get_profile`/`list_profiles`/`resolve_profile_name`, +
-  seams `ToolSpec`/`ToolContext`/`assemble_tool_list`/`register_tool_spec`/
-  `BodyDialect`/`register_dialect`). `CORE_MEMBERS` maps symbol→module;
-  kept consistent with the manifest by the boundary test.
-- Existing imports unchanged; facade NAMES the base, doesn't replace modules.
-- `lib.agent_core` is itself listed in CORE_MODULES (must obey no-concrete-plugin).
+## 5. `lib/agent_core/` package — Stage-1 physical relocation DONE (2026-06)
+- **Relocated leaves** (self-contained, no core-sibling back-imports), via
+  `git mv`: `push.py`, `task_runtime.py`, `agent_profiles.py`→`profiles.py`.
+  Thin re-export SHIMS at the old paths (`lib/push.py`, `lib/task_runtime.py`,
+  `lib/agent_profiles.py`) preserve all ~30 import sites AND the `hub` singleton
+  identity (`lib.push.hub is lib.agent_core.push.hub`).
+- **Facade `__init__.py` is LAZY** (PEP 562 `__getattr__` over `CORE_MEMBERS`):
+  importing a leaf submodule (`from lib.agent_core.push import hub`) must NOT pull
+  the heavy orchestrator chain. `CORE_MEMBERS` maps symbol→module (relocated leaves
+  point at new homes; cross-cutting members named-in-place at tasks_pkg/llm_dispatch).
+- **Cross-cutting members NOT moved** (orchestrator, model_config, endpoint,
+  compaction, llm, llm_dispatch): a naive move creates agent_core→tasks_pkg
+  back-imports + ~960 import rewrites. They migrate later when sibling coupling untangles.
+- **CRITICAL gotcha — push_event resolution**: `TaskRuntime.append_event` and
+  `manager.append_event`'s runtime path now import `push_event` from
+  `lib.agent_core.push` (canonical home). Tests that monkeypatch push_event to
+  capture must patch `lib.agent_core.push.push_event`, NOT `lib.push.push_event`
+  (the shim re-export is bypassed). Fixed in test_task_runtime, test_restart_smoke,
+  test_chat_manager_migration.
 
-## Guards (DO NOT regress) — all green
-- `test_core_tool_isolation.py`, `test_tool_registry.py`, `test_provider_registry.py`,
-  `test_agent_core_boundary.py` (4), `test_agent_options.py`,
-  `test_swarm_async.py` (TestSwarmDecoupledFromProject calls `_assemble_tool_list`
+## LESSON: never `git stash` mid-migration with untracked new files
+- During this work I ran `git stash`/`pop` to A/B a baseline. Stash treated the
+  NEW shim files (untracked at stash time, paths that git saw as renamed-away) as
+  deletions and DID NOT restore them on pop — silently lost all 3 shims.
+  Recreated from known content. To compare against baseline cleanly: COMMIT first,
+  then `git checkout <baseline> -- <path>` or use a worktree — don't stash a tree
+  with untracked files that collide with tracked renames.
+
+## Guards — all green (115 passed in the core suite)
+- test_core_tool_isolation, test_tool_registry, test_provider_registry,
+  test_agent_core_boundary (4), test_agent_options, test_task_runtime,
+  test_swarm_async (TestSwarmDecoupledFromProject calls `_assemble_tool_list`
   directly — signature MUST stay stable).
 
-## Gotchas
-- Memory tools gate on `has_base_tools` ONLY (not `memoryEnabled`).
-- swarm + mcp NOT gated on has_base_tools; read_files always on → has_real_tools ~always True.
-- `build_body` HOT_PATH; provider plugin branch is first if/elif so Claude post-proc runs.
-- Pre-existing unrelated failures (NOT regressions): `test_billing_phase2`
-  (shared-state order), `test_api_integration`/`test_bridge_auth` (QuartClient
-  ctx-manager harness), `test_chat_manager_migration` (poll 404 race). Fail in isolation.
-- Doc updated: `docs/ARCHITECTURE.md` §3.2 has agent_core / agent_core_manifest / agent_profiles rows.
+## Pre-existing unrelated failures (NOT regressions; verified vs baseline)
+- test_restart_smoke (server.py import harness: blueprint reg, 401/404/405 envelope),
+  test_api_integration/test_features_needs_restart (QuartClient ctx-manager harness),
+  test_billing_phase2 (shared-state order). All fail identically on baseline.
+- `routes/push.py` `@push_bp.websocket` AttributeError under bare `python -c` is
+  the Flask-vs-Quart shim (only installed when server.py boots) — not a regression.
 

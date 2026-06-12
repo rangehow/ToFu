@@ -29,13 +29,17 @@ function _singlePassDomTransform(html) {
   temp.innerHTML = html;
   const pres = temp.querySelectorAll('pre');
   const hasHljs = typeof hljs !== 'undefined';
+  /* ★ Perf: skip hljs while streaming — highlightAuto on a growing code block
+   * re-runs every frame and is the dominant per-token allocator (GC storm).
+   * The block is highlighted once at finalizeStreaming (renderMessage path). */
+  const _skipHl = typeof window !== 'undefined' && window._streamRenderNoHighlight;
   const hasProject = projectState && projectState.active;
   for (let pi = 0; pi < pres.length; pi++) {
     const pre = pres[pi];
     const code = pre.querySelector('code');
     if (!code) continue;
     /* --- Phase 1: Syntax highlighting (was highlightCodeInHtml) --- */
-    if (hasHljs) {
+    if (hasHljs && !_skipHl) {
       const lm = code.className.match(/language-(\w+)/);
       const lang = lm ? lm[1] : null;
       const text = code.textContent;
@@ -401,35 +405,27 @@ function renderMarkdown(text) {
     return '<pre style="white-space:pre-wrap">' + escapeHtml(text) + "</pre>";
   }
   try {
+  /* ★ Perf: streaming renders skip syntax highlighting, so they must NOT be
+   * cached — a later non-streaming caller could otherwise get an unhighlighted
+   * hit. The full message is re-rendered (with highlight) at finalizeStreaming. */
+  const _noHl = typeof window !== 'undefined' && window._streamRenderNoHighlight;
   const _ck = _mdCacheKey(text);
-  if (_mdCache.has(_ck)) {
+  if (!_noHl && _mdCache.has(_ck)) {
     return _mdCache.get(_ck);
   }
   const codeStore = [];
   let p = extractFencedBlocks(text, codeStore);
   const mathStore = [];
-  /* ★ FIX (2026-05-20): Re-route LaTeX-looking inline code spans to KaTeX.
-   * LLMs frequently wrap math in backticks (e.g. `\hat K = \text{LN}(X)W_K`)
-   * even when the prompt says to use $…$.  Detect "LaTeX-shaped" backtick
-   * content (a `\letter…` command, or a `^{…}` / `_{…}` superscript) and
-   * push it through the math pipeline instead of the code pipeline.
-   * This runs BEFORE generic backtick → codeStore so LaTeX wins. */
-  const _LATEX_IN_BACKTICK_RE = /`([^`\n]*?(?:\\[a-zA-Z]+|[\^_]\{)[^`\n]*?)`/g;
-  /* Path-shaped content that should NOT be routed to KaTeX:
-   *   - Windows drive letters: `C:\Users\...`, `D:/foo`
-   *   - UNC paths: `\\server\share`
-   *   - Any string whose backslash-segments look like path components
-   *     (`\Users\`, `\.ssh\`) — real LaTeX commands are followed by
-   *     `{`, whitespace, or end-of-token, never another `\name\`. */
-  const _looksLikePath = (s) =>
-    /^[a-zA-Z]:[\\/]/.test(s) ||
-    /^\\\\/.test(s) ||
-    /\\[a-zA-Z._-]+[\\/]/.test(s);
-  p = p.replace(_LATEX_IN_BACKTICK_RE, (m, tex) => {
-    if (_looksLikePath(tex)) return m;
-    mathStore.push({ tex: tex.trim(), display: false });
-    return "\x02MATH" + (mathStore.length - 1) + "\x03";
-  });
+  /* NOTE: Backtick spans are intentionally NOT inspected for "LaTeX-looking"
+   * content.  In Markdown a backtick span is always code — full stop.  Code
+   * is extracted to \x02CODE\x03 placeholders HERE, before any $…$ / \(…\) /
+   * $$…$$ / \[…\] math detection runs below, so a `$` (or `\d`, `_foo`, `^{`)
+   * inside backticks can never be mis-parsed as math.  An earlier override
+   * reached into backticks to re-route "math-shaped" spans to KaTeX; it
+   * corrupted ordinary code/regex (e.g. `r'\d+ : \d+'`, `_RG_MATCH_LINE`)
+   * into garbled subscripts and was removed.  Models that want typeset math
+   * must emit $…$ / \(…\), not backticks.
+   * See tests/test_frontend_markdown_backtick_code.py. */
   p = p.replace(/(`[^`\n]+`)/g, (m) => {
     codeStore.push(m);
     return "\x02CODE" + (codeStore.length - 1) + "\x03";
@@ -549,11 +545,13 @@ function renderMarkdown(text) {
       html = html.split(ph).join(fallback);
     }
   }
-  if (_mdCache.size >= _MD_CACHE_MAX) {
-    const first = _mdCache.keys().next().value;
-    _mdCache.delete(first);
+  if (!_noHl) {
+    if (_mdCache.size >= _MD_CACHE_MAX) {
+      const first = _mdCache.keys().next().value;
+      _mdCache.delete(first);
+    }
+    _mdCache.set(_ck, html);
   }
-  _mdCache.set(_ck, html);
   return html;
   } catch (e) {
     console.warn('renderMarkdown: marked.parse() failed, using fallback', e);

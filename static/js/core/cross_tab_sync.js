@@ -100,6 +100,47 @@ let _lastOfflineRecoveryAttempt = 0;
 const _OFFLINE_RECOVERY_COOLDOWN = 5000; // ms — don't run more than once per 5s
 
 /**
+ * Re-attach to a server task that is STILL RUNNING after a tunnel drop
+ * (case a: the Codelab/VS Code port-forward died but `server.py` and its
+ * daemon worker thread are alive).  Instead of a static content adopt, we
+ * clear the frontend-only `server_offline` verdict on the trailing assistant
+ * message and re-bind the live SSE stream to that SAME bubble.
+ *
+ * Why clear the markers first: `connectToTask`'s stale-tail guard pushes a
+ * fresh empty placeholder whenever the last assistant carries a
+ * `finishReason` (or a foreign `_taskId`).  On an offline reconnect that
+ * produced the reported bug — the previous turn froze tagged "Server
+ * Offline" while a new bubble appeared holding only the tool panel.  By
+ * stripping the offline verdict and aligning `_taskId`, the guard reuses the
+ * existing message and `connectToTask` pre-populates its partial
+ * content + toolRounds, so streaming resumes seamlessly in place.
+ *
+ * @returns {boolean} true if a live re-attach was initiated.
+ */
+function _reattachLiveOfflineTask(conv, task) {
+  const am = conv.messages[conv.messages.length - 1];
+  if (!am || am.role !== 'assistant') return false;
+  console.warn(
+    `[NetworkRecovery] ▶ Live re-attach — conv=${conv.id.slice(0,8)} ` +
+    `task=${task.id.slice(0,8)} still RUNNING on server; resuming SSE in place`
+  );
+  // Drop the frontend-only offline/interrupted verdict so connectToTask's
+  // stale-tail guard reuses THIS message instead of spawning a ghost placeholder.
+  if (am.finishReason === 'server_offline' || am.finishReason === 'interrupted') delete am.finishReason;
+  if (am.error && errorEnvelopeKind(am.error) === 'server_offline') delete am.error;
+  // Align the message + conv with the live task id (guard checks _taskId).
+  am._taskId = task.id;
+  conv.activeTaskId = task.id;
+  delete conv._activeTaskClearedAt;  // allow reattach (see settings restore guard)
+  saveConversations(conv.id);
+  try { ConvCache.put(conv); } catch (e) { console.debug(`[NetworkRecovery] ConvCache.put failed: ${e && e.message}`); }
+  if (activeConvId === conv.id) renderChat(conv);
+  renderConversationList();
+  connectToTask(conv.id, task.id);
+  return true;
+}
+
+/**
  * Recover conversations marked with finishReason='server_offline'.
  * Runs Case-F-style recovery without requiring a full page reload.
  * Called from: visibilitychange, online event, periodic health check,
@@ -113,13 +154,25 @@ async function _recoverOfflineConversations(trigger) {
   if (now - _lastOfflineRecoveryAttempt < _OFFLINE_RECOVERY_COOLDOWN) return 0;
   _lastOfflineRecoveryAttempt = now;
 
-  // Find all conversations with server_offline finishReason
+  // Find conversations needing recovery:
+  //  • server_offline → connection drop; reattach-if-running else static-adopt.
+  //  • interrupted    → a still-running task can be transiently mislabeled
+  //    'interrupted' by the racy "task not in memory" poll check
+  //    (routes/chat.py). Treat it as a reattach candidate, but ONLY act when
+  //    Api.chat.active() confirms the task is still running — otherwise it is a
+  //    genuine crash checkpoint whose recovery path is Case B, so we leave it
+  //    untouched (tracked via _interruptedOnlyIds and skipped before static-adopt).
   const offlineConvs = [];
+  const _interruptedOnlyIds = new Set();
   for (const conv of conversations) {
     if (conv._needsLoad) continue;
     const last = conv.messages[conv.messages.length - 1];
-    if (last && last.role === 'assistant' && last.finishReason === 'server_offline') {
+    if (!last || last.role !== 'assistant') continue;
+    if (last.finishReason === 'server_offline') {
       offlineConvs.push(conv);
+    } else if (last.finishReason === 'interrupted') {
+      offlineConvs.push(conv);
+      _interruptedOnlyIds.add(conv.id);
     }
   }
   if (offlineConvs.length === 0) return 0;
@@ -136,10 +189,39 @@ async function _recoverOfflineConversations(trigger) {
     `[NetworkRecovery] ★ Recovering ${offlineConvs.length} server_offline conversation(s) — trigger=${trigger}`
   );
 
+  /* ★ Live re-attach probe: if any offline conv's task is STILL RUNNING on
+   *   the server (tunnel dropped, but server.py + worker thread alive), we
+   *   re-bind the live SSE stream in place rather than statically adopting a
+   *   frozen snapshot. This is the seamless-resume path (case a). */
+  let _activeTasks = null;
+  try {
+    _activeTasks = await Api.chat.active({ signal: AbortSignal.timeout(8000) });
+  } catch (e) {
+    console.debug(`[NetworkRecovery] active() probe failed (will static-adopt): ${e && e.message}`);
+  }
+  const _runningByConv = new Map();
+  if (Array.isArray(_activeTasks)) {
+    for (const t of _activeTasks) {
+      if (t && t.convId && t.status === 'running' && !t.aborted) _runningByConv.set(t.convId, t);
+    }
+  }
+
   let recovered = 0;
+  const _reattachedIds = new Set();  // convs re-bound to a live stream (NOT static-adopted)
   await Promise.all(offlineConvs.map(async (conv) => {
     const am = conv.messages[conv.messages.length - 1];
     const localContentLen = am.content?.length || 0;
+    // ★ Seamless live re-attach takes priority over static adopt.
+    if (!activeStreams.has(conv.id)) {
+      const liveTask = _runningByConv.get(conv.id);
+      if (liveTask && _reattachLiveOfflineTask(conv, liveTask)) {
+        _reattachedIds.add(conv.id);
+        return;
+      }
+    }
+    // Interrupted convs with no live task stay as-is — their recovery is the
+    // crash-checkpoint path (Case B), not the server_offline static adopt.
+    if (_interruptedOnlyIds.has(conv.id)) return;
     try {
       const data = await Api.conversations.get(conv.id, { signal: AbortSignal.timeout(10000) });
       if (!data) return;
@@ -195,11 +277,20 @@ async function _recoverOfflineConversations(trigger) {
     }
   }));
 
-  if (recovered > 0) {
-    showToast('🔄', 'Connection Restored',
-      `Recovered ${recovered} conversation(s) from server. Results updated.`, 6000);
-    // Re-render active conversation if it was one of the recovered ones
-    if (activeConvId) {
+  const _reattachedCount = _reattachedIds.size;
+  if (recovered > 0 || _reattachedCount > 0) {
+    if (_reattachedCount > 0) {
+      showToast('🔄', 'Connection Restored',
+        `Reconnected ${_reattachedCount} running task(s) — streaming resumed.`, 6000);
+    }
+    if (recovered > 0) {
+      showToast('🔄', 'Connection Restored',
+        `Recovered ${recovered} conversation(s) from server. Results updated.`, 6000);
+    }
+    // Re-render active conversation if it was STATICALLY recovered.  Skip
+    // live-reattached convs — _reattachLiveOfflineTask already created the
+    // streaming bubble via connectToTask; a renderChat here would destroy it.
+    if (activeConvId && !_reattachedIds.has(activeConvId)) {
       const activeConv = conversations.find(c => c.id === activeConvId);
       if (activeConv && offlineConvs.includes(activeConv)) {
         renderChat(activeConv);
@@ -207,7 +298,8 @@ async function _recoverOfflineConversations(trigger) {
     }
     renderConversationList();
   }
-  return recovered;
+  // Count live-reattached convs as recovered for the periodic-poll stop check.
+  return recovered + _reattachedCount;
 }
 
 /* ★ Periodic background recovery: when VSCode tunnel drops, the browser's

@@ -136,64 +136,38 @@ def _init_chat_schema(conn):
     """Create chat domain tables and run migrations."""
     cur = conn._conn.cursor()
 
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE NOT NULL,
-            display_name TEXT NOT NULL DEFAULT '',
-            password_hash TEXT NOT NULL DEFAULT '',
-            created_at TEXT DEFAULT (datetime('now'))
-        )
-    ''')
+    # users: migrated onto Core (lib/database/_core_schema.py). Auto-increment
+    # PK (INTEGER AUTOINCREMENT) + TEXT created_at DEFAULT (datetime('now')).
+    # _table_exists guard REQUIRED on SQLite (bare execute, Core DDL has no
+    # IF NOT EXISTS). See tests/test_core_schema_parity.py.
+    from lib.database._core_schema import USERS, create_if_absent
+    create_if_absent(conn, USERS, table_exists=_table_exists)
 
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS conversations (
-            id TEXT NOT NULL,
-            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            title TEXT NOT NULL DEFAULT 'New Chat',
-            messages TEXT NOT NULL DEFAULT '[]',
-            created_at INTEGER NOT NULL,
-            updated_at INTEGER NOT NULL,
-            settings TEXT NOT NULL DEFAULT '{}',
-            msg_count INTEGER NOT NULL DEFAULT 0,
-            search_text TEXT NOT NULL DEFAULT '',
-            PRIMARY KEY (id, user_id)
-        )
-    ''')
+    # conversations: base table migrated onto Core (lib/database/_core_schema.py,
+    # OPTION B). Core owns all shared base columns including search_text.
+    # _table_exists guard REQUIRED on SQLite (bare execute, Core DDL has no
+    # IF NOT EXISTS). SQLite full-text search uses the separate FTS5
+    # conversations_fts table (created elsewhere), not a tsvector column.
+    # See tests/test_core_schema_parity.py.
+    from lib.database._core_schema import CONVERSATIONS, create_if_absent
+    create_if_absent(conn, CONVERSATIONS, table_exists=_table_exists)
     cur.execute('CREATE INDEX IF NOT EXISTS idx_conv_user ON conversations(user_id, updated_at DESC)')
     cur.execute('CREATE INDEX IF NOT EXISTS idx_conv_meta ON conversations(user_id, updated_at DESC, id, title, msg_count, created_at)')
 
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS task_results (
-            task_id TEXT PRIMARY KEY,
-            conv_id TEXT NOT NULL,
-            content TEXT NOT NULL DEFAULT '',
-            thinking TEXT NOT NULL DEFAULT '',
-            error TEXT,
-            status TEXT NOT NULL DEFAULT 'done',
-            tool_rounds TEXT,
-            search_results TEXT,
-            metadata TEXT,
-            created_at INTEGER NOT NULL,
-            completed_at INTEGER
-        )
-    ''')
+    # task_results + task_events: migrated onto Core (lib/database/_core_schema.py).
+    # _table_exists guard REQUIRED on SQLite (bare execute, Core DDL has no
+    # IF NOT EXISTS). Indexes stay below. See tests/test_core_schema_parity.py.
+    from lib.database._core_schema import (
+        TASK_RESULTS, TASK_EVENTS, create_if_absent,
+    )
+    create_if_absent(conn, TASK_RESULTS, table_exists=_table_exists)
     cur.execute('CREATE INDEX IF NOT EXISTS idx_task_conv ON task_results(conv_id)')
     cur.execute('CREATE INDEX IF NOT EXISTS idx_task_created ON task_results(created_at)')
 
     # ── task_events: persisted SSE event log (durable Last-Event-ID resumption) ──
     # Replaces in-memory task['events'] for cross-restart and post-cleanup
     # replay. event_id is monotonic per task, mirrored in the SSE 'id:' field.
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS task_events (
-            task_id    TEXT    NOT NULL,
-            event_id   INTEGER NOT NULL,
-            ts_ms      INTEGER NOT NULL,
-            type       TEXT    NOT NULL,
-            payload    TEXT    NOT NULL,
-            PRIMARY KEY (task_id, event_id)
-        )
-    ''')
+    create_if_absent(conn, TASK_EVENTS, table_exists=_table_exists)
     cur.execute('CREATE INDEX IF NOT EXISTS idx_task_events_ts ON task_events(ts_ms)')
 
     # ── chat_artifacts: renderable reports promoted out of chat (md/html/svg) ──
@@ -201,50 +175,23 @@ def _init_chat_schema(conn):
     # compaction, can be re-opened in the right-side panel by stable URL,
     # and can be versioned / pinned independently of the conversation row.
     # See docs/ARCHITECTURE.md §Artifacts subsystem.
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS chat_artifacts (
-            id              TEXT    PRIMARY KEY,
-            conv_id         TEXT    NOT NULL,
-            task_id         TEXT    NOT NULL DEFAULT '',
-            msg_id          TEXT    NOT NULL DEFAULT '',
-            source          TEXT    NOT NULL,
-            source_ref      TEXT    NOT NULL DEFAULT '{}',
-            format          TEXT    NOT NULL,
-            title           TEXT    NOT NULL DEFAULT '',
-            content         TEXT    NOT NULL,
-            content_sha256  TEXT    NOT NULL,
-            size_bytes      INTEGER NOT NULL DEFAULT 0,
-            version         INTEGER NOT NULL DEFAULT 1,
-            parent_id       TEXT    NOT NULL DEFAULT '',
-            pinned          INTEGER NOT NULL DEFAULT 0,
-            meta            TEXT    NOT NULL DEFAULT '{}',
-            created_at      INTEGER NOT NULL,
-            deleted_at      INTEGER NOT NULL DEFAULT 0
-        )
-    ''')
+    # chat_artifacts: migrated onto Core (lib/database/_core_schema.py).
+    # _table_exists guard REQUIRED on SQLite (bare execute, Core DDL has no
+    # IF NOT EXISTS). Indexes stay below. See tests/test_core_schema_parity.py.
+    from lib.database._core_schema import CHAT_ARTIFACTS, create_if_absent
+    create_if_absent(conn, CHAT_ARTIFACTS, table_exists=_table_exists)
     cur.execute('CREATE INDEX IF NOT EXISTS idx_chat_artifact_conv ON chat_artifacts(conv_id, created_at DESC)')
     cur.execute('CREATE INDEX IF NOT EXISTS idx_chat_artifact_msg ON chat_artifacts(conv_id, msg_id)')
     cur.execute('CREATE INDEX IF NOT EXISTS idx_chat_artifact_sha ON chat_artifacts(conv_id, content_sha256)')
     cur.execute('CREATE INDEX IF NOT EXISTS idx_chat_artifact_task ON chat_artifacts(task_id)')
 
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS transcript_archive (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            conv_id TEXT NOT NULL,
-            messages_json TEXT NOT NULL,
-            summary TEXT NOT NULL DEFAULT '',
-            created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
-            trigger TEXT NOT NULL DEFAULT 'force',
-            task_id TEXT NOT NULL DEFAULT '',
-            round_num INTEGER NOT NULL DEFAULT 0,
-            model TEXT NOT NULL DEFAULT '',
-            tokens_before INTEGER NOT NULL DEFAULT 0,
-            tokens_after INTEGER NOT NULL DEFAULT 0,
-            msgs_before INTEGER NOT NULL DEFAULT 0,
-            msgs_after INTEGER NOT NULL DEFAULT 0,
-            reason TEXT NOT NULL DEFAULT ''
-        )
-    ''')
+    # transcript_archive: migrated onto Core (lib/database/_core_schema.py).
+    # Auto-increment PK (INTEGER AUTOINCREMENT) + per-dialect epoch_now()
+    # default. _table_exists guard REQUIRED on SQLite (bare execute, Core DDL
+    # has no IF NOT EXISTS). The ALTER migration loop below stays (upgrade
+    # path). See tests/test_core_schema_parity.py.
+    from lib.database._core_schema import TRANSCRIPT_ARCHIVE, create_if_absent
+    create_if_absent(conn, TRANSCRIPT_ARCHIVE, table_exists=_table_exists)
     cur.execute('CREATE INDEX IF NOT EXISTS idx_ta_conv ON transcript_archive(conv_id)')
     cur.execute('CREATE INDEX IF NOT EXISTS idx_ta_conv_created ON transcript_archive(conv_id, created_at DESC)')
     # Migrations — extend existing transcript_archive with metadata columns
@@ -304,10 +251,39 @@ def _init_chat_schema(conn):
             logger.info('[DB] Migration: added column %s to conversations', col)
 
     # ── FTS5 virtual table for full-text search ──
+    # SELF-CONTENT (NOT content=''). A contentless FTS5 table cannot DELETE
+    # a row, so when a conversation is edited the OLD tokens can never be
+    # retracted from the index — searching the pre-edit text keeps matching
+    # (a stale hit). A self-content table stores the indexed text, so
+    # update_conversation_fts() can DELETE-then-INSERT by rowid and the old
+    # terms actually disappear. The minor extra storage is the search_text
+    # we already keep in the conversations column anyway.
     cur.execute('''
         CREATE VIRTUAL TABLE IF NOT EXISTS conversations_fts
-        USING fts5(search_text, content='', tokenize='unicode61')
+        USING fts5(search_text, tokenize='unicode61')
     ''')
+
+    # ── Migrate legacy CONTENTLESS tables (content='') → self-content ──
+    # Older installs created conversations_fts with content='' and cannot
+    # retract stale terms on edit. Detect that via the stored DDL and rebuild
+    # from the authoritative conversations.search_text column.
+    try:
+        cur.execute("SELECT sql FROM sqlite_master WHERE name='conversations_fts'")
+        _fts_ddl_row = cur.fetchone()
+        _fts_ddl = (_fts_ddl_row[0] if _fts_ddl_row else '') or ''
+        if "content=''" in _fts_ddl.replace('"', "'").replace(' ', ''):
+            logger.info('[DB] Rebuilding contentless conversations_fts → self-content')
+            cur.execute('DROP TABLE conversations_fts')
+            cur.execute('''
+                CREATE VIRTUAL TABLE conversations_fts
+                USING fts5(search_text, tokenize='unicode61')
+            ''')
+            cur.execute("""
+                INSERT INTO conversations_fts (rowid, search_text)
+                SELECT rowid, search_text FROM conversations WHERE search_text != ''
+            """)
+    except Exception as e:
+        logger.debug('[DB] conversations_fts contentless-migration skipped: %s', e)
 
     # ── Sync FTS from existing search_text if FTS is empty ──
     cur.execute("SELECT count(*) FROM conversations_fts")
@@ -355,55 +331,30 @@ def _init_chat_schema(conn):
     ''')
     cur.execute('CREATE INDEX IF NOT EXISTS idx_mq_conv ON message_queue(conv_id, position)')
 
-    # ── Paper reports: persistent cache for paper analysis reports ──
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS paper_reports (
-            paper_hash TEXT NOT NULL,
-            lang TEXT NOT NULL DEFAULT 'en',
-            report TEXT NOT NULL DEFAULT '',
-            model TEXT NOT NULL DEFAULT '',
-            created_at INTEGER NOT NULL,
-            PRIMARY KEY (paper_hash, lang)
-        )
-    ''')
+    # paper_reports: migrated onto Core (lib/database/_core_schema.py).
+    # _table_exists guard REQUIRED on SQLite (bare execute, Core DDL has no
+    # IF NOT EXISTS). See tests/test_core_schema_parity.py.
+    from lib.database._core_schema import PAPER_REPORTS, create_if_absent
+    create_if_absent(conn, PAPER_REPORTS, table_exists=_table_exists)
 
     # ── Paper library: server-side bookshelf (shared across browsers) ──
     # Stores one row per paper the user has loaded; the PDF bytes live under
     # uploads/papers/<pdf_filename>, reports in paper_reports, images on disk.
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS paper_library (
-            id TEXT NOT NULL,
-            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            title TEXT NOT NULL DEFAULT '',
-            pdf_url TEXT NOT NULL DEFAULT '',
-            pdf_filename TEXT NOT NULL DEFAULT '',
-            arxiv_id TEXT NOT NULL DEFAULT '',
-            paper_hash TEXT NOT NULL DEFAULT '',
-            parsed_text TEXT NOT NULL DEFAULT '',
-            qa_history TEXT NOT NULL DEFAULT '[]',
-            images TEXT NOT NULL DEFAULT '[]',
-            babel_cache TEXT NOT NULL DEFAULT '{}',
-            page_count INTEGER NOT NULL DEFAULT 0,
-            created_at INTEGER NOT NULL,
-            updated_at INTEGER NOT NULL,
-            PRIMARY KEY (id, user_id)
-        )
-    ''')
+    # paper_library: migrated onto Core (lib/database/_core_schema.py).
+    # _table_exists guard REQUIRED on SQLite (bare execute, Core DDL has no
+    # IF NOT EXISTS). See tests/test_core_schema_parity.py.
+    from lib.database._core_schema import PAPER_LIBRARY, create_if_absent
+    create_if_absent(conn, PAPER_LIBRARY, table_exists=_table_exists)
     # ── Daily cost cache: pre-aggregated per-day LLM costs (avoids full
     # table scans on every calendar render).  date is 'YYYY-MM-DD' local time.
     # conversations_json stores the per-conv breakdown for drill-down.
     # Past days are cached forever (messages are immutable); today is always
     # recomputed live.  Invalidated on conv delete / message delete.
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS daily_cost_cache (
-            user_id INTEGER NOT NULL,
-            date TEXT NOT NULL,
-            cost REAL NOT NULL DEFAULT 0,
-            conversations_json TEXT NOT NULL DEFAULT '{}',
-            computed_at INTEGER NOT NULL DEFAULT 0,
-            PRIMARY KEY (user_id, date)
-        )
-    ''')
+    # daily_cost_cache: migrated onto Core (lib/database/_core_schema.py).
+    # _table_exists guard REQUIRED on SQLite (bare execute, Core DDL has no
+    # IF NOT EXISTS). Index stays below. See tests/test_core_schema_parity.py.
+    from lib.database._core_schema import DAILY_COST_CACHE, create_if_absent
+    create_if_absent(conn, DAILY_COST_CACHE, table_exists=_table_exists)
     cur.execute('CREATE INDEX IF NOT EXISTS idx_daily_cost_user_date ON daily_cost_cache(user_id, date)')
 
     cur.execute('CREATE INDEX IF NOT EXISTS idx_paper_lib_user ON paper_library(user_id, updated_at DESC)')
@@ -411,16 +362,11 @@ def _init_chat_schema(conn):
     # ── Paper translations: persistent cache for Babel-mode whole-paper
     # translations (server-owned task; mirrors paper_reports). lang is the
     # target language code ('zh', 'en', 'ja', …).
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS paper_translations (
-            paper_hash TEXT NOT NULL,
-            lang TEXT NOT NULL,
-            text TEXT NOT NULL DEFAULT '',
-            model TEXT NOT NULL DEFAULT '',
-            created_at INTEGER NOT NULL,
-            PRIMARY KEY (paper_hash, lang)
-        )
-    ''')
+    # paper_translations: migrated onto Core (lib/database/_core_schema.py).
+    # _table_exists guard REQUIRED on SQLite (bare execute, Core DDL has no
+    # IF NOT EXISTS). See tests/test_core_schema_parity.py.
+    from lib.database._core_schema import PAPER_TRANSLATIONS, create_if_absent
+    create_if_absent(conn, PAPER_TRANSLATIONS, table_exists=_table_exists)
 
     # Seed default user
     cur.execute("""

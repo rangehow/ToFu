@@ -32,6 +32,15 @@ DATA_DIR = os.path.join(os.path.dirname(sys.executable) if getattr(sys, 'frozen'
 _FIRST_LAUNCH_MARKER = os.path.join(DATA_DIR, '.components_prompted')
 
 
+def _diag(msg: str) -> None:
+    """Null-safe diagnostic write — sys.stderr is None in windowed builds."""
+    try:
+        if sys.stderr is not None:
+            sys.stderr.write(f'[Tofu] {msg}\n')
+    except Exception:
+        pass
+
+
 # ═══════════════════════════════════════════════════════════════
 #  Component Definitions
 # ═══════════════════════════════════════════════════════════════
@@ -179,6 +188,18 @@ def _prompt_gui(components: list[Component]) -> list[Component]:
     except ImportError:
         return _prompt_terminal(components)
 
+    # Per-monitor DPI awareness so the dialog isn't bitmap-stretched (blurry)
+    # on HiDPI Windows displays. No-op elsewhere / on older Windows.
+    if sys.platform.startswith('win'):
+        try:
+            import ctypes
+            try:
+                ctypes.windll.shcore.SetProcessDpiAwareness(2)
+            except Exception:
+                ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+
     selected = []
     root = tk.Tk()
     root.title('Tofu — Optional Components')
@@ -312,7 +333,7 @@ def run_first_launch_prompt():
             results = _install_components(selected)
             for name, success, msg in results:
                 status = '✓' if success else '✗'
-                sys.stderr.write(f'[Tofu] {status} {name}: {msg}\n')
+                _diag(f'{status} {name}: {msg}')
 
         thread = threading.Thread(target=_bg_install, daemon=True,
                                   name='component-installer')

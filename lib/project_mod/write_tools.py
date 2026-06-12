@@ -4,6 +4,7 @@ Extracted from tools.py for modularity. Re-exported via tools.py for backward co
 """
 
 import os
+import re
 from difflib import SequenceMatcher
 
 from lib.log import audit_log, get_logger
@@ -122,6 +123,14 @@ def tool_create_project(path, name=None, overwrite=False, conv_id=None, task_id=
         return {'ok': False, 'action': 'create_project', 'path': abs_path,
                 'error': 'No primary project is set. Open a project before calling create_project.'}
 
+    # ── Read-only guard: refuse to scaffold inside a read-only root ──
+    from lib.project_mod.config import is_readonly_path
+    if is_readonly_path(abs_path, conv_id=conv_id):
+        return {'ok': False, 'action': 'create_project', 'path': abs_path,
+                'error': (f'Refusing to create a project at {abs_path}: it is '
+                          f'inside a READ-ONLY workspace root. Choose a '
+                          f'writable location.')}
+
     # ── Create or verify directory ──
     already_existed = os.path.exists(abs_path)
     if already_existed:
@@ -207,35 +216,130 @@ def tool_create_project(path, name=None, overwrite=False, conv_id=None, task_id=
 #  Absolute-path write safety
 # ═══════════════════════════════════════════════════════
 
-def _resolve_write_path(base, rel_path):
+def _nearest_existing_dir(abs_path):
+    """Return the deepest already-existing ancestor directory of *abs_path*.
+
+    Walks up from the file's parent until an existing directory is found.
+    Returns None only in the degenerate case where even the filesystem
+    root doesn't exist (shouldn't happen on a sane system).
+    """
+    d = os.path.dirname(abs_path)
+    while d and not os.path.isdir(d):
+        parent = os.path.dirname(d)
+        if parent == d:  # reached the root without finding anything
+            return None
+        d = parent
+    return d or None
+
+
+def _enforce_not_readonly(target, conv_id=None):
+    """Raise :class:`ReadOnlyRootError` if *target* sits in a read-only root.
+
+    The single guard every write/edit tool passes through (via
+    ``_resolve_write_path``).  Resolution is conv-scoped so a concurrent
+    task's root policy never leaks in.
+    """
+    from lib.project_mod.config import ReadOnlyRootError, is_readonly_path
+    if is_readonly_path(target, conv_id=conv_id):
+        raise ReadOnlyRootError(
+            f'Refusing to write to {target}: it is inside a READ-ONLY '
+            f'workspace root. This root was attached for reference only — '
+            f'reads/greps are allowed but edits are not. Write to a '
+            f'writable root instead (or ask the user to make this root '
+            f'writable).')
+
+
+def _resolve_write_path(base, rel_path, conv_id=None):
     """Return the on-disk target for a write/edit tool, accepting either
-    a project-relative path or an absolute path under a *registered* root.
+    a project-relative path or an absolute path.
 
     Symmetrically mirrors ``read_files`` which also accepts absolute paths.
-    The key safety constraint: an absolute path must resolve INSIDE some
-    entry of ``_roots`` (the set of paths the user has explicitly opened
-    or created via ``create_project``).  Absolute paths outside every
-    registered root are rejected — preventing the model from silently
-    writing to ``/etc/passwd`` or similar just because it ignored the
-    ``rootname:`` convention.
+    Resolution rules for an absolute path:
+
+      1. If it already resolves INSIDE some registered root, use it directly.
+      2. Otherwise, as long as the destination is NOT a forbidden system
+         path (``/etc``, ``/usr``, ``$HOME`` itself, …), auto-register the
+         deepest existing ancestor directory as an extra workspace root and
+         allow the write.  This makes absolute-path writes "just work" the
+         same way absolute-path reads already do — without forcing the model
+         to call ``create_project`` first.
+      3. Forbidden system paths are still rejected outright.
 
     Raises ``ValueError`` on rejection so callers can surface the error
     consistently with the existing ``_safe_path`` code path.
     """
     if rel_path and (rel_path.startswith('/') or rel_path.startswith('~')):
         abs_path = os.path.abspath(os.path.expanduser(rel_path))
-        # Check containment against every registered root.
+        # Restricted (remote API) callers may only write inside an already
+        # registered root — never auto-register a new one from tool input.
+        # Enforced before the root scan + auto-register below so a remote
+        # principal can neither escape the sandbox nor expand it.
+        from lib.project_mod.abs_path_guard import enforce_abs_write
+        enforce_abs_write(abs_path)
+        # 1) Already under a registered root → use directly.
         with _lock:
             roots_snapshot = [rs['path'] for rs in _roots.values()]
         for root_path in roots_snapshot:
             norm_root = os.path.abspath(root_path).rstrip(os.sep) or root_path
             if abs_path == norm_root or abs_path.startswith(norm_root + os.sep):
+                _enforce_not_readonly(abs_path, conv_id=conv_id)
                 return abs_path
+
+        # 3) Refuse system paths (same policy as create_project).
+        if _is_forbidden_create_path(abs_path) or _is_forbidden_create_path(os.path.dirname(abs_path)):
+            raise ValueError(
+                f'Refusing to write to system path {abs_path}. '
+                f'Choose a user-writable location.'
+            )
+
+        # 2) Auto-register the nearest existing ancestor as an extra root.
+        anchor = _nearest_existing_dir(abs_path)
+        if anchor and not _is_forbidden_create_path(anchor):
+            try:
+                add_project_root(anchor)
+                logger.info('[WriteTools] Auto-registered workspace root %s for '
+                            'absolute-path write to %s', anchor, abs_path)
+                _enforce_not_readonly(abs_path, conv_id=conv_id)
+                return abs_path
+            except Exception as e:
+                logger.warning('[WriteTools] Auto-register of %s failed: %s', anchor, e)
+                raise ValueError(
+                    f'Cannot write to {abs_path}: failed to register a workspace '
+                    f'root for it ({e}).'
+                ) from e
+
         raise ValueError(
-            f'Absolute path {abs_path} is outside all registered workspace roots. '
-            f'Call create_project(path=...) first, or use a "rootname:relative" prefix.'
+            f'Absolute path {abs_path} could not be resolved to a writable '
+            f'workspace location. Use a "rootname:relative" prefix or call '
+            f'create_project(path=...).'
         )
-    return _safe_path(base, rel_path)
+    target = _safe_path(base, rel_path)
+    _enforce_not_readonly(target, conv_id=conv_id)
+    return target
+
+
+# Match \uXXXX, \UXXXXXXXX and \xXX escape sequences (literal backslash form).
+_UNICODE_ESCAPE_RE = re.compile(r'\\U[0-9a-fA-F]{8}|\\u[0-9a-fA-F]{4}|\\x[0-9a-fA-F]{2}')
+
+
+def _decode_unicode_escapes(s):
+    """Decode literal ``\\uXXXX`` / ``\\UXXXXXXXX`` / ``\\xXX`` escapes to the
+    characters they denote, leaving all other text untouched.
+
+    Models frequently emit a real glyph (e.g. ``⏰``, em-dash ``—``) in an
+    ``apply_diff`` search where the file on disk holds the literal escape text
+    (``\\u23f0``, ``\\u2014``) — or the reverse. Decoding both sides before
+    comparison lets the matcher see through this representation drift. Only the
+    three numeric-escape forms are decoded; ``\\n`` / ``\\t`` and other C-style
+    escapes are deliberately left alone to avoid surprising false matches.
+    """
+    def _repl(m):
+        try:
+            return chr(int(m.group(0)[2:], 16))
+        except (ValueError, OverflowError) as e:
+            logger.debug('[write_tools] undecodable unicode escape %r: %s', m.group(0), e)
+            return m.group(0)
+    return _UNICODE_ESCAPE_RE.sub(_repl, s)
 
 
 def _find_closest_match(content, search, threshold=0.6):
@@ -284,6 +388,48 @@ def _find_closest_match(content, search, threshold=0.6):
     return None
 
 
+def _describe_duplicate_matches(content, search, context=1, max_show=5):
+    """Build a human/LLM-friendly listing of where *search* matches in *content*.
+
+    For each occurrence, shows the 1-based line number plus a few lines of
+    surrounding context so the caller can pick a unique anchor.
+
+    Args:
+        content: The file text the search was run against.
+        search: The (already line-normalized) search block.
+        context: Lines of context to show before/after each match.
+        max_show: Cap on how many matches to render in detail.
+
+    Returns:
+        A formatted multi-line string, or '' if no line-aligned match exists.
+    """
+    search_lines = search.split('\n')
+    n = len(search_lines)
+    content_lines = content.split('\n')
+    if n == 0 or len(content_lines) < n:
+        return ''
+
+    starts = [i for i in range(len(content_lines) - n + 1)
+              if content_lines[i:i + n] == search_lines]
+    if not starts:
+        return ''
+
+    parts = []
+    for idx, start in enumerate(starts[:max_show], 1):
+        lo = max(0, start - context)
+        hi = min(len(content_lines), start + n + context)
+        block = []
+        for ln in range(lo, hi):
+            marker = '>' if start <= ln < start + n else ' '
+            block.append(f'{marker} {ln + 1}: {content_lines[ln]}')
+        parts.append(f'Match {idx} (line {start + 1}):\n' + '\n'.join(block))
+
+    out = '\n\n'.join(parts)
+    if len(starts) > max_show:
+        out += f'\n\n… and {len(starts) - max_show} more match(es).'
+    return out
+
+
 # ═══════════════════════════════════════════════════════
 #  VS Code file-watcher nudge
 # ═══════════════════════════════════════════════════════
@@ -311,7 +457,7 @@ def tool_write_file(base, rel_path, content, description='', conv_id=None, task_
         useful for writing into directories created by ``create_project``.
     """
     try:
-        target = _resolve_write_path(base, rel_path)
+        target = _resolve_write_path(base, rel_path, conv_id=conv_id)
     except ValueError as e:
         logger.debug('[Tools] write_file path rejected %s: %s', rel_path, e, exc_info=True)
         return {'ok': False, 'error': str(e), 'action': 'write_file', 'path': rel_path}
@@ -374,7 +520,7 @@ def _apply_one_diff(base, rel_path, search, replace, description='', conv_id=Non
     Accepts project-relative paths and absolute paths under registered roots.
     """
     try:
-        target = _resolve_write_path(base, rel_path)
+        target = _resolve_write_path(base, rel_path, conv_id=conv_id)
     except ValueError as e:
         logger.debug('[Tools] apply_diff path rejected %s: %s', rel_path, e, exc_info=True)
         return {'ok': False, 'error': str(e), 'action': 'apply_diff', 'path': rel_path}
@@ -407,9 +553,14 @@ def _apply_one_diff(base, rel_path, search, replace, description='', conv_id=Non
 
             if tw_count >= 1:
                 if tw_count > 1 and not replace_all:
+                    locs = _describe_duplicate_matches(tw_content, tw_search)
+                    error_msg = (f'Search text matches {tw_count} locations (after trailing-whitespace '
+                                 f'normalization). Make it more specific (add surrounding lines so it '
+                                 f'matches exactly once), or set replace_all=true to replace all occurrences.')
+                    if locs:
+                        error_msg += f'\n\n{locs}'
                     return {'ok': False, 'action': 'apply_diff', 'path': rel_path,
-                            'error': f'Search text matches {tw_count} locations (after trailing-whitespace normalization). '
-                                     f'Make it more specific, or set replace_all=true to replace all occurrences.'}
+                            'error': error_msg}
                 tw_lines = tw_content.split('\n')
                 search_lines = tw_search.split('\n')
                 n_sl = len(search_lines)
@@ -436,7 +587,46 @@ def _apply_one_diff(base, rel_path, search, replace, description='', conv_id=Non
                 else:
                     tw_count = 0
 
+            # ── Tier 4: unicode-escape normalization ──
+            # The model often emits a real glyph (⏰, em-dash …) where the file
+            # holds the literal escape sequence (\u23f0, \u2014), or vice-versa.
+            # Decode \uXXXX / \UXXXXXXXX / \xXX on BOTH sides for the comparison
+            # only, then splice the model's verbatim replacement into the real
+            # file lines.
             if tw_count == 0:
+                esc_content_lines = [_decode_unicode_escapes(l).rstrip()
+                                     for l in norm_content.split('\n')]
+                esc_search_lines = [_decode_unicode_escapes(l).rstrip()
+                                    for l in norm_search.split('\n')]
+                n_el = len(esc_search_lines)
+                esc_starts = [i for i in range(len(esc_content_lines) - n_el + 1)
+                              if esc_content_lines[i:i + n_el] == esc_search_lines]
+                if esc_starts:
+                    if len(esc_starts) > 1 and not replace_all:
+                        esc_content = '\n'.join(esc_content_lines)
+                        esc_search = '\n'.join(esc_search_lines)
+                        locs = _describe_duplicate_matches(esc_content, esc_search)
+                        error_msg = (f'Search text matches {len(esc_starts)} locations (after unicode-escape '
+                                     f'normalization). Make it more specific (add surrounding lines so it '
+                                     f'matches exactly once), or set replace_all=true to replace all occurrences.')
+                        if locs:
+                            error_msg += f'\n\n{locs}'
+                        return {'ok': False, 'action': 'apply_diff', 'path': rel_path,
+                                'error': error_msg}
+                    content_lines = norm_content.split('\n')
+                    replace_lines = replace.replace('\r\n', '\n').split('\n')
+                    for start_idx in reversed(esc_starts):
+                        content_lines[start_idx:start_idx + n_el] = replace_lines
+                        if not replace_all:
+                            break
+                    content = '\n'.join(content_lines)
+                    search = norm_search
+                    count = len(esc_starts)
+                    _tw_replaced = True
+                    logger.debug('apply_diff: unicode-escape normalized match in %s '
+                                 '(%d locations)', rel_path, count)
+
+            if tw_count == 0 and not _tw_replaced:
                 hint = _find_closest_match(norm_content, norm_search)
                 error_msg = (f'Search text not found in {rel_path}. '
                              f'File has {content.count(chr(10))+1} lines. '
@@ -453,8 +643,13 @@ def _apply_one_diff(base, rel_path, search, replace, description='', conv_id=Non
             search = norm_search
 
     if count > 1 and not replace_all:
+        locs = _describe_duplicate_matches(content, search)
+        error_msg = (f'Search text matches {count} locations. Make it more specific (add surrounding '
+                     f'lines so it matches exactly once), or set replace_all=true to replace all occurrences.')
+        if locs:
+            error_msg += f'\n\n{locs}'
         return {'ok': False, 'action': 'apply_diff', 'path': rel_path,
-                'error': f'Search text matches {count} locations. Make it more specific, or set replace_all=true to replace all occurrences.'}
+                'error': error_msg}
 
     if _tw_replaced:
         new_content = content
@@ -504,6 +699,24 @@ def tool_apply_diff(base, rel_path, search, replace, description='', conv_id=Non
     return _apply_one_diff(base, rel_path, search, replace, description, conv_id, replace_all=replace_all, task_id=task_id)
 
 
+def _invalid_edit_entry_msg(i, edit):
+    """Build an actionable FAIL line for a batch edit that isn't an object.
+
+    The common cause is a model emitting the whole ``edits`` array as one
+    escaped JSON *string* (often with unescaped inner quotes, so it can't be
+    auto-parsed) — the harness then wraps that string into a single-element
+    list, and each element is a str, not a dict. Tell the model exactly that
+    so it re-emits a real array of objects instead of retrying blind.
+    """
+    if isinstance(edit, str):
+        return (f'[{i}] FAIL Invalid edit entry: got a string, expected an '
+                f'object with {{path, search, replace}}. The "edits" array '
+                f'must be real JSON objects, not a single stringified-JSON '
+                f'blob — re-send each edit as its own object.')
+    return (f'[{i}] FAIL Invalid edit entry: expected an object with '
+            f'{{path, search, replace}}, got {type(edit).__name__}.')
+
+
 def tool_apply_diffs(base_path, edits, conv_id=None, task_id=None):
     """Apply multiple search-and-replace edits in one batch."""
     if not edits:
@@ -522,7 +735,7 @@ def tool_apply_diffs(base_path, edits, conv_id=None, task_id=None):
 
     for i, edit in enumerate(edits, 1):
         if not isinstance(edit, dict):
-            results.append(f'[{i}] FAIL Invalid edit entry')
+            results.append(_invalid_edit_entry_msg(i, edit))
             fail_count += 1
             continue
 
@@ -588,7 +801,7 @@ def _insert_one(base, rel_path, anchor, content, position='after', description='
         dict with ok, action, path, error (on failure), or ok + line info (on success).
     """
     try:
-        target = _resolve_write_path(base, rel_path)
+        target = _resolve_write_path(base, rel_path, conv_id=conv_id)
     except ValueError as e:
         logger.debug('[Tools] insert_content path rejected %s: %s', rel_path, e, exc_info=True)
         return {'ok': False, 'error': str(e), 'action': 'insert_content', 'path': rel_path}
@@ -627,7 +840,37 @@ def _insert_one(base, rel_path, anchor, content, position='after', description='
             tw_anchor = _rstrip_lines(norm_anchor)
             tw_count = tw_content.count(tw_anchor)
 
+            # ── Tier 4: unicode-escape normalization ──
+            # Glyph-vs-literal-escape drift (anchor "⏰" vs file "\u23f0").
+            # Decode \uXXXX / \UXXXXXXXX / \xXX on both sides for matching,
+            # then reconstruct the real anchor text from the file lines.
             if tw_count == 0:
+                esc_content_lines = [_decode_unicode_escapes(l).rstrip()
+                                     for l in norm_content.split('\n')]
+                esc_anchor_lines = [_decode_unicode_escapes(l).rstrip()
+                                    for l in norm_anchor.split('\n')]
+                n_el = len(esc_anchor_lines)
+                esc_starts = [i for i in range(len(esc_content_lines) - n_el + 1)
+                              if esc_content_lines[i:i + n_el] == esc_anchor_lines]
+                if len(esc_starts) == 1:
+                    real_lines = norm_content.split('\n')[esc_starts[0]:esc_starts[0] + n_el]
+                    norm_anchor = '\n'.join(real_lines)
+                    count = 1
+                    _normalized = True
+                    logger.debug('insert_content: unicode-escape normalized match in %s', rel_path)
+                elif len(esc_starts) > 1:
+                    esc_content = '\n'.join(esc_content_lines)
+                    esc_anchor = '\n'.join(esc_anchor_lines)
+                    locs = _describe_duplicate_matches(esc_content, esc_anchor)
+                    error_msg = (f'Anchor text matches {len(esc_starts)} locations (after unicode-escape '
+                                 f'normalization). Make it more specific by adding surrounding lines so it '
+                                 f'matches exactly once.')
+                    if locs:
+                        error_msg += f'\n\n{locs}'
+                    return {'ok': False, 'action': 'insert_content', 'path': rel_path,
+                            'error': error_msg}
+
+            if tw_count == 0 and not _normalized:
                 hint = _find_closest_match(norm_content, norm_anchor)
                 error_msg = (f'Anchor text not found in {rel_path}. '
                              f'File has {file_content.count(chr(10))+1} lines. '
@@ -639,45 +882,54 @@ def _insert_one(base, rel_path, anchor, content, position='after', description='
                         'error': error_msg, 'anchorLen': len(anchor)}
 
             if tw_count > 1:
+                locs = _describe_duplicate_matches(tw_content, tw_anchor)
+                error_msg = (f'Anchor text matches {tw_count} locations (after trailing-whitespace '
+                             f'normalization). Make it more specific by adding surrounding lines so it '
+                             f'matches exactly once.')
+                if locs:
+                    error_msg += f'\n\n{locs}'
                 return {'ok': False, 'action': 'insert_content', 'path': rel_path,
-                        'error': f'Anchor text matches {tw_count} locations '
-                                 f'(after trailing-whitespace normalization). '
-                                 f'Make it more specific.'}
+                        'error': error_msg}
 
             # Single match after TW normalization — find the real position
-            # by matching line-by-line in the original content
-            tw_lines = tw_content.split('\n')
-            anchor_lines = tw_anchor.split('\n')
-            n_al = len(anchor_lines)
-            content_lines = norm_content.split('\n')
+            # by matching line-by-line in the original content.
+            # Skipped when tier-4 escape normalization already resolved a match.
+            if tw_count == 1 and not _normalized:
+                tw_lines = tw_content.split('\n')
+                anchor_lines = tw_anchor.split('\n')
+                n_al = len(anchor_lines)
+                content_lines = norm_content.split('\n')
 
-            match_start = None
-            for i in range(len(tw_lines) - n_al + 1):
-                if tw_lines[i:i + n_al] == anchor_lines:
-                    match_start = i
-                    break
+                match_start = None
+                for i in range(len(tw_lines) - n_al + 1):
+                    if tw_lines[i:i + n_al] == anchor_lines:
+                        match_start = i
+                        break
 
-            if match_start is not None:
-                # Reconstruct the original anchor text from the file
-                orig_anchor_lines = content_lines[match_start:match_start + n_al]
-                norm_anchor = '\n'.join(orig_anchor_lines)
-                norm_content = norm_content  # already LF-normalized
-                count = 1
-                _normalized = True
-                logger.debug('insert_content: trailing-WS normalized match in %s', rel_path)
-            else:
-                return {'ok': False, 'action': 'insert_content', 'path': rel_path,
-                        'error': 'Anchor matched after normalization but line mapping failed. '
-                                 'Please use read_files to get the exact content.'}
+                if match_start is not None:
+                    # Reconstruct the original anchor text from the file
+                    orig_anchor_lines = content_lines[match_start:match_start + n_al]
+                    norm_anchor = '\n'.join(orig_anchor_lines)
+                    count = 1
+                    _normalized = True
+                    logger.debug('insert_content: trailing-WS normalized match in %s', rel_path)
+                else:
+                    return {'ok': False, 'action': 'insert_content', 'path': rel_path,
+                            'error': 'Anchor matched after normalization but line mapping failed. '
+                                     'Please use read_files to get the exact content.'}
 
     if _normalized:
         file_content = norm_content
         anchor = norm_anchor
 
     if count > 1:
+        locs = _describe_duplicate_matches(file_content, anchor)
+        error_msg = (f'Anchor text matches {count} locations. Make it more specific to identify a '
+                     f'unique position by adding surrounding lines.')
+        if locs:
+            error_msg += f'\n\n{locs}'
         return {'ok': False, 'action': 'insert_content', 'path': rel_path,
-                'error': f'Anchor text matches {count} locations. '
-                         f'Make it more specific to identify a unique position.'}
+                'error': error_msg}
 
     # ── Build new content ──
     anchor_idx = file_content.index(anchor)
@@ -777,7 +1029,7 @@ def tool_insert_contents(base_path, edits, conv_id=None, task_id=None):
 
     for i, edit in enumerate(edits, 1):
         if not isinstance(edit, dict):
-            results.append(f'[{i}] FAIL Invalid edit entry')
+            results.append(_invalid_edit_entry_msg(i, edit))
             fail_count += 1
             continue
 

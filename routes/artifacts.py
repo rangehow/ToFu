@@ -33,18 +33,11 @@ from flask import Blueprint, Response, jsonify, request
 
 from lib.artifacts import (
     ArtifactNotFoundError,
-    delete_artifact,
     get_artifact,
     get_artifact_meta,
-    list_artifacts,
-    list_pinned_or_recent,
-    list_versions,
-    scan_message,
-    set_pinned,
 )
 from lib.log import audit_log, get_logger
 from lib.api_response import api_bad_request, api_error, api_internal_error, api_not_found
-from lib.request_parser import parse_body
 
 logger = get_logger(__name__)
 

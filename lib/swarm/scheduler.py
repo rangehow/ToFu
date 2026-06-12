@@ -458,7 +458,7 @@ class StreamingScheduler:
                         except Exception as e:
                             logger.warning('[Scheduler] on_retry callback error for %s: %s', spec.id, e, exc_info=True)
                     spec.context += (
-                        f'\n\n⚠️ Previous attempt failed with: '
+                        f'\n\nPrevious attempt failed with: '
                         f'{result.error_message}\n'
                         f'Please try a different approach.'
                     )
@@ -481,7 +481,7 @@ class StreamingScheduler:
                         except Exception as e:
                             logger.warning('[Scheduler] on_retry callback error for %s: %s', spec.id, e, exc_info=True)
                     spec.context += (
-                        f'\n\n⚠️ Previous attempt failed with: {err_msg}\n'
+                        f'\n\nPrevious attempt failed with: {err_msg}\n'
                         f'Please try a different approach.'
                     )
                 else:

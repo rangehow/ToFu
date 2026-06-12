@@ -181,12 +181,41 @@ class TestBuildBody:
         assert "tools" in body
         assert len(body["tools"]) == 1
 
+    def test_response_format_passed_through(self):
+        from lib.llm import build_body
+
+        rf = {"type": "json_object"}
+        body = build_body('claude-sonnet-4-20250514', self.DUMMY_MSGS,
+                          max_tokens=4096, response_format=rf, stream=False)
+        assert body["response_format"] == rf
+
+    def test_response_format_absent_by_default(self):
+        from lib.llm import build_body
+
+        body = build_body('claude-sonnet-4-20250514', self.DUMMY_MSGS,
+                          max_tokens=4096, stream=False)
+        assert "response_format" not in body
+
+    def test_extra_overrides_response_format(self):
+        from lib.llm import build_body
+
+        body = build_body('claude-sonnet-4-20250514', self.DUMMY_MSGS,
+                          max_tokens=4096,
+                          response_format={"type": "json_object"},
+                          extra={"response_format": {"type": "text"}},
+                          stream=False)
+        assert body["response_format"] == {"type": "text"}
+
     def test_unknown_model_no_clamping(self):
         from lib.llm import build_body
 
+        # An unknown model is not subject to the per-model output-ceiling
+        # clamp (_clamp_max_tokens). 500000 stays well under the 1M default
+        # context window, so the context-window clamp
+        # (_clamp_completion_to_context_window) leaves it untouched too.
         body = build_body("unknown-model-xyz", self.DUMMY_MSGS,
-                         max_tokens=999999, stream=False)
-        assert body["max_tokens"] == 999999
+                         max_tokens=500000, stream=False)
+        assert body["max_tokens"] == 500000
         assert "thinking" not in body
         assert "enable_thinking" not in body
 
@@ -478,9 +507,13 @@ class TestByoProviderThinkingFormat:
 
     def test_create_default_is_empty(self, monkeypatch, tmp_path):
         byo = self._isolate(monkeypatch, tmp_path)
+        # Use a private IP literal (like the sibling tests) so the SSRF egress
+        # guard in _validate_base_url passes without a live DNS lookup — CI
+        # runners have no outbound DNS, and a real hostname here would raise
+        # EgressDenied('DNS resolution failed').
         row = byo.create_provider(
             owner_key_id='k_test', name='cloud',
-            base_url='https://api.example.com/v1', api_key='', models=[],
+            base_url='http://10.0.0.1:8080/v1', api_key='', models=[],
         )
         assert row['thinking_format'] == ''
 

@@ -1,6 +1,6 @@
 ---
 name: image-gen-chinese-text-limitation
-description: generate_image 无法准确渲染中文字符，应生成纯背景让用户叠字
+description: generate_image (gemini-2.5-flash-image) cannot render Chinese/CJK characters accurately in posters/banners/covers — generate a text-free background and overlay the title in PPT/PS/Figma; English and digits render OK. 中文海报标题渲染缺陷，应生成纯背景让用户叠字
 enabled: true
 tags: [image-gen, chinese, poster, limitation]
 created: 2026-05-05T07:02:37Z

@@ -35,7 +35,7 @@ import re
 import threading
 import time
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify
 
 from lib.api_response import api_bad_request, api_not_found, api_ok
 from lib.daily_report import (  # noqa: F401  — back-compat re-exports
@@ -84,7 +84,7 @@ from lib.daily_report import (  # noqa: F401  — back-compat re-exports
     start_report_scheduler,
 )
 from lib.log import get_logger
-from lib.request_parser import parse_body
+from lib.request_parser import async_parse_body
 from routes.common import _db_safe
 
 from .auth import require_auth
@@ -101,14 +101,14 @@ api_v1_daily_report_bp = Blueprint('api_v1_daily_report', __name__)
 @api_v1_daily_report_bp.route('/api/v1/daily-report', methods=['POST'])
 @require_auth
 @_db_safe
-def generate_daily_report():
+async def generate_daily_report():
     """Analyse conversations for a given date using DB-based extraction.
 
     Always extracts conversations from the database for accurate counts.
     Body: {date?: 'YYYY-MM-DD', force?: true}
     """
     t0 = time.monotonic()
-    data = parse_body()
+    data = await async_parse_body()
     target_date = data.get('date', _dt.date.today().isoformat())
     force = data.get('force', False)
 
@@ -163,7 +163,7 @@ def generate_daily_report():
 
 @api_v1_daily_report_bp.route('/api/v1/daily-report/<date_str>')
 @require_auth
-def get_cached_report(date_str):
+async def get_cached_report(date_str):
     """Get a previously generated report for a specific date."""
     if not re.match(r'^\d{4}-\d{2}-\d{2}$', date_str):
         return api_bad_request('Invalid date format')
@@ -196,7 +196,7 @@ def get_cached_report(date_str):
 @api_v1_daily_report_bp.route('/api/v1/daily-report/backfill/<date_str>', methods=['POST'])
 @require_auth
 @_db_safe
-def backfill_report(date_str):
+async def backfill_report(date_str):
     """Server-side backfill: extract conversations from DB and analyse.
 
     Used for past days when the frontend didn't generate a report.
@@ -235,7 +235,7 @@ def backfill_report(date_str):
 
 @api_v1_daily_report_bp.route('/api/v1/daily-report/calendar/<int:year>/<int:month>')
 @require_auth
-def get_calendar_month(year, month):
+async def get_calendar_month(year, month):
     """Month overview: which days have cached reports + task counts."""
     if month < 1 or month > 12:
         return api_bad_request('Invalid month')
@@ -299,7 +299,7 @@ def get_calendar_month(year, month):
         # ── Compute conv_days from DB (which days have conversations) ──
         conv_days = {}
         try:
-            from lib.database import DOMAIN_CHAT, get_thread_db
+            from lib.database import DOMAIN_CHAT, async_fetchall
             from lib.utils import safe_json
 
             month_start = _dt.date(year, month, 1)
@@ -310,18 +310,18 @@ def get_calendar_month(year, month):
             ms_start = int(_dt.datetime.combine(month_start, _dt.time.min).timestamp() * 1000)
             ms_end = int(_dt.datetime.combine(month_end, _dt.time.min).timestamp() * 1000)
 
-            db = get_thread_db(DOMAIN_CHAT)
             # SQL-level date filter: only fetch convs whose window overlaps
             # the target month.  Bound both ends so we don't scan the whole
             # future history (created_at / updated_at are BIGINT epoch-ms).
-            rows = db.execute(
+            rows = await async_fetchall(
                 'SELECT id, messages, created_at, updated_at '
                 'FROM conversations WHERE user_id=? AND '
                 'COALESCE(updated_at, created_at, 0) >= ? AND '
                 'COALESCE(created_at, updated_at, 0) < ? '
                 'ORDER BY updated_at DESC',
-                (DEFAULT_USER_ID, ms_start, ms_end)
-            ).fetchall()
+                (DEFAULT_USER_ID, ms_start, ms_end),
+                domain=DOMAIN_CHAT,
+            )
             for r in rows:
                 msgs = safe_json(r['messages'], default=[], label='cal-conv-days')
                 if not isinstance(msgs, list) or not msgs:
@@ -365,24 +365,49 @@ def get_calendar_month(year, month):
                     'conv_days': conv_days, 'cost_days': cost_days})
 
 
+# Canonical task-status cycle order. The "click to advance" UI used to
+# hard-code this array in static/js/myday.js and compute the next status
+# client-side; that domain rule now lives here so the frontend only renders
+# the authoritative status the server returns.
+_STATUS_CYCLE = ('in_progress', 'done', 'blocked')
+
+
+def _next_cycle_status(current: str) -> str:
+    """Return the status that follows ``current`` in the manual toggle cycle."""
+    try:
+        idx = _STATUS_CYCLE.index(current)
+    except ValueError:
+        # Unknown / LLM-only status (e.g. 'incomplete') — start the cycle.
+        logger.debug('[DailyReport] status %r not in cycle — restarting', current)
+        return _STATUS_CYCLE[0]
+    return _STATUS_CYCLE[(idx + 1) % len(_STATUS_CYCLE)]
+
+
 @api_v1_daily_report_bp.route('/api/v1/daily-report/task-status', methods=['PATCH'])
 @require_auth
 @_db_safe
-def update_task_status():
+async def update_task_status():
     """Update the status of a single task in a daily report.
 
     Allows users to manually override the LLM-assigned completion status.
-    Body: {date: 'YYYY-MM-DD', conv_id: '...', status: 'done'|'incomplete'}
+
+    Body: ``{date, stream_id|conv_id|task_id, status?, action?}``
+      * ``status`` — set an explicit status ('done'|'in_progress'|'blocked'|'incomplete').
+      * ``action='cycle'`` — advance the item to the next status in the
+        canonical cycle (in_progress → done → blocked → …). The server owns
+        the cycle order; the response carries the resulting ``status``.
     """
-    data = parse_body()
+    data = await async_parse_body()
     date_str = data.get('date', '')
     item_id = data.get('stream_id', '') or data.get('conv_id', '') or data.get('task_id', '')
     new_status = data.get('status', '')
+    action = data.get('action', '')
+    cycle = (action == 'cycle') or not new_status
 
-    if not all([date_str, item_id, new_status]):
+    if not date_str or not item_id:
         return api_bad_request('Missing required fields')
     valid_statuses = ('done', 'in_progress', 'blocked', 'incomplete')
-    if new_status not in valid_statuses:
+    if not cycle and new_status not in valid_statuses:
         return jsonify({'ok': False, 'error': f'Invalid status — must be one of {valid_statuses}'}), 400
     if not re.match(r'^\d{4}-\d{2}-\d{2}$', date_str):
         return api_bad_request('Invalid date format')
@@ -391,48 +416,54 @@ def update_task_status():
     if not report:
         return api_not_found('No report for this date')
 
+    def _apply(item) -> str:
+        old_status = item.get('status', '?')
+        resolved = _next_cycle_status(old_status) if cycle else new_status
+        item['status'] = resolved
+        item['_manual'] = True
+        if resolved == 'done':
+            item['remaining'] = None
+        return old_status
+
     found = False
+    resolved_status = new_status
     # Try streams first
     for stream in report.get('streams', []):
         if stream.get('id') == item_id:
-            old_status = stream.get('status', '?')
-            stream['status'] = new_status
-            stream['_manual'] = True
-            if new_status == 'done':
-                stream['remaining'] = None
+            old_status = _apply(stream)
+            resolved_status = stream['status']
             found = True
             logger.info('[DailyReport] Stream status updated %s: %s → %s (id=%s)',
-                        date_str, old_status, new_status, item_id)
+                        date_str, old_status, resolved_status, item_id)
             break
 
     # Fall back to tasks (manual todos)
     if not found:
         for task in report.get('tasks', []):
             if task.get('conv_id') == item_id or task.get('id') == item_id:
-                old_status = task.get('status', '?')
-                task['status'] = new_status
-                task['_manual'] = True
+                old_status = _apply(task)
+                resolved_status = task['status']
                 found = True
                 logger.info('[DailyReport] Task status updated %s: %s → %s (id=%s)',
-                            date_str, old_status, new_status, item_id)
+                            date_str, old_status, resolved_status, item_id)
                 break
 
     if not found:
         return api_not_found('Item not found in report')
 
     _save_report(date_str, report)
-    return api_ok({'status': new_status})
+    return api_ok({'status': resolved_status})
 
 
 @api_v1_daily_report_bp.route('/api/v1/daily-report/todo-toggle', methods=['PATCH'])
 @require_auth
 @_db_safe
-def toggle_tomorrow_todo():
+async def toggle_tomorrow_todo():
     """Toggle the done state of a tomorrow TODO item.
 
     Body: {date: 'YYYY-MM-DD', todo_id: 'todo-...', done: true|false}
     """
-    data = parse_body()
+    data = await async_parse_body()
     date_str = data.get('date', '')
     todo_id = data.get('todo_id', '')
     done = data.get('done', False)
@@ -462,7 +493,7 @@ def toggle_tomorrow_todo():
 @api_v1_daily_report_bp.route('/api/v1/daily-report/inherited-todo-toggle', methods=['PATCH'])
 @require_auth
 @_db_safe
-def toggle_inherited_todo():
+async def toggle_inherited_todo():
     """Toggle a TODO item that was inherited from a previous day's report.
 
     This is a cross-day operation: the item lives in ``origin_date``'s
@@ -471,7 +502,7 @@ def toggle_inherited_todo():
 
     Body: {origin_date: 'YYYY-MM-DD', todo_id: 'todo-...', done: bool}
     """
-    data = parse_body()
+    data = await async_parse_body()
     origin_date = data.get('origin_date', '')
     todo_id = data.get('todo_id', '')
     done = data.get('done', False)
@@ -504,7 +535,7 @@ def toggle_inherited_todo():
 @api_v1_daily_report_bp.route('/api/v1/daily-report/inherited-todo', methods=['DELETE', 'POST'])
 @require_auth
 @_db_safe
-def delete_inherited_todo():
+async def delete_inherited_todo():
     """Delete a TODO item inherited from a previous day's report.
 
     This removes the item from the origin date's ``tomorrow[]`` array,
@@ -512,7 +543,7 @@ def delete_inherited_todo():
 
     Body: ``{origin_date: 'YYYY-MM-DD', todo_id: 'todo-...'}``
     """
-    data = parse_body()
+    data = await async_parse_body()
     origin_date = data.get('origin_date', '')
     todo_id = data.get('todo_id', '')
 
@@ -539,7 +570,7 @@ def delete_inherited_todo():
 
 @api_v1_daily_report_bp.route('/api/v1/daily-report/conv-count/<date_str>')
 @require_auth
-def get_conv_count(date_str):
+async def get_conv_count(date_str):
     """Return the number of conversations with activity on a given date.
 
     Queries the database directly — reliable count regardless of frontend state.
@@ -555,13 +586,13 @@ def get_conv_count(date_str):
 @api_v1_daily_report_bp.route('/api/v1/daily-report/task', methods=['POST'])
 @require_auth
 @_db_safe
-def add_manual_task():
+async def add_manual_task():
     """Add a manually created TODO item to a daily report.
 
     Body: ``{date: 'YYYY-MM-DD', task: 'task description'}``
     Creates the report file if it doesn't exist.
     """
-    data = parse_body()
+    data = await async_parse_body()
     date_str = data.get('date', '')
     task_text = (data.get('task', '') or '').strip()
 
@@ -591,12 +622,12 @@ def add_manual_task():
 @api_v1_daily_report_bp.route('/api/v1/daily-report/task', methods=['DELETE'])
 @require_auth
 @_db_safe
-def delete_manual_task():
+async def delete_manual_task():
     """Delete a TODO item from a daily report.
 
     Body: ``{date: 'YYYY-MM-DD', task_id: 'todo-...'}``
     """
-    data = parse_body()
+    data = await async_parse_body()
     date_str = data.get('date', '')
     task_id = data.get('task_id', '')
 
@@ -624,13 +655,13 @@ def delete_manual_task():
 @api_v1_daily_report_bp.route('/api/v1/daily-report/generate', methods=['POST'])
 @require_auth
 @_db_safe
-def start_generation():
+async def start_generation():
     """Start async report generation.  Returns immediately.
 
     Body: {date?: 'YYYY-MM-DD', force?: true}
     Poll ``/api/daily-report/status/<date>`` for progress.
     """
-    data = parse_body()
+    data = await async_parse_body()
     target_date = data.get('date', _dt.date.today().isoformat())
     force = data.get('force', False)
 
@@ -668,7 +699,7 @@ def start_generation():
 
 @api_v1_daily_report_bp.route('/api/v1/daily-report/status/<date_str>')
 @require_auth
-def get_generation_status(date_str):
+async def get_generation_status(date_str):
     """Poll generation progress for a date.
 
     Returns one of:

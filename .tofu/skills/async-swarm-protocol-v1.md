@@ -1,51 +1,39 @@
 ---
 name: async-swarm-protocol-v1
-description: Async swarm protocol: spawn returns handle, sub-agent updates flow through agent_inbox, no review/synthesis
+description: Async swarm v2 (Option A): conv-keyed sessions survive turn end. Phase1: swarm events mirrored to /api/push so panel settles. Phase2: on_settled hook auto-continues main agent (create_task) when swarm settles with pending inbox + idle conv, guarded by chain ceiling + latch
 enabled: true
 tags: [swarm, architecture, convention]
 created: 2026-05-27T16:21:46Z
-updated: 2026-05-27T16:21:46Z
+updated: 2026-06-08T05:30:57Z
 ---
 
-# Async Swarm Protocol (v1 — replaces all reactive/synthesis paths)
+## v2 — Conversation-scoped sessions (Option A, 2026-06-05)
+- `swarm_key_for(task)` = `task['convId'] or task['id']` — SINGLE key for session+inbox. Sessions keyed by swarm_key in `_active_sessions`; `_key_aliases{task_id→key}` for route callers.
+- `MasterOrchestrator.inbox_key = inbox_key or conv_id or task_id`; all inbox ops use it.
+- `_key_is_live(key)` scans chat task registry for any non-terminal task with convId==key. orchestrator.py finalization: abort+remove+clear ONLY on `task['aborted']` or `sess.is_terminated`; else **DETACH**.
+- `await_agents`/`get_agent_result` resolve `_get_session(swarm_key) or _get_session(task_id)`; `_await_from_disk` + `_read_agent_log` cross-task glob fallback.
 
-## Tools the master LLM sees
-- `spawn_agents(agents=[{objective, context?, role?, depends_on?}])` — fire-and-forget; returns JSON `{status:"async_launched", swarm_id, agents:[{id, role, objective, output_file}]}`. Calling again with an existing session injects new specs into the live scheduler (no separate spawn_more tool).
-- `await_agents(ids?, mode='any'|'all', timeout_seconds<=120)` — block until ≥1 / all complete; returns `{completed:[...], still_running:[...], timed_out}`.
-- `get_agent_result(agent_id)` — full final answer, or status notice for running/pending.
-- `store_artifact / read_artifact / list_artifacts` — shared K-V.
+## Phase 1 (2026-06-08) — cross-turn panel settle via /api/push (fixes stuck "N running async" badge)
+Root cause: swarm events emitted ONLY on spawning turn's SSE stream, which closes at turn end → terminal `swarm_phase:complete` never reaches browser.
+- `integration._handle_spawn_agents._emit(ev)` ALSO `push_event('swarm', push_conv_id, ev)`. push_conv_id = task['convId'] or cfg['convId'].
+- NEW `static/js/ui/swarm_push.js`: `pushSubscribe('swarm','*', fn)`. Skip if `activeStreams.has(convId)` (SSE authoritative). Else replay frame through EXISTING `_handleSwarmPhase`/`_handleSwarmAgent` with synthetic ctx `{convId, taskId:convId, assistantMsg:<swarm-owner>, buf:null, epCritic*}`, then `renderChat(conv,false)` (committed panel, twUpdate only repaints streaming zone).
+- Registered in `_BUNDLE_FILES` after `ui/sse_poll_fallback.js`; `<script>` in index.html.
 
-**Removed forever**: `spawn_more_agents`, `swarm_done`, `check_agents`, `REACTIVE_MASTER_TOOLS`, `_master_review`, `_synthesise`, `run_reactive*`, `run_swarm_task`, `lib/swarm/compat.py`, `lib/swarm/review.py`, `lib/swarm/synthesis.py`.
-
-## Sub-agent denylist
-`lib.swarm.tools.SUB_AGENT_DENYLIST = {spawn_agents, await_agents, get_agent_result, ask_human}`. Stripped by `scope_tools_for_role` for ALL roles (including `general`). Sub-agents only get the artifact tools on top of role-scoped tools.
-
-## Inbox — the model-facing notification queue
-- `lib/agent_inbox.py` — per-task priority queue (now > next > later), distinct from `lib/push.py` (UI-facing).
-- On every sub-agent completion, `MasterOrchestrator._on_agent_complete_callback` calls `agent_inbox.enqueue(task_id, format_swarm_update(...), priority='later', mode='swarm-update')`.
-- `lib/tasks_pkg/orchestrator.py` drains the inbox **right before each LLM call**, prepending each item as a `user` `_isMeta` message. Skipped when the previous turn ended with an unmatched `assistant tool_calls` — wait for the tool_result pair to close.
-- Task end (`task['status'] = 'done'` block in orchestrator) calls `agent_inbox.clear(task_id)` and `_remove_session(task_id)` to prevent leaks.
-
-## Per-agent output files
-Each sub-agent streams content + thinking to `data/swarm/<task_id>/<agent_id>.log`. Path returned in handle and in `<swarm-update>` so the model can `read_files` it if explicitly asked, but system prompt tells it not to.
-
-## System prompt
-`<parallel_execution>` block in `lib/tasks_pkg/system_context.py:_inject_system_contexts`. Teaches:
-- "fire and forget, don't poll, don't peek output_file, don't fabricate results, use await_agents only when nothing else to do".
-- Worked example with multi-round timing including "user asks mid-wait → give status, not guess".
+## Phase 2 (2026-06-08) — auto-wake main agent when swarm settles unattended (fixes wasted inbox)
+Root cause: swarm finishing AFTER spawning turn ended leaves `<swarm-update>`s in inbox until user sends another msg → sub-agent work sits unseen.
+- `MasterOrchestrator.__init__(on_settled=...)`; driver `finally` fires `self.on_settled()` AFTER the terminal `swarm_phase:complete` (so panel shows complete first). Wrapped in try/except — never raises into driver.
+- `_handle_spawn_agents` passes `on_settled=lambda k=swarm_key: _maybe_autocontinue(k)`.
+- `integration._maybe_autocontinue(swarm_key)`: bails unless `SWARM_AUTOCONTINUE_ENABLED` (env `TOFU_SWARM_AUTOCONTINUE`, default ON); no-op if `_key_is_live(key)` (a turn will drain naturally) or inbox empty. Latch `_autocontinue_inflight` + per-conv counter `_autocontinue_chain` (ceiling `SWARM_AUTOCONTINUE_MAX_CHAIN`, env `TOFU_SWARM_AUTOCONTINUE_MAX` default 3) prevent runaway. On failed start, rolls back the chain increment.
+- `_start_autocontinue_turn(conv_id)`: loads conv messages+settings from DB, appends a placeholder assistant msg tagged `_swarmAutoContinue`, writes back + FTS, builds config from settings (swarmEnabled default True so model can await/fetch), `create_task` + sets activeTaskId + `spawn_task`. Injects NO user message — the orchestrator's round-0 inbox-drain hook prepends the `<swarm-update>`s exactly like a human "continue" turn. Emits push frame `{type:'swarm_autocontinue_started', convId, newTaskId}` (NOT 'taskId' — hub frame is `{channel, taskId:<routing=conv_id>, **payload}` so a payload taskId would clobber routing).
+- `reset_autocontinue_chain(key)` called from `run_task` start when `not cfg.get('_swarmAutoContinue')` (human turn resets counter; auto-continue turns don't, so the ceiling bounds only unattended loops). `_cleanup_stale_sessions` drops chain/inflight for reaped convs (lock order: `_sessions_lock`→`_autocontinue_lock`).
+- Frontend `swarm_push.js::_attachAutoContinue(convId, newTaskId)`: opens SSE via `connectToTask` for the backend turn the browser didn't POST; pushes a trailing placeholder if needed (Case-A pattern); sets conv.activeTaskId. `chat_render.js` renders a `↻ Continued automatically after sub-agents finished` banner for `msg._swarmAutoContinue` (next to proactive banner).
 
 ## Key files
-- `lib/agent_inbox.py` (new) — queue + format_swarm_update XML builder.
-- `lib/swarm/master.py` (rewritten) — `MasterOrchestrator.run_in_background()` only. Daemon thread runs `StreamingScheduler.iter_completions()`.
-- `lib/swarm/integration.py` (rewritten) — `_handle_spawn_agents` returns handle; `_handle_await_agents`, `_handle_get_agent_result`.
-- `lib/swarm/tools.py` (rewritten) — `MASTER_TOOLS`, `SUB_AGENT_TOOLS`, `SUB_AGENT_DENYLIST`, `SWARM_CONTROL_TOOL_NAMES`, `SWARM_TOOL_NAMES`.
-- `lib/swarm/registry.py` — `scope_tools_for_role` always strips `SUB_AGENT_DENYLIST`.
-- `lib/swarm/planner.py` (trimmed) — `resolve_execution_order` only.
-- `lib/tasks_pkg/orchestrator.py` — adds drain hook just before LLM call + cleanup on task end.
-- `lib/tasks_pkg/system_context.py` — `<parallel_execution>` async-mode prompt.
-- `lib/tasks_pkg/model_config.py` — emits `SPAWN_AGENTS_TOOL + AWAIT_AGENTS_TOOL + GET_AGENT_RESULT_TOOL` instead of legacy.
-- `lib/tasks_pkg/handlers/misc.py` — swarm tool icon map updated.
+- `lib/swarm/integration.py` — _emit dual-emit, _maybe_autocontinue, _start_autocontinue_turn, reset_autocontinue_chain, SWARM_AUTOCONTINUE_*.
+- `lib/swarm/master.py` — on_settled param + driver finally hook.
+- `lib/tasks_pkg/orchestrator.py` — chain reset on human turns + DETACH teardown + inbox drain hook (round-0 prepends <swarm-update>).
+- `static/js/ui/swarm_push.js` — push subscriber + _attachAutoContinue.
+- `static/js/ui/chat_render.js` — _swarmAutoContinue banner.
 
 ## Tests
-`tests/test_agent_inbox.py`, `tests/test_swarm_tool_scoping.py`, `tests/test_swarm_async.py` — all pass. The legacy `tests/test_swarm_unit.py` and `debug/test_swarm*.py` files were deleted as part of the migration.
-
+`tests/test_swarm_async.py` — 45 pass (TestAutoContinueGuardrails: fires-when-idle, skips-live, skips-empty, chain-ceiling, failed-start-rollback, disabled-noop, reset-clears). Run `python3 -m unittest tests.test_swarm_async` (system pytest broken). After editing swarm src: `find lib/swarm/__pycache__ -name '*.pyc' -delete`. Rebuild bundle: `python3 -c "from lib.js_bundler import build_bundle; build_bundle()"`.

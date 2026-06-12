@@ -16,7 +16,6 @@ Usage:
 
 import math
 
-import requests
 
 from lib.log import get_logger
 
@@ -30,7 +29,6 @@ __all__ = [
 ]
 
 # Proxy bypass via centralized lib/proxy — respects Settings UI config.
-from lib.proxy import proxies_for as _proxies_for
 from lib.http_client import http_post
 
 # text-embedding-v4 API limit: input length must be in [1, 8192] tokens.

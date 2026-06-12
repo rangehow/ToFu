@@ -32,7 +32,7 @@ Pure function — no I/O, no logger spam, suitable for batch calls.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Iterable, List, Optional
 
 from lib.log import get_logger

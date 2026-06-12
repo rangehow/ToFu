@@ -1,0 +1,18 @@
+{
+  "name": "tofu-frontend-typecheck",
+  "version": "0.1.0",
+  "description": "Type-checking harness for Tofu's vanilla-JS frontend (static/js). No build step — tsc --checkJs --noEmit only, used in CI to catch cross-file global misuse.",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "typecheck:count": "tsc --noEmit --pretty false 2>&1 | grep -c 'error TS' || true"
+  },
+  "keywords": [],
+  "license": "MIT",
+  "devDependencies": {
+    "dompurify": "^3.2.4",
+    "jsdom": "^25.0.1",
+    "typescript": "^5.9.3"
+  }
+}

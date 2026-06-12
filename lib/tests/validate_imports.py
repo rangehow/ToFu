@@ -21,7 +21,7 @@ if _PROJECT_ROOT not in sys.path:
 # Sub-packages (each has __init__.py with re-exports)
 _SUB_PACKAGES = [
     'lib',
-    'lib.fetch',
+    'tofu_search.fetch',
     'lib.llm_dispatch',
     'lib.project_mod',
     'lib.scheduler',
@@ -46,7 +46,8 @@ _TOP_LEVEL_MODULES = [
     'lib.pricing',
     'lib.protocols',
     'lib.rate_limiter',
-    'lib.search',
+    'lib.search_bridge',
+    'tofu_search.search',
     'lib.memory',
 ]
 

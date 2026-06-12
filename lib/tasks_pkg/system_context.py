@@ -322,7 +322,7 @@ def _inject_system_contexts(messages, project_path, project_enabled,
     if project_enabled:
         def _load_project():
             from lib.project_mod import get_context_for_prompt
-            return get_context_for_prompt(project_path)
+            return get_context_for_prompt(project_path, conv_id=_cid or None)
 
         if _cid:
             proj_ctx = _get_cached_or_compute(
@@ -358,11 +358,16 @@ def _inject_system_contexts(messages, project_path, project_enabled,
         _extra_roots = []
         if project_enabled:
             try:
-                from lib.project_mod.config import _roots, _lock
-                with _lock:
-                    for _rn, _rs in _roots.items():
-                        if _rs.get('path') and _rs['path'] != _cwd:
-                            _extra_roots.append(f"{_rn} → {_rs['path']}")
+                # Source from the per-conv registry (when known) so the
+                # advertised roots match what resolve_namespaced_path will
+                # accept at tool-call time.  Reading the global _roots here
+                # leaks concurrent tasks' roots into this conv's prompt and
+                # causes "Unknown workspace root" refusals — see
+                # get_context_for_prompt's conv_id docstring.
+                from lib.project_mod.config import get_conv_roots
+                for _rn, _rs in get_conv_roots(_cid or None).items():
+                    if _rs.get('path') and _rs['path'] != _cwd:
+                        _extra_roots.append(f"{_rn} → {_rs['path']}")
             except Exception as e:
                 logger.debug('[SysPrompt] extra-roots probe failed: %s', e)
 
@@ -480,7 +485,8 @@ When you spawn, set `role` to one of these (default `general`):
 - **Never fabricate** sub-agent results before their `<swarm-update>` arrives. If the user asks mid-wait, give status, not a guess: "the audit is still running, should land shortly."
 - **Never read `output_file`** unless the user explicitly asks for a progress check. Trust the notification.
 - If you genuinely have nothing else useful to do while waiting, call `await_agents(mode='any')` to block on the next completion (capped at 120 s). If you have other work or the user is talking to you, prefer doing that over awaiting.
-- If a `<preview>` was too short, call `get_agent_result(id)` for the full body.
+- `await_agents` returns `{{completed:[...], still_running:[...], timed_out, note}}`. When `timed_out` is true it did NOT fail — the cap elapsed before your `mode` condition was met; `note` tells you how many finished and which are still running (they keep running in the background). Agents listed in `completed` are handed to you right here, so you will NOT get a duplicate `<swarm-update>` for them later.
+- If a `<preview>` was too short, call `get_agent_result(id)` for the full body. This also consumes that agent's pending `<swarm-update>`, so you won't see it twice.
 - Sub-agents cannot spawn further sub-agents and cannot ask the user. Don't write objectives that assume they can.
 
 ## Writing the objective

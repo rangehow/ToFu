@@ -29,7 +29,7 @@ existing JS tests use, so any divergence shows up immediately.
 from __future__ import annotations
 
 import re
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from typing import List, Optional
 
 from lib.log import get_logger

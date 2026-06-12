@@ -184,6 +184,40 @@ class TestInboxReceivesUpdates(unittest.TestCase):
             self.assertIn('<status>completed</status>', it['value'])
             self.assertIn('<preview>', it['value'])
 
+    def test_inbox_keyed_by_full_task_id_not_8char_prefix(self):
+        """Regression: the orchestrator drained with ``task['id'][:8]``
+        (the log prefix ``tid``) while master.py enqueues — and the
+        task-end clear wipes — under the FULL ``task['id']``.  The 8-char
+        key never matched, so every <swarm-update> sat unread and was
+        silently discarded at task end (0 injects, N cleared-unread per
+        session in app.log).  Guard the contract: the queue lives under
+        the full id, and the truncated prefix finds nothing."""
+        full_id = 'mpwfpik41m95mx-' + 'deadbeef0123456789'  # >8 chars, UUID-like
+        _reset_global_state(full_id)
+        try:
+            with _patch_factory():
+                execute_swarm_tool(
+                    'spawn_agents',
+                    {'agents': [{'id': 'zz', 'objective': 'Investigate Z'}]},
+                    task={'id': full_id},
+                )
+                self.assertTrue(
+                    _wait_until(lambda: agent_inbox.peek(full_id) >= 1),
+                    'expected swarm-update enqueued under FULL task id',
+                )
+            # The truncated prefix the orchestrator USED to drain with
+            # must NOT see the items — proving the prefix bug would lose them.
+            self.assertEqual(agent_inbox.peek(full_id[:8]), 0,
+                             '8-char prefix must not collide with the full-id queue')
+            # Draining with the full id (what the orchestrator does now)
+            # returns the queued items.
+            items = agent_inbox.drain(full_id)
+            self.assertEqual(len(items), 1)
+            self.assertEqual(items[0]['agent_id'], 'zz')
+        finally:
+            _reset_global_state(full_id)
+            _reset_global_state(full_id[:8])
+
 
 # ═════════════════════════════════════════════════════════
 #  await_agents
@@ -271,6 +305,77 @@ class TestAwaitAgents(unittest.TestCase):
         self.assertEqual(len(result['completed']), 1)
         self.assertEqual(result['completed'][0]['agent_id'], 'a1')
 
+    def test_await_no_ids_includes_early_finishers(self):
+        """Regression: await_agents() with NO ids must report agents that
+        finished BEFORE the call. Previously the no-ids branch built its
+        wait-set from only running/pending agents and force-emptied
+        already_done, so an early finisher vanished — mode='all' returned
+        k/N < total while the swarm panel showed N/N green."""
+        import threading
+        release = threading.Event()
+
+        class _MixedAgent(_FakeAgent):
+            def run(self):
+                # 'fast' returns at once; 'slow' waits for release.
+                if self.spec.id == 'slow':
+                    release.wait(timeout=5)
+                return self.result
+
+        with patch('lib.swarm.master._build_sub_agent',
+                   side_effect=lambda spec, **kw: _MixedAgent(spec)):
+            execute_swarm_tool(
+                'spawn_agents',
+                {'agents': [
+                    {'id': 'fast', 'objective': 'F'},
+                    {'id': 'slow', 'objective': 'S'},
+                ]},
+                task={'id': self.task_id},
+            )
+            # Wait until 'fast' has completed (its card is green) while
+            # 'slow' is still blocked.
+            self.assertTrue(_wait_until(
+                lambda: agent_inbox.peek(self.task_id) >= 1))
+            release.set()  # now let 'slow' finish too
+            raw = execute_swarm_tool(
+                'await_agents',
+                {'mode': 'all', 'timeout_seconds': 5},
+                task={'id': self.task_id},
+            )
+        result = json.loads(raw)
+        self.assertEqual(result['status'], 'ok')
+        self.assertFalse(result['timed_out'])
+        ids_seen = {p['agent_id'] for p in result['completed']}
+        self.assertEqual(ids_seen, {'fast', 'slow'},
+                         'no-ids await must include the early finisher')
+
+    def test_await_no_ids_when_all_already_done(self):
+        """Regression: await_agents() with no ids, called after ALL agents
+        already finished, must return them (not an empty 0/N 'finished'
+        note)."""
+        with _patch_factory():
+            execute_swarm_tool(
+                'spawn_agents',
+                {'agents': [
+                    {'id': 'p', 'objective': 'P'},
+                    {'id': 'q', 'objective': 'Q'},
+                ]},
+                task={'id': self.task_id},
+            )
+            self.assertTrue(_wait_until(
+                lambda: agent_inbox.peek(self.task_id) >= 2))
+            time.sleep(0.1)  # let the driver thread terminate
+            raw = execute_swarm_tool(
+                'await_agents',
+                {'mode': 'all', 'timeout_seconds': 5},
+                task={'id': self.task_id},
+            )
+        result = json.loads(raw)
+        self.assertEqual(result['status'], 'ok')
+        self.assertFalse(result['timed_out'])
+        self.assertEqual({p['agent_id'] for p in result['completed']},
+                         {'p', 'q'},
+                         'all-done no-ids await must return every agent')
+
     def test_await_unknown_id_returns_unknown_field(self):
         """B1: await_agents with unknown id returns it in 'unknown'."""
         with _patch_factory():
@@ -288,6 +393,91 @@ class TestAwaitAgents(unittest.TestCase):
         self.assertEqual(result['status'], 'ok')
         self.assertIn('unknown', result)
         self.assertIn('phantom', result['unknown'])
+
+    def test_await_consumes_inbox_for_returned_agents(self):
+        """De-dup: agents returned synchronously by await_agents must NOT
+        also remain in the inbox (which would re-inject them as a duplicate
+        <swarm-update> on the next round)."""
+        with _patch_factory():
+            execute_swarm_tool(
+                'spawn_agents',
+                {'agents': [
+                    {'id': 'x', 'objective': 'X'},
+                    {'id': 'y', 'objective': 'Y'},
+                ]},
+                task={'id': self.task_id},
+            )
+            # Let both finish and land in the inbox.
+            self.assertTrue(_wait_until(
+                lambda: agent_inbox.peek(self.task_id) >= 2))
+            raw = execute_swarm_tool(
+                'await_agents',
+                {'ids': ['x', 'y'], 'mode': 'all', 'timeout_seconds': 5},
+                task={'id': self.task_id},
+            )
+        result = json.loads(raw)
+        self.assertEqual({p['agent_id'] for p in result['completed']}, {'x', 'y'})
+        # Both were returned in the tool result → inbox must now be empty.
+        self.assertEqual(agent_inbox.peek(self.task_id), 0,
+                         'await_agents did not consume delivered inbox items')
+
+    def test_get_agent_result_consumes_inbox_for_that_agent(self):
+        """De-dup: get_agent_result hands back the full answer, so that
+        agent's pending <swarm-update> must be dropped — but OTHER agents'
+        items stay queued."""
+        with _patch_factory():
+            execute_swarm_tool(
+                'spawn_agents',
+                {'agents': [
+                    {'id': 'x', 'objective': 'X'},
+                    {'id': 'y', 'objective': 'Y'},
+                ]},
+                task={'id': self.task_id},
+            )
+            self.assertTrue(_wait_until(
+                lambda: agent_inbox.peek(self.task_id) >= 2))
+            execute_swarm_tool(
+                'get_agent_result',
+                {'agent_id': 'x'},
+                task={'id': self.task_id},
+            )
+        # Only y's update should remain.
+        remaining = agent_inbox.drain(self.task_id)
+        self.assertEqual([it['agent_id'] for it in remaining], ['y'])
+
+    def test_await_timeout_includes_actionable_note(self):
+        """On a real timeout, the result must carry an explanatory note
+        listing how many finished / are still running so the LLM knows
+        what to do next."""
+        import threading
+
+        block = threading.Event()
+
+        class _SlowAgent(_FakeAgent):
+            def run(self):
+                block.wait(timeout=5)
+                return self.result
+
+        def _slow_factory(spec, **kwargs):
+            return _SlowAgent(spec)
+
+        with patch('lib.swarm.master._build_sub_agent', side_effect=_slow_factory):
+            execute_swarm_tool(
+                'spawn_agents',
+                {'agents': [{'id': 'slow', 'objective': 'O'}]},
+                task={'id': self.task_id},
+            )
+            raw = execute_swarm_tool(
+                'await_agents',
+                {'mode': 'all', 'timeout_seconds': 1},
+                task={'id': self.task_id},
+            )
+            block.set()  # release the agent so the driver thread can exit
+        result = json.loads(raw)
+        self.assertTrue(result['timed_out'])
+        self.assertIn('note', result)
+        self.assertIn('still running', result['note'])
+        self.assertIn('slow', result['still_running'])
 
     def test_await_when_swarm_finished_returns_note(self):
         """B2: await_agents when nothing is running returns a clear note."""
@@ -371,6 +561,70 @@ class TestGetAgentResult(unittest.TestCase):
         )
         payload = json.loads(raw)
         self.assertEqual(payload['status'], 'error')
+
+    def test_get_result_falls_back_to_disk_when_session_gone(self):
+        """The in-memory session is the fast path; the per-agent .log file
+        is the durable fallback. After the session is removed (TTL evict /
+        recycle / task end), get_agent_result must still recover the full
+        transcript from disk instead of returning 'no active swarm'."""
+        import os
+        from lib.swarm.integration import _remove_session, _resolve_output_dir
+        out_dir = _resolve_output_dir(self.task_id)
+        os.makedirs(out_dir, exist_ok=True)
+        log_path = os.path.join(out_dir, 'gone1.log')
+        with open(log_path, 'w', encoding='utf-8') as fp:
+            fp.write('FULL TRANSCRIPT ' * 50)
+        try:
+            # No session registered for this task at all.
+            _remove_session(self.task_id)
+            raw = execute_swarm_tool(
+                'get_agent_result', {'agent_id': 'gone1'},
+                task={'id': self.task_id},
+            )
+            payload = json.loads(raw)
+            self.assertEqual(payload['status'], 'ok')
+            self.assertTrue(payload['found'])
+            self.assertEqual(payload['source'], 'disk')
+            self.assertIn('FULL TRANSCRIPT', payload['final_answer'])
+        finally:
+            try:
+                os.remove(log_path)
+            except OSError:
+                pass
+
+    def test_get_result_cross_task_disk_fallback(self):
+        """The agent's .log lives under the task_id of the turn that SPAWNED
+        it, but get_agent_result is often called on a LATER turn (fresh
+        task_id) in the same conversation. The disk fallback must glob across
+        task dirs to find ``<agent_id>.log`` regardless of which task asks.
+        Regression for conv mpwjy40j1jjue2 (agent 12c7b388 spawned under task
+        0c9045cd, asked for under task 6791bfaa)."""
+        import os
+        from lib.swarm.integration import _remove_session, _resolve_output_dir
+        spawn_task = self.task_id + '-spawned'
+        ask_task = self.task_id + '-asked'
+        spawn_dir = _resolve_output_dir(spawn_task)
+        os.makedirs(spawn_dir, exist_ok=True)
+        log_path = os.path.join(spawn_dir, 'xtask1.log')
+        with open(log_path, 'w', encoding='utf-8') as fp:
+            fp.write('CROSS TASK ANSWER ' * 20)
+        try:
+            _remove_session(spawn_task)
+            _remove_session(ask_task)
+            raw = execute_swarm_tool(
+                'get_agent_result', {'agent_id': 'xtask1'},
+                task={'id': ask_task},  # different task than the one that spawned it
+            )
+            payload = json.loads(raw)
+            self.assertEqual(payload['status'], 'ok')
+            self.assertTrue(payload['found'])
+            self.assertEqual(payload['source'], 'disk')
+            self.assertIn('CROSS TASK ANSWER', payload['final_answer'])
+        finally:
+            try:
+                os.remove(log_path)
+            except OSError:
+                pass
 
 
 # ═════════════════════════════════════════════════════════
@@ -496,6 +750,65 @@ class TestSpawnEdgeCases(unittest.TestCase):
                        f'B15: followup spec missing from get_status: {list(status)}')
 
 
+class TestSessionTTLLiveness(unittest.TestCase):
+    """#2: TTL eviction must NOT kill a swarm whose parent task is still
+    running. A long task that parked a wave >30 min ago and kept working
+    must still be able to await / get_agent_result."""
+
+    def setUp(self):
+        self.task_id = 'tttl-' + str(id(self))
+        _reset_global_state(self.task_id)
+
+    def tearDown(self):
+        _reset_global_state(self.task_id)
+        from lib.tasks_pkg.manager import tasks as _chat_tasks
+        _chat_tasks.pop(self.task_id, None)
+
+    def _force_stale(self):
+        """Push the session's timestamp past the TTL and reset the cleanup
+        throttle so the next cleanup pass would evict it."""
+        import lib.swarm.integration as integ
+        with integ._sessions_lock:
+            integ._session_timestamps[self.task_id] = (
+                time.time() - integ.SESSION_TTL_SECONDS - 10)
+            integ._last_cleanup = 0.0
+
+    def test_live_task_session_survives_ttl(self):
+        from lib.swarm.integration import _cleanup_stale_sessions, get_active_session
+        from lib.tasks_pkg.manager import tasks as _chat_tasks
+        with _patch_factory():
+            execute_swarm_tool(
+                'spawn_agents',
+                {'agents': [{'id': 'a1', 'objective': 'O'}]},
+                task={'id': self.task_id},
+            )
+        _chat_tasks[self.task_id] = {'id': self.task_id, 'status': 'running'}
+        self._force_stale()
+        with self.subTest('cleanup'):
+            import lib.swarm.integration as integ
+            with integ._sessions_lock:
+                _cleanup_stale_sessions()
+        self.assertIsNotNone(get_active_session(self.task_id),
+                             'live-task session must survive TTL eviction')
+
+    def test_finished_task_session_evicted_by_ttl(self):
+        from lib.swarm.integration import _cleanup_stale_sessions, get_active_session
+        from lib.tasks_pkg.manager import tasks as _chat_tasks
+        with _patch_factory():
+            execute_swarm_tool(
+                'spawn_agents',
+                {'agents': [{'id': 'a1', 'objective': 'O'}]},
+                task={'id': self.task_id},
+            )
+        _chat_tasks[self.task_id] = {'id': self.task_id, 'status': 'done'}
+        self._force_stale()
+        import lib.swarm.integration as integ
+        with integ._sessions_lock:
+            _cleanup_stale_sessions()
+        self.assertIsNone(get_active_session(self.task_id),
+                          'finished-task session past TTL must be evicted')
+
+
 class TestSwarmDecoupledFromProject(unittest.TestCase):
     """Swarm tools must be available even without project mode (decoupled
     on 2026-05-28; mirrors read_files decoupling)."""
@@ -582,6 +895,305 @@ class TestParentConfigPropagation(unittest.TestCase):
             'client-XYZ',
             'browserClientId did not propagate to sub-agent parent_task_proxy',
         )
+
+
+class TestConvScopedSession(unittest.TestCase):
+    """Option A: a swarm spawned on one turn is reachable from LATER turns
+    in the SAME conversation (each turn has a fresh task_id but shares the
+    conv id). This is the fix for the 'continue → await → no active swarm'
+    bug where a session was torn down at the spawning turn's end."""
+
+    def setUp(self):
+        self.conv_id = 'cscope-' + str(id(self))
+        self.spawn_task = self.conv_id + '-t1'
+        self.cont_task = self.conv_id + '-t2'
+        for k in (self.conv_id, self.spawn_task, self.cont_task):
+            _reset_global_state(k)
+
+    def tearDown(self):
+        import lib.swarm.integration as integ
+        with integ._sessions_lock:
+            integ._active_sessions.pop(self.conv_id, None)
+            for a in (self.spawn_task, self.cont_task):
+                integ._key_aliases.pop(a, None)
+        for k in (self.conv_id, self.spawn_task, self.cont_task):
+            _reset_global_state(k)
+
+    def test_session_keyed_by_conv_id(self):
+        """The session is registered under the conv id, not the task id."""
+        from lib.swarm.integration import get_active_session
+        with _patch_factory():
+            execute_swarm_tool(
+                'spawn_agents',
+                {'agents': [{'id': 'a1', 'objective': 'O'}]},
+                task={'id': self.spawn_task, 'convId': self.conv_id},
+            )
+        self.assertIsNotNone(get_active_session(self.conv_id),
+                             'session must be reachable by conv id')
+        # And reachable via the spawning task id (alias).
+        self.assertIsNotNone(get_active_session(self.spawn_task),
+                             'session must be reachable by spawning task id alias')
+
+    def test_await_resolves_from_later_turn_same_conv(self):
+        """The crux: a 'continue' turn (fresh task_id, same conv) must reach
+        the live swarm and get results — NOT 'no active swarm session'."""
+        with _patch_factory({'a1': {'final_answer': 'done already'}}):
+            execute_swarm_tool(
+                'spawn_agents',
+                {'agents': [{'id': 'a1', 'objective': 'O'}]},
+                task={'id': self.spawn_task, 'convId': self.conv_id},
+            )
+            self.assertTrue(_wait_until(
+                lambda: agent_inbox.peek(self.conv_id) >= 1))
+            # New turn: different task id, same conv.
+            raw = execute_swarm_tool(
+                'await_agents',
+                {'ids': ['a1'], 'mode': 'all', 'timeout_seconds': 5},
+                task={'id': self.cont_task, 'convId': self.conv_id},
+            )
+        result = json.loads(raw)
+        self.assertEqual(result['status'], 'ok')
+        self.assertEqual({p['agent_id'] for p in result['completed']}, {'a1'})
+
+    def test_get_result_resolves_from_later_turn_same_conv(self):
+        with _patch_factory({'a1': {'final_answer': 'Z' * 500}}):
+            execute_swarm_tool(
+                'spawn_agents',
+                {'agents': [{'id': 'a1', 'objective': 'O'}]},
+                task={'id': self.spawn_task, 'convId': self.conv_id},
+            )
+            self.assertTrue(_wait_until(
+                lambda: agent_inbox.peek(self.conv_id) >= 1))
+            raw = execute_swarm_tool(
+                'get_agent_result', {'agent_id': 'a1'},
+                task={'id': self.cont_task, 'convId': self.conv_id},
+            )
+        payload = json.loads(raw)
+        self.assertEqual(payload['status'], 'ok')
+        self.assertTrue(payload['found'])
+        self.assertEqual(len(payload['final_answer']), 500)
+
+
+class TestTeardownDecoupledFromTurn(unittest.TestCase):
+    """Option A: ``run_task`` finalization must NOT abort a still-running
+    swarm on a normal turn end — only on explicit user abort. Verified at
+    the integration level by simulating the orchestrator teardown branch."""
+
+    def setUp(self):
+        self.conv_id = 'tteardown-' + str(id(self))
+        self.task_id = self.conv_id + '-t1'
+        for k in (self.conv_id, self.task_id):
+            _reset_global_state(k)
+
+    def tearDown(self):
+        import lib.swarm.integration as integ
+        with integ._sessions_lock:
+            integ._active_sessions.pop(self.conv_id, None)
+            integ._key_aliases.pop(self.task_id, None)
+        for k in (self.conv_id, self.task_id):
+            _reset_global_state(k)
+
+    def _spawn_live(self, block):
+        """Spawn a swarm whose single agent blocks until *block* is set, so
+        the session stays live (is_terminated False) during the test."""
+        class _SlowAgent(_FakeAgent):
+            def run(self):
+                block.wait(timeout=5)
+                return self.result
+
+        return patch('lib.swarm.master._build_sub_agent',
+                     side_effect=lambda spec, **kw: _SlowAgent(spec))
+
+    def test_normal_turn_end_detaches_not_aborts(self):
+        """Replicates the orchestrator teardown branch with aborted=False:
+        a live swarm must survive (still registered, not aborted)."""
+        import threading
+        from lib.swarm.integration import (get_active_session, swarm_key_for,
+                                            _remove_session)
+        block = threading.Event()
+        with self._spawn_live(block):
+            execute_swarm_tool(
+                'spawn_agents',
+                {'agents': [{'id': 'slow', 'objective': 'O'}]},
+                task={'id': self.task_id, 'convId': self.conv_id},
+            )
+            # Simulate orchestrator finalization on a NORMAL turn end.
+            task = {'id': self.task_id, 'convId': self.conv_id, 'aborted': False}
+            key = swarm_key_for(task)
+            sess = get_active_session(key)
+            self.assertIsNotNone(sess)
+            user_aborted = bool(task.get('aborted'))
+            if sess is not None and (user_aborted or sess.is_terminated):
+                sess.abort(); _remove_session(key)
+            # Normal end → DETACH, do nothing.
+            self.assertIsNotNone(get_active_session(self.conv_id),
+                                 'normal turn end must NOT remove a live swarm')
+            self.assertFalse(sess._aborted,
+                             'normal turn end must NOT abort a live swarm')
+            block.set()
+
+    def test_user_abort_tears_down(self):
+        """With aborted=True the teardown branch DOES abort + remove."""
+        import threading
+        from lib.swarm.integration import (get_active_session, swarm_key_for,
+                                            _remove_session)
+        from lib.agent_inbox import clear as _clear_inbox
+        block = threading.Event()
+        with self._spawn_live(block):
+            execute_swarm_tool(
+                'spawn_agents',
+                {'agents': [{'id': 'slow', 'objective': 'O'}]},
+                task={'id': self.task_id, 'convId': self.conv_id},
+            )
+            task = {'id': self.task_id, 'convId': self.conv_id, 'aborted': True}
+            key = swarm_key_for(task)
+            sess = get_active_session(key)
+            self.assertIsNotNone(sess)
+            user_aborted = bool(task.get('aborted'))
+            if sess is not None and (user_aborted or sess.is_terminated):
+                sess.abort(); _remove_session(key); _clear_inbox(key)
+            block.set()
+        self.assertIsNone(get_active_session(self.conv_id),
+                          'user abort must remove the swarm session')
+        self.assertTrue(sess._aborted, 'user abort must signal abort')
+
+
+class TestAwaitDiskFallback(unittest.TestCase):
+    """Option A: await_agents with explicit ids and NO live session must
+    recover results from the durable on-disk transcripts instead of a hard
+    'no active swarm' error."""
+
+    def setUp(self):
+        self.task_id = 'tawaitdisk-' + str(id(self))
+        _reset_global_state(self.task_id)
+
+    def tearDown(self):
+        _reset_global_state(self.task_id)
+
+    def test_await_ids_fall_back_to_disk(self):
+        import os
+        from lib.swarm.integration import _remove_session, _resolve_output_dir
+        out_dir = _resolve_output_dir(self.task_id)
+        os.makedirs(out_dir, exist_ok=True)
+        log_path = os.path.join(out_dir, 'gonea.log')
+        with open(log_path, 'w', encoding='utf-8') as fp:
+            fp.write('DISK AWAIT ANSWER ' * 10)
+        try:
+            _remove_session(self.task_id)
+            raw = execute_swarm_tool(
+                'await_agents',
+                {'ids': ['gonea'], 'mode': 'all', 'timeout_seconds': 1},
+                task={'id': self.task_id},
+            )
+            result = json.loads(raw)
+            self.assertEqual(result['status'], 'ok')
+            self.assertEqual(result.get('source'), 'disk')
+            ids = {c['agent_id'] for c in result['completed']}
+            self.assertIn('gonea', ids)
+            self.assertIn('DISK AWAIT ANSWER',
+                          result['completed'][0]['final_answer'])
+        finally:
+            try:
+                os.remove(log_path)
+            except OSError:
+                pass
+
+    def test_await_no_ids_no_session_still_errors(self):
+        """Without ids there's nothing to scope to on disk → keep the
+        existing 'no active swarm' error."""
+        from lib.swarm.integration import _remove_session
+        _remove_session(self.task_id)
+        raw = execute_swarm_tool(
+            'await_agents', {'mode': 'all', 'timeout_seconds': 1},
+            task={'id': self.task_id},
+        )
+        self.assertEqual(json.loads(raw)['status'], 'error')
+
+
+# ═════════════════════════════════════════════════════════
+#  Phase 2 — auto-continue guardrails (_maybe_autocontinue)
+# ═════════════════════════════════════════════════════════
+
+class TestAutoContinueGuardrails(unittest.TestCase):
+    """The settle hook must wake the main agent only under safe conditions:
+    enabled, conversation idle, inbox non-empty, latch free, chain < ceiling.
+    We patch the actual turn-start so no DB/LLM is touched and count calls."""
+
+    def setUp(self):
+        self.key = 'tac-' + str(id(self))
+        agent_inbox.reset_for_test(self.key)
+        import lib.swarm.integration as integ
+        self.integ = integ
+        with integ._autocontinue_lock:
+            integ._autocontinue_chain.pop(self.key, None)
+            integ._autocontinue_inflight.discard(self.key)
+
+    def tearDown(self):
+        agent_inbox.reset_for_test(self.key)
+        with self.integ._autocontinue_lock:
+            self.integ._autocontinue_chain.pop(self.key, None)
+            self.integ._autocontinue_inflight.discard(self.key)
+
+    def _enqueue(self):
+        agent_inbox.enqueue(self.key, '<swarm-update>x</swarm-update>',
+                            priority='later', mode='swarm-update', agent_id='a1')
+
+    def test_fires_when_idle_with_pending(self):
+        self._enqueue()
+        with patch.object(self.integ, '_key_is_live', return_value=False), \
+             patch.object(self.integ, '_start_autocontinue_turn',
+                          return_value=True) as start:
+            self.integ._maybe_autocontinue(self.key)
+        start.assert_called_once_with(self.key)
+        self.assertEqual(self.integ._autocontinue_chain.get(self.key), 1)
+
+    def test_skips_when_conversation_live(self):
+        self._enqueue()
+        with patch.object(self.integ, '_key_is_live', return_value=True), \
+             patch.object(self.integ, '_start_autocontinue_turn',
+                          return_value=True) as start:
+            self.integ._maybe_autocontinue(self.key)
+        start.assert_not_called()
+
+    def test_skips_when_inbox_empty(self):
+        with patch.object(self.integ, '_key_is_live', return_value=False), \
+             patch.object(self.integ, '_start_autocontinue_turn',
+                          return_value=True) as start:
+            self.integ._maybe_autocontinue(self.key)
+        start.assert_not_called()
+
+    def test_chain_ceiling_blocks_runaway(self):
+        self._enqueue()
+        with self.integ._autocontinue_lock:
+            self.integ._autocontinue_chain[self.key] = self.integ.SWARM_AUTOCONTINUE_MAX_CHAIN
+        with patch.object(self.integ, '_key_is_live', return_value=False), \
+             patch.object(self.integ, '_start_autocontinue_turn',
+                          return_value=True) as start:
+            self.integ._maybe_autocontinue(self.key)
+        start.assert_not_called()
+
+    def test_failed_start_releases_chain_increment(self):
+        self._enqueue()
+        with patch.object(self.integ, '_key_is_live', return_value=False), \
+             patch.object(self.integ, '_start_autocontinue_turn',
+                          return_value=False):
+            self.integ._maybe_autocontinue(self.key)
+        # increment was rolled back so a later settle can retry
+        self.assertEqual(self.integ._autocontinue_chain.get(self.key, 0), 0)
+
+    def test_disabled_flag_is_a_noop(self):
+        self._enqueue()
+        with patch.object(self.integ, 'SWARM_AUTOCONTINUE_ENABLED', False), \
+             patch.object(self.integ, '_start_autocontinue_turn',
+                          return_value=True) as start:
+            self.integ._maybe_autocontinue(self.key)
+        start.assert_not_called()
+
+    def test_reset_chain_clears_counter(self):
+        with self.integ._autocontinue_lock:
+            self.integ._autocontinue_chain[self.key] = 2
+        self.integ.reset_autocontinue_chain(self.key)
+        self.assertNotIn(self.key, self.integ._autocontinue_chain)
 
 
 if __name__ == '__main__':

@@ -35,6 +35,23 @@ function _togglePriorThinking(el, msgIdx) {
   }
 }
 
+/* Lazy expand for the display-only "Earlier Response" block (Continue
+   rollback). Twin of _togglePriorThinking — sources from msg.priorContent,
+   the prose tail that was discarded when resuming from the tool-result
+   checkpoint. Rendered as plain text (not markdown) so it reads as a raw
+   record of what was rolled back. */
+function _togglePriorContent(el, msgIdx) {
+  el.classList.toggle("expanded");
+  const txt = el.querySelector(".thinking-text");
+  if (!txt || txt.textContent) return;
+  const conv = getActiveConv();
+  if (!conv) return;
+  const msg = conv.messages[msgIdx];
+  if (msg?.priorContent) {
+    txt.textContent = msg.priorContent;
+  }
+}
+
 /* Lazy-load branch thinking via <details> toggle event */
 document.addEventListener("toggle", function (e) {
   const det = e.target;
@@ -308,9 +325,12 @@ async function translateMessage(idx) {
   msg._translateDone = false;
   const text = msg.content || "";
   if (!text.trim()) return;
-  // Detect target language: if mostly Chinese → English, otherwise → Chinese
-  const chineseChars = (text.match(/[\u4e00-\u9fff]/g) || []).length;
-  const targetLang = chineseChars / text.length > 0.3 ? "English" : "Chinese";
+  // Detect target language server-side: if the source is already
+  // predominantly Chinese → translate to English, otherwise → Chinese.
+  // The CJK-ratio threshold is backend policy (lib/text_lang.py
+  // CHINESE_RATIO_THRESHOLD); _isAlreadyChinese delegates to
+  // /api/v1/text/detect-language so the rule lives in one place.
+  const targetLang = (await _isAlreadyChinese(text)) ? "English" : "Chinese";
   msg._originalContent = text;
   // Delegate to unified pipeline. mode='manual' surfaces the error on the
   // message body (renderMessage shows the click-to-retry hint) instead of

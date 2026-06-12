@@ -22,7 +22,6 @@ import requests
 from lib.http_client import http_get
 from lib.log import get_logger, log_context
 from lib.proxy import (
-    proxies_for as _proxies_for,
     register_no_proxy_url as _register_no_proxy_url,
 )
 
@@ -32,6 +31,8 @@ __all__ = [
     'discover_models',
     'enrich_models_with_pricing',
     'is_local_endpoint',
+    'is_raw_ip_host',
+    'should_bypass_proxy',
     'normalize_base_url',
     'probe_provider',
 ]
@@ -133,6 +134,40 @@ def is_local_endpoint(base_url: str) -> bool:
         if ip in net:
             return True
     return False
+
+
+def is_raw_ip_host(base_url: str) -> bool:
+    """True when *base_url*'s host is a bare IPv4/IPv6 literal (not a domain)."""
+    if not base_url:
+        return False
+    try:
+        host = (urlparse(base_url).hostname or '').lower()
+    except Exception as e:
+        logger.debug('[BrandDetect] Failed to parse URL %s: %s', base_url, e)
+        return False
+    if not host:
+        return False
+    try:
+        ipaddress.ip_address(host)
+        return True
+    except ValueError as e:
+        logger.debug('[BrandDetect] %s is not a raw IP host: %s', host, e)
+        return False
+
+
+def should_bypass_proxy(base_url: str) -> bool:
+    """True when traffic to *base_url* should bypass the corporate HTTP proxy.
+
+    Self-hosted LLM endpoints are reached directly, never through the corp
+    proxy (which only routes to the public internet). This is broader than
+    :func:`is_local_endpoint` on purpose — it also covers any bare IP
+    literal, because a raw-IP base URL is in practice always a self-hosted /
+    internal box (commercial APIs are addressed by domain). That includes
+    internal-but-publicly-routable corp ranges (e.g. ``33.x``) which
+    :func:`is_local_endpoint` cannot classify without ``TOFU_LOCAL_CIDRS``.
+    """
+    return is_local_endpoint(base_url) or is_raw_ip_host(base_url)
+
 
 # ── Discovery timeout (keep short — runs during startup) ─────
 _DISCOVER_TIMEOUT = 10
@@ -327,6 +362,14 @@ def discover_models(base_url: str, api_key: str,
             models_url = base_url.rstrip('/') + '/' + models_path.lstrip('/')
     else:
         models_url = base_url.rstrip('/') + '/models'
+
+    # Use-time SSRF egress guard (DNS can change since registration).
+    from lib.byo_egress import EgressDenied, validate_egress_url
+    try:
+        validate_egress_url(models_url)
+    except EgressDenied as e:
+        logger.warning('[Discovery] blocked egress to %s: %s', models_url, e)
+        return []
 
     logger.info('[Discovery] Fetching models from %s', models_url)
 
@@ -647,6 +690,13 @@ def _probe_balance_url(base_url: str, api_key: str) -> str:
     """
     parsed = urlparse(base_url.rstrip('/'))
     origin = '%s://%s' % (parsed.scheme, parsed.netloc)
+    # Use-time SSRF egress guard — the origin is what we'll actually hit.
+    from lib.byo_egress import EgressDenied, validate_egress_url
+    try:
+        validate_egress_url(origin)
+    except EgressDenied as e:
+        logger.warning('[BalanceProbe] blocked egress to %s: %s', origin, e)
+        return ''
     headers = {
         'Authorization': 'Bearer %s' % api_key,
         'User-Agent': 'Tofu/1.0',

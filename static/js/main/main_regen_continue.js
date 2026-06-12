@@ -160,7 +160,7 @@ async function regenerateFromUser(idx) {
       let errMsg;
       if (e.name === 'AbortError' && _regenAbortReason === 'timeout') {
         errMsg = _regenWillTranslate
-          ? 'Translation took too long and was cancelled. The server may be overloaded — try again, or disable auto-translate in Settings.'
+          ? 'The server took too long to respond and the request was cancelled — it may be overloaded. Please try again; if this keeps happening with Chinese input, disabling auto-translate in Settings can reduce the delay.'
           : 'Regenerate timed out — the server took too long to respond.';
       } else if (e.name === 'AbortError') {
         errMsg = 'Regenerate was aborted before the server replied.';
@@ -393,6 +393,25 @@ async function continueAssistant() {
   }
   // else: leave any existing priorThinking from a prior Continue in place —
   // streaming this turn produced no extra trailing thinking to overwrite it.
+
+  // ★ Stash the discarded prose tail as a display-only `priorContent` field
+  //   — same rationale + wire-safety contract as `priorThinking` (NOT in
+  //   lib/llm_sanitize._API_MESSAGE_FIELDS, so _strip_non_api_fields drops it
+  //   before any LLM call).  Without this, the rolled-back text vanished
+  //   silently while the tool panel stayed put — the inconsistency the user
+  //   reported ("ptool panel unchanged while the content area just
+  //   disappears").  Surfacing it as a collapsed "Earlier Response" block
+  //   makes the rollback honest and visible.
+  if (discardedContent > 0 && originalContent) {
+    // Prefer the clean discarded tail when preservedContent is a true prefix;
+    // otherwise (reconstructed-from-rounds case where the two diverge) keep
+    // the full original so nothing the model wrote is lost from view.
+    assistantMsg.priorContent = originalContent.startsWith(preservedContent)
+      ? originalContent.slice(preservedContent.length).replace(/^\n+/, '')
+      : originalContent;
+  }
+  // else: nothing was dropped (or preserved === original) — no prior block.
+
   assistantMsg.toolRounds = keptRounds;
   assistantMsg.content = preservedContent;
   // NB: assistantMsg.thinking is cleared here — any thinking we want to
@@ -470,8 +489,6 @@ async function continueAssistant() {
         tmEl.className = "stream-elapsed-timer";
         hdr.appendChild(tmEl);
       }
-      const relEl = msgEl.querySelector(".message-reltime");
-      if (relEl) relEl.remove();
       const bodyEl = msgEl.querySelector(".message-body");
       if (bodyEl) {
         bodyEl.id = "streaming-body";
@@ -532,6 +549,7 @@ async function continueAssistant() {
       assistantMsg.thinking = _originalThinking;
       assistantMsg.toolRounds = allRounds;
       delete assistantMsg.priorThinking;
+      delete assistantMsg.priorContent;
       delete assistantMsg._continueToolRounds;
       delete assistantMsg._continueContentPrefix;
       delete assistantMsg._continueApiRounds;

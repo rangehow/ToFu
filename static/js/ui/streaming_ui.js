@@ -177,6 +177,11 @@ function updateStreamingUI(msg) {
     clearInterval(_pendingStreamTimer);
     _pendingStreamTimer = null;
   }
+  /* ★ Perf: tell renderMarkdown to skip syntax highlighting for the duration
+   * of this streaming render. highlightAuto on a growing code block re-runs
+   * every frame and dominates per-token allocation (GC storm). The block is
+   * highlighted exactly once at finalizeStreaming via the renderMessage path. */
+  window._streamRenderNoHighlight = true;
   /* ★ Incremental content rendering: only re-render the new "tail" of content.
    * We split content at the last stable paragraph/block boundary and only update
    * the tail portion, avoiding full DOM teardown on every token.
@@ -254,6 +259,8 @@ function updateStreamingUI(msg) {
     }
   } catch (e) {
     contentZone.innerHTML = `<div class="md-content">${escapeHtml(msg.content || "")}</div>`;
+  } finally {
+    window._streamRenderNoHighlight = false;
   }
   /* ★ Phase-aware status indicator — shows what the model is doing between visible outputs */
   const phase = msg.phase;
@@ -364,6 +371,7 @@ function _syncToolRoundsDOM(container, rounds) {
         _fp = _fp * 31 + ((a.phase || '').length);
         _fp = _fp * 31 + ((a.preview || '').length);
         _fp = _fp * 31 + ((a.tools || []).length);
+        _fp = _fp * 31 + ((a.modifiedFiles | 0) + 1);
         _fp = _fp * 31 + (a._toolCalls ? a._toolCalls.length : 0);
         if (a._toolCalls && a._toolCalls.length) {
           /* Last call's status flips on every finish event — must
@@ -586,7 +594,7 @@ function _buildSwarmInboxChipsHTML(injects) {
     const word = inj.count === 1 ? 'update' : 'updates';
     chips.push(
       `<div class="sw-inbox-chip" title="Sub-agents pushed ${inj.count} update${inj.count === 1 ? '' : 's'} into the model's next round.">` +
-        `<span class="sw-inbox-chip-icon">📨</span>` +
+        `<span class="sw-inbox-chip-icon"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.5 5.5h13L22 12v6a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-6z"/></svg></span>` +
         `<span class="sw-inbox-chip-text">received</span> ` +
         `<span class="sw-inbox-chip-count">${inj.count}</span> ` +
         `<span class="sw-inbox-chip-text">async swarm ${word}</span>` +
@@ -597,9 +605,88 @@ function _buildSwarmInboxChipsHTML(injects) {
   return chips.join("");
 }
 
+/* Inline SVG icon set for the swarm panel — no emoji (CLAUDE.md §3.4).
+   `currentColor` lets each icon inherit the surrounding text/status color. */
+const _SW_SVG = {
+  /* hub-and-spoke: one parent forking into parallel agents */
+  hub: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="2.1"/><circle cx="5" cy="19" r="2.1"/><circle cx="19" cy="19" r="2.1"/><path d="M12 7.1v3.4M12 10.5L6 16.9M12 10.5l6 6.4"/></svg>',
+  hubSm: '<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="2.4"/><circle cx="5" cy="19" r="2.4"/><circle cx="19" cy="19" r="2.4"/><path d="M12 7.4v3M12 10.4L6 16.6M12 10.4l6 6.2"/></svg>',
+  /* tiny tool glyph (wrench) — fallback when a sub-agent tool has no icon */
+  tool: '<svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a4 4 0 0 0-5.2 5.2L3 18v3h3l6.5-6.5a4 4 0 0 0 5.2-5.2l-2.5 2.5-2.3-.6-.6-2.3z"/></svg>',
+  /* pencil — marks an agent that modified files on disk */
+  pencil: '<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>',
+};
+/* Tool names that mutate files on disk — mirrors lib/swarm/master.py
+   _FILE_WRITE_TOOLS. Used to flag sub-agents that edited the workspace. */
+const _SW_FILE_WRITE_TOOLS = new Set([
+  "write_file", "apply_diff", "apply_diffs", "insert_content", "insert_contents",
+]);
+
+/* How many file-mutating actions did this sub-agent take?
+   Prefers the backend-supplied `modifiedFiles` count (survives reload);
+   falls back to counting write-tool calls in the live `_toolCalls` timeline
+   or the aggregate `tools` name list. Returns 0 when the agent touched no
+   files (the common case — most agents only read). */
+function _swAgentModifiedCount(a) {
+  if (!a) return 0;
+  if (typeof a.modifiedFiles === "number") return a.modifiedFiles;
+  if (Array.isArray(a._toolCalls)) {
+    const n = a._toolCalls.filter(c => _SW_FILE_WRITE_TOOLS.has(c.toolName)).length;
+    if (n > 0) return n;
+  }
+  if (Array.isArray(a.tools)) {
+    return a.tools.filter(t => _SW_FILE_WRITE_TOOLS.has(t)).length;
+  }
+  return 0;
+}
+const _SW_STATUS_SVG = {
+  done: '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>',
+  failed: '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>',
+  running: '<svg viewBox="0 0 24 24" width="9" height="9" fill="currentColor"><circle cx="12" cy="12" r="7"/></svg>',
+  pending: '<svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="7"/></svg>',
+};
+function _swStatusIcon(status) {
+  if (status === 'done' || status === 'completed') return _SW_STATUS_SVG.done;
+  if (status === 'failed' || status === 'error') return _SW_STATUS_SVG.failed;
+  if (status === 'running' || status === 'thinking') return _SW_STATUS_SVG.running;
+  return _SW_STATUS_SVG.pending;
+}
+
+/* After a page reload the live-only `_swarmAgents` array is gone (it is
+   synthesized from swarm_* SSE events and never persisted). Rebuild agent
+   stubs from the persisted `spawn_agents` handle JSON stored in
+   `round.toolContent` so the completed panel's body isn't empty when the
+   user expands it. Returns [] when no handle is recoverable. */
+function _recoverSwarmAgents(round) {
+  const tc = round && round.toolContent;
+  if (!tc || typeof tc !== "string") return [];
+  let handle;
+  try {
+    handle = JSON.parse(tc);
+  } catch (e) {
+    return [];  /* tool result wasn't the JSON handle — nothing to recover */
+  }
+  const list = (handle && Array.isArray(handle.agents)) ? handle.agents : [];
+  return list.map((a) => ({
+    id: a.id || "",
+    role: a.role || "agent",
+    objective: a.objective || "",
+    status: "done",
+    phase: "done",
+    preview: "",
+    tools: [],
+  }));
+}
+
 /* ★ Build the live swarm panel HTML (used during streaming) */
 function _buildSwarmPanelHTML(round) {
-  const agents = round._swarmAgents || [];
+  /* Live path: `_swarmAgents` is populated from swarm_* SSE events.
+     Reload path: that field is gone, so recover stubs from the persisted
+     handle JSON — otherwise the completed panel renders an empty body. */
+  let agents = round._swarmAgents || [];
+  if (agents.length === 0) {
+    agents = _recoverSwarmAgents(round);
+  }
   const isActive = round.status === "searching" || round._swarmActive;
   const total = agents.length;
   const running = agents.filter(a => a.status === "running" || a.status === "thinking").length;
@@ -624,8 +711,8 @@ function _buildSwarmPanelHTML(round) {
 
   /* ── Header icon ── */
   const headerIcon = isActive
-    ? `<span class="sw-header-icon" style="animation:swarmIconBounce 1.2s ease-in-out infinite">⚡</span>`
-    : `<span class="sw-header-icon">⚡</span>`;
+    ? `<span class="sw-header-icon" style="animation:swarmIconBounce 1.2s ease-in-out infinite">${_SW_SVG.hub}</span>`
+    : `<span class="sw-header-icon">${_SW_SVG.hub}</span>`;
 
   /* ── Header subtitle counts ── */
   let headerSubtitle = "";
@@ -656,9 +743,9 @@ function _buildSwarmPanelHTML(round) {
     const n = running + pending;
     statusPill = `<span class="sw-status-pill sw-pill-async" title="Sub-agents are still working in the background — updates arrive automatically as the conversation continues."><span class="sw-async-dot"></span>${n} running async</span>`;
   } else if (failed > 0 && done === 0) {
-    statusPill = `<span class="sw-status-pill sw-pill-error">✗ Failed</span>`;
+    statusPill = `<span class="sw-status-pill sw-pill-error">${_SW_STATUS_SVG.failed} Failed</span>`;
   } else {
-    statusPill = `<span class="sw-status-pill sw-pill-done">✓ Complete</span>`;
+    statusPill = `<span class="sw-status-pill sw-pill-done">${_SW_STATUS_SVG.done} Complete</span>`;
   }
 
   /* ── Progress bar (only when agents exist) ── */
@@ -684,15 +771,11 @@ function _buildSwarmPanelHTML(round) {
   let agentCards = "";
   if (agents.length > 0) {
     agentCards = agents.map((a, i) => {
-      const statusIcon = {
-        done: "", completed: "", failed: "", error: "",
-        running: "", thinking: "", pending: "",
-      };
-      const sIcon = statusIcon[a.status] || "";
+      const sIcon = _swStatusIcon(a.status);
       const taskNum = `#${i + 1}`;
-      const objective = escapeHtml((a.objective || "").slice(0, 300));
+      const objective = escapeHtml(a.objective || "");
       const phase = a.phase || a.status || "";
-      const preview = (a.preview || "").slice(0, 400);
+      const preview = (a.preview || "").slice(0, 1200);
       /* Backend log token — matches `[Agent:%s]` in lib/swarm/agent.py
          (self.agent_id = f'agent-{role}-{spec.id}') so a user copying
          the chip can grep server logs directly. */
@@ -702,6 +785,12 @@ function _buildSwarmPanelHTML(round) {
       const roleLabel = escapeHtml(role);
       const idChip = a.id
         ? `<span class="sw-a-id" title="Click to copy log ID — grep '${escapeHtml(grepToken)}' in app.log to trace this agent" data-grep="${escapeHtml(grepToken)}" onclick="event.stopPropagation();(navigator.clipboard&&navigator.clipboard.writeText(this.dataset.grep));this.classList.add('sw-a-id-copied');setTimeout(()=>this.classList.remove('sw-a-id-copied'),900);">${escapeHtml(shortId)}</span>`
+        : "";
+      /* Concrete model this agent runs on (spec override → role tier →
+         parent default), resolved server-side and sent on spawn / start /
+         complete events. */
+      const modelChip = a.model
+        ? `<span class="sw-a-model" title="Model: ${escapeHtml(a.model)}">${escapeHtml(a.model)}</span>`
         : "";
 
       /* ── Status class ── */
@@ -716,9 +805,17 @@ function _buildSwarmPanelHTML(round) {
         thinking: "Thinking…", tool_use: "Using tools", writing: "Writing…",
         searching: "Searching…", coding: "Coding…", analyzing: "Analyzing…",
         done: "Complete", completed: "Complete", failed: "Failed", error: "Error",
-        pending: "Queued", running: "Working…",
+        pending: "Queued", running: "Working…", waiting: "Queued", queued: "Queued",
       };
-      const phaseLabel = phaseMap[phase] || phase || "Queued";
+      /* Status wins for a terminated agent: if status is done/failed but the
+         phase got stranded at a spawn-time value (e.g. "waiting" because the
+         per-agent events were routed to another panel), show the terminal
+         label rather than a contradictory "waiting"/"Queued" pill next to a
+         done checkmark (status/phase desync). */
+      let phaseLabel;
+      if (a.status === "done" || a.status === "completed") phaseLabel = "Complete";
+      else if (a.status === "failed" || a.status === "error") phaseLabel = "Failed";
+      else phaseLabel = phaseMap[phase] || phase || "Queued";
 
       /* ── Agent elapsed ── */
       let agentTimer = "";
@@ -746,7 +843,7 @@ function _buildSwarmPanelHTML(round) {
           const depAgent = agents.find(x => x.id === depId);
           const depLabel = depAgent ? `Task ${agents.indexOf(depAgent) + 1}` : depId;
           const depDone = depAgent && (depAgent.status === "done" || depAgent.status === "completed");
-          return `<span class="sw-dep-tag ${depDone ? 'sw-dep-done' : ''}">${depDone ? '✓' : ''} ${escapeHtml(depLabel)}</span>`;
+          return `<span class="sw-dep-tag ${depDone ? 'sw-dep-done' : ''}">${depDone ? _SW_STATUS_SVG.done + ' ' : ''}${escapeHtml(depLabel)}</span>`;
         }).join("");
         bodyContent += `<div class="sw-a-deps"><span class="sw-a-deps-label">Waits for:</span>${depHTML}</div>`;
       }
@@ -755,7 +852,7 @@ function _buildSwarmPanelHTML(round) {
       if (a.tools && a.tools.length > 0) {
         const toolHTML = a.tools.slice(-6).map(t => {
           const td = _TOOL_DISPLAY[t];
-          const icon = td ? td.icon : "⚡";
+          const icon = (td && td.icon) ? td.icon : _SW_SVG.tool;
           const label = td ? (td.label || t) : t;
           return `<span class="sw-a-tool-tag" title="${escapeHtml(t)}">${icon} ${label}</span>`;
         }).join("");
@@ -769,10 +866,10 @@ function _buildSwarmPanelHTML(round) {
       if (a._toolCalls && a._toolCalls.length > 0) {
         const rowsHTML = a._toolCalls.map(c => {
           const dot = c.status === "running" ? '<span class="sw-tl-dot sw-tl-running"></span>'
-                    : c.status === "failed"  ? '<span class="sw-tl-dot sw-tl-failed">✗</span>'
-                    :                          '<span class="sw-tl-dot sw-tl-done">✓</span>';
+                    : c.status === "failed"  ? `<span class="sw-tl-dot sw-tl-failed">${_SW_STATUS_SVG.failed}</span>`
+                    :                          `<span class="sw-tl-dot sw-tl-done">${_SW_STATUS_SVG.done}</span>`;
           const td = _TOOL_DISPLAY[c.toolName];
-          const icon = td ? td.icon : "⚡";
+          const icon = (td && td.icon) ? td.icon : _SW_SVG.tool;
           const elapsedStr = (typeof c.elapsed === "number") ? `${c.elapsed.toFixed(1)}s` : "";
           const detail = c.error || c.preview || "";
           const expandable = !!detail;
@@ -815,12 +912,22 @@ function _buildSwarmPanelHTML(round) {
       /* Auto-open running agents, collapse done ones */
       const autoOpen = (a.status === "running" || a.status === "thinking") ? " sw-a-open" : "";
 
-      return `<div class="sw-agent ${sClass}${autoOpen}" data-agent-id="${escapeHtml(a.id || '')}">` +
+      /* ★ File-modification flag — agents that wrote/edited files warrant
+         closer review, so mark them with a pencil pill + the edit count. */
+      const editCount = _swAgentModifiedCount(a);
+      const editPill = editCount > 0
+        ? `<span class="sw-a-edited" title="This agent modified ${editCount} file action(s) — review its changes">${_SW_SVG.pencil}${editCount}</span>`
+        : "";
+      const editedClass = editCount > 0 ? " sw-a-has-edits" : "";
+
+      return `<div class="sw-agent ${sClass}${autoOpen}${editedClass}" data-agent-id="${escapeHtml(a.id || '')}">` +
         `<div class="sw-a-header" onclick="this.closest('.sw-agent').classList.toggle('sw-a-open')">` +
           `<span class="sw-a-status-icon">${sIcon}</span>` +
           `<span class="sw-a-num">${taskNum}</span>` +
           `<span class="sw-a-role-tag" title="role">${roleLabel}</span>` +
           idChip +
+          modelChip +
+          editPill +
           `<span class="sw-a-phase-pill">${phaseLabel}</span>` +
           agentTimer +
           `<span class="sw-a-chevron">▾</span>` +
@@ -833,7 +940,7 @@ function _buildSwarmPanelHTML(round) {
   /* ── Stats footer ── */
   let statsFooter = "";
   const footerParts = [];
-  if (total > 0) footerParts.push(`⚡ ${total} parallel task${total > 1 ? "s" : ""}`);
+  if (total > 0) footerParts.push(`${_SW_SVG.hubSm} ${total} parallel task${total > 1 ? "s" : ""}`);
   if (round._swarmStats) {
     const s = round._swarmStats;
     if (s.totalTokens) footerParts.push(`${s.totalTokens >= 1000000 ? (s.totalTokens/1000000).toFixed(1) + "m" : s.totalTokens > 1000 ? (s.totalTokens/1000).toFixed(1) + "k" : s.totalTokens} tokens`);
@@ -867,8 +974,10 @@ function _buildSwarmPanelHTML(round) {
 
 /* ★ Build the done HTML specifically for swarm rounds — reuses the panel layout */
 function _buildSwarmDoneHTML(round, showNums) {
-  /* If we have _swarmAgents, render the full panel */
-  if (round._swarmAgents && round._swarmAgents.length > 0) {
+  /* Prefer the full panel: live `_swarmAgents`, else stubs recovered from
+     the persisted handle JSON (post-reload). */
+  if ((round._swarmAgents && round._swarmAgents.length > 0)
+      || _recoverSwarmAgents(round).length > 0) {
     const patchedRound = Object.assign({}, round, { _swarmActive: false });
     return _buildSwarmPanelHTML(patchedRound);
   }
@@ -881,13 +990,13 @@ function _buildSwarmDoneHTML(round, showNums) {
   return `<div class="sw-panel sw-complete">` +
     `<div class="sw-header">` +
       `<div class="sw-header-left">` +
-        `` +
+        `<span class="sw-header-icon">${_SW_SVG.hub}</span>` +
         `<div class="sw-header-info">` +
-          `<span class="sw-header-title">Agent Swarm</span>` +
+          `<span class="sw-header-title">Parallel Execution</span>` +
         `</div>` +
       `</div>` +
       `<div class="sw-header-right">` +
-        `<span class="sw-status-pill sw-pill-done">✓ Complete</span>` +
+        `<span class="sw-status-pill sw-pill-done">${_SW_STATUS_SVG.done} Complete</span>` +
         (elapsed ? `<span class="sw-header-timer">${elapsed}</span>` : "") +
       `</div>` +
     `</div>` +
@@ -1040,6 +1149,15 @@ function finishStream(convId) {
     if (_hgCleaned > 0) {
       console.info(`[finishStream] 🧹 Cleaned ${_hgCleaned} orphaned HG round(s) — conv=${convId.slice(0,8)}`);
     }
+    /* ★ FIX: clear a lingering "filtering memories" state.  If the task was
+     *   stopped (or died) while the cheap-LLM memory prefetch was still
+     *   running, no terminal memory_prefetch event ever arrives to reset
+     *   conv._memoryPrefetching — the sidebar dot/tag would stay stuck.
+     *   finishStream is the universal terminal point, so reset it here. */
+    if (conv._memoryPrefetching) {
+      conv._memoryPrefetching = false;
+      console.info(`[finishStream] 🧹 Cleared stuck memory-prefetch state — conv=${convId.slice(0,8)}`);
+    }
     conv.activeTaskId = null;
     conv._activeTaskClearedAt = Date.now();
     saveConversations(convId);
@@ -1061,7 +1179,13 @@ function finishStream(convId) {
      * reconciliation can move it off conv.messages[length-1]. */
     const _fsApCarrier = _findAutopilotPendingCarrier(conv);
     const _fsAutopilotInbound = !!_fsApCarrier;
-    if (_fsHasQueued) {
+    const _fsLastMsg = conv.messages[conv.messages.length - 1];
+    const _fsIsServerOffline = _fsLastMsg && _fsLastMsg.finishReason === 'server_offline';
+    if (_fsIsServerOffline) {
+      console.info(`[finishStream] 📡 Skipping syncConversationToServer — ` +
+        `finishReason=server_offline for conv=${convId.slice(0,8)}; ` +
+        `backend has the complete content, frontend only has a truncated snapshot`);
+    } else if (_fsHasQueued) {
       console.info(`[finishStream] 🚧 Skipping syncConversationToServer — ` +
         `queue has ${pendingMessageQueue.get(convId).length} item(s) for conv=${convId.slice(0,8)}; ` +
         `backend owns the next DB write via dispatch_next_queued()`);
@@ -1076,6 +1200,13 @@ function finishStream(convId) {
      *   on success, but it may be guarded/skipped in some edge cases.  This ensures
      *   the cache always has the latest post-stream content for instant reload. */
     ConvCache.put(conv);
+    /* ★ Auto-generate a descriptive title once the first turn completes.
+     *   The helper guards itself (skips if user-edited, already attempted, or
+     *   the conversation lacks a user+assistant pair), so this is a safe
+     *   fire-and-forget call on every stream finish. */
+    if (typeof _maybeAutoGenerateTitle === 'function' && !hasError) {
+      _maybeAutoGenerateTitle(convId);
+    }
   } else {
     console.error(`[finishStream] conv not found for id=${convId.slice(0,8)} — cannot save!`);
   }

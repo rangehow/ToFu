@@ -19,7 +19,13 @@
 const _TRANSLATE_POLL_MAX_ATTEMPTS = 40;   // ~150s total budget
 const _TRANSLATE_POLL_FAST_DELAY  = 2000;  // first 5 polls
 const _TRANSLATE_POLL_SLOW_DELAY  = 4000;  // remaining polls
-const _TRANSLATE_STALE_FRAC       = 0.15;  // <15% → stale partial translation
+
+/* Stale-partial heuristic thresholds. The policy lives in Python
+ * (lib/text_lang.is_stale_partial_translation) and is served via
+ * /api/v1/server-config → cached on window._translationPolicy. The constants
+ * below are only the pre-config-load fallback — never the source of truth. */
+const _TRANSLATE_STALE_FRAC_FALLBACK = 0.15;  // <15% → stale partial translation
+const _TRANSLATE_STALE_MIN_SOURCE_FALLBACK = 500;
 
 /**
  * Server-side language detection. Mirrors lib/text_lang.is_predominantly_chinese:
@@ -59,6 +65,11 @@ function _renderMsgInPlace(convId, idx, msg) {
   if (typeof activeConvId === 'undefined' || activeConvId !== convId) return;
   if (typeof renderMessage !== 'function') return;
   const el = document.getElementById(`msg-${idx}`);
+  // No surgical target: the bubble isn't laid out yet (conversation still
+  // loading) or the index drifted.  Do NOT full-renderChat here — that
+  // rebuilds the whole DOM and resets scroll to the top (the "jumps to the
+  // beginning" bug).  The msg object is already mutated in memory + DB, so
+  // the next natural render (or scroll-into-view) shows the translation.
   if (!el) return;
   const ct = document.getElementById('chatContainer');
   const inner = document.getElementById('chatInner');
@@ -77,11 +88,17 @@ function _renderMsgInPlace(convId, idx, msg) {
 
 /**
  * Stale-partial detector: a translation produced from mid-stream
- * partial content tends to be < 15% of the (now-final) source length.
+ * partial content tends to be a small fraction of the (now-final) source.
+ * Thresholds are backend-owned (lib/text_lang.is_stale_partial_translation),
+ * served via window._translationPolicy; fall back to constants pre-load.
  */
 function _isStalePartialTranslation(msg) {
-  return !!(msg && msg.translatedContent && msg.content && msg.content.length > 500 &&
-            msg.translatedContent.length < msg.content.length * _TRANSLATE_STALE_FRAC);
+  if (!msg || !msg.translatedContent || !msg.content) return false;
+  const p = (typeof window !== 'undefined' && window._translationPolicy) || null;
+  const frac = (p && p.stale_frac > 0) ? p.stale_frac : _TRANSLATE_STALE_FRAC_FALLBACK;
+  const minSrc = (p && p.min_source_chars > 0) ? p.min_source_chars : _TRANSLATE_STALE_MIN_SOURCE_FALLBACK;
+  return msg.content.length > minSrc &&
+         msg.translatedContent.length < msg.content.length * frac;
 }
 
 function _resetTranslationState(msg) {
@@ -154,9 +171,17 @@ function _applyTranslationDone(convId, idx, msg, result, field) {
  * full-message re-render if the loading indicator isn't in the DOM yet
  * (e.g. first running tick after a reload).
  */
+// Status kinds that are NOT problems — the spinner + "翻译中…" label already
+// convey them, so surfacing them as a ⚠ warning sub-line is redundant noise
+// (the duplicate "正在调用翻译模型，请稍候…" the user reported). Only genuine
+// retry conditions (rate_limited, *_error, truncated, empty_output, …) warrant
+// the warning line.
+const _TRANSLATE_BENIGN_STATUS_KINDS = new Set(['started', 'in_progress']);
+
 function _applyTranslationStatus(convId, idx, msg, result) {
   let changed = false;
-  if (result.statusMessage && result.statusMessage !== msg._translateStatus) {
+  if (result.statusMessage && result.statusMessage !== msg._translateStatus
+      && !_TRANSLATE_BENIGN_STATUS_KINDS.has(result.statusKind || '')) {
     msg._translateStatus = result.statusMessage;
     msg._translateStatusKind = result.statusKind || '';
     changed = true;

@@ -255,6 +255,22 @@ class TestMessageRoles:
 # ═══════════════════════════════════════════════════════════
 
 @pytest.mark.unit
+class TestResolveModelConfigResponseFormat:
+    """Verify _resolve_model_config surfaces responseFormat into the mcfg dict."""
+
+    def test_response_format_surfaced(self):
+        from lib.tasks_pkg.model_config import _resolve_model_config
+        rf = {'type': 'json_object'}
+        mcfg = _resolve_model_config({'model': 'gpt-x', 'responseFormat': rf}, 'tid12345')
+        assert mcfg['response_format'] == rf
+
+    def test_response_format_none_by_default(self):
+        from lib.tasks_pkg.model_config import _resolve_model_config
+        mcfg = _resolve_model_config({'model': 'gpt-x'}, 'tid12345')
+        assert mcfg['response_format'] is None
+
+
+@pytest.mark.unit
 class TestAssembleToolListReturnValue:
     """Verify _assemble_tool_list returns the expected 3-tuple."""
 

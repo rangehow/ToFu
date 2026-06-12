@@ -31,7 +31,6 @@ from __future__ import annotations
 import datetime
 import threading
 import time
-from typing import Optional
 
 from lib.config_dir import config_path
 from lib.json_store import read_json, update_json_atomic

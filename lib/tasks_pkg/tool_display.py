@@ -141,8 +141,79 @@ def _tool_display_code_exec(fn_name, fn_args, tc_id, tc_args_str):
     return display, {'toolName': 'code_exec'}
 
 
+def _persisted_read_labels(fn_args):
+    """When a read_files call targets spilled-to-disk tool results, return a
+    friendly display string (e.g. ``Read web search result — "…"``) instead
+    of the opaque persisted filename. Returns '' when no path is a known
+    persisted result so the caller keeps the default rendering.
+    """
+    if not isinstance(fn_args, dict):
+        return ''
+    reads = fn_args.get('reads')
+    if isinstance(reads, str):
+        import json
+        try:
+            reads = json.loads(reads)
+        except (ValueError, TypeError) as e:
+            logger.debug('[ToolDisplay] read_files reads=str not JSON: %s', e)
+            reads = None
+    specs = []
+    if isinstance(reads, list):
+        for r in reads:
+            if isinstance(r, dict) and r.get('path'):
+                specs.append(r)
+            elif isinstance(r, str) and r:
+                specs.append({'path': r})
+    elif fn_args.get('path'):
+        specs.append(fn_args)
+    if not specs:
+        return ''
+
+    from lib.tasks_pkg.persist_registry import (
+        describe_filename, friendly_label, lookup,
+    )
+    labels = []
+    persisted_count = 0
+    for spec in specs:
+        p = spec.get('path') or ''
+        hit = lookup(p) or describe_filename(p)
+        if hit is not None:
+            persisted_count += 1
+            labels.append(friendly_label(*hit))
+            continue
+        # Non-persisted (ordinary project file) in a mixed batch — keep the
+        # normal basename + line-range rendering so its path/range survives.
+        base = p.rsplit('/', 1)[-1] or p
+        sl, el = spec.get('start_line'), spec.get('end_line')
+        if sl is not None and el is not None:
+            labels.append(f'{base} L{sl}-{el}')
+        elif sl is not None:
+            labels.append(f'{base} L{sl}+')
+        else:
+            labels.append(base)
+
+    # Pure project read (nothing persisted) — defer to default rendering.
+    if persisted_count == 0:
+        return ''
+
+    n = len(labels)
+    # When every path is a persisted spill, the friendly "saved results"
+    # header is accurate; a mixed batch also pulls in project files, so use
+    # the neutral "files" header there.
+    header = (f'Read {n} saved result{"s" if n != 1 else ""}'
+              if persisted_count == n else f'Read {n} file{"s" if n != 1 else ""}')
+    # One entry per line so the frontend (which turns \n → <br>) renders
+    # every label in full instead of eliding to the first few.
+    body = '\n'.join(f'• {lbl}' for lbl in labels)
+    return f'{header}:\n{body}'
+
+
 def _tool_display_project(fn_name, fn_args, tc_id, tc_args_str):
     """Build display info for project tool calls."""
+    if fn_name == 'read_files':
+        friendly = _persisted_read_labels(fn_args)
+        if friendly:
+            return friendly, {'toolName': fn_name}
     from lib.project_mod import project_tool_display
     display = project_tool_display(fn_name, fn_args)
     return display, {'toolName': fn_name}
@@ -156,21 +227,25 @@ def _tool_display_browser(fn_name, fn_args, tc_id, tc_args_str):
 
 
 def _tool_display_memory(fn_name, fn_args, tc_id, tc_args_str):
-    """Build display info for memory management tool calls."""
+    """Build display info for memory management tool calls.
+
+    No emoji prefix — the frontend renders a per-tool SVG icon (see
+    ``_webToolSvg`` in ``static/js/ui/tool_rounds.js``).
+    """
     if fn_name == 'create_memory':
-        display = f"💡 Saving memory: {fn_args.get('name', '?')}"
+        display = f"Saving memory: {fn_args.get('name', '?')}"
     elif fn_name == 'update_memory':
-        display = f"✏️ Updating memory: {fn_args.get('memory_id', '?')}"
+        display = f"Updating memory: {fn_args.get('memory_id', '?')}"
     elif fn_name == 'delete_memory':
-        display = f"🗑️ Deleting memory: {fn_args.get('memory_id', '?')}"
+        display = f"Deleting memory: {fn_args.get('memory_id', '?')}"
     elif fn_name == 'merge_memories':
         ids = fn_args.get('memory_ids', [])
-        display = f"🔀 Merging {len(ids)} memories → {fn_args.get('name', '?')}"
+        display = f"Merging {len(ids)} memories → {fn_args.get('name', '?')}"
     elif fn_name == 'search_memories':
         query = fn_args.get('query', '')
-        display = f"🔍 Searching memories: {query[:80]}" if query else "🔍 Searching memories"
+        display = f"Searching memories: {query[:80]}" if query else "Searching memories"
     else:
-        display = f"💡 {fn_name}"
+        display = fn_name
     return display, {'toolName': fn_name}
 
 
@@ -204,8 +279,16 @@ def _tool_display_swarm(fn_name, fn_args, tc_id, tc_args_str):
     """
     if fn_name == 'spawn_agents':
         n_agents = len(fn_args.get('agents', [])) if isinstance(fn_args, dict) else 0
-        display = (f"⚡ Spawning {n_agents} agent{'s' if n_agents != 1 else ''}…"
-                   if n_agents else "⚡ Spawning agents…")
+        # A spawn_agents call with NO agents launches nothing (the backend
+        # returns ``{"error": "no agents specified"}``). It must NOT be
+        # stamped ``_swarm: True`` — an empty swarm panel becomes an event
+        # magnet: the frontend's "first _swarm round" lookup grafts a LATER
+        # real swarm's agent events onto this orphan round, splitting one
+        # swarm across two panels (the "ghost panel" / "ticked but waiting"
+        # bug). Render it as an ordinary tool round instead.
+        if not n_agents:
+            return "⚡ Spawning agents…", {'toolName': 'spawn_agents'}
+        display = f"⚡ Spawning {n_agents} agent{'s' if n_agents != 1 else ''}…"
         return display, {'toolName': 'spawn_agents', '_swarm': True}
 
     if fn_name == 'await_agents':
@@ -235,9 +318,22 @@ def _tool_display_compact(fn_name, fn_args, tc_id, tc_args_str):
 
 
 def _tool_display_image_gen(fn_name, fn_args, tc_id, tc_args_str):
-    """Build display info for image generation tool calls."""
-    prompt = fn_args.get('prompt', '…')[:80]
-    return f'🎨 Generating: {prompt}', {'toolName': 'generate_image'}
+    """Build display info for image generation tool calls.
+
+    ★ No hard 80-char cap on the prompt — the frontend word-wraps the
+    title line and users explicitly requested "do not truncate". A very
+    generous soft cap (2000 chars) still protects against a pathological
+    prompt bloating every SSE event. The full prompt is also exposed via
+    ``imagePrompt`` so the frontend footer can render it untruncated.
+    """
+    _FULL_LIMIT = 2000
+    prompt = fn_args.get('prompt', '…') or '…'
+    if len(prompt) > _FULL_LIMIT:
+        prompt = prompt[:_FULL_LIMIT - 1] + '…'
+    return f'🎨 Generating: {prompt}', {
+        'toolName': 'generate_image',
+        'imagePrompt': prompt,
+    }
 
 
 

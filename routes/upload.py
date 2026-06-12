@@ -110,7 +110,7 @@ def _safe_image_fetch(url: str, *, timeout: int = 30) -> tuple[bytes, str]:
     The request streams (``stream=True``) and aborts as soon as the size cap
     is reached, so an attacker cannot OOM the server with a huge body.
     """
-    import requests as _requests
+    from lib.http_client import http_get
 
     parsed = urlparse(url)
     if parsed.scheme not in ('http', 'https'):
@@ -136,11 +136,8 @@ def _safe_image_fetch(url: str, *, timeout: int = 30) -> tuple[bytes, str]:
                     f'(loopback/private/link-local/reserved)'
                 )
 
-    from lib.proxy import proxies_for as _proxies_for
-
     max_bytes = _image_fetch_max_bytes()
-    resp = _requests.get(url, proxies=_proxies_for(url),
-                         timeout=timeout, stream=True)
+    resp = http_get(url, timeout=timeout, stream=True)
     try:
         resp.raise_for_status()
         # Honor Content-Length if the server is honest; still re-check while
@@ -773,7 +770,7 @@ def parse_pdf():
     if pdf_bytes[:5] != b'%PDF-' and not file.filename.lower().endswith('.pdf'):
         logger.warning('[parse_pdf] Not a PDF: %s (header=%.10s)', file.filename, pdf_bytes[:10])
         return api_bad_request('Not a PDF')
-    from lib.pdf_parser import parse_pdf as _parse_pdf
+    from lib.pdf_parser.pool import parse_pdf_pooled as _parse_pdf
     logger.info('[parse_pdf] Starting parse: %s (%d bytes, %.1f MB)',
                 file.filename, len(pdf_bytes), len(pdf_bytes) / 1048576)
     try:

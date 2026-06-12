@@ -120,8 +120,16 @@ def _mint_session_key(user) -> tuple[dict, str]:
         metadata={'origin': 'login', 'email': user.email})
 
 
+def _response_obj(resp):
+    """Unwrap the Response from api_ok/api_created's ``(response, status)``
+    tuple so we can mutate cookies on it. Accepts a bare Response too."""
+    if isinstance(resp, tuple):
+        return resp[0]
+    return resp
+
+
 def _set_session_cookie(resp, token: str) -> None:
-    resp.set_cookie(
+    _response_obj(resp).set_cookie(
         SESSION_COOKIE, token,
         max_age=SESSION_COOKIE_MAX_AGE,
         httponly=True, samesite='Lax',
@@ -221,9 +229,9 @@ def logout_route():
         audit_log('user_logout', user_id=ctx.user_id,
                   key_id=ctx.key_id)
     resp = api_ok(ok=True)
-    resp.set_cookie(SESSION_COOKIE, '', expires=0, max_age=0,
-                    httponly=True, samesite='Lax',
-                    secure=request.is_secure)
+    _response_obj(resp).set_cookie(SESSION_COOKIE, '', expires=0, max_age=0,
+                                   httponly=True, samesite='Lax',
+                                   secure=request.is_secure)
     return resp
 
 

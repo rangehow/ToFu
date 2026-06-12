@@ -6,18 +6,18 @@ guidance prompt). They share no state with the rest of ``chat.py``
 beyond the public ``chat_bp`` Blueprint.
 """
 
-from flask import jsonify, request
 
 from lib.log import get_logger
 from lib.api_response import api_bad_request, api_internal_error, api_not_found, api_ok
 from lib.request_parser import parse_body
-from routes.chat import chat_bp  # legacy bp (still used for /api/chat/stream)
 from routes.api_v1.chat import api_v1_chat_bp  # noqa: E402
+from routes.api_v1.auth import require_scope
 
 logger = get_logger(__name__)
 
 
 @api_v1_chat_bp.route('/api/v1/chat/stdin-response', methods=['POST'], endpoint='ui_chat_stdin_response')
+@require_scope('chat')
 def chat_stdin_response():
     """Provide stdin input to a subprocess waiting for user input.
 
@@ -51,6 +51,7 @@ def chat_stdin_response():
     logger.info('[Stdin] Successfully resolved %s', stdin_id)
     return api_ok({'stdinId': stdin_id})
 @api_v1_chat_bp.route('/api/v1/chat/human-response', methods=['POST'], endpoint='ui_chat_human_response')
+@require_scope('chat')
 def chat_human_response():
     """Resolve a human guidance request — the user has answered a question.
 

@@ -254,14 +254,14 @@ SKIP_DOMAINS = {
 if isinstance(_search_cfg.get('skip_domains'), list):
     SKIP_DOMAINS = set(_search_cfg['skip_domains'])
 
-# Apply saved llm_content_filter setting at startup (not just on hot-reload)
-if 'llm_content_filter' in _search_cfg:
-    try:
-        import lib.fetch.content_filter as _cf_mod
-        _cf_mod.FILTER_ENABLED = bool(_search_cfg['llm_content_filter'])
-    except Exception as _e:
-        import logging as _logging
-        _logging.getLogger(__name__).debug('Could not apply saved llm_content_filter: %s', _e)
+# Resolved LLM-content-filter toggle (env > saved config > default ON).
+# tofu-search's pipeline reads this via lib/search_bridge.sync_search_config();
+# the bridge is installed at server startup, after this module is imported.
+LLM_CONTENT_FILTER_ENABLED = (
+    os.environ.get('FETCH_LLM_FILTER', '1') == '1'
+    if os.environ.get('FETCH_LLM_FILTER') is not None
+    else bool(_search_cfg.get('llm_content_filter', True))
+)
 
 # ── Model pricing tables — now live in lib/pricing.py ──
 # Imported here for backward compatibility (all consumers use `from lib import MODEL_PRICING`)
@@ -344,6 +344,19 @@ def reload_config():
     _mod.FETCH_MAX_BYTES = _rcfg('FETCH_MAX_BYTES', 'max_bytes', 20*1024*1024)
     if 'skip_domains' in _search and isinstance(_search['skip_domains'], list):
         _mod.SKIP_DOMAINS = set(_search['skip_domains'])
+    # Re-resolve the content-filter toggle (env > saved > default ON).
+    _mod.LLM_CONTENT_FILTER_ENABLED = (
+        os.environ.get('FETCH_LLM_FILTER', '1') == '1'
+        if os.environ.get('FETCH_LLM_FILTER') is not None
+        else bool(_search.get('llm_content_filter', True))
+    )
+    # Push the refreshed fetch/search settings into tofu-search's global config.
+    try:
+        from lib.search_bridge import sync_search_config
+        sync_search_config()
+    except Exception as _be:
+        import logging as _logging
+        _logging.getLogger(__name__).debug('tofu-search config re-sync skipped: %s', _be)
 
     # Feature flags
     _mod.PPTX_TRANSLATE_ENABLED = _resolve_feature_flag('PPTX_TRANSLATE_ENABLED', 'pptx_translate_enabled', False)

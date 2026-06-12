@@ -14,6 +14,7 @@ import requests
 
 import lib as _lib
 from lib.llm._transport import (
+    CONNECT_TIMEOUT,
     MAX_STREAM_RETRIES,
     chat_url,
     headers,
@@ -23,6 +24,7 @@ from lib.llm.body import build_body
 from lib.llm.cache import add_cache_breakpoints
 from lib.llm_errors import (
     ContentFilterError,
+    EndpointUnreachableError,
     InvalidImageError,
     PermissionError_,
     PromptTooLongError,
@@ -37,7 +39,6 @@ from lib.model_info import (
     _parse_token_limit_from_error,
     is_claude,
 )
-from lib.proxy import proxies_for
 from lib.http_client import http_post
 
 logger = get_logger(__name__)
@@ -47,7 +48,7 @@ def chat(messages, model=None, *, max_tokens=4096, temperature=0,
          thinking_enabled=False, preset='low', effort=None, extra=None,
          timeout=120, log_prefix='', api_key=None, base_url=None,
          extra_headers=None, max_retries=None, _limit_retry=False,
-         thinking_format='', provider_id=''):
+         thinking_format='', provider_id='', api_protocol='openai'):
     """Non-streaming chat completion.
 
     Args:
@@ -64,7 +65,12 @@ def chat(messages, model=None, *, max_tokens=4096, temperature=0,
         RetryableAPIError, PromptTooLongError, Exception
     """
     model = model or _lib.LLM_MODEL
-    url = f'{base_url.rstrip("/")}/chat/completions' if base_url else chat_url()
+    _anthropic = (api_protocol == 'anthropic')
+    if _anthropic:
+        from lib.llm.anthropic_outbound import anthropic_messages_url
+        url = anthropic_messages_url(base_url)
+    else:
+        url = f'{base_url.rstrip("/")}/chat/completions' if base_url else chat_url()
 
     body = build_body(
         model, messages,
@@ -102,6 +108,10 @@ def chat(messages, model=None, *, max_tokens=4096, temperature=0,
                 else:
                     extra_headers['anthropic-beta'] = _ttl_beta
 
+    if _anthropic:
+        from lib.llm.anthropic_outbound import openai_body_to_anthropic
+        body = openai_body_to_anthropic(body)
+
     if log_prefix:
         logger.debug('%s POST %s model=%s msgs=%d', log_prefix, url, model, len(messages))
 
@@ -112,16 +122,30 @@ def chat(messages, model=None, *, max_tokens=4096, temperature=0,
     for attempt in range(1 + retries):
         try:
             trace_id = uuid.uuid4().hex
-            hdrs = headers()
+            if _anthropic:
+                from lib.llm.anthropic_outbound import anthropic_headers
+                hdrs = anthropic_headers(api_key, extra_headers)
+            else:
+                hdrs = headers()
+                if api_key:
+                    hdrs['Authorization'] = f'Bearer {api_key}'
+                if extra_headers:
+                    hdrs.update(extra_headers)
             hdrs['M-TraceId'] = trace_id
-            if api_key:
-                hdrs['Authorization'] = f'Bearer {api_key}'
-            if extra_headers:
-                hdrs.update(extra_headers)
             if log_prefix:
                 logger.debug('%s M-TraceId=%s', log_prefix, trace_id)
-            resp = http_post(url, headers=hdrs, json=body,
-                                 timeout=(30, timeout))
+            try:
+                resp = http_post(url, headers=hdrs, json=body,
+                                     timeout=(CONNECT_TIMEOUT, timeout))
+            except requests.exceptions.ConnectionError as ce:
+                # Connect-phase failure = endpoint down. Escape to the
+                # dispatch layer for failover instead of burning the
+                # same-key retry loop on a dead host.
+                logger.warning('%s ✖ Endpoint unreachable (connect phase) %s: %s',
+                               log_prefix, url, ce)
+                raise EndpointUnreachableError(
+                    'endpoint unreachable: %s' % ce,
+                    base_url=base_url or '') from ce
             resp_trace = resp.headers.get('M-TraceId', '')
             if resp_trace and resp_trace != trace_id:
                 logger.debug('%s resp M-TraceId=%s', log_prefix, resp_trace)
@@ -144,7 +168,7 @@ def chat(messages, model=None, *, max_tokens=4096, temperature=0,
                             extra_headers=extra_headers,
                             max_retries=max_retries, _limit_retry=True,
                             thinking_format=thinking_format,
-                            provider_id=provider_id)
+                            provider_id=provider_id, api_protocol=api_protocol)
                         usage_r['_model_limit_learned'] = {
                             'model': model,
                             'old_limit': max_tokens,
@@ -154,7 +178,7 @@ def chat(messages, model=None, *, max_tokens=4096, temperature=0,
                 _classify_http_error(resp.status_code, err_msg, model,
                                      log_prefix, max_tokens=max_tokens)
             break
-        except (RateLimitError, PermissionError_, ContentFilterError, PromptTooLongError, StreamOnlyError, InvalidImageError):
+        except (RateLimitError, PermissionError_, ContentFilterError, PromptTooLongError, StreamOnlyError, InvalidImageError, EndpointUnreachableError):
             raise
         except _RETRYABLE as e:
             if attempt < retries:
@@ -175,6 +199,9 @@ def chat(messages, model=None, *, max_tokens=4096, temperature=0,
             f'API returned invalid JSON (HTTP {resp.status_code}): '
             f'{resp.text[:500]}'
         ) from e
+    if _anthropic:
+        from lib.llm.anthropic_outbound import anthropic_response_to_openai
+        data = anthropic_response_to_openai(data)
     choices = data.get('choices') or []
     if not choices:
         raise Exception(

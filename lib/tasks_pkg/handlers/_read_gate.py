@@ -276,8 +276,18 @@ def check_read_before_edit(task: dict, fn_name: str, fn_args: dict,
     if not unread:
         return None
 
-    paths_list = ', '.join(raw for raw, _ in unread)
-    msg = (
+    msg = _format_refusal(fn_name, [raw for raw, _ in unread])
+    logger.info(
+        '[ReadGate] Refused %s for unread file(s) %s (task=%s)',
+        fn_name, ', '.join(raw for raw, _ in unread), task.get('id', '?')[:8],
+    )
+    return msg
+
+
+def _format_refusal(fn_name: str, raw_paths: list[str]) -> str:
+    """Build the model-facing refusal message naming the unread file(s)."""
+    paths_list = ', '.join(raw_paths)
+    return (
         f'Error: {fn_name} refused — must read each target file first.\n'
         f'Unread file(s): {paths_list}\n'
         f'Issue read_files for these path(s) in this turn, then re-issue '
@@ -287,8 +297,56 @@ def check_read_before_edit(task: dict, fn_name: str, fn_args: dict,
         f'guessed/remembered content. Set env TOFU_APPLY_DIFF_READ_GATE=0 '
         f'to disable this check.'
     )
-    logger.info(
-        '[ReadGate] Refused %s for unread file(s) %s (task=%s)',
-        fn_name, paths_list, task.get('id', '?')[:8],
-    )
-    return msg
+
+
+def partition_batch_edits(task: dict, fn_name: str, fn_args: dict,
+                          project_path: str | None) -> tuple[list[int], list[str]]:
+    """Partition a batch edit call into read vs. unread targets.
+
+    For ``apply_diffs`` / ``insert_contents`` (the ``edits=[...]`` shape),
+    returns ``(skip_indices, unread_raw_paths)``:
+
+      * ``skip_indices`` — 0-based indices into ``fn_args['edits']`` whose
+        target file has NOT been read/written earlier in the conversation
+        and so must be skipped.
+      * ``unread_raw_paths`` — de-duplicated raw path strings (as the model
+        wrote them), in first-seen order, for messaging.
+
+    Returns ``([], [])`` when the gate is disabled, the tool is not a gated
+    batch tool, or every target is satisfied. Edits whose path can't be
+    resolved, or whose file doesn't exist on disk, are NOT skipped here —
+    downstream surfaces the cleaner error for those.
+    """
+    if not _gate_enabled():
+        return [], []
+    if fn_name not in _GATED_TOOLS:
+        return [], []
+    edits = fn_args.get('edits')
+    if not isinstance(edits, list) or not edits:
+        return [], []
+
+    conv_id = task.get('convId')
+    satisfied = _collect_satisfied_paths_from_rounds(task, project_path)
+    satisfied |= _collect_satisfied_paths_from_messages(task, project_path)
+
+    skip_indices: list[int] = []
+    unread_raw: list[str] = []
+    seen_raw: set[str] = set()
+    for idx, e in enumerate(edits):
+        if not isinstance(e, dict):
+            continue
+        rp = (e.get('path') or '').strip()
+        if not rp:
+            continue
+        ap = _resolve_abs(project_path, conv_id, rp)
+        if not ap:
+            continue
+        if ap in satisfied:
+            continue
+        if not os.path.isfile(ap):
+            continue
+        skip_indices.append(idx)
+        if rp not in seen_raw:
+            seen_raw.add(rp)
+            unread_raw.append(rp)
+    return skip_indices, unread_raw

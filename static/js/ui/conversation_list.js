@@ -91,6 +91,7 @@ function formatConvTime(ts) {
 }
 
 let _lastConvListHash = "";
+let _lastConvStructHash = "";        // struct part of the split hash (row identity/order/title/date/folder)
 let _lastRenderedSearchQuery = "";   // guard: skip background re-renders in search mode
 
 /* ★ PERF: Fast-path for conversation switch — instead of rebuilding the
@@ -101,18 +102,48 @@ let _lastActiveConvId = null;
 function _swapActiveConvItem(newActiveId) {
   if (sidebarSearchQuery) return false; // search mode — need full rebuild
   const oldId = _lastActiveConvId;
-  if (oldId === newActiveId) return true; // no change
-  _lastActiveConvId = newActiveId;
-  /* Swap .active class in DOM */
-  if (oldId) {
+  /* No-op only if the DOM already reflects the active state. A prior
+   * hash-skipped render can leave _lastActiveConvId pointing at a conv
+   * whose .active class was never applied (or applied to the wrong row),
+   * which is what makes the active indicator dot + status tag silently
+   * disappear. Verify the target row actually carries .active before
+   * trusting the cache; otherwise fall through and re-apply it. */
+  if (oldId === newActiveId) {
+    if (!newActiveId) return true;
+    const cur = document.querySelector(`.conv-item[data-conv-id="${CSS.escape(newActiveId)}"]`);
+    if (cur && cur.classList.contains('active')) return true;
+    if (!cur) return false; // not in DOM yet — need full rebuild
+    document.querySelectorAll('.conv-item.active').forEach(el => {
+      if (el !== cur) el.classList.remove('active');
+    });
+    cur.classList.add('active');
+    _lastConvListHash = "";
+    return true;
+  }
+  /* Locate the new row FIRST — if it isn't in the DOM yet we must NOT
+   * mutate any state (neither _lastActiveConvId nor the old row's class),
+   * otherwise the subsequent renderConversationList() can early-return on
+   * a stale hash and leave the sidebar with no active row at all. */
+  if (newActiveId) {
+    const newEl = document.querySelector(`.conv-item[data-conv-id="${CSS.escape(newActiveId)}"]`);
+    if (!newEl) {
+      /* New conv not in DOM yet — need a full rebuild. Force the hash to
+       * miss so the caller's renderConversationList() actually repaints. */
+      _lastConvListHash = "";
+      return false;
+    }
+    /* Clear .active from every currently-active row (defensive: there
+     * should be exactly one, but a desynced cache may have left several),
+     * then activate the target. */
+    document.querySelectorAll('.conv-item.active').forEach(el => {
+      if (el !== newEl) el.classList.remove('active');
+    });
+    newEl.classList.add('active');
+  } else if (oldId) {
     const oldEl = document.querySelector(`.conv-item[data-conv-id="${CSS.escape(oldId)}"]`);
     if (oldEl) oldEl.classList.remove('active');
   }
-  if (newActiveId) {
-    const newEl = document.querySelector(`.conv-item[data-conv-id="${CSS.escape(newActiveId)}"]`);
-    if (newEl) newEl.classList.add('active');
-    else return false; // new conv not in DOM yet — need full rebuild
-  }
+  _lastActiveConvId = newActiveId;
   /* Invalidate the hash so a subsequent full renderConversationList()
    * won't skip due to stale hash (the hash includes active state). */
   _lastConvListHash = "";
@@ -273,10 +304,113 @@ function _renderFolderTabsInner(tabsEl, folders, activeFolderId, allConvs) {
   });
 }
 
+/* ═══════════════════════════════════════════════════════════════════
+ * ★ PERF: Windowed conversation-list rendering.
+ *
+ * Rendering all N conversation rows synchronously (innerHTML of the full
+ * `filtered` set) was the dominant cold-load long-task: with a couple
+ * thousand convs it produced >2000 DOM children, ~65k total page nodes,
+ * 700ms+ of forced reflow, and starved LCP. Instead we render only the
+ * first page up-front and append further pages as a bottom sentinel
+ * scrolls into the #convList viewport.
+ *
+ * Correctness contract with the three fast paths in renderConversationList:
+ *   • The active conv is always forced into the FIRST page (see
+ *     _renderConvWindow) so its .active indicator / status dot never
+ *     depends on a row that hasn't been scrolled into existence.
+ *   • The status-only fast path SKIPS rows not currently in the DOM
+ *     (windowed-out) instead of bailing to a full rebuild — windowed rows
+ *     read live status via _buildConvItemHTML when later appended.
+ *   • _swapActiveConvItem already falls back to a full rebuild when its
+ *     target row isn't found, which re-windows from the top.
+ * ═══════════════════════════════════════════════════════════════════ */
+const _CONV_WINDOW_PAGE = 50;          // rows rendered per page
+const _CONV_WINDOW_PREFETCH_PX = 600;  // append the next page this far before the sentinel is reached
+let _convVirtual = { observer: null, sentinel: null };
+
+/** Disconnect any active windowing observer and drop the sentinel ref. */
+function _teardownConvVirtual() {
+  if (_convVirtual.observer) {
+    try { _convVirtual.observer.disconnect(); } catch (_e) { /* ignore */ }
+    _convVirtual.observer = null;
+  }
+  _convVirtual.sentinel = null;
+}
+
+/**
+ * Render `filtered` into `listEl` with bottom-sentinel windowing. Renders
+ * the first page (extended downward if needed so the active conv is always
+ * included), then lazily appends subsequent pages on scroll.
+ */
+function _renderConvWindow(listEl, filtered) {
+  _teardownConvVirtual();
+
+  /* Ensure the active row is within the initial window so its .active
+   * class + status dot are present immediately (sorted recent-first means
+   * this is almost always index 0, but a click on an old conv can be deep). */
+  let firstEnd = _CONV_WINDOW_PAGE;
+  if (activeConvId) {
+    const ai = filtered.findIndex(c => c.id === activeConvId);
+    if (ai >= firstEnd) firstEnd = ai + 1;
+  }
+  firstEnd = Math.min(firstEnd, filtered.length);
+
+  let html = "";
+  for (let i = 0; i < firstEnd; i++) {
+    const c = filtered[i];
+    html += _buildConvItemHTML(c, escapeHtml(stripNoTranslateTags(c.title)), "");
+  }
+  listEl.innerHTML = html;
+
+  /* Everything fits in the first window — no sentinel/observer needed. */
+  if (firstEnd >= filtered.length) return;
+
+  let cursor = firstEnd;
+  const sentinel = document.createElement('div');
+  sentinel.className = 'conv-window-sentinel';
+  sentinel.setAttribute('aria-hidden', 'true');
+  listEl.appendChild(sentinel);
+  _convVirtual.sentinel = sentinel;
+
+  const obs = new IntersectionObserver((entries) => {
+    /* Ignore stale callbacks from a sentinel that's been torn down. */
+    if (_convVirtual.sentinel !== sentinel) return;
+    if (!entries.some(e => e.isIntersecting)) return;
+
+    const end = Math.min(cursor + _CONV_WINDOW_PAGE, filtered.length);
+    let frag = "";
+    for (let i = cursor; i < end; i++) {
+      const c = filtered[i];
+      frag += _buildConvItemHTML(c, escapeHtml(stripNoTranslateTags(c.title)), "");
+    }
+    sentinel.insertAdjacentHTML('beforebegin', frag);
+    cursor = end;
+
+    if (cursor >= filtered.length) {
+      _teardownConvVirtual();
+      return;
+    }
+    /* The sentinel may still be inside the prefetch zone after the append
+     * (true→true gives no new callback). Re-observe on the next frame to
+     * force a fresh intersection check so paging chains until the sentinel
+     * is pushed below the prefetch margin. */
+    obs.unobserve(sentinel);
+    requestAnimationFrame(() => {
+      if (_convVirtual.sentinel === sentinel && _convVirtual.observer === obs) {
+        obs.observe(sentinel);
+      }
+    });
+  }, { root: listEl, rootMargin: `0px 0px ${_CONV_WINDOW_PREFETCH_PX}px 0px` });
+
+  obs.observe(sentinel);
+  _convVirtual.observer = obs;
+}
+
 function renderConversationList() {
   const listEl = document.getElementById("convList"),
     statsEl = document.getElementById("sidebarSearchStats");
   if (!sidebarSearchQuery) {
+    const _wasSearching = !!_lastRenderedSearchQuery;
     _lastRenderedSearchQuery = "";   // reset when exiting search mode
     statsEl.classList.remove("visible");
     const all = conversations.filter((c) => c.messages.length > 0 || (c._serverMsgCount || 0) > 0 || c._needsLoad);
@@ -285,19 +419,12 @@ function renderConversationList() {
     const _activeFolderId = typeof getActiveFolderId === 'function' ? getActiveFolderId() : null;
     const foldersReady = typeof areFoldersLoaded === 'function' ? areFoldersLoaded() : true;
 
-    /* ── Lightweight hash ── */
-    const _quickHash = (arr) => arr.map(c =>
-      `${c.id}|${c.title}|${c.updatedAt||""}|${c.id===activeConvId?1:0}|${activeStreams?.has(c.id)?1:0}|${c.activeTaskId||""}|${c._translating?1:0}|${c._memoryPrefetching?1:0}|${c.folderId||""}`
-    ).join("\n");
     const folderHash = folders.map(f => `${f.id}|${f.name}|${f.order}|${f.color||''}`).join(",");
     /* ── Render folder tabs (always, regardless of hash — tab visibility may change) ── */
     renderFolderTabs(folders, _activeFolderId, all);
 
-    const hash = `AF${_activeFolderId||''}|FL${foldersReady?1:0}|${_quickHash(all)}|||F${folderHash}`;
-    if (hash === _lastConvListHash) return;
-    _lastConvListHash = hash;
-
-    /* ── Filter by active folder tab ── */
+    /* ── Filter by active folder tab (done BEFORE hashing so the hash and the
+     *    in-place fast-path both operate on the actually-visible row set) ── */
     let filtered = all;
     if (_activeFolderId) {
       // Specific folder selected — show only its conversations
@@ -318,10 +445,47 @@ function renderConversationList() {
     }
     // else: folders loaded and empty — show everything (no folders exist)
 
-    let listHtml = "";
-    filtered.forEach((c) => {
-      listHtml += _buildConvItemHTML(c, escapeHtml(stripNoTranslateTags(c.title)), "");
-    });
+    /* ── Split hash: struct (row identity/order/title/date/folder) vs status
+     *    (active / streaming / translating / memory-prefetch / awaiting-human).
+     *    When only status changed we patch each row's .active class + dot +
+     *    status tag IN PLACE — no innerHTML rebuild, no full reparse/relayout
+     *    of the sidebar (the dominant long-task cost during a send's
+     *    translate→stream→done lifecycle). Mirrors the folder-tab fast path. ── */
+    const _structHash = `AF${_activeFolderId||''}|FL${foldersReady?1:0}|F${folderHash}|` +
+      filtered.map(c => `${c.id}|${c.title}|${c.updatedAt||""}|${c.folderId||""}`).join("\n");
+    const _statusHash = filtered.map(c => {
+      const f = _convStatusFlags(c);
+      return `${c.id===activeConvId?1:0}${f.streaming?1:0}${f.translating?1:0}${f.memoryPrefetching?1:0}${f.awaitingHuman?1:0}`;
+    }).join(",");
+    const _fullHash = `${_structHash}|||${_statusHash}`;
+    if (_fullHash === _lastConvListHash) return;
+
+    /* Coming out of search mode the DOM holds search-result rows (different
+     * set/order/snippets) — force a full rebuild even if struct hash matches. */
+    if (_wasSearching) _lastConvStructHash = "\u0000force-rebuild";
+    const _structChanged = _structHash !== _lastConvStructHash;
+    _lastConvListHash = _fullHash;
+    _lastConvStructHash = _structHash;
+
+    /* ── Fast path: only status changed → patch existing rows in place. ── */
+    if (!_structChanged && filtered.length > 0 &&
+        listEl.firstElementChild && !listEl.querySelector('.folder-view-empty')) {
+      for (const c of filtered) {
+        const row = listEl.querySelector(`.conv-item[data-conv-id="${CSS.escape(c.id)}"]`);
+        /* Windowed rows not yet scrolled into view aren't in the DOM — skip
+         * them (they pick up live status when appended) rather than bailing
+         * to a full rebuild on every status tick. Struct-hash equality
+         * guarantees the rendered rows are an exact prefix of `filtered`,
+         * so a missing row always means "windowed out", never "desynced". */
+        if (!row) continue;
+        _applyConvItemStatus(row, c);
+      }
+      /* Keep _lastActiveConvId in sync so _swapActiveConvItem stays O(1). */
+      _lastActiveConvId = activeConvId;
+      return;
+    }
+
+    let listHtml = null;  // non-null only for the empty / special states below
 
     /* ── Empty state ── */
     if (filtered.length === 0 && (_activeFolderId || folders.length > 0)) {
@@ -339,7 +503,16 @@ function renderConversationList() {
         `</div>`;
     }
 
-    listEl.innerHTML = listHtml;
+    /* ── Render: the empty / special state goes through a plain innerHTML
+     *    assignment; the normal (possibly large) list is windowed so the DOM
+     *    node count and synchronous build cost stay bounded regardless of how
+     *    many thousands of conversations exist. ── */
+    if (listHtml !== null) {
+      _teardownConvVirtual();
+      listEl.innerHTML = listHtml;
+    } else {
+      _renderConvWindow(listEl, filtered);
+    }
     /* ★ Keep _lastActiveConvId in sync after a full rebuild so
      * _swapActiveConvItem can do O(1) swaps on subsequent switches. */
     _lastActiveConvId = activeConvId;
@@ -382,6 +555,9 @@ function renderConversationList() {
 }
 
 function _renderSearchResults(results, query, listEl, statsEl, isPartial) {
+  /* Search replaces the whole list DOM — stop any list-mode windowing
+   * observer so it can't append conv rows into the search results. */
+  _teardownConvVirtual();
   statsEl.classList.add("visible");
   const suffix = isPartial ? ' <span class="search-loading">searching…</span>' : "";
   statsEl.innerHTML = `${results.length} result${results.length !== 1 ? "s" : ""}${suffix}`;
@@ -421,18 +597,33 @@ function _renderSearchResults(results, query, listEl, statsEl, isPartial) {
   listEl.innerHTML = newHtml;
 }
 
-function _buildConvItemHTML(c, titleHtml, snippetHtml) {
-  // ★ Separate translating state from streaming for distinct sidebar indicators
+/* ★ PERF: static action-button SVGs hoisted to module scope — these never
+ * change per row, so building them once instead of per-conv shrinks the
+ * per-item string work on every full rebuild. */
+const _CONV_DEL_SVG = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>`;
+const _CONV_CP_SVG = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>`;
+const _CONV_DUP_SVG = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="8" width="14" height="14" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>`;
+const _CONV_FOLDER_SVG = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>`;
+const _CONV_RENAME_SVG = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>`;
+
+/**
+ * Compute the four mutually-relevant status flags for a conversation row.
+ * Shared by the status-hash, full-rebuild HTML, and in-place patch paths so
+ * all three agree on exactly when a dot / tag should show.
+ *
+ * @param {Object} c — conversation object
+ * @returns {{streaming:boolean, translating:boolean, memoryPrefetching:boolean, awaitingHuman:boolean}}
+ */
+function _convStatusFlags(c) {
   const translating = !!c._translating;
-  // ★ Memory-prefetch (cheap-LLM filter) running — distinct amber indicator
-  //   so the user knows why the main model hasn't started producing tokens yet.
   const memoryPrefetching = !!c._memoryPrefetching;
-  let streaming = activeStreams.has(c.id) || c.activeTaskId;
+  let streaming = activeStreams.has(c.id) || !!c.activeTaskId;
   if (!streaming) {
     const prefix = c.id + ":";
     for (const k of activeStreams.keys()) { if (k.startsWith(prefix)) { streaming = true; break; } }
   }
-  // ★ Detect if conversation is awaiting human input (any round with status=awaiting_human)
+  // ★ Awaiting human input — scan back to the most recent assistant message
+  //   with toolRounds (breaks early; typically inspects only the tail).
   let awaitingHuman = false;
   if (c.messages) {
     for (let i = c.messages.length - 1; i >= 0; i--) {
@@ -441,44 +632,82 @@ function _buildConvItemHTML(c, titleHtml, snippetHtml) {
         for (const r of m.toolRounds) {
           if (r.status === 'awaiting_human') { awaitingHuman = true; break; }
         }
-        if (awaitingHuman) break;
+        break;  // only the latest assistant turn carries a live awaiting-human round
       }
     }
   }
-  const eid = escapeHtml(c.id);
-  const isActive = c.id === activeConvId ? " active" : "";
-  const delSvg = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>`;
-  const feishuBadge = c.source === 'feishu' ? `<span class="conv-feishu-badge" title="${t('sidebar.feishuConv')}">Feishu</span>` : '';
-  const cpSvg = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>`;
-  // ★ Sidebar dot priority: awaiting-human > translating > memory-prefetch > streaming.
-  //   Memory-prefetch sits between translating and streaming because it runs
-  //   BEFORE the main model starts streaming — distinguishing it from the
-  //   answering phase reassures the user that latency is the cheap filter,
-  //   not a stuck request.
+  return { streaming, translating, memoryPrefetching, awaitingHuman };
+}
+
+/**
+ * Build the dot + status-tag HTML for a row given its status flags.
+ * Priority: awaiting-human > translating > memory-prefetch > streaming.
+ * @returns {{dotHtml:string, statusTag:string}}
+ */
+function _convStatusHtml(f) {
   let dotHtml = '';
-  if (awaitingHuman) {
+  if (f.awaitingHuman) {
     dotHtml = `<div class="conv-awaiting-human-dot" title="${t('sidebar.awaitingInput')}"></div>`;
-  } else if (translating) {
+  } else if (f.translating) {
     dotHtml = `<div class="conv-translating-dot" title="${t('sidebar.translating')}"></div>`;
-  } else if (memoryPrefetching) {
+  } else if (f.memoryPrefetching) {
     dotHtml = `<div class="conv-memprefetch-dot" title="${t('sidebar.memoryPrefetch')}"></div>`;
-  } else if (streaming) {
+  } else if (f.streaming) {
     dotHtml = '<div class="conv-streaming-dot"></div>';
   }
   let statusTag = '';
-  if (translating) {
+  if (f.translating) {
     statusTag = `<span class="conv-status-tag conv-status-translating">${t('sidebar.translatingTag')}</span>`;
-  } else if (memoryPrefetching) {
+  } else if (f.memoryPrefetching) {
     statusTag = `<span class="conv-status-tag conv-status-memprefetch">${t('sidebar.memoryPrefetchTag')}</span>`;
-  } else if (streaming) {
+  } else if (f.streaming) {
     statusTag = `<span class="conv-status-tag conv-status-streaming">${t('sidebar.answering')}</span>`;
   }
-  const dupSvg = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="8" width="14" height="14" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>`;
-  const folderSvg = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>`;
+  return { dotHtml, statusTag };
+}
+
+/**
+ * ★ PERF: patch a row's status (active class, leading dot, trailing status
+ * tag) IN PLACE — no innerHTML rebuild of the whole list. Called by the
+ * status-only fast path in renderConversationList(). Only mutates the dot
+ * and status-tag nodes; the title / date / action buttons are untouched.
+ */
+function _applyConvItemStatus(row, c) {
+  row.classList.toggle('active', c.id === activeConvId);
+  const f = _convStatusFlags(c);
+  const { dotHtml, statusTag } = _convStatusHtml(f);
+
+  /* Leading dot: it's the first child of .conv-item when present (before
+   * .conv-text). Reconcile by comparing the current dot markup. */
+  const curDot = row.querySelector(':scope > .conv-translating-dot, :scope > .conv-memprefetch-dot, :scope > .conv-streaming-dot, :scope > .conv-awaiting-human-dot');
+  const curDotHtml = curDot ? curDot.outerHTML : '';
+  if (curDotHtml !== dotHtml) {
+    if (curDot) curDot.remove();
+    if (dotHtml) row.insertAdjacentHTML('afterbegin', dotHtml);
+  }
+
+  /* Trailing status tag: lives inside .conv-date. */
+  const dateEl = row.querySelector('.conv-date');
+  if (dateEl) {
+    const curTag = dateEl.querySelector('.conv-status-tag');
+    const curTagHtml = curTag ? curTag.outerHTML : '';
+    if (curTagHtml !== statusTag) {
+      if (curTag) curTag.remove();
+      if (statusTag) dateEl.insertAdjacentHTML('beforeend', statusTag);
+    }
+  }
+}
+
+function _buildConvItemHTML(c, titleHtml, snippetHtml) {
+  const f = _convStatusFlags(c);
+  const { dotHtml, statusTag } = _convStatusHtml(f);
+  const eid = escapeHtml(c.id);
+  const isActive = c.id === activeConvId ? " active" : "";
+  const feishuBadge = c.source === 'feishu' ? `<span class="conv-feishu-badge" title="${t('sidebar.feishuConv')}">Feishu</span>` : '';
   const _isDebug = typeof _featureFlags !== 'undefined' && _featureFlags.debug_mode;
-  const copyIdBtn = _isDebug ? `<button class="conv-action-btn conv-copy-id" data-conv-id="${eid}" title="${t('sidebar.copyConvId')}">${cpSvg}</button>` : '';
+  const copyIdBtn = _isDebug ? `<button class="conv-action-btn conv-copy-id" data-conv-id="${eid}" title="${t('sidebar.copyConvId')}">${_CONV_CP_SVG}</button>` : '';
   const folderClass = c.folderId ? ' in-folder' : '';
-  return `<div class="conv-item${isActive}${folderClass}" data-conv-id="${eid}" draggable="true" title="ID: ${eid}">${dotHtml}<div class="conv-text"><div class="conv-title">${feishuBadge}${titleHtml}</div>${snippetHtml || ""}<div class="conv-date">${formatConvTime(c.updatedAt || c.createdAt)}${statusTag}</div></div><div class="conv-actions">${copyIdBtn}<button class="conv-action-btn conv-ref" data-conv-id="${eid}" data-conv-title="${escapeHtml(c.title || 'Untitled')}" title="${t('sidebar.refConv')}">@</button><button class="conv-action-btn conv-folder-assign" data-conv-id="${eid}" title="${t('sidebar.moveToFolder')}">${folderSvg}</button><button class="conv-action-btn conv-dup" data-conv-id="${eid}" title="${t('sidebar.duplicate')}">${dupSvg}</button><button class="conv-action-btn conv-delete" data-conv-id="${eid}" title="${t('sidebar.deleteConv')}">${delSvg}</button></div></div>`;
+  return `<div class="conv-item${isActive}${folderClass}" data-conv-id="${eid}" draggable="true" title="ID: ${eid}">${dotHtml}<div class="conv-text"><div class="conv-title">${feishuBadge}${titleHtml}</div>${snippetHtml || ""}<div class="conv-date">${formatConvTime(c.updatedAt || c.createdAt)}${statusTag}</div></div><div class="conv-actions">${copyIdBtn}<button class="conv-action-btn conv-rename" data-conv-id="${eid}" title="${t('sidebar.renameConv')}">${_CONV_RENAME_SVG}</button><button class="conv-action-btn conv-ref" data-conv-id="${eid}" data-conv-title="${escapeHtml(c.title || 'Untitled')}" title="${t('sidebar.refConv')}">@</button><button class="conv-action-btn conv-folder-assign" data-conv-id="${eid}" title="${t('sidebar.moveToFolder')}">${_CONV_FOLDER_SVG}</button><button class="conv-action-btn conv-dup" data-conv-id="${eid}" title="${t('sidebar.duplicate')}">${_CONV_DUP_SVG}</button><button class="conv-action-btn conv-delete" data-conv-id="${eid}" title="${t('sidebar.deleteConv')}">${_CONV_DEL_SVG}</button></div></div>`;
 }
 
 function highlightMatch(text, query) {

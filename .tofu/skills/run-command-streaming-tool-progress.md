@@ -1,3 +1,12 @@
+---
+name: run_command streaming output via tool_progress SSE
+description: run_command/code_exec stream stdout/stderr live to the frontend via tool_progress SSE events; on_chunk callback + 200ms/4KB coalescing in handlers/code_exec.py; _partialOutput survives reconnect; final meta.output stays authoritative
+enabled: true
+tags: [run_command, code_exec, sse, streaming, tool_progress]
+created: 2026-05-07T06:15:35Z
+updated: 2026-05-07T06:15:35Z
+---
+
 # run_command streaming output via `tool_progress` SSE
 
 ## What

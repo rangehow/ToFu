@@ -23,7 +23,6 @@ import requests
 from lib.log import get_logger
 from lib.oauth.pkce import generate_pkce_codes
 from lib.oauth.token_store import load_token, save_token
-from lib.proxy import proxies_for
 from lib.http_client import http_post
 
 logger = get_logger(__name__)

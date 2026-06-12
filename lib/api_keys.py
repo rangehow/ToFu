@@ -68,6 +68,8 @@ Public API
 from __future__ import annotations
 
 import hashlib
+import hmac
+import os
 import secrets
 import threading
 import time
@@ -302,11 +304,21 @@ def revoke_key(key_id: str) -> bool:
     with _cache_lock:
         for i, row in enumerate(_cache):
             if row.get('id') == key_id:
+                is_bootstrap = (
+                    (row.get('metadata') or {}).get('origin')
+                    == 'bootstrap_personal_key'
+                )
                 _cache.pop(i)
                 _persist()
                 audit_log('api_key_revoked', key_id=key_id,
                           name=row.get('name', ''))
                 logger.info('[ApiKeys] revoked %s', key_id)
+                # The first-run emergency token is a one-shot copy of
+                # the bootstrap key only. Once that key is gone the file
+                # is a dead reference, so clear it to avoid handing the
+                # user a phantom token.
+                if is_bootstrap:
+                    _clear_first_run_token('bootstrap key revoked')
                 return True
     return False
 
@@ -317,17 +329,40 @@ _UPDATABLE = frozenset({'name', 'scopes', 'rate_limit_rpm',
 
 
 def update_key(key_id: str, **fields) -> bool:
+    """Update an existing key in place.
+
+    NOTE: the ``admin`` scope is NOT grantable through this path. A key's
+    privilege tier is fixed at mint time and reflected in its token prefix
+    (``tofu_admin_`` vs ``tofu_live_``); letting PATCH add ``admin`` would
+    leave a ``tofu_live_`` token silently wielding full privileges. Any
+    ``admin`` entry in an incoming ``scopes`` list is dropped here (a
+    warning is logged); the key keeps its existing admin-ness, which is
+    only ever set by :func:`create_key` with ``admin=True``. To change a
+    key's tier, revoke and re-mint.
+    """
     _ensure_loaded()
     with _cache_lock:
         for row in _cache:
             if row.get('id') != key_id:
                 continue
+            had_admin = _ADMIN_SCOPE in (row.get('scopes') or ())
             changed = {}
             for k, v in fields.items():
                 if k not in _UPDATABLE:
                     continue
                 if k == 'scopes':
-                    v = sorted(_normalise_scopes(v))
+                    new_scopes = set(_normalise_scopes(v))
+                    requested_admin = _ADMIN_SCOPE in new_scopes
+                    if requested_admin and not had_admin:
+                        logger.warning('[ApiKeys] refusing to grant admin '
+                                       'scope via update_key on %s; revoke '
+                                       'and re-mint to change tier', key_id)
+                    # Preserve the key's existing admin-ness, never flip it.
+                    if had_admin:
+                        new_scopes.add(_ADMIN_SCOPE)
+                    else:
+                        new_scopes.discard(_ADMIN_SCOPE)
+                    v = sorted(new_scopes)
                 if k in ('rate_limit_rpm', 'rate_limit_tpd'):
                     v = max(0, int(v or 0))
                 if k == 'disabled':
@@ -364,7 +399,9 @@ def validate_token(token: str) -> Optional[AuthContext]:
     now = time.time()
     with _cache_lock:
         for row in _cache:
-            if row.get('secret_hash') != h:
+            # Constant-time compare so a timing side-channel can't reveal
+            # how many leading hex chars of the stored hash matched.
+            if not hmac.compare_digest(str(row.get('secret_hash') or ''), h):
                 continue
             if row.get('disabled'):
                 logger.info('[ApiKeys] token rejected (disabled) %s',
@@ -413,6 +450,46 @@ def touch_key(key_id: str) -> None:
 _FIRST_RUN_TOKEN_FILE = config_path('.first_run_token')
 
 
+def _clear_first_run_token(reason: str) -> None:
+    """Delete the first-run emergency token file, ignoring absence.
+
+    Called when the bootstrap key it mirrors is revoked, or at startup
+    when the persisted token no longer validates (the matched key was
+    revoked/replaced while the process was down).
+    """
+    try:
+        os.unlink(_FIRST_RUN_TOKEN_FILE)
+    except FileNotFoundError:
+        logger.debug('[Auth] .first_run_token already absent (%s)', reason)
+        return
+    except OSError as e:
+        logger.debug('[Auth] could not remove .first_run_token: %s', e)
+        return
+    logger.warning('[Auth] Stale .first_run_token detected and removed (%s)',
+                   reason)
+
+
+def _purge_stale_first_run_token() -> None:
+    """On startup, drop ``.first_run_token`` if its contents no longer auth.
+
+    The file is a one-shot copy of the bootstrap key. If that key was
+    revoked or rotated, the on-disk token is a misleading dead reference
+    — validating it returns None. Remove it so the next boot starts clean.
+    """
+    try:
+        with open(_FIRST_RUN_TOKEN_FILE, 'r', encoding='utf-8') as fh:
+            token = fh.read().strip()
+    except FileNotFoundError:
+        logger.debug('[Auth] no .first_run_token to purge')
+        return
+    except OSError as e:
+        logger.debug('[Auth] could not read .first_run_token: %s', e)
+        return
+    if token and validate_token(token) is not None:
+        return
+    _clear_first_run_token('matched key was revoked')
+
+
 def has_any_key() -> bool:
     """True iff at least one key is persisted (loaded on first call)."""
     _ensure_loaded()
@@ -432,6 +509,10 @@ def bootstrap_personal_key(*, name: str = 'personal') -> Optional[str]:
     after copying.
     """
     _ensure_loaded()
+    # Self-heal any stale first-run token left over from a key rotation
+    # that happened while the process was down (the file is a one-shot
+    # copy of the bootstrap key, never updated by revoke/create).
+    _purge_stale_first_run_token()
     with _cache_lock:
         if _cache:
             return None
@@ -447,15 +528,14 @@ def bootstrap_personal_key(*, name: str = 'personal') -> Optional[str]:
     # File is 0600. Failures are non-fatal — the boot banner still has
     # the value.
     try:
-        import os as _os
         _path = _FIRST_RUN_TOKEN_FILE
-        _os.makedirs(_os.path.dirname(_path), exist_ok=True)
-        _flag = _os.O_WRONLY | _os.O_CREAT | _os.O_TRUNC
-        _fd = _os.open(_path, _flag, 0o600)
+        os.makedirs(os.path.dirname(_path), exist_ok=True)
+        _flag = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+        _fd = os.open(_path, _flag, 0o600)
         try:
-            _os.write(_fd, (plaintext + '\n').encode('utf-8'))
+            os.write(_fd, (plaintext + '\n').encode('utf-8'))
         finally:
-            _os.close(_fd)
+            os.close(_fd)
     except OSError as e:
         logger.debug('[ApiKeys] could not persist first-run token: %s', e)
     audit_log('api_key_bootstrap', key_id=row['id'], name=name)
@@ -469,4 +549,5 @@ __all__ = [
     'list_keys', 'get_key_by_id', 'validate_token',
     'create_key', 'revoke_key', 'update_key', 'touch_key',
     'has_any_key', 'bootstrap_personal_key',
+    '_purge_stale_first_run_token',
 ]

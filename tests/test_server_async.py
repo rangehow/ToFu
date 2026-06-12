@@ -44,36 +44,41 @@ def quart_available():
 
 
 @pytest.fixture(scope='module')
-def async_app(quart_available):
-    """Import and return the Quart app from server_async.py.
+def async_app(quart_available, flask_app):
+    """Return the Quart app, reusing the session-scoped ``flask_app``
+    fixture from conftest.py.
 
-    This exercises the Flask→Quart shim installation.
+    ``flask_app`` imports ``server`` exactly once per session AFTER the
+    conftest env-vars are set (SQLite temp DB, schema provisioned via
+    ``init_db()`` on import). Re-importing ``server.py`` independently
+    here would either double-run the heavy boot or, worse, bind to a
+    DIFFERENT database than the one the rest of the suite provisioned —
+    which previously surfaced as ``sqlite3.OperationalError: no such
+    table: task_results`` when the stream route tried to read.
     """
-    # server_async.py installs the shim at import time, so we need
-    # to be careful about import order. Use importlib to isolate.
-    import importlib.util
-    spec = importlib.util.spec_from_file_location(
-        'server',
-        os.path.join(os.path.dirname(os.path.dirname(__file__)), 'server.py')
-    )
-    mod = importlib.util.module_from_spec(spec)
-    # Don't actually execute __main__ block
-    # We just need the app object and the shim
-    # Patch __name__ so the if __name__ == '__main__' block is skipped
-    mod.__name__ = 'server'
-    try:
-        spec.loader.exec_module(mod)
-    except SystemExit:
-        pytest.skip('server_async.py called sys.exit (missing dep)')
-    except ImportError as e:
-        pytest.skip(f'Import failed: {e}')
-    return mod.app
+    return flask_app
 
 
 @pytest.fixture
 def client(async_app):
     """Quart test client."""
     return async_app.test_client()
+
+
+def _run_async(coro):
+    """Run an async test body without requiring pytest-asyncio.
+
+    This repo does not install the ``pytest-asyncio`` plugin, so a bare
+    ``@pytest.mark.asyncio async def`` test is collected but never awaited
+    (pytest reports it as a failure: "async def functions are not natively
+    supported"). Mirror ``tests/test_restart_smoke.py`` and drive the
+    coroutine on a private event loop instead.
+    """
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -93,12 +98,14 @@ class TestFlaskShim:
 
     def test_flask_blueprint_registration(self, async_app):
         """All Flask-style blueprints register successfully on Quart app."""
-        # Check that core blueprints are registered
+        # Check that core blueprints are registered. After the /api/v1
+        # migration, config/conversations moved under the api_v1_* namespace
+        # while chat/common kept their legacy bare names.
         bp_names = set(async_app.blueprints.keys())
         assert 'chat' in bp_names
         assert 'common' in bp_names
-        assert 'config' in bp_names
-        assert 'conversations' in bp_names
+        assert 'api_v1_config' in bp_names
+        assert 'api_v1_conversations' in bp_names
 
     def test_blueprint_count(self, async_app):
         """Reasonable number of blueprints are registered."""
@@ -106,83 +113,94 @@ class TestFlaskShim:
         assert len(async_app.blueprints) >= 20
 
 
+@pytest.mark.auth_mode("open")
 class TestBasicRoutes:
     """Test that sync Flask routes work under Quart."""
 
-    @pytest.mark.asyncio
-    async def test_health_endpoint(self, client):
-        """A basic GET to /api/chat/active should work."""
-        resp = await client.get('/api/chat/active')
-        assert resp.status_code == 200
-        data = await resp.get_json()
-        assert isinstance(data, list)
+    def test_health_endpoint(self, client):
+        """A basic GET to /api/v1/chat/active should work."""
+        async def go():
+            resp = await client.get('/api/v1/chat/active')
+            assert resp.status_code == 200
+            data = await resp.get_json()
+            assert isinstance(data, list)
+        _run_async(go())
 
-    @pytest.mark.asyncio
-    async def test_404_json(self, client):
+    def test_404_json(self, client):
         """API 404 returns JSON."""
-        resp = await client.get('/api/nonexistent')
-        assert resp.status_code == 404
-        data = await resp.get_json()
-        assert data['ok'] is False
+        async def go():
+            resp = await client.get('/api/nonexistent')
+            assert resp.status_code == 404
+            data = await resp.get_json()
+            assert data['ok'] is False
+        _run_async(go())
 
-    @pytest.mark.asyncio
-    async def test_404_html(self, client):
+    def test_404_html(self, client):
         """Non-API 404 returns HTML."""
-        resp = await client.get('/nonexistent-page')
-        assert resp.status_code == 404
-        body = (await resp.get_data()).decode()
-        assert '404' in body
+        async def go():
+            resp = await client.get('/nonexistent-page')
+            assert resp.status_code == 404
+            body = (await resp.get_data()).decode()
+            assert '404' in body
+        _run_async(go())
 
-    @pytest.mark.asyncio
-    async def test_static_js_mime(self, client):
+    def test_static_js_mime(self, client):
         """Static .js files get correct MIME type."""
-        # Request any .js file from static/
-        resp = await client.get('/static/js/core.js')
-        if resp.status_code == 200:
-            ct = resp.content_type or ''
-            assert 'javascript' in ct
+        async def go():
+            # Request any .js file from static/
+            resp = await client.get('/static/js/core.js')
+            if resp.status_code == 200:
+                ct = resp.content_type or ''
+                assert 'javascript' in ct
+        _run_async(go())
 
 
+@pytest.mark.auth_mode("open")
 class TestTunnelAuth:
     """Test tunnel token auth when enabled."""
 
-    @pytest.mark.asyncio
-    async def test_no_auth_when_no_token(self, client, async_app):
+    def test_no_auth_when_no_token(self, client, async_app):
         """When TUNNEL_TOKEN is empty, all requests pass through."""
         # server.py reads TUNNEL_TOKEN at module level — if not set,
         # auth is disabled and requests pass through unchanged.
         import server
         if server.TUNNEL_TOKEN:
             pytest.skip('TUNNEL_TOKEN is set in env')
-        resp = await client.get('/api/chat/active')
-        assert resp.status_code == 200
+        async def go():
+            resp = await client.get('/api/v1/chat/active')
+            assert resp.status_code == 200
+        _run_async(go())
 
 
+@pytest.mark.auth_mode("open")
 class TestCompression:
     """Test gzip compression."""
 
-    @pytest.mark.asyncio
-    async def test_json_compressed(self, client):
+    def test_json_compressed(self, client):
         """JSON responses are gzip compressed when Accept-Encoding: gzip."""
-        resp = await client.get(
-            '/api/chat/active',
-            headers={'Accept-Encoding': 'gzip'}
-        )
-        assert resp.status_code == 200
-        # Response might be compressed if body > 256 bytes
-        # For small responses (empty list), compression is skipped
-        # Just verify the request doesn't crash
+        async def go():
+            resp = await client.get(
+                '/api/v1/chat/active',
+                headers={'Accept-Encoding': 'gzip'}
+            )
+            assert resp.status_code == 200
+            # Response might be compressed if body > 256 bytes
+            # For small responses (empty list), compression is skipped
+            # Just verify the request doesn't crash
+        _run_async(go())
 
 
+@pytest.mark.auth_mode("open")
 class TestSSEStreaming:
     """Test SSE streaming compatibility."""
 
-    @pytest.mark.asyncio
-    async def test_stream_nonexistent_task(self, client):
+    def test_stream_nonexistent_task(self, client):
         """Streaming a nonexistent task returns 404."""
-        resp = await client.get('/api/chat/stream/nonexistent-task-id')
-        # Should be 404 (task not found) or SSE with error
-        assert resp.status_code in (200, 404)
+        async def go():
+            resp = await client.get('/api/chat/stream/nonexistent-task-id')
+            # Should be 404 (task not found) or SSE with error
+            assert resp.status_code in (200, 404)
+        _run_async(go())
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -247,11 +265,11 @@ if __name__ == '__main__':
     async def _run_checks():
         async with app.test_client() as client:
             # Basic route
-            resp = await client.get('/api/chat/active')
+            resp = await client.get('/api/v1/chat/active')
             assert resp.status_code == 200, f'Expected 200, got {resp.status_code}'
             data = await resp.get_json()
             assert isinstance(data, list)
-            print('  ✓ GET /api/chat/active → 200 (sync route in thread pool)')
+            print('  ✓ GET /api/v1/chat/active → 200 (sync route in thread pool)')
 
             # 404
             resp = await client.get('/api/nonexistent')

@@ -56,7 +56,6 @@ from lib.log import audit_log, get_logger, log_context
 
 logger = get_logger(__name__)
 
-from lib.database import DOMAIN_CHAT, db_execute_with_retry, get_thread_db
 from lib.tasks_pkg.endpoint_prompts import WORKER_DIRECTIVE_HEADER
 from lib.tasks_pkg.endpoint_review import (
     _accumulate_usage,
@@ -369,20 +368,13 @@ def _sync_endpoint_turns_to_conversation(task, endpoint_turns):
         return None
 
     try:
-        db = get_thread_db(DOMAIN_CHAT)
-        row = db.execute(
-            'SELECT messages FROM conversations WHERE id=? AND user_id=1',
-            (conv_id,)
-        ).fetchone()
-        if not row:
+        from lib.agent_core.store import get_conversation_store
+        store = get_conversation_store()
+        loaded = store.load_conversation_messages(conv_id)
+        if loaded is None:
             logger.warning('%s conv=%s Conversation not found — cannot sync endpoint turns', pfx, conv_id)
             return None
-
-        try:
-            messages = json.loads(row[0] or '[]')
-        except (json.JSONDecodeError, TypeError):
-            logger.error('%s conv=%s Failed to parse messages JSON', pfx, conv_id, exc_info=True)
-            return None
+        messages, _updated_at = loaded
 
         if not messages:
             logger.warning('%s conv=%s Conversation has 0 messages — cannot sync', pfx, conv_id)
@@ -419,26 +411,7 @@ def _sync_endpoint_turns_to_conversation(task, endpoint_turns):
         # Append the accumulated endpoint turns
         new_messages = base_messages + endpoint_turns
 
-        from lib.database import json_dumps_pg
-        from routes.conversations import build_search_text
-        messages_json = json_dumps_pg(new_messages)
-        search_text = build_search_text(new_messages)
-        now_ms = int(time.time() * 1000)
-        db_execute_with_retry(db, '''UPDATE conversations
-            SET messages=?, updated_at=?, msg_count=?, search_text=?
-            WHERE id=? AND user_id=1''',
-            (messages_json, now_ms, len(new_messages), search_text, conv_id))
-        # Update FTS5 index
-        if search_text:
-            try:
-                db.execute(
-                    "INSERT OR REPLACE INTO conversations_fts (rowid, search_text) "
-                    "SELECT rowid, ? FROM conversations WHERE id = ?",
-                    (search_text, conv_id)
-                )
-                db.commit()
-            except Exception as _fts_err:
-                logger.debug('[EndpointSync] FTS update failed (non-fatal): %s', _fts_err)
+        store.sync_conversation_with_search(conv_id, new_messages)
 
         logger.info('%s conv=%s ✅ Synced %d endpoint turns to conversation '
                     '(base=%d + endpoint=%d = %d total msgs)',
@@ -504,11 +477,10 @@ def _trigger_per_turn_auto_translate(task, turn_msg, msg_idx):
         return
 
     try:
-        db = get_thread_db(DOMAIN_CHAT)
         if is_critic:
-            _maybe_auto_translate_critic(conv_id, content, msg_idx, db)
+            _maybe_auto_translate_critic(conv_id, content, msg_idx)
         else:
-            _maybe_auto_translate_assistant(conv_id, content, msg_idx, db)
+            _maybe_auto_translate_assistant(conv_id, content, msg_idx)
     except Exception as e:
         logger.warning('[Endpoint:PerTurnTranslate] task=%s conv=%s msg=%s '
                        'failed (non-fatal, safety net will retry): %s',
@@ -580,21 +552,13 @@ def _trigger_endpoint_auto_translate(task, endpoint_turns):
         return
 
     try:
-        db = get_thread_db(DOMAIN_CHAT)
-        row = db.execute(
-            'SELECT messages FROM conversations WHERE id=? AND user_id=1',
-            (conv_id,)
-        ).fetchone()
-        if not row:
+        from lib.agent_core.store import get_conversation_store
+        loaded = get_conversation_store().load_conversation_messages(conv_id)
+        if loaded is None:
             logger.warning('%s conv=%s Conversation not found — skipping auto-translate',
                            pfx, conv_id[:8])
             return
-        try:
-            messages = json.loads(row[0] or '[]')
-        except (json.JSONDecodeError, TypeError) as e:
-            logger.warning('%s conv=%s Failed to parse messages JSON: %s',
-                           pfx, conv_id[:8], e)
-            return
+        messages, _updated_at = loaded
 
         scheduled = 0
         skipped = 0
@@ -634,10 +598,10 @@ def _trigger_endpoint_auto_translate(task, endpoint_turns):
                             pfx, conv_id[:8], idx, role, ep_tag, len(content))
 
                 if is_critic:
-                    _maybe_auto_translate_critic(conv_id, content, idx, db)
+                    _maybe_auto_translate_critic(conv_id, content, idx)
                     per_role_scheduled['critic'] += 1
                 else:
-                    _maybe_auto_translate_assistant(conv_id, content, idx, db)
+                    _maybe_auto_translate_assistant(conv_id, content, idx)
                     if is_planner:
                         per_role_scheduled['planner'] += 1
                     else:
@@ -686,6 +650,8 @@ def run_endpoint_task(task):
     stop_reason = 'completed'
     fallback_model = None
     fallback_from  = None
+    fallback_reason = None
+    fallback_kind = None
     endpoint_turns = []      # accumulated endpoint turn messages for DB persistence
 
     logger.info('[Endpoint] Starting endpoint task %s — planner → worker → critic loop',
@@ -717,6 +683,8 @@ def run_endpoint_task(task):
         if planner_result.get('fallbackModel'):
             fallback_model = planner_result['fallbackModel']
             fallback_from  = planner_result.get('fallbackFrom', '')
+            fallback_reason = planner_result.get('fallbackReason') or fallback_reason
+            fallback_kind = planner_result.get('fallbackKind') or fallback_kind
 
         planner_content = planner_result.get('content', '')
         planner_error   = planner_result.get('error')
@@ -852,6 +820,8 @@ def run_endpoint_task(task):
             if turn_result.get('fallbackModel'):
                 fallback_model = turn_result['fallbackModel']
                 fallback_from  = turn_result.get('fallbackFrom', '')
+                fallback_reason = turn_result.get('fallbackReason') or fallback_reason
+                fallback_kind = turn_result.get('fallbackKind') or fallback_kind
 
             accumulated_content = turn_content
             _accumulate_usage(total_usage, turn_usage)
@@ -1303,13 +1273,15 @@ def run_endpoint_task(task):
         # ══════════════════════════════════════
         _finalize(task, accumulated_content, total_usage, iteration,
                   stop_reason, fallback_model, fallback_from,
-                  replan_count=replan_count)
+                  replan_count=replan_count,
+                  fallback_reason=fallback_reason, fallback_kind=fallback_kind)
 
     except _EarlyExit as _e_audit:
         logger.debug('[endpoint] run_endpoint_task caught %s: %s', type(_e_audit).__name__, _e_audit)
         _finalize(task, accumulated_content, total_usage, 0,
                   stop_reason, fallback_model, fallback_from,
-                  replan_count=0)
+                  replan_count=0,
+                  fallback_reason=fallback_reason, fallback_kind=fallback_kind)
 
     except Exception as e:
         logger.error('[Endpoint] run_endpoint_task FATAL error task=%s',
@@ -1344,7 +1316,8 @@ class _EarlyExit(Exception):
 
 
 def _finalize(task, accumulated_content, total_usage, iteration,
-              stop_reason, fallback_model, fallback_from, *, replan_count=0):
+              stop_reason, fallback_model, fallback_from, *, replan_count=0,
+              fallback_reason=None, fallback_kind=None):
     """Emit completion events and persist final task result."""
     tid = task['id'][:8]
 
@@ -1389,6 +1362,12 @@ def _finalize(task, accumulated_content, total_usage, iteration,
     if fallback_model:
         done_evt['fallbackModel'] = fallback_model
         done_evt['fallbackFrom']  = fallback_from or ''
+        if fallback_reason:
+            done_evt['fallbackReason'] = fallback_reason
+            task['_fallback_reason'] = fallback_reason
+        if fallback_kind:
+            done_evt['fallbackKind'] = fallback_kind
+            task['_fallback_kind'] = fallback_kind
     append_event(task, done_evt)
     persist_task_result(task)
 

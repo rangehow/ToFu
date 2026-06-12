@@ -18,7 +18,6 @@ import secrets
 import threading
 import time
 from queue import Empty, Queue
-from typing import Optional
 
 from flask import Blueprint
 

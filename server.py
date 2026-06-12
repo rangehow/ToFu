@@ -107,6 +107,13 @@ except OSError:
 _PROJ_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _PROJ_DIR)
 
+# ── Dev fallback: locate a local tofu-search checkout when it isn't
+# pip-installed (production installs it via requirements.txt). Set
+# TOFU_SEARCH_PATH to the repo root of a sibling tofu-search clone.
+_TOFU_SEARCH_PATH = os.environ.get('TOFU_SEARCH_PATH', '')
+if _TOFU_SEARCH_PATH and os.path.isdir(_TOFU_SEARCH_PATH):
+    sys.path.insert(0, _TOFU_SEARCH_PATH)
+
 
 def _tofu_maybe_reexec_into_env():
     """Re-exec into Tofu's conda env if not already there."""
@@ -681,6 +688,11 @@ async def _clear_req_id(exc):
 app.teardown_appcontext(close_db)
 
 
+# ── Install the tofu-search bridge (LLM + browser + auth seams) ──
+# Must run before any search/fetch call; idempotent, re-synced on config reload.
+from lib.search_bridge import install_search_bridge
+install_search_bridge()
+
 # ── Register all Blueprints ──
 from routes import register_all
 register_all(app)
@@ -905,8 +917,9 @@ def _validate_imports():
     _CRITICAL_IMPORTS = [
         'lib.tasks_pkg.orchestrator',
         'lib.tasks_pkg.executor',
-        'lib.fetch',
-        'lib.search',
+        'tofu_search.fetch',
+        'tofu_search.search',
+        'lib.search_bridge',
         'lib.llm',
     ]
     _boot('Validating critical imports…')

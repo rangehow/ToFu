@@ -500,7 +500,7 @@ def _append_vu_message_to_conv(conv_id: str, vu_msg_id: str,
 
         now_ms = int(time.time() * 1000)
         try:
-            from routes.conversations import build_search_text
+            from lib.conversations import build_search_text
             search_text = build_search_text(messages)
         except Exception as e:
             logger.debug('[Autopilot] build_search_text failed: %s', e)
@@ -530,7 +530,7 @@ def _start_followup_task(task: dict, conv_id: str) -> str | None:
     importing from ``routes`` (orchestrator must not pull route-layer
     code at module scope — circular).
     """
-    from lib.tasks_pkg import create_task, run_task as _run_task
+    from lib.tasks_pkg import create_task
     from lib.tasks_pkg.conv_message_builder import build_api_messages_from_db
     from lib.tasks_pkg.manager import abort_running_tasks_for_conv
 
@@ -612,8 +612,8 @@ def _start_followup_task(task: dict, conv_id: str) -> str | None:
         logger.debug('[Autopilot] activeTaskId update skipped: %s', e)
 
     try:
-        from routes.common import _invalidate_meta_cache
-        _invalidate_meta_cache()
+        from lib.conversations import invalidate_meta_cache
+        invalidate_meta_cache()
     except Exception as e:
         logger.debug('[Autopilot] meta cache invalidation skipped: %s', e)
 

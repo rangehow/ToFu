@@ -19,6 +19,7 @@ const _PROVIDER_TEMPLATES = [
     base_url: 'https://api.minimax.chat/v1',
     balance_url: '',
     models: [
+      { model_id: 'MiniMax-M3',             capabilities: ['text', 'vision', 'thinking', 'cheap'],  rpm: 60,  cost: 0.002 },
       { model_id: 'MiniMax-M2.7',           capabilities: ['text', 'thinking', 'cheap'],  rpm: 60,  cost: 0.001 },
       { model_id: 'MiniMax-M2.7-highspeed', capabilities: ['text', 'thinking', 'cheap'],  rpm: 60,  cost: 0.001 },
       { model_id: 'MiniMax-M2.5',           capabilities: ['text', 'thinking', 'cheap'],  rpm: 60,  cost: 0.001 },
@@ -65,7 +66,7 @@ const _PROVIDER_TEMPLATES = [
     // V4 (Apr 2026): 1M ctx, dual Thinking / Non-Thinking modes. Legacy deepseek-chat /
     // deepseek-reasoner retire 2026-07-24 and currently route to deepseek-v4-flash.
     models: [
-      { model_id: 'deepseek-v4-pro',   capabilities: ['text', 'thinking', 'cheap'],  rpm: 30,  cost: 0.003 },
+      { model_id: 'deepseek-v4-pro',   capabilities: ['text', 'thinking', 'cheap'],  rpm: 30,  cost: 0.001 },
       { model_id: 'deepseek-v4-flash', capabilities: ['text', 'thinking', 'cheap'],  rpm: 60,  cost: 0.0002 },
       { model_id: 'deepseek-chat',     capabilities: ['text', 'cheap'],                       rpm: 60,  cost: 0.001 },
       { model_id: 'deepseek-reasoner', capabilities: ['text', 'thinking', 'cheap'],           rpm: 30,  cost: 0.002 },
@@ -95,14 +96,15 @@ const _PROVIDER_TEMPLATES = [
     name: 'Anthropic',
     base_url: 'https://api.anthropic.com/v1',
     balance_url: 'https://api.anthropic.com/v1/dashboard/billing/subscription',
+    protocol: 'anthropic',
     models: [
+      { model_id: 'claude-opus-4-8',            capabilities: ['text', 'vision', 'thinking'], rpm: 30,  cost: 0.015 },
       { model_id: 'claude-opus-4-7',            capabilities: ['text', 'vision', 'thinking'], rpm: 30,  cost: 0.015 },
       { model_id: 'claude-opus-4-6',            capabilities: ['text', 'vision', 'thinking'], rpm: 30,  cost: 0.015 },
       { model_id: 'claude-sonnet-4-6',           capabilities: ['text', 'vision', 'thinking'], rpm: 50,  cost: 0.009 },
       { model_id: 'claude-sonnet-4-5',           capabilities: ['text', 'vision', 'thinking'], rpm: 50,  cost: 0.009 },
       { model_id: 'claude-opus-4-5',             capabilities: ['text', 'vision', 'thinking'], rpm: 30,  cost: 0.015 },
       { model_id: 'claude-haiku-4-5',            capabilities: ['text', 'vision', 'cheap'],    rpm: 100, cost: 0.003 },
-      { model_id: 'claude-sonnet-4-20250514',    capabilities: ['text', 'vision', 'thinking'], rpm: 50,  cost: 0.009 },
     ],
   },
   {
@@ -113,13 +115,13 @@ const _PROVIDER_TEMPLATES = [
     base_url: 'https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1',
     balance_url: '',
     models: [
+      { model_id: 'us.anthropic.claude-opus-4-8-v1:0',      capabilities: ['text', 'vision', 'thinking'], rpm: 30,  cost: 0.015 },
       { model_id: 'us.anthropic.claude-opus-4-7-v1:0',      capabilities: ['text', 'vision', 'thinking'], rpm: 30,  cost: 0.015 },
       { model_id: 'us.anthropic.claude-opus-4-6-v1:0',      capabilities: ['text', 'vision', 'thinking'], rpm: 30,  cost: 0.015 },
       { model_id: 'us.anthropic.claude-sonnet-4-6-v1:0',    capabilities: ['text', 'vision', 'thinking'], rpm: 50,  cost: 0.009 },
       { model_id: 'us.anthropic.claude-sonnet-4-5-v1:0',    capabilities: ['text', 'vision', 'thinking'], rpm: 50,  cost: 0.009 },
       { model_id: 'us.anthropic.claude-opus-4-5-v1:0',      capabilities: ['text', 'vision', 'thinking'], rpm: 30,  cost: 0.015 },
       { model_id: 'us.anthropic.claude-haiku-4-5-v1:0',     capabilities: ['text', 'vision', 'cheap'],    rpm: 100, cost: 0.003 },
-      { model_id: 'us.anthropic.claude-sonnet-4-20250514-v1:0', capabilities: ['text', 'vision', 'thinking'], rpm: 50,  cost: 0.009 },
       { model_id: 'openai.gpt-oss-120b-1:0',                capabilities: ['text', 'thinking', 'cheap'],  rpm: 60,  cost: 0.001 },
       { model_id: 'openai.gpt-oss-20b-1:0',                 capabilities: ['text', 'cheap'],              rpm: 120, cost: 0.0005 },
     ],
@@ -361,6 +363,9 @@ const _PROVIDER_TEMPLATES = [
       { model_id: 'qwen3.5-plus-2026-02-15', capabilities: ['cheap', 'text', 'vision'],         rpm: 60,   cost: 0.0009 },
       { model_id: 'qwen3.6-plus',           capabilities: ['cheap', 'text', 'vision'],         rpm: 60,   cost: 0.0009 },
       { model_id: 'qwen3.6-plus-2026-04-02', capabilities: ['cheap', 'text', 'vision'],         rpm: 60,   cost: 0.0009 },
+      { model_id: 'qwen3.7-max',            capabilities: ['text', 'thinking'],                rpm: 30,   cost: 0.005 },
+      { model_id: 'qwen3.7-max-2026-05-20', capabilities: ['text', 'thinking'],                rpm: 30,   cost: 0.005 },
+      { model_id: 'qwen3.7-plus',           capabilities: ['cheap', 'text', 'vision', 'thinking'], rpm: 60,   cost: 0.0009 },
       { model_id: 'qwq-plus-2025-03-05',    capabilities: ['cheap', 'text'],                   rpm: 60,   cost: 0.0005 },
       { model_id: 'siliconflow/deepseek-r1-0528', capabilities: ['cheap', 'text'],                   rpm: 60,   cost: 0.0013 },
       { model_id: 'siliconflow/deepseek-v3-0324', capabilities: ['cheap', 'text'],                   rpm: 60,   cost: 0.0005 },

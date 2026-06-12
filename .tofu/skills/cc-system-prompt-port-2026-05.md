@@ -1,9 +1,9 @@
 ---
-name: Cc System Prompt Port 2026 05
-description: 
+name: Claude-Code system-prompt port (2026-05)
+description: Ported Claude Code's full static system-prompt section list into lib/tasks_pkg/system_prompt_cc.py; single layout (no CHATUI_CC_SYSPROMPT kill switch), CLAUDE.md injected as _isMeta user msg, compaction reinject keys off _CC_STATIC_MARKER
 enabled: true
-tags: []
-created: 
+tags: [system-prompt, claude-code, prompt-cache, compaction, cc-alignment]
+created: 2026-05-07T16:04:19Z
 updated: 2026-05-07T16:04:19Z
 ---
 

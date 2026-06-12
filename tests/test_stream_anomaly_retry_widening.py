@@ -192,20 +192,24 @@ def test_empty_stop_with_zero_byte_does_not_double_count():
 
 def test_chunks_received_field_is_propagated_from_llm_client():
     """Smoke check that the LLM client emits ``_chunks_received`` so
-    the stream handler can consume it. We import the module to verify
+    the stream handler can consume it. We read the module to verify
     the field-set keyword exists at the source-level (cheap regression
     against accidental removal).
+
+    The SSE finalize logic was unified into ``lib/llm/_sse_core.py``
+    (shared by the sync ``stream.py`` and async ``astream.py`` shells),
+    so the field is now set there.
     """
     import os
     src = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-        'lib/llm/stream.py',
+        'lib/llm/_sse_core.py',
     )
     with open(src) as f:
         content = f.read()
     assert "usage['_chunks_received']" in content, (
-        "lib/llm/stream.py must set usage['_chunks_received'] so stream_handler "
-        "can detect zero-byte gateway hangs deterministically."
+        "lib/llm/_sse_core.py must set usage['_chunks_received'] so "
+        "stream_handler can detect zero-byte gateway hangs deterministically."
     )
 
 

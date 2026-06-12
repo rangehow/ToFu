@@ -21,6 +21,7 @@ import re
 import uuid
 
 from lib.log import get_logger
+from lib.tasks_pkg.persist_registry import register as _register_label
 from lib.tasks_pkg.compaction._constants import (
     _DEFAULT_TOOL_RESULT_MAX,
     _PERSIST_DIR_BASE,
@@ -29,6 +30,22 @@ from lib.tasks_pkg.compaction._constants import (
 )
 
 logger = get_logger(__name__)
+
+
+def _short_id(tool_use_id: str) -> str:
+    """Derive a short, unique filename id fragment from a tool-use id.
+
+    The live caller always passes a provider tool-use id (``toolu_<24 random>``
+    for Anthropic, ``call_<24>`` for OpenAI, etc.).  The entropy lives in the
+    tail, while the ``toolu_`` / ``call_`` prefix is constant and repeated once
+    per split file in the persist index the model reads back — pure waste.
+    Strip the constant prefix and keep the entropy-bearing tail, capped so a
+    persisted filename never balloons.  Falls back to a fresh uuid fragment
+    when no tool-use id is supplied.
+    """
+    raw = (tool_use_id or uuid.uuid4().hex[:12]).replace('/', '_')
+    raw = re.sub(r'^(toolu_|call_|fc_)', '', raw)
+    return raw[-16:] or 'id'
 
 
 def _human_size(byte_count: int) -> str:
@@ -68,7 +85,7 @@ def _persist_to_disk(content: str, tool_name: str, tool_use_id: str = '',
     persist_dir = os.path.join(_PERSIST_DIR_BASE, dir_name)
     os.makedirs(persist_dir, exist_ok=True)
 
-    safe_id = (tool_use_id or uuid.uuid4().hex[:12]).replace('/', '_')
+    safe_id = _short_id(tool_use_id)
 
     # ── Try split-persist for multi-item tools ──
     if tool_name == 'web_search':
@@ -106,6 +123,9 @@ def _persist_to_disk(content: str, tool_name: str, tool_use_id: str = '',
 
     logger.info('[Persist] %s result persisted to disk: %s (%s)',
                 tool_name, filepath, _human_size(len(content)))
+
+    _first_line = content.lstrip().split('\n', 1)[0].strip()
+    _register_label(filepath, tool_name, _first_line)
 
     # Default preview: first N chars truncated at newline boundary
     preview = content[:_PERSIST_PREVIEW_CHARS]
@@ -151,12 +171,18 @@ def _persist_web_search_split(content: str, persist_dir: str,
         return None  # Only one result or no separators — use default
 
     index_lines = []
-    index_lines.append(f'Search results saved to {len(parts)} separate files '
-                       f'(total {_human_size(len(content))}). '
-                       f'Use read_files to read individual results.\n')
+    index_lines.append(
+        f'Search returned {len(parts)} results, saved to separate files '
+        f'(total {_human_size(len(content))}). The index below lists every '
+        f'result with a preview.\n'
+        f'IMPORTANT: do NOT stop after reading just one or two. Scan the whole '
+        f'index, pick EVERY result relevant to the task, and read them TOGETHER '
+        f'in a single read_files call (pass all the file paths in one `reads` '
+        f'array — batched reads are far cheaper than one-at-a-time). A broad '
+        f'search is wasted if you only open the top hit.\n')
 
     files_written = 0
-    _SNIPPET_CHARS = 200
+    _SNIPPET_CHARS = 400
 
     for i, part in enumerate(parts, 1):
         part = part.strip()
@@ -194,6 +220,7 @@ def _persist_web_search_split(content: str, persist_dir: str,
             with open(filepath, 'w', encoding='utf-8') as f:
                 f.write(part)
             files_written += 1
+            _register_label(filepath, 'web_search', title)
         except Exception as e:
             logger.warning('[Persist] Failed to write split file %s: %s',
                            filepath, e)
@@ -303,6 +330,7 @@ def _persist_grep_search_split(content: str, persist_dir: str,
             with open(filepath, 'w', encoding='utf-8') as f:
                 f.write(file_content)
             files_written += 1
+            _register_label(filepath, 'grep_search', fpath)
         except Exception as e:
             logger.warning('[Persist] Failed to write split file %s: %s',
                            filepath, e)
@@ -374,6 +402,8 @@ def _persist_find_files_split(content: str, persist_dir: str,
             with open(filepath, 'w', encoding='utf-8') as f:
                 f.write(section)
             files_written += 1
+            _register_label(filepath, 'find_files',
+                            f'{pattern} in {in_path.strip()}' if in_path else pattern)
         except Exception as e:
             logger.warning('[Persist] Failed to write split file %s: %s',
                            filepath, e)
@@ -466,6 +496,7 @@ def _persist_fetch_url_split(content: str, persist_dir: str,
             with open(filepath, 'w', encoding='utf-8') as f:
                 f.write(sec['body'])
             files_written += 1
+            _register_label(filepath, 'fetch_url', url)
         except Exception as e:
             logger.warning('[Persist] Failed to write split file %s: %s',
                            filepath, e)

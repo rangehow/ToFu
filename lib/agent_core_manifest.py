@@ -86,6 +86,33 @@ REGISTRY_SEAMS: tuple[str, ...] = (
     'lib.llm_dispatch.provider_registry',
 )
 
+# ── Persistence modules core must NOT import directly ──
+# The agent base must reach all persistence through the ConversationStore seam
+# (lib.protocols.ConversationStore via lib.agent_core.store.get_conversation_store),
+# never by importing the DB / conversation layer inline.  These prefixes name
+# the host persistence layer that a standalone tofu-agent would leave behind.
+FORBIDDEN_PERSISTENCE_MODULES: tuple[str, ...] = (
+    'lib.database',
+    'lib.conversations',
+)
+
+# Per-file ratchet of remaining direct persistence imports inside CORE_MODULES,
+# keyed by dotted module path → count of lines that still import a
+# FORBIDDEN_PERSISTENCE_MODULES symbol.  The boundary test asserts each file's
+# count is <= its baseline here (monotonic-decrease ratchet, mirroring
+# tests/test_frontend_api_isolation.py).  Drive a number DOWN by routing the
+# call through the store seam; NEVER raise one.  When a file hits 0, delete its
+# entry — the test then forbids the file from re-growing ANY persistence import.
+#
+# All stages done (2026-06): the agent base (CORE_MODULES) no longer
+# imports lib.database / lib.conversations anywhere.  Persistence flows
+# entirely through the ConversationStore seam
+# (lib.agent_core.store.get_conversation_store).  An empty baseline means
+# the boundary test now enforces ZERO direct persistence imports in core
+# — any new one fails CI.  Keep it empty.
+_PERSISTENCE_IMPORT_BASELINE: dict[str, int] = {}
+
+
 # ── Concrete plugins core must NOT import directly ──
 # Importing any of these from a CORE module means the base has grown a hard
 # dependency on a swappable plugin — exactly what the boundary forbids.
@@ -133,10 +160,23 @@ def is_concrete_plugin_import(dotted: str) -> bool:
                for p in CONCRETE_PLUGIN_MODULES)
 
 
+def is_forbidden_persistence_import(dotted: str) -> bool:
+    """True if *dotted* names the host persistence layer core must not import.
+
+    Core reaches persistence only through the ConversationStore seam
+    (:func:`lib.agent_core.store.get_conversation_store`).
+    """
+    return any(dotted == p or dotted.startswith(p + '.')
+               for p in FORBIDDEN_PERSISTENCE_MODULES)
+
+
 __all__ = [
     'CORE_MODULES',
     'REGISTRY_SEAMS',
     'CONCRETE_PLUGIN_MODULES',
+    'FORBIDDEN_PERSISTENCE_MODULES',
+    '_PERSISTENCE_IMPORT_BASELINE',
     'is_core_module',
     'is_concrete_plugin_import',
+    'is_forbidden_persistence_import',
 ]

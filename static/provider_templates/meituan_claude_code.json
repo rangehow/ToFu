@@ -1,0 +1,15 @@
+{
+  "key": "meituan_claude_code",
+  "brand": "claude",
+  "category": "official",
+  "name": "Meituan Claude Code (Anthropic)",
+  "base_url": "https://aigc.sankuai.com/v1/anthropic",
+  "protocol": "anthropic",
+  "extra_headers": {
+    "M-TransferContext-INF-CELL": "gray-release-ai-gpt-test"
+  },
+  "models": [
+    { "model_id": "yuju-claude-opus-4.8-evaDaily", "capabilities": ["text", "vision", "thinking"], "rpm": 30, "cost": 0.045 },
+    { "model_id": "yuju-claude-opus-4.7-evaDaily", "capabilities": ["text", "vision", "thinking"], "rpm": 30, "cost": 0.045 }
+  ]
+}

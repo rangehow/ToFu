@@ -778,14 +778,27 @@ document.addEventListener('click', function(e) {
       if (allRounds.length > 0) {
         trunc.remove();
         body.innerHTML = '';
-        for (const round of allRounds) {
+        /* Render in rAF-chunked batches: building 100+ tool rows synchronously
+         * freezes the main thread for ~1s (poor INP). Spreading the work across
+         * frames keeps the click responsive — same end state, rows stream in. */
+        const _renderSlot = (round) => {
           const slot = document.createElement('div');
           slot.setAttribute('data-prn', round.roundNum);
           slot.innerHTML = typeof _renderUnifiedToolLine === 'function'
             ? _renderUnifiedToolLine(round, false)
             : `<div class="ptool-line"><span class="ptool-text">${escapeHtml(round.toolName || round.query || '')}</span></div>`;
-          body.appendChild(slot);
-        }
+          return slot;
+        };
+        const CHUNK = 30;
+        let _i = 0;
+        const _renderChunk = () => {
+          const frag = document.createDocumentFragment();
+          const end = Math.min(_i + CHUNK, allRounds.length);
+          for (; _i < end; _i++) frag.appendChild(_renderSlot(allRounds[_i]));
+          body.appendChild(frag);
+          if (_i < allRounds.length) requestAnimationFrame(_renderChunk);
+        };
+        _renderChunk();
         return;
       }
     }

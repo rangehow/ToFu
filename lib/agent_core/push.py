@@ -26,8 +26,6 @@ Channels in use:
 """
 
 import asyncio
-import json
-import time
 import threading
 from collections import defaultdict
 from weakref import WeakSet

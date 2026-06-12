@@ -770,6 +770,53 @@ class TestDiskPersistence:
         # Should go through the default path (single [Persisted to:] header)
         assert result.startswith('[Persisted to:')
 
+    def test_persisted_results_get_friendly_display_labels(self):
+        """read_files on spilled web_search results should render a human
+        label (title) instead of the opaque persisted filename."""
+        import os
+        import re as _re
+        from lib.tasks_pkg.compaction import _persist_to_disk
+        from lib.tasks_pkg.persist_registry import clear, lookup
+        from lib.tasks_pkg.tool_display import _persisted_read_labels
+
+        clear()
+        content = (
+            '[1] AI Model Deprecation Tracker 2026\n'
+            'URL: https://example.com/track\n'
+            '──── Full Page Content ────\n' + ('lorem ' * 6000) +
+            '\n════════════════════\n'
+            '[2] Second Result Title\n'
+            'URL: https://example.org/two\n'
+            '──── Full Page Content ────\n' + ('ipsum ' * 6000)
+        )
+        out = _persist_to_disk(content, 'web_search', 'toolu_xyz', 'conv_lbl')
+        files = _re.findall(r'File: (\S+\.txt)', out)
+        assert len(files) == 2
+        assert lookup(files[0]) == ('web_search', 'AI Model Deprecation Tracker 2026')
+
+        display = _persisted_read_labels({'reads': [{'path': p} for p in files]})
+        assert 'web search result' in display
+        assert 'AI Model Deprecation Tracker 2026' in display
+        # Opaque filename must NOT leak into the display.
+        assert 'toolu_xyz' not in display
+
+        # Stateless fallback after a restart wipes the registry.
+        clear()
+        fb = _persisted_read_labels({'reads': [{'path': files[0]}]})
+        assert 'web search result' in fb
+        assert 'toolu_xyz' not in fb
+
+        for f in files:
+            os.unlink(f)
+
+    def test_non_persisted_read_keeps_default_display(self):
+        """read_files on ordinary project files must keep the normal path
+        rendering (no friendly-label hijack)."""
+        from lib.tasks_pkg.persist_registry import clear
+        from lib.tasks_pkg.tool_display import _persisted_read_labels
+        clear()
+        assert _persisted_read_labels({'reads': [{'path': 'lib/server.py'}]}) == ''
+
     def test_find_files_batch_split_persist(self):
         """Batch find_files persist should produce per-search files + index listing ALL patterns."""
         import os
@@ -1620,6 +1667,76 @@ class TestCompactRefusalGuards:
             'Refused compaction registered a cooldown, blocking the next '
             'legitimate attempt for 30s.'
         )
+
+
+
+@pytest.mark.unit
+class TestForceCompactReportsSummaryFailure:
+    """When the L2 summary LLM returns empty content, force_compact_if_needed
+    MUST report failure (return False) and NOT inject the synthetic
+    context_compact tool-pair.
+
+    Regression for the mq7y3irly1r4hu fatal-loop bug (2026-06-12): on an
+    empty summary, force_compact used to still append the synthetic pair
+    and return True, which made reactive_compact believe compaction
+    succeeded and skip its _head_truncate safety net — looping the same
+    oversized prompt back to the API until the task crashed FATAL."""
+
+    def _mk_messages(self):
+        # System + several real turns so the boundary is well-formed.
+        msgs = [{'role': 'system', 'content': 'sys'}]
+        for i in range(4):
+            msgs.append({'role': 'user', 'content': f'user turn {i}'})
+            msgs.append({'role': 'assistant', 'content': f'assistant turn {i}'})
+        return msgs
+
+    def test_empty_summary_returns_false_and_no_injection(self, monkeypatch):
+        from lib.tasks_pkg.compaction import _layer2
+
+        # Force the summary LLM to come back empty (the exact failure mode).
+        monkeypatch.setattr(_layer2, '_generate_query_aware_summary',
+                            lambda *a, **k: None)
+        # Avoid DB/SSE side-effects from the archive snapshot.
+        monkeypatch.setattr(_layer2, '_archive_transcript', lambda *a, **k: None)
+
+        msgs = self._mk_messages()
+        original = list(msgs)
+        task = {'id': 'fail_test', 'convId': 'conv_fail',
+                'config': {'model': 'gpt-4'}}
+
+        result = _layer2.force_compact_if_needed(
+            msgs, task=task, force=True, keep_recent_pairs=2,
+        )
+
+        assert result is False, (
+            'force_compact_if_needed must return False when the summary '
+            'failed — the reactive head-truncate net depends on it.'
+        )
+        assert msgs == original, (
+            'Failed compaction must NOT mutate/grow the message list with a '
+            'synthetic context_compact pair.'
+        )
+
+    def test_successful_summary_returns_true_and_injects(self, monkeypatch):
+        from lib.tasks_pkg.compaction import _layer2
+
+        monkeypatch.setattr(_layer2, '_generate_query_aware_summary',
+                            lambda *a, **k: 'SUMMARY BODY')
+        monkeypatch.setattr(_layer2, '_archive_transcript', lambda *a, **k: None)
+
+        msgs = self._mk_messages()
+        task = {'id': 'ok_test', 'convId': 'conv_ok',
+                'config': {'model': 'gpt-4'}}
+
+        result = _layer2.force_compact_if_needed(
+            msgs, task=task, force=True, keep_recent_pairs=2,
+        )
+
+        assert result is True
+        # The synthetic context_compact tool-pair was appended.
+        assert any(m.get('role') == 'tool'
+                   and m.get('name') == _layer2._COMPACT_TOOL_NAME
+                   for m in msgs)
 
 
 # ═══════════════════════════════════════════════════════════

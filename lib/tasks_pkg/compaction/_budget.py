@@ -24,18 +24,9 @@ from lib.tasks_pkg.compaction._constants import (
     MAX_ROUND_TOOL_RESULTS_CHARS,
     TOOL_RESULT_MAX_CHARS,
 )
-from lib.tasks_pkg.compaction._persist import _persist_to_disk
+from lib.tasks_pkg.compaction._persist import _human_size, _persist_to_disk
 
 logger = get_logger(__name__)
-
-
-def _human_size(byte_count: int) -> str:
-    if byte_count < 1024:
-        return f'{byte_count}B'
-    elif byte_count < 1024 * 1024:
-        return f'{byte_count / 1024:.1f}KB'
-    else:
-        return f'{byte_count / (1024 * 1024):.1f}MB'
 
 
 def budget_tool_result(tool_name: str, content: str,

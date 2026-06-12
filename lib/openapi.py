@@ -18,6 +18,7 @@ schemas) so the spec stays drift-free even if a developer forgets.
 
 from __future__ import annotations
 
+import asyncio
 import functools
 import json
 import re
@@ -80,9 +81,17 @@ def api_meta(*, summary: str = '', description: str = '',
     def decorator(fn):
         fn._api_meta = meta
 
-        @functools.wraps(fn)
-        def wrapper(*args, **kwargs):
-            return fn(*args, **kwargs)
+        # Dual-mode: an async handler MUST stay a coroutine function or
+        # Quart will run the sync wrapper in its thread-pool and try to
+        # serialize the returned coroutine object as the response body.
+        if asyncio.iscoroutinefunction(fn):
+            @functools.wraps(fn)
+            async def wrapper(*args, **kwargs):
+                return await fn(*args, **kwargs)
+        else:
+            @functools.wraps(fn)
+            def wrapper(*args, **kwargs):
+                return fn(*args, **kwargs)
 
         wrapper._api_meta = meta
         return wrapper

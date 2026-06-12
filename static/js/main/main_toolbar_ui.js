@@ -159,6 +159,20 @@ function _loadServerConfigAndPopulate() {
       if (data.upload && typeof data.upload === 'object') {
         window._uploadShrinkPolicy = data.upload;
       }
+      /* Capture context-window policy so the Context Health Bar mirrors the
+       * backend exactly. See lib/tasks_pkg/compaction.build_context_policy().
+       * Single source of truth — no more frontend-vs-backend limit/threshold
+       * drift (the JS table was stuck at 0.82 vs the real 0.90, and a stale
+       * per-model regex table). */
+      if (data.context && typeof data.context === 'object') {
+        window._contextPolicy = data.context;
+        if (typeof window.updateContextBar === 'function') window.updateContextBar();
+      }
+      /* Capture translation policy (stale-partial heuristic threshold) so
+       * translation.js mirrors the backend. See lib/text_lang.py. */
+      if (data.translation && typeof data.translation === 'object') {
+        window._translationPolicy = data.translation;
+      }
       /* Load hidden models from server config */
       _hiddenModels = new Set(data.hidden_models || []);
       _hiddenIgModels = new Set(data.hidden_ig_models || []);
@@ -361,40 +375,47 @@ document.addEventListener("click", (e) => {
 });
 
 function updateSubmenuCounts() {
+  /* ★ Track whether any count pill's VISIBILITY flipped (display:none ↔
+   * inline-block).  That pill is the only thing here that changes the
+   * toolbar's natural content width — when it appears, the box must be
+   * re-measured or the model name (.ps-label) truncates to fit the stale
+   * --toolbar-w.  We reflow ONLY on an actual visibility change so plain
+   * recomputes (e.g. depth toggles) stay free. */
+  let widthChanged = false;
+  const _setCount = (el, count) => {
+    if (!el) return;
+    el.textContent = count;
+    const want = count > 0;
+    if (el.classList.contains("visible") !== want) widthChanged = true;
+    el.classList.toggle("visible", want);
+  };
+
   // AI enhance: codeExec, memory, translate
   const aiCount = (codeExecEnabled ? 1 : 0) + (memoryEnabled ? 1 : 0) + (autoTranslate ? 1 : 0);
-  const aiEl = document.getElementById("submenuAICount");
-  if (aiEl) {
-    aiEl.textContent = aiCount;
-    aiEl.classList.toggle("visible", aiCount > 0);
-  }
+  _setCount(document.getElementById("submenuAICount"), aiCount);
   const aiTrigger = document.querySelector("#submenuAI .submenu-trigger");
   if (aiTrigger) aiTrigger.classList.toggle("has-active", aiCount > 0);
 
   // Tools: browser, desktop, scheduler, image gen, human guidance
   const toolCount = (browserEnabled ? 1 : 0) + (desktopEnabled ? 1 : 0) + (schedulerEnabled ? 1 : 0) + (imageGenEnabled ? 1 : 0) + (humanGuidanceEnabled ? 1 : 0);
-  const toolEl = document.getElementById("submenuToolsCount");
-  if (toolEl) {
-    toolEl.textContent = toolCount;
-    toolEl.classList.toggle("visible", toolCount > 0);
-  }
+  _setCount(document.getElementById("submenuToolsCount"), toolCount);
   const toolTrigger = document.querySelector("#submenuTools .submenu-trigger");
   if (toolTrigger) toolTrigger.classList.toggle("has-active", toolCount > 0);
 
   // Mode: swarm, endpoint, autopilot
   const modeCount = (swarmEnabled ? 1 : 0) + (endpointEnabled ? 1 : 0) + (autopilotEnabled ? 1 : 0);
-  const modeEl = document.getElementById("submenuModeCount");
-  if (modeEl) {
-    modeEl.textContent = modeCount;
-    modeEl.classList.toggle("visible", modeCount > 0);
-  }
+  _setCount(document.getElementById("submenuModeCount"), modeCount);
   const modeTrigger = document.querySelector("#submenuMode .submenu-trigger");
   if (modeTrigger) modeTrigger.classList.toggle("has-active", modeCount > 0);
+
+  /* A pill appeared/disappeared → toolbar's intrinsic width shifted by the
+   * pill's box.  Re-measure so .ps-label gets its space back. */
+  if (widthChanged && typeof _scheduleReflow === "function") _scheduleReflow();
 }
 
 function cycleSearchMode() {
-  const modes = ["off", "single", "multi"];
-  const idx = modes.indexOf(searchMode);
+  const modes = ["off", "multi"];
+  const idx = modes.indexOf(searchMode === "single" ? "multi" : searchMode);
   _applySearchModeUI(modes[(idx + 1) % modes.length]);
   _saveConvToolState();
   debugLog(`Search: ${searchMode}`, "success");

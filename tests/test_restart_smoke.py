@@ -126,10 +126,19 @@ def test_quart_request_sync_safe_get_json(server_module):
 # ═══════════════════════════════════════════════════════════════════════
 
 
+# Domains that must always be registered. After the /api/v1 migration,
+# several domains (config, conversations, project, memory, scheduler, mcp,
+# optimizer, browser, desktop) no longer own a bare-named Blueprint — they
+# live under the ``api_v1_<name>`` namespace. The always-on legacy UI
+# blueprints (chat, common, upload, translate, oauth, paper, push,
+# artifacts, metrics) keep their bare names.
 REQUIRED_BLUEPRINTS = {
-    'chat', 'common', 'config', 'conversations', 'upload', 'translate',
-    'project', 'browser', 'desktop', 'memory', 'scheduler', 'oauth',
-    'paper', 'push', 'mcp', 'optimizer', 'artifacts', 'metrics',
+    # Legacy UI / always-on blueprints (bare names):
+    'chat', 'common', 'upload', 'translate', 'browser', 'desktop',
+    'oauth', 'paper', 'push', 'artifacts', 'metrics',
+    # Migrated domains (now under the api_v1_* namespace):
+    'api_v1_config', 'api_v1_conversations', 'api_v1_project',
+    'api_v1_memory', 'api_v1_scheduler', 'api_v1_mcp', 'api_v1_optimizer',
 }
 
 
@@ -277,7 +286,7 @@ def _run_async(coro):
 def test_sync_route_runs_under_quart(client):
     """A long-standing sync Flask route must still be served by Quart."""
     async def go():
-        resp = await client.get('/api/chat/active', headers=_auth_headers())
+        resp = await client.get('/api/v1/chat/active', headers=_auth_headers())
         assert resp.status_code == 200
         data = await resp.get_json()
         assert isinstance(data, list)
@@ -311,7 +320,7 @@ def test_404_html_for_browser(client):
 
 def test_405_uses_unified_envelope(client):
     async def go():
-        resp = await client.post('/api/chat/active',
+        resp = await client.post('/api/v1/chat/active',
                                  headers=_auth_headers())  # GET-only route
         assert resp.status_code == 405
         data = await resp.get_json()
@@ -442,13 +451,13 @@ def _standalone():
 
     async def _check_routes():
         async with app.test_client() as c:
-            r = await c.get('/api/chat/active', headers=_h)
+            r = await c.get('/api/v1/chat/active', headers=_h)
             assert r.status_code == 200, r.status_code
             r = await c.get('/api/nope', headers=_h)
             assert r.status_code == 404
             data = await r.get_json()
             assert data['ok'] is False
-            r = await c.post('/api/chat/active', headers=_h)
+            r = await c.post('/api/v1/chat/active', headers=_h)
             assert r.status_code == 405
         return True
 

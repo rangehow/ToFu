@@ -1,12 +1,11 @@
 ---
 name: local-endpoints-vllm-sglang-design
-description: Local self-hosted LLM endpoints: ONE provider with `endpoints: [...]`, multi-URL slot fan-out, mandatory no-proxy host registration
+description: Local self-hosted LLM endpoints: ONE provider with endpoints:[...], multi-URL slot fan-out, mandatory no-proxy registration via should_bypass_proxy (raw-IP incl. 33.x), NOT just is_local_endpoint
 enabled: true
 tags: [llm-dispatch, local-endpoints, vllm, sglang, proxy, convention]
 created: 2026-05-13T04:28:54Z
-updated: 2026-05-13T04:28:54Z
+updated: 2026-06-06T02:29:00Z
 ---
-
 
 # Local self-hosted LLM endpoints (vLLM / SGLang / Ollama)
 
@@ -20,92 +19,43 @@ load-balances across the fleet automatically. Do NOT create one
 
 ```jsonc
 {
-  "id": "local",
-  "name": "本地部署模型",
-  "brand": "local",
-  "enabled": true,
-  "endpoints": [               // ← multi-URL fleet
-    "http://10.0.0.5:8000/v1",
-    "http://10.0.0.6:8000/v1"
-  ],
+  "id": "local", "name": "本地部署模型", "brand": "local", "enabled": true,
+  "endpoints": ["http://10.0.0.5:8000/v1", "http://10.0.0.6:8000/v1"],
   "base_url": "http://10.0.0.5:8000/v1",  // first endpoint, kept for legacy callers
-  "api_keys": [""],            // empty string is OK — most OSS engines have no auth
-  "models": [...],
-  "thinking_format": "..."
+  "api_keys": [""],            // empty string OK — most OSS engines have no auth
+  "models": [...], "thinking_format": "..."
 }
 ```
+Backwards-compat: if `endpoints` is absent/empty, the dispatcher falls back to `[base_url]`.
 
-Backwards-compat: if `endpoints` is absent/empty, the dispatcher falls back
-to `[base_url]`.
-
-## Slot fan-out (`lib/llm_dispatch/dispatcher.py:_build_slots_from_providers`)
-
-For each provider, slots are built across **endpoints × keys × models**.
-Local providers with empty `api_keys` get a single blank-key slot. Each
-slot's `key_name` is suffixed `_ep<idx>` when there are multiple
-endpoints so per-slot cooldowns don't clobber across endpoints.
-
-## Proxy bypass (CRITICAL — caused a real outage)
+## Proxy bypass (CRITICAL — caused a real outage, and a SECOND one via ephemeral slots)
 
 Self-hosted endpoints often live on private OR pseudo-private (corporate
 public-but-internal) IPs that the corporate `https_proxy` can't reach.
 RFC1918-only detection is NOT enough: e.g. `33.x.x.x` is publicly-routable
-but only routable from inside Meituan's network.
+but only routable from inside the corp network. Symptom when missed:
+`ProxyError('Unable to connect to proxy', ConnectionResetError(104))` —
+the LLM IP appears in the urllib3 MaxRetryError but `host=` is the corp proxy.
 
-`lib/proxy.py:register_no_proxy_host(host)` is the canonical fix. It:
-- adds the literal host to `_registered_hosts` (matched in `proxies_for`)
-- appends to the `no_proxy` env var so any third-party `requests` call
-  without our `proxies=` wrapper still bypasses
+### Two predicates in lib/llm_dispatch/discovery.py
+- `is_local_endpoint(url)` — loopback / RFC1918 / link-local / `.local|.internal|.lan|.intranet` / `TOFU_LOCAL_CIDRS`. Used for branding + health-poll inclusion + UI grouping.
+- `should_bypass_proxy(url)` = `is_local_endpoint(url) OR is_raw_ip_host(url)` — **this is the correct gate for proxy-bypass registration.** A bare IPv4/IPv6 literal base URL is in practice ALWAYS self-hosted/internal (commercial APIs use domains), so it must bypass even when not RFC1918 (covers 33.x without needing TOFU_LOCAL_CIDRS). Added 2026-06.
 
-Three call sites register hosts automatically:
-1. `lib/llm_dispatch/dispatcher.py:_build_slots_from_providers` for every
-   endpoint of every `brand=='local'` provider — runs at server boot.
-2. `lib/llm_dispatch/discovery.py:probe_provider` when `is_local` is True.
-3. `lib/llm_dispatch/health_local.py:_check_endpoint` on every poll
-   (cheap, idempotent).
+### Canonical fix: `lib/proxy.py:register_no_proxy_host(host)`
+- adds literal host to `_registered_hosts` (matched in `proxies_for`)
+- appends to `no_proxy` env var so third-party `requests` w/o our `proxies=` wrapper still bypasses
 
-If a future code path probes a local endpoint without going through one
-of these, it MUST call `register_no_proxy_url(url)` first or the very
-first request will time out via the corp proxy.
+### Call sites that auto-register (all must use should_bypass_proxy, NOT is_local_endpoint):
+1. `dispatcher.py:_build_slots_from_providers` — for every endpoint of every provider where `brand=='local' OR should_bypass_proxy(url)`. Server boot.
+2. `discovery.py:probe_provider` when `is_local`. (probe also force-registers when is_local)
+3. `health_local.py:_check_endpoint` — registers UNCONDITIONALLY every poll (cheap, idempotent).
+4. `ephemeral.py:mint_ephemeral_slot` — gates on `should_bypass_proxy(base_url)`. **This was the 2026-06 bug**: it gated on `is_local_endpoint`, so ephemeral slots (e.g. `/api/v1/agent/run` BYO `glm5.1-FP8` at `http://33.236.243.109:8080`) sent the FIRST chat request through the corp proxy → connection reset.
+
+If a future code path probes a local endpoint without going through one of these, it MUST call `register_no_proxy_url(url)` first (or check `should_bypass_proxy`).
 
 ## Health checker (`lib/llm_dispatch/health_local.py`)
+Per-endpoint, not per-provider. Probes each `endpoints` URL; cools down only slots whose `base_url` matches the dead endpoint; on recovery clears cooldowns + unions served-model sets and re-discovers on drift / every RESYNC_EVERY. Filters `discover_models` output to the union so a transient outage doesn't drop a private model.
 
-Per-endpoint, not per-provider:
-- Probes each endpoint in `provider['endpoints']`.
-- Cools down only the slots whose `base_url` matches the dead endpoint
-  (`_cooldown_endpoint_slots`).
-- On recovery, clears that endpoint's cooldowns and unions served-model
-  sets across live endpoints. Resync trigger:
-  - `not configured_ids` (provider was added when down), OR
-  - `union_served != configured_ids` (drift), OR
-  - `max(success_streak per endpoint) % RESYNC_EVERY == 0`.
-- Filters `discover_models` output to the union — protects against a
-  transient endpoint outage dropping that endpoint's private models.
-
-## Frontend convention (`static/js/settings.js`)
-
-A `brand=='local'` provider renders as a SPECIAL stg-provider-card:
-- single textarea `data-local-endpoints` with one URL per line
-- `_onLocalEndpoints(provIdx, value)` keeps `endpoints[]` and `base_url`
-  in sync (dedupe + first-as-base_url)
-- replaces "🔍 自动发现" button with "🔍 探测全部端点"
-  → calls `_discoverLocalModels(provIdx)` which hits
-  `POST /api/provider-probe-bulk` with the URL list, then merges the
-  union of served models. Per-endpoint OK/fail rows render in the
-  `#stgLocalStatus_<provIdx>` div on the same card.
-- HIDES balance URL, models_path, extra_headers fields (irrelevant for
-  OSS engines and clutters the UI).
-
-The "🖥️ 本地部署模型" button (in `index.html`) calls `addLocalProvider()`,
-which is idempotent: if a local provider already exists, it just expands
-that card instead of creating a new one. There should normally be ONE
-local provider in the system.
-
-## Migration note
-
-Earlier code created N separate `local_<host>` providers via a bulk-modal.
-A migration in `data/config/server_config.json` consolidated them into a
-single `id: 'local'` entry with `endpoints: [...]`. If any old `local_*`
-entries remain in a fresh deployment, run the consolidation snippet from
-the project history (look for `local_endpoints =` in earlier commits).
+## Frontend (`static/js/settings.js`)
+`brand=='local'` renders a special card: single textarea `data-local-endpoints` (one URL/line), `_onLocalEndpoints` syncs `endpoints[]`+`base_url`, "🔍 探测全部端点" → `POST /api/provider-probe-bulk`, per-endpoint OK/fail rows in `#stgLocalStatus_<idx>`. Balance/models_path/extra_headers hidden. `addLocalProvider()` is idempotent (one local provider total).
 

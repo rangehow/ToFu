@@ -205,7 +205,12 @@ function updateActiveTurn() {
   let ai = 0;
   for (let i = 0; i < dots.length; i++) {
     const el = document.getElementById("msg-" + dots[i].getAttribute("data-msg-idx"));
-    if (el && el.getBoundingClientRect().top <= thr) ai = i;
+    if (!el) continue;  // lazy-unrendered (older) message — skip, don't break
+    /* Dots are in vertical order: once one starts below the threshold, all
+     * later ones do too, so stop measuring — avoids a full getBoundingClientRect
+     * pass over every dot on every scroll frame. */
+    if (el.getBoundingClientRect().top <= thr) ai = i;
+    else break;
   }
   if (ai !== _lastActiveDotIdx) {
     if (_lastActiveDotIdx >= 0 && _lastActiveDotIdx < dots.length)

@@ -1,10 +1,10 @@
 ---
 name: file-history-cross-conversation-attribution
-description: fh side-channel must filter by last_writer_task_id and hold project lock across prev_snap+make_snapshot+diff
+description: fh side-channel: filter by last_writer_task_id, hold project lock across snapshot, AND drop unattributed drift on read-only rounds (Fix 4)
 enabled: true
 tags: [file-history, concurrency, orchestrator]
 created: 2026-05-13T04:52:04Z
-updated: 2026-05-13T04:52:04Z
+updated: 2026-06-10T09:35:00Z
 ---
 
 # File-history side-channel cross-conversation misattribution
@@ -13,71 +13,74 @@ updated: 2026-05-13T04:52:04Z
 A round that didn't actually edit any project file shows a long
 "N files changed" bar in the UI when ANOTHER conversation, pointing
 at the same project root, committed an editing round at roughly the
-same time.  Example conv: `mor8epb7c82olc`.
+same time. Example conv: `mor8epb7c82olc`. Also presents as: the bar
+appears on a no-op round and a hard refresh clears it only
+*sometimes* (the bad list was in the live SSE event but the persisted
+DB copy raced differently).
 
 ## Root cause
 `lib/tasks_pkg/orchestrator.py:_run_commit_round_async` runs three
-file-history calls back-to-back on a daemon thread:
-
+fh calls back-to-back on a daemon thread:
 ```python
 prev_snap = fh.get_last_snapshot_id(project_path)
 _snap_id  = fh.make_snapshot(...)
 fh_changes = fh.diff_name_status(project_path, prev_snap, _snap_id)
 ```
-
-Each call grabs the per-project `_project_lock` via
-`@with_project_lock`, but the sequence as a whole is NOT atomic.
-`fh.make_snapshot` walks the project-wide `tracked.json` index — so
-if conv-B's writer thread updates `tracked.json` between conv-A's
-`prev_snap` capture and conv-A's `make_snapshot`, conv-A's snapshot
-ends up containing conv-B's edits, and `diff_name_status` then
-reports those edits as if conv-A made them.  These flow into
-`task['modifiedFileList']` and into the persisted assistant message
-via `_patch_assistant_message_with_git`.
+`make_snapshot` walks the project-wide `tracked.json` index, so a
+concurrent conv's writer that updates `tracked.json` between our
+prev_snap capture and our make_snapshot leaks its edits into our diff.
+They flow into `task['modifiedFileList']` and the persisted assistant
+message via `_patch_assistant_message_with_git`.
 
 ## Fix (defense in depth)
 
 ### Fix 3 — atomic commit region
-Wrap the prev_snap → make_snapshot → diff → load_tracked sequence in
-`lib.file_history.store._project_lock(project_path)` so concurrent
-commit threads can't interleave in that critical region.  The
-inner `@with_project_lock` calls re-acquire the same RLock and
-become no-ops while we're holding it.
+Wrap prev_snap → make_snapshot → diff → load_tracked in
+`lib.file_history.store._project_lock(project_path)` (RLock; inner
+`@with_project_lock` calls re-acquire as no-ops).
 
 ### Fix 2 — per-task attribution on tracked entries
-Every `stage_backup` / `_stage_explicit` write now stamps
-`last_writer_task_id` on the `tracked.json` entry.  Plumbed through:
+Every `stage_backup`/`_stage_explicit` write stamps
+`last_writer_task_id` on the `tracked.json` entry (plumbed through
+store.py / api.py:track_edit / make_snapshot /
+modifications.py:_record_modification). In the orchestrator, after
+`diff_name_status`, drop any path whose `last_writer_task_id` is set
+and is NOT the current task's id.
 
-- `lib/file_history/store.py:stage_backup(... task_id=...)`
-- `lib/file_history/store.py:_stage_explicit(... task_id=...)`
-- `lib/file_history/api.py:track_edit(... task_id=...)` — passes
-  `task_id` (default: `message_id`) down to the store.
-- `lib/file_history/api.py:make_snapshot` — passes its `task_id`
-  through when re-staging declared `rel_paths`.
-- `lib/project_mod/modifications.py:_record_modification` — passes
-  `task_id=task_id` to `fh.track_edit(...)`.
-
-In the orchestrator, after `diff_name_status`, drop any path whose
-`last_writer_task_id` is set and is NOT the current task's id.
-Paths with empty `last_writer_task_id` (legacy entries) keep the
-previous reporting behaviour for back-compat.
+### Fix 4 — drop unattributed drift on read-only rounds (2026-06)
+Fix 2 kept paths with EMPTY `last_writer_task_id` for back-compat —
+but that escape hatch is the *residual leak*: external/IDE drift and
+un-stamped concurrent writes have `last_writer_task_id == ''` and get
+attributed to whatever round snapshots next. Gate it: compute
+`_round_can_write` = did this round run any tool NOT in a read-only
+WHITELIST (`list_dir, read_files, grep_search, find_files,
+web_search, fetch_url`) — probe `task['toolRounds']` by `toolName`.
+WHITELIST (not blacklist) so unknown MCP tools count as write-capable
+and never over-suppress. Then in the filter:
+  - writer set & != own  → drop (Fix 2)
+  - writer empty & NOT round_can_write → drop (Fix 4, drift)
+  - else keep.
+This preserves the legitimate side-channel for run_command /
+code_exec / MCP edits (which DO leave empty last_writer_task_id but
+run on a write-capable round). Probe fails OPEN (`_round_can_write=True`)
+on exception so we never over-suppress.
 
 ## Testing
-- `python debug/test_file_history.py` — 34 existing tests still pass.
-- `python debug/test_concurrent_fh_attribution.py` — new regression
-  test:
-  - Task-B writes `b_only.py`, Task-A writes nothing → A's bar must
-    be empty, B's bar must show `b_only.py`.
-  - Threaded variant with the same expectation.
+- `python debug/test_file_history.py` — 34 pass.
+- `python debug/test_concurrent_fh_attribution.py` — Task-A/B + C/D
+  concurrency PLUS new Task-E (read-only round drops unattributed
+  drift) / Task-F (write-capable round still surfaces it). The test's
+  `_commit_round_simulating_orchestrator` mirror must be kept in sync
+  with the orchestrator filter — it now takes `tool_rounds=` and
+  applies the same whitelist gate. NOTE: each drift edit appears in
+  only ONE snapshot diff, so use a distinct file per round in tests.
 
 ## Invariants
-- The fh attribution filter must NEVER drop entries with
-  `last_writer_task_id == ''` because legacy `tracked.json` files
-  written before this fix carry no attribution.
-- The `_project_lock` is an RLock — re-entrancy is required for
-  the existing `@with_project_lock` decorators inside the critical
-  region to remain correct.
-- `last_writer_task_id` lives on the tracked entry (per-file), not
-  on the snapshot record, because the misattribution happens at
-  diff time which keys on the tracked index.
-
+- NEVER drop entries with `last_writer_task_id == ''` on a
+  WRITE-CAPABLE round (legacy entries + run_command/code_exec/MCP).
+- `_project_lock` is an RLock — re-entrancy required.
+- `last_writer_task_id` lives on the tracked entry (per-file), set at
+  stage time; misattribution happens at diff time which keys on the
+  tracked index.
+- Read-only whitelist is the safe side: unknown tool name ⇒ treated
+  as write-capable.

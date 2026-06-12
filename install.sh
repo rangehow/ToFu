@@ -713,13 +713,18 @@ CONDA_PKGS=(
     "psutil>=5.9"
     "playwright>=1.40"
     "pillow>=10.0"
+    # numpy + scipy — used by scripts/png_to_svg.py for background removal
+    # (flood-fill connected-components) in generate_image(svg=true). Without
+    # them the SVG bg-removal step silently degrades to a worse trace.
+    "numpy>=1.24"
+    "scipy>=1.10"
     "python-pptx>=0.6.21"
     # lxml ≥6 works with libxml2 2.14+ and icu 75 OR 78 — gives the solver
     # maximum freedom. It's ABI-compatible with lxml 5.x at the Python level.
     "lxml>=6"
-    # BS4 — HTML fallback parser in lib/fetch/html_extract.py
+    # BS4 — HTML fallback parser in tofu_search/fetch/html_extract.py
     "beautifulsoup4>=4.12"
-    # python-dateutil — eagerly imported by lib/fetch/html_extract.py
+    # python-dateutil — eagerly imported by tofu_search/fetch/html_extract.py
     "python-dateutil>=2.8"
     # Office document parsers for lib/doc_parser.py (upload pipeline)
     "python-docx>=1.0"
@@ -751,6 +756,11 @@ CONDA_PKGS=(
 # and most users don't need it (pymupdf4llm covers the common case).
 PIP_ONLY_PKGS=(
     "pymupdf4llm>=0.0.17"
+    # vtracer — Rust-backed raster→vector tracer for generate_image(svg=true)
+    # (scripts/png_to_svg.py). Self-contained wheel: no Python deps, does not
+    # touch lxml/icu, so --no-deps is safe. Hard dep — the svg parameter on
+    # the generate_image tool is always advertised, so it must always work.
+    "vtracer>=0.6.11"
     "trafilatura>=1.6"
     "htmldate>=1.9.4"
     # trafilatura's pure-Python deps (from its pyproject.toml).
@@ -880,6 +890,8 @@ _IMPORT_CHECK_PKGS=(
     "psutil:psutil"
     "playwright:playwright"
     "PIL:pillow"
+    "numpy:numpy"
+    "scipy:scipy"
     "pptx:python-pptx"
     "lxml:lxml"
     "bs4:beautifulsoup4"
@@ -1191,6 +1203,25 @@ else
     fi
 fi
 
+# ── Verify the PNG→SVG stack (generate_image svg=true) ──
+# vtracer (pip, Rust wheel) + numpy/scipy (conda) power scripts/png_to_svg.py.
+# The generate_image tool ALWAYS advertises the `svg` parameter, so these must
+# import. vtracer ships no Python deps, so a plain pip retry (no lxml
+# constraint needed) is the right self-heal.
+info "Verifying PNG→SVG stack (vtracer + numpy + scipy) imports correctly..."
+_SVG_IMPORT_PROBE='import vtracer, numpy, scipy; print("vtracer ok, numpy", numpy.__version__, "scipy", scipy.__version__)'
+if python -c "$_SVG_IMPORT_PROBE" 2>/dev/null; then
+    ok "PNG→SVG stack import check passed"
+else
+    warn "PNG→SVG stack import failed — retrying vtracer via pip"
+    if _safe_pip_install --upgrade vtracer && python -c "$_SVG_IMPORT_PROBE" 2>/dev/null; then
+        ok "PNG→SVG stack import check passed after retry"
+    else
+        warn "vtracer still not importable — generate_image(svg=true) will fail."
+        warn "Manual recovery: conda activate ${ENV_NAME} && pip install vtracer"
+    fi
+fi
+
 # ═══════════════════════════════════════════════════════════════
 #  Step 6: Verify SQLite (built into Python)
 # ═══════════════════════════════════════════════════════════════
@@ -1199,13 +1230,13 @@ SQLITE_VER="$(python -c 'import sqlite3; print(sqlite3.sqlite_version)')"
 ok "SQLite $SQLITE_VER (built into Python)"
 
 # ═══════════════════════════════════════════════════════════════
-#  Step 7: Install ripgrep & fd-find from conda-forge (fast search)
+#  Step 7: Install ripgrep, fd-find & tmux from conda-forge
 # ═══════════════════════════════════════════════════════════════
-step "Installing ripgrep + fd-find (fast code/file search)"
-if conda install -n "$ENV_NAME" -c conda-forge --override-channels -y ripgrep fd-find; then
-    ok "ripgrep + fd-find installed"
+step "Installing ripgrep + fd-find + tmux (fast search + terminal multiplexer)"
+if conda install -n "$ENV_NAME" -c conda-forge --override-channels -y ripgrep fd-find tmux; then
+    ok "ripgrep + fd-find + tmux installed"
 else
-    warn "ripgrep/fd-find install failed — code search will fall back to grep / os.walk"
+    warn "ripgrep/fd-find/tmux install failed — code search will fall back to grep / os.walk"
 fi
 
 # ═══════════════════════════════════════════════════════════════
@@ -1215,7 +1246,7 @@ if [[ "$SKIP_PLAYWRIGHT" -eq 0 ]]; then
     step "Installing Playwright Chromium"
 
     # On Linux, install Chromium's shared libs from conda-forge so that no
-    # sudo / system packages are required. lib/fetch/playwright_pool.py
+    # sudo / system packages are required. tofu_search/fetch/playwright_pool.py
     # auto-prepends $CONDA_PREFIX/lib to LD_LIBRARY_PATH at runtime.
     if [[ "$OS" == "Linux" ]]; then
         info "Installing Chromium shared-lib deps from conda-forge (rootless)..."
@@ -1241,11 +1272,29 @@ if [[ "$SKIP_PLAYWRIGHT" -eq 0 ]]; then
         fi
     fi
 
-    info "Downloading Chromium browser binary via playwright..."
-    if python -m playwright install chromium; then
-        ok "Playwright Chromium installed"
+    # Self-heal: the Chromium download below runs `python -m playwright`, which
+    # needs the `playwright` pip package importable. If the earlier pip step
+    # failed/was skipped, this would die with "No module named 'playwright'"
+    # and leave JS-rendered fetching silently disabled. Reinstall it first.
+    if ! python -c "import playwright" 2>/dev/null; then
+        warn "playwright module not importable — reinstalling it before Chromium download"
+        if _safe_pip_install --upgrade "playwright>=1.40"; then
+            ok "playwright pip package installed"
+        else
+            warn "Could not install the playwright pip package — Chromium download will be skipped"
+        fi
+    fi
+
+    if ! python -c "import playwright" 2>/dev/null; then
+        warn "playwright still not importable — skipping Chromium download (fetching still works via requests)"
+        warn "Manual recovery: conda activate ${ENV_NAME} && pip install 'playwright>=1.40' && python -m playwright install chromium"
     else
-        warn "Playwright Chromium install failed (non-critical — fetching still works via requests)"
+        info "Downloading Chromium browser binary via playwright..."
+        if python -m playwright install chromium; then
+            ok "Playwright Chromium installed"
+        else
+            warn "Playwright Chromium install failed (non-critical — fetching still works via requests)"
+        fi
     fi
 else
     info "Skipping Playwright (--skip-playwright)"

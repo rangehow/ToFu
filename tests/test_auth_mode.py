@@ -119,7 +119,8 @@ class OpenModeGateTest(unittest.TestCase):
         cls._tmp.cleanup()
 
     def test_get_mode_route_is_public(self):
-        import asyncio, json
+        import asyncio
+        import json
         async def go():
             c = self.app.test_client()
             r = await c.get('/api/v1/auth/mode')
@@ -131,7 +132,8 @@ class OpenModeGateTest(unittest.TestCase):
         asyncio.run(go())
 
     def test_unauthed_call_passes_in_open_mode(self):
-        import asyncio, json
+        import asyncio
+        import json
         async def go():
             c = self.app.test_client()
             r = await c.get('/api/v1/keys/whoami')

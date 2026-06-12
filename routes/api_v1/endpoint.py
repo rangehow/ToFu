@@ -16,7 +16,7 @@ import threading
 
 from flask import Blueprint, jsonify
 
-from lib.api_response import api_bad_request, api_not_found, api_ok
+from lib.api_response import api_bad_request, api_not_found
 from lib.log import get_logger
 from lib.openapi import api_meta
 from lib.rate_limiter import rate_limit

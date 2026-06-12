@@ -24,9 +24,12 @@ GENERATE_IMAGE_TOOL = {
             "Generate or edit an image. "
             "Use this when the user asks you to create, draw, design, visualize, "
             "or EDIT/MODIFY an image, illustration, diagram, logo, or any visual content. "
-            "For image EDITING: if the user provides an image and asks to modify it "
-            "(change background, add objects, change style, remove elements, etc.), "
-            "pass the image URL as source_image. "
+            "For image EDITING: if the user provides an image (or refers to one you "
+            "generated earlier in this conversation) and asks to modify it — change "
+            "background, recolor, add/remove objects, restyle, etc. — pass that image's "
+            "URL or path as source_image and describe the change in prompt. Editing "
+            "preserves the rest of the source image and is automatically routed to a "
+            "capable model. "
             "Provide a detailed English prompt for best results. "
             "You can optionally specify aspect ratio and resolution."
         ),
@@ -60,14 +63,12 @@ GENERATE_IMAGE_TOOL = {
                         "Options: '1:1' (square), '16:9' (landscape), '9:16' (portrait), "
                         "'4:3', '3:4'. Default: '1:1'."
                     ),
-                    "enum": ["1:1", "16:9", "9:16", "4:3", "3:4"],
-                    "default": "1:1"
+                    "enum": ["1:1", "16:9", "9:16", "4:3", "3:4"]
                 },
                 "resolution": {
                     "type": "string",
                     "description": "Image resolution. '1K' for standard, '2K' for high-res. Default: '1K'.",
-                    "enum": ["1K", "2K"],
-                    "default": "1K"
+                    "enum": ["1K", "2K"]
                 },
                 "output_path": {
                     "type": "string",
@@ -93,8 +94,7 @@ GENERATE_IMAGE_TOOL = {
                         "with the same name but .svg extension. "
                         "Useful for logos, icons, mascots, and illustrations that need to "
                         "scale without pixelation. Default: false."
-                    ),
-                    "default": False
+                    )
                 }
             },
             "required": ["prompt"]

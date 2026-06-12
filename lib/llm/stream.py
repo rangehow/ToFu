@@ -1,46 +1,40 @@
 # HOT_PATH
-"""Streaming chat completion with SSE parsing.
+"""Streaming chat completion with SSE parsing (sync transport).
 
 Public API:
   - stream_chat(body, ...) → (assistant_msg, finish_reason, usage)
-"""
 
-import json
-import time
-import uuid
+The SSE parsing / error classification / tool-call accumulation / anomaly
+diagnostics live in ``lib/llm/_sse_core.py`` and are shared with the async
+transport (``lib/llm/astream.py``). This module is the thin ``requests``
+shell: it opens the stream, feeds lines to the core, and keeps the
+retry/backoff wrapper.
+"""
 
 import requests
 
-import lib as _lib
+from lib.llm._sse_core import (
+    SSEAccumulator,
+    classify_status_error,
+    prepare_request,
+)
 from lib.llm._transport import (
+    CONNECT_TIMEOUT,
     MAX_STREAM_RETRIES,
     abortable_sleep,
-    chat_url,
-    headers,
     retry_wait,
 )
-from lib.llm.cache import add_cache_breakpoints
-from lib.llm.diagnostics import RawSSEDumper
 from lib.llm_errors import (
     AbortedError,
     ContentFilterError,
+    EndpointUnreachableError,
     ModelLimitError,
     PermissionError_,
     PromptTooLongError,
     RateLimitError,
-    RetryableAPIError,
-    _GATEWAY_THROTTLE_STATUS,
     _RETRYABLE,
-    _classify_http_error,
-    _is_prompt_too_long,
 )
 from lib.log import get_logger
-from lib.model_info import (
-    _learn_model_limit,
-    _parse_token_limit_from_error,
-    is_claude,
-    is_minimax,
-)
 from lib.proxy import proxies_for
 
 logger = get_logger(__name__)
@@ -49,7 +43,7 @@ logger = get_logger(__name__)
 def stream_chat(body, *, on_thinking=None, on_content=None,
                 on_tool_call_ready=None,
                 abort_check=None, log_prefix='', api_key=None, base_url=None,
-                extra_headers=None):
+                extra_headers=None, api_protocol='openai'):
     """Streaming chat completion with callbacks.
 
     Automatically retries on transient connection errors up to
@@ -71,13 +65,16 @@ def stream_chat(body, *, on_thinking=None, on_content=None,
                 on_tool_call_ready=on_tool_call_ready,
                 abort_check=abort_check, log_prefix=log_prefix,
                 attempt=attempt, api_key=api_key, base_url=base_url,
-                extra_headers=extra_headers)
+                extra_headers=extra_headers, api_protocol=api_protocol)
             if _limit_learned:
                 if usage is None:
                     usage = {}
                 usage['_model_limit_learned'] = _limit_learned
             return msg, finish_reason, usage
-        except (RateLimitError, PermissionError_, AbortedError, ContentFilterError, PromptTooLongError):
+        except (RateLimitError, PermissionError_, AbortedError, ContentFilterError, PromptTooLongError, EndpointUnreachableError):
+            # EndpointUnreachableError: the host is down — retrying it on
+            # the SAME slot just burns another connect timeout. Escape to
+            # the dispatch layer, which cools this slot and fails over.
             raise
         except ModelLimitError as e:
             body['max_tokens'] = e.detected_limit
@@ -108,576 +105,60 @@ def stream_chat(body, *, on_thinking=None, on_content=None,
 def _stream_chat_once(body, *, on_thinking=None, on_content=None,
                       on_tool_call_ready=None,
                       abort_check=None, log_prefix='', attempt=0,
-                      api_key=None, base_url=None, extra_headers=None):
-    """Single attempt at a streaming chat completion."""
-    _task_id_for_latch = body.get('_task_id', '')
-    add_cache_breakpoints(body, log_prefix)
-    body.pop('_task_id', None)
+                      api_key=None, base_url=None, extra_headers=None,
+                      api_protocol='openai'):
+    """Single attempt at a streaming chat completion (sync transport)."""
+    plan = prepare_request(
+        body, attempt=attempt, log_prefix=log_prefix,
+        api_key=api_key, base_url=base_url, extra_headers=extra_headers,
+        api_protocol=api_protocol)
 
-    # Auto-inject extended cache TTL beta header for Claude
-    if is_claude(body.get('model', '')):
-        if _task_id_for_latch:
-            from lib.tasks_pkg.cache_tracking import latch_extended_ttl
-            _use_ext_ttl = latch_extended_ttl(_task_id_for_latch)
-        else:
-            _use_ext_ttl = getattr(_lib, 'CACHE_EXTENDED_TTL', False)
-        if _use_ext_ttl:
-            if extra_headers is None:
-                extra_headers = {}
-            _existing_beta = extra_headers.get('anthropic-beta', '')
-            _ttl_beta = 'extended-cache-ttl-2025-04-11'
-            if _ttl_beta not in _existing_beta:
-                if _existing_beta:
-                    extra_headers['anthropic-beta'] = f'{_existing_beta},{_ttl_beta}'
-                else:
-                    extra_headers['anthropic-beta'] = _ttl_beta
-
-    # Codex OAuth translation
-    _codex_mode = False
-    _codex_translator = None
-    if base_url and 'codex' in base_url and 'chatgpt.com' in base_url:
-        _codex_mode = True
-        from lib.oauth.codex import codex_translate_request, CodexSSETranslator
-        body = codex_translate_request(body)
-        _codex_translator = CodexSSETranslator(model=body.get('model', ''))
-        url = f'{base_url.rstrip("/")}/responses'
-        logger.debug('%s [Codex] Translated request for Responses API', log_prefix)
-    else:
-        url = f'{base_url.rstrip("/")}/chat/completions' if base_url else chat_url()
-
-    attempt_tag = f' (attempt {attempt+1})' if attempt > 0 else ''
-    if log_prefix:
-        logger.debug('%s%s POST %s '
-              'msgs=%d '
-              'tools=%s', log_prefix, attempt_tag, url, len(body.get('messages', [])), 'yes' if body.get('tools') else 'no')
-
-    trace_id = uuid.uuid4().hex
-    hdrs = headers()
-    hdrs['M-TraceId'] = trace_id
-    if api_key:
-        hdrs['Authorization'] = f'Bearer {api_key}'
-    if extra_headers:
-        hdrs.update(extra_headers)
-
-    if log_prefix:
-        logger.debug('%s M-TraceId=%s', log_prefix, trace_id)
-
-    _stream_t0 = time.time()
-
-    _raw_dumper = RawSSEDumper(body.get('model', ''), trace_id, body)
-    _raw_dumper.start()
-
-    resp = requests.post(url, headers=hdrs, json=body,
-                         stream=True, timeout=(60, 300),
-                         proxies=proxies_for(url))
+    try:
+        resp = requests.post(plan.url, headers=plan.hdrs, json=plan.body,
+                             stream=True, timeout=(CONNECT_TIMEOUT, 300),
+                             proxies=proxies_for(plan.url))
+    except requests.exceptions.ConnectionError as e:
+        # Connect-phase failure (ConnectTimeout / connection refused /
+        # SYN dropped) = the endpoint is down. Convert to
+        # EndpointUnreachableError so it escapes the same-key retry loop
+        # and the dispatch layer fails over to a healthy slot instead of
+        # burning CONNECT_TIMEOUT × MAX_STREAM_RETRIES on a dead host.
+        logger.warning('%s ✖ Endpoint unreachable (connect phase) %s: %s',
+                       log_prefix, plan.url, e)
+        raise EndpointUnreachableError(
+            'endpoint unreachable: %s' % e, base_url=plan.url) from e
 
     try:
         resp_trace = resp.headers.get('M-TraceId', '')
-        if resp_trace and resp_trace != trace_id:
+        if resp_trace and resp_trace != plan.trace_id:
             logger.debug('%s resp M-TraceId=%s', log_prefix, resp_trace)
 
         if resp.status_code != 200:
-            err_msg = f'API HTTP {resp.status_code}: {resp.text[:800]}'
-            if _raw_dumper.enabled:
-                _raw_dumper.line(f'[HTTP-{resp.status_code}] {resp.text[:2000]}')
-            _classify_http_error(resp.status_code, err_msg,
-                                 body.get('model', ''), log_prefix,
-                                 max_tokens=body.get('max_tokens', 0))
+            classify_status_error(resp.status_code, resp.text, body=plan.body,
+                                  log_prefix=log_prefix, raw_dumper=plan.raw_dumper)
 
         resp.encoding = 'utf-8'
-        content = ''
-        thinking_text = ''
-        tool_calls_acc = {}
-        finish_reason = 'stop'
-        usage = None
-        _saw_done = False
-        _saw_finish_reason = False
-        _chunk_count = 0
-        _aborted_by_client = False
 
-        _mm_mode = is_minimax(body.get('model', ''))
-        _mm_in_think = False
-        _mm_buf = ''
-        _consecutive_parse_errors = 0
-        _MAX_CONSECUTIVE_PARSE_ERRORS = 10
+        acc = SSEAccumulator(
+            plan.body, plan.trace_id, plan.raw_dumper, plan.codex_translator,
+            plan.t0, url=plan.url, log_prefix=log_prefix,
+            on_thinking=on_thinking, on_content=on_content,
+            on_tool_call_ready=on_tool_call_ready,
+            anthropic_translator=plan.anthropic_translator)
 
         for line in resp.iter_lines(decode_unicode=True):
             if abort_check and abort_check():
-                _aborted_by_client = True
-                logger.debug('%s Stream aborted by client after %d chunks', log_prefix, _chunk_count)
+                acc.mark_aborted()
+                break
+            if acc.feed_line(line):
                 break
 
-            _raw_dumper.line(line if line is not None else '')
-            if not line or not line.startswith('data:'):
-                continue
-            data_str = line[5:].strip()
-            if data_str == '[DONE]':
-                _saw_done = True
-                break
-            if not data_str:
-                continue
-            _chunk_count += 1
-
-            # Codex SSE translation
-            if _codex_mode and _codex_translator:
-                translated = _codex_translator.translate(data_str)
-                for t_str in translated:
-                    if t_str == '[DONE]':
-                        _saw_done = True
-                        break
-                    try:
-                        t_chunk = json.loads(t_str)
-                    except Exception as e:
-                        logger.debug('[LLM] Codex SSE chunk parse failed: %s', e)
-                        continue
-                    choices = t_chunk.get('choices', [])
-                    if choices:
-                        delta = choices[0].get('delta', {})
-                        fr = choices[0].get('finish_reason')
-                        if fr:
-                            finish_reason = fr
-                            _saw_finish_reason = True
-                        _c = delta.get('content', '')
-                        if _c and on_content:
-                            content += _c
-                            on_content(_c)
-                        _t = delta.get('reasoning_content', '')
-                        if _t and on_thinking:
-                            thinking_text += _t
-                            on_thinking(_t)
-                        for tc in (delta.get('tool_calls') or []):
-                            idx = tc.get('index', 0)
-                            if idx not in tool_calls_acc:
-                                tool_calls_acc[idx] = {
-                                    'id': tc.get('id', ''),
-                                    'type': 'function',
-                                    'function': {'name': '', 'arguments': ''},
-                                }
-                            if tc.get('id'):
-                                tool_calls_acc[idx]['id'] = tc['id']
-                            fn = tc.get('function', {})
-                            if fn.get('name'):
-                                tool_calls_acc[idx]['function']['name'] = fn['name']
-                            if fn.get('arguments'):
-                                tool_calls_acc[idx]['function']['arguments'] += fn['arguments']
-                    if t_chunk.get('usage'):
-                        usage = t_chunk['usage']
-                if _saw_done:
-                    break
-                continue
-
-            try:
-                chunk = json.loads(data_str)
-            except Exception as e:
-                _consecutive_parse_errors += 1
-                logger.warning('%s ⚠ SSE chunk JSON parse error (chunk #%d, consecutive=%d) model=%s trace=%s: %s — %s',
-                               log_prefix, _chunk_count, _consecutive_parse_errors,
-                               body.get('model', '?'), trace_id, data_str[:200], e, exc_info=True)
-                if _consecutive_parse_errors >= _MAX_CONSECUTIVE_PARSE_ERRORS:
-                    _raw_dumper.dump_anomaly(
-                        'parse_error',
-                        consecutive_errors=_consecutive_parse_errors,
-                        chunk_count=_chunk_count,
-                        last_data_preview=data_str[:200],
-                        model=body.get('model', '?'),
-                    )
-                    raise RetryableAPIError(
-                        f'{_consecutive_parse_errors} consecutive SSE parse errors — stream appears corrupt') from e
-                continue
-
-            _consecutive_parse_errors = 0
-
-            if 'error' in chunk:
-                eo = chunk['error']
-                err_text = eo.get('message', '') if isinstance(eo, dict) else str(eo)
-                _err_lower = err_text.lower()
-                _model_id = body.get('model', '')
-                _detected_limit = _parse_token_limit_from_error(err_text, _model_id)
-                if _detected_limit:
-                    _learn_model_limit(_model_id, _detected_limit)
-                    raise ModelLimitError(
-                        f'SSE error (token limit): {err_text}',
-                        _model_id, _detected_limit,
-                        body.get('max_tokens', 0))
-                if _is_prompt_too_long(err_text):
-                    logger.warning('%s Prompt too long detected in SSE error: %s',
-                                   log_prefix, err_text[:300])
-                    raise PromptTooLongError(f'SSE error: {err_text}')
-                _sse_err_type = eo.get('type', '') if isinstance(eo, dict) else ''
-                _sse_http_code = str(eo.get('http_code', '')) if isinstance(eo, dict) else ''
-                # ★ Some upstream gateways (AWS Bedrock, GCP Vertex) embed the
-                #   HTTP status inside the message text instead of a structured
-                #   field, e.g. "(Service: BedrockRuntime, Status Code: 429, …)".
-                #   Extract it so quota/rate-limit detection works for those too.
-                if not _sse_http_code:
-                    import re as _re
-                    _m = _re.search(r'status code[:\s]+(\d{3})', _err_lower)
-                    if _m:
-                        _sse_http_code = _m.group(1)
-                _sse_quota_patterns = [
-                    'too many tokens', 'too many requests',
-                    'quota exceeded', 'rate exceeded',
-                    'tokens per day', 'tokens per minute',
-                    'requests per day', 'requests per minute',
-                    'throttling', 'throttled',
-                ]
-                _sse_retryable_patterns = [
-                    '负载较高', 'server overload', 'service overload',
-                    'capacity', 'try again later', '稍后重试',
-                    'temporarily unavailable',
-                ]
-                _sse_non_retryable_patterns = [
-                    'not support model', 'invalid api key',
-                    'unauthorized', 'forbidden', 'not found',
-                    'plan not support', 'permission denied',
-                ]
-                _is_sse_non_retryable = any(
-                    p in _err_lower for p in _sse_non_retryable_patterns)
-                _is_sse_quota = (
-                    not _is_sse_non_retryable
-                    and (
-                        _sse_http_code == '429'
-                        or any(p in _err_lower for p in _sse_quota_patterns)
-                    )
-                )
-                _is_sse_retryable = (
-                    not _is_sse_non_retryable
-                    and not _is_sse_quota
-                    and (
-                        _sse_err_type == 'server_error'
-                        or _sse_http_code.startswith('5')
-                        or any(p in _err_lower for p in _sse_retryable_patterns)
-                    )
-                )
-                if _is_sse_quota:
-                    logger.warning('%s SSE rate-limit/quota detected — '
-                                   'escalating to dispatch layer: %s',
-                                   log_prefix, err_text[:300])
-                    raise RateLimitError(
-                        f'SSE error: {err_text}',
-                        reason=f'HTTP 429: {err_text[:180]}')
-                if _is_sse_retryable:
-                    _sse_status = int(_sse_http_code) if _sse_http_code.isdigit() else 500
-                    if _sse_status in _GATEWAY_THROTTLE_STATUS:
-                        logger.warning('%s SSE gateway throttle (HTTP %d) — '
-                                       'escalating to dispatch layer: %s',
-                                       log_prefix, _sse_status, err_text[:300])
-                        raise RateLimitError(
-                            f'SSE error: {err_text}',
-                            reason=f'HTTP {_sse_status}: {err_text[:180]}')
-                    logger.warning('%s SSE server error (retryable): %s',
-                                   log_prefix, err_text[:300])
-                    raise RetryableAPIError(
-                        f'SSE error: {err_text}',
-                        status_code=_sse_status)
-                if not err_text:
-                    err_text = (f'<empty error body> sse_type={_sse_err_type or "?"} '
-                                f'http_code={_sse_http_code or "?"} '
-                                f'model={body.get("model", "?")} '
-                                f'trace={trace_id}')
-                raise Exception(f'SSE error: {err_text}')
-
-            if chunk.get('usage'):
-                usage = chunk['usage']
-
-            choices = chunk.get('choices', [])
-            if not choices:
-                continue
-
-            delta = choices[0].get('delta', {})
-            fr = choices[0].get('finish_reason')
-            if fr:
-                finish_reason = fr
-                _saw_finish_reason = True
-            if choices[0].get('usage'):
-                usage = choices[0]['usage']
-
-            # Thinking / reasoning delta
-            td = (delta.get('thinking')
-                  or delta.get('reasoning_content')
-                  or (delta.get('content', '')
-                      if delta.get('role') == 'thinking' else ''))
-            if not td and delta.get('reasoning_details'):
-                rd_parts = delta['reasoning_details']
-                if isinstance(rd_parts, list):
-                    td = ''.join(d.get('text', '') for d in rd_parts if isinstance(d, dict))
-            if td:
-                thinking_text += td
-                if on_thinking:
-                    on_thinking(td)
-
-            # Content delta
-            if 'content' in delta and delta.get('role') != 'thinking':
-                cd = delta['content'] or ''
-                if cd:
-                    if _mm_mode:
-                        _mm_buf += cd
-                        while _mm_buf:
-                            if _mm_in_think:
-                                end_idx = _mm_buf.find('</think>')
-                                if end_idx == -1:
-                                    thinking_text += _mm_buf
-                                    if on_thinking:
-                                        on_thinking(_mm_buf)
-                                    _mm_buf = ''
-                                else:
-                                    think_part = _mm_buf[:end_idx]
-                                    if think_part:
-                                        thinking_text += think_part
-                                        if on_thinking:
-                                            on_thinking(think_part)
-                                    _mm_buf = _mm_buf[end_idx + len('</think>'):]
-                                    _mm_in_think = False
-                            else:
-                                start_idx = _mm_buf.find('<think>')
-                                if start_idx == -1:
-                                    if len(_mm_buf) > 7 and '<' in _mm_buf[-7:]:
-                                        safe = _mm_buf[:_mm_buf.rfind('<', max(0, len(_mm_buf)-7))]
-                                        if safe:
-                                            content += safe
-                                            if on_content:
-                                                on_content(safe)
-                                        _mm_buf = _mm_buf[len(safe):]
-                                    else:
-                                        content += _mm_buf
-                                        if on_content:
-                                            on_content(_mm_buf)
-                                        _mm_buf = ''
-                                else:
-                                    before = _mm_buf[:start_idx]
-                                    if before:
-                                        content += before
-                                        if on_content:
-                                            on_content(before)
-                                    _mm_buf = _mm_buf[start_idx + len('<think>'):]
-                                    _mm_in_think = True
-                    else:
-                        content += cd
-                        if on_content:
-                            on_content(cd)
-
-            # Tool call deltas
-            _tc_list = delta.get('tool_calls') or []
-            if _tc_list:
-                for tc in _tc_list:
-                    idx = tc.get('index', 0)
-                    if idx not in tool_calls_acc:
-                        if on_tool_call_ready and idx > 0 and (idx - 1) in tool_calls_acc:
-                            _prev = tool_calls_acc[idx - 1]
-                            try:
-                                on_tool_call_ready(_prev)
-                            except Exception as _tcr_err:
-                                logger.debug('%s on_tool_call_ready callback error: %s',
-                                             log_prefix, _tcr_err)
-                        tool_calls_acc[idx] = {
-                            'id': '', 'type': 'function',
-                            'function': {'name': '', 'arguments': ''},
-                        }
-                    if tc.get('id'):
-                        tool_calls_acc[idx]['id'] = tc['id']
-                    if tc.get('extra_content'):
-                        tool_calls_acc[idx]['extra_content'] = tc['extra_content']
-                    fn = tc.get('function', {})
-                    if fn.get('name'):
-                        tool_calls_acc[idx]['function']['name'] += fn['name']
-                    if fn.get('arguments') is not None:
-                        tool_calls_acc[idx]['function']['arguments'] += \
-                            fn.get('arguments', '')
-
-        # Fire callback for the LAST tool call when stream ends
-        if on_tool_call_ready and tool_calls_acc:
-            _last_idx = max(tool_calls_acc.keys())
-            _last_tc = tool_calls_acc[_last_idx]
-            if _last_tc['function']['name']:
-                try:
-                    on_tool_call_ready(_last_tc)
-                except Exception as _tcr_err:
-                    logger.debug('%s on_tool_call_ready callback error (final): %s',
-                                 log_prefix, _tcr_err)
-
-        # Flush MiniMax buffer
-        if _mm_mode and _mm_buf:
-            if _mm_in_think:
-                thinking_text += _mm_buf
-                if on_thinking:
-                    on_thinking(_mm_buf)
-            else:
-                content += _mm_buf
-                if on_content:
-                    on_content(_mm_buf)
-            _mm_buf = ''
-
-        # MiniMax: normalize reasoning_tokens into usage
-        if _mm_mode and usage and thinking_text:
-            ctd = usage.get('completion_tokens_details', {})
-            rt = ctd.get('reasoning_tokens', 0)
-            if rt > 0 and 'reasoning_tokens' not in usage:
-                usage['reasoning_tokens'] = rt
-
-        # Filter out spurious tool calls
-        _INTERNAL_TOOL_PREFIXES = ('antml:', 'anthropic.', '__')
-        if tool_calls_acc:
-            _filtered = {}
-            _names_with_args = {
-                tc['function']['name']
-                for tc in tool_calls_acc.values()
-                if (tc['function'].get('arguments', '') or '').strip()
-            }
-            for idx, tc_entry in tool_calls_acc.items():
-                fn_name = tc_entry['function']['name']
-                fn_args_str = tc_entry['function'].get('arguments', '')
-                if any(fn_name.startswith(p) for p in _INTERNAL_TOOL_PREFIXES):
-                    logger.debug('%s Filtering spurious internal tool call: %s',
-                                 log_prefix, fn_name)
-                    continue
-                if not fn_args_str.strip() and fn_name in _names_with_args:
-                    logger.warning(
-                        '%s Filtering phantom tool call: %s (tc_id=%s) has '
-                        'empty arguments — duplicate of another %s call with real args',
-                        log_prefix, fn_name, tc_entry.get('id', '?')[:12], fn_name,
-                    )
-                    continue
-                _filtered[idx] = tc_entry
-            tool_calls_acc = _filtered
-
-        # Build assistant message
-        msg = {'role': 'assistant'}
-        if thinking_text:
-            msg['reasoning_content'] = thinking_text
-        if tool_calls_acc:
-            msg['tool_calls'] = [tool_calls_acc[i]
-                                 for i in sorted(tool_calls_acc.keys())]
-            if content:
-                msg['content'] = content
-        else:
-            msg['content'] = content
-
-        # Log cache info
-        cache_info = ''
-        if usage:
-            cw = usage.get('cache_write_tokens',
-                           usage.get('cache_creation_input_tokens', 0))
-            cr = usage.get('cache_read_tokens',
-                           usage.get('cache_read_input_tokens', 0))
-            if cw or cr:
-                cache_info = f' cache_w={cw} cache_r={cr}'
-                if cr > 0:
-                    inp = usage.get('prompt_tokens',
-                                    usage.get('input_tokens', 0))
-                    cache_info += f' (saved ~{round(cr / max(inp, 1) * 100)}%)'
-
-        if log_prefix:
-            logger.debug('%s Done: finish=%s '
-                  'content=%d think=%d%s', log_prefix, finish_reason, len(content), len(thinking_text), cache_info)
-
-        _stream_elapsed_s = time.time() - _stream_t0
-
-        # Diagnostics: detect premature stream close
-        if not _aborted_by_client and not _saw_done:
-            logger.warning(
-                '%s ⚠ PREMATURE STREAM CLOSE: '
-                'Server never sent [DONE] marker. '
-                'M-TraceId=%s resp_trace=%s elapsed=%.1fs '
-                'chunks_received=%d '
-                'saw_finish_reason=%s finish_reason=%s '
-                'content_len=%d thinking_len=%d '
-                'tool_calls=%d model=%s url=%s',
-                log_prefix, trace_id, resp_trace or 'none',
-                _stream_elapsed_s, _chunk_count,
-                _saw_finish_reason, finish_reason,
-                len(content), len(thinking_text),
-                len(tool_calls_acc), body.get('model', '?'), url)
-            _raw_dumper.dump_anomaly(
-                'missing_done',
-                elapsed_s=round(_stream_elapsed_s, 2),
-                chunks=_chunk_count,
-                saw_finish_reason=_saw_finish_reason,
-                finish_reason=finish_reason,
-                content_len=len(content),
-                thinking_len=len(thinking_text),
-                tool_calls=len(tool_calls_acc),
-                resp_trace=resp_trace or 'none',
-            )
-        elif not _aborted_by_client and not _saw_finish_reason and _chunk_count > 0:
-            logger.warning(
-                '%s ⚠ MISSING FINISH_REASON: '
-                '[DONE] received but no finish_reason chunk. '
-                'M-TraceId=%s elapsed=%.1fs '
-                'Using default=%s chunks=%d '
-                'content_len=%d model=%s',
-                log_prefix, trace_id, _stream_elapsed_s,
-                finish_reason, _chunk_count,
-                len(content), body.get('model', '?'))
-            _raw_dumper.dump_anomaly(
-                'missing_finish_reason',
-                elapsed_s=round(_stream_elapsed_s, 2),
-                chunks=_chunk_count,
-                content_len=len(content),
-                thinking_len=len(thinking_text),
-                tool_calls=len(tool_calls_acc),
-            )
-
-        # Diagnostics: detect empty responses
-        if (not _aborted_by_client and finish_reason == 'stop'
-                and not content and not tool_calls_acc
-                and _chunk_count > 0):
-            logger.warning(
-                '%s ⚠ EMPTY STOP RESPONSE: '
-                'finish=stop but no content and no tool_calls. '
-                'M-TraceId=%s elapsed=%.1fs '
-                'chunks=%d thinking_len=%d model=%s',
-                log_prefix, trace_id, _stream_elapsed_s,
-                _chunk_count, len(thinking_text),
-                body.get('model', '?'))
-            _raw_dumper.dump_anomaly(
-                'empty_stop',
-                elapsed_s=round(_stream_elapsed_s, 2),
-                chunks=_chunk_count,
-                thinking_len=len(thinking_text),
-                finish_reason=finish_reason,
-                resp_trace=resp_trace or 'none',
-            )
-
-        # Inject metadata into usage
-        if usage is None:
-            usage = {}
-        usage['trace_id'] = trace_id
-        if resp_trace and resp_trace != trace_id:
-            usage['resp_trace_id'] = resp_trace
-        usage['stream_elapsed_ms'] = round(_stream_elapsed_s * 1000)
-        usage['_chunks_received'] = _chunk_count
-
-        # Stream anomaly flags
-        _has_anomaly = False
-        if not _aborted_by_client and not _saw_done:
-            usage['_missing_done'] = True
-            if not _saw_finish_reason:
-                _has_anomaly = True
-        if not _aborted_by_client and not _saw_finish_reason and _chunk_count > 0:
-            usage['_missing_finish_reason'] = True
-            _has_anomaly = True
-        if (not _aborted_by_client and finish_reason == 'stop'
-                and not content and not tool_calls_acc
-                and _chunk_count > 0):
-            usage['_empty_stop'] = True
-            _has_anomaly = True
-        if _has_anomaly:
-            usage['_stream_anomaly'] = True
-
-        _raw_dumper.finish(
-            finish_reason=finish_reason,
-            content_len=len(content),
-            thinking_len=len(thinking_text),
-            tool_calls=len(tool_calls_acc),
-            saw_done=_saw_done,
-            saw_finish_reason=_saw_finish_reason,
-        )
-
-        return msg, finish_reason, usage
+        acc.fire_final_tool_callback()
+        return acc.finalize(resp_trace=resp_trace)
     finally:
         try:
-            if _raw_dumper.enabled and _raw_dumper._fh is not None:
-                _raw_dumper.finish(error=True)
+            if plan.raw_dumper.enabled and plan.raw_dumper._fh is not None:
+                plan.raw_dumper.finish(error=True)
         except Exception as e:
             logger.debug('%s RawSSEDumper.finish(error=True) failed: %s', log_prefix, e)
         resp.close()

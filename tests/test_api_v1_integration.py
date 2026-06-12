@@ -303,7 +303,9 @@ class IntegrationTest(unittest.TestCase):
         from lib.api_keys import create_key
         _row, token = create_key(name='folder-tester', scopes=[], admin=True)
 
-        import importlib, os, tempfile
+        import importlib
+        import os
+        import tempfile
         folders_mod = importlib.import_module('routes.api_v1.folders')
         orig_path = folders_mod._FOLDERS_PATH
         tmp_dir = tempfile.mkdtemp()

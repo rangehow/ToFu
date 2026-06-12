@@ -297,7 +297,7 @@ DEFAULT_SLOT_CONFIGS = {
 
     # ── DeepSeek ──
     # V4 family (Apr 2026) — 1M ctx, dual Thinking / Non-Thinking; pro=1.6T/49B, flash=284B/13B.
-    'deepseek-v4-pro':               {'caps': {'text', 'thinking', 'cheap'},      'rpm': 30,  'latency': 3000, 'cost': 0.003},
+    'deepseek-v4-pro':               {'caps': {'text', 'thinking', 'cheap'},      'rpm': 30,  'latency': 3000, 'cost': 0.001},
     'deepseek-v4-flash':             {'caps': {'text', 'thinking', 'cheap'},      'rpm': 60,  'latency': 2000, 'cost': 0.0002},
     'deepseek-v4-flash-huawei':      {'caps': {'text', 'thinking', 'cheap'},      'rpm': 60,  'latency': 2000, 'cost': 0.0002},
     'deepseek-chat':                 {'caps': {'text', 'cheap'},                  'rpm': 60,  'latency': 2000, 'cost': 0.001},
@@ -338,6 +338,8 @@ DEFAULT_SLOT_CONFIGS = {
     'qwen-long':                     {'caps': {'text', 'cheap'},                  'rpm': 60,  'latency': 2000, 'cost': 0.001},
 
     # ── MiniMax ──
+    # M3 (2026-06-01) — flagship: MSA sparse attn, 1M ctx, native multimodal (image+video in).
+    'MiniMax-M3':                    {'caps': {'text', 'vision', 'thinking', 'cheap'}, 'rpm': 60, 'latency': 2000, 'cost': 0.002},
     'MiniMax-M2':                    {'caps': {'text', 'vision', 'cheap'},        'rpm': 60,  'latency': 2000, 'cost': 0.001},
     'MiniMax-M2.1':                  {'caps': {'text', 'thinking', 'cheap'},      'rpm': 60,  'latency': 2000, 'cost': 0.001},
     'MiniMax-M2.1-highspeed':        {'caps': {'text', 'thinking', 'cheap'},      'rpm': 60,  'latency': 1500, 'cost': 0.002},
@@ -354,6 +356,7 @@ DEFAULT_SLOT_CONFIGS = {
 
     # ── GLM (Zhipu AI) ──
     'glm-5.1':                       {'caps': {'text', 'thinking'},                'rpm': 60,  'latency': 3000, 'cost': 0.004},
+    'glm-5.1-huawei':                {'caps': {'text', 'thinking'},                'rpm': 60,  'latency': 3000, 'cost': 0.004},
     'glm-5':                         {'caps': {'text', 'thinking'},                'rpm': 60,  'latency': 3000, 'cost': 0.004},
     'glm-4.7':                       {'caps': {'text', 'thinking', 'cheap'},      'rpm': 60,  'latency': 2000, 'cost': 0.002},
     'glm-4.5-air':                   {'caps': {'text', 'cheap'},                   'rpm': 120, 'latency': 1500, 'cost': 0.001},
@@ -435,6 +438,8 @@ MODEL_ALIAS_GROUPS = [
     {'deepseek-v3.2-tencent', 'deepseek-v3.2-baidu', 'deepseek-v3.2-huawei', 'deepseek-v3.2-doubao'},
     # DeepSeek V4 Flash — direct DeepSeek API + Meituan gateway Huawei-cloud mirror
     {'deepseek-v4-flash', 'deepseek-v4-flash-huawei'},
+    # GLM-5.1 — Meituan gateway default + Huawei-cloud mirror
+    {'glm-5.1', 'glm-5.1-huawei'},
 ]
 
 MODEL_ALIASES: dict[str, set[str]] = {}

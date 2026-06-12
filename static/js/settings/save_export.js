@@ -46,6 +46,12 @@ function saveSettings() {
     config.keepToolHistory = kthCb.checked;
   }
 
+  // Auto-generate conversation title toggle
+  var agtCb = document.getElementById('settingAutoGenerateTitle');
+  if (agtCb) {
+    config.autoGenerateTitle = agtCb.checked;
+  }
+
   // Input send mode
   var ismSel = document.getElementById('settingInputSendMode');
   if (ismSel) {
@@ -105,9 +111,14 @@ function saveSettings() {
         if (data && data.ok) {
           debugLog('Debug mode ' + (newDbg ? 'enabled' : 'disabled'), 'success');
           if (typeof _featureFlags !== 'undefined') _featureFlags.debug_mode = newDbg;
-          // Re-render sidebar and messages to show/hide debug elements
+          // Re-render sidebar and messages to show/hide debug elements.
+          // Former renderMessages() never existed — whole-chat repaint is
+          // renderChat(conv). (caught by tsc --checkJs)
           if (typeof renderConversationList === 'function') renderConversationList();
-          if (typeof renderMessages === 'function') renderMessages();
+          if (typeof renderChat === 'function' && typeof getActiveConv === 'function') {
+            var _dbgConv = getActiveConv();
+            if (_dbgConv) renderChat(_dbgConv, true);
+          }
         }
       }).catch(function(e) { debugLog('Feature flag save failed: ' + e.message, 'error'); });
     }
@@ -168,8 +179,7 @@ async function _saveServerConfig() {
   payload.search.max_chars_direct = parseInt(document.getElementById('settingMaxCharsDirect')?.value) || 200000;
   payload.search.max_chars_pdf = parseInt(document.getElementById('settingMaxCharsPdf')?.value) || 0;
   payload.search.max_bytes = parseInt(document.getElementById('settingMaxBytes')?.value) || 20971520;
-  var sd = document.getElementById('settingSkipDomains');
-  if (sd) payload.search.skip_domains = sd.value.split('\n').map(function(s) { return s.trim(); }).filter(Boolean);
+  if (typeof ChipInput !== 'undefined') payload.search.skip_domains = ChipInput.getValues('settingSkipDomains');
 
   // Network — proxy address config (no_proxy is auto-managed by bypass domains)
   payload.proxy_config = {
@@ -178,9 +188,8 @@ async function _saveServerConfig() {
   };
 
   // Network — unified bypass domains (feeds both proxies_for() and no_proxy env)
-  var pb = document.getElementById('settingProxyBypass');
-  if (pb) {
-    payload.proxy_bypass_domains = pb.value.split('\n').map(function(s) { return s.trim(); }).filter(Boolean);
+  if (typeof ChipInput !== 'undefined') {
+    payload.proxy_bypass_domains = ChipInput.getValues('settingProxyBypass');
   }
 
   // Feishu bot config

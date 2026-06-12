@@ -126,7 +126,7 @@ def test_no_legacy_api_routes_remain():
         legacy.append(path)
 
     assert not legacy, (
-        f'Legacy /api/* routes remain outside the carve-out allow-list:\n'
+        'Legacy /api/* routes remain outside the carve-out allow-list:\n'
         + '\n'.join(f'  - {p}' for p in sorted(set(legacy)))
         + '\n\nIf any of these are legitimately non-JSON (multipart/SSE/'
           'static/redirect/beacon), add them to ALLOWED_NON_V1 in '
@@ -153,8 +153,8 @@ def test_carve_out_list_is_exhaustive():
     registered = {rule.rule for rule in app.url_map.iter_rules()}
     stale = [p for p in ALLOWED_NON_V1 if p not in registered]
     assert not stale, (
-        f'ALLOWED_NON_V1 contains paths that are NOT registered on '
-        f'the app:\n' + '\n'.join(f'  - {p}' for p in sorted(stale))
+        'ALLOWED_NON_V1 contains paths that are NOT registered on '
+        'the app:\n' + '\n'.join(f'  - {p}' for p in sorted(stale))
         + '\n\nEither restore the route or remove the entry from '
           'ALLOWED_NON_V1.'
     )

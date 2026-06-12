@@ -10,13 +10,12 @@ seven-step sequence:
   4. Write messages back with full-text search indexing
   5. Build an agentic task config from tools_config + conversation settings
   6. Create the agentic task and set ``activeTaskId``
-  7. Run the task in a background daemon thread
+  7. Run the task via the unified ``spawn_task`` entry point
 """
 
 from __future__ import annotations
 
 import json
-import threading
 import time
 from datetime import datetime
 from typing import Any
@@ -89,7 +88,7 @@ def inject_and_run_task(
         The agentic ``task_id`` on success, or ``None`` on failure.
     """
     from lib.database import DOMAIN_CHAT, db_execute_with_retry, get_thread_db, json_dumps_pg
-    from lib.tasks_pkg import run_task
+    from lib.tasks_pkg import spawn_task
     from lib.tasks_pkg.manager import create_task as create_agentic_task
 
     try:
@@ -136,7 +135,7 @@ def inject_and_run_task(
         messages.append(assistant_msg)
 
         # 4. Write messages back to DB ───────────────────────────────
-        from routes.conversations import build_search_text
+        from lib.conversations import build_search_text
 
         messages_json = json_dumps_pg(messages)
         search_text = build_search_text(messages)
@@ -148,17 +147,8 @@ def inject_and_run_task(
             (messages_json, now_ms, len(messages),
              search_text, conv_id)
         )
-        # Update FTS5 index
-        if search_text:
-            try:
-                db.execute(
-                    "INSERT OR REPLACE INTO conversations_fts (rowid, search_text) "
-                    "SELECT rowid, ? FROM conversations WHERE id = ?",
-                    (search_text, conv_id)
-                )
-                db.commit()
-            except Exception as _fts_err:
-                logger.debug('[Scheduler] FTS update failed (non-fatal): %s', _fts_err)
+        from lib.conversations import update_conversation_fts
+        update_conversation_fts(db, conv_id, search_text)
 
         # 5. Build config ────────────────────────────────────────────
         if isinstance(tools_config_json, str):
@@ -187,18 +177,12 @@ def inject_and_run_task(
         logger.info('%s Created agentic task %s in conv=%s',
                      log_prefix, agentic_task_id[:8], conv_id[:12])
 
-        # 7. Run in background daemon thread ─────────────────────────
-        def _run():
-            try:
-                run_task(agentic_task)
-            except Exception as e:
-                logger.error('%s Agentic task %s execution failed: %s',
-                             log_prefix, agentic_task_id[:8], e, exc_info=True)
-
-        threading.Thread(
-            target=_run, daemon=True,
-            name=f'sched-exec-{agentic_task_id[:8]}',
-        ).start()
+        # 7. Run via the unified spawn entry point ───────────────────
+        # spawn_task is loop-aware: inside the Quart event loop it runs
+        # run_task in asyncio.to_thread (tracked/cancellable); outside a
+        # loop it falls back to a daemon thread. This replaces the bare
+        # threading.Thread that bypassed the event loop.
+        spawn_task(agentic_task)
 
         return agentic_task_id
 

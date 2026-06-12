@@ -48,41 +48,53 @@
 (function () {
   'use strict';
 
-  /* ── Model → context-window table.  Mirrors lib/tasks_pkg/compaction.py
-   *    `_get_context_limit()` so client-side estimates match server-side
-   *    compaction triggers.  Order matters: more-specific keys first. */
-  const _CONTEXT_LIMITS = [
-    /* Claude 4.6+ Opus / Sonnet ship with 1M context (GA 2026-03-13). */
-    [/(?:claude|anthropic).*opus[-_.]?(\d+)[-_.](\d+)/i, (m) =>
-      (parseInt(m[1], 10) >= 4 && parseInt(m[2], 10) >= 6) || parseInt(m[1], 10) > 4 ? 1_000_000 : 200_000],
-    [/(?:claude|anthropic).*sonnet[-_.]?(\d+)[-_.](\d+)/i, (m) =>
-      (parseInt(m[1], 10) >= 4 && parseInt(m[2], 10) >= 6) || parseInt(m[1], 10) > 4 ? 1_000_000 : 200_000],
-    [/claude-opus-4\.6|claude-sonnet-4\.6/i, 1_000_000],
-    [/claude/i, 200_000],
-    [/gpt-4o|gpt-4-turbo/i, 128_000],
-    [/gpt-4|gpt-3\.5/i, 128_000],
-    [/o1|o3|o4/i, 200_000],
-    [/gemini/i, 1_000_000],
-    [/qwen/i, 128_000],
-    [/deepseek/i, 128_000],
-    [/doubao/i, 128_000],
-    [/minimax/i, 1_000_000],
-  ];
-  const _DEFAULT_LIMIT = 200_000;
+  /* ── Context-window policy.  The authoritative limits + compaction
+   *    thresholds live in Python (lib/tasks_pkg/compaction) and are served
+   *    via /api/v1/server-config → cached on `window._contextPolicy` by
+   *    _loadServerConfigAndPopulate().  We DO NOT re-derive them here — a
+   *    hard-coded copy silently drifted (the JS threshold was stuck at 0.82
+   *    vs the real 0.90, and the regex limit table missed learned overrides).
+   *
+   *    Policy shape (see build_context_policy()):
+   *      { default_limit, output_reserve, compaction_reserve,
+   *        summary_trigger_ratio, per_model: { <model_id>: <limit> } }
+   *
+   *    `_FALLBACK_LIMIT` is used only before the config has loaded (or if the
+   *    fetch failed) — it must never be the primary source of truth. */
+  const _FALLBACK_LIMIT = 200_000;
+  const _CRIT_THRESHOLD = 0.95;
 
-  /* 82 % matches lib/tasks_pkg/compaction.py:_SUMMARY_TRIGGER_RATIO —
-   * once we cross this, the server compacts on the next call. */
-  const _COMPACT_THRESHOLD = 0.82;
-  const _CRIT_THRESHOLD    = 0.95;
+  function _policy() {
+    return (typeof window !== 'undefined' && window._contextPolicy) || null;
+  }
+
+  /* Fraction of the FULL context window at which the server force-compacts.
+   * The server triggers on `usable * summary_trigger_ratio` where
+   * `usable = limit - output_reserve - compaction_reserve`, so the
+   * full-window fraction is model-dependent. Compute it exactly from the
+   * policy for the given limit; fall back to a conservative 0.82 only until
+   * the policy loads. */
+  function _compactThreshold(limit) {
+    const p = _policy();
+    if (!p || !limit) return 0.82;
+    /* Mirror lib/tasks_pkg/compaction/_tokens.py::_usable_context — a fixed
+     * output_reserve can exceed a small window, so usable is floored at
+     * min_usable_ratio of the limit.  Keep this in lock-step with the server
+     * or the "hot" zone won't line up with the real auto-compact trigger. */
+    const raw = limit - (p.output_reserve || 0) - (p.compaction_reserve || 0);
+    const usable = Math.max(raw, limit * (p.min_usable_ratio || 0.5));
+    if (usable <= 0) return 0.82;
+    const ratio = (p.summary_trigger_ratio || 0.9);
+    return Math.min(0.99, (usable * ratio) / limit);
+  }
 
   function _resolveContextLimit(modelId) {
-    if (!modelId) return _DEFAULT_LIMIT;
-    for (const [re, val] of _CONTEXT_LIMITS) {
-      const m = modelId.match(re);
-      if (!m) continue;
-      return typeof val === 'function' ? val(m) : val;
+    const p = _policy();
+    if (p) {
+      if (modelId && p.per_model && p.per_model[modelId] > 0) return p.per_model[modelId];
+      if (p.default_limit > 0) return p.default_limit;
     }
-    return _DEFAULT_LIMIT;
+    return _FALLBACK_LIMIT;
   }
 
   function _activeConv() {
@@ -394,10 +406,11 @@
     const pct   = limit > 0 ? Math.min(1, used / limit) : 0;
     const pctRounded = Math.round(pct * 100);
 
+    const compactThreshold = _compactThreshold(limit);
     let zone = 'ok';
-    if      (pct >= _CRIT_THRESHOLD)    zone = 'crit';
-    else if (pct >= _COMPACT_THRESHOLD) zone = 'hot';
-    else if (pct >= 0.60)               zone = 'warn';
+    if      (pct >= _CRIT_THRESHOLD)   zone = 'crit';
+    else if (pct >= compactThreshold)  zone = 'hot';
+    else if (pct >= 0.60)              zone = 'warn';
 
     /* ── Surgical writes: only touch the DOM when a value actually changed. */
     if (s.lastZone !== zone) {

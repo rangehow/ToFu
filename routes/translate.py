@@ -20,13 +20,10 @@ import uuid
 
 from flask import Blueprint, jsonify, request, send_file
 
-from lib.api_response import api_bad_request, api_error, api_internal_error, api_not_found
+from lib.api_response import api_bad_request, api_internal_error, api_not_found
 from lib.log import get_logger
-from lib.request_parser import parse_body
 from lib.translate import (  # noqa: F401  — back-compat re-exports
     DEFAULT_USER_ID,
-    _CHUNK_MAX_WORKERS,
-    _CHUNK_THRESHOLD,
     _MAX_PPTX_BYTES,
     _NOTRANSLATE_ALIAS_RE,
     _NOTRANSLATE_RE,
@@ -49,7 +46,6 @@ from lib.translate import (  # noqa: F401  — back-compat re-exports
     _format_status_message,
     _get_commit_lock,
     _reattach_notranslate_blocks,
-    _split_text_for_translation,
     _strip_notranslate_tags,
     _translate_one_chunk,
     _translate_runtime,

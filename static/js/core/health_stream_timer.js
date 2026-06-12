@@ -251,9 +251,22 @@ let _twRafId = null;
 let _twPendingConvId = null;
 let _twTimeoutId = null; // fallback timer when page is hidden (rAF paused)
 let _twDirty = false;    // data changed since last render
+let _twLastFlush = 0;    // timestamp of last actual render (perf clock)
+const _TW_MIN_INTERVAL = 33; // ~30fps cap — re-rendering markdown 120x/s on a
+                             // high-Hz display is pure waste; 30fps is visually
+                             // identical for streaming text and ~4x less work.
 
 function _twFlush() {
   _twRafId = null;
+  /* ★ Perf: rate-cap. rAF fires at the display refresh (up to 120Hz); a full
+   * tail markdown re-render per frame is the bulk of the streaming GC/paint
+   * load. If the last render was <33ms ago, reschedule instead of rendering. */
+  const _now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+  if (_twDirty && (_now - _twLastFlush) < _TW_MIN_INTERVAL) {
+    _twRafId = requestAnimationFrame(_twFlush);
+    return;
+  }
+  _twLastFlush = _now;
   _twDirty = false;
   if (_twTimeoutId) { clearTimeout(_twTimeoutId); _twTimeoutId = null; }
   const cid = _twPendingConvId;

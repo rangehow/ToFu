@@ -100,8 +100,8 @@ class GeminiAPICounter(TokenCounter):
             return None
 
         try:
-            import requests
-            from lib.proxy import proxies_for as _proxies_for
+            import requests  # noqa: F401  — availability probe (raises ImportError if absent)
+            from lib.proxy import proxies_for as _proxies_for  # noqa: F401
         except ImportError as e:
             logger.warning('[TokenCounter] requests / lib.proxy import failed: %s', e)
             return None

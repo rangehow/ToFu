@@ -269,24 +269,40 @@ def safe_route(fn):
     This is meant for routes where any uncaught exception should be a 500
     rather than crashing the framework's default handler.
     """
+    import asyncio
     import functools
+
+    def _handle(e):
+        # Special-case BadRequest from request_parser → 400 with field info
+        try:
+            from lib.request_parser import BadRequest as _BadReq
+            if isinstance(e, _BadReq):
+                extras = {'field': e.field} if e.field else {}
+                return api_bad_request(str(e), **extras)
+        except ImportError:
+            pass
+        return api_internal_error(
+            e, context=fn.__module__, source=fn.__qualname__,
+        )
+
+    # Dual-mode: keep an async handler a coroutine function so Quart
+    # awaits it natively instead of running the wrapper in its thread-pool
+    # and trying to serialize the returned coroutine as the response.
+    if asyncio.iscoroutinefunction(fn):
+        @functools.wraps(fn)
+        async def wrapper(*args, **kwargs):
+            try:
+                return await fn(*args, **kwargs)
+            except Exception as e:
+                return _handle(e)
+        return wrapper
 
     @functools.wraps(fn)
     def wrapper(*args, **kwargs):
         try:
             return fn(*args, **kwargs)
         except Exception as e:
-            # Special-case BadRequest from request_parser → 400 with field info
-            try:
-                from lib.request_parser import BadRequest as _BadReq
-                if isinstance(e, _BadReq):
-                    extras = {'field': e.field} if e.field else {}
-                    return api_bad_request(str(e), **extras)
-            except ImportError:
-                pass
-            return api_internal_error(
-                e, context=fn.__module__, source=fn.__qualname__,
-            )
+            return _handle(e)
 
     return wrapper
 

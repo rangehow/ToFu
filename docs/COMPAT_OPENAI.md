@@ -33,7 +33,7 @@ client = OpenAI(
 | `top_p`              | `cfg.topP`                                     |
 | `stop`               | `cfg.stop`                                     |
 | `seed`               | `cfg.seed`                                     |
-| `response_format`    | `cfg.responseFormat`                           |
+| `response_format`    | `cfg.responseFormat` → forwarded verbatim to the upstream engine (JSON mode / `json_schema`). Enforcement depends on the provider. |
 | `stream`             | Streaming on/off                               |
 | `user`               | `cfg.user` (audit only)                        |
 | `reasoning_effort`   | Maps `low/medium/high` → `medium/high/max` for `cfg.thinkingDepth` and turns on `cfg.thinkingEnabled`. |

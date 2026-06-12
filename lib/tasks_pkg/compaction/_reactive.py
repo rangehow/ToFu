@@ -34,18 +34,18 @@ import json
 from lib.log import get_logger
 from lib.tasks_pkg.compaction._archive import _archive_transcript
 from lib.tasks_pkg.compaction._constants import (
-    _COMPACTION_RESERVE,
     _cooldown_lock,
-    _OUTPUT_RESERVE,
     _summary_cooldowns,
     _WIRE_BYTE_SOFT_LIMIT,
     _WIRE_IMAGE_KEEP_TAIL,
 )
+from lib.tasks_pkg.compaction._layer1 import micro_compact
 from lib.tasks_pkg.compaction._layer2 import force_compact_if_needed
 from lib.tasks_pkg.compaction._tokens import (
     _estimate_total_tokens,
     _get_context_limit,
     _parse_reported_token_count,
+    _usable_context,
 )
 
 logger = get_logger(__name__)
@@ -136,14 +136,6 @@ def reactive_compact(messages: list, task: dict | None = None,
 
     Returns True if compaction was performed, False otherwise.
     """
-    # Lazy import — micro_compact lives in _layer1 post-split, but
-    # during the multi-step refactor it may still live on the package
-    # itself.  Try _layer1 first, fall through to the package facade.
-    try:
-        from lib.tasks_pkg.compaction._layer1 import micro_compact
-    except ImportError:
-        from lib.tasks_pkg.compaction import micro_compact
-
     conv_id = task.get('convId', '') if task else ''
     task_id = task.get('id', '')[:8] if task else '?'
     pfx = f'[Task {task_id}]'
@@ -221,7 +213,7 @@ def reactive_compact(messages: list, task: dict | None = None,
 
     # Phase 3: force compact with a tighter preservation budget.
     context_limit = _get_context_limit(task)
-    usable = context_limit - _OUTPUT_RESERVE - _COMPACTION_RESERVE
+    usable = _usable_context(context_limit)
     tight_budget = max(1, int(usable * 0.10))
     if reported_tokens:
         _r_reason = f'prompt too long: {reported_tokens:,} tokens'

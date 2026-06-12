@@ -437,7 +437,7 @@ async function saveEditAndResend(idx) {
       let errMsg;
       if (e.name === 'AbortError' && _editAbortReason === 'timeout') {
         errMsg = _editWillTranslate
-          ? 'Translation took too long and was cancelled. The server may be overloaded — try again, or disable auto-translate in Settings.'
+          ? 'The server took too long to respond and the request was cancelled — it may be overloaded. Please try again; if this keeps happening with Chinese input, disabling auto-translate in Settings can reduce the delay.'
           : 'Edit+resend timed out — the server took too long to respond.';
       } else if (e.name === 'AbortError') {
         errMsg = 'Edit+resend was aborted before the server replied.';

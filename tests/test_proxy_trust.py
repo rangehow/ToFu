@@ -14,8 +14,55 @@ Run:  pytest tests/test_proxy_trust.py -v
 """
 from __future__ import annotations
 
+import importlib
+import sys
+
 import pytest
-from flask import Flask, request
+
+
+def _import_real_flask():
+    """Return the genuine Flask package, even when another test module has
+    installed the session-wide ``sys.modules['flask'] = quart`` shim at
+    collection time.
+
+    This suite tests Werkzeug ProxyFix wiring against a *real* Flask app, so
+    it needs the actual ``Flask`` class (Quart exposes ``Quart``, not
+    ``Flask``). We temporarily lift the shim, import the real distribution
+    from disk, then restore the shim so other tests keep getting Quart.
+    """
+    cur = sys.modules.get('flask')
+    if cur is not None and hasattr(cur, 'Flask'):
+        return cur
+    shim = sys.modules.pop('flask', None)
+    shim_subs = {k: sys.modules.pop(k)
+                 for k in list(sys.modules) if k.startswith('flask.')}
+    try:
+        real = importlib.import_module('flask')
+        # ``app.test_client()`` lazily does ``from .testing import FlaskClient``.
+        # If we restore the shim before that runs, the relative import would
+        # resolve through Quart's package path. Eagerly import the real
+        # submodules now (while the shim is lifted) so they stay cached as the
+        # genuine Flask modules.
+        for sub in ('flask.testing', 'flask.cli'):
+            try:
+                importlib.import_module(sub)
+            except ImportError:
+                pass
+        return real
+    finally:
+        if shim is not None:
+            # Re-pin the shim, but keep our freshly-imported REAL flask.*
+            # submodules — they must win over any quart-era cached entries.
+            real_subs = {k: sys.modules[k]
+                         for k in list(sys.modules) if k.startswith('flask.')}
+            sys.modules['flask'] = shim
+            sys.modules.update(shim_subs)
+            sys.modules.update(real_subs)
+
+
+_flask = _import_real_flask()
+Flask = _flask.Flask
+request = _flask.request
 
 
 # ═══════════════════════════════════════════════════════════
@@ -33,12 +80,13 @@ class TestDefaultIgnoresXForwardedFor:
         # MUST be ignored — request.remote_addr stays as the test client's
         # synthetic 127.0.0.1.
         #
-        # We use /api/me because it's an unauthenticated endpoint that
-        # always 200s without side effects, and the assertion is on the
-        # response code (we never log remote_addr in the body — checking
-        # via request inspection in a sentinel route would require app
-        # mutation, which we avoid).
-        resp = flask_client.get('/api/me',
+        # We use /api/v1/users/me because it's a public probe endpoint that
+        # always 200s without side effects (returns {user: null} when
+        # unauthenticated), and the assertion is on the response code (we
+        # never log remote_addr in the body — checking via request
+        # inspection in a sentinel route would require app mutation, which
+        # we avoid).
+        resp = flask_client.get('/api/v1/users/me',
                                 headers={'X-Forwarded-For': '198.51.100.42'})
         assert resp.status_code == 200
         # If ProxyFix were silently active, this still 200s — so we test

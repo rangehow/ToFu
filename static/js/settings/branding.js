@@ -91,6 +91,23 @@ function _modelShortName(modelId) {
   return modelId.replace(/^(aws\.|vertex\.)/, '').split('/').pop();
 }
 
+/* ★ Friendly provider display name for a provider_id — used by the message
+ * finish bar (route tag) to show which provider actually served a turn.
+ * Resolves via the registered-models list (each carries provider_id +
+ * provider_name), falling back to the raw id. */
+function _providerDisplayName(providerId) {
+  if (!providerId) return '';
+  try {
+    if (typeof _registeredModels !== 'undefined' && Array.isArray(_registeredModels)) {
+      for (var i = 0; i < _registeredModels.length; i++) {
+        var m = _registeredModels[i];
+        if (m && m.provider_id === providerId && m.provider_name) return m.provider_name;
+      }
+    }
+  } catch (e) { /* best-effort — fall back to the raw id */ }
+  return providerId;
+}
+
 function _brandSvg(brand, size) {
   var s = size || 20;
   var svg = _BRAND_ICONS[brand] || _BRAND_ICONS.generic;

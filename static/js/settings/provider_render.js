@@ -142,10 +142,13 @@ function _renderProvidersTab() {
     '</div>';
 
     // ── Nested Model List ──
+    var matrixOn = (typeof _stgMatrixOpen !== 'undefined') && _stgMatrixOpen[pi];
+    var canMatrix = (typeof _renderAccessMatrix === 'function') && ((p.api_keys || []).length > 1 || isLocal);
     html += '<div class="stg-models-section">' +
       '<div class="stg-models-header">' +
         '<span class="stg-models-title">' + escapeHtml(t('settings.modelList')) + '</span>' +
         '<div class="stg-models-actions">' +
+          (canMatrix ? '<button class="stg-btn-add stg-matrix-toggle' + (matrixOn ? ' active' : '') + '" onclick="_toggleMatrixView(' + pi + ')" title="' + escapeHtml(t('settings.matrixToggleHint')) + '">⊞ ' + escapeHtml(matrixOn ? t('settings.matrixViewCards') : t('settings.matrixViewMatrix')) + '</button>' : '') +
           (_findMatchingTemplate(p) ? '<button class="stg-btn-add" onclick="_syncFromTemplate(' + pi + ')" title="' + escapeHtml(t('settings.syncTemplateTitle')) + '">📋 ' + escapeHtml(t('settings.syncTemplate')) + '</button>' : '') +
           (isLocal
             ? '<button class="stg-btn-add" onclick="_discoverLocalModels(' + pi + ')" title="' + escapeHtml(t('settings.probeAllEndpointsTitle')) + '">' + escapeHtml(t('settings.probeAllEndpoints')) + '</button>'
@@ -154,7 +157,9 @@ function _renderProvidersTab() {
         '</div>' +
       '</div>';
 
-    if (models.length === 0) {
+    if (matrixOn && canMatrix) {
+      html += _renderAccessMatrix(pi);
+    } else if (models.length === 0) {
       html += '<p class="stg-empty-sm">' + escapeHtml(t('settings.noModels')) + '</p>';
     } else {
       html += '<div class="stg-model-list">';
@@ -417,7 +422,7 @@ function _renderApiKeysSection(provIdx, keys, isLocal) {
   var html = '<div class="stg-field stg-keys-field" data-prov-idx="' + provIdx + '">' +
     '<div class="stg-keys-header">' +
       '<label style="margin:0;">' + escapeHtml(t('settings.apiKeys')) +
-        ' <span class="stg-keys-info" tabindex="0" role="tooltip" aria-label="' + escapeHtml(helpTxt) + '" title="' + escapeHtml(helpTxt) + '">ⓘ</span>' +
+        ' <span class="stg-keys-info" tabindex="0" role="tooltip" aria-label="' + escapeHtml(helpTxt) + '" title="' + escapeHtml(helpTxt) + '">i</span>' +
       '</label>' +
       '<button type="button" class="stg-btn-add stg-keys-tb" ' +
         'onclick="_addApiKey(' + provIdx + ')" ' +
@@ -440,6 +445,15 @@ function _renderApiKeysSection(provIdx, keys, isLocal) {
   return html;
 }
 
+/** Mask an API key for display, leaking only the last 4 characters.
+ *  Keys of length <= 4 are shown verbatim (nothing meaningful to hide). */
+function _maskApiKey(v) {
+  v = v || '';
+  if (v.length <= 4) return v;
+  var dots = Math.min(v.length - 4, 32);
+  return new Array(dots + 1).join('•') + v.slice(-4);
+}
+
 /** Render one merged API-key card (editor row + runtime stats row).
  *
  *  The card carries a state class (stg-keystat-good / ok / warn / disabled
@@ -454,13 +468,22 @@ function _renderApiKeyCard(provIdx, idx, value) {
   var statsHTML = (typeof _renderKeyCardStatsHTML === 'function')
     ? _renderKeyCardStatsHTML(provIdx, idx) : '';
 
+  // Non-blank keys render masked (••••…last4) and readonly; the eye button
+  // reveals the full plaintext. Blank (just-added) keys start editable so the
+  // user can type immediately. The real value lives in data-key-real while
+  // masked — _collectApiKeysFromDom reads it from there.
+  var hasVal = !!(value || '').trim();
+  var inputAttrs = hasVal
+    ? 'type="text" readonly data-masked="1" data-key-real="' + escapeHtml(value || '') + '" ' +
+      'value="' + escapeHtml(_maskApiKey(value || '')) + '" '
+    : 'type="text" data-masked="0" data-key-real="" value="" ';
+
   return '<div class="stg-key-card ' + stateCls + blankCls + '" data-key-idx="' + idx + '">' +
     '<div class="stg-key-card-edit">' +
       '<span class="stg-keys-idx">#' + (idx + 1) + '</span>' +
-      '<input type="password" class="stg-keys-input" data-key-field="value" ' +
+      '<input class="stg-keys-input" data-key-field="value" ' +
         'spellcheck="false" autocomplete="off" autocapitalize="off" autocorrect="off" ' +
-        'placeholder="sk-…" ' +
-        'value="' + escapeHtml(value || '') + '" ' +
+        'placeholder="sk-…" ' + inputAttrs +
         'oninput="_onApiKeyRowEdit(' + provIdx + ')">' +
       '<button type="button" class="stg-keys-btn" ' +
         'onclick="_toggleApiKeyVisibility(this)" ' +
@@ -484,7 +507,10 @@ function _collectApiKeysFromDom(provIdx) {
   var out = [];
   for (var i = 0; i < cards.length; i++) {
     var inp = cards[i].querySelector('input[data-key-field="value"]');
-    var v = (inp && inp.value || '').trim();
+    var raw = inp && inp.getAttribute('data-masked') === '1'
+      ? (inp.getAttribute('data-key-real') || '')
+      : (inp && inp.value || '');
+    var v = raw.trim();
     if (v) out.push(v);
   }
   return out;
@@ -497,6 +523,18 @@ function _collectApiKeysFromDom(provIdx) {
 function _onApiKeyRowEdit(provIdx) {
   var p = _stgProviders[provIdx];
   if (!p) return;
+  // Keep data-key-real in sync for any revealed (editable) input so the eye
+  // toggle and collect logic always see the latest typed value.
+  var editCard = document.querySelector('.stg-provider-card[data-prov-idx="' + provIdx + '"]');
+  if (editCard) {
+    var editInputs = editCard.querySelectorAll('.stg-keys-field[data-prov-idx="' + provIdx + '"] input[data-key-field="value"]');
+    for (var ei = 0; ei < editInputs.length; ei++) {
+      if (editInputs[ei].getAttribute('data-masked') !== '1') {
+        editInputs[ei].setAttribute('data-key-real', editInputs[ei].value);
+      }
+    }
+  }
+
   var collected = _collectApiKeysFromDom(provIdx);
   if (collected === null) return;
   p.api_keys = collected;
@@ -591,7 +629,19 @@ function _toggleApiKeyVisibility(btn) {
   if (!holder) return;
   var inp = holder.querySelector('input[data-key-field="value"]');
   if (!inp) return;
-  inp.type = (inp.type === 'password') ? 'text' : 'password';
+  if (inp.getAttribute('data-masked') === '1') {
+    // Reveal: show full plaintext and allow editing.
+    inp.value = inp.getAttribute('data-key-real') || '';
+    inp.removeAttribute('readonly');
+    inp.setAttribute('data-masked', '0');
+  } else {
+    // Hide: commit the current value, then show masked (last-4) and lock.
+    var real = inp.value;
+    inp.setAttribute('data-key-real', real);
+    inp.value = _maskApiKey(real);
+    inp.setAttribute('readonly', 'readonly');
+    inp.setAttribute('data-masked', '1');
+  }
 }
 
 // ── Custom Headers — structured key/value rows ──────────────────────────

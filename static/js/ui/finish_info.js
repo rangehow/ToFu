@@ -21,20 +21,57 @@ function renderFinishInfo(msg) {
   // ★ Model tag — auto-detect brand from model_id
   const depthIcons = { medium: '', high: '', max: '' };
   const depthLabels = { medium: "Med", high: "Hi", max: "Max" };
+  // ★ Resolve the ACTUAL slot that served this turn — real model / key /
+  //   provider, recorded by the dispatcher in usage._dispatch. The preset
+  //   ("opus") and msg.model can be an alias that routes to a different
+  //   upstream model, so prefer the resolved values for an honest finish bar.
+  let _disp = null;
+  const _dispRounds = msg.apiRounds || [];
+  for (let i = _dispRounds.length - 1; i >= 0; i--) {
+    const d = ((_dispRounds[i] && _dispRounds[i].usage) || {})._dispatch;
+    if (d && (d.model || d.provider_id || d.key)) { _disp = d; break; }
+  }
+  if (!_disp && u && u._dispatch) _disp = u._dispatch;
+  const _realModel = (_disp && _disp.model) || _mid;
+  const _realProvider = (_disp && _disp.provider_id) || _pid;
+  // Friendly key display: prefer the last 4 chars of the real API key
+  //   (rendered as ••1234), else fall back to the raw slot name.
+  const _keyTail = _disp && _disp.key_tail;
+  const _keyDisplay = _keyTail ? ('••' + _keyTail) : (_disp && _disp.key) || "";
+
   if (_mid) {
-    const _brand = typeof _detectBrand === 'function' ? _detectBrand(_mid) : 'generic';
+    const _brand = typeof _detectBrand === 'function' ? _detectBrand(_realModel) : 'generic';
     const icon = (typeof _brandSvg === 'function') ? _brandSvg(_brand, 12) : '✦';
-    const displayName = typeof _modelShortName === 'function' ? _modelShortName(_mid) : _mid;
+    // Show the actual model id (e.g. "aws.claude-opus-4.8"), not the
+    // friendly short name — the user wants the real upstream model here.
+    const displayName = _realModel;
     // Append thinking depth ONLY for thinking-capable models
     const depth = msg.thinkingDepth || "";
     let depthStr = "";
-    const _isThinkModel = typeof _isThinkingCapable === 'function' ? _isThinkingCapable(_mid) : false;
+    const _isThinkModel = typeof _isThinkingCapable === 'function' ? _isThinkingCapable(_realModel) : false;
     if (depth && depthLabels[depth] && _isThinkModel) {
       depthStr = ` ${depthIcons[depth] || ""}${depthLabels[depth]}`;
     }
     parts.push(
-      `<span class="finish-tag preset" data-preset="${_brand}" title="Model: ${escapeHtml(_mid)}${depth ? ' · Depth: ' + depth : ''}">${icon} ${displayName}${depthStr}</span>`,
+      `<span class="finish-tag preset" data-preset="${_brand}" title="Model: ${escapeHtml(_realModel)}${depth ? ' · Depth: ' + escapeHtml(depth) : ''}">${icon} ${displayName}${depthStr}</span>`,
     );
+  }
+
+  // ★ Route tag — the actual provider + API-key slot that served this turn.
+  if (_realProvider || _keyDisplay) {
+    const _provName = (typeof _providerDisplayName === 'function')
+      ? _providerDisplayName(_realProvider) : (_realProvider || "");
+    const _routeBits = [];
+    if (_provName) _routeBits.push(escapeHtml(_provName));
+    if (_keyDisplay) _routeBits.push(escapeHtml(_keyDisplay));
+    if (_routeBits.length) {
+      const _routeTip = [
+        _realProvider ? `Provider: ${escapeHtml(_realProvider)}` : "",
+        _keyDisplay ? `Key: ${escapeHtml(_keyDisplay)}` : "",
+        _realModel ? `Actual model: ${escapeHtml(_realModel)}` : "",
+      ].filter(Boolean).join("\n");
+      parts.push(`<span class="finish-tag route" title="${_routeTip}">${_routeBits.join(" · ")}</span>`);
+    }
   }
 
   // ★ Finish reason tag — separate from model
@@ -200,8 +237,13 @@ function renderFinishInfo(msg) {
     }
   }
   if (msg.fallbackModel) {
+    const _fbReason = msg.fallbackReason || msg.fallbackKind || "";
+    const _reasonLine = _fbReason
+      ? `\n失败原因 / Reason: ${_fbReason}`
+      : "";
+    const _tip = `原模型 ${msg.fallbackFrom || "?"} 失败，已回退到 ${msg.fallbackModel}${_reasonLine}`;
     parts.push(
-      `<span class="finish-tag warn" title="原模型 ${escapeHtml(msg.fallbackFrom || "?")} 失败，已回退到 ${escapeHtml(msg.fallbackModel)}">Fallback → Opus</span>`,
+      `<span class="finish-tag warn" title="${escapeHtml(_tip)}">Fallback → Opus</span>`,
     );
   }
   if (parts.length === 0) return "";

@@ -56,7 +56,9 @@ class TestOrdering(unittest.TestCase):
         self.assertLess(names.index('run_command'), names.index('create_memory'),
                         'project (base) must precede memory (capability)')
 
-    def test_single_search_mode(self):
+    def test_single_search_mode_is_legacy_alias_for_multi(self):
+        # 'single' is a retired mode kept as a backward-compat alias: it now
+        # yields the same web_search (multi) tool as 'multi'.
         tl, _ = assemble_tool_list(_ctx(search_mode='single', search_enabled=True))
         self.assertEqual(_names(tl)[0], 'web_search')
 

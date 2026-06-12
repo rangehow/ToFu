@@ -89,6 +89,9 @@ class Slot:
                                     # 'enable_thinking' = {enable_thinking: bool} (LongCat, Qwen, Gemini)
                                     # 'thinking_type' = {thinking: {type: enabled/disabled}} (Doubao, Claude)
                                     # 'none' = no thinking parameters sent
+    protocol: str = ''              # per-provider wire protocol:
+                                    # '' / 'openai' = OpenAI Chat Completions (default)
+                                    # 'anthropic' = Anthropic Messages API (POST /v1/messages)
     stream_only: bool = False       # True if model only supports stream=True (e.g. qwq-plus, deepseek-reasoner)
 
     # ── Rate limiting ──
@@ -165,6 +168,20 @@ class Slot:
             self._5h_window.append(now)
             self.inflight += 1
             self.total_requests += 1
+
+
+    def release(self):
+        """Release a reserved inflight slot WITHOUT recording success/failure.
+
+        Used when a request terminates for a payload-level reason (content
+        filter, oversized prompt, invalid image, user abort) that reflects
+        neither slot health nor a successful completion — so neither
+        ``record_success`` nor ``record_error`` is appropriate, but the
+        inflight reservation taken by ``record_request`` must still be
+        returned or the slot's ``score()`` is permanently inflated.
+        """
+        with self._lock:
+            self.inflight = max(0, self.inflight - 1)
 
     def record_success(self, latency_ms, ttft_ms=None,
                        output_tokens: int = 0):

@@ -42,6 +42,9 @@ var _i18n = {
   'sidebar.moveToFolder': { zh: '移入文件夹', en: 'Move to folder' },
   'sidebar.duplicate': { zh: '复制为新对话', en: 'Duplicate conversation' },
   'sidebar.deleteConv': { zh: '删除对话', en: 'Delete conversation' },
+  'sidebar.renameConv': { zh: '重命名对话', en: 'Rename conversation' },
+  'sidebar.renameConvTitle': { zh: '重命名对话', en: 'Rename Conversation' },
+  'sidebar.renameConvPh': { zh: '输入对话标题', en: 'Enter conversation title' },
 
   // ══════════════════════════════════════
   //  Welcome Screen
@@ -135,26 +138,6 @@ var _i18n = {
   'settings.tabMCP': { zh: 'MCP', en: 'MCP' },
   'settings.tabSkills': { zh: 'Skills', en: 'Skills' },
   'settings.tabAdvanced': { zh: '高级', en: 'Advanced' },
-  'settings.authModeTitle': { zh: '访问控制模式', en: 'Access Control Mode' },
-  'settings.authModeDesc': { zh: '决定本实例是否需要令牌即可访问。开放模式下任何人(可访问网络的)都能调用 API；私有模式下需 Bearer 令牌；多用户模式适用于将本实例作为中继站为他人开放。', en: 'Controls whether this instance requires a token to access. In Open mode anyone who can reach it may call the API; Private mode requires a Bearer token; Multi-user mode is the same as Private but treats this instance as a relay for others.' },
-  'settings.authModeLoading': { zh: '正在加载…', en: 'Loading…' },
-  'settings.tabApiKeys': { zh: 'API 密钥', en: 'API Keys' },
-  'settings.apiKeysTitle': { zh: 'API 密钥（无头调用）', en: 'API Keys (Headless)' },
-  'settings.apiKeysDesc': { zh: '为 SDK / CLI / OpenAI-兼容客户端 颁发 Bearer 令牌。', en: 'Issue Bearer tokens for SDKs, CLIs, and OpenAI-compatible clients.' },
-  'settings.apiKeyName': { zh: '名称', en: 'Name' },
-  'settings.apiKeyRpm': { zh: 'RPM', en: 'RPM' },
-  'settings.apiKeyTpd': { zh: '每日 Token', en: 'Tokens / day' },
-  'settings.apiKeyCreate': { zh: '创建密钥', en: 'Create Key' },
-  'settings.apiKeyScopes': { zh: '范围', en: 'Scopes' },
-  'settings.apiKeyJustCreated': { zh: '⚠️ 立即保存此令牌——离开页面后无法再次显示。', en: '⚠️ Save this token NOW — it cannot be shown again.' },
-  'settings.apiKeyCopy': { zh: '复制', en: 'Copy' },
-  'settings.apiKeyDismiss': { zh: '关闭', en: 'Dismiss' },
-  'settings.apiKeyExisting': { zh: '已颁发的密钥', en: 'Existing keys' },
-  'settings.apiKeyLoading': { zh: '正在加载…', en: 'Loading…' },
-  'settings.apiKeyShowUsage': { zh: '用量', en: 'Usage' },
-  'settings.apiKeyRevoke': { zh: '撤销', en: 'Revoke' },
-  'settings.apiKeyUsage': { zh: '用量(过去 30 天)', en: 'Usage (last 30 days)' },
-  'settings.apiKeyUsageHint': { zh: '点击下方任一密钥查看其使用情况。', en: 'Click "Usage" on any key to inspect.' },
   'skills.title': { zh: 'Skills', en: 'Skills' },
   'skills.tabCatalog': { zh: '市场', en: 'Catalog' },
   'skills.tabInstalled': { zh: '已安装', en: 'Installed' },
@@ -166,7 +149,6 @@ var _i18n = {
   'skills.uninstallBtn': { zh: '卸载', en: 'Uninstall' },
   'skills.viewFiles': { zh: '查看文件', en: 'View files' },
   'skills.openHomepage': { zh: '主页', en: 'Homepage' },
-  'common.close': { zh: '关闭', en: 'Close' },
   'settings.cancel': { zh: '取消', en: 'Cancel' },
   'settings.save': { zh: '保存', en: 'Save' },
 
@@ -207,6 +189,8 @@ var _i18n = {
   'settings.optimizerModuleDesc': { zh: '每晚 03:30 分析当日日志并自动提出改进建议（如屏蔽垃圾搜索域名）。关闭后不再运行分析，顶栏 OPTIMIZER 徽章隐藏。已应用的改动会保留直到手动撤销。', en: 'Every night at 03:30 local, analyses the day\'s logs and auto-proposes improvements (e.g. blocking spammy search domains). When off, analysis stops and the top-bar OPTIMIZER badge is hidden. Already-applied changes persist until manually reverted.' },
   'settings.keepToolHistory': { zh: '保留工具调用历史', en: 'Keep Tool Call History' },
   'settings.keepToolHistoryDesc': { zh: '多轮对话时保留完整的工具调用记录（搜索内容、网页抓取结果等），模型能看到之前搜过什么，避免重复调用。关闭可节省 token 但模型会丢失工具上下文', en: 'Preserve full tool call records (search results, fetched pages, etc.) across conversation turns. Model can see what was searched before, avoiding redundant calls. Disable to save tokens but model loses tool context' },
+  'settings.autoGenerateTitle': { zh: '自动生成对话标题', en: 'Auto-Generate Conversation Titles' },
+  'settings.autoGenerateTitleDesc': { zh: '首轮回复结束后用 AI 自动为对话生成标题。关闭后需要手动重命名对话（默认关闭）。', en: 'After the first reply, let AI generate a title for the conversation. When off, you rename conversations manually (off by default).' },
   'settings.inputSendMode': { zh: '输入框发送方式', en: 'Input Send Behavior' },
   'settings.inputSendModeDesc': { zh: '选择触发"发送消息"的按键。Shift+Enter 始终插入换行。', en: 'Choose which key sends the message. Shift+Enter always inserts a newline.' },
   'settings.inputSendModeEnter': { zh: 'Enter 发送 · Ctrl+Enter 换行', en: 'Enter send · Ctrl+Enter newline' },
@@ -230,10 +214,14 @@ var _i18n = {
   //  Self-update (topbar button)
   // ══════════════════════════════════════
   'update.title': { zh: '软件更新', en: 'Software Update' },
+  'update.subtitle': { zh: '让 Tofu 保持最新版本', en: 'Keep Tofu up to date' },
+  'update.btnLabel': { zh: '更新', en: 'Update' },
+  'update.btnNew': { zh: '有新版', en: 'New' },
   'update.checkTitle': { zh: '检查更新', en: 'Check for updates' },
   'update.availableTitle': { zh: '有可用更新：v%s', en: 'Update available: v%s' },
   'update.checking': { zh: '正在检查更新…', en: 'Checking for updates…' },
   'update.checkFailed': { zh: '无法检查更新，请稍后再试。', en: 'Could not check for updates. Please try again later.' },
+  'update.retry': { zh: '重试', en: 'Retry' },
   'update.current': { zh: '当前版本', en: 'Current' },
   'update.latest': { zh: '最新版本', en: 'Latest' },
   'update.upToDate': { zh: '✅ 已是最新版本。', en: '✅ You are up to date.' },
@@ -245,12 +233,22 @@ var _i18n = {
   'update.depsInstalled': { zh: '✅ 已安装新的依赖包。', en: '✅ New dependencies installed.' },
   'update.depsFailed': { zh: '⚠️ 已更新到 %s，但安装新依赖失败。请手动运行 pip install -r requirements.txt 后再重启。', en: '⚠️ Updated to %s, but installing new dependencies failed. Run "pip install -r requirements.txt" manually, then restart.' },
   'update.restartBtn': { zh: '立即重启', en: 'Restart now' },
+  'update.restartNow': { zh: '重启服务器', en: 'Restart server' },
+  'update.restartNowHint': { zh: '无需手动停止再启动，直接原地重启。', en: 'Restarts in place — no manual stop-then-start needed.' },
+  'update.restartConfirm': { zh: '确定要重启服务器吗？正在进行的任务会被中断。', en: 'Restart the server now? Any in-progress tasks will be interrupted.' },
   'update.restarting': { zh: '正在重启…', en: 'Restarting…' },
   'update.restartHint': { zh: '重启期间页面会短暂不可用，完成后会自动刷新。', en: 'The page will be briefly unavailable and will auto-refresh once back.' },
   'update.restartWait': { zh: '正在等待服务器恢复…', en: 'Waiting for the server to come back…' },
   'update.restartTimeout': { zh: '服务器重启耗时较长，请手动刷新页面。', en: 'Server is taking a while — please refresh manually.' },
   'update.dirty': { zh: '⚠️ 检测到对受版本控制的源码文件的本地改动，已阻止自动更新（不会自动暂存或覆盖）。请先提交或还原以下文件：', en: '⚠️ Local changes to tracked source files were detected — the update is blocked (we never auto-stash or overwrite). Commit or revert these first:' },
   'update.noGit': { zh: '当前不是 git 检出目录，无法原地更新。请重新运行 install.sh。', en: 'This is not a git checkout — in-place update is unavailable. Re-run install.sh.' },
+  'update.step.fetch': { zh: '拉取远端', en: 'Fetch from remote' },
+  'update.step.pull': { zh: '合并更新', en: 'Pull changes' },
+  'update.step.deps': { zh: '安装依赖', en: 'Install dependencies' },
+  'update.step.depsSkip': { zh: '无需更新依赖', en: 'No dependency changes' },
+  'update.applyStarting': { zh: '正在准备更新…', en: 'Preparing update…' },
+  'update.applyStartFailed': { zh: '无法启动更新，请稍后再试。', en: 'Could not start the update. Please try again.' },
+  'update.applyTimeout': { zh: '更新耗时异常，请检查服务器日志。', en: 'The update is taking unusually long — check the server log.' },
   'settings.loadingFailed': { zh: '加载服务器配置失败。请检查服务器是否正在运行。', en: 'Failed to load server config. Please check if the server is running.' },
   'settings.noProviders': { zh: '还没有配置服务商。点击"+ 自定义服务商"开始添加。', en: 'No providers configured. Click "+ Custom Provider" to start.' },
   'settings.keys': { zh: '个密钥', en: 'keys' },
@@ -293,6 +291,55 @@ var _i18n = {
   'settings.autoDiscoverHint': { zh: '从 /v1/models 接口自动发现模型', en: 'Auto-discover models from /v1/models endpoint' },
   'settings.aliases': { zh: '别名：', en: 'Aliases:' },
   'settings.addAlias': { zh: '+ 别名', en: '+ Alias' },
+  'settings.apply': { zh: '应用', en: 'Apply' },
+  // ── Access Matrix (per-key × per-model capability grid) ──
+  'settings.matrixViewMatrix': { zh: '访问矩阵', en: 'Access Matrix' },
+  'settings.matrixViewCards': { zh: '卡片视图', en: 'Card View' },
+  'settings.matrixToggleHint': { zh: '按「密钥 × 模型」逐格管理访问、别名、限速与能力', en: 'Manage access, aliases, RPM and capabilities per (key × model) cell' },
+  'settings.matrixModelCol': { zh: '模型 ＼ 密钥', en: 'Model ＼ Key' },
+  'settings.matrixNoKeys': { zh: '该服务商还没有 API 密钥。', en: 'This provider has no API keys yet.' },
+  'settings.matrixBlankKey': { zh: '（无密钥）', en: '(no key)' },
+  'settings.matrixRenameKey': { zh: '为此密钥命名（如 高配额 / 测试）', en: 'Name this key (e.g. high-quota / test)' },
+  'settings.matrixLegendOn': { zh: '已开放', en: 'Granted' },
+  'settings.matrixLegendOff': { zh: '已禁用', en: 'Disabled' },
+  'settings.matrixLegendOverride': { zh: '有覆盖', en: 'Overridden' },
+  'settings.matrixGlobalToggle': { zh: '全局启用 / 禁用该模型（影响所有密钥）', en: 'Globally enable/disable this model (all keys)' },
+  'settings.matrixClickEnable': { zh: '点击：对该密钥开放此模型', en: 'Click: grant this key access to this model' },
+  'settings.matrixClickDisable': { zh: '点击：对该密钥禁用此模型', en: 'Click: deny this key access to this model' },
+  'settings.matrixEditCell': { zh: '为此（密钥 × 模型）设置专属别名 / 限速 / 能力', en: 'Set per-cell aliases / RPM / capabilities' },
+  'settings.matrixCellEnabled': { zh: '该密钥可访问此模型', en: 'This key may access this model' },
+  'settings.matrixOverrideRpm': { zh: '覆盖限速 (RPM)', en: 'Override RPM' },
+  'settings.matrixOverrideAlias': { zh: '覆盖别名', en: 'Override aliases' },
+  'settings.matrixOverrideCaps': { zh: '覆盖能力', en: 'Override capabilities' },
+  'settings.matrixInheritHint': { zh: '默认继承：', en: 'Inherits:' },
+  'settings.matrixNoAlias': { zh: '无别名', en: 'no aliases' },
+  // ── Access Matrix: probe & recommend ──
+  'settings.matrixProbe': { zh: '探测推荐', en: 'Probe & Recommend' },
+  'settings.matrixProbeHint': { zh: '逐格发送最小请求，检测每个密钥可访问哪些模型/别名。在后台运行并持久化——关闭设置也不会中断，重开后自动恢复', en: 'Send a tiny request per cell to detect which models/aliases each key can reach. Runs in the background and is persisted — closing Settings won\'t interrupt it; it resumes on reopen' },
+  'settings.matrixRetest': { zh: '重新探测', en: 'Retest' },
+  'settings.matrixProbing': { zh: '正在后台探测…', en: 'Probing in background…' },
+  'settings.matrixProbeFailed': { zh: '探测失败', en: 'Probe failed' },
+  'settings.matrixNothingToProbe': { zh: '没有可探测的密钥或模型', en: 'No keys or models to probe' },
+  'settings.matrixOkCount': { zh: '可用', en: 'reachable' },
+  'settings.matrixFlaggedCount': { zh: '建议禁用', en: 'flagged' },
+  'settings.matrixApplyRec': { zh: '应用推荐', en: 'Apply Recommendations' },
+  'settings.matrixApplyHint': { zh: '禁用所有「建议禁用」的格子（每个别名独立处理：失效别名单独禁用，根模型与其它别名保持可用）', en: 'Disable every flagged cell (each alias is independent: a dead alias is disabled on its own; the root and other aliases stay reachable)' },
+  'settings.matrixAliasTag': { zh: '别名', en: 'alias' },
+  'settings.matrixEditorSub': { zh: '限速与能力作用于整行模型；别名的开关请直接点击别名行的格子。', en: 'RPM & capabilities apply to the whole model entry; toggle an alias on/off by clicking its own row\'s cells.' },
+  'settings.matrixAliasOne': { zh: '别名', en: 'alias' },
+  'settings.matrixAliasMany': { zh: '别名', en: 'aliases' },
+  'settings.matrixAliasCountHint': { zh: '该模型的别名各自路由到不同的上游模型，可逐个开关', en: 'Each alias routes to a different upstream model and can be toggled independently' },
+  'settings.matrixAttempts': { zh: '探测次数', en: 'Attempts' },
+  'settings.matrixAttemptsHint': { zh: '每个格子探测多次以过滤偶发的假 429；任一次成功即视为可用', en: 'Probe each cell several times to filter out false 429s; a single success counts as reachable' },
+  'settings.matrixApplied': { zh: '已应用：禁用了 {n} 个格子', en: 'Applied: disabled {n} cell(s)' },
+  'settings.matrixNothingApplied': { zh: '没有需要禁用的格子', en: 'No cells needed disabling' },
+  'settings.matrixClearProbe': { zh: '清除探测结果', en: 'Clear results' },
+  'settings.probeOk': { zh: '可用', en: 'Reachable' },
+  'settings.probeRateLimited': { zh: '限流 (429)', en: 'Rate-limited (429)' },
+  'settings.probeUnauthorized': { zh: '无权限', en: 'Unauthorized' },
+  'settings.probeNotFound': { zh: '模型不存在', en: 'Model not found' },
+  'settings.probeUnavailable': { zh: '不可用 / 超时', en: 'Unavailable / timeout' },
+  'settings.probeError': { zh: '错误', en: 'Error' },
   'settings.edit': { zh: '编辑', en: 'Edit' },
   'settings.delete': { zh: '删除', en: 'Delete' },
   'settings.free': { zh: '免费', en: 'Free' },
@@ -403,6 +450,34 @@ var _i18n = {
   'settings.maxBytesHint': { zh: '字节，默认 20MB', en: 'bytes, default 20MB' },
   'settings.blockedDomains': { zh: '屏蔽域名', en: 'Blocked Domains' },
   'settings.blockedDomainsDesc': { zh: '抓取器不会访问的域名，每行一个。', en: 'Domains the fetcher will not visit, one per line.' },
+
+  // Authenticated fetch sources (login-walled: Xiaohongshu, …)
+  'settings.authSources': { zh: '需要登录的来源', en: 'Login-Required Sources' },
+  'settings.authSourcesDesc': { zh: '小红书等需要登录的站点。在你自己的浏览器中登录后粘贴 Cookie 即可连接；之后搜索与抓取链接将使用该会话读取内容。Cookie 仅保存在本地服务器，不会上传。', en: 'Sites that require a login (e.g. Xiaohongshu). Connect by logging in via your OWN browser and pasting the cookie; search and link fetching then use that session. Cookies are stored only on your local server and never uploaded.' },
+  'settings.authSourcesEmpty': { zh: '暂无可登录的来源。', en: 'No login-required sources yet.' },
+  'settings.authSourcesLoadFail': { zh: '加载失败', en: 'Failed to load' },
+  'common.remove': { zh: '移除', en: 'Remove' },
+  'common.saving': { zh: '保存中…', en: 'Saving…' },
+  'settings.authSrcConnected': { zh: '已连接', en: 'Connected' },
+  'settings.authSrcDisabled': { zh: '已连接（已停用）', en: 'Connected (disabled)' },
+  'settings.authSrcNotConnected': { zh: '未连接', en: 'Not connected' },
+  'settings.authSrcToggle': { zh: '启用 / 停用', en: 'Enable / disable' },
+  'settings.authSrcConnect': { zh: '连接', en: 'Connect' },
+  'settings.authSrcReconnect': { zh: '重新连接', en: 'Reconnect' },
+  'settings.authSrcDisconnectBtn': { zh: '断开', en: 'Disconnect' },
+  'settings.authSrcStep1': { zh: '在你自己的浏览器中打开该站点并登录', en: 'Open the site in YOUR browser and log in' },
+  'settings.authSrcStep1Generic': { zh: '在你自己的浏览器中登录该站点', en: 'Log in to the site in your own browser' },
+  'settings.authSrcOpenLogin': { zh: '打开登录页 ↗', en: 'Open login page ↗' },
+  'settings.authSrcStep2': { zh: '打开开发者工具 (F12) → Network，点任一请求，复制 Request Headers 里完整的 Cookie', en: 'Open DevTools (F12) → Network, click any request, copy the full Cookie from Request Headers' },
+  'settings.authSrcStep3': { zh: '粘贴到下方并保存', en: 'Paste it below and save' },
+  'settings.authSrcKeyCookie': { zh: '关键 Cookie：登录态由 <code>web_session</code> 携带，请确保它在内（连同 <code>a1</code> / <code>webId</code> 一起粘贴最稳妥，直接粘贴整段 Cookie 即可）。', en: 'Key cookie: the login session is carried by <code>web_session</code> — make sure it\'s included (pasting the whole Cookie string, with <code>a1</code> / <code>webId</code>, is safest).' },
+  'settings.authSrcCookiePh': { zh: 'web_session=...; a1=...', en: 'web_session=...; a1=...' },
+  'settings.authSrcProxyPh': { zh: '可选代理，例如 http://host:port', en: 'Optional proxy, e.g. http://host:port' },
+  'settings.authSrcCookieEmpty': { zh: '请粘贴 Cookie', en: 'Please paste a cookie' },
+  'settings.authSrcSaveConnect': { zh: '保存并连接', en: 'Save & connect' },
+  'settings.authSrcSaved': { zh: '已连接', en: 'Connected' },
+  'settings.authSrcSaveFail': { zh: '保存失败: ', en: 'Save failed: ' },
+  'settings.authSrcDisconnectConfirm': { zh: '断开并清除该来源的 Cookie？', en: 'Disconnect and clear this source\'s cookies?' },
 
   // ══════════════════════════════════════
   //  Settings — Translation Tab
@@ -764,6 +839,11 @@ var _i18n = {
   'translate.retry.truncated_final': { zh: '多次截断后返回部分结果', en: 'Output truncated after retries' },
   'translate.retry.mt_fallback': { zh: '机器翻译失败，已切换到大模型', en: 'MT provider failed, using LLM' },
   'translate.retry.timed_out': { zh: '翻译超时，已直接发送原文', en: 'Translation timed out, sent original text' },
+  // Send-path auto-translate failed: the ORIGINAL (untranslated) text was sent
+  // to the model. Shown as a quiet click-to-retry notice under the user bubble.
+  'translate.sendFailed.timed_out': { zh: '自动翻译超时，已按原文发送', en: 'Auto-translate timed out — sent original text' },
+  'translate.sendFailed.failed': { zh: '自动翻译失败，已按原文发送', en: 'Auto-translate failed — sent original text' },
+  'translate.sendFailed.retry': { zh: '重新翻译', en: 'Retranslate' },
 
   // ══════════════════════════════════════
   //  Time / Relative
@@ -927,6 +1007,11 @@ var _i18n = {
   'mcp.saveConnect': { zh: '保存并连接', en: 'Save & Connect' },
   'mcp.installConnect': { zh: '安装并连接', en: 'Install & Connect' },
   'mcp.cancel': { zh: '取消', en: 'Cancel' },
+  'mcp.reconnecting': { zh: '连接失败，自动重试中', en: 'Connection failed, auto-retrying' },
+  'mcp.retryInSec': { zh: '{n} 秒后重试', en: 'retry in {n}s' },
+  'mcp.retryInMin': { zh: '{n} 分钟后重试', en: 'retry in {n} min' },
+  'mcp.retryNow': { zh: '即将重试…', en: 'retrying…' },
+  'mcp.retryFailCount': { zh: '已失败 {n} 次', en: '{n} failed attempts' },
 
   // ══════════════════════════════════════
   //  Browser bridge modal
@@ -975,6 +1060,10 @@ var _i18n = {
   'common.required': { zh: '必填', en: 'Required' },
   'common.officialApi': { zh: '官方 API', en: 'Official API' },
   'common.relayApi': { zh: '中转 API', en: 'Relay API' },
+  // ── Themed dialog (confirm/alert/prompt) default button labels ──
+  'dialog.confirm': { zh: '确定', en: 'OK' },
+  'dialog.cancel': { zh: '取消', en: 'Cancel' },
+  'dialog.ok': { zh: '好的', en: 'OK' },
 };
 
 /**
@@ -1052,7 +1141,14 @@ function _onLanguageChange(lang) {
   _syncLangPicker(lang);
   // Re-render dynamic content that uses t()
   if (typeof renderConversationList === 'function') renderConversationList();
-  if (typeof renderMessages === 'function') renderMessages();
+  // ★ Repaint the open conversation so message chrome (tool labels,
+  //   finish-info, timestamps) re-renders with the new language. The
+  //   former call was to renderMessages(), which never existed — the
+  //   whole-chat repaint is renderChat(conv). (caught by tsc --checkJs)
+  if (typeof renderChat === 'function' && typeof getActiveConv === 'function') {
+    var _activeConv = getActiveConv();
+    if (_activeConv) renderChat(_activeConv, true);
+  }
   if (typeof _refreshOptimizerPanel === 'function') {
     try { _refreshOptimizerPanel(); } catch (e) { /* panel may not be open */ }
   }

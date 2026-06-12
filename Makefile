@@ -36,6 +36,11 @@ lint-fix: ## Auto-fix lint issues
 	python -m ruff check --fix lib/ routes/ tests/
 	python -m ruff format lib/ routes/ tests/
 
+.PHONY: typecheck
+typecheck: ## Type-check the vanilla-JS frontend (tsc --checkJs, no build step)
+	@if [ ! -d node_modules/typescript ]; then echo '⚠️  Run `npm install` first (installs TypeScript dev-dep)'; exit 1; fi
+	npx tsc --noEmit
+
 # ── Tests ──────────────────────────────────────────────────────
 
 test-unit: ## Run unit tests (no server, no browser, no network)

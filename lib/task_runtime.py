@@ -14,6 +14,6 @@ Prefer importing from the new home in new code::
 
 from __future__ import annotations
 
-from lib.agent_core.task_runtime import TaskRuntime, _make_envelope
+from lib.agent_core.task_runtime import TaskRuntime
 
 __all__ = ['TaskRuntime']

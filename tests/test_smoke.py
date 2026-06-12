@@ -39,7 +39,7 @@ class TestImportValidation:
     # Sub-packages with __init__.py façades
     _SUB_PACKAGES = [
         "lib",
-        "lib.fetch",
+        "tofu_search.fetch",
         "lib.llm_dispatch",
         "lib.project_mod",
         "lib.scheduler",
@@ -61,7 +61,8 @@ class TestImportValidation:
         "lib.pricing",
         "lib.protocols",
         "lib.rate_limiter",
-        "lib.search",
+        "lib.search_bridge",
+        "tofu_search.search",
         "lib.memory",
     ]
 

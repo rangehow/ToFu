@@ -57,9 +57,13 @@ __all__ = [
 #  discussion before implementation).
 # ═══════════════════════════════════════════════════════════════════════
 
-PREFETCH_BM25_TOP_N       = 80     # coarse-stage candidate pool (wide recall; cheap-LLM filters)
+PREFETCH_BM25_TOP_N       = 40     # coarse-stage candidate pool — BM25's top-40 reliably
+                                   # contains the true positives; 80 just doubled the
+                                   # reranker payload (~50KB) for a step that drops most of it.
 PREFETCH_MAX_INJECTED     = 5      # hard cap on memories injected
-PREFETCH_MAX_BYTES        = 8_000  # hard cap on injected body bytes
+PREFETCH_MAX_BYTES        = 12_000 # hard cap on injected body bytes — sized so
+                                   # PREFETCH_MAX_INJECTED median-length bodies (~2KB) fit
+                                   # as FULL bodies instead of being truncated to titles.
 PREFETCH_RECENT_TURNS_K   = 3      # number of user+assistant pairs used for query
 PREFETCH_MIN_CANDIDATES   = 2      # below this, skip cheap-LLM step
 PREFETCH_BODY_PREVIEW_LEN = 500    # chars of body shown to cheap model

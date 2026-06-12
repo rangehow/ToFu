@@ -183,6 +183,12 @@ def _read_absolute_file(path: str, start_line=None, end_line=None):
         For images: dict with ``__screenshot__`` protocol.
         For all other files: str with extracted text content.
     """
+    from lib.project_mod.abs_path_guard import AbsPathDenied, enforce_abs_read
+    try:
+        enforce_abs_read(path)
+    except AbsPathDenied as e:
+        return f'Error: {e}'
+
     from lib.file_reader import read_local_file as _read_local
     result = _read_local(path)
 
@@ -196,10 +202,13 @@ def _read_absolute_file(path: str, start_line=None, end_line=None):
         total = len(lines)
         s = max(1, start_line or 1) - 1
         e = min(total, end_line or total)
-        sliced = '\n'.join(lines[s:e])
         expanded_path = os.path.expanduser(path)
         expanded_path = os.path.abspath(expanded_path)
         filename = os.path.basename(expanded_path)
+        if s >= e:
+            return (f'Error: requested line range {start_line or 1}-{end_line or total} '
+                    f'is empty or out of bounds for {filename} ({total} lines).')
+        sliced = '\n'.join(lines[s:e])
         header = f'File: {filename} (lines {s + 1}-{e} of {total})\n'
         return header + '─' * 40 + '\n' + sliced
 
@@ -221,8 +230,9 @@ def _read_project_file(base, rel_path, start_line=None, end_line=None):
     if not os.path.isfile(target):
         return f'File not found: {rel_path}'
     sz = os.path.getsize(target)
-    if sz > MAX_FILE_SIZE:
-        return f'File too large ({_fmt_size(sz)}). Use grep_search to find specific content.'
+    if sz > MAX_FILE_SIZE and not (start_line or end_line):
+        return (f'File too large ({_fmt_size(sz)}). Use grep_search to find specific content, '
+                f'or read_files with start_line/end_line for a specific range.')
 
     filename = os.path.basename(rel_path)
     is_data = _is_data_file(filename, sz)
@@ -234,6 +244,9 @@ def _read_project_file(base, rel_path, start_line=None, end_line=None):
                 total = len(all_lines)
                 s = max(1, start_line or 1) - 1
                 e = min(total, end_line or total)
+                if s >= e:
+                    return (f'Error: requested line range {start_line or 1}-{end_line or total} '
+                            f'is empty or out of bounds for {rel_path} ({total} lines).')
                 text = ''.join(all_lines[s:e])
                 header = f'File: {rel_path} (lines {s + 1}-{e} of {total})\n'
             else:
@@ -366,7 +379,7 @@ def tool_read_files(base, reads):
     parts = []
     image_results = {}  # index → dict for __screenshot__ results
     total_chars = 0
-    BATCH_CHAR_BUDGET = 200_000
+    BATCH_CHAR_BUDGET = 50 * 1024 * 1024  # ★ lifted; per-file size bounds are the real limit
     WHOLE_FILE_THRESHOLD = 40_000
     for i, spec in enumerate(reads):
         if not isinstance(spec, dict) or 'path' not in spec:
@@ -606,10 +619,14 @@ _RG_MAX_FILESIZE = '2M'
 # Max depth for rg/fd to search (safety cap)
 _TOOL_MAX_DEPTH = 30
 
-# Real-match line discriminator for rg/grep output: "<path>:<lineno>:<content>".
-# Context lines use '-' as the separator ("<path>-<lineno>-...") and group
-# separators are literal "--", so neither matches.
-_RG_MATCH_LINE = re.compile(r'^.+?:\d+:')
+# Real-match line discriminator for rg/grep output. Two emitted shapes:
+#   multi-file : "<path>:<lineno>:<content>"   (path prefix present)
+#   single-file: "<lineno>:<content>"          (rg/grep omit the path when
+#                                               searching exactly one file)
+# The path prefix is therefore optional. Context lines use '-' after the
+# line number ("<path>-<lineno>-..." / "<lineno>-...") and group separators
+# are literal "--", so neither matches.
+_RG_MATCH_LINE = re.compile(r'^(?:.+?:)?\d+:')
 
 
 def _get_io_timeout(base, default=60):
@@ -869,8 +886,8 @@ def _python_grep(base, target, pattern, include=None, cap=MAX_GREP_RESULTS, coun
             break
         if time.time() > deadline:
             if not count_only:
-                matches.append(f'\u23f0 (grep timed out after {timeout_val}s \u2014 '
-                               f'try a more specific path or pattern)')
+                matches.append(f'[grep timed out after {timeout_val}s - '
+                               f'try a more specific path or pattern]')
             logger.warning('[Tools] python_grep timed out after %ds', timeout_val)
             break
 
@@ -984,8 +1001,8 @@ def _python_find(target, base, pattern, cap):
         if len(matches) >= cap:
             return matches
         if time.time() > deadline:
-            matches.append(f'  \u23f0 (search timed out after {timeout_val}s \u2014 '
-                           f'try a more specific path)')
+            matches.append(f'  [search timed out after {timeout_val}s - '
+                           f'try a more specific path]')
             return matches
     return matches
 
@@ -1116,4 +1133,8 @@ def tool_find_files(base, pattern, rel_path=None, max_results=None):
     hdr = f'Files matching "{pattern}"'
     if rel_path:
         hdr += f' in {rel_path}'
-    return hdr + f' ({len(matches)} found):\n\n' + '\n'.join(matches)
+    # The timeout sentinel ("[search timed out ...]") is appended to `matches`
+    # for display but is not a real file - exclude it from the count so the
+    # header is honest.
+    n_real = sum(1 for m in matches if '[search timed out' not in m)
+    return hdr + f' ({n_real} found):\n\n' + '\n'.join(matches)

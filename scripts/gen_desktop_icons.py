@@ -12,6 +12,15 @@ Outputs:
 import os
 import sys
 
+# Windows CI consoles default to cp1252, which can't encode the ✓/× glyphs
+# in our status prints — that raises UnicodeEncodeError and fails the build.
+# Force UTF-8 on the streams (Python 3.7+) so output is portable.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding='utf-8')
+    except (AttributeError, ValueError):
+        pass
+
 try:
     from PIL import Image
 except ImportError:

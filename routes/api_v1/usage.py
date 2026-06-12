@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from flask import Blueprint, request
 
-from lib.api_response import api_bad_request, api_forbidden, api_ok
+from lib.api_response import api_forbidden, api_ok
 from lib.log import get_logger
 from lib.openapi import api_meta
 from lib.usage_tracker import (

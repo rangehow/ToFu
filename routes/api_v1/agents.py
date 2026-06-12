@@ -18,9 +18,14 @@ uniform v1 path so SDK callers can pick whichever fits their workflow:
 
   * Feature-shaped poll (flat-result format the UI uses):
       GET  /api/v1/agents/translate/poll/{task_id}
-      POST /api/v1/agents/translate/poll/batch
+      POST /api/v1/agents/translate/poll/batch   (façade; body {taskIds:[…]})
       GET  /api/v1/agents/paper/report/poll?task_id=…&cursor=…
       GET  /api/v1/agents/paper/translate/poll?task_id=…&cursor=…
+
+  The bare ``/api/v1/translate/*`` routes (``…/poll/<id>`` and
+  ``…/poll-batch``) are the underlying implementation these façades
+  delegate to; new SDK callers should prefer the ``/agents/translate/*``
+  paths above.
 
 The cursor / SSE routes work for ANY TaskRuntime-backed task uniformly
 (see ``routes/api_v1/tasks.py``). The feature-shaped routes preserve
@@ -33,7 +38,7 @@ from __future__ import annotations
 
 import time
 
-from flask import Blueprint, request
+from flask import Blueprint
 
 from lib.api_response import api_bad_request, api_internal_error, api_ok
 from lib.log import get_logger, log_context
@@ -99,7 +104,7 @@ def paper_translate_start():
                               'text': {'type': 'string'},
                               'source_lang': {'type': 'string'},
                               'target_lang': {'type': 'string',
-                                               'default': 'zh'},
+                                               'default': 'English'},
                               'model': {'type': 'string'},
                           }}}}})
 def translate_start():
@@ -109,7 +114,7 @@ def translate_start():
     except BadRequest as e:
         return api_bad_request(str(e), field=e.field or 'text')
     try:
-        from routes.translate import translate_start as _ts
+        from routes.api_v1.translate import translate_start_v1 as _ts
     except ImportError as e:
         return api_internal_error(e, context='Translate module unavailable',
                                   source='api_v1.agents.translate_start')
@@ -132,7 +137,7 @@ def translate_start():
 )
 def translate_poll_v1(task_id):
     try:
-        from routes.translate import translate_poll as _tp
+        from routes.api_v1.translate import translate_poll_v1 as _tp
     except ImportError as e:
         return api_internal_error(e, context='Translate module unavailable',
                                   source='api_v1.agents.translate_poll_v1')
@@ -161,7 +166,7 @@ def translate_poll_v1(task_id):
 )
 def translate_poll_batch_v1():
     try:
-        from routes.translate import translate_poll_batch as _tpb
+        from routes.api_v1.translate import translate_poll_batch_v1 as _tpb
     except ImportError as e:
         return api_internal_error(e, context='Translate module unavailable',
                                   source='api_v1.agents.translate_poll_batch_v1')
@@ -301,7 +306,7 @@ def _run_search(query: str, *, max_results: int, freshness: str,
     Pure function; no Flask dependencies, so the same body powers both
     the sync route and the async worker.
     """
-    from lib.search import perform_web_search
+    from tofu_search import perform_web_search
 
     t0 = time.time()
     with log_context('api_v1.search.perform', logger=logger):
@@ -456,7 +461,7 @@ def browser_fetch():
     except BadRequest as e:
         return api_bad_request(str(e), field=e.field or 'url')
     try:
-        from lib.fetch import fetch_page_content
+        from tofu_search import fetch_page_content
     except ImportError as e:
         return api_internal_error(e, context='Fetch pipeline unavailable',
                                   source='api_v1.agents.browser_fetch')

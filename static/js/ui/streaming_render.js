@@ -281,22 +281,13 @@ function _streamingBubbleHTML(role, status, timeStr, msgId) {
   const st = status || c.defaultStatus;
   const tm = timeStr || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   const extraCls = role === 'critic' ? ' user-msg' : '';
-  /* Mirror the streaming bubble's owning message id onto the DOM so the
-   * unified controller can correlate `#streaming-msg` with the real msg
-   * object. Optional — older callers that don't pass msgId stay valid. */
-  const msgIdAttr = msgId ? ` data-msg-id="${escapeHtml(msgId)}"` : "";
-  return `<div class="message${extraCls} ${c.cls}" id="streaming-msg"${msgIdAttr}>` +
-    `<div class="message-avatar">${c.avatar}</div>` +
-    `<div class="message-content">` +
-      `<div class="message-header">` +
-        `<span class="message-role">${c.label}</span>` +
-        `<span class="message-time">${tm}</span>` +
-        `<span id="stream-elapsed-timer" class="stream-elapsed-timer"></span>` +
-      `</div>` +
-      `<div class="message-body" id="streaming-body">` +
-        `<div class="stream-status"><div class="pulse"></div> ${st}</div>` +
-      `</div>` +
-    `</div></div>`;
+  /* safeHtml auto-escapes every interpolation. The avatar is trusted
+   * hardcoded SVG/img markup (settings/branding.js) so it is wrapped in
+   * raw(); msgId (caller-supplied) is escaped automatically. Returns a
+   * _SafeHtmlRaw whose toString() yields the HTML string the
+   * insertAdjacentHTML call sites expect. */
+  const dataMsgId = msgId ? raw(` data-msg-id="${escapeHtml(msgId)}"`) : '';
+  return String(safeHtml`<div class="message${extraCls} ${raw(c.cls)}" id="streaming-msg"${dataMsgId}><div class="message-avatar">${raw(c.avatar)}</div><div class="message-content"><div class="message-header"><span class="message-role">${c.label}</span><span class="message-time">${tm}</span><span id="stream-elapsed-timer" class="stream-elapsed-timer"></span></div><div class="message-body" id="streaming-body"><div class="stream-status"><div class="pulse"></div> ${st}</div></div></div></div>`);
 }
 
 /**
@@ -530,13 +521,6 @@ function _forceScrollToBottom(container, forceActualHeights) {
 
   container.scrollTop = container.scrollHeight;
 
-  if (forceActualHeights && inner) {
-    // Re-enable content-visibility:auto.  The browser caches the actual
-    // heights it just computed (via "auto" in contain-intrinsic-size),
-    // so scrollHeight stays correct and the scroll position doesn't shift.
-    inner.classList.remove('cv-off');
-  }
-
   // Safety net for async content (images, KaTeX, code highlights).
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
@@ -546,6 +530,16 @@ function _forceScrollToBottom(container, forceActualHeights) {
   setTimeout(() => {
     container.scrollTop = container.scrollHeight;
     container.style.scrollBehavior = '';
+    if (forceActualHeights && inner) {
+      // Re-enable content-visibility:auto only AFTER scroll has fully settled.
+      // Keeping cv-off across the rAF + 150ms passes means every tool-round slot
+      // ([data-prn]) stays rendered during the switch instead of flashing empty
+      // (collapsing to its 32px contain-intrinsic-size placeholder) as the browser
+      // re-evaluates off-screen slots against a still-moving scroll position.
+      // The browser cached real heights (via "auto" contain-intrinsic-size) while
+      // cv-off was on, so scrollHeight stays correct when auto-skip resumes here.
+      inner.classList.remove('cv-off');
+    }
   }, 150);
 }
 

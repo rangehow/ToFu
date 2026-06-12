@@ -103,8 +103,8 @@ def test_api_js_exists():
     """api.js — the unified frontend API client — must exist."""
     path = os.path.join(JS_DIR, 'api.js')
     assert os.path.isfile(path), (
-        f'static/js/api.js is missing. It is the single entry point for '
-        f'all frontend backend calls. Recreate it before any other change.'
+        'static/js/api.js is missing. It is the single entry point for '
+        'all frontend backend calls. Recreate it before any other change.'
     )
 
 

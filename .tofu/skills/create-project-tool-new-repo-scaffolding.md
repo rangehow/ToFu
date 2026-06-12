@@ -1,74 +1,38 @@
 ---
 name: create-project-tool-new-repo-scaffolding
-description: New create_project tool + absolute-path writes under registered roots — unblocks "generate new repo at /path" scenarios
+description: Absolute-path writes auto-register nearest existing dir as a root (no mandatory create_project); create_project now optional
 enabled: true
 tags: [python, project-tools, create_project, multi-root, write_file, absolute-path, feature]
 created: 2026-04-19T08:46:37Z
-updated: 2026-04-19T08:46:37Z
+updated: 2026-06-05T08:17:29Z
 ---
 
-# create_project tool — scaffolding new repositories outside the current project
+# create_project tool + auto-registering absolute-path writes
 
-## Problem
-`write_file` / `apply_diff` / `insert_content` historically used `_safe_path(base, rel)` which rejected any path outside the primary project root. So when the user asked the model to "generate a whole new repo at /some/path referencing this repo", the model could read the current repo but had no way to create the target — it got "Path traversal blocked" errors.
+## Problem (original)
+`write_file` / `apply_diff` / `insert_content` historically rejected any absolute path outside the primary root, so "generate a new repo at /some/path" needed an explicit `create_project` first. The model rarely thought to call it, hitting *"Absolute path X is outside all registered workspace roots. Call create_project(path=...) first…"*. This was asymmetric with `read_files`, which reads ANY absolute path freely.
 
-## Solution — three pieces
+## Fix (2026-06 — friction removal)
+`_resolve_write_path(base, rel_path)` in `lib/project_mod/write_tools.py` now AUTO-REGISTERS instead of rejecting:
+1. If the abs path already resolves under a registered root → use directly.
+2. Else, if NOT a forbidden system path → find the deepest existing ancestor dir (`_nearest_existing_dir`) and `add_project_root(anchor)`, then allow the write. Writes "just work" like reads.
+3. Forbidden system paths (`_is_forbidden_create_path` on the path AND its dirname: `/etc`, `/usr`, `$HOME` itself, …) are still rejected with *"Refusing to write to system path …"*.
 
-### 1. `create_project(path, name?, overwrite?)` tool
-- Defined in `lib/project_mod/write_tools.py` (`tool_create_project`).
-- Expands `~`, abspath, validates via `_is_forbidden_create_path` (blocks `/`, `/etc`, `/usr`, `/bin`, `/sbin`, `/boot`, `/sys`, `/proc`, `/dev`, `/var`, `/lib*`, `/root`, Windows `C:\` system paths, and `$HOME` itself — descendants of `/home`, `/opt`, `/tmp`, `/workspace` are fine).
-- Creates directory (`makedirs exist_ok=True`).
-- Registers as **extra root** via `add_project_root` (never replaces primary — the "reference" project stays available for reading).
-- Returns `{ok, path, rootName, created, overwrite, message}`.
-- If the target already exists and is non-empty, fails unless `overwrite=true`. With `overwrite=true`, existing files are NOT deleted — only the guard is bypassed so the dir can be registered.
-- Writes `audit_log('project_create', ...)`.
+So **`create_project` is now OPTIONAL** — only needed to (a) pre-create an empty dir, or (b) assign an explicit `name:` prefix. Tool descriptions in `lib/tools/project.py` were updated: `write_file` documents the auto-register behavior; `create_project` says "you usually do NOT need this".
 
-### 2. Write tools accept absolute paths under registered roots
-- `_resolve_write_path(base, rel_path)` in `write_tools.py`: if rel_path starts with `/` or `~`, resolves to abspath and validates it lies under any entry of `_roots` (the registered workspace roots dict). Otherwise falls back to the existing `_safe_path`.
-- Symmetric with `read_files` which already accepted absolute paths via `_read_absolute_file`.
-- Any absolute path NOT under a registered root is rejected with: *"Absolute path X is outside all registered workspace roots. Call create_project(path=...) first, or use a 'rootname:relative' prefix."*
-- Applied in `tool_write_file`, `_apply_one_diff`, `_insert_one`.
+NOTE: the `name:` (colon-prefix) path in `_resolve_base` (tools.py) is STILL strict — an unknown root name raises `UnknownWorkspaceRootError` (no silent fallback to primary → avoids clobber). Only the bare-absolute-path case auto-registers.
 
-### 3. Integration points touched
-- **Schema**: `PROJECT_TOOL_CREATE_PROJECT` in `lib/tools/project.py`, added to `PROJECT_TOOLS`, `PROJECT_TOOL_NAMES`, and `__all__`.
-- **Dispatch**: new `elif fn_name == 'create_project'` branch in `execute_tool()` in `lib/project_mod/tools.py`.
-- **Display**: `project_tool_display` branch for `create_project`.
-- **Meta builder**: `_build_create_project` in `lib/tools/meta.py` → `_META_BUILDERS`.
-- **Approval gate**: added to `is_write_op` set, `_WRITE_TOOLS`, and `_APPROVAL_META_ENRICHERS` (`_approval_meta_create_project`) in `lib/tasks_pkg/tool_dispatch.py`. Creates go through the same approve/reject UI flow as `write_file`.
-- **Deferral**: added to `CORE_TOOL_NAMES` and `_NEVER_DEFER` in `lib/tools/deferral.py` so it's always loaded.
-- **Cache invalidation**: added to the `elif fut_fn_name in (...)` check that triggers `_invalidate_project_cache`.
-- **System prompt**: added to the tools list in `lib/project_mod/indexer.py` with an explicit use-case note.
-- **Frontend**: added to `_isRoundProject()` and icon map in `static/js/ui.js`.
-- **Healthcheck**: added `tool_create_project` to the `lib.project_mod` export list.
+## create_project(path, name?, overwrite?) — still available
+- `lib/project_mod/write_tools.py::tool_create_project`. Expands `~`, abspath, validates via `_is_forbidden_create_path`. Creates dir, registers via `add_project_root` (extra root, never replaces primary). Returns `{ok, path, rootName, created, overwrite, message}`. Non-empty existing dir needs `overwrite=true` (files NOT deleted). Writes `audit_log('project_create', ...)`.
 
-## Usage pattern for the LLM
-```
-1. User: "Generate a new FastAPI repo at ~/projects/myapi, referencing patterns from the current project."
-2. Model: create_project(path='~/projects/myapi') → {rootName: 'myapi', ...}
-3. Model reads current project normally (list_dir, grep_search, read_files).
-4. Model writes to new project via either:
-     write_file(path='myapi:src/main.py', content=...)     # name: prefix (preferred)
-     write_file(path='/home/u/projects/myapi/src/main.py', content=...)  # absolute
-5. Both primary and new roots available for reads. User can still Stop/Reject via the approval UI.
-```
+## Integration points (unchanged from original wiring)
+- Schema `PROJECT_TOOL_CREATE_PROJECT` in `lib/tools/project.py`; dispatch branch in `lib/project_mod/tools.py::execute_tool`; display in `tool_display.py`; meta `_build_create_project` in `lib/tools/meta.py`; approval gate in `lib/tasks_pkg/tool_dispatch.py` (`is_write_op`, `_WRITE_TOOLS`, `_APPROVAL_META_ENRICHERS`); deferral `CORE_TOOL_NAMES`/`_NEVER_DEFER`; cache-invalidation list; system prompt in `lib/project_mod/indexer.py`; frontend `static/js/ui.js`.
 
 ## Safety layers
-1. `_is_forbidden_create_path` blocks system paths at creation time.
-2. Non-empty existing directory requires `overwrite=true`.
-3. Absolute-path writes must be under some registered root (transitive safety — attackers can't just write `/etc/passwd` by guessing an absolute path).
-4. Approval flow gates `create_project` just like `write_file`.
-5. No undo recorded for the directory creation itself (MVP limitation — manual cleanup needed if abandoned). File writes inside the new project ARE tracked normally by `_record_modification`.
+1. `_is_forbidden_create_path` blocks system paths at both create AND auto-register time.
+2. Auto-register only touches the nearest EXISTING ancestor (doesn't create system dirs).
+3. Approval flow still gates write_file/create_project.
 
 ## Testing
-Full smoke test:
-```python
-from lib.project_mod import set_project, tool_create_project, execute_tool
-set_project(os.getcwd())
-r = tool_create_project('/tmp/foo', conv_id='c', task_id='t')  # ok
-execute_tool('write_file', {'path': 'foo:hello.py', 'content': '...'}, os.getcwd(), conv_id='c', task_id='t')  # ok
-execute_tool('write_file', {'path': '/tmp/foo/bar.py', 'content': '...'}, os.getcwd(), conv_id='c', task_id='t')  # ok (abs under registered root)
-execute_tool('write_file', {'path': '/etc/x', 'content': '...'}, os.getcwd(), ...)  # rejected
-tool_create_project('/etc/evil')  # rejected (system path)
-```
-All tests/test_project_tools.py, test_streaming_and_prefetch.py, test_compaction_improvements.py (227 tests) still pass.
+End-to-end through `execute_tool('write_file', {'path': '/tmp/x/proxy/src/core/client.py', ...}, cwd)` succeeds with NO prior create_project; nearest existing ancestor `/tmp/x` gets auto-registered; `/etc/...` still blocked. (pytest suites can't run in this env due to a polluted sibling-workspace `pytest11` entrypoint causing `TypeError: required field "lineno" missing from alias` — unrelated to this change.)
 

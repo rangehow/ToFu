@@ -31,7 +31,6 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Optional
 
 from lib.database import DOMAIN_SYSTEM, _BACKEND, get_thread_db as get_db
 from lib.log import audit_log, get_logger

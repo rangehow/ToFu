@@ -1,8 +1,22 @@
 # HOT_PATH
 """
-Context compaction — two-layer progressive compression pipeline.
+Context compaction — four-layer progressive compression pipeline (L0–L3).
 
-Layer 1 — Micro-compaction (runs before every LLM call, zero LLM cost):
+The layers are numbered by *when* they fire, not by where they live.  Only
+L1 + L2 run inside ``run_compaction_pipeline`` (called once per round by the
+orchestrator); L0 fires earlier at tool-result entry, and L3 fires later as
+an error recovery path.  The numbering below is the single source of truth —
+every sub-module docstring uses the same L0/L1/L2/L3 labels.
+
+Layer 0 — Tool-result budgeting (``_budget`` / ``_persist``, zero LLM cost):
+
+    Fires at tool-result *entry* time from ``tool_dispatch.py`` — NOT from
+    ``run_compaction_pipeline``.  Oversized results are persisted to disk
+    and replaced with a preview + file path the model can re-read, so a
+    single grep/fetch can't swallow the context window.  A per-round
+    aggregate guard caps parallel tool-call explosions.
+
+Layer 1 — Micro-compaction (``_layer1``, runs before every LLM call, zero LLM cost):
 
     Keeps a "hot tail" of the N most recent tool results untouched.
     Tool results that fall outside the hot tail are replaced in the
@@ -10,13 +24,15 @@ Layer 1 — Micro-compaction (runs before every LLM call, zero LLM cost):
     result was compacted and it can re-call the tool if needed.
 
     This layer runs every round, is idempotent (skips already-compacted
-    results), and requires no LLM calls.
+    results), and requires no LLM calls.  The transforms are pluggable
+    steps (see ``_steps`` / ``_builtin_steps``); the orchestration shell
+    owns durable-placeholder persistence.
 
-Layer 2 — Context compact (force-triggered by orchestrator only):
+Layer 2 — Context compact (``_layer2``, force-triggered by orchestrator only):
 
     NOT in the model's tool list — the model never calls this voluntarily.
     Force-injected by the orchestrator when estimated token count exceeds
-    80% of usable context window.
+    ``_SUMMARY_TRIGGER_RATIO`` of usable context window.
 
     Pure LLM summary with selective turn compression:
       - A cheap model evaluates each historical user↔assistant turn
@@ -28,6 +44,14 @@ Layer 2 — Context compact (force-triggered by orchestrator only):
 
     The summary is injected as a synthetic tool_call + tool_result pair.
     Old messages before the boundary are replaced.
+
+Layer 3 — Reactive compaction (``_reactive``, error recovery, off-pipeline):
+
+    Emergency path invoked from ``llm_fallback.py`` when the upstream API
+    rejects a request as too long (HTTP 400 prompt-too-long) or too large
+    (HTTP 413 wire bytes).  Archives, aggressively strips images, runs an
+    aggressive micro_compact, force-compacts with a tight budget, then
+    head-truncates as a last resort.  Capped at ``_REACTIVE_COMPACT_MAX_RETRIES``.
 
 Concurrency safety:
     All persistent state is keyed by conv_id.  Multiple conversations
@@ -123,6 +147,28 @@ from lib.tasks_pkg.compaction._budget import (  # noqa: E402,F401
 
 from lib.tasks_pkg.compaction._layer1 import micro_compact  # noqa: E402,F401
 
+# Step framework + built-in steps.  Importing _builtin_steps here ensures
+# the five default L1 steps are registered at package-import time (so
+# list_steps() is introspectable and config arms can be validated before
+# the first micro_compact call).
+from lib.tasks_pkg.compaction._steps import (  # noqa: E402,F401
+    CompactionContext,
+    CompactionStep,
+    MessageEditor,
+    STEP_KIND_STRUCTURAL,
+    STEP_KIND_TRANSFORM,
+    register_step,
+    get_step,
+    get_step_spec,
+    list_steps,
+    run_steps,
+)
+import lib.tasks_pkg.compaction._builtin_steps  # noqa: E402,F401
+import lib.tasks_pkg.compaction._methods  # noqa: E402,F401 (experimental steps)
+import lib.tasks_pkg.compaction._faithful_methods  # noqa: E402,F401 (verified OpenCode/Hermes/OpenClaw)
+
+from lib.tasks_pkg.compaction._advanced import advanced_compact  # noqa: E402,F401
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Token estimation helpers
@@ -134,8 +180,11 @@ from lib.tasks_pkg.compaction._tokens import (  # noqa: E402,F401
     _estimate_total_tokens,
     _get_context_limit,
     _get_static_context_limit,
+    build_context_policy,
+    resolve_model_context_limit,
     _human_size,
     _parse_reported_token_count,
+    _parse_context_overflow,
     _PROMPT_TOO_LONG_RE,
     _should_force_compact,
 )

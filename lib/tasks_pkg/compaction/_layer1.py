@@ -5,6 +5,17 @@
 Runs every round (cheap, no LLM call).  Cache-aware: messages in the
 prompt-cache prefix are left byte-identical to avoid invalidation.
 
+Architecture (2026-06 step refactor):
+    ``micro_compact`` is the *orchestration shell* — it builds the
+    ``_round_index`` (DB + in-flight task), computes the cache-prefix
+    boundary, owns the ``_stamp_l1`` durable-placeholder closure, and
+    performs the CAS-style ``UPDATE conversations`` persist.  The actual
+    *transforms* (the former Phase A–D) live as registered steps in
+    ``_builtin_steps.py`` and run through ``_steps.run_steps`` against a
+    :class:`CompactionContext`.  This makes the compression methods
+    orderable / ablatable / replaceable purely by configuration without
+    touching the shell.
+
 Critical L1 invariant (memory: ``l1-compaction-fix-durable-placeholders``):
 when a tool result is compacted, the placeholder text is also written
 back to the source-of-truth ``toolContent`` field on the matching
@@ -15,10 +26,7 @@ api-form messages list (discarded after the LLM call) and the next turn
 re-reads the original 33k-char content.
 """
 
-import json
-
 from lib.log import get_logger
-from lib.tasks_pkg.compaction._tokens import _human_size
 
 logger = get_logger(__name__)
 
@@ -34,21 +42,15 @@ def _get_constants():
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  Layer 1 — Micro-compaction (extended)
-#  Now processes ALL message types, not just tool results:
-#    - Strips old thinking/reasoning_content from cold assistant messages
-#    - Compresses cold tool results (original behaviour)
-#  Inspired by Claude Code's microcompact which edits all message types.
+#  Layer 1 — Micro-compaction (orchestration shell)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def micro_compact(messages: list, conv_id: str = '', task: dict | None = None,
                   **kwargs) -> int:
     """Compress cold tool results AND strip old thinking blocks.
 
-    Extended beyond the original tool-result-only compaction:
-      1. Strip reasoning_content from cold assistant messages (saves huge
-         amounts — thinking blocks can be 10K+ chars each).
-      2. Compress cold tool results outside the hot tail (original behaviour).
+    The transforms run through the compaction step registry; this
+    function owns the durable-placeholder bookkeeping and persistence.
 
     Cache-aware: if prompt cache is active (tracked by cache_tracking.py),
     messages in the cache prefix are left byte-identical to avoid
@@ -66,19 +68,20 @@ def micro_compact(messages: list, conv_id: str = '', task: dict | None = None,
                   individual tool calls as compacted in real time.
 
     Keyword Args:
-        enable_assistant_compact: If True, also compact cold assistant
-            message content (Phase D).  Disabled by default because
-            A/B testing proved it invalidates prompt cache — only
-            enable when cache rebuild is already expected (e.g.,
-            during force_compact).
-        enable_paired_assistant_compact: If True, also compact the
-            interstitial ``content`` on the ``assistant(tool_calls)``
-            message that paired with any cold tool result being
-            compacted in Phase B.  HYPOTHESIS under A/B test: since
-            Phase B is already invalidating the cache at this index,
-            a co-located mutation costs nothing extra and saves
-            additional tokens for free.  Opt-in while under evaluation
-            (2026-04-26 A/B test — see debug/test_paired_compact_ab.py).
+        steps: Explicit ordered list of compaction step names to run.
+            When omitted, the default ordering is built from the gates
+            below — reproducing the historical phase order:
+            ``strip_thinking → compact_tool_results
+            → [fold_paired_interstitial] → strip_cold_images
+            → [compact_cold_assistant]``.
+        enable_assistant_compact: If True, append ``compact_cold_assistant``
+            (Phase D).  Disabled by default because A/B testing proved it
+            invalidates prompt cache — only enable when cache rebuild is
+            already expected (e.g. during force_compact / reactive).
+        enable_paired_assistant_compact: If True, insert
+            ``fold_paired_interstitial`` (Phase B2) right after
+            ``compact_tool_results``.  A/B-verified -1.4% cache writes
+            vs B-only (2026-04-27).
 
     Returns:
         Estimated number of tokens saved.
@@ -122,16 +125,10 @@ def micro_compact(messages: list, conv_id: str = '', task: dict | None = None,
 
     if conv_id:
         try:
-            from lib.database import DOMAIN_CHAT, get_thread_db
-            _db = get_thread_db(DOMAIN_CHAT)
-            _row = _db.execute(
-                'SELECT messages, updated_at FROM conversations '
-                'WHERE id=? AND user_id=1',
-                (conv_id,),
-            ).fetchone()
-            if _row and _row[0]:
-                _conv_messages = json.loads(_row[0]) if isinstance(_row[0], str) else _row[0]
-                _conv_updated_at = _row[1] if not hasattr(_row, 'get') else _row['updated_at']
+            from lib.agent_core.store import get_conversation_store
+            _loaded = get_conversation_store().load_conversation_messages(conv_id)
+            if _loaded is not None:
+                _conv_messages, _conv_updated_at = _loaded
                 if isinstance(_conv_messages, list):
                     for _m in _conv_messages:
                         if not isinstance(_m, dict):
@@ -238,11 +235,6 @@ def micro_compact(messages: list, conv_id: str = '', task: dict | None = None,
                            tc_id[:12] if tc_id else '?',
                            round_entry.get('toolName', '?'),
                            round_entry.get('roundNum'), _ev_err)
-    # Track which assistant messages had their paired tool result
-    # compacted in Phase B so we can (optionally) co-compact the
-    # interstitial commentary in a second pass — ONE pass per assistant
-    # regardless of how many tool_calls fan-out below it.
-    _paired_assistant_indices: set[int] = set()
 
     # ── Cache-aware: determine which messages are in the cache prefix ──
     # Messages in the cache prefix are skipped to maintain byte-identical
@@ -255,420 +247,35 @@ def micro_compact(messages: list, conv_id: str = '', task: dict | None = None,
         except Exception as e:
             logger.debug('[Compaction] cache_tracking not available: %s', e)
 
-    # ── Phase A: Strip old thinking/reasoning_content ──────────────────
-    # Keep only the N most recent assistant messages' thinking intact.
-    assistant_indices = [
-        i for i, m in enumerate(messages)
-        if m.get('role') == 'assistant' and m.get('reasoning_content')
-    ]
-    thinking_stripped = 0
-    if len(assistant_indices) > _c._THINKING_HOT_TAIL:
-        cold_thinking = assistant_indices[:-_c._THINKING_HOT_TAIL]
-        for idx in cold_thinking:
-            # Cache-aware: skip messages in the cache prefix
-            if idx < _cache_prefix_count:
-                continue
-            msg = messages[idx]
-            rc = msg.get('reasoning_content', '')
-            if not rc:
-                continue
-            rc_len = len(rc) if isinstance(rc, str) else 0
-            if rc_len > 0:
-                tokens_saved += rc_len // 4
-                msg['reasoning_content'] = ''
-                thinking_stripped += 1
+    # ── Run the L1 transform steps ─────────────────────────────────────
+    # The Phase A–D bodies live as registered steps in _builtin_steps.py.
+    # Build the default ordering, inserting the two gated steps in their
+    # historical positions when the corresponding kwarg is set, so output
+    # is byte-identical to the pre-refactor monolith.  An explicit
+    # ``steps=[...]`` kwarg overrides (used by experiments / config arms).
+    from lib.tasks_pkg.compaction._steps import (
+        CompactionContext, make_constants, run_steps)
+    import lib.tasks_pkg.compaction._builtin_steps  # noqa: F401 (registers steps)
 
-    if thinking_stripped > 0:
-        logger.info('[L1-think] conv=%s  stripped reasoning_content from %d '
-                    'cold assistant messages (~%d tokens saved)',
-                    conv_id[:8] if conv_id else '?',
-                    thinking_stripped, tokens_saved)
+    step_names = kwargs.get('steps')
+    if step_names is None:
+        step_names = ['strip_thinking', 'compact_tool_results']
+        if kwargs.get('enable_paired_assistant_compact', False):
+            step_names.append('fold_paired_interstitial')
+        step_names.append('strip_cold_images')
+        if kwargs.get('enable_assistant_compact', False):
+            step_names.append('compact_cold_assistant')
 
-    # ── Phase B: Compress cold tool results (original logic) ──────────
-    tool_indices = [i for i, m in enumerate(messages) if m.get('role') == 'tool']
-
-    cold_indices = []
-    if len(tool_indices) <= _c.MICRO_HOT_TAIL:
-        logger.debug('[L1] %d tool results ≤ hot-tail size %d, '
-                     'skipping Phase B (Phase C image strip may still run)',
-                     len(tool_indices), _c.MICRO_HOT_TAIL)
-    else:
-        cold_indices = tool_indices[:-_c.MICRO_HOT_TAIL]
-    compacted_count = 0
-    skipped_short = 0
-    skipped_already = 0
-    tool_tokens_saved = 0
-
-    # Helper: walk backward from a tool index to its paired
-    # assistant(tool_calls) message (the one whose tool_calls[].id
-    # matches tool.tool_call_id, in practice always the nearest
-    # preceding assistant msg).
-    def _find_paired_assistant(tool_idx: int) -> int | None:
-        for j in range(tool_idx - 1, -1, -1):
-            role_j = messages[j].get('role')
-            if role_j == 'assistant':
-                return j
-            if role_j in ('user', 'system'):
-                return None   # tool results never cross a user/system boundary
-        return None
-
-    for idx in cold_indices:
-        # Cache-aware: skip messages in the cache prefix
-        if idx < _cache_prefix_count:
-            skipped_already += 1
-            continue
-
-        msg = messages[idx]
-        content = msg.get('content', '')
-        tool_name = msg.get('name', 'tool')
-        mutated = False
-
-        # ── Handle multimodal content (list of content blocks) ──
-        if isinstance(content, list):
-            text_parts = []
-            image_count = 0
-            image_chars = 0
-            for b in content:
-                if not isinstance(b, dict):
-                    continue
-                if b.get('type') == 'text':
-                    text_parts.append(b.get('text', ''))
-                elif b.get('type') == 'image_url':
-                    image_count += 1
-                    image_chars += len(
-                        b.get('image_url', {}).get('url', ''))
-
-            text_len = sum(len(t) for t in text_parts)
-
-            # Images consume enormous context (base64 data URLs).
-            # Always compact cold image tool results regardless of
-            # text length — the image data is the real cost.
-            if image_count > 0:
-                _before_chars = text_len + image_chars
-                text_preview = ' '.join(text_parts).strip()[:200]
-                msg['content'] = (
-                    f'[{tool_name} result compacted — had {image_count} '
-                    f'image(s) ({_human_size(image_chars)} base64) + '
-                    f'{text_len:,} chars text — re-call tool if needed]\n'
-                    f'Text was: {text_preview}'
-                )
-                tool_tokens_saved += text_len // 4 + image_count * _c._IMAGE_TOKENS_DEFAULT
-                compacted_count += 1
-                mutated = True
-                _stamp_l1(msg, _before_chars, len(msg['content']))
-            elif text_len <= _c.MICRO_COMPACT_THRESHOLD:
-                skipped_short += 1
-            else:
-                _before_chars = text_len
-                msg['content'] = (
-                    f'[{tool_name} result compacted — was {text_len:,} chars'
-                    f' — re-call tool if full content needed]'
-                )
-                tool_tokens_saved += text_len // 4
-                compacted_count += 1
-                mutated = True
-                _stamp_l1(msg, _before_chars, len(msg['content']))
-
-        # ── Handle plain-string content ──
-        elif isinstance(content, str):
-            if content.startswith('[') and 'compacted' in content[:80]:
-                skipped_already += 1
-            elif content.startswith('[Persisted to:'):
-                skipped_already += 1
-            elif len(content) <= _c.MICRO_COMPACT_THRESHOLD:
-                skipped_short += 1
-            else:
-                old_len = len(content)
-                first_two = '\n'.join(content.split('\n')[:2])
-                if len(first_two) > 120:
-                    first_two = first_two[:120] + '…'
-                placeholder = (
-                    f'[{tool_name} result compacted — was {old_len:,} chars]\n'
-                    f'Preview: {first_two}\n'
-                    f'[Re-call tool if full content needed]'
-                )
-                msg['content'] = placeholder
-                tool_tokens_saved += (old_len - len(placeholder)) // 4
-                compacted_count += 1
-                mutated = True
-                _stamp_l1(msg, old_len, len(placeholder))
-
-        # If we actually mutated this tool result, remember the paired
-        # assistant index so an optional pass can co-compact the
-        # interstitial commentary at zero extra cache cost.
-        if mutated:
-            paired_idx = _find_paired_assistant(idx)
-            if paired_idx is not None and paired_idx >= _cache_prefix_count:
-                _paired_assistant_indices.add(paired_idx)
-
-    tokens_saved += tool_tokens_saved
-
-    logger.info('[L1] conv=%s  cold=%d  compacted=%d  '
-                'skipped_short=%d  skipped_already=%d  '
-                'thinking_stripped=%d  ~%d tokens saved',
-                conv_id[:8] if conv_id else '?',
-                len(cold_indices), compacted_count,
-                skipped_short, skipped_already,
-                thinking_stripped, tokens_saved)
-
-    # ── Phase B2: Co-compact interstitial assistant commentary ─────────
-    # ★ HYPOTHESIS CONFIRMED 2026-04-27 via live API A/B on Opus 4.7 —
-    #   see debug/test_paired_compact_live.py (8 rounds × 2 arms).
-    #
-    # When Phase B compacts a cold tool result at msg[N], we ALSO compact
-    # the content of its paired ``assistant(tool_calls)`` message at
-    # msg[N-1] (the "Let me examine X" interstitial commentary).
-    #
-    # Cache-impact analysis:
-    #   - Local byte-hash analysis predicted: first_break moves from N
-    #     to N-1, potentially enlarging the invalidated prefix.
-    #   - Live API measurement showed: the extra invalidated bytes
-    #     (~110 tokens of interstitial) are MORE than offset by the
-    #     shorter compacted content being written. Net: PAIRED cache
-    #     writes were 1.4% LOWER than BASELINE (32,402 → 31,942 tokens
-    #     across 8 rounds, -460 tokens).
-    #   - Total cost delta: -1.7% (PAIRED cheaper).
-    #
-    # This is UNLIKE Phase D (assistant content in non-tool-round
-    # contexts), which A/B'd at +57% cost because it mutates messages
-    # whose neighbors weren't being mutated, introducing brand-new
-    # cache breaks with no offsetting savings.
-    #
-    # Still gated behind ``enable_paired_assistant_compact=True`` for
-    # now. Rollout plan: (1) add to reactive_compact/force_compact
-    # unconditionally where cache rebuild is already happening, then
-    # (2) enable in normal micro_compact after further production
-    # observation — the test was on synthetic data; real interstitials
-    # vary in length and the economics may shift.
-    paired_assistants_compacted = 0
-    paired_assistants_tokens_saved = 0
-    if kwargs.get('enable_paired_assistant_compact', False) and _paired_assistant_indices:
-        _PAIRED_COMMENTARY_THRESHOLD = 200  # only compact > 200 chars
-        _PAIRED_PREVIEW_LEN = 100           # keep first 100 chars as preview
-
-        for idx in sorted(_paired_assistant_indices):
-            msg = messages[idx]
-            content = msg.get('content', '')
-
-            # String-shaped content path
-            if isinstance(content, str) and content:
-                # Idempotency guard
-                if content.startswith('[Interstitial compacted'):
-                    continue
-                if len(content) <= _PAIRED_COMMENTARY_THRESHOLD:
-                    continue
-                old_len = len(content)
-                preview = content[:_PAIRED_PREVIEW_LEN].rstrip()
-                if len(content) > _PAIRED_PREVIEW_LEN:
-                    preview += '…'
-                new_content = (
-                    f'[Interstitial compacted — was {old_len:,} chars] '
-                    f'{preview}'
-                )
-                msg['content'] = new_content
-                paired_assistants_tokens_saved += (old_len - len(new_content)) // 4
-                paired_assistants_compacted += 1
-
-            # List-shaped content (Claude multimodal: [{type:text,text:...}, ...])
-            elif isinstance(content, list):
-                text_blocks = [
-                    (i, b) for i, b in enumerate(content)
-                    if isinstance(b, dict) and b.get('type') == 'text'
-                ]
-                total_text = sum(len(b.get('text', '')) for _, b in text_blocks)
-                if total_text <= _PAIRED_COMMENTARY_THRESHOLD:
-                    continue
-                # Already compacted?
-                if text_blocks and text_blocks[0][1].get('text', '').startswith(
-                        '[Interstitial compacted'):
-                    continue
-                combined = ''.join(b.get('text', '') for _, b in text_blocks)
-                preview = combined[:_PAIRED_PREVIEW_LEN].rstrip()
-                if len(combined) > _PAIRED_PREVIEW_LEN:
-                    preview += '…'
-                new_text = (
-                    f'[Interstitial compacted — was {total_text:,} chars] '
-                    f'{preview}'
-                )
-                # Replace all text blocks with ONE compacted block, keep non-text blocks.
-                new_content = []
-                text_replaced = False
-                for b in content:
-                    if isinstance(b, dict) and b.get('type') == 'text':
-                        if not text_replaced:
-                            new_content.append({'type': 'text', 'text': new_text})
-                            text_replaced = True
-                    else:
-                        new_content.append(b)
-                msg['content'] = new_content
-                paired_assistants_tokens_saved += (total_text - len(new_text)) // 4
-                paired_assistants_compacted += 1
-
-        tokens_saved += paired_assistants_tokens_saved
-        if paired_assistants_compacted > 0:
-            logger.info(
-                '[L1-pair] conv=%s  co-compacted %d paired assistant interstitials '
-                '(~%d tokens saved; A/B-verified -1.4%% cache writes vs B-only)',
-                conv_id[:8] if conv_id else '?',
-                paired_assistants_compacted, paired_assistants_tokens_saved,
-            )
-
-    # ── Phase C: Aggressively strip cold images ──────────────────────
-    # Images consume massive context (base64 data URLs: 1-10MB each).
-    # Unlike text tool results, images can't be re-searched or grepped,
-    # so the model only needs recent images. Use a much tighter hot tail.
-    _IMAGE_HOT_TAIL = 2  # keep only the 2 most recent image tool results
-    image_tool_indices = [
-        i for i, m in enumerate(messages)
-        if m.get('role') == 'tool'
-        and isinstance(m.get('content'), list)
-        and any(
-            isinstance(b, dict) and b.get('type') == 'image_url'
-            for b in m['content']
-        )
-    ]
-    images_stripped = 0
-    image_tokens_saved = 0
-
-    if len(image_tool_indices) > _IMAGE_HOT_TAIL:
-        cold_image_indices = image_tool_indices[:-_IMAGE_HOT_TAIL]
-        for idx in cold_image_indices:
-            if idx < _cache_prefix_count:
-                continue
-            msg = messages[idx]
-            content = msg['content']
-            tool_name = msg.get('name', 'tool')
-
-            # Measure image data size
-            image_count = 0
-            image_chars = 0
-            text_parts = []
-            for b in content:
-                if not isinstance(b, dict):
-                    continue
-                if b.get('type') == 'image_url':
-                    image_count += 1
-                    image_chars += len(
-                        b.get('image_url', {}).get('url', ''))
-                elif b.get('type') == 'text':
-                    text_parts.append(b.get('text', ''))
-
-            if image_count == 0:
-                continue
-
-            text_preview = ' '.join(text_parts).strip()[:200]
-            msg['content'] = (
-                f'[{tool_name} image compacted — had {image_count} '
-                f'image(s) ({_human_size(image_chars)} base64) — '
-                f're-call tool if image needed]\n'
-                f'Text was: {text_preview}'
-            )
-            image_tokens_saved += image_count * _c._IMAGE_TOKENS_DEFAULT
-            images_stripped += 1
-
-    if images_stripped > 0:
-        tokens_saved += image_tokens_saved
-        logger.info('[L1-img] conv=%s  stripped %d cold image tool results '
-                    '(~%d vision tokens, %s base64 data freed)',
-                    conv_id[:8] if conv_id else '?',
-                    images_stripped, image_tokens_saved,
-                    _human_size(image_chars))
-
-    # ── Phase D: Compact cold assistant message content ───────────────
-    # In long agentic conversations, assistant messages from 20+ rounds ago
-    # contain verbose explanations that are no longer critical.  Compacting
-    # these saves tokens at the cost of invalidating prompt cache.
-    #
-    # ★ CRITICAL: A/B testing (2026-04-06) proved that compacting messages
-    #   within the cached prefix DESTROYS cache stability.  Even though
-    #   get_cache_prefix_count() returns a value, Anthropic actually caches
-    #   everything up to BP4 (the conversation tail).  Mutating ANY message
-    #   in that range changes the prefix bytes → full cache miss → expensive
-    #   re-cache at 1.25-2.0x.  In testing, Phase D increased total cost
-    #   by 57% due to cache invalidation (3 full re-caches in 4 rounds).
-    #
-    # Therefore, Phase D is DISABLED during normal micro_compact runs.
-    # It is ONLY enabled when called from force_compact (Layer 2) where
-    # the cache is about to be rebuilt anyway, so the invalidation cost
-    # is already paid.  This way we still get the token savings when it
-    # matters most (approaching context limit) without hurting cache
-    # during normal operation.
-    #
-    # To enable: pass `enable_assistant_compact=True` explicitly.
-    if kwargs.get('enable_assistant_compact', False):
-        _ASSISTANT_HOT_TAIL = 6   # keep 6 most recent assistant msgs untouched
-        _ASSISTANT_COMPACT_THRESHOLD = 800  # only compact if content > 800 chars
-
-        all_assistant_indices = [
-            i for i, m in enumerate(messages)
-            if m.get('role') == 'assistant'
-        ]
-
-        assistant_compacted = 0
-        assistant_tokens_saved = 0
-
-        if len(all_assistant_indices) > _ASSISTANT_HOT_TAIL:
-            cold_assistant = all_assistant_indices[:-_ASSISTANT_HOT_TAIL]
-            for idx in cold_assistant:
-                msg = messages[idx]
-                content = msg.get('content', '')
-
-                # Skip messages that are tool_calls-only (content is empty/None)
-                if not content:
-                    continue
-
-                # Handle string content
-                if isinstance(content, str):
-                    if len(content) <= _ASSISTANT_COMPACT_THRESHOLD:
-                        continue
-                    # Already compacted?
-                    if content.startswith('[Assistant response compacted'):
-                        continue
-                    old_len = len(content)
-                    preview = content[:200].rstrip()
-                    if not preview.endswith('…') and len(content) > 200:
-                        preview += '…'
-                    msg['content'] = (
-                        f'[Assistant response compacted — was {old_len:,} chars]\n'
-                        f'{preview}'
-                    )
-                    saved = (old_len - len(msg['content'])) // 4
-                    assistant_tokens_saved += saved
-                    assistant_compacted += 1
-
-                # Handle list content (multi-block)
-                elif isinstance(content, list):
-                    total_text_len = 0
-                    for blk in content:
-                        if isinstance(blk, dict) and blk.get('type') == 'text':
-                            total_text_len += len(blk.get('text', ''))
-                    if total_text_len <= _ASSISTANT_COMPACT_THRESHOLD:
-                        continue
-                    # Collect text and compact
-                    text_parts = []
-                    for blk in content:
-                        if isinstance(blk, dict) and blk.get('type') == 'text':
-                            text_parts.append(blk.get('text', ''))
-                    full_text = '\n'.join(text_parts)
-                    if full_text.startswith('[Assistant response compacted'):
-                        continue
-                    preview = full_text[:200].rstrip()
-                    if not preview.endswith('…') and len(full_text) > 200:
-                        preview += '…'
-                    msg['content'] = (
-                        f'[Assistant response compacted — was {total_text_len:,} chars]\n'
-                        f'{preview}'
-                    )
-                    saved = (total_text_len - len(msg['content'])) // 4
-                    assistant_tokens_saved += saved
-                    assistant_compacted += 1
-
-        if assistant_compacted > 0:
-            tokens_saved += assistant_tokens_saved
-            logger.info('[L1-asst] conv=%s  compacted %d cold assistant messages '
-                        '(~%d tokens saved)',
-                        conv_id[:8] if conv_id else '?',
-                        assistant_compacted, assistant_tokens_saved)
+    ctx = CompactionContext(
+        messages=messages,
+        conv_id=conv_id,
+        task=task,
+        constants=make_constants(_c, kwargs.get('constant_overrides')),
+        cache_prefix_count=_cache_prefix_count,
+        ignore_cache_prefix=bool(kwargs.get('ignore_cache_prefix', False)),
+        stamp_fn=_stamp_l1,
+    )
+    tokens_saved += run_steps(step_names, ctx)
 
     # ── Persist conv-form mutations ──
     # When _stamp_l1 mutated the source-of-truth toolContent on a round
@@ -684,18 +291,9 @@ def micro_compact(messages: list, conv_id: str = '', task: dict | None = None,
     # round when this conversation is rebuilt and L1 fires again.
     if _conv_dirty and _conv_messages is not None and conv_id:
         try:
-            from lib.database import DOMAIN_CHAT, get_thread_db, json_dumps_pg
-            import time as _time
-            _db = get_thread_db(DOMAIN_CHAT)
-            _now_ms = int(_time.time() * 1000)
-            cur = _db.execute(
-                'UPDATE conversations SET messages=?, updated_at=? '
-                'WHERE id=? AND user_id=1 AND updated_at=?',
-                (json_dumps_pg(_conv_messages), _now_ms, conv_id,
-                 _conv_updated_at),
-            )
-            _db.commit()
-            _affected = getattr(cur, 'rowcount', None)
+            from lib.agent_core.store import get_conversation_store
+            _affected = get_conversation_store().cas_update_conversation_messages(
+                conv_id, _conv_messages, _conv_updated_at)
             if _affected == 0:
                 logger.info('[L1-persist] conv=%s CAS skipped — row was '
                             'updated by another writer; placeholders will '

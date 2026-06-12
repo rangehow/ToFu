@@ -4,7 +4,6 @@ import hmac
 import io
 import os
 import threading
-import time
 import zipfile
 
 from flask import Blueprint, jsonify, request, send_file

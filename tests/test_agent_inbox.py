@@ -77,6 +77,39 @@ def test_clear_returns_zero_when_empty():
     assert agent_inbox.clear('nonexistent') == 0
 
 
+# ── consume (de-dup of already-delivered agents) ─────────────
+
+def test_consume_removes_only_named_agents():
+    agent_inbox.enqueue('t1', 'a', agent_id='a1')
+    agent_inbox.enqueue('t1', 'b', agent_id='a2')
+    agent_inbox.enqueue('t1', 'c', agent_id='a3')
+    removed = agent_inbox.consume('t1', ['a1', 'a3'])
+    assert removed == 2
+    items = agent_inbox.drain('t1')
+    assert [it['agent_id'] for it in items] == ['a2']
+
+
+def test_consume_all_deletes_bucket():
+    agent_inbox.enqueue('t1', 'a', agent_id='a1')
+    agent_inbox.enqueue('t1', 'b', agent_id='a2')
+    removed = agent_inbox.consume('t1', ['a1', 'a2'])
+    assert removed == 2
+    assert agent_inbox.peek('t1') == 0
+
+
+def test_consume_unknown_agent_is_noop():
+    agent_inbox.enqueue('t1', 'a', agent_id='a1')
+    assert agent_inbox.consume('t1', ['nope']) == 0
+    assert agent_inbox.peek('t1') == 1
+
+
+def test_consume_empty_args_are_noops():
+    agent_inbox.enqueue('t1', 'a', agent_id='a1')
+    assert agent_inbox.consume('', ['a1']) == 0
+    assert agent_inbox.consume('t1', []) == 0
+    assert agent_inbox.peek('t1') == 1
+
+
 def test_clear_tombstones_block_late_enqueues():
     """After clear(), late-arriving items must NOT recreate the inbox."""
     agent_inbox.enqueue('t1', 'a')

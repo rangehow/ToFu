@@ -141,13 +141,15 @@ function _renderKeyCardStatsHTML(provIdx, keyIdx) {
     ? '<span class="stg-keystat-count" title="今日总调用次数（不含 429 限流）">调用 ' + total + '</span>'
     : '<span class="stg-keystat-count" title="今日尚无调用">—</span>';
 
-  return '<span class="stg-keystat-rate" title="' + rateTitle + '">' + srTxt + '</span>' +
-    countChip +
-    (fail > 0 ? '<span class="stg-keystat-fail" title="真正的调用失败次数（网络/5xx/解析错误等，不含 429）">失败 ' + fail + '</span>' : '') +
-    (rl429 > 0 ? '<span class="stg-keystat-429" title="今日收到的 429 限流次数（不计入成功率）；连续 ' + max429 + ' 次会自动停用">限流 ' + rl429 + '</span>' : '') +
+  return '<span class="stg-keystat-metrics">' +
+      '<span class="stg-keystat-rate" title="' + rateTitle + '">' + srTxt + '</span>' +
+      countChip +
+      (fail > 0 ? '<span class="stg-keystat-fail" title="真正的调用失败次数（网络/5xx/解析错误等，不含 429）">失败 ' + fail + '</span>' : '') +
+      (rl429 > 0 ? '<span class="stg-keystat-429" title="今日收到的 429 限流次数（不计入成功率）；连续 ' + max429 + ' 次会自动停用">限流 ' + rl429 + '</span>' : '') +
+    '</span>' +
     streakBadge + badge + lastErr +
     '<span class="stg-keystat-actions">' +
-      '<label class="stg-toggle" title="今日启用/禁用此密钥（明日自动重置）">' +
+      '<label class="stg-toggle stg-key-toggle" title="今日启用/禁用此密钥（明日自动重置）">' +
         '<input type="checkbox"' + (enabled ? ' checked' : '') +
             ' onchange="_onKeyToggle(' + provIdx + ',' + keyIdx + ',this.checked)">' +
         '<span class="stg-toggle-track"><span class="stg-toggle-thumb"></span></span>' +

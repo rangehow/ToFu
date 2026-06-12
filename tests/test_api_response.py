@@ -34,8 +34,19 @@ async def _resolve(resp):
 
 
 def _make_app_ctx():
-    """Build a minimal app for test_request_context."""
+    """Build a minimal app for test_request_context.
+
+    Newer Flask sansio (3.1+) reads ``config['PROVIDE_AUTOMATIC_OPTIONS']``
+    in ``add_url_rule``, but the installed Quart dropped it from
+    ``default_config`` → bare ``Quart(__name__)`` raises ``KeyError`` on
+    construction. ``server.py`` patches ``Quart.default_config`` at import
+    time; replicate that here so this module works standalone too (without
+    importing the whole server).
+    """
     from quart import Quart
+    if 'PROVIDE_AUTOMATIC_OPTIONS' not in Quart.default_config:
+        Quart.default_config = {**Quart.default_config,
+                                'PROVIDE_AUTOMATIC_OPTIONS': True}
     app = Quart(__name__)
     return app
 
@@ -432,6 +443,41 @@ def test_safe_route_decorator():
     _ok('@safe_route catches exceptions, lets ok responses pass')
 
 
+
+def test_safe_route_decorator_async():
+    """@safe_route is dual-mode: an async handler stays awaitable and its
+    exceptions are still caught and turned into a 500 envelope."""
+    import asyncio
+
+    from lib.api_response import api_ok, safe_route
+    app = _make_app_ctx()
+
+    @safe_route
+    async def crashing_async():
+        raise ValueError('bad input async')
+
+    @safe_route
+    async def good_async():
+        return api_ok({'value': 2})
+
+    # The decorated async handler MUST remain a coroutine function so Quart
+    # awaits it natively instead of serializing a leaked coroutine object.
+    assert asyncio.iscoroutinefunction(crashing_async)
+    assert asyncio.iscoroutinefunction(good_async)
+
+    async def _t():
+        async with app.test_request_context('/test'):
+            status, body = await _resolve(await crashing_async())
+            assert status == 500
+            assert body['ok'] is False
+            status, body = await _resolve(await good_async())
+            assert status == 200
+            assert body['value'] == 2
+
+    asyncio.run(_t())
+    _ok('@safe_route (async) stays awaitable; catches async exceptions')
+
+
 def test_request_id_attached_when_set():
     """error responses include request_id when lib.log.req_id() is set."""
     from lib.api_response import api_internal_error
@@ -521,6 +567,7 @@ def main():
         test_api_internal_error_with_exception,
         test_api_internal_error_default,
         test_safe_route_decorator,
+        test_safe_route_decorator_async,
         test_request_id_attached_when_set,
         test_normalize_error_passthrough_dict_envelope,
         test_normalize_error_arbitrary_dict,

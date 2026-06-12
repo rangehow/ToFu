@@ -8,7 +8,7 @@ import json
 import os
 import sys
 
-from flask import Blueprint, jsonify, request
+from flask import jsonify, request
 
 from lib.config_dir import config_path as _config_path
 from lib.log import get_logger
@@ -52,129 +52,16 @@ def _write_server_config(data):
 
 
 # ══════════════════════════════════════════════════════
-#  Pricing-Tier Tag Re-evaluation (cheap, and any future tiers)
+#  Provider defaults + pricing-tier tags
+#  → moved to lib/provider_defaults.py (2026-06). Re-exported with the
+#    legacy private names for the existing call sites in this module.
 # ══════════════════════════════════════════════════════
 
-def _reeval_cheap_tags(providers: list):
-    """Re-evaluate pricing-tier capability tags on all provider models.
-
-    Delegates to :func:`lib.llm_dispatch.config.reevaluate_pricing_tags`,
-    which is driven by the PRICING_TIERS table (currently just 'cheap' —
-    input < $3/1M AND output < $15/1M, strict).  New tiers added to that
-    table are auto-applied here with no further code changes.
-
-    The legacy name ``_reeval_cheap_tags`` is retained for continuity
-    with existing call sites; it now covers every managed tier tag.
-    """
-    from lib.llm_dispatch.config import reevaluate_pricing_tags
-
-    for prov in providers:
-        models = prov.get('models') or []
-        if not models:
-            continue
-        reevaluate_pricing_tags(models, log_prefix='provider=%s' % prov.get('id', '?'))
-
-
-# ══════════════════════════════════════════════════════
-#  Provider Defaults Builder
-# ══════════════════════════════════════════════════════
-
-def _build_default_providers():
-    """Build default provider config from environment/hardcoded values."""
-    import lib as _lib
-    from lib.llm_dispatch.config import (
-        DEFAULT_SLOT_CONFIGS,
-        MODEL_ALIAS_GROUPS,
-        MANAGED_TIER_TAGS,
-        get_pricing_tiers,
-    )
-
-    base_url = getattr(_lib, 'LLM_BASE_URL', '')
-    api_keys = list(getattr(_lib, 'LLM_API_KEYS', []))
-
-    def _auto_cheap(model_id, caps_set, cost):
-        # Apply every managed pricing-tier tag (cheap, plus any future tier).
-        if 'image_gen' in caps_set or 'embedding' in caps_set:
-            return caps_set
-        tiers = get_pricing_tiers(model_id, fallback_cost_per_1k=cost)
-        # Drop any stale managed tier tag not in the current desired set.
-        caps_set -= (MANAGED_TIER_TAGS - tiers)
-        caps_set |= tiers
-        return caps_set
-
-    def _build_chat_model_entry(model_id, think_default):
-        slot_cfg = DEFAULT_SLOT_CONFIGS.get(model_id, {})
-        caps_set = _auto_cheap(model_id, set(slot_cfg.get('caps', {'text'})), slot_cfg.get('cost', 0.01))
-        aliases = []
-        for group in MODEL_ALIAS_GROUPS:
-            if model_id in group:
-                aliases = sorted(a for a in group if a != model_id)
-                break
-        return {
-            'model_id': model_id, 'aliases': aliases, 'capabilities': sorted(caps_set),
-            'rpm': slot_cfg.get('rpm', 30), 'cost': slot_cfg.get('cost', 0.01),
-            'thinking_default': think_default,
-        }
-
-    preset_model_keys = [
-        ('opus', 'LLM_MODEL', True), ('qwen', 'QWEN_MODEL', True),
-        ('gemini', 'GEMINI_MODEL', True), ('gemini_flash', 'GEMINI_FLASH_PREVIEW_MODEL', True),
-        ('doubao', 'DOUBAO_MODEL', True), ('minimax', 'MINIMAX_MODEL', True),
-    ]
-    seen_model_ids = set()
-    models = []
-    presets = {}
-    for preset_key, env_key, think_default in preset_model_keys:
-        model_id = getattr(_lib, env_key, '')
-        if not model_id:
-            continue
-        if preset_key != 'opus':
-            presets[preset_key] = model_id
-        if model_id in seen_model_ids:
-            continue
-        seen_model_ids.add(model_id)
-        models.append(_build_chat_model_entry(model_id, think_default))
-
-    extra_model_keys = [
-        ('GEMINI_PRO_MODEL', True),
-        ('GEMINI_PRO_PREVIEW_MODEL', True),
-        ('CLAUDE_SONNET_MODEL', True),
-    ]
-    for env_key, think_default in extra_model_keys:
-        model_id = getattr(_lib, env_key, '')
-        if not model_id or model_id in seen_model_ids:
-            continue
-        seen_model_ids.add(model_id)
-        models.append(_build_chat_model_entry(model_id, think_default))
-
-    image_gen_id = getattr(_lib, 'IMAGE_GEN_MODEL', '')
-    if image_gen_id and image_gen_id not in seen_model_ids:
-        seen_model_ids.add(image_gen_id)
-        slot_cfg = DEFAULT_SLOT_CONFIGS.get(image_gen_id, {})
-        models.append({
-            'model_id': image_gen_id, 'aliases': [],
-            'capabilities': sorted(slot_cfg.get('caps', {'image_gen'})),
-            'rpm': slot_cfg.get('rpm', 10),
-            'cost': slot_cfg.get('cost', 0.015),
-            'thinking_default': False,
-        })
-
-    for emb_id in getattr(_lib, 'EMBEDDING_MODELS', []):
-        if emb_id in seen_model_ids:
-            continue
-        seen_model_ids.add(emb_id)
-        from lib.embeddings import AVAILABLE_EMBEDDING_MODELS
-        emb_info = AVAILABLE_EMBEDDING_MODELS.get(emb_id, {})
-        models.append({
-            'model_id': emb_id, 'aliases': [],
-            'capabilities': ['embedding'],
-            'rpm': emb_info.get('max_rpm', 60),
-            'cost': 0.001,
-            'thinking_default': False,
-        })
-
-    return [{'id': 'default', 'name': 'Default', 'base_url': base_url,
-             'api_keys': api_keys, 'enabled': True, 'models': models}], presets
+from lib.provider_defaults import (  # noqa: E402
+    build_default_providers as _build_default_providers,
+    reeval_cheap_tags as _reeval_cheap_tags,
+)
+from lib.provider_balance import normalize_balance as _normalize_balance  # noqa: E402
 
 
 # ══════════════════════════════════════════════════════
@@ -270,7 +157,6 @@ def get_server_config():
         for k, v in saved['models'].items():
             models[k] = v
 
-    import lib.fetch.content_filter as _cf_mod
     search_info = {
         'fetch_top_n': getattr(_lib, 'FETCH_TOP_N', 6),
         'fetch_timeout': getattr(_lib, 'FETCH_TIMEOUT', 15),
@@ -279,13 +165,15 @@ def get_server_config():
         'max_chars_pdf': getattr(_lib, 'FETCH_MAX_CHARS_PDF', 0),
         'max_bytes': getattr(_lib, 'FETCH_MAX_BYTES', 20 * 1024 * 1024),
         'skip_domains': sorted(getattr(_lib, 'SKIP_DOMAINS', set())),
-        'llm_content_filter': _cf_mod.FILTER_ENABLED,
+        'llm_content_filter': getattr(_lib, 'LLM_CONTENT_FILTER_ENABLED', True),
     }
     if 'search' in saved:
         search_info.update(saved['search'])
         # Apply saved llm_content_filter on config load (page refresh / startup)
         if 'llm_content_filter' in saved['search']:
-            _cf_mod.FILTER_ENABLED = bool(saved['search']['llm_content_filter'])
+            _lib.LLM_CONTENT_FILTER_ENABLED = bool(saved['search']['llm_content_filter'])
+            from lib.search_bridge import sync_search_config
+            sync_search_config()
 
     total_keys = sum(len(p.get('api_keys', [])) for p in providers)
     total_models = sum(len(p.get('models', [])) for p in providers)
@@ -425,6 +313,39 @@ def get_server_config():
         logger.warning('[ServerConfig] upload policy unavailable: %s', e)
         upload_policy = {}
 
+    # Context-window policy — single source of truth for the Context Health
+    # Bar (static/js/context-bar.js). The bar used to hard-code a copy of the
+    # limit table + compaction thresholds, which silently drifted from the
+    # Python constants (e.g. 0.82 vs the real 0.90). Now it reads these.
+    # ``per_model`` carries the resolved limit (static preset + auto-learned
+    # override) for every model in the dropdown, so the gauge never re-derives.
+    try:
+        from lib.tasks_pkg.compaction import (
+            build_context_policy, resolve_model_context_limit,
+        )
+        context_policy = build_context_policy()
+        per_model = {}
+        for dm in dropdown_models:
+            mid = dm.get('model_id', '')
+            if not mid or mid in per_model:
+                continue
+            per_model[mid] = resolve_model_context_limit(
+                mid, dm.get('provider_id', '') or '')
+        context_policy['per_model'] = per_model
+    except Exception as e:
+        logger.warning('[ServerConfig] context policy unavailable: %s', e)
+        context_policy = {}
+
+    # Translation policy — single source of truth for the frontend's
+    # stale-partial-translation heuristic (was hard-coded 0.15 in
+    # static/js/translation.js). See lib/text_lang.stale_translation_policy().
+    try:
+        from lib.text_lang import stale_translation_policy
+        translation_policy = stale_translation_policy()
+    except Exception as e:
+        logger.warning('[ServerConfig] translation policy unavailable: %s', e)
+        translation_policy = {}
+
     return jsonify({
         'providers': providers, 'presets': presets,
         'models': models, 'search': search_info,
@@ -441,6 +362,8 @@ def get_server_config():
         'network': network_info,
         'mt_provider': mt_provider_info,
         'upload': upload_policy,
+        'context': context_policy,
+        'translation': translation_policy,
     })
 
 
@@ -478,6 +401,7 @@ def feishu_status():
 def check_provider_balance():
     """Proxy a balance/billing check to a provider's billing API."""
     import requests as _requests
+    from lib.http_client import http_get
 
     data = parse_body()
     balance_url = (data.get('balance_url') or '').strip()
@@ -494,7 +418,7 @@ def check_provider_balance():
     logger.info('[Balance] Checking balance at %.200s', balance_url)
 
     try:
-        resp = _requests.get(balance_url, headers=headers, timeout=15)
+        resp = http_get(balance_url, headers=headers, timeout=15)
         resp.raise_for_status()
         billing = resp.json()
     except _requests.Timeout:
@@ -507,97 +431,10 @@ def check_provider_balance():
         logger.warning('[Balance] Invalid JSON from %s: %s', balance_url, e)
         return api_error('Invalid JSON response', status=502)
 
-    result = _normalize_balance(billing, balance_url, headers, _requests)
+    result = _normalize_balance(billing, balance_url, headers)
 
     logger.info('[Balance] Result: %s', {k: v for k, v in result.items() if k != 'raw'})
     return api_ok({'balance': result})
-def _normalize_balance(billing, balance_url, headers, _requests):
-    """Normalize different provider balance formats into a unified structure.
-
-    Unified output fields (all optional):
-      - balance_usd: remaining balance in USD
-      - used_usd: total used in USD
-      - limit_usd: total limit/quota in USD
-      - currency: original currency if non-USD
-      - balance_local: remaining in original currency
-      - hard_limit_usd / total_usage_cents: legacy OpenAI format
-      - raw: original response if nothing else matched
-    """
-    result = {}
-
-    # ── Format 1: OpenAI /subscription style (hard_limit_usd) ──
-    if 'hard_limit_usd' in billing:
-        result['hard_limit_usd'] = billing['hard_limit_usd']
-        result['limit_usd'] = billing['hard_limit_usd']
-        result['soft_limit_usd'] = billing.get('soft_limit_usd')
-
-        if balance_url.endswith('/subscription'):
-            usage_url = balance_url.rsplit('/subscription', 1)[0] + '/usage'
-            try:
-                uresp = _requests.get(usage_url, headers=headers, timeout=15)
-                uresp.raise_for_status()
-                usage_data = uresp.json()
-                if 'total_usage' in usage_data:
-                    result['total_usage_cents'] = usage_data['total_usage']
-                    result['used_usd'] = usage_data['total_usage'] / 100
-                    result['balance_usd'] = result['limit_usd'] - result['used_usd']
-            except Exception as e:
-                logger.debug('[Balance] Usage fetch from %s failed (non-critical): %s', usage_url, e)
-        return result
-
-    # ── Format 2: DeepSeek /user/balance (balance_infos array) ──
-    if 'balance_infos' in billing:
-        infos = billing.get('balance_infos', [])
-        result['is_available'] = billing.get('is_available', True)
-        if infos:
-            # Prefer USD, fallback to first entry
-            info = infos[0]
-            for bi in infos:
-                if bi.get('currency', '').upper() == 'USD':
-                    info = bi
-                    break
-            currency = info.get('currency', 'CNY')
-            total = float(info.get('total_balance', 0))
-            granted = float(info.get('granted_balance', 0))
-            topped_up = float(info.get('topped_up_balance', 0))
-            result['currency'] = currency
-            result['balance_local'] = total
-            result['granted_balance'] = granted
-            result['topped_up_balance'] = topped_up
-            # Approximate USD if CNY
-            if currency.upper() == 'USD':
-                result['balance_usd'] = total
-            else:
-                result['balance_usd'] = round(total / 7.2, 2)  # approximate CNY→USD
-        return result
-
-    # ── Format 3: OpenRouter /credits (data.total_credits / total_usage) ──
-    credits_data = billing.get('data', billing)
-    if 'total_credits' in credits_data:
-        tc = float(credits_data.get('total_credits', 0))
-        tu = float(credits_data.get('total_usage', 0))
-        result['limit_usd'] = round(tc, 4)
-        result['used_usd'] = round(tu, 4)
-        result['balance_usd'] = round(tc - tu, 4)
-        return result
-
-    # ── Format 4: Generic — look for common field names ──
-    for key in ('balance', 'remaining', 'credits', 'available_balance'):
-        if key in billing:
-            val = billing[key]
-            if isinstance(val, (int, float)):
-                result['balance_usd'] = float(val)
-                return result
-            if isinstance(val, str):
-                try:
-                    result['balance_usd'] = float(val)
-                    return result
-                except (ValueError, TypeError) as e:
-                    logger.debug('[Config] balance_usd parse failed for key=%s: %s', key, e)
-
-    # ── Fallback: return raw data ──
-    result['raw'] = billing
-    return result
 
 
 @config_bp.route('/api/v1/providers/discover-models', methods=['POST'])
@@ -908,6 +745,145 @@ def probe_provider_bulk():
     })
 
 
+# ══════════════════════════════════════════════════════
+#  Access-matrix cell-probe engine
+#  → moved to lib/provider_probe.py (2026-06). Re-exported here with the
+#    legacy private names used by the probe route handlers below + tests.
+# ══════════════════════════════════════════════════════
+import threading  # noqa: E402
+import time as _time  # noqa: E402
+
+from lib.json_store import read_json  # noqa: E402,F401  (used by probe handlers)
+from lib.provider_probe import (  # noqa: E402,F401
+    probe_one_cell as _probe_one_cell,
+    probe_cell_multi as _probe_cell_multi,
+    run_cell_probe_task as _run_cell_probe_task,
+    probe_cache_path as _probe_cache_path,
+    probe_cell_key as _probe_cell_key,
+    persist_probe_task as _persist_probe_task,
+    public_probe_snapshot as _public_probe_snapshot,
+    CELL_PROBE_TASKS as _CELL_PROBE_TASKS,
+    CELL_PROBE_LOCK as _CELL_PROBE_LOCK,
+)
+
+@config_bp.route('/api/v1/providers/probe-cells/start', methods=['POST'])
+def probe_provider_cells_start():
+    """Start (or resume) a background per-(key × id) reachability probe.
+
+    Body: ``{provider_id, base_url, api_keys: [str], extra_headers?: {},
+    models: [{model_id, aliases?: [str]}], timeout?: int, attempts?: int,
+    force?: bool}``. ``attempts`` (default 3, clamped 1..5) re-probes a
+    transiently-failing cell to filter out FALSE 429s.
+
+    Behaviour:
+      * If a probe for ``provider_id`` is already running → return its
+        live snapshot (does NOT restart).
+      * Else if ``force`` is false and a persisted snapshot exists on disk
+        → return that (resume after Settings was closed / server restarted).
+      * Else start a fresh background probe and return its initial snapshot.
+
+    Each alias is probed as its own cell (aliases are distinct models).
+    """
+    data = parse_body()
+    provider_id = (data.get('provider_id') or '').strip()
+    base_url = (data.get('base_url') or '').strip()
+    api_keys = data.get('api_keys') or []
+    extra_headers = data.get('extra_headers') or {}
+    models = data.get('models') or []
+    timeout = int(data.get('timeout') or 12)
+    attempts = max(1, min(5, int(data.get('attempts') or 3)))
+    protocol = (data.get('protocol') or 'openai').strip() or 'openai'
+    force = bool(data.get('force'))
+
+    if not provider_id:
+        return api_bad_request('provider_id is required')
+    if not base_url:
+        return api_bad_request('base_url is required')
+    if not isinstance(api_keys, list) or not api_keys:
+        return api_bad_request('api_keys (non-empty list) is required')
+    if not isinstance(models, list) or not models:
+        return api_bad_request('models (non-empty list) is required')
+
+    with _CELL_PROBE_LOCK:
+        existing = _CELL_PROBE_TASKS.get(provider_id)
+        if existing and existing['status'] == 'running' and not force:
+            logger.info('[CellProbe] %s already running — returning live snapshot', provider_id)
+            return api_ok(_public_probe_snapshot(existing))
+
+    if not force:
+        cached = read_json(_probe_cache_path(provider_id), default=None)
+        if isinstance(cached, dict) and cached.get('cells'):
+            logger.info('[CellProbe] %s resumed from disk (%d cells, status=%s)',
+                        provider_id, len(cached['cells']), cached.get('status'))
+            return api_ok(cached)
+
+    # Build the work list: one cell per (key_idx, concrete id). Every alias
+    # is its own cell because aliases can be different upstream models.
+    work = []
+    for key_idx, api_key in enumerate(api_keys):
+        for m in models:
+            root = (m.get('model_id') or '').strip()
+            if not root:
+                continue
+            for mid in [root] + [a for a in (m.get('aliases') or []) if a]:
+                work.append((key_idx, api_key, root, mid))
+
+    if not work:
+        return api_bad_request('no testable (key, model) pairs')
+    if len(work) > 400:
+        return api_bad_request('too many cells to probe (%d > 400)' % len(work))
+
+    task = {
+        'provider_id': provider_id,
+        'status': 'running',
+        'started_at': _time.time(),
+        'finished_at': None,
+        'total': len(work),
+        'done_count': 0,
+        'cells': {},
+        'summary': {'ok': 0, 'disable': 0},
+        'error': None,
+        'attempts': attempts,
+        '_abort': False,
+        '_base_url': base_url,
+        '_extra_headers': extra_headers,
+        '_protocol': protocol,
+    }
+    with _CELL_PROBE_LOCK:
+        _CELL_PROBE_TASKS[provider_id] = task
+    _persist_probe_task(task)
+
+    th = threading.Thread(target=_run_cell_probe_task, args=(task, work, timeout),
+                          name='cell-probe-%s' % provider_id[:24], daemon=True)
+    th.start()
+
+    logger.info('[CellProbe] Launched background probe for %s (%d cells, force=%s)',
+                provider_id, len(work), force)
+    return api_ok(_public_probe_snapshot(task))
+
+
+@config_bp.route('/api/v1/providers/probe-cells/status', methods=['GET'])
+def probe_provider_cells_status():
+    """Poll a provider's probe progress: live task if any, else disk snapshot.
+
+    Query: ``?provider_id=X``. Returns the same snapshot shape as ``start``,
+    or ``{status: 'none'}`` when nothing has ever been probed.
+    """
+    provider_id = (request.args.get('provider_id') or '').strip()
+    if not provider_id:
+        return api_bad_request('provider_id is required')
+
+    with _CELL_PROBE_LOCK:
+        task = _CELL_PROBE_TASKS.get(provider_id)
+        if task:
+            return api_ok(_public_probe_snapshot(task))
+
+    cached = read_json(_probe_cache_path(provider_id), default=None)
+    if isinstance(cached, dict) and cached.get('cells') is not None:
+        return api_ok(cached)
+    return api_ok({'status': 'none'})
+
+
 @config_bp.route('/api/v1/providers/templates')
 def get_provider_templates():
     """Serve external provider templates from static/provider_templates/*.json.
@@ -1024,9 +1000,10 @@ def save_server_config():
         existing['search'] = data['search']
         # LLM content filter is a separate module-level flag
         if 'llm_content_filter' in data['search']:
-            import lib.fetch.content_filter as _cf_mod
-            _cf_mod.FILTER_ENABLED = bool(data['search']['llm_content_filter'])
-            logger.info('[Config] LLM content filter → %s', _cf_mod.FILTER_ENABLED)
+            _lib.LLM_CONTENT_FILTER_ENABLED = bool(data['search']['llm_content_filter'])
+            from lib.search_bridge import sync_search_config
+            sync_search_config()
+            logger.info('[Config] LLM content filter → %s', _lib.LLM_CONTENT_FILTER_ENABLED)
         changes.append('search.*')
 
     if 'hidden_models' in data and isinstance(data['hidden_models'], list):

@@ -1,3 +1,12 @@
+---
+name: Export bakes corp proxy into install.sh
+description: export.py _patch_install_sh_proxy injects http_proxy/https_proxy/no_proxy export block into install.sh after 'set -euo pipefail' for personal+internal modes (never opensource); values read from server_config.json proxy_config
+enabled: true
+tags: [export, install.sh, proxy, corp-network]
+created: 2026-05-07T06:45:40Z
+updated: 2026-05-07T06:45:40Z
+---
+
 # Export bakes corp proxy into install.sh (personal + internal)
 
 ## Why

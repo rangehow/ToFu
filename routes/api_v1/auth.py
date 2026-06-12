@@ -66,6 +66,7 @@ never enforce 429.
 
 from __future__ import annotations
 
+import asyncio
 import functools
 import hashlib
 import logging
@@ -148,6 +149,48 @@ def _is_public(path: str) -> bool:
     return any(path.startswith(p) for p in _PUBLIC_PREFIXES)
 
 
+# Open mode hands every request a synthetic full-admin context. That is
+# safe ONLY for a loopback-bound personal install. If the server is bound
+# to a routable interface (0.0.0.0, Docker port-map, a tunnel) while in
+# open mode, a remote client would otherwise reach the admin API with no
+# credential. We therefore restrict the synthetic grant to loopback peers
+# unless the operator explicitly opts in.
+_OPEN_MODE_ALLOW_REMOTE = (
+    os.environ.get('TOFU_OPEN_MODE_ALLOW_REMOTE', '').strip().lower()
+    in ('1', 'true', 'yes', 'on'))
+
+
+def _remote_is_loopback() -> bool:
+    """True when the request peer is the local host (127.0.0.0/8, ::1).
+
+    Uses ``request.remote_addr`` — the direct socket peer, NOT any
+    ``X-Forwarded-For`` header (which a remote client can spoof). A
+    reverse proxy on the same host still presents 127.0.0.1, so a
+    loopback-only proxy deployment keeps working; a proxy on another box
+    correctly reads as non-loopback.
+    """
+    import ipaddress
+    addr = (request.remote_addr or '').strip()
+    if not addr:
+        # No peer info (some ASGI test harnesses): fail closed.
+        return False
+    # Quart's in-process test client reports the literal '<local>' — an
+    # in-process call IS the local host. Hypercorn uses real socket addrs.
+    if addr == '<local>':
+        return True
+    # Strip IPv6 zone id if present (e.g. 'fe80::1%eth0').
+    addr = addr.split('%', 1)[0]
+    try:
+        ip = ipaddress.ip_address(addr)
+    except ValueError:
+        return False
+    if ip.is_loopback:
+        return True
+    # IPv4-mapped IPv6 loopback (::ffff:127.0.0.1).
+    mapped = getattr(ip, 'ipv4_mapped', None)
+    return bool(mapped and mapped.is_loopback)
+
+
 def _is_api_path(path: str) -> bool:
     """Path participates in the headless contract (rate limits + 401 envelope).
 
@@ -191,6 +234,24 @@ def _extract_bearer_or_cookie() -> str:
     return ''
 
 
+def _token_source(token: str) -> str:
+    """Return which transport carried ``token`` (for diagnostic logging).
+
+    Mirrors the priority order of :func:`_extract_bearer_or_cookie`.
+    """
+    auth = request.headers.get('Authorization', '') or ''
+    parts = auth.split(None, 1)
+    if len(parts) == 2 and parts[0].lower() == 'bearer' and parts[1].strip() == token:
+        return 'header'
+    if (request.headers.get('x-api-key') or '').strip() == token:
+        return 'x-api-key'
+    if (request.cookies.get(SESSION_COOKIE) or '').strip() == token:
+        return 'cookie'
+    if (request.args.get('token') or '').strip() == token:
+        return 'query'
+    return 'unknown'
+
+
 def _legacy_tunnel_token_passes() -> bool:
     """Back-compat: honour ``TUNNEL_TOKEN`` if a deployment still sets it.
 
@@ -201,13 +262,14 @@ def _legacy_tunnel_token_passes() -> bool:
     tt = os.environ.get('TUNNEL_TOKEN', '')
     if not tt:
         return False
+    import hmac
     cookie_val = request.cookies.get('_tunnel_auth') or ''
     expected = hashlib.sha256(tt.encode()).hexdigest()[:32]
-    if cookie_val == expected:
+    if hmac.compare_digest(cookie_val, expected):
         return True
-    if request.headers.get('X-Tunnel-Token', '') == tt:
+    if hmac.compare_digest(request.headers.get('X-Tunnel-Token', ''), tt):
         return True
-    if request.args.get('token', '') == tt:
+    if hmac.compare_digest(request.args.get('token', ''), tt):
         return True
     return False
 
@@ -244,10 +306,27 @@ async def auth_before_request():
             ctx_open = validate_token(token)
             if ctx_open is not None:
                 touch_key(ctx_open.key_id)
+        # Synthetic full-admin grant is loopback-only by default. A
+        # remote peer in open mode does NOT get the free admin context;
+        # it must present a valid credential (resolved above) or it
+        # falls through to the private-mode rejection path below. This
+        # closes the "bind 0.0.0.0 + open mode = unauthenticated admin"
+        # foot-gun. Operators who front the server with their own auth
+        # can opt back in via TOFU_OPEN_MODE_ALLOW_REMOTE=1.
         if ctx_open is None:
-            ctx_open = local_admin_context()
-        g.auth_ctx = ctx_open
-        return None
+            if _OPEN_MODE_ALLOW_REMOTE or _remote_is_loopback():
+                ctx_open = local_admin_context()
+            else:
+                # Remote, unauthenticated, open mode → behave like
+                # private mode for this request (fall through).
+                _auth_log.warning(
+                    'Auth: open-mode synthetic admin refused for non-loopback '
+                    'peer %s on %s (set TOFU_OPEN_MODE_ALLOW_REMOTE=1 to allow)',
+                    request.remote_addr, path)
+        if ctx_open is not None:
+            g.auth_ctx = ctx_open
+            return None
+        # else: fall through to the credential-required gate below.
 
     is_public = path in _PUBLIC_EXACT
 
@@ -270,12 +349,22 @@ async def auth_before_request():
             # public-list status. Don't fall through to other auth
             # mechanisms because the user has clearly tried to
             # authenticate and we should tell them it failed.
-            _auth_log.warning('Auth: rejected token (path=%s '
-                              'remote=%s)', path, request.remote_addr)
+            # Log a token prefix (first 16 chars — enough to grep, not
+            # enough to be a usable secret) + the transport it arrived
+            # on, so a token-vs-keystore mismatch (e.g. a stale
+            # .first_run_token) is diagnosable from logs/app.log alone.
+            _auth_log.warning('Auth: rejected token prefix=%.16s source=%s '
+                              '(path=%s remote=%s)', token,
+                              _token_source(token), path,
+                              request.remote_addr)
             return jsonify({
                 'ok': False,
                 'error': {'kind': 'unauthorized',
-                          'detail': 'Invalid or expired API key'},
+                          'detail': 'Invalid or expired API key. If you '
+                                    'copied it from '
+                                    'data/config/.first_run_token, that '
+                                    'token may have been rotated — restart '
+                                    'the server to mint a fresh one.'},
             }), 401
 
     # 2. Back-compat: legacy TUNNEL_TOKEN flow.
@@ -334,7 +423,10 @@ async def auth_before_request():
             '<code>?token=YOUR_TOKEN</code> appended, or send '
             '<code>Authorization: Bearer YOUR_TOKEN</code>.</p>'
             '<p>The token is printed on first server boot and saved to '
-            '<code>data/config/.first_run_token</code>.</p>',
+            '<code>data/config/.first_run_token</code>.</p>'
+            '<p>If you copied a token from that file but still get '
+            '<em>Invalid or expired API key</em>, the key was rotated — '
+            'restart the server to mint a fresh one.</p>',
             status=401, content_type='text/html; charset=utf-8',
         )
 
@@ -387,8 +479,21 @@ def current_auth() -> Optional[AuthContext]:
 def require_auth(fn):
     """Decorator: 401 if no AuthContext is attached.
 
-    Most routes prefer ``@require_scope('\u2026')`` which implies auth.
+    Most routes prefer ``@require_scope('…')`` which implies auth.
+
+    Dual-mode: an ``async def`` handler is wrapped by an async wrapper so
+    it stays a coroutine function (Quart awaits it natively); a sync
+    handler keeps a sync wrapper (Quart runs it in its thread-pool).
     """
+    if asyncio.iscoroutinefunction(fn):
+        @functools.wraps(fn)
+        async def wrapper(*args, **kwargs):
+            ctx = current_auth()
+            if ctx is None or not ctx.is_authenticated:
+                return api_unauthorized('Authentication required')
+            return await fn(*args, **kwargs)
+        return wrapper
+
     @functools.wraps(fn)
     def wrapper(*args, **kwargs):
         ctx = current_auth()
@@ -408,23 +513,39 @@ def require_scope(*scopes: str):
     if not scopes:
         raise ValueError('require_scope needs at least one scope')
 
+    def _denied(ctx):
+        """Return the rejection response, or None when access is granted."""
+        if ctx is None or not ctx.is_authenticated:
+            return api_unauthorized('Authentication required')
+        for sc in scopes:
+            if not ctx.has_scope(sc):
+                audit_log('api_forbidden', key_id=ctx.key_id,
+                          name=ctx.name, missing_scope=sc,
+                          path=request.path)
+                return api_forbidden(
+                    f'Missing required scope: {sc}',
+                    missing_scope=sc,
+                    required_scopes=list(scopes),
+                    granted_scopes=sorted(ctx.scopes),
+                )
+        return None
+
     def decorator(fn):
+        if asyncio.iscoroutinefunction(fn):
+            @functools.wraps(fn)
+            async def wrapper(*args, **kwargs):
+                denied = _denied(current_auth())
+                if denied is not None:
+                    return denied
+                return await fn(*args, **kwargs)
+            wrapper._required_scopes = list(scopes)
+            return wrapper
+
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
-            ctx = current_auth()
-            if ctx is None or not ctx.is_authenticated:
-                return api_unauthorized('Authentication required')
-            for sc in scopes:
-                if not ctx.has_scope(sc):
-                    audit_log('api_forbidden', key_id=ctx.key_id,
-                              name=ctx.name, missing_scope=sc,
-                              path=request.path)
-                    return api_forbidden(
-                        f'Missing required scope: {sc}',
-                        missing_scope=sc,
-                        required_scopes=list(scopes),
-                        granted_scopes=sorted(ctx.scopes),
-                    )
+            denied = _denied(current_auth())
+            if denied is not None:
+                return denied
             return fn(*args, **kwargs)
         wrapper._required_scopes = list(scopes)
         return wrapper

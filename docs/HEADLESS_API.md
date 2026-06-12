@@ -123,6 +123,7 @@ available via `config`.
   ],
   "tools": [...],                                       // optional, OpenAI-shaped
   "tool_choice": "auto",                                // optional
+  "response_format": {"type": "json_object"},           // optional; forwarded to the engine (JSON mode)
   "temperature": 1.0,
   "max_tokens": 32768,
   "stream": false,                                      // true → SSE
@@ -135,13 +136,30 @@ available via `config`.
     "agentBackend": "builtin",
     "endpointMode": false,
     "swarmEnabled": false,
-    "mcpEnabled": true
+    "mcpEnabled": true,
+    "disableModelFallback": false
   },
   "conversation_id": "my-headless-job-001",             // optional
   "idempotency_key": "uuid-or-anything-stable",          // optional, replays cached response
   "timeout_s": 600
 }
 ```
+
+> **⚠️ Automatic model fallback (important for pinned-model callers).**
+> The server admin can configure a global *fallback model* (Settings →
+> model defaults). When set, a transient error on your requested model
+> causes Tofu to **silently re-run that round on the fallback model** —
+> so a request pinned to `model: "X"` can return output from a different
+> model. The done event / task snapshot expose this via
+> `fallbackModel` / `fallbackFrom` / `fallbackReason`, so always inspect
+> them if model identity matters. For reproducible runs, benchmarks, or
+> evals where you must measure ONLY the requested model, set
+> `config.disableModelFallback: true`: the round then surfaces the
+> primary error (envelope `context: "fallback-disabled"`) instead of
+> switching. The fallback *target* itself is admin-only; this flag is
+> the per-request opt-out. Whether a deployment has a fallback model is
+> not exposed in `/capabilities` (it's a server secret), so treat the
+> opt-out as the safe default for deterministic pipelines.
 
 **Sync response** (`stream:false`):
 
@@ -577,6 +595,92 @@ HTTP/1.1 403 Forbidden
 }
 ```
 
+### 3.8 Error model
+
+Tofu uses **two** complementary error channels. Match on the structured
+fields below — never substring-match `error.message` / `detail`, which
+are human-facing and may change.
+
+**1. HTTP-level errors** (request rejected before/around dispatch) come
+back as `{ok: false, error: <string|envelope>}` with the HTTP status
+set. Some carry extra top-level fields a client can branch on:
+
+| Status | Extra top-level fields | Meaning |
+|--------|------------------------|---------|
+| 400 | `field` | Malformed request; `field` names the offending key |
+| 401 | — | Missing / invalid API key |
+| 403 | `missing_scope`, `required_scopes`, `granted_scopes` | Key lacks a scope (see §3.7.5) |
+| 402 | `error_kind: "insufficient_funds"`, `balance_micro`, `needed_micro` | Pre-flight credit reservation failed (multi-user installs) |
+| 404 | — | Unknown task / resource |
+| 429 | `Retry-After` header | Rate / token limit hit |
+| 500 | `request_id` | Internal error; quote `request_id` in bug reports |
+
+**2. Task-level errors** (the LLM call or a tool failed mid-task) arrive
+as a **typed error envelope** — on `task['error']`, in the terminal
+`done` event's `error` field (SSE / WebSocket), and in
+`GET /api/v1/tasks/{id}`. The envelope is the discoverable contract:
+
+```jsonc
+{
+  "kind":      "ratelimit",     // closed enum — classify on THIS
+  "severity":  "warning",        // "warning" | "error"
+  "retryable": true,             // is retrying the same request likely to help?
+  "message":   "…",              // short bilingual title (display)
+  "hint":      "…",              // bilingual recovery hint (display)
+  "detail":    "HTTP 429: …",    // technical detail (truncated)
+  "model":     "claude-opus-4-7",
+  "context":   "fallback",
+  "source":    "llm-stream",
+  "raw":       "…"               // raw upstream text (≤300 chars)
+}
+```
+
+`kind` is a **closed enum** — a typo never leaks through as a silent
+generic; unknown values are downgraded to `generic` server-side. Stable
+values:
+
+| `kind` | `retryable` | Meaning / typical fix |
+|--------|:-----------:|------------------------|
+| `quota` | no | API-key balance / quota exhausted → top up or swap key |
+| `ratelimit` | yes | 429 / TPM-RPM throttle → wait and retry |
+| `permission` | no | 401 / 403 from the upstream provider; key invalid or lacks model access |
+| `no_slot` | yes | Dispatcher found zero usable key slots |
+| `dispatch_exhausted` | no | Every slot for this capability was tried |
+| `timeout` | yes | Upstream / network read timeout |
+| `network` | yes | Connection error, DNS, proxy reset |
+| `content_filter` | no | Provider safety filter blocked the response |
+| `invalid_image` | no | Image content rejected (too large / corrupt) |
+| `prompt_too_long` | no | Context overflow after auto-compaction |
+| `stream_only` | no | Model rejects non-streaming calls |
+| `model_limit` | no | `max_tokens` exceeded the model's learned cap |
+| `tool_rounds_exhausted` | no | Hit the per-task tool-round budget |
+| `tool_timeout` | yes | Repeated tool-execution timeouts |
+| `premature_close` | yes | SSE stream cut off (retries exhausted) |
+| `abnormal_stop` | yes | Missing finish marker / partial reply |
+| `aborted` | no | User cancelled |
+| `server_offline` | yes | Client lost contact with the server |
+| `internal` | no | Backend bug — check `logs/error.log` |
+| `generic` | no | Unrecognised — last-resort fallback |
+
+> A successful HTTP 200 can still carry a task-level failure: in
+> non-stream mode the body's `finish_reason` is `stop` while a
+> `tofu_error` / `error` envelope is present; in stream mode the
+> terminal `done` frame carries it. Always inspect the envelope before
+> treating a 200 as success.
+
+The enum is the single source of truth in
+[`lib/error_envelope.py`](../lib/error_envelope.py) (`KINDS`); a drift
+test keeps it honest.
+
+> The envelope's `context` field is a free-form diagnostic tag (not a
+> closed enum). One value worth recognising: `context:
+> "fallback-disabled"` means the primary model errored and automatic
+> fallback was suppressed because this request set
+> `config.disableModelFallback: true`. The error you see is the real
+> primary-model error — branch on `kind` / `retryable` as usual and
+> retry on the SAME model rather than expecting a fallback to have
+> masked it.
+
 ---
 
 ## 4. Compatibility adapters
@@ -647,6 +751,54 @@ webhooks):
 |-------------|-----------------------|-------------------------------------|
 | Python      | `clients/python/`     | `pip install -e clients/python[cli]`. Provides the `tofu` CLI. |
 | TypeScript  | `clients/typescript/` | Works in Node 18+, browsers, Cloudflare Workers, Vercel Edge, Deno, Bun. |
+
+### 4.5 In-process façade (`import tofu`)
+
+When your code runs **in the same Python process** as Tofu (an embedding
+Flask/FastAPI app, a notebook, a worker that imported the package), use the
+top-level `tofu` façade instead of the HTTP API — no socket, no SSE
+re-parsing, and crucially **no vendoring of `lib/` internals**. It calls the
+exact same orchestrator the HTTP route does.
+
+```python
+import tofu
+
+# Blocking turn — mirrors POST /api/v1/chat/completions (stream=false).
+res = tofu.chat(
+    messages=[{"role": "user", "content": "Summarise this as JSON"}],
+    model="claude-opus-4-7",
+    response_format={"type": "json_object"},
+    config={"thinkingDepth": "high", "tools": ["search"]},
+)
+if res.ok:
+    print(res.content, res.usage)
+else:
+    print("failed:", res.error["kind"], res.error["message"])   # typed envelope
+
+# Streaming — yields the SAME native event dicts as §3.6.1.
+for ev in tofu.stream(messages=[{"role": "user", "content": "Hi"}],
+                      model="claude-opus-4-7"):
+    if ev["type"] == "delta" and ev.get("content"):
+        print(ev["content"], end="", flush=True)
+
+caps = tofu.capabilities()   # same payload as GET /api/v1/capabilities
+```
+
+* **Request knobs** mirror the HTTP chat body (`model`, `messages`,
+  `response_format`, `tools`, `temperature`, `max_tokens`, `config`, …);
+  explicit `config` values win over the top-level knobs.
+* **`tofu.chat`** returns a `ChatResult` — inspect `res.ok` /
+  `res.error["kind"]`, not just `res.content` (a turn can finish empty with a
+  typed error envelope per §3.8).
+* **`tofu.stream`** yields the native event vocabulary directly (switch on
+  `ev["type"]`); the terminal `done` event carries `error` on failure.
+* **Out of scope by design:** multi-user **billing** and **BYO ephemeral
+  providers** are HTTP-key-scoped and remain `/api/v1/*`-only. The in-process
+  façade is for trusted same-process embedders. Use the HTTP API / `tofu-sdk`
+  when you need those.
+* The kernel both surfaces share lives in `lib/tasks_pkg/entry.py`
+  (`build_chat_config` / `run_chat_sync` / `run_chat_stream`), so the HTTP
+  route and `import tofu` can never drift on how a request becomes a task.
 
 ---
 

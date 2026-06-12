@@ -33,6 +33,9 @@ class LLMDispatcher:
         self.slots: list[Slot] = []
         self._initialized = False
         self._lock = threading.Lock()
+        # id → frozenset routing group, merged from config aliases + static
+        # MODEL_ALIAS_GROUPS. Rebuilt by _build_alias_index during slot build.
+        self._alias_index: dict[str, frozenset] = {}
 
     def initialize(self):
         """Build slot pool from env vars + benchmark data. Idempotent."""
@@ -232,7 +235,8 @@ class LLMDispatcher:
         key combination so the dispatcher load-balances across the fleet.
         """
         self._direct_models = set()
-        from lib.llm_dispatch.discovery import normalize_base_url
+        config_alias_groups: list[set] = []
+        from lib.llm_dispatch.discovery import normalize_base_url, should_bypass_proxy
         from lib.proxy import register_no_proxy_url
 
         for provider in providers:
@@ -244,6 +248,7 @@ class LLMDispatcher:
             api_keys = provider.get('api_keys', [])
             prov_extra_headers = provider.get('extra_headers') or {}
             prov_thinking_format = provider.get('thinking_format', '')
+            prov_protocol = provider.get('protocol', '')
 
             # ── Multi-endpoint expansion for local providers ──
             # Backwards-compatible: when 'endpoints' is absent we fall back
@@ -268,9 +273,12 @@ class LLMDispatcher:
             # Self-hosted endpoints sit on private (or pseudo-private) IPs
             # that corp HTTP proxies can't reach. Pre-register them for
             # proxy bypass so the very first request out of the gate goes
-            # direct.  No-op for cloud providers.
-            if provider.get('brand') == 'local':
-                for url in endpoint_urls:
+            # direct. Covers brand=='local' AND any bare-IP endpoint (a
+            # raw-IP base URL is in practice always self-hosted, including
+            # internal-but-publicly-routable corp ranges like 33.x that
+            # is_local_endpoint can't classify). No-op for cloud providers.
+            for url in endpoint_urls:
+                if provider.get('brand') == 'local' or should_bypass_proxy(url):
                     register_no_proxy_url(url)
 
             # Local providers without keys are still valid (vLLM/SGLang/Ollama
@@ -315,41 +323,89 @@ class LLMDispatcher:
                 if cost == 0.01 and 'cost' in default_cfg:
                     cost = default_cfg['cost']
 
-                # All model IDs to create slots for: primary + aliases
-                aliases = model_entry.get('aliases', [])
-                all_ids = [model_id] + [a for a in aliases if a]
+                # ── Per-(key, model) capability matrix ──
+                # ``model_entry['key_access']`` maps a key index (as a string)
+                # to a partial override dict:
+                #   { "0": {"enabled": false},
+                #     "1": {"rpm": 10, "aliases": [...], "capabilities": [...]} }
+                # An absent index inherits the model-level defaults (the
+                # historical behavior — every key gets every model). A present
+                # entry overrides only the fields it names. Setting
+                # ``enabled: false`` disables just that (key, model) cell,
+                # leaving the model active for the other keys.
+                key_access = model_entry.get('key_access') or {}
+                base_aliases = model_entry.get('aliases', [])
 
-                for mid in all_ids:
-                    # Check DEFAULT_SLOT_CONFIGS for alias-specific overrides
-                    alias_cfg = DEFAULT_SLOT_CONFIGS.get(mid, {})
-                    slot_caps = set(alias_cfg.get('caps', caps))
-                    slot_rpm = alias_cfg.get('rpm', rpm)
-                    slot_cost = alias_cfg.get('cost', cost)
-                    slot_lat = alias_cfg.get('latency', latency)
+                # Record the declared interchangeable set for this entry
+                # ({model_id} ∪ every alias, including per-cell aliases) so the
+                # picker can route any member to any other member's slot.
+                entry_group = {model_id}
+                entry_group.update(a for a in base_aliases if a)
+                for _cell in key_access.values():
+                    entry_group.update(a for a in (_cell.get('aliases') or []) if a)
+                if len(entry_group) > 1:
+                    config_alias_groups.append(entry_group)
 
-                    # Auto-tag managed pricing tiers ('cheap' + any future
-                    # PRICING_TIERS rows) from real pricing data.
-                    # Skip non-chat models — tier tags don't apply.
-                    if ('image_gen' not in slot_caps
-                            and 'embedding' not in slot_caps):
-                        tiers = get_pricing_tiers(mid, fallback_cost_per_1k=slot_cost)
-                        # Strip stale managed tags, then apply desired tier tags.
-                        slot_caps -= (MANAGED_TIER_TAGS - tiers)
-                        slot_caps |= tiers
+                for key_idx, (key_name, api_key) in enumerate(keys):
+                    cell = key_access.get(str(key_idx)) or {}
+                    if cell.get('enabled') is False:
+                        logger.debug('[Dispatch] Model %s disabled for key #%d '
+                                     'in provider %s', model_id, key_idx, prov_id)
+                        continue
 
-                    # Check stream_only flag from default config
-                    slot_stream_only = alias_cfg.get('stream_only', default_cfg.get('stream_only', False))
+                    cell_caps = cell.get('capabilities')
+                    cell_rpm = cell.get('rpm', rpm)
+                    cell_cost = cell.get('cost', cost)
+                    cell_aliases = cell.get('aliases', base_aliases)
 
-                    # ★ One slot per (endpoint × key). For non-local providers
-                    #   endpoint_urls collapses to a single entry, preserving
-                    #   the historical N-key-only behavior.
-                    slot_endpoints = endpoint_urls or [base_url]
-                    for ep_idx, ep_url in enumerate(slot_endpoints):
-                        # Distinguish key_names per endpoint so the slot pool
-                        # has stable identifiers and per-key cooldowns don't
-                        # clobber each other across endpoints.
-                        ep_suffix = f'_ep{ep_idx}' if len(slot_endpoints) > 1 else ''
-                        for key_name, api_key in keys:
+                    # ``disabled_ids`` lists concrete ids (the root model_id
+                    # and/or specific aliases) that this key must NOT serve.
+                    # Because each alias can map to a genuinely different
+                    # upstream model on the gateway, the matrix treats every
+                    # id independently — a key can keep the root reachable
+                    # while a dead alias is dropped, or vice-versa.
+                    disabled_ids = set(cell.get('disabled_ids') or [])
+
+                    # All model IDs to create slots for: primary + this cell's
+                    # aliases, minus any id this key has disabled.
+                    all_ids = [mid for mid in ([model_id] + [a for a in cell_aliases if a])
+                               if mid not in disabled_ids]
+
+                    for mid in all_ids:
+                        # Check DEFAULT_SLOT_CONFIGS for alias-specific overrides.
+                        # Precedence: alias_cfg > cell override > model default.
+                        alias_cfg = DEFAULT_SLOT_CONFIGS.get(mid, {})
+                        if cell_caps is not None:
+                            # Explicit per-cell capability set wins outright.
+                            slot_caps = set(cell_caps)
+                        else:
+                            slot_caps = set(alias_cfg.get('caps', caps))
+                        slot_rpm = alias_cfg.get('rpm', cell_rpm)
+                        slot_cost = alias_cfg.get('cost', cell_cost)
+                        slot_lat = alias_cfg.get('latency', latency)
+
+                        # Auto-tag managed pricing tiers ('cheap' + any future
+                        # PRICING_TIERS rows) from real pricing data.
+                        # Skip non-chat models — tier tags don't apply.
+                        if ('image_gen' not in slot_caps
+                                and 'embedding' not in slot_caps):
+                            tiers = get_pricing_tiers(mid, fallback_cost_per_1k=slot_cost)
+                            # Strip stale managed tags, then apply desired tier tags.
+                            slot_caps -= (MANAGED_TIER_TAGS - tiers)
+                            slot_caps |= tiers
+
+                        # Check stream_only flag from default config
+                        slot_stream_only = alias_cfg.get('stream_only', default_cfg.get('stream_only', False))
+
+                        # ★ One slot per (endpoint × key). For non-local providers
+                        #   endpoint_urls collapses to a single entry, preserving
+                        #   the historical N-key-only behavior.
+                        slot_endpoints = endpoint_urls or [base_url]
+                        for ep_idx, ep_url in enumerate(slot_endpoints):
+                            # Distinguish key_names per endpoint so the slot pool
+                            # has stable identifiers and per-key cooldowns don't
+                            # clobber each other across endpoints.
+                            ep_suffix = f'_ep{ep_idx}' if len(slot_endpoints) > 1 else ''
                             slot = Slot(
                                 key_name=key_name + ep_suffix,
                                 api_key=api_key,
@@ -359,12 +415,15 @@ class LLMDispatcher:
                                 provider_id=prov_id,
                                 extra_headers=dict(prov_extra_headers),
                                 thinking_format=prov_thinking_format,
+                                protocol=prov_protocol,
                                 rpm_limit=slot_rpm,
                                 latency_ema=slot_lat,
                                 cost_per_1k_tokens=slot_cost,
                                 stream_only=slot_stream_only,
                             )
                             self.slots.append(slot)
+
+        self._build_alias_index(config_alias_groups)
 
         logger.info('[Dispatch] Built %d slots from %d saved providers '
                     '(%d direct models)',
@@ -474,6 +533,8 @@ class LLMDispatcher:
                 )
                 self.slots.append(slot)
 
+        self._build_alias_index([])
+
     def _load_benchmark_data(self):
         """Load benchmark_results.json to seed slot parameters and prune dead slots."""
         benchmark_file = os.path.join(
@@ -505,7 +566,6 @@ class LLMDispatcher:
 
         updated = 0
         dead_slots = []
-        matched_slots = set()   # track which slots have benchmark entries
 
         for slot in self.slots:
             entry_key = f'{slot.key_name}:{slot.model}'
@@ -519,8 +579,6 @@ class LLMDispatcher:
                             break
             if not entry:
                 continue
-
-            matched_slots.add(id(slot))
 
             # Check if probe showed this pair is *permanently* dead
             # Only prune on clear "invalid model" / HTTP 400 — NOT on
@@ -572,24 +630,62 @@ class LLMDispatcher:
                 self.slots.remove(s)
                 logger.debug('  [Dispatch] Removed dead slot: %s:%s', s.key_name, s.model)
 
-        # Remove alias-expanded slots not confirmed by benchmark.
-        # These were added speculatively from _MODEL_ALIAS_GROUPS but the
-        # benchmark never saw them for this specific key — so the deployment
-        # likely doesn't exist on this API gateway.
-        unconfirmed = []
-        if models_data:
-            direct = getattr(self, '_direct_models', set())
-            unconfirmed = [s for s in self.slots
-                           if s.model not in direct
-                           and id(s) not in matched_slots]
-            for s in unconfirmed:
-                self.slots.remove(s)
-                logger.debug('  [Dispatch] Removed unconfirmed alias slot: '
-                            '%s:%s', s.key_name, s.model)
+        logger.info('Loaded benchmark data: %d slots updated, %d dead removed',
+                    updated, len(dead_slots))
 
-        logger.info('Loaded benchmark data: %d slots updated, '
-              '%d dead removed, '
-              '%d unconfirmed aliases removed', updated, len(dead_slots), len(unconfirmed))
+    def _build_alias_index(self, config_groups: list[set]):
+        """Merge per-provider config alias groups with the static groups.
+
+        Each model entry's ``{model_id} \u222a aliases`` declares a set of ids
+        that route to the same logical model on a gateway. The hand-maintained
+        :data:`MODEL_ALIAS_GROUPS` adds cross-provider / cross-naming links
+        (e.g. a direct-API id, a gateway-prefixed id, and a Bedrock id that may
+        live in different provider entries). Both are merged by connected
+        components so the links compose transitively — declaring an alias in
+        config is enough; no static-table edit required.
+
+        Builds ``self._alias_index``: id \u2192 frozenset of every interchangeable id.
+        """
+        from .config import MODEL_ALIAS_GROUPS
+
+        # Union-find over all ids appearing in any group.
+        parent: dict[str, str] = {}
+
+        def _find(x: str) -> str:
+            parent.setdefault(x, x)
+            root = x
+            while parent[root] != root:
+                root = parent[root]
+            while parent[x] != root:
+                parent[x], x = root, parent[x]
+            return root
+
+        def _union(ids):
+            ids = [i for i in ids if i]
+            if not ids:
+                return
+            r0 = _find(ids[0])
+            for other in ids[1:]:
+                parent[_find(other)] = r0
+
+        for group in list(MODEL_ALIAS_GROUPS) + list(config_groups):
+            _union(list(group))
+
+        components: dict[str, set] = {}
+        for node in list(parent):
+            components.setdefault(_find(node), set()).add(node)
+
+        index: dict[str, frozenset] = {}
+        for members in components.values():
+            frozen = frozenset(members)
+            for member in members:
+                index[member] = frozen
+        self._alias_index = index
+
+    def _alias_set(self, model: str) -> set:
+        """Return the routing group for *model* (itself if it has no aliases)."""
+        group = self._alias_index.get(model)
+        return set(group) if group else {model}
 
     def pick_slot(self, capability='text', prefer_model=None,
                   exclude_models=None, exclude_keys=None,
@@ -728,7 +824,7 @@ class LLMDispatcher:
 
             if prefer_model:
                 # Use alias group so interchangeable deployments are all "preferred"
-                alias_set = MODEL_ALIASES.get(prefer_model, {prefer_model})
+                alias_set = self._alias_set(prefer_model)
                 preferred = [s for s in candidates if s.model in alias_set]
                 if preferred:
                     chosen = min(preferred, key=lambda s: s.score())
@@ -783,7 +879,7 @@ class LLMDispatcher:
 
             # If prefer_model, ensure it (or alias group members) are in the list
             if prefer_model:
-                alias_set = MODEL_ALIASES.get(prefer_model, {prefer_model})
+                alias_set = self._alias_set(prefer_model)
                 preferred = [s for s in candidates if s.model in alias_set]
                 others = [s for s in candidates if s.model not in alias_set]
                 result = preferred[:n]
@@ -855,6 +951,41 @@ class LLMDispatcher:
 
             best = min(candidates, key=lambda s: s.score())
             return best.api_key, best.key_name, best
+
+    def has_capable_slots(self, capability: str = 'text',
+                          exclude_models=None, exclude_keys=None,
+                          exclude_pairs=None) -> bool:
+        """True if at least one slot CAN serve ``capability`` ignoring
+        transient cooldown / rpm state.
+
+        Used by the dispatch retry loops to distinguish two ``pick_slot``
+        ``None`` outcomes that need OPPOSITE handling:
+          * slots exist but are all in 0.5s rate-limit cooldown → the
+            request should keep fast-polling (a 429-equivalent), NOT give
+            up — otherwise a fresh concurrent request that arrives while
+            every slot is cooling fails immediately on attempt 1.
+          * no slot has the capability at all (or all are permanently
+            excluded) → genuinely unservable, give up.
+
+        Only the durable disqualifiers (capability, hard exclusions,
+        chat-compatibility) are checked here; cooldown / inflight / rpm
+        are deliberately ignored."""
+        self.initialize()
+        ex_models = exclude_models or set()
+        ex_keys = exclude_keys or set()
+        ex_pairs = exclude_pairs or set()
+        with self._lock:
+            for s in self.slots:
+                if capability not in s.capabilities:
+                    continue
+                if s.model in ex_models or s.key_name in ex_keys:
+                    continue
+                if (s.key_name, s.model) in ex_pairs:
+                    continue
+                if not self._is_chat_compatible(s):
+                    continue
+                return True
+        return False
 
     def summarize_slots(self, capability: str = None) -> str:
         """Return a compact one-line summary of all slots for logging.

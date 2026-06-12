@@ -236,3 +236,171 @@ def test_gate_insert_content_also_gated(workspace):
     )
     assert err is not None
     assert 'insert_content refused' in err
+
+
+
+# ── partition_batch_edits: per-path gating for apply_diffs / insert_contents ──
+
+def _two_file_workspace(workspace):
+    """Add a second file b.py to the workspace; return its rel path."""
+    other = os.path.join(workspace['project_path'], 'b.py')
+    with open(other, 'w') as f:
+        f.write('def bar():\n    return 2\n')
+    return 'b.py'
+
+
+def test_partition_skips_only_unread_edit(workspace):
+    """Batch with one read + one unread file → skip only the unread edit."""
+    from lib.tasks_pkg.handlers._read_gate import partition_batch_edits
+    b_rel = _two_file_workspace(workspace)
+    rounds = [{
+        'roundNum': 1,
+        'toolName': 'read_files',
+        'toolArgs': json.dumps({'reads': [{'path': workspace['target_rel']}]}),
+        'status': 'done',
+    }]
+    task = _make_task(tool_rounds=rounds)
+    skip_idx, unread = partition_batch_edits(
+        task, 'apply_diffs',
+        {'edits': [
+            {'path': workspace['target_rel'], 'search': 'return 1', 'replace': 'return 2'},
+            {'path': b_rel, 'search': 'return 2', 'replace': 'return 3'},
+        ]},
+        workspace['project_path'],
+    )
+    assert skip_idx == [1]
+    assert unread == [b_rel]
+
+
+def test_partition_empty_when_all_read(workspace):
+    """Every target read → nothing to skip."""
+    from lib.tasks_pkg.handlers._read_gate import partition_batch_edits
+    b_rel = _two_file_workspace(workspace)
+    rounds = [{
+        'roundNum': 1,
+        'toolName': 'read_files',
+        'toolArgs': json.dumps({'reads': [
+            {'path': workspace['target_rel']}, {'path': b_rel}]}),
+        'status': 'done',
+    }]
+    task = _make_task(tool_rounds=rounds)
+    skip_idx, unread = partition_batch_edits(
+        task, 'apply_diffs',
+        {'edits': [
+            {'path': workspace['target_rel'], 'search': 'return 1', 'replace': 'return 2'},
+            {'path': b_rel, 'search': 'return 2', 'replace': 'return 3'},
+        ]},
+        workspace['project_path'],
+    )
+    assert skip_idx == []
+    assert unread == []
+
+
+def test_partition_all_unread(workspace):
+    """No reads at all → both edits flagged (caller turns this into a full refusal)."""
+    from lib.tasks_pkg.handlers._read_gate import partition_batch_edits
+    b_rel = _two_file_workspace(workspace)
+    task = _make_task()
+    skip_idx, unread = partition_batch_edits(
+        task, 'apply_diffs',
+        {'edits': [
+            {'path': workspace['target_rel'], 'search': 'return 1', 'replace': 'return 2'},
+            {'path': b_rel, 'search': 'return 2', 'replace': 'return 3'},
+        ]},
+        workspace['project_path'],
+    )
+    assert skip_idx == [0, 1]
+    assert workspace['target_rel'] in unread and b_rel in unread
+
+
+def test_partition_dedups_unread_paths(workspace):
+    """Two edits to the same unread file → one entry in unread, both indices skipped."""
+    from lib.tasks_pkg.handlers._read_gate import partition_batch_edits
+    task = _make_task()
+    skip_idx, unread = partition_batch_edits(
+        task, 'apply_diffs',
+        {'edits': [
+            {'path': workspace['target_rel'], 'search': 'foo', 'replace': 'baz'},
+            {'path': workspace['target_rel'], 'search': 'return 1', 'replace': 'return 2'},
+        ]},
+        workspace['project_path'],
+    )
+    assert skip_idx == [0, 1]
+    assert unread == [workspace['target_rel']]
+
+
+def test_partition_disabled_via_env(workspace, monkeypatch):
+    from lib.tasks_pkg.handlers._read_gate import partition_batch_edits
+    monkeypatch.setenv('TOFU_APPLY_DIFF_READ_GATE', '0')
+    task = _make_task()
+    skip_idx, unread = partition_batch_edits(
+        task, 'apply_diffs',
+        {'edits': [{'path': workspace['target_rel'], 'search': 'x', 'replace': 'y'}]},
+        workspace['project_path'],
+    )
+    assert skip_idx == [] and unread == []
+
+
+def test_partition_nonexistent_not_skipped(workspace):
+    """Edits to files that don't exist are NOT skipped by the gate —
+    downstream returns the cleaner 'File not found' error."""
+    from lib.tasks_pkg.handlers._read_gate import partition_batch_edits
+    task = _make_task()
+    skip_idx, unread = partition_batch_edits(
+        task, 'apply_diffs',
+        {'edits': [{'path': 'ghost.py', 'search': 'x', 'replace': 'y'}]},
+        workspace['project_path'],
+    )
+    assert skip_idx == [] and unread == []
+
+
+# ── meta builder: per-edit status must not default to 'ok' on non-batch output ──
+
+def test_meta_apply_diff_refusal_marks_all_fail():
+    """A gate-refusal string has no '[N] OK/FAIL' lines — every child edit
+    must render as fail, not a green check (the Q3 frontend bug)."""
+    from lib.tools.meta import build_project_tool_meta
+    refusal = ('Error: apply_diffs refused — must read each target file first.\n'
+               'Unread file(s): a.py, b.py\n')
+    meta = build_project_tool_meta(
+        'apply_diffs',
+        {'edits': [
+            {'path': 'a.py', 'search': 'x', 'replace': 'y'},
+            {'path': 'b.py', 'search': 'x', 'replace': 'y'},
+        ]},
+        refusal,
+    )
+    assert all(s['status'] == 'fail' for s in meta['editSummaries'])
+
+
+def test_meta_apply_diff_partial_parses_statuses():
+    """A real batch result with mixed OK/FAIL lines parses per-edit status."""
+    from lib.tools.meta import build_project_tool_meta
+    output = ('Applied 1/2 edits (1 failed)\n'
+              '[1] OK a.py: 1 lines changed (2L → 2L)\n'
+              '[2] FAIL b.py: Search text not found in b.py.')
+    meta = build_project_tool_meta(
+        'apply_diffs',
+        {'edits': [
+            {'path': 'a.py', 'search': 'x', 'replace': 'y'},
+            {'path': 'b.py', 'search': 'x', 'replace': 'y'},
+        ]},
+        output,
+    )
+    statuses = [s['status'] for s in meta['editSummaries']]
+    assert statuses == ['ok', 'fail']
+
+
+def test_meta_insert_content_refusal_marks_all_fail():
+    from lib.tools.meta import build_project_tool_meta
+    refusal = ('Error: insert_contents refused — must read each target file first.\n'
+               'Unread file(s): a.py\n')
+    meta = build_project_tool_meta(
+        'insert_contents',
+        {'edits': [
+            {'path': 'a.py', 'anchor': 'def foo', 'content': 'pass\n'},
+            {'path': 'a.py', 'anchor': 'def bar', 'content': 'pass\n'},
+        ]},
+        refusal,
+    )
+    assert all(s['status'] == 'fail' for s in meta['editSummaries'])

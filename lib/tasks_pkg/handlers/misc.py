@@ -88,6 +88,7 @@ def _handle_ask_human(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg, p
     append_event(task, {
         'type': 'human_guidance_request',
         'roundNum': rn,
+        'toolCallId': tc_id,
         'guidanceId': guidance_id,
         'question': question,
         'responseType': response_type,
@@ -186,6 +187,7 @@ def _handle_ask_human(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg, p
 def _handle_scheduler_tool(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg, project_path, project_enabled, all_tools=None):
     fn_args['_source_conv_id'] = task.get('convId', '')
     fn_args['_source_task_id'] = task.get('id', '')
+    fn_args['_tool_call_id'] = tc_id
     return simple_call(
         task, fn_name, fn_args, rn, round_entry, tc_id,
         executor=execute_scheduler_tool,
@@ -195,7 +197,7 @@ def _handle_scheduler_tool(task, tc, fn_name, tc_id, fn_args, rn, round_entry, c
 
 def _run_desktop(fn_name, fn_args):
     """Desktop tool executor — wraps send_desktop_command + format_desktop_result."""
-    from routes.desktop import format_desktop_result, send_desktop_command
+    from lib.desktop import format_desktop_result, send_desktop_command
     cmd_type = fn_name.replace('desktop_', '', 1)
     result, error = send_desktop_command(cmd_type, fn_args, timeout=30)
     if error:
@@ -253,11 +255,56 @@ def _handle_swarm_tool(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg, 
     elif fn_name == 'get_agent_result':
         badge = f'{icon} {(fn_args.get("agent_id") or "?")[:8]}'
 
+    post_build = _build_await_post_build(icon) if fn_name == 'await_agents' else None
+
     return simple_call(
         task, fn_name, fn_args, rn, round_entry, tc_id,
         executor=_run_swarm,
         source='Swarm', icon=icon, badge=badge, module_tag='Swarm',
+        post_build=post_build,
     )
+
+
+def _build_await_post_build(icon):
+    """Return a post_build hook that rewrites the await_agents result badge
+    from its JSON payload so the UI shows the real outcome.
+
+    Without this every await row gets a generic ``⏳ await all`` badge that
+    looks identical whether the wait completed cleanly or hit the hard-cap
+    timeout. The hook surfaces ``done N/M`` plus a ``timed out`` marker so the
+    user has full visibility of partial completions.
+    """
+    import json as _json
+
+    def _post_build(meta, tool_content, _fn_args):
+        try:
+            data = _json.loads(tool_content) if isinstance(tool_content, str) else tool_content
+        except (ValueError, TypeError) as e:
+            logger.debug('[Swarm] await_agents result not JSON, keeping default badge: %s', e)
+            return
+        if not isinstance(data, dict):
+            return
+        if data.get('status') == 'error':
+            meta['badge'] = '❌ no swarm'
+            return
+        completed = data.get('completed') or []
+        still_running = data.get('still_running') or []
+        n_done = len(completed)
+        n_total = n_done + len(still_running)
+        timed_out = bool(data.get('timed_out'))
+        if timed_out:
+            # Amber warning badge — partial result, the wait was cut short.
+            meta['badge'] = f'{icon} timed out · {n_done}/{n_total} done'
+            meta['awaitTimedOut'] = True
+        elif n_total:
+            meta['badge'] = f'✓ {n_done}/{n_total} done'
+        else:
+            # Nothing was waited on (all already finished, or swarm idle).
+            meta['badge'] = '✓ done'
+        if still_running:
+            meta['awaitStillRunning'] = still_running
+
+    return _post_build
 
 
 @tool_registry.tool_set(CONV_REF_TOOL_NAMES, category='conversations',

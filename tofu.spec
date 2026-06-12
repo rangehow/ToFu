@@ -19,14 +19,27 @@ from PyInstaller.utils.hooks import collect_submodules, collect_data_files
 block_cipher = None
 
 # ── Project root ──
-ROOT = os.path.dirname(os.path.abspath(SPECPATH))
+# SPECPATH is the directory containing this spec file, which IS the project
+# root (tofu.spec lives at the repo top level). Do NOT take dirname() — that
+# would point one level ABOVE the repo and break all ROOT-relative paths
+# (e.g. desktop/launcher.py) during CI builds.
+ROOT = os.path.abspath(SPECPATH)
 
 # ── Hidden imports: dynamically-imported modules that PyInstaller misses ──
 hidden_imports = []
 
+# The server entry module — imported dynamically via runpy.run_module('server')
+# in the desktop launcher's frozen self-relaunch path, so static analysis
+# misses it. Must be listed explicitly or the frozen build can't start.
+hidden_imports += ['server']
+
 # All lib subpackages (Flask blueprints, LLM dispatch, tools, etc.)
 hidden_imports += collect_submodules('lib')
 hidden_imports += collect_submodules('routes')
+
+# Hypercorn ASGI server (the desktop build runs the real Hypercorn startup).
+hidden_imports += ['hypercorn', 'hypercorn.asyncio', 'hypercorn.config',
+                   'hypercorn.protocol', 'cryptography']
 
 # Flask internals
 hidden_imports += ['flask.json', 'flask.templating', 'jinja2.ext']

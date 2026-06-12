@@ -374,7 +374,6 @@ def _niutrans_v1(text, src_lang, tgt_lang, api_key, api_url=''):
     Endpoint: POST https://api.niutrans.com/NiuTransServer/translation
     Params: src_text, from, to, apikey
     """
-    from lib.proxy import proxies_for
 
     url = api_url or 'https://api.niutrans.com/NiuTransServer/translation'
 
@@ -419,7 +418,6 @@ def _niutrans_v2(text, src_lang, tgt_lang, api_key, app_id, api_url=''):
     Endpoint: POST https://api.niutrans.com/v2/text/translate
     Params: srcText, from, to, appId, timestamp, authStr
     """
-    from lib.proxy import proxies_for
 
     url = api_url or 'https://api.niutrans.com/v2/text/translate'
     timestamp = str(int(time.time() * 1000))

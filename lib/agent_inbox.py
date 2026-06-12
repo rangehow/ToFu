@@ -201,6 +201,40 @@ def drain(task_id: str, *,
     return result
 
 
+def consume(task_id: str, agent_ids) -> int:
+    """Drop queued items whose ``agent_id`` is in *agent_ids*.
+
+    Used to de-duplicate the two delivery channels: when ``await_agents``
+    (or ``get_agent_result``) hands the model an agent's result directly in
+    the tool return value, the pending ``<swarm-update>`` for that same agent
+    would otherwise be injected AGAIN on the next round.  Calling this right
+    after a synchronous return removes the now-redundant inbox item so the
+    model sees each completion exactly once.
+
+    Items for agents NOT in *agent_ids* are left untouched (they're still
+    pending and will be delivered later).
+
+    Returns the number of items removed.
+    """
+    if not task_id or not agent_ids:
+        return 0
+    ids = {str(a) for a in agent_ids}
+    with _lock:
+        bucket = _inboxes.get(task_id)
+        if not bucket:
+            return 0
+        kept = [it for it in bucket if it.get('agent_id') not in ids]
+        removed = len(bucket) - len(kept)
+        if kept:
+            _inboxes[task_id] = kept
+        else:
+            _inboxes.pop(task_id, None)
+    if removed:
+        logger.info('[Inbox:%s] consumed %d already-delivered item(s) for agents=%s',
+                    task_id, removed, sorted(ids))
+    return removed
+
+
 def peek(task_id: str) -> int:
     """Return the number of pending items for *task_id* without consuming them."""
     if not task_id:
@@ -240,6 +274,20 @@ def clear(task_id: str) -> int:
     if n:
         logger.info('[Inbox:%s] cleared %d unread item(s) on task end', task_id, n)
     return n
+
+
+def untombstone(key: str) -> None:
+    """Remove *key* from the tombstone set so its inbox can be re-created.
+
+    Called when a fresh ``spawn_agents`` wave starts on a conversation whose
+    previous swarm was explicitly aborted (which tombstoned the slot). Without
+    this, the new wave's ``enqueue`` calls would be silently dropped because
+    the slot is still tombstoned from the abort.
+    """
+    if not key:
+        return
+    with _lock:
+        _tombstones.discard(key)
 
 
 def reset_for_test(task_id: str = '') -> None:

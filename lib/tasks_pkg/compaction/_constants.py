@@ -19,13 +19,20 @@ import threading
 #  Layer 1 — Micro-compaction
 # ═══════════════════════════════════════════════════════════════════════════════
 
-MICRO_HOT_TAIL = 60
+MICRO_HOT_TAIL = 40
 """Number of most-recent tool results to keep uncompressed.
 Everything older is archived to DB and replaced with a placeholder.
 
 2026-04-19: Raised 30 → 60 to reduce compaction aggressiveness. Most
 SWE-bench-style tasks complete in 20-40 tool calls; doubling the hot
-tail keeps them fully uncompressed. Normal chats rarely exceed 60 either."""
+tail keeps them fully uncompressed. Normal chats rarely exceed 60 either.
+
+2026-06-07: Lowered 60 → 40. The dspro 8-arm compaction A/B
+(maps_workdir_pro8b) showed OpenCode's more active cold-output pruning
+cut input tokens ~10% at the lowest cost/solve with no resolve-rate
+regression vs the 60-keep `tofu` arm. Keeping the count-based hot tail
+(not token-based) but tightening it to 40 captures most of that saving
+while still covering the 20-40-tool-call body of typical SWE-bench runs."""
 
 MICRO_COMPACT_THRESHOLD = 2000
 """Minimum character count before a tool result is worth compacting.
@@ -69,8 +76,15 @@ _DEFAULT_CONTEXT_LIMIT = 1_000_000
 """Fallback context limit when the model name is not recognized.
 Raised to 1M since primary models (Claude 4.6) support 1M context (GA 2026-03-13)."""
 
-_OUTPUT_RESERVE = 32_000
-"""Tokens reserved for model output generation."""
+_OUTPUT_RESERVE = 128_000
+"""Tokens reserved for model output generation.
+
+2026-06-02: Raised 32K → 128K to match the real max-output cap of the
+primary Claude Opus/Sonnet 4.6–4.8 family (128K output tokens, which
+count against the same 1M window). The old 32K under-reserved by ~96K,
+so a near-full prompt plus a long answer could overrun 1M before
+force-compact fired. With 1M context this still leaves ~864K usable
+before the 0.90 trigger (~778K)."""
 
 _COMPACTION_RESERVE = 8_000
 """Tokens reserved for the compaction LLM call itself."""

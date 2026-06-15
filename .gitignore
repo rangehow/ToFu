@@ -46,6 +46,20 @@ swebench_workdir/
 swebench_rerun_workdir/
 abtest_workdir/
 
+# ── CWD pollution: stray dirs created by eval/agent harnesses that wrote
+#    output to a path RELATIVE to the repo root instead of an absolute one
+#    (e.g. INS/ruanjunhao04/..., mnt/dolphinfs/...; the harness stripped the
+#    leading "/" and re-created our own abs path as a nested tree). Not part
+#    of the app — see the 2026-06 "unrelated folders polluting the tree" note. ──
+/INS/
+/mnt/
+/Mant/
+/_/
+/django/
+/outputs/
+/similar_fix.py/
+/pylint-*/
+
 # ── Test coverage ──
 .coverage
 
@@ -93,6 +107,10 @@ Thumbs.db
 #    by lib/file_history; round-by-round GC churns it, so it must never be
 #    version-tracked — see the 2026-06 "satus full of D" incident). ──
 .tofu/
+
+# ── Safe-delete trash (files moved aside by the delete mechanism instead of
+#    being unlinked; purge manually to reclaim disk). Never track. ──
+.tofu_trash/
 
 # ── Sensitive reports (moved to docs/ but should not be published) ──
 docs/SECURITY_AUDIT_REPORT.md

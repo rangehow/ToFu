@@ -125,6 +125,9 @@ def _bump_version(part: str = 'patch') -> str:
 PERSONAL_EXCLUDE_DIRS = {
     '__pycache__',                 # Python bytecode
     '.pytest_cache',               # pytest cache
+    'build',                       # setuptools build artifacts (regenerable)
+    'dist',                        # wheel/sdist build output (regenerable)
+    'tofu.egg-info',               # setuptools egg metadata (regenerable)
     '.git',                        # git history (large, clone fresh is better)
     'node_modules',                # (shouldn't exist, but just in case)
     'offline_pkgs',                # offline pip packages
@@ -147,6 +150,7 @@ PERSONAL_EXCLUDE_DIRS = {
     'outputs',                     # smoke-test / eval output (thousands of files, transient)
     'promo',                       # promotional slides/screenshots (~10MB, not runtime)
     'django',                      # stray empty dir (not part of tofu)
+    '.tofu_trash',                 # trash/undo bin (transient, per-host)
 }
 
 # Dirs excluded ONLY at the project root (not inside subdirs like lib/)
@@ -198,6 +202,9 @@ ALWAYS_EXCLUDE_DIRS = {
     '__pycache__',                 # Python bytecode
     '.pytest_cache',               # pytest cache
     '.ruff_cache',                 # ruff linter cache
+    'build',                       # setuptools build artifacts (regenerable)
+    'dist',                        # wheel/sdist build output (regenerable)
+    'tofu.egg-info',               # setuptools egg metadata (regenerable)
     '.git',                        # git history (may contain old secrets)
     '.migrate_backup',             # migration backups
     'node_modules',                # (shouldn't exist, but just in case)
@@ -213,6 +220,7 @@ ALWAYS_EXCLUDE_DIRS = {
     'outputs',                     # smoke-test / eval output (thousands of files, transient)
     'promo',                       # promotional slides/screenshots (~10MB, not runtime)
     'django',                      # stray empty dir (not part of tofu)
+    '.tofu_trash',                 # trash/undo bin (transient, per-host)
 }
 
 ALWAYS_EXCLUDE_FILES = {
@@ -253,6 +261,7 @@ ALWAYS_EXCLUDE_FILES = {
     # stripped from opensource via OPENSOURCE_EXTRA_EXCLUDE_FILES (hardcoded
     # corp proxy IP must not ship publicly).
     'copy_to_dst.sh',     # per-host copy helper (hardcoded internal mount paths)
+    'copy_to_chenxin.sh', # per-host copy helper (hardcoded internal mount paths)
     'server.log',
     'server.log.1',
     'prompt_output.txt',
@@ -1917,9 +1926,21 @@ def export_project(mode: str, dest: Path, dry_run: bool = False,
             except OSError:
                 source_names = set()
 
+            # Per-host files that must NEVER survive into a re-exported dest,
+            # even though they're not in the source tree (so the loop below
+            # would otherwise skip them). .tofu_env.json pins an absolute
+            # interpreter path; if a stale one from another host/user lingers,
+            # server.py re-execs into the WRONG conda env (missing deps →
+            # ModuleNotFoundError). It's in ALWAYS_EXCLUDE_FILES so it's never
+            # copied — this actively strips a pre-existing one.
+            _force_strip_from_dest = {'.tofu_env.json'}
+
             targets = []
             for item in dest.iterdir():
                 if item.name in _preserve_user_data:
+                    continue
+                if item.name in _force_strip_from_dest:
+                    targets.append(item)
                     continue
                 if item.name in _preserve_excluded:
                     continue

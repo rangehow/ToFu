@@ -142,6 +142,8 @@ PERSONAL_EXCLUDE_DIRS = {
     'sundries',                    # unrelated scripts/files (not part of tofu)
     'swebench_workdir',            # SWE-bench working directory (large, transient)
     'swebench_rerun_workdir',      # SWE-bench rerun results (thousands of venvs)
+    'swebench_pilot_workdir',      # SWE-bench pilot working directory (transient)
+    'swebench_glm_ab_workdir',     # SWE-bench GLM A/B working directory (transient)
     'swebench_full',               # SWE-bench full dataset working directory
     'abtest_workdir',              # A/B-test working directory (many conda envs + repos)
     'overleaf_cache',              # Overleaf project cache (~89MB, regenerable)
@@ -212,6 +214,8 @@ ALWAYS_EXCLUDE_DIRS = {
     'sundries',                    # unrelated scripts/files (not part of tofu)
     'swebench_workdir',            # SWE-bench working directory (large, transient)
     'swebench_rerun_workdir',      # SWE-bench rerun results (thousands of venvs)
+    'swebench_pilot_workdir',      # SWE-bench pilot working directory (transient)
+    'swebench_glm_ab_workdir',     # SWE-bench GLM A/B working directory (transient)
     'swebench_full',               # SWE-bench full dataset working directory
     'abtest_workdir',              # A/B-test working directory (many conda envs + repos)
     'overleaf_cache',              # Overleaf project cache (~89MB, regenerable)
@@ -822,6 +826,56 @@ def _scrub_dest_pgdata_identity(dest: Path) -> None:
             logger.warning('Could not scrub dest pgdata/%s: %s', name, e)
 
 
+def _gitignored_excludes(src: Path) -> list[str]:
+    """Return tar ``--exclude=`` args for every path git ignores in ``src``.
+
+    Runs ``git ls-files -o -i --exclude-standard --directory`` inside the
+    source tree, which honours ``.gitignore`` / ``.git/info/exclude`` /
+    the global excludesfile AND collapses a fully-ignored directory to a
+    single entry — so we never enumerate the 800K+ files inside eval
+    ``*_workdir/`` trees. This keeps the export's exclusions in lock-step
+    with ``.gitignore`` instead of drifting against the hand-maintained
+    ``ALWAYS_EXCLUDE_DIRS`` set.
+
+    Best-effort: returns ``[]`` if ``src`` is not a git repo or git is
+    unavailable. Used for internal/opensource exports only — personal mode
+    deliberately keeps gitignored data (``.env``, ``data/``, ``uploads/``).
+
+    Args:
+        src: Source project root (the git work tree).
+
+    Returns:
+        A list of ``--exclude=./<path>`` args, one per ignored entry.
+    """
+    if not _have_tool('git'):
+        logger.debug('git not on PATH; skipping gitignore-based excludes')
+        return []
+    try:
+        proc = subprocess.run(
+            ['git', 'ls-files', '-z', '-o', '-i',
+             '--exclude-standard', '--directory'],
+            cwd=str(src), capture_output=True, text=True,
+        )
+    except Exception as e:
+        logger.warning('git ls-files for gitignore excludes failed: %s', e)
+        return []
+    if proc.returncode != 0:
+        logger.debug('git ls-files rc=%s (src not a repo?); '
+                     'skipping gitignore excludes: %.200s',
+                     proc.returncode, proc.stderr)
+        return []
+
+    excludes: list[str] = []
+    for raw in proc.stdout.split('\0'):
+        path = raw.strip().rstrip('/')
+        if not path:
+            continue
+        excludes.append(f'--exclude=./{path}')
+    logger.info('[Export] Honouring .gitignore: %d ignored path(s) excluded',
+                len(excludes))
+    return excludes
+
+
 def _build_tar_excludes_for_mode(mode: str, dest: Path) -> tuple[list[str], list[str]]:
     """Build ``--exclude=`` args for the streaming tar copy, per mode.
 
@@ -867,6 +921,14 @@ def _build_tar_excludes_for_mode(mode: str, dest: Path) -> tuple[list[str], list
         tar_excludes.append(f'--exclude={g}')
     for f in files:
         tar_excludes.append(f'--exclude={f}')
+
+    # Honour .gitignore for internal/opensource so the export stays in
+    # lock-step with the repo's ignore rules (covers new eval/bench
+    # *_workdir/ dirs, caches, etc. without touching the hand-maintained
+    # lists). Personal mode is INTENTIONALLY skipped — it's a full self-use
+    # backup that keeps gitignored data (.env, data/, uploads/, .chatui/).
+    if mode != 'personal':
+        tar_excludes.extend(_gitignored_excludes(ROOT))
 
     # Preserve dest user data + git history across re-exports. Same set for
     # all modes — these dirs belong to the destination user, not source.
@@ -1567,6 +1629,62 @@ def _bundle_internal_mcp_repos(dest: Path, mode: str):
         print(f"     {C_DIM}{', '.join(bundled)}{C_END}")
 
 
+def _bundle_tofu_search_wheel(dest: Path, mode: str):
+    """Copy the prebuilt ``tofu-search`` wheel into ``<dest>/vendor/``.
+
+    ``tofu-search`` IS published on public PyPI, but corp-network installs
+    point pip at an internal mirror that does not carry it. Bundling the
+    wheel lets ``install.sh`` ``pip install`` it offline/behind the firewall
+    without depending on either mirror. Opensource exports skip this — a
+    vanilla host reaches public PyPI fine, so install.sh installs it from
+    there.
+
+    The wheel is sourced from the sibling repo's ``dist/`` directory
+    (``<ROOT>/../tofu-search/dist/tofu_search-*.whl``). Skips cleanly if the
+    sibling repo or a built wheel isn't present.
+    """
+    if mode not in ('personal', 'internal'):
+        return
+
+    import shutil
+
+    src_repo = ROOT.parent / 'tofu-search'
+    dist_dir = src_repo / 'dist'
+    if not dist_dir.is_dir():
+        logger.info('tofu-search dist/ not found — skipping wheel bundle: %s', dist_dir)
+        return
+
+    wheels = sorted(dist_dir.glob('tofu_search-*.whl'))
+    if not wheels:
+        logger.info('No tofu_search-*.whl in %s — skipping wheel bundle', dist_dir)
+        return
+
+    # Highest version wins (sorted lexically is good enough for 0.x; the
+    # install.sh side also `sort -V | tail -1` if several land in vendor/).
+    wheel = wheels[-1]
+
+    vendor_dir = dest / 'vendor'
+    vendor_dir.mkdir(parents=True, exist_ok=True)
+    (vendor_dir / '.gitkeep').touch()
+
+    # Drop any stale tofu_search wheels from a prior export so install.sh's
+    # glob doesn't pick an older version.
+    for old in vendor_dir.glob('tofu_search-*.whl'):
+        try:
+            old.unlink()
+        except OSError as e:
+            logger.debug('Could not remove stale wheel %s: %s', old, e)
+
+    target = vendor_dir / wheel.name
+    try:
+        shutil.copy2(wheel, target)
+        logger.info('Bundled tofu-search wheel: %s → %s', wheel, target)
+        print(f"  {C_GREEN}📦 Bundled tofu-search wheel → vendor/{C_END}")
+        print(f"     {C_DIM}{wheel.name}{C_END}")
+    except OSError as e:
+        logger.warning('Failed to bundle tofu-search wheel: %s', e)
+
+
 def _portablize_bundled_mcp_config(dest: Path, mode: str):
     """Rewrite hope/xuecheng entries in the exported ``mcp_servers.json``.
 
@@ -1705,6 +1823,11 @@ def _create_skeleton(dest: Path, mode: str):
     # Opensource mode skips this entirely (repos are internal-only).
     _bundle_internal_mcp_repos(dest, mode)
 
+    # ── Personal & internal: bundle the prebuilt tofu-search wheel under
+    # vendor/ so install.sh can pip-install it behind a corp mirror that
+    # lacks the package. Opensource installs it from public PyPI instead.
+    _bundle_tofu_search_wheel(dest, mode)
+
     # ── Personal & internal: rewrite hope/xuecheng entries in the copied
     # mcp_servers.json from absolute source-machine `uvx --from /path` to
     # bare `hope-mcp` / `xuecheng-mcp` launchers, so the persisted config
@@ -1740,9 +1863,19 @@ def _create_skeleton(dest: Path, mode: str):
         '# Set PPTX_TRANSLATE_ENABLED=1 to enable it.',
         'PPTX_TRANSLATE_ENABLED=0',
         '',
+        '# This is a standalone single-machine copy. Never defer to a remote',
+        '# PostgreSQL owner recorded in an inherited pgdata: on shared storage a',
+        '# copy sees pgdata at the same absolute path as the source, so the',
+        '# .pg_owner_host / heartbeat left by the source machine (or a previous',
+        '# container) would otherwise route every DB call across a dead link and',
+        '# crash with "connection ... timeout expired". With this flag set, the',
+        '# copy clears the inherited marker on startup and owns PG locally.',
+        '# Unset it ONLY for a same-path multi-host failover deployment.',
+        'TOFU_PG_STANDALONE=1',
+        '',
     ]
     env_file.write_text('\n'.join(env_lines))
-    logger.info('Created .env (PPTX_TRANSLATE_ENABLED=0)')
+    logger.info('Created .env (PPTX_TRANSLATE_ENABLED=0, TOFU_PG_STANDALONE=1)')
 
     # .env.example should have been copied from source.  Create a minimal
     # fallback only if the copy is missing (e.g. excluded by a filter).
@@ -2014,6 +2147,7 @@ def export_project(mode: str, dest: Path, dry_run: bool = False,
             # absolute `uvx --from /path` entries to bare launchers so it's
             # portable to another machine.
             _bundle_internal_mcp_repos(dest, mode)
+            _bundle_tofu_search_wheel(dest, mode)
             _portablize_bundled_mcp_config(dest, mode)
         else:
             stats = _export_via_tar_with_sanitize(mode, dest)

@@ -1,8 +1,0 @@
-"""github-batch-mcp — fast batch-commit MCP server for GitHub.
-
-Performs many-file commits in O(1) GitHub API calls regardless of file
-count, by inlining UTF-8 text directly into the git tree-create call and
-uploading binary blobs in parallel.
-"""
-
-__version__ = "0.1.0"

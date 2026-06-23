@@ -41,10 +41,15 @@ data/
 /paper/
 /thesis_references.bib
 
+# ── Personal scratch copy script (not part of the app) ──
+/copy_to_chenxin.sh
+
 # ── Eval / bench workdirs (large, causes FUSE timeouts) ──
-swebench_workdir/
-swebench_rerun_workdir/
-abtest_workdir/
+# Glob covers every eval/bench harness output dir (swebench_workdir/,
+# swebench_glm_ab_workdir/, swebench_pilot_workdir/, abtest_workdir/, …).
+# These hold thousands of repo clones + conda envs (800K+ files combined)
+# and are the #1 cause of grep/find FUSE timeouts — never track or scan them.
+*_workdir/
 
 # ── CWD pollution: stray dirs created by eval/agent harnesses that wrote
 #    output to a path RELATIVE to the repo root instead of an absolute one
@@ -105,8 +110,11 @@ Thumbs.db
 
 # ── File-history store (per-project copy-backup undo data, auto-created
 #    by lib/file_history; round-by-round GC churns it, so it must never be
-#    version-tracked — see the 2026-06 "satus full of D" incident). ──
-.tofu/
+#    version-tracked — see the 2026-06 "satus full of D" incident). Scope the
+#    ignore to file-history/ ONLY: .tofu/skills/ is real project content and
+#    stays tracked (the negation below is defensive against a broad re-add). ──
+.tofu/file-history/
+!.tofu/skills/
 
 # ── Safe-delete trash (files moved aside by the delete mechanism instead of
 #    being unlinked; purge manually to reclaim disk). Never track. ──
@@ -132,3 +140,5 @@ installer_output/
 static/icons/tofu.ico
 static/icons/tofu.icns
 .icon-backups/
+# AI assistant evolution journal (per-developer, not source)
+JOURNAL.md

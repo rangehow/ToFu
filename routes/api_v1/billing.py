@@ -425,9 +425,10 @@ async def alipay_notify_route():
 @api_v1_billing_bp.route('/api/v1/billing/checkout', methods=['POST'])
 @api_meta(summary='Create a checkout session',
           description='Issue a payment URL for the authenticated user '
-                       'to redirect to. Currently supports ``provider="alipay"``; '
-                       '``provider="stripe"`` requires the operator to '
-                       'configure Stripe Checkout (returns 501 otherwise).',
+                       'to redirect to. Supports ``provider="alipay"`` and '
+                       '``provider="stripe"`` (the latter creates a Stripe '
+                       'Checkout Session; requires ``stripe.secret_key`` in '
+                       'payments.json).',
           tags=['billing'])
 async def create_checkout_route():
     try:
@@ -458,11 +459,22 @@ async def create_checkout_route():
         return api_ok(provider='alipay', redirect_url=url,
                        out_trade_no=out_trade_no)
     if provider == 'stripe':
-        return api_bad_request(
-            'Stripe Checkout is not yet wired up. Use the Stripe '
-            'Checkout Session API directly with metadata.user_id set, '
-            'then point its webhook at /api/v1/billing/webhooks/stripe.',
-            error_kind='stripe_checkout_not_implemented')
+        from lib.billing.payments import create_stripe_checkout
+        currency = optional_str(body, 'currency', default='usd', max_len=8)
+        success_url = return_url or (
+            request.host_url.rstrip('/') + '/?topup=success')
+        cancel_url = optional_str(body, 'cancel_url', default='', max_len=500)
+        try:
+            session_id, url = await create_stripe_checkout(
+                user_id=user_id,
+                amount_minor=amount_minor,
+                currency=currency,
+                success_url=success_url,
+                cancel_url=cancel_url)
+        except RuntimeError as e:
+            return api_bad_request(str(e), error_kind='stripe_checkout_failed')
+        return api_ok(provider='stripe', redirect_url=url,
+                       session_id=session_id)
     return api_bad_request(f'Unknown provider: {provider!r}',
                             field='provider')
 

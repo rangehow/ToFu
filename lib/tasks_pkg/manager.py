@@ -17,13 +17,34 @@ import uuid
 from datetime import datetime
 
 from lib.agent_core.events import EventType, build_event
-from lib.database import DOMAIN_CHAT, db_execute_with_retry, get_thread_db, json_dumps_pg
+from lib.database import DOMAIN_CHAT, get_thread_db, json_dumps_pg
 from lib.error_envelope import to_json as _err_to_json
 from lib.llm_dispatch import dispatch_stream
 from lib.log import get_logger
+from lib.tasks_pkg.auto_translate import (  # noqa: F401  (re-export)
+    _maybe_auto_translate_assistant,
+    _maybe_auto_translate_critic,
+)
 from lib.task_runtime import TaskRuntime
 
 logger = get_logger(__name__)
+
+# Gateway/provider routing prefixes that are an internal dispatch detail, not
+# something the user picked. Mirrors the canonical list in
+# lib/llm_dispatch/discovery.py so the user-facing model name (e.g.
+# "claude-opus-4.8") never leaks "aws.claude-opus-4.8" into the UI.
+_GATEWAY_PREFIXES = ('aws.', 'vertex.', 'gcp.', 'azure.', 'bedrock.')
+
+
+def _display_model_name(model: str) -> str:
+    """Strip internal gateway/provider prefixes for a user-facing label."""
+    name = model or 'the model'
+    for prefix in _GATEWAY_PREFIXES:
+        if name.startswith(prefix):
+            name = name[len(prefix):]
+            break
+    return name
+
 
 # ── Backing runtime ──────────────────────────────────────────────
 # kind='chat'. push_channel='chat' (matches the existing /api/push routes
@@ -48,7 +69,62 @@ tasks_lock = _chat_runtime._lock  # type: ignore[attr-defined]
 _conv_latest_task = {}   # conv_id → task_id
 _conv_latest_task_lock = threading.Lock()
 
-def create_task(conv_id, messages, config):
+# ── Cross-replica supersede index (Epic C §4.3) ──
+# The freshness guard's "newest task for this conv" must be authoritative
+# ACROSS replicas so a stale task on replica A recognises that replica B
+# started a newer task for the same conv. We MIRROR conv->latest_task_id into
+# the shared runtime_state_store: under inproc the local dict stays the fast
+# authoritative path (byte-identical to before); under redis the store is the
+# fleet source of truth. The actual cross-replica ABORT of the superseded task
+# routes to its owning replica via taskId affinity (LB concern) — this index
+# only decides WHO is newest.
+_LATEST_KIND = 'latest'
+_LATEST_TTL = 3600.0  # a conv's latest-task marker; refreshed on each new task
+
+
+def _record_latest_task(conv_id: str, task_id: str) -> None:
+    with _conv_latest_task_lock:
+        _conv_latest_task[conv_id] = task_id
+    try:
+        from lib.runtime_state_store import get_store
+        get_store().set_value(_LATEST_KIND, conv_id, task_id, _LATEST_TTL)
+    except Exception as e:
+        logger.debug('[Task] supersede index mirror failed conv=%s: %s',
+                     conv_id[:8], e)
+
+
+def _latest_task_for_conv(conv_id: str):
+    """Fleet-authoritative newest task_id for a conv. Prefers the shared store
+    (cross-replica) and falls back to the local dict; the two agree under the
+    inproc backend."""
+    try:
+        from lib.runtime_state_store import get_store
+        v = get_store().get_value(_LATEST_KIND, conv_id)
+        if v:
+            return v
+    except Exception as e:
+        logger.debug('[Task] supersede index read failed conv=%s: %s',
+                     conv_id[:8], e)
+    with _conv_latest_task_lock:
+        return _conv_latest_task.get(conv_id)
+
+def create_task(conv_id, messages, config, *, supersede=True):
+    """Create (and register) a chat task.
+
+    ``supersede`` (default True) makes superseding the INVARIANT of task
+    creation: after registering as the conversation's latest task, any OTHER
+    still-running task for the same ``conv_id`` is force-aborted (via
+    ``abort_running_tasks_for_conv``). This is the single source of truth for
+    the "a new task supersedes the old one" rule — every background path that
+    creates a task (queue ``dispatch_next_queued``, scheduler/proactive/timer
+    ``inject_and_run_task``) is automatically covered, instead of each entry
+    point having to remember to call the abort sweep.
+
+    Pass ``supersede=False`` for a DELIBERATE concurrency axis that must run
+    alongside its siblings under the same conv_id — currently only
+    ``chat_branch_start`` (a branch is an intentional parallel turn and must
+    NOT abort the main task or sibling branches).
+    """
     task_id = str(uuid.uuid4())
     # ── Extract the user's original question from the last user message ──
     # This is passed to the content filter alongside the search query so
@@ -95,6 +171,15 @@ def create_task(conv_id, messages, config):
     )
     task.update({
         'convId': conv_id, 'messages': messages, 'config': config,
+        # ★ Stable assistant message id, minted CLIENT-SIDE before the send
+        #   POST and shipped in config.assistantMsgId. The frontend stamps the
+        #   same id on the streaming bubble (data-msg-id), so live progressive
+        #   translation frames (incremental._Acc._push_progressive) can route
+        #   to the still-streaming message — which has no DB index yet. Also
+        #   reused as the final commit's msg_id so the in-stream preview and the
+        #   committed translation address the SAME message. Empty for non-UI /
+        #   external callers → live preview is simply skipped (no regression).
+        '_assistantMsgId': (config or {}).get('assistantMsgId') or '',
         # Override TaskRuntime defaults with chat-specific shape:
         'status': 'running',          # chat tasks start running, not pending
         'content': '', 'thinking': '', 'error': None,
@@ -112,12 +197,79 @@ def create_task(conv_id, messages, config):
         # '_force_rotate_pair' is set transiently by analyse_stream_result
         # and consumed (cleared) by stream_llm_response on the next call.
     })
+    # ★ Identity scope for the personal-preference profile. Resolved HERE,
+    #   in the request thread, because the post-turn consolidation runs in a
+    #   detached daemon with no request context. The scope is the multi-user
+    #   tenant's user_id (populated only by login); open/private mode leave it
+    #   empty → the single global profile (personal-install semantic, no
+    #   migration). Best-effort: any failure (no request ctx) → '' = global.
+    try:
+        from lib.memory.user_profile import resolve_profile_scope
+        from routes.api_v1.auth import current_auth
+        task['_profileScope'] = resolve_profile_scope(current_auth())
+    except Exception as e:
+        logger.debug('[Task %s] profile scope resolve failed: %s', task_id[:8], e)
+        task['_profileScope'] = ''
+
+    # ★ Project-brain Activity Feed: a 'started' pulse, EXCEPT for autopilot
+    #   follow-up turns (config.autopilotRunId set) — a deep autopilot run is
+    #   dozens of tasks and would flood the feed; those collapse to a single
+    #   'run_concluded' event at run close-out (autopilot._emit_run_concluded).
+    #   Best-effort: emit_project_event never raises, but guard the lookup too
+    #   so feed wiring can NEVER break task creation.
+    try:
+        _cfg = config or {}
+        _proj = (_cfg.get('projectPath') or '').strip()
+        if _proj and conv_id and not (_cfg.get('autopilotRunId') or '').strip():
+            from lib.conversations.project_feed import emit_project_event
+            emit_project_event(
+                _proj, conv_id, 'started',
+                (last_user_query or '').strip() or 'New turn started',
+                task_id=task_id)
+    except Exception as e:
+        logger.debug('[Task %s] project-feed started emit skipped: %s',
+                     task_id[:8], e)
+
     # ★ Register as the LATEST task for this conversation — freshness guard
     if conv_id:
-        with _conv_latest_task_lock:
-            _conv_latest_task[conv_id] = task_id
+        _record_latest_task(conv_id, task_id)
+        # ★ Supersede invariant (see docstring): abort any other running task
+        #   for this conv so "a new task replaced the old one without aborting
+        #   it" is structurally impossible. Registered as latest FIRST so the
+        #   superseded tasks' freshness guard classifies their late writes as
+        #   expected (superseded_by_new_task), not as the unexpected-WARNING
+        #   never-aborted branch. Best-effort: never let it break creation.
+        if supersede:
+            try:
+                abort_running_tasks_for_conv(conv_id, exclude_task_id=task_id)
+            except Exception as e:
+                logger.warning('[Task %s] supersede abort sweep failed: %s',
+                               task_id[:8], e, exc_info=True)
     logger.info('[Task %s] Created for conv=%s lastUserQuery=%r', task_id[:8], conv_id, last_user_query[:80])
     return task
+
+
+def discard_task(task_id: str, conv_id: str | None = None) -> None:
+    """Remove a non-streaming carrier/holder task from the active registry.
+
+    Some flows use ``create_task`` purely as a message container for a
+    synchronous reporter sub-turn (e.g. ``autopilot.summarize_run``) — the
+    carrier is NEVER spawned and NEVER reaches a terminal status, so it would
+    otherwise linger forever as a phantom ``status='running'`` row that
+    ``/api/chat/active`` reports and the frontend orphan-recovery turns into a
+    permanently-stuck "Waiting…" placeholder. (TTL cleanup only evicts
+    done/error/aborted tasks, so a never-finalized carrier is immortal.)
+
+    This drops the task from ``tasks`` AND clears any ``_conv_latest_task``
+    entry it claimed, so the carrier is invisible to every reconnect path. Safe
+    to call unconditionally (idempotent, best-effort).
+    """
+    with tasks_lock:
+        tasks.pop(task_id, None)
+    if conv_id:
+        with _conv_latest_task_lock:
+            if _conv_latest_task.get(conv_id) == task_id:
+                del _conv_latest_task[conv_id]
 
 def abort_running_tasks_for_conv(conv_id: str, exclude_task_id: str | None = None) -> int:
     """Abort all running tasks for a conversation, except the excluded one.
@@ -130,6 +282,7 @@ def abort_running_tasks_for_conv(conv_id: str, exclude_task_id: str | None = Non
     new task and may overwrite the conversation with stale content.
     """
     aborted = 0
+    _aborted_tasks = []
     with tasks_lock:
         for tid, t in tasks.items():
             if (t.get('convId') == conv_id
@@ -140,6 +293,7 @@ def abort_running_tasks_for_conv(conv_id: str, exclude_task_id: str | None = Non
                 t['_abort_timestamp'] = time.time()
                 t['_abort_reason'] = 'superseded_by_new_task'
                 aborted += 1
+                _aborted_tasks.append(t)
                 logger.info(
                     '[Task %s] conv=%s ⚠️ AUTO-ABORTED: superseded by new task %s — '
                     'content=%dchars elapsed=%.1fs',
@@ -159,10 +313,50 @@ def abort_running_tasks_for_conv(conv_id: str, exclude_task_id: str | None = Non
                            elapsed_s=round(time.time() - t.get('created_at', time.time()), 2))
                 except Exception as _aerr:
                     logger.debug('[Manager] audit_log task_abort failed: %s', _aerr)
+    # ★ Zombie-task terminal floor (outside tasks_lock — this does DB I/O).
+    #   An aborted task normally reaches a terminal task_results row only when
+    #   ITS OWN thread runs finalize/persist. A thread that is wedged (e.g. a
+    #   stream that never received a token, 0 events for hours) never gets
+    #   there, so on a server restart (in-memory tasks cleared) a poll finds
+    #   neither memory nor DB → 404 and the user loses the turn. Writing an
+    #   aborted floor NOW guarantees a durable terminal state regardless of
+    #   whether the thread ever unwedges. Idempotent: if the thread later does
+    #   finalize, persist_task_result overwrites this floor with the real
+    #   final content/status (last-writer-wins, keyed on task_id).
+    for _t in _aborted_tasks:
+        _write_aborted_terminal_floor(_t)
     if aborted:
         logger.info('[Manager] conv=%s Auto-aborted %d stale task(s) before starting new task %s',
                     conv_id[:8], aborted, (exclude_task_id or '?')[:8])
     return aborted
+
+
+def _write_aborted_terminal_floor(task) -> None:
+    """Persist a terminal ``status='aborted'`` row to ``task_results`` for a
+    just-aborted task, so a later poll (even after a restart that cleared the
+    in-memory registry) resolves to a terminal state instead of a 404.
+
+    Best-effort and idempotent — reuses the shared ``_upsert_task_row`` (keyed
+    on task_id), so a subsequent real finalize by the task's own thread simply
+    overwrites this floor with the authoritative final content/status. Only the
+    partial content accumulated so far is written; that is strictly better than
+    losing the turn to a 404.
+    """
+    try:
+        conv_id = task.get('convId', '') or ''
+        tr_json = (None if _tool_rounds_have_dedicated_home(task)
+                   else json.dumps(_merge_tool_rounds(task), ensure_ascii=False))
+        meta = build_result_meta(task)
+        meta_json = json.dumps(meta, ensure_ascii=False) if meta else None
+        error_json = _err_to_json(task['error']) if task.get('error') is not None else None
+        _upsert_task_row(task, conv_id, content=task.get('content') or '',
+                         thinking=task.get('thinking') or '', status='aborted',
+                         error_json=error_json, tr_json=tr_json, meta_json=meta_json)
+        logger.debug('[Task %s] conv=%s Wrote aborted terminal floor to task_results',
+                     task['id'][:8], conv_id[:8])
+    except Exception as e:
+        logger.warning('[Task %s] Failed to write aborted terminal floor: %s',
+                       task.get('id', '?')[:8], e, exc_info=True)
 
 
 def _assign_message_ids(messages):
@@ -296,6 +490,19 @@ def append_event(task, event):
     except Exception as e:
         logger.debug('[Manager] append_persistent_event failed (non-fatal): %s', e)
 
+    # ★ Wake any async API handler awaiting this task (event-driven wait,
+    #   replaces the old busy-poll loops). Every event nudges the waiter so
+    #   SSE generators flush incrementally; terminal events additionally
+    #   release the admission slot + fire BYO/tool-env disposal callbacks.
+    try:
+        from lib.agent_core.admission import notify_task
+        _is_terminal = (event.get('type') in ('done', 'error', 'aborted')
+                        or task.get('status') in ('done', 'error', 'aborted'))
+        notify_task(task['id'], terminal=_is_terminal)
+    except Exception as e:
+        logger.debug('[Manager] admission notify failed task=%s: %s',
+                     task['id'][:8], e)
+
 def _tool_rounds_have_dedicated_home(task):
     """True when the task's toolRounds are durably stored in conversations.messages.
 
@@ -341,6 +548,51 @@ def load_tool_rounds_from_conversation(conv_id):
     return []
 
 
+def load_endpoint_turns_from_conversation(conv_id):
+    """Return the trailing endpoint turns from a conversation's messages, or [].
+
+    Endpoint-mode results are persisted into the conversation's ``messages``
+    array (by ``_sync_endpoint_turns_to_conversation`` in endpoint.py), NOT
+    into the single ``task_results`` content blob.  When a poll outlives the
+    in-memory task (evicted past TTL, or server restarted), the DB-path of
+    ``/api/chat/poll`` no longer has ``task['_endpoint_turns']`` to echo, so
+    the frontend can't rebuild the multi-turn structure and renders a single
+    stale bubble until a manual refresh.
+
+    This recovery reader reconstructs the same list from the durable
+    conversation messages: it finds where the original (non-endpoint)
+    conversation ends and returns everything after it — the planner, every
+    worker iteration, and every critic review.  Mirrors the ``baseEnd`` slice
+    the frontend (``_pollFallback`` / SSE state handler) computes, so the
+    poll DB branch can hand back a byte-equivalent ``endpointTurns`` payload.
+
+    Returns [] when the conversation is missing/unparseable or carries no
+    endpoint turns.
+    """
+    if not conv_id:
+        return []
+    try:
+        db = get_thread_db(DOMAIN_CHAT)
+        row = db.execute(
+            'SELECT messages FROM conversations WHERE id=? AND user_id=1',
+            (conv_id,)
+        ).fetchone()
+        if not row or not row[0]:
+            return []
+        messages = json.loads(row[0])
+        original_end = 0
+        for i, m in enumerate(messages):
+            if (not m.get('_epIteration')
+                    and not m.get('_isEndpointReview')
+                    and not m.get('_isEndpointPlanner')):
+                original_end = i + 1
+        return messages[original_end:]
+    except Exception as e:
+        logger.warning('[Recovery] load_endpoint_turns_from_conversation failed conv=%s: %s',
+                       conv_id, e)
+        return []
+
+
 def build_result_meta(task):
     """Build the persisted-result metadata dict from a finished task.
 
@@ -363,13 +615,91 @@ def build_result_meta(task):
             meta['fallbackReason'] = task['_fallback_reason']
         if task.get('_fallback_kind'):
             meta['fallbackKind'] = task['_fallback_kind']
+    if task.get('id'): meta['taskId'] = task['id']
     if task.get('model'): meta['model'] = task['model']
     if task.get('provider_id'): meta['provider_id'] = task['provider_id']
     if task.get('thinkingDepth'): meta['thinkingDepth'] = task['thinkingDepth']
     if task.get('apiRounds'): meta['apiRounds'] = task['apiRounds']
     if task.get('modifiedFiles'): meta['modifiedFiles'] = task['modifiedFiles']
     if task.get('modifiedFileList'): meta['modifiedFileList'] = task['modifiedFileList']
+    # Orchestration flow per-node run trace (resolved brief + bounded I/O per
+    # node) — persisted so the canvas/inspector overlay survives reload /
+    # server restart, served via /api/v1/chat/flow-trace/<task>.
+    if task.get('_flow_trace'): meta['flowTrace'] = task['_flow_trace']
+    if task.get('_flow_label'): meta['flowLabel'] = task['_flow_label']
+    # ★ Endpoint-mode terminal signal — persisted so the /api/chat/poll DB
+    #   branch (task evicted past TTL / server restarted) can still tell the
+    #   frontend "this is a FINISHED endpoint task". Without it, a poll-fallback
+    #   that outlives the in-memory task hits the DB branch, returns no
+    #   endpointMode, and the frontend overwrites the multi-turn endpoint
+    #   structure with the last in-progress turn's single content blob — a
+    #   state-sync gap only a manual refresh repaired. The authoritative turns
+    #   live in the conversation messages (synced by endpoint.py), so the flag
+    #   tells the frontend to reconcile from there rather than from this row.
+    if task.get('endpoint_mode'):
+        meta['endpointMode'] = True
+        if task.get('_endpoint_stop_reason'):
+            meta['endpointStopReason'] = task['_endpoint_stop_reason']
     return meta
+
+
+def _merge_tool_rounds(task):
+    """Merge checkpoint + current toolRounds, in order (the continue-flow merge).
+
+    Single source of truth for the ``_checkpointToolRounds + toolRounds``
+    concatenation that the final-persist, partial-checkpoint, and both
+    conversation-sync paths all need.
+
+    Returns a list of SHALLOW-COPIED round dicts. The copy is load-bearing for
+    thread-safety: the swarm driver thread stamps ``_swarmSnapshot`` onto a
+    live round dict (master._persist_agent_snapshot) while THIS path may be
+    running ``json_dumps_pg(messages)`` on the same rounds from the
+    orchestrator thread. Serializing a by-reference dict that another thread
+    mutates raises ``RuntimeError: dictionary changed size during iteration``
+    (silently swallowed by the sync's except → checkpoint dropped) or persists
+    a half-stamped round. A shallow ``dict(r)`` copy is cheap — it duplicates
+    only the key→value references (the multi-KB ``toolContent`` string is
+    shared, not copied) — and gives json a stable dict to walk. The
+    ``_swarmSnapshot`` value (a dict) is copied by-reference, which is correct:
+    the stamp REPLACES that key with a fresh object rather than mutating it
+    in place, so the snapshot a given serialize sees is always internally
+    consistent.
+    """
+    cp = task.get('_checkpointToolRounds') or []
+    cur = task.get('toolRounds') or []
+    merged = (list(cp) + cur) if cp else cur
+    return [dict(r) if isinstance(r, dict) else r for r in merged]
+
+
+# Static column order for the task_results upsert — shared by the final-result
+# and the running-checkpoint writers so the two can never drift.
+_TASK_RESULTS_COLS = (
+    'task_id', 'conv_id', 'content', 'thinking', 'error',
+    'status', 'tool_rounds', 'metadata', 'created_at', 'completed_at',
+)
+
+
+def _upsert_task_row(task, conv_id, *, content, thinking, status,
+                     error_json, tr_json, meta_json):
+    """Single source of truth for the ``task_results`` upsert.
+
+    Owns the DB acquire + the ``upsert(..., insert_cols=[10], retry=True)``
+    shape (``retry=True`` commits — see lib/database._core_schema.upsert).
+    Callers supply only the fields that vary between the final-result write
+    (``status='done'|'error'``, full metadata) and the running checkpoint
+    (``status='running'``, partial metadata).  ``created_at`` /
+    ``completed_at`` are derived here identically for both.
+    """
+    from lib.database._core_schema import TASK_RESULTS, upsert
+    db = get_thread_db(DOMAIN_CHAT)
+    upsert(db, TASK_RESULTS, {
+        'task_id': task['id'], 'conv_id': conv_id,
+        'content': content, 'thinking': thinking,
+        'error': error_json, 'status': status, 'tool_rounds': tr_json,
+        'metadata': meta_json,
+        'created_at': int(task.get('created_at', time.time()) * 1000),
+        'completed_at': int(time.time() * 1000),
+    }, insert_cols=list(_TASK_RESULTS_COLS), retry=True)
 
 
 def persist_task_result(task):
@@ -405,10 +735,9 @@ def persist_task_result(task):
     meta = build_result_meta(task)
 
     # ★ Merge checkpoint toolRounds for DB persistence (continue flow)
-    _merged_tr = list(task.get('_checkpointToolRounds') or []) + (task.get('toolRounds') or [])
+    _merged_tr = _merge_tool_rounds(task)
 
     try:
-        db = get_thread_db(DOMAIN_CHAT)
         # Only store the (potentially multi-MB) toolRounds blob when this task
         # has no conversation row to hold it — see _tool_rounds_have_dedicated_home.
         # For DB-backed/endpoint tasks the conversation is the durable store and
@@ -420,16 +749,9 @@ def persist_task_result(task):
         # message persistence) round-trips through lib.error_envelope so the
         # frontend only ever sees the typed dict.
         error_json = _err_to_json(task['error']) if task.get('error') is not None else None
-        from lib.database._core_schema import TASK_RESULTS, upsert
-        upsert(db, TASK_RESULTS, {
-            'task_id': task['id'], 'conv_id': task['convId'],
-            'content': task['content'], 'thinking': task['thinking'],
-            'error': error_json, 'status': task['status'], 'tool_rounds': tr_json,
-            'metadata': meta_json, 'created_at': int(task['created_at']*1000),
-            'completed_at': int(time.time()*1000),
-        }, insert_cols=['task_id', 'conv_id', 'content', 'thinking', 'error',
-                        'status', 'tool_rounds', 'metadata', 'created_at',
-                        'completed_at'], retry=True)
+        _upsert_task_row(task, task['convId'], content=task['content'],
+                         thinking=task['thinking'], status=task['status'],
+                         error_json=error_json, tr_json=tr_json, meta_json=meta_json)
         logger.debug('[Task %s] conv=%s Persisted to DB successfully', task_id_short, conv_id_short)
     except Exception:
         logger.error('[Task %s] conv=%s ❌ Persist FAILED — content (%d chars) and thinking (%d chars) may be lost!',
@@ -452,6 +774,36 @@ def persist_task_result(task):
 
     # ★ Auto-dispatch next queued message (server-side queue)
     _dispatch_queued_message(task)
+
+    # ★ Cross-conversation awareness (Layer 2): lazily (re)generate this
+    #   conversation's project summary after a successful reply, but ONLY when
+    #   it's a real project conversation. Non-blocking — runs in a daemon
+    #   thread so it never delays task completion or the next queued message.
+    _maybe_refresh_project_summary(task)
+
+
+def _maybe_refresh_project_summary(task):
+    """Post-reply trigger for the lazy project-summary generator (Layer 2).
+
+    Fires only for completed, non-aborted project conversations. The summary
+    engine itself is the gate for *whether* to regenerate (msg_count growth),
+    so this just decides whether the conversation is even a project candidate
+    and kicks off a background, fire-and-forget refresh.
+    """
+    try:
+        if task.get('status') != 'done' or task.get('aborted'):
+            return
+        conv_id = task.get('convId')
+        if not conv_id:
+            return
+        cfg = task.get('config') or {}
+        if not cfg.get('projectEnabled') or not cfg.get('projectPath'):
+            return
+        from lib.conversations.project_summary import ensure_summary
+        ensure_summary(conv_id, blocking=False)
+    except Exception as e:
+        logger.debug('[ProjSummary] post-reply trigger skipped conv=%s: %s',
+                     task.get('convId', '?'), e)
 
 
 def _update_proactive_execution_status(task):
@@ -559,8 +911,7 @@ def _sync_result_to_conversation(task, meta):
     # down (abort is cooperative), and its _sync_result_to_conversation
     # would overwrite the new task's data. This guard prevents that.
     if conv_id:
-        with _conv_latest_task_lock:
-            latest = _conv_latest_task.get(conv_id)
+        latest = _latest_task_for_conv(conv_id)
         if latest and latest != task['id']:
             _abort_reason = task.get('_abort_reason', '')
             _autopilot_child = task.get('_autopilot_spawned_followup')
@@ -756,9 +1107,7 @@ def _sync_result_to_conversation(task, meta):
         new_thinking_len = len(thinking)
 
         # ★ Merge checkpoint toolRounds for continue flow
-        _cp_tr = task.get('_checkpointToolRounds') or []
-        _new_tr = task.get('toolRounds') or []
-        tool_rounds = (list(_cp_tr) + _new_tr) if _cp_tr else _new_tr
+        tool_rounds = _merge_tool_rounds(task)
 
         if existing_content_len > new_content_len and existing_thinking_len > new_thinking_len:
             # ★ FIX: Even when frontend has more content (synced before us),
@@ -827,6 +1176,8 @@ def _sync_result_to_conversation(task, meta):
             last_msg['model'] = meta['model']
         if meta.get('provider_id'):
             last_msg['provider_id'] = meta['provider_id']
+        if meta.get('taskId'):
+            last_msg['_taskId'] = meta['taskId']
         if meta.get('fallbackModel'):
             last_msg['fallbackModel'] = meta['fallbackModel']
             last_msg['fallbackFrom'] = meta.get('fallbackFrom', '')
@@ -891,6 +1242,18 @@ def _sync_result_to_conversation(task, meta):
         # memory prefetch: persist indicator payload for reload visibility
         if task.get('_memoryPrefetch'):
             last_msg['_memoryPrefetch'] = task['_memoryPrefetch']
+
+        # preferences-applied chip: persist so the chip survives reload
+        if task.get('_preferencesApplied'):
+            last_msg['_preferencesApplied'] = task['_preferencesApplied']
+
+        # related-conversations chip: persist so the chip survives reload
+        if task.get('_relatedConversations'):
+            last_msg['_relatedConversations'] = task['_relatedConversations']
+
+        # preferences-learned: persist the "Noted: you prefer X" moment(s)
+        if task.get('_preferencesLearned'):
+            last_msg['_preferencesLearned'] = task['_preferencesLearned']
 
         # git-shim: persist the round commit sha for redo/diff references.
         if task.get('gitSha'):
@@ -994,188 +1357,29 @@ def _sync_result_to_conversation(task, meta):
         # user switched conversations or clicked translate.  Fire regardless.
         if content and not error:
             try:
-                _maybe_auto_translate_assistant(conv_id, content, len(messages) - 1, db)
+                _maybe_auto_translate_assistant(conv_id, content, len(messages) - 1, db, task=task)
             except Exception as te:
                 logger.warning('%s conv=%s Auto-translate trigger failed (non-fatal): %s',
                                pfx, conv_id, te)
+        else:
+            # No content / errored task: the safety net is skipped, so if the
+            # tool loop spun up an incremental accumulator (per-round segments
+            # translated in the background) it would otherwise dangle until its
+            # 300s idle-timeout and log a misleading "finalize never called"
+            # warning. Tear it down explicitly. No-op when no accumulator
+            # exists (autoTranslate off — the common case).
+            try:
+                from lib.translate import cancel_incremental
+                if cancel_incremental(task):
+                    logger.info('%s conv=%s cancelled incremental accumulator '
+                                '(task ended with no content / error=%s)',
+                                pfx, conv_id, bool(error))
+            except Exception as ce:
+                logger.debug('%s conv=%s cancel_incremental failed: %s', pfx, conv_id, ce)
 
     except Exception as e:
         logger.error('%s conv=%s ❌ Failed to sync result to conversation: %s',
                      pfx, conv_id, e, exc_info=True)
-
-
-def _maybe_auto_translate_assistant(conv_id, content, msg_idx, db=None):
-    """Automatically translate the assistant's response on the server side.
-
-    Called from _sync_result_to_conversation after the assistant content is persisted.
-    This is the server-side safety net — ensures translation happens even if the
-    frontend is offline, switched away, or the SSE stream closed prematurely.
-
-    Respects the per-conversation autoTranslate setting (frozen at send-time by
-    the frontend — won't be overwritten while a task is active).
-
-    ``db`` may be omitted; callers that don't hold a connection (e.g. the
-    endpoint module, which is DB-decoupled) pass nothing and this acquires
-    the thread-local chat connection itself.
-    """
-    pfx = '[AutoTranslate]'
-    if db is None:
-        db = get_thread_db(DOMAIN_CHAT)
-    try:
-        row = db.execute(
-            'SELECT messages, settings FROM conversations WHERE id=? AND user_id=1',
-            (conv_id,)
-        ).fetchone()
-        if not row:
-            return
-
-        # ── Check autoTranslate setting (default true, matching frontend behavior) ──
-        settings = json.loads(row[1] or '{}') if row[1] else {}
-        auto_translate = settings.get('autoTranslate', True)
-        if not auto_translate:
-            logger.info('%s conv=%s msg=%d autoTranslate=false in settings — '
-                        'skipping (settings.autoTranslate=%r)',
-                        pfx, conv_id[:8], msg_idx,
-                        settings.get('autoTranslate'))
-            return
-
-        # Check if translation already exists (frontend may have triggered it first)
-        messages = json.loads(row[0] or '[]')
-        if msg_idx < len(messages):
-            existing_tc = messages[msg_idx].get('translatedContent')
-            if existing_tc and len(existing_tc) > 0:
-                # ★ FIX: detect stale partial translations — if the existing translation
-                # is less than 15% of the content length, it was translated from partial
-                # content (e.g. mid-stream) and needs re-translation with the full content.
-                content_len = len(content)
-                tc_len = len(existing_tc)
-                if content_len > 0 and tc_len < content_len * 0.15:
-                    logger.info('%s conv=%s msg=%d stale translatedContent detected: '
-                                'tc=%d chars vs content=%d chars (%.1f%%) — re-translating',
-                                pfx, conv_id[:8], msg_idx, tc_len, content_len,
-                                tc_len / content_len * 100)
-                    # Clear the stale translation so we re-translate
-                    messages[msg_idx].pop('translatedContent', None)
-                    messages[msg_idx].pop('_translateDone', None)
-                    messages[msg_idx].pop('_translateTaskId', None)
-                    messages[msg_idx].pop('_translatedCache', None)
-                    # Persist the cleared state (with CAS to avoid clobbering
-                    # concurrent frontend writes)
-                    try:
-                        _ua_row = db.execute(
-                            'SELECT updated_at FROM conversations WHERE id=? AND user_id=1',
-                            (conv_id,)
-                        ).fetchone()
-                        if _ua_row:
-                            _now_ms = int(time.time() * 1000)
-                            db_execute_with_retry(
-                                db,
-                                'UPDATE conversations SET messages=?, updated_at=? WHERE id=? AND user_id=1 AND updated_at=?',
-                                (json_dumps_pg(messages), _now_ms, conv_id, _ua_row[0])
-                            )
-                    except Exception as ce:
-                        logger.warning('%s conv=%s Failed to clear stale translation: %s',
-                                       pfx, conv_id[:8], ce)
-                else:
-                    logger.debug('%s conv=%s msg=%d already has translatedContent (%d chars) — skipping',
-                                 pfx, conv_id[:8], msg_idx, len(existing_tc))
-                    return
-
-        logger.debug('%s conv=%s msg=%d autoTranslate is ON — translating regardless of content language',
-                     pfx, conv_id[:8], msg_idx)
-
-        # ── Check for already-running translate task from the frontend ──
-        # Import lazily to avoid circular imports
-        from lib.translate import _translate_tasks, _translate_tasks_lock
-        with _translate_tasks_lock:
-            for tid, tt in _translate_tasks.items():
-                if (tt.get('convId') == conv_id and
-                    tt.get('msgIdx') == msg_idx and
-                    tt.get('field') == 'translatedContent' and
-                    tt['status'] == 'running'):
-                    logger.info('%s conv=%s msg=%d Frontend already started translate task %s — skipping',
-                                pfx, conv_id[:8], msg_idx, tid)
-                    return
-
-        # ── Resolve the stable per-message id so the live push frame can be
-        #    routed by id (the preferred path) instead of the fragile msgIdx
-        #    fallback.  Without this the frontend's '*' translate subscriber
-        #    can only match by index, which drifts for multi-turn agent /
-        #    endpoint conversations and post-stream reconciliation — the
-        #    surgical _renderMsgInPlace then targets the wrong (or no) DOM
-        #    node and the translation never appears until a full re-render. ──
-        _msg_id = ''
-        if msg_idx is not None and 0 <= msg_idx < len(messages):
-            _msg_id = messages[msg_idx].get('_msgId') or ''
-
-        # ── Start background translation thread ──
-        logger.info('%s conv=%s msg=%d Starting server-side auto-translation (%d chars)',
-                    pfx, conv_id[:8], msg_idx, len(content))
-
-        def _run_translate():
-            try:
-                from lib.translate import _do_translate, _translate_tasks, _translate_tasks_lock
-                task_id = str(uuid.uuid4())[:12]
-                task = {
-                    'id': task_id,
-                    'status': 'running',
-                    'result': None,
-                    'error': None,
-                    'model': None,
-                    'progress': None,
-                    'convId': conv_id,
-                    'msgIdx': msg_idx,
-                    'msgId': _msg_id,
-                    'field': 'translatedContent',
-                    'targetLang': 'Chinese',
-                    'textLen': len(content),
-                    'created_at': time.time(),
-                    'completed_at': None,
-                }
-                with _translate_tasks_lock:
-                    _translate_tasks[task_id] = task
-                logger.info('%s task=%s conv=%s Translate thread started', pfx, task_id, conv_id[:8])
-                _do_translate(task_id, content, 'Chinese', 'English', conv_id, msg_idx, 'translatedContent',
-                              msg_id=_msg_id or None)
-            except Exception as e:
-                logger.error('%s conv=%s Translate thread failed: %s', pfx, conv_id[:8], e, exc_info=True)
-
-        threading.Thread(target=_run_translate, daemon=True,
-                         name=f'auto-translate-{conv_id[:8]}').start()
-
-    except Exception as e:
-        logger.warning('%s conv=%s Failed to check/start auto-translate: %s',
-                       pfx, conv_id[:8], e)
-
-
-def _maybe_auto_translate_critic(conv_id, content, msg_idx, db=None):
-    """Server-side auto-translate for endpoint-mode critic review messages.
-
-    Endpoint-mode critic output is authored by the Critic LLM (English by
-    default, sometimes mixed) and is stored as ``role='user'`` with
-    ``_isEndpointReview=true`` in the conversation's ``messages`` list.  The
-    existing ``_maybe_auto_translate_assistant`` safety-net commits to
-    ``messages[msg_idx]`` by index regardless of role, so we reuse it
-    directly and only override the log prefix + source-lang hint for
-    observability.
-
-    This path is only invoked from
-    ``endpoint._trigger_endpoint_auto_translate``.  The per-conv
-    ``autoTranslate`` gate, dedup against running frontend translate tasks,
-    and stale-partial re-translation logic are inherited verbatim.
-    """
-    pfx = '[AutoTranslate:Critic]'
-    if not conv_id or not content:
-        logger.debug('%s conv=%s msg=%s — empty conv/content; skipping',
-                     pfx, conv_id[:8] if conv_id else '?', msg_idx)
-        return
-    # Delegate to the shared helper — it is role-agnostic at the commit
-    # layer (writes to messages[msg_idx]).  We only log the role flavour
-    # here so operators can distinguish critic translations in the log.
-    logger.info('%s conv=%s msg=%d content=%dchars — delegating to '
-                '_maybe_auto_translate_assistant safety net',
-                pfx, conv_id[:8], msg_idx, len(content))
-    _maybe_auto_translate_assistant(conv_id, content, msg_idx, db)
 
 
 def checkpoint_task_partial(task):
@@ -1198,12 +1402,9 @@ def checkpoint_task_partial(task):
         return
 
     # ★ Merge checkpoint toolRounds for continue flow
-    _cp_tr = task.get('_checkpointToolRounds') or []
-    _cur_tr = task.get('toolRounds') or []
-    _merged_tr = (list(_cp_tr) + _cur_tr) if _cp_tr else _cur_tr
+    _merged_tr = _merge_tool_rounds(task)
 
     try:
-        db = get_thread_db(DOMAIN_CHAT)
         # See _tool_rounds_have_dedicated_home: skip the duplicate blob for
         # tasks whose toolRounds are checkpointed into conversations.messages
         # by _sync_partial_to_conversation on the same cadence.
@@ -1215,16 +1416,9 @@ def checkpoint_task_partial(task):
         meta_json = json.dumps(meta, ensure_ascii=False) if meta else None
         # Error envelope is JSON-serialised at the wire — see persist_task_result.
         _cp_error_json = _err_to_json(task['error']) if task.get('error') is not None else None
-        from lib.database._core_schema import TASK_RESULTS, upsert
-        upsert(db, TASK_RESULTS, {
-            'task_id': task['id'], 'conv_id': conv_id,
-            'content': task.get('content') or '', 'thinking': task.get('thinking') or '',
-            'error': _cp_error_json, 'status': 'running', 'tool_rounds': tr_json,
-            'metadata': meta_json, 'created_at': int(task['created_at']*1000),
-            'completed_at': int(time.time()*1000),
-        }, insert_cols=['task_id', 'conv_id', 'content', 'thinking', 'error',
-                        'status', 'tool_rounds', 'metadata', 'created_at',
-                        'completed_at'], retry=True)
+        _upsert_task_row(task, conv_id, content=task.get('content') or '',
+                         thinking=task.get('thinking') or '', status='running',
+                         error_json=_cp_error_json, tr_json=tr_json, meta_json=meta_json)
         logger.debug('[Checkpoint %s] conv=%s Saved partial: content=%dchars thinking=%dchars',
                      task_id_short, conv_id, content_len, thinking_len)
     except Exception as e:
@@ -1278,9 +1472,7 @@ def _sync_partial_to_conversation(task):
             return
 
     # ★ Merge checkpoint toolRounds for continue flow
-    _cp_tr = task.get('_checkpointToolRounds') or []
-    _cur_tr = task.get('toolRounds') or []
-    tool_rounds = (list(_cp_tr) + _cur_tr) if _cp_tr else _cur_tr
+    tool_rounds = _merge_tool_rounds(task)
 
     # Bounded CAS retry — under contention with the frontend or other writers
     # we re-read and try again rather than silently dropping the checkpoint.
@@ -1309,6 +1501,21 @@ def _sync_partial_to_conversation(task):
 
             last_msg = messages[-1]
             if last_msg.get('role') != 'assistant':
+                # Do NOT materialize a brand-new trailing assistant row from a
+                # thinking-only first checkpoint.  A turn that streams a stray
+                # reasoning fragment and then dies (server crash) would otherwise
+                # leave an empty husk ({content:'', thinking:'I'}) with no
+                # finishReason — which renders as a blank bubble with no finish
+                # tag and slips past the frontend ghost-cleanup (the stray
+                # `thinking` defeats its `!thinking` guard).  Wait until there's
+                # real CONTENT before appending the row; thinking accumulated by
+                # then is written alongside it, so nothing is dropped.  Updating
+                # an EXISTING assistant row (frontend placeholder) is unaffected.
+                if not content:
+                    logger.debug('[Checkpoint] conv=%s deferring trailing assistant '
+                                 'row — thinking-only first checkpoint (no content yet)',
+                                 conv_id[:8])
+                    return
                 last_msg = {'role': 'assistant', 'content': '', 'thinking': ''}
                 messages.append(last_msg)
 
@@ -1351,6 +1558,9 @@ def _sync_partial_to_conversation(task):
                 ('modifiedFileList', 'modifiedFileList'),
                 ('apiRounds', 'apiRounds'),
                 ('_memoryPrefetch', '_memoryPrefetch'),
+                ('_preferencesApplied', '_preferencesApplied'),
+                ('_relatedConversations', '_relatedConversations'),
+                ('_preferencesLearned', '_preferencesLearned'),
             ):
                 v = task.get(src_key)
                 if v and not last_msg.get(dst_key):
@@ -1430,7 +1640,16 @@ def recover_stale_tasks_on_startup():
             "SELECT task_id, conv_id, content, thinking FROM task_results WHERE status='running'"
         ).fetchall()
 
+        # conv_id → task_id of the interrupted task carrying the MOST recovered
+        # text.  task_results.conv_id is BACKEND-AUTHORITATIVE (create_task stamps
+        # it), unlike the frontend-synced settings.activeTaskId which is null/stale
+        # after a mid-stream crash (the PUT that persists it may never have landed).
+        # Keying the merge off THIS map is what lets a crash-interrupted turn be
+        # recovered into conversations.messages even when activeTaskId was lost —
+        # the root fix for "Continue starts a brand-new agent from scratch".
+        interrupted_task_by_conv = {}
         if stale_rows:
+            _best_recovered_len = {}
             for row in stale_rows:
                 tid = row['task_id']
                 cid = row['conv_id'] or ''
@@ -1439,38 +1658,73 @@ def recover_stale_tasks_on_startup():
                 logger.info('[Startup] Marking stale task %s (conv=%s) as interrupted: '
                             'content=%dchars thinking=%dchars',
                             tid[:8], cid[:8], clen, tlen)
+                if cid:
+                    _tot = clen + tlen
+                    if _tot >= _best_recovered_len.get(cid, -1):
+                        _best_recovered_len[cid] = _tot
+                        interrupted_task_by_conv[cid] = tid
             db.execute("UPDATE task_results SET status='interrupted' WHERE status='running'")
             db.commit()
-            logger.info('[Startup] Marked %d stale running task(s) as interrupted', len(stale_rows))
+            logger.info('[Startup] Marked %d stale running task(s) as interrupted '
+                        '(%d owning conv(s) identified via task_results.conv_id)',
+                        len(stale_rows), len(interrupted_task_by_conv))
 
-        # ── Step 2: Clear activeTaskId from all conversation settings ──
-        # Find conversations that still have activeTaskId set
+        # ── Step 2+3: Merge recovered content into conversations + clear stale
+        #    activeTaskId.  Drive off TWO sources, UNIONed by conv_id:
+        #      (a) conversations still carrying settings.activeTaskId — clear the
+        #          now-dead pointer (json_extract is index-backed on PG via
+        #          idx_conv_active_task and native on SQLite).
+        #      (b) conversations that OWN an interrupted task via
+        #          task_results.conv_id — AUTHORITATIVE; recovers the turn even
+        #          when activeTaskId was never persisted (the mid-stream-crash
+        #          case that used to orphan the interrupted content entirely).
         conv_rows = db.execute(
             "SELECT id, settings, messages FROM conversations WHERE user_id=1 "
-            "AND settings IS NOT NULL AND CAST(settings AS TEXT) LIKE '%activeTaskId%'"
+            "AND json_extract(settings, '$.activeTaskId') IS NOT NULL"
         ).fetchall()
+        conv_by_id = {r['id']: r for r in conv_rows}
+
+        _missing_ids = [c for c in interrupted_task_by_conv if c not in conv_by_id]
+        if _missing_ids:
+            _ph = ','.join('?' for _ in _missing_ids)
+            for r in db.execute(
+                "SELECT id, settings, messages FROM conversations WHERE user_id=1 "
+                f"AND id IN ({_ph})", tuple(_missing_ids)
+            ).fetchall():
+                conv_by_id[r['id']] = r
+            logger.info('[Startup] %d interrupted-owning conv(s) had NO activeTaskId '
+                        '(recovered via task_results.conv_id): %s',
+                        len(_missing_ids), [c[:8] for c in _missing_ids])
 
         cleared = 0
-        for crow in conv_rows:
-            cid = crow['id']
+        recovered_conv_ids: list = []
+        for cid, crow in conv_by_id.items():
             try:
                 settings = json.loads(crow['settings'] or '{}')
             except (json.JSONDecodeError, TypeError) as _e_audit:
                 logger.debug('[manager] recover_stale_tasks_on_startup caught %s: %s', type(_e_audit).__name__, _e_audit)
                 continue
             atid = settings.get('activeTaskId')
-            if not atid:
+            # Authoritative merge source: the interrupted task OWNED by this conv
+            # (task_results.conv_id) wins over the frontend-synced activeTaskId
+            # pointer — the interrupted task is the one that actually holds the
+            # recovered content/thinking/toolRounds.
+            merge_task_id = interrupted_task_by_conv.get(cid) or atid
+            if not merge_task_id and not atid:
                 continue
-            # Clear activeTaskId
-            settings['activeTaskId'] = None
+            # Clear the dead pointer if present.
+            if atid:
+                settings['activeTaskId'] = None
             settings_json = json.dumps(settings, ensure_ascii=False)
 
-            # ── Step 3: If there's interrupted task data, ensure it's in the
-            #    conversation messages (the checkpoint may have partial content) ──
-            task_row = db.execute(
-                "SELECT content, thinking, tool_rounds, metadata FROM task_results WHERE task_id=?",
-                (atid,)
-            ).fetchone()
+            # ── Merge interrupted task data into the conversation messages
+            #    (the checkpoint may carry partial content the UI never saw) ──
+            task_row = None
+            if merge_task_id:
+                task_row = db.execute(
+                    "SELECT content, thinking, tool_rounds, metadata FROM task_results WHERE task_id=?",
+                    (merge_task_id,)
+                ).fetchone()
 
             messages_json = None
             if task_row:
@@ -1556,18 +1810,22 @@ def recover_stale_tasks_on_startup():
                     (settings_json, now_ms, cid)
                 )
             cleared += 1
-            logger.info('[Startup] Cleared activeTaskId=%s from conv=%s '
-                        '(messages_updated=%s)',
-                        atid[:8], cid[:8], bool(messages_json))
+            recovered_conv_ids.append(cid)
+            logger.info('[Startup] Recovered conv=%s from task=%s '
+                        '(activeTaskId_cleared=%s messages_updated=%s)',
+                        cid[:8],
+                        merge_task_id[:8] if merge_task_id else 'none',
+                        bool(atid), bool(messages_json))
 
         if cleared:
             db.commit()
-            logger.info('[Startup] Cleared activeTaskId from %d conversation(s)', cleared)
+            logger.info('[Startup] Recovered %d conversation(s) (merged interrupted '
+                        'content + cleared any dead activeTaskId)', cleared)
 
         total = len(stale_rows) + cleared
         if total:
             logger.info('[Startup] ✅ Stale task recovery complete: %d task(s) interrupted, '
-                        '%d conv(s) cleaned', len(stale_rows), cleared)
+                        '%d conv(s) recovered', len(stale_rows), cleared)
             # Invalidate meta cache so first frontend request gets clean data
             try:
                 from lib.conversations import invalidate_meta_cache
@@ -1576,6 +1834,28 @@ def recover_stale_tasks_on_startup():
                 logger.debug('[Startup] meta cache invalidation skipped: %s', e)
         else:
             logger.debug('[Startup] No stale tasks or activeTaskIds found — clean shutdown')
+
+        # ── Resume any autopilot run that was armed when the server died ──
+        #   Recovery above restored the interrupted reply, but the crash killed
+        #   the end-of-turn VU hook mid-flight (no follow-up spawned, no baton).
+        #   The DURABLE armed-marker is authoritative here — resume scans EVERY
+        #   conv carrying a marker (not just recovered tasks), so an armed-but-
+        #   idle conv (marker present, no in-flight task at crash) is resumed
+        #   too. Hence this runs UNCONDITIONALLY (not gated on recovered ids);
+        #   recovered_conv_ids is passed only for logging-symmetry union. Runs
+        #   AFTER the commit so the resumed carrier sees merged messages.
+        try:
+            from lib.tasks_pkg.autopilot import (
+                resume_armed_autopilot_after_crash,
+            )
+            resumed = resume_armed_autopilot_after_crash(recovered_conv_ids)
+            if resumed:
+                logger.info('[Startup] Resumed %d armed autopilot run(s) '
+                            'after crash: %s', len(resumed),
+                            [c[:8] for c in resumed])
+        except Exception as e:
+            logger.warning('[Startup] autopilot resume-after-crash failed '
+                           '(non-fatal): %s', e, exc_info=True)
 
     except Exception as e:
         logger.error('[Startup] Stale task recovery failed (non-fatal): %s', e, exc_info=True)
@@ -1613,6 +1893,119 @@ def cleanup_old_tasks():
                 del _conv_latest_task[cid]
     if n:
         logger.debug('[Manager] cleanup_old_tasks removed %d tasks', n)
+    # ★ Stuck-task backstop (rides the same tick). cleanup_stale only evicts
+    #   FINISHED tasks, so a purely-wedged running task (never superseded) would
+    #   otherwise live forever with no terminal state. See reap_stuck_running_tasks.
+    try:
+        reap_stuck_running_tasks()
+    except Exception as e:
+        logger.warning('[Manager] reap_stuck_running_tasks failed: %s', e, exc_info=True)
+
+
+# Age (seconds) after which a running task that has produced ZERO output
+# (no events, no content, no thinking) is considered wedged and force-failed.
+# Env-tunable; 0 disables the backstop. Default 30 min — comfortably longer
+# than any legitimate pre-first-token wait (queueing, long tool prep).
+def _stuck_task_max_silent_secs() -> int:
+    import os
+    try:
+        return int(os.environ.get('TOFU_STUCK_TASK_MAX_SILENT_SECS', '') or '1800')
+    except (ValueError, TypeError):
+        return 1800
+
+
+def reap_stuck_running_tasks() -> int:
+    """Force-terminate running tasks that are wedged with zero output.
+
+    Targets the "pure stuck" case the supersede/abort path does NOT cover: a
+    task that was never superseded but whose thread is wedged before producing
+    anything (the exact shape of the incident that motivated this — a stream
+    that received 0 tokens, emitted 0 events, for hours). Left alone, such a
+    task stays ``status='running'`` in memory forever and, having never
+    finalized, has NO terminal ``task_results`` row → after a restart a poll
+    404s and the turn is lost.
+
+    Discriminator (deliberately conservative to avoid killing a task that is
+    legitimately BLOCKED ON HUMAN INPUT — ask_user / write-approval / stdin):
+    such a task has already emitted at least one event (the phase / tool_call
+    for the prompt), so we require **zero events AND zero content AND zero
+    thinking** plus an age past the silence threshold. A human-waiting task
+    fails the zero-events test and is never reaped.
+
+    Marks the task aborted (reason ``stuck_no_output``) and writes an error
+    terminal floor so a poll resolves to a terminal state instead of a 404.
+    Returns the number of tasks reaped.
+    """
+    max_silent = _stuck_task_max_silent_secs()
+    if max_silent <= 0:
+        return 0
+    now = time.time()
+    stuck = []
+    with tasks_lock:
+        for tid, t in tasks.items():
+            if t.get('status') != 'running' or t.get('aborted'):
+                continue
+            # Zero output so far?
+            if (t.get('content') or '') or (t.get('thinking') or ''):
+                continue
+            try:
+                with t['events_lock']:
+                    n_events = len(t['events'])
+            except Exception:
+                # No events structure (legacy/malformed) — treat as no output.
+                n_events = 0
+            if n_events > 0:
+                continue
+            age = now - t.get('created_at', now)
+            if age < max_silent:
+                continue
+            t['aborted'] = True
+            t['_abort_timestamp'] = now
+            t['_abort_reason'] = 'stuck_no_output'
+            t['status'] = 'error'
+            from lib.error_envelope import make_envelope as _make_env
+            t['error'] = _make_env(
+                'internal',
+                detail=('Task produced no output for %d seconds and was '
+                        'terminated as stuck.' % int(age)),
+                model=(t.get('config') or {}).get('model', '') or '',
+                context='stuck-task-reaper',
+                source='lib.tasks_pkg.manager',
+            )
+            t['finishReason'] = 'error'
+            t['finished_at'] = now
+            stuck.append(t)
+    for t in stuck:
+        logger.warning('[Task %s] conv=%s ⚠️ STUCK — 0 events/0 content for %.0fs, '
+                       'force-failed and writing terminal floor',
+                       t['id'][:8], (t.get('convId') or '')[:8],
+                       now - t.get('created_at', now))
+        _write_stuck_terminal_floor(t)
+    if stuck:
+        logger.warning('[Manager] reap_stuck_running_tasks force-failed %d wedged task(s)',
+                       len(stuck))
+    return len(stuck)
+
+
+def _write_stuck_terminal_floor(task) -> None:
+    """Persist a terminal ``status='error'`` row for a reaped stuck task so a
+    later poll (even post-restart) resolves terminally instead of 404.
+
+    Best-effort; reuses the shared ``_upsert_task_row`` (keyed on task_id).
+    """
+    try:
+        conv_id = task.get('convId', '') or ''
+        meta = build_result_meta(task)
+        meta_json = json.dumps(meta, ensure_ascii=False) if meta else None
+        error_json = _err_to_json(task['error']) if task.get('error') is not None else None
+        _upsert_task_row(task, conv_id, content=task.get('content') or '',
+                         thinking=task.get('thinking') or '', status='error',
+                         error_json=error_json, tr_json=None, meta_json=meta_json)
+        logger.debug('[Task %s] conv=%s Wrote stuck terminal floor to task_results',
+                     task['id'][:8], conv_id[:8])
+    except Exception as e:
+        logger.warning('[Task %s] Failed to write stuck terminal floor: %s',
+                       task.get('id', '?')[:8], e, exc_info=True)
 
 # ── Streaming checkpoint interval (seconds) ──
 # During LLM token streaming, we periodically persist partial content to
@@ -1637,7 +2030,14 @@ def stream_llm_response(task, body, tag='', on_tool_call_ready=None):
     """
     pfx = f'[Task {task["id"][:8]}][{tag}]'
     model = body.get('model', '?')
-    _last_stream_ckpt = time.time()
+    # ★ Init to 0.0 (epoch) so the FIRST content/thinking delta checkpoints
+    #   immediately, then settle into the _STREAM_CHECKPOINT_INTERVAL cadence.
+    #   Starting at time.time() left a pre-first-checkpoint window where a
+    #   server crash after the first tokens but before the 5s tick lost the
+    #   whole turn. checkpoint_task_partial() no-ops while content+thinking are
+    #   still empty, so an early call before any token is harmless. Mirrors the
+    #   orchestrator tool-loop's `_last_checkpoint = 0.0` (orchestrator.py).
+    _last_stream_ckpt = 0.0
 
     # ★ Timing: measure time-to-first-token (TTFT) for the FIRST LLM round
     #   of this task only (the "waiting" window the user sees). Anchored to
@@ -1670,6 +2070,20 @@ def stream_llm_response(task, body, tag='', on_tool_call_ready=None):
                 checkpoint_task_partial(task)
             except Exception as e:
                 logger.debug('%s streaming checkpoint failed (non-fatal): %s', pfx, e)
+            # ── Presence heartbeat (throttled, rides the checkpoint cadence).
+            #    Token flow IS work — a long single-LLM turn with no tool rounds
+            #    must keep the peer ACTIVE, not flap to idle. One bump per
+            #    checkpoint interval (~5s), inside the ACTIVE_TTL window, so no
+            #    per-token writes. Best-effort.
+            _cfg = task.get('config') or {}
+            _pp = _cfg.get('projectPath') or ''
+            _cid = task.get('convId') or ''
+            if _pp and _cid:
+                try:
+                    from lib.presence import heartbeat as _presence_heartbeat
+                    _presence_heartbeat(_pp, _cid, phase='generating')
+                except Exception as e:
+                    logger.debug('%s presence heartbeat failed (non-fatal): %s', pfx, e)
 
     def _on_thinking(td):
         _log_ttft_once()
@@ -1725,6 +2139,20 @@ def stream_llm_response(task, body, tag='', on_tool_call_ready=None):
         _avoid_pairs = {_rotate_signal}
         logger.info('%s zero-byte force-rotate: avoiding %s:%s for this dispatch',
                     pfx, _rotate_signal[0], _rotate_signal[1])
+
+    # ★ Surface the in-flight request as a live phase BEFORE the first token.
+    #   Between a finished tool and the model's next token there is a silent
+    #   gap (prompt prefill / TTFT) during which no content/thinking delta
+    #   fires — and if the next turn is a tool call with no preamble, nothing
+    #   renders until tool_start.  Without this the spinner stays frozen on
+    #   the previous "Analyzing results…" label and the task looks hung.
+    #   Cleared automatically by the first content/thinking delta, or by
+    #   tool_start (hasActiveSearch) on the frontend.
+    _model_label = _display_model_name(model)
+    append_event(task, build_event(
+        EventType.PHASE, phase='waiting_model',
+        detail=f'Sent to {_model_label}, waiting for it to start replying…',
+        model=model))
 
     msg, finish_reason, usage = dispatch_stream(
         body,

@@ -185,9 +185,9 @@
 .presence-strip[hidden]{display:none}
 .collab-bar-inner{display:flex;align-items:center;gap:8px;width:100%;height:28px;padding:0 16px;background:var(--bg-secondary);border:none;border-bottom:1px solid var(--border);color:var(--text-secondary);font-size:12px;font-family:inherit;cursor:pointer;text-align:left;overflow:hidden;white-space:nowrap;transition:background var(--transition)}
 .collab-bar-inner:hover{background:var(--bg-hover)}
-.collab-brain{display:inline-flex;color:var(--accent);flex:0 0 auto}
+.collab-brain{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:6px;background:var(--accent-subtle);color:var(--accent);flex:0 0 auto}
 .collab-brain-ico{display:block}
-.collab-label{font-weight:600;color:var(--text-secondary);flex:0 0 auto}
+.collab-label{font-weight:600;color:var(--text-secondary);flex:0 0 auto;letter-spacing:.02em}
 .collab-sep{color:var(--text-tertiary);opacity:.5;flex:0 0 auto}
 .collab-seg{flex:0 0 auto;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .collab-seg-decisions{color:#e0a13a;font-weight:600}
@@ -19897,12 +19897,27 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .topbar{
 .pb-inf-epic.pb-inf-open{border-left:3px solid var(--text-tertiary)}
 
 /* Always-visible inline per-conversation influence bar (docked on chat view). */
-.conv-influence-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;width:100%;padding:7px 16px;background:linear-gradient(180deg,color-mix(in srgb,var(--accent) 4%,var(--bg-primary)),var(--bg-primary));border:none;border-bottom:1px solid var(--border-light);cursor:pointer;font-family:inherit;text-align:left;transition:background var(--transition)}
+.conv-influence-bar{position:relative;display:flex;align-items:center;gap:8px;flex-wrap:wrap;width:100%;padding:7px 16px;background:linear-gradient(180deg,color-mix(in srgb,var(--accent) 4%,var(--bg-primary)),var(--bg-primary));border:none;border-bottom:1px solid var(--border-light);cursor:pointer;font-family:inherit;text-align:left;transition:background var(--transition)}
 .conv-influence-bar:hover{background:var(--accent-subtle)}
 .conv-influence-bar[hidden]{display:none}
 .conv-inf-lead{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:700;color:var(--accent)}
 .conv-inf-lead svg{width:13px;height:13px}
 .conv-influence-bar .pb-inf-chip{cursor:pointer}
+
+/* ── Hierarchy join: when the project-wide collab bar is visible directly
+   above, the conversation-scoped influence bar reads as its INDENTED sub-row
+   (a └ tree connector + deeper left padding + muted, non-accent lead) so the
+   two stacked bars form ONE "Project → this-chat" hierarchy instead of two
+   competing accent twins. When the collab bar is hidden this selector doesn't
+   match and the influence bar renders as a normal standalone bar (accent lead,
+   original padding) — behaviour unchanged. */
+.presence-strip:not([hidden]) + .conv-influence-bar{padding-left:40px;background:linear-gradient(180deg,color-mix(in srgb,var(--accent) 6%,var(--bg-primary)),color-mix(in srgb,var(--accent) 2%,var(--bg-primary)))}
+/* Tree join: vertical drop aligned under the parent brain-badge centre (~26px),
+   horizontal arm reaching the child map-pin. Accent-tinted so it reads as an
+   intentional connector, not a stray border. */
+.presence-strip:not([hidden]) + .conv-influence-bar::before{content:'';position:absolute;left:25px;top:-1px;bottom:50%;width:12px;border-left:1.5px solid color-mix(in srgb,var(--accent) 38%,var(--border));border-bottom:1.5px solid color-mix(in srgb,var(--accent) 38%,var(--border));border-bottom-left-radius:6px;pointer-events:none}
+.presence-strip:not([hidden]) + .conv-influence-bar .conv-inf-lead{color:var(--text-secondary);font-weight:600}
+.presence-strip:not([hidden]) + .conv-influence-bar .conv-inf-lead svg{color:color-mix(in srgb,var(--accent) 55%,var(--text-tertiary))}
 
 /* ── Responsive: stack the three columns on a narrow panel ── */
 @media (max-width:720px){

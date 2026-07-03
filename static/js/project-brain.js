@@ -879,8 +879,11 @@
       return;
     }
     var chips = '';
+    // Lead glyph is a map-pin ("you are here in the project"), deliberately
+    // NOT the brain glyph the collab bar above uses — two identical brains
+    // stacked read as a duplicate. This bar is the conv-scoped sub-lens.
     chips += '<span class="conv-inf-lead">' +
-      ((typeof Icon === 'function') ? Icon('brain', 13) : '') +
+      ((typeof Icon === 'function') ? Icon('mapPin', 13) : '') +
       '<span>' + _esc(_t('projectBrain.barLead', 'This chat')) + '</span></span>';
     if (s.charterActive) {
       chips += _influenceChip('lightbulb', 1, 'infCharterBound',

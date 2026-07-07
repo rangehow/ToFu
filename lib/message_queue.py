@@ -393,18 +393,33 @@ def get_queue(conv_id: str) -> list[dict]:
             logger.warning('[Queue] Failed to parse payload for queue_id=%s: %s', row['id'][:8], e)
             data = {}
 
-        result.append({
+        # A peer/operator turn (KIND_PEER_MSG) stores the model-facing framed
+        # `text` (embeds "[Peer message … (conv X)]" + the sender's short id).
+        # Prefer the clean, unframed `_peerText` the sender carried so the queue
+        # bar shows the ORIGINAL message, and surface the sender + operator flag
+        # so the frontend can render "from «title»" instead of the raw id.
+        is_peer = bool(data.get('_peerMessage'))
+        preview = (data.get('_peerText') if is_peer else None) or data.get('text', '') or ''
+        entry = {
             'queueId': row['id'],
             'position': row['position'],
             'kind': row['kind'] or KIND_REAL,
             'priority': row['priority'],
-            'text': (data.get('text', '') or '')[:100],
+            # No mid-word truncation (the user flagged cut-off previews). Cap at
+            # a generous 2000 chars purely so a pathological payload can't bloat
+            # the poll response; the frontend already wraps + scrolls the text.
+            'text': preview[:2000],
             'hasImages': bool(data.get('images')),
             'hasPdfs': bool(data.get('pdfTexts')),
             'hasRefs': bool(data.get('convRefs')),
             'hasQuotes': bool(data.get('replyQuotes')),
             'timestamp': row['created_at'],
-        })
+        }
+        if is_peer:
+            entry['isPeerMessage'] = True
+            entry['fromConv'] = data.get('_fromConv', '')
+            entry['isPeerHuman'] = bool(data.get('_peerHuman'))
+        result.append(entry)
 
     return result
 
@@ -658,6 +673,18 @@ def dispatch_next_queued(conv_id: str) -> str | None:
                 'content': translated_text if auto_translate and has_chinese else text,
                 'timestamp': payload.get('timestamp', int(time.time() * 1000)),
             }
+            # ★ Carry the client-generated stable _msgId through verbatim
+            #   (mirrors lib/chat/turn_builder.build_user_msg_from_payload).
+            #   The QUEUED lane is the send-while-a-task-is-running path: the
+            #   user sends on a slow network, it hangs, they send again → the
+            #   turn is enqueued and later persisted HERE, not by the immediate
+            #   /api/chat/send persist. Without preserving _msgId, a queued-then-
+            #   rescued message duplicates exactly like the immediate path did
+            #   before the fix — the client's rescue-PUT rebase (keyed on _msgId)
+            #   wouldn't recognise this server copy. Preserve it so server and
+            #   client agree on one turn identity.
+            if payload.get('_msgId'):
+                user_msg['_msgId'] = payload['_msgId']
             if auto_translate and has_chinese and translated_text != text:
                 user_msg['originalContent'] = text
                 user_msg['_translateDone'] = True

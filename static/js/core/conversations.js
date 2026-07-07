@@ -26,6 +26,40 @@ function convAutoTranslate(conv) {
 }
 
 /* ═══════════════════════════════════════════════════════════════════
+   convTitleById(cid) — resolve a conversation id to its human-readable TITLE.
+
+   Peer/operator surfaces (the queued-message bar, the project_message /
+   project_intervene delivery card) carry a bare conversation id — often the
+   TRUNCATED 8-char display form (`mradmzmd`) — where a user expects a title.
+   A raw id is meaningless to a human, so this is the single frontend seam that
+   maps an id → title. It matches on the full id first, then by unique prefix
+   (so an 8-char id still resolves against the loaded `conversations` list),
+   and falls back to a localized "Untitled chat" — NEVER a bare id.
+
+   Returns '' when `cid` is empty. Best-effort: reads the in-memory
+   `conversations` list only (no fetch), so it degrades to the fallback label
+   when the conversation isn't loaded rather than blocking on the network.
+   ═══════════════════════════════════════════════════════════════════ */
+function convTitleById(cid) {
+  const _t = (typeof t === 'function') ? t : (k => k);
+  if (!cid) return '';
+  try {
+    if (typeof conversations !== 'undefined' && Array.isArray(conversations)) {
+      let hit = conversations.find(c => c && c.id === cid);
+      if (!hit) {
+        // Prefix match (the id may be the 8-char display form). Accept only an
+        // unambiguous single match — never guess between two conversations.
+        const pre = conversations.filter(c => c && c.id && c.id.indexOf(cid) === 0);
+        if (pre.length === 1) hit = pre[0];
+      }
+      if (hit && hit.title && String(hit.title).trim()) return String(hit.title).trim();
+    }
+  } catch (e) { if (typeof console !== 'undefined') console.debug('[convTitleById] lookup failed', e); }
+  return _t('toast.untitledConv');
+}
+if (typeof window !== 'undefined') window.convTitleById = convTitleById;
+
+/* ═══════════════════════════════════════════════════════════════════
    convAutoTranslateEffective(conv) — resolver for the ON-OPEN / ON-ACTIVATE
    retro-translate decision (a FINISHED message that still has no translation).
 
@@ -229,16 +263,57 @@ function _trimMsgForPersist(m) {
    load-bearing — reassigning it makes the message look new to the DB and would
    spuriously bump rev on the very next write.
 
+   Poor-network correctness (lost-ACK): the send can SUCCEED server-side (real
+   user turn + real assistant reply persisted, rev bumped) while its RESPONSE is
+   lost, so the client thinks it failed, appends a local error bubble, and
+   rescue-PUTs → 409 → here. Two hazards this must avoid:
+     • DUPLICATE user turn — deduped by `_msgId` (client now ships the id on the
+       send payload so the server persists the SAME id) AND, defensively, by
+       matching (role,timestamp) which the backend's own idempotent append uses.
+     • Stale ERROR bubble coexisting with the real answer — a local
+       assistant message that is ERROR-ONLY (no content/thinking/toolRounds) is
+       DROPPED when the server already carries a real assistant reply for the
+       same turn, so the user never sees "error + answer" for one send.
+
    Returns the rebased message array (server base + appended local-only tail). */
+function _isErrorOnlyAssistant(m) {
+  return !!(m && m.role === 'assistant' && m.error
+    && !(m.content || '').trim()
+    && !(m.thinking || '').trim()
+    && !(m.toolRounds && m.toolRounds.length)
+    && !m._igResult && !(m._igResults && m._igResults.length));
+}
 function _rebaseUnackedTail(serverMsgs, localMsgs) {
   const base = Array.isArray(serverMsgs) ? serverMsgs.slice() : [];
   const serverIds = new Set();
-  for (const m of base) { if (m && m._msgId) serverIds.add(m._msgId); }
+  const serverUserTs = new Set();       // (role=user) timestamps present on server
+  let serverHasTrailingRealAssistant = false;
+  for (const m of base) {
+    if (!m) continue;
+    if (m._msgId) serverIds.add(m._msgId);
+    if (m.role === 'user' && m.timestamp) serverUserTs.add(m.timestamp);
+  }
+  const lastServer = base.length ? base[base.length - 1] : null;
+  if (lastServer && lastServer.role === 'assistant' && !_isErrorOnlyAssistant(lastServer)) {
+    serverHasTrailingRealAssistant = true;
+  }
   for (const lm of (Array.isArray(localMsgs) ? localMsgs : [])) {
-    if (!lm || !lm._msgId) continue;            // no stable id → can't safely place; skip
-    if (serverIds.has(lm._msgId)) continue;     // server already has it
-    base.push(lm);                              // append verbatim (keeps _msgId)
-    serverIds.add(lm._msgId);
+    if (!lm) continue;
+    if (lm._msgId && serverIds.has(lm._msgId)) continue;   // server already has this exact msg
+    // Defensive dedup: a user turn the server persisted under a matching
+    // timestamp (the backend's own idempotency key) — skip even if _msgId
+    // somehow diverged (old client mid-rollout).
+    if (lm.role === 'user' && lm.timestamp && serverUserTs.has(lm.timestamp)) continue;
+    // Drop a stale local error-only assistant bubble when the server already
+    // answered this turn for real (lost-ACK: send succeeded, response lost).
+    if (_isErrorOnlyAssistant(lm) && serverHasTrailingRealAssistant) {
+      console.warn('[rebase] dropping stale local error-only assistant bubble — '
+        + 'server has a real reply for this turn (lost-ACK recovery)');
+      continue;
+    }
+    base.push(lm);                                         // append verbatim (keeps _msgId)
+    if (lm._msgId) serverIds.add(lm._msgId);
+    if (lm.role === 'user' && lm.timestamp) serverUserTs.add(lm.timestamp);
   }
   return base;
 }
@@ -959,7 +1034,12 @@ async function loadConversationsFromServer(prefetchId) {
         _applySettingsToConv(pc, prefetchedConv.settings);
         pc.pinned = keepPinned; pc.pinnedAt = keepPinnedAt;
         pc._needsLoad = false;
-        pc._serverMsgCount = Math.max(serverMsgs.length, pc.messages.length);
+        pc._serverMsgCount = serverMsgs.length;
+        /* ★ Adopt the server rev — the prefetched conv came straight from the
+         *   server, so its rev is authoritative. Without this, pc._serverRev
+         *   stays undefined and pc's first PUT sends no baseRev (fail-open, no
+         *   CAS protection). */
+        if (typeof prefetchedConv.rev === 'number') pc._serverRev = prefetchedConv.rev;
         console.log(`[loadConversationsFromServer] ⚡ Prefetched conv ${pc.id.slice(0,8)}: ${serverMsgs.length} msgs — no second fetch needed`);
         /* ★ Update IndexedDB cache with the prefetched data */
         ConvCache.put(pc);
@@ -1189,10 +1269,20 @@ async function loadConversationMessages(convId) {
      *   is SHORTER (it never got the message) — treat local as authoritative so
      *   the OVERWRITE branch can't wipe it, and let KEEP_LOCAL re-sync it. */
     const _localHasPendingSync = convHasPendingSync(conv);
+    /* ★ KEEP_LOCAL fires ONLY on genuine un-acked local writes — either activity
+     *   that happened DURING this fetch (_hasFreshLocalActivity) or a durable
+     *   pending-sync tail (_localHasPendingSync). The old third disjunct
+     *   `localNewest > serverNewest` was a pure WALL-CLOCK tiebreaker: a stale
+     *   IDB/in-memory copy whose max message timestamp merely exceeded the
+     *   server's would win KEEP_LOCAL and then get PUT back, re-clobbering fresh
+     *   server truth (the wrong-data-on-reconnect root cause). It is REMOVED —
+     *   freshness is now decided by the server-issued monotonic `rev` (adopted
+     *   at :data.rev), never by comparing clocks that can skew or be inflated by
+     *   an optimistic push. Genuine local work is still protected by the two
+     *   real signals above; a merely newer-looking timestamp is not. */
     const localHasUnsynced =
       _hasFreshLocalActivity ||
-      _localHasPendingSync ||
-      (hasLocalData && !cacheHit && localNewest > serverNewest);
+      _localHasPendingSync;
 
     /* ── One-line reconciliation snapshot ──
      *  Logged BEFORE the branch dispatch so that postmortem of any
@@ -1558,6 +1648,9 @@ async function forceRecoverFromServer(convId) {
       conv.title = data.title || conv.title;
       conv.updatedAt = data.updatedAt || data.updated_at || conv.updatedAt;
       conv._serverMsgCount = serverMsgs.length;
+      /* ★ Adopt the server rev so a later PUT carries the correct baseRev
+       *   (this is a server GET — its rev is authoritative). */
+      if (typeof data.rev === 'number') conv._serverRev = data.rev;
       conv._needsLoad = false;
       const keepPinned = conv.pinned, keepPinnedAt = conv.pinnedAt;
       _applySettingsToConv(conv, data.settings);

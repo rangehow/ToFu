@@ -334,6 +334,18 @@ def build_user_msg_from_payload(payload, config, conv_id=None):
         'content': translated_text,
         'timestamp': timestamp,
     }
+    # ★ Carry the client-generated stable _msgId through verbatim. The frontend
+    #   assigns _msgId to the optimistic user message BEFORE the send POST, and
+    #   its persistence layer dedups on _msgId (rescue-PUT rebase
+    #   _rebaseUnackedTail; PATCH /messages/by-id). If we dropped it here,
+    #   _assign_message_ids would mint a DIFFERENT server UUID → on a poor
+    #   network where the send succeeded but its response was lost, the client's
+    #   rescue-PUT rebase wouldn't recognise the server's copy and would append
+    #   the message a SECOND time (duplicate user bubble). Preserving the id
+    #   makes server and client agree on one identity for the turn.
+    _client_msg_id = payload.get('_msgId')
+    if _client_msg_id:
+        user_msg['_msgId'] = _client_msg_id
     if original_text:
         user_msg['originalContent'] = original_text
         user_msg['_translateDone'] = True

@@ -20,6 +20,10 @@ from lib.openapi import api_meta
 from lib.request_parser import async_parse_body, parse_body  # noqa: F401
 from lib.utils import safe_json as _safe_json
 from lib.conversations import build_search_text, update_conversation_fts  # noqa: F401  — build_search_text re-exported for back-compat callers
+from lib.conversations.segments_backfill import (
+    collect_taskids_needing_segments,
+    fill_messages_with_segments,
+)
 from lib.database._core_schema import CONVERSATIONS, upsert
 
 # Columns written by the conversation upserts in this module. Omits `search_tsv`
@@ -313,6 +317,50 @@ def _conv_has_live_task(conv_id):
         return True
 
 
+def _rehydrate_segments_from_task_results(db, conv_id, messages):
+    """Backstop for segment-timeline delivery (epic pt_cb8f98b0cb9b47fb).
+
+    Fill ``segments`` on any assistant message that LACKS them from the
+    backend-authoritative ``task_results.segments`` row (the thin persisted
+    form — id/name/input/result, exactly what renderSegmentTimelineHTML
+    consumes), keyed on the message's ``_taskId``. This recovers segments for
+    turns persisted BEFORE the save_conv preservation fix shipped (the client
+    PUT had already stripped them and the old GET path never put them back).
+
+    Display-only: enriches the SERVED payload in place, does NOT write back —
+    so no GET-path write-amplification and no rev bump. Once a turn re-syncs
+    through the fixed save_conv, segments live in the messages column and this
+    backstop finds them already present and no-ops for that message. Falls
+    through cleanly (leaves the message segment-less → grouped render) when no
+    ``task_results`` row exists. Best-effort: never break the GET response.
+
+    Returns the number of messages rehydrated.
+    """
+    _need = collect_taskids_needing_segments(messages)
+    if not _need:
+        return 0
+    filled = 0
+    try:
+        placeholders = ','.join('?' for _ in _need)
+        rows = db.execute(
+            'SELECT task_id, segments FROM task_results WHERE task_id IN (%s)'
+            % placeholders,
+            tuple(_need.keys())).fetchall()
+        # Reuse the shared fill core (single source of truth with the backfill
+        # migration — see lib/conversations/segments_backfill.py).
+        segs_by_tid = {row[0]: row[1] for row in rows}
+        filled = fill_messages_with_segments(_need, segs_by_tid)
+    except Exception as e:
+        logger.warning('[get_conv] segments rehydrate from task_results failed '
+                       'conv=%s: %s', conv_id[:8], e, exc_info=True)
+        return filled
+    if filled:
+        logger.info('[get_conv] 🧩 Rehydrated segments on %d message(s) from '
+                    'task_results for conv=%s (display-only, no persist)',
+                    filled, conv_id[:8])
+    return filled
+
+
 def _reconcile_conv_on_get_blocking(db, conv_id, r):
     """Server-authoritative ghost reconcile on the conversation GET path.
 
@@ -359,6 +407,13 @@ def _reconcile_conv_on_get_blocking(db, conv_id, r):
     cleaned, changed = reconcile_conversation_messages(messages, prefix_n)
     if not changed:
         d = _conv_row_to_dict(r)
+        # Backstop: fill segments lost before the save_conv preservation fix
+        # (display-only, no persist). New/re-synced turns already carry them.
+        try:
+            _rehydrate_segments_from_task_results(db, conv_id, d['messages'])
+        except Exception as _rse:
+            logger.debug('[get_conv] segments rehydrate (unchanged path) '
+                         'conv=%s: %s', conv_id[:8], _rse)
         _attach_orphan_marker(d, cleaned, conv_id)
         return d
 
@@ -399,6 +454,14 @@ def _reconcile_conv_on_get_blocking(db, conv_id, r):
         'updatedAt': r['updated_at'], 'updated_at': r['updated_at'],
         'settings': settings_dict,
     }
+    # Backstop: fill segments lost before the save_conv preservation fix
+    # (display-only — the reconcile write above already committed the cleaned
+    # list; rehydration enriches ONLY the served dict, never re-persisted).
+    try:
+        _rehydrate_segments_from_task_results(db, conv_id, d['messages'])
+    except Exception as _rse:
+        logger.debug('[get_conv] segments rehydrate (changed path) '
+                     'conv=%s: %s', conv_id[:8], _rse)
     _attach_orphan_marker(d, cleaned, conv_id)
     return d
 
@@ -884,6 +947,86 @@ def _save_conv_blocking(db, conv_id, data):
             logger.warning('[save_conv] translation-merge pre-step failed '
                            'conv=%s: %s (continuing without merge)',
                            conv_id[:12], _me, exc_info=True)
+
+
+    # ── Preserve server-authored `segments` against frontend overwrite ──
+    # Same class of bug as the translation merge above: `segments` is the
+    # backend-authoritative typed-timeline SoT (epic pt_cb8f98b0cb9b47fb),
+    # written onto the message by _sync_result_to_conversation. The client
+    # NEVER echoes it back — _trimMsgForPersist (core/conversations.js) strips
+    # it on every PUT. Without merging it back here, the FIRST post-turn full-
+    # conversation sync overwrites the message with segments gone, and the GET
+    # path (which does not re-derive them from the messages column) then serves
+    # a segment-less message → the frontend timeline gate falls back to the
+    # grouped render. Fix: before the overwrite, re-attach segments from the
+    # existing DB message onto the incoming (stripped) one, keyed on stable
+    # identity (_msgId, falling back to _taskId), only when the client's copy
+    # lacks them. Skip on allowTruncate (edit/regen intentionally rewrites, and
+    # a regenerated turn's stale segments must NOT be resurrected).
+    _seg_preserved = 0
+    if msg_count > 0 and not allow_truncate:
+        try:
+            _seg_row = db.execute(
+                'SELECT messages FROM conversations WHERE id=? AND user_id=?',
+                (conv_id, DEFAULT_USER_ID)
+            ).fetchone()
+            if _seg_row:
+                try:
+                    _seg_db_msgs = json.loads(_seg_row[0] or '[]') or []
+                except (json.JSONDecodeError, TypeError) as _sje:
+                    logger.warning('[save_conv] Failed to parse existing messages '
+                                   'for segments merge conv=%s: %s',
+                                   conv_id[:12], _sje)
+                    _seg_db_msgs = []
+
+                # Index the DB messages that carry segments by their stable id
+                # so we can match regardless of any positional shift.
+                _seg_by_msgid = {}
+                _seg_by_taskid = {}
+                for _dbm in _seg_db_msgs:
+                    if not isinstance(_dbm, dict):
+                        continue
+                    _dbsegs = _dbm.get('segments')
+                    if not _dbsegs:
+                        continue
+                    _mid = _dbm.get('_msgId')
+                    _tid = _dbm.get('_taskId')
+                    if _mid:
+                        _seg_by_msgid[_mid] = _dbsegs
+                    if _tid:
+                        _seg_by_taskid[_tid] = _dbsegs
+
+                if _seg_by_msgid or _seg_by_taskid:
+                    for _dst in raw_messages:
+                        if not isinstance(_dst, dict):
+                            continue
+                        if _dst.get('segments'):
+                            continue  # client already carries segments — leave it
+                        _src_segs = None
+                        _mid = _dst.get('_msgId')
+                        if _mid and _mid in _seg_by_msgid:
+                            _src_segs = _seg_by_msgid[_mid]
+                        else:
+                            _tid = _dst.get('_taskId')
+                            if _tid and _tid in _seg_by_taskid:
+                                _src_segs = _seg_by_taskid[_tid]
+                        if _src_segs:
+                            _dst['segments'] = _src_segs
+                            _seg_preserved += 1
+
+                if _seg_preserved > 0:
+                    # Re-materialize the payload so the write below carries the
+                    # merged segments back into the messages column.
+                    messages = json_dumps_pg(raw_messages)
+                    logger.info(
+                        '[save_conv] 🧩 Preserved segments on %d message(s) '
+                        'from DB into incoming payload conv=%s',
+                        _seg_preserved, conv_id[:12],
+                    )
+        except Exception as _seg_me:
+            logger.warning('[save_conv] segments-merge pre-step failed '
+                           'conv=%s: %s (continuing without merge)',
+                           conv_id[:12], _seg_me, exc_info=True)
 
     if msg_count == 0:
         logger.info('[save_conv] Conv %s — saving with 0 messages (new/empty conv)',

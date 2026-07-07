@@ -293,6 +293,16 @@ async function sendMessage() {
     images: [...pendingImages],
     pdfTexts: [...pendingPdfTexts],
     timestamp: Date.now(),
+    // ★ Mint the turn's stable _msgId HERE and ship it to the server, so the
+    //   persisted server row and the optimistic client row share ONE identity.
+    //   Without this the server mints its own UUID (build_user_msg_from_payload
+    //   → _assign_message_ids), and on a lost-ACK poor-network send the
+    //   rescue-PUT rebase (keyed on _msgId) fails to match the server's copy
+    //   and appends a DUPLICATE user bubble. Uses the same _newClientMsgId()
+    //   generator _ensureMsgId uses, so the id format is consistent and the
+    //   server (which only fills MISSING _msgId in _assign_message_ids) keeps it.
+    _msgId: (typeof _newClientMsgId === 'function') ? _newClientMsgId()
+            : ('tmp_' + Date.now() + '_' + Math.random().toString(36).slice(2, 10)),
   };
   // ── Per-turn context snapshot: freeze the workspace/tools/model that
   //    are active right now so each turn carries a note of what it ran
@@ -332,11 +342,12 @@ async function sendMessage() {
     images: msgPayload.images,
     pdfTexts: msgPayload.pdfTexts,
     timestamp: msgPayload.timestamp,
+    _msgId: msgPayload._msgId,
   };
   if (msgPayload.replyQuotes) userMsg.replyQuotes = msgPayload.replyQuotes;
   if (msgPayload.convRefs) userMsg.convRefs = msgPayload.convRefs;
   if (_turnCtx) userMsg._ctx = _turnCtx;
-  _ensureMsgId(userMsg);
+  _ensureMsgId(userMsg);  // no-op — _msgId already set from msgPayload
 
   conv._needsLoad = false;
   conv.messages.push(userMsg);
@@ -941,9 +952,29 @@ function renderPendingQueueUI(convId) {
     if (item.pdfTexts?.length) badges.push(`<span>${item.pdfTexts.length} pdf</span>`);
     if (item.convRefs?.length) badges.push(`<span>${item.convRefs.length} ref</span>`);
     if (item.replyQuotes?.length) badges.push(`<span>↩ ${item.replyQuotes.length}</span>`);
+    // ── Peer/operator source line ──
+    // A queued turn from a sibling conversation (project_message / operator
+    // nudge) should name the SOURCE conversation by its TITLE (a raw id is
+    // meaningless), and let the user jump to it. Inline-styled because
+    // static/styles.css is under a sibling edit-hold.
+    let srcLine = '';
+    if (item.isPeerMessage && item.fromConv) {
+      const _title = (typeof convTitleById === 'function')
+        ? convTitleById(item.fromConv) : item.fromConv;
+      const _lbl = (typeof t === 'function')
+        ? t(item.isPeerHuman ? 'queue.fromOperator' : 'queue.fromConv')
+        : (item.isPeerHuman ? 'from operator' : 'from');
+      const _bubbleSvg = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>`;
+      srcLine = `<div class="queue-item-src" onclick="loadConversation('${escapeHtml(item.fromConv)}')" `
+        + `style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--text-tertiary);margin-bottom:3px;cursor:pointer;" `
+        + `title="${escapeHtml(_title)}">${_bubbleSvg}<span>${escapeHtml(_lbl)} «${escapeHtml(_title)}»</span></div>`;
+    }
     return `<div class="pending-queue-item">
       <span class="queue-item-number">${i + 1}</span>
-      <span class="queue-item-text">${escapeHtml(preview)}</span>
+      <div class="queue-item-body" style="flex:1;min-width:0;display:flex;flex-direction:column;">
+        ${srcLine}
+        <span class="queue-item-text">${escapeHtml(preview)}</span>
+      </div>
       ${badges.length ? `<span class="queue-item-attachments">${badges.join('')}</span>` : ''}
       <button class="queue-item-cancel" onclick="removePendingQueueItem('${convId}', ${i})" title="取消此消息">✕</button>
       ${item.queueId ? '<span class="queue-item-synced" title="已同步到服务器">☁</span>' : ''}
@@ -1266,6 +1297,11 @@ async function _refreshServerQueue(convId) {
         convRefs: item.hasRefs ? ['(server)'] : [],
         replyQuotes: item.hasQuotes ? ['(server)'] : [],
         timestamp: item.timestamp,
+        // Peer/operator turn attribution (from a sibling conversation) so the
+        // queue bar can name the SOURCE conversation by title, not a raw id.
+        isPeerMessage: !!item.isPeerMessage,
+        fromConv: item.fromConv || '',
+        isPeerHuman: !!item.isPeerHuman,
       }));
       pendingMessageQueue.set(convId, localQueue);
     } else {

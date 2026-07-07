@@ -33,6 +33,57 @@ function _setVal(id, value, prop) {
 }
 
 // ══════════════════════════════════════════════════════
+//  Model list ordering — cold sort + insertion sort
+// ══════════════════════════════════════════════════════
+//
+// Each provider's model list is kept alphabetically ordered by model_id.
+// To avoid re-sorting on every render (which would make rows jump around
+// while editing), the full sort runs only ONCE per editor session — a
+// "cold sort" when the working copy is loaded (_coldSortAllProviderModels
+// in openSettings). In-session additions (auto-discover / template sync /
+// add / rename) keep the order via _insertModelSorted (binary-search
+// insertion). The next settings-open cold-sorts again from scratch.
+
+/** Case-insensitive sort key for a model entry. */
+function _modelSortKey(m) {
+  return ((m && m.model_id) || '').toLowerCase();
+}
+
+/** One-time full sort of a provider's model list (in place, by model_id). */
+function _coldSortModels(models) {
+  if (!Array.isArray(models)) return models;
+  models.sort(function(a, b) {
+    var ka = _modelSortKey(a), kb = _modelSortKey(b);
+    return ka < kb ? -1 : (ka > kb ? 1 : 0);
+  });
+  return models;
+}
+
+/** Cold-sort every provider's model list (called once on config load). */
+function _coldSortAllProviderModels() {
+  for (var i = 0; i < _stgProviders.length; i++) {
+    if (_stgProviders[i] && Array.isArray(_stgProviders[i].models)) {
+      _coldSortModels(_stgProviders[i].models);
+    }
+  }
+}
+
+/** Insert one model into an already-sorted list at its alphabetical
+ *  position (binary search). Cheap incremental upkeep so freshly added or
+ *  renamed models land correctly without re-sorting the whole list. */
+function _insertModelSorted(models, m) {
+  if (!Array.isArray(models)) return;
+  var key = _modelSortKey(m);
+  var lo = 0, hi = models.length;
+  while (lo < hi) {
+    var mid = (lo + hi) >> 1;
+    if (_modelSortKey(models[mid]) <= key) lo = mid + 1;
+    else hi = mid;
+  }
+  models.splice(lo, 0, m);
+}
+
+// ══════════════════════════════════════════════════════
 //  Tab switching & config loading
 // ══════════════════════════════════════════════════════
 
@@ -43,6 +94,9 @@ function switchSettingsTab(tabId) {
   document.querySelectorAll('.settings-tab-panel').forEach(function(p) {
     p.classList.toggle('active', p.id === 'settingsTab_' + tabId);
   });
+  if (tabId === 'preferences' && typeof _populatePreferencesTab === 'function') {
+    _populatePreferencesTab();
+  }
 }
 
 async function _loadServerConfig() {
@@ -72,6 +126,15 @@ function openSettings() {
   document.getElementById("settingImageMaxWidth").value =
     (typeof config.imageMaxWidth === 'number' ? config.imageMaxWidth : 0);
   document.getElementById("settingSystem").value = config.systemPrompt || "";
+  var spModeSel = document.getElementById('settingSystemPromptMode');
+  if (spModeSel) spModeSel.value = (config.systemPromptMode === 'replace') ? 'replace' : 'append';
+  var spbEl = document.getElementById('settingSystemDisabledBlocks');
+  if (spbEl) {
+    var _disabled = (config.systemPromptBlocks && Array.isArray(config.systemPromptBlocks.disabled))
+      ? config.systemPromptBlocks.disabled : [];
+    spbEl.value = JSON.stringify(_disabled);
+  }
+  if (typeof _refreshSystemPromptSummary === 'function') _refreshSystemPromptSummary();
 
   // Default thinking depth
   var dtd = document.getElementById('settingDefaultThinkingDepth');
@@ -142,11 +205,31 @@ function openSettings() {
   // Load OAuth status
   _loadOAuthStatus();
 
-  // Show version in footer
+  // Show version in footer + (config-gated) mobile-client download entry.
   var verEl = document.getElementById('settingsVersion');
   if (verEl) {
     Api.health.info().then(function(d){
       if(d && d.version) verEl.textContent = 'v' + d.version;
+      // Discreet mobile-client link — renders ONLY when the server exposes a
+      // download URL (TOFU_MOBILE_CLIENT_URL). Absent → stays hidden, no dead
+      // button. SVG glyph per §3.4 (no emoji), no raw fetch (piggybacks health).
+      var mcEl = document.getElementById('settingsMobileClient');
+      if (mcEl) {
+        var url = d && d.mobile_client_url;
+        if (url) {
+          mcEl.href = url;
+          mcEl.innerHTML =
+            '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" ' +
+            'stroke="currentColor" stroke-width="2" stroke-linecap="round" ' +
+            'stroke-linejoin="round" aria-hidden="true">' +
+            '<rect x="5" y="2" width="14" height="20" rx="2" ry="2"></rect>' +
+            '<line x1="12" y1="18" x2="12" y2="18"></line></svg>' +
+            '<span>' + t('settings.mobileClient') + '</span>';
+          mcEl.style.display = '';
+        } else {
+          mcEl.style.display = 'none';
+        }
+      }
     }).catch(function(){});
   }
 
@@ -169,6 +252,11 @@ function openSettings() {
     _stgProviders = JSON.parse(JSON.stringify(cfg.providers || []));
     _stgPresets = JSON.parse(JSON.stringify(cfg.presets || {}));
 
+    // One-time cold sort: order every provider's model list alphabetically
+    // by model_id. In-session additions stay ordered via _insertModelSorted,
+    // and the next settings-open cold-sorts again from scratch.
+    _coldSortAllProviderModels();
+
     // Pre-load external templates so sync buttons appear on first render
     _loadExternalProviderTemplates().finally(function() {
       _renderProvidersTab();
@@ -188,6 +276,7 @@ function openSettings() {
     _populateMtProviderSection(cfg);
     _populateMcpTab();
     if (typeof _populateSkillsTab === 'function') _populateSkillsTab();
+    if (typeof _populatePreferencesTab === 'function') _populatePreferencesTab();
   });
 }
 

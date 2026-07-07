@@ -9,6 +9,7 @@ import datetime as _dt
 import re
 import time
 
+from lib.cost import normalize_usage
 from lib.log import get_logger
 
 from .storage import DEFAULT_USER_ID
@@ -86,11 +87,12 @@ def _calc_msg_cost_cny(usage, model_or_preset='', provider_id=''):
     model_id = model_or_preset or ''
     model_id = _LEGACY_PRESET_TO_MODEL.get(model_id, model_id)
 
-    inp = usage.get('prompt_tokens') or usage.get('input_tokens') or 0
-    out = usage.get('completion_tokens') or usage.get('output_tokens') or 0
-    cache_write = usage.get('cache_write_tokens') or usage.get('cache_creation_input_tokens') or 0
-    cache_read = usage.get('cache_read_tokens') or usage.get('cache_read_input_tokens') or 0
-    think_tok = usage.get('reasoning_tokens') or usage.get('thinking_tokens') or 0
+    _u = normalize_usage(usage)
+    inp = _u['input']
+    out = _u['output']
+    cache_write = _u['cache_write']
+    cache_read = _u['cache_read']
+    think_tok = _u['thinking']
     if think_tok > 0 and out == 0:
         out = think_tok
     if inp == 0 and out == 0 and cache_write == 0 and cache_read == 0:
@@ -247,9 +249,8 @@ def _scan_costs_in_range(ms_start, ms_end, year=None, month=None):
                 }
             entry = days[day_num]['conversations'][conv_id]
             entry['cost'] += cost_cny
-            entry['tokens'] += (
-                (usage.get('input_tokens') or usage.get('prompt_tokens') or 0) +
-                (usage.get('output_tokens') or usage.get('completion_tokens') or 0))
+            _tok = normalize_usage(usage)
+            entry['tokens'] += _tok['input'] + _tok['output']
 
     for day_data in days.values():
         day_data['cost'] = round(day_data['cost'], 4)
@@ -362,6 +363,70 @@ def invalidate_day_cost_cache(date_str=None):
     except Exception as e:
         logger.warning('[DailyReport] invalidate_day_cost_cache(%s) failed: %s',
                        date_str, e)
+
+
+def _cost_days_for_messages(messages, conv_start=0, conv_end=0):
+    """Return the set of ``'YYYY-MM-DD'`` days a message list contributes cost to.
+
+    Only messages carrying a ``usage`` dict affect the per-day aggregate, so
+    those are the only days whose cache is stale after an edit/delete. The
+    timestamp resolution mirrors :func:`_scan_costs_in_range` (message
+    timestamp, else conversation-span fallback) so the invalidated days line
+    up with the persisted aggregates.
+
+    Args:
+        messages: List of message dicts (or anything non-list → empty set).
+        conv_start: Conversation created_at (epoch-ms) fallback for
+            timestamp-less messages.
+        conv_end: Conversation updated_at (epoch-ms) fallback.
+
+    Returns:
+        set[str] of day strings.
+    """
+    from .conversations import _safe_int_ts
+
+    if not isinstance(messages, list):
+        return set()
+    cs = _safe_int_ts(conv_start or conv_end or 0)
+    days: set = set()
+    for msg in messages:
+        if not isinstance(msg, dict) or not msg.get('usage'):
+            continue
+        ts = _safe_int_ts(msg.get('timestamp', 0))
+        if not ts:
+            ts = cs
+        if not ts:
+            continue
+        d = _dt.datetime.fromtimestamp(ts / 1000)
+        days.add(f'{d.year:04d}-{d.month:02d}-{d.day:02d}')
+    return days
+
+
+def invalidate_cost_cache_for_messages(messages, conv_start=0, conv_end=0):
+    """Scoped cost-cache invalidation for a delete/edit of specific messages.
+
+    Removes ONLY the persisted per-day entries the given messages touch,
+    instead of nuking the whole table. This is what conversation/message
+    deletes must call: wiping all days forces the next calendar open to
+    live-rescan the entire month (~10s), so a single delete would otherwise
+    permanently defeat the persistent cost cache.
+
+    Args:
+        messages: The messages being removed (or the whole conversation's
+            messages when a conversation is deleted).
+        conv_start: Conversation created_at (epoch-ms) — timestamp fallback.
+        conv_end: Conversation updated_at (epoch-ms) — timestamp fallback.
+
+    Returns:
+        set[str] of the day strings that were invalidated.
+    """
+    day_strs = _cost_days_for_messages(messages, conv_start, conv_end)
+    for date_str in day_strs:
+        invalidate_day_cost_cache(date_str)
+    if day_strs:
+        logger.debug('[DailyReport] Scoped cost invalidation for %d day(s): %s',
+                     len(day_strs), sorted(day_strs))
+    return day_strs
 
 
 def _get_monthly_costs(year, month):

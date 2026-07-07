@@ -1,122 +1,102 @@
 ---
 name: hope-mcp-cluster-acceptance-verifier
-description: v0.4.0 verifier: poll get_yarn_apps after run_job to detect UNSUBMITTED failures the CLI misses
+description: submit_job verifier + GPU-quota classify/rejected_app_id; retry_on_quota = restart-durable BACKGROUND task that PAUSES on dead session for auto-login (bounded by HOPE_MCP_MAX_PAUSE_SEC=300s, then fails fast); poll/cancel tools; NOT blocking (MCP kills at 120s)
 enabled: true
 tags: [hope-mcp, submission-pipeline, verification]
 created: 2026-05-06T14:16:26Z
-updated: 2026-05-06T15:31:30Z
+updated: 2026-06-22T10:40:49Z
 ---
 
-# hope-mcp v0.4.1 — Cluster-acceptance verifier + .hope override rewriter
+# hope-mcp — verifier + .hope rewriter + durable, session-aware quota retry
 
-## The REAL bug behind "zw03 routing" mystery (LIVE-FIXED 2026-05-06)
+## v0.4.1 — `_apply_overrides_to_hope_conf`
+Backend re-parses `hopeConfContent` server-side; the AFO submitter reads
+queue/usergroup/arguments/app_name from THAT text, NOT the run_job HTTP
+fields. So `submit_job` surgically rewrites the staged `.hope` file
+(line-by-line, section-aware) and ships it as `hopeConfContent`.
 
-Earlier notes in this memory blamed a "backend skeleton override" for
-jobs being routed to a queue the caller did NOT ask for. That was
-**wrong — the actual bug was in hope-mcp's own `submit_job`**.
+## v0.4.0 verifier
+`submit_job` polls `POST /jobs/get_yarn_apps?runid=<rid>` (3s/60s):
+accepted (PENDING/ACCEPTED/RUNNING/terminal OR app_id) → ok=True;
+submission_failed (UNSUBMITTED) → ok=False + submitter_error; transient
+keep polling; timeout → ok=False. Env `HOPE_MCP_VERIFY_TIMEOUT`/`_POLL_INTERVAL`.
 
-The hope backend re-parses ``hopeConfContent`` server-side and the
-AFO cluster-side submitter reads queue / usergroup / arguments /
-app_name from THAT text, **not** from the parallel fields we pass in
-the run_job HTTP payload. We were sending the literal .hope file
-content verbatim while overriding only the HTTP-payload field.
-Result: user-requested queue was silently ignored, the submitter
-honoured the original queue written in the .hope file, and if that
-queue pointed at an inactive sub-cluster (like zw03), the run ended
-UNSUBMITTED.
+## GPU-quota: classify + appId 兜底 (tools/submit.py)
+P0 codes carry an EXPERIMENT-level GPU quota via the
+`tfjob.validate.mlp.sankuai.com` admission webhook (NOT queue capacity).
+Markers reordered: `("is restricted to use",100,300)` + `("admission
+webhook",0,500)` BEFORE `("error message:",40,400)` so `now using M` tail
+survives. `_classify_submitter_failure` → `failure_category=
+{category:'quota_exceeded',experiment,limit_gpu,used_gpu}`.
+`_extract_rejected_app_id` → `rejected_app_id` (a quota-rejected CR never
+becomes a YARN app; do NOT watch_job it).
 
-## v0.4.1 fix — `_apply_overrides_to_hope_conf`
+## Background retry — NOT blocking (tools/submit_retry.py)
+chatui MCP client kills any tool call at ~120s (`MCP_CALL_TIMEOUT=120`,
+`lib/mcp/types.py`; applied `lib/mcp/client.py:1402`). So `submit_job`
+does ONE inline attempt; on quota rejection with `retry_on_quota=True`
+calls `spawn_retry()` → background asyncio.Task on the MCP loop, returns
+IMMEDIATELY `pending_retry=True`+`retry_task_id`. Shared
+`submit._attempt_run_and_verify()` = ONE run_job+verify (no
+re-tar/re-upload — init/S3/save run ONCE before). Tools:
+`get_submit_retry_status(task_id)` + `cancel_submit_retry` (both in
+TOOLS+TOOL_HANDLERS+`_SAFE_RETRY_TOOLS`). Params `retry_deadline_sec=1800`,
+`retry_interval_sec=30`.
 
-Whenever the caller passes `queue`, `usergroup`, `app_name`, or
-`arguments` to `submit_job`, we NOW:
+## RESTART DURABILITY
+`_RetryState` carries re-spawn inputs + `to_dict/from_dict`. `_state_dir()`
+= `HOPE_MCP_RETRY_STATE_DIR` else `<hope home>/.hope/hope_mcp_retry`.
+`_persist()` = atomic tempfile+os.replace, one JSON/task, BEFORE the loop +
+every checkpoint. `rehydrate_on_startup()` (in `server.py::run_stdio` after
+loop up): running/paused→re-spawn; terminal→reload in memory; corrupt→
+log+unlink+skip. `deadline_ts` ABSOLUTE wall-clock → downtime counts; an
+expired task finalizes failed on first resumed iter with ZERO run_job.
+Best-effort (no writable dir → in-process-only fallback).
 
-1. Copy the workdir to a staging temp dir (symlinks preserved,
-   `.hopemeta` excluded).
-2. Rewrite the corresponding lines inside the staged `.hope` file
-   **surgically** (line-by-line, preserving comments / blank lines /
-   section order — no configparser round-trip).
-3. Tar the staged directory (so the cluster-side submitter sees the
-   overrides when it unzips).
-4. Send the SAME rewritten string as `hopeConfContent` in both
-   `save_code_version` and `run_job` (so backend bookkeeping agrees
-   with what the cluster will actually run).
+## SESSION-AWARE PAUSE + BOUNDED PAUSE CAP
+Non-terminal `paused` status + `pause_reason` + `paused_since`. `_LIVE_STATES
+= {running,paused}` used by reaper/done-flag/cancel/_on_task_done. **Session
+gate at top of every loop iteration**: probe `hope_api.is_session_live()`;
+if dead → `status='paused'` (set `paused_since` on entry), call shared
+`preflight.try_auto_login()` (idempotent while push pending), persist, sleep
+one interval, `continue` — NO attempt increment, NO run_job. Recovery (auto
+`approved` OR an out-of-band live-probe flip at the gate top) → back to
+`running`, `paused_since=None`.
+**Bounded cap:** when continuous pause `>= _MAX_PAUSE_SEC` (env
+`HOPE_MCP_MAX_PAUSE_SEC`, default 300=5min) → finalize `failed` with
+`session_recovery_failed:True` + clear reason (no_username → "set
+HOPE_USERNAME / run hope_login"; else → "approve the push"). Without this a
+no_username task would sit paused the whole `retry_deadline_sec`.
+`paused_since` resets on recovery so an INTERMITTENT session never
+accumulates toward the cap. snapshot surfaces `paused_for_sec` +
+`pause_give_up_in_sec`; pause_reason advertises the countdown. Loop order:
+deadline check FIRST, then session gate — task never outlives its budget.
+Covers mid-loop expiry AND restart-with-dead-session (rehydrate seeds paused
+when the shared startup probe says dead). Paused task is cancellable + never
+reaped.
 
-Section-aware: `arguments` in `[user_args]` is left alone when
-overriding `[others]arguments`. Fields not present in the original
-file are NOT added (avoids accidentally injecting defaults).
+## CANCEL RACE (fixed)
+`task.cancel()` on a Task NOT yet stepped → straight to cancelled WITHOUT
+running the body → `except CancelledError` never fires. Fix:
+`task.add_done_callback(_on_task_done)` reconciles cancelled/exception.
 
-## Live verification
-
-```
-workdir: /tmp/hope_mcp_realtest_init  (queue in .hope: zw03_training)
-caller: queue=root.zw05_training_cluster.hadoop-aipnlp.llm_second
-submit_job →
-  ok: True
-  verified: True
-  run_id: 49254282
-  app_id: psx2r18xrlspkti2
-  state: RUNNING
-  app_url: https://mlp.sankuai.com/ml/#/job/psx2r18xrlspkti2
-```
-
-## v0.4.0 verifier (still in place)
-
-`submit_job` polls `POST /jobs/get_yarn_apps?runid=<rid>` every
-`verify_poll_interval_sec` (default 3 s) for up to `verify_timeout_sec`
-(default 60 s):
-
-* **`accepted`** = state in {PENDING, ACCEPTED, RUNNING, FINISHED,
-  SUCCEEDED, FAILED, KILLED} OR `app_id` is non-empty
-  → ``ok=True, verified=True, app_id=<id>``
-* **`submission_failed`** = state == `UNSUBMITTED`
-  → ``ok=False, stage="verify"`` + submitter_error from run log
-* **`transient`** = anything else (typically `SUBMITTING`) — keep polling
-* **`timeout`** = deadline hit without accept/fail verdict
-  → ``ok=False, stage="verify", verify.verdict="timeout"``
-
-## `get_run_log` `result_code=-1` is OVERLOADED
-
-LIVE-VERIFIED 2026-05-06: the backend sends `result_code=-1` with
-`result_info` EMPTY for "log not ready yet" AND with `result_info`
-containing the entire FATAL stack trace for "run failed before AppId
-mint". Treat non-empty `result_info` on `rc=-1` as terminal.
-
-## Log-fetch retry for async FATAL lines
-
-The AFO submitter writes its stack trace a few seconds AFTER flipping
-state to UNSUBMITTED. `_drain_log_for_failure` retries up to 3 times
-at 2 s apart, short-circuiting on any known error marker.
-
-## Submitter-error extractor markers (priority-ordered, case-insensitive)
-
-```python
-("error message:",                       40, 200),   # Image not set
-("Configuration file verification failed", 0, 300),
-("YarnException",                         0, 600),   # federation
-("does not active",                     100, 200),
-("Image not set",                        80, 200),
-("tensorflow job failed or killed",      80, 200),
-("Error running com.meituan",            80, 600),
-("Caused by:",                           40, 600),
-("FATAL",                                40, 400),
-```
-
-## Knobs
-
-* Tool params: `verify_timeout_sec` (default 60, 0 = skip),
-  `verify_poll_interval_sec` (default 3, min 0.5).
-* Env vars: `HOPE_MCP_VERIFY_TIMEOUT`, `HOPE_MCP_VERIFY_POLL_INTERVAL`.
+## get_run_log result_code=-1 OVERLOADED
+rc=-1 + empty result_info = "log not ready"; rc=-1 + non-empty = FATAL.
+`_drain_log_for_failure` retries 3× at 2s.
 
 ## Tests
-
-`tests/test_submit.py` (7 dedicated tests, 93 total):
-
-* `test_apply_overrides_to_hope_conf_rewrites_queue` — core rewriter
-* `test_apply_overrides_only_rewrites_in_correct_section` — section hint
-* `test_submit_job_uploads_rewritten_hope_conf` — end-to-end the
-  rewritten body reaches save_code_version + run_job
-* `test_submit_job_full_pipeline_verified` — happy path with AppId
-* `test_submit_job_legacy_skip_verify` — verify_timeout_sec=0 bypass
-* `test_submit_job_flags_unsubmitted_as_failure` — UNSUBMITTED → ok=False
-* `test_submit_job_flags_timeout_as_failure` — perpetual SUBMITTING → ok=False
+`tests/test_submit.py` (46 in-file; full suite 157 pass / 2 skip determ.).
+Covers retry+durability+session+cap: bg-spawn-succeeds (run_job 2×/S3+save
+1×), gives-up-at-deadline, cancel, persisted-on-spawn, rehydrate-resume→
+succeed, rehydrate-deadline-elapsed→0-run_job, rehydrate-keeps-terminal,
+pause-on-dead-session→recover (1 run_job), rehydrate-seeds-paused (0 run_job),
+paused-is-cancellable, gives-up-at-pause-cap-no-username (cap=0.6s vs
+budget=600s proves cap not deadline ends it; asserts session_recovery_failed +
+HOPE_USERNAME hint + elapsed<30s), pause-streak-resets-on-recovery (flapping
+probe still succeeds). Autouse fixture `_isolate_submit_retry` sets
+`HOPE_MCP_RETRY_STATE_DIR` to tmp + resets module globals. Cap tests
+`monkeypatch.setattr(sr, "_MAX_PAUSE_SEC", small)`. `_retry_loop` imports
+`_attempt_run_and_verify`/`try_auto_login`/`is_session_live` LAZILY → tests
+patch the DEFINING modules (submit/preflight/hope_api). pytest-randomly NOT
+installed.
 

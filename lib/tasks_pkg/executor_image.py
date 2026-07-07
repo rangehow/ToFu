@@ -14,6 +14,23 @@ logger = get_logger(__name__)
 # ── Shared constant: application root ──
 _APP_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+
+def _images_dir() -> str:
+    """Absolute path to the uploads/images dir under the resolved runtime base.
+
+    User-generated images are USER STATE referenced from the DB by
+    ``/api/images/`` URLs, so they must co-locate with the DB via
+    ``runtime_paths.uploads_root()`` — not the code tree. Byte-identical to
+    ``<repo>/uploads/images`` in the default in-tree layout; falls back to it
+    if runtime_paths is somehow unavailable.
+    """
+    try:
+        from lib.runtime_paths import uploads_root
+        return os.path.join(uploads_root(), 'images')
+    except Exception as e:  # pragma: no cover — defensive
+        logger.debug('[Tool:generate_image] uploads_root() unavailable, using in-tree: %s', e)
+        return os.path.join(_APP_ROOT, 'uploads', 'images')
+
 # ── png_to_svg module cache ──
 # scripts/png_to_svg.py is loaded via importlib (not a regular package import)
 # because it lives outside lib/. We cache the module after first load so we
@@ -204,7 +221,7 @@ def _resolve_source_image(image_ref: str) -> dict | None:
     # ── Local file: /api/images/xxx.png → read from disk ──
     if image_ref.startswith('/api/images/'):
         filename = os.path.basename(image_ref)
-        filepath = os.path.join(_APP_ROOT, 'uploads', 'images', filename)
+        filepath = os.path.join(_images_dir(), filename)
         try:
             with open(filepath, 'rb') as f:
                 raw = f.read()
@@ -364,7 +381,7 @@ def _save_image_to_disk(image_b64, mime_type='image/png'):
     ext = ext_map.get(mime_type, '.png')
     filename = f'gen_{int(_time.time() * 1000)}{ext}'
 
-    upload_dir = os.path.join(_APP_ROOT, 'uploads', 'images')
+    upload_dir = _images_dir()
     os.makedirs(upload_dir, exist_ok=True)
     filepath = os.path.join(upload_dir, filename)
 
@@ -490,9 +507,10 @@ def _convert_to_svg(saved_url: str, project_save_path: str,
     # ── Convert the uploads copy ──
     if saved_url:
         filename = os.path.basename(saved_url)
-        png_path = os.path.join(_APP_ROOT, 'uploads', 'images', filename)
+        _img_dir = _images_dir()
+        png_path = os.path.join(_img_dir, filename)
         svg_filename = os.path.splitext(filename)[0] + '.svg'
-        svg_path = os.path.join(_APP_ROOT, 'uploads', 'images', svg_filename)
+        svg_path = os.path.join(_img_dir, svg_filename)
         try:
             ok = convert_png_to_svg(png_path, svg_path)
             if ok:
@@ -561,7 +579,7 @@ def register_image_gen_handler(tool_registry, IMAGE_GEN_TOOL_NAMES, _finalize_to
                 'toolName': 'generate_image',
                 'imagePrompt': '', 'imageError': 'No prompt provided',
                 'imageAspectRatio': aspect_ratio, 'imageResolution': resolution,
-                'badge': '❌ failed',
+                'badge': 'failed',
             }
             _finalize_tool_round(task, rn, round_entry, [meta])
             return tc_id, 'Error: No image prompt provided.', False
@@ -590,7 +608,7 @@ def register_image_gen_handler(tool_registry, IMAGE_GEN_TOOL_NAMES, _finalize_to
 
         # ── Emit progress event ──
         round_entry['status'] = 'running'
-        badge_text = '⏳ editing…' if is_edit else '⏳ generating…'
+        badge_text = 'editing…' if is_edit else 'generating…'
         round_entry['results'] = [{
             'toolName': 'generate_image',
             'imagePrompt': prompt[:100],
@@ -615,7 +633,7 @@ def register_image_gen_handler(tool_registry, IMAGE_GEN_TOOL_NAMES, _finalize_to
 
         # ── 429 progress callback — update badge so user sees rate-limit status ──
         def _on_429(retry_count):
-            badge_429 = '⏳ rate limited, retrying (#%d)…' % retry_count
+            badge_429 = 'rate limited, retrying (#%d)…' % retry_count
             round_entry['results'] = [{
                 'toolName': 'generate_image',
                 'imagePrompt': prompt[:100],
@@ -709,6 +727,17 @@ def register_image_gen_handler(tool_registry, IMAGE_GEN_TOOL_NAMES, _finalize_to
                 fallback_parts.append(f'Model response: {text_response}')
             fallback_parts.append(f'Prompt: {prompt[:200]}')
             fallback_parts.append(f'Aspect ratio: {aspect_ratio}, Resolution: {resolution}')
+            # Surface a reusable reference so the model can EDIT this image on a
+            # later turn by passing it back as `source_image`. Without this the
+            # model has no URL/path to reference and always re-generates from
+            # scratch. Prefer the project path; fall back to the uploads URL.
+            _edit_ref = project_save_path or saved_url
+            if _edit_ref:
+                fallback_parts.append(
+                    f'To EDIT this image later (recolor, change background, add/remove '
+                    f'objects, restyle, etc.), call generate_image again with '
+                    f'source_image="{_edit_ref}" and describe the change in the prompt.'
+                )
             if project_save_path:
                 fallback_parts.append(f'Image saved to project path: {project_save_path}')
             elif output_path and not project_save_path:
@@ -765,7 +794,7 @@ def register_image_gen_handler(tool_registry, IMAGE_GEN_TOOL_NAMES, _finalize_to
                 'imageAspectRatio': aspect_ratio, 'imageResolution': resolution,
                 'imageMode': image_mode,
                 'imageSourceUrl': source_display_url,
-                'badge': '❌ failed',
+                'badge': 'failed',
             }
             _finalize_tool_round(task, rn, round_entry, [meta])
 

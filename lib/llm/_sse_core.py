@@ -91,7 +91,7 @@ class RequestPlan:
 
 def prepare_request(body, *, attempt=0, log_prefix='', api_key=None,
                     base_url=None, extra_headers=None,
-                    api_protocol='openai') -> RequestPlan:
+                    api_protocol='openai', oauth='') -> RequestPlan:
     """Identical pre-flight for both transports.
 
     Mutates ``body`` in place (cache breakpoints, ``_task_id`` pop, Codex
@@ -119,6 +119,13 @@ def prepare_request(body, *, attempt=0, log_prefix='', api_key=None,
                 else:
                     extra_headers['anthropic-beta'] = _ttl_beta
 
+    # Subscription-OAuth slot: swap in a live token + client-identity headers,
+    # and (for Claude) prepend the mandatory identity system block — all BEFORE
+    # the body translation below reads messages / builds headers.
+    if oauth:
+        from lib.oauth.outbound import resolve_oauth_request
+        api_key, extra_headers, body = resolve_oauth_request(oauth, body, extra_headers)
+
     # Codex OAuth translation
     codex_translator = None
     anthropic_translator = None
@@ -137,6 +144,9 @@ def prepare_request(body, *, attempt=0, log_prefix='', api_key=None,
         body = openai_body_to_anthropic(body)
         anthropic_translator = AnthropicSSETranslator(model=_model_name)
         url = anthropic_messages_url(base_url)
+        if oauth == 'claude':
+            from lib.oauth.outbound import claude_oauth_url
+            url = claude_oauth_url(url)
         logger.debug('%s [Anthropic] Translated request for Messages API', log_prefix)
     else:
         url = f'{base_url.rstrip("/")}/chat/completions' if base_url else chat_url()
@@ -150,6 +160,10 @@ def prepare_request(body, *, attempt=0, log_prefix='', api_key=None,
     if anthropic_translator is not None:
         from lib.llm.anthropic_outbound import anthropic_headers
         hdrs = anthropic_headers(api_key, extra_headers)
+        if oauth == 'claude':
+            # Subscription tokens are rejected on Authorization: Bearer
+            # (401 since 2026); the token must ride x-api-key only.
+            hdrs.pop('Authorization', None)
     else:
         hdrs = headers()
         if api_key:
@@ -164,6 +178,27 @@ def prepare_request(body, *, attempt=0, log_prefix='', api_key=None,
     t0 = time.time()
     raw_dumper = RawSSEDumper(body.get('model', ''), trace_id, body)
     raw_dumper.start()
+
+    # ── Wire fingerprint (cache-miss traceability) ──
+    # This is the ONLY point that sees the FINAL, post-translation messages
+    # exactly as they go on the wire (after add_cache_breakpoints AND, on the
+    # anthropic path, openai_body_to_anthropic). Canonicalise them into an
+    # envelope-agnostic fingerprint and stash it on the RawSSEDumper (which
+    # travels into SSEAccumulator → finalize, where it is relayed into `usage`
+    # like trace_id). Stashing it on the dumper — NOT on `body` — keeps the
+    # ephemeral fingerprint OFF the wire (body is what requests/httpx serialise).
+    # detect_cache_break then PROVES a server-side miss (bytes identical) vs.
+    # names a client-caused culprit. Best-effort: never block a request.
+    raw_dumper.wire_fp = None
+    raw_dumper.wire_static = ''
+    try:
+        from lib.tasks_pkg.wire_fingerprint import (
+            canonical_messages, static_prefix_hash,
+        )
+        raw_dumper.wire_fp = canonical_messages(body.get('messages') or [])
+        raw_dumper.wire_static = static_prefix_hash(body.get('messages') or [])
+    except Exception as _wfe:
+        logger.debug('%s wire fingerprint capture failed: %s', log_prefix, _wfe)
 
     return RequestPlan(url=url, hdrs=hdrs, body=body, trace_id=trace_id,
                        raw_dumper=raw_dumper, codex_translator=codex_translator,
@@ -363,7 +398,11 @@ class SSEAccumulator:
                         self.tool_calls_acc[idx]['id'] = tc['id']
                     fn = tc.get('function', {})
                     if fn.get('name'):
-                        self.tool_calls_acc[idx]['function']['name'] = fn['name']
+                        # Append (not overwrite) to match the main OpenAI path
+                        # in _handle_delta — a function name may stream across
+                        # multiple deltas; overwriting would keep only the last
+                        # fragment and produce a wrong tool name.
+                        self.tool_calls_acc[idx]['function']['name'] += fn['name']
                     if fn.get('arguments'):
                         self.tool_calls_acc[idx]['function']['arguments'] += fn['arguments']
             if t_chunk.get('usage'):
@@ -630,6 +669,20 @@ class SSEAccumulator:
                         self.log_prefix, fn_name, tc_entry.get('id', '?')[:12], fn_name,
                     )
                     continue
+                # ── Normalize empty/whitespace arguments to '{}' ──
+                # A genuine no-arg tool call (or one whose args delta never
+                # arrived) survives the phantom filter above with arguments=''.
+                # OpenAI/Anthropic tolerate that (the executor does
+                # ``json.loads(args or '{}')``), but Gemini's OpenAI-compat
+                # proxy REJECTS a replayed assistant tool_call with empty
+                # arguments — HTTP 400 "Expected function 'arguments' in a(n)
+                # 'assistant' message to be populated." — killing the whole
+                # follow-up turn. We emit '{}' (valid empty JSON object) so the
+                # message replays cleanly across every provider. Equivalent to
+                # the empty→'{}' coercion the DB-history replay builders already
+                # apply (conv_message_builder / message_builder).
+                if not fn_args_str.strip():
+                    tc_entry['function']['arguments'] = '{}'
                 _filtered[idx] = tc_entry
             self.tool_calls_acc = _filtered
 
@@ -737,6 +790,16 @@ class SSEAccumulator:
             usage['resp_trace_id'] = resp_trace
         usage['stream_elapsed_ms'] = round(_stream_elapsed_s * 1000)
         usage['_chunks_received'] = chunk_count
+
+        # ── Relay the post-translation wire fingerprint into `usage` ──
+        # Captured in prepare_request (the only point seeing the final wire
+        # bytes) and carried on the RawSSEDumper. detect_cache_break reads these
+        # to distinguish a PROVEN server-side miss (fingerprint identical to
+        # last round) from a client-caused one (names the changed msg.field).
+        _wfp = getattr(self.raw_dumper, 'wire_fp', None)
+        if _wfp is not None:
+            usage['_wire_fp'] = _wfp
+            usage['_wire_static'] = getattr(self.raw_dumper, 'wire_static', '')
 
         # Stream anomaly flags
         _has_anomaly = False

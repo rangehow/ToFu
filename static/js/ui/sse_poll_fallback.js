@@ -22,12 +22,31 @@ async function _pollFallback(convId, taskId, stream, assistantMsg) {
   const buf = streamBufs.get(convId);
   const _preExistingContent = assistantMsg.content?.length || 0;
   const _preExistingThinking = assistantMsg.thinking?.length || 0;
+  /* ★ Reset the endpoint poll-turn counter at the start of every poll
+   *   session.  It gates the "new completed turns arrived → renderChat"
+   *   check below; if a prior session left it equal to the server's turn
+   *   count (e.g. SSE timed out after the last turn, then poll takes over),
+   *   the first endpoint poll would compute newEpCount === prevEpCount and
+   *   skip the re-render, leaving a stale streaming bubble until the
+   *   terminal finishStream re-render.  Clearing it forces the first
+   *   endpoint poll of this session to repaint from the authoritative turns. */
+  {
+    const _startConv = conversations.find(c => c.id === convId);
+    if (_startConv) _startConv._epPollTurnCount = 0;
+  }
   console.warn(`[_pollFallback] START — conv=${convId.slice(0,8)} taskId=${taskId.slice(0,8)} preExistingContent=${_preExistingContent}chars preExistingThinking=${_preExistingThinking}chars`);
   // Poll until the task finishes, the user aborts, or server is confirmed dead.
   let _pollIter = 0;
   let _consecutiveErrors = 0;     // ★ Circuit breaker: track consecutive network failures
   const _MAX_CONSECUTIVE_ERRORS = 10; // ★ After 10 failures (~5s), do health check
   let _rttEma = 300; // ★ Item 8: exponential moving average of poll RTT (ms), seed 300ms
+  /* ★ Epic C sharded-backend affinity re-route: bounded count of SSE re-open
+   *   attempts triggered by a `reconnect:true` poll hint (see the guard in the
+   *   loop below). Capped so a pathological setup where SSE never re-attaches
+   *   cannot spin the re-open path forever — after the cap we fall through and
+   *   keep polling (the bubble stays live, terminal/offline paths still apply). */
+  let _reconnectAttempts = 0;
+  const _MAX_RECONNECT_ATTEMPTS = 3;
   while (true) {
     if (stream.controller.signal.aborted) {
       console.warn(`[_pollFallback] ABORTED at iteration ${_pollIter} — conv=${convId.slice(0,8)}`);
@@ -49,7 +68,13 @@ async function _pollFallback(convId, taskId, stream, assistantMsg) {
           finishStream(convId);
           return;
         }
-        throw new Error(`Poll HTTP ${resp.status}`);
+        /* ★ resp===null means Api.chat.poll swallowed a network failure
+         *   (onError:'null' — VS Code tunnel drop / fetch threw). Dereferencing
+         *   resp.status here would itself throw the misleading TypeError
+         *   "Cannot read properties of null (reading 'status')" that was
+         *   surfacing at ERROR level in the client-error log. Feed the circuit
+         *   breaker a clean network-failure message instead. */
+        throw new Error(resp ? `Poll HTTP ${resp.status}` : 'Poll network error (no response)');
       }
       _consecutiveErrors = 0; // ★ Reset on any successful response
       const data = await resp.json();
@@ -69,6 +94,46 @@ async function _pollFallback(convId, taskId, stream, assistantMsg) {
             finishStream(convId);
             return;
           }
+        }
+      }
+
+      /* ★ Epic C sharded-backend affinity hint. Under TOFU_RUNTIME_STATE_BACKEND
+       *   =redis the poll endpoint (routes/chat.py) returns status='running'
+       *   PLUS reconnect:true when the DB has a live 'running' checkpoint but
+       *   the task is absent from THIS replica's memory — it is (probably) alive
+       *   on another replica. Polling here would report 'running' forever
+       *   against a replica that has no live task, so the bubble hangs. Re-open
+       *   the SSE stream instead: taskId affinity re-routes us to the owning
+       *   replica. If SSE now attaches it takes over (return); if it still
+       *   fails, resume polling — bounded by _MAX_RECONNECT_ATTEMPTS so we never
+       *   loop the re-open path forever. (inproc default never sets reconnect, so
+       *   this whole block is dead code on a single-box install.) */
+      if (data.reconnect === true && data.status === 'running'
+          && typeof _trySSE === 'function'
+          && !stream.controller.signal.aborted) {
+        if (_reconnectAttempts < _MAX_RECONNECT_ATTEMPTS) {
+          _reconnectAttempts++;
+          console.warn(`[_pollFallback] ↻ reconnect hint (sharded) — taskId=${taskId.slice(0,8)} ` +
+            `likely on another replica; re-opening SSE (attempt ${_reconnectAttempts}/${_MAX_RECONNECT_ATTEMPTS})`);
+          let _sseTookOver = false;
+          try {
+            _sseTookOver = await _trySSE(convId, taskId, stream, assistantMsg);
+          } catch (e) {
+            if (e && e.name === 'AbortError') { twStop(convId); finishStream(convId); return; }
+            console.warn(`[_pollFallback] reconnect SSE re-open threw: ${e && e.message} — resuming poll`);
+          }
+          if (stream.controller.signal.aborted) { twStop(convId); finishStream(convId); return; }
+          if (_sseTookOver) {
+            /* SSE re-attached and ran to completion on the owning replica; it
+             *   owns finishStream/twStop. Nothing left to poll. */
+            console.info(`[_pollFallback] ✅ SSE re-attached after reconnect hint — conv=${convId.slice(0,8)}; poll yielding`);
+            return;
+          }
+          /* SSE still couldn't attach — fall through to keep polling; the next
+           *   poll may either re-emit the hint (retried, bounded) or the task
+           *   may migrate/settle. */
+        } else {
+          console.warn(`[_pollFallback] reconnect hint exhausted (${_MAX_RECONNECT_ATTEMPTS}) for taskId=${taskId.slice(0,8)} — continuing to poll this replica`);
         }
       }
 
@@ -192,6 +257,10 @@ async function _pollFallback(convId, taskId, stream, assistantMsg) {
       if (data.taskId) assistantMsg._taskId = data.taskId;
       /* ★ memory prefetch: recover indicator state from poll response */
       if (data.memoryPrefetch) assistantMsg._memoryPrefetch = data.memoryPrefetch;
+      /* ★ preferences-applied: recover chip state from poll response */
+      if (data.preferencesApplied) assistantMsg._preferencesApplied = data.preferencesApplied;
+      /* ★ preferences-learned: recover "Noted: you prefer X" moment(s) */
+      if (data.preferencesLearned) assistantMsg._preferencesLearned = data.preferencesLearned;
       /* ★ git-shim: round commit sha for redo/diff references */
       if (data.gitSha) assistantMsg._gitSha = data.gitSha;
       /* ★ Persisted cost snapshot (server-side stamp). */
@@ -240,13 +309,26 @@ async function _pollFallback(convId, taskId, stream, assistantMsg) {
          *   sidebar dot / pause button / translation gating in the running
          *   state instead of going idle until a manual refresh. */
         if (data.autopilotNextTaskId && data.autopilotVuMessage) {
-          assistantMsg._autopilotPending = {
+          const _apPayload = {
             nextTaskId: data.autopilotNextTaskId,
             vuMessage: data.autopilotVuMessage,
           };
+          /* Kick-from-idle carrier: assistantMsg is a DETACHED dummy never
+           * pushed into conv.messages — stamp the baton on the finalized VU
+           * user msg at the tail so _findAutopilotPendingCarrier finds it. */
+          const _apConv = conversations.find(c => c.id === convId);
+          const _apDetached = _apConv && _apConv.messages.indexOf(assistantMsg) === -1;
+          let _apTarget = assistantMsg;
+          if (_apDetached && _apConv && _apConv.messages.length) {
+            _apTarget = _apConv.messages[_apConv.messages.length - 1];
+          }
+          _apTarget._autopilotPending = _apPayload;
+          /* ★ AUTHORITATIVE baton on the conv object (see sse_pipeline.js) —
+           *   survives a message splice that could strip the positional stamp. */
+          if (_apConv) _apConv._apPendingBaton = _apPayload;
           console.info(
             `[_pollFallback] 🤖 Autopilot follow-up attached via poll — ` +
-            `next task=${data.autopilotNextTaskId.slice(0,8)} ` +
+            `next task=${data.autopilotNextTaskId.slice(0,8)} detachedCarrier=${!!_apDetached} ` +
             `vu="${(data.autopilotVuMessage.content||'').slice(0,80)}${(data.autopilotVuMessage.content||'').length>80?'…':''}"`
           );
         }

@@ -78,7 +78,7 @@ SEARCH_TOOL_MULTI = {
                 },
                 "queries": {
                     "type": "array",
-                    "description": "Array of search queries (for batch mode). All queries run concurrently. Much faster than multiple separate web_search calls.",
+                    "description": "Array of search queries (for batch mode). All queries run concurrently. Much faster than multiple separate web_search calls. Each element MUST be an object like {\"query\": \"...\"} — never a single bare string or a concatenation of queries; for one search use the top-level 'query' field instead.",
                     "items": {
                         "type": "object",
                         "properties": {
@@ -126,6 +126,10 @@ def _build_fetch_url_tool():
         "you SHOULD use fetch_url to follow the most relevant links and explore deeper.\n"
         "IMPORTANT: This tool is for REMOTE web URLs only (http:// or https://). "
         "Do NOT use for local file paths or file:// URIs — use read_files with an absolute path instead.\n"
+        "If the URL points to a file asset rather than a web page (e.g. an SVG, image, "
+        "archive, font or Office document), it is handled automatically: text-like assets "
+        "(SVG/JSON/source code) are returned inline, while binary assets are downloaded to a "
+        "local staging path and the response tells you the path to open with read_files.\n"
     )
     if filter_on:
         description += (
@@ -161,7 +165,7 @@ def _build_fetch_url_tool():
         }
     properties["urls"] = {
         "type": "array",
-        "description": "Array of URLs to fetch (for batch mode). All fetches run concurrently. Much faster than multiple separate fetch_url calls.",
+        "description": "Array of URLs to fetch (for batch mode). All fetches run concurrently. Much faster than multiple separate fetch_url calls. Each element MUST be an object like {\"url\": \"...\"} — never a single bare string; for one URL use the top-level 'url' field instead.",
         "items": {
             "type": "object",
             "properties": {

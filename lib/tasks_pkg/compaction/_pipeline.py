@@ -59,7 +59,9 @@ def _reinject_system_contexts_after_compact(messages: list, task: dict | None = 
         # _isMeta msg, not in sys_text, so it would fire every compaction.)
         from lib.tasks_pkg.system_context import _CC_STATIC_MARKER
         if _CC_STATIC_MARKER not in sys_text:
-            from lib.tasks_pkg.system_context import _inject_system_contexts
+            from lib.tasks_pkg.system_context import (
+                _inject_system_contexts, _disabled_prompt_blocks,
+            )
             # Re-inject from scratch — the system_context module handles dedup
             _inject_system_contexts(
                 messages, project_path, project_enabled,
@@ -68,6 +70,8 @@ def _reinject_system_contexts_after_compact(messages: list, task: dict | None = 
                 conv_id=task.get('convId', ''),
                 task=task,
                 model=cfg.get('model', ''),
+                system_prompt_mode=cfg.get('systemPromptMode', 'append'),
+                disabled_blocks=_disabled_prompt_blocks(cfg),
             )
             logger.info('[PostCompact] Re-injected system contexts after compaction')
 
@@ -168,7 +172,18 @@ def run_compaction_pipeline(messages: list, current_round: int,
 
     # Force compact if context near capacity (chatui L2) — unless the arm
     # opted out to run its own summarizer as the sole context manager.
-    compacted = False if _disable_force else force_compact_if_needed(messages, task=task)
+    #
+    # ``_allow_head_truncate_fallback=True`` is the deterministic OOM guard:
+    # when the L2 summary LLM can't run (no 'cheap' slot / saturated single
+    # model / input too big) AND the context is critically over the usable
+    # window, force_compact falls through to _head_truncate right here rather
+    # than returning False and looping the oversized prompt (the reactive
+    # net never fires proactively — the max_tokens clamp prevents the API
+    # rejection that would trigger it). Only the PROACTIVE pipeline passes
+    # this; reactive_compact keeps its own Phase-4 head-truncate and must NOT
+    # double-truncate, so it does not set the flag.
+    compacted = False if _disable_force else force_compact_if_needed(
+        messages, task=task, _allow_head_truncate_fallback=True)
 
     # Post-compact: re-inject system contexts if compaction dropped them
     if compacted:
@@ -197,9 +212,31 @@ def run_compaction_pipeline(messages: list, current_round: int,
                     logger.error('[Pipeline] advanced_compact failed: %s',
                                  e, exc_info=True)
 
-    # Notify cache tracker that compaction occurred so the expected
-    # cache_read token drop isn't flagged as a cache break.
-    if (saved > 0 or compacted or adv_saved > 0) and conv_id:
+    # Notify cache tracker ONLY for mutations that actually touch the cached
+    # PREFIX, so the expected cache_read drop isn't flagged as a break.
+    #
+    # ★ Default L1 (micro_compact, saved>0) is cache-SAFE by construction:
+    #   every built-in step gates on ``ctx.is_in_cache_prefix(idx)`` and skips
+    #   messages[0:get_cache_prefix_count]. It edits only COLD results that
+    #   have NOT yet been cached (or, idempotently, ones already byte-identical
+    #   in the prefix). So it does NOT cause a drop and must NOT raise
+    #   compaction_pending — doing so blanket-suppresses detect_cache_break on
+    #   exactly the transient rounds (cold start, post-eviction, big fan-out)
+    #   where a REAL break is most likely, masking it. (See memory
+    #   l1-compaction-notify-masks-detection.)
+    #
+    #   We DO notify for:
+    #     * L2 force-compact (``compacted``) — rebuilds/drops prefix messages.
+    #     * advanced structural compaction (``adv_saved``) — drops whole turns.
+    #     * the aggressive arm (``ignore_cache_prefix``) — L1 then edits INSIDE
+    #       the prefix, so a drop is genuinely expected.
+    _ignore_prefix = False
+    if task:
+        _cc = (task.get('config') or {}).get('compaction')
+        if isinstance(_cc, dict):
+            _ignore_prefix = bool(_cc.get('ignore_cache_prefix', False))
+    _touched_prefix = bool(compacted) or adv_saved > 0 or (saved > 0 and _ignore_prefix)
+    if _touched_prefix and conv_id:
         try:
             from lib.tasks_pkg.cache_tracking import notify_compaction
             notify_compaction(conv_id)

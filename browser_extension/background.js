@@ -1,5 +1,5 @@
 /**
- * Tofu Browser Bridge — Background Service Worker (v4.1)
+ * Tofu Browser Bridge — Background Service Worker (v4.5)
  *
  * Single-endpoint architecture:
  *   Every poll is a POST to /api/browser/poll with:
@@ -33,6 +33,21 @@ let BRIDGE_SECRET = '';           // Optional: matches server TOFU_BRIDGE_SECRET
 let pollActive = false;
 let connected = false;
 let lastError = '';
+
+// Chromium major version (parsed once at load). Reported to the server on every
+// poll so the Tofu UI can surface Chrome 142+ "Local Network Access" prompt
+// guidance — those prompts fire on the browser RUNNING the extension, so the
+// version must come from HERE, not the (possibly different) UI viewer's UA.
+let CHROME_MAJOR = 0;
+try {
+  const _cm = (navigator.userAgent || '').match(/Chrom(?:e|ium)\/(\d+)/);
+  if (_cm) CHROME_MAJOR = parseInt(_cm[1], 10);
+} catch (e) { /* navigator.userAgent unavailable in this context */ }
+
+// Result-nudge: track the in-flight poll so a freshly-completed command can
+// abort the idle long-poll and be delivered immediately (see executeAndReport).
+let _activePollController = null;
+let _flushPending = false;        // true ⇒ active poll aborted to flush a result
 
 // Result queue: completed results waiting to be sent with next poll
 const _resultQueue = [];        // [{id, result, error}, ...]
@@ -152,20 +167,26 @@ function stopPolling() {
 async function poll() {
   if (!pollActive || !SERVER_URL) return;
 
+  // Declared outside the try so the catch can restore them on a flush abort.
+  let resultsToSend = [];
+  let timeoutId = null;
   try {
     // Drain the result queue — send all completed results with this poll
-    const resultsToSend = _resultQueue.splice(0, _resultQueue.length);
+    resultsToSend = _resultQueue.splice(0, _resultQueue.length);
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT);
+    _activePollController = controller;
+    _flushPending = false;
+    timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT);
 
     const resp = await fetch(`${SERVER_URL}/api/browser/poll`, {
       method: 'POST',
       signal: controller.signal,
       headers: buildHeaders(),
-      body: JSON.stringify({ results: resultsToSend, clientId: CLIENT_ID }),
+      body: JSON.stringify({ results: resultsToSend, clientId: CLIENT_ID, chromeMajor: CHROME_MAJOR }),
     });
     clearTimeout(timeoutId);
+    _activePollController = null;
 
     if (!resp.ok) {
       if (resp.status === 401) {
@@ -209,7 +230,19 @@ async function poll() {
     if (pollActive) setTimeout(poll, POLL_INTERVAL);
 
   } catch (err) {
+    if (timeoutId) clearTimeout(timeoutId);
+    _activePollController = null;
     if (err.name === 'AbortError') {
+      if (_flushPending) {
+        // Deliberate abort: a command result just landed, so we cut the idle
+        // long-poll short. Re-poll INSTANTLY (not the 100ms reconnect path) so
+        // the result goes out now instead of waiting the server's 8s window.
+        // Restore the in-flight poll's drained results so none are lost.
+        _flushPending = false;
+        if (resultsToSend.length) _resultQueue.unshift(...resultsToSend);
+        if (pollActive) setTimeout(poll, 0);
+        return;
+      }
       // Fetch timeout — normal (server long-poll returned nothing), just reconnect
       connected = true;
       if (pollActive) setTimeout(poll, POLL_INTERVAL);
@@ -256,8 +289,15 @@ async function executeAndReport(cmd) {
   _resultQueue.push({ id: cmd.id, result, error });
   _inflight.delete(cmd.id);
 
-  // Nudge the poll loop: if we have results and no active poll is running,
-  // the next poll() will pick them up automatically via setTimeout.
+  // ★ Result-nudge: if a long-poll is currently in-flight, abort it so a fresh
+  // poll carries this result out immediately instead of waiting up to the
+  // server's 8s long-poll window. _flushPending lets poll()'s catch distinguish
+  // this deliberate abort from the 12s fetch-timeout abort (instant re-poll vs
+  // the normal 100ms reconnect).
+  if (_activePollController && pollActive) {
+    _flushPending = true;
+    try { _activePollController.abort(); } catch (_) {}
+  }
 }
 
 function withTimeout(promise, ms, timeoutMsg) {
@@ -418,16 +458,9 @@ function _extractContent(selector, maxChars) {
     return { elements: results, count: elements.length };
   }
 
-  let text = document.body ? (document.body.innerText || document.body.textContent || '') : '';
-  const textLength = text.length;
-  let truncated = false;
-  if (text.length > maxChars) {
-    text = text.substring(0, maxChars);
-    truncated = true;
-  }
-
-  // Return full page HTML so the server can run trafilatura/BS4 extraction
-  // (same pipeline as fetch_page_content). Cap at 2MB to avoid message bloat.
+  // Page HTML is the PRIMARY payload: the server runs trafilatura/BS4
+  // extraction on it (same pipeline as fetch_page_content) and discards
+  // innerText whenever extraction succeeds. Cap at 2MB to avoid message bloat.
   const MAX_HTML = 2 * 1024 * 1024;
   let html = document.documentElement ? document.documentElement.outerHTML : '';
   let htmlTruncated = false;
@@ -442,7 +475,25 @@ function _extractContent(selector, maxChars) {
     if (name) meta[name] = (m.getAttribute('content') || '').substring(0, 200);
   });
 
-  return { text, textLength, truncated, html, htmlTruncated, meta };
+  // innerText is only a FALLBACK for when HTML is too small for the server to
+  // extract from (server gates extraction on html.length > 200). read_tab waits
+  // for load, so outerHTML reflects the live post-render DOM — a real content
+  // page (incl. a rendered SPA) always has substantial HTML. Below this
+  // threshold the page is an empty/error/redirect shell, so we ship innerText
+  // and skip its (reflow-inducing) computation entirely on the common path.
+  const MIN_HTML_FOR_EXTRACT = 2048;
+  const out = { html, htmlTruncated, meta };
+  if (html.length < MIN_HTML_FOR_EXTRACT) {
+    let text = document.body ? (document.body.innerText || document.body.textContent || '') : '';
+    out.textLength = text.length;
+    out.truncated = false;
+    if (text.length > maxChars) {
+      text = text.substring(0, maxChars);
+      out.truncated = true;
+    }
+    out.text = text;
+  }
+  return out;
 }
 
 // ══════════════════════════════════════════
@@ -548,21 +599,40 @@ async function cmdScreenshotTab(params) {
     tabId = activeTab.id;
   }
 
+  // Both CDP paths screenshot the target tab IN THE BACKGROUND — no tab
+  // activation, no focus stealing. Only the last-resort captureVisibleTab path
+  // must bring the tab to the front (the visible "navigation" flicker), so it
+  // runs solely when every CDP attempt fails (e.g. DevTools already attached).
   if (fullPage) {
     try {
       return await _screenshotFullPageCDP(tabId, format, quality);
     } catch (err) {
-      console.warn('[Screenshot] Full-page CDP failed, falling back to viewport capture:', err && err.message);
-      // Fall through to viewport capture. Record fallbackReason so the
-      // server-side handler/log can surface it.
-      const res = await _screenshotViewport(tabId, format, quality);
-      res.fullPage = false;
-      res.fallbackReason = String((err && err.message) || err || 'unknown');
-      return res;
+      console.warn('[Screenshot] Full-page CDP failed, trying viewport CDP:', err && err.message);
+      try {
+        const res = await _screenshotViewportCDP(tabId, format, quality);
+        res.fallbackReason = String((err && err.message) || err || 'full-page CDP failed');
+        return res;
+      } catch (err2) {
+        console.warn('[Screenshot] Viewport CDP failed, falling back to captureVisibleTab:', err2 && err2.message);
+        const res = await _screenshotViewport(tabId, format, quality);
+        res.fullPage = false;
+        res.fallbackReason = String((err2 && err2.message) || err2 || 'CDP unavailable');
+        return res;
+      }
     }
   }
 
-  return await _screenshotViewport(tabId, format, quality);
+  // Viewport-only request: still prefer the background CDP capture so we don't
+  // yank the tab to the foreground; only fall back to captureVisibleTab if CDP
+  // can't attach.
+  try {
+    return await _screenshotViewportCDP(tabId, format, quality);
+  } catch (err) {
+    console.warn('[Screenshot] Viewport CDP failed, falling back to captureVisibleTab:', err && err.message);
+    const res = await _screenshotViewport(tabId, format, quality);
+    res.fallbackReason = String((err && err.message) || err || 'CDP unavailable');
+    return res;
+  }
 }
 
 async function _screenshotFullPageCDP(tabId, format, quality) {
@@ -602,6 +672,37 @@ async function _screenshotFullPageCDP(tabId, format, quality) {
       height: clipHeight,
       contentHeight: height,
       truncatedHeight: height > FULL_PAGE_MAX_HEIGHT_PX,
+    };
+  } finally {
+    if (attached) {
+      try { await chrome.debugger.detach(target); } catch (_) {}
+    }
+  }
+}
+
+// Background viewport capture via CDP — captures the tab's current viewport
+// WITHOUT activating/focusing it (unlike chrome.tabs.captureVisibleTab, which
+// can only grab the foreground tab). captureBeyondViewport:false keeps it to
+// the visible area, so it's fast and never triggers the tab-switch flicker.
+async function _screenshotViewportCDP(tabId, format, quality) {
+  const target = { tabId };
+  let attached = false;
+  try {
+    await chrome.debugger.attach(target, '1.3');
+    attached = true;
+    await chrome.debugger.sendCommand(target, 'Page.enable');
+
+    const shotParams = { format, captureBeyondViewport: false, fromSurface: true };
+    if (format === 'jpeg') shotParams.quality = quality;
+
+    const shot = await chrome.debugger.sendCommand(target, 'Page.captureScreenshot', shotParams);
+    if (!shot || !shot.data) throw new Error('CDP returned empty screenshot');
+
+    const mime = format === 'jpeg' ? 'image/jpeg' : 'image/png';
+    return {
+      dataUrl: `data:${mime};base64,${shot.data}`,
+      format,
+      fullPage: false,
     };
   } finally {
     if (attached) {
@@ -1670,6 +1771,15 @@ async function cmdFetchUrl(params) {
     throw new Error(`Cannot fetch protected URL: ${url}`);
   }
 
+  // Refuse binary assets by extension. Navigating a tab to a PDF/zip/media URL
+  // makes Chrome's download manager save it to the user's machine (and yields
+  // no scrapable text) — these are fetched/parsed server-side, never here.
+  // (The server-side bridge already filters these, but a redirect could still
+  // land us on one, so guard defensively.)
+  if (isBinaryAssetUrl(url)) {
+    throw new Error(`Refusing to open binary asset in a tab (would download): ${url}`);
+  }
+
   // Create a background tab (not active, so it doesn't steal focus)
   let tab;
   try {
@@ -1756,6 +1866,17 @@ async function cmdNotify(params) {
 
 function isProtectedUrl(url) {
   return /^(chrome|chrome-extension|about|chrome-search|devtools):/.test(url);
+}
+
+// Binary assets that Chrome downloads (instead of rendering) when a tab
+// navigates to them, and which yield no scrapable text. Mirrors the
+// server-side _BROWSER_UNRENDERABLE_EXTS list in lib/search_bridge.py.
+// `.svg` is intentionally excluded (it renders as text/markup).
+function isBinaryAssetUrl(url) {
+  let path;
+  try { path = new URL(url).pathname.toLowerCase().replace(/\/+$/, ''); }
+  catch { return false; }
+  return /\.(pdf|zip|tar|gz|tgz|rar|7z|bz2|xz|jpg|jpeg|png|gif|webp|bmp|ico|mp4|mp3|wav|avi|mov|webm|mkv|flac|ogg|docx?|xlsx?|pptx?|exe|dmg|iso|apk|bin|woff2?|ttf|otf|eot)$/.test(path);
 }
 
 function updateBadge(state) {

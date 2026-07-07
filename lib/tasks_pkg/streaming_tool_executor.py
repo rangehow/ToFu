@@ -74,6 +74,38 @@ _STREAMABLE_TOOLS = frozenset({
 _INTERNAL_TOOL_PREFIXES = ('antml:', 'anthropic.', '__')
 
 
+def _has_executable_target(fn_name: str, fn_args: dict) -> bool:
+    """True if a streamable read-only call has a usable target to pre-execute.
+
+    Guards against phantom/placeholder calls the model sometimes emits, e.g.
+    ``fetch_url({"reason": "placeholder", "urls": []})`` — an empty ``urls``
+    array is falsy so it falls through to single-URL mode with ``url=''``.
+    Pre-executing that would run ``fetch_page_content('')`` and CACHE a bogus
+    ``"Failed to fetch ."`` result (tagged ``source: "Prefetch"``) that the
+    real handler then never gets a chance to reject cleanly. Returning False
+    here defers the call to the normal handler, which rejects it with a clear
+    "no URL provided" message instead.
+    """
+    if fn_name == 'fetch_url':
+        urls = fn_args.get('urls')
+        if isinstance(urls, list) and any(
+            (isinstance(s, dict) and s.get('url')) or (isinstance(s, str) and s.strip())
+            for s in urls
+        ):
+            return True
+        return bool((fn_args.get('url') or '').strip())
+    if fn_name == 'web_search':
+        queries = fn_args.get('queries')
+        if isinstance(queries, list) and any(
+            (isinstance(s, dict) and s.get('query')) or (isinstance(s, str) and s.strip())
+            for s in queries
+        ):
+            return True
+        return bool((fn_args.get('query') or '').strip())
+    # Project tools (read_files, grep_search, …) — let the handler validate.
+    return True
+
+
 class StreamingToolAccumulator:
     """Accumulates tool calls during streaming and pre-executes read-only ones.
 
@@ -186,7 +218,8 @@ class StreamingToolAccumulator:
                          'for %s: %s', self._tid, fn_name, e)
 
         # ── Pre-execute read-only tools ──
-        if fn_name in _STREAMABLE_TOOLS and fn_args:
+        if (fn_name in _STREAMABLE_TOOLS and fn_args
+                and _has_executable_target(fn_name, fn_args)):
             self._submitted_count += 1
             t0 = time.time()
             logger.info('[%s] StreamingToolExec: pre-executing %s (tc_id=%s) '
@@ -265,84 +298,74 @@ class StreamingToolAccumulator:
                                     conv_id=_conv_id)
 
             elif fn_name == 'web_search':
-                from tofu_search import perform_web_search
-                from tofu_search.search import format_search_for_tool_response
+                # Delegate to the SINGLE SOURCE OF TRUTH for search —
+                # handlers.search._web_search_one — so the streaming pre-exec
+                # path is byte-identical to the serial handler: the vertical
+                # thread-pool is shut down (the old inline copy LEAKED a pool
+                # per vertical query), perform_web_search is wrapped in the
+                # same try/except safety net (graceful search_diag on failure
+                # instead of an escaping exception / raw error string), and the
+                # vertical-timeout is the same. Same authoritative-cache
+                # hazard as the fetch_url fix: this result is cached and the
+                # serial pipeline SKIPS re-execution, so any drift here was
+                # silently served. (Lazy import avoids a cycle.)
                 from lib.tasks_pkg.handlers.search import (
-                    resolve_vertical, _vertical_to_sse_payload, _vertical_header_for_llm,
+                    _web_search_one, _format_search_display_for_results,
+                    _vertical_to_sse_payload, _vertical_header_for_llm,
                 )
+                from tofu_search.search import format_search_for_tool_response
+                user_question = self._task.get('lastUserQuery', '')
+
                 # ★ Batch mode: run concurrent searches (lightweight, no SSE events)
+                # Parity with serial _handle_web_search_batch (handlers/search.py):
+                # same (query, freshness, vertical) specs, run_batch_concurrent
+                # orchestration, per-query `_q` tagging, and {'batch': [...]}
+                # vertical carrier (consumed at tool_dispatch.py:1063).
                 queries = fn_args.get('queries')
                 batch_vertical = fn_args.get('vertical', 'auto')
                 if queries and isinstance(queries, list):
-                    from concurrent.futures import ThreadPoolExecutor as _TP, as_completed as _ac
-                    user_q = self._task.get('lastUserQuery', '')
+                    from lib.tasks_pkg.handlers._adapter import run_batch_concurrent
                     batch_freshness = fn_args.get('freshness', '')
                     specs = []
                     for s in queries[:5]:
                         if isinstance(s, dict) and s.get('query'):
                             specs.append((s['query'],
-                                          s.get('vertical') or batch_vertical,
-                                          s.get('freshness', '') or batch_freshness))
+                                          s.get('freshness', '') or batch_freshness,
+                                          s.get('vertical') or batch_vertical))
                         elif isinstance(s, str) and s.strip():
-                            specs.append((s.strip(), batch_vertical, batch_freshness))
+                            specs.append((s.strip(), batch_freshness, batch_vertical))
 
-                    def _do_search(spec):
-                        q, v, f = spec
-                        plan = resolve_vertical(q, v)
-                        v_fut = None
-                        if plan is not None:
-                            from concurrent.futures import ThreadPoolExecutor as _TP1
-                            _vp = _TP1(max_workers=1)
-                            v_fut = _vp.submit(plan)
-                        r = perform_web_search(q, user_question=user_q, freshness=f)
-                        sd = getattr(r, '_search_diag', None)
-                        fmt = format_search_for_tool_response(r, search_diag=sd)
-                        v_rec = None
-                        if v_fut is not None:
-                            try:
-                                v_rec = v_fut.result(timeout=5)
-                            except Exception as ve:
-                                logger.warning('[%s] StreamingToolExec: vertical(%s) failed: %s',
-                                               self._tid, v, ve)
-                        if v_rec:
-                            fmt = _vertical_header_for_llm(v_rec) + fmt
-                        return q, r, fmt, v_rec
+                    def _worker(spec):
+                        q, f, v = spec
+                        results, search_diag, _bkdn, vertical_result = _web_search_one(
+                            q, user_question, f, vertical=v)
+                        fmt = format_search_for_tool_response(results, search_diag=search_diag)
+                        if vertical_result:
+                            fmt = _vertical_header_for_llm(vertical_result) + fmt
+                        return (results, fmt, vertical_result)
 
-                    parts = [None] * len(specs)
-                    results_per_q = [None] * len(specs)
-                    verticals = []
-                    with _TP(max_workers=min(len(specs), 5)) as pool:
-                        futs = {pool.submit(_do_search, sp): i for i, sp in enumerate(specs)}
-                        for f in _ac(futs):
-                            idx = futs[f]
-                            try:
-                                q, r, fmt, v_rec = f.result()
-                                parts[idx] = f'=== Search: {q} ===\n{fmt}' if len(specs) > 1 else fmt
-                                results_per_q[idx] = r
-                                if v_rec:
-                                    payload = _vertical_to_sse_payload(v_rec)
-                                    if payload:
-                                        payload = dict(payload)
-                                        payload['query'] = q
-                                        verticals.append(payload)
-                            except Exception as e:
-                                logger.debug('[%s] StreamingToolExec: batch search query %r failed: %s',
-                                             self._tid, specs[idx][0][:80], e)
-                                parts[idx] = f'Search failed for "{specs[idx][0]}": {e}'
-                                results_per_q[idx] = []
+                    ordered = run_batch_concurrent(specs, _worker, max_workers=5, tag='Search')
+                    n = len(specs)
                     all_display_results = []
-                    for idx, r in enumerate(results_per_q):
-                        if not r:
+                    verticals = []
+                    parts = []
+                    for idx, item in enumerate(ordered):
+                        q = specs[idx][0]
+                        if item is None:
+                            parts.append(f'Search failed for "{q}": internal error (see logs)')
                             continue
-                        src_q = specs[idx][0] if idx < len(specs) else ''
-                        for item in r:
-                            dr = {k: v for k, v in item.items() if k != 'full_content'}
-                            if item.get('full_content'):
-                                dr['fetched'] = True
-                                dr['fetchedChars'] = len(item['full_content'])
-                            # Tag with source query for per-query grouping in UI
-                            dr['_q'] = src_q
-                            all_display_results.append(dr)
+                        results, fmt, vertical_result = item
+                        disp = _format_search_display_for_results(results)
+                        for dr in disp:
+                            dr['_q'] = q
+                        all_display_results.extend(disp)
+                        if vertical_result:
+                            payload = _vertical_to_sse_payload(vertical_result)
+                            if payload:
+                                payload = dict(payload)
+                                payload['query'] = q
+                                verticals.append(payload)
+                        parts.append(f'=== Search: {q} ===\n{fmt}' if n > 1 else fmt)
                     formatted = _ContentWithDisplayResults(
                         '\n\n'.join(p for p in parts if p),
                         all_display_results,
@@ -355,123 +378,96 @@ class StreamingToolAccumulator:
                 query = fn_args.get('query', '')
                 vertical_param = fn_args.get('vertical', 'auto')
                 freshness = fn_args.get('freshness', '')
-                user_question = self._task.get('lastUserQuery', '')
-                plan = resolve_vertical(query, vertical_param)
-                v_fut = None
-                if plan is not None:
-                    from concurrent.futures import ThreadPoolExecutor as _TP1
-                    _vp = _TP1(max_workers=1)
-                    v_fut = _vp.submit(plan)
-                results = perform_web_search(query,
-                                             user_question=user_question,
-                                             freshness=freshness)
-                search_diag = getattr(results, '_search_diag', None)
-                engine_breakdown = getattr(results, '_engine_breakdown', None)
-                formatted_text = format_search_for_tool_response(results,
-                                                                 search_diag=search_diag)
-                v_rec = None
-                if v_fut is not None:
-                    try:
-                        v_rec = v_fut.result(timeout=5)
-                    except Exception as ve:
-                        logger.warning('[%s] StreamingToolExec: vertical(%s) failed: %s',
-                                       self._tid, vertical_param, ve)
-                if v_rec:
-                    formatted_text = _vertical_header_for_llm(v_rec) + formatted_text
-                display_results = []
-                for r in results:
-                    dr = {k: v for k, v in r.items() if k != 'full_content'}
-                    if r.get('full_content'):
-                        dr['fetched'] = True
-                        dr['fetchedChars'] = len(r['full_content'])
-                    display_results.append(dr)
+                results, search_diag, engine_breakdown, vertical_result = _web_search_one(
+                    query, user_question, freshness, vertical=vertical_param)
+                formatted_text = format_search_for_tool_response(results, search_diag=search_diag)
+                if vertical_result:
+                    formatted_text = _vertical_header_for_llm(vertical_result) + formatted_text
+                display_results = _format_search_display_for_results(results)
                 formatted = _ContentWithDisplayResults(formatted_text, display_results)
                 if not display_results and search_diag:
                     formatted.search_diag = search_diag
                 if engine_breakdown:
                     formatted.engine_breakdown = engine_breakdown
-                if v_rec:
-                    formatted.vertical = _vertical_to_sse_payload(v_rec)
+                vertical_payload = _vertical_to_sse_payload(vertical_result)
+                if vertical_payload:
+                    formatted.vertical = vertical_payload
                 return formatted
 
             elif fn_name == 'fetch_url':
-                from tofu_search import fetch_page_content
+                # Delegate to the SINGLE SOURCE OF TRUTH for URL fetching —
+                # handlers.search._fetch_url_one — so the streaming pre-exec
+                # path handles binary file assets (staged to data/fetched/ for
+                # read_files) and text assets (SVG/JSON/source returned raw,
+                # skipping the article filter) IDENTICALLY to the serial
+                # pipeline. Using the old text-only fetch_page_content here
+                # silently returned nothing for those URLs, and because this
+                # result is injected into _tool_result_cache as authoritative,
+                # the serial pipeline then SKIPPED re-execution — so the loss
+                # was invisible. (Lazy import avoids a cycle: search.py imports
+                # from executor, which streaming_tool_executor also uses.)
+                from lib.tasks_pkg.handlers.search import (
+                    _fetch_url_one, _format_fetch_display)
+                from lib.tasks_pkg.tool_display import _short_url
+                user_question = self._task.get('lastUserQuery', '')
+
                 # ★ Batch mode: run concurrent fetches (lightweight, no SSE events)
+                # Parity with the serial batch worker (handlers/search.py:614) —
+                # it passes fetch_reason='' for batch URLs (no per-URL reason).
                 urls = fn_args.get('urls')
                 if urls and isinstance(urls, list):
                     from concurrent.futures import ThreadPoolExecutor as _TP, as_completed as _ac
-                    import lib as _lib_ref
-                    from lib.tasks_pkg.tool_display import _short_url
                     url_list = [
                         (s.get('url') if isinstance(s, dict) else s)
                         for s in urls[:10]
                         if (isinstance(s, dict) and s.get('url')) or (isinstance(s, str) and s.strip())
                     ]
-                    def _do_fetch(u):
-                        c = fetch_page_content(
-                            u, max_chars=_lib_ref.FETCH_MAX_CHARS_DIRECT,
-                            pdf_max_chars=_lib_ref.FETCH_MAX_CHARS_PDF,
-                        )
-                        is_pdf = (u.lower().rstrip('/').endswith('.pdf')
-                                  or (c and c.startswith('[Page ')))
-                        return c, is_pdf
                     parts = [None] * len(url_list)
                     display_results = [None] * len(url_list)
                     with _TP(max_workers=min(len(url_list), 8)) as pool:
-                        futs = {pool.submit(_do_fetch, u): i for i, u in enumerate(url_list)}
+                        futs = {pool.submit(_fetch_url_one, u, user_question, ''): i
+                                for i, u in enumerate(url_list)}
                         for f in _ac(futs):
                             idx = futs[f]
                             u = url_list[idx]
                             try:
-                                c, is_pdf = f.result()
-                                if c:
-                                    parts[idx] = f"Content from {u} ({len(c):,} chars):\n\n{c}"
-                                    display_results[idx] = {
-                                        'title': f'{"PDF" if is_pdf else "Page"}: {_short_url(u)}',
-                                        'snippet': f'{len(c):,} chars',
-                                        'url': u,
-                                        'source': 'PDF' if is_pdf else 'Direct Fetch',
-                                        'fetched': True,
-                                        'fetchedChars': len(c),
-                                    }
-                                else:
-                                    parts[idx] = f"Failed to fetch {u}."
-                                    display_results[idx] = {
-                                        'title': f'Page: {_short_url(u)}',
-                                        'snippet': 'Failed',
-                                        'url': u,
-                                        'source': 'Direct Fetch',
-                                        'fetched': False,
-                                        'fetchedChars': 0,
-                                    }
+                                item = f.result()
                             except Exception as e:
                                 logger.debug('[%s] StreamingToolExec: batch fetch %r failed: %s',
                                              self._tid, u, e)
-                                parts[idx] = f"Failed to fetch {u}: {e}"
-                                display_results[idx] = {
-                                    'title': f'Page: {_short_url(u)}',
-                                    'snippet': f'Error: {str(e)[:120]}',
-                                    'url': u,
-                                    'source': 'Direct Fetch',
-                                    'fetched': False,
-                                    'fetchedChars': 0,
+                                item = {
+                                    'url': u, 'page_content': None, 'is_pdf': False,
+                                    'raw_chars': 0, 'filtered_chars': 0,
+                                    'error_msg': f'internal fetch error: {str(e)[:120]}',
+                                    'saved_path': None, 'is_asset': False,
                                 }
+                            page_content = item.get('page_content')
+                            filtered_chars = item.get('filtered_chars', 0)
+                            error_msg = item.get('error_msg')
+                            if page_content:
+                                parts[idx] = (f"Content from {u} "
+                                              f"({filtered_chars:,} chars):\n\n{page_content}")
+                            else:
+                                parts[idx] = (f"Failed to fetch {u}."
+                                              + (f' ({error_msg})' if error_msg else ''))
+                            display_results[idx] = _format_fetch_display(item, _short_url)
                     formatted = _ContentWithDisplayResults(
                         '\n\n'.join(p for p in parts if p),
                         [d for d in display_results if d is not None],
                     )
                     return formatted
+
                 url = fn_args.get('url', '')
-                import lib as _lib_ref
-                content = fetch_page_content(
-                    url,
-                    max_chars=_lib_ref.FETCH_MAX_CHARS_DIRECT,
-                    pdf_max_chars=_lib_ref.FETCH_MAX_CHARS_PDF,
-                )
-                if content:
+                fetch_reason = fn_args.get('reason', '')
+                item = _fetch_url_one(url, user_question, fetch_reason=fetch_reason)
+                page_content = item.get('page_content')
+                filtered_chars = item.get('filtered_chars', 0)
+                error_msg = item.get('error_msg')
+                if page_content:
                     return (f"Content from {url} "
-                            f"({len(content):,} chars):\n\n{content}")
-                return f"Failed to fetch {url}."
+                            f"({filtered_chars:,} chars):\n\n{page_content}")
+                return (f"Failed to fetch {url}."
+                        + (f' ({error_msg})' if error_msg else ''))
 
             return ''
 
@@ -517,16 +513,23 @@ class StreamingToolAccumulator:
         # Single __screenshot__ — already in the right format
         if content.get('__screenshot__'):
             return content
-        # __batch_images__ — extract first image, attach text fallback
+        # __batch_images__ — preserve EVERY image (the model and UI both need
+        # all of them).  We keep the first image's fields at the top level for
+        # backward compatibility with single-image consumers, and add an
+        # ``images`` list carrying the full batch so downstream code can emit
+        # one image_url block / thumbnail per image.
         if content.get('__batch_images__'):
             images = content['__batch_images__']
             text = content.get('_text_content', '')
-            if images:
-                first_img = next(iter(images.values()))
-                if isinstance(first_img, dict) and first_img.get('__screenshot__'):
-                    if text and not first_img.get('_text_fallback'):
-                        first_img['_text_fallback'] = text
-                    return first_img
+            img_list = [v for v in images.values()
+                        if isinstance(v, dict) and v.get('__screenshot__')]
+            if img_list:
+                first_img = dict(img_list[0])
+                if text and not first_img.get('_text_fallback'):
+                    first_img['_text_fallback'] = text
+                if len(img_list) > 1:
+                    first_img['images'] = img_list
+                return first_img
         return content
 
     def _prepare_cache_value(self, content, fn_name):

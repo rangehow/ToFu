@@ -59,7 +59,7 @@ window.addEventListener("unhandledrejection", (evt) => {
 const _debugCache = {};
 function clearDebug() {
   document.getElementById("debugContent").innerHTML = "";
-  document.getElementById("debugTitle").textContent = "📨 Messages";
+  document.getElementById("debugTitle").innerHTML = Icon('inbox', 14) + ' Messages';
   const p = document.getElementById("debugContent");
   if (p) p._rawMessages = null;
 }
@@ -136,11 +136,59 @@ function _fmtKB(n) {
   if (n < 1024) return n + "B";
   return (n / 1024).toFixed(1) + "KB";
 }
+/* ── Project-Brain injection sniff (observability of the "brain") ──
+ * The AUTHORITATIVE signal that this task injected the project charter /
+ * board is the exact marker string the MODEL actually saw in the wire-form
+ * `messages` snapshot: `[PROJECT CHARTER]` / `[PROJECT BOARD]`. We sniff
+ * ONLY those markers in the message content — no separate frontend heuristic,
+ * no state reverse-engineering. Returns e.g. {charter:true, board:false} or
+ * null when neither is present. `_debugMsgText` flattens string|array content
+ * (system blocks are commonly wrapped as an array of text blocks). */
+function _debugMsgText(msg) {
+  if (!msg) return "";
+  if (typeof msg.content === "string") return msg.content;
+  if (Array.isArray(msg.content)) {
+    let s = "";
+    for (const b of msg.content) {
+      if (b && typeof b === "object" && b.type === "text") s += (b.text || "") + "\n";
+    }
+    return s;
+  }
+  return "";
+}
+function _debugBrainInfo(msg) {
+  if (!msg) return null;
+  // Only system messages carry the injected charter/board blocks.
+  if (msg.role !== "system") return null;
+  const text = _debugMsgText(msg);
+  if (!text) return null;
+  const charter = text.indexOf("[PROJECT CHARTER]") !== -1;
+  const board = text.indexOf("[PROJECT BOARD]") !== -1;
+  if (!charter && !board) return null;
+  return { charter, board };
+}
 function toggleDebug() {
   debugVisible = !debugVisible;
   document
     .getElementById("debugPanel")
     .classList.toggle("visible", debugVisible);
+  // ★ Single source of truth: whenever the panel is opened, (re)load the
+  //   active conversation's messages from the backend. A cold page refresh
+  //   restores the active conv via renderChat (not loadConversation), so
+  //   restoreDebugForConv never fired and the panel showed empty until the
+  //   next generation. Loading on open guarantees fresh, backend-built content.
+  if (debugVisible
+      && typeof activeConvId !== "undefined" && activeConvId
+      && typeof restoreDebugForConv === "function") {
+    restoreDebugForConv(activeConvId);
+  }
+}
+// Close the debug panel (top-right ✕). Distinct from clearDebug(), which only
+// wipes content — the ✕ must actually hide the panel.
+function closeDebug() {
+  debugVisible = false;
+  const panel = document.getElementById("debugPanel");
+  if (panel) panel.classList.remove("visible");
 }
 // Called on conversation switch: restore cached debug for this conv.
 //
@@ -158,7 +206,7 @@ function toggleDebug() {
 function restoreDebugForConv(convId) {
   const cached = _debugCache[convId];
   if (cached && cached.messages && cached.messages.length > 0) {
-    showMessagesInDebug(cached.messages, cached.label, false, undefined, cached.tools);
+    showMessagesInDebug(cached.messages, cached.label, false, undefined, cached.tools, cached.approx);
     return;
   }
   const conv = conversations.find((c) => c.id === convId);
@@ -178,7 +226,7 @@ function restoreDebugForConv(convId) {
   const _ph = document.getElementById("debugContent");
   const _title = document.getElementById("debugTitle");
   if (_ph) _ph.innerHTML = '<div class="debug-loading">Loading messages from server…</div>';
-  if (_title) _title.textContent = "📨 Messages (loading…)";
+  if (_title) _title.innerHTML = Icon('inbox', 14) + ' Messages (loading…)';
   const _sp = (typeof config !== 'undefined' && config.systemPrompt) || '';
   Api.conversations.getDebugMessages(convId, _sp)
     .then(data => {
@@ -190,6 +238,8 @@ function restoreDebugForConv(convId) {
           `${data.count} msgs (server)`,
           false,
           convId,
+          undefined,
+          !!data.approx,
         );
       } else {
         clearDebug();
@@ -203,13 +253,20 @@ function restoreDebugForConv(convId) {
 }
 // ★ Render full messages array into debug panel — supports incremental updates
 //   isUpdate=true → streaming update, preserve collapse states, only patch changed blocks
-function showMessagesInDebug(messages, label, isUpdate, forConvId, tools) {
+//   approx=true → COLD-path reconstruction (the /debug-messages endpoint, which
+//     rebuilds the wire form from the DB with a hypothetical first-round for the
+//     per-round memory/date). Renders the amber "reconstructed approximation"
+//     chip so the human knows they are NOT looking at a precise capture of a
+//     specific round. The live SSE snapshot path (the real wire form) passes
+//     approx=false/undefined and must NEVER show this chip.
+function showMessagesInDebug(messages, label, isUpdate, forConvId, tools, approx) {
   const cid =
     forConvId || (typeof activeConvId !== "undefined" ? activeConvId : null);
   // Cache for conversation switching
   if (cid) {
     _debugCache[cid] = { messages, label };
     if (tools) _debugCache[cid].tools = tools;
+    _debugCache[cid].approx = !!approx;
   }
   // Only render if this conv is currently active (or no conv specified)
   if (
@@ -224,23 +281,64 @@ function showMessagesInDebug(messages, label, isUpdate, forConvId, tools) {
   let _totalTokens = 0;
   let _compactedCount = 0;
   let _toolMsgCount = 0;
+  let _brainCharter = false;
+  let _brainBoard = false;
   for (const m of messages) {
     _totalTokens += _debugMsgTokens(m);
     if (m && m.role === "tool") {
       _toolMsgCount++;
       if (_debugCompactionInfo(m)) _compactedCount++;
     }
+    const bi = _debugBrainInfo(m);
+    if (bi) { _brainCharter = _brainCharter || bi.charter; _brainBoard = _brainBoard || bi.board; }
   }
   const title = document.getElementById("debugTitle");
   if (title) {
-    const toolsSuffix = tools && tools.length > 0 ? ` · 🔧${tools.length}` : '';
+    const toolsSuffix = tools && tools.length > 0 ? ` · ${Icon('wrench', 11)}${tools.length}` : '';
     const compactedSuffix = _compactedCount > 0
-      ? ` · 🗜${_compactedCount}/${_toolMsgCount}` : '';
+      ? ` · ${Icon('archive', 11)}${_compactedCount}/${_toolMsgCount}` : '';
     const tokSuffix = _totalTokens > 0
       ? ` · ~${_totalTokens >= 1000
           ? (_totalTokens / 1000).toFixed(1) + 'K'
           : _totalTokens}tok` : '';
-    title.textContent = `📨 Messages (${messages.length})${toolsSuffix}${compactedSuffix}${tokSuffix}${label ? " — " + label : ""}`;
+    /* Project-Brain injection counter — a 🧠 (SVG, §3.4) tally of which brain
+     * blocks the model saw this task, sniffed from the authoritative markers. */
+    let brainSuffix = '';
+    if (_brainCharter || _brainBoard) {
+      const parts = [];
+      if (_brainCharter) parts.push(t('debug.brainCharter'));
+      if (_brainBoard) parts.push(t('debug.brainBoard'));
+      brainSuffix =
+        ` · <span class="debug-brain-summary" title="${escapeHtml(t('debug.brainSummaryTitle'))}">` +
+        `${Icon('brain', 11)} ${escapeHtml(parts.join('/'))}</span>`;
+    }
+    title.innerHTML = `${Icon('inbox', 14)} Messages (${messages.length})${toolsSuffix}${compactedSuffix}${brainSuffix}${tokSuffix}${label ? " — " + escapeHtml(String(label)) : ""}`;
+  }
+  /* ── Amber "reconstructed approximation" chip (cold path only) ──
+   * Gated STRICTLY on the endpoint's approx flag, never on the panel in
+   * general — the live SSE snapshot is the real wire form and must show no
+   * chip. Discloses the two cold-path approximations the human can't see
+   * otherwise: (a) memory/date are a hypothetical first-round, (b)
+   * transport-layer transforms are not expanded. SVG glyph only (§3.4). */
+  {
+    const _panel = document.getElementById("debugContent");
+    let _chip = _panel ? _panel.parentNode.querySelector(".debug-approx-chip") : null;
+    if (approx && _panel) {
+      if (!_chip) {
+        _chip = document.createElement("div");
+        _chip.className = "debug-approx-chip";
+        _panel.parentNode.insertBefore(_chip, _panel);
+      }
+      _chip.innerHTML =
+        `<div class="debug-approx-head">${Icon('alertTriangle', 13)} ` +
+        `${escapeHtml(t('debug.approxTitle'))}</div>` +
+        `<ul class="debug-approx-list">` +
+        `<li>${escapeHtml(t('debug.approxMemDate'))}</li>` +
+        `<li>${escapeHtml(t('debug.approxTransport'))}</li>` +
+        `</ul>`;
+    } else if (_chip) {
+      _chip.remove();
+    }
   }
   // Helper: syntax-color JSON (full, no truncation)
   function colorJson(obj, depth) {
@@ -320,9 +418,23 @@ function showMessagesInDebug(messages, label, isUpdate, forConvId, tools) {
       badge.className = "debug-compact-badge";
       const fromKB = compInfo.from != null ? _fmtKB(compInfo.from) : "?";
       const toKB = compInfo.to != null ? _fmtKB(compInfo.to) : "?";
-      badge.textContent = `🗜 ${compInfo.layer} ${fromKB}→${toKB}`;
+      badge.innerHTML = `${Icon('archive', 11)} ${escapeHtml(compInfo.layer)} ${fromKB}→${toKB}`;
       badge.title = `Tool result compacted (${compInfo.layer}) — original ${fromKB}, now ${toKB}`;
       header.appendChild(badge);
+    }
+    // Project-Brain injection badge — sniffed from the authoritative markers
+    // the model actually saw. Names which brain blocks this system msg carries.
+    const brainInfo = _debugBrainInfo(msg);
+    if (brainInfo) {
+      block.classList.add("debug-msg-brain");
+      const bParts = [];
+      if (brainInfo.charter) bParts.push(t('debug.brainCharter'));
+      if (brainInfo.board) bParts.push(t('debug.brainBoard'));
+      const bBadge = document.createElement("span");
+      bBadge.className = "debug-brain-badge";
+      bBadge.innerHTML = `${Icon('brain', 11)} ${escapeHtml(bParts.join('/'))}`;
+      bBadge.title = t('debug.brainBadgeTitle');
+      header.appendChild(bBadge);
     }
     const summary = document.createElement("span");
     summary.className = "debug-msg-summary";
@@ -353,11 +465,11 @@ function showMessagesInDebug(messages, label, isUpdate, forConvId, tools) {
     if (msg.tool_calls && msg.tool_calls.length > 0) {
       const tcDiv = document.createElement("div");
       tcDiv.className = "debug-tool-calls";
-      tcDiv.textContent =
-        "🔧 " +
-        msg.tool_calls
+      tcDiv.innerHTML =
+        Icon('wrench', 12) + ' ' +
+        escapeHtml(msg.tool_calls
           .map((tc) => (tc.function ? tc.function.name : "?"))
-          .join(", ");
+          .join(", "));
       block.appendChild(tcDiv);
     }
     // Body (collapsed, lazy-rendered)
@@ -439,7 +551,7 @@ function showMessagesInDebug(messages, label, isUpdate, forConvId, tools) {
         if (newCompInfo) {
           const fromKB = newCompInfo.from != null ? _fmtKB(newCompInfo.from) : "?";
           const toKB = newCompInfo.to != null ? _fmtKB(newCompInfo.to) : "?";
-          const text = `🗜 ${newCompInfo.layer} ${fromKB}→${toKB}`;
+          const text = `${Icon('archive', 11)} ${escapeHtml(newCompInfo.layer)} ${fromKB}→${toKB}`;
           if (!badge) {
             badge = document.createElement("span");
             badge.className = "debug-compact-badge";
@@ -448,7 +560,7 @@ function showMessagesInDebug(messages, label, isUpdate, forConvId, tools) {
             const sumEl = hdr.querySelector(".debug-msg-summary");
             hdr.insertBefore(badge, sumEl);
           }
-          badge.textContent = text;
+          badge.innerHTML = text;
           badge.title = `Tool result compacted (${newCompInfo.layer}) — original ${fromKB}, now ${toKB}`;
         } else if (badge) {
           badge.remove();
@@ -471,16 +583,16 @@ function showMessagesInDebug(messages, label, isUpdate, forConvId, tools) {
         const oldTc = existing[i].querySelector(".debug-tool-calls");
         if (messages[i].tool_calls && messages[i].tool_calls.length > 0) {
           const tcText =
-            "🔧 " +
-            messages[i].tool_calls
+            Icon('wrench', 12) + ' ' +
+            escapeHtml(messages[i].tool_calls
               .map((tc) => (tc.function ? tc.function.name : "?"))
-              .join(", ");
+              .join(", "));
           if (oldTc) {
-            oldTc.textContent = tcText;
+            oldTc.innerHTML = tcText;
           } else {
             const tcDiv = document.createElement("div");
             tcDiv.className = "debug-tool-calls";
-            tcDiv.textContent = tcText;
+            tcDiv.innerHTML = tcText;
             const body2 = existing[i].querySelector(".debug-msg-body");
             existing[i].insertBefore(tcDiv, body2);
           }
@@ -551,7 +663,7 @@ function showMessagesInDebug(messages, label, isUpdate, forConvId, tools) {
       tHeader.className = 'debug-msg-header';
       const tRole = document.createElement('span');
       tRole.className = 'role-tools';
-      tRole.textContent = '🔧 TOOLS';
+      tRole.innerHTML = Icon('wrench', 12) + ' TOOLS';
       tHeader.appendChild(tRole);
       const tSummary = document.createElement('span');
       tSummary.className = 'debug-msg-summary';
@@ -625,8 +737,8 @@ function copyDebugContent() {
     _safeClipboardWrite(text).then(() => {
       const btn = document.getElementById("debugCopyBtn");
       if (btn) {
-        btn.textContent = "✅";
-        setTimeout(() => (btn.textContent = "📋"), 1500);
+        btn.innerHTML = Icon('check', 13);
+        setTimeout(() => (btn.innerHTML = Icon('clipboard', 13)), 1500);
       }
     });
   }

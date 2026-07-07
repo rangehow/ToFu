@@ -42,6 +42,7 @@ from lib.swarm.registry import (
     scope_tools_for_role,
 )
 from lib.swarm.tools import ARTIFACT_TOOLS
+from lib.tool_input_repair import ingest_tool_call
 
 logger = get_logger(__name__)
 
@@ -54,6 +55,18 @@ DEFAULT_TOOL_RESULT_MAX_CHARS = 30_000
 
 # Max parallel tool calls per round
 MAX_PARALLEL_TOOLS = int(os.environ.get('TOOL_MAX_PARALLEL_WORKERS', '16'))
+
+# File-edit tools whose touched path is recorded on this sub-agent's presence
+# peer (→ cross-peer overlap detection). Maps tool name → the action label
+# shown in the presence strip. Read-only tools / run_command are excluded
+# (run_command's edits aren't reliably attributable from args alone).
+_PRESENCE_EDIT_ACTIONS = {
+    'write_file': 'written',
+    'apply_diff': 'patched',
+    'apply_diffs': 'patched',
+    'insert_content': 'inserted',
+    'insert_contents': 'inserted',
+}
 
 # Patterns that suggest the agent has reached a final answer
 # (used for early-stop detection on content without tool calls)
@@ -90,13 +103,23 @@ class SubAgent:
                  artifact_store: ArtifactStore | None = None,
                  tool_result_max_chars: int = DEFAULT_TOOL_RESULT_MAX_CHARS,
                  build_body_fn: BodyBuilder | None = None,
-                 dispatch_stream_fn: Callable | None = None):
+                 dispatch_stream_fn: Callable | None = None,
+                 stream_sink: Callable | None = None):
         self.spec = spec
         self.parent_task = parent_task
         self.agent_id = f'agent-{spec.role}-{spec.id}'
         self.model = self._resolve_model(spec, model)
         self.thinking_enabled = thinking_enabled
         self.on_event = on_event
+        # Optional per-token sink: ``stream_sink(kind, chunk, **meta)`` where
+        # kind is 'content' | 'thinking' | 'phase'. 'content'/'thinking' carry
+        # an output chunk; 'phase' carries a transient status detail (+ a
+        # ``phase=`` kwarg) so the engine can surface "waiting for model…" /
+        # "retrying…" on the live bubble while dispatch is in flight. Lets a
+        # caller (the orchestration engine) stream this sub-agent's output live
+        # into a chat bubble, identical to a first-class agent turn. No-op when
+        # unset (tests / swarm use).
+        self.stream_sink = stream_sink
         self.abort_check = abort_check or (lambda: False)
         self.project_path = project_path
         self.artifact_store = artifact_store  # shared across agents
@@ -122,6 +145,16 @@ class SubAgent:
         # Cleanup state
         self._started = False
         self._cleaned_up = False
+        # Presence: throttle anchor for the streaming heartbeat (one bump per
+        # ~5s of token flow). 0.0 → the first chunk beats immediately.
+        self._last_presence_beat = 0.0
+
+        # Durable-resume key. Set by the master orchestrator's _make_agent
+        # factory (like ``output_file``). When present, the agent checkpoints
+        # its full ``messages`` array to the DB at each round boundary so a
+        # server restart can rehydrate and resume it mid-conversation. Empty
+        # in unit tests / standalone use → all checkpoint writes are no-ops.
+        self.swarm_key = ''
 
         # ── Debug: log agent initialization details ──
         tool_names = []
@@ -280,7 +313,116 @@ class SubAgent:
 
     # ─────────────────────────────────────────────────
     #  Execution
+    def _emit_stream_phase(self, phase: str, detail: str, **meta):
+        """Push a transient 'phase' status through the stream sink.
+
+        Used to surface "waiting for the model…" / "retrying…" on the live
+        chat bubble while this agent's dispatch is in flight (e.g. blocked on
+        a rate-limited strict_model). The engine's stream_sink maps it to a
+        ``step_phase`` event → the EndpointEventAdapter emits a wire ``phase``
+        event (transient UI, per the retry-notification-phase-not-delta
+        convention — NEVER a delta, so it can't pollute the assistant content).
+        No-op when no stream_sink is wired (swarm / unit tests). Never raises.
+        """
+        if not self.stream_sink:
+            return
+        try:
+            self.stream_sink('phase', detail or '', phase=phase, **meta)
+        except TypeError:
+            # An older 2-arg stream_sink (kind, chunk) — degrade gracefully:
+            # the phase is best-effort UX, so just drop it rather than crash.
+            logger.debug('[Agent:%s] stream_sink lacks phase support — '
+                         'dropping phase=%s', self.agent_id, phase)
+        except Exception as _se:
+            logger.debug('[Agent:%s] stream_sink phase error (non-fatal): %s',
+                         self.agent_id, _se)
+
     # ─────────────────────────────────────────────────
+    #  Execution
+    # ─────────────────────────────────────────────────
+
+    def _presence_conv_id(self) -> str:
+        return (self.parent_task or {}).get('convId') or ''
+
+    def _presence_announce(self, phase: str = 'working') -> None:
+        """Register this sub-agent as a live presence peer of the project root.
+
+        Keyed by ``(parent convId, agent_id)`` so N concurrent sub-agents of
+        ONE conversation are N distinct peers that group under the parent
+        conversation (the composite key in lib/presence/registry.py). No-op
+        when there's no project root or convId. Best-effort.
+        """
+        conv_id = self._presence_conv_id()
+        if not (self.project_path and conv_id):
+            return
+        try:
+            from lib.presence import announce as _announce
+            _announce(
+                self.project_path, conv_id,
+                agent_id=self.agent_id,
+                task_id=self.parent_task.get('id', ''),
+                title=self.spec.role,
+                objective=self.spec.objective or '',
+                parent_title=(self.parent_task.get('config') or {}).get('convTitle') or '',
+                phase=phase,
+            )
+        except Exception as _pe:
+            logger.debug('[%s] presence announce failed: %s', self.agent_id, _pe)
+
+    def _presence_heartbeat(self, phase: str = 'generating') -> None:
+        conv_id = self._presence_conv_id()
+        if not (self.project_path and conv_id):
+            return
+        try:
+            from lib.presence import heartbeat as _heartbeat
+            _heartbeat(self.project_path, conv_id, agent_id=self.agent_id, phase=phase)
+        except Exception as _pe:
+            logger.debug('[%s] presence heartbeat failed: %s', self.agent_id, _pe)
+
+    def _presence_record_file(self, rel_path: str, action: str = 'edited') -> None:
+        conv_id = self._presence_conv_id()
+        if not (self.project_path and conv_id and rel_path):
+            return
+        try:
+            from lib.presence import record_files as _record_files
+            _record_files(self.project_path, conv_id,
+                          [{'path': rel_path, 'action': action}],
+                          agent_id=self.agent_id)
+        except Exception as _pe:
+            logger.debug('[%s] presence record_file failed: %s', self.agent_id, _pe)
+
+    def _presence_idle(self) -> None:
+        conv_id = self._presence_conv_id()
+        if not (self.project_path and conv_id):
+            return
+        try:
+            from lib.presence import mark_idle as _mark_idle
+            _mark_idle(self.project_path, conv_id, agent_id=self.agent_id)
+        except Exception as _pe:
+            logger.debug('[%s] presence idle failed: %s', self.agent_id, _pe)
+
+    @staticmethod
+    def _presence_edited_path(fn_name: str, fn_args: dict) -> str:
+        """Extract the project-relative path a file-edit tool just wrote.
+
+        Returns '' for non-edit tools. Handles the single-path tools
+        (write_file / apply_diff / insert_content — ``path`` arg) and the batch
+        tools (apply_diffs / insert_contents — first entry of the ``edits``
+        array). The swarm path reads from the tool ARGS rather than
+        commit_round's journal, which attributes by the shared parent taskId
+        and so can't separate sibling sub-agents.
+        """
+        if fn_name not in _PRESENCE_EDIT_ACTIONS:
+            return ''
+        p = fn_args.get('path')
+        if isinstance(p, str) and p.strip():
+            return p.strip()
+        edits = fn_args.get('edits')
+        if isinstance(edits, list):
+            for e in edits:
+                if isinstance(e, dict) and isinstance(e.get('path'), str) and e['path'].strip():
+                    return e['path'].strip()
+        return ''
 
     def run(self) -> SubAgentResult:
         """Execute the sub-agent synchronously. Returns SubAgentResult."""
@@ -294,6 +436,10 @@ class SubAgent:
             from lib.browser import _set_active_client
             _set_active_client(_browser_cid)
 
+        # ★ Presence: register this sub-agent as a live peer (groups under the
+        #   parent conversation). Mirror of the orchestrator's announce@start.
+        self._presence_announce(phase='working')
+
         logger.info('[Agent:%s] ========== RUN START ==========', self.agent_id)
         logger.info('[Agent:%s] role=%s model=%s max_rounds=%d tools=%s',
                      self.agent_id, self.spec.role, self.model, self.max_rounds,
@@ -306,8 +452,22 @@ class SubAgent:
         # Emitting again here would regress the phase from 'running' → 'starting'
         # and (if IDs ever mismatch) create duplicate frontend cards.
 
+        # Hard provider isolation: a swarm sub-agent runs on its OWN thread,
+        # so the parent's thread-local provider pin does not propagate
+        # automatically. Re-apply it here (forwarded via parent_task config)
+        # so every dispatch this sub-agent makes stays bound to the same BYO
+        # endpoint. No-op when unset. See lib/llm_dispatch/provider_pin.py.
+        _pin = ''
         try:
-            self._run_loop(start_time)
+            _pin = ((self.parent_task or {}).get('config') or {}).get(
+                '_pinned_provider_id') or ''
+        except Exception as _pe:
+            logger.debug('[%s] provider-pin lookup failed: %s', self.agent_id, _pe)
+
+        try:
+            from lib.llm_dispatch.provider_pin import provider_pin
+            with provider_pin(_pin):
+                self._run_loop(start_time)
         except Exception as e:
             self.result.status = SubAgentStatus.FAILED.value
             self.result.error_message = f'{type(e).__name__}: {e}'
@@ -336,8 +496,18 @@ class SubAgent:
                 self.result.status = SubAgentStatus.FAILED.value
                 self.result.error_message = self.result.error_message or 'No final answer produced'
 
+        # Final checkpoint with the terminal status + result, BEFORE _cleanup
+        # truncates self.messages. The scheduler/master then marks the session
+        # row terminated once every agent is done.
+        self._checkpoint(final=True)
+
         # Cleanup
         self._cleanup()
+
+        # ★ Presence: this sub-agent finished — transition its peer to IDLE
+        #   (kept, then faded by the sweep). Mirror of the orchestrator's
+        #   mark_idle@done in run_task's finally.
+        self._presence_idle()
 
         # NOTE: Do NOT emit AGENT_COMPLETE here — the MasterOrchestrator's
         # on_agent_complete callback already emits swarm_agent_complete with
@@ -345,6 +515,32 @@ class SubAgent:
         # cause the frontend to process TWO completion events per agent.
 
         return self.result
+
+    def _checkpoint(self, *, final: bool = False):
+        """Persist this agent's resumable state to the DB (best-effort).
+
+        Called at every round boundary (after the assistant message +
+        tool results for the round are in ``self.messages``) and once more
+        at run end. No-op unless ``self.swarm_key`` was set by the master.
+        Never raises — persistence is a safety net, not a critical path.
+        """
+        if not self.swarm_key:
+            return
+        try:
+            from lib.swarm import persistence
+            status = self.result.status or SubAgentStatus.RUNNING.value
+            persistence.save_agent(
+                self.swarm_key, self.spec.id,
+                role=self.spec.role,
+                objective=self.spec.objective,
+                status=status,
+                messages=self.messages,
+                result=self.result.to_dict() if final else None,
+                rounds_used=self.result.rounds_used,
+            )
+        except Exception as e:
+            logger.debug('[Agent:%s] checkpoint failed (non-fatal): %s',
+                         self.agent_id, e)
 
     def _run_loop(self, start_time: float):
         """Core agent loop: LLM call → tool execution → repeat.
@@ -394,8 +590,15 @@ class SubAgent:
             self.result.rounds_used = round_num
             round_start = time.time()
 
-            logger.debug('[Agent:%s] ── Round %d/%d START ── messages=%d',
-                         self.agent_id, round_num, self.max_rounds, len(self.messages))
+            # INFO (not debug): this is the per-round heartbeat that reaches
+            # app.log. Without it a long-running flow/swarm worker that is
+            # merely SLOW (e.g. blocked on a rate-limited strict_model dispatch)
+            # is indistinguishable from a wedged one — the round START with no
+            # matching "LLM done" line below is precisely what tells an operator
+            # "it began round N and is still waiting on the model".
+            logger.info('[Agent:%s] \u2500\u2500 Round %d/%s START \u2500\u2500 messages=%d',
+                        self.agent_id, round_num,
+                        self.max_rounds or '\u221e', len(self.messages))
 
             # ── LLM call (uses DI-injected or default build_body / dispatch_stream) ──
             body = self._build_body(
@@ -406,6 +609,12 @@ class SubAgent:
                 thinking_enabled=self.thinking_enabled,
                 temperature=1.0,
             )
+            # ★ Attach a session-stable id so add_cache_breakpoints latches the
+            #   extended-TTL (1h) decision for this agent's whole multi-round
+            #   loop — matches the main orchestrator (orchestrator.py:_task_id).
+            #   agent_id is constant across rounds, so the prefix cache key
+            #   never shifts mid-session. Released in _cleanup().
+            body['_task_id'] = self.agent_id
 
             content_parts = []
             thinking_parts = []
@@ -432,15 +641,68 @@ class SubAgent:
                                  self.agent_id, _e)
                 _log_buffer.clear()
 
+            def _beat_on_stream():
+                # ★ Presence heartbeat (throttled, ~5s — mirrors the
+                #   conversation path's checkpoint-throttle). Token flow IS
+                #   work, so a long single-LLM sub-agent generation with no
+                #   tool rounds keeps its peer ACTIVE instead of flapping to
+                #   idle. One bump per interval, never per token.
+                _now = time.time()
+                if _now - self._last_presence_beat >= 5.0:
+                    self._last_presence_beat = _now
+                    self._presence_heartbeat(phase='generating')
+
             def on_content(chunk):
                 content_parts.append(chunk)
                 if _output_path and chunk:
                     _log_buffer.append(chunk)
+                if chunk:
+                    _beat_on_stream()
+                if self.stream_sink and chunk:
+                    try:
+                        self.stream_sink('content', chunk)
+                    except Exception as _se:
+                        logger.debug('[Agent:%s] stream_sink content error '
+                                     '(non-fatal): %s', self.agent_id, _se)
 
             def on_thinking(chunk):
                 thinking_parts.append(chunk)
                 if _output_path and chunk:
                     _log_buffer.append(chunk)
+                if chunk:
+                    _beat_on_stream()
+                if self.stream_sink and chunk:
+                    try:
+                        self.stream_sink('thinking', chunk)
+                    except Exception as _se:
+                        logger.debug('[Agent:%s] stream_sink thinking error '
+                                     '(non-fatal): %s', self.agent_id, _se)
+
+            # ── Live "waiting for the model" signal ──
+            # Before the (potentially minutes-long, rate-limited) dispatch, push
+            # a transient 'phase' through the stream sink so a flow/swarm worker
+            # bubble shows "waiting for model…" instead of a bare static pulse.
+            # The first content/thinking delta clears it on the frontend. The
+            # on_retry hook below refreshes it while the dispatcher cycles on
+            # cooldown (rate-limited strict_model) — the exact 5-minute
+            # first-token stall the user saw as a "hang". Phase, not delta:
+            # transient UI, never pollutes the assistant content.
+            self._emit_stream_phase('waiting_model',
+                                    'Sent to the model, waiting for it to '
+                                    'start replying…')
+
+            def _on_dispatch_retry(attempt=0, reason='', status_code=0):
+                # Surface dispatch retries / cooldown waits as a transient
+                # 'retrying' phase on the worker bubble. Bounded by the
+                # dispatcher itself (fires on the 1st cooldown cycle, then
+                # every ~20 cycles ≈ 6s), so no per-cycle spam here.
+                _r = reason or 'Retrying'
+                if status_code == 429 and 'rate' not in _r.lower():
+                    _r = f'{_r} (rate-limited)'
+                self._emit_stream_phase(
+                    'retrying',
+                    f'{_r}… (attempt {attempt})' if attempt else f'{_r}…',
+                    attempt=attempt, status_code=status_code)
 
             try:
                 msg, stop_reason, usage = self._dispatch_stream(
@@ -450,6 +712,7 @@ class SubAgent:
                     abort_check=self.abort_check,
                     prefer_model=body.get('model', ''),
                     log_prefix=f'[{self.agent_id}]',
+                    on_retry=_on_dispatch_retry,
                 )
             except Exception as e:
                 logger.error('[%s] LLM call failed round %d: %s', self.agent_id, round_num, e, exc_info=True)
@@ -475,9 +738,11 @@ class SubAgent:
                 self.result.prompt_tokens += usage.get('prompt_tokens', 0)
                 self.result.completion_tokens += usage.get('completion_tokens', 0)
                 self.result.total_tokens += usage.get('total_tokens', 0)
-            logger.debug('[Agent:%s] Round %d LLM done in %.1fs — stop=%s usage=%s content_len=%d',
-                         self.agent_id, round_num, round_elapsed, stop_reason,
-                         usage, len(''.join(content_parts)))
+            logger.info('[Agent:%s] Round %d LLM done in %.1fs \u2014 stop=%s '
+                        'content_len=%d thinking_len=%d total_tokens=%d',
+                        self.agent_id, round_num, round_elapsed, stop_reason,
+                        len(''.join(content_parts)), len(''.join(thinking_parts)),
+                        self.result.total_tokens)
 
             # Save thinking for trace
             if thinking_parts:
@@ -530,6 +795,14 @@ class SubAgent:
             )
 
             self._execute_tool_calls(tool_calls, round_num)
+
+            # ── Round-boundary checkpoint ──
+            # Persist the full message history (assistant turn + tool results)
+            # so a restart can rehydrate and resume from exactly here. This is
+            # the last completed round; an interrupted next round is re-run on
+            # resume (side-effecting tools may therefore re-execute — accepted
+            # by design, see lib/swarm/persistence.py).
+            self._checkpoint()
 
             # ── Post-tool-execution abort check ──
             if self.abort_check():
@@ -617,32 +890,67 @@ class SubAgent:
                     'content': results.get(tc_id, '(no result)'),
                 })
 
+    def _known_tool_names(self) -> set[str]:
+        """Live set of REAL tool names available to THIS sub-agent this turn.
+
+        Derived from the role-scoped ``self.tools`` schema list (built-ins +
+        MCP + swarm/artifact tools injected for this agent). Used as the
+        membership oracle for :func:`resolve_tool_name` so an alias never maps
+        onto a tool the agent doesn't actually have, and a legitimate
+        dynamically-injected tool is never mis-aliased. The three
+        locally-handled artifact tools are always included.
+        """
+        names: set[str] = {'store_artifact', 'read_artifact', 'list_artifacts'}
+        for t in (self.tools or []):
+            if isinstance(t, dict):
+                n = (t.get('function') or {}).get('name')
+                if n:
+                    names.add(n)
+        return names
+
     def _execute_single_tool(self, tool_call: dict, round_num: int) -> str:
         """Execute a single tool call and return the result string."""
         fn_info = tool_call.get('function', {})
-        fn_name = fn_info.get('name', '?')
-        fn_args_raw = fn_info.get('arguments', '{}')
+        _raw_name = fn_info.get('name', '?')
         tc_id = tool_call.get('id') or str(uuid.uuid4())[:8]
         tool_start = time.time()
 
-        logger.debug('[Agent:%s] Round %d → TOOL_CALL %s args_raw=%s',
-                     self.agent_id, round_num, fn_name,
-                     (fn_args_raw if isinstance(fn_args_raw, str) else str(fn_args_raw))[:300])
+        # ── Unified tool-call ingestion ──
+        # The sub-agent path dispatches to the executor DIRECTLY, bypassing the
+        # main chat dispatcher's parse_tool_calls — so it must funnel each call
+        # through the SAME ingestion seam so name-alias (WebFetch→fetch_url …),
+        # JSON decode+repair, AND schema/param repair (previously missing here)
+        # all apply identically. Hallucination rejection is enabled: an invented
+        # name is returned to the sub-agent as an actionable error instead of
+        # the executor's raw "unknown tool" wall. The membership oracle is THIS
+        # agent's role-scoped tool set.
+        _ingested = ingest_tool_call(
+            tool_call,
+            known_tools=self._known_tool_names(),
+            model=self.model or '',
+            conv_id=self._presence_conv_id(),
+        )
+        if _ingested.dropped:
+            logger.warning('[Agent:%s] Dropping tool call %r (%s)',
+                           self.agent_id, _raw_name, _ingested.drop_reason)
+            return f'Error: ignored malformed tool name {_raw_name!r} ({_ingested.drop_reason}).'
+        if _ingested.alias_kind:
+            logger.info('[Agent:%s] Aliased tool name %r → %r (%s)',
+                        self.agent_id, _raw_name, _ingested.fn_name, _ingested.alias_kind)
+        fn_name = _ingested.fn_name
+        fn_info['name'] = fn_name  # persist canonical name onto the tool_call
+        if _ingested.rejected:
+            logger.warning('[Agent:%s] Rejected hallucinated tool %r (suggestions=%s)',
+                           self.agent_id, _raw_name, _ingested.rejection.get('suggestions'))
+            return _ingested.parse_error
+        if _ingested.parse_error:
+            logger.warning('[Agent:%s] Unparseable args for %s: %s',
+                           self.agent_id, fn_name, _ingested.parse_error)
+            return _ingested.parse_error
+        fn_args = _ingested.fn_args
 
-        try:
-            fn_args = json.loads(fn_args_raw) if isinstance(fn_args_raw, str) else fn_args_raw
-        except json.JSONDecodeError:
-            # Attempt best-effort JSON repair
-            try:
-                from lib.utils import repair_json as _repair_json
-                fn_args = _repair_json(fn_args_raw if isinstance(fn_args_raw, str) else '{}')
-                logger.debug('[Agent:%s] Repaired malformed JSON for %s', self.agent_id, fn_name)
-            except Exception as e:
-                logger.warning('[%s] Invalid JSON args for %s: %s: %s', self.agent_id, fn_name, fn_args_raw[:100], e, exc_info=True)
-                return f'Invalid JSON arguments for {fn_name}: {fn_args_raw[:200]}'
-
-        if not isinstance(fn_args, dict):
-            fn_args = {}
+        logger.debug('[Agent:%s] Round %d → TOOL_CALL %s args=%s',
+                     self.agent_id, round_num, fn_name, str(fn_args)[:300])
 
         # Log the tool call
         self.result.tool_log.append({
@@ -705,6 +1013,16 @@ class SubAgent:
                          self.agent_id, fn_name, tool_elapsed, len(truncated))
             logger.debug('[Agent:%s] Tool %s result preview: %s',
                          self.agent_id, fn_name, truncated[:300])
+            # ★ Presence: if this was a file-edit tool, record the touched path
+            #   on this sub-agent's peer so cross-peer overlap detection can flag
+            #   two sub-agents (or a sub-agent + a sibling conversation)
+            #   clobbering the same file. We read the path straight from the
+            #   tool args (the swarm path can't use commit_round's journal,
+            #   which attributes by the shared parent taskId). Only on success
+            #   (an error already returned above via the except).
+            _edited = self._presence_edited_path(fn_name, fn_args)
+            if _edited:
+                self._presence_record_file(_edited, action=_PRESENCE_EDIT_ACTIONS.get(fn_name, 'edited'))
             _emit_finish('done', preview=truncated)
             return truncated
         except Exception as e:
@@ -810,6 +1128,10 @@ class SubAgent:
             'toolRounds': self.parent_task.get('toolRounds', []),
             'phase': self.parent_task.get('phase'),
             '_suppressEvents': True,
+            # ★ Inherit per-request custom tools (handlers resolve task-locally
+            #   in _execute_tool_one before the global registry). The schema
+            #   side is already role-scoped via scope_tools_for_role.
+            '_tool_env': self.parent_task.get('_tool_env'),
         }
 
         tc_id = tool_call.get('id', str(uuid.uuid4())[:8])
@@ -902,6 +1224,16 @@ class SubAgent:
         if self._cleaned_up:
             return
         self._cleaned_up = True
+
+        # Release the per-task extended-TTL latch keyed on agent_id (set in
+        # run()), mirroring orchestrator._finalize_and_emit_done — otherwise
+        # _ttl_latch leaks one entry per sub-agent for the process lifetime.
+        try:
+            from lib.tasks_pkg.cache_tracking import release_ttl_latch
+            release_ttl_latch(self.agent_id)
+        except Exception as _e:
+            logger.debug('[Agent:%s] TTL latch release skipped: %s',
+                         self.agent_id, _e)
 
         # Compact message history — keep only system, first user, and last 2 messages
         # This frees memory from potentially large tool results

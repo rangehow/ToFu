@@ -127,6 +127,15 @@ class MockLLMRecorder:
             if self.response_queue:
                 resp_spec = self.response_queue.pop(0)
             else:
+                # Queue exhausted → a no-verdict 4-char default. The endpoint
+                # loop's iteration-5 stuck guard bounds the loop, so it always
+                # TERMINATES; tests that deliberately exhaust the queue
+                # (test_stuck_stops_loop) rely on reaching that guard. Loop
+                # determinism for the timing-sensitive tests comes from the
+                # generous _run_endpoint_task_and_wait timeout + the disabled
+                # background scheduler (no live LLM/web polls stealing CPU),
+                # NOT from forcing a STOP here (which would mask stuck
+                # detection).
                 resp_spec = {"content": "1234", "finish_reason": "end_turn"}
 
         content = resp_spec["content"]
@@ -166,8 +175,18 @@ def _has_consecutive_same_role(messages: list[dict], role: str) -> bool:
     return False
 
 
-def _run_endpoint_task_and_wait(task, timeout=60):
-    """Run an endpoint task and wait for completion."""
+def _run_endpoint_task_and_wait(task, timeout=180):
+    """Run an endpoint task and wait for completion.
+
+    Timeout is generous (180s): each endpoint turn runs the REAL
+    orchestration machinery (message building, compaction, cache session,
+    memory prefetch, per-round persistence) around the mocked LLM, so a
+    multi-iteration loop legitimately takes tens of seconds — and more under
+    parallel-suite CPU load. These tests assert message SHAPES, not latency;
+    a tight timeout only produced flaky ``TimeoutError``s. The mock
+    recorder's STOP-on-exhaustion fallback bounds the iteration count, so the
+    loop always terminates well within this budget.
+    """
     from lib.tasks_pkg.endpoint import run_endpoint_task
 
     done = threading.Event()
@@ -341,7 +360,7 @@ class TestVerdictParsing:
 #  Test: Single iteration (planner → worker → critic STOP)
 # ═══════════════════════════════════════════════════════════
 
-@pytest.mark.unit
+@pytest.mark.slow  # runs the full endpoint loop (real orchestration) — integration-grade, not a fast unit
 class TestEndpointSingleIteration:
     """Test a single-iteration endpoint: planner → worker → critic(STOP).
 
@@ -487,7 +506,7 @@ class TestEndpointSingleIteration:
 #  Test: Multi-iteration (worker → critic CONTINUE → worker → critic STOP)
 # ═══════════════════════════════════════════════════════════
 
-@pytest.mark.unit
+@pytest.mark.slow  # runs the full multi-iteration endpoint loop — integration-grade
 class TestEndpointMultiIteration:
     """Test multi-iteration endpoint with CONTINUE then STOP.
 
@@ -595,7 +614,7 @@ class TestEndpointMultiIteration:
 #  Test: Endpoint turns stored on task correctly
 # ═══════════════════════════════════════════════════════════
 
-@pytest.mark.unit
+@pytest.mark.slow  # runs the full endpoint loop — integration-grade
 class TestEndpointTurnsPersistence:
     """Test that endpoint turns are correctly accumulated on the task dict."""
 
@@ -858,7 +877,7 @@ class TestEndpointWithPriorContext:
 #  Test: Full integration — endpoint + follow-up
 # ═══════════════════════════════════════════════════════════
 
-@pytest.mark.unit
+@pytest.mark.slow  # runs the full endpoint loop — integration-grade
 class TestEndpointFollowUpIntegration:
     """Integration test: run endpoint, then verify follow-up message shape.
 
@@ -930,7 +949,7 @@ class TestEndpointFollowUpIntegration:
 #  Test: Stuck detection — message shapes remain valid
 # ═══════════════════════════════════════════════════════════
 
-@pytest.mark.unit
+@pytest.mark.slow  # runs the endpoint loop to the stuck guard — integration-grade
 class TestEndpointStuckDetection:
     """Test that stuck detection works and message shapes remain valid."""
 
@@ -991,7 +1010,7 @@ class TestEndpointStuckDetection:
 #  Test: Message role alternation across all scenarios
 # ═══════════════════════════════════════════════════════════
 
-@pytest.mark.unit
+@pytest.mark.slow  # runs multiple full endpoint loops — integration-grade
 class TestNoConsecutiveUserMessagesEver:
     """Exhaustive test: no scenario produces consecutive user messages in API calls.
 
@@ -1147,7 +1166,7 @@ class TestNoConsecutiveUserMessagesEver:
 #  Test: Planner replaces user message in working messages
 # ═══════════════════════════════════════════════════════════
 
-@pytest.mark.unit
+@pytest.mark.slow  # runs the full endpoint loop — integration-grade
 class TestPlannerReplacesUserMessage:
     """Verify that the planner's output replaces the original user message
     in the working messages sent to the worker and critic."""

@@ -1,6 +1,20 @@
-"""lib/cost.py — Per-message cost calculation.
+"""lib/cost.py — Per-message cost calculation (THE single cost engine).
 
-Pure-function port of ``static/js/core.js:calcCostCny``. Encapsulates:
+★ Single source of truth (2026-06-24): this is the ONE place per-token cost
+arithmetic happens. Both surfaces delegate here:
+
+  * **Display** — the headless ``/api/v1/messages/cost`` endpoint + the SSE
+    done-event / persisted ``cost`` stamps; the JS ``calcCostCny`` is a thin
+    fetch wrapper to that endpoint (it does NO client-side pricing math).
+  * **Billing** — ``lib/billing/cost.compute_request_cost`` calls
+    ``compute_cost`` and converts the per-component USD sub-costs
+    (``inputCostUsd`` / ``outputCostUsd`` / ``cacheWriteCostUsd`` /
+    ``cacheReadCostUsd``, 9-dp precise) into micro-credits, then layers the
+    relay margin. So the wallet debit and the displayed ¥/$ can never drift.
+
+Historically a partial port of the old ``static/js/core.js:calcCostCny``; the
+JS pricing tables have since been deleted, leaving this as the sole engine.
+Encapsulates:
 
 * Anthropic-vs-OpenAI cache-token convention detection.
 * Cache-write / cache-read multiplier handling per provider.
@@ -38,6 +52,61 @@ from lib.pricing import (
 )
 
 logger = get_logger(__name__)
+
+
+# ── Usage-dict key normalisation (pure aliasing, NO cache-convention math) ──
+
+# A usage dict arrives in one of two vendor spellings and carries ONE
+# convention only (OpenAI keys XOR Anthropic keys with meaningful values),
+# so ``a or b`` and ``b or a`` are equivalent — the fallback order is
+# immaterial. This helper is DELIBERATELY just the key aliasing: it does NOT
+# apply the Anthropic-vs-OpenAI cache-token convention (`inp <= cw+cr`), which
+# stays where the arithmetic lives (``compute_cost`` / ``cost_estimator``).
+#
+# Key aliases (OpenAI ⇄ Anthropic):
+#   input   : prompt_tokens              ⇄ input_tokens
+#   output  : completion_tokens          ⇄ output_tokens
+#   cache_w : cache_write_tokens         ⇄ cache_creation_input_tokens
+#   cache_r : cache_read_tokens          ⇄ cache_read_input_tokens
+#   think   : reasoning_tokens           ⇄ thinking_tokens
+_USAGE_KEY_ALIASES = {
+    'input': ('prompt_tokens', 'input_tokens'),
+    'output': ('completion_tokens', 'output_tokens'),
+    'cache_write': ('cache_write_tokens', 'cache_creation_input_tokens'),
+    'cache_read': ('cache_read_tokens', 'cache_read_input_tokens'),
+    'thinking': ('reasoning_tokens', 'thinking_tokens'),
+}
+
+
+def normalize_usage(usage: Optional[dict]) -> dict:
+    """Read a usage dict's token counts under either vendor spelling.
+
+    Returns a dict with the five canonical integer keys — ``input``,
+    ``output``, ``cache_write``, ``cache_read``, ``thinking`` — each resolved
+    from the OpenAI key OR the Anthropic key (see ``_USAGE_KEY_ALIASES``),
+    coerced to ``int`` with a 0 default. All-zero on a null/non-dict input.
+
+    This is PURE key-aliasing: it replaces the ~7 copies of
+    ``int(usage.get('prompt_tokens') or usage.get('input_tokens') or 0)``
+    scattered across cost/paper/route code. It deliberately does NOT apply the
+    cache-token convention detection — callers that need "uncached input" run
+    that math themselves on ``input`` / ``cache_write`` / ``cache_read``.
+    """
+    if not usage or not isinstance(usage, dict):
+        return {k: 0 for k in _USAGE_KEY_ALIASES}
+    out = {}
+    for canon, keys in _USAGE_KEY_ALIASES.items():
+        val = 0
+        for k in keys:
+            v = usage.get(k)
+            if v:
+                val = v
+                break
+        try:
+            out[canon] = int(val or 0)
+        except (TypeError, ValueError):
+            out[canon] = 0
+    return out
 
 
 def _legacy_preset_to_model(model_id: str) -> str:
@@ -99,14 +168,12 @@ def compute_cost(
 
     model_id = _legacy_preset_to_model(model_id or '')
 
-    inp = int(usage.get('prompt_tokens') or usage.get('input_tokens') or 0)
-    out = int(usage.get('completion_tokens') or usage.get('output_tokens') or 0)
-    cache_write = int(usage.get('cache_write_tokens')
-                       or usage.get('cache_creation_input_tokens') or 0)
-    cache_read = int(usage.get('cache_read_tokens')
-                      or usage.get('cache_read_input_tokens') or 0)
-    think_tok = int(usage.get('reasoning_tokens')
-                     or usage.get('thinking_tokens') or 0)
+    _u = normalize_usage(usage)
+    inp = _u['input']
+    out = _u['output']
+    cache_write = _u['cache_write']
+    cache_read = _u['cache_read']
+    think_tok = _u['thinking']
 
     # Some providers report thinking in `reasoning_tokens` but `out=0`
     # when the model emitted only thinking; treat thinking as output then.
@@ -136,6 +203,14 @@ def compute_cost(
             'outputCostCny': _round(out_cny, 6),
             'cacheWriteCostCny': 0.0,
             'cacheReadCostCny': 0.0,
+            # USD per-component sub-costs — consumed by the billing adapter
+            # (lib/billing/cost.compute_request_cost) so the wallet debit and
+            # the displayed cost share ONE arithmetic core. Qwen bills in CNY,
+            # so the USD figures are the CNY costs divided by the live rate.
+            'inputCostUsd': _round(inp_cny / rate, 9),
+            'outputCostUsd': _round(out_cny / rate, 9),
+            'cacheWriteCostUsd': 0.0,
+            'cacheReadCostUsd': 0.0,
             'cacheSavingsCny': 0.0,
             'cacheSavingsUsd': 0.0,
         }
@@ -195,6 +270,13 @@ def compute_cost(
         'outputCostCny': _round(output_cost_usd * rate, 6),
         'cacheWriteCostCny': _round(cw_cost_usd * rate, 6),
         'cacheReadCostCny': _round(cr_cost_usd * rate, 6),
+        # USD per-component sub-costs — consumed by the billing adapter
+        # (lib/billing/cost.compute_request_cost) so the wallet debit and the
+        # displayed cost share ONE arithmetic core and can never drift.
+        'inputCostUsd': _round(input_cost_usd, 9),
+        'outputCostUsd': _round(output_cost_usd, 9),
+        'cacheWriteCostUsd': _round(cw_cost_usd, 9),
+        'cacheReadCostUsd': _round(cr_cost_usd, 9),
         'cacheSavingsCny': _round(
             cache_savings_usd * rate if cache_savings_usd > 0 else 0, 6),
         'cacheSavingsUsd': _round(
@@ -202,4 +284,4 @@ def compute_cost(
     }
 
 
-__all__ = ['compute_cost']
+__all__ = ['compute_cost', 'normalize_usage']

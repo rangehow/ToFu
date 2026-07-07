@@ -22,6 +22,7 @@ function newChat() {
     prevConv.swarmEnabled = !!swarmEnabled;
     prevConv.endpointEnabled = !!endpointEnabled;
     prevConv.autopilotEnabled = !!autopilotEnabled;
+    prevConv.activeFlow = activeFlow || '';
     prevConv.imageGenEnabled = !!imageGenEnabled;
     if (imageGenMode) {
       prevConv.imageGenAspect = _igSelectedAspect || '1:1';
@@ -63,6 +64,8 @@ function newChat() {
     `<div class="welcome" id="welcome"><div class="welcome-icon"><img src="${BASE_PATH}/static/icons/tofu-welcome.svg" alt="Tofu" width="64" height="64"></div><h2 class="tofu-brand"><span class="tofu-brand-t">T</span><span class="tofu-brand-o1">o</span><span class="tofu-brand-f">f</span><span class="tofu-brand-u">u</span><small>豆腐</small></h2>${_folderBadgeHtml}<p>${t('welcome.subtitle')}</p><div class="feature-pills"><span class="feature-pill">Extended Thinking</span><span class="feature-pill">Search</span><span class="feature-pill">URL Fetch</span><span class="feature-pill">Image Input</span><span class="feature-pill">Co-Pilot</span><span class="feature-pill">Browser</span></div></div>`;
   buildTurnNav(null);
   renderPendingQueueUI(null);
+  // ★ A brand-new conversation has no latch — hide any lingering banner.
+  if (typeof syncToolsetBanner === 'function') syncToolsetBanner();
   updateSendButton();
   if (!hasInput) {
     _clearProjectStateLocal();
@@ -100,6 +103,7 @@ function loadConversation(id) {
     prevConv.swarmEnabled = !!swarmEnabled;
     prevConv.endpointEnabled = !!endpointEnabled;
     prevConv.autopilotEnabled = !!autopilotEnabled;
+    prevConv.activeFlow = activeFlow || '';
     prevConv.imageGenEnabled = !!imageGenEnabled;
     prevConv.imageGenMode = !!imageGenMode;
     prevConv.humanGuidanceEnabled = !!humanGuidanceEnabled;
@@ -193,6 +197,9 @@ function loadConversation(id) {
   renderPendingQueueUI(id);
   // ★ Refresh server queue state for this conversation
   _refreshServerQueue(id);
+  // ★ The tool-schema "apply now" banner is per-conversation — re-evaluate it
+  //   for the conv we just switched to so it never lingers from another conv.
+  if (typeof syncToolsetBanner === 'function') syncToolsetBanner();
   updateSendButton();
   if (typeof restoreDebugForConv === "function") restoreDebugForConv(id);
   const inp = document.getElementById("userInput"),
@@ -225,17 +232,63 @@ function loadConversation(id) {
     }, 0);
   }
 }
-function deleteConversation(id, e) {
+async function deleteConversation(id, e) {
   if (e && e.stopPropagation) e.stopPropagation();
+  let conv = conversations.find((c) => c.id === id);
+  if (!conv) return;
+
+  /* ★ CRITICAL: a conversation loaded this session as a sidebar shell has
+   *   _needsLoad=true / messages:[] in memory — its history lives only on the
+   *   server.  Snapshotting it as-is would capture ZERO messages, and undo
+   *   would then skip the re-create (syncConversationToServer requires
+   *   messages.length > 0) → the conversation is permanently lost despite the
+   *   "restored" toast.  So for an unloaded conv we MUST fetch the full body
+   *   from the server BEFORE deleting, exactly like duplicateConversation. */
+  const _needsHydrate = !!conv._needsLoad ||
+    (conv.messages.length === 0 && (conv._serverMsgCount || 0) > 0);
+  if (_needsHydrate) {
+    try {
+      await loadConversationMessages(id);
+    } catch (err) {
+      debugLog(`[deleteConv] hydrate-before-delete failed: ${err && err.message}`, 'warn');
+    }
+    /* Re-read: the conv may have been removed/replaced during the await. */
+    conv = conversations.find((c) => c.id === id);
+    if (!conv) return;
+    /* ★ ABORT-ON-HYDRATION-FAILURE: if we STILL can't obtain the full body
+     *   (server unreachable / load failed → messages stayed empty while the
+     *   server has history), REFUSE to delete.  Deleting now would leave the
+     *   undo snapshot hollow and lose the conversation permanently — the worst
+     *   outcome precisely when the network is flaky.  Leave the conv intact and
+     *   tell the user to retry once reconnected.  Refuse to delete what we
+     *   cannot safely snapshot. */
+    if (conv.messages.length === 0 && (conv._serverMsgCount || 0) > 0) {
+      debugLog(`[deleteConv] ABORT — could not hydrate conv ${id.slice(0,8)} ` +
+        `(${conv._serverMsgCount} server msgs, 0 local); delete refused to avoid data loss`, 'warn');
+      if (typeof showToast === "function") {
+        showToast(t('sidebar.deleteFailed'), 'error');
+      }
+      return;
+    }
+  }
+
   const s = activeStreams.get(id);
   if (s) {
     s.controller.abort();
     activeStreams.delete(id);
   }
-  const conv = conversations.find((c) => c.id === id);
-  if (conv && conv.activeTaskId)
+
+  /* ★ Snapshot AFTER hydration so it carries full messages → undo can re-create
+   * the server row.  We capture a deep clone + the sidebar position + whether
+   * it was active, so restore re-inserts it exactly where it was. */
+  const snapshot = JSON.parse(JSON.stringify(conv));
+  const origIndex = conversations.indexOf(conv);
+  const wasActive = (activeConvId === id);
+
+  if (conv.activeTaskId)
     Api.chat.abortTask(conv.activeTaskId)
       .catch(e => debugLog(`[deleteConv] abort failed: ${e.message}`, 'warn'));
+  /* Server DELETE only AFTER the snapshot is complete. */
   Api.conversations.remove(id)
     .catch(e => debugLog(`[deleteConv] delete failed: ${e.message}`, 'warn'));
   /* ★ Remove from IndexedDB cache */
@@ -246,6 +299,97 @@ function deleteConversation(id, e) {
     if (conversations.length > 0) loadConversation(conversations[0].id);
     else newChat();
   } else renderConversationList();
+
+  _showUndoDeleteToast(snapshot, origIndex, wasActive);
+}
+
+/* ★ Restore a conversation deleted via deleteConversation. Re-inserts the
+ * snapshot at its original sidebar position (clamped), re-caches it, and
+ * re-creates the server row via the normal full-conv PUT. */
+function _restoreDeletedConversation(snapshot, origIndex, wasActive) {
+  if (!snapshot || !snapshot.id) return;
+  // Guard: don't double-insert if the user mashed undo or it already came back.
+  if (conversations.some(c => c.id === snapshot.id)) {
+    if (wasActive) loadConversation(snapshot.id);
+    else renderConversationList();
+    return;
+  }
+  const restored = JSON.parse(JSON.stringify(snapshot));
+  /* The snapshot already holds the full messages (deleteConversation hydrates
+   * shell convs before snapshotting), so it's a complete in-memory conv —
+   * clear the lazy-load flag and any transient streaming/task state. */
+  delete restored._needsLoad;
+  delete restored._initialSwitchLoad;
+  delete restored.activeTaskId;
+  delete restored._lastSyncMsgCount;
+  /* ★ Preserve the ORIGINAL updatedAt so the restored conv keeps its place in
+   * the sidebar instead of jumping to the top with the current time.
+   * syncConversationToServer ships `conv.updatedAt || Date.now()`, so as long
+   * as we don't bump it here (and we never call saveConversations(id), which
+   * would), the original timestamp is what gets persisted. */
+  restored.updatedAt = snapshot.updatedAt;
+  const idx = (origIndex >= 0 && origIndex <= conversations.length)
+    ? origIndex : 0;
+  conversations.splice(idx, 0, restored);
+  try { ConvCache.put(restored); } catch (_) { /* best-effort */ }
+  /* Re-create the server row (full PUT). The snapshot is hydrated, so a conv
+   * that had history always re-creates with its messages intact.  A genuinely
+   * empty conv (zero messages, no server row) is restored in-memory only —
+   * which is correct, the server never had a row for it either. */
+  if (restored.messages && restored.messages.length > 0) {
+    syncConversationToServer(restored).catch(err =>
+      debugLog(`[deleteConv] restore sync failed: ${err && err.message}`, 'warn'));
+  }
+  _broadcastToTabs("conv_restored", { convId: restored.id });
+  if (wasActive) loadConversation(restored.id);
+  else renderConversationList();
+  if (typeof showToast === "function") showToast(t('sidebar.convRestored'), 'success');
+}
+
+/* ★ Dedicated undo toast for conversation deletion. The generic showToast()
+ * has no action-button affordance, so this builds a small toast with an Undo
+ * button. Auto-dismisses after the timeout (deletion stands). */
+function _showUndoDeleteToast(snapshot, origIndex, wasActive) {
+  const c = document.getElementById('toastContainer');
+  if (!c) return;
+  const title = snapshot.title || 'Untitled';
+  const el = document.createElement('div');
+  el.className = 'toast t-info toast-undo';
+  el.innerHTML =
+    `<div class="toast-icon-wrap t-info"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></div>` +
+    `<div class="toast-body">` +
+      `<span class="toast-title">${escapeHtml(t('sidebar.convDeleted'))}</span>` +
+      `<span class="toast-detail">${escapeHtml(title)}</span>` +
+    `</div>` +
+    `<button class="toast-undo-btn" type="button">${escapeHtml(t('sidebar.undoDelete'))}</button>` +
+    `<div class="toast-progress t-info" style="width:100%;animation:toastTimer 6000ms linear forwards"></div>`;
+
+  let timer, done = false;
+  const dismiss = () => {
+    if (done) return;
+    done = true;
+    el.classList.add('removing');
+    setTimeout(() => el.remove(), 300);
+  };
+  el.querySelector('.toast-undo-btn').addEventListener('click', () => {
+    if (done) return;
+    done = true;
+    clearTimeout(timer);
+    el.remove();
+    _restoreDeletedConversation(snapshot, origIndex, wasActive);
+  });
+  c.appendChild(el);
+  timer = setTimeout(dismiss, 6000);
+  /* Pause the countdown on hover so a deliberating user isn't rushed. */
+  const prog = el.querySelector('.toast-progress');
+  el.addEventListener('mouseenter', () => {
+    clearTimeout(timer);
+    if (prog) prog.style.animationPlayState = 'paused';
+  });
+  el.addEventListener('mouseleave', () => {
+    if (prog) prog.style.animationPlayState = 'running';
+    timer = setTimeout(dismiss, 2000);
+  });
 }
 
 // ══════════════════════════════════════════════════════
@@ -480,6 +624,8 @@ function _buildToolbarOverrides() {
     thinkingEnabled,
     model: config.model || serverModel,
     systemPrompt: config.systemPrompt || '',
+    systemPromptMode: config.systemPromptMode || 'append',
+    systemPromptBlocks: config.systemPromptBlocks || {},
     thinkingDepth: config.thinkingDepth,
     temperature: config.temperature,
     searchMode,
@@ -494,7 +640,7 @@ function _buildToolbarOverrides() {
     humanGuidanceEnabled,
     endpointMode: endpointEnabled,
     autopilot: autopilotEnabled,
-    agentBackend: activeAgentBackend || 'builtin',
+    activeFlow: activeFlow || '',
     autoTranslate: !!autoTranslate,
     autoApply: autoApplyWrites,
     browserClientId: window._browserClientId || null,
@@ -522,6 +668,7 @@ function _buildConvSnapshot(conv, isActive) {
     swarmEnabled: conv.swarmEnabled,
     endpointEnabled: conv.endpointEnabled,
     autopilotEnabled: conv.autopilotEnabled,
+    activeFlow: conv.activeFlow || '',
     imageGenEnabled: conv.imageGenEnabled,
     humanGuidanceEnabled: conv.humanGuidanceEnabled,
     projectPath: isActive ? _getConvProjectPath(conv) : conv.projectPath,

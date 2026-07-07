@@ -267,33 +267,16 @@ NiuTrans is the default provider with excellent Chinese↔English quality. Click
 
 ---
 
-### 🔀 CLI Backend Switching
+### 🔀 Subscription Login (Claude Pro/Max · ChatGPT)
 
-Already using **Claude Code** or **OpenAI Codex**? Tofu can act as a pure web frontend for them — you get Tofu's UI, conversation management, and persistence, while the external CLI handles all LLM calls and tool execution with its own authentication.
+Already paying for **Claude Pro/Max** or a **ChatGPT** subscription? Log in with it and Tofu uses that subscription as a model provider — no separate API key, billed under your existing plan.
 
-**Setup:**
-```bash
-# Install Claude Code
-npm install -g @anthropic-ai/claude-code && claude auth login
+**How it works:** Go to **Settings → Providers** and click **登录 Claude** / **登录 ChatGPT**. Tofu runs a PKCE OAuth flow (`lib/oauth/`), stores the token, and `lib/oauth/outbound.py` bridges the logged-in subscription into a managed provider slot — resolved per-request into a live token plus the required client-identity headers. From then on the subscription behaves like any other provider in the dispatcher (slot rotation, fallback, latency scoring all apply).
 
-# Or install Codex
-npm install -g @openai/codex && codex auth login
-```
+- **Claude** requests go to the Anthropic Messages API with the Claude-Code identity headers.
+- **ChatGPT (Codex)** requests are auto-converted to the Responses API format.
 
-Click the **backend selector** (🤖) in the top bar to switch. The UI automatically adapts — model selector and Tofu-specific features are hidden when using an external backend.
-
-| Feature | Built-in (Tofu) | Claude Code | Codex |
-|---------|:-:|:-:|:-:|
-| Chat & streaming | ✅ | ✅ | ✅ |
-| Web search | ✅ | ✅ (CC's) | ✅ (Codex's) |
-| File operations | ✅ | ✅ (CC's) | ✅ (Codex's) |
-| Code execution | ✅ | ✅ (Bash) | ✅ (exec) |
-| Model selection | ✅ | — | — |
-| Image generation | ✅ | ❌ | ❌ |
-| Browser extension | ✅ | ❌ | ❌ |
-| Multi-agent swarm | ✅ | ❌ | ❌ |
-
-> The CLI must be installed on the same machine as the Tofu server. Each conversation remembers its backend.
+> This is a normal in-dispatch provider, **not** a CLI subprocess. (An earlier CLI-subprocess "backend switching" mechanism — `lib/agent_backends/` — was removed in 2026-06 in favour of this simpler subscription-as-provider path.)
 
 ---
 
@@ -457,7 +440,7 @@ When your team communicates in Feishu and you want AI assistance directly in gro
 
 When the assistant discovers something useful — a bug pattern, a project convention, your preferred coding style — it can save that knowledge as a **memory** for future sessions.
 
-**How it works:** Memories are Markdown files stored in `.chatui/skills/` (project-scoped) or `.chatui/skills/global/` (all projects). The assistant creates them proactively or when you ask. In future conversations, relevant memories are automatically loaded into context.
+**How it works:** Project-scoped memories are Markdown files stored in `.tofu/skills/` inside your project; global memories (shared across all projects) live in the server-side store `data/memories/global/`. The assistant creates them proactively or when you ask. In future conversations, relevant memories are automatically loaded into context.
 
 **Tools:** `create_memory`, `update_memory`, `delete_memory`, `merge_memories` — the assistant manages its own knowledge base across sessions.
 
@@ -531,7 +514,7 @@ The `.env.example` file documents all supported variables. Key ones:
 ├── index.html                 Main chat UI (single-page app)
 │
 ├── lib/                       Core libraries
-│   ├── agent_backends/        CLI backend switching (builtin/Claude Code/Codex)
+│   ├── agent_core/            Reusable agent base (run loop, dispatch, TaskRuntime, push, profiles)
 │   ├── llm/                   LLM API client package (build_body / stream / cache / diagnostics)
 │   ├── llm_dispatch/          Multi-key multi-model smart dispatcher
 │   ├── database/              Dual backend — SQLite default, PostgreSQL auto-bootstrap
@@ -539,7 +522,7 @@ The `.env.example` file documents all supported variables. Key ones:
 │   │   ├── orchestrator.py    Main LLM ↔ tool loop
 │   │   ├── executor.py        Tool execution engine
 │   │   ├── endpoint.py        Planner → Worker → Critic loop
-│   │   └── compaction.py      3-layer context compaction
+│   │   └── compaction/        3-layer context compaction (package)
 │   ├── tools/                 Tool definitions & schemas
 │   ├── swarm/                 Multi-agent orchestration
 │   ├── fetch/                 Content fetching & extraction

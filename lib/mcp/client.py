@@ -16,7 +16,10 @@ Design notes:
 from __future__ import annotations
 
 import asyncio
+import importlib
 import os
+import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -29,6 +32,7 @@ from lib.mcp.types import (
     MCP_BREAKER_MAX_BACKOFF,
     MCP_CALL_TIMEOUT,
     MCP_CONNECT_TIMEOUT,
+    MCP_DEGRADED_TIMEOUT_STREAK,
     MCP_KEEPALIVE_INTERVAL,
     MCP_MAX_RESULT_CHARS,
     MCP_PING_TIMEOUT,
@@ -105,6 +109,27 @@ def _is_transport_dead_error(exc: BaseException) -> bool:
         'session is closed', 'peer closed',
     )
     return any(n in text for n in needles)
+
+
+def _is_call_timeout_error(exc: BaseException) -> bool:
+    """True when ``exc`` is a tool-call timeout (transport read-timeout or the
+    outer thread-future timeout), as opposed to a tool-level / transport-dead
+    error. Used to drive the call-level degraded-health gate.
+
+    Matches:
+      - ``concurrent.futures.TimeoutError`` / ``asyncio.TimeoutError`` /
+        builtin ``TimeoutError`` raised by the outer ``future.result(...)``;
+      - mcp's ``McpError`` whose text reports "Timed out while waiting for
+        response" (the read_timeout_seconds path).
+    """
+    leaf = _unwrap_exception_group(exc)
+    if isinstance(leaf, (TimeoutError, asyncio.TimeoutError)):
+        return True
+    if type(leaf).__name__ in ('TimeoutError', 'McpError'):
+        text = (str(leaf) or '').lower()
+        if 'timed out while waiting' in text or 'timeout' in text:
+            return True
+    return False
 
 
 def _read_stderr_tail(f, max_bytes: int = _MCP_STDERR_TAIL_BYTES) -> str:
@@ -345,6 +370,656 @@ def _coerce_args_to_schema(
     return out
 
 
+def _extract_read_only_hint(tool: Any) -> bool:
+    """Return the MCP ``annotations.readOnlyHint`` for *tool* (default False).
+
+    The MCP spec puts behavioural hints on ``Tool.annotations`` (a
+    ``ToolAnnotations`` object with optional ``readOnlyHint`` / ``destructiveHint``
+    / … fields). Older servers omit it entirely. We treat a tool as read-only
+    ONLY when the hint is explicitly True — anything else (missing, False,
+    unparsable) is conservatively treated as a write tool by the caller.
+    """
+    annotations = getattr(tool, 'annotations', None)
+    if annotations is None:
+        return False
+    try:
+        hint = getattr(annotations, 'readOnlyHint', None)
+        if hint is None and isinstance(annotations, dict):
+            hint = annotations.get('readOnlyHint')
+        return hint is True
+    except Exception as e:
+        logger.debug('[MCP] readOnlyHint extraction failed for %s: %s',
+                     getattr(tool, 'name', '?'), e)
+        return False
+
+
+# ── Vendored MCP servers: first-connect auto-install ─────
+#
+# Internal MCP servers (hope-mcp, …) are private and not on PyPI, so a fresh
+# Tofu checkout has no way to obtain them — the user just sees "launcher X is
+# not on PATH". To make onboarding zero-touch we ship the source in-repo and
+# pip-install it into Tofu's OWN interpreter on first connect.
+#
+# The registry + repo_root live in the tiny, dependency-free
+# ``lib/mcp/vendored`` module so the release-time vendoring script can read
+# the same source of truth WITHOUT importing this heavy module. The
+# underscore aliases below preserve the historical internal names used
+# throughout this file (and monkeypatched by tests).
+from lib.mcp import vendored as _vendored_mod
+from lib.mcp.vendored import VENDORED_LAUNCHERS as _VENDORED_LAUNCHERS
+from lib.mcp.vendored import repo_root as _repo_root
+
+# Guard so a failing install is attempted at most once per process per
+# command — otherwise every reconnect sweep would re-run pip. Protected by
+# ``_install_lock``.
+_install_attempted: set[str] = set()
+_install_lock = threading.Lock()
+# Per-command serialization so two concurrent callers (e.g. the startup
+# pre-warm racing a user "Install" click) never run ``pip install`` of the
+# SAME source at once — the second waits, then sees ``_install_attempted`` and
+# just re-resolves. The registry dict itself is guarded by ``_install_lock``.
+_install_cmd_locks: dict[str, threading.Lock] = {}
+# Last auto-install failure reason per command, surfaced in the connect error
+# so the user sees WHY zero-touch install failed (pip stderr / no source /
+# timeout) instead of a generic "not on PATH" dead-end. Set under _install_lock.
+_install_last_error: dict[str, str] = {}
+
+# ── Hot-reload of the vendored registry ──────────────────
+#
+# ``vendored.py`` is imported once at startup, so a NEW row added to
+# ``VENDORED_LAUNCHERS`` while Tofu is already running is invisible until a
+# restart — the #1 papercut when onboarding a freshly-added internal MCP.
+# To make that truly zero-touch we re-read the file when its mtime changes
+# and MERGE any new/changed rows into the LIVE ``_VENDORED_LAUNCHERS`` dict.
+#
+# Why merge-in-place instead of rebinding: the live dict's *identity* is part
+# of the contract — tests monkeypatch entries via ``setitem`` on it, and the
+# module-level alias is shared. We mutate the existing object so every holder
+# (including a test's patched view) sees the update without a rebind.
+_vendored_mtime: float = 0.0
+_vendored_reload_lock = threading.Lock()
+
+
+def _vendored_path() -> str:
+    return getattr(_vendored_mod, '__file__', '') or ''
+
+
+def _reload_vendored_if_changed() -> None:
+    """Re-import ``vendored.py`` if its mtime advanced; merge new rows live.
+
+    Cheap: one ``os.path.getmtime`` stat per call, and the actual reload only
+    runs when the file genuinely changed. Failures (file gone, syntax error
+    mid-edit) are swallowed — we keep the last-good registry rather than break
+    every connect. Never DELETES rows (a half-saved edit shouldn't drop a
+    server mid-flight); it only adds/updates.
+    """
+    path = _vendored_path()
+    if not path:
+        return
+    global _vendored_mtime
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        return
+    if mtime <= _vendored_mtime:
+        return
+    with _vendored_reload_lock:
+        # Re-check under lock — another thread may have just reloaded.
+        try:
+            mtime = os.path.getmtime(path)
+        except OSError:
+            return
+        if mtime <= _vendored_mtime:
+            return
+        try:
+            importlib.reload(_vendored_mod)
+            fresh = dict(getattr(_vendored_mod, 'VENDORED_LAUNCHERS', {}) or {})
+        except Exception as e:
+            # Mid-edit syntax error or transient read failure — keep last-good
+            # registry and retry on the next mtime bump.
+            logger.warning('[MCP] vendored.py reload failed (keeping last-good '
+                           'registry): %s', e)
+            # Advance the baseline so we don't hammer reload on every call while
+            # the file is briefly broken; the next real save bumps mtime again.
+            _vendored_mtime = mtime
+            return
+        added = [k for k in fresh if k not in _VENDORED_LAUNCHERS]
+        # Merge in place (preserve dict identity for test monkeypatches).
+        _VENDORED_LAUNCHERS.update(fresh)
+        _vendored_mtime = mtime
+        if added:
+            logger.info('[MCP] vendored registry hot-reloaded: +%d new server(s) %s',
+                        len(added), ', '.join(sorted(added)))
+
+
+# Baseline the mtime at import time so an edit made BETWEEN process start and
+# the first connect is still detected (mtime then strictly advances).
+try:
+    _vendored_mtime = os.path.getmtime(_vendored_path()) if _vendored_path() else 0.0
+except OSError:
+    _vendored_mtime = 0.0
+
+
+# ── Vendored-snapshot staleness detection (+ opt-in auto-vendor) ──
+#
+# The ``tools/<name>`` snapshot is what a DEPLOY (no sibling checkout) installs
+# from; it is committed to git and refreshed at release time via
+# ``make vendor-mcp`` (scripts/vendor_mcp.sh rsyncs sibling → snapshot). The
+# papercut: it's easy to edit the sibling and forget to re-vendor, so a STALE
+# snapshot gets committed/shipped.
+#
+# On a dev box the running process installs from the SIBLING (editable), never
+# the snapshot — so we never silently rewrite git-tracked files during a
+# request. Instead:
+#   A) ALWAYS-ON detection: at connect, compare sibling vs snapshot and LOG a
+#      loud warning when they drift (zero writes).
+#   B) OPT-IN rebuild: only when TOFU_MCP_AUTO_VENDOR is truthy do we shell out
+#      to vendor_mcp.sh to refresh the snapshot — explicit, never the default.
+#
+# Both are no-ops on a deploy (no sibling on disk = nothing to compare/rebuild)
+# and for non-vendored servers (npx/uvx).
+
+# Mirror scripts/vendor_mcp.sh's EXCLUDES so the comparison matches exactly
+# what a real vendor would copy — otherwise __pycache__/egg-info would make a
+# freshly-vendored snapshot look "stale" forever.
+_VENDOR_EXCLUDE_DIRS = frozenset({
+    '.git', '__pycache__', '.pytest_cache', '.ruff_cache', 'build', 'dist',
+    '.tofu', '.chatui', '.venv', 'venv',
+})
+
+
+def _vendor_excluded_dir(name: str) -> bool:
+    return name in _VENDOR_EXCLUDE_DIRS or name.endswith('.egg-info')
+
+
+def _vendor_excluded_file(name: str) -> bool:
+    return name.endswith('.pyc') or name.endswith('.egg-link')
+
+
+def _vendor_tree_signature(base: str) -> dict[str, tuple[int, int]]:
+    """Map relpath → (size, int(mtime)) for vendor-relevant files under ``base``.
+
+    Honours the same excludes as vendor_mcp.sh. ``rsync -a`` preserves size +
+    mtime, so a faithful vendored snapshot has an identical signature; any
+    difference (added/removed/edited file) means drift.
+    """
+    sig: dict[str, tuple[int, int]] = {}
+    for dirpath, dirnames, filenames in os.walk(base):
+        dirnames[:] = [d for d in dirnames if not _vendor_excluded_dir(d)]
+        for fn in filenames:
+            if _vendor_excluded_file(fn):
+                continue
+            full = os.path.join(dirpath, fn)
+            try:
+                st = os.stat(full)
+            except OSError:
+                continue
+            sig[os.path.relpath(full, base)] = (st.st_size, int(st.st_mtime))
+    return sig
+
+
+def _snapshot_stale_reason(sibling: str, snapshot: str) -> str:
+    """Return a concise drift description, or '' when the snapshot is fresh."""
+    if not os.path.isdir(snapshot):
+        return 'snapshot missing'
+    sib = _vendor_tree_signature(sibling)
+    snap = _vendor_tree_signature(snapshot)
+    if sib == snap:
+        return ''
+    missing = sorted(set(sib) - set(snap))      # in sibling, absent from snapshot
+    extra = sorted(set(snap) - set(sib))        # in snapshot, deleted from sibling
+    changed = sorted(r for r in (set(sib) & set(snap)) if sib[r] != snap[r])
+    parts = []
+    if missing:
+        parts.append(f'{len(missing)} new/missing (e.g. {", ".join(missing[:3])})')
+    if changed:
+        parts.append(f'{len(changed)} changed (e.g. {", ".join(changed[:3])})')
+    if extra:
+        parts.append(f'{len(extra)} stale-extra (e.g. {", ".join(extra[:3])})')
+    return '; '.join(parts) or 'content differs'
+
+
+def _auto_vendor_enabled() -> bool:
+    return os.environ.get('TOFU_MCP_AUTO_VENDOR', '').strip().lower() in {
+        '1', 'true', 'yes', 'on',
+    }
+
+
+# Last drift state we LOGGED per command ('' = fresh), so we warn once per
+# distinct drift instead of on every reconnect. Protected by _snapshot_lock.
+_snapshot_reported: dict[str, str] = {}
+_snapshot_lock = threading.Lock()
+
+
+def _run_vendor_script(command: str, root: str) -> bool:
+    """Shell out to scripts/vendor_mcp.sh for ONE server. Returns success."""
+    script = os.path.join(root, 'scripts', 'vendor_mcp.sh')
+    if not os.path.isfile(script):
+        logger.warning('[MCP] auto-vendor requested but %s not found', script)
+        return False
+    child_env = dict(os.environ)
+    child_env['TOFU_PYTHON'] = sys.executable
+    _ensure_writable_caches(child_env)
+    try:
+        proc = subprocess.run(
+            ['bash', script, command], cwd=root, env=child_env,
+            capture_output=True, text=True, timeout=120,
+        )
+    except (subprocess.TimeoutExpired, OSError) as e:
+        logger.error('[MCP] auto-vendor of %r failed to run: %s', command, e)
+        return False
+    if proc.returncode != 0:
+        tail = (proc.stderr or proc.stdout or '').strip().splitlines()[-5:]
+        logger.error('[MCP] auto-vendor of %r failed (rc=%d): %s',
+                     command, proc.returncode, ' | '.join(tail))
+        return False
+    return True
+
+
+def _check_snapshot_staleness(command: str) -> None:
+    """Detect (always) and optionally rebuild (opt-in) a stale ``tools/`` snapshot.
+
+    Safe by design: never writes anything unless ``TOFU_MCP_AUTO_VENDOR`` is
+    truthy. No-op for non-vendored commands and on deploys with no sibling.
+    """
+    spec = _VENDORED_LAUNCHERS.get(command)
+    if not spec:
+        return
+    sources = spec.get('sources', [])
+    sibling_rel = next((s for s in sources if not s.startswith('tools/')), None)
+    snap_rel = next((s for s in sources if s.startswith('tools/')), None)
+    if not sibling_rel or not snap_rel:
+        return  # need BOTH a sibling source and a snapshot dest to compare
+    root = _repo_root()
+    sibling = os.path.abspath(os.path.join(root, sibling_rel))
+    snapshot = os.path.abspath(os.path.join(root, snap_rel))
+    # Only meaningful where the sibling dev checkout exists — that's the only
+    # thing we could vendor FROM. On a deploy (snapshot-only) stay silent.
+    if not os.path.isfile(os.path.join(sibling, 'pyproject.toml')):
+        return
+
+    try:
+        reason = _snapshot_stale_reason(sibling, snapshot)
+    except OSError as e:
+        logger.debug('[MCP] snapshot staleness check for %r failed: %s', command, e)
+        return
+
+    with _snapshot_lock:
+        already = _snapshot_reported.get(command)
+        if reason == already:
+            return  # same state as last time we acted — stay quiet
+        _snapshot_reported[command] = reason
+
+    if not reason:
+        return  # fresh (possibly just re-vendored) — nothing to say
+
+    logger.warning(
+        '[MCP] vendored snapshot tools/%s is STALE vs sibling %s: %s. '
+        'Run `make vendor-mcp %s` before committing/deploying.',
+        command, sibling, reason, command)
+
+    if not _auto_vendor_enabled():
+        return
+
+    logger.info('[MCP] TOFU_MCP_AUTO_VENDOR set — rebuilding snapshot tools/%s', command)
+    if _run_vendor_script(command, root):
+        # Recompute so we report the fresh state (and don't re-warn next time).
+        try:
+            new_reason = _snapshot_stale_reason(sibling, snapshot)
+        except OSError:
+            new_reason = ''
+        with _snapshot_lock:
+            _snapshot_reported[command] = new_reason
+        if new_reason:
+            logger.warning('[MCP] auto-vendor of %r ran but snapshot still '
+                           'differs: %s', command, new_reason)
+        else:
+            logger.info('[MCP] auto-vendor of %r OK — snapshot tools/%s now fresh',
+                        command, command)
+
+
+def _find_vendored_source(command: str) -> tuple[str, bool] | None:
+    """Resolve the install source for ``command``.
+
+    Returns ``(src_dir, editable)`` for the first candidate dir that contains
+    a ``pyproject.toml``, or ``None`` if the command is unregistered / no
+    source exists. ``editable`` is True only when the resolved dir is OUTSIDE
+    the repo's ``tools/`` tree (i.e. a sibling dev checkout) — the vendored
+    snapshot under ``tools/`` is always installed non-editable.
+
+    Hot-reloads ``vendored.py`` first when its mtime advanced, so a server row
+    added to the running process's source is picked up WITHOUT a restart.
+    """
+    _reload_vendored_if_changed()
+    spec = _VENDORED_LAUNCHERS.get(command)
+    if not spec:
+        return None
+    root = _repo_root()
+    tools_dir = os.path.join(root, 'tools') + os.sep
+    for rel in spec['sources']:
+        cand = rel if os.path.isabs(rel) else os.path.abspath(os.path.join(root, rel))
+        if os.path.isfile(os.path.join(cand, 'pyproject.toml')):
+            is_vendored = (cand + os.sep).startswith(tools_dir)
+            return cand, (not is_vendored)
+    return None
+
+
+def _try_autoinstall_launcher(command: str) -> str | None:
+    """pip-install a vendored MCP server into Tofu's interpreter, then resolve.
+
+    Returns the resolved absolute launcher path on success, else ``None``.
+    Installs into ``sys.executable`` (the very env Tofu runs in) so the new
+    console script lands next to the interpreter where ``_resolve_launcher``
+    finds it — no PATH/venv changes required.
+
+    ``PIP_REQUIRE_VIRTUALENV`` is explicitly neutralised for the child: many
+    internal conda setups enable it globally, which makes a bare ``pip
+    install`` abort with "Could not find an activated virtualenv" even though
+    installing into the active conda env is exactly what we want.
+    """
+    found = _find_vendored_source(command)
+    if not found:
+        # Unregistered or no source on disk — nothing we can pip-install. This
+        # is NOT a sticky failure: we never touch _install_attempted, so a
+        # later call (e.g. after the source appears) can still try.
+        return None
+    src, editable = found
+
+    # Grab (or create) the per-command lock, then hold it across the whole
+    # check-then-pip section so a concurrent caller for the SAME command waits
+    # here instead of launching a second simultaneous pip on the same source.
+    with _install_lock:
+        cmd_lock = _install_cmd_locks.setdefault(command, threading.Lock())
+
+    with cmd_lock:
+        with _install_lock:
+            if command in _install_attempted:
+                # pip already RAN for this command this process (possibly by
+                # the caller we just waited behind). Re-resolve in case it
+                # succeeded, but never pip again. (The guard is only set AFTER
+                # a real pip run below, so a transient pre-pip error never
+                # wedges the command permanently.)
+                return _resolve_launcher(command)
+        return _run_pip_install(command, src, editable)
+
+
+def _run_pip_install(command: str, src: str, editable: bool) -> str | None:
+    """Actually shell out to pip for ``command``; caller holds its cmd lock."""
+    pip_args = [sys.executable, '-m', 'pip', 'install', '--no-input']
+    if editable:
+        pip_args.append('-e')
+    pip_args.append(src)
+
+    child_env = dict(os.environ)
+    child_env['PIP_REQUIRE_VIRTUALENV'] = 'false'
+    _ensure_writable_caches(child_env)
+
+    logger.info('[MCP] auto-installing vendored launcher %r from %s (editable=%s)',
+                command, src, editable)
+    try:
+        proc = subprocess.run(
+            pip_args, env=child_env, capture_output=True, text=True,
+            timeout=300,
+        )
+    except (subprocess.TimeoutExpired, OSError) as e:
+        # pip never produced a result. Do NOT set the one-shot guard — this is
+        # often transient (timeout, transient OS error), so a later retry (or
+        # the "Reinstall" button) should be allowed to try again.
+        msg = f'pip did not complete: {e}'
+        logger.error('[MCP] auto-install of %r failed to run pip: %s', command, e)
+        with _install_lock:
+            _install_last_error[command] = msg
+        return None
+
+    # pip actually ran (rc known) → this counts as the one allowed attempt.
+    with _install_lock:
+        _install_attempted.add(command)
+
+    if proc.returncode != 0:
+        tail = (proc.stderr or proc.stdout or '').strip().splitlines()[-5:]
+        joined = ' | '.join(tail)
+        logger.error('[MCP] auto-install of %r failed (rc=%d): %s',
+                     command, proc.returncode, joined)
+        with _install_lock:
+            _install_last_error[command] = (
+                f'pip install {src} exited {proc.returncode}: {joined}')
+        return None
+
+    resolved = _resolve_launcher(command)
+    if resolved:
+        logger.info('[MCP] auto-install of %r OK → %s', command, resolved)
+        with _install_lock:
+            _install_last_error.pop(command, None)
+    else:
+        logger.error('[MCP] auto-install of %r reported success but launcher '
+                     'still not resolvable', command)
+        with _install_lock:
+            _install_last_error[command] = (
+                f'pip install {src} succeeded but the {command!r} console '
+                'script is still not next to the interpreter — check the '
+                "package's [project.scripts] entry.")
+    return resolved
+
+
+
+def is_vendored_launcher(command: str) -> bool:
+    """True when ``command`` is a bare, registered vendored MCP launcher.
+
+    Used by the install route to decide whether a slow pip pre-warm is even
+    possible before attempting the (fast) connect. No-op for npx/uvx commands
+    and anything with a path separator.
+    """
+    if not command or os.sep in command or (os.altsep and os.altsep in command):
+        return False
+    return _find_vendored_source(command) is not None
+
+
+def prewarm_vendored_launcher(command: str) -> tuple[bool, str]:
+    """Ensure a vendored launcher is importable BEFORE connect.
+
+    Intended to run in a normal worker thread (e.g. the Flask request handler
+    for ``/catalog/install``), NOT on the MCP event loop — so the blocking
+    ``pip install`` here is fine and never freezes live MCP traffic.
+
+    Returns ``(ready, detail)``:
+      * ``(True, path)``  — launcher already resolvable, or pip install succeeded.
+      * ``(True, '')``    — already on PATH (nothing to do).
+      * ``(False, why)``  — install attempted and failed; ``why`` is the
+        captured pip stderr / reason (also stored in ``_install_last_error``).
+
+    Safe to call even for non-vendored commands: returns ``(True, '')`` so the
+    caller just proceeds to connect.
+    """
+    import shutil as _shutil
+    if not command or os.sep in command:
+        return True, ''
+    if _shutil.which(command):
+        return True, ''
+    resolved = _resolve_launcher(command)
+    if resolved:
+        return True, resolved
+    if _find_vendored_source(command) is None:
+        # Not something we can pip-install — let connect surface the hint.
+        return True, ''
+    resolved = _try_autoinstall_launcher(command)
+    if resolved:
+        return True, resolved
+    with _install_lock:
+        why = _install_last_error.get(command, '')
+    return False, why
+
+
+
+def prewarm_all_vendored() -> dict[str, str]:
+    """Pip-install every registered vendored launcher that isn't resolvable yet.
+
+    Meant to run ONCE in a background thread at startup so the App-Store
+    "Install" click is normally just the sub-second MCP handshake instead of
+    a cold pip install. Blocking (pip) — never call from the event loop.
+
+    Returns ``{command: 'ok' | reason}`` for the launchers that needed work
+    (already-resolvable ones are skipped silently).
+    """
+    _reload_vendored_if_changed()
+    out: dict[str, str] = {}
+    for command in list(_VENDORED_LAUNCHERS.keys()):
+        try:
+            import shutil as _shutil
+            if _shutil.which(command) or _resolve_launcher(command):
+                continue
+            if _find_vendored_source(command) is None:
+                continue
+            ready, detail = prewarm_vendored_launcher(command)
+            out[command] = 'ok' if ready else (detail or 'install failed')
+        except Exception as e:  # never let pre-warm crash boot
+            logger.warning('[MCP] pre-warm of %r failed: %s', command, e)
+            out[command] = f'error: {e}'
+    return out
+
+
+
+# ── Async install jobs (route returns immediately; UI polls) ──────────
+#
+# Why: a cold ``pip install`` of a vendored server can take minutes. Even
+# though our bundled Hypercorn server has no per-request kill timer, the app
+# explicitly supports running behind reverse proxies (cloud-IDE / notebook;
+# see server.py `_detect_reverse_proxy`) whose own response timeouts WOULD
+# cut a multi-minute synchronous POST — re-introducing the exact "install
+# times out" symptom one layer down, and leaving a half-installed package.
+# So the install route kicks the pip pre-warm off into a background thread
+# and returns ``{status:'installing'}`` at once; the front end polls
+# ``/catalog/install/status`` until it flips to ``ready`` / ``error``.
+#
+# State is a tiny in-process dict (single-process server). Each entry::
+#   {state: 'installing'|'ready'|'error', detail: str, started: float, ended: float}
+_install_jobs: dict[str, dict] = {}
+_install_jobs_lock = threading.Lock()
+
+
+def get_install_job(command: str) -> dict | None:
+    """Return a snapshot of the install job for ``command`` (or None)."""
+    with _install_jobs_lock:
+        job = _install_jobs.get(command)
+        return dict(job) if job is not None else None
+
+
+def start_install_job(command: str) -> dict:
+    """Start (or re-attach to) a background pip pre-warm for ``command``.
+
+    Idempotent: if a job is already ``installing`` it is returned as-is
+    (re-clicking Install never spawns a second pip — the per-command lock in
+    ``_try_autoinstall_launcher`` would serialize them anyway, but we avoid
+    even queuing a redundant thread). If the launcher already resolves we
+    return ``ready`` immediately without touching pip.
+
+    Returns the job snapshot dict.
+    """
+    import shutil as _shutil
+    # Fast path: already importable → no job needed.
+    if not command or os.sep in command or _shutil.which(command) or _resolve_launcher(command):
+        snap = {'state': 'ready', 'detail': '', 'started': time.time(), 'ended': time.time()}
+        with _install_jobs_lock:
+            _install_jobs[command] = snap
+        return dict(snap)
+
+    with _install_jobs_lock:
+        existing = _install_jobs.get(command)
+        if existing is not None and existing.get('state') == 'installing':
+            return dict(existing)
+        job = {'state': 'installing', 'detail': '', 'started': time.time(), 'ended': 0.0}
+        _install_jobs[command] = job
+
+    def _worker():
+        try:
+            ready, detail = prewarm_vendored_launcher(command)
+        except Exception as e:  # defensive — never let the thread die silently
+            ready, detail = False, f'install crashed: {e}'
+            logger.error('[MCP] install job for %r crashed: %s', command, e, exc_info=True)
+        with _install_jobs_lock:
+            _install_jobs[command] = {
+                'state': 'ready' if ready else 'error',
+                'detail': detail,
+                'started': job['started'],
+                'ended': time.time(),
+            }
+        logger.info('[MCP] install job for %r finished: %s',
+                    command, 'ready' if ready else f'error ({detail})')
+
+    threading.Thread(target=_worker, name=f'mcp-install:{command}', daemon=True).start()
+    with _install_jobs_lock:
+        return dict(_install_jobs[command])
+
+
+def _resolve_launcher(command: str) -> str | None:
+    """Best-effort resolve a bare launcher name to an absolute path.
+
+    Why this exists: the #1 cause of "launcher X is not on PATH" reports is
+    a Python console script (e.g. ``hope-mcp``, ``overleaf-mcp``) that WAS
+    pip-installed — but into the same interpreter that runs Tofu, whose
+    ``bin/`` directory isn't on the *spawned subprocess's* PATH (conda envs
+    activated via a wrapper, systemd units, IDE-launched servers, …). The
+    script sits right next to ``sys.executable`` yet ``shutil.which`` (which
+    only searches ``$PATH``) misses it, so the user is told to "install"
+    something that is in fact already installed.
+
+    We look, in order, for an executable named ``command`` in:
+      1. the directory of the running interpreter (``sys.executable``) —
+         this is where ``pip install`` drops console scripts for the very
+         env Tofu runs in;
+      2. ``<base_prefix>/bin`` (covers venvs whose scripts were installed
+         against the base interpreter);
+      3. a ``Scripts`` sibling (Windows layout), for completeness.
+
+    Returns an absolute path if found, else ``None``. Only meaningful for a
+    BARE command (no path separator) — anything with a slash is taken
+    as-is by the caller.
+    """
+    if not command or os.sep in command or (os.altsep and os.altsep in command):
+        return None
+
+    candidates: list[str] = []
+    exe_dir = os.path.dirname(os.path.abspath(sys.executable)) if sys.executable else ''
+    for base in (exe_dir, getattr(sys, 'base_prefix', '') or ''):
+        if not base:
+            continue
+        # base_prefix is a prefix, not a bin dir — append bin/ when needed.
+        bin_dirs = [base] if os.path.basename(base) in ('bin', 'Scripts') \
+            else [os.path.join(base, 'bin'), os.path.join(base, 'Scripts')]
+        for bd in bin_dirs:
+            candidates.append(os.path.join(bd, command))
+
+    seen: set[str] = set()
+    for cand in candidates:
+        if cand in seen:
+            continue
+        seen.add(cand)
+        if os.path.isfile(cand) and os.access(cand, os.X_OK):
+            logger.info('[MCP] resolved launcher %r → %s (not on PATH, found '
+                        'next to interpreter)', command, cand)
+            return cand
+    return None
+
+
+def _prepend_interpreter_bin_to_path(env: dict[str, str]) -> None:
+    """Prepend the running interpreter's ``bin/`` dir to ``env['PATH']``.
+
+    Ensures stdio MCP child processes inherit the same environment Tofu
+    runs in. Without this, a server installed into Tofu's conda env can
+    launch (we resolve its absolute path) but then fails when it shells
+    out to a sibling tool from the same env (e.g. ``hope-mcp`` → ``hope``)
+    because that tool isn't on the inherited PATH. Idempotent: skips if the
+    dir is already the first PATH entry.
+    """
+    exe_dir = os.path.dirname(os.path.abspath(sys.executable)) if sys.executable else ''
+    if not exe_dir or not os.path.isdir(exe_dir):
+        return
+    current = env.get('PATH', '')
+    parts = current.split(os.pathsep) if current else []
+    if parts and parts[0] == exe_dir:
+        return
+    env['PATH'] = os.pathsep.join([exe_dir, *[p for p in parts if p != exe_dir]])
+
+
 def _launcher_install_hint(command: str) -> str:
     """Return an actionable install hint for a missing launcher binary.
 
@@ -357,8 +1032,32 @@ def _launcher_install_hint(command: str) -> str:
     """
     base = command.rsplit('/', 1)[-1]
 
-    # Project-bundled MCP servers — try ``vendor/<base>/`` relative to the
-    # repo root. Walk up from this file: lib/mcp/client.py → repo root.
+    # Vendored internal MCP servers (registered in lib/mcp/vendored.py) are
+    # auto-installed on first connect. If we're showing a hint for one, the
+    # zero-touch install must have FAILED — surface the captured reason and
+    # the exact manual command pointing at the real in-repo source, instead
+    # of the useless generic "package manager" line.
+    src_info = _find_vendored_source(base)
+    if src_info is not None:
+        src, editable = src_info
+        with _install_lock:
+            why = _install_last_error.get(base, '')
+        pip_cmd = f'{sys.executable} -m pip install {"-e " if editable else ""}{src}'
+        msg = (
+            f'{base!r} is a bundled MCP server that Tofu tries to auto-install '
+            f'on first connect, but that did not succeed. '
+        )
+        if why:
+            msg += f'Reason: {why}. '
+        msg += (
+            f'Fix it manually with:\n    {pip_cmd}\n'
+            f'(run in the same env that started Tofu), then click Reinstall. '
+            'If pip succeeded but the launcher is still missing, restart Tofu.'
+        )
+        return msg
+
+    # Project-bundled MCP servers shipped as a source tree under
+    # ``vendor/<base>/`` (internal exports) but NOT in the vendored registry.
     try:
         repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
         vendor_path = os.path.join(repo_root, 'vendor', base)
@@ -458,6 +1157,14 @@ class MCPBridge:
         # ``self._lock``. Cleared on any successful (re)connect.
         self._breaker: dict[str, tuple[int, float]] = {}
 
+        # Per-server CONSECUTIVE call-timeout streak: name → count. Distinct
+        # from the reconnect breaker above — this tracks tool calls that time
+        # out on a transport that is otherwise alive. At
+        # ``MCP_DEGRADED_TIMEOUT_STREAK`` the server is 'degraded' and the next
+        # call fast-fails instead of blocking for the full timeout again. Any
+        # successful call resets it to 0. Protected by ``self._lock``.
+        self._timeout_streak: dict[str, int] = {}
+
         # Last-known good config per server. Retained so the keepalive loop
         # can keep retrying a server whose live handle was torn down by a
         # FAILED reconnect (connect_server pops the old handle before it
@@ -488,11 +1195,25 @@ class MCPBridge:
             time.sleep(0.05)
         return loop
 
-    def _run_async(self, coro) -> Any:
-        """Run an async coroutine on the MCP event loop, blocking until done."""
+    def _run_async(self, coro, timeout: float | None = None) -> Any:
+        """Run an async coroutine on the MCP event loop, blocking until done.
+
+        Args:
+            coro: The coroutine to drive to completion.
+            timeout: Outer (thread-side) wall-clock budget in seconds. The
+                inner ``_async_call_tool`` already bounds the request with the
+                resolved per-server ``read_timeout_seconds``; this outer cap
+                must therefore EXCEED that value (we add 10s of headroom),
+                otherwise a server with a longer per-call timeout than the
+                global default would be killed here before its own deadline.
+                Defaults to ``MCP_CALL_TIMEOUT + 10`` for non-call paths
+                (connect / disconnect) that don't carry a per-server budget.
+        """
+        if timeout is None:
+            timeout = MCP_CALL_TIMEOUT + 10
         loop = self._ensure_loop()
         future = asyncio.run_coroutine_threadsafe(coro, loop)
-        return future.result(timeout=MCP_CALL_TIMEOUT + 10)
+        return future.result(timeout=timeout)
 
     # ── Connection management ─────────────────────────────
 
@@ -543,6 +1264,17 @@ class MCPBridge:
         Returns:
             List of ``mcp.types.Tool`` objects discovered.
         """
+        # Detect (and, only if TOFU_MCP_AUTO_VENDOR is set, rebuild) a stale
+        # tools/<name> snapshot vs its sibling dev checkout. Always-on path is
+        # log-only — never writes git-tracked files by default. No-op for
+        # non-vendored commands and on deploys without a sibling.
+        try:
+            cmd = srv_cfg.get('command', '') if srv_cfg.get('transport', 'stdio') != 'sse' else ''
+            if cmd and os.sep not in cmd:
+                _check_snapshot_staleness(cmd)
+        except Exception as e:
+            logger.debug('[MCP] snapshot staleness check skipped: %s', e)
+
         # Tear down any existing server with the same name BEFORE taking
         # the lock for the new registration. The disconnect itself hits
         # the async loop; holding self._lock across it would freeze every
@@ -574,6 +1306,7 @@ class MCPBridge:
                     description=tool.description or '',
                     input_schema=tool.inputSchema or {'type': 'object', 'properties': {}},
                     openai_def=self._tool_to_openai(name, tool),
+                    read_only_hint=_extract_read_only_hint(tool),
                 )
             self._started = True
 
@@ -778,15 +1511,43 @@ class MCPBridge:
                             f'MCP server {name}: stdio transport requires "command"'
                         )
 
-                    # Pre-flight: verify the launcher is on PATH. Without this we
-                    # get a cryptic FileNotFoundError deep inside mcp.client.stdio.
+                    # Pre-flight: verify the launcher is resolvable. Without
+                    # this we get a cryptic FileNotFoundError deep inside
+                    # mcp.client.stdio. If it's not on PATH, try to self-heal
+                    # by resolving a pip-installed console script that lives
+                    # next to the running interpreter (the common "installed
+                    # but not on the subprocess PATH" case) before giving up.
                     import shutil as _shutil
                     if not _shutil.which(command):
-                        hint = _launcher_install_hint(command)
-                        raise FileNotFoundError(
-                            f'MCP server {name!r}: launcher {command!r} is not on PATH. '
-                            f'{hint}'
-                        )
+                        resolved = _resolve_launcher(command)
+                        if not resolved:
+                            # Last resort: if this is a vendored internal
+                            # server, pip-install it into Tofu's own env now
+                            # so onboarding is zero-touch (no PATH edits, no
+                            # manual install). One attempt per process.
+                            #
+                            # CRITICAL: ``_try_autoinstall_launcher`` runs a
+                            # BLOCKING ``subprocess.run`` (pip, up to 300s). We
+                            # are on the shared MCP event loop here, so calling
+                            # it inline would freeze EVERY other server's
+                            # keepalive / tool-calls / connects for the whole
+                            # install. Offload to a worker thread (mirrors
+                            # ``_reconnect_server``'s ``run_in_executor``) so a
+                            # cold install never stalls the loop. Normally this
+                            # path isn't even reached — the install ROUTE
+                            # pre-warms the launcher in a Flask worker thread
+                            # first (see ``prewarm_vendored_launcher``).
+                            owner_loop = asyncio.get_running_loop()
+                            resolved = await owner_loop.run_in_executor(
+                                None, _try_autoinstall_launcher, command)
+                        if resolved:
+                            command = resolved
+                        else:
+                            hint = _launcher_install_hint(command)
+                            raise FileNotFoundError(
+                                f'MCP server {name!r}: launcher {command!r} is not on PATH. '
+                                f'{hint}'
+                            )
 
                     from mcp import StdioServerParameters
                     from mcp.client.stdio import stdio_client
@@ -809,6 +1570,13 @@ class MCPBridge:
                     # writable project-local dir when $HOME/.cache is read-only
                     # — otherwise uvx dies before the MCP handshake.
                     _ensure_writable_caches(env)
+                    # Make the running interpreter's bin/ dir visible to the
+                    # child. This is what lets a pip-installed MCP server find
+                    # its sibling console tools (e.g. hope-mcp shelling out to
+                    # `hope`) AND mirrors the _resolve_launcher fallback so the
+                    # subprocess sees the same launcher we resolved. Prepended
+                    # so the env Tofu runs in wins over a stale system copy.
+                    _prepend_interpreter_bin_to_path(env)
                     extra_env = srv_cfg.get('env', {})
                     if extra_env:
                         env.update(extra_env)
@@ -1070,9 +1838,29 @@ class MCPBridge:
 
         Returns:
             List of OpenAI tool dicts ready to append to the tool_list.
+
+        Ordering is deterministic (sorted by namespaced name) rather than
+        dict-insertion order.  Insertion order changes whenever a server
+        reconnects or re-discovers its tools mid-conversation, which would
+        reorder the tools array and break the prompt cache prefix even though
+        the tool *content* is unchanged.  A stable sort keeps the bytes
+        identical across rounds.
         """
         with self._lock:
-            return [info['openai_def'] for info in self._tool_index.values()]
+            return [self._tool_index[ns]['openai_def']
+                    for ns in sorted(self._tool_index)]
+
+    def get_tool_safety(self) -> dict[str, bool]:
+        """Map every discovered MCP tool's namespaced name → read-only flag.
+
+        The flag is the tool's MCP ``annotations.readOnlyHint`` (default
+        ``False`` when the server omits it). Consumers use this to partition
+        MCP tools for concurrency / write-approval: a tool that is NOT
+        read-only is treated as a write tool (serial + approval-eligible).
+        """
+        with self._lock:
+            return {ns: bool(info.get('read_only_hint'))
+                    for ns, info in self._tool_index.items()}
 
     def get_tool_info(self, namespaced_name: str) -> MCPToolInfo | None:
         """Look up tool info by namespaced name."""
@@ -1159,16 +1947,64 @@ class MCPBridge:
             tool_name = info['tool_name']
 
         timeout = handle.config.get('timeout', MCP_CALL_TIMEOUT)
+
+        # ── Call-level health gate ──
+        # If this server has already timed out MCP_DEGRADED_TIMEOUT_STREAK
+        # times in a row, fast-fail with an actionable error instead of
+        # blocking the model for another full ``timeout`` seconds (and then
+        # likely auto-retrying). A single later success resets the streak.
+        if MCP_DEGRADED_TIMEOUT_STREAK > 0:
+            with self._lock:
+                streak = self._timeout_streak.get(server_name, 0)
+            if streak >= MCP_DEGRADED_TIMEOUT_STREAK:
+                logger.warning(
+                    '[MCP:Call] %s.%s SKIPPED — server degraded after %d '
+                    'consecutive call timeouts (timeout=%ds). Not retried; '
+                    'reconnect or raise the per-server timeout to recover.',
+                    server_name, tool_name, streak, timeout,
+                )
+                audit_log('mcp_server_degraded', server=server_name,
+                          tool=tool_name, consecutive_timeouts=streak,
+                          timeout=timeout)
+                return (
+                    f'MCP Error: server {server_name!r} is degraded — '
+                    f'{streak} consecutive call timeouts (each waited '
+                    f'{timeout}s). The call was not attempted. This usually '
+                    f'means the tool runs longer than the server\'s per-call '
+                    f'timeout; do not retry blindly.'
+                )
+
         logger.info('[MCP:Call] %s.%s(args=%s) timeout=%ds',
                     server_name, tool_name, str(arguments)[:200], timeout)
 
         t0 = time.time()
         try:
             result = self._run_async(
-                self._async_call_tool(handle, tool_name, arguments, timeout)
+                self._async_call_tool(handle, tool_name, arguments, timeout),
+                timeout=timeout + 10,
             )
         except Exception as e:
             elapsed = time.time() - t0
+            # A call timeout (transport read-timeout OR the outer thread-future
+            # budget) bumps the per-server streak and leaves an audit trail so
+            # the mismatch between a long-poll tool and the transport cap is
+            # greppable. NOT treated as a transport-dead error (reconnecting
+            # wouldn't help a tool that simply runs longer than its budget).
+            if _is_call_timeout_error(e):
+                with self._lock:
+                    new_streak = self._timeout_streak.get(server_name, 0) + 1
+                    self._timeout_streak[server_name] = new_streak
+                logger.warning(
+                    '[MCP:Call] %s.%s TIMED OUT after %.1fs (budget=%ds, '
+                    'consecutive=%d). If this tool legitimately runs longer '
+                    'than %ds, raise its per-server "timeout" in '
+                    'mcp_servers.json.',
+                    server_name, tool_name, elapsed, timeout, new_streak, timeout,
+                )
+                audit_log('mcp_call_timeout', server=server_name,
+                          tool=tool_name, timeout=timeout,
+                          elapsed=round(elapsed, 1), consecutive=new_streak)
+                raise
             # If the call failed because the transport is dead (subprocess
             # crashed / idle-dropped), transparently reconnect once and
             # retry — the user should never have to manually reconnect.
@@ -1186,9 +2022,11 @@ class MCPBridge:
                     raise e from re
                 try:
                     result = self._run_async(
-                        self._async_call_tool(new_handle, tool_name, arguments, timeout)
+                        self._async_call_tool(new_handle, tool_name, arguments, timeout),
+                        timeout=timeout + 10,
                     )
                     elapsed = time.time() - t0
+                    self._reset_timeout_streak(server_name)
                     logger.info(
                         '[MCP:Call] %s.%s succeeded after reconnect+retry '
                         '(%d chars in %.1fs)',
@@ -1204,9 +2042,20 @@ class MCPBridge:
             raise
 
         elapsed = time.time() - t0
+        # Any successful call clears the degraded streak.
+        self._reset_timeout_streak(server_name)
         logger.info('[MCP:Call] %s.%s returned %d chars in %.1fs',
                     server_name, tool_name, len(result), elapsed)
         return result
+
+    def _reset_timeout_streak(self, server_name: str) -> None:
+        """Clear a server's consecutive call-timeout streak (called on any
+        successful call). Logs once when recovering from a degraded state."""
+        with self._lock:
+            prev = self._timeout_streak.pop(server_name, 0)
+        if prev >= MCP_DEGRADED_TIMEOUT_STREAK > 0:
+            logger.info('[MCP:Call] %s recovered from degraded state '
+                        '(streak was %d)', server_name, prev)
 
     async def _async_call_tool(
         self,

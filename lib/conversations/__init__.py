@@ -14,7 +14,11 @@ from lib.conversations.meta_cache import (
     refresh_meta_cache_if_stale,
 )
 from lib.conversations.search_index import build_search_text, update_conversation_fts
-from lib.conversations.title_gen import generate_conversation_title
+from lib.conversations.settings_store import (
+    set_conversation_settings,
+    update_conversation_settings,
+)
+from lib.conversations.title_gen import first_user_text, generate_conversation_title
 
 __all__ = [
     'build_search_text',
@@ -22,4 +26,7 @@ __all__ = [
     'invalidate_meta_cache',
     'refresh_meta_cache_if_stale',
     'generate_conversation_title',
+    'first_user_text',
+    'update_conversation_settings',
+    'set_conversation_settings',
 ]

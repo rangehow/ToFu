@@ -22,13 +22,13 @@ Created 2026-05-03 in response to a request for a Claude-Code-style architecture
    Views best at 1400px wide.
 
 ## Layers (for consistency across docs + diagrams)
-1. 入口层 Entry — Web UI · Feishu · Browser ext. · Desktop agent · MCP · Agent backends (Claude Code / Codex)
-2. routes/ — 27 Blueprints, 243 routes, trading_* gated by TRADING_ENABLED
+1. 入口层 Entry — Web UI · Feishu · Browser ext. · Desktop agent · MCP · Headless API (`/api/v1`) · OpenAI/Anthropic compat  (NOTE: the former CLI "agent backends" were removed 2026-06-21; Claude Pro/ChatGPT subscriptions now enter as normal providers via `lib/oauth/`)
+2. routes/ — top-level Blueprints + `api_v1/` (~362 route decorators); trading routes are NO LONGER in core (extracted to the `tofu-trading` plugin 2026-06, mounts via `routes/plugin_registry.py`)
 3. 核心引擎 Core — `tasks_pkg/manager` · `orchestrator` · `endpoint` · `swarm/master`
 4. 安全 Safety — `approval.py` · `tool_hooks` · `DANGEROUS_PATTERNS` · `oauth/` · `proxy` · `export.py`
 5. 上下文 Context — `system_context` · `compaction` · `memory/` · `conv_message_builder` · `attachments`
 6. 工具 Tools — `lib/tools/` definitions → `tool_dispatch` → `executor` → `handlers/`
-7. 模型调度 LLM Dispatch — `llm_dispatch/{dispatcher,api,config,discovery,slot,factory}` + `llm_client`
+7. 模型调度 LLM Dispatch — `llm_dispatch/{dispatcher,api,config,discovery,slot,factory}` + `llm/` package (was the deleted `llm_client.py` — see llm-package-split memory)
 8. 基础设施 Infra — `database/` (PG→SQLite) · `log.py` · `compat` · `cross_dc` · `bootstrap`
 9. 运营进化 Ops — `optimizer/` (nightly LLM-driven self-tuning) · `scheduler/` · `daily_report` · audit_log
 

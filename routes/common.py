@@ -17,7 +17,10 @@ from flask import Blueprint, Response, jsonify, make_response, request, send_fro
 
 import lib as _lib  # module ref for hot-reload
 from lib.css_bundler import get_styles_link_tag as _get_styles_link_tag
-from lib.js_bundler import get_bundle_script_tag as _get_bundle_tag
+from lib.js_bundler import (
+    get_bundle_script_tag as _get_bundle_tag,
+    get_feature_bundle_filename as _get_feature_bundle_filename,
+)
 from lib.log import get_logger
 from lib.api_response import api_bad_request, api_internal_error, api_ok
 from lib.request_parser import parse_body
@@ -333,7 +336,7 @@ FAVICON_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
 # ── Cached bundled index.html (avoids re-reading + regex on every page load) ──
 # Keyed by (bundle_tag, styles_link_tag, html_mtime) so any of those changing
 # triggers a re-render of the cached HTML.
-_bundled_index_cache = {'tag': None, 'styles_tag': None, 'html': None, 'mtime': 0}
+_bundled_index_cache = {'tag': None, 'styles_tag': None, 'feature': None, 'html': None, 'mtime': 0}
 
 # Regex: match contiguous block of app script tags + interleaved HTML comments/blank lines.
 # Two important details:
@@ -349,10 +352,45 @@ _bundled_index_cache = {'tag': None, 'styles_tag': None, 'html': None, 'mtime': 
 #      fires multiple times (.*? doesn't cross \n → bundle injected per-block →
 #      duplicate-IIFE crash) or matches enormous spans ([\s\S]*? backtracks across
 #      <head> meta tags etc).
+# The SINGLE source of truth for "which static/js/<path> is an app script the
+# bundle replaces". Both the strip regex below AND the is_stripped_app_script()
+# predicate consume this ONE sub-pattern, so a test can drive the predicate to
+# assert manifest↔regex parity without re-typing (and thus drifting from) the
+# pattern. The `(?!bundle-)` negative lookahead excludes the built bundle tag
+# itself (bundle-<hash>.js) so re-serving the cached HTML doesn't strip its own
+# injected tag. See CLAUDE.md §3.2.1 and tests/test_bundle_manifest_parity.py.
+_APP_SCRIPT_SRC_SUBPATTERN = r'static/js/(?!bundle-)[\w./-]+\.js'
+
+# Predicate form of the sub-pattern above (anchored at start). True iff the
+# given <script src> value is an app script _APP_SCRIPTS_RE would strip — i.e.
+# a file the bundle MUST rebuild. Used by the parity test to close the
+# regex↔manifest edge structurally (never a re-typed copy of the pattern).
+_APP_SCRIPT_SRC_RE = re.compile(_APP_SCRIPT_SRC_SUBPATTERN)
+
+
+def is_stripped_app_script(src_attr):
+    """Return True iff ``src_attr`` names an app script the bundle replaces.
+
+    ``src_attr`` is a ``<script>`` ``src`` value (e.g.
+    ``"static/js/foo.js?v=1"``). Returns True for every app script the
+    ``_APP_SCRIPTS_RE`` strip pass removes from the served HTML, and False for
+    the built ``bundle-<hash>.js`` tag (and anything not under ``static/js/``).
+    Shares ``_APP_SCRIPT_SRC_SUBPATTERN`` with the strip regex so the two can
+    never diverge.
+
+    Args:
+        src_attr: The raw ``src`` attribute value of a ``<script>`` tag.
+
+    Returns:
+        True if this src would be stripped as an app script, else False.
+    """
+    return bool(_APP_SCRIPT_SRC_RE.match(src_attr or ''))
+
+
 _APP_SCRIPTS_RE = re.compile(
-    r'(?:(?:<!--[^<]*?-->\n)|(?:<script defer src="static/js/(?!bundle-)[\w./-]+\.js[^"]*"[^>]*></script>\n)|(?:\s*\n))*'
-    r'<script defer src="static/js/(?!bundle-)[\w./-]+\.js[^"]*"[^>]*></script>\n'
-    r'(?:(?:<!--[^<]*?-->\n)|(?:<script defer src="static/js/(?!bundle-)[\w./-]+\.js[^"]*"[^>]*></script>\n)|(?:\s*\n))*'
+    r'(?:(?:<!--[^<]*?-->\n)|(?:<script defer src="' + _APP_SCRIPT_SRC_SUBPATTERN + r'[^"]*"[^>]*></script>\n)|(?:\s*\n))*'
+    r'<script defer src="' + _APP_SCRIPT_SRC_SUBPATTERN + r'[^"]*"[^>]*></script>\n'
+    r'(?:(?:<!--[^<]*?-->\n)|(?:<script defer src="' + _APP_SCRIPT_SRC_SUBPATTERN + r'[^"]*"[^>]*></script>\n)|(?:\s*\n))*'
 )
 
 # Regex: match the app stylesheet `<link>` tag (with whatever ?v=… is in the
@@ -373,6 +411,22 @@ def index_page():
         resp.headers['Cache-Control'] = 'private, no-cache'
         return resp
 
+    # Deferred feature bundle (lazy-loaded by static/js/feature-loader.js). We
+    # expose its hashed URL to the page as window.__FEATURE_BUNDLE_SRC__ via a
+    # tiny inline <script> injected right before the core bundle tag. None when
+    # there is nothing to defer (dev fallback / empty deferred manifest) — the
+    # loader then no-ops and the deferred entry-point stubs are never installed.
+    feature_name = None
+    try:
+        feature_name = _get_feature_bundle_filename()
+    except Exception as _e_feat:
+        logger.debug('[Index] feature bundle unavailable: %s', _e_feat)
+    if feature_name:
+        feature_tag = ('<script>window.__FEATURE_BUNDLE_SRC__='
+                       f'"static/js/{feature_name}";</script>\n')
+    else:
+        feature_tag = ''
+
     # Use cached version if bundle tag, styles tag, AND index.html mtime
     # are all unchanged. Any of those changing → rebuild the served HTML.
     html_path = os.path.join(BASE_DIR, 'index.html')
@@ -383,6 +437,7 @@ def index_page():
         html_mtime = 0
     if (_bundled_index_cache['tag'] == bundle_tag
             and _bundled_index_cache['styles_tag'] == styles_tag
+            and _bundled_index_cache['feature'] == feature_tag
             and _bundled_index_cache['mtime'] == html_mtime
             and _bundled_index_cache['html']):
         resp = make_response(_bundled_index_cache['html'])
@@ -393,17 +448,20 @@ def index_page():
     # Read index.html and rewrite both:
     #   1. The contiguous block of <script defer src="static/js/*.js"> tags
     #      → single bundle tag with content-hashed filename.
-    #   2. The single <link rel="stylesheet" href="static/styles.css?v=…">
-    #      → content-hashed query string (lib/css_bundler.py).
+    #   2. The single <link rel="stylesheet" href="static/styles.css">
+    #      → hashed minified file static/styles-<hash>.css (lib/css_bundler.py).
     try:
         with open(html_path, 'r', encoding='utf-8') as f:
             html = f.read()
 
-        html = _APP_SCRIPTS_RE.sub(bundle_tag + '\n', html)
+        # feature_tag prepended so window.__FEATURE_BUNDLE_SRC__ is defined
+        # BEFORE the core bundle (which contains feature-loader.js) executes.
+        html = _APP_SCRIPTS_RE.sub(feature_tag + bundle_tag + '\n', html)
         html = _APP_STYLES_RE.sub(styles_tag, html)
 
         _bundled_index_cache['tag'] = bundle_tag
         _bundled_index_cache['styles_tag'] = styles_tag
+        _bundled_index_cache['feature'] = feature_tag
         _bundled_index_cache['html'] = html
         _bundled_index_cache['mtime'] = html_mtime
 
@@ -448,6 +506,32 @@ def dashboard_page():
     """
     return send_from_directory(os.path.join(BASE_DIR, 'static'),
                                 'dashboard.html')
+
+
+@common_bp.route('/admin')
+@common_bp.route('/admin/')
+def admin_page():
+    """Relay-operator admin console (multi-user mode).
+
+    Standalone HTML (``static/admin.html``) that reuses the dashboard
+    shell and hosts the relay-admin panels (users / pricing / redeem
+    codes / payments) previously embedded as hidden Settings tabs.
+
+    The page itself is ALWAYS served — there is no server-side gate on
+    the route, so it can never 401 a browser (per the project's "never
+    trap a frontend user" rule). Authorization is decided client-side
+    by ``static/js/relay-admin.js`` (mode must be ``multi-user`` and the
+    principal must hold the ``admin`` scope) AND enforced server-side by
+    every ``/api/v1/users`` / ``/api/v1/billing`` endpoint it calls. A
+    non-admin sees only the "需要管理员权限" notice and cannot mutate
+    anything.
+
+    Settings (in ``index.html``) is therefore pure single-user config;
+    managing OTHER users lives here, parallel to the customer-facing
+    ``/dashboard``.
+    """
+    return send_from_directory(os.path.join(BASE_DIR, 'static'),
+                                'admin.html')
 
 @api_v1_common_bp.route('/api/v1/features')
 def features():
@@ -505,6 +589,13 @@ def health_check():
     from lib.database import _BACKEND, db_available
     from lib.version import __version__
     result = {'ok': True, 'ts': int(time.time() * 1000), 'db_ok': db_available, 'version': __version__}
+
+    # Optional native mobile-client download URL (e.g. a GitHub Releases link).
+    # Empty by default — the Settings footer entry stays hidden until an
+    # operator sets TOFU_MOBILE_CLIENT_URL, so no dead button ever ships.
+    _mobile_url = (os.environ.get('TOFU_MOBILE_CLIENT_URL') or '').strip()
+    if _mobile_url:
+        result['mobile_client_url'] = _mobile_url
 
     # Report the active backend ('pg' or 'sqlite') — NOT a hardcoded value,
     # which previously mislabeled every PostgreSQL deployment as sqlite.

@@ -115,7 +115,7 @@ function _applyModelUI(modelId) {
   const toggle = document.getElementById("presetToggle");
   if (toggle) {
     toggle.setAttribute("data-model", modelId);
-    toggle.setAttribute("data-brand", brand);
+    toggle.setAttribute("data-brand", String(brand));
     const iconEl = toggle.querySelector(".ps-icon");
     const labelEl = toggle.querySelector(".ps-label");
     if (labelEl) {
@@ -204,6 +204,14 @@ function _reflowToolbar() {
   if (!bar) return;
   const inputInner = document.querySelector('.input-inner');
   if (!inputInner) return;
+
+  /* ★ Bail if the input area is hidden (e.g. Paper Reading Mode sets
+   * .input-area display:none). While hidden, every child's
+   * getBoundingClientRect() returns width 0, so the measured sum collapses
+   * and we'd write the Math.max(480) floor → a scrunched toolbar that
+   * persists after returning to chat. Skip entirely; exitPaperMode()
+   * re-runs the reflow once the area is visible again. */
+  if (inputInner.offsetParent === null) return;
 
   /* 1. Blow out max-width so toolbar lays out naturally */
   inputInner.style.transition = 'none';
@@ -446,9 +454,9 @@ function _applyImageGenUI(enabled) {
     ? t('ig.placeholder')
     : 'Type your message...';
   const hint = document.getElementById('inputHint');
-  if (hint) hint.textContent = imageGenMode
+  if (hint) hint.innerHTML = _renderHintHtml(imageGenMode
     ? t('ig.hint')
-    : _inputSendHintText();
+    : _inputSendHintText());
   /* ★ Reflow toolbar only if the mode actually changed — switching between
    * ig-active / normal swaps the visible toolbar so re-measure is needed.
    * But on conv switch where both convs have imageGenMode=false, skip. */
@@ -500,10 +508,10 @@ function _saveConvToolState() {
   conv.swarmEnabled = !!swarmEnabled;
   conv.endpointEnabled = !!endpointEnabled;
   conv.autopilotEnabled = !!autopilotEnabled;
+  conv.activeFlow = activeFlow || '';
   conv.imageGenEnabled = !!imageGenEnabled;
   conv.imageGenMode = !!imageGenMode;
   conv.humanGuidanceEnabled = !!humanGuidanceEnabled;
-  conv.agentBackend = activeAgentBackend || 'builtin';
   /* ★ FIX: Sync projectPath from the UI-visible projectState to the conv object.
    * Without this, conv.projectPath can diverge from projectState when:
    *  (a) A new conv is created (has no projectPath property at all)
@@ -584,6 +592,7 @@ function _restoreConvToolState(conv) {
   _applySwarmUI(!!conv.swarmEnabled);
   _applyEndpointUI(!!conv.endpointEnabled);
   _applyAutopilotUI(!!conv.autopilotEnabled);
+  _applyFlowUI(conv.activeFlow || '');
   _applyImageGenToolUI(!!conv.imageGenEnabled);
   _applyImageGenUI(!!conv.imageGenMode);
   _applyHumanGuidanceUI(!!conv.humanGuidanceEnabled);
@@ -608,30 +617,33 @@ function _restoreConvToolState(conv) {
     document.querySelectorAll('#igResolutionBar .ig-pill').forEach(b =>
       b.classList.toggle('active', b.dataset.res === _igSelectedResolution));
   }
-  _applyAutoTranslateUI(conv.autoTranslate !== undefined ? !!conv.autoTranslate : true);
-  /* ★ Restore agent backend selection per-conversation */
-  const _savedBackend = conv.agentBackend || 'builtin';
-  if (_savedBackend !== activeAgentBackend) {
-    activeAgentBackend = _savedBackend;
-    // Restore capabilities from cache
-    if (_agentBackendCache) {
-      const b = _agentBackendCache.find(x => x.name === activeAgentBackend);
-      if (b) _agentBackendCapabilities = b.capabilities || {};
-    }
-    _applyAgentBackendUI();
-    _applyBackendCapabilities();
+  /* ★ Auto-translate toggle: restore the per-conv frozen value, BUT never pull
+   *   a live global-ON down to a conv that was frozen OFF — otherwise opening
+   *   an old conversation silently turns the user's global "auto-translate on"
+   *   off, and the on-open retro-translate (convAutoTranslateEffective, which
+   *   reads this same global) never fires. When the global is ON we keep it ON;
+   *   the per-conv freeze still governs the in-flight send path via
+   *   convAutoTranslate. */
+  if (typeof autoTranslate !== 'undefined' && autoTranslate) {
+    _applyAutoTranslateUI(true);
+  } else {
+    _applyAutoTranslateUI(convAutoTranslate(conv));
   }
   if (typeof updateSubmenuCounts === 'function') updateSubmenuCounts();
   if (typeof updateContextBar === 'function') updateContextBar();
+  /* ★ Re-filter the cross-conversation presence strip to this conversation's
+   *   project root immediately on switch (else it lags up to one 5s tick). */
+  if (typeof presenceRefresh === 'function') presenceRefresh();
+  /* ★ If the Project Brain panel is open, re-resolve its feed to the new
+   *   conversation's project (two projects must never bleed into one view). */
+  if (typeof projectBrainRefresh === 'function') projectBrainRefresh();
+  /* ★ Re-pull the always-visible per-conversation Brain Influence bar with
+   *   the NEW convId so it re-renders for this conversation (or hides). */
+  if (typeof convInfluenceRefresh === 'function') convInfluenceRefresh();
   /* ★ Reflow toolbar after restoring conv tool state (toolbar width may differ). */
   _scheduleReflow();
 }
 function _resetToolsToDefaults() {
-  // ★ Reset agent backend to builtin
-  activeAgentBackend = 'builtin';
-  _agentBackendCapabilities = null;
-  _applyAgentBackendUI();
-  _applyBackendCapabilities();
   config.thinkingDepth = config.defaultThinkingDepth;   // ← reset to default depth BEFORE applying model UI (let _applyModelUI normalize)
   _applyModelUI(serverModel);
   _applySearchModeUI("multi");
@@ -641,10 +653,12 @@ function _resetToolsToDefaults() {
   _applyMemoryUI(true);
   _applySwarmUI(true);
   _applyEndpointUI(false);
+  _applyAutopilotUI(true);
+  _applyFlowUI('');
   _applyImageGenToolUI(false);
   _applyImageGenUI(false);
   if (typeof paperMode !== 'undefined' && paperMode && typeof exitPaperMode === 'function') exitPaperMode();
-  _applyAutoTranslateUI(true);
+  _applyAutoTranslateUI(convAutoTranslate(null));
   /* ★ Reset image gen creative mode settings to defaults */
   _igSelectedAspect = '1:1';
   _igSelectedResolution = '1K';
@@ -828,6 +842,8 @@ function _resetToolsToDefaults() {
     document.addEventListener("dragenter", (e) => {
       e.preventDefault();
       if (!e.dataTransfer || !e.dataTransfer.types.includes("Files")) return;
+      // Project modal open → the folder browser owns file drops (save-to-disk).
+      if (window._tofuProjectModalOpen) return;
       _dragCounter++;
       if (_dragCounter === 1 && overlay) {
         overlay.classList.add("visible");
@@ -857,6 +873,10 @@ function _resetToolsToDefaults() {
       }
     });
     document.addEventListener("drop", async (e) => {
+      // Project modal open → the folder browser's capture-phase handler saves
+      // the file to disk and stopPropagation()s; if a drop lands OUTSIDE the
+      // browser box we simply ignore it rather than attaching to chat.
+      if (window._tofuProjectModalOpen) return;
       e.preventDefault();
       _dragCounter = 0;
       if (overlay) overlay.classList.remove("visible");
@@ -962,7 +982,9 @@ function _resetToolsToDefaults() {
   /* ★ DB-first boot: conversations[] starts empty and is populated by
    *   loadConversationsFromServer() inside initActiveTasks().
    *   The sidebar shows a brief loading indicator (~16ms) until the
-   *   server responds.  This eliminates all localStorage desync bugs. */
+   *   server responds.  This eliminates all localStorage desync bugs.
+   *   On failure we fall back to the IndexedDB cache + a backoff retry
+   *   (see _bootReconnectWithBackoff below). */
   /* ★ Restore last active conversation from sessionStorage (if any).
    *   If the conv exists on the server, we'll navigate to it after loading.
    *   Otherwise, fall back to the most recent conversation. */
@@ -980,7 +1002,29 @@ function _resetToolsToDefaults() {
     _vlmRestoreState().catch(e => console.warn('[VLM-Restore] Failed:', e));
   }
 
+  /* ★ Paint the sidebar from the IndexedDB cache IMMEDIATELY, before the
+   *   server round-trip. On a flaky tunnel / mobile network the boot fetch
+   *   can throw (`Failed to fetch`) and previously left a dead "Loading…"
+   *   placeholder. Cache-first first-paint shows real (opened) conversations
+   *   with zero network dependency; the server list reconciles them in-place
+   *   when it arrives (id-keyed merge). */
+  if (typeof hydrateSidebarFromCache === 'function') {
+    hydrateSidebarFromCache().catch(e => debugLog(`cache hydrate: ${e.message}`, 'warn'));
+  }
+
   initActiveTasks().then(() => {
+    /* ★ Decide reconnect by OBSERVABLE OUTCOME, not by a thrown error.
+     *   loadConversationsFromServer swallows Failed to fetch (try/catch →
+     *   debugLog) and RESOLVES, so the .catch below never fires on the tunnel
+     *   drop it targets. serverLoadOk() is the truth: false on throw / !resp.ok
+     *   (→ reconnect), true on a real 200-with-data OR a legitimate 304. */
+    const _ok = (typeof serverLoadOk === 'function') ? serverLoadOk() : true;
+    if (!_ok) {
+      debugLog('[boot] server load did not succeed — starting reconnect backoff', 'warn');
+      _bootReconnectWithBackoff();
+    } else {
+      _clearBootReconnectBanner();
+    }
     renderConversationList();
     /* ★ Try to restore the last active conversation from before refresh */
     const restoredConv = _restoredConvId && conversations.find(c => c.id === _restoredConvId);
@@ -996,30 +1040,28 @@ function _resetToolsToDefaults() {
     }
     // After task reconnection, resume any pending translation tasks for active conv
     if (activeConvId) _resumePendingTranslations(activeConvId);
+    /* ★ Re-attempt any durable pending-sync messages (poor-network send
+     *   failures carried across a reload) once the conv list is loaded. */
+    if (typeof _flushPendingSyncs === 'function') _flushPendingSyncs('boot');
   }).catch(e => {
     debugLog(`Boot load failed: ${e.message}`, 'warn');
-    /* Even if server load fails, the app is still usable — user can create new chats */
+    /* Even if server load fails, the app is still usable — user can create new
+     *   chats, and cached conversations are already painted. Show a visible,
+     *   non-blocking "reconnecting" state and retry with backoff. */
     renderConversationList();
+    _bootReconnectWithBackoff();
   });
   if (typeof _initSelectionPopup === "function") _initSelectionPopup();
-  loadPricing();
   loadProjectStatus();
-  /* ★ Pre-fetch agent backend availability for the backend selector dropdown */
-  _fetchAgentBackends().catch(() => {});
   _updateAutoApplyUI();
   _applyAutoTranslateUI();
-  setInterval(() => {
-    if (document.visibilityState !== "visible" || _editingMsgIdx !== null) return;
-    /* Yield to pending input: the merge + conv-list rebuild is ~tens of ms of
-     * main-thread work; running it on a bare timer adds input delay (poor INP)
-     * when a click lands mid-poll. requestIdleCallback defers it until the main
-     * thread is free. Fallback to a plain call where rIC is unavailable. */
-    const _poll = () => loadConversationsFromServer();
-    if (typeof requestIdleCallback === "function")
-      requestIdleCallback(_poll, { timeout: 5000 });
-    else
-      _poll();
-  }, 60000);
+  /* Visible-idle conversation-list reconciliation is owned by the SINGLE
+   * fully-guarded reconciler `_crossDeviceReconcile` (core/cross_tab_sync.js).
+   * A second timer used to live here on a 60s cadence but with a WEAKER guard
+   * (it omitted the `activeStreams.size===0` check), so it could fire a
+   * full list merge + re-render mid-stream — needless churn and a divergent
+   * contract across timers. Consolidated into the one reconciler, which now
+   * carries the requestIdleCallback INP-yield this timer contributed. */
   // ── Tab visibility: resume pending translations when user switches back ──
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible' && activeConvId) {
@@ -1050,4 +1092,89 @@ function _resetToolsToDefaults() {
   }
   // Signal to loading-guard stubs that all scripts have loaded (MUST run even on error)
   if (typeof _markScriptsLoaded === 'function') _markScriptsLoaded();
+
+  /* ── Boot reconnect: visible non-blocking banner + guarded backoff retry ──
+   *
+   * When the initial conversation load fails (common through a flaky VS Code
+   * port-forward tunnel on mobile), the sidebar has already been painted from
+   * the IndexedDB cache. We show a small, dismissible banner explaining that
+   * we're showing CACHED conversations and reconnecting — NOT that the list is
+   * complete — then retry loadConversationsFromServer() with exponential
+   * backoff. On success the id-keyed merge reconciles the cached shells and
+   * the banner clears.
+   *
+   * Concurrency: _bootLoadInFlight guards against stacking with the 60s
+   * refresh timer / cross-tab triggers so a flaky tunnel can't spawn a pile of
+   * overlapping fetches. */
+  function _showBootReconnectBanner() {
+    if (document.getElementById('boot-reconnect-banner')) return;
+    const banner = document.createElement('div');
+    banner.id = 'boot-reconnect-banner';
+    /* If the DB-unavailable banner (z-index 10000, top:0) is already showing,
+     *   offset below it so the two STACK instead of overlapping at top:0 (the
+     *   9999 boot banner would otherwise be hidden behind the 10000 DB one). */
+    const _dbBanner = document.getElementById('db-warning-banner');
+    const _topOffset = _dbBanner ? (_dbBanner.offsetHeight || 44) : 0;
+    banner.style.cssText =
+      'position:fixed;top:' + _topOffset + 'px;left:0;right:0;z-index:9999;' +
+      'background:#b45309;color:#fff;padding:8px 14px;font-size:13px;' +
+      'text-align:center;box-shadow:0 2px 8px rgba(0,0,0,.3);' +
+      'display:flex;align-items:center;justify-content:center;gap:8px;';
+    /* SVG glyph per CLAUDE.md §3.4 — no emoji for UI status. */
+    const _bannerText = (typeof t === 'function')
+      ? t('conn.bootReconnect')
+      : '离线，显示缓存的对话，正在重连…';
+    banner.innerHTML =
+      '<span style="display:inline-flex"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg></span>' +
+      '<span>' + _bannerText + '</span>';
+    document.body.prepend(banner);
+  }
+
+  function _clearBootReconnectBanner() {
+    const b = document.getElementById('boot-reconnect-banner');
+    if (b) b.remove();
+  }
+
+  async function _bootReconnectWithBackoff() {
+    /* Idempotent: the boot promise's .then(!ok) and .catch both call this, and
+     *   though a promise settles once (so a single boot can't double-fire), we
+     *   don't want to depend on that invariant — a second entry (future caller,
+     *   re-boot path) must NOT spawn a concurrent backoff loop / second banner.
+     *   window-scoped so it survives even if this IIFE is re-evaluated. */
+    if (window._bootReconnectStarted) {
+      debugLog('[boot-reconnect] already running — not starting a second loop', 'warn');
+      return;
+    }
+    window._bootReconnectStarted = true;
+    _showBootReconnectBanner();
+    const _delays = [2000, 4000, 8000, 15000, 30000];
+    try {
+      for (let i = 0; i < _delays.length; i++) {
+        await new Promise(r => setTimeout(r, _delays[i]));
+        if (window._bootLoadInFlight) continue;  // another load (timer/cross-tab) is running
+        window._bootLoadInFlight = true;
+        try {
+          await loadConversationsFromServer();
+          /* The call swallows errors + resolves, so success is the observable
+           *   flag, not the absence of a throw. */
+          if (typeof serverLoadOk !== 'function' || serverLoadOk()) {
+            _clearBootReconnectBanner();
+            renderConversationList();
+            debugLog(`[boot-reconnect] recovered on attempt ${i + 1}`, 'success');
+            return;
+          }
+          debugLog(`[boot-reconnect] attempt ${i + 1}: still not reachable`, 'warn');
+        } catch (e) {
+          debugLog(`[boot-reconnect] attempt ${i + 1} threw: ${e.message}`, 'warn');
+        } finally {
+          window._bootLoadInFlight = false;
+        }
+      }
+      debugLog('[boot-reconnect] gave up after backoff; 60s timer will keep trying', 'warn');
+    } finally {
+      /* Release the idempotency latch so a LATER genuine failure (or the 60s
+       *   timer detecting a fresh drop) can restart the backoff loop. */
+      window._bootReconnectStarted = false;
+    }
+  }
 })();

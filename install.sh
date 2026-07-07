@@ -169,15 +169,29 @@ TOFU_INSTALL_LOG="${_TOFU_LOG_DIR}/install-$(date +%Y%m%d_%H%M%S).log"
 # Strip ANSI colour escapes BEFORE tee'ing into the file so the log is
 # readable as plain text (terminals still see the coloured stream).
 # Uses process substitution: terminal gets raw, log gets sed-stripped.
+#
+# PORTABILITY: `stdbuf` ships with GNU coreutils and is ABSENT on stock
+# macOS/BSD; `sed -u` (unbuffered) is a GNU extension BSD sed rejects.
+# Using either unconditionally makes this `exec` redirect fail on macOS,
+# which aborts the whole install before a single package is fetched
+# (symptom: empty tofu dir). So probe for both and degrade gracefully.
+_TOFU_STDBUF=""
+if command -v stdbuf &>/dev/null; then
+    _TOFU_STDBUF="stdbuf -oL"
+fi
+_TOFU_SED_U=""
+if command -v sed &>/dev/null && echo x | sed -u '' &>/dev/null; then
+    _TOFU_SED_U="-u"
+fi
 if command -v sed &>/dev/null; then
-    exec > >(stdbuf -oL tee >(stdbuf -oL sed -u $'s/\x1b\\[[0-9;]*[a-zA-Z]//g' >> "$TOFU_INSTALL_LOG")) 2>&1
+    exec > >($_TOFU_STDBUF tee >($_TOFU_STDBUF sed $_TOFU_SED_U $'s/\x1b\\[[0-9;]*[a-zA-Z]//g' >> "$TOFU_INSTALL_LOG")) 2>&1
 else
-    exec > >(stdbuf -oL tee -a "$TOFU_INSTALL_LOG") 2>&1
+    exec > >($_TOFU_STDBUF tee -a "$TOFU_INSTALL_LOG") 2>&1
 fi
 # Record key metadata at the top of the log for future debugging.
 {
     echo "──────────────────────────────────────────────"
-    echo "tofu install.sh — $(date -Iseconds)"
+    echo "tofu install.sh — $(date -Iseconds 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)"
     echo "host:    $(hostname 2>/dev/null || echo unknown)"
     echo "user:    $(whoami 2>/dev/null || echo unknown)"
     echo "args:    $0 $*"
@@ -399,7 +413,7 @@ if [[ -z "$CONDA_BIN" ]]; then
         MF_URLS=("${_USER_MIRRORS[@]}" "${MF_URLS[@]}")
     fi
     if [[ "${_SKIP_MINIFORGE_DOWNLOAD:-0}" -ne 1 ]]; then
-    TMP_INSTALLER="$(mktemp -t miniforge.XXXXXX.sh)"
+    TMP_INSTALLER="$(mktemp "${TMPDIR:-/tmp}/miniforge.XXXXXX")"
     # Don't override the global EXIT trap (which is the install-log reminder);
     # use a RETURN-style cleanup at the end of this branch.
     # Force IPv4 — many corp networks return AAAA records but have no v6
@@ -710,6 +724,14 @@ CONDA_PKGS=(
     "flask>=3.0"
     "flask-compress>=1.14"
     "requests>=2.31"
+    # jinja2 / urllib3 / pyyaml — transitive deps (jinja2←flask/quart,
+    # urllib3←requests, pyyaml used directly by routes/api_docs.py for the
+    # YAML OpenAPI spec). Pinned in requirements.txt to CVE-clearing floors;
+    # listed here so the drift guard passes and clean envs get the fixed
+    # versions instead of whatever the resolver happens to pull transitively.
+    "jinja2>=3.1.6"
+    "urllib3>=1.26.19"
+    "pyyaml>=6.0"
     "psutil>=5.9"
     "playwright>=1.40"
     "pillow>=10.0"
@@ -732,6 +754,16 @@ CONDA_PKGS=(
     "xlrd>=2.0"
     "olefile>=0.46"
     "mcp>=1.0"
+    # orjson — fast JSON encoder; imported by routes/chat.py for chat
+    # snapshot serialisation. Hard dep: the server won't boot without it.
+    "orjson>=3.9"
+    # sqlalchemy Core — lib/database/_core_schema.py builds the chat
+    # persistence schema with it. Hard dep: imported at server boot.
+    "sqlalchemy>=2.0"
+    # markdown — server-side Markdown rendering. Hard dep at import time.
+    "markdown>=3.4"
+    # tiktoken — exact BPE tokenizer tier for lib/token_counter.
+    "tiktoken>=0.5"
     # PDF parsing (fitz) — used in lib/pdf_parser and routes/paper
     "pymupdf>=1.24"
     # uv / uvx — used by lib/mcp/client.py to launch MCP servers
@@ -785,6 +817,30 @@ PIP_ONLY_PKGS=(
     "regex>=2024.0"        # required by dateparser
     "tzlocal>=5.0"         # required by dateparser
 )
+
+# ── Drift guard: every dep declared in requirements.txt must be covered by
+#    CONDA_PKGS or PIP_ONLY_PKGS (or installed by a dedicated step below).
+#    install.sh deliberately splits installs across conda/pip to dodge the
+#    lxml6/icu78/PG18 deadlock, so we can't just `pip install -r`. Instead we
+#    fail FAST here if the hand-maintained lists fall out of sync with
+#    requirements.txt — far better than a ModuleNotFoundError at server boot.
+_REQ_FILE="${INSTALL_DIR:-$PWD}/requirements.txt"
+if [[ -f "$_REQ_FILE" ]]; then
+    _norm() { tr 'A-Z' 'a-z' | sed -E 's/[<>=!~; ].*//; s/_/-/g; s/[[:space:]]//g'; }
+    # Packages installed by dedicated steps, not the two arrays:
+    #   tofu-search (own step), docling (--with-docling only).
+    _EXEMPT=$'tofu-search\ndocling'
+    _covered="$(printf '%s\n' "${CONDA_PKGS[@]}" "${PIP_ONLY_PKGS[@]}" | _norm; printf '%s\n' "$_EXEMPT")"
+    _declared="$(grep -vE '^\s*#' "$_REQ_FILE" | grep -vE '^\s*$' | _norm | sort -u)"
+    _missing="$(comm -23 <(printf '%s\n' "$_declared" | sort -u) <(printf '%s\n' "$_covered" | sort -u))"
+    if [[ -n "$_missing" ]]; then
+        warn "requirements.txt declares packages NOT covered by install.sh:"
+        printf '%s\n' "$_missing" | sed 's/^/    - /' >&2
+        warn "Add each to CONDA_PKGS (conda-forge) or PIP_ONLY_PKGS (pip) above."
+        fail "install.sh package lists are out of sync with requirements.txt."
+    fi
+    ok "Dependency lists cover all of requirements.txt"
+fi
 
 # ── Heal broken envs: remove any pip-installed versions of these deps ──
 # A common failure mode on older hosts (CentOS 7 / glibc 2.17) is that an
@@ -938,14 +994,26 @@ fi
 #   without user intervention.
 _safe_pip_install() {
     local _log
-    _log="$(mktemp -t tofu_pip.XXXXXX)"
+    _log="$(mktemp "${TMPDIR:-/tmp}/tofu_pip.XXXXXX")"
     local _rc=0
     (
-        export PIP_USER=0
+        # Some hosts force --user globally via the PIP_USER env var OR a
+        # pip.conf 'user=true' (~/.pip/pip.conf, ~/.config/pip/pip.conf,
+        # /etc/pip.conf). With --user active, pip refuses --prefix:
+        # "Can not combine '--user' and '--prefix'". Setting PIP_USER=0 is
+        # NOT enough — pip still treats the var as set, and a pip.conf
+        # default is untouched. Neutralise BOTH sources:
+        #   - env: unset PIP_USER / PYTHONUSERBASE
+        #   - config files: PIP_CONFIG_FILE=/dev/null makes pip ignore every
+        #     pip.conf (the index URL comes from PIP_INDEX_URL, set elsewhere,
+        #     so the corp mirror still applies).
+        #   - CLI: --no-user as a final belt-and-braces override.
+        unset PIP_USER
         unset PYTHONUSERBASE
+        export PIP_CONFIG_FILE=/dev/null
         # Tee so the user still sees pip's output live; capture to log
         # for the post-mortem permission check.
-        python -m pip install --prefix "$ENV_PREFIX" "$@" 2>&1 | tee "$_log"
+        python -m pip install --no-user --prefix "$ENV_PREFIX" "$@" 2>&1 | tee "$_log"
         exit "${PIPESTATUS[0]}"
     )
     _rc=$?
@@ -998,33 +1066,107 @@ if [[ ${#PIP_ONLY_PKGS[@]} -gt 0 ]]; then
     fi
 fi
 
-# ── Optional: bundled internal MCP servers (hope-mcp, xuecheng-mcp) ──
-# personal/internal exports include sibling repos under vendor/<name>/.
-# Install them so the MCP tab's "Install" button (which spawns
-# `<name>-mcp` on PATH) works out of the box. Skipped silently if
-# vendor/ doesn't exist (opensource exports / fresh git clone).
-if [[ -d "${INSTALL_DIR}/vendor" ]]; then
-    step "Installing bundled internal MCP servers"
-    _BUNDLED_MCPS=()
-    for _mcp in hope-mcp xuecheng-mcp; do
-        _path="${INSTALL_DIR}/vendor/${_mcp}"
-        if [[ -d "$_path" && -f "$_path/pyproject.toml" ]]; then
-            _BUNDLED_MCPS+=("$_path")
-        fi
-    done
-    if [[ ${#_BUNDLED_MCPS[@]} -eq 0 ]]; then
-        info "No bundled MCP repos under vendor/ — skipping"
-    elif ! python -c "import pip" 2>/dev/null; then
-        warn "pip not available — cannot install bundled MCP servers"
-        warn "Manual recovery later: pip install ${_BUNDLED_MCPS[*]}"
-    else
-        info "Installing: ${_BUNDLED_MCPS[*]}"
-        if _safe_pip_install --upgrade "${_BUNDLED_MCPS[@]}"; then
-            ok "Bundled MCP servers installed (hope-mcp / xuecheng-mcp now on PATH)"
+# ── tofu-search — the standalone search + content-fetch pipeline ──
+# server.py lists tofu_search.fetch / tofu_search.search as CRITICAL imports,
+# so the server refuses to boot without it. Two install sources:
+#   1. A bundled wheel under vendor/ (personal/internal exports) — used when
+#      present, because corp networks point pip at an internal mirror that
+#      does NOT carry tofu-search (only public PyPI does).
+#   2. Public PyPI (opensource installs / fresh git clone on a vanilla host).
+# --no-deps is safe: its deps (requests / trafilatura / bs4 / lxml /
+# python-dateutil) are installed above, and --no-deps keeps pip from
+# shadowing conda's lxml 6.
+# A bare "import tofu_search" is NOT a safe skip condition: an OLDER copy that
+# predates a server symbol (e.g. a colleague's pre-existing env stuck on an
+# earlier release) imports fine yet is missing the names server.py / handlers
+# import, so the server still dies at boot with
+#   "ImportError: cannot import name '<symbol>' from 'tofu_search'".
+# Skip ONLY when the installed build (a) meets the requirements.txt floor AND
+# (b) exposes the exact symbols the server imports. Floor is read from
+# requirements.txt so it stays in sync with the drift guard above.
+_TS_FLOOR="$(grep -iE '^[[:space:]]*tofu-search[[:space:]]*>=' "${INSTALL_DIR:-$PWD}/requirements.txt" 2>/dev/null | sed -E 's/.*>=[[:space:]]*//; s/[^0-9.].*//' | head -1)"
+[[ -z "$_TS_FLOOR" ]] && _TS_FLOOR="0.4.0"
+_TS_SKIP_PROBE="$(cat <<PYEOF
+import sys
+try:
+    import tofu_search as ts
+    from tofu_search import fetch_page_content, looks_like_text_asset, perform_web_search  # noqa: F401
+except Exception:
+    sys.exit(1)
+def _v(s):
+    out = []
+    for p in (str(s).split('+')[0].split('.') + ['0', '0', '0'])[:3]:
+        d = ''.join(ch for ch in p if ch.isdigit())
+        out.append(int(d) if d else 0)
+    return tuple(out)
+sys.exit(0 if _v(getattr(ts, '__version__', '0')) >= _v('${_TS_FLOOR}') else 2)
+PYEOF
+)"
+if python -c "$_TS_SKIP_PROBE" 2>/dev/null; then
+    ok "tofu-search satisfies floor ${_TS_FLOOR} with required symbols — skipping"
+elif ! python -c "import pip" 2>/dev/null; then
+    warn "pip not available — cannot install tofu-search (server will fail to boot)"
+else
+    step "Installing/upgrading tofu-search (required search/fetch pipeline; need >= ${_TS_FLOOR} with server symbols)"
+    _TOFU_SEARCH_WHL=""
+    if [[ -d "${INSTALL_DIR}/vendor" ]]; then
+        _TOFU_SEARCH_WHL="$(ls -1 "${INSTALL_DIR}"/vendor/tofu_search-*.whl 2>/dev/null | { sort -V 2>/dev/null || sort; } | tail -1)"
+    fi
+    if [[ -n "$_TOFU_SEARCH_WHL" ]]; then
+        info "Installing bundled wheel: ${_TOFU_SEARCH_WHL##*/}"
+        if _safe_pip_install --no-deps --upgrade "$_TOFU_SEARCH_WHL"; then
+            ok "tofu-search installed from bundled wheel"
         else
-            warn "Bundled MCP install failed — Settings → MCP install buttons may fail"
-            warn "Retry manually: pip install ${_BUNDLED_MCPS[*]}"
+            warn "Bundled tofu-search wheel install failed — falling back to PyPI"
+            _safe_pip_install --no-deps --upgrade "tofu-search>=${_TS_FLOOR}" \
+                && ok "tofu-search installed from PyPI" \
+                || fail "tofu-search install failed — the server will not boot. Retry: pip install tofu-search"
         fi
+    else
+        info "No bundled wheel — installing from PyPI"
+        if _safe_pip_install --no-deps --upgrade "tofu-search>=${_TS_FLOOR}"; then
+            ok "tofu-search installed from PyPI"
+        else
+            warn "tofu-search install from PyPI failed."
+            warn "  If you are behind a corp mirror that lacks tofu-search, retry with public PyPI:"
+            warn "    pip install --index-url https://pypi.org/simple/ 'tofu-search>=${_TS_FLOOR}'"
+            fail "tofu-search install failed — the server will not boot without it."
+        fi
+    fi
+fi
+
+# ── Optional: bundled internal MCP servers (hope-mcp, xuecheng-mcp, llm-mcp) ──
+# These private servers aren't on PyPI, so the MCP tab's "Install" button
+# (which spawns `<name>-mcp` on PATH) can't fetch them — we must pip-install
+# the source here. Sources, in priority order:
+#   1. vendor/<name>/   — personal/internal EXPORTS bundle the source here.
+#   2. ../<name>/        — a DEV checkout: sibling repos next to this one.
+# Covering the sibling case means a developer clone (no vendor/) also gets the
+# launchers on PATH, so click-to-install is a fast handshake, not a cold pip.
+# Skipped silently if neither source exists (opensource exports).
+step "Installing bundled internal MCP servers"
+_BUNDLED_MCPS=()
+for _mcp in hope-mcp xuecheng-mcp llm-mcp; do
+    _vendor_path="${INSTALL_DIR}/vendor/${_mcp}"
+    _sibling_path="$(cd "${INSTALL_DIR}/.." 2>/dev/null && pwd)/${_mcp}"
+    if [[ -f "${_vendor_path}/pyproject.toml" ]]; then
+        _BUNDLED_MCPS+=("$_vendor_path")
+    elif [[ -f "${_sibling_path}/pyproject.toml" ]]; then
+        _BUNDLED_MCPS+=("$_sibling_path")
+    fi
+done
+if [[ ${#_BUNDLED_MCPS[@]} -eq 0 ]]; then
+    info "No bundled MCP repos (vendor/ or sibling checkout) — skipping"
+elif ! python -c "import pip" 2>/dev/null; then
+    warn "pip not available — cannot install bundled MCP servers"
+    warn "Manual recovery later: pip install ${_BUNDLED_MCPS[*]}"
+else
+    info "Installing: ${_BUNDLED_MCPS[*]}"
+    if _safe_pip_install --upgrade "${_BUNDLED_MCPS[@]}"; then
+        ok "Bundled MCP servers installed (hope-mcp / xuecheng-mcp / llm-mcp now on PATH)"
+    else
+        warn "Bundled MCP install failed — Settings → MCP install buttons may fail"
+        warn "Retry manually: pip install ${_BUNDLED_MCPS[*]}"
     fi
 fi
 
@@ -1157,8 +1299,8 @@ fi
 # so install.sh never prints "Installation complete!" on a broken env again.
 info "Verifying lxml + trafilatura + htmldate + justext + transitive deps import correctly..."
 
-_TOFU_IMPORT_PROBE='import lxml.etree, lxml_html_clean, trafilatura, htmldate, justext, courlan, dateparser, babel, tld, pytz, regex, tzlocal; print("lxml", lxml.__version__, "trafilatura", trafilatura.__version__, "htmldate", htmldate.__version__, "justext", justext.__version__)'
-_TOFU_IMPORT_ERR="$(mktemp -t tofu_import_err.XXXXXX)"
+_TOFU_IMPORT_PROBE='import lxml.etree, lxml_html_clean, trafilatura, htmldate, justext, courlan, dateparser, babel, tld, pytz, regex, tzlocal, tofu_search.search, tofu_search.fetch; from tofu_search import fetch_page_content, looks_like_text_asset, perform_web_search; import tofu_search as _ts; print("lxml", lxml.__version__, "trafilatura", trafilatura.__version__, "htmldate", htmldate.__version__, "justext", justext.__version__, "tofu_search", getattr(_ts, "__version__", "?"))'
+_TOFU_IMPORT_ERR="$(mktemp "${TMPDIR:-/tmp}/tofu_import_err.XXXXXX")"
 
 if python -c "$_TOFU_IMPORT_PROBE" 2>"$_TOFU_IMPORT_ERR"; then
     ok "Import check passed"
@@ -1171,7 +1313,7 @@ else
     # resolver can't downgrade conda's lxml 6 (the original reason we used
     # --no-deps). Constraint files apply to ALL packages pip considers,
     # not just direct asks, so any lxml downgrade attempt is blocked.
-    _TOFU_PIP_CONSTRAINT="$(mktemp -t tofu_pip_constraint.XXXXXX)"
+    _TOFU_PIP_CONSTRAINT="$(mktemp "${TMPDIR:-/tmp}/tofu_pip_constraint.XXXXXX")"
     {
         echo "lxml>=6"
         echo "libxml2>=2.14"   # ignored if not on PyPI; harmless

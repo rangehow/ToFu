@@ -181,6 +181,7 @@ class PgCursor:
             self.description = self._cursor.description
             self.rowcount = self._cursor.rowcount
             self._conn._last_used = time.monotonic()
+            self._conn._last_used_wall = time.time()
             _sql_upper = translated[:30].lstrip().upper()
             if _sql_upper.startswith(('INSERT', 'UPDATE', 'DELETE', 'CREATE', 'ALTER', 'DROP')):
                 self._conn._dirty = True
@@ -188,9 +189,15 @@ class PgCursor:
             # A SQL execution failure is a genuine, often data-affecting error.
             # Log at ERROR so it reaches error.log; the full SQL/params stay at
             # DEBUG (enable via TOFU_DB_LOG_LEVEL=DEBUG) to avoid leaking values.
-            logger.error('[DB] SQL execution failed (%s): %.120s', type(e).__name__, e)
-            logger.debug('[DB] SQL error detail: %s\n  Original: %.200s\n  Translated: %.200s\n  Params: %.200s',
-                         e, sql, translated, str(params)[:200] if params else 'None')
+            # A caller running an expected-to-fail probe (see
+            # suppress_sql_error_log in _core) demotes this to DEBUG.
+            from lib.database._core import _sql_errors_suppressed
+            if _sql_errors_suppressed():
+                logger.debug('[DB] SQL execution failed (%s) [suppressed]: %.120s', type(e).__name__, e)
+            else:
+                logger.error('[DB] SQL execution failed (%s): %.120s', type(e).__name__, e)
+                logger.debug('[DB] SQL error detail: %s\n  Original: %.200s\n  Translated: %.200s\n  Params: %.200s',
+                             e, sql, translated, str(params)[:200] if params else 'None')
             try:
                 self._conn._conn.rollback()
             except Exception as _rb_err:
@@ -208,9 +215,26 @@ class PgCursor:
         translated, is_pragma = translate_sql(sql)
         if is_pragma:
             return self
-        self._cursor.executemany(translated, params_list)
-        self.description = self._cursor.description
-        self.rowcount = self._cursor.rowcount
+        try:
+            self._cursor.executemany(translated, params_list)
+            self.description = self._cursor.description
+            self.rowcount = self._cursor.rowcount
+            self._conn._last_used = time.monotonic()
+            self._conn._last_used_wall = time.time()
+            # Mark the connection dirty so teardown COMMITs instead of
+            # rolling back — otherwise executemany-only writes are silently
+            # discarded by close_db()'s clean-reads rollback branch.
+            _sql_upper = translated[:30].lstrip().upper()
+            if _sql_upper.startswith(('INSERT', 'UPDATE', 'DELETE', 'CREATE', 'ALTER', 'DROP')):
+                self._conn._dirty = True
+        except Exception as e:
+            logger.error('[DB] SQL executemany failed (%s): %.120s', type(e).__name__, e)
+            logger.debug('[DB] executemany error detail: %s\n  Translated: %.200s', e, translated)
+            try:
+                self._conn._conn.rollback()
+            except Exception as _rb_err:
+                logger.debug('[DB] Rollback after executemany error also failed: %s', _rb_err)
+            raise
         return self
 
     def fetchone(self):
@@ -270,6 +294,11 @@ class PgConnection:
         self._dirty = False
         self._created_at = time.monotonic()
         self._last_used = time.monotonic()
+        # Wall-clock twin of _last_used. time.monotonic() FREEZES across an OS
+        # suspend (laptop lid close / VM pause / FUSE stall) while time.time()
+        # keeps advancing, so the health check needs the wall clock to notice a
+        # connection went stale during a suspend (see _test_pg_connection).
+        self._last_used_wall = time.time()
         self.row_factory = None
 
     @property
@@ -280,7 +309,32 @@ class PgConnection:
     def execute(self, sql, params=None):
         cur = self._conn.cursor()
         wrapper = PgCursor(cur, self)
-        return wrapper.execute(sql, params)
+        try:
+            return wrapper.execute(sql, params)
+        except Exception as e:
+            # Transparent one-shot reconnect on a dead-connection error, but
+            # ONLY when this connection has issued no write yet in the current
+            # transaction (self._dirty is False). A connection-level failure
+            # means nothing was committed, so re-running a clean read / the
+            # first statement is idempotent. This rescues the raw db.execute()
+            # read sites (e.g. persist_conv_messages' settings SELECT) that do
+            # NOT route through db_execute_with_retry, so a pooled connection
+            # killed by a suspend / PG restart / network flap becomes a
+            # transparent reconnect instead of a hard 500 on the user's next
+            # Send/Regen. A statement_timeout cancellation (OperationalError
+            # that is NOT a dead-connection signature) is deliberately NOT
+            # retried — only genuine connection death is.
+            etype = type(e).__name__
+            if etype in ('OperationalError', 'InterfaceError') and not self._dirty:
+                from lib.database._core import _pg_error_is_dead, _reconnect_pg_inplace
+                is_dead = (etype == 'InterfaceError') or _pg_error_is_dead(str(e))
+                if is_dead and _reconnect_pg_inplace(self):
+                    logger.warning('[DB] Transparent reconnect after dead connection '
+                                   '(%s) — retrying statement once', etype)
+                    cur = self._conn.cursor()
+                    wrapper = PgCursor(cur, self)
+                    return wrapper.execute(sql, params)
+            raise
 
     def executemany(self, sql, params_list):
         cur = self._conn.cursor()
@@ -345,22 +399,35 @@ class PgConnection:
 
 
 def _split_sql_statements(sql):
-    """Split SQL text into individual statements, respecting string literals."""
+    """Split SQL text into individual statements, respecting string literals.
+
+    A literal single quote inside a string is escaped by doubling it (``''``)
+    in both SQLite and PostgreSQL. Treat ``''`` as an escaped quote (consume
+    both, stay in-string) rather than two delimiters, otherwise a ``;`` inside
+    a literal like ``'it''s; ok'`` would wrongly split the statement and
+    corrupt the DDL/DML.
+    """
     statements = []
     current = []
     in_string = False
-    for ch in sql:
-        if ch == "'" and not in_string:
-            in_string = True
-            current.append(ch)
-        elif ch == "'" and in_string:
-            in_string = False
+    i = 0
+    n = len(sql)
+    while i < n:
+        ch = sql[i]
+        if ch == "'":
+            if in_string and i + 1 < n and sql[i + 1] == "'":
+                # Escaped quote inside a literal — consume both, stay in-string.
+                current.append("''")
+                i += 2
+                continue
+            in_string = not in_string
             current.append(ch)
         elif ch == ';' and not in_string:
             statements.append(''.join(current))
             current = []
         else:
             current.append(ch)
+        i += 1
     remaining = ''.join(current).strip()
     if remaining:
         statements.append(remaining)

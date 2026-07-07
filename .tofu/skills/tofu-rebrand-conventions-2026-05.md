@@ -1,6 +1,6 @@
 ---
 name: tofu-rebrand-conventions-2026-05
-description: After the chatui→tofu rebrand: env vars are TOFU_*; lib/env_compat.getenv_compat() reads new with CHATUI_* legacy fallback. .chatui/skills/ dir name preserved on disk; PG database name still 'chatui'
+description: After the chatui→tofu rebrand: env vars are TOFU_*; lib/env_compat.getenv_compat() reads new with CHATUI_* legacy fallback. Memory + file-history dirs later moved to .tofu/ (2026-06); PG database name still 'chatui'
 enabled: true
 tags: [convention, rebrand, env-vars, compat]
 created: 2026-05-09T06:48:02Z
@@ -49,9 +49,15 @@ see the new names.
 | What | Why |
 |---|---|
 | **PG database name `chatui`** | Renaming the live DB requires `pg_dump | pg_restore` — silent rename would lose all conv data. Default stays `chatui`; override via `TOFU_PG_DBNAME`. |
-| **`.chatui/skills/` dir** | Holds user memories. Renaming would orphan every saved memory file. Path is preserved with explanatory comments in `lib/memory/storage.py`, `CLAUDE.md`. |
-| **`.chatui/file-history/` dir** | Same reason as `.chatui/skills/` — versioned backups would be orphaned. See `lib/file_history/store.py`. |
 | **Historical files** | `paper/emnlp-demo/tofu.tex`, `benchmarks/results_*.json`, `docs/SECURITY_AUDIT_REPORT.md` etc. — historical record. |
+
+> **UPDATE (2026-06):** the memory + file-history dirs were LATER moved off the
+> `.chatui/` prefix onto the `.tofu*` artifact prefix (CLAUDE.md §3.6):
+> project memories now live at `<project>/.tofu/skills/` and file-history at
+> `<base>/.tofu/file-history/` (`lib/memory/storage.py`, `lib/file_history/store.py`).
+> Global memories moved further, out of any project, to the server store
+> `<data>/memories/global/`. So `.chatui/skills` / `.chatui/file-history` are NO
+> LONGER the active locations — only the PG database name stayed `chatui`.
 
 ## When to add a new env var
 

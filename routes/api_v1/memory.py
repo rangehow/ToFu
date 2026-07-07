@@ -50,12 +50,21 @@ _CATALOG_DL_TIMEOUT = 60                         # seconds
 
 
 def _project_path() -> str:
-    """Resolve the project_path from the request, falling back to root."""
+    """Resolve the project_path from the request, falling back to root.
+
+    The query-string branch is decoded-until-stable via the shared
+    ``decode_proxy_path_arg`` seam: a reverse proxy (VS Code ``/proxy/<port>/``)
+    can double-encode an already-encoded path, so a GET ``?project_path=…``
+    would otherwise arrive as a literal ``%2F…`` string and mis-scope the
+    memory list. The JSON-body branch is unaffected (bodies aren't URL-encoded)
+    so it takes precedence unchanged.
+    """
     explicit = None
     if request.is_json and request.get_json(silent=True):
         explicit = (request.get_json(silent=True) or {}).get('project_path')
     if not explicit:
-        explicit = request.args.get('project_path')
+        from lib.request_parser import decode_proxy_path_arg
+        explicit = decode_proxy_path_arg('project_path')
     return explicit or _PROJECT_ROOT
 
 
@@ -278,13 +287,22 @@ def skill_catalog_v1():
     from lib.memory import list_all_memories
     from lib.memory.catalog import get_catalog
     project_path = _project_path()
-    installed_ids = {
-        m['id'] for m in list_all_memories(project_path=project_path)
-        if m.get('is_package')
-    }
+    packages = [m for m in list_all_memories(project_path=project_path)
+                if m.get('is_package')]
+    installed_ids = {m['id'] for m in packages}
+    # Catalog-installed packages carry a ``.catalog_id`` marker; match on
+    # that first so e.g. catalog ``xlsx-skill`` (memory id ``xlsx``) shows
+    # as installed.  Fall back to the raw id for drag-dropped packages
+    # whose folder name happens to equal a catalog id.
+    by_catalog_id = {m['catalog_id']: m['id'] for m in packages
+                     if m.get('catalog_id')}
     catalog = get_catalog()
     for entry in catalog:
-        entry['installed'] = entry['id'] in installed_ids
+        cid = entry['id']
+        mem_id = by_catalog_id.get(cid) or (cid if cid in installed_ids
+                                            else None)
+        entry['installed'] = mem_id is not None
+        entry['installed_memory_id'] = mem_id or ''
     return jsonify({'catalog': catalog,
                     'installed_ids': sorted(installed_ids)})
 
@@ -351,6 +369,7 @@ def skill_catalog_install_v1():
         result = install_skill_package(
             bytes(buf.getvalue()), scope=scope, project_path=project_path,
             overwrite=overwrite, original_filename=f'{skill_id}.zip',
+            catalog_id=skill_id, subdir=entry.get('subdir') or None,
         )
     except InstallerError as e:
         logger.warning('[Memory.v1] Catalog install rejected (%s): %s',
@@ -369,6 +388,78 @@ def skill_catalog_install_v1():
         'install_hints': result['install_hints'],
         'catalog_id': skill_id,
     }), 201
+
+
+@api_v1_memory_bp.route('/api/v1/profile', methods=['GET'])
+@require_auth
+@api_meta(
+    summary='Get the personal-preference profile',
+    description=('Returns ``{body, items, chars, cap, over_cap, pending}`` — '
+                 'the bounded, always-injected user-preference profile. '
+                 '``items`` is the structured per-preference view '
+                 '(``[{header, text}]``) the settings UI edits; ``body`` is '
+                 'the raw markdown. ``pending`` is retained for back-compat '
+                 '(now usually empty — new preferences auto-apply).'),
+    tags=['memory'],
+)
+def get_user_profile_v1():
+    from lib.memory import user_profile as up
+    from .auth import current_auth
+    scope = up.resolve_profile_scope(current_auth())
+    body = up.load_profile(scope)
+    return jsonify({
+        'body': body,
+        'items': up.parse_items(body),
+        'chars': len(body),
+        'cap': up.USER_PROFILE_CHAR_CAP,
+        'over_cap': up.profile_over_cap(body, scope),
+        'pending': up.load_pending(),
+    })
+
+
+@api_v1_memory_bp.route('/api/v1/profile', methods=['PUT'])
+@require_auth
+@api_meta(
+    summary='Hand-edit the personal-preference profile',
+    description=('Body: ``{items: [{header, text}]}`` (structured, preferred) '
+                 'OR ``{body}`` (raw markdown). An empty items list / body '
+                 'clears the profile. Returns the save-result plus the '
+                 're-parsed ``items``.'),
+    tags=['memory'],
+)
+def put_user_profile_v1():
+    from lib.memory import user_profile as up
+    from .auth import current_auth
+    scope = up.resolve_profile_scope(current_auth())
+    data = parse_body()
+    if isinstance(data.get('items'), list):
+        res = up.save_items(data['items'], scope)
+    else:
+        res = up.save_profile(data.get('body', ''), scope)
+    res['items'] = up.parse_items(scope=scope)
+    return jsonify(res)
+
+
+@api_v1_memory_bp.route('/api/v1/profile/pending/<pending_id>',
+                         methods=['POST'])
+@require_auth
+@api_meta(
+    summary='Confirm or dismiss a staged preference proposal',
+    description=('Body: ``{accept: bool, text?: str}``. On accept the '
+                 '(optionally edited) preference is written into the profile; '
+                 'either way the proposal is removed from the pending list. '
+                 'This is the propose-then-confirm gate — new preferences are '
+                 'NEVER written silently.'),
+    tags=['memory'],
+)
+def resolve_profile_pending_v1(pending_id):
+    from lib.memory import user_profile as up
+    data = parse_body()
+    res = up.resolve_pending(pending_id, accept=bool(data.get('accept')),
+                             edited_text=data.get('text'))
+    if not res.get('resolved'):
+        return api_not_found('Pending proposal not found')
+    return jsonify(res)
 
 
 @api_v1_memory_bp.route('/api/v1/memory/<memory_id>/files', methods=['GET'])

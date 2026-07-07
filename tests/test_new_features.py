@@ -35,16 +35,26 @@ class TestAttachments:
         )
         assert result == []
 
-    def test_inject_attachments_to_last_user_msg(self):
+    def test_inject_attachments_appends_trailing_meta_msg(self):
+        """★ Cache-safe contract: attachments are appended as a NEW trailing
+        _isMeta user message, NOT merged into the historical (in-prefix) user
+        message. Merging mutated cached bytes and forced a full cache miss
+        every time the reminder fired."""
         from lib.tasks_pkg.attachments import inject_attachments
         messages = [
             {'role': 'system', 'content': 'sys'},
             {'role': 'user', 'content': 'Hello'},
         ]
         inject_attachments(messages, ['<attachment>test</attachment>'])
-        assert '<attachment>test</attachment>' in messages[1]['content']
+        # The original user message is left BYTE-IDENTICAL.
+        assert messages[1]['content'] == 'Hello'
+        # A new trailing _isMeta user message carries the attachment.
+        assert len(messages) == 3
+        assert messages[2]['role'] == 'user'
+        assert messages[2].get('_isMeta') is True
+        assert '<attachment>test</attachment>' in messages[2]['content']
 
-    def test_inject_attachments_to_multimodal_user_msg(self):
+    def test_inject_attachments_does_not_touch_multimodal_prefix(self):
         from lib.tasks_pkg.attachments import inject_attachments
         messages = [
             {'role': 'user', 'content': [
@@ -52,8 +62,11 @@ class TestAttachments:
             ]},
         ]
         inject_attachments(messages, ['<attachment>test</attachment>'])
-        assert len(messages[0]['content']) == 2
-        assert messages[0]['content'][1]['type'] == 'text'
+        # Original multimodal message untouched.
+        assert len(messages[0]['content']) == 1
+        # New trailing meta message appended.
+        assert len(messages) == 2
+        assert messages[1].get('_isMeta') is True
 
     def test_inject_attachments_no_user_creates_one(self):
         from lib.tasks_pkg.attachments import inject_attachments
@@ -63,6 +76,7 @@ class TestAttachments:
         inject_attachments(messages, ['<attachment>test</attachment>'])
         assert len(messages) == 2
         assert messages[1]['role'] == 'user'
+        assert messages[1].get('_isMeta') is True
 
     def test_inject_empty_attachments_no_change(self):
         from lib.tasks_pkg.attachments import inject_attachments
@@ -72,6 +86,127 @@ class TestAttachments:
         original = copy.deepcopy(messages)
         inject_attachments(messages, [])
         assert messages == original
+
+    # ── B2: trigger must be message-scan based, NOT cross-task round_num ──
+
+    @staticmethod
+    def _writeful_history(extra_tail_rounds=4):
+        """A realistic cross-task message list: an early write, then several
+        non-write rounds, then a NEW user turn (task 2). The write happened
+        long ago in message terms, so the reminder SHOULD fire."""
+        msgs = [
+            {'role': 'system', 'content': 'sys'},
+            {'role': 'user', 'content': 'implement the feature'},
+            {'role': 'assistant', 'content': None, 'tool_calls': [
+                {'function': {'name': 'write_file',
+                              'arguments': '{"path":"a.py","content":"x"}'}}]},
+            {'role': 'tool', 'content': 'written a.py'},
+        ]
+        # Several non-write rounds (read/grep) — the model "moved on".
+        for i in range(extra_tail_rounds):
+            msgs.append({'role': 'assistant', 'content': None, 'tool_calls': [
+                {'function': {'name': 'read_files',
+                              'arguments': f'{{"reads":[{{"path":"b{i}.py"}}]}}'}}]})
+            msgs.append({'role': 'tool', 'content': f'content of b{i}.py'})
+        # Task-1 wrap-up + a NEW task-2 user turn (round_num resets to a low
+        # value in task 2).
+        msgs.append({'role': 'assistant', 'content': 'task 1 done'})
+        msgs.append({'role': 'user', 'content': 'task 2: now refactor it'})
+        return msgs
+
+    def test_reminder_fires_on_message_scan_low_round_num(self):
+        """B2 reproduction → fixed contract: with an earlier write and a gap
+        of many messages since, the reminder fires REGARDLESS of round_num.
+
+        On the OLD implementation this returns None: compute_turn_attachments
+        gated on ``round_num > 5`` (here round_num=3 from a fresh task 2), and
+        the per-conv ``_attachment_state`` carried a stale ``last_reminder_round``
+        from task 1 that made the throttle gate permanently true. Both are
+        cross-task round-counter bugs the message-scan fix removes."""
+        from lib.tasks_pkg.attachments import compute_turn_attachments
+        msgs = self._writeful_history()
+        result = compute_turn_attachments(
+            msgs, task={}, round_num=3, conv_id='conv-b2',
+            project_path='/proj', project_enabled=True,
+        )
+        assert result, 'reminder must fire on message-scan even at low round_num'
+        assert '## Recently Modified Files' in result[0]
+        # The files it names come from the write/read history.
+        assert 'a.py' in result[0]
+
+    def test_reminder_does_not_fire_right_after_write(self):
+        """No nagging immediately after a write — the model is still on it.
+        A write in the last message means gap≈0 < the min-gap threshold."""
+        from lib.tasks_pkg.attachments import compute_turn_attachments
+        msgs = [
+            {'role': 'system', 'content': 'sys'},
+            {'role': 'user', 'content': 'do it'},
+            {'role': 'assistant', 'content': None, 'tool_calls': [
+                {'function': {'name': 'write_file',
+                              'arguments': '{"path":"a.py","content":"x"}'}}]},
+            {'role': 'tool', 'content': 'written'},
+        ]
+        result = compute_turn_attachments(
+            msgs, task={}, round_num=9, conv_id='conv-b2b',
+            project_path='/proj', project_enabled=True,
+        )
+        assert result == [], 'must not nag right after a write'
+
+    def test_reminder_dedups_no_stacking(self):
+        """B3: once a reminder is in context and NO new write follows it, the
+        reminder must NOT fire again (no stale stacking). The prior reminder
+        message is in the scan window; absent a newer write, return nothing."""
+        from lib.tasks_pkg.attachments import (compute_turn_attachments,
+                                               inject_attachments)
+        msgs = self._writeful_history()
+        first = compute_turn_attachments(
+            msgs, task={}, round_num=3, conv_id='conv-b2c',
+            project_path='/proj', project_enabled=True)
+        assert first  # fires once
+        inject_attachments(msgs, first)  # now the reminder is in context
+        # A few more non-write rounds happen (no writes after the reminder).
+        for i in range(4):
+            msgs.append({'role': 'assistant', 'content': None, 'tool_calls': [
+                {'function': {'name': 'grep_search',
+                              'arguments': '{"pattern":"x"}'}}]})
+            msgs.append({'role': 'tool', 'content': 'match'})
+        second = compute_turn_attachments(
+            msgs, task={}, round_num=5, conv_id='conv-b2c',
+            project_path='/proj', project_enabled=True)
+        assert second == [], 'must not re-fire without a new write since the reminder'
+
+    def test_reminder_refires_after_new_write(self):
+        """After a reminder, a NEW write + gap legitimately re-arms it."""
+        from lib.tasks_pkg.attachments import (compute_turn_attachments,
+                                               inject_attachments)
+        msgs = self._writeful_history()
+        inject_attachments(msgs, compute_turn_attachments(
+            msgs, task={}, round_num=3, conv_id='conv-b2d',
+            project_path='/proj', project_enabled=True))
+        # New write AFTER the reminder, then a gap.
+        msgs.append({'role': 'assistant', 'content': None, 'tool_calls': [
+            {'function': {'name': 'apply_diff',
+                          'arguments': '{"path":"z.py","search":"a","replace":"b"}'}}]})
+        msgs.append({'role': 'tool', 'content': 'patched z.py'})
+        for i in range(4):
+            msgs.append({'role': 'assistant', 'content': None, 'tool_calls': [
+                {'function': {'name': 'read_files',
+                              'arguments': '{"reads":[{"path":"q.py"}]}'}}]})
+            msgs.append({'role': 'tool', 'content': 'q'})
+        again = compute_turn_attachments(
+            msgs, task={}, round_num=7, conv_id='conv-b2d',
+            project_path='/proj', project_enabled=True)
+        assert again, 'a new write after the reminder must re-arm it'
+        assert 'z.py' in again[0]
+
+    def test_no_module_level_round_state(self):
+        """B2 leak fix: the per-conv round-counter dict is gone (message-scan
+        needs no cross-call state, so there is no unbounded module-level dict
+        to leak)."""
+        import lib.tasks_pkg.attachments as att
+        assert not hasattr(att, '_attachment_state'), (
+            '_attachment_state should be removed — the trigger is now a pure '
+            'message scan with no per-conv state to leak')
 
 
 
@@ -167,6 +302,27 @@ class TestCacheTracking:
         from lib.tasks_pkg.cache_tracking import _cache_states, get_cache_prefix_count
         _cache_states.pop('nonexistent', None)
         assert get_cache_prefix_count('nonexistent') == 0
+
+    def test_prefix_protected_after_write_only_round(self):
+        """★ Regression: a round that only WROTE the prefix (cache_read=0,
+        large cache_write — e.g. round 1 of a fresh conversation) must still
+        protect that prefix from micro-compact mutation on the next round.
+        Gating on read alone left round 2 unprotected → guaranteed miss."""
+        from lib.tasks_pkg.cache_tracking import (
+            CacheState, _cache_states, get_cache_prefix_count,
+        )
+        conv_id = 'test-prefix-write-only'
+        from lib.tasks_pkg.cache_tracking import _state_key
+        state = CacheState()
+        state.last_cache_read_tokens = 0        # nothing read yet
+        state.last_cache_write_tokens = 278500  # but a big prefix WAS written
+        state.message_count = 6
+        state.call_count = 1
+        _cache_states[_state_key(conv_id)] = state
+        try:
+            assert get_cache_prefix_count(conv_id) == 4  # max(0, 6 - 2)
+        finally:
+            _cache_states.pop(_state_key(conv_id), None)
 
     def test_no_false_positive_on_message_growth(self):
         """Growing messages (tool rounds) should NOT trigger a cache break
@@ -401,12 +557,13 @@ class TestCacheAwareMicroCompact:
         from lib.tasks_pkg.compaction import micro_compact
 
         conv_id = 'test-cache-mc-1'
+        from lib.tasks_pkg.cache_tracking import _state_key
         # Set up state with active cache
         state = CacheState()
         state.last_cache_read_tokens = 5000
         state.message_count = 5  # simulate 5 messages tracked; prefix = max(0, 5 - 2) = 3
         state.call_count = 5
-        _cache_states[conv_id] = state
+        _cache_states[_state_key(conv_id)] = state
 
         messages = [
             {'role': 'system', 'content': 'system prompt'},
@@ -429,4 +586,4 @@ class TestCacheAwareMicroCompact:
         assert messages[2]['reasoning_content'] == original_thinking_2
 
         # Cleanup
-        _cache_states.pop(conv_id, None)
+        _cache_states.pop(_state_key(conv_id), None)

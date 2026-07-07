@@ -15,7 +15,7 @@ logger = get_logger(__name__)
 #  Schema Version Cache — Skip redundant DDL on subsequent startups
 # ═══════════════════════════════════════════════════════════════════════
 
-_SCHEMA_VERSION = 22  # Increment when tables/columns/indexes change
+_SCHEMA_VERSION = 37  # Increment when tables/columns/indexes change
 
 
 def _column_exists(conn, table, column):
@@ -31,6 +31,13 @@ def _table_exists(conn, table):
     cur = conn._conn.cursor()
     cur.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,))
     return cur.fetchone() is not None
+
+
+def _count_rows(conn, table):
+    """Return the row count of a table (orphan-heal row guard)."""
+    cur = conn._conn.cursor()
+    cur.execute(f'SELECT count(*) FROM {table}')
+    return int(cur.fetchone()[0])
 
 
 def _read_meta(conn, key):
@@ -170,6 +177,18 @@ def _init_chat_schema(conn):
     create_if_absent(conn, TASK_EVENTS, table_exists=_table_exists)
     cur.execute('CREATE INDEX IF NOT EXISTS idx_task_events_ts ON task_events(ts_ms)')
 
+    # ── conversation_messages: Phase 5 messages-as-rows (migrator-first) ──
+    # Empty on existing installs until the TOFU_MESSAGES_ROWS-gated backfill /
+    # dual-write populates it (lib/database/messages_rows.py). No data depends
+    # on it until reads are flipped (a separate, verification-gated step).
+    from lib.database._core_schema import CONVERSATION_MESSAGES
+    create_if_absent(conn, CONVERSATION_MESSAGES, table_exists=_table_exists)
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_conv_msgs_conv ON conversation_messages(conv_id, seq)')
+    # Partial UNIQUE: _msgId is the per-conv addressing key WHEN PRESENT, but
+    # legacy/un-backfilled messages carry msg_id='' and several may coexist in
+    # one conversation, so empty ids are excluded from the uniqueness guarantee.
+    cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_conv_msgs_msgid ON conversation_messages(conv_id, msg_id) WHERE msg_id <> ''")
+
     # ── chat_artifacts: renderable reports promoted out of chat (md/html/svg) ──
     # First-class storage for "report-shaped" outputs so they survive
     # compaction, can be re-opened in the right-side panel by stable URL,
@@ -214,6 +233,10 @@ def _init_chat_schema(conn):
     for col, sql in {
         'search_results': "ALTER TABLE task_results ADD COLUMN search_results TEXT",
         'metadata':       "ALTER TABLE task_results ADD COLUMN metadata TEXT",
+        # segments (v36): the typed-segment timeline. Nullable TEXT/JSON — a
+        # pre-existing row stays NULL until its task is re-persisted, and every
+        # reader treats absent segments as "derive from the legacy channels".
+        'segments':       "ALTER TABLE task_results ADD COLUMN segments TEXT",
     }.items():
         if not _column_exists(conn, 'task_results', col):
             cur.execute(sql)
@@ -245,10 +268,32 @@ def _init_chat_schema(conn):
         'settings':     "ALTER TABLE conversations ADD COLUMN settings TEXT NOT NULL DEFAULT '{}'",
         'msg_count':    "ALTER TABLE conversations ADD COLUMN msg_count INTEGER NOT NULL DEFAULT 0",
         'search_text':  "ALTER TABLE conversations ADD COLUMN search_text TEXT NOT NULL DEFAULT ''",
+        # rev (v37): server-issued monotonic message-version, trigger-bumped.
+        'rev':          "ALTER TABLE conversations ADD COLUMN rev INTEGER NOT NULL DEFAULT 0",
     }.items():
         if not _column_exists(conn, 'conversations', col):
             cur.execute(sql)
             logger.info('[DB] Migration: added column %s to conversations', col)
+
+    # ── Trigger: bump rev whenever the messages column actually changes ──
+    # The SQLite mirror of the PG conversations_rev_bump_trg. SQLite can't
+    # mutate NEW in a BEFORE trigger, so this is an AFTER UPDATE OF messages
+    # trigger running a nested rev-only UPDATE. Non-recursion is guaranteed two
+    # ways even with PRAGMA recursive_triggers=ON: (1) `OF messages` scopes the
+    # trigger so the nested `SET rev=...` (which does NOT touch messages) never
+    # re-fires it; (2) the WHEN guard fires only on a genuine messages change.
+    # rev advances ONLY on a real messages change, so settings/title-only writes
+    # never bump it (no false CAS 409). Matches the PG semantics byte-for-byte.
+    cur.execute('DROP TRIGGER IF EXISTS conversations_rev_bump_trg')
+    cur.execute('''
+        CREATE TRIGGER conversations_rev_bump_trg
+        AFTER UPDATE OF messages ON conversations
+        FOR EACH ROW WHEN NEW.messages IS NOT OLD.messages
+        BEGIN
+            UPDATE conversations SET rev = OLD.rev + 1
+            WHERE id = NEW.id AND user_id = NEW.user_id;
+        END;
+    ''')
 
     # ── FTS5 virtual table for full-text search ──
     # SELF-CONTENT (NOT content=''). A contentless FTS5 table cannot DELETE
@@ -305,37 +350,31 @@ def _init_chat_schema(conn):
         logger.info('[DB] Backfilling search_text for %d conversations...', backfill_count)
         _backfill_search_fts(conn)
 
-    # ── Agent backend session mapping ──
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS agent_sessions (
-            conv_id TEXT NOT NULL,
-            backend TEXT NOT NULL,
-            session_id TEXT NOT NULL,
-            created_at TEXT DEFAULT (datetime('now')),
-            last_used_at TEXT DEFAULT (datetime('now')),
-            PRIMARY KEY (conv_id, backend)
-        )
-    ''')
-    cur.execute('CREATE INDEX IF NOT EXISTS idx_agent_sessions_backend ON agent_sessions(backend)')
-
-    # ── Message queue: server-side pending message queue ──
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS message_queue (
-            id TEXT PRIMARY KEY,
-            conv_id TEXT NOT NULL,
-            payload TEXT NOT NULL DEFAULT '{}',
-            config TEXT NOT NULL DEFAULT '{}',
-            position INTEGER NOT NULL DEFAULT 1,
-            created_at INTEGER NOT NULL
-        )
-    ''')
+    # ── Message queue: migrated onto Core. ──
+    from lib.database._core_schema import (
+        MESSAGE_QUEUE, create_if_absent,
+    )
+    create_if_absent(conn, MESSAGE_QUEUE, table_exists=_table_exists)
     cur.execute('CREATE INDEX IF NOT EXISTS idx_mq_conv ON message_queue(conv_id, position)')
+    # ── Migration (v26): unified priority turn-source queue columns ──
+    for col, sql in {
+        'kind':     "ALTER TABLE message_queue ADD COLUMN kind TEXT NOT NULL DEFAULT 'real'",
+        'priority': "ALTER TABLE message_queue ADD COLUMN priority INTEGER NOT NULL DEFAULT 100",
+    }.items():
+        if not _column_exists(conn, 'message_queue', col):
+            cur.execute(sql)
+            logger.info('[DB] Migration: added column %s to message_queue', col)
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_mq_conv_prio ON message_queue(conv_id, priority, position)')
 
     # paper_reports: migrated onto Core (lib/database/_core_schema.py).
     # _table_exists guard REQUIRED on SQLite (bare execute, Core DDL has no
     # IF NOT EXISTS). See tests/test_core_schema_parity.py.
     from lib.database._core_schema import PAPER_REPORTS, create_if_absent
     create_if_absent(conn, PAPER_REPORTS, table_exists=_table_exists)
+    # Migration: add `meta` (JSON model+usage+cost finish-tag) to existing DBs.
+    if not _column_exists(conn, 'paper_reports', 'meta'):
+        cur.execute("ALTER TABLE paper_reports ADD COLUMN meta TEXT NOT NULL DEFAULT ''")
+        logger.info('[DB] Migration: added column meta to paper_reports')
 
     # ── Paper library: server-side bookshelf (shared across browsers) ──
     # Stores one row per paper the user has loaded; the PDF bytes live under
@@ -398,54 +437,13 @@ def _init_system_schema(conn):
     create_if_absent(conn, PRICING_CACHE, table_exists=_table_exists)
     create_if_absent(conn, RECENT_PROJECTS, table_exists=_table_exists)
 
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS scheduled_tasks (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            schedule TEXT NOT NULL,
-            task_type TEXT NOT NULL DEFAULT 'command',
-            command TEXT NOT NULL,
-            description TEXT DEFAULT '',
-            enabled INTEGER NOT NULL DEFAULT 1,
-            notify_on_failure INTEGER NOT NULL DEFAULT 1,
-            notify_on_success INTEGER NOT NULL DEFAULT 0,
-            max_runtime INTEGER NOT NULL DEFAULT 300,
-            last_run TEXT,
-            last_result TEXT,
-            last_status TEXT DEFAULT 'never',
-            run_count INTEGER NOT NULL DEFAULT 0,
-            fail_count INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT NOT NULL DEFAULT '',
-            updated_at TEXT NOT NULL DEFAULT '',
-            target_conv_id TEXT DEFAULT '',
-            source_conv_id TEXT DEFAULT '',
-            tools_config TEXT DEFAULT '{}',
-            poll_count INTEGER NOT NULL DEFAULT 0,
-            last_poll_at TEXT DEFAULT '',
-            last_poll_decision TEXT DEFAULT '',
-            last_poll_reason TEXT DEFAULT '',
-            last_execution_at TEXT DEFAULT '',
-            last_execution_task_id TEXT DEFAULT '',
-            last_execution_status TEXT DEFAULT '',
-            execution_count INTEGER NOT NULL DEFAULT 0,
-            max_executions INTEGER NOT NULL DEFAULT 0,
-            expires_at TEXT DEFAULT ''
-        )
-    ''')
-
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS proactive_poll_log (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            task_id TEXT NOT NULL,
-            poll_time TEXT NOT NULL,
-            decision TEXT NOT NULL DEFAULT 'skip',
-            reason TEXT NOT NULL DEFAULT '',
-            status_snapshot TEXT NOT NULL DEFAULT '',
-            model TEXT NOT NULL DEFAULT '',
-            tokens_used INTEGER NOT NULL DEFAULT 0,
-            execution_task_id TEXT DEFAULT ''
-        )
-    ''')
+    # scheduled_tasks + proactive_poll_log: migrated onto Core. The post-create
+    # ALTERs below stay (upgrade-only; Core's create only fires on fresh installs).
+    from lib.database._core_schema import (
+        SCHEDULED_TASKS, PROACTIVE_POLL_LOG, create_if_absent,
+    )
+    create_if_absent(conn, SCHEDULED_TASKS, table_exists=_table_exists)
+    create_if_absent(conn, PROACTIVE_POLL_LOG, table_exists=_table_exists)
     cur.execute('CREATE INDEX IF NOT EXISTS idx_poll_log_task ON proactive_poll_log(task_id, poll_time DESC)')
 
     # ── Migration: add proactive agent columns ──
@@ -479,92 +477,102 @@ def _init_system_schema(conn):
             logger.info('[DB] Migration: added column %s to scheduled_tasks', col_name)
 
     # Timer Watcher tables
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS timer_watchers (
-            id TEXT PRIMARY KEY,
-            conv_id TEXT NOT NULL,
-            source_task_id TEXT NOT NULL DEFAULT '',
-            check_instruction TEXT NOT NULL,
-            check_command TEXT NOT NULL DEFAULT '',
-            continuation_message TEXT NOT NULL,
-            poll_interval INTEGER NOT NULL DEFAULT 60,
-            max_polls INTEGER NOT NULL DEFAULT 120,
-            poll_count INTEGER NOT NULL DEFAULT 0,
-            status TEXT NOT NULL DEFAULT 'active',
-            tools_config TEXT NOT NULL DEFAULT '{}',
-            created_at TEXT NOT NULL DEFAULT '',
-            updated_at TEXT NOT NULL DEFAULT '',
-            triggered_at TEXT DEFAULT '',
-            cancelled_at TEXT DEFAULT '',
-            execution_task_id TEXT DEFAULT '',
-            last_poll_at TEXT DEFAULT '',
-            last_poll_decision TEXT DEFAULT '',
-            last_poll_reason TEXT DEFAULT ''
-        )
-    ''')
+    # timer_watchers + timer_poll_log: migrated onto Core.
+    from lib.database._core_schema import (
+        TIMER_WATCHERS, TIMER_POLL_LOG, create_if_absent,
+    )
+    create_if_absent(conn, TIMER_WATCHERS, table_exists=_table_exists)
     cur.execute('CREATE INDEX IF NOT EXISTS idx_timer_status ON timer_watchers(status)')
     cur.execute('CREATE INDEX IF NOT EXISTS idx_timer_conv ON timer_watchers(conv_id)')
-
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS timer_poll_log (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timer_id TEXT NOT NULL,
-            poll_time TEXT NOT NULL,
-            decision TEXT NOT NULL DEFAULT 'wait',
-            reason TEXT NOT NULL DEFAULT '',
-            check_output TEXT NOT NULL DEFAULT '',
-            tokens_used INTEGER NOT NULL DEFAULT 0
-        )
-    ''')
+    create_if_absent(conn, TIMER_POLL_LOG, table_exists=_table_exists)
     cur.execute('CREATE INDEX IF NOT EXISTS idx_timer_poll_log ON timer_poll_log(timer_id, poll_time DESC)')
+    # Migration (v25): record which model the poll LLM resolved to.
+    if not _column_exists(conn, 'timer_poll_log', 'model'):
+        cur.execute("ALTER TABLE timer_poll_log ADD COLUMN model TEXT NOT NULL DEFAULT ''")
+        logger.info('[DB] Migration: added column model to timer_poll_log')
+    # Migration (v27): stable per-poll id + the raw LLM output (so a
+    # parse-failure poll can be located by id and its raw decision text
+    # survives refresh/restart for diagnosis).
+    for _tpl_col, _tpl_sql in {
+        'poll_id':    "ALTER TABLE timer_poll_log ADD COLUMN poll_id TEXT NOT NULL DEFAULT ''",
+        'raw_output': "ALTER TABLE timer_poll_log ADD COLUMN raw_output TEXT NOT NULL DEFAULT ''",
+    }.items():
+        if not _column_exists(conn, 'timer_poll_log', _tpl_col):
+            cur.execute(_tpl_sql)
+            logger.info('[DB] Migration: added column %s to timer_poll_log', _tpl_col)
+
+    # ── Swarm durable state (see lib/swarm/persistence.py) ──
+    # Persists conversation-scoped swarm sessions and per-agent message
+    # checkpoints so an in-flight sub-agent can be rehydrated and resumed
+    # at round granularity after a server restart. swarm_key == convId.
+    # swarm_sessions + swarm_agents: migrated onto Core.
+    from lib.database._core_schema import (
+        SWARM_SESSIONS, SWARM_AGENTS, create_if_absent,
+    )
+    create_if_absent(conn, SWARM_SESSIONS, table_exists=_table_exists)
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_swarm_sessions_status ON swarm_sessions(status)')
+    create_if_absent(conn, SWARM_AGENTS, table_exists=_table_exists)
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_swarm_agents_key ON swarm_agents(swarm_key)')
+
+    # ── Orchestration run instances (see lib/orchestration_runs.py) ──
+    # A run instance is a durable, reopenable execution of a flow TEMPLATE.
+    # Unlike the in-memory TaskRuntime (TTL-purged), these survive restarts:
+    #   orchestration_runs        — one row per run; pins a definition SNAPSHOT
+    #                               so editing the template never mutates a run.
+    #   orchestration_run_events  — append-only mirror of the engine event
+    #                               stream for durable cursor replay. seq is
+    #                               monotonic per run (matches TaskRuntime seq).
+    # 'paused' is an instance-only status (blocked on a human gate); the engine
+    # thread's TaskRuntime status stays 'running' while it waits.
+    # orchestration_runs + orchestration_run_events: migrated onto Core.
+    from lib.database._core_schema import (
+        ORCHESTRATION_RUNS, ORCHESTRATION_RUN_EVENTS, create_if_absent,
+    )
+    create_if_absent(conn, ORCHESTRATION_RUNS, table_exists=_table_exists)
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_orch_runs_status ON orchestration_runs(status, updated_at DESC)')
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_orch_runs_orch ON orchestration_runs(orch_id, created_at DESC)')
+    create_if_absent(conn, ORCHESTRATION_RUN_EVENTS, table_exists=_table_exists)
+
+    # ── Project Events: cross-conversation activity feed ("project brain"
+    #    pulse). Append-only, keyed on project_path; seq is monotonic per
+    #    project (matches TaskRuntime/orchestration seq). See
+    #    lib/conversations/project_feed.py. ──
+    from lib.database._core_schema import PROJECT_EVENTS, PROJECT_CHARTER, PROJECT_TASKS, create_if_absent
+    create_if_absent(conn, PROJECT_EVENTS, table_exists=_table_exists)
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_project_events_path_ts ON project_events(project_path, ts DESC)')
+    # Project Charter: the north-star doc (Pillar #2). One row per project_path.
+    create_if_absent(conn, PROJECT_CHARTER, table_exists=_table_exists)
+    # Project Board: coordination tasks (Pillar #3). Per project_path.
+    create_if_absent(conn, PROJECT_TASKS, table_exists=_table_exists)
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_project_tasks_path_status ON project_tasks(project_path, status)')
+    # Migration: dispatched flag (brain-dispatched claim badge). Added 2026-07.
+    if not _column_exists(conn, 'project_tasks', 'dispatched'):
+        cur.execute('ALTER TABLE project_tasks ADD COLUMN dispatched INTEGER NOT NULL DEFAULT 0')
+    # Migration: kind (epic|lease). Pre-existing rows are epics — the DEFAULT
+    # 'epic' makes every old row read as a dispatchable epic (never silently
+    # dropped off the board). Added 2026-07.
+    if not _column_exists(conn, 'project_tasks', 'kind'):
+        cur.execute("ALTER TABLE project_tasks ADD COLUMN kind TEXT NOT NULL DEFAULT 'epic'")
 
     # ── Daily Optimizer tables (see lib/optimizer/) ──
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS optimizer_proposals (
-            id TEXT PRIMARY KEY,
-            created_at TEXT NOT NULL,
-            title TEXT NOT NULL,
-            rationale TEXT NOT NULL,
-            action_type TEXT NOT NULL,
-            action_args TEXT NOT NULL,
-            severity TEXT NOT NULL DEFAULT 'low',
-            confidence REAL NOT NULL DEFAULT 0,
-            evidence TEXT NOT NULL DEFAULT '',
-            status TEXT NOT NULL DEFAULT 'pending_review',
-            status_reason TEXT NOT NULL DEFAULT ''
-        )
-    ''')
+    # optimizer_proposals + optimizer_action_log: migrated onto Core.
+    from lib.database._core_schema import (
+        OPTIMIZER_PROPOSALS, OPTIMIZER_ACTION_LOG, create_if_absent,
+    )
+    create_if_absent(conn, OPTIMIZER_PROPOSALS, table_exists=_table_exists)
     cur.execute('CREATE INDEX IF NOT EXISTS idx_opt_prop_created ON optimizer_proposals(created_at DESC)')
     cur.execute('CREATE INDEX IF NOT EXISTS idx_opt_prop_status ON optimizer_proposals(status)')
     cur.execute('CREATE INDEX IF NOT EXISTS idx_opt_prop_action ON optimizer_proposals(action_type)')
-
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS optimizer_action_log (
-            id TEXT PRIMARY KEY,
-            proposal_id TEXT NOT NULL,
-            applied_at TEXT NOT NULL,
-            expires_at TEXT NOT NULL DEFAULT '',
-            pre_metric TEXT NOT NULL DEFAULT '',
-            outcome_metric TEXT NOT NULL DEFAULT '',
-            outcome_recorded_at TEXT NOT NULL DEFAULT '',
-            reverted_at TEXT NOT NULL DEFAULT '',
-            revert_reason TEXT NOT NULL DEFAULT ''
-        )
-    ''')
+    create_if_absent(conn, OPTIMIZER_ACTION_LOG, table_exists=_table_exists)
     cur.execute('CREATE INDEX IF NOT EXISTS idx_opt_actlog_proposal ON optimizer_action_log(proposal_id)')
     cur.execute('CREATE INDEX IF NOT EXISTS idx_opt_actlog_applied ON optimizer_action_log(applied_at DESC)')
     cur.execute('CREATE INDEX IF NOT EXISTS idx_opt_actlog_expires ON optimizer_action_log(expires_at)')
 
     # ── Rate-limit event log (PR3c / C7 step 2) ──
     # See the matching block in _schema_pg.py for design notes.
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS rate_limit_events (
-            id       INTEGER PRIMARY KEY AUTOINCREMENT,
-            endpoint TEXT    NOT NULL,
-            ip       TEXT    NOT NULL,
-            ts_ms    INTEGER NOT NULL
-        )
-    ''')
+    # rate_limit_events: migrated onto Core.
+    from lib.database._core_schema import RATE_LIMIT_EVENTS, create_if_absent
+    create_if_absent(conn, RATE_LIMIT_EVENTS, table_exists=_table_exists)
     cur.execute('CREATE INDEX IF NOT EXISTS idx_rate_limit_lookup ON rate_limit_events(endpoint, ip, ts_ms)')
     cur.execute('CREATE INDEX IF NOT EXISTS idx_rate_limit_ts ON rate_limit_events(ts_ms)')
 
@@ -580,84 +588,39 @@ def _init_system_schema(conn):
     # ``users`` table from the chat schema is a single-row stub for the
     # local UI's session — different shape, different purpose. Naming
     # collision avoided here on purpose.
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS tenant_users (
-            id TEXT PRIMARY KEY,
-            email TEXT UNIQUE NOT NULL,
-            password_hash TEXT NOT NULL DEFAULT '',
-            display_name TEXT NOT NULL DEFAULT '',
-            role TEXT NOT NULL DEFAULT 'user',
-            status TEXT NOT NULL DEFAULT 'active',
-            created_at INTEGER NOT NULL,
-            last_login_at INTEGER NOT NULL DEFAULT 0,
-            email_verified INTEGER NOT NULL DEFAULT 0,
-            metadata TEXT NOT NULL DEFAULT '{}'
-        )
-    ''')
+    # tenant_users: migrated onto Core.
+    from lib.database._core_schema import TENANT_USERS, create_if_absent
+    create_if_absent(conn, TENANT_USERS, table_exists=_table_exists)
     cur.execute('CREATE INDEX IF NOT EXISTS idx_tenant_users_email ON tenant_users(email)')
     cur.execute('CREATE INDEX IF NOT EXISTS idx_tenant_users_role ON tenant_users(role)')
 
     # The ledger is the SOURCE OF TRUTH for every credit movement.
     # Append-only — never UPDATE or DELETE rows. The wallet balance is a
     # denormalized cache derived from SUM(amount) over this table.
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS billing_ledger (
-            id TEXT PRIMARY KEY,
-            user_id TEXT NOT NULL,
-            ts INTEGER NOT NULL,
-            amount_micro INTEGER NOT NULL,
-            kind TEXT NOT NULL,
-            ref_type TEXT NOT NULL DEFAULT '',
-            ref_id TEXT NOT NULL DEFAULT '',
-            balance_after_micro INTEGER NOT NULL,
-            note TEXT NOT NULL DEFAULT ''
-        )
-    ''')
+    # billing_ledger: migrated onto Core.
+    from lib.database._core_schema import BILLING_LEDGER, create_if_absent
+    create_if_absent(conn, BILLING_LEDGER, table_exists=_table_exists)
     cur.execute('CREATE INDEX IF NOT EXISTS idx_ledger_user_ts ON billing_ledger(user_id, ts DESC)')
     cur.execute('CREATE INDEX IF NOT EXISTS idx_ledger_ref ON billing_ledger(ref_type, ref_id)')
     cur.execute('CREATE INDEX IF NOT EXISTS idx_ledger_kind ON billing_ledger(kind)')
+    # Partial index serving the reserve-reclaim janitor's GROUP BY (user_id,
+    # ref_id) over only reserve-type rows — keeps the 5-minute sweep off a
+    # full scan of the append-only, ever-growing ledger.
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_ledger_reserve_sweep "
+                "ON billing_ledger(user_id, ref_id) WHERE ref_type = 'reserve'")
 
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS billing_wallets (
-            user_id TEXT PRIMARY KEY,
-            balance_micro INTEGER NOT NULL DEFAULT 0,
-            currency TEXT NOT NULL DEFAULT 'CREDIT',
-            low_balance_alert_micro INTEGER NOT NULL DEFAULT 0,
-            updated_at INTEGER NOT NULL
-        )
-    ''')
-
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS billing_redeem_codes (
-            code TEXT PRIMARY KEY,
-            amount_micro INTEGER NOT NULL,
-            batch TEXT NOT NULL DEFAULT '',
-            created_by TEXT NOT NULL DEFAULT '',
-            created_at INTEGER NOT NULL,
-            expires_at INTEGER NOT NULL DEFAULT 0,
-            redeemed_by TEXT NOT NULL DEFAULT '',
-            redeemed_at INTEGER NOT NULL DEFAULT 0,
-            note TEXT NOT NULL DEFAULT ''
-        )
-    ''')
+    # billing_wallets + billing_redeem_codes: migrated onto Core.
+    from lib.database._core_schema import (
+        BILLING_WALLETS, BILLING_REDEEM_CODES, create_if_absent,
+    )
+    create_if_absent(conn, BILLING_WALLETS, table_exists=_table_exists)
+    create_if_absent(conn, BILLING_REDEEM_CODES, table_exists=_table_exists)
     cur.execute('CREATE INDEX IF NOT EXISTS idx_redeem_batch ON billing_redeem_codes(batch)')
     cur.execute('CREATE INDEX IF NOT EXISTS idx_redeem_redeemed ON billing_redeem_codes(redeemed_by)')
 
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS billing_payments (
-            id TEXT PRIMARY KEY,
-            user_id TEXT NOT NULL,
-            provider TEXT NOT NULL,
-            provider_id TEXT NOT NULL DEFAULT '',
-            amount_minor INTEGER NOT NULL,
-            currency TEXT NOT NULL DEFAULT 'USD',
-            credit_micro INTEGER NOT NULL,
-            status TEXT NOT NULL DEFAULT 'pending',
-            created_at INTEGER NOT NULL,
-            settled_at INTEGER NOT NULL DEFAULT 0,
-            raw TEXT NOT NULL DEFAULT '{}'
-        )
-    ''')
+    # billing_payments: migrated onto Core.
+    from lib.database._core_schema import BILLING_PAYMENTS, create_if_absent
+    create_if_absent(conn, BILLING_PAYMENTS, table_exists=_table_exists)
     cur.execute('CREATE INDEX IF NOT EXISTS idx_payments_user ON billing_payments(user_id)')
     cur.execute('CREATE INDEX IF NOT EXISTS idx_payments_provider ON billing_payments(provider, provider_id)')
     cur.execute('CREATE INDEX IF NOT EXISTS idx_payments_status ON billing_payments(status)')
@@ -694,6 +657,12 @@ def init_db(_new_connection):
     conn = None
     try:
         conn = _new_connection()
+
+        # ── Self-heal orphan tables (runs BEFORE the version fast-path so
+        #    already-current deployments still converge). Drops tables left by
+        #    removed subsystems / leaked tests that have no Core definition.
+        from lib.database._orphan_heal import heal_orphan_tables
+        heal_orphan_tables(conn, table_exists=_table_exists, count_rows=_count_rows)
 
         # ── Fast path: version AND optional-domain set both unchanged.
         #    The domain set is part of the cache key so enabling a new domain

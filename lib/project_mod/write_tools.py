@@ -5,6 +5,8 @@ Extracted from tools.py for modularity. Re-exported via tools.py for backward co
 
 import os
 import re
+import tempfile
+import threading
 from difflib import SequenceMatcher
 
 from lib.log import audit_log, get_logger
@@ -13,6 +15,108 @@ from lib.project_mod.modifications import _record_modification
 from lib.project_mod.scanner import _fmt_size, _safe_path, add_project_root
 
 logger = get_logger(__name__)
+
+
+# ═══════════════════════════════════════════════════════
+#  Temp-directory detection (scratch writes are untracked)
+# ═══════════════════════════════════════════════════════
+# Absolute-path writes into the OS temp dir are TRUE scratch: they must not
+# auto-register a workspace root (which would invent a bogus ``tmp:`` project
+# in the file-changes bar) and must not be recorded in the undo history.
+# This mirrors run_command, whose snapshot/diff only walks ``base_path`` and
+# therefore already ignores anything written under /tmp.
+#
+# Sourced from ``tempfile.gettempdir()`` (honours $TMPDIR/$TEMP/$TMP) plus the
+# conventional Unix temp roots as a fallback — never a single hardcoded path,
+# per the no-hardcoded-environment-values rule.
+
+def _temp_roots():
+    """Return the normalized set of temp-directory roots (cached).
+
+    Includes the platform temp dir (``tempfile.gettempdir()``, which respects
+    ``$TMPDIR``/``$TEMP``/``$TMP``) plus ``/tmp`` and ``/var/tmp`` as Unix
+    fallbacks.  Each is realpath-normalized so symlinked temp dirs (e.g. macOS
+    ``/tmp`` → ``/private/tmp``) match a realpath'd target.
+    """
+    cached = getattr(_temp_roots, '_cache', None)
+    if cached is not None:
+        return cached
+    roots = set()
+    try:
+        roots.add(os.path.realpath(tempfile.gettempdir()))
+    except Exception as e:
+        logger.debug('[WriteTools] gettempdir failed: %s', e)
+    for fallback in ('/tmp', '/var/tmp'):
+        try:
+            if os.path.isdir(fallback):
+                roots.add(os.path.realpath(fallback))
+        except OSError as e:
+            logger.debug('[WriteTools] temp fallback %s stat failed: %s', fallback, e)
+    roots.discard('')
+    _temp_roots._cache = roots
+    return roots
+
+
+def _is_temp_path(abs_path):
+    """True if *abs_path* lives inside an OS temp-directory root.
+
+    Used to treat absolute-path writes under /tmp (etc.) as untracked scratch:
+    no root auto-registration, no modification record.
+    """
+    if not abs_path:
+        return False
+    try:
+        real = os.path.realpath(abs_path)
+    except Exception as e:
+        logger.debug('[WriteTools] realpath failed for %s: %s', abs_path, e)
+        real = os.path.abspath(abs_path)
+    for troot in _temp_roots():
+        if real == troot or real.startswith(troot + os.sep):
+            return True
+    return False
+
+
+# ═══════════════════════════════════════════════════════
+#  Workspace-root auto-registration signal (observability)
+# ═══════════════════════════════════════════════════════
+# When an absolute-path write auto-registers a NEW extra root (§2 of
+# _resolve_write_path), that expansion of the workspace was historically
+# invisible — no tool round, no SSE event, only an app.log line. The handler
+# layer (lib/tasks_pkg/handlers/project.py) owns the ``task`` dict and emits
+# the ``workspace_root_added`` event; the write layer can't (it only has
+# conv_id/task_id). We bridge the two via a per-thread collector: the
+# synchronous handler→execute_tool→_resolve_write_path call chain runs in one
+# thread, so a thread-local list is the race-free seam (the dict result of the
+# write is stringified by execute_tool, dropping any extra signal fields).
+
+_root_signal = threading.local()
+
+
+def _signal_root_added(root_name, root_path):
+    """Record that an absolute-path write auto-registered a new extra root.
+
+    Appends to the current thread's pending-signal list (created lazily). The
+    handler drains it via :func:`drain_root_added_signals` after the tool runs.
+    """
+    pending = getattr(_root_signal, 'pending', None)
+    if pending is None:
+        pending = []
+        _root_signal.pending = pending
+    pending.append({'rootName': root_name, 'path': root_path})
+
+
+def drain_root_added_signals():
+    """Return and clear the current thread's pending root-added signals.
+
+    Returns a list of ``{rootName, path}`` dicts (empty when none). Called by
+    the project tool handler immediately after a write tool executes, so the
+    auto-registration can be surfaced as a ``workspace_root_added`` SSE event.
+    """
+    pending = getattr(_root_signal, 'pending', None)
+    if not pending:
+        return []
+    _root_signal.pending = []
+    return pending
 
 
 # ═══════════════════════════════════════════════════════
@@ -285,6 +389,19 @@ def _resolve_write_path(base, rel_path, conv_id=None):
                 _enforce_not_readonly(abs_path, conv_id=conv_id)
                 return abs_path
 
+        # 1.5) Temp-dir scratch writes: allow the write but NEVER register a
+        #      workspace root for it.  A write to /tmp/x.py is ephemeral
+        #      scratch — auto-registering would invent a bogus ``tmp:`` project
+        #      in the file-changes bar and undo history.  Returning the abs
+        #      path WITHOUT add_project_root means _mod_attribution finds no
+        #      containing root → the caller's _should_record_modification()
+        #      skips the journal entry, matching run_command (which only
+        #      snapshots base_path and so already ignores /tmp).
+        if _is_temp_path(abs_path):
+            logger.debug('[WriteTools] temp-dir scratch write (untracked, no root '
+                         'registered): %s', abs_path)
+            return abs_path
+
         # 3) Refuse system paths (same policy as create_project).
         if _is_forbidden_create_path(abs_path) or _is_forbidden_create_path(os.path.dirname(abs_path)):
             raise ValueError(
@@ -296,9 +413,44 @@ def _resolve_write_path(base, rel_path, conv_id=None):
         anchor = _nearest_existing_dir(abs_path)
         if anchor and not _is_forbidden_create_path(anchor):
             try:
+                # Detect whether this anchor is genuinely NEW (vs. an existing
+                # root re-resolved) so we only signal real workspace expansion.
+                with _lock:
+                    _anchor_norm = os.path.abspath(anchor).rstrip(os.sep) or anchor
+                    _existing = any(
+                        (os.path.abspath(rs['path']).rstrip(os.sep) or rs['path']) == _anchor_norm
+                        for rs in _roots.values()
+                    )
                 add_project_root(anchor)
                 logger.info('[WriteTools] Auto-registered workspace root %s for '
                             'absolute-path write to %s', anchor, abs_path)
+                if not _existing:
+                    # Look up the assigned root name so the signal carries it.
+                    _new_name = None
+                    with _lock:
+                        for rn, rs in _roots.items():
+                            if (os.path.abspath(rs['path']).rstrip(os.sep) or rs['path']) == _anchor_norm:
+                                _new_name = rn
+                                break
+                    # ★ Also register the new root into THIS conversation's own
+                    #   scoped registry (not just the global _roots). Without
+                    #   this, a subsequent ``newroot:rel/path`` namespaced write
+                    #   in the SAME task hits the conv-scoped resolver, which —
+                    #   per the 2026-05-05 isolation fix — does NOT fall through
+                    #   to the global registry and raises UnknownWorkspaceRootError
+                    #   for a root that only landed in the global one. add_conv_root
+                    #   is a no-op when the conv has no registry (background task
+                    #   must not conjure one) and never touches other convs.
+                    if conv_id:
+                        try:
+                            from lib.project_mod.config import add_conv_root
+                            add_conv_root(conv_id, anchor,
+                                          name=_new_name or os.path.basename(anchor))
+                        except Exception as e:
+                            logger.debug('[WriteTools] add_conv_root failed conv=%s '
+                                         'anchor=%s (non-fatal): %s',
+                                         conv_id[:12] if conv_id else '?', anchor, e)
+                    _signal_root_added(_new_name or os.path.basename(anchor), anchor)
                 _enforce_not_readonly(abs_path, conv_id=conv_id)
                 return abs_path
             except Exception as e:
@@ -316,6 +468,84 @@ def _resolve_write_path(base, rel_path, conv_id=None):
     target = _safe_path(base, rel_path)
     _enforce_not_readonly(target, conv_id=conv_id)
     return target
+
+
+def _mod_attribution(target, base, rel_path):
+    """Map a resolved on-disk ``target`` back to the workspace root that owns it.
+
+    Returns ``(mod_base, mod_rel_path)`` for the modifications journal so that
+    :func:`_record_modification` records the CORRECT root name and a clean
+    root-relative path.
+
+    Why this is needed: :func:`_resolve_write_path` accepts an absolute path
+    that may live under an EXTRA workspace root (auto-registered on first
+    absolute-path write).  In that case it returns the absolute target, but the
+    caller still holds the PRIMARY ``base`` and the original (absolute)
+    ``rel_path``.  Recording those verbatim makes the journal attribute the
+    write to the primary root (e.g. ``chatui:``) and stores the full absolute
+    path — which surfaces as a wrong ``rootname:`` prefix in the file-changes
+    bar.  We re-derive attribution from the deepest matching registered root.
+
+    For a non-absolute ``rel_path`` (the common case), attribution is already
+    correct, so we return ``(base, rel_path)`` unchanged.
+    """
+    if not (rel_path and (rel_path.startswith('/') or rel_path.startswith('~'))):
+        return base, rel_path
+    try:
+        abs_target = os.path.abspath(os.path.expanduser(target))
+    except Exception as e:
+        logger.debug('[WriteTools] _mod_attribution abspath failed for %s: %s', target, e)
+        return base, rel_path
+    best_path = None
+    try:
+        with _lock:
+            roots_snapshot = [rs['path'] for rs in _roots.values()]
+    except Exception as e:
+        logger.debug('[WriteTools] _mod_attribution roots snapshot failed: %s', e)
+        roots_snapshot = []
+    for root_path in roots_snapshot:
+        try:
+            norm_root = os.path.abspath(root_path).rstrip(os.sep) or root_path
+        except Exception:
+            continue
+        if abs_target == norm_root or abs_target.startswith(norm_root + os.sep):
+            # Prefer the DEEPEST (longest) matching root so a nested extra
+            # root wins over a parent root.
+            if best_path is None or len(norm_root) > len(best_path):
+                best_path = norm_root
+    if best_path is None:
+        return base, rel_path
+    mod_rel = os.path.relpath(abs_target, best_path)
+    return best_path, mod_rel
+
+
+def _should_record_modification(target):
+    """False when *target* is an OS temp-dir scratch write OUTSIDE all roots.
+
+    Temp scratch writes are deliberately untracked: no undo journal entry and
+    no file-changes-bar prefix (there is no registered root containing them).
+    Mirrors run_command, which never snapshots files outside ``base_path``.
+
+    A temp path that DOES fall under a registered root (e.g. the user
+    legitimately opened a project under ``/tmp/proj``) is still tracked — the
+    skip applies only to true out-of-workspace scratch.
+    """
+    try:
+        abs_target = os.path.abspath(os.path.expanduser(target))
+    except Exception as e:
+        logger.debug('[WriteTools] _should_record_modification abspath failed for %s: %s',
+                     target, e)
+        return True
+    if not _is_temp_path(abs_target):
+        return True
+    # Temp path — record only if it sits inside a registered workspace root.
+    with _lock:
+        roots_snapshot = [rs['path'] for rs in _roots.values()]
+    for root_path in roots_snapshot:
+        norm_root = os.path.abspath(root_path).rstrip(os.sep) or root_path
+        if abs_target == norm_root or abs_target.startswith(norm_root + os.sep):
+            return True
+    return False
 
 
 # Match \uXXXX, \UXXXXXXXX and \xXX escape sequences (literal backslash form).
@@ -493,8 +723,10 @@ def tool_write_file(base, rel_path, content, description='', conv_id=None, task_
         new_lines = content.count('\n') + 1
         sz = len(content.encode('utf-8'))
 
-        _record_modification(base, 'write_file', rel_path, original_content,
-                             conv_id=conv_id, task_id=task_id)
+        if _should_record_modification(target):
+            _mod_base, _mod_rel = _mod_attribution(target, base, rel_path)
+            _record_modification(_mod_base, 'write_file', _mod_rel, original_content,
+                                 conv_id=conv_id, task_id=task_id)
 
         result = {
             'ok': True, 'action': 'write_file', 'path': rel_path,
@@ -508,6 +740,145 @@ def tool_write_file(base, rel_path, content, description='', conv_id=None, task_
     except Exception as e:
         logger.error('[Tools] write_file failed for %s: %s', rel_path, e, exc_info=True)
         return {'ok': False, 'error': str(e), 'action': 'write_file', 'path': rel_path}
+
+
+# ═══════════════════════════════════════════════════════
+#  save_uploaded_file — binary-safe drag-and-drop into a project folder
+# ═══════════════════════════════════════════════════════
+# Backs POST /api/v1/project/upload. Unlike tool_write_file (text `content`),
+# this writes RAW BYTES so images / PDFs / archives dropped onto the folder
+# browser land on disk intact. It deliberately does NOT auto-register a new
+# workspace root the way an absolute-path agent write does: a UI file-drop
+# into a directory the user has not attached is a mistake we want to surface,
+# not silently expand the workspace. The destination must therefore already
+# resolve INSIDE a registered root (any form: primary, extra, or a subdir of
+# one). Read-only roots are refused, name collisions auto-rename (never
+# clobber), and the write is recorded so it appears in the file-changes bar
+# and is undoable exactly like an agent write.
+
+def _dedupe_target(target):
+    """Return *target*, or a ``name (n).ext`` sibling if it already exists.
+
+    Preserves the extension and inserts a `` (n)`` counter before it, mirroring
+    the OS "copy" convention. Bounded to avoid an unbounded loop on a pathologic
+    directory; falls back to a timestamp suffix past the cap.
+    """
+    if not os.path.exists(target):
+        return target
+    root, ext = os.path.splitext(target)
+    for n in range(1, 1000):
+        candidate = f'{root} ({n}){ext}'
+        if not os.path.exists(candidate):
+            return candidate
+    import time as _t
+    return f'{root} ({int(_t.time() * 1000)}){ext}'
+
+
+def save_uploaded_file(base, rel_path, data, description='', conv_id=None,
+                       task_id=None, on_conflict='rename'):
+    """Save raw *data* bytes to a project file dropped via the folder browser.
+
+    Args:
+        base: The active project root (absolute path).
+        rel_path: Destination path — a project-relative path OR an absolute
+            path that MUST resolve inside an already-registered workspace root.
+        data: The file bytes.
+        description: Optional note (unused by the model; kept for symmetry).
+        conv_id / task_id: Attribution for the undo journal.
+        on_conflict: ``'rename'`` (default — auto-suffix ``name (1).ext``) or
+            ``'overwrite'`` (replace in place, recording the pre-image so undo
+            restores it).
+
+    Returns:
+        dict: ``{ok, action, path, created, renamed, bytesWritten}`` on success,
+        or ``{ok: False, error, ...}`` on rejection/failure. Never raises for
+        the expected cases (read-only root, unregistered path, IO error).
+    """
+    if not isinstance(data, (bytes, bytearray)):
+        return {'ok': False, 'error': 'save_uploaded_file expects bytes',
+                'action': 'upload_file', 'path': rel_path}
+
+    # Resolve WITHOUT the auto-register branch: a UI drop must target an
+    # already-attached root. We reuse _resolve_write_path only for the
+    # relative-path + read-only enforcement; for an absolute path we first
+    # verify it lives under a registered root ourselves so a stray drop can't
+    # invent a workspace.
+    is_abs = bool(rel_path) and (rel_path.startswith('/') or rel_path.startswith('~'))
+    if is_abs:
+        abs_path = os.path.abspath(os.path.expanduser(rel_path))
+        with _lock:
+            roots_snapshot = [rs['path'] for rs in _roots.values()]
+        inside_root = False
+        for root_path in roots_snapshot:
+            norm_root = os.path.abspath(root_path).rstrip(os.sep) or root_path
+            if abs_path == norm_root or abs_path.startswith(norm_root + os.sep):
+                inside_root = True
+                break
+        if not inside_root:
+            return {'ok': False, 'action': 'upload_file', 'path': rel_path,
+                    'error': ('Destination is not inside any attached workspace '
+                              'folder. Add it as a project folder first, then drop.')}
+        try:
+            _enforce_not_readonly(abs_path, conv_id=conv_id)
+        except ValueError as e:
+            return {'ok': False, 'error': str(e), 'action': 'upload_file', 'path': rel_path}
+        target = abs_path
+    else:
+        try:
+            target = _resolve_write_path(base, rel_path, conv_id=conv_id)
+        except ValueError as e:
+            logger.debug('[Tools] upload path rejected %s: %s', rel_path, e, exc_info=True)
+            return {'ok': False, 'error': str(e), 'action': 'upload_file', 'path': rel_path}
+
+    parent = os.path.dirname(target)
+    if parent and not os.path.isdir(parent):
+        try:
+            os.makedirs(parent, exist_ok=True)
+        except Exception as e:
+            logger.warning('[Tools] upload makedirs failed for parent of %s: %s', rel_path, e, exc_info=True)
+            return {'ok': False, 'error': f'Cannot create directory: {e}',
+                    'action': 'upload_file', 'path': rel_path}
+
+    renamed = False
+    original_content = None
+    existed = os.path.isfile(target)
+    if existed and on_conflict == 'rename':
+        new_target = _dedupe_target(target)
+        renamed = new_target != target
+        target = new_target
+        existed = os.path.isfile(target)
+    if existed:  # overwrite path — capture pre-image so undo restores bytes
+        try:
+            with open(target, 'rb') as f:
+                original_content = f.read()
+        except Exception as e:
+            logger.debug('[Tools] upload pre-image read failed for %s: %s', target, e)
+
+    try:
+        with open(target, 'wb') as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        _touch_for_vscode(target)
+        sz = len(data)
+
+        if _should_record_modification(target):
+            _mod_base, _mod_rel = _mod_attribution(target, base, target if is_abs else rel_path)
+            _record_modification(_mod_base, 'write_file', _mod_rel, original_content,
+                                 conv_id=conv_id, task_id=task_id)
+
+        logger.info('upload_file: %s (%s) %s', target, _fmt_size(sz),
+                    '[created]' if not (existed and original_content is not None) else '[overwrote]')
+        return {
+            'ok': True, 'action': 'upload_file', 'path': target,
+            'name': os.path.basename(target),
+            'created': original_content is None,
+            'renamed': renamed, 'bytesWritten': sz,
+            'description': description,
+        }
+    except Exception as e:
+        logger.error('[Tools] upload_file failed for %s: %s', target, e, exc_info=True)
+        return {'ok': False, 'error': str(e), 'action': 'upload_file', 'path': rel_path}
 
 
 # ═══════════════════════════════════════════════════════
@@ -672,10 +1043,12 @@ def _apply_one_diff(base, rel_path, search, replace, description='', conv_id=Non
         new_lines = new_content.count('\n') + 1
         diff_lines = len(search.split('\n'))
 
-        _record_modification(base, 'apply_diff', rel_path,
-                             original_content=content,
-                             reverse_patch=reverse_patch,
-                             conv_id=conv_id, task_id=task_id)
+        if _should_record_modification(target):
+            _mod_base, _mod_rel = _mod_attribution(target, base, rel_path)
+            _record_modification(_mod_base, 'apply_diff', _mod_rel,
+                                 original_content=content,
+                                 reverse_patch=reverse_patch,
+                                 conv_id=conv_id, task_id=task_id)
 
         result = {
             'ok': True, 'action': 'apply_diff', 'path': rel_path,
@@ -982,10 +1355,12 @@ def _insert_one(base, rel_path, anchor, content, position='after', description='
         new_lines = new_content.count('\n') + 1
         inserted_lines = content.count('\n') + 1
 
-        _record_modification(base, 'apply_diff', rel_path,
-                             original_content=file_content,
-                             reverse_patch=reverse_patch,
-                             conv_id=conv_id, task_id=task_id)
+        if _should_record_modification(target):
+            _mod_base, _mod_rel = _mod_attribution(target, base, rel_path)
+            _record_modification(_mod_base, 'apply_diff', _mod_rel,
+                                 original_content=file_content,
+                                 reverse_patch=reverse_patch,
+                                 conv_id=conv_id, task_id=task_id)
 
         # Calculate which line the insertion happened at
         anchor_line = file_content[:anchor_idx].count('\n') + 1

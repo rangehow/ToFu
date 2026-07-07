@@ -106,6 +106,235 @@ class AdapterTest(unittest.TestCase):
         self.assertEqual(len(emitted), len(adapter.messages))
         self.assertTrue(any(m.get('_isEndpointPlanner') for m in emitted))
 
+    def test_step_phase_for_producer_becomes_wire_phase(self):
+        """Engine ``step_phase`` for an assistant producer → wire ``phase``
+        event on the live stream (the "waiting for model…" signal), and is
+        NOT a delta (so it can't pollute the assistant content)."""
+        streamed = []
+        adapter = EndpointEventAdapter(on_stream=streamed.append)
+        adapter.on_event({'type': 'step_phase', 'node_id': 'worker',
+                          'role': 'worker', 'emits': 'assistant',
+                          'phase': 'waiting_model',
+                          'detail': 'Sent to the model, waiting…'})
+        phases = [e for e in streamed if e.get('type') == 'phase']
+        self.assertEqual(len(phases), 1)
+        self.assertEqual(phases[0]['phase'], 'waiting_model')
+        self.assertIn('waiting', phases[0]['detail'].lower())
+        # Never emitted as a delta (would pollute assistantMsg.content).
+        self.assertFalse([e for e in streamed if e.get('type') == 'delta'])
+
+    def test_step_phase_for_verifier_is_skipped(self):
+        """A verifier (user-side) producer's phase would land on the wrong
+        bubble — the adapter must drop it."""
+        streamed = []
+        adapter = EndpointEventAdapter(on_stream=streamed.append)
+        adapter.on_event({'type': 'step_phase', 'node_id': 'vu',
+                          'role': 'virtual_user', 'emits': 'user',
+                          'phase': 'retrying', 'detail': 'Retrying…'})
+        self.assertFalse(streamed)
+
+    def test_subagent_waiting_phase_end_to_end(self):
+        """FULL path: a real SubAgent whose dispatch fires on_retry (the
+        rate-limited cooldown wait) → engine _stream_sink → step_phase →
+        adapter → wire ``phase`` event. Proves the live "waiting for model…"
+        signal reaches the stream during a stall, with NO real LLM."""
+        from lib.orchestration import build_autopilot_definition
+        from lib.swarm.protocol import SubAgentStatus
+
+        streamed = []
+        adapter = EndpointEventAdapter(on_stream=streamed.append)
+
+        def fake_dispatch(body, *, on_content=None, on_thinking=None,
+                          abort_check=None, prefer_model='', log_prefix='',
+                          on_retry=None, **kw):
+            # Simulate the dispatcher entering the cooldown wait (rate-limited
+            # strict_model) BEFORE the first token — exactly the 304s stall.
+            if on_retry:
+                on_retry(attempt=1,
+                         reason='Waiting for model (rate-limited)',
+                         status_code=429)
+            # Then a token arrives and the turn finishes (no tool calls).
+            if on_content:
+                on_content('done analysing')
+            return ({'role': 'assistant', 'content': 'done analysing'},
+                    'stop', {'total_tokens': 5})
+
+        def fake_build_body(**kw):
+            return {'model': kw.get('model', 'm'), 'messages': []}
+
+        # A SubAgent-backed runner that injects the DI mocks (so no real LLM).
+        from lib.swarm.agent import SubAgent
+        from lib.swarm.protocol import SubTaskSpec
+        from lib.orchestration import render_role_brief, resolve_emits
+
+        def subagent_runner(node, ctx, it):
+            role = node.get('role', 'general')
+            spec = SubTaskSpec(role=role,
+                               objective=render_role_brief(node) or 'go',
+                               context=ctx, max_rounds=1)
+            nid = node.get('id')
+            emits = resolve_emits(node)
+
+            def _sink(kind, chunk, *, phase='', **meta):
+                # Mirror the engine's real _stream_sink mapping.
+                ev = ({'type': 'step_phase', 'node_id': nid, 'role': role,
+                       'emits': emits, 'phase': phase or 'working',
+                       'detail': chunk, **meta}
+                      if kind == 'phase' else
+                      {'type': 'step_delta', 'node_id': nid, 'role': role,
+                       'emits': emits, 'kind': kind, 'chunk': chunk})
+                adapter.on_event(ev)
+
+            agent = SubAgent(spec, parent_task={'id': 't', 'convId': 'c',
+                                                'config': {}},
+                             all_tools=[], model='m',
+                             build_body_fn=fake_build_body,
+                             dispatch_stream_fn=fake_dispatch,
+                             stream_sink=_sink)
+            r = agent.run()
+            # Autopilot VU stops the loop on TASK_DONE.
+            out = ('[VU: TASK_DONE]' if role == 'virtual_user'
+                   else (r.final_answer or ''))
+            return {'output': out,
+                    'status': SubAgentStatus.COMPLETED.value, 'error': ''}
+
+        defn = build_autopilot_definition(max_iterations=1)
+        FlowExecutor(defn, agent_runner=subagent_runner,
+                     on_event=adapter.on_event).run()
+
+        phases = [e for e in streamed if e.get('type') == 'phase'
+                  and e.get('phase') in ('waiting_model', 'retrying')]
+        self.assertTrue(phases, 'expected a waiting/retrying phase on the stream')
+        # The pre-dispatch 'waiting_model' fired first.
+        self.assertEqual(phases[0]['phase'], 'waiting_model')
+        # The on_retry cooldown signal surfaced as a 'retrying' phase carrying
+        # the 429 status (the rate-limited-stall signal — the whole point).
+        retrying = [e for e in phases if e.get('phase') == 'retrying']
+        self.assertTrue(retrying, 'expected a retrying phase from on_retry')
+        self.assertEqual(retrying[0]['statusCode'], 429)
+        # The worker also streamed its content as a delta (not the phase).
+        self.assertTrue(any(e.get('type') == 'delta' and e.get('content')
+                            for e in streamed))
+
+
+class ThinkingPropagationTest(unittest.TestCase):
+    """The orchestration-flow path must carry per-node thinking through
+    finalize so the bubble's thinking block survives (the "thinking refreshes
+    then disappears instantly" bug). Asserts:
+      • the finalized MESSAGE dict (planner / worker / critic) carries
+        ``thinking``;
+      • the finalizing SSE events (``endpoint_planner_done`` /
+        ``endpoint_critic_msg``) carry ``thinking``.
+    Revert-proof: dropping ``thinking`` from any of those sites fails here.
+    """
+
+    def _drive(self):
+        defn = build_endpoint_definition(max_iterations=3)
+        streamed = []
+        adapter = EndpointEventAdapter(on_stream=streamed.append)
+
+        def runner(node, ctx, it):
+            role = node.get('role')
+            # Mock runner mirrors the real _default_runner return shape,
+            # INCLUDING the new 'thinking' key the engine now populates from
+            # the accumulated stream chunks.
+            if role == 'worker':
+                return {'output': 'work done', 'status': 'completed',
+                        'error': '', 'tool_names': ['write_file'],
+                        'thinking': 'WORKER-REASONING'}
+            if role == 'critic':
+                return {'output': '[VERDICT: STOP]', 'status': 'completed',
+                        'error': '', 'thinking': 'CRITIC-REASONING'}
+            return {'output': 'PLAN', 'status': 'completed', 'error': '',
+                    'thinking': 'PLANNER-REASONING'}
+
+        FlowExecutor(defn, agent_runner=runner,
+                     on_event=adapter.on_event).run()
+        return adapter.messages, streamed
+
+    def test_messages_carry_thinking(self):
+        msgs, _ = self._drive()
+        planner = [m for m in msgs if m.get('_isEndpointPlanner')][0]
+        worker = [m for m in msgs
+                  if m.get('_epIteration') and not m.get('_isEndpointReview')][0]
+        critic = [m for m in msgs if m.get('_isEndpointReview')][-1]
+        self.assertEqual(planner.get('thinking'), 'PLANNER-REASONING')
+        self.assertEqual(worker.get('thinking'), 'WORKER-REASONING')
+        self.assertEqual(critic.get('thinking'), 'CRITIC-REASONING')
+
+    def test_finalize_sse_events_carry_thinking(self):
+        _, streamed = self._drive()
+        planner_done = [e for e in streamed
+                        if e.get('type') == 'endpoint_planner_done']
+        critic_msg = [e for e in streamed
+                      if e.get('type') == 'endpoint_critic_msg']
+        self.assertTrue(planner_done)
+        self.assertTrue(critic_msg)
+        self.assertEqual(planner_done[0].get('thinking'), 'PLANNER-REASONING')
+        self.assertEqual(critic_msg[-1].get('thinking'), 'CRITIC-REASONING')
+
+    def test_engine_step_complete_and_trace_carry_full_streamed_thinking(self):
+        """End-to-end via the engine's REAL default SubAgent runner (no LLM):
+        the engine's ``_stream_sink`` accumulates the FULL streamed thinking
+        (not the 2000-char-capped ``reasoning_trace``) and puts it on BOTH the
+        ``step_complete`` event and the durable ``step_trace`` entry.
+
+        Patches ``lib.swarm.agent._default_dispatch_stream`` /
+        ``_default_build_body`` so every node node runs the real
+        ``FlowExecutor._default_runner`` path (the production path) with no
+        network. The mocked dispatch streams a >2000-char thinking blob; the
+        critic's 'final out' classifies as STOP (loose fallback) → one
+        iteration."""
+        import lib.swarm.agent as agent_mod
+        from lib.orchestration import build_endpoint_definition
+
+        big_think = 'THINK-' * 1000  # 6000 chars > reasoning_trace 2000 cap
+
+        def fake_dispatch(body, *, on_content=None, on_thinking=None,
+                          abort_check=None, prefer_model='', log_prefix='',
+                          on_retry=None, **kw):
+            if on_thinking:
+                on_thinking(big_think)
+            if on_content:
+                on_content('final out')
+            return ({'role': 'assistant', 'content': 'final out'},
+                    'stop', {'total_tokens': 3})
+
+        def fake_build_body(**kw):
+            return {'model': kw.get('model', 'm'), 'messages': []}
+
+        events = []
+        orig_dispatch = agent_mod._default_dispatch_stream
+        orig_build = agent_mod._default_build_body
+        agent_mod._default_dispatch_stream = fake_dispatch
+        agent_mod._default_build_body = fake_build_body
+        try:
+            defn = build_endpoint_definition(max_iterations=1)
+            # agent_runner=None → engine uses its built-in _default_runner
+            # (the production code path under test).
+            FlowExecutor(defn, agent_runner=None,
+                         on_event=events.append,
+                         all_tools=[], model='m').run()
+        finally:
+            agent_mod._default_dispatch_stream = orig_dispatch
+            agent_mod._default_build_body = orig_build
+
+        completes = [e for e in events if e.get('type') == 'step_complete']
+        traces = [e for e in events if e.get('type') == 'step_trace']
+        self.assertTrue(completes)
+        self.assertTrue(traces)
+        # The engine captured the FULL streamed thinking (not the 2000-char
+        # reasoning_trace cap) onto step_complete + step_trace.
+        complete_think = [e for e in completes if e.get('thinking')]
+        self.assertTrue(complete_think,
+                        'step_complete should carry accumulated thinking')
+        self.assertIn(big_think, complete_think[0]['thinking'])
+        self.assertGreater(len(complete_think[0]['thinking']), 2000)
+        trace_think = [e for e in traces if e.get('thinking')]
+        self.assertTrue(trace_think,
+                        'step_trace should carry accumulated thinking')
+        self.assertIn(big_think, trace_think[0]['thinking'])
+
 
 if __name__ == '__main__':
     unittest.main()

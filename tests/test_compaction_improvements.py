@@ -352,74 +352,13 @@ class TestDeltaAttachments:
     across turns and delta tracking prevents DUPLICATE injection.
     """
 
-    def test_first_call_computes_and_returns(self):
-        from lib.tasks_pkg.system_context import _get_cached_or_compute, _last_context_cache
-        _last_context_cache.clear()
-        call_count = [0]
-        def compute():
-            call_count[0] += 1
-            return 'Project context v1'
-        result = _get_cached_or_compute('conv1', 'project', compute)
-        assert result == 'Project context v1'
-        assert call_count[0] == 1
-
-    def test_second_identical_call_still_returns_text(self):
-        """Even when hash matches, text is ALWAYS returned (for injection)."""
-        from lib.tasks_pkg.system_context import _get_cached_or_compute, _last_context_cache
-        _last_context_cache.clear()
-        text = 'Project context v1'
-        _get_cached_or_compute('conv2', 'project', lambda: text)
-        # Second call — compute_fn is still called (we always compute to
-        # check the hash), but the result is returned from cache
-        result = _get_cached_or_compute('conv2', 'project', lambda: text)
-        assert result == text  # MUST return text, not empty/None
-
-    def test_changed_content_updates_cache(self):
-        from lib.tasks_pkg.system_context import _get_cached_or_compute, _last_context_cache
-        _last_context_cache.clear()
-        _get_cached_or_compute('conv3', 'project', lambda: 'v1')
-        result = _get_cached_or_compute('conv3', 'project', lambda: 'v2 updated')
-        assert result == 'v2 updated'
-
-    def test_different_categories_independent(self):
-        from lib.tasks_pkg.system_context import _get_cached_or_compute, _last_context_cache
-        _last_context_cache.clear()
-        r1 = _get_cached_or_compute('conv4', 'project', lambda: 'proj ctx')
-        r2 = _get_cached_or_compute('conv4', 'skills', lambda: 'skills ctx')
-        assert r1 == 'proj ctx'
-        assert r2 == 'skills ctx'
-
-    def test_different_convs_independent(self):
-        from lib.tasks_pkg.system_context import _get_cached_or_compute, _last_context_cache
-        _last_context_cache.clear()
-        r1 = _get_cached_or_compute('conv_a', 'project', lambda: 'ctx')
-        r2 = _get_cached_or_compute('conv_b', 'project', lambda: 'ctx')
-        assert r1 == 'ctx'
-        assert r2 == 'ctx'
-
-    def test_context_hash_consistency(self):
-        from lib.tasks_pkg.system_context import _context_hash
-        text = 'Hello World'
-        h1 = _context_hash(text)
-        h2 = _context_hash(text)
-        assert h1 == h2
-        assert len(h1) == 16  # md5[:16]
-
-    def test_empty_compute_returns_empty(self):
-        from lib.tasks_pkg.system_context import _get_cached_or_compute, _last_context_cache
-        _last_context_cache.clear()
-        result = _get_cached_or_compute('conv5', 'project', lambda: '')
-        assert result == ''
-
     def test_context_always_injected_on_fresh_messages(self):
         """Simulate the real scenario: 2 tasks in same conversation.
         Both should have project context in their system message."""
         from lib.tasks_pkg.system_context import (
             _append_to_system_message,
             _inject_system_contexts,
-            _last_context_cache,
         )
-        _last_context_cache.clear()
 
         # Task 1: fresh messages from frontend
         msgs1 = [{'role': 'system', 'content': 'You are helpful'},
@@ -816,6 +755,75 @@ class TestDiskPersistence:
         from lib.tasks_pkg.tool_display import _persisted_read_labels
         clear()
         assert _persisted_read_labels({'reads': [{'path': 'lib/server.py'}]}) == ''
+
+    def test_get_conversation_label_skips_decorative_first_line(self):
+        """A spilled get_conversation result opens with a ``═══`` rule; the
+        persisted-result label must show the meaningful title line, not the
+        wall of box-drawing characters (the reported UI ugliness)."""
+        import os
+        from lib.tasks_pkg.compaction import _persist_to_disk
+        from lib.tasks_pkg.persist_registry import clear, lookup
+        from lib.tasks_pkg.tool_display import _persisted_read_labels
+
+        clear()
+        content = (
+            '═' * 60 + '\n'
+            'Referenced Conversation: "Why does it show fail to fetch?"\n'
+            '   ID: mr4e8pnxbv440z\n'
+            '   Messages: 12\n'
+            + '═' * 60 + '\n\n'
+            + ('some long body text ' * 6000)
+        )
+        out = _persist_to_disk(content, 'get_conversation', 'toolu_conv', 'conv_gc')
+        # Single-file persist path.
+        assert out.startswith('[Persisted to:')
+        fp = out.split('[Persisted to: ', 1)[1].split(']', 1)[0]
+
+        tool, desc = lookup(fp)
+        assert tool == 'get_conversation'
+        # Description is the meaningful header, NOT the ═══ rule.
+        assert 'Referenced Conversation' in desc
+        assert '═' not in desc
+
+        display = _persisted_read_labels({'reads': [{'path': fp}]})
+        assert 'past conversation' in display  # friendly verb
+        assert 'Referenced Conversation' in display
+        assert '═' not in display
+        assert 'get_conversation output' not in display
+
+        os.unlink(fp)
+
+    def test_get_conversation_label_survives_registry_loss(self):
+        """After a server restart the process-local registry is empty, so the
+        row must fall back to describe_filename(). A default-spill
+        get_conversation_<id>.txt must still render the ``past conversation``
+        verb — never the raw opaque filename."""
+        from lib.tasks_pkg.persist_registry import (
+            clear, describe_filename, friendly_label,
+        )
+        from lib.tasks_pkg.tool_display import _persisted_read_labels
+
+        clear()  # simulate a fresh process (no in-memory labels)
+        fname = 'get_conversation_9Yqehab12cd.txt'
+
+        # Stateless filename parse recovers the tool (no description).
+        parsed = describe_filename(fname)
+        assert parsed == ('get_conversation', '')
+        assert friendly_label(*parsed) == 'past conversation'
+
+        display = _persisted_read_labels({'reads': [{'path': fname}]})
+        assert 'past conversation' in display
+        assert 'get_conversation_9Yqehab12cd' not in display  # not the raw name
+        assert '.txt' not in display
+
+    def test_default_spill_recognition_is_allowlisted(self):
+        """describe_filename must NOT mistake an ordinary project file that
+        merely has a name_underscore.txt shape for a persisted spill —
+        recognition is restricted to _DEFAULT_SPILL_TOOLS."""
+        from lib.tasks_pkg.persist_registry import clear, describe_filename
+        clear()
+        assert describe_filename('requirements_dev.txt') is None
+        assert describe_filename('notes_2026.txt') is None
 
     def test_find_files_batch_split_persist(self):
         """Batch find_files persist should produce per-search files + index listing ALL patterns."""
@@ -1920,3 +1928,157 @@ class TestPairedAssistantCompaction:
         src = inspect.getsource(micro_compact)
         assert 'enable_paired_assistant_compact' in src, (
             'micro_compact must honor enable_paired_assistant_compact kwarg')
+
+
+
+# ═══════════════════════════════════════════════════════════
+#  14. Proactive head-truncate fallback — the OOM fatal-loop fix
+#
+#  When the L2 summary LLM cannot run (no 'cheap' slot / saturated single
+#  model / input too big) the proactive path used to return False and do
+#  NOTHING, leaving the context pinned near the window every round. The
+#  reactive head-truncate net never fires proactively (the max_tokens clamp
+#  keeps the request just under the hard ceiling, so there's no API
+#  rejection). Nothing bounded the context → unbounded re-send → OOM.
+#
+#  These tests drive the REAL proactive entry (run_compaction_pipeline)
+#  with the summary dispatch stubbed to FAIL, and prove:
+#    * WITHOUT the fallback (double-neuter NC): context stays oversized.
+#    * WITH the fallback: context is bounded (messages dropped).
+#    * Non-critical case (headroom remains): still returns False — the
+#      empty-summary→False contract is preserved, no gratuitous truncation.
+#    * Reactive path is byte-identical (does NOT double-truncate).
+# ═══════════════════════════════════════════════════════════
+
+@pytest.mark.unit
+class TestProactiveHeadTruncateFallback:
+    """Fix for the force-compact→OOM fatal loop when the summary LLM is down."""
+
+    @staticmethod
+    def _oversized_messages(n_turns=40, chars_per_turn=8000):
+        """Build a message list that is genuinely over a 128k-token window.
+
+        ~40 turns × ~8000 chars ≈ 320k chars ≈ 106k+ tokens (the entropy
+        heuristic counts ~1 token / 3 latin chars → but padded to be safely
+        over usable≈90k for a 128k window). Every turn is anchored by a real
+        user message so _find_turn_boundary is well-formed."""
+        msgs = [{'role': 'system', 'content': 'static system prompt'}]
+        body = 'x' * chars_per_turn
+        for i in range(n_turns):
+            msgs.append({'role': 'user', 'content': f'user turn {i}: {body}'})
+            msgs.append({'role': 'assistant', 'content': f'assistant turn {i}: {body}'})
+        return msgs
+
+    @staticmethod
+    def _task_128k():
+        # gpt-4 → 128k window in _get_static_context_limit.
+        return {'id': 'oom_test', 'convId': 'conv-oom',
+                'config': {'model': 'gpt-4'}}
+
+    def _stub_summary_fail(self, monkeypatch):
+        """Make the L2 summary LLM path fail exactly like a dead 'cheap'
+        dispatch on a vanilla deploy (RuntimeError from dispatch_chat).
+
+        dispatch_chat is lazy-imported INSIDE _generate_query_aware_summary,
+        so we patch it on its home module lib.llm_dispatch — this exercises
+        the REAL graceful-degradation path (cheap→text retry) end to end,
+        then still raises so the summary genuinely fails."""
+        import lib.llm_dispatch as _ld
+        from lib.tasks_pkg.compaction import _layer2
+
+        def _boom(*a, **k):
+            raise RuntimeError('All 3 dispatch attempts failed for capability=cheap')
+
+        monkeypatch.setattr(_ld, 'dispatch_chat', _boom)
+        # Avoid DB/SSE side effects from archival + events.
+        monkeypatch.setattr(_layer2, '_archive_transcript', lambda *a, **k: None)
+
+    def test_proactive_bounds_context_when_summary_fails(self, monkeypatch):
+        """WITH the fallback: run_compaction_pipeline shrinks an oversized
+        context even though the summary LLM is dead."""
+        import lib.tasks_pkg.compaction._pipeline as pl
+        from lib.tasks_pkg.compaction._tokens import (
+            _estimate_total_tokens, _get_context_limit, _usable_context,
+        )
+        self._stub_summary_fail(monkeypatch)
+        # Neutralize L1 so the ONLY thing that can shrink the list is the L2
+        # force-compact fallback we are testing (isolate the mechanism).
+        monkeypatch.setattr(pl, 'micro_compact', lambda *a, **k: 0)
+
+        msgs = self._oversized_messages()
+        task = self._task_128k()
+        before_tokens = _estimate_total_tokens(msgs)
+        before_len = len(msgs)
+        usable = _usable_context(_get_context_limit(task))
+        assert before_tokens >= usable, (
+            f'test fixture not oversized: {before_tokens} < usable {usable}')
+
+        pl.run_compaction_pipeline(msgs, 1, task=task)
+
+        after_tokens = _estimate_total_tokens(msgs)
+        assert len(msgs) < before_len, (
+            'proactive pipeline must DROP messages when the summary LLM is '
+            'down and the context is critically over budget (OOM guard)')
+        assert after_tokens < before_tokens, 'context must actually shrink'
+
+    def test_force_compact_fallback_returns_true_and_truncates(self, monkeypatch):
+        """Unit-level: force_compact_if_needed(_allow_head_truncate_fallback=True)
+        returns True and drops messages when summary fails + over budget."""
+        from lib.tasks_pkg.compaction import _layer2
+        self._stub_summary_fail(monkeypatch)
+
+        msgs = self._oversized_messages()
+        before_len = len(msgs)
+        result = _layer2.force_compact_if_needed(
+            msgs, task=self._task_128k(), force=True,
+            _allow_head_truncate_fallback=True)
+        assert result is True
+        assert len(msgs) < before_len
+
+    def test_no_fallback_flag_preserves_false_contract(self, monkeypatch):
+        """WITHOUT the opt-in flag (the reactive path's shape): summary
+        failure → returns False and does NOT truncate. This is the
+        force-compact-empty-summary-fatal-loop contract that reactive_compact's
+        own Phase-4 head-truncate depends on."""
+        from lib.tasks_pkg.compaction import _layer2
+        self._stub_summary_fail(monkeypatch)
+
+        msgs = self._oversized_messages()
+        before = list(msgs)
+        result = _layer2.force_compact_if_needed(
+            msgs, task=self._task_128k(), force=True)  # no fallback flag
+        assert result is False
+        assert msgs == before, (
+            'without the opt-in flag, a failed summary must NOT mutate the '
+            'message list — reactive Phase-4 head-truncate depends on this')
+
+    def test_non_critical_still_returns_false(self, monkeypatch):
+        """WITH the flag but context UNDER the window: summary failure still
+        returns False and does not gratuitously truncate. Only a genuine
+        over-window overflow triggers the head-truncate escape."""
+        from lib.tasks_pkg.compaction import _layer2
+        self._stub_summary_fail(monkeypatch)
+
+        # Small conversation, nowhere near a 128k window.
+        msgs = [{'role': 'system', 'content': 'sys'}]
+        for i in range(3):
+            msgs.append({'role': 'user', 'content': f'q{i}'})
+            msgs.append({'role': 'assistant', 'content': f'a{i}'})
+        before = list(msgs)
+        result = _layer2.force_compact_if_needed(
+            msgs, task=self._task_128k(), force=True,
+            _allow_head_truncate_fallback=True)
+        assert result is False, (
+            'below the window, a failed summary must not head-truncate')
+        assert msgs == before
+
+    def test_reactive_does_not_pass_fallback_flag(self):
+        """reactive_compact keeps its OWN Phase-4 head-truncate; it must NOT
+        also pass _allow_head_truncate_fallback to force_compact (that would
+        double-truncate). Guards the byte-identical-reactive requirement."""
+        import inspect
+        from lib.tasks_pkg.compaction import _reactive
+        src = inspect.getsource(_reactive.reactive_compact)
+        assert '_allow_head_truncate_fallback' not in src, (
+            'reactive_compact must not opt into the proactive head-truncate '
+            'fallback — it owns its Phase-4 _head_truncate already')

@@ -109,6 +109,44 @@ def extract_legacy_thinking_depth(value: Any) -> Optional[str]:
     return _LEGACY_PRESET_TO_DEPTH.get(value)
 
 
+#: Canonical default for the per-conversation ``autoTranslate`` flag when no
+#: explicit value exists anywhere. Translation costs an extra LLM round-trip
+#: plus latency on every turn, so it is OPT-IN (OFF). This single constant is
+#: the source of truth — every trigger-path read (input send-path, the
+#: server-side safety net, the incremental per-round gate, the headless API
+#: path) MUST resolve through :func:`resolve_auto_translate` so the three
+#: layers can never disagree (the historical three-way default split that made
+#: auto-translate fire unpredictably).
+AUTO_TRANSLATE_DEFAULT = False
+
+
+def resolve_auto_translate(*sources: Optional[Mapping]) -> bool:
+    """Resolve the effective ``autoTranslate`` decision from one or more dicts.
+
+    Each ``source`` is a settings/config-shaped mapping that MAY carry an
+    ``autoTranslate`` key. Sources are consulted left-to-right; the FIRST one
+    that defines the key (value is not ``None``) wins and its truthiness is
+    returned. When no source defines it, the canonical
+    :data:`AUTO_TRANSLATE_DEFAULT` (OFF) is returned.
+
+    This is the ONE backend entry point for the trigger decision — callers
+    (``routes/chat.py`` send path, ``lib/chat/turn_builder`` input path,
+    ``lib/message_queue``, the ``lib/tasks_pkg/auto_translate`` safety net, the
+    ``lib/translate/incremental`` gate, and the headless ``routes/api_v1/chat``
+    path) pass whichever dict they hold and never embed a literal default
+    again. Passing several sources lets a caller express precedence (e.g. an
+    explicit per-request config overriding stored conv settings) without
+    duplicating the "first-defined-wins, else OFF" rule.
+    """
+    for src in sources:
+        if not src:
+            continue
+        val = src.get('autoTranslate')
+        if val is not None:
+            return bool(val)
+    return AUTO_TRANSLATE_DEFAULT
+
+
 def _coerce_bool(v: Any, default: bool = False) -> bool:
     """JS-compatible truthiness check.
 
@@ -131,6 +169,30 @@ def _first_defined(*candidates):
 def _pick(active: Any, inactive: Any, *, is_active: bool):
     """Pick ``active`` when current conv is active, else ``inactive``."""
     return active if is_active else inactive
+
+
+#: Built-in flow names the toolbar's ``builtin:<name>`` selector maps to.
+#: Mirrors the builders registered in lib.orchestration_endpoint_runner.
+_KNOWN_FLOW_BUILTINS = frozenset({'endpoint', 'autopilot'})
+
+
+def _parse_active_flow(value: Any) -> tuple[str, str]:
+    """Split the toolbar ``activeFlow`` token into ``(flow_builtin, flow_id)``.
+
+    The frontend Mode dropdown stores ONE string:
+      * ``''`` / non-string        → no flow selected → ('', '')
+      * ``'builtin:<name>'``       → a canonical flow → (name, '')
+      * any other non-empty string → a stored orchestration id → ('', id)
+
+    These map directly onto the ``flowBuiltin`` / ``flowId`` fields that
+    ``lib.orchestration_endpoint_runner.resolve_chat_flow_entry`` reads.
+    """
+    if not isinstance(value, str) or not value:
+        return '', ''
+    if value.startswith('builtin:'):
+        name = value[len('builtin:'):]
+        return (name, '') if name in _KNOWN_FLOW_BUILTINS else ('', '')
+    return '', value
 
 
 def resolve_conv_config(
@@ -175,6 +237,22 @@ def resolve_conv_config(
         'model': model,
         'preset': model,
         'systemPrompt': ov.get('systemPrompt') or defaults.get('systemPrompt') or '',
+        # 'append' (default) → user prompt is prepended ON TOP of the
+        # built-in Claude-Code static prompt. 'replace' → user prompt
+        # fully replaces the built-in base block (CLAUDE.md / memory /
+        # swarm / date are still auto-injected — they track feature
+        # toggles, not the base prose). See _inject_system_contexts.
+        'systemPromptMode': (
+            ov.get('systemPromptMode')
+            or defaults.get('systemPromptMode')
+            or 'append'),
+        # Per-block keep/drop toggles from the system-prompt editor.
+        # Shape: {'disabled': [block_id, ...]}. Global (not per-conv),
+        # so it reads from overrides → server defaults like systemPrompt.
+        'systemPromptBlocks': (
+            ov.get('systemPromptBlocks')
+            or defaults.get('systemPromptBlocks')
+            or {}),
         'thinkingDepth': _pick(
             ov.get('thinkingDepth') or legacy_depth,
             conv.get('thinkingDepth') or legacy_depth or None,
@@ -247,7 +325,6 @@ def resolve_conv_config(
             _coerce_bool(conv.get('autopilotEnabled')),
             is_active=is_active,
         ),
-        'agentBackend': ov.get('agentBackend') or 'builtin',
         'autoTranslate': (
             _coerce_bool(conv.get('autoTranslate'),
                           _coerce_bool(ov.get('autoTranslate'), False))
@@ -257,6 +334,14 @@ def resolve_conv_config(
         'browserClientId': None,  # populated below
         'keepToolHistory': ov.get('keepToolHistory') is not False,
     }
+    # ── Orchestration flow selection (the Mode dropdown) ──
+    # Active conv reads the live toolbar token; inactive reads the stored one.
+    active_flow = _pick(ov.get('activeFlow'), conv.get('activeFlow'),
+                        is_active=is_active)
+    flow_builtin, flow_id = _parse_active_flow(active_flow)
+    out['activeFlow'] = active_flow if isinstance(active_flow, str) else ''
+    out['flowBuiltin'] = flow_builtin
+    out['flowId'] = flow_id
     # browserClientId is gated on the resolved browserEnabled flag.
     if out['browserEnabled']:
         out['browserClientId'] = ov.get('browserClientId') or None
@@ -302,6 +387,8 @@ def resolve_conv_settings(
         'autopilotEnabled': _coerce_bool(conv.get('autopilotEnabled')),
         'imageGenEnabled': _coerce_bool(conv.get('imageGenEnabled')),
         'humanGuidanceEnabled': _coerce_bool(conv.get('humanGuidanceEnabled')),
+        'activeFlow': (conv.get('activeFlow') if isinstance(conv.get('activeFlow'), str)
+                       else (ov.get('activeFlow') if isinstance(ov.get('activeFlow'), str) else '')),
         'projectPath': conv.get('projectPath') or '',
         'projectPaths': list(conv.get('projectPaths') or []),
         'readOnlyPaths': list(conv.get('readOnlyPaths') or []),
@@ -319,4 +406,5 @@ def resolve_conv_settings(
 __all__ = [
     'resolve_conv_config', 'resolve_conv_settings',
     'canonicalise_model_id', 'extract_legacy_thinking_depth',
+    'resolve_auto_translate', 'AUTO_TRANSLATE_DEFAULT',
 ]

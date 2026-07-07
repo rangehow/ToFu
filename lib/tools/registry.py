@@ -32,17 +32,316 @@ Design contract (DO NOT BREAK)
 4. **Side-effect gates are allowed.**  ``build()`` may log (e.g.
    "browser requested but extension not connected") and may return an
    empty list — exactly mirroring the legacy behaviour.
+
+Plugin isolation (multi-tenant)
+-------------------------------
+``discover_plugin_specs()`` loads third-party ``tofu.tools`` entry points into
+the SAME process-global ``_TOOL_SPECS`` list as the built-ins.  On a shared,
+multi-tenant server (e.g. the headless ``/api/v1/agent/run`` API) that means a
+plugin installed for one caller would otherwise be visible to EVERY caller —
+its tool schema (and any imperative "always call me first" text in that schema)
+silently pollutes unrelated requests.
+
+To prevent this, every spec carries a :attr:`ToolSpec.source`
+(``'builtin'`` | ``'plugin'``) tag and plugins additionally carry a
+:attr:`ToolSpec.plugin_name`.  :func:`assemble_tool_list` consults the
+per-request :attr:`ToolContext.enabled_plugins` allow-list:
+
+* built-in specs are ALWAYS evaluated;
+* a plugin spec is evaluated only when its ``plugin_name`` is allow-listed.
+
+The allow-list is resolved per request by :func:`resolve_enabled_plugins` from
+``cfg['plugins']`` (request-scoped) falling back to the
+``TOFU_DEFAULT_TOOL_PLUGINS`` env var (deployment-wide default).  The default
+when neither is set is **fail-closed**: NO third-party plugins are visible.  A
+dedicated single-tenant deployment that wants the old "everything I installed
+is on" behaviour sets ``TOFU_DEFAULT_TOOL_PLUGINS=*`` (or passes
+``cfg['plugins']='*'``), which maps to ``enabled_plugins=None`` (gate fully
+open).  This isolation is a VISIBILITY boundary (the LLM never sees the schema),
+not a security sandbox — a plugin's handler code still lives in-process.
 """
 
 from __future__ import annotations
 
+import os
+import re
+import threading
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from lib.log import get_logger
 
 logger = get_logger(__name__)
+
+
+# ══════════════════════════════════════════════════════════
+#  Sticky multi-root latch (prompt-cache stability)
+# ══════════════════════════════════════════════════════════
+# When a conversation transitions to multi-root, every path-taking tool gains
+# the ``_MULTIROOT_PATH_HINT`` text on its ``path`` field (see
+# lib/tools/project.py::with_multiroot_hint). If that decision flapped between
+# rounds, the tool-schema bytes would change and invalidate the whole prompt
+# cache prefix (~65k tokens). We therefore latch "this conversation is
+# multi-root" once and never downgrade mid-conversation. Cleared by
+# ``clear_multiroot_sticky`` when the conversation's cache state is evicted.
+_multiroot_sticky: set[str] = set()
+_multiroot_sticky_lock = threading.Lock()
+
+
+def mark_multiroot_sticky(conv_id: str) -> bool:
+    """Latch *conv_id* as multi-root for the rest of the conversation.
+
+    Returns ``True`` only on the OFF→ON transition (the first time this
+    conversation is marked multi-root), ``False`` if it was already sticky.
+    Callers use the transition signal to re-establish the tool-schema latch
+    exactly once — see :meth:`ToolContext.multiroot_active`.
+    """
+    if not conv_id:
+        return False
+    with _multiroot_sticky_lock:
+        if conv_id in _multiroot_sticky:
+            return False
+        _multiroot_sticky.add(conv_id)
+        return True
+
+
+def is_multiroot_sticky(conv_id: str) -> bool:
+    """Whether *conv_id* has been latched multi-root."""
+    if not conv_id:
+        return False
+    with _multiroot_sticky_lock:
+        return conv_id in _multiroot_sticky
+
+
+def clear_multiroot_sticky(conv_id: str) -> None:
+    """Release the multi-root latch for *conv_id* (on cache-state cleanup)."""
+    if not conv_id:
+        return
+    with _multiroot_sticky_lock:
+        _multiroot_sticky.discard(conv_id)
+
+
+# ══════════════════════════════════════════════════════════
+#  Per-conversation tool-SCHEMA latch (the (B) root fix)
+# ══════════════════════════════════════════════════════════
+# The whole tools array sits in the cached prompt prefix (BP1-3). ANY byte
+# change between rounds — a user toggling Swarm/Scheduler/Browser on the
+# frontend, an MCP server re-emitting a tool, etc. — invalidates the entire
+# prefix (~65k tokens). The (A) fixes removed the *incidental* code-side flaps
+# (multiroot hint, MCP ordering). This latch removes the LAST class: it freezes
+# the EXACT tool list a conversation first used, and serves that byte-identical
+# snapshot for every later round, so a mid-conversation change cannot break the
+# cache. The change is not lost — it is DEFERRED: it applies to the next NEW
+# conversation, or immediately if the user clicks "Apply now" (which clears the
+# latch). We still assemble fresh every round (cheap) purely to DETECT a
+# divergence and signal the frontend.
+#
+# Kill switch: env TOFU_TOOLSET_LATCH=0 disables the freeze (assembly returns
+# the live list every round, legacy behaviour).
+_tool_latch: dict[str, tuple[str, list[dict]]] = {}  # conv_id → (hash, snapshot)
+_tool_latch_diverged: dict[str, bool] = {}           # conv_id → last divergence flag
+# conv_id → {'added': [name, ...], 'removed': [name, ...]} for the most recent
+# divergence — lets the frontend show WHICH tools the held-back toggle changed.
+_tool_latch_diff: dict[str, dict[str, list[str]]] = {}
+_tool_latch_lock = threading.Lock()
+
+
+def _tool_names(tool_list: list[dict] | None) -> list[str]:
+    """Extract the ordered tool names from an OpenAI-style tool list."""
+    names: list[str] = []
+    for t in (tool_list or []):
+        try:
+            name = (t.get('function') or {}).get('name')
+        except AttributeError:
+            name = None
+        if name:
+            names.append(name)
+    return names
+
+
+def _toolset_latch_enabled() -> bool:
+    """Whether the tool-schema latch is active (default ON)."""
+    val = os.environ.get('TOFU_TOOLSET_LATCH', '1').strip().lower()
+    return val not in ('0', 'false', 'no', 'off')
+
+
+def _hash_tool_list(tool_list: list[dict]) -> str:
+    """Stable hash of a tool list's bytes (order-sensitive, content-sensitive)."""
+    import hashlib
+    import json
+    try:
+        blob = json.dumps(tool_list, sort_keys=True, ensure_ascii=False)
+    except (TypeError, ValueError):
+        blob = str(tool_list)
+    return hashlib.md5(blob.encode('utf-8', errors='replace')).hexdigest()
+
+
+def _diagnose_byte_drift(snapshot: list[dict], fresh: list[dict]) -> str:
+    """Describe the FIRST tool whose bytes differ between two same-name lists.
+
+    Called only when the latch flags a divergence but the set of tool NAMES is
+    unchanged — i.e. a tool's *content* or the list *order* drifted. Returns a
+    short human string naming the offending tool + which field changed
+    (``position`` / ``description`` / ``parameters``), with values truncated
+    per CLAUDE.md §2.6 so the log line stays grep-able and bounded. Returns
+    ``''`` when no positional difference is found (e.g. a pure re-order that
+    the name-set view already collapsed).
+    """
+    import json
+
+    def _fn(t: dict) -> dict:
+        try:
+            return t.get('function') or {}
+        except AttributeError:
+            return {}
+
+    def _trunc(s: str, n: int = 240) -> str:
+        s = str(s)
+        return s if len(s) <= n else s[:n] + f'…(+{len(s) - n} chars)'
+
+    for i, (a, b) in enumerate(zip(snapshot, fresh)):
+        fa, fb = _fn(a), _fn(b)
+        na, nb = fa.get('name'), fb.get('name')
+        if na != nb:
+            return f'position {i}: frozen={na!r} fresh={nb!r} (tool order changed)'
+        da, db = fa.get('description', ''), fb.get('description', '')
+        if da != db:
+            return (f'tool={na!r} field=description '
+                    f'frozen={_trunc(da)!r} fresh={_trunc(db)!r}')
+        pa = json.dumps(fa.get('parameters'), sort_keys=True, ensure_ascii=False)
+        pb = json.dumps(fb.get('parameters'), sort_keys=True, ensure_ascii=False)
+        if pa != pb:
+            return (f'tool={na!r} field=parameters '
+                    f'frozen={_trunc(pa, 320)} fresh={_trunc(pb, 320)}')
+    if len(snapshot) != len(fresh):
+        return (f'length changed: frozen={len(snapshot)} fresh={len(fresh)} '
+                '(same names, different count — duplicate?)')
+    return ''
+
+
+def latch_tool_list(conv_id: str,
+                    fresh: list[dict] | None) -> tuple[list[dict] | None, bool]:
+    """Freeze the tool list for a conversation; return ``(effective, diverged)``.
+
+    First round for *conv_id* establishes the snapshot and returns *fresh*
+    unchanged (``diverged=False``). Later rounds return the FROZEN snapshot
+    byte-for-byte; ``diverged`` is ``True`` whenever the freshly-assembled list
+    differs from the frozen one (i.e. the user changed a tool toggle). The
+    divergence is computed fresh each round, so toggling a tool then toggling
+    it back reports ``diverged=False``.
+
+    No-ops (returns ``(fresh, False)``) when *conv_id* is empty (stateless
+    assembly) or the latch is disabled via ``TOFU_TOOLSET_LATCH=0``.
+    """
+    if not conv_id or not _toolset_latch_enabled():
+        return fresh, False
+    fresh_list = fresh or []
+    fresh_hash = _hash_tool_list(fresh_list)
+    import copy
+    with _tool_latch_lock:
+        entry = _tool_latch.get(conv_id)
+        if entry is None:
+            _tool_latch[conv_id] = (fresh_hash, copy.deepcopy(fresh_list))
+            _tool_latch_diverged[conv_id] = False
+            return fresh, False
+        latched_hash, snapshot = entry
+        diverged = fresh_hash != latched_hash
+        _tool_latch_diverged[conv_id] = diverged
+        if diverged:
+            frozen_names = set(_tool_names(snapshot))
+            fresh_names = set(_tool_names(fresh_list))
+            added = sorted(fresh_names - frozen_names)
+            removed = sorted(frozen_names - fresh_names)
+            _tool_latch_diff[conv_id] = {'added': added, 'removed': removed}
+            # Empty name-diff but bytes changed → a tool's CONTENT or the list
+            # ORDER drifted (e.g. an MCP server emitting a non-deterministic
+            # schema). Pinpoint the first offending tool+field so we can tell a
+            # spurious flap from a legitimate change instead of just showing a
+            # generic banner. Guarded to this case so the common toggle path
+            # pays nothing.
+            if not added and not removed:
+                try:
+                    detail = _diagnose_byte_drift(snapshot, fresh_list)
+                except Exception as e:
+                    detail = f'(drift diagnosis failed: {e})'
+                logger.warning('[ToolLatch] conv=%s diverged with EMPTY '
+                               'name-diff (byte-level schema drift) — %s',
+                               conv_id[:8], detail or '(no positional diff found)')
+        else:
+            _tool_latch_diff.pop(conv_id, None)
+        # Return the frozen snapshot (copy so callers can't mutate the latch).
+        return copy.deepcopy(snapshot), diverged
+
+
+def tool_list_diverged(conv_id: str) -> bool:
+    """Whether the latched tool list currently differs from a fresh assembly.
+
+    Cheap read of the flag computed by the most recent :func:`latch_tool_list`
+    call for *conv_id*. Used to decide whether to surface the "apply on next
+    conversation" affordance. Returns ``False`` when unknown.
+    """
+    return _tool_latch_diverged.get(conv_id, False)
+
+
+def tool_list_diff(conv_id: str) -> dict[str, list[str]]:
+    """Names added/removed by the held-back toggle for *conv_id*.
+
+    Returns ``{'added': [...], 'removed': [...]}`` (sorted, possibly empty)
+    describing how the freshly-assembled tool list differs from the frozen
+    snapshot, as computed by the most recent :func:`latch_tool_list` call.
+    Lets the frontend show WHICH tools a pending change touches. Returns
+    empty lists when there is no current divergence.
+    """
+    diff = _tool_latch_diff.get(conv_id)
+    if not diff:
+        return {'added': [], 'removed': []}
+    return {'added': list(diff.get('added', [])),
+            'removed': list(diff.get('removed', []))}
+
+
+def clear_tool_list_latch(conv_id: str) -> None:
+    """Drop the frozen tool list for *conv_id* (on "Apply now" or cleanup).
+
+    The next :func:`latch_tool_list` call re-establishes the snapshot from the
+    then-current toggles — i.e. the deferred tool change takes effect and the
+    prompt cache rebuilds once.
+    """
+    if not conv_id:
+        return
+    with _tool_latch_lock:
+        _tool_latch.pop(conv_id, None)
+    _tool_latch_diverged.pop(conv_id, None)
+    _tool_latch_diff.pop(conv_id, None)
+
+
+def clear_all_tool_list_latches() -> int:
+    """Drop EVERY conversation's frozen tool list. Returns the count cleared.
+
+    Called when the *global* tool surface changes for a deliberate,
+    infrequent reason — chiefly an MCP server install / uninstall / connect /
+    disconnect (see ``routes/api_v1/mcp.py``). Unlike a composer-toggle flap
+    (which the latch intentionally defers to the next conversation to protect
+    the ~65k-token prompt-cache prefix), an MCP mutation is an explicit "I want
+    this tool set now" action that should take effect on the next round of
+    EVERY conversation, not just the active one.
+
+    Cost is self-limiting: the prompt cache keys on the tool array's *bytes*,
+    not the latch identity. A conversation whose effective tool set is
+    unchanged by the mutation re-establishes a byte-identical snapshot on its
+    next round → no cache rebuild. Only conversations whose tool set genuinely
+    changed pay the one-time rebuild — which is exactly what we want.
+    """
+    with _tool_latch_lock:
+        n = len(_tool_latch)
+        _tool_latch.clear()
+    _tool_latch_diverged.clear()
+    _tool_latch_diff.clear()
+    if n:
+        logger.info('[ToolRegistry] cleared %d tool-schema latch(es) — global '
+                    'tool surface changed (MCP mutation); next round of each '
+                    'conversation re-assembles from current tools', n)
+    return n
 
 # A dispatch handler — same signature as lib.protocols.ToolHandler.  Typed
 # loosely here to avoid importing the protocol into this low-level module.
@@ -83,6 +382,25 @@ class ToolContext:
     scheduler_enabled: bool = False
     messages: list[dict[str, Any]] | None = None
 
+    # Conversation id — used to make schema-shaping decisions sticky for a
+    # conversation's lifetime (e.g. the multi-root path hint). Empty for
+    # one-off / stateless assembly (tests, compat adapters).
+    conv_id: str = ''
+
+    # ── Multi-tenant plugin visibility allow-list ──
+    # Which third-party (``source='plugin'``) tool specs this task may see.
+    #   * ``None``  → ALL plugins visible (single-tenant / legacy behaviour —
+    #                 e.g. a dedicated app/ deployment that owns its process).
+    #   * ``set()`` → NO plugins visible (the safe headless multi-tenant
+    #                 default: a shared server never leaks one tenant's
+    #                 plugins to another).
+    #   * ``{names}`` → only plugins whose ``ToolSpec.plugin_name`` is in the
+    #                 set are visible.
+    # Built-in specs are NEVER affected by this field. Populated from
+    # ``cfg['plugins']`` (per-request) falling back to the
+    # ``TOFU_DEFAULT_TOOL_PLUGINS`` env var — see :meth:`resolve_enabled_plugins`.
+    enabled_plugins: set[str] | None = None
+
     # ── Mutated by the assembler between phases ──
     current_count: int = 0
     has_base_tools: bool = False
@@ -92,6 +410,19 @@ class ToolContext:
         """Short task-id prefix for log lines."""
         return (self.task_id or '')[:8]
 
+    def plugin_allowed(self, plugin_name: str) -> bool:
+        """Whether a ``source='plugin'`` spec named *plugin_name* is visible.
+
+        ``enabled_plugins is None`` → all plugins allowed (legacy / dedicated
+        single-tenant process). Otherwise the plugin must be explicitly listed.
+        A plugin spec with an empty ``plugin_name`` (a misconfigured plugin
+        that didn't get tagged) is treated as NOT allow-listed unless the gate
+        is fully open (``None``) — fail-closed, never leak by accident.
+        """
+        if self.enabled_plugins is None:
+            return True
+        return bool(plugin_name) and plugin_name in self.enabled_plugins
+
     @property
     def multiroot_active(self) -> bool:
         """True when more than one workspace root is configured for this task.
@@ -100,7 +431,40 @@ class ToolContext:
         sends; element 0 is the primary, the rest are extras). Used to decide
         whether path-taking tool schemas should carry the ``rootname:`` prefix
         hint — single-root sessions keep the cache-stable default schema.
+
+        **Sticky per conversation.** Once a conversation has gone multi-root,
+        the hint stays on for the rest of that conversation even if a later
+        task transiently reports a single ``projectPaths`` (e.g. an extra root
+        was auto-registered mid-conversation by an absolute-path write, then a
+        subsequent task's snapshot lags). Flapping this value rewrites every
+        path-taking tool's schema and breaks the prompt-cache prefix — see
+        ``mark_multiroot_sticky``. A conversation never silently downgrades to
+        single-root mid-stream; the latch is cleared only on cleanup.
         """
+        live = self._multiroot_live()
+        if not self.conv_id:
+            # Stateless assembly (tests / compat adapters): no latch.
+            return live
+        if live:
+            # Going multi-root is a LEGITIMATE one-time schema change: the
+            # model in THIS conversation needs the ``rootname:`` path hint
+            # immediately. On the OFF→ON transition, re-establish the
+            # tool-schema latch so the next assembly (this same round, since
+            # multiroot_active is read before latch_tool_list) re-freezes the
+            # snapshot WITH the hint — one deliberate cache rebuild, then
+            # byte-stable again, and no permanent phantom empty-name-diff
+            # divergence. Mirrors the clear_all_tool_list_latches MCP-mutation
+            # precedent. Idempotent: only the first mark fires the clear.
+            if mark_multiroot_sticky(self.conv_id):
+                clear_tool_list_latch(self.conv_id)
+                logger.info('[ToolLatch] conv=%s went multi-root — cleared '
+                            'tool-schema latch so the rootname hint re-freezes '
+                            '(one-time cache rebuild)', self.conv_id[:8])
+            return True
+        return is_multiroot_sticky(self.conv_id)
+
+    def _multiroot_live(self) -> bool:
+        """The raw, un-latched multi-root signal from this task's cfg."""
         paths = self.cfg.get('projectPaths') or []
         if not isinstance(paths, (list, tuple)):
             return False
@@ -109,17 +473,38 @@ class ToolContext:
 
     @property
     def has_conv_ref(self) -> bool:
-        """True if any message carries a ``[REFERENCED_CONVERSATION`` marker.
+        """True when a USER turn actually attached a referenced conversation.
 
-        Mirrors the legacy detection in ``_assemble_tool_list``: a
-        conversation @-mention injects this marker, which enables the
-        conversation-reference tools.
+        Enables the conversation-reference tools (``list_conversations`` /
+        ``get_conversation``) only when the user genuinely attached a
+        conversation via the ``@`` affordance — never because the literal
+        token happens to appear in free-form prose.
+
+        Detection, in priority order, scanning **user-role messages only**:
+          1. The structured ``convRefs`` / ``convRefTexts`` field — the
+             authoritative signal set by the send path when a reference is
+             attached (present on raw conversation rows).
+          2. The server-injected wrapper signature
+             ``[REFERENCED_CONVERSATION`` ... ``title="`` — what
+             ``conv_message_builder`` prepends to the user message after
+             resolving a ref (present on API-built messages, which no longer
+             carry ``convRefs``). The ``title="`` guard distinguishes the
+             real injected block from someone quoting the bare token.
+
+        Assistant content is NEVER scanned: a conversation *about* this
+        feature (where the model quotes the marker, as in this very chat)
+        must not self-enable the tools and break the prompt-cache latch.
         """
         if not self.messages:
             return False
         for m in self.messages:
+            if m.get('role') != 'user':
+                continue
+            if m.get('convRefs') or m.get('convRefTexts'):
+                return True
             c = m.get('content', '')
-            if isinstance(c, str) and '[REFERENCED_CONVERSATION' in c:
+            if isinstance(c, str) and '[REFERENCED_CONVERSATION' in c \
+                    and 'title="' in c:
                 return True
         return False
 
@@ -171,6 +556,21 @@ class ToolSpec:
     handler_special:
         If set (e.g. ``'__code_exec__'``), register :attr:`handler` as a
         *special* dispatch key instead of by exact name.
+    source:
+        Provenance of this spec — ``'builtin'`` (registered by core at import
+        time) or ``'plugin'`` (contributed by a third-party ``tofu.tools``
+        entry point).  Set automatically by :func:`discover_plugin_specs`;
+        built-ins keep the default.  Drives the per-request visibility gate in
+        :func:`assemble_tool_list`: ``'builtin'`` specs are ALWAYS evaluated,
+        ``'plugin'`` specs only when allow-listed via
+        :attr:`ToolContext.enabled_plugins`.  This is the multi-tenant
+        isolation seam — see the module-level "Plugin isolation" note.
+    plugin_name:
+        For ``source='plugin'`` specs, the entry-point name the spec was loaded
+        from (e.g. ``'liantong_kb'``).  This — NOT :attr:`key` — is what a
+        caller lists in ``config.plugins`` / ``TOFU_DEFAULT_TOOL_PLUGINS`` to
+        make the plugin visible.  One entry point may register several specs;
+        they all share its ``plugin_name``.  Empty for built-ins.
     """
 
     key: str
@@ -184,6 +584,8 @@ class ToolSpec:
     handler: ToolHandlerFn | None = None
     handler_names: frozenset[str] = field(default_factory=frozenset)
     handler_special: str = ''
+    source: str = 'builtin'
+    plugin_name: str = ''
 
 
 # ── Module-level registry ─────────────────────────────────
@@ -301,9 +703,21 @@ def assemble_tool_list(ctx: ToolContext) -> tuple[list[dict], bool]:
     """
     tool_list: list[dict] = []
 
+    def _visible(spec: ToolSpec) -> bool:
+        # Built-ins always evaluated; plugins gated by the per-request
+        # allow-list so one tenant's installed plugin can't leak into another's
+        # tool surface on a shared server.
+        if spec.source != 'plugin':
+            return True
+        if ctx.plugin_allowed(spec.plugin_name):
+            return True
+        logger.debug('[Task %s] plugin spec key=%s (plugin=%s) hidden — not in '
+                     'enabled_plugins', ctx.tid, spec.key, spec.plugin_name)
+        return False
+
     # ── Base phase ──
     for spec in _TOOL_SPECS:
-        if spec.phase != 'base':
+        if spec.phase != 'base' or not _visible(spec):
             continue
         ctx.current_count = len(tool_list)
         try:
@@ -318,7 +732,7 @@ def assemble_tool_list(ctx: ToolContext) -> tuple[list[dict], bool]:
 
     # ── Capability phase ──
     for spec in _TOOL_SPECS:
-        if spec.phase != 'capability':
+        if spec.phase != 'capability' or not _visible(spec):
             continue
         ctx.current_count = len(tool_list)
         try:
@@ -363,6 +777,18 @@ def _build_read_files(ctx: ToolContext) -> list[dict]:
         from lib.tools.project import with_multiroot_hint
         return with_multiroot_hint([READ_FILES_TOOL])
     return [READ_FILES_TOOL]
+
+
+def _build_inspect_image(ctx: ToolContext) -> list[dict]:
+    # inspect_image is ALWAYS on (like read_files) — it re-renders a region
+    # of any local image at full resolution so the model can read detail the
+    # initial downscale discarded. No project / vision toggle gates it; the
+    # dispatch path drops the resulting image for text-only models anyway.
+    from lib.tools import INSPECT_IMAGE_TOOL
+    if ctx.project_enabled and ctx.multiroot_active:
+        from lib.tools.project import with_multiroot_hint
+        return with_multiroot_hint([INSPECT_IMAGE_TOOL])
+    return [INSPECT_IMAGE_TOOL]
 
 
 def _build_project_or_code_exec(ctx: ToolContext) -> list[dict]:
@@ -416,12 +842,42 @@ def _build_image_gen(ctx: ToolContext) -> list[dict]:
 
 
 def _build_conv_ref(ctx: ToolContext) -> list[dict]:
-    # Only when the user @-mentioned a conversation AND some base tool exists.
-    if ctx.has_conv_ref and ctx.current_count > 0:
+    # CONV_REF_TOOLS = [list_conversations, get_conversation] — BOTH are
+    # read-only (discover siblings + open one). Register them in two cases:
+    #   (a) the user @-mentioned a conversation (the classic explicit path), OR
+    #   (b) we're in project mode — the always-on cross-conv digest
+    #       (system_context.py ★4.4) names sibling conversations for ambient
+    #       awareness, so the model must be ABLE to open a surfaced sibling
+    #       rather than being told about phantom tools. Gating only on
+    #       has_conv_ref meant the digest header advertised tools absent from
+    #       the schema on a plain project turn (the conv_tools_available
+    #       branch). Registering them in project mode closes that gap.
+    # Both branches require at least one base tool (current_count > 0): with no
+    # tools at all there's no schema to extend.
+    if ctx.current_count <= 0:
+        return []
+    if ctx.has_conv_ref or (ctx.project_enabled and ctx.project_path):
         from lib.tools import CONV_REF_TOOLS
-        logger.debug('[Task %s] 💬 Conversation @mention detected — conv_ref '
-                     'tools enabled', ctx.tid)
-        return list(CONV_REF_TOOLS)
+        logger.debug('[Task %s] 💬 conv_ref tools enabled (has_conv_ref=%s '
+                     'project=%s)', ctx.tid, ctx.has_conv_ref,
+                     bool(ctx.project_enabled and ctx.project_path))
+        tools = list(CONV_REF_TOOLS)
+        # Project Charter tools (Pillar #2): the shared north star. Only in
+        # project mode (a charter is per-project) — read + propose. Commit is
+        # human-gated and is NEVER exposed as an agent tool.
+        if ctx.project_enabled and ctx.project_path:
+            from lib.tools import BOARD_TOOLS, CHARTER_TOOLS, PEER_TOOLS
+            tools += list(CHARTER_TOOLS)
+            # Project Board tools (Pillar #3): the coordination board — the
+            # mechanism that makes conversations auto-coordinate (claim/avoid
+            # duplicating). Project-scoped, same gate.
+            tools += list(BOARD_TOOLS)
+            # Project Peer tools (Pillar #6): cross-conversation communication
+            # — live peer status + advisory messaging + advisory/gated
+            # intervention. Same project gate; registered on every project turn
+            # so the model can coordinate without the phantom-tool trap.
+            tools += list(PEER_TOOLS)
+        return tools
     return []
 
 
@@ -445,6 +901,18 @@ def _build_memory(ctx: ToolContext) -> list[dict]:
         return []
     from lib.memory import ALL_MEMORY_TOOLS
     return list(ALL_MEMORY_TOOLS)
+
+
+def _build_todo(ctx: ToolContext) -> list[dict]:
+    # Structured task checklist (todo_write). Attaches whenever ANY base tool
+    # exists — it's a lightweight, always-useful progress tracker that also
+    # feeds the continuation enforcer, so it needs no user-facing toggle
+    # (mirrors the memory-tools attachment rule). A pure-chat turn with no
+    # tools does not get it (nothing to track).
+    if not ctx.has_base_tools:
+        return []
+    from lib.tools.todo import TODO_WRITE_TOOL
+    return [TODO_WRITE_TOOL]
 
 
 def _build_scheduler(ctx: ToolContext) -> list[dict]:
@@ -492,6 +960,19 @@ def _build_mcp(ctx: ToolContext) -> list[dict]:
     return []
 
 
+def _build_custom(ctx: ToolContext) -> list[dict]:
+    # Per-request custom tools brought by a headless /api/v1/agent/run caller.
+    # The route validates + mints a ToolEnvironment, stashes its clean schemas
+    # on cfg['_customToolSchemas'], and attaches the env as task['_tool_env']
+    # (whose handlers the executor resolves before the global registry).
+    # Registered LAST so the cache-stable built-in ordering is untouched.
+    schemas = ctx.cfg.get('_customToolSchemas')
+    if not schemas or not isinstance(schemas, list):
+        return []
+    logger.info('[Task %s] 🧩 Custom tools injected: %d', ctx.tid, len(schemas))
+    return list(schemas)
+
+
 def _register_builtins() -> None:
     """Register the built-in tool specs in canonical (cache-stable) order."""
     builtins = [
@@ -508,6 +989,10 @@ def _register_builtins() -> None:
                  provides=frozenset({'read_files'}),
                  idempotent_tools=frozenset({'read_files'}),
                  category='project', description='Read local files'),
+        ToolSpec('inspect_image', _build_inspect_image, phase='base',
+                 provides=frozenset({'inspect_image'}),
+                 idempotent_tools=frozenset({'inspect_image'}),
+                 category='project', description='Zoom/rotate/crop image viewer'),
         ToolSpec('project', _build_project_or_code_exec, phase='base',
                  provides=frozenset({
                      'list_dir', 'grep_search', 'find_files',
@@ -532,8 +1017,16 @@ def _register_builtins() -> None:
                  provides=frozenset({'generate_image'}),
                  category='image', description='Image generation'),
         ToolSpec('conv_ref', _build_conv_ref, phase='base',
-                 provides=frozenset({'list_conversations', 'get_conversation'}),
-                 idempotent_tools=frozenset({'list_conversations', 'get_conversation'}),
+                 provides=frozenset({'list_conversations', 'get_conversation',
+                                     'project_charter_read', 'project_charter_propose',
+                                     'project_board_read', 'project_board_post',
+                                     'project_board_claim', 'project_board_complete',
+                                     'project_board_block',
+                                     'project_peer_status', 'project_feed_read',
+                                     'project_message', 'project_intervene'}),
+                 idempotent_tools=frozenset({'list_conversations', 'get_conversation',
+                                             'project_charter_read', 'project_board_read',
+                                             'project_peer_status', 'project_feed_read'}),
                  category='conversation', description='Conversation reference tools'),
         ToolSpec('human_guidance', _build_human_guidance, phase='base',
                  provides=frozenset({'ask_human'}),
@@ -545,6 +1038,9 @@ def _register_builtins() -> None:
                      'delete_memory', 'merge_memories',
                  }),
                  category='memory', description='Memory CRUD tools'),
+        ToolSpec('todo', _build_todo, phase='capability',
+                 provides=frozenset({'todo_write'}),
+                 category='task', description='Structured task checklist'),
         ToolSpec('scheduler', _build_scheduler, phase='capability',
                  category='scheduler', description='Scheduler / proactive agent tools'),
         ToolSpec('swarm', _build_swarm, phase='capability',
@@ -554,6 +1050,10 @@ def _register_builtins() -> None:
                  category='swarm', description='Async multi-agent swarm'),
         ToolSpec('mcp', _build_mcp, phase='capability',
                  category='mcp', description='External MCP-server tools'),
+        # ── per-request custom tools (always last; handlers are task-local) ──
+        ToolSpec('custom', _build_custom, phase='capability',
+                 category='custom',
+                 description='Per-request custom tools (handlers via task[_tool_env])'),
     ]
     for spec in builtins:
         register_tool_spec(spec)
@@ -598,16 +1098,109 @@ def discover_plugin_specs() -> int:
         logger.debug('[ToolRegistry] entry_points lookup failed: %s', e)
         return 0
     for ep in eps:
+        ep_name = getattr(ep, 'name', '?')
         try:
             register_fn = ep.load()
-            register_fn(register_tool_spec)
+            # Hand the plugin a wrapper that STAMPS provenance onto every spec
+            # it registers, so we don't depend on the plugin author remembering
+            # to set source/plugin_name. This is what makes the per-request
+            # visibility gate (ToolContext.enabled_plugins) able to tell a
+            # plugin's specs apart from built-ins — see the module "Plugin
+            # isolation" note. ``replace`` is safe on the frozen dataclass.
+            def _stamping_register(spec: ToolSpec, *, replace_existing: bool = False,
+                                   _pname: str = ep_name, **_kw) -> None:
+                # Accept the plugin author's ``replace=`` kwarg under either
+                # name (back-compat) without colliding with dataclasses.replace.
+                do_replace = replace_existing or bool(_kw.get('replace'))
+                stamped = replace(spec, source='plugin', plugin_name=_pname)
+                register_tool_spec(stamped, replace=do_replace)
+            register_fn(_stamping_register)
             loaded += 1
             logger.info('[ToolRegistry] loaded plugin tool spec(s) from %s',
-                        ep.name)
+                        ep_name)
         except Exception as e:
             logger.warning('[ToolRegistry] plugin %s failed to load: %s',
-                           getattr(ep, 'name', '?'), e, exc_info=True)
+                           ep_name, e, exc_info=True)
     return loaded
+
+
+def available_plugins() -> dict[str, list[str]]:
+    """Map each loaded plugin name → the spec keys it registered.
+
+    Introspection helper for ops / docs / a future ``/api/v1/capabilities``
+    surface: lets an operator see WHICH third-party plugins are installed in
+    this process and therefore what a caller may name in ``config.plugins``.
+    Built-in specs are excluded.
+    """
+    out: dict[str, list[str]] = {}
+    for spec in _TOOL_SPECS:
+        if spec.source == 'plugin' and spec.plugin_name:
+            out.setdefault(spec.plugin_name, []).append(spec.key)
+    return out
+
+
+# ══════════════════════════════════════════════════════════
+#  Per-request plugin allow-list resolution
+# ══════════════════════════════════════════════════════════
+
+_DEFAULT_PLUGINS_ENV = 'TOFU_DEFAULT_TOOL_PLUGINS'
+
+
+def _parse_plugin_spec(value: Any) -> set[str] | None:
+    """Normalise a raw plugins value into an allow-list set (or ``None``).
+
+    Accepts:
+      * ``'*'`` / ``['*']`` / ``'all'`` → ``None`` (gate fully open, ALL
+        plugins visible).
+      * a comma/space-separated string  → set of names.
+      * a list/tuple/set of names       → set of names.
+      * ``None`` / ``''`` / ``[]``      → empty set (NO plugins visible).
+
+    The ``'*'`` sentinel maps to ``None`` because that is exactly the
+    ``ToolContext.enabled_plugins`` value meaning "allow everything".
+    """
+    if value is None:
+        return set()
+    if isinstance(value, str):
+        v = value.strip()
+        if v in ('*', 'all'):
+            return None
+        if not v:
+            return set()
+        return {tok for tok in re.split(r'[,\s]+', v) if tok}
+    if isinstance(value, (list, tuple, set)):
+        items = {str(x).strip() for x in value if str(x).strip()}
+        if '*' in items or 'all' in items:
+            return None
+        return items
+    logger.debug('[ToolRegistry] ignoring unrecognised plugins value: %r', value)
+    return set()
+
+
+def resolve_enabled_plugins(cfg: dict[str, Any]) -> set[str] | None:
+    """Resolve the per-request plugin allow-list for :class:`ToolContext`.
+
+    Resolution order (first non-absent wins):
+
+    1. ``cfg['plugins']`` — request-scoped. A headless caller sets this via
+       ``config.plugins`` on ``/api/v1/agent/run`` (or any orchestrator cfg).
+    2. ``TOFU_DEFAULT_TOOL_PLUGINS`` env var — deployment-wide default. A
+       dedicated single-tenant install (e.g. liantong's ``app/`` copy) sets
+       this once so it never has to pass ``plugins`` per request.
+    3. Neither set → **fail-closed**: empty set → NO third-party plugins.
+
+    Each level accepts the :func:`_parse_plugin_spec` vocabulary, including the
+    ``'*'`` wildcard (→ ``None`` = all plugins visible).
+
+    Returns:
+        ``None`` (all plugins), ``set()`` (none), or a set of plugin names.
+    """
+    if 'plugins' in cfg:
+        return _parse_plugin_spec(cfg.get('plugins'))
+    env = os.environ.get(_DEFAULT_PLUGINS_ENV)
+    if env is not None:
+        return _parse_plugin_spec(env)
+    return set()
 
 
 # Register built-ins + discover plugins at import time.

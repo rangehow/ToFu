@@ -31,6 +31,15 @@ function saveSettings() {
   config.maxTokens = parseInt(document.getElementById("settingMaxTokens").value);
   config.imageMaxWidth = parseInt(document.getElementById("settingImageMaxWidth").value) || 0;
   config.systemPrompt = document.getElementById("settingSystem").value;
+  var spModeSel = document.getElementById('settingSystemPromptMode');
+  if (spModeSel) config.systemPromptMode = (spModeSel.value === 'replace') ? 'replace' : 'append';
+  var spbEl = document.getElementById('settingSystemDisabledBlocks');
+  if (spbEl) {
+    var _disabledIds = [];
+    try { _disabledIds = JSON.parse(spbEl.value || '[]'); } catch (e) { _disabledIds = []; }
+    if (!Array.isArray(_disabledIds)) _disabledIds = [];
+    config.systemPromptBlocks = { disabled: _disabledIds };
+  }
   var dtdEl = document.getElementById('settingDefaultThinkingDepth');
   if (dtdEl) {
     var oldDefault = config.defaultThinkingDepth;
@@ -73,8 +82,6 @@ function saveSettings() {
         if (data && data.ok) {
           debugLog('Trading module ' + (newVal ? 'enabled' : 'disabled') + ' — applied', 'success');
           if (typeof _featureFlags !== 'undefined') _featureFlags.trading_enabled = newVal;
-          var btn = document.getElementById('tradingAdvisorBtn');
-          if (btn) btn.style.display = newVal ? 'flex' : 'none';
           // Server tells us whether the toggle takes effect now or only after
           // a restart (blueprint registration is import-time — see A14).
           var hint = document.getElementById('tradingRestartHint');
@@ -246,7 +253,7 @@ function importServerConfig(event) {
   var reader = new FileReader();
   reader.onload = async function(e) {
     try {
-      var imported = JSON.parse(e.target.result);
+      var imported = JSON.parse(String(e.target.result || ""));
       var r = await Api.serverConfig.update(imported);
       var data = r ? await r.json().catch(function() { return {}; }) : {};
       if (data.ok) {

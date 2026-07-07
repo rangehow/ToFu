@@ -99,7 +99,7 @@ async function submitHumanGuidanceFreeText(guidanceId) {
   // ★ Auto-translate CN→EN: if autoTranslate is ON and text contains Chinese,
   //   translate before sending to backend — same as sendMessage() flow.
   const conv = conversations.find(c => c.id === activeConvId);
-  const _hgAutoTrans = conv ? (conv.autoTranslate !== undefined ? !!conv.autoTranslate : true) : !!autoTranslate;
+  const _hgAutoTrans = convAutoTranslate(conv);
   const hasChinese = /[\u4e00-\u9fff\u3400-\u4dbf]/.test(text);
   let finalText = text;
 
@@ -321,6 +321,9 @@ async function _restoreConvProject(conv) {
 // ── Multi-path folder state for the modal ──
 let _mpFolders = []; // array of path strings being edited in the modal
 let _mpReadOnly = new Set(); // subset of _mpFolders the user marked read-only
+// Mirror of the badges currently painted in the project bar ({path, readOnly}),
+// so the bar's click-to-toggle handler can look an entry up by index.
+let _projectBarFolders = [];
 
 function _syncFoldersFromState() {
   // Build _mpFolders from projectState (single source of truth)
@@ -353,17 +356,25 @@ function openProjectModal() {
   _syncFoldersFromState();
   _mpRenderTags();
   _updateProjectModalStatus();
+  _recentFilter = "";
+  const _recentInput = document.getElementById("recentSearchInput");
+  if (_recentInput) _recentInput.value = "";
   renderRecentProjects();
   document.getElementById("projectModal").classList.add("open");
+  // Tell the full-page chat-drop handler (main.js) to stand down so a file
+  // dropped onto the folder browser is SAVED to disk, not attached to chat.
+  window._tofuProjectModalOpen = true;
   // Default mobile view to Browse on each open (no-op on desktop).
   pmMobileTab("browse");
   // Docked browser: populate it from the primary folder (or home) on open.
   browseDirectory(_mpFolders.length ? _mpFolders[0] : "~");
+  _attachFolderDropZone();
   setTimeout(() => document.getElementById("mpPathInput").focus(), 100);
 }
 
 function closeProjectModal() {
   document.getElementById("projectModal").classList.remove("open");
+  window._tofuProjectModalOpen = false;
 }
 
 /* ── Mobile segmented tab toggle (Browse / Workspace) ──
@@ -571,6 +582,9 @@ function saveRecentProject(path) {
     .catch(e => debugLog(`[saveRecentProject] ${e.message}`, 'warn'));
 }
 
+let _recentProjects = [];
+let _recentFilter = "";
+
 async function renderRecentProjects() {
   const container = document.getElementById("recentProjectPaths");
   const listEl = document.getElementById("recentPathsList");
@@ -582,19 +596,60 @@ async function renderRecentProjects() {
       list = Array.isArray(data) ? data : data.projects || [];
     }
   } catch {}
+  _recentProjects = list;
   if (list.length === 0) {
     container.hidden = true;
     return;
   }
   container.hidden = false;
-  listEl.innerHTML = list
+  _renderRecentList();
+}
+
+// Basename of a path (last non-empty segment).
+function _recentName(path) {
+  const parts = String(path).split("/").filter(Boolean);
+  return parts[parts.length - 1] || path;
+}
+
+// Highlight the matched substring of `text` (case-insensitive), HTML-escaping
+// both the surrounding text and the match so a path can't inject markup.
+function _recentHighlight(text, query) {
+  const safe = escapeHtml(text);
+  if (!query) return safe;
+  const idx = text.toLowerCase().indexOf(query.toLowerCase());
+  if (idx < 0) return safe;
+  const before = escapeHtml(text.slice(0, idx));
+  const match = escapeHtml(text.slice(idx, idx + query.length));
+  const after = escapeHtml(text.slice(idx + query.length));
+  return `${before}<mark class="recent-hl">${match}</mark>${after}`;
+}
+
+function _renderRecentList() {
+  const listEl = document.getElementById("recentPathsList");
+  const countEl = document.getElementById("recentCount");
+  const clearBtn = document.getElementById("recentSearchClear");
+  if (!listEl) return;
+  const q = _recentFilter.trim();
+  const filtered = q
+    ? _recentProjects.filter(
+        (item) => item.path.toLowerCase().includes(q.toLowerCase()),
+      )
+    : _recentProjects;
+  if (countEl) countEl.textContent = q ? `${filtered.length}/${_recentProjects.length}` : String(_recentProjects.length);
+  if (clearBtn) clearBtn.hidden = !q;
+  if (filtered.length === 0) {
+    const _t = (typeof t === "function") ? t : (k) => k;
+    const msg = q ? _t("pm.recentNoMatch") : _t("pm.recentEmpty");
+    listEl.innerHTML = `<div class="recent-paths-empty">${escapeHtml(msg)}</div>`;
+    return;
+  }
+  listEl.innerHTML = filtered
     .map((item) => {
-      const parts = item.path.split("/").filter(Boolean);
-      const name = parts[parts.length - 1] || item.path;
+      const name = _recentName(item.path);
       return `<div class="recent-path-item" onclick="selectRecentProject('${escapeHtml(item.path)}')" title="${escapeHtml(item.path)}">
          <span class="recent-path-text">
-           <span class="recent-path-name">${escapeHtml(name)}</span>
-           <span class="recent-path-full">${escapeHtml(item.path)}</span>
+           <span class="recent-path-name">${_recentHighlight(name, q)}</span>
+           <span class="recent-path-full">${_recentHighlight(item.path, q)}</span>
          </span>
          ${item.count > 1 ? `<span class="recent-path-count">×${item.count}</span>` : ""}
        </div>`;
@@ -602,12 +657,31 @@ async function renderRecentProjects() {
     .join("");
 }
 
+function _filterRecentProjects(value) {
+  _recentFilter = value || "";
+  _renderRecentList();
+}
+
+function _clearRecentSearch() {
+  _recentFilter = "";
+  const input = document.getElementById("recentSearchInput");
+  if (input) {
+    input.value = "";
+    input.focus();
+  }
+  _renderRecentList();
+}
+
 function selectRecentProject(path) {
+  if (!path) return;
   // Add the recent project path into the multi-path list and apply
-  if (path && !_mpFolders.includes(path)) {
+  if (!_mpFolders.includes(path)) {
     _mpFolders.push(path);
     _mpRenderTags();
   }
+  // Switch the left-hand folder browser to that item's location so the user
+  // sees where it lives (breadcrumb + listing reflect the selected path).
+  browseDirectory(path);
 }
 
 async function clearRecentProjects() {
@@ -644,10 +718,16 @@ async function undoConvModifications(msgIdx) {
   )
     return;
   try {
-    // ★ Per-round undo: prefer taskId (specific to this round), fallback to convId
+    // ★ Per-round undo: prefer taskId (specific to this round), fallback to convId.
+    //   ALWAYS pin the conversation's own project path so undo targets the
+    //   session that recorded the change — NOT whichever project is globally
+    //   active in the UI (which may differ when another conversation switched
+    //   projects mid-task). Without this, undo silently no-ops (undone=0).
     const body = msg._taskId
       ? { taskId: msg._taskId }
       : { convId: conv.id };
+    const convProjectPath = _getConvProjectPath(conv);
+    if (convProjectPath) body.projectPath = convProjectPath;
     const resp = await Api.project.undo(body);
     const data = resp ? await resp.json().catch(() => ({})) : {};
     if (resp && resp.ok && data.ok) {
@@ -685,7 +765,15 @@ async function undoAllModifications() {
   )
     return;
   try {
-    const resp = await Api.project.undoAll();
+    // ★ Pin the conversation's own project so undo-all targets the session
+    //   that recorded the changes — NOT whichever project is globally active
+    //   in the UI. Mirrors per-round undo; keeps behaviour independent of UI
+    //   focus when conversations edit different projects concurrently.
+    const conv0 = getActiveConv();
+    const body = {};
+    const convProjectPath = _getConvProjectPath(conv0);
+    if (convProjectPath) body.projectPath = convProjectPath;
+    const resp = await Api.project.undoAll(body);
     const data = resp ? await resp.json().catch(() => ({})) : {};
     if (resp && resp.ok && data.ok) {
       if (typeof showToast === 'function') {
@@ -770,13 +858,13 @@ function _updateProjectUI() {
   if (!projectState.active) {
     bar.style.display = "none";
     bar.classList.remove("scanning");
-    badge.classList.remove("visible");
+    badge?.classList.remove("visible");
     toggle.classList.remove("active");
     return;
   }
 
   bar.style.display = "flex";
-  badge.classList.add("visible");
+  badge?.classList.add("visible");
   toggle.classList.add("active");
 
   // ── Render folder badges ──
@@ -799,12 +887,13 @@ function _updateProjectUI() {
       }
     }
   }
+  _projectBarFolders = _barFolders;
   const _lockGlyph = '<svg class="folder-badge-lock" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>';
-  const badges = _barFolders.map(({ path: p, readOnly }) => {
+  const badges = _barFolders.map(({ path: p, readOnly }, i) => {
     const short = p.split('/').filter(Boolean).pop() || p;
     const cls = 'folder-badge' + (readOnly ? ' folder-badge-ro' : '');
-    const tip = escapeHtml(p) + (readOnly ? ' (read-only)' : '');
-    return `<span class="${cls}" title="${tip}">${readOnly ? _lockGlyph : ''}${escapeHtml(short)}</span>`;
+    const tip = escapeHtml(p) + (readOnly ? ' (read-only — click to allow edits)' : ' (writable — click to make read-only)');
+    return `<span class="${cls}" title="${tip}" onclick="toggleProjectBarReadOnly(${i}, event)">${readOnly ? _lockGlyph : ''}${escapeHtml(short)}</span>`;
   });
   foldersEl.innerHTML = badges.join('');
 
@@ -813,11 +902,90 @@ function _updateProjectUI() {
   if (projectState.crossDC && projectState.crossDC.latencyClass !== 'local') {
     const dc = projectState.crossDC;
     const cls = dc.latencyClass === 'very_slow' ? 'color:#ef4444' : 'color:#f59e0b';
-    const icon = dc.latencyClass === 'very_slow' ? '🐢' : '⚡';
+    const _snailSvg = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M2 13a6 6 0 1 0 12 0 4 4 0 1 0-8 0 2 2 0 0 0 4 0"/><circle cx="10" cy="13" r="8"/><path d="M2 21h12c4.4 0 8-3.6 8-8V7a2 2 0 1 0-4 0v6"/><path d="M18 3 19.1 5.2"/><path d="M22 3 20.9 5.2"/></svg>';
+    const _zapSvg = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/></svg>';
+    const icon = dc.latencyClass === 'very_slow' ? _snailSvg : _zapSvg;
     const lat = dc.latencyMs ? `${dc.latencyMs}ms` : '?';
     statsEl.innerHTML = `<span style="${cls};font-size:11px" title="Cross-DC: cluster=${dc.cluster}, latency=${lat}">${icon} ${dc.cluster} (${lat})</span>`;
   } else {
     statsEl.innerHTML = '';
+  }
+}
+
+/* Toggle a project-bar folder badge between writable and read-only in place,
+   without opening the modal.  Mirrors _mpToggleReadOnly + mpApplyFolders:
+   recompute the full path / read-only sets from the current projectState,
+   flip the clicked root, then optimistically repaint + reconcile with the
+   backend via /api/project/set_paths (the only endpoint that carries the
+   read-only policy).  On failure we revert and report the error. */
+/* Derive the conversation's {allPaths, roList} from an _applyProjectData-shaped
+   server state object (get_state() output). The BACKEND is the single source of
+   truth for the read-only policy, so we persist what it returns — never a guess. */
+function _deriveConvPathsFromState(data) {
+  const allPaths = [];
+  const roList = [];
+  if (data && data.path) {
+    allPaths.push(data.path);
+    if (data.readOnly) roList.push(data.path);
+  }
+  for (const r of (data && data.extraRoots) || []) {
+    const p = typeof r === 'string' ? r : r.path;
+    const ro = typeof r === 'object' && !!r.readOnly;
+    if (p && !allPaths.includes(p)) {
+      allPaths.push(p);
+      if (ro) roList.push(p);
+    }
+  }
+  return { allPaths, roList };
+}
+
+// Monotonic toggle sequence — only the newest in-flight toggle is allowed to
+// paint/persist its result, so out-of-order responses can't flip the badge.
+let _roToggleSeq = 0;
+
+async function toggleProjectBarReadOnly(index, event) {
+  // The badge lives inside #projectBarFolders, whose own onclick opens the
+  // project modal. Stop the click here so toggling never pops the modal.
+  if (event) { event.stopPropagation(); event.preventDefault(); }
+  const entry = _projectBarFolders[index];
+  if (!entry || !entry.path) return;
+
+  // Rebuild the ordered path list + read-only set from current state so we
+  // never drop extra roots or lose ordering (primary must stay first).
+  const folders = _projectBarFolders.map((f) => f.path);
+  const readOnly = new Set(_projectBarFolders.filter((f) => f.readOnly).map((f) => f.path));
+  if (readOnly.has(entry.path)) readOnly.delete(entry.path);
+  else readOnly.add(entry.path);
+  const roList = folders.filter((p) => readOnly.has(p));
+
+  const seq = ++_roToggleSeq;
+  const _prevProjectState = { ...projectState, extraRoots: (projectState.extraRoots || []).slice() };
+
+  // Optimistic LOCAL repaint only (instant feedback). We do NOT sync the
+  // conversation here — the backend round-trip below owns persistence, so we
+  // never write a guessed state that could race the authoritative response.
+  _applyProjectData({
+    path: folders[0],
+    readOnly: readOnly.has(folders[0]),
+    extraRoots: folders.slice(1).map((p) => ({ path: p, readOnly: readOnly.has(p) })),
+    crossDC: projectState.crossDC || null,
+  });
+  debugLog(`${entry.path} → ${readOnly.has(entry.path) ? 'read-only' : 'writable'}`, "success");
+
+  try {
+    const resp = await Api.project.setPaths(folders, roList);
+    const data = resp ? await resp.json().catch(() => ({})) : {};
+    if (!resp || !resp.ok) throw new Error(data.error || "Failed");
+    if (seq !== _roToggleSeq) return;   // superseded by a newer toggle — drop stale paint
+    // Single source of truth: render + persist EXACTLY what the backend returned.
+    _applyProjectData(data);
+    const { allPaths, roList: srvRo } = _deriveConvPathsFromState(data);
+    _saveConvProjectPath(allPaths[0] || '', allPaths.slice(1), srvRo);
+  } catch (e) {
+    if (seq !== _roToggleSeq) return;   // a newer toggle is in charge — let it settle
+    projectState = _prevProjectState;
+    _updateProjectUI();
+    debugLog(`Read-only toggle failed: ${e.message}`, "error");
   }
 }
 
@@ -866,15 +1034,23 @@ async function loadProjectStatus() {
       const roMatch = savedReadOnly.length === currentRO.length &&
         savedReadOnly.every(p => currentRO.includes(p));
       if ((!extrasMatch && savedExtras.length > 0) || !roMatch) {
-        // Primary matches but extras or read-only policy don't — re-apply.
-        debugLog("Restoring extra roots / read-only policy for conversation", "info");
-        try {
-          const fixResp = await Api.project.setPaths(allPaths, savedReadOnly);
-          const fixData = fixResp ? await fixResp.json().catch(() => ({})) : {};
-          if (fixResp && fixResp.ok) _applyProjectData(fixData);
-        } catch (e2) {
-          debugLog("Extra roots restore failed: " + e2.message, "warn");
-        }
+        // Primary matches but extras or read-only policy don't. The server's
+        // in-memory RO flag is ephemeral (reset on restart), so the durable
+        // per-conv readOnlyPaths is the authority here — paint the bar from it
+        // IMMEDIATELY, then re-hydrate the server in the BACKGROUND so the load
+        // isn't gated on the slow setPaths round-trip (fs isdir + cross-DC probe).
+        _applyProjectData({
+          path: allPaths[0],
+          readOnly: savedReadOnly.includes(allPaths[0]),
+          extraRoots: allPaths.slice(1).map(p => ({ path: p, readOnly: savedReadOnly.includes(p) })),
+          crossDC: data.crossDC || null,
+        });
+        debugLog("Re-hydrating server read-only policy in background", "info");
+        Api.project.setPaths(allPaths, savedReadOnly)
+          .then(fixResp => fixResp && fixResp.ok
+            ? fixResp.json().catch(() => null) : null)
+          .then(fixData => { if (fixData) _applyProjectData(fixData); })
+          .catch(e2 => debugLog("Background RO re-hydrate failed: " + e2.message, "warn"));
       } else {
         _applyProjectData(data);
       }
@@ -983,12 +1159,17 @@ async function browseDirectory(path) {
         var icon = d.hasCode
           ? '<svg class="fi-folder" width="16" height="16" viewBox="0 0 24 24" fill="rgba(245,158,11,0.14)" stroke="#f59e0b" stroke-width="1.8" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>'
           : '<svg class="fi-folder" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" opacity="0.55"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>';
+        var safeName = d.name.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
         return (
           '<div class="folder-item' + hidden + added +
-          '" onclick="browseDirectory(\'' + safePath + '\')" title="Open ' + escapeHtml(d.name) + '">' +
+          '" data-dir-path="' + escapeHtml(d.path) + '"' +
+          ' onclick="browseDirectory(\'' + safePath + '\')" title="Open ' + escapeHtml(d.name) + '">' +
           '<span class="folder-icon">' + icon + "</span>" +
           '<span class="folder-name">' + escapeHtml(d.name) + "</span>" +
           badge + items +
+          '<button class="folder-del-btn" onclick="event.stopPropagation();mpDeleteFolder(\'' + safePath + '\',\'' + safeName + '\')" title="Delete folder">' +
+          '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>' +
+          '</button>' +
           '<button class="folder-add-btn" onclick="event.stopPropagation();mpAddBrowsedPath(\'' + safePath + '\')" title="Add to workspace">' +
           '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>' +
           '</button>' +
@@ -1061,6 +1242,62 @@ function mpAddBrowsedPath(path) {
 
 function browseParent() {
   if (_browseState.parent) browseDirectory(_browseState.parent);
+}
+
+/* Create a new sub-folder inside the directory the browser is currently
+   showing, then refresh so the new folder appears in the list. */
+async function mpNewFolder() {
+  const parent = _browseState.path;
+  if (!parent) return;
+  const name = await showPrompt(t('folder.createInHint', { dir: parent }), {
+    title: t('folder.createTitle'),
+    placeholder: t('folder.namePh'),
+    okText: t('folder.create'),
+  });
+  if (name == null) return; // cancelled
+  const clean = String(name).trim();
+  if (!clean) return;
+  try {
+    const resp = await Api.project.mkdir(parent, clean);
+    const data = resp ? await resp.json().catch(() => ({})) : {};
+    if (resp && resp.ok && data.ok) {
+      if (typeof showToast === 'function') showToast(t('folder.created'), 'success');
+      browseDirectory(parent);
+    } else {
+      await showAlert((data && data.error) || t('folder.createFailed'),
+        { title: t('folder.createFailed') });
+    }
+  } catch (e) {
+    await showAlert(e.message || t('folder.createFailed'),
+      { title: t('folder.createFailed') });
+  }
+}
+
+/* Delete a folder shown in the browser (moved to a recoverable trash bin),
+   then refresh the current directory. */
+async function mpDeleteFolder(path, name) {
+  if (!path) return;
+  if (!await showConfirm(
+    t('folder.deleteDirConfirm', { name: name || path }) + '\n' +
+    t('folder.deleteDirHint'),
+    { danger: true, title: t('folder.deleteTitle') })) return;
+  try {
+    const resp = await Api.project.rmdir(path);
+    const data = resp ? await resp.json().catch(() => ({})) : {};
+    if (resp && resp.ok && data.ok) {
+      if (typeof showToast === 'function') showToast(t('folder.deleted'), 'success');
+      // Drop it from the workspace list too, if it was staged there.
+      const idx = _mpFolders.indexOf(path);
+      if (idx !== -1) { _mpFolders.splice(idx, 1); _mpReadOnly.delete(path); _mpRenderTags(); }
+      browseDirectory(_browseState.path);
+    } else {
+      await showAlert((data && data.error) || t('folder.deleteFailed'),
+        { title: t('folder.deleteFailed') });
+    }
+  } catch (e) {
+    await showAlert(e.message || t('folder.deleteFailed'),
+      { title: t('folder.deleteFailed') });
+  }
 }
 
 function toggleHiddenDirs() {
@@ -1212,4 +1449,119 @@ async function confirmApplyCode() {
     btn.disabled = false;
     btn.textContent = "Write File";
   }
+}
+
+
+/* ═══════════════════════════════════════════════════════
+   Drag-and-drop files INTO a project folder (folder browser)
+   ═══════════════════════════════════════════════════════
+   Distinct from the full-page chat drop (main.js), which attaches files to
+   the next MESSAGE. Dropping onto the folder browser SAVES the raw bytes to
+   disk inside the attached workspace (binary-safe, sandboxed, undoable).
+
+   The full-page chat overlay lives at document level (z-index 200); this
+   handler is bound directly to #folderBrowser and runs in the CAPTURE phase +
+   stopPropagation so a file dropped on the browser is saved to disk and NOT
+   also attached to chat. main.js additionally skips its overlay while the
+   project modal is open (see _tofuProjectModalOpen). */
+var _folderDropAttached = false;
+
+/** Resolve which directory a drop landed on: a specific folder row's path,
+ *  else the directory currently shown in the browser. Returns '' if unknown. */
+function _folderDropTargetDir(target) {
+  var row = target && target.closest ? target.closest('.folder-item[data-dir-path]') : null;
+  if (row && row.dataset.dirPath) return row.dataset.dirPath;
+  return (typeof _browseState !== 'undefined' && _browseState.path) ? _browseState.path : '';
+}
+
+function _clearFolderDropHighlight() {
+  var el = document.getElementById('folderBrowser');
+  if (el) el.classList.remove('fb-drop-active');
+  document.querySelectorAll('.folder-item.fb-drop-row')
+    .forEach(function (r) { r.classList.remove('fb-drop-row'); });
+}
+
+/** Save one dropped File into `dir` via the binary-safe upload endpoint. */
+async function _uploadDroppedFile(file, dir) {
+  var fd = new FormData();
+  fd.append('file', file, file.name);
+  if (dir) fd.append('dir', dir);
+  var resp = await Api.project.upload(fd);
+  var data = resp ? await resp.json().catch(function () { return {}; }) : {};
+  if (resp && resp.ok && data && data.ok) return { ok: true, data: data };
+  return { ok: false, error: (data && data.error) || ('HTTP ' + (resp ? resp.status : '?')) };
+}
+
+function _attachFolderDropZone() {
+  if (_folderDropAttached) return;
+  var el = document.getElementById('folderBrowser');
+  if (!el) return;
+  _folderDropAttached = true;
+
+  var hasFiles = function (e) {
+    return e.dataTransfer && Array.prototype.indexOf.call(e.dataTransfer.types || [], 'Files') !== -1;
+  };
+
+  el.addEventListener('dragover', function (e) {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+    el.classList.add('fb-drop-active');
+    var row = e.target.closest ? e.target.closest('.folder-item[data-dir-path]') : null;
+    document.querySelectorAll('.folder-item.fb-drop-row')
+      .forEach(function (r) { if (r !== row) r.classList.remove('fb-drop-row'); });
+    if (row) row.classList.add('fb-drop-row');
+  }, true);
+
+  el.addEventListener('dragleave', function (e) {
+    // Only clear when the pointer actually leaves the browser box.
+    if (e.target === el && !el.contains(e.relatedTarget)) _clearFolderDropHighlight();
+  }, true);
+
+  el.addEventListener('drop', function (e) {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    e.stopPropagation();  // beat the document-level chat-drop handler
+    var dir = _folderDropTargetDir(e.target);
+    _clearFolderDropHighlight();
+    var files = Array.prototype.slice.call((e.dataTransfer && e.dataTransfer.files) || []);
+    if (!files.length) return;
+    _runFolderDrop(files, dir);
+  }, true);
+}
+
+async function _runFolderDrop(files, dir) {
+  var dirLabel = dir ? (dir.split('/').filter(Boolean).slice(-1)[0] || dir) : 'project root';
+  var results = await Promise.allSettled(files.map(function (f) {
+    return _uploadDroppedFile(f, dir);
+  }));
+  var saved = 0, renamed = 0;
+  var errors = [];
+  results.forEach(function (r, i) {
+    if (r.status === 'fulfilled' && r.value && r.value.ok) {
+      saved++;
+      if (r.value.data && r.value.data.renamed) renamed++;
+    } else {
+      var msg = (r.status === 'fulfilled' && r.value) ? r.value.error : (r.reason && r.reason.message);
+      errors.push(files[i].name + ': ' + (msg || 'failed'));
+    }
+  });
+  if (typeof showToast === 'function') {
+    if (saved > 0) {
+      var detail = t('folderDrop.savedInto', { dir: dirLabel })
+        + (renamed ? ' · ' + t('folderDrop.renamedNote', { n: renamed }) : '');
+      showToast(t('folderDrop.saved', { n: saved }), '', detail, 4200);
+    }
+    if (errors.length) {
+      showToast(t('folderDrop.failed', { n: errors.length }), 'error',
+        errors.slice(0, 3).join('\n'), 6000);
+    }
+  }
+  // Refresh so the newly-saved files reflect in the browser's file count.
+  if (typeof browseDirectory === 'function' && typeof _browseState !== 'undefined' && _browseState.path) {
+    browseDirectory(_browseState.path);
+  }
+  // Surface the write in the project bar's file-changes affordance.
+  if (typeof loadProjectStatus === 'function') { try { loadProjectStatus(); } catch (_e) { /* best-effort */ } }
 }

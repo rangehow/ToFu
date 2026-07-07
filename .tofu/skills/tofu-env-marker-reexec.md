@@ -1,10 +1,10 @@
 ---
 name: tofu-env-marker-reexec
-description: .tofu_env.json marker bridges install.sh → server.py/bootstrap.py: re-exec into the right conda env without conda init
+description: .tofu_env.json marker re-execs server.py/bootstrap.py into a pinned conda env; STALE cross-host marker → wrong env → ModuleNotFoundError. export.py force-strips it from pre-existing dest.
 enabled: true
 tags: [install, conda, bootstrap, server]
 created: 2026-05-06T03:36:27Z
-updated: 2026-05-06T03:36:27Z
+updated: 2026-06-19T13:55:30Z
 ---
 
 # Tofu Env Marker (.tofu_env.json) — re-exec pattern
@@ -20,6 +20,29 @@ shared codelab containers (see codelab-bashrc-danger memory).
 the top of `server.py` AND `bootstrap.py` reads it and, if needed, re-execs
 into the env's python via `os.execv`. Loop guard: `_TOFU_ENV_REEXEC=1`
 (mirrors existing `_CHATUI_VIA_BOOTSTRAP=1`).
+
+## ⚠️ STALE-MARKER TRAP (seen 2026-06, tofu-personal)
+Symptom: server prints the boot banner TWICE then dies with
+`ModuleNotFoundError: No module named 'orjson'` (or any dep) EVEN THOUGH you
+just `pip/conda install`-ed it into your activated env. Root cause: a stale
+`.tofu_env.json` left in a pre-existing destination pins `python` to ANOTHER
+user's/host's env (`owned_by_tofu_install:false`, e.g.
+`.../liuxinyu67/miniconda3/envs/tofu/bin/python`). server.py re-execs into THAT
+env (2nd banner), which lacks the dep — your install went to the wrong env.
+Fix: `rm .tofu_env.json`; re-run from the activated env (install.sh rewrites a
+correct one). Diagnostic: doubled "async bootstrap" banner = re-exec happened;
+`cat .tofu_env.json` to see the pinned path.
+
+## export.py hardening (2026-06)
+`.tofu_env.json` is in `ALWAYS_EXCLUDE_FILES` so it's never COPIED — but the
+selective-cleanup loop in `export_project()` skipped pre-existing dest items
+`if item.name not in source_names` (the marker isn't in the source tree).
+Whether a stale dest marker got cleaned was pure luck (depended on the source
+host having its own marker on disk). FIX: added
+`_force_strip_from_dest = {'.tofu_env.json'}` checked BEFORE the
+`not in source_names` skip → a pre-existing stale marker is now ALWAYS deleted
+on re-export. Add per-host abs-path files to this set, not just to the exclude
+list (exclude-from-copy ≠ strip-from-dest).
 
 ## Marker schema
 ```json
@@ -56,7 +79,8 @@ into the env's python via `os.execv`. Loop guard: `_TOFU_ENV_REEXEC=1`
 - `server.py` — `_tofu_maybe_reexec_into_env()` BEFORE bootstrap excepthook
 - `bootstrap.py` — same guard, then handles missing-deps repair
 - `.gitignore` — `.tofu_env.json` excluded
-- `export.py` — `.tofu_env.json` in `ALWAYS_EXCLUDE_FILES`
+- `export.py` — `.tofu_env.json` in `ALWAYS_EXCLUDE_FILES` AND
+  `_force_strip_from_dest` in `export_project()` selective cleanup
 
 ## Bootstrap UI provider templates
 `/bootstrap/provider-templates` endpoint serves `_BUILTIN_PROVIDER_TEMPLATES`
@@ -64,4 +88,3 @@ merged with `static/provider_templates/*.json` (so `meituan.json` works
 automatically). Frontend renders provider cards + model dropdown — same
 shape as Settings UI's `_PROVIDER_TEMPLATES` but smaller curated builtin
 list (~12 entries).
-

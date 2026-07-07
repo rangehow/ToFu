@@ -239,6 +239,7 @@
                        { requirement, current: current || null, history: history || [] },
                        { onError: 'null' }),
     builtin:  (name)          => get(`/api/v1/orchestrations/builtin/${encodeURIComponent(name)}`, { onError: 'null' }),
+    roleSchema: ()            => get('/api/v1/orchestrations/role-schema', { onError: 'null' }),
     plan:     (def)           => post('/api/v1/orchestrations/plan', { definition: def }, { onError: 'null' }),
     run:      (def, input)    => post('/api/v1/orchestrations/run', { definition: def, input: input || '' }, { onError: 'null' }),
     runPoll:  (taskId, cursor) => get(`/api/v1/orchestrations/run/poll/${encodeURIComponent(taskId)}?cursor=${cursor || 0}`, { onError: 'null' }),
@@ -249,6 +250,28 @@
     humanInput: (requestId, response) =>
                   post('/api/v1/orchestrations/run/human-input',
                        { requestId, response: response || '' }, { onError: 'null' }),
+    // Durable run instances (Task Mode) — see docs/proposals/TASK_MODE.md.
+    // taskCreate returns {ok, run_id}; taskEvents is the durable cursor
+    // replay that survives reload/restart (unlike runPoll above).
+    taskCreate:  (def, input, orchId) =>
+                  post('/api/v1/orchestrations/tasks',
+                       { definition: def || null, id: orchId || undefined,
+                         input: input || '' },
+                       { parse: 'response', onError: 'null' }),
+    taskList:    (status, orchId)  => {
+      const qs = new URLSearchParams();
+      if (status) qs.set('status', status);
+      if (orchId) qs.set('orch_id', orchId);
+      const q = qs.toString();
+      return get('/api/v1/orchestrations/tasks' + (q ? '?' + q : ''), { onError: 'null' });
+    },
+    taskGet:     (runId)           => get(`/api/v1/orchestrations/tasks/${encodeURIComponent(runId)}`, { onError: 'null' }),
+    taskEvents:  (runId, cursor)   => get(`/api/v1/orchestrations/tasks/${encodeURIComponent(runId)}/events?cursor=${cursor || 0}`, { onError: 'null' }),
+    taskAbort:   (runId)           => post(`/api/v1/orchestrations/tasks/${encodeURIComponent(runId)}/abort`, {}, { onError: 'null' }),
+    taskRemove:  async (runId)     => {
+      const r = await del(`/api/v1/orchestrations/tasks/${encodeURIComponent(runId)}`, { parse: 'response', onError: 'null' });
+      return !!(r && r.ok);
+    },
   };
 
   // memory ----------------------------------------------------------
@@ -261,6 +284,16 @@
     install:        (formData)  => request('/api/v1/memory/install', { method: 'POST', body: formData, parse: 'response' }),
     catalog:        ()          => get('/api/v1/memory/catalog'),
     catalogInstall: (skillId, scope) => post('/api/v1/memory/catalog/install', { skill_id: skillId, scope: scope || 'project' }, { parse: 'response' }),
+  };
+
+  // profile (personal-preference profile) ---------------------------
+  const profile = {
+    get:           ()         => get('/api/v1/profile'),
+    save:          (body)     => put('/api/v1/profile', { body: body || '' }),
+    saveItems:     (items)    => put('/api/v1/profile', { items: items || [] }),
+    resolvePending: (id, accept, text) =>
+      post(`/api/v1/profile/pending/${encodeURIComponent(id)}`,
+           { accept: !!accept, text: text }, { parse: 'response' }),
   };
 
   // timer -----------------------------------------------------------
@@ -289,11 +322,6 @@
     runNow:    (opts)         => post('/api/v1/optimizer/run-now', Object.assign({ dry_run: false, window_hours: 24 }, opts || {})),
   };
 
-  // agentBackends ---------------------------------------------------
-  const agentBackends = {
-    status: () => get('/api/v1/agent-backends/status'),
-  };
-
   // compactions (per-conversation snapshots) ------------------------
   const compactions = {
     list: (convId)            => get(`/api/v1/conversations/${encodeURIComponent(convId)}/compactions`),
@@ -317,6 +345,13 @@
     getResponse: (convId, opts) =>
       request(`/api/v1/conversations/${encodeURIComponent(convId)}`,
               Object.assign({ method: 'GET', parse: 'response', onError: 'null' }, opts || {})),
+    // Lightweight hover-preview: {id, title, firstUserMessage, msgCount}.
+    // Parses only the opening user turn server-side, so the response is tiny
+    // even for a huge conversation. Used by the Project Brain panel to resolve
+    // opaque conversation IDs to a readable preview on hover. null on failure.
+    preview: (convId) =>
+      get(`/api/v1/conversations/${encodeURIComponent(convId)}/preview`,
+          { onError: 'null' }),
     patchSettings: (convId, patch) =>
       request(`/api/v1/conversations/${encodeURIComponent(convId)}/settings`,
               { method: 'PATCH', json: patch, parse: 'response', onError: 'null' }),
@@ -337,6 +372,12 @@
     getDebugMessages: (convId, systemPrompt) =>
       get(`/api/v1/conversations/${encodeURIComponent(convId)}/debug-messages`,
           { query: { systemPrompt: systemPrompt || '' }, onError: 'null' }),
+    // Branch create returns Response so the caller parses {ok, branch,
+    // branch_idx} / inspects status itself (matches the legacy fetch shape
+    // it replaced in branch.js).
+    createBranch: (convId, msgIdx, body) =>
+      post(`/api/v1/conversations/${encodeURIComponent(convId)}/messages/${encodeURIComponent(msgIdx)}/branches`,
+           body, { parse: 'response', onError: 'null' }),
     // Branch delete returns Response so the caller can inspect status / body.
     deleteBranch: (convId, msgIdx, branchIdx) =>
       del(`/api/v1/conversations/${encodeURIComponent(convId)}/messages/${encodeURIComponent(msgIdx)}/branches/${encodeURIComponent(branchIdx)}`,
@@ -381,6 +422,13 @@
     deleteMessage: (convId, msgIdx, mode) =>
       del(`/api/v1/conversations/${encodeURIComponent(convId)}/messages/${encodeURIComponent(msgIdx)}`,
           { query: { mode: mode || 'single' }, parse: 'response', onError: 'null' }),
+    // Apply a pending tool-toggle change to an active conversation: clears the
+    // per-conversation tool-schema latch so the next round re-assembles tools
+    // from the current toggles (accepts a one-time prompt-cache rebuild).
+    // Returns parsed {ok, conv_id} or null on error.
+    applyToolset: (convId) =>
+      post(`/api/v1/conversations/${encodeURIComponent(convId)}/toolset/apply`,
+           {}, { onError: 'null' }),
     // Server-side extract-file-changes from a tool-rounds payload (v1).
     extractFileChanges: (toolRounds) =>
       post('/api/v1/messages/extract-file-changes', { toolRounds }, { onError: 'null' }),
@@ -429,10 +477,10 @@
   };
 
   // chat (task / streaming control plane) ---------------------------
-  // Stream lifecycle methods. Note: the SSE chat stream itself is still
-  // consumed via raw fetch in main.js / branch.js (we hand back the
-  // Response so callers can pipe `.body.getReader()`). Use stream() to
-  // build that fetch.
+  // Stream lifecycle methods. The SSE chat stream is consumed through
+  // chat.streamResponse() below (ui/sse_pipeline.js + branch.js) — it hands
+  // back the raw Response so callers can pipe `.body.getReader()`. No JS file
+  // calls fetch('/api/chat/stream/...') directly.
   const chat = {
     // Outbound message lifecycle.
     // send() / regenerate() return the raw Response so callers can inspect
@@ -459,6 +507,26 @@
                                        { parse: 'response', onError: 'null' }),
     queueClear:   (convId)      => del(`/api/v1/chat/queue/${encodeURIComponent(convId)}`,
                                        { parse: 'response', onError: 'null' }),
+    // Arm autopilot mid-stream — "take over from here" while a reply is
+    // streaming. Persists autopilotEnabled + flips the live task's config
+    // so the virtual user takes over at the next natural stop.
+    armAutopilot: (convId)      => post('/api/v1/chat/autopilot/arm', { convId },
+                                        { onError: 'null' }),
+    // Disarm autopilot — clears the persistent armed-marker + flips live
+    // config off. Backs the queue-bar cancel button and toggle-OFF gesture.
+    disarmAutopilot: (convId)   => post('/api/v1/chat/autopilot/disarm', { convId },
+                                        { onError: 'null' }),
+    // Kick autopilot on a FINISHED conversation — "push it forward". Spawns a
+    // carrier task that runs the virtual-user hook directly (no worker turn).
+    // Returns {taskId} or throws ApiError (409 when a task is already running).
+    kickAutopilot: (convId, config) => post('/api/v1/chat/autopilot/kick',
+                                            { convId, config }),
+    // Summarize a concluded autopilot run — on-demand close-out report for a
+    // run that ended without a clean TASK_DONE (Stop / new user message).
+    // Returns {ok, summary, runId} (summary = human-only sidecar record,
+    // NOT a chat message) or throws ApiError.
+    summarizeAutopilotRun: (convId, runId, config) =>
+      post('/api/v1/chat/autopilot/summarize', { convId, runId, config }),
     // Active-tasks listing — used on init to reconnect SSE streams.
     active:       (opts)        => get('/api/v1/chat/active', Object.assign({ onError: 'null' }, opts || {})),
     activeResponse: (opts)      => request('/api/v1/chat/active', Object.assign({ method: 'GET', parse: 'response', onError: 'null' }, opts || {})),
@@ -466,13 +534,13 @@
     patchToolState: (convId, settings) =>
       request(`/api/v1/chat/tool-state/${encodeURIComponent(convId)}`,
               { method: 'PATCH', json: settings, parse: 'response', onError: 'null' }),
-    // Status of the auto-translate retry loop (poll endpoint).
-    sendTranslateStatus: (convId) =>
-      get(`/api/v1/chat/translate-status/${encodeURIComponent(convId)}`,
-          { onError: 'null' }),
     poll: (taskId, opts) =>
       request(`/api/v1/chat/poll/${encodeURIComponent(taskId)}`,
               Object.assign({ method: 'GET', parse: 'response', onError: 'null' }, opts || {})),
+    // Per-node orchestration-flow run trace (resolved brief + bounded I/O per
+    // node) for the Studio canvas/inspector overlay. {ok, taskId, flowLabel, trace}.
+    flowTrace: (taskId) =>
+      get(`/api/v1/chat/flow-trace/${encodeURIComponent(taskId)}`, { onError: 'null' }),
     // streamResponse stays on /api/chat/stream/<id> — that's the SSE
     // carve-out (long-lived response, custom event format).
     streamResponse: (taskId, opts) =>
@@ -496,6 +564,20 @@
     check:   (opts) => get('/api/v1/update/check', Object.assign({ onError: 'null' }, opts || {})),
     apply:   ()     => post('/api/v1/update/apply', {}),
     restart: ()     => post('/api/v1/update/restart', {}, { onError: 'null' }),
+  };
+
+  // swarm (multi-agent control plane) -------------------------------
+  // status: GET — current swarm state for a task. Top-level shape:
+  //   {active, task_id, agents:[...], running, pending, completed, ...}
+  //   or {active:false, message} when no swarm is registered for the task
+  //   (e.g. session evicted after a server restart). Used by the
+  //   stuck-panel reconciler in ui/streaming_ui.js to settle zombie panels.
+  const swarm = {
+    status: (taskId, opts) =>
+      get(`/api/v1/swarm/status/${encodeURIComponent(taskId)}`,
+          Object.assign({ onError: 'null' }, opts || {})),
+    abort:  (taskId) =>
+      post(`/api/v1/swarm/abort/${encodeURIComponent(taskId)}`, {}, { onError: 'null' }),
   };
 
   // health / status -------------------------------------------------
@@ -526,6 +608,16 @@
     update: (payload) =>
       request('/api/v1/server-config',
               { method: 'POST', json: payload, parse: 'response' }),
+    // Built-in (default) system prompt — used by the Settings system-prompt
+    // editor to pre-fill / reset. project & tools flags shape the preview.
+    defaultSystemPrompt: (project, tools) =>
+      get('/api/v1/system-prompt/default?project=' + (project ? '1' : '0')
+          + '&tools=' + (tools === false ? '0' : '1'), { onError: 'null' }),
+    // Built-in system prompt split into toggleable blocks (id/title/text/
+    // dynamic) — used by the per-block system-prompt editor.
+    systemPromptBlocks: (project, tools) =>
+      get('/api/v1/system-prompt/blocks?project=' + (project ? '1' : '0')
+          + '&tools=' + (tools === false ? '0' : '1'), { onError: 'null' }),
   };
 
   // features (per-deployment toggles) ------------------------------
@@ -587,6 +679,7 @@
       request('/api/oauth/logout',
               { method: 'GET', query: { provider }, parse: 'response', onError: 'null' }),
     callbackPost: (body)            => post('/api/oauth/callback', body, { onError: 'null', parse: 'response' }),
+    storeToken:  (provider, token)  => post('/api/oauth/store-token', { provider, token }, { onError: 'null', parse: 'response' }),
     callbackGet:  (queryString)     =>
       // queryString is a pre-encoded "k=v&k2=v2" string — we hand it off raw
       // because the legacy code did the same. Future cleanup can switch to
@@ -600,12 +693,29 @@
     catalogList:      ()                           =>
       request('/api/v1/mcp/catalog',
               { method: 'GET', parse: 'response', onError: 'null' }),
+    // Lightweight introspection: flat list of every connected MCP tool
+    // ({tools, total, servers_connected}). Used by the per-turn context
+    // capsule (info-rail.js) to surface active MCP tools without paying the
+    // heavier catalog fetch.
+    toolsList:        ()                           =>
+      request('/api/v1/mcp/tools',
+              { method: 'GET', parse: 'response', onError: 'null' }),
     // NOTE: no onError:'null' here — a failed connect returns HTTP 500
     // with a rich {error, stderr_tail} body; we want that to throw an
     // ApiError (carrying .body) so the UI can show the real reason
     // instead of a generic "无法连接" after the call silently nulls out.
     catalogInstall:   (id, env)                    =>
+      // Returns fast: either {status:'ready'} (connected) or HTTP 202
+      // {status:'installing'} when a cold `pip install` was kicked off in the
+      // background. The UI then polls installStatus until ready/error, so the
+      // request no longer blocks for minutes (a proxy could cut it).
       post('/api/v1/mcp/catalog/install', { id, env: env || {} }),
+    // Poll an in-flight async install. 202 while installing, 200 ready (with
+    // tool list), 500 error — all carry a {status} field. parse:'response'
+    // so the caller inspects HTTP status + body.
+    catalogInstallStatus: (id)                     =>
+      request('/api/v1/mcp/catalog/install/status',
+              { method: 'GET', query: { id }, parse: 'response', onError: 'null' }),
     catalogUninstall: (id, purge)                  =>
       post('/api/v1/mcp/catalog/uninstall',
            { id, ...(purge ? { purge: true } : {}) }, { onError: 'null' }),
@@ -705,13 +815,90 @@
     undo:          (body)     =>
       request('/api/v1/project/undo',
               { method: 'POST', json: body, parse: 'response' }),
-    undoAll:       ()         =>
+    undoAll:       (body)     =>
       request('/api/v1/project/undo-all',
-              { method: 'POST', json: {}, parse: 'response' }),
+              { method: 'POST', json: body || {}, parse: 'response' }),
     browse:        (path, showHidden) => post('/api/v1/project/browse', { path, showHidden: !!showHidden }),
+    mkdir:         (parent, name)     =>
+      request('/api/v1/project/mkdir',
+              { method: 'POST', json: { parent, name }, parse: 'response' }),
+    rmdir:         (path)             =>
+      request('/api/v1/project/rmdir',
+              { method: 'POST', json: { path }, parse: 'response' }),
     write:         (path, content)    => post('/api/v1/project/write', { path, content }),
+    // Binary-safe drop-into-folder. `formData` carries file + dir (+ optional name).
+    upload:        (formData)         =>
+      request('/api/v1/project/upload', { method: 'POST', body: formData, timeout: 0 }),
     writeApproval: (approvalId, approved) =>
       post('/api/v1/project/write-approval', { approvalId, approved }),
+    // Project-brain Activity Feed (read-only). Keyed on the explicit `path`
+    // the caller holds — never the server's global active project.
+    feed:          (path, sinceSeq) =>
+      get('/api/v1/project/feed',
+          { query: { path, since: sinceSeq || 0 }, onError: 'null' }),
+    // Project-brain Charter (north star). read-only get + human-gated commit.
+    charter:       (path) =>
+      get('/api/v1/project/charter', { query: { path }, onError: 'null' }),
+    commitCharter: (path, body) =>
+      post('/api/v1/project/charter/commit', Object.assign({ path }, body || {})),
+    // Unresolved proposals (single source for "awaiting you") + durable reject.
+    charterPending: (path) =>
+      get('/api/v1/project/charter/pending', { query: { path }, onError: 'null' }),
+    dismissProposal: (path, proposalId, body) =>
+      post('/api/v1/project/charter/dismiss',
+           Object.assign({ path, proposalId }, body || {})),
+    // Project-brain Board (coordination kanban). read-only.
+    board:         (path) =>
+      get('/api/v1/project/board', { query: { path }, onError: 'null' }),
+    // Board HUMAN mutations. All key strictly on the explicit `path`; `convId`
+    // is the displayed conversation acting as the human's proxy. `post` needs
+    // it (becomes created_by_conv → dispatch target); complete/block/reopen
+    // tolerate an empty convId (lifecycle actions on an existing epic, no
+    // dispatch target — feed event + audit record a blank actor honestly).
+    boardPost:     (path, { title, convId, dependsOn } = {}) =>
+      post('/api/v1/project/board/post',
+           { path, title, convId, depends_on: dependsOn || [] }),
+    boardComplete: (path, taskId, convId) =>
+      post('/api/v1/project/board/complete', { path, taskId, convId: convId || '' }),
+    boardBlock:    (path, taskId, convId, reason) =>
+      post('/api/v1/project/board/block',
+           { path, taskId, convId: convId || '', reason: reason || '' }),
+    boardReopen:   (path, taskId, convId) =>
+      post('/api/v1/project/board/reopen', { path, taskId, convId: convId || '' }),
+    // PARK an epic pending a human decision (open|claimed → deferred). A parked
+    // epic stops autonomous dispatch and won't oscillate; the human resumes it
+    // later via boardReopen (deferred → open). convId optional (feed actor).
+    boardDefer:    (path, taskId, convId, reason) =>
+      post('/api/v1/project/board/defer',
+           { path, taskId, convId: convId || '', reason: reason || '' }),
+    // Collaboration-bar one-shot summary (board + decisions + peer→epic join).
+    brainSummary:  (path) =>
+      get('/api/v1/project/brain/summary', { query: { path }, onError: 'null' }),
+    // LIVE peer/team roster (presence ⋈ task ⋈ claimed-epic). convId optional
+    // — when present it's excluded so a conv never lists itself as a peer.
+    brainPeers:    (path, convId) =>
+      get('/api/v1/project/brain/peers',
+          { query: { path, convId: convId || '' }, onError: 'null' }),
+    // Per-conversation brain INFLUENCE — how THIS conv is affected by the
+    // brain (charter bound by, epics owned vs avoided, decisions awaiting).
+    brainInfluence: (path, convId) =>
+      get('/api/v1/project/brain/influence',
+          { query: { path, convId }, onError: 'null' }),
+    // HUMAN nudge to a sibling conversation — the operator (acting via the
+    // displayed conv `convId`) sends advisory `text` to `toConvId`. Reuses
+    // send_peer_message server-side (same rate limit + self-send guard).
+    // Throws ApiError on refusal so the composer can surface rate_limited.
+    brainPeerMessage: (path, convId, toConvId, text) =>
+      post('/api/v1/project/brain/peer-message',
+           { path, convId: convId || '', toConvId, text }),
+    // HUMAN hard-abort of a sibling conversation's running task(s). The
+    // operator (acting via `convId`) stops `toConvId` — the authenticated
+    // operator IS the approval (confirmed client-side), passed server-side as
+    // approved_by and honored by the same audit gate. Aborts the TASK only.
+    // Throws ApiError on refusal so the caller can surface the reason.
+    brainPeerAbort: (path, convId, toConvId) =>
+      post('/api/v1/project/brain/peer-abort',
+           { path, convId: convId || '', toConvId }),
   };
 
   // paper-reader (library + report + translate + QA) ---------------
@@ -726,26 +913,57 @@
     // upload + chat + fetch-arxiv-stream stay on /api/paper/* (multipart / SSE
     // carve-outs — not v1 envelope shape).
     upload:         (formData)            => request('/api/paper/upload', { method: 'POST', body: formData, timeout: 0 }),
-    fetchArxivStream: (url, opts)         =>
+    fetchArxivStream: (url, paperId, opts) =>
       request('/api/paper/fetch-arxiv-stream',
-              Object.assign({ method: 'POST', json: { url }, parse: 'response', timeout: 0 }, opts || {})),
+              Object.assign({ method: 'POST', json: { url, paper_id: paperId || '' }, parse: 'response', timeout: 0 }, opts || {})),
+    searchArxiv:    (query, maxResults)   =>
+      post('/api/v1/paper/search-arxiv', { query, max_results: maxResults || 10 }, { onError: 'null' }),
+    recommend:      (description, maxResults) =>
+      post('/api/v1/paper/recommend', { description, max_results: maxResults || 6 }, { onError: 'null' }),
+    // Streaming describe-to-recommend (server-owned task; polled like Q&A so
+    // the transport matches the tab beside it — no SSE).
+    recommendStart: (description, maxResults) =>
+      post('/api/v1/paper/recommend/start', { description, max_results: maxResults || 6 }),
+    recommendPoll:  (taskId, cursor)      =>
+      request('/api/v1/paper/recommend/poll',
+              { method: 'GET', query: { task_id: taskId, cursor }, parse: 'response', onError: 'null' }),
+    recommendAbort: (taskId)              =>
+      post('/api/v1/paper/recommend/abort', { task_id: taskId }, { onError: 'null' }),
     chatStream:     (body, opts)          =>
       request('/api/paper/chat',
               Object.assign({ method: 'POST', json: body, parse: 'response', timeout: 0 }, opts || {})),
     reparse:        (filename)            => post('/api/v1/paper/reparse', { filename }),
-    reportStart:    (body, opts)          => post('/api/v1/paper/report/start', body, opts || {}),
+    // timeout:0 — /start does synchronous prep (image-manifest extraction,
+    // injection sanitize, prompt build) that legitimately runs 10–40s before
+    // it spawns the background task and returns. The default 30s client
+    // timeout would fire an AbortController mid-prep, surfacing a phantom
+    // "Failed" while the server task keeps running orphaned. The task is then
+    // polled; no client-side deadline belongs on the start round-trip.
+    reportStart:    (body, opts)          => post('/api/v1/paper/report/start', body, Object.assign({ timeout: 0 }, opts || {})),
     reportPoll:     (taskId, cursor)      =>
       request('/api/v1/paper/report/poll',
               { method: 'GET', query: { task_id: taskId, cursor }, parse: 'response', onError: 'null' }),
     reportLookup:   (paperHash, lang, opts) =>
       post('/api/v1/paper/report/lookup', { paper_hash: paperHash, lang }, Object.assign({ onError: 'null' }, opts || {})),
     reportCache:    (cacheBody)           => post('/api/v1/paper/report/cache', cacheBody, { onError: 'null' }),
-    reportAbort:    (taskId)              => post('/api/v1/paper/report/abort', { task_id: taskId }, { onError: 'null', parse: 'none' }),
+    reportAbort:    (taskId)              => post(`/api/v1/paper/report/abort/${encodeURIComponent(taskId)}`, {}, { onError: 'null', parse: 'none' }),
+    // Review Mode reuses ALL the report endpoints above — the report `lang`
+    // arg carries the composite cache key ``review:<venue>:<uilang>`` opaquely.
+    // Only the venue list needs its own (read-only) endpoint.
+    reviewVenues:   ()                    =>
+      request('/api/v1/paper/review/venues', { method: 'GET', onError: 'null' }),
+    // Agentic Q&A — server-owned TaskRuntime task (web_search/fetch_url, full
+    // report + section-aware paper context). Polls like the report task.
+    qaStart:        (body)                => post('/api/v1/paper/qa/start', body),
+    qaPoll:         (taskId, cursor)      =>
+      request('/api/v1/paper/qa/poll',
+              { method: 'GET', query: { task_id: taskId, cursor }, parse: 'response', onError: 'null' }),
+    qaAbort:        (taskId)              => post(`/api/v1/paper/qa/abort/${encodeURIComponent(taskId)}`, {}, { onError: 'null', parse: 'none' }),
     translateStart: (body)                => post('/api/v1/paper/translate/start', body),
     translatePoll:  (taskId, cursor)      =>
       request('/api/v1/paper/translate/poll',
               { method: 'GET', query: { task_id: taskId, cursor }, parse: 'response', onError: 'null' }),
-    translateAbort: (taskId)              => post('/api/v1/paper/translate/abort', { task_id: taskId }, { onError: 'null', parse: 'none' }),
+    translateAbort: (taskId)              => post(`/api/v1/paper/translate/abort/${encodeURIComponent(taskId)}`, {}, { onError: 'null', parse: 'none' }),
     translateCache: (paperHash, lang)     => post('/api/v1/paper/translate/cache', { paper_hash: paperHash, lang }, { onError: 'null' }),
     // URL builder for the report-export endpoint (md/html/pdf). Returned
     // URL is a full link so the caller can use window.open() / anchor.href.
@@ -828,7 +1046,7 @@
   const pdf = {
     parse:     (formData)            => request('/api/pdf/parse', { method: 'POST', body: formData, timeout: 0 }),
     vlmStart:  (formData)            => request('/api/pdf/vlm-parse', { method: 'POST', body: formData, timeout: 0 }),
-    vlmPoll:   (taskId)              => get(`/api/pdf/vlm-parse/${encodeURIComponent(taskId)}`, { onError: 'null' }),
+    vlmPoll:   (taskId)              => get(`/api/v1/pdf/vlm-parse/${encodeURIComponent(taskId)}`, { onError: 'null' }),
     vlmTasks:  (filename)            => get('/api/v1/pdf/vlm-tasks', { query: { filename }, onError: 'null' }),
   };
 
@@ -882,10 +1100,11 @@
     ApiError,
     _resolve,         // exposed for SSE/WS path building
     // domains
-    folders, orchestrations, memory, timer, scheduler, optimizer, agentBackends, compactions,
+    folders, orchestrations, memory, profile, timer, scheduler, optimizer, compactions,
     conversations, text, translate, chat, images, pdf, doc, artifacts,
     health, pricing, clientError, serverConfig, browser, project, daily, paper,
     features, providers, dispatch, oauth, mcp, update, trading, authSources,
+    swarm,
   };
 
   global.Api = Api;

@@ -1,6 +1,6 @@
 ---
 name: browser-extension-fullpage-screenshot-cdp
-description: Full-page screenshot in browser extension: CDP Page.captureScreenshot with captureBeyondViewport, with viewport fallback
+description: Browser-extension screenshot is fully BACKGROUND via CDP (full-page + viewport-CDP); only last-resort captureVisibleTab activates the tab. No tab-switch flicker.
 enabled: true
 tags: [browser-extension, screenshot, cdp, chrome-debugger, architecture]
 created: 2026-05-04T13:04:20Z
@@ -24,9 +24,16 @@ Protocol, not just the visible viewport.
      `{captureBeyondViewport: true, fromSurface: true, clip: {0,0,W,H,1}}`.
   5. Height clipped at `FULL_PAGE_MAX_HEIGHT_PX = 16000` (Chrome texture cap).
   6. `chrome.debugger.detach` in `finally`.
-- If CDP fails (DevTools already attached, protected URL, etc.),
-  `cmdScreenshotTab` transparently calls `_screenshotViewport()` and sets
-  `fullPage: false, fallbackReason: '...'` on the result.
+- `_screenshotViewportCDP(tabId, format, quality)` (v4.4.0+): same CDP attach,
+  but `Page.captureScreenshot` with `captureBeyondViewport:false` — grabs the
+  tab's CURRENT viewport **in the background, without activating/focusing it**.
+- **Fallback chain (v4.4.0+):** full-page request →
+  `_screenshotFullPageCDP` → (on fail) `_screenshotViewportCDP` → (on fail)
+  `_screenshotViewport`. A `fullPage:false` request goes straight to
+  `_screenshotViewportCDP` → (on fail) `_screenshotViewport`. Only the LAST
+  resort `_screenshotViewport` (chrome.tabs.captureVisibleTab) activates the
+  tab — that's the visible "navigation"/flicker we now avoid in the common case.
+  Each fallthrough records `fallbackReason`.
 - `COMMAND_TIMEOUT_OVERRIDES = {screenshot_tab: 55000}` because full-page
   captures can legitimately exceed the default 25 s cap.
 - Requires `"debugger"` permission in `manifest.json` (already present).

@@ -2,7 +2,16 @@
 :root{--bg-primary:#0a0a0c;--bg-secondary:#111115;--bg-tertiary:#1a1a21;--bg-hover:#22222b;--bg-active:#2a2a35;--border:#2a2a35;--border-light:#33333f;--text-primary:#e8e8ed;--text-secondary:#9898a8;--text-tertiary:#6a6a7a;--accent:#6e56cf;--accent-hover:#7c66d4;--accent-subtle:rgba(110,86,207,0.12);--thinking-bg:rgba(207,167,56,0.06);--thinking-border:rgba(207,167,56,0.25);--thinking-text:#cfb850;--error-bg:rgba(207,56,56,0.08);--error-border:rgba(207,56,56,0.3);--error-text:#cf5050;--user-bubble:#1e1b4b;--shadow:0 2px 12px rgba(0,0,0,0.4);--radius:12px;--radius-sm:8px;--radius-xs:6px;--transition:0.2s cubic-bezier(0.4,0,0.2,1);--search-blue:#3b82f6;--search-cyan:#06b6d4;--search-purple:#8b5cf6;--fetch-green:#10b981;--fetch-teal:#14b8a6}
 *{margin:0;padding:0;box-sizing:border-box}html{overflow:hidden;height:100%;width:100%}body{font-family:'Plus Jakarta Sans','Jakarta Fallback',-apple-system,sans-serif;background:var(--bg-primary);color:var(--text-primary);height:100vh;height:100dvh;overflow:hidden;display:flex;width:100%}
 ::-webkit-scrollbar{width:6px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:transparent;border-radius:3px}::-webkit-scrollbar-thumb:hover{background:var(--border-light)}.conversations-list:hover::-webkit-scrollbar-thumb,.chat-container:hover::-webkit-scrollbar-thumb,.modal:hover::-webkit-scrollbar-thumb{background:var(--border)}.conversations-list,.chat-container,.modal{scrollbar-color:transparent transparent}.conversations-list:hover,.chat-container:hover,.modal:hover{scrollbar-color:var(--border) transparent}
-.sidebar{width:280px;min-width:280px;background:var(--bg-secondary);border-right:1px solid var(--border);display:flex;flex-direction:column;transition:margin-left var(--transition);z-index:20}.sidebar.collapsed{margin-left:-280px}.sidebar-header{padding:16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px}.sidebar-header h1{font-size:15px;font-weight:700;letter-spacing:0.06em;flex:1;display:flex;align-items:center;gap:5px;font-family:'Pixelify Sans','Press Start 2P',cursive}.sidebar-brand{display:inline-flex;letter-spacing:0.04em}.sidebar-brand-t,.sidebar-brand-o,.sidebar-brand-f,.sidebar-brand-u{-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}.sidebar-brand-t{background-image:linear-gradient(135deg,#8b6cf6,#a78bfa)}.sidebar-brand-o{background-image:linear-gradient(135deg,#a78bfa,#c4b5fd)}.sidebar-brand-f{background-image:linear-gradient(135deg,#7c3aed,#8b6cf6)}.sidebar-brand-u{background-image:linear-gradient(135deg,#6d28d9,#7c3aed)}.sidebar-tofu-icon{flex-shrink:0;opacity:0.85}
+.sidebar{--project-rail-w:150px;--project-rail-w-collapsed:52px;--sidebar-list-min:280px;width:280px;min-width:280px;background:var(--bg-secondary);border-right:1px solid var(--border);display:flex;flex-direction:column;transition:margin-left var(--transition),width var(--transition),min-width var(--transition);z-index:20}
+/* When ≥1 project exists the sidebar hosts the vertical rail + list side by
+ * side, so its total width is derived (rail + list-min), never a magic number.
+ * With 0 projects the rail is absent and the sidebar keeps its single-column
+ * width (zero-folder degradation). */
+.sidebar.has-rail{width:calc(var(--project-rail-w) + var(--sidebar-list-min));min-width:calc(var(--project-rail-w) + var(--sidebar-list-min))}
+.sidebar.has-rail.rail-collapsed{width:calc(var(--project-rail-w-collapsed) + var(--sidebar-list-min));min-width:calc(var(--project-rail-w-collapsed) + var(--sidebar-list-min))}
+.sidebar.collapsed{margin-left:-280px}
+.sidebar.has-rail.collapsed{margin-left:calc(-1 * (var(--project-rail-w) + var(--sidebar-list-min)))}
+.sidebar.has-rail.rail-collapsed.collapsed{margin-left:calc(-1 * (var(--project-rail-w-collapsed) + var(--sidebar-list-min)))}.sidebar-header{padding:16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px}.sidebar-header h1{font-size:15px;font-weight:700;letter-spacing:0.06em;flex:1;display:flex;align-items:center;gap:5px;font-family:'Pixelify Sans','Press Start 2P',cursive}.sidebar-brand{display:inline-flex;letter-spacing:0.04em}.sidebar-brand-t,.sidebar-brand-o,.sidebar-brand-f,.sidebar-brand-u{-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}.sidebar-brand-t{background-image:linear-gradient(135deg,#8b6cf6,#a78bfa)}.sidebar-brand-o{background-image:linear-gradient(135deg,#a78bfa,#c4b5fd)}.sidebar-brand-f{background-image:linear-gradient(135deg,#7c3aed,#8b6cf6)}.sidebar-brand-u{background-image:linear-gradient(135deg,#6d28d9,#7c3aed)}.sidebar-tofu-icon{flex-shrink:0;opacity:0.85}
 .sidebar-header-actions{display:flex;gap:2px;align-items:center}
 .sidebar-header-actions .action-btn{width:30px;height:30px}
 .sidebar-action-row{display:flex;gap:6px;padding:12px 16px;align-items:stretch}
@@ -36,32 +45,81 @@
 .conv-rename-btn:active{transform:scale(0.97)}
 .conv-rename-btn.cancel{background:var(--bg-tertiary);color:var(--text-secondary);border:1px solid var(--border)}.conv-rename-btn.cancel:hover{background:var(--bg-hover);color:var(--text-primary)}
 .conv-rename-btn.ok{background:var(--accent);color:#fff;border:1px solid transparent}.conv-rename-btn.ok:hover{background:var(--accent-hover)}
-/* ── Folder tab bar ── */
-.folder-tabs{padding:0 12px 0;flex-shrink:0;position:relative}
-.folder-tabs:empty{display:none}
-.folder-tabs-scroll{display:flex;flex-wrap:wrap;gap:4px;overflow:hidden;padding:2px 0 4px;max-height:94px;transition:max-height 0.25s cubic-bezier(0.4,0,0.2,1)}
-.folder-tabs-scroll.expanded{max-height:500px;overflow-y:auto}
-.folder-tabs-toggle{width:100%;height:20px;display:none;align-items:center;justify-content:center;gap:4px;background:var(--bg-secondary);border:none;border-top:1px solid var(--border);color:var(--text-tertiary);cursor:pointer;padding:2px 0 0;z-index:1;transition:color 0.15s,background 0.15s;font-size:10px;font-family:inherit;font-weight:600;margin-top:-1px}
-.folder-tabs-toggle:hover{color:var(--accent);background:var(--bg-hover)}
-.folder-tabs-toggle svg{transition:transform 0.25s ease}
-.folder-tabs-scroll.expanded+.folder-tabs-toggle svg{transform:rotate(180deg)}
-.folder-tabs.has-overflow .folder-tabs-toggle{display:flex}
-.folder-tabs-toggle-label{letter-spacing:0.02em}
+/* ═══ Vertical project rail ═══
+ * Sidebar body = rail (left column) + conversation list (flex). The rail
+ * stacks projects as full-width rows so names of any length align cleanly —
+ * replaces the old ragged wrapping pill bar. Width driven by --project-rail-w
+ * on .sidebar; collapses to an icon-only strip via .sidebar.rail-collapsed. */
+.sidebar-body{display:flex;flex:1;min-height:0;overflow:hidden}
+.project-rail{display:flex;flex-direction:column;flex-shrink:0;width:var(--project-rail-w);border-right:1px solid var(--border);background:var(--bg-tertiary);overflow:hidden;transition:width var(--transition)}
+.project-rail:empty{display:none}
+.sidebar.rail-collapsed .project-rail{width:var(--project-rail-w-collapsed)}
+.project-rail-head{display:flex;align-items:center;justify-content:space-between;padding:10px 10px 6px 12px;flex-shrink:0}
+.project-rail-title{font-size:10px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:var(--text-tertiary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.project-rail-collapse{display:flex;align-items:center;justify-content:center;width:20px;height:20px;flex-shrink:0;border:none;background:transparent;color:var(--text-tertiary);cursor:pointer;border-radius:var(--radius-xs);transition:color 0.15s,background 0.15s,transform 0.25s}
+.project-rail-collapse:hover{color:var(--accent);background:var(--bg-hover)}
+.sidebar.rail-collapsed .project-rail-collapse svg{transform:rotate(180deg)}
+.sidebar.rail-collapsed .project-rail-title{display:none}
+.sidebar.rail-collapsed .project-rail-head{justify-content:center;padding:10px 0 6px}
+.project-rail-list{display:flex;flex-direction:column;gap:2px;flex:1;overflow-y:auto;overflow-x:hidden;padding:2px 8px 4px;min-height:0}
 
-.folder-tab{display:inline-flex;align-items:center;gap:5px;padding:4px 12px;border:1px solid var(--border);border-radius:99px;background:transparent;color:var(--text-secondary);font-size:11.5px;font-weight:600;font-family:inherit;cursor:pointer;white-space:nowrap;flex-shrink:0;transition:all 0.15s ease;user-select:none;line-height:1.4}
-.folder-tab:hover{background:var(--bg-hover);color:var(--text-primary);border-color:var(--border-light)}
-.folder-tab.active{background:var(--accent-subtle);color:var(--accent);border-color:var(--accent);font-weight:700}
-.folder-tab-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+/* Project ROW (reuses .folder-tab so all JS handlers still match) */
+.folder-tab{display:flex;align-items:center;gap:8px;width:100%;padding:7px 9px;border:1px solid transparent;border-radius:var(--radius-xs);background:transparent;color:var(--text-secondary);font-size:12.5px;font-weight:600;font-family:inherit;cursor:pointer;white-space:nowrap;transition:background 0.15s,color 0.15s;user-select:none;line-height:1.3;position:relative;text-align:left}
+.folder-tab:hover{background:var(--bg-hover);color:var(--text-primary)}
+.folder-tab.active{background:var(--accent-subtle);color:var(--accent);font-weight:700}
+/* Left accent bar for the active project — reads as "you are here" */
+.folder-tab.active::before{content:'';position:absolute;left:0;top:6px;bottom:6px;width:3px;border-radius:0 3px 3px 0;background:var(--accent)}
+.folder-tab-dot{width:9px;height:9px;border-radius:50%;flex-shrink:0}
 .folder-tab-dot.streaming{animation:folderDotPulse 1.5s ease-in-out infinite}
 @keyframes folderDotPulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:0.3;transform:scale(0.65)}}
-.folder-tab-name{max-width:80px;overflow:hidden;text-overflow:ellipsis}
-
-.folder-tab-count{font-size:10px;min-width:16px;height:16px;line-height:16px;text-align:center;border-radius:8px;background:var(--bg-hover);color:var(--text-secondary);padding:0 4px;flex-shrink:0;font-weight:600}
+.folder-tab-inbox-dot,.folder-tab-add-dot{width:auto;height:auto;border-radius:0;display:inline-flex;align-items:center;justify-content:center;color:var(--text-tertiary)}
+.folder-tab.active .folder-tab-inbox-dot{color:var(--accent)}
+.folder-tab-name{flex:1;overflow:hidden;text-overflow:ellipsis}
+.folder-tab-count{font-size:10px;min-width:18px;height:16px;line-height:16px;text-align:center;border-radius:8px;background:var(--bg-hover);color:var(--text-secondary);padding:0 5px;flex-shrink:0;font-weight:600}
 .folder-tab.active .folder-tab-count{background:var(--accent);color:#fff}
-.folder-tab-inbox-icon{flex-shrink:0;opacity:0.7}
-.folder-tab-add{padding:4px 8px;color:var(--text-tertiary);border-style:dashed}
-.folder-tab-add:hover{color:var(--accent);border-color:var(--accent);background:var(--accent-subtle)}
-.folder-tab.folder-tab-drop{border-color:var(--accent);background:var(--accent-subtle);box-shadow:0 0 0 2px rgba(110,86,207,0.2)}
+/* Footer "+ New project" row (kept separate from the scroll list) */
+.folder-tab-add{flex-shrink:0;margin:2px 8px 8px;width:auto;color:var(--text-tertiary)}
+.folder-tab-add:hover{color:var(--accent);background:var(--accent-subtle)}
+.folder-tab-add-dot{color:inherit}
+/* Drag-a-conversation drop target */
+.folder-tab.folder-tab-drop{background:var(--accent-subtle);box-shadow:inset 0 0 0 1.5px var(--accent)}
+
+/* ── Collapsed (icon-only) rail: show dot/glyph, hide name + count ── */
+.sidebar.rail-collapsed .folder-tab{justify-content:center;padding:8px 0;gap:0}
+.sidebar.rail-collapsed .folder-tab-name,
+.sidebar.rail-collapsed .folder-tab-count{display:none}
+.sidebar.rail-collapsed .project-rail-list{padding:2px 6px 4px}
+.sidebar.rail-collapsed .folder-tab-add{margin:2px 6px 8px}
+/* Colored initial inside the collapsed dot so projects stay distinguishable */
+.sidebar.rail-collapsed .folder-tab-dot[data-initial]{width:22px;height:22px;border-radius:6px;display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#fff}
+.sidebar.rail-collapsed .folder-tab-dot[data-initial]::after{content:attr(data-initial)}
+
+/* Folder quick-add (zero-folder state entry point) — hidden once the rail exists */
+.folder-quickadd{display:flex;align-items:center;gap:7px;margin:0 12px 8px;padding:7px 12px;border:1px dashed var(--border);border-radius:var(--radius-sm);background:transparent;color:var(--text-tertiary);font-family:inherit;font-size:12px;font-weight:600;cursor:pointer;transition:color 0.15s,border-color 0.15s,background 0.15s}
+.folder-quickadd:hover{color:var(--accent);border-color:var(--accent);background:var(--accent-subtle)}
+.folder-quickadd svg{flex-shrink:0}
+.sidebar.has-rail .folder-quickadd{display:none}
+
+/* ═══ Rail on drawer viewports (phone ≤768 ∪ portrait touch-tablet) ═══
+ * One consistent mental model across form factors: the rail ALWAYS renders
+ * icon-only here (no wide labeled column crammed into an 82vw drawer, and NO
+ * horizontal chip fallback). Rule of thumb matches core.js isDrawerViewport()
+ * / TOFU_BP + the paper-mode predicate. !important beats the desktop
+ * .rail-collapsed toggle so the drawer is icon-only regardless of the stored
+ * expand choice. The per-block drawer WIDTH override lives in the two drawer
+ * blocks below (their drawer widths differ). */
+@media(max-width:768px),(max-width:1024px) and (pointer:coarse){
+  .sidebar.has-rail .project-rail{width:var(--project-rail-w-collapsed)!important}
+  .sidebar.has-rail .project-rail-title{display:none}
+  .sidebar.has-rail .project-rail-head{justify-content:center;padding:10px 0 6px}
+  .sidebar.has-rail .folder-tab{justify-content:center;padding:9px 0;gap:0}
+  .sidebar.has-rail .folder-tab-name,
+  .sidebar.has-rail .folder-tab-count{display:none}
+  .sidebar.has-rail .project-rail-list{padding:2px 5px 4px}
+  .sidebar.has-rail .folder-tab-add{margin:2px 5px 8px}
+  .sidebar.has-rail .folder-tab-dot[data-initial]{width:26px;height:26px;border-radius:7px;display:inline-flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#fff}
+  .sidebar.has-rail .folder-tab-dot[data-initial]::after{content:attr(data-initial)}
+}
 /* Folder tab context menu */
 .folder-tab-menu{position:fixed;z-index:9999;background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius-sm);box-shadow:var(--shadow);min-width:140px;padding:4px 0;animation:folderPickerIn 0.1s ease}
 .folder-tab-menu-item{display:flex;align-items:center;gap:8px;padding:7px 12px;font-size:12.5px;color:var(--text-primary);cursor:pointer;transition:background var(--transition)}
@@ -85,8 +143,8 @@
 
 /* ── Drag-and-drop folder assignment ── */
 .conv-item.conv-dragging{opacity:0.4}
-.folder-tabs-drop-active .folder-tab:not(.folder-tab-add){border-style:dashed;border-color:var(--border-light)}
-.folder-tabs-drop-active .folder-tab.folder-tab-drop{border-color:var(--accent)!important;background:var(--accent-subtle)!important;border-style:solid}
+.folder-tabs-drop-active .folder-tab:not(.folder-tab-add){box-shadow:inset 0 0 0 1px var(--border-light)}
+.folder-tabs-drop-active .folder-tab.folder-tab-drop{background:var(--accent-subtle)!important;box-shadow:inset 0 0 0 1.5px var(--accent)!important}
 /* ── Sidebar search (expandable panel) ── */
 .sidebar-search-wrapper{padding:4px 12px 8px;position:relative;flex-shrink:0;animation:searchSlideDown 0.15s ease}
 @keyframes searchSlideDown{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:translateY(0)}}
@@ -798,7 +856,8 @@ textarea::placeholder{color:var(--text-tertiary)}
 .sidebar.paper-active .paper-sidebar-overlay{display:flex}
 .sidebar.paper-active .sidebar-action-row,
 .sidebar.paper-active .sidebar-search-wrapper,
-.sidebar.paper-active .folder-tabs,
+.sidebar.paper-active .folder-quickadd,
+.sidebar.paper-active .sidebar-body,
 .sidebar.paper-active .conversations-list{display:none!important}
 .sidebar.paper-active .sidebar-header h1{display:none!important}
 .sidebar.paper-active .sidebar-header .action-btn{display:none!important}
@@ -895,6 +954,16 @@ textarea::placeholder{color:var(--text-tertiary)}
 /* Mobile-only PDF⇄Reader view switcher — hidden on desktop (see @media ≤768px) */
 .paper-mobile-switch{display:none}
 
+/* Coarse-pointer divider hardening: where the side-by-side split IS shown on a
+ * touch device (landscape tablet / wide foldable, >1024px so it escaped the
+ * single-pane predicate above), the visual 6px line is too thin to grab with a
+ * finger. A transparent ::before overlay widens the touch hit target to ~28px
+ * WITHOUT changing the visible line or the layout width of .paper-divider. */
+@media(pointer:coarse){
+  .paper-divider::before{content:'';position:absolute;top:0;bottom:0;left:50%;
+    transform:translateX(-50%);width:28px;background:transparent;z-index:1}
+}
+
 /* ── Right: tabs panel (equal width with PDF) ── */
 .paper-right{flex:1;min-width:300px;display:flex;flex-direction:column;min-height:0;background:var(--bg-primary)}
 
@@ -957,6 +1026,19 @@ textarea::placeholder{color:var(--text-tertiary)}
 .paper-report-lang-opt.active{background:var(--accent,#b08d57);color:#fff}
 .paper-report-lang-opt:disabled{opacity:.5;cursor:default}
 .paper-report-lang-opt.loading{opacity:.7;cursor:progress}
+/* Reader comfort controls: text-size A−/A+ steppers + reading-width cycle.
+ * Reuses the segmented-toggle chrome so it reads as a sibling of the EN/中
+ * control. SVG glyphs only (§3.4). */
+.paper-reader-settings{display:inline-flex;align-items:center;border:1px solid var(--border);border-radius:8px;overflow:hidden;flex-shrink:0}
+.paper-reader-set-btn{display:inline-flex;align-items:center;justify-content:center;gap:4px;min-width:32px;height:30px;padding:0 8px;border:none;background:none;color:var(--text-secondary);cursor:pointer;transition:background .15s,color .15s;font-family:inherit;font-weight:700;font-size:11.5px}
+.paper-reader-set-btn+.paper-reader-set-btn{border-left:1px solid var(--border)}
+.paper-reader-set-btn:hover:not(:disabled){background:var(--bg-hover);color:var(--text-primary)}
+.paper-reader-set-btn:active{transform:translateY(1px)}
+.paper-reader-set-btn:disabled{opacity:.4;cursor:default}
+.paper-reader-set-btn:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.paper-reader-set-btn svg{display:block}
+/* the width-cycle button shows its current label (Narrow/Comfortable/Wide) */
+.paper-reader-set-width{font-size:11px;letter-spacing:.01em;min-width:44px}
 .paper-report-stop-btn{color:var(--error-text);border-color:var(--error-border);background:var(--error-bg)}
 .paper-report-stop-btn:hover{color:#fff;background:var(--error-text);border-color:var(--error-text)}
 .paper-report-stop-btn:disabled{opacity:.6;cursor:default;pointer-events:none}
@@ -1002,15 +1084,52 @@ textarea::placeholder{color:var(--text-tertiary)}
 .paper-report-thinking-body{padding:0 14px 10px 14px;max-height:180px;overflow-y:auto;white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;line-height:1.5;color:var(--text-tertiary)}
 .paper-report-hint{font-size:11px;color:var(--text-quaternary);margin-top:4px}
 @keyframes spin{to{transform:rotate(360deg)}}
-.paper-report-content{flex:1;overflow-y:auto;padding:20px;font-size:14px;line-height:1.7;color:var(--text-primary)}
-.paper-report-content h2{font-size:16px;margin:20px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--border)}
-.paper-report-content h2:first-child{margin-top:0}
-.paper-report-content h3{font-size:14px;margin:14px 0 6px}
-.paper-report-content ul,.paper-report-content ol{padding-left:20px;margin:6px 0}
-.paper-report-content li{margin:4px 0}
-.paper-report-content strong{color:var(--text-primary)}
-.paper-report-content code{background:var(--bg-tertiary);padding:1px 5px;border-radius:3px;font-size:12px}
-.paper-report-content blockquote{border-left:3px solid var(--accent);padding-left:12px;margin:8px 0;color:var(--text-secondary)}
+/* ── Unified reading prose ──────────────────────────────────────────────
+ * Applies to BOTH reading surfaces — the generated-report pane
+ * (.paper-report-content) and the review pane (.paper-report-body) — which
+ * previously carried two near-duplicate rule blocks that had already drifted
+ * (only -body had table styling). Merged so every reading-comfort improvement
+ * lands on both and can't drift again. Per-theme overrides (light/tofu at
+ * ~1644/1957) still layer on top via their own selectors. */
+
+/* READING MEASURE: cap the text column at a comfortable line length and centre
+ * it, in BOTH the enhanced (TOC-grid) and plain (no-TOC) final layouts — the
+ * <article> is the text column in each (_renderFinalReport wraps prose in
+ * .paper-report-article whether or not a TOC is built). Without this, prose ran
+ * edge-to-edge (~130–160 chars) on a wide reader pane; ~68–72ch is the
+ * sustained-reading optimum. Tunable per-theme via --reader-measure. */
+/* Reader comfort controls (see _applyReaderPrefs in paper-reader.js): two CSS
+ * custom properties the reader toolbar drives + persists to localStorage.
+ *   --reader-measure   : text-column width (Narrow 640 / Comfortable 720 / Wide 860)
+ *   --reader-font-scale: multiplies the base reading size (A−/A+, ~0.85–1.3)
+ * Both live on the container and INHERIT, so every re-render + all three themes
+ * pick them up with no per-element rewrite. Defaults reproduce today's look. */
+.paper-report-content,.paper-report-body{--reader-measure:720px;--reader-font-scale:1}
+.paper-report-article{max-width:var(--reader-measure);margin-inline:auto;width:100%}
+/* Streaming frames render prose FLAT into #…BodyContent.paper-report-body (no
+ * .paper-report-article wrapper yet), so centre those flat flow children to the
+ * same measure — otherwise streaming text runs full-width then snaps to 720px
+ * when the final enhanced render mounts. Scoped to the NON-enhanced body so the
+ * TOC-grid final layout (.paper-report-doc, capped at 1180px) is untouched. */
+.paper-report-body:not(.paper-report-enhanced) > :not(.paper-report-doc):not(.paper-report-article):not(.paper-read-time){max-width:var(--reader-measure);margin-inline:auto}
+
+.paper-report-content h2,.paper-report-body h2{font-size:18px;line-height:1.3;margin:26px 0 12px;padding-bottom:6px;border-bottom:1px solid var(--border)}
+.paper-report-content h2:first-child,.paper-report-body h2:first-child{margin-top:0}
+.paper-report-content h3,.paper-report-body h3{font-size:15.5px;line-height:1.35;margin:20px 0 7px}
+.paper-report-content p,.paper-report-body p{margin:0 0 1em}
+.paper-report-content ul,.paper-report-content ol,.paper-report-body ul,.paper-report-body ol{padding-left:22px;margin:8px 0}
+.paper-report-content li,.paper-report-body li{margin:5px 0}
+.paper-report-content strong,.paper-report-body strong{color:var(--text-primary)}
+.paper-report-content a,.paper-report-body a{color:var(--accent);text-decoration:none;border-bottom:1px solid color-mix(in srgb,var(--accent) 35%,transparent);transition:border-color .15s,color .15s}
+.paper-report-content a:hover,.paper-report-body a:hover{border-bottom-color:var(--accent)}
+.paper-report-content code,.paper-report-body code{background:var(--bg-tertiary);padding:1px 5px;border-radius:3px;font-size:.86em;font-family:'JetBrains Mono',ui-monospace,monospace}
+.paper-report-content pre,.paper-report-body pre{margin:12px 0;padding:12px 14px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:8px;overflow-x:auto;font-size:12.5px;line-height:1.55}
+.paper-report-content pre code,.paper-report-body pre code{background:none;padding:0;font-size:inherit}
+.paper-report-content blockquote,.paper-report-body blockquote{border-left:3px solid var(--accent);padding:2px 0 2px 14px;margin:12px 0;color:var(--text-secondary)}
+.paper-report-content table,.paper-report-body table{border-collapse:collapse;margin:14px 0;font-size:13px;width:100%}
+.paper-report-content th,.paper-report-content td,.paper-report-body th,.paper-report-body td{border:1px solid var(--border);padding:6px 10px;text-align:left}
+.paper-report-content th,.paper-report-body th{background:var(--bg-secondary);font-weight:600}
+.paper-report-content tbody tr:nth-child(even),.paper-report-body tbody tr:nth-child(even){background:color-mix(in srgb,var(--text-primary) 3%,transparent)}
 
 .paper-report-content img,.paper-report-body img{display:block;max-width:100%;height:auto;margin:14px auto;border:1px solid var(--border);border-radius:6px;background:#fff;padding:4px;box-shadow:0 2px 8px rgba(0,0,0,.15);cursor:zoom-in}
 .paper-report-content p:has(> img:only-child),.paper-report-body p:has(> img:only-child){text-align:center;margin:14px 0}
@@ -1035,15 +1154,12 @@ textarea::placeholder{color:var(--text-tertiary)}
 .report-section-chip.error{color:#ef4444;background:rgba(239,68,68,.1)}
 .report-section-chip.error .report-section-chip-dot{background:#ef4444}
 @keyframes reportChipPulse{0%,100%{opacity:.5;transform:scale(.9)}50%{opacity:1;transform:scale(1.2)}}
-.paper-report-body{flex:1;overflow-y:auto;padding:20px;font-size:14px;line-height:1.7;color:var(--text-primary)}
-.paper-report-body h2{font-size:16px;margin:20px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--border)}
-.paper-report-body h2:first-child{margin-top:0}
-.paper-report-body h3{font-size:14px;margin:14px 0 6px}
-.paper-report-body ul,.paper-report-body ol{padding-left:20px;margin:6px 0}
-.paper-report-body li{margin:4px 0}
-.paper-report-body strong{color:var(--text-primary)}
-.paper-report-body code{background:var(--bg-tertiary);padding:1px 5px;border-radius:3px;font-size:12px}
-.paper-report-body blockquote{border-left:3px solid var(--accent);padding-left:12px;margin:8px 0;color:var(--text-secondary)}
+/* Container rules only — element/prose styling lives in the unified block above.
+ * Base reading size is 15px/1.75 (long-form comfort; was 14px/1.7 = chat size).
+ * The light/tofu themes bump further; dark now inherits this larger base
+ * instead of the old cramped 14px. */
+.paper-report-content{flex:1;overflow-y:auto;padding:20px;font-size:calc(15px * var(--reader-font-scale,1));line-height:1.75;color:var(--text-primary)}
+.paper-report-body{flex:1;overflow-y:auto;padding:20px;font-size:calc(15px * var(--reader-font-scale,1));line-height:1.75;color:var(--text-primary)}
 .paper-report-body table{border-collapse:collapse;margin:8px 0;font-size:13px;width:100%}
 .paper-report-body th,.paper-report-body td{border:1px solid var(--border);padding:6px 10px;text-align:left}
 .paper-report-body th{background:var(--bg-secondary);font-weight:600}
@@ -1113,6 +1229,70 @@ textarea::placeholder{color:var(--text-tertiary)}
 .paper-result-meta .paper-card-cat{background:var(--accent-subtle,rgba(99,102,241,.12));color:var(--accent);font-weight:600;font-family:var(--font-mono,monospace)}
 .paper-result-meta .paper-card-id{font-family:var(--font-mono,monospace)}
 .paper-result-arrow{display:flex;align-items:center;color:var(--text-tertiary);transition:transform .18s,color .18s}
+.paper-result-why{display:flex;align-items:flex-start;gap:6px;font-size:12px;color:var(--accent);line-height:1.45}
+.paper-result-why svg{flex:0 0 auto;margin-top:2px;opacity:.85}
+.paper-result-meta .paper-card-venue{background:var(--accent-subtle,rgba(99,102,241,.12));color:var(--accent);font-weight:700}
+
+/* Paper mode is a full-screen overlay in the same SPA — suppress the global
+   Project-Brain docked bars (presence strip + per-conversation influence bar)
+   so they don't bleed through under the reader. Decoupled from their own
+   push-driven visibility toggling (this !important override always wins). */
+body.paper-mode-active #presenceStrip,
+body.paper-mode-active #convInfluenceBar{display:none !important}
+
+/* ── Describe-to-recommend ── */
+.paper-describe-divider{display:flex;align-items:center;gap:10px;width:100%;color:var(--text-tertiary);font-size:11px;margin:2px 0}
+.paper-describe-divider::before,.paper-describe-divider::after{content:"";flex:1;height:1px;background:var(--border)}
+.paper-describe-box{display:flex;flex-direction:column;gap:8px;width:100%}
+.paper-describe-label{display:flex;align-items:center;gap:6px;font-size:12.5px;font-weight:600;color:var(--text-secondary)}
+.paper-describe-input{width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid var(--border);border-radius:10px;background:var(--bg-tertiary);color:var(--text-primary);font-size:13px;font-family:inherit;line-height:1.5;resize:vertical;min-height:56px;outline:none;transition:border-color .15s}
+.paper-describe-input:focus{border-color:var(--accent)}
+.paper-describe-input::placeholder{color:var(--text-tertiary)}
+.paper-describe-btn{display:flex;align-items:center;justify-content:center;gap:7px;padding:10px 20px;border:none;border-radius:10px;background:var(--accent);color:white;font-size:13px;font-weight:600;cursor:pointer;transition:all .15s;font-family:inherit}
+.paper-describe-btn:hover{background:var(--accent-hover);transform:translateY(-1px);box-shadow:0 6px 16px -6px var(--accent)}
+.paper-describe-btn:active{transform:translateY(0)}
+
+/* ── Correction banner (false-premise) ── */
+.paper-correction{display:flex;gap:12px;padding:14px 16px;border:1px solid var(--warn,#d9922e);border-radius:14px;background:color-mix(in srgb,var(--warn,#d9922e) 8%,transparent)}
+.paper-correction-icon{flex:0 0 auto;color:var(--warn,#d9922e);margin-top:1px}
+.paper-correction-body{flex:1;min-width:0;display:flex;flex-direction:column;gap:6px}
+.paper-correction-title{font-size:13px;font-weight:700;color:var(--text-primary)}
+.paper-correction-note{font-size:12.5px;color:var(--text-secondary);line-height:1.55}
+.paper-correction-offer{margin-top:6px;background:var(--bg-tertiary)}
+.paper-correction-offer-label{font-size:11px;font-weight:600;color:var(--warn,#d9922e);text-transform:uppercase;letter-spacing:.03em}
+
+/* ── Streaming describe-to-recommend (progressive reveal, aligned with chatInner) ── */
+/* Status line above the list: interpreting → grounding progress. */
+.paper-rec-status{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--text-tertiary);min-height:18px}
+.paper-rec-status[hidden]{display:none}
+.paper-rec-spin{flex:0 0 auto;width:13px;height:13px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:paperSpin .8s linear infinite}
+.paper-rec-banner:empty{display:none}
+/* A card streams in: opacity+translateY only (compositor-only, no reflow),
+   staggered by its --i index. animation-fill-mode:both prevents a pre-flash. */
+.paper-rec-card[data-status="grounded"]{animation:paperRecIn .34s cubic-bezier(.2,.9,.3,1.1) both;animation-delay:calc(var(--i,0) * 55ms)}
+@keyframes paperRecIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+/* Skeleton placeholder — same box as a real card so the swap causes zero CLS. */
+.paper-rec-skeleton{cursor:default;pointer-events:none;border-style:dashed}
+.paper-rec-skeleton:hover{border-color:var(--border);transform:none;box-shadow:none}
+.paper-rec-sk-num{background:var(--bg-hover)}
+.paper-rec-sk-line{height:11px;border-radius:6px;background:linear-gradient(90deg,var(--bg-hover) 25%,var(--border) 37%,var(--bg-hover) 63%);background-size:200% 100%;animation:paperRecShimmer 1.3s ease-in-out infinite}
+.paper-rec-sk-title{width:70%;height:13px}
+.paper-rec-sk-why{width:88%}
+.paper-rec-sk-meta{width:40%;margin-top:3px}
+@keyframes paperRecShimmer{to{background-position:-200% 0}}
+/* Respect reduced-motion: no shimmer, no stagger, no slide — reveal instantly. */
+@media (prefers-reduced-motion:reduce){
+  .paper-rec-card[data-status="grounded"]{animation:none}
+  .paper-rec-sk-line{animation:none}
+  .paper-rec-spin{animation-duration:1.6s}
+  /* Reading surface: kill decorative motion but keep the (instant) progress
+   * fill legible — the read-time bar still conveys position, just without the
+   * animated width tween; the section chips stop pulsing; the landing icon
+   * stops floating. Spinners keep spinning (they signal in-progress work). */
+  .paper-read-time-fill{transition:none}
+  .report-section-chip.running .report-section-chip-dot{animation:none}
+  .paper-landing-icon{animation:none}
+}
 
 /* ── Loading / Error ── */
 .paper-loading{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:40px;color:var(--text-secondary);font-size:13px}
@@ -1134,8 +1314,16 @@ textarea::placeholder{color:var(--text-tertiary)}
  * at a time (the PDF or the Reader = Q&A/Report/Babel tabs), each filling the
  * whole body, toggled by the .paper-mobile-switch bar pinned to the bottom.
  * .paper-body[data-paper-view] is the source of truth (set by
- * _setPaperMobileView() in paper-reader.js). */
-@media(max-width:768px){
+ * _setPaperMobileView() in paper-reader.js).
+ *
+ * The predicate covers BOTH true phones (≤768px, any pointer) AND touch
+ * tablets / unfolded foldables in portrait (≤1024px WITH a coarse pointer) —
+ * where the desktop side-by-side split becomes two cramped columns plus a
+ * 6px finger-hostile divider. A mouse-driven narrow desktop window (fine
+ * pointer, ≤1024px) is deliberately EXCLUDED — it keeps the draggable split.
+ * paper-reader.js mirrors this exact predicate in matchMedia() so a fold /
+ * orientation crossing re-asserts the view + refits the PDF. */
+@media(max-width:768px),(max-width:1024px) and (pointer:coarse){
   /* Body becomes a positioning context for the two stacked full-size panes.
    * Reserve room at the bottom for the fixed switcher + the iOS safe area. */
   .paper-mode-container{--paper-switch-h:calc(54px + env(safe-area-inset-bottom,0px))}
@@ -1164,7 +1352,8 @@ textarea::placeholder{color:var(--text-tertiary)}
   .sidebar.paper-active .paper-sidebar-overlay{display:flex!important}
   .sidebar.paper-active .sidebar-action-row,
   .sidebar.paper-active .sidebar-search-wrapper,
-  .sidebar.paper-active .folder-tabs,
+  .sidebar.paper-active .folder-quickadd,
+  .sidebar.paper-active .sidebar-body,
   .sidebar.paper-active .conversations-list{display:none!important}
   .sidebar.paper-active .sidebar-header h1{display:none!important}
   /* Larger touch targets for the paper library on phones */
@@ -1569,7 +1758,7 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .paper-qa-send-btn:activ
 [data-theme="light"] .paper-report-content,
 [data-theme="light"] .paper-report-body{
   font-family:'Source Serif Pro','Charter','Iowan Old Style','Georgia','Noto Serif SC','Songti SC',serif;
-  font-size:15px;line-height:1.8;color:#2d2a22;
+  font-size:calc(15px * var(--reader-font-scale,1));line-height:1.8;color:#2d2a22;
   padding:28px 32px
 }
 [data-theme="light"] .paper-report-content h2,
@@ -1884,7 +2073,7 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .paper-qa-send-btn:activ
   background:
     linear-gradient(180deg,#FFFEF9,#F9F6EB);
   color:#4A4233;
-  font-size:14.5px;line-height:1.75;
+  font-size:calc(14.5px * var(--reader-font-scale,1));line-height:1.75;
   padding:28px 34px
 }
 [data-theme="tofu"] .paper-report-content h2,
@@ -6482,6 +6671,33 @@ input.settings-mono {
 .proactive-banner .pb-icon{font-size:16px;flex-shrink:0}
 .proactive-banner .pb-text{color:var(--text-secondary);font-size:11px}
 .proactive-banner .pb-name{color:#a855f7;font-weight:700}
+/* ── Network-latency signal indicator ──
+   Lives INSIDE .topbar-tools, so it mirrors the .topbar-tool-btn shell
+   (height/radius/border/typography) for a consistent control group; only the
+   signal-bars + ms readout carry the semantic state colour. */
+.net-latency-badge{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 10px;border:1px solid transparent;border-radius:8px;background:none;color:var(--text-secondary);font-family:'Plus Jakarta Sans',sans-serif;font-size:12.5px;font-weight:600;line-height:1;white-space:nowrap;flex-shrink:0;user-select:none;cursor:default;transition:color .15s ease,background-color .15s ease,border-color .15s ease}
+.net-latency-badge:hover{color:var(--text-primary);background:var(--bg-hover);border-color:var(--border-light)}
+.net-latency-badge .net-bars{display:inline-flex;align-items:flex-end;gap:2px;height:14px}
+.net-latency-badge .net-bar{width:3px;border-radius:1px;background:currentColor;opacity:0.25;transition:background .2s ease,opacity .2s ease}
+.net-latency-badge .net-bar:nth-child(1){height:5px}
+.net-latency-badge .net-bar:nth-child(2){height:8px}
+.net-latency-badge .net-bar:nth-child(3){height:11px}
+.net-latency-badge .net-bar:nth-child(4){height:14px}
+.net-latency-badge .net-bar.lit{opacity:1}
+.net-latency-badge .net-ms{min-width:36px;text-align:right;font-variant-numeric:tabular-nums;font-size:11px;letter-spacing:-0.2px;color:var(--text-tertiary)}
+/* State-driven colour of the lit bars + label (the semantic signal). */
+.net-latency-badge[data-state="good"] .net-bar.lit{background:#34d399}
+.net-latency-badge[data-state="good"] .net-ms{color:#34d399}
+.net-latency-badge[data-state="ok"] .net-bar.lit{background:#eab308}
+.net-latency-badge[data-state="ok"] .net-ms{color:#eab308}
+.net-latency-badge[data-state="poor"] .net-bar.lit{background:#f97316}
+.net-latency-badge[data-state="poor"] .net-ms{color:#f97316}
+.net-latency-badge[data-state="timeout"] .net-bar.lit{background:#ef4444}
+.net-latency-badge[data-state="timeout"] .net-ms{color:#ef4444}
+.net-latency-badge[data-state="offline"]{opacity:0.65}
+.net-latency-badge[data-state="offline"] .net-ms{color:var(--text-tertiary)}
+/* Narrow viewports: match the tool buttons' tighter padding. */
+@media (max-width:1080px){.net-latency-badge{padding:0 7px}}
 /* ── Timer Watcher badge & panel ── */
 .timer-trigger{position:relative;user-select:none;-webkit-user-select:none}
 .timer-panel{user-select:text;-webkit-user-select:text}
@@ -7924,12 +8140,40 @@ input.settings-mono {
   background: color-mix(in srgb, var(--accent) 15%, transparent);
   white-space: nowrap;
 }
+/* At-a-glance count chip on a COLLAPSED routine-read summary ("3 active" /
+   "5 open") — a neutral pill so the user gets the signal without expanding. */
+.ptool-convmeta-count {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 8px;
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 1;
+  border-radius: 999px;
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  white-space: nowrap;
+}
 .ptool-convmeta-body {
   margin: 4px 0 6px 11px;
   padding: 12px 14px;
   border-left: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
   background: var(--accent-subtle);
   border-radius: 0 8px 8px 0;
+}
+/* Plain-language "why this ran / what it means" caption above the card body —
+   turns an opaque list of conv ids + statuses into something a user (and the
+   agent) can actually interpret. Muted so it reads as an explanatory lead-in. */
+.ptool-convmeta-why {
+  margin: 0 0 9px;
+  padding-bottom: 8px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-tertiary);
+  border-bottom: 1px dashed color-mix(in srgb, var(--accent) 24%, transparent);
+  overflow-wrap: anywhere;
 }
 .ptool-convmeta-content {
   font-size: 13px;
@@ -7944,6 +8188,70 @@ input.settings-mono {
   color: var(--text-tertiary);
   font-style: italic;
 }
+/* ── Structured Project-Brain tool renderers (Phase 3) ── */
+.ptool-convmeta-structured { font-size: 12.5px; }
+/* Board mini-kanban */
+.ptool-board-mini { display: flex; flex-direction: column; gap: 10px; }
+.ptool-board-mini-lane { display: flex; flex-direction: column; gap: 5px; }
+.ptool-board-mini-head { display: flex; align-items: center; gap: 6px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-tertiary); }
+.ptool-board-mini-count { display: inline-flex; align-items: center; justify-content: center; min-width: 16px; height: 16px; padding: 0 5px; font-size: 10px; font-weight: 700; color: var(--text-secondary); background: var(--bg-tertiary); border: 1px solid var(--border); border-radius: 8px; }
+.ptool-board-mini-card { display: flex; align-items: center; gap: 6px; padding: 5px 9px; background: var(--bg-secondary); border: 1px solid var(--border); border-left: 2px solid var(--border); border-radius: 5px; }
+.ptool-board-mini-open { border-left-color: var(--pb-amber, #eab308); }
+.ptool-board-mini-claimed { border-left-color: var(--accent); }
+.ptool-board-mini-deferred { border-left-color: var(--text-tertiary); opacity: 0.85; border-left-style: dashed; }
+.ptool-board-mini-done { border-left-color: var(--pb-green, #22c55e); opacity: 0.75; }
+.ptool-board-mini-title { flex: 1; overflow-wrap: anywhere; }
+.ptool-board-mini-owner { font-size: 10px; color: var(--accent); font-family: var(--mono, monospace); }
+.ptool-board-mini-auto { display: inline-flex; color: var(--accent); }
+.ptool-board-mini-empty { font-size: 11px; color: var(--text-tertiary); padding: 2px 4px; }
+/* Board transition line */
+.ptool-board-transition { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; font-size: 12.5px; }
+.ptool-board-tr-verb { font-weight: 700; color: var(--accent); }
+.ptool-board-tr-title { overflow-wrap: anywhere; color: var(--text-primary); }
+.ptool-board-tr-arrow { display: inline-flex; color: var(--text-tertiary); transform: rotate(-90deg); }
+.ptool-board-tr-status { font-size: 10.5px; font-weight: 700; padding: 1px 8px; border-radius: 8px; border: 1px solid var(--border); }
+/* Peer status cards */
+.ptool-peer-list { display: flex; flex-direction: column; gap: 7px; }
+.ptool-peer-card { padding: 7px 10px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; }
+.ptool-peer-who { display: flex; align-items: center; gap: 6px; font-weight: 600; color: var(--text-primary); }
+.ptool-peer-agent { font-size: 10.5px; font-weight: 400; color: var(--text-tertiary); }
+.ptool-peer-detail { margin-top: 3px; font-size: 11.5px; color: var(--text-secondary); }
+.ptool-peer-epic { margin-top: 4px; display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--accent); }
+.ptool-peer-empty { font-size: 12px; color: var(--text-tertiary); font-style: italic; }
+/* Charter proposal card */
+.ptool-charter-proposal { padding: 9px 11px; background: var(--accent-subtle); border: 1px solid color-mix(in srgb, var(--accent) 26%, transparent); border-radius: 6px; }
+.ptool-charter-prop-title { font-weight: 700; color: var(--text-primary); margin-bottom: 4px; }
+.ptool-charter-prop-text { font-size: 12.5px; line-height: 1.55; color: var(--text-primary); overflow-wrap: anywhere; }
+.ptool-charter-prop-pending { margin-top: 7px; display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--text-secondary); }
+/* Activity feed (project_feed_read) — chronological rows: kind chip + who + summary + time */
+.ptool-feed-list { display: flex; flex-direction: column; gap: 6px; }
+.ptool-feed-row { display: flex; align-items: flex-start; gap: 8px; padding: 6px 9px; background: var(--bg-secondary); border: 1px solid var(--border); border-left: 2px solid var(--border); border-radius: 5px; }
+.ptool-feed-started { border-left-color: var(--accent); }
+.ptool-feed-completed { border-left-color: var(--pb-green, #22c55e); }
+.ptool-feed-aborted, .ptool-feed-blocked { border-left-color: var(--pb-red, #ef4444); }
+.ptool-feed-claimed { border-left-color: var(--pb-amber, #eab308); }
+.ptool-feed-decided, .ptool-feed-proposed_decision { border-left-color: #a78bfa; }
+.ptool-feed-kind { flex-shrink: 0; display: inline-flex; align-items: center; height: 16px; padding: 0 6px; font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; color: var(--text-secondary); background: var(--bg-tertiary); border-radius: 7px; white-space: nowrap; }
+.ptool-feed-body { flex: 1; min-width: 0; }
+.ptool-feed-head { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+.ptool-feed-who { font-size: 11.5px; font-weight: 600; color: var(--text-primary); overflow-wrap: anywhere; }
+.ptool-feed-mine { font-size: 10px; font-weight: 600; color: var(--accent); }
+.ptool-feed-when { font-size: 10.5px; color: var(--text-tertiary); margin-left: auto; white-space: nowrap; }
+.ptool-feed-summary { margin-top: 2px; font-size: 11.5px; line-height: 1.5; color: var(--text-secondary); overflow-wrap: anywhere; }
+.ptool-feed-empty { font-size: 12px; color: var(--text-tertiary); font-style: italic; }
+/* Peer message / intervention delivery card */
+.ptool-peermsg { padding: 8px 11px; background: var(--bg-secondary); border: 1px solid var(--border); border-left: 2px solid var(--accent); border-radius: 6px; }
+.ptool-peermsg-denied, .ptool-peermsg-failed { border-left-color: var(--pb-red, #ef4444); }
+.ptool-peermsg-rate_limited { border-left-color: var(--pb-amber, #eab308); }
+.ptool-peermsg-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.ptool-peermsg-verb { font-weight: 700; color: var(--accent); font-size: 12.5px; }
+.ptool-peermsg-arrow { display: inline-flex; color: var(--text-tertiary); transform: rotate(-90deg); }
+.ptool-peermsg-target { font-family: var(--mono, monospace); font-size: 11.5px; color: var(--text-primary); }
+.ptool-peermsg-outcome { margin-left: auto; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.02em; padding: 1px 8px; border-radius: 8px; border: 1px solid var(--border); color: var(--text-secondary); }
+.ptool-peermsg-outcome-delivered { color: var(--pb-green, #22c55e); border-color: color-mix(in srgb, var(--pb-green, #22c55e) 45%, transparent); }
+.ptool-peermsg-outcome-denied, .ptool-peermsg-outcome-failed { color: var(--pb-red, #ef4444); border-color: color-mix(in srgb, var(--pb-red, #ef4444) 45%, transparent); }
+.ptool-peermsg-outcome-rate_limited { color: var(--pb-amber, #eab308); border-color: color-mix(in srgb, var(--pb-amber, #eab308) 45%, transparent); }
+.ptool-peermsg-text { margin-top: 6px; font-size: 12.5px; line-height: 1.55; color: var(--text-primary); overflow-wrap: anywhere; white-space: pre-wrap; }
 .ptool-batch-done-summary {
   display: flex;
   /* Top-align so a multi-line description keeps the status glyph / index
@@ -8868,6 +9176,14 @@ input.settings-mono {
   position: relative;
 }
 .folder-item:hover { background: var(--bg-hover); box-shadow: inset 2px 0 0 var(--accent); }
+
+/* Drag-and-drop-into-folder affordance (save-to-disk, distinct from chat drop) */
+.folder-browser.fb-drop-active { outline: 2px dashed var(--accent); outline-offset: -3px; border-radius: var(--radius-sm); }
+.folder-item.fb-drop-row {
+  background: var(--accent-subtle);
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+.folder-item.fb-drop-row .folder-name { color: var(--accent); }
 .folder-item.folder-hidden { opacity: 0.45; }
 .folder-item .fi-folder { flex-shrink: 0; transition: transform 0.12s; }
 .folder-item:hover .fi-folder { transform: scale(1.08); }
@@ -8958,30 +9274,74 @@ input.settings-mono {
 
 /* ── Recent project paths (lives inside a .pm-section) ── */
 .recent-paths { margin: 0; }
-.recent-paths-header {
-  display: flex; align-items: center; justify-content: space-between;
-  margin-bottom: 8px;
-}
-.recent-paths-title {
-  font-size: 11px;
-  font-weight: 700;
-  color: var(--text-tertiary);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-.recent-paths-clear {
+/* Clear-all button — sits at the right edge of the .pm-section-label header */
+.recent-paths .recent-paths-clear {
+  margin-left: auto;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; padding: 0;
   background: none; border: none;
   color: var(--text-tertiary);
   cursor: pointer;
-  font-size: 13px;
-  padding: 2px 6px;
-  border-radius: 4px;
-  line-height: 1;
+  border-radius: var(--radius-xs);
   transition: color 0.15s, background-color 0.15s;
 }
-.recent-paths-clear:hover {
+.recent-paths .recent-paths-clear:hover {
   background: rgba(239, 68, 68, 0.10);
   color: #ef4444;
+}
+
+/* Search box — mirrors the Workspace add-row input for a unified look */
+.recent-search {
+  position: relative;
+  display: flex; align-items: center;
+  margin-bottom: 10px; flex-shrink: 0;
+}
+.recent-search-input {
+  flex: 1; min-width: 0;
+  padding: 6px 30px 6px 12px;
+  height: 32px; box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--input-bg, var(--bg-secondary));
+  color: var(--text-primary);
+  font-size: 12.5px; line-height: 20px;
+  font-family: 'JetBrains Mono', monospace;
+  margin: 0;
+}
+.recent-search-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-subtle);
+}
+.recent-search-input::placeholder { color: var(--text-tertiary); font-family: inherit; }
+.recent-search-clear {
+  position: absolute; right: 6px;
+  top: 50%; transform: translateY(-50%);
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px; padding: 0;
+  background: none; border: none;
+  color: var(--text-tertiary); cursor: pointer;
+  border-radius: 50%;
+  transition: color 0.15s, background-color 0.15s;
+}
+/* Respect the [hidden] attr — the class rule's explicit display must not win over it */
+.recent-search-clear[hidden] { display: none; }
+.recent-search-clear:hover { color: var(--text-primary); background: var(--bg-hover); }
+
+/* Matched-substring highlight in results */
+.recent-hl {
+  background: var(--accent-subtle);
+  color: var(--accent);
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+/* Empty / no-match state */
+.recent-paths-empty {
+  padding: 14px 4px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-tertiary);
 }
 .recent-paths-list {
   display: flex; flex-direction: column;
@@ -10366,20 +10726,27 @@ input.settings-mono {
 [data-theme="tofu"] .conv-rename-btn.cancel{background:#F0E3D5;border-color:#D4B896;color:#8A7458}
 [data-theme="tofu"] .conv-rename-btn.ok{background:linear-gradient(180deg,#C4956A 0%,#A67B55 100%)}
 
-/* ── Tofu theme: folder tabs ── */
-[data-theme="tofu"] .folder-tabs{padding:0 8px 0}
-[data-theme="tofu"] .folder-tab{border-color:#E8D5C0;color:#8A7458;font-size:11px}
-[data-theme="tofu"] .folder-tab:hover{background:rgba(196,149,106,0.1);color:#5C4A38;border-color:#D4B896}
-[data-theme="tofu"] .folder-tab.active{background:rgba(196,149,106,0.15);color:#A67B55;border-color:#C4956A}
-[data-theme="tofu"] .folder-tab-add{color:#B8A090;border-color:#E8D5C0}
-[data-theme="tofu"] .folder-tab-add:hover{color:#A67B55;border-color:#C4956A;background:rgba(196,149,106,0.1)}
+/* ── Tofu theme: project rail ── */
+[data-theme="tofu"] .project-rail{background:linear-gradient(180deg,#EAE6DC 0%,#E4E0D5 100%);border-right:2px solid #C2BCA4}
+[data-theme="tofu"] .project-rail-title{color:#A89878}
+[data-theme="tofu"] .project-rail-collapse{color:#B8A090}
+[data-theme="tofu"] .project-rail-collapse:hover{color:#A67B55;background:rgba(196,149,106,0.12)}
+[data-theme="tofu"] .folder-tab{color:#8A7458;font-size:12px}
+[data-theme="tofu"] .folder-tab:hover{background:rgba(196,149,106,0.12);color:#5C4A38}
+[data-theme="tofu"] .folder-tab.active{background:rgba(196,149,106,0.18);color:#A67B55}
+[data-theme="tofu"] .folder-tab.active::before{background:#C4956A}
+[data-theme="tofu"] .folder-tab-count{background:rgba(196,149,106,0.18);color:#8A7458}
+[data-theme="tofu"] .folder-tab.active .folder-tab-count{background:#C4956A;color:#FFF9F4}
+[data-theme="tofu"] .folder-tab-inbox-dot,[data-theme="tofu"] .folder-tab-add-dot{color:#B8A090}
+[data-theme="tofu"] .folder-tab.active .folder-tab-inbox-dot{color:#A67B55}
+[data-theme="tofu"] .folder-tab-add{color:#B8A090}
+[data-theme="tofu"] .folder-tab-add:hover{color:#A67B55;background:rgba(196,149,106,0.12)}
+[data-theme="tofu"] .folder-quickadd{color:#B8A090;border-color:#E8D5C0}
+[data-theme="tofu"] .folder-quickadd:hover{color:#A67B55;border-color:#C4956A;background:rgba(196,149,106,0.1)}
 [data-theme="tofu"] .folder-tab-menu{background:#FDF8F3;border-color:#E8D5C0}
 [data-theme="tofu"] .folder-tab-menu-item{color:#5C4A38}
 [data-theme="tofu"] .folder-tab-menu-item:hover{background:rgba(196,149,106,0.1)}
 [data-theme="tofu"] .folder-tab-menu-delete:hover{color:#D4544A;background:rgba(212,84,74,0.08)}
-
-[data-theme="tofu"] .folder-tabs-toggle{border-top-color:#E8D5C0;color:#B8A090}
-[data-theme="tofu"] .folder-tabs-toggle:hover{color:#A67B55;background:rgba(196,149,106,0.08)}
 
 [data-theme="tofu"] .folder-tab-dot.streaming{animation:tofuBreathing 2.2s cubic-bezier(0.45,0.05,0.55,0.95) infinite}
 
@@ -10484,6 +10851,30 @@ input.settings-mono {
 }
 [data-theme="tofu"] .topbar-tool-btn svg,
 [data-theme="tofu"] .update-btn svg{stroke-width:2.2}
+/* Latency badge — mirror the kinako tool-button shell in the tofu theme. */
+[data-theme="tofu"] .net-latency-badge{
+  height:28px;
+  border-radius:4px;
+  border:1.5px solid rgba(194,188,164,0.5);
+  border-top-color:rgba(255,252,246,0.6);
+  border-left-color:rgba(255,252,246,0.6);
+  border-right-color:rgba(168,152,120,0.4);
+  border-bottom-color:rgba(168,152,120,0.4);
+  background:linear-gradient(180deg, rgba(245,242,234,0.6) 0%, rgba(235,232,222,0.6) 100%);
+  box-shadow:0 1px 0 rgba(154,144,122,0.25);
+  color:#7C6A4E;
+  font-family:'JetBrains Mono',monospace;
+  font-size:11px;
+  font-weight:600;
+  letter-spacing:0.02em
+}
+[data-theme="tofu"] .net-latency-badge:hover{
+  color:#5C4A33;
+  background:linear-gradient(180deg, rgba(250,247,240,0.85) 0%, rgba(240,237,228,0.85) 100%);
+  border-right-color:rgba(168,152,120,0.55);
+  border-bottom-color:rgba(168,152,120,0.55)
+}
+[data-theme="tofu"] .net-latency-badge .net-ms{color:#9A8A6E}
 
 /* ══════════════════════════════════════════════════════
    🕹️ Send btn — pixel art primary action button
@@ -11380,6 +11771,9 @@ input.settings-mono {
 [data-theme="tofu"] .folder-browser-footer{background:#E4E1D7;border-top:var(--stitch)}
 [data-theme="tofu"] .folder-item.selected{background:rgba(196,149,106,0.08);border-left:3px solid #C4956A}
 [data-theme="tofu"] .folder-code-badge{background:rgba(196,149,106,0.1);color:#A67B52;border-radius:0}
+[data-theme="tofu"] .recent-search .recent-search-input{border:2px solid #1a1814;border-radius:0;background:#F5F3ED}
+[data-theme="tofu"] .recent-search .recent-search-input:focus{border-color:#1a1814;box-shadow:3px 3px 0 #c9993f}
+[data-theme="tofu"] .recent-hl{background:rgba(196,149,106,0.22);color:#A67B52}
 [data-theme="tofu"] .recent-path-item{border-radius:0;border:1px solid #D6D1C3;box-shadow:1px 1px 0 rgba(0,0,0,0.05)}
 [data-theme="tofu"] .recent-path-item:hover{background:rgba(196,149,106,0.06);box-shadow:none;color:#A67B52;transform:none}
 [data-theme="tofu"] .recent-path-item:hover .recent-path-name{color:#A67B52}
@@ -11492,7 +11886,12 @@ input.settings-mono {
    want a different identity out-specify this via [data-theme="tofu"]
    .settings-panel (Settings), !important (Memory) or the pin below
    (My Day). Plain modals (browser, apply) + project-modal inherit it. */
-[data-theme="tofu"] .modal{
+/* :not(.memory-modal) — as with the input rule below, the memory modal owns
+   its own --m-* shell (border/background/shadow/radius) and must not inherit
+   the generic tofu block styling. Excluding it at the source lets its own
+   .memory-modal shell rule win by normal cascade, retiring the shell
+   counter-!important overrides. */
+[data-theme="tofu"] .modal:not(.memory-modal){
   background:#faf8f3;
   border:3px solid #1a1814;
   border-radius:0;
@@ -11522,13 +11921,25 @@ input.settings-mono {
   border-width:4px;
   box-shadow:10px 10px 0 #1a1814
 }
-[data-theme="tofu"] .modal input{
+/* :not(.memory-modal) — the memory modal owns a complete --m-* design system
+   and must not inherit the generic tofu input styling. Excluding it here at the
+   SOURCE (specificity 0,3,1) lets its own .memory-modal .memory-* rules win by
+   normal cascade in every theme, retiring ~15 counter-!important overrides that
+   previously existed only to beat this over-broad bleed.
+   :not(.recent-search-input) — SAME source-exclusion pattern: the project
+   modal's Recent-search box owns its own blocky tofu styling
+   ([data-theme="tofu"] .recent-search .recent-search-input, specificity 0,3,0).
+   Without this carve-out this bleed (0,3,1) out-specifies it and flattens its
+   intended 2px ink border to the generic 1px — so exclude it at the source
+   rather than adding an !important counter-rule. Proven by
+   tests/test_recent_search_tofu_specificity.py. */
+[data-theme="tofu"] .modal:not(.memory-modal) input:not(.recent-search-input){
   border-radius:0;
   border:1px solid rgba(184,176,160,0.4);
   background:#F5F3ED;
   box-shadow:none
 }
-[data-theme="tofu"] .modal input:focus{border-color:#BB9572;box-shadow:none}
+[data-theme="tofu"] .modal:not(.memory-modal) input:not(.recent-search-input):focus{border-color:#BB9572;box-shadow:none}
 
 /* ── Project modal — tofu header band + blocky close (it nests its own
       .pm-header, so the generic > h3 rule doesn't reach it). ── */
@@ -13786,15 +14197,15 @@ input.settings-mono {
 .memory-modal{
   width:620px;
   max-width:95vw;
-  padding:0 !important;
-  border-radius:var(--m-radius) !important;
+  padding:0;
+  border-radius:var(--m-radius);
   display:flex;
   flex-direction:column;
   max-height:85vh;
-  overflow:hidden !important;
-  background:var(--m-white) !important;
-  border:3px solid var(--m-ink) !important;
-  box-shadow:var(--m-shadow) !important;
+  overflow:hidden;
+  background:var(--m-white);
+  border:3px solid var(--m-ink);
+  box-shadow:var(--m-shadow);
   color:var(--m-ink);
   font-family:'Inter','SF Pro',-apple-system,system-ui,sans-serif;
   animation:memorySlam .22s cubic-bezier(.2,1.2,.4,1) both;
@@ -13923,18 +14334,18 @@ input.settings-mono {
   width:100%;
   height:30px;
   padding:0 10px 0 28px;
-  border:var(--m-border-sm) !important;
-  background:var(--m-white) !important;
+  border:var(--m-border-sm);
+  background:var(--m-white);
   color:var(--m-ink);
   font-size:12px;font-weight:500;
   line-height:30px;
   outline:none;
   transition:border-color .15s,box-shadow .15s;
   box-sizing:border-box;
-  border-radius:0 !important;
+  border-radius:0;
 }
 .memory-modal .memory-search-input:focus{
-  border-color:var(--m-gold) !important;
+  border-color:var(--m-gold);
   box-shadow:0 0 0 2px var(--m-gold-glow);
 }
 .memory-modal .memory-search-input::placeholder{
@@ -14159,33 +14570,33 @@ input.settings-mono {
 }
 .memory-modal .memory-input{
   display:block;width:100%;padding:7px 10px;
-  border:var(--m-border-sm) !important;
-  background:var(--m-white) !important;
+  border:var(--m-border-sm);
+  background:var(--m-white);
   color:var(--m-ink);font-size:12px;margin-bottom:6px;
   outline:none;box-sizing:border-box;transition:border-color .15s,box-shadow .15s;
-  border-radius:0 !important;
+  border-radius:0;
 }
-.memory-modal .memory-input:focus{border-color:var(--m-gold) !important;box-shadow:0 0 0 2px var(--m-gold-glow)}
+.memory-modal .memory-input:focus{border-color:var(--m-gold);box-shadow:0 0 0 2px var(--m-gold-glow)}
 .memory-modal .memory-textarea{
   display:block;width:100%;padding:7px 10px;
-  border:var(--m-border-sm) !important;
-  background:var(--m-white) !important;
+  border:var(--m-border-sm);
+  background:var(--m-white);
   color:var(--m-ink);font-size:12px;
   font-family:'JetBrains Mono',monospace;margin-bottom:6px;
   outline:none;resize:vertical;box-sizing:border-box;
   transition:border-color .15s,box-shadow .15s;min-height:72px;
-  border-radius:0 !important;
+  border-radius:0;
 }
-.memory-modal .memory-textarea:focus{border-color:var(--m-gold) !important;box-shadow:0 0 0 2px var(--m-gold-glow)}
+.memory-modal .memory-textarea:focus{border-color:var(--m-gold);box-shadow:0 0 0 2px var(--m-gold-glow)}
 .memory-modal .memory-select{
   padding:7px 10px;
-  border:var(--m-border-sm) !important;
-  background:var(--m-white) !important;
+  border:var(--m-border-sm);
+  background:var(--m-white);
   color:var(--m-ink);font-size:12px;
   outline:none;transition:border-color .15s;
-  border-radius:0 !important;
+  border-radius:0;
 }
-.memory-modal .memory-select:focus{border-color:var(--m-gold) !important}
+.memory-modal .memory-select:focus{border-color:var(--m-gold)}
 .memory-field-label{
   display:block;margin:2px 0 4px;font-size:11px;font-weight:700;
   color:var(--m-ink);letter-spacing:.02em;
@@ -14759,6 +15170,10 @@ input.settings-mono {
 }
 .peer-msg-banner .peer-msg-icon{display:inline-flex;color:#82aaff}
 .peer-msg-banner .peer-msg-from{color:#82aaff;font-weight:600}
+/* Operator nudge (from the Team panel) — distinct from an agent peer note. */
+.peer-msg-banner.peer-msg-banner-operator{border-color:rgba(126,231,135,.4);background:rgba(126,231,135,.09)}
+.peer-msg-banner.peer-msg-banner-operator .peer-msg-icon,
+.peer-msg-banner.peer-msg-banner-operator .peer-msg-from{color:#7ee787}
 
 /* ── Conversation Reference Picker Popover ── */
 .conv-ref-picker{
@@ -15105,6 +15520,13 @@ input.settings-mono {
   padding:1px 7px;
 }
 .autopilot-run-fold-summary .apf-hint{font-size:11px;opacity:.8;flex:1;}
+.autopilot-run-fold-summary .apf-incomplete{
+  display:inline-flex;align-items:center;gap:4px;
+  font-size:11px;font-weight:600;
+  color:#b45309;background:rgba(245,158,11,0.15);
+  padding:1px 7px;border-radius:10px;
+}
+.autopilot-run-fold-summary .apf-incomplete svg{flex-shrink:0;}
 .autopilot-run-fold-summary .apf-summarize-btn{
   font-size:11px;
   border:1px solid rgba(129,140,248,0.45);
@@ -15118,6 +15540,20 @@ input.settings-mono {
   background:rgba(129,140,248,0.15);
 }
 .autopilot-run-fold-summary .apf-summarize-btn:disabled{opacity:.5;cursor:default;}
+/* "View report" button — opens the close-out debrief in a sub-window. Shares
+ * the summarize button's visual language plus a leading document glyph. */
+.autopilot-run-fold-summary .apf-report-btn{
+  display:inline-flex;align-items:center;gap:5px;
+  font-size:11px;
+  border:1px solid rgba(129,140,248,0.45);
+  background:rgba(129,140,248,0.08);
+  color:#c7d2fe;
+  border-radius:6px;
+  padding:2px 9px;
+  cursor:pointer;
+}
+.autopilot-run-fold-summary .apf-report-btn:hover{background:rgba(129,140,248,0.2);}
+.autopilot-run-fold-summary .apf-report-btn svg{flex-shrink:0;opacity:.9;}
 .autopilot-run-fold-summary .apf-toggle{font-size:9px;opacity:.85;transition:transform .15s ease;}
 .autopilot-run-fold[open] .autopilot-run-fold-summary .apf-toggle{transform:rotate(180deg);}
 
@@ -15139,6 +15575,12 @@ input.settings-mono {
 [data-theme="light"] .autopilot-run-fold-summary .apf-summarize-btn:hover{
   background:rgba(99,102,241,0.1);
 }
+[data-theme="light"] .autopilot-run-fold-summary .apf-report-btn{
+  color:#3730a3;
+  border-color:rgba(99,102,241,0.5);
+  background:rgba(99,102,241,0.06);
+}
+[data-theme="light"] .autopilot-run-fold-summary .apf-report-btn:hover{background:rgba(99,102,241,0.12);}
 /* Tofu theme: indigo clashes with the warm cream palette and is unreadable on
  * --bg-primary (#F5F3ED) — use the kinako ink/accent (#BB9572) family. */
 [data-theme="tofu"] .autopilot-run-fold{
@@ -15157,6 +15599,12 @@ input.settings-mono {
 [data-theme="tofu"] .autopilot-run-fold-summary .apf-summarize-btn:hover{
   background:rgba(187,149,114,0.14);
 }
+[data-theme="tofu"] .autopilot-run-fold-summary .apf-report-btn{
+  color:#5C4A33;
+  border-color:rgba(187,149,114,0.5);
+  background:rgba(187,149,114,0.1);
+}
+[data-theme="tofu"] .autopilot-run-fold-summary .apf-report-btn:hover{background:rgba(187,149,114,0.18);}
 /* Inner turns get a subtle inset so the fold boundary reads clearly. */
 .autopilot-run-fold > .message{margin-left:6px;margin-right:6px;}
 .autopilot-run-fold[open]{padding-bottom:4px;}
@@ -15207,6 +15655,64 @@ input.settings-mono {
   background:rgba(187,149,114,0.08);
 }
 [data-theme="tofu"] .autopilot-summary-panel .aps-header{color:#5C4A33;border-bottom-color:rgba(187,149,114,0.2);}
+
+/* ── Autopilot run-report SUB-WINDOW (modal overlay) ─────────────────
+ * The close-out debrief opened on demand from the run fold's "View report"
+ * button. A read-only, human-only surface (never sent to the agent). */
+.ap-report-overlay{
+  position:fixed;inset:0;z-index:2400;
+  display:flex;align-items:center;justify-content:center;
+  padding:24px;
+  background:rgba(10,10,16,0.55);
+  backdrop-filter:blur(3px);
+  animation:apReportFadeIn .16s ease;
+}
+@keyframes apReportFadeIn{from{opacity:0}to{opacity:1}}
+.ap-report-modal{
+  display:flex;flex-direction:column;
+  width:min(760px,100%);max-height:min(82vh,900px);
+  border:1px solid rgba(129,140,248,0.45);
+  border-radius:12px;
+  background:var(--bg-secondary,#1a1a22);
+  box-shadow:0 18px 60px rgba(0,0,0,0.5);
+  overflow:hidden;
+  animation:apReportRise .18s cubic-bezier(.2,.7,.3,1);
+}
+@keyframes apReportRise{from{opacity:0;transform:translateY(12px) scale(.985)}to{opacity:1;transform:none}}
+.ap-report-head{
+  display:flex;align-items:center;gap:8px;
+  padding:12px 14px;
+  font-size:13px;font-weight:600;letter-spacing:.02em;
+  color:#a5b4fc;
+  border-bottom:1px solid rgba(129,140,248,0.22);
+  background:rgba(129,140,248,0.07);
+  flex-shrink:0;
+}
+.ap-report-head .aps-icon{flex-shrink:0;opacity:.9;}
+.ap-report-title{flex-shrink:0;}
+.ap-report-private{
+  font-size:10px;font-weight:500;opacity:.72;font-style:italic;
+}
+.ap-report-close{
+  margin-left:auto;flex-shrink:0;
+  display:inline-flex;align-items:center;justify-content:center;
+  width:26px;height:26px;padding:0;
+  border:none;border-radius:6px;
+  background:transparent;color:inherit;opacity:.8;cursor:pointer;
+  transition:background .12s ease,opacity .12s ease;
+}
+.ap-report-close:hover{background:rgba(129,140,248,0.2);opacity:1;}
+.ap-report-body{
+  padding:16px 18px 20px 18px;
+  font-size:13.5px;line-height:1.68;
+  overflow-y:auto;
+}
+[data-theme="light"] .ap-report-modal{border-color:rgba(99,102,241,0.4);background:var(--bg-secondary,#fff);}
+[data-theme="light"] .ap-report-head{color:#3730a3;border-bottom-color:rgba(99,102,241,0.18);background:rgba(99,102,241,0.06);}
+[data-theme="light"] .ap-report-close:hover{background:rgba(99,102,241,0.14);}
+[data-theme="tofu"] .ap-report-modal{border-color:rgba(187,149,114,0.55);}
+[data-theme="tofu"] .ap-report-head{color:#5C4A33;border-bottom-color:rgba(187,149,114,0.28);background:rgba(187,149,114,0.1);}
+[data-theme="tofu"] .ap-report-close:hover{background:rgba(187,149,114,0.2);}
 /* Live status chip while the autopilot virtual-user is thinking /
  * running tools.  Indigo accent matches the VU message styling. */
 .stream-phase.stream-phase-autopilot{
@@ -15331,6 +15837,57 @@ input.settings-mono {
   line-height: 1.45;
   word-break: break-word;
 }
+
+/* Source-conversation badge — names WHICH conversation triggered a
+   background/async toast, and (when navigable) jumps there on click. */
+.toast-conv-src {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  align-self: flex-start;
+  max-width: 100%;
+  margin-bottom: 3px;
+  padding: 1px 7px 1px 5px;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--toast-accent);
+  background: color-mix(in srgb, var(--toast-accent) 13%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--toast-accent) 26%, transparent);
+}
+.toast-conv-src svg { flex-shrink: 0; opacity: 0.9; }
+.toast-conv-src-label { opacity: 0.75; }
+.toast-conv-src-title {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 180px;
+}
+.toast-clickable .toast-conv-src[role="button"] { cursor: pointer; }
+.toast-clickable .toast-conv-src[role="button"]:hover {
+  background: color-mix(in srgb, var(--toast-accent) 24%, transparent);
+}
+.toast-conv-src[role="button"]:focus-visible {
+  outline: 2px solid var(--toast-accent);
+  outline-offset: 1px;
+}
+
+/* Quieter "what can you do?" guidance line under the detail. */
+.toast-hint {
+  margin-top: 5px;
+  padding-top: 5px;
+  border-top: 1px solid var(--border-light);
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+/* A navigable toast reads as actionable (the close button stays a plain
+   cursor via its own rule). */
+.toast-clickable { cursor: pointer; }
+.toast-clickable .toast-close { cursor: pointer; }
 
 .toast-close {
   background: none;
@@ -15625,6 +16182,50 @@ input.settings-mono {
 .sidebar-backdrop{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.35);z-index:25;opacity:0;transition:opacity .3s ease;-webkit-tap-highlight-color:transparent}
 .sidebar-backdrop.visible{display:block;opacity:1}
 
+/* ═══════════════════════════════════════════════════════════
+   PORTRAIT-TABLET / FOLDABLE CHAT DRAWER  (769px–1024px, coarse pointer)
+   ───────────────────────────────────────────────────────────
+   At this viewport paper-reading mode ALREADY single-panes
+   (`@media(max-width:768px),(max-width:1024px) and (pointer:coarse)`), but the
+   CHAT sidebar stayed a pinned 280px flex child — an internal inconsistency
+   across our own surfaces at one screen size. This block turns the chat sidebar
+   into the SAME slide-over drawer the phone uses, WITHOUT the ≤768px 360px
+   compaction (topbar badge-hiding, message avatar removal, font shrink) which a
+   ~900px tablet does not need. The `pointer:coarse` half keeps a fine-pointer
+   desktop narrowed to <1024px, and any landscape tablet >1024px, on the pinned
+   two-pane layout. The lower bound (min-width:769px) hands ≤768 to the phone
+   master block so the two never both apply.
+
+   KEEP IN SYNC with core.js isTabletDrawerViewport() / TOFU_BP.tablet=1024 and
+   the paper-mode predicate above (guarded by
+   tests/test_breakpoint_coordination.py). */
+@media(min-width:769px) and (max-width:1024px) and (pointer:coarse){
+  /* Sidebar → fixed slide-over drawer (mirrors the phone drawer geometry, a
+   * touch wider since a tablet has the room). */
+  .sidebar{position:fixed!important;left:0;top:0;bottom:0;width:min(360px,80vw);max-width:360px;min-width:auto!important;z-index:30;padding-top:env(safe-area-inset-top,0px);transform:translateX(-100%);transition:transform .3s cubic-bezier(.4,0,.2,1);box-shadow:none;will-change:transform}
+  /* The derived desktop has-rail width (rail + list-min) must NOT widen the
+   * fixed drawer — reset it; the icon-only rail lives INSIDE the drawer. */
+  .sidebar.has-rail,.sidebar.has-rail.rail-collapsed{width:min(360px,80vw)!important;min-width:auto!important}
+  .sidebar.collapsed{margin-left:0;transform:translateX(-100%)}
+  .sidebar.has-rail.collapsed,.sidebar.has-rail.rail-collapsed.collapsed{margin-left:0!important}
+  .sidebar:not(.collapsed){transform:translateX(0);box-shadow:4px 0 24px rgba(0,0,0,0.25)}
+  /* Tofu theme sets overflow:visible / position:relative on these for desktop
+   * dropdown popovers; re-assert containment at matching (0,2,0) specificity so
+   * the drawer clips correctly (same war the phone block fights). */
+  [data-theme="tofu"] .sidebar{position:fixed!important;overflow:hidden!important}
+  [data-theme="tofu"] .sidebar.collapsed{transform:translateX(-100%)!important}
+  [data-theme="tofu"] .sidebar:not(.collapsed){transform:translateX(0)!important}
+  /* Main pane takes the full width — it is no longer pushed by the (now fixed)
+   * sidebar. */
+  .main{width:100%!important;flex:1!important;min-width:0!important}
+  /* Sidebar-header action buttons get 44px touch targets (beats the tofu
+   * 0,3,0 selector — same insurance the phone block uses). */
+  .sidebar-header-actions .action-btn,
+  [data-theme="tofu"] .sidebar-header .action-btn{width:44px!important;height:44px!important}
+  /* Comfortable touch rows for the conversation list. */
+  .conv-item{min-height:48px}
+}
+
 /* ── Safe area insets for notched phones ──
  * env(safe-area-inset-*) resolves to 0px where unsupported, so these are
  * folded DIRECTLY into the mobile height/padding rules below (single source
@@ -15662,7 +16263,10 @@ input.settings-mono {
 
   /* ===== SIDEBAR: slide-over drawer ===== */
   .sidebar{position:fixed!important;left:0;top:0;bottom:0;width:82vw;max-width:320px;min-width:auto!important;z-index:30;padding-top:env(safe-area-inset-top,0px);transform:translateX(-100%);transition:transform .3s cubic-bezier(.4,0,.2,1);box-shadow:none;will-change:transform}
+  /* Derived desktop has-rail width must not widen the fixed phone drawer. */
+  .sidebar.has-rail,.sidebar.has-rail.rail-collapsed{width:82vw!important;max-width:320px;min-width:auto!important}
   .sidebar.collapsed{margin-left:0;transform:translateX(-100%)}
+  .sidebar.has-rail.collapsed,.sidebar.has-rail.rail-collapsed.collapsed{margin-left:0!important}
   .sidebar:not(.collapsed){transform:translateX(0);box-shadow:4px 0 24px rgba(0,0,0,0.25)}
   .sidebar-header{padding:14px 16px}
   .sidebar-header h1{font-size:15px}
@@ -15739,6 +16343,17 @@ input.settings-mono {
   /* --- Message actions: always visible on mobile (no hover) --- */
   .message-actions{opacity:1;position:relative;top:auto;right:auto;margin-top:4px;flex-wrap:wrap}
   .msg-action-btn{padding:7px 12px;font-size:11px;min-height:44px;display:inline-flex;align-items:center}
+  /* Tofu sets `.msg-action-btn{padding:3px 6px;font-size:10px}` at 0,2,0 which
+   * beats the plain rule above (0,1,0): the button keeps its 44px min-height but
+   * its cramped desktop padding/font, mismatching the other touch controls.
+   * Re-assert comfortable touch padding/font at matching specificity. */
+  [data-theme="tofu"] .msg-action-btn{padding:7px 12px;font-size:11px}
+  /* Tofu decorative glyphs anchored OUTSIDE their box (negative left) are
+   * clipped by the mobile overflow:hidden containers, so they render as dead
+   * space or a sliver on narrow screens. The active-conv left-border and the
+   * thinking-block frame already signal state — drop the ornaments on mobile. */
+  [data-theme="tofu"] .conv-item.active::before{display:none!important}   /* pixel ▸ cursor */
+  [data-theme="tofu"] .thinking-block::after{display:none!important}      /* thought-bubble dots */
   .delete-turn-popup{position:fixed;bottom:auto;top:50%;left:50%;right:auto;transform:translate(-50%,-50%);min-width:200px;max-width:calc(100vw - 32px);max-height:80dvh;overflow-y:auto}
 
   /* --- Thinking blocks --- */
@@ -17098,8 +17713,12 @@ input.settings-mono {
   .preset-toggle{padding:3px 6px 3px 5px}
 }
 
-/* ── Landscape phones ── */
-@media(max-height:500px) and (max-width:900px){
+/* ── Landscape phones ──
+ * Was `max-height:500px` only, which missed the many 540–599px-tall landscape
+ * handsets (and split-screen slices). Anchor it on orientation:landscape and
+ * raise the short-viewport ceiling to 600px so the whole class is covered,
+ * while the max-width:900px guard keeps it off genuine landscape tablets. */
+@media(orientation:landscape) and (max-height:600px) and (max-width:900px){
   .topbar{height:calc(40px + env(safe-area-inset-top,0px));padding-top:env(safe-area-inset-top,0px)}
   .chat-inner{padding:10px calc(12px + env(safe-area-inset-right,0px)) 100px calc(12px + env(safe-area-inset-left,0px))}
   .input-area{padding:6px 10px 8px}
@@ -19760,23 +20379,52 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .topbar{
 .project-brain-close{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;background:transparent;border:none;color:var(--text-tertiary);font-size:16px;line-height:1;cursor:pointer;border-radius:var(--radius-xs);transition:color var(--transition),background var(--transition),transform 0.12s ease}
 .project-brain-close:hover{color:var(--text-primary);background:var(--bg-hover)}
 .project-brain-close:active{transform:scale(0.9)}
+.project-brain-head-actions{display:flex;align-items:center;gap:8px}
+.pb-tr-toggle{display:inline-flex;align-items:center;gap:6px;padding:5px 10px;background:transparent;border:1px solid var(--border);color:var(--text-tertiary);font-family:inherit;font-size:12px;font-weight:600;line-height:1;cursor:pointer;border-radius:var(--radius-xs);transition:color var(--transition),background var(--transition),border-color var(--transition)}
+.pb-tr-toggle:hover{color:var(--text-primary);background:var(--bg-hover)}
+.pb-tr-toggle .pb-tr-toggle-ico{display:inline-flex}
+.pb-tr-toggle .pb-tr-toggle-ico svg{display:block}
+.pb-tr-toggle.pb-tr-toggle-on{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 45%,var(--border));background:color-mix(in srgb,var(--accent) 12%,transparent)}
+/* A node showing a translation over its original — subtle accent underline so
+   the operator can tell at a glance the text is a translated VIEW (hover the
+   node to see the original in the title tooltip). */
+[data-pb-tr="1"]{text-decoration:underline;text-decoration-style:dotted;text-decoration-color:color-mix(in srgb,var(--accent) 55%,transparent);text-underline-offset:3px}
 
-/* Three-column grid. Hairline gutters via the grid background. */
-.project-brain-columns{flex:1;display:grid;grid-template-columns:1fr 1fr 1.15fr;gap:1px;background:var(--border);overflow:hidden}
-.project-brain-col{background:var(--bg-secondary);display:flex;flex-direction:column;min-height:0}
-.project-brain-col-head{display:flex;align-items:center;gap:8px;padding:13px 16px;font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-secondary);border-bottom:1px solid var(--border);background:color-mix(in srgb,var(--bg-tertiary) 90%,var(--accent));position:sticky;top:0;z-index:1}
-.project-brain-col-head::before{content:'';width:6px;height:6px;border-radius:50%;background:var(--accent);opacity:0.55;flex-shrink:0}
-.project-brain-col-charter .project-brain-col-head::before{background:var(--accent)}
-.project-brain-col-board .project-brain-col-head::before{background:var(--pb-green)}
-.project-brain-col-activity .project-brain-col-head::before{background:var(--pb-amber)}
-.project-brain-col-body{flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column}
+/* ── Tab bar: the four surfaces shown one-at-a-time ──
+   Four side-by-side columns collapse to unreadable slivers on a narrow panel
+   (width:min(960px,94vw)) — so we tab between them and give the ACTIVE surface
+   the full width. Each tab carries a colour-coded dot matching its old column
+   accent + an optional count badge. */
+.project-brain-tabs{display:flex;align-items:stretch;gap:2px;padding:0 12px;background:var(--bg-secondary);border-bottom:1px solid var(--border);overflow-x:auto;flex-shrink:0}
+.pb-tab{position:relative;display:inline-flex;align-items:center;gap:7px;padding:12px 15px;background:transparent;border:none;border-bottom:2px solid transparent;color:var(--text-tertiary);font-family:inherit;font-size:12.5px;font-weight:600;letter-spacing:0.01em;cursor:pointer;white-space:nowrap;transition:color var(--transition),border-color var(--transition)}
+.pb-tab::before{content:'';width:7px;height:7px;border-radius:50%;background:currentColor;opacity:0.45;flex-shrink:0}
+.pb-tab:hover{color:var(--text-secondary)}
+.pb-tab-active{color:var(--text-primary);border-bottom-color:var(--accent)}
+.pb-tab-active::before{opacity:1}
+.pb-tab[data-pb-tab="charter"].pb-tab-active{color:var(--accent)}
+.pb-tab[data-pb-tab="board"].pb-tab-active{color:var(--pb-green)}
+.pb-tab[data-pb-tab="activity"].pb-tab-active{color:var(--pb-amber)}
+.pb-tab[data-pb-tab="peers"].pb-tab-active{color:var(--accent)}
+.pb-tab-count{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;padding:0 5px;font-size:10.5px;font-weight:700;line-height:1;border-radius:999px;background:var(--bg-tertiary);border:1px solid var(--border);color:var(--text-secondary)}
+.pb-tab-count[hidden]{display:none}
+
+/* Tab-panel host: the active panel fills the panel; the rest are hidden.
+   NOTE: the panels carry BOTH .project-brain-col AND .pb-tab-panel, so the
+   show/hide rules MUST out-specify .project-brain-col (which sets display:flex);
+   a bare .pb-tab-panel selector has equal specificity and loses on source order,
+   leaving every panel visible → tab clicks appear to do nothing. */
+.project-brain-columns{flex:1;display:block;background:var(--bg-secondary);overflow:hidden;min-height:0}
+.project-brain-col.pb-tab-panel{display:none;height:100%}
+.project-brain-col.pb-tab-panel-active{display:flex}
+.project-brain-col{background:var(--bg-secondary);display:flex;flex-direction:column;min-height:0;flex:1}
+.project-brain-col-body{flex:1;overflow-y:auto;padding:16px 18px;display:flex;flex-direction:column;max-width:820px;width:100%;margin:0 auto;box-sizing:border-box}
 .project-brain-col-body::-webkit-scrollbar{width:8px}
 .project-brain-col-body::-webkit-scrollbar-thumb{background:var(--border);border-radius:4px}
 .project-brain-col-body::-webkit-scrollbar-thumb:hover{background:var(--border-light)}
 .project-brain-placeholder{display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-tertiary);font-size:13px;text-align:center;padding:24px;font-style:italic}
 
 /* Empty states — a centered, quiet dashed frame instead of bare text. */
-.pb-activity-empty,.pb-charter-empty,.pb-board-empty{flex:1;display:flex;align-items:center;justify-content:center;min-height:200px;color:var(--text-tertiary);font-size:13px;text-align:center;padding:24px;margin:2px;border:1px dashed var(--border);border-radius:var(--pb-radius);background:color-mix(in srgb,var(--bg-tertiary) 30%,transparent)}
+.pb-activity-empty,.pb-charter-empty,.pb-board-empty,.pb-peers-empty{flex:1;display:flex;align-items:center;justify-content:center;min-height:200px;color:var(--text-tertiary);font-size:13px;text-align:center;padding:24px;margin:2px;border:1px dashed var(--border);border-radius:var(--pb-radius);background:color-mix(in srgb,var(--bg-tertiary) 30%,transparent)}
 .pb-board-lane-empty{color:var(--text-tertiary);font-size:12px;padding:8px 10px;text-align:center;border:1px dashed var(--border);border-radius:var(--pb-radius-sm);background:color-mix(in srgb,var(--bg-tertiary) 25%,transparent)}
 
 /* ── Activity column ── */
@@ -19804,12 +20452,95 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .topbar{
 .pb-conv-chip{display:inline-flex;align-items:center;align-self:flex-start;max-width:100%;background:var(--bg-secondary);border:1px solid var(--border);color:var(--text-secondary);font-size:11px;padding:3px 10px;border-radius:var(--pb-radius-chip);cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:inherit;transition:color var(--transition),border-color var(--transition),background var(--transition)}
 .pb-conv-chip:hover{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 50%,transparent);background:var(--accent-subtle)}
 
+/* ── Team / Peers column ── */
+.pb-peers-roster{display:flex;flex-direction:column;gap:9px}
+.pb-peers-roster-head,.pb-peers-thread-head{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-tertiary);margin:2px 0 6px}
+.pb-peer-card{display:flex;gap:10px;align-items:flex-start;padding:11px 12px;background:var(--pb-card-bg);border:1px solid var(--border);border-radius:var(--pb-radius);transition:border-color var(--transition),background var(--transition),transform 0.12s ease;animation:pbRowIn 0.24s cubic-bezier(0.16,1,0.3,1)}
+.pb-peer-clickable{cursor:pointer}
+.pb-peer-clickable:hover{border-color:color-mix(in srgb,var(--accent) 45%,transparent);background:var(--pb-card-hover);transform:translateY(-1px)}
+.pb-peer-agent{margin-left:14px;border-style:dashed}
+/* Presence dot — a soft status light. green=running(pulse), amber=idle. */
+.pb-peer-dot{width:9px;height:9px;flex-shrink:0;margin-top:5px;border-radius:50%;background:var(--text-tertiary)}
+.pb-peer-dot[data-state="active"]{background:var(--pb-green);box-shadow:0 0 0 3px color-mix(in srgb,var(--pb-green) 22%,transparent);animation:pbPeerPulse 1.8s ease-in-out infinite}
+.pb-peer-dot[data-state="idle"]{background:var(--pb-amber);box-shadow:0 0 0 3px color-mix(in srgb,var(--pb-amber) 18%,transparent)}
+@keyframes pbPeerPulse{0%,100%{box-shadow:0 0 0 3px color-mix(in srgb,var(--pb-green) 22%,transparent)}50%{box-shadow:0 0 0 5px color-mix(in srgb,var(--pb-green) 8%,transparent)}}
+.pb-peer-body{flex:1;min-width:0;display:flex;flex-direction:column;gap:4px}
+.pb-peer-who{font-size:13px;font-weight:600;color:var(--text-primary);line-height:1.4;overflow-wrap:anywhere}
+.pb-peer-doing{font-size:11.5px;color:var(--text-secondary);line-height:1.4;overflow-wrap:anywhere}
+/* Peer-message thread — chat-like exchanges between conversations. */
+.pb-peers-thread{margin-top:16px;padding-top:14px;border-top:1px solid var(--border);display:flex;flex-direction:column;gap:8px}
+.pb-peer-msg{padding:9px 11px;background:color-mix(in srgb,var(--bg-tertiary) 45%,transparent);border:1px solid var(--border);border-left:2px solid color-mix(in srgb,var(--accent) 55%,var(--border));border-radius:var(--pb-radius);animation:pbRowIn 0.24s cubic-bezier(0.16,1,0.3,1)}
+.pb-peer-msg-intervene{border-left-color:var(--pb-red);background:color-mix(in srgb,var(--pb-red) 7%,transparent)}
+.pb-peer-msg-head{display:flex;align-items:center;gap:6px;font-size:10.5px;color:var(--text-tertiary);margin-bottom:4px}
+.pb-peer-msg-head svg{flex-shrink:0}
+.pb-peer-msg-route{font-family:var(--font-mono,monospace);color:var(--text-secondary);font-weight:600}
+.pb-peer-msg-time{margin-left:auto}
+.pb-peer-msg-body{font-size:12.5px;color:var(--text-primary);line-height:1.45;overflow-wrap:anywhere;word-break:break-word}
+/* Per-card nudge composer — the operator messages a sibling conversation. */
+.pb-peer-nudge{margin-top:6px}
+.pb-peer-nudge-toggle{display:inline-flex;align-items:center;gap:5px;padding:3px 8px;font-size:11px;font-weight:600;color:var(--text-secondary);background:transparent;border:1px solid var(--border);border-radius:var(--pb-radius-sm);cursor:pointer;transition:border-color var(--transition),color var(--transition),background var(--transition)}
+.pb-peer-nudge-toggle:hover{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 45%,transparent);background:var(--pb-card-hover)}
+.pb-peer-nudge-toggle svg{flex-shrink:0}
+.pb-peer-nudge-composer{margin-top:7px;display:flex;flex-direction:column;gap:6px}
+.pb-peer-nudge-input{width:100%;box-sizing:border-box;resize:vertical;min-height:44px;padding:7px 9px;font:inherit;font-size:12px;line-height:1.4;color:var(--text-primary);background:var(--bg-tertiary);border:1px solid var(--border);border-radius:var(--pb-radius-sm)}
+.pb-peer-nudge-input:focus{outline:none;border-color:color-mix(in srgb,var(--accent) 55%,transparent)}
+.pb-peer-nudge-actions{display:flex;align-items:center;gap:8px}
+.pb-peer-nudge-status{font-size:11px;color:var(--text-tertiary);margin-right:auto;flex-shrink:0}
+.pb-peer-nudge-status-ok{color:var(--pb-green)}
+.pb-peer-nudge-status-err{color:var(--pb-red)}
+.pb-peer-nudge-cancel,.pb-peer-nudge-send{padding:4px 12px;font-size:11.5px;font-weight:600;border-radius:var(--pb-radius-sm);cursor:pointer;border:1px solid var(--border);transition:opacity var(--transition),background var(--transition),border-color var(--transition)}
+.pb-peer-nudge-cancel{color:var(--text-secondary);background:transparent}
+.pb-peer-nudge-cancel:hover{color:var(--text-primary);border-color:var(--text-tertiary)}
+.pb-peer-nudge-send{color:#fff;background:var(--accent);border-color:var(--accent)}
+.pb-peer-nudge-send:hover{opacity:0.9}
+.pb-peer-nudge-send:disabled{opacity:0.5;cursor:default}
+/* Per-card controls row: nudge + (when running) the operator hard-abort. */
+.pb-peer-controls{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:6px}
+.pb-peer-controls .pb-peer-nudge{margin-top:0}
+/* Operator STOP (hard-abort) — danger affordance, gated behind a confirm. */
+.pb-peer-stop{display:inline-flex;align-items:center;gap:6px}
+.pb-peer-stop-btn{display:inline-flex;align-items:center;gap:5px;padding:3px 8px;font-size:11px;font-weight:600;color:var(--pb-red);background:transparent;border:1px solid color-mix(in srgb,var(--pb-red) 40%,var(--border));border-radius:var(--pb-radius-sm);cursor:pointer;transition:border-color var(--transition),background var(--transition)}
+.pb-peer-stop-btn:hover{background:color-mix(in srgb,var(--pb-red) 10%,transparent);border-color:color-mix(in srgb,var(--pb-red) 60%,transparent)}
+.pb-peer-stop-btn svg{flex-shrink:0}
+.pb-peer-stop-btn:disabled{opacity:0.5;cursor:default}
+.pb-peer-stop-status{font-size:11px;color:var(--text-tertiary)}
+.pb-peer-stop-status-ok{color:var(--pb-green)}
+.pb-peer-stop-status-err{color:var(--pb-red)}
+
 /* ── Charter column ── */
 .pb-charter-northstar{font-size:13px;line-height:1.55;color:var(--text-primary);white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;padding:11px 13px;background:var(--pb-card-bg);border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:var(--pb-radius)}
 .pb-charter-section{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-tertiary);margin:18px 0 8px}
 .pb-charter-decisions{list-style:none;display:flex;flex-direction:column;gap:6px;margin:0;padding:0}
 .pb-charter-decisions li{font-size:13px;line-height:1.45;color:var(--text-primary);padding:9px 11px;background:var(--pb-card-bg);border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:var(--pb-radius-sm);white-space:normal;overflow-wrap:anywhere;word-break:break-word;transition:border-color var(--transition),background var(--transition)}
 .pb-charter-decisions li:hover{background:var(--pb-card-hover)}
+/* ── Long-text clamp-with-expand ──
+   A committed decision / north-star / proposal can be 2000+ chars. Clamp to a
+   readable preview and let the human expand — otherwise one wall of text makes
+   the whole surface unusable (the reported bug). `.pb-clamp` is collapsed by
+   default; `.pb-clamp-open` shows all. A gradient fade hints there's more. */
+.pb-clamp{position:relative;overflow:hidden;max-height:7.8em;transition:max-height 0.18s ease}
+.pb-clamp.pb-clamp-open{max-height:none}
+.pb-clamp:not(.pb-clamp-open)::after{content:'';position:absolute;left:0;right:0;bottom:0;height:2.4em;background:linear-gradient(180deg,transparent,var(--pb-card-bg));pointer-events:none}
+.pb-clamp-toggle{display:inline-flex;align-items:center;gap:4px;margin-top:7px;padding:2px 0;background:transparent;border:none;color:var(--accent);font-family:inherit;font-size:11.5px;font-weight:600;cursor:pointer}
+.pb-clamp-toggle:hover{text-decoration:underline}
+.pb-clamp-toggle svg{width:12px;height:12px;transition:transform 0.18s ease}
+.pb-clamp-toggle.pb-clamp-toggle-open svg{transform:rotate(180deg)}
+
+/* ── Hover preview for opaque conversation IDs ──
+   A single floating card (project-brain.js reuses one #pb-conv-preview node,
+   positioned via fixed coords) that resolves a [data-conv-id] chip to its
+   conversation's title + opening question on hover. Kept above the overlay. */
+.pb-conv-preview{position:fixed;z-index:100060;max-width:340px;min-width:190px;background:var(--pb-card-bg,var(--bg-secondary));border:1px solid var(--border);border-radius:var(--pb-radius,10px);box-shadow:0 8px 30px rgba(0,0,0,0.32);padding:10px 12px;pointer-events:none;font-size:12px;line-height:1.5}
+.pb-conv-preview[hidden]{display:none}
+.pb-preview-title{font-size:12.5px;font-weight:600;color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pb-preview-id{font-size:10.5px;color:var(--text-tertiary);font-family:var(--font-mono,monospace);margin-top:1px}
+.pb-preview-label{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.04em;color:var(--text-tertiary);margin-top:7px}
+.pb-preview-body{color:var(--text-secondary);margin-top:2px;overflow-wrap:anywhere;word-break:break-word;display:-webkit-box;-webkit-line-clamp:5;-webkit-box-orient:vertical;overflow:hidden}
+.pb-preview-empty,.pb-preview-loading{color:var(--text-tertiary);margin-top:6px;font-style:italic}
+/* Peer-message thread from/to ids get an underline-on-hover affordance so it's
+   discoverable they carry a preview. */
+.pb-peer-msg-cid{cursor:help;border-bottom:1px dotted var(--border)}
+.pb-peer-msg-cid:hover{color:var(--accent);border-bottom-color:var(--accent)}
 
 /* Charter pending proposals — the human commit/reject gate. */
 .pb-proposal{background:var(--pb-card-bg);border:1px solid color-mix(in srgb,var(--pb-amber) 34%,var(--border));border-radius:var(--pb-radius);padding:11px 12px;margin-bottom:9px;box-shadow:inset 3px 0 0 var(--pb-amber)}
@@ -19835,6 +20566,10 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .topbar{
 .pb-board-card.pb-board-open{border-left:3px solid var(--pb-amber)}
 .pb-board-card.pb-board-claimed{border-left:3px solid var(--accent)}
 .pb-board-card.pb-board-done{border-left:3px solid var(--pb-green);opacity:0.72}
+.pb-board-card.pb-board-deferred{border-left:3px dashed var(--text-tertiary);opacity:0.8}
+.pb-board-card.pb-board-held{border-left:3px solid var(--pb-amber)}
+.pb-board-lane-held .pb-board-count{color:var(--pb-amber);border-color:color-mix(in srgb,var(--pb-amber) 34%,transparent);background:color-mix(in srgb,var(--pb-amber) 12%,transparent)}
+.pb-board-held-by{font-size:10.5px;color:var(--text-tertiary)}
 .pb-board-title{font-size:13px;line-height:1.5;color:var(--text-primary);white-space:normal;overflow-wrap:anywhere;word-break:break-word}
 .pb-board-card-meta{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-top:9px}
 .pb-board-badge{display:inline-flex;align-items:center;gap:4px;font-size:10px;font-weight:600;padding:2px 8px;border-radius:var(--pb-radius-chip);line-height:1.5}
@@ -19852,6 +20587,8 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .topbar{
 .pb-board-act-complete:hover{color:var(--pb-green);border-color:color-mix(in srgb,var(--pb-green) 40%,transparent)}
 .pb-board-act-block:hover{color:var(--pb-red);border-color:color-mix(in srgb,var(--pb-red) 40%,transparent)}
 .pb-board-act-reopen:hover{color:var(--pb-amber);border-color:color-mix(in srgb,var(--pb-amber) 40%,transparent)}
+.pb-board-act-defer:hover{color:var(--text-secondary);border-color:var(--border-light)}
+.pb-board-act-resume:hover{color:var(--pb-green);border-color:color-mix(in srgb,var(--pb-green) 40%,transparent)}
 
 /* collab-bar conflict styling (shares this block's ownership). */
 .collab-seg-conflict{color:var(--pb-red);font-weight:600}
@@ -19924,3 +20661,14 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .topbar{
   .project-brain-columns{grid-template-columns:1fr;gap:1px;overflow-y:auto}
   .project-brain-col{min-height:240px}
 }
+
+
+/* ── Orphaned-user-turn Resume affordance (patch→fundamental-fix #2) ──
+ * Rendered under #chatInner when the backend marks conv._orphanResumable.
+ * Explicit, honest affordance replacing the deleted Case-E auto-fire. */
+.orphan-resume{display:flex;align-items:center;justify-content:center;gap:12px;flex-wrap:wrap;margin:8px auto 20px;padding:12px 16px;max-width:680px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg-secondary)}
+.orphan-resume-hint{color:var(--text-tertiary);font-size:13px}
+.orphan-resume-btn{display:inline-flex;align-items:center;gap:6px;padding:7px 14px;border-radius:var(--radius-sm);cursor:pointer;font-family:inherit;font-size:13px;font-weight:600;background:var(--accent);color:#fff;border:none}
+.orphan-resume-btn:hover{filter:brightness(1.08)}
+[data-theme="tofu"] .orphan-resume{border:2px solid #1a1814;box-shadow:3px 3px 0 #1a1814;background:var(--bg-secondary)}
+[data-theme="tofu"] .orphan-resume-btn{border:2px solid #1a1814;box-shadow:2px 2px 0 #1a1814;border-radius:0}

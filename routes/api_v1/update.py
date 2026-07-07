@@ -5,8 +5,11 @@ Routes (mounted under ``/api/v1``):
   GET  /api/v1/update/check    — compare installed VERSION vs. the newest
                                  GitHub release tag; report git availability
                                  and whether the working tree is safe to pull.
-  POST /api/v1/update/apply    — admin: ``git pull --ff-only`` from the
-                                 official remote. Refuses on a dirty tree.
+  POST /api/v1/update/apply    — admin: apply the update. A git checkout
+                                 uses ``git pull --ff-only`` (refuses on a
+                                 dirty tree); a non-git deployment (exported
+                                 copy / zip) downloads the release tarball
+                                 and overlays tracked source instead.
   POST /api/v1/update/restart  — admin: re-exec the server process so pulled
                                  ``.py`` changes take effect. Explicit only —
                                  ``apply`` never auto-restarts.
@@ -70,14 +73,17 @@ def update_check():
 @api_meta(
     summary='Apply the available update',
     description=(
-        'Runs git fetch + git pull --ff-only against the official remote. '
-        'Refuses (without mutating anything) if git is unavailable or the '
-        'working tree has tracked-source changes — it never auto-stashes '
-        'or force-resets. User settings live outside tracked code and are '
-        'never touched. If the pull touches requirements.txt, runs pip '
-        'install -r requirements.txt against the running interpreter so '
-        'the update is self-contained. Returns needs_restart=true when '
-        'files changed; the caller must POST /api/v1/update/restart.'
+        'Applies the update, choosing the strategy automatically. A git '
+        'checkout runs git fetch + git pull --ff-only (refuses, without '
+        'mutating anything, on a dirty tracked-source tree; never '
+        'auto-stashes or force-resets). A non-git deployment downloads the '
+        'official release tarball and overlays tracked source onto the '
+        'project root, backing up replaced files to .update_backup/. Either '
+        'way user settings/data/memories live outside tracked code and are '
+        'never touched. If requirements.txt changed, runs pip install '
+        'against the running interpreter so the update is self-contained. '
+        'Returns needs_restart=true when files changed; the caller must '
+        'POST /api/v1/update/restart.'
     ),
     tags=['system'],
 )
@@ -120,6 +126,43 @@ def update_apply():
     return api_ok({'taskId': task_id, 'started': True})
 
 
+def _close_inheritable_listen_sockets():
+    """Mark inherited-across-exec FDs (Hypercorn's listen socket) close-on-exec.
+
+    Hypercorn's ``Config._create_sockets`` calls ``sock.set_inheritable(True)``
+    on its listening socket (hypercorn/config.py). Since PEP 446 (Python 3.4)
+    every other FD is created non-inheritable by default, so the ONLY
+    inheritable FDs above the std streams are exactly Hypercorn's bound
+    listeners. If we don't clear that flag, ``os.execv`` leaks the still-bound
+    listen socket into the fresh server image: the old port stays occupied by
+    our own inherited FD, ``_wait_port_free`` in server.py times out, and the
+    restart silently shifts to port+1 (15002 → 15003) on every restart.
+
+    Resetting the inheritable flag makes execv close these FDs, freeing the
+    port so the new image reclaims it.
+    """
+    # Only inspect actually-open FDs. /proc/self/fd (Linux) avoids scanning a
+    # potentially huge SC_OPEN_MAX range; fall back to a bounded range elsewhere.
+    try:
+        fds = [int(name) for name in os.listdir('/proc/self/fd') if name.isdigit()]
+    except OSError:
+        _max = os.sysconf('SC_OPEN_MAX') if hasattr(os, 'sysconf') else 4096
+        fds = range(3, min(_max, 65536))
+    closed = 0
+    for fd in fds:
+        if fd < 3:
+            continue
+        try:
+            if os.get_inheritable(fd):
+                os.set_inheritable(fd, False)
+                closed += 1
+        except OSError:
+            continue
+    if closed:
+        logger.info('[Update] Cleared inheritable flag on %d FD(s) before re-exec '
+                    '(prevents leaked listen socket holding the port)', closed)
+
+
 def _deferred_reexec(delay: float = 0.6):
     """Re-exec the current process after a short delay.
 
@@ -133,6 +176,16 @@ def _deferred_reexec(delay: float = 0.6):
     try:
         # Let the env-reexec guard run again from a clean slate.
         os.environ.pop('_TOFU_ENV_REEXEC', None)
+        # Drop Hypercorn's inheritable listen socket so execv frees the port;
+        # otherwise the new image inherits our bound socket and shifts to
+        # port+1. MUST run before execv. See _close_inheritable_listen_sockets.
+        _close_inheritable_listen_sockets()
+        # Tell the fresh image which port we were serving so it reclaims it
+        # (waits for our lingering listener to drain) instead of letting the
+        # connect-probe shift the port (15000 → 15001). See server.py.
+        _runtime_port = (os.environ.get('_TOFU_RUNTIME_PORT', '') or '').strip()
+        if _runtime_port:
+            os.environ['_TOFU_REEXEC_PORT'] = _runtime_port
         os.execv(sys.executable, [sys.executable, *sys.argv])
     except OSError as e:
         # execv only returns on failure — log loudly; the process keeps running.

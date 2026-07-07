@@ -13,10 +13,11 @@ Provides:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 import uuid
-from typing import Generator
+from typing import AsyncGenerator
 
 from lib.log import get_logger
 
@@ -66,8 +67,15 @@ def translate_openai_request(body: dict) -> tuple[list[dict], dict, dict]:
     if 'tools' in body:
         cfg.setdefault('searchMode', 'off')
         cfg.setdefault('fetchEnabled', False)
-        cfg.setdefault('memoryEnabled', False)
         cfg.setdefault('mcpEnabled', False)
+
+    # App-personal capabilities (memory store + preference profile) fail
+    # closed on this headless compat surface regardless of whether tools were
+    # supplied — the operator's personal state must never ride an OpenAI-compat
+    # call. setdefault = an explicit caller cfg still wins. Single source of
+    # truth: lib/agent_core/personal_scope.
+    from lib.agent_core.personal_scope import apply_headless_personal_defaults
+    apply_headless_personal_defaults(cfg)
 
     # Reasoning / thinking — OpenAI's `reasoning_effort` (o-series) maps
     # to our `thinkingDepth`.
@@ -89,7 +97,11 @@ def translate_openai_request(body: dict) -> tuple[list[dict], dict, dict]:
 # ── Response translation (sync) ────────────────────────────────────
 
 def _assistant_message(task: dict) -> dict:
-    msg: dict = {'role': 'assistant', 'content': task.get('content') or ''}
+    # Deliverable = narration-free answer from the segment model (epic
+    # pt_cb8f98b0cb9b47fb, step 3). Single source of truth across sync +
+    # streaming so a headless caller never sees inter-round scaffolding prose.
+    from lib.tasks_pkg.segments import deliverable_text
+    msg: dict = {'role': 'assistant', 'content': deliverable_text(task)}
     rounds = task.get('toolRounds') or []
     if rounds:
         last = rounds[-1] if isinstance(rounds[-1], dict) else None
@@ -129,21 +141,27 @@ def build_openai_response(task: dict, model: str,
 
 # ── Streaming ──────────────────────────────────────────────────────
 
-def stream_openai_chunks(task, model: str, requested_id: str = '',
-                          *, include_tofu_native: bool = False
-                          ) -> Generator[str, None, None]:
+async def stream_openai_chunks(task, model: str, requested_id: str = '',
+                               *, include_tofu_native: bool = False
+                               ) -> AsyncGenerator[str, None]:
     """Yield SSE wire frames in OpenAI's ``chat.completion.chunk`` shape.
 
     ``include_tofu_native=True`` adds a `tofu` envelope to chunks for
     non-delta events (phase/tool_call/etc.). Vanilla OpenAI clients
     ignore unknown fields, so this is safe to leave on.
+
+    Event-driven: blocks on the task's wakeup signal instead of polling,
+    so it never pins a thread while the model is generating.
     """
+    from lib.agent_core.admission import unregister_waiter, wait_for_event
+
     completion_id = requested_id or f'chatcmpl-{uuid.uuid4().hex[:24]}'
     emitted_role = False
     cursor = 0
-    last_heartbeat = time.time()
+    task_id = task.get('id') or ''
 
-    while True:
+    try:
+      while True:
         with task['events_lock']:
             new_events = list(task['events'][cursor:])
             cursor = len(task['events'])
@@ -151,6 +169,17 @@ def stream_openai_chunks(task, model: str, requested_id: str = '',
         for ev in new_events:
             etype = ev.get('type', '')
             if etype == 'delta':
+                # ★ Narrator-leak root fix (epic pt_cb8f98b0cb9b47fb, step 3):
+                #   a content delta is UNCLASSIFIABLE mid-stream (narration vs
+                #   answer is only known at round close), and a wire client
+                #   cannot retract bytes already sent. So we do NOT forward raw
+                #   content deltas into the answer channel — the narration-free
+                #   deliverable is emitted from the segment model at `done`.
+                #   Thinking deltas DO stream live (reasoning_content), giving a
+                #   real-time experience without polluting the answer. This
+                #   retires the compat surface's dependence on DELTA_RESET.
+                if not ev.get('thinking'):
+                    continue
                 chunk = {
                     'id': completion_id, 'object': 'chat.completion.chunk',
                     'created': int(time.time()), 'model': model,
@@ -159,12 +188,25 @@ def stream_openai_chunks(task, model: str, requested_id: str = '',
                 if not emitted_role:
                     chunk['choices'][0]['delta']['role'] = 'assistant'
                     emitted_role = True
-                if ev.get('content'):
-                    chunk['choices'][0]['delta']['content'] = ev['content']
-                if ev.get('thinking'):
-                    chunk['choices'][0]['delta']['reasoning_content'] = ev['thinking']
+                chunk['choices'][0]['delta']['reasoning_content'] = ev['thinking']
                 yield f'data: {json.dumps(chunk, ensure_ascii=False)}\n\n'
             elif etype == 'done':
+                # ★ Emit the narration-free deliverable as content NOW, from the
+                #   segment model (falls back to task['content']). One clean
+                #   answer chunk — no inter-round scaffolding prose ever leaked.
+                from lib.tasks_pkg.segments import deliverable_text
+                answer = deliverable_text(task)
+                if answer:
+                    ans_chunk = {
+                        'id': completion_id, 'object': 'chat.completion.chunk',
+                        'created': int(time.time()), 'model': model,
+                        'choices': [{'index': 0, 'delta': {}, 'finish_reason': None}],
+                    }
+                    if not emitted_role:
+                        ans_chunk['choices'][0]['delta']['role'] = 'assistant'
+                        emitted_role = True
+                    ans_chunk['choices'][0]['delta']['content'] = answer
+                    yield f'data: {json.dumps(ans_chunk, ensure_ascii=False)}\n\n'
                 final = {
                     'id': completion_id, 'object': 'chat.completion.chunk',
                     'created': int(time.time()), 'model': model,
@@ -187,14 +229,33 @@ def stream_openai_chunks(task, model: str, requested_id: str = '',
                 yield f'data: {json.dumps(chunk, ensure_ascii=False)}\n\n'
 
         if task.get('status') in ('done', 'error', 'aborted') and not new_events:
+            # Terminal but the `done` event wasn't in the stream (e.g. a late
+            # connect after completion) — still emit the deliverable so the
+            # client gets the answer, then close.
+            from lib.tasks_pkg.segments import deliverable_text
+            answer = deliverable_text(task)
+            if answer:
+                ans_chunk = {
+                    'id': completion_id, 'object': 'chat.completion.chunk',
+                    'created': int(time.time()), 'model': model,
+                    'choices': [{'index': 0, 'delta': {
+                        **({'role': 'assistant'} if not emitted_role else {}),
+                        'content': answer}, 'finish_reason': None}],
+                }
+                emitted_role = True
+                yield f'data: {json.dumps(ans_chunk, ensure_ascii=False)}\n\n'
             yield 'data: [DONE]\n\n'
             return
 
-        now = time.time()
-        if now - last_heartbeat > 15:
+        woke = await wait_for_event(task_id, timeout=15.0)
+        if not woke:
             yield ': heartbeat\n\n'
-            last_heartbeat = now
-        time.sleep(0.05)
+    except (GeneratorExit, asyncio.CancelledError):
+        logger.info('[compat:openai] stream client disconnected task=%s',
+                    task_id[:8])
+        raise
+    finally:
+        unregister_waiter(task_id)
 
 
 # ── /v1/models ─────────────────────────────────────────────────────

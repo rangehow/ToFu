@@ -92,8 +92,23 @@ def simple_call(
     elapsed = time.time() - t0
 
     _content_len = len(tool_content) if isinstance(tool_content, str) else len(str(tool_content))
-    logger.info('[Task %s] [%s] %s completed in %.1fs (result_len=%d)',
-                tid, tag, fn_name, elapsed, _content_len)
+    # Several executors (MCP bridge, desktop agent, swarm tools) signal failure
+    # by RETURNING an error string rather than raising — so the bare "completed"
+    # line below would record a failed call as a success, and the §4.4
+    # "[Tool:…] failed" contract that the optimizer's analyzer greps for would
+    # never fire. Detect the well-known error sentinels and emit a WARNING that
+    # names the tool, so a recurring MCP/desktop failure is visible in app.log
+    # (and now mineable) instead of hiding behind a green "completed".
+    _is_err_result = isinstance(tool_content, str) and tool_content.lstrip()[:40].startswith((
+        '❌', 'Error', 'MCP Error', 'MCP tool error', 'MCP server not connected',
+        'Desktop Agent Error', 'Failed'))
+    if _is_err_result:
+        logger.warning('[Task %s] [%s] %s returned an error result in %.1fs '
+                       '(result_len=%d): %.200s',
+                       tid, tag, fn_name, elapsed, _content_len, tool_content)
+    else:
+        logger.info('[Task %s] [%s] %s completed in %.1fs (result_len=%d)',
+                    tid, tag, fn_name, elapsed, _content_len)
 
     meta = _build_simple_meta(
         fn_name, tool_content, source=source,
@@ -116,6 +131,7 @@ def run_batch_concurrent(
     *,
     max_workers: int,
     tag: str = 'batch',
+    abort: Callable[[], bool] | None = None,
 ) -> list[R | None]:
     """Run *worker* over *items* concurrently, preserving input order.
 
@@ -134,21 +150,39 @@ def run_batch_concurrent(
         ``min(len(items), max_workers)``.
     tag
         Short label used in log prefixes (e.g. ``'Search'``, ``'Fetch'``).
+    abort
+        Optional ``() -> bool`` predicate checked at the START of every worker
+        slot. When it trips, not-yet-started items short-circuit to ``None``
+        instead of running — so a Stop pressed mid-batch stops the remaining
+        queued queries/fetches firing (Python threads already running cannot be
+        killed, but the pool serialises beyond ``max_workers``, so the queued
+        tail is skipped). This is what keeps a Stopped paper report from
+        spraying dozens more searches. A raising predicate is treated as
+        "not aborted" so it can never wedge the batch.
 
     Returns
     -------
     list
         Output aligned with *items* (same length, same order). A worker
-        failure puts ``None`` at the corresponding index.
+        failure (or an abort-skip) puts ``None`` at the corresponding index.
     """
     n = len(items)
     if n == 0:
         return []
 
+    def _guarded(item: T) -> R | None:
+        if abort is not None:
+            try:
+                if abort():
+                    return None
+            except Exception as e:  # a broken predicate must not wedge the batch
+                logger.debug('[%s] abort predicate raised: %s', tag, e)
+        return worker(item)
+
     t0 = time.time()
     ordered: list[R | None] = [None] * n
     with ThreadPoolExecutor(max_workers=min(n, max_workers)) as pool:
-        futures = {pool.submit(worker, item): i for i, item in enumerate(items)}
+        futures = {pool.submit(_guarded, item): i for i, item in enumerate(items)}
         for fut in as_completed(futures):
             idx = futures[fut]
             try:

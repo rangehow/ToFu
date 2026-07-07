@@ -189,9 +189,14 @@ def test_append_event_legacy_dict_fallback():
 def test_abort_running_tasks_for_conv():
     from lib.tasks_pkg.manager import (create_task, abort_running_tasks_for_conv,
                                           tasks)
-    t1 = create_task('cv-abort', [{'role': 'user', 'content': 'a'}], {})
-    t2 = create_task('cv-abort', [{'role': 'user', 'content': 'b'}], {})
-    t3 = create_task('cv-abort', [{'role': 'user', 'content': 'c'}], {})
+    # supersede=False: this test exercises the STANDALONE abort sweep in
+    # isolation, so it needs 3 genuinely-concurrent running tasks as its
+    # precondition. With the default supersede=True, creating t2/t3 would
+    # auto-abort the earlier ones (the new invariant, covered separately by
+    # test_create_task_supersedes_prior_running_task).
+    t1 = create_task('cv-abort', [{'role': 'user', 'content': 'a'}], {}, supersede=False)
+    t2 = create_task('cv-abort', [{'role': 'user', 'content': 'b'}], {}, supersede=False)
+    t3 = create_task('cv-abort', [{'role': 'user', 'content': 'c'}], {}, supersede=False)
     # All running, none aborted
     assert all(not t['aborted'] for t in (t1, t2, t3))
 
@@ -350,7 +355,7 @@ def test_chat_streams_via_http_endpoints():
 
         async with app.test_client() as client:
             # poll endpoint should find the task
-            r = await client.get(f'/api/chat/poll/{task["id"]}')
+            r = await client.get(f'/api/v1/chat/poll/{task["id"]}')
             assert r.status_code == 200, f'Got {r.status_code}'
             data = await r.get_json()
             assert data['status'] == 'running'
@@ -360,7 +365,7 @@ def test_chat_streams_via_http_endpoints():
             append_event(task, {'type': 'delta', 'content': 'hello'})
             task['content'] = 'hello'
 
-            r2 = await client.get(f'/api/chat/poll/{task["id"]}')
+            r2 = await client.get(f'/api/v1/chat/poll/{task["id"]}')
             data2 = await r2.get_json()
             assert data2['content'] == 'hello'
 
@@ -369,7 +374,7 @@ def test_chat_streams_via_http_endpoints():
             task['status'] = 'done'
             task['finishReason'] = 'stop'
 
-            r3 = await client.get(f'/api/chat/poll/{task["id"]}')
+            r3 = await client.get(f'/api/v1/chat/poll/{task["id"]}')
             data3 = await r3.get_json()
             assert data3['status'] == 'done'
 
@@ -383,7 +388,7 @@ def test_chat_streams_via_http_endpoints():
         else:
             os.environ['TOFU_AUTH_MODE'] = 'private'
         _auth_mode.reset_for_tests()
-    _ok('HTTP /api/chat/poll/<id> end-to-end works against runtime-backed store')
+    _ok('HTTP /api/v1/chat/poll/<id> end-to-end works against runtime-backed store')
 
 
 def test_aborted_task_does_not_resurrect_truncated_turn():
@@ -575,6 +580,8 @@ def main():
     print()
     print(_color('═══ chat manager.py Migration Tests ═══', '36'))
     print()
+    from tests._standalone_guard import guard_standalone_db
+    guard_standalone_db('test_chat_manager_migration.__main__')
     tests = [
         test_runtime_and_aliases,
         test_create_task_legacy_fields,

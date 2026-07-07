@@ -10,6 +10,73 @@ function apiUrl(path) {
   return BASE_PATH + path;
 }
 
+/* ── Responsive breakpoints — SINGLE source of truth ───────────────────
+ * The mobile breakpoint (768px) was hardcoded in ~7 JS call sites (bare
+ * `innerWidth <= 768`, a local `MOBILE_BP`, two `matchMedia('(max-width:768px)')`
+ * strings) that had to stay in lock-step with the CSS `@media(max-width:768px)`
+ * master block. Any drift between them silently half-breaks the mobile layout
+ * (e.g. the sidebar drawer opens with no backdrop). Consolidate onto ONE
+ * constant + two tiny helpers so a future change is made in exactly one place.
+ *
+ * KEEP IN SYNC with the CSS master mobile block header in static/styles.css
+ * (`@media(max-width:768px){ … OVERFLOW CONTAINMENT … }`) and the tablet-drawer
+ * predicate (`@media(max-width:768px),(max-width:1024px) and (pointer:coarse)`).
+ * If you change a number here, change it there too (guarded by
+ * tests/test_breakpoint_coordination.py).
+ *
+ * `mobile` (768px, width-only) governs the phone compact layout + bottom sheet.
+ * `tablet` (1024px, PAIRED WITH pointer:coarse) governs the portrait-tablet /
+ * foldable slide-over drawer — the same viewport at which paper mode already
+ * single-panes, so chat and paper stay consistent across our own surfaces. A
+ * landscape tablet or a desktop at >1024px (or any fine-pointer device) keeps
+ * the pinned two-pane layout because the pointer:coarse half is not satisfied. */
+const TOFU_BP = Object.freeze({ mobile: 768, tablet: 1024 });
+/** True when the viewport is at or below the mobile breakpoint (width test). */
+function isMobileViewport() {
+  return window.innerWidth <= TOFU_BP.mobile;
+}
+/** The mobile media-query string, e.g. '(max-width:768px)'. */
+function mobileMediaQuery() {
+  return '(max-width:' + TOFU_BP.mobile + 'px)';
+}
+/** The tablet-drawer media-query string — a coarse pointer at/below the tablet
+ *  width. Matches the CSS paper-mode second predicate byte-for-byte. */
+function tabletDrawerMediaQuery() {
+  return '(max-width:' + TOFU_BP.tablet + 'px) and (pointer:coarse)';
+}
+/** True on a portrait tablet / foldable: touch-primary AND ≤ tablet width, but
+ *  WIDER than a phone (a phone is already covered by isMobileViewport). Uses
+ *  matchMedia so the pointer:coarse half is honored (a fine-pointer desktop
+ *  narrowed to 900px stays on the desktop split). */
+function isTabletDrawerViewport() {
+  if (typeof window.matchMedia !== 'function') return false;
+  return window.matchMedia(tabletDrawerMediaQuery()).matches
+    && !isMobileViewport();
+}
+/** The union predicate the slide-over DRAWER behaviors gate on: a phone OR a
+ *  portrait tablet. Any code that shows the backdrop / auto-collapses /
+ *  swipe-toggles the sidebar must use THIS, not isMobileViewport alone, or the
+ *  drawer opens on a tablet with no way to dismiss it. */
+function isDrawerViewport() {
+  return isMobileViewport() || isTabletDrawerViewport();
+}
+/** True when the user has asked the OS to minimize motion (accessibility /
+ *  vestibular comfort). Animation code should check this and use instant
+ *  scrolls / skip decorative transitions when it returns true. */
+function prefersReducedMotion() {
+  return typeof window.matchMedia === 'function'
+    && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+if (typeof window !== 'undefined') {
+  window.TOFU_BP = TOFU_BP;
+  window.isMobileViewport = isMobileViewport;
+  window.mobileMediaQuery = mobileMediaQuery;
+  window.tabletDrawerMediaQuery = tabletDrawerMediaQuery;
+  window.isTabletDrawerViewport = isTabletDrawerViewport;
+  window.isDrawerViewport = isDrawerViewport;
+  window.prefersReducedMotion = prefersReducedMotion;
+}
+
 /* ── Lazy KaTeX loader (277KB single-line script freezes DevTools) ── */
 let _katexLoading = null;
 function _ensureKatex() {
@@ -85,9 +152,12 @@ let activeConvId = sessionStorage.getItem('tofu_activeConvId') || null,
   activeStreams = new Map(),
   streamBufs = new Map(),
   pendingImages = [],
-  pdfProcessing = false;
-/** ★ Message queue: when user sends while streaming, messages are queued here
- *  and auto-dispatched when the current stream finishes.
+  pdfProcessing = 0;  // counter: # of in-flight PDF text-parses (see upload.js)
+/** Message-queue MIRROR of server state (read-only on the client).
+ *  The backend is the single source of truth: sending always POSTs to
+ *  /api/chat/send, and the server decides queue-vs-dispatch. This Map is
+ *  populated ONLY by _refreshServerQueue() (main_send_pipeline.js) to drive
+ *  the queued-message UI — the client never optimistically enqueues here.
  *  Key = convId, Value = Array of { text, images, pdfTexts, replyQuotes, convRefs, timestamp } */
 let pendingMessageQueue = new Map();
 let _editingMsgIdx = null,
@@ -136,14 +206,14 @@ let thinkingEnabled = true,
   schedulerEnabled = false,
   swarmEnabled = true,
   endpointEnabled = false,
-  autopilotEnabled = false,
+  autopilotEnabled = true,
+  activeFlow = "",   // "" | "builtin:endpoint" | "builtin:autopilot" | <orchId>
   imageGenEnabled = false,
   imageGenMode = false,
   humanGuidanceEnabled = false,
   searchMode = "multi",
   debugVisible = false,
   sidebarSearchQuery = "";
-let _browserStatusInterval = null;
 let serverModel = "aws.claude-opus-4.8";
 let config = JSON.parse(
   localStorage.getItem("claude_client_config") ||
@@ -162,6 +232,14 @@ let config = JSON.parse(
 
 function generateId() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
+
+/* Shared HH:MM clock formatter for message-bubble timestamps. Accepts an
+ * epoch-ms timestamp (or falsy → now) and returns a locale HH:MM string.
+ * Extracted from 5 copy-pasted `new Date(...).toLocaleTimeString([], {...})`
+ * sites (streaming bubbles / translating bubble / SSE reconnect). */
+function formatClockTime(ts) {
+  return new Date(ts || Date.now()).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
 /* Client-side stable message id (Step 1 of unified chatInner rendering).

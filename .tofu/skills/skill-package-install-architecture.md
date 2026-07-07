@@ -18,11 +18,12 @@ There are **two UI entry points**, both backed by the same memory storage:
    tab): search bar, scope toggle (Catalog / Installed), category pills,
    curated catalog grid, drag-drop zone, and a per-package file browser.
 
-Both write to `<project>/.chatui/skills/`. The model never sees the
+Both write to `<project>/.tofu/skills/` (project scope; global memories go to
+the server store `<data>/memories/global/`). The model never sees the
 distinction — `search_memories` returns flat `.md` and packaged
 `<id>/SKILL.md` identically.
 
-## On-disk shapes (under `<.chatui/skills>/`)
+## On-disk shapes (under `<.tofu/skills>/`)
 - **Flat** — `<id>.md` (created by `create_memory`).
 - **Package** — `<id>/SKILL.md` plus `references/`, `scripts/`,
   `knowledge/`, `assets/`. Sub-files NOT indexed by BM25; the model
@@ -115,7 +116,10 @@ modal stays for what it does well: quick CRUD on flat notes.
 - **No router/exploder.** mlp-skills installs as ONE package
   containing many `skills/<sub>/SKILL.md` files.
 - **No `install.sh` execution** — surfaced as `install_hints` only.
-- **No rename** of `.chatui/skills/` directory.
+- ~~**No rename** of `.chatui/skills/` directory.~~ **SUPERSEDED (2026-06):** the
+  project memory dir DID move to the `.tofu*` artifact prefix — now
+  `<project>/.tofu/skills/` (`lib/memory/storage.py`); global memories moved out
+  of the project to `<data>/memories/global/`. Only the PG database name stayed `chatui`.
 - **No bundling of internal-only skills** in the default catalog —
   that would leak through to the opensource export.
 

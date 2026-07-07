@@ -7,13 +7,36 @@ cryptography>=42.0
 flask>=3.0
 flask-compress>=1.14
 requests>=2.31
+# urllib3 — transitive via requests; pinned explicitly to a floor that clears
+# the redirect-leak CVE trio (CVE-2023-43804 / CVE-2023-45803 Cookie+body leak
+# on cross-origin redirect, CVE-2024-37891 proxy-auth leak), fixed in 1.26.18/.19.
+urllib3>=1.26.19
+# Jinja2 — transitive via flask/quart; pinned to a floor past the sandbox/attr
+# escaping bypasses (CVE-2024-22195/34064/56201/56326, CVE-2025-27516), fixed
+# across 3.1.3–3.1.6. Flask 3.x already supports it.
+Jinja2>=3.1.6
 psutil>=5.9
 # sqlite3 is built into Python — no external package needed
 # tofu-search — standalone multi-engine web search + content fetch pipeline,
 # extracted from this repo's former lib/search + lib/fetch. chatui wires its
 # own LLM routing / browser-extension / auth-source behavior into tofu-search's
 # provider seams via lib/search_bridge.py at startup.
-tofu-search>=0.2.0
+# >=0.3.1: the browser-search fallback now relies on the BrowserProvider.fetch_html
+# seam (the SERP parser lives IN the library); the bridge no longer ships its own
+# parser, so an older tofu-search would leave browser-search dead.
+# >=0.3.2: adds the pre-fetch relevance gate (skips fetching zero-query-overlap
+# SERP junk before it costs a fetch / floods the browser bridge); default-on,
+# so chatui search + Reading-Mode reports stop pulling off-topic pages.
+# >=0.4.0: carries the `tofu_search.verify` subpackage (zero-LLM citation
+# verifier). Below this floor, paper-mode's citation-integrity card silently
+# never appears (build_citation_audit degrades to None on the missing import).
+# >=0.4.1: adaptive per-engine dual-path proxy (proxied↔direct, sticky+TTL'd)
+# — the bridge passes proxy_dual_attempt; below this floor that kwarg is
+# rejected by an older configure(), so keep the floor at the version that
+# defines it.
+# >=0.4.2: docs/packaging hygiene (lxml transitive-dep note); no API change —
+# floor bumped to always resolve the latest published release.
+tofu-search>=0.4.2
 trafilatura>=1.6
 # playwright is optional — powers the JS-rendered fallback in tofu_search.fetch.
 # On Linux, Chromium needs X11/GTK shared libs (libatk, libgbm, libXcomposite, …).
@@ -44,6 +67,22 @@ openpyxl>=3.1
 xlrd>=2.0
 olefile>=0.46
 mcp>=1.0
+# orjson — fast C JSON encoder. REQUIRED (not optional): routes/chat.py's SSE
+# state snapshot serializes the ENTIRE conversation (content+thinking+toolRounds,
+# 10+ MB for long convs). Plain json.dumps holds the GIL for the whole call, so
+# even via asyncio.to_thread it stalls the event loop ~40 ms and overflows the
+# accept queue → the page goes dark (the 15000 incident, 2026-06). orjson encodes
+# the same payload in ~5 ms, dropping the loop stall below the danger threshold.
+# A stdlib iterencode fallback covers the rare inputs orjson rejects (non-str keys).
+orjson>=3.9
+# tiktoken — exact BPE tokenizer (cl100k/o200k) used by lib/token_counter as
+# the local "exact" tier for OpenAI/Claude-family models. Without it the
+# resolver chain falls through to the CJK/entropy heuristic, which under-counts
+# high-entropy content (base64/minified data) and can let an oversized prompt
+# slip past the proactive-compaction trigger. Optional at runtime (the
+# heuristic is the always-present fallback), but shipping it makes the
+# compaction token-gate substantially tighter.
+tiktoken>=0.7
 # PDF parsing stack — pymupdf (fitz) is used across lib/pdf_parser, routes/paper,
 # and tofu_search.fetch for fast local PDF text/image extraction. pymupdf4llm is an
 # optional LLM-oriented Markdown extractor built on top of pymupdf.
@@ -53,6 +92,11 @@ pymupdf4llm>=0.0.17
 # (routes/paper.py:export_report). Frontend still uses marked.js for live
 # rendering; this dep is only used for downloadable .html exports.
 markdown>=3.5
+# PyYAML — serves the YAML variant of the OpenAPI spec
+# (routes/api_docs.py::openapi_yaml). The route degrades to JSON on
+# ImportError, so this is a soft feature dep; declared explicitly because it
+# was previously only present transitively and went missing in clean envs.
+PyYAML>=6.0
 # uv powers several MCP servers (via `uvx`) — see lib/mcp/client.py. Installing
 # it here guarantees uvx is on PATH inside the conda env without requiring a
 # separate curl|sh bootstrap.

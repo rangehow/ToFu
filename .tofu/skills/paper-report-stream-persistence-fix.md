@@ -4,7 +4,7 @@ description: Paper report is server-owned background task; frontend polls by tas
 enabled: true
 tags: [paper-mode, report, streaming, state-persistence, bug-fix, sse]
 created: 2026-04-18T06:48:42Z
-updated: 2026-05-22T03:05:46Z
+updated: 2026-06-30T00:00:00Z
 ---
 
 # Paper Report — Server-Owned Background Task (2026-04-18 rewrite)
@@ -63,13 +63,49 @@ persists the full report; frontend only shows progress.
 - `_paintReportFromState()` calls **`renderToolRoundsHTML(s.toolRounds,
   running)`** from `ui.js` — identical look to chat tool rendering.
 - `_loadOrGenerateReport()` priority: (1) existing local poll state →
-  paint+resume; (2) `/api/paper/report/lookup` by paper_hash → attach
-  and poll; (3) `/api/paper/report/cache` DB hit → render instantly; (4)
-  start new task via `/start`.
+  paint+resume; (1.5) **pending regenerate intent → force /start (takes
+  priority over lookup, see below)**; (2) `/api/paper/report/lookup` by
+  paper_hash → attach and poll; (3) `/api/paper/report/cache` DB hit → render
+  instantly; (4) start new task via `/start`.
 - `exitPaperMode` / paper switch only clears `pollTimer`; the server task
   keeps running and is re-attached on re-entry.
-- `_regeneratePaperReport` aborts current task via `/abort` then calls
-  `_generatePaperReport(true)` (force=true bypasses DB cache).
+- `_regeneratePaperReport` is `async` and `await`s `_generatePaperReport(true)`
+  (force=true bypasses DB cache). It does NOT send a standalone `/abort` —
+  the backend's `force=true` /start aborts the old task AND registers the new
+  task_id over the dedup index in ONE transaction. **Before** the await it
+  persists a regenerate INTENT to localStorage (`paper_report_regen_intent`).
+
+## Regenerate-intent persistence (2026-06-30 fix)
+**Bug:** Regenerate-then-refresh reverted to the OLD cached report while the new
+search ran orphaned. `_regeneratePaperReport` was synchronous and split
+stop+restart into two fire-and-forget requests (standalone `/abort` + un-awaited
+force `/start`); a refresh between them left the old task half-aborted (abort is
+cooperative) and the force /start undelivered → re-entry's lookup missed → fell
+through to the stale DB cache.
+**Fix (A+B):**
+- **A (atomic):** drop the standalone `/abort`; `await` the force `/start` which
+  does abort+restart atomically server-side.
+- **B (persisted intent, PRIORITY over lookup):** `_setReportRegenIntent(paperHash,
+  lang)` writes a localStorage marker SYNCHRONOUSLY before the await.
+  `_loadOrGenerateReport` checks it at **step 1.5 — BEFORE the step-2
+  lookup-reconnect** — so a pending intent ALWAYS forces a fresh regenerate
+  (re-issue force /start). Intent clears on task attach (re-entrancy guard vs
+  refresh→endless regenerate) and defensively on any terminal poll status.
+  `startPaperId` cross-paper guard preserved.
+**Why before lookup, not after (the subtle half):** the orphan has TWO landing
+spots by refresh timing — (a) already terminal → lookup MISS → stale **cache**
+(step 3); (b) **still RUNNING** (cooperative abort searches 100s+ after the abort
+POST) and the dedup index `(paper_hash,lang)` still points to it → lookup **HITS
+the orphan** (step 2) and re-attaches to the very task being replaced. Covering
+only (a) leaves (b) silently swallowing the regenerate. Precedence must be
+**intent → lookup → cache**.
+**Lesson:** A regenerate that stops+restarts a server task must be ONE atomic
+`force=true` /start (never separate /abort + /start); the intent must be
+persisted before the round-trip AND checked with priority over any
+reconnect/lookup path (a cooperative-abort orphan still owns the dedup key).
+**Test:** `tests/test_frontend_paper_regen_refresh.py` (jsdom, 13 checks) covering
+both halves + two source-level negative controls (comment-out the intent block;
+move the intent check after lookup → orphan-reattach checks fail).
 
 ## Key invariants
 - Server events are append-only with monotonic `seq`; frontend never

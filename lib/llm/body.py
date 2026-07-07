@@ -23,6 +23,7 @@ from lib.llm_sanitize import (
 from lib.log import get_logger
 from lib.model_info import (
     _clamp_max_tokens,
+    gemini_reasoning_effort,
     is_claude,
     is_claude_opus_47,
     is_doubao,
@@ -43,6 +44,40 @@ _CLAUDE_SINGLE_IMAGE_MAX_PX = 7999
 _CLAUDE_MANY_IMAGE_MAX_PX = 1999
 _CLAUDE_MANY_IMAGE_THRESHOLD = 5
 
+# Plain-prefix magics for the formats whose signature is a fixed head.
+# WebP is deliberately NOT here: its magic is a RIFF container whose 4-byte
+# head 'RIFF' is shared with WAV / AVI / ANI, so a bare startswith(b'RIFF')
+# would mislabel any RIFF payload as image/webp. WebP is sniffed separately in
+# sniff_image_mime() by the full RIFF....WEBP signature. Anthropic accepts
+# exactly PNG / JPEG / GIF / WebP, which is the full set covered here.
+_IMAGE_MAGICS = {
+    b'\x89PNG':    'image/png',
+    b'\xff\xd8':   'image/jpeg',
+    b'GIF8':       'image/gif',
+}
+
+
+def sniff_image_mime(head: bytes):
+    """Return the true image MIME from magic bytes, or None if unrecognized.
+
+    The single source of truth for "what image format are these bytes really?"
+    — used both by the OpenAI-side validator (``_validate_image_blocks``) and
+    by the Anthropic boundary transform (``anthropic_outbound._media_type_and_data``)
+    so the two paths cannot drift.
+
+    WebP requires the full RIFF-container check (bytes 0-3 == 'RIFF' AND bytes
+    8-11 == 'WEBP'); a bare 'RIFF' prefix also matches WAV/AVI and must NOT be
+    treated as an image.
+    """
+    if not isinstance(head, (bytes, bytearray)):
+        return None
+    for magic, mtype in _IMAGE_MAGICS.items():
+        if head.startswith(magic):
+            return mtype
+    if len(head) >= 12 and head[:4] == b'RIFF' and head[8:12] == b'WEBP':
+        return 'image/webp'
+    return None
+
 
 def _validate_image_blocks(messages: list) -> list:
     """Validate image_url blocks, replacing invalid ones with text placeholders.
@@ -55,18 +90,24 @@ def _validate_image_blocks(messages: list) -> list:
 
     Mutates messages in-place.
     """
-    _APP_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    # Resolve the uploads dir via the single runtime-base authority so local
+    # /api/images/ URLs resolve on a relocated install (data dir off the code
+    # tree). Falls back to the legacy in-tree path if runtime_paths is
+    # somehow unavailable (byte-identical in the default layout).
+    try:
+        from lib.runtime_paths import uploads_root
+        _IMAGES_DIR = os.path.join(uploads_root(), 'images')
+    except Exception as _rp_e:
+        logger.debug('[ImageValidation] uploads_root() unavailable, using in-tree: %s', _rp_e)
+        _IMAGES_DIR = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+            'uploads', 'images')
     _MIN_IMAGE_BYTES = 32
-    _IMAGE_MAGICS = {
-        b'\x89PNG':    'image/png',
-        b'\xff\xd8':   'image/jpeg',
-        b'GIF8':       'image/gif',
-        b'RIFF':       'image/webp',
-    }
     _EXT_MIME = {
         '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
         '.gif': 'image/gif', '.webp': 'image/webp', '.bmp': 'image/bmp',
     }
+    _sniff_mime = sniff_image_mime
     _dropped = 0
     _resolved = 0
 
@@ -88,15 +129,11 @@ def _validate_image_blocks(messages: list) -> list:
                 filename = url[_local_idx + len(_local_prefix):]
                 filename = filename.split('?')[0].split('#')[0]
                 filename = os.path.basename(filename)
-                filepath = os.path.join(_APP_ROOT, 'uploads', 'images', filename)
+                filepath = os.path.join(_IMAGES_DIR, filename)
                 try:
                     with open(filepath, 'rb') as f:
                         raw = f.read()
-                    mime = None
-                    for magic, mtype in _IMAGE_MAGICS.items():
-                        if raw.startswith(magic):
-                            mime = mtype
-                            break
+                    mime = _sniff_mime(raw)
                     if not mime:
                         ext = os.path.splitext(filename)[1].lower()
                         mime = _EXT_MIME.get(ext, 'image/png')
@@ -139,9 +176,28 @@ def _validate_image_blocks(messages: list) -> list:
                     sample = _b64.b64decode(b64_data[:1364])
                     if len(sample) < _MIN_IMAGE_BYTES:
                         raise ValueError(f'Decoded image too small ({len(sample)} bytes)')
-                    is_known = any(sample.startswith(magic) for magic in _IMAGE_MAGICS)
-                    if not is_known:
+                    _true_mime = _sniff_mime(sample)
+                    if not _true_mime:
                         raise ValueError(f'Unrecognized image format (magic: {sample[:4].hex()})')
+                    # Reconcile the declared media type with the real bytes.
+                    # A mislabeled data URI (e.g. PNG bytes tagged image/jpeg)
+                    # is accepted by every OpenAI-compat gateway but HARD-
+                    # REJECTED by the Anthropic Messages API with HTTP 400
+                    # ("messages.N.content.0.image.source.base64: The image was
+                    # specified using the image/jpeg media type, but the image
+                    # does not appear to be in that format."), killing the turn.
+                    # Rewrite the header to the sniffed type so the outbound
+                    # data URI is self-consistent for every provider.
+                    _header = parts[0]  # e.g. 'data:image/jpeg;base64'
+                    _declared_mime = _header[len('data:'):].split(';', 1)[0].strip().lower()
+                    if _declared_mime != _true_mime:
+                        _suffix = _header[len('data:') + len(_declared_mime):] if _declared_mime else ';base64'
+                        block['image_url']['url'] = f'data:{_true_mime}{_suffix},{b64_data}'
+                        logger.warning(
+                            '[ImageValidation] Corrected mislabeled image media '
+                            'type %r → %r (bytes sniffed as %s) to satisfy strict '
+                            'validators (Anthropic Messages API)',
+                            _declared_mime or '(none)', _true_mime, _true_mime)
                     new_blocks.append(block)
                 except Exception as e:
                     _dropped += 1
@@ -204,6 +260,29 @@ def _downscale_oversized_images(messages: list, model: str) -> None:
 
     max_px = (_CLAUDE_MANY_IMAGE_MAX_PX if total_images >= _CLAUDE_MANY_IMAGE_THRESHOLD
               else _CLAUDE_SINGLE_IMAGE_MAX_PX)
+
+    # ── Cache-awareness note (2026-07) ──
+    # Crossing _CLAUDE_MANY_IMAGE_THRESHOLD drops max_px 7999 → 1999, which
+    # RETROACTIVELY re-encodes images already sent (and cached) at 7999px on a
+    # prior round — a guaranteed prompt-cache miss on the round the Nth image
+    # arrives. This is NOT avoidable by keeping the larger size: Anthropic
+    # HARD-REJECTS a >2000px image in a many-image (≥N) request with HTTP 400
+    # ("image dimensions exceed max allowed size for many-images requests:
+    # 2000 pixels"), so the shrink is a correctness requirement, not a tunable.
+    # We therefore keep the shrink but log it at WARNING so the resulting cache
+    # miss is ATTRIBUTABLE (greppable) instead of being laundered into the
+    # "stochastic server-side miss" bucket — the wire fingerprint
+    # (lib/tasks_pkg/wire_fingerprint.py) already names the changed image block
+    # as the culprit; this log ties that culprit to its root cause. The resize
+    # is idempotent: an image already at/under max_px is skipped, so once the
+    # threshold is crossed the per-round churn stops.
+    if total_images >= _CLAUDE_MANY_IMAGE_THRESHOLD:
+        logger.warning(
+            '[ImageDownscale] many-image request (%d ≥ %d images) → max_px '
+            'capped at %d; any image previously sent larger will be re-encoded '
+            'this round (a one-time, API-mandated prompt-cache miss — '
+            'attributable, not stochastic-server).',
+            total_images, _CLAUDE_MANY_IMAGE_THRESHOLD, _CLAUDE_MANY_IMAGE_MAX_PX)
 
     _resized = 0
     for msg in messages:
@@ -602,7 +681,16 @@ def build_body(model, messages, *, max_tokens=128000, temperature=1.0,
         kw['enable_thinking'] = bool(thinking_enabled)
         body['chat_template_kwargs'] = kw
         body['temperature'] = temperature if temperature is not None else 0.7
-    elif _tf == 'enable_thinking' or (not _tf and (is_longcat(model) or is_qwen(model) or is_gemini(model) or is_ernie(model))):
+    elif _tf == 'reasoning_effort' or (not _tf and is_gemini(model)):
+        # Gemini 3.x is a reasoning model. The only knob the OpenAI-compat
+        # gateway forwards to Vertex's thinkingLevel is the OpenAI-style
+        # ``reasoning_effort`` string (verified via usage.reasoning_tokens:
+        # minimal≈0 → high≈1000+). The legacy top-level ``enable_thinking``
+        # boolean and the nested ``thinking.thinking_level`` field are both
+        # silently ignored on this path.  Gemini 3.x also recommends NOT
+        # sending temperature/top_p/top_k, so we omit temperature here.
+        body['reasoning_effort'] = gemini_reasoning_effort(_effort, thinking_enabled)
+    elif _tf == 'enable_thinking' or (not _tf and (is_longcat(model) or is_qwen(model) or is_ernie(model))):
         body['enable_thinking'] = thinking_enabled
         if is_longcat(model):
             body['temperature'] = 1.0 if thinking_enabled else (temperature or 0.7)

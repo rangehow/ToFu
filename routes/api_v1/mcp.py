@@ -32,6 +32,30 @@ logger = get_logger(__name__)
 api_v1_mcp_bp = Blueprint('api_v1_mcp', __name__)
 
 
+def _invalidate_tool_latches(reason: str) -> None:
+    """Drop every conversation's tool-schema latch after an MCP mutation.
+
+    The per-conversation latch (lib/tools/registry.py) freezes the tool array
+    a conversation first used to keep the prompt-cache prefix byte-identical,
+    deferring composer-toggle flaps to the next NEW conversation. But an MCP
+    install / uninstall / connect / disconnect changes the GLOBAL tool surface
+    on purpose — the user expects the new (or removed) tools to take effect on
+    the next round of EVERY conversation, not just a brand-new one. Clearing
+    all latches makes that happen; conversations whose effective tool set is
+    unchanged re-latch byte-identically next round (no cache rebuild), so the
+    cost is paid only where the tool set genuinely changed.
+    """
+    try:
+        from lib.tools import clear_all_tool_list_latches
+        n = clear_all_tool_list_latches()
+        if n:
+            logger.info('[MCP.v1] %s → cleared %d tool-schema latch(es)',
+                        reason, n)
+    except Exception as e:
+        logger.warning('[MCP.v1] tool-latch invalidation failed (%s): %s',
+                        reason, e)
+
+
 # ── Config CRUD ──────────────────────────────────────────────────────
 
 @api_v1_mcp_bp.route('/api/v1/mcp/servers', methods=['GET'])
@@ -114,6 +138,7 @@ def upsert_server_v1():
 
     cfg_upsert(name, data)
     logger.info('[MCP.v1] config upserted: %s (transport=%s)', name, transport)
+    _invalidate_tool_latches(f'server upsert {name}')
     return jsonify({'ok': True, 'message': f'Server "{name}" configured'})
 
 
@@ -135,6 +160,7 @@ def delete_server_v1(name):
 
     cfg_remove(name)
     logger.info('[MCP.v1] config removed: %s', name)
+    _invalidate_tool_latches(f'server removal {name}')
     return jsonify({'ok': True, 'message': f'Server "{name}" removed'})
 
 
@@ -169,6 +195,7 @@ def connect_servers_v1():
                 updated['enabled'] = True
                 cfg_upsert(target, updated)
                 logger.info('[MCP.v1] re-enabled %s on connect', target)
+            _invalidate_tool_latches(f'connect {target}')
             return jsonify({
                 'ok': True,
                 'server': target,
@@ -189,6 +216,7 @@ def connect_servers_v1():
     try:
         result = bridge.connect_all()
         total_tools = sum(len(v) for v in result.values())
+        _invalidate_tool_latches('connect_all')
         return jsonify({
             'ok': True,
             'servers': {k: {'tools': v} for k, v in result.items()},
@@ -215,6 +243,7 @@ def disconnect_servers_v1():
         try:
             bridge._disconnect_one(target, forget=True)
             logger.info('[MCP.v1] disconnected %s', target)
+            _invalidate_tool_latches(f'disconnect {target}')
             return jsonify({'ok': True,
                             'message': f'Disconnected from "{target}"'})
         except Exception as e:
@@ -224,6 +253,7 @@ def disconnect_servers_v1():
 
     try:
         bridge.disconnect_all()
+        _invalidate_tool_latches('disconnect_all')
         return api_ok({'message': 'All MCP servers disconnected'})
     except Exception as e:
         logger.error('[MCP.v1] disconnect_all failed: %s', e, exc_info=True)
@@ -413,12 +443,58 @@ def install_from_catalog_v1():
     cfg_upsert(server_id, server_cfg)
     logger.info('[MCP.v1] catalog install: %s', server_id)
 
+    # For a vendored internal launcher that isn't on PATH yet, the first
+    # install does a cold `pip install` that can take MINUTES. We do NOT block
+    # this request on it — a multi-minute synchronous POST would be cut by a
+    # reverse proxy's response timeout (the app supports cloud-IDE proxies)
+    # and would leave a half-installed package. Instead we start a background
+    # install job and return `status:'installing'` immediately; the front end
+    # polls /catalog/install/status, which performs the (fast) connect once
+    # pip finishes. Launchers already on PATH skip straight to connect.
+    command = server_cfg.get('command', '') if server_cfg.get('transport', 'stdio') != 'sse' else ''
+    if command:
+        from lib.mcp.client import is_vendored_launcher, start_install_job
+        if is_vendored_launcher(command):
+            job = start_install_job(command)
+            if job.get('state') == 'installing':
+                return jsonify({
+                    'ok': True,
+                    'status': 'installing',
+                    'id': server_id,
+                    'message': f'{entry["name"]} 正在安装依赖…',
+                }), 202
+            if job.get('state') == 'error':
+                from lib.mcp.client import _launcher_install_hint
+                logger.error('[MCP.v1] catalog install: install of %s failed: %s',
+                             server_id, job.get('detail'))
+                return jsonify({
+                    'ok': False,
+                    'error': _launcher_install_hint(command),
+                    'config_saved': True,
+                    'stderr_tail': job.get('detail') or '',
+                }), 500
+            # state == 'ready' → fall through to the fast connect below.
+
+    return _connect_after_install(server_id, server_cfg, entry['name'])
+
+
+def _connect_after_install(server_id, server_cfg, display_name):
+    """Do the (fast) MCP handshake for an installed server + surface errors.
+
+    Shared by the synchronous install path (launcher already on PATH) and the
+    async status poll (launcher just finished pip-installing).
+    """
+    from lib.mcp import get_bridge
+    from lib.mcp.client import MCPConnectError
+
     bridge = get_bridge()
     try:
         tools = bridge.connect_server(server_id, server_cfg)
+        _invalidate_tool_latches(f'catalog install {server_id}')
         return jsonify({
             'ok': True,
-            'message': f'{entry["name"]} installed and connected',
+            'status': 'ready',
+            'message': f'{display_name} installed and connected',
             'tools_count': len(tools),
             'tool_names': [t.name for t in tools],
         })
@@ -439,6 +515,62 @@ def install_from_catalog_v1():
             'error': f'Config saved but connection failed: {e}',
             'config_saved': True,
         }), 500
+
+
+@api_v1_mcp_bp.route('/api/v1/mcp/catalog/install/status', methods=['GET'])
+@require_auth
+@api_meta(
+    summary='Poll an async catalog install',
+    description=(
+        'Query ``?id=<server>``. Returns ``{status: installing|ready|error}``. '
+        'When the background pip finishes successfully this endpoint performs '
+        'the (fast) MCP handshake and returns the connected tool list, mirroring '
+        'the synchronous install response.'
+    ),
+    tags=['mcp'],
+)
+def install_status_v1():
+    from flask import request
+
+    from lib.mcp.client import (
+        _launcher_install_hint, get_install_job,
+    )
+    from lib.mcp.config import load_mcp_config
+    from lib.mcp.registry import get_catalog_entry
+
+    server_id = (request.args.get('id') or '').strip()
+    if not server_id:
+        return api_bad_request('server id is required', field='id')
+
+    server_cfg = load_mcp_config().get(server_id)
+    if server_cfg is None:
+        return jsonify({'ok': False, 'error': f'Unknown server: {server_id}'}), 404
+
+    command = (server_cfg.get('command', '')
+               if server_cfg.get('transport', 'stdio') != 'sse' else '')
+    job = get_install_job(command) if command else None
+
+    # No job recorded (e.g. server restarted mid-install) — treat as unknown
+    # and let the client re-POST install to restart cleanly.
+    if job is None:
+        return jsonify({'ok': True, 'status': 'unknown', 'id': server_id})
+
+    state = job.get('state')
+    if state == 'installing':
+        return jsonify({'ok': True, 'status': 'installing', 'id': server_id}), 202
+    if state == 'error':
+        return jsonify({
+            'ok': False,
+            'status': 'error',
+            'error': _launcher_install_hint(command),
+            'config_saved': True,
+            'stderr_tail': job.get('detail') or '',
+        }), 500
+
+    # state == 'ready' → perform the fast handshake now.
+    entry = get_catalog_entry(server_id)
+    display_name = entry['name'] if entry else server_id
+    return _connect_after_install(server_id, server_cfg, display_name)
 
 
 @api_v1_mcp_bp.route('/api/v1/mcp/catalog/uninstall', methods=['POST'])
@@ -480,6 +612,7 @@ def uninstall_from_catalog_v1():
         cfg_remove(server_id)
         audit_log('mcp_uninstall', server=server_id, mode='purge')
         logger.info('[MCP.v1] catalog uninstall (purge): %s', server_id)
+        _invalidate_tool_latches(f'catalog uninstall/purge {server_id}')
         return jsonify({'ok': True,
                         'message': f'Uninstalled {server_id}',
                         'purged': True})
@@ -492,6 +625,7 @@ def uninstall_from_catalog_v1():
         audit_log('mcp_uninstall', server=server_id, mode='soft')
         logger.info('[MCP.v1] catalog uninstall (soft, env kept): %s',
                     server_id)
+        _invalidate_tool_latches(f'catalog uninstall/soft {server_id}')
         return jsonify({
             'ok': True,
             'message': f'{server_id} disabled (credentials kept for re-enable)',

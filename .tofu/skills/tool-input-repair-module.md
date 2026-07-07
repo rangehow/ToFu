@@ -1,10 +1,10 @@
 ---
 name: tool-input-repair-module
-description: Centralized tool-arg repair (lib/tool_input_repair.py): 6 patterns incl. leaked_tool_call_syntax, load-bearing ordering, schema-driven, audit telemetry
+description: Centralized tool-arg repair (lib/tool_input_repair.py): 6 value-repair patterns + param-KEY alias layer + structural transforms (MultiEdit→apply_diffs, AskUserQuestion→ask_human), schema-driven, audit telemetry
 enabled: true
 tags: [tool-dispatch, open-models, validation, repair-patterns]
 created: 2026-05-12T05:31:43Z
-updated: 2026-06-01T06:05:23Z
+updated: 2026-06-30T06:09:06Z
 ---
 
 # Tool-Input Repair Module
@@ -23,8 +23,48 @@ inside `parse_tool_calls`, **right after** `_repair_json` succeeds and
 # ── Schema-driven shape repair (Awais open-model-harness patterns) ──
 fn_args, _repair_log = validate_then_repair(fn_name, fn_args, model=...)
 ```
+Secondary harnesses (paper report/Q&A) reach the SAME logic via
+`parse_and_repair_tool_args(name, raw)` — so a fix here lands everywhere.
 
-## Six repair patterns (ORDERING IS LOAD-BEARING)
+## Three repair layers (DON'T CONFUSE THEM)
+
+0. **Structural transform** (added 2026-06-30) — `_STRUCTURAL_TRANSFORMS` +
+   `_apply_structural_transform`: RIGHT (name-resolved) tool, but the model
+   emitted another harness's whole-payload STRUCTURE, not just renamed keys.
+   A flat key-rename can't express it. Two registered:
+   `MultiEdit→apply_diffs` (push top-level `file_path` DOWN into each edit +
+   rename per-edit `old_string/new_string→search/replace`) and
+   `AskUserQuestion→ask_human` (lift `questions[0]` to top level, options→choice).
+   Runs FIRST in `validate_then_repair`, BEFORE the key-alias + type passes
+   (which mop up residual mismatch in the reshaped payload). Shape-GUARDED:
+   fires only when args match the FOREIGN shape AND not the canonical one
+   (native `apply_diffs`/`ask_human` calls are untouched). Logs
+   `(tool_name, 'structural_transform')`. The matching tool-NAME aliases
+   (`multiedit→apply_diffs`, `askuserquestion/ask_user→ask_human`,
+   `webfetch→fetch_url`) live in `_TOOL_NAME_ALIASES`. NOTE our human tool is
+   `ask_human`, NOT `ask_user`.
+1. **Tool-NAME alias** — `resolve_tool_name` + `_TOOL_NAME_ALIASES`:
+   wrong tool NAME from another harness (`read_file→read_files`,
+   `edit→apply_diff`, `bash→run_command`). Lives in `tool_dispatch.parse_tool_calls`.
+   Emits `tool_name_aliased` audit (attempted/resolved/kind/model) so the
+   optimizer can quantify which cross-harness names each model emits.
+2. **Parameter-KEY alias** (added 2026-06-30) — `_apply_param_aliases` +
+   `_PARAM_ALIASES`: RIGHT tool, wrong-harness ARG KEYS. The canonical bug:
+   `apply_diff` called with Claude *Edit* keys `{file_path, old_string,
+   new_string}` instead of `{path, search, replace}` → schema walk drops the
+   unknown keys → `path=''` → executor returns the empty-after-colon
+   `File not found: ` (no path). Runs INSIDE `validate_then_repair`, BEFORE
+   the type-walk (so a renamed key is also type-checked, e.g.
+   `read_files paths→reads` then `bare_string_to_array`).
+   Guards: rename `alias→canonical` only when canonical is a declared
+   property, canonical ABSENT from args, alias NOT itself a declared property.
+   Emits `param_alias` log entry; UI label in `_REPAIR_PATTERN_LABELS`.
+   Tables for apply_diff(s)/write_file/insert_content(s)/read_files/list_dir/
+   grep_search/find_files/run_command/fetch_url.
+   **Tell-tale**: an empty `File not found: ` (or any tool error naming no
+   path) = an arg key that didn't map to the schema.
+
+## Six value-repair patterns (ORDERING IS LOAD-BEARING)
 
 Inside `_repair_one_value`, applied per top-level key after an
 `actual == expected` early-return (valid inputs are never touched):
@@ -32,63 +72,50 @@ Inside `_repair_one_value`, applied per top-level key after an
 0. `leaked_tool_call_syntax` — value is a string containing leaked
    Anthropic native text tool-call markup (`<parameter name="path">VALUE`,
    `</parameter>`, `<invoke ...>`, `<function_calls>`, incl. `antml:`
-   variants). Strip the markup via `_LEAKED_TOOL_XML_RE`, recover VALUE,
-   then RECURSE on the cleaned value so an array slot still gets wrapped.
-   Labelled `leaked_tool_call_syntax` regardless of the inner pattern.
+   variants). Strip via `_LEAKED_TOOL_XML_RE`, recover VALUE, then RECURSE.
 1. `null_omission` — `{"k": null}` for non-required key → delete
 2. `stringified_json` — `'["a"]'`/`'{"x":1}'` → `json.loads`
 3. `stringified_primitive` — `"42"`/`"true"` → int/bool/float
 4. `bare_string_to_array` — `"foo"` where array expected → `["foo"]`
 5. `empty_placeholder_unwrap` — `{"a":"x"}` where array expected → `["x"]`
 
-**Why pattern 2 must run before pattern 4**: otherwise
-`'["a","b"]'` becomes `['["a","b"]']` — recoverable input becomes
-double-wrapped garbage. Tests in `tests/test_tool_input_repair.py`
-specifically guard this ordering.
-
-**Why pattern 0 is safe**: it only fires on the shape-mismatch path
-(after `actual == expected` returned), and only when
-`_LEAKED_TOOL_XML_RE` actually matches — so a well-formed `write_file`
-`content` string (type already matches `string`) is never stripped, and
-a plain `a<b.py` path (no markup) falls through to bare_string_to_array.
-
-## Real bug this fixed (conv mpus9bcfbrkbvq, 2026-06-01)
-
-Claude **Opus 4.8** leaked `{"reads": "\n<parameter name=\"path\">CLAUDE.md"}`
-into all 8 `read_files` calls in one conversation → every one returned
-`File not found: <parameter name="path">CLAUDE.md`. Sibling tools
-(list_dir/grep_search/find_files/run_command) all succeeded because
-their args were flat scalars. This is a MODEL glitch specific to the
-nested-array schema of `read_files`; the harness now self-heals it.
-DB verified via `tofu` PG db on port 15439 (NOT `chatui` — renamed).
+**Why pattern 2 must run before pattern 4**: otherwise `'["a","b"]'`
+becomes `['["a","b"]']` — recoverable input becomes double-wrapped garbage.
 
 ## Schema source
 
 Built once at import time by walking `lib.tools` (every dict with
 `type=='function'` plus every list of such dicts). New tools added at
-runtime won't be seen until restart — same model as
-`PROJECT_TOOL_NAMES`. Tools without an indexed schema pass through
-unchanged (no-op for unknown tools).
+runtime won't be seen until restart. Tools without an indexed schema pass
+through unchanged.
 
 ## Telemetry
 
 Every repair emits `audit_log('tool_input_repaired', tool=..., model=...,
-path=..., pattern=...)` to `logs/audit.log`. A spike for one
-(model, tool) pair after a model swap is the regression signal. Use
-`grep tool_input_repaired logs/audit.log` to inspect.
+path=..., pattern=...)`. `grep tool_input_repaired logs/audit.log`.
 
 ## Critical invariants
 
-- **Valid inputs are never touched** — `_repair_one_value` returns
-  `changed=False` when actual type already matches expected.
-- **Only top-level properties** — nested-object repair is intentionally
-  out of scope (would risk over-repair of legitimate `write_file` content).
-- **Required keys keep their nulls** — pattern 1 only fires when
-  `key not in required`; this leaves the broken arg visible so the
-  model self-corrects next turn.
+- **Valid inputs are never touched.**
+- **Only top-level properties** (nested-object repair out of scope).
+- **Required keys keep their nulls** (pattern 1 skips required).
 
 ## Tests
 
-`tests/test_tool_input_repair.py` — 15 tests, no pytest dependency
-(uses a manual runner). Run: `python tests/test_tool_input_repair.py`.
-Includes 3 leaked-markup regression tests using conv mpus9bcfbrkbvq shapes.
+`tests/test_tool_input_repair.py` — 40 tests (6 param-alias + 5 structural/
+Claude-Code-alias added 2026-06-30), no pytest dependency (manual runner).
+Run: `python3 tests/test_tool_input_repair.py`. The conda env's `pytest` is
+BROKEN (vendored `_pytest` → `TypeError: required field "lineno"`).
+Negative control for the structural layer: replace the
+`_apply_structural_transform` call in `validate_then_repair` with
+`(repaired, False)` → exactly the 3 reshape-dependent tests fail (the
+`native_*_not_reshaped` no-op tests stay green); restore byte-identical.
+
+## Empty-`model` audit fix (2026-06-30)
+
+`task['model']` was only set at task FINALIZATION (orchestrator.py ~546), so
+per-round telemetry during tool dispatch (`tool_hallucinated`,
+`tool_name_aliased`) logged `model=""`. Fixed: set `task['model'] = model`
+right after the LLM call in the round loop (orchestrator.py ~1581), as soon
+as the model is known. Tell-tale of regression: `model:""` in audit events
+that fire mid-task.

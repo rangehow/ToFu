@@ -94,6 +94,9 @@ win._applyProjectData = global._applyProjectData = spy('_applyProjectData');
 win.syncConversationToServer = global.syncConversationToServer = spy('syncConversationToServer');
 win._autoTranslateHumanGuidance = global._autoTranslateHumanGuidance = spy('_autoTranslateHumanGuidance');
 global.autoTranslate = win.autoTranslate = false;
+win.convAutoTranslate = global.convAutoTranslate = (c) =>
+  (c && c.autoTranslate !== undefined) ? !!c.autoTranslate
+    : (typeof autoTranslate !== 'undefined' && autoTranslate !== undefined ? !!autoTranslate : false);
 win.updateContextBar = global.updateContextBar = spy('updateContextBar');
 if (typeof global.requestAnimationFrame !== 'function') {
   global.requestAnimationFrame = win.requestAnimationFrame = (fn) => { try { fn(); } catch (_) {} return 0; };
@@ -180,7 +183,11 @@ function line(obj) { return 'data: ' + JSON.stringify(obj); }
 // ── 4. Non-data / id lines + bad JSON are no-ops (return falsy) ──
 {
   const { ctx } = setup();
-  check('id_line_noop', !T.dispatchSSEEvent('id: 42', ctx) && ctx.lastEventId === '42');
+  // An `id:` line no longer COMMITS the cursor immediately — it only stashes
+  // a pending id (committed once the paired data event applies, see #27). So
+  // lastEventId stays unchanged after a lone id line.
+  check('id_line_noop', !T.dispatchSSEEvent('id: 42', ctx) && ctx.lastEventId == null);
+  check('id_line_stashes_pending', ctx.pendingEventId === '42');
   check('comment_line_noop', !T.dispatchSSEEvent(': keepalive', ctx));
   check('bad_json_noop', !T.dispatchSSEEvent('data: {not json', ctx));
 }
@@ -212,17 +219,24 @@ function line(obj) { return 'data: ' + JSON.stringify(obj); }
     ctx.assistantMsg.content === '');
 }
 
-// ── 7. endpoint_critic_msg finalizes critic + sets approval ──
+// ── 7. endpoint_critic_msg finalizes critic + sets approval + KEEPS thinking ──
 {
-  const { ctx } = setup();
+  const { conv, ctx } = setup();
   T.dispatchSSEEvent(line({ type: 'state', endpointMode: true,
     endpointPhase: 'reviewing', endpointIteration: 1,
     endpointTurns: [{ role: 'assistant', content: 'w', _epIteration: 1, _msgId: 'mid-w2' }],
     content: 'review' }), ctx);
   T.dispatchSSEEvent(line({ type: 'endpoint_critic_msg', content: 'Looks good',
-    next_phase: 'stop' }), ctx);
+    thinking: 'CRITIC-REASONING', next_phase: 'stop' }), ctx);
   check('critic_msg_clears_phase', ctx.epCriticPhase === false);
   check('critic_msg_clears_buf_refs', ctx.epCriticMsg === null && ctx.epCriticBuf === null);
+  /* ★ Thinking-persistence: the critic bubble's thinking must survive
+   *   finalize (the flow path now sends ev.thinking; sse_pipeline must
+   *   apply it). _epCriticMsg is nulled, so read the persisted critic
+   *   message in conv.messages. */
+  const criticMsg = conv.messages.find(m => m._isEndpointReview);
+  check('critic_msg_keeps_thinking', !!criticMsg &&
+    criticMsg.thinking === 'CRITIC-REASONING');
 }
 
 // ── 8. tool_complete stamps toolContent/tokens on the matching round ──
@@ -339,6 +353,25 @@ function line(obj) { return 'data: ' + JSON.stringify(obj); }
   const r = ctx.assistantMsg.toolRounds.find(x => x.toolCallId === 'wa1');
   check('write_approval_pending', r && r.status === 'pending_approval' &&
     r.approvalId === 'ap1' && r.approvalMeta && r.approvalMeta.path === 'x.txt');
+}
+
+// ── 15b. write_approval_request for run_command carries command/description ──
+//   (the destructive-run_command gate path — meta.command drives the
+//    ameta.command!=null render branch in ui/tool_rounds.js). ──
+{
+  const { ctx } = setup();
+  T.dispatchSSEEvent(line({ type: 'tool_start', roundNum: 1, toolCallId: 'wac',
+    toolName: 'run_command' }), ctx);
+  T.dispatchSSEEvent(line({ type: 'write_approval_request', toolCallId: 'wac',
+    approvalId: 'ap2', meta: { toolName: 'run_command', command: 'rm foo.py',
+      description: 'delete foo' } }), ctx);
+  const r = ctx.assistantMsg.toolRounds.find(x => x.toolCallId === 'wac');
+  check('run_command_approval_pending', r && r.status === 'pending_approval' &&
+    r.approvalId === 'ap2');
+  check('run_command_approval_meta', r && r.approvalMeta &&
+    r.approvalMeta.command === 'rm foo.py' &&
+    r.approvalMeta.description === 'delete foo' &&
+    r.approvalMeta.path == null);
 }
 
 // ── 16. round_usage stashes _liveLastRoundUsage; returns falsy ──
@@ -492,7 +525,167 @@ function line(obj) { return 'data: ' + JSON.stringify(obj); }
   check('stranded_agent_phase_advanced', r2 && r2.phase === 'done');
 }
 
-console.log(out.join('\n'));
+// ── 26. OUT-OF-ORDER SSE (#6): swarm_agent_complete arrives BEFORE the
+//        agent's start/phase event ever created its card. The terminal
+//        result must NOT be dropped — the handler must CREATE the card so the
+//        agent shows its real outcome (regression: pre-fix the complete event
+//        no-op'd when no matching agent existed, so the card vanished until
+//        the swarm_phase:complete sweep). ──
+{
+  const { ctx } = setup();
+  // Real spawn panel exists + is active (spawning landed), but agent 'oo2'
+  // has NOT been announced via start/phase yet.
+  T.dispatchSSEEvent(line({ type: 'tool_start', roundNum: 1, toolCallId: 'ooR',
+    toolName: 'spawn_agents', _swarm: true }), ctx);
+  T.dispatchSSEEvent(line({ type: 'swarm_phase', phase: 'spawning',
+    agents: [{ agentId: 'oo1', role: 'coder', objective: 'first' }] }), ctx);
+  // complete for 'oo2' races ahead of its start — must create the card.
+  T.dispatchSSEEvent(line({ type: 'swarm_agent_complete', agentId: 'oo2',
+    role: 'researcher', objective: 'second', status: 'completed',
+    preview: 'OO2 RESULT', elapsed: 1.5, tokens: 42, modifiedFiles: 1 }), ctx);
+  const panel = ctx.assistantMsg.toolRounds.find(r => r._swarm && r._swarmActive);
+  const oo2 = (panel._swarmAgents || []).find(a => a.id === 'oo2');
+  check('ooo_complete_creates_card', !!oo2);
+  check('ooo_complete_real_status', oo2 && oo2.status === 'done' &&
+    oo2.preview === 'OO2 RESULT' && oo2.modifiedFiles === 1);
+  // And an error racing ahead of start creates a failed card too.
+  T.dispatchSSEEvent(line({ type: 'swarm_agent_error', agentId: 'oo3',
+    role: 'coder', error: 'boom' }), ctx);
+  const oo3 = (panel._swarmAgents || []).find(a => a.id === 'oo3');
+  check('ooo_error_creates_failed_card', !!oo3 && oo3.status === 'failed' &&
+    oo3.phase === 'error');
+}
+
+// ── 27. CURSOR-COMMIT CONTRACT (resume-loss bug fix): the Last-Event-ID
+//        cursor must be committed only AFTER the paired data event is
+//        applied, never on the lone id line. Wire order is `id: N` then
+//        `data: {...}`. A drop between the two must NOT advance the cursor
+//        past the unapplied delta (which the resume `event_id > cursor`
+//        would then silently skip). ──
+{
+  const { ctx } = setup();
+  // (a) id then its paired data → cursor commits to that id, buf advances.
+  T.dispatchSSEEvent('id: 5', ctx);
+  check('cursor_not_committed_before_data', ctx.lastEventId == null &&
+    ctx.pendingEventId === '5');
+  T.dispatchSSEEvent(line({ type: 'delta', content: 'A' }), ctx);
+  check('cursor_committed_after_data', ctx.lastEventId === '5' &&
+    ctx.pendingEventId == null && ctx.assistantMsg.content === 'A');
+  // (b) next id arrives but its data line is DROPPED (never delivered).
+  //     The cursor must stay at 5 — NOT advance to 6 — so a resume re-sends
+  //     event 6 rather than skipping it.
+  T.dispatchSSEEvent('id: 6', ctx);
+  check('dropped_data_leaves_cursor', ctx.lastEventId === '5' &&
+    ctx.pendingEventId === '6');
+  // (c) the retried event 6 finally applies → cursor advances to 6, and the
+  //     delta is applied exactly once (no loss).
+  T.dispatchSSEEvent('id: 6', ctx);
+  T.dispatchSSEEvent(line({ type: 'delta', content: 'B' }), ctx);
+  check('retried_event_applied_once', ctx.lastEventId === '6' &&
+    ctx.assistantMsg.content === 'AB');
+}
+
+// ── 28. PHASE 1 (parity-gap closure): a `done` event carrying
+//        `committedMessage` PROJECTS IT VERBATIM onto the settled bubble —
+//        the single source of truth for settled state. content/thinking go
+//        through keep-longer; toolRounds + terminal metadata are taken
+//        verbatim from the committed DB dict. ──
+{
+  const { am, ctx } = setup();
+  // Client streamed a short partial; the backend committed the fuller answer.
+  T.dispatchSSEEvent(line({ type: 'delta', content: 'short partial' }), ctx);
+  const committed = {
+    role: 'assistant',
+    content: 'THE FULL COMMITTED ANSWER from the DB, longer than the partial',
+    thinking: 'committed reasoning',
+    toolRounds: [{ roundNum: 1, toolCallId: 'x', status: 'done', results: [] }],
+    finishReason: 'stop', usage: { total_tokens: 77 }, model: 'db-model',
+    cost: { costCny: 0.01 }, apiRounds: [{ round: 1 }],
+  };
+  const ret = T.dispatchSSEEvent(line({ type: 'done', finishReason: 'stop',
+    committedMessage: committed }), ctx);
+  check('committed_done_returns_true', ret === true);
+  check('committed_projects_content_verbatim',
+    am.content === 'THE FULL COMMITTED ANSWER from the DB, longer than the partial');
+  check('committed_projects_thinking_verbatim', am.thinking === 'committed reasoning');
+  check('committed_projects_toolrounds_verbatim',
+    Array.isArray(am.toolRounds) && am.toolRounds.length === 1 &&
+    am.toolRounds[0].toolCallId === 'x');
+  check('committed_projects_metadata',
+    am.finishReason === 'stop' && am.model === 'db-model' &&
+    am.usage && am.usage.total_tokens === 77 && am.cost && am.cost.costCny === 0.01);
+  check('committed_stamps_projection_flag', am._committedProjection === true);
+}
+
+// ── 29. OFFLINE FALLBACK (Phase-2 invariant, verified here): a `done` WITHOUT
+//        `committedMessage` (server died before commit / skip path) must NOT
+//        blank the bubble — the transient streamed content is preserved as the
+//        terminal fallback. ──
+{
+  const { am, ctx } = setup();
+  T.dispatchSSEEvent(line({ type: 'delta', content: 'streamed partial answer' }), ctx);
+  const ret = T.dispatchSSEEvent(line({ type: 'done', finishReason: 'stop' }), ctx);
+  check('no_committed_done_returns_true', ret === true);
+  check('no_committed_keeps_streamed_content', am.content === 'streamed partial answer');
+  check('no_committed_no_projection_flag', am._committedProjection === undefined);
+}
+
+// ── 30. workspace_root_added: state parity — the handler refreshes
+//        projectState via Api.project.status(), mutates extraRoots, and
+//        persists the new root into conv.projectPaths (was toast-ONLY).
+//        ASYNC: the refresh runs in a status().then() microtask, so this
+//        scenario awaits a microtask flush before asserting, and the final
+//        console.log is deferred until after asyncTests() resolves. ──
+async function asyncTests() {
+  // (a) ACTIVE-conv event → full parity refresh.
+  {
+    const { conv, ctx } = setup();          // conv 'c1', activeConvId 'c1'
+    let ps = { extraRoots: [] };
+    // Real-ish _applyProjectData: mirrors project.js — sets extraRoots.
+    win._applyProjectData = global._applyProjectData = (data) => {
+      if (data && Array.isArray(data.extraRoots)) ps.extraRoots = data.extraRoots;
+    };
+    let statusCalls = 0;
+    win.Api = global.Api = { project: { status: () => { statusCalls++;
+      return Promise.resolve({ path: '/proj',
+        extraRoots: [{ path: '/proj/sib', name: 'sib', readOnly: false }] }); } } };
+    T.dispatchSSEEvent(line({ type: 'workspace_root_added',
+      roots: [{ rootName: 'sib', path: '/proj/sib' }] }), ctx);
+    await Promise.resolve(); await Promise.resolve();   // flush the .then chain
+    check('wra_toast_shown', calls.showToast >= 1);
+    check('wra_status_refreshed', statusCalls === 1);
+    check('wra_mutates_projectState_extraRoots',
+      ps.extraRoots.length === 1 && ps.extraRoots[0].path === '/proj/sib');
+    check('wra_persists_conv_projectPaths',
+      Array.isArray(conv.projectPaths) && conv.projectPaths[0] === '/proj' &&
+      conv.projectPaths.includes('/proj/sib'));
+    check('wra_calls_saveConversations', calls.saveConversations >= 1);
+    check('wra_calls_syncConversationToServer', calls.syncConversationToServer >= 1);
+  }
+  // (b) GATE: an event whose conv is NOT the active one must NOT refresh
+  //     projectState (a background task's global _state may hold a different
+  //     project). Toast still fires; the status()/extraRoots refresh does not.
+  {
+    const { ctx } = setup();                 // ctx.convId 'c1'
+    let ps = { extraRoots: [] };
+    win._applyProjectData = global._applyProjectData = (data) => {
+      if (data && Array.isArray(data.extraRoots)) ps.extraRoots = data.extraRoots;
+    };
+    let statusCalls = 0;
+    win.Api = global.Api = { project: { status: () => { statusCalls++;
+      return Promise.resolve({ path: '/proj',
+        extraRoots: [{ path: '/proj/sib', name: 'sib' }] }); } } };
+    activeConvId = 'a-different-conv';        // ctx.convId ('c1') != active
+    T.dispatchSSEEvent(line({ type: 'workspace_root_added',
+      roots: [{ rootName: 'sib', path: '/proj/sib' }] }), ctx);
+    await Promise.resolve(); await Promise.resolve();
+    check('wra_inactive_conv_no_refresh', statusCalls === 0 && ps.extraRoots.length === 0);
+  }
+}
+
+asyncTests()
+  .then(() => { console.log(out.join('\n')); })
+  .catch((e) => { out.push('FAIL asyncTests_threw ' + (e && e.stack || e)); console.log(out.join('\n')); });
 """
 
 
@@ -524,5 +717,5 @@ def test_sse_dispatch_characterization():
     assert proc.returncode == 0, f'node failed: {proc.stderr}\n{output}'
     fails = [ln for ln in output.splitlines() if ln.startswith('FAIL')]
     assert not fails, 'SSE dispatch characterization failures:\n' + output
-    # 25 scenario groups, ~52 individual checks.
-    assert output.count('PASS') >= 50, f'expected >=50 PASS lines, got:\n{output}'
+    # 30 scenario groups, ~82 individual checks.
+    assert output.count('PASS') >= 80, f'expected >=80 PASS lines, got:\n{output}'

@@ -1,156 +1,53 @@
 ---
 name: autopilot-mode
-description: Autopilot (virtual user) mode design: VU auto-replies at every natural stop and ask_human
+description: Autopilot VU bubble: streams via worker substrate (streamBufs/twUpdate); SETTLED render (autopilot_vu_done) is VERBATIM from ev.vuMessage — NO `|| buf.content` fallback (dual source of truth); empty content is legit. Lazy-create treats 'phase' as content-bearing.
 enabled: true
 tags: [autopilot, task-loop, endpoint, design]
 created: 2026-05-13T16:28:32Z
-updated: 2026-05-20T09:59:32Z
+updated: 2026-07-06T00:00:00Z
 ---
 
----
-name: autopilot-mode
-description: Autopilot (virtual user) mode design: VU auto-replies at every natural stop and ask_human, with full streaming of VU's content + tool calls
-enabled: true
-tags: [autopilot, task-loop, endpoint, design, streaming]
----
+## What
+Toggle `conv.autopilotEnabled` (cfg key `autopilot`) makes the LLM keep going without a real human. Mutually exclusive with endpoint mode. Backend `lib/tasks_pkg/autopilot.py`.
 
-# Autopilot mode (virtual user)
+## VU bubble streaming (shared-substrate unification)
+**The VU reply renders IDENTICALLY to an agent turn.** Routed through the SAME machinery the worker uses — `#streaming-msg` + `streamBufs` + `twStart/twUpdate/updateStreamingUI`. Live incremental markdown, thinking block, tool rounds, elapsed-time bar; just USER lane + Autopilot avatar/label. Phase text (waiting_model / retrying/限流中 / tool_exec / llm_thinking) flows through the same `updateStreamingUI` phase branches the agent uses — no duplicate renderer.
 
-Toggle on the conversation (`conv.autopilotEnabled`, cfg key `autopilot`)
-that makes the LLM keep going without a real human. Mutually exclusive
-with endpoint mode (frontend toggles auto-disable each other; backend in
-`_start_task_for_conv` defensively drops `autopilot` when `endpointMode`
-is also on).
+## SETTLED render = VERBATIM backend projection (2026-07-02, MANDATORY)
+Directive: chat-inner bubble = pure backend projection; NO dual frontend+backend state requiring sync (un-diagnosable). Line = **transient vs settled**: accumulating deltas into the live buffer = OK; the moment a turn/VU reply SETTLES it must project ONE backend record verbatim.
+- **FIX:** `autopilot_vu_done` in `static/js/ui/streaming_render.js` now does `entry.msg.content = finalMsg.content || ""` + `entry.msg.toolRounds = Array.isArray(finalMsg.toolRounds) ? finalMsg.toolRounds : []`. **DROPPED** the old `entry.msg.content = finalMsg.content || (buf && buf.content) || entry.msg.content || ""` chain.
+- **WHY:** `ev.vuMessage` IS the authoritative record — the SAME dict `_append_vu_message_to_conv` (autopilot.py:1018) wrote to the DB, shipped on `AUTOPILOT_VU_DONE` (autopilot.py:1620). The `||` fallback only DIVERGES when backend content is FALSY = a LEGITIMATE empty "keep going" VU reply → it silently substituted stale buffer text exactly when correctness matters. Backend never ships a wrongly-empty DONE: `vu_result is None` bail emits `VU_CANCEL` (removes bubble), not DONE. Empty-when-shouldn't-be = backend bug to fix at source, NEVER papered over frontend-side.
+- **Bans (see `.tofu/skills/separation-of-concerns-directive.md`):** (1) no local-buffer fallback for settled state; (2) no frontend-only lifecycle heuristics — `*_start`/`*_done`/`*_cancel` asserted by backend, client obeys.
+- **Test:** `tests/test_frontend_autopilot_vu_verbatim.py` drives REAL `_handleAutopilotVuEvent` (jsdom, twUpdate stubbed no-op — verbatim logic is pure in-memory, no streaming_ui.js needed): vu_start → stale delta+tool_start → vu_done{content:'',toolRounds:[]}; asserts settled msg == record verbatim. NC = byte-revert (rewrites `|| buf.content` back into a temp copy) proves assertions FAIL under the fallback.
 
-## Two trigger points
+## Lazy-create guard: 'phase' IS content-bearing (2026-07-02)
+`_handleAutopilotVuEvent` has a lazy-creation fallback: when an `autopilot_vu_event` arrives WITHOUT a preceding `autopilot_vu_start` (reconnect / late-connect / dropped start frame), it stands up the bubble if the inner frame is "content-bearing". Set = `tool_start` + `delta(content|thinking)` + **`phase`**. Rationale: a rate-limited first-token stall emits PHASE-ONLY frames (`waiting_model`→`retrying/限流中`) for tens of seconds before any delta; a replay cursor landing there must still materialize the bubble (the phase chip is the only liveness signal). Non-rendered interactive types (`stdin_request`/`write_approval_request`/`human_guidance_*`) still do NOT create the bubble (the VU IS the user, hosts no widgets). Test: `tests/test_frontend_autopilot_warmup.py::test_autopilot_phase_only_frame_lazily_creates_bubble` (+ NC).
 
-1. **Natural stop** — `_finalize_and_emit_done` calls
-   `maybe_run_autopilot(task)` BEFORE emitting `done`. Streaming pipeline
-   (see "VU streaming" below) makes the synthetic user bubble show up
-   IMMEDIATELY when the worker stops, with content + tool rounds
-   streaming in live as the VU sub-task runs.
-2. **`ask_human` interception** — `lib/tasks_pkg/handlers/misc.py
-   ::_handle_ask_human` checks `is_autopilot_enabled` BEFORE blocking on
-   `request_human_guidance`; if on, calls the VU directly and resolves
-   the guidance with the synthetic answer. NO streaming pipeline yet on
-   this path (the response renders inside the assistant's tool round,
-   not as a separate user message).
+## Warm-up placeholder + pre-stream attribution (UPDATED 2026-07-06)
+Gap between `autopilot_vu_start` and first delta has TWO parts. (1) Once the VU sub-task's LLM request goes out, `stream_llm_response` emits `waiting_model`/`retrying`(限流中) and round-0 `llm_thinking` — all forwarded (`'phase'` ∈ `_VU_FORWARD_TYPES`) and rendered by the existing `updateStreamingUI` phase branches. (2) BEFORE that, `run_virtual_user` does SILENT pre-stream work (objective DB read + message assembly + `create_task`) — measured 2.5–26.7s across 12 real runs (probe: `debug/autopilot_warmup_window_probe.py`, run with `PYTHONPATH=.`), first forwarded phase was `llm_thinking`. That window is now ATTRIBUTED: `_emit_vu_setup_phase(task, vu_msg_id, detail)` (autopilot.py) emits a `working` phase wrapped as `autopilot_vu_event` (SAME envelope as `_VUEventForwarder`; emitted on the PARENT task since the sub-task/forwarder don't exist yet) → routes into the VU bubble by vuMsgId → renders via the `working` branch (detail verbatim). Two call sites: before objective-resolution ("Autopilot：核对助手回答…") and before sub-task build ("Autopilot：整理对话上下文…"). Placeholder i18n `autopilot.warming` is now an HONEST starting state = `Autopilot 启动中…` / `Autopilot starting…` (was the vague `Autopilot…`); superseded the instant the first `working`/`waiting_model` phase lands. Two render sites: `streaming_render.js` `_streamingBubbleHTML('autopilot')` defaultStatus + `chat_render.js:~776` cold-render VU pulse — change both together. Backend test: `tests/test_autopilot_warmup_setup_phase.py` (setup phases emitted + BEFORE `_run_single_turn`; NC neuters the helper). Lesson: "warm-up is model quota, not fixable in frontend" was PARTLY WRONG — the pre-stream setup window emitted nothing and IS fixable by attributing each step; name what blocks, never a bare placeholder.
 
-## VU streaming (2026-05-20)
+**Granular startup detail (UPDATED 2026-07-06b).** The two `autopilot.py` setup phases (objective-resolve + message-assembly) are FAST (~ms) and flash at ~0s. A full parent event trace (825ff390 = 3228 events) showed the REAL sink is INSIDE the VU sub-task's `run_task` PREP window (tool assembly → tool-history rebuild → system-context injection incl. FUSE memory/project prefetch): 2.9–4.7s typical, ~26s on a giant conv — measured SILENT (first `llm_thinking` at +26.7s; `waiting_model`/TTFT of 80–120s is a SEPARATE, already-attributed window). Fix: `run_task` (orchestrator.py) now emits granular `working` phases via a local `_vu_phase(detail)` helper GATED on `task['_vu_subtask']` (so the ordinary worker/endpoint startup is byte-identical — no new events). Because the VU sub-task's `events` is a `_VUEventForwarder`, each phase auto-forwards into the bubble. Four call sites in prep order: 装配工具 (Section 2) → 重建工具调用历史 (Section 2.5, conditional) → 注入系统上下文 (Section 3) → 上下文就绪正在发送请求 (post-`_t_prep_done`). Full VU startup timeline: [核对助手回答][整理对话上下文] (autopilot.py) → [装配工具][重建历史][注入上下文][发送请求] (run_task prep) → waiting_model → llm_thinking → deltas. These phases are PYTHON-SIDE and render via the existing `updateStreamingUI` `working` branch (streaming_ui.js:317, `escapeHtml(phase.detail)` verbatim) — **NO bundle rebuild needed**. Test: `tests/test_autopilot_startup_granular_phases.py` (source-structure + gate + ordering; double-neuter = remove the `_vu_subtask` gate → isolation test fails; delete a phase call → ordering test fails; both bite, source restored byte-identical).
 
-The natural-stop path streams the VU's reply + tool calls into the
-synthetic user bubble live, so the user sees activity from the moment
-the worker finishes — instead of waiting for the VU to fully complete
-and then having the bubble "pop in" all at once.
+**Key functions in `static/js/ui/streaming_render.js`:**
+- `_beginVuStreaming(convId, conv, vuMsgId)` — finalizes parent worker's `#streaming-msg` via `ConvView.finalizeStreaming(parentAssistant)` + sets `_vuTookOverBubble=true`; pushes VU msg; `twStart`; inserts `_streamingBubbleHTML('autopilot', null, null, vuMsgId)`.
+- `_handleAutopilotVuEvent`: `vu_start`→`_beginVuStreaming`; `vu_event`→accumulate into vuMsg + streamBufs then `twUpdate`; `vu_done`→finalize VERBATIM from ev.vuMessage + `twStop`; `vu_cancel`→remove bubble + `twStop`. Lazy-create on tool_start/phase/delta-with-content.
+- `_streamingBubbleHTML` `'autopilot'` role: avatar=`_TOFU_CRITIC_SVG`, label='Autopilot', cls='vu-user-msg', user lane, defaultStatus=i18n `autopilot.warming`. **JSDoc `@param role` MUST list `autopilot`** or `test_frontend_typecheck` fails.
 
-**Backend (`lib/tasks_pkg/autopilot.py`):**
-- `maybe_run_autopilot` now mints a `vu_msg_id` upfront and:
-  1. `_append_empty_vu_placeholder_to_conv` — writes `{role:user,
-     content:"", _msgId, _isVirtualUser:true, _streamingVu:true,
-     toolRounds:[]}` to the conv DB so a refresh mid-stream still sees
-     the bubble.
-  2. emits `autopilot_vu_start` SSE event carrying `vuMsgId` + the
-     placeholder dict.
-  3. runs `run_virtual_user(task, vu_msg_id=...)` which pipes through
-     `_VUEventForwarder(parent_task, vu_msg_id)`.
-  4. on success: `_finalize_vu_placeholder_in_conv` (locates by
-     `_msgId`, updates content + toolRounds in place, drops
-     `_streamingVu`) and emits `autopilot_vu_done`.
-  5. on bail-out (TASK_DONE / aborted / queued real user msg):
-     `_delete_vu_placeholder_from_conv` + emit `autopilot_vu_cancel`.
-- `_VUEventForwarder` now wraps every VU sub-task event of type in
-  `_VU_FORWARD_TYPES` (delta, phase, tool_start, tool_result,
-  tool_progress, tool_complete, tool_compacted, stdin_*,
-  write_approval_request, human_guidance_*) as
-  `{type:'autopilot_vu_event', vuMsgId, inner: ev}` on the parent
-  stream. The parent-stream `phase: autopilot_thinking` chip is
-  preserved for backward compat.
-- The `done` event STILL carries `autopilotNextTaskId` +
-  `autopilotVuMessage` so cold-replay / late-connect clients can
-  reconcile. Streaming clients dedup by `_msgId`.
+## Event flow (`maybe_run_autopilot`, backend)
+1. Mint `vu_msg_id`, emit `AUTOPILOT_VU_START {vuMsgId}` (in-memory only, BEFORE VU sub-task runs — hence warm-up window).
+2. `run_virtual_user(task, vu_msg_id)`; `_VUEventForwarder` wraps every inner event in `_VU_FORWARD_TYPES` (incl. `'phase'`) as `autopilot_vu_event {vuMsgId, inner: ev}` on parent stream.
+3. Success → `_append_vu_message_to_conv` (ONLY DB write) + `autopilot_vu_done {vuMsgId, vuMessage}` (vuMessage = the DB dict, authoritative).
+4. Bail (TASK_DONE / abort / queued real msg) → `autopilot_vu_cancel {vuMsgId}`.
+5. `done` carries `autopilotNextTaskId` + `autopilotVuMessage` for cold-replay/late-connect.
+Ordering: worker deltas → round_usage → vu_start → vu_event×N → vu_done → done → round_committed.
 
-**Frontend (`static/js/ui.js`, `static/js/main.js`):**
-- `_processSSELine` has 4 new branches: `autopilot_vu_start`,
-  `autopilot_vu_event`, `autopilot_vu_done`, `autopilot_vu_cancel` →
-  all routed to `_handleAutopilotVuEvent(convId, ev)`.
-- `_findVuMsgById(conv, vuMsgId)` locates the VU msg by stable id (NOT
-  by tail position).
-- `_surgicalRerenderMsg(convId, idx)` repaints just that bubble; new
-  inserts go AFTER `#streaming-msg` (so DOM order stays
-  parent_user → parent_assistant_streaming → VU_user → next).
-- `_handleAutopilotVuEvent` for inner events:
-  - `delta` → append to `vuMsg.content` / `vuMsg.thinking`
-  - `tool_start` → push to `vuMsg.toolRounds`
-  - `tool_result` / `tool_progress` / `tool_complete` /
-    `tool_compacted` → update the matching round
-  - `phase` → ignored (parent chip already covers it)
-  - stdin / approval / hg → logged + ignored (VU bubble doesn't host
-    interactive widgets)
-- `_attachAutopilotFollowup` (in `main.js`) DEDUPS by `_msgId`: if the
-  VU msg with the matching id is already in `conv.messages` (streamed
-  in), it reconciles in place instead of pushing a duplicate.
+## Diagnosis recipe (stuck 'Autopilot…')
+Truth is in DB not transcript. `from lib.database import get_thread_db, DOMAIN_CHAT`; task_results has conv_id/status/content (Postgres — no `rowid`, no `conv_id` on task_events). `SELECT event_id, ts_ms, type, payload FROM task_events WHERE task_id LIKE '<id8>%' ORDER BY event_id`. A `status='running'` task with vu_start + vu_event(phase) but NO vu_done/done, and app.log showing recent activity = ALIVE + rate-limit-stalled, NOT hung. To measure the SILENT pre-stream window specifically, run `PYTHONPATH=. python3 debug/autopilot_warmup_window_probe.py` — it prints the vu_start→first-phase gap per run. As of 2026-07-06 that window is attributed with `working` setup phases (see Warm-up section); a bare placeholder with NO `working`/`waiting_model` phase during a multi-second gap = the setup phases regressed.
 
-## VU stop signal
-
-The ONLY graceful stop is the VU emitting `[VU: TASK_DONE]` (constant
-`_VU_DONE_SENTINEL` in `autopilot.py`). Per user spec:
-- NO turn cap.
-- NO state-change "no progress" watchdog.
-- Empty VU output is treated as a valid "keep going" reply (NOT a stop).
-
-Other stops are external: real user clicking Stop (`task['aborted']`),
-real user sending a new message (auto-aborts via
-`abort_running_tasks_for_conv`), or LLM error.
-
-## VU has the SAME TOOLS as the worker
-
-`run_virtual_user` runs through `orchestrator._run_single_turn` as a
-**fresh sub-task** that inherits the parent's `task['config']` verbatim,
-so `_assemble_tool_list` builds the SAME tool set the worker sees.
-Sub-task wiring:
-- `convId=''` → stays out of `_conv_latest_task` registry, out of conv
-  DB sync (`_sync_result_to_conversation` short-circuits on
-  `_inline_messages=True`).
-- `_inline_messages=True`, `_vu_subtask=True`, `_autopilotParent=<id>`
-- `sub_cfg['autopilot']=False`, `endpointMode=False`,
-  `humanGuidanceEnabled=False`.
-- Strips checkpoint/continue keys.
-- A daemon thread `autopilot-abort-mirror-<tid>` mirrors
-  `parent.aborted` onto `sub_task['aborted']`.
-
-## VU prompt rules (`_VU_ROLE_PROMPT`)
-
-- Code/engineering tasks → pick the most robust long-term solution; do
-  NOT optimize for cost / speed of impl / backward-compat.
-- Open-ended discussion → use own judgment, stay concrete.
-- Reply in 1-3 sentences, same language as the assistant.
-- Output ONLY the reply text, no preamble.
-- Emit `[VU: TASK_DONE]` exactly when the assistant has clearly finished.
-- Tool use is optional.
-
-The role prompt is appended as a TRAILING user-turn directive
-(`_isVuDirective: True`) on top of the parent's full message list —
-SAME pattern as `endpoint_review._run_planner_turn` /
-`_run_critic_turn`.
+## VU stop signal / sub-task wiring
+ONLY graceful stop = VU emits `[VU: TASK_DONE]`. Empty output = valid "keep going"; most VU replies use 0 tool rounds. `run_virtual_user` runs via `orchestrator._run_single_turn` as fresh sub-task inheriting parent `task['config']` (SAME tools), `_inline_messages=True`, `_vu_subtask=True`, sub_cfg autopilot/endpointMode/humanGuidanceEnabled=False.
 
 ## Pitfalls
-
-- DO NOT spawn the autopilot follow-up before `persist_task_result`
-  finishes. Order: hook → done event → persist (inside
-  `_finalize_and_emit_done`); we set
-  `task['_autopilot_spawned_followup']` and the queue dispatcher defers.
-- `_start_followup_task` strips checkpoint/continue cfg keys.
-- Cross-talk dedup in `_sync_result_to_conversation` tolerates +2 msg
-  drift.
-- The VU sub-task ALSO runs `_inject_system_contexts`, but the existing
-  markers trigger the idempotency guards so it's a no-op.
-- `_VUEventForwarder` MUST be installed AFTER `create_task('', …)` and
-  BEFORE `_run_single_turn(sub_task)`.
-- IDB cache: `_handleAutopilotVuEvent` calls `ConvCache.put(conv)` on
-  `start`/`done`/`cancel` (not on every inner event — too noisy).
-  Mid-stream reload reads the placeholder skeleton from server DB.
-- `_autopilotPending` in the `done` event is stamped on the PARENT's
-  assistant message (not the VU msg). `finishStream` →
-  `_findAutopilotPendingCarrier` → `_attachAutopilotFollowup` reconciles
-  by `_msgId` so the streaming pipeline and cold-replay agree.
-
+- Don't spawn follow-up before persist_task_result; `task['_autopilot_spawned_followup']` defers dispatch.
+- `finishStream` autopilot tail walk-back: when `#streaming-msg` gone (VU finalized it) the `if (sm && ...)` guards skip — no double-finalize.
+- `conv_view.js::finalizeStreaming` allows `msg._isVirtualUser`. `sse_pipeline.js` done handler repaints worker finish bar via `_vuTookOverBubble`.

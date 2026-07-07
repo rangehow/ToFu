@@ -53,7 +53,16 @@ MAX_TREE_ENTRIES = 500
 MAX_READ_CHARS   = 1_000_000     # ★ whole-file read cap lifted; MAX_FILE_SIZE (512KB) is the real bound
 MAX_GREP_RESULTS = 50
 LINE_COUNT_LIMIT = 50_000        # ★ skip line counting for files above this
-SESSIONS_DIR     = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+# Per-project undo/redo history store. Resolved through the single runtime-base
+# authority so a relocated / frozen / read-only install writes it next to the DB
+# instead of under a read-only <repo>/lib. Byte-identical to the legacy
+# <repo>/lib/.project_sessions for an in-tree install (see project_sessions_root).
+try:
+    from lib.runtime_paths import project_sessions_root as _sessions_root
+    SESSIONS_DIR = _sessions_root()
+except Exception as _rp_e:  # pragma: no cover — defensive (keeps import robust)
+    logger.debug('[Config] project_sessions_root() unavailable, using in-tree: %s', _rp_e)
+    SESSIONS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                                 '.project_sessions')
 
 MAX_COMMAND_TIMEOUT = None      # ★ no timeout limit for run_command
@@ -276,14 +285,152 @@ def set_conv_roots(conv_id, primary_path, extras=None, readonly_paths=None):
             _conv_roots.move_to_end(conv_id)
         _conv_roots[conv_id] = conv_map
         _conv_primary[conv_id] = abs_primary
-        while len(_conv_roots) > MAX_CONV_ROOTS:
-            _evicted_id, _ = _conv_roots.popitem(last=False)
-            _conv_primary.pop(_evicted_id, None)
-            logger.debug('[Config] LRU-evicted conv root state for %s '
-                         '(over %d cap)', _evicted_id[:12], MAX_CONV_ROOTS)
+        # LRU eviction that PINS live-task convs (never evict a conv whose
+        # task is mid-flight — see _evict_conv_roots_over_cap). The conv we
+        # just registered is newest, so it is never the victim.
+        _evict_conv_roots_over_cap()
     logger.debug('[Config] set_conv_roots conv=%s primary=%s extras=%d names=%s',
                  conv_id[:12] if conv_id else '?',
                  abs_primary, len(extras_list), list(conv_map.keys()))
+
+
+def add_conv_root(conv_id, path, name=None, access='rw'):
+    """Add ONE extra root into a conversation's OWN scoped registry.
+
+    The per-conv equivalent of :func:`add_project_root` for the global
+    ``_roots``. Used by the absolute-path-write auto-register path so a root
+    the running task just expanded into is resolvable via a subsequent
+    ``newroot:rel/path`` namespaced write IN THE SAME TASK — otherwise the
+    conv-scoped resolver (which, per the 2026-05-05 isolation fix, does NOT
+    fall through to the global ``_roots``) would raise
+    ``UnknownWorkspaceRootError`` for a root that only landed in the global
+    registry.
+
+    Isolation invariants (deliberately conservative):
+      * Only the conversation named by ``conv_id`` is touched — never another
+        conv's map, never the global ``_roots``.
+      * A registry is only MUTATED, never CREATED here: if the conv has no
+        existing entry the call is a no-op (returns ``None``). A background
+        task must not conjure a conv registry — that would flip the
+        conv-scoped resolver into strict-isolation mode for a conv the UI
+        never wired a project to.
+      * Re-adding the same path refreshes its access flag and returns the
+        existing name (idempotent), mirroring ``add_project_root``.
+
+    Args:
+        conv_id: Conversation identifier (must already own a registry).
+        path:    Directory path to add (abspath'd / expanduser'd here).
+        name:    Preferred short name. Defaults to the directory basename.
+            Honoured when free in the conv map so the conv-registry name
+            agrees with the global-registry name the ``workspace_root_added``
+            event advertises; deduped with a ``_N`` suffix on collision.
+        access:  ``'rw'`` (default) or ``'ro'`` write policy for this root.
+
+    Returns:
+        The assigned root name (str), or ``None`` when there is nothing to do
+        (no conv_id, conv has no registry, or path invalid).
+    """
+    if not conv_id:
+        return None
+    abs_path = os.path.abspath(os.path.expanduser(path))
+    if not os.path.isdir(abs_path):
+        return None
+    _access = 'ro' if access == 'ro' else 'rw'
+    with _lock:
+        conv_map = _conv_roots.get(conv_id)
+        if conv_map is None:
+            # No conv registry → nothing to extend. The global registry (which
+            # the write path already updated) covers the legacy/no-project
+            # resolution fallback; creating a registry here would wrongly
+            # engage strict isolation for this conv.
+            return None
+        # Idempotent: same path already present → refresh access, return name.
+        for rn, rs in conv_map.items():
+            if os.path.abspath(rs['path']) == abs_path:
+                rs['access'] = _access
+                return rn
+        rname = name or os.path.basename(abs_path) or 'root'
+        orig = rname
+        counter = 2
+        while rname in conv_map:
+            rname = f'{orig}_{counter}'
+            counter += 1
+        conv_map[rname] = _make_root_state(abs_path, access=_access)
+        # Refresh LRU recency — this conv is actively being written to.
+        _conv_roots.move_to_end(conv_id)
+    logger.info('[Config] add_conv_root conv=%s [%s] %s',
+                conv_id[:12] if conv_id else '?', rname, abs_path)
+    return rname
+
+
+def _conv_has_live_task(conv_id):
+    """True when *conv_id* currently owns a pending/running task.
+
+    Used to PIN a live conversation's root registry against LRU eviction:
+    evicting the registry of a conv whose task is mid-flight makes its next
+    ``name:rel/path`` tool call resolve against the (concurrency-clobbered)
+    global ``_roots`` — either raising ``UnknownWorkspaceRootError`` (caught
+    by the tools.py self-heal) OR, if the global holds a colliding-basename
+    root, SILENTLY misrouting the write to the wrong tree (the self-heal is
+    exception-only and never sees this). Both are prevented by not evicting a
+    live conv while an idle one is available.
+
+    Reuses the SAME runtime-task signal the GET-path reconcile uses
+    (manager._latest_task_for_conv + the chat TaskRuntime status), so
+    "is this conv live?" has one definition across the codebase.
+
+    Fails OPEN: if the probe cannot run (import cycle, runtime absent), it
+    returns False so eviction is NEVER blocked — an unbounded _conv_roots is
+    a worse failure than a rare mis-eviction, and the self-heal still covers
+    the latter.
+    """
+    if not conv_id:
+        return False
+    try:
+        from lib.tasks_pkg.manager import _chat_runtime, _latest_task_for_conv
+        tid = _latest_task_for_conv(conv_id)
+        if not tid:
+            return False
+        t = _chat_runtime.get(tid)
+        return bool(t and t.get('status') in ('pending', 'running'))
+    except Exception as e:
+        logger.debug('[Config] live-task probe failed for conv=%s: %s — '
+                     'treating as idle (eviction not blocked)',
+                     conv_id[:12] if conv_id else '?', e)
+        return False
+
+
+def _evict_conv_roots_over_cap():
+    """Evict oldest IDLE conv registries until within ``MAX_CONV_ROOTS``.
+
+    Called under ``_lock``. Walks _conv_roots oldest→newest and drops the
+    first entry whose conv has NO live task (see ``_conv_has_live_task``),
+    preserving the LIVE ones regardless of age. If every over-cap candidate
+    from the oldest end is live (pathological: >MAX_CONV_ROOTS simultaneously
+    running tasks), it falls back to evicting the strict oldest and logs a
+    WARNING — bounding memory takes precedence, and the self-heal covers the
+    displaced conv.
+    """
+    while len(_conv_roots) > MAX_CONV_ROOTS:
+        # Find the oldest entry that is NOT protected by a live task.
+        victim = None
+        for cid in _conv_roots:  # OrderedDict iterates oldest→newest
+            if not _conv_has_live_task(cid):
+                victim = cid
+                break
+        if victim is None:
+            # All entries are live — evict strict-oldest to bound memory.
+            victim, _ = _conv_roots.popitem(last=False)
+            _conv_primary.pop(victim, None)
+            logger.warning('[Config] LRU cap %d exceeded but ALL conv roots '
+                           'have live tasks — force-evicted oldest live conv '
+                           '%s (self-heal will cover it if it resolves a '
+                           'namespaced path)', MAX_CONV_ROOTS, victim[:12])
+            continue
+        _conv_roots.pop(victim, None)
+        _conv_primary.pop(victim, None)
+        logger.debug('[Config] LRU-evicted idle conv root state for %s '
+                     '(over %d cap)', victim[:12], MAX_CONV_ROOTS)
 
 
 def clear_conv_state(conv_id):
@@ -425,6 +572,12 @@ def get_state():
         s = dict(_state)
         # Include modification count for undo
         s['modificationsCount'] = len(_state.get('modifications', []))
+        # ★ Never serialize the raw undo log to clients. Each entry stores the
+        #   full pre-image (originalContent) of every edited file, so a
+        #   long-running project can balloon this response to tens of MB
+        #   (Lighthouse flagged /api/v1/project/set at 28MB). The frontend only
+        #   consumes modificationsCount; drop the heavy blobs from the payload.
+        s.pop('modifications', None)
         # ★ Always include extra roots so the frontend stays in sync
         extra = []
         primary = _state.get('path')

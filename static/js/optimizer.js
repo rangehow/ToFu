@@ -15,7 +15,7 @@ function toggleOptimizerPanel(e) {
   // the panel bubble up here. Without this guard, clicking a row, button,
   // or the "older proposals" header would flip _optimizerPanelOpen back to
   // false and close the popup.
-  if (e && panel.contains(e.target)) return;
+  if (e && panel.contains(/** @type {Node} */ (e.target))) return;
   if (e) e.stopPropagation();
   _optimizerPanelOpen = !_optimizerPanelOpen;
   panel.classList.toggle("visible", _optimizerPanelOpen);
@@ -37,12 +37,12 @@ function _optFmtTime(iso) {
 
 function _optStatusIcon(status) {
   switch (status) {
-    case "applied": return "🟢";
-    case "pending_review": return "🟡";
-    case "rejected": return "🔴";
-    case "expired": return "⚪";
-    case "reverted": return "↩️";
-    default: return "⚪";
+    case "applied": return IconDot('green');
+    case "pending_review": return IconDot('yellow');
+    case "rejected": return IconDot('red');
+    case "expired": return IconDot('grey');
+    case "reverted": return Icon('refresh', 12);
+    default: return IconDot('grey');
   }
 }
 
@@ -77,11 +77,11 @@ function _optRenderAction(p) {
     return `${t('optimizer.blockSearchDomain')} <b>${escapeHtml(args.domain)}</b>${ttl}`;
   }
   if (type === "other") {
-    return `💡 ${escapeHtml(p.title || t('optimizer.untitled'))}`;
+    return `${Icon('lightbulb', 13)} ${escapeHtml(p.title || t('optimizer.untitled'))}`;
   }
   // Fall-through: show type + first arg
   const firstArg = Object.keys(args).slice(0, 2).map(k => `${k}=${JSON.stringify(args[k]).slice(0, 30)}`).join(", ");
-  return `⚙️ ${escapeHtml(type)}${firstArg ? " <span style='color:var(--text-secondary)'>" + escapeHtml(firstArg) + "</span>" : ""}`;
+  return `${Icon('cog', 13)} ${escapeHtml(type)}${firstArg ? " <span style='color:var(--text-secondary)'>" + escapeHtml(firstArg) + "</span>" : ""}`;
 }
 
 function _optimizerFeatureEnabled() {
@@ -316,13 +316,22 @@ function _startOptimizerPolling() {
 }
 _startOptimizerPolling();
 
+// Allow mobile_panels.js to keep the open-flag in sync when it portals the
+// panel to <body> as a bottom sheet.
+if (typeof window !== "undefined") {
+  window._setOptimizerPanelOpen = function (v) { _optimizerPanelOpen = !!v; };
+}
+
 // Close panel when clicking outside
 document.addEventListener("click", (e) => {
   if (!_optimizerPanelOpen) return;
+  const panel = document.getElementById("optimizerPanel");
+  // On mobile the panel is portaled out of the badge into <body>; its own
+  // backdrop (mobile_panels.js) owns closing, so skip the badge-based check.
+  if (panel && panel.classList.contains("mobile-panel-portaled")) return;
   const badge = document.getElementById("optimizerBadge");
-  if (badge && !badge.contains(e.target)) {
+  if (badge && !badge.contains(/** @type {Node} */ (e.target))) {
     _optimizerPanelOpen = false;
-    const panel = document.getElementById("optimizerPanel");
     if (panel) panel.classList.remove("visible");
   }
 });

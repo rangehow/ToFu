@@ -8,6 +8,38 @@
    exports / imports needed.
    ═══════════════════════════════════════════════════════════════════ */
 
+/* ── Finish-reason tiers (mirror finish_info.js) — decide the settled
+ *   sidebar state of a turn that carries a finishReason.
+ *   NORMAL: clean completion, no flag.
+ *   ERR:    hard failure → red error state (same bucket as msg.error).
+ *   Everything else that is neither NORMAL nor ERR is treated as an
+ *   INCOMPLETE (interrupted / truncated / stopped) turn → amber state. */
+const _FINISH_NORMAL = new Set(['stop', 'end_turn', 'stop_sequence', 'tool_use', 'tool_calls']);
+const _FINISH_ERR = new Set(['error', 'server_offline']);
+
+/* Is the assistant message at `msgIdx` part of an autopilot run that has
+ * already CONCLUDED (produced a debrief report / carries a concluded record)?
+ * The run id is stamped on the run's virtual-user (role:'user') turns, not on
+ * the assistant turns, so we scan backwards from `msgIdx` for the nearest VU
+ * turn's `_autopilotRunId`, then consult the conv's `autopilotSummaries`
+ * sidecar — the SAME backend-authoritative "run concluded" signal chat_render
+ * uses (record.status==='concluded' OR record.content present). A conv with no
+ * autopilot state returns false immediately (cheap). */
+function _autopilotRunConcluded(c, msgIdx) {
+  const summaries = c && c.autopilotSummaries;
+  if (!summaries || typeof summaries !== 'object' || !c.messages) return false;
+  let runId = null;
+  for (let j = msgIdx; j >= 0; j--) {
+    const mm = c.messages[j];
+    if (mm && mm._autopilotRunId) { runId = mm._autopilotRunId; break; }
+    // Stop at a human (non-VU) user turn — that's the boundary before the run.
+    if (mm && mm.role === 'user' && !mm._isVirtualUser && j !== msgIdx) break;
+  }
+  if (!runId) return false;
+  const rec = summaries[runId];
+  return !!(rec && typeof rec === 'object' && (rec.status === 'concluded' || rec.content));
+}
+
 function stripNoTranslateTags(text) {
   if (!text) return text;
   return text
@@ -32,7 +64,7 @@ function stripNoTranslateTags(text) {
  * @returns {Promise<object|null>}  Server response `{ok, msgCount, msg}` or
  *                                  null on failure.
  */
-async function _patchMessageOnServer(convId, msgIdx, patch, opts = {}) {
+async function _patchMessageOnServer(convId, msgIdx, patch, /** @type {any} */ opts = {}) {
   if (!convId || msgIdx == null || !patch || Object.keys(patch).length === 0) return null;
   // Prefer stable id addressing when the message has _msgId. The conv is
   // expected on the global `conversations` array; if a caller has only the
@@ -88,6 +120,51 @@ function formatConvTime(ts) {
     datePart = `${months[d.getMonth()]} ${d.getDate()}${sameYear ? "" : ", " + d.getFullYear()}`;
   }
   return `<span class="conv-date-text">${datePart}</span><span class="conv-date-sep">·</span><span class="conv-date-time">${time}</span>`;
+}
+
+/* ── Date grouping for the conversation list ──
+ * Rows are sorted recency-first (_convSorter), so each date bucket is a
+ * contiguous run. Each bucket gets a clickable header that folds its rows.
+ * The ">30 days" ("older") bucket starts collapsed. */
+const _CONV_OLDER_DAYS = 30;
+/** Set of date-group keys the user has collapsed. "older" starts collapsed. */
+const _collapsedConvGroups = new Set(['older']);
+
+/** Classify a timestamp into a date-group key. */
+function _convDateGroupKey(ts) {
+  if (!ts) return 'older';
+  const now = new Date();
+  const startToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const dayMs = 86400000;
+  if (ts >= startToday) return 'today';
+  if (ts >= startToday - dayMs) return 'yesterday';
+  if (ts >= startToday - 6 * dayMs) return 'prev7';
+  if (ts >= startToday - (_CONV_OLDER_DAYS - 1) * dayMs) return 'prev30';
+  return 'older';
+}
+
+const _CONV_GROUP_I18N = {
+  today: 'sidebar.dateToday',
+  yesterday: 'sidebar.dateYesterday',
+  prev7: 'sidebar.datePrev7',
+  prev30: 'sidebar.datePrev30',
+  older: 'sidebar.dateOlder',
+};
+
+/** Collapsible section-header markup for a date-group key + its row count. */
+function _convGroupHeaderHtml(key, count, collapsed) {
+  const label = t(_CONV_GROUP_I18N[key] || key);
+  const chevron = `<svg class="conv-date-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>`;
+  return `<button type="button" class="conv-date-group${collapsed ? ' collapsed' : ''}" data-group="${key}" onclick="_toggleConvGroup('${key}')">` +
+    `${chevron}<span class="conv-date-label">${label}</span><span class="conv-date-count">${count}</span></button>`;
+}
+
+/** Toggle a date group's collapsed state and re-render. */
+function _toggleConvGroup(key) {
+  if (_collapsedConvGroups.has(key)) _collapsedConvGroups.delete(key);
+  else _collapsedConvGroups.add(key);
+  _lastConvListHash = "";          // force a full rebuild past the hash guard
+  renderConversationList();
 }
 
 let _lastConvListHash = "";
@@ -154,7 +231,15 @@ function _swapActiveConvItem(newActiveId) {
 let _lastFolderTabsHash = '';
 let _lastFolderTabsContentHash = '';
 let _lastFolderTabsStructHash = '';
-let _folderTabsExpanded = false;
+/* Vertical project-rail collapsed/expanded state (icon-only ⇄ labeled),
+ * persisted like the old expand state. Kept in localStorage so the choice
+ * survives reloads and spans conversations. The toggle handler in
+ * main_folders_mobile.js writes the SAME key. */
+const RAIL_COLLAPSE_KEY = 'tofu_project_rail_collapsed';
+function _readRailCollapsed() {
+  try { return localStorage.getItem(RAIL_COLLAPSE_KEY) === '1'; }
+  catch (_e) { return false; }
+}
 
 
 
@@ -165,17 +250,32 @@ function renderFolderTabs(folders, activeFolderId, allConvs) {
     _renderFolderTabsInner(tabsEl, folders, activeFolderId, allConvs);
   } catch (e) {
     console.error('[renderFolderTabs] Error:', e);
-    // On error, ensure tabs aren't left in broken state — render minimal fallback
-    try { tabsEl.innerHTML = '<div class="folder-tabs-scroll"><button class="folder-tab folder-tab-add" title="New folder"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button></div>'; } catch(_) {}
+    // On error, ensure the rail isn't left in a broken state — minimal fallback.
+    try { tabsEl.innerHTML = '<div class="project-rail-list"><button class="folder-tab folder-tab-add" title="New folder"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button></div>'; } catch(_) {}
   }
 }
 
 function _renderFolderTabsInner(tabsEl, folders, activeFolderId, allConvs) {
-  // Always show tabs — even with 0 folders, show just the "+" button for discoverability
-  tabsEl.style.display = '';
-
   const safeFolders = folders || [];
   const safeConvs = allConvs || [];
+
+  /* ── Zero-folder degradation ──
+   * A user who never made a folder must NOT be forced into a two-pane rail
+   * layout. With 0 folders the rail is hidden entirely (single-column list,
+   * exactly as before) and only the discreet "+ New folder" quick-add entry
+   * point shows. The rail materializes once ≥1 folder exists. The sidebar
+   * `.has-rail` class drives the CSS grid/flex split. */
+  const sidebarEl = tabsEl.closest('.sidebar') || document.getElementById('sidebar');
+  const hasRail = safeFolders.length > 0;
+  if (sidebarEl) sidebarEl.classList.toggle('has-rail', hasRail);
+  if (!hasRail) {
+    tabsEl.innerHTML = '';
+    _lastFolderTabsHash = '';
+    _lastFolderTabsContentHash = '';
+    _lastFolderTabsStructHash = '';
+    return;
+  }
+  tabsEl.style.display = '';
 
   // Compute counts per folder + uncategorized
   const folderIds = new Set(safeFolders.map(f => f.id));
@@ -212,6 +312,12 @@ function _renderFolderTabsInner(tabsEl, folders, activeFolderId, allConvs) {
     if (isStreaming) streamingFolderIds.add(c.folderId);
   }
 
+  /* Reflect the persisted collapsed/expanded choice on the sidebar every
+   * render (cheap class toggle, outside the structural fast path so it always
+   * self-heals to the stored value). */
+  const railCollapsed = _readRailCollapsed();
+  if (sidebarEl) sidebarEl.classList.toggle('rail-collapsed', railCollapsed);
+
   // Split hash: content hash (folders/counts/names) vs active-tab hash
   // When only the active tab changes, skip full DOM rebuild and just swap .active class
   const streamKey = [...streamingFolderIds].sort().join(',');
@@ -240,68 +346,50 @@ function _renderFolderTabsInner(tabsEl, folders, activeFolderId, allConvs) {
 
   const sortedFolders = [...safeFolders].sort((a, b) => (lastActiveMap[b.id] || 0) - (lastActiveMap[a.id] || 0) || (a.order || 0) - (b.order || 0));
 
+  /* ── Vertical project rail ──
+   * Each project is a full-width ROW (dot + name + count) so names of any
+   * length align into clean columns — no ragged wrap. The rail scrolls
+   * vertically when it overflows; there is no more +N expand toggle.
+   * Row DOM contract is UNCHANGED from the pill era: `.folder-tab` with
+   * `data-folder-id` (empty string = 未分类), an inner `.folder-tab-dot`
+   * (streaming pulse) and `.folder-tab-name`, so _initFolderTabs' click /
+   * context-menu / long-press / drag-drop handlers all keep working. */
+  const railTitle = escapeHtml(t('sidebar.projects'));
+  const collapseTip = railCollapsed ? escapeHtml(t('sidebar.expandRail')) : escapeHtml(t('sidebar.collapseRail'));
   let html = '';
-  html += '<div class="folder-tabs-scroll';
-  // Preserve expanded state synchronously to avoid collapse→expand flash
-  if (_folderTabsExpanded) html += ' expanded';
-  html += '">';
-  // "未分类" tab — shows conversations not in any folder (only when folders exist)
-  if (sortedFolders.length > 0) {
-    const ucBadge = uncategorizedCount > 0 ? `<span class="folder-tab-count">${uncategorizedCount}</span>` : '';
-    html += `<button class="folder-tab${!activeFolderId ? ' active' : ''}" data-folder-id="">`;
-    html += `<svg class="folder-tab-inbox-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>`;
-    html += `<span class="folder-tab-name">${t('sidebar.uncategorized')}</span>${ucBadge}</button>`;
-  }
-  // Folder tabs
+  html += `<div class="project-rail-head">`;
+  html += `<span class="project-rail-title">${railTitle}</span>`;
+  html += `<button class="project-rail-collapse" title="${collapseTip}" aria-label="${collapseTip}">`;
+  html += `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>`;
+  html += `</button></div>`;
+  html += '<div class="project-rail-list">';
+
+  // "未分类" row — conversations not in any folder (uses the inbox glyph as its "dot")
+  const ucBadge = uncategorizedCount > 0 ? `<span class="folder-tab-count">${uncategorizedCount}</span>` : '';
+  html += `<button class="folder-tab folder-tab-uncat${!activeFolderId ? ' active' : ''}" data-folder-id="" title="${escapeHtml(t('sidebar.uncategorized'))}">`;
+  html += `<span class="folder-tab-dot folder-tab-inbox-dot"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg></span>`;
+  html += `<span class="folder-tab-name">${escapeHtml(t('sidebar.uncategorized'))}</span>${ucBadge}</button>`;
+
+  // Project rows
   for (const f of sortedFolders) {
     const fcolor = f.color ? escapeHtml(f.color) : 'var(--accent)';
     const fname = escapeHtml(f.name);
     const isActive = activeFolderId === f.id;
     const cnt = countMap[f.id] || 0;
     const badge = cnt > 0 ? `<span class="folder-tab-count">${cnt}</span>` : '';
-    html += `<button class="folder-tab${isActive ? ' active' : ''}" data-folder-id="${escapeHtml(f.id)}" title="${fname}">`;
     const dotStreaming = streamingFolderIds.has(f.id) ? ' streaming' : '';
-    html += `<span class="folder-tab-dot${dotStreaming}" style="background:${fcolor}"></span>`;
+    html += `<button class="folder-tab${isActive ? ' active' : ''}" data-folder-id="${escapeHtml(f.id)}" title="${fname}">`;
+    html += `<span class="folder-tab-dot${dotStreaming}" style="background:${fcolor}" data-initial="${fname.slice(0, 1).toUpperCase()}"></span>`;
     html += `<span class="folder-tab-name">${fname}</span>${badge}`;
     html += `</button>`;
   }
-  // "+" add tab — always visible
-  html += `<button class="folder-tab folder-tab-add" title="${t('sidebar.newFolder')}">`;
-  html += `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>`;
-  html += `</button>`;
   html += '</div>';
-  // Expand/collapse toggle (hidden by default, shown via CSS when overflow detected)
-  html += `<button class="folder-tabs-toggle">`;
-  html += `<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>`;
-  html += `<span class="folder-tabs-toggle-label"></span>`;
+  // Footer "+ New project" row — always visible at the rail bottom.
+  html += `<button class="folder-tab folder-tab-add" title="${escapeHtml(t('sidebar.newFolder'))}">`;
+  html += `<span class="folder-tab-dot folder-tab-add-dot"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></span>`;
+  html += `<span class="folder-tab-name">${escapeHtml(t('sidebar.newFolder'))}</span>`;
   html += `</button>`;
   tabsEl.innerHTML = html;
-
-  // Check overflow after render — if content exceeds visible height, show toggle & count hidden
-  requestAnimationFrame(() => {
-    const scrollEl = tabsEl.querySelector('.folder-tabs-scroll');
-    if (!scrollEl) return;
-    const isOverflow = scrollEl.scrollHeight > scrollEl.clientHeight + 2;
-    tabsEl.classList.toggle('has-overflow', isOverflow);
-    // Count how many real folder tabs are hidden (below the fold)
-    if (isOverflow) {
-      const label = tabsEl.querySelector('.folder-tabs-toggle-label');
-      if (label) {
-        if (_folderTabsExpanded) {
-          label.textContent = t('sidebar.lessFolders');
-        } else {
-          const collapsedMax = 94; // matches CSS max-height (3 rows)
-          // Only count real folder tabs, exclude the "+" add button
-          const tabs = scrollEl.querySelectorAll('.folder-tab:not(.folder-tab-add)');
-          let hiddenCount = 0;
-          tabs.forEach(tab => {
-            if (tab.offsetTop + tab.offsetHeight > collapsedMax) hiddenCount++;
-          });
-          label.textContent = hiddenCount > 0 ? `+${hiddenCount}` : '';
-        }
-      }
-    }
-  });
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -338,32 +426,89 @@ function _teardownConvVirtual() {
 }
 
 /**
+ * Build the render plan for `filtered`: a flat list of items, each either a
+ * date-group header, a conversation row, or the collapsed-"older" toggle.
+ * `filtered` is recency-sorted so each date bucket is one contiguous run.
+ * The ">30 days" bucket is collapsed behind a toggle unless expanded (or the
+ * active conv lives in it, or it's the ONLY populated group — in those cases
+ * it's force-expanded so its rows are always visible and clickable).
+ *
+ * @returns {Array<{type:'header'|'conv'|'older'|'older-collapse', key?:string, conv?:object, count?:number}>}
+ */
+function _buildConvPlan(filtered) {
+  /* Per-group row counts so each header shows its size. */
+  const counts = {};
+  for (const c of filtered) {
+    const key = _convDateGroupKey(c.updatedAt || c.createdAt);
+    counts[key] = (counts[key] || 0) + 1;
+  }
+  /* Keep the active conv's group always expanded so its row never hides. */
+  const activeKey = activeConvId
+    ? (() => { const a = filtered.find(c => c.id === activeConvId); return a ? _convDateGroupKey(a.updatedAt || a.createdAt) : null; })()
+    : null;
+
+  /* ★ Never auto-collapse the ONLY populated group. The "older" (>30d) bucket
+   * starts collapsed, but for a user whose conversations are ALL older than 30
+   * days that would hide every row behind a single collapsed header — the
+   * sidebar looks empty and clicks land on nothing (no .conv-item is rendered).
+   * When a single group holds all the rows, force it expanded regardless of
+   * its remembered collapsed state, so there is always something to click. */
+  const _soleGroupKey = Object.keys(counts).length === 1 ? Object.keys(counts)[0] : null;
+
+  /** @type {Array<{type:'header'|'conv', key?:string, count?:number, collapsed?:boolean, conv?:object}>} */
+  const plan = [];
+  let curGroup = null;
+  let curCollapsed = false;
+  for (const c of filtered) {
+    const key = _convDateGroupKey(c.updatedAt || c.createdAt);
+    if (key !== curGroup) {
+      curCollapsed = _collapsedConvGroups.has(key) && key !== activeKey && key !== _soleGroupKey;
+      plan.push({ type: 'header', key, count: counts[key], collapsed: curCollapsed });
+      curGroup = key;
+    }
+    if (curCollapsed) continue;   // rows hidden under a collapsed header
+    plan.push({ type: 'conv', conv: c });
+  }
+  return plan;
+}
+
+/** Render a single plan item to HTML. */
+function _planItemHtml(item) {
+  if (item.type === 'header') return _convGroupHeaderHtml(item.key, item.count, item.collapsed);
+  const c = item.conv;
+  return _buildConvItemHTML(c, escapeHtml(stripNoTranslateTags(c.title)), "");
+}
+
+/**
  * Render `filtered` into `listEl` with bottom-sentinel windowing. Renders
  * the first page (extended downward if needed so the active conv is always
- * included), then lazily appends subsequent pages on scroll.
+ * included), then lazily appends subsequent pages on scroll. Rows are grouped
+ * under date-section headers via the render plan from _buildConvPlan().
  */
 function _renderConvWindow(listEl, filtered) {
   _teardownConvVirtual();
 
+  const plan = _buildConvPlan(filtered);
+
   /* Ensure the active row is within the initial window so its .active
    * class + status dot are present immediately (sorted recent-first means
-   * this is almost always index 0, but a click on an old conv can be deep). */
+   * this is almost always near the top, but a click on an old conv can be
+   * deep). Index is into the PLAN (headers shift positions). */
   let firstEnd = _CONV_WINDOW_PAGE;
   if (activeConvId) {
-    const ai = filtered.findIndex(c => c.id === activeConvId);
+    const ai = plan.findIndex(it => it.type === 'conv' && it.conv.id === activeConvId);
     if (ai >= firstEnd) firstEnd = ai + 1;
   }
-  firstEnd = Math.min(firstEnd, filtered.length);
+  firstEnd = Math.min(firstEnd, plan.length);
 
   let html = "";
   for (let i = 0; i < firstEnd; i++) {
-    const c = filtered[i];
-    html += _buildConvItemHTML(c, escapeHtml(stripNoTranslateTags(c.title)), "");
+    html += _planItemHtml(plan[i]);
   }
   listEl.innerHTML = html;
 
   /* Everything fits in the first window — no sentinel/observer needed. */
-  if (firstEnd >= filtered.length) return;
+  if (firstEnd >= plan.length) return;
 
   let cursor = firstEnd;
   const sentinel = document.createElement('div');
@@ -377,16 +522,15 @@ function _renderConvWindow(listEl, filtered) {
     if (_convVirtual.sentinel !== sentinel) return;
     if (!entries.some(e => e.isIntersecting)) return;
 
-    const end = Math.min(cursor + _CONV_WINDOW_PAGE, filtered.length);
+    const end = Math.min(cursor + _CONV_WINDOW_PAGE, plan.length);
     let frag = "";
     for (let i = cursor; i < end; i++) {
-      const c = filtered[i];
-      frag += _buildConvItemHTML(c, escapeHtml(stripNoTranslateTags(c.title)), "");
+      frag += _planItemHtml(plan[i]);
     }
     sentinel.insertAdjacentHTML('beforebegin', frag);
     cursor = end;
 
-    if (cursor >= filtered.length) {
+    if (cursor >= plan.length) {
       _teardownConvVirtual();
       return;
     }
@@ -451,11 +595,11 @@ function renderConversationList() {
      *    status tag IN PLACE — no innerHTML rebuild, no full reparse/relayout
      *    of the sidebar (the dominant long-task cost during a send's
      *    translate→stream→done lifecycle). Mirrors the folder-tab fast path. ── */
-    const _structHash = `AF${_activeFolderId||''}|FL${foldersReady?1:0}|F${folderHash}|` +
-      filtered.map(c => `${c.id}|${c.title}|${c.updatedAt||""}|${c.folderId||""}`).join("\n");
+    const _structHash = `AF${_activeFolderId||''}|FL${foldersReady?1:0}|CG${[..._collapsedConvGroups].sort().join('.')}|F${folderHash}|` +
+      filtered.map(c => `${c.id}|${c.title}|${c.updatedAt||""}|${c.folderId||""}|${(c.projectSummary && c.projectSummary.text) ? "S" : ""}`).join("\n");
     const _statusHash = filtered.map(c => {
       const f = _convStatusFlags(c);
-      return `${c.id===activeConvId?1:0}${f.streaming?1:0}${f.translating?1:0}${f.memoryPrefetching?1:0}${f.awaitingHuman?1:0}`;
+      return `${c.id===activeConvId?1:0}${f.streaming?1:0}${f.translating?1:0}${f.memoryPrefetching?1:0}${f.awaitingHuman?1:0}${f.errored?1:0}${f.incomplete?1:0}`;
     }).join(",");
     const _fullHash = `${_structHash}|||${_statusHash}`;
     if (_fullHash === _lastConvListHash) return;
@@ -605,6 +749,21 @@ const _CONV_CP_SVG = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none
 const _CONV_DUP_SVG = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="8" width="14" height="14" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>`;
 const _CONV_FOLDER_SVG = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>`;
 const _CONV_RENAME_SVG = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>`;
+/* "summarized" glyph — a document with text lines (SVG only, no emoji per
+ * §3.4). Shown in a conv row's title when an AI summary is cached
+ * (settings.projectSummary.text); click reveals the cached text. */
+const _CONV_SUMMARY_SVG = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="14" y2="17"/></svg>`;
+
+/* Click handler for the sidebar summarized-conversation glyph. Reads the
+ * cached summary text off the badge's data-summary attribute and surfaces it
+ * via the shared toast. stopPropagation so it doesn't open/activate the row. */
+function showConvSummary(badgeEl, ev) {
+  if (ev) { ev.stopPropagation(); ev.preventDefault(); }
+  const text = (badgeEl && badgeEl.dataset && badgeEl.dataset.summary) || '';
+  if (!text) return;
+  const title = (typeof t === 'function') ? t('sidebar.summaryTitle') : 'Summary';
+  if (typeof showToast === 'function') showToast('', title, text, 8000);
+}
 
 /**
  * Compute the four mutually-relevant status flags for a conversation row.
@@ -612,7 +771,7 @@ const _CONV_RENAME_SVG = `<svg width="14" height="14" viewBox="0 0 24 24" fill="
  * all three agree on exactly when a dot / tag should show.
  *
  * @param {Object} c — conversation object
- * @returns {{streaming:boolean, translating:boolean, memoryPrefetching:boolean, awaitingHuman:boolean}}
+ * @returns {{streaming:boolean, translating:boolean, memoryPrefetching:boolean, awaitingHuman:boolean, errored:boolean, incomplete:boolean}}
  */
 function _convStatusFlags(c) {
   const translating = !!c._translating;
@@ -636,7 +795,69 @@ function _convStatusFlags(c) {
       }
     }
   }
-  return { streaming, translating, memoryPrefetching, awaitingHuman };
+  // ★ Settled final-generation state — the conv is idle (not streaming) and
+  //   its most-recent assistant turn ended abnormally. Two distinct buckets:
+  //     errored    → hard failure (msg.error, or an ERR-tier finishReason)
+  //     incomplete → the turn stopped without finishing and without a hard
+  //                   error (aborted / interrupted / truncated / gateway
+  //                   close / rounds-exhausted …) — "not completed, needs
+  //                   attention". A turn with NO finishReason but with actual
+  //                   content is treated as complete (legacy turns predate the
+  //                   field); a bare placeholder with neither content, error,
+  //                   nor finishReason is a dangling/interrupted generation.
+  //   Only the latest assistant turn defines the final state; errored wins
+  //   over incomplete when both could apply.
+  let errored = false;
+  let incomplete = false;
+  if (!streaming && c.messages) {
+    for (let i = c.messages.length - 1; i >= 0; i--) {
+      const m = c.messages[i];
+      if (m.role !== 'assistant') continue;
+      const fr = m.finishReason;
+      if (m.error || _FINISH_ERR.has(fr)) {
+        errored = true;
+      } else if (fr) {
+        incomplete = !_FINISH_NORMAL.has(fr);
+      } else {
+        // No finishReason: complete only if the turn actually produced output.
+        const hasOutput = !!((m.content && m.content.length) ||
+                             (m.thinking && m.thinking.length) ||
+                             (m.toolRounds && m.toolRounds.length) ||
+                             m._igResults);
+        incomplete = !hasOutput;
+      }
+      // ★ Autopilot exception — an autopilot run's LAST agent turn is stamped
+      //   `interrupted`/`aborted` by the VU loop that stops it, even though the
+      //   run itself concluded (it produced a debrief report). If the run this
+      //   turn belongs to has a concluded summary record, the conversation is
+      //   done from the user's view → don't flag it. Only downgrades the
+      //   "settled abnormal" states; a genuine error envelope still shows.
+      if ((incomplete || errored) && !m.error && _autopilotRunConcluded(c, i)) {
+        incomplete = false;
+        errored = false;
+      }
+      break;
+    }
+  }
+  // ★ Messages-stripped fallback — the sidebar (?meta=1) shell has no
+  //   c.messages, so the block above can't run. Use the raw settled-turn facts
+  //   the backend stamps into settings (lastFinishReason / lastMsgError /
+  //   lastMsgHasOutput) and run the SAME _FINISH_ERR/_FINISH_NORMAL classifier
+  //   so a crash-interrupted conv shows its amber dot before the user opens it.
+  //   awaiting_human + autopilot-concluded downgrades still need full messages
+  //   (not carried in meta) → those stay precise only after load; not a
+  //   regression (pre-load showed nothing at all).
+  else if (!streaming && !c.messages && c.lastMsgRole === 'assistant') {
+    const fr = c.lastFinishReason;
+    if (c.lastMsgError || _FINISH_ERR.has(fr)) {
+      errored = true;
+    } else if (fr) {
+      incomplete = !_FINISH_NORMAL.has(fr);
+    } else {
+      incomplete = !c.lastMsgHasOutput;
+    }
+  }
+  return { streaming, translating, memoryPrefetching, awaitingHuman, errored, incomplete };
 }
 
 /**
@@ -654,6 +875,10 @@ function _convStatusHtml(f) {
     dotHtml = `<div class="conv-memprefetch-dot" title="${t('sidebar.memoryPrefetch')}"></div>`;
   } else if (f.streaming) {
     dotHtml = '<div class="conv-streaming-dot"></div>';
+  } else if (f.errored) {
+    dotHtml = `<div class="conv-error-dot" title="${t('sidebar.errorState')}"></div>`;
+  } else if (f.incomplete) {
+    dotHtml = `<div class="conv-incomplete-dot" title="${t('sidebar.incompleteState')}"></div>`;
   }
   let statusTag = '';
   if (f.translating) {
@@ -662,6 +887,10 @@ function _convStatusHtml(f) {
     statusTag = `<span class="conv-status-tag conv-status-memprefetch">${t('sidebar.memoryPrefetchTag')}</span>`;
   } else if (f.streaming) {
     statusTag = `<span class="conv-status-tag conv-status-streaming">${t('sidebar.answering')}</span>`;
+  } else if (f.errored) {
+    statusTag = `<span class="conv-status-tag conv-status-error" title="${t('sidebar.errorState')}">${t('sidebar.errorTag')}</span>`;
+  } else if (f.incomplete) {
+    statusTag = `<span class="conv-status-tag conv-status-incomplete" title="${t('sidebar.incompleteState')}">${t('sidebar.incompleteTag')}</span>`;
   }
   return { dotHtml, statusTag };
 }
@@ -679,7 +908,7 @@ function _applyConvItemStatus(row, c) {
 
   /* Leading dot: it's the first child of .conv-item when present (before
    * .conv-text). Reconcile by comparing the current dot markup. */
-  const curDot = row.querySelector(':scope > .conv-translating-dot, :scope > .conv-memprefetch-dot, :scope > .conv-streaming-dot, :scope > .conv-awaiting-human-dot');
+  const curDot = row.querySelector(':scope > .conv-translating-dot, :scope > .conv-memprefetch-dot, :scope > .conv-streaming-dot, :scope > .conv-awaiting-human-dot, :scope > .conv-error-dot, :scope > .conv-incomplete-dot');
   const curDotHtml = curDot ? curDot.outerHTML : '';
   if (curDotHtml !== dotHtml) {
     if (curDot) curDot.remove();
@@ -704,10 +933,14 @@ function _buildConvItemHTML(c, titleHtml, snippetHtml) {
   const eid = escapeHtml(c.id);
   const isActive = c.id === activeConvId ? " active" : "";
   const feishuBadge = c.source === 'feishu' ? `<span class="conv-feishu-badge" title="${t('sidebar.feishuConv')}">Feishu</span>` : '';
+  const _summaryText = (c.projectSummary && c.projectSummary.text) ? String(c.projectSummary.text) : '';
+  const summaryBadge = _summaryText
+    ? `<span class="conv-summary-badge" data-summary="${escapeHtml(_summaryText)}" title="${t('sidebar.summaryBadge')}" onclick="showConvSummary(this, event)">${_CONV_SUMMARY_SVG}</span>`
+    : '';
   const _isDebug = typeof _featureFlags !== 'undefined' && _featureFlags.debug_mode;
   const copyIdBtn = _isDebug ? `<button class="conv-action-btn conv-copy-id" data-conv-id="${eid}" title="${t('sidebar.copyConvId')}">${_CONV_CP_SVG}</button>` : '';
   const folderClass = c.folderId ? ' in-folder' : '';
-  return `<div class="conv-item${isActive}${folderClass}" data-conv-id="${eid}" draggable="true" title="ID: ${eid}">${dotHtml}<div class="conv-text"><div class="conv-title">${feishuBadge}${titleHtml}</div>${snippetHtml || ""}<div class="conv-date">${formatConvTime(c.updatedAt || c.createdAt)}${statusTag}</div></div><div class="conv-actions">${copyIdBtn}<button class="conv-action-btn conv-rename" data-conv-id="${eid}" title="${t('sidebar.renameConv')}">${_CONV_RENAME_SVG}</button><button class="conv-action-btn conv-ref" data-conv-id="${eid}" data-conv-title="${escapeHtml(c.title || 'Untitled')}" title="${t('sidebar.refConv')}">@</button><button class="conv-action-btn conv-folder-assign" data-conv-id="${eid}" title="${t('sidebar.moveToFolder')}">${_CONV_FOLDER_SVG}</button><button class="conv-action-btn conv-dup" data-conv-id="${eid}" title="${t('sidebar.duplicate')}">${_CONV_DUP_SVG}</button><button class="conv-action-btn conv-delete" data-conv-id="${eid}" title="${t('sidebar.deleteConv')}">${_CONV_DEL_SVG}</button></div></div>`;
+  return `<div class="conv-item${isActive}${folderClass}" data-conv-id="${eid}" draggable="true" title="ID: ${eid}">${dotHtml}<div class="conv-text"><div class="conv-title">${feishuBadge}${summaryBadge}${titleHtml}</div>${snippetHtml || ""}<div class="conv-date">${formatConvTime(c.updatedAt || c.createdAt)}${statusTag}</div></div><div class="conv-actions">${copyIdBtn}<button class="conv-action-btn conv-rename" data-conv-id="${eid}" title="${t('sidebar.renameConv')}">${_CONV_RENAME_SVG}</button><button class="conv-action-btn conv-ref" data-conv-id="${eid}" data-conv-title="${escapeHtml(c.title || 'Untitled')}" title="${t('sidebar.refConv')}">@</button><button class="conv-action-btn conv-folder-assign" data-conv-id="${eid}" title="${t('sidebar.moveToFolder')}">${_CONV_FOLDER_SVG}</button><button class="conv-action-btn conv-dup" data-conv-id="${eid}" title="${t('sidebar.duplicate')}">${_CONV_DUP_SVG}</button><button class="conv-action-btn conv-delete" data-conv-id="${eid}" title="${t('sidebar.deleteConv')}">${_CONV_DEL_SVG}</button></div></div>`;
 }
 
 function highlightMatch(text, query) {
@@ -873,6 +1106,16 @@ function _resolveAssistantById(conv, msgId, fallback) {
  */
 function _findAutopilotPendingCarrier(conv) {
   if (!conv || !Array.isArray(conv.messages)) return null;
+  /* ★ AUTHORITATIVE source: a conv-level baton set by the done/poll
+   *   handlers.  Unlike the per-message stamp below it cannot be lost
+   *   when a message is spliced out (vu_cancel, edit) — the backend's
+   *   fact (nextTaskId) is held on the conv object, not a positional
+   *   message.  The per-message scan is kept only as a compat reader
+   *   for batons stamped before this field existed. */
+  const _baton = conv._apPendingBaton;
+  if (_baton && _baton.nextTaskId) {
+    return { msg: { _autopilotPending: _baton }, idx: -1, _convLevel: true };
+  }
   for (let i = conv.messages.length - 1; i >= 0; i--) {
     const m = conv.messages[i];
     if (m && m._autopilotPending) return { msg: m, idx: i };

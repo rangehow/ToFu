@@ -402,8 +402,8 @@ function updateSubmenuCounts() {
   const toolTrigger = document.querySelector("#submenuTools .submenu-trigger");
   if (toolTrigger) toolTrigger.classList.toggle("has-active", toolCount > 0);
 
-  // Mode: swarm, endpoint, autopilot
-  const modeCount = (swarmEnabled ? 1 : 0) + (endpointEnabled ? 1 : 0) + (autopilotEnabled ? 1 : 0);
+  // Mode: swarm, endpoint, autopilot, flow
+  const modeCount = (swarmEnabled ? 1 : 0) + (endpointEnabled ? 1 : 0) + (autopilotEnabled ? 1 : 0) + (activeFlow ? 1 : 0);
   _setCount(document.getElementById("submenuModeCount"), modeCount);
   const modeTrigger = document.querySelector("#submenuMode .submenu-trigger");
   if (modeTrigger) modeTrigger.classList.toggle("has-active", modeCount > 0);
@@ -464,6 +464,8 @@ async function _checkBrowserStatus() {
   const badge = document.getElementById("browserBadge");
   try {
     const d = await Api.browser.status();
+    _applyBrowserLocalShortcut(d && d.extensionPath);
+    _applyBrowserLnaWarning(d && d.chromeMajor);
     if (d && d.connected) {
       dot?.classList.replace("disconnected", "connected") ||
         dot?.classList.add("connected");
@@ -473,6 +475,9 @@ async function _checkBrowserStatus() {
        * correct device's extension, not a random one. */
       const clients = d.clients || [];
       const clientCount = clients.length;
+      /* secondsAgo is null until the first poll lands — render a fallback
+       * instead of the literal string "nulls ago". */
+      const ago = (d.secondsAgo != null) ? `${d.secondsAgo}s ago` : "just now";
       if (clientCount > 0) {
         /* Use the first connected client (most recently active) */
         const activeClient = clients[0];
@@ -481,10 +486,10 @@ async function _checkBrowserStatus() {
         txt &&
           (txt.textContent = clientCount > 1
             ? `${clientCount} extensions connected (using ${shortId}…)`
-            : `Extension connected (${shortId}…, ${d.secondsAgo}s ago)`);
+            : `Extension connected (${shortId}…, ${ago})`);
       } else {
         txt &&
-          (txt.textContent = `Extension connected (${d.secondsAgo}s ago)`);
+          (txt.textContent = `Extension connected (${ago})`);
       }
       badge?.classList.remove("disconnected");
     } else {
@@ -504,6 +509,71 @@ async function _checkBrowserStatus() {
 }
 function downloadBrowserExtension() {
   window.open(apiUrl("/api/browser/download"), "_blank");
+}
+
+/* ★ When Tofu runs on the user's own machine the unpacked extension already
+ * sits on disk — show its absolute path so they can "Load unpacked" it
+ * directly with NO download/unzip. The path is click-to-copy. */
+function _applyBrowserLocalShortcut(extPath) {
+  const box = document.getElementById("browserLocalShortcut");
+  const code = document.getElementById("browserExtPath");
+  if (!box || !code) return;
+  if (!extPath) {
+    box.style.display = "none";
+    return;
+  }
+  box.style.display = "";
+  code.textContent = extPath;
+  code.onclick = function () {
+    if (typeof _safeClipboardWrite === "function") {
+      _safeClipboardWrite(extPath)
+        .then(() => code.classList.add("copied"))
+        .catch(() => {});
+    }
+  };
+}
+
+/* ★ Chrome 142+ ships "Local Network Access" prompts on by default, which fire
+ * per-site during multi-tab searches. The extension can't grant this itself,
+ * so when the CONNECTED extension reports Chromium >= 142 we surface guidance
+ * to disable the prompt at the browser level (flag or managed policy). */
+function _applyBrowserLnaWarning(chromeMajor) {
+  const box = document.getElementById("browserLnaWarning");
+  if (!box) return;
+  if (!chromeMajor || chromeMajor < 142) {
+    box.style.display = "none";
+    return;
+  }
+  box.style.display = "";
+  // Click-to-copy the policy JSON.
+  const pol = document.getElementById("browserLnaPolicy");
+  if (pol && !pol._wired) {
+    pol._wired = true;
+    pol.onclick = function () {
+      if (typeof _safeClipboardWrite === "function") {
+        _safeClipboardWrite(pol.textContent)
+          .then(() => pol.classList.add("copied"))
+          .catch(() => {});
+      }
+    };
+  }
+  // Show the OS-specific managed-policy directory (best-effort, from the UA of
+  // the browser viewing this page — usually the same machine as the bridge).
+  const pathEl = document.getElementById("browserLnaPath");
+  if (pathEl) {
+    const ua = (navigator.userAgent || "").toLowerCase();
+    let dir = "";
+    if (ua.includes("windows")) {
+      dir = "HKLM\\SOFTWARE\\Policies\\Google\\Chrome\\ (via registry / Group Policy)";
+    } else if (ua.includes("mac os") || ua.includes("macintosh")) {
+      dir = "defaults write com.google.Chrome LocalNetworkAccessAllowedForUrls -array '*'";
+    } else {
+      dir = "/etc/opt/chrome/policies/managed/tofu-lna.json";
+    }
+    const label = (typeof t === "function") ? t("browser.lnaPathLabel") : "Place it at:";
+    pathEl.style.display = "";
+    pathEl.innerHTML = label + " <code>" + dir.replace(/</g, "&lt;") + "</code>";
+  }
 }
 
 // ══════════════════════════════════════════════════════
@@ -546,6 +616,10 @@ function toggleEndpoint() {
     _applyAutopilotUI(false);
     debugLog("Autopilot disabled — Endpoint Mode takes precedence", "info");
   }
+  if (endpointEnabled && activeFlow) {
+    _applyFlowUI('');
+    debugLog("Flow cleared — Endpoint Mode takes precedence", "info");
+  }
   _saveConvToolState();
   debugLog(
     endpointEnabled
@@ -572,14 +646,244 @@ function toggleAutopilot() {
     _applyEndpointUI(false);
     debugLog("Endpoint Mode disabled — Autopilot takes precedence", "info");
   }
+  /* A flow selection and the toggles are mutually exclusive — the flow IS
+   * the execution mode (backend drops the toggles when a flow is set). */
+  if (autopilotEnabled && activeFlow) {
+    _applyFlowUI('');
+    debugLog("Flow cleared — Autopilot takes precedence", "info");
+  }
   _saveConvToolState();
   debugLog(
     autopilotEnabled
-      ? "Autopilot: ON — virtual user keeps the conversation going until it decides the task is done"
+      ? "Autopilot: ON — send an empty message to hand the conversation to the virtual user"
       : "Autopilot: OFF",
     "success",
   );
+  /* ★ Turning the toggle ON does NOT take over immediately — opening the
+   * switch mid-reply only ENABLES autopilot; the user explicitly hands off by
+   * sending an empty message (see _doSendOrGenerate → _maybeArmAutopilot),
+   * which enqueues a cancellable armed-marker that the user can see and cancel.
+   * Turning the toggle OFF disarms: clears the marker + flips any live task's
+   * config off so the loop stops at the current turn's natural end. */
+  if (!autopilotEnabled) {
+    const _conv = (typeof getActiveConv === 'function') ? getActiveConv() : null;
+    if (_conv && typeof Api !== 'undefined' && Api.chat && Api.chat.disarmAutopilot) {
+      Api.chat.disarmAutopilot(_conv.id)
+        .then((resp) => {
+          /* Fold the just-concluded run instantly even with no live stream. */
+          if (typeof _applyDisarmResponse === 'function') _applyDisarmResponse(_conv.id, resp);
+          if (typeof _refreshServerQueue === 'function') _refreshServerQueue(_conv.id);
+        })
+        .catch((e) => console.warn('[Autopilot] disarm failed:', e && e.message));
+    }
+  }
 }
+
+/**
+ * Arm autopilot for the active conversation — the explicit "hand it over"
+ * gesture (empty send while autopilot is ON).
+ *
+ * Enqueues a persistent armed-marker (priority 90) into the server-side
+ * turn-source queue.  Unlike the old behavior, this works whether or not a
+ * reply is currently streaming:
+ *   • Streaming    → the in-flight task's config is flipped too, so the VU
+ *     takes over at its natural stop without re-sending.
+ *   • Idle (done)  → the marker still arms autopilot; it shows in the queue
+ *     bar as "Autopilot 待接管" and the user can cancel it.
+ * The marker outranks nothing and is outranked by every real message, so a
+ * human message the user types later is always processed first.
+ *
+ * After arming we refresh the queue bar so the cancellable sentinel appears.
+ */
+function _maybeArmAutopilot() {
+  const conv = getActiveConv();
+  if (!conv) return;
+  if (!(typeof Api !== 'undefined' && Api.chat && Api.chat.armAutopilot)) return;
+  Api.chat.armAutopilot(conv.id).then((r) => {
+    if (r && r.armed) {
+      debugLog("Autopilot armed — virtual user will take over (you can cancel it in the queue bar)", "success");
+      if (typeof showToast === "function") {
+        showToast("", t('autopilot.armedTitle'), t('autopilot.armedBody'), 4000);
+      }
+    }
+    /* Surface the pending sentinel (and any real queued messages) in the bar. */
+    if (typeof _refreshServerQueue === 'function') _refreshServerQueue(conv.id);
+  }).catch((e) => console.warn('[Autopilot] arm failed:', e && e.message));
+}
+if (typeof window !== 'undefined') window._maybeArmAutopilot = _maybeArmAutopilot;
+
+/**
+ * Kick autopilot on the active conversation when its reply has ALREADY
+ * finished — the "push it forward" gesture (empty-Enter, autopilot ON, not
+ * streaming). Spawns a backend carrier task that runs the virtual-user hook
+ * directly (no AI worker turn), then connects to its SSE stream so the VU
+ * bubble streams in identically to a natural-stop takeover.
+ *
+ * No-op when something is still streaming (the arm path covers that) or when
+ * autopilot is off.
+ */
+async function _kickAutopilot() {
+  const conv = getActiveConv();
+  if (!conv) return;
+  if (typeof autopilotEnabled !== 'undefined' && !autopilotEnabled) return;
+  const streaming = activeStreams.has(conv.id) || !!conv.activeTaskId;
+  if (streaming) return;
+  if (!(typeof Api !== 'undefined' && Api.chat && Api.chat.kickAutopilot)) return;
+  let cfg = {};
+  try {
+    if (typeof _buildConvConfig === 'function') cfg = await _buildConvConfig(conv);
+  } catch (e) {
+    console.warn('[Autopilot] kick: _buildConvConfig failed, using defaults:', e && e.message);
+  }
+  try {
+    const r = await Api.chat.kickAutopilot(conv.id, cfg);
+    if (r && r.taskId) {
+      conv.activeTaskId = r.taskId;
+      if (typeof saveConversations === 'function') saveConversations(conv.id);
+      renderConversationList();
+      updateSendButton();
+      debugLog('Autopilot taking over — virtual user is composing the next reply', 'success');
+      connectToTask(conv.id, r.taskId, 0, { autopilotKick: true });
+    }
+  } catch (e) {
+    /* 409 = a task is already running for this conv (arm path applies). */
+    console.warn('[Autopilot] kick failed:', e && e.message);
+  }
+}
+if (typeof window !== 'undefined') window._kickAutopilot = _kickAutopilot;
+
+// ══════════════════════════════════════════════════════
+// ★ Orchestration Flow selector (Mode dropdown)
+//   activeFlow ∈ { '' , 'builtin:endpoint', 'builtin:autopilot', <orchId> }.
+//   Selecting a flow makes the whole conversation run on the FlowExecutor
+//   engine (routes/chat.py → resolve_chat_flow_entry); it is mutually
+//   exclusive with the endpoint/autopilot toggles (the flow IS the mode).
+// ══════════════════════════════════════════════════════
+var _orchFlowCache = null;   // cached [{id,name}] of stored custom flows
+
+function _applyFlowUI(flowVal) {
+  /* ★ Normalize a persisted/synced builtin:autopilot back to the autopilot
+   *   toggle state. New selections never store this (setActiveFlow aliases it
+   *   away), but a conversation saved BEFORE this change — or synced from a
+   *   peer/older client — carries activeFlow='builtin:autopilot'. Restoring it
+   *   as a flow would resurrect the flow badge + "runs on engine" identity for
+   *   what the backend actually runs as plain autopilot. Redirect it here so
+   *   EVERY caller (including _restoreConvToolState on reload) converges on the
+   *   autopilot toggle. Single choke point — do NOT re-list this per caller. */
+  if ((flowVal || '') === 'builtin:autopilot') {
+    activeFlow = '';
+    if (typeof _applyAutopilotUI === 'function') _applyAutopilotUI(true);
+    if (typeof _applyEndpointUI === 'function') _applyEndpointUI(false);
+    flowVal = '';
+  }
+  activeFlow = flowVal || '';
+  const btn = document.getElementById("flowToggle");
+  if (btn) btn.classList.toggle("active", !!activeFlow);
+  const badge = document.getElementById("flowBadge");
+  if (badge) badge.style.display = activeFlow ? "" : "none";
+  const label = document.getElementById("flowActiveLabel");
+  if (label) label.textContent = _flowDisplayName(activeFlow);
+  // Reflect the radio-style selection in the dropdown list.
+  document.querySelectorAll('#flowMenuList .flow-menu-item').forEach(el => {
+    el.classList.toggle('selected', (el.dataset.flow || '') === activeFlow);
+  });
+}
+
+function _flowDisplayName(flowVal) {
+  if (!flowVal) return t('toolbar.flowNone');
+  if (flowVal === 'builtin:endpoint') return t('toolbar.autonomousMode');
+  if (flowVal === 'builtin:autopilot') return t('toolbar.autopilot');
+  const f = (_orchFlowCache || []).find(x => ('' + x.id) === flowVal);
+  return f ? f.name : t('toolbar.flowCustom');
+}
+
+function setActiveFlow(flowVal) {
+  /* ★ builtin:autopilot is the standalone Autopilot toggle wearing a dropdown
+   *   entry. The backend routes flowBuiltin='autopilot' to the LIVE standalone
+   *   autopilot path (resolve_chat_flow_entry, Option C) unless the
+   *   TOFU_AUTOPILOT_VIA_FLOW dev flag is on — so the DEFAULT experience is the
+   *   plain autopilot loop, NOT an engine flow. Present it that way in the UI
+   *   too: alias the selection to the autopilot toggle so the badge, info-rail
+   *   mode chip, and the /config/resolve payload are byte-identical to picking
+   *   the toggle. Single writer — the flow selector delegates to toggleAutopilot
+   *   rather than growing its own parallel "autopilot but as a flow" state. */
+  if ((flowVal || '') === 'builtin:autopilot') {
+    _applyFlowUI('');                 // never carry a flow selection for autopilot
+    if (!autopilotEnabled) {
+      toggleAutopilot();              // → sets autopilotEnabled, clears endpoint/flow, saves
+    } else {
+      _saveConvToolState();
+    }
+    if (typeof updateSubmenuCounts === 'function') updateSubmenuCounts();
+    const _menu = document.getElementById("flowMenu");
+    if (_menu) _menu.classList.remove("open");
+    debugLog("Autopilot: ON (selected from Mode menu) — same as the toolbar toggle", "success");
+    return;
+  }
+  _applyFlowUI(flowVal || '');
+  /* Flow ⇄ toggles mutual exclusion: a flow owns the loop boundary. */
+  if (activeFlow && (endpointEnabled || autopilotEnabled)) {
+    _applyEndpointUI(false);
+    _applyAutopilotUI(false);
+  }
+  _saveConvToolState();
+  if (typeof updateSubmenuCounts === 'function') updateSubmenuCounts();
+  debugLog(
+    activeFlow ? `Flow: ${_flowDisplayName(activeFlow)} — runs on the orchestration engine`
+               : "Flow: none",
+    "success",
+  );
+  // Close the dropdown after a pick.
+  const menu = document.getElementById("flowMenu");
+  if (menu) menu.classList.remove("open");
+}
+
+function toggleFlowMenu(e) {
+  if (e) e.stopPropagation();
+  const menu = document.getElementById("flowMenu");
+  if (!menu) return;
+  const willOpen = !menu.classList.contains("open");
+  menu.classList.toggle("open", willOpen);
+  if (willOpen) _populateFlowMenu();
+}
+
+async function _populateFlowMenu() {
+  const list = document.getElementById("flowMenuList");
+  if (!list) return;
+  // Built-ins are always present; custom flows come from the store.
+  let custom = [];
+  try {
+    custom = await Api.orchestrations.list();
+    _orchFlowCache = (custom || []).map(e => ({ id: e.id, name: e.name || 'Untitled' }));
+  } catch (err) {
+    console.warn('[Flow] list failed:', err && err.message);
+    _orchFlowCache = _orchFlowCache || [];
+  }
+  const items = [
+    { flow: '', name: t('toolbar.flowNone'), desc: t('toolbar.flowNoneDesc') },
+    { flow: 'builtin:endpoint', name: t('toolbar.autonomousMode'), desc: t('toolbar.autonomousModeDesc') },
+    { flow: 'builtin:autopilot', name: t('toolbar.autopilot'), desc: t('toolbar.autopilotDesc') },
+  ];
+  for (const f of (_orchFlowCache || [])) {
+    items.push({ flow: '' + f.id, name: f.name, desc: t('toolbar.flowCustomDesc') });
+  }
+  list.innerHTML = items.map(it =>
+    '<div class="flow-menu-item' + ((it.flow === activeFlow) ? ' selected' : '') + '" '
+    + 'data-flow="' + escapeHtml(it.flow) + '" onclick="setActiveFlow(\'' + escapeHtml(it.flow).replace(/'/g, "\\'") + '\')">'
+    + '<span class="flow-menu-check">✓</span>'
+    + '<span class="flow-menu-text"><span class="flow-menu-name">' + escapeHtml(it.name) + '</span>'
+    + '<span class="flow-menu-desc">' + escapeHtml(it.desc) + '</span></span>'
+    + '</div>'
+  ).join('');
+}
+
+// Close the flow menu on outside click.
+document.addEventListener("click", (e) => {
+  if (!e.target.closest("#flowMenuWrapper")) {
+    const menu = document.getElementById("flowMenu");
+    if (menu) menu.classList.remove("open");
+  }
+});
 
 /* ═══ Folder management UI ═══ */
 

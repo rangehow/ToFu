@@ -26,6 +26,7 @@ from .auth import (  # noqa: F401  — re-exports for tests/clients
 # Import sub-blueprints. Each sub-module registers routes on its own
 # Blueprint and exposes it as ``<name>_bp``.
 from .chat import api_v1_chat_bp
+from .chat_direct import api_v1_chat_direct_bp
 from .tasks import api_v1_tasks_bp
 from .capabilities import api_v1_capabilities_bp
 from .keys import api_v1_keys_bp
@@ -34,7 +35,6 @@ from .billing import api_v1_billing_bp
 from .users import api_v1_users_bp
 from .conversations import api_v1_conversations_bp
 from .agents import api_v1_agents_bp
-from .agent_backends import api_v1_agent_backends_bp
 from .agent_run import api_v1_agent_run_bp
 from .folders import api_v1_folders_bp
 from .orchestrations import api_v1_orchestrations_bp
@@ -65,6 +65,7 @@ from .update import api_v1_update_bp
 
 ALL_V1_BLUEPRINTS = [
     api_v1_chat_bp,
+    api_v1_chat_direct_bp,
     api_v1_tasks_bp,
     api_v1_capabilities_bp,
     api_v1_keys_bp,
@@ -73,7 +74,6 @@ ALL_V1_BLUEPRINTS = [
     api_v1_users_bp,
     api_v1_conversations_bp,
     api_v1_agents_bp,
-    api_v1_agent_backends_bp,
     api_v1_agent_run_bp,
     api_v1_folders_bp,
     api_v1_orchestrations_bp,

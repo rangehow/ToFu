@@ -19,20 +19,23 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 from lib.agent_core.events import EventType, build_event
-from lib.log import get_logger
+from lib.log import audit_log, get_logger
 from lib.protocols import TaskEventSink
 
 logger = get_logger(__name__)
 
 from lib.tasks_pkg.approval import request_write_approval
-from lib.tasks_pkg.compaction import budget_tool_result, enforce_round_aggregate_budget, mark_empty_result
+from lib.tasks_pkg.compaction import budget_tool_result, clamp_tool_result_text, enforce_round_aggregate_budget, mark_empty_result
 from lib.tasks_pkg.executor import SWARM_TOOL_NAMES, _build_simple_meta, _execute_tool_one, _finalize_tool_round, tool_registry
 from lib.tasks_pkg.manager import _strip_base64_for_snapshot, append_event
 from lib.tasks_pkg.tool_display import _build_tool_round_entry
 from lib.tasks_pkg.tool_hooks import run_post_hooks, run_pre_hooks
 from lib.token_counter import count_text
-from lib.tool_input_repair import resolve_tool_name, schema_hint, validate_then_repair
-from lib.tools import PROJECT_TOOL_NAMES, build_project_tool_meta
+from lib.tool_input_repair import (
+    HALLUCINATION_ABORT_THRESHOLD,
+    ingest_tool_call,
+)
+from lib.tools import build_project_tool_meta
 from lib.model_info import model_supports_vision
 
 
@@ -49,6 +52,7 @@ _REPAIR_PATTERN_LABELS = {
     'bare_string_to_array': 'wrapped string in array',
     'empty_placeholder_unwrap': 'unwrapped object to array',
     'leaked_tool_call_syntax': 'stripped leaked tool-call markup',
+    'param_alias': 'renamed wrong-harness arg key',
 }
 
 
@@ -148,6 +152,8 @@ _IDEMPOTENT_TOOLS_BASE = frozenset({
     'browser_summarize_page', 'browser_get_app_state',
     'browser_get_interactive_elements',
     'list_conversations', 'get_conversation',
+    'project_charter_read', 'project_board_read',
+    'project_peer_status',
 })
 
 # ── Concurrency safety partitioning ──
@@ -184,6 +190,46 @@ def _registry_tool_flags() -> tuple[frozenset, frozenset]:
 
 
 _WRITE_TOOLS, _IDEMPOTENT_TOOLS = _registry_tool_flags()
+
+
+def _task_partitions(task: dict[str, Any]) -> tuple[frozenset, frozenset]:
+    """Per-task write/idempotent partitions: base UNION the task's custom env.
+
+    The module-level ``_WRITE_TOOLS`` / ``_IDEMPOTENT_TOOLS`` are frozen at
+    import and cover built-ins + ToolSpec plugins. Per-request custom tools
+    (``task['_tool_env']``) declare their own ``write`` / ``idempotent`` flags,
+    which would otherwise be invisible here — a custom write tool would run in
+    the parallel pool (race) and a custom read tool would never dedup. Union
+    them in at dispatch time so the partitions are correct for THIS task.
+    """
+    write = set(_WRITE_TOOLS)
+    idem = set(_IDEMPOTENT_TOOLS)
+    # ── MCP tools: conservative write classification ──
+    # External MCP tools carry no built-in safety partition, so by default we
+    # treat every discovered MCP tool as a WRITE tool (serial dispatch +
+    # approval-eligible in Manual mode). A tool whose MCP ``readOnlyHint``
+    # annotation is explicitly True is exempted (stays in the parallel pool).
+    # This closes the hole where an arbitrary remote-mutating MCP tool ran in
+    # parallel with no approval. Computed per-task because the MCP bridge may
+    # connect after this module is imported.
+    try:
+        from lib.mcp import get_bridge
+        bridge = get_bridge()
+        if bridge.connected:
+            for ns_name, read_only in bridge.get_tool_safety().items():
+                if not read_only:
+                    write.add(ns_name)
+    except Exception as e:
+        logger.debug('[tool_dispatch] MCP partition classification skipped: %s', e)
+    # ── Per-request custom tools (task-local env) ──
+    env = task.get('_tool_env')
+    if env is not None:
+        try:
+            write |= env.write_names
+            idem |= env.idempotent_names
+        except Exception as e:
+            logger.debug('[tool_dispatch] task partition union skipped: %s', e)
+    return frozenset(write), frozenset(idem)
 
 
 
@@ -273,19 +319,36 @@ def _build_cache_hit_meta(
         fmt = cached_content.get('format', 'png')
         comp_size = cached_content.get('compressedSize', 0)
         filename = os.path.basename(fn_args.get('path', '') or '')
-        data_uri = cached_content.get('dataUrl', '') or ''
         source_label = 'Prefetch' if is_prefetch else 'Cache'
         badge_suffix = '' if is_prefetch else ' (cached)'
+        # Multi-image batch carries every image in ``images``; fall back to
+        # the dict itself for a single image.
+        img_dicts = cached_content.get('images') or [cached_content]
+        descriptors = []
+        for img in img_dicts:
+            uri = img.get('dataUrl', '') or ''
+            if uri:
+                descriptors.append({
+                    'uri': uri,
+                    'format': img.get('format', fmt),
+                    'filename': img.get('filename', '') or filename,
+                })
+        n = len(img_dicts)
+        title = f'🖼️ {filename}' if filename else '🖼️ image'
+        snippet = f'{filename or "image"} ({fmt}, {comp_size:,} bytes)'
+        if n > 1:
+            title = f'🖼️ {n} images'
+            snippet = f'{n} images loaded'
         meta = {
             'toolName': fn_name,
-            'title': f'🖼️ {filename}' if filename else f'🖼️ image',
-            'snippet': f'{filename or "image"} ({fmt}, {comp_size:,} bytes)',
+            'title': title,
+            'snippet': snippet,
             'source': source_label, 'fetched': True,
             'fetchedChars': comp_size, 'url': '',
             'badge': f'🖼️ {fmt}{badge_suffix}',
         }
-        if data_uri:
-            meta['imageDataUris'] = [{'uri': data_uri, 'format': fmt, 'filename': filename}]
+        if descriptors:
+            meta['imageDataUris'] = descriptors
         return meta
 
     content_str = cached_content if isinstance(cached_content, str) else str(cached_content)
@@ -385,8 +448,6 @@ _TOOL_EXEC_LABELS = {
 }
 
 
-# _repair_json now lives in lib.utils — no lazy import wrapper needed.
-from lib.utils import repair_json as _repair_json
 
 
 def tool_label(tn: str) -> str:
@@ -404,6 +465,52 @@ def tool_label(tn: str) -> str:
         if parsed:
             return f'🔌 {parsed[0]}/{parsed[1]}'
     return tn
+
+
+def _known_tool_names(task: dict[str, Any]) -> set[str]:
+    """Build the set of tool names that are REAL for this task's turn.
+
+    The source of truth is ``task['_tool_schema']`` — the exact tool list
+    shipped to the model this round (built-ins + MCP + swarm + memory +
+    per-request custom tools). Using the schema set, rather than the global
+    ``tool_registry``, guarantees we never flag a legitimately-registered
+    MCP/swarm/custom tool as hallucinated just because it isn't a built-in.
+
+    Falls back to the global registry's exact names ∪ custom-env names when
+    no schema was attached (e.g. a unit test that calls parse_tool_calls
+    directly), so classification degrades safely instead of flagging
+    everything.
+    """
+    names: set[str] = set()
+    for t in (task.get('_tool_schema') or []):
+        if isinstance(t, dict):
+            fn = t.get('function') or {}
+            n = fn.get('name')
+            if n:
+                names.add(n)
+    # Per-request custom tools (their schemas are normally already in
+    # _tool_schema, but union them in directly so classification is correct
+    # even if the snapshot predates a late-attached env).
+    env = task.get('_tool_env')
+    if env is not None:
+        try:
+            for s in (env.schemas or []):
+                if isinstance(s, dict):
+                    n = (s.get('function') or {}).get('name')
+                    if n:
+                        names.add(n)
+        except Exception as e:
+            logger.debug('[tool_dispatch] tool_env name union skipped: %s', e)
+    if names:
+        return names
+    # ── Fallback: no schema snapshot — use the global registry ──
+    try:
+        names |= set(tool_registry._exact.keys())
+        for name_set, _ in tool_registry._sets:
+            names |= set(name_set)
+    except Exception as e:
+        logger.debug('[tool_dispatch] registry name harvest skipped: %s', e)
+    return names
 
 
 def parse_tool_calls(
@@ -464,6 +571,11 @@ def parse_tool_calls(
     _assistant_thinking_signature = assistant_msg.get('thinking_signature') or ''
 
     _total_tcs = len(assistant_msg['tool_calls'])
+    # Live set of REAL tool names for this turn (built-ins + MCP + swarm +
+    # memory + custom). Source of truth for both alias resolution (so an MCP
+    # tool wins the exact check and is never aliased over) and hallucination
+    # classification (an unknown name not in this set is a fake tool).
+    _known = _known_tool_names(task)
     # Build set of function names that have non-empty arguments,
     # so we can identify phantom duplicates (same name, empty args).
     _names_with_real_args = set()
@@ -488,117 +600,105 @@ def parse_tool_calls(
         if not fn_name.replace('_', '').replace('-', '').isalnum():
             logger.warning('[Task %s] Skipping malformed tool name (non-alphanumeric): %.80s', tid, fn_name)
             continue
-        # ── Tool-NAME repair (alias resolution) ──
-        # The model sometimes calls a tool by a name from another harness
-        # (read_file→read_files, bash→run_command, Grep→grep_search, …).
-        # Rewrite well-known synonyms to the canonical Tofu tool so the call
-        # executes instead of dying on a hard "Unknown tool" wall. Only
-        # confident 1:1 mappings are applied; anything unrecognized passes
-        # through and still surfaces the honest unknown-tool error.
-        if fn_name not in tool_registry:
-            _resolved, _alias_kind = resolve_tool_name(fn_name)
-            if _alias_kind and _resolved != fn_name:
-                logger.info('[Task %s] Aliased tool name %r → %r (%s)',
-                            tid, fn_name, _resolved, _alias_kind)
-                _tool_name_aliased = fn_name
-                fn_name = _resolved
-                # Rewrite the name in-place so the persisted assistant message
-                # carries the canonical tool name — otherwise replay/continue
-                # would re-trigger the same alias every turn and the stored
-                # tool_call name would mismatch the executed tool.
-                fn_obj['name'] = _resolved
+        # ── Unified tool-call ingestion ──
+        # ONE seam does name-drop guard → name-alias (read_file→read_files,
+        # WebFetch→fetch_url, …) → JSON decode+repair → schema/param repair →
+        # hallucination reject. Shared verbatim with the swarm sub-agent and
+        # timer-poll dispatch paths (lib/tool_input_repair.ingest_tool_call), so
+        # a guard added here can never again skip those paths. ``_known`` (not
+        # ``tool_registry``) is the membership oracle so MCP / swarm / memory /
+        # custom tools are recognised — never aliased over nor mis-flagged.
+        # The chat-specific PRESENTATION layered on the result below (UI
+        # auto-fixed badge, phantom-empty-args skip, autopilot loop-break, raw-
+        # args diagnostic log) stays here — it's not shared behaviour.
+        _ingested = ingest_tool_call(
+            tool_call=tc, known_tools=_known,
+            model=task.get('model', '') or '',
+            conv_id=task.get('convId', '') or '',
+        )
+        # Drop guard: streaming artefacts (antml:thinking, XML-corrupted names)
+        # — skip entirely (not executed, not rejected). Preserves the prior
+        # per-reason WARNING for grep parity.
+        if _ingested.dropped:
+            if _ingested.drop_reason == 'internal_artifact':
+                logger.warning('[Task %s] Skipping spurious/internal tool call name: %s', tid, fn_name)
+            elif _ingested.drop_reason == 'malformed':
+                logger.warning('[Task %s] Skipping malformed tool name (non-alphanumeric): %.80s', tid, fn_name)
             else:
-                _tool_name_aliased = None
-        else:
-            _tool_name_aliased = None
+                logger.warning('[Task %s] Skipping tool call with missing function name: %s', tid, tc)
+            continue
+        _tool_name_aliased = _ingested.raw_name if _ingested.alias_kind else None
+        if _ingested.alias_kind:
+            logger.info('[Task %s] Aliased tool name %r → %r (%s)',
+                        tid, _ingested.raw_name, _ingested.fn_name, _ingested.alias_kind)
+        fn_name = _ingested.fn_name
+        # Persist the canonical name onto the tool_call so replay/Continue
+        # doesn't re-trigger the alias and the stored name matches the executed
+        # tool.
+        fn_obj['name'] = fn_name
+        _hallucinated = _ingested.rejection
+        if _hallucinated:
+            logger.warning(
+                '[Task %s] conv=%s Rejected hallucinated tool %r '
+                '(suggestions=%s, repeat=%d)',
+                tid, task.get('convId', '') or '', fn_name,
+                _hallucinated.get('suggestions'), _ingested.repeat_count)
+
         # Guard against phantom tool calls: valid name but empty arguments,
         # AND another tool call with the SAME name has real arguments.
         # This avoids dropping legitimate no-arg tools
         # that appear alongside other tool calls.
         _raw_check = (fn_obj.get('arguments', '') or '').strip()
-        if not _raw_check and fn_name in _names_with_real_args:
+        if not _raw_check and fn_name in _names_with_real_args and not _hallucinated:
             logger.warning('[Task %s] Skipping phantom tool call %s (tc_id=%s) '
                            'with empty arguments — duplicate of another %s call '
                            'with real args',
                            tid, fn_name, tc.get('id', '?')[:12], fn_name)
             continue
         tc_id = tc.get('id') or f'call_{uuid.uuid4().hex[:12]}'
-        _args_parse_error = None
         # Harness self-repair tracking — surfaced to the UI so the user knows
         # the displayed/executed args were auto-corrected from a malformed
         # model output.  ``_json_repaired`` = recovered truncated/invalid JSON;
         # ``_repair_log`` = schema-shape coercions (stringified_json, …).
-        _json_repaired = False
-        _repair_log = None
+        _json_repaired = _ingested.json_repaired
+        _repair_log = _ingested.repair_log or None
+        _args_parse_error = _ingested.parse_error
+        fn_args = _ingested.fn_args
 
-        # ── Parse arguments (with repair fallback) ──
-        try:
-            raw_args = fn_obj.get('arguments', '') or ''
-            fn_args = json.loads(raw_args) if raw_args.strip() else {}
-        except (json.JSONDecodeError, TypeError, KeyError) as e:
-            try:
-                raw = fn_obj.get('arguments', '{}')
-                fn_args = _repair_json(raw if isinstance(raw, str) else '{}')
-                _json_repaired = True
-                # Successful repair — the LLM streamed slightly-malformed JSON
-                # (common with long code blobs in write_file). _repair_json
-                # recovered it and the tool call proceeds normally. Debug so
-                # error.log stays clean; only unrecovered failures below
-                # warrant a warning.
-                logger.debug(
-                    '[Task %s] conv=%s Repaired malformed JSON for tool=%s tc_id=%s at round %d: original_err=%s',
-                    tid, task.get('convId', ''), fn_name, tc_id, round_num, e)
-
-            except Exception as e:
-                # Capture the raw offending argument string so the failure is
-                # diagnosable after the fact. Without this, error.log records
-                # only the char offset ("Expecting ':' delimiter ... char 132")
-                # and the malformed text is discarded — making every
-                # structural-JSON failure impossible to reconstruct.
-                _raw_for_log = raw_args if isinstance(raw_args, str) else str(raw_args)
-                _err_pos = getattr(e, 'pos', None)
-                if isinstance(_err_pos, int):
-                    _lo = max(0, _err_pos - 40)
-                    _around = _raw_for_log[_lo:_err_pos + 40]
-                    _window = ' near=...%r...' % _around
-                else:
-                    _window = ''
-                logger.warning(
-                    '[Task %s] conv=%s Failed to parse tool args for tool=%s tc_id=%s at round %d: %s | '
-                    'raw_args(%d chars)=%.800r%s',
-                    tid, task.get('convId', ''), fn_name, tc_id, round_num, e,
-                    len(_raw_for_log), _raw_for_log, _window, exc_info=True)
-
-                fn_args = {}
-                _hint = schema_hint(fn_name)
-                _args_parse_error = (
-                    f'ERROR: Your tool call for `{fn_name}` had malformed JSON '
-                    f'arguments — {e}. Please retry with valid JSON.'
-                    + (f' {_hint}' if _hint else '')
-                )
-
-        # ── Schema-driven shape repair (Awais open-model-harness patterns) ──
-        # Runs only when JSON parse succeeded. Repairs:
-        #   null_omission, stringified_json, stringified_primitive,
-        #   bare_string_to_array, empty_placeholder_unwrap.
-        # Valid inputs are never touched. Tools without an indexed schema
-        # pass through unchanged. See lib/tool_input_repair.py.
-        if not _args_parse_error and isinstance(fn_args, dict):
-            try:
-                fn_args, _repair_log = validate_then_repair(
-                    fn_name, fn_args,
-                    model=task.get('model', '') or '',
-                )
-                if _repair_log:
-                    logger.debug(
-                        '[Task %s] tool=%s tc_id=%s: repaired %d arg(s) %s',
-                        tid, fn_name, tc_id[:12], len(_repair_log), _repair_log,
-                    )
-            except Exception as _re:
-                logger.warning(
-                    '[Task %s] tool=%s tc_id=%s: input-repair pass failed (passing args through): %s',
-                    tid, fn_name, tc_id[:12], _re, exc_info=True,
-                )
+        # ── Autopilot loop breaker (chat-only presentation on the reject) ──
+        # A no-suggestion phantom re-emitted under autopilot is a token-burning
+        # loop the model can't escape (module_buffer_manager ×7). Abort gates on
+        # HALLUCINATION_ABORT_THRESHOLD, DELIBERATELY HIGHER than the escalate
+        # threshold: the model first gets ~2 rounds holding the injected real-
+        # tool list to self-correct; abort is the true last resort. Only fires
+        # for pure inventions (no nearby real tool to suggest).
+        if _hallucinated:
+            _repeat_n = _ingested.repeat_count
+            if (_repeat_n >= HALLUCINATION_ABORT_THRESHOLD
+                    and not (_hallucinated.get('suggestions') or [])):
+                try:
+                    from lib.tasks_pkg.autopilot import is_autopilot_enabled
+                    if is_autopilot_enabled(task):
+                        logger.warning(
+                            '[Task %s] conv=%s Autopilot loop breaker: tool %r '
+                            'invented %d× in a row — aborting task to stop the loop',
+                            tid, task.get('convId', ''), fn_name, _repeat_n)
+                        audit_log('hallucination_loop_break',
+                                  tool=fn_name,
+                                  repeat=_repeat_n,
+                                  conv_id=task.get('convId', '') or '',
+                                  task_id=task.get('id', '') or '',
+                                  model=task.get('model', '') or '')
+                        task['aborted'] = True
+                        task['_abort_reason'] = 'hallucination_loop'
+                except Exception as _e_brk:
+                    logger.debug('[Task %s] autopilot loop-breaker check '
+                                 'skipped: %s', tid, _e_brk)
+        elif _repair_log:
+            logger.debug(
+                '[Task %s] tool=%s tc_id=%s: repaired %d arg(s) %s',
+                tid, fn_name, tc_id[:12], len(_repair_log), _repair_log,
+            )
 
         # ── Build a UI-facing repair summary (None when nothing was fixed) ──
         _repair_summary = _build_repair_summary(
@@ -616,6 +716,11 @@ def parse_tool_calls(
                 _apply_repair_to_round(round_entry, fn_name, fn_args, _repair_summary,
                                        project_enabled,
                                        task.get('convId') or task.get('id'))
+            # ★ Hallucinated tool announced during streaming — mark the
+            #   already-rendered round as rejected so the UI restyles it.
+            if _hallucinated:
+                round_entry['status'] = 'rejected'
+                round_entry['_rejected'] = _hallucinated
             # ★ Attach assistantContent to the first early-announced entry
             if _assistant_content and not _ac_tagged:
                 round_entry['assistantContent'] = _assistant_content
@@ -658,6 +763,14 @@ def parse_tool_calls(
         if _repair_summary:
             round_entry['_repaired'] = _repair_summary
             event_payload['_repaired'] = _repair_summary
+        # ★ Unified hallucination state — the call was rejected, never run.
+        #   The frontend renders `status:'rejected'` + `_rejected` distinctly
+        #   (struck-through line + "not a real tool" badge + suggestions).
+        if _hallucinated:
+            round_entry['status'] = 'rejected'
+            round_entry['_rejected'] = _hallucinated
+            event_payload['status'] = 'rejected'
+            event_payload['_rejected'] = _hallucinated
         # ★ Tag first entry with assistant content so Continue can replay it
         if _assistant_content and not _ac_tagged:
             round_entry['assistantContent'] = _assistant_content
@@ -760,7 +873,15 @@ def _unpack_cache_entry(cached) -> tuple:
     Handles all legacy tuple lengths (2–6) and bare values gracefully.
     """
     if not isinstance(cached, (tuple, list)):
-        logger.debug('[Dedup] cache value is %s not tuple — wrapping', type(cached).__name__)
+        # A non-(tuple/list) entry means a buggy writer poisoned the dedup
+        # cache; we still wrap it, but a str/dict becomes the model-visible
+        # result verbatim while anything else is str()'d into garbage — both
+        # are real defects worth surfacing, not a routine fallback.
+        if isinstance(cached, (str, dict)):
+            logger.debug('[Dedup] cache value is %s not tuple — wrapping', type(cached).__name__)
+        else:
+            logger.warning('[Dedup] cache value is unexpected type %s (not tuple/str/dict) '
+                           '— wrapping; model will see str() of it', type(cached).__name__)
         return (cached, False, 'dedup', None, None, None)
     # Pad to length 6 with defaults
     defaults = (None, False, 'dedup', None, None, None)
@@ -826,9 +947,20 @@ def execute_tool_pipeline(
         Current model identifier (for logging).
     """
     tid = task['id'][:8]
-    auto_apply = cfg.get('autoApply', True)
+    # Attendance-aware auto-apply default. A task is "attended" only when a
+    # human is watching a UI that can answer the write-approval prompt (set by
+    # the interactive chat routes). Headless / autonomous tasks (agent/run,
+    # scheduler, autopilot) are unattended: they MUST auto-apply or they would
+    # block on an approval nobody can answer. When the caller omits autoApply we
+    # therefore default attended→Manual (False) and unattended→auto (True).
+    _attended = bool(task.get('_attended'))
+    auto_apply = cfg.get('autoApply')
+    if auto_apply is None:
+        auto_apply = not _attended
     tool_results = {}  # tc_id → (tool_content, is_search)
     _pipeline_timed_out = False
+    # Per-task write/idempotent partitions (base UNION custom env flags).
+    _write_tools, _idempotent_tools = _task_partitions(task)
 
     # ══════════════════════════════════════════
     #  Pre-phase: Serial write-approval tools
@@ -843,19 +975,41 @@ def execute_tool_pipeline(
     for item in parsed_tcs:
         tc, fn_name, tc_id, fn_args, rn, round_entry, _parse_err = item
 
-        # JSON parse failure → return error to LLM, skip execution
+        # JSON parse failure / hallucinated-tool rejection → return error to
+        # LLM, skip execution.
         if _parse_err:
             if round_entry:
-                _finalize_tool_round(
-                    task, rn, round_entry,
-                    [{'type': 'error', 'content': _parse_err}],
-                    query_override=round_entry.get('query', fn_name),
-                )
+                _rejected = round_entry.get('_rejected')
+                _err_meta = {'type': 'error', 'content': _parse_err,
+                             'toolName': fn_name}
+                if _rejected:
+                    # Keep the distinct 'rejected' status (don't let
+                    # _finalize_tool_round flip it to 'done') and carry the
+                    # descriptor onto the result meta + event so the frontend
+                    # styles it as a rejected hallucination, with suggestions.
+                    _err_meta['rejected'] = _rejected
+                    round_entry['results'] = [_err_meta]
+                    round_entry['status'] = 'rejected'
+                    append_event(task, build_event(
+                        EventType.TOOL_RESULT,
+                        roundNum=rn,
+                        toolCallId=round_entry.get('toolCallId', ''),
+                        query=round_entry.get('query', fn_name),
+                        results=[_err_meta],
+                        status='rejected',
+                        _rejected=_rejected,
+                    ))
+                else:
+                    _finalize_tool_round(
+                        task, rn, round_entry,
+                        [_err_meta],
+                        query_override=round_entry.get('query', fn_name),
+                    )
             tool_results[tc_id] = (_parse_err, False)
             continue
 
         # ── Dedup check for idempotent tools ──
-        if fn_name in _IDEMPOTENT_TOOLS:
+        if fn_name in _idempotent_tools:
             cache_key = _make_cache_key(fn_name, fn_args)
             cached = _cache.get(cache_key)
             if cached is not None:
@@ -934,21 +1088,36 @@ def execute_tool_pipeline(
                 tool_results[tc_id] = (dedup_content, cached_is_search)
                 continue
 
-        is_write_op = fn_name in ('write_file', 'apply_diff', 'apply_diffs', 'insert_content', 'insert_contents', 'create_project')
+        # ── Write-approval gate (Manual mode) ──
+        # The approval set is DERIVED from the per-task write partition
+        # (_write_tools), so every state-mutating tool — project writes,
+        # run_command, memory mutators, MCP write tools, and custom write
+        # tools — is approval-eligible from a single source of truth (no second
+        # hand-maintained list). Gating only ever happens for an ATTENDED task
+        # (a human can answer); unattended / headless tasks never block here.
         needs_approval = (
-            is_write_op and fn_name in PROJECT_TOOL_NAMES
-            and not auto_apply and not task['aborted']
+            fn_name in _write_tools
+            and _attended and not auto_apply and not task['aborted']
             and not (round_entry and round_entry.get('toolName') == 'code_exec')
         )
+        # run_command is in the write partition for concurrency safety, but
+        # read-only invocations (grep/ls/cat/git status/…) must NOT prompt —
+        # only commands that could mutate the filesystem require approval.
+        if needs_approval and fn_name == 'run_command':
+            from lib.project_mod.tools import _is_destructive_command
+            needs_approval = _is_destructive_command(fn_args.get('command', ''))
 
         if needs_approval:
-            tool_content = _handle_approval(task, fn_name, fn_args, rn, round_entry, project_path, round_num, model)
-            tool_results[tc_id] = (tool_content, False)
-            # ── Write ops invalidate project-tool caches ──
-            # After a write_file/apply_diff, read_files/grep_search/list_dir/find_files
-            # results for any path may have changed.
-            _invalidate_project_cache(_cache, trigger=fn_name)
-            continue
+            approved, reject_content = _handle_approval(
+                task, fn_name, fn_args, rn, round_entry, project_path, round_num, model)
+            if not approved:
+                tool_results[tc_id] = (reject_content, False)
+                continue
+            # Approved → fall through to normal dispatch. The item is in
+            # _write_tools, so the serial write-tool phase below executes it via
+            # _execute_tool_one and invalidates the project cache afterwards.
+            #   (one execution path for project / run_command / memory / MCP /
+            #    custom write tools.)
 
         # ── Abort check: skip remaining tools if user clicked Stop ──
         if task.get('aborted'):
@@ -996,10 +1165,10 @@ def execute_tool_pipeline(
     #  write tools run serially to prevent filesystem race conditions.
     # ══════════════════════════════════════════
     _serial_write_items = [
-        item for item in parallel_items if item[1] in _WRITE_TOOLS
+        item for item in parallel_items if item[1] in _write_tools
     ]
     parallel_items = [
-        item for item in parallel_items if item[1] not in _WRITE_TOOLS
+        item for item in parallel_items if item[1] not in _write_tools
     ]
     for item in _serial_write_items:
         tc, fn_name, tc_id, fn_args, rn, round_entry, _pe = item
@@ -1059,7 +1228,7 @@ def execute_tool_pipeline(
                         ret_tc_id, tool_content, is_search = fut.result()
                         tool_results[ret_tc_id] = (tool_content, is_search)
                         # ── Populate dedup cache for idempotent tools ──
-                        if fut_fn_name in _IDEMPOTENT_TOOLS:
+                        if fut_fn_name in _idempotent_tools:
                             # Find the matching fn_args from parallel_items
                             for _pi in parallel_items:
                                 if _pi[2] == ret_tc_id:  # tc_id match
@@ -1244,6 +1413,18 @@ def execute_tool_pipeline(
                 round_entry['compactedFromChars'] = _l0_pre_chars
                 round_entry['compactedToChars'] = len(tool_content)
 
+            # ★ Layer 2: tool-agnostic hard ceiling — the LAST line of
+            # defence. Unlike Layer 0 (budget_tool_result) this has NO
+            # per-tool exemption, so it ALSO clamps read_files (which Layer 0
+            # skips). Makes the "opaque blob floods context" bug class
+            # unrepresentable: a relative-path PNG decoded as text, a str()'d
+            # image dict, or any future leak gets clamped to a survivable
+            # result instead of a fatal HTTP 400. See conv mqgfkmxy (2026-06).
+            if isinstance(tool_content, str):
+                _conv_id_hc = task.get('convId', '') if task else ''
+                tool_content = clamp_tool_result_text(
+                    fn_name, tool_content, tc_id=tc_id, conv_id=_conv_id_hc)
+
             # Collect for aggregate budget check
             _round_results_for_budget.append((tc_id, tool_content, fn_name))
 
@@ -1371,13 +1552,20 @@ def execute_tool_pipeline(
                                                 _re_fn or '?', _re_rn, _ev_err)
                                 break
 
-    # Emit snapshot AFTER tool results appended
+    # Emit snapshot AFTER tool results appended — WIRE-FORM view (same single
+    # source of truth as the orchestrator's pre-LLM and final snapshots), so
+    # the panel reflects exactly what the model will receive next round. Runs
+    # on an independent copy via apply_wire_sanitize (does not mutate messages).
     try:
-        snapshot = _strip_base64_for_snapshot(messages)
+        from lib.tasks_pkg.wire_messages import apply_wire_sanitize
+        _wire = apply_wire_sanitize(
+            messages, conv_id=task.get('convId', ''),
+            provider_id=task.get('provider_id') or '')
+        snapshot = _strip_base64_for_snapshot(_wire)
         snap_evt = build_event(
             EventType.MESSAGES_SNAPSHOT,
             round=round_num + 1,
-            label=f'Round {round_num + 1} 工具结果后 · {len(messages)}条',
+            label=f'Round {round_num + 1} 工具结果后 · {len(snapshot)}条',
             messages=snapshot,
         )
         if tool_list:
@@ -1401,6 +1589,7 @@ def execute_tool_pipeline(
 def _approval_meta_run_command(approval_meta, fn_args):
     """Enrich approval metadata for ``run_command``."""
     approval_meta['command'] = fn_args.get('command', '')
+    approval_meta['description'] = fn_args.get('description', '')
     approval_meta['path'] = fn_args.get('working_dir', '') or ''
 
 
@@ -1541,21 +1730,25 @@ def _handle_approval(
     project_path: str | None,
     round_num: int,
     model: str,
-) -> str:
-    """Handle the manual-approval flow for a write operation.
+) -> tuple[bool, str | None]:
+    """Gate a write operation on manual user approval (no execution).
 
-    Emits a ``write_approval_request`` event, blocks waiting for the user
-    response, and either executes the tool (approved) or returns a
-    rejection message (rejected).
+    Emits a ``write_approval_request`` event and blocks waiting for the user
+    response. This function ONLY decides — it never executes the tool. On
+    approval the caller lets the tool fall through to the normal serial
+    write-tool dispatch, so a single execution path serves project writes,
+    run_command, memory, MCP, and custom write tools.
 
     Uses the :data:`_APPROVAL_META_ENRICHERS` dispatch table to build
     tool-specific approval metadata.
 
     Returns
     -------
-    str
-        The tool result content string (either the execution result or
-        a rejection message).
+    tuple[bool, str | None]
+        ``(approved, reject_content)``. When approved, ``(True, None)`` and
+        ``round_entry`` is left ``pending_approval`` for the executor to
+        finalize. When rejected, ``(False, message)`` and the round has
+        already been finalized with a ``rejected`` badge.
     """
     tid = task['id'][:8]
     approval_id = f'{task["id"]}_{uuid.uuid4().hex[:8]}'
@@ -1594,18 +1787,16 @@ def _handle_approval(
         meta['badge'] = 'rejected'
         meta['writeOk'] = False
         _finalize_tool_round(task, rn, round_entry, [meta])
-        return tool_content
+        return False, tool_content
 
-    # Approved — execute the write immediately (serial, with conv_id + task_id for undo tracking)
-    from lib.project_mod import execute_tool as _exec_proj
-    tool_content = (
-        _exec_proj(fn_name, fn_args, project_path, conv_id=task['convId'], task_id=task['id'])
-        if project_path
-        else 'Error: No project path.'
-    )
-    meta = build_project_tool_meta(fn_name, fn_args, tool_content)
-    _finalize_tool_round(task, rn, round_entry, [meta])
-    return tool_content
+    # Approved — do NOT execute here. The caller lets the item fall through to
+    # the normal serial write-tool dispatch (_execute_tool_one), so a single
+    # execution path serves project writes, run_command, memory, MCP, and custom
+    # write tools uniformly. round_entry stays 'pending_approval' until that
+    # execution finalizes it.
+    logger.info('[Task %s] Write approved: tool=%s — dispatching via normal path',
+                tid, fn_name)
+    return True, None
 
 
 def _append_screenshot_message(messages, tc_id, tool_content):
@@ -1621,47 +1812,47 @@ def _append_screenshot_message(messages, tc_id, tool_content):
         Screenshot dict with keys ``dataUrl``, ``format``, ``originalSize``,
         ``compressedSize``, ``compressionApplied``.
     """
-    data_url = tool_content['dataUrl']
-    fmt = tool_content.get('format', 'png')
-    orig_size = tool_content.get('originalSize', 0)
-    comp_size = tool_content.get('compressedSize', 0)
-    compression_applied = tool_content.get('compressionApplied', False)
+    # A multi-image batch (read_files of several images) carries every image
+    # in ``images``; otherwise treat the dict itself as the single image.
+    img_dicts = tool_content.get('images') or [tool_content]
 
-    # Parse the data URL: "data:image/png;base64,iVBOR..."
-    if data_url.startswith('data:'):
-        header, b64_data = data_url.split(',', 1)
-        media_type = header.split(':')[1].split(';')[0]
-    else:
-        b64_data = data_url
-        media_type = f'image/{fmt}'
+    def _data_url_parts(img):
+        du = img.get('dataUrl', '')
+        if du.startswith('data:'):
+            header, b64 = du.split(',', 1)
+            return header.split(':')[1].split(';')[0], b64
+        return f'image/{img.get("format", "png")}', du
 
-    size_info = f'{comp_size:,} bytes'
-    if compression_applied and orig_size:
-        size_info = f'{orig_size:,} → {comp_size:,} bytes (compressed)'
+    content_blocks = []
+    for img in img_dicts:
+        media_type, b64_data = _data_url_parts(img)
+        content_blocks.append({
+            'type': 'image_url',
+            'image_url': {'url': f'data:{media_type};base64,{b64_data}'},
+        })
 
     # Use custom text description if provided (e.g. image gen results),
     # otherwise fall back to the generic screenshot description.
     text_desc = tool_content.get('_text_fallback')
     if not text_desc:
+        fmt = tool_content.get('format', 'png')
+        orig_size = tool_content.get('originalSize', 0)
+        comp_size = tool_content.get('compressedSize', 0)
+        size_info = f'{comp_size:,} bytes'
+        if tool_content.get('compressionApplied') and orig_size:
+            size_info = f'{orig_size:,} → {comp_size:,} bytes (compressed)'
         text_desc = (
             f'📸 Screenshot captured ({fmt}, {size_info}). '
             f'The image above shows the current visible area of the page. '
             f'Analyze it visually.'
         )
+    if len(img_dicts) > 1:
+        text_desc = f'{len(img_dicts)} images loaded above.\n{text_desc}'
+
+    content_blocks.append({'type': 'text', 'text': text_desc})
 
     messages.append({
         'role': 'tool',
         'tool_call_id': tc_id,
-        'content': [
-            {
-                'type': 'image_url',
-                'image_url': {
-                    'url': f'data:{media_type};base64,{b64_data}',
-                },
-            },
-            {
-                'type': 'text',
-                'text': text_desc,
-            },
-        ],
+        'content': content_blocks,
     })

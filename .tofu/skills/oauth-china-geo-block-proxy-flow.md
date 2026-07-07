@@ -1,46 +1,59 @@
 ---
 name: oauth-china-geo-block-proxy-flow
-description: OAuth for Chinese users: popup uses local browser (needs Clash), token exchange uses server (needs corporate proxy); geo-block diagnosis and workarounds
+description: OAuth geo-block: server egress 403-blocked AND browser fetch CORS-blocked (no ACAO on token endpoint); only working path is B2 curl-assisted: user terminal does the POST, paste token JSON to /api/oauth/store-token
 enabled: true
 tags: [oauth, proxy, china, geo-block]
 created: 2026-04-05T07:25:23Z
-updated: 2026-04-05T07:25:23Z
+updated: 2026-06-24T10:53:57Z
 ---
 
 # OAuth Flow for Chinese Users — Network Architecture
 
-## Two Different Networks in Play
-
-| Step | Where it runs | Network | Fix |
+## Three networks, and ALL THREE auto-paths can fail
+| Step | Where | Network | Status under geo-block |
 |---|---|---|---|
-| **Popup** (`claude.ai/oauth/authorize`) | User's local browser | Local machine → needs Clash/VPN | User configures Clash rules |
-| **Token exchange** (`console.anthropic.com/v1/oauth/token`) | Remote server | Server → corporate proxy | `proxies_for(url)` in requests calls |
-| **API calls** (after login) | Remote server | Server → corporate proxy | Same |
+| Popup authorize (`claude.ai/oauth/authorize`) | local browser | VPN/Clash | ✅ works |
+| Token exchange — SERVER (`/api/oauth/callback`) | remote server | corporate proxy | ❌ 403 geo-block |
+| Token exchange — BROWSER fetch (B1) | local browser | VPN | ❌ CORS-blocked |
+| Token exchange — TERMINAL curl (B2) | user terminal | VPN | ✅ works |
+| API calls after login | remote server | corporate proxy | works (uses x-api-key) |
 
-## Key Findings (2026-04)
+## The 403 + CORS double-block (2026-06)
+- SERVER POST → `console.anthropic.com/v1/oauth/token` → **403
+  `{"error":{"type":"forbidden","message":"Request not allowed"}}`**, `cf-ray:…-HKG`.
+  Edge/geo block on the server egress IP. NOT a UA issue (tested 3 UAs).
+  `auth.openai.com` similarly 403s `unsupported_country_region_territory`.
+- BROWSER `fetch(token_url)` (B1) → **CORS preflight blocked**: the token
+  endpoint serves the CLI and sends NO `Access-Control-Allow-Origin`. Cannot be
+  worked around from JS. So B1 silently falls back to the geo-blocked server.
+  Diagnostic tell: a working curl carrying `Referer: …vscode-….sankuai.com` proves
+  the browser ran B1 but it threw → fell back → user still sees the server 403.
 
-- `console.anthropic.com` — reachable from corporate proxy (Meituan `10.229.18.27:8412`)
-- `claude.ai` — geo-blocked by Cloudflare (302 → app-unavailable-in-region)
-- `auth.openai.com` — geo-blocked (403 unsupported_country_region_territory) from BOTH proxy and direct
+## Fix 1: surface the REAL reason
+`lib/oauth/token_store.py::OAuthExchangeError(status_code, detail)`. exchange fns
+RAISE it; `_explain_exchange_failure()` splits 403 geo-block / 400-401 invalid_grant
+/ status-0 net. `manager.exchange_code` → `{error,status_code,detail}`.
 
-## Mandatory: Use `proxies_for()` in OAuth HTTP Calls
+## Fix 2: B2 curl-assisted manual exchange (the ONLY reliable path here)
+`static/js/settings/oauth.js`:
+- `_completeLogin` order: B1 browser fetch → server `/callback` → on BOTH failing,
+  `_showCurlHelper(provider, code, state)`.
+- `_buildCurlCommand` emits the exact curl (code + our PKCE `code_verifier` +
+  client_id/redirect_uri; json for claude, form for codex) — the params come from
+  the `exchange` block that `/api/oauth/login` now returns.
+- User runs it in their VPN terminal, pastes the returned token JSON into the
+  manual box. `_oauthManualSubmit` detects a `{`-leading paste with `access_token`
+  → `_storeBrowserToken` → `POST /api/oauth/store-token` → `manager.store_token`
+  → `*_store_token` (save_token + provision_oauth_provider). NO exchange (terminal
+  already did it).
+- `store_token` accepts Anthropic's real shape `{access_token, refresh_token,
+  expires_in, account:{email_address}}`. KNOWN: email comes back blank (it's nested
+  under account.email_address; `_extract_email_from_token` only checks top-level
+  email/id_token) — cosmetic, token works.
 
-All `requests.post()` in `lib/oauth/claude.py` and `lib/oauth/codex.py` MUST include:
-```python
-from lib.proxy import proxies_for
-resp = requests.post(url, json=payload, proxies=proxies_for(url), timeout=30)
-```
-
-## UX for Chinese Users
-
-- Show auth URL in a copyable input so user can open in a proxied browser on any device
-- Show geo-block warning inline on the OAuth cards
-- Don't auto-reset on popup close — user may be copying code manually
-- `/api/oauth/test` endpoint for server-side connectivity diagnosis
-
-## Common Issues
-
-1. **Popup shows "unsupported region"** → User's local Clash not routing `claude.ai`/`auth.openai.com`
-2. **Token exchange fails** → Server can't reach endpoint, check proxy config
-3. **VSCode proxy 404** → OAuth fetch calls must use `apiUrl()` not raw `/api/` paths
+## Mandatory / gotchas
+- Server-side OAuth HTTP must keep `lib.http_client.http_post` (auto `proxies_for`).
+- Patch `lib.oauth.claude.save_token` (module ns), NOT `token_store.save_token`.
+- VSCode proxy: OAuth fetch must use `apiUrl()` not raw `/api/`.
+- Don't auto-reset on popup close — user may be pasting code/curl JSON.
 

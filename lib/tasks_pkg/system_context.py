@@ -24,60 +24,20 @@ to save 18% cost / +49% cache hit — see
 ``.tofu/skills/claudemd-placement-ab-test-results.md``.
 """
 
-import hashlib
-
 from lib.log import get_logger
 
 logger = get_logger(__name__)
 
 from lib.tasks_pkg import system_prompt_cc
 
-# ── Delta attachment tracking ──
-# Cache of (hash, text) per category per conv_id.
-# Purpose: skip the expensive FUSE load (get_context_for_prompt /
-# build_memory_context) when the content hasn't changed.
-# IMPORTANT: we ALWAYS inject into the system message — we only skip
-# the *computation*.  Each task gets fresh messages from the frontend,
-# so the text is NOT already present.
-_last_context_cache: dict[tuple[str, str], tuple[str, str]] = {}
-
-
-def _context_hash(text: str) -> str:
-    """Compute a fast hash for a context string."""
-    return hashlib.md5(text.encode('utf-8', errors='replace')).hexdigest()[:16]
-
-
-def _get_cached_or_compute(conv_id: str, category: str,
-                            compute_fn) -> str:
-    """Return cached context text if hash matches, else re-compute.
-
-    Unlike the previous ``_should_inject`` (which skipped injection),
-    this function always returns text — it only skips the *computation*.
-
-    Args:
-        conv_id:    Conversation ID for cache scoping.
-        category:   'project' or 'memory'.
-        compute_fn: Zero-arg callable that produces the context string.
-
-    Returns:
-        The context string (either from cache or freshly computed).
-        Empty string if compute_fn returns falsy.
-    """
-    key = (conv_id, category)
-    text = compute_fn()
-    if not text:
-        return ''
-    h = _context_hash(text)
-    prev = _last_context_cache.get(key)
-    if prev and prev[0] == h:
-        logger.debug('[DeltaCtx] Reusing cached %s context (hash=%s) conv=%s',
-                     category, h[:8], conv_id[:8])
-        return prev[1]  # cached text (should be identical)
-    _last_context_cache[key] = (h, text)
-    return text
-
-
 _TIMESTAMP_PREFIX = 'Current date and time: '
+
+# Idempotency markers for the personal-preference profile blocks. Mirror the
+# constants in lib/memory/user_profile.py — kept in sync there. The core tier
+# (always-on) carries _PROFILE_MARKER; the relevance-gated detail tier carries
+# the distinct _PROFILE_DETAIL_MARKER so the two never collide.
+_PROFILE_MARKER = '[USER PREFERENCE PROFILE]'
+_PROFILE_DETAIL_MARKER = '[USER PREFERENCE PROFILE — relevant detail]'
 
 
 def inject_search_addendum_to_user(messages: list, search_enabled: bool,
@@ -233,6 +193,139 @@ def _insert_user_context_message(messages, body: str) -> None:
     })
 
 
+def _append_user_profile_block(messages, block: str,
+                               marker: str = _PROFILE_MARKER) -> bool:
+    """Append the preference-profile block to the cache-safe tail.
+
+    Placement priority (cache-stability matters):
+      1. If a prepended ``_isMeta`` user message exists (CLAUDE.md carrier),
+         append the block there as a separate text block. This co-locates the
+         profile with the project-context reminder in the BP4 tail segment so
+         a profile edit re-writes only that already-dynamic segment.
+      2. Otherwise (project mode off → no _isMeta msg) append to the FIRST
+         real user message — still the tail, still NOT messages[0].
+
+    ``marker`` is the idempotency substring this block carries (the core tier
+    uses :data:`_PROFILE_MARKER`; the relevance-gated detail tier passes its
+    own distinct marker so the two never block each other).
+
+    Returns True if the block was injected, False if no suitable user message
+    was found (in which case the caller skips the notify_compaction).
+    """
+    # Idempotency: the block rides a USER message (not messages[0]), so the
+    # system-text probe in the caller can't see it. Re-scan here and bail if
+    # the marker is already present anywhere (endpoint re-entry / post-
+    # compaction re-injection share the same messages list).
+    for m in messages:
+        c = m.get('content', '')
+        if isinstance(c, str):
+            if marker in c:
+                return False
+        elif isinstance(c, list):
+            for blk in c:
+                if isinstance(blk, dict) and blk.get('type') == 'text' \
+                        and marker in blk.get('text', ''):
+                    return False
+
+    target_idx = None
+    for i, m in enumerate(messages):
+        if m.get('role') == 'user' and m.get('_isMeta'):
+            target_idx = i
+            break
+    if target_idx is None:
+        # No _isMeta carrier — fall back to the first real (non-meta) user msg.
+        for i, m in enumerate(messages):
+            if m.get('role') == 'user':
+                target_idx = i
+                break
+    if target_idx is None:
+        return False
+
+    content = messages[target_idx].get('content', '')
+    if isinstance(content, str):
+        messages[target_idx]['content'] = [
+            {'type': 'text', 'text': content},
+            {'type': 'text', 'text': block},
+        ]
+    elif isinstance(content, list):
+        messages[target_idx]['content'] = list(content) + [
+            {'type': 'text', 'text': block},
+        ]
+    else:
+        messages[target_idx]['content'] = [{'type': 'text', 'text': block}]
+    return True
+
+
+def _refresh_detail_block(messages, block: str | None,
+                          marker: str = _PROFILE_DETAIL_MARKER) -> str:
+    """Replace (or strip) the relevance-gated DETAIL block on the TRUE tail.
+
+    The detail tier rides the LAST user message (the genuine volatile tail) —
+    the SAME cache-safe seam ``inject_relevant_memories`` uses — NOT the
+    prepended ``_isMeta`` carrier (index 1, CLAUDE.md). The carrier lives
+    inside the cached prompt prefix (``messages[0:N-2]`` after the first tool
+    round); because the detail selection changes per turn, putting it on the
+    carrier rewrites the carrier bytes every turn and re-bills the whole prefix
+    from ``messages[1]`` onward within the 5-min TTL window (this was bug B4 —
+    the ★2.5 comment mislabelled the carrier as "the tail"). The byte-stable
+    CORE tier still rides the carrier via :func:`_append_user_profile_block`;
+    only the volatile detail moves here.
+
+    Unlike :func:`_append_user_profile_block` (append-once, for the byte-stable
+    CORE tier), the detail tier is RELEVANCE-GATED PER TURN. Within ONE task
+    the same last user message may be re-injected (endpoint-mode Planner /
+    Worker / Critic share the message list), so this:
+
+      1. Removes any existing text block carrying ``marker`` from the LAST user
+         message (a stale detail from a re-entry on the SAME message), and
+      2. appends ``block`` when non-None (this turn's fresh selection).
+
+    A PRIOR turn's detail block, frozen on that turn's (now mid-history) user
+    message, is deliberately left untouched — stripping a prefix-resident block
+    would itself mutate the cached prefix. This is the same frozen-stale-block
+    tradeoff ``<relevant_memories>`` already makes, and it keeps the cache
+    intact: no shared message is rewritten across turns.
+
+    Returns one of ``'replaced'`` / ``'added'`` / ``'removed'`` / ``'noop'`` so
+    the caller knows whether the tail was mutated (→ ``notify_compaction``).
+    """
+    # Target the LAST user message (true volatile tail), walking from the end —
+    # mirrors inject_relevant_memories. NEVER the _isMeta carrier (see B4).
+    target_idx = None
+    for i in range(len(messages) - 1, -1, -1):
+        if messages[i].get('role') == 'user':
+            target_idx = i
+            break
+    if target_idx is None:
+        return 'noop'
+
+    content = messages[target_idx].get('content', '')
+    # Normalise to a list of blocks so we can surgically drop the stale one.
+    if isinstance(content, str):
+        blocks = [{'type': 'text', 'text': content}]
+    elif isinstance(content, list):
+        blocks = list(content)
+    else:
+        blocks = []
+
+    def _is_detail(blk) -> bool:
+        return (isinstance(blk, dict) and blk.get('type') == 'text'
+                and marker in blk.get('text', ''))
+
+    had_old = any(_is_detail(b) for b in blocks)
+    if not had_old and block is None:
+        return 'noop'  # nothing to strip, nothing to add — tail unchanged
+
+    new_blocks = [b for b in blocks if not _is_detail(b)]
+    if block is not None:
+        new_blocks.append({'type': 'text', 'text': block})
+
+    messages[target_idx]['content'] = new_blocks
+    if block is not None:
+        return 'replaced' if had_old else 'added'
+    return 'removed'
+
+
 def _system_text(messages) -> str:
     """Return the plain-text concatenation of the first system message.
 
@@ -261,10 +354,33 @@ def _system_text(messages) -> str:
 _CC_STATIC_MARKER = "IMPORTANT: You must NEVER generate or guess URLs"
 
 
+def _disabled_prompt_blocks(cfg: dict) -> set[str] | None:
+    """Extract the user's disabled static-prompt block IDs from task config.
+
+    Config shape (set by the per-block system-prompt editor)::
+
+        cfg['systemPromptBlocks'] = {'disabled': ['tone_and_style', ...]}
+
+    Returns a set of block IDs, or ``None`` when nothing is disabled (so the
+    default — keep every block — is preserved for old configs).
+    """
+    try:
+        spb = cfg.get('systemPromptBlocks') or {}
+        disabled = spb.get('disabled') or []
+        ids = {str(x) for x in disabled if x}
+        return ids or None
+    except Exception as e:
+        logger.debug('[Inject] disabled-blocks parse failed: %s', e)
+        return None
+
+
 def _inject_system_contexts(messages, project_path, project_enabled,
                              memory_enabled, search_enabled, swarm_enabled,
                              has_real_tools, conv_id: str = '',
-                             task: dict = None, model: str = ''):
+                             task: dict = None, model: str = '',
+                             system_prompt_mode: str = 'append',
+                             tool_names: set[str] | None = None,
+                             disabled_blocks: set[str] | None = None):
     """Inject the Claude-Code-style system + user contexts into *messages*.
 
     Modifies the messages list directly. Final shape:
@@ -294,11 +410,91 @@ def _inject_system_contexts(messages, project_path, project_enabled,
 
     Args:
         model: Model ID for the ``# Environment`` section.
+        system_prompt_mode: ``'append'`` (default) injects the built-in
+            Claude-Code static block on top of any user system prompt;
+            ``'replace'`` suppresses the static block so the user's
+            system prompt is the sole base. CLAUDE.md / memory / swarm /
+            date are still injected in both modes (they track feature
+            toggles, not the base prose). A ``'replace'`` request with no
+            user system prompt falls back to ``'append'`` so the model is
+            never left with an empty base.
+        tool_names: Set of tool names registered for this turn, forwarded
+            to ``build_static_prompt`` so the ``# Using your tools`` section
+            only names dedicated tools that actually exist. ``None`` (the
+            default) ships all bullets — back-compat for callers without a
+            tool list.
+        disabled_blocks: Static-prompt block IDs the user switched OFF in the
+            per-block editor (see ``system_prompt_cc.BLOCK_META``). Forwarded
+            to ``build_static_prompt`` so those blocks are dropped. ``None``
+            keeps every block.
     """
     _cid = conv_id or ''
 
+    # ── Context-assembly trace (STRICTLY LOCAL — no module-level state). ──
+    #   One unified [Context] observability layer for prompt assembly: every
+    #   block that gets spliced records (name, chars-actually-spliced) here and
+    #   emits a DEBUG drill-down line; suppressed seams emit a DEBUG "skip" line
+    #   with the reason. At the END of assembly _emit_context_summary() writes
+    #   ONE INFO line naming every injected block + total — the per-assembly
+    #   trace (this function runs ONCE per task at round 0, so the summary is
+    #   per-assembly, NOT per-round). All three helpers swallow their own
+    #   exceptions: instrumentation must NEVER break the turn it observes.
+    #   `chars` is the length of the string ACTUALLY handed to the splice
+    #   helper (wrapper included for <system-reminder>-wrapped blocks), so the
+    #   summary total equals the real delta in assembled prompt bytes.
+    _trace: list[tuple[str, int]] = []
+
+    def _trace_fallback(detail: str) -> None:
+        # Last-resort diagnostic for a trace-helper fault. Deliberately
+        # NON-'[Context]'-prefixed and itself fully swallowed so a failing
+        # logging backend can never propagate out of the instrumentation and
+        # break the turn it is only observing.
+        try:
+            logger.debug('[CtxTrace] %s', detail)
+        except Exception:
+            pass
+
+    def _ctx_injected(name: str, chars: int) -> None:
+        try:
+            _trace.append((name, int(chars)))
+            logger.debug('[Context] conv=%s inject block=%s chars=%d',
+                         (_cid or '?')[:8], name, chars)
+        except Exception as _e:
+            _trace_fallback('inject log failed for %s: %s' % (name, _e))
+
+    def _ctx_suppressed(name: str, reason: str) -> None:
+        try:
+            logger.debug('[Context] conv=%s skip block=%s reason=%s',
+                         (_cid or '?')[:8], name, reason)
+        except Exception as _e:
+            _trace_fallback('suppress log failed for %s: %s' % (name, _e))
+
+    def _emit_context_summary() -> None:
+        """Emit the single per-assembly INFO trace line from _trace."""
+        try:
+            _blocks = ','.join('%s:%d' % (n, c) for n, c in _trace)
+            _total = sum(c for _, c in _trace)
+            _round = len((task or {}).get('toolRounds') or []) if task else 0
+            logger.info('[Context] conv=%s round=%d blocks=[%s] total=%d',
+                        (_cid or '?')[:8], _round, _blocks, _total)
+        except Exception as _e:
+            _trace_fallback('summary emit failed: %s' % _e)
+
     # ── Idempotency probe: detect an already-injected system message ──
     _existing = _system_text(messages)
+
+    # ── Replace mode: the user's system prompt fully substitutes the
+    #    built-in static block. The user prompt arrives as messages[0]
+    #    (role=system) from the message builder. Only honour replace when
+    #    that prompt is actually non-empty — otherwise an empty 'replace'
+    #    would leave the model with no base prompt at all. Endpoint-mode
+    #    re-entry already has the static block, so the marker guard below
+    #    still wins there.
+    _replace_static = (
+        system_prompt_mode == 'replace'
+        and _CC_STATIC_MARKER not in _existing
+        and bool(_existing.strip())
+    )
 
     # ── Helper: try to get prefetched result, else compute synchronously ──
     def _get_prefetched(key, fallback_fn):
@@ -324,13 +520,11 @@ def _inject_system_contexts(messages, project_path, project_enabled,
             from lib.project_mod import get_context_for_prompt
             return get_context_for_prompt(project_path, conv_id=_cid or None)
 
-        if _cid:
-            proj_ctx = _get_cached_or_compute(
-                _cid, 'project',
-                lambda: _get_prefetched('_prefetch_project', _load_project),
-            ) or ''
-        else:
-            proj_ctx = _get_prefetched('_prefetch_project', _load_project) or ''
+        # FUSE-slow load is absorbed by the prefetch future (_prefetch_project);
+        # _get_prefetched consumes it when ready, else falls back to a sync
+        # load. No conv-scoped result cache — each task gets fresh messages and
+        # ALWAYS injects, so a hash cache could not skip the compute anyway.
+        proj_ctx = _get_prefetched('_prefetch_project', _load_project) or ''
 
     logger.info('[Inject] conv=%s proj_enabled=%s proj_ctx_len=%d '
                 'has_real_tools=%s',
@@ -339,7 +533,15 @@ def _inject_system_contexts(messages, project_path, project_enabled,
 
     # ★ 1. Static Claude-Code block — append as separate cache-stable block.
     #      Injected ONCE; marker guards against endpoint-mode re-entry.
-    if _CC_STATIC_MARKER not in _existing:
+    #      Skipped entirely in replace mode (user prompt is the base).
+    if _replace_static:
+        logger.info('[Inject] conv=%s system_prompt_mode=replace — built-in '
+                    'static block suppressed (user prompt is the base)',
+                    (_cid or '?')[:8])
+        _ctx_suppressed('static', 'replace_mode')
+    elif _CC_STATIC_MARKER in _existing:
+        _ctx_suppressed('static', 'marker_present')
+    if _CC_STATIC_MARKER not in _existing and not _replace_static:
         # When project mode is OFF, suppress the working-directory bullet
         # entirely — leaking the server's cwd in the system prompt has caused
         # the model to chase ghost paths (the path is the server's runtime
@@ -380,10 +582,18 @@ def _inject_system_contexts(messages, project_path, project_enabled,
             # project mode is on. For chat-only / paper-Q&A / translation
             # turns, the prompt becomes a generic-assistant prompt.
             is_code_context=project_enabled,
+            # Only name dedicated tools in "# Using your tools" that are
+            # actually registered this turn — otherwise the model is told
+            # write_file / apply_diff / grep_search exist when project mode
+            # is off and tries to call a tool absent from the schema.
+            tool_names=tool_names,
+            # User-disabled blocks from the per-block system-prompt editor.
+            disabled_blocks=disabled_blocks,
         )
         _append_to_system_message(messages, _static_block,
                                    as_separate_block=True)
         _existing = _system_text(messages)
+        _ctx_injected('static', len(_static_block))
 
     # ★ 2. Project CLAUDE.md → prepended user _isMeta message (cache-friendly).
     if proj_ctx and '[PROJECT CO-PILOT MODE]' not in _existing:
@@ -395,6 +605,7 @@ def _inject_system_contexts(messages, project_path, project_enabled,
             logger.info('[Inject] conv=%s CLAUDE.md inserted as user '
                         '_isMeta msg (len=%d)',
                         (_cid or '?')[:8], len(_reminder))
+            _ctx_injected('claude_md', len(_reminder))
     elif proj_ctx:
         # CLAUDE.md is already IN the system message — shouldn't happen under
         # the single-layout design.  Left as a warning so stale snapshots /
@@ -405,30 +616,154 @@ def _inject_system_contexts(messages, project_path, project_enabled,
                        'stale legacy code paths.',
                        (_cid or '?')[:8])
 
+    # ★ 2.5 Personal preference profile → appended to the prepended _isMeta
+    #   user message (NOT the system prefix). This is the cache-safe seam: the
+    #   profile is small + bounded but DOES change when the consolidation pass
+    #   rewrites it, so it must ride the BP4 5-min-TTL tail like CLAUDE.md /
+    #   <relevant_memories> — never messages[0] (that would re-write the whole
+    #   cached prefix on every preference edit; see the memory-count-hint and
+    #   timestamp-placement A/B lessons). Gated on memory_enabled so the
+    #   Memory toggle's "off → no proactive memory plumbing" semantics hold.
+    # Preferences are a DISTINCT personal capability from the memory store
+    # (see lib/agent_core/personal_scope). The UI keeps the historical
+    # behaviour (profile rides the Memory toggle) via the memory_enabled
+    # fallback; a headless caller that enabled the memory store does NOT get
+    # the operator's personal profile unless it ALSO opts into preferences.
+    from lib.agent_core.personal_scope import resolve_preferences_enabled
+    _prefs_enabled = resolve_preferences_enabled(
+        task.get('config') if task else None, memory_enabled=memory_enabled)
+    if not _prefs_enabled:
+        _ctx_suppressed('pref_core', 'preferences_disabled')
+    elif _PROFILE_MARKER in _existing:
+        _ctx_suppressed('pref_core', 'marker_present')
+    if _prefs_enabled and _PROFILE_MARKER not in _existing:
+        # Identity scope: captured onto the task at creation from the request's
+        # AuthContext.user_id (multi-user tenant) — '' for open/private mode →
+        # the single global profile, so personal installs are byte-identical.
+        _profile_scope = (task.get('_profileScope', '') if task else '') or ''
+        # TIERED injection (relevance gating). The CORE tier (work-style /
+        # standing instructions, e.g. ## Preferences) is byte-stable across
+        # turns and always injected — the always-on, cache-friendly block. The
+        # DETAIL tier (identity / project-specific facts, e.g. ## About the
+        # user) is scored by BM25 against THIS turn's last-user text and only
+        # the relevant bullets are injected, as a SEPARATE block. Both ride the
+        # same _isMeta tail (the BP4 5-min-TTL seam) — the core stays
+        # byte-stable there so it keeps its cache hit, while the detail block
+        # varying per turn is exactly the cache-safe pattern <relevant_memories>
+        # already uses. See render_profile_tiers + lib/memory/relevance.score_items.
+        try:
+            from lib.memory.user_profile import load_profile, render_profile_tiers
+            _profile_body = load_profile(_profile_scope)
+            _query = _extract_last_user_text(messages)
+            _core_block, _detail_block = render_profile_tiers(
+                _profile_body, _profile_scope, query=_query)
+        except Exception as e:
+            logger.warning('[Inject] conv=%s user-profile load failed: %s',
+                           (_cid or '?')[:8], e)
+            _profile_body, _core_block, _detail_block = '', None, None
+        _profile_injected = False
+        if _core_block:
+            _profile_injected = _append_user_profile_block(
+                messages, _core_block, marker=_PROFILE_MARKER)
+        # Detail tier rides the TRUE tail (the LAST user message) with its OWN
+        # marker — the SAME cache-safe seam <relevant_memories> uses — NOT the
+        # _isMeta carrier the core rides. The carrier is at index 1 (CLAUDE.md)
+        # and sits INSIDE the cached prefix; the detail selection changes per
+        # turn, so placing it on the carrier would rewrite the cached prefix
+        # every turn (bug B4). It is RELEVANCE-GATED PER TURN, so within a task
+        # (endpoint re-entry on the same last user message) it must be
+        # REFRESHED, not append-once: _refresh_detail_block strips any stale
+        # detail block on that message and re-appends this turn's selection (or
+        # removes it entirely when this turn has no relevant detail). A prior
+        # turn's frozen detail (on a now-historical user message) is left
+        # untouched — same tradeoff <relevant_memories> makes.
+        _detail_action = _refresh_detail_block(
+            messages, _detail_block, marker=_PROFILE_DETAIL_MARKER)
+        _detail_injected = _detail_action in ('replaced', 'added', 'removed')
+        # ── Chip stash: fire whenever the profile is IN CONTEXT this turn,
+        #   not only when THIS call mutated the message list. _append_*
+        #   returns False when the marker is already present — which happens
+        #   on every turn after the first when the _isMeta carrier is reused
+        #   from the server-side message store (keepToolHistory) or rebuilt
+        #   history. The preferences ARE in context on those turns (carried
+        #   over), so the "preferences applied" chip must still appear — gating
+        #   it on a fresh mutation is exactly what made the chip flicker in/out
+        #   between turns of the same conversation. So: stash the chip payload
+        #   whenever there's a non-empty profile body; only the cache
+        #   notify_compaction + the INFO log are gated on an actual mutation.
+        if _core_block and task is not None:
+            try:
+                from lib.memory.user_profile import applied_profile_items
+                _applied = applied_profile_items(
+                    _profile_body, _profile_scope, query=_query)
+                # The chip shows EXACTLY what was injected: the full
+                # always-on core + only the relevance-selected detail
+                # bullets — never an arbitrary first-N slice. `items` is
+                # the flat union (back-compat for the existing chip);
+                # `core`/`detail` let the UI group them.
+                task['_appliedPreferences'] = {
+                    'chars': len(_profile_body),
+                    'items': _applied['core'] + _applied['detail'],
+                    'core': _applied['core'],
+                    'detail': _applied['detail'],
+                    'detail_injected': bool(_detail_block),
+                }
+            except Exception as e:
+                logger.debug('[Inject] profile summary stash failed: %s', e)
+        if _profile_injected or _detail_injected:
+            _existing = _system_text(messages)
+            # CRITICAL: we mutated a message that, after the first tool
+            # round, sits INSIDE the cached prefix (messages[0:N-2]).
+            # Tell cache_tracking this is an expected, legitimate
+            # mutation so detect_cache_break does NOT log a false
+            # `PREFIX MUTATION DETECTED` every round. See
+            # .tofu/skills/cache-tracking-prefix-mutation-mutators.md.
+            if _cid:
+                try:
+                    from lib.tasks_pkg.cache_tracking import notify_compaction
+                    notify_compaction(_cid)
+                except Exception as e:
+                    logger.debug('[Inject] notify_compaction unavailable: %s', e)
+            logger.info('[Inject] conv=%s user-profile applied '
+                        '(%d chars, core=%s on _isMeta carrier, detail=%s on '
+                        'true tail)',
+                        (_cid or '?')[:8], len(_profile_body),
+                        _profile_injected, _detail_injected)
+        # Record the bytes that ACTUALLY landed: core on the _isMeta carrier,
+        # detail on the true tail. They are two distinct seams with their own
+        # real lengths (the summary total must sum what was spliced). 'removed'
+        # subtracts a stale block (endpoint re-entry) → not a fresh-assembly
+        # inject, so it is not counted as added bytes.
+        if _profile_injected and _core_block:
+            _ctx_injected('pref_core', len(_core_block))
+        if _detail_action in ('added', 'replaced') and _detail_block:
+            _ctx_injected('pref_detail', len(_detail_block))
+
     # ★ 3. Compact memory accumulation instructions + memory count hint
     #   Both the HOW-TO-USE instructions and the dynamic count hint
     #   ("You have N accumulated memories...") go into the system message.
     #   Suppressed when the user disables Memory — keeps the toggle's
     #   "off → no proactive memory plumbing" semantics consistent with the
     #   per-turn prefetch gate in orchestrator.py.
+    if not (has_real_tools and memory_enabled):
+        _ctx_suppressed('memory_accum',
+                        'no_tools' if not has_real_tools else 'memory_disabled')
     if has_real_tools and memory_enabled:
         if '<memory_accumulation>' in _existing:
             logger.debug('[Inject] Memory instructions already present, skipping '
                          'append (conv=%s)', _cid[:8] if _cid else '?')
+            _ctx_suppressed('memory_accum', 'marker_present')
         else:
             from lib.memory import MEMORY_ACCUMULATION_INSTRUCTIONS_COMPACT
 
-            # Build memory count hint (dynamic, changes on CRUD)
+            # Build memory count hint (dynamic, changes on CRUD). Cheap
+            # in-process count — no conv-scoped cache (each task injects fresh).
             _pp = project_path if project_enabled else None
             def _load_memory_hint():
                 from lib.memory import build_memory_context
                 return build_memory_context(project_path=_pp)
 
-            if _cid:
-                _mem_hint = _get_cached_or_compute(
-                    _cid, 'memory_hint', _load_memory_hint)
-            else:
-                _mem_hint = _load_memory_hint() or ''
+            _mem_hint = _load_memory_hint() or ''
 
             _mem_block = MEMORY_ACCUMULATION_INSTRUCTIONS_COMPACT
             if _mem_hint:
@@ -437,11 +772,15 @@ def _inject_system_contexts(messages, project_path, project_enabled,
             # Separate cache-block: the memory count in _mem_hint changes
             # whenever memories are CRUD'd, so we want its BP independent
             # from the static CC block's BP.
+            _mem_spliced = _wrap_system_reminder(_mem_block)
             _append_to_system_message(
                 messages,
-                _wrap_system_reminder(_mem_block),
+                _mem_spliced,
                 as_separate_block=True)
             _existing = _system_text(messages)
+            # Full spliced length (hint + instructions, <system-reminder>
+            # wrapper included) — that is the byte delta this seam adds.
+            _ctx_injected('memory_accum', len(_mem_spliced))
 
     # ★ 4. Swarm system prompt injection — gated ONLY on swarm_enabled.
     #   Decoupled from project_enabled because a bare-conversation research
@@ -540,14 +879,154 @@ Round N+2, two `<swarm-update>` blocks arrive (a1 + a3 completed, a2 still runni
 Round N+3, a2's update lands. Synthesise the full picture for the user.
 </parallel_execution>
 """
-        _append_to_system_message(messages,
-                                   _wrap_system_reminder(swarm_prompt),
+        _swarm_spliced = _wrap_system_reminder(swarm_prompt)
+        _append_to_system_message(messages, _swarm_spliced,
                                    as_separate_block=True)
+        _ctx_injected('swarm', len(_swarm_spliced))
+    elif not swarm_enabled:
+        _ctx_suppressed('swarm', 'swarm_disabled')
+    else:
+        _ctx_suppressed('swarm', 'marker_present')
 
-    # Current date is already inlined by build_static_prompt()'s
-    # section_current_date — do NOT append it here or it duplicates.
+    # ★ 4.4 Cross-conversation project digest (Layer 2) — always-on in project
+    #   mode. A bounded list (top DIGEST_MAX_SIBLINGS) of the most recent OTHER
+    #   conversations of this project, each as "title — summary [id]", so the
+    #   model is AMBIENTLY aware that siblings exist and can get_conversation()
+    #   into one. Read-only/cached (never generates a summary on this hot path);
+    #   own cache-block because the sibling list changes as the project grows.
+    # Marker is the substring BOTH header variants share (tool-enabled and
+    # tool-free), so the idempotency probe matches regardless of which header
+    # build_project_digest emitted — see its conv_tools_available docstring.
+    _DIGEST_MARKER = 'related conversation(s)'
+    if not (project_enabled and project_path):
+        _ctx_suppressed('digest', 'project_off')
+    elif _DIGEST_MARKER in _existing:
+        _ctx_suppressed('digest', 'marker_present')
+    if project_enabled and project_path and _DIGEST_MARKER not in _existing:
+        # The digest's header advertises list_conversations / get_conversation
+        # ONLY when those tools are actually registered this turn. They register
+        # only once the user @-attached a conversation (registry._build_conv_ref
+        # gates on has_conv_ref), so on a plain project turn we must NOT tell the
+        # model to call tools absent from its schema — mirrors the
+        # using-tools-section-filters-by-registered-tools guardrail.
+        _conv_tools_available = bool(
+            tool_names and {'list_conversations', 'get_conversation'} & tool_names)
+        _digest_query = _extract_last_user_text(messages)
+        try:
+            from lib.conversations.project_summary import build_project_digest
+            _digest = build_project_digest(
+                project_path, current_conv_id=_cid or None,
+                conv_tools_available=_conv_tools_available,
+                query=_digest_query)
+        except Exception as e:
+            logger.debug('[Inject] project digest build failed conv=%s: %s',
+                         (_cid or '?')[:8], e)
+            _digest = ''
+        if _digest:
+            _digest_spliced = _wrap_system_reminder(_digest)
+            _append_to_system_message(messages, _digest_spliced,
+                                       as_separate_block=True)
+            _existing = _system_text(messages)
+            _ctx_injected('digest', len(_digest_spliced))
+        else:
+            _ctx_suppressed('digest', 'empty')
+            # Stash the SAME siblings (structured) so the frontend can show a
+            # "related conversations" provenance segment — making the ambient
+            # context the model received auditable, mirroring the prefs chip.
+            if task is not None:
+                try:
+                    from lib.conversations.project_summary import (
+                        project_digest_entries)
+                    _entries = project_digest_entries(
+                        project_path, current_conv_id=_cid or None,
+                        query=_digest_query)
+                    if _entries:
+                        task['_relatedConversations'] = {
+                            'count': len(_entries),
+                            'items': _entries,
+                            'toolsAvailable': _conv_tools_available,
+                        }
+                except Exception as e:
+                    logger.debug('[Inject] related-convs stash failed: %s', e)
 
+    # ★ 4.45 Project Charter (the shared "north star" — Pillar #2).
+    #   Its OWN cache-stable block next to the digest: the charter changes far
+    #   less often than the sibling list, and it's the mechanism that makes
+    #   every conversation of the project share one intent. Injected ONLY when
+    #   a charter exists (an empty project adds no prompt weight). Keyed
+    #   STRICTLY on the explicit project_path — never the global singleton.
+    _CHARTER_MARKER = '[PROJECT CHARTER]'
+    if not (project_enabled and project_path):
+        _ctx_suppressed('charter', 'project_off')
+    elif _CHARTER_MARKER in _existing:
+        _ctx_suppressed('charter', 'marker_present')
+    if project_enabled and project_path and _CHARTER_MARKER not in _existing:
+        try:
+            from lib.conversations.project_charter import render_charter_block
+            _charter_block = render_charter_block(project_path)
+        except Exception as e:
+            logger.debug('[Inject] charter build failed conv=%s: %s',
+                         (_cid or '?')[:8], e)
+            _charter_block = ''
+        if _charter_block:
+            _charter_spliced = _wrap_system_reminder(_charter_block)
+            _append_to_system_message(messages, _charter_spliced,
+                                       as_separate_block=True)
+            _existing = _system_text(messages)
+            _ctx_injected('charter', len(_charter_spliced))
+        else:
+            _ctx_suppressed('charter', 'empty')
 
+    # ★ 4.46 Project Board (auto-coordination — Pillar #3).
+    #   The mechanism that makes conversations STOP colliding/duplicating: the
+    #   board's open/claimed/done epics injected as their own cache block, with
+    #   an explicit "avoid duplicating — X is being advanced by conversation …"
+    #   hint per epic another conversation holds an UNEXPIRED lease on. NOT a
+    #   passive display: this is what a reading conversation acts on to step
+    #   aside. Injected only when the board is non-empty; keyed STRICTLY on the
+    #   explicit project_path. render_board_block evaluates lease expiry at
+    #   read time (an abandoned claim reads open → never deadlocks).
+    _BOARD_MARKER = '[PROJECT BOARD]'
+    if not (project_enabled and project_path):
+        _ctx_suppressed('board', 'project_off')
+    elif _BOARD_MARKER in _existing:
+        _ctx_suppressed('board', 'marker_present')
+    if project_enabled and project_path and _BOARD_MARKER not in _existing:
+        try:
+            from lib.conversations.project_board import render_board_block
+            _board_block = render_board_block(project_path, current_conv_id=_cid or '')
+        except Exception as e:
+            logger.debug('[Inject] board build failed conv=%s: %s',
+                         (_cid or '?')[:8], e)
+            _board_block = ''
+        if _board_block:
+            _board_spliced = _wrap_system_reminder(_board_block)
+            _append_to_system_message(messages, _board_spliced,
+                                       as_separate_block=True)
+            _existing = _system_text(messages)
+            _ctx_injected('board', len(_board_spliced))
+        else:
+            _ctx_suppressed('board', 'empty')
+
+    # ★ 4.5 Current date.
+    #   In append mode the date is already inlined by build_static_prompt()'s
+    #   section_current_date — do NOT append it again or it duplicates.
+    #   In replace mode the static block is suppressed, so the date would be
+    #   missing entirely; inject it here as its own cache-stable block
+    #   (changes once per UTC day, like the static section).
+    if _replace_static:
+        _date_line = system_prompt_cc.section_current_date()
+        if _date_line not in _existing:
+            _append_to_system_message(messages, _date_line,
+                                       as_separate_block=True)
+            _ctx_injected('date', len(_date_line))
+
+    # ── Per-assembly trace: ONE INFO line naming every block spliced this
+    #   assembly + the total bytes. _inject_system_contexts runs ONCE per task
+    #   (round 0), so this is a per-assembly summary, NOT a per-round line —
+    #   `round` reflects the tool-round count at assembly (0 on a fresh task).
+    #   The model sees these same system blocks on every round of the task.
+    _emit_context_summary()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

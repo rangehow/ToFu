@@ -78,6 +78,13 @@ async function regenerateFromUser(idx) {
   // ── Atomic backend call: truncate + translate + task start ──
   const _regenConfig = await _buildConvConfig(conv);
 
+  // ★ Mint the assistant message id BEFORE the POST (same as the send path) so
+  //   live per-round translation frames route to the still-streaming bubble.
+  const _regenAssistantMsgId = (typeof _newClientMsgId === 'function')
+    ? _newClientMsgId()
+    : ('tmp_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8));
+  _regenConfig.assistantMsgId = _regenAssistantMsgId;
+
   // ★ If autoTranslate is on and message has Chinese, show stop button immediately
   const _regenAbortCtrl = new AbortController();
   let _regenAbortReason = '';  // '' | 'timeout' | 'user-stop'
@@ -93,7 +100,7 @@ async function regenerateFromUser(idx) {
     conv._translateAbortCtrl = _regenAbortCtrl;
     updateSendButton();
     renderConversationList();
-    if (activeConvId === convId) _renderTranslatingBubble(convId);
+    if (activeConvId === convId) _renderTranslatingBubble();
   }
 
   try {
@@ -102,6 +109,9 @@ async function regenerateFromUser(idx) {
     const resp = await Api.chat.regenerate({
       convId,
       truncateToIndex: idx,
+      // ★ Phase 3: stable-id truncate point (authoritative server-side; index
+      //   is the fallback). See chat_regenerate's truncateToMsgId handling.
+      ...(msg._msgId ? { truncateToMsgId: msg._msgId } : {}),
       config: _regenConfig,
       settings: _regenSettings,
     }, { signal: _regenAbortCtrl.signal });
@@ -113,6 +123,20 @@ async function regenerateFromUser(idx) {
 
     // Update local state if server translated the message
     if (result.userMessage) {
+      // ★ When auto-translate is OFF, the server restores the original text
+      //   and DROPS the translation metadata. Object.assign only MERGES keys,
+      //   so explicitly delete the stale local translation fields first —
+      //   otherwise the bilingual block lingers and a later full-conv sync
+      //   would re-PUT the stale originalContent into the DB.
+      if (result.restoredOriginal) {
+        delete msg.originalContent;
+        delete msg._translateDone;
+        delete msg._translateModel;
+        delete msg._translateFailed;
+        delete msg.translatedContent;
+        delete msg._translatedCache;
+        delete msg._showingTranslation;
+      }
       Object.assign(msg, result.userMessage);
       if (activeConvId === convId) {
         const msgEl = document.getElementById('msg-' + idx);
@@ -128,16 +152,17 @@ async function regenerateFromUser(idx) {
       role: "assistant", content: "", thinking: "",
       timestamp: Date.now(), toolRounds: [],
       model: _regenConfig.model || serverModel,
+      _msgId: _regenAssistantMsgId,
     };
     // ★ Endpoint mode: mark as planner so SSE reconnection identifies it correctly
     if (_regenConfig.endpointMode) assistantMsg._isEndpointPlanner = true;
-    _ensureMsgId(assistantMsg);
+    _ensureMsgId(assistantMsg);  // no-op when _msgId already set
     conv.messages.push(assistantMsg);
     conv.activeTaskId = taskId;
     saveConversations(convId);
 
     _removeTranslatingBubble();
-    if (activeConvId === convId) _renderStreamingBubble(conv, _regenConfig);
+    if (activeConvId === convId) _renderStreamingBubble(conv, _regenConfig, _regenAssistantMsgId);
     buildTurnNav(conv);
     connectToTask(convId, taskId);
 
@@ -312,26 +337,98 @@ async function continueAssistant() {
   }
 
   // ═══════════════════════════════════════════════════════════
-  // ★ Step 2: If no checkpoint, fall back to full regeneration
+  // ★ Step 2: No tool checkpoint → try backend assistant-PREFILL resume
+  //   (epic pt_cb8f98b0cb9b47fb, case 3).
+  //
+  //   A no-tool turn interrupted mid-sentence has no tool-result checkpoint,
+  //   but on a prefill-capable provider (NOT Claude) the backend can feed the
+  //   model its own half-written string so it CONTINUES the same tokens rather
+  //   than regenerating from scratch. We delegate to /api/chat/continue: the
+  //   server-side resume_prefill_from_segments decides (segments SoT + model
+  //   capability + resumable finish reason). If it declines it replies
+  //   {fallback:'regenerate'} and we do exactly the old pop-and-regenerate.
+  //
+  //   Unlike the tool-checkpoint rollback below, prefill mode CONTINUES the
+  //   same string — nothing is discarded, so the message KEEPS its full
+  //   content as the continuation base (content deltas append; state events
+  //   take the longer snapshot) and we do NOT pop it.
   // ═══════════════════════════════════════════════════════════
   if (toolHistory.length === 0) {
-    // No recoverable tool checkpoint — pop the incomplete assistant message
-    // and regenerate from scratch (same as clicking "Regenerate").
     debugLog(
-      "Continue: no tool checkpoint found — falling back to full regeneration",
+      "Continue: no tool checkpoint — attempting backend prefill resume (case 3)",
       "info",
     );
-    showToast(
-      "无法续接（无工具调用检查点），将重新生成回复",
-      "info",
-    );
-    conv.messages.pop();
-    /* ★ FIX: clear _needsLoad and _serverMsgCount after pop — same reason as regenerateFromUser */
-    conv._needsLoad = false;
-    conv._serverMsgCount = conv.messages.length;
-    if (activeConvId === conv.id) renderChat(conv, false);
-    await syncConversationToServer(conv, { allowTruncate: true });
-    await startAssistantResponse(conv.id);
+    const _origContentC3 = assistantMsg.content || "";
+    const _origThinkingC3 = assistantMsg.thinking || "";
+    // Move the live thinking tail to a display-only field (prefill carries
+    // content only — the reasoning trace can't be replayed on the wire).
+    if (_origThinkingC3) assistantMsg.priorThinking = _origThinkingC3;
+    assistantMsg.thinking = "";
+    delete assistantMsg.finishReason;
+    delete assistantMsg.toolSummary;
+    delete assistantMsg.error;
+
+    const cfgPayloadC3 = await _buildConvConfig(conv);
+    if (typeof _ensureMsgId === 'function') _ensureMsgId(assistantMsg);
+    if (assistantMsg._msgId) cfgPayloadC3.assistantMsgId = assistantMsg._msgId;
+
+    // Streaming UI: reuse the existing bubble, keep the content zone populated.
+    if (activeConvId === conv.id) {
+      renderChat(conv, false);
+      const lastIdxC3 = conv.messages.length - 1;
+      const msgElC3 = document.getElementById(`msg-${lastIdxC3}`);
+      if (msgElC3) {
+        msgElC3.id = "streaming-msg";
+        const bodyElC3 = msgElC3.querySelector(".message-body");
+        if (bodyElC3) {
+          bodyElC3.id = "streaming-body";
+          if (!bodyElC3.querySelector('[data-zone="content"]')) {
+            bodyElC3.innerHTML =
+              '<div data-zone="tool"></div><div data-zone="thinking"></div><div data-zone="content"></div><div data-zone="status"><div class="stream-status"><div class="pulse"></div> Continuing…</div></div>';
+          }
+          updateStreamingUI(assistantMsg);
+        }
+      }
+      scrollToBottom();
+    }
+
+    await syncConversationToServer(conv);
+    let taskIdC3;
+    try {
+      const resC3 = await Api.chat.continue({ convId: conv.id, config: cfgPayloadC3 });
+      const dataC3 = await resC3.json();
+      if (!resC3.ok) throw new Error(dataC3.error || "Request failed");
+      if (dataC3.fallback === 'regenerate') {
+        // Backend declined prefill (Claude / clean stop / no resumable tail).
+        // Undo the display-only rollback and do the classic regenerate.
+        debugLog(
+          `Continue: backend declined prefill (${dataC3.reason}) — full regeneration`,
+          "info",
+        );
+        assistantMsg.thinking = _origThinkingC3;
+        delete assistantMsg.priorThinking;
+        showToast("无法续接（无工具调用检查点），将重新生成回复", "info");
+        conv.messages.pop();
+        conv._needsLoad = false;
+        conv._serverMsgCount = conv.messages.length;
+        if (activeConvId === conv.id) renderChat(conv, false);
+        await syncConversationToServer(conv, { allowTruncate: true });
+        await startAssistantResponse(conv.id);
+        return;
+      }
+      taskIdC3 = dataC3.taskId;
+      debugLog(
+        `Continue: backend prefill resume started (task=${taskIdC3}, ` +
+        `base=${_origContentC3.length} chars)`,
+        "info",
+      );
+    } catch (e) {
+      debugLog("Continue (prefill) failed: " + e.message, "error");
+      return;
+    }
+    conv.activeTaskId = taskIdC3;
+    saveConversations(conv.id);
+    connectToTask(conv.id, taskIdC3);
     return;
   }
 
@@ -516,6 +613,13 @@ async function continueAssistant() {
   //   stream handlers to merge prior rounds with newly-streamed ones.
   // ═══════════════════════════════════════════════════════════
   const cfgPayload = await _buildConvConfig(conv);
+  // ★ Continue reuses the SAME assistant message (it already has a stable
+  //   _msgId — server UUID or a tmp_ id). Ship it so the backend stamps
+  //   task['_assistantMsgId'] → live per-round translation frames route to this
+  //   still-streaming bubble (which carries data-msg-id from the renderChat
+  //   above via renderMessage). _ensureMsgId guarantees the id exists.
+  if (typeof _ensureMsgId === 'function') _ensureMsgId(assistantMsg);
+  if (assistantMsg._msgId) cfgPayload.assistantMsgId = assistantMsg._msgId;
   debugLog(
     `Continue: delegating to /api/chat/continue with ${keptRounds.length} kept ` +
     `round(s), preservedContent=${preservedContent.length} chars`,

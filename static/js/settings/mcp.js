@@ -15,6 +15,7 @@
 /** Cached catalog & state */
 var _mcpCatalog = [];
 var _mcpActiveCategory = 'all';
+var _mcpScope = 'all';         // 'all' | 'installed' | 'available'
 var _mcpSearchQuery = '';
 var _mcpInstallTarget = null;  // CatalogEntry being installed
 var _mcpInstallIsReinstall = false;  // true = editing existing (stored env will be honoured)
@@ -26,7 +27,7 @@ var _mcpBreakerTickTimer = null;     // 1s interval that ticks the live "retry i
  */
 async function _populateMcpTab() {
   var grid = document.getElementById('mcpCatalogGrid');
-  if (grid) grid.innerHTML = '<p class="stg-loading">正在加载…</p>';
+  if (grid) grid.innerHTML = '<p class="stg-loading">' + escapeHtml(t('mcp.loading')) + '</p>';
   try {
     var r = await Api.mcp.catalogList();
     if (!r || !r.ok) throw new Error('HTTP ' + (r ? r.status : 'no response'));
@@ -37,8 +38,12 @@ async function _populateMcpTab() {
     _renderMcpCatalog();
     _renderMcpInstalled();
     _mcpUpdateToolCount();
+    // Keep the per-turn context capsule's MCP chips in sync with the live
+    // connection state (install / connect / uninstall all funnel through a
+    // _populateMcpTab refresh). See info-rail.js::refreshMcpRailState.
+    if (typeof refreshMcpRailState === 'function') refreshMcpRailState();
   } catch (e) {
-    if (grid) grid.innerHTML = '<p class="stg-empty">加载 Apps 失败: ' + escapeHtml(e.message) + '</p>';
+    if (grid) grid.innerHTML = '<p class="stg-empty">' + escapeHtml(t('mcp.loadFailed', { err: e.message })) + '</p>';
     debugLog('[MCP] Failed to load catalog: ' + e.message, 'error');
   }
 }
@@ -49,7 +54,7 @@ function _mcpUpdateToolCount() {
   if (!badge) return;
   var total = 0;
   _mcpCatalog.forEach(function(e) { total += (e.tools_count || 0); });
-  badge.textContent = total + ' tools';
+  badge.textContent = t('mcp.toolsCount', { n: total });
 }
 
 /** Render category filter pills. */
@@ -61,7 +66,7 @@ function _renderMcpCategoryBar() {
     var c = e.category || 'Other';
     cats[c] = (cats[c] || 0) + 1;
   });
-  var html = '<button class="mcp-cat-pill' + (_mcpActiveCategory === 'all' ? ' active' : '') + '" onclick="_mcpSetCategory(\'all\')">全部 <span class="mcp-cat-count">' + _mcpCatalog.length + '</span></button>';
+  var html = '<button class="mcp-cat-pill' + (_mcpActiveCategory === 'all' ? ' active' : '') + '" onclick="_mcpSetCategory(\'all\')">' + escapeHtml(t('mcp.scopeAll')) + ' <span class="mcp-cat-count">' + _mcpCatalog.length + '</span></button>';
   var order = ['Development','Data & DB','Communication','Search & Web','Productivity','DevOps','Finance','Design','Other','Custom'];
   order.forEach(function(c) {
     if (!cats[c]) return;
@@ -76,6 +81,18 @@ function _mcpSetCategory(cat) {
   _renderMcpCatalog();
 }
 
+/** Switch the installed/available scope filter and re-render. */
+function _mcpSetScope(scope) {
+  _mcpScope = scope;
+  var tabs = document.getElementById('mcpScopeTabs');
+  if (tabs) {
+    tabs.querySelectorAll('.skills-scope-tab').forEach(function(t) {
+      t.classList.toggle('active', t.getAttribute('data-scope') === scope);
+    });
+  }
+  _renderMcpCatalog();
+}
+
 function _mcpFilterCatalog(query) {
   _mcpSearchQuery = (query || '').toLowerCase().trim();
   _renderMcpCatalog();
@@ -85,6 +102,10 @@ function _mcpFilterCatalog(query) {
 function _mcpFilteredCatalog() {
   return _mcpCatalog.filter(function(e) {
     if (_mcpActiveCategory !== 'all' && e.category !== _mcpActiveCategory) return false;
+    // Scope filter: an entry counts as "installed" if it is configured
+    // (installed) regardless of live connection state.
+    if (_mcpScope === 'installed' && !e.installed) return false;
+    if (_mcpScope === 'available' && e.installed) return false;
     if (_mcpSearchQuery) {
       var hay = (e.name + ' ' + e.description + ' ' + (e.tags || []).join(' ')).toLowerCase();
       return hay.indexOf(_mcpSearchQuery) !== -1;
@@ -101,8 +122,8 @@ function _mcpFilteredCatalog() {
 function _mcpRetryLabel(secs) {
   secs = Math.max(0, Math.round(secs || 0));
   if (secs <= 0) return t('mcp.retryNow');
-  if (secs < 60) return t('mcp.retryInSec').replace('{n}', secs);
-  return t('mcp.retryInMin').replace('{n}', Math.ceil(secs / 60));
+  if (secs < 60) return t('mcp.retryInSec').replace('{n}', String(secs));
+  return t('mcp.retryInMin').replace('{n}', String(Math.ceil(secs / 60)));
 }
 
 /**
@@ -129,7 +150,10 @@ function _renderMcpCatalog() {
   if (!grid) return;
   var items = _mcpFilteredCatalog();
   if (items.length === 0) {
-    grid.innerHTML = '<p class="stg-empty">没有匹配的 App。</p>';
+    var emptyMsg = _mcpScope === 'installed' ? t('mcp.emptyInstalled')
+      : _mcpScope === 'available' ? t('mcp.emptyAvailable')
+      : t('mcp.emptyNoMatch');
+    grid.innerHTML = '<p class="stg-empty">' + emptyMsg + '</p>';
     return;
   }
   // Show featured first, then alphabetical
@@ -150,23 +174,23 @@ function _renderMcpCatalog() {
       : breaker ? ' installed reconnecting'
       : installed ? ' installed' : '';
     html += '<div class="mcp-app-card' + stateClass + '">';
-    html += '<div class="mcp-app-icon">' + (e.icon || '🔌') + '</div>';
+    html += '<div class="mcp-app-icon">' + (e.icon || Icon('plug', 26)) + '</div>';
     html += '<div class="mcp-app-name"><span class="mcp-app-name-text">' + escapeHtml(e.name) + '</span>';
     if (connected) {
-      html += '<span class="mcp-app-status on"><span class="dot"></span>ON</span>';
+      html += '<span class="mcp-app-status on"><span class="dot"></span>' + escapeHtml(t('mcp.statusOn')) + '</span>';
     } else if (breaker) {
       html += '<span class="mcp-app-status reconnecting" title="' +
-        escapeHtml(t('mcp.reconnecting') + ' · ' + t('mcp.retryFailCount').replace('{n}', breaker.failures || 0)) +
+        escapeHtml(t('mcp.reconnecting') + ' · ' + t('mcp.retryFailCount').replace('{n}', String(breaker.failures || 0))) +
         '">⟳ ' + _mcpBreakerCountdownSpan(breaker) + '</span>';
     } else if (installed) {
-      html += '<span class="mcp-app-status off">IDLE</span>';
+      html += '<span class="mcp-app-status off">' + escapeHtml(t('mcp.statusIdle')) + '</span>';
     }
     html += '</div>';
     html += '<div class="mcp-app-desc">' + escapeHtml(e.description || '') + '</div>';
     // Footer: repo link (left) + tools count / action buttons (right)
     html += '<div class="mcp-app-footer">';
     if (e.url) {
-      html += '<a class="mcp-app-repo" href="' + escapeHtml(e.url) + '" target="_blank" rel="noopener" title="Source Repository">' + REPO_SVG + ' Repo</a>';
+      html += '<a class="mcp-app-repo" href="' + escapeHtml(e.url) + '" target="_blank" rel="noopener" title="' + escapeHtml(t('mcp.repoTitle')) + '">' + REPO_SVG + ' ' + escapeHtml(t('mcp.repo')) + '</a>';
     } else {
       html += '<span></span>';
     }
@@ -176,9 +200,9 @@ function _renderMcpCatalog() {
         html += '<span class="mcp-app-version" title="' + escapeHtml((e.server_impl_name || e.id) + ' v' + e.server_version) + '">v' + escapeHtml(e.server_version) + '</span>';
       }
       if (e.tools_count) {
-        html += '<span class="mcp-app-tools-count">' + (e.tools_count || 0) + ' tools</span>';
+        html += '<span class="mcp-app-tools-count">' + escapeHtml(t('mcp.toolsCount', { n: (e.tools_count || 0) })) + '</span>';
       }
-      html += '<button class="btn btn-secondary btn-xs" onclick="_mcpUninstall(\'' + escapeHtml(e.id) + '\')" title="断开连接，但保留已填写的凭据，方便下次一键重新启用">卸载</button>';
+      html += '<button class="btn btn-secondary btn-xs" onclick="_mcpUninstall(\'' + escapeHtml(e.id) + '\')" title="' + escapeHtml(t('mcp.uninstallTitle')) + '">' + escapeHtml(t('mcp.uninstall')) + '</button>';
     } else if (installed) {
       if (breaker) {
         html += '<span class="mcp-app-reconnecting-note" title="' +
@@ -188,11 +212,11 @@ function _renderMcpCatalog() {
       if (e.custom) {
         // Custom servers have no catalog entry, so the catalog install
         // endpoint would 404. Reconnect straight through connectOne.
-        html += '<button class="btn btn-primary btn-xs" onclick="_mcpReconnect(\'' + escapeHtml(e.id) + '\')" title="重新连接此自定义服务器">连接</button>';
+        html += '<button class="btn btn-primary btn-xs" onclick="_mcpReconnect(\'' + escapeHtml(e.id) + '\')" title="' + escapeHtml(t('mcp.connectCustomTitle')) + '">' + escapeHtml(t('mcp.connect')) + '</button>';
       } else {
-        html += '<button class="btn btn-primary btn-xs" onclick="_mcpOpenInstallModal(\'' + escapeHtml(e.id) + '\', true)" title="编辑凭据并重新连接（已有凭据会回填为默认；留空则沿用）">连接</button>';
+        html += '<button class="btn btn-primary btn-xs" onclick="_mcpOpenInstallModal(\'' + escapeHtml(e.id) + '\', true)" title="' + escapeHtml(t('mcp.connectReinstallTitle')) + '">' + escapeHtml(t('mcp.connect')) + '</button>';
       }
-      html += '<button class="btn btn-secondary btn-xs" onclick="_mcpPurge(\'' + escapeHtml(e.id) + '\')" title="彻底删除配置，包括已保存的凭据">清除凭据</button>';
+      html += '<button class="btn btn-secondary btn-xs" onclick="_mcpPurge(\'' + escapeHtml(e.id) + '\')" title="' + escapeHtml(t('mcp.purgeTitle')) + '">' + escapeHtml(t('mcp.purge')) + '</button>';
     } else {
       // If the catalog entry has NO required env vars, skip the modal
       // entirely and one-click-install with the built-in defaults. The
@@ -202,9 +226,9 @@ function _renderMcpCatalog() {
       // servers like Hope just creates confusion.
       var _needsInput = (e.env_specs || []).some(function(s) { return s.required; });
       if (_needsInput) {
-        html += '<button class="btn btn-primary btn-xs" onclick="_mcpOpenInstallModal(\'' + escapeHtml(e.id) + '\')">安装</button>';
+        html += '<button class="btn btn-primary btn-xs" onclick="_mcpOpenInstallModal(\'' + escapeHtml(e.id) + '\')">' + escapeHtml(t('mcp.install')) + '</button>';
       } else {
-        html += '<button class="btn btn-primary btn-xs" onclick="_mcpQuickInstall(\'' + escapeHtml(e.id) + '\')" title="无需配置，点击直接安装并连接；如需修改默认值可在安装后点“连接”">安装</button>';
+        html += '<button class="btn btn-primary btn-xs" onclick="_mcpQuickInstall(\'' + escapeHtml(e.id) + '\')" title="' + escapeHtml(t('mcp.quickInstallTitle')) + '">' + escapeHtml(t('mcp.install')) + '</button>';
       }
     }
     html += '</div></div>';  // action + footer
@@ -303,7 +327,7 @@ function _renderMcpInstalled() {
 
   if (countEl) {
     if (total > 0) {
-      countEl.textContent = total + ' installed';
+      countEl.textContent = t('mcp.installedCount', { n: total });
       countEl.style.display = '';
     } else {
       countEl.style.display = 'none';
@@ -341,11 +365,11 @@ function _renderMcpInstalled() {
 function _mcpErrDetail(e) {
   var body = e && e.body;
   if (body && typeof body === 'object') {
-    var msg = body.error || e.message || '未知错误';
-    if (body.stderr_tail) msg += '\n\n服务器输出:\n' + body.stderr_tail;
+    var msg = body.error || e.message || t('mcp.unknownError');
+    if (body.stderr_tail) msg += '\n\n' + t('mcp.serverOutputLabel') + '\n' + body.stderr_tail;
     return msg;
   }
-  return (e && e.message) || '未知错误（无法连接到服务器）';
+  return (e && e.message) || t('mcp.unknownErrorNoConn');
 }
 
 async function _mcpQuickInstall(serverId) {
@@ -354,22 +378,26 @@ async function _mcpQuickInstall(serverId) {
   debugLog('[MCP] Quick-installing ' + serverId + ' (no required env)…', 'info');
   try {
     var data = await Api.mcp.catalogInstall(serverId, {});
-    if (data && data.ok) {
+    if (data && data.ok && data.status === 'installing') {
+      debugLog('[MCP] ' + serverId + ' installing deps in background; polling…', 'info');
+      data = await _mcpPollInstall(serverId, null);
+    }
+    if (data && data.ok && data.status !== 'error') {
       debugLog('[MCP] Installed ' + serverId + ': ' + (data.tools_count || 0) + ' tools', 'success');
       await _populateMcpTab();
     } else {
       // Installation failed — fall back to opening the modal so the user
       // can inspect the default values and/or override them. This is the
       // safety net for "hope binary not on PATH" kinds of errors.
-      var _err = (data && data.error) || '未知错误（无法连接到服务器）';
+      var _err = (data && data.error) || t('mcp.unknownErrorNoConn');
       debugLog('[MCP] Quick install failed (' + _err + '); opening install modal for ' + serverId, 'warning');
-      showAlert('一键安装失败: ' + _err + '\n\n将打开高级设置，可手动调整参数后重试。');
+      showAlert(t('mcp.quickInstallFailed', { err: _err }));
       _mcpOpenInstallModal(serverId);
     }
   } catch (e) {
     var _detail = _mcpErrDetail(e);
     debugLog('[MCP] Quick install error for ' + serverId + ': ' + _detail, 'error');
-    showAlert('一键安装失败: ' + _detail + '\n\n将打开高级设置，可手动调整参数后重试。');
+    showAlert(t('mcp.quickInstallFailed', { err: _detail }));
     _mcpOpenInstallModal(serverId);
   }
 }
@@ -387,7 +415,7 @@ function _mcpOpenInstallModal(serverId, isReinstall) {
   // Catalog icons are server-owned (lib/mcp/registry.py), not user input,
   // so innerHTML is safe here — matches how _renderMcpCatalog() already
   // emits the same icon strings into the grid cards on L3609.
-  var _icon = entry.icon || '🔌';
+  var _icon = entry.icon || Icon('plug', 34);
   document.getElementById('mcpInstallIcon').innerHTML =
     (typeof _icon === 'string' && _icon.trim().startsWith('<'))
       ? _icon
@@ -416,28 +444,57 @@ function _mcpOpenInstallModal(serverId, isReinstall) {
   var storedKeys = (entry.stored_env_keys || []);
 
   function _renderSpec(spec) {
-    var inputType = (spec.secret !== false) ? 'password' : 'text';
     var hasStored = storedKeys.indexOf(spec.key) !== -1;
+    if (spec.type === 'select' && Array.isArray(spec.options)) {
+      return _renderSelectSpec(spec, hasStored);
+    }
+    var inputType = (spec.secret !== false) ? 'password' : 'text';
     var html = '<div class="stg-field">';
     html += '<label>' + escapeHtml(spec.label || spec.key);
     if (spec.required) html += ' <span style="color:#ef4444;">*</span>';
-    if (hasStored) html += ' <span style="color:#10b981;font-size:11px;">● 已保存</span>';
+    if (hasStored) html += ' <span style="color:#10b981;font-size:11px;">' + escapeHtml(t('mcp.savedBadge')) + '</span>';
     html += '</label>';
-    var ph = hasStored ? '已保存，留空则沿用；填写即覆盖' : (spec.hint || '');
+    var ph = hasStored ? t('mcp.savedHint') : (spec.hint || '');
     html += '<input type="' + inputType + '" class="mcp-env-input" data-key="' + escapeHtml(spec.key) + '" data-has-stored="' + (hasStored ? '1' : '0') + '" placeholder="' + escapeHtml(ph) + '">';
     html += '</div>';
     return html;
   }
 
+  // A select-type spec renders a provider dropdown that drives a companion
+  // (normally hidden) text input carrying the real env value. Picking a known
+  // provider fills the host AND any sibling fields named in the option's
+  // `autofill` map (e.g. SMTP host + ports). The "__custom__" option reveals
+  // the text input for manual entry. The dropdown itself is class
+  // `mcp-env-select` (NOT `mcp-env-input`), so it is never collected as a
+  // value at install time — only the companion input is.
+  function _renderSelectSpec(spec, hasStored) {
+    var html = '<div class="stg-field">';
+    html += '<label>' + escapeHtml(spec.label || spec.key);
+    if (spec.required) html += ' <span style="color:#ef4444;">*</span>';
+    if (hasStored) html += ' <span style="color:#10b981;font-size:11px;">' + escapeHtml(t('mcp.savedBadge')) + '</span>';
+    html += '</label>';
+    html += '<select class="mcp-env-select" data-select-for="' + escapeHtml(spec.key) + '" onchange="_mcpEnvPresetChanged(this)">';
+    html += '<option value="">' + escapeHtml(t('mcp.selectProvider')) + '</option>';
+    spec.options.forEach(function(opt) {
+      var af = opt.autofill ? escapeHtml(JSON.stringify(opt.autofill)) : '';
+      html += '<option value="' + escapeHtml(opt.value) + '" data-autofill="' + af + '">' + escapeHtml(opt.label) + '</option>';
+    });
+    html += '</select>';
+    var ph = hasStored ? t('mcp.savedHint') : (spec.hint || '');
+    html += '<input type="text" class="mcp-env-input" data-key="' + escapeHtml(spec.key) + '" data-has-stored="' + (hasStored ? '1' : '0') + '" placeholder="' + escapeHtml(ph) + '" style="margin-top:6px;display:none;">';
+    html += '</div>';
+    return html;
+  }
+
   if (specs.length === 0) {
-    fieldsHtml = '<p class="mcp-install-noenv">无需配置，直接安装即可。</p>';
+    fieldsHtml = '<p class="mcp-install-noenv">' + escapeHtml(t('mcp.noEnvNeeded')) + '</p>';
   } else {
     var required = specs.filter(function(s) { return s.required; });
     var optional = specs.filter(function(s) { return !s.required; });
     required.forEach(function(spec) { fieldsHtml += _renderSpec(spec); });
     if (optional.length > 0) {
       fieldsHtml += '<details class="mcp-advanced-toggle" style="margin-top:12px;">';
-      fieldsHtml += '<summary style="cursor:pointer;color:var(--text-muted);font-size:12px;user-select:none;">▸ 高级设置（可选，' + optional.length + ' 项）</summary>';
+      fieldsHtml += '<summary style="cursor:pointer;color:var(--text-muted);font-size:12px;user-select:none;">' + escapeHtml(t('mcp.advancedToggle', { n: optional.length })) + '</summary>';
       fieldsHtml += '<div style="margin-top:8px;">';
       optional.forEach(function(spec) { fieldsHtml += _renderSpec(spec); });
       fieldsHtml += '</div></details>';
@@ -447,9 +504,46 @@ function _mcpOpenInstallModal(serverId, isReinstall) {
 
   var btn = document.getElementById('mcpInstallBtn');
   btn.disabled = false;
-  btn.textContent = _mcpInstallIsReinstall ? '保存并连接' : '安装并连接';
+  btn.textContent = _mcpInstallIsReinstall ? t('mcp.saveConnect') : t('mcp.installConnect');
 
   document.getElementById('mcpInstallOverlay').style.display = 'flex';
+}
+
+/**
+ * Provider-dropdown change handler. Drives the companion host input for the
+ * select's own key, and applies the chosen option's `autofill` map to sibling
+ * env inputs (e.g. SMTP host + ports). Choosing "__custom__" clears and
+ * reveals the host input for manual entry; choosing the blank prompt hides it.
+ */
+function _mcpEnvPresetChanged(sel) {
+  var fields = document.getElementById('mcpInstallFields');
+  if (!fields) return;
+  var key = sel.getAttribute('data-select-for');
+  var hostInput = fields.querySelector('.mcp-env-input[data-key="' + key + '"]');
+  var opt = sel.options[sel.selectedIndex];
+  var value = sel.value;
+
+  if (!value) {
+    if (hostInput) { hostInput.value = ''; hostInput.style.display = 'none'; }
+    return;
+  }
+  if (value === '__custom__') {
+    if (hostInput) { hostInput.value = ''; hostInput.style.display = ''; hostInput.focus(); }
+    return;
+  }
+  // Known provider: set host, keep the input hidden (value still collected).
+  if (hostInput) { hostInput.value = value; hostInput.style.display = 'none'; }
+
+  var afRaw = opt ? opt.getAttribute('data-autofill') : '';
+  if (afRaw) {
+    var autofill = {};
+    try { autofill = JSON.parse(afRaw); }
+    catch (e) { debugLog('[MCP] bad autofill JSON: ' + e.message, 'warning'); }
+    Object.keys(autofill).forEach(function(k) {
+      var sib = fields.querySelector('.mcp-env-input[data-key="' + k + '"]');
+      if (sib) sib.value = autofill[k];
+    });
+  }
 }
 
 function _mcpCloseInstallModal(evt) {
@@ -458,15 +552,42 @@ function _mcpCloseInstallModal(evt) {
   _mcpInstallTarget = null;
 }
 
+/**
+ * Poll an async catalog install until it finishes (ready / error).
+ * Returns the final parsed body ({ok, status, tools_count, error, stderr_tail}).
+ * Bounded so a stuck install eventually surfaces an error rather than spinning
+ * forever (cold pip is minutes, not hours).
+ */
+async function _mcpPollInstall(serverId, statusEl) {
+  var DEADLINE_MS = 6 * 60 * 1000;   // 6 min hard cap
+  var INTERVAL_MS = 2500;
+  var t0 = Date.now();
+  while (Date.now() - t0 < DEADLINE_MS) {
+    await new Promise(function(r) { setTimeout(r, INTERVAL_MS); });
+    if (statusEl) {
+      var secs = Math.round((Date.now() - t0) / 1000);
+      statusEl.textContent = t('mcp.installingDeps', { n: secs });
+    }
+    var resp = await Api.mcp.catalogInstallStatus(serverId);
+    if (!resp) continue;                       // transient network blip — retry
+    var body = await resp.json().catch(function() { return null; });
+    if (!body) continue;
+    if (body.status === 'installing') continue;
+    // ready / error / unknown → return for the caller to render.
+    return body;
+  }
+  return { ok: false, status: 'error', error: t('mcp.installTimeout') };
+}
+
 async function _mcpDoInstall() {
   if (!_mcpInstallTarget) return;
   var btn = document.getElementById('mcpInstallBtn');
   var status = document.getElementById('mcpInstallStatus');
   btn.disabled = true;
-  btn.textContent = '安装中…';
+  btn.textContent = t('mcp.installing');
   status.style.display = 'block';
   status.className = 'mcp-install-status info';
-  status.textContent = '正在启动 ' + _mcpInstallTarget.name + '…';
+  status.textContent = t('mcp.startingFirstInstall', { name: _mcpInstallTarget.name });
 
   // Collect env values
   var env = {};
@@ -479,9 +600,14 @@ async function _mcpDoInstall() {
 
   try {
     var data = await Api.mcp.catalogInstall(_mcpInstallTarget.id, env);
-    if (data && data.ok) {
+    // Async path: server kicked off a background pip install. Poll status.
+    if (data && data.ok && data.status === 'installing') {
+      status.textContent = t('mcp.installingDepsName', { name: _mcpInstallTarget.name });
+      data = await _mcpPollInstall(_mcpInstallTarget.id, status);
+    }
+    if (data && data.ok && data.status !== 'error') {
       status.className = 'mcp-install-status success';
-      status.textContent = '✓ ' + _mcpInstallTarget.name + ' 已安装 — ' + (data.tools_count || 0) + ' 个工具可用';
+      status.textContent = t('mcp.installedSuccess', { name: _mcpInstallTarget.name, n: (data.tools_count || 0) });
       debugLog('[MCP] Installed ' + _mcpInstallTarget.id + ': ' + (data.tools_count || 0) + ' tools', 'success');
       // Refresh catalog after a short delay so user sees the success
       setTimeout(function() {
@@ -489,16 +615,18 @@ async function _mcpDoInstall() {
         _populateMcpTab();
       }, 1200);
     } else {
+      var _msg = (data && data.error) || t('mcp.installFailedNoConn');
+      if (data && data.stderr_tail) _msg += '\n\n' + t('mcp.serverOutputLabel') + '\n' + data.stderr_tail;
       status.className = 'mcp-install-status error';
-      status.textContent = '✕ ' + ((data && data.error) || '安装失败（无法连接到服务器）');
+      status.textContent = '✕ ' + _msg;
       btn.disabled = false;
-      btn.textContent = '重试';
+      btn.textContent = t('mcp.retry');
     }
   } catch (e) {
     status.className = 'mcp-install-status error';
     status.textContent = '✕ ' + _mcpErrDetail(e);
     btn.disabled = false;
-    btn.textContent = '重试';
+    btn.textContent = t('mcp.retry');
   }
 }
 
@@ -508,15 +636,15 @@ async function _mcpDoInstall() {
 async function _mcpUninstall(serverId) {
   var entry = _mcpCatalog.find(function(e) { return e.id === serverId; });
   var name = entry ? entry.name : serverId;
-  if (!await showConfirm('卸载 ' + name + '？\n\n将断开连接并禁用，但会保留已填写的凭据；下次点击“连接”可一键重新启用，无需再填一遍。\n\n如需彻底清除凭据，请先卸载，再在空闲卡片上点“清除凭据”。')) return;
+  if (!await showConfirm(t('mcp.uninstallConfirm', { name: name }))) return;
 
   try {
     var data = await Api.mcp.catalogUninstall(serverId, false);
-    if (!data || !data.ok) { showAlert('卸载失败: ' + ((data && data.error) || '未知错误')); return; }
+    if (!data || !data.ok) { showAlert(t('mcp.uninstallFailed', { err: ((data && data.error) || t('mcp.unknownError')) })); return; }
     debugLog('[MCP] Uninstalled ' + serverId + (data.purged ? ' (purged)' : ' (soft, env kept)'), 'info');
     await _populateMcpTab();
   } catch (e) {
-    showAlert('卸载失败: ' + e.message);
+    showAlert(t('mcp.uninstallFailed', { err: e.message }));
   }
 }
 
@@ -524,47 +652,70 @@ async function _mcpUninstall(serverId) {
 async function _mcpPurge(serverId) {
   var entry = _mcpCatalog.find(function(e) { return e.id === serverId; });
   var name = entry ? entry.name : serverId;
-  if (!await showConfirm('清除 ' + name + ' 的全部配置和已保存的凭据？\n\n此操作不可恢复，重新启用时需要再次填写所有凭据。', { danger: true })) return;
+  if (!await showConfirm(t('mcp.purgeConfirm', { name: name }), { danger: true })) return;
 
   try {
     var data = await Api.mcp.catalogUninstall(serverId, true);
-    if (!data || !data.ok) { showAlert('清除失败: ' + ((data && data.error) || '未知错误')); return; }
+    if (!data || !data.ok) { showAlert(t('mcp.purgeFailed', { err: ((data && data.error) || t('mcp.unknownError')) })); return; }
     debugLog('[MCP] Purged ' + serverId, 'info');
     await _populateMcpTab();
   } catch (e) {
-    showAlert('清除失败: ' + e.message);
+    showAlert(t('mcp.purgeFailed', { err: e.message }));
   }
 }
 
 async function _mcpConnectAll() {
   var btn = document.getElementById('mcpConnectAllBtn');
-  if (btn) { btn.disabled = true; btn.textContent = '连接中…'; }
+  if (btn) { btn.disabled = true; btn.textContent = t('mcp.connecting'); }
   try {
     var data = await Api.mcp.connectAll();
-    if (!data || !data.ok) { showAlert('连接失败: ' + ((data && data.error) || '未知错误')); return; }
+    if (!data || !data.ok) { showAlert(t('mcp.connectFailed', { err: ((data && data.error) || t('mcp.unknownError')) })); return; }
     var total = data.total_tools || 0;
     var count = Object.keys(data.servers || {}).length;
     debugLog('[MCP] Connected all: ' + count + ' server(s), ' + total + ' tools', 'success');
     await _populateMcpTab();
   } catch (e) {
-    showAlert('连接失败: ' + e.message);
+    showAlert(t('mcp.connectFailed', { err: e.message }));
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = '全部连接'; }
+    if (btn) { btn.disabled = false; btn.textContent = t('mcp.connectAll'); }
   }
 }
 
 async function _mcpReconnect(serverId) {
   try {
     var data = await Api.mcp.connectOne(serverId);
-    if (!data || !data.ok) { showAlert('连接失败: ' + ((data && data.error) || '未知错误')); return; }
+    if (!data || !data.ok) { showAlert(t('mcp.connectFailed', { err: ((data && data.error) || t('mcp.unknownError')) })); return; }
     debugLog('[MCP] Reconnected ' + serverId + ': ' + (data.tools_count || 0) + ' tools', 'success');
     await _populateMcpTab();
   } catch (e) {
-    showAlert('连接失败: ' + e.message);
+    showAlert(t('mcp.connectFailed', { err: e.message }));
   }
 }
 
-// ── Manual add (advanced) ──
+// ── Manual add (code-free custom server) ──
+
+/** Open the add-custom-server modal, resetting all fields. */
+function _mcpOpenAddModal() {
+  ['mcpNewName', 'mcpNewCommand', 'mcpNewArgs', 'mcpNewUrl', 'mcpNewEnv', 'mcpNewDesc'].forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el) el.value = '';
+  });
+  var transport = document.getElementById('mcpNewTransport');
+  if (transport) transport.value = 'stdio';
+  _mcpTransportChanged();
+  var status = document.getElementById('mcpAddStatus');
+  if (status) { status.style.display = 'none'; status.textContent = ''; }
+  var btn = document.getElementById('mcpAddSaveBtn');
+  if (btn) { btn.disabled = false; btn.textContent = t('mcp.saveConnect'); }
+  var overlay = document.getElementById('mcpAddOverlay');
+  if (overlay) overlay.style.display = 'flex';
+}
+
+function _mcpCloseAddModal(evt) {
+  if (evt && evt.target !== evt.currentTarget) return;
+  var overlay = document.getElementById('mcpAddOverlay');
+  if (overlay) overlay.style.display = 'none';
+}
 
 function _mcpTransportChanged() {
   var transport = (document.getElementById('mcpNewTransport') || {}).value || 'stdio';
@@ -575,9 +726,22 @@ function _mcpTransportChanged() {
 }
 
 async function _mcpSaveServer() {
+  var status = document.getElementById('mcpAddStatus');
+  var saveBtn = document.getElementById('mcpAddSaveBtn');
+  function _fail(msg) {
+    if (status) {
+      status.style.display = 'block';
+      status.className = 'mcp-install-status error';
+      status.textContent = '✕ ' + msg;
+    } else {
+      showAlert(msg);
+    }
+    if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = t('mcp.saveConnect'); }
+  }
+
   var name = (document.getElementById('mcpNewName') || {}).value || '';
   name = name.trim();
-  if (!name) { showAlert('请输入服务器名称'); return; }
+  if (!name) { _fail(t('mcp.needName')); return; }
 
   var transport = (document.getElementById('mcpNewTransport') || {}).value || 'stdio';
   var payload = { name: name, transport: transport, enabled: true };
@@ -586,10 +750,10 @@ async function _mcpSaveServer() {
     payload.command = (document.getElementById('mcpNewCommand') || {}).value || '';
     var argsText = (document.getElementById('mcpNewArgs') || {}).value || '';
     payload.args = argsText.split('\n').map(function(s) { return s.trim(); }).filter(Boolean);
-    if (!payload.command) { showAlert('请输入命令 (command)'); return; }
+    if (!payload.command) { _fail(t('mcp.needCommand')); return; }
   } else {
     payload.url = (document.getElementById('mcpNewUrl') || {}).value || '';
-    if (!payload.url) { showAlert('请输入 SSE URL'); return; }
+    if (!payload.url) { _fail(t('mcp.needUrl')); return; }
   }
 
   // Parse env vars
@@ -607,16 +771,30 @@ async function _mcpSaveServer() {
   var desc = (document.getElementById('mcpNewDesc') || {}).value || '';
   if (desc.trim()) payload.description = desc.trim();
 
+  if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = t('mcp.saving'); }
+  if (status) {
+    status.style.display = 'block';
+    status.className = 'mcp-install-status info';
+    status.textContent = t('mcp.startingName', { name: name });
+  }
+
   try {
     var data = await Api.mcp.serverCreate(payload);
-    if (!data || !data.ok) { showAlert('保存失败: ' + ((data && data.error) || '未知错误')); return; }
+    if (!data || !data.ok) { _fail((data && data.error) || t('mcp.saveFailedNoConn')); return; }
 
     // Auto-connect
     await Api.mcp.connectOne(name);
 
     debugLog('[MCP] Server "' + name + '" saved & connected', 'success');
-    await _populateMcpTab();
+    if (status) {
+      status.className = 'mcp-install-status success';
+      status.textContent = t('mcp.savedConnected', { name: name });
+    }
+    setTimeout(function() {
+      _mcpCloseAddModal();
+      _populateMcpTab();
+    }, 900);
   } catch (e) {
-    showAlert('保存失败: ' + e.message);
+    _fail(_mcpErrDetail(e));
   }
 }

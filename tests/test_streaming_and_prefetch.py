@@ -6,7 +6,6 @@
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import sys
@@ -111,6 +110,74 @@ class TestStreamingToolAccumulator:
             'function': {'name': 'grep_search', 'arguments': 'NOT JSON'},
         })
         assert acc.submitted_count == 0
+
+    def test_callback_skips_phantom_fetch_url_empty_urls(self):
+        """A placeholder fetch_url with an empty urls array is NOT pre-executed.
+
+        Regression: the model emitted
+        ``fetch_url({"reason": "placeholder", "urls": []})``. Because ``urls``
+        is falsy it fell through to single-URL mode with url='', pre-executing
+        ``fetch_page_content('')`` and caching a bogus 'Failed to fetch .'
+        (source: Prefetch). The guard must defer it to the normal handler.
+        """
+        from lib.tasks_pkg.streaming_tool_executor import StreamingToolAccumulator
+        task = self._make_task()
+        acc = StreamingToolAccumulator(task, project_path='/tmp')
+        acc.on_tool_call_ready({
+            'id': 'tc_phantom',
+            'function': {'name': 'fetch_url',
+                         'arguments': json.dumps({'reason': 'placeholder', 'urls': []})},
+        })
+        assert acc.submitted_count == 0
+
+    def test_callback_skips_fetch_url_no_target(self):
+        """fetch_url with neither url nor urls is not pre-executed."""
+        from lib.tasks_pkg.streaming_tool_executor import StreamingToolAccumulator
+        task = self._make_task()
+        acc = StreamingToolAccumulator(task, project_path='/tmp')
+        acc.on_tool_call_ready({
+            'id': 'tc_nourl',
+            'function': {'name': 'fetch_url', 'arguments': json.dumps({'reason': 'x'})},
+        })
+        assert acc.submitted_count == 0
+
+    def test_callback_skips_web_search_empty_query(self):
+        """web_search with a blank query is not pre-executed."""
+        from lib.tasks_pkg.streaming_tool_executor import StreamingToolAccumulator
+        task = self._make_task()
+        acc = StreamingToolAccumulator(task, project_path='/tmp')
+        acc.on_tool_call_ready({
+            'id': 'tc_blank',
+            'function': {'name': 'web_search', 'arguments': json.dumps({'query': '  '})},
+        })
+        assert acc.submitted_count == 0
+
+    def test_callback_submits_fetch_url_with_real_url(self):
+        """A fetch_url with a real url IS still pre-executed (guard doesn't over-reject)."""
+        from lib.tasks_pkg.streaming_tool_executor import StreamingToolAccumulator
+        task = self._make_task()
+        acc = StreamingToolAccumulator(task, project_path='/tmp')
+        acc._execute_one = MagicMock(return_value='page content')
+        acc.on_tool_call_ready({
+            'id': 'tc_real',
+            'function': {'name': 'fetch_url',
+                         'arguments': json.dumps({'url': 'https://example.com'})},
+        })
+        assert acc.submitted_count == 1
+
+    def test_has_executable_target_helper(self):
+        """_has_executable_target directly: the pure predicate behind the guard."""
+        from lib.tasks_pkg.streaming_tool_executor import _has_executable_target as h
+        assert h('fetch_url', {'urls': []}) is False
+        assert h('fetch_url', {'url': ''}) is False
+        assert h('fetch_url', {'url': 'https://x.com'}) is True
+        assert h('fetch_url', {'urls': [{'url': 'https://x.com'}]}) is True
+        assert h('fetch_url', {'urls': ['https://x.com']}) is True
+        assert h('web_search', {'query': ''}) is False
+        assert h('web_search', {'query': 'hello'}) is True
+        assert h('web_search', {'queries': [{'query': 'hi'}]}) is True
+        # Project tools are always allowed (their handler validates).
+        assert h('grep_search', {'pattern': 'x'}) is True
 
     def test_inject_into_cache_waits_for_unfinished(self):
         """inject_into_cache waits for in-progress futures instead of cancelling."""
@@ -278,86 +345,6 @@ class TestStreamingCallback:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  Test 3: Delta Attachment Tracking
-# ═══════════════════════════════════════════════════════════════════════════════
-
-@pytest.mark.unit
-class TestDeltaAttachments:
-    """Test delta attachment tracking — always returns text, only skips compute.
-
-    CRITICAL DESIGN: In our system each task gets fresh messages from the
-    frontend.  Delta tracking must ALWAYS return the text for injection —
-    it only caches to skip expensive FUSE I/O when content is unchanged.
-    """
-
-    def test_context_hash_consistency(self):
-        """Same text produces same hash."""
-        from lib.tasks_pkg.system_context import _context_hash
-        h1 = _context_hash("hello world")
-        h2 = _context_hash("hello world")
-        assert h1 == h2
-
-    def test_context_hash_different(self):
-        """Different text produces different hash."""
-        from lib.tasks_pkg.system_context import _context_hash
-        h1 = _context_hash("hello world")
-        h2 = _context_hash("hello earth")
-        assert h1 != h2
-
-    def test_first_call_returns_text(self):
-        """First call always computes and returns text."""
-        from lib.tasks_pkg.system_context import _get_cached_or_compute, _last_context_cache
-        key = ('test-conv-delta-1', 'project')
-        _last_context_cache.pop(key, None)
-        result = _get_cached_or_compute('test-conv-delta-1', 'project',
-                                         lambda: 'some context')
-        assert result == 'some context'
-
-    def test_second_identical_call_still_returns_text(self):
-        """Second call with same content STILL returns text (never empty)."""
-        from lib.tasks_pkg.system_context import _get_cached_or_compute, _last_context_cache
-        key = ('test-conv-delta-2', 'skills')
-        _last_context_cache.pop(key, None)
-        _get_cached_or_compute('test-conv-delta-2', 'skills',
-                               lambda: 'skill content A')
-        result = _get_cached_or_compute('test-conv-delta-2', 'skills',
-                                         lambda: 'skill content A')
-        assert result == 'skill content A'  # MUST return, not skip
-
-    def test_changed_content_returns_new_text(self):
-        """Changed content returns the new version."""
-        from lib.tasks_pkg.system_context import _get_cached_or_compute, _last_context_cache
-        key = ('test-conv-delta-3', 'project')
-        _last_context_cache.pop(key, None)
-        _get_cached_or_compute('test-conv-delta-3', 'project', lambda: 'v1')
-        result = _get_cached_or_compute('test-conv-delta-3', 'project',
-                                         lambda: 'v2')
-        assert result == 'v2'
-
-    def test_per_section_independence(self):
-        """Different categories tracked independently."""
-        from lib.tasks_pkg.system_context import _get_cached_or_compute, _last_context_cache
-        for cat in ('project', 'skills'):
-            _last_context_cache.pop(('test-conv-delta-4', cat), None)
-
-        r1 = _get_cached_or_compute('test-conv-delta-4', 'project',
-                                     lambda: 'proj context')
-        r2 = _get_cached_or_compute('test-conv-delta-4', 'skills',
-                                     lambda: 'memory context')
-        assert r1 == 'proj context'
-        assert r2 == 'memory context'
-
-    def test_empty_compute_returns_empty(self):
-        """Empty string from compute returns empty."""
-        from lib.tasks_pkg.system_context import _get_cached_or_compute, _last_context_cache
-        key = ('test-conv-delta-5', 'project')
-        _last_context_cache.pop(key, None)
-        result = _get_cached_or_compute('test-conv-delta-5', 'project',
-                                         lambda: '')
-        assert result == ''
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
 #  Test 4: Concurrency Partitioning
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -510,6 +497,59 @@ class TestMemoryPrefetch:
             )
 
         mock_fn.assert_called_once()
+
+    def test_digest_header_tool_free_when_conv_tools_absent(self):
+        """The project-digest reminder must NOT advertise list_conversations /
+        get_conversation when those tools are not registered for the turn.
+
+        Regression for the dual-gate bug: the digest injected on every project
+        turn (project_enabled) but the conv-ref tools only register on an
+        @-attach (has_conv_ref) — so a plain project turn told the model to
+        call tools absent from its schema. The header is now tool-aware.
+        """
+        from lib.tasks_pkg.system_context import _inject_system_contexts
+
+        messages = [{'role': 'system', 'content': 'Base'}]
+        with patch('lib.project_mod.get_context_for_prompt', return_value=''), \
+             patch('lib.conversations.project_summary.build_project_digest') as mock_digest:
+            mock_digest.return_value = 'For ambient awareness: this project has 2 related conversation(s).'
+            _inject_system_contexts(
+                messages, '/tmp/proj', True,       # project_enabled
+                False, False, False,               # memory, search, swarm
+                has_real_tools=True,
+                conv_id='',
+                task=None,
+                tool_names={'read_files', 'web_search'},  # NO conv-ref tools
+            )
+        # build_project_digest must have been called with conv_tools_available=False.
+        assert mock_digest.called
+        _, kwargs = mock_digest.call_args
+        assert kwargs.get('conv_tools_available') is False
+        # And the injected text names no phantom tool.
+        text = self._all_text(messages)
+        assert 'list_conversations' not in text
+        assert 'get_conversation' not in text
+
+    def test_digest_header_advertises_tools_when_conv_tools_present(self):
+        """When the conv-ref tools ARE registered, the digest is built with
+        conv_tools_available=True so the header can instruct their use."""
+        from lib.tasks_pkg.system_context import _inject_system_contexts
+
+        messages = [{'role': 'system', 'content': 'Base'}]
+        with patch('lib.project_mod.get_context_for_prompt', return_value=''), \
+             patch('lib.conversations.project_summary.build_project_digest') as mock_digest:
+            mock_digest.return_value = 'This project has 1 related conversation(s) you can consult.'
+            _inject_system_contexts(
+                messages, '/tmp/proj', True,
+                False, False, False,
+                has_real_tools=True,
+                conv_id='',
+                task=None,
+                tool_names={'read_files', 'list_conversations', 'get_conversation'},
+            )
+        assert mock_digest.called
+        _, kwargs = mock_digest.call_args
+        assert kwargs.get('conv_tools_available') is True
 
     def test_skills_prefetch_consumed(self):
         """Memory count hint is injected into the system message by _inject_system_contexts.

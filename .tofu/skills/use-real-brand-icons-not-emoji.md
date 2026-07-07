@@ -1,41 +1,63 @@
 ---
 name: use-real-brand-icons-not-emoji
-description: MANDATORY: brand/product icons must use official SVG logos, never emoji. Brand SVGs in static/icons/. MCP catalog icons: lib/mcp/registry.py 'icon' field renders as innerHTML (grid+modal) — use <img src="static/icons/mcp/<id>.svg"> for brands; stored in static/icons/mcp/.
+description: MANDATORY (CLAUDE.md §3.4): UI icons SVG-only, NO emoji. THREE emoji sources for a tool row: (1) round.query label builders (tool_display.py, browser/display.py); (2) generic meta icon/badge/title via _build_simple_meta/simple_call (misc.py + executor_image.py); (3) MCP meta in handlers/mcp.py (🔌 badge/title). All de-emoji'd; frontend _getToolSvg renders the SVG.
 enabled: true
 tags: [html, css, icons, svg, branding, convention, mandatory]
 created: 2026-03-29T11:14:03Z
-updated: 2026-06-10T06:36:53Z
+updated: 2026-06-26T05:01:35Z
 ---
 
-## Rule
-When an icon represents a real product/service/brand (Feishu/Lark, Google, GitHub, Claude, OpenAI, Docker, Slack…),
-you **MUST** use the official SVG logo. **Never** substitute a generic emoji or random SVG path.
+## Rule (CLAUDE.md §3.4)
+UI **icons** must be SVG, NEVER emoji — brand AND generic-concept. Scope = rendered UI
+affordances (incl. debug drawer). OUT of scope (left as emoji): console/`debugLog`/`_orchRunLog`
+strings, code comments (`★`), `showToast(icon,…)` (auto-stripped by `_stripEmoji` core/toast.js),
+info-banner PROSE tips, typographic dingbats (✓ ✕ ✗ ✦ ✎ ± ∅ ▶ ▾ ▸ ⏸ ↻ ⬇ ⬆ ↔ ⏱ ⬡ ⊞ ⟳ ✚ ⚠ · →),
+folder `⭐ 置顶`, `✅`/`❌` endpoint-critic protocol tokens, AND error-detection SENTINELS that match
+emoji in tool RESULT CONTENT (e.g. `tool_content.startswith('❌')` in mcp.py — content, not UI).
 
-## How to Find Official Icons
-1. Search the web for `{brand} logo SVG`.
-2. Best sources (in order):
-   - **simple-icons** via jsdelivr (works, fast): `https://cdn.jsdelivr.net/npm/simple-icons@latest/icons/{slug}.svg` — monochrome single-path, viewBox 0 0 24 24, fill currentColor-ready. Has GitHub/GitLab/Slack/Notion/Docker/K8s/AWS/Stripe/Figma/Discord/Perplexity/Zapier/Vercel/Supabase/Postgres/Redis/Mongo/Sentry/Cloudflare/Overleaf/Playwright/Puppeteer/BigQuery/Jira/Asana/Todoist/Upstash/Brave/Gmail/Google-Drive etc.
-   - dashboard-icons / LobeHub (note: `jsdelivr.net/gh/...` raw-GitHub path can TIME OUT — prefer npm path above).
-   - **Favicon fallback** for brands NOT in simple-icons (Tavily, Exa, Firecrawl, Context7): `curl {site}/favicon.ico` → PIL convert → base64-embed PNG inside `<svg><image href="data:image/png;base64,…"/></svg>`.
-3. `curl` (not fetch_url) for raw assets.
+## THE FRONTEND HELPER
+`static/js/core/icons.js` → `window.Icon(name,size?,extraStyle?)` (Lucide, stroke=currentColor)
++ `window.IconDot(color,size?)`. ~44 glyphs in `_PATHS`. Bundled right after i18n.js.
 
-## Implementation Pattern
-- Save to `static/icons/{brand}.svg` (external file). For MCP catalog: `static/icons/mcp/{id}.svg`.
-- Reference with `<img src="static/icons/{brand}.svg" width="20" height="20" alt="{Brand}">` — bare relative `static/...` path is the project convention (index.html:1254/1283), no BASE_PATH/apiUrl needed for innerHTML-injected refs.
-- Dark theme on DARK bg: `style="filter:brightness(0) invert(1)"` whitens a dark SVG. On LIGHT/cream tiles (e.g. MCP cards use `--s-cream`) DO NOT invert — black simple-icons render correctly.
-- Size to context: 15×15 tab buttons, 20×20 section titles, 26px MCP grid tile, 34px MCP modal.
+## ★ TOOL-CALL ROW has THREE emoji sources — fix ALL
+A tool round renders ONE SVG via `static/js/ui/tool_rounds.js::_getToolSvg(round)`
+(project→_projToolSvg, browser→_browserToolSvg, imagegen→own, `mcp__*`→_webToolSvg.mcp plug,
+else `_webToolSvg[icon]||_webToolSvg[toolName]||.generic` wrench). Emoji anywhere else = DUPLICATE.
+1. **The label** = `round.query` text beside the SVG. Built by:
+   `lib/tasks_pkg/tool_display.py` `_tool_display_*` (conv_ref/fetch_url/scheduler/desktop/
+   swarm/compact/image_gen/human_guidance/mcp/generic + except-fallback in
+   `_build_tool_round_entry`); `lib/browser/display.py::_DISPLAY_HANDLERS` (19 lambdas);
+   `lib/project_mod/tools.py::project_tool_display` (already clean). → de-emoji'd 2026-06-26.
+2. **Generic result meta** = `meta.title`/`meta.badge` (badge pill + preview), built by
+   `_build_simple_meta`/`simple_call` (`lib/tasks_pkg/executor.py`, `handlers/_adapter.py`).
+   The `icon=` kwarg ONLY feeds the default fallback (frontend ignores it for the row icon) →
+   pass NO icon, keep badge/title text-only. De-emoji'd:
+   - `lib/tasks_pkg/handlers/misc.py`: swarm (`_SWARM_BADGE_VERB`, was `_SWARM_ICON_MAP` 🐝⏳📥📦),
+     `_build_await_post_build` (badge `'timed out · N/M done'` + `meta.awaitTimedOut` amber),
+     ask_human (🙋/✅/⛔/❌→plain), scheduler/desktop (dropped `icon=⏰`/`🖥️`), conv_ref (💬/📋).
+   - `lib/tasks_pkg/executor_image.py`: image badges (`⏳ editing…`/`❌ failed`→plain); kept
+     `✓ {model}`/`⚠ svg failed` dingbats + `✓`/`✗` in log strings.
+3. **MCP result meta** = its OWN handler `lib/tasks_pkg/handlers/mcp.py::handle_mcp_tool`
+   (NOT misc.py — dynamic `mcp__*` fallback). `_post_build` set `meta.badge='🔌 {server}'`,
+   `meta.title='🔌 {server}/{tool}'`, `❌ {server}` on error, `icon='🔌'`. → de-emoji'd: badge=
+   bare `server_name`, error=`'{server} (error)'`, title=`'{server}/{tool} — {suffix}'`, dropped
+   `icon=`. KEEP the `❌` in the `is_error` startswith() sentinel (matches result content).
+- When de-emoji'ing a tool with NO specific frontend icon, ADD an SVG to `_webToolSvg` keyed by
+  toolName. Done: get_conversation/list_conversations/await_agents/get_agent_result/
+  context_compact/mcp (+ `_getToolSvg` maps `mcp__*`→plug).
 
-## MCP catalog icons (lib/mcp/registry.py)
-- Each CatalogEntry has an `'icon'` field. The frontend (`static/js/settings/mcp.js` `_renderMcpCatalog` + `_mcpOpenInstallModal`) injects it via **innerHTML when the string starts with `<`**, else escapes it as an emoji/text. So an `<img …>` or inline `<svg …>` string Just Works.
-- 37 brand entries migrated emoji→`<img src="static/icons/mcp/<id>.svg">` (2026-06). Generic-concept entries kept as emoji: fetch 🌐, memory 🧠, sequential-thinking 💭, filesystem 📂, mcp-compass 🧭, Xuecheng 📖. Hope uses an inline `<svg>` string.
-- CSS sizing added in static/styles.css: `.mcp-app-icon img,.mcp-app-icon svg{width:26px;height:26px;object-fit:contain}` and `.mcp-install-modal-icon img,…svg{width:34px;height:34px}`.
+## CRITICAL constraints
+- i18n `data-i18n`→textContent (no SVG) → SVG sibling + inner `<span data-i18n>`, or strip emoji.
+  `data-i18n-html`→innerHTML (SVG OK). `el.textContent='🔧…'`→`el.innerHTML=Icon(...)+escapeHtml(rest)`.
 
-## Existing Icons in Project
-- static/icons/: claude.svg, openai.svg, lark.svg, niutrans.svg, translate.svg
-- static/icons/mcp/: 37 brand logos (github, gitlab, git, linear, postgres, sqlite, redis, mongodb, slack, gmail, brave-search, tavily, exa, firecrawl, notion, todoist, google-drive, docker, kubernetes, sentry, cloudflare, stripe, figma, playwright, puppeteer, context7, supabase, vercel, aws, upstash, jira, asana, discord, perplexity, zapier, bigquery, overleaf)
+## Verify
+- `node --check` edited JS; rebuild: `python3 -c "from lib.js_bundler import build_bundle; print(build_bundle())"`.
+- Backend emoji sweep (ALL meta+label sources):
+  `grep -nP "[\x{1F000}-\x{1FAFF}\x{2600}-\x{27BF}\x{2300}-\x{23FF}]" lib/tasks_pkg/tool_display.py lib/browser/display.py lib/tasks_pkg/handlers/misc.py lib/tasks_pkg/handlers/mcp.py lib/tasks_pkg/executor_image.py`
+  → only `★` comments + ✓/⚠/✗ log/dingbats + mcp.py line-96 content-sentinel `❌` OK.
+- Runtime: build a round per tool via `_build_tool_round_entry`; run `_build_await_post_build()` +
+  the mcp `_post_build` — assert no emoji (ord>0x2500) in `query`/`badge`/`title`.
+- MCP catalog: `python3 -c "from lib.mcp.registry import CATALOG; print([e['id'] for e in CATALOG if not e['icon'].startswith('<')] or 'ALL SVG')"`.
 
-## OK to keep emoji
-Generic concepts: 🔑 credentials, 📂 workspace, 👥 access, ⚠️ warning, 🧠 memory, 💭 thinking.
-
-## NOT OK
-💬 for Feishu, 🔍 for Google, 🐙 for GitHub, 🐳 for Docker — always the real logo.
+## Existing icon files
+static/icons/ (claude/openai/lark/niutrans/translate.svg) + static/icons/mcp/ (42); core/icons.js ~44 glyphs.

@@ -12,6 +12,10 @@
 .migrate_backup/
 load_env.py
 
+# ── Self-update backups (originals of files replaced by the tarball-overlay
+#    updater for non-git deployments; reversible safety net, machine-local). ──
+.update_backup/
+
 # ── Data-cleanup leftovers (large stray artifacts at repo root, e.g. the
 #    276MB delete.list.all.final; not part of the app, exceed GitHub's
 #    100MB limit and break export/push — see export-large-stray-file note). ──
@@ -80,6 +84,9 @@ logs/
 # ── JS bundle (auto-generated at startup) ──
 static/js/bundle-*.js
 
+# ── Minified stylesheet (auto-generated at startup by lib/css_bundler) ──
+static/styles-*.css
+
 # ── Frontend type-check harness (tsc --checkJs) ──
 node_modules/
 *.tsbuildinfo
@@ -142,3 +149,7 @@ static/icons/tofu.icns
 .icon-backups/
 # AI assistant evolution journal (per-developer, not source)
 JOURNAL.md
+# AI assistant runtime artifacts (file-history, trash, sandbox)
+.tofu*
+# AI assistant runtime artifacts (file-history, trash, sandbox)
+.tofu*

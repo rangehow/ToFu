@@ -1,98 +1,48 @@
 ---
 name: pg-ownership-cleanup-on-copy-or-opensource
-description: MANDATORY cleanup when copying chatui to new path, new machine, or open-sourcing: delete data/pgdata/ ownership files (.pg_owner_host, postmaster.pid) to prevent new instance silently connecting to the original machine's PostgreSQL via FUSE cross-machine routing
+description: pgdata copy self-heals via .pg_instance_id path-stamp (different abs-path); SAME-abs-path-on-shared-FUSE now self-heals via TOFU_PG_STANDALONE=1 (seeded into every export .env) clearing inherited remote-owner marker. Manual reset-ownership only as fallback.
 enabled: true
 tags: [postgresql, fuse, copy, open-source, cleanup, mandatory, pgdata, cross-machine, deployment]
 created: 2026-03-30T06:12:47Z
-updated: 2026-03-30T06:12:47Z
+updated: 2026-06-20T15:17:57Z
 ---
 
-# PostgreSQL Ownership Cleanup on Copy / Fork / Open-Source
+# PostgreSQL Ownership on Copy / Fork / Open-Source
 
-## Problem
+## ✅ AUTOMATIC self-heal (two complementary mechanisms)
 
-When the chatui project is **copied to a new path**, **deployed to another machine**, or **open-sourced**,
-the `data/pgdata/` directory contains ownership markers from the original machine. Due to the
-FUSE-aware multi-machine design in `lib/database.py` `_ensure_pg_running()`, the new instance will
-**silently connect to the original machine's PostgreSQL** instead of starting its own — causing:
+### 1. Different absolute path → `.pg_instance_id` copy-detect (2026-06)
+Copying `data/pgdata/` to a **different absolute path** (colleague's home, `tofu-meituan2`, OSS clone) self-heals.
+- `.pg_instance_id` JSON stamp (`{path,id,created}`) written by `_write_instance_stamp()` via `_mark_pg_owned_locally()`.
+- `_pgdata_was_copied()` = stamp canonical path != current realpath.
+- `_heal_if_copied()` clears `.pg_owner_host` + `.tofu_heartbeat` (NOT pidfile), wired FIRST in `_pg_already_running_on_another_machine()`.
 
-1. **Shared data** — new instance reads/writes the original's database
-2. **Privacy leak** — open-source users could inherit private conversation data
-3. **Silent failure** — no error is shown; everything "works" but on the wrong DB
+### 2. SAME absolute path on shared FUSE → `TOFU_PG_STANDALONE=1` (2026-06-20)
+**The gap mechanism #1 can't cover**: on shared FUSE storage every container/host sees the copy at the SAME abs-path as the source, so the stamp matches → copy-detect returns False → the inherited `.pg_owner_host` (pointing at the source machine or a dead old container) makes Step 3 "defer to remote" → every DB call crashes with `connection to server at "127.0.0.1", port 15432 failed: timeout expired`. (Seen on tofu-personal: inherited owner `10.20.49.98`, a defunct codelab container; scheduler + mcp keepalive were just the first callers to hit it.)
 
-## Root Cause
+Fix (`lib/database/_bootstrap.py`):
+- `_standalone_mode()` reads `TOFU_PG_STANDALONE` (1/true/yes/on).
+- `_heal_if_standalone_remote_owner(pgdata)`: if standalone AND owner_host is remote AND pidfile PID is NOT a live local postgres → clear inherited owner + heartbeat, own PG locally. No-ops if flag unset / owner is local / our own live postmaster (IP-flap guard). Audit: `pg_standalone_heal_remote_owner`.
+- Wired in `_pg_already_running_on_another_machine()` right AFTER `_heal_if_copied()`.
+- **`export.py` seeds `TOFU_PG_STANDALONE=1` into every exported `.env`** (`_create_skeleton`, internal+opensource; personal mode keeps the user's real `.env`). → exported copies self-heal with zero manual steps.
+- **Disables same-path multi-host failover** (the `pg-cross-host-heartbeat-takeover` feature). That's intentional: standalone deployments don't use failover. Leave the flag UNSET to keep failover.
 
-`_ensure_pg_running()` Step 3 reads `data/pgdata/.pg_owner_host` and `data/pgdata/postmaster.pid`.
-If they contain another machine's IP, the code treats that machine as the PG owner and connects remotely:
-
-```python
-# lib/database.py ~line 1810-1827
-if is_remote_owner:
-    return True, owner_host  # ← connects to ORIGINAL machine's PG!
-```
-
-## Files That MUST Be Cleaned Up
-
-### Before copying / distributing / open-sourcing:
-
+## Discoverable CLI — `lib/database/pg_admin.py`
 ```bash
-# MANDATORY: Remove these files/directories
-rm -rf data/pgdata/            # Entire PG data directory (contains all DB data + ownership markers)
-
-# Or at minimum, remove just the routing files (keeps data but disconnects):
-rm -f data/pgdata/.pg_owner_host
-rm -f data/pgdata/postmaster.pid
+python -m lib.database.pg_admin status            # stamp + owner_host + heartbeat; prints COPIED if mismatched
+python -m lib.database.pg_admin reset-ownership [--yes]   # clears markers, keeps data; REFUSES (rc=2) if pidfile is a live local postgres
 ```
 
-### Full cleanup checklist for open-source / distribution:
+## When you STILL act manually
+1. Legacy copy without the standalone flag at the exact same abs-path on a different machine → `reset-ownership`, or just add `TOFU_PG_STANDALONE=1` to `.env`.
+2. **Open-sourcing / distributing**: want DATA gone → `rm -rf data/pgdata/ data/*.db logs/*.log data/server_config.json`.
 
-```bash
-# 1. PostgreSQL data (private conversations, API keys in DB, etc.)
-rm -rf data/pgdata/
+## Always prefer `pg_dump` over raw-copy
+PG forces `0700` on pgdata. Hot raw-copy across FUSE corrupts TOAST. `export.py` uses `pg_dumpall`.
 
-# 2. SQLite databases (if any legacy ones exist)
-rm -f data/*.db
+## ⚠️ Testing pitfall (boot verification)
+A `python server.py` boot test launched from inside a running tofu server INHERITS that parent's `TOFU_PG_PORT`/`TOFU_PG_HOST` env → hits the "explicit PG target from env" short-circuit BEFORE owner/standalone logic, so the boot connects to the PARENT's port (e.g. 15439) and never exercises the heal. To test the heal against a real pgdata, use a CLEAN env: `env -i PATH=$PATH HOME=$HOME TOFU_PG_STANDALONE=1 python3 -c "from lib.database import _bootstrap as b; b._pg_already_running_on_another_machine('data/pgdata', 15432)"`. The unit tests (`test_pg_copy_self_heal.py`) are the authoritative verification.
 
-# 3. Log files (may contain sensitive info)
-rm -rf logs/*.log
-
-# 4. Server config with learned model limits / API keys
-rm -f data/server_config.json
-
-# 5. Skill resolutions (project-specific)
-rm -rf .chatui/
-
-# 6. Any cached/temp files
-rm -rf __pycache__/ lib/__pycache__/ routes/__pycache__/
-```
-
-### Add to .gitignore (for open-source):
-
-```gitignore
-data/pgdata/
-data/*.db
-logs/
-data/server_config.json
-.chatui/error_resolutions.json
-```
-
-## When This Applies
-
-- **Copying code to a new machine** (especially on shared FUSE storage)
-- **Open-sourcing the repository**
-- **Giving the code to a colleague**
-- **Creating a dev/staging fork**
-- **Docker image builds** (don't bake in pgdata!)
-
-## Recovery If Forgotten
-
-If someone already started a copied instance and it's connected to the wrong DB:
-
-```bash
-# 1. Stop the server on the new machine
-# 2. Clean up
-rm -rf data/pgdata/
-# 3. Restart — it will auto-create a fresh PG via initdb
-python server.py
-```
+## Tests
+`tests/test_pg_copy_self_heal.py` — now 25 (was 18, +7 standalone: flag parsing, heal clears remote owner, no-op when flag-unset/owner-local/live-local-pg, Step-3 no-defer in standalone, Step-3 still-defers when not standalone). `test_pg_ip_flap_takeover.py` (5) unaffected. Full PG/db suite: 63 passed.
 

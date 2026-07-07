@@ -1,0 +1,53 @@
+{
+  "_comment": "Adversarial fixture for debug_panel_fidelity.py. Raw DB-form conversation messages (role+content+toolRounds), NOT OpenAI wire form. Designed to exercise each WIRE-subset transform. See notes per message.",
+  "messages": [
+    {
+      "_note": "(gateway term) contains a provider-blocked keyword to prove _sanitize_messages fires unconditionally in the offline subset (point 3 approximation).",
+      "role": "user",
+      "content": "Tell me about the 习近平 economic policy report.",
+      "timestamp": 1000
+    },
+    {
+      "_note": "(a full toolRounds + reorder) one llmRound batch, two calls whose toolCallIds are in REVERSE lexical order (call_zzz before call_aaa). Reconstruction emits tool results in [zzz, aaa]; sort_tool_results must reorder to [aaa, zzz].",
+      "role": "assistant",
+      "content": "",
+      "toolRounds": [
+        {
+          "llmRound": 1,
+          "roundNum": 1,
+          "toolCallId": "call_zzz",
+          "toolName": "web_search",
+          "toolArgs": {"query": "zeta policy"},
+          "toolContent": "ZETA search result body",
+          "status": "done",
+          "assistantContent": "Let me search and read."
+        },
+        {
+          "llmRound": 1,
+          "roundNum": 2,
+          "toolCallId": "call_aaa",
+          "toolName": "read_files",
+          "toolArgs": {"path": "alpha.py"},
+          "toolContent": "ALPHA file content",
+          "status": "done"
+        }
+      ]
+    },
+    {
+      "_note": "(d empty user) whitespace-only content. Survives builder (neighbors are tool then assistant, not same-role). WIRE _fix_empty_user_messages must replace with '[empty message]'.",
+      "role": "user",
+      "content": "   ",
+      "timestamp": 2000
+    },
+    {
+      "_note": "(c consecutive same-role probe #1) plain assistant. The builder's own _merge_consecutive_same_role should already merge this with the next assistant in COLD — proving the WIRE merge is redundant on builder output (a finding, not a failure).",
+      "role": "assistant",
+      "content": "Partial answer part one."
+    },
+    {
+      "_note": "(c consecutive same-role probe #2) second consecutive plain assistant.",
+      "role": "assistant",
+      "content": "Partial answer part two."
+    }
+  ]
+}

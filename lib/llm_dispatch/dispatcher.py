@@ -8,6 +8,7 @@ best-for-model, etc.).
 import json
 import os
 import threading
+import time
 
 from lib.log import get_logger
 
@@ -16,6 +17,12 @@ from .config import (
     MANAGED_TIER_TAGS,
     MODEL_ALIASES,
     get_pricing_tiers,
+)
+from .conv_affinity import (
+    get_conv_affinity,
+    get_preferred_key,
+    record_conv_key,
+    sticky_routing_enabled,
 )
 from .slot import Slot
 
@@ -68,6 +75,21 @@ class LLMDispatcher:
         Auto-discovery ensures that a friend deploying with their own endpoint
         (e.g. YEYSAI, OpenRouter) gets working slots without running migrate.py.
         """
+        # ── Benchmark / multi-tenant fail-loud mode ──
+        # When set, build NO operator-curated slots at all. The only way to
+        # dispatch is then an inline `provider` block / @prov_xxx BYO
+        # endpoint (ephemeral slots, injected at request time). This is
+        # defense-in-depth on top of the per-task provider pin: with the
+        # operator's Keys/Providers store absent there is literally no key
+        # to leak onto, so an isolation bug fails LOUDLY (clean "no slot"
+        # error) instead of silently consuming shared internal quota.
+        if os.environ.get('TOFU_DISABLE_CONFIGURED_SLOTS', '').strip().lower() \
+                in ('1', 'true', 'yes', 'on'):
+            logger.warning('[Dispatch] TOFU_DISABLE_CONFIGURED_SLOTS set — '
+                           'building 0 operator slots; only inline-provider / '
+                           'BYO ephemeral slots can serve requests')
+            return
+
         # ★ Always re-read config from disk — the module-level
         #   _SAVED_CONFIG is a stale snapshot from server startup that
         #   misses providers added via the Settings UI.
@@ -142,20 +164,19 @@ class LLMDispatcher:
         use the saved config (which the user can then edit in Settings).
         """
         try:
-            import json as _json
+            from lib import _SERVER_CONFIG_PATH
+            from lib.json_store import update_json_atomic
 
-            from lib import _SERVER_CONFIG_PATH, _load_server_config
+            def _mutate(config):
+                if not isinstance(config, dict):
+                    config = {}
+                config['providers'] = providers
+                # Don't set presets — let the system use the first model
+                if 'presets' not in config:
+                    config['presets'] = {}
+                return config
 
-            config = _load_server_config()
-            config['providers'] = providers
-            # Don't set presets — let the system use the first model
-            if 'presets' not in config:
-                config['presets'] = {}
-
-            os.makedirs(os.path.dirname(_SERVER_CONFIG_PATH), exist_ok=True)
-            with open(_SERVER_CONFIG_PATH, 'w') as f:
-                _json.dump(config, f, indent=2, ensure_ascii=False)
-
+            update_json_atomic(_SERVER_CONFIG_PATH, _mutate, default={})
             logger.info('[Dispatch] Saved auto-discovered config to %s',
                        _SERVER_CONFIG_PATH)
         except Exception as e:
@@ -210,13 +231,19 @@ class LLMDispatcher:
                     break
 
         if migrated:
-            # Persist so migration only runs once
+            # Persist so migration only runs once (locked RMW so a concurrent
+            # Settings save isn't clobbered).
             try:
                 from lib import _SERVER_CONFIG_PATH
-                config['providers'] = providers
-                os.makedirs(os.path.dirname(_SERVER_CONFIG_PATH), exist_ok=True)
-                with open(_SERVER_CONFIG_PATH, 'w') as f:
-                    json.dump(config, f, indent=2, ensure_ascii=False)
+                from lib.json_store import update_json_atomic
+
+                def _mutate(cfg):
+                    if not isinstance(cfg, dict):
+                        cfg = {}
+                    cfg['providers'] = providers
+                    return cfg
+
+                update_json_atomic(_SERVER_CONFIG_PATH, _mutate, default={})
                 logger.info('[Dispatch] Persisted extra_headers migration '
                            'to %s', _SERVER_CONFIG_PATH)
             except Exception as e:
@@ -249,6 +276,7 @@ class LLMDispatcher:
             prov_extra_headers = provider.get('extra_headers') or {}
             prov_thinking_format = provider.get('thinking_format', '')
             prov_protocol = provider.get('protocol', '')
+            prov_oauth = provider.get('oauth', '')
 
             # ── Multi-endpoint expansion for local providers ──
             # Backwards-compatible: when 'endpoints' is absent we fall back
@@ -416,6 +444,7 @@ class LLMDispatcher:
                                 extra_headers=dict(prov_extra_headers),
                                 thinking_format=prov_thinking_format,
                                 protocol=prov_protocol,
+                                oauth=prov_oauth,
                                 rpm_limit=slot_rpm,
                                 latency_ema=slot_lat,
                                 cost_per_1k_tokens=slot_cost,
@@ -599,7 +628,7 @@ class LLMDispatcher:
                     # All requests got 429 — this key has no quota for this model
                     dead_slots.append(slot)
                     continue
-                slot.rpm_limit = max(5, rpm_val)
+                slot.set_rpm_ceiling(rpm_val)
 
             # Seed latency from benchmark (use speed data first, then latency)
             speed = entry.get('speed', {})
@@ -778,6 +807,19 @@ class LLMDispatcher:
                              s.provider_id, s.key_name, e)
                 return True
 
+        # ── Hard provider pin (multi-tenant isolation) ──
+        # When the current task thread is bound to a provider (an inline
+        # `provider` block or a registered @prov_xxx BYO endpoint), the
+        # picker may ONLY select that provider's slot — for EVERY
+        # capability, never silently falling back to an operator-curated
+        # key. See lib/llm_dispatch/provider_pin.py for the full rationale
+        # (the 429 / no-fallback cross-tenant leak this prevents).
+        from lib.llm_dispatch.provider_pin import get_pinned_provider
+        _pinned_provider = get_pinned_provider()
+
+        def _slot_provider_ok(s):
+            return (not _pinned_provider) or s.provider_id == _pinned_provider
+
         with self._lock:
             candidates = []
             for slot in self.slots:
@@ -799,9 +841,17 @@ class LLMDispatcher:
                     continue
                 if not _slot_key_enabled(slot):
                     continue
+                if not _slot_provider_ok(slot):
+                    continue
                 candidates.append(slot)
 
             if not candidates:
+                # ★ Pinned-provider isolation: a pinned task whose own slot
+                #   is momentarily unavailable (cooldown/excluded) must WAIT,
+                #   never widen onto an operator key. Return None so the
+                #   dispatch retry loop keeps cycling within the provider.
+                if _pinned_provider:
+                    return None
                 # ★ strict_model: if the user chose a specific model and all
                 #   its slots are in cooldown, return None immediately so the
                 #   retry loop waits — do NOT fall back to another model.
@@ -815,6 +865,8 @@ class LLMDispatcher:
                                 continue
                             if not _slot_key_enabled(slot):
                                 continue
+                            if not _slot_provider_ok(slot):
+                                continue
                             if not (exclude_models and slot.model in exclude_models):
                                 if not (exclude_keys and slot.key_name in exclude_keys):
                                     if not (exclude_pairs and (slot.key_name, slot.model) in exclude_pairs):
@@ -822,21 +874,45 @@ class LLMDispatcher:
                 if not candidates:
                     return None
 
+            # ── Conversation-sticky routing ──
+            # Anthropic's prompt cache is keyed per API key, so a conversation
+            # must keep landing on the SAME key round-to-round or every flip
+            # costs a full cache_creation write + 0% read. When this thread is
+            # bound to a conv (run_task sets it) and that conv has a recent
+            # sticky key, prefer the eligible candidate on that key over the
+            # raw min-score pick. The sticky key is a SOFT preference: if it's
+            # not among the eligible candidates (cooled down / excluded /
+            # disabled), we fall through to score-based selection and rebind.
+            _sticky = (sticky_routing_enabled() and get_conv_affinity()) or None
+            _sticky_key = get_preferred_key(_sticky) if _sticky else None
+
+            def _select(pool):
+                """Pick the best slot in *pool*, honoring the sticky key when eligible."""
+                if _sticky_key:
+                    on_key = [s for s in pool if s.key_name == _sticky_key]
+                    # Only honor the sticky key when it isn't in cooldown
+                    # (score=inf). Otherwise let the normal picker route around it.
+                    if on_key:
+                        best_sticky = min(on_key, key=lambda s: s.score())
+                        if best_sticky.score() != float('inf'):
+                            return best_sticky
+                return min(pool, key=lambda s: s.score())
+
             if prefer_model:
                 # Use alias group so interchangeable deployments are all "preferred"
                 alias_set = self._alias_set(prefer_model)
                 preferred = [s for s in candidates if s.model in alias_set]
                 if preferred:
-                    chosen = min(preferred, key=lambda s: s.score())
+                    chosen = _select(preferred)
                 elif strict_model:
                     # ★ User explicitly chose this model — all its slots are
                     #   in candidates but none match the alias group (shouldn't
                     #   happen normally, but guard against it).  Return None.
                     return None
                 else:
-                    chosen = min(candidates, key=lambda s: s.score())
+                    chosen = _select(candidates)
             else:
-                chosen = min(candidates, key=lambda s: s.score())
+                chosen = _select(candidates)
 
             # ★ strict_model: if the best candidate has score=inf it means
             #   all matching slots are in cooldown.  Return None so the
@@ -844,6 +920,35 @@ class LLMDispatcher:
             #   or fall back to a different model.
             if strict_model and chosen.score() == float('inf'):
                 return None
+
+            # ── Record the chosen key as this conv's sticky key ──
+            # Done for every pick (not just sticky hits) so the FIRST round of
+            # a conversation seeds the affinity, and a forced fallback (sticky
+            # key cooled down) rebinds to the healthy key it landed on.
+            if _sticky and chosen is not None:
+                # A churn signal worth grepping: the conv had a sticky key but
+                # the picker landed elsewhere (cooled down / excluded), which
+                # costs a fresh per-key prompt-cache write this round. Logged at
+                # INFO (not DEBUG) because this is the exact event that re-bills
+                # the prompt cache — production app.log is INFO+, so a DEBUG line
+                # left us blind to the most expensive routing decision.
+                if _sticky_key and chosen.key_name != _sticky_key:
+                    logger.info('[Dispatch] conv=%s sticky key %s unavailable '
+                                '— rebinding to %s (model=%s); prompt cache will '
+                                'be re-written on the new key',
+                                _sticky[:8], _sticky_key, chosen.key_name,
+                                chosen.model)
+                record_conv_key(_sticky, chosen.key_name)
+
+            # ── Isolation observability ──
+            # One line per pick so a provider leak is a single grep:
+            #   pinned=ephemeral:… but provider=… mismatched → leak.
+            # Only emitted when a pin is active (operator UI traffic stays
+            # quiet). debug-level: high volume, on the hot path.
+            if _pinned_provider:
+                logger.debug('[Dispatch] pick model=%s provider=%s key=%s '
+                             'pinned=%s', chosen.model, chosen.provider_id,
+                             chosen.key_name, _pinned_provider)
 
             if reserve:
                 chosen.record_request()  # atomic: inflight++ while still holding lock
@@ -974,6 +1079,12 @@ class LLMDispatcher:
         ex_models = exclude_models or set()
         ex_keys = exclude_keys or set()
         ex_pairs = exclude_pairs or set()
+        # Respect the thread's hard provider pin (same isolation rule as
+        # _pick): a pinned task only "has capable slots" among its own
+        # provider's slots, so the retry loop waits for THAT provider to
+        # recover instead of treating operator slots as a fallback.
+        from lib.llm_dispatch.provider_pin import get_pinned_provider
+        _pinned_provider = get_pinned_provider()
         with self._lock:
             for s in self.slots:
                 if capability not in s.capabilities:
@@ -984,8 +1095,61 @@ class LLMDispatcher:
                     continue
                 if not self._is_chat_compatible(s):
                     continue
+                if _pinned_provider and s.provider_id != _pinned_provider:
+                    continue
                 return True
         return False
+
+
+    def sticky_cooldown_remaining_s(self, conv_id: str, prefer_model=None,
+                                    *, exclude_keys=None, exclude_pairs=None):
+        """Seconds until ``conv_id``'s warm sticky key becomes pickable again.
+
+        Returns ``(remaining_seconds, key_name)`` when the conversation has a
+        recorded sticky key, that key has a slot in ``prefer_model``'s alias
+        group, the slot is NOT hard-excluded, and its ONLY disqualifier is a
+        live cooldown (``now < cooldown_until``). Returns ``None`` when there is
+        no warm key worth waiting for (no affinity, key excluded, or the slot is
+        already eligible — in which case the normal picker will land on it).
+
+        Used by the dispatch retry loop to decide whether to briefly HOLD for
+        the conv's warm key (preserving its prompt-cache prefix) instead of
+        rebinding to a cold key. The caller gates the returned ``remaining`` on
+        a budget, which is what distinguishes a transient 0.5s rate-limit nudge
+        (worth waiting) from a long consecutive-error / quota cooldown (not).
+        """
+        if not conv_id:
+            return None
+        sticky_key = get_preferred_key(conv_id)
+        if not sticky_key:
+            return None
+        ex_keys = exclude_keys or set()
+        ex_pairs = exclude_pairs or set()
+        if sticky_key in ex_keys:
+            return None
+        alias_set = self._alias_set(prefer_model) if prefer_model else None
+        now = time.time()
+        best_remaining = None
+        with self._lock:
+            for s in self.slots:
+                if s.key_name != sticky_key:
+                    continue
+                if alias_set is not None and s.model not in alias_set:
+                    continue
+                if (s.key_name, s.model) in ex_pairs:
+                    continue
+                if not self._is_chat_compatible(s):
+                    continue
+                remaining = s.cooldown_until - now
+                if remaining <= 0:
+                    # The warm key is already eligible — no need to wait; the
+                    # normal picker will choose it. Signal "nothing to hold for".
+                    return None
+                if best_remaining is None or remaining < best_remaining:
+                    best_remaining = remaining
+        if best_remaining is None:
+            return None
+        return (best_remaining, sticky_key)
 
     def summarize_slots(self, capability: str = None) -> str:
         """Return a compact one-line summary of all slots for logging.

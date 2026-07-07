@@ -191,7 +191,7 @@ function compressImage(file, userMaxWidth) {
   return new Promise((resolve) => {
     const reader = new FileReader();
     reader.onload = (ev) => {
-      const dataUrl = ev.target.result;
+      const dataUrl = String(ev.target.result || "");
       const originalBytes = Math.round((dataUrl.length * 3) / 4);
       const passthrough = () => resolve({
         base64: dataUrl.split(",")[1],
@@ -449,10 +449,10 @@ async function handleDocUpload(file) {
 
   // Determine icon by extension
   const ext = _getFileExt(file.name);
-  const iconMap = {'.docx':'📝', '.pptx':'📊', '.xlsx':'📈', '.txt':'📄', '.md':'📄',
-                   '.csv':'📊', '.json':'📄', '.xml':'📄', '.py':'🐍', '.js':'📜',
-                   '.html':'🌐', '.yaml':'⚙️', '.yml':'⚙️'};
-  const icon = iconMap[ext] || '📄';
+  const iconMap = {'.docx':Icon('file',22), '.pptx':Icon('slides',22), '.xlsx':Icon('fileSheet',22), '.txt':Icon('file',22), '.md':Icon('file',22),
+                   '.csv':Icon('fileSheet',22), '.json':Icon('fileCode',22), '.xml':Icon('fileCode',22), '.py':Icon('fileCode',22), '.js':Icon('fileCode',22),
+                   '.html':Icon('fileCode',22), '.yaml':Icon('cog',22), '.yml':Icon('cog',22)};
+  const icon = iconMap[ext] || Icon('file',22);
 
   try {
     const formData = new FormData();
@@ -503,14 +503,14 @@ function renderImagePreviews() {
       const vlmS = pdf.vlmStatus || "";
       const vlmBadge =
         vlmS === "parsing"
-          ? `<div class="pdf-vlm-badge parsing">🔄 VLM ${pdf.vlmProgress || "..."}</div>`
+          ? `<div class="pdf-vlm-badge parsing">${Icon('refresh',11)} VLM ${pdf.vlmProgress || "..."}</div>`
           : vlmS === "done"
-            ? `<div class="pdf-vlm-badge done">✅ VLM</div>`
+            ? `<div class="pdf-vlm-badge done">${Icon('file',11)} VLM</div>`
             : vlmS === "failed" || vlmS === "timeout"
-              ? `<div class="pdf-vlm-badge failed">⚠️ VLM</div>`
+              ? `<div class="pdf-vlm-badge failed">${Icon('zap',11)} VLM</div>`
               : "";
       const methodLabel = pdf.method === "vlm" ? "VLM" : "TEXT";
-      const docIcon = pdf._docIcon || "📄";
+      const docIcon = pdf._docIcon || Icon('file',22);
       return `<div class="img-preview pdf-text-card" onclick="previewPendingPdfText(${i})"><div class="pdf-text-card-inner"><div class="pdf-text-icon">${docIcon}</div><div class="pdf-text-info"><div class="pdf-text-name" title="${escapeHtml(pdf.name)}">${escapeHtml(pdf.name.length > 20 ? pdf.name.slice(0, 18) + "…" : pdf.name)}</div><div class="pdf-text-meta">${pdf.pages}p · ${sizeStr}${badge}</div>${vlmBadge}</div></div><button class="remove-img" onclick="event.stopPropagation();removePdfText(${i})">✕</button><div class="img-size">${methodLabel}</div></div>`;
     })
     .join("");
@@ -535,7 +535,7 @@ function renderImagePreviews() {
         : isPdf
           ? `PDF page ${img.pdfPage}`
           : "";
-      return `<div class="img-preview${isPdf ? " pdf-page" : ""}" ${tip ? `title="${tip}"` : ""}  onclick="previewPendingImage(${i})"><img src="${img.preview}" alt="preview">${srcLabel ? `<div class="pdf-badge">${srcLabel}</div>` : ""}<button class="remove-img" onclick="event.stopPropagation();removeImage(${i})">✕</button><div class="img-size">${label}</div></div>`;
+      return `<div class="img-preview${isPdf ? " pdf-page" : ""}" draggable="true" data-img-idx="${i}" ${tip ? `title="${tip}"` : ""}  onclick="previewPendingImage(${i})"><img src="${img.preview}" alt="preview" draggable="false">${srcLabel ? `<div class="pdf-badge">${srcLabel}</div>` : ""}<button class="remove-img" onclick="event.stopPropagation();removeImage(${i})">✕</button><div class="img-size">${label}</div></div>`;
     })
     .join("");
   // ★ Target-aware: render into edit area when editing, main input otherwise
@@ -553,6 +553,62 @@ function removeImage(i) {
   renderImagePreviews();
   if (typeof _igUpdateGenButton === 'function') _igUpdateGenButton();
 }
+
+// ── Drag-to-reorder image preview chips ──────────────
+// Image chips carry draggable="true" + data-img-idx. We move the dragged
+// entry within pendingImages on drop. Document-level delegation is used so
+// the handlers survive renderImagePreviews()'s innerHTML rebuilds.
+var _imgDragFromIdx = null;
+function _imgChipFrom(target) {
+  const chip = target && target.closest ? target.closest('.img-preview[data-img-idx]') : null;
+  if (!chip) return null;
+  // Only chips inside an image-previews container are reorderable images
+  // (pdf-text-card lacks data-img-idx, so closest already filters those out).
+  const idx = parseInt(chip.dataset.imgIdx, 10);
+  return Number.isInteger(idx) ? { chip, idx } : null;
+}
+document.addEventListener('dragstart', (e) => {
+  const hit = _imgChipFrom(e.target);
+  if (!hit) return;
+  _imgDragFromIdx = hit.idx;
+  hit.chip.classList.add('img-dragging');
+  if (e.dataTransfer) {
+    e.dataTransfer.effectAllowed = 'move';
+    // Required for Firefox to initiate the drag.
+    try { e.dataTransfer.setData('text/plain', String(hit.idx)); } catch (_e) { /* ignore */ }
+  }
+});
+document.addEventListener('dragend', (e) => {
+  const hit = _imgChipFrom(e.target);
+  if (hit) hit.chip.classList.remove('img-dragging');
+  document.querySelectorAll('.img-preview.img-drop-target')
+    .forEach((el) => el.classList.remove('img-drop-target'));
+  _imgDragFromIdx = null;
+});
+document.addEventListener('dragover', (e) => {
+  if (_imgDragFromIdx === null) return;
+  const hit = _imgChipFrom(e.target);
+  if (!hit) return;
+  e.preventDefault();  // allow drop
+  if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+  document.querySelectorAll('.img-preview.img-drop-target')
+    .forEach((el) => { if (el !== hit.chip) el.classList.remove('img-drop-target'); });
+  if (hit.idx !== _imgDragFromIdx) hit.chip.classList.add('img-drop-target');
+});
+document.addEventListener('drop', (e) => {
+  if (_imgDragFromIdx === null) return;
+  const hit = _imgChipFrom(e.target);
+  if (!hit) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const from = _imgDragFromIdx;
+  const to = hit.idx;
+  _imgDragFromIdx = null;
+  if (from === to || from < 0 || from >= pendingImages.length) { renderImagePreviews(); return; }
+  const moved = pendingImages.splice(from, 1)[0];
+  pendingImages.splice(to, 0, moved);
+  renderImagePreviews();
+}, true);  // capture: run before the full-page file-drop handler
 function removePdfText(i) {
   const entry = pendingPdfTexts[i];
   if (entry) entry._vlmAlive = false; // ★ Kill VLM polling for this entry
@@ -670,7 +726,6 @@ window._vlmParseEntry = async function(file, entry, isAlive, onUpdate) {
     }
   }
 };
-// _startVlmParse is no longer needed — VLM auto-starts inside parsePdfToServer().
 
 // ══════════════════════════════════════════════════════
 //  ★ Preview functions
@@ -741,7 +796,16 @@ function previewToolContent(roundNum, toolCallId) {
     const round = rounds.find(r => r.roundNum === roundNum && (toolCallId ? r.toolCallId === toolCallId : true));
     if (round && round.toolContent) {
       const td = typeof _getToolDisplay === 'function' ? _getToolDisplay(round) : { icon: '📄', label: 'Tool' };
-      const title = `${td.icon} ${td.label}: ${(round.query || '').slice(0, 80)}`;
+      // ★ openTextPreview escapes the title as TEXT, so the icon must be a
+      //   plain glyph — never a raw <svg> string. _getToolDisplay returns an
+      //   SVG markup string for most tools (MCP, project, timer, …); only a
+      //   few use emoji. Including the SVG here leaked literal "<svg …>" into
+      //   the preview header. Drop the icon from the escaped title entirely.
+      //   For MCP tools round.query already reads "server/tool — resource",
+      //   so use it alone instead of the redundant title-cased label.
+      const q = (round.query || '').slice(0, 120);
+      const isMcp = (round.toolName || '').startsWith('mcp__');
+      const title = isMcp ? (q || td.label) : `${td.label}: ${q}`;
       const chars = round.toolContent.length;
       const meta = chars >= 1024 ? `${(chars / 1024).toFixed(1)}KB` : `${chars} chars`;
       openTextPreview(title, meta, round.toolContent);
@@ -777,28 +841,22 @@ document.addEventListener('click', function(e) {
       const allRounds = getToolRoundsFromMsg(msg);
       if (allRounds.length > 0) {
         trunc.remove();
-        body.innerHTML = '';
-        /* Render in rAF-chunked batches: building 100+ tool rows synchronously
-         * freezes the main thread for ~1s (poor INP). Spreading the work across
-         * frames keeps the click responsive — same end state, rows stream in. */
-        const _renderSlot = (round) => {
-          const slot = document.createElement('div');
-          slot.setAttribute('data-prn', round.roundNum);
-          slot.innerHTML = typeof _renderUnifiedToolLine === 'function'
-            ? _renderUnifiedToolLine(round, false)
-            : `<div class="ptool-line"><span class="ptool-text">${escapeHtml(round.toolName || round.query || '')}</span></div>`;
-          return slot;
-        };
-        const CHUNK = 30;
-        let _i = 0;
-        const _renderChunk = () => {
-          const frag = document.createDocumentFragment();
-          const end = Math.min(_i + CHUNK, allRounds.length);
-          for (; _i < end; _i++) frag.appendChild(_renderSlot(allRounds[_i]));
-          body.appendChild(frag);
-          if (_i < allRounds.length) requestAnimationFrame(_renderChunk);
-        };
-        _renderChunk();
+        /* Render the full grouped structure (parallel-batch .ptool-turn
+         * containers) in one shot via the shared helper so the expanded
+         * view matches the streaming/static layout exactly. */
+        if (typeof _renderToolGroupsHTML === 'function') {
+          body.innerHTML = _renderToolGroupsHTML(allRounds, allRounds);
+        } else {
+          body.innerHTML = '';
+          for (const round of allRounds) {
+            const slot = document.createElement('div');
+            slot.setAttribute('data-prn', round.roundNum);
+            slot.innerHTML = typeof _renderUnifiedToolLine === 'function'
+              ? _renderUnifiedToolLine(round, false)
+              : `<div class="ptool-line"><span class="ptool-text">${escapeHtml(round.toolName || round.query || '')}</span></div>`;
+            body.appendChild(slot);
+          }
+        }
         return;
       }
     }

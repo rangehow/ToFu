@@ -30,6 +30,8 @@ import sys
 import tempfile
 import unittest
 
+import pytest
+
 
 # ── Once-only global fixture ────────────────────────────────────────
 
@@ -40,6 +42,11 @@ _STATE = {'app': None, 'tmp': None, 'admin': None, 'user': None,
 def _setup_once():
     if _STATE['app'] is not None:
         return _STATE
+    # ⚠️ DATA-LOSS GUARD (2026-06-28): imports server.py + builds the real app
+    # OUTSIDE the conftest flask_app/live_server fixtures, so it must call the
+    # keystone DB guard itself before touching the real app/DB.
+    from tests.conftest import _assert_test_database
+    _assert_test_database('test_e2e_headless_api._setup_once')
     _STATE['tmp'] = tempfile.TemporaryDirectory()
     tmp = _STATE['tmp'].name
     # Patch the API-key + usage stores to a tempdir BEFORE booting server.
@@ -157,6 +164,12 @@ def _install_chat_stub():
 
 
 class E2EHeadlessApiTest(unittest.TestCase):
+
+    # Auth contract assertions require the credential gate to be ACTIVE,
+    # which it only is in private/multi-user mode (open mode — the conftest
+    # default — lets unauth /api/v1/* through with a synthetic principal).
+    # The per-test conftest fixture forces private mode for this file.
+    pytestmark = pytest.mark.auth_mode('private')
 
     @classmethod
     def setUpClass(cls):

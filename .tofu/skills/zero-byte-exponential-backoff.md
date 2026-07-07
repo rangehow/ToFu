@@ -1,69 +1,35 @@
 ---
 name: zero-byte-exponential-backoff
-description: Zero-byte gateway retries now use exponential backoff + jitter (corrects "essentially free" assumption)
+description: Zero-byte AND classic-premature retries both use exponential backoff (classic cap raised 2→16); only late-round stream_anomaly bucket stays no-backoff
 enabled: true
 tags: [llm, retry, stream, gateway, convention]
 created: 2026-05-12T07:19:18Z
-updated: 2026-05-12T07:19:18Z
+updated: 2026-06-17T01:22:37Z
 ---
 
+# Abnormal-stop retry pacing (lib/tasks_pkg/stream_handler.py)
 
-# Zero-byte retry pacing (lib/tasks_pkg/stream_handler.py, 2026-05-12)
+## Current design (supersedes the 2026-05-12 "classic does NOT sleep" note)
+`analyse_stream_result` paces abnormal-stop retries. Backoff applies to:
+- **zero_byte** bucket: always.
+- **classic premature-close** bucket: NOW ALSO backed off (changed when
+  `_PREMATURE_RETRY_MAX_CLASSIC` was raised 2 → 16). A cap of 16 with no
+  backoff would hammer a dropped connection in milliseconds, so backoff is
+  the necessary companion to the higher cap.
+- **late-round stream_anomaly** bucket (`_is_anomaly_empty`, round>0, not
+  zero-byte): KEEPS the historical NO-backoff behaviour (sleeps 0.0s).
 
-## Why
-The earlier "each zero-byte retry is essentially free" claim was wrong for
-prompt-cache billing.  Verified on conv `mp2a0tz1h45d8p`: 17 retries × 28,718
-`cache_read_tokens` = ~488 K cache reads = ~$0.73 at Opus list price for a
-single failed turn.  Bedrock zero-byte windows also cluster — hammering the
-same poisoned pool every ~3s rarely recovers.  Anthropic SDK / Claude Code
-themselves use exponential backoff (`CLAUDE_CODE_MAX_RETRIES`).
+Code: `_backoff_s = _zero_byte_backoff_seconds(n) if (_is_zero_byte or _is_classic_premature) else 0.0`.
+Schedule (`_zero_byte_backoff_seconds`): `0.5*2**(n-1)` capped at 8.0 + uniform[0,0.5) jitter → 0.5,1,2,4,8,8...
+`_interruptible_sleep(seconds, task)` polls `task['aborted']` every 100ms.
+Caps: `_PREMATURE_RETRY_MAX_CLASSIC = _PREMATURE_RETRY_MAX_ZERO_BYTE = 16`; `_EMPTY_STOP_RETRY_MAX = 2`.
+Zero-byte also sets `task['_force_rotate_pair']=(key,model)` to rotate slots next dispatch.
 
-## What changed
-- Added `_zero_byte_backoff_seconds(attempt)` and `_interruptible_sleep` helpers.
-- After deciding `'continue'` for a zero-byte abnormal stop, the analyser
-  sleeps `0.5 * 2**(attempt-1)` seconds (capped at 8s) plus uniform [0, 0.5s)
-  jitter.  Schedule: 0.5, 1, 2, 4, 8, 8, 8, ...
-- Sleep polls `task['aborted']` every 100 ms so user abort interrupts promptly.
-- Phase event carries `backoff_s` (frontend ignores extra fields; dedup is
-  still on `attempt`).  Detail string surfaces "退避 X.Xs 后重试" to the user.
-- Classic premature-close bucket does NOT sleep (already capped at 2; full
-  per-attempt token cost dominates wall time anyway).
-- Cap unchanged: `_PREMATURE_RETRY_MAX_ZERO_BYTE = 16`.  Total wall-time
-  budget rises from ~46s to ~75s.
+## Tests (tests/test_zero_byte_backoff.py — 7, pytest OR `python3 tests/test_zero_byte_backoff.py`)
+- backoff schedule doubles to cap; jitter present; zero-byte retry sleeps once; phase event carries backoff_s.
+- `test_classic_premature_retry_uses_backoff` — classic NOW sleeps once in [0.5,1.0) (RENAMED from the old `_does_not_sleep`; that old assertion encoded the obsolete cap=2/no-backoff design and was the source of a stale-test failure fixed 2026-06).
+- `test_late_round_stream_anomaly_does_not_sleep` — late-round anomaly bucket still 0.0s (chunks_received=12, elapsed=90s, round=2 → classic bucket label but `_is_anomaly_empty`, so no backoff).
+- interruptible sleep returns <0.5s on abort.
 
-## Why not infinite retries (rejected proposal)
-1. Zero-byte does not currently rotate slots → infinite means burning
-   cache-read tokens on the same dead key forever.
-2. Outage windows can persist for minutes; user sees a hung session with no
-   feedback.
-3. Asymmetric to 429: 429 retries succeed because slot rotation finds a free
-   pool; zero-byte without rotation is just spinning.
-   → If we ever add slot rotation here (mirroring `gateway-5xx-treated-as-429`),
-   revisit and consider raising the cap.
-
-## Tests
-- `tests/test_zero_byte_round0_retry.py` (6 tests, unchanged) — still green.
-- `tests/test_zero_byte_backoff.py` (6 new tests):
-  - `test_backoff_schedule_doubles_until_cap` — schedule 0.5/1/2/4/8/8/8
-  - `test_backoff_includes_jitter` — jitter ∈ [base, base+0.5)
-  - `test_zero_byte_retry_calls_sleep_with_backoff` — sleep invoked once
-  - `test_phase_event_carries_backoff_s` — UI metadata exposed
-  - `test_classic_premature_retry_does_not_sleep` — no backoff in classic bucket
-  - `test_interruptible_sleep_returns_promptly_on_abort` — abort < 500 ms
-
-Both run as plain `python tests/test_zero_byte_*.py` (no pytest dep);
-the new file ships its own minimal `_MonkeyPatch` shim.
-
-## Cost evidence (conv mp2a0tz1h45d8p, all 17 rounds)
-- `cache_read_tokens`: 488,206 (28,718 × 17)
-- `prompt_tokens` uncached: 102
-- `completion_tokens`: 17
-- Approx Anthropic public list price: $0.73 per failed turn
-
-## Future direction (not implemented)
-Highest-leverage next step would be to force slot rotation on each
-zero-byte retry (analogous to `gateway-5xx-treated-as-429`) so each
-retry hits a different upstream pool.  Failures cluster per-pool —
-in our logs all 34 anomalies in 2 minutes were on `sankuai_key_0`.
-Add `force_rotate=True` flag to the dispatch call when `_is_zero_byte`.
-
+## Why backoff (cost evidence, conv mp2a0tz1h45d8p)
+17 zero-byte retries × 28,718 cache_read_tokens = ~488K cache reads ≈ $0.73 for ONE failed turn. Bedrock zero-byte windows cluster per-pool (34/34 anomalies on sankuai_key_0 in 2 min) → hammering every ~3s rarely recovers. Hence backoff + slot rotation.

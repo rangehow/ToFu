@@ -12,14 +12,15 @@ Usage:
 
 Sanitization levels:
   personal   — For yourself (another machine, backup, etc.)
-               ✓ Keeps EVERYTHING: API keys, configs, skills, uploads.
-               ✗ Only skips bulky regenerable junk: __pycache__, .git,
-                 node_modules, offline_pkgs, *.pyc, logs/, *.db files,
-                 and other large runtime artifacts.
-               ✗ NEVER raw-copies data/pgdata/ — hot-copy across FUSE
-                 causes TOAST corruption. Instead, a pg_dumpall SQL file
-                 is shipped under data/pg_backup.sql and auto-restored
-                 on the destination's first boot.
+               ✓ Keeps your config + credentials: API keys, providers,
+                 MCP server tokens (data/config/), skills, uploads.
+               ✗ Does NOT carry chat history: the PG cluster (data/pgdata/),
+                 SQLite *.db files, and any SQL dumps (data/pg_backup.sql,
+                 data/pg_backups/) are all skipped, so the destination boots
+                 with a fresh empty database.
+               ✗ Also skips bulky regenerable junk: __pycache__, .git,
+                 node_modules, offline_pkgs, *.pyc, logs/, and other large
+                 runtime artifacts.
                No other sanitization applied.
 
   internal   — For colleagues within the company.
@@ -47,9 +48,19 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import textwrap
+import threading
+import time
 from datetime import datetime
 from pathlib import Path
+
+# Central registry of agent-written project-local artifacts (.tofu*). Used so
+# the export sanitizer recognises present + future artifacts by their reserved
+# prefix instead of re-listing each name (see lib/agent_artifacts.py).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib.agent_artifacts import GITIGNORE_PATTERN as _AGENT_ARTIFACT_GLOB
+from lib.agent_artifacts import is_agent_artifact
 
 # ═══════════════════════════════════════════════════════════
 #  Configuration
@@ -57,14 +68,21 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 
-# ANSI
-C_RED    = '\033[91m'
-C_GREEN  = '\033[92m'
-C_YELLOW = '\033[93m'
-C_CYAN   = '\033[96m'
-C_BOLD   = '\033[1m'
-C_DIM    = '\033[2m'
-C_END    = '\033[0m'
+# ANSI — only emit color codes when writing to a real terminal. When stdout
+# is piped/captured (e.g. run_command, CI, redirected to a file) the escape
+# sequences would otherwise show up as literal "[2m…[0m" garbage, since
+# nothing interprets them. Honor the NO_COLOR convention (https://no-color.org).
+_USE_COLOR = sys.stdout.isatty() and not os.environ.get('NO_COLOR')
+if _USE_COLOR:
+    C_RED    = '\033[91m'
+    C_GREEN  = '\033[92m'
+    C_YELLOW = '\033[93m'
+    C_CYAN   = '\033[96m'
+    C_BOLD   = '\033[1m'
+    C_DIM    = '\033[2m'
+    C_END    = '\033[0m'
+else:
+    C_RED = C_GREEN = C_YELLOW = C_CYAN = C_BOLD = C_DIM = C_END = ''
 
 # ── Logger ──
 logger = logging.getLogger('export')
@@ -89,16 +107,16 @@ def _read_version() -> str:
         return '0.0.0'
 
 
-def _bump_version(part: str = 'patch') -> str:
-    """Bump version (major/minor/patch) and write back to VERSION file.
+def _next_version(current: str, part: str = 'patch') -> str:
+    """Compute the next version from ``current`` (pure — no file I/O).
 
     Args:
+        current: The current version string (e.g. ``'0.13.0'``).
         part: 'major', 'minor', or 'patch'.
 
     Returns:
-        The new version string.
+        The bumped version string.
     """
-    current = _read_version()
     parts = current.split('.')
     if len(parts) != 3:
         parts = ['0', '0', '0']
@@ -111,10 +129,74 @@ def _bump_version(part: str = 'patch') -> str:
     else:
         patch += 1
 
-    new_ver = f'{major}.{minor}.{patch}'
+    return f'{major}.{minor}.{patch}'
+
+
+def _bump_version(part: str = 'patch') -> str:
+    """Bump version (major/minor/patch) and write back to VERSION file.
+
+    Args:
+        part: 'major', 'minor', or 'patch'.
+
+    Returns:
+        The new version string.
+    """
+    current = _read_version()
+    new_ver = _next_version(current, part)
     _VERSION_FILE.write_text(new_ver + '\n', encoding='utf-8')
     logger.info('Version bumped: %s → %s', current, new_ver)
     return new_ver
+
+
+def _commit_version_to_origin(version: str) -> None:
+    """Commit the bumped ``VERSION`` file into THIS (origin) git tree.
+
+    ``_bump_version`` writes the new number into the origin ``VERSION`` file,
+    but only the *exported* copy was ever committed + tagged. That left the
+    origin's VERSION change uncommitted and the published tag drifting ahead
+    of origin's last commit — so the origin machine's own self-update checker
+    would later see ``latest_tag > origin_VERSION`` and nag about an update it
+    itself produced. Committing the bump here keeps origin and the published
+    tag in lockstep.
+
+    Commits ONLY the ``VERSION`` file (``git commit VERSION``), so any other
+    in-progress edits in the origin tree are left untouched. Never raises —
+    the export itself must not fail because the origin commit didn't go
+    through; failures are logged and surfaced to the operator.
+
+    Args:
+        version: The new version string (without the leading ``v``).
+    """
+    if not (ROOT / '.git').exists():
+        logger.info('Origin is not a git checkout — skipping VERSION commit '
+                    '(VERSION file was still bumped to %s)', version)
+        return
+
+    def _git(cmd: list[str]) -> subprocess.CompletedProcess:
+        return subprocess.run(['git', *cmd], cwd=str(ROOT),
+                              capture_output=True, text=True)
+
+    try:
+        # Nothing staged/changed for VERSION? Then it's already committed
+        # (e.g. a no-op re-run) — don't create an empty commit.
+        diff = _git(['diff', '--quiet', '--', 'VERSION'])
+        if diff.returncode == 0:
+            logger.info('Origin VERSION already committed at %s — nothing to '
+                        'commit', version)
+            return
+        commit = _git(['commit', 'VERSION', '-m', f'v{version}'])
+        if commit.returncode != 0:
+            err = (commit.stderr or commit.stdout or '').strip()
+            logger.error('Failed to commit VERSION to origin: %s', err)
+            print(f"  {C_YELLOW}\u26a0 Could not commit VERSION to origin "
+                  f"(commit it manually): {err}{C_END}")
+            return
+        logger.info('Committed VERSION bump v%s to origin tree', version)
+        print(f"  {C_GREEN}\u2713 Committed VERSION v{version} to origin{C_END}")
+    except (FileNotFoundError, OSError) as e:
+        logger.error('git unavailable while committing origin VERSION: %s', e)
+        print(f"  {C_YELLOW}\u26a0 git unavailable — VERSION v{version} bumped "
+              f"but not committed to origin{C_END}")
 
 
 # ═══════════════════════════════════════════════════════════
@@ -132,13 +214,15 @@ PERSONAL_EXCLUDE_DIRS = {
     'node_modules',                # (shouldn't exist, but just in case)
     'offline_pkgs',                # offline pip packages
     '.migrate_backup',             # migration backups
+    '.update_backup',              # self-update tarball backups (per-host safety net)
     '.project_indexes',            # project index caches (auto-rebuilt)
     'logs',                        # application logs (regenerable)
-    # NOTE: pgdata/ is NEVER raw-copied — hot-copying a live PG cluster across
-    # FUSE/NFS causes TOAST chunk corruption (see _dump_source_pg_to_sql()
-    # below). Instead, personal-mode export does `pg_dumpall` to
-    # ``data/pg_backup.sql`` and restores on the destination's first boot.
-    'pgdata',                      # PG cluster directory (use pg_dumpall instead)
+    # NOTE: pgdata/ holds the chat-history database and is NEVER copied —
+    # personal mode intentionally ships config + credentials only, so the
+    # destination boots with a fresh empty DB. (Raw-copying a live pgdata
+    # across FUSE/NFS would also cause TOAST chunk corruption regardless.)
+    'pgdata',                      # PG cluster directory (chat history — never copied)
+    'pg_backups',                  # timestamped pg_dumpall SQL dumps (chat history)
     'sundries',                    # unrelated scripts/files (not part of tofu)
     'swebench_workdir',            # SWE-bench working directory (large, transient)
     'swebench_rerun_workdir',      # SWE-bench rerun results (thousands of venvs)
@@ -168,6 +252,7 @@ PERSONAL_EXCLUDE_GLOBS = {
 }
 
 PERSONAL_EXCLUDE_FILES = {
+    'pg_backup.sql',               # staged PG restore dump (chat history)
     'nohup.out',
     'server.log',
     'server.log.1',
@@ -209,6 +294,7 @@ ALWAYS_EXCLUDE_DIRS = {
     'tofu.egg-info',               # setuptools egg metadata (regenerable)
     '.git',                        # git history (may contain old secrets)
     '.migrate_backup',             # migration backups
+    '.update_backup',              # self-update tarball backups (per-host safety net)
     'node_modules',                # (shouldn't exist, but just in case)
     'offline_pkgs',                # offline pip packages
     'sundries',                    # unrelated scripts/files (not part of tofu)
@@ -310,6 +396,8 @@ OPENSOURCE_EXTRA_EXCLUDE_DIRS = {
     'benchmarks',               # benchmark scripts with internal API keys
     'outputs',                  # evaluation reports
     'posters',                  # personal scratch poster images (not part of the app)
+    'debug',                    # standalone scratch/benchmark scripts (never imported by the
+                                # app); 148 files that trip `ruff check .` in CI lint
 }
 
 # Files that live INSIDE an opensource-excluded dir but are still required by
@@ -556,6 +644,14 @@ def _sanitize_source_opensource(content: str, filepath: str) -> str:
             "\n",
             content,
         )
+        # Belt-and-braces: hard-default the runtime build flag to True so any
+        # ``internal_only`` entry that ever escapes the source strip above is
+        # still filtered out by get_catalog() at runtime — independent of the
+        # env var or entry ordering.
+        content = content.replace(
+            "_OPENSOURCE_BUILD = os.environ.get('TOFU_OPENSOURCE_BUILD', '').strip().lower() in {",
+            "_OPENSOURCE_BUILD = os.environ.get('TOFU_OPENSOURCE_BUILD', '1').strip().lower() in {",
+        )
 
     # 15. Clean remaining internal identifiers.
     #     'sankuai' (三快) is an internal corp name — always replace.
@@ -573,7 +669,17 @@ def _sanitize_source_opensource(content: str, filepath: str) -> str:
     )
     if not _is_brand_asset:
         content = content.replace('Meituan', 'YourProvider')
-        content = content.replace('meituan', 'your-provider')
+        # NOTE: the replacement token MUST be a valid JS identifier. `meituan`
+        # appears as an UNQUOTED object key (`meituan: '<svg…>'`) in brand
+        # registries like static/js/settings/branding.js and
+        # visibility_defaults.js. A hyphenated token (`your-provider`) turns
+        # that into `your-provider:` which JS parses as subtraction
+        # (`your - provider`) → "Uncaught SyntaxError: Unexpected token '-'",
+        # white-screening the whole exported app. `yourprovider` is a bareword
+        # key wherever `meituan` was, so the exported JS always parses.
+        # (Do NOT gate this on a per-file allowlist — that list drifts on every
+        # refactor and is exactly what orphaned the brand registries before.)
+        content = content.replace('meituan', 'yourprovider')
 
     return content
 
@@ -585,6 +691,16 @@ def _sanitize_source_opensource(content: str, filepath: str) -> str:
 def _should_exclude(relpath: str, filename: str, mode: str) -> str | None:
     """Check if a file/dir should be excluded. Returns reason or None."""
     parts = Path(relpath).parts
+
+    # ── Agent-written artifacts (.tofu*) — all modes ──
+    # Prefix-based via the central registry so CURRENT and FUTURE
+    # ``.tofu``-prefixed artifacts (.tofu/, .tofu_trash/, .tofu_sandbox/,
+    # .tofu_env.json, …) are always stripped without re-listing each name.
+    for part in parts:
+        if is_agent_artifact(part):
+            return f'agent artifact: {part}'
+    if is_agent_artifact(filename):
+        return f'agent artifact: {filename}'
 
     # ── Top-level-only exclusions (all modes) ──
     if parts and parts[0] in _TOP_LEVEL_ONLY_EXCLUDE_DIRS:
@@ -653,149 +769,6 @@ def _is_text_file(filepath: str) -> bool:
     return False
 
 
-
-
-# ═══════════════════════════════════════════════════════════
-#  PostgreSQL dump & restore (personal mode)
-# ═══════════════════════════════════════════════════════════
-#
-# Why NOT raw-copy pgdata/ ?
-# --------------------------
-# A PostgreSQL cluster is made up of heap pages, TOAST side-tables, WAL,
-# and index files that are only guaranteed to be mutually consistent when
-# ``pg_ctl stop`` has flushed and fsynced them.  Copying a LIVE pgdata
-# over a FUSE / NFS mount — which is what ``tar c | tar x`` was doing —
-# produces "torn" TOAST chunks: the heap tuple references a TOAST value
-# whose chunk hasn't landed on the destination's filesystem yet.  The
-# destination PG starts fine, but any SELECT or INSERT that touches the
-# affected row dies with:
-#
-#     ERROR:  missing chunk number 0 for toast value NNN in pg_toast_XXX
-#
-# and — worse — any INSERT whose index entry points at the broken TOAST
-# value hangs for ``statement_timeout`` seconds (default 120 s), which is
-# exactly the symptom observed in production (PUT /api/conversations/<id>
-# returning 500 after 120 s, breaking "Send").
-#
-# The fix is a two-stage, transactionally-consistent handoff:
-#
-#   1. At export time: ``pg_dumpall`` the source PG into a plain-text SQL
-#      file under ``data/pg_backup.sql``.  This is atomic from PG's point
-#      of view (a single serializable snapshot), so TOAST chunks are
-#      always paired with their parent rows.
-#   2. At destination boot: if no pgdata/ yet AND ``data/pg_backup.sql``
-#      is present, initdb a fresh cluster and ``psql -f`` the dump.  The
-#      dump file is deleted after a successful restore so subsequent
-#      boots skip straight to the normal path.
-#
-# Fallback: if the source PG isn't running (or pg_dumpall isn't
-# available), export silently proceeds without a dump and the destination
-# comes up with an empty DB — the destination user can re-import via the
-# Settings UI.  We never raw-copy pgdata/.
-# ───────────────────────────────────────────────────────────────────────
-
-def _dump_source_pg_to_sql() -> Path | None:
-    """Dump the source's PostgreSQL cluster to ``data/pg_backup.sql``.
-
-    Returns the path of the dump file on success, or None if no dump was
-    made (PG not running, binaries missing, etc.).  The caller is
-    responsible for deleting the dump file after the tar pipe has
-    finished copying it into the destination.
-    """
-    src_backup = ROOT / 'data' / 'pg_backup.sql'
-    # Remove any stale dump from a prior aborted export.
-    if src_backup.exists():
-        try:
-            src_backup.unlink()
-        except OSError as e:
-            logger.warning('Could not remove stale pg_backup.sql: %s', e)
-
-    pgdata = ROOT / 'data' / 'pgdata'
-    if not pgdata.is_dir():
-        logger.info('No source pgdata/ — skipping PG dump (SQLite-only source, or fresh install)')
-        return None
-
-    # Discover source PG port from its postgresql.conf.
-    src_port = None
-    conf = pgdata / 'postgresql.conf'
-    if conf.is_file():
-        try:
-            for line in conf.read_text(encoding='utf-8', errors='replace').splitlines():
-                s = line.strip()
-                if s.startswith('port') and '=' in s and not s.startswith('#'):
-                    val = s.split('=', 1)[1].strip().split('#')[0].strip()
-                    try:
-                        src_port = int(val)
-                        break
-                    except ValueError:
-                        continue
-        except OSError as e:
-            logger.warning('Could not read source postgresql.conf: %s', e)
-    if src_port is None:
-        logger.info('Could not determine source PG port — skipping dump')
-        return None
-
-    pg_dumpall = shutil.which('pg_dumpall')
-    if not pg_dumpall:
-        logger.info('pg_dumpall not on PATH — skipping dump (destination will start with empty DB)')
-        return None
-
-    # Probe reachability: if PG isn't running, skip the dump silently.
-    pg_isready = shutil.which('pg_isready')
-    if pg_isready:
-        try:
-            probe = subprocess.run(
-                [pg_isready, '-h', '127.0.0.1', '-p', str(src_port)],
-                capture_output=True, text=True, timeout=5,
-            )
-            if probe.returncode != 0:
-                logger.info('Source PG not responding on port %d — skipping dump '
-                            '(destination will start with empty DB)', src_port)
-                return None
-        except (subprocess.TimeoutExpired, OSError) as e:
-            logger.info('pg_isready probe failed: %s — skipping dump', e)
-            return None
-
-    user = os.environ.get('USER') or os.environ.get('USERNAME') or 'postgres'
-    print(f"  {C_CYAN}\U0001f4be Dumping source PostgreSQL (port {src_port}) "
-          f"to data/pg_backup.sql …{C_END}")
-    try:
-        # --clean: emit DROPs so restore is idempotent on a fresh cluster.
-        # --if-exists: silence DROP errors when target doesn't exist.
-        # -f: write directly to file (avoid tens of GB through a Python pipe).
-        result = subprocess.run(
-            [pg_dumpall, '-h', '127.0.0.1', '-p', str(src_port), '-U', user,
-             '--clean', '--if-exists', '-f', str(src_backup)],
-            capture_output=True, text=True,
-            env={**os.environ, 'PGCONNECT_TIMEOUT': '10', 'PGGSSENCMODE': 'disable'},
-            # No timeout: a large DB can take a while on FUSE.
-        )
-        if result.returncode != 0:
-            logger.warning('pg_dumpall failed (rc=%d): %s', result.returncode,
-                           (result.stderr or '').strip()[:500])
-            # Clean up partial file so destination doesn't try to restore it.
-            if src_backup.exists():
-                try:
-                    src_backup.unlink()
-                except OSError:
-                    pass
-            return None
-    except OSError as e:
-        logger.warning('pg_dumpall invocation failed: %s', e)
-        if src_backup.exists():
-            try:
-                src_backup.unlink()
-            except OSError:
-                pass
-        return None
-
-    try:
-        size_mb = src_backup.stat().st_size / (1024 * 1024)
-    except OSError:
-        size_mb = 0
-    print(f"  {C_GREEN}\u2713 Dump complete: data/pg_backup.sql ({size_mb:.1f} MB){C_END}")
-    logger.info('pg_dumpall wrote %s (%.1f MB)', src_backup, size_mb)
-    return src_backup
 
 
 # Module-level version for sanitization pipeline (set in export_project)
@@ -922,6 +895,11 @@ def _build_tar_excludes_for_mode(mode: str, dest: Path) -> tuple[list[str], list
     for f in files:
         tar_excludes.append(f'--exclude={f}')
 
+    # Agent-written artifacts (.tofu*) — one glob covers every current AND
+    # future ``.tofu``-prefixed artifact in every mode, so a new artifact
+    # never silently leaks into an export (the historical drift failure mode).
+    tar_excludes.append(f'--exclude={_AGENT_ARTIFACT_GLOB}')
+
     # Honour .gitignore for internal/opensource so the export stays in
     # lock-step with the repo's ignore rules (covers new eval/bench
     # *_workdir/ dirs, caches, etc. without touching the hand-maintained
@@ -940,17 +918,95 @@ def _build_tar_excludes_for_mode(mode: str, dest: Path) -> tuple[list[str], list
     return tar_excludes, preserved
 
 
-def _stream_tar_copy(src: Path, dst: Path, excludes: list[str]) -> None:
+def _ellipsize(text: str, width: int) -> str:
+    """Trim ``text`` to ``width`` chars, keeping the tail (the filename)."""
+    if len(text) <= width:
+        return text
+    if width <= 1:
+        return text[:width]
+    return '…' + text[-(width - 1):]
+
+
+def _tar_progress_consumer(pipe, dst: Path) -> None:
+    """Render live per-file progress from ``tar -v`` verbose output.
+
+    ``tar cvf -`` writes the archive to stdout and the name of each member
+    to stderr, one path per line, as it descends the tree. We read that
+    stream and show:
+      - a permanent line the first time tar enters each TOP-LEVEL entry
+        (``./lib``, ``./static``, …) so an unwanted dir that slipped past
+        the ``--exclude`` rules is immediately visible; and
+      - a live, in-place ``transferred N · <current file>`` counter.
+
+    The counter is only animated on a real TTY; when output is piped/
+    captured we just emit the per-top-level lines (no carriage-return
+    spam in logs).
+    """
+    is_tty = sys.stdout.isatty()
+    seen_top: set[str] = set()
+    count = 0
+    last_paint = 0.0
+    try:
+        term_w = shutil.get_terminal_size((100, 24)).columns
+    except OSError:
+        term_w = 100
+
+    for raw in iter(pipe.readline, b''):
+        line = raw.decode('utf-8', 'replace').rstrip('\n')
+        if not line:
+            continue
+        rel = line[2:] if line.startswith('./') else line
+        if not rel:
+            # tar emits the archive root ('./') as its first member — skip.
+            continue
+        count += 1
+        top = rel.split('/', 1)[0]
+        if top and top not in seen_top:
+            seen_top.add(top)
+            src_item = (ROOT / top)
+            kind = 'dir ' if src_item.is_dir() else 'file'
+            # Clear any live counter line before printing a permanent row.
+            if is_tty:
+                sys.stdout.write('\r\033[K')
+            print(f"    {C_DIM}↳ {kind} {C_END}{C_CYAN}{top}{C_END}")
+            if is_tty:
+                sys.stdout.flush()
+        if is_tty:
+            now = time.monotonic()
+            if now - last_paint >= 0.08:
+                last_paint = now
+                shown = _ellipsize(rel, max(20, term_w - 24))
+                sys.stdout.write(
+                    f"\r\033[K    {C_DIM}transferred {count} · {shown}{C_END}")
+                sys.stdout.flush()
+
+    if is_tty:
+        sys.stdout.write(f"\r\033[K    {C_DIM}transferred {count} files{C_END}\n")
+        sys.stdout.flush()
+    else:
+        print(f"    {C_DIM}transferred {count} files{C_END}")
+
+
+def _stream_tar_copy(src: Path, dst: Path, excludes: list[str],
+                     progress: bool = False) -> None:
     """Run ``tar c <excludes> . | tar x`` from src into dst.
+
+    When ``progress`` is True, ``tar`` runs in verbose mode and each
+    archived path is streamed live (see ``_tar_progress_consumer``) so the
+    operator can watch the transfer and spot files that shouldn't be
+    carried. Without it, the copy is silent (the historical behavior).
 
     Raises RuntimeError on real failure. GNU tar rc=1 ("file changed as
     we read it") is treated as a non-fatal warning — the source tree may
     be live (running server appending to logs, .project_sessions, etc.).
     """
     dst.mkdir(parents=True, exist_ok=True)
+    # Verbose mode writes member names to stderr (stdout carries the archive).
+    create_cmd = ['tar', 'cvf', '-', *excludes, '.'] if progress \
+        else ['tar', 'cf', '-', *excludes, '.']
     try:
         tar_c = subprocess.Popen(
-            ['tar', 'cf', '-', *excludes, '.'],
+            create_cmd,
             cwd=str(src),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -964,9 +1020,29 @@ def _stream_tar_copy(src: Path, dst: Path, excludes: list[str]) -> None:
         )
         if tar_c.stdout is not None:
             tar_c.stdout.close()
+
+        # When showing progress, drain tar_c's stderr (the verbose file
+        # list) in a thread so it can't block on a full pipe buffer while
+        # we wait on the extract side. We capture the rendered lines back
+        # into ``cerr`` only as needed for the rc=1 warning below.
+        progress_thread = None
+        if progress and tar_c.stderr is not None:
+            progress_thread = threading.Thread(
+                target=_tar_progress_consumer,
+                args=(tar_c.stderr, src),
+                daemon=True,
+            )
+            progress_thread.start()
+
         # No timeout — cross-FUSE copies can take minutes; user requested "no timeout".
         _, xerr = tar_x.communicate()
-        _, cerr = tar_c.communicate()
+        if progress_thread is not None:
+            # stderr is consumed by the thread; just reap the process.
+            tar_c.wait()
+            progress_thread.join(timeout=5)
+            cerr = b''
+        else:
+            _, cerr = tar_c.communicate()
         if tar_c.returncode not in (0, 1, None):
             raise RuntimeError(
                 f'tar create failed (rc={tar_c.returncode}): '
@@ -1249,7 +1325,7 @@ def _collect_opensource_candidates(dest: Path) -> set[str]:
         dest, triggers, extra_globs=_rg_excluded_globs())
 
 
-def _export_personal_via_tar(dest: Path) -> dict:
+def _export_personal_via_tar(dest: Path, progress: bool = False) -> dict:
     """Fast personal-mode export using a streaming ``tar c | tar x`` pipe.
 
     Per-file ``shutil.copy2`` is painfully slow on FUSE / network filesystems
@@ -1259,9 +1335,14 @@ def _export_personal_via_tar(dest: Path) -> dict:
 
     Preservation: if the destination already has ``data/``, ``uploads/``, or
     ``.git/``, those are EXCLUDED from the source tar — so the destination's
-    own chat history, uploaded files, and git history are never clobbered by
-    a re-export.  Personal mode deliberately includes its own ``data/`` and
+    own data, uploaded files, and git history are never clobbered by a
+    re-export.  Personal mode deliberately includes its own ``data/`` and
     ``uploads/`` only when the destination is empty / fresh.
+
+    Chat history is NOT carried: the PG cluster, SQLite DBs, and SQL dumps
+    are all excluded (see PERSONAL_EXCLUDE_*), so a fresh destination boots
+    with an empty database while config + credentials (data/config/) come
+    across intact.
 
     Returns a stats dict compatible with the walk-based path.
     """
@@ -1271,36 +1352,18 @@ def _export_personal_via_tar(dest: Path) -> dict:
         print(f"  {C_CYAN}\U0001f4be Preserving dest: {', '.join(preserved + ['/'])}"
               f"  (not overwritten from source){C_END}")
 
-    # ── Dump source PG to data/pg_backup.sql (only if dest has no data/) ──
-    # If the destination already has a ``data/`` directory, it is preserved
-    # as-is (above); the destination user's own DB stays untouched.  But
-    # for a FRESH dest, we want the source's chat history to be available.
-    # We CANNOT raw-copy pgdata/ (TOAST corruption on FUSE — see
-    # _dump_source_pg_to_sql docstring), so instead we dump SQL and rely on
-    # the destination's PG bootstrap to restore on first boot.
-    pg_dump_path: Path | None = None
-    if 'data' not in preserved:
-        pg_dump_path = _dump_source_pg_to_sql()
+    # Personal mode does NOT carry chat history: pgdata/, *.db, and any
+    # SQL dumps are excluded (see PERSONAL_EXCLUDE_*), so a fresh dest boots
+    # with an empty DB. Config + credentials (data/config/) still copy over.
 
     print(f"  {C_DIM}Streaming tar pipe (src → dst) — much faster on FUSE…{C_END}")
 
     stats = {'copied': 0, 'sanitized': 0, 'excluded': 0, 'excluded_reasons': {}}
 
-    _stream_tar_copy(ROOT, dest, tar_excludes)
+    _stream_tar_copy(ROOT, dest, tar_excludes, progress=progress)
 
     # Count files at dest for the summary (best-effort, fast path via fd).
     stats['copied'] = _fast_count_files(dest)
-
-    # ── Clean up the source-side dump — it was a temp copy artifact ──
-    # The file has already been streamed into the destination via tar.
-    # Leaving it in the source would confuse subsequent runs of the source
-    # server (it would try to restore an outdated snapshot on first boot).
-    if pg_dump_path is not None and pg_dump_path.exists():
-        try:
-            pg_dump_path.unlink()
-            logger.debug('Removed source-side pg_backup.sql (already in dest)')
-        except OSError as e:
-            logger.warning('Could not remove source pg_backup.sql: %s', e)
 
     # ── Scrub host-identity files from any pgdata the dest may already have ──
     # Belt-and-braces: if a previous (pre-dump) export left a pgdata there, or
@@ -1593,7 +1656,7 @@ def _bundle_internal_mcp_repos(dest: Path, mode: str):
     (vendor_dir / '.gitkeep').touch()
 
     bundled = []
-    for sibling_name in ('hope-mcp', 'xuecheng-mcp'):
+    for sibling_name in ('hope-mcp', 'xuecheng-mcp', 'llm-mcp'):
         src = ROOT.parent / sibling_name
         if not src.exists() or not (src / 'pyproject.toml').exists():
             logger.info('Sibling MCP repo not found — skipping: %s', src)
@@ -1663,6 +1726,50 @@ def _bundle_tofu_search_wheel(dest: Path, mode: str):
     # install.sh side also `sort -V | tail -1` if several land in vendor/).
     wheel = wheels[-1]
 
+    # ── Staleness guard ──────────────────────────────────────────────────
+    # The wheel in dist/ is whatever was LAST built; if someone bumped the
+    # tofu-search source version (pyproject.toml) or raised the floor in our
+    # requirements.txt but forgot to `python -m build`, dist/ still holds an
+    # OLD wheel. Bundling it silently ships a build below our own floor →
+    # server boots and may crash on a symbol that only exists in the newer
+    # release (this exact trap shipped a 0.3.0 wheel against a >=0.3.2 floor /
+    # 0.3.2 source). Don't fail the export (the wheel may still be usable),
+    # but make the drift IMPOSSIBLE to miss so the operator rebuilds dist/.
+    def _wheel_ver(name: str) -> tuple:
+        m = re.search(r'tofu_search-([0-9]+(?:\.[0-9]+)*)', name)
+        parts = (m.group(1).split('.') if m else ['0']) + ['0', '0', '0']
+        return tuple(int(''.join(c for c in p if c.isdigit()) or 0) for p in parts[:3])
+
+    def _ver_tuple(s: str) -> tuple:
+        parts = (str(s).split('+')[0].split('.') if s else ['0']) + ['0', '0', '0']
+        return tuple(int(''.join(c for c in p if c.isdigit()) or 0) for p in parts[:3])
+
+    wheel_v = _wheel_ver(wheel.name)
+    expected = []  # (label, version_tuple, raw)
+    try:
+        pyproj = (src_repo / 'pyproject.toml').read_text(encoding='utf-8', errors='ignore')
+        m = re.search(r'(?m)^\s*version\s*=\s*["\']([^"\']+)["\']', pyproj)
+        if m:
+            expected.append(('tofu-search source pyproject.toml', _ver_tuple(m.group(1)), m.group(1)))
+    except OSError as e:
+        logger.debug('Could not read tofu-search pyproject.toml for staleness check: %s', e)
+    try:
+        reqs = (ROOT / 'requirements.txt').read_text(encoding='utf-8', errors='ignore')
+        m = re.search(r'(?mi)^\s*tofu-search\s*>=\s*([0-9][0-9.]*)', reqs)
+        if m:
+            expected.append(("chatui requirements.txt floor (>=)", _ver_tuple(m.group(1)), m.group(1)))
+    except OSError as e:
+        logger.debug('Could not read requirements.txt for staleness check: %s', e)
+
+    for label, ev, raw in expected:
+        if wheel_v < ev:
+            msg = (f"bundled tofu-search wheel {wheel.name} is STALE: "
+                   f"{'.'.join(map(str, wheel_v))} < {raw} ({label})")
+            logger.warning('[Export] %s', msg)
+            print(f"  {C_RED}⚠ STALE WHEEL — {msg}{C_END}")
+            print(f"     {C_YELLOW}Rebuild it first:  (cd {src_repo} && python -m build --wheel) "
+                  f"then re-run this export.{C_END}")
+
     vendor_dir = dest / 'vendor'
     vendor_dir.mkdir(parents=True, exist_ok=True)
     (vendor_dir / '.gitkeep').touch()
@@ -1719,7 +1826,7 @@ def _portablize_bundled_mcp_config(dest: Path, mode: str):
         return
 
     rewritten = []
-    for name in ('hope', 'xuecheng'):
+    for name in ('hope', 'xuecheng', 'llm'):
         entry = config.get(name)
         if not isinstance(entry, dict):
             continue
@@ -1921,7 +2028,8 @@ def _create_skeleton(dest: Path, mode: str):
 #  Fast path: tar-pipe copy + targeted rg-driven sanitize
 # ═══════════════════════════════════════════════════════════
 
-def _export_via_tar_with_sanitize(mode: str, dest: Path) -> dict:
+def _export_via_tar_with_sanitize(mode: str, dest: Path,
+                                  progress: bool = False) -> dict:
     """Fast non-personal export: bulk tar copy + post-pass sanitize.
 
     This is the internal/opensource analogue of ``_export_personal_via_tar``.
@@ -1943,7 +2051,7 @@ def _export_via_tar_with_sanitize(mode: str, dest: Path) -> dict:
               f"  (not overwritten from source){C_END}")
 
     print(f"  {C_DIM}Streaming tar pipe (src → dst) — fast path…{C_END}")
-    _stream_tar_copy(ROOT, dest, tar_excludes)
+    _stream_tar_copy(ROOT, dest, tar_excludes, progress=progress)
 
     # Targeted sanitize pass — only opens files containing trigger patterns.
     print(f"  {C_DIM}Running targeted sanitize pass (rg-driven)…{C_END}")
@@ -2019,8 +2127,9 @@ def _print_export_summary(dest: Path, mode: str, stats: dict,
 # ═══════════════════════════════════════════════════════════
 
 def export_project(mode: str, dest: Path, dry_run: bool = False,
-                    push: bool = False, commit_msg: str | None = None,
-                    is_release: bool = False, branch_override: str | None = None):
+                   push: bool = False, commit_msg: str | None = None,
+                   is_release: bool = False, branch_override: str | None = None,
+                   progress: bool = False):
     """Main export function.
 
     Args:
@@ -2030,6 +2139,9 @@ def export_project(mode: str, dest: Path, dry_run: bool = False,
         push: If True, auto-push to the configured upstream git repo after export.
         commit_msg: Custom git commit message (only used when push=True).
         is_release: If True, create a git tag for the current version.
+        progress: If True, stream a live per-file transfer view during the
+            tar copy so the operator can watch the transfer and spot any
+            files that shouldn't be carried.
     """
     if dest.exists():
         print(f"\n  {C_YELLOW}\u26a0 Destination already exists: {dest} — overwriting{C_END}")
@@ -2137,7 +2249,7 @@ def export_project(mode: str, dest: Path, dry_run: bool = False,
     # be sanitized without writing anything.
     if not dry_run:
         if mode == 'personal':
-            stats = _export_personal_via_tar(dest)
+            stats = _export_personal_via_tar(dest, progress=progress)
             excluded_log: list = []
             _all_excluded_dirs = PERSONAL_EXCLUDE_DIRS
             # Personal mode skips _create_skeleton (it mirrors source data/
@@ -2150,7 +2262,7 @@ def export_project(mode: str, dest: Path, dry_run: bool = False,
             _bundle_tofu_search_wheel(dest, mode)
             _portablize_bundled_mcp_config(dest, mode)
         else:
-            stats = _export_via_tar_with_sanitize(mode, dest)
+            stats = _export_via_tar_with_sanitize(mode, dest, progress=progress)
             excluded_log = []
             _all_excluded_dirs = (ALWAYS_EXCLUDE_DIRS
                                   if mode == 'internal'
@@ -2170,6 +2282,11 @@ def export_project(mode: str, dest: Path, dry_run: bool = False,
             _restore_opensource_kept_files(dest)
             _run_ruff_autofix(dest)
             _verify_opensource(dest)
+        # JS syntax safety net (internal + opensource both sanitize JS). Runs
+        # BEFORE push so a sanitizer regression that corrupts JS fails the
+        # export loudly instead of shipping a white-screening tree.
+        if mode in ('internal', 'opensource'):
+            _verify_exported_js_syntax(dest)
         if push:
             _git_push(dest, mode, commit_msg, is_release=is_release,
                       branch_override=branch_override)
@@ -2308,6 +2425,70 @@ def _run_ruff_autofix(dest: Path):
         print(f"    {C_YELLOW}ruff timed out — skipping{C_END}")
     except Exception as e:
         print(f"    {C_YELLOW}ruff auto-fix failed: {e}{C_END}")
+
+
+class ExportSyntaxError(RuntimeError):
+    """Raised when the sanitizer produced JavaScript that fails to parse.
+
+    This is a HARD failure: shipping invalid JS white-screens every user of
+    the exported build (the served bundle is a naive concat of these files —
+    see lib/js_bundler.py). Fail the export loudly at build time rather than
+    on some user's fresh install.
+    """
+
+
+def _verify_exported_js_syntax(dest: Path) -> None:
+    """Best-effort ``node --check`` over every exported ``.js`` file.
+
+    A safety net for sanitizer-induced corruption: any find-replace in
+    ``_sanitize_source_opensource`` / ``_sanitize_defaults_for_export`` that
+    rewrites a code identifier into a non-identifier token (the classic
+    ``meituan`` → ``your-provider`` unquoted-key bug) produces invalid JS that
+    the bundler would happily ship. This catches that class at EXPORT time,
+    file-agnostically, so a regression can never reach a user.
+
+    No-op when ``node`` is absent (mirrors ``lib/js_bundler._node_syntax_ok`` —
+    fresh-install machines commonly lack node; the class fix in the sanitizer
+    is the primary defense, this is defense-in-depth for the build host).
+
+    Raises:
+        ExportSyntaxError: if any exported ``.js`` file fails ``node --check``.
+    """
+    node = shutil.which('node')
+    if not node:
+        print(f"  {C_DIM}\u23ed node not found \u2014 skipping JS syntax verification{C_END}")
+        return
+
+    js_files = [p for p in (dest / 'static' / 'js').rglob('*.js')
+                if p.is_file() and not p.name.startswith('bundle-')]
+    print(f"  {C_BOLD}\U0001f50d Verifying exported JS syntax ({len(js_files)} files)\u2026{C_END}")
+
+    broken: list[tuple[str, str]] = []
+    for p in js_files:
+        try:
+            r = subprocess.run(
+                [node, '--check', str(p)],
+                capture_output=True, text=True, timeout=30,
+                stdin=subprocess.DEVNULL,
+            )
+        except (subprocess.TimeoutExpired, OSError) as e:
+            logger.warning('node --check could not run on %s: %s', p, e)
+            continue
+        if r.returncode != 0:
+            rel = p.relative_to(dest)
+            detail = (r.stderr or r.stdout or '').strip().splitlines()
+            first = detail[0] if detail else 'syntax error'
+            broken.append((str(rel), first))
+            print(f"    {C_RED}\u2717 {rel}: {first}{C_END}")
+
+    if broken:
+        print(f"\n  {C_RED}\u26a0 {len(broken)} exported JS file(s) FAIL to parse \u2014 "
+              f"the sanitizer corrupted them.{C_END}")
+        raise ExportSyntaxError(
+            'Sanitizer produced %d syntactically-invalid JS file(s): %s'
+            % (len(broken), ', '.join(f'{rel} ({err})' for rel, err in broken))
+        )
+    print(f"  {C_GREEN}\u2705 All exported JS parses cleanly.{C_END}")
 
 
 def _verify_opensource(dest: Path):
@@ -2613,6 +2794,12 @@ def main():
         '--branch',
         help='Override git branch name (default: from repo config)',
     )
+    parser.add_argument(
+        '--progress', action='store_true',
+        help='Stream a live per-file view during the copy (shows each '
+             'top-level dir entered + a running transferred-files counter) '
+             'so you can watch the transfer and catch files that should be excluded',
+    )
 
     args = parser.parse_args()
 
@@ -2626,8 +2813,17 @@ def main():
     # ── Handle version bumping ──
     version = _read_version()
     if args.bump:
-        version = _bump_version(args.bump)
-        print(f"  {C_CYAN}\U0001f4cc Version: v{version}{C_END}")
+        if args.dry_run:
+            # Preview only — compute the next version WITHOUT writing/committing.
+            version = _next_version(version, args.bump)
+            print(f"  {C_CYAN}\U0001f4cc Version: v{version} "
+                  f"{C_DIM}(dry run — VERSION not written){C_END}")
+        else:
+            version = _bump_version(args.bump)
+            print(f"  {C_CYAN}\U0001f4cc Version: v{version}{C_END}")
+            # Commit the bump into THIS origin tree so origin's VERSION and the
+            # published release tag never drift.
+            _commit_version_to_origin(version)
     else:
         print(f"  {C_DIM}Version: v{version} (use --bump patch/minor/major to increment){C_END}")
 
@@ -2667,7 +2863,8 @@ def main():
 
     export_project(args.mode, dest, dry_run=args.dry_run,
                    push=args.push, commit_msg=commit_msg,
-                   is_release=is_release, branch_override=args.branch)
+                   is_release=is_release, branch_override=args.branch,
+                   progress=args.progress)
 
 
 if __name__ == '__main__':

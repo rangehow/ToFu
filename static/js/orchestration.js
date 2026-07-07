@@ -45,6 +45,8 @@ var _ORCH_ROLES = [
     blurb: 'Interacts with live browser tabs.' },
   { role: 'synthesizer', label: 'Synthesizer', icon: 'tofu-synthesizer', tier: 'standard',
     blurb: 'Merges many agent outputs into one converged result.' },
+  { role: 'virtual_user', label: 'Virtual User', icon: 'tofu-general', tier: 'standard',
+    blurb: 'Stands in for the human: auto-replies to keep a task going until done. Speaks as User.' },
   { role: 'router',      label: 'Router',      icon: 'tofu-router',      tier: 'light',
     blurb: 'Classifies each item and routes it to a branch.' },
   { role: 'general',     label: 'General',     icon: 'tofu-general',     tier: 'standard',
@@ -85,18 +87,64 @@ var _ORCH_GLYPHS = {
   stop:   '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>',
   artifact: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M9 13h6M9 17h6"/></svg>',
   human:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="7" r="4"/><path d="M5.5 21a6.5 6.5 0 0 1 13 0"/></svg>',
+  group:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3" stroke-dasharray="4 3"/><rect x="7" y="7" width="4" height="4" rx="1"/><rect x="13" y="13" width="4" height="4" rx="1"/><path d="M11 9h2a2 2 0 0 1 2 2v2"/></svg>',
+};
+
+// ── Inline UI icons (SVG-only; NO emoji) ────────────────────────────
+// House rule for the orchestration surface: every icon is an inline SVG
+// glyph, never an emoji — even for abstract concepts. Each entry is a
+// self-sized <svg class="orch-ico"> (1em, currentColor) safe to splice
+// into button labels and run-log lines (which use innerHTML).
+var _orchSvg = function (inner, big) {
+  return '<svg class="orch-ico' + (big ? ' orch-ico-lg' : '') + '" viewBox="0 0 24 24" '
+    + 'fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" '
+    + 'stroke-linejoin="round" aria-hidden="true">' + inner + '</svg>';
+};
+var _ORCH_ICONS = {
+  plus:    _orchSvg('<path d="M12 5v14M5 12h14"/>'),
+  gear:    _orchSvg('<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>'),
+  layout:  _orchSvg('<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/>'),
+  star:    '<svg class="orch-ico" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2l2.9 6.3 6.9.7-5.1 4.6 1.4 6.8L12 17.8 5.9 20.4l1.4-6.8L2.2 9l6.9-.7z"/></svg>',
+  loop:    _orchSvg('<path d="M17 2l4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/>'),
+  auto:    _orchSvg('<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2.5"/><path d="M12 3v4M12 17v4M3 12h4M17 12h4"/>'),
+  fanout:  _orchSvg('<circle cx="6" cy="12" r="2"/><circle cx="18" cy="5" r="2"/><circle cx="18" cy="12" r="2"/><circle cx="18" cy="19" r="2"/><path d="M8 12h2M11 11l5-5M11 13l5 5"/>'),
+  shield:  _orchSvg('<path d="M12 3l7 3v5c0 4.5-3 8.5-7 10-4-1.5-7-5.5-7-10V6z"/><path d="M9 12l2 2 4-4"/>'),
+  folder:  _orchSvg('<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>'),
+  wand:    _orchSvg('<path d="M15 4V2M15 10V8M11 6H9M21 6h-2M18.5 3.5l-1 1M11.5 3.5l1 1M5 21l11-11"/>'),
+  save:    _orchSvg('<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/>'),
+  puzzle:  _orchSvg('<path d="M15.39 4.39a1 1 0 0 0 1.68-.474 2.5 2.5 0 1 1 3.014 3.015 1 1 0 0 0-.474 1.68l1.683 1.682a2.414 2.414 0 0 1 0 3.414L19.61 15.39a1 1 0 0 1-1.68-.474 2.5 2.5 0 1 0-3.014 3.015 1 1 0 0 1 .474 1.68l-1.683 1.682a2.414 2.414 0 0 1-3.414 0L8.61 19.61a1 1 0 0 0-1.68.474 2.5 2.5 0 1 1-3.014-3.015 1 1 0 0 0 .474-1.68l-1.683-1.682a2.414 2.414 0 0 1 0-3.414L4.39 8.61a1 1 0 0 1 1.68.474 2.5 2.5 0 1 0 3.014-3.015 1 1 0 0 1-.474-1.68l1.683-1.682a2.414 2.414 0 0 1 3.414 0z"/>', true),
+  speak:   _orchSvg('<path d="M21 11.5a8.38 8.38 0 0 1-9 8.3 8.5 8.5 0 0 1-3.8-.9L3 20l1.1-3.3A8.38 8.38 0 0 1 12 3.5a8.5 8.5 0 0 1 9 8z"/>'),
+  eye:     _orchSvg('<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/>'),
+  rocket:  _orchSvg('<path d="M5 15c-1 1-1.5 4-1.5 4s3-.5 4-1.5"/><path d="M9 11a12 12 0 0 1 8-8c2 0 3 1 3 3a12 12 0 0 1-8 8z"/><path d="M9 11l-3 1 3 5 1-3"/><circle cx="14.5" cy="9.5" r="1.5"/>'),
+  bot:     _orchSvg('<rect x="4" y="8" width="16" height="12" rx="2"/><path d="M12 8V5M9 4h6"/><circle cx="9" cy="14" r="1"/><circle cx="15" cy="14" r="1"/>'),
+  check:   '<svg class="orch-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg>',
+  reject:  _orchSvg('<circle cx="12" cy="12" r="9"/><path d="M15 9l-6 6M9 9l6 6"/>'),
+  warn:    _orchSvg('<path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/>'),
+  compass: _orchSvg('<circle cx="12" cy="12" r="9"/><path d="M16 8l-2 6-6 2 2-6z"/>'),
+  package: _orchSvg('<path d="M21 8l-9-5-9 5v8l9 5 9-5z"/><path d="M3 8l9 5 9-5M12 13v8"/>'),
+  person:  _orchSvg('<circle cx="12" cy="8" r="4"/><path d="M5 21a7 7 0 0 1 14 0"/>'),
+  flag:    _orchSvg('<path d="M5 21V4M5 4h11l-2 4 2 4H5"/>'),
+  stop:    '<svg class="orch-ico" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>',
 };
 
 // ── Canvas state ────────────────────────────────────────────────────
 var _orchNodes = [];          // [{id, type:'role'|'control', role?, kind?, x, y, name, params}]
 var _orchEdges = [];          // [{id, from, to}]
 var _orchSel = null;          // selected node id
+var _orchSelEdge = null;      // selected edge id (mutually exclusive with _orchSel)
 var _orchSeq = 0;             // id counter
 var _orchName = 'Untitled Flow';
 var _orchModalReady = false;
 var _orchConnect = null;      // active connection drag {from, x, y}
 var _orchDragNode = null;     // active node-move drag {id, dx, dy}
 var _orchCurrentId = null;    // backend id of the loaded/saved flow (null = unsaved)
+// Nested-canvas edit stack. Each frame = a parent editing context we left
+// to descend into a GROUP (subflow) node. Frame:
+//   {nodes, edges, sel, seq, name, groupId}
+// where (nodes/edges/sel/seq/name) are the parent level's working state and
+// groupId is the subflow node on that level whose child we are now editing.
+// Empty = editing the root flow.
+var _orchStack = [];
 
 var _ORCH_CARD_W = 188;       // must match .orch-node width in CSS
 
@@ -109,9 +157,14 @@ function _orchIconBase() {
 // Resolve a role icon to a full URL. An `icon` carrying an explicit
 // extension (e.g. 'tofu-worker.svg') is used as-is; otherwise '.png' is
 // appended. Lets crisp SVGs and cleaned PNGs coexist in _ORCH_ROLES.
+// Cache-bust token for role icons. Bump when icon art is regenerated so
+// browsers re-fetch instead of serving the stale (max-age=86400) bytes.
+var _ORCH_ICON_VER = '20260622a';
+
 function _orchIconSrc(icon) {
   var name = icon || 'tofu-general';
-  return _orchIconBase() + '/' + (/\.\w+$/.test(name) ? name : name + '.png');
+  var file = /\.\w+$/.test(name) ? name : name + '.png';
+  return _orchIconBase() + '/' + file + '?v=' + _ORCH_ICON_VER;
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -124,6 +177,7 @@ function openOrchestration() {
   if (ov) ov.style.display = 'flex';
   if (!_orchNodes.length) _orchLoadTemplate('endpoint');
   _orchRender();
+  _orchFetchRoleSchema();   // refresh structured-param fields (async, no-op if cached)
 }
 
 function closeOrchestration(evt) {
@@ -152,34 +206,37 @@ function _orchEnsureModal() {
     +              'oninput="_orchOnRename(this.value)" />'
     +     '</div>'
     +     '<div class="orch-top-actions">'
+    +       '<button class="orch-btn orch-btn-ghost orch-m-only orch-m-pal-btn" onclick="_orchToggleMobilePalette()">' + _ORCH_ICONS.plus + ' Nodes</button>'
+    +       '<button class="orch-btn orch-btn-ghost orch-m-only orch-m-insp-btn" onclick="_orchToggleMobileInspector()">' + _ORCH_ICONS.gear + ' Edit</button>'
     +       '<div class="orch-tpl-wrap">'
-    +         '<button class="orch-btn orch-btn-ghost" onclick="_orchToggleTplMenu()">✨ Templates ▾</button>'
+    +         '<button class="orch-btn orch-btn-ghost" onclick="_orchToggleTplMenu()">' + _ORCH_ICONS.wand + ' Templates ▾</button>'
     +         '<div class="orch-tpl-menu" id="orchTplMenu" style="display:none">'
-    +           '<button onclick="_orchLoadTemplate(\'endpoint\');_orchToggleTplMenu(true)">🔁 Endpoint loop (plan→work→critic)</button>'
-    +           '<button onclick="_orchLoadBuiltin(\'endpoint\');_orchToggleTplMenu(true)">⭐ Endpoint (canonical, backend)</button>'
-    +           '<button onclick="_orchLoadTemplate(\'fanout\');_orchToggleTplMenu(true)">🌐 Fan-out → synthesize</button>'
-    +           '<button onclick="_orchLoadTemplate(\'adversarial\');_orchToggleTplMenu(true)">⚔️ Adversarial verify</button>'
-    +           '<button onclick="_orchLoadTemplate(\'blank\');_orchToggleTplMenu(true)">➕ Blank canvas</button>'
+    +           '<button onclick="_orchLoadTemplate(\'endpoint\');_orchToggleTplMenu(true)">' + _ORCH_ICONS.loop + ' Endpoint loop (plan→work→critic)</button>'
+    +           '<button onclick="_orchLoadBuiltin(\'endpoint\');_orchToggleTplMenu(true)">' + _ORCH_ICONS.star + ' Endpoint (canonical, backend)</button>'
+    +           '<button onclick="_orchLoadTemplate(\'autopilot\');_orchToggleTplMenu(true)">' + _ORCH_ICONS.auto + ' Autopilot (worker ⇄ virtual user)</button>'
+    +           '<button onclick="_orchLoadTemplate(\'fanout\');_orchToggleTplMenu(true)">' + _ORCH_ICONS.fanout + ' Fan-out → synthesize</button>'
+    +           '<button onclick="_orchLoadTemplate(\'adversarial\');_orchToggleTplMenu(true)">' + _ORCH_ICONS.shield + ' Adversarial verify</button>'
+    +           '<button onclick="_orchLoadTemplate(\'blank\');_orchToggleTplMenu(true)">' + _ORCH_ICONS.plus + ' Blank canvas</button>'
     +         '</div>'
     +       '</div>'
     +       '<div class="orch-tpl-wrap">'
-    +         '<button class="orch-btn orch-btn-ghost" onclick="_orchOpenLoadMenu()">📂 Open ▾</button>'
+    +         '<button class="orch-btn orch-btn-ghost" onclick="_orchOpenLoadMenu()">' + _ORCH_ICONS.folder + ' Open ▾</button>'
     +         '<div class="orch-load-menu" id="orchLoadMenu" style="display:none"></div>'
     +       '</div>'
     +       '<button class="orch-btn orch-btn-ghost" onclick="_orchTidy()" title="Auto-arrange nodes into clean top-down lanes">⤓ Tidy</button>'
     +       '<span class="orch-top-sep" aria-hidden="true"></span>'
-    +       '<button class="orch-btn orch-btn-ghost" id="orchAiToggle" onclick="_orchToggleAi()">🪄 AI Composer</button>'
+    +       '<button class="orch-btn orch-btn-ghost" id="orchAiToggle" onclick="_orchToggleAi()">' + _ORCH_ICONS.wand + ' AI Composer</button>'
     +       '<span class="orch-top-sep" aria-hidden="true"></span>'
     +       '<button class="orch-btn orch-btn-run" onclick="_orchOpenRun()">▶ Run</button>'
     +       '<button class="orch-btn orch-btn-ghost" onclick="_orchExport()">⬇ Export JSON</button>'
-    +       '<button class="orch-btn orch-btn-primary" onclick="_orchSave()">💾 Save</button>'
+    +       '<button class="orch-btn orch-btn-primary" onclick="_orchSave()">' + _ORCH_ICONS.save + ' Save</button>'
     +       '<span class="orch-top-sep" aria-hidden="true"></span>'
     +       '<button class="orch-btn orch-btn-close" onclick="closeOrchestration()" title="Close">✕</button>'
     +     '</div>'
     +   '</header>'
     +   '<div class="orch-body">'
     +     '<aside class="orch-ai" id="orchAi">'
-    +       '<div class="orch-ai-head"><span>🪄 AI Composer</span>'
+    +       '<div class="orch-ai-head"><span>' + _ORCH_ICONS.wand + ' AI Composer</span>'
     +         '<button class="orch-ai-clear" onclick="_orchAiClear()" title="Clear chat">⟲</button></div>'
     +       '<div class="orch-ai-log" id="orchAiLog"></div>'
     +       '<div class="orch-ai-input">'
@@ -190,6 +247,7 @@ function _orchEnsureModal() {
     +     '</aside>'
     +     '<aside class="orch-palette" id="orchPalette"></aside>'
     +     '<main class="orch-canvas-wrap">'
+    +       '<div class="orch-crumb" id="orchCrumb" style="display:none"></div>'
     +       '<div class="orch-canvas" id="orchCanvas">'
     +         '<svg class="orch-edges" id="orchEdges"></svg>'
     +         '<div class="orch-nodes" id="orchNodes"></div>'
@@ -200,15 +258,17 @@ function _orchEnsureModal() {
     +   '</div>'
     +   '<div class="orch-run-drawer" id="orchRunDrawer">'
     +     '<div class="orch-run-head">'
-    +       '<span>▶ Run Flow</span>'
-    +       '<button class="orch-ai-clear" onclick="_orchCloseRun()" title="Close">✕</button>'
+    +       '<span>' + _ORCH_ICONS.rocket + ' ' + t('orch.run.title') + '</span>'
+    +       '<button class="orch-ai-clear" onclick="_orchCloseRun()" title="Close">' + _ORCH_ICONS.reject + '</button>'
     +     '</div>'
     +     '<div class="orch-run-input">'
     +       '<textarea id="orchRunInput" rows="2" placeholder="Initial request / input for the flow (optional)…"></textarea>'
+    +       '<div class="orch-run-hint">' + _ORCH_ICONS.eye + ' ' + t('orch.run.hint') + '</div>'
     +       '<div class="orch-run-actions">'
-    +         '<button class="orch-btn orch-btn-ghost" onclick="_orchPlan()">👁 Preview plan</button>'
-    +         '<button class="orch-btn orch-btn-run" id="orchRunBtn" onclick="_orchRun()">▶ Run</button>'
-    +         '<button class="orch-btn orch-btn-danger" id="orchRunAbort" onclick="_orchRunAbort()" style="display:none">Stop</button>'
+    +         '<button class="orch-btn orch-btn-ghost" onclick="_orchPlan()">' + _ORCH_ICONS.eye + ' ' + t('orch.run.previewPlan') + '</button>'
+    +         '<button class="orch-btn orch-btn-run" id="orchRunBtn" onclick="_orchRun()" title="' + t('orch.run.testRun') + '">' + _ORCH_ICONS.auto + ' ' + t('orch.run.testRun') + '</button>'
+    +         '<button class="orch-btn orch-btn-primary" id="orchRunTaskBtn" onclick="_orchRunAsTask()" title="' + t('orch.run.asTask') + '">' + _ORCH_ICONS.rocket + ' ' + t('orch.run.asTask') + '</button>'
+    +         '<button class="orch-btn orch-btn-danger" id="orchRunAbort" onclick="_orchRunAbort()" style="display:none">' + _ORCH_ICONS.stop + ' ' + t('orch.run.stop') + '</button>'
     +       '</div>'
     +     '</div>'
     +     '<div class="orch-run-log" id="orchRunLog"></div>'
@@ -220,6 +280,27 @@ function _orchEnsureModal() {
 
   _orchRenderPalette();
   _orchWireCanvas();
+  document.addEventListener('keydown', _orchOnKeyDown);
+}
+
+// Delete / Backspace removes the selected edge or node — making lines
+// first-class deletable objects like nodes. Only fires when the studio is
+// open AND focus is not inside a text field (so editing an objective /
+// label with Backspace never nukes the node).
+function _orchOnKeyDown(e) {
+  var ov = document.getElementById('orchModal');
+  if (!ov || ov.style.display === 'none') return;
+  if (e.key !== 'Delete' && e.key !== 'Backspace') return;
+  var tag = (e.target && e.target.tagName || '').toLowerCase();
+  if (tag === 'input' || tag === 'textarea' || tag === 'select'
+      || (e.target && e.target.isContentEditable)) return;
+  if (_orchSelEdge) {
+    e.preventDefault();
+    _orchDeleteEdge(_orchSelEdge);
+  } else if (_orchSel) {
+    e.preventDefault();
+    _orchDeleteNode(_orchSel);
+  }
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -231,7 +312,11 @@ function _orchRenderPalette() {
   if (!el) return;
   var base = _orchIconBase();
 
-  var html = '<div class="orch-pal-section">Control</div><div class="orch-pal-grid">';
+  var html = '<div class="orch-sheet-head orch-m-only">'
+           + '<span>' + _ORCH_ICONS.plus + ' ' + escapeHtml(t('orch.palette.agents')) + '</span>'
+           + '<button class="orch-ai-clear" onclick="_orchCloseMobilePalette()" title="Close">✕</button></div>';
+  html += '<div class="orch-m-only orch-sheet-hint">' + escapeHtml(t('orch.palette.tapHint')) + '</div>';
+  html += '<div class="orch-pal-section">' + escapeHtml(t('orch.palette.control')) + '</div><div class="orch-pal-grid">';
   _ORCH_CONTROLS.forEach(function (c) {
     html += '<div class="orch-chip orch-chip-ctrl" draggable="true" '
          +  'data-ptype="control" data-pkind="' + c.kind + '" '
@@ -242,7 +327,17 @@ function _orchRenderPalette() {
   });
   html += '</div>';
 
-  html += '<div class="orch-pal-section">Agents</div><div class="orch-pal-grid">';
+  // Group (subflow) — a black-box sub-flow that looks like one role.
+  html += '<div class="orch-pal-section">' + escapeHtml(t('orch.palette.group')) + '</div><div class="orch-pal-grid">';
+  html += '<div class="orch-chip orch-chip-ctrl orch-chip-group" draggable="true" '
+       +  'data-ptype="subflow" data-prole="general" '
+       +  'style="--chip-accent:#8b5cf6" title="' + escapeHtml(t('orch.group.chipTip')) + '">'
+       +    '<span class="orch-chip-glyph">' + _ORCH_GLYPHS.group + '</span>'
+       +    '<span class="orch-chip-label">' + escapeHtml(t('orch.group.chip')) + '</span>'
+       +  '</div>';
+  html += '</div>';
+
+  html += '<div class="orch-pal-section">' + escapeHtml(t('orch.palette.agents')) + '</div><div class="orch-pal-grid">';
   _ORCH_ROLES.forEach(function (r) {
     html += '<div class="orch-chip orch-chip-role" draggable="true" '
          +  'data-ptype="role" data-prole="' + r.role + '" '
@@ -253,20 +348,67 @@ function _orchRenderPalette() {
          +  '</div>';
   });
   html += '</div>';
-  html += '<div class="orch-pal-foot">Drag onto the canvas → wire ports → tune in the inspector.</div>';
+  html += '<div class="orch-pal-foot">' + escapeHtml(t('orch.palette.foot')) + '</div>';
   el.innerHTML = html;
 
   el.querySelectorAll('.orch-chip').forEach(function (chip) {
-    chip.addEventListener('dragstart', function (e) {
-      var payload = {
+    function _payload() {
+      return {
         ptype: chip.getAttribute('data-ptype'),
         role: chip.getAttribute('data-prole') || '',
         kind: chip.getAttribute('data-pkind') || '',
       };
-      e.dataTransfer.setData('text/orch', JSON.stringify(payload));
+    }
+    chip.addEventListener('dragstart', function (e) {
+      e.dataTransfer.setData('text/orch', JSON.stringify(_payload()));
       e.dataTransfer.effectAllowed = 'copy';
     });
+    // Touch devices can't HTML5-drag from the rail, so tap-to-add drops the
+    // node into the visible centre of the canvas and closes the palette sheet.
+    chip.addEventListener('click', function () {
+      if (!_orchIsMobile()) return;
+      _orchAddNodeAtCenter(_payload());
+      _orchCloseMobilePalette();
+    });
   });
+}
+
+// ── Mobile helpers ──────────────────────────────────────────────────
+// On phones the side rails become slide-up sheets and HTML5 drag is
+// replaced by tap-to-add; these helpers gate that behaviour on viewport.
+function _orchIsMobile() {
+  var q = (typeof window.mobileMediaQuery === 'function')
+    ? window.mobileMediaQuery() : '(max-width:768px)';
+  return window.matchMedia && window.matchMedia(q).matches;
+}
+
+function _orchAddNodeAtCenter(payload) {
+  var canvas = document.getElementById('orchCanvas');
+  if (!canvas) return;
+  var x = canvas.scrollLeft + canvas.clientWidth / 2 - _ORCH_CARD_W / 2;
+  var y = canvas.scrollTop + canvas.clientHeight / 2 - 40;
+  _orchAddNode(payload, Math.max(8, x), Math.max(8, y));
+}
+
+function _orchToggleMobilePalette() {
+  var shell = document.querySelector('.orch-shell');
+  if (!shell) return;
+  shell.classList.remove('orch-m-insp');
+  shell.classList.toggle('orch-m-pal');
+}
+function _orchCloseMobilePalette() {
+  var shell = document.querySelector('.orch-shell');
+  if (shell) shell.classList.remove('orch-m-pal');
+}
+function _orchToggleMobileInspector() {
+  var shell = document.querySelector('.orch-shell');
+  if (!shell) return;
+  shell.classList.remove('orch-m-pal');
+  shell.classList.toggle('orch-m-insp');
+}
+function _orchCloseMobileInspector() {
+  var shell = document.querySelector('.orch-shell');
+  if (shell) shell.classList.remove('orch-m-insp');
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -295,10 +437,11 @@ function _orchWireCanvas() {
     _orchAddNode(payload, Math.max(8, x), Math.max(8, y));
   });
 
-  // Click empty canvas → deselect.
+  // Click empty canvas → deselect (both node and edge).
   canvas.addEventListener('pointerdown', function (e) {
     if (e.target === canvas || e.target.id === 'orchNodes' || e.target.id === 'orchEdges') {
-      _orchSel = null; _orchRenderNodes(); _orchRenderInspector();
+      _orchSel = null; _orchSelEdge = null;
+      _orchRenderNodes(); _orchRenderEdges(); _orchRenderInspector();
     }
   });
 
@@ -317,7 +460,8 @@ function _orchAddNode(payload, x, y) {
     }
   }
   var node = {
-    id: _orchNextId(payload.ptype === 'role' ? payload.role : payload.kind),
+    id: _orchNextId(payload.ptype === 'role' ? payload.role
+                    : payload.ptype === 'subflow' ? 'group' : payload.kind),
     type: payload.ptype,
     role: payload.role || '',
     kind: payload.kind || '',
@@ -330,12 +474,38 @@ function _orchAddNode(payload, x, y) {
   _orchRender();
 }
 
+// A freshly-dropped Group must carry a VALID embedded child definition or
+// the parent fails backend validation (a subflow node requires
+// params.definition or params.ref — see lib/orchestration._validate_subflow_node).
+// Seed it with the minimal runnable flow: start → general agent → stop.
+function _orchBlankGroupDefinition() {
+  return {
+    schema: 'tofu.orchestration/v1',
+    name: t('orch.group.defaultLabel'),
+    nodes: [
+      { id: 'gstart', type: 'control', kind: 'start', params: {} },
+      { id: 'gagent', type: 'role', role: 'general',
+        params: { objective: '', tier: 'standard', isolation: 'fresh-context' } },
+      { id: 'gstop', type: 'control', kind: 'stop', params: {} },
+    ],
+    edges: [
+      { from: 'gstart', to: 'gagent' },
+      { from: 'gagent', to: 'gstop' },
+    ],
+  };
+}
+
 function _orchDefaultParams(payload) {
   if (payload.ptype === 'role') {
-    var rdef = _ORCH_ROLES.filter(function (r) { return r.role === payload.role; })[0] || {};
+    var rdef = /** @type {any} */ (_ORCH_ROLES.filter(function (r) { return r.role === payload.role; })[0] || {});
     return { objective: '', tier: rdef.tier || 'standard', isolation: 'fresh-context' };
   }
+  if (payload.ptype === 'subflow') {
+    // Default scope = isolated (a true black box) — the whole point of a Group.
+    return { scope: 'isolated', definition: _orchBlankGroupDefinition() };
+  }
   switch (payload.kind) {
+    case 'start':    return { seed: '' };
     case 'loop':     return { max_iterations: 10, stop_condition: 'verdict:STOP', verifier: 'critic' };
     case 'parallel': return { max_concurrent: 8, per_item: true };
     case 'branch':   return { classifier: 'router', branches: 2 };
@@ -433,12 +603,15 @@ function _orchDeleteNode(id) {
   _orchNodes = _orchNodes.filter(function (n) { return n.id !== id; });
   _orchEdges = _orchEdges.filter(function (e) { return e.from !== id && e.to !== id; });
   if (_orchSel === id) _orchSel = null;
+  _orchSelEdge = null;   // an edge touching this node may have vanished
   _orchRender();
 }
 
 function _orchDeleteEdge(id) {
   _orchEdges = _orchEdges.filter(function (e) { return e.id !== id; });
+  if (_orchSelEdge === id) _orchSelEdge = null;
   _orchRenderEdges();
+  _orchRenderInspector();
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -452,6 +625,7 @@ function _orchRender() {
   _orchRenderEdges();
   _orchRenderInspector();
   _orchRenderHint();
+  _orchRenderBreadcrumb();
 }
 
 function _orchRenderHint() {
@@ -460,10 +634,10 @@ function _orchRenderHint() {
   h.style.display = _orchNodes.length ? 'none' : 'block';
   if (!_orchNodes.length) {
     h.innerHTML = '<div class="orch-hint-card">'
-      + '<div class="orch-hint-emoji">🧩</div>'
+      + '<div class="orch-hint-emoji">' + _ORCH_ICONS.puzzle + '</div>'
       + '<div class="orch-hint-title">Compose a flow</div>'
       + '<div class="orch-hint-text">Drag a <b>Start</b> node and some agents from the left, '
-      + 'then drag between the ● ports to wire them. Try a template ✨ to see a working loop.</div>'
+      + 'then drag between the ● ports to wire them. Load a template to see a working loop.</div>'
       + '</div>';
   }
 }
@@ -476,15 +650,23 @@ function _orchRenderNodes() {
   _orchNodes.forEach(function (n) {
     var selCls = (_orchSel === n.id) ? ' is-selected' : '';
     var accent, iconHtml, sub, typeCls;
-    if (n.type === 'role') {
-      var rdef = _ORCH_ROLES.filter(function (r) { return r.role === n.role; })[0] || {};
+    if (n.type === 'subflow') {
+      accent = '#8b5cf6';
+      typeCls = ' orch-node-group';
+      iconHtml = _ORCH_GLYPHS.group;
+      sub = _orchGroupSub(n);
+    } else if (n.type === 'role') {
+      var rdef = /** @type {any} */ (_ORCH_ROLES.filter(function (r) { return r.role === n.role; })[0] || {});
       accent = '#6e56cf';
       typeCls = ' orch-node-role';
       iconHtml = '<img src="' + _orchIconSrc(rdef.icon) + '" alt="" '
                + 'onerror="this.style.display=\'none\'">';
       sub = escapeHtml(n.params.tier || 'standard') + ' · ' + escapeHtml(n.params.isolation || 'fresh');
+      var _eff = n.params.emits || _orchDefaultEmits(n.role);
+      if (_eff === 'user') sub += ' · ' + _ORCH_ICONS.speak + 'user';
+      sub += _orchIoBadge(n);
     } else {
-      var cdef = _ORCH_CONTROLS.filter(function (c) { return c.kind === n.kind; })[0] || {};
+      var cdef = /** @type {any} */ (_ORCH_CONTROLS.filter(function (c) { return c.kind === n.kind; })[0] || {});
       accent = cdef.accent || '#888';
       typeCls = ' orch-node-ctrl orch-node-' + (n.kind || 'ctrl');
       iconHtml = _ORCH_GLYPHS[cdef.glyph] || '';
@@ -497,10 +679,18 @@ function _orchRenderNodes() {
     html += '<div class="orch-node' + typeCls + selCls + '" id="orch-node-' + n.id + '" '
          +  'style="left:' + n.x + 'px;top:' + n.y + 'px;--node-accent:' + accent + '" '
          +  'onpointerdown="_orchSelectNode(\'' + n.id + '\')">';
+    if (n.kind === 'start') {
+      html += '<span class="orch-node-ribbon orch-ribbon-in">INPUT</span>';
+    } else if (n.kind === 'stop') {
+      html += '<span class="orch-node-ribbon orch-ribbon-out">RESULT</span>';
+    }
     if (hasIn) {
       html += '<span class="orch-port orch-port-in" onpointerup="_orchPortUp(event,\'' + n.id + '\')"></span>';
     }
-    html += '<div class="orch-node-head" onpointerdown="_orchNodeHeaderDown(event,\'' + n.id + '\')">'
+    var headExtra = (n.type === 'subflow')
+      ? ' ondblclick="_orchEnterGroup(\'' + n.id + '\')" title="' + escapeHtml(t('orch.group.chipTip')) + '"'
+      : '';
+    html += '<div class="orch-node-head" onpointerdown="_orchNodeHeaderDown(event,\'' + n.id + '\')"' + headExtra + '>'
          +    '<span class="orch-node-icon">' + iconHtml + '</span>'
          +    '<span class="orch-node-title">' + title + '</span>'
          +    '<button class="orch-node-del" onpointerdown="event.stopPropagation()" '
@@ -524,12 +714,35 @@ function _orchControlSub(n) {
     var hm = { approve: 'approval gate', input: 'collect input', notify: 'notify user' };
     return hm[n.params.mode] || 'approval gate';
   }
-  if (n.kind === 'start') return 'user request enters here';
+  if (n.kind === 'start') {
+    var sd = ((n.params && n.params.seed) || '').trim();
+    return sd ? '\u25b6 ' + escapeHtml(sd.slice(0, 42)) : 'click to set the input \u25b8';
+  }
   if (n.kind === 'stop') return 'result returns to chat';
   return '';
 }
 
+function _orchGroupSub(n) {
+  var d = (n.params && n.params.definition) || {};
+  var nn = (d.nodes || []).length;
+  var scope = (n.params && n.params.scope) || 'isolated';
+  var glyph = (scope === 'isolated') ? '\u25a3' : '\u25a4';   // ▣ box / ▤ flatten
+  return glyph + ' ' + escapeHtml(scope) + ' · ' + nn + ' nodes' + _orchIoBadge(n);
+}
+
+// A compact "⇄ Ni/No" badge when a node declares a typed I/O contract, so
+// the card surfaces at a glance that it has named ports (Dify-style).
+function _orchIoBadge(n) {
+  var io = n.params && n.params.io;
+  if (!io) return '';
+  var ni = Array.isArray(io.inputs) ? io.inputs.length : 0;
+  var no = Array.isArray(io.outputs) ? io.outputs.length : 0;
+  if (!ni && !no) return '';
+  return ' · <span class="orch-io-badge">\u21c4 ' + ni + '/' + no + '</span>';
+}
+
 function _orchAutoLabel(n) {
+  if (n.type === 'subflow') return t('orch.group.defaultLabel');
   if (n.type === 'role') {
     var r = _ORCH_ROLES.filter(function (x) { return x.role === n.role; })[0];
     return r ? r.label : n.role;
@@ -538,11 +751,443 @@ function _orchAutoLabel(n) {
   return c ? c.label : n.kind;
 }
 
+// One-word class label for a node (Agent / Group / Control).
+function _orchKindLabel(n) {
+  return (n.type === 'subflow') ? t('orch.kind.group')
+       : (n.type === 'role') ? t('orch.kind.agent') : t('orch.kind.control');
+}
+
+// The node's identity blurb (the same one the palette shows).
+function _orchNodeBlurb(n) {
+  if (n.type === 'role') {
+    var r = _ORCH_ROLES.filter(function (x) { return x.role === n.role; })[0];
+    return r ? r.blurb : '';
+  }
+  if (n.type === 'subflow') return '';
+  var c = _ORCH_CONTROLS.filter(function (x) { return x.kind === n.kind; })[0];
+  return c ? c.blurb : '';
+}
+
+// Avatar shown in the inspector header: the role's mascot image, or a
+// theme-colored control glyph.
+function _orchInspAvatar(n) {
+  if (n.type === 'role') {
+    var r = _ORCH_ROLES.filter(function (x) { return x.role === n.role; })[0];
+    return '<img class="orch-insp-avatar" src="'
+      + escapeHtml(_orchIconSrc(r ? r.icon : 'tofu-general')) + '" alt="">';
+  }
+  if (n.type === 'subflow') {
+    return '<span class="orch-insp-avatar orch-insp-glyph">' + _ORCH_GLYPHS.group + '</span>';
+  }
+  var c = _ORCH_CONTROLS.filter(function (x) { return x.kind === n.kind; })[0];
+  var glyph = _ORCH_GLYPHS[(c && c.glyph) || n.kind] || _ORCH_GLYPHS.play;
+  var accent = c ? c.accent : 'var(--accent)';
+  return '<span class="orch-insp-avatar orch-insp-glyph" style="--node-accent:' + accent + '">'
+    + glyph + '</span>';
+}
+
+// Inspector header: avatar + kind eyebrow + name + blurb.
+function _orchInspHeader(n) {
+  var h = '<div class="orch-insp-head">' + _orchInspAvatar(n)
+    + '<div class="orch-insp-htext">'
+    + '<span class="orch-insp-kind">' + escapeHtml(_orchKindLabel(n)) + '</span>'
+    + '<span class="orch-insp-type">' + escapeHtml(_orchAutoLabel(n)) + '</span>'
+    + '</div></div>';
+  var blurb = _orchNodeBlurb(n);
+  if (blurb) h += '<div class="orch-insp-blurb">' + escapeHtml(blurb) + '</div>';
+  return h;
+}
+
+// A collapsible inspector section. `hintKey` (optional) renders a compact
+// muted help line at the top of the body — this replaces the old always-on
+// filled prose boxes that dominated the rail.
+function _orchSec(titleKey, icon, open, inner, hintKey) {
+  var h = '<details class="orch-sec"' + (open ? ' open' : '') + '>';
+  h += '<summary class="orch-sec-sum">' + (icon || '')
+    + '<span>' + escapeHtml(t(titleKey)) + '</span>'
+    + '<span class="orch-sec-chev">\u203a</span></summary>';
+  h += '<div class="orch-sec-body">';
+  if (hintKey) h += '<div class="orch-sec-hint">' + t(hintKey) + '</div>';
+  h += inner + '</div></details>';
+  return h;
+}
+
 function _orchSelectNode(id) {
   if (_orchDragNode) return;     // selection happens via header-down already
   _orchSel = id;
+  _orchSelEdge = null;
   _orchRenderNodes();
+  _orchRenderEdges();
   _orchRenderInspector();
+}
+
+// Select an edge (mutually exclusive with node selection). The inspector
+// then shows the edge panel; Delete/Backspace removes it.
+function _orchSelectEdge(id) {
+  _orchSelEdge = id;
+  _orchSel = null;
+  _orchRenderNodes();
+  _orchRenderEdges();
+  _orchRenderInspector();
+}
+
+// Edge inspector panel: shows the wiring (from → to), an optional typed
+// data-binding (which producer OUTPUT feeds which consumer INPUT), a
+// reverse button, and a delete button. The binding is only offered when
+// the target node declares typed io.inputs (see the I/O editor below).
+function _orchRenderEdgeInspector(edge) {
+  var from = _orchFind(edge.from), to = _orchFind(edge.to);
+  var fromLbl = from ? escapeHtml(from.name || _orchAutoLabel(from)) : escapeHtml(edge.from);
+  var toLbl = to ? escapeHtml(to.name || _orchAutoLabel(to)) : escapeHtml(edge.to);
+  var h = '<div class="orch-sheet-head orch-m-only"><span>' + _ORCH_ICONS.gear + ' '
+        + escapeHtml(t('orch.edge.title')) + '</span>'
+        + '<button class="orch-ai-clear" onclick="_orchCloseMobileInspector()" title="Close">✕</button></div>';
+  h += '<div class="orch-insp-head">'
+     + '<span class="orch-insp-kind">' + escapeHtml(t('orch.edge.title')) + '</span>'
+     + '<span class="orch-insp-type">' + fromLbl + ' → ' + toLbl + '</span></div>';
+  h += '<div class="orch-edge-flow"><b>' + fromLbl + '</b> '
+     + '<span class="orch-edge-arrowtxt">→</span> <b>' + toLbl + '</b></div>';
+
+  // Typed data binding: if the TARGET declares io.inputs, let the user bind
+  // each input port to one of the SOURCE node's outputs. This makes the line
+  // carry a concrete value (Dify-style), persisted on the target's
+  // params.io.inputs[].from as '<sourceId>' or '<sourceId>.<outName>'.
+  var inPorts = to ? _orchNodeInputs(to) : [];
+  if (inPorts.length && from) {
+    var srcOuts = _orchNodeOutputs(from);
+    h += '<div class="orch-note orch-note-wire">' + t('orch.edge.bindNote') + '</div>';
+    inPorts.forEach(function (ip, idx) {
+      var optList = [['', t('orch.edge.bindNone')]];
+      srcOuts.forEach(function (op) {
+        var ref = (op.name === 'text' && srcOuts.length === 1) ? from.id : (from.id + '.' + op.name);
+        optList.push([ref, op.name + ' (' + (op.type || 'any') + ')']);
+      });
+      var cur = (ip.from && (ip.from === from.id || ip.from.indexOf(from.id + '.') === 0)) ? ip.from : '';
+      var o = optList.map(function (p) {
+        return '<option value="' + escapeHtml(p[0]) + '"' + (p[0] === cur ? ' selected' : '') + '>' + escapeHtml(p[1]) + '</option>';
+      }).join('');
+      h += '<label class="orch-fld"><span>' + escapeHtml(t('orch.edge.bindTo', { port: ip.name })) + '</span>'
+         + '<select class="orch-input" onchange="_orchBindEdgeInput(\'' + edge.to + '\',' + idx + ', this.value)">'
+         + o + '</select></label>';
+    });
+  }
+
+  h += '<div class="orch-edge-btns">';
+  h += '<button class="orch-btn orch-btn-ghost orch-btn-block" onclick="_orchReverseEdge(\'' + edge.id + '\')">'
+     + escapeHtml(t('orch.edge.reverse')) + '</button>';
+  h += '<button class="orch-btn orch-btn-danger orch-btn-block" onclick="_orchDeleteEdge(\'' + edge.id + '\')">'
+     + escapeHtml(t('orch.edge.delete')) + '</button>';
+  h += '</div>';
+  return h;
+}
+
+// Reverse an edge's direction (respecting start/stop port rules).
+function _orchReverseEdge(id) {
+  var e = _orchEdges.filter(function (x) { return x.id === id; })[0];
+  if (!e) return;
+  var s = _orchFind(e.to), d = _orchFind(e.from);
+  if (s && s.kind === 'stop') { _orchToast(t('orch.toast.stopNoOut')); return; }
+  if (d && d.kind === 'start') { _orchToast(t('orch.toast.startNoIn')); return; }
+  if (_orchEdges.some(function (x) { return x.from === e.to && x.to === e.from; })) {
+    _orchToast(t('orch.toast.dupEdge')); return;
+  }
+  var tmp = e.from; e.from = e.to; e.to = tmp;
+  _orchRenderEdges();
+  _orchRenderInspector();
+}
+
+// Bind a target node's input port (by index) to a producer output ref.
+// Stores onto the target's params.io.inputs[idx].from; '' clears it.
+function _orchBindEdgeInput(targetId, idx, ref) {
+  var n = _orchFind(targetId);
+  if (!n) return;
+  var io = /** @type {any} */ (n.params.io = n.params.io || {});
+  var inputs = (io.inputs = io.inputs || []);
+  if (!inputs[idx]) return;
+  if (ref) inputs[idx].from = ref;
+  else delete inputs[idx].from;
+  _orchRenderNodes();
+}
+
+// Read a node's declared input ports (params.io.inputs), or [] when none.
+function _orchNodeInputs(n) {
+  var io = n && n.params && n.params.io;
+  return (io && Array.isArray(io.inputs)) ? io.inputs : [];
+}
+
+// Read a node's declared output ports, or the implicit single 'text' output.
+function _orchNodeOutputs(n) {
+  var io = n && n.params && n.params.io;
+  if (io && Array.isArray(io.outputs) && io.outputs.length) return io.outputs;
+  return [{ name: 'text', type: 'text' }];
+}
+
+// Valid io port types (mirrors lib.orchestration.VALID_IO_TYPES; refreshed
+// from /role-schema's ioTypes when available).
+var _ORCH_IO_TYPES = ['text', 'json', 'artifact', 'file', 'number', 'bool', 'any'];
+
+// ── Typed I/O contract editor (node inspector) ──
+// Renders the node's declared input + output ports — the authoring surface
+// for the Dify-style strict I/O contract: outputs name what a node produces
+// (a pure-NL node = one 'text' output; a tool-heavy worker adds an 'artifact'
+// output to expose its change manifest), inputs name + type what it consumes
+// and wire to an upstream producer's output via `from`. Returned as the inner
+// HTML of the collapsible "Data I/O" section (the enclosing _orchSec provides
+// the title + help note), so it carries NO <details> wrapper itself.
+function _orchIoSectionBody(n) {
+  var io = (n.params && n.params.io) || {};
+  var inputs = Array.isArray(io.inputs) ? io.inputs : [];
+  var outputs = Array.isArray(io.outputs) ? io.outputs : [];
+  var typeOpts = function (cur) {
+    return _ORCH_IO_TYPES.map(function (ty) {
+      return '<option value="' + ty + '"' + (ty === cur ? ' selected' : '') + '>' + ty + '</option>';
+    }).join('');
+  };
+
+  var h = '';
+
+  // Outputs
+  h += '<div class="orch-io-head">' + escapeHtml(t('orch.io.outputs')) + '</div>';
+  if (!outputs.length) {
+    h += '<div class="orch-io-implicit">' + escapeHtml(t('orch.io.implicitOut')) + '</div>';
+  }
+  outputs.forEach(function (p, i) {
+    h += '<div class="orch-io-port">'
+      + '<input class="orch-input orch-io-name" value="' + escapeHtml(p.name || '') + '" '
+      + 'placeholder="name" oninput="_orchIoSet(\'outputs\',' + i + ',\'name\',this.value)">'
+      + '<select class="orch-input orch-io-type" onchange="_orchIoSet(\'outputs\',' + i + ',\'type\',this.value)">'
+      + typeOpts(p.type || 'text') + '</select>'
+      + '<button class="orch-io-del" title="' + escapeHtml(t('orch.io.removePort')) + '" '
+      + 'onclick="_orchIoRemove(\'outputs\',' + i + ')">✕</button></div>';
+  });
+  h += '<button class="orch-btn orch-btn-ghost orch-io-add" onclick="_orchIoAdd(\'outputs\')">'
+    + _ORCH_ICONS.plus + ' ' + escapeHtml(t('orch.io.addOutput')) + '</button>';
+
+  // Inputs — each is a labelled box pairing the port (name + type) with the
+  // upstream output that FEEDS it. The `from` selector only offers outputs
+  // of nodes wired ahead of this one (Dify-style), so the value an input
+  // carries is always a concrete, traceable upstream producer.
+  h += '<div class="orch-io-head orch-io-head-in">' + escapeHtml(t('orch.io.inputs')) + '</div>';
+  if (inputs.length) {
+    h += '<div class="orch-io-subhint">' + escapeHtml(t('orch.io.inputsHint')) + '</div>';
+  }
+  var hasUpstream = false;
+  var up = _orchUpstreamIds(n.id);
+  _orchNodes.forEach(function (m) {
+    if (m.id !== n.id && m.kind !== 'start' && m.kind !== 'stop' && up[m.id]) hasUpstream = true;
+  });
+  inputs.forEach(function (p, i) {
+    h += '<div class="orch-io-portbox">'
+      + '<div class="orch-io-port">'
+      + '<input class="orch-input orch-io-name" value="' + escapeHtml(p.name || '') + '" '
+      + 'placeholder="name" oninput="_orchIoSet(\'inputs\',' + i + ',\'name\',this.value)">'
+      + '<select class="orch-input orch-io-type" onchange="_orchIoSet(\'inputs\',' + i + ',\'type\',this.value)">'
+      + typeOpts(p.type || 'text') + '</select>'
+      + '<button class="orch-io-del" title="' + escapeHtml(t('orch.io.removePort')) + '" '
+      + 'onclick="_orchIoRemove(\'inputs\',' + i + ')">✕</button></div>';
+    h += '<div class="orch-io-fromrow"><span class="orch-io-fromlbl">' + escapeHtml(t('orch.io.fromLabel')) + '</span>'
+      + '<select class="orch-input orch-io-from" onchange="_orchIoSet(\'inputs\',' + i + ',\'from\',this.value)">'
+      + _orchIoFromOptions(n, p.from) + '</select></div>';
+    h += '</div>';
+  });
+  if (inputs.length && !hasUpstream) {
+    h += '<div class="orch-io-empty">' + escapeHtml(t('orch.io.noUpstream')) + '</div>';
+  }
+  h += '<button class="orch-btn orch-btn-ghost orch-io-add" onclick="_orchIoAdd(\'inputs\')">'
+    + _ORCH_ICONS.plus + ' ' + escapeHtml(t('orch.io.addInput')) + '</button>';
+
+  // Preset: make this a "tool-heavy worker" (summary + changes outputs).
+  if (n.type === 'role') {
+    h += '<div class="orch-io-subhint">' + escapeHtml(t('orch.io.presetHint')) + '</div>';
+    h += '<button class="orch-btn orch-btn-ghost orch-io-preset" onclick="_orchIoToolHeavyPreset()">'
+      + escapeHtml(t('orch.io.toolHeavyPreset')) + '</button>';
+  }
+  return h;
+}
+
+// Set of node ids that are UPSTREAM of `id` (reachable by walking edges
+// backward). An input can only be fed by a node that actually flows into
+// this one — Dify-style: data travels along wired edges, you can't bind to
+// a node that isn't connected ahead of you.
+function _orchUpstreamIds(id) {
+  var seen = {};
+  var stack = [id];
+  while (stack.length) {
+    var cur = stack.pop();
+    _orchEdges.forEach(function (e) {
+      if (e.to === cur && !seen[e.from]) { seen[e.from] = true; stack.push(e.from); }
+    });
+  }
+  return seen;
+}
+
+// Build the <option>s for an input's `from` ref: 'start' + the outputs of
+// every node WIRED UPSTREAM of `self` (so a binding always corresponds to a
+// real incoming edge). A currently-bound ref that is no longer upstream is
+// still listed (flagged) so the user can see and fix a stale wire.
+function _orchIoFromOptions(self, cur) {
+  var up = _orchUpstreamIds(self.id);
+  var opts = [['', t('orch.edge.bindNone')], ['start', t('orch.io.fromStart')]];
+  var curStillListed = !cur || cur === 'start';
+  _orchNodes.forEach(function (m) {
+    if (m.id === self.id || m.kind === 'start' || m.kind === 'stop') return;
+    if (!up[m.id]) return;
+    var outs = _orchNodeOutputs(m);
+    var lbl = m.name || _orchAutoLabel(m);
+    outs.forEach(function (op) {
+      var ref = (op.name === 'text' && outs.length === 1) ? m.id : (m.id + '.' + op.name);
+      opts.push([ref, lbl + ' · ' + op.name]);
+      if (ref === cur) curStillListed = true;
+    });
+  });
+  if (!curStillListed) {
+    var sid = (cur.indexOf('.') !== -1) ? cur.slice(0, cur.indexOf('.')) : cur;
+    var sm = _orchFind(sid);
+    var slbl = sm ? (sm.name || _orchAutoLabel(sm)) : sid;
+    opts.push([cur, t('orch.io.fromStale', { node: slbl })]);
+  }
+  return opts.map(function (p) {
+    return '<option value="' + escapeHtml(p[0]) + '"' + (p[0] === cur ? ' selected' : '') + '>' + escapeHtml(p[1]) + '</option>';
+  }).join('');
+}
+
+function _orchIoEnsure(n) {
+  n.params.io = n.params.io || {};
+  return n.params.io;
+}
+
+function _orchIoAdd(side) {
+  var n = _orchFind(_orchSel);
+  if (!n) return;
+  var io = _orchIoEnsure(n);
+  io[side] = io[side] || [];
+  var base = side === 'outputs' ? 'out' : 'in';
+  io[side].push({ name: base + (io[side].length + 1), type: 'text' });
+  _orchRenderInspector();
+  _orchRenderNodes();
+}
+
+function _orchIoRemove(side, i) {
+  var n = _orchFind(_orchSel);
+  if (!n || !n.params.io || !n.params.io[side]) return;
+  n.params.io[side].splice(i, 1);
+  if (!n.params.io[side].length) delete n.params.io[side];
+  if (n.params.io && !n.params.io.inputs && !n.params.io.outputs) delete n.params.io;
+  _orchRenderInspector();
+  _orchRenderNodes();
+}
+
+function _orchIoSet(side, i, key, value) {
+  var n = _orchFind(_orchSel);
+  if (!n || !n.params.io || !n.params.io[side] || !n.params.io[side][i]) return;
+  if (key === 'from' && !value) delete n.params.io[side][i].from;
+  else n.params.io[side][i][key] = value;
+  // A 'from' change shouldn't blow away focus on a name field, so only the
+  // node card needs re-render for type/from; name edits re-render lazily.
+  if (key !== 'name') _orchRenderNodes();
+}
+
+// One-click preset: declare the canonical tool-heavy-worker output pair —
+// a human-readable 'summary' (text) + a machine-readable 'changes'
+// (artifact) manifest the engine fills from the worker's tool log.
+function _orchIoToolHeavyPreset() {
+  var n = _orchFind(_orchSel);
+  if (!n) return;
+  var io = _orchIoEnsure(n);
+  io.outputs = [{ name: 'summary', type: 'text' }, { name: 'changes', type: 'artifact' }];
+  _orchRenderInspector();
+  _orchRenderNodes();
+}
+
+// ── Nested-canvas navigation (Group / subflow black box) ──
+// Load working canvas arrays from a child definition (without touching
+// _orchCurrentId — that belongs to the ROOT flow only).
+function _orchLoadWorkingFromDef(def) {
+  _orchName = def.name || t('orch.group.defaultLabel');
+  _orchSel = null; _orchSeq = 0;
+  _orchNodes = (def.nodes || []).map(function (n) {
+    return {
+      id: n.id, type: n.type, role: n.role || '', kind: n.kind || '',
+      x: (n.pos && n.pos.x) || 20, y: (n.pos && n.pos.y) || 20,
+      name: n.name || '', params: n.params || {},
+    };
+  });
+  _orchNodes.forEach(function (n) {
+    var m = /(\d+)$/.exec(n.id || '');
+    if (m) _orchSeq = Math.max(_orchSeq, parseInt(m[1], 10));
+  });
+  _orchEdges = (def.edges || []).map(function (e) {
+    return { id: _orchNextId('e'), from: e.from, to: e.to };
+  });
+  _orchRender();
+  var needsLayout = (def.nodes || []).some(function (n) {
+    return !n.pos || typeof n.pos.x !== 'number' || typeof n.pos.y !== 'number';
+  });
+  if (needsLayout && _orchNodes.length) _orchTidy({ silent: true });
+}
+
+// Descend into a Group node: push the current level, edit its child flow.
+function _orchEnterGroup(id) {
+  var n = _orchFind(id);
+  if (!n || n.type !== 'subflow') return;
+  _orchStack.push({
+    nodes: _orchNodes, edges: _orchEdges, sel: _orchSel,
+    seq: _orchSeq, name: _orchName, groupId: id,
+  });
+  var def = (n.params && n.params.definition) || _orchBlankGroupDefinition();
+  _orchLoadWorkingFromDef(def);
+}
+
+// Commit the current child level back into its parent Group node and pop
+// one frame. The serialized child becomes params.definition (and any stale
+// ref is dropped — an edited embedded child is authoritative).
+function _orchExitGroup() {
+  if (!_orchStack.length) return;
+  var childDef = _orchToDefinition();
+  var frame = _orchStack.pop();
+  _orchNodes = frame.nodes; _orchEdges = frame.edges;
+  _orchSel = frame.sel; _orchSeq = frame.seq; _orchName = frame.name;
+  var gnode = _orchFind(frame.groupId);
+  if (gnode) {
+    gnode.params = gnode.params || {};
+    gnode.params.definition = childDef;
+    delete gnode.params.ref;
+  }
+  _orchRender();
+}
+
+// Collapse all open group frames back to the root flow. Called before any
+// operation that must act on the WHOLE flow (save / export / run / plan).
+function _orchFlushToRoot() {
+  while (_orchStack.length) _orchExitGroup();
+}
+
+// Jump straight to a given depth (breadcrumb click). 0 = root.
+function _orchCrumbTo(depth) {
+  while (_orchStack.length > depth) _orchExitGroup();
+}
+
+function _orchRenderBreadcrumb() {
+  var el = document.getElementById('orchCrumb');
+  if (!el) return;
+  if (!_orchStack.length) { el.style.display = 'none'; el.innerHTML = ''; return; }
+  el.style.display = 'flex';
+  var parts = ['<button class="orch-crumb-item" onclick="_orchCrumbTo(0)">'
+    + escapeHtml(t('orch.crumb.root')) + '</button>'];
+  _orchStack.forEach(function (frame, i) {
+    // A frame's label = the GROUP node's label on its parent level, which
+    // is stored in that frame's own nodes array (the parent's working set).
+    var gn = null;
+    for (var k = 0; k < frame.nodes.length; k++) {
+      if (frame.nodes[k].id === frame.groupId) { gn = frame.nodes[k]; break; }
+    }
+    var lbl = (gn && (gn.name || _orchAutoLabel(gn))) || t('orch.group.defaultLabel');
+    parts.push('<span class="orch-crumb-sep">\u203a</span>');
+    // Clicking a crumb returns to the level INSIDE that group (depth i+1).
+    parts.push('<button class="orch-crumb-item" onclick="_orchCrumbTo(' + (i + 1) + ')">'
+      + escapeHtml(lbl) + '</button>');
+  });
+  el.innerHTML = parts.join('');
 }
 
 // ── Edges (SVG bezier layer) ──
@@ -562,8 +1207,8 @@ function _orchRenderEdges() {
   var svg = document.getElementById('orchEdges');
   var canvas = document.getElementById('orchCanvas');
   if (!svg || !canvas) return;
-  svg.setAttribute('width', canvas.scrollWidth);
-  svg.setAttribute('height', canvas.scrollHeight);
+  svg.setAttribute('width', String(canvas.scrollWidth));
+  svg.setAttribute('height', String(canvas.scrollHeight));
 
   // Arrowhead marker (rebuilt each render since we replace innerHTML wholesale).
   // A slim concave chevron (the M..L..L..L back-notch) reads sharper than a
@@ -595,8 +1240,14 @@ function _orchRenderEdges() {
     var ii = (inSeen[e.to] = (inSeen[e.to] || 0)); inSeen[e.to]++;
     a = { x: a.x + fanOffset(oi, outCount[e.from]), y: a.y };
     b = { x: b.x + fanOffset(ii, inCount[e.to]), y: b.y };
-    parts += '<path class="orch-edge-path" marker-end="url(#orchArrow)" d="' + _orchBezier(a, b) + '" '
-          +  'onclick="_orchDeleteEdge(\'' + e.id + '\')"><title>Click to remove</title></path>';
+    var selCls = (_orchSelEdge === e.id) ? ' is-selected' : '';
+    // A wide transparent "hit" path under the visible one widens the
+    // click/selection target (a 2px stroke is hard to hit precisely).
+    parts += '<path class="orch-edge-hit" d="' + _orchBezier(a, b) + '" '
+          +  'onclick="_orchSelectEdge(\'' + e.id + '\')"></path>';
+    parts += '<path class="orch-edge-path' + selCls + '" marker-end="url(#orchArrow)" d="' + _orchBezier(a, b) + '" '
+          +  'onclick="_orchSelectEdge(\'' + e.id + '\')"><title>'
+          +  escapeHtml(t('orch.edge.clickTip')) + '</title></path>';
   });
 
   if (_orchConnect) {
@@ -644,93 +1295,173 @@ function _orchBezier(a, b) {
 function _orchRenderInspector() {
   var el = document.getElementById('orchInspector');
   if (!el) return;
+  // An edge selection takes over the inspector with a dedicated panel.
+  if (_orchSelEdge) {
+    var edge = _orchEdges.filter(function (e) { return e.id === _orchSelEdge; })[0];
+    if (edge) {
+      if (_orchIsMobile()) {
+        var esh = el.closest('.orch-shell');
+        if (esh) { esh.classList.add('orch-m-insp'); esh.classList.remove('orch-m-pal'); }
+      }
+      el.innerHTML = _orchRenderEdgeInspector(edge);
+      return;
+    }
+    _orchSelEdge = null;   // stale id — fall through to node/empty rendering
+  }
+
   var n = _orchSel ? _orchFind(_orchSel) : null;
+  // On mobile the inspector is a slide-up sheet: open it when a node is
+  // selected, close it when selection clears (e.g. tap on empty canvas).
+  if (_orchIsMobile()) {
+    var shell = el.closest('.orch-shell');
+    if (shell) {
+      if (n) { shell.classList.add('orch-m-insp'); shell.classList.remove('orch-m-pal'); }
+      else { shell.classList.remove('orch-m-insp'); }
+    }
+  }
   if (!n) {
     el.innerHTML = '<div class="orch-insp-empty">'
-      + '<div class="orch-insp-empty-icon">⚙️</div>'
-      + 'Select a node to edit its settings.'
-      + '<div class="orch-insp-stats">' + _orchNodes.length + ' nodes · ' + _orchEdges.length + ' links</div>'
+      + '<div class="orch-insp-empty-icon">' + _ORCH_ICONS.gear + '</div>'
+      + escapeHtml(t('orch.insp.empty'))
+      + '<div class="orch-insp-stats">' + t('orch.insp.stats', { n: _orchNodes.length, m: _orchEdges.length }) + '</div>'
       + '</div>';
     return;
   }
 
-  var h = '<div class="orch-insp-head">'
-        + '<span class="orch-insp-kind">' + escapeHtml(n.type === 'role' ? 'Agent' : 'Control') + '</span>'
-        + '<span class="orch-insp-type">' + escapeHtml(_orchAutoLabel(n)) + '</span>'
-        + '</div>';
+  var h = '<div class="orch-sheet-head orch-m-only"><span>' + _ORCH_ICONS.gear + ' ' + escapeHtml(_orchKindLabel(n)) + '</span>'
+        + '<button class="orch-ai-clear" onclick="_orchCloseMobileInspector()" title="Close">✕</button></div>';
+  h += _orchInspHeader(n);
 
-  h += '<label class="orch-fld"><span>Label</span>'
-    +  '<input class="orch-input" value="' + escapeHtml(n.name) + '" '
-    +  'placeholder="' + escapeHtml(_orchAutoLabel(n)) + '" '
-    +  'oninput="_orchSetParam(\'name\', this.value)"></label>';
+  if (n.type === 'subflow') {
+    var _gd = (n.params && n.params.definition) || {};
+    h += '<button class="orch-btn orch-btn-primary orch-btn-block orch-insp-cta" '
+      +  'onclick="_orchEnterGroup(\'' + n.id + '\')">' + escapeHtml(t('orch.group.open'))
+      +  ' <span class="orch-insp-cta-sub">' + t('orch.group.summary', { n: (_gd.nodes || []).length, m: (_gd.edges || []).length }) + '</span></button>';
+    var _gIdentity = _orchLabelField(n)
+      + _orchSelectFld(t('orch.fld.groupFace'), 'role', n.role,
+        [['general', 'General'], ['researcher', 'Researcher'], ['coder', 'Coder'],
+         ['analyst', 'Analyst'], ['writer', 'Writer'], ['synthesizer', 'Synthesizer']]);
+    h += _orchSec('orch.sec.identity', _ORCH_ICONS.gear, true, _gIdentity);
+    var _gExec = _orchSelectFld(t('orch.fld.groupScope'), 'scope', (n.params.scope || 'isolated'),
+        [['isolated', t('orch.scope.isolated')], ['inline', t('orch.scope.inline')]])
+      + _orchSelectFld(t('orch.fld.emits'), 'emits', n.params.emits,
+        [['', t('orch.emits.auto', { role: _orchDefaultEmits(n.role) })],
+         ['assistant', t('orch.emits.assistant')],
+         ['user', t('orch.emits.user')]]);
+    h += _orchSec('orch.sec.execution', _ORCH_ICONS.gear, false, _gExec, 'orch.note.group');
+    h += _orchSec('orch.sec.io', _ORCH_ICONS.package, false, _orchIoSectionBody(n), 'orch.io.note');
+  } else if (n.type === 'role') {
+    // ── Persona (open, READ-ONLY): the role's fixed identity. Shown so the
+    // author understands what this character does and how it behaves — never
+    // editable (the prompt is owned by the backend, lib/swarm/registry.AGENT_ROLES).
+    // A role's task is no longer authored per-flow: the engine derives it from
+    // the node label and the wired data inputs.
+    h += _orchSec('orch.sec.persona', _ORCH_ICONS.bot, true,
+        _orchPersonaSectionBody(n), 'orch.persona.note');
 
-  if (n.type === 'role') {
-    h += '<label class="orch-fld"><span>Objective</span>'
-      +  '<textarea class="orch-input orch-ta" rows="4" '
-      +  'placeholder="What should this agent accomplish? Brief it like a colleague who just walked in." '
-      +  'oninput="_orchSetParam(\'objective\', this.value)">' + escapeHtml(n.params.objective || '') + '</textarea></label>';
-    h += _orchSelectFld('Model tier', 'tier', n.params.tier, [['light', 'Light · fast'], ['standard', 'Standard · parent'], ['heavy', 'Heavy · strongest']]);
-    h += _orchSelectFld('Context', 'isolation', n.params.isolation,
-        [['fresh-context', 'Fresh — one-shot, isolated'], ['shared-context', 'Shared — accumulates across loops']]);
-    h += '<div class="orch-note">💡 <b>Shared</b> context makes a Worker that learns across loop iterations (like endpoint mode). <b>Fresh</b> is a stateless fan-out sub-agent.</div>';
-  } else if (n.kind === 'loop') {
-    h += _orchNumFld('Max iterations', 'max_iterations', n.params.max_iterations);
-    h += _orchSelectFld('Stop when', 'stop_condition', n.params.stop_condition,
-        [['verdict:STOP', 'Verifier returns STOP'], ['no_new_findings', 'A round finds nothing new'], ['max_only', 'Only the iteration cap']]);
-    h += _orchSelectFld('Verifier role', 'verifier', n.params.verifier,
-        [['critic', 'Critic'], ['reviewer', 'Reviewer'], ['none', 'No verifier']]);
-    h += '<div class="orch-note">🔁 Wrap a Worker (+ optional Verifier) inside this loop. The verifier is a <i>different</i> agent than the producer — that\'s structural adversarial verification.</div>';
-  } else if (n.kind === 'parallel') {
-    h += _orchNumFld('Max concurrent', 'max_concurrent', n.params.max_concurrent);
-    h += _orchCheckFld('One agent per item', 'per_item', n.params.per_item);
-  } else if (n.kind === 'branch') {
-    h += _orchSelectFld('Classifier role', 'classifier', n.params.classifier,
-        [['router', 'Router'], ['analyst', 'Analyst'], ['general', 'General']]);
-    h += _orchNumFld('Branch count', 'branches', n.params.branches);
-  } else if (n.kind === 'artifact') {
-    h += '<label class="orch-fld"><span>File path</span>'
-      +  '<input class="orch-input" value="' + escapeHtml(n.params.path || '') + '" '
-      +  'placeholder="e.g. reports/findings.md" '
-      +  'oninput="_orchSetParam(\'path\', this.value)"></label>';
-    h += _orchSelectFld('Kind', 'format', n.params.format,
-        [['file', 'File'], ['report', 'Report'], ['dataset', 'Dataset'],
-         ['code', 'Code'], ['image', 'Image']]);
-    h += '<label class="orch-fld"><span>Description</span>'
-      +  '<textarea class="orch-input orch-ta" rows="3" '
-      +  'placeholder="What this deliverable must contain — the contract between the '
-      +  'producing and consuming agents." '
-      +  'oninput="_orchSetParam(\'description\', this.value)">' + escapeHtml(n.params.description || '') + '</textarea></label>';
-    h += '<div class="orch-note">\uD83D\uDCE6 A <b>Deliverable</b> declares an expected '
-      +  'intermediate output. The engine records it and surfaces it in the run log so '
-      +  'you can track what each stage is supposed to produce.</div>';
-  } else if (n.kind === 'human') {
-    h += _orchSelectFld('Mode', 'mode', n.params.mode,
-        [['approve', 'Approve — pause for go / no-go'],
-         ['input', 'Input — collect an answer'],
-         ['notify', 'Notify — message, don\'t block']]);
-    h += '<label class="orch-fld"><span>Prompt</span>'
-      +  '<textarea class="orch-input orch-ta" rows="3" '
-      +  'placeholder="What to ask / tell the user at this gate." '
-      +  'oninput="_orchSetParam(\'prompt\', this.value)">' + escapeHtml(n.params.prompt || '') + '</textarea></label>';
-    if (n.params.mode === 'approve') {
-      h += _orchNumFld('Approve timeout (sec)', 'timeout_sec', n.params.timeout_sec);
+    // ── Last run (auto-expanded when present): the traceability overlay —
+    // what this node actually saw + produced on the most recent run.
+    var _runBody = _orchRunTraceBody(n);
+    if (_runBody) {
+      h += _orchSec('orch.sec.lastRun', _ORCH_ICONS.rocket, true,
+          _runBody, 'orch.run.note');
     }
-    h += '<div class="orch-note">🧑 A <b>Human</b> gate pauses the flow: '
-      +  '<b>Approve</b> halts the run on reject, <b>Input</b> appends the answer to '
-      +  'the context for downstream agents, <b>Notify</b> just surfaces a message. '
-      +  'Reuses the same approval / ask-human plumbing as chat.</div>';
+
+    // ── Execution (open): the model layer — label + tier / context / speaks-as.
+    var _exec = _orchLabelField(n)
+      + _orchSelectFld(t('orch.fld.tier'), 'tier', n.params.tier,
+        [['light', t('orch.tier.light')], ['standard', t('orch.tier.standard')], ['heavy', t('orch.tier.heavy')]])
+      + _orchSelectFld(t('orch.fld.context'), 'isolation', n.params.isolation,
+        [['fresh-context', t('orch.iso.fresh')], ['shared-context', t('orch.iso.shared')]])
+      + _orchSelectFld(t('orch.fld.emits'), 'emits', n.params.emits,
+        [['', t('orch.emits.auto', { role: _orchDefaultEmits(n.role) })],
+         ['assistant', t('orch.emits.assistant')],
+         ['user', t('orch.emits.user')]]);
+    h += _orchSec('orch.sec.execution', _ORCH_ICONS.gear, true, _exec, 'orch.note.exec');
+
+    // ── Data I/O (open): the typed port contract — the data nodes.
+    h += _orchSec('orch.sec.io', _ORCH_ICONS.package, true,
+        _orchIoSectionBody(n), 'orch.io.note');
   } else {
-    h += '<div class="orch-note">' + escapeHtml((_ORCH_CONTROLS.filter(function (c) { return c.kind === n.kind; })[0] || {}).blurb || '') + '</div>';
+    // Control nodes: one "Settings" section holding the label + the kind's
+    // own fields. Verbose prose is demoted to the section hint (collapsible),
+    // not an always-on filled box.
+    var _c = _orchLabelField(n);
+    var _hint = null;
+    if (n.kind === 'loop') {
+      _c += _orchNumFld(t('orch.fld.maxIter'), 'max_iterations', n.params.max_iterations)
+        + _orchSelectFld(t('orch.fld.stopWhen'), 'stop_condition', n.params.stop_condition,
+            [['verdict:STOP', t('orch.stop.verdict')], ['no_new_findings', t('orch.stop.noNew')], ['max_only', t('orch.stop.maxOnly')]])
+        + _orchSelectFld(t('orch.fld.verifier'), 'verifier', n.params.verifier,
+            [['critic', t('orch.verifier.critic')], ['reviewer', t('orch.verifier.reviewer')], ['none', t('orch.verifier.none')]]);
+      _hint = 'orch.note.loop';
+    } else if (n.kind === 'parallel') {
+      _c += _orchNumFld(t('orch.fld.maxConcurrent'), 'max_concurrent', n.params.max_concurrent)
+        + _orchCheckFld(t('orch.fld.perItem'), 'per_item', n.params.per_item);
+    } else if (n.kind === 'branch') {
+      _c += _orchSelectFld(t('orch.fld.classifier'), 'classifier', n.params.classifier,
+            [['router', t('orch.classifier.router')], ['analyst', t('orch.classifier.analyst')], ['general', t('orch.classifier.general')]])
+        + _orchNumFld(t('orch.fld.branchCount'), 'branches', n.params.branches);
+    } else if (n.kind === 'artifact') {
+      _c += '<label class="orch-fld"><span>' + escapeHtml(t('orch.fld.filePath')) + '</span>'
+        +  '<input class="orch-input" value="' + escapeHtml(n.params.path || '') + '" '
+        +  'placeholder="' + escapeHtml(t('orch.fld.filePathPh')) + '" '
+        +  'oninput="_orchSetParam(\'path\', this.value)"></label>'
+        + _orchSelectFld(t('orch.fld.artifactKind'), 'format', n.params.format,
+            [['file', t('orch.afmt.file')], ['report', t('orch.afmt.report')], ['dataset', t('orch.afmt.dataset')],
+             ['code', t('orch.afmt.code')], ['image', t('orch.afmt.image')]])
+        + '<label class="orch-fld"><span>' + escapeHtml(t('orch.fld.description')) + '</span>'
+        +  '<textarea class="orch-input orch-ta" rows="3" '
+        +  'placeholder="' + escapeHtml(t('orch.fld.artifactDescPh')) + '" '
+        +  'oninput="_orchSetParam(\'description\', this.value)">' + escapeHtml(n.params.description || '') + '</textarea></label>';
+      _hint = 'orch.note.artifact';
+    } else if (n.kind === 'human') {
+      _c += _orchSelectFld(t('orch.fld.humanMode'), 'mode', n.params.mode,
+            [['approve', t('orch.hmode.approve')],
+             ['input', t('orch.hmode.input')],
+             ['notify', t('orch.hmode.notify')]])
+        + '<label class="orch-fld"><span>' + escapeHtml(t('orch.fld.prompt')) + '</span>'
+        +  '<textarea class="orch-input orch-ta" rows="3" '
+        +  'placeholder="' + escapeHtml(t('orch.fld.promptPh')) + '" '
+        +  'oninput="_orchSetParam(\'prompt\', this.value)">' + escapeHtml(n.params.prompt || '') + '</textarea></label>';
+      if (n.params.mode === 'approve') {
+        _c += _orchNumFld(t('orch.fld.approveTimeout'), 'timeout_sec', n.params.timeout_sec);
+      }
+      _hint = 'orch.note.human';
+    } else if (n.kind === 'start') {
+      _c += '<label class="orch-fld"><span>' + escapeHtml(t('orch.fld.startInput')) + '</span>'
+        +  '<textarea class="orch-input orch-ta" rows="5" '
+        +  'placeholder="' + escapeHtml(t('orch.fld.startInputPh')) + '" '
+        +  'oninput="_orchSetParam(\'seed\', this.value)">' + escapeHtml((n.params && n.params.seed) || '') + '</textarea></label>';
+      _hint = 'orch.note.start';
+    } else if (n.kind === 'stop') {
+      _hint = 'orch.note.stop';
+    }
+    // ── Data flow (open, READ-ONLY): what enters and leaves this flow node.
+    // Control nodes carry no typed ports, so this summarises the wired in/out
+    // and what the node passes through — making the data flow legible.
+    h += _orchSec('orch.sec.flow', _ORCH_ICONS.package, true,
+        _orchFlowSummaryBody(n), 'orch.flow.note');
+    h += _orchSec('orch.sec.settings', _ORCH_ICONS.gear, true, _c, _hint);
   }
 
-  // Connections summary
+  // Connections summary + delete (always-visible footer, outside sections).
   var ins = _orchEdges.filter(function (e) { return e.to === n.id; });
   var outs = _orchEdges.filter(function (e) { return e.from === n.id; });
-  h += '<div class="orch-conn-box"><div class="orch-conn-row">→ in: <b>' + ins.length + '</b></div>'
-    +  '<div class="orch-conn-row">out: <b>' + outs.length + '</b> →</div></div>';
-
-  h += '<button class="orch-btn orch-btn-danger orch-btn-block" onclick="_orchDeleteNode(\'' + n.id + '\')">Delete node</button>';
+  h += '<div class="orch-insp-foot">';
+  h += '<div class="orch-conn-box"><div class="orch-conn-row">' + escapeHtml(t('orch.conn.in')) + ' <b>' + ins.length + '</b></div>'
+    +  '<div class="orch-conn-row">' + escapeHtml(t('orch.conn.out')) + ' <b>' + outs.length + '</b> →</div></div>';
+  h += '<button class="orch-btn orch-btn-danger orch-btn-block" onclick="_orchDeleteNode(\'' + n.id + '\')">' + escapeHtml(t('orch.btn.deleteNode')) + '</button>';
+  h += '</div>';
   el.innerHTML = h;
+}
+
+// The node-label field, shared by every node kind.
+function _orchLabelField(n) {
+  return '<label class="orch-fld"><span>' + escapeHtml(t('orch.fld.label')) + '</span>'
+    + '<input class="orch-input" value="' + escapeHtml(n.name) + '" '
+    + 'placeholder="' + escapeHtml(_orchAutoLabel(n)) + '" '
+    + 'oninput="_orchSetParam(\'name\', this.value)"></label>';
 }
 
 function _orchSelectFld(label, key, val, opts) {
@@ -747,19 +1478,188 @@ function _orchNumFld(label, key, val) {
 }
 function _orchCheckFld(label, key, val) {
   return '<label class="orch-fld orch-fld-check">'
+       + '<span>' + escapeHtml(label) + '</span>'
+       + '<span class="stg-toggle stg-dv-toggle">'
        + '<input type="checkbox"' + (val ? ' checked' : '') + ' onchange="_orchSetParam(\'' + key + '\', this.checked)">'
-       + '<span>' + escapeHtml(label) + '</span></label>';
+       + '<span class="stg-toggle-track"><span class="stg-toggle-thumb"></span></span>'
+       + '</span></label>';
 }
 
-function _orchSetParam(key, value, isNum) {
+function _orchSetParam(key, value, isNum, kind) {
   var n = _orchFind(_orchSel);
   if (!n) return;
   if (key === 'name') { n.name = value; _orchRenderNodes(); return; }
+  // 'role' on a subflow node is the group's OUTWARD face (a node field, not
+  // a param). Changing it can change the emits 'Auto' default → re-render.
+  if (key === 'role') {
+    n.role = value;
+    _orchRenderNodes();
+    _orchRenderInspector();
+    return;
+  }
+  // List-kind structured fields are edited as a newline textarea but stored
+  // as an array of non-empty trimmed strings (matches the backend's
+  // _coerce_list). An empty list is OMITTED so it never renders a section.
+  if (kind === 'list') {
+    var items = String(value == null ? '' : value).split('\n')
+      .map(function (s) { return s.trim(); })
+      .filter(function (s) { return s; });
+    if (items.length) { n.params[key] = items; } else { delete n.params[key]; }
+    _orchRenderNodes();
+    return;
+  }
   if (isNum) value = (value === '' ? '' : Number(value));
-  n.params[key] = value;
+  // 'Auto'/unset (empty) selections should OMIT the key entirely — an empty
+  // string is not a valid enum value and would fail backend validation
+  // (e.g. emits='' or a structured select left blank); leaving it unset lets
+  // the backend derive the default / treat the field as absent.
+  if (value === '') {
+    delete n.params[key];
+  } else {
+    n.params[key] = value;
+  }
   _orchRenderNodes();   // sub-line may change
   // The human gate shows/hides fields by mode → re-render the inspector.
   if (key === 'mode') _orchRenderInspector();
+}
+
+// Mirror lib/orchestration.resolve_emits' role rule so the inspector's
+// "Auto" option shows the same default the backend will derive.
+function _orchDefaultEmits(role) {
+  return (role === 'critic' || role === 'reviewer' || role === 'virtual_user')
+    ? 'user' : 'assistant';
+}
+
+// ── Read-only persona design per role, from /role-schema's `personas`
+// ({role: {prompt, whenToUse, tier}}). The studio SHOWS this so an author
+// understands a character — it is never editable (the prompt is owned by
+// the backend, lib/swarm/registry.AGENT_ROLES). A small built-in fallback
+// covers the pre-fetch / headless-test window.
+var _orchRolePersonas = null;
+
+// ── Read-only role persona (the fixed prompt design) ──
+// A role's behavior is owned by the backend (lib/swarm/registry.AGENT_ROLES).
+// The studio SHOWS the persona so an author understands what a character does
+// and how it behaves, but it is deliberately NOT editable: the system prompt
+// is part of the role's design, not a per-flow authoring field.
+var _ORCH_PERSONA_FALLBACK = {
+  planner: { tier: 'heavy', prompt: 'You are the PLANNER. Rewrite the request into a structured brief with a Goal, a concrete Checklist of steps, and Acceptance Criteria.' },
+  worker: { tier: 'heavy', prompt: 'You are the WORKER. Execute the plan against the checklist. Your first tool call must be state-changing — act, do not merely analyze.' },
+  critic: { tier: 'heavy', prompt: 'You are the CRITIC. Review the worker output against the plan and emit exactly one verdict tag: [VERDICT: STOP] or [VERDICT: CONTINUE_WORKER].' },
+  virtual_user: { tier: 'standard', prompt: 'You are a VIRTUAL USER standing in for the human. Reply briefly to keep the task moving, and emit [VU: TASK_DONE] when it is clearly complete.' },
+};
+
+// Resolve a role's persona: fetched personas → built-in fallback → null.
+function _orchRolePersona(role) {
+  var src = _orchRolePersonas || _ORCH_PERSONA_FALLBACK;
+  return (src && src[role]) || null;
+}
+
+// Render the read-only Persona section body for a role node: the model tier,
+// the "when to use" guidance, and the full system-prompt design — all shown,
+// none editable. Returns inner HTML for the enclosing _orchSec.
+// ── "Last run" trace body for a node (the traceability overlay) ──
+// Shows what THIS node actually did on the most recent run: its status, the
+// resolved brief it ran with (the rendered role prompt), and its output —
+// so the data flow through start / loop / role nodes is legible instead of
+// opaque. Reads the live _orchRunTrace map (populated by the run drawer);
+// returns null when the node hasn't run yet (section is then hidden).
+function _orchRunTraceBody(n) {
+  var tr = _orchRunTrace[n.id];
+  if (!tr) return null;
+  var statusLbl = { running: t('orch.run.statusRunning'),
+                    done: t('orch.run.statusDone'),
+                    error: t('orch.run.statusError') }[tr.status] || tr.status;
+  var h = '<div class="orch-runtrace-row"><span class="orch-runtrace-lbl">'
+    + escapeHtml(t('orch.run.status')) + '</span>'
+    + '<span class="orch-runtrace-status orch-runtrace-' + escapeHtml(tr.status || '')
+    + '">' + escapeHtml(statusLbl) + '</span></div>';
+  if (typeof tr.state_changing === 'number') {
+    h += '<div class="orch-runtrace-row"><span class="orch-runtrace-lbl">'
+      + escapeHtml(t('orch.run.actions')) + '</span><span>' + tr.state_changing + '</span></div>';
+  }
+  var out = (tr.output || '').trim();
+  if (out) {
+    h += '<div class="orch-runtrace-lbl orch-runtrace-outlbl">'
+      + escapeHtml(t('orch.run.output')) + '</div>'
+      + '<pre class="orch-runtrace-out">' + escapeHtml(out.slice(0, 4000)) + '</pre>';
+  } else if (tr.status === 'running') {
+    h += '<div class="orch-runtrace-waiting">' + escapeHtml(t('orch.run.streaming')) + '</div>';
+  }
+  return h;
+}
+
+function _orchPersonaSectionBody(n) {
+  var persona = _orchRolePersona(n.role);
+  if (!persona) {
+    return '<div class="orch-persona-empty">' + escapeHtml(t('orch.persona.none')) + '</div>';
+  }
+  // The model tier is editable in the Execution section (and defaults to the
+  // role's tier hint), and the task description is captured by the editable
+  // objective field above — so the read-only persona shows only the fixed
+  // system-prompt design, not those two redundant rows.
+  var h = '';
+  if (persona.prompt) {
+    h += '<div class="orch-persona-lbl orch-persona-promptlbl">'
+      + escapeHtml(t('orch.persona.prompt')) + '</div>'
+      + '<pre class="orch-persona-prompt" readonly>' + escapeHtml(persona.prompt) + '</pre>';
+  }
+  return h;
+}
+
+// ── Read-only data-flow summary for CONTROL nodes ──
+// Control nodes (start / loop / fan-out / join / route / human / stop) don't
+// carry typed ports, but the user still needs to SEE what data enters and
+// leaves them. This builds a plain in/out summary from the wired edges plus a
+// one-line note on what the node passes through — so the data flow is legible
+// even for nodes without a typed I/O contract.
+function _orchFlowSummaryBody(n) {
+  var ins = _orchEdges.filter(function (e) { return e.to === n.id; })
+    .map(function (e) { var m = _orchFind(e.from); return m ? (m.name || _orchAutoLabel(m)) : e.from; });
+  var outs = _orchEdges.filter(function (e) { return e.from === n.id; })
+    .map(function (e) { var m = _orchFind(e.to); return m ? (m.name || _orchAutoLabel(m)) : e.to; });
+
+  var inText, outText;
+  if (n.kind === 'start') {
+    var seed = ((n.params && n.params.seed) || '').trim();
+    inText = seed ? t('orch.flow.seedSet') : t('orch.flow.fromUser');
+  } else {
+    inText = ins.length ? ins.map(escapeHtml).join(', ') : t('orch.flow.none');
+  }
+  if (n.kind === 'stop') {
+    outText = t('orch.flow.toChat');
+  } else {
+    outText = outs.length ? outs.map(escapeHtml).join(', ') : t('orch.flow.none');
+  }
+
+  var h = '<div class="orch-flow-row"><span class="orch-flow-arrow">\u2192</span>'
+    + '<span class="orch-flow-lbl">' + escapeHtml(t('orch.flow.in')) + '</span>'
+    + '<span class="orch-flow-val">' + inText + '</span></div>'
+    + '<div class="orch-flow-row"><span class="orch-flow-arrow">\u2190</span>'
+    + '<span class="orch-flow-lbl">' + escapeHtml(t('orch.flow.out')) + '</span>'
+    + '<span class="orch-flow-val">' + outText + '</span></div>';
+  var carry = t('orch.flow.carry.' + n.kind);
+  if (carry && carry !== 'orch.flow.carry.' + n.kind) {
+    h += '<div class="orch-flow-carry">' + carry + '</div>';
+  }
+  return h;
+}
+
+// Fetch the authoritative schema once; re-render the inspector if a node is
+// selected so dynamically-added fields appear without a reselect.
+async function _orchFetchRoleSchema() {
+  if (_orchRolePersonas || typeof Api === 'undefined' || !Api.orchestrations
+      || !Api.orchestrations.roleSchema) return;
+  try {
+    var res = await Api.orchestrations.roleSchema();
+    if (res && res.ok) {
+      if (res.personas && typeof res.personas === 'object') _orchRolePersonas = res.personas;
+      if (Array.isArray(res.ioTypes) && res.ioTypes.length) _ORCH_IO_TYPES = res.ioTypes;
+      if (_orchSel) _orchRenderInspector();
+    }
+  } catch (e) {
+    if (typeof console !== 'undefined') console.warn('role-schema fetch failed', e);
+  }
 }
 
 function _orchOnRename(v) { _orchName = v || 'Untitled Flow'; }
@@ -802,7 +1702,7 @@ function _orchRenderAiLog() {
   if (!log) return;
   if (!_orchAiHistory.length) {
     log.innerHTML = '<div class="orch-ai-empty">'
-      + '<div class="orch-ai-empty-icon">🪄</div>'
+      + '<div class="orch-ai-empty-icon">' + _ORCH_ICONS.wand + '</div>'
       + '<div class="orch-ai-empty-title">Compose by conversation</div>'
       + '<div class="orch-ai-empty-text">Try: <i>"Build a research flow that fans out to 3 '
       + 'researchers then synthesizes"</i> or <i>"add a critic loop after the worker".</i></div>'
@@ -834,7 +1734,9 @@ async function _orchAiSend() {
   _orchRenderAiLog();
   _orchAiSetEnabled(false);
 
-  // Send the current graph so the model edits in place.
+  // Send the current graph so the model edits in place. Collapse any open
+  // group frames first so the composer sees the whole root flow.
+  _orchFlushToRoot();
   var current = _orchNodes.length ? _orchToDefinition() : null;
   var result;
   try {
@@ -846,14 +1748,14 @@ async function _orchAiSend() {
   _orchAiSetEnabled(true);
 
   if (!result) {
-    _orchAiHistory.push({ role: 'assistant', content: '⚠️ The composer request failed. Try again.' });
+    _orchAiHistory.push({ role: 'assistant', content: 'The composer request failed. Try again.' });
     _orchRenderAiLog();
     return;
   }
   var reply = result.reply || (result.ok ? 'Updated the graph.' : 'I could not build a valid graph.');
   // Surface validation issues inline so the user understands a rejected draft.
   if (!result.ok && result.validation && result.validation.errors && result.validation.errors.length) {
-    reply += '\n⚠️ ' + result.validation.errors.slice(0, 3).join('; ');
+    reply += '\n' + result.validation.errors.slice(0, 3).join('; ');
   }
   _orchAiHistory.push({ role: 'assistant', content: reply });
   _orchRenderAiLog();
@@ -882,10 +1784,45 @@ function _orchAiSetEnabled(on) {
 
 var _orchRunTaskId = null;
 var _orchRunPolling = false;
+// Per-node live run trace, keyed by node_id. Accumulated from the run
+// drawer's events (step_start / step_delta / step_complete) so the canvas
+// can show each node's status badge and the inspector can show the last
+// run's resolved brief + input + output. Cleared at the start of each run.
+//   { node_id: {role, name, status:'running'|'done'|'error', output, preview,
+//     iteration, emits, state_changing, brief?, input? } }
+var _orchRunTrace = {};
+
+// Reset the live trace + clear any node status badges from a prior run.
+function _orchResetRunTrace() {
+  _orchRunTrace = {};
+  document.querySelectorAll('.orch-node[data-run-status]').forEach(function (el) {
+    el.removeAttribute('data-run-status');
+  });
+}
+
+// Stamp a node's run status onto its canvas card (CSS targets
+// [data-run-status]). No full re-render — just a cheap attribute flip.
+function _orchSetNodeRunStatus(nodeId, status) {
+  if (!nodeId) return;
+  var el = document.getElementById('orch-node-' + nodeId);
+  if (el) el.setAttribute('data-run-status', status);
+  // Refresh the inspector if THIS node is selected, so its "Last run"
+  // section updates live as the node streams.
+  if (_orchSel === nodeId) _orchRenderInspector();
+}
+
+function _orchStartSeed() {
+  var st = _orchNodes.filter(function (n) { return n.kind === 'start'; })[0];
+  return (st && st.params && st.params.seed) ? String(st.params.seed) : '';
+}
 
 function _orchOpenRun() {
   var d = document.getElementById('orchRunDrawer');
   if (d) d.classList.add('is-open');
+  // Prefill the run input from the Start node's seed so the entry point
+  // the user configured on the canvas is what they run with by default.
+  var inp = document.getElementById('orchRunInput');
+  if (inp && !inp.value) inp.value = _orchStartSeed();
 }
 function _orchCloseRun() {
   var d = document.getElementById('orchRunDrawer');
@@ -912,7 +1849,7 @@ function _orchRenderHumanGate(ev) {
   var row = document.createElement('div');
   row.className = 'orch-run-line orch-human-gate';
   row.id = 'orchHumanGate-' + rid;
-  var head = '🧑 <b>' + escapeHtml(ev.name || 'Human') + '</b> — '
+  var head = _ORCH_ICONS.person + ' <b>' + escapeHtml(ev.name || 'Human') + '</b> — '
     + escapeHtml(ev.prompt || (ev.mode === 'approve' ? 'Approve to continue?' : 'Your input?'));
   var ridArg = "'" + rid.replace(/'/g, "\\'") + "'";
   if (ev.mode === 'approve') {
@@ -951,39 +1888,75 @@ async function _orchHumanInput(rid) {
 }
 
 async function _orchPlan() {
+  _orchFlushToRoot();
   if (!_orchNodes.length) { _orchToast('Nothing to plan', true); return; }
   var def = _orchToDefinition();
   var res = await Api.orchestrations.plan(def);
   var log = document.getElementById('orchRunLog');
   if (log) log.innerHTML = '';
   if (!res || !res.ok) {
-    _orchRunLog('⚠️ ' + escapeHtml((res && res.error) || 'plan failed'), 'is-err');
+    _orchRunLog(_ORCH_ICONS.warn + ' ' + escapeHtml((res && res.error) || 'plan failed'), 'is-err');
     return;
   }
   _orchRunLog('<b>Execution plan (' + res.steps.length + ' steps):</b>');
   res.steps.forEach(function (s, i) {
-    var label = s.role ? ('🤖 ' + s.role) : ('⬡ ' + (s.kind || s.action));
+    var label = s.role ? (_ORCH_ICONS.bot + ' ' + s.role) : ('⬡ ' + (s.kind || s.action));
     _orchRunLog((i + 1) + '. ' + escapeHtml(label) + ' <span class="orch-run-dim">(' + escapeHtml(s.action) + ')</span>');
   });
 }
 
 async function _orchRun() {
   if (_orchRunPolling) return;
+  _orchFlushToRoot();
   if (!_orchNodes.length) { _orchToast('Nothing to run', true); return; }
   var def = _orchToDefinition();
   var input = (document.getElementById('orchRunInput') || {}).value || '';
+  if (!input.trim()) input = _orchStartSeed();
   var log = document.getElementById('orchRunLog');
   if (log) log.innerHTML = '';
-  _orchRunLog('🚀 Starting run…');
+  _orchResetRunTrace();
+  _orchRunLog(_ORCH_ICONS.rocket + ' Starting run…');
 
   var res = await Api.orchestrations.run(def, input);
   if (!res || !res.ok || !res.task_id) {
-    _orchRunLog('⚠️ ' + escapeHtml((res && (res.error || (res.errors || []).join('; '))) || 'run failed'), 'is-err');
+    _orchRunLog(_ORCH_ICONS.warn + ' ' + escapeHtml((res && (res.error || (res.errors || []).join('; '))) || 'run failed'), 'is-err');
     return;
   }
   _orchRunTaskId = res.task_id;
   _orchRunSetBusy(true);
   _orchRunPoll(0);
+}
+
+// Launch a DURABLE run (Task Mode) instead of the ephemeral in-drawer run.
+// Unlike _orchRun (TaskRuntime-only, lives in this drawer), this persists a
+// run instance and hands off to the Task Mode viewer where it can be
+// reopened after a reload. Passes _orchCurrentId so the run links to its
+// saved template; an unsaved flow still runs (inline definition snapshot).
+async function _orchRunAsTask() {
+  _orchFlushToRoot();
+  if (!_orchNodes.length) { _orchToast('Nothing to run', true); return; }
+  var def = _orchToDefinition();
+  var input = (document.getElementById('orchRunInput') || {}).value || '';
+  if (!input.trim()) input = _orchStartSeed();
+
+  var btn = document.getElementById('orchRunTaskBtn');
+  if (btn) btn.disabled = true;
+  try {
+    var resp = await Api.orchestrations.taskCreate(def, input, _orchCurrentId || '');
+    var data = (resp && resp.json) ? await resp.json().catch(function () { return {}; }) : {};
+    if (!data || !data.ok || !data.run_id) {
+      _orchToast((data && (data.error || (data.errors || []).join('; '))) || 'Could not start task', true);
+      return;
+    }
+    _orchToast('Task started — opening Task Mode');
+    if (typeof openTaskMode === 'function') {
+      closeOrchestration();
+      openTaskMode();
+      if (typeof _tmOpenRun === 'function') _tmOpenRun(data.run_id);
+    }
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 }
 
 function _orchRunSetBusy(on) {
@@ -998,7 +1971,7 @@ async function _orchRunPoll(cursor) {
   if (!_orchRunTaskId) return;
   var res = await Api.orchestrations.runPoll(_orchRunTaskId, cursor);
   if (!res || !res.ok) {
-    _orchRunLog('⚠️ poll failed', 'is-err');
+    _orchRunLog(_ORCH_ICONS.warn + ' poll failed', 'is-err');
     _orchRunSetBusy(false);
     return;
   }
@@ -1014,38 +1987,62 @@ async function _orchRunPoll(cursor) {
 function _orchRenderRunEvent(ev) {
   switch (ev.type) {
     case 'flow_start':
-      _orchRunLog('▶ <b>' + escapeHtml(ev.name || 'flow') + '</b> — ' + (ev.nodes || 0) + ' nodes'); break;
+      _orchRunLog(_ORCH_ICONS.flag + ' <b>' + escapeHtml(ev.name || 'flow') + '</b> — ' + (ev.nodes || 0) + ' nodes'); break;
     case 'step_start':
-      _orchRunLog('🤖 <b>' + escapeHtml(ev.name || ev.role) + '</b> running…', 'is-active'); break;
+      if (ev.node_id) {
+        _orchRunTrace[ev.node_id] = {
+          node_id: ev.node_id, role: ev.role, name: ev.name || ev.role,
+          status: 'running', output: '', preview: '', emits: ev.emits || '',
+          isolation: ev.isolation || '',
+        };
+        _orchSetNodeRunStatus(ev.node_id, 'running');
+      }
+      _orchRunLog(_ORCH_ICONS.bot + ' <b>' + escapeHtml(ev.name || ev.role) + '</b> running…', 'is-active'); break;
+    case 'step_delta':
+      if (ev.node_id && _orchRunTrace[ev.node_id] && ev.kind !== 'thinking') {
+        _orchRunTrace[ev.node_id].output += (ev.chunk || '');
+        if (_orchSel === ev.node_id) _orchRenderInspector();
+      }
+      break;
     case 'step_complete':
-      _orchRunLog('✅ ' + escapeHtml(ev.role) + ' <span class="orch-run-dim">' + escapeHtml((ev.preview || '').slice(0, 120)) + '</span>'); break;
+      if (ev.node_id) {
+        var _tr = _orchRunTrace[ev.node_id] || (_orchRunTrace[ev.node_id] = { node_id: ev.node_id });
+        _tr.role = ev.role; _tr.status = (ev.status === 'failed') ? 'error' : 'done';
+        // The engine now sends the FULL output; fall back to preview/stream accum.
+        _tr.output = (ev.output != null) ? ev.output : (_tr.output || ev.preview || '');
+        _tr.preview = ev.preview || (_tr.output || '').slice(0, 120);
+        _tr.state_changing = ev.state_changing || 0;
+        if (ev.emits) _tr.emits = ev.emits;
+        _orchSetNodeRunStatus(ev.node_id, _tr.status);
+      }
+      _orchRunLog(_ORCH_ICONS.check + ' ' + escapeHtml(ev.role) + ' <span class="orch-run-dim">' + escapeHtml((ev.preview || '').slice(0, 120)) + '</span>'); break;
     case 'loop_iteration':
-      _orchRunLog('🔁 loop iteration ' + ev.iteration + '/' + ev.max); break;
+      _orchRunLog(_ORCH_ICONS.loop + ' loop iteration ' + ev.iteration + '/' + ev.max); break;
     case 'zero_deliverable_guard':
-      _orchRunLog('⚠️ zero-deliverable guard — injecting "execute, stop analyzing" directive', 'is-err'); break;
+      _orchRunLog(_ORCH_ICONS.warn + ' zero-deliverable guard — injecting "execute, stop analyzing" directive', 'is-err'); break;
     case 'replan':
-      _orchRunLog('🧭 re-plan #' + ev.replan + ' — ' + escapeHtml((ev.defect || 'structural defect').slice(0, 100))); break;
+      _orchRunLog(_ORCH_ICONS.compass + ' re-plan #' + ev.replan + ' — ' + escapeHtml((ev.defect || 'structural defect').slice(0, 100))); break;
     case 'stuck_detected':
-      _orchRunLog('🔁 stuck — verifier feedback is repeating; breaking the loop', 'is-err'); break;
+      _orchRunLog(_ORCH_ICONS.loop + ' stuck — verifier feedback is repeating; breaking the loop', 'is-err'); break;
     case 'parallel_start':
-      _orchRunLog('🌐 fan-out → ' + ev.branches + ' branches'); break;
+      _orchRunLog(_ORCH_ICONS.fanout + ' fan-out → ' + ev.branches + ' branches'); break;
     case 'branch_pick':
       _orchRunLog('↪ route → ' + escapeHtml(ev.chosen || '(none)')); break;
     case 'artifact_declared':
-      _orchRunLog('📦 deliverable: <b>' + escapeHtml(ev.path || ev.name || '(unnamed)') + '</b>'
+      _orchRunLog(_ORCH_ICONS.package + ' deliverable: <b>' + escapeHtml(ev.path || ev.name || '(unnamed)') + '</b>'
         + (ev.description ? ' <span class="orch-run-dim">' + escapeHtml(ev.description.slice(0, 120)) + '</span>' : '')); break;
     case 'human_notify':
-      _orchRunLog('🧑 <b>' + escapeHtml(ev.name || 'Human') + '</b> '
+      _orchRunLog(_ORCH_ICONS.person + ' <b>' + escapeHtml(ev.name || 'Human') + '</b> '
         + '<span class="orch-run-dim">' + escapeHtml((ev.prompt || '').slice(0, 200)) + '</span>'); break;
     case 'human_request':
       _orchRenderHumanGate(ev); break;
     case 'human_resolved':
       _orchClearHumanGate(ev.request_id);
-      _orchRunLog('🧑 ' + (ev.mode === 'approve'
-        ? (ev.approved ? '✅ approved' : '⛔ rejected')
-        : '✅ answered') + ' <span class="orch-run-dim">' + escapeHtml(ev.request_id || '') + '</span>'); break;
+      _orchRunLog(_ORCH_ICONS.person + ' ' + (ev.mode === 'approve'
+        ? (ev.approved ? _ORCH_ICONS.check + ' approved' : _ORCH_ICONS.reject + ' rejected')
+        : _ORCH_ICONS.check + ' answered') + ' <span class="orch-run-dim">' + escapeHtml(ev.request_id || '') + '</span>'); break;
     case 'flow_complete':
-      _orchRunLog('🏁 <b>' + escapeHtml(ev.status) + '</b> — ' + (ev.agents_run || 0) + ' agents, ' + (ev.elapsed || 0) + 's',
+      _orchRunLog(_ORCH_ICONS.flag + ' <b>' + escapeHtml(ev.status) + '</b> — ' + (ev.agents_run || 0) + ' agents, ' + (ev.elapsed || 0) + 's',
                   ev.status === 'completed' ? 'is-done' : 'is-err'); break;
     case 'done':
       if (ev.result && ev.result.final) {
@@ -1053,14 +2050,14 @@ function _orchRenderRunEvent(ev) {
       }
       break;
     case 'error':
-      _orchRunLog('⚠️ ' + escapeHtml((ev.error && ev.error.detail) || 'error'), 'is-err'); break;
+      _orchRunLog(_ORCH_ICONS.warn + ' ' + escapeHtml((ev.error && ev.error.detail) || 'error'), 'is-err'); break;
   }
 }
 
 async function _orchRunAbort() {
   if (!_orchRunTaskId) return;
   await Api.orchestrations.runAbort(_orchRunTaskId);
-  _orchRunLog('⏹ abort requested…');
+  _orchRunLog(_ORCH_ICONS.stop + ' abort requested…');
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -1090,6 +2087,7 @@ async function _orchLoadBuiltin(name) {
 }
 
 function _orchLoadTemplate(which) {
+  _orchStack = [];
   _orchNodes = []; _orchEdges = []; _orchSel = null; _orchSeq = 0; _orchCurrentId = null;
   // Templates carry the FINAL coordinates the backend layout engine
   // (lib.orchestration.layout_definition) produces for each topology —
@@ -1130,6 +2128,14 @@ function _orchLoadTemplate(which) {
     var st2 = mk({ ptype: 'control', kind: 'stop' }, 270, 780);
     link(s2, fo); link(fo, r1); link(fo, r2); link(fo, r3);
     link(r1, jn); link(r2, jn); link(r3, jn); link(jn, sy); link(sy, st2);
+  } else if (which === 'autopilot') {
+    _orchName = 'Autopilot';
+    var sa = mk({ ptype: 'control', kind: 'start' }, 155, 30);
+    var la = mk({ ptype: 'control', kind: 'loop' }, 155, 180, { max_iterations: 12, stop_condition: 'verdict:STOP', verifier: 'virtual_user' });
+    var wa = mk({ ptype: 'role', role: 'worker' }, 40, 330, { isolation: 'shared-context', emits: 'assistant', objective: 'Continue the task. Make concrete progress every turn.' });
+    var va = mk({ ptype: 'role', role: 'virtual_user' }, 155, 480, { emits: 'user', objective: 'Stand in for the human. Reply briefly to keep going; emit [VU: TASK_DONE] when finished.' });
+    var sta = mk({ ptype: 'control', kind: 'stop' }, 270, 330);
+    link(sa, la); link(la, wa); link(wa, va); link(va, la); link(la, sta);
   } else if (which === 'adversarial') {
     _orchName = 'Adversarial Verify';
     var s3 = mk({ ptype: 'control', kind: 'start' }, 40, 30);
@@ -1196,6 +2202,7 @@ function _orchToDefinition() {
 }
 
 function _orchExport() {
+  _orchFlushToRoot();
   var def = _orchToDefinition();
   var blob = new Blob([JSON.stringify(def, null, 2)], { type: 'application/json' });
   var url = URL.createObjectURL(blob);
@@ -1211,6 +2218,7 @@ function _orchExport() {
 // loaded from / previously saved to the store we hold its id in
 // _orchCurrentId and PUT; otherwise we POST and remember the new id.
 async function _orchSave() {
+  _orchFlushToRoot();
   var def = _orchToDefinition();
   if (typeof Api === 'undefined' || !Api.orchestrations) {
     _orchToast('API client unavailable', true);
@@ -1282,6 +2290,7 @@ async function _orchDeleteFromStore(id, evt) {
 
 // Rehydrate canvas state from a stored definition object.
 function _orchApplyDefinition(def, id) {
+  _orchStack = [];
   _orchCurrentId = id || null;
   _orchName = def.name || 'Untitled Flow';
   _orchSeq = 0;
@@ -1392,10 +2401,16 @@ function _orchInjectStyles() {
 .orch-run-input{padding:11px;border-bottom:var(--orch-rail);display:flex;flex-direction:column;gap:9px}
 .orch-run-input textarea{width:100%;resize:none;background:var(--bg-primary);border:1px solid var(--border);border-radius:var(--orch-r-md);color:var(--text-primary);font-family:inherit;font-size:12.5px;padding:9px 11px;outline:none;line-height:1.5;transition:border-color var(--transition),box-shadow var(--transition)}
 .orch-run-input textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-subtle)}
-.orch-run-actions{display:flex;gap:8px}
-.orch-run-actions .orch-btn{flex:1}
+.orch-run-hint{font-size:11.5px;line-height:1.55;color:var(--text-tertiary);background:var(--bg-tertiary);border:1px solid var(--border);border-radius:var(--orch-r-sm,7px);padding:8px 10px;display:flex;gap:7px;align-items:flex-start}
+.orch-run-hint svg{width:14px;height:14px;flex-shrink:0;margin-top:1px;opacity:.7}
+.orch-run-hint b{color:var(--text-secondary);font-weight:700}
+.orch-run-actions{display:flex;gap:8px;flex-wrap:wrap}
+.orch-run-actions .orch-btn{flex:1;min-width:104px;justify-content:center}
 .orch-run-log{flex:1;overflow-y:auto;padding:12px;font-size:12px;line-height:1.6;font-family:var(--mono-font,monospace)}
+.orch-ico{width:1em;height:1em;vertical-align:-0.15em;flex-shrink:0}
+.orch-ico-lg{width:1.4em;height:1.4em}
 .orch-run-line{padding:3px 0;color:var(--text-secondary);word-break:break-word}
+.orch-run-line .orch-ico{margin-right:2px}
 .orch-run-line.is-active{color:var(--accent)}
 .orch-run-line.is-done{color:var(--orch-ok);font-weight:600}
 .orch-run-line.is-err{color:var(--error-text)}
@@ -1418,20 +2433,87 @@ function _orchInjectStyles() {
 .orch-chip-role:hover .orch-chip-ava img{transform:scale(1.08);transition:transform .15s}
 .orch-chip-label{font-size:11px;font-weight:600;color:var(--text-secondary)}
 .orch-pal-foot{margin:16px 4px 4px;font-size:11px;line-height:1.5;color:var(--text-tertiary)}
-.orch-canvas-wrap{flex:1;min-width:0;position:relative;background:var(--bg-primary)}
-.orch-canvas{position:absolute;inset:0;overflow:auto;background-color:var(--bg-primary);background-image:radial-gradient(color-mix(in srgb,var(--border) 70%,transparent) 1px,transparent 1px);background-size:24px 24px}
+.orch-canvas-wrap{flex:1;min-width:0;position:relative;background:var(--bg-primary);display:flex;flex-direction:column}
+.orch-canvas{position:relative;flex:1;min-height:0;overflow:auto;background-color:var(--bg-primary);background-image:radial-gradient(color-mix(in srgb,var(--border) 70%,transparent) 1px,transparent 1px);background-size:24px 24px}
 .orch-edges{position:absolute;top:0;left:0;pointer-events:none;min-width:100%;min-height:100%;overflow:visible}
 .orch-edge-path{fill:none;stroke:color-mix(in srgb,var(--accent) 38%,var(--border-light));stroke-width:2;stroke-linecap:round;pointer-events:stroke;cursor:pointer;transition:stroke .15s,stroke-width .15s}
-.orch-edge-path:hover{stroke:var(--error-text);stroke-width:2.75}
+.orch-edge-path:hover{stroke:var(--accent);stroke-width:2.75}
+.orch-edge-path.is-selected{stroke:var(--accent);stroke-width:3}
+.orch-edge-hit{fill:none;stroke:transparent;stroke-width:14;stroke-linecap:round;pointer-events:stroke;cursor:pointer}
 .orch-edge-arrow{fill:color-mix(in srgb,var(--accent) 55%,var(--border-light));stroke:none}
 .orch-edge-temp{fill:none;stroke:var(--accent);stroke-width:2;stroke-dasharray:5 4;stroke-linecap:round;pointer-events:none;opacity:.85}
-.orch-nodes{position:absolute;top:0;left:0;width:100%;height:100%}
-.orch-node{position:absolute;width:${_ORCH_CARD_W}px;background:var(--bg-secondary);border:1px solid var(--border-light);border-left:4px solid var(--node-accent,var(--accent));border-radius:var(--orch-r-md);box-shadow:var(--orch-elev-card);user-select:none;transition:box-shadow .15s,border-color .15s,transform .12s ease}
+.orch-edge-flow{padding:8px 10px;background:var(--bg-tertiary,var(--bg-secondary));border-radius:var(--orch-r-md);margin:6px 0;font-size:13px;text-align:center}
+.orch-edge-arrowtxt{color:var(--accent);margin:0 4px}
+.orch-edge-btns{margin-top:10px;display:flex;flex-direction:column;gap:6px}
+.orch-io-head{font-size:11px;text-transform:uppercase;letter-spacing:.04em;opacity:.6;margin:8px 0 4px}
+.orch-io-implicit{font-size:12px;opacity:.6;font-style:italic;padding:2px 0}
+.orch-io-port{display:flex;gap:5px;align-items:center;margin-bottom:4px}
+.orch-io-name{flex:1 1 auto;min-width:0}
+.orch-io-type{flex:0 0 84px}
+.orch-io-from{width:100%;margin:0 0 6px;font-size:12px}
+.orch-io-del{flex:0 0 auto;background:none;border:none;color:var(--error-text);cursor:pointer;font-size:13px;padding:2px 5px;border-radius:4px}
+.orch-io-del:hover{background:var(--accent-subtle)}
+.orch-io-add,.orch-io-preset{font-size:12px;padding:4px 8px;width:100%;margin-top:4px}
+.orch-io-badge{color:var(--accent);font-variant-numeric:tabular-nums}
+.orch-io-head-in{margin-top:15px}
+.orch-io-subhint{font-size:10.5px;line-height:1.5;color:var(--text-tertiary);margin:0 0 8px}
+.orch-io-portbox{border:1px solid var(--border-light);border-radius:var(--orch-r-sm);padding:7px 8px;margin-bottom:8px;background:var(--bg-primary)}
+.orch-io-portbox .orch-io-port{margin-bottom:6px}
+.orch-io-fromrow{display:flex;align-items:center;gap:6px}
+.orch-io-fromlbl{flex:0 0 auto;font-size:10.5px;font-weight:600;color:var(--accent);white-space:nowrap}
+.orch-io-fromrow .orch-io-from{margin:0;flex:1 1 auto}
+.orch-io-empty{font-size:10.5px;line-height:1.5;color:var(--text-tertiary);background:var(--bg-tertiary);border:1px dashed var(--border-light);border-radius:var(--orch-r-sm);padding:8px 10px;margin-bottom:8px}
+/* Read-only role persona (the fixed prompt design) */
+.orch-persona-lbl{font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;font-weight:600;color:var(--text-tertiary)}
+.orch-persona-promptlbl{margin:4px 0 5px}
+.orch-persona-prompt{font-family:var(--font-mono,ui-monospace,monospace);font-size:11px;line-height:1.5;white-space:pre-wrap;word-break:break-word;color:var(--text-secondary);background:var(--bg-tertiary);border:1px solid var(--border-light);border-radius:var(--orch-r-sm);padding:8px 10px;margin:0;max-height:240px;overflow:auto;cursor:default}
+.orch-persona-empty{font-size:11.5px;line-height:1.5;color:var(--text-tertiary);font-style:italic;padding:2px 0}
+/* Per-node run trace ("Last run") — the traceability overlay */
+.orch-runtrace-row{display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:12px}
+.orch-runtrace-lbl{font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;font-weight:600;color:var(--text-tertiary)}
+.orch-runtrace-status{font-size:11.5px;font-weight:700}
+.orch-runtrace-running{color:var(--accent)}
+.orch-runtrace-done{color:var(--success-text,#3fb950)}
+.orch-runtrace-error{color:var(--error-text,#f7768e)}
+.orch-runtrace-outlbl{margin:4px 0 5px}
+.orch-runtrace-out{font-family:var(--font-mono,ui-monospace,monospace);font-size:11px;line-height:1.5;white-space:pre-wrap;word-break:break-word;color:var(--text-secondary);background:var(--bg-tertiary);border:1px solid var(--border-light);border-radius:var(--orch-r-sm);padding:8px 10px;margin:0;max-height:300px;overflow:auto}
+.orch-runtrace-waiting{font-size:11.5px;color:var(--text-tertiary);font-style:italic}
+/* Canvas node run-status badge (live overlay during a run) */
+.orch-node[data-run-status]::after{content:"";position:absolute;top:7px;right:9px;width:9px;height:9px;border-radius:50%;z-index:7}
+.orch-node[data-run-status="running"]::after{background:var(--accent);box-shadow:0 0 0 3px var(--accent-subtle);animation:orch-run-pulse 1.1s ease-in-out infinite}
+.orch-node[data-run-status="done"]::after{background:var(--success-text,#3fb950)}
+.orch-node[data-run-status="error"]::after{background:var(--error-text,#f7768e)}
+@keyframes orch-run-pulse{0%,100%{opacity:1}50%{opacity:.35}}
+/* Read-only data-flow summary for control nodes */
+.orch-flow-row{display:flex;align-items:baseline;gap:7px;margin-bottom:5px;font-size:12px}
+.orch-flow-arrow{flex:0 0 auto;color:var(--accent);font-weight:700}
+.orch-flow-lbl{flex:0 0 auto;font-size:10.5px;text-transform:uppercase;letter-spacing:.03em;font-weight:600;color:var(--text-tertiary)}
+.orch-flow-val{flex:1 1 auto;color:var(--text-secondary);word-break:break-word}
+.orch-flow-carry{font-size:11px;line-height:1.55;color:var(--text-tertiary);margin-top:7px;padding-top:7px;border-top:1px solid var(--border-light)}
+.orch-flow-carry b{color:var(--text-secondary);font-weight:600}
+.orch-nodes{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none}
+.orch-node{position:absolute;width:${_ORCH_CARD_W}px;background:var(--bg-secondary);border:1px solid var(--border-light);border-left:4px solid var(--node-accent,var(--accent));border-radius:var(--orch-r-md);box-shadow:var(--orch-elev-card);user-select:none;pointer-events:auto;transition:box-shadow .15s,border-color .15s,transform .12s ease}
 .orch-node:hover{box-shadow:var(--orch-elev-pop);transform:translateY(-1px)}
 .orch-node.is-selected{border-color:var(--accent);border-left-color:var(--node-accent,var(--accent));box-shadow:0 0 0 2px var(--accent-subtle),var(--orch-elev-pop)}
 .orch-node.is-dragging{opacity:.95;box-shadow:var(--orch-elev-lift);z-index:50;transform:none}
 .orch-node-artifact{border-style:dashed;border-left-style:solid;background:linear-gradient(180deg,var(--bg-secondary),color-mix(in srgb,var(--node-accent) 8%,var(--bg-secondary)))}
+.orch-node-group{border-style:dashed;border-left-style:solid;border-width:1.5px;background:linear-gradient(180deg,var(--bg-secondary),color-mix(in srgb,#8b5cf6 10%,var(--bg-secondary)))}
+.orch-node-group .orch-node-head{cursor:pointer}
+.orch-node-group .orch-node-sub{font-family:var(--mono-font,monospace);color:#8b5cf6;opacity:.9}
+.orch-chip-group{grid-column:1 / -1}
+.orch-crumb{display:flex;align-items:center;gap:4px;flex-wrap:wrap;padding:8px 14px;border-bottom:var(--orch-rail);background:var(--bg-tertiary);font-size:12px;position:relative;z-index:4}
+.orch-crumb-item{background:transparent;border:1px solid transparent;color:var(--text-secondary);font-family:inherit;font-size:12px;font-weight:600;padding:4px 9px;border-radius:var(--orch-r-sm);cursor:pointer;transition:background .12s,color .12s,border-color .12s}
+.orch-crumb-item:hover{background:var(--bg-hover);color:var(--text-primary);border-color:var(--border-light)}
+.orch-crumb-item:last-child{color:var(--accent)}
+.orch-crumb-sep{color:var(--text-tertiary);font-size:12px}
 .orch-node-artifact .orch-node-sub{font-family:var(--mono-font,monospace);color:var(--node-accent);opacity:.9}
+.orch-node-start,.orch-node-stop{border-width:1.5px;border-style:solid;border-color:color-mix(in srgb,var(--node-accent) 55%,var(--border-light))}
+.orch-node-start{background:linear-gradient(180deg,color-mix(in srgb,var(--node-accent) 14%,var(--bg-secondary)),var(--bg-secondary))}
+.orch-node-stop{background:linear-gradient(180deg,var(--bg-secondary),color-mix(in srgb,var(--node-accent) 14%,var(--bg-secondary)))}
+.orch-node-ribbon{position:absolute;right:9px;top:-9px;font-size:8.5px;font-weight:800;letter-spacing:.1em;padding:2px 7px;border-radius:999px;color:#fff;background:var(--node-accent);box-shadow:0 2px 6px rgba(0,0,0,.3);pointer-events:none;z-index:6}
+.orch-ribbon-out{top:auto;bottom:-9px}
+.orch-note-wire{background:color-mix(in srgb,var(--node-accent,var(--accent)) 9%,var(--bg-tertiary));border-left:3px solid var(--node-accent,var(--accent))}
+.orch-note code{font-family:var(--mono-font,monospace);font-size:10.5px;background:var(--bg-primary);border:1px solid var(--border);border-radius:4px;padding:1px 4px;color:var(--text-primary)}
 .orch-node-head{display:flex;align-items:center;gap:8px;padding:9px 8px 7px 11px;cursor:grab}
 .orch-node-head:active{cursor:grabbing}
 .orch-node-icon{width:24px;height:24px;flex-shrink:0;display:flex;align-items:center;justify-content:center;color:var(--node-accent)}
@@ -1448,19 +2530,42 @@ function _orchInjectStyles() {
 .orch-port-out{bottom:-7px}
 .orch-hint{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none}
 .orch-hint-card{max-width:340px;text-align:center;background:var(--bg-secondary);border:1px dashed var(--border-light);border-radius:var(--orch-r-lg);padding:26px 28px;box-shadow:var(--orch-elev-pop)}
-.orch-hint-emoji{font-size:34px;margin-bottom:10px}
+.orch-hint-emoji{margin-bottom:10px;color:var(--text-tertiary)}
+.orch-hint-emoji .orch-ico,.orch-hint-emoji .orch-ico-lg{width:34px;height:34px}
 .orch-hint-title{font-size:16px;font-weight:700;color:var(--text-primary);margin-bottom:8px}
 .orch-hint-text{font-size:12.5px;line-height:1.6;color:var(--text-secondary)}
 .orch-inspector{width:300px;flex-shrink:0;border-left:var(--orch-rail);background:var(--bg-secondary);overflow-y:auto;padding:16px}
 .orch-insp-empty{text-align:center;color:var(--text-tertiary);font-size:12.5px;padding-top:48px}
-.orch-insp-empty-icon{font-size:30px;margin-bottom:12px;opacity:.7}
+.orch-insp-empty-icon{margin-bottom:12px;opacity:.7}
+.orch-insp-empty-icon .orch-ico{width:30px;height:30px}
 .orch-insp-stats{margin-top:18px;font-size:11px;color:var(--text-tertiary)}
-.orch-insp-head{display:flex;flex-direction:column;gap:3px;margin-bottom:16px;padding-bottom:12px;border-bottom:var(--orch-rail)}
+.orch-insp-head{display:flex;align-items:center;gap:11px;margin-bottom:10px}
+.orch-insp-avatar{width:38px;height:38px;flex:0 0 38px;border-radius:var(--orch-r-md);object-fit:cover;background:var(--bg-tertiary)}
+.orch-insp-glyph{display:inline-flex;align-items:center;justify-content:center;color:var(--node-accent,var(--accent));background:color-mix(in srgb,var(--node-accent,var(--accent)) 14%,var(--bg-secondary))}
+.orch-insp-glyph svg{width:20px;height:20px}
+.orch-insp-htext{display:flex;flex-direction:column;gap:2px;min-width:0}
 .orch-insp-kind{font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--accent)}
-.orch-insp-type{font-size:17px;font-weight:700;color:var(--text-primary)}
+.orch-insp-type{font-size:16px;font-weight:700;color:var(--text-primary);line-height:1.2;word-break:break-word}
+.orch-insp-blurb{font-size:11.5px;line-height:1.5;color:var(--text-tertiary);margin-bottom:14px}
+.orch-insp-cta{margin-bottom:12px;flex-direction:column;gap:2px;line-height:1.3}
+.orch-insp-cta-sub{font-size:10.5px;font-weight:500;opacity:.8}
+/* Collapsible inspector sections */
+.orch-sec{border:1px solid var(--border-light);border-radius:var(--orch-r-md);margin-bottom:8px;background:var(--bg-primary)}
+.orch-sec[open]{background:transparent}
+.orch-sec-sum{cursor:pointer;list-style:none;display:flex;align-items:center;gap:7px;padding:10px 11px;font-size:12px;font-weight:700;color:var(--text-primary);user-select:none}
+.orch-sec-sum::-webkit-details-marker{display:none}
+.orch-sec-sum .orch-ico{width:14px;height:14px;opacity:.7;flex:0 0 auto}
+.orch-sec-sum>span:first-of-type{flex:1}
+.orch-sec-chev{transition:transform .18s ease;opacity:.5;font-size:15px}
+.orch-sec[open] .orch-sec-chev{transform:rotate(90deg)}
+.orch-sec-body{padding:2px 11px 12px}
+.orch-sec-hint{font-size:11px;line-height:1.55;color:var(--text-tertiary);margin-bottom:11px}
+.orch-sec-hint b{color:var(--text-secondary);font-weight:600}
+.orch-sec-hint code{font-size:10.5px;background:var(--bg-tertiary);padding:1px 4px;border-radius:3px}
+.orch-insp-foot{margin-top:14px;padding-top:12px;border-top:var(--orch-rail)}
 .orch-fld{display:block;margin-bottom:13px}
 .orch-fld>span{display:block;font-size:11px;font-weight:600;color:var(--text-secondary);margin-bottom:5px}
-.orch-fld-check{display:flex;align-items:center;gap:8px}
+.orch-fld-check{display:flex;align-items:center;justify-content:space-between;gap:8px}
 .orch-fld-check>span{margin-bottom:0}
 .orch-input{width:100%;background:var(--bg-primary);border:1px solid var(--border);border-radius:var(--orch-r-sm);color:var(--text-primary);font-family:inherit;font-size:12.5px;padding:8px 10px;outline:none;transition:border-color var(--transition),box-shadow var(--transition)}
 .orch-input:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-subtle)}
@@ -1470,7 +2575,63 @@ function _orchInjectStyles() {
 .orch-conn-row{flex:1;font-size:11px;color:var(--text-secondary);text-align:center}
 .orch-toast{position:fixed;bottom:28px;left:50%;transform:translateX(-50%);z-index:9999;background:var(--bg-tertiary);border:1px solid var(--border-light);color:var(--text-primary);font-size:13px;padding:11px 18px;border-radius:var(--orch-r-md);box-shadow:var(--orch-elev-pop);transition:opacity .3s}
 .orch-toast.is-err{border-color:var(--error-border);color:var(--error-text)}
-@media(max-width:820px){.orch-palette{width:120px}.orch-inspector{width:240px}}
+.orch-m-only{display:none}
+.orch-sheet-head{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border-bottom:var(--orch-rail);font-size:13px;font-weight:800;color:var(--text-secondary)}
+.orch-sheet-hint{padding:9px 14px;font-size:11.5px;line-height:1.5;color:var(--text-tertiary);border-bottom:var(--orch-rail)}
+@media(max-width:1100px) and (min-width:769px){.orch-palette{width:150px}.orch-inspector{width:250px}}
+
+@media(max-width:768px){
+  /* Full-screen modal — phones have no room for a centred floating card. */
+  .orch-overlay{align-items:stretch;justify-content:stretch}
+  .orch-shell{width:100vw;height:100vh;height:100dvh;max-width:none;border:none;border-radius:0}
+
+  .orch-m-only{display:inline-flex}
+
+  /* Header: one horizontally-scrollable row instead of wrapping into 3 tall
+     rows that devour vertical canvas space. */
+  .orch-top{padding:8px 10px;gap:8px}
+  .orch-top-left{flex-shrink:1}
+  .orch-name-input{width:100%;min-width:80px;font-size:15px;padding:5px 8px}
+  .orch-top-actions{flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none;gap:6px;flex-shrink:0;max-width:62vw}
+  .orch-top-actions::-webkit-scrollbar{display:none}
+  .orch-btn{padding:8px 10px;font-size:12px}
+  .orch-top-sep{display:none}
+
+  /* Side rails stop stealing canvas width: palette + inspector become
+     full-width slide-up sheets, the AI panel + run drawer go full-screen.
+     The canvas always fills the body so there's room to actually place
+     nodes (which on touch happens via tap-to-add, see _orchAddNodeAtCenter). */
+  .orch-body{position:relative}
+  .orch-canvas-wrap{position:absolute;inset:0}
+
+  .orch-palette,.orch-inspector{
+    position:absolute;left:0;right:0;bottom:0;top:auto;width:auto;
+    max-height:62%;border:none;border-top:var(--orch-rail);
+    border-radius:var(--orch-r-xl) var(--orch-r-xl) 0 0;
+    box-shadow:var(--orch-elev-lift);z-index:40;
+    transform:translateY(110%);transition:transform .22s ease;
+  }
+  .orch-shell.orch-m-pal .orch-palette{transform:translateY(0)}
+  .orch-shell.orch-m-insp .orch-inspector{transform:translateY(0)}
+  .orch-pal-grid{grid-template-columns:repeat(3,1fr)}
+  .orch-pal-foot{display:none}
+  .orch-chip-group{grid-column:1 / -1}
+
+  /* AI composer + run drawer: full-screen overlays driven by existing
+     .is-open toggles (no JS change needed). */
+  .orch-ai{position:absolute;inset:0;width:auto;z-index:50;transform:translateX(-110%);transition:transform .22s ease;border-right:none}
+  .orch-ai.is-open{width:auto;transform:translateX(0)}
+  .orch-run-drawer{top:0;width:auto;left:0;right:0}
+  .orch-run-drawer.is-open{width:auto}
+
+  /* Bigger touch targets for ports + node delete on the canvas. */
+  .orch-port{width:16px;height:16px}
+  .orch-port-in{top:-9px}
+  .orch-port-out{bottom:-9px}
+  .orch-node-del{opacity:1}
+
+  .orch-tpl-menu,.orch-load-menu{position:fixed;left:8px;right:8px;top:auto;min-width:0;max-height:60vh}
+}
 `;
   var style = document.createElement('style');
   style.id = 'orch-studio-styles';

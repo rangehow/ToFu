@@ -55,7 +55,118 @@
     unsub: null,          // push unsubscribe handle (Activity feed)
     panelUnsub: null,     // push unsubscribe handle (Charter/Board live refresh)
     cbTimer: null,        // debounce timer for Charter/Board refetch
+    tab: 'charter',       // active tab (charter|board|activity|peers)
+    tabsWired: false,     // one-shot tab click delegation guard
   };
+
+  // ── Tabs: show one surface at a time (full width) ──────────────
+  /** Switch the visible tab-panel. `name` ∈ charter|board|activity|peers. */
+  function _selectTab(name) {
+    _state.tab = name;
+    var tabs = document.querySelectorAll('.project-brain-tabs .pb-tab');
+    for (var i = 0; i < tabs.length; i++) {
+      var on = tabs[i].getAttribute('data-pb-tab') === name;
+      tabs[i].classList.toggle('pb-tab-active', on);
+      tabs[i].setAttribute('aria-selected', on ? 'true' : 'false');
+    }
+    var panels = document.querySelectorAll('.project-brain-columns .pb-tab-panel');
+    for (var j = 0; j < panels.length; j++) {
+      panels[j].classList.toggle('pb-tab-panel-active',
+        panels[j].getAttribute('data-pb-panel') === name);
+    }
+    // The newly-active panel's content was rendered but not yet translated
+    // (only VISIBLE items are processed). Re-apply so its free-text content
+    // gets the overlay now that it's on screen (no-op when the toggle is off).
+    if (typeof ProjectBrainI18n !== 'undefined' && ProjectBrainI18n &&
+        typeof ProjectBrainI18n.applyAll === 'function') {
+      try { ProjectBrainI18n.applyAll(); } catch (_e) { /* best-effort */ }
+    }
+  }
+
+  /** Wire the tab bar once (click delegation). Idempotent. */
+  function _initTabs() {
+    if (_state.tabsWired) return;
+    var bar = document.getElementById('projectBrainTabs');
+    if (!bar) return;
+    bar.addEventListener('click', function (ev) {
+      var btn = ev.target && ev.target.closest ? ev.target.closest('.pb-tab') : null;
+      if (!btn) return;
+      var name = btn.getAttribute('data-pb-tab');
+      if (name) _selectTab(name);
+    });
+    _state.tabsWired = true;
+  }
+
+  /** Set a tab's count badge (hidden when 0 / falsy). */
+  function _setTabCount(id, n) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    if (n && n > 0) { el.textContent = n > 99 ? '99+' : String(n); el.hidden = false; }
+    else { el.textContent = ''; el.hidden = true; }
+  }
+
+  // ── Long-text clamp-with-expand ─────────────────────────────────
+  // A committed decision / north-star / proposal can be 2000+ chars; showing
+  // it in full makes the surface an unreadable wall (the reported bug). Wrap
+  // long text in a collapsed .pb-clamp with a Show more/less toggle. Short
+  // text (< threshold) is returned as-is so we don't add chrome needlessly.
+  var _CLAMP_THRESHOLD = 240;
+
+  /** HTML for a clamp block. `innerHtml` is already-escaped/safe markup.
+   *  The content element carries `data-pb-src="<rawText>"` — the ORIGINAL,
+   *  authoritative text. The content-translation overlay (project-brain-i18n)
+   *  lays a translation OVER this element's innerHTML while the source stays
+   *  retrievable from the attribute; it never mutates rawText, and the
+   *  commit/reject controls read their own data-text (never this). */
+  function _clampBlock(innerHtml, rawText) {
+    var srcAttr = rawText ? (' data-pb-src="' + _esc(rawText) + '"') : '';
+    if ((rawText || '').length <= _CLAMP_THRESHOLD) {
+      return '<div class="pb-clamp-inner"' + srcAttr + '>' + innerHtml + '</div>';
+    }
+    var more = _esc(_t('projectBrain.showMore', 'Show more'));
+    return '<div class="pb-clamp-wrap">' +
+      '<div class="pb-clamp"' + srcAttr + '>' + innerHtml + '</div>' +
+      '<button type="button" class="pb-clamp-toggle" data-more="' + more +
+      '" data-less="' + _esc(_t('projectBrain.showLess', 'Show less')) + '">' +
+      ((typeof Icon === 'function') ? Icon('chevronDown', 12) : '') +
+      '<span>' + more + '</span></button>' +
+      '</div>';
+  }
+
+  /** Lay the content-translation overlay over a freshly-rendered subtree.
+   *  No-op when the overlay module is absent or the toggle is off — the
+   *  originals painted by the render fns stay on screen (source of truth). */
+  function _applyContentI18n(el) {
+    if (!el || typeof ProjectBrainI18n === 'undefined' || !ProjectBrainI18n ||
+        typeof ProjectBrainI18n.apply !== 'function') return;
+    try { ProjectBrainI18n.apply(el); }
+    catch (_e) { /* overlay is best-effort; never break a render */ }
+  }
+
+  /** Delegate clamp-toggle clicks within a rendered container. */
+  function _wireClampToggles(el) {
+    if (!el) return;
+    var btns = el.querySelectorAll('.pb-clamp-toggle');
+    for (var i = 0; i < btns.length; i++) {
+      btns[i].addEventListener('click', function (ev) {
+        var btn = ev.currentTarget;
+        var clamp = btn.parentNode.querySelector('.pb-clamp');
+        if (!clamp) return;
+        var open = clamp.classList.toggle('pb-clamp-open');
+        btn.classList.toggle('pb-clamp-toggle-open', open);
+        var lbl = btn.querySelector('span');
+        if (lbl) lbl.textContent = open
+          ? (btn.getAttribute('data-less') || 'Show less')
+          : (btn.getAttribute('data-more') || 'Show more');
+        // Lazy-on-expand: translate the now-visible long text (no-op when the
+        // content-translation overlay is off / already-target / cached).
+        if (open && typeof ProjectBrainI18n !== 'undefined' &&
+            ProjectBrainI18n && typeof ProjectBrainI18n.apply === 'function') {
+          ProjectBrainI18n.apply(clamp);
+        }
+      });
+    }
+  }
 
   /**
    * sha1(path)[:16] — MUST match the backend project_channel_key. We use
@@ -112,6 +223,153 @@
   }
 
   function _activityListEl() { return document.getElementById('projectBrainActivityList'); }
+
+  // ── Hover preview for opaque conversation IDs ────────────────────
+  // Every conv reference in the panel (activity chip, board owner chip,
+  // influence row, peer roster card, peer-message thread) carries a
+  // [data-conv-id]. On hover we resolve it to {title, firstUserMessage} via a
+  // tiny backend preview endpoint and float a card next to the cursor, so the
+  // opaque short id reads as "the first thing that conversation asked". The
+  // fetch is cached (a conv's opening turn doesn't change) and shared behind a
+  // single delegated listener on the overlay so it also covers chips that were
+  // re-rendered after the listener was bound.
+  var _convPreviewCache = {};     // convId → {title, firstUserMessage,...} | Promise
+  var _previewEl = null;          // the single floating card, reused
+  var _previewHoverId = '';       // convId currently hovered (guards stale async)
+  var _previewTimer = null;       // hover-intent debounce
+
+  /** Fetch (and cache) a conversation preview. Returns a Promise<preview|null>. */
+  function _fetchConvPreview(convId) {
+    if (!convId) return Promise.resolve(null);
+    var cached = _convPreviewCache[convId];
+    if (cached && typeof cached.then !== 'function') return Promise.resolve(cached);
+    if (cached && typeof cached.then === 'function') return cached;
+    var api = (typeof Api !== 'undefined' && Api.conversations) ? Api.conversations : null;
+    if (!api || typeof api.preview !== 'function') return Promise.resolve(null);
+    var p = Promise.resolve(api.preview(convId)).then(function (res) {
+      // api_ok wraps the payload at top level; keep only the fields we render.
+      var rec = res ? {
+        id: res.id || convId,
+        title: res.title || '',
+        firstUserMessage: res.firstUserMessage || '',
+        msgCount: res.msgCount || 0,
+      } : null;
+      _convPreviewCache[convId] = rec;   // cache even null (avoid refetch storms)
+      return rec;
+    }).catch(function (e) {
+      if (typeof console !== 'undefined') console.warn('[ProjectBrain] conv preview failed', e);
+      _convPreviewCache[convId] = null;
+      return null;
+    });
+    _convPreviewCache[convId] = p;
+    return p;
+  }
+
+  /**
+   * Build the inner HTML of a hover-preview card from a preview record. Pure +
+   * testable. Shows the conversation title (or the short id when untitled) and
+   * the opening question; an explicit "no messages yet" line for empty convs.
+   */
+  function buildConvPreviewCard(preview, convId) {
+    var short = String(convId || (preview && preview.id) || '').slice(0, 8);
+    var title = (preview && preview.title) ||
+      _t('projectBrain.previewUntitled', 'Untitled') ;
+    var first = preview && preview.firstUserMessage;
+    var head = '<div class="pb-preview-title">' + _esc(title) + '</div>';
+    var idLine = '<div class="pb-preview-id">' + _esc(short) + '</div>';
+    var bodyHtml;
+    if (first) {
+      bodyHtml = '<div class="pb-preview-label">' +
+        _esc(_t('projectBrain.previewFirstQuestion', 'First question')) + '</div>' +
+        '<div class="pb-preview-body">' + _esc(first) + '</div>';
+    } else {
+      bodyHtml = '<div class="pb-preview-empty">' +
+        _esc(_t('projectBrain.previewEmpty', 'No messages yet')) + '</div>';
+    }
+    return head + idLine + bodyHtml;
+  }
+
+  function _ensurePreviewEl() {
+    if (_previewEl) return _previewEl;
+    var el = document.createElement('div');
+    el.className = 'pb-conv-preview';
+    el.setAttribute('role', 'tooltip');
+    el.hidden = true;
+    document.body.appendChild(el);
+    _previewEl = el;
+    return el;
+  }
+
+  /** Position the (already-populated) preview card near an anchor element. */
+  function _positionPreview(anchor) {
+    var el = _previewEl;
+    if (!el || !anchor) return;
+    el.hidden = false;
+    var M = 8, GAP = 8;
+    var r = anchor.getBoundingClientRect();
+    var pw = el.offsetWidth || 300;
+    var ph = el.offsetHeight || 120;
+    var left = Math.round(r.left);
+    var maxLeft = window.innerWidth - pw - M;
+    if (left > maxLeft) left = Math.max(M, maxLeft);
+    if (left < M) left = M;
+    // Prefer above; fall back below when there's no room.
+    var top;
+    if (r.top - GAP - ph >= M) top = Math.round(r.top - ph - GAP);
+    else top = Math.round(r.bottom + GAP);
+    el.style.left = left + 'px';
+    el.style.top = top + 'px';
+  }
+
+  function _hideConvPreview() {
+    if (_previewTimer) { clearTimeout(_previewTimer); _previewTimer = null; }
+    _previewHoverId = '';
+    if (_previewEl) { _previewEl.hidden = true; _previewEl.innerHTML = ''; }
+  }
+
+  /** Show the preview for `anchor`'s conv id (fetch + render + position). */
+  function _showConvPreview(anchor) {
+    var convId = anchor && anchor.getAttribute ? anchor.getAttribute('data-conv-id') : '';
+    if (!convId) return;
+    _previewHoverId = convId;
+    var el = _ensurePreviewEl();
+    // Loading state so the card appears instantly on a cold fetch.
+    el.innerHTML = '<div class="pb-preview-loading">' +
+      _esc(_t('projectBrain.previewLoading', 'Loading…')) + '</div>';
+    _positionPreview(anchor);
+    _fetchConvPreview(convId).then(function (rec) {
+      // A different chip may be hovered by the time the fetch resolves.
+      if (_previewHoverId !== convId) return;
+      el.innerHTML = buildConvPreviewCard(rec, convId);
+      _positionPreview(anchor);
+    });
+  }
+
+  /** Delegated hover handler: find the nearest [data-conv-id] under the cursor. */
+  function _onOverlayHover(ev) {
+    var t2 = ev.target;
+    var anchor = (t2 && t2.closest) ? t2.closest('[data-conv-id]') : null;
+    if (!anchor || !anchor.getAttribute('data-conv-id')) { _hideConvPreview(); return; }
+    var convId = anchor.getAttribute('data-conv-id');
+    if (convId === _previewHoverId && _previewEl && !_previewEl.hidden) return;
+    if (_previewTimer) clearTimeout(_previewTimer);
+    _previewTimer = setTimeout(function () { _showConvPreview(anchor); }, 140);
+  }
+
+  /** Wire the delegated hover-preview on the overlay once. Idempotent. */
+  function _initConvPreview() {
+    var overlay = document.getElementById('projectBrainOverlay');
+    if (!overlay || overlay._pbPreviewWired) return;
+    overlay.addEventListener('mouseover', _onOverlayHover);
+    overlay.addEventListener('mouseout', function (ev) {
+      // Only hide when leaving the anchor entirely (not moving within it).
+      var to = ev.relatedTarget;
+      var anchor = (ev.target && ev.target.closest) ? ev.target.closest('[data-conv-id]') : null;
+      if (anchor && to && anchor.contains && anchor.contains(to)) return;
+      _hideConvPreview();
+    });
+    overlay._pbPreviewWired = true;
+  }
 
   /** Compact relative time from an epoch-ms `ts` (localized). '' when absent. */
   function _relTime(ts) {
@@ -195,7 +453,12 @@
 
     var summary = document.createElement('div');
     summary.className = 'pb-activity-summary';
-    summary.textContent = ev.summary || kindLabel;
+    // Prefer the UNtruncated text (payload.summary_full, present only when the
+    // display summary was capped at write time) so a long summary expands to
+    // its full self instead of a dead mid-word fragment. Short summaries have
+    // no summary_full → render as-is with no clamp chrome.
+    var fullText = (ev.payload && ev.payload.summary_full) || ev.summary || kindLabel;
+    summary.innerHTML = _clampBlock(_esc(fullText), fullText);
     body.appendChild(summary);
 
     // Timestamp row — a legend without WHEN is only half a fix. Relative text
@@ -251,6 +514,10 @@
       // newest on top
       if (list.firstChild) list.insertBefore(row, list.firstChild);
       else list.appendChild(row);
+      // Wire the summary's Show more/less toggle (present only for a clamped,
+      // over-threshold summary — short rows have no toggle to bind).
+      _wireClampToggles(row);
+      if (!fromBackfill) _applyContentI18n(row);
       var empty = list.querySelector('.pb-activity-empty');
       if (empty) empty.remove();
     }
@@ -290,6 +557,8 @@
       // closeFeed() wiped the list innerHTML; if the backfill produced no rows
       // the column would otherwise be a blank void — restore the placeholder.
       _ensureActivityEmptyState();
+      var _al = _activityListEl();
+      if (_al) _applyContentI18n(_al);
     }).catch(function (e) {
       if (typeof console !== 'undefined') console.warn('[ProjectBrain] backfill failed', e);
       _ensureActivityEmptyState();
@@ -374,7 +643,8 @@
       return;
     }
     if (content) {
-      parts.push('<div class="pb-charter-northstar">' + _esc(content) + '</div>');
+      parts.push('<div class="pb-charter-northstar">' +
+        _clampBlock(_esc(content), content) + '</div>');
     }
     if (decisions.length) {
       parts.push('<div class="pb-charter-section">' +
@@ -383,7 +653,7 @@
       for (var i = 0; i < decisions.length; i++) {
         var d = decisions[i];
         var txt = (d && typeof d === 'object') ? (d.text || '') : String(d);
-        parts.push('<li>' + _esc(txt) + '</li>');
+        parts.push('<li>' + _clampBlock(_esc(txt), txt) + '</li>');
       }
       parts.push('</ul>');
     }
@@ -402,7 +672,7 @@
         parts.push(
           '<div class="pb-proposal" data-event-id="' + _esc(p.event_id) +
           '" data-proposal-id="' + _esc(pid) + '">' +
-          '<div class="pb-proposal-text">' + _esc(ptext) + '</div>' +
+          '<div class="pb-proposal-text">' + _clampBlock(_esc(ptext), ptext) + '</div>' +
           '<div class="pb-proposal-actions">' +
           '<button type="button" class="pb-proposal-commit" data-text="' + _esc(ptext) +
           '" data-ver="' + version + '" data-proposal-id="' + _esc(pid) + '">' +
@@ -413,6 +683,11 @@
       }
     }
     el.innerHTML = parts.join('');
+    _wireClampToggles(el);
+    _applyContentI18n(el);
+    // Charter tab badge = pending proposals awaiting the human (the actionable
+    // count), not the committed-decision total.
+    _setTabCount('pbTabCountCharter', props.length);
     // Wire commit/reject — commit calls the human-gated commit route, then
     // re-renders so the decision moves from "proposed" to "committed".
     var commitBtns = el.querySelectorAll('.pb-proposal-commit');
@@ -512,7 +787,7 @@
     } catch (_e) { return ''; }
   }
 
-  /** One action button (SVG icon + label). `act` ∈ complete|block|reopen. */
+  /** One action button (SVG icon + label). `act` ∈ complete|block|defer|reopen|resume. */
   function _boardActionBtn(act, glyph, labelKey, fallback) {
     return '<button type="button" class="pb-board-act pb-board-act-' + act +
       '" data-act="' + act + '" title="' + _esc(_t(labelKey, fallback)) + '">' +
@@ -535,23 +810,56 @@
         + '<span>' + _esc(_t('projectBrain.dispatched', 'auto')) + '</span></span>'
       : '';
     // Human lifecycle controls, gated by status:
-    //   • complete + block on open|claimed (lifecycle of live work)
+    //   • complete + block + park(defer) on open|claimed (live-work lifecycle)
     //   • reopen on claimed (break a stuck live claim) AND done (revive)
+    //   • resume(=reopen, deferred→open) on deferred — the human DECISION lever
+    //     that unparks a human-gated epic once the blocking question is answered
     var acts = [];
     if (t.status === 'open' || t.status === 'claimed') {
       acts.push(_boardActionBtn('complete', 'check', 'projectBrain.actComplete', 'Done'));
       acts.push(_boardActionBtn('block', 'ban', 'projectBrain.actBlock', 'Block'));
+      acts.push(_boardActionBtn('defer', 'clock', 'projectBrain.actDefer', 'Park'));
     }
     if (t.status === 'claimed' || t.status === 'done') {
       acts.push(_boardActionBtn('reopen', 'refresh', 'projectBrain.actReopen', 'Reopen'));
     }
+    if (t.status === 'deferred') {
+      // "Resume" is the reopen path (deferred → open) with decision-focused copy.
+      acts.push(_boardActionBtn('resume', 'play', 'projectBrain.actResume', 'Resume'));
+    }
     var actionsRow = acts.length
       ? '<div class="pb-board-card-actions">' + acts.join('') + '</div>' : '';
+    // A board epic title can be a multi-sentence design description (stored
+    // full, up to 2000 chars). Render it through the clamp so a long title
+    // collapses with a Show more/less toggle instead of a wall of text — the
+    // full text is always the expandable source (never a clipped fragment).
+    var titleHtml = _clampBlock(_esc(t.title), t.title || '');
     return '<div class="pb-board-card pb-board-' + _esc(t.status) + '" data-task-id="' +
       _esc(t.id) + '">' +
-      '<div class="pb-board-title">' + _esc(t.title) + '</div>' +
+      '<div class="pb-board-title">' + titleHtml + '</div>' +
       '<div class="pb-board-card-meta">' + ownerChip + badge + '</div>' +
       actionsRow + '</div>';
+  }
+
+  /** Render one path-LEASE row for the Held lane. A lease reserves a
+   *  path/subsystem ("hold off editing"); it is NOT an epic, so it shows the
+   *  held path + the holder conversation, and offers NO epic lifecycle
+   *  actions (complete/block/park). The reservation auto-expires or is
+   *  released by its holder — the operator does not manage it here. */
+  function _heldCard(t) {
+    var owner = t.owner_conv_id || '';
+    var ownerChip = owner
+      ? '<button type="button" class="pb-conv-chip" data-conv-id="' + _esc(owner) + '">' +
+        _esc(owner) + '</button>'
+      : '';
+    var titleHtml = _clampBlock(_esc(t.title), t.title || '');
+    return '<div class="pb-board-card pb-board-held" data-task-id="' +
+      _esc(t.id) + '">' +
+      '<div class="pb-board-title">' + titleHtml + '</div>' +
+      '<div class="pb-board-card-meta">' +
+      '<span class="pb-board-held-by">' +
+      _esc(_t('projectBrain.heldBy', 'held by')) + '</span> ' + ownerChip +
+      '</div></div>';
   }
 
   /** Dispatch a per-card human mutation → backend → refreshBoard (no local
@@ -564,7 +872,10 @@
     var call = null;
     if (act === 'complete' && typeof api.boardComplete === 'function') {
       call = api.boardComplete(path, taskId, convId);
-    } else if (act === 'reopen' && typeof api.boardReopen === 'function') {
+    } else if ((act === 'reopen' || act === 'resume') &&
+               typeof api.boardReopen === 'function') {
+      // "resume" is the same backend reopen (deferred → open); the distinct
+      // verb only drives decision-focused UI copy on a parked card.
       call = api.boardReopen(path, taskId, convId);
     } else if (act === 'block' && typeof api.boardBlock === 'function') {
       var reason = '';
@@ -572,6 +883,13 @@
         reason = prompt(_t('projectBrain.blockReasonPrompt', 'Why is this blocked?')) || '';
       }
       call = api.boardBlock(path, taskId, convId, reason);
+    } else if (act === 'defer' && typeof api.boardDefer === 'function') {
+      var dreason = '';
+      if (typeof prompt === 'function') {
+        dreason = prompt(_t('projectBrain.deferReasonPrompt',
+                            'Park this epic — what human decision is it waiting on?')) || '';
+      }
+      call = api.boardDefer(path, taskId, convId, dreason);
     }
     if (!call) return;
     if (btn) btn.disabled = true;
@@ -610,13 +928,24 @@
     if (!tasks.length) {
       el.innerHTML = '<div class="pb-board-empty">' +
         _esc(_t('projectBrain.boardEmpty', 'Board is empty')) + '</div>';
+      _setTabCount('pbTabCountBoard', 0);
       return;
     }
-    var cols = { open: [], claimed: [], done: [] };
+    var cols = { open: [], claimed: [], deferred: [], done: [] };
+    var held = [];
     for (var i = 0; i < tasks.length; i++) {
       var t = tasks[i];
+      // A path-LEASE (kind='lease') is a durational resource reservation, not
+      // an epic. It carries status='claimed' but MUST NOT render in the
+      // Claimed lane (it isn't work being advanced) nor inflate the attention
+      // badge — it goes to a dedicated Held lane, same shape as the Parked
+      // (deferred) lane. Mirrors render_board_block's backend partition.
+      if (t.kind === 'lease') { held.push(t); continue; }
       (cols[t.status] || cols.open).push(t);
     }
+    // Board badge = live epics needing attention (open + claimed), not done,
+    // and NOT path leases (a held path is not an epic awaiting action).
+    _setTabCount('pbTabCountBoard', cols.open.length + cols.claimed.length);
     function lane(key, labelKey) {
       var cards = cols[key].map(_boardCard).join('') ||
         '<div class="pb-board-lane-empty">—</div>';
@@ -636,10 +965,24 @@
                         'Open a conversation to post an epic')) + '">' +
       ((typeof Icon === 'function') ? Icon('plus', 13) : '') +
       '<span>' + _esc(_t('projectBrain.newEpic', 'New epic')) + '</span></button>';
+    // Held lane (path leases) — rendered only when non-empty, its own lane so
+    // the operator never mistakes a reservation for a claimed epic.
+    var heldLane = '';
+    if (held.length) {
+      var heldCards = held.map(_heldCard).join('');
+      heldLane = '<div class="pb-board-lane pb-board-lane-held">' +
+        '<div class="pb-board-lane-head">' +
+        ((typeof Icon === 'function') ? Icon('lock', 12) : '') +
+        ' ' + _esc(_t('projectBrain.laneHeld', 'Held (do not edit)')) +
+        ' <span class="pb-board-count">' + held.length + '</span></div>' +
+        heldCards + '</div>';
+    }
     el.innerHTML =
       '<div class="pb-board-toolbar">' + newBtn + '</div>' +
       lane('open', 'projectBrain.laneOpen') +
       lane('claimed', 'projectBrain.laneClaimed') +
+      heldLane +
+      (cols.deferred.length ? lane('deferred', 'projectBrain.laneDeferred') : '') +
       lane('done', 'projectBrain.laneDone');
     // conv-chip click → open that conversation
     var chips = el.querySelectorAll('.pb-conv-chip');
@@ -649,6 +992,10 @@
         if (cid && typeof loadConversation === 'function') loadConversation(cid);
       });
     }
+    // Board titles render through _clampBlock (long epics collapse with a
+    // Show more/less toggle) — bind those toggles for the whole board.
+    _wireClampToggles(el);
+    _applyContentI18n(el);
     // "＋ New epic"
     var nb = el.querySelector('#pbBoardNewBtn');
     if (nb && !nb.disabled) nb.addEventListener('click', _boardPostNew);
@@ -768,13 +1115,14 @@
       cparts.push('<div class="pb-inf-group-head">' +
         _esc(_t('projectBrain.infCharterHead', 'Bound by the charter')) + '</div>');
       if (charter.content) {
-        cparts.push('<div class="pb-inf-northstar">' + _esc(charter.content) + '</div>');
+        cparts.push('<div class="pb-inf-northstar">' +
+          _clampBlock(_esc(charter.content), charter.content) + '</div>');
       }
       var decs = charter.decisions || [];
       if (decs.length) {
         cparts.push('<ul class="pb-inf-decisions">');
         for (var i = 0; i < Math.min(decs.length, 6); i++) {
-          cparts.push('<li>' + _esc(decs[i]) + '</li>');
+          cparts.push('<li>' + _clampBlock(_esc(decs[i]), String(decs[i])) + '</li>');
         }
         cparts.push('</ul>');
       }
@@ -808,6 +1156,8 @@
         '</div>');
     }
     body.innerHTML = parts.join('');
+    _wireClampToggles(body);
+    _applyContentI18n(body);
 
     // conv chips (peer owners) → open that conversation.
     var chipsEls = body.querySelectorAll('.pb-conv-chip');
@@ -944,6 +1294,7 @@
         refreshBoard(path);
         refreshInfluence(path);
         refreshConvInfluenceBar();
+        _refreshPeers(path);
       }, 300);
     };
     pushSubscribe('project', '*', handler);
@@ -970,13 +1321,30 @@
     }
     overlay.hidden = false;
     overlay.classList.add('pb-open');
+    _initTabs();
+    _initConvPreview();
+    if (typeof ProjectBrainI18n !== 'undefined' && ProjectBrainI18n &&
+        typeof ProjectBrainI18n.initToggle === 'function') {
+      try { ProjectBrainI18n.initToggle(); } catch (_e) { /* best-effort */ }
+    }
+    _selectTab(_state.tab || 'charter');
     var path = _displayedProjectPath();
     if (path) {
       openFeed(path);
       refreshCharter(path);
       refreshBoard(path);
       refreshInfluence(path);
+      _refreshPeers(path);
       _subscribePanelLive(path);
+    }
+  }
+
+  /** Drive the Team/Peers column (project-brain-peers.js) if it's loaded. */
+  function _refreshPeers(path) {
+    if (typeof window.ProjectBrainPeers !== 'undefined' &&
+        window.ProjectBrainPeers &&
+        typeof window.ProjectBrainPeers.refreshPeers === 'function') {
+      window.ProjectBrainPeers.refreshPeers(path);
     }
   }
 
@@ -1010,6 +1378,7 @@
   function closeProjectBrain() {
     var overlay = document.getElementById('projectBrainOverlay');
     if (overlay) { overlay.hidden = true; overlay.classList.remove('pb-open'); }
+    _hideConvPreview();
     closeFeed();
     _unsubscribePanelLive();
     var banner = document.getElementById('projectBrainInfluence');
@@ -1034,12 +1403,16 @@
       refreshCharter(path);
       refreshBoard(path);
       refreshInfluence(path);
+      _refreshPeers(path);
       _subscribePanelLive(path);
     } else if (path) {
       // Same project, but the active CONVERSATION may have changed — the
       // influence lens is conv-scoped, so re-resolve it even when the project
       // key is unchanged (charter/board are project-scoped and unaffected).
+      // The peer roster also excludes the active conv server-side, so refresh
+      // it too (a conv switch changes who counts as a "peer").
       refreshInfluence(path);
+      _refreshPeers(path);
     } else {
       closeFeed();
       _unsubscribePanelLive();
@@ -1065,6 +1438,11 @@
     refreshInfluence: refreshInfluence,
     renderConvInfluenceBar: renderConvInfluenceBar,
     refreshConvInfluenceBar: refreshConvInfluenceBar,
+    buildConvPreviewCard: buildConvPreviewCard,
+    _fetchConvPreview: _fetchConvPreview,
+    _showConvPreview: _showConvPreview,
+    _hideConvPreview: _hideConvPreview,
+    _initConvPreview: _initConvPreview,
     _onPush: _onPush,
     _state: _state,
   };

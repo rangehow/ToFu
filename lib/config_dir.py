@@ -23,22 +23,26 @@ Contents:
   need a config file OUTSIDE this directory, update `export.py`.
 
 Note:
-  Memories (both global and project-scoped) are stored under
-  ``<project>/.tofu/skills/`` — no external ``~/`` dependency. This
-  module does NOT touch memory paths.
+  Project-scoped memories live under ``<project>/.tofu/skills/`` (they
+  travel with the project tree). GLOBAL memories live in the server-side
+  store ``<data>/memories/global/`` (``$TOFU_DATA_DIR`` or ``<root>/data``)
+  so they are shared across all projects and reachable with no project
+  attached — see ``lib/memory/storage.py``. Both inherit ``data/``'s
+  export exclusion. This module does NOT touch memory paths.
 """
 
 import os
 
 from lib.log import get_logger
+from lib.runtime_paths import data_root
 
 logger = get_logger(__name__)
 
-# ── Project base directory (same as lib/database.py BASE_DIR) ──
-_BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
 # ── Per-project config directory ──
-CONFIG_DIR = os.path.join(_BASE_DIR, 'data', 'config')
+# Anchored to the WRITABLE data root (see lib/runtime_paths) so a frozen
+# desktop install writes config under a user-writable dir, not the read-only
+# _internal/ bundle.
+CONFIG_DIR = os.path.join(data_root(), 'config')
 
 
 def _ensure_config_dir():
@@ -54,6 +58,21 @@ def config_path(*parts):
         config_path('daily_reports', '2026-04-01.json')
     """
     return os.path.join(CONFIG_DIR, *parts)
+
+
+# ── Per-project fetched-files staging directory ──
+# data/fetched/ holds file assets downloaded by the fetch_url tool that
+# cannot be extracted as text (images, archives, office docs, …). The model
+# is handed the saved path and reads it back via read_files. Lives under the
+# fully-gitignored data/ tree, so it stays isolated per project copy and is
+# never exported.
+FETCHED_DIR = os.path.join(data_root(), 'fetched')
+
+
+def fetched_path(*parts):
+    """Build a path under data/fetched/, creating the directory on first use."""
+    os.makedirs(FETCHED_DIR, exist_ok=True)
+    return os.path.join(FETCHED_DIR, *parts)
 
 
 # ── Auto-create config dir on import ──

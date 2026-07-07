@@ -47,7 +47,6 @@ Termination guardrails:
   6. Abort — user can abort at any time.
 """
 
-import json
 import threading
 import time
 import uuid
@@ -64,6 +63,7 @@ from lib.tasks_pkg.endpoint_review import (
     _run_critic_turn,
     _run_planner_turn,
 )
+from lib.agent_verdict import is_incomplete_stop
 from lib.agent_core.events import EventType, build_event
 from lib.tasks_pkg.manager import append_event, create_task, persist_task_result
 from lib.tasks_pkg.orchestrator import _run_single_turn, run_task
@@ -1122,6 +1122,9 @@ def run_endpoint_task(task):
                         '[Endpoint] Replan error: %s — falling back to worker retry',
                         replan_error,
                     )
+                    audit_log('endpoint_replan_failed', task_id=tid,
+                              iteration=iteration, replan_count=replan_count,
+                              reason='error', detail=str(replan_error)[:200])
                     # Fall through to CONTINUE_WORKER behaviour below
                     next_phase = 'worker'
                 elif not new_plan:
@@ -1129,6 +1132,9 @@ def run_endpoint_task(task):
                         '[Endpoint] Replan produced empty plan — falling back '
                         'to worker retry',
                     )
+                    audit_log('endpoint_replan_failed', task_id=tid,
+                              iteration=iteration, replan_count=replan_count,
+                              reason='empty')
                     next_phase = 'worker'
                 else:
                     # ── Plan-size growth guard ──
@@ -1324,8 +1330,34 @@ def _finalize(task, accumulated_content, total_usage, iteration,
     with task['content_lock']:
         task['content'] = accumulated_content
     task['usage'] = total_usage
-    task['status'] = 'done'
-    task['finishReason'] = 'stop'
+    # A worker turn that returned an error (stop_reason='error') or a
+    # user/superseded abort (stop_reason='aborted') breaks out of the loop and
+    # falls through here.  Surfacing those as a clean status='done'/finish='stop'
+    # masks a real failure (often with empty content) and silently drops
+    # task['error'] set by the failed turn.  Mirror the single-turn orchestrator
+    # contract (orchestrator.py:1932) and the FATAL path below: report the
+    # true terminal state and carry the error envelope onto the DONE event.
+    if stop_reason == 'error':
+        task['status'] = 'error'
+        task['finishReason'] = 'error'
+    elif stop_reason == 'aborted':
+        task['status'] = 'aborted'
+        task['finishReason'] = 'aborted'
+    elif is_incomplete_stop(stop_reason):
+        # ★ The loop was CUT OFF by a safety cap (max_iterations / max_replans /
+        #   stuck), NOT genuinely finished — the objective is unverified.
+        #   Surfacing this as a clean status='done'/finish='stop' (as it did
+        #   historically) silently reports a budget-exhausted runaway as
+        #   success. Status stays 'done' (it is not an ERROR — real work may
+        #   have shipped), but finishReason='incomplete' honestly flags
+        #   "stopped early, needs review" for the sidebar + finish bar.
+        task['status'] = 'done'
+        task['finishReason'] = 'incomplete'
+        audit_log('loop_incomplete', task_id=tid, mode='endpoint',
+                  reason=stop_reason, iterations=min(iteration, MAX_ITERATIONS))
+    else:
+        task['status'] = 'done'
+        task['finishReason'] = 'stop'
     # ★ Clear _endpoint_phase once the loop is finalized.  Without this the
     #   state snapshot (see routes/chat.py) still reports endpointPhase='reviewing'
     #   after approval, which the frontend's reconnect paths misinterpret as
@@ -1346,9 +1378,16 @@ def _finalize(task, accumulated_content, total_usage, iteration,
     done_evt = build_event(
         EventType.DONE,
         usage=total_usage,
-        finishReason='stop',
+        finishReason=task['finishReason'],
         endpointReason=stop_reason,
     )
+    if task['finishReason'] == 'incomplete':
+        # Explicit human-facing flag: the loop was cut off by a safety cap and
+        # the objective is unverified — the frontend renders a "stopped early,
+        # needs review" affordance instead of a clean-done finish bar.
+        done_evt['incomplete'] = True
+    if task.get('error'):
+        done_evt['error'] = task['error']
     if task.get('preset'):
         done_evt['preset'] = task['preset']
     if task.get('model'):
@@ -1392,7 +1431,48 @@ def _finalize(task, accumulated_content, total_usage, iteration,
 # ══════════════════════════════════════════════════════════
 #  run_task_sync — synchronous wrapper for Feishu/API consumers
 # ══════════════════════════════════════════════════════════
-def run_task_sync(config: dict, *, timeout: float = 600) -> str:
+def _format_progress_event(ev: dict) -> str:
+    """Render a task event into a one-line progress string for a non-streaming
+    consumer (Feishu bot), or '' when the event is not progress-worthy.
+
+    Only ``tool_start`` is surfaced — it's the glanceable "the bot is doing
+    something" signal. Everything else (deltas, usage, snapshots) is noise for
+    a chat-bot progress ping.
+    """
+    if not isinstance(ev, dict):
+        return ''
+    if ev.get('type') == EventType.TOOL_START:
+        name = ev.get('toolName') or 'tool'
+        query = (ev.get('query') or '').strip()
+        return f'Running {name}: {query}' if query else f'Running {name}…'
+    return ''
+
+
+def _drain_progress(task: dict, cursor: int, progress_fn) -> int:
+    """Forward any task events appended since ``cursor`` to ``progress_fn``.
+
+    Returns the new cursor. Errors raised by ``progress_fn`` are swallowed
+    (logged at debug) — progress reporting must never break the task.
+    """
+    try:
+        with task['events_lock']:
+            new = list(task['events'][cursor:])
+    except Exception as e:
+        logger.debug('[run_task_sync] progress drain failed (ignored): %s', e)
+        return cursor
+    advanced = cursor + len(new)
+    for ev in new:
+        line = _format_progress_event(ev)
+        if not line:
+            continue
+        try:
+            progress_fn(line)
+        except Exception as e:
+            logger.debug('[run_task_sync] progress_fn raised (ignored): %s', e)
+    return advanced
+
+
+def run_task_sync(config: dict, *, timeout: float = 600, progress_fn=None) -> str:
     """Run a task synchronously and return the final content string.
 
     This is the entry point for non-streaming consumers (Feishu bot,
@@ -1407,6 +1487,11 @@ def run_task_sync(config: dict, *, timeout: float = 600) -> str:
         Task config dict with 'model', 'messages', and optional tool settings.
     timeout : float
         Maximum seconds to wait (default 600 = 10 min).
+    progress_fn : callable, optional
+        Called with a one-line progress string each time a long-running tool
+        starts (e.g. ``"Running web_search: latest news"``). Lets a
+        non-streaming consumer stream intermediate progress while the task
+        runs. Exceptions from the callback are swallowed (logged at debug).
 
     Returns
     -------
@@ -1442,7 +1527,25 @@ def run_task_sync(config: dict, *, timeout: float = 600) -> str:
                               name=f'run_task_sync-{task["id"][:8]}')
     worker.start()
 
-    finished = done_event.wait(timeout=timeout)
+    if progress_fn is None:
+        finished = done_event.wait(timeout=timeout)
+    else:
+        # Poll for new events while waiting so a non-streaming consumer can
+        # forward live tool-start progress. ``done_event.wait(0.5)`` returns
+        # True the instant the worker finishes, so this adds at most ~0.5s of
+        # post-completion latency and zero overhead once done.
+        import time as _time
+        _deadline = _time.monotonic() + timeout
+        _cursor = 0
+        finished = False
+        while True:
+            if done_event.wait(timeout=0.5):
+                _cursor = _drain_progress(task, _cursor, progress_fn)
+                finished = True
+                break
+            _cursor = _drain_progress(task, _cursor, progress_fn)
+            if _time.monotonic() >= _deadline:
+                break
 
     if not finished:
         task['aborted'] = True

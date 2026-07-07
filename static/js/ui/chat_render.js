@@ -10,16 +10,335 @@
 
 /** Per-message fingerprint for surgical DOM diffing.
  *  Must change whenever the rendered HTML for this message would differ. */
+/* ── Autopilot run fold ───────────────────────────────────────────────
+ * Collapse a CONCLUDED autopilot run's VU<->agent transcript into one
+ * <details>, leaving the original human message (above, un-stamped) and the
+ * close-out summary (below) as the visible spine — "human msg → report".
+ *
+ * Grouping keys on the EXPLICIT `data-ap-run` id stamped by renderMessage
+ * (VU turns + summary) — never role-scanning. The interleaved worker
+ * assistant turns between VU turns are NOT individually stamped, so we fold
+ * the contiguous DOM sibling RANGE from the run's first stamped element up to
+ * (but excluding) its `data-ap-summary` element. A run is "concluded" iff its
+ * summary element is present in the DOM; an in-progress run (no summary yet)
+ * stays fully expanded and live.
+ *
+ * Idempotent + surgical-safe: re-running over already-folded DOM is a no-op
+ * (the inner turns live inside `.autopilot-run-fold` and are skipped). The
+ * <details> open/closed state is preserved across re-renders via a per-run
+ * memory so a forced re-render doesn't snap an expanded run shut.
+ */
+const _apFoldOpenState = {};
+
+/* Look up a run's sidecar record (human-only, NOT a chat message). ONE record
+ * per run carries BOTH the terminal fact (status:'concluded', reason) AND the
+ * optional close-out report (content — absent on a manual stop). Stored
+ * backend-side under settings.autopilotSummaries[runId] and mirrored onto
+ * conv.autopilotSummaries by _applySettingsToConv / _handleAutopilotRunConcluded.
+ * Returns {runId, status, reason, content?, translatedContent?, ts, _summaryId}
+ * or null. */
+function _apRunRecord(conv, runId) {
+  if (!conv || !conv.autopilotSummaries || !runId) return null;
+  const rec = conv.autopilotSummaries[runId];
+  return (rec && typeof rec === 'object') ? rec : null;
+}
+
+/* The run's close-out REPORT — only when the record carries report content
+ * (a clean [VU: TASK_DONE]). A manual-stop concluded record has a status but
+ * NO content, so this returns null for it (the run still folds, but shows no
+ * report panel — the "Summarize this run" affordance appears instead). */
+function _apRunSummary(conv, runId) {
+  const rec = _apRunRecord(conv, runId);
+  return (rec && rec.content) ? rec : null;
+}
+
+/* ★ BACKEND-AUTHORITATIVE "run has concluded" — the frontend NEVER infers
+ * run-end from stream / task / pending-carrier state anymore (that inference
+ * WAS the inter-turn-gap mis-fold bug: between turns the stream is briefly
+ * gone AND activeTaskId briefly null, so "nothing in flight" was ALSO true
+ * mid-run → premature fold). A run folds iff:
+ *   (a) the backend wrote a concluded record for it
+ *       (conv.autopilotSummaries[runId].status==='concluded'), delivered via
+ *       the autopilot_run_concluded SSE, the disarm response, or the settings
+ *       round-trip — this covers BOTH a clean [VU: TASK_DONE] (reason=task_done,
+ *       with a report) AND a manual Stop / toggle-off / supersede (reason=
+ *       stopped, no report); OR
+ *   (b) a NEWER run exists after it (structurally over — the backend stamps
+ *       _autopilotRunId on every persisted VU turn, so a later run id in the
+ *       DOM list is itself a backend fact, not a client guess).
+ * The inter-turn gap needs no special-casing now: no concluded record is
+ * written between turns, so the last run simply stays fully expanded until the
+ * backend says the whole run ended. (A legacy pre-migration record that has
+ * `content` but no `status` still folds — treat report-presence as concluded.) */
+function _apRunConcluded(conv, runId, isLast) {
+  const rec = _apRunRecord(conv, runId);
+  if (rec && (rec.status === 'concluded' || rec.content)) return true;  // (a) backend fact
+  if (!isLast) return true;                                             // (b) superseded
+  return false;
+}
+
+function _applyAutopilotRunFolds(inner, conv) {
+  if (!inner) return;
+  if (!conv && typeof getActiveConv === 'function') conv = getActiveConv();
+  try {
+    /* Legacy: pre-sidecar conversations may still carry a summary as a
+     * `data-ap-summary` MESSAGE element. New runs never do (the summary lives
+     * in the sidecar), so this map is empty for them. */
+    const summaries = {};
+    inner.querySelectorAll('.message[data-ap-summary][data-ap-run]').forEach(el => {
+      summaries[el.getAttribute('data-ap-run')] = el;
+    });
+    /* All run ids present (stamped VU turns + any legacy summary). */
+    const runIds = [];
+    inner.querySelectorAll('.message[data-ap-run]').forEach(el => {
+      const r = el.getAttribute('data-ap-run');
+      if (r && runIds.indexOf(r) === -1) runIds.push(r);
+    });
+    if (!runIds.length) return;
+    const lastRunId = runIds[runIds.length - 1];
+
+    for (const runId of runIds) {
+      const _esc = (window.CSS && CSS.escape) ? CSS.escape(runId) : runId;
+      const summaryEl = summaries[runId] || null;
+      const firstStamped = inner.querySelector(
+        `.message[data-ap-run="${_esc}"]:not([data-ap-summary])`
+      );
+      if (!firstStamped) continue;                 // summary-only run, nothing to fold
+      if (firstStamped.closest('.autopilot-run-fold')) continue;  // already folded
+
+      /* ★ Only fold a run once it has truly CONCLUDED (positive signal) —
+       * never mid-run / in the inter-turn gap (see _apRunConcluded). */
+      if (!_apRunConcluded(conv, runId, runId === lastRunId)) continue;
+
+      /* Collect the contiguous sibling range [firstStamped .. before summary).
+       * When there is no summary element, fold the run of consecutive stamped
+       * turns (stop at the first element that isn't part of THIS run). */
+      const range = [];
+      let node = firstStamped;
+      while (node && node !== summaryEl) {
+        const next = node.nextElementSibling;
+        const isMsg = node.classList && node.classList.contains('message');
+        if (isMsg) range.push(node);
+        if (!summaryEl) {
+          /* No summary anchor — bound the fold at the run's own turns plus
+           * the interleaved worker turns. Stop once we pass a message that is
+           * neither this run's stamped turn nor an (un-stamped) assistant
+           * worker turn — i.e. a new human/user turn outside the run. */
+          const nextIsRun = next && next.getAttribute &&
+            next.getAttribute('data-ap-run') === runId;
+          const nextIsWorker = next && next.classList &&
+            next.classList.contains('message') &&
+            !next.classList.contains('user-msg') &&
+            !next.getAttribute('data-ap-run');
+          if (!nextIsRun && !nextIsWorker) { node = null; break; }
+        }
+        node = next;
+      }
+      if (!range.length) continue;
+
+      const turnCount = range.length;
+      const wasOpen = !!_apFoldOpenState[runId];
+      const details = document.createElement('details');
+      details.className = 'autopilot-run-fold';
+      details.setAttribute('data-ap-run-fold', runId);
+      if (wasOpen) details.open = true;
+      const _label = (typeof t === 'function' && t('autopilot.runFold') !== 'autopilot.runFold')
+        ? t('autopilot.runFold') : 'Autopilot run';
+      const _hint = (typeof t === 'function' && t('autopilot.runFoldHint') !== 'autopilot.runFoldHint')
+        ? t('autopilot.runFoldHint') : 'turns — click to expand';
+      const summary = document.createElement('summary');
+      summary.className = 'autopilot-run-fold-summary';
+      const _sumRec = _apRunSummary(conv, runId);
+      let _summaryInner =
+        `<svg class="apf-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>`
+        + `<span class="apf-label">${escapeHtml(_label)}</span>`
+        + `<span class="apf-count">${turnCount}</span>`
+        + `<span class="apf-hint">${escapeHtml(_hint)}</span>`;
+      /* ★ A run cut off by a safety cap (budget / stuck) carries incomplete —
+       * flag it "needs review" in the fold header so a stopped-early run is
+       * visibly distinct from a clean [VU: TASK_DONE] conclusion. */
+      if (_sumRec && _sumRec.incomplete) {
+        const _revLabel = (typeof t === 'function' && t('autopilot.needsReview') !== 'autopilot.needsReview')
+          ? t('autopilot.needsReview') : 'stopped early · needs review';
+        const _revTip = (typeof t === 'function' && t('finishInfo.reasonIncompleteTip') !== 'finishInfo.reasonIncompleteTip')
+          ? t('finishInfo.reasonIncompleteTip') : '';
+        _summaryInner += `<span class="apf-incomplete" title="${escapeHtml(_revTip)}">`
+          + (typeof Icon === 'function' ? Icon('alertTriangle', 12) : '')
+          + `${escapeHtml(_revLabel)}</span>`;
+      }
+      /* Report affordances live IN the fold's summary card (not as a separate
+       * panel below it): a run WITH a close-out report gets a "View report"
+       * button that opens the debrief in a sub-window; a manual-stop run with
+       * NO report gets "Summarize this run" instead. */
+      if (_sumRec && _sumRec.content) {
+        const _viewLabel = (typeof t === 'function' && t('autopilot.viewReport') !== 'autopilot.viewReport')
+          ? t('autopilot.viewReport') : 'View report';
+        _summaryInner += `<button class="apf-report-btn" data-ap-run-report="${escapeHtml(runId)}" `
+          + `onclick="event.preventDefault();event.stopPropagation();_openApSummaryModal('${escapeHtml(runId)}')">`
+          + `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M16 13H8"/><path d="M16 17H8"/><path d="M10 9H8"/></svg>`
+          + `${escapeHtml(_viewLabel)}</button>`;
+      } else if (!summaryEl && !_sumRec) {
+        const _sumLabel = (typeof t === 'function' && t('autopilot.summarizeRun') !== 'autopilot.summarizeRun')
+          ? t('autopilot.summarizeRun') : 'Summarize this run';
+        _summaryInner += `<button class="apf-summarize-btn" data-ap-run-summarize="${escapeHtml(runId)}" `
+          + `onclick="event.preventDefault();event.stopPropagation();_summarizeAutopilotRun('${escapeHtml(runId)}',this)">`
+          + `${escapeHtml(_sumLabel)}</button>`;
+      }
+      _summaryInner += `<span class="apf-toggle">▼</span>`;
+      summary.innerHTML = _summaryInner;
+      details.appendChild(summary);
+      /* Track open/closed so subsequent re-renders preserve the user's choice. */
+      details.addEventListener('toggle', () => { _apFoldOpenState[runId] = details.open; });
+
+      /* Insert the <details> where the first turn was, then move the range in. */
+      firstStamped.parentNode.insertBefore(details, firstStamped);
+      for (const el of range) details.appendChild(el);
+
+      /* ★ The run's close-out REPORT is no longer rendered as an
+       * always-visible panel below the fold. It is a human-only debrief
+       * surfaced on demand via the "View report" button in the fold summary
+       * (→ _openApSummaryModal), keeping the transcript spine compact:
+       * human msg → [folded run]. Any stale panel from a previous render of
+       * the old layout is cleaned up here. */
+      const _stalePanel = details.parentNode
+        && details.nextElementSibling
+        && details.nextElementSibling.classList
+        && details.nextElementSibling.classList.contains('autopilot-summary-panel')
+        ? details.nextElementSibling : null;
+      if (_stalePanel) _stalePanel.remove();
+    }
+  } catch (e) {
+    console.warn('[Autopilot fold] failed (non-fatal):', e && e.message);
+  }
+}
+
+/* Open the run's close-out REPORT in a read-only sub-window (modal overlay).
+ * The report is a human-only debrief (mirrors the vu-private-zone framing) —
+ * never sent to the agent, never part of the transcript. Reached from the
+ * "View report" button in the autopilot run fold's summary card. Idempotent:
+ * a second call replaces any open report modal. Closes on overlay click, the
+ * × button, or Escape. */
+function _openApSummaryModal(runId) {
+  try {
+    const conv = (typeof getActiveConv === 'function') ? getActiveConv() : null;
+    const rec = _apRunRecord(conv, runId);
+    if (!rec || !rec.content) {
+      console.warn('[Autopilot report] no report content for run', runId);
+      return;
+    }
+    /* Drop any previously-open report modal. */
+    const prev = document.getElementById('apReportModal');
+    if (prev) prev.remove();
+
+    const _title = (typeof t === 'function' && t('autopilot.summaryLabel') !== 'autopilot.summaryLabel')
+      ? t('autopilot.summaryLabel') : 'Run summary report';
+    const _privNote = (typeof t === 'function' && t('autopilot.summaryHumanOnly') !== 'autopilot.summaryHumanOnly')
+      ? t('autopilot.summaryHumanOnly') : 'For you only · not sent to the agent';
+    /* Prefer the translated text for a Chinese UI when present. */
+    const _useTranslated = !!(rec.translatedContent
+      && typeof convAutoTranslate === 'function' && conv && convAutoTranslate(conv));
+    const _body = _useTranslated ? rec.translatedContent : (rec.content || '');
+    const _bodyHtml = (typeof renderMarkdown === 'function')
+      ? renderMarkdown(_body) : escapeHtml(_body);
+
+    const overlay = document.createElement('div');
+    overlay.id = 'apReportModal';
+    overlay.className = 'ap-report-overlay';
+    overlay.setAttribute('data-ap-report-run', runId);
+    overlay.innerHTML =
+      `<div class="ap-report-modal" role="dialog" aria-modal="true">`
+      + `<div class="ap-report-head">`
+      + `<svg class="aps-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M16 13H8"/><path d="M16 17H8"/><path d="M10 9H8"/></svg>`
+      + `<span class="ap-report-title">${escapeHtml(_title)}</span>`
+      + `<span class="ap-report-private">${escapeHtml(_privNote)}</span>`
+      + `<button class="ap-report-close" aria-label="Close" title="Close">`
+      + `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`
+      + `</button>`
+      + `</div>`
+      + `<div class="ap-report-body md-content">${_bodyHtml}</div>`
+      + `</div>`;
+
+    const close = () => {
+      overlay.remove();
+      document.removeEventListener('keydown', onKey);
+    };
+    const onKey = (e) => { if (e.key === 'Escape') close(); };
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+    overlay.querySelector('.ap-report-close').addEventListener('click', close);
+    document.addEventListener('keydown', onKey);
+
+    document.body.appendChild(overlay);
+  } catch (e) {
+    console.warn('[Autopilot report modal] open failed (non-fatal):', e && e.message);
+  }
+}
+if (typeof window !== 'undefined') window._openApSummaryModal = _openApSummaryModal;
+
+/* Click handler for the "Summarize this run" button in a manual-stop fold. */
+async function _summarizeAutopilotRun(runId, btn) {
+  const conv = (typeof getActiveConv === 'function') ? getActiveConv() : null;
+  if (!conv) return;
+  const _restore = () => {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = (typeof t === 'function' ? t('autopilot.summarizeRun') : 'Summarize this run');
+    }
+  };
+  if (btn) { btn.disabled = true; btn.textContent = (typeof t === 'function' ? t('common.loading') : 'Loading…'); }
+  let cfg = {};
+  try {
+    if (typeof _buildConvConfig === 'function') cfg = await _buildConvConfig(conv);
+  } catch (e) {
+    console.warn('[Autopilot] summarize: _buildConvConfig failed, using defaults:', e && e.message);
+  }
+  try {
+    const res = await Api.chat.summarizeAutopilotRun(conv.id, runId, cfg);
+    if (res && res.ok && res.summary && res.summary.content) {
+      /* ★ The summary is a human-only SIDECAR record (NOT a chat message).
+       * Store it on conv.autopilotSummaries so the fold renders its report
+       * panel — never push it into conv.messages. */
+      if (!conv.autopilotSummaries || typeof conv.autopilotSummaries !== 'object') {
+        conv.autopilotSummaries = {};
+      }
+      conv.autopilotSummaries[res.runId || runId] = res.summary;
+      if (typeof saveConversations === 'function') saveConversations(conv.id);
+      try { if (typeof ConvCache !== 'undefined') ConvCache.put(conv); } catch (e) { /* non-fatal */ }
+      if (typeof renderChat === 'function') renderChat(conv, true);
+    } else {
+      _restore();
+    }
+  } catch (e) {
+    console.warn('[Autopilot] summarize run failed:', e && e.message);
+    _restore();
+  }
+}
+
 function _msgFingerprint(msg) {
   const sr = msg.toolRounds || msg.searchResults;
   /* Count compacted rounds so a tool_compacted SSE landing on an
    * earlier message triggers a re-render of just that message.
    * Iterating toolRounds is cheap (avg 2-10 entries). */
   let compactedCount = 0, compactedToSum = 0;
+  /* Swarm agent state token: a committed (non-streaming) swarm panel is
+   * mutated in place by cross-turn /api/push frames (swarm_push.js). Those
+   * mutations live INSIDE round._swarmAgents, which the rest of this
+   * fingerprint never sees (it only counts sr.length). Without folding agent
+   * status/phase/tokens/preview here, the surgical re-render diffs the
+   * swarm-owning message as "unchanged" and the panel never repaints when an
+   * agent flips running→done. Piggyback on the existing toolRounds loop. */
+  let swarmFp = '';
   if (Array.isArray(msg.toolRounds)) {
     for (const r of msg.toolRounds) {
       if (r.compactionLayer) compactedCount++;
       compactedToSum += (r.compactedToChars | 0);
+      if (r._swarm) {
+        swarmFp += (r._swarmActive ? 'A' : '') + (r._asyncRunning ? 'R' : '')
+                 + (r._swarmEndTime ? 'E' : '') + '|';
+        for (const a of (r._swarmAgents || [])) {
+          swarmFp += (a.status || '') + ',' + (a.phase || '') + ','
+                   + (a.tokens || '') + ',' + ((a.preview || '').length) + ';';
+        }
+      }
     }
   }
   /* Error envelope: include kind + message length so a re-classification
@@ -29,7 +348,7 @@ function _msgFingerprint(msg) {
     if (typeof msg.error === 'object') {
       _errFp = (msg.error.kind || '') + ':' + ((msg.error.message || '').length);
     } else {
-      _errFp = String(msg.error).length;
+      _errFp = String(String(msg.error).length);
     }
   }
   return (msg.role || "") + ":" +
@@ -47,7 +366,10 @@ function _msgFingerprint(msg) {
     (msg.modifiedFiles || 0) + ":" +
     (msg.images ? msg.images.length : 0) + ":" +
     (msg.pdfTexts ? msg.pdfTexts.length : 0) + ":" +
-    "c" + compactedCount + "ts" + compactedToSum;
+    (msg._autopilotRunId || "") + ":" +
+    (msg._isAutopilotSummary ? "S" : "") + ":" +
+    "c" + compactedCount + "ts" + compactedToSum +
+    (swarmFp ? ":sw" + swarmFp : "");
 }
 
 /* ── Tool-round freshness gradient ──
@@ -78,6 +400,110 @@ function _msgFingerprint(msg) {
  * Kept callable from existing render entry points so callers don't NPE. */
 function _stampFreshness(_conv) { /* no-op */ }
 
+/* ── Background data-refresh repaint (scroll-preserving) ──────────────────
+ * Cost + file-change batch prefetches (and their per-message async fallback)
+ * land data that `_msgFingerprint` deliberately does NOT track, so the
+ * surgical diff in renderChat would treat every message as "unchanged" and
+ * skip the repaint. Historically these callbacks worked around that by
+ * calling `renderChat(conv, true)` — the FULL re-render path, which (a) resets
+ * the lazy window back to the last _INITIAL_RENDER messages (dropping any
+ * older messages a scrolled-up reader force-loaded), (b) flashes the whole
+ * list via the `cv-off` height recompute, and (c) ends in
+ * `_forceScrollToBottom()`, yanking the reader to the bottom. Firing ~1s after
+ * a conversation opens (when the batch responses arrive) — precisely while the
+ * user is scrolling up to read history — that is the reported "flicker back
+ * and forth then jump to the bottom" bug.
+ *
+ * This repaints the CURRENTLY-RENDERED assistant messages in place. Only
+ * `role==='assistant'` bubbles carry the cost / file-changes / finish bars, so
+ * user bubbles (and their quote/ref badges) are left untouched. It upholds two
+ * invariants so a data-only refresh is invisible to the reader:
+ *
+ *   (1) COMPARE-BEFORE-SWAP. Each assistant bubble is `outerHTML`-replaced ONLY
+ *       when its freshly-rendered HTML differs from what we last rendered for
+ *       it (stamped as `__bgHtml` on the node). Unchanged bubbles keep their
+ *       exact DOM node — preserving any manually-expanded tool-round `<details>`
+ *       state and skipping needless layout. Same principle as the `data-mfp`
+ *       surgical diff, extended to the async cost/file-change data that
+ *       `_msgFingerprint` deliberately omits. If NOTHING changed we return
+ *       before touching the DOM or scroll at all.
+ *
+ *   (2) ANCHOR-RELATIVE SCROLL RESTORE. A raw `scrollTop = saved` restore is
+ *       only correct when heights ABOVE the fold don't change — but that is
+ *       exactly what changes here: on first open the bars aren't fetched yet,
+ *       so above-fold assistant bubbles render short and GROW when the batch
+ *       lands. Restoring the raw pixel then drifts the reader downward by the
+ *       total added height above the fold. Instead we pin the topmost message
+ *       element intersecting the viewport: record its offset from the container
+ *       top BEFORE the swaps, then after the swaps adjust `scrollTop` so that
+ *       same element sits at the same visual offset. The reader's viewport is
+ *       preserved even when above-fold bubbles change height.
+ *
+ * Both measurements happen under the same `cv-off` guard `_renderMsgInPlace`
+ * uses, so the swap can't collapse `content-visibility:auto` intrinsic-size
+ * caches and mis-resolve the geometry. No-op during streaming (the live bubble
+ * is owned by the streaming UI) or before any message is laid out. */
+function _bgRefreshChat(conv) {
+  if (!conv || conv.id !== activeConvId) return;
+  if (activeStreams.has(conv.id) && document.getElementById('streaming-msg')) return;
+  const inner = document.getElementById('chatInner');
+  const container = document.getElementById('chatContainer');
+  if (!inner || !container) return;
+  const els = inner.querySelectorAll('[id^="msg-"]');
+  if (!els.length) return;  // welcome / loading skeleton — nothing to repaint
+
+  const total = conv.messages.length;
+
+  /* ── (1) Compare-before-swap: build the swap list, skipping bubbles whose
+   *        rendered output is byte-identical to what we last painted. ── */
+  const updates = [];
+  els.forEach((el) => {
+    const m = el.id.match(/^msg-(\d+)$/);
+    if (!m) return;
+    const idx = parseInt(m[1], 10);
+    if (idx >= total) return;
+    const msg = conv.messages[idx];
+    if (!msg || msg.role !== 'assistant') return;
+    const fresh = renderMessage(msg, idx);
+    if (el.__bgHtml === fresh) return;  // unchanged → keep DOM (expand state intact)
+    updates.push({ idx, el, html: fresh });
+  });
+  if (!updates.length) return;  // nothing changed → reader untouched
+
+  /* ── (2) Anchor-relative scroll preservation across the swaps. ── */
+  inner.classList.add('cv-off');
+  void inner.scrollHeight;  // force real heights before measuring
+  const cTop = container.getBoundingClientRect().top;
+  let anchorId = null;
+  let anchorOffset = 0;
+  for (const el of els) {
+    const r = el.getBoundingClientRect();
+    if (r.bottom > cTop + 1) {  // topmost element still (partly) in view
+      anchorId = el.id;
+      anchorOffset = r.top - cTop;
+      break;
+    }
+  }
+
+  for (const u of updates) {
+    u.el.outerHTML = u.html;
+    const n = document.getElementById('msg-' + u.idx);
+    if (n) n.__bgHtml = u.html;  // stamp so a later no-change refresh skips it
+  }
+
+  void inner.scrollHeight;  // re-layout after swaps
+  if (anchorId) {
+    const a = document.getElementById(anchorId);
+    if (a) {
+      const newOffset = a.getBoundingClientRect().top - container.getBoundingClientRect().top;
+      container.scrollTop += (newOffset - anchorOffset);  // re-pin the anchor
+    }
+  }
+  inner.classList.remove('cv-off');
+  if (!activeStreams.has(conv.id)) _applyAutopilotRunFolds(inner, conv);
+  _lastRenderedFingerprint = _convRenderFingerprint(conv);
+}
+
 function renderChat(conv, forceScroll) {
   /* ── Guard 1: skip if user is editing a message in this conversation ── */
   if (_editingMsgIdx !== null && conv.id === activeConvId) return;
@@ -92,10 +518,16 @@ function renderChat(conv, forceScroll) {
    * was already cached, the prefetch returns false and we don't paint. */
   if (typeof _prefetchConvCosts === 'function') {
     _prefetchConvCosts(conv).then((didFetch) => {
-      if (didFetch && conv.id === activeConvId && typeof renderChat === 'function') {
-        // Bypass the fingerprint guard — cache changed even though
-        // _convRenderFingerprint didn't.
-        renderChat(conv, true);
+      // ★ Skip the re-render while this conv is actively streaming. The
+      //   streaming bubble's cost/finish bar is owned by the live stream UI,
+      //   not this static render — see the file-changes loop fix below.
+      // ★ SCROLL FIX: repaint IN PLACE (scroll-preserving) instead of
+      //   renderChat(conv,true). The old force-scroll path reset the lazy
+      //   window and yanked a scrolled-up reader to the bottom the moment the
+      //   cost batch landed (~1s after open) — the "flicker + jump" bug.
+      if (didFetch && conv.id === activeConvId
+          && !activeStreams.has(conv.id)) {
+        _bgRefreshChat(conv);
       }
     });
   }
@@ -106,8 +538,21 @@ function renderChat(conv, forceScroll) {
    * biggest source of post-migration render lag (after cost). */
   if (typeof _prefetchConvFileChanges === 'function') {
     _prefetchConvFileChanges(conv).then((didFetch) => {
-      if (didFetch && conv.id === activeConvId && typeof renderChat === 'function') {
-        renderChat(conv, true);
+      // ★ FIX (continuous fc-bar flash + scroll-jam): while the conv is
+      //   streaming, the in-progress message's toolRounds keep growing, so the
+      //   coarse _fcFingerprint keeps changing → the prefetch keeps returning
+      //   didFetch=true → renderChat(conv,true) → Guard 1c →
+      //   showStreamingUIForConv → _forceScrollToBottom, in a tight loop that
+      //   replays the fcPulse/fcFileIn animations and pins the view to the
+      //   bottom. The streaming bubble's file-changes bar is rendered by the
+      //   live `fc` zone (updateStreamingUI), so this static re-render is both
+      //   redundant and harmful mid-stream. Defer it until the stream ends.
+      // ★ SCROLL FIX: scroll-preserving in-place repaint (see _bgRefreshChat)
+      //   instead of the force-scroll full re-render — the file-changes batch
+      //   also lands ~1s after open and must not move a scrolled-up reader.
+      if (didFetch && conv.id === activeConvId
+          && !activeStreams.has(conv.id)) {
+        _bgRefreshChat(conv);
       }
     });
   }
@@ -233,6 +678,8 @@ function renderChat(conv, forceScroll) {
     if (anyChange) {
       buildTurnNav(conv);
     }
+    if (!activeStreams.has(conv.id)) _applyAutopilotRunFolds(inner, conv);
+    if (!activeStreams.has(conv.id)) _syncOrphanResumeAffordance(conv);
     _lastRenderedFingerprint = fp;
     _lazyConvId = conv.id;
     return;
@@ -274,6 +721,8 @@ function renderChat(conv, forceScroll) {
   }
 
   inner.innerHTML = html;
+  if (!activeStreams.has(conv.id)) _applyAutopilotRunFolds(inner, conv);
+  if (!activeStreams.has(conv.id)) _syncOrphanResumeAffordance(conv);
   _lastRenderedFingerprint = fp;
 
   /* Observe the sentinel to trigger loading when scrolled up */
@@ -291,6 +740,64 @@ function renderChat(conv, forceScroll) {
    * hideUntilSettled=true: content-visibility:auto heights are estimated on
    * first paint, so hide until the 150ms timer has corrected scrollTop. */
   _forceScrollToBottom(container, true);
+}
+
+/* ═══ Orphaned-user-turn Resume affordance (patch→fundamental-fix #2) ═══
+ *
+ * The backend GET-path classifier (classify_orphan_resumable) stamps
+ * conv._orphanResumable when the AUTHORITATIVE trailing turn is an unanswered
+ * user message with no live task. We render an EXPLICIT, honest Resume button
+ * — the click flows through the normal user-initiated startAssistantResponse
+ * path. This REPLACES the deleted Case-E age<5min auto-fire: a billed turn is
+ * never minted from an inference, and (because the verdict is DB-verified, not
+ * shell-metadata-guessed) the double-answer bug is structurally impossible.
+ *
+ * Image-gen orphans are excluded server-side (marker.isImageGen) — those belong
+ * to the creative pipeline, not the orchestrator; we skip the affordance for
+ * them (the creative mode surfaces its own retry). */
+function _orphanResumeAffordanceHtml(conv) {
+  const m = conv && conv._orphanResumable;
+  if (!m || m.isImageGen) return '';
+  const _t = (typeof t === 'function') ? t : (k) => k;
+  const label = _t('orphanResume.label');
+  const hint = _t('orphanResume.hint');
+  const cid = String(conv.id).replace(/'/g, "\\'");
+  const icon = (typeof Icon === 'function') ? Icon('rocket', 14) : '';
+  return `<div class="orphan-resume" id="orphanResume" data-conv="${escapeHtml(String(conv.id))}">`
+    + `<span class="orphan-resume-hint">${escapeHtml(hint)}</span>`
+    + `<button class="orphan-resume-btn" onclick="_resumeOrphanTurn('${cid}')">`
+    + `${icon}<span>${escapeHtml(label)}</span></button>`
+    + `</div>`;
+}
+
+/* Inject / remove the affordance under #chatInner without a full re-render. */
+function _syncOrphanResumeAffordance(conv) {
+  const inner = document.getElementById('chatInner');
+  if (!inner) return;
+  const existing = document.getElementById('orphanResume');
+  const html = _orphanResumeAffordanceHtml(conv);
+  if (!html) { if (existing) existing.remove(); return; }
+  if (existing) {
+    if (existing.getAttribute('data-conv') !== String(conv.id)) {
+      existing.outerHTML = html;
+    }
+    return;
+  }
+  const wrapper = document.createElement('div');
+  wrapper.innerHTML = html;
+  const el = wrapper.firstElementChild;
+  if (el) inner.appendChild(el);
+}
+
+/* Resume click handler — a NORMAL user-initiated send. Clears the marker first
+ * so the affordance disappears immediately and can't double-fire. */
+function _resumeOrphanTurn(convId) {
+  const conv = conversations.find((c) => c.id === convId);
+  if (!conv) return;
+  conv._orphanResumable = null;
+  const el = document.getElementById('orphanResume');
+  if (el) el.remove();
+  if (typeof startAssistantResponse === 'function') startAssistantResponse(convId);
 }
 
 /* ★ Format precise date + time for finished messages */
@@ -344,10 +851,15 @@ function renderMessage(msg, idx) {
         imgCount > 0 ? ` · ${imgCount} img${imgCount > 1 ? "s" : ""}` : "";
       const methodBadge = pdf.method === "vlm" ? ' · <b>VLM</b>' : '';
       const _ext = pdf.name ? pdf.name.slice(pdf.name.lastIndexOf('.')).toLowerCase() : '';
-      const _docIconMap = {'.pdf':'📕', '.docx':'📝', '.pptx':'📊', '.xlsx':'📈', '.txt':'📄', '.md':'📄',
-                           '.csv':'📊', '.json':'📄', '.xml':'📄', '.py':'🐍', '.js':'📜',
-                           '.html':'🌐', '.yaml':'⚙️', '.yml':'⚙️'};
-      const docIcon = _docIconMap[_ext] || '📄';
+      const _dsvg = (inner) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${inner}</svg>`;
+      const _DOC_FILE = '<path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"/><path d="M14 2v5a1 1 0 0 0 1 1h5"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/>';
+      const _DOC_SHEET = '<path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"/><path d="M14 2v5a1 1 0 0 0 1 1h5"/><path d="M8 13h2"/><path d="M14 13h2"/><path d="M8 17h2"/><path d="M14 17h2"/>';
+      const _DOC_CODE = '<path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"/><path d="M14 2v5a1 1 0 0 0 1 1h5"/><path d="M10 12.5 8 15l2 2.5"/><path d="m14 12.5 2 2.5-2 2.5"/>';
+      const _DOC_SLIDE = '<path d="M2 3h20"/><path d="M21 3v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V3"/><path d="m7 21 5-5 5 5"/>';
+      const _docIconMap = {'.pdf':_DOC_FILE, '.docx':_DOC_FILE, '.pptx':_DOC_SLIDE, '.xlsx':_DOC_SHEET, '.txt':_DOC_FILE, '.md':_DOC_FILE,
+                           '.csv':_DOC_SHEET, '.json':_DOC_CODE, '.xml':_DOC_CODE, '.py':_DOC_CODE, '.js':_DOC_CODE,
+                           '.html':_DOC_CODE, '.yaml':_DOC_CODE, '.yml':_DOC_CODE};
+      const docIcon = _dsvg(_docIconMap[_ext] || _DOC_FILE);
       body += `<div class="pdf-attach-badge" title="${escapeHtml(pdf.name)}" onclick="previewMsgPdfText(${idx},${pdfI})" style="cursor:pointer"><span class="pdf-attach-icon">${docIcon}</span><span class="pdf-attach-info"><span class="pdf-attach-name">${escapeHtml(pdf.name.length > 25 ? pdf.name.slice(0, 23) + "…" : pdf.name)}</span><span class="pdf-attach-meta">${pdf.pages} pages · ${sizeStr}${imgStr}${scanBadge}${methodBadge}</span></span></div>`;
     });
     body += "</div>";
@@ -378,7 +890,35 @@ function renderMessage(msg, idx) {
           </span></div>`;
       }
     }
+    // ── Peer-message provenance banner ──
+    // A KIND_PEER_MSG turn injected by a sibling conversation (via
+    // project_message / advisory project_intervene) is a real user-role turn,
+    // so WITHOUT this it would render byte-identical to something the human
+    // typed. Surface it distinctly + attribute the sender so the arrival is
+    // observable (backend stamps `_peerMessage` + `_fromConv` in
+    // message_queue.dispatch_next_queued).
+    if (msg._peerMessage) {
+      const _fromShort = escapeHtml((msg._fromConv || "").slice(0, 8) || "peer");
+      // A human operator nudge (backend stamps `_peerHuman`) is attributed to
+      // the operator, not a peer conversation — distinct label + styling class.
+      const _isHuman = !!msg._peerHuman;
+      const _labelKey = _isHuman ? "peer.operatorBanner" : "peer.messageBanner";
+      const _fallback = _isHuman
+        ? "Message from the project operator"
+        : "Message from a peer conversation";
+      const _pmLabel = (typeof t === "function" && t(_labelKey) !== _labelKey)
+        ? t(_labelKey)
+        : _fallback;
+      body += `<div class="peer-msg-banner${_isHuman ? " peer-msg-banner-operator" : ""}" title="${escapeHtml(msg._fromConv || "")}">`
+            + `<span class="peer-msg-icon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span>`
+            + `<span class="peer-msg-text">${_pmLabel} <span class="peer-msg-from">conv ${_fromShort}</span></span></div>`;
+    }
   }
+  // NOTE: the autopilot run summary is NO LONGER a message — it's a human-only
+  // sidecar record (conv.autopilotSummaries[runId]) rendered as the run fold's
+  // read-only report PANEL by _buildApSummaryPanel. A legacy `_isAutopilotSummary`
+  // assistant row from before the sidecar migration still renders as a plain
+  // assistant turn (harmless) — we intentionally no longer special-case it.
   // ── Proactive agent banner ──
   if (msg._proactive) {
     const taskName = msg._proactiveTaskId ? `Task ${(msg._proactiveTaskId || "").slice(0, 8)}` : "Proactive Agent";
@@ -394,21 +934,62 @@ function renderMessage(msg, idx) {
       : "Continued automatically after sub-agents finished";
     body += `<div class="proactive-banner"><span class="pb-text">↻ <span class="pb-name">${escapeHtml(_acLabel)}</span></span></div>`;
   }
-  // ── MCP login-hint + Memory Prefetch indicator (finished message) ──
-  if (!isUser && msg._mcpLoginHint) {
+  // ── Turn provenance (finished message) ──
+  //   The awaiting-approval login keeps its own prominent callout; memory
+  //   prefetch + preferences + any RESOLVED login fold into one quiet,
+  //   collapsible strip (renderTurnProvenanceHtml). Learned-preference cards
+  //   (with Confirm/Dismiss) stay separate.
+  if (!isUser) {
     body += renderMcpLoginHintHtml(msg._mcpLoginHint);
+    body += renderTurnProvenanceHtml(msg);
+    if (msg._preferencesLearned) {
+      body += renderPreferenceLearnedHtml(msg._preferencesLearned);
+    }
   }
-  if (!isUser && msg._memoryPrefetch) {
-    body += renderMemoryPrefetchHtml(msg._memoryPrefetch);
+  /* ★ Autopilot VU bubble, still streaming and not yet showing content —
+   * render a live "composing…" pulse so the eagerly-created bubble isn't
+   * blank while the simulated user warms up / investigates. */
+  if (msg._isVirtualUser && msg._streamingVu && !msg.content
+      && !(msg.toolRounds && msg.toolRounds.length) && !msg.thinking) {
+    body += `<div class="stream-status vu-composing"><div class="pulse"></div> `
+          + `${escapeHtml(typeof t === "function" ? t("autopilot.warming") : "Autopilot…")}</div>`;
   }
   const rounds = getToolRoundsFromMsg(msg);
-  if (rounds.length > 0) {
+  /* ★ Autopilot VU provenance: the VU's tool investigation + private
+   * reasoning are DISPLAY-ONLY — only the reply text reaches the agent
+   * (see conv_message_builder._build_user_message, which reads ONLY
+   * `content` for a user row). Collect both here and emit them inside one
+   * default-collapsed "Private · not sent" container below, so the human
+   * can tell at a glance which part is excluded from the agent's context
+   * vs. the reply that is actually sent. */
+  const _vuPrivate = !!msg._isVirtualUser;
+  let _vuPrivateHtml = '';
+  /* ★ Interleaved segment timeline (epic pt_8b406df8fbe24ae5, step 5).
+   *   When the flag is ON and this finished assistant message carries a
+   *   `segments` list, render tools with their PRECEDING thinking+narration
+   *   inline (per-tool), instead of the three grouped blocks. Gated to the
+   *   normal assistant path — VU private-zone framing keeps its own layout.
+   *   renderSegmentTimelineHTML returns "" if it can't apply (no segments /
+   *   unmatchable toolRounds) → we fall through to the legacy render. When it
+   *   DOES render, it already includes the per-batch thinking, so the separate
+   *   msg.thinking block below is suppressed (_segTimelineRendered). */
+  let _segTimelineRendered = false;
+  if (!isUser && !_vuPrivate && _segTimelineEnabled()
+      && Array.isArray(msg.segments) && msg.segments.length > 0) {
+    const _tl = renderSegmentTimelineHTML(msg.segments, msg, idx);
+    if (_tl) {
+      body += _tl;
+      _segTimelineRendered = true;
+    }
+  }
+  if (!_segTimelineRendered && rounds.length > 0) {
+    let _roundsHtml = '';
     /* ★ Autopilot virtual-user messages carry the VU sub-task's tool
      * investigation as `toolRounds`. Surface them under a labelled
      * header so the user can tell "Autopilot probed these things
      * before replying" from a normal assistant tool panel. */
     if (msg._isVirtualUser) {
-      body += `<div class="vu-investigation-header" title="Tools the autopilot used to investigate before composing this reply">`
+      _roundsHtml += `<div class="vu-investigation-header" title="Tools the autopilot used to investigate before composing this reply">`
             + `<span class="vu-investigation-icon"></span>`
             + `<span class="vu-investigation-label">Autopilot investigation · ${rounds.length} tool ${rounds.length === 1 ? 'call' : 'calls'}</span>`
             + `</div>`;
@@ -417,14 +998,34 @@ function renderMessage(msg, idx) {
        so historical messages still tell the user "this turn received
        async sub-agent updates before the model's reply".               */
     if (msg._inboxInjects && msg._inboxInjects.length) {
-      body += _buildSwarmInboxChipsHTML(msg._inboxInjects);
+      _roundsHtml += _buildSwarmInboxChipsHTML(msg._inboxInjects);
     }
-    body += renderToolRoundsHTML(rounds, false);
+    _roundsHtml += renderToolRoundsHTML(rounds, false);
+    if (_vuPrivate) _vuPrivateHtml += _roundsHtml; else body += _roundsHtml;
   }
-  if (msg.thinking) {
+  if (msg.thinking && !_segTimelineRendered) {
     const thinkLen = msg.thinking.length;
     const thinkMeta = thinkLen >= 1024 ? ` (${Math.round(thinkLen / 1024)}k chars)` : ` (${thinkLen} chars)`;
-    body += `<div class="thinking-block" onclick="_toggleThinking(this,${idx})"><div class="thinking-header"><span class="thinking-label">Thinking Process${thinkMeta}</span><span class="thinking-toggle">▼</span></div><div class="thinking-content"><div class="thinking-text"></div></div></div>`;
+    const _thinkHtml = `<div class="thinking-block" onclick="_toggleThinking(this,${idx})"><div class="thinking-header"><span class="thinking-label">Thinking Process${thinkMeta}</span><span class="thinking-toggle">▼</span></div><div class="thinking-content"><div class="thinking-text"></div></div></div>`;
+    if (_vuPrivate) _vuPrivateHtml += _thinkHtml; else body += _thinkHtml;
+  }
+  /* ★ Flush the VU private zone — a single default-collapsed <details>
+   * container that makes the "not sent to the agent" boundary unmistakable
+   * (the reply below stands out). The inner thinking-block's lazy-load via
+   * _toggleThinking still works: the element exists in the DOM even while
+   * the <details> is closed. */
+  if (_vuPrivate && _vuPrivateHtml) {
+    const _privLabel = (typeof t === "function" && t("autopilot.privateNotSent") !== "autopilot.privateNotSent")
+      ? t("autopilot.privateNotSent")
+      : "Private · not sent to the agent";
+    body += `<details class="vu-private-zone">`
+          + `<summary class="vu-private-summary" title="${escapeHtml(_privLabel)}">`
+          + `<svg class="vu-private-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/><line x1="2" x2="22" y1="2" y2="22"/></svg>`
+          + `<span class="vu-private-label">${escapeHtml(_privLabel)}</span>`
+          + `<span class="vu-private-toggle">▼</span>`
+          + `</summary>`
+          + `<div class="vu-private-body">${_vuPrivateHtml}</div>`
+          + `</details>`;
   }
   // ── Prior thinking (display-only) ──
   // Trailing reasoning that was emitted after the last completed tool batch
@@ -458,18 +1059,18 @@ function renderMessage(msg, idx) {
     const ige = msg._igError;
     // Determine error-type CSS class and icon
     let errTypeClass = 'ig-error-generic';
-    let errIcon = '⚠';
+    let errIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>';
     if (ige.isRateLimit || ige.errorType === 'rate_limited') {
       errTypeClass = 'ig-error-ratelimit';
-      errIcon = '⏳';
+      errIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 22h14"/><path d="M5 2h14"/><path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22"/><path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2"/></svg>';
     } else if (ige.isContentBlocked || ige.errorType === 'content_blocked') {
       errTypeClass = 'ig-error-blocked';
-      errIcon = '🚫';
+      errIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M4.929 4.929 19.07 19.071"/></svg>';
     } else if (ige.isTimeout || ige.errorType === 'timeout') {
       errTypeClass = 'ig-error-timeout';
-      errIcon = '⏱';
+      errIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="10" x2="14" y1="2" y2="2"/><line x1="12" x2="15" y1="14" y2="11"/><circle cx="12" cy="14" r="8"/></svg>';
     } else if (ige.errorType === 'no_slot') {
-      errIcon = '🔌';
+      errIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m19 5 3-3"/><path d="m2 22 3-3"/><path d="M6.3 20.3a2.4 2.4 0 0 0 3.4 0L12 18l-6-6-2.3 2.3a2.4 2.4 0 0 0 0 3.4Z"/><path d="M7.5 13.5 10 11"/><path d="M10.5 16.5 13 14"/><path d="m12 6 6 6 2.3-2.3a2.4 2.4 0 0 0 0-3.4l-2.6-2.6a2.4 2.4 0 0 0-3.4 0Z"/></svg>';
     }
     body += `<div class="ig-result-wrapper">
       <div class="ig-error-card ${errTypeClass}">
@@ -504,7 +1105,7 @@ function renderMessage(msg, idx) {
             ${arStr ? `<span class="ig-meta-pill">${escapeHtml(arStr)}</span>` : ''}
             ${sizeStr ? `<span class="ig-meta-pill">${sizeStr}</span>` : ''}
             ${elapsedStr ? `<span class="ig-meta-pill">${elapsedStr}</span>` : ''}
-            ${ig.history_turns ? `<span class="ig-meta-pill ig-history-pill" title="${ig.history_turns} prior editing turn${ig.history_turns > 1 ? 's' : ''}">🔄 ${ig.history_turns}</span>` : ''}
+            ${ig.history_turns ? `<span class="ig-meta-pill ig-history-pill" title="${ig.history_turns} prior editing turn${ig.history_turns > 1 ? 's' : ''}">${Icon('refresh', 11)} ${ig.history_turns}</span>` : ''}
           </div>
           <div class="ig-result-actions">
             <button onclick="event.stopPropagation();_downloadGenImage(this)" title="Download">⬇</button>
@@ -570,11 +1171,11 @@ function renderMessage(msg, idx) {
           // Error slot — with error-type differentiation and retry button
           const errModel = _shortModel[r.model] || r.model || '?';
           let errTypeClass = 'ig-error-generic';
-          let errIcon = '⚠';
+          let errIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>';
           const et = r.errorType || '';
-          if (et === 'rate_limited') { errTypeClass = 'ig-error-ratelimit'; errIcon = '⏳'; }
-          else if (et === 'content_blocked') { errTypeClass = 'ig-error-blocked'; errIcon = '🚫'; }
-          else if (et === 'timeout') { errTypeClass = 'ig-error-timeout'; errIcon = '⏱'; }
+          if (et === 'rate_limited') { errTypeClass = 'ig-error-ratelimit'; errIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 22h14"/><path d="M5 2h14"/><path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22"/><path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2"/></svg>'; }
+          else if (et === 'content_blocked') { errTypeClass = 'ig-error-blocked'; errIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M4.929 4.929 19.07 19.071"/></svg>'; }
+          else if (et === 'timeout') { errTypeClass = 'ig-error-timeout'; errIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="10" x2="14" y1="2" y2="2"/><line x1="12" x2="15" y1="14" y2="11"/><circle cx="12" cy="14" r="8"/></svg>'; }
           const promptEsc = JSON.stringify(r.prompt || '').replace(/"/g, '&quot;');
           const modelEsc = JSON.stringify(r.model || '').replace(/"/g, '&quot;');
           body += `<div class="ig-batch-slot" data-slot-idx="${ri}" data-msg-idx="${idx}"><div class="ig-batch-error ${errTypeClass}">
@@ -594,14 +1195,18 @@ function renderMessage(msg, idx) {
       // ★ Endpoint-mode critic messages are role=user but produced by the
       //   Critic LLM — they DO receive server-side auto-translate.  Treat
       //   them like assistants for the purposes of translation display.
-      const _isCritic = isUser && msg._isEndpointReview;
+      // ★ Virtual-user (Autopilot) messages are role=user but produced by the
+      //   VU LLM and auto-translated to the UI language for DISPLAY — treat
+      //   them like critic/assistant for translation display (the VU composes
+      //   in the assistant's language; the user sees it in their UI language).
+      const _isCritic = isUser && (msg._isEndpointReview || msg._isVirtualUser);
       const showTrans = (!isUser || _isCritic)
                         && msg.translatedContent
                         && msg._showingTranslation !== false;
       if (showTrans) {
         mdHtml = renderMarkdown(stripNoTranslateTags(msg.translatedContent));
       } else if (_isCritic) {
-        // Critic messages are user-role but contain rich markdown
+        // Critic / VU messages are user-role but contain rich markdown
         mdHtml = renderMarkdown(msg.content);
       } else if (isUser) {
         mdHtml = escapeHtml(stripNoTranslateTags(msg.originalContent || msg.content));
@@ -614,7 +1219,22 @@ function renderMessage(msg, idx) {
         mdHtml = r.html;
         _inlinedBranches = r.inlinedSet;
       }
+      /* ★ Autopilot VU provenance boundary: the VU's tool investigation
+       * and private reasoning above/below are display-only — only THIS
+       * reply text is fed to the assistant as its next user message. Mark
+       * it so the human can tell at a glance which part becomes the
+       * agent's context vs. which part was private process. */
+      const _vuSent = msg._isVirtualUser && !msg._streamingVu && msg.content;
+      if (_vuSent) {
+        const _vuSentLabel = (typeof t === "function" && t("autopilot.sentToAgent") !== "autopilot.sentToAgent")
+          ? t("autopilot.sentToAgent")
+          : "Sent to the agent as the next message";
+        body += `<div class="vu-sent-zone"><div class="vu-handoff-header" title="${escapeHtml(_vuSentLabel)}">`
+              + `<svg class="vu-handoff-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>`
+              + `<span class="vu-handoff-label">${escapeHtml(_vuSentLabel)}</span></div>`;
+      }
       body += `<div class="md-content${isUser ? " user-content" : ""}">${mdHtml}</div>`;
+      if (_vuSent) body += `</div>`;
     } catch (e) {
   // ── Compaction markers — render inline chips for each archived snapshot ──
   // Each marker becomes a clickable chip that opens the Compaction Viewer
@@ -624,15 +1244,18 @@ function renderMessage(msg, idx) {
   if (!isUser && Array.isArray(msg._compactions) && msg._compactions.length) {
     const _ccDom = msg._compactions.map((c) => {
       const trig = (c.trigger || 'force');
+      const _zapSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/></svg>';
+      const _wrenchSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.106-3.105c.32-.322.863-.22.983.218a6 6 0 0 1-8.259 7.057l-7.91 7.91a1 1 0 0 1-2.999-3l7.91-7.91a6 6 0 0 1 7.057-8.259c.438.12.54.662.219.984z"/></svg>';
+      const _archiveSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>';
       const trigLabel = trig === 'reactive'
-        ? '⚡ 紧急压缩'
-        : (trig === 'manual' ? '🔧 手动压缩' : '🗜️ 自动压缩');
+        ? _zapSvg + ' 紧急压缩'
+        : (trig === 'manual' ? _wrenchSvg + ' 手动压缩' : _archiveSvg + ' 自动压缩');
       const before = c.tokensBefore || 0;
       const after  = c.tokensAfter  || 0;
       const reductionPct = (c.reductionPct != null) ? c.reductionPct
                           : (before > 0 ? Math.round((1 - after / before) * 100) : 0);
       const sizeFrag = before > 0 && after > 0
-        ? `${(before/1000).toFixed(0)}k → ${(after/1000).toFixed(0)}k tokens · −${reductionPct}%`
+        ? `${(before/1000).toFixed(0)}k → ${(after/1000).toFixed(0)}k tokens · -${reductionPct}%`
         : (before > 0 ? `${(before/1000).toFixed(0)}k tokens 已归档` : '已归档');
       const reasonFrag = c.reason ? `<span class="compaction-marker-reason">${escapeHtml(c.reason)}</span>` : '';
       const statusCls = (c.status === 'done') ? 'is-done' : 'is-progress';
@@ -691,8 +1314,8 @@ function renderMessage(msg, idx) {
     const _asstOrig = stripNoTranslateTags(msg.content || '');
     body += `<div class="bilingual-block bilingual-original"><div class="bilingual-header" onclick="if(event.target.closest('.bilingual-copy-btn'))return;this.parentElement.classList.toggle('expanded')"><span class="bilingual-label"><span class="bilingual-type active">原文</span><span class="bilingual-sep">/</span><span class="bilingual-type">译文</span>${_tmAsst}</span><button class="bilingual-copy-btn" onclick="event.stopPropagation();copyBilingualOriginal(this,'assistant',${idx})" title="Copy original text"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button><span class="bilingual-toggle">▼</span></div><div class="bilingual-body"><div class="md-content">${renderMarkdown(_asstOrig)}</div></div></div>`;
   }
-  // ── Critic (endpoint review) bilingual block — symmetric with assistant ──
-  if (isUser && msg._isEndpointReview && msg.translatedContent && msg._showingTranslation !== false) {
+  // ── Critic (endpoint review) / Autopilot VU bilingual block — symmetric with assistant ──
+  if (isUser && (msg._isEndpointReview || msg._isVirtualUser) && msg.translatedContent && msg._showingTranslation !== false) {
     const _tmCritic = msg._translateModel ? `<span class="bilingual-model" title="${escapeHtml(msg._translateModel)}">${escapeHtml(msg._translateModel)}</span>` : '';
     const _critOrig = stripNoTranslateTags(msg.content || '');
     body += `<div class="bilingual-block bilingual-original"><div class="bilingual-header" onclick="if(event.target.closest('.bilingual-copy-btn'))return;this.parentElement.classList.toggle('expanded')"><span class="bilingual-label"><span class="bilingual-type active">原文</span><span class="bilingual-sep">/</span><span class="bilingual-type">译文</span>${_tmCritic}</span><button class="bilingual-copy-btn" onclick="event.stopPropagation();copyBilingualOriginal(this,'critic',${idx})" title="Copy original text"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button><span class="bilingual-toggle">▼</span></div><div class="bilingual-body"><div class="md-content">${renderMarkdown(_critOrig)}</div></div></div>`;
@@ -701,7 +1324,7 @@ function renderMessage(msg, idx) {
   // Fires for both assistant messages AND endpoint-critic (role=user,
   // _isEndpointReview) messages — both are routed through the auto-translate
   // pipeline.
-  if ((!isUser || (isUser && msg._isEndpointReview))
+  if ((!isUser || (isUser && (msg._isEndpointReview || msg._isVirtualUser)))
       && !msg.translatedContent && msg._translateDone === false) {
     const errText = msg._translateError;
     if (errText) {
@@ -719,14 +1342,23 @@ function renderMessage(msg, idx) {
         const i18nKey = kind ? `translate.retry.${kind}` : '';
         const localized = i18nKey && typeof t === 'function' ? t(i18nKey) : '';
         const display = (localized && localized !== i18nKey) ? localized : msg._translateStatus;
-        statusSub = `<div class="translate-status-sub" style="font-size:11px;color:#f59e0b;margin-top:2px" title="${escapeHtml(msg._translateStatus)}">⚠ ${escapeHtml(display)}</div>`;
+        statusSub = `<div class="translate-status-sub" title="${escapeHtml(msg._translateStatus)}">⚠ ${escapeHtml(display)}</div>`;
       }
-      // ── Streaming preview: render partial translation text as it arrives. ──
+      // ── Streaming preview: render the partial translation as markdown as it
+      //    arrives, in a styled block that morphs smoothly into the final
+      //    bilingual译文 once the stream completes. ──
       let previewSub = '';
       if (msg._translatePartial) {
-        previewSub = `<div class="translate-preview-sub" style="font-size:12px;color:var(--text-secondary,#888);margin-top:4px;white-space:pre-wrap;opacity:0.7;max-height:200px;overflow:hidden">${escapeHtml(msg._translatePartial)}</div>`;
+        let _pv;
+        try { _pv = renderMarkdown(stripNoTranslateTags(msg._translatePartial)); }
+        catch (e) { _pv = escapeHtml(msg._translatePartial); }
+        previewSub = `<div class="translate-preview"><div class="md-content">${_pv}</div><span class="translate-caret"></span></div>`;
       }
-      body += `<div class="translate-loading" id="translate-loading-${idx}"><span class="translate-spinner"></span> ${t('translate.translatingToCN')}${statusSub}${previewSub}</div>`;
+      const _hasPreview = previewSub ? ' has-preview' : '';
+      body += `<div class="translate-loading${_hasPreview}" id="translate-loading-${idx}">`
+        + `<div class="translate-loading-head"><span class="translate-spinner"></span>`
+        + `<span class="translate-loading-label">${t('translate.translatingToCN')}</span></div>`
+        + `${statusSub}${previewSub}</div>`;
     }
   }
   if (msg.error)
@@ -740,7 +1372,17 @@ function renderMessage(msg, idx) {
     try { body += window.Artifacts.renderChips(msg._artifacts); }
     catch (e) { console.debug("[Artifacts] renderChips failed:", e); }
   }
-  if (!isUser) body += renderFinishInfo(msg);
+  if (!isUser) {
+    /* Is this the still-running tail? The backend withholds finishReason/
+     * usage mid-stream, so a model-only assistant message that is the last
+     * message of a conv with a live stream / active task is in progress —
+     * suppress its premature finish bar (see renderFinishInfo). */
+    const _lvConv = getActiveConv();
+    const _isLiveTail = !!(_lvConv
+      && idx === _lvConv.messages.length - 1
+      && (activeStreams.has(_lvConv.id) || _lvConv.activeTaskId));
+    body += renderFinishInfo(msg, _isLiveTail);
+  }
   const idAttr = typeof idx === "number" ? ` id="msg-${idx}"` : "";
   /* Stable per-message handle for the unified chatInner controller.
    * Server backfills `_msgId` (UUID) on persist; client-only messages get
@@ -748,6 +1390,14 @@ function renderMessage(msg, idx) {
    * mirror it onto the DOM so future surgical updates can address by id
    * instead of mutable index. */
   const msgIdAttr = (msg && msg._msgId) ? ` data-msg-id="${escapeHtml(msg._msgId)}"` : "";
+  /* ★ Autopilot run fold: stamp the run id on every turn of an autopilot
+   * run (VU turns + the close-out summary) so renderChat's post-render
+   * grouping pass can collapse a CONCLUDED run's VU<->agent transcript into
+   * one <details>, leaving [original human msg → summary] as the visible
+   * spine. Grouping keys on this EXPLICIT id — never role-scanning. */
+  const apRunAttr = (msg && msg._autopilotRunId)
+    ? ` data-ap-run="${escapeHtml(msg._autopilotRunId)}"` : "";
+  const apSummaryAttr = (msg && msg._isAutopilotSummary) ? ` data-ap-summary="1"` : "";
   let actionBtns = "";
   if (typeof idx === "number") {
     const copyH = `<button class="msg-action-btn copy-msg-btn" onclick="event.stopPropagation();copyMessage(${idx})" title="Copy"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg> Copy</button>`;
@@ -770,7 +1420,7 @@ function renderMessage(msg, idx) {
     // Show the Translate button on: (a) assistant messages, (b) endpoint
     // critic review messages (role=user + _isEndpointReview) — they
     // receive auto-translate too.
-    const _translateBtnAllowed = !isUser || (isUser && msg._isEndpointReview);
+    const _translateBtnAllowed = !isUser || (isUser && (msg._isEndpointReview || msg._isVirtualUser));
     const translateH = _translateBtnAllowed
       ? `<button class="msg-action-btn msg-translate-btn${isShowingTrans ? " translated" : ""}" onclick="event.stopPropagation();translateMessage(${idx})" title="${isShowingTrans ? "Show Original" : "Translate"}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12.87 15.07l-2.54-2.51.03-.03A17.52 17.52 0 0014.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7l1.62-4.33L19.12 17h-3.24z"/></svg> ${isShowingTrans ? "Original" : "Translate"}</button>`
       : "";
@@ -822,12 +1472,22 @@ function renderMessage(msg, idx) {
   // ── Avatar: tofu critic for reviews & autopilot, onigiri mascot for user ──
   const _criticAvatar = (typeof _TOFU_CRITIC_SVG !== 'undefined') ? _TOFU_CRITIC_SVG
     : '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>';
+  // A peer/operator KIND_PEER_MSG turn is role=user but NOT human input — give
+  // it the people-glyph (mirrors the project_peer_status tool icon) + a role
+  // label instead of the onigiri + "You", so the header identity stops lying.
+  // The specific sender (conv id / operator) stays in the in-bubble banner.
+  const _peerAvatar = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>';
+  const _tOr = (k, fb) => (typeof t === "function" && t(k) !== k) ? t(k) : fb;
   const userAvatar = (msg._isEndpointReview || msg._isVirtualUser)
     ? _criticAvatar
+    : msg._peerMessage
+    ? _peerAvatar
     : (typeof _USER_AVATAR_SVG !== 'undefined') ? _USER_AVATAR_SVG
     : '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>';
   const userLabel = msg._isEndpointReview ? "Critic"
     : msg._isVirtualUser ? "Autopilot"
+    : msg._peerMessage
+    ? (msg._peerHuman ? _tOr("peer.operatorLabel", "Operator") : _tOr("peer.senderLabel", "Peer"))
     : "You";
 
   /* messageTime is a formatter output (digits + localized separators) —
@@ -837,11 +1497,22 @@ function renderMessage(msg, idx) {
   const epWorkerCls = (!isUser && !msg._isEndpointPlanner && !msg._isEndpointReview) ? ' ep-worker-msg' : '';
   const epPlannerCls = msg._isEndpointPlanner ? ' ep-planner-msg' : '';
   const vuCls = msg._isVirtualUser ? ' vu-user-msg' : '';
+  // ── Per-turn context capsule (floats in the RIGHT GUTTER beside the turn) ──
+  // Frozen snapshot of the workspace/tools/model active when this turn was
+  // sent (msg._ctx, captured in the send pipeline). Rendered as a direct
+  // child of `.message` — NOT inside `.message-content` (which clips via
+  // overflow:hidden) — so CSS can place it at left:100% out in the gutter,
+  // clear of both the bubble and the hover action-bar. See info-rail.js.
+  let turnCtxHtml = "";
+  if (msg._ctx && typeof renderTurnCtxNote === "function") {
+    try { turnCtxHtml = renderTurnCtxNote(msg._ctx); }
+    catch (e) { console.debug("[turnCtx] renderTurnCtxNote failed:", e); }
+  }
   const badgeHtml = plannerBadge || criticBadge;
   /* Final assembly via safeHtml. roleName / userLabel / time are
    * escaped by default. Everything pre-built above (avatars = trusted
    * SVG, badgeHtml, body, branchHtml, actionBtns, the class/attr
    * fragments) is already-trusted HTML, marked raw(). */
   const _classAttr = `${isUser ? ' user-msg' : ''}${msg._isEndpointReview ? ' ep-critic-msg' : ''}${epPlannerCls}${epWorkerCls}${vuCls}`;
-  return String(safeHtml`<div class="message${raw(_classAttr)}"${raw(idAttr)}${raw(msgIdAttr)}${raw(mfpAttr)}><div class="message-avatar">${raw(isUser ? userAvatar : avatarContent)}</div><div class="message-content"><div class="message-header"><span class="message-role">${isUser ? userLabel : roleName}</span>${raw(badgeHtml)}${raw(messageTimeHtml)}</div><div class="message-body">${raw(body)}</div>${raw(branchHtml)}${raw(actionBtns)}</div></div>`);
+  return String(safeHtml`<div class="message${raw(_classAttr)}"${raw(idAttr)}${raw(msgIdAttr)}${raw(apRunAttr)}${raw(apSummaryAttr)}${raw(mfpAttr)}><div class="message-avatar">${raw(isUser ? userAvatar : avatarContent)}</div><div class="message-content"><div class="message-header"><span class="message-role">${isUser ? userLabel : roleName}</span>${raw(badgeHtml)}${raw(messageTimeHtml)}</div><div class="message-body">${raw(body)}</div>${raw(branchHtml)}${raw(actionBtns)}</div>${raw(turnCtxHtml)}</div>`);
 }

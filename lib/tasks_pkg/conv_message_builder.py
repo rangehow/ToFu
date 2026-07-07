@@ -28,7 +28,6 @@ The transformations mirror what the old frontend ``buildApiMessages()`` did:
 from __future__ import annotations
 
 import json
-import os
 import re
 
 from lib.database import DOMAIN_CHAT, get_thread_db
@@ -38,10 +37,6 @@ logger = get_logger(__name__)
 
 # Regex to strip <notranslate> and <nt> wrapper tags
 _NT_RE = re.compile(r'</?(?:notranslate|nt)>', re.IGNORECASE)
-
-# Where uploaded images are stored on disk
-_UPLOAD_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
-    os.path.abspath(__file__)))), 'uploads')
 
 
 def build_branch_api_messages(
@@ -258,6 +253,13 @@ def _transform_messages(
             continue
         if msg.get('_epIteration'):
             continue
+        # NOTE: autopilot run summaries are NO LONGER messages — they live in
+        # the conversation sidecar (settings.autopilotSummaries[runId]), human-
+        # only, so there is nothing to skip here. Any legacy `_isAutopilotSummary`
+        # assistant row from before the sidecar migration is still skipped below
+        # as a defensive guard so old conversations don't replay the report.
+        if msg.get('_isAutopilotSummary'):
+            continue
 
         role = msg.get('role', '')
 
@@ -325,6 +327,7 @@ def _build_user_message(msg: dict) -> dict:
 
     # 6. Inline PDF text
     pdf_texts = msg.get('pdfTexts') or []
+    _pdf_chars_before = len(text_content)
     for pdf in pdf_texts:
         name = pdf.get('name', 'document.pdf')
         pages = pdf.get('pages', '?')
@@ -335,6 +338,9 @@ def _build_user_message(msg: dict) -> dict:
             f'PDF Document: {name} ({pages} pages, {text_len / 1024:.1f}KB)\n'
             f'{"═" * 50}\n{text}'
         )
+    if pdf_texts:
+        logger.debug('[Context] inject block=pdf_inline docs=%d chars=%d',
+                     len(pdf_texts), len(text_content) - _pdf_chars_before)
 
     # 7. Build multimodal image blocks
     images = msg.get('images') or []
@@ -346,6 +352,29 @@ def _build_user_message(msg: dict) -> dict:
             img_url = ''
             if img.get('base64'):
                 media_type = img.get('mediaType', 'image/png')
+                # Source guard: the stored ``mediaType`` is a DB value written
+                # by the upload path and is NOT trusted — a PNG saved with
+                # mediaType='image/jpeg' (or vice-versa) is where the mislabeled
+                # data URI is BORN. Sniff the real format from the base64 prefix
+                # and correct it here so the DB never even emits a mismatched
+                # URL. The Anthropic Messages API HARD-REJECTS a media-type/bytes
+                # mismatch (HTTP 400 "messages.N.content.0.image.source.base64:
+                # The image was specified using the image/jpeg media type, but the
+                # image does not appear to be in that format."). Best-effort: on
+                # any decode failure keep the stored type; payload is untouched.
+                try:
+                    import base64 as _b64
+
+                    from lib.llm.body import sniff_image_mime
+                    _sniffed = sniff_image_mime(_b64.b64decode(img['base64'][:1364]))
+                    if _sniffed and _sniffed != media_type:
+                        logger.warning(
+                            '[MsgBuilder] Corrected mislabeled stored image '
+                            'mediaType %r → %r (bytes sniffed as %s) before '
+                            'building data URI', media_type, _sniffed, _sniffed)
+                        media_type = _sniffed
+                except Exception as _mte:
+                    logger.debug('[MsgBuilder] image mediaType sniff skipped: %s', _mte)
                 img_url = f'data:{media_type};base64,{img["base64"]}'
             elif img.get('url'):
                 # Pass through — backend _validate_image_blocks resolves
@@ -370,6 +399,9 @@ def _build_user_message(msg: dict) -> dict:
 
         if text_content:
             content_blocks.append({'type': 'text', 'text': text_content})
+        _n_img = sum(1 for b in content_blocks if b.get('type') == 'image_url')
+        logger.debug('[Context] inject block=images count=%d blocks=%d',
+                     _n_img, len(content_blocks))
         return {'role': 'user', 'content': content_blocks}
     else:
         return {'role': 'user', 'content': text_content}
@@ -417,7 +449,28 @@ def _build_assistant_messages(msg: dict) -> list[dict]:
         return [{'role': 'assistant', 'content': ''}]
 
     # ── Attempt structured reconstruction ──
-    structured = _reconstruct_tool_call_messages(rounds)
+    # Segment-first (epic pt_cb8f98b0cb9b47fb, step 4): when this row carries a
+    # persisted `segments` timeline, drive the rebuild FROM the segment
+    # structure (rehydrate against toolRounds first so Gemini extraContent is
+    # recovered). Byte-identical to the toolRounds path by the reconstructor
+    # parity gate; falls through to the toolRounds path for legacy rows with
+    # no segments, or if the segment path can't reconstruct (→ None).
+    structured = None
+    seg_list = msg.get('segments')
+    if seg_list:
+        try:
+            from lib.tasks_pkg.segments import (
+                reconstruct_tool_messages_from_segments,
+                rehydrate_segments,
+            )
+            structured = reconstruct_tool_messages_from_segments(
+                rehydrate_segments(seg_list, rounds))
+        except Exception as _seg_e:
+            logger.warning('[MsgBuilder] segment reconstruction failed, '
+                           'falling back to toolRounds: %s', _seg_e)
+            structured = None
+    if structured is None:
+        structured = _reconstruct_tool_call_messages(rounds)
     if structured is not None:
         # Append the final assistant text (if any) as a trailing message.
         if final_content:

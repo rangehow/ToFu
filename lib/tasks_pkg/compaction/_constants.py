@@ -92,6 +92,36 @@ _COMPACTION_RESERVE = 8_000
 _COMPACT_TOOL_NAME = 'context_compact'
 """Tool name for the synthetic compact tool pair."""
 
+_ARCHIVE_RETENTION_DEFAULT = 50
+"""Max ``transcript_archive`` rows retained PER CONVERSATION (ring buffer).
+
+Every force + reactive compaction inserts a full ``messages_json`` row, so on
+a year-scale conversation with thousands of compactions the table grows
+unbounded (rows were previously only deleted on whole-conversation cleanup).
+A GC-on-insert in ``_archive_transcript`` keeps the newest N; older raw
+transcripts age out.  Recoverability for the compaction VIEWER is bounded to
+the last N compactions — ample for inspecting recent context, and the LIVE
+message list is never touched by pruning.  Env-overridable, FAIL-OPEN:
+``TOFU_COMPACTION_ARCHIVE_RETENTION`` unset→50, ``0``/<=0→unlimited (never
+prune), garbage→default."""
+
+
+def archive_retention() -> int:
+    """Resolve the per-conversation transcript_archive retention (ring buffer).
+
+    FAIL-OPEN: unset→:data:`_ARCHIVE_RETENTION_DEFAULT`, ``0``/<=0→UNLIMITED
+    (never prune), non-int→default.  Read at call time (not import) so an
+    operator can retune without a restart.
+    """
+    raw = (os.environ.get('TOFU_COMPACTION_ARCHIVE_RETENTION') or '').strip()
+    if not raw:
+        return _ARCHIVE_RETENTION_DEFAULT
+    try:
+        val = int(raw)
+    except (ValueError, TypeError):
+        return _ARCHIVE_RETENTION_DEFAULT
+    return val if val > 0 else 0
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Wire-size safety (gateway HTTP 413)
@@ -217,6 +247,19 @@ _PERSIST_PREVIEW_CHARS = 2000
 # result chars in one round exceed this, the largest non-exempt results
 # are persisted to disk.
 MAX_ROUND_TOOL_RESULTS_CHARS = 300_000
+
+# ── Absolute single-result hard ceiling (tool-agnostic backstop) ──
+# Layer-2 catch-all in clamp_tool_result_text: NO single tool result text
+# may exceed this, regardless of tool or per-tool budget — including the
+# _BUDGET_EXEMPT_TOOLS (read_files).  This is the structural tripwire that
+# ends the "opaque blob enters the text stream" bug CLASS: every historical
+# variant (relative-path PNG decoded as text, str()'d __screenshot__ dict,
+# base64 leak) tokenises far above this and would have been clamped to a
+# degraded-but-alive result instead of a fatal HTTP 400.  Set well above any
+# legitimate single text file (a 512KB source file ≈ 512K chars) but far
+# below the ~1M-token wall.  __screenshot__ dicts are exempt — they never
+# enter the text stream (native image_url protocol).
+_SINGLE_RESULT_HARD_CEILING_CHARS = 800_000
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

@@ -80,6 +80,31 @@ class ResolveConvConfigTest(unittest.TestCase):
         )
         self.assertEqual(out['searchMode'], 'multi')
 
+    def test_auto_translate_defaults_false(self):
+        # ★ Gate-divergence guard. The runtime config produced here defaults
+        # autoTranslate=False, but the server-side safety net
+        # (lib/tasks_pkg/auto_translate.py) reads settings.autoTranslate with a
+        # default of TRUE. When the task config says False yet conv settings
+        # say True (or vice-versa) the incremental accumulator and the safety
+        # net disagree about who owns translation; the orphan-teardown in
+        # _maybe_auto_translate_assistant's finally block must absorb that
+        # divergence (see tests/test_auto_translate_safety_net.py). This test
+        # pins the config default so the divergence can't widen silently.
+        out = resolve_conv_config(conv_settings={}, overrides={}, is_active=True)
+        self.assertFalse(out['autoTranslate'])
+
+    def test_auto_translate_override_true_active(self):
+        out = resolve_conv_config(
+            conv_settings={}, overrides={'autoTranslate': True}, is_active=True)
+        self.assertTrue(out['autoTranslate'])
+
+    def test_auto_translate_conv_value_wins_inactive(self):
+        out = resolve_conv_config(
+            conv_settings={'autoTranslate': True},
+            overrides={'autoTranslate': False},
+            is_active=False)
+        self.assertTrue(out['autoTranslate'])
+
     def test_browser_client_id_only_when_enabled(self):
         out = resolve_conv_config(
             conv_settings={},
@@ -120,11 +145,6 @@ class ResolveConvConfigTest(unittest.TestCase):
         )
         self.assertFalse(out['keepToolHistory'])
 
-    def test_agent_backend_default_builtin(self):
-        out = resolve_conv_config(
-            conv_settings={}, overrides={}, is_active=True)
-        self.assertEqual(out['agentBackend'], 'builtin')
-
     def test_project_paths_list_copy(self):
         paths = ['/a', '/b']
         out = resolve_conv_config(
@@ -156,15 +176,53 @@ class ResolveConvConfigTest(unittest.TestCase):
             conv_settings={}, overrides={}, is_active=True)
         expected = {
             'maxTokens', 'thinkingEnabled', 'model', 'preset',
-            'systemPrompt', 'thinkingDepth', 'temperature', 'searchMode',
+            'systemPrompt', 'systemPromptMode', 'systemPromptBlocks',
+            'thinkingDepth', 'temperature', 'searchMode',
             'fetchEnabled', 'codeExecEnabled', 'memoryEnabled',
             'schedulerEnabled', 'swarmEnabled', 'projectPath',
             'projectPaths', 'readOnlyPaths', 'autoApply', 'browserEnabled',
             'desktopEnabled', 'imageGenEnabled', 'humanGuidanceEnabled',
-            'endpointMode', 'autopilot', 'agentBackend',
+            'endpointMode', 'autopilot',
             'autoTranslate', 'browserClientId', 'keepToolHistory',
+            'activeFlow', 'flowBuiltin', 'flowId',
         }
         self.assertEqual(set(out.keys()), expected)
+
+    def test_active_flow_builtin_parsed(self):
+        out = resolve_conv_config(
+            conv_settings={}, overrides={'activeFlow': 'builtin:autopilot'},
+            is_active=True)
+        self.assertEqual(out['activeFlow'], 'builtin:autopilot')
+        self.assertEqual(out['flowBuiltin'], 'autopilot')
+        self.assertEqual(out['flowId'], '')
+
+    def test_active_flow_stored_id_parsed(self):
+        out = resolve_conv_config(
+            conv_settings={}, overrides={'activeFlow': 'orch_abc123'},
+            is_active=True)
+        self.assertEqual(out['flowBuiltin'], '')
+        self.assertEqual(out['flowId'], 'orch_abc123')
+
+    def test_active_flow_unknown_builtin_ignored(self):
+        out = resolve_conv_config(
+            conv_settings={}, overrides={'activeFlow': 'builtin:nope'},
+            is_active=True)
+        self.assertEqual(out['flowBuiltin'], '')
+        self.assertEqual(out['flowId'], '')
+
+    def test_active_flow_empty_when_none(self):
+        out = resolve_conv_config(conv_settings={}, overrides={}, is_active=True)
+        self.assertEqual(out['activeFlow'], '')
+        self.assertEqual(out['flowBuiltin'], '')
+        self.assertEqual(out['flowId'], '')
+
+    def test_active_flow_inactive_reads_stored(self):
+        out = resolve_conv_config(
+            conv_settings={'activeFlow': 'orch_stored'},
+            overrides={'activeFlow': 'builtin:endpoint'},
+            is_active=False)
+        self.assertEqual(out['flowId'], 'orch_stored')
+        self.assertEqual(out['flowBuiltin'], '')
 
 
 class ResolveConvSettingsTest(unittest.TestCase):
@@ -236,6 +294,7 @@ class ResolveConvSettingsTest(unittest.TestCase):
             'swarmEnabled', 'endpointEnabled', 'autopilotEnabled',
             'imageGenEnabled', 'humanGuidanceEnabled', 'projectPath',
             'projectPaths', 'readOnlyPaths', 'autoTranslate', 'folderId',
+            'activeFlow',
         }
         self.assertEqual(set(out.keys()), expected)
 

@@ -57,33 +57,108 @@ async function openUpdateDialog() {
 /** Run the version check with a visible spinner + bounded timeout.
  *  The check hits GitHub's tags API server-side; on a slow/blocked
  *  network we must NOT sit on a bare label forever — show a spinner,
- *  cap the wait, and offer an explicit retry. */
+ *  cap the wait, and surface the CONCRETE failure reason (never a vague
+ *  "try again later"). */
 async function _runUpdateCheck() {
   const body = document.getElementById('updateModalBody');
   if (!body) return;
+  // A restart owns the modal body — re-opening the dialog (or a retry click)
+  // must not paint the "checking…" spinner over the live progress card.
+  if (_restartActive) return;
   body.innerHTML =
     '<div class="upd-checking-wrap"><span class="upd-big-spin"></span><span>' +
     escapeHtml(t('update.checking')) + '</span></div>';
 
   let r = null;
+  let failure = null;  // {title, reason} — set on any failure
   try {
     // Bounded wait — the default 30s feels frozen. 12s is plenty for a
-    // reachable GitHub; beyond that we surface a retry instead of hanging.
-    r = await Api.update.check({ timeout: 12000 });
+    // reachable GitHub; beyond that we surface a reason instead of hanging.
+    // onError:'throw' (overriding api.js's default null) so we can read the
+    // real cause — backend down vs HTTP error vs timeout — and say so.
+    r = await Api.update.check({ timeout: 12000, onError: 'throw' });
   } catch (e) {
+    failure = _classifyCheckError(e);
     if (typeof debugLog === 'function') debugLog('[Update] check failed: ' + (e && e.message), 'error');
   }
-  if (!r || !r.ok) {
-    body.innerHTML =
-      '<div class="upd-checking-wrap"><p class="upd-error">' +
-      escapeHtml(t('update.checkFailed')) + '</p>' +
-      '<button class="upd-retry-btn" onclick="_runUpdateCheck()">' +
-      escapeHtml(t('update.retry')) + '</button></div>';
+
+  // The request succeeded at the HTTP layer but the backend could not reach
+  // GitHub — it tells us the concrete cause via error_kind/error_detail.
+  if (!failure && r && r.error_kind) {
+    failure = _githubFailureReason(r.error_kind, r.error_detail);
+  }
+  // Defensive: a malformed/empty payload with no explicit error.
+  if (!failure && (!r || !r.ok)) {
+    failure = { title: t('update.checkFailTitle'), reason: t('update.errUnknown') };
+  }
+
+  if (failure) {
+    _renderCheckError(failure);
     return;
   }
   _updateState = r;
   _renderUpdateBadge();
   _renderUpdateDialogBody(r);
+}
+
+/** Map a thrown ApiError (backend side) to a concrete {title, reason}.
+ *  Distinguishes "backend unreachable" / "request timed out" / "backend
+ *  returned HTTP N" so the user always learns the real cause. */
+function _classifyCheckError(e) {
+  const title = t('update.checkFailTitle');
+  // AbortController timeout (api.js) surfaces as AbortError or code 'timeout'.
+  const code = e && e.code;
+  const name = e && e.name;
+  if (code === 'timeout' || name === 'AbortError') {
+    return { title, reason: t('update.errTimeout') };
+  }
+  // Network-layer failure reaching our OWN backend (server down / restarting).
+  if (code === 'network' || (typeof e !== 'undefined' && e instanceof TypeError)) {
+    return { title, reason: t('update.errBackend') };
+  }
+  // HTTP error from the backend route itself (e.g. 500/502/auth).
+  if (e && typeof e.status === 'number' && e.status > 0) {
+    return { title, reason: t('update.errBackendHttp').replace('%s', String(e.status)) };
+  }
+  return { title, reason: t('update.errBackend') };
+}
+
+/** Map the backend's GitHub-side error_kind to localized {title, reason}. */
+function _githubFailureReason(kind, detail) {
+  const title = t('update.checkFailTitle');
+  const map = {
+    network: t('update.errNetwork'),
+    rate_limited: t('update.errRateLimited'),
+    http: t('update.errHttp').replace('%s', escapeHtml(String(detail || '').replace(/^HTTP\s*/i, '').split(' ')[0] || '')),
+    parse: t('update.errParse'),
+    no_tags: t('update.errNoTags'),
+  };
+  return { title, reason: map[kind] || t('update.errUnknown'), detail: detail };
+}
+
+/** Render a concrete error card: heading + the real reason + retry.
+ *  Always names WHY the check failed — backend down, timeout, GitHub
+ *  unreachable, rate-limited, etc. */
+function _renderCheckError(failure) {
+  const body = document.getElementById('updateModalBody');
+  if (!body) return;
+  const icon =
+    '<span class="upd-err-icon"><svg width="22" height="22" viewBox="0 0 24 24" ' +
+    'fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" ' +
+    'stroke-linejoin="round"><circle cx="12" cy="12" r="10"/>' +
+    '<line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg></span>';
+  body.innerHTML =
+    '<div class="upd-err-card">' +
+      '<div class="upd-err-head">' + icon +
+        '<div class="upd-err-title">' + escapeHtml(failure.title || t('update.checkFailTitle')) + '</div>' +
+      '</div>' +
+      '<p class="upd-err-reason">' + escapeHtml(failure.reason || t('update.errUnknown')) + '</p>' +
+      '<button class="upd-retry-btn" onclick="_runUpdateCheck()">' +
+        '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+        'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+        '<path d="M23 4v6h-6"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>' +
+        escapeHtml(t('update.retry')) + '</button>' +
+    '</div>';
 }
 
 /** current → latest version hero card. */
@@ -109,11 +184,7 @@ function _renderUpdateDialogBody(r) {
   if (!body) return;
 
   let actionHtml = '';
-  if (!r.git_available) {
-    // Not a git checkout — in-place update isn't possible.
-    actionHtml = '<div class="upd-badge warn"><span class="upd-badge-icon">⚠️</span><span>' +
-      escapeHtml(t('update.noGit')) + '</span></div>';
-  } else if (!r.update_available) {
+  if (!r.update_available) {
     actionHtml = '<div class="upd-badge ok"><span class="upd-badge-icon">' +
       '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
       'stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">' +
@@ -123,12 +194,19 @@ function _renderUpdateDialogBody(r) {
     // Genuine tracked-source edits block the pull. List a few, never auto-stash.
     const sample = (r.blocking || []).slice(0, 8).map(escapeHtml).join('<br>');
     actionHtml =
-      '<div class="upd-badge warn"><span class="upd-badge-icon">⚠️</span><span>' +
-      escapeHtml(t('update.dirty').replace(/^⚠️\s*/, '')) + '</span></div>' +
+      '<div class="upd-badge warn"><span class="upd-badge-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg></span><span>' +
+      escapeHtml(t('update.dirty')) + '</span></div>' +
       (sample ? '<pre class="upd-files">' + sample + '</pre>' : '');
   } else {
+    // A non-git deployment (exported copy / zip) updates via a downloaded
+    // release-tarball overlay rather than git pull. Note the method so the
+    // user understands the one limitation (can't delete files removed upstream).
+    const methodNote = (r.update_method === 'tarball')
+      ? '<p class="upd-hint">' + escapeHtml(t('update.tarballNote')) + '</p>'
+      : '';
     actionHtml =
       '<p class="upd-ready">' + escapeHtml(t('update.ready')) + '</p>' +
+      methodNote +
       '<button class="upd-apply-btn" id="updateApplyBtn" onclick="applyUpdate()">' +
       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
       'stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/>' +
@@ -145,9 +223,10 @@ function _renderUpdateDialogBody(r) {
 function _renderUpdateStepper() {
   const area = document.getElementById('updateActionArea');
   if (!area) return;
+  const isTarball = !!(_updateState && _updateState.update_method === 'tarball');
   const labels = {
-    fetch: t('update.step.fetch'),
-    pull: t('update.step.pull'),
+    fetch: isTarball ? t('update.step.fetchDl') : t('update.step.fetch'),
+    pull: isTarball ? t('update.step.pullOverlay') : t('update.step.pull'),
     deps: t('update.step.deps'),
   };
   const items = _UPDATE_STAGES.map(function (stage) {
@@ -332,47 +411,181 @@ function _renderDepsFailed(b) {
     '<p class="upd-hint">' + escapeHtml(t('update.restartHint')) + '</p>';
 }
 
+// ── Restart progress model ───────────────────────────────────────────
+// During an in-place re-exec there is NO server listening (the old process
+// os.execv's into the new one; Hypercorn only binds after DB init + import
+// validation + service startup). So we can't stream live boot logs over the
+// wire. Instead we drive a determinate bar through the server's REAL boot
+// phases (mirrors server.py's _boot() sequence), time-estimated, and treat
+// /api/health as the single source of truth: the instant it answers we snap
+// to 100% with the genuine returned version. The bar eases toward each
+// phase's cap but never reaches 100% on its own — it can only *under*-report
+// progress, never claim "done" before the server actually is.
+var _RESTART_PHASES = [
+  { key: 'shutdown', dur: 1.5, to: 12 },  // graceful drain + os.execv
+  { key: 'reload',   dur: 3.0, to: 34 },  // re-import core modules
+  { key: 'db',       dur: 2.5, to: 52 },  // init_db / warmup
+  { key: 'imports',  dur: 3.0, to: 72 },  // critical-import validation
+  { key: 'services', dur: 3.0, to: 86 },  // background workers / MCP
+  { key: 'bind',     dur: 6.0, to: 94 },  // _wait_port_free + Hypercorn bind
+];
+var _restartT0 = 0;
+var _restartRaf = null;
+var _restartPoll = null;
+var _restartDone = false;
+// True from the moment a restart is kicked off until it succeeds or times
+// out. Single source of truth that the dialog-render paths consult so they
+// never clobber the live restart progress card (e.g. re-opening the dialog
+// or the always-live footer "Restart now" button mid-restart). Distinct from
+// _restartDone, which starts false and so can't tell "not started" from "done".
+var _restartActive = false;
+
+/** Map elapsed seconds → {pct, key} along the phase timeline (ease-out per
+ *  phase). The final phase holds at its cap if the server overruns, so a
+ *  slow boot looks "still working" rather than falsely complete. */
+function _restartProgress(elapsed) {
+  var from = 0, acc = 0;
+  for (var i = 0; i < _RESTART_PHASES.length; i++) {
+    var ph = _RESTART_PHASES[i];
+    var last = (i === _RESTART_PHASES.length - 1);
+    if (elapsed < acc + ph.dur || last) {
+      var t = Math.min(1, (elapsed - acc) / ph.dur);
+      var eased = 1 - Math.pow(1 - t, 2);
+      return { pct: Math.min(from + (ph.to - from) * eased, ph.to), key: ph.key };
+    }
+    acc += ph.dur; from = ph.to;
+  }
+  return { pct: 94, key: 'bind' };
+}
+
+/** Render the restart progress card into the dialog body. */
+function _renderRestartProgress() {
+  const body = document.getElementById('updateModalBody');
+  if (!body) return;
+  body.innerHTML =
+    '<div class="upd-restart" id="updRestartCard">' +
+      '<div class="upd-restart-head">' +
+        '<span class="upd-restart-spin" id="updRestartSpin"></span>' +
+        '<div class="upd-restart-headtext">' +
+          '<div class="upd-restart-title" id="updRestartTitle">' + escapeHtml(t('update.restartTitle')) + '</div>' +
+          '<div class="upd-restart-sub">' + escapeHtml(t('update.restartSub')) + '</div>' +
+        '</div>' +
+      '</div>' +
+      '<div class="upd-restart-bar"><div class="upd-restart-fill" id="updRestartFill"></div></div>' +
+      '<div class="upd-restart-foot">' +
+        '<span class="upd-restart-phase" id="updRestartPhase">' + escapeHtml(t('update.phase.shutdown')) + '</span>' +
+        '<span class="upd-restart-pct" id="updRestartPct">0%</span>' +
+      '</div>' +
+    '</div>';
+}
+
+/** Animation frame: advance the bar from the phase timeline. */
+function _restartAnimate() {
+  if (_restartDone) return;
+  const elapsed = (Date.now() - _restartT0) / 1000;
+  const p = _restartProgress(elapsed);
+  const fill = document.getElementById('updRestartFill');
+  const pctEl = document.getElementById('updRestartPct');
+  const phaseEl = document.getElementById('updRestartPhase');
+  if (fill) fill.style.width = p.pct.toFixed(1) + '%';
+  if (pctEl) pctEl.textContent = Math.round(p.pct) + '%';
+  if (phaseEl) {
+    const label = t('update.phase.' + p.key);
+    const secs = ' · ' + t('update.restartElapsed').replace('%s', String(Math.round(elapsed)));
+    phaseEl.textContent = label + secs;
+  }
+  _restartRaf = requestAnimationFrame(_restartAnimate);
+}
+
+/** Snap to 100% "Back online · vX", then reload the page. */
+function _restartSucceed(version) {
+  if (_restartDone) return;
+  _restartDone = true;
+  _restartActive = false;
+  if (_restartRaf) cancelAnimationFrame(_restartRaf);
+  if (_restartPoll) clearInterval(_restartPoll);
+  const fill = document.getElementById('updRestartFill');
+  const pctEl = document.getElementById('updRestartPct');
+  const phaseEl = document.getElementById('updRestartPhase');
+  const spin = document.getElementById('updRestartSpin');
+  const card = document.getElementById('updRestartCard');
+  if (card) card.classList.add('is-online');
+  if (spin) spin.classList.add('is-done');
+  if (fill) fill.style.width = '100%';
+  if (pctEl) pctEl.textContent = '100%';
+  if (phaseEl) {
+    phaseEl.textContent = t('update.phase.online') +
+      (version ? ' · v' + version : '');
+  }
+  // Brief pause so the user sees the completed state before the reload.
+  setTimeout(function () { window.location.reload(); }, 750);
+}
+
+/** Restart failed to come back within the ceiling — stop and tell the user. */
+function _restartTimeout() {
+  if (_restartDone) return;
+  _restartDone = true;
+  _restartActive = false;
+  if (_restartRaf) cancelAnimationFrame(_restartRaf);
+  if (_restartPoll) clearInterval(_restartPoll);
+  const phaseEl = document.getElementById('updRestartPhase');
+  const spin = document.getElementById('updRestartSpin');
+  if (spin) spin.classList.add('is-error');
+  if (phaseEl) phaseEl.textContent = t('update.restartTimeout');
+  showToast('⚠️', t('update.restartTimeout'), '', 6000);
+}
+
 /** Explicit restart — re-execs the server, then waits for it to come back.
  *  Invoked from the post-pull "Restart now" button AND the always-available
  *  footer button (no git pull needed). The backend re-execs in place via
- *  os.execv, so there is no kill-then-relaunch gap. */
+ *  os.execv reclaiming the SAME port, so the page can reconnect to the same
+ *  URL once /api/health answers again. */
 async function restartServer(opts) {
+  // Already restarting — ignore a re-entry (footer button stays live, the
+  // post-pull button could be double-clicked) so we never spawn a second
+  // poll loop or reset the progress timeline.
+  if (_restartActive) return;
   // The footer button is available with no pending update — confirm first so
   // a stray click never interrupts running tasks.
   if (opts && opts.confirm && !await showConfirm(t('update.restartConfirm'), { danger: true })) return;
+  _restartActive = true;
   const btn = document.getElementById('updateRestartBtn')
     || document.getElementById('updateRestartNowBtn');
   if (btn) { btn.disabled = true; btn.textContent = t('update.restarting'); }
+
+  _renderRestartProgress();
   try {
     await Api.update.restart();
   } catch (e) {
     if (typeof debugLog === 'function') debugLog('[Update] restart request failed: ' + (e && e.message), 'warning');
   }
-  showToast('🔄', t('update.restarting'), t('update.restartWait'), 8000);
-  _waitForServerBack(0);
+
+  _restartDone = false;
+  _restartT0 = Date.now();
+  _restartRaf = requestAnimationFrame(_restartAnimate);
+  // Wait out the backend's 0.6s pre-exec sleep before the first probe so we
+  // never mistake the still-alive OLD process for a successful restart.
+  setTimeout(function () { _restartPoll = setInterval(_restartCheckHealth, 1500); }, 2500);
 }
 
-/** Poll /api/health until the server answers again, then reload. */
-function _waitForServerBack(attempt) {
-  if (attempt > 40) {  // ~80s ceiling
-    showToast('⚠️', t('update.restartTimeout'), '', 6000);
-    return;
-  }
-  setTimeout(async function () {
-    let ok = false;
-    try {
-      const resp = await Api.health.check();
-      ok = !!(resp && resp.ok);
-    } catch (e) { ok = false; }
-    if (ok) {
-      window.location.reload();
-    } else {
-      _waitForServerBack(attempt + 1);
-    }
-  }, 2000);
+/** One health probe; on success finish, on overall timeout bail. */
+async function _restartCheckHealth() {
+  if (_restartDone) return;
+  if ((Date.now() - _restartT0) / 1000 > 80) { _restartTimeout(); return; }
+  let info = null;
+  try {
+    info = await Api.health.info();  // parsed JSON → carries version
+  } catch (e) { info = null; }
+  if (info && info.ok) _restartSucceed(info.version || '');
 }
 
 function closeUpdateModal() {
+  // A restart owns the modal: the progress card is the only feedback the user
+  // has while the server is down (no live logs over the wire). Dismissing it —
+  // via the × button or a backdrop click — would strand the user staring at a
+  // dead page with no indication the restart is still in flight. Pin it open
+  // until the restart resolves (auto-reloads on success, or shows a timeout).
+  if (_restartActive) return;
   const modal = document.getElementById('updateModal');
   if (modal) modal.classList.remove('open');
 }

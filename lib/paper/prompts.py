@@ -4,7 +4,43 @@ Kept separate from the engine so the prompt can evolve without churning
 the engine module.
 """
 
+from datetime import datetime, timezone
+
 from lib.tools.search import FETCH_URL_TOOL, SEARCH_TOOL_MULTI
+
+
+def date_anchor_clause(ui_lang: str) -> str:
+    """Return a system-message clause stating TODAY's date.
+
+    The report / review prompts are built as a self-contained ``messages``
+    list that (unlike the main chat path) never inherits the ``Current date:``
+    system block. Without a "now" anchor the model conflates the paper's
+    PUBLICATION date (printed in the paper text) with the present, and then
+    wrongly claims no follow-up work exists yet "at the time of writing" — even
+    though generation happens months later. This clause supplies today's date
+    and explicitly breaks that misconception so the follow-up search actually
+    happens. Changes once per UTC day (cache-stable within a day).
+    """
+    today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+    if ui_lang == 'zh':
+        return (
+            f"今天的日期是 {today}（UTC）。\n"
+            "注意：论文正文里印的发表/上线日期是**过去**的时间点，绝不是"
+            "“现在”。你此刻是在该发表日期**之后**（往往已数月）撰写这篇报告——"
+            "在这段间隔里很可能已经出现了引用、扩展或质疑本文的后续工作。"
+            "因此**禁止**写“截至写作时尚无可检索的后续论文”这类话；请以今天为基准，"
+            "用 web_search 实际去检索自论文发表以来出现的后续工作。\n\n"
+        )
+    return (
+        f"Today's date is {today} (UTC).\n"
+        "Note: any publication / release date printed in the paper text is a "
+        "PAST point in time, NOT 'now'. You are writing this report AFTER that "
+        "date (often by months), and follow-up work that cites, extends, or "
+        "critiques this paper has very likely appeared in the interval. Do NOT "
+        "write anything like 'no follow-up papers are searchable at the time of "
+        "writing' — anchor on today's date and actually use web_search to find "
+        "post-publication follow-ups.\n\n"
+    )
 
 
 _REPORT_PROMPT_EN = """\
@@ -25,6 +61,7 @@ Write the full report in one pass. Be specific, quantitative, and analytical —
 - **Surface implementation details that are easy to miss.** Initialization scheme, masking, position encoding, dropout placement, learning-rate schedule, batch construction, gradient clipping, regularization, normalization placement, tokenization details, evaluation protocol — if the paper specifies it, you specify it. If the paper is silent, mark it explicitly as "(not specified — common choice in this family is …)".
 - **Cite numbers, not vibes.** "Improves substantially" is forbidden — write "+2.0 BLEU on WMT14 EN-DE (28.4 vs. 26.4)". When the paper gives a comparison, give the comparison.
 - **Distinguish claim vs. evidence.** When you write a strength, name the experiment / table / figure that supports it. When evidence is missing for a claim, say so under Weaknesses.
+- **Reproducibility claims must be VERIFIED, not parroted.** Never write "code is available" / "data is released" merely because the paper prints a URL. Use fetch_url to OPEN every code / data / model-weights link and report what is ACTUALLY there — a real source repository (runnable training/eval scripts, configs, a README with setup steps, released weights) vs. a mere project/landing page, a paywall, an "available upon request" promise, or a 404. An unverified, request-only, or partial release is NOT a pass. Treating a printed link as proof is the single most common laziness in these reports — do not do it.
 
 ## 🧮 Formatting rules — READ CAREFULLY
 
@@ -42,10 +79,22 @@ Write the full report in one pass. Be specific, quantitative, and analytical —
 
 3. **No backticks around math.** This is the single most common failure: writing `` `\\hat K = \\text{LN}(X)W_K` `` produces a gray code box, not a formula. Anything that contains `\\command{…}`, `^{…}`, `_{…}`, fractions, Greek letters, or operators must be in `$…$` (inline) or `$$…$$` (block). Backticks are only for literal source code identifiers (variable names, function names, file paths) — never for math.
 
+4. **Highlight callouts with a leading keyword.** When a point is a key takeaway, a caveat, or a tip worth visually pulling out of the prose, write it as a Markdown blockquote whose FIRST word is one of these exact keywords (followed by a colon): `Key takeaway:`, `Note:`, `Tip:`, `Warning:`, or `Important:`. The renderer turns these into styled callout boxes. Example:
+   ```
+   > Key takeaway: Removing recurrence entirely is what unlocks full parallelism over sequence length — every other design choice follows from defending that decision.
+   ```
+   Use these sparingly (a handful across the whole report — e.g. the headline result, the single biggest limitation, a non-obvious reproduction gotcha). Do NOT prefix ordinary blockquotes or the problem→constraint reasoning chains in the Design Choices section with these keywords.
+
 ---
 
 ## ⚡ TL;DR
 2-3 crisp sentences: what they did, the key result, and why it matters. Include specific method names, numbers, and benchmarks. A busy professor should get the full picture in 10 seconds.
+
+The TL;DR MUST be self-contained — a reader who stops after it should have NO dangling questions. Concretely:
+- **Say what KIND of contribution this is.** Is the core method applied at TRAINING time, at INFERENCE / test time, at the data or eval-protocol level, or a combination? State it explicitly (e.g. "an inference-time *selection* method that re-ranks candidate patches", "a training objective", "a benchmark"). Never leave the reader guessing whether a number came from a new training run or a new way of using a fixed model.
+- **Make every number interpretable in place.** For each headline figure give the metric, the benchmark, the comparison point, and the direction — never a bare "54.2%". Write "54.2% resolve-rate on SWE-Bench Verified (Best@16 selection), +3.5 pts over the strongest baseline", not "54.2%".
+- **State the ceiling / what the number is measured against.** If the paper reports an upper bound (oracle), a lower bound (random), or a known SOTA, give it so the reader knows how much headroom remains (e.g. "vs. an oracle ceiling of 68% and a random-selection floor of 41%").
+- Do NOT use any term in the TL;DR that you only define later. If a concept is unavoidable, gloss it inline in three words.
 
 ## 📋 Paper Card
 | Field | Detail |
@@ -62,6 +111,8 @@ A table of 6-10 key terms/abbreviations that the paper introduces or relies on h
 - Give a one-sentence definition.
 - Explain **WHY** this concept exists — what problem it solves or what role it plays in the method.
 - If it's a new term coined by this paper, say so; if it's borrowed from prior work, name the source.
+- **Each definition must be SELF-CONTAINED.** Do not define a term using another term the reader has not yet seen defined. If your definition leans on a sub-concept (e.g. a "selection rule", a "reward model", a "proxy metric"), either add that sub-concept as its own row, or define it inline in the same cell — never leave it dangling. A reader must be able to fully understand each row without scrolling elsewhere.
+- **For any quantity that is DERIVED, SCORED, or PREDICTED, say HOW it is produced**, not merely what it represents. Don't write "a continuous score in $[0,1]$" — write "a continuous score in $[0,1]$, produced by «the concrete mechanism: e.g. the LLM judge's averaged token-probability / a learned regression head / a normalized vote count»". The reader must know where every number comes from.
 
 | Term | Definition | Why it matters |
 |------|-----------|---------------|
@@ -180,12 +231,20 @@ Honest categorization (transformative / strong-incremental / niche) with one-sen
 ### Key Equations & Theorems
 Most important formulations with plain-language explanations.
 
-### Reproducibility Checklist
-- [ ] Code available?
-- [ ] Data available?
-- [ ] Hyperparameters fully specified?
-- [ ] Compute requirements stated?
-- [ ] Random seeds / variance reported?
+### Reproducibility Checklist (EVIDENCE-BASED — verify, do not trust the paper's word)
+
+> A URL printed in a paper is a CLAIM, not proof. Before filling this checklist you MUST use fetch_url on every code / data / model link the paper gives (and, when none is given, web_search for an official repository), then report what you ACTUALLY found — exactly as a human referee checking reproducibility would click the link and inspect the repo. Do NOT mark "Code available" / "Data available" as ✅ on the strength of the paper's text alone.
+
+For each item, lead with **✅ Yes / ⚠️ Partial / ❌ No / ❔ Could not verify** then give the concrete evidence:
+
+- **Code available** — State the exact URL you fetched and what it resolved to. Distinguish a real source repository (runnable code: training/eval scripts, configs, a `requirements`/environment spec, a README with setup steps) from a mere *project / landing page*, a paywalled page, a 404, or an "available upon request" promise. Name the key files you actually saw (or note their absence). Trap to avoid: a link to a research-group project page is NOT "code available" — say so explicitly.
+- **Data available** — Did you reach the actual dataset (or a download / generation script), or only a textual description? Note any licensing / access gate.
+- **Trained weights / checkpoints** — Released and downloadable, or not?
+- **Hyperparameters fully specified** — Enough in the paper / appendix / repo to re-run without guessing? List what is missing.
+- **Compute requirements stated** — Hardware + wall-clock / GPU-hours given?
+- **Random seeds / variance reported** — Seeds fixed? Results over multiple runs with error bars, or single-run?
+
+End with a one-line **Reproducibility verdict**: could an independent team reproduce the headline result from what is actually public *today*? If the repository could not be confirmed complete (or could not be found at all), say so plainly — an unconfirmed or partial release is not a pass.
 
 ---
 
@@ -212,6 +271,7 @@ _REPORT_PROMPT_ZH = """\
 - **暴露容易遗漏的实现细节。** 初始化方案、masking、位置编码、dropout 位置、学习率调度、batch 构造、梯度裁剪、正则化、归一化位置、tokenization、评估协议——论文写了你就写；论文没写就明确标注 "(论文未指定 — 该家族常见做法是…)"。
 - **用数字说话，不用感觉说话。** 禁止"显著提升"这类含糊措辞——写"WMT14 EN-DE 上 +2.0 BLEU（28.4 vs. 26.4）"。论文给出对比的，你也要把对比补全。
 - **区分主张与证据。** 写优点时点名是哪个实验/表/图支持它。写到证据缺失的主张时，应放到"不足"一节里。
+- **可复现性结论必须实际验证，不能鞑述。** 不要因为论文印了一个链接就写"代码已公开 / 数据已发布"。必须用 fetch_url **逐个打开**论文给出的代码 / 数据 / 模型权重链接，并如实报告里面**到底有什么**：是一个真正可运行的源码仓库（训练/评测脚本、配置、带安装步骤的 README、已发布的权重），还是仅仅是一个项目/落地页、付费墙、"按需索取"的承诺、或 404。未经验证、需申请才给、或只发了一部分，都**不算通过**。把印出来的链接当作证据，是这类报告最常见的懒政——绝不允许。
 
 ## 🧮 格式规范（必须严格遵守）
 
@@ -229,10 +289,23 @@ _REPORT_PROMPT_ZH = """\
 
 3. **公式严禁包反引号。** 这是最常见的错误：写成 `` `\\hat K = \\text{LN}(X)W_K` `` 会被渲染成灰色代码块而不是公式。凡是含 `\\命令{…}`、`^{…}`、`_{…}`、分式、希腊字母或运算符的内容，**必须**用 `$…$`（行内）或 `$$…$$`（独立成行）。反引号只用于字面量代码标识符（变量名、函数名、文件路径），**不要用于数学符号**。
 
+4. **用关键词开头的引用块来突出重点提示。** 当某条内容是核心结论、需要警示的局限、或值得从正文里单独拎出来的提示时，把它写成一个 Markdown 引用块（blockquote），且**第一个词**必须是下列关键词之一（后跟冒号）：`关键结论：`、`要点：`、`备注：`、`提示：`、`建议：`、`注意：`、`警告：`、`重要：` 或 `局限：`。渲染器会把它们变成带样式的提示框。示例：
+   ```
+   > 关键结论：彻底去掉循环结构，才换来了对序列长度的完全并行——其余设计选择都是在为这个决定辩护。
+   ```
+   请克制使用（全文只用少数几个——比如最重磅的结果、最大的单一局限、一个不显然的复现坑）。**不要**给普通引用块、或"设计选择"一节里"问题→约束"的推理链加这些关键词前缀。
+
 ---
 
 ## ⚡ 一句话总结
 2-3 句话精炼概括：他们做了什么，关键结果是什么，为什么重要。包含具体方法名、数字和基准。让忙碌的教授 10 秒内掌握全貌。
+
+
+一句话总结必须**自包含**——读者只读这几句就不应还有悬而未决的问题。具体要求：
+- **说清这是哪一类贡献。** 核心方法是用在**训练阶段**、**推理/测试阶段**、还是数据/评测协议层面，或是几者组合？必须明说（例如“一种**推理期**的*选择/重排*方法，在固定生成器上重排候选解”、“一个训练目标”、“一个基准测试集”）。绝不能让读者猜测某个数字是来自一次新训练还是一种使用固定模型的新方式。
+- **每个数字都要当场可解释。** 每个头部数字都要给出：指标、基准、对比参照点、提升方向——绝不能光写一个“54.2%”。应写“在 SWE-Bench Verified 上达到 54.2% 的 resolve 率（Best@16 选择），比最强基线 +3.5 个百分点”。
+- **给出上限/参照系。** 若论文报告了上界（oracle）、下界（随机）或已知 SOTA，请一并给出，让读者知道还有多少提升空间（例如“对比 oracle 上限 68%、随机选择下限 41%”）。
+- 一句话总结里**不得**出现任何你只在后文才定义的术语；若某概念不可避免，用三五个字就地点一下。
 
 ## 📋 论文信息卡
 | 字段 | 内容 |
@@ -249,6 +322,9 @@ _REPORT_PROMPT_ZH = """\
 - 一句话定义
 - **为什么**需要它——它在方法中扮演什么角色、解决什么问题
 - 如果是论文首创的概念就标注"本文首创"；借鉴自前人工作则写出来源
+
+- **每条定义必须自包含。** 不要用另一个读者还没见过的术语来定义当前术语。若定义依赖某个子概念（如“选择规则 selection rule”、“奖励模型”、“代理指标”），要么把该子概念也列为独立一行，要么在同一格内就地解释清楚——绝不能悬空。读者应能在不翻阅别处的情况下完全看懂每一行。
+- **凡是被推导、打分或预测出来的量，必须说清它是怎么算出来的**，而不只是它代表什么。不要只写“一个 $[0,1]$ 的连续分”——要写“一个 $[0,1]$ 的连续分，由«具体机制：如 LLM judge 输出的平均 token 概率 / 一个学习的回归头 / 归一化的投票数»产生”。读者必须知道每个数字从哪里来。
 
 | 术语 | 定义 | 为什么重要 |
 |------|------|-----------|
@@ -367,12 +443,20 @@ _REPORT_PROMPT_ZH = """\
 ### 关键公式与定理
 最重要的数学公式及其通俗解释。
 
-### 可复现性检查
-- [ ] 代码是否公开？
-- [ ] 数据是否公开？
-- [ ] 超参数是否完整？
-- [ ] 计算资源是否注明？
-- [ ] 随机种子/方差是否报告？
+### 可复现性检查（基于证据——要验证，不要轻信论文的说法）
+
+> 论文里印的一个 URL 是一个**主张**，不是证据。填写本清单前，你**必须**用 fetch_url 打开论文给出的每一个代码 / 数据 / 模型链接（若论文未给，则用 web_search 找官方仓库），然后如实报告你**真正看到了什么**——就像一个检查可复现性的人类审稿人会点开链接、逐一查看仓库那样。不要仅凭论文文字就把"代码公开 / 数据公开"打上 ✅。
+
+每一项先用 **✅ 是 / ⚠️ 部分 / ❌ 否 / ❔ 无法验证** 开头，再给出具体证据：
+
+- **代码是否公开** — 写出你 fetch 的确切 URL 及它实际打开后是什么。区分一个真正的源码仓库（可运行代码：训练/评测脚本、配置、`requirements`/环境声明、带安装步骤的 README）与一个仅是*项目/落地页*、付费页、404、或"按需索取"承诺。点名你真正看到的关键文件（或指出它们的缺失）。要避开的陷阱：指向研究组项目主页的链接**不算**"代码公开"——要明确说明。
+- **数据是否公开** — 你是否抵达了真正的数据集（或下载/生成脚本），还是只有文字描述？注明任何许可/访问门槛。
+- **训练权重 / checkpoint** — 是否已发布且可下载？
+- **超参数是否完整** — 论文/附录/仓库里是否足以不靠猜测就重跑？列出缺什么。
+- **计算资源是否注明** — 是否给出硬件 + wall-clock / GPU-小时？
+- **随机种子/方差是否报告** — 种子是否固定？是多次运行带误差棒，还是单次运行？
+
+最后给出一行 **可复现性结论**：仅凭*今天*真正公开的东西，一个独立团队能否复现核心结果？若无法确认仓库完整（或根本找不到），就如实说明——未经确认或部分发布不算通过。
 
 ---
 

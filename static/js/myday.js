@@ -21,6 +21,71 @@ const _myday = {
   _costDays: {},       // { dayNum: {cost, conversations} } — server-side cost data per day
 };
 
+/* ═══════ Persistent per-day report cache (IndexedDB) ═══════
+   The server is the SOURCE OF TRUTH; this is a local READ cache only, so a
+   reopen / day-click paints INSTANTLY from cache and then revalidates against
+   the server in the background.  Mirrors the idb-cache.js pattern (read-through
+   + write-after-server-confirms).  Falls back gracefully when IDB is
+   unavailable — callers just get null and hit the network as before. */
+const _mydayIDB = (function () {
+  const DB_NAME = 'tofu_myday_cache';
+  const STORE = 'reports';
+  const VER = 1;
+  let _dbp = null;
+  function _open() {
+    if (_dbp) return _dbp;
+    _dbp = new Promise((resolve) => {
+      try {
+        if (typeof indexedDB === 'undefined') { resolve(null); return; }
+        const rq = indexedDB.open(DB_NAME, VER);
+        rq.onupgradeneeded = (e) => {
+          const db = e.target.result;
+          if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE, { keyPath: 'date' });
+        };
+        rq.onsuccess = (e) => resolve(e.target.result);
+        rq.onerror = () => { console.warn('[MyDay] report cache open failed'); resolve(null); };
+      } catch (e) { console.warn('[MyDay] report cache init error:', e && e.message); resolve(null); }
+    });
+    return _dbp;
+  }
+  function get(date) {
+    return _open().then((db) => {
+      if (!db) return null;
+      return new Promise((resolve) => {
+        try {
+          const rq = db.transaction(STORE, 'readonly').objectStore(STORE).get(date);
+          rq.onsuccess = () => resolve(rq.result ? rq.result.report : null);
+          rq.onerror = () => resolve(null);
+        } catch (e) { resolve(null); }
+      });
+    });
+  }
+  function put(date, report) {
+    return _open().then((db) => {
+      if (!db) return;
+      return new Promise((resolve) => {
+        try {
+          const tx = db.transaction(STORE, 'readwrite');
+          tx.objectStore(STORE).put({ date: date, report: report, cachedAt: Date.now() });
+          tx.oncomplete = () => resolve();
+          tx.onerror = () => resolve();
+        } catch (e) { resolve(); }
+      });
+    });
+  }
+  return { get: get, put: put };
+})();
+
+/* Set both the in-memory + persistent cache from an authoritative server
+   report.  Every place that receives a fresh full report routes through here
+   so the IDB copy stays in lockstep with what the server returned. */
+function _mydaySetCache(dateStr, report) {
+  if (!report) return;
+  report._full = true;
+  _myday.cache[dateStr] = report;
+  try { _mydayIDB.put(dateStr, report); } catch (e) { /* cache is optional */ }
+}
+
 function openDailyReport() {
   const modal = document.getElementById('dailyReportModal');
   modal.classList.add('open');
@@ -247,37 +312,54 @@ async function _mydaySelectDay(day) {
     return;
   }
 
-  // Check cache first — if we have a full report, show it
+  // ── INSTANT PAINT ──
+  // 1) In-memory full report → render immediately, still revalidate below.
+  // 2) Else IndexedDB (survives page reload) → paint from cache, then reconcile.
+  // 3) Else skeleton. The first paint NEVER blocks on the network.
+  let painted = false;
   if (_myday.cache[dateStr] && _myday.cache[dateStr]._full) {
     _mydayRenderTasks(_myday.cache[dateStr]);
-    return;
+    painted = true;
+  } else {
+    try {
+      const cachedReport = await _mydayIDB.get(dateStr);
+      // Guard: the user may have clicked another day while IDB read was in flight.
+      if (cachedReport && _myday.selectedDateStr === dateStr) {
+        cachedReport._full = true;
+        _myday.cache[dateStr] = cachedReport;
+        _mydayRenderTasks(cachedReport);
+        painted = true;
+      }
+    } catch (e) { console.warn('[MyDay] report cache read failed:', e); }
   }
+  if (!painted && _myday.selectedDateStr === dateStr) _mydayShowSkeleton();
 
-  // Check server for existing report or running job
-  _mydayShowSkeleton();
+  // ── BACKGROUND REVALIDATE ──
+  // Reconcile the (possibly cached) view with the server's authoritative state.
   try {
     const data = await Api.daily.status(dateStr);
+    if (_myday.selectedDateStr !== dateStr) return; // user navigated away
     if (data) {
       if (data.status === 'done' && data.report) {
-        data.report._full = true;
-        _myday.cache[dateStr] = data.report;
-        if (_myday.selectedDateStr === dateStr) _mydayRenderTasks(data.report);
+        _mydaySetCache(dateStr, data.report);
+        _mydayRenderTasks(data.report);
         return;
       }
       if (data.status === 'generating') {
         // Already running on server — start polling
         _mydayStartPolling(dateStr);
-        if (_myday.selectedDateStr === dateStr)
-          _mydayShowProgressUI(dateStr, data.progress);
+        _mydayShowProgressUI(dateStr, data.progress);
         return;
       }
     }
+    // Server says idle/no-report. If we painted from cache, KEEP that view
+    // (a stale cached report still beats a blank prompt); otherwise prompt.
+    if (!painted) _mydayRenderWaiting(dateStr);
   } catch (e) {
     console.warn('[MyDay] Status check failed:', e);
+    // Offline / error: keep the cached paint; only prompt if we had nothing.
+    if (!painted && _myday.selectedDateStr === dateStr) _mydayRenderWaiting(dateStr);
   }
-
-  // Nothing cached, nothing running → show waiting/generate prompt
-  if (_myday.selectedDateStr === dateStr) _mydayRenderWaiting(dateStr);
 }
 
 /* ═══════ Header update ═══════ */
@@ -339,7 +421,13 @@ function _mydayShowProgressUI(dateStr, progressData) {
     message = t('myday.stageStarting');
   }
 
-  const stageEmoji = { starting: '🚀', extracting: '🔍', analyzing: '✶', saving: '💾' };
+  const _mdIco = (inner) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:1em;height:1em;vertical-align:-2px">${inner}</svg>`;
+  const stageEmoji = {
+    starting: _mdIco('<path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09"/><path d="M9 12a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.4 22.4 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 .05 5 .05"/>'),
+    extracting: _mdIco('<path d="m21 21-4.34-4.34"/><circle cx="11" cy="11" r="8"/>'),
+    analyzing: '✶',
+    saving: _mdIco('<path d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7"/><path d="M7 3v4a1 1 0 0 0 1 1h7"/>'),
+  };
   const stageLabel = {
     starting: t('myday.stageStarting'),
     extracting: t('myday.stageExtracting'),
@@ -389,8 +477,7 @@ function _mydayStartPolling(dateStr) {
       if (data.status === 'done') {
         _mydayStopPolling(dateStr);
         if (data.report) {
-          data.report._full = true;
-          _myday.cache[dateStr] = data.report;
+          _mydaySetCache(dateStr, data.report);
         }
         // Refresh display if user is viewing this date
         if (_myday.selectedDateStr === dateStr) {
@@ -527,8 +614,7 @@ async function _mydayTriggerGenerate() {
 
     if (data.status === 'done' && data.report) {
       // Already cached — instant result
-      data.report._full = true;
-      _myday.cache[dateStr] = data.report;
+      _mydaySetCache(dateStr, data.report);
       if (_myday.selectedDateStr === dateStr) _mydayRenderTasks(data.report);
       if (refreshBtn) refreshBtn.classList.remove('spinning');
       _mydayRenderCalendar();
@@ -564,8 +650,7 @@ async function _mydayTriggerGenerateForDate(dateStr, force) {
     const data = await resp.json();
 
     if (data.status === 'done' && data.report) {
-      data.report._full = true;
-      _myday.cache[dateStr] = data.report;
+      _mydaySetCache(dateStr, data.report);
       if (_myday.selectedDateStr === dateStr) _mydayRenderTasks(data.report);
       if (refreshBtn) refreshBtn.classList.remove('spinning');
       _mydayRenderCalendar();
@@ -846,6 +931,7 @@ async function _mydayToggleStreamStatus(streamId) {
     if (body && body.ok && body.status) {
       stream.status = body.status;
       if (body.status === 'done') stream.remaining = null;
+      try { _mydayIDB.put(dateStr, cached); } catch (e) { /* cache optional */ }
     } else {
       console.warn('[MyDay] Stream status toggle failed:', resp && resp.status);
       stream.status = oldStatus;
@@ -881,6 +967,8 @@ async function _mydayToggleTodo(todoId) {
       console.warn('[MyDay] Todo toggle failed:', resp && resp.status);
       item.done = !newDone;
       _mydayRenderTasks(cached);
+    } else {
+      try { _mydayIDB.put(dateStr, cached); } catch (e) { /* cache optional */ }
     }
   } catch (e) {
     console.warn('[MyDay] Todo toggle error:', e);
@@ -961,8 +1049,7 @@ async function _mydayAddTodo() {
     if (!resp || !resp.ok) throw new Error(`HTTP ${resp ? resp.status : 'no response'}`);
     const data = await resp.json();
     if (data.report) {
-      data.report._full = true;
-      _myday.cache[dateStr] = data.report;
+      _mydaySetCache(dateStr, data.report);
       _mydayRenderTasks(data.report);
     }
   } catch (e) {
@@ -981,8 +1068,7 @@ async function _mydayDeleteTask(taskId) {
     if (!resp || !resp.ok) throw new Error(`HTTP ${resp ? resp.status : 'no response'}`);
     const data = await resp.json();
     if (data.report) {
-      data.report._full = true;
-      _myday.cache[dateStr] = data.report;
+      _mydaySetCache(dateStr, data.report);
       _mydayRenderTasks(data.report);
     }
   } catch (e) {

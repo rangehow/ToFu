@@ -20,6 +20,8 @@ import threading
 import time
 import unittest
 
+import pytest
+
 
 def _free_port() -> int:
     s = socket.socket()
@@ -37,6 +39,12 @@ _STATE = {'app': None, 'admin_token': None, 'user_token': None,
 def _boot_real_server():
     if _STATE['app'] is not None:
         return _STATE
+    # ⚠️ DATA-LOSS GUARD (2026-06-28): this helper imports server.py and boots
+    # its OWN Hypercorn — it bypasses conftest's live_server fixture, so it
+    # must call the keystone DB guard itself. Refuse to boot the real app
+    # against a non-test DB (the incident was a live server on production PG).
+    from tests.conftest import _assert_test_database
+    _assert_test_database('test_sdk_e2e._boot_real_server')
     _STATE['tmp'] = tempfile.TemporaryDirectory()
     tmp = _STATE['tmp'].name
 
@@ -152,6 +160,12 @@ def _shutdown_real_server():
     os.environ.get('TOFU_SKIP_NETWORK_E2E') == '1',
     'TOFU_SKIP_NETWORK_E2E=1 set — skipping real-network SDK test')
 class SDKE2ETest(unittest.TestCase):
+
+    # The credential gate (incl. invalid-token → 401) is only ACTIVE in
+    # private/multi-user mode; open mode (conftest default) accepts any
+    # request. The server reads the mode per-request, and the per-test
+    # conftest fixture sets private before each test fires.
+    pytestmark = pytest.mark.auth_mode('private')
 
     @classmethod
     def setUpClass(cls):

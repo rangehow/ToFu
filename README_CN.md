@@ -263,33 +263,16 @@ npm install ./clients/typescript
 
 ---
 
-### 🔀 CLI 后端切换
+### 🔀 订阅登录（Claude Pro/Max · ChatGPT）
 
-已经在用 **Claude Code** 或 **OpenAI Codex**？Tofu 可以作为它们的纯 Web 前端 —— 你获得 Tofu 的 UI、对话管理和持久化，而外部 CLI 用自己的认证处理所有 LLM 调用和工具执行。
+已经在为 **Claude Pro/Max** 或 **ChatGPT** 付费订阅？直接用它登录，Tofu 就把该订阅当作一个模型服务商使用 —— 无需单独的 API 密钥，计费走你已有的订阅套餐。
 
-**安装：**
-```bash
-# 安装 Claude Code
-npm install -g @anthropic-ai/claude-code && claude auth login
+**使用方法：** 打开 **设置 → 服务商**，点击 **登录 Claude** / **登录 ChatGPT**。Tofu 会走一遍 PKCE OAuth 流程（`lib/oauth/`），保存 token，并由 `lib/oauth/outbound.py` 把已登录的订阅桥接进一个受管理的服务商 slot —— 每次请求时解析成实时 token 加上所需的客户端身份请求头。此后该订阅就与调度器里的其它服务商一样（slot 轮换、回退、延迟评分都适用）。
 
-# 或安装 Codex
-npm install -g @openai/codex && codex auth login
-```
+- **Claude** 请求走 Anthropic Messages API，并带上 Claude-Code 身份请求头。
+- **ChatGPT（Codex）** 请求会自动转换为 Responses API 格式。
 
-点击顶栏的**后端选择器**（🤖）即可切换。UI 会自动适配 —— 使用外部后端时，模型选择器和 Tofu 专属功能自动隐藏。
-
-| 功能 | 内置 (Tofu) | Claude Code | Codex |
-|------|:-:|:-:|:-:|
-| 对话与流式输出 | ✅ | ✅ | ✅ |
-| 网页搜索 | ✅ | ✅ (CC 自带) | ✅ (Codex 自带) |
-| 文件操作 | ✅ | ✅ (CC 自带) | ✅ (Codex 自带) |
-| 代码执行 | ✅ | ✅ (Bash) | ✅ (exec) |
-| 模型选择 | ✅ | — | — |
-| 图片生成 | ✅ | ❌ | ❌ |
-| 浏览器插件 | ✅ | ❌ | ❌ |
-| 多智能体集群 | ✅ | ❌ | ❌ |
-
-> CLI 必须安装在与 Tofu 服务器同一台机器上。每个对话会记住它使用的后端。
+> 这是一个正常的调度内服务商，**不是** CLI 子进程。（早期的 CLI 子进程式"后端切换"机制 —— `lib/agent_backends/` —— 已于 2026-06 移除，改为这个更简单的"订阅即服务商"路径。）
 
 ---
 
@@ -447,7 +430,7 @@ pip install docling --extra-index-url https://download.pytorch.org/whl/cpu
 
 当助手发现了有用的东西 —— 一个 Bug 模式、一个项目规范、你偏好的编码风格 —— 它可以把这些知识保存为**记忆**，供未来的会话使用。
 
-**工作原理：** 记忆以 Markdown 文件形式存储在 `.chatui/skills/`（项目级）或 `.chatui/skills/global/`（全局）。助手会主动创建记忆，你也可以要求它创建。在之后的对话中，相关的记忆会自动加载到上下文中。
+**工作原理：** 项目级记忆以 Markdown 文件形式存储在项目内的 `.tofu/skills/`；全局记忆（跨项目共享）存放在服务端存储 `data/memories/global/`。助手会主动创建记忆，你也可以要求它创建。在之后的对话中，相关的记忆会自动加载到上下文中。
 
 **工具：** `create_memory`、`update_memory`、`delete_memory`、`merge_memories` —— 助手跨会话管理自己的知识库。
 
@@ -521,7 +504,7 @@ vim .env   # 填入你的值
 ├── index.html                 主聊天 UI（单页应用）
 │
 ├── lib/                       核心库
-│   ├── agent_backends/        CLI 后端切换（内置/Claude Code/Codex）
+│   ├── agent_core/            可复用智能体基座（运行循环、调度、TaskRuntime、push、profiles）
 │   ├── llm/                   LLM API 客户端包（build_body / stream / cache / diagnostics）
 │   ├── llm_dispatch/          多密钥多模型智能调度器
 │   ├── database/              双后端—— SQLite 默认，PostgreSQL 自动初始化
@@ -529,7 +512,7 @@ vim .env   # 填入你的值
 │   │   ├── orchestrator.py    LLM ↔ 工具主循环
 │   │   ├── executor.py        工具执行引擎
 │   │   ├── endpoint.py        Planner → Worker → Critic 循环
-│   │   └── compaction.py      3 层上下文压缩
+│   │   └── compaction/        3 层上下文压缩（包）
 │   ├── tools/                 工具定义与 Schema
 │   ├── swarm/                 多智能体编排
 │   ├── fetch/                 内容抓取与提取

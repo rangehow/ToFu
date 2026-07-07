@@ -617,7 +617,19 @@ def _execute_tool_one(
         from lib.browser import _set_active_client
         _set_active_client(_browser_cid)
 
-    handler = tool_registry.lookup(fn_name, round_entry)
+    # ★ Per-request custom tools resolve task-locally, BEFORE the global
+    #   registry — a request's tools never persist into tool_registry and
+    #   never leak into another task. See lib/tools/tool_env.py.
+    handler = None
+    _tool_env = task.get('_tool_env')
+    if _tool_env is not None:
+        try:
+            handler = _tool_env.resolve(fn_name)
+        except Exception as e:
+            logger.warning('[Executor] tool_env.resolve failed for %s: %s',
+                           fn_name, e, exc_info=True)
+    if handler is None:
+        handler = tool_registry.lookup(fn_name, round_entry)
     if handler is not None:
         # ★ Universal exception safety net: any uncaught exception inside
         # a tool handler (unexpected arg shape, downstream bug, I/O failure…)
@@ -668,6 +680,25 @@ def _execute_tool_one(
                     fn_name, type(e).__name__, tc_id[:8], _arg_preview,
                     exc_info=True,
                 )
+                # ── Feed the self-diagnosis loop ──
+                # This is a GENUINE tool bug (not a recoverable LLM-fault
+                # ValueError / UnknownWorkspaceRootError handled above). Emit a
+                # structured, fingerprinted audit event so the nightly
+                # optimizer can CLUSTER recurring failures by signature and
+                # surface the ones that keep recurring — instead of relying on
+                # brittle '[Tool:X] failed' regex scraping of app.log with no
+                # dedup. req_id() (seeded to the task id in run_task) ties the
+                # event back to its task automatically.
+                try:
+                    from lib.error_fingerprint import fingerprint
+                    from lib.log import audit_log
+                    audit_log('tool_error', tool=fn_name,
+                              exc_type=type(e).__name__,
+                              fingerprint=fingerprint(str(e), exc_type=type(e).__name__),
+                              detail=str(e)[:200])
+                except Exception as _ae:
+                    logger.debug('[Executor] tool_error audit emit failed for %s: %s',
+                                 fn_name, _ae)
             err_msg = (
                 f'Error: tool "{fn_name}" execution failed with '
                 f'{type(e).__name__}: {e}. Check the parameter schema '

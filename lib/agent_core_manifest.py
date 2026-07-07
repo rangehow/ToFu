@@ -17,9 +17,10 @@ the AST test, not by the folder layout.
 The directory IS being migrated to mirror this manifest, in stages:
 * **Stage 1 (done, 2026-06):** self-contained leaves with no core-sibling
   back-imports — ``push.py``, ``task_runtime.py``, ``profiles.py`` — physically
-  moved into ``lib/agent_core/``.  Thin shims at the old paths
-  (``lib.push``, ``lib.task_runtime``, ``lib.agent_profiles``) re-export from
-  the new homes, so existing call sites are unaffected.
+  moved into ``lib/agent_core/``.  Thin shims at the old paths ``lib.push`` and
+  ``lib.task_runtime`` re-export from the new homes for their remaining call
+  sites; ``profiles`` had no remaining external importer, so its old
+  ``lib.agent_profiles`` shim was deleted outright (2026-06).
 * **Later stages:** the cross-cutting members (orchestrator, model_config,
   endpoint, …) stay named-in-place for now — moving them naively would create
   ``agent_core → tasks_pkg`` back-imports and rewrite ~960 import sites.  They
@@ -71,7 +72,6 @@ CORE_MODULES: tuple[str, ...] = (
     # Cross-cutting base infrastructure.
     'lib.task_runtime',
     'lib.push',
-    'lib.agent_profiles',
     # The browsable facade package that mirrors this manifest (see
     # lib/agent_core/__init__.py).  It is itself part of the base and must
     # obey the no-concrete-plugin rule — it imports only core modules + the

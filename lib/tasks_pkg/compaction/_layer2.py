@@ -144,6 +144,40 @@ What the assistant should do next to continue the task.
 #  Query-aware LLM summary with selective turn compression
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def _objective_anchor_index(messages: list) -> int | None:
+    """Index of the immutable OBJECTIVE ANCHOR — the first real user message.
+
+    This is the SAME "first real user message" the autopilot objective pin
+    (``_get_or_persist_objective`` / ``_extract_objective``) is derived from —
+    ONE definition of "the objective", not a parallel one.  Compaction protects
+    this message so the original goal survives N successive summaries VERBATIM
+    (``execute_compact_tool`` excludes it from the summarized ``old_messages``
+    and re-inserts it exactly once; ``_head_truncate`` never drops it).  The
+    autopilot pin is a cross-run TEXT cache of the very same message.
+
+    Skips leading ``system`` messages and any VU directive / virtual-user turn
+    (defensive — those flags are autopilot-only and absent elsewhere).  Returns
+    ``None`` when no real user message exists (compaction then behaves exactly
+    as before — no anchor to protect).
+    """
+    for i, m in enumerate(messages):
+        if not isinstance(m, dict) or m.get('role') != 'user':
+            continue
+        if m.get('_isVuDirective') or m.get('_isVirtualUser'):
+            continue
+        content = m.get('content')
+        if isinstance(content, str):
+            if content.strip():
+                return i
+        elif isinstance(content, list):
+            if any(isinstance(b, dict) and b.get('type') == 'text'
+                   and (b.get('text') or '').strip() for b in content):
+                return i
+        elif content:  # non-empty non-text (e.g. image-only) — still real
+            return i
+    return None
+
+
 def _extract_current_query(messages: list) -> str:
     """Extract the most recent user query from messages."""
     for msg in reversed(messages):
@@ -260,10 +294,49 @@ def _format_messages_for_summary(messages: list) -> str:
     return '\n\n'.join(parts)
 
 
+def _summary_input_char_budget(task: dict | None) -> int:
+    """Char ceiling for the summary LLM's INPUT, sized to the model window.
+
+    The old fixed 200k-char cap was model-agnostic and token-blind: on a
+    small-window model (e.g. 128k qwen/gpt-4) 200k chars of dense or CJK
+    text is ~130k–200k tokens (the heuristic counts 1 token/CJK char) —
+    well OVER the window once the ~1.5k system prompt + `_SUMMARY_MAX_TOKENS`
+    output reserve are added. The summary call then fails ("prompt too
+    long" / dispatch exhausted), which was the root of the proactive-
+    compaction dead-end. Size the input to what the model can actually take:
+    ``usable - output_reserve`` tokens, converted to chars with a
+    conservative ~3 chars/token, and clamp to the historical 200k so large
+    windows behave as before.
+    """
+    try:
+        usable = _usable_context(_get_context_limit(task))
+    except Exception:
+        usable = 96_000
+    input_token_budget = max(4_000, usable - _SUMMARY_MAX_TOKENS - 2_000)
+    # Convert token budget → char budget at ~1 char/token. This is the
+    # CJK-worst-case ratio (the entropy heuristic counts ~1 token per CJK
+    # char), so the char cap is SAFE for Chinese/Japanese input — the exact
+    # case that overflowed a 128k window in production (est_input≈122k on a
+    # 200k-char summary). For latin-heavy text it trims a bit more than
+    # strictly necessary, but the summary is still produced. Clamp to the
+    # historical 200k ceiling, which only binds on large (>=~300k) windows —
+    # so 1M-context models are byte-identical to the old fixed cap.
+    return max(20_000, min(200_000, input_token_budget))
+
+
 def _generate_query_aware_summary(messages: list, current_query: str,
                                    log_prefix: str = '',
-                                   conv_id: str = '') -> str | None:
-    """Call a cheap model to generate a query-aware summary."""
+                                   conv_id: str = '',
+                                   task: dict | None = None) -> str | None:
+    """Call a cheap model to generate a query-aware summary.
+
+    Degrades gracefully so the proactive path actually works on a
+    vanilla/exported deploy: the input is capped to the model's real token
+    window (see ``_summary_input_char_budget``), and if the preferred
+    ``capability='cheap'`` dispatch fails (no model tagged cheap, or the
+    single model is momentarily exhausted) it retries once against any
+    text-capable slot before giving up.
+    """
     from lib.llm_dispatch import dispatch_chat
 
     formatted = _format_messages_for_summary(messages)
@@ -272,32 +345,52 @@ def _generate_query_aware_summary(messages: list, current_query: str,
     logger.info('%s Formatting %d messages for summary (%s), query=%.80s',
                 tag, len(messages), _human_size(len(formatted)), current_query)
 
-    if len(formatted) > 200_000:
+    _char_budget = _summary_input_char_budget(task)
+    if len(formatted) > _char_budget:
         original_len = len(formatted)
+        # Keep the head (early goals/decisions) and a larger tail (recent
+        # working state), eliding the middle — 1/3 head, 2/3 tail.
+        _head = _char_budget // 3
+        _tail = _char_budget - _head
         formatted = (
-            formatted[:50_000]
+            formatted[:_head]
             + '\n\n... [middle of conversation omitted for summary] ...\n\n'
-            + formatted[-100_000:]
+            + formatted[-_tail:]
         )
-        logger.info('%s Input truncated: %s → %s',
-                    tag, _human_size(original_len), _human_size(len(formatted)))
+        logger.info('%s Input truncated to model window: %s → %s (budget %s)',
+                    tag, _human_size(original_len), _human_size(len(formatted)),
+                    _human_size(_char_budget))
 
     user_content = (
         f'## Current User Query\n{current_query}\n\n'
         f'## Conversation History to Compress\n\n{formatted}'
     )
 
-    try:
-        content, usage = dispatch_chat(
+    def _dispatch(capability: str):
+        return dispatch_chat(
             [
                 {'role': 'system', 'content': _SUMMARY_SYSTEM_PROMPT},
                 {'role': 'user', 'content': user_content},
             ],
             max_tokens=_SUMMARY_MAX_TOKENS,
             temperature=0,
-            capability='cheap',
+            capability=capability,
             log_prefix=tag,
         )
+
+    try:
+        try:
+            content, usage = _dispatch('cheap')
+        except Exception as _cheap_e:
+            # Preferred cheap tier failed — retry once against ANY text slot
+            # (a deploy may have no model tagged 'cheap' at all). The
+            # dispatcher already widens 'cheap'→'text' internally when no
+            # cheap slot exists, so this mainly covers a transient cheap-slot
+            # exhaustion; it's cheap insurance and makes the intent explicit.
+            logger.warning('%s cheap-tier summary dispatch failed (%s: %s) — '
+                           'retrying on any text-capable slot',
+                           tag, type(_cheap_e).__name__, _cheap_e)
+            content, usage = _dispatch('text')
 
         if content:
             in_tok = usage.get('prompt_tokens', 0)
@@ -328,6 +421,32 @@ def _generate_query_aware_summary(messages: list, current_query: str,
         return None
 
 
+def _coerce_spec_list(value) -> list:
+    """Coerce a tool arg that should be a list-of-specs into a real list.
+
+    Tolerates the observed-in-the-wild case where a streamed / partial
+    tool-call recorded the array as a JSON *string* (sometimes truncated)
+    instead of a list — e.g. ``reads='[{"path": "a.py", "end_line": 4]'``.
+    Iterating such a raw string char-by-char is what produced the notorious
+    "one letter per line" modified-files reminder (conv mr4e8pnxbv440z).
+
+    If the string decodes to a list, return it; otherwise return ``[]`` so the
+    caller skips it rather than iterating characters and emitting garbage.
+    """
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return []
+        try:
+            parsed = json.loads(s)
+        except (ValueError, TypeError):
+            return []
+        return parsed if isinstance(parsed, list) else []
+    return []
+
+
 def _extract_recently_accessed_files(messages: list,
                                      max_files: int = 8) -> list[str]:
     """Scan messages newest-first for file paths from read/write tools."""
@@ -351,8 +470,17 @@ def _extract_recently_accessed_files(messages: list,
                              fn_name, exc, exc_info=True)
                 continue
 
+            if not isinstance(args, dict):
+                logger.debug('[Compact] Skipping non-dict tool_call args for %s (type=%s)',
+                             fn_name, type(args).__name__)
+                continue
+
             if fn_name == 'read_files':
-                for spec in args.get('reads', []) or []:
+                # After _coerce_spec_list the container is guaranteed a LIST,
+                # so a string ELEMENT is a genuine full path (a documented
+                # Claude-Opus shape: reads=["a.py","b.py"]) — NOT a stray char
+                # from iterating a string container. Keep both element shapes.
+                for spec in _coerce_spec_list(args.get('reads')):
                     if isinstance(spec, dict):
                         p = spec.get('path', '')
                     elif isinstance(spec, str):
@@ -365,14 +493,14 @@ def _extract_recently_accessed_files(messages: list,
                         files_seen.append(p)
                         files_set.add(p)
             elif fn_name in ('apply_diff', 'apply_diffs') and args.get('edits'):
-                for edit in args['edits'] or []:
+                for edit in _coerce_spec_list(args.get('edits')):
                     if isinstance(edit, dict):
                         p = edit.get('path', '')
                         if p and p not in files_set:
                             files_seen.append(p)
                             files_set.add(p)
             elif fn_name in ('insert_content', 'insert_contents') and args.get('edits'):
-                for edit in args['edits'] or []:
+                for edit in _coerce_spec_list(args.get('edits')):
                     if isinstance(edit, dict):
                         p = edit.get('path', '')
                         if p and p not in files_set:
@@ -495,6 +623,26 @@ def execute_compact_tool(messages: list, task: dict | None = None, **kwargs) -> 
     old_messages = messages[:boundary]
     recent_messages = messages[boundary:]
 
+    # ★ OBJECTIVE ANCHOR — the first real user message is the north-star
+    #   objective.  If it falls in the to-be-summarized ``old_messages`` it
+    #   would be lossily paraphrased (and re-paraphrased every subsequent
+    #   compaction → unbounded drift), so we PULL IT OUT and re-insert it
+    #   verbatim exactly once, right after the system messages.  If it is
+    #   already in ``recent_messages`` (short conversation) there is nothing to
+    #   do — it's preserved as-is.  Because the anchor is a genuine existing
+    #   message (not a synthesized prepend), a subsequent compaction finds the
+    #   SAME message already at the front of ``recent_messages`` and never
+    #   duplicates it — idempotent, byte-identical, cache-prefix-stable.
+    anchor_idx = _objective_anchor_index(messages)
+    anchor_msg = None
+    if anchor_idx is not None and anchor_idx < boundary:
+        anchor_msg = messages[anchor_idx]
+        # Summarize everything old EXCEPT the anchor.
+        old_messages = [m for k, m in enumerate(messages[:boundary])
+                        if k != anchor_idx]
+        logger.info('%s [Compact] Preserving objective anchor verbatim '
+                    '(msg idx=%d) across summary', pfx, anchor_idx)
+
     preserved_turns = sum(
         1 for m in recent_messages if m.get('role') == 'user'
     )
@@ -505,7 +653,7 @@ def execute_compact_tool(messages: list, task: dict | None = None, **kwargs) -> 
                 preserved_turns, current_query)
 
     summary_text = _generate_query_aware_summary(
-        old_messages, current_query, pfx, conv_id=conv_id
+        old_messages, current_query, pfx, conv_id=conv_id, task=task
     )
 
     if not summary_text:
@@ -531,7 +679,14 @@ def execute_compact_tool(messages: list, task: dict | None = None, **kwargs) -> 
         else:
             break
 
-    new_messages = list(system_msgs) + list(recent_messages)
+    # Rebuild: system → [objective anchor, if it was in the summarized region]
+    # → recent.  The anchor is placed immediately after the system block so the
+    # model always sees the original goal at a stable position, and exactly
+    # once (it was removed from ``old_messages`` above, so it isn't also inside
+    # the summary text's source, and it is NOT in ``recent_messages`` because
+    # anchor_idx < boundary).
+    anchor_block = [anchor_msg] if anchor_msg is not None else []
+    new_messages = list(system_msgs) + anchor_block + list(recent_messages)
     messages.clear()
     messages.extend(new_messages)
 
@@ -548,6 +703,19 @@ def execute_compact_tool(messages: list, task: dict | None = None, **kwargs) -> 
                 tokens_before, tokens_after, reduction_pct,
                 msg_count_before, len(messages),
                 boundary - len(system_msgs))
+
+    # ── Phase-C: record the 'saved' half of this L2 event's cache ROI ──
+    # The following round's detect_cache_break completes it with the re-billed
+    # cache_write. Best-effort; never let instrumentation break compaction.
+    if conv_id:
+        try:
+            from lib.tasks_pkg.cache_tracking import record_l2_compaction
+            record_l2_compaction(
+                conv_id, tokens_before=int(tokens_before),
+                tokens_after=int(tokens_after),
+                msgs_before=int(msg_count_before), msgs_after=int(len(messages)))
+        except Exception as _roi_e:
+            logger.debug('%s [Compact] record_l2_compaction failed: %s', pfx, _roi_e)
 
     if _archive_id is not None:
         try:
@@ -611,6 +779,20 @@ def force_compact_if_needed(messages: list, task: dict | None = None,
     logger.info('%s [ForceCompact] Injecting context_compact for conv=%s',
                 pfx, conv_id[:8] if conv_id else '?')
 
+    # ★ Surface the L2 summary as a live phase. Without this, the front-end
+    #   spinner stays frozen on "Analyzing results…" for the several seconds
+    #   the cheap-model summary call takes — the user can't tell the harness
+    #   is busy compressing context rather than hung.
+    if task is not None:
+        try:
+            from lib.agent_core.events import EventType, build_event
+            from lib.tasks_pkg.manager import append_event
+            append_event(task, build_event(
+                EventType.PHASE, phase='compacting',
+                detail='Compressing earlier context to fit the window…'))
+        except Exception as _ph_e:
+            logger.debug('%s [ForceCompact] phase emit failed: %s', pfx, _ph_e)
+
     _trigger = (kwargs.get('_compaction_trigger')
                 if isinstance(kwargs, dict) else None) or 'force'
     _reason = (kwargs.get('_compaction_reason')
@@ -635,6 +817,59 @@ def force_compact_if_needed(messages: list, task: dict | None = None,
     # head-truncate safety net and looping the same oversized prompt back
     # to the API. Report failure so the caller can fall through.
     if not _meta.get('compacted'):
+        # ★ Deterministic proactive safety net (fix for the OOM fatal loop).
+        #   The summary LLM is the ONLY mechanism the proactive path had; on
+        #   a vanilla/exported deploy the cheap-model dispatch can fail
+        #   outright (no model tagged 'cheap', saturated single model,
+        #   summary input itself too big). Historically force-compact then
+        #   returned False and did nothing, so the context stayed pinned near
+        #   the window every round — and the reactive head-truncate net never
+        #   fired because the max_tokens clamp keeps the request just under
+        #   the hard ceiling (no API rejection). Nothing bounded the context
+        #   → unbounded re-send → OOM (SIGKILL).
+        #
+        #   So when the proactive pipeline opts in (_allow_head_truncate_fallback)
+        #   AND we are genuinely over the usable window, fall through to the
+        #   same last-resort _head_truncate the reactive path already trusts,
+        #   right here. This is bounded, logged (audit_log
+        #   'proactive_head_truncate') context loss — strictly better than a
+        #   process death. The empty-summary→False contract is preserved for
+        #   the NON-critical case (still headroom before the window): we only
+        #   head-truncate when estimated input >= usable window.
+        _allow_ht = bool(kwargs.get('_allow_head_truncate_fallback')
+                         if isinstance(kwargs, dict) else False)
+        if _allow_ht:
+            try:
+                from lib.tasks_pkg.compaction._tokens import (
+                    _count_tokens_authoritative)
+                _est_tokens, _tok_method = _count_tokens_authoritative(
+                    messages, task)
+            except Exception as _ce:
+                logger.debug('%s [ForceCompact] authoritative count failed, '
+                             'using heuristic: %s', pfx, _ce)
+                _est_tokens = _estimate_total_tokens(messages)
+                _tok_method = 'heuristic'
+            _usable = _usable_context(_get_context_limit(task))
+            if _est_tokens >= _usable:
+                logger.warning(
+                    '%s [ForceCompact] Summary failed AND context critically '
+                    'over budget (est=%d via %s >= usable=%d) — falling back '
+                    'to deterministic head-truncate so the context is bounded '
+                    'without depending on the summary LLM',
+                    pfx, _est_tokens, _tok_method, _usable)
+                from lib.tasks_pkg.compaction._reactive import _head_truncate
+                _dropped = _head_truncate(
+                    messages, task,
+                    reported_token_count=_est_tokens,
+                    event_name='proactive_head_truncate')
+                if _dropped:
+                    # Context was bounded — surface as a real compaction so
+                    # the pipeline notifies the cache tracker (prefix changed)
+                    # and the round proceeds with a smaller prompt.
+                    return True
+                logger.warning(
+                    '%s [ForceCompact] Head-truncate dropped 0 messages '
+                    '(too few to shed) — reporting failure', pfx)
         logger.warning('%s [ForceCompact] Compaction did not mutate messages '
                        '(summary empty or refused) — reporting failure so the '
                        'caller can fall back', pfx)

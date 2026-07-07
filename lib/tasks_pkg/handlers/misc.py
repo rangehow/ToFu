@@ -13,7 +13,12 @@ from lib.swarm.tools import SWARM_TOOL_NAMES
 from lib.tasks_pkg.executor import _build_simple_meta, _finalize_tool_round, tool_registry
 from lib.tasks_pkg.handlers._adapter import simple_call
 from lib.tasks_pkg.manager import append_event
-from lib.tools import CONV_REF_TOOL_NAMES
+from lib.tools import (
+    BOARD_TOOL_NAMES,
+    CHARTER_TOOL_NAMES,
+    CONV_REF_TOOL_NAMES,
+    PEER_TOOL_NAMES,
+)
 
 logger = get_logger(__name__)
 
@@ -68,8 +73,8 @@ def _handle_ask_human(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg, p
         tool_content = 'Error: question parameter is required.'
         meta = _build_simple_meta(
             fn_name, tool_content, source='HumanGuidance',
-            title='❌ Missing question', snippet='No question provided',
-            badge='❌ error',
+            title='Missing question', snippet='No question provided',
+            badge='error',
         )
         _finalize_tool_round(task, rn, round_entry, [meta])
         return tc_id, tool_content, False
@@ -166,9 +171,9 @@ def _handle_ask_human(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg, p
         return s if len(s) <= _FULL_LIMIT else s[:_FULL_LIMIT - 1] + '…'
     meta = _build_simple_meta(
         fn_name, tool_content, source='HumanGuidance',
-        title=f'🙋 {_clip(question)}',
+        title=_clip(question),
         snippet=_clip(user_response or 'No response'),
-        badge='✅ answered' if user_response else '⛔ aborted',
+        badge='answered' if user_response else 'aborted',
         extra={
             'guidanceId': guidance_id,
             'question': question,
@@ -191,7 +196,7 @@ def _handle_scheduler_tool(task, tc, fn_name, tc_id, fn_args, rn, round_entry, c
     return simple_call(
         task, fn_name, fn_args, rn, round_entry, tc_id,
         executor=execute_scheduler_tool,
-        source='Scheduler', icon='⏰', module_tag='Scheduler',
+        source='Scheduler', module_tag='Scheduler',
     )
 
 
@@ -211,19 +216,55 @@ def _handle_desktop_tool(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg
     return simple_call(
         task, fn_name, fn_args, rn, round_entry, tc_id,
         executor=_run_desktop,
-        source='Desktop Agent', icon='🖥️', module_tag='Desktop',
+        source='Desktop Agent', module_tag='Desktop',
     )
 
 
-# Module-level constant — swarm tool icon dispatch.
-_SWARM_ICON_MAP = {
-    'spawn_agents':     '🐝',
-    'await_agents':     '⏳',
-    'get_agent_result': '📥',
-    'store_artifact':   '📦',
-    'read_artifact':    '📖',
-    'list_artifacts':   '📋',
+# Swarm tool badge labels (text only — the frontend renders the SVG icon, so
+# no emoji prefix here per CLAUDE.md §3.4; an emoji would duplicate the icon).
+_SWARM_BADGE_VERB = {
+    'spawn_agents':     'spawn',
+    'await_agents':     'await',
+    'get_agent_result': 'result',
+    'store_artifact':   'store',
+    'read_artifact':    'read',
+    'list_artifacts':   'list',
 }
+
+
+@tool_registry.handler('todo_write', category='task',
+                       description='Maintain the structured task checklist')
+def _handle_todo_write(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg, project_path, project_enabled, all_tools=None):
+    """Persist the model's checklist onto ``task['_todos']`` (survives
+    compaction — it's on the task dict, not in ``messages``) and feed the
+    continuation enforcer.  The list REPLACES the prior state each call.
+
+    Note: NOT a state-changing tool (no file mutation) — so it correctly does
+    NOT reset the zero-deliverable streak; the two guards stay orthogonal.
+    """
+    from lib.tools.todo import apply_todo_write
+
+    todos, tool_content = apply_todo_write(fn_args)
+    task['_todos'] = todos
+
+    total = len(todos)
+    done = sum(1 for t in todos if t.get('status') == 'completed')
+    in_prog = sum(1 for t in todos if t.get('status') == 'in_progress')
+    logger.info('[Executor] todo_write: %d item(s) — %d done, %d in_progress '
+                '(task=%s)', total, done, in_prog, task.get('id', '?')[:8])
+
+    badge = f'{done}/{total}' if total else 'cleared'
+    meta = _build_simple_meta(
+        fn_name, tool_content, source='Checklist',
+        title=f'Checklist · {done}/{total} done' if total else 'Checklist cleared',
+        snippet=tool_content[:200],
+        badge=badge,
+        # Structured payload so the frontend renders a live progress panel
+        # off engine data, not by re-parsing the result prose.
+        extra={'todos': todos},
+    )
+    _finalize_tool_round(task, rn, round_entry, [meta])
+    return tc_id, tool_content, False
 
 
 @tool_registry.tool_set(SWARM_TOOL_NAMES, category='swarm',
@@ -244,35 +285,38 @@ def _handle_swarm_tool(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg, 
             all_tools=all_tools or [],
         )
 
-    icon = _SWARM_ICON_MAP.get(fn_name, '🐝')
-    badge = icon
+    verb = _SWARM_BADGE_VERB.get(fn_name, 'swarm')
+    badge = verb
     if fn_name == 'spawn_agents':
         num_agents = len(fn_args.get('agents', []))
-        badge = f'{icon} {num_agents} agents'
+        badge = f'{num_agents} agents'
     elif fn_name == 'await_agents':
         ids = fn_args.get('ids') or []
-        badge = f'{icon} await {len(ids) or "all"}'
+        badge = f'await {len(ids) or "all"}'
     elif fn_name == 'get_agent_result':
-        badge = f'{icon} {(fn_args.get("agent_id") or "?")[:8]}'
+        badge = f'{(fn_args.get("agent_id") or "?")[:8]}'
 
-    post_build = _build_await_post_build(icon) if fn_name == 'await_agents' else None
+    post_build = _build_await_post_build() if fn_name == 'await_agents' else None
 
     return simple_call(
         task, fn_name, fn_args, rn, round_entry, tc_id,
         executor=_run_swarm,
-        source='Swarm', icon=icon, badge=badge, module_tag='Swarm',
+        source='Swarm', badge=badge, module_tag='Swarm',
         post_build=post_build,
     )
 
 
-def _build_await_post_build(icon):
+def _build_await_post_build():
     """Return a post_build hook that rewrites the await_agents result badge
     from its JSON payload so the UI shows the real outcome.
 
-    Without this every await row gets a generic ``⏳ await all`` badge that
+    Without this every await row gets a generic ``await all`` badge that
     looks identical whether the wait completed cleanly or hit the hard-cap
     timeout. The hook surfaces ``done N/M`` plus a ``timed out`` marker so the
     user has full visibility of partial completions.
+
+    No emoji prefix — the frontend renders the SVG icon and colors the badge
+    via ``meta.awaitTimedOut`` (amber) per CLAUDE.md §3.4.
     """
     import json as _json
 
@@ -285,7 +329,7 @@ def _build_await_post_build(icon):
         if not isinstance(data, dict):
             return
         if data.get('status') == 'error':
-            meta['badge'] = '❌ no swarm'
+            meta['badge'] = 'no swarm'
             return
         completed = data.get('completed') or []
         still_running = data.get('still_running') or []
@@ -293,14 +337,14 @@ def _build_await_post_build(icon):
         n_total = n_done + len(still_running)
         timed_out = bool(data.get('timed_out'))
         if timed_out:
-            # Amber warning badge — partial result, the wait was cut short.
-            meta['badge'] = f'{icon} timed out · {n_done}/{n_total} done'
+            # Amber warning badge (via awaitTimedOut) — partial result, wait cut short.
+            meta['badge'] = f'timed out · {n_done}/{n_total} done'
             meta['awaitTimedOut'] = True
         elif n_total:
-            meta['badge'] = f'✓ {n_done}/{n_total} done'
+            meta['badge'] = f'{n_done}/{n_total} done'
         else:
             # Nothing was waited on (all already finished, or swarm idle).
-            meta['badge'] = '✓ done'
+            meta['badge'] = 'done'
         if still_running:
             meta['awaitStillRunning'] = still_running
 
@@ -313,15 +357,280 @@ def _handle_conv_ref_tool(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cf
     current_conv_id = task.get('convId')
 
     def _run(_fn_name, _fn_args):
-        return execute_conv_ref_tool(_fn_name, _fn_args, current_conv_id=current_conv_id)
+        return execute_conv_ref_tool(
+            _fn_name, _fn_args,
+            current_conv_id=current_conv_id,
+            project_path=project_path,
+        )
 
-    icon = '📋' if fn_name == 'list_conversations' else '💬'
     detail = fn_args.get('keyword', 'all') if fn_name == 'list_conversations' else fn_args.get('conversation_id', '?')[:8]
     return simple_call(
         task, fn_name, fn_args, rn, round_entry, tc_id,
         executor=_run,
-        source='Conversations', icon=icon, module_tag='ConvRef',
-        title=f'{icon} {fn_name}: {detail}',
+        source='Conversations', module_tag='ConvRef',
+        title=f'{fn_name}: {detail}',
+    )
+
+
+@tool_registry.tool_set(CHARTER_TOOL_NAMES, category='conversations',
+                        description='Read / propose to the project charter (north star)')
+def _handle_charter_tool(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg, project_path, project_enabled, all_tools=None):
+    current_conv_id = task.get('convId', '')
+
+    def _run(_fn_name, _fn_args):
+        from lib.conversations.project_charter import execute_charter_tool
+        return execute_charter_tool(
+            _fn_name, _fn_args,
+            current_conv_id=current_conv_id,
+            project_path=project_path if project_enabled else '')
+
+    verb = 'read' if fn_name == 'project_charter_read' else 'propose'
+    # Structured enrichment (rendered off engine/args data, NOT re-parsed prose):
+    # a propose carries the proposal text + a pending-human-review marker so the
+    # frontend can render a distinct "awaiting review" affordance.
+    _extra = None
+    if fn_name == 'project_charter_propose':
+        _extra = {'charterProposal': {
+            'proposal': (fn_args.get('proposal') or '').strip(),
+            'title': (fn_args.get('title') or '').strip(),
+            'pending': True,
+        }}
+    return simple_call(
+        task, fn_name, fn_args, rn, round_entry, tc_id,
+        executor=_run,
+        source='Charter', module_tag='Charter', badge=verb, extra=_extra,
+    )
+
+
+@tool_registry.tool_set(BOARD_TOOL_NAMES, category='conversations',
+                        description='Read / post / claim / complete / block project board epics')
+def _handle_board_tool(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg, project_path, project_enabled, all_tools=None):
+    current_conv_id = task.get('convId', '')
+
+    def _run(_fn_name, _fn_args):
+        from lib.conversations.project_board import execute_board_tool
+        return execute_board_tool(
+            _fn_name, _fn_args,
+            current_conv_id=current_conv_id,
+            project_path=project_path if project_enabled else '')
+
+    _verb = fn_name.replace('project_board_', '', 1)
+
+    def _post_build(meta, _tool_content, _fn_args):
+        """Attach a STRUCTURED board snapshot (read) or transition (mutation),
+        read off the engine — never re-parsed from the prose result."""
+        if not project_enabled or not project_path:
+            return
+        try:
+            from lib.conversations.project_board import read_board
+            board = read_board(project_path)
+        except Exception as e:
+            logger.debug('[Board] post_build read failed: %s', e)
+            return
+        if fn_name == 'project_board_read':
+            # Compact mini-kanban: counts + lane epic titles (structured).
+            lanes = {'open': [], 'claimed': [], 'deferred': [], 'done': []}
+            for tk in board.get('tasks', []):
+                lanes.setdefault(tk.get('status', 'open'), []).append({
+                    'id': tk.get('id', ''), 'title': tk.get('title', ''),
+                    'owner': tk.get('owner_conv_id', ''),
+                    'dispatched': bool(tk.get('dispatched')),
+                })
+            meta['boardSnapshot'] = {
+                'open': board.get('open', 0), 'claimed': board.get('claimed', 0),
+                'deferred': board.get('deferred', 0), 'done': board.get('done', 0),
+                'lanes': lanes,
+            }
+        else:
+            # Mutation → an explicit transition (verb + target epic + status).
+            tid = (_fn_args.get('task_id') or '').strip()
+            title = ''
+            status = ''
+            for tk in board.get('tasks', []):
+                if tk.get('id') == tid:
+                    title = tk.get('title', '')
+                    status = tk.get('status', '')
+                    break
+            meta['boardTransition'] = {
+                'verb': _verb, 'taskId': tid, 'title': title, 'status': status,
+            }
+
+    return simple_call(
+        task, fn_name, fn_args, rn, round_entry, tc_id,
+        executor=_run,
+        source='Board', module_tag='Board', badge=_verb,
+        post_build=_post_build,
+    )
+
+
+def _make_intervention_approval_fn(task, rn, tc_id, round_entry):
+    """Build the human-approval callback for a coercive peer hard-abort.
+
+    Returns ``approval_fn(prompt) -> approver | None`` that routes the request
+    through the SAME human-guidance seam ``ask_human`` uses: it emits a
+    ``human_guidance_request`` choice event (Approve / Deny) the UI already
+    renders + resolves, then BLOCKS on ``request_human_guidance`` until the
+    human decides (or the task aborts). Grant → returns the approver identity
+    (the resolving user, or 'human'); deny/abort → returns None.
+
+    Under AUTOPILOT a coercive kill of another conversation is NEVER
+    auto-authorized (the VU may freely answer questions, but must not silently
+    green-light stopping a sibling) → returns None (advisory fallback).
+    """
+    import uuid as _uuid
+
+    def _approval_fn(prompt: str):
+        from lib.tasks_pkg.autopilot import is_autopilot_enabled
+        if is_autopilot_enabled(task):
+            logger.info('[Peer] hard-abort auto-DENIED under autopilot task=%s',
+                        task.get('id', '?')[:8])
+            return None
+        guidance_id = f'hg_{_uuid.uuid4().hex[:12]}'
+        options = [{'label': 'Approve abort', 'value': 'approve'},
+                   {'label': 'Deny', 'value': 'deny'}]
+        round_entry['status'] = 'awaiting_human'
+        round_entry['guidanceId'] = guidance_id
+        round_entry['guidanceQuestion'] = prompt
+        round_entry['guidanceType'] = 'choice'
+        round_entry['guidanceOptions'] = options
+        append_event(task, {
+            'type': 'human_guidance_request',
+            'roundNum': rn,
+            'toolCallId': tc_id,
+            'guidanceId': guidance_id,
+            'question': prompt,
+            'responseType': 'choice',
+            'options': options,
+            'intervention': True,
+        })
+        from lib.tasks_pkg.human_guidance import request_human_guidance
+        resp = request_human_guidance(guidance_id, task=task)
+        if resp is None:
+            return None  # task aborted while waiting
+        rl = str(resp).strip().lower()
+        approved = ('approve' in rl or rl in ('yes', 'ok', 'y', 'approved')) \
+            and not rl.startswith('deny') and rl not in ('no', 'n')
+        if not approved:
+            return None
+        # Stamp the approver identity for the audit_log('intervention', …).
+        who = str(resp).strip()
+        return who if who and 'approve' not in who.lower() else 'human'
+
+    return _approval_fn
+
+
+@tool_registry.tool_set(PEER_TOOL_NAMES, category='conversations',
+                        description='Live peer status / peer messaging / advisory intervention')
+def _handle_peer_tool(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg, project_path, project_enabled, all_tools=None):
+    current_conv_id = task.get('convId', '')
+
+    # Only project_intervene(hard_abort=True) needs the human-approval seam;
+    # build it lazily so status/message paths carry no approval overhead.
+    approval_fn = None
+    if fn_name == 'project_intervene' and bool(fn_args.get('hard_abort')):
+        approval_fn = _make_intervention_approval_fn(task, rn, tc_id, round_entry)
+
+    def _run(_fn_name, _fn_args):
+        from lib.conversations.project_peer import execute_peer_tool
+        return execute_peer_tool(
+            _fn_name, _fn_args,
+            current_conv_id=current_conv_id,
+            project_path=project_path if project_enabled else '',
+            config=cfg, approval_fn=approval_fn)
+
+    _verb = {'project_peer_status': 'status',
+             'project_feed_read': 'feed',
+             'project_message': 'message',
+             'project_intervene': 'intervene'}.get(fn_name, 'peer')
+
+    def _post_build(meta, _tool_content, _fn_args):
+        """Attach STRUCTURED meta (read off the engine, never re-parsed prose):
+        the live peer list for ``project_peer_status``, the recent activity
+        events for ``project_feed_read``, and a delivery descriptor for
+        ``project_message`` / ``project_intervene``."""
+        if not project_enabled or not project_path:
+            return
+        # ── project_peer_status → live peer cards ──
+        if fn_name == 'project_peer_status':
+            try:
+                from lib.conversations.project_peer import build_peer_status
+                status = build_peer_status(project_path, current_conv_id)
+            except Exception as e:
+                logger.debug('[Peer] post_build status failed: %s', e)
+                return
+            target = (_fn_args.get('conv_id') or '').strip()
+            peers = status.get('peers', [])
+            if target:
+                peers = [p for p in peers if (p.get('convId', '') or '').startswith(target)]
+            meta['peerStatus'] = {
+                'count': len(peers),
+                'peers': [{
+                    'convId': p.get('convId', ''),
+                    'agentId': p.get('agentId', ''),
+                    'title': p.get('title', ''),
+                    'statusLabel': p.get('statusLabel', ''),
+                    'round': p.get('round', 0),
+                    'currentFile': p.get('currentFile', ''),
+                    'claimedEpic': p.get('claimedEpic', ''),
+                } for p in peers],
+            }
+            return
+        # ── project_feed_read → chronological activity events ──
+        if fn_name == 'project_feed_read':
+            try:
+                limit = int(_fn_args.get('limit') or 25)
+            except (TypeError, ValueError):
+                limit = 25
+            limit = max(1, min(limit, 60))
+            try:
+                from lib.conversations.project_feed import read_project_feed
+                feed = read_project_feed(project_path, limit=limit)
+            except Exception as e:
+                logger.debug('[Peer] post_build feed failed: %s', e)
+                return
+            events = feed.get('events', []) or []
+            meta['feedActivity'] = {
+                'count': len(events),
+                'events': [{
+                    'kind': ev.get('kind', 'note'),
+                    'title': ev.get('title', ''),
+                    'convId': ev.get('conv_id', ''),
+                    'summary': ev.get('summary', ''),
+                    'ts': ev.get('ts', 0),
+                    'mine': bool(ev.get('conv_id') and ev.get('conv_id') == current_conv_id),
+                } for ev in events],
+            }
+            return
+        # ── project_message / project_intervene → delivery descriptor ──
+        if fn_name in ('project_message', 'project_intervene'):
+            to = (_fn_args.get('to_conv_id') or '').strip()
+            text = (_fn_args.get('text') or _fn_args.get('message') or '').strip()
+            content = _tool_content if isinstance(_tool_content, str) else str(_tool_content)
+            low = content.lower()
+            # Classify the outcome off the well-known result-string phrasing.
+            if low.startswith('error') or 'was denied' in low or 'requires explicit human' in low:
+                outcome = 'failed'
+            elif 'not sent' in low or 'rate limit' in low:
+                outcome = 'rate_limited'
+            elif 'denied' in low:
+                outcome = 'denied'
+            else:
+                outcome = 'delivered'
+            hard = bool(_fn_args.get('hard_abort')) if fn_name == 'project_intervene' else False
+            meta['peerDelivery'] = {
+                'tool': fn_name,
+                'toConv': to,
+                'text': text,
+                'hardAbort': hard,
+                'outcome': outcome,
+            }
+            return
+
+    return simple_call(
+        task, fn_name, fn_args, rn, round_entry, tc_id,
+        executor=_run,
+        source='Peer', module_tag='Peer', badge=_verb,
+        post_build=_post_build,
     )
 
 

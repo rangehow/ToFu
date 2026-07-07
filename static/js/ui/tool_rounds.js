@@ -26,6 +26,7 @@ function _isRoundCodeExec(round) {
 function _isRoundProject(round) {
   return [
     "read_files",
+    "inspect_image",
     "list_dir",
     "grep_search",
     "find_files",
@@ -54,16 +55,39 @@ function _isRoundBrowser(round) {
 function _isRoundImageGen(round) {
   return round.toolName === "generate_image";
 }
+/* ★ Project-brain / conversation-reference tools. These return prose (a
+   board listing, the charter text, a conversation digest, peer status) in
+   `round.toolContent` plus a short `snippet`, but historically fell through
+   to the bare generic tool line that shows only icon+name+badge — hiding all
+   the actual content. `_isRoundConvMeta` routes them to a dedicated
+   collapsible block that renders the full content as Markdown. */
+const _CONV_META_TOOLS = new Set([
+  "project_board_read", "project_board_post", "project_board_claim",
+  "project_board_complete", "project_board_block", "project_board_defer",
+  "project_charter_read", "project_charter_propose",
+  "list_conversations", "get_conversation",
+  "project_peer_status", "project_feed_read",
+  "project_message", "project_intervene",
+]);
+function _isRoundConvMeta(round) {
+  return _CONV_META_TOOLS.has(round.toolName);
+}
 function _isRoundSwarm(round) {
   /* Only treat as swarm if the backend flagged it AND there's real swarm content */
   if (!round._swarm) return false;
   /* Must have at least one agent OR meaningful results to render the swarm panel.
-     Even during active spawning, we don't show the panel until agents arrive. */
-  if (!round._swarmAgents?.length && !round.results?.length) return false;
+     Even during active spawning, we don't show the panel until agents arrive.
+     A durable `_swarmSnapshot` (persisted by the backend when the swarm settles)
+     also counts — it's what makes a reloaded fire-and-forget swarm renderable
+     even when the live `_swarmAgents` array and any `results` are absent. */
+  if (!round._swarmAgents?.length
+      && !round.results?.length
+      && !(round._swarmSnapshot && round._swarmSnapshot.agents?.length)) return false;
   return true;
 }
 
 /* ★ Tool display metadata — icon, label, color for non-search/fetch tools */
+const _TD_SVG = (inner) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:1em;height:1em;vertical-align:-2px">${inner}</svg>`;
 const _TOOL_DISPLAY = {
   web_search:    { icon: "", label: "Searching", color: "#60a5fa" },
   fetch_url:     { icon: "", label: "Fetching",  color: "#34d399" },
@@ -72,11 +96,11 @@ const _TOOL_DISPLAY = {
   get_agent_result: { icon: "", label: "Agent Result",   color: "#f59e0b" },
   create_memory:  { icon: "", label: "Memory",     color: "#a78bfa" },
   schedule_task: { icon: "", label: "Schedule",  color: "#fb923c" },
-  timer_create:  { icon: "⏱️", label: "Timer Watcher", color: "#a855f7" },
-  timer_manage:  { icon: "⏱️", label: "Timer",   color: "#a855f7" },
-  bash_exec:     { icon: "▶️", label: "Running",   color: "#f472b6" },
+  timer_create:  { icon: _TD_SVG('<circle cx="12" cy="14" r="8"/><line x1="10" x2="14" y1="2" y2="2"/><line x1="12" x2="15" y1="14" y2="11"/>'), label: "Timer Watcher", color: "#a855f7" },
+  timer_manage:  { icon: _TD_SVG('<circle cx="12" cy="14" r="8"/><line x1="10" x2="14" y1="2" y2="2"/><line x1="12" x2="15" y1="14" y2="11"/>'), label: "Timer",   color: "#a855f7" },
+  bash_exec:     { icon: _TD_SVG('<path d="M5 5a2 2 0 0 1 3.008-1.728l11.997 6.998a2 2 0 0 1 .003 3.458l-12 7A2 2 0 0 1 5 19z"/>'), label: "Running",   color: "#f472b6" },
   desktop_click: { icon: "", label: "Desktop",   color: "#94a3b8" },
-  desktop_type:  { icon: "⌨️", label: "Desktop",   color: "#94a3b8" },
+  desktop_type:  { icon: _TD_SVG('<path d="M10 8h.01"/><path d="M12 12h.01"/><path d="M14 8h.01"/><path d="M16 12h.01"/><path d="M18 8h.01"/><path d="M6 8h.01"/><path d="M7 16h10"/><path d="M8 12h.01"/><rect width="20" height="16" x="2" y="4" rx="2"/>'), label: "Desktop",   color: "#94a3b8" },
   desktop_screenshot: { icon: "", label: "Desktop", color: "#94a3b8" },
   generate_image: { icon: "", label: "Image", color: "#e879f9" },
   ask_human: { icon: "", label: "Guidance", color: "#a5b4fc" },
@@ -90,7 +114,7 @@ function _getToolDisplay(round) {
   if (_isRoundBrowser(round)) return { icon: "", label: "Browser",   color: "#38bdf8" };
   // Generic fallback — use the tool name itself
   const name = (round.toolName || "tool").replace(/_/g, " ");
-  return { icon: "⚡", label: name.charAt(0).toUpperCase() + name.slice(1), color: "#94a3b8" };
+  return { icon: _TD_SVG('<path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/>'), label: name.charAt(0).toUpperCase() + name.slice(1), color: "#94a3b8" };
 }
 
 function _getRoundBlockClass(round) {
@@ -101,6 +125,7 @@ function _getRoundIcon(round) {
   if (_isRoundProject(round)) {
     const m = {
       read_files: "file",
+      inspect_image: "zoomimg",
       list_dir: "folder",
       grep_search: "search",
       find_files: "find",
@@ -152,7 +177,7 @@ function _renderCodeExecBlock(round, isSearching) {
   const cmd = escapeHtml(meta.command || round.query || "");
   if (isSearching) {
     return `<div class="code-exec-block code-exec-running">
-         <div class="code-exec-header"><span class="code-exec-icon">⚡</span><span class="code-exec-label">Running...</span><span class="ptool-spinner"></span></div>
+         <div class="code-exec-header"><span class="code-exec-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/></svg></span><span class="code-exec-label">Running...</span><span class="ptool-spinner"></span></div>
          <pre class="code-exec-cmd"><code>$ ${cmd}</code></pre>
        </div>`;
   }
@@ -174,7 +199,7 @@ function _renderCodeExecBlock(round, isSearching) {
     ? `<pre class="code-exec-output"><code>${escapeHtml(output)}</code></pre>`
     : "";
   return `<div class="code-exec-block ${statusCls}">
-       <div class="code-exec-header"><span class="code-exec-icon">⚡</span><span class="code-exec-label">Code Execution</span><span class="code-exec-status">${statusLabel}</span></div>
+       <div class="code-exec-header"><span class="code-exec-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/></svg></span><span class="code-exec-label">Code Execution</span><span class="code-exec-status">${statusLabel}</span></div>
        <pre class="code-exec-cmd"><code>$ ${cmd}</code></pre>
        ${outputHtml}
      </div>`;
@@ -195,6 +220,8 @@ const _projToolSvg = {
   diff: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v18"/><path d="M8 8l4-4 4 4"/><path d="M8 16l4 4 4-4"/></svg>',
   terminal:
     '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>',
+  zoomimg:
+    '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="16.5" y1="16.5" x2="21" y2="21"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>',
 };
 
 // ── Browser Tools — SVG Icons ──
@@ -226,6 +253,23 @@ const _webToolSvg = {
   merge_memories: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3v6a6 6 0 0 0 6 6 6 6 0 0 0 6-6V3"/><line x1="12" y1="15" x2="12" y2="21"/></svg>',
   search_memories: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="16.5" y1="16.5" x2="21" y2="21"/></svg>',
   schedule_task: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>',
+  // Conversation-reference tools — message bubble (get) / list (search).
+  // Backend no longer prepends 💬/📋 to the label; these SVGs are the icon.
+  get_conversation: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22z"/></svg>',
+  list_conversations: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><line x1="8" y1="9" x2="16" y2="9"/><line x1="8" y1="13" x2="13" y2="13"/></svg>',
+  // Project-brain tools — board (kanban columns), charter (compass/north-star),
+  // peer (linked people). Inline SVG per the icon convention (§3.4).
+  project_board_read: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="18" rx="1"/><rect x="14" y="3" width="7" height="11" rx="1"/></svg>',
+  project_charter_read: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/></svg>',
+  project_peer_status: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
+  // Activity feed — a pulse/heartbeat line (the live cross-conversation stream).
+  project_feed_read: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>',
+  // Async-swarm bookkeeping tools (spawn_agents gets the full panel instead).
+  await_agents: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>',
+  get_agent_result: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>',
+  // MCP bridge tools (mcp__server__tool) — a plug glyph.
+  mcp: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22v-5"/><path d="M15 8V2"/><path d="M17 8a1 1 0 0 1 1 1v4a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V9a1 1 0 0 1 1-1z"/><path d="M9 8V2"/></svg>',
+  context_compact: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>',
   ask_human: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
   generic: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>',
 };
@@ -250,6 +294,17 @@ function _getToolSvg(round) {
   if (_isRoundImageGen(round)) return _imageGenMode(round) === "edit" ? _imageEditSvg : _imageGenSvg;
   if (_isRoundProject(round)) return _projToolSvg[icon] || _projToolSvg.file;
   if (_isRoundBrowser(round)) return _browserToolSvg[icon] || _browserToolSvg.tabs;
+  // MCP bridge tools are named ``mcp__server__tool`` — collapse to the plug icon.
+  if ((round.toolName || "").startsWith("mcp__")) return _webToolSvg.mcp;
+  // Project-brain sibling tools share their family icon (post/claim/complete/
+  // block → board; propose → charter; message/intervene → peer).
+  if (_isRoundConvMeta(round)) {
+    const tn = round.toolName || "";
+    if (tn.startsWith("project_board_")) return _webToolSvg.project_board_read;
+    if (tn.startsWith("project_charter_")) return _webToolSvg.project_charter_read;
+    if (tn === "project_feed_read") return _webToolSvg.project_feed_read;
+    if (tn === "project_message" || tn === "project_intervene") return _webToolSvg.project_peer_status;
+  }
   return _webToolSvg[icon] || _webToolSvg[round.toolName] || _webToolSvg.generic;
 }
 
@@ -376,7 +431,42 @@ function _renderToolRepairedBadge(round) {
     (rep.detail ? ":\n" + rep.detail : ".")
   );
   const cls = stillFailed ? "ptool-badge-warn" : "ptool-badge-repaired";
-  return `<span class="ptool-badge ${cls}" title="${tip}">🔧 ${label}</span>`;
+  return `<span class="ptool-badge ${cls}" title="${tip}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:1em;height:1em;vertical-align:-2px"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.106-3.105c.32-.322.863-.22.983.218a6 6 0 0 1-8.259 7.057l-7.91 7.91a1 1 0 0 1-2.999-3l7.91-7.91a6 6 0 0 1 7.057-8.259c.438.12.54.662.219.984z"/></svg> ${label}</span>`;
+}
+
+/**
+ * Render a rejected hallucinated tool call. The backend (lib/tasks_pkg/
+ * tool_dispatch.py) detected that `round.toolName` is not a real tool this
+ * turn and rejected it WITHOUT executing — stamping `status:'rejected'` and a
+ * `_rejected = {attempted, suggestions}` descriptor (mirrored onto the result
+ * meta). We render the attempted name struck-through with a distinct "not a
+ * real tool" badge and, when available, a "did you mean …" suggestion chip.
+ */
+function _renderRejectedToolLine(round, svg) {
+  const meta = (round.results || [])[0] || {};
+  const rej = round._rejected || meta.rejected || {};
+  const attempted = escapeHtml(rej.attempted || round.toolName || "?");
+  const sugg = Array.isArray(rej.suggestions) ? rej.suggestions.filter(Boolean) : [];
+  const _t = (typeof t === "function") ? t : (k, d) => d;
+  const badgeLabel = escapeHtml(_t("tool.hallucinated", "not a real tool"));
+  const tip = escapeHtml(_t(
+    "tool.hallucinatedTip",
+    "The model called a tool that doesn't exist this turn — it was rejected and never run."
+  ));
+  let suggHtml = "";
+  if (sugg.length) {
+    const chips = sugg.map((s) => `<code class="ptool-reject-sugg">${escapeHtml(s)}</code>`).join(" ");
+    const did = escapeHtml(_t("tool.didYouMean", "did you mean"));
+    suggHtml = `<span class="ptool-reject-hint">${did} ${chips}?</span>`;
+  }
+  /* SVG glyph (§3.4 — no emoji): a circle-slash "forbidden" mark. */
+  const banSvg = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:1em;height:1em;vertical-align:-2px"><circle cx="12" cy="12" r="9"/><line x1="5.6" y1="5.6" x2="18.4" y2="18.4"/></svg>`;
+  return `<div class="ptool-line ptool-rejected" title="${tip}">
+       <span class="ptool-icon">${svg}</span>
+       <span class="ptool-text ptool-reject-name">${attempted}</span>
+       <span class="ptool-badge ptool-badge-reject">${banSvg} ${badgeLabel}</span>
+       ${suggHtml}
+     </div>`;
 }
 
 /**
@@ -494,7 +584,7 @@ function _renderInboxInjectRow(round) {
     : `<div class="sw-inbox-row-empty">No payload preview available.</div>`;
   return `<details class="sw-inbox-row" data-rn="${round.roundNum}">
        <summary class="ptool-line sw-inbox-row-header">
-         <span class="ptool-icon">📨</span>
+         <span class="ptool-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:1em;height:1em"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg></span>
          <span class="ptool-text">Received <b>${count}</b> async sub-agent ${word}</span>
          ${idsLabel}
          <span class="ptool-badge ptool-badge-info">injected → context</span>
@@ -617,6 +707,431 @@ function _renderMemoryBlock(round, svg, q, compactionLabelHtml, rootPill, badgeH
      </details>`;
 }
 
+/* ★ Project-brain / conversation-meta block — a collapsible card that renders
+   the tool's full prose output (board listing, charter text, conversation
+   digest, peer status) as Markdown. These tools return their real payload in
+   `round.toolContent`; the previous generic renderer showed only a name +
+   badge, so the user saw NOTHING of the content. This block surfaces it.
+
+   Header: family SVG icon + label + a source chip (Board / Charter /
+   Conversations / Peer) + the action badge (read/post/…). Body: the full
+   `toolContent` rendered as Markdown, falling back to the meta snippet when
+   toolContent hasn't landed yet (e.g. mid-stream before tool_complete). */
+/* ★ Per-tool DISPLAY metadata for the collapsed conv-meta header. The backend
+   display string (`round.query`) is an English, LLM-oriented label ("Live peer
+   status", "Read the project board"); on a non-English UI it reads as raw
+   jargon, and — the user's core complaint — it never says WHY the tool ran or
+   WHAT the result means. `_convMetaHeadLabel` returns a localized title and
+   `_convMetaPurpose` a one-line plain-language caption explaining the tool's
+   role in the shared "conversations-as-a-team" coordination surface (the
+   Project Brain). Both are i18n keys with an English fallback for the jsdom
+   harness; unknown tools fall back to the raw display string. */
+function _convMetaHeadLabel(round, tFn) {
+  const _t = (typeof tFn === "function") ? tFn : (k, d) => d;
+  const tn = round.toolName || "";
+  const raw = round.query || tn;
+  const M = {
+    project_board_read: ["brainHead.boardRead", "Checked the team board"],
+    project_charter_read: ["brainHead.charterRead", "Read the project charter"],
+    project_charter_propose: ["brainHead.charterPropose", "Proposed a charter decision"],
+    project_peer_status: ["brainHead.peerStatus", "Checked who else is working now"],
+    project_feed_read: ["brainHead.feedRead", "Reviewed recent team activity"],
+    project_message: ["brainHead.message", "Sent a note to another conversation"],
+    project_intervene: ["brainHead.intervene", "Flagged an overlap to another conversation"],
+    list_conversations: ["brainHead.listConvs", "Searched past conversations"],
+    get_conversation: ["brainHead.getConv", "Opened a past conversation"],
+  };
+  if (tn.startsWith("project_board_") && !M[tn]) {
+    return _t("brainHead.boardMutate", "Updated the team board");
+  }
+  const entry = M[tn];
+  return entry ? _t(entry[0], entry[1]) : raw;
+}
+/* One-line "why this ran / what it means" caption. Keyed on tool name; empty
+   string ⇒ no caption row (the structured card body already speaks for itself). */
+function _convMetaPurpose(round, tFn) {
+  const _t = (typeof tFn === "function") ? tFn : (k, d) => d;
+  const tn = round.toolName || "";
+  const P = {
+    project_peer_status: ["brainWhy.peerStatus",
+      "Sibling conversations of this project that are running right now — used to avoid duplicating work already in progress."],
+    project_board_read: ["brainWhy.boardRead",
+      "The shared to-do board across all conversations of this project — who is doing what, so work isn't duplicated."],
+    project_feed_read: ["brainWhy.feedRead",
+      "A recent timeline of what other conversations of this project have been doing."],
+    project_charter_read: ["brainWhy.charterRead",
+      "The project's shared goal and committed decisions that every conversation aligns to."],
+    project_charter_propose: ["brainWhy.charterPropose",
+      "Proposes a decision for the human to commit as shared project-wide intent — advisory until approved."],
+    project_message: ["brainWhy.message",
+      "An advisory note to a sibling conversation, delivered on its next turn — it never interrupts a running turn."],
+    project_intervene: ["brainWhy.intervene",
+      "Nudges a sibling conversation to re-check the board (advisory); a hard stop needs explicit human approval."],
+  };
+  if (tn.startsWith("project_board_") && !P[tn]) {
+    return _t("brainWhy.boardMutate",
+      "Updates the shared to-do board so sibling conversations see this claim / change.");
+  }
+  const entry = P[tn];
+  return entry ? _t(entry[0], entry[1]) : "";
+}
+/* ── Structured per-tool renderers (Phase 3) ──────────────────────────
+   Each renders off the STRUCTURED meta the backend attaches (boardSnapshot /
+   boardTransition / peerStatus / charterProposal) — NOT re-parsed prose. They
+   return an inner-HTML string (the body of the convmeta card), or '' to fall
+   back to the generic Markdown dump. */
+
+/** Mini-kanban for project_board_read: counts + per-lane epic titles. */
+function _renderBoardSnapshot(snap) {
+  if (!snap) return "";
+  const _t = (typeof t === "function") ? t : (k, d) => d;
+  const lanes = snap.lanes || {};
+  const laneDef = [
+    ["open", _t("projectBrain.laneOpen", "Open")],
+    ["claimed", _t("projectBrain.laneClaimed", "In progress")],
+    ["deferred", _t("projectBrain.laneDeferred", "Parked (awaiting decision)")],
+    ["done", _t("projectBrain.laneDone", "Done")],
+  ];
+  let html = '<div class="ptool-board-mini">';
+  for (const [key, label] of laneDef) {
+    const epics = lanes[key] || [];
+    const count = (snap[key] != null) ? snap[key] : epics.length;
+    let cards = epics.map(function (e) {
+      const owner = e.owner
+        ? `<span class="ptool-board-mini-owner">${escapeHtml(String(e.owner).slice(0, 8))}</span>` : "";
+      const disp = e.dispatched
+        ? `<span class="ptool-board-mini-auto" title="${escapeHtml(_t("projectBrain.dispatchedTitle", "Started autonomously by the project brain"))}">${(typeof Icon === "function") ? Icon("rocket", 10) : ""}</span>` : "";
+      return `<div class="ptool-board-mini-card ptool-board-mini-${escapeHtml(key)}"><span class="ptool-board-mini-title">${escapeHtml(e.title || e.id || "")}</span>${owner}${disp}</div>`;
+    }).join("");
+    if (!cards) cards = '<div class="ptool-board-mini-empty">—</div>';
+    html += `<div class="ptool-board-mini-lane"><div class="ptool-board-mini-head">${escapeHtml(label)} <span class="ptool-board-mini-count">${count}</span></div>${cards}</div>`;
+  }
+  html += "</div>";
+  return html;
+}
+
+/** Explicit transition line for a board mutation (verb + epic + new status). */
+function _renderBoardTransition(tr) {
+  if (!tr || !tr.verb) return "";
+  const _t = (typeof t === "function") ? t : (k, d) => d;
+  const verbLabel = _t("projectBrain.boardVerb." + tr.verb, tr.verb);
+  const title = tr.title || tr.taskId || "";
+  const statusLabel = tr.status
+    ? `<span class="ptool-board-tr-status ptool-board-mini-${escapeHtml(tr.status)}">${escapeHtml(_t("projectBrain.lane" + tr.status.charAt(0).toUpperCase() + tr.status.slice(1), tr.status))}</span>`
+    : "";
+  return `<div class="ptool-board-transition">` +
+    `<span class="ptool-board-tr-verb">${escapeHtml(verbLabel)}</span>` +
+    `<span class="ptool-board-tr-title">${escapeHtml(title)}</span>` +
+    (tr.status ? `<span class="ptool-board-tr-arrow">${(typeof Icon === "function") ? Icon("chevronDown", 12) : "→"}</span>${statusLabel}` : "") +
+    `</div>`;
+}
+
+/* Localize the small known set of backend statusLabel tokens ("generating" /
+   "working" / "idle" and "editing X" / "working (phase)") so the peer card
+   reads in the UI language; unknown labels pass through verbatim. */
+function _localizePeerStatusLabel(sl, tFn) {
+  const _t = (typeof tFn === "function") ? tFn : (k, d) => d;
+  const s = String(sl || "").trim();
+  if (!s) return "";
+  if (s === "generating") return _t("projectBrain.stGenerating", "generating");
+  if (s === "working") return _t("projectBrain.stWorking", "working");
+  if (s === "idle") return _t("projectBrain.stIdle", "idle");
+  let m;
+  if ((m = s.match(/^editing\s+(.+)$/)))
+    return _t("projectBrain.peerEditing", "editing {file}").replace("{file}", m[1]);
+  if ((m = s.match(/^working\s+\((.+)\)$/)))
+    return _t("projectBrain.stWorkingPhase", "working ({phase})").replace("{phase}", m[1]);
+  return s;
+}
+
+/** Live peer cards for project_peer_status: conv id + status + round + epic. */
+function _renderPeerStatus(ps) {
+  if (!ps) return "";
+  const _t = (typeof t === "function") ? t : (k, d) => d;
+  const peers = ps.peers || [];
+  if (!peers.length) {
+    return `<div class="ptool-peer-empty">${escapeHtml(_t("projectBrain.peerNone", "No active peers right now."))}</div>`;
+  }
+  let html = '<div class="ptool-peer-list">';
+  for (const p of peers) {
+    const who = p.title || ("conv " + String(p.convId || "").slice(0, 8));
+    const sub = p.agentId ? `<span class="ptool-peer-agent">${escapeHtml("sub-agent " + p.agentId)}</span>` : "";
+    const bits = [];
+    if (p.statusLabel) bits.push(escapeHtml(_localizePeerStatusLabel(p.statusLabel, _t)));
+    if (p.round) bits.push(_t("projectBrain.peerRound", "round {n}").replace("{n}", p.round));
+    if (p.currentFile) bits.push(escapeHtml(p.currentFile));
+    const epic = p.claimedEpic
+      ? `<div class="ptool-peer-epic">${(typeof Icon === "function") ? Icon("package", 11) : ""}<span>${escapeHtml(p.claimedEpic)}</span></div>` : "";
+    html += `<div class="ptool-peer-card">` +
+      `<div class="ptool-peer-who">${(typeof Icon === "function") ? Icon("messageCircle", 12) : ""}<span>${escapeHtml(who)}</span>${sub}</div>` +
+      (bits.length ? `<div class="ptool-peer-detail">${bits.join(" · ")}</div>` : "") +
+      epic + `</div>`;
+  }
+  html += "</div>";
+  return html;
+}
+
+/** Charter proposal card: the proposed text + a "pending human review" affordance. */
+function _renderCharterProposal(cp) {
+  if (!cp || !cp.proposal) return "";
+  const _t = (typeof t === "function") ? t : (k, d) => d;
+  const titleLine = cp.title
+    ? `<div class="ptool-charter-prop-title">${escapeHtml(cp.title)}</div>` : "";
+  return `<div class="ptool-charter-proposal">` +
+    titleLine +
+    `<div class="ptool-charter-prop-text">${escapeHtml(cp.proposal)}</div>` +
+    `<div class="ptool-charter-prop-pending">` +
+    `${(typeof Icon === "function") ? Icon("hourglass", 11) : ""}` +
+    `<span>${escapeHtml(_t("projectBrain.proposalPending", "Awaiting human review — commit or reject in the Project Brain panel"))}</span>` +
+    `</div></div>`;
+}
+
+/* Localize the inspect_image ops chip. The backend (lib/file_reader.py) builds
+   an English, LLM-facing op string like "cropped, zoom 2×" / "rotated 90°,
+   fit to 4000px" / "full frame". Here we translate the human-facing chip at
+   render time (keeping the dynamic numbers). `mode === "title"` returns the
+   tooltip label instead of the chip body. */
+function _localizeInspectOps(tFn, ops, mode) {
+  const _t = (typeof tFn === "function") ? tFn : (k, d) => d;
+  if (mode === "title") return _t("inspect.opsTitle", "Applied transform");
+  const raw = String(ops || "").trim();
+  if (!raw) return "";
+  if (raw === "full frame") return _t("inspect.fullFrame", "full frame");
+  return raw.split(",").map((seg) => {
+    const s = seg.trim();
+    if (s === "cropped") return _t("inspect.cropped", "cropped");
+    if (s === "grid overlay") return _t("inspect.gridOverlay", "grid overlay");
+    let m;
+    if ((m = s.match(/^rotated\s+(.+)$/)))
+      return _t("inspect.rotated", "rotated {deg}").replace("{deg}", m[1]);
+    if ((m = s.match(/^zoom\s+(.+)$/)))
+      return _t("inspect.zoom", "zoom {factor}").replace("{factor}", m[1]);
+    if ((m = s.match(/^fit to\s+(.+)$/)))
+      return _t("inspect.fitTo", "fit to {size}").replace("{size}", m[1]);
+    return s;  // unknown token — pass through verbatim
+  }).join(_t("inspect.opsSep", ", "));
+}
+
+/* Relative-time formatter for a ms epoch (mirrors project-brain.js `_relTime`
+   so the transcript feed reads the same as the panel). */
+function _convMetaRelTime(ts) {
+  const _t = (typeof t === "function") ? t : (k, d) => d;
+  const n = Number(ts) || 0;
+  if (!n) return "";
+  const secs = Math.max(0, Math.floor((Date.now() - n) / 1000));
+  const mins = Math.floor(secs / 60);
+  if (mins < 1) return _t("projectBrain.justNow", "just now");
+  if (mins < 60) return _t("projectBrain.minutesAgo", "{n}m ago").replace("{n}", mins);
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return _t("projectBrain.hoursAgo", "{n}h ago").replace("{n}", hrs);
+  const days = Math.floor(hrs / 24);
+  return _t("projectBrain.daysAgo", "{n}d ago").replace("{n}", days);
+}
+
+/** Chronological activity list for project_feed_read (kind chip + who + summary
+    + relative time). Reuses the feed-kind i18n labels the panel uses. */
+function _renderFeedActivity(fa) {
+  if (!fa) return "";
+  const _t = (typeof t === "function") ? t : (k, d) => d;
+  const events = fa.events || [];
+  if (!events.length) {
+    return `<div class="ptool-feed-empty">${escapeHtml(_t("projectBrain.activityEmpty", "No activity yet"))}</div>`;
+  }
+  let html = '<div class="ptool-feed-list">';
+  for (const ev of events) {
+    const kind = ev.kind || "note";
+    const kindLabel = _t("projectBrain.kind." + kind, kind);
+    const who = ev.title || (ev.convId ? "conv " + String(ev.convId).slice(0, 8) : "");
+    const mine = ev.mine
+      ? `<span class="ptool-feed-mine">${escapeHtml(_t("projectBrain.thisConv", "this conversation"))}</span>` : "";
+    const when = _convMetaRelTime(ev.ts);
+    const summary = (ev.summary || "").trim();
+    html += `<div class="ptool-feed-row ptool-feed-${escapeHtml(kind)}">` +
+      `<span class="ptool-feed-kind">${escapeHtml(kindLabel)}</span>` +
+      `<div class="ptool-feed-body">` +
+      `<div class="ptool-feed-head">` +
+      (who ? `<span class="ptool-feed-who">${escapeHtml(who)}</span>` : "") + mine +
+      (when ? `<span class="ptool-feed-when">${escapeHtml(when)}</span>` : "") +
+      `</div>` +
+      (summary ? `<div class="ptool-feed-summary">${escapeHtml(summary)}</div>` : "") +
+      `</div></div>`;
+  }
+  html += "</div>";
+  return html;
+}
+
+/** Delivery card for project_message / project_intervene: the target conv, the
+    message body, and a delivery-outcome chip (delivered / rate-limited / denied). */
+function _renderPeerDelivery(pd) {
+  if (!pd || !pd.toConv) return "";
+  const _t = (typeof t === "function") ? t : (k, d) => d;
+  const isIntervene = pd.tool === "project_intervene";
+  const verb = isIntervene
+    ? (pd.hardAbort ? _t("projectBrain.pdHardIntervene", "Hard intervention") : _t("projectBrain.pdIntervene", "Advisory intervention"))
+    : _t("projectBrain.pdMessage", "Message");
+  const outcomeLabel = _t("projectBrain.pdOutcome." + (pd.outcome || "delivered"),
+    pd.outcome || "delivered");
+  const arrow = (typeof Icon === "function") ? Icon("chevronDown", 12) : "→";
+  const body = (pd.text || "").trim();
+  return `<div class="ptool-peermsg ptool-peermsg-${escapeHtml(pd.outcome || "delivered")}">` +
+    `<div class="ptool-peermsg-head">` +
+    `<span class="ptool-peermsg-verb">${escapeHtml(verb)}</span>` +
+    `<span class="ptool-peermsg-arrow">${arrow}</span>` +
+    `<span class="ptool-peermsg-target">conv ${escapeHtml(String(pd.toConv).slice(0, 8))}</span>` +
+    `<span class="ptool-peermsg-outcome ptool-peermsg-outcome-${escapeHtml(pd.outcome || "delivered")}">${escapeHtml(outcomeLabel)}</span>` +
+    `</div>` +
+    (body ? `<div class="ptool-peermsg-text">${escapeHtml(body)}</div>` : "") +
+    `</div>`;
+}
+
+/* ★ Default-open policy for conv-meta cards. ROUTINE COORDINATION READS
+   (peer_status / board_read / feed_read / charter_read / list_conversations /
+   get_conversation) the agent fires constantly and that usually need no user
+   action are default-COLLAPSED — the localized header + one-line purpose
+   caption stay in the summary, the multi-row body tucks away until clicked, so
+   the transcript isn't dominated by low-signal noise. MUTATING / DECISION cards
+   (project_message / project_intervene / project_charter_propose / board
+   mutations) represent an action the agent TOOK and stay OPEN. */
+const _CONV_META_ROUTINE_READS = new Set([
+  "project_peer_status", "project_board_read", "project_feed_read",
+  "project_charter_read", "list_conversations", "get_conversation",
+]);
+function _convMetaDefaultOpen(round) {
+  const tn = round.toolName || "";
+  // Board MUTATIONS (post/claim/complete/block/defer) are actions → open.
+  if (tn.startsWith("project_board_") && tn !== "project_board_read") return true;
+  return !_CONV_META_ROUTINE_READS.has(tn);
+}
+
+/* At-a-glance count chip for a COLLAPSED routine-read summary, so the user sees
+   "3 peers active" / "5 open" without expanding. Empty ⇒ no chip. Driven off
+   the same structured meta the body renders (never re-parsed prose). */
+function _convMetaSummaryChip(round, meta, tFn) {
+  const _t = (typeof tFn === "function") ? tFn : (k, d) => d;
+  const tn = round.toolName || "";
+  let n = null, label = "";
+  if (tn === "project_peer_status" && meta.peerStatus) {
+    n = (meta.peerStatus.peers || []).length;
+    label = _t("brainChip.peers", "{n} active").replace("{n}", n);
+  } else if (tn === "project_board_read" && meta.boardSnapshot) {
+    const snap = meta.boardSnapshot;
+    n = (snap.open != null) ? snap.open : (snap.lanes && snap.lanes.open ? snap.lanes.open.length : 0);
+    label = _t("brainChip.openEpics", "{n} open").replace("{n}", n);
+  } else if (tn === "project_feed_read" && meta.feedActivity) {
+    n = (meta.feedActivity.events || []).length;
+    label = _t("brainChip.events", "{n} events").replace("{n}", n);
+  } else {
+    return "";
+  }
+  if (n == null) return "";
+  return `<span class="ptool-convmeta-count">${escapeHtml(label)}</span>`;
+}
+
+/** Pick the structured body for a conv-meta round, or '' to fall back. */
+function _structuredConvMetaBody(round, meta) {
+  if (meta.boardSnapshot) return _renderBoardSnapshot(meta.boardSnapshot);
+  if (meta.boardTransition) return _renderBoardTransition(meta.boardTransition);
+  if (meta.peerStatus) return _renderPeerStatus(meta.peerStatus);
+  if (meta.feedActivity) return _renderFeedActivity(meta.feedActivity);
+  if (meta.peerDelivery) return _renderPeerDelivery(meta.peerDelivery);
+  if (meta.charterProposal) return _renderCharterProposal(meta.charterProposal);
+  return "";
+}
+
+/* Localized source chip label (Board / Charter / Conversations / Peer). The
+   backend `meta.source` is an English family tag; translate it for the chip. */
+const _CONV_META_SOURCE_I18N = {
+  Board: ["brainSrc.board", "Team board"],
+  Charter: ["brainSrc.charter", "Charter"],
+  Conversations: ["brainSrc.conversations", "Conversations"],
+  ConvRef: ["brainSrc.conversations", "Conversations"],
+  Peer: ["brainSrc.peer", "Team"],
+};
+
+function _renderConvMetaBlock(round, svg, q, badgeHtml) {
+  const meta = (round.results || [])[0] || {};
+  const _t = (typeof t === "function") ? t : (k, d) => d;
+  const source = meta.source || "";
+  const srcEntry = _CONV_META_SOURCE_I18N[source];
+  const sourceLabel = srcEntry ? _t(srcEntry[0], srcEntry[1]) : (source || "");
+  const sourceChip = sourceLabel
+    ? `<span class="ptool-convmeta-src">${escapeHtml(sourceLabel)}</span>`
+    : "";
+  // ★ Localized, plain-language header + a "why this ran / what it means"
+  //   caption. Replaces the raw English backend display string (round.query)
+  //   that the user found meaningless.
+  const headLabel = _convMetaHeadLabel(round, _t);
+  const purpose = _convMetaPurpose(round, _t);
+  const purposeHtml = purpose
+    ? `<div class="ptool-convmeta-why">${escapeHtml(purpose)}</div>`
+    : "";
+  // ★ Structured renderer first (driven off backend meta, not re-parsed prose).
+  //   When a structured body is available it replaces the raw Markdown dump;
+  //   otherwise we fall back to the full toolContent (charter_read text,
+  //   conversation digests, peer message/intervene results, etc.).
+  const structured = _structuredConvMetaBody(round, meta);
+  let bodyHtml;
+  if (structured) {
+    bodyHtml = `<div class="ptool-convmeta-structured">${structured}</div>`;
+  } else {
+    // Full content preferred; snippet is the mid-stream / pre-complete fallback.
+    const content = (typeof round.toolContent === "string" && round.toolContent.trim())
+      ? round.toolContent
+      : (typeof meta.snippet === "string" ? meta.snippet : "");
+    bodyHtml = content.trim()
+      ? `<div class="ptool-convmeta-content md-content">${renderMarkdown(content)}</div>`
+      : `<div class="ptool-convmeta-empty">${escapeHtml(_t("tool.noContent", "No content returned."))}</div>`;
+  }
+  // ★ Default-collapse routine coordination READS (low-signal, fired
+  //   constantly); keep MUTATING / DECISION cards open (they show an action
+  //   the agent took). A collapsed read still carries an at-a-glance count
+  //   chip in its summary ("3 peers active" / "5 open") so the user gets the
+  //   signal without expanding.
+  const isOpen = _convMetaDefaultOpen(round);
+  const openAttr = isOpen ? " open" : "";
+  const countChip = isOpen ? "" : _convMetaSummaryChip(round, meta, _t);
+  return `<details class="ptool-convmeta-block"${openAttr} data-rn="${round.roundNum}">
+       <summary class="ptool-line ptool-convmeta-header">
+         <span class="ptool-icon">${svg}</span>
+         <span class="ptool-text">${escapeHtml(headLabel)}</span>
+         ${countChip}
+         ${sourceChip}
+         ${badgeHtml}
+       </summary>
+       <div class="ptool-convmeta-body">${purposeHtml}${bodyHtml}</div>
+     </details>`;
+}
+
+/* ── MCP resource linkifier ───────────────────────────────────────────
+ * The backend attaches `round._mcpLinks` = {label → href} for any MCP
+ * tool call whose resource resolves to a URL (e.g. an Overleaf project).
+ * The label is the EXACT substring `_mcp_arg_suffix` rendered on the
+ * title line — a human-readable project name when cached, else the
+ * `6a1e7…a668` short-id. We wrap that substring in an <a> so users can
+ * jump straight to the project instead of staring at an unreadable id.
+ *
+ * `text` is ALREADY HTML-escaped; labels are escaped the same way before
+ * matching so a name with special chars still lines up. We only replace
+ * the first occurrence and skip if the label is empty or already inside
+ * an anchor (defensive). */
+function _linkifyMcpLabels(text, round) {
+  const links = round && round._mcpLinks;
+  if (!links || typeof links !== "object" || !text) return text;
+  let out = text;
+  for (const label of Object.keys(links)) {
+    const href = links[label];
+    if (!label || !href) continue;
+    // Only allow http(s) hrefs — never inject javascript:/data: URLs.
+    if (!/^https?:\/\//i.test(href)) continue;
+    const escLabel = escapeHtml(label);
+    const idx = out.indexOf(escLabel);
+    if (idx === -1) continue;
+    const anchor = `<a class="ptool-mcp-link" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(href)}">${escLabel}</a>`;
+    out = out.slice(0, idx) + anchor + out.slice(idx + escLabel.length);
+  }
+  return out;
+}
+
 function _renderUnifiedToolLine(round, isSearching) {
   const svg = _getToolSvg(round);
   const td = _getToolDisplay(round);
@@ -624,7 +1139,7 @@ function _renderUnifiedToolLine(round, isSearching) {
    * displays render one item per line so users can see every candidate
    * without elision. escapeHtml first (HTML-safe), THEN substitute
    * \n → <br> so the browser actually breaks the line. */
-  const q = escapeHtml(round.query || "").replace(/\n/g, '<br>');
+  const q = _linkifyMcpLabels(escapeHtml(round.query || "").replace(/\n/g, '<br>'), round);
   const results = round.results || [];
   const meta = results[0] || {};
   const rootPill = _renderToolRootPill(round);
@@ -641,6 +1156,15 @@ function _renderUnifiedToolLine(round, isSearching) {
   //   model was handed. Collapsible: expands to the raw payloads.
   if (round._inboxInject) {
     return _renderInboxInjectRow(round);
+  }
+
+  // ★ Hallucinated / rejected tool — the model invented a tool that does not
+  //   exist this turn (e.g. `search_web` when only `web_search` is real).
+  //   The backend classified + rejected it (status:'rejected' + _rejected),
+  //   so it NEVER executed. Render it distinctly so the user can tell a fake
+  //   tool call apart from a real one that errored.
+  if (round.status === "rejected" && (round._rejected || (meta && meta.rejected))) {
+    return _renderRejectedToolLine(round, svg);
   }
 
   // ★ Human Guidance — LLM is asking the user a question
@@ -686,7 +1210,7 @@ function _renderUnifiedToolLine(round, isSearching) {
         const rShow = rLines.slice(0, maxPreviewLines);
         let diffLines = "";
         sShow.forEach((l) => {
-          diffLines += `<div class="ptool-diff-line ptool-diff-del"><span class="ptool-diff-sign">−</span><span class="ptool-diff-code">${escapeHtml(l)}</span></div>`;
+          diffLines += `<div class="ptool-diff-line ptool-diff-del"><span class="ptool-diff-sign">-</span><span class="ptool-diff-code">${escapeHtml(l)}</span></div>`;
         });
         if (sLines.length > maxPreviewLines)
           diffLines += `<div class="ptool-diff-line ptool-diff-del ptool-diff-ellipsis"><span class="ptool-diff-sign"> </span><span class="ptool-diff-code">… ${sLines.length - maxPreviewLines} more lines</span></div>`;
@@ -719,7 +1243,7 @@ function _renderUnifiedToolLine(round, isSearching) {
       const replaceShow = replaceLines.slice(0, maxLines);
       let diffLines = "";
       searchShow.forEach((l) => {
-        diffLines += `<div class="ptool-diff-line ptool-diff-del"><span class="ptool-diff-sign">−</span><span class="ptool-diff-code">${escapeHtml(l)}</span></div>`;
+        diffLines += `<div class="ptool-diff-line ptool-diff-del"><span class="ptool-diff-sign">-</span><span class="ptool-diff-code">${escapeHtml(l)}</span></div>`;
       });
       if (totalSearchLines > maxLines)
         diffLines += `<div class="ptool-diff-line ptool-diff-del ptool-diff-ellipsis"><span class="ptool-diff-sign"> </span><span class="ptool-diff-code">… ${totalSearchLines - maxLines} more lines (${totalSearchLines} lines · ${totalSearchChars.toLocaleString()} chars total)</span></div>`;
@@ -733,7 +1257,10 @@ function _renderUnifiedToolLine(round, isSearching) {
     } else if (ameta.command != null) {
       // run_command — show command preview
       const cmdText = escapeHtml(ameta.command || "");
-      detailHtml = `<div class="ptool-diff-preview"><pre class="ptool-cmd-code" style="margin:0;padding:8px 12px;font-size:12px;"><code>$ ${cmdText}</code></pre></div>`;
+      const cmdDescHtml = ameta.description
+        ? `<div class="ptool-cmd-desc">${escapeHtml(ameta.description)}</div>`
+        : "";
+      detailHtml = `<div class="ptool-diff-preview">${cmdDescHtml}<pre class="ptool-cmd-code" style="margin:0;padding:8px 12px;font-size:12px;"><code>$ ${cmdText}</code></pre></div>`;
     } else if (ameta.contentPreview) {
       const previewLines = (ameta.contentPreview || "")
         .split("\n")
@@ -776,7 +1303,7 @@ function _renderUnifiedToolLine(round, isSearching) {
       _recoverTimerPolls(round);
     }
     return `<div class="ptool-line ptool-active">
-         <span class="ptool-icon">⏱️</span>
+         <span class="ptool-icon">${Icon('timer')}</span>
          <span class="ptool-text">${q || "Timer Watcher"}</span>
          <span class="ptool-badge ptool-badge-warn">waiting for first poll…</span>
          <span class="ptool-spinner"></span>
@@ -815,12 +1342,37 @@ function _renderUnifiedToolLine(round, isSearching) {
        </div>`;
   }
 
+  // ★ Interrupted — the task was aborted (Stop) while this tool round was
+  //   still in-flight. The backend dangling-round sweep
+  //   (orchestrator._finalize_dangling_tool_rounds) stamps status='aborted'
+  //   on rounds the abort short-circuit left in 'searching'. Render a static
+  //   "interrupted" affordance — NO spinner — so it never shows "Running…"
+  //   live or after reload. Real results (if any) fall through to the normal
+  //   done renderers below, since the sweep only marks result-less rounds.
+  if (round.status === "aborted" && !(round.results && round.results.length && !meta.interrupted)) {
+    const cmdText = escapeHtml(round.query || meta.title || td.label || round.toolName || "");
+    return `<div class="ptool-line ptool-interrupted" data-rn="${round.roundNum}">
+         <span class="ptool-icon">${svg}</span>
+         ${rootPill}
+         <span class="ptool-text">${cmdText}</span>
+         <span class="ptool-badge ptool-badge-interrupted">interrupted</span>
+       </div>`;
+  }
+
   if (isSearching) {
     // ★ run_command / code_exec: show running state with full command.
     //   If streaming output has started arriving via tool_progress events,
     //   render it live inside the block so the user can follow along.
     if (round.toolName === "run_command" || round.toolName === "code_exec") {
       const cmdText = escapeHtml(round.query || "");
+      let _cmdDesc = "";
+      try {
+        const _a = typeof round.toolArgs === "string" ? JSON.parse(round.toolArgs) : (round.toolArgs || {});
+        _cmdDesc = (_a && _a.description) || "";
+      } catch (_e) { /* malformed toolArgs — skip description */ }
+      const descHtml = _cmdDesc
+        ? `<div class="ptool-cmd-desc">${escapeHtml(_cmdDesc)}</div>`
+        : "";
       const partial = typeof round._partialOutput === "string" ? round._partialOutput : "";
       let liveOutHtml = "";
       if (partial) {
@@ -839,6 +1391,7 @@ function _renderUnifiedToolLine(round, isSearching) {
              <span class="ptool-cmd-label">Running...</span>
              <span class="ptool-spinner"></span>
            </div>
+           ${descHtml}
            <pre class="ptool-cmd-code"><code>$ ${cmdText}</code></pre>
            ${liveOutHtml}
          </div>`;
@@ -863,22 +1416,40 @@ function _renderUnifiedToolLine(round, isSearching) {
   // ★ run_command / code_exec: render as inline terminal block with collapsible output
   if ((round.toolName === "run_command" || round.toolName === "code_exec") && (meta.command != null || meta.output != null)) {
     const cmd = escapeHtml(meta.command || round.query || "");
+    const descHtml = meta.description
+      ? `<div class="ptool-cmd-desc">${escapeHtml(meta.description)}</div>`
+      : "";
     const output = meta.output || "";
     const exitCode = meta.exitCode ?? "?";
     const timedOut = meta.timedOut || false;
-    const isOk = exitCode === "0" || exitCode === 0;
-    const statusCls = timedOut
-      ? "ptool-cmd-timeout"
-      : isOk
-        ? "ptool-cmd-ok"
-        : "ptool-cmd-err";
-    const statusLabel = timedOut
-      ? "timeout"
-      : isOk
-        ? "✓ done"
-        : `✗ exit ${exitCode}`;
+    // ★ "not run": the command was refused/blocked BEFORE it executed (read-only
+    //   root, dangerous pattern, no project, pre-hook block, abort, start error).
+    //   There is no real exit code — show the cause, never the cryptic "exit ?".
+    const notRun = meta.notRun === true || exitCode === "not-run";
+    const isOk = !notRun && (exitCode === "0" || exitCode === 0);
+    const statusCls = notRun
+      ? "ptool-cmd-notrun"
+      : timedOut
+        ? "ptool-cmd-timeout"
+        : isOk
+          ? "ptool-cmd-ok"
+          : "ptool-cmd-err";
+    const notRunBadge = meta.badge && meta.badge !== `exit ${exitCode}`
+      ? meta.badge : "not run";
+    const statusLabel = notRun
+      ? `⊘ ${escapeHtml(notRunBadge)}`
+      : timedOut
+        ? "timeout"
+        : isOk
+          ? "✓ done"
+          : `✗ exit ${exitCode}`;
+    // For a not-run command the reason IS the message — surface it inline
+    // (not hidden behind a collapse toggle) so the user sees why immediately.
+    const reason = notRun ? (meta.reason || output || "") : "";
     let outputHtml = "";
-    if (output) {
+    if (notRun && reason) {
+      outputHtml = `<div class="ptool-cmd-reason">${escapeHtml(reason)}</div>`;
+    } else if (output) {
       outputHtml = `<div class="ptool-cmd-output-wrap">
            <div class="ptool-cmd-toggle" onclick="event.stopPropagation();var w=this.parentElement;w.classList.toggle('expanded');this.textContent=w.classList.contains('expanded')?'▾ Collapse':'▸ Show output';">▸ Show output</div>
            <pre class="ptool-cmd-output"><code>${escapeHtml(output)}</code></pre>
@@ -891,7 +1462,50 @@ function _renderUnifiedToolLine(round, isSearching) {
            <span class="ptool-cmd-label">${round.toolName === "code_exec" ? "Code Execution" : "Command"}</span>
            <span class="ptool-cmd-status">${statusLabel}</span>
          </div>
+         ${descHtml}
          <pre class="ptool-cmd-code"><code>$ ${cmd}</code></pre>
+         ${outputHtml}
+       </div>`;
+  }
+
+  // ★ browser_execute_js — render as an inline code block (JS in, result out),
+  //   mirroring the run_command terminal block. A cramped one-line "12165686:
+  //   (() => {…" row is unreadable; show the full snippet + collapsible result.
+  if (round.toolName === "browser_execute_js") {
+    let jsCode = "";
+    let jsDesc = "";
+    try {
+      const a = typeof round.toolArgs === "string" ? JSON.parse(round.toolArgs) : (round.toolArgs || {});
+      jsCode = (a && a.code) || "";
+      jsDesc = (a && a.description) || "";
+    } catch (_e) { /* malformed toolArgs */ }
+    const isErr = meta.badge === "error";
+    const statusLabel = isErr ? "✗ error" : "✓ ok";
+    const statusCls = isErr ? "ptool-cmd-err" : "ptool-cmd-ok";
+    // The result returned to the model lives in round.toolContent.
+    const out = typeof round.toolContent === "string" ? round.toolContent : "";
+    let outputHtml = "";
+    if (out) {
+      outputHtml = `<div class="ptool-cmd-output-wrap">
+           <div class="ptool-cmd-toggle" onclick="event.stopPropagation();var w=this.parentElement;w.classList.toggle('expanded');this.textContent=w.classList.contains('expanded')?'▾ Collapse':'▸ Show result';">▸ Show result</div>
+           <pre class="ptool-cmd-output"><code>${escapeHtml(out)}</code></pre>
+         </div>`;
+    }
+    const descHtml = jsDesc
+      ? `<div class="ptool-cmd-desc">${escapeHtml(jsDesc)}</div>`
+      : "";
+    const codeHtml = jsCode
+      ? `<pre class="ptool-cmd-code"><code>${escapeHtml(jsCode)}</code></pre>`
+      : "";
+    return `<div class="ptool-cmd-block ptool-cmd-js ${statusCls}" data-rn="${round.roundNum}">
+         <div class="ptool-cmd-header">
+           <span class="ptool-cmd-icon">${svg}</span>
+           ${rootPill}
+           <span class="ptool-cmd-label">${escapeHtml(round.query || "Execute JS")}</span>
+           <span class="ptool-cmd-status">${statusLabel}</span>
+         </div>
+         ${descHtml}
+         ${codeHtml}
          ${outputHtml}
        </div>`;
   }
@@ -960,7 +1574,7 @@ function _renderUnifiedToolLine(round, isSearching) {
         const group = _byQuery.get(key);
         const groupItems = group.map(_renderResultItem).join("");
         const header = key
-          ? `<div class="search-query-group-header"><span class="search-query-group-icon">🔍</span><span class="search-query-group-q">${escapeHtml(key)}</span><span class="search-query-group-count">${group.length}</span></div>`
+          ? `<div class="search-query-group-header"><span class="search-query-group-icon">${Icon('search', 13)}</span><span class="search-query-group-q">${escapeHtml(key)}</span><span class="search-query-group-count">${group.length}</span></div>`
           : "";
         return `<div class="search-query-group">${header}${groupItems}</div>`;
       }).join("");
@@ -1054,28 +1668,42 @@ function _renderUnifiedToolLine(round, isSearching) {
        </div>`;
   }
 
-  // ★ read_files image(s): render inline thumbnails when the backend
-  //   attached data URIs (meta.imageDataUris). Each descriptor carries a
-  //   full data: URL the browser can render directly.
-  if (round.toolName === "read_files" && Array.isArray(meta.imageDataUris) && meta.imageDataUris.length) {
+  // ★ read_files / inspect_image image(s): render inline thumbnails when the
+  //   backend attached data URIs (meta.imageDataUris). Each descriptor carries
+  //   a full data: URL the browser can render directly. inspect_image is the
+  //   zoom/rotate/crop viewer — it gets a distinct accent + an "ops" chip
+  //   describing the transform (e.g. "crop, 2×").
+  if ((round.toolName === "read_files" || round.toolName === "inspect_image" || round.toolName === "browser_screenshot") &&
+      Array.isArray(meta.imageDataUris) && meta.imageDataUris.length) {
     const imgs = meta.imageDataUris.filter((d) => d && d.uri);
     if (imgs.length) {
-      const cards = imgs.map((d) => {
+      const isInspect = round.toolName === "inspect_image";
+      const multi = imgs.length > 1;
+      const tiles = imgs.map((d) => {
         const cap = escapeHtml(d.filename || d.format || "");
-        return `<div class="imagegen-card">
+        return `<figure class="rf-img-tile">
              <img src="${escapeHtml(d.uri)}" alt="${cap}" loading="lazy"
                   onclick="_openImageFullscreen(this.src)" />
-             ${cap ? `<div class="imagegen-card-footer"><span class="ig-prompt">${cap}</span></div>` : ""}
-           </div>`;
+             ${cap ? `<figcaption class="rf-img-cap" title="${cap}">${cap}</figcaption>` : ""}
+           </figure>`;
       }).join("");
-      return `<div class="ptool-imagegen-block" data-rn="${round.roundNum}">
-           <div class="ptool-line ptool-imagegen-header">
+      // inspect_image: prefer the ops badge (crop/zoom/rotate); read_files
+      // multi: image count; else fall back to the generic meta badge.
+      const opsChip = isInspect && meta.inspectOps
+        ? `<span class="ptool-badge rf-inspect-chip" title="${escapeHtml(_localizeInspectOps(t, meta.inspectOps, "title"))}">${escapeHtml(_localizeInspectOps(t, meta.inspectOps))}</span>`
+        : "";
+      const countBadge = multi
+        ? `<span class="ptool-badge ptool-badge-info">${imgs.length} images</span>`
+        : (!isInspect && meta.badge ? `<span class="ptool-badge ptool-badge-info">${escapeHtml(meta.badge)}</span>` : "");
+      return `<div class="ptool-readimg-block${isInspect ? " ptool-inspectimg-block" : ""}" data-rn="${round.roundNum}">
+           <div class="ptool-line ptool-readimg-header">
              <span class="ptool-icon">${svg}</span>
              <span class="ptool-text">${q}</span>
-             ${meta.badge ? `<span class="ptool-badge ptool-badge-info">${escapeHtml(meta.badge)}</span>` : ""}
+             ${opsChip}
+             ${countBadge}
              ${_tcPreviewBtn(round)}
            </div>
-           ${cards}
+           <div class="rf-img-grid${multi ? " rf-img-grid-multi" : ""}${isInspect ? " rf-img-grid-inspect" : ""}">${tiles}</div>
          </div>`;
     }
   }
@@ -1111,7 +1739,7 @@ function _renderUnifiedToolLine(round, isSearching) {
         ? `<button class="ig-action-btn" onclick="event.stopPropagation();window.open('${escapeHtml(svgUrl)}','_blank')" title="${escapeHtml("Open SVG" + (svgPath ? " — " + svgPath : ""))}">SVG</button>`
         : "";
       const pathBadges = [
-        projPath ? `<span class="ig-path-chip" title="Saved to project: ${escapeHtml(projPath)}"><span class="ig-path-icon">🖼</span>${escapeHtml(projPath)}</span>` : "",
+        projPath ? `<span class="ig-path-chip" title="Saved to project: ${escapeHtml(projPath)}"><span class="ig-path-icon">${Icon('image', 12)}</span>${escapeHtml(projPath)}</span>` : "",
         svgPath ? `<span class="ig-path-chip ig-path-chip-svg" title="SVG saved to project: ${escapeHtml(svgPath)}"><span class="ig-path-icon">⬡</span>${escapeHtml(svgPath)}</span>` : "",
       ].filter(Boolean).join("");
       const pathFooter = pathBadges
@@ -1415,6 +2043,16 @@ function _renderUnifiedToolLine(round, isSearching) {
        </details>`;
   }
 
+  // ★ Project-brain / conversation-meta tools — render their full prose
+  //   output in a collapsible Markdown card instead of the bare generic line
+  //   (which hid all the content). Only when the round has settled (done);
+  //   the in-flight "searching…" state is handled by the generic active
+  //   branch above.
+  if (_isRoundConvMeta(round) && round.status !== "rejected") {
+    const convMetaHtml = _renderConvMetaBlock(round, svg, q, badgeHtml);
+    if (convMetaHtml) return convMetaHtml;
+  }
+
   return `<div class="ptool-line">
        <span class="ptool-icon">${svg}</span>
        ${compactionLabelHtml}
@@ -1452,10 +2090,16 @@ async function _recoverTimerPolls(round) {
       const chronological = [...polls].reverse();
       const recoveredPolls = chronological.map((p, idx) => ({
         pollNum: p.poll_num || p.pollNum || (idx + 1),
+        pollId: p.poll_id || p.pollId || '',
         decision: p.decision || 'wait',
         reason: (p.reason || '').slice(0, 200),
+        rawContent: p.raw_output || p.rawContent || '',
         tokensUsed: p.tokens_used || 0,
         timerId: timerId,
+        model: p.model || '',
+        cmdOutput: p.check_output || '',
+        parseError: p.decision === 'parse_error',
+        toolTrace: [],  // not persisted per-poll; live trace only
         ts: p.poll_time ? new Date(p.poll_time).getTime() : Date.now(),
       }));
       const triggered = chronological.some(p => p.decision === 'ready');
@@ -1497,23 +2141,84 @@ function _renderTimerWatcherBlock(round, svg) {
   const timerId = round._timerTimerId || "";
   const totalPolls = polls.filter(p => p.decision !== "started").length;
   const timerIdShort = timerId ? timerId.slice(0, 12) : "";
+  // Was the most recent poll a parse/LLM error? Surface it in the header so
+  // a stuck verification (LLM not returning a usable decision) is obvious.
+  const realPolls = polls.filter(p => p.decision !== "started");
+  const lastPoll = realPolls.length ? realPolls[realPolls.length - 1] : null;
+  const lastWasError = lastPoll && (lastPoll.decision === "error" || lastPoll.decision === "parse_error" || lastPoll.parseError);
+  // The model the poll LLM resolved to (cheap-capability alias → concrete
+  // model). Prefer the round-level stash, fall back to the newest poll.
+  const pollModel = round._timerModel || (lastPoll && lastPoll.model) || "";
 
   // Header
   let headerLabel, headerCls;
+  const _tIco = Icon('timer', 13) + ' ';
   if (triggered) {
-    headerLabel = `⏱️ Timer ${timerIdShort} — ✅ triggered after ${totalPolls} poll${totalPolls !== 1 ? "s" : ""}`;
+    headerLabel = `${_tIco}Timer ${timerIdShort} — triggered after ${totalPolls} poll${totalPolls !== 1 ? "s" : ""}`;
     headerCls = "timer-watcher-triggered";
   } else if (round._timerOrphaned) {
-    headerLabel = `⏱️ Timer ${timerIdShort} — ⚠️ task interrupted (${totalPolls} poll${totalPolls !== 1 ? "s" : ""}, timer still active in background)`;
+    headerLabel = `${_tIco}Timer ${timerIdShort} — task interrupted (${totalPolls} poll${totalPolls !== 1 ? "s" : ""}, timer still active in background)`;
     headerCls = "timer-watcher-orphaned";
   } else if (isActive) {
     const skipN = round._timerSkipCount || 0;
     const skipSuffix = skipN > 0 ? `, ${skipN} skipped` : "";
-    headerLabel = `⏱️ Timer ${timerIdShort} — watching… (${totalPolls} poll${totalPolls !== 1 ? "s" : ""}${skipSuffix})`;
-    headerCls = "timer-watcher-active";
+    const errSuffix = lastWasError ? ", last check errored" : "";
+    headerLabel = `${_tIco}Timer ${timerIdShort} — watching… (${totalPolls} poll${totalPolls !== 1 ? "s" : ""}${skipSuffix}${errSuffix})`;
+    headerCls = lastWasError ? "timer-watcher-active timer-watcher-warn" : "timer-watcher-active";
   } else {
-    headerLabel = `⏱️ Timer ${timerIdShort} — ${round.status || "done"} (${totalPolls} polls)`;
+    headerLabel = `${_tIco}Timer ${timerIdShort} — ${round.status || "done"} (${totalPolls} polls)`;
     headerCls = "";
+  }
+
+  // ── What is being verified — show the check instruction + command so the
+  //    user understands the timer's job, who runs it, and how often. ──
+  //    The instruction can be long; render it expandable instead of clipping
+  //    mid-sentence (the old slice(0,400) cut "report st…").
+  let metaHtml = "";
+  const instr = round._timerCheckInstruction || "";
+  const cmd = round._timerCheckCommand || "";
+  const interval = round._timerPollInterval || 0;
+  const maxPolls = round._timerMaxPolls || 0;
+  if (instr || cmd || interval) {
+    const cadence = interval
+      ? `Checks every ${interval}s${maxPolls ? ` · up to ${maxPolls} times` : ""}`
+      : "";
+
+    // Expandable instruction: a clamped preview + full text revealed on click.
+    let instrHtml = "";
+    if (instr) {
+      const LONG = instr.length > 160;
+      const valId = "tw-instr-" + round.roundNum;
+      const toggle = LONG
+        ? ` onclick="event.stopPropagation();var v=document.getElementById('${valId}');v.classList.toggle('expanded');this.querySelector('.timer-meta-more').textContent=v.classList.contains('expanded')?'show less':'show more';"`
+        : "";
+      const moreLink = LONG
+        ? `<span class="timer-meta-more">show more</span>` : "";
+      instrHtml = `<div class="timer-meta-row timer-meta-row-instr"${toggle}>
+        <span class="timer-meta-label">Verifying</span>
+        <span class="timer-meta-val timer-meta-clamp" id="${valId}">${escapeHtml(instr)}</span>
+        ${moreLink}
+      </div>`;
+    }
+
+    // Who runs the check — the cheap-capability LLM, with the concrete model.
+    const verifierVal = pollModel
+      ? `Cheap LLM · <span class="timer-meta-model">${escapeHtml(pollModel)}</span>`
+      : `Cheap LLM (model resolved at poll time)`;
+
+    metaHtml = `<div class="timer-watcher-meta">
+      ${instrHtml}
+      ${cmd ? `<div class="timer-meta-row"><span class="timer-meta-label">Command</span><code class="timer-meta-cmd">${escapeHtml(cmd.slice(0, 300))}</code></div>` : ""}
+      <div class="timer-meta-row"><span class="timer-meta-label">Verifier</span><span class="timer-meta-val">${verifierVal}</span></div>
+      ${cadence ? `<div class="timer-meta-row"><span class="timer-meta-label">Cadence</span><span class="timer-meta-val">${cadence}</span></div>` : ""}
+    </div>`;
+  }
+
+  // ── "Next check in Ns" hint while active ──
+  let nextPollHtml = "";
+  if (isActive && round._timerNextPollTs) {
+    const secs = Math.max(0, Math.round((round._timerNextPollTs - Date.now()) / 1000));
+    nextPollHtml = `<div class="timer-next-poll">${Icon('hourglass', 12)} Next check ${secs > 0 ? `in ~${secs}s` : "due now"}…</div>`;
   }
 
   // Build poll lines (most recent first for readability)
@@ -1524,26 +2229,88 @@ function _renderTimerWatcherBlock(round, svg) {
 
   let pollLines = "";
   for (const p of visible) {
-    let icon, cls;
+    let icon, cls, label;
+    const isParseErr = p.decision === "parse_error" || p.parseError;
     if (p.decision === "started") {
-      icon = "🔔"; cls = "timer-poll-started";
+      icon = Icon('bell', 13); cls = "timer-poll-started"; label = "";
     } else if (p.decision === "ready") {
-      icon = "✅"; cls = "timer-poll-ready";
+      icon = Icon('save', 13); cls = "timer-poll-ready"; label = `#${p.pollNum}`;
     } else if (p.decision === "error") {
-      icon = "❌"; cls = "timer-poll-error";
+      icon = Icon('ban', 13); cls = "timer-poll-error"; label = `#${p.pollNum}`;
+    } else if (isParseErr) {
+      icon = Icon('zap', 13); cls = "timer-poll-error timer-poll-parse-err"; label = `#${p.pollNum}`;
     } else {
-      icon = "⏳"; cls = "timer-poll-wait";
+      icon = Icon('hourglass', 13); cls = "timer-poll-wait"; label = `#${p.pollNum}`;
     }
     const ts = p.ts ? new Date(p.ts).toLocaleTimeString() : "";
-    const reason = escapeHtml((p.reason || "").slice(0, 120));
-    const pollLabel = p.decision === "started" ? "" : `#${p.pollNum}`;
+    const fullReason = p.reason || "";
+    const reason = escapeHtml(fullReason.slice(0, 120));
     const tokens = p.tokensUsed ? ` · ${p.tokensUsed} tok` : "";
-    pollLines += `<div class="timer-poll-line ${cls}">
+    // The raw LLM output — only meaningful (and only sent/persisted) when the
+    // decision could not be parsed. This is the evidence that explains WHY the
+    // poll failed, so it is the centerpiece of an errored poll's detail.
+    const rawContent = (isParseErr && p.rawContent) ? String(p.rawContent) : "";
+    // Per-poll model chip — which LLM made this decision.
+    const modelChip = p.model
+      ? `<span class="timer-poll-model" title="Verified by ${escapeHtml(p.model)}">${escapeHtml(p.model)}</span>` : "";
+    // Stable per-poll id (e.g. tmr_84bd4fb3.p36) — lets the user correlate this
+    // exact check with the app.log line and the DB poll_log row.
+    const pollIdChip = p.pollId
+      ? `<span class="timer-poll-id" title="Poll id — search app.log for this">${escapeHtml(p.pollId)}</span>` : "";
+    // Per-poll tool-call timeline — reuse the swarm panel's .sw-tl-* look so
+    // the timer's tool activity reads identically to a sub-agent's.
+    const trace = Array.isArray(p.toolTrace) ? p.toolTrace : [];
+
+    // Expandable detail: full reason + raw LLM output + tool-call timeline + check_command output.
+    const hasDetail = (fullReason.length > 120) || rawContent.length > 0 || trace.length > 0 || (p.cmdOutput && p.cmdOutput.length > 0);
+    let detailHtml = "";
+    if (hasDetail) {
+      const fullReasonHtml = fullReason.length > 120
+        ? `<div class="timer-poll-detail-reason">${escapeHtml(fullReason)}</div>` : "";
+      // Raw LLM output — what the model actually returned when its decision
+      // could not be parsed as JSON. Shown verbatim so the failure is diagnosable.
+      const rawHtml = rawContent.length > 0
+        ? `<div class="timer-poll-detail-label">Raw LLM output (unparseable decision):</div>` +
+          `<pre class="timer-poll-detail-output timer-poll-raw"><code>${escapeHtml(rawContent)}</code></pre>`
+        : "";
+      let traceHtml = "";
+      if (trace.length > 0) {
+        const rows = trace.map(tc => {
+          const td = (typeof _TOOL_DISPLAY !== "undefined") ? _TOOL_DISPLAY[tc.name] : null;
+          const ticon = (td && td.icon) ? td.icon : _TD_SVG('<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.106-3.105c.32-.322.863-.22.983.218a6 6 0 0 1-8.259 7.057l-7.91 7.91a1 1 0 0 1-2.999-3l7.91-7.91a6 6 0 0 1 7.057-8.259c.438.12.54.662.219.984z"/>');
+          const dot = tc.isError
+            ? `<span class="sw-tl-dot sw-tl-failed">✕</span>`
+            : `<span class="sw-tl-dot sw-tl-done">✓</span>`;
+          const el = (typeof tc.elapsed === "number") ? `${tc.elapsed.toFixed(1)}s` : "";
+          return `<div class="sw-tl-row sw-tl-${tc.isError ? "failed" : "done"}">
+            <div class="sw-tl-line">${dot}<span class="sw-tl-icon">${ticon}</span>` +
+            `<span class="sw-tl-name">${escapeHtml(tc.name || "?")}</span>` +
+            (tc.argsBrief ? `<span class="sw-tl-args" title="${escapeHtml(tc.argsBrief)}">${escapeHtml(tc.argsBrief)}</span>` : "") +
+            (el ? `<span class="sw-tl-elapsed">${el}</span>` : "") +
+          `</div></div>`;
+        }).join("");
+        traceHtml = `<div class="timer-poll-detail-label">Tools called this poll:</div>` +
+          `<div class="sw-a-timeline timer-poll-trace">${rows}</div>`;
+      }
+      const cmdOutHtml = (p.cmdOutput && p.cmdOutput.length > 0)
+        ? `<div class="timer-poll-detail-label">Check output (evidence):</div><pre class="timer-poll-detail-output"><code>${escapeHtml(p.cmdOutput)}</code></pre>`
+        : "";
+      detailHtml = `<div class="timer-poll-detail">${fullReasonHtml}${rawHtml}${traceHtml}${cmdOutHtml}</div>`;
+    }
+    const toggleAttr = hasDetail
+      ? ` onclick="event.stopPropagation();var d=this.nextElementSibling;if(d){d.classList.toggle('expanded');this.classList.toggle('expanded');}"`
+      : "";
+    const caret = hasDetail ? `<span class="timer-poll-caret">▸</span>` : `<span class="timer-poll-caret-spacer"></span>`;
+    const toolBadge = trace.length > 0
+      ? `<span class="timer-poll-toolcount" title="${trace.length} tool call(s) this poll">${Icon('wrench', 11)} ${trace.length}</span>` : "";
+    pollLines += `<div class="timer-poll-line ${cls}${hasDetail ? " timer-poll-has-detail" : ""}"${toggleAttr}>
+      ${caret}
       <span class="timer-poll-icon">${icon}</span>
-      <span class="timer-poll-num">${pollLabel}</span>
+      <span class="timer-poll-num">${label}</span>
       <span class="timer-poll-reason">${reason}</span>
+      ${toolBadge}${pollIdChip}${modelChip}
       <span class="timer-poll-meta">${ts}${tokens}</span>
-    </div>`;
+    </div>${detailHtml}`;
   }
 
   let hiddenHtml = "";
@@ -1562,7 +2329,7 @@ function _renderTimerWatcherBlock(round, svg) {
       : "";
     const lastPollNum = round._timerLastSkipPollNum || 0;
     skipTrailer = `<div class="timer-poll-line timer-poll-skipped">
-      <span class="timer-poll-icon">💤</span>
+      <span class="timer-poll-icon">${Icon('clock', 13)}</span>
       <span class="timer-poll-num">${lastPollNum ? `#${lastPollNum}` : ""}</span>
       <span class="timer-poll-reason">${round._timerSkipCount} poll${round._timerSkipCount !== 1 ? "s" : ""} skipped — check_command output unchanged</span>
       <span class="timer-poll-meta">${skipTs}</span>
@@ -1578,38 +2345,276 @@ function _renderTimerWatcherBlock(round, svg) {
          <span class="timer-toggle">${expandedByDefault ? '▾' : '▸'}</span>
        </div>
        <div class="timer-watcher-body${expandedByDefault ? ' expanded' : ''}" id="${uid}-wrap">
-         ${pollLines}${hiddenHtml}${skipTrailer}
+         ${metaHtml}${pollLines}${hiddenHtml}${skipTrailer}${nextPollHtml}
        </div>
      </div>`;
+}
+
+/* ── Parallel-batch grouping ──────────────────────────────────────────
+ * A single LLM turn (one assistant message) can carry several tool_calls
+ * that the harness runs together. The backend tags every such round with
+ * the SAME `llmRound` (= orchestrator loop index, see
+ * lib/tasks_pkg/tool_dispatch.py). Rounds with the same llmRound were
+ * therefore issued IN PARALLEL; rounds with different llmRound are
+ * sequential turns. We group contiguous same-llmRound rounds into one
+ * `.ptool-turn` container so the UI reflects the real parallelism instead
+ * of a flat list.
+ *
+ * Accuracy guard: we ONLY group on real `llmRound` data. Legacy rounds
+ * without it are each their own (solo) group — the old roundNum-gap
+ * heuristic is too unreliable to *claim* parallelism visually. */
+function _computeToolBatches(rounds) {
+  const hasLlm = (rounds || []).some((r) => r && r.llmRound != null);
+  const groups = [];
+  let cur = null;
+  for (const r of rounds || []) {
+    const key = hasLlm && r.llmRound != null ? "L" + r.llmRound : "S" + r.roundNum;
+    if (!cur || cur.key !== key) { cur = { key, rounds: [] }; groups.push(cur); }
+    cur.rounds.push(r);
+  }
+  return groups;
+}
+
+/* Count distinct LLM turns represented by a set of rounds (for the panel
+ * header). Falls back to round count when no llmRound data is present. */
+function _countToolTurns(rounds) {
+  const set = new Set();
+  let hasLlm = false;
+  for (const r of rounds || []) {
+    if (r && r.llmRound != null) { hasLlm = true; set.add(r.llmRound); }
+  }
+  return hasLlm ? set.size : (rounds || []).length;
+}
+
+/* Panel header text — "N tools used" plus a "· M turns" suffix only when
+ * parallelism actually compressed the turn count (M < N). */
+function _toolPanelHeaderLabel(rounds, anyActive) {
+  const count = (rounds || []).length;
+  if (anyActive) return t("toolPanel.working", { n: count });
+  const turns = _countToolTurns(rounds);
+  const base = t("toolPanel.toolsUsed", { n: count, s: count !== 1 ? "s" : "" });
+  return turns < count
+    ? base + t("toolPanel.turnsSuffix", { n: turns, s: turns !== 1 ? "s" : "" })
+    : base;
+}
+
+/* git-fork glyph (two parents → one child) — reads as "these calls
+ * branched off the same turn". SVG only, per CLAUDE.md §3.4. */
+const _turnForkSvg = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><circle cx="18" cy="6" r="3"/><path d="M18 9v2c0 .6-.4 1-1 1H7c-.6 0-1-.4-1-1V9"/><path d="M12 12v3"/></svg>';
+
+function _turnLabelText(size) {
+  return t("toolPanel.parallelCalls", { n: size });
+}
+
+/* Round number a tool-batch maps to. A group's llmRound is 0-based; the
+ * cost popover labels the matching API round 1-based as `第N轮`, so
+ * N = llmRound + 1. Returns null for legacy rounds with no llmRound
+ * (we never claim a round number we don't actually have). */
+function _groupRoundNo(g) {
+  const r0 = g && g.rounds && g.rounds[0];
+  return r0 && r0.llmRound != null ? r0.llmRound + 1 : null;
+}
+
+/* Human label for a round number — uses the shared `toolPanel.roundTag`
+ * i18n key (also used by the cost popover in finish_info.js) so the two
+ * panels line up 1:1 and a user can trace one round across both. */
+function _roundTagText(rno) {
+  return t("toolPanel.roundTag", { n: rno });
+}
+
+/* Standalone round tag for a SOLO turn (one tool call). Solo groups are
+ * display:contents (no box), so this renders as a thin label line above
+ * the single tool row. */
+function _renderSoloRoundTag(rno) {
+  return `<div class="ptool-turn-rno ptool-turn-rno-solo">${escapeHtml(_roundTagText(rno))}</div>`;
+}
+
+/* The collapsible header shown atop a multi-call .ptool-turn container.
+ * Shared verbatim by the static renderer and the streaming sync path so
+ * a finalize swap is seamless. `rno` (optional) prefixes the round number
+ * so the header reads e.g. `第3轮 · 2 parallel calls`. */
+function _renderTurnHead(size, rno) {
+  const rnoHtml = rno != null ? `<span class="ptool-turn-rno">${escapeHtml(_roundTagText(rno))}</span>` : "";
+  return `<div class="ptool-turn-head">${_turnForkSvg}${rnoHtml}<span class="ptool-turn-label">${_turnLabelText(size)}</span><span class="ptool-turn-chev">▾</span></div>`;
+}
+
+/* Render one tool round into its `[data-prn]` slot. Swarm rounds get the
+ * full agent dashboard; everything else the compact tool line. `allRounds`
+ * is the full timeline (swarm panels need it for cross-round context). */
+function _renderToolSlot(r, allRounds) {
+  const inner = _isRoundSwarm(r)
+    ? _buildSwarmPanelHTML(r, allRounds)
+    : _renderUnifiedToolLine(r, r.status === "searching");
+  const swarmAttr = _isRoundSwarm(r) ? ' data-prn-kind="swarm"' : '';
+  return `<div data-prn="${r.roundNum}"${swarmAttr}>${inner}</div>`;
+}
+
+/* Render the full grouped inner HTML of the panel body: one `.ptool-turn`
+ * per batch. Solo turns get no chrome (CSS collapses the wrapper via
+ * display:contents); multi-call turns get the collapsible parallel header.
+ * Used by the static render path AND the upload.js "expand all" handler. */
+function _renderToolGroupsHTML(rounds, allRounds) {
+  const ctx = allRounds || rounds;
+  return _computeToolBatches(rounds).map((g) => {
+    const slots = g.rounds.map((r) => _renderToolSlot(r, ctx)).join("");
+    const size = g.rounds.length;
+    const rno = _groupRoundNo(g);
+    const head = size >= 2 ? _renderTurnHead(size, rno) : (rno != null ? _renderSoloRoundTag(rno) : "");
+    return `<div class="ptool-turn" data-llm-round="${escapeHtml(String(g.key))}" data-batch-size="${size}" data-round-no="${rno != null ? rno : ""}">${head}${slots}</div>`;
+  }).join("");
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   INTERLEAVED SEGMENT TIMELINE (epic pt_8b406df8fbe24ae5, step 5)
+
+   Renders a finished assistant turn from its ordered `segments` list
+   (the backend SoT, docs/EPIC_SEGMENT_TIMELINE_DESIGN.md) so each tool's
+   PRECEDING thinking + narration render ADJACENT to it, inline — instead
+   of the three global grouped blocks (all tools / all thinking / all
+   content) the legacy path produces.
+
+   DATA CONTRACT (mirrors the backend rehydrate philosophy): segments carry
+   the ORDER + the prose. Tool BODIES are NOT re-derived from the thin
+   `tool_use` segment (which lacks query/results/_swarm/interactive-card
+   fields) — they are looked up in the still-present, render-rich
+   `msg.toolRounds` full objects by tool-call id (fallback: positional).
+   So this helper needs BOTH segments (order/prose) and toolRounds (bodies);
+   if either is missing the caller falls back to the legacy grouped render.
+
+   Reuses `.ptool-panel` / `.ptool-turn` / `.thinking-block` / `.md-content`
+   verbatim — NO new CSS (styles.css is under a sibling's hold; and reusing
+   the proven classes keeps the flag-off/on visuals consistent).
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* Feature flag: interleaved per-tool timeline (epic pt_8b406df8fbe24ae5).
+ * DEFAULT OFF — the three-zone / grouped renderer stays the proven fallback
+ * until the timeline is validated at high tool count. Toggle via localStorage
+ * `tofu_segment_timeline` = '1' (a settings switch can flip it later). Read
+ * defensively so a storage-blocked context never throws. */
+function _segTimelineEnabled() {
+  try {
+    return localStorage.getItem('tofu_segment_timeline') === '1';
+  } catch (_e) {
+    return false;
+  }
+}
+
+/* Build a tool-call-id → round lookup (fallback to positional order for
+ * legacy rounds that predate stable toolCallId stamping). */
+function _roundsByToolCallId(rounds) {
+  const byId = new Map();
+  const noId = [];
+  for (const r of (rounds || [])) {
+    if (r && r.toolCallId) byId.set(String(r.toolCallId), r);
+    else noId.push(r);
+  }
+  return { byId, noId };
+}
+
+/* Render one interleaved batch: the batch's thinking + narration prose
+ * (from segments) followed by its tool rows (from toolRounds, grouped/
+ * rendered by the existing _renderToolGroupsHTML). `batch` = ordered list
+ * of segments sharing one llmRound; `rounds` = the resolved full rounds
+ * for that batch's tool_use segments; `allRounds` = full timeline (swarm
+ * context). idx = message index (thinking-block lazy-load hook). */
+function _renderTimelineBatch(batch, rounds, allRounds, idx) {
+  let html = "";
+  // Prose first (thinking, then narration text) — the order the model
+  // produced it before it called the tools. Non-deliverable text only;
+  // the deliverable answer is rendered by the caller AFTER the timeline.
+  for (const s of batch) {
+    if (s.type === "thinking" && s.text) {
+      const len = s.text.length;
+      const meta = len >= 1024 ? ` (${Math.round(len / 1024)}k chars)` : ` (${len} chars)`;
+      /* Per-batch thinking: the text is segment-local (NOT msg.thinking), so
+       * we can't reuse the _toggleThinking lazy-load (which reads
+       * msg.thinking). Inject the escaped text directly with a pure-CSS
+       * expand toggle (same idiom as the streaming .thinking-block). Per-batch
+       * reasoning is bounded, so no lazy-load needed here. Reuses the
+       * .thinking-block classes verbatim — no new CSS. */
+      html += `<div class="thinking-block seg-thinking" onclick="this.classList.toggle('expanded')"><div class="thinking-header"><span class="thinking-label">${escapeHtml(t('stream.thinking.done'))}${meta}</span><span class="thinking-toggle">▼</span></div><div class="thinking-content"><div class="thinking-text">${escapeHtml(s.text)}</div></div></div>`;
+    } else if (s.type === "text" && !s.deliverable && s.text) {
+      /* Inter-round narration ("Let me check the files.") rendered as its
+       * own quiet content block, adjacent to the tools it preceded. */
+      html += `<div class="md-content seg-narration">${renderMarkdown(s.text)}</div>`;
+    }
+  }
+  // Then the tool rows for this batch (rich bodies from toolRounds).
+  if (rounds.length > 0) {
+    html += _renderToolGroupsHTML(rounds, allRounds);
+  }
+  return html;
+}
+
+/* Render the interleaved per-tool timeline for a finished message.
+ * Returns HTML, or "" when the segment path can't apply (caller falls
+ * back to the legacy grouped render). Pure — no DOM mutation. */
+function renderSegmentTimelineHTML(segments, msg, idx) {
+  if (!Array.isArray(segments) || segments.length === 0) return "";
+  const allRounds = getToolRoundsFromMsg(msg) || [];
+  const { byId, noId } = _roundsByToolCallId(allRounds);
+  let noIdCursor = 0;
+
+  // Walk segments, accumulating consecutive segments of the same llmRound
+  // into a batch. A batch flushes when the llmRound changes OR at the end.
+  // Terminal (deliverable) segments are NOT part of the timeline — the
+  // caller renders the deliverable answer separately, after the panel.
+  const batches = [];
+  let cur = null;
+  let curKey = Symbol("start");
+  for (const s of segments) {
+    if (s.terminal) continue;               // deliverable answer / terminal thinking
+    if (s.type === "text" && s.deliverable) continue;  // safety: never in timeline
+    const key = (s.llmRound != null) ? ("L" + s.llmRound) : "S";
+    if (key !== curKey || cur === null) {
+      cur = { key, segs: [], rounds: [] };
+      batches.push(cur);
+      curKey = key;
+    }
+    cur.segs.push(s);
+    if (s.type === "tool_use") {
+      // Resolve the render-rich round for this tool_use.
+      let r = s.id ? byId.get(String(s.id)) : null;
+      if (!r && noIdCursor < noId.length) r = noId[noIdCursor++];
+      if (r) cur.rounds.push(r);
+    }
+  }
+  if (batches.length === 0) return "";
+
+  // If NO batch resolved any tool round (segments present but toolRounds
+  // absent/unmatchable), the timeline would show prose with no tools —
+  // fall back to the legacy path rather than render a lopsided view.
+  const anyTool = batches.some((b) => b.rounds.length > 0);
+  if (!anyTool && allRounds.length > 0) return "";
+
+  const inner = batches
+    .map((b) => _renderTimelineBatch(b.segs, b.rounds, allRounds, idx))
+    .join("");
+  if (!inner) return "";
+
+  /* Wrap in the same .ptool-panel chrome so the header ("N tools used")
+   * and the collapse behaviour match the legacy render exactly. */
+  const anyActive = allRounds.some((r) => r.status === "searching" || r._swarmActive);
+  const headerLabel = _toolPanelHeaderLabel(allRounds, anyActive);
+  return `<div class="ptool-panel seg-timeline${anyActive ? " ptool-panel-active" : ""}">` +
+    `<div class="ptool-panel-header"><span class="ptool-panel-label">${headerLabel}</span></div>` +
+    `<div class="ptool-panel-body" data-full-count="${allRounds.length}">${inner}</div>` +
+    `</div>`;
 }
 
 function _renderUnifiedGroup(allRounds) {
   const anyActive = allRounds.some((r) => r.status === "searching" || r._swarmActive);
   const count = allRounds.length;
-  const headerLabel = anyActive
-    ? `Working… (${count})`
-    : `${count} tool${count > 1 ? "s" : ""} used`;
-  /* Render one slot per round, swarm rounds use the full agent
-   * dashboard (`_buildSwarmPanelHTML`), everything else uses the
-   * compact tool-line.  Each slot wears `data-prn` so the streaming
-   * sync path (see `_syncToolRoundsDOM`) can locate and update it
-   * by round number. */
-  const _renderSlot = (r) => {
-    const inner = _isRoundSwarm(r)
-      ? _buildSwarmPanelHTML(r)
-      : _renderUnifiedToolLine(r, r.status === "searching");
-    const swarmAttr = _isRoundSwarm(r) ? ' data-prn-kind="swarm"' : '';
-    return `<div data-prn="${r.roundNum}"${swarmAttr}>${inner}</div>`;
-  };
+  const headerLabel = _toolPanelHeaderLabel(allRounds, anyActive);
   const STATIC_LIMIT = 100;
   let lines, truncHtml = "";
   if (!anyActive && count > STATIC_LIMIT) {
     const tail = allRounds.slice(-50);
-    lines = tail.map(_renderSlot).join("");
+    lines = _renderToolGroupsHTML(tail, allRounds);
     const hiddenN = count - 50;
-    truncHtml = `<div class="ptool-truncated" data-hidden-count="${hiddenN}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg><span>${hiddenN} earlier tool calls hidden — click to expand</span></div>`;
+    truncHtml = `<div class="ptool-truncated" data-hidden-count="${hiddenN}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg><span>${escapeHtml(t("toolPanel.hidden", { n: hiddenN }))}</span></div>`;
   } else {
-    lines = allRounds.map(_renderSlot).join("");
+    lines = _renderToolGroupsHTML(allRounds, allRounds);
   }
   return `<div class="ptool-panel${anyActive ? " ptool-panel-active" : ""}">
        <div class="ptool-panel-header">
@@ -1618,6 +2623,20 @@ function _renderUnifiedGroup(allRounds) {
        <div class="ptool-panel-body" data-full-count="${count}">${truncHtml}${lines}</div>
      </div>`;
 }
+
+/* Collapse / expand a parallel-call group when its header is clicked.
+ * Delegated (survives innerHTML rebuilds) and scoped to the header so a
+ * click on a tool row inside the group never toggles it. */
+document.addEventListener("click", function (e) {
+  const head = e.target.closest(".ptool-turn-head");
+  if (!head) return;
+  const turn = head.closest(".ptool-turn");
+  if (!turn) return;
+  e.stopPropagation();
+  const collapsed = turn.classList.toggle("collapsed");
+  const chev = head.querySelector(".ptool-turn-chev");
+  if (chev) chev.textContent = collapsed ? "▸" : "▾";
+});
 
 // ★ Backwards compat aliases
 const _renderProjectGroup = _renderUnifiedGroup;
@@ -1640,70 +2659,64 @@ function _tcPreviewBtn(round) {
  * notification BEFORE the subprocess times out (up to 5 min wait).
  */
 function renderMcpLoginHintHtml(lh) {
+  /* PROMINENT callout shown ONLY while the login is actionable
+   * (awaiting_approval) so the user knows to tap "Approve" on their
+   * mobile-office app before the subprocess times out. Once the login
+   * RESOLVES (approved/denied/timeout/done) this returns '' — the
+   * resolution folds into the quiet turn-provenance strip instead
+   * (see _mcpLoginSegment / renderTurnProvenanceHtml). */
   if (!lh) return '';
   const phase = lh.phase || 'awaiting_approval';
+  if (phase !== 'awaiting_approval') return '';
   const user = lh.username || '';
-  let icon = '📱';
-  let state = 'running';
-  let headline = '';
-  let sub = '';          // short subtitle (non-technical)
-  let snippetBlock = ''; // optional <pre> with the raw CLI response
-  /* Helper: format the stashed snippet for in-chip display.
-   * Prefer a tidy pretty-printed JSON block when the snippet parses
-   * as JSON, else show the raw text verbatim. Always shown in full —
-   * no slicing or ellipsis — because the user explicitly asked for
-   * "incomplete displays are not allowed". */
-  const _formatSnippet = (raw) => {
-    if (!raw) return '';
-    let text = String(raw).trim();
-    try {
-      const trimmed = text.replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, '');
-      const parsed = JSON.parse(trimmed);
-      text = JSON.stringify(parsed, null, 2);
-    } catch (_e) { /* leave raw */ }
-    return `<pre class="mp-snippet">${escapeHtml(text)}</pre>`;
-  };
-  if (phase === 'awaiting_approval') {
-    headline = user
-      ? `Waiting for mobile approval · ${user}`
-      : 'Waiting for mobile approval';
-    sub = 'Tap Approve on your mobile office app — push may take a few seconds to arrive';
-  } else if (phase === 'approved') {
-    state = 'done';
-    icon = '✓';
-    headline = user ? `Login approved · ${user}` : 'Login approved';
-    sub = 'Session is live';
-  } else if (phase === 'denied') {
-    state = 'failed';
-    icon = '✕';
-    headline = 'Login denied';
-    sub = 'Approval was rejected or cancelled on the phone';
-    snippetBlock = _formatSnippet(lh.snippet);
-  } else if (phase === 'timeout') {
-    state = 'failed';
-    icon = '⏰';
-    headline = 'Login timed out';
-    sub = 'No approval received in time — try again';
-    snippetBlock = _formatSnippet(lh.snippet);
-  } else {
-    state = 'done';
-    headline = 'Login finished';
-    snippetBlock = _formatSnippet(lh.snippet);
-  }
-  return `<div class="mem-prefetch-chip mp-${state} mp-login-hint">` +
-    `<span class="mp-icon">${icon}</span>` +
+  const _t = (typeof t === "function") ? t : (k => k);
+  const headline = user
+    ? `${_t('login.awaiting')} · ${user}`
+    : _t('login.awaiting');
+  const sub = _t('login.awaitingSub');
+  return `<div class="mem-prefetch-chip mp-running mp-login-hint">` +
+    `<span class="mp-icon">${Icon('smartphone', 14)}</span>` +
     `<span class="mp-text"><span class="mp-headline">${escapeHtml(headline)}</span>` +
-    (sub ? `<span class="mp-sub">${escapeHtml(sub)}</span>` : '') +
-    snippetBlock +
+    `<span class="mp-sub">${escapeHtml(sub)}</span>` +
     `</span>` +
-    (state === 'running'
-      ? `<span class="mp-dots"><span>.</span><span>.</span><span>.</span></span>`
-      : '') +
+    `<span class="mp-dots"><span>.</span><span>.</span><span>.</span></span>` +
     `</div>`;
 }
 
-function renderMemoryPrefetchHtml(mp) {
-  if (!mp) return "";
+/* ── Safe inline-markdown for the provenance strip ──────────────────
+   The preference bullets (and some memory descriptions) carry lightweight
+   markdown — `**bold**`, `*italic*`, `` `code` ``. Rendering them through a
+   bare escapeHtml() showed the literal asterisks/backticks ("markdown 渲染,
+   字体不好看"). We can't pipe them through the full block renderer
+   (renderMarkdown wraps in <p>, runs the code-fence/table/KaTeX pipeline —
+   overkill and layout-breaking for a one-line bullet). Instead: escape
+   first (XSS-safe), THEN unescape only the three inline emphasis spans.
+   Order matters — code spans are tokenised first so `*` inside them stays
+   literal. */
+function _tpInlineMd(text) {
+  let s = escapeHtml(String(text == null ? "" : text));
+  const codes = [];
+  s = s.replace(/`([^`]+)`/g, (_m, c) => {
+    codes.push(c);
+    return "\x01CODE" + (codes.length - 1) + "\x02";
+  });
+  // Bold before italic so `**x**` isn't half-eaten by the single-* rule.
+  s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  s = s.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, "$1<em>$2</em>");
+  s = s.replace(/\x01CODE(\d+)\x02/g, (_m, i) => `<code>${codes[+i]}</code>`);
+  return s;
+}
+
+/* ── Memory-prefetch segment for the unified turn-provenance strip ──
+   Returns {state, segHtml, detailHtml} or null. The collapsed segment is
+   icon + small count; full labels + the picked-memory list live in
+   detailHtml (revealed when the strip is expanded). */
+/* ── Memory-prefetch segment for the unified turn-provenance strip ──
+   Returns {state, segHtml, detailHtml} or null. The collapsed segment is
+   icon + small count; full labels + the picked-memory list live in
+   detailHtml (revealed when the strip is expanded). */
+function _memPrefetchSegment(mp) {
+  if (!mp) return null;
   const phase = mp.phase || "started";
   const selected = mp.selected || 0;
   const candidates = mp.candidates || 0;
@@ -1711,75 +2724,293 @@ function renderMemoryPrefetchHtml(mp) {
   const rerankMs = mp.rerankMs || 0;
   const totalMs = mp.totalMs || 0;
   const fellBack = !!mp.fellBack;
+  const _t = (typeof t === "function") ? t : (k => k);
 
-  // ── Build a short headline ──
-  let icon = "🧠";
+  let icon = Icon('brain', 13);
   let state = "running";
-  let headline = "";
+  let count = "";        // tiny count shown beside the icon when collapsed
+  let headline = "";     // full label shown in the expanded detail
   let sub = "";
   if (phase === "started") {
-    headline = "Surfacing relevant memories…";
-    sub = (mp.totalMemories ? `${mp.totalMemories} total` : "") + " · BM25";
-  } else if (phase === "bm25_done") {
-    headline = `Filtering ${candidates} candidates with cheap model…`;
-    sub = `BM25 ${bm25Ms}ms`;
-  } else if (phase === "rerank_started") {
-    headline = `Filtering ${candidates} candidates with cheap model…`;
+    headline = _t("memPrefetch.surfacing");
+    sub = (mp.totalMemories ? _t("memPrefetch.totalN", { n: mp.totalMemories }) : "") + " · BM25";
+  } else if (phase === "bm25_done" || phase === "rerank_started") {
+    count = candidates ? String(candidates) : "";
+    headline = _t("memPrefetch.filtering", { n: candidates });
     sub = `BM25 ${bm25Ms}ms`;
   } else if (phase === "done") {
     state = "done";
     if (selected === 0) {
-      headline = "No prior memory relevant to this turn";
-      sub = `${candidates||0} candidates · BM25 ${bm25Ms}ms · filter ${rerankMs}ms`;
+      headline = _t("memPrefetch.none");
+      sub = `${_t("memPrefetch.candidatesN", { n: candidates || 0 })} · BM25 ${bm25Ms}ms · ${_t("memPrefetch.filterLabel")} ${rerankMs}ms`;
     } else {
-      headline = `Prefetched ${selected} memor${selected === 1 ? "y" : "ies"}`;
+      count = String(selected);
+      headline = _t(selected === 1 ? "memPrefetch.prefetched" : "memPrefetch.prefetchedN", { n: selected });
       const parts = [];
-      if (candidates) parts.push(`${candidates} candidates`);
+      if (candidates) parts.push(_t("memPrefetch.candidatesN", { n: candidates }));
       parts.push(`BM25 ${bm25Ms}ms`);
-      if (rerankMs) parts.push(`filter ${rerankMs}ms`);
-      if (totalMs) parts.push(`total ${totalMs}ms`);
-      if (fellBack) parts.push("⚠ fallback to BM25 top-3");
+      if (rerankMs) parts.push(`${_t("memPrefetch.filterLabel")} ${rerankMs}ms`);
+      if (totalMs) parts.push(`${_t("memPrefetch.totalLabel")} ${totalMs}ms`);
+      if (fellBack) parts.push(_t("memPrefetch.fallback"));
       sub = parts.join(" · ");
     }
   } else if (phase === "skipped") {
     state = "skipped";
-    headline = "Memory prefetch skipped";
+    headline = _t("memPrefetch.skipped");
     sub = mp.reason || "";
   } else if (phase === "failed") {
     state = "failed";
-    icon = "⚠️";
-    headline = "Memory prefetch failed";
+    icon = Icon('alertTriangle', 13);
+    headline = _t("memPrefetch.failed");
     sub = mp.reason || "";
   } else {
-    headline = "Memory prefetch…";
+    headline = _t("memPrefetch.generic");
     sub = phase;
   }
 
-  // ── Optional detail panel listing picked memories ──
-  let details = "";
+  // Collapsed label: a short word beside the icon so the strip reads as
+  // text, not just glyphs (e.g. "3 memories", "no memories", "filtering").
+  let segLabel;
+  if (state === "running") segLabel = _t("memPrefetch.tag");
+  else if (phase === "done" && selected > 0)
+    segLabel = _t(selected === 1 ? "memPrefetch.tagN" : "memPrefetch.tagNs", { n: selected });
+  else if (phase === "done") segLabel = _t("memPrefetch.tagNone");
+  else if (state === "skipped") segLabel = _t("memPrefetch.tagSkipped");
+  else if (state === "failed") segLabel = _t("memPrefetch.tagFailed");
+  else segLabel = _t("memPrefetch.tag");
+
+  const segHtml =
+    `<span class="tp-seg tp-seg-mem tp-${state}">${icon}` +
+    `<span class="tp-label">${escapeHtml(segLabel)}</span>` +
+    (state === "running" ? `<span class="mp-dots"><span>.</span><span>.</span><span>.</span></span>` : "") +
+    `</span>`;
+
+  let memList = "";
   if (phase === "done" && selected > 0 && Array.isArray(mp.memories) && mp.memories.length > 0) {
     const items = mp.memories.map(m => {
       const nm = escapeHtml(m.name || "?");
       const sc = escapeHtml(m.scope || "");
-      const ds = escapeHtml(m.description || "");
+      const ds = m.description ? _tpInlineMd(m.description) : "";
       return `<li><span class="mp-mem-name">${nm}</span>` +
              (sc ? ` <span class="mp-mem-scope">${sc}</span>` : "") +
              (ds ? `<div class="mp-mem-desc">${ds}</div>` : "") +
              `</li>`;
     }).join("");
-    details = `<ul class="mp-mem-list">${items}</ul>`;
+    memList = `<ul class="mp-mem-list">${items}</ul>`;
+  }
+  const detailHtml =
+    `<div class="tp-detail-row tp-detail-mem mp-${state}">` +
+      `<div class="mp-text"><span class="mp-headline">${escapeHtml(headline)}</span>` +
+      (sub ? `<span class="mp-sub">${escapeHtml(sub)}</span>` : "") +
+      memList +
+      `</div></div>`;
+  return { state, segHtml, detailHtml };
+}
+
+/* ── Preferences-applied segment for the unified turn-provenance strip ──
+   Backend payload: {chars, items:[...]}. See lib/memory/user_profile.py +
+   EventType.PREFERENCES_APPLIED. */
+function _prefsAppliedSegment(pa) {
+  if (!pa) return null;
+  const items = Array.isArray(pa.items) ? pa.items : [];
+  const n = items.length;
+  const _t = (typeof t === "function") ? t : (k => k);
+  const headline = (n > 0)
+    ? _t("prefs.appliedN").replace("{n}", n)
+    : _t("prefs.applied");
+
+  const segLabel = (n > 0)
+    ? _t(n === 1 ? "prefs.tagN" : "prefs.tagNs", { n })
+    : _t("prefs.tagNone");
+  const segHtml =
+    `<span class="tp-seg tp-seg-prefs tp-done">${Icon('sliders', 13)}` +
+    `<span class="tp-label">${escapeHtml(segLabel)}</span>` +
+    `</span>`;
+
+  let prefList = "";
+  if (n > 0) {
+    const lis = items.map(it => `<li>${_tpInlineMd(it)}</li>`).join("");
+    prefList = `<ul class="mp-mem-list pa-list">${lis}</ul>`;
+  }
+  const detailHtml =
+    `<div class="tp-detail-row tp-detail-prefs pa-chip">` +
+      `<div class="mp-text"><span class="mp-headline">${escapeHtml(headline)}</span>` +
+      (pa.chars ? `<span class="mp-sub">${_t("prefs.fromProfile")}</span>` : "") +
+      prefList +
+      `</div></div>`;
+  return { segHtml, detailHtml };
+}
+
+/* ── Related-conversations segment for the unified turn-provenance strip ──
+   Backend payload: {count, items:[{id,title,summary}], toolsAvailable}.
+   The model was told these siblings exist (ambient cross-conv awareness, see
+   lib/conversations/project_summary.build_project_digest); we surface the same
+   set so the user can SEE — and click into — what the model was made aware of.
+   See EventType.RELATED_CONVERSATIONS. */
+function _relatedConvsSegment(rc) {
+  if (!rc) return null;
+  const items = Array.isArray(rc.items) ? rc.items : [];
+  const n = items.length || rc.count || 0;
+  if (n <= 0) return null;
+  const _t = (typeof t === "function") ? t : (k => k);
+  const label = _t(n === 1 ? "relatedConvs.tagN" : "relatedConvs.tagNs", { n });
+
+  const segLabel = _t(n === 1 ? "relatedConvs.tagN" : "relatedConvs.tagNs", { n });
+  const segHtml =
+    `<span class="tp-seg tp-seg-convs tp-done">${Icon('messageSquare', 13)}` +
+    `<span class="tp-label">${escapeHtml(segLabel)}</span>` +
+    `</span>`;
+
+  let convList = "";
+  if (items.length) {
+    const lis = items.map(it => {
+      const id = escapeHtml(it.id || "");
+      const title = escapeHtml(it.title || "(untitled)");
+      const summary = escapeHtml(it.summary || "");
+      // Clickable when we have an id — openConversation is the global opener.
+      const titleHtml = id
+        ? `<a class="rc-conv-link" href="#" onclick="event.stopPropagation();try{loadConversation('${id}')}catch(e){};return false;">${title}</a>`
+        : `<span class="rc-conv-title">${title}</span>`;
+      return `<li>${titleHtml}` +
+             (summary ? `<div class="rc-conv-summary">${summary}</div>` : "") +
+             `</li>`;
+    }).join("");
+    convList = `<ul class="mp-mem-list rc-list">${lis}</ul>`;
+  }
+  const detailHtml =
+    `<div class="tp-detail-row tp-detail-convs mp-done">` +
+      `<div class="mp-text"><span class="mp-headline">${escapeHtml(label)}</span>` +
+      `<span class="mp-sub">${escapeHtml(_t("relatedConvs.sub"))}</span>` +
+      convList +
+      `</div></div>`;
+  return { state: "done", segHtml, detailHtml };
+}
+
+/* ── Resolved-MCP-login segment for the unified turn-provenance strip ──
+   Only RESOLVED states (approved/denied/timeout/done) demote into the strip;
+   while awaiting_approval the login keeps its own prominent callout (see
+   renderMcpLoginHintHtml). */
+function _mcpLoginSegment(lh) {
+  if (!lh) return null;
+  const phase = lh.phase || 'awaiting_approval';
+  if (phase === 'awaiting_approval') return null;  // stays a standalone callout
+  const user = lh.username || '';
+  const _t = (typeof t === "function") ? t : (k => k);
+
+  let icon, state, headline;
+  if (phase === 'approved') {
+    icon = Icon('check', 13); state = 'done';
+    headline = user ? `${_t('login.approved')} · ${user}` : _t('login.approved');
+  } else if (phase === 'denied') {
+    icon = Icon('ban', 13); state = 'failed';
+    headline = _t('login.denied');
+  } else if (phase === 'timeout') {
+    icon = Icon('alarm', 13); state = 'failed';
+    headline = _t('login.timeout');
+  } else {
+    icon = Icon('check', 13); state = 'done';
+    headline = _t('login.finished');
   }
 
-  const expandable = !!details;
-  return `<div class="mem-prefetch-chip mp-${state}${expandable ? ' mp-expandable' : ''}"${expandable ? ' onclick="this.classList.toggle(\'mp-expanded\')"' : ''}>` +
-    `<span class="mp-icon">${icon}</span>` +
-    `<span class="mp-text"><span class="mp-headline">${escapeHtml(headline)}</span>` +
-    (sub ? `<span class="mp-sub">${escapeHtml(sub)}</span>` : "") +
-    `</span>` +
-    (state === "running" ? `<span class="mp-dots"><span>.</span><span>.</span><span>.</span></span>` : "") +
-    (expandable ? `<span class="mp-chevron">▾</span>` : "") +
-    (details ? `<div class="mp-details">${details}</div>` : "") +
+  let snippet = '';
+  if (lh.snippet && (phase === 'denied' || phase === 'timeout')) {
+    let text = String(lh.snippet).trim();
+    try {
+      const trimmed = text.replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, '');
+      text = JSON.stringify(JSON.parse(trimmed), null, 2);
+    } catch (_e) { /* leave raw */ }
+    snippet = `<pre class="mp-snippet">${escapeHtml(text)}</pre>`;
+  }
+
+  const segHtml = `<span class="tp-seg tp-seg-login tp-${state}">${icon}` +
+    `<span class="tp-label">${escapeHtml(headline)}</span></span>`;
+  const detailHtml =
+    `<div class="tp-detail-row tp-detail-login mp-${state}">` +
+      `<div class="mp-text"><span class="mp-headline">${escapeHtml(headline)}</span>` +
+      snippet +
+      `</div></div>`;
+  return { state, segHtml, detailHtml };
+}
+
+/* ── UNIFIED turn-provenance strip ───────────────────────────────────
+   Replaces the old stack of separate boxes (memory-prefetch +
+   preferences-applied + resolved login) with ONE quiet, collapsible
+   strip at the head of the assistant turn. Collapsed = icons + small
+   counts; click anywhere on the strip → expands to show full labels,
+   the picked-memory list, and which preferences were in context.
+   The awaiting-approval login callout is rendered SEPARATELY and stays
+   prominent (see renderMcpLoginHintHtml) — only resolved logins fold in
+   here as a small segment.
+   Called from both the streaming path (streaming_ui.js) and the
+   finished-message path (chat_render.js) so the strip is identical
+   live and after reload. */
+function renderTurnProvenanceHtml(msg) {
+  if (!msg) return "";
+  const segs = [_mcpLoginSegment(msg._mcpLoginHint),
+                _memPrefetchSegment(msg._memoryPrefetch),
+                _prefsAppliedSegment(msg._preferencesApplied),
+                _relatedConvsSegment(msg._relatedConversations)]
+                .filter(Boolean);
+  if (segs.length === 0) return "";
+
+  const running = segs.some(s => s.state === "running");
+  const failed = segs.some(s => s.state === "failed");
+  const stripState = failed ? "tp-has-failed" : (running ? "tp-running" : "tp-done");
+  const segHtml = segs.map(s => s.segHtml).join("");
+  const detailHtml = segs.map(s => s.detailHtml).join("");
+
+  return `<div class="turn-prov ${stripState} tp-expandable" onclick="this.classList.toggle('tp-expanded')">` +
+    `<span class="tp-segs">${segHtml}</span>` +
+    `<span class="tp-chevron">${Icon('chevronDown', 12)}</span>` +
+    `<div class="tp-details">${detailHtml}</div>` +
     `</div>`;
+}
+
+/* ── Back-compat shims ───────────────────────────────────────────────
+   Older call sites / persisted-message render paths may still reference
+   the per-chip builders. Route them through the unified strip so a stray
+   caller never resurrects the old stacked boxes. */
+function renderMemoryPrefetchHtml(mp) {
+  return mp ? renderTurnProvenanceHtml({ _memoryPrefetch: mp }) : "";
+}
+function renderPreferencesAppliedHtml(pa) {
+  return pa ? renderTurnProvenanceHtml({ _preferencesApplied: pa }) : "";
+}
+
+function renderPreferenceLearnedHtml(learned) {
+  /* "Remembered: X" moment(s) from the layer-3 consolidation pass.
+     learned: [{kind:'added'|'reinforced'|'pending', summary, pending, id}].
+     New preferences/identity facts are now AUTO-APPLIED and the user is simply
+     INFORMED (kind 'added'); a reinforced one is a low-risk tightening of an
+     existing entry. Both are informational only — no confirm/dismiss — and the
+     hint points the user to Settings where they can edit or remove the entry.
+     The legacy 'pending' branch (propose-then-confirm) is retained for old
+     persisted messages that still carry staged proposals.
+     Backed by EventType.PREFERENCE_LEARNED. */
+  if (!Array.isArray(learned) || !learned.length) return "";
+  const _t = (typeof t === "function") ? t : (k => k);
+  const rows = learned.map(p => {
+    const sum = escapeHtml(p.summary || "");
+    if (p.pending) {
+      const pid = escapeHtml(p.id || "");
+      return `<div class="pl-row pl-pending" data-pref-id="${pid}">` +
+        `<span class="pl-lead">${Icon('lightbulb', 13)}</span>` +
+        `<span class="pl-text">${_t("prefs.learned")} <b>${sum}</b>` +
+        `<span class="pl-hint">${_t("prefs.pendingHint")}</span></span>` +
+        `<span class="pl-actions">` +
+        `<button class="pl-btn pl-confirm" onclick="window.resolvePreference&&resolvePreference(this,'${pid}',true)">${_t("prefs.confirm")}</button>` +
+        `<button class="pl-btn pl-dismiss" onclick="window.resolvePreference&&resolvePreference(this,'${pid}',false)">${_t("prefs.dismiss")}</button>` +
+        `</span></div>`;
+    }
+    const lead = (p.kind === "added")
+      ? `${_t("prefs.added")}: ` : `${_t("prefs.learnedReinforced")}: `;
+    return `<div class="pl-row pl-reinforced">` +
+      `<span class="pl-lead">${Icon('check', 13)}</span>` +
+      `<span class="pl-text">${lead}<b>${sum}</b>` +
+      `<span class="pl-hint">${_t("prefs.editInSettings")}</span></span>` +
+      `</div>`;
+  }).join("");
+  return `<div class="pref-learned-box">${rows}</div>`;
 }
 
 function renderToolRoundsHTML(rounds, isStreaming) {

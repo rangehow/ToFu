@@ -534,17 +534,7 @@
     if (!_activeId) return;
     try {
       const text = await _ensureContent(_activeId);
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        await navigator.clipboard.writeText(text);
-      } else {
-        // Fallback: temp textarea
-        const ta = document.createElement("textarea");
-        ta.value = text;
-        document.body.appendChild(ta);
-        ta.select();
-        document.execCommand("copy");
-        ta.remove();
-      }
+      await _safeClipboardWrite(text);
       if (typeof showToast === "function") {
         showToast("", "Copied", "Source copied to clipboard.", 1800);
       }
@@ -774,6 +764,25 @@
       r.style.display = match ? "" : "none";
       if (match) visible++;
     });
+    /* When a filter matches nothing, every row is display:none — show an
+     * explicit "no matches" line so the list doesn't look blank/broken
+     * (sibling of the conv-list collapse bug: never leave a control with
+     * zero visible items and no fallback). */
+    const listEl = panel.querySelector(".artifact-lib-list");
+    if (!listEl) return;
+    let noResult = listEl.querySelector(".artifact-lib-noresult");
+    if (visible === 0 && rows.length > 0) {
+      if (!noResult) {
+        noResult = document.createElement("div");
+        noResult.className = "artifact-lib-noresult";
+        listEl.appendChild(noResult);
+      }
+      const _esc = (typeof escapeHtml === "function") ? escapeHtml : function (s) { return String(s); };
+      noResult.textContent = "No artifacts match \u201c" + _esc(q) + "\u201d";
+      noResult.style.display = "";
+    } else if (noResult) {
+      noResult.style.display = "none";
+    }
   }
 
   function _allowScripts() {
@@ -974,5 +983,6 @@
     // Exposed for tests / debug
     _meta: _metaCache,
     _content: _contentCache,
+    _filterLibrary: _filterLibrary,
   };
 })();

@@ -1,10 +1,25 @@
 """lib/memory/storage.py — File I/O, YAML frontmatter, CRUD operations.
 
 Memories are plain Markdown files stored in:
-  • Global:  <project>/.tofu/skills/global/*.md  (apply across projects)
-  • Project: <project>/.tofu/skills/*.md         (project-specific)
+  • Global:  <data>/memories/global/*.md  — server-side store, shared across
+             ALL projects and reachable even with no project attached.
+             ``<data>`` is ``$TOFU_DATA_DIR`` when set, else ``<root>/data``.
+  • Project: <project>/.tofu/skills/*.md   — travels with the project tree.
 
-All memories live under the project directory.
+The global store moved out of ``<project>/.tofu/skills/global/`` (2026-06):
+rooting a "global" memory under one project meant it was invisible from every
+other project and impossible to reach in a project-less chat. The legacy
+per-project ``global/`` directory is still READ (back-compat) and its contents
+are copied into the server store once per root (idempotent migration), so no
+existing global memory is lost.
+
+Multi-root: the read/list functions accept an optional ``extra_paths`` list
+(the non-primary workspace roots of a multi-root session). Project memories are
+UNIONED across the primary root + every extra root and de-duplicated by id
+(server-global store wins, then primary root). NEW project memories are written
+ONLY to the primary ``project_path``; global memories always go to the server
+store; update/delete/merge locate a memory in whichever root it lives and
+mutate it in place.
 """
 
 import json
@@ -21,6 +36,7 @@ logger = get_logger(__name__)
 
 __all__ = [
     'GLOBAL_MEMORY_DIR', 'GLOBAL_MEMORY_SUBDIR', 'PROJECT_MEMORY_SUBDIR', 'MIN_DESCRIPTION_LENGTH',
+    'SERVER_GLOBAL_MEMORY_SUBPATH',
     'list_all_memories', 'list_memories', 'get_memory', 'get_enabled_memories',
     'get_eligible_memories',
     'create_memory', 'update_memory', 'delete_memory', 'merge_memories',
@@ -32,6 +48,7 @@ __all__ = [
 #  Constants
 # ═══════════════════════════════════════════════════════
 
+# Legacy per-project global location (still READ for back-compat + migrated).
 GLOBAL_MEMORY_SUBDIR = os.path.join('.tofu', 'skills', 'global')
 PROJECT_MEMORY_SUBDIR = os.path.join('.tofu', 'skills')
 MIN_DESCRIPTION_LENGTH = 20
@@ -40,7 +57,19 @@ MIN_DESCRIPTION_LENGTH = 20
 # (injection.py references it for the path template)
 GLOBAL_MEMORY_DIR = None  # Set dynamically; see _get_global_memory_dir()
 
+# Project root = three levels up from lib/memory/storage.py (mirrors the
+# BASE_DIR computation in lib/config_dir.py + lib/database.py).
+_PROJECT_ROOT = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# Server-side global memory store, relative to the resolved data dir.
+SERVER_GLOBAL_MEMORY_SUBPATH = os.path.join('memories', 'global')
+
 _lock = threading.Lock()
+
+# Roots whose legacy ``.tofu/skills/global`` dir has already been migrated
+# into the server store this process (idempotent — guards repeated scans).
+_migrated_roots: set = set()
 
 
 # ═══════════════════════════════════════════════════════
@@ -305,6 +334,20 @@ def _memory_from_file(filepath, scope='global', package_dir=None,
     # Pull OpenClaw / Anthropic-style gating fields out of metadata.
     pkg_meta = _extract_package_metadata(meta)
 
+    # Packages installed from the curated catalog drop a ``.catalog_id``
+    # marker so the catalog endpoint can match them back (the memory id is
+    # derived from SKILL.md ``name`` and rarely equals the catalog id).
+    catalog_id = ''
+    if package_dir:
+        marker = os.path.join(package_dir, '.catalog_id')
+        if os.path.isfile(marker):
+            try:
+                with open(marker, encoding='utf-8') as cf:
+                    catalog_id = cf.read().strip()
+            except OSError as e:
+                logger.debug('Failed to read .catalog_id in %s: %s',
+                             package_dir, e)
+
     # Top-level frontmatter overrides (``requires_bins:`` /
     # ``requires_env:`` directly in frontmatter, predating the
     # ``metadata.openclaw`` block format).
@@ -332,6 +375,7 @@ def _memory_from_file(filepath, scope='global', package_dir=None,
         'filepath': filepath,
         'is_package': bool(package_dir),
         'package_dir': package_dir or '',
+        'catalog_id': catalog_id,
     }
 
     eligible, reasons = _check_memory_eligible(mem)
@@ -416,33 +460,152 @@ def _list_memories_in_dir(dirpath, scope='global'):
     return memories
 
 
-def _get_global_memory_dir(project_path):
-    """Return the global memory directory for ``project_path``.
+def _server_data_dir():
+    """Return the server data directory — the SAME writable root the DB and
+    logs use.
 
-    Global memories live at ``<project>/.tofu/skills/global/``.  Returns
-    ``None`` when no project root is set — the caller must handle that
-    (typically by skipping global enumeration).
+    Delegates to ``lib.runtime_paths.data_root()`` so the global memory store
+    always co-locates with ``data/tofu.db`` under one resolved base. This
+    matters once a source checkout defaults its data root OUT of the code tree
+    (``TOFU_DATA_LAYOUT``): recomputing ``<project_root>/data`` here would split
+    global memories back into the tree while the DB moved to the per-user dir —
+    silently orphaning them. Falls back to the legacy in-tree path only if the
+    import fails (should never happen; runtime_paths is dependency-free).
+    """
+    try:
+        from lib.runtime_paths import data_root
+        return data_root()
+    except Exception as e:  # pragma: no cover — defensive
+        logger.warning('[Memory] runtime_paths.data_root() unavailable, '
+                       'falling back to in-tree data/: %s', e)
+        return os.environ.get('TOFU_DATA_DIR') or os.path.join(_PROJECT_ROOT, 'data')
+
+
+def _server_global_memory_dir():
+    """Return the canonical server-side global memory directory.
+
+    ``<data>/memories/global/``.  Independent of any project, so global
+    memories work in a project-less chat and are shared across projects.
+    Lives under ``data/`` which export.py already excludes wholesale.
+    """
+    return os.path.join(_server_data_dir(), SERVER_GLOBAL_MEMORY_SUBPATH)
+
+
+def _get_global_memory_dir(project_path):
+    """Return the LEGACY per-project global memory directory.
+
+    Legacy global memories lived at ``<project>/.tofu/skills/global/``.
+    Still read for back-compat (and migrated into the server store); returns
+    ``None`` when no project root is set.
     """
     if not project_path:
         return None
     return os.path.join(project_path, GLOBAL_MEMORY_SUBDIR)
 
 
-def list_all_memories(project_path=None):
-    """List all global + project memories."""
+def _migrate_one_root_globals(root):
+    """Copy a root's legacy global memories into the server store.
+
+    Idempotent: a legacy entry is copied only when no server-store entry of
+    the same id already exists. Files are copied (not moved) so the legacy
+    original survives the transition window — it is shadowed by id de-dup
+    on read (server store wins). Handles both flat ``<id>.md`` files and
+    ``<id>/SKILL.md`` skill packages.
+    """
+    legacy_dir = _get_global_memory_dir(root)
+    if not legacy_dir or not os.path.isdir(legacy_dir):
+        return
+    server_dir = _server_global_memory_dir()
+    _ensure_dir(server_dir)
+    for entry in sorted(os.listdir(legacy_dir)):
+        if entry.startswith('.'):
+            continue
+        src = os.path.join(legacy_dir, entry)
+        if os.path.isfile(src) and entry.endswith('.md'):
+            dst = os.path.join(server_dir, entry)
+            if os.path.exists(dst) or os.path.isdir(os.path.splitext(dst)[0]):
+                continue
+            shutil.copy2(src, dst)
+            logger.info('[Memory] migrated legacy global memory %s → %s',
+                        entry, server_dir)
+        elif os.path.isdir(src) and os.path.isfile(
+                os.path.join(src, 'SKILL.md')):
+            dst = os.path.join(server_dir, entry)
+            if os.path.exists(dst):
+                continue
+            shutil.copytree(src, dst)
+            logger.info('[Memory] migrated legacy global skill package %s → %s',
+                        entry, server_dir)
+
+
+def _iter_roots(project_path, extra_paths):
+    """Return the ordered, de-duplicated list of roots to scan.
+
+    The primary ``project_path`` always comes first (so it wins on an id
+    collision); any ``extra_paths`` follow in order, skipping blanks and
+    duplicates.
+    """
+    roots = []
+    if project_path:
+        roots.append(project_path)
+    for p in (extra_paths or []):
+        if p and p not in roots:
+            roots.append(p)
+    return roots
+
+
+def list_all_memories(project_path=None, extra_paths=None):
+    """List all global + project memories across the primary + extra roots.
+
+    Project- and global-scoped memories are unioned across the primary
+    ``project_path`` and every root in ``extra_paths`` (a multi-root
+    session), de-duplicated by id with the primary root winning on a
+    collision. With no ``extra_paths`` this is identical to the original
+    single-root behaviour.
+    """
+    roots = _iter_roots(project_path, extra_paths)
+    memories = []
+    seen_ids = set()
     with _lock:
-        global_dir = _get_global_memory_dir(project_path)
-        memories = (_list_memories_in_dir(global_dir, scope='global')
-                    if global_dir else [])
-        if project_path:
-            proj_dir = os.path.join(project_path, PROJECT_MEMORY_SUBDIR)
-            memories += _list_memories_in_dir(proj_dir, scope='project')
+        # One-time idempotent migration of each root's legacy global dir into
+        # the server store, so pre-existing globals become cross-project.
+        for root in roots:
+            if root in _migrated_roots:
+                continue
+            try:
+                _migrate_one_root_globals(root)
+            except Exception as e:
+                logger.warning('[Memory] legacy global migration failed for '
+                               '%s: %s', root, e)
+            _migrated_roots.add(root)
+
+        # Server-side global store first — canonical, scanned once regardless
+        # of project, and wins on an id collision.
+        for mem in _list_memories_in_dir(_server_global_memory_dir(),
+                                         scope='global'):
+            if mem['id'] in seen_ids:
+                continue
+            seen_ids.add(mem['id'])
+            memories.append(mem)
+
+        for root in roots:
+            # Legacy per-root global dir (back-compat read; shadowed by id).
+            global_dir = _get_global_memory_dir(root)
+            scanned = (_list_memories_in_dir(global_dir, scope='global')
+                       if global_dir else [])
+            proj_dir = os.path.join(root, PROJECT_MEMORY_SUBDIR)
+            scanned += _list_memories_in_dir(proj_dir, scope='project')
+            for mem in scanned:
+                if mem['id'] in seen_ids:
+                    continue
+                seen_ids.add(mem['id'])
+                memories.append(mem)
     return memories
 
 
-def list_memories(project_path=None, scope='all'):
+def list_memories(project_path=None, scope='all', extra_paths=None):
     """List memories, optionally filtered by scope."""
-    all_memories = list_all_memories(project_path)
+    all_memories = list_all_memories(project_path, extra_paths=extra_paths)
     if scope == 'global':
         return [s for s in all_memories if s['scope'] == 'global']
     elif scope == 'project':
@@ -450,23 +613,24 @@ def list_memories(project_path=None, scope='all'):
     return all_memories
 
 
-def get_memory(memory_id, project_path=None):
+def get_memory(memory_id, project_path=None, extra_paths=None):
     """Get a single memory by ID. Returns memory dict or None."""
-    for s in list_all_memories(project_path):
+    for s in list_all_memories(project_path, extra_paths=extra_paths):
         if s['id'] == memory_id:
             return s
     return None
 
 
-def get_enabled_memories(project_path=None):
+def get_enabled_memories(project_path=None, extra_paths=None):
     """Get only enabled memories."""
-    return [s for s in list_all_memories(project_path) if s.get('enabled', True)]
+    return [s for s in list_all_memories(project_path, extra_paths=extra_paths)
+            if s.get('enabled', True)]
 
 
-def get_eligible_memories(project_path=None):
+def get_eligible_memories(project_path=None, extra_paths=None):
     """Get memories that are both enabled AND meet all runtime requirements."""
     return [
-        s for s in get_enabled_memories(project_path)
+        s for s in get_enabled_memories(project_path, extra_paths=extra_paths)
         if s.get('eligible', True)
     ]
 
@@ -488,14 +652,21 @@ def resolve_target_dir(scope, project_path):
     """Return the on-disk directory where a memory of ``scope`` should live.
 
     Used by both :func:`create_memory` and the package installer.
-    Raises ``ValueError`` when ``project_path`` is missing — the in-tree
-    layout requires a project root.
+
+    * ``scope='global'`` → the server-side store (``<data>/memories/global/``),
+      created on demand. No project root required — global memories are
+      project-independent.
+    * ``scope='project'`` → ``<project>/.tofu/skills/``. Raises ``ValueError``
+      when ``project_path`` is missing (a project-scoped memory has nowhere
+      to live without one).
     """
+    if scope == 'global':
+        target = _server_global_memory_dir()
+        _ensure_dir(target)
+        return target
     if not project_path:
-        raise ValueError('project_path required for memory storage')
-    if scope == 'project':
-        return os.path.join(project_path, PROJECT_MEMORY_SUBDIR)
-    return os.path.join(project_path, GLOBAL_MEMORY_SUBDIR)
+        raise ValueError('project_path required for project-scoped memory storage')
+    return os.path.join(project_path, PROJECT_MEMORY_SUBDIR)
 
 
 def create_memory(name, description='', body='', tags=None, scope='global', project_path=None):
@@ -542,9 +713,14 @@ def create_memory(name, description='', body='', tags=None, scope='global', proj
     return mem
 
 
-def update_memory(memory_id, updates, project_path=None):
-    """Update an existing memory. Returns updated memory or None."""
-    all_memories = list_all_memories(project_path)
+def update_memory(memory_id, updates, project_path=None, extra_paths=None):
+    """Update an existing memory. Returns updated memory or None.
+
+    The memory is located across the primary + extra roots and rewritten
+    in place at its own ``filepath`` (so editing an extra-root memory
+    stays in that root).
+    """
+    all_memories = list_all_memories(project_path, extra_paths=extra_paths)
     target = None
     for s in all_memories:
         if s['id'] == memory_id:
@@ -560,22 +736,30 @@ def update_memory(memory_id, updates, project_path=None):
     return target
 
 
-def delete_memory(memory_id, project_path=None):
+def delete_memory(memory_id, project_path=None, extra_paths=None):
     """Delete a memory. Handles both flat ``.md`` files and package
     directories (``<id>/SKILL.md`` + references/scripts).
 
+    The memory is located across the primary + extra roots.
     Returns True if deleted.
     """
-    all_memories = list_all_memories(project_path)
+    all_memories = list_all_memories(project_path, extra_paths=extra_paths)
+    _roots = _iter_roots(project_path, extra_paths)
+    # Global skill packages live in the server store, not under a project
+    # root, so it must also be an allowed deletion prefix.
+    _allowed = [os.path.realpath(r) for r in _roots]
+    _allowed.append(os.path.realpath(_server_global_memory_dir()))
     for s in all_memories:
         if s['id'] != memory_id:
             continue
         try:
             if s.get('is_package') and s.get('package_dir'):
                 pkg = s['package_dir']
-                # Defence: only delete inside the project's skills tree.
-                if project_path and not os.path.realpath(pkg).startswith(
-                        os.path.realpath(project_path)):
+                # Defence: only delete inside an allowed skills tree (project
+                # roots + the server-side global store).
+                pkg_real = os.path.realpath(pkg)
+                if _allowed and not any(
+                        pkg_real.startswith(a) for a in _allowed):
                     logger.warning('Refusing to delete package outside project: %s', pkg)
                     return False
                 shutil.rmtree(pkg)
@@ -589,12 +773,16 @@ def delete_memory(memory_id, project_path=None):
     return False
 
 
-def merge_memories(memory_ids, name, description, body, tags=None, scope='project', project_path=None):
-    """Merge multiple memories into one new consolidated memory, deleting the originals."""
+def merge_memories(memory_ids, name, description, body, tags=None, scope='project', project_path=None, extra_paths=None):
+    """Merge multiple memories into one new consolidated memory, deleting the originals.
+
+    Source memories are located across the primary + extra roots; the new
+    consolidated memory is always written to the PRIMARY ``project_path``.
+    """
     if not memory_ids or len(memory_ids) < 2:
         raise ValueError("merge_memories requires at least 2 memory IDs")
 
-    all_memories = list_all_memories(project_path)
+    all_memories = list_all_memories(project_path, extra_paths=extra_paths)
     mem_map = {s['id']: s for s in all_memories}
     missing = [sid for sid in memory_ids if sid not in mem_map]
     if missing:
@@ -611,17 +799,18 @@ def merge_memories(memory_ids, name, description, body, tags=None, scope='projec
 
     deleted_ids = []
     for sid in memory_ids:
-        if delete_memory(sid, project_path):
+        if delete_memory(sid, project_path, extra_paths=extra_paths):
             deleted_ids.append(sid)
 
     return {'merged_memory': merged, 'deleted_ids': deleted_ids}
 
 
-def toggle_memory(memory_id, enabled=None, project_path=None):
+def toggle_memory(memory_id, enabled=None, project_path=None, extra_paths=None):
     """Toggle a memory's enabled state."""
     if enabled is None:
-        mem = get_memory(memory_id, project_path)
+        mem = get_memory(memory_id, project_path, extra_paths=extra_paths)
         if not mem:
             return None
         enabled = not mem.get('enabled', True)
-    return update_memory(memory_id, {'enabled': enabled}, project_path)
+    return update_memory(memory_id, {'enabled': enabled}, project_path,
+                         extra_paths=extra_paths)

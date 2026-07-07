@@ -24,6 +24,16 @@ async function startAssistantResponse(convId) {
   }
   /* ★ Use per-conv model — config.model is global and may reflect a different conv */
   const _convModel = (convId === activeConvId) ? (config.model || serverModel) : (conv.model || serverModel);
+  /* ★ Mint the assistant message's stable id BEFORE the POST (same as the send
+   *   / regenerate paths) so live per-round translation frames route to THIS
+   *   bubble while it streams — it has no DB index yet. Shipped to the backend
+   *   via config.assistantMsgId below; create_task copies it to
+   *   task['_assistantMsgId']. Reused on the assistantMsg object + stamped on
+   *   the bubble (data-msg-id) so the in-stream preview and the final committed
+   *   translation address the same message. */
+  const _saMsgId = (typeof _newClientMsgId === 'function')
+    ? _newClientMsgId()
+    : ('tmp_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8));
   const assistantMsg = {
     role: "assistant",
     content: "",
@@ -31,8 +41,9 @@ async function startAssistantResponse(convId) {
     timestamp: Date.now(),
     toolRounds: [],
     model: _convModel,
+    _msgId: _saMsgId,
   };
-  _ensureMsgId(assistantMsg);
+  _ensureMsgId(assistantMsg);  // no-op when _msgId already set
   conv.messages.push(assistantMsg);
   if (activeConvId === convId) {
     const inner = document.getElementById("chatInner");
@@ -43,7 +54,7 @@ async function startAssistantResponse(convId) {
       const _isEndpoint = (convId === activeConvId) ? endpointEnabled : (!!conv.endpointEnabled);
       if (_isEndpoint) assistantMsg._isEndpointPlanner = true;
       const role = _isEndpoint ? 'planner' : 'worker';
-      inner.insertAdjacentHTML('beforeend', _streamingBubbleHTML(role));
+      inner.insertAdjacentHTML('beforeend', _streamingBubbleHTML(role, null, null, _saMsgId));
       const el = document.getElementById('streaming-msg');
       if (el) {
         el.classList.add('message-new');
@@ -60,19 +71,23 @@ async function startAssistantResponse(convId) {
   //   We sync all messages EXCEPT the trailing empty assistant (it's just a
   //   UI placeholder — the backend doesn't need it).
   await syncConversationToServer(conv);
-  // Debug panel shows raw conv.messages for inspection (not API-processed).
-  showMessagesInDebug(
-    conv.messages.slice(0, -1),  // exclude trailing empty assistant msg
-    `${conv.messages.length} ${t('conv.messages')}`,
-    false,
-    convId,
-  );
+  // Debug panel: single source of truth is the backend. The DB was just
+  // synced above, so restoreDebugForConv fetches the exact api-form messages
+  // the LLM will see (via /debug-messages → build_api_messages_from_db),
+  // instead of the raw, not-API-processed client-side conv.messages. The
+  // subsequent messages_snapshot SSE updates it in place as rounds run.
+  if (typeof restoreDebugForConv === "function") restoreDebugForConv(convId);
   let taskId;
   /* ★ Use shared _buildConvConfig to avoid config divergence.
    * startAssistantResponse is now only used by continueAssistant() and
    * Case E orphan recovery. sendMessage and regenerateFromUser use the
    * atomic /api/chat/send and /api/chat/regenerate endpoints instead. */
   const baseConfig = await _buildConvConfig(conv);
+  /* ★ Ship the assistant msg id minted above so the backend stamps it on the
+   *   task (task['_assistantMsgId']) → live per-round translation frames route
+   *   to the streaming bubble. Endpoint mode ignores it (its own translate
+   *   path), so this is harmless when _ep is true. */
+  baseConfig.assistantMsgId = _saMsgId;
   const _ep = !!baseConfig.endpointMode;
   const _pp = baseConfig.projectPath;
   /* Decide API route: endpoint mode uses /api/v1/endpoint/start */
@@ -115,12 +130,22 @@ async function startAssistantResponse(convId) {
     const _kind = e.name === 'TimeoutError' ? 'timeout'
       : e.name === 'AbortError' ? 'aborted'
       : 'network';
+    /* Fix the empty-hint hole at the source: a client-side chat-start failure
+     * MUST carry actionable guidance so it doesn't depend on which path
+     * stamped the error. This is NOT the recoverable server_offline case — the
+     * POST that starts the turn failed, so no task ran server-side and there is
+     * nothing to recover. The honest advice is check the connection and Retry
+     * (renderErrorEnvelope shows NO Recover button for kind=network). */
+    const _hint = _kind === 'network'
+      ? ((typeof t === 'function') ? t('err.net.hint')
+          : "Couldn't reach the server — check your network or proxy, then Retry.")
+      : '';
     assistantMsg.error = normalizeErrorEnvelope({
       kind: _kind,
       severity: _kind === 'aborted' ? 'warning' : 'error',
       retryable: _kind !== 'aborted',
       message: errMsg,
-      hint: '', detail: e.message || '',
+      hint: _hint, detail: e.message || '',
       model: baseConfig.model || '', context: 'chat-start', source: 'frontend-fetch', raw: e.message || '',
     });
     /* Funnel the streaming-finalize through the unified controller so
@@ -269,6 +294,13 @@ async function sendMessage() {
     pdfTexts: [...pendingPdfTexts],
     timestamp: Date.now(),
   };
+  // ── Per-turn context snapshot: freeze the workspace/tools/model that
+  //    are active right now so each turn carries a note of what it ran
+  //    with (rendered on the right of the user bubble). Persisted by the
+  //    backend (whitelisted in build_user_msg_from_payload) so it survives
+  //    reload. See static/js/info-rail.js.
+  const _turnCtx = (typeof buildTurnCtxSnapshot === 'function') ? buildTurnCtxSnapshot() : null;
+  if (_turnCtx) msgPayload.ctx = _turnCtx;
   // Reply quotes
   if (typeof getPendingReplyQuotes === "function") {
     const rqs = getPendingReplyQuotes();
@@ -303,6 +335,7 @@ async function sendMessage() {
   };
   if (msgPayload.replyQuotes) userMsg.replyQuotes = msgPayload.replyQuotes;
   if (msgPayload.convRefs) userMsg.convRefs = msgPayload.convRefs;
+  if (_turnCtx) userMsg._ctx = _turnCtx;
   _ensureMsgId(userMsg);
 
   conv._needsLoad = false;
@@ -361,6 +394,18 @@ async function sendMessage() {
   // ── Atomic backend call: message creation + translate + task start ──
   const _sendConfig = await _buildConvConfig(conv);
 
+  // ★ Mint the assistant message's stable id BEFORE the POST and ship it to
+  //   the backend (config.assistantMsgId). The server stamps it on the task
+  //   (task['_assistantMsgId']) so live per-round translation frames route to
+  //   THIS message while it's still streaming (it has no DB index yet), and
+  //   the streaming bubble is stamped with the same data-msg-id below. Reused
+  //   verbatim for the assistantMsg object so the in-stream preview and the
+  //   final committed translation address the same message.
+  const _assistantMsgId = (typeof _newClientMsgId === 'function')
+    ? _newClientMsgId()
+    : ('tmp_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8));
+  _sendConfig.assistantMsgId = _assistantMsgId;
+
   // ★ If autoTranslate is on and text has Chinese, show stop button immediately
   //   so the user can abort during server-side translation.
   // ★ Safety timer must comfortably exceed the backend translate cap
@@ -380,7 +425,7 @@ async function sendMessage() {
     conv._translateAbortCtrl = _sendAbortCtrl;
     updateSendButton();
     renderConversationList();
-    if (activeConvId === convId) _renderTranslatingBubble(convId);
+    if (activeConvId === convId) _renderTranslatingBubble();
   }
 
   try {
@@ -404,7 +449,14 @@ async function sendMessage() {
      * starts streaming.  Each subsequent round is covered by the
      * 'phase: llm_thinking' SSE branch in ui.js. */
     if (typeof updateContextBar === 'function') updateContextBar();
-    const resp = await Api.chat.send(_sendBody, { signal: _sendAbortCtrl.signal });
+    /* ★ #5 idempotency: key the send on the optimistic user message's stable
+     *   _msgId (assigned once, above). A network retry of THIS send reuses the
+     *   same key → the backend's @idempotent_post replays the cached {taskId}
+     *   instead of spawning a duplicate task (and double-charging tokens).
+     *   A genuinely new send gets a new _msgId → new key. */
+    const _sendOpts = { signal: _sendAbortCtrl.signal };
+    if (userMsg._msgId) _sendOpts.headers = { 'Idempotency-Key': String(userMsg._msgId) };
+    const resp = await Api.chat.send(_sendBody, _sendOpts);
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
       throw new Error(err.error || `Server ${resp.status}`);
@@ -463,10 +515,14 @@ async function sendMessage() {
       role: "assistant", content: "", thinking: "",
       timestamp: Date.now(), toolRounds: [],
       model: _sendConfig.model || serverModel,
+      // ★ Same id we minted + shipped in config.assistantMsgId, so the live
+      //   per-round translation preview (routed by this id) lands on this
+      //   exact message object.
+      _msgId: _assistantMsgId,
     };
     // ★ Endpoint mode: mark as planner so SSE reconnection identifies it correctly
     if (_sendConfig.endpointMode) assistantMsg._isEndpointPlanner = true;
-    _ensureMsgId(assistantMsg);
+    _ensureMsgId(assistantMsg);  // no-op when _msgId already set
     conv.messages.push(assistantMsg);
     conv.activeTaskId = taskId;
     saveConversations(convId);
@@ -485,7 +541,7 @@ async function sendMessage() {
 
     if (activeConvId === convId) {
       _removeTranslatingBubble();
-      _renderStreamingBubble(conv, _sendConfig);
+      _renderStreamingBubble(conv, _sendConfig, _assistantMsgId);
     }
     buildTurnNav(conv);
     connectToTask(convId, taskId);
@@ -504,7 +560,21 @@ async function sendMessage() {
         if (msgEl) msgEl.outerHTML = renderMessage(userMsg, userMsgIdx);
       }
       saveConversations(convId);
-      syncConversationToServer(conv);
+      /* ★ The send fetch failed/aborted, so the backend's _chat_send did NOT
+       *   persist this turn — clear the in-flight marker BEFORE the rescue
+       *   sync so it is not silently skipped by syncConversationToServer's
+       *   `_sendInFlight` guard.  Without this the PUT is a no-op and the
+       *   user's message survives only in the in-memory array → it vanishes
+       *   on the next page refresh (the poor-network data-loss bug).  The
+       *   duplicate the guard protects against cannot happen here: chat_send
+       *   threw, so there is no concurrent backend persist. */
+      conv._sendInFlight = false;
+      /* ★ Durability: if the rescue PUT fails (the same poor network that
+       *   failed the send), mark the turn _pendingSync + persist to
+       *   IndexedDB and start the retry poller so the message survives a
+       *   reload and is re-synced on reconnect. */
+      const _synced = await syncConversationToServer(conv);
+      if (!_synced) markConvPendingSync(conv);
       buildTurnNav(conv);
       Api.chat.abortConv(convId);
     } else if (e.name === 'AbortError' && _sendAbortReason === 'timeout'
@@ -541,7 +611,19 @@ async function sendMessage() {
           chatInnerEl.insertAdjacentHTML("beforeend", renderMessage(errAssistant, conv.messages.length - 1));
       }
       saveConversations(convId);
-      syncConversationToServer(conv);
+      /* ★ Same as the user-stop branch above: the send failed, so the backend
+       *   is NOT persisting this turn.  Clear `_sendInFlight` before the rescue
+       *   sync — otherwise syncConversationToServer's guard skips the PUT and
+       *   the user message + error bubble disappear on the next refresh
+       *   (poor-network data-loss). await so the PUT has a chance to land
+       *   before the user can reload. */
+      conv._sendInFlight = false;
+      /* ★ Durability: if the rescue PUT also fails (poor network), mark the
+       *   turn _pendingSync + persist to IndexedDB and start the retry poller
+       *   so the user message + error bubble survive a reload and are
+       *   re-synced automatically once connectivity returns. */
+      const _synced = await syncConversationToServer(conv);
+      if (!_synced) markConvPendingSync(conv);
       buildTurnNav(conv);
     }
   } finally {
@@ -574,6 +656,25 @@ async function sendMessage() {
 // ══════════════════════════════════════════════════════
 //  ★ Pending Message Queue — dispatch, UI, cancel
 // ══════════════════════════════════════════════════════
+
+/**
+ * Count of DISPATCHABLE queued messages for a conversation.
+ *
+ * Mirrors the backend's `_get_queue_depth` (lib/message_queue.py), which
+ * excludes the autopilot armed-marker sentinel (kind='autopilot').  That
+ * sentinel is a persistent flag consumed by the end-of-turn autopilot hook,
+ * NOT a turn that ever gets dequeued & dispatched as a task.  Every frontend
+ * gate that means "is there pending work the backend will start next?" MUST
+ * use this — using the raw Map length instead makes an armed-but-idle
+ * autopilot look like a permanently stuck queued message (ghost "Dispatching…"
+ * bubble + a doomed ~15s _checkForQueuedTask retry loop).
+ */
+function _dispatchableQueueCount(convId) {
+  const q = pendingMessageQueue.has(convId) ? pendingMessageQueue.get(convId) : null;
+  if (!q || q.length === 0) return 0;
+  return q.filter((it) => it && it.kind !== 'autopilot').length;
+}
+if (typeof window !== 'undefined') window._dispatchableQueueCount = _dispatchableQueueCount;
 
 // ★ REMOVED: _dispatchQueuedMessage() — dead code.
 // Queue dispatch is now handled server-side by dispatch_next_queued() in
@@ -608,6 +709,9 @@ function _attachAutopilotFollowup(convId, payload) {
     console.warn('[Autopilot] _attachAutopilotFollowup: missing nextTaskId or vuMessage', payload);
     return;
   }
+  /* Baton consumed \u2014 clear the authoritative conv-level copy so a later
+   * finishStream / poll doesn't re-dispatch the same follow-up. */
+  delete conv._apPendingBaton;
   console.info(
     `%c[Autopilot] ▶ Attaching to follow-up task=${nextTaskId.slice(0,8)} for conv=${convId.slice(0,8)} ` +
     `vu="${(vuMessage.content||'').slice(0,80)}${(vuMessage.content||'').length>80?'…':''}"`,
@@ -812,7 +916,22 @@ function renderPendingQueueUI(convId) {
     if (queueHost) queueHost.appendChild(container);
   }
   container.classList.remove('queue-removing');
-  const items = queue.map((item, i) => {
+  /* Autopilot SVG glyph (steering-wheel-ish circle) for the sentinel item. */
+  const _apSvg = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/><path d="M12 3v6M12 15v6M3 12h6M15 12h6"/></svg>`;
+  let _realCount = 0;   // human/workflow items get sequential numbers
+  const items = queue.map((item) => {
+    /* ── Autopilot armed-marker sentinel — always rendered last (priority 90),
+     *   distinct styling, cancel = DISARM (not just queue-remove). ── */
+    if (item.kind === 'autopilot') {
+      const apLabel = (typeof t === 'function') ? t('autopilot.pendingTakeover') : 'Autopilot will take over';
+      const apCancelTitle = (typeof t === 'function') ? t('autopilot.cancelTakeover') : 'Cancel autopilot';
+      return `<div class="pending-queue-item pending-queue-autopilot">
+        <span class="queue-item-number queue-item-autopilot-icon">${_apSvg}</span>
+        <span class="queue-item-text">${escapeHtml(apLabel)}</span>
+        <button class="queue-item-cancel" onclick="cancelAutopilotMarker('${convId}')" title="${escapeHtml(apCancelTitle)}">✕</button>
+      </div>`;
+    }
+    const i = _realCount++;
     const preview = item.text
       ? item.text
       : (item.images?.length ? `${item.images.length} 张图片` : "附件");
@@ -831,12 +950,43 @@ function renderPendingQueueUI(convId) {
     </div>`;
   }).join("");
   const headerSvg = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4m0 12v4M4.93 4.93l2.83 2.83m8.48 8.48l2.83 2.83M2 12h4m12 0h4M4.93 19.07l2.83-2.83m8.48-8.48l2.83-2.83"/></svg>`;
+  /* Header count reflects only real queued messages; the autopilot sentinel
+   * is described by its own row, not counted as "排队消息". */
+  const _headerLabel = _realCount > 0
+    ? `${_realCount} ${(typeof t === 'function') ? t('queue.messagesQueued') : '条消息排队中'}`
+    : ((typeof t === 'function') ? t('autopilot.armedShort') : 'Autopilot armed');
   container.innerHTML = `<div class="queue-header">
     ${headerSvg}
-    <span>${queue.length} 条消息排队中</span>
-    ${queue.length > 1 ? `<button class="queue-clear-all" onclick="clearPendingQueue('${convId}')">全部清空</button>` : ''}
+    <span>${escapeHtml(_headerLabel)}</span>
+    ${_realCount > 1 ? `<button class="queue-clear-all" onclick="clearPendingQueue('${convId}')">${(typeof t === 'function') ? t('queue.clearAll') : '全部清空'}</button>` : ''}
   </div>${items}`;
 }
+
+/**
+ * Cancel the autopilot armed-marker (disarm) from the queue bar.
+ * Clears the persistent sentinel + flips any live task's autopilot off, and
+ * turns the toolbar toggle off to keep the UI consistent.
+ */
+function cancelAutopilotMarker(convId) {
+  if (typeof Api !== 'undefined' && Api.chat && Api.chat.disarmAutopilot) {
+    Api.chat.disarmAutopilot(convId)
+      .then((resp) => {
+        /* Fold the just-concluded run instantly even with no live stream. */
+        if (typeof _applyDisarmResponse === 'function') _applyDisarmResponse(convId, resp);
+        if (typeof _refreshServerQueue === 'function') _refreshServerQueue(convId);
+      })
+      .catch((e) => console.warn('[Autopilot] disarm (queue cancel) failed:', e && e.message));
+  }
+  /* Reflect the cancel in the toolbar toggle for the active conv. */
+  const _conv = (typeof getActiveConv === 'function') ? getActiveConv() : null;
+  if (_conv && _conv.id === convId && typeof autopilotEnabled !== 'undefined' && autopilotEnabled
+      && typeof _applyAutopilotUI === 'function') {
+    _applyAutopilotUI(false);
+    if (typeof _saveConvToolState === 'function') _saveConvToolState();
+  }
+  debugLog('Autopilot canceled — virtual user will not take over', 'info');
+}
+if (typeof window !== 'undefined') window.cancelAutopilotMarker = cancelAutopilotMarker;
 
 /**
  * Remove a single item from the pending queue (server-backed).
@@ -1008,7 +1158,7 @@ async function _checkForQueuedTask(convId, _retryCount = 0) {
       // Retry if there are queued items, OR if autopilot is on (the
       // backend may still be running the VU LLM call to produce the
       // synthetic user reply, then will spawn a follow-up task).
-      const _hasQueueItems = pendingMessageQueue.has(convId) && pendingMessageQueue.get(convId).length > 0;
+      const _hasQueueItems = _dispatchableQueueCount(convId) > 0;
       const _autopilotOn = !!(_conv && _conv.autopilotEnabled);
       const _shouldRetry = _hasQueueItems || _autopilotOn;
       // ★ Extended retry schedule — covers slow aborts (mid-tool, slow LLM
@@ -1109,6 +1259,7 @@ async function _refreshServerQueue(convId) {
       // Convert server format to local format
       const localQueue = serverQueue.map(item => ({
         queueId: item.queueId,
+        kind: item.kind || 'real',
         text: item.text || '',
         images: item.hasImages ? ['(server)'] : [],
         pdfTexts: item.hasPdfs ? ['(server)'] : [],

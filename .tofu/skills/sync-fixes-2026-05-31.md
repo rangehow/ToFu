@@ -100,6 +100,21 @@ Phase 3, multi-tab CAS, SSE+push fanout dedup) for a separate PR.
 - M1: `_sync_result_to_conversation` lacks CAS retry. Rejected: the
   existing benign-skip log is correct semantics — task_results carries
   canonical data and the winner already had the SSE done event merged.
+  **⚠️ OVERTURNED 2026-07-03 (follow-up #4).** The "frontend likely synced
+  first (safe)" assumption is FALSE on a poor network: the SSE `done` frame
+  may never reach the browser, so `finishStream` never syncs, yet a
+  concurrent partial-checkpoint / meta write still bumps `updated_at` →
+  single-shot CAS miss → the final turn is dropped from
+  `conversations.messages` (survives only in `task_results`, recoverable
+  only via poll/startup). `_sync_result_to_conversation` now has the SAME
+  bounded CAS-retry (`_MAX_TERMINAL_CAS=3`) as `_sync_partial`: on a miss it
+  re-reads the fresh row and re-applies the content-length guard via a local
+  `_apply_result_to_tail(msgs)` closure — skip ONLY if the fresh row already
+  holds content ≥ ours (genuine frontend-won), else re-merge + re-CAS. Test:
+  `tests/test_terminal_cas_retry.py` (double-neuter `_MAX_TERMINAL_CAS→1`
+  bites). Lesson: "canonical data lives elsewhere (task_results)" does NOT
+  justify dropping the copy in the table the RELOAD path reads — reload
+  rebuilds `conversations` from the conv row, not task_results.
 - D2/D3/D4: Phase-3/4 frontend cutover (id-based regen/branch, remove
   full-array PUT). Coordinated FE+BE work.
 - D11: SSE+push dual-fanout consolidation. Architectural redesign.

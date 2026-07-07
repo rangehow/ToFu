@@ -208,9 +208,14 @@ class TaskRuntime:
         task = self.get(task_id)
         if not task:
             return False
-        if task['status'] in ('done', 'error', 'aborted'):
-            return False
-        task['abort_event'].set()
+        # Hold _lock so the status check + abort_event.set() is atomic w.r.t.
+        # finish() (which reads abort_event.is_set() under the same lock to
+        # decide done-vs-aborted). Without this an abort racing a finish could
+        # be lost, marking a cancelled task 'done'.
+        with self._lock:
+            if task['status'] in ('done', 'error', 'aborted'):
+                return False
+            task['abort_event'].set()
         logger.info('[TaskRuntime:%s] abort requested for task %s',
                     self.kind, task_id[:8])
         return True

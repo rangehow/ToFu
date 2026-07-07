@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tofu"
-version = "0.11.0"
+version = "0.13.0"
 description = "Tofu (豆腐) — Self-hosted AI assistant with Flask backend and vanilla JS frontend"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -16,6 +16,18 @@ dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
     "ruff",
+    # In-memory Redis for exercising the redis-backed runtime-state store +
+    # push bus (Epics B/C/D) against a REAL redis-py client without a live
+    # server. Test-only; the runtime `redis` dep it pulls is NOT core.
+    "fakeredis>=2.20",
+]
+# Optional horizontal-scale extra: the cross-replica runtime-state backend
+# (TOFU_RUNTIME_STATE_BACKEND=redis) + push fan-out. Redis is NOT a core
+# dependency — a single-box install runs the inproc default with zero extra
+# packages. `pip install tofu[scale]` pulls the client for a multi-replica
+# deployment.
+scale = [
+    "redis>=4.3",
 ]
 # Optional trading subsystem — extracted into its own package. `pip install
 # tofu[trading]` pulls it in; it self-mounts via the tofu.blueprints /
@@ -41,7 +53,7 @@ testpaths = ["tests"]
 python_files = "test_*.py"
 python_classes = "Test*"
 python_functions = "test_*"
-addopts = "-v --tb=short"
+addopts = "-v --tb=short --strict-markers"
 markers = [
     "unit: Pure unit tests (no server, no DB)",
     "api: API integration tests (requires PostgreSQL)",

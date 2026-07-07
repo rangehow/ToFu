@@ -11,7 +11,6 @@ static/js/main.js — currently 90 s) so the user sees a clean fallback rather
 than a generic AbortError.
 """
 
-import re
 import threading
 import time
 
@@ -103,7 +102,8 @@ def auto_translate_user(text, config, conv_id=None):
         did not produce usable output — the caller surfaces this to the user
         so the silent original-text fallback is no longer invisible.
     """
-    auto_translate = config.get('autoTranslate', False)
+    from lib.conv_config import resolve_auto_translate
+    auto_translate = resolve_auto_translate(config)
     if not auto_translate or not text:
         return text, None, None, None
 
@@ -266,7 +266,8 @@ def translate_user_text_to_english(text, config):
     ``usage`` is the engine's usage dict (carries ``_dispatch.model`` plus
     token counts) or ``None`` when no translation happened / it failed.
     """
-    if not config.get('autoTranslate', False) or not text:
+    from lib.conv_config import resolve_auto_translate
+    if not resolve_auto_translate(config) or not text:
         return text, None, None, None
 
     source_lang = (config.get('translateSourceLang') or '').strip()
@@ -351,6 +352,11 @@ def build_user_msg_from_payload(payload, config, conv_id=None):
         user_msg['replyQuotes'] = payload['replyQuotes']
     if payload.get('convRefs'):
         user_msg['convRefs'] = payload['convRefs']
+    # Per-turn context snapshot (workspace/tools/model active when the turn
+    # was sent) — opaque to the backend, persisted as-is so the frontend can
+    # render the per-turn note after a reload. See static/js/info-rail.js.
+    if payload.get('ctx'):
+        user_msg['_ctx'] = payload['ctx']
     # Resolve convRefTexts server-side from convRefs if not already provided
     conv_ref_texts = payload.get('convRefTexts')
     if not conv_ref_texts and payload.get('convRefs'):

@@ -15,10 +15,10 @@ Pure functions; no Flask imports.
 
 from __future__ import annotations
 
+import asyncio
 import json
-import time
 import uuid
-from typing import Generator
+from typing import AsyncGenerator
 
 from lib.log import get_logger
 
@@ -99,8 +99,15 @@ def translate_anthropic_request(body: dict) -> tuple[list[dict], dict, dict]:
     if 'tools' in body:
         cfg.setdefault('searchMode', 'off')
         cfg.setdefault('fetchEnabled', False)
-        cfg.setdefault('memoryEnabled', False)
         cfg.setdefault('mcpEnabled', False)
+
+    # App-personal capabilities (memory store + preference profile) fail
+    # closed on this headless compat surface regardless of whether tools were
+    # supplied — the operator's personal state must never ride an
+    # Anthropic-compat call. setdefault = an explicit caller cfg still wins.
+    # Single source of truth: lib/agent_core/personal_scope.
+    from lib.agent_core.personal_scope import apply_headless_personal_defaults
+    apply_headless_personal_defaults(cfg)
 
     options = {
         'stream': bool(body.get('stream')),
@@ -111,10 +118,13 @@ def translate_anthropic_request(body: dict) -> tuple[list[dict], dict, dict]:
 
 def _content_blocks_from_task(task: dict) -> list[dict]:
     """Build Anthropic content[] from the assembled task content."""
+    from lib.tasks_pkg.segments import deliverable_text
     blocks: list[dict] = []
     if task.get('thinking'):
         blocks.append({'type': 'thinking', 'thinking': task['thinking']})
-    text = task.get('content') or ''
+    # Deliverable = narration-free answer from the segment model (epic
+    # pt_cb8f98b0cb9b47fb, step 3) — one source of truth with the streaming path.
+    text = deliverable_text(task)
     if text:
         blocks.append({'type': 'text', 'text': text})
     rounds = task.get('toolRounds') or []
@@ -166,24 +176,31 @@ def build_anthropic_response(task: dict, model: str) -> dict:
     }
 
 
-def stream_anthropic_chunks(task, model: str
-                              ) -> Generator[str, None, None]:
+async def stream_anthropic_chunks(task, model: str
+                                  ) -> AsyncGenerator[str, None]:
     """Yield Anthropic-style SSE frames (named events).
 
     Sequence: message_start → content_block_start → content_block_delta*
               → content_block_stop → message_delta → message_stop.
+
+    Event-driven: blocks on the task's wakeup signal instead of polling,
+    so it never pins a thread while the model is generating.
     """
+    from lib.agent_core.admission import unregister_waiter, wait_for_event
+
     msg_id = 'msg_' + uuid.uuid4().hex[:16]
     cursor = 0
     started = False
     text_block_open = False
+    thinking_block_open = False
     block_index = 0
-    last_heartbeat = time.time()
+    task_id = task.get('id') or ''
 
     def _evt(name: str, data: dict) -> str:
         return f'event: {name}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n'
 
-    while True:
+    try:
+      while True:
         with task['events_lock']:
             new_events = list(task['events'][cursor:])
             cursor = len(task['events'])
@@ -203,21 +220,21 @@ def stream_anthropic_chunks(task, model: str
                 })
                 started = True
             if etype == 'delta':
-                content = ev.get('content', '')
-                if content:
-                    if not text_block_open:
+                # ★ Narrator-leak root fix (epic pt_cb8f98b0cb9b47fb, step 3):
+                #   content deltas are unclassifiable mid-stream and a wire
+                #   client can't retract, so we do NOT stream raw content as the
+                #   answer text block. The narration-free deliverable is emitted
+                #   from the segment model at `done`. Thinking DOES stream live
+                #   as a thinking block (real-time reasoning without polluting
+                #   the answer). Retires the compat surface's DELTA_RESET need.
+                if ev.get('thinking'):
+                    if not thinking_block_open:
                         yield _evt('content_block_start', {
                             'type': 'content_block_start',
                             'index': block_index,
-                            'content_block': {'type': 'text', 'text': ''},
+                            'content_block': {'type': 'thinking', 'thinking': ''},
                         })
-                        text_block_open = True
-                    yield _evt('content_block_delta', {
-                        'type': 'content_block_delta',
-                        'index': block_index,
-                        'delta': {'type': 'text_delta', 'text': content},
-                    })
-                if ev.get('thinking'):
+                        thinking_block_open = True
                     yield _evt('content_block_delta', {
                         'type': 'content_block_delta',
                         'index': block_index,
@@ -225,6 +242,30 @@ def stream_anthropic_chunks(task, model: str
                                   'thinking': ev['thinking']},
                     })
             elif etype == 'done':
+                # Close the live thinking block (if any) before the answer block.
+                if thinking_block_open:
+                    yield _evt('content_block_stop', {
+                        'type': 'content_block_stop', 'index': block_index,
+                    })
+                    thinking_block_open = False
+                    block_index += 1
+                # ★ Emit the narration-free deliverable as one text block NOW.
+                from lib.tasks_pkg.segments import deliverable_text
+                answer = deliverable_text(task)
+                if answer:
+                    yield _evt('content_block_start', {
+                        'type': 'content_block_start',
+                        'index': block_index,
+                        'content_block': {'type': 'text', 'text': ''},
+                    })
+                    yield _evt('content_block_delta', {
+                        'type': 'content_block_delta',
+                        'index': block_index,
+                        'delta': {'type': 'text_delta', 'text': answer},
+                    })
+                    yield _evt('content_block_stop', {
+                        'type': 'content_block_stop', 'index': block_index,
+                    })
                 if text_block_open:
                     yield _evt('content_block_stop', {
                         'type': 'content_block_stop',
@@ -250,14 +291,46 @@ def stream_anthropic_chunks(task, model: str
                 return
 
         if task.get('status') in ('done', 'error', 'aborted') and not new_events:
+            # Terminal but no `done` event in the stream (late connect after
+            # completion) — still emit the deliverable so the client gets the
+            # answer, with a well-formed message envelope.
+            if not started:
+                yield _evt('message_start', {
+                    'type': 'message_start',
+                    'message': {
+                        'id': msg_id, 'type': 'message', 'role': 'assistant',
+                        'model': model, 'content': [], 'stop_reason': None,
+                        'stop_sequence': None,
+                        'usage': {'input_tokens': 0, 'output_tokens': 0},
+                    },
+                })
+                started = True
+            from lib.tasks_pkg.segments import deliverable_text
+            answer = deliverable_text(task)
+            if answer:
+                yield _evt('content_block_start', {
+                    'type': 'content_block_start', 'index': block_index,
+                    'content_block': {'type': 'text', 'text': ''},
+                })
+                yield _evt('content_block_delta', {
+                    'type': 'content_block_delta', 'index': block_index,
+                    'delta': {'type': 'text_delta', 'text': answer},
+                })
+                yield _evt('content_block_stop', {
+                    'type': 'content_block_stop', 'index': block_index,
+                })
             yield _evt('message_stop', {'type': 'message_stop'})
             return
 
-        now = time.time()
-        if now - last_heartbeat > 15:
+        woke = await wait_for_event(task_id, timeout=15.0)
+        if not woke:
             yield ': heartbeat\n\n'
-            last_heartbeat = now
-        time.sleep(0.05)
+    except (GeneratorExit, asyncio.CancelledError):
+        logger.info('[compat:anthropic] stream client disconnected task=%s',
+                    task_id[:8])
+        raise
+    finally:
+        unregister_waiter(task_id)
 
 
 __all__ = [

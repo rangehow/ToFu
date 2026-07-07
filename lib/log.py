@@ -48,6 +48,7 @@ import functools
 import json
 import logging
 import os
+import sys
 import time
 import uuid
 from contextlib import contextmanager
@@ -56,8 +57,85 @@ from threading import Lock as _Lock
 from threading import local as thread_local
 
 # ── Base directory and log paths ──
+# LOG_DIR must be WRITABLE. In a frozen desktop build BASE_DIR resolves inside
+# the read-only _internal/ bundle (under Program Files), so we redirect to a
+# writable root. Kept inline (not via lib/runtime_paths) to avoid an import
+# cycle — runtime_paths imports lib.log. The logic mirrors runtime_paths.
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-LOG_DIR = os.path.join(BASE_DIR, 'logs')
+
+
+def _per_user_base() -> str:
+    """Per-user, guaranteed-writable base dir. Byte-for-byte twin of
+    ``lib/runtime_paths._per_user_root``."""
+    if sys.platform.startswith('win'):
+        base = os.environ.get('LOCALAPPDATA') or os.path.expanduser('~')
+        return os.path.join(base, 'Tofu')
+    if sys.platform == 'darwin':
+        return os.path.join(os.path.expanduser('~'), 'Library',
+                            'Application Support', 'Tofu')
+    xdg = os.environ.get('XDG_DATA_HOME') or os.path.join(
+        os.path.expanduser('~'), '.local', 'share')
+    return os.path.join(xdg, 'Tofu')
+
+
+def _writable_base_dir() -> str:
+    """Resolve the writable BASE dir that holds both logs/ and data/.
+
+    This is a byte-for-byte twin of ``lib/runtime_paths._resolve_base`` (kept
+    inline because runtime_paths imports lib.log — a cycle). CRITICAL: the
+    frozen-fallback decision probes the SHARED base dir (``<exe_dir>``), NOT a
+    ``…/logs`` subdir, so this reaches the SAME verdict runtime_paths does for
+    ``data/``. Probing different subdirs could split logs and data to different
+    roots on a partially-writable install. tests/test_desktop_install_paths.py
+    pins the two twins to agree.
+    """
+    explicit = os.environ.get('TOFU_DATA_DIR') or os.environ.get('CHATUI_DATA_DIR')
+    if explicit:
+        explicit = os.path.abspath(explicit)
+        return os.path.dirname(explicit) if os.path.basename(explicit) == 'data' else explicit
+    if getattr(sys, 'frozen', False):
+        exe_dir = os.path.dirname(sys.executable)
+        try:
+            os.makedirs(exe_dir, exist_ok=True)
+            probe = os.path.join(exe_dir, '.tofu_write_probe')
+            with open(probe, 'w'):
+                pass
+            os.remove(probe)
+            return exe_dir
+        except OSError:
+            return _per_user_base()
+    # Source checkout — mirror runtime_paths._source_checkout_base() exactly:
+    # keep user state OUT of the code tree by default (fresh clone → per-user),
+    # but keep an existing populated in-tree data/ where it is (zero migration).
+    layout = (os.environ.get('TOFU_DATA_LAYOUT')
+              or os.environ.get('CHATUI_DATA_LAYOUT') or 'auto').strip().lower()
+    if layout == 'intree':
+        return BASE_DIR
+    if layout == 'xdg':
+        return _per_user_base()
+    if layout == 'auto':
+        data_dir = os.path.join(BASE_DIR, 'data')
+        try:
+            with os.scandir(data_dir) as it:
+                populated = any(True for _ in it)
+        except OSError:
+            populated = False
+        return BASE_DIR if populated else _per_user_base()
+    # Unknown value → treat as auto's fresh-clone default (per-user).
+    data_dir = os.path.join(BASE_DIR, 'data')
+    try:
+        with os.scandir(data_dir) as it:
+            populated = any(True for _ in it)
+    except OSError:
+        populated = False
+    return BASE_DIR if populated else _per_user_base()
+
+
+def _writable_logs_dir() -> str:
+    return os.path.join(_writable_base_dir(), 'logs')
+
+
+LOG_DIR = _writable_logs_dir()
 
 # Primary log files
 APP_LOG = os.path.join(LOG_DIR, 'app.log')

@@ -40,7 +40,7 @@ from .notranslate import (
 from .dedup import _dedup_repetition_loop, _dedup_inline_loop
 
 # Engine (one-chunk LLM/MT dispatcher + retry loop, + chunked free-text wrapper)
-from .engine import _translate_one_chunk, _translate_freetext, _chunk_freetext
+from .engine import _translate_one_chunk, _translate_freetext
 
 # Status formatter (used by routes/chat.py auto-translate flow)
 from .status import _format_status_message
@@ -59,6 +59,21 @@ from .commit import (
     _commit_translation_to_db,
     _commit_translation_inner,
     _get_commit_lock,
+)
+
+# Incremental per-round translation (agent assistant replies)
+from .incremental import (
+    submit_round_segment,
+    finalize_incremental,
+    cancel_incremental,
+)
+
+# Per-message in-flight dedup guard (pre-spawn double-fire prevention)
+from .inflight import (
+    claim_inflight,
+    release_inflight,
+    is_inflight,
+    msg_key,
 )
 
 # PPTX file translation
@@ -81,7 +96,7 @@ __all__ = [
     # dedup
     '_dedup_repetition_loop', '_dedup_inline_loop',
     # engine
-    '_translate_one_chunk', '_translate_freetext', '_chunk_freetext',
+    '_translate_one_chunk', '_translate_freetext',
     # status
     '_format_status_message',
     # runtime
@@ -89,6 +104,10 @@ __all__ = [
     '_cleanup_translate_tasks', '_do_translate',
     # commit
     '_commit_translation_to_db', '_commit_translation_inner', '_get_commit_lock',
+    # incremental per-round translation
+    'submit_round_segment', 'finalize_incremental', 'cancel_incremental',
+    # in-flight dedup guard
+    'claim_inflight', 'release_inflight', 'is_inflight', 'msg_key',
     # pptx
     '_do_translate_pptx', '_ensure_pptx_upload_dir',
     '_PPTX_UPLOAD_DIR', '_MAX_PPTX_BYTES',

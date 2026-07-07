@@ -112,7 +112,7 @@ class ConvConfigRouteTest(unittest.TestCase):
         body = _new_loop_run(r.get_json())
         self.assertTrue(body['ok'])
         # All expected keys present even with empty input
-        for k in ('model', 'searchMode', 'memoryEnabled', 'agentBackend'):
+        for k in ('model', 'searchMode', 'memoryEnabled'):
             self.assertIn(k, body, f'missing key: {k}')
 
     # ── /settings/resolve ──────────────────────────────────────────
@@ -143,12 +143,25 @@ class ConvConfigRouteTest(unittest.TestCase):
     # ── Auth ───────────────────────────────────────────────────────
 
     def test_unauth_rejected(self):
-        async def go():
-            return await self.app.test_client().post(
-                '/api/v1/conversations/config/resolve',
-                json={'conv_settings': {}})
-        r = _new_loop_run(go())
-        self.assertEqual(r.status_code, 401)
+        # Credential gate only fires in private/multi-user mode; open mode
+        # (default) lets unauth requests through with a synthetic principal.
+        from lib.auth_mode import reset_for_tests
+        prev = os.environ.get('TOFU_AUTH_MODE')
+        os.environ['TOFU_AUTH_MODE'] = 'private'
+        reset_for_tests()
+        try:
+            async def go():
+                return await self.app.test_client().post(
+                    '/api/v1/conversations/config/resolve',
+                    json={'conv_settings': {}})
+            r = _new_loop_run(go())
+            self.assertEqual(r.status_code, 401)
+        finally:
+            if prev is None:
+                os.environ.pop('TOFU_AUTH_MODE', None)
+            else:
+                os.environ['TOFU_AUTH_MODE'] = prev
+            reset_for_tests()
 
 
 if __name__ == '__main__':

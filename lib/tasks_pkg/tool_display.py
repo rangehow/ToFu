@@ -18,10 +18,14 @@ from lib.scheduler import SCHEDULER_TOOL_NAMES
 from lib.memory import MEMORY_TOOL_NAMES
 from lib.tasks_pkg.executor import SWARM_TOOL_NAMES
 from lib.tools import (
+    BOARD_TOOL_NAMES,
     BROWSER_TOOL_NAMES,
+    CHARTER_TOOL_NAMES,
     CODE_EXEC_TOOL_NAMES,
     CONV_REF_TOOL_NAMES,
+    IMAGE_EDIT_TOOL_NAMES,
     IMAGE_GEN_TOOL_NAMES,
+    PEER_TOOL_NAMES,
     PROJECT_TOOL_NAMES,
 )
 
@@ -41,7 +45,6 @@ def _tool_display_web_search(fn_name, fn_args, tc_id, tc_args_str):
     """
     queries = fn_args.get('queries')
     if queries and isinstance(queries, list):
-        n = len(queries)
         full_list = []
         for s in queries:
             if isinstance(s, dict):
@@ -51,6 +54,13 @@ def _tool_display_web_search(fn_name, fn_args, tc_id, tc_args_str):
             else:
                 q = '?'
             full_list.append(q)
+        n = len(full_list)
+        # A single-element batch (common after the bare-string→array repair,
+        # or when the model wraps one query) reads as a plain single search —
+        # ``1 searches:`` is grammatically wrong and wastes a line.
+        if n == 1:
+            return full_list[0], {'toolName': 'web_search',
+                                  '_batchQueries': full_list}
         # One query per line so the frontend wraps long terms instead of
         # squashing them onto one elided line. Indent each line with "• "
         # so the count header reads naturally.
@@ -110,7 +120,6 @@ def _tool_display_fetch_url(fn_name, fn_args, tc_id, tc_args_str):
     """
     urls = fn_args.get('urls')
     if urls and isinstance(urls, list):
-        n = len(urls)
         full_list = []
         for s in urls:
             if isinstance(s, dict):
@@ -120,8 +129,18 @@ def _tool_display_fetch_url(fn_name, fn_args, tc_id, tc_args_str):
             else:
                 u = '?'
             full_list.append(u)
+        n = len(full_list)
+        # Single-element batch → plain single fetch (see web_search above).
+        if n == 1:
+            target_url = full_list[0]
+            is_pdf_hint = target_url.lower().rstrip('/').endswith('.pdf')
+            short = _short_url(target_url)
+            display_query = f'{"PDF " if is_pdf_hint else ""}{short}'
+            return target_url, {'toolName': 'fetch_url',
+                                '_display_query': display_query,
+                                '_batchUrls': full_list}
         lines = '\n'.join(f'• {u}' for u in full_list)
-        display = f'📄 {n} URLs:\n{lines}'
+        display = f'{n} URLs:\n{lines}'
         return display, {
             'toolName': 'fetch_url',
             '_display_query': display,
@@ -130,8 +149,8 @@ def _tool_display_fetch_url(fn_name, fn_args, tc_id, tc_args_str):
     target_url = fn_args.get('url', '')
     is_pdf_hint = target_url.lower().rstrip('/').endswith('.pdf')
     short = _short_url(target_url)
-    display_query = f'{"📑 PDF" if is_pdf_hint else "🌐"} {short}'
-    return f'📄 {target_url}', {'toolName': 'fetch_url', '_display_query': display_query}
+    display_query = f'{"PDF " if is_pdf_hint else ""}{short}'
+    return target_url, {'toolName': 'fetch_url', '_display_query': display_query}
 
 
 def _tool_display_code_exec(fn_name, fn_args, tc_id, tc_args_str):
@@ -250,21 +269,65 @@ def _tool_display_memory(fn_name, fn_args, tc_id, tc_args_str):
 
 
 def _tool_display_conv_ref(fn_name, fn_args, tc_id, tc_args_str):
-    """Build display info for conversation reference tool calls."""
-    icon = '📋' if fn_name == 'list_conversations' else '💬'
+    """Build display info for conversation reference tool calls.
+
+    No emoji prefix — the frontend renders a per-tool SVG icon (see
+    ``_webToolSvg`` in ``static/js/ui/tool_rounds.js``).
+    """
     kw = fn_args.get('keyword', 'all') if fn_name == 'list_conversations' else fn_args.get('conversation_id', '?')[:8]
-    display = f"{icon} {fn_name}: {kw}"
+    display = f"{fn_name}: {kw}"
+    return display, {'toolName': fn_name}
+
+
+def _tool_display_brain(fn_name, fn_args, tc_id, tc_args_str):
+    """Build a friendly collapsed-header label for project-brain tools.
+
+    Without a dedicated handler these fall through to ``_tool_display_generic``,
+    which (a) logs a spurious WARNING on EVERY call ("Unregistered tool … may
+    need a dedicated display handler") and (b) shows the raw ``project_board_read``
+    fn-name as the transcript preview. This returns a short human-readable
+    summary keyed on the tool + its salient arg (the frontend still renders the
+    SVG icon + the structured card body; this is only the collapsed preview
+    line the user reads before expanding). No emoji prefix (§3.4).
+    """
+    args = fn_args if isinstance(fn_args, dict) else {}
+    if fn_name == 'project_board_read':
+        display = 'Read the project board'
+    elif fn_name == 'project_charter_read':
+        display = 'Read the project charter'
+    elif fn_name == 'project_charter_propose':
+        title = (args.get('title') or '').strip()
+        display = f'Propose to charter: {title}' if title else 'Propose a charter amendment'
+    elif fn_name == 'project_peer_status':
+        cid = (args.get('conv_id') or '').strip()
+        display = f'Peer status: conv {cid[:8]}' if cid else 'Live peer status'
+    elif fn_name == 'project_feed_read':
+        display = 'Read the project activity feed'
+    elif fn_name == 'project_message':
+        to = (args.get('to_conv_id') or '').strip()
+        display = f'Message → conv {to[:8]}' if to else 'Send a peer message'
+    elif fn_name == 'project_intervene':
+        to = (args.get('to_conv_id') or '').strip()
+        hard = bool(args.get('hard_abort'))
+        kind = 'Hard intervene' if hard else 'Advisory intervene'
+        display = f'{kind} → conv {to[:8]}' if to else kind
+    elif fn_name.startswith('project_board_'):
+        verb = fn_name.replace('project_board_', '', 1)
+        tid = (args.get('task_id') or '').strip()
+        display = f'Board {verb}: {tid}' if tid else f'Board {verb}'
+    else:
+        display = fn_name
     return display, {'toolName': fn_name}
 
 
 def _tool_display_scheduler(fn_name, fn_args, tc_id, tc_args_str):
-    """Build display info for scheduler tool calls."""
-    return f"⏰ {fn_name}", {'toolName': fn_name}
+    """Build display info for scheduler tool calls (frontend renders SVG icon)."""
+    return fn_name, {'toolName': fn_name}
 
 
 def _tool_display_desktop(fn_name, fn_args, tc_id, tc_args_str):
-    """Build display info for desktop tool calls."""
-    return f"🖥️ {fn_name}", {'toolName': fn_name}
+    """Build display info for desktop tool calls (frontend renders SVG icon)."""
+    return fn_name, {'toolName': fn_name}
 
 
 def _tool_display_swarm(fn_name, fn_args, tc_id, tc_args_str):
@@ -287,22 +350,22 @@ def _tool_display_swarm(fn_name, fn_args, tc_id, tc_args_str):
         # swarm across two panels (the "ghost panel" / "ticked but waiting"
         # bug). Render it as an ordinary tool round instead.
         if not n_agents:
-            return "⚡ Spawning agents…", {'toolName': 'spawn_agents'}
-        display = f"⚡ Spawning {n_agents} agent{'s' if n_agents != 1 else ''}…"
+            return "Spawning agents…", {'toolName': 'spawn_agents'}
+        display = f"Spawning {n_agents} agent{'s' if n_agents != 1 else ''}…"
         return display, {'toolName': 'spawn_agents', '_swarm': True}
 
     if fn_name == 'await_agents':
         ids = fn_args.get('ids') if isinstance(fn_args, dict) else None
         mode = (fn_args.get('mode', 'any') if isinstance(fn_args, dict) else 'any')
         if ids and isinstance(ids, list) and len(ids) > 0:
-            label = f'⏳ Awaiting {len(ids)} agent{"s" if len(ids) != 1 else ""} ({mode})'
+            label = f'Awaiting {len(ids)} agent{"s" if len(ids) != 1 else ""} ({mode})'
         else:
-            label = f'⏳ Awaiting all running agents ({mode})'
+            label = f'Awaiting all running agents ({mode})'
         return label, {'toolName': 'await_agents'}
 
     if fn_name == 'get_agent_result':
         agent_id = (fn_args.get('agent_id', '') if isinstance(fn_args, dict) else '')
-        label = f'📥 Fetching result for {agent_id[:12]}' if agent_id else '📥 Fetching agent result'
+        label = f'Fetching result for {agent_id[:12]}' if agent_id else 'Fetching agent result'
         return label, {'toolName': 'get_agent_result'}
 
     # Artifact tools fall through to the generic renderer in the dispatch
@@ -313,8 +376,8 @@ def _tool_display_swarm(fn_name, fn_args, tc_id, tc_args_str):
 
 
 def _tool_display_compact(fn_name, fn_args, tc_id, tc_args_str):
-    """Build display info for context_compact tool calls."""
-    return '🗜️ Compacting context…', {'toolName': fn_name}
+    """Build display info for context_compact tool calls (frontend renders SVG icon)."""
+    return 'Compacting context…', {'toolName': fn_name}
 
 
 def _tool_display_image_gen(fn_name, fn_args, tc_id, tc_args_str):
@@ -330,12 +393,38 @@ def _tool_display_image_gen(fn_name, fn_args, tc_id, tc_args_str):
     prompt = fn_args.get('prompt', '…') or '…'
     if len(prompt) > _FULL_LIMIT:
         prompt = prompt[:_FULL_LIMIT - 1] + '…'
-    return f'🎨 Generating: {prompt}', {
+    return f'Generating: {prompt}', {
         'toolName': 'generate_image',
         'imagePrompt': prompt,
     }
 
 
+
+
+def _tool_display_inspect_image(fn_name, fn_args, tc_id, tc_args_str):
+    """Build display info for inspect_image tool calls.
+
+    Surfaces the target file plus the requested transform (crop / zoom /
+    rotate / grid) so the tool-call line reads e.g. ``diagram.png — crop, 2×``.
+    """
+    path = fn_args.get('path', '?') or '?'
+    base = os.path.basename(path) or path
+    ops = []
+    if fn_args.get('crop'):
+        ops.append('crop')
+    z = fn_args.get('zoom')
+    if z:
+        try:
+            ops.append(f'{float(z):g}×')
+        except (TypeError, ValueError):
+            ops.append('zoom')
+    rot = fn_args.get('rotate')
+    if rot:
+        ops.append(f'{rot}°')
+    if fn_args.get('grid'):
+        ops.append('grid')
+    suffix = f' — {", ".join(ops)}' if ops else ''
+    return f'{base}{suffix}', {'toolName': 'inspect_image'}
 
 
 def _tool_display_human_guidance(fn_name, fn_args, tc_id, tc_args_str):
@@ -350,9 +439,7 @@ def _tool_display_human_guidance(fn_name, fn_args, tc_id, tc_args_str):
     question = fn_args.get('question', '…') or '…'
     if len(question) > _FULL_LIMIT:
         question = question[:_FULL_LIMIT - 1] + '…'
-    response_type = fn_args.get('response_type', 'free_text')
-    icon = '🗳️' if response_type == 'choice' else '🙋'
-    return f'{icon} {question}', {'toolName': 'ask_human'}
+    return question, {'toolName': 'ask_human'}
 
 
 # Keys from fn_args that identify the *resource* the call is operating on
@@ -605,24 +692,159 @@ def _mcp_arg_suffix(fn_args):
     return ''
 
 
+def _mcp_links(fn_args):
+    """Map the human-readable label of a linkable MCP arg → its clickable URL.
+
+    Returns a dict keyed by the EXACT label string ``_mcp_arg_suffix`` renders
+    for that arg (e.g. ``[EMNLP Demo] Tofu`` or the ``6a1e7…a668`` short id, or
+    a Xuecheng doc title / numeric id), so the frontend can linkify that exact
+    substring on the tool-call line. Only resources we can resolve a URL for
+    are included; empty dict when none apply.
+
+    Currently covers:
+      * overleaf ``project_id`` → ``…/project/<id>`` (always — synthesized
+        from the deployment base when no exact URL was harvested)
+      * xuecheng ``doc``        → harvested ``…/collabpage/<id>`` URL (only
+        when one was seen in a prior tool result — no canonical base assumed)
+    """
+    if not isinstance(fn_args, dict):
+        return {}
+    links = {}
+    try:
+        pid = fn_args.get('project_id')
+        if pid:
+            label = _render_mcp_arg('project_id', pid)
+            from lib.mcp.project_names import get_project_url
+            href = get_project_url(str(pid).strip())
+            if label and href:
+                links[label] = href
+    except Exception as e:
+        logger.debug('[ToolDisplay] overleaf link resolve failed: %s', e)
+    try:
+        doc = fn_args.get('doc')
+        if doc:
+            label = _render_mcp_arg('doc', doc)
+            from lib.mcp.project_names import get_doc_url
+            href = get_doc_url(_doc_cid(doc))
+            if label and href:
+                links[label] = href
+    except Exception as e:
+        logger.debug('[ToolDisplay] xuecheng link resolve failed: %s', e)
+    return links
+
+
+def _mcp_batch_paths(fn_args):
+    """Extract the repo-relative paths from a batch-file MCP call.
+
+    Covers the ``files=[{path, …}]`` / ``delete_paths=[…]`` shape used by
+    ``github-batch/batch_commit``, the ``paths=[…]`` shape of
+    ``github-batch/batch_delete``, and the official ``github/push_files``
+    (``files=[{path, content}]``). These carry the paths INSIDE a list, so the
+    flat ``_MCP_RESOURCE_KEYS`` scan misses them and the title line degrades to
+    just ``branch @ owner/repo``.
+
+    Returns a list of ``(path, is_delete)`` tuples in commit-then-delete order,
+    or ``[]`` when the call has no batch-path shape.
+    """
+    if not isinstance(fn_args, dict):
+        return []
+    out = []
+    files = fn_args.get('files')
+    if isinstance(files, list):
+        for f in files:
+            if isinstance(f, dict) and f.get('path'):
+                out.append((str(f['path']), False))
+            elif isinstance(f, str) and f.strip():
+                out.append((f.strip(), False))
+    for key in ('delete_paths', 'paths'):
+        val = fn_args.get(key)
+        if isinstance(val, list):
+            for p in val:
+                if isinstance(p, str) and p.strip():
+                    out.append((p.strip(), True))
+    return out
+
+
+def _doc_cid(val) -> str:
+    """Normalise a Xuecheng ``doc`` arg to its bare numeric contentId, or ''."""
+    if val is None:
+        return ''
+    s = str(val).strip()
+    m = _KM_DOC_RE.search(s)
+    if m:
+        return m.group(1)
+    return s if s.isdigit() else ''
+
+
+def compose_mcp_display(fn_name, fn_args):
+    """Compose the MCP tool-call display label — the SINGLE source of truth.
+
+    Both the live tool-round line (``_tool_display_mcp``, at ``tool_start``)
+    and the persisted results-row title (``handlers/mcp.py::_post_build``,
+    after execution) call this so the two can NEVER diverge. Previously
+    ``_post_build`` recomputed the label from ``_mcp_arg_suffix`` directly,
+    which has no batch-path awareness — so a ``batch_commit`` line that showed
+    every file at ``tool_start`` regressed to ``batch_commit — main @ owner/repo``
+    the moment the commit finished.
+
+    Returns ``(display, is_multiline)``. When ``is_multiline`` is True the
+    display is the batch-file form (one path per line, ``\\n``-separated) that
+    the frontend renders with ``\\n → <br>``; callers should surface it via
+    ``_display_query`` so it reaches the SSE event verbatim.
+    """
+    from lib.mcp.types import parse_namespaced_name
+    parsed = parse_namespaced_name(fn_name)
+    if parsed:
+        server_name, tool_name = parsed
+        head = f'{server_name}/{tool_name}'
+    else:
+        head = fn_name
+
+    # ── Batch-file commits (github-batch/batch_commit, batch_delete,
+    #    github/push_files): the paths live inside a ``files``/``paths`` list
+    #    that the flat arg scan can't see. Render every path on its own line
+    #    so users see exactly what was touched, scoped to ``owner/repo`` —
+    #    instead of a uniform ``main @ owner/repo``.
+    batch_paths = _mcp_batch_paths(fn_args)
+    if batch_paths:
+        n = len(batch_paths)
+        lines = '\n'.join(
+            f'• {"− " if is_del else ""}{p}' for p, is_del in batch_paths
+        )
+        container = ''
+        if isinstance(fn_args, dict) and fn_args.get('owner') and fn_args.get('repo'):
+            container = f"{fn_args['owner']}/{fn_args['repo']}"
+        scope = f' @ {container}' if container else ''
+        return f'{head} — {n} file{"s" if n != 1 else ""}{scope}:\n{lines}', True
+
+    suffix = _mcp_arg_suffix(fn_args)
+    return (f'{head} — {suffix}' if suffix else head), False
+
+
 def _tool_display_mcp(fn_name, fn_args, tc_id, tc_args_str):
     """Build display info for MCP bridge tool calls (mcp__server__tool).
 
     Surfaces the most informative arg (file_path, name, section_title, short
     project_id, owner/repo, …) after the tool name so users can tell at a
     glance which file / project / resource the call is operating on —
-    instead of seeing a uniform ``🔌 overleaf/create_file`` for every write.
+    instead of seeing a uniform ``overleaf/create_file`` for every write.
+    No emoji prefix — the frontend renders the plug SVG icon (§3.4).
+
+    When the resource resolves to a known URL (e.g. an Overleaf project), a
+    ``_mcpLinks`` map (label → href) is attached so the frontend can render
+    that segment as a clickable link instead of an unreadable id jumble.
     """
-    from lib.mcp.types import parse_namespaced_name
-    parsed = parse_namespaced_name(fn_name)
-    if parsed:
-        server_name, tool_name = parsed
-        head = f'🔌 {server_name}/{tool_name}'
-    else:
-        head = f'🔌 {fn_name}'
-    suffix = _mcp_arg_suffix(fn_args)
-    display = f'{head} — {suffix}' if suffix else head
-    return display, {'toolName': fn_name}
+    extra = {'toolName': fn_name}
+    display, multiline = compose_mcp_display(fn_name, fn_args)
+    if multiline:
+        # Batch-file form (one path per line) — expose the multiline text via
+        # _display_query so it survives verbatim into the SSE tool_start event.
+        extra['_display_query'] = display
+        return display, extra
+    links = _mcp_links(fn_args)
+    if links:
+        extra['_mcpLinks'] = links
+    return display, extra
 
 
 def _tool_display_generic(fn_name, fn_args, tc_id, tc_args_str):
@@ -632,7 +854,7 @@ def _tool_display_generic(fn_name, fn_args, tc_id, tc_args_str):
     if fn_name.startswith(MCP_TOOL_PREFIX):
         return _tool_display_mcp(fn_name, fn_args, tc_id, tc_args_str)
     logger.warning('[Orchestrator] Unregistered tool %s — using generic round_entry. This tool may need a dedicated display handler.', fn_name)
-    return f"🔧 {fn_name}", {'toolName': fn_name}
+    return fn_name, {'toolName': fn_name}
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -665,7 +887,8 @@ def _build_display_dispatch_table():
         table.setdefault(name, _tool_display_project)
 
     # ★ read_files — global tool (not in PROJECT_TOOL_NAMES), uses same
-    #   project-style display rendering (🔍 / 📂 / 📄 + path + lines).
+    #   project-style display rendering (path + line ranges; icon is the
+    #   frontend SVG, no emoji prefix).
     table.setdefault('read_files', _tool_display_project)
 
     # Browser tools (basic + advanced)
@@ -682,6 +905,11 @@ def _build_display_dispatch_table():
     for name in CONV_REF_TOOL_NAMES:
         table[name] = _tool_display_conv_ref
 
+    # Project-brain tools (board / charter / peer / feed) — friendly collapsed
+    # label + no spurious "unregistered tool" WARNING on every call.
+    for name in (BOARD_TOOL_NAMES | CHARTER_TOOL_NAMES | PEER_TOOL_NAMES):
+        table[name] = _tool_display_brain
+
     # Scheduler tools
     for name in SCHEDULER_TOOL_NAMES:
         table[name] = _tool_display_scheduler
@@ -697,6 +925,10 @@ def _build_display_dispatch_table():
     # Image generation tools
     for name in IMAGE_GEN_TOOL_NAMES:
         table[name] = _tool_display_image_gen
+
+    # Image inspection tool (zoom/rotate/crop viewer)
+    for name in IMAGE_EDIT_TOOL_NAMES:
+        table[name] = _tool_display_inspect_image
 
     # Human guidance tool
     table['ask_human'] = _tool_display_human_guidance
@@ -715,7 +947,7 @@ _TOOL_DISPLAY_DISPATCH = _build_display_dispatch_table()
 #    — the rootname pill is only meaningful for paths the user could
 #    distinguish between project roots.
 _FS_TOOLS_FOR_ROOT_PILL = frozenset({
-    'read_files', 'list_dir', 'grep_search', 'find_files',
+    'read_files', 'inspect_image', 'list_dir', 'grep_search', 'find_files',
     'write_file', 'apply_diff', 'apply_diffs',
     'insert_content', 'insert_contents',
     'create_project', 'run_command',
@@ -771,7 +1003,7 @@ def _extract_first_path_arg(fn_name, fn_args):
         if fn_args.get('path'):
             return fn_args['path']
         return ''
-    if fn_name in ('apply_diff', 'insert_content'):
+    if fn_name in ('apply_diff', 'insert_content', 'inspect_image'):
         return fn_args.get('path') or ''
     if fn_name in ('apply_diffs', 'insert_contents'):
         edits = fn_args.get('edits')
@@ -857,6 +1089,36 @@ def _resolve_tool_root_name(fn_name, fn_args, conv_id=None):
         # can see the typo / stale name in the UI.
         return head
 
+    # No explicit ``rootname:`` prefix. When the path is ABSOLUTE, attribute
+    # it to whichever registered root contains it (longest-prefix match).
+    # Without this, an absolute path under a NON-primary root (e.g. the model
+    # reading ``/abs/to/FDP/hope/op2_train.sh`` while ``chatui`` is primary)
+    # would skip the prefix branch above and fall through to the primary
+    # fallback below — mislabeled as the primary root, or unlabeled. The
+    # longest-prefix match disambiguates nested roots correctly.
+    if raw_path and (raw_path.startswith('/') or raw_path.startswith('~')
+                     or os.path.isabs(raw_path)):
+        try:
+            abs_path = os.path.abspath(os.path.expanduser(raw_path))
+        except (OSError, ValueError) as e:
+            logger.debug('[ToolDisplay] abspath(%r) failed: %s', raw_path, e)
+            abs_path = ''
+        if abs_path:
+            best_name, best_len = '', -1
+            for rn, rp in registry_items:
+                if not rp:
+                    continue
+                try:
+                    abs_root = os.path.abspath(os.path.expanduser(rp))
+                except (OSError, ValueError) as e:
+                    logger.debug('[ToolDisplay] abspath(%r) failed: %s', rp, e)
+                    continue
+                if abs_path == abs_root or abs_path.startswith(abs_root.rstrip('/') + '/'):
+                    if len(abs_root) > best_len:
+                        best_name, best_len = rn, len(abs_root)
+            if best_name:
+                return best_name
+
     # No prefix — fall back to the primary root's name.
     if primary_path:
         try:
@@ -873,6 +1135,34 @@ def _resolve_tool_root_name(fn_name, fn_args, conv_id=None):
                 if rp == primary_path:
                     return rn
     return ''
+
+
+def tool_round_label(fn_name, fn_args):
+    """Return the human-readable tool-round label chat would render for a call.
+
+    Public, side-effect-free entry point over the same ``_tool_display_*``
+    dispatch table the chat orchestrator uses, so secondary agent surfaces
+    (paper report / Q&A) get IDENTICAL, string/dict-safe labels — including
+    the multi-line batch rendering (``N searches:\\n• …``) and the empty-list
+    guards — instead of reimplementing them. Prefers the richer
+    ``_display_query`` (multi-line) over the compact form when the handler
+    supplies one.
+
+    Args:
+        fn_name: Tool name.
+        fn_args: The DECODED + repaired arguments dict (run it through
+            ``lib.tool_input_repair.parse_and_repair_tool_args`` first).
+
+    Returns:
+        The display string. Falls back to the tool name on any handler error.
+    """
+    handler = _TOOL_DISPLAY_DISPATCH.get(fn_name, _tool_display_generic)
+    try:
+        display_query, extra = handler(fn_name, fn_args, '', '')
+    except Exception as e:
+        logger.warning('[ToolDisplay] tool_round_label handler for %s raised: %s', fn_name, e)
+        return fn_name
+    return extra.get('_display_query', display_query)
 
 
 def _build_tool_round_entry(fn_name, fn_args, tc_id, tc_args_str, tool_round_num,
@@ -901,7 +1191,7 @@ def _build_tool_round_entry(fn_name, fn_args, tc_id, tc_args_str, tool_round_num
         display_query, extra = handler(fn_name, fn_args, tc_id, tc_args_str)
     except Exception as e:
         logger.warning('[ToolDisplay] handler for %s raised: %s', fn_name, e)
-        display_query = f'🔧 {fn_name}'
+        display_query = fn_name
         extra = {'toolName': fn_name}
 
     tool_round_num += 1

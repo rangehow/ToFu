@@ -21,6 +21,7 @@ import json
 import logging
 import time
 import signal
+import threading
 import faulthandler
 
 # ── Capture C-level fatal signals (SIGSEGV / SIGABRT / SIGFPE / SIGILL / SIGBUS) ──
@@ -66,31 +67,384 @@ if _fault_shm_log is None:
     else:
         faulthandler.enable(all_threads=True)
 
+
+# ── Faulthandler-sink hygiene + event-loop stall detection (pure helpers) ──
+# These back the boot-time /dev/shm prune and the loop-stall watchdog wired up
+# inside _serve(). Kept at module scope (not nested in _serve) so they are pure
+# and unit-testable without a running loop — see tests/test_loop_stall_watchdog.py.
+_FAULT_DUMP_PREFIX = 'tofu_faulthandler_'
+_FAULT_DUMP_SUFFIX = '.log'
+
+
+def _pid_alive(pid):
+    """Best-effort liveness probe for *pid* (signal 0). Conservative: an
+    ambiguous OSError (other than 'no such process') reports True so we never
+    delete a dump whose owner might still be running."""
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OverflowError:
+        return False  # pid out of representable range → cannot be a live process
+    except PermissionError:
+        return True   # exists but owned by another user
+    except OSError:
+        return True   # ambiguous — err on the side of keeping
+    return True
+
+
+def _read_instance_lock_entry(lock_path):
+    """Read the ``<pid>@<host>`` first line of the single-instance lock file.
+
+    Returns ``(pid:int|None, host:str|None)``. A missing/empty/malformed file
+    yields ``(None, None)`` (or ``(None, host)`` if only the pid is unparseable).
+    """
+    try:
+        with open(lock_path, 'r') as f:
+            entry = (f.readline() or '').strip()
+    except OSError:
+        return None, None
+    if not entry or '@' not in entry:
+        return None, None
+    pid_str, _, host = entry.partition('@')
+    host = host.strip() or None
+    try:
+        return int(pid_str), host
+    except (ValueError, TypeError):
+        return None, host
+
+
+def _pid_is_live_server(pid):
+    """True iff *pid* is alive AND its ``/proc/<pid>/cmdline`` still looks like
+    our ``server.py``.
+
+    A dead pid → False. A live pid whose cmdline is provably NOT ``server.py``
+    (PID reuse) → False. If liveness or the cmdline cannot be established
+    (no /proc, permission denied, empty cmdline) this conservatively returns
+    True so we NEVER reclaim a lock whose owner might still be a running server.
+    Mirrors stop.sh's ``kill -0`` + ``ps -o args`` server.py check.
+    """
+    if not _pid_alive(pid):
+        return False
+    try:
+        with open('/proc/%d/cmdline' % pid, 'rb') as f:
+            cmdline = f.read().replace(b'\x00', b' ').decode('utf-8', 'replace')
+    except (OSError, ValueError):
+        return True  # cannot inspect → assume a live server, refuse to reclaim
+    if not cmdline.strip():
+        return True  # ambiguous → conservative
+    return 'server.py' in cmdline
+
+
+def _reclaim_stale_instance_lock(lock_path, hostname, logger):
+    """Decide whether a flock-contended instance lock is a STALE *local* lock we
+    may reclaim, and if so unlink it so a fresh inode can be flock'd.
+
+    Robustness rationale (the crux of the OOM-restart bug): ``flock`` is bound
+    to an open file *description*, NOT to process liveness. When the previous
+    server is SIGKILL'd (e.g. OOM) its atexit/lock-release never runs, and
+    orphaned child processes may keep the fd — and thus the flock — open
+    indefinitely; on a FUSE mount the advisory lock is not reliably released on
+    unclean death either. So a contended flock does NOT prove "a server is
+    running". We mirror stop.sh: read the recorded ``<pid>@<host>`` and ONLY
+    when ``host == this machine`` AND that pid is not a live ``server.py`` do we
+    ``unlink`` the lock path. Unlinking yields a brand-new inode on the retry;
+    the orphan's surviving fd points at the now-unlinked OLD inode, so its
+    lingering flock is harmless and our flock on the new inode succeeds.
+
+    Cross-host staleness is deliberately NOT handled here (that is the PG
+    heartbeat-takeover's domain) — a foreign-host lock is left untouched and the
+    caller refuses to start.
+
+    Returns True iff a stale local lock was unlinked (caller should retry the
+    flock), else False.
+    """
+    pid, host = _read_instance_lock_entry(lock_path)
+    if pid is None and host is None:
+        logger.critical('[Lock] contended instance lock has no readable <pid>@<host> entry — '
+                        'refusing to reclaim (a live peer may hold it)')
+        return False
+    if host and host != hostname:
+        logger.critical('[Lock] instance lock held by another host: pid=%s host=%s (we are %s) — '
+                        'refusing to reclaim a foreign lock (cross-host is PG-heartbeat territory)',
+                        pid, host, hostname)
+        return False
+    if pid is not None and _pid_is_live_server(pid):
+        logger.critical('[Lock] instance lock held by a LIVE local server (pid=%s host=%s) — '
+                        'another instance is genuinely running', pid, host)
+        return False
+    logger.warning('[Lock] reclaiming stale lock pid=%s host=%s (dead)', pid, host)
+    try:
+        os.unlink(lock_path)
+    except OSError as e:
+        logger.critical('[Lock] failed to unlink stale lock %s: %s', lock_path, e)
+        return False
+    return True
+
+
+def _acquire_instance_lock(lock_path, logger, hostname=None, allow_reclaim=True):
+    """Acquire the exclusive single-instance lock at *lock_path*.
+
+    Returns ``(ok, fd)``: ``(True, <open flocked fd>)`` on success — the caller
+    MUST keep the fd open for the whole process lifetime — or ``(False, None)``
+    when a live instance genuinely holds it. On a platform without ``fcntl`` /
+    with an unopenable lock dir it degrades to best-effort ``(True, fd|None)``
+    so a missing lock never blocks startup.
+
+    Self-healing: on flock contention we do NOT assume a live server (see
+    ``_reclaim_stale_instance_lock`` for why). If the recorded owner is a dead
+    LOCAL pid we unlink the stale lock and retry ONCE on a fresh inode. A
+    single bounded retry (``allow_reclaim=False``) guarantees no reclaim loop;
+    if the retry still fails we log CRITICAL and refuse (caller surfaces the
+    ``TOFU_SKIP_LOCK=1`` escape hatch).
+    """
+    if hostname is None:
+        import socket as _s
+        hostname = _s.gethostname()
+    try:
+        import fcntl
+    except ImportError:
+        logger.warning('[Lock] fcntl unavailable on this platform — skipping instance lock')
+        try:
+            return True, open(lock_path, 'a+')
+        except OSError:
+            return True, None
+    try:
+        if not os.path.exists(lock_path):
+            open(lock_path, 'a').close()
+        fd = open(lock_path, 'r+')
+    except OSError as e:
+        logger.warning('[Lock] cannot open lock file %s (%s) — proceeding without instance lock', lock_path, e)
+        return True, None
+    try:
+        fcntl.flock(fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except (IOError, OSError):
+        fd.close()
+        if allow_reclaim and _reclaim_stale_instance_lock(lock_path, hostname, logger):
+            ok2, fd2 = _acquire_instance_lock(lock_path, logger, hostname=hostname, allow_reclaim=False)
+            if ok2 and fd2 is not None:
+                logger.info('[Lock] reclaimed stale lock and acquired fresh instance lock (pid=%d)', os.getpid())
+            else:
+                logger.critical('[Lock] reclaimed stale lock but STILL could not acquire flock — '
+                                'refusing to start. Set TOFU_SKIP_LOCK=1 to override.')
+            return ok2, fd2
+        return False, None
+    try:
+        fd.seek(0)
+        fd.truncate()
+        fd.write('%d@%s\n' % (os.getpid(), hostname))
+        fd.flush()
+    except OSError as e:
+        logger.debug('[Lock] could not stamp lock identity: %s', e)
+    return True, fd
+
+
+def _parse_fault_dump_pid(basename):
+    """Extract the pid from ``tofu_faulthandler_<pid>.log`` (else None)."""
+    if not basename.startswith(_FAULT_DUMP_PREFIX) or not basename.endswith(_FAULT_DUMP_SUFFIX):
+        return None
+    core = basename[len(_FAULT_DUMP_PREFIX):-len(_FAULT_DUMP_SUFFIX)]
+    try:
+        return int(core)
+    except (ValueError, TypeError):
+        return None
+
+
+def _prune_stale_fault_dumps(directory='/dev/shm', keep_basename='',
+                             pid_alive=_pid_alive, logger=None):
+    """Delete ``tofu_faulthandler_<pid>.log`` files in *directory* whose pid is
+    no longer alive. Never touches *keep_basename* (our own live sink) or files
+    that don't match the naming pattern. Returns the number removed.
+
+    server.py opens one such file on every boot but historically never removed
+    old ones, so the /dev/shm sink accumulated thousands of dead-pid files."""
+    import glob as _glob
+    removed = 0
+    pattern = os.path.join(directory, _FAULT_DUMP_PREFIX + '*' + _FAULT_DUMP_SUFFIX)
+    for path in _glob.glob(pattern):
+        base = os.path.basename(path)
+        if keep_basename and base == keep_basename:
+            continue
+        pid = _parse_fault_dump_pid(base)
+        if pid is None or pid_alive(pid):
+            continue
+        try:
+            os.unlink(path)
+            removed += 1
+        except OSError as _rm_err:
+            if logger is not None:
+                logger.debug('[LoopWatch] could not prune %s: %s', path, _rm_err)
+    return removed
+
+
+def _loop_stall_decide(age, threshold, already_dumped):
+    """Pure decision for the loop-stall watchdog.
+
+    Given the heartbeat *age* (seconds since the last on-loop bump), the stall
+    *threshold*, and whether we've *already_dumped* for the current stall
+    episode, return ``(should_dump, next_already_dumped)``. Emits at most one
+    dump per contiguous stall episode and re-arms once the loop recovers."""
+    if threshold <= 0:
+        return (False, already_dumped)   # watchdog disabled
+    if age <= threshold:
+        return (False, False)            # healthy → re-arm for the next episode
+    if already_dumped:
+        return (False, True)             # still stalled, already captured
+    return (True, True)                  # stalled and not yet captured → dump
+
+
+def _should_arm_ctimer(threshold, sink):
+    """Pure gate for the GIL-INDEPENDENT capture path.
+
+    ``faulthandler.dump_traceback_later`` runs from a dedicated C timer thread
+    that does NOT acquire the GIL, so it fires even when the loop is wedged
+    inside a single monolithic GIL-holding C call (the documented ``json.dumps``
+    / catastrophic-regex pit) — the exact case the Python-thread watcher, which
+    must take the GIL to run, is BLIND to. Arm it only when the watchdog is
+    enabled (*threshold* > 0) AND we have a sink with a real file descriptor
+    (``dump_traceback_later`` requires an fd — an in-memory buffer has none)."""
+    if threshold is None or threshold <= 0:
+        return False
+    if sink is None:
+        return False
+    try:
+        sink.fileno()
+    except Exception:
+        return False
+    return True
+
+
+
+# One-shot boot cleanup: prune dead-pid faulthandler dumps from the tmpfs sink
+# so it stays bounded (the file we just opened for THIS pid is preserved).
+if _fault_shm_log is not None:
+    try:
+        _pruned = _prune_stale_fault_dumps(
+            directory='/dev/shm',
+            keep_basename=os.path.basename(_FAULT_SHM_PATH))
+        if _pruned:
+            sys.stderr.write('[boot] pruned %d stale faulthandler dump(s) from /dev/shm\n'
+                             % _pruned)
+    except Exception:
+        pass   # cleanup is best-effort; never block boot on it
+
 # ── Pin mapped pages into RAM (FUSE SIGBUS mitigation) ──
 # All .so files (C extensions, libpython, libc) are dlopen'd via mmap with
 # demand-paged code segments. When those files live on a FUSE mount, a
 # transient stall during a lazy page-in delivers SIGBUS (unrecoverable).
 # MCL_CURRENT pins already-mapped pages; MCL_FUTURE pins every future mmap
 # at load time, collapsing the dangerous demand-fault window to zero.
-try:
-    import ctypes as _ctypes
-    _MCL_CURRENT, _MCL_FUTURE = 1, 2
-    _libc = _ctypes.CDLL('libc.so.6', use_errno=True)
-    if _libc.mlockall(_MCL_CURRENT | _MCL_FUTURE) != 0:
-        import errno as _errno
-        _mlk_err = _ctypes.get_errno()
-        # ENOMEM (12) = memlock rlimit too low — common in containers
-        if _mlk_err == _errno.ENOMEM:
-            os.write(2, b'[boot] mlockall skipped: memlock rlimit too low\n')
-        else:
-            os.write(2, (b'[boot] mlockall failed errno=%d\n' % _mlk_err))
-    else:
-        os.write(2, b'[boot] mlockall(MCL_CURRENT|MCL_FUTURE) OK '
-                    b'\xe2\x80\x94 pages pinned\n')
-except Exception as _mlk_exc:
+#
+# BUT pinned pages are unreclaimable and are charged against the cgroup
+# memory limit. On a memory-constrained container (e.g. an exported copy
+# on a small box) pinning the whole C-extension working set can push RSS
+# past memory.max → the OOM killer SIGKILLs the process at boot (a bare
+# "Killed" with no traceback). mlockall only HELPS on a FUSE mount and is
+# only SAFE with headroom under the cgroup limit, so we gate on both.
+# Override: TOFU_MLOCK=1 forces it on, =0 forces it off (default 'auto').
+def _tofu_path_is_fuse(_path):
+    """Best-effort: True if *_path* sits on a FUSE filesystem (stdlib-only)."""
     try:
-        os.write(2, (b'[boot] mlockall unavailable: %s\n'
-                     % str(_mlk_exc).encode(errors='replace')))
+        _path = os.path.abspath(_path)
+        _best_mp, _best_fstype = '', ''
+        with open('/proc/self/mountinfo', 'r') as _f:
+            for _line in _f:
+                # mountinfo: "... <mount point> ... - <fstype> <source> ..."
+                _halves = _line.split(' - ')
+                if len(_halves) != 2:
+                    continue
+                _left = _halves[0].split()
+                _right = _halves[1].split()
+                if len(_left) < 5 or not _right:
+                    continue
+                _mp, _fstype = _left[4], _right[0]
+                if (_path == _mp or _path.startswith(_mp.rstrip('/') + '/')) \
+                        and len(_mp) >= len(_best_mp):
+                    _best_mp, _best_fstype = _mp, _fstype
+        return _best_fstype.startswith('fuse')
+    except OSError:
+        return False
+
+
+def _tofu_cgroup_mem_limit_bytes():
+    """cgroup memory limit in bytes, or None if unlimited/unknown (stdlib-only)."""
+    for _p in ('/sys/fs/cgroup/memory.max',                    # cgroup v2
+               '/sys/fs/cgroup/memory/memory.limit_in_bytes'):  # cgroup v1
+        try:
+            with open(_p, 'r') as _f:
+                _raw = _f.read().strip()
+        except OSError:
+            continue
+        if _raw == 'max':
+            return None
+        try:
+            _val = int(_raw)
+        except ValueError:
+            continue
+        # cgroup v1 reports a huge sentinel (~PAGE_COUNTER_MAX) for "unlimited"
+        if _val <= 0 or _val >= (1 << 62):
+            return None
+        return _val
+    return None
+
+
+def _tofu_should_mlock():
+    """Decide whether mlockall is worth it. Returns (do_it, reason)."""
+    _mode = os.environ.get('TOFU_MLOCK', 'auto').strip().lower()
+    if _mode in ('0', 'off', 'false', 'no'):
+        return False, 'disabled via TOFU_MLOCK=%s' % _mode
+    if _mode in ('1', 'on', 'true', 'yes', 'force'):
+        return True, 'forced via TOFU_MLOCK=%s' % _mode
+    # auto: pin only where the SIGBUS risk is real (project dir OR the conda
+    # env holding the .so files is on FUSE) AND there is enough memory
+    # headroom that pinning won't trip the OOM killer.
+    _on_fuse = (_tofu_path_is_fuse(os.path.dirname(os.path.abspath(__file__)))
+                or _tofu_path_is_fuse(sys.prefix))
+    if not _on_fuse:
+        return False, 'not on FUSE (no SIGBUS risk to mitigate)'
+    _limit = _tofu_cgroup_mem_limit_bytes()
+    if _limit is None:
+        return True, 'on FUSE, cgroup memory unlimited'
+    try:
+        _min_gb = float(os.environ.get('TOFU_MLOCK_MIN_LIMIT_GB', '8'))
+    except ValueError:
+        _min_gb = 8.0
+    _gib = float(1 << 30)
+    if _limit >= _min_gb * _gib:
+        return True, 'on FUSE, cgroup limit %.1fGiB >= %.1fGiB' % (_limit / _gib, _min_gb)
+    return False, ('on FUSE but cgroup limit %.1fGiB < %.1fGiB — skipping to avoid '
+                   'OOM (set TOFU_MLOCK=1 to force)' % (_limit / _gib, _min_gb))
+
+
+_tofu_do_mlock, _tofu_mlock_reason = _tofu_should_mlock()
+if _tofu_do_mlock:
+    try:
+        import ctypes as _ctypes
+        _MCL_CURRENT, _MCL_FUTURE = 1, 2
+        _libc = _ctypes.CDLL('libc.so.6', use_errno=True)
+        if _libc.mlockall(_MCL_CURRENT | _MCL_FUTURE) != 0:
+            import errno as _errno
+            _mlk_err = _ctypes.get_errno()
+            # ENOMEM (12) = memlock rlimit too low — common in containers
+            if _mlk_err == _errno.ENOMEM:
+                os.write(2, b'[boot] mlockall skipped: memlock rlimit too low\n')
+            else:
+                os.write(2, (b'[boot] mlockall failed errno=%d\n' % _mlk_err))
+        else:
+            os.write(2, b'[boot] mlockall(MCL_CURRENT|MCL_FUTURE) OK '
+                        b'\xe2\x80\x94 pages pinned\n')
+    except Exception as _mlk_exc:
+        try:
+            os.write(2, (b'[boot] mlockall unavailable: %s\n'
+                         % str(_mlk_exc).encode(errors='replace')))
+        except OSError:
+            pass
+else:
+    try:
+        os.write(2, (b'[boot] mlockall skipped \xe2\x80\x94 %s\n'
+                     % _tofu_mlock_reason.encode(errors='replace')))
     except OSError:
         pass
 
@@ -248,10 +602,28 @@ def _install_flask_shim():
         wrapper._quart_async_wrapper = True
         return wrapper
 
+    # Quart 0.19.x's send_file / send_from_directory still use the
+    # pre-Flask-2.0 kwarg name `attachment_filename`; modern route code
+    # uses Flask's `download_name`. Normalize so callers can use the
+    # current Flask spelling regardless of the installed Quart version.
+    def _compat_download_name(async_fn):
+        @functools.wraps(async_fn)
+        def adapter(*args, **kwargs):
+            if 'download_name' in kwargs:
+                params = inspect.signature(async_fn).parameters
+                if 'download_name' not in params and 'attachment_filename' in params:
+                    kwargs['attachment_filename'] = kwargs.pop('download_name')
+            return async_fn(*args, **kwargs)
+        # Mark so _genuine() unwraps through this adapter on re-install,
+        # recovering the real async helper rather than stopping here.
+        adapter.__wrapped__ = async_fn
+        adapter._quart_async_wrapper = True
+        return adapter
+
     # Replace in quart module so `from flask import send_from_directory`
     # gets the sync-safe version
-    quart.send_from_directory = _sync_safe(_orig_send_from_directory)
-    quart.send_file = _sync_safe(_orig_send_file)
+    quart.send_from_directory = _sync_safe(_compat_download_name(_orig_send_from_directory))
+    quart.send_file = _sync_safe(_compat_download_name(_orig_send_file))
     quart.make_response = _sync_safe(_orig_make_response)
 
     # Expose originals at module level for async code that needs to await directly
@@ -334,10 +706,9 @@ def _install_flask_shim():
 
     # Werkzeug exceptions are used directly in some places
     # Quart re-exports them, but ensure werkzeug is still importable
-    try:
-        import werkzeug
-    except ImportError:
-        pass
+    import importlib.util
+    if importlib.util.find_spec('werkzeug') is None:
+        logging.getLogger(__name__).debug('werkzeug not importable; relying on quart re-exports')
 
 
 _install_flask_shim()
@@ -366,14 +737,25 @@ BASE_DIR = _PROJ_DIR
 # ── Logging setup (identical to server.py) ──
 from logging.handlers import RotatingFileHandler, TimedRotatingFileHandler
 
-LOG_DIR = os.path.join(BASE_DIR, 'logs')
+# LOG_DIR must be WRITABLE. In a frozen desktop build BASE_DIR is the read-only
+# bundle root, so route logs to the writable root (see lib/runtime_paths).
+from lib.runtime_paths import data_root as _tofu_data_root, logs_root as _tofu_logs_root
+LOG_DIR = _tofu_logs_root()
 os.makedirs(LOG_DIR, exist_ok=True)
 
 _LOG_FMT = '%(asctime)s [%(levelname)s] %(name)s [%(threadName)s]: %(message)s'
 _LOG_DATEFMT = '%Y-%m-%d %H:%M:%S'
 _formatter = logging.Formatter(_LOG_FMT, datefmt=_LOG_DATEFMT)
 
-_BIZ_PREFIXES = ('lib.', 'routes.', 'server')
+# 'tofu_search' is the extracted search/fetch library (sibling package). Its
+# loggers carry first-class business diagnostics — the per-engine result
+# counts, the streaming-fetch race-to-N decisions, the LLM content-filter
+# reductions, and the step-by-step pipeline timing breakdown that explains WHY
+# a search took N seconds. Treat it as business (→ app.log INFO, error.log
+# WARNING+), NOT vendor: routing it to vendor.log at WARNING-only (the old
+# behaviour) discarded all the INFO pipeline detail an operator needs to
+# diagnose a slow/failed search.
+_BIZ_PREFIXES = ('lib.', 'routes.', 'server', 'tofu_search')
 
 class _BizOnly(logging.Filter):
     def filter(self, record):
@@ -458,6 +840,54 @@ for _sub in ('trafilatura.xml', 'trafilatura.core', 'trafilatura.htmlprocessing'
              'trafilatura.metadata'):
     logging.getLogger(_sub).setLevel(logging.ERROR)
 logging.getLogger('hypercorn.access').addFilter(_QuietPollFilter())
+
+
+# ── Crash visibility: route uncaught exceptions to the log files ──
+# faulthandler (top of file) covers C-level fatal signals, but an uncaught
+# *Python* exception in the main thread otherwise reaches only the default
+# excepthook → stderr, never app.log / error.log. Install a hook that logs
+# it at CRITICAL (with traceback) before delegating to whatever hook was
+# already installed (e.g. the bootstrap-delegation hook that re-execs to
+# bootstrap.py on ImportError) — so we add visibility without clobbering it.
+_prev_excepthook = sys.excepthook
+
+def _crash_excepthook(exc_type, exc_value, exc_tb):
+    # Ctrl-C is a normal shutdown path, not a crash — don't scream about it.
+    if not issubclass(exc_type, KeyboardInterrupt):
+        try:
+            logging.getLogger('server').critical(
+                'Uncaught exception — process is terminating',
+                exc_info=(exc_type, exc_value, exc_tb))
+        except Exception:
+            pass  # logging must never mask the original crash
+    (_prev_excepthook or sys.__excepthook__)(exc_type, exc_value, exc_tb)
+
+sys.excepthook = _crash_excepthook
+
+
+# ── Crash visibility: background threads ──
+# sys.excepthook covers ONLY the main thread. The entire task/orchestration
+# system (run_task, swarm agents, scheduler ticks, timers) runs in daemon
+# worker threads, where an uncaught exception otherwise reaches just the
+# default threading hook → stderr, never app.log / error.log. Route it through
+# our 'server' logger at CRITICAL (with traceback) so a silently-dying worker
+# is always diagnosable. threading.excepthook exists since Py3.8.
+_prev_thread_excepthook = threading.excepthook
+
+def _thread_crash_excepthook(args):
+    # SystemExit raised inside a thread is a normal stop signal, not a crash.
+    if not issubclass(args.exc_type, (KeyboardInterrupt, SystemExit)):
+        try:
+            logging.getLogger('server').critical(
+                'Uncaught exception in background thread %r — thread is dying',
+                getattr(args.thread, 'name', '?'),
+                exc_info=(args.exc_type, args.exc_value, args.exc_traceback))
+        except Exception:
+            pass  # logging must never mask the original crash
+    if _prev_thread_excepthook is not None:
+        _prev_thread_excepthook(args)
+
+threading.excepthook = _thread_crash_excepthook
 
 
 # ── Boot progress ──
@@ -911,6 +1341,39 @@ def _init_database():
     except Exception as e:
         _server_log.warning('Stale task recovery failed: %s', e)
 
+    # ── Presence: reconcile the on-disk live-peer registry. A server that
+    #    crashed mid-run left ghost peers marked "active" in each project's
+    #    .tofu/presence/registry.json; with no live tasks yet, every persisted
+    #    peer is a ghost and is reaped, so the "who's working" strip never lies
+    #    after a restart. Then start the background sweep timer.
+    try:
+        from lib.database import DOMAIN_CHAT, get_thread_db
+        from lib.presence import reconcile_on_startup, start_sweeper
+        _roots: list[str] = []
+        try:
+            db = get_thread_db(DOMAIN_CHAT)
+            rows = db.execute(
+                "SELECT DISTINCT json_extract(settings, '$.projectPath') AS p "
+                "FROM conversations WHERE user_id=1 "
+                "AND json_extract(settings, '$.projectPath') IS NOT NULL").fetchall()
+            _roots = [r['p'] for r in rows if r['p']]
+        except Exception as _re:
+            _server_log.debug('Presence root discovery failed: %s', _re)
+        reconcile_on_startup(_roots)
+        start_sweeper()
+    except Exception as e:
+        _server_log.warning('Presence startup reconciliation failed: %s', e)
+
+    # Resume swarm sub-agents that were mid-flight when the server stopped.
+    # DB-backed round-level resume (see lib/swarm/persistence.py): rehydrates
+    # each conversation-scoped session and re-spawns its unfinished agents
+    # from their checkpointed message history.
+    try:
+        from lib.swarm.integration import rehydrate_swarms_on_startup
+        rehydrate_swarms_on_startup()
+    except Exception as e:
+        _server_log.warning('Swarm rehydration failed: %s', e)
+
 
 def _validate_imports():
     """Validate critical imports at startup."""
@@ -945,15 +1408,17 @@ def _validate_imports():
         'PIL._imaging',
         'lxml.etree',
         'greenlet._greenlet',
-        'yaml._yaml',
         'numpy.core._multiarray_umath',
         'markupsafe._speedups',
         'charset_normalizer.md',
     ]
-    # These are optional — may not be installed in all environments
+    # These are optional — may not be installed in all environments.
+    # yaml._yaml: only used by routes/api_docs.py::openapi_yaml, which already
+    # degrades to JSON on ImportError — never a hard dependency.
     _NATIVE_PRELOADS_OPTIONAL = [
         'pymupdf._extra',
         'psycopg2._psycopg',
+        'yaml._yaml',
     ]
     _boot('Eager-loading native extensions (FUSE SIGBUS mitigation)…')
     for _mod in _NATIVE_PRELOADS:
@@ -1032,6 +1497,43 @@ def _find_free_port(start=15000, end=15100):
     return start
 
 
+def _wait_port_free(host, port, timeout=10.0):
+    """Block until ``host:port`` can be bound, or ``timeout`` seconds elapse.
+
+    Uses a real ``bind()`` probe rather than ``connect_ex`` so the server's
+    OWN lingering listener — which is briefly still present right after an
+    in-place re-exec restart — is correctly WAITED OUT instead of being
+    mistaken for a foreign process (the connect-probe would see it as "in
+    use" and silently shift the port). Returns True once the port is bindable.
+
+    Args:
+        host: Bind host (``0.0.0.0`` / ``::`` normalized to all-interfaces).
+        port: Port to wait for.
+        timeout: Max seconds to wait before giving up.
+
+    Returns:
+        True if the port became bindable within ``timeout``, else False.
+    """
+    import socket
+    import time as _t
+    bind_host = '' if host in ('', '0.0.0.0', '::') else host
+    deadline = _t.time() + timeout
+    while True:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.bind((bind_host, port))
+            return True
+        except OSError as e:
+            if _t.time() >= deadline:
+                _server_log.debug('[Port] %s:%d still busy after %.1fs wait: %s',
+                                  bind_host or '*', port, timeout, e)
+                return False
+            _t.sleep(0.25)
+        finally:
+            s.close()
+
+
 def _ensure_tls_certs(certfile='', keyfile=''):
     """Ensure TLS certificates exist for HTTP/2 support.
 
@@ -1056,7 +1558,7 @@ def _ensure_tls_certs(certfile='', keyfile=''):
             return certfile, keyfile
         _tls_log.warning('[TLS] Provided cert/key files not found: %s, %s', certfile, keyfile)
 
-    cert_dir = os.path.join(BASE_DIR, 'data', 'certs')
+    cert_dir = os.path.join(_tofu_data_root(), 'certs')
     cert_path = os.path.join(cert_dir, 'tofu.pem')
     key_path = os.path.join(cert_dir, 'tofu.key')
 
@@ -1167,37 +1669,18 @@ if __name__ == '__main__':
     host = args.host
 
     # ── Instance lock — prevent multiple servers on the same project dir ──
-    import socket as _sock_mod
-    _lock_dir = os.path.join(BASE_DIR, 'data')
+    # Self-healing: a contended flock does NOT prove a live server (an OOM
+    # SIGKILL skips atexit/lock-release, and an orphaned child — or an
+    # unclean death on a FUSE mount — can keep the fd's flock held). So on
+    # contention we reclaim a stale LOCAL lock (dead recorded pid) by
+    # unlinking + retrying on a fresh inode, exactly as stop.sh does. See
+    # _acquire_instance_lock / _reclaim_stale_instance_lock.
+    _lock_dir = _tofu_data_root()
     os.makedirs(_lock_dir, exist_ok=True)
     _lock_path = os.path.join(_lock_dir, '.server.lock')
-    _instance_lock_fd = None
 
-    def _acquire_instance_lock():
-        global _instance_lock_fd
-        try:
-            if not os.path.exists(_lock_path):
-                open(_lock_path, 'a').close()
-            _instance_lock_fd = open(_lock_path, 'r+')
-        except Exception:
-            return True
-        try:
-            import fcntl
-            fcntl.flock(_instance_lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except (IOError, OSError):
-            _instance_lock_fd.close()
-            _instance_lock_fd = None
-            return False
-        try:
-            _instance_lock_fd.seek(0)
-            _instance_lock_fd.truncate()
-            _instance_lock_fd.write(f'{os.getpid()}@{_sock_mod.gethostname()}\n')
-            _instance_lock_fd.flush()
-        except Exception:
-            pass
-        return True
-
-    if not _acquire_instance_lock():
+    _lock_ok, _instance_lock_fd = _acquire_instance_lock(_lock_path, _server_log)
+    if not _lock_ok:
         _skip = (os.environ.get('TOFU_SKIP_LOCK', '') or '').strip()
         if _skip != '1':
             _server_log.critical('Another server instance is already running from this project directory.\n'
@@ -1234,9 +1717,36 @@ if __name__ == '__main__':
     except Exception as _e:
         _server_log.warning('[Server] PG shutdown hook failed: %s', _e)
 
-    port = _find_free_port(start=args.port)
-    if port != args.port:
-        _server_log.info('Port %d in use — using %d', args.port, port)
+    # On an in-place restart (re-exec), the previous image's listener may
+    # still be draining on the original port for a fraction of a second.
+    # _deferred_reexec stamps the port it was serving into _TOFU_REEXEC_PORT;
+    # honor it by WAITING for that exact port to free up rather than letting
+    # the connect-probe mistake our own lingering socket for a foreign one
+    # and shift to the next port (15000 → 15001 → …).
+    _reexec_port_env = (os.environ.get('_TOFU_REEXEC_PORT', '') or '').strip()
+    os.environ.pop('_TOFU_REEXEC_PORT', None)
+    if _reexec_port_env:
+        try:
+            port = int(_reexec_port_env)
+        except (ValueError, TypeError):
+            port = args.port
+        if _wait_port_free(host, port):
+            _server_log.info('[Restart] Reclaimed original port %d', port)
+        else:
+            _server_log.warning('[Restart] Port %d still busy after wait — '
+                                 'falling back to probe', port)
+            port = _find_free_port(start=port)
+            if port != args.port:
+                _server_log.info('Port %d in use — using %d', args.port, port)
+    else:
+        port = _find_free_port(start=args.port)
+        if port != args.port:
+            _server_log.info('Port %d in use — using %d', args.port, port)
+
+    # Record the port we actually bound so an in-place restart (re-exec)
+    # can reclaim it instead of re-probing. Read by _deferred_reexec in
+    # routes/api_v1/update.py.
+    os.environ['_TOFU_RUNTIME_PORT'] = str(port)
 
     # ── TLS / HTTP/2 setup ──
     from lib.env_compat import getenv_compat
@@ -1274,19 +1784,34 @@ if __name__ == '__main__':
                 from lib.mcp.client import get_bridge
                 from lib.mcp.config import load_mcp_config
                 mcp_config = load_mcp_config()
-                if mcp_config:
-                    enabled = sum(1 for c in mcp_config.values() if c.get('enabled', True))
-                    if enabled > 0:
-                        import threading
-                        def _mcp_auto():
-                            try:
-                                bridge = get_bridge()
-                                result = bridge.connect_all()
-                                total = sum(len(v) for v in result.values())
-                                _server_log.info('[MCP] Auto-connect: %d servers, %d tools', len(result), total)
-                            except Exception as e:
-                                _server_log.error('[MCP] Auto-connect failed: %s', e, exc_info=True)
-                        threading.Thread(target=_mcp_auto, name='mcp-auto-connect', daemon=True).start()
+                enabled = sum(1 for c in (mcp_config or {}).values()
+                              if c.get('enabled', True))
+                import threading
+
+                def _mcp_auto():
+                    # Pre-warm vendored launchers (pip install off the event
+                    # loop) so a later App-Store install click is just the
+                    # fast handshake, never a cold pip that would freeze the
+                    # MCP loop. Runs even with zero configured servers — that
+                    # is exactly the fresh-install case we want fast.
+                    try:
+                        from lib.mcp.client import prewarm_all_vendored
+                        warmed = prewarm_all_vendored()
+                        if warmed:
+                            _server_log.info('[MCP] Pre-warm: %s', warmed)
+                    except Exception as e:
+                        _server_log.warning('[MCP] Pre-warm failed: %s', e)
+                    if enabled <= 0:
+                        return
+                    try:
+                        bridge = get_bridge()
+                        result = bridge.connect_all()
+                        total = sum(len(v) for v in result.values())
+                        _server_log.info('[MCP] Auto-connect: %d servers, %d tools', len(result), total)
+                    except Exception as e:
+                        _server_log.error('[MCP] Auto-connect failed: %s', e, exc_info=True)
+
+                threading.Thread(target=_mcp_auto, name='mcp-auto-connect', daemon=True).start()
             except Exception as e:
                 _server_log.warning('[MCP] Auto-connect setup failed: %s', e)
 
@@ -1401,6 +1926,22 @@ if __name__ == '__main__':
     hconfig.keep_alive_timeout = 600
     hconfig.graceful_timeout = 10
 
+    # ── Listen backlog ──
+    # Hypercorn's default (100) is small: if the event loop briefly stalls
+    # (CPU starvation from sibling processes, a burst of slow handlers), the
+    # kernel accept queue fills and further connections are dropped/reset —
+    # the page "goes dark" even though the process is alive and the port is
+    # bound. A larger backlog lets transient stalls QUEUE instead of failing,
+    # so the browser reconnect succeeds once the loop catches up. The kernel
+    # still caps this at net.core.somaxconn. Override via TOFU_LISTEN_BACKLOG.
+    try:
+        _listen_backlog = int(os.environ.get('TOFU_LISTEN_BACKLOG', '0') or '0')
+    except (ValueError, TypeError):
+        _listen_backlog = 0
+    if _listen_backlog <= 0:
+        _listen_backlog = 1024
+    hconfig.backlog = _listen_backlog
+
     if _has_tls:
         hconfig.certfile = _tls_cert
         hconfig.keyfile = _tls_key
@@ -1408,6 +1949,18 @@ if __name__ == '__main__':
     # ── Run ──
     async def _serve():
         loop = asyncio.get_running_loop()
+
+        # Uncaught exceptions in coroutines / callbacks never reach
+        # sys.excepthook — asyncio routes them here. Default behavior only
+        # logs to the root 'asyncio' logger at ERROR; funnel through our
+        # 'server' logger at ERROR with the traceback so they land in
+        # error.log with full context.
+        def _loop_exception_handler(_loop, ctx):
+            msg = ctx.get('message') or 'Unhandled exception in event loop'
+            exc = ctx.get('exception')
+            _server_log.error('[asyncio] %s', msg,
+                              exc_info=exc if exc else False)
+        loop.set_exception_handler(_loop_exception_handler)
 
         # ── Size the default executor ──
         # Every sync route handler runs in this loop's default executor via
@@ -1428,8 +1981,172 @@ if __name__ == '__main__':
         loop.set_default_executor(_executor)
         _server_log.info('[Server] Sync route executor sized to %d threads', _sync_workers)
 
+        # ── Dedicated agent-worker executor ──
+        # spawn_task() runs run_task on a thread; if it shared the default
+        # executor with sync route handlers, long agent runs would starve
+        # request handling (and vice-versa). Give agent workers their own
+        # pool so the two cannot deadlock each other. Sized to the
+        # in-flight ceiling + headroom; override via TOFU_AGENT_WORKERS.
+        try:
+            _agent_workers = int(os.environ.get('TOFU_AGENT_WORKERS', '') or '0')
+        except (ValueError, TypeError):
+            _agent_workers = 0
+        if _agent_workers <= 0:
+            _agent_workers = min(256, (os.cpu_count() or 4) * 16)
+        _agent_executor = ThreadPoolExecutor(
+            max_workers=_agent_workers, thread_name_prefix='tofu-agent')
+        try:
+            from lib.tasks_pkg import set_agent_executor
+            set_agent_executor(_agent_executor)
+            _server_log.info('[Server] Agent-worker executor sized to %d threads',
+                             _agent_workers)
+        except Exception as _ae_err:
+            _server_log.warning('[Server] could not install agent executor: %s',
+                                _ae_err)
+
         from lib.push import hub as _push_hub
         _push_hub.set_loop(loop)
+
+        # ── Periodic finished-task reaper ──
+        # The headless agent-API path (agent/run, compat adapters,
+        # /api/v1/chat) never calls cleanup_old_tasks() opportunistically
+        # the way the UI chat routes do, so on a headless-only deployment
+        # the in-memory task registry would grow without bound. Run a
+        # cheap sweep on the loop every TOFU_TASK_CLEANUP_INTERVAL seconds
+        # (default 60). Finished-only + TTL-bounded — never touches a
+        # running task. Disable with the interval set to 0.
+        try:
+            _cleanup_interval = int(
+                os.environ.get('TOFU_TASK_CLEANUP_INTERVAL', '') or '60')
+        except (ValueError, TypeError):
+            _cleanup_interval = 60
+
+        async def _task_reaper():
+            from lib.tasks_pkg import cleanup_old_tasks
+            while not _shutdown_requested.is_set():
+                await asyncio.sleep(_cleanup_interval)
+                try:
+                    await asyncio.to_thread(cleanup_old_tasks)
+                except Exception as _reap_err:
+                    _server_log.warning('[Server] task reaper sweep failed: %s',
+                                        _reap_err)
+
+        if _cleanup_interval > 0:
+            loop.create_task(_task_reaper())
+            _server_log.info('[Server] Finished-task reaper every %ds',
+                             _cleanup_interval)
+
+
+        # ── Event-loop stall watchdog ──
+        # We have no supervisor and faulthandler only fires on C-level fatal
+        # signals, so a wedged event loop (a blocking call on the loop thread,
+        # a starved executor, a FUSE/PG stall) currently goes SILENT: the port
+        # stops accept()ing while the process stays alive, and we get no stack
+        # to diagnose it. This turns that into a captured all-thread dump.
+        #
+        # TWO complementary capture paths:
+        #
+        #  (A) GUARANTEED, GIL-INDEPENDENT — faulthandler.dump_traceback_later.
+        #      The async heartbeat acts as a watchdog PET: on each bump it
+        #      cancels + re-arms a C-timer set to fire in _stall_threshold s.
+        #      While the loop is healthy the timer is petted before it fires;
+        #      when the loop wedges — even inside a single monolithic
+        #      GIL-holding C call (the documented json.dumps / catastrophic-
+        #      regex pit) — the timer's DEDICATED C THREAD fires WITHOUT taking
+        #      the GIL and writes an all-thread dump to the FUSE-resilient
+        #      /dev/shm sink. This is the path that covers the one root cause
+        #      the project has proven can happen.
+        #
+        #  (B) COMPLEMENTARY, human-readable — an off-loop daemon thread watches
+        #      the heartbeat timestamp and, on a stall, emits an ERROR log line
+        #      (with measured duration) + a dump to the FUSE log sink. It works
+        #      for GIL-RELEASING stalls (blocking syscalls: FUSE/PG) but is
+        #      BLIND to a GIL-held wedge (it must take the GIL to run) — hence
+        #      it is a signal, never the sole guarantee. Path (A) is.
+        #
+        # One dump per stall episode; both re-arm on recovery.
+        # Set TOFU_LOOP_STALL_SECS=0 to disable both.
+        try:
+            _stall_threshold = float(
+                os.environ.get('TOFU_LOOP_STALL_SECS', '') or '5')
+        except (ValueError, TypeError):
+            _stall_threshold = 5.0
+        try:
+            _stall_bump_interval = float(
+                os.environ.get('TOFU_LOOP_HEARTBEAT_SECS', '') or '1')
+        except (ValueError, TypeError):
+            _stall_bump_interval = 1.0
+        if _stall_bump_interval <= 0:
+            _stall_bump_interval = 1.0
+
+        # The C-timer must fire AFTER a healthy heartbeat would have petted it,
+        # so its timeout must exceed the bump interval; guarantee headroom.
+        _ctimer_timeout = max(_stall_threshold, _stall_bump_interval * 2.0)
+        _arm_ctimer = _should_arm_ctimer(_stall_threshold, _fault_shm_log)
+
+        _loop_heartbeat = {'ts': time.monotonic()}
+
+        async def _loop_heartbeat_task():
+            # Pet path (A): re-arm the GIL-independent C-timer on every bump.
+            while not _shutdown_requested.is_set():
+                _loop_heartbeat['ts'] = time.monotonic()
+                if _arm_ctimer:
+                    try:
+                        faulthandler.cancel_dump_traceback_later()
+                        # exit=False: capture the hang, do NOT abort the process.
+                        faulthandler.dump_traceback_later(
+                            _ctimer_timeout, repeat=False,
+                            file=_fault_shm_log, exit=False)
+                    except Exception as _ct_err:
+                        _server_log.warning('[LoopWatch] could not arm C-timer: %s', _ct_err)
+                await asyncio.sleep(_stall_bump_interval)
+            if _arm_ctimer:
+                try:
+                    faulthandler.cancel_dump_traceback_later()
+                except Exception:
+                    pass
+
+        def _loop_stall_watch():
+            # Poll fast enough to notice a stall promptly, but never faster
+            # than a fraction of the threshold. Runs off-loop as a daemon.
+            poll = max(0.5, min(_stall_bump_interval, _stall_threshold / 2.0))
+            already_dumped = False
+            while not _shutdown_requested.is_set():
+                _shutdown_requested.wait(poll)
+                if _shutdown_requested.is_set():
+                    break
+                age = time.monotonic() - _loop_heartbeat['ts']
+                should_dump, already_dumped = _loop_stall_decide(
+                    age, _stall_threshold, already_dumped)
+                if not should_dump:
+                    continue
+                _server_log.error(
+                    '[LoopWatch] event loop STALLED ~%.1fs (threshold=%.1fs) — '
+                    'dumping all-thread stacks to faulthandler sinks', age, _stall_threshold)
+                for _sink in (_fault_shm_log, _fault_log):
+                    if _sink is None:
+                        continue
+                    try:
+                        _sink.write('\n=== LOOP STALL pid=%d age=%.1fs at %s ===\n'
+                                    % (os.getpid(), age, time.strftime('%Y-%m-%d %H:%M:%S')))
+                        _sink.flush()
+                        faulthandler.dump_traceback(file=_sink, all_threads=True)
+                        _sink.flush()
+                    except Exception as _dump_err:
+                        _server_log.warning('[LoopWatch] dump to sink failed: %s', _dump_err)
+
+        if _stall_threshold > 0:
+            loop.create_task(_loop_heartbeat_task())
+            _stall_thread = threading.Thread(
+                target=_loop_stall_watch, name='tofu-loopwatch', daemon=True)
+            _stall_thread.start()
+            _server_log.info(
+                '[Server] Loop-stall watchdog armed (threshold=%.1fs, heartbeat=%.1fs, '
+                'GIL-independent C-timer=%s @ %.1fs)',
+                _stall_threshold, _stall_bump_interval,
+                'on' if _arm_ctimer else 'off', _ctimer_timeout)
+        else:
+            _server_log.info('[Server] Loop-stall watchdog disabled (TOFU_LOOP_STALL_SECS=0)')
 
         # Bridge the SIGTERM threading.Event to an async trigger Hypercorn
         # awaits. When set, Hypercorn stops accepting new connections and

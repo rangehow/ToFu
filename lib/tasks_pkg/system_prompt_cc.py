@@ -466,6 +466,17 @@ def section_tone_and_style(is_code_context: bool = True,
             "retrieved — paste the real link so the user can verify it. Do "
             "NOT fabricate or guess URLs you did not open; only cite pages you "
             "actually retrieved. Prefer official/primary sources.")
+        items.append(
+            "For research / fact-lookup questions, do not finalize after a "
+            "single search. Corroborate each key fact (a version, date, price, "
+            "spec, leaderboard standing, or API/doc claim) against at least "
+            "TWO independent sources you actually opened — open the most "
+            "promising 2–3 results with fetch_url and cross-check them. If two "
+            "independent sources agree, that fact is confirmed: stop and move "
+            "on — this is a bounded verification pass (a couple of extra "
+            "fetches), NOT exhaustive crawling. Synthesize the confirmed facts "
+            "in your own words with their source links; never paste large raw "
+            "page dumps into the answer.")
     return _with_heading("# Tone and style", items)
 
 

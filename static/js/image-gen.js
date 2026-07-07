@@ -102,7 +102,7 @@ function _igClassifyError(data, httpStatus) {
     title = 'No model available';
   }
 
-  return {
+  return /** @type {any} */ ({
     title,
     text: errText,
     detail: data.text || '',
@@ -111,7 +111,7 @@ function _igClassifyError(data, httpStatus) {
     isTimeout,
     isRateLimit,
     isContentBlocked,
-  };
+  });
 }
 
 /**
@@ -570,16 +570,16 @@ async function _igRetryBatchSlot(msgIdx, slotIdx, prompt, model) {
 function _igBatchErrorSlotHtml(errInfo, model, msgIdx, slotIdx, prompt) {
   const modelLabel = _IG_MODEL_SHORT[model] || model || '?';
   let typeClass = 'ig-error-generic';
-  let icon = '⚠';
+  let icon = Icon('zap', 24);
   if (errInfo.isRateLimit) {
     typeClass = 'ig-error-ratelimit';
-    icon = '⏳';
+    icon = Icon('hourglass', 24);
   } else if (errInfo.isContentBlocked) {
     typeClass = 'ig-error-blocked';
-    icon = '🚫';
+    icon = Icon('ban', 24);
   } else if (errInfo.isTimeout || errInfo.errorType === 'timeout') {
     typeClass = 'ig-error-timeout';
-    icon = '⏱';
+    icon = Icon('timer', 24);
   }
   return `<div class="ig-batch-error ${typeClass}">
     <div class="ig-error-icon">${icon}</div>
@@ -769,25 +769,25 @@ async function _igGenerateBatch(prompt, count) {
         }
 
         // ── Incrementally update saved result ──
-        assistantMsg._igResults[i] = {
+        assistantMsg._igResults[i] = /** @type {any} */ ({
           ok: true, prompt, model: data.model || model, provider_id: data.provider_id || '',
           aspect_ratio: _igSelectedAspect, resolution: _igSelectedResolution,
           image_url: data.image_url || '', remote_image_url: data.remote_image_url || '',
           file_size: data.file_size || 0, elapsed, response_text: data.text || '', error: '',
-        };
+        });
       } else {
         const errInfo = _igClassifyError(data, data._status);
         if (slotEl) {
-          slotEl.setAttribute('data-slot-idx', i);
-          slotEl.setAttribute('data-msg-idx', msgIdx);
+          slotEl.setAttribute('data-slot-idx', String(i));
+          slotEl.setAttribute('data-msg-idx', String(msgIdx));
           slotEl.innerHTML = _igBatchErrorSlotHtml(errInfo, model, msgIdx, i, prompt);
         }
 
         // Show toast for specific error types
         if (errInfo.isRateLimit) {
-          _igToast(`⏳ Slot ${i + 1} rate limited`, 'warning');
+          _igToast(`⏳ Slot ${String(i + 1)} rate limited`, 'warning');
         } else if (errInfo.isContentBlocked) {
-          _igToast(`🚫 Slot ${i + 1} content blocked`, 'error');
+          _igToast(`🚫 Slot ${String(i + 1)} content blocked`, 'error');
         }
 
         assistantMsg._igResults[i] = {
@@ -817,8 +817,8 @@ async function _igGenerateBatch(prompt, count) {
 
       const errInfo = { title: isAbort ? 'Cancelled' : 'Network error', text: errText, errorType: isAbort ? 'cancelled' : 'network', isRateLimit: false, isContentBlocked: false };
       if (slotEl) {
-        slotEl.setAttribute('data-slot-idx', i);
-        slotEl.setAttribute('data-msg-idx', msgIdx);
+        slotEl.setAttribute('data-slot-idx', String(i));
+        slotEl.setAttribute('data-msg-idx', String(msgIdx));
         slotEl.innerHTML = _igBatchErrorSlotHtml(errInfo, model, msgIdx, i, prompt);
       }
 
@@ -976,53 +976,9 @@ setTimeout(function() { if (!_igModelsLoaded) _loadIgModels(); }, 5000);
 
 // ── Image Generation — Utility functions for displaying
 //    images generated via the generate_image tool ──
-
-/**
- * Open an image in fullscreen overlay.
- * Called from tool result image click handlers.
- */
-function _openImageFullscreen(src) {
-  // Remove existing
-  document.querySelectorAll(".imagegen-fullscreen").forEach((el) => el.remove());
-  const overlay = document.createElement("div");
-  overlay.className = "imagegen-fullscreen";
-  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
-  const img = document.createElement("img");
-  img.src = src;
-  img.onload = function() {
-    // For tall images (aspect ratio > 1.3:1 height:width), allow scrolling
-    // instead of shrinking via max-height — avoids the "shows less than
-    // the inline version" effect for paper figures.
-    if (this.naturalHeight > this.naturalWidth * 1.3) {
-      this.style.maxHeight = 'none';
-      overlay.style.overflowY = 'auto';
-      overlay.style.alignItems = 'flex-start';
-      overlay.style.padding = '20px 0';
-    }
-  };
-  overlay.appendChild(img);
-  document.body.appendChild(overlay);
-  const handler = (e) => {
-    if (e.key === "Escape") {
-      overlay.remove();
-      document.removeEventListener("keydown", handler);
-    }
-  };
-  document.addEventListener("keydown", handler);
-}
-
-/**
- * Download a generated image from a tool result card.
- */
-function _downloadGenImage(btn) {
-  const card = btn.closest(".imagegen-card") || btn.closest(".ig-result-card");
-  if (!card) return;
-  const img = card.querySelector("img");
-  if (!img) return;
-  const a = document.createElement("a");
-  a.href = img.src;
-  a.download = `generated_${Date.now()}.png`;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-}
+//
+// NOTE: `_openImageFullscreen` + `_downloadGenImage` were MOVED to the CORE
+// bundle (static/js/ui/image_fullscreen.js). They are called via inline
+// onclick= from tool-panel / chat image thumbnails that render in the core
+// bundle BEFORE Image-Gen mode (which loads this deferred file) is ever
+// opened, so they must always be present. Do not re-add them here.

@@ -1,48 +1,74 @@
 ---
 name: production-cache-miss-root-cause-analysis
-description: Root cause of production cache misses: proxy-level server-side inconsistency, NOT contention or BP4 advancement
+description: Sub-5min cache misses are a STOCHASTIC ~6-8% gap-independent server-side per-request failure; load-balancer routing UNPROVEN; single-baseline claim disproven
 enabled: true
 tags: [caching, anthropic, production, debugging]
 created: 2026-04-10T09:32:27Z
-updated: 2026-04-10T09:32:27Z
+updated: 2026-06-20T15:24:17Z
 ---
 
-# Production Cache Miss Root Cause Analysis (2026-04-10)
+# Production Cache Miss Root Cause Analysis
 
-## Key Findings
+## ⚠️ 2026-06-20 RE-INVESTIGATION (corrects the 2026-04-10 conclusions below)
 
-### What causes the ~15% base miss rate in production?
-**Server-side inconsistency in the sankuai → AWS Bedrock proxy layer.**
+Re-ran the analysis against production `logs/app.log*` (590 drop events, 8908
+CacheStats rounds). Two of the 2026-04-10 claims did NOT hold up; treat the
+mechanism as **unconfirmed server-side stochastic failure**, not proven routing.
 
-### Evidence:
-1. **Identical prompt test**: Sending the EXACT same prompt 10 times (2s gaps), calls 2 and 4 got cache MISS despite identical bytes. After stabilization, calls 5-10 all HIT.
-2. **Not contention**: A/B test proved different conversations don't evict each other (per-round cache_read identical ±0.1%).
-3. **Not BP4 advancement**: Test showed advancing BP4 forward retains incremental cache hits (T3-T5 all hit).
-4. **Not TTL expiry**: 57% of drops happen within 10 seconds (well within 5min TTL).
-5. **Random, not periodic**: Miss pattern is random with clusters, consistent with load-balanced backends.
+### What the production logs DO show (high confidence)
+- **Drop rate is FLAT vs inter-round gap under 5 min** — the dispositive result:
+  - gap 0-10s → 6.6% | 10-30s → 5.8% | 30-60s → 7.8% | 60-300s → 7.7%
+  - gap >300s → **33.7%** (this is the real 5m-tail TTL cliff)
+  - A gap-independent constant ~6-8% miss rate = a *stochastic per-request*
+    server failure. Rules OUT TTL for the sub-5min band; rules OUT
+    "recent call = safer."
+- **Not contention**: 335/534 server-side drops happened with only ONE
+  conversation active within ±6s. Confirms the original no-contention finding.
+- **Breakpoint advancement is NOT a cause** — Anthropic reads are automatic up
+  to the longest matching cached prefix; advancing BP4 never loses an earlier
+  write's read. The reason string conflating the two is misleading.
 
-### Most likely cause:
-Proxy load-balances across multiple Anthropic/Bedrock instances. Each instance has its own cache. When a request lands on a different instance, it's a cache miss.
+### What was DISPROVEN / overstated in the 2026-04-10 memory
+- ❌ **"Drops to a single fixed baseline per conversation"** — FALSE in prod.
+  conv=mqjkmn49 dropped to {0, 54066, 57801, 58225, 58973, 59397} — six values.
+  There IS a recurring band 50-62k (54274×56, 54066×47) but it's the
+  system+tools size shared across convs, NOT a per-conv routing fingerprint.
+- ❌ **"Load-balancer routing across instances"** — PLAUSIBLE but UNPROVEN.
+  The clean proof would be a REBOUND event (same conv: hit→~0→hit within 5min,
+  same bytes). **Zero such events exist in the logs** — every drop-to-0 is
+  followed by a full cache REWRITE, never instant recovery of the old prefix.
+  So the production logs cannot demonstrate "identical bytes missed then
+  recovered." The routing mechanism is a hypothesis, not a measured fact.
 
-### The "drop to baseline" pattern:
-- Misses always drop cache_read to a FIXED value per conversation (e.g., 12,508 or 21,185)
-- This baseline = system + tools tokens (cached with 1h TTL at BP1-BP3)
-- These survive even 5+ hour gaps (confirmed: 318 min gap still had cache hit)
-- Only the conversation tail (BP4, 5m TTL) is lost on server-side miss
+### Honest current conclusion
+Sub-5min misses = **stochastic ~6-8% per-request server-side failure** in the
+gateway/Bedrock layer: gap-independent, not contention, not TTL, mechanism
+(eviction vs routing) NOT pinned down from logs alone. To actually pin it we'd
+need data logs can't give: backend-instance response headers, or a controlled
+identical-prompt replay against the live gateway.
 
-### Stats:
-- Total API calls: 2,973
-- Overall cache hit rate: 84.2%
-- Tokens wasted on server-side misses: ~26M (12.1% of total)
-- Estimated extra cost: ~$97/day
-- Per-conversation miss rate: consistent 10-17%
+### Client-side causes we CAN fix (proven from same logs, mechanism-independent)
+- **140 PREFIX MUTATION warnings** — client mutating the cached prefix.
+- **86 CONFIRMED client-caused breaks**: 38 system+tools changed, 34 system
+  changed, 10 tools changed, 4 compaction. **48 involve a tools-array change
+  across 36 distinct conversations** = mid-conversation feature toggles (Swarm/
+  Scheduler/Browser/etc.) rebuilding the BP1-3 prefix. See the tools-array
+  latch idea (analogous to existing `latch_extended_ttl`).
 
-### What we CANNOT fix:
-- Server-side routing is outside our control
-- The proxy's internal load balancing behavior
+## Original 2026-04-10 analysis (A/B harness — kept for context, see caveats above)
+- Identical-prompt test: same prompt 10× (2s gaps), calls 2 & 4 missed despite
+  identical bytes, then 5-10 all hit. (Harness result — NOT reproduced as
+  rebound events in production logs; see above.)
+- A/B test: different conversations don't evict each other (±0.1%).
+- 57% of drops within 10s → not TTL (consistent with 2026-06 flat-rate finding).
+- Overall hit rate ~84%; per-conv miss 10-17%.
 
-### What we CAN do:
-- Accept ~15% miss rate as infrastructure baseline
-- The 1h TTL on BP1-BP3 IS working (protects system+tools across tasks)
-- The mixed TTL strategy is correct (1h stable prefix, 5m volatile tail)
+## What we CANNOT fix
+- The stochastic server-side miss itself (gateway/Bedrock internal behavior).
+
+## What we CAN do
+- Accept ~6-8% sub-5min base miss as infra baseline; 1h TTL on BP1-3 works
+  (system+tools survives multi-hour gaps).
+- Eliminate the CLIENT-side breaks: prefix mutations + mid-session tools-array
+  toggles (the latter is user-driven from the frontend tool switches).
 

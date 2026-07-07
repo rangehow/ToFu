@@ -1,68 +1,61 @@
 ---
 name: mcp-tool-display-surfaces-key-args
-description: MCP tool display lines in chatui should surface the most informative arg (file_path, project_id short, name) so users can tell which resource a generic tool like create_file touched
+description: MCP tool display: surface resource + human-readable name + CLICKABLE link. overleaf-mcp emits canonical project_url (OVERLEAF_BASE_URL) in EVERY write/read tag; chatui harvests URL+name→_mcpLinks{label→href}, frontend _linkifyMcpLabels wraps the label in <a>
 enabled: true
 tags: [mcp, ui, tool-display, ux, overleaf]
 created: 2026-04-29T14:34:41Z
-updated: 2026-04-29T14:45:41Z
+updated: 2026-06-25T16:54:06Z
 ---
 
-# MCP tool display — surface resource + HUMAN-READABLE container
+# MCP tool display — surface resource + HUMAN-READABLE container + CLICKABLE link
 
 ## Problem
-Without surfacing args, the UI shows every overleaf MCP call as
-`🔌 overleaf/create_file` with no clue *which* file, *which* project.
-Even after adding the short project_id (`69f21…cca7`), users still can't
-read project IDs — they need the **human-readable name**.
+The UI showed every overleaf MCP call as `🔌 overleaf/edit_file — acl.tex @ 6a1e7…a668`.
+Users can't read or navigate the 24-hex id; they need the human name AND a hyperlink.
 
-## Fix — three layers
+## Fix — layers
 
 ### 1. `lib/tasks_pkg/tool_display.py` — title-line suffix
-`_tool_display_mcp` splits args into:
-- **resource** (what is being operated on): file_path / path / name / title /
-  issue_number / pull_number / query / url / branch
-- **container** (what scope it lives in): project_id / repo — rendered via
-  the human-readable project name when available, else `short…id` form
+`_tool_display_mcp` → `_mcp_arg_suffix`: resource (file_path/path/name/title/
+issue_number/query/doc) `@` container (project_id → cached name else `short…id`).
 
-Format: `<tool> — <resource> @ <container>`. Section titles compose with
-file path as `main.tex › Introduction`.
+### 2. `lib/mcp/project_names.py` — name + URL cache
+Process dicts behind one lock, filled by `ingest_tool_result()`:
+- `_cache` project_id→name, `_doc_cache` contentId→title
+- `_proj_url_cache`/`_doc_url_cache` id→full URL (harvested via `_OVERLEAF_URL_RE`
+  `(https?://[^\s/]+)/project/([0-9a-f]{24})` / `_KM_FULL_URL_RE` collabpage)
+- `_overleaf_base` learned from first harvested overleaf URL (self-hosted!); default
+  `https://www.overleaf.com`
+- `get_project_url` ALWAYS synthesizes for valid 24-hex id; `get_doc_url` only when harvested.
 
-Examples:
-- `🔌 overleaf/create_file — acl.sty @ [EMNLP Demo] Tofu`
-- `🔌 overleaf/update_section — main.tex › Introduction @ [EMNLP Demo] Tofu`
-- `🔌 github/create_issue — title @ torvalds/linux`
-- `🔌 github/get_issue — torvalds/linux#42`
+### 3. Linkify (frontend `static/js/ui/tool_rounds.js`)
+Backend `_tool_display_mcp` attaches `extra['_mcpLinks']={label→href}` keyed by the EXACT
+rendered label. `_linkifyMcpLabels(text, round)` runs on already-escaped `q`, indexOf the
+escaped label, wraps in `<a class="ptool-mcp-link" target=_blank rel=noopener>`.
+**XSS guard: only `^https?://` hrefs.** CSS `.ptool-mcp-link` in styles.css.
 
-### 2. `lib/mcp/project_names.py` — name cache (NEW)
-Process-level `dict[project_id, name]`, populated opportunistically by
-`ingest_tool_result()` from:
-- `list_projects` JSON array with id/name fields
-- `status_summary` plain-text header  `📄 Project: <title>  [<24-hex-id>]`
-  (regex anchors on the 24-hex ID to tolerate bracketed titles like
-  `[EMNLP Demo] Tofu`)
-- `create_project` friendly text response
-- `_ingest_obj` recursively walks any JSON for `{id/project_id, name/project_name}` pairs
+### 4. `lib/tasks_pkg/handlers/mcp.py` `_post_build`
+Calls `ingest_tool_result()` THEN rebuilds the suffix so the learning call shows it.
 
-`get_project_name(pid)` returns the cached name or `''`. Thread-safe via
-lock. No network calls on the chatui side.
+## ⭐ overleaf-mcp = authoritative URL source (2026-06-25 part 2)
+**The client must NOT guess the host.** overleaf-mcp owns `OVERLEAF_BASE_URL`
+(env, default www.overleaf.com — same constant compile.py/metadata.py use). So the
+SERVER emits the canonical URL in EVERY project-scoped result; chatui just harvests it.
+- `config.py::project_url(pid)` — `{BASE.rstrip('/')}/project/{pid}`, '' for invalid id.
+- `git_client.py::_project_tag` now returns `[Name] (short…id) <url>` → ALL write tools
+  (create/edit/rewrite/delete/upload) carry the link. **This was the latent bug:** before,
+  ONLY create_project embedded a URL, so on self-hosted deploys every edit linked to the
+  WRONG host (www.overleaf.com) until a create happened to run.
+- server.py: `list_projects` (per-line `[id] <url>`), `status_summary` (`URL:` line),
+  `create_project` (uses project_url instead of hardcoded www.overleaf.com).
 
-### 3. `lib/tasks_pkg/handlers/mcp.py` — hook into post-execution
-`_post_build` calls `ingest_tool_result()` with the completed tool's result
-THEN rebuilds the arg suffix (so the very call that learned the name shows
-it). Also applies the same suffix to `meta.title`.
-
-## overleaf-mcp side — `git_client.py`
-Write ops return strings with project name + short id:
-`✅ Created 'acl.sty' in project [EMNLP Demo] Tofu (69f21…cca7)`
-
-`_resolve_project_name(pid)` calls `compile.list_projects_web()` once and
-caches per-process. Falls back to `(short_id)` only if session cookie is
-missing.
+## Tests
+- chatui `tests/test_mcp_tool_links.py` (9): incl. write-tool-result-carries-harvestable-url.
+- overleaf-mcp `tests/test_project_url.py` (8): default/self-hosted base, invalid→'',
+  _project_tag embeds url. (reload config module per-test to pick up monkeypatched env.)
 
 ## Takeaway
-For MCP tools with opaque 24-hex IDs, do BOTH:
-1. Have the server return a human-readable identity in its response
-2. Have the chatui client harvest name→id mappings from tool results into
-   a process cache, so later calls (within the same session) can show
-   the name even when they only pass the ID.
-
+For opaque-id MCP tools: the SERVER (which knows its base URL) emits the full URL in
+its text → client harvests url→id + name→id into a process cache → display keys
+`_mcpLinks` by the exact rendered label → frontend linkifies that substring (http(s) only).
+Don't synthesize URLs client-side from a guessed host.

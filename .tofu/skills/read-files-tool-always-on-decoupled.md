@@ -53,8 +53,13 @@ and is redundant with the new direct registration.
   `'read_files'` as a string literal — keeps per-task dedup cache
   invalidation on write ops.
 - `_IDEMPOTENT_TOOLS` in `tool_dispatch.py` still includes `'read_files'`.
-- `CORE_TOOL_NAMES` in `deferral.py` still lists `'read_files'` so it's
-  never deferred under token pressure.
+- ~~`CORE_TOOL_NAMES` in `deferral.py` still lists `'read_files'`~~ —
+  **STALE (2026-05-17):** the whole tool-deferral subsystem (`lib/tools/deferral.py`,
+  `CORE_TOOL_NAMES`, `_NEVER_DEFER`, `tool_search`) was REMOVED (see
+  `tool-deferral-subsystem-removed-2026-05` memory). Nothing is deferred any more;
+  read_files is simply always in the list. Tool assembly also moved from
+  `model_config._assemble_tool_list` to the declarative `ToolSpec` registry
+  `lib/tools/registry.py::assemble_tool_list` (`_build_read_files` — "read_files is ALWAYS on").
 
 ## Side effect (intentional)
 Because `_assemble_tool_list` uses `has_real_tools = len(tool_list) > 0`

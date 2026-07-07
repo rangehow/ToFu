@@ -4,8 +4,11 @@ import json
 import threading
 import time
 
+import orjson
+
 from flask import Blueprint, Response, jsonify, request
 
+from lib.agent_core.events import EventType, build_event
 from lib.database import DOMAIN_CHAT, get_db
 from lib.log import audit_log, get_logger
 from lib.api_response import api_bad_request, api_internal_error, api_not_found, api_ok
@@ -33,11 +36,86 @@ from lib.chat import (  # noqa: F401
     resolve_conv_refs as _resolve_conv_refs,
     scan_continue_checkpoint as _scan_continue_checkpoint,
 )
+from lib.idempotency import idempotent_post
 from routes.common import DEFAULT_USER_ID, _invalidate_meta_cache
 
 logger = get_logger(__name__)
 
 chat_bp = Blueprint('chat', __name__)
+
+
+def _dumps_yielding(obj) -> str:
+    """Serialize a (potentially multi-MB) SSE snapshot off the event loop.
+
+    Background: the C accelerator behind ``json.dumps`` holds the GIL for the
+    *entire* call and never releases it mid-encode, so wrapping plain
+    ``json.dumps`` in ``asyncio.to_thread`` does NOT free the loop — a 10 MB
+    conversation snapshot still stalls ``accept()`` for ~40 ms (the wedge
+    behind the 15000 incident).
+
+    ``orjson.dumps`` encodes the same 10 MB in ~5 ms — fast enough that the
+    loop stall drops to ~4 ms even though it, too, holds the GIL; the encode
+    is simply over before it matters, and it also tames the pathological
+    "one huge string field" shape that ``iterencode`` (one atomic chunk)
+    cannot. It is the primary path.
+
+    orjson rejects a handful of inputs the stdlib tolerates (notably non-str
+    dict keys → ``JSONEncodeError``/``TypeError``). For those rare snapshots
+    we fall back to ``JSONEncoder.iterencode``, which yields to the
+    interpreter between chunks so the loop can still breathe.
+
+    The two encoders differ only in item separators (orjson is compact:
+    ``,``/``:`` vs stdlib ``, ``/``: ``); both are valid JSON the frontend
+    parses identically.
+    """
+    try:
+        return orjson.dumps(obj).decode('utf-8')
+    except (TypeError, ValueError) as e:
+        logger.warning('[Chat] orjson snapshot encode failed (%s); '
+                       'falling back to stdlib iterencode', e)
+        return ''.join(json.JSONEncoder(ensure_ascii=False).iterencode(obj))
+
+
+def _running_checkpoint_verdict(sharded: bool):
+    """Decide how to report a DB checkpoint with status='running' whose task is
+    ABSENT from this replica's memory (Epic C §4.1 / §6.4).
+
+    Returns ``(effective_status, reconnect_hint)``:
+      * sharded (redis, multi-replica): ``('running', True)`` — the task is
+        (probably) alive on another replica; the client re-routes via taskId
+        affinity. NO cross-replica liveness probe, NO DB flip to interrupted.
+      * single-process (inproc): ``('interrupted', False)`` — absent genuinely
+        means the server crashed mid-task; keep the crash-recovery behaviour
+        byte-identical to before Epic C.
+    """
+    if sharded:
+        return ('running', True)
+    return ('interrupted', False)
+
+
+def _loads_yielding(raw):
+    """Parse a (potentially multi-MB) JSON snapshot with minimal GIL-hold.
+
+    The mirror of :func:`_dumps_yielding` for the DECODE direction. The
+    stdlib ``json.loads`` C accelerator holds the GIL for the whole parse,
+    so a multi-MB ``tool_rounds`` blob decoded inside the sync SSE fallback
+    generators (``gen_done`` / ``gen_persisted``) stalls the event loop just
+    as an on-loop encode would — those generators run each ``next()`` in the
+    executor via Quart's ``run_sync_iterable``, but the GIL is still held for
+    the whole call so the loop thread is starved regardless (the same trap
+    documented for ``to_thread(json.dumps)``).
+
+    ``orjson.loads`` parses the same blob several times faster and releases
+    the GIL far sooner, dropping the stall below the danger threshold. It
+    accepts ``str`` or ``bytes``. On the rare input orjson rejects we fall
+    back to stdlib ``json.loads`` so behaviour is never worse than before.
+    """
+    try:
+        return orjson.loads(raw)
+    except (TypeError, ValueError) as e:
+        logger.warning('[Chat] orjson snapshot parse failed (%s); '
+                       'falling back to stdlib json.loads', e)
+        return json.loads(raw)
 # v1 blueprint for the JSON routes (the carve-out /api/chat/stream/<id> stays on chat_bp).
 from routes.api_v1.chat import api_v1_chat_bp  # noqa: E402
 
@@ -53,23 +131,39 @@ def chat_active():
     """
     cleanup_old_tasks()
     with tasks_lock:
-        result = [{'id': t['id'], 'convId': t['convId'], 'status': t['status'],
+        # ``tasks`` is a process-global registry mutated by many code paths
+        # (the orchestrator, external/eval harnesses, tests). A malformed
+        # entry missing optional keys must not 500 this status endpoint, so
+        # read every field defensively.
+        #
+        # ★ Exclude non-streaming CARRIER/HOLDER tasks (``_inline_messages`` /
+        #   ``_vu_subtask``): the autopilot VU + reporter sub-turns and the
+        #   summarize carrier use ``create_task`` purely as a message container
+        #   and never stream a ``done`` event. If the frontend sees one here it
+        #   runs orphan-recovery (initActiveTasks Case C / cross-tab reconcile),
+        #   pushes an empty assistant placeholder, and connects an SSE that
+        #   never completes → a permanently-stuck "Waiting…" bubble. Reconnect
+        #   only ever makes sense for real UI-streaming tasks, so hide carriers.
+        #   (The autopilot-kick carrier sets ``_autopilot_kick``, NOT these
+        #   flags, so it is still reported and reconnectable.)
+        result = [{'id': t.get('id', ''), 'convId': t.get('convId', ''),
+                   'status': t.get('status', ''),
                    'aborted': bool(t.get('aborted'))}
-                  for t in tasks.values()]
+                  for t in tasks.values()
+                  if not t.get('_inline_messages') and not t.get('_vu_subtask')]
     return jsonify(result)
 
 
 @api_v1_chat_bp.route('/api/v1/chat/start', methods=['POST'], endpoint='ui_chat_start')
 @require_scope('chat')
+@idempotent_post()
 def chat_start():
-    """Start a chat task. Body is ``{convId, config[, messages, agentBackend]}``.
+    """Start a chat task. Body is ``{convId, config[, messages]}``.
 
     Default flow: load messages from the DB via ``build_api_messages_from_db``,
     then dispatch to the built-in orchestrator. External callers (SWE-bench,
     eval harnesses) may pass ``messages`` inline, which sets ``_inline_messages``
-    so :func:`_sync_result_to_conversation` skips DB write-back. Selecting a
-    non-builtin ``config.agentBackend`` (codex / claude_code / …) routes to
-    :func:`_start_external_backend` instead.
+    so :func:`_sync_result_to_conversation` skips DB write-back.
 
     Returns ``{taskId}``; the client polls ``/api/v1/chat/poll/<taskId>``.
     """
@@ -99,22 +193,44 @@ def chat_start():
 
     cleanup_old_tasks()
 
-    # ★ Abort stale running tasks for this conversation before starting a new one
-    from lib.tasks_pkg import abort_running_tasks_for_conv
-    abort_running_tasks_for_conv(conv_id)
-
-    # ── Backend dispatch: external backends get their own flow ──
-    backend_name = cfg.get('agentBackend', 'builtin')
-    if backend_name and backend_name != 'builtin':
-        return _start_external_backend(data, messages, backend_name)
-
-    # ── Default: built-in Tofu backend ──
+    # ★ Supersede (abort any stale running task for this conv) is now an
+    #   invariant of create_task(supersede=True, the default) — no explicit
+    #   pre-abort needed here. The ordering-critical explicit sweeps in
+    #   _start_task_for_conv (before build_api_messages_from_db) and
+    #   chat_abort_conv remain, because those must run BEFORE their DB read.
     task = create_task(conv_id, messages, cfg)
+    # Human-attended UI task: a user is watching and can answer the write-
+    # approval prompt, so Manual mode actually gates here (see
+    # execute_tool_pipeline's attendance-aware default).
+    task['_attended'] = True
     # Tag tasks that were started with inline messages (no DB-backed
     # conversation row). These tasks skip _sync_result_to_conversation()
     # entirely — external callers read results from task_results directly.
     if inline_messages:
         task['_inline_messages'] = True
+
+    # ── Admission control (backpressure) ──
+    # Cap concurrent in-flight tasks so a UI spawn storm can't exhaust the
+    # agent-worker pool — the SAME ceiling the headless paths enforce
+    # (controller.try_acquire → 503 + retry_after when full). The slot is
+    # released on the task's terminal event via on_terminal (fires once from
+    # the orchestrator worker thread), so a UI spawn can never permanently
+    # consume capacity. Registered BEFORE spawn so no terminal signal is
+    # missed.
+    from lib.agent_core.admission import controller as _admission, on_terminal
+    if not _admission.try_acquire():
+        _stats = _admission.stats()
+        logger.warning('[Chat] /chat/start refused for conv=%s — at inflight '
+                       'capacity (%d/%d)', conv_id[:8],
+                       _stats['in_flight'], _stats['capacity'])
+        return jsonify({
+            'ok': False,
+            'error': {'kind': 'capacity',
+                      'detail': 'Server is at task capacity. Retry shortly.',
+                      'retry_after_s': 3},
+        }), 503
+    on_terminal(task['id'], lambda _tid: _admission.release())
+
     from lib.tasks_pkg import spawn_task
     _cfg_model = cfg.get('model', '?')
     _cfg_preset = cfg.get('preset', cfg.get('effort', '?'))
@@ -125,6 +241,10 @@ def chat_start():
     except Exception as _spawn_err:
         logger.exception('[Chat] Failed to start thread for task %s conv=%s',
                          task['id'], task['convId'])
+        # spawn failed → no terminal event will fire, so the on_terminal
+        # release above never runs. Release the admission slot here to avoid
+        # permanently leaking capacity on a spawn error.
+        _admission.release()
         from lib.error_envelope import make_envelope as _make_env
         task['status'] = 'error'
         task['error'] = _make_env(
@@ -188,6 +308,52 @@ def chat_send_translate_status(conv_id):
     return jsonify(get_send_translate_status(conv_id) or {})
 
 
+def _truncate_conv_history(conv_id):
+    """Discharge every server-side obligation that follows truncating a conv.
+
+    Any route that rewrites a conversation's history to a shorter prefix
+    (regenerate, edit-and-resend) MUST clear the two in-memory side-channels
+    that outlive the DB write, or the next task replays stale state:
+
+      * the message QUEUE — a previous /api/chat/send aborted mid-translate
+        may have left an enqueued message; without clearing it the queue
+        auto-dispatches a phantom turn after this run completes;
+      * the server-side tool-history STORE
+        (lib/tasks_pkg/server_message_store) — a full-fidelity in-memory copy
+        of the prior turns' tool_use/tool_result rounds, keyed by conv_id and
+        driven by keepToolHistory (default ON). On the next task the
+        orchestrator's rebuild_messages_with_history REPLACES the DB-built
+        (now-truncated) messages with that stored copy, which still holds the
+        rounds we just truncated away — so every regen/edit would replay an
+        ever-growing stale context instead of the truncated one. Clearing it
+        forces a clean rebuild from the truncated DB state; the preserved
+        turns' tool history is reconstructed from their stored toolRounds by
+        conv_message_builder, so no real context is lost.
+
+    Folding both into one helper makes the invariant impossible to
+    half-apply: a future truncating route calls this once instead of
+    re-deriving (and forgetting one of) the two clears. Best-effort — each
+    failure is logged, never raised.
+
+    Args:
+        conv_id: The conversation whose history was just truncated.
+    """
+    try:
+        from lib.message_queue import clear_queue
+        _cleared = clear_queue(conv_id)
+        if _cleared:
+            logger.info('[Regen] conv=%s cleared %d stale queued message(s) before regen',
+                        conv_id[:8], _cleared)
+    except Exception as e:
+        logger.warning('[Regen] Failed to clear queue for conv=%s: %s', conv_id[:8], e)
+
+    try:
+        from lib.tasks_pkg.server_message_store import clear as _clear_msg_store
+        _clear_msg_store(conv_id)
+    except Exception as e:
+        logger.warning('[Regen] Failed to clear message store for conv=%s: %s', conv_id[:8], e)
+
+
 def _start_task_for_conv(conv_id, config, data=None):
     """Build API messages from DB and start a task. Returns (taskId, error_response).
 
@@ -227,18 +393,25 @@ def _start_task_for_conv(conv_id, config, data=None):
     if not api_messages:
         return None, (jsonify({'error': 'No messages to process'}), 400)
 
-    # External backend support
-    backend_name = config.get('agentBackend', 'builtin')
-    if backend_name and backend_name != 'builtin':
-        # Reuse existing external backend flow
-        full_data = {'convId': conv_id, 'config': config}
-        if data:
-            full_data.update(data)
-        return None, _start_external_backend(full_data, api_messages, backend_name)
-
     task = create_task(conv_id, api_messages, config)
+    task['_attended'] = True
     task_id = task['id']
     _cfg_model = config.get('model', '?')
+
+    # ★ A user-SELECTED orchestration flow (Mode dropdown) is mutually
+    #   exclusive with the endpoint/autopilot toggles — the flow IS the
+    #   execution mode. Drop the toggles so we never double-loop, and so the
+    #   resolver's flow-wins precedence isn't masked by a stale endpoint flag.
+    _flow_selected = bool(config.get('flowDefinition') or config.get('flowBuiltin')
+                          or config.get('flowId'))
+    if _flow_selected and (config.get('endpointMode') or config.get('autopilot')):
+        logger.info('[Chat] conv=%s endpointMode/autopilot dropped — '
+                    'an orchestration flow is selected (flow takes precedence)',
+                    conv_id[:8])
+        config = dict(config)
+        config['endpointMode'] = False
+        config['autopilot'] = False
+        task['config'] = config
 
     # ★ Endpoint mode: route to the autonomous planner → worker → critic loop
     is_endpoint = config.get('endpointMode', False)
@@ -255,27 +428,46 @@ def _start_task_for_conv(conv_id, config, data=None):
         config['autopilot'] = False
         task['config'] = config
 
-    if is_endpoint:
-        # ★ Flagged cutover (default OFF): TOFU_ENDPOINT_VIA_FLOW=1 routes
-        #   endpoint mode through the unified FlowExecutor engine instead of
-        #   the live lib/tasks_pkg/endpoint.py. Same task contract + SSE
-        #   schema (via EndpointEventAdapter). The live path stays the
-        #   default until the engine path is validated on real tasks.
-        from lib.orchestration_endpoint_runner import (
-            endpoint_via_flow_enabled, run_endpoint_via_flow,
-        )
-        from lib.tasks_pkg.endpoint import run_endpoint_task
-        _endpoint_entry = (run_endpoint_via_flow if endpoint_via_flow_enabled()
-                           else run_endpoint_task)
+    # ★ FlowExecutor dispatch (the orchestration-engine convergence point):
+    #   a user-SELECTED flow (flowDefinition / flowBuiltin / flowId) is always
+    #   honored; endpointMode / autopilot route through the engine only when
+    #   their respective flags are on (TOFU_ENDPOINT_VIA_FLOW /
+    #   TOFU_AUTOPILOT_VIA_FLOW). Returns None when no engine path applies, so
+    #   endpoint mode falls back to the live loop and everything else to a
+    #   normal task. All flagging/precedence lives in resolve_chat_flow_entry.
+    from lib.orchestration_endpoint_runner import resolve_chat_flow_entry
+    _flow_entry = resolve_chat_flow_entry(config)
+
+    if _flow_entry is not None or is_endpoint:
+        # Endpoint mode without a flow entry → the live planner→worker→critic
+        # loop (default + authoritative). Otherwise the chosen engine entry.
+        if _flow_entry is None:
+            from lib.tasks_pkg.endpoint import run_endpoint_task
+            _flow_entry = run_endpoint_task
         task['endpoint_mode'] = True
-        task['_endpoint_phase'] = 'planning'
-        task['_endpoint_iteration'] = 0
-        logger.info('[Chat] Starting ENDPOINT task %s for conv %s model=%s via=%s',
-                    task_id[:8], conv_id[:8], _cfg_model, _endpoint_entry.__name__)
+        # Seed the phase that the FIRST SSE `state` snapshot will report. A
+        # user-selected flow may open on a worker / verifier rather than a
+        # planner; advertising 'planning' for a plannerless flow makes the
+        # frontend stand up a Planner bubble that never streams (hangs at
+        # "Waiting…"). Live endpoint mode (no flow def) keeps 'planning'.
+        _initial_phase = 'planning'
         try:
-            threading.Thread(target=_endpoint_entry, args=(task,), daemon=True).start()
+            from lib.orchestration_endpoint_runner import resolve_chat_flow_definition
+            _sel_defn, _ = resolve_chat_flow_definition(config)
+            if _sel_defn is not None:
+                from lib.orchestration import initial_phase_for_flow
+                _initial_phase = initial_phase_for_flow(_sel_defn)
+        except Exception as _phase_err:
+            logger.debug('[Chat] initial-phase derivation failed, defaulting to '
+                         'planning: %s', _phase_err)
+        task['_endpoint_phase'] = _initial_phase
+        task['_endpoint_iteration'] = 0
+        logger.info('[Chat] Starting FLOW task %s for conv %s model=%s via=%s',
+                    task_id[:8], conv_id[:8], _cfg_model, _flow_entry.__name__)
+        try:
+            threading.Thread(target=_flow_entry, args=(task,), daemon=True).start()
         except Exception as _spawn_err:
-            logger.exception('[Chat] Failed to start endpoint thread for task %s conv=%s',
+            logger.exception('[Chat] Failed to start flow/endpoint thread for task %s conv=%s',
                              task_id[:8], conv_id[:8])
             from lib.error_envelope import make_envelope as _make_env
             task['status'] = 'error'
@@ -314,6 +506,7 @@ def _start_task_for_conv(conv_id, config, data=None):
 
 @api_v1_chat_bp.route('/api/v1/chat/send', methods=['POST'], endpoint='ui_chat_send')
 @require_scope('chat')
+@idempotent_post()
 def chat_send():
     """Atomic send: create user message + auto-translate + persist + start task.
 
@@ -465,15 +658,22 @@ def chat_send():
         # 5. Start task (no active task — send immediately)
         task_id, err_resp = _start_task_for_conv(conv_id, config, data)
         if err_resp is not None:
-            # External backend returns a full Response directly
             if isinstance(err_resp, tuple):
                 return err_resp
-            return err_resp  # direct Response from _start_external_backend
+            return err_resp
 
-        # 6. Update activeTaskId in settings
+        # 6. Update activeTaskId in settings.
+        #    ★ Settings-ONLY write (not a full-row _persist_conv_messages):
+        #    the only new information here is activeTaskId. Rewriting the whole
+        #    `messages` array with this route's stale user-only tail (and
+        #    bumping updated_at) races the task thread, which may have ALREADY
+        #    checkpointed the assistant slot via _sync_partial_to_conversation —
+        #    clobbering the streamed content back to the pre-start snapshot
+        #    ("Waiting…" on reload). set_conversation_settings does a per-conv
+        #    serialized merge of just this key and never touches messages.
         try:
-            _persist_conv_messages(db, conv_id, messages, title,
-                                   {'activeTaskId': task_id})
+            from lib.conversations import set_conversation_settings
+            set_conversation_settings(conv_id, {'activeTaskId': task_id}, db=db)
         except Exception as e:
             logger.warning('[Send] Failed to update activeTaskId: %s', e)
 
@@ -537,13 +737,11 @@ def chat_branch_start():
 
         cleanup_old_tasks()
 
-        # External backend support
-        backend_name = cfg.get('agentBackend', 'builtin')
-        if backend_name and backend_name != 'builtin':
-            full_data = {'convId': conv_id, 'config': cfg}
-            return _start_external_backend(full_data, api_messages, backend_name)
-
-        task = create_task(conv_id, api_messages, cfg)
+        # ★ supersede=False: a branch is a DELIBERATE concurrency axis — it must
+        #   run alongside the main task and sibling branches, so it must NOT
+        #   abort other running tasks for this conv (see create_task docstring).
+        task = create_task(conv_id, api_messages, cfg, supersede=False)
+        task['_attended'] = True
         task_id = task['id']
         _cfg_model = cfg.get('model', '?')
         logger.info('[Branch] Starting task %s for conv %s msg=%d branch=%d model=%s',
@@ -624,6 +822,30 @@ def chat_regenerate():
 
         title = row['title']
 
+        # ── Phase 3: msgId is authoritative; index is the fallback ──
+        # The client sends ``truncateToMsgId`` (the stable id of the user
+        # message to keep-and-resend-from) alongside the legacy
+        # ``truncateToIndex``. If the id resolves in the freshly-loaded
+        # messages, its CURRENT index wins — this is index-drift-proof if any
+        # writer reordered messages between the client's read and this request.
+        # When the id is absent (older client) or doesn't resolve (message
+        # since deleted), we fall back to the supplied index unchanged, so the
+        # behaviour is strictly additive.
+        _truncate_msg_id = data.get('truncateToMsgId')
+        if _truncate_msg_id:
+            from lib.tasks_pkg.manager import find_message_by_id
+            _resolved_idx, _ = find_message_by_id(messages, _truncate_msg_id)
+            if _resolved_idx is not None:
+                if _resolved_idx != truncate_to:
+                    logger.info('[Regen] conv=%s truncateToMsgId resolved to index '
+                                '%d (client sent index %d — drift corrected)',
+                                conv_id[:8], _resolved_idx, truncate_to)
+                truncate_to = _resolved_idx
+            else:
+                logger.debug('[Regen] conv=%s truncateToMsgId=%s did not resolve '
+                             '— using index %d', conv_id[:8],
+                             str(_truncate_msg_id)[:12], truncate_to)
+
         if truncate_to < 0 or truncate_to >= len(messages):
             return api_bad_request(f'truncateToIndex {truncate_to} out of range (0..{len(messages)-1})')
 
@@ -640,10 +862,68 @@ def chat_regenerate():
             user_msg['images'] = edited_images
         if edited_pdf_texts is not None:
             user_msg['pdfTexts'] = edited_pdf_texts
+        # Refresh the per-turn context snapshot when the client sends a fresh
+        # one (edit-and-resend re-runs with possibly new model/tools). A plain
+        # regenerate omits ``ctx`` so the original snapshot is preserved.
+        # See static/js/info-rail.js.
+        if data.get('ctx'):
+            user_msg['_ctx'] = data['ctx']
 
         # 3. Auto-translate if needed
         text = user_msg.get('content', '')
-        auto_translate = config.get('autoTranslate', False)
+        from lib.conv_config import resolve_auto_translate
+        auto_translate = resolve_auto_translate(config)
+        # Track whether we mutated user_msg so the response tells the frontend
+        # to refresh its local copy (otherwise a later full-conv sync would PUT
+        # the stale pre-restore content back into the DB).
+        restored_original = False
+
+        # ── Autopilot (virtual-user) / endpoint-critic messages ──
+        # These are role='user' but DISPLAY-translated: `content` is the
+        # model-language original (shown in the 原文 toggle) and
+        # `translatedContent` is the UI-language rendering shown in the OUTER
+        # bubble. This is the OPPOSITE wiring of a normal user message.
+        # An edit changes `content`, which invalidates the cached
+        # `translatedContent` — drop it (+ `_translatedCache`) so the outer
+        # bubble re-renders the edited `content` instead of the stale 译文
+        # (the reported "edit only shows in the toggle" bug). They must NOT go
+        # through the normal user→English auto-translate path below, which
+        # would set `originalContent` and corrupt the VU/critic structure into
+        # a double-translated mess.
+        _is_vu_critic = bool(user_msg.get('_isVirtualUser') or user_msg.get('_isEndpointReview'))
+        if _is_vu_critic and edited_content is not None:
+            for _k in ('translatedContent', '_translatedCache', '_translateDone',
+                       '_translateModel', '_translateField', '_translateError'):
+                user_msg.pop(_k, None)
+            restored_original = True  # tell the client to refresh its local copy
+            logger.info('[Regen] conv=%s VU/critic edit — cleared stale display '
+                        'translation (translatedContent) before regenerate',
+                        conv_id[:8])
+
+        if _is_vu_critic:
+            # Skip the normal user-message translate paths entirely for VU /
+            # critic messages — their `content` is fed to the model as-is.
+            auto_translate = False
+        if not auto_translate and text and user_msg.get('originalContent'):
+            # Auto-translate is OFF, but this message carries a translation from
+            # an earlier auto-translate-ON turn: content=English (sent to the
+            # model), originalContent=the user's original (what they see). A
+            # plain regenerate sends no editedContent, so without this the model
+            # would silently receive the stale English instead of the original.
+            # Restore the original and drop the translation metadata so the run
+            # honours the current (OFF) setting and matches the on-screen text.
+            # (Edit-and-resend already pops originalContent in step 2, so this
+            # only triggers for the no-edit regenerate path.)
+            user_msg['content'] = user_msg['originalContent']
+            user_msg.pop('originalContent', None)
+            user_msg.pop('_translateDone', None)
+            user_msg.pop('_translateModel', None)
+            user_msg.pop('_translateFailed', None)
+            text = user_msg['content']
+            restored_original = True
+            logger.info('[Regen] conv=%s auto-translate OFF — restored original '
+                        'text (dropped stale translation) before regenerate',
+                        conv_id[:8])
         if auto_translate and text:
             # Translate ANY non-English input to English (English is the
             # model's strongest language). The actual "is this already
@@ -682,20 +962,11 @@ def chat_regenerate():
         # 5. Persist truncated messages to DB
         _persist_conv_messages(db, conv_id, messages, title, settings_patch)
 
-        # 5a. Defensive: clear any messages still sitting in the server-side
-        #     queue for this conv. If a previous /api/chat/send was aborted
-        #     mid-translate but its enqueue still landed (or a different race
-        #     left the queue non-empty), regenerating should start clean —
-        #     otherwise the queue would auto-dispatch a phantom turn after
-        #     this regen completes.
-        try:
-            from lib.message_queue import clear_queue
-            _cleared = clear_queue(conv_id)
-            if _cleared:
-                logger.info('[Regen] conv=%s cleared %d stale queued message(s) before regen',
-                            conv_id[:8], _cleared)
-        except Exception as e:
-            logger.warning('[Regen] Failed to clear queue for conv=%s: %s', conv_id[:8], e)
+        # 5a+5b. Discharge the post-truncation obligations (clear the message
+        #        queue + the in-memory server_message_store) via the single
+        #        helper so the invariant can't be half-applied. See
+        #        _truncate_conv_history for the full rationale.
+        _truncate_conv_history(conv_id)
 
         logger.info('[Regen] conv=%s truncated to idx=%d msgs=%d edited=%s title=%.50s',
                     conv_id[:8], truncate_to, len(messages),
@@ -708,10 +979,11 @@ def chat_regenerate():
                 return err_resp
             return err_resp
 
-        # 7. Update activeTaskId
+        # 7. Update activeTaskId (settings-only — see the note in chat_send:
+        #    a full-row rewrite here would clobber a task-thread checkpoint).
         try:
-            _persist_conv_messages(db, conv_id, messages, title,
-                                   {'activeTaskId': task_id})
+            from lib.conversations import set_conversation_settings
+            set_conversation_settings(conv_id, {'activeTaskId': task_id}, db=db)
         except Exception as e:
             logger.warning('[Regen] Failed to update activeTaskId: %s', e)
 
@@ -722,7 +994,13 @@ def chat_regenerate():
             'convId': conv_id,
             'title': title,
             'msgCount': len(messages),
-            'userMessage': user_msg if edited_content is not None else None,
+            'userMessage': (user_msg if (edited_content is not None
+                                         or restored_original) else None),
+            # Tells the frontend to DROP its stale local translation fields
+            # (originalContent / _translateDone / …). Object.assign-merging
+            # the returned user_msg alone wouldn't remove keys that the server
+            # dropped, leaving a ghost bilingual block + a re-PUT risk.
+            'restoredOriginal': restored_original,
         })
 
     except Exception as e:
@@ -735,6 +1013,80 @@ def chat_regenerate():
 #  (_build_tool_history_round + _scan_continue_checkpoint moved to
 #   lib/chat/turn_builder.py; re-exported at the top of this module)
 # ══════════════════════════════════════════════════════════
+
+
+def _continue_via_prefill_only(db, conv_id, messages, assistant_msg, title,
+                               config, settings_patch, resume_prefill,
+                               orig_full_content, data):
+    """Case 3 — resume a NO-TOOL mid-answer turn via assistant prefill.
+
+    There is no tool-call checkpoint (``scan is None``), so the classic
+    Continue path would fall back to regenerate-from-scratch. But the provider
+    tolerates a trailing assistant prefill and the turn ended mid-answer, so we
+    feed the model its own half-written string and let it continue the SAME
+    tokens instead of restarting.
+
+    Unlike the tool-checkpoint rollback (which DISCARDS the mid-prose tail and
+    regenerates), prefill mode CONTINUES the same string — nothing is discarded.
+    So the message content stays as the full prior answer (the base the
+    continuation extends); there is NO ``priorContent`` block. The streaming
+    checkpoint grows ``content`` as continuation tokens arrive, so a mid-stream
+    reload shows [full prior answer] + [partial continuation]. Persist BEFORE
+    starting so a streaming checkpoint can't race the rollback.
+    """
+    # Keep the full prior answer as the continuation base (content is already
+    # orig_full_content; assert it explicitly for clarity). Clear the live
+    # thinking tail (prefill carries content only — the reasoning trace can't
+    # be replayed on the wire) but stash it display-only, mirroring case 2.
+    assistant_msg['content'] = orig_full_content
+    _prior_think = assistant_msg.get('thinking') or ''
+    assistant_msg['thinking'] = ''
+    if _prior_think:
+        assistant_msg['priorThinking'] = _prior_think
+    for stale_key in ('finishReason', 'toolSummary', 'error'):
+        assistant_msg.pop(stale_key, None)
+
+    _persist_conv_messages(db, conv_id, messages, title, settings_patch)
+
+    cfg_payload = dict(config)
+    cfg_payload['excludeLast'] = True
+    cfg_payload['resumePrefill'] = resume_prefill
+    # Seed task['content'] with the full pre-rollback answer so the resumed
+    # turn displays everything the user already saw plus the continuation.
+    cfg_payload['contentPrefix'] = orig_full_content
+
+    task_id, err_resp = _start_task_for_conv(conv_id, cfg_payload, data)
+    if err_resp is not None:
+        return err_resp if not isinstance(err_resp, tuple) else err_resp
+
+    try:
+        from lib.conversations import set_conversation_settings
+        set_conversation_settings(conv_id, {'activeTaskId': task_id}, db=db)
+    except Exception as e:
+        logger.warning('[Continue] Failed to update activeTaskId (prefill-only): %s', e)
+
+    _invalidate_meta_cache()
+    try:
+        from lib.log import audit_log as _audit_log
+        _audit_log('continue_prefill_only', conv_id=conv_id,
+                   prefillChars=len(resume_prefill),
+                   origContentChars=len(orig_full_content))
+    except Exception as e:
+        logger.debug('[Continue] audit_log (prefill-only) failed (non-fatal): %s', e)
+
+    return jsonify({
+        'taskId': task_id,
+        'convId': conv_id,
+        'checkpoint': {
+            'keptRounds': 0,
+            'discardedRounds': 0,
+            'preservedContentLen': len(orig_full_content),
+            'discardedContentLen': 0,
+            'preservedThinkingChars': 0,
+            'discardedThinking': 0,
+            'resumeMode': 'prefill',
+        },
+    })
 
 
 @api_v1_chat_bp.route('/api/v1/chat/continue', methods=['POST'], endpoint='ui_chat_continue')
@@ -801,8 +1153,37 @@ def chat_continue():
                         conv_id[:8])
             return jsonify({'fallback': 'regenerate', 'reason': 'empty_assistant'})
 
+        # ★ Resume-prefill extraction (epic pt_cb8f98b0cb9b47fb) — MUST happen
+        #   BEFORE any rollback mutates assistant_msg. The segment list is the
+        #   SoT: resume_prefill_from_segments reads the terminal deliverable
+        #   (the tail the model was mid-writing) from assistant_msg['segments'],
+        #   gated on model prefill capability + a resumable finish reason. This
+        #   is the segments-first replacement for tail-diffing. Claude → None
+        #   (fail closed). The full pre-rollback content is captured too, to
+        #   seed task['content'] so nothing the user saw vanishes on resume.
+        _model = (config.get('model') or '').strip()
+        _finish_reason = assistant_msg.get('finishReason') or ''
+        _orig_full_content = assistant_msg.get('content') or ''
+        _resume_prefill = None
+        try:
+            from lib.tasks_pkg.segments import resume_prefill_from_segments
+            _resume_prefill = resume_prefill_from_segments(
+                assistant_msg.get('segments'), _model, finish_reason=_finish_reason)
+        except Exception as _rp_e:
+            logger.debug('[Continue] resume-prefill extraction failed (non-fatal): %s', _rp_e)
+
         scan = _scan_continue_checkpoint(assistant_msg)
         if scan is None:
+            # No tool-call checkpoint. If we DO have a resumable prefill (a
+            # no-tool mid-answer turn — case 3), resume via prefill alone rather
+            # than regenerating from scratch. Otherwise fall back to regenerate.
+            if _resume_prefill:
+                logger.info('[Continue] conv=%s no tool checkpoint but resumable '
+                            'prefill (%d chars) — resuming via assistant prefill (case 3)',
+                            conv_id[:8], len(_resume_prefill))
+                return _continue_via_prefill_only(
+                    db, conv_id, messages, assistant_msg, title, config,
+                    settings_patch, _resume_prefill, _orig_full_content, data)
             logger.info('[Continue] conv=%s no tool-call checkpoint available — fallback to regenerate',
                         conv_id[:8])
             return jsonify({'fallback': 'regenerate', 'reason': 'no_checkpoint'})
@@ -864,6 +1245,19 @@ def chat_continue():
             cfg_payload['toolHistory'] = scan['tool_history']
         if preserved_content:
             cfg_payload['contentPrefix'] = preserved_content
+        # ★ Resume-prefill (case 2 — mid-prose AFTER a completed tool batch).
+        #   When the provider tolerates prefill AND the tail is resumable, ship
+        #   the terminal deliverable tail so the model continues the SAME tokens
+        #   (inject_tool_history replays the tool batch; the prefill is appended
+        #   as the trailing assistant turn by the orchestrator). Seed
+        #   task['content'] with the FULL pre-rollback content so the resumed
+        #   turn displays [everything the user saw] + [continuation] with no
+        #   duplication — the continuation the model returns is ONLY the new
+        #   tokens after the prefill. Claude / clean stop → _resume_prefill is
+        #   None → contentPrefix (preserved_content) drives the universal path.
+        if _resume_prefill:
+            cfg_payload['resumePrefill'] = _resume_prefill
+            cfg_payload['contentPrefix'] = _orig_full_content
         if scan['kept_rounds']:
             cfg_payload['checkpointToolRounds'] = scan['kept_rounds']
         if kept_usage:
@@ -880,10 +1274,11 @@ def chat_continue():
         if err_resp is not None:
             return err_resp if not isinstance(err_resp, tuple) else err_resp
 
-        # Persist activeTaskId (same as chat_regenerate).
+        # Persist activeTaskId (settings-only — same rationale as chat_send:
+        #    a full-row rewrite would clobber a task-thread checkpoint).
         try:
-            _persist_conv_messages(db, conv_id, messages, title,
-                                   {'activeTaskId': task_id})
+            from lib.conversations import set_conversation_settings
+            set_conversation_settings(conv_id, {'activeTaskId': task_id}, db=db)
         except Exception as e:
             logger.warning('[Continue] Failed to update activeTaskId: %s', e)
 
@@ -934,22 +1329,51 @@ def chat_continue():
 # ══════════════════════════════════════════════════════════
 
 
-def _start_external_backend(data, messages, backend_name):
-    """Thin HTTP wrapper over ``lib.chat.external_backend.run_external_backend``.
+def _warm_resume_serviceable(resume_cursor, n_events):
+    """Decide whether a warm (in-memory) Last-Event-ID resume is serviceable.
 
-    The engine (validation + SSE-bridge worker thread) lives in lib and
-    returns a plain result dict; here we map it to a Flask response.
+    Returns True iff ``resume_cursor`` names a position the in-memory event
+    buffer can actually replay from — i.e. the next event to send
+    (``resume_cursor + 1``) is at or before the current buffer length.
+
+    When False the caller MUST fall back to a full state-snapshot
+    (a "resync"), exactly as the cold path does, instead of slicing
+    ``events[resume_from:]`` into an empty list. An empty slice on an
+    ahead-of-buffer cursor used to leave the warm stream sending nothing
+    until the next live event (a silent stall) and mis-index the live loop.
+    A cursor that is plausibly behind the buffer (``>= -1``, in range) stays
+    serviceable; only an out-of-range-ahead cursor forces resync.
+
+    ``resume_cursor`` is the SSE ``Last-Event-ID`` (id of the last RECEIVED
+    event); ``-1``/``0`` etc. are normal early cursors. The boundary case
+    ``resume_from == n_events`` IS serviceable (empty replay, then live
+    streaming continues from exactly that index).
     """
-    from lib.chat.external_backend import run_external_backend
-    result = run_external_backend(data, messages, backend_name)
-    if 'error' in result:
-        return jsonify({'error': result['error']}), result.get('status', 400)
-    return jsonify(result)
+    if resume_cursor is None or resume_cursor < 0:
+        return False  # no/invalid cursor → fresh snapshot (caller's else-branch)
+    resume_from = resume_cursor + 1
+    return resume_from <= n_events
 
 
 @chat_bp.route('/api/chat/stream/<task_id>', methods=['GET'])
 async def chat_stream(task_id):
     import asyncio
+
+    # ── Per-principal concurrent-SSE cap (backpressure) ──
+    # A single process serves every LIVE SSE stream as a long-lived
+    # connection; with no per-principal ceiling one client/IP can open
+    # unbounded streams and exhaust the process. We acquire a slot keyed by
+    # the request principal (user_id → key_id → client IP) ONLY for the live
+    # streaming path (generate_with_disconnect_log) — the transient
+    # DB-snapshot / cold-replay generators below finish in microseconds and
+    # are the reconnect/replay safety valve, so they are intentionally NOT
+    # counted against the cap. The live path acquires just before opening the
+    # stream and releases in its finally, so a dropped/aborted/errored stream
+    # can never leak a slot.
+    from lib.agent_core.principal import principal_key
+    from lib.agent_core.sse_limit import limiter as _sse_limiter
+    _sse_principal = principal_key(current_auth())
+
     with tasks_lock:
         task = tasks.get(task_id)
 
@@ -999,16 +1423,16 @@ async def chat_stream(task_id):
                                 (task_id,)
                             ).fetchone()
                             if row_local:
-                                state_local = {
-                                    'type': 'state',
-                                    'content': row_local['content'] or '',
-                                    'thinking': row_local['thinking'] or '',
-                                    'status': row_local['status'],
-                                }
+                                state_local = build_event(
+                                    EventType.STATE,
+                                    content=row_local['content'] or '',
+                                    thinking=row_local['thinking'] or '',
+                                    status=row_local['status'],
+                                )
                                 if row_local['tool_rounds']:
                                     try:
-                                        state_local['toolRounds'] = json.loads(row_local['tool_rounds'])
-                                    except (json.JSONDecodeError, TypeError) as _e:
+                                        state_local['toolRounds'] = _loads_yielding(row_local['tool_rounds'])
+                                    except (json.JSONDecodeError, ValueError, TypeError) as _e:
                                         logger.debug('[Chat] cold-replay tool_rounds parse failed: %s', _e)
                                 else:
                                     from lib.tasks_pkg import load_tool_rounds_from_conversation
@@ -1018,8 +1442,8 @@ async def chat_stream(task_id):
                                 if row_local['error']:
                                     from lib.error_envelope import from_json as _err_from_json
                                     state_local['error'] = _err_from_json(row_local['error'])
-                                yield f'data: {json.dumps(state_local, ensure_ascii=False)}\n\n'
-                            done_evt_local = {'type': 'done'}
+                                yield f'data: {_dumps_yielding(state_local)}\n\n'
+                            done_evt_local = build_event(EventType.DONE)
                             if row_local:
                                 if row_local['metadata']:
                                     try:
@@ -1040,7 +1464,7 @@ async def chat_stream(task_id):
                                 if row_local['error']:
                                     from lib.error_envelope import from_json as _err_from_json
                                     done_evt_local['error'] = _err_from_json(row_local['error'])
-                            yield f'data: {json.dumps(done_evt_local, ensure_ascii=False)}\n\n'
+                            yield f'data: {_dumps_yielding(done_evt_local)}\n\n'
                         except Exception as _e:
                             logger.debug('[Chat] cold-replay synthetic done failed: %s', _e)
 
@@ -1058,17 +1482,17 @@ async def chat_stream(task_id):
                 (task_id,)
             ).fetchone())
         if row:
-            state = {
-                'type': 'state', 'content': row['content'],
-                'thinking': row['thinking'], 'status': row['status'],
-            }
+            state = build_event(
+                EventType.STATE, content=row['content'],
+                thinking=row['thinking'], status=row['status'],
+            )
             if row['error']:
                 from lib.error_envelope import from_json as _err_from_json
                 state['error'] = _err_from_json(row['error'])
             if row['tool_rounds']:
                 try:
-                    state['toolRounds'] = json.loads(row['tool_rounds'])
-                except (json.JSONDecodeError, TypeError) as e:
+                    state['toolRounds'] = await asyncio.to_thread(_loads_yielding, row['tool_rounds'])
+                except (json.JSONDecodeError, ValueError, TypeError) as e:
                     logger.warning('[Chat] Failed to parse tool_rounds for task %s: %s', task_id, e, exc_info=True)
             else:
                 from lib.tasks_pkg import load_tool_rounds_from_conversation
@@ -1083,7 +1507,7 @@ async def chat_stream(task_id):
                         'apiRounds', 'modifiedFiles', 'modifiedFileList'):
                 if meta.get(key):
                     state[key] = meta[key]
-            done_evt = {'type': 'done'}
+            done_evt = build_event(EventType.DONE)
             for key in ('finishReason', 'usage', 'preset', 'toolSummary',
                         'model', 'provider_id', 'thinkingDepth',
                         'apiRounds', 'modifiedFiles', 'modifiedFileList'):
@@ -1109,8 +1533,8 @@ async def chat_stream(task_id):
             def gen_done():
                 for _ in range(4):
                     yield ':' + ' ' * 2048 + '\n\n'
-                yield f'data: {json.dumps(state, ensure_ascii=False)}\n\n'
-                yield f'data: {json.dumps(done_evt, ensure_ascii=False)}\n\n'
+                yield f'data: {_dumps_yielding(state)}\n\n'
+                yield f'data: {_dumps_yielding(done_evt)}\n\n'
 
             return Response(gen_done(), mimetype='text/event-stream', headers={
                 'Content-Type': 'text/event-stream; charset=utf-8',
@@ -1157,6 +1581,24 @@ async def chat_stream(task_id):
         """
         return task['status'] != 'running' and not task.get('_autopilot_deciding')
 
+    def _apply_autopilot_baton(evt):
+        """Stamp the autopilot follow-up baton onto a SYNTHESIZED done event.
+
+        The orchestrator's REAL done event carries
+        ``autopilotNextTaskId``/``autopilotVuMessage`` directly, but every
+        late/synthetic done built here uses ``extract_task_meta()`` which does
+        NOT include them.  If a synthetic done is ever sent for an autopilot
+        turn (cold replay, resume, or a residual status-flip race), copy the
+        baton from the transport-agnostic stash so the frontend still attaches
+        to the spawned follow-up instead of stranding it.  Mirrors the
+        ``chat_poll`` baton surfacing below.
+        """
+        _ap = task.get('_autopilot_followup')
+        if _ap:
+            evt['autopilotNextTaskId'] = _ap['next_task_id']
+            evt['autopilotVuMessage'] = _ap['vu_msg']
+        return evt
+
     async def generate():
         nonlocal _events_sent
         for _ in range(4):
@@ -1167,10 +1609,19 @@ async def chat_stream(task_id):
             #   replay only events AFTER the cursor. Per the SSE spec,
             #   Last-Event-ID is the id of the last *received* event, so
             #   we resume from cursor + 1 to avoid re-sending it.
-            if _resume_cursor is not None and _resume_cursor >= 0:
+            # ★ Resync guard: if the cursor is AHEAD of the in-memory buffer
+            #   (e.g. the buffer was trimmed, or a stale/over-eager client),
+            #   _warm_resume_serviceable() is False → fall through to a full
+            #   state snapshot instead of slicing an empty list (which would
+            #   silently stall the stream and mis-index the live loop).
+            if _warm_resume_serviceable(_resume_cursor, len(task['events'])):
                 resume_from = _resume_cursor + 1
                 missed_evts = task['events'][resume_from:]
             else:
+                if _resume_cursor is not None and _resume_cursor >= 0:
+                    logger.info('[Chat] SSE stream %s Last-Event-ID=%d is ahead of '
+                                'buffer (len=%d) — full-snapshot resync',
+                                task_id[:8], _resume_cursor, len(task['events']))
                 missed_evts = None
                 resume_from = None
                 cursor = len(task['events'])
@@ -1187,20 +1638,21 @@ async def chat_stream(task_id):
             # Advance cursor past replayed events for live streaming loop
             cursor = resume_from + len(missed_evts)
             if _task_terminal() and not missed_evts:
-                late_done = {'type': 'done'}
+                late_done = build_event(EventType.DONE)
                 late_meta = _extract_task_meta(task)
                 late_done.update(late_meta)
                 if task['error']:
                     late_done['error'] = task['error']
+                _apply_autopilot_baton(late_done)
                 yield f'id: {cursor}\ndata: {json.dumps(late_done, ensure_ascii=False)}\n\n'
                 return
         else:
             # Fresh connection path: send full state snapshot
             with task['events_lock']:
-                state = {
-                    'type': 'state', 'content': task['content'],
-                    'thinking': task['thinking'], 'status': task['status'],
-                }
+                state = build_event(
+                    EventType.STATE, content=task['content'],
+                    thinking=task['thinking'], status=task['status'],
+                )
                 if task['error']:
                     state['error'] = task['error']
                 if task['toolRounds']:
@@ -1213,6 +1665,12 @@ async def chat_stream(task_id):
                     state['preset'] = task['preset']
                 if task.get('_memoryPrefetch'):
                     state['memoryPrefetch'] = task['_memoryPrefetch']
+                if task.get('_preferencesApplied'):
+                    state['preferencesApplied'] = task['_preferencesApplied']
+                if task.get('_relatedConversations'):
+                    state['relatedConversations'] = task['_relatedConversations']
+                if task.get('_preferencesLearned'):
+                    state['preferencesLearned'] = task['_preferencesLearned']
                 # ★ Endpoint mode: include phase and completed turns for reconnection
                 if task.get('endpoint_mode'):
                     state['endpointMode'] = True
@@ -1235,13 +1693,24 @@ async def chat_stream(task_id):
             #   the state snapshot and the first live event at the same cursor.
             #   If the client only received the state snapshot and reconnects,
             #   _lastEventId will be null → fresh connection with full state.
-            yield f'data: {json.dumps(state, ensure_ascii=False)}\n\n'
+            # ★ Robustness: the snapshot serializes the ENTIRE conversation
+            #   content + thinking + toolRounds. For very large conversations
+            #   this json.dumps is multi-millisecond CPU work; running it
+            #   directly on the event-loop thread stalls accept()/all other
+            #   connections (a single big conv could make the whole page go
+            #   dark). Offload to the executor via _dumps_yielding (orjson —
+            #   plain json.dumps holds the GIL for the whole call so to_thread
+            #   alone does NOT free the loop). Live deltas below stay inline →
+            #   streaming latency unchanged.
+            _state_payload = await asyncio.to_thread(_dumps_yielding, state)
+            yield f'data: {_state_payload}\n\n'
 
             if _task_terminal():
-                done_evt = {'type': 'done'}
+                done_evt = build_event(EventType.DONE)
                 done_evt.update(meta)
                 if task['error']:
                     done_evt['error'] = task['error']
+                _apply_autopilot_baton(done_evt)
                 yield f'id: {cursor}\ndata: {json.dumps(done_evt, ensure_ascii=False)}\n\n'
                 return
 
@@ -1261,8 +1730,9 @@ async def chat_stream(task_id):
                 # Send an informational event (NOT 'done') so the frontend shows a toast,
                 # then close the SSE stream. The frontend detects the stream closed
                 # without a 'done' event → _trySSE returns false → _pollFallback kicks in.
-                timeout_notice = {'type': 'sse_timeout',
-                                  'message': 'SSE connection reached maximum duration. Switching to polling — task is still running.'}
+                timeout_notice = build_event(
+                    EventType.SSE_TIMEOUT,
+                    message='SSE connection reached maximum duration. Switching to polling — task is still running.')
                 yield f'data: {json.dumps(timeout_notice, ensure_ascii=False)}\n\n'
                 return
 
@@ -1288,7 +1758,7 @@ async def chat_stream(task_id):
                                _done_fr, _done_err_summary)
                     return
             if _task_terminal() and not new_evts:
-                late_done = {'type': 'done'}
+                late_done = build_event(EventType.DONE)
                 late_meta = _extract_task_meta(task)
                 late_done.update(late_meta)
                 if task['error']:
@@ -1314,6 +1784,7 @@ async def chat_stream(task_id):
                         'finishReason=%s model=%s error=%s',
                         task_id[:8], _late_fr,
                         late_meta.get('model', '?'), _err_summary)
+                _apply_autopilot_baton(late_done)
                 yield f'id: {cursor}\ndata: {json.dumps(late_done, ensure_ascii=False)}\n\n'
                 return
             # ★ SSE reader dedup: if a newer SSE reader connected, exit this one
@@ -1326,6 +1797,10 @@ async def chat_stream(task_id):
             if time.time() - last_t > 15:
                 yield ': keepalive\n\n'
                 last_t = time.time()
+                # Heartbeat: re-arm the per-principal SSE slot lease so a
+                # living long stream never expires; the lease TTL only
+                # reclaims a slot whose owner crashed (design §5.2).
+                _sse_limiter.refresh(_sse_token)
             await asyncio.sleep(0.05)
 
     async def generate_with_disconnect_log():
@@ -1339,6 +1814,9 @@ async def chat_stream(task_id):
         except (GeneratorExit, asyncio.CancelledError):
             logger.debug('[Chat] SSE stream closed by client (GeneratorExit)', exc_info=True)
         finally:
+            # Release the per-principal SSE slot FIRST — a dropped / aborted /
+            # errored stream must free its slot before anything else can raise.
+            _sse_limiter.release(_sse_token)
             elapsed = time.time() - _stream_start
             content_len = len(task.get('content') or '')
             _fr = task.get('finishReason') or '?'
@@ -1371,6 +1849,23 @@ async def chat_stream(task_id):
                            'finishReason=%s model=%s provider=%s',
                            task_id[:8], _events_sent, elapsed, content_len,
                            _fr, _model, _provider)
+
+    _sse_token = _sse_limiter.try_acquire(_sse_principal)
+    if _sse_token is None:
+        _active = _sse_limiter.active(_sse_principal)
+        logger.warning('[Chat] SSE stream refused for principal=%s task=%s — '
+                       'at concurrent-stream cap (%d active, cap=%d)',
+                       _sse_principal, task_id[:8], _active, _sse_limiter.cap)
+        resp = jsonify({
+            'ok': False,
+            'error': {'kind': 'rate_limited',
+                      'detail': 'Too many concurrent streams for this '
+                                'principal. Close an existing stream or '
+                                'retry shortly.',
+                      'retry_after_s': 5},
+        })
+        resp.headers['Retry-After'] = '5'
+        return resp, 429
 
     resp = Response(generate_with_disconnect_log(), mimetype='text/event-stream', headers={
         'Content-Type': 'text/event-stream; charset=utf-8',
@@ -1459,19 +1954,6 @@ def chat_abort(task_id):
         except (OSError, ProcessLookupError) as e:
             logger.debug('[Chat] Task %s — subprocess kill skipped: %s', task_id[:8], e)
 
-    # ── External backend: also signal the subprocess to terminate ──
-    _backend_name = task.get('_backend')
-    if _backend_name and _backend_name != 'builtin':
-        try:
-            from lib.agent_backends import get_backend
-            backend = get_backend(_backend_name)
-            if backend:
-                backend.abort(task_id)
-                logger.info('[Chat] Sent abort to external backend %s for task %s',
-                            _backend_name, task_id[:8])
-        except Exception as e:
-            logger.warning('[Chat] Failed to abort external backend %s: %s',
-                           _backend_name, e)
     return api_ok()
 @api_v1_chat_bp.route('/api/v1/chat/poll/<task_id>', methods=['GET'], endpoint='ui_chat_poll')
 @require_scope('chat')
@@ -1532,6 +2014,15 @@ def chat_poll(task_id):
         # ★ Memory prefetch indicator (persists through poll fallback + reload)
         if task.get('_memoryPrefetch'):
             r['memoryPrefetch'] = task['_memoryPrefetch']
+        # ★ Preferences-applied chip (persists through poll fallback + reload)
+        if task.get('_preferencesApplied'):
+            r['preferencesApplied'] = task['_preferencesApplied']
+        # ★ Related-conversations chip (persists through poll fallback + reload)
+        if task.get('_relatedConversations'):
+            r['relatedConversations'] = task['_relatedConversations']
+        # ★ Preferences-learned moment(s) (persist through poll + reload)
+        if task.get('_preferencesLearned'):
+            r['preferencesLearned'] = task['_preferencesLearned']
         # ★ Autopilot follow-up baton — mirror the SSE done event so a client
         #   on the poll fallback path attaches to the spawned follow-up task
         #   instead of stranding it (see lib/tasks_pkg/orchestrator.py).
@@ -1540,10 +2031,20 @@ def chat_poll(task_id):
             r['autopilotNextTaskId'] = _ap_followup['next_task_id']
             r['autopilotVuMessage'] = _ap_followup['vu_msg']
         # ★ Include endpoint turns for endpoint mode tasks so _pollFallback
-        #   can reconstruct the full multi-turn conversation
-        if task.get('endpoint_mode') and task.get('_endpoint_turns'):
+        #   can reconstruct the full multi-turn conversation.  Also surface
+        #   the same authoritative terminal signals the SSE state snapshot
+        #   carries (endpointPhase / endpointStopReason / endpointIteration)
+        #   so BOTH transports hand the frontend the identical baton — the
+        #   poll path can then suppress ghost-worker creation after Critic
+        #   STOP exactly like the SSE state handler does.
+        if task.get('endpoint_mode'):
             r['endpointMode'] = True
-            r['endpointTurns'] = task['_endpoint_turns']
+            if task.get('_endpoint_turns'):
+                r['endpointTurns'] = task['_endpoint_turns']
+            r['endpointPhase'] = task.get('_endpoint_phase', 'planning')
+            r['endpointIteration'] = task.get('_endpoint_iteration', 0)
+            if task.get('_endpoint_stop_reason'):
+                r['endpointStopReason'] = task['_endpoint_stop_reason']
         return jsonify(r)
 
     logger.debug('[Chat] Poll %s — not in memory, checking DB', task_id[:8])
@@ -1562,17 +2063,45 @@ def chat_poll(task_id):
         #   the server crashed/restarted mid-task. Mark it as 'interrupted'
         #   so the frontend stops polling and recovers the partial content.
         effective_status = row['status']
+        _reconnect_hint = False
         if effective_status == 'running':
-            logger.warning('[Chat] Poll %s — found stale checkpoint (status=running) in DB but task is NOT in memory. '
-                           'Server likely crashed mid-task. Returning status=interrupted with %dchars content, %dchars thinking.',
-                           task_id[:8], _db_content_len, _db_thinking_len)
-            effective_status = 'interrupted'
-            # ★ Update DB so future polls don't re-trigger this warning
+            # ★ Epic C (§4.1 / §6.4): a running checkpoint absent from THIS
+            #   replica's memory means either (a) single-process crash, or
+            #   (b) multi-replica — the task is alive on ANOTHER replica and
+            #   the poll landed here via a stale/misrouted request. We do NOT
+            #   run a cross-replica liveness probe (ratified §6.4). Instead:
+            #   under the sharded (redis) backend, report status='running' +
+            #   reconnect=True so the client re-routes to the owning replica via
+            #   taskId affinity (NOT the false 'interrupted' that would strand a
+            #   live task). Under the single-process (inproc) backend, absent
+            #   genuinely means crashed → keep today's 'interrupted'
+            #   crash-recovery behaviour byte-identical.
+            _sharded = False
             try:
-                db.execute("UPDATE task_results SET status='interrupted' WHERE task_id=?", (task_id,))
-                db.commit()
-            except Exception as e:
-                logger.warning('[Chat] Failed to update stale task %s to interrupted: %s', task_id[:8], e)
+                from lib.env_compat import getenv_compat as _ge
+                _sharded = (_ge('TOFU_RUNTIME_STATE_BACKEND') or 'inproc').strip().lower() == 'redis'
+            except Exception as _e_be:
+                logger.debug('[Chat] backend probe failed: %s', _e_be)
+            _verdict_status, _reconnect_hint = _running_checkpoint_verdict(_sharded)
+            effective_status = _verdict_status
+            if _reconnect_hint:
+                logger.info('[Chat] Poll %s — running checkpoint absent locally under sharded backend; '
+                            'reporting running+reconnect (task likely on another replica — affinity re-route). '
+                            '%dchars content, %dchars thinking.',
+                            task_id[:8], _db_content_len, _db_thinking_len)
+                # Do NOT flip the DB to interrupted — the task is (probably)
+                # alive on its owning replica; flipping would corrupt its state.
+            else:
+                logger.warning('[Chat] Poll %s — found stale checkpoint (status=running) in DB but task is NOT in memory. '
+                               'Server likely crashed mid-task. Returning status=interrupted with %dchars content, %dchars thinking.',
+                               task_id[:8], _db_content_len, _db_thinking_len)
+                # effective_status already 'interrupted' from the verdict.
+                # ★ Update DB so future polls don't re-trigger this warning
+                try:
+                    db.execute("UPDATE task_results SET status='interrupted' WHERE task_id=?", (task_id,))
+                    db.commit()
+                except Exception as e:
+                    logger.warning('[Chat] Failed to update stale task %s to interrupted: %s', task_id[:8], e)
         else:
             logger.debug('[Chat] Poll %s from DB — status=%s content=%dchars thinking=%dchars '
                          'finishReason=%s model=%s error=%s',
@@ -1582,13 +2111,19 @@ def chat_poll(task_id):
             'id': row['task_id'], 'status': effective_status,
             'content': row['content'], 'thinking': row['thinking'],
         }
+        if _reconnect_hint:
+            # Tell the client to re-open the stream (it will land on the
+            # owning replica via taskId affinity) rather than treat this as a
+            # terminal interrupted state.
+            r['reconnect'] = True
+
         if row['error']:
             from lib.error_envelope import from_json as _err_from_json
             r['error'] = _err_from_json(row['error'])
         if row['tool_rounds']:
             try:
-                r['toolRounds'] = json.loads(row['tool_rounds'])
-            except (json.JSONDecodeError, TypeError) as e:
+                r['toolRounds'] = _loads_yielding(row['tool_rounds'])
+            except (json.JSONDecodeError, ValueError, TypeError) as e:
                 logger.warning('[Chat] Failed to parse tool_rounds in poll for task %s: %s', task_id, e, exc_info=True)
         else:
             from lib.tasks_pkg import load_tool_rounds_from_conversation
@@ -1604,6 +2139,24 @@ def chat_poll(task_id):
                      'modifiedFiles', 'modifiedFileList'):
             if _db_meta.get(key):
                 r[key] = _db_meta[key]
+        # ★ Endpoint mode: the in-memory task that held _endpoint_turns has
+        #   been evicted (past TTL) or lost to a server restart, so reconstruct
+        #   the multi-turn structure from the durable conversation messages
+        #   (the authoritative store — endpoint.py syncs every turn there).
+        #   Without this, a poll-fallback that outlives the in-memory task
+        #   returns no endpointMode → the frontend overwrites the multi-turn
+        #   endpoint render with the last single-turn content blob, a
+        #   display-state desync that only a manual refresh repaired.  Covers
+        #   BOTH done and interrupted statuses (the interrupted server-crash
+        #   path is exactly when this reconstruction matters most).
+        if _db_meta.get('endpointMode'):
+            r['endpointMode'] = True
+            from lib.tasks_pkg import load_endpoint_turns_from_conversation
+            _ep_turns = load_endpoint_turns_from_conversation(row['conv_id'])
+            if _ep_turns:
+                r['endpointTurns'] = _ep_turns
+            if _db_meta.get('endpointStopReason'):
+                r['endpointStopReason'] = _db_meta['endpointStopReason']
         if _db_meta.get('fallbackModel'):
             r['fallbackModel'] = _db_meta['fallbackModel']
             r['fallbackFrom'] = _db_meta.get('fallbackFrom', '')
@@ -1616,6 +2169,51 @@ def chat_poll(task_id):
     logger.warning('[Chat] Poll %s — NOT FOUND in memory or DB! Task may have been cleaned up. '
                    'Client will receive 404 and may lose accumulated content.',
                    task_id[:8])
+    return api_not_found('Task not found')
+
+
+@api_v1_chat_bp.route('/api/v1/chat/flow-trace/<task_id>', methods=['GET'],
+                      endpoint='ui_chat_flow_trace')
+@require_scope('chat')
+def chat_flow_trace(task_id):
+    """Return the per-node run trace for an orchestration-flow chat task.
+
+    The trace is the traceability record FlowExecutor accumulates: one entry
+    per executed node carrying the RESOLVED delegation brief (the rendered
+    role prompt — "what is this role doing?"), a bounded copy of its effective
+    input context, its full bounded output, the message axis / isolation /
+    loop iteration, and deliverable counts + timing. Powers the Studio
+    canvas/inspector overlay.
+
+    Served from the live in-memory task first (mid-run / just-finished), then
+    the persisted ``task_results.metadata.flowTrace`` (survives reload /
+    restart). Returns ``{ok, taskId, flowLabel, trace: [...]}``.
+    """
+    with tasks_lock:
+        task = tasks.get(task_id)
+    if task is not None:
+        return api_ok({
+            'taskId': task_id,
+            'flowLabel': task.get('_flow_label', ''),
+            'trace': task.get('_flow_trace') or [],
+        })
+
+    db = get_db(DOMAIN_CHAT)
+    row = db.execute(
+        'SELECT metadata FROM task_results WHERE task_id=?', (task_id,)
+    ).fetchone()
+    if row and row['metadata']:
+        try:
+            meta = json.loads(row['metadata'])
+        except (json.JSONDecodeError, TypeError) as e:
+            logger.warning('[Chat] flow-trace %s — metadata parse failed: %s',
+                           task_id[:8], e)
+            meta = {}
+        return api_ok({
+            'taskId': task_id,
+            'flowLabel': meta.get('flowLabel', ''),
+            'trace': meta.get('flowTrace') or [],
+        })
     return api_not_found('Task not found')
 
 

@@ -25,7 +25,7 @@ __all__ = [
     # Modifications / Undo
     'get_modifications', 'get_conv_ids_with_modifications',
     'undo_conv_modifications', 'undo_task_modifications', 'undo_all_modifications',
-    'redo_task_modifications',
+    'redo_task_modifications', 'resolve_base_path',
     '_record_modification',
     # Scanner
     'set_project', 'set_project_paths', 'ensure_project_state', 'clear_project', 'rescan',
@@ -36,16 +36,17 @@ __all__ = [
     '_roots', '_make_root_state', 'resolve_namespaced_path',
     'get_roots', 'get_root_path',
     # Per-conversation root registry (2026-05-05)
-    'set_conv_roots', 'clear_conv_state', 'get_conv_roots',
+    'set_conv_roots', 'add_conv_root', 'clear_conv_state', 'get_conv_roots',
     # Read-only roots
     'is_readonly_path', 'ReadOnlyRootError',
     # Tools
-    'tool_list_dir', 'tool_read_files', 'tool_grep', 'tool_grep_batch',
+    'tool_list_dir', 'tool_read_files', 'tool_inspect_image', 'tool_grep', 'tool_grep_batch',
     'tool_find_files', 'tool_find_files_batch',
     'tool_write_file', 'tool_apply_diff', 'tool_insert_content',
     'tool_create_project', 'tool_run_command',
     'execute_tool', 'execute_standalone_command',
     'project_tool_display', 'browse_directory',
+    'create_directory', 'delete_directory',
     # Context
     'get_context_for_prompt',
 ]
@@ -75,6 +76,7 @@ from lib.project_mod.config import (
     _roots,
     _state,
     ReadOnlyRootError,
+    add_conv_root,
     clear_conv_state,
     is_readonly_path,
     clear_recent_projects,
@@ -100,6 +102,7 @@ from lib.project_mod.modifications import (
     get_conv_ids_with_modifications,
     get_modifications,
     redo_task_modifications,
+    resolve_base_path,
     undo_all_modifications,
     undo_conv_modifications,
     undo_task_modifications,
@@ -125,6 +128,8 @@ from lib.project_mod.scanner import (
 # ── Tools ──
 from lib.project_mod.tools import (
     browse_directory,
+    create_directory,
+    delete_directory,
     execute_standalone_command,
     execute_tool,
     project_tool_display,
@@ -135,6 +140,7 @@ from lib.project_mod.tools import (
     tool_grep,
     tool_grep_batch,
     tool_insert_content,
+    tool_inspect_image,
     tool_list_dir,
     tool_read_files,
     tool_run_command,

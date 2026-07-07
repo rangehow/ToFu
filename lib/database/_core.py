@@ -80,6 +80,42 @@ try:
     _SLOW_QUERY_MS = int(getenv_compat('TOFU_DB_SLOW_QUERY_MS', default='2000'))
 except (ValueError, TypeError) as e:
     logger.debug('[DB] Invalid TOFU_DB_SLOW_QUERY_MS, defaulting to 2000ms: %s', e)
+# ── Opt-in SQL-error log suppression ─────────────────────────────────────
+# Some callers run a query that is EXPECTED to fail as part of normal control
+# flow — e.g. an existence probe for a table that may not be created yet
+# (lib/billing/janitor.py's startup gate polls ``SELECT 1 FROM billing_ledger``
+# until the schema is bootstrapped). Such a probe still raises (the caller
+# handles it), but the cursor wrappers would otherwise log every failure at
+# ERROR, spamming error.log with self-recovering "no such table" noise. A
+# caller wraps the probe in ``with suppress_sql_error_log():`` to demote that
+# one query's failure log to DEBUG. Thread-local so it never affects other
+# threads' genuine errors.
+_sql_log_local = threading.local()
+
+
+def _sql_errors_suppressed() -> bool:
+    return getattr(_sql_log_local, 'suppress', False)
+
+
+class suppress_sql_error_log:
+    """Context manager: demote SQL-execution-failure logs to DEBUG on this
+    thread for queries that are expected to fail as normal control flow.
+
+    The exception is still raised — only the ERROR-level log line is
+    suppressed (re-emitted at DEBUG so it remains visible under
+    ``TOFU_DB_LOG_LEVEL=DEBUG``).
+    """
+
+    def __enter__(self):
+        self._prev = getattr(_sql_log_local, 'suppress', False)
+        _sql_log_local.suppress = True
+        return self
+
+    def __exit__(self, *exc):
+        _sql_log_local.suppress = self._prev
+        return False
+
+
     _SLOW_QUERY_MS = 2000
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -90,16 +126,54 @@ except (ValueError, TypeError) as e:
 _BACKEND = 'sqlite'  # default, upgraded to 'pg' below if possible
 
 
+def _require_pg() -> bool:
+    """True when the deployment has declared PG mandatory (Epic D1).
+
+    Reads ``TOFU_REQUIRE_PG`` at call time. When True, the DB bootstrap must
+    fail-CLOSED rather than degrade to the write-serializing SQLite fallback.
+    """
+    from lib.env_compat import getenv_compat as _ge
+    return (_ge('TOFU_REQUIRE_PG', default='') or '').strip().lower() in ('1', 'true', 'yes')
+
+
+def _assert_pg_available_or_raise(pg_ok: bool, pgdata: str = '') -> None:
+    """Epic D1: if PG is mandatory (``TOFU_REQUIRE_PG``) but unavailable,
+    raise instead of falling back to SQLite. Pure + testable — the module-load
+    guard delegates here. No-op when PG is available or the flag is unset (so
+    the single-box SQLite fallback is byte-identical)."""
+    if pg_ok or not _require_pg():
+        return
+    try:
+        from lib.log import audit_log
+        audit_log('pg_required_but_unavailable', pgdata=pgdata)
+    except Exception as _ae:
+        logger.debug('[DB] audit_log for TOFU_REQUIRE_PG failed: %s', _ae)
+    logger.critical(
+        '[DB] TOFU_REQUIRE_PG=1 but PostgreSQL is unavailable — REFUSING to '
+        'start on the SQLite fallback (it serializes all writes under one file '
+        'lock and cannot serve a scaled deployment). Provision/repair PG '
+        '(see logs/postgresql.log) or unset TOFU_REQUIRE_PG for single-box.')
+    raise RuntimeError(
+        'TOFU_REQUIRE_PG=1 and PostgreSQL is unavailable — refusing to fall '
+        'back to SQLite for a scale-declared deployment.')
+
+
 # ═══════════════════════════════════════════════════════════════════════
 #  Config
 # ═══════════════════════════════════════════════════════════════════════
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# The WRITABLE base dir (parent of the data/ + logs/ roots). In a frozen
+# desktop build this is a user-writable location rather than the read-only
+# _internal/ bundle — see lib/runtime_paths. base_dir is also handed to the
+# PG bootstrap (which places data/pg_backups + logs/postgresql.log under it).
+from lib.runtime_paths import data_root  # noqa: E402
+
+_DB_DIR = data_root()
+BASE_DIR = os.path.dirname(_DB_DIR)
 
 # SQLite path (used as fallback): ``data/tofu.db``.
 from lib.env_compat import getenv_compat  # noqa: E402
 
-_DB_DIR = os.path.join(BASE_DIR, 'data')
 _DEFAULT_DB_FILE = os.path.join(_DB_DIR, 'tofu.db')
 _explicit_db_path = getenv_compat('TOFU_DB_PATH', default='')
 DB_PATH = _explicit_db_path or _DEFAULT_DB_FILE
@@ -506,9 +580,12 @@ class _SqliteCursorWrapper:
             if _sql_upper.startswith(('INSERT', 'UPDATE', 'DELETE', 'CREATE', 'ALTER', 'DROP')):
                 self._conn._dirty = True
         except Exception as e:
-            logger.error('[DB] SQL execution failed (%s): %.120s', type(e).__name__, e)
-            logger.debug('[DB] SQL error detail: %s\n  SQL: %.200s\n  Params: %.200s',
-                         e, sql, str(params)[:200] if params else 'None')
+            if _sql_errors_suppressed():
+                logger.debug('[DB] SQL execution failed (%s) [suppressed]: %.120s', type(e).__name__, e)
+            else:
+                logger.error('[DB] SQL execution failed (%s): %.120s', type(e).__name__, e)
+                logger.debug('[DB] SQL error detail: %s\n  SQL: %.200s\n  Params: %.200s',
+                             e, sql, str(params)[:200] if params else 'None')
             raise
         if _SLOW_QUERY_MS:
             _elapsed_ms = (time.monotonic() - _t0) * 1000
@@ -840,7 +917,18 @@ def _test_pg_connection(pg_conn):
             return False
 
         idle = now - pg_conn._last_used
-        if idle < _IDLE_CHECK_S:
+        # ★ Suspend guard: time.monotonic() FREEZES while the OS is suspended
+        #   (laptop lid close / VM pause / FUSE stall), so a connection whose
+        #   backend PG killed overnight still looks "used a few seconds ago" by
+        #   the monotonic clock and the SELECT 1 probe below would be skipped —
+        #   handing a DEAD connection to the request (the recurring "server
+        #   closed the connection unexpectedly" on the first Send after
+        #   reconnecting the next day). Cross-check the WALL clock: if either
+        #   clock shows a gap >= _IDLE_CHECK_S, probe. The wall clock advances
+        #   across a suspend even when monotonic did not, so a resumed process
+        #   always probes and discards the stale connection.
+        wall_idle = time.time() - getattr(pg_conn, '_last_used_wall', 0)
+        if idle < _IDLE_CHECK_S and wall_idle < _IDLE_CHECK_S:
             return True
 
         raw.rollback()
@@ -849,6 +937,7 @@ def _test_pg_connection(pg_conn):
         cur.fetchone()
         cur.close()
         pg_conn._last_used = now
+        pg_conn._last_used_wall = time.time()
         return True
     except Exception as e:
         logger.debug('[DB] Health check failed: %s', e)
@@ -1015,6 +1104,35 @@ def get_db(domain=DOMAIN_CHAT):
         setattr(g, key, db)
         logger.debug('[DB] Request-scoped connection for domain=%s (backend=%s)', domain, _BACKEND)
     return db
+
+
+def get_read_db(domain=DOMAIN_CHAT):
+    """Read-only DB lane (Epic D3 scaffold).
+
+    Returns a connection suitable for LAG-TOLERANT read-only queries (sidebar
+    list, old-conversation load, search). Today it is an ALIAS of
+    :func:`get_db` — the read-replica routing lands only when
+    ``TOFU_PG_READ_REPLICAS`` is provisioned AND the infra sign-off from the
+    Epic D design (§5) is granted, so the single-box / current behaviour is
+    byte-identical. Call sites can adopt ``get_read_db`` incrementally NOW; the
+    routing turns on later without touching them.
+
+    Lag discipline (design D3 §2.3): NEVER use this for a read that must see a
+    just-written row (e.g. immediately after ``chat_send`` persists, or a task
+    poll of a freshly-persisted result) — those MUST stay on :func:`get_db`
+    (the primary). Only lag-tolerant reads may adopt this lane.
+    """
+    from lib.env_compat import getenv_compat as _ge
+    _replicas = (_ge('TOFU_PG_READ_REPLICAS', default='') or '').strip()
+    if not _replicas or _BACKEND != 'pg':
+        # Unset, or SQLite single-box → identical to the primary lane.
+        return get_db(domain)
+    # NOTE: replica-pool routing is the §10-gated infra follow-up (D3). Until
+    # the replica pool exists, fall back to the primary so behaviour is safe
+    # and unchanged; the seam is in place for the routing to slot in.
+    logger.debug('[DB] get_read_db: TOFU_PG_READ_REPLICAS set but replica pool '
+                 'not yet wired — using primary (D3 infra follow-up)')
+    return get_db(domain)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1282,6 +1400,49 @@ def close_thread_db(domain=None):
 #  Write-Retry Helper
 # ═══════════════════════════════════════════════════════════════════════
 
+def _reconnect_pg_inplace(db):
+    """Swap a dead PgConnection's underlying raw connection for a fresh one.
+
+    Adopts a brand-new psycopg2 connection (and its semaphore slot) into the
+    existing ``db`` wrapper so callers holding the wrapper (request-scoped /
+    thread-local / pooled) transparently continue on a live connection. The
+    OLD raw connection is closed and its semaphore slot + global ``_conn_count``
+    released here — otherwise every reconnect permanently leaks one pool slot
+    and one PG backend (the fresh connection kept its own slot/count).
+
+    Only meaningful on the PG backend. Returns True on success, False on
+    failure (caller then re-raises the original error).
+    """
+    if _BACKEND != 'pg' or not hasattr(db, '_conn'):
+        return False
+    try:
+        old_raw = db._conn
+        fresh = _new_pg_connection()
+        try:
+            old_raw.close()
+        except Exception as _c_err:
+            logger.debug('[DB] Closing dead raw conn during reconnect failed: %s', _c_err)
+        old_sem = getattr(db, '_semaphore', None)
+        if old_sem is not None:
+            try:
+                old_sem.release()
+            except ValueError:
+                logger.debug('[DB] Old semaphore already released during reconnect')
+            with _conn_count_lock:
+                globals()['_conn_count'] = max(0, _conn_count - 1)
+        db._conn = fresh._conn
+        db._semaphore = fresh._semaphore
+        db._created_at = fresh._created_at
+        db._last_used = time.monotonic()
+        db._last_used_wall = time.time()
+        db._closed = False
+        db._dirty = False
+        return True
+    except Exception as re_err:
+        logger.warning('[DB] In-place PG reconnect failed: %s', re_err)
+        return False
+
+
 def db_execute_with_retry(db, sql, params=(), *, commit=True, max_retries=3):
     """Execute a single SQL write with retry on contention or connection loss."""
     last_err = None
@@ -1308,34 +1469,8 @@ def db_execute_with_retry(db, sql, params=(), *, commit=True, max_retries=3):
                         logger.debug('[DB-Retry] Rollback failed: %s', _rb_err)
                     # Try to reconnect for PG connection errors
                     if etype in ('OperationalError', 'InterfaceError') and hasattr(db, '_conn'):
-                        try:
-                            old_raw = db._conn
-                            fresh = _new_pg_connection()
-                            # Adopt fresh's raw connection AND its semaphore slot.
-                            # The slot + global _conn_count tied to the dead raw
-                            # connection must be released here, otherwise every
-                            # reconnect permanently leaks one pool slot and one
-                            # PG backend (fresh kept its own slot/count).
-                            try:
-                                old_raw.close()
-                            except Exception as _c_err:
-                                logger.debug('[DB-Retry] Closing dead raw conn failed: %s', _c_err)
-                            old_sem = getattr(db, '_semaphore', None)
-                            if old_sem is not None:
-                                try:
-                                    old_sem.release()
-                                except ValueError:
-                                    logger.debug('[DB-Retry] Old semaphore already released')
-                                import lib.database._core as _core_mod
-                                with _conn_count_lock:
-                                    _core_mod._conn_count = max(0, _core_mod._conn_count - 1)
-                            db._conn = fresh._conn
-                            db._semaphore = fresh._semaphore
-                            db._created_at = fresh._created_at
-                            db._last_used = time.monotonic()
+                        if _reconnect_pg_inplace(db):
                             logger.info('[DB-Retry] Reconnected underlying PG connection (was: %s)', etype)
-                        except Exception as re_err:
-                            logger.warning('[DB-Retry] Reconnect failed: %s', re_err)
 
             if is_retryable and attempt < max_retries:
                 delay = 0.5 * (2 ** attempt)
@@ -1842,7 +1977,11 @@ _FORCE_SQLITE = getenv_compat('TOFU_DB_BACKEND', default='').lower() == 'sqlite'
 
 db_available = False
 pg_available = False
-_PGDATA = os.path.join(BASE_DIR, 'data', 'pgdata')
+# Live cluster location: local disk when the FUSE-backup split engages, else
+# the legacy <data>/pgdata (byte-identical on a vanilla local-disk box).
+# See lib/database/db_paths.py + the JOURNAL durability-redesign entry.
+from lib.database.db_paths import resolve_pgdata_dir  # noqa: E402
+_PGDATA = resolve_pgdata_dir(_DB_DIR)
 
 if _FORCE_SQLITE:
     _BACKEND = 'sqlite'
@@ -1906,6 +2045,16 @@ else:
                                               name='db-conn-reaper')
             _reaper_thread.start()
 
+            # Record the backend decision in the audit trail so an operator
+            # can always answer "which DB is actually serving?" from audit.log
+            # — the failover branch below logs the SQLite case symmetrically.
+            try:
+                from lib.log import audit_log
+                audit_log('db_backend_selected', backend='pg',
+                          host=PG_HOST, port=PG_PORT, dbname=PG_DBNAME)
+            except Exception as _ae:
+                logger.debug('[DB] audit_log for PG backend selection failed: %s', _ae)
+
         except ImportError:
             logger.warning('[DB] psycopg2 not installed — falling back to SQLite')
             _pg_ok = False
@@ -1928,7 +2077,19 @@ else:
             )
         except Exception as _pe:
             logger.debug('[DB] pgdata existence probe failed: %s', _pe)
-        if _pgdata_exists:
+        # Local-primary cold-start hazard: the RESOLVED _PGDATA may be an empty
+        # local dir that SHOULD have been seeded/restored from a recoverable
+        # source on FUSE (a populated legacy pgdata or a logical dump). If such
+        # a source exists but the resolved cluster came up empty, serving SQLite
+        # would look like data loss just as much as the pgdata-exists case —
+        # fire the same fail-loud guard.
+        _recoverable_source = False
+        try:
+            from lib.database.db_paths import has_recoverable_source
+            _recoverable_source = has_recoverable_source(_DB_DIR)
+        except Exception as _re:
+            logger.debug('[DB] recoverable-source probe failed: %s', _re)
+        if _pgdata_exists or _recoverable_source:
             logger.critical(
                 '[DB] PostgreSQL cluster EXISTS at %s but bootstrap FAILED — '
                 'NOT falling back transparently. Your conversations are most '
@@ -1951,6 +2112,13 @@ else:
                     'empty SQLite and risk masking the real data. Recover PG '
                     '(see logs/postgresql.log) or unset TOFU_DB_STRICT_PG.')
 
+        # ── Epic D1: fail-CLOSED PG guarantee for scaled deployments ──
+        # Delegates to the testable _assert_pg_available_or_raise helper: when
+        # TOFU_REQUIRE_PG is set and PG is unavailable, raise instead of
+        # degrading to write-serializing SQLite. Unset → byte-identical
+        # graceful fallback below.
+        _assert_pg_available_or_raise(False, _PGDATA)
+
         _BACKEND = 'sqlite'
         db_available = True
         pg_available = False
@@ -1961,6 +2129,20 @@ else:
         logger.info('[DB] SQLite fallback backend: %s '
                     '(busy_timeout=%dms, pool_max=%d)',
                     DB_PATH, _BUSY_TIMEOUT_MS, _SQLITE_POOL_MAX)
+        # Audit the backend decision symmetrically with the PG branch. The
+        # existing-cluster case already audited 'pg_bootstrap_failed_with_'
+        # 'existing_cluster' above; this also covers the fresh-host /
+        # no-cluster path that previously left NO audit trace of running on
+        # SQLite — so an operator scanning audit.log can always see the
+        # failover and which backend is live.
+        try:
+            from lib.log import audit_log
+            audit_log('db_backend_selected', backend='sqlite',
+                      path=DB_PATH,
+                      reason=('pg_bootstrap_failed_existing_cluster' if _pgdata_exists
+                              else 'pg_unavailable_or_no_cluster'))
+        except Exception as _ae:
+            logger.debug('[DB] audit_log for SQLite backend selection failed: %s', _ae)
 
 
 # ═══════════════════════════════════════════════════════════════════════

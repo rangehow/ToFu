@@ -34,6 +34,19 @@ lib/                   — Core business logic
                          async_http_get / async_http_post / async_http_stream
   json_store.py        — Atomic JSON file I/O with per-path locking and JSONC tolerance:
                          read_json / write_json_atomic / update_json_atomic / write_text_atomic
+  agent_verdict.py     — Single source of truth for agent-loop decision logic:
+                         classify_verdict (STOP/CONTINUE_WORKER/CONTINUE_PLANNER
+                         gating + anti-analysis-spiral overrides), detect_stuck,
+                         count_state_changing_rounds, STATE_CHANGING_TOOLS,
+                         VU_DONE_SENTINEL. Consumed by endpoint_review,
+                         orchestration_engine, autopilot (was hand-copied 4×)
+  agent_loop.py        — Shared multi-round tool-calling loop + abort seam:
+                         AbortSignal (uniformly wraps threading.Event /
+                         task['aborted'] flag / abort_check callback behind one
+                         .aborted predicate) + run_agent_loop() owning the round
+                         loop and the 3 abort checks (before-round / post-stream /
+                         between-tools). Adopters: paper report_engine + qa_engine
+                         (2026-07; orchestrator/endpoint/swarm/timer adopt later)
   ttl_cache.py         — Generic in-memory TTL cache with LRU eviction +
                          get_or_compute serialization (TTLCache class)
   task_runtime.py      — Compatibility shim → re-exports TaskRuntime from
@@ -54,6 +67,9 @@ lib/                   — Core business logic
     cache.py           — Anthropic prompt-cache breakpoints
     chat.py            — Non-streaming chat() entry point
     stream.py          — SSE streaming + tool-call accumulation
+    astream.py         — Async SSE streaming variant
+    _sse_core.py       — Shared SSE parsing + tool-call accumulation core
+    anthropic_outbound.py — Anthropic-native outbound request builder
     diagnostics.py     — RawSSEDumper (anomaly ring buffer + opt-in transcript)
     _transport.py      — Retry config, headers(), chat_url(), abortable_sleep()
   llm_errors.py        — Exception classes + HTTP error classifier
@@ -77,14 +93,21 @@ lib/                   — Core business logic
     conversation.py    — conversation-control tools
   tasks_pkg/           — Task orchestration, compaction, execution
     orchestrator.py    — Main run_task loop, SSE event emission
-    manager.py         — Task registry + lifecycle
+    manager.py         — Task registry + lifecycle (persist via shared
+                         _merge_tool_rounds / _upsert_task_row helpers)
+    commit_round.py    — Per-round file-history snapshot (daemon-thread
+                         make_snapshot + round_committed SSE) +
+                         derive_round_modified_files (extracted from orchestrator)
+    auto_translate.py  — Server-side auto-translate safety net for assistant +
+                         endpoint-critic messages (extracted from manager)
     executor.py        — Tool execution entry (+ content_ref resolution)
     executor_image.py  — Image-gen tool execution path
     streaming_tool_executor.py — Streaming-tool variant
     tool_dispatch.py   — Tool-name → handler routing
     tool_display.py, tool_hooks.py — Tool UX + before/after hooks
     endpoint.py        — Endpoint mode (Planner→Worker→Critic loop)
-    endpoint_prompts.py, endpoint_review.py — Prompts + verdict parser
+    endpoint_prompts.py, endpoint_review.py — Prompts + critic/planner turns
+                         (verdict parsing delegates to lib/agent_verdict.py)
     compaction.py      — Context-window compaction (3-layer)
     cache_tracking.py, llm_fallback.py, stream_handler.py — Prompt-cache
                          tracking, model-swap fallback, stream classifier
@@ -95,7 +118,11 @@ lib/                   — Core business logic
                          ask_user, blocking stdin requests
     handlers/          — Per-tool execution handlers (misc, project, search, browser, mcp, memory, code_exec, _adapter)
   project_mod/         — Project file tools (list/read/write/grep/run)
-    tools.py           — Public tool entry points
+    tools.py           — Tool dispatch facade: execute_tool registry
+                         (_EXEC_HANDLERS name→handler) + re-exports
+    run_command.py     — run_command subsystem (shell exec, process-tree kill,
+                         snapshot/diff, destructive-command guards) — extracted
+                         from tools.py
     read_tools.py      — Absolute + project file reading (images/PDF/Office)
     write_tools.py     — write_file / apply_diff / insert_content
     indexer.py, scanner.py, modifications.py, config.py
@@ -107,15 +134,19 @@ lib/                   — Core business logic
   browser/             — Browser automation (advanced, playwright pool, queue, handlers)
   fetch/               — Web fetch pipeline (HTTP, HTML/PDF extraction, playwright pool, content filter)
   search/              — Search orchestration + rerank + dedup (engines/ sub-package)
-  agent_backends/      — Pluggable agent backends (builtin, codex, claude_code) + SSE bridge
   mcp/                 — Model Context Protocol client, registry, config
   memory/              — Memory / stored-notes layer (storage, relevance, injection, tools)
-  oauth/               — OAuth flows (Claude, Codex, manager, PKCE, token store)
+  oauth/               — OAuth subscription login (Claude Pro/Max, ChatGPT Codex):
+                         manager, PKCE, token store. outbound.py bridges a logged-in
+                         subscription into a managed server_config provider (the slot's
+                         `oauth` marker → live token + client-identity spoof headers +
+                         Claude identity system block, resolved per request)
   feishu/              — Feishu/Lark bot pipeline, events, messaging
   scheduler/           — Cron + timer + proactive agent scheduler
   pdf_parser/          — PDF parsing (text, images, math, VLM, postprocess)
   cross_dc.py          — Cross-DC FUSE latency detection (env-var driven, auto-benchmarks)
-  compat.py            — Cross-platform shim (Linux/macOS/Windows)
+  compat/              — Cross-platform shim (_platform.py: Linux/macOS/Windows) +
+                         OpenAI/Anthropic API-compat adapters (openai.py, anthropic.py)
   fs_keepalive.py      — Linux-only FUSE/NFS mount keepalive
   billing/             — Wallet / ledger / pricing / per-user cost accounting (payments/ sub-pkg)
   paper/               — Reading-Mode engine extracted from routes/paper.py:
@@ -123,13 +154,23 @@ lib/                   — Core business logic
   # NOTE: the trading subsystem was EXTRACTED to a standalone `tofu-trading`
   # package (2026-06) and is no longer in-tree. It mounts via the
   # `tofu.blueprints` / `tofu.startup` entry-point groups (see routes/plugin_registry.py).
-  # The empty lib/trading*/ dirs are vestigial.
   database/            — Dual-backend DB layer (PostgreSQL primary, SQLite fallback)
     _core.py           — Connection factory, pool, config (PG_* / TOFU_DB_PATH; legacy CHATUI_DB_PATH still honored)
     _bootstrap.py      — Auto-bootstrap local userspace PG; fallback to SQLite
-    _schema_pg.py      — PG DDL / migrations
-    _schema_sqlite.py  — SQLite DDL / migrations
-    _sql_translate.py  — Translate SQLite-flavored SQL to PG at the wrapper layer
+    _core_schema.py    — SINGLE source of every table definition (SQLAlchemy
+                         Core). Migration COMPLETE (2026-06): one Table() →
+                         byte-equivalent PG + SQLite DDL. Defining/altering a
+                         table happens HERE.
+    _schema_pg.py      — PG bootstrap: create_if_absent(Core tables) + PG-only
+                         extras (indexes, tsvector/GIN/trigger, ALTER migrations)
+    _schema_sqlite.py  — SQLite bootstrap: create_if_absent(Core tables) +
+                         SQLite-only extras (indexes, FTS5, ALTER migrations)
+    _sql_translate.py  — Permanent SQLite→PG dialect bridge at the wrapper layer
+                         (? → %s, json_extract, strftime, …; runs on every PG
+                         query). NOT deprecated — only its INSERT OR REPLACE
+                         upsert branch is superseded by _core_schema.upsert()
+                         for migrated tables; in-tree _PK_MAP entries are gone,
+                         leaving only external tofu-trading tables.
     _wrappers.py       — Uniform execute() / fetchone() / fetchall() API
 routes/                — Quart Blueprints. Top-level: chat (+ chat_queue / chat_human_io /
                          chat_tool_state side-effect modules), conversations (+ _search /
@@ -156,13 +197,14 @@ static/js/             — Frontend (vanilla JS). Unified API client api.js (§3
                          scheduler, timer, update, relay-admin, compaction-viewer, context-bar,
                          push, idb-cache, export-images, log-clean, i18n. Bundled by
                          lib/js_bundler.py (_BUNDLE_FILES — see §3.2.1).
-static/                — CSS (styles.css, trading.css)
+static/                — CSS (styles.css)
 debug/                 — Standalone test/benchmark scripts
 tests/                 — pytest-style suites + standalone runners. Suites for the
                          shared infrastructure modules:
                            test_api_response.py, test_json_store.py, test_ttl_cache.py,
                            test_request_parser.py, test_http_client.py,
                            test_task_runtime.py, test_server_async.py,
+                           test_agent_loop.py, test_server_config_concurrent_writers.py,
                            test_chat_manager_migration.py, test_paper_migration.py,
                            test_translate_migration.py,
                            test_trading_simulator_migration.py
@@ -321,7 +363,7 @@ This is the single seam between frontend and backend. It exists so:
 - migrating an endpoint from legacy → `/api/v1` touches one file;
 - cross-cutting concerns (timeout, error shape, auth) live in one place;
 - the frontend stays a thin renderer, never re-implementing backend logic
-  (see `.chatui/skills/separation-of-concerns-directive.md`).
+  (see `.tofu/skills/separation-of-concerns-directive.md`).
 
 The rule is enforced by `tests/test_frontend_api_isolation.py`, which
 maintains a per-file ratchet (`BASELINE`) of remaining legacy calls.
@@ -336,8 +378,10 @@ plus per-domain methods (`Api.folders.*`, growing). Errors throw
 **Streaming exceptions** (allowed because they don't fit the JSON
 verb model):
 - Real-time push events → `pushSubscribe(channel, taskId, fn)` from `push.js`.
-- SSE chat stream `/api/chat/stream/<id>` → currently uses raw fetch;
-  scheduled to move under `Api.chat.stream(taskId)` in a follow-up PR.
+- SSE chat stream `/api/chat/stream/<id>` → consumed via
+  `Api.chat.streamResponse(taskId, {signal})`, which returns the raw
+  Response so the caller (`ui/sse_pipeline.js`, `branch.js`) can pipe
+  `.body.getReader()`. No file calls this endpoint with a raw `fetch`.
 
 #### 3.2.1 ⚠️ JS Bundler Allowlist — DO NOT FORGET
 
@@ -383,23 +427,32 @@ diff <(grep -oE 'static/js/[a-z_-]+\.js' index.html | sed 's|static/js/||' | sor
 
 ### 3.3 HTML/CSS
 
-- `index.html` and `trading.html` are single-page apps with inline structure.
-- CSS is in `static/styles.css` (main) and `static/trading.css` (trading page).
+- `index.html` is a single-page app with inline structure.
+- CSS is in `static/styles.css` (main).
 - Dark theme with CSS variables at `:root`.
 
-### 3.4 Icons — Real Brand Icons, NOT Emoji
+### 3.4 Icons — SVG Only, NO Emoji
 
-> **When an icon represents a real-world product, service, or brand (e.g. Feishu/Lark, Google, GitHub),
-> you MUST use the actual official SVG logo — never substitute with a generic emoji.**
+> **Emojis are PROHIBITED as icons anywhere in the UI. Every icon MUST be an
+> SVG — official brand logos for real products/services, and a suitable SVG
+> glyph for generic concepts. No exceptions.**
 
 **Rules:**
+- **Brand/product icons**: Use the actual official SVG logo (Feishu/Lark, Google,
+  GitHub, Docker, …). Never a generic emoji or a random SVG path.
+- **Generic-concept icons** (credentials, workspace, access control, warnings, …):
+  Use an SVG glyph too — NOT an emoji like 🔑 / 📂 / 👥 / ⚠️.
 - **Search first**: Before adding any brand icon, search the web for the official SVG (check sources like
   [dashboard-icons](https://github.com/homarr-labs/dashboard-icons),
   [Simple Icons](https://simpleicons.org/), or the brand's own asset page).
 - **Inline SVG preferred**: Embed the SVG inline in HTML for color control and no external dependency.
 - **Size to context**: Use `width`/`height` attributes matching the surrounding text size (e.g. 15×15 for tab buttons, 20×16 for section titles).
-- **Emoji OK for generic concepts**: Emojis like 🔑, 📂, 👥 are fine for abstract concepts (credentials, workspace, access control) — but NOT for representing a specific product.
-- **Never use**: 💬 for Feishu, 🔍 for Google, 🐙 for GitHub, etc. — always use the real logo.
+- **Never use**: 💬 for Feishu, 🔍 for Google, 🐙 for GitHub, etc. — always the real logo.
+
+> **Scope note**: this rule governs *icons* (visual UI affordances). It does NOT
+> touch the separate structured-protocol tokens (e.g. the `✅`/`❌` critic-verdict
+> markers in `lib/tasks_pkg/endpoint_prompts.py` / `endpoint_review.py`), which are
+> parsed by code, not rendered as icons — leave those alone.
 
 ### 3.5 No Hardcoded Environment-Specific Values
 
@@ -422,6 +475,91 @@ if hostname.startswith('set-zw05'):
 
 # ✅ CORRECT — environment-driven, auto-detected
 _CLUSTER_MOUNTS_ENV = os.environ.get('CROSS_DC_CLUSTER_MOUNTS', '')
+### 3.6 Agent-Written Project Artifacts — the `.tofu` prefix convention
+
+> **Any hidden file or directory the assistant writes INTO a user's project
+> (not the Tofu install) MUST be named with the `.tofu` prefix, and MUST be
+> declared in `lib/agent_artifacts.py`. Never invent a bare/un-prefixed name.**
+
+As the assistant works it deposits runtime state in the user's project:
+`.tofu/` (file-history backups + memories), `.tofu_trash/` (recoverable
+deletes), `.tofu_sandbox/` (restricted-run shims), `.tofu_env.json` (env
+marker). Many independent mechanisms must recognise these as "agent junk, not
+source": `.gitignore` generation (`lib/project_mod/indexer.py`), the export
+sanitizer (`export.py`), the self-update preserve/skip lists
+(`lib/self_update.py`), and the MCP vendor-copy excludes (`lib/mcp/client.py`).
+
+Historically each kept its OWN hardcoded list, so a new artifact had to be
+added in ~5 places — and forgetting one silently leaked it (committed to git,
+copied into exports, flagged as a dirty tree blocking updates). The fix is the
+single-source-of-truth registry **`lib/agent_artifacts.py`**:
+
+- `ARTIFACT_PREFIX` (`.tofu`) + `is_agent_artifact(name)` — the prefix predicate.
+- `GITIGNORE_PATTERN` (`.tofu*`) — one glob covering every present/future artifact.
+- `KNOWN_ARTIFACT_NAMES` + per-artifact constants (`TRASH_DIR`, `SANDBOX_DIR`, …).
+
+**Rules when adding a NEW artifact:**
+1. Name it `.tofu_<something>` (the reserved prefix is what makes every
+   consumer recognise it mechanically).
+2. Add the canonical name as a constant in `lib/agent_artifacts.py` and import
+   it in the producer — define the name ONCE.
+3. Consumers should call `is_agent_artifact()` / use `GITIGNORE_PATTERN`, never
+   re-list literal names. If you find a consumer with its own hardcoded `.tofu`
+   list, migrate it to the registry rather than extending the list.
+
+
+### 3.7 App-Personal vs Headless Capabilities — the `personal_scope` registry
+
+> **Tofu is two products sharing one orchestrator: the interactive app (chat
+> UI) where the owner's personal state is ON by default, and the headless agent
+> runtime (`/api/v1/agent/run`, `/api/v1/chat/completions`, `/chat/stream-direct`,
+> the OpenAI/Anthropic compat surfaces, the in-process `tofu.chat` facade) where
+> the server is a stateless executor for a BYO caller. Any capability that
+> injects the OPERATOR's personal state into the prompt — the memory store, the
+> personal preference profile, and anything similar added later — MUST be
+> declared in `lib/agent_core/personal_scope.py` and fails CLOSED on every
+> headless surface.**
+
+**Why.** Defaults are sticky and invisible. `memoryEnabled` defaults to `True`
+for the UI (`lib/conv_config.py`), and historically every headless cfg-builder
+inherited that default unless it remembered to override it — so a shared/
+multi-tenant deployment would splice the operator's memories (and the global
+`.tofu_user_profile.md` preference file) into an unrelated API caller's prompt.
+That is both a hallucination vector and a privacy/isolation leak. The
+prompt-assembly side already suppresses a capability's description when its flag
+is off (`system_context.py` gates `<memory_accumulation>` / `[USER PREFERENCE
+PROFILE]`), so the fix is purely about the DEFAULT a headless caller lands on.
+
+**The mechanism (single source of truth):**
+- `PERSONAL_CAPABILITIES` in `lib/agent_core/personal_scope.py` — one entry per
+  app-personal capability (cfg key + fail-closed `headless_default` + `ui_default`
+  + the prompt block it gates).
+- `apply_headless_personal_defaults(cfg)` — called ONCE by every headless
+  cfg-builder AFTER merging the caller's explicit cfg (`build_chat_config` in
+  `lib/tasks_pkg/entry.py`; `_build_cfg` in `routes/api_v1/agent_run.py`;
+  `translate_openai_request` / `translate_anthropic_request` in `lib/compat/`).
+  It's `setdefault`-based so an explicit caller opt-in (`config.memory=true`,
+  `config.preferences=true`, or the raw `memoryEnabled`/`preferencesEnabled`
+  keys) ALWAYS wins.
+- The UI builder `resolve_conv_config` does NOT call it — the interactive
+  product keeps its default-on behaviour, byte-identical.
+- The preference profile is its OWN capability (`preferencesEnabled`), decoupled
+  from `memoryEnabled` via `resolve_preferences_enabled()` (UI back-compat:
+  absent flag → falls back to the memory toggle).
+
+**Rules when adding a NEW capability that injects operator-personal state:**
+1. Add ONE `PersonalCapability` entry to `PERSONAL_CAPABILITIES` with
+   `headless_default=False`.
+2. Gate its prompt injection in `system_context.py` on the flag (so an
+   un-provided capability is never described to the model).
+3. Do NOT add per-surface `setdefault` overrides — the single
+   `apply_headless_personal_defaults` call already covers every headless
+   builder. The ratchet test `tests/test_personal_scope_headless.py` fails if a
+   registered capability isn't honoured fail-closed across all surfaces.
+
+---
+
+## 4. Architecture Patterns
 _LOCAL_IDC = os.environ.get('CROSS_DC_LOCAL_IDC', '')
 # Benchmark latency at startup to classify local vs remote
 ```
@@ -501,8 +639,9 @@ from lib.llm import RateLimitError, AbortedError, is_claude
 ### 4.4 Tool execution
 
 Tools are defined in the `lib/tools/` package — one submodule per tool family
-(`emit.py`, `project.py`, `search.py`, `browser.py`, `meta.py`,
-`human_guidance.py`, `image_gen.py`, `code_exec.py`, `conversation.py`). Execution
+(`project.py`, `search.py`, `browser.py`, `meta.py`, `human_guidance.py`,
+`image_gen.py`, `code_exec.py`, `conversation.py`) plus `registry.py` (tool
+schema registry). Execution
 is split across `lib/tasks_pkg/`:
 
 - `tool_dispatch.py` — name → handler routing
@@ -539,6 +678,7 @@ logger.error('[Tool:%s] failed: %s', tool_name, error, exc_info=True)
 | Reading/writing JSON files | `lib.json_store.read_json / write_json_atomic / update_json_atomic` | hand-rolled `tempfile.mkstemp + os.replace`, `json.load/dump` |
 | Background TTL caches | `lib.ttl_cache.TTLCache(ttl=..., max_size=..., name=...)` | hand-rolled `_cache = {}` + `_cache_lock = threading.Lock()` |
 | Background tasks (chat / paper / translate / trading-sim style) | `lib.task_runtime.TaskRuntime` (one instance per task kind) — see §14 | local `_tasks = {}` registry with custom append/poll/abort logic |
+| Multi-round tool-calling loop + abort/stop | `lib.agent_loop.run_agent_loop(...)` + `AbortSignal.from_event / from_task_flag / from_callback / never` | hand-rolled `for rnd in range(max+1)` shell with per-engine before/post-stream/between-tools abort checks |
 | Server-side push (real-time event channel) | `lib.push.push_event(channel, task_id, event)` (auto-fired from `TaskRuntime.append_event`) — see §4.7 | per-feature WebSocket endpoints |
 
 #### 4.6.1 Carve-outs — modules that intentionally bypass the shared layer
@@ -692,6 +832,7 @@ Before submitting any code change, verify:
 | Read/write a JSON file safely | `lib/json_store.py` — `read_json` / `write_json_atomic` / `update_json_atomic` (§4.6) |
 | Add an in-memory TTL cache | `lib/ttl_cache.py` — `TTLCache(ttl=, max_size=, name=)` (§4.6) |
 | Add a background task (poll/abort/events) | `lib/task_runtime.py` — `TaskRuntime` + `routes/_task_routes.py::register_task_routes` (§14) |
+| Run a multi-round tool-calling loop with Stop support | `lib/agent_loop.py` — `run_agent_loop(...)` + `AbortSignal` (wraps Event / task-flag / callback) (§4.6) |
 | Push a real-time event to the frontend | `lib/push.py::push_event(channel, task_id, event)` — auto-fired by `TaskRuntime.append_event` (§4.7) |
 | Change LLM behavior | `lib/llm/` (package), `lib/llm_dispatch/` (package) |
 | Adjust per-model token caps | `lib/model_info.py` (`_clamp_max_tokens`) |
@@ -703,18 +844,19 @@ Before submitting any code change, verify:
 | Debug endpoint (Planner/Worker/Critic) | `lib/tasks_pkg/endpoint.py`, `endpoint_prompts.py`, `endpoint_review.py` |
 | Change project file tools | `lib/project_mod/tools.py`, `lib/project_mod/read_tools.py`, `lib/project_mod/write_tools.py` |
 | Read local files (images/PDF/Office) | `lib/file_reader.py` (core) → `lib/project_mod/read_tools.py` (`_read_absolute_file`) |
-| Manage memory / stored notes (legacy "skills") | `lib/memory/storage.py`, `lib/memory/tools.py`, `routes/memory.py`, on-disk `<project>/.chatui/skills/` |
-| Install Anthropic / OpenClaw / AgentSkills `.zip` packages (drag-and-drop) | `lib/memory/installer.py` → `POST /api/v1/memory/install` (multipart). Packages live as `<.chatui/skills>/<name>/SKILL.md` + references/ + scripts/. Treated identically to flat `.md` memories by BM25 / search_memories — frontend marks them with a `SKILL` badge. `install.sh` is **never auto-executed**; surfaced as `install_hints`. |
+| Manage memory / stored notes (legacy "skills") | `lib/memory/storage.py`, `lib/memory/tools.py`, `routes/memory.py`, on-disk `<project>/.tofu/skills/` (project scope); global memories moved to the server store `<data>/memories/global/` (2026-06) |
+| Install Anthropic / OpenClaw / AgentSkills `.zip` packages (drag-and-drop) | `lib/memory/installer.py` → `POST /api/v1/memory/install` (multipart). Packages live as `<.tofu/skills>/<name>/SKILL.md` + references/ + scripts/. Treated identically to flat `.md` memories by BM25 / search_memories — frontend marks them with a `SKILL` badge. `install.sh` is **never auto-executed**; surfaced as `install_hints`. |
 | Skills store / curated catalog / file browser | `lib/memory/catalog.py` (curated `SkillCatalogEntry` list), `routes/api_v1/memory.py` (`/api/v1/memory/catalog`, `/api/v1/memory/catalog/install`, `/api/v1/memory/<id>/files`), `static/js/skills.js`, Settings → **Skills** tab. App-Store layout mirrors the MCP tab: search + scope tabs (Catalog / Installed) + category pills + grid + drag-drop zone. Catalog one-click installs download a `.zip` over HTTPS (capped at 50 MB) and feed it to `install_skill_package`. |
 | Modify trading features | External `tofu-trading` package (extracted 2026-06) — mounts via `tofu.blueprints` entry point; not in this repo |
 | Reusable agent base (run loop, dispatch, TaskRuntime, push, profiles) | `lib/agent_core/` (facade `__init__.py`; `task_runtime.py`, `push.py`, `events.py`, `profiles.py`) |
 | Per-user billing / wallet / cost ledger | `lib/billing/` (wallet, ledger, pricing, users, payments/), `routes/api_v1/billing.py` |
 | Declarative multi-agent orchestration (Studio) | `lib/orchestration.py` (schema + validator), `lib/orchestration_engine.py`, `routes/api_v1/orchestrations.py`, `static/js/orchestration.js` |
+| Orchestration typed node I/O (Dify-style dataflow) | OPTIONAL `params.io = {inputs:[{name,type,from}], outputs:[{name,type}]}` on role/subflow nodes. Types: `VALID_IO_TYPES` (text/json/artifact/file/number/bool/any). `from` ref = `'<id>'`/`'<id>.<out>'`/`'start'`. Helpers `node_output_names` + `parse_io_ref`; `_validate_node_io` in `lib/orchestration.py`. Engine (`lib/orchestration_engine.py`) `_compose_typed_inputs` (a node with declared inputs reads ONLY wired upstream outputs, not the scratchpad) + `_publish_outputs`/`_build_change_manifest` (an `artifact`-typed output is filled with the worker's state-changing tool manifest — how a tool-heavy worker exposes its many ops as ONE typed output vs a pure-NL node's single `text` output). FULLY back-compat: no `io` block ⇒ legacy accumulating scratchpad. Studio: edges are click-to-SELECT (not click-to-delete) + Delete/Backspace key + edge inspector (reverse/bind); I/O editor (`_orchRenderIoEditor`) authors ports. Tests: `tests/test_orchestration_io.py` + Scenario 5 in `tests/orch_nested_roundtrip_harness.js`. |
 | Paper / Reading Mode (reports, Q&A, translate) | `lib/paper/` (report_engine, translate_engine, prompts), `routes/paper.py`, `static/js/paper-reader.js` |
 | Daily report subsystem | `routes/daily_report.py`, `lib/scheduler/` |
 | Scheduled / proactive agents, cron, timers | `lib/scheduler/` (manager, executor, cron, timer, proactive), `routes/scheduler.py` |
 | MCP (Model Context Protocol) | `lib/mcp/` (client, registry, config), `routes/mcp.py`, `lib/tasks_pkg/handlers/mcp.py` |
-| Agent backends (Codex, Claude Code, builtin) | `lib/agent_backends/`, `routes/agent_backends.py` |
+| Use a Claude Pro/Max or ChatGPT subscription as a provider | `lib/oauth/` (PKCE login, token store) → `lib/oauth/outbound.py` bridges a logged-in subscription into a managed provider slot (the slot's `oauth` marker resolves per-request to a live token + client-identity headers). Used via the normal dispatch path — NOT a CLI subprocess. (The former `lib/agent_backends/` CLI-subprocess backend was removed 2026-06-21.) |
 | OAuth flows (Claude / Codex) | `lib/oauth/`, `routes/oauth.py` |
 | PDF parsing (text, images, math, VLM) | `lib/pdf_parser/` |
 | Web fetch / browser automation | `tofu_search.fetch` (external pkg), `lib/browser/`, `routes/browser.py` |
@@ -725,8 +867,80 @@ Before submitting any code change, verify:
 | Folder / conversation organization | `routes/api_v1/folders.py`, `routes/conversations.py` |
 | Check recent errors | `tail -f logs/error.log` or `grep_search` the `logs/` directory |
 | Export / sanitize project | `export.py` (three modes: `--mode personal` / `--mode internal` / `--mode opensource`) — see §11 |
-| Cross-platform compat | `lib/compat.py` (core) → `debug/test_cross_platform.py` (smoke test) |
+| Cross-platform compat | `lib/compat/_platform.py` (core, re-exported from `lib/compat/__init__.py`) → `debug/test_cross_platform.py` (smoke test) |
 | Cross-DC FUSE latency | `lib/cross_dc.py` (detection) → `data/config/cross_dc.json` (config) |
+
+### 8.1 Conversation IDs & tracing a conversation
+
+> 🔴 **READ THIS SECTION FIRST whenever the user gives you a bare token that
+> could be a conversation ID** (14 lowercase-alphanumeric chars, e.g.
+> `mqgfkmxyrlygaa`, often introduced as "this is the conversation ID" or
+> "对话 ID"). Do NOT explore from scratch, do NOT `grep_search` the repo for
+> the ID, and do NOT `find`/`ls` the filesystem for it — those find nothing
+> and waste the turn (conversations are DB rows, not files). The complete,
+> authoritative recipe — ID→timestamp decode, the `conversations` schema, and
+> the exact `psql` query to fetch content — is right here in §8.1. Use it.
+
+**ID format.** A conversation ID is **14 chars matching `^[a-z0-9]{14}$`**
+(lowercase base36), e.g. `mqhv05fyf3y1u3`. The **first 8 chars decode to the
+creation time in epoch-ms**: `int(cid[:8], 36)` ≈ the `created_at` column
+(also stored as bigint epoch-ms). The two are close but **not byte-exact** —
+the ID is minted client-side slightly before the row is persisted, so use it
+for an approximate "when was this created" sanity check, not as a precise
+timestamp. IDs that don't match the 14-char pattern (`agent-*`, `bench-*`, …)
+are swarm/benchmark runs, not real user conversations.
+
+```python
+import datetime
+cid = "mqhv05fyf3y1u3"
+print(datetime.datetime.fromtimestamp(int(cid[:8], 36) / 1000))  # ≈ created_at
+```
+
+**Storage.** Single-table — there is **no `messages` table**. Everything lives
+in `conversations` (PG-primary; SQLite only when PG is down):
+
+```
+conversations: id(text), user_id(int), title(text), messages(jsonb),
+               created_at(bigint ms), updated_at(bigint ms),
+               settings(jsonb), msg_count(int), search_text, search_tsv
+```
+
+`messages` is a JSONB array; each element has `role` / `content` / `thinking` /
+`timestamp` / `model` / `usage` / `toolRounds` / `apiRounds` … (PK is
+`(id, user_id)`).
+
+**Fetching a conversation by ID — query PostgreSQL DIRECTLY.**
+
+> ⚠️ Conversations are **rows in the `conversations` table, NOT files on
+> disk**. To read one by its ID, go straight to the DB. **Do NOT** `find` /
+> `ls` the filesystem for the ID, and do NOT `grep_search` the repo for it —
+> those will find nothing and waste the turn. There is no per-conversation
+> file anywhere.
+
+The live PG instance is on **port 15439, db `tofu`, user `hadoop-aipnlp`**
+(NOT the code default 15432; the old `chatui` db name no longer exists).
+Always pass an explicit `user=` and set `PGGSSENCMODE=disable` to dodge Kerberos:
+
+```bash
+export PGGSSENCMODE=disable
+DSN="host=127.0.0.1 port=15439 dbname=tofu user=hadoop-aipnlp"
+# header
+psql "$DSN" -tAc "SELECT id,title,msg_count,to_timestamp(created_at/1000)
+                  FROM conversations WHERE id='<conv_id>';"
+# full message array (role + content), in order
+psql "$DSN" -tAc "SELECT m->>'role', left(m->>'content',200)
+                  FROM conversations, jsonb_array_elements(messages) m
+                  WHERE id='<conv_id>';"
+```
+
+> Verify the port at runtime: `grep 'listening on IPv4' logs/postgresql.log | tail -1`.
+> Don't trust `data/tofu.db` (SQLite) when PG is running — it's an empty shadow.
+
+**Secondary — logs, for runtime *behaviour* only** (not for fetching content):
+once you have the conv ID, `grep_search` it across `logs/` to see the LLM
+rounds, tool calls, and errors (per §2.6 every code path logs `conv_id`).
+Use this to answer "what happened during the run", never to locate the
+conversation itself — that's always the DB query above.
 
 ---
 
@@ -759,9 +973,10 @@ Before submitting any code change, verify:
   `data/config/` within the project directory — NOT in `~/.chatui/` (legacy global). This means
   multiple copies on the same machine have fully independent configs, databases, and API keys.
   Config files: `data/config/server_config.json`, `data/config/features.json`, `data/config/daily_reports/`.
-  Memory / skill notes (both global and project-scoped) are stored under
-  `<project>/.chatui/skills/` (the directory name is preserved for back-compat with
-  existing memory files; renaming would orphan every saved memory).
+  Project-scoped memory / skill notes are stored under `<project>/.tofu/skills/`;
+  global memories moved (2026-06) to the server-side store `<data>/memories/global/`
+  so they are shared across projects and reachable in a project-less chat (the legacy
+  `<project>/.tofu/skills/global/` dir is still read and migrated once, idempotently).
   Auto-migration: on first run, if `data/config/server_config.json` doesn't exist but `~/.chatui/server_config.json` does, it's copied once.
 - Key env vars for initial setup:
   - `LLM_API_KEYS` — comma-separated API keys (or configure via Settings UI)
@@ -780,7 +995,7 @@ Before submitting any code change, verify:
 - Provider templates in Settings UI for one-click provider setup (OpenAI, Anthropic, Meituan, etc.)
 - Trading is now an external plugin (`tofu-trading`), not bundled with core; install it + set `TRADING_ENABLED=1` to mount its Blueprints (see `routes/plugin_registry.py`)
 - **Cross-platform support** (Linux, macOS, Windows):
-  - All platform-specific code is in `lib/compat.py` — use its helpers instead of direct `fcntl`, `select`, `/proc` access.
+  - All platform-specific code is in `lib/compat/` (`_platform.py`, re-exported from `lib/compat/__init__.py`) — use its helpers instead of direct `fcntl`, `select`, `/proc` access.
   - FS keepalive (`lib/fs_keepalive.py`) is Linux-only; graceful no-op on other platforms.
   - Interactive stdin detection in `run_command` is Linux-only (requires `/proc`); degrades to non-interactive on macOS/Windows.
   - `DANGEROUS_PATTERNS` in `lib/project_mod/config.py` include both Unix and Windows equivalents.
@@ -809,7 +1024,15 @@ Any numeric/boolean constant that affects model behavior or system performance:
 - Any change to `lib/llm_dispatch/` routing tables (esp. `config.py`, `dispatcher.py`)
 
 ### 10.3 Database Schema Changes
-- Any `ALTER TABLE`, new tables, new indexes, or column changes to the schema — **must be applied to BOTH `lib/database/_schema_pg.py` AND `lib/database/_schema_sqlite.py`** to keep backends in sync
+- **New tables / column changes**: define the table ONCE in
+  `lib/database/_core_schema.py` (SQLAlchemy Core), add a byte-equivalence
+  parity test in `tests/test_core_schema_parity.py` (green on BOTH backends),
+  then wire it into bootstrap via `create_if_absent(...)` in BOTH
+  `_schema_pg.py` and `_schema_sqlite.py`. The full table migration is complete
+  (2026-06) — do NOT hand-author a `CREATE TABLE` in the `_schema_*.py` files.
+- **Backend-specific extras** (indexes, PG-only tsvector/GIN/trigger infra, and
+  upgrade-only `ALTER TABLE` migrations) DO still live in `_schema_pg.py` /
+  `_schema_sqlite.py` and must be kept in sync across backends.
 - Changes to migration scripts or DB initialization logic
 - Changes to `lib/database/_sql_translate.py` (SQLite→PG SQL translation rules)
 
@@ -1318,4 +1541,4 @@ in `lib/js_bundler.py` (see §3.2.1) — that hasn't changed.
 
 ---
 
-*Last updated: 2026-06-11 — Directory-map refresh after the agent-base relocation + trading extraction. `lib/agent_core/` is now the browsable home of the reusable base (run loop, dispatch, endpoint loop, compaction, push hub, `TaskRuntime`, profiles, streaming-event contract); `lib/task_runtime.py` and `lib/push.py` are compatibility shims re-exporting from it. The trading subsystem was extracted to a standalone `tofu-trading` package and now mounts via the `tofu.blueprints` / `tofu.startup` / `tofu.task_runtimes` entry-point groups (`routes/plugin_registry.py`) — no longer in-tree. New in-tree packages: `lib/paper/` (Reading-Mode engine), `lib/billing/` (per-user wallet/ledger/pricing), `lib/orchestration*.py` (declarative multi-agent Studio). Routes reorganized under `routes/api_v1/` as the canonical surface. Frontend monoliths (core.js / ui.js / main.js / settings.js) decomposed into `core/` `ui/` `main/` `settings/` subpackages, with unified `static/js/api.js` as the single backend seam. Prior wave (2026-05-22): Flask→Quart+Hypercorn ASGI migration; `/api/push` WebSocket multiplexer; six shared infrastructure modules; 5 task registries unified onto `TaskRuntime`. Test workflow is now Makefile-driven (`make lint` / `test-unit` / `test-api` / `ci`).*
+*Last updated: 2026-07-01 — Same-interface consolidation arc: (1) all six `server_config.json` read-modify-write sites unified onto `json_store.update_json_atomic` (locked RMW, fixes a lost-update race); (2) new shared agent-loop seam `lib/agent_loop.py` (`AbortSignal` + `run_agent_loop`), first adopters paper `report_engine`/`qa_engine`; (3) paper's 3 abort endpoints migrated to `register_task_routes` (poll deferred — see JOURNAL). Prior: 2026-06-11 — Directory-map refresh after the agent-base relocation + trading extraction. `lib/agent_core/` is now the browsable home of the reusable base (run loop, dispatch, endpoint loop, compaction, push hub, `TaskRuntime`, profiles, streaming-event contract); `lib/task_runtime.py` and `lib/push.py` are compatibility shims re-exporting from it. The trading subsystem was extracted to a standalone `tofu-trading` package and now mounts via the `tofu.blueprints` / `tofu.startup` / `tofu.task_runtimes` entry-point groups (`routes/plugin_registry.py`) — no longer in-tree. New in-tree packages: `lib/paper/` (Reading-Mode engine), `lib/billing/` (per-user wallet/ledger/pricing), `lib/orchestration*.py` (declarative multi-agent Studio). Routes reorganized under `routes/api_v1/` as the canonical surface. Frontend monoliths (core.js / ui.js / main.js / settings.js) decomposed into `core/` `ui/` `main/` `settings/` subpackages, with unified `static/js/api.js` as the single backend seam. Prior wave (2026-05-22): Flask→Quart+Hypercorn ASGI migration; `/api/push` WebSocket multiplexer; six shared infrastructure modules; 5 task registries unified onto `TaskRuntime`. Test workflow is now Makefile-driven (`make lint` / `test-unit` / `test-api` / `ci`).*

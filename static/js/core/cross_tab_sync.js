@@ -51,6 +51,20 @@ function _handleCrossTabMsg(msg) {
       }
       break;
     }
+    case "conv_restored": {
+      /* ★ Another tab undid a deletion → refresh from server to pick the
+       *   re-created conversation back up (mirrors conv_saved). */
+      clearTimeout(_crossTabMergeTimer);
+      _crossTabMergeTimer = setTimeout(() => {
+        if (
+          document.visibilityState === "visible" &&
+          activeStreams.size === 0 &&
+          _editingMsgIdx === null
+        )
+          loadConversationsFromServer();
+      }, 600);
+      break;
+    }
   }
 }
 /* ★ No longer listening to localStorage 'storage' events for conversations.
@@ -63,16 +77,15 @@ document.addEventListener("visibilitychange", () => {
      *   browser throttles it to ~1s intervals.  This ensures the UI is
      *   fully caught up the instant the user sees the tab. */
     if (activeStreams.size > 0 && activeConvId && streamBufs.has(activeConvId)) {
-      const buf = streamBufs.get(activeConvId);
-      if (buf) {
-        updateStreamingUI({
-          thinking: buf.thinking,
-          content: buf.content,
-          toolRounds: buf.toolRounds,
-          phase: buf.phase,
-          _memoryPrefetch: buf._memoryPrefetch,
-          _mcpLoginHint: buf._mcpLoginHint,
-        });
+      /* ★ Message-checkpoint fallback (see _streamFrameArg in
+       *   health_stream_timer.js): switching a background tab back into a
+       *   mid-stream conv whose buffer hasn't been seeded yet must render the
+       *   persisted checkpoint, not paint "等待中…" over it (same class of wipe
+       *   the _twFlush raw-buffer read caused). */
+      const arg = (typeof _streamFrameArg === 'function')
+        ? _streamFrameArg(activeConvId) : null;
+      if (arg) {
+        updateStreamingUI(arg);
         scrollToBottom();
       }
     } else if (activeStreams.size === 0 && _editingMsgIdx === null) {
@@ -82,6 +95,9 @@ document.addEventListener("visibilitychange", () => {
      *   reconnects and user switches to the browser), recover any conversations
      *   that were marked server_offline while the connection was down. */
     _recoverOfflineConversations('visibilitychange');
+    /* ★ Re-attempt durable pending-sync messages (poor-network send failures
+     *   carried across a reload) now that the tab is focused. */
+    if (typeof _flushPendingSyncs === 'function') _flushPendingSyncs('visibilitychange');
   }
 });
 
@@ -93,6 +109,9 @@ document.addEventListener("visibilitychange", () => {
 window.addEventListener('online', () => {
   console.info('[NetworkRecovery] 🌐 Browser "online" event fired — checking for offline conversations to recover');
   _recoverOfflineConversations('online_event');
+  /* ★ Also re-attempt any message whose send failed on a poor network and
+   *   whose rescue PUT never landed (durable _pendingSync markers). */
+  if (typeof _flushPendingSyncs === 'function') _flushPendingSyncs('online_event');
 });
 
 /** Debounce guard for _recoverOfflineConversations */
@@ -221,7 +240,19 @@ async function _recoverOfflineConversations(trigger) {
     }
     // Interrupted convs with no live task stay as-is — their recovery is the
     // crash-checkpoint path (Case B), not the server_offline static adopt.
-    if (_interruptedOnlyIds.has(conv.id)) return;
+    // But if such a conv ALSO carries a stale server_offline error envelope
+    // (server is reachable now, since the health check above passed), clear it
+    // so the bubble doesn't keep a misleading "Server Offline" badge on top of
+    // the (correct) interrupted verdict.
+    if (_interruptedOnlyIds.has(conv.id)) {
+      if (am.error && errorEnvelopeKind(am.error) === 'server_offline') {
+        delete am.error;
+        saveConversations(conv.id);
+        try { ConvCache.put(conv); } catch (e) { console.debug(`[NetworkRecovery] ConvCache.put failed: ${e && e.message}`); }
+        if (activeConvId === conv.id && typeof renderChat === 'function') renderChat(conv);
+      }
+      return;
+    }
     try {
       const data = await Api.conversations.get(conv.id, { signal: AbortSignal.timeout(10000) });
       if (!data) return;
@@ -279,13 +310,21 @@ async function _recoverOfflineConversations(trigger) {
 
   const _reattachedCount = _reattachedIds.size;
   if (recovered > 0 || _reattachedCount > 0) {
+    // Guarded t() — zh primary; literal fallback keeps jsdom harnesses safe.
+    const _tt = (typeof t === 'function')
+      ? t
+      : (k, p) => ({
+          'conn.restoredTitle': '连接已恢复',
+          'conn.restoredReattach': '已重连 ' + (p && p.n) + ' 个进行中的任务，流式已恢复。',
+          'conn.restoredRecovered': '已从服务器恢复 ' + (p && p.n) + ' 个对话，结果已更新。',
+        }[k] || k);
     if (_reattachedCount > 0) {
-      showToast('🔄', 'Connection Restored',
-        `Reconnected ${_reattachedCount} running task(s) — streaming resumed.`, 6000);
+      showToast('🔄', _tt('conn.restoredTitle'),
+        _tt('conn.restoredReattach', { n: _reattachedCount }), 6000);
     }
     if (recovered > 0) {
-      showToast('🔄', 'Connection Restored',
-        `Recovered ${recovered} conversation(s) from server. Results updated.`, 6000);
+      showToast('🔄', _tt('conn.restoredTitle'),
+        _tt('conn.restoredRecovered', { n: recovered }), 6000);
     }
     // Re-render active conversation if it was STATICALLY recovered.  Skip
     // live-reattached convs — _reattachLiveOfflineTask already created the
@@ -341,4 +380,65 @@ function _startOfflineRecoveryPolling() {
     }
   }, 15000); // Check every 15 seconds
 }
+
+/* ★ Cross-device reconciliation poll (2026-07-05)
+ *
+ *   The conversation list is reconciled with the server by PULL only — there
+ *   is no cross-DEVICE push channel (BroadcastChannel is same-machine only;
+ *   Epic B push fan-out is §10-gated/parked). So two devices (e.g. a phone
+ *   over a flaky VS Code port-forward and a desktop) drift apart and only
+ *   self-heal when the stale device's tab REGAINS focus while idle
+ *   (`visibilitychange` above). A phone left visible-but-untouched never
+ *   re-pulls in the normal case: the only other list-refresh interval
+ *   (`_startOfflineRecoveryPolling`) is gated on the presence of
+ *   `server_offline` convs and no-ops otherwise.
+ *
+ *   This interval closes that gap: while the tab is VISIBLE and fully IDLE it
+ *   re-pulls the list on a fixed cadence, so a device catches a sibling's
+ *   changes without needing a refocus. It reuses `loadConversationsFromServer`
+ *   verbatim — the id-keyed merge and its 304 / count-drop / allowTruncate
+ *   guards already prevent a stale device from truncating fresher server
+ *   state, so a periodic re-pull can only ADD/UPDATE, never clobber.
+ *
+ *   Idle guard is byte-identical to the `conv_saved` cross-tab refresh above
+ *   (visible AND no active stream AND not editing) so it can never fire over a
+ *   live stream or an in-progress edit. It shares the window-scoped
+ *   `_bootLoadInFlight` latch with the boot-reconnect backoff and the 60s
+ *   main.js refresh timer, so overlapping loads are impossible. Backgrounded
+ *   tabs cost nothing — the visibility guard short-circuits before any fetch.
+ */
+const _CROSS_DEVICE_RECONCILE_MS = 25000; // 25s — sane middle of the 20–30s band
+function _crossDeviceReconcile() {
+  /* Same idle guard as the conv_saved refresh — never clobber a live stream
+   *   or an in-progress edit. This is now the SOLE visible-idle list
+   *   reconciler (the divergent 60s main.js timer, which omitted the
+   *   activeStreams guard, was consolidated into this one). */
+  if (
+    document.visibilityState !== "visible" ||
+    activeStreams.size !== 0 ||
+    _editingMsgIdx !== null
+  )
+    return false;
+  /* Share the boot-reconnect in-flight latch so no two timers can issue
+   *   overlapping loads through a flaky tunnel. */
+  if (window._bootLoadInFlight) return false;
+  /* Yield to pending input: the merge + conv-list rebuild is ~tens of ms of
+   *   main-thread work; running it on a bare timer adds input delay (poor INP)
+   *   when a click lands mid-poll. requestIdleCallback defers it until the main
+   *   thread is free. Fallback to a plain call where rIC is unavailable.
+   *   (Preserved from the folded-in 60s timer.) */
+  const _run = () => {
+    if (window._bootLoadInFlight) return;
+    window._bootLoadInFlight = true;
+    Promise.resolve(loadConversationsFromServer())
+      .catch((e) => debugLog(`[cross-device-reconcile] ${e && e.message}`, "warn"))
+      .finally(() => { window._bootLoadInFlight = false; });
+  };
+  if (typeof requestIdleCallback === "function")
+    requestIdleCallback(_run, { timeout: 5000 });
+  else
+    _run();
+  return true;
+}
+setInterval(_crossDeviceReconcile, _CROSS_DEVICE_RECONCILE_MS);
 

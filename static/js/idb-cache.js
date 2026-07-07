@@ -145,11 +145,87 @@ var ConvCache = (function () {
 
   // Strip a single message of transient/bloat fields and return the
   // shape we want to persist.  Mirrors the v1 stripping logic.
+  //
+  // Beyond the message-level `images[].base64/preview` strip, three fields
+  // inside toolRounds/apiRounds balloon a conversation to 100+ MB and OOM the
+  // browser tab on load (proven: mr80gsd8rywph9 = 121 MB). The IndexedDB copy
+  // is a LOCAL READ CACHE only (server is source of truth), so we can drop
+  // them entirely here — a cache read that needs them re-fetches from server:
+  //   • toolRounds[].results[].imageDataUris[].uri — multi-MB inline base64
+  //     data: URLs (9 MB in mr8l9rq09d34n3). The render path filters out
+  //     descriptors without a `uri` (tool_rounds.js), so dropping it degrades
+  //     to "no inline thumbnail" rather than a broken <img>. Keep the
+  //     format/filename metadata so the descriptor shape survives.
+  //   • toolRounds[]._partialOutput on a DONE round — the transient
+  //     run_command terminal buffer (18 MB in mqxbemdr7asicp); authoritative
+  //     output is in toolContent/results[0].output.
+  //   • apiRounds[].usage._wire_fp / _wire_static — backend SSE cache-miss
+  //     diagnostics (~226 KB/round), read by no render path.
+  var _USAGE_TRANSIENT = ['_wire_fp', '_wire_static'];
+  function _stripUsageObj(u) {
+    if (!u || typeof u !== 'object') return u;
+    var o = {};
+    for (var uk in u) if (Object.prototype.hasOwnProperty.call(u, uk) && _USAGE_TRANSIENT.indexOf(uk) === -1) o[uk] = u[uk];
+    return o;
+  }
+  function _stripToolRound(rd) {
+    if (!rd || typeof rd !== 'object') return rd;
+    var changed = false;
+    var o = rd;
+    if (rd.status === 'done' && rd._partialOutput) {
+      o = {}; for (var k in rd) if (Object.prototype.hasOwnProperty.call(rd, k) && k !== '_partialOutput') o[k] = rd[k];
+      changed = true;
+    }
+    var results = o.results;
+    if (Array.isArray(results) && results.some(function (res) {
+      return res && Array.isArray(res.imageDataUris) && res.imageDataUris.some(function (d) { return d && d.uri; });
+    })) {
+      if (!changed) { var c = {}; for (var k2 in o) if (Object.prototype.hasOwnProperty.call(o, k2)) c[k2] = o[k2]; o = c; }
+      o.results = results.map(function (res) {
+        if (!res || !Array.isArray(res.imageDataUris)) return res;
+        return Object.assign({}, res, {
+          imageDataUris: res.imageDataUris.map(function (d) {
+            if (!d || !d.uri) return d;
+            var d2 = {}; for (var dk in d) if (Object.prototype.hasOwnProperty.call(d, dk) && dk !== 'uri') d2[dk] = d[dk];
+            return d2;  // keep format/filename, drop the multi-MB data: URL
+          }),
+        });
+      });
+    }
+    return o;
+  }
+  // Cache-strip one segment: drop the `result` off a tool_use segment (it
+  // duplicates the tool output already carried by toolRounds, which is what
+  // the renderer actually reads for tool bodies). Prose segments (thinking/
+  // text) pass through unchanged — they ARE the timeline's render source and
+  // are size-bounded. Returns a shallow clone only when it trims.
+  function _stripSegmentForCache(s) {
+    if (!s || typeof s !== 'object') return s;
+    if (s.type === 'tool_use' && 'result' in s) {
+      var o = {};
+      for (var sk in s) if (Object.prototype.hasOwnProperty.call(s, sk) && sk !== 'result') o[sk] = s[sk];
+      return o;
+    }
+    return s;
+  }
   function _stripMessage(m) {
     var r = {};
     for (var k in m) {
       if (k === '_hydratePromise' || k === '_translateTaskId') continue;
       if (Object.prototype.hasOwnProperty.call(m, k)) r[k] = m[k];
+    }
+    // segments — the backend-owned typed-timeline SoT (epic
+    // pt_8b406df8fbe24ae5). The interleaved renderer NOW reads segments for
+    // ORDER + PROSE (per-batch thinking/narration), so we KEEP them in the
+    // cache (dropping them would force a grouped→timeline reflicker on every
+    // cache-open). But a `tool_use` segment's `result` DUPLICATES the tool
+    // output that already lives (and renders from) `toolRounds` — and can be
+    // multi-MB (the conv-OOM class: mr80gsd8rywph9 = 121 MB). The renderer
+    // never reads `segment.result` (tool BODIES come from toolRounds), so
+    // strip `result` off tool_use segments: keep the structure (id/name/
+    // input/llmRound) + the prose, drop the duplicated bulk. Bounded form.
+    if (Array.isArray(r.segments)) {
+      r.segments = r.segments.map(_stripSegmentForCache);
     }
     if (r.images && r.images.length > 0) {
       r.images = r.images.map(function (img) {
@@ -161,6 +237,24 @@ var ConvCache = (function () {
         if (img.url) { o.url = img.url; o.preview = img.url; }
         return o;
       });
+    }
+    if (Array.isArray(r.toolRounds)) {
+      r.toolRounds = r.toolRounds.map(_stripToolRound);
+    }
+    if (Array.isArray(r.apiRounds) && r.apiRounds.some(function (rd) {
+      return rd && rd.usage && _USAGE_TRANSIENT.some(function (tk) { return tk in rd.usage; });
+    })) {
+      r.apiRounds = r.apiRounds.map(function (rd) {
+        if (!rd || !rd.usage) return rd;
+        return Object.assign({}, rd, { usage: _stripUsageObj(rd.usage) });
+      });
+    }
+    // _liveLastRoundUsage.usage mirrors a round's raw usage (with _wire_fp);
+    // the gauge reader only uses .tokensIn, so drop the diagnostic sub-keys.
+    if (r._liveLastRoundUsage && r._liveLastRoundUsage.usage
+        && _USAGE_TRANSIENT.some(function (tk) { return tk in r._liveLastRoundUsage.usage; })) {
+      r._liveLastRoundUsage = Object.assign({}, r._liveLastRoundUsage,
+        { usage: _stripUsageObj(r._liveLastRoundUsage.usage) });
     }
     return r;
   }
@@ -183,13 +277,24 @@ var ConvCache = (function () {
       codeExecEnabled: conv.codeExecEnabled, browserEnabled: conv.browserEnabled,
       desktopEnabled: conv.desktopEnabled, memoryEnabled: conv.memoryEnabled,
       schedulerEnabled: conv.schedulerEnabled, swarmEnabled: conv.swarmEnabled,
-      endpointEnabled: conv.endpointEnabled, imageGenMode: conv.imageGenMode,
+      endpointEnabled: conv.endpointEnabled, autopilotEnabled: conv.autopilotEnabled,
+      activeFlow: conv.activeFlow, imageGenMode: conv.imageGenMode,
       humanGuidanceEnabled: conv.humanGuidanceEnabled,
       projectPath: conv.projectPath, projectPaths: conv.projectPaths,
       readOnlyPaths: conv.readOnlyPaths,
       autoTranslate: conv.autoTranslate,
       pinned: conv.pinned, pinnedAt: conv.pinnedAt,
       folderId: conv.folderId,
+      /* Human-only autopilot run-summary sidecar — keep it in the cache so a
+       * reload renders the run fold's report panel without a server round-trip. */
+      autopilotSummaries: conv.autopilotSummaries,
+      /* ★ Poor-network durability: the conv-level pending-sync marker. It rides
+       * the META row (not just the message-level `_pendingSync`) so the cheap
+       * getAllMeta() boot scan can spot a stranded pending tail WITHOUT joining
+       * the messages store — a conv reloaded as a metadata-only shell
+       * (messages:[]) would otherwise be invisible to the flush poller and the
+       * poor-network message never re-synced. Cleared on a confirmed PUT. */
+      _pendingSyncAt: conv._pendingSyncAt || 0,
     };
   }
 
@@ -222,9 +327,52 @@ var ConvCache = (function () {
   }
 
   /**
+   * List ALL cached conversation meta rows (meta-only — no message join).
+   * Cheap cursor over the conv_meta store; used by the boot path to paint
+   * the sidebar instantly before / without a server round-trip.
+   *
+   * NOTE: `put()` only writes conversations that have messages, so this
+   * reflects conversations OPENED on this device, NOT the full server list.
+   * @returns {Promise<Array<{id,title,updatedAt,cachedAt,settings,msgCount}>>}
+   */
+  function getAllMeta() {
+    if (!_available) return Promise.resolve([]);
+    return _open().then(function (db) {
+      if (!db) return [];
+      return new Promise(function (resolve) {
+        try {
+          var tx = db.transaction(META_STORE, 'readonly');
+          var out = [];
+          var cursorReq = tx.objectStore(META_STORE).openCursor();
+          cursorReq.onsuccess = function (e) {
+            var c = e.target.result;
+            if (c) {
+              var v = c.value;
+              out.push({
+                id: v.id, title: v.title, updatedAt: v.updatedAt,
+                cachedAt: v.cachedAt, settings: v.settings || {},
+                msgCount: v.msgCount || (v.msgOrder ? v.msgOrder.length : 0),
+              });
+              c.continue();
+            }
+          };
+          tx.oncomplete = function () { resolve(out); };
+          tx.onerror = function () {
+            console.warn('[ConvCache] getAllMeta tx error: %o', tx.error);
+            resolve(out);
+          };
+        } catch (e) {
+          console.warn('[ConvCache] getAllMeta exception: %s', e.message);
+          resolve([]);
+        }
+      });
+    });
+  }
+
+  /**
    * Paginated read.
    * @param {string} convId
-   * @param {{beforeIdx?:number, afterIdx?:number, limit?:number}} opts
+   * @param {{beforeIdx?:number, afterIdx?:number, limit?:number}} [opts]
    *   beforeIdx — return messages with idx in [..., beforeIdx)
    *   afterIdx  — return messages with idx in (afterIdx, ...]
    *   limit     — max number to return (no limit if omitted).
@@ -356,6 +504,10 @@ var ConvCache = (function () {
       });
 
       return new Promise(function (resolve) {
+        // A request-level error bubbles to tx.onerror AND then aborts the tx
+        // (tx.onabort) — latch so we resolve the promise exactly once.
+        var _settled = false;
+        function _done() { if (_settled) return; _settled = true; resolve(); }
         try {
           var tx = db.transaction([META_STORE, MSG_STORE], 'readwrite');
           var metaStore = tx.objectStore(META_STORE);
@@ -422,20 +574,33 @@ var ConvCache = (function () {
                 });
                 _maybeCheckQuota();
               }
-              resolve();
+              _done();
             };
             tx.onerror = function () {
               console.warn('[ConvCache] put tx error:', tx.error);
-              resolve();
+              _done();
+            };
+            // A QuotaExceededError (or any storage-pressure failure) aborts the
+            // transaction WITHOUT bubbling as a request onerror — only onabort
+            // fires. Without this handler the `await ConvCache.put(conv)`
+            // promise never resolves (hangs the durable pending-sync rescue),
+            // and no room is reclaimed. Log, fire a reactive evict so the next
+            // write has space, then resolve.
+            tx.onabort = function () {
+              console.warn('[ConvCache] put tx aborted (likely QuotaExceeded):', tx.error);
+              evict().then(function (n) {
+                if (n > 0) console.info('[ConvCache] Post-abort evict removed %d entries', n);
+              });
+              _done();
             };
           };
           metaReq.onerror = function () {
             console.warn('[ConvCache] put meta-read error:', metaReq.error);
-            resolve();
+            _done();
           };
         } catch (e) {
           console.warn('[ConvCache] put exception:', e.message);
-          resolve();
+          _done();
         }
       });
     });
@@ -668,6 +833,7 @@ var ConvCache = (function () {
   return {
     get: get,
     getMeta: getMeta,
+    getAllMeta: getAllMeta,
     getMessages: getMessages,
     put: put,
     remove: remove,

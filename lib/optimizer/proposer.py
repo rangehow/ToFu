@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import re
 
+from lib.llm_json import strip_code_fences as _strip_fences
 from lib.log import get_logger
 
 from .actions import ACTION_REGISTRY
@@ -119,6 +120,8 @@ def _build_user_prompt(evidence: EvidenceBundle) -> str:
                              ensure_ascii=False, default=str)[:1000]
     cost_outliers = json.dumps(evidence.top_cost_conversations[:8],
                                ensure_ascii=False, default=str)[:800]
+    recurring = json.dumps(evidence.recurring_issues[:12],
+                           ensure_ascii=False, default=str)[:2000]
 
     return f'''## Evidence window
 {evidence.window_hours}h ending {evidence.generated_at}
@@ -154,6 +157,11 @@ compaction_triggers={evidence.compaction_trigger_count}
 
 ## Top-cost conversations (latest cached day)
 {cost_outliers}
+
+## Recurring issues (fingerprint-clustered failures, count>=2 in window)
+## These are the SAME failure recurring across tasks — the highest-signal
+## evidence. A high count with a recent last_seen = an UNRESOLVED problem.
+{recurring}
 
 ## Audit event counts
 {audit_events}
@@ -205,16 +213,6 @@ Rules:
 # ══════════════════════════════════════════════════════════
 #  LLM call + JSON parsing
 # ══════════════════════════════════════════════════════════
-
-def _strip_fences(text: str) -> str:
-    s = (text or '').strip()
-    if s.startswith('```'):
-        # Remove opening fence line
-        s = s.split('\n', 1)[-1] if '\n' in s else s[3:]
-        if s.endswith('```'):
-            s = s[:-3]
-    return s.strip()
-
 
 def _validate_proposal(raw: dict) -> dict | None:
     if not isinstance(raw, dict):

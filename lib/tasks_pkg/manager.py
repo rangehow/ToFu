@@ -605,7 +605,7 @@ def build_result_meta(task):
     """
     meta = {}
     if task.get('finishReason'): meta['finishReason'] = task['finishReason']
-    if task.get('usage'): meta['usage'] = task['usage']
+    if task.get('usage'): meta['usage'] = _sanitize_usage_for_persist(task['usage'])
     if task.get('preset'): meta['preset'] = task['preset']
     if task.get('toolSummary'): meta['toolSummary'] = task['toolSummary']
     if task.get('_fallback_model'):
@@ -619,7 +619,7 @@ def build_result_meta(task):
     if task.get('model'): meta['model'] = task['model']
     if task.get('provider_id'): meta['provider_id'] = task['provider_id']
     if task.get('thinkingDepth'): meta['thinkingDepth'] = task['thinkingDepth']
-    if task.get('apiRounds'): meta['apiRounds'] = task['apiRounds']
+    if task.get('apiRounds'): meta['apiRounds'] = _sanitize_api_rounds_for_persist(task['apiRounds'])
     if task.get('modifiedFiles'): meta['modifiedFiles'] = task['modifiedFiles']
     if task.get('modifiedFileList'): meta['modifiedFileList'] = task['modifiedFileList']
     # Orchestration flow per-node run trace (resolved brief + bounded I/O per
@@ -641,6 +641,85 @@ def build_result_meta(task):
         if task.get('_endpoint_stop_reason'):
             meta['endpointStopReason'] = task['_endpoint_stop_reason']
     return meta
+
+
+# ── Persisted-payload trimming: drop transient/diagnostic bloat ──────────
+#
+# Three fields balloon the persisted conversation JSON without any value once
+# a turn is done — they are transient streaming buffers or backend-only
+# diagnostics that no render path reads. Left in place they inflate a single
+# conversation to 100+ MB, so the browser exhausts memory the moment it loads
+# and renders it (proven: mr80gsd8rywph9 = 121 MB, dominated by usage._wire_fp).
+# We strip them at the DB persist boundary (and mirror the strip on the
+# frontend PUT + IndexedDB cache) so the authoritative store never carries them.
+#
+#   1. usage._wire_fp / _wire_static — the post-translation wire fingerprint
+#      (a ~226 KB canonicalized-message LIST per round). Captured in
+#      lib/llm/_sse_core.py purely for same-run cache-miss diagnosis by
+#      lib/tasks_pkg/cache_tracking.py, which keeps its OWN in-memory copy
+#      (prev.wire_fp). NO frontend code reads usage._wire_fp — grep-verified.
+#   2. toolRounds[]._partialOutput — the live run_command terminal buffer that
+#      grows during streaming. Once the round is done the authoritative output
+#      lives in results[0].output / toolContent; _partialOutput is dead weight
+#      (18 MB in mqxbemdr7asicp while toolContent was 2 KB). The render path
+#      uses toolContent, never _partialOutput, on a completed round.
+#
+# These two are dropped unconditionally on persist. Inline base64 image URIs
+# (toolRounds[].results[].imageDataUris[].uri) are ALSO multi-MB but ARE the
+# render source, so they are handled on the frontend cache side (strip from the
+# IndexedDB copy, keep in the live/DB copy) — not here.
+
+# usage sub-keys that are backend-only stream diagnostics (never read by any
+# render path). _wire_fp is the giant (~226 KB/round); the rest are tiny but
+# equally value-free once persisted, so drop the whole diagnostic set.
+_USAGE_TRANSIENT_KEYS = ('_wire_fp', '_wire_static')
+
+
+def _sanitize_usage_for_persist(usage):
+    """Return a copy of *usage* with transient wire-diagnostic keys dropped.
+
+    ``usage._wire_fp`` is a per-round ~226 KB canonical-message list captured
+    for live cache-miss tracing (lib/llm/_sse_core.py → cache_tracking.py); it
+    is consumed WITHIN the run and never read by any render path, so persisting
+    it just bloats the conversation. Returns *usage* unchanged (same object)
+    when there is nothing to strip, so the common small-usage case is free.
+    """
+    if not isinstance(usage, dict):
+        return usage
+    if not any(k in usage for k in _USAGE_TRANSIENT_KEYS):
+        return usage
+    return {k: v for k, v in usage.items() if k not in _USAGE_TRANSIENT_KEYS}
+
+
+def _sanitize_api_rounds_for_persist(api_rounds):
+    """Return a copy of *api_rounds* with each round's usage diagnostics stripped."""
+    if not isinstance(api_rounds, list):
+        return api_rounds
+    out = []
+    for r in api_rounds:
+        if isinstance(r, dict) and isinstance(r.get('usage'), dict):
+            r = {**r, 'usage': _sanitize_usage_for_persist(r['usage'])}
+        out.append(r)
+    return out
+
+
+def _trim_round_for_persist(r):
+    """Drop the transient run_command streaming buffer from a DONE tool round.
+
+    ``_partialOutput`` is the live terminal buffer accumulated during streaming
+    (lib/tasks_pkg/handlers/code_exec.py). On a completed round the authoritative
+    output is already in ``results[0].output`` / ``toolContent``; the buffer is
+    pure bloat (18 MB observed while toolContent was 2 KB). We only drop it once
+    the round is ``done`` — a still-running round keeps it so a mid-stream
+    state-snapshot reconnect can still replay the partial output. Returns *r*
+    unchanged when there is nothing to trim.
+    """
+    if not isinstance(r, dict):
+        return r
+    if r.get('status') == 'done' and r.get('_partialOutput'):
+        r = dict(r)
+        r.pop('_partialOutput', None)
+    return r
 
 
 def _merge_tool_rounds(task):
@@ -668,19 +747,24 @@ def _merge_tool_rounds(task):
     cp = task.get('_checkpointToolRounds') or []
     cur = task.get('toolRounds') or []
     merged = (list(cp) + cur) if cp else cur
-    return [dict(r) if isinstance(r, dict) else r for r in merged]
+    # The shallow-copy is thread-safety (see docstring); layer the persist
+    # trim on top so a DONE round's transient _partialOutput buffer never
+    # reaches the DB. _trim_round_for_persist returns dict(r) when it strips,
+    # so it subsumes the shallow copy for those rounds.
+    return [_trim_round_for_persist(dict(r)) if isinstance(r, dict) else r
+            for r in merged]
 
 
 # Static column order for the task_results upsert — shared by the final-result
 # and the running-checkpoint writers so the two can never drift.
 _TASK_RESULTS_COLS = (
     'task_id', 'conv_id', 'content', 'thinking', 'error',
-    'status', 'tool_rounds', 'metadata', 'created_at', 'completed_at',
+    'status', 'tool_rounds', 'metadata', 'segments', 'created_at', 'completed_at',
 )
 
 
 def _upsert_task_row(task, conv_id, *, content, thinking, status,
-                     error_json, tr_json, meta_json):
+                     error_json, tr_json, meta_json, segments_json=None):
     """Single source of truth for the ``task_results`` upsert.
 
     Owns the DB acquire + the ``upsert(..., insert_cols=[10], retry=True)``
@@ -696,7 +780,7 @@ def _upsert_task_row(task, conv_id, *, content, thinking, status,
         'task_id': task['id'], 'conv_id': conv_id,
         'content': content, 'thinking': thinking,
         'error': error_json, 'status': status, 'tool_rounds': tr_json,
-        'metadata': meta_json,
+        'metadata': meta_json, 'segments': segments_json,
         'created_at': int(task.get('created_at', time.time()) * 1000),
         'completed_at': int(time.time() * 1000),
     }, insert_cols=list(_TASK_RESULTS_COLS), retry=True)
@@ -737,6 +821,19 @@ def persist_task_result(task):
     # ★ Merge checkpoint toolRounds for DB persistence (continue flow)
     _merged_tr = _merge_tool_rounds(task)
 
+    # ★ Segment-timeline SoT (epic pt_cb8f98b0cb9b47fb, step 1 — SHIPS DARK).
+    #   Assemble the ordered typed-segment list from the SAME merged rounds +
+    #   terminal content/thinking. Nothing reads task['segments'] yet; it is
+    #   populated here (the single terminal chokepoint) so later steps can flip
+    #   the compat surfaces / persistence / frontend onto it. Best-effort: a
+    #   segment-assembly failure must NEVER break result persistence.
+    try:
+        from lib.tasks_pkg.segments import assemble_segments
+        task['segments'] = assemble_segments(task, merged=_merged_tr)
+    except Exception as _seg_e:
+        logger.warning('[Task %s] segment assembly failed (non-fatal, dark): %s',
+                       task_id_short, _seg_e, exc_info=True)
+
     try:
         # Only store the (potentially multi-MB) toolRounds blob when this task
         # has no conversation row to hold it — see _tool_rounds_have_dedicated_home.
@@ -744,6 +841,19 @@ def persist_task_result(task):
         # recovery readers fall back to load_tool_rounds_from_conversation().
         tr_json = None if _tool_rounds_have_dedicated_home(task) else json.dumps(_merged_tr, ensure_ascii=False)
         meta_json = json.dumps(meta, ensure_ascii=False) if meta else None
+        # ★ segments (epic pt_cb8f98b0cb9b47fb, step 2): persist the THIN form
+        #   (segments_to_json strips the _round mirror — it duplicates the
+        #   tool_rounds column). Rehydrated on read via rehydrate_segments +
+        #   the co-persisted toolRounds. Best-effort: never break persistence.
+        segments_json = None
+        try:
+            _segs = task.get('segments')
+            if _segs:
+                from lib.tasks_pkg.segments import segments_to_json
+                segments_json = json.dumps(segments_to_json(_segs), ensure_ascii=False)
+        except Exception as _sj_e:
+            logger.warning('[Task %s] segments serialize failed (non-fatal): %s',
+                           task_id_short, _sj_e, exc_info=True)
         # Error envelope is JSON-serialised at the wire — task_results.error
         # is TEXT, but every consumer (SSE done, /api/chat/poll, conversation
         # message persistence) round-trips through lib.error_envelope so the
@@ -751,7 +861,8 @@ def persist_task_result(task):
         error_json = _err_to_json(task['error']) if task.get('error') is not None else None
         _upsert_task_row(task, task['convId'], content=task['content'],
                          thinking=task['thinking'], status=task['status'],
-                         error_json=error_json, tr_json=tr_json, meta_json=meta_json)
+                         error_json=error_json, tr_json=tr_json, meta_json=meta_json,
+                         segments_json=segments_json)
         logger.debug('[Task %s] conv=%s Persisted to DB successfully', task_id_short, conv_id_short)
     except Exception:
         logger.error('[Task %s] conv=%s ❌ Persist FAILED — content (%d chars) and thinking (%d chars) may be lost!',
@@ -1164,6 +1275,19 @@ def _sync_result_to_conversation(task, meta):
         # final 'stop' arrived) is superseded.
         if tool_rounds:
             last_msg['toolRounds'] = tool_rounds
+        # ★ segments (epic pt_cb8f98b0cb9b47fb, step 2): persist the THIN
+        #   timeline onto the message dict too (round-trips through the
+        #   conversations.messages JSON column). Co-persisted with toolRounds
+        #   above, so rehydrate_segments can rebuild _round on read. Dark:
+        #   nothing reads msg['segments'] yet.
+        try:
+            _segs = task.get('segments')
+            if _segs:
+                from lib.tasks_pkg.segments import segments_to_json
+                last_msg['segments'] = segments_to_json(_segs)
+        except Exception as _sm_e:
+            logger.warning('%s conv=%s segments write onto message failed (non-fatal): %s',
+                           pfx, conv_id, _sm_e)
         if meta.get('finishReason'):
             last_msg['finishReason'] = meta['finishReason']
         if meta.get('usage'):
@@ -1282,9 +1406,23 @@ def _sync_result_to_conversation(task, meta):
                 # reflect the new last message (assistant, not user) for Case E
                 if messages:
                     lm = messages[-1]
-                    if s.get('lastMsgRole') != lm.get('role') or s.get('lastMsgTimestamp') != lm.get('timestamp'):
+                    # Raw settled-turn facts for the sidebar's stripped-messages
+                    # path (classification stays frontend-side). Recompute every
+                    # sync so a re-run overwrites a prior interrupted verdict.
+                    _lfr = lm.get('finishReason')
+                    _lerr = bool(lm.get('error'))
+                    _lout = bool((lm.get('content') or '') or (lm.get('thinking') or '')
+                                 or (lm.get('toolRounds') or []) or lm.get('_igResults'))
+                    if (s.get('lastMsgRole') != lm.get('role')
+                            or s.get('lastMsgTimestamp') != lm.get('timestamp')
+                            or s.get('lastFinishReason') != _lfr
+                            or s.get('lastMsgError') != _lerr
+                            or s.get('lastMsgHasOutput') != _lout):
                         s['lastMsgRole'] = lm.get('role')
                         s['lastMsgTimestamp'] = lm.get('timestamp')
+                        s['lastFinishReason'] = _lfr
+                        s['lastMsgError'] = _lerr
+                        s['lastMsgHasOutput'] = _lout
                         changed = True
                 if changed:
                     settings_json = json.dumps(s, ensure_ascii=False)
@@ -1404,6 +1542,23 @@ def checkpoint_task_partial(task):
     # ★ Merge checkpoint toolRounds for continue flow
     _merged_tr = _merge_tool_rounds(task)
 
+    # ★ Segment-timeline SoT (epic pt_cb8f98b0cb9b47fb): assemble on the CRASH
+    #   path too, so a turn cut off mid-prose leaves a persisted resumable tail.
+    #   persist_task_result assembles at clean finalization; without the same
+    #   block here a server crash / transport drop mid-answer would have NO
+    #   segment record — only the legacy channels — and the Continue prefill
+    #   path (resume_prefill_from_segments) would find nothing to resume. The
+    #   resumable flag is NOT stamped here (status='running', no finishReason
+    #   yet); recover_stale_tasks_on_startup stamps finishReason='interrupted'
+    #   on the message, and the continue read passes it as the finish_reason
+    #   override. Best-effort: a segment failure must NEVER break checkpointing.
+    try:
+        from lib.tasks_pkg.segments import assemble_segments
+        task['segments'] = assemble_segments(task, merged=_merged_tr)
+    except Exception as _seg_e:
+        logger.warning('[Checkpoint %s] segment assembly failed (non-fatal): %s',
+                       task_id_short, _seg_e, exc_info=True)
+
     try:
         # See _tool_rounds_have_dedicated_home: skip the duplicate blob for
         # tasks whose toolRounds are checkpointed into conversations.messages
@@ -1414,11 +1569,24 @@ def checkpoint_task_partial(task):
         if task.get('preset'): meta['preset'] = task['preset']
         if task.get('thinkingDepth'): meta['thinkingDepth'] = task['thinkingDepth']
         meta_json = json.dumps(meta, ensure_ascii=False) if meta else None
+        # ★ Thin segments for the checkpoint row (same discipline as
+        #   persist_task_result step 2). Rehydrated on read via the co-persisted
+        #   tool_rounds. Best-effort — never break the checkpoint write.
+        _cp_segments_json = None
+        try:
+            _cp_segs = task.get('segments')
+            if _cp_segs:
+                from lib.tasks_pkg.segments import segments_to_json
+                _cp_segments_json = json.dumps(segments_to_json(_cp_segs), ensure_ascii=False)
+        except Exception as _sj_e:
+            logger.warning('[Checkpoint %s] segments serialize failed (non-fatal): %s',
+                           task_id_short, _sj_e, exc_info=True)
         # Error envelope is JSON-serialised at the wire — see persist_task_result.
         _cp_error_json = _err_to_json(task['error']) if task.get('error') is not None else None
         _upsert_task_row(task, conv_id, content=task.get('content') or '',
                          thinking=task.get('thinking') or '', status='running',
-                         error_json=_cp_error_json, tr_json=tr_json, meta_json=meta_json)
+                         error_json=_cp_error_json, tr_json=tr_json, meta_json=meta_json,
+                         segments_json=_cp_segments_json)
         logger.debug('[Checkpoint %s] conv=%s Saved partial: content=%dchars thinking=%dchars',
                      task_id_short, conv_id, content_len, thinking_len)
     except Exception as e:
@@ -1570,6 +1738,23 @@ def _sync_partial_to_conversation(task):
             if git_sha and not last_msg.get('_gitSha'):
                 last_msg['_gitSha'] = git_sha
                 mutated = True
+
+            # ★ Segment-timeline SoT (epic pt_cb8f98b0cb9b47fb): mirror the THIN
+            #   segments onto the message dict so a page-reload / Continue after
+            #   a mid-prose crash can read the resumable tail from the same
+            #   conversations.messages row it reads everything else from. Unlike
+            #   the structural-metadata backfill above (fill-if-absent), segments
+            #   are backend-authoritative and refreshed every checkpoint, so we
+            #   overwrite. Best-effort — a serialize failure just skips the write.
+            _seg_val = task.get('segments')
+            if _seg_val:
+                try:
+                    from lib.tasks_pkg.segments import segments_to_json
+                    last_msg['segments'] = segments_to_json(_seg_val)
+                    mutated = True
+                except Exception as _msj_e:
+                    logger.debug('[Checkpoint] conv=%s segments->msg serialize failed: %s',
+                                 conv_id[:8], _msj_e)
 
             # Backfill stable IDs onto every message — pure write-side hook.
             if _assign_message_ids(messages):
@@ -1794,6 +1979,29 @@ def recover_stale_tasks_on_startup():
                                        cid[:8], exc)
 
             now_ms = int(time.time() * 1000)
+            # Stamp the settled-turn facts the sidebar reads without messages
+            # (raw only — classification stays frontend-side). Derive from the
+            # FINAL merged tail (finishReason='interrupted' is stamped above),
+            # then fold into settings_json so it rides the same atomic UPDATE —
+            # NOT a separate SELECT→mutate→UPDATE (that would clobber).
+            try:
+                _final_msgs = json.loads(messages_json) if messages_json else json.loads(crow['messages'] or '[]')
+            except (json.JSONDecodeError, TypeError):
+                _final_msgs = []
+            if _final_msgs:
+                _lm = _final_msgs[-1]
+                try:
+                    _s = json.loads(settings_json or '{}')
+                except (json.JSONDecodeError, TypeError):
+                    _s = {}
+                _s['lastMsgRole'] = _lm.get('role')
+                _s['lastMsgTimestamp'] = _lm.get('timestamp')
+                _s['lastFinishReason'] = _lm.get('finishReason')
+                _s['lastMsgError'] = bool(_lm.get('error'))
+                _s['lastMsgHasOutput'] = bool(
+                    (_lm.get('content') or '') or (_lm.get('thinking') or '')
+                    or (_lm.get('toolRounds') or []) or _lm.get('_igResults'))
+                settings_json = json.dumps(_s, ensure_ascii=False)
             if messages_json:
                 from lib.conversations import build_search_text
                 messages_parsed = json.loads(messages_json)

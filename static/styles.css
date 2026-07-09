@@ -18,7 +18,7 @@
 .new-chat-btn{flex:1;padding:10px 16px;margin:0;background:var(--accent);color:white;border:none;border-radius:var(--radius-sm);font-family:inherit;font-size:13px;font-weight:600;cursor:pointer;transition:background var(--transition);display:flex;align-items:center;gap:8px;justify-content:center}.new-chat-btn:hover{background:var(--accent-hover)}
 /* new-folder-btn removed — folders use tab bar with "+" button */
 /* ── Folder create/rename dialog ── */
-.folder-dialog-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;animation:fadeIn 0.15s ease}
+.folder-dialog-overlay{position:fixed;inset:0;height:var(--vh100,100vh);background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;animation:fadeIn 0.15s ease}
 .folder-dialog{background:var(--bg-secondary);border:1px solid var(--border-light);border-radius:var(--radius);padding:20px 24px;width:340px;max-width:90vw;box-shadow:0 8px 32px rgba(0,0,0,0.5)}
 .folder-dialog-title{font-size:15px;font-weight:600;color:var(--text-primary);margin-bottom:14px}
 .folder-dialog-input{width:100%;padding:9px 12px;background:var(--bg-primary);border:1px solid var(--border);border-radius:var(--radius-xs);color:var(--text-primary);font-size:14px;font-family:inherit;outline:none;transition:border-color var(--transition)}
@@ -32,7 +32,7 @@
 .folder-dialog-ok{padding:7px 16px;background:var(--accent);color:white;border:none;border-radius:var(--radius-xs);font-size:13px;font-weight:600;font-family:inherit;cursor:pointer;transition:background var(--transition)}.folder-dialog-ok:hover{background:var(--accent-hover)}.folder-dialog-ok:disabled{opacity:0.6;cursor:not-allowed}
 
 /* ── Conversation rename dialog (dedicated, redesigned) ── */
-.conv-rename-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.55);backdrop-filter:blur(2px);z-index:9999;display:flex;align-items:center;justify-content:center;animation:fadeIn 0.15s ease}
+.conv-rename-overlay{position:fixed;inset:0;height:var(--vh100,100vh);background:rgba(0,0,0,0.55);backdrop-filter:blur(2px);z-index:9999;display:flex;align-items:center;justify-content:center;animation:fadeIn 0.15s ease}
 .conv-rename-card{background:var(--bg-secondary);border:1px solid var(--border-light);border-radius:16px;padding:22px 24px 20px;width:380px;max-width:90vw;box-shadow:0 16px 48px rgba(0,0,0,0.45);animation:convRenamePop 0.18s cubic-bezier(0.16,1,0.3,1)}
 @keyframes convRenamePop{from{opacity:0;transform:translateY(8px) scale(0.97)}to{opacity:1;transform:translateY(0) scale(1)}}
 .conv-rename-head{display:flex;align-items:center;gap:9px;font-size:15px;font-weight:600;color:var(--text-primary);margin-bottom:16px}
@@ -2430,7 +2430,7 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .paper-qa-send-btn:activ
 /* Fullscreen image overlay */
 /* ★ Perf: removed backdrop-filter:blur(8px) — blur forces GPU re-composite on scroll.
  * Solid rgba(0,0,0,0.95) is visually equivalent on dark bg. */
-.imagegen-fullscreen{position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.95);display:flex;align-items:center;justify-content:center;cursor:zoom-out;animation:fadeIn .2s ease}
+.imagegen-fullscreen{position:fixed;inset:0;height:var(--vh100,100vh);z-index:9999;background:rgba(0,0,0,0.95);display:flex;align-items:center;justify-content:center;cursor:zoom-out;animation:fadeIn .2s ease}
 .imagegen-fullscreen img{max-width:95vw;max-height:95vh;object-fit:contain;border-radius:8px;box-shadow:0 0 60px rgba(0,0,0,0.5)}
 /* Image gen inside tool panel */
 .ptool-imagegen-block{margin:4px 0}
@@ -2570,7 +2570,7 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .paper-qa-send-btn:activ
    ★ Full-page Drop Overlay
    ═══════════════════════════════════════════ */
 /* ★ Perf: removed backdrop-filter:blur(8px) from drop overlay */
-.drop-overlay{display:none;position:fixed;inset:0;z-index:200;background:rgba(10,10,12,0.92);align-items:center;justify-content:center}
+.drop-overlay{display:none;position:fixed;inset:0;height:var(--vh100,100vh);z-index:200;background:rgba(10,10,12,0.92);align-items:center;justify-content:center}
 .drop-overlay.visible{display:flex}
 .drop-overlay-inner{text-align:center;animation:fadeIn .2s ease}
 .drop-icon{margin-bottom:16px;animation:dropBounce 1s ease-in-out infinite;color:var(--text-secondary)}
@@ -2581,7 +2581,7 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .paper-qa-send-btn:activ
 
 .search-badge,.fetch-badge{font-size:10px;font-weight:700;font-family:'JetBrains Mono',monospace;padding:3px 9px;border-radius:20px;white-space:nowrap;display:none;align-items:center;gap:5px;border:1px solid;animation:fadeIn .3s ease}.search-badge.visible,.fetch-badge.visible{display:flex}.search-badge[data-mode="single"]{background:rgba(59,130,246,0.12);color:#60a5fa;border-color:rgba(59,130,246,0.25)}.search-badge[data-mode="multi"]{background:rgba(139,92,246,0.12);color:#a78bfa;border-color:rgba(139,92,246,0.25)}.search-badge .sb-dot{width:5px;height:5px;border-radius:50%;animation:pulse 1.5s infinite}.search-badge[data-mode="single"] .sb-dot{background:var(--search-blue)}.search-badge[data-mode="multi"] .sb-dot{background:var(--search-purple)}.fetch-badge{background:rgba(16,185,129,0.12);color:var(--fetch-green);border-color:rgba(16,185,129,0.25)}.fetch-badge .fb-dot{width:5px;height:5px;border-radius:50%;background:var(--fetch-green);animation:pulse 1.5s infinite}
 /* ★ Perf: removed backdrop-filter:blur(4px) — solid bg is visually equivalent, no GPU cost */
-.modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:100;align-items:center;justify-content:center}.modal-overlay.open{display:flex}.modal{background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius);padding:28px 32px;width:600px;max-width:92vw;max-height:85vh;overflow-y:auto;box-shadow:var(--shadow)}.modal h3{font-size:18px;font-weight:700;margin-bottom:22px;letter-spacing:-0.01em}.modal label{display:block;font-size:12px;font-weight:600;color:var(--text-secondary);margin-bottom:6px;text-transform:uppercase;letter-spacing:.05em}.modal input,.modal select{width:100%;padding:10px 12px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text-primary);font-family:'JetBrains Mono',monospace;font-size:13px;margin-bottom:16px;outline:none}.modal input:focus{border-color:var(--accent)}.modal .modal-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:16px;padding-top:16px;border-top:1px solid var(--border)}.modal .btn{padding:9px 24px;border-radius:var(--radius-sm);border:none;font-family:inherit;font-size:13px;font-weight:600;cursor:pointer;transition:background-color var(--transition),color var(--transition)}.modal .btn-primary{background:var(--accent);color:white}.modal .btn-primary:hover{background:var(--accent-hover)}.modal .btn-secondary{background:var(--bg-tertiary);color:var(--text-secondary)}.modal .btn-secondary:hover{background:var(--bg-hover)}.modal .range-row{display:flex;align-items:center;gap:12px;margin-bottom:16px}.modal input[type="range"]{flex:1;margin:0;padding:0;height:4px;-webkit-appearance:none;appearance:none;background:var(--border);border-radius:2px;border:none}.modal input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;height:16px;border-radius:50%;background:var(--accent);cursor:pointer}.modal .range-value{font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--text-secondary);min-width:48px;text-align:right}
+.modal-overlay{display:none;position:fixed;inset:0;height:var(--vh100,100vh);background:rgba(0,0,0,0.7);z-index:100;align-items:center;justify-content:center}.modal-overlay.open{display:flex}.modal{background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius);padding:28px 32px;width:600px;max-width:92vw;max-height:85vh;max-height:calc(var(--vh100, 100vh) * 0.85);overflow-y:auto;box-shadow:var(--shadow)}.modal h3{font-size:18px;font-weight:700;margin-bottom:22px;letter-spacing:-0.01em}.modal label{display:block;font-size:12px;font-weight:600;color:var(--text-secondary);margin-bottom:6px;text-transform:uppercase;letter-spacing:.05em}.modal input,.modal select{width:100%;padding:10px 12px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text-primary);font-family:'JetBrains Mono',monospace;font-size:13px;margin-bottom:16px;outline:none}.modal input:focus{border-color:var(--accent)}.modal .modal-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:16px;padding-top:16px;border-top:1px solid var(--border)}.modal .btn{padding:9px 24px;border-radius:var(--radius-sm);border:none;font-family:inherit;font-size:13px;font-weight:600;cursor:pointer;transition:background-color var(--transition),color var(--transition)}.modal .btn-primary{background:var(--accent);color:white}.modal .btn-primary:hover{background:var(--accent-hover)}.modal .btn-secondary{background:var(--bg-tertiary);color:var(--text-secondary)}.modal .btn-secondary:hover{background:var(--bg-hover)}.modal .range-row{display:flex;align-items:center;gap:12px;margin-bottom:16px}.modal input[type="range"]{flex:1;margin:0;padding:0;height:4px;-webkit-appearance:none;appearance:none;background:var(--border);border-radius:2px;border:none}.modal input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;height:16px;border-radius:50%;background:var(--accent);cursor:pointer}.modal .range-value{font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--text-secondary);min-width:48px;text-align:right}
 .message-actions{display:flex;gap:4px;margin-left:auto;opacity:0;transition:opacity var(--transition);position:absolute;top:0;right:0;contain:layout style;will-change:opacity}.message:hover .message-actions{opacity:1}.msg-action-btn{background:none;border:none;color:var(--text-tertiary);cursor:pointer;padding:3px 8px;border-radius:4px;transition:color var(--transition),background-color var(--transition);display:flex;align-items:center;gap:4px;font-size:11px;font-family:inherit}.msg-action-btn:hover{color:var(--text-primary);background:var(--bg-hover)}.msg-action-btn.copied{color:#34d399}.msg-regen-btn:hover{color:#f59e0b;background:rgba(245,158,11,0.1)}.msg-continue-btn{color:var(--accent)!important;opacity:0.7;transition:opacity var(--transition),background-color var(--transition)}.msg-continue-btn:hover{opacity:1;color:var(--accent)!important;background:rgba(99,102,241,0.1)!important}.msg-translate-btn:hover{color:#38bdf8;background:rgba(56,189,248,0.1)}.msg-translate-btn.translated{color:#38bdf8}.msg-translate-btn .spin-icon{animation:spin .8s linear infinite;display:inline-block}.edit-area{margin-top:4px}.edit-textarea{width:100%;min-height:60px;max-height:300px;padding:10px 12px;background:var(--bg-tertiary);border:1px solid var(--accent);border-radius:var(--radius-sm);color:var(--text-primary);font-family:inherit;font-size:14px;line-height:1.5;resize:none;outline:none}.edit-actions{display:flex;gap:8px;margin-top:8px;justify-content:flex-end;flex-wrap:wrap}.edit-actions button{padding:6px 16px;border-radius:var(--radius-sm);border:none;font-family:inherit;font-size:12px;font-weight:600;cursor:pointer;transition:color var(--transition),background-color var(--transition)}.edit-save-btn{background:var(--bg-tertiary);color:var(--text-secondary);border:1px solid var(--border)!important}.edit-save-btn:hover{background:var(--bg-hover);color:var(--text-primary)}.edit-resend-btn{background:var(--accent);color:white}.edit-resend-btn:hover{background:var(--accent-hover)}.edit-cancel-btn{background:transparent;color:var(--text-tertiary)}.edit-cancel-btn:hover{color:var(--text-primary)}.edit-hint{font-size:11px;color:var(--text-tertiary);width:100%;text-align:right;margin-top:4px}
 
 /* ── Delete message button & confirmation popup ── */
@@ -6558,7 +6558,7 @@ input.settings-mono {
 @keyframes fadeIn{from{opacity:0}to{opacity:1}}
 
 /* ── App dialogs: themed confirm/alert/prompt (static/js/core/dialog.js) ── */
-.app-dialog-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.55);backdrop-filter:blur(2px);z-index:10050;display:flex;align-items:center;justify-content:center;padding:20px;opacity:0;transition:opacity 0.16s ease}
+.app-dialog-overlay{position:fixed;inset:0;height:var(--vh100,100vh);background:rgba(0,0,0,0.55);backdrop-filter:blur(2px);z-index:10050;display:flex;align-items:center;justify-content:center;padding:20px;opacity:0;transition:opacity 0.16s ease}
 .app-dialog-overlay.open{opacity:1}
 .app-dialog-overlay.closing{opacity:0}
 .app-dialog{background:var(--bg-secondary);border:1px solid var(--border-light);border-radius:var(--radius);padding:22px 24px 18px;width:400px;max-width:calc(100vw - 40px);box-shadow:0 16px 48px rgba(0,0,0,0.55);transform:translateY(8px) scale(0.98);opacity:0;transition:transform 0.18s cubic-bezier(0.2,1,0.3,1),opacity 0.18s ease}
@@ -6724,7 +6724,7 @@ input.settings-mono {
 .timer-panel-item .tpi-header-jump{cursor:pointer;border-radius:6px;margin:-3px -4px 4px;padding:3px 4px;transition:background .15s}
 .timer-panel-item .tpi-header-jump:hover{background:var(--bg-hover)}
 /* ── Timer poll-log modal ── */
-.timer-log-overlay{position:fixed;inset:0;z-index:4000;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;padding:24px;backdrop-filter:blur(2px)}
+.timer-log-overlay{position:fixed;inset:0;height:var(--vh100,100vh);z-index:4000;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;padding:24px;backdrop-filter:blur(2px)}
 .timer-log-card{background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius-md,10px);box-shadow:var(--clay-lg,0 8px 32px rgba(0,0,0,0.4));width:min(560px,calc(100vw - 48px));max-height:min(70vh,640px);display:flex;flex-direction:column;overflow:hidden;font-size:12px}
 .timer-log-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:12px 14px;border-bottom:1px solid var(--border)}
 .timer-log-title{font-weight:700;color:var(--text-primary);font-size:13px;display:flex;align-items:center;gap:6px}
@@ -15660,7 +15660,7 @@ input.settings-mono {
  * The close-out debrief opened on demand from the run fold's "View report"
  * button. A read-only, human-only surface (never sent to the agent). */
 .ap-report-overlay{
-  position:fixed;inset:0;z-index:2400;
+  position:fixed;inset:0;height:var(--vh100,100vh);z-index:2400;
   display:flex;align-items:center;justify-content:center;
   padding:24px;
   background:rgba(10,10,16,0.55);
@@ -16159,7 +16159,7 @@ input.settings-mono {
 .export-progress-toast .export-progress-bar-fill{height:100%;background:var(--accent);border-radius:2px;transition:width .3s ease}
 .export-progress-toast.done .export-progress-bar-fill{background:#22c55e}
 .export-progress-toast.error .export-progress-bar-fill{background:#ef4444}
-.export-preview-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:10000;display:flex;flex-direction:column;align-items:center;overflow-y:auto;padding:40px 20px}
+.export-preview-overlay{position:fixed;inset:0;height:var(--vh100,100vh);background:rgba(0,0,0,0.85);z-index:10000;display:flex;flex-direction:column;align-items:center;overflow-y:auto;padding:40px 20px}
 .export-preview-overlay .epv-toolbar{position:sticky;top:0;z-index:1;display:flex;gap:10px;margin-bottom:24px;padding:12px 20px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow)}
 .export-preview-overlay .epv-toolbar button{padding:8px 18px;border-radius:var(--radius-sm);border:1px solid var(--border);background:var(--bg-tertiary);color:var(--text-primary);font-size:13px;cursor:pointer;transition:background .2s}
 .export-preview-overlay .epv-toolbar button:hover{background:var(--bg-hover)}
@@ -16179,7 +16179,7 @@ input.settings-mono {
    ═══════════════════════════════════════════════════════════ */
 
 /* ── Sidebar Backdrop (mobile overlay) ── */
-.sidebar-backdrop{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.35);z-index:25;opacity:0;transition:opacity .3s ease;-webkit-tap-highlight-color:transparent}
+.sidebar-backdrop{display:none;position:fixed;inset:0;height:var(--vh100,100vh);background:rgba(0,0,0,0.35);z-index:25;opacity:0;transition:opacity .3s ease;-webkit-tap-highlight-color:transparent}
 .sidebar-backdrop.visible{display:block;opacity:1}
 
 /* ═══════════════════════════════════════════════════════════
@@ -20364,9 +20364,14 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .topbar{
 .project-brain-toggle:active{transform:scale(0.92)}
 
 /* Overlay + sliding panel. */
-.project-brain-overlay{position:fixed;inset:0;background:rgba(6,6,10,0.58);backdrop-filter:blur(4px);z-index:9998;display:flex;align-items:stretch;justify-content:flex-end;animation:fadeIn 0.16s ease}
+.project-brain-overlay{position:fixed;inset:0;height:100vh;height:var(--vh100,100vh);background:rgba(6,6,10,0.58);backdrop-filter:blur(4px);z-index:9998;display:flex;align-items:stretch;justify-content:flex-end;animation:fadeIn 0.16s ease}
 .project-brain-overlay[hidden]{display:none}
-.project-brain-panel{position:relative;background:var(--bg-secondary);border-left:1px solid var(--border-light);width:min(960px,94vw);height:100%;display:flex;flex-direction:column;box-shadow:-24px 0 64px rgba(0,0,0,0.5);animation:pbSlideIn 0.24s cubic-bezier(0.16,1,0.3,1)}
+/* WebView quirk: a position:fixed element sizes to the initial containing
+   block, which this Android WebView measures as height:0 (same root cause as
+   the blank-screen/modal fixes) — so inset:0 alone collapsed the overlay and
+   its height:100% panel to nothing. Pin an explicit height from the known-good
+   --vh100 px var (set by _installViewportHeightGuard), plain 100vh fallback. */
+.project-brain-panel{position:relative;background:var(--bg-secondary);border-left:1px solid var(--border-light);width:min(960px,94vw);height:100%;min-height:var(--vh100,100vh);display:flex;flex-direction:column;box-shadow:-24px 0 64px rgba(0,0,0,0.5);animation:pbSlideIn 0.24s cubic-bezier(0.16,1,0.3,1)}
 /* Accent hairline running down the panel's leading edge — ties it to the brand. */
 .project-brain-panel::before{content:'';position:absolute;top:0;left:0;width:3px;height:100%;background:linear-gradient(180deg,var(--accent),color-mix(in srgb,var(--accent) 30%,transparent));opacity:0.9}
 @keyframes pbSlideIn{from{transform:translateX(28px);opacity:0}to{transform:translateX(0);opacity:1}}

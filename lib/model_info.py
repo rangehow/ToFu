@@ -443,6 +443,13 @@ def _clamp_max_tokens(model: str, max_tokens: int) -> int:
     clamped to _DEFAULT_UNKNOWN_MAX_OUTPUT so the first request doesn't
     over-ask and get rejected.
     """
+    # Defense-in-depth: a caller that passes a missing/None/invalid max_tokens
+    # must never crash the clamp (``min(None, int)`` raises TypeError). Fall
+    # back to the conservative unknown-family ceiling and let the family/learned
+    # limits below refine it. The upstream config resolver is the primary guard;
+    # this keeps _clamp_max_tokens total for every caller.
+    if not isinstance(max_tokens, int) or max_tokens <= 0:
+        max_tokens = _DEFAULT_UNKNOWN_MAX_OUTPUT
     limit = max_tokens
     matched_family = False
     # Check family-level limits

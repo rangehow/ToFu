@@ -231,7 +231,23 @@ def resolve_conv_config(
 
     # ── Field-by-field, matching the JS impl exactly ──
     out = {
-        'maxTokens': ov.get('maxTokens', defaults.get('maxTokens')),
+        # ROOT-CAUSE guard: never hand a None maxTokens to any consumer.
+        # ``.get(k, default)`` only substitutes for an ABSENT key, so
+        # ``ov.get('maxTokens', defaults.get('maxTokens'))`` returned None
+        # whenever NEITHER overrides NOR server_defaults carried the key —
+        # the exact shape the killed-turn recovery path produces
+        # (resolve_conv_config(conv_settings=…, is_active=False) with no
+        # overrides/defaults). That None propagated to build_body →
+        # _clamp_max_tokens → ``min(None, int)`` and FATALed the whole turn
+        # ("'<' not supported between instances of 'int' and 'NoneType'"),
+        # which the killed-recovery sweep then re-dispatched into a crash
+        # loop. Coerce a missing/None/invalid value to the same 128000 the
+        # downstream resolver defaults to — behaviourally identical for every
+        # reader (all already do ``cfg.get('maxTokens') or <fallback>``), and
+        # it eliminates the invariant violation at the source. The two
+        # downstream coercions (_resolve_model_config, _clamp_max_tokens)
+        # remain as defense-in-depth.
+        'maxTokens': ov.get('maxTokens') or defaults.get('maxTokens') or 128000,
         'thinkingEnabled': _coerce_bool(ov.get('thinkingEnabled'),
                                           defaults.get('thinkingEnabled', False)),
         'model': model,
@@ -331,6 +347,15 @@ def resolve_conv_config(
             if conv.get('autoTranslate') is not None
             else _coerce_bool(ov.get('autoTranslate'), False)
         ),
+        # LLM-correction tier of the input language detector. UI default ON
+        # (personal_scope.ui_default=True); it only ever fires when
+        # autoTranslate is also on AND the statistical detection is ambiguous,
+        # so the blast radius is bounded. Headless surfaces get it forced OFF
+        # by apply_headless_personal_defaults (fail-closed).
+        'langCorrectionEnabled': _coerce_bool(
+            ov.get('langCorrectionEnabled'),
+            (_coerce_bool(conv.get('langCorrectionEnabled'), True)
+             if conv.get('langCorrectionEnabled') is not None else True)),
         'browserClientId': None,  # populated below
         'keepToolHistory': ov.get('keepToolHistory') is not False,
     }

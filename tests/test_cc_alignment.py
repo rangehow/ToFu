@@ -356,6 +356,22 @@ class TestResolveModelConfigResponseFormat:
         mcfg = _resolve_model_config({'model': 'gpt-x'}, 'tid12345')
         assert mcfg['response_format'] is None
 
+    def test_max_tokens_none_coerced_to_default(self):
+        """A config carrying maxTokens=None must NOT pass None through.
+        ``cfg.get('maxTokens', 128000)`` returns None when the key is
+        PRESENT-but-None, which then FATALs the turn in _clamp_max_tokens
+        (``min(None, int)``). resolve_conv_config no longer emits None (fixed
+        at source), but _resolve_model_config keeps this coercion as
+        defense-in-depth for any caller that still supplies a None."""
+        from lib.tasks_pkg.model_config import _resolve_model_config
+        assert _resolve_model_config(
+            {'model': 'gpt-x', 'maxTokens': None}, 'tid12345')['max_tokens'] == 128000
+        # Absent key → same default.
+        assert _resolve_model_config({'model': 'gpt-x'}, 'tid12345')['max_tokens'] == 128000
+        # Explicit valid value survives.
+        assert _resolve_model_config(
+            {'model': 'gpt-x', 'maxTokens': 64000}, 'tid12345')['max_tokens'] == 64000
+
 
 @pytest.mark.unit
 class TestAssembleToolListReturnValue:

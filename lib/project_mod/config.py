@@ -168,6 +168,26 @@ _conv_roots: _collections.OrderedDict = _collections.OrderedDict()
 # when no ':' prefix is present).
 _conv_primary: dict[str, str] = {}
 
+# ═══════════════════════════════════════════════════════
+#  ★ Sticky per-conversation working directory (2026-07-09)
+# ═══════════════════════════════════════════════════════
+# conv_id → last-known abs cwd for run_command. This is DERIVED, stateless
+# session affinity — NOT a persistent shell and NOT an env snapshot. It exists
+# purely to stop the model burning tokens re-emitting `cd <project>` / absolute
+# `python`/`pip` on every single run_command call: once it navigates (an
+# explicit ``working_dir`` or a trailing ``cd`` inside the command), subsequent
+# calls with no ``working_dir`` resume from there. The env/venv is still fully
+# re-derived per call by ``_get_cmd_env`` (the CONDA/pip contamination guard +
+# portable_sandbox jail are untouched), so there is no mutable state to corrupt,
+# leak across tenants, or scrub.
+#
+# HARD ISOLATION INVARIANT: a cwd is only remembered when it stays INSIDE one of
+# that conv's registered roots (``get_conv_roots``). A ``cd /etc`` or a hop into
+# another app's tree is rejected and the anchor is left unchanged — app A's cwd
+# can never leak into app B, matching the strict per-conv isolation of the root
+# registries. Keyed and LRU-evicted exactly like _conv_roots; cleared together.
+_conv_cwd: _collections.OrderedDict = _collections.OrderedDict()
+
 
 def _make_root_state(abs_path, access='rw'):
     """Create a fresh per-root state dict.
@@ -433,6 +453,86 @@ def _evict_conv_roots_over_cap():
                      '(over %d cap)', victim[:12], MAX_CONV_ROOTS)
 
 
+def _cwd_within_conv_roots(conv_id, abs_cwd):
+    """True when *abs_cwd* is inside (or equal to) a registered root for *conv_id*.
+
+    Uses the SAME conv-scoped registry (with global-``_roots`` fallback) as the
+    path resolver, so "is this cwd legitimately mine?" has one definition. This
+    is the isolation gate for the sticky cwd: a directory outside every root the
+    conversation owns is refused so app A's ``cd`` can never leak into app B.
+    """
+    if not abs_cwd:
+        return False
+    try:
+        target = os.path.realpath(abs_cwd)
+    except OSError:
+        return False
+    with _lock:
+        if conv_id and conv_id in _conv_roots:
+            roots = list(_conv_roots[conv_id].values())
+        else:
+            roots = list(_roots.values())
+    for rs in roots:
+        try:
+            rp = os.path.realpath(rs['path'])
+        except OSError:
+            continue
+        if target == rp or target.startswith(rp + os.sep):
+            return True
+    return False
+
+
+def get_conv_cwd(conv_id):
+    """Return the sticky working directory for *conv_id*, or None.
+
+    Only returns a path that (a) was previously accepted by ``set_conv_cwd``
+    and (b) still exists as a directory. A vanished sticky (the model deleted
+    or renamed the dir) safe-degrades to None so the caller falls back to the
+    project-root anchor instead of raising at subprocess spawn.
+    """
+    if not conv_id:
+        return None
+    with _lock:
+        cwd = _conv_cwd.get(conv_id)
+        if cwd:
+            _conv_cwd.move_to_end(conv_id)
+    if cwd and os.path.isdir(cwd):
+        return cwd
+    if cwd:
+        # Stale (deleted/renamed) — drop it so we don't hand a dead cwd to Popen.
+        with _lock:
+            _conv_cwd.pop(conv_id, None)
+        logger.debug('[Config] sticky cwd for conv=%s vanished (%s) — cleared',
+                     conv_id[:12] if conv_id else '?', cwd)
+    return None
+
+
+def set_conv_cwd(conv_id, abs_cwd):
+    """Remember *abs_cwd* as the sticky cwd for *conv_id* (isolation-gated).
+
+    Refuses — leaving any existing anchor unchanged — when the target is not a
+    directory or falls outside every root the conversation owns (see
+    ``_cwd_within_conv_roots``). Returns True when the anchor was updated.
+    """
+    if not conv_id or not abs_cwd:
+        return False
+    abs_cwd = os.path.abspath(os.path.expanduser(abs_cwd))
+    if not os.path.isdir(abs_cwd):
+        return False
+    if not _cwd_within_conv_roots(conv_id, abs_cwd):
+        logger.debug('[Config] sticky cwd %s rejected for conv=%s '
+                     '(outside registered roots)', abs_cwd,
+                     conv_id[:12] if conv_id else '?')
+        return False
+    with _lock:
+        if conv_id in _conv_cwd:
+            _conv_cwd.move_to_end(conv_id)
+        _conv_cwd[conv_id] = abs_cwd
+        while len(_conv_cwd) > MAX_CONV_ROOTS:
+            _conv_cwd.popitem(last=False)
+    return True
+
+
 def clear_conv_state(conv_id):
     """Drop a conversation's root registry (call on task/conv teardown)."""
     if not conv_id:
@@ -440,6 +540,7 @@ def clear_conv_state(conv_id):
     with _lock:
         _conv_roots.pop(conv_id, None)
         _conv_primary.pop(conv_id, None)
+        _conv_cwd.pop(conv_id, None)
 
 
 def ensure_project_state_for_conv(conv_id, path, extras=None, readonly_paths=None):

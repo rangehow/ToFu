@@ -37,6 +37,8 @@ __all__ = [
     'get_roots', 'get_root_path',
     # Per-conversation root registry (2026-05-05)
     'set_conv_roots', 'add_conv_root', 'clear_conv_state', 'get_conv_roots',
+    # Sticky per-conversation cwd (2026-07-09)
+    'get_conv_cwd', 'set_conv_cwd',
     # Read-only roots
     'is_readonly_path', 'ReadOnlyRootError',
     # Tools
@@ -78,7 +80,9 @@ from lib.project_mod.config import (
     ReadOnlyRootError,
     add_conv_root,
     clear_conv_state,
+    get_conv_cwd,
     is_readonly_path,
+    set_conv_cwd,
     clear_recent_projects,
     get_conv_roots,
     get_project_path,

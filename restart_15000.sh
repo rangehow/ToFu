@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 #
-# restart_15000.sh — reload the Tofu server on :15000 so it picks up the
-# Project Brain path-normalization backend fix (lib/conversations/project_{feed,board,charter}.py).
+# restart_15000.sh — reliably reload the Tofu server on :15000.
 #
 # ┌─────────────────────────────────────────────────────────────────────────┐
 # │ RUN THIS FROM A TERMINAL THAT IS **NOT** A CHILD OF THE :15000 SERVER.    │
@@ -10,14 +9,23 @@
 # │ server would also kill the shell running this script (self-plug-pull).    │
 # └─────────────────────────────────────────────────────────────────────────┘
 #
-# Safe to re-run (idempotent): if no server is on :15000 it just launches one.
-# It does NOT use `set -e` on the whole script so a missing process (nothing to
-# kill) is not treated as a fatal error.
+# WHY THIS SCRIPT WAS REWRITTEN (2026-07-10):
+#   The live server is launched as `python server.py` with NO `--port` argument
+#   (the port defaults to $PORT / 15000 inside server.py). The previous version
+#   matched `pkill -f "server.py --port 15000"`, which matched NOTHING, so the
+#   old process was never killed; the relaunch then either shifted to :15001 via
+#   server.py's _find_free_port fallback OR aborted on the instance lock
+#   ("Another server instance is already running"). Root fix: kill the EXACT PID
+#   that is actually listening on :15000 (from `ss -ltnp`), escalate SIGTERM →
+#   SIGKILL if the port doesn't free, and only then relaunch — with the SAME
+#   command the process really uses (`python server.py`, no --port).
+#
+# Safe to re-run (idempotent): if nothing is on :15000 it just launches one.
+# No `set -e` on the whole script so "nothing to kill" is not fatal.
 
 PROJ="/mnt/dolphinfs/ssd_pool/docker/user/hadoop-aipnlp/INS/ruanjunhao04/chatui"
 PY="/mnt/dolphinfs/ssd_pool/docker/user/hadoop-aipnlp/INS/ruanjunhao04/miniforge3/envs/tofu/bin/python"
 PORT=15000
-PATTERN="server.py --port ${PORT}"
 LOG="server_${PORT}.log"
 
 echo "════════════════════════════════════════════════════════════════"
@@ -25,39 +33,54 @@ echo "[0/5] restart_15000.sh — reloading Tofu server on :${PORT}"
 echo "      project: ${PROJ}"
 cd "${PROJ}" || { echo "FATAL: cannot cd into project dir"; exit 1; }
 
-# ── Guard: refuse to run if THIS shell is a descendant of the :15000 server. ──
-# Walk our own parent chain; if we hit the current :15000 listener PID, abort —
-# killing it would terminate this very shell.
-LISTENER_PID="$(ss -ltnp 2>/dev/null | awk -v p=":${PORT}" '$4 ~ p {print $0}' \
-                | grep -oE 'pid=[0-9]+' | head -1 | cut -d= -f2)"
-if [ -n "${LISTENER_PID}" ]; then
+# ── Helper: PIDs currently LISTENING on :PORT (the authoritative kill target). ──
+# `ss -ltnp` Local Address:Port column ($4) looks like 127.0.0.1:15000 or
+# *:15000 — match a literal ":PORT" at end of field, then pull pid=NNN.
+listener_pids() {
+  ss -ltnp 2>/dev/null \
+    | awk -v pat=":${PORT}\$" '$4 ~ pat {print}' \
+    | grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -u
+}
+
+# ── Guard: refuse to run if THIS shell is a descendant of a :PORT listener. ──
+# Killing that PID would terminate this very shell (self-plug-pull).
+LPIDS_INIT="$(listener_pids)"
+if [ -n "${LPIDS_INIT}" ]; then
   up=$$
   for _ in 1 2 3 4 5 6 7 8; do
-    [ -z "${up}" ] || [ "${up}" = "1" ] && break
-    if [ "${up}" = "${LISTENER_PID}" ]; then
-      echo "FATAL: this shell (pid $$) is a DESCENDANT of the :${PORT} server"
-      echo "       (pid ${LISTENER_PID}). Killing it would terminate this shell."
-      echo "       Re-run from a plain VS Code terminal, not a Tofu agent shell."
-      exit 2
-    fi
+    { [ -z "${up}" ] || [ "${up}" = "1" ]; } && break
+    for lp in ${LPIDS_INIT}; do
+      if [ "${up}" = "${lp}" ]; then
+        echo "FATAL: this shell (pid $$) is a DESCENDANT of the :${PORT} server"
+        echo "       (pid ${lp}). Killing it would terminate this shell."
+        echo "       Re-run from a plain VS Code terminal, not a Tofu agent shell."
+        exit 2
+      fi
+    done
     up="$(ps -o ppid= -p "${up}" 2>/dev/null | tr -d ' ')"
   done
 fi
 
-# ── [1/5] Stop the current :15000 server. ──
-echo "[1/5] Stopping current server (pattern: '${PATTERN}') ..."
-if pgrep -f "${PATTERN}" >/dev/null 2>&1; then
-  pkill -f "${PATTERN}"
-  echo "      SIGTERM sent."
+# ── [1/5] Stop whatever is listening on :PORT (by exact PID). ──
+echo "[1/5] Stopping current server on :${PORT} ..."
+LPIDS="$(listener_pids)"
+if [ -z "${LPIDS}" ]; then
+  # Fallback: no listener socket found (e.g. mid-crash) — match the real
+  # launch command. NOTE: matches `python server.py`, NOT a --port substring.
+  LPIDS="$(pgrep -f 'server\.py' 2>/dev/null | tr '\n' ' ')"
+fi
+if [ -n "${LPIDS}" ]; then
+  echo "      Target PID(s): ${LPIDS}"
+  for lp in ${LPIDS}; do kill "${lp}" 2>/dev/null && echo "      SIGTERM -> ${lp}"; done
 else
-  echo "      No running '${PATTERN}' process found — nothing to stop."
+  echo "      No process found listening on :${PORT} — nothing to stop."
 fi
 
-# ── [2/5] Wait for the port to free (up to ~20s). ──
+# ── [2/5] Wait for the port to free (up to ~20s); escalate to SIGKILL. ──
 echo "[2/5] Waiting for :${PORT} to free ..."
 freed=0
 for i in $(seq 1 20); do
-  if ! ss -ltn 2>/dev/null | grep -q ":${PORT} "; then
+  if [ -z "$(listener_pids)" ] && ! ss -ltn 2>/dev/null | grep -q ":${PORT} "; then
     freed=1
     echo "      Port :${PORT} is free (after ${i}s)."
     break
@@ -65,19 +88,28 @@ for i in $(seq 1 20); do
   sleep 1
 done
 if [ "${freed}" != "1" ]; then
-  echo "      WARNING: :${PORT} still bound after 20s. Forcing kill of stragglers ..."
-  pkill -9 -f "${PATTERN}" 2>/dev/null
+  echo "      WARNING: :${PORT} still bound after 20s — escalating to SIGKILL."
+  KPIDS="$(listener_pids)"; [ -z "${KPIDS}" ] && KPIDS="$(pgrep -f 'server\.py' 2>/dev/null | tr '\n' ' ')"
+  for lp in ${KPIDS}; do kill -9 "${lp}" 2>/dev/null && echo "      SIGKILL -> ${lp}"; done
   sleep 2
+  if ss -ltn 2>/dev/null | grep -q ":${PORT} "; then
+    echo "      FATAL: :${PORT} STILL bound after SIGKILL. Aborting to avoid a"
+    echo "             stray second instance / port shift. Investigate manually."
+    exit 3
+  fi
+  echo "      Port :${PORT} freed after SIGKILL."
 fi
 
-# ── [3/5] Relaunch exactly as the previous process was started. ──
-echo "[3/5] Relaunching: nohup ${PY} server.py --port ${PORT} > ${LOG} 2>&1 &"
-nohup "${PY}" server.py --port "${PORT}" > "${LOG}" 2>&1 &
+# ── [3/5] Relaunch EXACTLY as the process is really started (no --port). ──
+#   Port comes from $PORT (server.py default 15000). We export it explicitly so
+#   the bind is deterministic and never drifts via _find_free_port.
+echo "[3/5] Relaunching: PORT=${PORT} nohup ${PY} server.py > ${LOG} 2>&1 &"
+PORT="${PORT}" BIND_HOST="${BIND_HOST:-127.0.0.1}" nohup "${PY}" server.py > "${LOG}" 2>&1 &
 NEWPID=$!
 echo "      Launched pid ${NEWPID}; logging to ${LOG}"
 
-# ── [4/5] Wait for the server to accept connections (up to ~40s; startup does
-#          PG bootstrap + blueprint registration, so give it room). ──
+# ── [4/5] Wait for the server to accept connections (up to ~40s; boot does PG
+#          bootstrap + blueprint registration). ──
 echo "[4/5] Waiting for the server to come up on :${PORT} ..."
 BASE="http://127.0.0.1:${PORT}"
 up_ok=0
@@ -87,56 +119,36 @@ for i in $(seq 1 40); do
     echo "      Server responding (after ${i}s)."
     break
   fi
+  # If the launched process already died (e.g. lock abort), fail fast.
+  if ! kill -0 "${NEWPID}" 2>/dev/null; then
+    echo "      ERROR: launched pid ${NEWPID} exited during startup. Tail of ${LOG}:"
+    tail -n 30 "${LOG}" 2>/dev/null
+    echo "      If this is a stale instance lock, last resort:"
+    echo "         PORT=${PORT} TOFU_SKIP_LOCK=1 nohup ${PY} server.py > ${LOG} 2>&1 &"
+    exit 4
+  fi
   sleep 1
 done
 if [ "${up_ok}" != "1" ]; then
   echo "      ERROR: server did not respond within 40s. Tail of ${LOG}:"
   tail -n 30 "${LOG}" 2>/dev/null
-  exit 3
+  exit 4
 fi
 
-# ── [5/5] Self-verify the fix took: BOTH the stripped and trailing-slash board
-#          queries must now return done=3, and GET / must serve the fresh
-#          bundle/style hashes. ──
-echo "[5/5] Verifying the Project Brain path-normalization fix is LIVE ..."
-enc="$(${PY} -c "import urllib.parse;print(urllib.parse.quote('${PROJ}'))")"
-encs="$(${PY} -c "import urllib.parse;print(urllib.parse.quote('${PROJ}/'))")"
-
-read_done () {  # $1 = url-encoded path -> prints "done=N total=M"
-  curl -s --max-time 5 "${BASE}/api/v1/project/board?path=$1" \
-    | ${PY} -c 'import sys,json;d=json.load(sys.stdin);print("done=%s total=%s"%(d.get("done"),len(d.get("tasks",[]))))' \
-    2>/dev/null || echo "done=ERR total=ERR"
-}
-
-# The DOUBLE-encoded variant is what the VS Code proxy actually sends the
-# browser's already-encoded query as (%2F -> %252F). This is THE case that
-# blanked the panel; it must resolve too after the route-decode fix.
-encd="$(${PY} -c "import urllib.parse;print(urllib.parse.quote(urllib.parse.quote('${PROJ}')))")"
-stripped="$(read_done "${enc}")"
-slashed="$(read_done "${encs}")"
-doubled="$(read_done "${encd}")"
-echo "      board (stripped path)   -> ${stripped}"
-echo "      board (trailing slash)  -> ${slashed}"
-echo "      board (double-encoded)  -> ${doubled}   [VS Code proxy case]"
-
-echo "      GET / serves:"
-curl -s --max-time 5 "${BASE}/" \
-  | grep -oE '(bundle-[a-f0-9]+\.js|styles-[a-f0-9]+\.css)' | sort -u | sed 's/^/        /'
-
-# All three variants must resolve to the same non-empty board for the fix to
-# be live: stripped (baseline), trailing-slash (normalize fix), AND
-# double-encoded (the proxy re-encode fix — the actual blank-panel cause).
-sd="$(echo "${stripped}" | grep -oE 'done=[0-9]+' | cut -d= -f2)"
-ld="$(echo "${slashed}"  | grep -oE 'done=[0-9]+' | cut -d= -f2)"
-dd="$(echo "${doubled}"  | grep -oE 'done=[0-9]+' | cut -d= -f2)"
+# ── [5/5] Self-verify the STICKY-CWD feature is LIVE: the served capabilities
+#          must carry the new working_dir "STICKY" description text. If the old
+#          bytecode were still serving, this string is absent. ──
+echo "[5/5] Verifying the sticky-cwd feature is LIVE ..."
+CAPS="$(curl -s --max-time 8 "${BASE}/api/v1/capabilities" 2>/dev/null)"
 echo "────────────────────────────────────────────────────────────────"
-if [ -n "${sd}" ] && [ "${sd}" = "${ld}" ] && [ "${sd}" = "${dd}" ] && [ "${sd}" != "0" ]; then
-  echo "✅ FIX LIVE: stripped, trailing-slash AND double-encoded board all agree (done=${sd}). Restart complete."
+if printf '%s' "${CAPS}" | grep -q 'STICKY'; then
+  echo "✅ FIX LIVE: /api/v1/capabilities advertises the STICKY working_dir behavior."
+  echo "   Restart complete — the new run_command sticky-cwd code is running."
 else
-  echo "❌ FIX NOT CONFIRMED: stripped done=${sd:-?}, slashed done=${ld:-?}, double done=${dd:-?}."
-  echo "   Expected all three equal and > 0. The double-encoded case is the"
-  echo "   VS Code proxy path — if only it is 0, routes/api_v1/project.py's"
-  echo "   _decoded_path_arg fix is not loaded (stale bytecode → restart again)."
-  exit 4
+  echo "❌ FIX NOT CONFIRMED: no 'STICKY' text in served /api/v1/capabilities."
+  echo "   The server is up but appears to be serving OLD code (stale bytecode"
+  echo "   or the wrong process). Re-check that :${PORT} is the process you just"
+  echo "   launched (pid ${NEWPID}) and that git HEAD contains the sticky-cwd commit."
+  exit 5
 fi
 echo "════════════════════════════════════════════════════════════════"

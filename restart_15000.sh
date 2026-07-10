@@ -135,20 +135,26 @@ if [ "${up_ok}" != "1" ]; then
   exit 4
 fi
 
-# ── [5/5] Self-verify the STICKY-CWD feature is LIVE: the served capabilities
-#          must carry the new working_dir "STICKY" description text. If the old
-#          bytecode were still serving, this string is absent. ──
-echo "[5/5] Verifying the sticky-cwd feature is LIVE ..."
-CAPS="$(curl -s --max-time 8 "${BASE}/api/v1/capabilities" 2>/dev/null)"
+# ── [5/5] Self-verify the sticky-cwd CODE is present in the interpreter this
+#          server runs under. NOTE: we do NOT grep /api/v1/capabilities — that
+#          endpoint emits only each tool's truncated top-level `description`, not
+#          parameter-level fields, so `working_dir`/"STICKY" is ABSENT from the
+#          JSON regardless of the running code (a guaranteed false-negative). The
+#          valid probe is that the sticky-cwd symbols import cleanly from
+#          lib.project_mod under the SAME interpreter used to launch the server.
+#          (Full behavioral proof is the two-call test: working_dir on call 1,
+#          bare `pwd` on call 2 resumes in that dir — see the JOURNAL entry.)
+echo "[5/5] Verifying the sticky-cwd code is importable under the server interpreter ..."
 echo "────────────────────────────────────────────────────────────────"
-if printf '%s' "${CAPS}" | grep -q 'STICKY'; then
-  echo "✅ FIX LIVE: /api/v1/capabilities advertises the STICKY working_dir behavior."
-  echo "   Restart complete — the new run_command sticky-cwd code is running."
+if "${PY}" -c "from lib.project_mod import get_conv_cwd, set_conv_cwd" 2>/dev/null; then
+  echo "✅ CODE PRESENT: get_conv_cwd/set_conv_cwd import from lib.project_mod."
+  echo "   Server is up on :${PORT} (pid ${NEWPID})."
+  echo "   Behavioral proof: run two run_command calls in one conversation —"
+  echo "   call 1 with working_dir=<subdir>, call 2 with none + \`pwd\` resumes there."
 else
-  echo "❌ FIX NOT CONFIRMED: no 'STICKY' text in served /api/v1/capabilities."
-  echo "   The server is up but appears to be serving OLD code (stale bytecode"
-  echo "   or the wrong process). Re-check that :${PORT} is the process you just"
-  echo "   launched (pid ${NEWPID}) and that git HEAD contains the sticky-cwd commit."
+  echo "❌ CODE ABSENT: get_conv_cwd/set_conv_cwd do NOT import from lib.project_mod."
+  echo "   git HEAD is missing the sticky-cwd commit (expected 1e8ba20), or ${PY}"
+  echo "   is the wrong interpreter. The server started but WITHOUT the feature."
   exit 5
 fi
 echo "════════════════════════════════════════════════════════════════"

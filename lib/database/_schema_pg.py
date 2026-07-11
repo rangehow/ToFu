@@ -45,6 +45,43 @@ def _count_rows(conn, table):
     return int(cur.fetchone()[0])
 
 
+# Critical columns that MUST exist on an already-current database. The version
+# fast-path trusts the stored _schema_version integer as a proxy for "all DDL
+# applied", but the version write and the per-column ALTERs are NOT atomic
+# across restarts on slow (FUSE) storage: a migration run can commit the version
+# yet have a later ADD COLUMN fail / time out, leaving the DB current-by-version
+# but column-missing — after which every future boot fast-paths past the fix.
+# Checked BEFORE the fast-path so such a divergence forces a full re-migration.
+# Keep this to load-bearing columns whose absence makes a subsystem throw
+# (a broad audit belongs in the parity test, not the boot path).
+_CRITICAL_COLUMNS = {
+    'project_tasks': (
+        'blocked_until', 'block_count', 'block_reason',
+        'wait_paths', 'dispatch_target',
+    ),
+}
+
+
+def _missing_critical_columns(conn):
+    """Return a list of (table, column) that SHOULD exist but do not.
+
+    Read-only (information_schema); best-effort. A missing table is skipped —
+    the normal create path owns that, this guard only catches the
+    version-current-but-column-missing divergence on an EXISTING table.
+    """
+    missing = []
+    for table, cols in _CRITICAL_COLUMNS.items():
+        try:
+            if not _table_exists(conn, table):
+                continue
+            for col in cols:
+                if not _column_exists(conn, table, col):
+                    missing.append((table, col))
+        except Exception as e:
+            logger.debug('[DB] critical-column probe failed for %s: %s', table, e)
+    return missing
+
+
 def _read_meta(conn, key):
     """Read a value from the core-owned ``schema_meta`` table.
 
@@ -781,11 +818,17 @@ def init_db(_new_pg_connection, _STATEMENT_TIMEOUT_MS):
         current_domains = _get_schema_domains(conn)
         want_domains = ','.join(active_domains())
         if current_version == _SCHEMA_VERSION and current_domains == want_domains:
-            elapsed = time.monotonic() - t0
-            logger.info('[DB] Schema version %d + domains [%s] current — skipping '
-                        'DDL (fast startup, checked in %.2fs)',
-                        _SCHEMA_VERSION, want_domains, elapsed)
-            return
+            missing = _missing_critical_columns(conn)
+            if missing:
+                logger.warning('[DB] Schema version %d current but critical columns '
+                               'missing %s — forcing full DDL migration to converge',
+                               _SCHEMA_VERSION, missing)
+            else:
+                elapsed = time.monotonic() - t0
+                logger.info('[DB] Schema version %d + domains [%s] current — skipping '
+                            'DDL (fast startup, checked in %.2fs)',
+                            _SCHEMA_VERSION, want_domains, elapsed)
+                return
 
         logger.info('[DB] Schema version %s → %d, domains [%s] → [%s] — running '
                     'full DDL migration', current_version, _SCHEMA_VERSION,

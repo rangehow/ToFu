@@ -521,6 +521,87 @@ def test_NC_sweep_autoland_is_load_bearing(flask_app, monkeypatch):
     )
 
 
+# ════════════════════════════════════════════════════════════════════
+#  Perceptibility — the Landing section of the always-surfaced board block
+#  (render_board_block is the human-facing text surface; no contested files)
+# ════════════════════════════════════════════════════════════════════
+
+def test_board_block_renders_landing_section(flask_app):
+    """A pending-ready marker appears in a 'Landing' section of the board block,
+    with its files + conv — so a human perceives the queue in the surface that
+    is re-read every turn."""
+    import lib.conversations.project_ready as pr
+    from lib.conversations.project_board import render_board_block
+    with flask_app.app_context():
+        pr.post_ready_marker('/rb/1', 'cA', files=['lib/x.py', 'lib/y.py'],
+                             test_paths=['t.py'], at_ref='HEAD',
+                             gate_result={'green': True, 'selfConsistent': True})
+        block = render_board_block('/rb/1', current_conv_id='cREADER')
+    assert 'Landing' in block, 'the board block must show a Landing section'
+    assert 'lib/x.py' in block and 'lib/y.py' in block, 'slice files must be shown'
+    assert 'cA' in block, 'the owning conversation must be shown'
+
+
+def test_board_block_landing_marks_held_overlap(flask_app):
+    """The held-for-overlap cluster (the part a human must SEQUENCE) is called
+    out distinctly from a cleanly-landable slice."""
+    import lib.conversations.project_ready as pr
+    from lib.conversations.project_board import render_board_block
+    with flask_app.app_context():
+        # A∩B share lib/shared.py → both held; C disjoint → landable.
+        pr.post_ready_marker('/rb/2', 'cA', files=['lib/shared.py'],
+                             test_paths=['t.py'], at_ref='HEAD',
+                             gate_result={'green': True, 'selfConsistent': True})
+        pr.post_ready_marker('/rb/2', 'cB', files=['lib/shared.py'],
+                             test_paths=['t.py'], at_ref='HEAD',
+                             gate_result={'green': True, 'selfConsistent': True})
+        pr.post_ready_marker('/rb/2', 'cC', files=['lib/c.py'],
+                             test_paths=['t.py'], at_ref='HEAD',
+                             gate_result={'green': True, 'selfConsistent': True})
+        block = render_board_block('/rb/2', current_conv_id='cREADER')
+    low = block.lower()
+    assert 'landing' in low
+    # the overlap must be surfaced as needing human sequencing
+    assert 'overlap' in low or 'sequence' in low or 'authoriz' in low, \
+        'the held-for-overlap cluster must be flagged for the human to sequence'
+    assert 'lib/shared.py' in block
+
+
+def test_board_block_ready_marker_not_in_open_lane(flask_app):
+    """A ready marker (kind='ready', status open) must NOT render in the Open
+    lane (where it would read as a claimable epic) — it is partitioned into the
+    Landing section only."""
+    import lib.conversations.project_ready as pr
+    from lib.conversations.project_board import post_task, render_board_block
+    with flask_app.app_context():
+        # a real open epic + a ready marker on the same board
+        post_task('/rb/3', 'cX', 'A genuine open epic to work')
+        pr.post_ready_marker('/rb/3', 'cA', files=['lib/z.py'],
+                             test_paths=['t.py'], at_ref='HEAD',
+                             gate_result={'green': True, 'selfConsistent': True})
+        block = render_board_block('/rb/3', current_conv_id='cREADER')
+    # the epic shows in Open; the marker's file must NOT appear as an Open item
+    assert 'A genuine open epic to work' in block
+    open_idx = block.find('Open (unclaimed')
+    landing_idx = block.find('Landing')
+    assert open_idx != -1 and landing_idx != -1
+    # 'lib/z.py' (the ready marker) must appear only AFTER the Open section
+    # header — i.e. within Landing, never as an Open bullet.
+    z_idx = block.find('lib/z.py')
+    assert z_idx > landing_idx, 'the ready marker must render in Landing, not Open'
+
+
+def test_board_block_no_landing_section_when_no_markers(flask_app):
+    """No ready markers → no Landing section (no prompt weight for an empty
+    queue), but a normal board still renders."""
+    import lib.conversations.project_board as pb
+    with flask_app.app_context():
+        pb.post_task('/rb/4', 'cX', 'Some open epic')
+        block = pb.render_board_block('/rb/4', current_conv_id='cREADER')
+    assert 'Some open epic' in block
+    assert 'Landing' not in block
+
+
 def main():
     import pytest as _pt
     _pt.main([__file__, '-v'])

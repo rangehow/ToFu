@@ -1,8 +1,11 @@
 # Project Brain — Per-Conversation Worktree Isolation
 
-> **Status:** DESIGN — owner-directed 2026-07-11. No refactor code until this
-> model is ratified on paper. Tier-2 bleeding-control (class-aware backoff +
-> event-driven wait_paths) lands in parallel and is NOT a substitute for this.
+> **Status:** DESIGN — owner-directed 2026-07-11. Q1/Q2 RATIFIED and FUSE
+> validation V2–V4 RUN FOR REAL (§7.1 — the git worktree model SURVIVES on the
+> beegfs-fuse mount; no fallback to lighter isolation needed). No refactor code
+> until the model is ratified in full on paper. Tier-2 bleeding-control
+> (class-aware backoff + event-driven wait_paths) landed already (`a73f824`) and
+> is NOT a substitute for this.
 >
 > **Scope:** replaces the entire commit-time contention apparatus
 > (`project_commit` byte-identity gate, `project_ready` overlap-hold,
@@ -77,9 +80,13 @@ needed. The rest of this doc is the concrete plan.
 
 - One long-lived **integration branch** (default `tofu/integration`, env
   `TOFU_WORKTREE_INTEGRATION_BRANCH`) is the project's moving trunk that all
-  conversations rebase onto and land into. It tracks (or *is*) the human's
-  working branch; landing = fast-forward/merge integration → the branch the
-  human actually builds from.
+  conversations rebase onto and land into. **RATIFIED (Q1, owner 2026-07-11):**
+  `tofu/integration` is a DEDICATED branch — autonomous merges NEVER land
+  directly on the branch the human builds from. The human periodically
+  fast-forwards `tofu/integration` into their working branch at their own
+  cadence, giving a review / rollback seam and blast-radius isolation between
+  the autonomous fleet and the human's trunk. Landing = CAS-merge into
+  `tofu/integration` only (§5).
 - Each **active conversation** that does project work gets its own git worktree
   and a per-conversation branch `tofu/conv/<conv_id>` created off the current
   integration HEAD.
@@ -161,13 +168,20 @@ Today the brain detects collisions at **land time** (the most expensive moment)
 and parks. The board already knows epic → paths (`wait_paths`, `dispatch_target`
 authorship). Move the coordination to **dispatch time**:
 
-- When `dispatch_epic` (`project_dispatch.py`) assigns an epic to a
-  conversation, it also records the epic's **declared file-ownership set**
-  (derived from the epic's `wait_paths` / design-doc file list, or a coarse
-  subsystem claim).
-- `select_dispatchable` prefers epics whose ownership set is **disjoint** from
-  every currently-claimed epic's set — so two *live* conversations rarely touch
-  the same file by construction.
+- **RATIFIED (Q2, owner 2026-07-11):** each epic DECLARES its intended
+  **write-set** at post/dispatch time — the set of files it expects to touch —
+  and the dispatcher partitions on THAT declared write-set, with a coarse
+  subsystem tag (e.g. `css`, `routes/api_v1`, `lib/conversations`) as the
+  fallback when a precise set can't be given. `wait_paths` alone is explicitly
+  REJECTED as the source: it only captures declared *sibling-blocks*, not the
+  epic's full write footprint, so it under-counts and lets two epics that will
+  both edit `styles.css` co-dispatch. The declared write-set is a new epic
+  field (`write_set` JSON), set by `post_task` / `dispatch_epic`.
+- `select_dispatchable` prefers epics whose declared write-set is **disjoint**
+  from every currently-claimed epic's write-set — so two *live* conversations
+  rarely touch the same file by construction. Missing write-set → fall back to
+  the subsystem tag; missing both → treat as touching-everything (dispatch
+  serially, conservative).
 - Overlap becomes a **scheduler constraint** (don't co-dispatch two epics that
   both own `styles.css`), NOT a land-time jail. If ownership sets must overlap
   (unavoidable hot file), the epics are *serialized* at dispatch — one waits for
@@ -191,8 +205,9 @@ land_worktree(conv_id, files, test_paths, message):
   2. run_acceptance_gate(conv_worktree, files, test_paths, at_ref=<merge-base>)
        └─ REUSED unchanged: green AND selfConsistent (orphan scan)
   3. not ok? → return why (tests red / orphaned callers). Do NOT merge.
-  4. ok? → merge/ff conv branch into integration (agent author, --author Tofu Agent)
-  5. integration → human's build branch (ff/merge; the human's normal flow)
+  4. ok? → CAS-serialized merge into tofu/integration (see §5.1)
+  5. STOP. The human fast-forwards tofu/integration → their build branch at
+     their own cadence (Q1). Autonomous landing NEVER writes the human's trunk.
 ```
 
 - **Authorship** is the merge commit's parentage — structural, not inferred.
@@ -202,6 +217,51 @@ land_worktree(conv_id, files, test_paths, message):
   split-brain (removed-symbol-still-referenced) that byte-identity could not.
 - Agent-authored merges keep `--author 'Tofu Agent'` (the existing
   `_agent_author()` convention); the human remains committer.
+
+### 5.1 Integration-ref land serialization — the primitive the file model needs
+
+**Per-conv worktrees move collision off the FILES but reintroduce it on the
+INTEGRATION REF** (owner's catch). N worktrees share one `.git`; two
+conversations merging into `tofu/integration` at the same instant race on the
+single ref update. Without serialization, "merge the branch" just relocates the
+stall to `refs/heads/tofu/integration`.
+
+**This is measured, not assumed** (§7.1): a BLIND concurrent `update-ref new`
+loses 7 of 8 updates (last-writer-wins → silent lost merges). The fix is git's
+native compare-and-swap plus a bounded retry, NOT a home-grown lock:
+
+```
+CAS-merge(conv_id):                        # the land critical section
+  for attempt in 1..MAX_LAND_RETRIES (50):
+    OLD = rev-parse refs/heads/tofu/integration
+    if is-ancestor(OLD, conv_branch):      # fast-forwardable
+        NEW = conv_branch tip
+    else:                                  # true divergence → merge commit,
+        NEW = commit-tree <conv tree> -p OLD -p conv_branch   # no worktree touch
+        # (a real tree-level conflict here → bail to sync_worktree(step 1),
+        #  resolve in the conv's own worktree, never on integration)
+    if update-ref refs/heads/tofu/integration NEW OLD:   # CAS: only if unchanged
+        return landed
+    jittered-backoff()                     # someone else won; re-read OLD, retry
+  return land_exhausted → post a board block, do not force
+```
+
+- **CAS is the serialization** — `git update-ref <ref> <new> <old>` fails
+  atomically if the ref moved since we read `OLD`, so exactly one writer wins
+  per round and the losers RE-READ and retry. Measured: 8 concurrent CAS merges
+  → 8/8 landed, 0 exhausted, ≤8 retries, all branches reachable, fsck clean
+  (§7.1). This is a much lighter primitive than a board soft-lease on the ref
+  and needs no external lock; the board lease is reserved for the *worktree*
+  (GC), not the ref.
+- **Merge WITHOUT a checkout** — land uses `commit-tree` (git 2.11-compatible;
+  `merge-tree --write-tree` does NOT exist on 2.11, §7.1), so landing never
+  touches any worktree's working copy and cannot collide with a live edit.
+- **Land is short and CPU-bound** (ref read + object write + CAS) so the retry
+  window is tiny; the acceptance gate (the slow part) runs BEFORE the critical
+  section, on the conv's own worktree, not under contention.
+- **Exhaustion is a real (rare) outcome** — 50 failed CAS rounds means pathological
+  contention; it posts a board block (class `[sibling]`, retried by Tier-2
+  event-driven wake), never a forced blind write.
 
 ---
 
@@ -237,23 +297,61 @@ actual DolphinFS/FUSE mount before committing to the refactor:
 | V5 | rebase/merge across worktrees on FUSE latency | time `sync_worktree` under cross-DC mount | within `cross_dc.py` tolerance; no corruption |
 | V6 | worktree path resolution under the multi-root `_roots` fix (§3.3) | unit + integration: conv A tool cannot resolve into conv B worktree | strict per-conv isolation |
 
-**Gate:** V2–V4 must pass on a real DolphinFS mount before ANY refactor code
-lands. If `git worktree` proves unsafe under concurrent FUSE writes, the
-fallback is a lighter-weight isolation (per-conv index files / sparse overlays)
-— but that decision is data-driven, made after V2–V4, not assumed now.
+**Gate:** V2–V4 RAN FOR REAL on the `beegfs-fuse` mount 2026-07-11 (see §7.1) →
+**PASS**. The `git worktree` model survives concurrent FUSE writes + concurrent
+integration-ref merges. **No fallback to lighter isolation is needed.** V5–V6
+remain to be exercised during the build (they gate their own steps, not the
+go/no-go).
+
+### 7.1 Empirical results (2026-07-11, `beegfs-fuse` / git 2.11.0)
+
+Probe: 8 worktrees off one `.git`, 80 concurrent commits, then concurrent
+integration-ref land under two strategies. All `.git` on the FUSE mount.
+
+| Check | Result |
+|---|---|
+| **V2** 8 worktrees / one `.git`, 80 concurrent commits | **PASS** — 8/8 add, 80/80 commit, 0 bad branch tips |
+| **V3** lock behavior under concurrency | **PASS** — 0 stale `.lock`, no `index.lock` deadlock |
+| **V4** GC | **PASS with constraint** — `worktree remove` is UNSUPPORTED on git 2.11; GC = `rm -rf <wt>` + `git worktree prune` (verified clean) |
+| **REF blind** `update-ref new` (no CAS) | **FAILS by design** — only 1 of 8 survives (silent lost merges). NEVER use. |
+| **REF CAS** `update-ref new old` + retry (§5.1) | **PASS** — 8/8 landed, 0 exhausted, ≤8 retries, all reachable, fsck clean |
+| "corruption" seen on first pass | **reflog garbling ONLY**, not DAG/object/ref corruption — eliminated by `core.logallrefupdates=false` on the server repo |
+
+**Three hard environment constraints this surfaced (bind the build):**
+1. **git is 2.11.0** — NO `merge-tree --write-tree`, NO `worktree remove`. Land
+   MUST use `commit-tree` + CAS `update-ref` (§5.1); GC MUST use `rm -rf` +
+   `worktree prune`. A newer git would simplify this but is not assumed.
+2. **The server `.git` MUST set `core.logallrefupdates=false`.** Per-ref reflogs
+   are the ONLY artifact that garbles under concurrent FUSE appends; with them
+   off, `fsck --connectivity-only` is clean after 80 concurrent commits + 8
+   concurrent CAS merges. (A dangling reflog is not DAG corruption, but turning
+   it off removes the noise and the (harmless) fsck warnings entirely.)
+3. **Integration-ref land is CAS-with-retry, never blind** — the blind path
+   loses 7/8 merges silently. §5.1 is not optional; it is the primitive that
+   makes the whole "merge the branch" story not relocate the stall to the ref.
+
+Probe scripts kept at `/tmp/fuse_worktree_probe*.sh` (not committed — throwaway
+validation harness; the results + constraints live here). Re-runnable.
 
 ---
 
 ## 8. Build order (proposed — ratify before code)
 
-0. **FUSE validation V2–V6** (§7) — hard gate. Data first.
+0. **FUSE validation V2–V4** (§7.1) — DONE 2026-07-11, PASS. (V5 rebase-latency
+   / V6 per-conv `_roots` isolation are exercised inside steps 3/2 respectively.)
 1. `lib/conversations/project_worktree.py` — lifecycle primitives, dark, behind
    `TOFU_WORKTREE_ISOLATION=inproc` (no behavior change), with the soft-lease GC.
-2. Per-conv `_roots` binding fix (§3.3) — prerequisite, independently testable.
-3. Worktree-scoped path resolution (§3.1) + `run_command` cwd (§3.2), flag-gated.
-4. `land_worktree` land flow (§5) reusing the acceptance gate; `project_commit`
-   becomes the `inproc`-mode path only.
-5. Dispatch-time file-ownership partitioning (§4) in `select_dispatchable`.
+   Sets `core.logallrefupdates=false` on the shared `.git` (§7.1 constraint 2);
+   GC via `rm -rf` + `worktree prune` (§7.1 constraint 1, git 2.11).
+2. Per-conv `_roots` binding fix (§3.3) — prerequisite, independently testable
+   (this IS V6).
+3. Worktree-scoped path resolution (§3.1) + `run_command` cwd (§3.2), flag-gated
+   (rebase latency here IS V5).
+4. `land_worktree` land flow (§5) + the CAS-with-retry integration-ref primitive
+   (§5.1, `commit-tree` + `update-ref new old`) reusing the acceptance gate;
+   `project_commit` becomes the `inproc`-mode path only.
+5. Dispatch-time write-set partitioning (§4) in `select_dispatchable` — add the
+   epic `write_set` field to `post_task` / `dispatch_epic`.
 6. Retire (§0.1) the byte-identity gate + overlap-hold once (1)–(5) are green
    under the flag and the flag defaults `on` — behind the strangler-fig
    invariant (legacy path stays until every consumer is migrated).
@@ -281,16 +379,21 @@ Worktree isolation (§0–§8) remains THE fix.
 
 ---
 
-## 10. Open questions for owner ratification
+## 10. Open questions
 
-1. **Integration branch identity** — is `tofu/integration` a new branch the
-   human periodically merges to their working branch, or should landing target
-   the human's branch directly? (Affects §2.1 / §5 step 5.)
-2. **Ownership-set source** — derive the epic's file-ownership set from
-   `wait_paths` alone, from the epic's design-doc file list, or a coarse
-   subsystem tag? (§4.)
-3. **FUSE fallback threshold** — if V3 (concurrent lock behavior) is marginal
-   rather than clean, do we accept a bounded commit-retry, or fall back to the
-   lighter isolation? (§7.)
-4. **Worktree disk budget** — N worktrees share objects but each has a working
-   copy; cap on concurrent worktrees per project? (§2.3 GC tuning.)
+1. ~~**Integration branch identity**~~ — **RESOLVED (Q1):** dedicated
+   `tofu/integration`; the human fast-forwards it into their build branch at
+   their own cadence. Autonomous landing never writes the human's trunk. (§2.1, §5)
+2. ~~**Ownership-set source**~~ — **RESOLVED (Q2):** each epic declares its
+   intended write-set at post/dispatch; the dispatcher partitions on it, with a
+   coarse subsystem tag as fallback. `wait_paths` alone is rejected (too narrow). (§4)
+3. ~~**FUSE fallback threshold**~~ — **RESOLVED empirically (§7.1):** V2–V4 PASS
+   on the real mount; no fallback needed. The bounded-retry primitive is CAS on
+   the integration ref (§5.1), not a commit retry, and it is required regardless.
+4. **Worktree disk budget** (STILL OPEN) — N worktrees share objects but each
+   has a working copy; cap on concurrent worktrees per project? Suggest a soft
+   cap = max concurrent dispatched convs, with LRU GC of idle worktrees past
+   their lease. (§2.3 GC tuning.)
+5. **Ref-land contention ceiling** (NEW, low-risk) — measured ≤8 retries at 8-way
+   concurrency with no exhaustion; confirm `MAX_LAND_RETRIES=50` + jittered
+   backoff is ample at the real fleet's peak dispatch width, or make it adaptive.

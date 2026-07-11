@@ -295,6 +295,131 @@ def test_auto_land_lands_disjoint_holds_overlapping(flask_app, monkeypatch):
 
 
 # ════════════════════════════════════════════════════════════════════
+#  Producer trigger — an agent declaring its slice done posts a marker
+#  (closes the entry gap: auto_land_ready has nothing to consume unless
+#  SOMETHING produces markers; a human calling gate_and_post by hand is the
+#  same inert ritual the loop's exit eliminated).
+# ════════════════════════════════════════════════════════════════════
+
+def test_ready_land_tool_posts_marker_on_green(flask_app, monkeypatch):
+    """The producer: an agent invokes project_ready_land declaring its slice
+    (files + test_paths); a green gate posts a marker WITHOUT a human."""
+    import lib.conversations.project_acceptance as pa
+    import lib.conversations.project_ready as pr
+    monkeypatch.setattr(pa, 'run_acceptance_gate', lambda *a, **k: {
+        'ok': True, 'green': True, 'selfConsistent': True, 'orphans': [],
+        'testSummary': '5 passed'})
+    with flask_app.app_context():
+        out = pr.execute_ready_land_tool(
+            {'files': ['lib/x.py'], 'test_paths': ['tests/test_x.py']},
+            current_conv_id='cA', project_path='/prod/1')
+        markers = pr.read_ready_markers('/prod/1')
+    assert isinstance(out, str) and 'ready' in out.lower()
+    assert len(markers) == 1 and markers[0]['conv'] == 'cA'
+    assert markers[0]['files'] == ['lib/x.py']
+
+
+def test_ready_land_tool_reports_gate_failure_no_marker(flask_app, monkeypatch):
+    """A non-ok gate posts NO marker and the tool explains why (orphan/red)."""
+    import lib.conversations.project_acceptance as pa
+    import lib.conversations.project_ready as pr
+    monkeypatch.setattr(pa, 'run_acceptance_gate', lambda *a, **k: {
+        'ok': False, 'green': False, 'selfConsistent': True, 'orphans': [],
+        'testSummary': '1 failed'})
+    with flask_app.app_context():
+        out = pr.execute_ready_land_tool(
+            {'files': ['lib/x.py'], 'test_paths': ['t.py']},
+            current_conv_id='cA', project_path='/prod/2')
+        markers = pr.read_ready_markers('/prod/2')
+    assert markers == []
+    assert 'not' in out.lower() or 'fail' in out.lower()
+
+
+def test_ready_land_tool_requires_files_and_tests(flask_app):
+    """A declare-error (no files or no test_paths) is a clear message, not a
+    gate run — mirrors project_commit's required-files discipline."""
+    import lib.conversations.project_ready as pr
+    with flask_app.app_context():
+        o1 = pr.execute_ready_land_tool({'test_paths': ['t.py']},
+                                        current_conv_id='cA', project_path='/prod/3')
+        o2 = pr.execute_ready_land_tool({'files': ['lib/x.py']},
+                                        current_conv_id='cA', project_path='/prod/3')
+        markers = pr.read_ready_markers('/prod/3')
+    assert 'files' in o1.lower()
+    assert 'test' in o2.lower()
+    assert markers == []
+
+
+def test_ready_land_real_gate_posts_on_green_not_on_orphan(flask_app, tmp_path):
+    """REAL-TREE producer proof (owner's hard bar): with the GENUINE acceptance
+    gate (NO stub) against a real temp git repo, a green slice auto-posts a
+    marker and an orphan slice posts nothing. This is what proves finishing
+    green work produces a marker without a human."""
+    import subprocess
+    import lib.conversations.project_ready as pr
+
+    def _git(d, *a):
+        subprocess.run(['git', *a], cwd=d, check=True, capture_output=True, text=True)
+
+    def _repo(name):
+        d = str(tmp_path / name)
+        os.makedirs(d, exist_ok=True)
+        _git(d, 'init', '-q'); _git(d, 'config', 'user.email', 'x@y')
+        _git(d, 'config', 'user.name', 'x')
+        (tmp_path / name / 'a.py').write_text('def a():\n    return 1\n')
+        (tmp_path / name / 'b.py').write_text('def b():\n    return 2\n')
+        (tmp_path / name / 'test_a.py').write_text('def test_a():\n    assert True\n')
+        _git(d, 'add', '-A'); _git(d, 'commit', '-q', '-m', 'base')
+        return d
+
+    with flask_app.app_context():
+        # GREEN: additive edit, test passes, no orphan → marker posted.
+        d = _repo('green')
+        (tmp_path / 'green' / 'a.py').write_text(
+            'def a():\n    return 1\n\n\ndef a2():\n    return 9\n')
+        out = pr.execute_ready_land_tool(
+            {'files': ['a.py'], 'test_paths': ['test_a.py']},
+            current_conv_id='realA', project_path=d)
+        green_markers = pr.read_ready_markers(d)
+
+        # ORPHAN: remove b() while a committed caller imports it → NO marker.
+        d2 = _repo('orphan')
+        (tmp_path / 'orphan' / 'caller.py').write_text(
+            'from b import b\n\n\ndef use():\n    return b()\n')
+        _git(d2, 'add', 'caller.py'); _git(d2, 'commit', '-q', '-m', 'caller')
+        (tmp_path / 'orphan' / 'b.py').write_text('def other():\n    return 0\n')
+        out2 = pr.execute_ready_land_tool(
+            {'files': ['b.py'], 'test_paths': ['test_a.py']},
+            current_conv_id='realB', project_path=d2)
+        orphan_markers = pr.read_ready_markers(d2)
+
+    assert len(green_markers) == 1 and green_markers[0]['conv'] == 'realA', \
+        'a genuinely-green slice must auto-post a marker (real gate)'
+    assert 'ready' in out.lower()
+    assert orphan_markers == [], 'an orphan slice must post NO marker (real gate)'
+    assert 'split-brain' in out2.lower() or 'orphan' in out2.lower()
+
+
+def test_ready_land_routes_through_execute_board_tool(flask_app, monkeypatch):
+    """The clean router: execute_board_tool dispatches project_ready_land to the
+    producer (proves the wiring in the uncontested project_board.py works — the
+    agent-visible SPEC in conversation.py is the only deferred piece)."""
+    import lib.conversations.project_acceptance as pa
+    import lib.conversations.project_ready as pr
+    from lib.conversations.project_board import execute_board_tool
+    monkeypatch.setattr(pa, 'run_acceptance_gate', lambda *a, **k: {
+        'ok': True, 'green': True, 'selfConsistent': True, 'orphans': []})
+    with flask_app.app_context():
+        out = execute_board_tool(
+            'project_ready_land',
+            {'files': ['lib/y.py'], 'test_paths': ['t.py']},
+            current_conv_id='cB', project_path='/prod/4')
+        markers = pr.read_ready_markers('/prod/4')
+    assert 'Unknown board tool' not in out
+    assert len(markers) == 1 and markers[0]['conv'] == 'cB'
+
+
+# ════════════════════════════════════════════════════════════════════
 #  Criterion (arm the heartbeat) — sweep_dispatch turns the loop itself
 # ════════════════════════════════════════════════════════════════════
 

@@ -952,6 +952,11 @@ def execute_board_tool(fn_name: str, fn_args: dict, *,
             return execute_commit_tool(
                 fn_args, current_conv_id=current_conv_id,
                 project_path=project_path)
+        if fn_name == 'project_ready_land':
+            from lib.conversations.project_ready import execute_ready_land_tool
+            return execute_ready_land_tool(
+                fn_args, current_conv_id=current_conv_id,
+                project_path=project_path)
         return f"Error: Unknown board tool '{fn_name}'"
     except Exception as e:
         logger.warning('[Board] tool %s failed: %s', fn_name, e, exc_info=True)

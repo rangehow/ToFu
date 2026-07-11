@@ -282,5 +282,68 @@ def auto_land_ready(project_path: str) -> dict:
     return out
 
 
+def execute_ready_land_tool(fn_args: dict, *, current_conv_id: str = '',
+                            project_path: str = '') -> str:
+    """Agent-tool entry point (``project_ready_land``) → human-readable string.
+
+    This is the PRODUCER that feeds the autonomous landing loop: an agent calls
+    it when it has finished a slice and declares the slice's ``files`` +
+    ``test_paths``. It runs the acceptance gate and, iff green + self-consistent,
+    posts a ready-to-land MARKER — so the 30s heartbeat can auto-land the slice
+    without a human. Mirrors ``project_commit``'s declare-your-files discipline:
+    the agent knows exactly what it wrote and how to test it; there is no
+    file/test auto-discovery.
+    """
+    try:
+        if not project_path:
+            return ('Error: project_ready_land is only available in project mode '
+                    '(open a project first).')
+        files = fn_args.get('files') or None
+        if files is not None and not isinstance(files, list):
+            files = [str(files)]
+        test_paths = fn_args.get('test_paths') or None
+        if test_paths is not None and not isinstance(test_paths, list):
+            test_paths = [str(test_paths)]
+        if not files:
+            return ('No files declared — project_ready_land requires files=[...] '
+                    '(the paths YOUR slice edited). It does not auto-discover '
+                    'your work.')
+        if not test_paths:
+            return ('No test_paths declared — project_ready_land requires '
+                    'test_paths=[...] (the tests that must pass at HEAD to prove '
+                    'the slice green). The acceptance gate runs exactly these.')
+        at_ref = (fn_args.get('at_ref') or 'HEAD').strip() or 'HEAD'
+        res = gate_and_post(project_path, current_conv_id, files=files,
+                            test_paths=test_paths, at_ref=at_ref)
+        gate = res.get('gate') or {}
+        if res.get('posted'):
+            return ('Slice is ready to land — posted a ready marker '
+                    f'({res.get("markerId", "")}). The acceptance gate passed '
+                    'green + self-consistent at %s. The autonomous heartbeat '
+                    'will land it (if its file-set is disjoint from every other '
+                    'pending marker) or hold it for human authorization (if it '
+                    'overlaps a sibling slice). No further action needed.'
+                    % at_ref)
+        why = []
+        if not gate.get('green', True):
+            why.append('tests did not pass')
+        if not gate.get('selfConsistent', True):
+            orphans = gate.get('orphans') or []
+            syms = ', '.join(o.get('symbol', '?') for o in orphans[:5])
+            why.append(f'HEAD would be split-brained (orphaned callers: {syms})')
+        if not why:
+            why.append(gate.get('error') or 'gate not ok')
+        summary = gate.get('testSummary') or ''
+        return ('Slice NOT posted — the acceptance gate did not pass: '
+                + '; '.join(why)
+                + (f'\nTest tail:\n{summary}' if summary else '')
+                + '\nFix the failure and re-run project_ready_land.')
+    except Exception as e:
+        logger.warning('[Ready] execute_ready_land_tool failed: %s', e,
+                       exc_info=True)
+        return f'Error executing project_ready_land: {e}'
+
+
 __all__ = ['gate_and_post', 'post_ready_marker', 'read_ready_markers',
-           'landable_markers', 'held_markers', 'auto_land_ready']
+           'landable_markers', 'held_markers', 'auto_land_ready',
+           'execute_ready_land_tool']

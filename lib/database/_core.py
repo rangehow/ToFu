@@ -296,6 +296,37 @@ def _pg_session_setup_plan(via_pooler):
     options = (f'-c statement_timeout={_STATEMENT_TIMEOUT_MS}ms '
                f'-c idle_in_transaction_session_timeout={_IDLE_IN_TRANSACTION_S}s')
     return {'emit_set_session': False, 'options': options}
+
+
+def _pg_admin_dsn():
+    """DSN for the DIRECT (pooler-bypassing) admin lane.
+
+    Multi-statement DDL migrations and ``VACUUM (FULL)`` / ``REINDEX`` cannot
+    run through a transaction pooler (VACUUM FULL is illegal inside a pooled
+    transaction block; a DDL ``SET SESSION`` + restore straddles a connection
+    recycle), so those paths must reach a genuinely-direct PG endpoint. Set
+    ``TOFU_PG_DIRECT_DSN`` to the real backend when the runtime DSN points at a
+    pooler (PgBouncer). Defaults to the normal ``PG_DSN`` when unset — so a
+    non-pooler deployment (the single-box default) is unaffected.
+    """
+    return os.environ.get('TOFU_PG_DIRECT_DSN', '').strip() or PG_DSN
+
+
+def _pg_connect_target(admin=False):
+    """Resolve (dsn, session_plan) for a new PG connection.
+
+    Normal connections follow the pooler decision (``_pg_via_pooler`` →
+    startup-options vs SET SESSION). An ``admin`` connection ALWAYS uses a
+    real session (SET SESSION, never the pooler startup-options form) and,
+    when pooling is on, connects to the direct DSN so it bypasses the pooler.
+
+    With pooling OFF this returns exactly the legacy target for BOTH modes
+    (normal DSN + SET SESSION), so single-box behaviour is byte-identical and
+    ``admin`` is a no-op.
+    """
+    if admin:
+        return _pg_admin_dsn(), {'emit_set_session': True, 'options': None}
+    return PG_DSN, _pg_session_setup_plan(_pg_via_pooler())
 _TCP_KEEPALIVES_IDLE_S = 30
 _TCP_KEEPALIVES_INTERVAL_S = 10
 _TCP_KEEPALIVES_COUNT = 3
@@ -858,11 +889,15 @@ def _new_sqlite_connection():
 #  PostgreSQL Connection Factory
 # ═══════════════════════════════════════════════════════════════════════
 
-def _new_pg_connection():
+def _new_pg_connection(admin=False):
     """Create a new psycopg2 connection with full resilience parameters.
 
     Guarded by a bounded semaphore to prevent overwhelming PG with too
     many simultaneous connections (the root cause of 'too many clients').
+
+    ``admin=True`` requests the direct (pooler-bypassing) lane with a real
+    session — for multi-statement DDL and VACUUM/REINDEX, which cannot run
+    through a transaction pooler. See ``_pg_connect_target``.
     """
     global _conn_count
     if PG_PORT == 0:
@@ -928,7 +963,7 @@ def _new_pg_connection():
     json_type = psycopg2.extensions.new_type((JSON_OID,), 'JSON_AS_STR', _jsonb_as_string)
     jsonb_type = psycopg2.extensions.new_type((JSONB_OID,), 'JSONB_AS_STR', _jsonb_as_string)
 
-    _session_plan = _pg_session_setup_plan(_pg_via_pooler())
+    _dsn, _session_plan = _pg_connect_target(admin)
     _connect_kwargs = dict(
         connect_timeout=_CONNECT_TIMEOUT_S,
         keepalives=1,
@@ -942,7 +977,7 @@ def _new_pg_connection():
         _connect_kwargs['options'] = _session_plan['options']
     try:
         try:
-            conn = psycopg2.connect(PG_DSN, **_connect_kwargs)
+            conn = psycopg2.connect(_dsn, **_connect_kwargs)
         except psycopg2.OperationalError as e:
             err_txt = str(e)
             # Expected shutdown race: the postmaster is stopping while a
@@ -967,7 +1002,7 @@ def _new_pg_connection():
                 raise
             # One-shot retry after re-bootstrap
             logger.info('[DB] Retrying psycopg2.connect after PG re-bootstrap')
-            conn = psycopg2.connect(PG_DSN, **_connect_kwargs)
+            conn = psycopg2.connect(_dsn, **_connect_kwargs)
     except Exception:
         _conn_semaphore.release()
         raise
@@ -1057,6 +1092,20 @@ def _new_connection():
     """Create a new connection using the active backend."""
     if _BACKEND == 'pg':
         return _new_pg_connection()
+    return _new_sqlite_connection()
+
+
+def _new_pg_admin_connection():
+    """PG connection for the direct (pooler-bypassing) admin lane — DDL /
+    VACUUM / REINDEX. See ``_pg_connect_target``. PG-only."""
+    return _new_pg_connection(admin=True)
+
+
+def _new_admin_connection():
+    """Backend-aware admin connection. On PG this bypasses the pooler with a
+    real session; on SQLite it is an ordinary connection (no pooler concept)."""
+    if _BACKEND == 'pg':
+        return _new_pg_admin_connection()
     return _new_sqlite_connection()
 
 
@@ -1675,7 +1724,9 @@ def heal_toast_corruption():
 
     conn = None
     try:
-        conn = _new_connection()
+        # Admin lane: VACUUM (FULL) / REINDEX below cannot run through a
+        # transaction pooler, so bypass it (direct DSN + real session).
+        conn = _new_admin_connection()
         cur = conn.cursor()
         # Step 1 — fast health probe. If this succeeds, we're done.
         try:
@@ -1947,7 +1998,9 @@ def init_db():
     _register_optional_domains()
     if _BACKEND == 'pg':
         from lib.database._schema_pg import init_db as _pg_schema_init
-        _pg_schema_init(_new_pg_connection, _STATEMENT_TIMEOUT_MS)
+        # Admin lane: multi-statement DDL + SET SESSION/restore below cannot run
+        # through a transaction pooler, so it connects direct (bypasses it).
+        _pg_schema_init(_new_pg_admin_connection, _STATEMENT_TIMEOUT_MS)
     else:
         from lib.database._schema_sqlite import init_db as _sqlite_schema_init
         _sqlite_schema_init(_new_sqlite_connection)

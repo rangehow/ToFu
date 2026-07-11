@@ -87,8 +87,11 @@ def test_plan_on_options_is_valid_libpq_form(core):
 
 def test_connect_path_wires_the_plan(core):
     src = inspect.getsource(core._new_pg_connection)
-    assert '_pg_session_setup_plan(_pg_via_pooler())' in src, \
-        'the connect path must compute the plan from the env flag'
+    # The connect path resolves (dsn, plan) via _pg_connect_target, which for a
+    # non-admin connection computes the plan from _pg_via_pooler() (asserted
+    # directly in test_target_normal_pooler_on_uses_startup_options).
+    assert '_pg_connect_target(admin)' in src, \
+        'the connect path must resolve dsn+plan from the env-driven target helper'
     assert "_session_plan['emit_set_session']" in src, \
         'the SET SESSION block must be gated on the plan'
     assert "_session_plan['options']" in src, \

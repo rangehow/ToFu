@@ -220,8 +220,8 @@ client-side param binding), **zero advisory locks** anywhere.
 | 1 | `_core.py` `_new_pg_connection` `conn.autocommit = False` | psycopg2 txn mode | **SAFE** — app COMMIT/ROLLBACK per txn returns the backend to the pool `idle`; no residue | no change |
 | 2 | `_core.py` `_new_pg_connection` connect-time `SET SESSION statement_timeout` + `idle_in_transaction_session_timeout` | 2 GUCs, **runtime hot path** | **HAZARDOUS** — under txn pooling a `SET SESSION` no-ops for the setter (a later txn may land on a different backend) AND leaks the GUC to the next unrelated pool borrower | **FIXED** (this increment) |
 | 3 | `_core.py` TOAST-heal `SET LOCAL statement_timeout = 5000` | 1 GUC, already txn-scoped | **SAFE** — `SET LOCAL` resets at COMMIT; this is the canonical pooler-safe pattern (the model the fix follows) | no change |
-| 4 | `_schema_pg.py` DDL migration `SET SESSION statement_timeout=600s` + restore | admin/DDL path | **HAZARDOUS but out-of-band** — multi-statement DDL with SET+restore is fundamentally incompatible with transaction pooling; the correct fix is to route admin/DDL over a **direct (non-pooled) DSN**, i.e. DSN-routing wiring, not a session-state leak on the runtime path | **deferred → DSN-split** |
-| 5 | `_core.py` self-heal VACUUM FULL / REINDEX `raw.autocommit = True` flip | admin path | same class as #4 — VACUUM FULL requires a real session in autocommit; needs a direct connection, not a pooled one | **deferred → DSN-split** |
+| 4 | `_schema_pg.py` DDL migration `SET SESSION statement_timeout=600s` + restore | admin/DDL path | **HAZARDOUS but out-of-band** — multi-statement DDL with SET+restore is fundamentally incompatible with transaction pooling; the correct fix is to route admin/DDL over a **direct (non-pooled) DSN** | **RESOLVED-IN-CODE** (direct-DSN admin lane) |
+| 5 | `_core.py` self-heal VACUUM FULL / REINDEX `raw.autocommit = True` flip | admin path | same class as #4 — VACUUM FULL requires a real session in autocommit; needs a direct connection, not a pooled one | **RESOLVED-IN-CODE** (direct-DSN admin lane) |
 
 **Fix for #2 (the only runtime-path hazard).** Two pure, unit-testable helpers
 next to the timeout constants in `_core.py`:
@@ -257,11 +257,36 @@ import at collection in this env). Regression-checked against
 `test_db_safe_dual_mode` / `test_runtime_state_store` / `test_pg_require_wait_retry`
 (all green).
 
+### Admin lane for #4/#5 (RESOLVED-IN-CODE 2026-07-11)
+
+The DDL and VACUUM/REINDEX admin paths would *actively break* through a
+transaction pooler (VACUUM FULL is illegal inside a pooled transaction block;
+the DDL `SET SESSION`+restore straddles a connection recycle) — so turning on
+`TOFU_PG_VIA_POOLER` without this fix would leave a latent trap. Closed with a
+direct (pooler-bypassing) admin lane:
+
+- `_pg_admin_dsn()` → `TOFU_PG_DIRECT_DSN` (the real backend when the runtime
+  DSN points at PgBouncer), **defaulting to the normal `PG_DSN`** when unset.
+- `_pg_connect_target(admin)` → the pure `(dsn, session_plan)` decision: a
+  normal connection follows the pooler decision; an `admin` connection ALWAYS
+  uses a real session (SET SESSION, never startup-options) and, when pooling is
+  on, connects to the direct DSN. **With pooling OFF, `admin` is a no-op —
+  `_pg_connect_target(admin=True) == _pg_connect_target(admin=False)` — so
+  single-box is byte-identical.**
+- `_new_pg_connection(admin=False)` routes through the target; the two admin
+  sites — `init_db` schema DDL (`_new_pg_admin_connection`) and
+  `heal_toast_corruption` VACUUM/REINDEX (`_new_admin_connection`) — take the
+  admin lane. The `_schema_pg.py` DDL `SET SESSION 600s`+restore is now correct
+  by construction: it runs on a real (non-pooled) session.
+- Tests: `tests/test_pg_admin_direct_lane.py` (12) — admin DSN default/override,
+  the routing matrix (normal/admin × pooler on/off), flag-off byte-identity,
+  the load-bearing pooler-on-admin-bypasses case, wiring guards, and an NC.
+
 **Remaining D2 = infra only, still §10-gated:** provision the managed PgBouncer
-HA tier, point the runtime DSN at it, set `TOFU_PG_VIA_POOLER=1`, and (per #4/#5)
-add the direct-DSN admin lane for DDL/VACUUM. None of that is dev-testable and
-none is done here — the code is now pooler-*compatible*, which is the part that
-was NOT infra-gated.
+HA tier, point the runtime DSN at it, set `TOFU_PG_VIA_POOLER=1`, and set
+`TOFU_PG_DIRECT_DSN` to the real backend. None of that is dev-testable and none
+is done here — the D2 *code* portion is now complete (pooler-compatible on both
+the runtime and admin paths); only the infra remains gated.
 
 ## 6. Scope boundary
 

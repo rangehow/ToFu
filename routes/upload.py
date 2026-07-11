@@ -29,7 +29,7 @@ def _detect_image_format(head: bytes) -> str | None:
 
 from lib.env_compat import getenv_compat
 from lib.log import get_logger
-from lib.api_response import api_bad_request, api_internal_error, api_not_found
+from lib.api_response import api_bad_request, api_error, api_internal_error, api_not_found
 from lib.request_parser import parse_body
 
 logger = get_logger(__name__)
@@ -367,8 +367,8 @@ def upload_image():
         }
         if media_type not in ext_map:
             logger.warning('[upload_image] Rejected media_type=%s (SVG/other not allowed)', media_type)
-            return jsonify({'error': 'Unsupported image type — SVG uploads are disabled for security. '
-                                     'Allowed: png, jpeg, gif, webp, bmp.'}), 400
+            return api_error('Unsupported image type — SVG uploads are disabled for security. '
+                             'Allowed: png, jpeg, gif, webp, bmp.', status=400)
         ext = ext_map.get(media_type, '.png')
         try:
             img_bytes = base64.b64decode(b64_data)
@@ -420,8 +420,8 @@ def upload_image():
     # and enable stored XSS when served inline. See §10.4.
     if ext not in ('.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'):
         logger.warning('[upload_image] Rejected extension=%s (SVG/other not allowed)', ext)
-        return jsonify({'error': 'Unsupported image type — SVG uploads are disabled for security. '
-                                 'Allowed: .png, .jpg, .jpeg, .gif, .webp, .bmp.'}), 400
+        return api_error('Unsupported image type — SVG uploads are disabled for security. '
+                         'Allowed: .png, .jpg, .jpeg, .gif, .webp, .bmp.', status=400)
     # ── Magic-bytes sanity check ──
     head = file.stream.read(32)
     file.stream.seek(0)

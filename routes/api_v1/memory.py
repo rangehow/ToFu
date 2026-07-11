@@ -244,7 +244,7 @@ def install_skill_package_v1():
         overwrite = bool(body.get('overwrite'))
         path = body.get('path') or ''
         if not path or not os.path.exists(path):
-            return jsonify({'error': 'Provide a file upload or {"path": ...}'}), 400
+            return api_error('Provide a file upload or {"path": ...}', status=400)
         source = path
         fname = os.path.basename(path)
 

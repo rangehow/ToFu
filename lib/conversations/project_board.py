@@ -56,19 +56,37 @@ BLOCK_COOLDOWN_BASE_MS = 60 * 60 * 1000       # 1 h after the first block
 BLOCK_COOLDOWN_MAX_MS = 24 * 60 * 60 * 1000   # capped at 1 day
 _BLOCK_COOLDOWN_FACTOR = 4                     # x4 per block -> cap by block #4
 
+# A [sibling] block auto-resolves the instant a sibling commits — it is
+# TRANSIENT by definition, so it must NOT ride the escalating human curve
+# (ordinary collaboration churn would otherwise ratchet a perfectly-landable
+# epic toward the 24 h cap). Instead a sibling block tracks the LEASE clock: a
+# flat window equal to one lease TTL, no escalation. When the sibling releases
+# the path sooner, release_lease wakes the waiter immediately (event-driven,
+# see _wake_wait_path_waiters); the flat window is only the crash-safety
+# fallback for a holder that dies without releasing (reclaimed within one TTL).
+SIBLING_BLOCK_COOLDOWN_MS = DEFAULT_LEASE_TTL_MS  # 30 min, flat
 
-def _block_cooldown_ms(block_count: int) -> int:
-    """Return the cooldown window (ms) for a row that has now been blocked
-    ``block_count`` times. 0 blocks -> 0 (never blocked). Otherwise
-    ``BASE * FACTOR**(count-1)`` clamped to ``BLOCK_COOLDOWN_MAX_MS`` — so the
-    1st block sleeps BASE (1 h), and with FACTOR=4 the cap (1 day) is reached by
-    the 4th block: 1 h -> 4 h -> 16 h -> 24 h(cap). That is the owner's "few
-    retries then a long sleep" — a perpetually human-gated epic costs ~3 more
-    billed turns before settling to one retry/day, instead of ~48/day at the old
-    30-min lease cadence. Pure + side-effect-free."""
+
+def _block_cooldown_ms(block_count: int, block_class: str = 'human') -> int:
+    """Return the cooldown window (ms) for a row blocked ``block_count`` times.
+
+    CLASS-AWARE (owner directive 2026-07-11): a transient ``'sibling'`` block
+    must never escalate — it returns the FLAT ``SIBLING_BLOCK_COOLDOWN_MS`` (one
+    lease clock) regardless of count, because a collaboration event auto-
+    resolves on the sibling's commit and is woken event-driven on release. The
+    escalating exponential curve is reserved for ``'human'`` (and any untagged
+    reason, conservatively treated as human — a genuine unknown gate should
+    escalate, not be assumed transient).
+
+    Human curve: 0 blocks -> 0. Otherwise ``BASE * FACTOR**(count-1)`` clamped
+    to ``BLOCK_COOLDOWN_MAX_MS`` — 1st block sleeps BASE (1 h), and with
+    FACTOR=4 the cap (1 day) is reached by the 4th block: 1 h -> 4 h -> 16 h ->
+    24 h(cap). Pure + side-effect-free."""
     n = int(block_count or 0)
     if n <= 0:
         return 0
+    if block_class == 'sibling':
+        return SIBLING_BLOCK_COOLDOWN_MS
     # Clamp the exponent so FACTOR**(n-1) can't build a huge int before min()
     # (n is small in practice, but stay safe against a runaway block_count).
     exp = min(n - 1, 20)
@@ -456,7 +474,12 @@ def block_task(project_path: str, conv_id: str, task_id: str, reason: str) -> di
         title = row['title'] or ''
         new_count = int(row['block_count'] or 0) + 1
         now = _now_ms()
-        blocked_until = now + _block_cooldown_ms(new_count)
+        # CLASS-AWARE backoff: a [sibling] block is transient (auto-resolves on
+        # the sibling's commit + woken event-driven on release) so it uses the
+        # flat lease-clock window; any other reason (human-gated / untagged)
+        # rides the escalating human curve.
+        block_class = 'sibling' if _SIBLING_TAG in reason.lower() else 'human'
+        blocked_until = now + _block_cooldown_ms(new_count, block_class)
         # A '[sibling] … path=<p>' reason ALSO auto-populates the wait-on-path
         # hold (the precise mechanism) on the SAME row — the cooldown is the
         # fallback for the interim when no live lease exists yet. One tool for
@@ -481,7 +504,7 @@ def block_task(project_path: str, conv_id: str, task_id: str, reason: str) -> di
         logger.error('[Board] block failed proj=%.40r task=%s: %s',
                      project_path, task_id, e, exc_info=True)
         return {'ok': False, 'error': str(e)}
-    cooldown_min = _block_cooldown_ms(new_count) // 60_000
+    cooldown_min = _block_cooldown_ms(new_count, block_class) // 60_000
     _emit('blocked', project_path, conv_id,
           f'Blocked: {title}' + (f' — {reason}' if reason else '')
           + f' (retry in ~{cooldown_min}m, block #{new_count})',
@@ -637,11 +660,45 @@ def claim_lease(project_path: str, conv_id: str, resource: str, *,
     return {'ok': True, 'id': task_id, 'lease_expires_at': lease}
 
 
+def _wake_wait_path_waiters(db, project_path: str, resource: str, now_ms: int) -> int:
+    """Event-driven wait-path recovery: when a path lease is RELEASED, clear the
+    cooldown of every EPIC that was waiting on that exact path so it becomes
+    dispatchable on the very next sweep — instead of sleeping out a separate
+    cooldown after the real blocker (the sibling's edit) is already gone.
+
+    An epic waits on ``resource`` iff its ``wait_paths`` JSON list contains it.
+    Only epics (never ``kind='lease'`` rows — their ``wait_paths`` is always
+    ``'[]'``) with a live future cooldown are touched; ``blocked_until`` is
+    reset to 0 (``block_count``/``block_reason`` are left intact as history).
+    Best-effort, shares the caller's transaction; returns rows woken.
+    """
+    try:
+        cur = db.execute(
+            "UPDATE project_tasks SET blocked_until=0, updated_at=? "
+            "WHERE project_path=? AND kind!='lease' AND blocked_until>? "
+            "AND wait_paths LIKE ?",
+            (now_ms, project_path, now_ms, f'%"{resource}"%'))
+    except Exception as e:
+        logger.warning('[Board] wake-on-release failed proj=%.40r res=%.60r: %s',
+                       project_path, resource, e)
+        return 0
+    woken = cur.rowcount if cur is not None and cur.rowcount is not None else 0
+    if woken:
+        logger.info('[Board] woke %d wait-path waiter(s) on release of %.60r',
+                    woken, resource)
+    return woken
+
+
 def release_lease(project_path: str, conv_id: str, resource: str) -> dict:
     """Release a resource/path lease held by THIS conversation (delete the
     ``kind='lease'`` row). A no-op advisory error if no matching lease exists.
     Only the holder may release (a different conversation's live lease is left
-    untouched — releasing it would be a silent yank). Returns ``{'ok','error'?}``.
+    untouched — releasing it would be a silent yank).
+
+    On release this also WAKES any epic waiting on the released path
+    (``_wake_wait_path_waiters``): the sibling's edit is done, so the waiter's
+    cooldown is cleared and it is dispatchable immediately rather than one
+    cooldown later. Returns ``{'ok','error'?}``.
     """
     resource = (resource or '').strip()[:_TITLE_MAX_CHARS]
     if not project_path or not resource:
@@ -661,6 +718,8 @@ def release_lease(project_path: str, conv_id: str, resource: str) -> dict:
             return {'ok': False, 'error': 'held_by_other', 'owner': owner}
         db.execute('DELETE FROM project_tasks WHERE id=? AND project_path=?',
                    (row['id'], project_path))
+        now = _now_ms()
+        _wake_wait_path_waiters(db, project_path, resource, now)
         db.commit()
         task_id = row['id']
     except Exception as e:

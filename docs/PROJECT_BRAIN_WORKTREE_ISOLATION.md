@@ -1,11 +1,15 @@
 # Project Brain — Per-Conversation Worktree Isolation
 
-> **Status:** DESIGN — owner-directed 2026-07-11. Q1/Q2 RATIFIED and FUSE
-> validation V2–V4 RUN FOR REAL (§7.1 — the git worktree model SURVIVES on the
-> beegfs-fuse mount; no fallback to lighter isolation needed). No refactor code
-> until the model is ratified in full on paper. Tier-2 bleeding-control
-> (class-aware backoff + event-driven wait_paths) landed already (`a73f824`) and
-> is NOT a substitute for this.
+> **Status:** DESIGN — owner-directed 2026-07-11. Q1/Q2 RATIFIED; FUSE
+> validation V2–V4 + the land primitive RUN FOR REAL and CONTENT-verified (§7.1
+> — the git worktree model SURVIVES on the beegfs-fuse mount; no fallback to
+> lighter isolation needed). The §5.1 land primitive was CORRECTED after the
+> owner caught that a `commit-tree <conv-tree>` "merge" silently discarded 7 of
+> 8 landers' content (last-tree-wins) while all 8 stayed reachable — the land
+> now does a REAL 3-way merge and the gate is CONTENT-verified, not reachability.
+> No refactor code until the model is ratified in full on paper. Tier-2
+> bleeding-control (class-aware backoff + event-driven wait_paths) landed
+> already (`a73f824`) and is NOT a substitute for this.
 >
 > **Scope:** replaces the entire commit-time contention apparatus
 > (`project_commit` byte-identity gate, `project_ready` overlap-hold,
@@ -101,7 +105,7 @@ needed. The rest of this doc is the concrete plan.
 |---|---|---|
 | `ensure_worktree(project, conv_id)` | first project tool call of a task, or dispatch | create off integration HEAD if absent; reuse if present; return abs path. Idempotent. |
 | `sync_worktree(conv_id)` | task start / before land | rebase conv branch onto latest integration HEAD (fast-forward when possible; on conflict, surface as a normal conflict for the conv to resolve — NOT a silent park) |
-| `land_worktree(conv_id, files, msg)` | replaces `project_commit.do_commit` | commit conv branch, run acceptance gate at the *prospective* merge HEAD, then merge/ff into integration. Conflict → report, do not force. |
+| `land_worktree(conv_id, files, msg)` | replaces `project_commit.do_commit` | commit conv branch, run acceptance gate at the *prospective* merge HEAD, then a REAL 3-way merge into integration under CAS (§5.1). Success = merge-result tree contains every landed change (content-verified). Conflict → report, do not force. |
 | `release_worktree(conv_id)` | task/conversation end + soft-lease TTL | GC: prune the worktree, delete the conv branch IF fully merged; keep if it has unmerged commits (never lose work). |
 
 ### 2.3 GC — reuse the board's proven soft-lease model, do NOT invent a reaper
@@ -205,7 +209,9 @@ land_worktree(conv_id, files, test_paths, message):
   2. run_acceptance_gate(conv_worktree, files, test_paths, at_ref=<merge-base>)
        └─ REUSED unchanged: green AND selfConsistent (orphan scan)
   3. not ok? → return why (tests red / orphaned callers). Do NOT merge.
-  4. ok? → CAS-serialized merge into tofu/integration (see §5.1)
+  4. ok? → CAS-serialized REAL 3-way merge into tofu/integration (§5.1);
+           success = the merge-result tree contains every landed change
+           (CONTENT-verified), NOT merely reachable/ancestor
   5. STOP. The human fast-forwards tofu/integration → their build branch at
      their own cadence (Q1). Autonomous landing NEVER writes the human's trunk.
 ```
@@ -227,41 +233,69 @@ single ref update. Without serialization, "merge the branch" just relocates the
 stall to `refs/heads/tofu/integration`.
 
 **This is measured, not assumed** (§7.1): a BLIND concurrent `update-ref new`
-loses 7 of 8 updates (last-writer-wins → silent lost merges). The fix is git's
-native compare-and-swap plus a bounded retry, NOT a home-grown lock:
+loses 7 of 8 updates (last-writer-wins → silent lost merges). The fix is a REAL
+3-way merge whose *result tree* is committed under git's native compare-and-swap
+plus a bounded retry, NOT a home-grown lock.
+
+> ⚠️ **CORRECTED PRIMITIVE (owner catch 2026-07-11).** The first draft used
+> `commit-tree <conv-tree> -p OLD -p conv_branch`. That does NOT merge: it
+> fabricates a commit whose TREE is the conv's OWN tree while merely *pointing*
+> at `OLD` as a parent. Ancestry links up (so an `--is-ancestor` / reachability
+> check passes for ALL landers — a FALSE green), but each lander's tree
+> OVERWRITES the previous lander's — measured: 8 distinct-file landers → final
+> tree held only `base.txt` + the last winner's file. **Seven of eight landers'
+> content silently discarded, reported as success.** That is data loss, worse
+> than the stall. The land MUST compute a genuine merged tree.
 
 ```
-CAS-merge(conv_id):                        # the land critical section
+CAS-merge(conv_branch):                    # the land critical section
   for attempt in 1..MAX_LAND_RETRIES (50):
     OLD = rev-parse refs/heads/tofu/integration
-    if is-ancestor(OLD, conv_branch):      # fast-forwardable
-        NEW = conv_branch tip
-    else:                                  # true divergence → merge commit,
-        NEW = commit-tree <conv tree> -p OLD -p conv_branch   # no worktree touch
-        # (a real tree-level conflict here → bail to sync_worktree(step 1),
-        #  resolve in the conv's own worktree, never on integration)
+    if is-ancestor(OLD, conv_branch):      # trivially fast-forwardable
+        NEW = conv_branch tip              # tree already includes OLD's content
+    else:                                  # true divergence → REAL 3-way merge
+        lw = git worktree add --detach <scratch> OLD    # throwaway land-worktree
+        if NOT git -C lw merge --no-edit conv_branch:   # genuine content merge
+            git -C lw merge --abort; rm -rf lw; prune
+            return CONFLICT → sync_worktree(step 1): resolve in the CONV's
+                              worktree, never on integration (no clobber)
+        NEW = git -C lw rev-parse HEAD     # the MERGE-RESULT tree (all content)
+        rm -rf lw; git worktree prune
     if update-ref refs/heads/tofu/integration NEW OLD:   # CAS: only if unchanged
         return landed
-    jittered-backoff()                     # someone else won; re-read OLD, retry
+    # lost the CAS race: integration moved under us → re-read OLD and re-merge
+    jittered-backoff()
   return land_exhausted → post a board block, do not force
 ```
 
+- **The merge is a REAL `git merge`** in a throwaway detached land-worktree
+  checked out at `OLD`, so `NEW` is a true 3-way merge tree containing EVERY
+  landed change, and a genuine same-file conflict falls out of `git merge`
+  (→ resolved in the conv's own worktree, never silently "last-tree-wins").
+  `git merge` (not `merge-tree --write-tree`, absent on git 2.11) is the
+  2.11-compatible way to get a real merged tree. The scratch worktree is
+  detached + immediately pruned, so it never collides with a live conv edit.
 - **CAS is the serialization** — `git update-ref <ref> <new> <old>` fails
-  atomically if the ref moved since we read `OLD`, so exactly one writer wins
-  per round and the losers RE-READ and retry. Measured: 8 concurrent CAS merges
-  → 8/8 landed, 0 exhausted, ≤8 retries, all branches reachable, fsck clean
-  (§7.1). This is a much lighter primitive than a board soft-lease on the ref
-  and needs no external lock; the board lease is reserved for the *worktree*
-  (GC), not the ref.
-- **Merge WITHOUT a checkout** — land uses `commit-tree` (git 2.11-compatible;
-  `merge-tree --write-tree` does NOT exist on 2.11, §7.1), so landing never
-  touches any worktree's working copy and cannot collide with a live edit.
-- **Land is short and CPU-bound** (ref read + object write + CAS) so the retry
-  window is tiny; the acceptance gate (the slow part) runs BEFORE the critical
-  section, on the conv's own worktree, not under contention.
-- **Exhaustion is a real (rare) outcome** — 50 failed CAS rounds means pathological
-  contention; it posts a board block (class `[sibling]`, retried by Tier-2
-  event-driven wake), never a forced blind write.
+  atomically if the ref moved since we read `OLD`; exactly one writer wins per
+  round and the losers RE-READ `OLD`, RE-MERGE (against the new tip), and retry.
+  This is a much lighter primitive than a board soft-lease on the ref and needs
+  no external lock; the board lease is reserved for the *worktree* (GC), not the ref.
+- **Re-merge on every retry, not re-CAS the stale tree** — because a lost CAS
+  means integration advanced, the losing lander MUST recompute its merge on the
+  new `OLD` (the loop re-enters at the top), or it would reintroduce the
+  last-tree-wins clobber at the ref layer. This is the subtle invariant the
+  broken draft violated.
+- **CONTENT-verified, measured (§7.1):** 8 concurrent distinct-file landers →
+  8/8 landed, `git ls-tree` shows ALL 8 files + base present (no loss); a
+  same-file conflict → exactly one lands, the other REPORTS conflict (not
+  clobbered), integration holds one intact winner; ≤8 retries, 0 exhausted,
+  fsck clean.
+- **The acceptance gate (the slow part) runs BEFORE the critical section**, on
+  the conv's own worktree. The merge itself is bounded; the retry window is the
+  merge time, still short.
+- **Exhaustion is a real (rare) outcome** — 50 failed CAS rounds means
+  pathological contention; it posts a board block (class `[sibling]`, retried by
+  Tier-2 event-driven wake), never a forced blind write.
 
 ---
 
@@ -314,7 +348,8 @@ integration-ref land under two strategies. All `.git` on the FUSE mount.
 | **V3** lock behavior under concurrency | **PASS** — 0 stale `.lock`, no `index.lock` deadlock |
 | **V4** GC | **PASS with constraint** — `worktree remove` is UNSUPPORTED on git 2.11; GC = `rm -rf <wt>` + `git worktree prune` (verified clean) |
 | **REF blind** `update-ref new` (no CAS) | **FAILS by design** — only 1 of 8 survives (silent lost merges). NEVER use. |
-| **REF CAS** `update-ref new old` + retry (§5.1) | **PASS** — 8/8 landed, 0 exhausted, ≤8 retries, all reachable, fsck clean |
+| **REF CAS** `commit-tree`-fake-merge + `update-ref new old` | **FALSE GREEN — data loss** — 8/8 "landed" + all reachable, but final tree held only base + last winner's file; 7/8 landers' content silently discarded (owner catch) |
+| **REF CAS** REAL 3-way merge (`git merge` in scratch land-worktree) + `update-ref new old` + retry (§5.1) | **PASS, CONTENT-verified** — 8 distinct-file landers → 8/8 landed, `ls-tree` shows ALL 8 files + base (no loss); same-file conflict → one lands + one REPORTS conflict (not clobbered); ≤8 retries, 0 exhausted, fsck clean |
 | "corruption" seen on first pass | **reflog garbling ONLY**, not DAG/object/ref corruption — eliminated by `core.logallrefupdates=false` on the server repo |
 
 **Three hard environment constraints this surfaced (bind the build):**
@@ -329,6 +364,13 @@ integration-ref land under two strategies. All `.git` on the FUSE mount.
 3. **Integration-ref land is CAS-with-retry, never blind** — the blind path
    loses 7/8 merges silently. §5.1 is not optional; it is the primitive that
    makes the whole "merge the branch" story not relocate the stall to the ref.
+4. **The land must do a REAL 3-way merge and the gate must be CONTENT-verified,
+   never reachability.** `commit-tree <conv-tree>` links ancestry without
+   merging trees → last-tree-wins data loss that a reachability/ancestor check
+   reports as SUCCESS. The land runs `git merge` in a scratch detached
+   land-worktree and the probe asserts every lander's file is in the final
+   `ls-tree`; a lost CAS forces a RE-MERGE against the new tip, not a re-CAS of
+   the stale tree.
 
 Probe scripts kept at `/tmp/fuse_worktree_probe*.sh` (not committed — throwaway
 validation harness; the results + constraints live here). Re-runnable.
@@ -395,5 +437,8 @@ Worktree isolation (§0–§8) remains THE fix.
    cap = max concurrent dispatched convs, with LRU GC of idle worktrees past
    their lease. (§2.3 GC tuning.)
 5. **Ref-land contention ceiling** (NEW, low-risk) — measured ≤8 retries at 8-way
-   concurrency with no exhaustion; confirm `MAX_LAND_RETRIES=50` + jittered
-   backoff is ample at the real fleet's peak dispatch width, or make it adaptive.
+   concurrency with no exhaustion, CONTENT-verified (all landers preserved, real
+   conflicts reported); confirm `MAX_LAND_RETRIES=50` + jittered backoff is ample
+   at the real fleet's peak dispatch width, or make it adaptive. Note each retry
+   now re-runs a `git merge` (not just a ref poke), so the per-retry cost is the
+   merge time — cheap for small diffs, worth watching for large ones.

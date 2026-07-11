@@ -820,7 +820,7 @@ PROJECT_TASKS = define_table(
     # releases automatically when that lease expires (at read time, no reaper).
     # NOT a new lock namespace — it reads the SAME kind='lease' rows. Reset to
     # '[]' on complete/reopen. See docs/PROJECT_BRAIN_WAIT_ON_PATH.md.
-    sa.Column('wait_paths', sa.Text, nullable=False, server_default="'[]'"),
+    sa.Column('wait_paths', sa.Text, nullable=False, server_default="[]"),
     # dispatch_target: MUTABLE routing override for idle-sibling migration
     # (Pillar #5). Dispatch routes to dispatch_target or created_by_conv. When
     # the originating conv is genuinely stuck (no live task + kickoff undrained

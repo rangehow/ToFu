@@ -15,7 +15,7 @@ logger = get_logger(__name__)
 #  Schema Version Cache — Skip redundant DDL on subsequent startups
 # ═══════════════════════════════════════════════════════════════════════
 
-_SCHEMA_VERSION = 37  # Increment when tables/columns/indexes change
+_SCHEMA_VERSION = 38  # Increment when tables/columns/indexes change
 
 
 def _column_exists(conn, table, column):
@@ -553,6 +553,31 @@ def _init_system_schema(conn):
     # dropped off the board). Added 2026-07.
     if not _column_exists(conn, 'project_tasks', 'kind'):
         cur.execute("ALTER TABLE project_tasks ADD COLUMN kind TEXT NOT NULL DEFAULT 'epic'")
+    # Migration: block-cooldown columns (self-expiring escalating backoff, NOT
+    # the removed park shelf). Pre-existing rows default to 0/'' → read as
+    # never-blocked, so an old epic stays immediately dispatchable. Added 2026-07.
+    if not _column_exists(conn, 'project_tasks', 'blocked_until'):
+        cur.execute('ALTER TABLE project_tasks ADD COLUMN blocked_until INTEGER NOT NULL DEFAULT 0')
+    if not _column_exists(conn, 'project_tasks', 'block_count'):
+        cur.execute('ALTER TABLE project_tasks ADD COLUMN block_count INTEGER NOT NULL DEFAULT 0')
+    if not _column_exists(conn, 'project_tasks', 'block_reason'):
+        cur.execute("ALTER TABLE project_tasks ADD COLUMN block_reason TEXT NOT NULL DEFAULT ''")
+    # Migration: wait-on-path commit-dependency column (Pillar #3). Pre-existing
+    # rows default to '[]' → no wait, so an old epic stays dispatchable. The
+    # wait resolves against live lease rows at read time (self-expiring, no
+    # reaper). Added 2026-07. See docs/PROJECT_BRAIN_WAIT_ON_PATH.md.
+    if not _column_exists(conn, 'project_tasks', 'wait_paths'):
+        cur.execute("ALTER TABLE project_tasks ADD COLUMN wait_paths TEXT NOT NULL DEFAULT '[]'")
+    # Migration: idle-sibling migration routing column (Pillar #5). Pre-existing
+    # rows default to '' → route to created_by_conv (unchanged). Added 2026-07.
+    # See docs/PROJECT_BRAIN_MIGRATION.md.
+    if not _column_exists(conn, 'project_tasks', 'dispatch_target'):
+        cur.execute("ALTER TABLE project_tasks ADD COLUMN dispatch_target TEXT NOT NULL DEFAULT ''")
+    # Migration: the shelving/park mechanism was removed (the project pushes
+    # every open epic forward at full speed). Any epic left in the retired
+    # 'deferred' status is revived to 'open' so it dispatches again. Idempotent.
+    cur.execute("UPDATE project_tasks SET status='open', owner_conv_id='', "
+                'lease_expires_at=0, dispatched=0 WHERE status=\'deferred\'')
 
     # ── Daily Optimizer tables (see lib/optimizer/) ──
     # optimizer_proposals + optimizer_action_log: migrated onto Core.

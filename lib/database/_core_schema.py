@@ -802,6 +802,33 @@ PROJECT_TASKS = define_table(
     # (the heartbeat/completion sweep) rather than a human/agent claim — surfaced
     # as a "brain-dispatched" badge on the board card. Reset to 0 on complete.
     sa.Column('dispatched', sa.Integer, nullable=False, server_default=sa.text('0')),
+    # blocked_until / block_count / block_reason: the BLOCK COOLDOWN (a
+    # self-expiring escalating backoff, NOT the removed park shelf). When an
+    # epic hits a genuine external gate, block_task stamps blocked_until = now +
+    # an ESCALATING cooldown (capped) and records why; select_dispatchable skips
+    # a row whose blocked_until is still in the future (at-READ-time expiry, no
+    # reaper, no human un-block gate — so it can never deadlock). block_count
+    # drives the escalation; both reset to 0 on complete / reopen so a human
+    # reopen forces an immediate retry. See project_board.py::block_task.
+    sa.Column('blocked_until', bigint_column(), nullable=False, server_default=sa.text('0')),
+    sa.Column('block_count', sa.Integer, nullable=False, server_default=sa.text('0')),
+    sa.Column('block_reason', sa.Text, nullable=False, server_default=''),
+    # wait_paths: the wait-on-path commit-dependency (Pillar #3). A JSON array
+    # of path/resource strings this epic must wait on — resolved as the INVERSE
+    # READ of the path-lease: select_dispatchable holds the epic while any
+    # listed path is under a LIVE lease held by a DIFFERENT conversation, and
+    # releases automatically when that lease expires (at read time, no reaper).
+    # NOT a new lock namespace — it reads the SAME kind='lease' rows. Reset to
+    # '[]' on complete/reopen. See docs/PROJECT_BRAIN_WAIT_ON_PATH.md.
+    sa.Column('wait_paths', sa.Text, nullable=False, server_default="'[]'"),
+    # dispatch_target: MUTABLE routing override for idle-sibling migration
+    # (Pillar #5). Dispatch routes to dispatch_target or created_by_conv. When
+    # the originating conv is genuinely stuck (no live task + kickoff undrained
+    # past the lease TTL, and NOT held by cooldown/wait), the sweep migrates the
+    # epic to a genuinely-idle sibling by setting this field — WITHOUT touching
+    # created_by_conv (immutable authorship/provenance). Reset to '' on
+    # complete/reopen. See docs/PROJECT_BRAIN_MIGRATION.md.
+    sa.Column('dispatch_target', sa.Text, nullable=False, server_default=''),
     sa.Column('created_at', bigint_column(), nullable=False, server_default=sa.text('0')),
     sa.Column('updated_at', bigint_column(), nullable=False, server_default=sa.text('0')),
 )

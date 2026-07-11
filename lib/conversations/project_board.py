@@ -42,6 +42,76 @@ logger = get_logger(__name__)
 # epic reads as open again so no abandoned conversation can hold it forever.
 DEFAULT_LEASE_TTL_MS = 30 * 60 * 1000  # 30 minutes
 
+# ── Block cooldown (self-expiring escalating backoff) ──
+# When an epic hits a genuine external gate (a sibling must commit first; a
+# human §10 infra sign-off), block_task stamps blocked_until = now + an
+# ESCALATING cooldown so select_dispatchable stops re-dispatching it (which
+# burned a billed agent turn every ~30 min to re-discover the same unmet dep).
+# The cooldown is exponential in the block count and CAPPED, so a perpetually
+# human-gated epic converges to a long sleep after a FEW retries (owner: "few
+# retries then long sleep") instead of churning at fixed cadence forever. It is
+# NOT the removed park shelf: it self-expires at READ time (no reaper) and needs
+# NO human action to release, so it can never deadlock the board.
+BLOCK_COOLDOWN_BASE_MS = 60 * 60 * 1000       # 1 h after the first block
+BLOCK_COOLDOWN_MAX_MS = 24 * 60 * 60 * 1000   # capped at 1 day
+_BLOCK_COOLDOWN_FACTOR = 4                     # x4 per block -> cap by block #4
+
+
+def _block_cooldown_ms(block_count: int) -> int:
+    """Return the cooldown window (ms) for a row that has now been blocked
+    ``block_count`` times. 0 blocks -> 0 (never blocked). Otherwise
+    ``BASE * FACTOR**(count-1)`` clamped to ``BLOCK_COOLDOWN_MAX_MS`` — so the
+    1st block sleeps BASE (1 h), and with FACTOR=4 the cap (1 day) is reached by
+    the 4th block: 1 h -> 4 h -> 16 h -> 24 h(cap). That is the owner's "few
+    retries then a long sleep" — a perpetually human-gated epic costs ~3 more
+    billed turns before settling to one retry/day, instead of ~48/day at the old
+    30-min lease cadence. Pure + side-effect-free."""
+    n = int(block_count or 0)
+    if n <= 0:
+        return 0
+    # Clamp the exponent so FACTOR**(n-1) can't build a huge int before min()
+    # (n is small in practice, but stay safe against a runaway block_count).
+    exp = min(n - 1, 20)
+    return min(BLOCK_COOLDOWN_MAX_MS, BLOCK_COOLDOWN_BASE_MS * (_BLOCK_COOLDOWN_FACTOR ** exp))
+
+
+# The block CLASS tag that means "auto-resolves when a sibling commits" — the
+# ONLY class that auto-populates a wait-on-path hold (a [human-gated] block
+# cannot self-resolve from a lease, so it never derives a path wait).
+_SIBLING_TAG = '[sibling]'
+
+
+def _parse_sibling_wait_paths(reason: str) -> list:
+    """Extract the wait-on-path list a ``[sibling]`` block reason declares.
+
+    PARSE CONTRACT (deliberately strict — free-text scraping is FORBIDDEN so a
+    worker's prose can neither accidentally populate nor be required to populate
+    a path hold):
+      • Paths are read ONLY from a STRUCTURED token ``path=<p1>,<p2>,...`` — a
+        bare mention of a filename in prose yields NOTHING.
+      • The token value is comma-separated; each path is trimmed; the value ends
+        at the first whitespace run (so trailing prose after a space is NOT
+        consumed into the last path).
+      • Paths are returned ONLY when the reason carries the ``[sibling]`` class
+        tag. A ``[human-gated]`` or untagged reason yields ``[]`` — a
+        human-gated block must never auto-hold on a path.
+      • De-duped, order-preserving.
+
+    Pure + side-effect-free. Returns ``[]`` on any non-match.
+    """
+    import re
+    if not reason or _SIBLING_TAG not in reason.lower():
+        return []
+    m = re.search(r'path=(\S+)', reason)
+    if not m:
+        return []
+    out = []
+    for p in m.group(1).split(','):
+        s = p.strip()
+        if s and s not in out:
+            out.append(s)
+    return out
+
 _TITLE_MAX_CHARS = 2000  # epics carry multi-sentence design descriptions; a
                          # tight cap silently clipped titles mid-word (both in
                          # the board panel and the injected prompt block)
@@ -49,6 +119,45 @@ _MAX_BOARD_TASKS = 200  # coarse epics only — a guard against runaway posting
 
 
 _now_ms = now_ms
+
+
+def _prune_expired_leases(db, project_path: str, now_ms: int) -> int:
+    """Lazy garbage-collect this project's DEAD path-lease rows (``kind='lease'``
+    with a non-zero ``lease_expires_at <= now``).
+
+    This is the WRITE-side analogue of the board's at-read-time lease expiry —
+    NOT the background reaper the lease design explicitly rejects. An expired
+    lease is already invisible to every READER (``_effective_status`` reports it
+    ``open``, so ``render_board_block`` drops it from the Held lane and
+    ``select_dispatchable`` never picks it), but the ROW persists forever:
+    ``claim_lease``/``release_lease`` only delete on explicit release, and
+    ``_effective_status`` merely downgrades at read time. Left unpruned, dead
+    leases accumulate and (a) count against ``post_task``'s ``_MAX_BOARD_TASKS``
+    cap — a real epic-posting-budget leak, not mere clutter — and (b) bloat the
+    ``project_tasks`` scan.
+
+    Deleting a row whose lease has expired is a semantic no-op to every reader,
+    so this is safe to piggyback on the two board WRITE seams that already
+    mutate + commit (``post_task``, ``claim_lease``) — no new thread, no read
+    turned into a writer (``read_board`` stays a pure, never-raises read so its
+    contract and the load-bearing NC guards that force-expire a lease then read
+    it back are untouched). NEVER prunes an epic (only ``kind='lease'``), never
+    a live lease. Best-effort: the caller owns the surrounding transaction, so
+    this only issues the DELETE; a failure is logged and swallowed. Returns the
+    number of rows deleted (0 on error)."""
+    try:
+        cur = db.execute(
+            "DELETE FROM project_tasks WHERE project_path=? AND kind='lease' "
+            'AND lease_expires_at>0 AND lease_expires_at<=?',
+            (project_path, now_ms))
+        n = cur.rowcount if cur is not None and cur.rowcount is not None else 0
+        if n:
+            logger.debug('[Board] pruned %d expired lease(s) proj=%.40r', n, project_path)
+        return n
+    except Exception as e:
+        logger.warning('[Board] expired-lease prune failed proj=%.40r: %s',
+                       project_path, e)
+        return 0
 
 
 def _effective_status(stored_status: str, lease_expires_at: int,
@@ -81,6 +190,34 @@ def _row_to_task(r, now_ms: int) -> dict:
         kind = r['kind'] or 'epic'
     except (KeyError, IndexError, TypeError):
         kind = 'epic'
+    # Block-cooldown fields are nullable-safe: a pre-migration row (no column)
+    # reads as never-blocked (0/'') so it is NEVER wrongly cooldown-suppressed.
+    try:
+        blocked_until = int(r['blocked_until'] or 0)
+    except (KeyError, IndexError, TypeError):
+        blocked_until = 0
+    try:
+        block_count = int(r['block_count'] or 0)
+    except (KeyError, IndexError, TypeError):
+        block_count = 0
+    try:
+        block_reason = r['block_reason'] or ''
+    except (KeyError, IndexError, TypeError):
+        block_reason = ''
+    # wait_paths is nullable-safe: a pre-migration row (no column) reads as an
+    # empty list -> no wait -> never wrongly held. Malformed JSON also -> [].
+    try:
+        wait_paths = json.loads(r['wait_paths'] or '[]')
+        if not isinstance(wait_paths, list):
+            wait_paths = []
+    except (KeyError, IndexError, TypeError, ValueError):
+        wait_paths = []
+    # dispatch_target is nullable-safe: a pre-migration row (no column) reads as
+    # '' -> dispatch routes to created_by_conv (unchanged).
+    try:
+        dispatch_target = r['dispatch_target'] or ''
+    except (KeyError, IndexError, TypeError):
+        dispatch_target = ''
     return {
         'id': r['id'], 'title': r['title'] or '', 'status': eff,
         'kind': kind,
@@ -91,6 +228,18 @@ def _row_to_task(r, now_ms: int) -> dict:
         'dispatched': dispatched and eff == 'claimed',
         'created_by_conv': r['created_by_conv'] or '',
         'depends_on': depends_on,
+        # Block cooldown: blocked_until is the at-read-time-expiring retry gate;
+        # a row is "on cooldown" iff blocked_until > now (evaluated by the
+        # reader — select_dispatchable / render). block_count drives escalation.
+        'blocked_until': blocked_until,
+        'block_count': block_count,
+        'block_reason': block_reason,
+        # wait-on-path: paths this epic waits on; a reader (select_dispatchable /
+        # render) resolves them against live lease rows via _paths_waited_but_held.
+        'wait_paths': wait_paths,
+        # dispatch_target: mutable routing override (idle-sibling migration).
+        # created_by_conv is immutable authorship; this is who runs it NEXT.
+        'dispatch_target': dispatch_target,
         'created_at': int(r['created_at'] or 0),
         'updated_at': int(r['updated_at'] or 0),
     }
@@ -131,7 +280,9 @@ def read_board(project_path: str) -> dict:
         db = get_thread_db(DOMAIN_CHAT)
         rows = db.execute(
             'SELECT id, title, status, owner_conv_id, lease_expires_at, '
-            '       created_by_conv, depends_on, dispatched, kind, created_at, updated_at '
+            '       created_by_conv, depends_on, dispatched, kind, '
+            '       blocked_until, block_count, block_reason, wait_paths, '
+            '       dispatch_target, created_at, updated_at '
             'FROM project_tasks WHERE project_path=? '
             'ORDER BY created_at ASC', (project_path,)).fetchall()
     except Exception as e:
@@ -157,6 +308,9 @@ def post_task(project_path: str, conv_id: str, title: str, *,
     project_path = normalize_project_path(project_path)
     try:
         db = get_thread_db(DOMAIN_CHAT)
+        # GC dead path-leases FIRST so they never falsely inflate the cap count
+        # (an expired lease is invisible to readers but still a row).
+        _prune_expired_leases(db, project_path, _now_ms())
         n = db.execute('SELECT COUNT(*) AS c FROM project_tasks WHERE project_path=?',
                        (project_path,)).fetchone()
         if n and int(n['c']) >= _MAX_BOARD_TASKS:
@@ -241,7 +395,9 @@ def complete_task(project_path: str, conv_id: str, task_id: str) -> dict:
             return {'ok': False, 'error': 'task not found'}
         db.execute(
             "UPDATE project_tasks SET status='done', lease_expires_at=0, "
-            'dispatched=0, updated_at=? WHERE id=? AND project_path=?',
+            "dispatched=0, blocked_until=0, block_count=0, block_reason='', "
+            "wait_paths='[]', dispatch_target='', updated_at=? "
+            'WHERE id=? AND project_path=?',
             (_now_ms(), task_id, project_path))
         db.commit()
     except Exception as e:
@@ -263,92 +419,85 @@ def complete_task(project_path: str, conv_id: str, task_id: str) -> dict:
 
 
 def block_task(project_path: str, conv_id: str, task_id: str, reason: str) -> dict:
-    """Report an epic BLOCKED — emits the ``blocked`` feed kind (the last dead
-    kind to gain a producer). Does not change board status (a block is a
-    signal, not a state); the reason is surfaced in the feed. ``{'ok','error'?}``.
+    """Report an epic BLOCKED — stamp a SELF-EXPIRING escalating cooldown so it
+    stops being re-dispatched while its external gate is unmet, and emit the
+    ``blocked`` feed kind.
+
+    This does NOT change the board status (a block is still not a status — the
+    row stays ``open``). What it DOES: increment ``block_count`` and set
+    ``blocked_until = now + _block_cooldown_ms(block_count)`` + record the
+    ``block_reason``. ``select_dispatchable`` skips a row whose ``blocked_until``
+    is still in the future, so the ~30-min lease-expiry re-dispatch churn (a
+    billed agent turn each cycle to re-discover the same unmet dep) stops. The
+    cooldown escalates (exponential, capped) so a perpetually human-gated epic
+    converges to a long sleep after a few retries; it expires at READ time (no
+    reaper, no human un-block gate) so it can never deadlock and a resolved dep
+    IS retried once the window lapses.
+
+    The ``reason`` should record the block CLASS for HUMAN visibility, e.g.
+    ``[human-gated] …`` (only a human action can satisfy it — escalate to the
+    long interval fast) vs ``[sibling] …`` (will auto-resolve when a sibling
+    commits — retry-after-cooldown is right). The escalation itself is
+    class-agnostic; the tag is surfaced on the board card, not branched on.
+    Returns ``{'ok', 'blocked_until'?, 'block_count'?, 'error'?}``.
     """
     if not project_path or not task_id:
         return {'ok': False, 'error': 'missing project/task'}
-    reason = (reason or '').strip()
-    from lib.conversations.project_feed import normalize_project_path
-    project_path = normalize_project_path(project_path)
-    try:
-        db = get_thread_db(DOMAIN_CHAT)
-        title = _task_title(db, project_path, task_id)
-        if title is None:
-            return {'ok': False, 'error': 'task not found'}
-    except Exception as e:
-        logger.warning('[Board] block lookup failed proj=%.40r: %s', project_path, e)
-        return {'ok': False, 'error': str(e)}
-    _emit('blocked', project_path, conv_id,
-          f'Blocked: {title}' + (f' — {reason}' if reason else ''),
-          payload={'taskId': task_id, 'reason': reason})
-    audit_log('board_block', project_path=project_path, task_id=task_id, conv_id=conv_id)
-    return {'ok': True}
-
-
-def defer_task(project_path: str, conv_id: str, task_id: str,
-               reason: str = '') -> dict:
-    """PARK an epic — set the terminal-ish ``deferred`` status.
-
-    Unlike ``block_task`` (a feed SIGNAL that leaves board status untouched),
-    this is a real STATUS write: ``deferred`` epics are EXCLUDED from
-    ``select_dispatchable`` (they satisfy ``status != 'open'``) so the
-    heartbeat sweep stops re-dispatching them, and — crucially —
-    ``_effective_status`` never reclaims a ``deferred`` epic (its reclaim is
-    specific to ``claimed``), so a parked epic does NOT oscillate
-    ``open→claimed→lease-expires→open`` the way a human-gated epic otherwise
-    would. The epic stays VISIBLE on the board (distinct from ``done``) so the
-    "parked pending a human decision" state is legible.
-
-    Sets ``status='deferred'`` and CLEARS ``owner_conv_id`` + ``lease_expires_at``
-    + the dispatched flag (a parked epic holds no lease). Permitted from
-    ``open`` and ``claimed``; refused for ``done`` (can't park finished work)
-    and ``deferred`` (idempotent no-op → advisory error). The un-park path is
-    ``reopen_task`` (``deferred → open``), the same human lever that revives a
-    done/claimed epic. Emits a ``note`` feed event so the transition is
-    observable. ``{'ok', 'from'?, 'error'?}``.
-    """
-    if not project_path or not task_id:
-        return {'ok': False, 'error': 'missing project/task'}
-    reason = (reason or '').strip()
+    reason = (reason or '').strip()[:_TITLE_MAX_CHARS]
     from lib.conversations.project_feed import normalize_project_path
     project_path = normalize_project_path(project_path)
     try:
         db = get_thread_db(DOMAIN_CHAT)
         row = db.execute(
-            'SELECT title, status FROM project_tasks '
+            'SELECT title, block_count FROM project_tasks '
             'WHERE id=? AND project_path=?', (task_id, project_path)).fetchone()
         if not row:
             return {'ok': False, 'error': 'task not found'}
-        prev_status = row['status'] or 'open'
         title = row['title'] or ''
-        if prev_status == 'done':
-            return {'ok': False, 'error': 'already_done'}
-        if prev_status == 'deferred':
-            return {'ok': False, 'error': 'already_deferred'}
-        db.execute(
-            "UPDATE project_tasks SET status='deferred', owner_conv_id='', "
-            'lease_expires_at=0, dispatched=0, updated_at=? '
-            'WHERE id=? AND project_path=?',
-            (_now_ms(), task_id, project_path))
+        new_count = int(row['block_count'] or 0) + 1
+        now = _now_ms()
+        blocked_until = now + _block_cooldown_ms(new_count)
+        # A '[sibling] … path=<p>' reason ALSO auto-populates the wait-on-path
+        # hold (the precise mechanism) on the SAME row — the cooldown is the
+        # fallback for the interim when no live lease exists yet. One tool for
+        # the worker: it reports the sibling blocker once, the brain derives the
+        # path hold. Only set when the parse yields paths (never clobber an
+        # existing wait with []). See _parse_sibling_wait_paths for the contract.
+        wait_paths = _parse_sibling_wait_paths(reason)
+        if wait_paths:
+            db.execute(
+                'UPDATE project_tasks SET blocked_until=?, block_count=?, '
+                'block_reason=?, wait_paths=?, updated_at=? '
+                'WHERE id=? AND project_path=?',
+                (blocked_until, new_count, reason, json.dumps(wait_paths),
+                 now, task_id, project_path))
+        else:
+            db.execute(
+                'UPDATE project_tasks SET blocked_until=?, block_count=?, '
+                'block_reason=?, updated_at=? WHERE id=? AND project_path=?',
+                (blocked_until, new_count, reason, now, task_id, project_path))
         db.commit()
     except Exception as e:
-        logger.error('[Board] defer failed proj=%.40r task=%s: %s',
+        logger.error('[Board] block failed proj=%.40r task=%s: %s',
                      project_path, task_id, e, exc_info=True)
         return {'ok': False, 'error': str(e)}
-    summary = f'Parked (deferred): {title}' + (f' — {reason}' if reason else '')
-    _emit('note', project_path, conv_id, summary,
-          payload={'taskId': task_id, 'deferred': True, 'from': prev_status,
-                   'reason': reason})
-    audit_log('board_defer', project_path=project_path, task_id=task_id,
-              conv_id=conv_id, from_status=prev_status)
-    return {'ok': True, 'from': prev_status}
-
+    cooldown_min = _block_cooldown_ms(new_count) // 60_000
+    _emit('blocked', project_path, conv_id,
+          f'Blocked: {title}' + (f' — {reason}' if reason else '')
+          + f' (retry in ~{cooldown_min}m, block #{new_count})',
+          payload={'taskId': task_id, 'reason': reason,
+                   'blockedUntil': blocked_until, 'blockCount': new_count})
+    audit_log('board_block', project_path=project_path, task_id=task_id,
+              conv_id=conv_id, block_count=new_count)
+    return {'ok': True, 'blocked_until': blocked_until, 'block_count': new_count}
 
 
 def reopen_task(project_path: str, conv_id: str, task_id: str) -> dict:
-    """Reopen an epic (done|claimed → open) — a HUMAN override.
+    """Reopen an epic (done|claimed → open) — a HUMAN override / revive lever.
+
+    Note: there is deliberately NO parked/deferred state to un-park (the
+    shelving mechanism was removed — the project pushes every open epic forward
+    at full speed rather than holding work pending a human decision).
 
     A direct status write, NOT a lease mutation: it sets ``status='open'`` and
     CLEARS ``owner_conv_id`` + ``lease_expires_at`` (+ the dispatched flag), so
@@ -371,18 +520,24 @@ def reopen_task(project_path: str, conv_id: str, task_id: str) -> dict:
     try:
         db = get_thread_db(DOMAIN_CHAT)
         row = db.execute(
-            'SELECT title, status, owner_conv_id FROM project_tasks '
+            'SELECT title, status, owner_conv_id, blocked_until FROM project_tasks '
             'WHERE id=? AND project_path=?', (task_id, project_path)).fetchone()
         if not row:
             return {'ok': False, 'error': 'task not found'}
         prev_status = row['status'] or 'open'
         prev_owner = row['owner_conv_id'] or ''
         title = row['title'] or ''
-        if prev_status == 'open':
+        # A blocked epic is stored status='open' (block never changes status)
+        # but carries a live cooldown. Reopen must still act on it — clearing
+        # the cooldown for an IMMEDIATE retry (owner constraint) — so 'open' is
+        # only "already open" when it also has NO live block cooldown.
+        has_live_block = int(row['blocked_until'] or 0) > _now_ms()
+        if prev_status == 'open' and not has_live_block:
             return {'ok': False, 'error': 'already_open'}
         db.execute(
             "UPDATE project_tasks SET status='open', owner_conv_id='', "
-            'lease_expires_at=0, dispatched=0, updated_at=? '
+            "lease_expires_at=0, dispatched=0, blocked_until=0, block_count=0, "
+            "block_reason='', wait_paths='[]', dispatch_target='', updated_at=? "
             'WHERE id=? AND project_path=?',
             (_now_ms(), task_id, project_path))
         db.commit()
@@ -433,6 +588,13 @@ def claim_lease(project_path: str, conv_id: str, resource: str, *,
     try:
         db = get_thread_db(DOMAIN_CHAT)
         now = _now_ms()
+        # Lazy GC: sweep this project's dead leases on any lease write, so
+        # orphaned reservations (claimed on a distinct path, never released)
+        # don't accumulate forever. If THIS resource's own lease is expired it
+        # is pruned here too — the lookup below then misses and we recreate it
+        # via the INSERT branch, which is exactly the "expired → reclaimable"
+        # semantic (just as a fresh row rather than an in-place UPDATE).
+        _prune_expired_leases(db, project_path, now)
         # Find an existing lease for this exact resource (title match on a
         # kind='lease' row). One reservation per resource string.
         row = db.execute(
@@ -513,6 +675,92 @@ def release_lease(project_path: str, conv_id: str, resource: str) -> dict:
     return {'ok': True}
 
 
+def _paths_waited_but_held(epic: dict, board_tasks: list, now_ms: int) -> list:
+    """The wait-on-path RESOLVER (pure, side-effect-free).
+
+    Given an epic's ``wait_paths`` and the board's task list, return the subset
+    of those paths currently held by a LIVE lease owned by a DIFFERENT
+    conversation. An empty result means the epic is NOT waiting (dispatchable
+    as far as wait-on-path is concerned).
+
+    This is the INVERSE READ of the path-lease — NOT a new lock namespace. It
+    reads the SAME ``kind='lease'`` rows ``claim_lease`` writes, and uses
+    ``_effective_status`` so an EXPIRED lease no longer holds the path (the
+    at-read-time self-expiry that keeps this out of park-2.0 territory: a
+    crashed/abandoned holder releases within one lease TTL, no reaper).
+
+    Fail-open by construction: no wait_paths, a path nobody leases, an expired
+    lease, or the epic's OWN lease → that path is NOT held → never strands.
+    """
+    want = epic.get('wait_paths') or []
+    if not want:
+        return []
+    epic_conv = (epic.get('created_by_conv') or '').strip()
+    # Build path -> is-held-by-another map from live lease rows.
+    held_by_other = set()
+    for t in (board_tasks or []):
+        if not isinstance(t, dict) or t.get('kind') != 'lease':
+            continue
+        eff = _effective_status('claimed', int(t.get('lease_expires_at') or 0), now_ms)
+        if eff != 'claimed':
+            continue  # expired lease no longer holds anything
+        owner = (t.get('owner_conv_id') or '').strip()
+        # Only a DIFFERENT conversation's live lease holds this epic. The epic's
+        # own lease on a path must never self-deadlock it.
+        if owner and owner != epic_conv:
+            held_by_other.add(t.get('title') or '')
+    return [p for p in want if p in held_by_other]
+
+
+def set_wait_paths(project_path: str, conv_id: str, task_id: str,
+                   paths: list) -> dict:
+    """Declare (or clear) the PATHS an epic must wait on — the wait-on-path
+    commit-dependency. ``paths`` is a list of path/resource strings matching the
+    lease ``title`` a sibling would claim; an EMPTY list clears the wait.
+
+    This does NOT change board status. ``select_dispatchable`` (wired later)
+    holds the epic while any listed path is under a live lease held by another
+    conversation (resolved by ``_paths_waited_but_held``), and releases when
+    that lease expires — so the brain HOLDS precisely while a sibling is
+    actively editing the path, instead of the block-then-cooldown dance. Reset
+    to ``[]`` on complete / reopen. Returns ``{'ok', 'wait_paths'?, 'error'?}``.
+    """
+    if not project_path or not task_id:
+        return {'ok': False, 'error': 'missing project/task'}
+    # Normalize: strings only, trimmed, de-duped, bounded.
+    clean = []
+    for p in (paths or []):
+        s = (str(p) or '').strip()[:_TITLE_MAX_CHARS]
+        if s and s not in clean:
+            clean.append(s)
+    from lib.conversations.project_feed import normalize_project_path
+    project_path = normalize_project_path(project_path)
+    try:
+        db = get_thread_db(DOMAIN_CHAT)
+        title = _task_title(db, project_path, task_id)
+        if title is None:
+            return {'ok': False, 'error': 'task not found'}
+        db.execute(
+            'UPDATE project_tasks SET wait_paths=?, updated_at=? '
+            'WHERE id=? AND project_path=?',
+            (json.dumps(clean), _now_ms(), task_id, project_path))
+        db.commit()
+    except Exception as e:
+        logger.error('[Board] set_wait_paths failed proj=%.40r task=%s: %s',
+                     project_path, task_id, e, exc_info=True)
+        return {'ok': False, 'error': str(e)}
+    if clean:
+        _emit('note', project_path, conv_id,
+              f'Waiting on path(s): {", ".join(clean)}',
+              payload={'taskId': task_id, 'waitPaths': clean})
+    else:
+        _emit('note', project_path, conv_id, 'Cleared path wait',
+              payload={'taskId': task_id, 'waitPaths': []})
+    audit_log('board_wait_on_path', project_path=project_path, task_id=task_id,
+              conv_id=conv_id, wait_count=len(clean))
+    return {'ok': True, 'wait_paths': clean}
+
+
 def _task_title(db, project_path: str, task_id: str):
     row = db.execute('SELECT title FROM project_tasks WHERE id=? AND project_path=?',
                      (task_id, project_path)).fetchone()
@@ -546,11 +794,18 @@ def render_board_block(project_path: str, current_conv_id: str = '') -> str:
     # expired one reads 'open' and is simply dropped (it holds nothing).
     epics = [t for t in tasks if t.get('kind') != 'lease']
     held_t = [t for t in tasks if t.get('kind') == 'lease' and t['status'] == 'claimed']
-    open_t = [t for t in epics if t['status'] == 'open']
+    now = _now_ms()
+    # An epic whose block cooldown is still LIVE (blocked_until > now) is
+    # partitioned into its own "Blocked" lane — NOT the Open lane (where it
+    # would read as "claim me" and get re-dispatched). Once the cooldown lapses
+    # it falls back to Open automatically (at-read-time, no reaper).
+    blocked_t = [t for t in epics
+                 if t['status'] == 'open' and int(t.get('blocked_until') or 0) > now]
+    blocked_ids = {t['id'] for t in blocked_t}
+    open_t = [t for t in epics if t['status'] == 'open' and t['id'] not in blocked_ids]
     claimed_t = [t for t in epics if t['status'] == 'claimed']
     done_t = [t for t in epics if t['status'] == 'done']
-    deferred_t = [t for t in epics if t['status'] == 'deferred']
-    if not (open_t or claimed_t or done_t or deferred_t or held_t):
+    if not (open_t or claimed_t or done_t or held_t or blocked_t):
         return ''
     lines = ['[PROJECT BOARD] — shared coordination board for this project. '
              'Before starting work, CHECK it: claim an open epic so siblings '
@@ -573,18 +828,40 @@ def render_board_block(project_path: str, current_conv_id: str = '') -> str:
             hint = '' if mine else ' — another conversation is advancing this; ' \
                    'pick a different epic or coordinate, do not redo it'
             lines.append(f'  • [{t["id"]}] {t["title"]} — claimed by {owner}{mine}{hint}')
+    # Precompute, for each epic, which of its wait_paths are held live by
+    # ANOTHER conversation (who holds each) — the wait-on-path annotation. An
+    # epic with a non-empty result is held on those paths until the sibling's
+    # lease clears (surfaced so the human sees the PRECISE hold, not just a
+    # cooldown timer).
+    def _wait_annotation(t):
+        held = _paths_waited_but_held(t, tasks, now)
+        if not held:
+            return ''
+        holders = {}
+        for lt in held_t:
+            title = lt.get('title') or ''
+            if title in held:
+                holders[title] = lt.get('owner_conv_id') or 'another conversation'
+        parts = [f'{p} (held by {holders.get(p, "?")})' for p in held]
+        return ' — waiting on ' + ', '.join(parts)
+
     if open_t:
         lines.append('')
         lines.append('Open (unclaimed — claim one with project_board_claim before working it):')
         for t in open_t:
             dep = f' (depends on {", ".join(t["depends_on"])})' if t['depends_on'] else ''
-            lines.append(f'  • [{t["id"]}] {t["title"]}{dep}')
-    if deferred_t:
+            lines.append(f'  • [{t["id"]}] {t["title"]}{dep}{_wait_annotation(t)}')
+    if blocked_t:
         lines.append('')
-        lines.append('Parked (deferred — NOT auto-dispatched; awaiting a human '
-                     'decision. A human reopens one when it is ready to resume):')
-        for t in deferred_t:
-            lines.append(f'  • [{t["id"]}] {t["title"]}')
+        lines.append('Blocked (waiting on an external gate — auto-retries after a '
+                     'cooldown, do NOT re-dispatch until then):')
+        for t in blocked_t:
+            mins = max(0, (int(t.get('blocked_until') or 0) - now) // 60_000)
+            reason = (t.get('block_reason') or '').strip()
+            why = f' — {reason}' if reason else ''
+            cnt = int(t.get('block_count') or 0)
+            lines.append(f'  • [{t["id"]}] {t["title"]}{why} '
+                         f'(retry in ~{mins}m, blocked {cnt}×){_wait_annotation(t)}')
     if done_t:
         lines.append('')
         lines.append('Recently done:')
@@ -631,9 +908,18 @@ def execute_board_tool(fn_name: str, fn_args: dict, *,
             res = block_task(project_path, current_conv_id,
                              fn_args.get('task_id') or '',
                              fn_args.get('reason') or '')
-            return ('Reported blocked (visible in the project activity feed).'
-                    if res.get('ok')
-                    else f'Error reporting block: {res.get("error", "unknown")}.')
+            if res.get('ok'):
+                mins = _block_cooldown_ms(res.get('block_count', 1)) // 60_000
+                return ('Reported blocked. This epic is now on a self-expiring '
+                        f'cooldown (~{mins}m, block #{res.get("block_count", 1)}) '
+                        'so the autonomous heartbeat will NOT re-dispatch it '
+                        'until the external gate has had time to clear. The '
+                        'cooldown escalates on repeated blocks and auto-expires '
+                        '(no human un-block needed); a human reopen resets it '
+                        'for an immediate retry. Tag the reason with the block '
+                        'class ([human-gated] vs [sibling]) so it is visible on '
+                        'the board.')
+            return f'Error reporting block: {res.get("error", "unknown")}.'
         if fn_name == 'project_claim_path':
             res = claim_lease(project_path, current_conv_id,
                               fn_args.get('resource') or '',
@@ -661,20 +947,11 @@ def execute_board_tool(fn_name: str, fn_args: dict, *,
             if res.get('error') == 'no such lease':
                 return 'No matching hold to release (already expired or released).'
             return f'Error releasing path(s): {res.get("error", "unknown")}.'
-        if fn_name == 'project_board_defer':
-            res = defer_task(project_path, current_conv_id,
-                             fn_args.get('task_id') or '',
-                             fn_args.get('reason') or '')
-            if res.get('ok'):
-                return ('Parked (deferred). This epic is no longer auto-dispatched '
-                        'by the heartbeat sweep and will NOT oscillate '
-                        'open/claimed; it stays visible on the board until a human '
-                        'reopens it when the blocking decision lands.')
-            if res.get('error') == 'already_deferred':
-                return 'Already parked (deferred) — no change.'
-            if res.get('error') == 'already_done':
-                return 'Cannot park a completed epic.'
-            return f'Error parking epic: {res.get("error", "unknown")}.'
+        if fn_name == 'project_commit':
+            from lib.conversations.project_commit import execute_commit_tool
+            return execute_commit_tool(
+                fn_args, current_conv_id=current_conv_id,
+                project_path=project_path)
         return f"Error: Unknown board tool '{fn_name}'"
     except Exception as e:
         logger.warning('[Board] tool %s failed: %s', fn_name, e, exc_info=True)
@@ -683,8 +960,10 @@ def execute_board_tool(fn_name: str, fn_args: dict, *,
 
 __all__ = [
     'read_board', 'post_task', 'claim_task', 'complete_task', 'block_task',
-    'defer_task', 'reopen_task', 'claim_lease', 'release_lease',
+    'reopen_task', 'claim_lease', 'release_lease',
     'render_board_block', 'execute_board_tool',
     '_effective_status',
     'claims_by_conv', 'DEFAULT_LEASE_TTL_MS',
+    'BLOCK_COOLDOWN_BASE_MS', 'BLOCK_COOLDOWN_MAX_MS', '_block_cooldown_ms',
+    'set_wait_paths', '_paths_waited_but_held',
 ]

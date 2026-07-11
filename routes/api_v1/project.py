@@ -31,7 +31,6 @@ Routes (legacy snake_case path → new hyphen-case path):
   POST   /api/v1/project/board/complete     — Project Brain: human marks epic done
   POST   /api/v1/project/board/block        — Project Brain: human flags epic blocked
   POST   /api/v1/project/board/reopen       — Project Brain: human reopens an epic
-  POST   /api/v1/project/board/defer        — Project Brain: human parks (defers) an epic
   GET    /api/v1/project/brain/summary      — Project Brain: collab-bar summary
   GET    /api/v1/project/brain/peers        — Project Brain: LIVE peer/team roster
   GET    /api/v1/project/brain/influence    — Project Brain: per-conversation influence
@@ -478,7 +477,6 @@ def project_gitignore_dismiss():
             e, source='api_v1.project.gitignore_dismiss')
 
 
-
 # ── Project Brain: Activity Feed (read-only) ─────────────────────────
 
 @api_v1_project_bp.route('/api/v1/project/feed', methods=['GET'])
@@ -616,7 +614,6 @@ def project_board():
         logger.error('[Project.v1] board read failed for %s: %s',
                      project_path, e, exc_info=True)
         return api_internal_error(e, source='api_v1.project.board')
-
 
 
 def _board_conv_id(data: dict) -> str:
@@ -777,45 +774,6 @@ def project_board_reopen():
         logger.error('[Project.v1] board/reopen failed for %s: %s',
                      project_path, e, exc_info=True)
         return api_internal_error(e, source='api_v1.project.board_reopen')
-
-
-@api_v1_project_bp.route('/api/v1/project/board/defer', methods=['POST'])
-@require_auth
-@rate_limit(limit=20, per=60)
-@api_meta(
-    summary='HUMAN parks a board epic (open|claimed → deferred)',
-    description=(
-        'Body: ``{path, taskId, convId, reason?}``. Sets the terminal-ish '
-        '``deferred`` status and clears the owner + lease. A parked epic is '
-        'EXCLUDED from autonomous dispatch and never oscillates '
-        'open/claimed — it waits, visibly, for a human to reopen it (via '
-        '``/board/reopen``) once the blocking decision lands. Refused for '
-        '``done`` and already-``deferred`` epics. Emits a ``note`` feed '
-        'event; audit-logged.'),
-    tags=['project'],
-)
-def project_board_defer():
-    data = parse_body()
-    project_path = (data.get('path') or '').strip()
-    if not project_path:
-        return api_bad_request('path is required', field='path')
-    task_id = (data.get('taskId') or '').strip()
-    if not task_id:
-        return api_bad_request('taskId is required', field='taskId')
-    conv_id = _board_conv_id(data)
-    reason = (data.get('reason') or '').strip()
-    try:
-        from lib.conversations.project_board import defer_task
-        result = defer_task(project_path, conv_id, task_id, reason)
-        if not result.get('ok'):
-            return jsonify(result), 400
-        logger.info('[Project.v1] board/defer proj=%.40r task=%s from=%s',
-                    project_path, task_id, result.get('from'))
-        return api_ok(result)
-    except Exception as e:
-        logger.error('[Project.v1] board/defer failed for %s: %s',
-                     project_path, e, exc_info=True)
-        return api_internal_error(e, source='api_v1.project.board_defer')
 
 
 @api_v1_project_bp.route('/api/v1/project/charter/pending', methods=['GET'])

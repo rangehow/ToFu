@@ -226,33 +226,6 @@ BOARD_BLOCK_TOOL = {
     },
 }
 
-BOARD_DEFER_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "project_board_defer",
-        "description": (
-            "PARK a board epic that cannot progress autonomously right now — set "
-            "its status to DEFERRED. Use this when an epic is gated on a decision "
-            "only a human can make (e.g. a design-first / infra-choice epic you "
-            "can't complete on your own): parking it STOPS the autonomous "
-            "heartbeat from repeatedly re-dispatching it, so it no longer "
-            "oscillates open↔claimed and wastes turns. The epic stays VISIBLE on "
-            "the board (distinct from done) and a human reopens it when the "
-            "blocking decision lands. This differs from project_board_block, which "
-            "only flags a signal in the feed WITHOUT changing dispatchability — use "
-            "defer to actually stop the sweep, block to merely flag."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "task_id": {"type": "string", "description": "The board epic id (from project_board_read)."},
-                "reason": {"type": "string", "description": "Why it's parked (recorded in the project activity feed) — e.g. which human decision it awaits."},
-            },
-            "required": ["task_id"],
-        },
-    },
-}
-
 # ── Resource/path LEASE tools (durational file-avoidance) ──
 # A lease is a PROACTIVE, path-level reservation posted BEFORE editing that
 # reaches EVERY sibling (incl. an idle one the heartbeat wakes later) via the
@@ -317,11 +290,11 @@ PATH_RELEASE_TOOL = {
 }
 
 BOARD_TOOLS = [BOARD_READ_TOOL, BOARD_POST_TOOL, BOARD_CLAIM_TOOL,
-               BOARD_COMPLETE_TOOL, BOARD_BLOCK_TOOL, BOARD_DEFER_TOOL,
+               BOARD_COMPLETE_TOOL, BOARD_BLOCK_TOOL,
                PATH_CLAIM_TOOL, PATH_RELEASE_TOOL]
 BOARD_TOOL_NAMES = {'project_board_read', 'project_board_post',
                     'project_board_claim', 'project_board_complete',
-                    'project_board_block', 'project_board_defer',
+                    'project_board_block',
                     'project_claim_path', 'project_release_path'}
 
 
@@ -458,7 +431,7 @@ __all__ = [
     'CHARTER_READ_TOOL', 'CHARTER_PROPOSE_TOOL',
     'CHARTER_TOOLS', 'CHARTER_TOOL_NAMES',
     'BOARD_READ_TOOL', 'BOARD_POST_TOOL', 'BOARD_CLAIM_TOOL',
-    'BOARD_COMPLETE_TOOL', 'BOARD_BLOCK_TOOL', 'BOARD_DEFER_TOOL',
+    'BOARD_COMPLETE_TOOL', 'BOARD_BLOCK_TOOL',
     'PATH_CLAIM_TOOL', 'PATH_RELEASE_TOOL',
     'BOARD_TOOLS', 'BOARD_TOOL_NAMES',
     'PEER_STATUS_TOOL', 'PEER_FEED_TOOL', 'PEER_MESSAGE_TOOL',

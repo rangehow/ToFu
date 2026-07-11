@@ -15,7 +15,7 @@ logger = get_logger(__name__)
 #  Schema Version Cache — Skip redundant DDL on subsequent startups
 # ═══════════════════════════════════════════════════════════════════════
 
-_SCHEMA_VERSION = 38  # Increment when tables/columns/indexes change
+_SCHEMA_VERSION = 39  # Increment when tables/columns/indexes change
 
 
 def _column_exists(conn, table, column):
@@ -710,6 +710,20 @@ def _init_system_schema(conn):
     # epic to 'open' so it dispatches again. Idempotent.
     cur.execute("UPDATE project_tasks SET status='open', owner_conv_id='', "
                 "lease_expires_at=0, dispatched=0 WHERE status='deferred'")
+    # Project status snapshots: the human↔brain status lane (Pillar #7).
+    # Append-only, keyed on project_path; seq monotonic per project. See
+    # lib/conversations/project_status.py.
+    from lib.database._core_schema import PROJECT_STATUS_SNAPSHOTS
+    create_if_absent(conn, PROJECT_STATUS_SNAPSHOTS, table_exists=_table_exists)
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_project_status_path_seq ON project_status_snapshots(project_path, seq DESC)')
+    # Project watch lane (Pillar #7): human-authored watch items + append-only
+    # brain responses. See lib/conversations/project_watch.py.
+    from lib.database._core_schema import (
+        PROJECT_WATCH_ITEMS, PROJECT_WATCH_RESPONSES)
+    create_if_absent(conn, PROJECT_WATCH_ITEMS, table_exists=_table_exists)
+    create_if_absent(conn, PROJECT_WATCH_RESPONSES, table_exists=_table_exists)
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_project_watch_items_path ON project_watch_items(project_path, updated_at DESC)')
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_project_watch_resp_item_seq ON project_watch_responses(item_id, seq DESC)')
 
     # ── Daily Optimizer tables (see lib/optimizer/) ──
     # optimizer_proposals + optimizer_action_log: migrated onto Core.

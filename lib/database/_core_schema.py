@@ -833,6 +833,65 @@ PROJECT_TASKS = define_table(
     sa.Column('updated_at', bigint_column(), nullable=False, server_default=sa.text('0')),
 )
 
+# project_status_snapshots — the human↔brain status lane (Pillar #7 of the
+# project brain). Append-only, keyed on project_path; seq is a per-project
+# monotonic counter (composite PK, mirrors project_events) so the trail can be
+# read newest-first / incrementally. Each row is ONE synthesized "where is the
+# project / are we drifting from the charter" narrative + the pillar_state JSON
+# evidence it was generated from + the trigger that minted it. Retention is
+# bounded (pruned on insert). HUMAN-FACING ONLY — never injected into sibling
+# agent prompts. See lib/conversations/project_status.py.
+PROJECT_STATUS_SNAPSHOTS = define_table(
+    'project_status_snapshots',
+    sa.Column('project_path', sa.Text, nullable=False),
+    sa.Column('seq', sa.Integer, nullable=False),
+    sa.Column('snapshot_id', sa.Text, nullable=False, server_default=''),
+    sa.Column('narrative', sa.Text, nullable=False, server_default=''),
+    sa.Column('pillar_state', sa.Text, nullable=False, server_default="{}"),
+    sa.Column('trigger', sa.Text, nullable=False, server_default='manual'),
+    sa.Column('ts', bigint_column(), nullable=False, server_default=sa.text('0')),
+    sa.PrimaryKeyConstraint('project_path', 'seq'),
+)
+
+
+# project_watch_items — the human's standing "things I care about" list (Pillar
+# #7 watch lane). The HUMAN authors each item (kind: concern|question|goal +
+# free text); the brain addresses it on a recurring basis. Single TEXT PK
+# (item_id). status: open|resolved. `promoted` marks an item bridged into the
+# charter (the ONLY path to agent awareness — a human-gated charter commit).
+# HUMAN-FACING ONLY — never injected into sibling agent prompts. See
+# lib/conversations/project_watch.py.
+PROJECT_WATCH_ITEMS = define_table(
+    'project_watch_items',
+    sa.Column('item_id', sa.Text, primary_key=True),
+    sa.Column('project_path', sa.Text, nullable=False, server_default=''),
+    sa.Column('kind', sa.Text, nullable=False, server_default='concern'),
+    sa.Column('text', sa.Text, nullable=False, server_default=''),
+    sa.Column('status', sa.Text, nullable=False, server_default='open'),
+    sa.Column('promoted', sa.Integer, nullable=False, server_default=sa.text('0')),
+    sa.Column('response_fingerprint', sa.Text, nullable=False, server_default=''),
+    sa.Column('created_by_conv', sa.Text, nullable=False, server_default=''),
+    sa.Column('created_at', bigint_column(), nullable=False, server_default=sa.text('0')),
+    sa.Column('updated_at', bigint_column(), nullable=False, server_default=sa.text('0')),
+)
+
+# project_watch_responses — append-only trail of the brain's recurring
+# responses to a watch item, keyed on item_id with a monotonic per-item seq
+# (composite PK, mirrors project_events). Bounded retention per item (pruned on
+# insert). A concern whose answer CHANGES over time is the drift signal, so we
+# keep the trail, not latest-only. HUMAN-FACING ONLY.
+PROJECT_WATCH_RESPONSES = define_table(
+    'project_watch_responses',
+    sa.Column('item_id', sa.Text, nullable=False),
+    sa.Column('seq', sa.Integer, nullable=False),
+    sa.Column('project_path', sa.Text, nullable=False, server_default=''),
+    sa.Column('response', sa.Text, nullable=False, server_default=''),
+    sa.Column('pillar_state', sa.Text, nullable=False, server_default="{}"),
+    sa.Column('trigger', sa.Text, nullable=False, server_default='manual'),
+    sa.Column('ts', bigint_column(), nullable=False, server_default=sa.text('0')),
+    sa.PrimaryKeyConstraint('item_id', 'seq'),
+)
+
 # optimizer_proposals — nightly self-tuning proposals. Single TEXT PK;
 # confidence is DOUBLE PRECISION/REAL.
 OPTIMIZER_PROPOSALS = define_table(

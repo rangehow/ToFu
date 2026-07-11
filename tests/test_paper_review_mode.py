@@ -154,6 +154,26 @@ def test_review_prompt_human_reviewer_voice_and_precise_weaknesses():
     _ok('review prompt: human-reviewer voice for Summary/Strengths + precise-not-numerous Weaknesses')
 
 
+def test_review_prompt_per_point_length_ceiling():
+    """The 2026-07 verbosity fix: Summary/Strengths/Weaknesses must carry an
+    EXPLICIT per-point length ceiling so each bullet is one tight sentence,
+    not a long-winded sub-paragraph. Asserted in BOTH languages."""
+    from lib.paper import build_review_prompt
+    pe = build_review_prompt('neurips', 'en').lower()
+    # A concrete per-bullet length cap must be present (one to two sentences).
+    assert 'one sentence' in pe or 'one to two sentences' in pe, \
+        'EN review prompt lacks a per-point length ceiling'
+    # And the ceiling must be framed as a hard limit, not a nicety.
+    assert 'no sub-paragraph' in pe or 'not a sub-paragraph' in pe or \
+        'no multi-sentence' in pe, 'EN prompt must forbid sub-paragraph bullets'
+    pz = build_review_prompt('iclr', 'zh')
+    assert '一到两句' in pz or '一句话' in pz, \
+        'ZH review prompt lacks a per-point length ceiling'
+    assert '不要展开成段落' in pz or '不展开成段落' in pz or '不要写成小段落' in pz, \
+        'ZH prompt must forbid sub-paragraph bullets'
+    _ok('review prompt: explicit per-point length ceiling in Summary/Strengths/Weaknesses (EN+ZH)')
+
+
 # ─── Cache-key non-pollution ─────────────────────────────────────
 
 def test_make_review_lang_distinct_from_report_key():
@@ -406,6 +426,7 @@ def main():
         test_review_prompt_ui_language,
         test_review_prompt_has_anti_slop_constraints,
         test_review_prompt_human_reviewer_voice_and_precise_weaknesses,
+        test_review_prompt_per_point_length_ceiling,
         test_make_review_lang_distinct_from_report_key,
         test_engine_review_injects_with_real_uilang_and_persists_composite_key,
         test_review_appendix_suppressed_report_keeps_it,

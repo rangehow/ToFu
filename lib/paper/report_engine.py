@@ -130,6 +130,15 @@ def _run_report_task(task, messages, images):
     # (reset in _dispatch) and discard a tool-round's draft in _begin_tool_round.
     # Held on a mutable holder so both closures share the same per-round buffer.
     _round = {'content': ''}
+    # Authoritative body source. The streamed deltas (``full_content``) are
+    # DISPLAY-ONLY: a mid-stream transient retry in stream_chat re-streams the
+    # WHOLE response through on_content, doubling the deltas. The dispatcher's
+    # RETURNED ``msg['content']`` of the terminal (no-tool) round is a single
+    # clean copy regardless of how the deltas arrived, so we persist/enrich from
+    # THAT — a re-emit can never double the written document. Captured in
+    # _accumulate_usage (fires with msg every round); the last no-tool round is
+    # always the terminal one (a no-tool round ends the loop).
+    _terminal = {'content': None}
 
     def _dispatch(rnd, tools):
         _round['content'] = ''
@@ -170,6 +179,12 @@ def _run_report_task(task, messages, images):
         # dispatcher may fall back to a different model than asked).
         nonlocal _round_count, _resolved_model, _provider_id
         _round_count += 1
+        # Capture the CLEAN returned content of a no-tool (terminal) round as
+        # the authoritative body — immune to on_content re-streaming (retries).
+        # A round with tool_calls is not terminal; its prose is an interim draft
+        # handled by _begin_tool_round, so we only record no-tool rounds.
+        if isinstance(msg, dict) and not msg.get('tool_calls'):
+            _terminal['content'] = msg.get('content') or ''
         if isinstance(usage, dict):
             _usage_total['prompt_tokens'] += int(
                 usage.get('prompt_tokens') or usage.get('input_tokens') or 0)
@@ -318,6 +333,27 @@ def _run_report_task(task, messages, images):
         elapsed = time.time() - t0
         logger.info('[Paper:Report] Task %s content stream complete — %d chars in %.1fs',
                     task['task_id'], len(full_content), elapsed)
+
+        # ── Authoritative body from the terminal round's CLEAN returned content ──
+        # The streamed deltas in ``full_content`` are display-only: a mid-stream
+        # transient retry (lib/llm/stream.py) re-streams the WHOLE response
+        # through on_content, so ``full_content`` can hold the report twice. The
+        # dispatcher's RETURNED ``msg['content']`` of the terminal (no-tool)
+        # round is a single clean copy however the deltas arrived. Adopt it as
+        # the source of truth for what gets injected + persisted, and tell live
+        # pollers to converge (delta_reset) so the live stream matches the
+        # written document. Only override when it actually diverges, so the
+        # common no-retry path stays byte-identical.
+        _clean = _terminal['content']
+        if _clean is not None and _clean != full_content:
+            logger.info('[Paper:Report] Task %s — replacing %d-char streamed body with '
+                        '%d-char terminal returned content (deltas were display-only; '
+                        'likely a mid-stream re-stream)',
+                        task['task_id'], len(full_content), len(_clean))
+            full_content = _clean
+            task['full_text'] = full_content
+            _append_report_event(task, {'type': 'delta_reset'})
+            _append_report_event(task, {'type': 'delta', 'delta': full_content})
 
         # Strip LLM preamble before the first heading. Models often emit
         # "Now I have enough information..." / "Let me compile..." / multi-

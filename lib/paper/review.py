@@ -415,13 +415,13 @@ Produce the review in this exact structure:
 # Review
 
 ## Summary
-A neutral 3–5 sentence paraphrase of the paper in YOUR OWN words — the way a reviewer opens a review to show the authors they were understood: the problem, the core idea of the method (a sentence or two), and the nature of the main result. Write it as prose a person would write; you do NOT need to pack in exact numbers, benchmark names, or deltas here — a high-level characterization is what a real Summary looks like (save the precise figures for the Weaknesses, where they do work). This is the ONLY place you describe the paper.
+A neutral 3–5 sentence paraphrase of the paper in YOUR OWN words — the way a reviewer opens a review to show the authors they were understood: the problem, the core idea of the method (a sentence or two), and the nature of the main result. Write it as prose a person would write; you do NOT need to pack in exact numbers, benchmark names, or deltas here — a high-level characterization is what a real Summary looks like (save the precise figures for the Weaknesses, where they do work). Keep it to those 3–5 sentences and no sub-paragraphs. This is the ONLY place you describe the paper.
 
 ## Strengths
-2–4 bullet points in a reviewer's natural voice. State the genuine merits — a well-motivated problem, a clean or simple idea, a thorough evaluation, a useful released artifact — at the level a person would actually write them. Be honest rather than exhaustive: if the paper has one real strength, list one. Do NOT bolt a table/figure/§ citation onto every strength; cite a specific number only where it genuinely sharpens the point. Do NOT manufacture strengths to look balanced.
+2–4 bullet points in a reviewer's natural voice. State the genuine merits — a well-motivated problem, a clean or simple idea, a thorough evaluation, a useful released artifact — at the level a person would actually write them. Be honest rather than exhaustive: if the paper has one real strength, list one. Do NOT bolt a table/figure/§ citation onto every strength; cite a specific number only where it genuinely sharpens the point. Do NOT manufacture strengths to look balanced. **Length ceiling: one sentence per bullet, two at the absolute most — no sub-paragraphs.** State the merit and stop; do not elaborate, re-justify, or restate it in different words.
 
 ## Weaknesses
-The heart of the review. Raise ONLY the weaknesses that are real and that matter to the decision — quality and precision over quantity (typically 2–4; more only if the paper genuinely has that many distinct, decisive problems). Order them most-to-least decision-relevant. For each: the precise weakness, the evidence or omission that reveals it, its impact on the paper's claims, and — where possible — the concrete experiment or change that would resolve it. Prefer one deeply-argued deal-breaker over five shallow observations, and be willing to name a flaw the authors themselves may not have noticed. Be specific and fair.
+The heart of the review. Raise ONLY the weaknesses that are real and that matter to the decision — quality and precision over quantity (typically 2–4; more only if the paper genuinely has that many distinct, decisive problems). Order them most-to-least decision-relevant. For each: the precise weakness, the evidence or omission that reveals it, its impact on the paper's claims, and — where possible — the concrete experiment or change that would resolve it. Prefer one deeply-argued deal-breaker over five shallow observations, and be willing to name a flaw the authors themselves may not have noticed. Be specific and fair. **Length ceiling: keep each weakness to two or three sentences of dense argument (weakness → evidence → fix). No multi-sentence rambling, no sub-paragraph per point — if it needs a paragraph, you are padding.**
 
 ## Questions to the Authors
 3–6 numbered, ACTIONABLE questions (each answerable with a specific number / ablation / clarification). These are the questions whose answers would move your rating.
@@ -477,13 +477,13 @@ _REVIEW_PROMPT_ZH = """\
 # 评审意见
 
 ## 概述（Summary）
-用**你自己的话**、3–5 句中性地转述这篇论文——就像审稿人在开头向作者表明"我读懂了你"：问题是什么、方法的核心想法（一两句）、以及主要结果的性质。写成一个人会写的散文；**不必**在这里堆砌精确数字、基准名或提升幅度——一个较高层次的概括才是真实 Summary 的样子（把精确数字留到 Weaknesses，在那里它们才有用武之地）。这是你**唯一**可以复述论文的地方。
+用**你自己的话**、3–5 句中性地转述这篇论文——就像审稿人在开头向作者表明"我读懂了你"：问题是什么、方法的核心想法（一两句）、以及主要结果的性质。写成一个人会写的散文；**不必**在这里堆砌精确数字、基准名或提升幅度——一个较高层次的概括才是真实 Summary 的样子（把精确数字留到 Weaknesses，在那里它们才有用武之地）。控制在这 3–5 句以内，不要展开成段落。这是你**唯一**可以复述论文的地方。
 
 ## 优点（Strengths）
-2–4 条，用审稿人自然的口吻。写出真实的优点——问题动机充分、想法干净/简单、评估充分、发布了有用的产物——写到一个人真正会写的程度即可。宁可诚实，不必求全：如果论文只有一个真优点，就只列一个。**不要**给每条优点都钉上表/图/§ 引用；只在具体数字确实能让论点更锋利时才给。**不要**为了显得"平衡"而硬造优点。
+2–4 条，用审稿人自然的口吻。写出真实的优点——问题动机充分、想法干净/简单、评估充分、发布了有用的产物——写到一个人真正会写的程度即可。宁可诚实，不必求全：如果论文只有一个真优点，就只列一个。**不要**给每条优点都钉上表/图/§ 引用；只在具体数字确实能让论点更锋利时才给。**不要**为了显得"平衡"而硬造优点。**长度上限：每条一句话，最多两句，不要展开成段落。**点到即止，不要反复论证或换着说法重复同一个优点。
 
 ## 缺点（Weaknesses）
-评审的核心。只提出**真实且影响决策**的缺点——质量与精度高于数量（通常 2–4 条；只有当论文确实有那么多相互独立、有决定性的问题时才更多）。按对决策的影响从大到小排列。每条给出：精确的缺点、暴露它的证据或缺失、它对论文主张的影响、以及（尽量）能解决它的具体实验或修改。宁可把一个致命问题论证透彻，也不要罗列五个浮于表面的观察，并敢于指出作者自己可能都没注意到的缺陷。要具体、公允。
+评审的核心。只提出**真实且影响决策**的缺点——质量与精度高于数量（通常 2–4 条；只有当论文确实有那么多相互独立、有决定性的问题时才更多）。按对决策的影响从大到小排列。每条给出：精确的缺点、暴露它的证据或缺失、它对论文主张的影响、以及（尽量）能解决它的具体实验或修改。宁可把一个致命问题论证透彻，也不要罗列五个浮于表面的观察，并敢于指出作者自己可能都没注意到的缺陷。要具体、公允。**长度上限：每条控制在两到三句致密的论证（缺点→证据→改法），不要展开成段落——如果一条要写成一段，那就是在注水。**
 
 ## 给作者的问题（Questions to the Authors）
 3–6 个带编号、**可执行**的问题（每个都能用具体的数字/消融/澄清回答）。这些应是"答案会改变你评分"的问题。

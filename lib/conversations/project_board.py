@@ -30,11 +30,11 @@ whose lease has expired is reported ``open``).
 from __future__ import annotations
 
 import json
-import time
 import uuid
 
 from lib.database import DOMAIN_CHAT, get_thread_db
 from lib.log import audit_log, get_logger
+from lib.timeutil import now_ms
 
 logger = get_logger(__name__)
 
@@ -48,8 +48,7 @@ _TITLE_MAX_CHARS = 2000  # epics carry multi-sentence design descriptions; a
 _MAX_BOARD_TASKS = 200  # coarse epics only — a guard against runaway posting
 
 
-def _now_ms() -> int:
-    return int(time.time() * 1000)
+_now_ms = now_ms
 
 
 def _effective_status(stored_status: str, lease_expires_at: int,

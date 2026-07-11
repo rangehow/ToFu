@@ -94,6 +94,11 @@ class TaskRuntime:
         self.error_source = error_source or f'task_runtime.{kind}'
         self._tasks: dict[str, dict] = {}
         self._lock = threading.Lock()
+        # Strong references to in-flight asyncio worker tasks. The event loop
+        # keeps only a WEAK reference to a bare ensure_future()/create_task()
+        # result, so without this a worker Task could be GC'd mid-flight and
+        # silently never run. Each entry self-evicts via add_done_callback.
+        self._bg_tasks: set = set()
 
     # ── Task lifecycle ─────────────────────────────────────────
 
@@ -323,7 +328,9 @@ class TaskRuntime:
         if loop and loop.is_running():
             async def _async_wrapper():
                 await asyncio.to_thread(_wrapper)
-            asyncio.ensure_future(_async_wrapper())
+            bg = asyncio.ensure_future(_async_wrapper())
+            self._bg_tasks.add(bg)
+            bg.add_done_callback(self._bg_tasks.discard)
         else:
             threading.Thread(
                 target=_wrapper,

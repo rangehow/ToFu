@@ -282,7 +282,7 @@ def test_NC_1_lease_dispatch_skip_is_load_bearing(flask_app):
 
     _patch_restore(
         _DISPATCH_SRC,
-        "        if t.get('kind') == 'lease':\n            continue\n",
+        "        if t.get('kind') in ('lease', 'ready'):\n            continue\n",
         "        if False:  # NC-1 (lease-skip disabled)\n            continue\n",
         run,
     )

@@ -168,7 +168,9 @@ def select_dispatchable(project_path: str) -> list[dict]:
         #    sweep + _drain_idle_target would spawn a spurious BILLED kickoff at
         #    TTL expiry. DENYLIST (not an allowlist on 'epic') so a
         #    pre-migration None/'' kind still reads as a dispatchable epic. ──
-        if t.get('kind') == 'lease':
+        #    A 'ready' row is a ready-to-land slice MARKER (a green acceptance-
+        #    gate result awaiting autonomous landing), likewise never work. ──
+        if t.get('kind') in ('lease', 'ready'):
             continue
         # ── live-claim filter: only OPEN epics are pickable. A claimed epic
         #    with an unexpired lease (effective status 'claimed') is excluded

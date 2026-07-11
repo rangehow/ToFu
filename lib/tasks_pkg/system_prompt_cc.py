@@ -28,9 +28,9 @@ Tool-name substitutions vs Claude Code:
   Glob / GlobTool         → find_files
   Grep / GrepTool         → grep_search
   Bash / BashTool         → run_command
-  Task / TodoWrite        → (not ported; Tofu has no todo tool)
-  AskUserQuestion         → (not ported; Tofu has ask_user via human_guidance)
-  Agent                   → (not ported; Tofu has spawn_agents for swarm)
+  TodoWrite               → todo_write
+  AskUserQuestion         → ask_human (via human_guidance)
+  Task / Agent            → spawn_agents (async swarm)
 """
 from __future__ import annotations
 

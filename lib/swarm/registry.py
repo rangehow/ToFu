@@ -418,6 +418,17 @@ def get_role_config(role: str) -> dict[str, Any]:
     return AGENT_ROLES.get(role, AGENT_ROLES['general'])
 
 
+# Roles that exist for the endpoint/autopilot FlowExecutor paths but are NOT
+# meant to be spawned manually via ``spawn_agents``. They carry prompts that
+# only make sense inside their host loop (a lone ``virtual_user`` or ``critic``
+# sub-agent has nothing to drive). ``get_role_config`` still resolves them for
+# endpoint mode; they are excluded ONLY from the manual-spawn catalogue so the
+# ``role`` param and the catalogue advertise the same 7 spawnable roles.
+_CATALOGUE_EXCLUDED_ROLES = frozenset({
+    'planner', 'worker', 'critic', 'virtual_user',
+})
+
+
 def format_role_catalogue() -> str:
     """Return a multi-line "role: when_to_use" listing for prompt injection.
 
@@ -427,9 +438,15 @@ def format_role_catalogue() -> str:
     without an explicit role catalogue the model has no idea which
     role to pick and either falls back to ``general`` or doesn't spawn
     at all.
+
+    Only MANUALLY-SPAWNABLE roles are listed; endpoint/autopilot-internal
+    roles (see :data:`_CATALOGUE_EXCLUDED_ROLES`) are omitted so the catalogue
+    matches the ``role`` param's advertised set.
     """
     lines = []
     for role, cfg in AGENT_ROLES.items():
+        if role in _CATALOGUE_EXCLUDED_ROLES:
+            continue
         when = cfg.get('when_to_use', '').strip().replace('\n', ' ')
         lines.append(f'  - {role}: {when}')
     return '\n'.join(lines)

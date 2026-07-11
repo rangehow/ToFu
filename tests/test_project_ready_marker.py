@@ -294,6 +294,108 @@ def test_auto_land_lands_disjoint_holds_overlapping(flask_app, monkeypatch):
     assert remaining_convs == {'cA', 'cB'}, 'the overlapping pair stays held'
 
 
+# ════════════════════════════════════════════════════════════════════
+#  Criterion (arm the heartbeat) — sweep_dispatch turns the loop itself
+# ════════════════════════════════════════════════════════════════════
+
+def test_sweep_dispatch_auto_lands_green_marker(flask_app, monkeypatch):
+    """The autonomy half: a green ready marker on a project is AUTO-LANDED by
+    one sweep_dispatch pass (the 30s heartbeat seam), without a human calling
+    auto_land_ready by hand. This is what makes the built loop actually turn."""
+    import lib.conversations.project_acceptance as pa
+    import lib.conversations.project_commit as pc
+    import lib.conversations.project_dispatch as pd
+    import lib.conversations.project_ready as pr
+
+    monkeypatch.setattr(pa, 'run_acceptance_gate', lambda *a, **k: {
+        'ok': True, 'green': True, 'selfConsistent': True, 'orphans': []})
+    committed = []
+
+    def _fake_commit(project_path, conv_id, message, *, files=None, author=None):
+        committed.append((conv_id, tuple(files)))
+        return {'ok': True, 'commitSha': 'sha_sweep', 'committed': list(files),
+                'excluded': [], 'verified': True}
+    monkeypatch.setattr(pc, 'do_commit', _fake_commit)
+
+    with flask_app.app_context():
+        pr.post_ready_marker('/sweep/1', 'cA', files=['lib/only.py'],
+                             test_paths=['t.py'], at_ref='HEAD',
+                             gate_result={'green': True, 'selfConsistent': True})
+        pd.sweep_dispatch('/sweep/1')          # ← the heartbeat pass
+        remaining = pr.read_ready_markers('/sweep/1')
+    assert committed == [('cA', ('lib/only.py',))], \
+        'sweep_dispatch must auto-land the green marker via project_commit'
+    assert remaining == [], 'the landed marker is cleared by the sweep'
+
+
+def test_sweep_holds_overlapping_markers(flask_app, monkeypatch):
+    """One sweep pass lands only the disjoint slice and leaves the overlapping
+    pair HELD (they persist across the sweep for human authorization)."""
+    import lib.conversations.project_acceptance as pa
+    import lib.conversations.project_commit as pc
+    import lib.conversations.project_dispatch as pd
+    import lib.conversations.project_ready as pr
+
+    monkeypatch.setattr(pa, 'run_acceptance_gate', lambda *a, **k: {
+        'ok': True, 'green': True, 'selfConsistent': True, 'orphans': []})
+    committed = []
+    monkeypatch.setattr(pc, 'do_commit', lambda project_path, conv_id, message, *, files=None, author=None: (
+        committed.append(tuple(files)) or {'ok': True, 'commitSha': 's', 'committed': list(files), 'excluded': []}))
+
+    with flask_app.app_context():
+        pr.post_ready_marker('/sweep/2', 'cA', files=['lib/shared.py'],
+                             test_paths=['t.py'], at_ref='HEAD',
+                             gate_result={'green': True, 'selfConsistent': True})
+        pr.post_ready_marker('/sweep/2', 'cB', files=['lib/shared.py'],
+                             test_paths=['t.py'], at_ref='HEAD',
+                             gate_result={'green': True, 'selfConsistent': True})
+        pr.post_ready_marker('/sweep/2', 'cC', files=['lib/c.py'],
+                             test_paths=['t.py'], at_ref='HEAD',
+                             gate_result={'green': True, 'selfConsistent': True})
+        pd.sweep_dispatch('/sweep/2')
+        remaining = {m['conv'] for m in pr.read_ready_markers('/sweep/2')}
+    assert committed == [('lib/c.py',)], 'only the disjoint slice C is landed by the sweep'
+    assert remaining == {'cA', 'cB'}, 'the overlapping pair stays held across the sweep'
+
+
+def test_NC_sweep_autoland_is_load_bearing(flask_app, monkeypatch):
+    """Byte-revert the auto_land_ready call in sweep_dispatch → a green marker
+    is NOT landed by the sweep (reproduces the inert-loop defect: the loop is
+    built but nothing turns it)."""
+    import lib.conversations.project_acceptance as pa
+    import lib.conversations.project_commit as pc
+    import lib.conversations.project_ready as pr
+
+    monkeypatch.setattr(pa, 'run_acceptance_gate', lambda *a, **k: {
+        'ok': True, 'green': True, 'selfConsistent': True, 'orphans': []})
+    committed = []
+    monkeypatch.setattr(pc, 'do_commit', lambda *a, **k: committed.append(1) or {
+        'ok': True, 'commitSha': 's', 'committed': list(k.get('files') or []), 'excluded': []})
+
+    def run():
+        import lib.conversations.project_dispatch as pd
+        with flask_app.app_context():
+            from lib.database import DOMAIN_CHAT, get_thread_db
+            get_thread_db(DOMAIN_CHAT).execute(
+                "DELETE FROM project_tasks WHERE project_path='/ncsweep'")
+            get_thread_db(DOMAIN_CHAT).commit()
+            pr.post_ready_marker('/ncsweep', 'cA', files=['lib/x.py'],
+                                 test_paths=['t.py'], at_ref='HEAD',
+                                 gate_result={'green': True, 'selfConsistent': True})
+            pd.sweep_dispatch('/ncsweep')
+        assert not committed, \
+            'NC: with the auto_land call removed, the sweep must NOT land the ' \
+            'marker (the loop is inert — this is the defect the wiring fixes)'
+
+    _patch_restore(
+        _DISPATCH_SRC,
+        "    try:\n        _auto_land_ready_markers(project_path)\n    except Exception as e:\n"
+        "        logger.debug('[Dispatch] auto-land pass skipped proj=%.40r: %s', project_path, e)\n",
+        "    pass  # NC (auto-land wiring removed)\n",
+        run,
+    )
+
+
 def main():
     import pytest as _pt
     _pt.main([__file__, '-v'])

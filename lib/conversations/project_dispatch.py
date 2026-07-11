@@ -673,6 +673,37 @@ def _migrate_stranded_epics(project_path: str) -> int:
     return 0
 
 
+def _auto_land_ready_markers(project_path: str) -> int:
+    """Autonomously land ready-to-land slice markers on this project — the
+    arming of the continuous-atomic-slice-landing loop into the heartbeat.
+
+    Delegates to ``project_ready.auto_land_ready`` which RE-GATES each pending
+    marker at HEAD (never lands a stale marker blind), lands the maximal
+    file-set-DISJOINT set via ``project_commit`` (agent author), and HOLDS any
+    file-set-overlapping markers for human authorization. Best-effort; never
+    raises into the sweep. Returns the number of slices landed this pass.
+
+    Placed at the TOP of ``sweep_dispatch`` (before the epic dispatch loop) so
+    a landed slice refreshes HEAD before any epic that then dispatches picks up
+    work against a stale tree.
+    """
+    if not project_path:
+        return 0
+    try:
+        from lib.conversations.project_ready import auto_land_ready
+        res = auto_land_ready(project_path)
+        landed = res.get('landed') or []
+        if landed:
+            logger.info('[Dispatch] auto-landed %d ready slice(s) on proj=%.40r '
+                        '(held=%d)', len(landed), project_path,
+                        len(res.get('held') or []))
+        return len(landed)
+    except Exception as e:
+        logger.warning('[Dispatch] auto-land ready markers failed proj=%.40r: %s',
+                       project_path, e)
+        return 0
+
+
 def sweep_dispatch(project_path: str, *, max_per_sweep: int = 3) -> int:
     """The HEARTBEAT: dispatch genuinely-pickable epics on an idle project,
     even when nothing just completed (the completion trigger can only propagate
@@ -695,6 +726,14 @@ def sweep_dispatch(project_path: str, *, max_per_sweep: int = 3) -> int:
     if not project_path:
         return 0
     dispatched = 0
+    # ── Arm the continuous-atomic-slice-landing loop: land any green ready
+    #    markers FIRST (before the epic dispatch loop) so a just-landed slice
+    #    refreshes HEAD for any epic that then dispatches. Best-effort; the
+    #    loop re-gates at HEAD + holds overlaps, so this is safe on the tick. ──
+    try:
+        _auto_land_ready_markers(project_path)
+    except Exception as e:
+        logger.debug('[Dispatch] auto-land pass skipped proj=%.40r: %s', project_path, e)
     # ── Self-heal FIRST: re-drain any idle conv still holding an undrained
     #    kickoff (a broken completion chain / restart / a prior multi-dispatch
     #    sweep). Without this, a stranded kickoff stays queued forever — the

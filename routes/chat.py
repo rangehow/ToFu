@@ -2123,9 +2123,19 @@ def chat_poll(task_id):
                          'finishReason=%s model=%s error=%s',
                          task_id[:8], row['status'], _db_content_len, _db_thinking_len,
                          _db_finish, _db_model, bool(row['error']))
+        # ★ Close the 5s cold-replay window on the POLL fallback too (the
+        #   sse_poll_fallback.js path): the task is not in memory, so row
+        #   content/thinking is the (up to 5s stale) task_results checkpoint.
+        #   Fold the lossless per-delta task_events log — identical to the two
+        #   SSE cold emits above — so a poll-fallback reconnect mid-stream sees
+        #   the full buffer, not a short checkpoint. Falls back to the row pair
+        #   on an empty/failed log.
+        from lib.tasks_pkg.event_fold import fold_cold_state_text
+        _poll_c, _poll_t = fold_cold_state_text(
+            task_id, row['content'] or '', row['thinking'] or '')
         r = {
             'id': row['task_id'], 'status': effective_status,
-            'content': row['content'], 'thinking': row['thinking'],
+            'content': _poll_c, 'thinking': _poll_t,
         }
         if _reconnect_hint:
             # Tell the client to re-open the stream (it will land on the

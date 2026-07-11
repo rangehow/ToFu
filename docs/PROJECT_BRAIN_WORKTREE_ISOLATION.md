@@ -7,6 +7,11 @@
 > owner caught that a `commit-tree <conv-tree>` "merge" silently discarded 7 of
 > 8 landers' content (last-tree-wins) while all 8 stayed reachable — the land
 > now does a REAL 3-way merge and the gate is CONTENT-verified, not reachability.
+> A SECOND owner catch closed a false-green one level up: the acceptance gate
+> now re-runs ON THE MERGE-RESULT tree inside the CAS critical section (§5) —
+> two branches that each pass their own gate can merge textually-clean into a
+> semantically-broken trunk (A drops `foo()`, B adds a call to it), so a
+> pre-merge-only gate is a false green; content-preserved ≠ integration-correct.
 > No refactor code until the model is ratified in full on paper. Tier-2
 > bleeding-control (class-aware backoff + event-driven wait_paths) landed
 > already (`a73f824`) and is NOT a substitute for this.
@@ -105,7 +110,7 @@ needed. The rest of this doc is the concrete plan.
 |---|---|---|
 | `ensure_worktree(project, conv_id)` | first project tool call of a task, or dispatch | create off integration HEAD if absent; reuse if present; return abs path. Idempotent. |
 | `sync_worktree(conv_id)` | task start / before land | rebase conv branch onto latest integration HEAD (fast-forward when possible; on conflict, surface as a normal conflict for the conv to resolve — NOT a silent park) |
-| `land_worktree(conv_id, files, msg)` | replaces `project_commit.do_commit` | commit conv branch, run acceptance gate at the *prospective* merge HEAD, then a REAL 3-way merge into integration under CAS (§5.1). Success = merge-result tree contains every landed change (content-verified). Conflict → report, do not force. |
+| `land_worktree(conv_id, files, msg)` | replaces `project_commit.do_commit` | pre-flight gate the conv branch, then a REAL 3-way merge into integration under CAS (§5.1), RE-GATING the merge-result tree inside the CAS section before publishing the ref. Success = merge-result GATES GREEN (not just content-present). Conflict / red merge-result → report + resolve in conv worktree, never publish. |
 | `release_worktree(conv_id)` | task/conversation end + soft-lease TTL | GC: prune the worktree, delete the conv branch IF fully merged; keep if it has unmerged commits (never lose work). |
 
 ### 2.3 GC — reuse the board's proven soft-lease model, do NOT invent a reaper
@@ -206,21 +211,39 @@ conflicts *survivable*; dispatch-time partitioning makes them *rare*.
 land_worktree(conv_id, files, test_paths, message):
   1. sync_worktree(conv_id)        # rebase conv branch onto integration HEAD
        └─ conflict? → report to conv, resolve in-worktree, retry (no park)
-  2. run_acceptance_gate(conv_worktree, files, test_paths, at_ref=<merge-base>)
-       └─ REUSED unchanged: green AND selfConsistent (orphan scan)
+  2. run_acceptance_gate(conv_worktree, ...)   # PRE-FLIGHT on the conv branch:
+       └─ fail fast if the conv's own work is red. Necessary, NOT sufficient.
   3. not ok? → return why (tests red / orphaned callers). Do NOT merge.
-  4. ok? → CAS-serialized REAL 3-way merge into tofu/integration (§5.1);
-           success = the merge-result tree contains every landed change
-           (CONTENT-verified), NOT merely reachable/ancestor
+  4. ok? → CAS-serialized REAL 3-way merge into tofu/integration (§5.1), and
+           inside that critical section RE-RUN the acceptance gate ON THE
+           MERGE-RESULT tree before publishing the ref. Success = the
+           merge-result GATES GREEN (not just "files present", not "reachable").
+           A red merge-result routes to conflict resolution in the conv's
+           worktree — the broken merge is NEVER published to the ref.
   5. STOP. The human fast-forwards tofu/integration → their build branch at
      their own cadence (Q1). Autonomous landing NEVER writes the human's trunk.
 ```
 
+> ⚠️ **The gate must run on the tree that PUBLISHES (owner catch 2026-07-11).**
+> Step 2 gates the conv branch in ISOLATION; that is necessary (fail fast) but
+> NOT sufficient. Two branches that each pass their own gate can merge
+> textually-clean into a semantically-broken integration — e.g. conv A removes
+> `foo()` (green: nothing calls it on A), conv B adds `lib.foo()` in a different
+> file (green: `foo` still exists on B), the diffs don't overlap so `git merge`
+> succeeds with zero conflict, and `tofu/integration` is now RED with a broken
+> reference NO pre-merge gate ever saw. **Content-preserved ≠ integration-correct.**
+> The gate on the merge-result (step 4) is the only thing that catches this; it
+> runs inside the CAS section so the ref is published ONLY if the merged tree is
+> green. On a lost CAS, re-merge AND re-gate (never re-CAS a stale/ungated tree).
+> Proven on the real mount (§7.1 Scenario C).
+
 - **Authorship** is the merge commit's parentage — structural, not inferred.
 - **No contamination possible**: the conv branch contains only that conv's
   commits by construction.
-- **The acceptance gate is the ONLY quality gate** — it already catches the
-  split-brain (removed-symbol-still-referenced) that byte-identity could not.
+- **The gate runs TWICE**: pre-merge on the conv branch (fail fast, step 2) and
+  — the load-bearing one — on the merge-result inside the CAS section (step 4).
+  The same `run_acceptance_gate` (green tests AND `selfConsistent` orphan scan);
+  the merge-result run is what makes the published trunk provably correct.
 - Agent-authored merges keep `--author 'Tofu Agent'` (the existing
   `_agent_author()` convention); the human remains committer.
 
@@ -259,11 +282,17 @@ CAS-merge(conv_branch):                    # the land critical section
             git -C lw merge --abort; rm -rf lw; prune
             return CONFLICT → sync_worktree(step 1): resolve in the CONV's
                               worktree, never on integration (no clobber)
-        NEW = git -C lw rev-parse HEAD     # the MERGE-RESULT tree (all content)
+        if NOT run_acceptance_gate(lw):     # *** GATE THE MERGE-RESULT ***
+            rm -rf lw; git worktree prune
+            return CONFLICT → resolve in the CONV's worktree; NEVER publish a
+                              red merge-result to the ref
+        NEW = git -C lw rev-parse HEAD     # the MERGE-RESULT tree (all content,
+                                           # and PROVEN green as an integration)
         rm -rf lw; git worktree prune
     if update-ref refs/heads/tofu/integration NEW OLD:   # CAS: only if unchanged
         return landed
-    # lost the CAS race: integration moved under us → re-read OLD and re-merge
+    # lost the CAS race: integration moved under us → re-read OLD, RE-MERGE and
+    # RE-GATE against the new tip (never re-CAS a stale/ungated tree)
     jittered-backoff()
   return land_exhausted → post a board block, do not force
 ```
@@ -290,9 +319,13 @@ CAS-merge(conv_branch):                    # the land critical section
   same-file conflict → exactly one lands, the other REPORTS conflict (not
   clobbered), integration holds one intact winner; ≤8 retries, 0 exhausted,
   fsck clean.
-- **The acceptance gate (the slow part) runs BEFORE the critical section**, on
-  the conv's own worktree. The merge itself is bounded; the retry window is the
-  merge time, still short.
+- **The acceptance gate runs TWICE**: a pre-flight on the conv branch (cheap
+  fail-fast, outside the critical section) AND — the load-bearing one — on the
+  MERGE-RESULT tree inside the CAS section, because content-preserved ≠
+  integration-correct (§5, Scenario C). The critical-section work is therefore
+  merge + gate; keep the gate scoped to the affected tests so the window stays
+  short (emit the per-land duration metric — Q5 — so a slow merge-gate is
+  visible). On a lost CAS the loser re-merges AND re-gates against the new tip.
 - **Exhaustion is a real (rare) outcome** — 50 failed CAS rounds means
   pathological contention; it posts a board block (class `[sibling]`, retried by
   Tier-2 event-driven wake), never a forced blind write.
@@ -350,12 +383,17 @@ integration-ref land under two strategies. All `.git` on the FUSE mount.
 | **REF blind** `update-ref new` (no CAS) | **FAILS by design** — only 1 of 8 survives (silent lost merges). NEVER use. |
 | **REF CAS** `commit-tree`-fake-merge + `update-ref new old` | **FALSE GREEN — data loss** — 8/8 "landed" + all reachable, but final tree held only base + last winner's file; 7/8 landers' content silently discarded (owner catch) |
 | **REF CAS** REAL 3-way merge (`git merge` in scratch land-worktree) + `update-ref new old` + retry (§5.1) | **PASS, CONTENT-verified** — 8 distinct-file landers → 8/8 landed, `ls-tree` shows ALL 8 files + base (no loss); same-file conflict → one lands + one REPORTS conflict (not clobbered); ≤8 retries, 0 exhausted, fsck clean |
+| **GATE on merge-result** (Scenario C: A drops `foo()`, B adds a call in another file — textually clean, semantically broken) | **PASS** — both branches GREEN individually; A lands, B's textually-clean merge GATES RED on the merge-result → land REFUSES to publish; `tofu/integration` ref UNCHANGED, trunk stays GREEN. A "files present" check would have passed both files (proves present ≠ correct) |
 | "corruption" seen on first pass | **reflog garbling ONLY**, not DAG/object/ref corruption — eliminated by `core.logallrefupdates=false` on the server repo |
 
 **Three hard environment constraints this surfaced (bind the build):**
 1. **git is 2.11.0** — NO `merge-tree --write-tree`, NO `worktree remove`. Land
-   MUST use `commit-tree` + CAS `update-ref` (§5.1); GC MUST use `rm -rf` +
-   `worktree prune`. A newer git would simplify this but is not assumed.
+   MUST compute a REAL merged tree via `git merge` in a throwaway detached
+   land-worktree, then CAS `update-ref new old` to the merge-result (§5.1) —
+   NEVER `commit-tree <conv-tree>` (that fabricates ancestry without merging
+   content = the discarded-content data-loss bug). GC MUST use `rm -rf` +
+   `worktree prune`. A newer git (`merge-tree --write-tree`, `worktree remove`)
+   would simplify this but is not assumed.
 2. **The server `.git` MUST set `core.logallrefupdates=false`.** Per-ref reflogs
    are the ONLY artifact that garbles under concurrent FUSE appends; with them
    off, `fsck --connectivity-only` is clean after 80 concurrent commits + 8
@@ -371,9 +409,17 @@ integration-ref land under two strategies. All `.git` on the FUSE mount.
    land-worktree and the probe asserts every lander's file is in the final
    `ls-tree`; a lost CAS forces a RE-MERGE against the new tip, not a re-CAS of
    the stale tree.
+5. **The acceptance gate MUST run on the MERGE-RESULT tree, inside the CAS
+   critical section, before publishing the ref — not only pre-merge on the conv
+   branch.** Two branches that each pass their own gate can merge textually-clean
+   into a semantically-broken trunk (§5 example / §7.1 Scenario C). A pre-merge
+   gate is necessary (fail fast) but a FALSE GREEN on its own; content-preserved
+   ≠ integration-correct. Red merge-result → route to conflict resolution, never
+   the ref. On a lost CAS, re-merge AND re-gate.
 
 Probe scripts kept at `/tmp/fuse_worktree_probe*.sh` (not committed — throwaway
-validation harness; the results + constraints live here). Re-runnable.
+validation harness; the results + constraints live here). `probe4` is the
+gate-on-merge-result Scenario C. Re-runnable.
 
 ---
 
@@ -390,7 +436,10 @@ validation harness; the results + constraints live here). Re-runnable.
 3. Worktree-scoped path resolution (§3.1) + `run_command` cwd (§3.2), flag-gated
    (rebase latency here IS V5).
 4. `land_worktree` land flow (§5) + the CAS-with-retry integration-ref primitive
-   (§5.1, `commit-tree` + `update-ref new old`) reusing the acceptance gate;
+   (§5.1, REAL `git merge` in a scratch detached land-worktree → acceptance gate
+   ON THE MERGE-RESULT tree inside the CAS critical section → `update-ref new
+   old`; a red merge-result routes to conflict resolution, never the ref); the
+   pre-merge gate on the conv branch is reused but is NOT sufficient alone.
    `project_commit` becomes the `inproc`-mode path only.
 5. Dispatch-time write-set partitioning (§4) in `select_dispatchable` — add the
    epic `write_set` field to `post_task` / `dispatch_epic`.
@@ -432,13 +481,13 @@ Worktree isolation (§0–§8) remains THE fix.
 3. ~~**FUSE fallback threshold**~~ — **RESOLVED empirically (§7.1):** V2–V4 PASS
    on the real mount; no fallback needed. The bounded-retry primitive is CAS on
    the integration ref (§5.1), not a commit retry, and it is required regardless.
-4. **Worktree disk budget** (STILL OPEN) — N worktrees share objects but each
-   has a working copy; cap on concurrent worktrees per project? Suggest a soft
-   cap = max concurrent dispatched convs, with LRU GC of idle worktrees past
-   their lease. (§2.3 GC tuning.)
-5. **Ref-land contention ceiling** (NEW, low-risk) — measured ≤8 retries at 8-way
-   concurrency with no exhaustion, CONTENT-verified (all landers preserved, real
-   conflicts reported); confirm `MAX_LAND_RETRIES=50` + jittered backoff is ample
-   at the real fleet's peak dispatch width, or make it adaptive. Note each retry
-   now re-runs a `git merge` (not just a ref poke), so the per-retry cost is the
-   merge time — cheap for small diffs, worth watching for large ones.
+4. ~~**Worktree disk budget**~~ — **RATIFIED (Q4, owner 2026-07-11):** soft cap =
+   max concurrent dispatched convs; LRU-GC idle worktrees past their lease. The
+   shared object store makes the marginal cost mostly working copies —
+   acceptable. (§2.3 GC tuning.)
+5. ~~**Ref-land contention ceiling**~~ — **RATIFIED (Q5, owner 2026-07-11):**
+   `MAX_LAND_RETRIES=50` + jittered backoff is fine at current width. Because
+   each retry now re-runs a real `git merge` AND a re-gate (constraint 5), the
+   land MUST emit a per-land retry-count + duration metric so an expensive
+   large-diff critical section is visible; go adaptive ONLY if the metric says
+   so. (Measured ≤8 retries at 8-way, 0 exhausted, CONTENT-verified.)

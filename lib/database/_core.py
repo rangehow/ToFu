@@ -136,6 +136,58 @@ def _require_pg() -> bool:
     return (_ge('TOFU_REQUIRE_PG', default='') or '').strip().lower() in ('1', 'true', 'yes')
 
 
+def _pg_require_wait_s() -> float:
+    """Bounded seconds to wait for PG to come up before fail-closing.
+
+    Returns 0.0 unless ``TOFU_REQUIRE_PG`` is set — a single-box / PG-optional
+    boot must add ZERO latency and stay byte-identical to today. When PG is
+    mandatory, default to 60s (tunable via ``TOFU_PG_REQUIRE_WAIT_S``), because
+    on a self-triggered re-exec the app-owned postmaster is torn down with the
+    old process and returns within seconds; a single 5s probe that then aborts
+    turns that transient race into a hard boot failure."""
+    if not _require_pg():
+        return 0.0
+    from lib.env_compat import getenv_compat as _ge
+    raw = (_ge('TOFU_PG_REQUIRE_WAIT_S', default='') or '').strip()
+    if not raw:
+        return 60.0
+    try:
+        return max(0.0, float(raw))
+    except (ValueError, TypeError):
+        logger.warning('[DB] TOFU_PG_REQUIRE_WAIT_S=%r is not a number — '
+                       'defaulting to 60s', raw)
+        return 60.0
+
+
+def _retry_until(attempt, deadline_s: float, *, sleep=None, monotonic=None,
+                 base_backoff_s: float = 1.0, max_backoff_s: float = 8.0):
+    """Call ``attempt()`` until it returns a truthy result or the deadline.
+
+    Generic bounded-retry-with-exponential-backoff primitive. ``sleep`` and
+    ``monotonic`` are injectable for deterministic tests. When ``deadline_s``
+    is <= 0 this is exactly ONE attempt with no sleep (the byte-identical
+    single-box path). Total sleeping is clamped so it never overshoots the
+    deadline. Returns the first truthy result, else None."""
+    import time as _time
+    sleep = sleep or _time.sleep
+    monotonic = monotonic or _time.monotonic
+    start = monotonic()
+    backoff = base_backoff_s
+    while True:
+        result = attempt()
+        if result:
+            return result
+        elapsed = monotonic() - start
+        remaining = deadline_s - elapsed
+        if remaining <= 0:
+            return None
+        wait = min(backoff, max_backoff_s, remaining)
+        if wait <= 0:
+            return None
+        sleep(wait)
+        backoff *= 2
+
+
 def _assert_pg_available_or_raise(pg_ok: bool, pgdata: str = '') -> None:
     """Epic D1: if PG is mandatory (``TOFU_REQUIRE_PG``) but unavailable,
     raise instead of falling back to SQLite. Pure + testable — the module-load
@@ -1993,18 +2045,38 @@ if _FORCE_SQLITE:
 else:
     # Try PostgreSQL
     _pg_ok = False
-    try:
-        from lib.database._bootstrap import _ensure_pg_running as _boot_ensure
-        _pg_result = _boot_ensure(_PGDATA, BASE_DIR, PG_HOST, PG_PORT, PG_USER, PG_PASSWORD, PG_DBNAME)
-        if _pg_result:
-            PG_HOST = _pg_result['PG_HOST']
-            PG_PORT = _pg_result['PG_PORT']
-            PG_DSN = _pg_result['PG_DSN']
-            _pg_ok = True
-    except ImportError as e:
-        logger.info('[DB] PG bootstrap unavailable (missing dependency: %s) — will try SQLite', e)
-    except Exception as e:
-        logger.warning('[DB] PG bootstrap failed: %s — will try SQLite', e)
+
+    def _attempt_pg_bootstrap():
+        """One full PG bootstrap attempt (probe + auto-start). Returns the
+        result dict on success, else None. Retried by _retry_until below when
+        PG is mandatory, so a transient re-exec race doesn't fail-close boot."""
+        try:
+            from lib.database._bootstrap import _ensure_pg_running as _boot_ensure
+            return _boot_ensure(_PGDATA, BASE_DIR, PG_HOST, PG_PORT, PG_USER,
+                                PG_PASSWORD, PG_DBNAME)
+        except ImportError as e:
+            logger.info('[DB] PG bootstrap unavailable (missing dependency: %s) '
+                        '— will try SQLite', e)
+            return None
+        except Exception as e:
+            logger.warning('[DB] PG bootstrap attempt failed: %s', e)
+            return None
+
+    # On a self-triggered re-exec the app-owned postmaster is coming back within
+    # seconds. When PG is MANDATORY (TOFU_REQUIRE_PG), wait for it with backoff
+    # up to a real deadline before refusing — a single-shot probe that aborts on
+    # the race is the bug. wait=0 when PG is optional → byte-identical single-box.
+    _pg_wait_s = _pg_require_wait_s()
+    if _pg_wait_s > 0:
+        logger.info('[DB] TOFU_REQUIRE_PG set — waiting up to %.0fs for '
+                    'PostgreSQL (tolerates a self-restart re-exec race) '
+                    'before fail-closing.', _pg_wait_s)
+    _pg_result = _retry_until(_attempt_pg_bootstrap, deadline_s=_pg_wait_s)
+    if _pg_result:
+        PG_HOST = _pg_result['PG_HOST']
+        PG_PORT = _pg_result['PG_PORT']
+        PG_DSN = _pg_result['PG_DSN']
+        _pg_ok = True
 
     if _pg_ok:
         # Verify psycopg2 is importable

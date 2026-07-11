@@ -42,37 +42,26 @@ function _clearSseCursor(taskId) {
 }
 
 
-/* ── State-snapshot content-regression guard ─────────────────────────────
- * A reconnect `state` snapshot replays the server's LAST checkpoint of the
- * turn. On a flaky network the reconnect can land BEFORE the server has
- * written a fresh 5s checkpoint (cold-replay race, wrong replica), so the
- * snapshot's `content`/`thinking` can be EMPTY or SHORTER than what the
- * client already accumulated from live deltas. Assigning it raw
- * (`msg.content = ev.content || ""`) then BLANKS an in-progress message —
- * the "sent and generating, later found completely GONE" symptom.
+/* ── State-snapshot regression guard — TWO-TIER (2026-07-11) ──────────────
+ * A reconnect `state` snapshot replays the server's record of the turn. Its
+ * TEXT (content/thinking) is now BACKEND-AUTHORITATIVE and applied VERBATIM at
+ * the 5 state sites: the server folds the lossless per-delta task_events log on
+ * every cold path (lib/tasks_pkg/event_fold.py::fold_cold_state_text) AND
+ * persists each delta BEFORE pushing it to the client (durable-before-visible
+ * ordering, lib/tasks_pkg/manager.py::append_event) — so a state snapshot's
+ * text is never SHORTER than the client buffer. The old `_snapshotLonger` text
+ * keep-longer belt was therefore RETIRED here (the "sent and generating, later
+ * found GONE" cold-replay race is closed at the source).
  *
- * The invariant (same as _pollFallback's merge and the 2026-05-31
- * content-regression detector): a snapshot may only GROW a field, never
- * shrink it. Returns the longer of the incoming snapshot vs. the value the
- * message already holds. `field` is 'content' or 'thinking'.
- */
-function _snapshotLonger(msg, ev, field) {
-  const incoming = (ev && ev[field]) || "";
-  const current = (msg && msg[field]) || "";
-  return incoming.length >= current.length ? incoming : current;
-}
-
-
-/**
- * toolRounds sibling of _snapshotLonger — a reconnect `state` snapshot (or a
- * racey `done` committedMessage) may replay a COLD/empty checkpoint whose
- * toolRounds array is shorter than what the client already accumulated from
- * live deltas. Assigning it verbatim then COLLAPSES the on-screen tool-round
- * panel (searches / file edits) mid-stream — the same content-regression class
- * _snapshotLonger fixes for text, extended to rounds.
+ * toolRounds is the REMAINING residual: on every cold path it is still sourced
+ * from the 5s task_results.tool_rounds checkpoint / the conversation (NOT the
+ * delta fold — reconstructing rounds needs the tool_start/tool_done
+ * choreography, owned by the segment-timeline epic). So a cold mid-round
+ * reconnect can still deliver a SHORTER rounds array, and the keep-longer guard
+ * below is still load-bearing FOR ROUNDS ONLY.
  *
- * Invariant: a snapshot may only GROW the rounds, never shrink them. Returns
- * the incoming array only when it is at least as long as the current one.
+ * Invariant (rounds): a snapshot may only GROW the rounds, never shrink them.
+ * Returns the incoming array only when it is at least as long as the current one.
  */
 function _snapshotLongerRounds(current, incoming) {
   const cur = Array.isArray(current) ? current : [];
@@ -578,8 +567,14 @@ function dispatchSSEEvent(line, ctx) {
               }
             }
             if (plannerMsg) {
-              plannerMsg.content = _snapshotLonger(plannerMsg, ev, 'content');
-              plannerMsg.thinking = _snapshotLonger(plannerMsg, ev, 'thinking');
+              // Verbatim text projection: the backend folds the lossless
+              // task_events log into content/thinking on every cold path
+              // (event_fold.fold_cold_state_text) AND persists each delta
+              // BEFORE pushing it, so a state snapshot's text is never behind
+              // the client buffer. toolRounds is NOT yet foldable (still 5s-
+              // checkpoint-sourced), so it keeps the keep-longer guard.
+              plannerMsg.content = ev.content || "";
+              plannerMsg.thinking = ev.thinking || "";
               plannerMsg.toolRounds = _snapshotLongerRounds(plannerMsg.toolRounds, ev.toolRounds);
               assistantMsg = plannerMsg;
               if (buf) {
@@ -632,8 +627,8 @@ function dispatchSSEEvent(line, ctx) {
               _ensureMsgId(plannerMsg);
               conv.messages.push(plannerMsg);
             }
-            plannerMsg.content = _snapshotLonger(plannerMsg, ev, 'content');
-            plannerMsg.thinking = _snapshotLonger(plannerMsg, ev, 'thinking');
+            plannerMsg.content = ev.content || "";  // verbatim (server fold authoritative for text)
+            plannerMsg.thinking = ev.thinking || "";
             plannerMsg.toolRounds = _snapshotLongerRounds(plannerMsg.toolRounds, ev.toolRounds);
             assistantMsg = plannerMsg;
             if (buf) {
@@ -706,8 +701,8 @@ function dispatchSSEEvent(line, ctx) {
                 _ensureMsgId(workerMsg);
                 conv.messages.push(workerMsg);
               }
-              workerMsg.content = _snapshotLonger(workerMsg, ev, 'content');
-              workerMsg.thinking = _snapshotLonger(workerMsg, ev, 'thinking');
+              workerMsg.content = ev.content || "";  // verbatim (server fold authoritative for text)
+              workerMsg.thinking = ev.thinking || "";
               workerMsg.toolRounds = _snapshotLongerRounds(workerMsg.toolRounds, ev.toolRounds);
               assistantMsg = workerMsg;
               if (buf) {
@@ -746,15 +741,15 @@ function dispatchSSEEvent(line, ctx) {
         } /* close else (full reconnection) */
       } else if (_epCriticPhase && _epCriticMsg) {
         /* State snapshot during critic phase → update critic msg */
-        _epCriticMsg.content = _snapshotLonger(_epCriticMsg, ev, 'content');
-        _epCriticMsg.thinking = _snapshotLonger(_epCriticMsg, ev, 'thinking');
+        _epCriticMsg.content = ev.content || "";  // verbatim (server fold authoritative for text)
+        _epCriticMsg.thinking = ev.thinking || "";
         if (_epCriticBuf) {
           _epCriticBuf.content = (_epCriticMsg.content || "").replace(/\[VERDICT:\s*(?:STOP|CONTINUE)\s*\]\s*$/i, "").trimEnd();
           _epCriticBuf.thinking = _epCriticMsg.thinking;
         }
       } else {
-        assistantMsg.content = _snapshotLonger(assistantMsg, ev, 'content');
-        assistantMsg.thinking = _snapshotLonger(assistantMsg, ev, 'thinking');
+        assistantMsg.content = ev.content || "";  // verbatim (server fold authoritative for text)
+        assistantMsg.thinking = ev.thinking || "";
         if (ev.error) assistantMsg.error = ev.error;
         if (ev.toolRounds) {
           /* Merge: keep checkpoint rounds + new ones from state snapshot.
@@ -1554,8 +1549,11 @@ function dispatchSSEEvent(line, ctx) {
        *   by copying settled fields onto the existing object, not replacing it. */
       const _cm = ev.committedMessage;
       if (_cm && typeof _cm === 'object') {
-        assistantMsg.content = _snapshotLonger(assistantMsg, _cm, 'content');
-        assistantMsg.thinking = _snapshotLonger(assistantMsg, _cm, 'thinking');
+        // committedMessage is the backend's COMPLETE authoritative record →
+        // project content/thinking VERBATIM (the _snapshotLonger text belt was
+        // retired; server fold + persist-before-push make it unnecessary).
+        assistantMsg.content = (_cm.content != null) ? _cm.content : (assistantMsg.content || '');
+        assistantMsg.thinking = (_cm.thinking != null) ? _cm.thinking : (assistantMsg.thinking || '');
         if (Array.isArray(_cm.toolRounds)) assistantMsg.toolRounds = _snapshotLongerRounds(assistantMsg.toolRounds, _cm.toolRounds);
         for (const _k of ['finishReason', 'usage', 'preset', 'toolSummary',
                           'model', 'provider_id', 'apiRounds', 'modifiedFiles',

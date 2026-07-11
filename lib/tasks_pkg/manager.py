@@ -450,7 +450,19 @@ def append_event(task, event):
     """
     if task.get('_suppressEvents'):
         return
-    seq = _chat_runtime.append_event(task['id'], event)
+
+    # ★ Durable-before-visible ordering: the persistent task_events row MUST
+    #   commit before the frame is pushed to the client, so a cold reconnect
+    #   folding the log (event_fold.fold_cold_state_text) can never be behind
+    #   the bytes the client already holds. We hand the persist to the
+    #   runtime's before_push hook (fired after seq assignment, before push).
+    #   Best-effort: a DB blip is logged, never blocks the stream.
+    def _persist_before_push(_seq):
+        from lib.tasks_pkg.event_log import append_persistent_event
+        append_persistent_event(task['id'], _seq, event)
+
+    seq = _chat_runtime.append_event(task['id'], event,
+                                     before_push=_persist_before_push)
     if seq is None:
         # Task not in runtime (registered via legacy direct dict insert in
         # tests, etc.) — fall back to direct append for backward compat.
@@ -462,6 +474,12 @@ def append_event(task, event):
             seq = len(task['events'])
             event['seq'] = seq
             task['events'].append(event)
+        # Persist BEFORE the fallback push too (same durable-before-visible
+        # ordering as the runtime path above).
+        try:
+            _persist_before_push(seq)
+        except Exception as e:
+            logger.debug('[Manager] legacy-path persist failed (non-fatal): %s', e)
         try:
             from lib.push import push_event
             push_event('chat', task['id'], event)
@@ -479,16 +497,16 @@ def append_event(task, event):
     elif event.get('type') == 'delta':
         task['phase'] = None  # Clear phase when LLM starts producing tokens
 
-    # ★ Persist to task_events table for durable Last-Event-ID replay.
-    #   This survives cleanup_old_tasks AND server restart, eliminating the
-    #   "tool list disappeared after I came back" class of bugs.
-    try:
-        from lib.tasks_pkg.event_log import append_persistent_event, flush_pending
-        append_persistent_event(task['id'], seq, event)
-        if event.get('type') == 'done':
+    # ★ Persistence now happens in _persist_before_push (durable-before-visible
+    #   ordering, above) — the row is committed BEFORE the client push, not
+    #   after. Only the terminal flush_pending remains here (no-op for API
+    #   compat; harmless if the persist raced).
+    if event.get('type') == 'done':
+        try:
+            from lib.tasks_pkg.event_log import flush_pending
             flush_pending(task['id'])
-    except Exception as e:
-        logger.debug('[Manager] append_persistent_event failed (non-fatal): %s', e)
+        except Exception as e:
+            logger.debug('[Manager] flush_pending failed (non-fatal): %s', e)
 
     # ★ Wake any async API handler awaiting this task (event-driven wait,
     #   replaces the old busy-poll loops). Every event nudges the waiter so

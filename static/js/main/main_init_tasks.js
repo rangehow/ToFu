@@ -8,102 +8,19 @@
    scope — no imports / exports needed.
    ═══════════════════════════════════════════════════════════════════ */
 
-/**
- * Classify a TRAILING assistant message left behind by an interrupted turn.
- *
- * A "ghost tail" is an assistant turn that carries NO settled output: empty
- * content, no finishReason, no usage, no error, and no REAL tool round (an
- * empty / still-`searching` round does not count). Such a turn started but
- * never finalized.
- *
- * Returns:
- *   'delete'      — truly empty (not even a thinking fragment): remove it.
- *   'interrupted' — has a stray `thinking` fragment (and maybe _memoryPrefetch)
- *                   but no content/finishReason: stamp finishReason='interrupted'
- *                   so it renders honestly instead of as a blank, tag-less bubble
- *                   (and recovered thinking + provenance are preserved).
- *   null          — not a ghost tail; leave it alone.
- *
- * Pure function (no DOM / network) so it is unit-testable in isolation and
- * shared by the Case-D reconcile path in initActiveTasks().
- */
-function _classifyGhostTail(lastMsg) {
-  if (!lastMsg || lastMsg.role !== 'assistant') return null;
-  if (lastMsg.content || lastMsg.finishReason || lastMsg.usage || lastMsg.error) return null;
-  const hasRealRound = Array.isArray(lastMsg.toolRounds)
-    && lastMsg.toolRounds.some(r =>
-      r && (r.status === 'done' || r.toolContent
-        || (Array.isArray(r.results) && r.results.length)));
-  if (hasRealRound) return null;
-  return lastMsg.thinking ? 'interrupted' : 'delete';
-}
-
-/**
- * True for a BURIED (non-tail) assistant placeholder that carries NO
- * user-visible payload at all — the blank bubbles left mid-list by aborted /
- * failed / empty-stop turns that the user then retried on top of.
- *
- * WHY this exists separately from _classifyGhostTail:
- *   _classifyGhostTail only ever inspected conv.messages[length-1]. Once a
- *   NEWER turn is appended on top of an empty placeholder, that placeholder is
- *   no longer the tail, so nothing ever removed it — repeated failed attempts
- *   STACKED empty "Agent" bubbles in the middle of the transcript (the "chat
- *   became cluttered, can't tell what happened, can't continue" symptom, conv
- *   mr3jfcw10pianj had 4 such buried empties at idx 79/80/81/84).
- *
- * The buried predicate is intentionally MORE aggressive than the tail one on a
- * single axis: a buried empty turn is removed EVEN when it carries a settled
- * finishReason (aborted / interrupted) or usage, because mid-list it renders as
- * a body-less badge-only bubble — pure clutter — whereas the TAIL keeps its
- * badge (that's what _classifyGhostTail preserves). It is NOT more aggressive
- * about content: anything user-visible (content, a thinking fragment, a real
- * tool round, an error envelope, an image-gen result) keeps the turn. A
- * thinking-only interrupted turn is preserved (its recovered reasoning renders
- * a thinking block — not a blank bubble).
- *
- * Special turns (endpoint planner/critic/worker, autopilot VU, image-gen) are
- * never treated as empty clutter even with empty content.
- *
- * Pure function (no DOM / network) — unit-testable in isolation.
- */
-function _isBuriedEmptyGhost(msg) {
-  if (!msg || msg.role !== 'assistant') return false;
-  if (msg._epIteration || msg._isEndpointReview || msg._isEndpointPlanner
-      || msg._isVirtualUser || msg._autopilotRunId
-      || msg._igResult || msg._igResults || msg._igError) return false;
-  if ((msg.content || '').trim()) return false;
-  if ((msg.thinking || '').trim()) return false;   // interrupted-with-reasoning → keep
-  if (msg.error) return false;                       // a rendered error block is meaningful
-  const hasRealRound = Array.isArray(msg.toolRounds)
-    && msg.toolRounds.some(r =>
-      r && (r.status === 'done' || r.toolContent
-        || (Array.isArray(r.results) && r.results.length)));
-  if (hasRealRound) return false;
-  return true;
-}
-
-/**
- * Remove every BURIED empty-ghost assistant placeholder from conv.messages,
- * leaving the tail (index -1) alone for _classifyGhostTail to reconcile.
- *
- * Splices in reverse so indices stay valid. Returns the number removed (0 →
- * caller does nothing, so no needless save/sync). Idempotent: a second call on
- * already-swept messages removes nothing.
- *
- * @param {Object} conv
- * @returns {number} count of buried ghosts removed
- */
-function _sweepBuriedGhostAssistants(conv) {
-  if (!conv || !Array.isArray(conv.messages) || conv.messages.length < 2) return 0;
-  const msgs = conv.messages;
-  const lastIdx = msgs.length - 1;
-  const removeIdx = [];
-  for (let i = 0; i < lastIdx; i++) {
-    if (_isBuriedEmptyGhost(msgs[i])) removeIdx.push(i);
-  }
-  for (let k = removeIdx.length - 1; k >= 0; k--) msgs.splice(removeIdx[k], 1);
-  return removeIdx.length;
-}
+/* NOTE: the ENTIRE frontend ghost-lifecycle classifier family is now RETIRED.
+ * `_isBuriedEmptyGhost` / `_sweepBuriedGhostAssistants` went first (2026-07-07),
+ * then `_classifyGhostTail` (2026-07-11) once the backend reconcile reached
+ * every render path. All INFERRED settled lifecycle state in JS — the
+ * separation-of-concerns violation. The verdict (buried-ghost sweep +
+ * superseded-error-husk collapse + trailing delete/interrupt) now lives ONLY on
+ * the backend (lib/conversations/reconcile.py), applied + persisted +
+ * _reconciledAt-stamped in one commit on the GET path
+ * (routes/conversations.py::_reconcile_conv_on_get_blocking), the prefetch path
+ * (_prefetch_reconciled_dict), and startup recovery. Proven byte-equivalent by
+ * tests/test_reconcile_js_backend_equivalence.py. The frontend keeps ONLY
+ * network/DOM orchestration (reconnect a live SSE, poll a finished task); it no
+ * longer infers settled lifecycle at all. */
 
 // ── Init ──
 async function initActiveTasks() {
@@ -242,44 +159,23 @@ async function initActiveTasks() {
        *   frontend just loaded is already clean. This is what makes the
        *   resurrect + auto-fire regressions structurally impossible on the
        *   crash-recovery path: no frontend pop / allowTruncate PUT happens. */
-      if (!conv._needsLoad && !activeStreams.has(conv.id) && !conv._reconciledAt) {
-        /* ★ Ghost-tail reconcile — the buried-ghost SWEEP and the empty-tail
-         *   DELETE were RETIRED here (2026-07-07): both INFERRED settled
-         *   lifecycle state in JS and truncated persisted history via
-         *   syncConversationToServer(conv, {allowTruncate:true}) — the
-         *   separation-of-concerns violation. That verdict now lives on the
-         *   backend GET path
-         *   (routes/conversations.py::_reconcile_conv_on_get_blocking →
-         *   lib/conversations/reconcile.py), which runs the SAME sweep + tail
-         *   classification and persists it in the SAME commit — proven
-         *   byte-equivalent by tests/test_reconcile_js_backend_equivalence.py.
-         *   loadConversationMessages ALWAYS runs Phase 2 (the reconciling GET)
-         *   even on a cache hit, so any idle conv the frontend renders has
-         *   already been reconciled server-side; the client no longer truncates.
-         *   Only the NON-destructive interrupt STAMP survives (no allowTruncate;
-         *   the backend applies the identical 'interrupt' verdict, so this is a
-         *   belt for a conv whose Phase-2 GET has not yet returned). */
-        const lastMsg = conv.messages[conv.messages.length - 1];
-        if (_classifyGhostTail(lastMsg) === 'interrupted') {
-          /* Has a stray `thinking` fragment (and possibly _memoryPrefetch) but
-             no content/finishReason — an interrupted turn whose task is gone.
-             DON'T delete (that discards recovered reasoning + provenance);
-             STAMP finishReason='interrupted' so it renders honestly with the
-             "Interrupted" finish badge instead of a blank, tag-less bubble.
-             Without this the trailing husk slips past the delete branch (its
-             `thinking` defeats the `!thinking` guard) and is orphaned forever. */
-          console.warn(
-            `[initActiveTasks CaseD] Stamping interrupted on ghost thinking-only assistant message in conv ${conv.id.slice(0, 8)} ` +
-            `(thinking=${(lastMsg.thinking || '').length}chars, msgs=${conv.messages.length}). ` +
-            `Interrupted turn whose task is gone — preserving recovered thinking.`,
-          );
-          lastMsg.finishReason = 'interrupted';
-          saveConversations(null);  // recovery reconcile, not new activity — don't bump updatedAt
-          syncConversationToServer(conv);
-        }
-      }
+      /* Case D: RETIRED (2026-07-11). The trailing-assistant ghost verdict —
+       *   'delete' an empty husk, 'interrupt'-stamp a thinking-only husk — is
+       *   now applied ENTIRELY server-side by
+       *   lib/conversations/reconcile.py::reconcile_conversation_messages, which
+       *   both persists the cleaned list AND stamps settings._reconciledAt in
+       *   the SAME commit. That reconcile runs on EVERY render path the client
+       *   can take: the single-conv GET (_reconcile_conv_on_get_blocking), the
+       *   ?meta=1&prefetch= path (_prefetch_reconciled_dict — the last bypass,
+       *   closed 2026-07-11), and startup recovery. So any idle conv the
+       *   frontend renders has already had the identical verdict applied +
+       *   _reconciledAt set — the JS `_classifyGhostTail` belt (and its
+       *   non-destructive interrupt stamp) is now dead code and is removed.
+       *   Backend/frontend equivalence proven by
+       *   tests/test_reconcile_js_backend_equivalence.py; the prefetch bypass
+       *   closure by tests/test_prefetch_path_reconcile.py. */
 
-      /* Case E (patch→fundamental-fix #2): orphaned trailing user message.
+      /* Case E: orphaned trailing user message.
          The old frontend logic INFERRED an orphan from an age<5min heuristic
          (on messages OR a stale _needsLoad shell's settings.lastMsgRole) and
          then AUTO-STARTED a billed LLM turn behind a 3s setTimeout. That was a

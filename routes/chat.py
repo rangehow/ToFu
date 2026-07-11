@@ -1423,10 +1423,20 @@ async def chat_stream(task_id):
                                 (task_id,)
                             ).fetchone()
                             if row_local:
+                                # ★ Close the 5s cold-replay window: fold the
+                                #   lossless per-delta task_events log instead of
+                                #   trusting the (up to 5s stale) task_results
+                                #   checkpoint. The fold reconstructs the EXACT
+                                #   text the client saw; on an empty/failed log
+                                #   it returns the checkpoint pair unchanged.
+                                from lib.tasks_pkg.event_fold import fold_cold_state_text
+                                _fold_c, _fold_t = fold_cold_state_text(
+                                    task_id, row_local['content'] or '',
+                                    row_local['thinking'] or '')
                                 state_local = build_event(
                                     EventType.STATE,
-                                    content=row_local['content'] or '',
-                                    thinking=row_local['thinking'] or '',
+                                    content=_fold_c,
+                                    thinking=_fold_t,
                                     status=row_local['status'],
                                 )
                                 if row_local['tool_rounds']:
@@ -1482,9 +1492,15 @@ async def chat_stream(task_id):
                 (task_id,)
             ).fetchone())
         if row:
+            # ★ Close the 5s cold-replay window (see gen_persisted above):
+            #   fold the lossless per-delta task_events log; falls back to the
+            #   checkpoint pair on an empty/failed log.
+            from lib.tasks_pkg.event_fold import fold_cold_state_text
+            _fold_c, _fold_t = fold_cold_state_text(
+                task_id, row['content'] or '', row['thinking'] or '')
             state = build_event(
-                EventType.STATE, content=row['content'],
-                thinking=row['thinking'], status=row['status'],
+                EventType.STATE, content=_fold_c,
+                thinking=_fold_t, status=row['status'],
             )
             if row['error']:
                 from lib.error_envelope import from_json as _err_from_json

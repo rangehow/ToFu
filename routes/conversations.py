@@ -99,6 +99,30 @@ def _json(payload, status=None):
     return _Defer(jsonify, payload, status=status)
 
 
+def _prefetch_reconciled_dict(db, conv_id, r):
+    """Build the prefetch payload for a conversation, running the SAME
+    server-authoritative ghost reconcile the single-conv GET handler runs.
+
+    The ``?meta=1&prefetch=<id>`` branch of ``list_convs`` returns this conv's
+    full body inline so the frontend can render it without a second round-trip.
+    The frontend then sets ``pc._needsLoad = false``, which SKIPS the
+    reconciling Phase-2 GET (``loadConversationMessages`` is gated on
+    ``_needsLoad``). So without reconciling HERE, a prefetched active conv with
+    an interrupted ghost tail reaches the client unreconciled and with
+    ``settings._reconciledAt`` unstamped — the sole remaining render path the
+    frontend Case-D ``_classifyGhostTail`` belt exists for.
+
+    Gate on the live-task probe exactly as ``get_conv`` does: a pending/running
+    task's empty placeholder is byte-identical to a ghost tail and must NOT be
+    swept (that would delete+persist the live stream's target). For an idle
+    conv, delegate to ``_reconcile_conv_on_get_blocking`` (persist-in-place, no
+    ``updated_at`` bump, stamp ``_reconciledAt``).
+    """
+    if _conv_has_live_task(conv_id):
+        return _conv_row_to_dict(r)
+    return _reconcile_conv_on_get_blocking(db, conv_id, r)
+
+
 def _conv_row_to_dict(r):
     """Convert a DB row (with messages column) to a conversation dict."""
     return {
@@ -240,7 +264,7 @@ async def list_convs():
                             (prefetch_id, DEFAULT_USER_ID)
                         ).fetchone()
                         if r:
-                            prefetch_data = _conv_row_to_dict(r)
+                            prefetch_data = _prefetch_reconciled_dict(db, prefetch_id, r)
                     except Exception as e:
                         logger.warning('[Common] prefetch conv %s failed: %s', prefetch_id[:12], e)
                 return payload, etag, prefetch_data

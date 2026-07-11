@@ -260,6 +260,42 @@ DOMAIN_SYSTEM = 'system'
 _CONNECT_TIMEOUT_S = 5
 _STATEMENT_TIMEOUT_MS = 120_000
 _IDLE_IN_TRANSACTION_S = 300
+
+
+def _pg_via_pooler():
+    """True when the runtime PG connection goes through a transaction-pooling
+    tier (PgBouncer). Env-gated OFF by default → single-box/desktop behaviour
+    is byte-identical. See docs/EPIC_D §5a (managed PgBouncer HA, transaction
+    pooling) and the D2 session-state audit.
+    """
+    return os.environ.get('TOFU_PG_VIA_POOLER', '').strip().lower() in (
+        '1', 'true', 'yes', 'on')
+
+
+def _pg_session_setup_plan(via_pooler):
+    """Decide HOW to apply the two connection-scoped timeout GUCs.
+
+    Under transaction pooling a server backend is returned to the pool at every
+    COMMIT, so a connect-time ``SET SESSION`` (a) silently no-ops for the setter
+    (a later transaction may land on a different backend) and (b) LEAKS the GUC
+    to the next unrelated pool borrower. The pooler-safe form ships the SAME two
+    timeout values as libpq *startup* options (``-c statement_timeout=…``) so
+    they ride the server backend for its whole pooled lifetime and are part of
+    the pool key — never leaking, never no-op'ing — and skips the SET SESSION.
+
+    Returns ``{'emit_set_session': bool, 'options': str|None}``. With
+    ``via_pooler`` False the plan is byte-identical to the legacy path
+    (SET SESSION emitted, no libpq ``options``).
+    """
+    if not via_pooler:
+        return {'emit_set_session': True, 'options': None}
+    # Carry the SAME units as the legacy SET SESSION so the enforced timeouts
+    # are identical — only the delivery mechanism changes. libpq's default unit
+    # for these GUCs is ms, so idle_in_transaction MUST keep its 's' suffix
+    # (a bare 300 would mean 300ms, not 300s).
+    options = (f'-c statement_timeout={_STATEMENT_TIMEOUT_MS}ms '
+               f'-c idle_in_transaction_session_timeout={_IDLE_IN_TRANSACTION_S}s')
+    return {'emit_set_session': False, 'options': options}
 _TCP_KEEPALIVES_IDLE_S = 30
 _TCP_KEEPALIVES_INTERVAL_S = 10
 _TCP_KEEPALIVES_COUNT = 3
@@ -892,6 +928,7 @@ def _new_pg_connection():
     json_type = psycopg2.extensions.new_type((JSON_OID,), 'JSON_AS_STR', _jsonb_as_string)
     jsonb_type = psycopg2.extensions.new_type((JSONB_OID,), 'JSONB_AS_STR', _jsonb_as_string)
 
+    _session_plan = _pg_session_setup_plan(_pg_via_pooler())
     _connect_kwargs = dict(
         connect_timeout=_CONNECT_TIMEOUT_S,
         keepalives=1,
@@ -901,11 +938,21 @@ def _new_pg_connection():
         application_name='tofu',
         gssencmode='disable',
     )
+    if _session_plan['options']:
+        _connect_kwargs['options'] = _session_plan['options']
     try:
         try:
             conn = psycopg2.connect(PG_DSN, **_connect_kwargs)
         except psycopg2.OperationalError as e:
             err_txt = str(e)
+            # Expected shutdown race: the postmaster is stopping while a
+            # background finalize/daemon connection is being opened. Do NOT
+            # attempt a self-heal reboot (we are on the way down) — re-raise so
+            # the caller's finalize aborts; it logs one concise line via
+            # is_expected_shutdown_error. Checked BEFORE the dead-signature
+            # self-heal because "server closed the connection" overlaps both.
+            if _sql_error_is_expected_shutdown(err_txt):
+                raise
             # Self-heal on recognised "PG is dead" signatures. Anything
             # else (auth failure, bad host, etc.) re-raises immediately.
             if not _pg_error_is_dead(err_txt):
@@ -928,20 +975,26 @@ def _new_pg_connection():
     psycopg2.extensions.register_type(jsonb_type, conn)
     conn.autocommit = False
 
-    try:
-        cur = conn.cursor()
-        cur.execute('SET SESSION statement_timeout = %s',
-                    (f'{_STATEMENT_TIMEOUT_MS}ms',))
-        cur.execute('SET SESSION idle_in_transaction_session_timeout = %s',
-                    (f'{_IDLE_IN_TRANSACTION_S}s',))
-        conn.commit()
-        cur.close()
-    except Exception as e:
-        logger.debug('[DB] Could not set session parameters (non-fatal): %s', e)
+    # Connect-time SET SESSION is applied ONLY on the non-pooler path. Under
+    # transaction pooling these are delivered as libpq startup options above
+    # (_session_plan['options']) — a SET SESSION on a pooled connection no-ops
+    # for the setter and leaks the GUC to the next pool borrower. See
+    # _pg_session_setup_plan.
+    if _session_plan['emit_set_session']:
         try:
-            conn.rollback()
-        except Exception as _rb_err:
-            logger.debug('[DB] Rollback after set-session-params also failed: %s', _rb_err)
+            cur = conn.cursor()
+            cur.execute('SET SESSION statement_timeout = %s',
+                        (f'{_STATEMENT_TIMEOUT_MS}ms',))
+            cur.execute('SET SESSION idle_in_transaction_session_timeout = %s',
+                        (f'{_IDLE_IN_TRANSACTION_S}s',))
+            conn.commit()
+            cur.close()
+        except Exception as e:
+            logger.debug('[DB] Could not set session parameters (non-fatal): %s', e)
+            try:
+                conn.rollback()
+            except Exception as _rb_err:
+                logger.debug('[DB] Rollback after set-session-params also failed: %s', _rb_err)
 
     with _conn_count_lock:
         _conn_count += 1

@@ -201,6 +201,68 @@ these choices only fix the *target-topology* posture the seam rolls out into).
 self-run** — the same robust-first logic; D4's cross-replica invalidation
 rides that managed bus.
 
+## 5b. D2 SESSION-STATE AUDIT — completed 2026-07-11 (code-only slice; the pooler-compat conversion landed)
+
+The §5a resolution put the D2 **session-state audit** in scope as *pure code*
+(making the codebase pooler-compatible), distinct from the §10-gated *infra*
+(provisioning/activating the managed PgBouncer tier). The audit below is
+complete, the one runtime hot-path hazard is fixed and gated behind
+`TOFU_PG_VIA_POOLER` (flag-off = byte-identical single-box), and the two
+admin-path items are classified and deferred to the DSN-split with rationale.
+
+**Method:** exhaustive grep of `lib/database/` for `SET SESSION` / `SET LOCAL` /
+`pg_advisory_*` / `prepare(` / `set_session` / `autocommit` / cross-statement
+locks. **Findings: zero server-side prepared statements** (psycopg2 does
+client-side param binding), **zero advisory locks** anywhere.
+
+| # | Site | Session-scoped state | Class under txn-pooling | Disposition |
+|---|---|---|---|---|
+| 1 | `_core.py` `_new_pg_connection` `conn.autocommit = False` | psycopg2 txn mode | **SAFE** — app COMMIT/ROLLBACK per txn returns the backend to the pool `idle`; no residue | no change |
+| 2 | `_core.py` `_new_pg_connection` connect-time `SET SESSION statement_timeout` + `idle_in_transaction_session_timeout` | 2 GUCs, **runtime hot path** | **HAZARDOUS** — under txn pooling a `SET SESSION` no-ops for the setter (a later txn may land on a different backend) AND leaks the GUC to the next unrelated pool borrower | **FIXED** (this increment) |
+| 3 | `_core.py` TOAST-heal `SET LOCAL statement_timeout = 5000` | 1 GUC, already txn-scoped | **SAFE** — `SET LOCAL` resets at COMMIT; this is the canonical pooler-safe pattern (the model the fix follows) | no change |
+| 4 | `_schema_pg.py` DDL migration `SET SESSION statement_timeout=600s` + restore | admin/DDL path | **HAZARDOUS but out-of-band** — multi-statement DDL with SET+restore is fundamentally incompatible with transaction pooling; the correct fix is to route admin/DDL over a **direct (non-pooled) DSN**, i.e. DSN-routing wiring, not a session-state leak on the runtime path | **deferred → DSN-split** |
+| 5 | `_core.py` self-heal VACUUM FULL / REINDEX `raw.autocommit = True` flip | admin path | same class as #4 — VACUUM FULL requires a real session in autocommit; needs a direct connection, not a pooled one | **deferred → DSN-split** |
+
+**Fix for #2 (the only runtime-path hazard).** Two pure, unit-testable helpers
+next to the timeout constants in `_core.py`:
+- `_pg_via_pooler()` → parses `TOFU_PG_VIA_POOLER` (default OFF; truthy
+  `1/true/yes/on`), mirroring the `TOFU_REQUIRE_PG` / `TOFU_RUNTIME_STATE_BACKEND`
+  env-gate pattern.
+- `_pg_session_setup_plan(via_pooler)` → returns
+  `{'emit_set_session': bool, 'options': str|None}`. **OFF** = legacy
+  (`emit_set_session=True`, `options=None`) — byte-identical emitted SQL. **ON**
+  = ships the SAME two timeout values (identical units — `120000ms` /
+  `300s`) as libpq **startup** options (`-c statement_timeout=… -c
+  idle_in_transaction_session_timeout=…`) and skips the SET SESSION.
+
+Why startup-options rather than per-transaction `SET LOCAL` reassertion: the
+`options` GUCs ride the *server backend* for its whole pooled lifetime and are
+part of PgBouncer's pool key, so they never leak and never no-op — **and** they
+cover the idle window *before* the first app statement, which a `SET LOCAL
+idle_in_transaction_session_timeout` structurally cannot (there is no
+transaction yet). Zero per-transaction overhead.
+
+`_new_pg_connection` computes the plan once from the env flag, conditionally
+adds `options` to `_connect_kwargs`, and gates the SET SESSION block on
+`_session_plan['emit_set_session']`.
+
+**Tests:** `tests/test_pg_pooler_session_state.py` (18, DB-free) — env parser
+truthy/falsy/default; flag-OFF plan == legacy (byte-identical); flag-ON plan
+emits startup options with matching values/units and NO SET SESSION; libpq
+`-c` form validity; a source-guard that the connect path actually consults the
+plan; and an NC proving the plan guard is load-bearing. Run with
+`PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` (autoload trips a spurious vispy GL-ES
+import at collection in this env). Regression-checked against
+`test_db_stale_conn_recovery` / `test_db_thread_conn_lifecycle` /
+`test_db_safe_dual_mode` / `test_runtime_state_store` / `test_pg_require_wait_retry`
+(all green).
+
+**Remaining D2 = infra only, still §10-gated:** provision the managed PgBouncer
+HA tier, point the runtime DSN at it, set `TOFU_PG_VIA_POOLER=1`, and (per #4/#5)
+add the direct-DSN admin lane for DDL/VACUUM. None of that is dev-testable and
+none is done here — the code is now pooler-*compatible*, which is the part that
+was NOT infra-gated.
+
 ## 6. Scope boundary
 
 - **Epics B / C** — their own docs; D reuses B's Redis substrate for D4's

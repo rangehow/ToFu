@@ -563,7 +563,7 @@
   const update = {
     check:   (opts) => get('/api/v1/update/check', Object.assign({ onError: 'null' }, opts || {})),
     apply:   ()     => post('/api/v1/update/apply', {}),
-    restart: ()     => post('/api/v1/update/restart', {}, { onError: 'null' }),
+    restart: (body) => post('/api/v1/update/restart', body || {}, { onError: 'null' }),
   };
 
   // swarm (multi-agent control plane) -------------------------------

@@ -28,10 +28,11 @@ import uuid
 
 from flask import Blueprint
 
-from lib.api_response import api_internal_error, api_ok
+from lib.api_response import api_conflict, api_internal_error, api_ok
 from lib.log import audit_log, get_logger
 from lib.openapi import api_meta
 from lib.push import push_event
+from lib.request_parser import parse_body
 
 from .auth import require_auth, require_scope
 
@@ -201,17 +202,51 @@ def _deferred_reexec(delay: float = 0.6):
         'Re-execs the server process so freshly-pulled code takes effect. '
         'Explicit and admin-only — there is no silent auto-restart. The '
         'response is sent before the process restarts; clients should wait '
-        'a few seconds and reconnect.'
+        'a few seconds and reconnect. Refuses with 409 when OTHER '
+        'conversations have in-flight tasks (a re-exec kills every running '
+        'task); pass {"force": true} to override.'
     ),
     tags=['system'],
 )
 def update_restart():
-    audit_log('self_update_restart', pid=os.getpid())
-    logger.warning('[Update] Restart requested — re-exec scheduled (pid=%d)',
-                   os.getpid())
+    # A restart is an unconditional os.execv of the whole server, so EVERY
+    # in-flight task dies with it. Refuse by default when sibling conversations
+    # are mid-run — otherwise an agent's own run_command probing this endpoint
+    # silently interrupts all its long-running siblings. The caller's own
+    # conversation (if any) is excluded so it can restart itself.
+    body = parse_body()
+    force = bool(body.get('force'))
+    own_conv = (body.get('convId') or body.get('conv_id') or '').strip() or None
+
+    running = []
+    try:
+        from lib.tasks_pkg.manager import list_running_tasks
+        running = list_running_tasks(exclude_conv_id=own_conv)
+    except Exception as e:
+        logger.warning('[Update] Could not check running tasks before restart: %s', e)
+
+    if running and not force:
+        logger.warning(
+            '[Update] Restart REFUSED — %d running task(s) would be killed: %s '
+            '(pass force=true to override)',
+            len(running), [r['taskId'][:8] for r in running])
+        audit_log('self_update_restart_refused', pid=os.getpid(),
+                  running_tasks=len(running))
+        return api_conflict(
+            'Restart refused: %d other conversation(s) have running tasks that '
+            'a restart would interrupt. Retry when idle, or pass force=true.'
+            % len(running),
+            runningTasks=running, needsForce=True)
+
+    audit_log('self_update_restart', pid=os.getpid(),
+              forced=force, running_tasks=len(running))
+    logger.warning('[Update] Restart requested — re-exec scheduled (pid=%d, '
+                   'force=%s, running_tasks=%d)',
+                   os.getpid(), force, len(running))
     threading.Thread(target=_deferred_reexec, name='tofu-restart',
                      daemon=True).start()
-    return api_ok({'restarting': True})
+    return api_ok({'restarting': True, 'forced': force,
+                   'interruptedTasks': len(running)})
 
 
 __all__ = ['api_v1_update_bp']

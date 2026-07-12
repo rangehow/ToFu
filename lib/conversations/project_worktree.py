@@ -816,6 +816,108 @@ def scoped_base_path(project_path: str, conv_id: str) -> str:
     return project_path
 
 
+def commit_worktree(project_path: str, conv_id: str, message: str, *,
+                    author: str | None = None) -> dict:
+    """Commit ALL of this conversation's working changes onto its OWN branch.
+
+    Inside an isolated worktree there is NOTHING to contaminate — the checkout
+    contains ONLY this conversation's edits by construction — so a plain
+    ``git add -A`` is SAFE here (the false-clean trap that ``project_commit``'s
+    byte-identity gate defends against simply cannot occur in a per-conv
+    worktree). This is the step-4 companion to :func:`land_worktree`: land
+    merges the BRANCH, so the working-tree edits must first be committed onto
+    it. A no-op ("nothing to commit") is a benign success.
+
+    Returns ``{ok, committed?, sha?, nothing?, disabled?, error?}``. Never raises.
+    """
+    out: dict = {'ok': False}
+    if not is_isolation_enabled():
+        out['disabled'] = True
+        return out
+    wt = worktree_path(project_path, conv_id)
+    if not (os.path.isdir(wt) and _is_git_repo(wt)):
+        out['error'] = 'worktree missing — call ensure_worktree first'
+        return out
+    rc, dirty, _ = _git(wt, 'status', '--porcelain')
+    if rc == 0 and not dirty.strip():
+        out['ok'] = True
+        out['nothing'] = True
+        return out
+    rc, _, err = _git(wt, 'add', '-A')
+    if rc != 0:
+        out['error'] = f'git add failed: {err.strip()[:200]}'
+        return out
+    author_str = (author or _agent_author())
+    rc, _, err = _git(wt, 'commit', '-m', message or 'Worktree work',
+                      '--author', author_str)
+    if rc != 0:
+        out['error'] = f'git commit failed: {err.strip()[:200]}'
+        return out
+    sha = _rev_parse(wt, 'HEAD')
+    out['ok'] = True
+    out['committed'] = True
+    out['sha'] = sha[:12]
+    audit_log('worktree_commit', project_path=_norm_base(project_path),
+              conv_id=conv_id, branch=conv_branch(conv_id), sha=sha[:12])
+    logger.info('[Worktree] committed conv=%s onto %s @ %s',
+                conv_id[:12], conv_branch(conv_id), sha[:12])
+    return out
+
+
+def execute_land_tool(fn_args: dict, *, current_conv_id: str = '',
+                      project_path: str = '') -> str:
+    """Agent-tool entry point (isolation ``on`` mode) → human-readable string.
+
+    Replaces ``project_commit`` when ``TOFU_WORKTREE_ISOLATION=on``: commit the
+    conversation's worktree edits onto its branch, then CAS-merge that branch
+    into the integration branch (:func:`land_worktree`), gating the merge-result.
+    A conflict / red merge-result is REPORTED (resolve in the worktree), never
+    forced onto the integration ref.
+    """
+    try:
+        if not project_path:
+            return ('Error: worktree land is only available in project mode '
+                    '(open a project first).')
+        message = (fn_args.get('message') or '').strip()
+        if not message:
+            return ('Provide a `message` describing the change to land it into '
+                    'the integration branch.')
+        test_paths = fn_args.get('test_paths') or []
+        if test_paths and not isinstance(test_paths, list):
+            test_paths = [str(test_paths)]
+
+        commit = commit_worktree(project_path, current_conv_id, message)
+        if not commit.get('ok'):
+            return f'Land aborted — could not commit worktree: {commit.get("error", "unknown")}.'
+
+        res = land_worktree(project_path, current_conv_id,
+                            test_paths=test_paths, message=message)
+        if res.get('ok'):
+            return (f'Landed into {integration_branch()} @ {res["sha"][:12]} '
+                    f'(after {res.get("retries", 1)} CAS round(s)). The human '
+                    f'fast-forwards {integration_branch()} into their build '
+                    f'branch at their own cadence.')
+        if res.get('conflict'):
+            return (f'Land held — merge conflict against {integration_branch()}. '
+                    f'Resolve it in your worktree (sync_worktree rebases onto the '
+                    f'latest integration HEAD), then land again. Nothing was '
+                    f'published to the integration ref. Detail: {res.get("error", "")[:200]}')
+        if res.get('merge_result_red'):
+            return (f'Land held — the merge-result tests are RED (integration '
+                    f'would break). Fix on your branch and land again; the ref '
+                    f'was NOT moved.\n{res.get("testSummary", "")[-600:]}')
+        if res.get('preflight_red'):
+            return (f'Land held — your branch\'s own tests are RED. Fix them '
+                    f'first.\n{res.get("testSummary", "")[-600:]}')
+        if res.get('exhausted'):
+            return (f'Land exhausted after {MAX_LAND_RETRIES} CAS rounds under '
+                    f'heavy contention — retry shortly.')
+        return f'Land failed: {res.get("error", "unknown")}.'
+    except Exception as e:
+        logger.warning('[Worktree] execute_land_tool failed: %s', e, exc_info=True)
+        return f'Error executing worktree land: {e}'
+
+
 def reset_for_test() -> None:
     """Test-only hook (parity with ``rate_limit_store.reset_for_test``). This
     module holds no memoized process state — env + filesystem are the truth — so
@@ -828,6 +930,6 @@ __all__ = [
     'conv_branch', 'worktrees_root', 'worktree_path',
     'ensure_integration_setup', 'ensure_worktree', 'refresh_lease',
     'sync_worktree', 'release_worktree', 'gc_worktrees', 'land_worktree',
-    'scoped_base_path',
+    'scoped_base_path', 'commit_worktree', 'execute_land_tool',
     'reset_for_test', 'DEFAULT_LEASE_TTL_MS', 'MAX_LAND_RETRIES',
 ]

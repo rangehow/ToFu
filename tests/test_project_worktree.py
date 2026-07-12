@@ -360,6 +360,71 @@ def test_gc_keeps_unmerged_on_expiry(tmp_path, on):
     assert 'A' not in res['reclaimed']
 
 
+# ─────────────────────────────────────────────────────────────────────────
+#  Land verb — commit_worktree + execute_land_tool (step 4 wiring)
+# ─────────────────────────────────────────────────────────────────────────
+
+def test_commit_worktree_commits_all_edits(tmp_path, on):
+    """Inside an isolated worktree git add -A is safe; commit_worktree turns the
+    working-tree edits into a branch commit (no false-clean gate needed)."""
+    repo = _seed(tmp_path)
+    wt = pw.ensure_worktree(repo, 'A')['path']
+    with open(os.path.join(wt, 'new.py'), 'w') as f:
+        f.write('x = 1\n')
+    res = pw.commit_worktree(repo, 'A', 'add new.py')
+    assert res['ok'] is True and res.get('committed') is True and res.get('sha')
+    # the file is committed on the conv branch, worktree now clean
+    assert _git(wt, 'status', '--porcelain').stdout.strip() == ''
+
+
+def test_commit_worktree_nothing_to_commit(tmp_path, on):
+    repo = _seed(tmp_path)
+    pw.ensure_worktree(repo, 'A')
+    res = pw.commit_worktree(repo, 'A', 'noop')
+    assert res['ok'] is True and res.get('nothing') is True
+
+
+def test_execute_land_tool_commits_then_lands(tmp_path, on):
+    """The on-mode land verb: edit in the worktree, then execute_land_tool
+    commits + CAS-merges into integration. The change reaches the integration
+    tree without any manual git."""
+    repo = _seed(tmp_path)
+    wt = pw.ensure_worktree(repo, 'A')['path']
+    with open(os.path.join(wt, 'landed.py'), 'w') as f:
+        f.write('y = 2\n')
+    msg = pw.execute_land_tool({'message': 'land landed.py'},
+                               current_conv_id='A', project_path=repo)
+    assert 'Landed into' in msg, msg
+    ib = pw.integration_branch()
+    tree = _git(repo, 'ls-tree', '-r', '--name-only', ib).stdout
+    assert 'landed.py' in tree, tree
+
+
+def test_execute_land_tool_requires_message(tmp_path, on):
+    repo = _seed(tmp_path)
+    pw.ensure_worktree(repo, 'A')
+    msg = pw.execute_land_tool({}, current_conv_id='A', project_path=repo)
+    assert 'message' in msg.lower()
+
+
+def test_execute_land_tool_conflict_reported_not_forced(tmp_path, on):
+    """Two convs edit the same line; the second land is REPORTED as held, the
+    integration ref is not force-moved to the loser."""
+    repo = _seed(tmp_path)
+    wa = pw.ensure_worktree(repo, 'A')['path']
+    wb = pw.ensure_worktree(repo, 'B')['path']
+    with open(os.path.join(wa, 'base.txt'), 'w') as f:
+        f.write('A-line\n')
+    with open(os.path.join(wb, 'base.txt'), 'w') as f:
+        f.write('B-line\n')
+    assert 'Landed into' in pw.execute_land_tool(
+        {'message': 'A'}, current_conv_id='A', project_path=repo)
+    msg_b = pw.execute_land_tool({'message': 'B'}, current_conv_id='B', project_path=repo)
+    assert 'held' in msg_b.lower() or 'conflict' in msg_b.lower(), msg_b
+    ib = pw.integration_branch()
+    assert _git(repo, 'show', f'{ib}:base.txt').stdout.strip() == 'A-line'
+
+
 def main():
     import pytest as _pt
     _pt.main([__file__, '-v'])

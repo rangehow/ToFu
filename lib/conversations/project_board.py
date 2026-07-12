@@ -1048,7 +1048,8 @@ def execute_board_tool(fn_name: str, fn_args: dict, *,
         if fn_name == 'project_board_post':
             res = post_task(project_path, current_conv_id,
                             fn_args.get('title') or '',
-                            depends_on=fn_args.get('depends_on'))
+                            depends_on=fn_args.get('depends_on'),
+                            write_set=fn_args.get('write_set'))
             return (f'Posted epic {res["id"]} to the board.' if res.get('ok')
                     else f'Error posting epic: {res.get("error", "unknown")}.')
         if fn_name == 'project_board_claim':
@@ -1111,6 +1112,21 @@ def execute_board_tool(fn_name: str, fn_args: dict, *,
                 return 'No matching hold to release (already expired or released).'
             return f'Error releasing path(s): {res.get("error", "unknown")}.'
         if fn_name == 'project_commit':
+            # Worktree isolation (§5/§6): when on, `land_worktree` is the land
+            # verb — commit the conv's worktree edits onto its branch, then
+            # CAS-merge into the integration branch. Off (default) →
+            # byte-identity project_commit on the shared checkout (unchanged).
+            try:
+                from lib.conversations.project_worktree import (
+                    execute_land_tool, is_isolation_enabled,
+                )
+                if is_isolation_enabled():
+                    return execute_land_tool(
+                        fn_args, current_conv_id=current_conv_id,
+                        project_path=project_path)
+            except Exception as _wt_e:
+                logger.warning('[Board] worktree land routing failed, falling '
+                               'back to project_commit: %s', _wt_e)
             from lib.conversations.project_commit import execute_commit_tool
             return execute_commit_tool(
                 fn_args, current_conv_id=current_conv_id,

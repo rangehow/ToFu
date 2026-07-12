@@ -110,6 +110,16 @@ const _SW_STATUS_SVG = {
    sooner when the server is reachable; this is the offline fallback so an
    open tab still self-corrects visually without a manual refresh. */
 const _SW_STALE_MS = 30 * 60 * 1000;
+/* How long a backend `active===true` confirmation (stamped on the round by
+   _reconcileStuckSwarmPanels as `_swActiveConfirmedAt`) suppresses the
+   wall-clock staleness guess. The reconciler sweeps every 20s and skips a
+   conv that is actively streaming (its own SSE/poll is authoritative there),
+   so a live long swarm gets re-confirmed each sweep; 90s (>4 sweeps) tolerates
+   a couple of missed/slow sweeps before the age fallback is allowed to speak
+   again. This is what makes `isStale` a genuine OFFLINE residual: it can only
+   fire when the backend fact is ABSENT or STALE (server unreachable), never
+   against a fresh known-active verdict. */
+const _SW_ACTIVE_CONFIRM_TTL_MS = 90 * 1000;
 function _swStatusIcon(status) {
   if (status === 'done' || status === 'completed') return _SW_STATUS_SVG.done;
   if (status === 'failed' || status === 'error') return _SW_STATUS_SVG.failed;
@@ -303,17 +313,31 @@ function _buildSwarmPanelHTML(round, allRounds) {
       round._swarmEndTime = round._swarmStartTime || Date.now();
     }
   }
-  /* ── Staleness guard (Option 1) ──
-     A panel still flagged active/async with no frozen end time, whose
-     start is older than _SW_STALE_MS, is a zombie: the terminal
+  /* ── Staleness guard (age fallback, OFFLINE residual only) ──
+     A panel still flagged active/async with no frozen end time, whose start is
+     older than _SW_STALE_MS, MIGHT be a zombie: the terminal
      swarm_phase:complete event never reached this tab (server restart /
-     dropped SSE). Render it as settled-but-unconfirmed rather than ticking
-     "Running" forever. Cheap, local, needs no backend round-trip. */
+     dropped SSE).
+
+     Root-cause guard (FE-inference-debt #1): the wall-clock age is a GUESS and
+     must NEVER override a known backend fact. _reconcileStuckSwarmPanels probes
+     Api.swarm.status(taskId) and, when the backend reports `active===true`,
+     stamps `_swActiveConfirmedAt` on the round. While that confirmation is
+     fresh, the swarm is AUTHORITATIVELY still alive (a big multi-agent wave can
+     legitimately run well past 30 min) — so we suppress the age guess entirely.
+     The age fallback is thus reachable ONLY when NO fresh backend fact exists
+     (server unreachable → the reconciler's probe returned null / never ran), so
+     an open offline tab still self-corrects a genuine zombie without a manual
+     refresh, exactly as before — but a genuinely long, backend-confirmed-alive
+     swarm is never mislabeled "Stale". */
   const _swStartedAt = round._swarmStartTime || 0;
+  const _backendConfirmedActive = !!round._swActiveConfirmedAt
+    && (Date.now() - round._swActiveConfirmedAt) < _SW_ACTIVE_CONFIRM_TTL_MS;
   const isStale = !round._swarmEndTime
     && (round._swarmActive || round._asyncRunning)
     && _swStartedAt > 0
-    && (Date.now() - _swStartedAt) > _SW_STALE_MS;
+    && (Date.now() - _swStartedAt) > _SW_STALE_MS
+    && !_backendConfirmedActive;
   const isActive = !isStale && (round.status === "searching" || round._swarmActive);
   const total = agents.length;
   const running = agents.filter(a => a.status === "running" || a.status === "thinking").length;
@@ -769,9 +793,32 @@ async function _reconcileStuckSwarmPanels() {
         }
       }
     }
-    /* status.active === true → genuinely still running; leave the panel and
-       its guard untouched so a later sweep re-confirms (cheap, the active
-       pill is correct meanwhile). */
+    /* status.active === true → genuinely still running. Stamp a
+       backend-authoritative liveness fact on every panel of this task so the
+       wall-clock staleness guess (_SW_STALE_MS) is SUPPRESSED while this
+       confirmation is fresh — a long, backend-confirmed-alive swarm must never
+       render "Stale". The stamp is refreshed each sweep; when the backend
+       later reports inactive (or becomes unreachable) the confirmation ages
+       out and the normal settle / offline-fallback paths take over. */
+    if (status.active === true) {
+      const now = Date.now();
+      const convsToRender = new Set();
+      for (const { conv, round } of entries) {
+        round._swActiveConfirmedAt = now;
+        convsToRender.add(conv);
+      }
+      for (const conv of convsToRender) {
+        try {
+          if (typeof activeConvId !== "undefined" && conv.id === activeConvId
+              && typeof renderChat === "function") {
+            renderChat(conv);
+          }
+          if (typeof saveConversations === "function") saveConversations(conv.id);
+        } catch (e) {
+          console.warn("[Swarm] reconcile active-confirm re-render failed: " + (e && e.message));
+        }
+      }
+    }
   }
 }
 if (typeof window !== 'undefined' && !window._swReconcileTicker) {

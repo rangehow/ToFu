@@ -35,6 +35,7 @@ Routes (legacy snake_case path → new hyphen-case path):
   POST   /api/v1/project/board/block        — Project Brain: human flags epic blocked
   POST   /api/v1/project/board/reopen       — Project Brain: human reopens an epic
   GET    /api/v1/project/brain/summary      — Project Brain: collab-bar summary
+  GET    /api/v1/project/brain/ready        — Project Brain: ready-to-land queue (landable/held)
   GET    /api/v1/project/brain/peers        — Project Brain: LIVE peer/team roster
   GET    /api/v1/project/brain/influence    — Project Brain: per-conversation influence
   POST   /api/v1/project/brain/peer-message — Project Brain: human nudges a sibling conversation
@@ -995,6 +996,47 @@ def project_brain_summary():
     except Exception as e:
         logger.error('[Project.v1] brain summary failed for %s: %s',
                      project_path, e, exc_info=True)
+
+@api_v1_project_bp.route('/api/v1/project/brain/ready', methods=['GET'])
+@require_auth
+@api_meta(
+    summary='Ready-to-land queue (continuous-atomic-slice-landing markers)',
+    description=(
+        'Read-only. The continuous-atomic-slice-landing queue: green slices '
+        'that passed the fresh-worktree acceptance gate and are awaiting '
+        'autonomous commit by the 30s heartbeat. Keyed strictly on the '
+        'explicit ``path``. Returns ``{landable: [...], held: [...], counts}`` '
+        'where ``landable`` markers have a file-set DISJOINT from every other '
+        'pending marker (the heartbeat lands them automatically) and ``held`` '
+        'markers OVERLAP a sibling slice on shared files (held for a human to '
+        'authorize a landing order — two independently-green slices touching '
+        'the same file conflict if landed together). Each marker carries '
+        '``{id, conv, files, atRef, testPaths, green, selfConsistent, '
+        'gateAt}``. This is the machine-readable form of the Landing section '
+        'the board block renders as text.'),
+    tags=['project'],
+)
+def project_brain_ready():
+    project_path = _decoded_path_arg()
+    if not project_path:
+        return api_bad_request('path is required', field='path')
+    try:
+        from lib.conversations.project_ready import (
+            held_markers, landable_markers)
+        landable = landable_markers(project_path)
+        held = held_markers(project_path)
+        return api_ok({
+            'landable': landable,
+            'held': held,
+            'counts': {'landable': len(landable), 'held': len(held),
+                       'total': len(landable) + len(held)},
+        })
+    except Exception as e:
+        logger.error('[Project.v1] brain ready failed for %s: %s',
+                     project_path, e, exc_info=True)
+        return api_internal_error(e, source='api_v1.project.brain_ready')
+
+
         return api_internal_error(e, source='api_v1.project.brain_summary')
 
 

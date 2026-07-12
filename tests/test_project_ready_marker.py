@@ -602,6 +602,56 @@ def test_board_block_no_landing_section_when_no_markers(flask_app):
     assert 'Landing' not in block
 
 
+# ════════════════════════════════════════════════════════════════════
+#  Perceptibility (machine-readable) — GET /api/v1/project/brain/ready
+#  The backend surface the graphical Landing lane consumes. Lands NOW in the
+#  now-uncontested routes/api_v1/project.py; the JS lane folds in later.
+# ════════════════════════════════════════════════════════════════════
+
+def test_route_brain_ready_returns_landable_and_held(flask_app, flask_client):
+    import json as _json
+    import lib.conversations.project_ready as pr
+    p = os.path.abspath('/tmp/ready-route-1')
+    with flask_app.app_context():
+        from lib.database import DOMAIN_CHAT, get_thread_db
+        get_thread_db(DOMAIN_CHAT).execute(
+            'DELETE FROM project_tasks WHERE project_path=?',
+            (os.path.abspath(p),))
+        get_thread_db(DOMAIN_CHAT).commit()
+        # C disjoint → landable; A∩B share shared.py → both held.
+        pr.post_ready_marker(p, 'cA', files=['lib/shared.py'], test_paths=['t.py'],
+                             at_ref='HEAD', gate_result={'green': True, 'selfConsistent': True})
+        pr.post_ready_marker(p, 'cB', files=['lib/shared.py'], test_paths=['t.py'],
+                             at_ref='HEAD', gate_result={'green': True, 'selfConsistent': True})
+        pr.post_ready_marker(p, 'cC', files=['lib/c.py'], test_paths=['t.py'],
+                             at_ref='HEAD', gate_result={'green': True, 'selfConsistent': True})
+    r = flask_client.get('/api/v1/project/brain/ready?path=' + p)
+    assert r.status_code == 200, r.get_data(as_text=True)
+    data = _json.loads(r.get_data(as_text=True))
+    land_convs = {m['conv'] for m in data['landable']}
+    held_convs = {m['conv'] for m in data['held']}
+    assert land_convs == {'cC'}, data
+    assert held_convs == {'cA', 'cB'}, data
+    assert data['counts'] == {'landable': 1, 'held': 2, 'total': 3}
+    # a marker carries the fields the frontend lane renders
+    m = data['landable'][0]
+    assert m['files'] == ['lib/c.py'] and 'atRef' in m and 'gateAt' in m
+
+
+def test_route_brain_ready_requires_path(flask_client):
+    assert flask_client.get('/api/v1/project/brain/ready').status_code == 400
+
+
+def test_route_brain_ready_empty_project(flask_app, flask_client):
+    import json as _json
+    p = os.path.abspath('/tmp/ready-route-empty')
+    r = flask_client.get('/api/v1/project/brain/ready?path=' + p)
+    assert r.status_code == 200
+    data = _json.loads(r.get_data(as_text=True))
+    assert data['landable'] == [] and data['held'] == []
+    assert data['counts']['total'] == 0
+
+
 def main():
     import pytest as _pt
     _pt.main([__file__, '-v'])

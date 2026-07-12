@@ -8,8 +8,27 @@
    ═══════════════════════════════════════════════════════════════════ */
 
 async function loadFolders() {
-  const list = await Api.folders.list();
+  /* Api.folders.list() is best-effort ({onError:'null'}): a transient network
+   * failure resolves to [] (empty array), NOT the real folder list. Adopting
+   * that empty result would blank every folder tab on a flaky connection even
+   * though the folders still exist server-side (the "folders missing on
+   * desktop" symptom). Distinguish a genuine empty list (200 → []) from a
+   * fetch failure by re-requesting with onError:'throw' when the first call
+   * came back empty, so a real error is caught instead of masquerading as
+   * "no folders". On error we keep whatever folders were already loaded. */
+  let list = await Api.folders.list();
+  if (Array.isArray(list) && list.length === 0) {
+    try {
+      const verified = await Api.get('/api/v1/folders');
+      if (Array.isArray(verified)) list = verified;
+    } catch (e) {
+      console.warn('[loadFolders] fetch failed — keeping current folders:', e.message);
+      if (_foldersLoaded) return _folders;   // preserve already-loaded tabs
+      list = null;                            // first load ever failed → leave unloaded
+    }
+  }
   if (Array.isArray(list)) _folders = list;
+  else return _folders;   // fetch failed before first success — don't mark loaded
   _foldersLoaded = true;
   /* ★ Trigger sidebar re-render so folder tabs appear immediately.
    *   On init, loadFolders() runs in parallel with loadConversationsFromServer().

@@ -992,6 +992,14 @@ async def _compress_response(response):
         return response
     if response.content_encoding:
         return response
+    # Never compress partial / range / non-200 responses. Gzipping a 206 while
+    # keeping its Content-Range header (and rewriting Content-Length to the
+    # compressed slice length) hands the client a body it decodes as a corrupt
+    # byte-range — the empirically-confirmed cause of vendor .js "failed to
+    # load" on clients that issue Range requests for scripts (mobile
+    # Safari/Chrome, some tablet browsers). Only whole 200 bodies are safe.
+    if response.status_code != 200 or 'Content-Range' in response.headers:
+        return response
     accept_enc = request.headers.get('Accept-Encoding', '')
     if 'gzip' not in accept_enc:
         return response

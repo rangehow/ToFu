@@ -1214,6 +1214,7 @@ LIVE_PG_PROJECT_TASKS = """
         block_reason TEXT NOT NULL DEFAULT '',
         wait_paths TEXT NOT NULL DEFAULT '[]',
         dispatch_target TEXT NOT NULL DEFAULT '',
+        write_set TEXT NOT NULL DEFAULT '[]',
         created_at BIGINT NOT NULL DEFAULT 0,
         updated_at BIGINT NOT NULL DEFAULT 0,
         PRIMARY KEY (id)
@@ -1236,6 +1237,7 @@ LIVE_SQLITE_PROJECT_TASKS = """
         block_reason TEXT NOT NULL DEFAULT '',
         wait_paths TEXT NOT NULL DEFAULT '[]',
         dispatch_target TEXT NOT NULL DEFAULT '',
+        write_set TEXT NOT NULL DEFAULT '[]',
         created_at INTEGER NOT NULL DEFAULT 0,
         updated_at INTEGER NOT NULL DEFAULT 0,
         PRIMARY KEY (id)

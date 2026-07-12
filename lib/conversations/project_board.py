@@ -236,6 +236,16 @@ def _row_to_task(r, now_ms: int) -> dict:
         dispatch_target = r['dispatch_target'] or ''
     except (KeyError, IndexError, TypeError):
         dispatch_target = ''
+    # write_set is nullable-safe: a pre-migration row (no column) reads as an
+    # empty list -> unknown footprint -> treated as non-conflicting (never
+    # stranded). Malformed JSON also -> []. See select_dispatchable's
+    # disjoint-preference partitioning (worktree isolation §4).
+    try:
+        write_set = json.loads(r['write_set'] or '[]')
+        if not isinstance(write_set, list):
+            write_set = []
+    except (KeyError, IndexError, TypeError, ValueError):
+        write_set = []
     return {
         'id': r['id'], 'title': r['title'] or '', 'status': eff,
         'kind': kind,
@@ -258,6 +268,10 @@ def _row_to_task(r, now_ms: int) -> dict:
         # dispatch_target: mutable routing override (idle-sibling migration).
         # created_by_conv is immutable authorship; this is who runs it NEXT.
         'dispatch_target': dispatch_target,
+        # write_set: JSON list of paths/globs/subsystem-tags this epic intends
+        # to write; select_dispatchable prefers epics whose write_set is
+        # disjoint from live-claimed epics' (dispatch-time collision avoidance).
+        'write_set': write_set,
         'created_at': int(r['created_at'] or 0),
         'updated_at': int(r['updated_at'] or 0),
     }
@@ -300,7 +314,7 @@ def read_board(project_path: str) -> dict:
             'SELECT id, title, status, owner_conv_id, lease_expires_at, '
             '       created_by_conv, depends_on, dispatched, kind, '
             '       blocked_until, block_count, block_reason, wait_paths, '
-            '       dispatch_target, created_at, updated_at '
+            '       dispatch_target, write_set, created_at, updated_at '
             'FROM project_tasks WHERE project_path=? '
             'ORDER BY created_at ASC', (project_path,)).fetchall()
     except Exception as e:
@@ -315,8 +329,16 @@ def read_board(project_path: str) -> dict:
 
 
 def post_task(project_path: str, conv_id: str, title: str, *,
-              depends_on: list | None = None) -> dict:
-    """Post a new OPEN epic to the board. Returns ``{'ok', 'id'?, 'error'?}``."""
+              depends_on: list | None = None,
+              write_set: list | None = None) -> dict:
+    """Post a new OPEN epic to the board. Returns ``{'ok', 'id'?, 'error'?}``.
+
+    ``write_set`` (optional) declares the paths/globs/subsystem-tags this epic
+    intends to WRITE, enabling dispatch-time collision avoidance
+    (select_dispatchable prefers epics disjoint from live-claimed ones). An
+    omitted/empty write_set means "unknown footprint" and is treated as
+    non-conflicting, so declaring it is optional and never strands an epic.
+    """
     title = (title or '').strip()[:_TITLE_MAX_CHARS]
     if not project_path:
         return {'ok': False, 'error': 'no project'}
@@ -336,12 +358,13 @@ def post_task(project_path: str, conv_id: str, title: str, *,
         task_id = 'pt_' + uuid.uuid4().hex[:16]
         ts = _now_ms()
         deps = json.dumps([str(d) for d in (depends_on or [])], ensure_ascii=False)
+        wset = json.dumps([str(w) for w in (write_set or [])], ensure_ascii=False)
         db.execute(
             'INSERT INTO project_tasks '
             '(id, project_path, title, status, owner_conv_id, lease_expires_at, '
-            ' created_by_conv, depends_on, created_at, updated_at) '
-            "VALUES (?, ?, ?, 'open', '', 0, ?, ?, ?, ?)",
-            (task_id, project_path, title, conv_id or '', deps, ts, ts))
+            ' created_by_conv, depends_on, write_set, created_at, updated_at) '
+            "VALUES (?, ?, ?, 'open', '', 0, ?, ?, ?, ?, ?)",
+            (task_id, project_path, title, conv_id or '', deps, wset, ts, ts))
         db.commit()
     except Exception as e:
         logger.error('[Board] post failed proj=%.40r: %s', project_path, e, exc_info=True)
@@ -820,6 +843,49 @@ def set_wait_paths(project_path: str, conv_id: str, task_id: str,
     return {'ok': True, 'wait_paths': clean}
 
 
+def set_write_set(project_path: str, conv_id: str, task_id: str,
+                  write_set: list) -> dict:
+    """Declare (or clear) the WRITE-SET an epic intends to touch — the
+    dispatch-time file-ownership footprint (worktree isolation §4).
+
+    ``write_set`` is a list of path / glob / subsystem-tag strings; an EMPTY
+    list clears it ("unknown footprint" → treated as non-conflicting). This does
+    NOT change board status. ``select_dispatchable`` PREFERS an epic whose
+    write_set is disjoint from every live-claimed epic's write_set, shifting
+    collision detection LEFT from land-time to dispatch-time. A soft preference,
+    never a hard filter — an undeclared epic is never stranded. Unlike
+    ``wait_paths``, the write_set is a STABLE declared property (like
+    ``depends_on``) and is NOT reset on complete/reopen. Returns
+    ``{'ok', 'write_set'?, 'error'?}``.
+    """
+    if not project_path or not task_id:
+        return {'ok': False, 'error': 'missing project/task'}
+    clean = []
+    for p in (write_set or []):
+        s = (str(p) or '').strip()[:_TITLE_MAX_CHARS]
+        if s and s not in clean:
+            clean.append(s)
+    from lib.conversations.project_feed import normalize_project_path
+    project_path = normalize_project_path(project_path)
+    try:
+        db = get_thread_db(DOMAIN_CHAT)
+        title = _task_title(db, project_path, task_id)
+        if title is None:
+            return {'ok': False, 'error': 'task not found'}
+        db.execute(
+            'UPDATE project_tasks SET write_set=?, updated_at=? '
+            'WHERE id=? AND project_path=?',
+            (json.dumps(clean), _now_ms(), task_id, project_path))
+        db.commit()
+    except Exception as e:
+        logger.error('[Board] set_write_set failed proj=%.40r task=%s: %s',
+                     project_path, task_id, e, exc_info=True)
+        return {'ok': False, 'error': str(e)}
+    audit_log('board_write_set', project_path=project_path, task_id=task_id,
+              conv_id=conv_id, write_count=len(clean))
+    return {'ok': True, 'write_set': clean}
+
+
 def _task_title(db, project_path: str, task_id: str):
     row = db.execute('SELECT title FROM project_tasks WHERE id=? AND project_path=?',
                      (task_id, project_path)).fetchone()
@@ -1067,5 +1133,5 @@ __all__ = [
     '_effective_status',
     'claims_by_conv', 'DEFAULT_LEASE_TTL_MS',
     'BLOCK_COOLDOWN_BASE_MS', 'BLOCK_COOLDOWN_MAX_MS', '_block_cooldown_ms',
-    'set_wait_paths', '_paths_waited_but_held',
+    'set_wait_paths', '_paths_waited_but_held', 'set_write_set',
 ]

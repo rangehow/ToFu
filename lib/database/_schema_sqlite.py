@@ -15,7 +15,7 @@ logger = get_logger(__name__)
 #  Schema Version Cache — Skip redundant DDL on subsequent startups
 # ═══════════════════════════════════════════════════════════════════════
 
-_SCHEMA_VERSION = 39  # Increment when tables/columns/indexes change
+_SCHEMA_VERSION = 40  # Increment when tables/columns/indexes change
 
 
 def _column_exists(conn, table, column):
@@ -52,7 +52,7 @@ def _count_rows(conn, table):
 _CRITICAL_COLUMNS = {
     'project_tasks': (
         'blocked_until', 'block_count', 'block_reason',
-        'wait_paths', 'dispatch_target',
+        'wait_paths', 'dispatch_target', 'write_set',
     ),
 }
 
@@ -610,6 +610,12 @@ def _init_system_schema(conn):
     # See docs/PROJECT_BRAIN_MIGRATION.md.
     if not _column_exists(conn, 'project_tasks', 'dispatch_target'):
         cur.execute("ALTER TABLE project_tasks ADD COLUMN dispatch_target TEXT NOT NULL DEFAULT ''")
+    # Migration: dispatch-time write-set partitioning (Pillar #3 / worktree
+    # isolation §4). Pre-existing rows default to '[]' → unknown footprint →
+    # treated as non-conflicting, so an old epic stays dispatchable. Added
+    # 2026-07. See docs/PROJECT_BRAIN_WORKTREE_ISOLATION.md §4.
+    if not _column_exists(conn, 'project_tasks', 'write_set'):
+        cur.execute("ALTER TABLE project_tasks ADD COLUMN write_set TEXT NOT NULL DEFAULT '[]'")
     # Migration: the shelving/park mechanism was removed (the project pushes
     # every open epic forward at full speed). Any epic left in the retired
     # 'deferred' status is revived to 'open' so it dispatches again. Idempotent.

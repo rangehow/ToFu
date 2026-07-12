@@ -829,6 +829,17 @@ PROJECT_TASKS = define_table(
     # created_by_conv (immutable authorship/provenance). Reset to '' on
     # complete/reopen. See docs/PROJECT_BRAIN_MIGRATION.md.
     sa.Column('dispatch_target', sa.Text, nullable=False, server_default=''),
+    # write_set: dispatch-time file-ownership partitioning (Pillar #3 / worktree
+    # isolation §4). A JSON array of path/glob/subsystem-tag strings this epic
+    # intends to WRITE. select_dispatchable PREFERS an epic whose write_set is
+    # DISJOINT from every live-claimed epic's write_set, shifting collision
+    # detection LEFT from land-time to dispatch-time so two convs don't get
+    # handed epics that will fight over the same files. A SOFT preference, never
+    # a hard filter: an empty write_set (the default) means "unknown footprint"
+    # and is treated as non-conflicting so a pre-migration / undeclared epic is
+    # NEVER stranded. Reset to '[]' on complete/reopen. See
+    # docs/PROJECT_BRAIN_WORKTREE_ISOLATION.md §4.
+    sa.Column('write_set', sa.Text, nullable=False, server_default="[]"),
     sa.Column('created_at', bigint_column(), nullable=False, server_default=sa.text('0')),
     sa.Column('updated_at', bigint_column(), nullable=False, server_default=sa.text('0')),
 )

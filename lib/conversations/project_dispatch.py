@@ -200,7 +200,59 @@ def select_dispatchable(project_path: str) -> list[dict]:
         if _paths_waited_but_held(t, tasks, now_ms):
             continue
         candidates.append(t)
+
+    # ── Write-set partitioning (worktree isolation §4): shift collision
+    #    detection LEFT from land-time to dispatch-time. Prefer a candidate
+    #    whose declared write_set is DISJOINT from every LIVE-CLAIMED epic's
+    #    write_set, so two conversations aren't handed epics that will fight
+    #    over the same files. This is a SOFT preference (stable reorder,
+    #    disjoint-first) NOT a hard filter — a conflicting epic is still
+    #    dispatchable (last), and an epic with an empty/undeclared write_set is
+    #    "unknown footprint" → treated as non-conflicting → never demoted. ──
+    claimed_write_sets = [
+        _write_set_of(t) for t in tasks
+        if t.get('status') == 'claimed' and _write_set_of(t)
+    ]
+    if claimed_write_sets and len(candidates) > 1:
+        candidates.sort(
+            key=lambda c: 1 if _write_set_conflicts(_write_set_of(c),
+                                                     claimed_write_sets) else 0)
     return candidates
+
+
+def _write_set_of(task: dict) -> list:
+    """The epic's declared write_set as a clean list of strings (empty when
+    undeclared → unknown footprint → treated as non-conflicting)."""
+    ws = task.get('write_set') or []
+    return [str(s) for s in ws if isinstance(ws, list) and str(s).strip()]
+
+
+def _paths_intersect(a: str, b: str) -> bool:
+    """True iff two write-set entries name overlapping targets. Handles a
+    plain-prefix / directory-containment relationship in EITHER direction
+    (``lib/`` vs ``lib/x.py``) and exact match; a trailing-``*`` glob is
+    treated as its directory prefix. Deliberately conservative — a false
+    "overlap" only demotes an epic in the ordering (safe), never drops it."""
+    a = (a or '').rstrip('/*')
+    b = (b or '').rstrip('/*')
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    return a.startswith(b + '/') or b.startswith(a + '/')
+
+
+def _write_set_conflicts(ws: list, others: list) -> bool:
+    """True iff ``ws`` shares any target with ANY of the ``others`` write-sets.
+    An empty ``ws`` (unknown footprint) never conflicts (fail-open)."""
+    if not ws:
+        return False
+    for other in others:
+        for x in ws:
+            for y in other:
+                if _paths_intersect(x, y):
+                    return True
+    return False
 
 
 def dispatch_epic(project_path: str, epic: dict, target_conv_id: str, *,

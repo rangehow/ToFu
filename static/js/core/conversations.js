@@ -1281,6 +1281,12 @@ async function loadConversationMessages(convId) {
       return conv;
     }
     const data = await resp.json();
+    /* ★ Windowed-read pagination state (no-op for a legacy full response, i.e.
+     *   data.windowed !== true). When windowed, this stamps conv._windowed +
+     *   the seq cursors so scroll-up can fetch earlier messages; the caller
+     *   must then NOT treat conv.messages as the complete history. */
+    const _isWindowed = (typeof recordWindowState === 'function')
+      ? recordWindowState(conv, data) : false;
     const serverMsgs = data.messages || [];
     const serverUpdatedAt = data.updatedAt || data.updated_at || 0;
     /* ★ Adopt the server-issued rev as this conv's CAS base. The GET reflects

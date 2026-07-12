@@ -1081,6 +1081,11 @@ function _installViewportHeightGuard() {
    *   fix. Same late-wire reason as above (pushSubscribe defined by push.js). */
   if (typeof _wireConvHistoryRewritePush === 'function') _wireConvHistoryRewritePush();
 
+  /* ★ Windowed-read scroll-up loader: when a long conversation is opened with
+   *   only its tail window, scrolling to the top fetches + prepends earlier
+   *   messages. Inert unless the server served a windowed response. */
+  if (typeof wireConvWindowScrollLoader === 'function') wireConvWindowScrollLoader();
+
   initActiveTasks().then(() => {
     /* ★ Decide reconnect by OBSERVABLE OUTCOME, not by a thrown error.
      *   loadConversationsFromServer swallows Failed to fetch (try/catch →

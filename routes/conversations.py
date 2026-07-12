@@ -681,6 +681,102 @@ def _maybe_backfill_narration_on_open(conv_id, conv_dict):
                      conv_id[:8], e)
 
 
+def _parse_window_args():
+    """Read the windowed-read query params. Returns ``(window, before_seq)``:
+    ``window`` is the tail size (0/absent = no window), ``before_seq`` is the
+    page-up cursor (None = tail). Both best-effort int-parsed; junk → default.
+    """
+    try:
+        window = int(request.args.get('window', '') or 0)
+    except (TypeError, ValueError):
+        window = 0
+    if window < 0:
+        window = 0
+    before_seq = None
+    bs = request.args.get('before_seq', '')
+    if bs:
+        try:
+            before_seq = int(bs)
+        except (TypeError, ValueError):
+            before_seq = None
+    return window, before_seq
+
+
+def _windowed_served_readonly(db, conv_id, r, window, before_seq):
+    """Serve a WINDOW of the conversation from the normalized row store.
+
+    The root-cause fix for slow first-open of long conversations: read only the
+    tail ``window`` messages via ``load_message_window`` (cost O(window), not
+    O(history)) instead of detoasting + parsing the whole ``messages`` blob.
+
+    reconcile runs WITHIN the tail window: a ghost tail / superseded-error-husk
+    can only be at the very end, so the tail window is sufficient to reach the
+    same verdict WITHOUT deserializing the full history. The cache-prefix
+    protection guards the HEAD prefix, which the tail window never includes, so
+    a windowed reconcile can never delete a prefix message. When the window
+    reconcile shortens the tail, the change is persisted off-request exactly
+    like the full path (``_schedule_reconcile_persist`` on the full cleaned
+    list) so the authoritative JSONB + rows stay correct.
+
+    Returns ``(served, changed, cleaned_full, settings_dict)`` mirroring
+    ``_reconcile_conv_served_readonly``; ``cleaned_full`` is None unless a
+    tail-window reconcile fired (then it is the FULL cleaned list to persist).
+    Raises on any row-store failure so the caller can fail open to the blob.
+    """
+    from lib.database.messages_rows import load_message_window
+
+    win = load_message_window(db, conv_id, limit=window, before_seq=before_seq)
+    win_msgs = win['messages']
+
+    base = {
+        'id': r['id'], 'title': r['title'],
+        'createdAt': r['created_at'], 'created_at': r['created_at'],
+        'updatedAt': r['updated_at'], 'updated_at': r['updated_at'],
+        'settings': _safe_json(r['settings'], default={}, label='settings') or {},
+        'rev': _row_rev(r),
+        # pagination envelope the frontend uses for scroll-up loading
+        'windowed': True,
+        'totalCount': win['totalCount'],
+        'firstLoadedSeq': win['firstLoadedSeq'],
+        'lastLoadedSeq': win['lastLoadedSeq'],
+        'hasMore': win['hasMore'],
+    }
+
+    # A page-up request (before_seq set) is a pure slice — never reconcile it,
+    # only the tail (before_seq=None) can carry a ghost/husk.
+    if before_seq is not None:
+        base['messages'] = win_msgs
+        return base, False, None, None
+
+    # Tail window: run reconcile on the window only. reconcile is idempotent and
+    # operates on trailing pairs, so the tail window verdict matches the full
+    # verdict for trailing ghost/husk.
+    try:
+        from lib.conversations.reconcile import reconcile_conversation_messages
+        cleaned_win, changed = reconcile_conversation_messages(win_msgs, 0)
+    except Exception as e:
+        logger.debug('[get_conv] windowed reconcile skipped conv=%s: %s',
+                     conv_id[:8], e)
+        cleaned_win, changed = win_msgs, False
+
+    base['messages'] = cleaned_win
+    if not changed:
+        return base, False, None, None
+
+    # The window shortened. Compute the FULL cleaned list to persist off-request
+    # (the persisted JSONB stays authoritative). This is the ONLY full
+    # deserialize on the windowed path, and only when the tail actually changed
+    # (rare), so the common open stays O(window).
+    settings_dict = base['settings'] if isinstance(base['settings'], dict) else {}
+    settings_dict['_reconciledAt'] = int(time.time() * 1000)
+    base['settings'] = settings_dict
+    cleaned_full, settings_for_persist = None, None
+    c_full, ch_full, sd_full = _compute_reconcile(conv_id, r)
+    if ch_full:
+        cleaned_full, settings_for_persist = c_full, sd_full
+    return base, bool(cleaned_full is not None), cleaned_full, settings_for_persist
+
+
 @conversations_bp.route('/api/v1/conversations/<conv_id>', methods=['GET'])
 @_db_safe
 async def get_conv(conv_id):
@@ -693,12 +789,38 @@ async def get_conv(conv_id):
     (``reconcile_conversation_messages``) so the frontend no longer has to infer
     settled lifecycle state — GATED so it never touches a conv with a live task
     (see ``_conv_has_live_task`` / ``_reconcile_conv_on_get_blocking``).
+
+    Windowed read (gated on ``rows_read_enabled()`` + a ``window`` query param):
+    serve only the tail N messages from the normalized ``conversation_messages``
+    row store so first-open cost is O(window) not O(history). Fails open to the
+    single-blob path on any error; no param / flag off = byte-identical to the
+    legacy full-array behavior.
     """
     r = await async_fetchone(
         'SELECT id, title, messages, created_at, updated_at, settings, rev FROM conversations WHERE id=? AND user_id=?',
         (conv_id, DEFAULT_USER_ID), domain=DOMAIN_CHAT)
     if not r:
         return api_not_found('Not found')
+
+    # ── Windowed read cutover (gated + fail-open). Only when the row-store read
+    #    flag is on AND the client asked for a window. ──
+    try:
+        from lib.database.messages_rows import rows_read_enabled
+        _window, _before_seq = _parse_window_args()
+        if _window > 0 and rows_read_enabled() and not _conv_has_live_task(conv_id):
+            try:
+                served, changed, cleaned_full, sd = await run_pooled(
+                    lambda db: _windowed_served_readonly(
+                        db, conv_id, r, _window, _before_seq))
+                if changed and cleaned_full is not None:
+                    _schedule_reconcile_persist(conv_id, cleaned_full, sd)
+                return jsonify(served)
+            except Exception as e:
+                logger.warning('[get_conv] windowed read failed conv=%s: %s — '
+                               'failing open to full-blob path', conv_id[:8], e)
+    except Exception as e:
+        logger.debug('[get_conv] window gate check failed conv=%s: %s',
+                     conv_id[:8], e)
 
     # GATE 1 (live-task): reconcile ONLY when the conv is idle. A pending/running
     # task's empty placeholder is indistinguishable from a ghost tail; deleting

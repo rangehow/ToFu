@@ -455,6 +455,10 @@ _BUNDLE_FILES = [
     # runtime, so it MUST come after main.js AND push.js. Wired from main.js
     # boot via _wireConvHistoryRewritePush().
     'conv_sync_push.js',
+    # Client half of windowed conversation reads (tail-N first-open + scroll-up
+    # pagination). Inert unless the server returns windowed:true. Reads
+    # conversations/activeConvId/renderChat + Api at runtime → after main.js.
+    'conv_window.js',
     'compaction-viewer.js',
     'context-bar.js',
     # Cross-conversation live-presence strip — pure render subscriber on the

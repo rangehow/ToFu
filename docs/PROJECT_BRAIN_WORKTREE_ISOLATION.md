@@ -455,7 +455,20 @@ gate-on-merge-result Scenario C. Re-runnable.
    falls back to a retry-on-EBUSY `rm -rf` + `worktree prune` (OpenCode's
    network-FS rm-retry pattern).
 2. Per-conv `_roots` binding fix (§3.3) — prerequisite, independently testable
-   (this IS V6).
+   (this IS V6). **LANDED 2026-07-12 (`daedc34`).** The per-conv registry
+   (`_conv_roots`, 2026-05) already gave strict isolation *when a conv had a
+   registry*; the residual §3.3 hazard was the process-global `_roots` /
+   `_state['path']` FALL-THROUGH that survives when a conv lacks one — under
+   worktrees that global tree IS the shared primary checkout / another conv's
+   worktree. Gated behind `TOFU_WORKTREE_ISOLATION` (lazy
+   `project_worktree.is_isolation_enabled`, fails closed to OFF):
+   `resolve_namespaced_path` + `get_conv_roots` no longer fall through to the
+   global registry/primary for a conv-scoped call under isolation (raise
+   `UnknownWorkspaceRootError` / return `{}` — fail closed), and the `tools.py`
+   self-heal only heals to `base_path` when it is a REGISTERED root of THIS conv.
+   OFF = byte-identical (legacy fall-through intact). `tests/test_worktree_roots_isolation.py`
+   (11) + 26/26 through the fresh-HEAD gate (V6 + readonly-roots + conv-eviction),
+   self-consistent, 0 orphans.
 3. Worktree-scoped path resolution (§3.1) + `run_command` cwd (§3.2), flag-gated
    (rebase latency here IS V5).
 4. `land_worktree` land flow (§5) + the CAS-with-retry integration-ref primitive

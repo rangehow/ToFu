@@ -293,9 +293,23 @@ class StreamingToolAccumulator:
                 #   conversation's root registry (prevents concurrent-task
                 #   clobber — see lib/project_mod/config.py::set_conv_roots).
                 _conv_id = self._task.get('convId') or self._task.get('id') or ''
-                return execute_tool(fn_name, fn_args,
-                                    self._project_path or '.',
-                                    conv_id=_conv_id)
+                # ★ Worktree isolation (§3.1, build step 3): scope the read
+                #   base to this conv's worktree when TOFU_WORKTREE_ISOLATION=on
+                #   so a pre-executed read sees the SAME isolated tree the
+                #   serial handler will. OFF (default) → base unchanged.
+                _base = self._project_path or '.'
+                if self._project_path and _conv_id:
+                    try:
+                        from lib.conversations.project_worktree import (
+                            is_isolation_enabled as _wt_on,
+                            scoped_base_path as _wt_scope,
+                        )
+                        if _wt_on():
+                            _base = _wt_scope(self._project_path, _conv_id) or _base
+                    except Exception as _wt_e:
+                        logger.debug('[%s] StreamingToolExec: worktree scoping '
+                                     'skipped: %s', self._tid, _wt_e)
+                return execute_tool(fn_name, fn_args, _base, conv_id=_conv_id)
 
             elif fn_name == 'web_search':
                 # Delegate to the SINGLE SOURCE OF TRUTH for search —
@@ -339,7 +353,7 @@ class StreamingToolAccumulator:
                         q, f, v = spec
                         results, search_diag, _bkdn, vertical_result = _web_search_one(
                             q, user_question, f, vertical=v)
-                        fmt = format_search_for_tool_response(results, search_diag=search_diag)
+                        fmt = format_search_for_tool_response(results, search_diag=search_diag, query=q)
                         if vertical_result:
                             fmt = _vertical_header_for_llm(vertical_result) + fmt
                         return (results, fmt, vertical_result)
@@ -380,7 +394,7 @@ class StreamingToolAccumulator:
                 freshness = fn_args.get('freshness', '')
                 results, search_diag, engine_breakdown, vertical_result = _web_search_one(
                     query, user_question, freshness, vertical=vertical_param)
-                formatted_text = format_search_for_tool_response(results, search_diag=search_diag)
+                formatted_text = format_search_for_tool_response(results, search_diag=search_diag, query=query)
                 if vertical_result:
                     formatted_text = _vertical_header_for_llm(vertical_result) + formatted_text
                 display_results = _format_search_display_for_results(results)

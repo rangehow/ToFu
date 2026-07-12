@@ -161,6 +161,10 @@ BOARD_POST_TOOL = {
                     "type": "array", "items": {"type": "string"},
                     "description": "Optional list of board task ids this epic depends on."
                 },
+                "write_set": {
+                    "type": "array", "items": {"type": "string"},
+                    "description": "Optional list of file paths / globs / subsystem tags this epic intends to WRITE. Declaring it lets the dispatcher avoid handing two conversations epics that will fight over the same files (it prefers epics whose write-set is disjoint from currently-claimed ones). Optional and advisory — an omitted write-set is treated as 'unknown footprint' and never blocks dispatch."
+                },
             },
             "required": ["title"],
         },
@@ -212,14 +216,27 @@ BOARD_BLOCK_TOOL = {
         "name": "project_board_block",
         "description": (
             "Report that a board epic is BLOCKED (you can't proceed — a dependency, a "
-            "missing decision, an external wait). Surfaces the block in the project "
-            "activity feed so a human or sibling conversation can unblock it."
+            "missing decision, an external wait). This puts the epic on a "
+            "SELF-EXPIRING, escalating cooldown so the autonomous heartbeat stops "
+            "re-dispatching it (and burning a billed turn) while its gate is unmet — "
+            "the cooldown grows on repeated blocks and auto-clears with NO human "
+            "action, and a human reopen resets it for an immediate retry. In the "
+            "reason, PREFIX the block CLASS so it's visible on the board: "
+            "'[human-gated] …' when only a human action can satisfy it (e.g. infra "
+            "sign-off — this escalates to a long sleep fast), or '[sibling] …' when it "
+            "will auto-resolve once another conversation commits (retry-after-cooldown "
+            "is expected). When the sibling blocker is specific file(s) that must be "
+            "committed first, name them in a structured token "
+            "'[sibling] path=lib/x.py,static/js/y.js …' — the epic is then HELD "
+            "precisely while a sibling holds a lease on those paths (auto-released when "
+            "they finish), the precise complement to the cooldown. Then state the "
+            "concrete blocker."
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "task_id": {"type": "string", "description": "The board epic id."},
-                "reason": {"type": "string", "description": "Why it's blocked."},
+                "reason": {"type": "string", "description": "Why it's blocked. PREFIX with the block class: '[human-gated] …' or '[sibling] …'. For a sibling-commit blocker, name the files as '[sibling] path=a.py,b.py …' to auto-hold on them."},
             },
             "required": ["task_id"],
         },
@@ -289,13 +306,62 @@ PATH_RELEASE_TOOL = {
     },
 }
 
+# ── Safe commit seam (contamination-proof) ──
+# The one clean way for an agent to turn its OWN finished work into a git
+# commit in this large, multi-conversation, persistently-dirty working tree.
+# It NEVER runs `git add -A` and never commits a pathspec: it stages ONLY the
+# files this conversation can PROVE it authored (byte-identical to its own last
+# file-history record), excluding any file that also carries a live sibling's
+# uncommitted hunks, then commits the index with no pathspec. Project-scoped.
+PROJECT_COMMIT_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "project_commit",
+        "description": (
+            "Safely commit THIS conversation's own finished work to git. Use "
+            "this instead of raw `git add`/`git commit` via run_command: this "
+            "project's working tree is large and shared by several sibling "
+            "conversations at once, so a plain `git add <file>` sweeps a "
+            "sibling's uncommitted hunks in the SAME file into your commit. "
+            "This tool stages ONLY files it can prove you authored "
+            "(byte-identical to your own last recorded edit), EXCLUDES any file "
+            "that also carries foreign/sibling hunks or is a generated bundle, "
+            "then commits the index with no pathspec. Excluded files are "
+            "reported, never silently committed. You MUST pass `files` (the "
+            "exact paths you edited this turn — it does NOT auto-discover your "
+            "work). Omit `message` (or pass dry_run) to PREVIEW the "
+            "clean/contaminated/ignored split without committing. Only "
+            "available in project mode."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "message": {
+                    "type": "string",
+                    "description": "Commit message. Omit to get a dry-run plan (clean vs excluded) instead of committing."
+                },
+                "files": {
+                    "type": "array", "items": {"type": "string"},
+                    "description": "REQUIRED. The project-relative paths YOU edited this turn. The tool does NOT auto-discover your work — declare exactly what you changed; it then commits only the subset provably yours (byte-identical to your recorded edit) and holds any file carrying foreign/sibling hunks."
+                },
+                "dry_run": {
+                    "type": "boolean",
+                    "description": "If true, only report the clean/contaminated/ignored split; do not commit."
+                },
+            },
+            "required": ["files"],
+        },
+    },
+}
+
 BOARD_TOOLS = [BOARD_READ_TOOL, BOARD_POST_TOOL, BOARD_CLAIM_TOOL,
                BOARD_COMPLETE_TOOL, BOARD_BLOCK_TOOL,
-               PATH_CLAIM_TOOL, PATH_RELEASE_TOOL]
+               PATH_CLAIM_TOOL, PATH_RELEASE_TOOL, PROJECT_COMMIT_TOOL]
 BOARD_TOOL_NAMES = {'project_board_read', 'project_board_post',
                     'project_board_claim', 'project_board_complete',
                     'project_board_block',
-                    'project_claim_path', 'project_release_path'}
+                    'project_claim_path', 'project_release_path',
+                    'project_commit'}
 
 
 # ── Project Peer tools (Pillar #6 — cross-conversation communication) ──
@@ -361,12 +427,20 @@ PEER_MESSAGE_TOOL = {
     "function": {
         "name": "project_message",
         "description": (
-            "Send an ADVISORY message to a sibling conversation of this project "
-            "(find its id with project_peer_status). The message lands in the "
-            "target's queue and is seen on its NEXT turn — it NEVER interrupts a "
-            "live turn mid-stream. Use it to coordinate: share a finding, warn of "
-            "an overlap, hand off context. It is advisory — the peer decides "
-            "whether to act. Rate-limited per target to prevent message storms."
+            "Coordinate DIRECTLY with a sibling conversation (another AGENT) of "
+            "this project — find its id with project_peer_status. You are "
+            "writing TO A PEER AGENT, not reporting to a human: use the "
+            "imperative coordination register — CLAIM work ('I'm taking the "
+            "parser refactor, stand down on lib/parser/'), CONFIRM a boundary "
+            "('are you touching styles.css? I'm about to rewrite it'), HAND OFF "
+            "context ('the schema bump you need is on branch X, done'), or WARN "
+            "of an overlap ('your epic Y duplicates the one I already own'). Do "
+            "NOT narrate your progress or write a status update as if to a "
+            "human. The message lands in the peer's queue and is seen on its "
+            "NEXT turn — it NEVER interrupts a live turn mid-stream. The peer "
+            "acts autonomously on what you send. Rate-limited per target to "
+            "prevent message storms — spend it on coordination that changes what "
+            "the peer does, not FYI chatter."
         ),
         "parameters": {
             "type": "object",
@@ -377,7 +451,7 @@ PEER_MESSAGE_TOOL = {
                 },
                 "text": {
                     "type": "string",
-                    "description": "The message body. Be specific and actionable."
+                    "description": "The coordination message, addressed to the peer AGENT. A concrete coordination act — a claim, a boundary question, a hand-off, or an overlap warning — NOT a status report. State what you want the peer to do or confirm."
                 },
             },
             "required": ["to_conv_id", "text"],
@@ -390,14 +464,21 @@ PEER_INTERVENE_TOOL = {
     "function": {
         "name": "project_intervene",
         "description": (
-            "Intervene in a sibling conversation you believe is going wrong "
-            "(e.g. duplicating an epic you own, heading down a path a committed "
-            "decision rules out). By DEFAULT this is ADVISORY: it sends a "
+            "Tell a sibling conversation (another AGENT) to STOP or change "
+            "course when it is going wrong — e.g. it is duplicating an epic you "
+            "already own, or heading down a path a committed decision rules out. "
+            "Write it as a direct coordination directive TO THE PEER AGENT "
+            "('stop — I own the parser epic, drop it and re-check the board'), "
+            "not as a status report to a human. By DEFAULT this is ADVISORY: a "
             "high-priority notice the peer sees on its next turn asking it to "
-            "pause and re-check the board — it does NOT stop the peer. A genuine "
-            "hard abort of the peer's running task requires explicit HUMAN "
-            "approval and cannot be done unilaterally by an agent; if you set "
-            "hard_abort without that approval it is refused with guidance."
+            "pause and re-check the board — it does NOT stop the peer, the peer "
+            "decides how to respond. A genuine hard abort of the peer's running "
+            "task requires explicit HUMAN approval and cannot be done "
+            "unilaterally by an agent; if you set hard_abort without that "
+            "approval it is refused with guidance.\n"
+            "Note: an advisory intervention shares the SAME per-target rate-limit "
+            "budget as project_message (a few per target per window), so it can be "
+            "refused if you have recently messaged the same conversation."
         ),
         "parameters": {
             "type": "object",
@@ -408,7 +489,7 @@ PEER_INTERVENE_TOOL = {
                 },
                 "message": {
                     "type": "string",
-                    "description": "The advisory notice explaining WHY (e.g. which epic overlaps). Optional; a sensible default is used if omitted."
+                    "description": "The directive to the peer AGENT explaining WHAT to stop/change and WHY (e.g. which epic overlaps and that you own it). Optional; a sensible default is used if omitted."
                 },
                 "hard_abort": {
                     "type": "boolean",
@@ -432,7 +513,7 @@ __all__ = [
     'CHARTER_TOOLS', 'CHARTER_TOOL_NAMES',
     'BOARD_READ_TOOL', 'BOARD_POST_TOOL', 'BOARD_CLAIM_TOOL',
     'BOARD_COMPLETE_TOOL', 'BOARD_BLOCK_TOOL',
-    'PATH_CLAIM_TOOL', 'PATH_RELEASE_TOOL',
+    'PATH_CLAIM_TOOL', 'PATH_RELEASE_TOOL', 'PROJECT_COMMIT_TOOL',
     'BOARD_TOOLS', 'BOARD_TOOL_NAMES',
     'PEER_STATUS_TOOL', 'PEER_FEED_TOOL', 'PEER_MESSAGE_TOOL',
     'PEER_INTERVENE_TOOL', 'PEER_TOOLS', 'PEER_TOOL_NAMES',

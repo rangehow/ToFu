@@ -350,14 +350,48 @@ function finishStream(convId) {
       }
     }
   }
-  // ── ★ Autopilot in-band follow-up: when the done event carried
-  //    autopilotNextTaskId + autopilotVuMessage, the backend already
-  //    appended the synthetic user message to conv DB and spawned the
-  //    next task before closing this SSE stream.  Attach to it directly
-  //    instead of going through the queue-poll path.  This eliminates
-  //    the race where the VU LLM call took longer than the polling
-  //    retry budget (~15s) and the synthetic user msg + follow-up task
-  //    stayed invisible until manual page refresh.
+  // ── ★ Terminal continuation (autopilot baton + server-queue drain) ──
+  //   Extracted into _runTerminalContinuation so EVERY terminal path — the
+  //   normal finishStream, AND the self-heal reclaim in
+  //   _healStuckPlaceholder — routes the follow-up/queue dispatch through
+  //   ONE server-authoritative funnel. Before this, a self-heal that cleared
+  //   the running predicate (activeTaskId/activeStreams) but skipped
+  //   finishStream would leave a server-spawned autopilot follow-up or queued
+  //   message invisible until a manual refresh (the "autonomous flow must
+  //   self-heal" invariant, violated). See _runTerminalContinuation.
+  _runTerminalContinuation(convId);
+}
+
+/**
+ * The terminal continuation funnel: after a conversation's running predicate
+ * has been cleared (task done / aborted / reclaimed), resolve and attach any
+ * follow-up work the backend may already have spawned — an autopilot next
+ * turn or an auto-dispatched queued message.
+ *
+ * SERVER-AUTHORITATIVE by design (the root-cause requirement): the inline
+ * `_apPendingBaton` is only a FAST-PATH optimisation available when a `done`
+ * event actually arrived and stamped it. On a swallowed-done self-heal the
+ * baton was NEVER stamped, so we MUST fall through to `_checkForQueuedTask`,
+ * which probes `/api/chat/active` — the authority — and discovers the
+ * follow-up/queued task the backend spawned regardless of whether any inline
+ * baton survived. This is the ONLY way the empty-ghost / phantom-carrier case
+ * (the task produced nothing, but a queued message or autopilot follow-up is
+ * waiting behind it) self-heals without a manual refresh.
+ *
+ * MUST be called by every terminal path (finishStream, self-heal reclaim) so
+ * the baton + queue-drain can never be dropped by one path diverging.
+ *
+ * @param {string} convId
+ */
+function _runTerminalContinuation(convId) {
+  const conv = conversations.find((c) => c.id === convId);
+  // ── ★ Autopilot in-band follow-up (FAST PATH): when the done/poll event
+  //    carried autopilotNextTaskId + autopilotVuMessage, the backend already
+  //    appended the synthetic user message to conv DB and spawned the next
+  //    task.  Attach to it directly instead of going through the queue-poll
+  //    path.  This eliminates the race where the VU LLM call took longer than
+  //    the polling retry budget (~15s) and the synthetic user msg + follow-up
+  //    task stayed invisible until manual page refresh.
   /* Locate the autopilot carrier by flag, not by tail position — the
    * carrier is whichever message the SSE done handler stamped, which
    * may have been moved off the tail by Phase-2 reconciliation. */
@@ -382,11 +416,13 @@ function finishStream(convId) {
     );
   }
 
-  // ── ★ Server-side queue: always check for auto-dispatched next task ──
-  // The backend's persist_task_result → _dispatch_queued_message checks the
-  // message_queue table and auto-dispatches the next message. We poll for
-  // the new task to connect to its SSE stream. No frontend gate — the
-  // backend is the single source of truth for queue state.
+  // ── ★ Server-side queue (AUTHORITY): always check for an auto-dispatched
+  // next task.  The backend's persist_task_result → _dispatch_queued_message
+  // checks the message_queue table and auto-dispatches the next message; it
+  // also spawns the autopilot follow-up task even when no inline baton
+  // reached us (swallowed done).  _checkForQueuedTask probes /api/chat/active
+  // and attaches to whatever is running — no frontend gate, the backend is the
+  // single source of truth for queue/follow-up state.
   //
   // ★ Optimistic UI (when queue has items): insert a placeholder streaming
   //   bubble immediately so the user has visual feedback that their queued
@@ -409,12 +445,13 @@ function finishStream(convId) {
         if (isNearBottom(80)) scrollToBottom();
       }
     } catch (e) {
-      console.warn('[finishStream] queued-dispatch placeholder insert failed:', e);
+      console.warn('[_runTerminalContinuation] queued-dispatch placeholder insert failed:', e);
     }
   }
   const _queuedCheckDelay = _hasQueued ? 0 : 500;
   setTimeout(() => _checkForQueuedTask(convId), _queuedCheckDelay);
 }
+if (typeof window !== 'undefined') window._runTerminalContinuation = _runTerminalContinuation;
 
 /**
  * Re-trigger EN→CN translation for any awaiting_human rounds that haven't

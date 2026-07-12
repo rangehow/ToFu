@@ -2535,8 +2535,18 @@ function _renderTimelineBatch(batch, rounds, allRounds, idx) {
       html += `<div class="thinking-block seg-thinking" onclick="this.classList.toggle('expanded')"><div class="thinking-header"><span class="thinking-label">${escapeHtml(t('stream.thinking.done'))}${meta}</span><span class="thinking-toggle">▼</span></div><div class="thinking-content"><div class="thinking-text">${escapeHtml(s.text)}</div></div></div>`;
     } else if (s.type === "text" && !s.deliverable && s.text) {
       /* Inter-round narration ("Let me check the files.") rendered as its
-       * own quiet content block, adjacent to the tools it preceded. */
-      html += `<div class="md-content seg-narration">${renderMarkdown(s.text)}</div>`;
+       * own quiet content block, adjacent to the tools it preceded.
+       * ★ When auto-translate committed a per-round Chinese projection onto
+       *   this segment (seg.translatedText, stamped by the incremental
+       *   translator via _commit_translation_to_db → _stamp_segment_translations),
+       *   render THAT so the settled timeline shows the translated narration in
+       *   place — the "tool prose reappears but stays English" gap. Falls back
+       *   to the English narration when the field is absent (auto-translate off
+       *   / pre-v36 row). Strip surviving <notranslate>/⟦NT_n⟧ markers exactly
+       *   like the deliverable bilingual view (chat_render) does. */
+      const _segText = (s.translatedText && s.translatedText.trim()) ? s.translatedText : s.text;
+      const _segClean = (typeof stripNoTranslateTags === "function") ? stripNoTranslateTags(_segText) : _segText;
+      html += `<div class="md-content seg-narration">${renderMarkdown(_segClean)}</div>`;
     }
   }
   // Then the tool rows for this batch (rich bodies from toolRounds).

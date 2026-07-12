@@ -516,6 +516,44 @@ def _attach_orphan_marker(conv_dict, messages, conv_id):
                      conv_id[:8], e)
 
 
+def _maybe_backfill_narration_on_open(conv_id, conv_dict):
+    """FORWARD fix for the "tool prose reappears but stays English" gap.
+
+    A turn translated before its narration segments were stamped keeps its
+    Chinese only in the bottom ``translatedContent`` — the interleaved narration
+    segments lack ``translatedText`` and no client/server path re-requests it
+    (both ``needsTranslation`` and the retro guard treat the turn as done). On
+    conversation OPEN, when auto-translate is on for this conv and it carries any
+    such candidate, spawn a BACKGROUND task that translates + stamps the missing
+    narration segments (reusing the live translate core; rev-CAS neutral). The
+    stamped Chinese then surfaces on the next open / re-render.
+
+    Fire-and-forget: makes LLM calls, so it MUST run off the GET path and never
+    block or fail the response. Guarded on a cheap candidate pre-check so the
+    common (fully-stamped) conversation does zero extra work. No-op when
+    auto-translate is off or no event loop is running (sync caller).
+    """
+    try:
+        settings = conv_dict.get('settings') if isinstance(conv_dict, dict) else None
+        from lib.conv_config import resolve_auto_translate
+        if not resolve_auto_translate(settings if isinstance(settings, dict) else {}):
+            return
+        from lib.translate.segment_backfill import (
+            backfill_conv_narration_segments, conv_has_backfill_candidates)
+        if not conv_has_backfill_candidates(conv_dict.get('messages')):
+            return
+        import asyncio
+        loop = asyncio.get_running_loop()
+        loop.create_task(backfill_conv_narration_segments(conv_id))
+        logger.info('[get_conv] conv=%s spawned on-open narration backfill', conv_id[:8])
+    except RuntimeError:
+        # No running loop (sync context) — skip; the migration covers offline rows.
+        pass
+    except Exception as e:
+        logger.debug('[get_conv] narration backfill spawn skipped conv=%s: %s',
+                     conv_id[:8], e)
+
+
 @conversations_bp.route('/api/v1/conversations/<conv_id>', methods=['GET'])
 @_db_safe
 async def get_conv(conv_id):
@@ -540,16 +578,21 @@ async def get_conv(conv_id):
     # it would corrupt the live stream. Skip reconcile AND leave _reconciledAt
     # unstamped so the frontend keeps deferring rather than treating it as clean.
     if _conv_has_live_task(conv_id):
-        return jsonify(_conv_row_to_dict(r))
+        _served = _conv_row_to_dict(r)
+        _maybe_backfill_narration_on_open(conv_id, _served)
+        return jsonify(_served)
 
     try:
         cleaned = await run_pooled(
             lambda db: _reconcile_conv_on_get_blocking(db, conv_id, r))
+        _maybe_backfill_narration_on_open(conv_id, cleaned)
         return jsonify(cleaned)
     except Exception as e:
         logger.warning('[get_conv] GET-path reconcile failed for conv=%s: %s — '
                        'serving unreconciled row', conv_id[:8], e, exc_info=True)
-        return jsonify(_conv_row_to_dict(r))
+        _served = _conv_row_to_dict(r)
+        _maybe_backfill_narration_on_open(conv_id, _served)
+        return jsonify(_served)
 
 
 @conversations_bp.route('/api/v1/conversations/<conv_id>/preview', methods=['GET'])

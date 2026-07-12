@@ -288,6 +288,38 @@ function _trimMsgForPersist(m) {
   return r;
 }
 
+/* ★ Segment-recovery freshness signal (epic pt_cb8f98b0cb9b47fb).
+ *
+ * The display-only GET-path backstop (_rehydrate_segments_from_task_results)
+ * fills `segments` onto assistant messages that lack them, but does NOT bump
+ * the conversation `updatedAt` or change the message count (it's a read-time
+ * enrichment, never persisted on GET). So for a HISTORICAL turn whose cached
+ * copy was seeded segment-less (before the sse_pipeline committedMessage fix,
+ * or by any client PUT that stripped segments), the Phase-2 freshness check
+ * (`serverMsgs.length !== conv.messages.length || serverUpdatedAt > cached`)
+ * sees NO difference and keeps the segment-less cache — so the interleaved
+ * tool/thinking timeline stays empty until a hard refresh happens to move
+ * updatedAt. This predicate makes "server has segments the local copy lacks"
+ * an explicit staleness signal so the rehydrated server copy always wins.
+ *
+ * Positional compare (both arrays are the same turn order at equal length; the
+ * length-mismatch case is already handled by the caller's count check). Returns
+ * true as soon as ANY aligned assistant message has server segments but the
+ * local copy has none — cheap early-out, no allocation. */
+function _serverHasSegmentsLocalLacks(serverMsgs, localMsgs) {
+  if (!Array.isArray(serverMsgs) || !Array.isArray(localMsgs)) return false;
+  const n = Math.min(serverMsgs.length, localMsgs.length);
+  for (let i = 0; i < n; i++) {
+    const sm = serverMsgs[i], lm = localMsgs[i];
+    if (!sm || !lm || sm.role !== 'assistant') continue;
+    const sHas = Array.isArray(sm.segments) && sm.segments.length > 0;
+    const lHas = Array.isArray(lm.segments) && lm.segments.length > 0;
+    if (sHas && !lHas) return true;
+  }
+  return false;
+}
+if (typeof window !== 'undefined') window._serverHasSegmentsLocalLacks = _serverHasSegmentsLocalLacks;
+
 /* ═══════════════════════════════════════════════════════════════════
    rev-based CAS rebase (append-missing-tail, keyed on _msgId)
    ───────────────────────────────────────────────────────────────────
@@ -1524,7 +1556,13 @@ async function loadConversationMessages(convId) {
        *   msg from the persisted server copy. */
       const cacheIsStale = !cacheHit ||
         serverMsgs.length !== conv.messages.length ||
-        serverUpdatedAt > (conv._cachedUpdatedAt || 0);
+        serverUpdatedAt > (conv._cachedUpdatedAt || 0) ||
+        /* ★ The GET-path segments rehydrate is display-only (no count/updatedAt
+         *   change), so a segment-less cache would otherwise be judged FRESH and
+         *   the server's rehydrated tool/thinking timeline discarded. Treat
+         *   "server carries segments the local copy lacks" as stale so the
+         *   backstop always surfaces on historical turns. */
+        _serverHasSegmentsLocalLacks(serverMsgs, conv.messages);
 
       if (cacheIsStale) {
         /* ★ Diagnostic: if we're about to wipe a non-empty local that

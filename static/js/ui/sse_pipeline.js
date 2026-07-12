@@ -1553,6 +1553,17 @@ function dispatchSSEEvent(line, ctx) {
         assistantMsg.content = (_cm.content != null) ? _cm.content : (assistantMsg.content || '');
         assistantMsg.thinking = (_cm.thinking != null) ? _cm.thinking : (assistantMsg.thinking || '');
         if (Array.isArray(_cm.toolRounds)) assistantMsg.toolRounds = _snapshotLongerRounds(assistantMsg.toolRounds, _cm.toolRounds);
+        /* ★ segments (epic pt_cb8f98b0cb9b47fb): the backend re-derives the
+         *   authoritative typed-timeline SoT on finalization and ships it
+         *   VERBATIM in committedMessage. Project it here — WITHOUT this, the
+         *   just-settled in-memory message (and the ConvCache.put(conv) at
+         *   finishStream) has toolRounds+thinking but NO segments, seeding a
+         *   segment-less cache. On the next open the display-only GET-path
+         *   rehydrate returns segments but with the SAME count/updatedAt, so
+         *   the cache-freshness check discards them and the interleaved
+         *   timeline renders empty (the "tool/thinking lost on open, back on
+         *   refresh" bug). Taken verbatim like toolRounds — backend owns it. */
+        if (Array.isArray(_cm.segments)) assistantMsg.segments = _cm.segments;
         for (const _k of ['finishReason', 'usage', 'preset', 'toolSummary',
                           'model', 'provider_id', 'apiRounds', 'modifiedFiles',
                           'modifiedFileList', 'cost', '_taskId',

@@ -196,9 +196,21 @@ def select_dispatchable(project_path: str) -> list[dict]:
         #    lease) is HELD until that lease clears — the precise complement to
         #    the cooldown. Resolved as the inverse read of the path-lease at
         #    read time, so it self-expires when the holder releases/crashes
-        #    (within one lease TTL); a path nobody leases never strands. ──
+        #    (within one lease TTL); a path nobody leases never strands.
+        #
+        #    ISOLATION-GATED (the "conflict = preference, never idle block"
+        #    fix): under worktree isolation each conversation edits its OWN
+        #    checkout, so a waited-path overlap causes NO collision — it must
+        #    only DEMOTE the epic in ordering (handed out last, after disjoint
+        #    work), never withhold it. Under the default shared inproc tree two
+        #    convs editing the same file DO collide (byte-identity refuses the
+        #    2nd commit), so the hard withhold stays — OFF is byte-identical to
+        #    today, and Slice A already stopped its re-dispatch churn. ──
         if _paths_waited_but_held(t, tasks, now_ms):
-            continue
+            if _isolation_on():
+                t = {**t, '_conflict_demote': True}
+            else:
+                continue
         candidates.append(t)
 
     # ── Write-set partitioning (worktree isolation §4): shift collision
@@ -213,11 +225,37 @@ def select_dispatchable(project_path: str) -> list[dict]:
         _write_set_of(t) for t in tasks
         if t.get('status') == 'claimed' and _write_set_of(t)
     ]
-    if claimed_write_sets and len(candidates) > 1:
-        candidates.sort(
-            key=lambda c: 1 if _write_set_conflicts(_write_set_of(c),
-                                                     claimed_write_sets) else 0)
+    if len(candidates) > 1:
+        def _demote_key(c):
+            # A wait-on-path conflict (isolation-demoted above) OR a declared
+            # write_set that overlaps a live-claimed epic's → hand out LAST.
+            # Both are SOFT: a conflicting epic is still dispatchable, just
+            # after every disjoint one, so no colliding pair is handed out
+            # concurrently while independent work exists. Stable sort keeps
+            # relative order within each bucket.
+            if c.get('_conflict_demote'):
+                return 1
+            if claimed_write_sets and _write_set_conflicts(
+                    _write_set_of(c), claimed_write_sets):
+                return 1
+            return 0
+        candidates.sort(key=_demote_key)
     return candidates
+
+
+def _isolation_on() -> bool:
+    """True iff worktree isolation is active (``TOFU_WORKTREE_ISOLATION=on``).
+
+    Gates the wait-on-path DEMOTE-vs-WITHHOLD choice in select_dispatchable.
+    Fails CLOSED to OFF (the shared-tree hard-withhold, byte-identical to
+    today) on any probe error — a broken probe must never silently disable the
+    collision protection the shared tree still needs."""
+    try:
+        from lib.conversations.project_worktree import is_isolation_enabled
+        return bool(is_isolation_enabled())
+    except Exception as e:
+        logger.debug('[Dispatch] isolation probe failed (assuming OFF): %s', e)
+        return False
 
 
 def _write_set_of(task: dict) -> list:

@@ -252,6 +252,81 @@ def _write_set_conflicts(ws: list, others: list) -> bool:
             for y in other:
                 if _paths_intersect(x, y):
                     return True
+def _project_dirty_set(project_path: str):
+    """Every working-tree path dirty vs HEAD (modified/added/untracked), as
+    project-relative posix paths — the UNBILLED change-detection probe behind
+    the sibling-block re-dispatch gate.
+
+    Reuses ``project_commit._dirty_paths`` (the single source of truth for
+    "what differs from HEAD", incl. the porcelain ``-z`` / rename parsing) so
+    this never re-implements the git plumbing. Returns ``None`` on a git-probe
+    failure (not a repo / spawn error) so the caller FAILS OPEN — a transient
+    git error must never strand an epic. One subprocess; the caller memoizes it
+    across a sweep's candidates.
+    """
+    try:
+        from lib.conversations.project_commit import _dirty_paths, _is_git_repo
+        from lib.conversations.project_feed import normalize_project_path
+        base = normalize_project_path(project_path)
+        if not _is_git_repo(base):
+            return None
+        return _dirty_paths(base)
+    except Exception as e:
+        logger.debug('[Dispatch] dirty-set probe failed proj=%.40r: %s',
+                     project_path, e)
+        return None
+
+
+def _sibling_block_unresolved(epic: dict, dirty) -> bool:
+    """PURE change-gate core: True iff ``epic`` is held by an UNRESOLVED
+    ``[sibling]`` block — it was blocked with the ``[sibling]`` class, declares
+    ``wait_paths``, and at least one of those paths is STILL dirty vs HEAD
+    (the sibling has not committed).
+
+    Rationale — the root-cause fix for the token bleed. A ``[sibling]`` block
+    means "auto-resolves when a sibling commits path X". Its TRUE resolution
+    signal is therefore "X is clean vs HEAD", NOT "a flat cooldown lapsed". The
+    old flat 30-min cooldown re-dispatched a BILLED turn every cycle just to
+    re-discover the same unmet blocker and re-block. This gate lets the heartbeat
+    consult the free ``dirty`` set instead: while a waited path is dirty the real
+    blocker still stands → skip (no billed turn); once it goes clean → dispatch,
+    so a resolved blocker is retried the instant its inputs actually change —
+    convergent (no churn) AND non-stranding (no lease/release event required,
+    which siblings rarely emit).
+
+    FAIL-OPEN: a non-``[sibling]`` block, no declared ``wait_paths``, or a failed
+    probe (``dirty is None``) → False (dispatch as before). Pure given ``dirty``.
+    """
+    from lib.conversations.project_board import _SIBLING_TAG
+    if _SIBLING_TAG not in (epic.get('block_reason') or '').lower():
+        return False
+    want = epic.get('wait_paths') or []
+    if not want or dirty is None:
+        return False
+    for p in want:
+        if p in dirty:
+            return True
+        if any(_paths_intersect(p, d) for d in dirty):
+            return True
+    return False
+
+
+def _skip_unresolved_sibling(project_path: str, epic: dict, dirty_cache: dict) -> bool:
+    """Heartbeat wrapper around ``_sibling_block_unresolved`` that probes the
+    project dirty-set at most ONCE per sweep. Pass the SAME ``dirty_cache`` dict
+    across a sweep's candidate loop so the git probe is a single subprocess per
+    sweep (and only when a genuine ``[sibling]``+``wait_paths`` candidate exists —
+    the cheap tag pre-check gates the probe). Fail-open on any error path."""
+    from lib.conversations.project_board import _SIBLING_TAG
+    if _SIBLING_TAG not in (epic.get('block_reason') or '').lower():
+        return False
+    if not (epic.get('wait_paths') or []):
+        return False
+    if 'v' not in dirty_cache:
+        dirty_cache['v'] = _project_dirty_set(project_path)
+    return _sibling_block_unresolved(epic, dirty_cache['v'])
+
+
     return False
 
 
@@ -804,9 +879,18 @@ def sweep_dispatch(project_path: str, *, max_per_sweep: int = 3) -> int:
     except Exception as e:
         logger.debug('[Dispatch] migrate pass skipped proj=%.40r: %s', project_path, e)
     try:
+        dirty_cache: dict = {}  # memoize the git dirty-set probe: ≤1 subprocess/sweep
         for epic in select_dispatchable(project_path):
             if dispatched >= max(1, max_per_sweep):
                 break
+            # ── Change-gated sibling re-dispatch: an epic held by a [sibling]
+            #    block auto-resolves only when the sibling COMMITS its path(s).
+            #    While a waited path is still dirty vs HEAD the real blocker
+            #    stands → skip WITHOUT spending a billed kickoff turn (the fix
+            #    for the flat-cooldown re-dispatch bleed). Cheap, unbilled,
+            #    fail-open; the epic is re-evaluated for free next sweep. ──
+            if _skip_unresolved_sibling(project_path, epic, dirty_cache):
+                continue
             target = _dispatch_target(epic)
             if not target:
                 continue  # never invent a conversation
@@ -870,7 +954,12 @@ def on_epic_completed(project_path: str, completed_conv_id: str = '') -> int:
     dispatched = 0
     try:
         candidates = select_dispatchable(project_path)
+        dirty_cache: dict = {}
         for epic in candidates:
+            # Same change-gate as the sweep: don't spend a billed turn on an
+            # epic whose [sibling] blocker (a waited path) is still dirty.
+            if _skip_unresolved_sibling(project_path, epic, dirty_cache):
+                continue
             target = _dispatch_target(epic) or completed_conv_id
             if not target:
                 # No conversation to route the work to — leave it open for a

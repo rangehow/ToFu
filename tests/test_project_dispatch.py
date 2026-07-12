@@ -504,3 +504,142 @@ def test_NC5_dropping_wait_on_path_skip_leaks_waited_epic(flask_app):
         "        if False:  # NC-5 (wait-on-path skip disabled)\n            continue",
         run,
     )
+
+
+
+# ════════════════════════════════════════════════════════════════════
+#  Change-gated sibling re-dispatch (the token-bleed fix)
+#
+#  A [sibling] block auto-resolves when the sibling COMMITS its waited path.
+#  The heartbeat must NOT spend a billed kickoff turn while that path is still
+#  dirty vs HEAD (the old flat-cooldown churn) — it consults the free git
+#  dirty-set instead: dirty → skip (no turn), clean → dispatch. Convergent
+#  (no churn) AND non-stranding (no lease/release event required).
+# ════════════════════════════════════════════════════════════════════
+
+def _blocked_sibling_epic(block_reason, wait_paths):
+    """A minimal epic dict as select_dispatchable would surface it."""
+    return {'id': 'e1', 'title': 'work', 'status': 'open',
+            'block_reason': block_reason, 'wait_paths': wait_paths}
+
+
+def test_sibling_gate_unresolved_while_path_dirty():
+    """PURE core: a [sibling] epic whose waited path is still dirty vs HEAD is
+    UNRESOLVED (skip — the sibling has not committed)."""
+    from lib.conversations.project_dispatch import _sibling_block_unresolved
+    epic = _blocked_sibling_epic('[sibling] path=lib/x.py waiting', ['lib/x.py'])
+    assert _sibling_block_unresolved(epic, {'lib/x.py', 'other.py'}) is True
+
+
+def test_sibling_gate_resolved_when_path_clean():
+    """PURE core: once the waited path is no longer dirty (sibling committed),
+    the block is RESOLVED → dispatch (do NOT skip)."""
+    from lib.conversations.project_dispatch import _sibling_block_unresolved
+    epic = _blocked_sibling_epic('[sibling] path=lib/x.py waiting', ['lib/x.py'])
+    assert _sibling_block_unresolved(epic, {'unrelated.py'}) is False
+
+
+def test_sibling_gate_matches_directory_containment():
+    """A waited dir prefix is held while ANY file under it is dirty (reuses
+    _paths_intersect's containment logic)."""
+    from lib.conversations.project_dispatch import _sibling_block_unresolved
+    epic = _blocked_sibling_epic('[sibling] path=lib/conversations', ['lib/conversations'])
+    assert _sibling_block_unresolved(epic, {'lib/conversations/project_board.py'}) is True
+
+
+def test_sibling_gate_fail_open_on_probe_failure():
+    """FAIL-OPEN: a git-probe failure (dirty is None) must NEVER strand — the
+    epic dispatches as before rather than sleeping forever."""
+    from lib.conversations.project_dispatch import _sibling_block_unresolved
+    epic = _blocked_sibling_epic('[sibling] path=lib/x.py waiting', ['lib/x.py'])
+    assert _sibling_block_unresolved(epic, None) is False
+
+
+def test_sibling_gate_ignores_non_sibling_block():
+    """A [human-gated] block (or untagged) is NOT change-gated — this gate only
+    governs the transient sibling class (human-gated keeps its escalating
+    cooldown)."""
+    from lib.conversations.project_dispatch import _sibling_block_unresolved
+    epic = _blocked_sibling_epic('[human-gated] path=lib/x.py infra', ['lib/x.py'])
+    assert _sibling_block_unresolved(epic, {'lib/x.py'}) is False
+
+
+def test_sibling_gate_no_wait_paths_never_holds():
+    """A [sibling] block with no declared wait_paths falls through (nothing to
+    change-detect on) → dispatch."""
+    from lib.conversations.project_dispatch import _sibling_block_unresolved
+    epic = _blocked_sibling_epic('[sibling] some prose', [])
+    assert _sibling_block_unresolved(epic, {'lib/x.py'}) is False
+
+
+def test_sweep_skips_sibling_epic_while_path_dirty(flask_app, monkeypatch):
+    """INTEGRATION: the heartbeat must NOT dispatch (no billed kickoff) a
+    [sibling] epic whose waited path is still dirty — the token-bleed fix."""
+    import lib.conversations.project_dispatch as pd
+    from lib.conversations.project_board import block_task, post_task
+    # Stub the git probe: the waited path is dirty (sibling hasn't committed).
+    monkeypatch.setattr(pd, '_project_dirty_set', lambda p: {'lib/x.py'})
+    with flask_app.app_context():
+        epic = post_task('/s/sibdirty', 'cP', 'epic')['id']
+        # A [sibling] path= block: populates wait_paths AND a flat cooldown.
+        block_task('/s/sibdirty', 'cP', epic, '[sibling] path=lib/x.py blocked')
+        # Clear the cooldown so ONLY the change-gate can suppress dispatch
+        # (isolates the new mechanism from the pre-existing cooldown skip).
+        from lib.database import DOMAIN_CHAT, get_thread_db
+        get_thread_db(DOMAIN_CHAT).execute(
+            'UPDATE project_tasks SET blocked_until=0 WHERE id=?', (epic,))
+        get_thread_db(DOMAIN_CHAT).commit()
+        n = pd.sweep_dispatch('/s/sibdirty')
+    assert n == 0, 'a [sibling] epic with a still-dirty waited path must NOT be dispatched'
+    assert _queue_kinds(flask_app, 'cP') == [], 'no billed kickoff while the blocker stands'
+
+
+def test_sweep_dispatches_sibling_epic_once_path_clean(flask_app, monkeypatch):
+    """INTEGRATION: once the waited path goes clean (sibling committed), the
+    heartbeat dispatches the epic — convergent, non-stranding."""
+    import lib.conversations.project_dispatch as pd
+    from lib.conversations.project_board import block_task, post_task
+    from lib.message_queue import KIND_WORKFLOW
+    # Stub the git probe: NOTHING dirty (the waited path was committed).
+    monkeypatch.setattr(pd, '_project_dirty_set', lambda p: set())
+    with flask_app.app_context():
+        epic = post_task('/s/sibclean', 'cP', 'epic')['id']
+        block_task('/s/sibclean', 'cP', epic, '[sibling] path=lib/x.py blocked')
+        from lib.database import DOMAIN_CHAT, get_thread_db
+        get_thread_db(DOMAIN_CHAT).execute(
+            'UPDATE project_tasks SET blocked_until=0 WHERE id=?', (epic,))
+        get_thread_db(DOMAIN_CHAT).commit()
+        n = pd.sweep_dispatch('/s/sibclean')
+    assert n == 1, 'once the waited path is clean the epic must be dispatched'
+    assert KIND_WORKFLOW in _queue_kinds(flask_app, 'cP')
+
+
+def test_NC6_dropping_change_gate_redispatches_dirty_sibling(flask_app, monkeypatch):
+    """NC-6: no-op the change-gate in sweep_dispatch → a [sibling] epic with a
+    still-dirty waited path is re-dispatched anyway (the token-bleed churn the
+    gate prevents). Proves the gate is load-bearing."""
+    def run():
+        import lib.conversations.project_dispatch as pd
+        from lib.conversations.project_board import block_task, post_task
+        monkeypatch.setattr(pd, '_project_dirty_set', lambda p: {'lib/x.py'})
+        with flask_app.app_context():
+            from lib.database import DOMAIN_CHAT, get_thread_db
+            db = get_thread_db(DOMAIN_CHAT)
+            db.execute("DELETE FROM project_tasks WHERE project_path='/nc6s'")
+            db.execute("DELETE FROM message_queue WHERE conv_id='cNC6'")
+            db.commit()
+            epic = post_task('/nc6s', 'cNC6', 'epic')['id']
+            block_task('/nc6s', 'cNC6', epic, '[sibling] path=lib/x.py blocked')
+            db.execute('UPDATE project_tasks SET blocked_until=0 WHERE id=?', (epic,))
+            db.commit()
+            n = pd.sweep_dispatch('/nc6s')
+        assert n == 1, \
+            'NC-6: with the change-gate disabled, a dirty-path [sibling] epic ' \
+            'is re-dispatched (the billed churn the gate prevents)'
+
+    _patch_restore(
+        _DISPATCH_SRC,
+        "            if _skip_unresolved_sibling(project_path, epic, dirty_cache):\n                continue\n            target = _dispatch_target(epic)",
+        "            if False:  # NC-6 (change-gate disabled)\n                continue\n            target = _dispatch_target(epic)",
+        run,
+    )

@@ -385,41 +385,36 @@ def _rehydrate_segments_from_task_results(db, conv_id, messages):
     return filled
 
 
-def _reconcile_conv_on_get_blocking(db, conv_id, r):
-    """Server-authoritative ghost reconcile on the conversation GET path.
+def _compute_reconcile(conv_id, r):
+    """READ-ONLY ghost-reconcile verdict — the pure judgment half, no DB write.
 
-    Runs the SAME pure verdict as startup recovery
+    Runs the SAME verdict as startup recovery
     (``reconcile_conversation_messages``) so the frontend never has to INFER
-    settled lifecycle state (separation-of-concerns directive). Returns the
-    (possibly cleaned) row dict to serialize.
+    settled lifecycle state (separation-of-concerns directive), but performs
+    NO ``UPDATE``/``commit`` — that is deferred to ``_persist_reconcile`` so the
+    conversation GET read path never does an inline (FUSE-fsync) write.
 
-    Four gates (see the epic pt_e02044f4ab084dff design):
-      1. LIVE-TASK gate — never reconcile a conv with a pending/running task
-         (checked by the caller BEFORE this runs); a live empty placeholder
-         must not be deleted+persisted.
-      2. changed-only — skip the DB write entirely when the verdict changed
-         nothing (no write-amplification on every conversation open).
-      3. NO ``updated_at`` bump — persist the cleaned list WITHOUT touching the
-         timestamp, else the sidebar re-sorts to "now" on every open (backend
-         mirror of the ``saveConversations`` load-time-restamp gotcha).
-      4. cache-neutral — pass the LIVE ``get_cache_prefix_count`` so the sweep
-         never removes an in-prefix message (which would bust the prompt cache);
-         and signal ``notify_history_rewrite`` so cache-break detection names the
-         cause honestly instead of laundering it into a false "PROVEN" verdict.
+    Returns ``(cleaned, changed, settings_dict)``:
+      • ``(None, False, None)``   — empty history or reconcile deps unavailable;
+        the caller serves the unreconciled row verbatim.
+      • ``(cleaned, False, None)``— reconcile changed nothing (no write needed).
+      • ``(cleaned, True, sd)``   — history was rewritten; ``sd`` is the settings
+        dict with ``_reconciledAt`` stamped, ready to persist + serve.
+
+    Cache-neutral: passes the LIVE ``get_cache_prefix_count`` so the sweep never
+    removes an in-prefix message (which would bust the prompt cache).
     """
     messages = _safe_json(r['messages'], default=[], label='messages')
     if not messages:
-        return _conv_row_to_dict(r)
+        return None, False, None
 
     try:
         from lib.conversations.reconcile import reconcile_conversation_messages
-        from lib.tasks_pkg.cache_tracking import (
-            get_cache_prefix_count, notify_history_rewrite,
-        )
+        from lib.tasks_pkg.cache_tracking import get_cache_prefix_count
     except Exception as e:
         logger.warning('[get_conv] reconcile deps unavailable for conv=%s: %s',
                        conv_id[:8], e)
-        return _conv_row_to_dict(r)
+        return None, False, None
 
     prefix_n = 0
     try:
@@ -430,26 +425,30 @@ def _reconcile_conv_on_get_blocking(db, conv_id, r):
 
     cleaned, changed = reconcile_conversation_messages(messages, prefix_n)
     if not changed:
-        d = _conv_row_to_dict(r)
-        # Backstop: fill segments lost before the save_conv preservation fix
-        # (display-only, no persist). New/re-synced turns already carry them.
-        try:
-            _rehydrate_segments_from_task_results(db, conv_id, d['messages'])
-        except Exception as _rse:
-            logger.debug('[get_conv] segments rehydrate (unchanged path) '
-                         'conv=%s: %s', conv_id[:8], _rse)
-        _attach_orphan_marker(d, cleaned, conv_id)
-        return d
+        return cleaned, False, None
 
-    # ── Persist the cleaned list in the SAME request that serves it.
-    #    NO updated_at bump (gate 3): re-use the stored value verbatim so the
-    #    sidebar sort order is untouched. Stamp settings._reconciledAt so the
-    #    frontend Case-D path DEFERS (it is gated on !conv._reconciledAt) and
-    #    does not re-infer lifecycle state. ──
     settings_dict = _safe_json(r['settings'], default={}, label='settings') or {}
     if not isinstance(settings_dict, dict):
         settings_dict = {}
     settings_dict['_reconciledAt'] = int(time.time() * 1000)
+    return cleaned, True, settings_dict
+
+
+def _persist_reconcile(db, conv_id, cleaned, settings_dict):
+    """WRITE half of the reconcile — the (FUSE-fsync) ``UPDATE``+``commit`` that
+    the GET read path defers to a background task (see ``_schedule_reconcile_persist``).
+
+    Caller guarantees the verdict was ``changed=True``. Gates preserved:
+      • NO ``updated_at`` bump — re-use the stored value verbatim so the sidebar
+        sort order is untouched (backend mirror of the ``saveConversations``
+        load-time-restamp gotcha).
+      • ``_reconciledAt`` already stamped into ``settings_dict`` by ``_compute_reconcile``.
+    After the write it signals ``notify_history_rewrite`` (honest cache-break
+    naming) AND emits ``push_event('conv', conv_id, {kind:'history_rewrite', rev})``
+    so every client that has this conversation open re-aligns WITHOUT a manual
+    refresh. Returns the post-write ``rev`` (0 if unreadable).
+    """
+    from lib.tasks_pkg.cache_tracking import notify_history_rewrite
 
     messages_json = json_dumps_pg(cleaned)
     settings_json = json.dumps(settings_dict, ensure_ascii=False)
@@ -461,15 +460,64 @@ def _reconcile_conv_on_get_blocking(db, conv_id, r):
          conv_id, DEFAULT_USER_ID))
     db.commit()
 
+    # The ``conversations_rev_bump_trg`` trigger advanced rev on the UPDATE;
+    # read it back so the push carries the NEW version the client can dedupe on.
+    new_rev = 0
+    try:
+        cur = db.execute('SELECT rev FROM conversations WHERE id=? AND user_id=?',
+                         (conv_id, DEFAULT_USER_ID))
+        row = cur.fetchone() if cur is not None else None
+        if row is not None:
+            try:
+                new_rev = int(row['rev'] if hasattr(row, 'keys') else row[0])
+            except (TypeError, ValueError, KeyError, IndexError):
+                new_rev = 0
+    except Exception as e:
+        logger.debug('[get_conv] read post-reconcile rev conv=%s: %s',
+                     conv_id[:8], e)
+
     try:
         notify_history_rewrite(conv_id)
     except Exception as e:
         logger.debug('[get_conv] notify_history_rewrite failed conv=%s: %s',
                      conv_id[:8], e)
 
-    logger.info('[get_conv] Reconciled ghost message(s) on GET for conv=%s '
-                '(%d→%d msgs, no updated_at bump)',
-                conv_id[:8], len(messages), len(cleaned))
+    try:
+        from lib.push import push_event
+        push_event('conv', conv_id, {'kind': 'history_rewrite', 'rev': new_rev})
+    except Exception as e:
+        logger.debug('[get_conv] push history_rewrite failed conv=%s: %s',
+                     conv_id[:8], e)
+
+    logger.info('[get_conv] Reconciled ghost message(s) for conv=%s '
+                '(→%d msgs, no updated_at bump, rev=%d)',
+                conv_id[:8], len(cleaned), new_rev)
+    return new_rev
+
+
+def _reconcile_conv_served_readonly(db, conv_id, r):
+    """Build the GET response dict WITHOUT writing the DB (read path zero-fsync).
+
+    Returns ``(served, changed, cleaned, settings_dict)``. When ``changed`` is
+    True the ``served`` dict already carries the ``cleaned`` messages + stamped
+    settings (so the OPENING client sees correct state immediately), but the row
+    is NOT yet persisted — the caller schedules ``_persist_reconcile`` off the
+    request; its post-write ``push_event`` (rev+1) then re-aligns every other
+    open client. ``served.rev`` stays the pre-write value on purpose so a client
+    can tell the push's newer rev apart.
+    """
+    cleaned, changed, settings_dict = _compute_reconcile(conv_id, r)
+    if not changed:
+        d = _conv_row_to_dict(r)
+        # Backstop: fill segments lost before the save_conv preservation fix
+        # (display-only, no persist). New/re-synced turns already carry them.
+        try:
+            _rehydrate_segments_from_task_results(db, conv_id, d['messages'])
+        except Exception as _rse:
+            logger.debug('[get_conv] segments rehydrate (unchanged path) '
+                         'conv=%s: %s', conv_id[:8], _rse)
+        _attach_orphan_marker(d, cleaned, conv_id)
+        return d, False, None, None
 
     d = {
         'id': r['id'], 'title': r['title'],
@@ -477,10 +525,89 @@ def _reconcile_conv_on_get_blocking(db, conv_id, r):
         'createdAt': r['created_at'], 'created_at': r['created_at'],
         'updatedAt': r['updated_at'], 'updated_at': r['updated_at'],
         'settings': settings_dict,
+        'rev': _row_rev(r),
     }
-    # Backstop: fill segments lost before the save_conv preservation fix
-    # (display-only — the reconcile write above already committed the cleaned
-    # list; rehydration enriches ONLY the served dict, never re-persisted).
+    try:
+        _rehydrate_segments_from_task_results(db, conv_id, d['messages'])
+    except Exception as _rse:
+        logger.debug('[get_conv] segments rehydrate (changed path) '
+                     'conv=%s: %s', conv_id[:8], _rse)
+    _attach_orphan_marker(d, cleaned, conv_id)
+    return d, True, cleaned, settings_dict
+
+
+# Strong refs to in-flight background reconcile-persist tasks (create_task does
+# not keep its own ref; without this they can be GC'd mid-flight).
+_bg_reconcile_persist_tasks: set = set()
+
+
+def _schedule_reconcile_persist(conv_id, cleaned, settings_dict):
+    """Fire-and-forget the reconcile WRITE off the GET request.
+
+    The read handler has already returned the cleaned dict to the opening
+    client; this persists the same verdict on a background task so the request
+    never blocks on a (FUSE-fsync) ``UPDATE``+``commit``. On completion
+    ``_persist_reconcile`` emits the ``history_rewrite`` push so all open
+    clients converge. Reconcile is idempotent, so a redundant re-fire from a
+    concurrent GET is harmless (the second verdict is ``changed=False``).
+    """
+    import asyncio
+
+    async def _run():
+        try:
+            await run_pooled(
+                lambda db: _persist_reconcile(db, conv_id, cleaned, settings_dict))
+        except Exception as e:
+            logger.warning('[get_conv] background reconcile persist failed '
+                           'conv=%s: %s', conv_id[:8], e, exc_info=True)
+        finally:
+            _bg_reconcile_persist_tasks.discard(asyncio.current_task())
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    if loop is None:
+        # No running loop (non-async caller): skip — reconcile is idempotent, so
+        # the next GET from an async context will re-detect and persist. The
+        # served dict was already correct, so nothing is lost visually.
+        logger.debug('[get_conv] no running loop; deferring reconcile persist '
+                     'conv=%s to next GET', conv_id[:8])
+        return
+    t = loop.create_task(_run())
+    _bg_reconcile_persist_tasks.add(t)
+
+
+def _reconcile_conv_on_get_blocking(db, conv_id, r):
+    """SYNCHRONOUS persist-in-place reconcile (compute + write in one call).
+
+    Retained for the ``?prefetch=<id>`` branch of ``list_convs``
+    (``_prefetch_reconciled_dict``), which inlines the body so the frontend sets
+    ``_needsLoad=false`` and never issues the reconciling GET — that path MUST
+    persist within the request. The GET read path itself no longer calls this;
+    it uses ``_reconcile_conv_served_readonly`` + a background
+    ``_schedule_reconcile_persist`` so the read never does an inline fsync write.
+    """
+    cleaned, changed, settings_dict = _compute_reconcile(conv_id, r)
+    if not changed:
+        d = _conv_row_to_dict(r)
+        try:
+            _rehydrate_segments_from_task_results(db, conv_id, d['messages'])
+        except Exception as _rse:
+            logger.debug('[get_conv] segments rehydrate (unchanged path) '
+                         'conv=%s: %s', conv_id[:8], _rse)
+        _attach_orphan_marker(d, cleaned, conv_id)
+        return d
+
+    new_rev = _persist_reconcile(db, conv_id, cleaned, settings_dict)
+    d = {
+        'id': r['id'], 'title': r['title'],
+        'messages': cleaned,
+        'createdAt': r['created_at'], 'created_at': r['created_at'],
+        'updatedAt': r['updated_at'], 'updated_at': r['updated_at'],
+        'settings': settings_dict,
+        'rev': new_rev,
+    }
     try:
         _rehydrate_segments_from_task_results(db, conv_id, d['messages'])
     except Exception as _rse:
@@ -583,10 +710,16 @@ async def get_conv(conv_id):
         return jsonify(_served)
 
     try:
-        cleaned = await run_pooled(
-            lambda db: _reconcile_conv_on_get_blocking(db, conv_id, r))
-        _maybe_backfill_narration_on_open(conv_id, cleaned)
-        return jsonify(cleaned)
+        served, changed, cleaned, settings_dict = await run_pooled(
+            lambda db: _reconcile_conv_served_readonly(db, conv_id, r))
+        # ── Read path is now write-free: the response carries the cleaned
+        #    state immediately (correct for the OPENING client), and the
+        #    persist + history_rewrite push are deferred off-request so this GET
+        #    never blocks on a FUSE-fsync UPDATE+commit. ──
+        if changed:
+            _schedule_reconcile_persist(conv_id, cleaned, settings_dict)
+        _maybe_backfill_narration_on_open(conv_id, served)
+        return jsonify(served)
     except Exception as e:
         logger.warning('[get_conv] GET-path reconcile failed for conv=%s: %s — '
                        'serving unreconciled row', conv_id[:8], e, exc_info=True)

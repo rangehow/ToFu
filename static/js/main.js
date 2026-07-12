@@ -1075,6 +1075,12 @@ function _installViewportHeightGuard() {
    *   before push.js, so pushSubscribe isn't defined yet at its IIFE time. */
   if (typeof _wireConvSyncPush === 'function') _wireConvSyncPush();
 
+  /* ★ Server→client history_rewrite alignment: subscribe to the `conv` push
+   *   channel so a backend reconcile (ghost-tail delete / husk collapse) is
+   *   applied in place the instant it lands — the "must refresh to sync state"
+   *   fix. Same late-wire reason as above (pushSubscribe defined by push.js). */
+  if (typeof _wireConvHistoryRewritePush === 'function') _wireConvHistoryRewritePush();
+
   initActiveTasks().then(() => {
     /* ★ Decide reconnect by OBSERVABLE OUTCOME, not by a thrown error.
      *   loadConversationsFromServer swallows Failed to fetch (try/catch →

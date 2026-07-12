@@ -449,6 +449,12 @@ _BUNDLE_FILES = [
     'main.js',
     # Post-orchestrator UI widgets (depend on conversations/activeConvId/config
     # globals declared in core.js + main.js, so they MUST come after main.js).
+    # Server→client history_rewrite alignment: applies the backend reconcile
+    # verdict push ('conv' channel) in place so no manual refresh is needed.
+    # Reads conversations/activeConvId/renderChat + calls pushSubscribe at
+    # runtime, so it MUST come after main.js AND push.js. Wired from main.js
+    # boot via _wireConvHistoryRewritePush().
+    'conv_sync_push.js',
     'compaction-viewer.js',
     'context-bar.js',
     # Cross-conversation live-presence strip — pure render subscriber on the

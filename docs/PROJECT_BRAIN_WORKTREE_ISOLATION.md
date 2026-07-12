@@ -486,12 +486,25 @@ gate-on-merge-result Scenario C. Re-runnable.
    pre-exec) is coded + tested on disk but HELD: both files currently carry a
    sibling conversation's uncommitted work, so landing them would sweep foreign
    hunks. It lands the moment the sibling commits those two files.
+   **WIRING LANDED 2026-07-12 (`39b81c0`, owner-directed wholesale commit** — no
+   live peers, whole tree gate-green 117/117, so the two hot-path files were
+   committed WHOLE, knowingly sweeping in the uncommitted sibling hunks they
+   carried). Both tool-execution seams now call `scoped_base_path` under
+   isolation.
 4. `land_worktree` land flow (§5) + the CAS-with-retry integration-ref primitive
    (§5.1, REAL `git merge` in a scratch detached land-worktree → acceptance gate
    ON THE MERGE-RESULT tree inside the CAS critical section → `update-ref new
    old`; a red merge-result routes to conflict resolution, never the ref); the
    pre-merge gate on the conv branch is reused but is NOT sufficient alone.
    `project_commit` becomes the `inproc`-mode path only.
+   **LANDED 2026-07-12 (`4280c5b`).** `commit_worktree` (safe `git add -A`
+   inside the isolated worktree — nothing to contaminate by construction) +
+   `execute_land_tool` (commit-in-worktree → `land_worktree` CAS-merge, gating
+   the merge-result; conflict / red-merge / preflight-red REPORTED, never forced
+   onto the ref). `project_board.execute_board_tool` routes `project_commit` →
+   `execute_land_tool` when `TOFU_WORKTREE_ISOLATION=on`, else the byte-identity
+   `project_commit` (OFF default = byte-identical; fail-open to project_commit on
+   any routing error). `tests/test_project_worktree.py` +5 (commit/land/conflict).
 5. Dispatch-time write-set partitioning (§4) in `select_dispatchable` — add the
    epic `write_set` field to `post_task` / `dispatch_epic`.
    **CORE LANDED 2026-07-12 (`39385a3`).** `project_tasks` gains a `write_set`
@@ -508,7 +521,10 @@ gate-on-merge-result Scenario C. Re-runnable.
    arg (a `write_set` field on the post_task tool spec in `lib/tools/conversation.py`)
    is HELD — that file carries a sibling's uncommitted work; the backend already
    accepts write_set via `post_task`/`set_write_set`, the tool-surface arg lands
-   when the sibling commits.
+   when the sibling commits. **TOOL-ARG LANDED 2026-07-12 (`39b81c0`, part of the
+   owner-directed wholesale commit):** `write_set` is now on the
+   `project_board_post` tool spec and routed through `execute_board_tool` →
+   `post_task(write_set=)`.
 6. Retire (§0.1) the byte-identity gate + overlap-hold once (1)–(5) are green
    under the flag and the flag defaults `on` — behind the strangler-fig
    invariant (legacy path stays until every consumer is migrated).

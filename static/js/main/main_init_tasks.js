@@ -91,9 +91,9 @@ async function initActiveTasks() {
          *   visual bug.  Mirrors the Case C placeholder logic but gated on
          *   "last assistant belongs to a different / finished task". */
         const _amA = conv.messages[conv.messages.length - 1];
-        const _staleTail = _amA && _amA.role === 'assistant'
+        const _staleTail = _amA
           && !_amA._epIteration && !_amA._isEndpointReview && !_amA._isEndpointPlanner
-          && ((_amA._taskId && _amA._taskId !== conv.activeTaskId) || !!_amA.finishReason);
+          && assistantTailIsPriorTurn(_amA, conv.activeTaskId);
         if (_staleTail) {
           console.info(
             `[initActiveTasks CaseA] Pushing fresh assistant placeholder for conv=${conv.id.slice(0,8)} ` +

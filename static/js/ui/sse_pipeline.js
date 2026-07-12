@@ -183,9 +183,7 @@ async function connectToTask(convId, taskId, retries = 0, opts = {}) {
    *   its own logic that already handles critic→worker transitions. */
   if (assistantMsg && assistantMsg.role === 'assistant'
       && !conv.messages.some(m => m._epIteration)) {
-    const _staleTaskId = assistantMsg._taskId && assistantMsg._taskId !== taskId;
-    const _isCompletedTurn = !!assistantMsg.finishReason;
-    if (_staleTaskId || _isCompletedTurn) {
+    if (assistantTailIsPriorTurn(assistantMsg, taskId)) {
       console.info(
         `[connectToTask] 🆕 Last assistant belongs to a prior turn ` +
         `(taskId=${assistantMsg._taskId?.slice(0,8) || 'none'} vs new=${taskId.slice(0,8)}, ` +

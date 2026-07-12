@@ -774,6 +774,48 @@ def _merge_and_gate(base_path: str, old: str, branch: str,
         _prune_worktree_dir(base_path, lw)
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+#  Tool-scoping seam (build-order step 3, §3.1/§3.2)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def scoped_base_path(project_path: str, conv_id: str) -> str:
+    """Resolve the base path project FILE TOOLS (and ``run_command`` cwd) should
+    operate against for this conversation.
+
+    This is the ONE seam build-order step 3 (§3.1/§3.2) needs: the project file
+    tools thread ``project_path`` as an explicit parameter (they do NOT depend
+    on ``os.getcwd()``), so worktree-scoping is a path-resolution change, not a
+    ``chdir``. Under isolation this returns the conv's OWN worktree checkout
+    (creating it on first use via :func:`ensure_worktree`); every read / write /
+    grep / apply_diff / ``run_command`` cwd then flows against that worktree
+    with no further change.
+
+    Rollout seam (§6): when isolation is OFF (default) this returns
+    ``project_path`` UNCHANGED — the caller sees byte-identical behavior, so a
+    single-box install is untouched. It also returns ``project_path`` unchanged
+    on ANY failure (not a git repo, worktree-add error): fail-open to the shared
+    checkout so a worktree hiccup degrades to today's behavior rather than
+    breaking the task. NOTE: this scopes ONLY the tool base; the Project-Brain
+    coordination surfaces (presence / feed / board / modifications) keep using
+    the ORIGINAL ``project_path`` so cross-conversation coordination stays keyed
+    on the one real project, not fragmented per worktree.
+
+    Returns the absolute worktree path, or ``project_path`` unchanged.
+    """
+    if not project_path or not conv_id or not is_isolation_enabled():
+        return project_path
+    try:
+        res = ensure_worktree(project_path, conv_id)
+        if res.get('ok') and res.get('path'):
+            return res['path']
+        logger.warning('[Worktree] scoped_base_path fell back to primary for '
+                       'conv=%s: %s', conv_id[:12], res.get('error', '?'))
+    except Exception as e:
+        logger.warning('[Worktree] scoped_base_path errored for conv=%s: %s — '
+                       'using primary checkout', conv_id[:12], e)
+    return project_path
+
+
 def reset_for_test() -> None:
     """Test-only hook (parity with ``rate_limit_store.reset_for_test``). This
     module holds no memoized process state — env + filesystem are the truth — so
@@ -786,5 +828,6 @@ __all__ = [
     'conv_branch', 'worktrees_root', 'worktree_path',
     'ensure_integration_setup', 'ensure_worktree', 'refresh_lease',
     'sync_worktree', 'release_worktree', 'gc_worktrees', 'land_worktree',
+    'scoped_base_path',
     'reset_for_test', 'DEFAULT_LEASE_TTL_MS', 'MAX_LAND_RETRIES',
 ]

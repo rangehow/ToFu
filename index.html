@@ -786,6 +786,9 @@
 
             <!-- Mobile-only "more" button — opens bottom sheet with all toggles -->
             <button class="mobile-more-btn" id="mobileMoreBtn" onclick="toggleMobileSheet()" data-i18n-title="toolbar.moreOptionsTooltip" title="更多选项"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg></button>
+            <button class="mic-btn" id="micBtn" onclick="toggleVoiceInput()" data-i18n-title="voice.tooltip" title="Voice input" style="display:none">
+              <svg class="mic-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/></svg>
+            </button>
             <div class="search-mode-toggle" id="searchModeToggle" data-mode="off" onclick="cycleSearchMode()" title="Click to cycle: Off → Single → Multi → Off">
               <span class="sm-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><line x1="16.5" y1="16.5" x2="21" y2="21"/></svg></span>
               <span class="sm-label">Search</span>
@@ -2420,6 +2423,8 @@
 <script defer src="static/js/translation.js?v=20260528a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
 
 <script defer src="static/js/upload.js?v=20260528a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
+
+<script defer src="static/js/voice.js?v=20260707a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
 <script defer src="static/js/image-gen.js?v=20260528a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
 <script defer src="static/js/paper-reader.js?v=20260529a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
 <script defer src="static/js/project.js?v=20260611b" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
@@ -2450,6 +2455,8 @@
 <script defer src="static/js/settings/visibility_defaults.js?v=20260528a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
 <script defer src="static/js/settings/chip_input.js?v=20260610a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
 <script defer src="static/js/settings/other_tabs.js?v=20260528a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
+
+<script defer src="static/js/settings/speech.js?v=20260709a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
 <script defer src="static/js/settings/auth_sources.js?v=20260610b" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
 <script defer src="static/js/settings/save_export.js?v=20260528a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
 <script defer src="static/js/settings/system_prompt_editor.js?v=20260617a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>

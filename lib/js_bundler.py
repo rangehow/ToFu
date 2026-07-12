@@ -374,6 +374,11 @@ _BUNDLE_FILES = [
     'toolset-apply.js',  # tool-schema latch "apply on next conversation" banner
     'translation.js',
     'upload.js',
+
+    # Voice input (speech-to-text) — mic button + MediaRecorder capture.
+    # Leaf composer feature: uses Api.audio.* at RUNTIME and its initVoiceInput()
+    # is called from main.js's boot, so it only needs to load before main.js.
+    'voice.js',
     # image-gen.js — MOVED to _DEFERRED_FILES (lazy-loaded on first entry into
     # Image-Gen mode; ~11KB gzip). No load-time side effect (its only load-time
     # core read is `const _escapeHtmlBasic = escapeHtml`, and core loads first).
@@ -419,6 +424,8 @@ _BUNDLE_FILES = [
     'settings/visibility_defaults.js',
     'settings/chip_input.js',
     'settings/other_tabs.js',
+
+    'settings/speech.js',
     'settings/auth_sources.js',
     'settings/save_export.js',
     'settings/system_prompt_editor.js',

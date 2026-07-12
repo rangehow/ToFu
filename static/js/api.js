@@ -1055,6 +1055,16 @@
     parse: (formData) => request('/api/doc/parse', { method: 'POST', body: formData, timeout: 0 }),
   };
 
+  // audio (speech-to-text / voice input) ---------------------------
+  // transcribe: multipart audio blob → { ok, text, model, ... } (mirrors
+  //   pdf.parse — timeout:0 because a transcription round-trip is slow).
+  // capabilities: { available, models, maxBytes, maxDurationS } — drives the
+  //   graceful hide of the mic button when no transcription model is configured.
+  const audio = {
+    transcribe:   (formData) => request('/api/v1/audio/transcribe', { method: 'POST', body: formData, timeout: 0 }),
+    capabilities: ()         => get('/api/v1/audio/capabilities', { onError: 'null' }),
+  };
+
   // artifacts (panel + library + version chain) ---------------------
   // v1 metadata routes are JSON; raw / view / export are intentional
   // carve-outs that ship typed binary or sandboxed HTML — we expose
@@ -1101,7 +1111,7 @@
     _resolve,         // exposed for SSE/WS path building
     // domains
     folders, orchestrations, memory, profile, timer, scheduler, optimizer, compactions,
-    conversations, text, translate, chat, images, pdf, doc, artifacts,
+    conversations, text, translate, chat, images, pdf, doc, audio, artifacts,
     health, pricing, clientError, serverConfig, browser, project, daily, paper,
     features, providers, dispatch, oauth, mcp, update, trading, authSources,
     swarm,

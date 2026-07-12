@@ -2156,6 +2156,40 @@ if __name__ == '__main__':
         else:
             _server_log.info('[Server] Loop-stall watchdog disabled (TOFU_LOOP_STALL_SECS=0)')
 
+        # ── Deferred orphaned-queue re-dispatch ──
+        # A message enqueued while a task was already running lives ONLY in
+        # message_queue (never in conversations.messages) until it is drained by
+        # the post-task-completion hook / a human send / the Project-Brain idle
+        # drain — NONE of which fire on a fresh boot for a conv with no live
+        # task. So a restart strands queued turns: shown in the queue bar,
+        # never processed, no transcript trace = total loss. This drains them.
+        #
+        # It SPAWNS billed tasks + touches the DB, so — exactly like the
+        # killed-recovery / autopilot-resume boot dispatch — it MUST run on the
+        # SERVING loop (which keeps running under Hypercorn), NOT inline in the
+        # startup loop whose asyncio.run() teardown would block until each
+        # spawned carrier finished (the boot-time-dispatch / long-boot trap).
+        # Ordering is safe: recover_stale_tasks_on_startup() ran inline in
+        # _init_database BEFORE this loop, so every crashed task is already
+        # marked interrupted and its activeTaskId cleared — no live in-memory
+        # task exists to double-dispatch, and redispatch_orphaned_queue_on_startup
+        # applies its own per-conv live-task guard + non-reentrant _dispatch_lock
+        # anyway. Gated on the shutdown flag so a ^C during startup skips it.
+        if not _shutdown_requested.is_set():
+            async def _run_orphan_queue_redispatch():
+                try:
+                    from lib.message_queue import redispatch_orphaned_queue_on_startup
+                    if _shutdown_requested.is_set():
+                        return
+                    spawned = await asyncio.to_thread(redispatch_orphaned_queue_on_startup)
+                    if spawned:
+                        _server_log.info('[Server] Re-dispatched %d orphaned queued '
+                                         'turn(s) stranded by restart', len(spawned))
+                except Exception as _oq_err:
+                    _server_log.warning('[Server] orphaned-queue redispatch failed '
+                                        '(non-fatal): %s', _oq_err)
+            loop.create_task(_run_orphan_queue_redispatch())
+
         # Bridge the SIGTERM threading.Event to an async trigger Hypercorn
         # awaits. When set, Hypercorn stops accepting new connections and
         # drains in-flight ones within graceful_timeout. Poll cheaply (the

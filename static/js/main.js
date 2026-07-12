@@ -282,7 +282,20 @@ function _reflowToolbar() {
  * Once the real font loads, glyph widths change and the preset label
  * may need more space. */
 if (document.fonts && document.fonts.ready) {
-  document.fonts.ready.then(() => _scheduleReflow());
+  document.fonts.ready.then(() => {
+    /* ★ Suppress the .input-inner max-width .4s transition for THIS re-snap.
+     * With preload the metrics usually already match (no-op), but on a cold
+     * cache the glyph widths still change here — without this guard the width
+     * delta animates as a visible 0.4s "settle". Restore the transition on the
+     * next frame so genuine user-driven width changes still animate. */
+    const inner = document.querySelector('.input-inner');
+    const prev = inner ? inner.style.transition : null;
+    if (inner) inner.style.transition = 'none';
+    _reflowToolbar();
+    if (inner) {
+      requestAnimationFrame(() => { inner.style.transition = prev || ''; });
+    }
+  });
 }
 /* --chat-w is NOT synced — chat area uses its own fixed max-width (820px default)
  * independent of toolbar width, per §4.2 decoupled layout. */

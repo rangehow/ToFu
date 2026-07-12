@@ -14,6 +14,15 @@
 <link rel="manifest" href="static/manifest.json" crossorigin="use-credentials">
 <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 180 180'><defs><linearGradient id='t' x1='0' y1='0' x2='.5' y2='1'><stop offset='0%25' stop-color='%23fef8ec'/><stop offset='100%25' stop-color='%23fdf2d7'/></linearGradient><linearGradient id='f' x1='0' y1='0' x2='.2' y2='1'><stop offset='0%25' stop-color='%23fdf4dc'/><stop offset='100%25' stop-color='%23f5e8c8'/></linearGradient><linearGradient id='r' x1='0' y1='0' x2='1' y2='.7'><stop offset='0%25' stop-color='%23ecdcc0'/><stop offset='100%25' stop-color='%23dcc8a4'/></linearGradient></defs><path d='M86 26 L36 54 L91 90 L147 59Z' fill='url(%23t)'/><path d='M36 54 L34 119 L97 153 L91 90Z' fill='url(%23f)'/><path d='M91 90 L97 153 L145 125 L147 59Z' fill='url(%23r)'/><path d='M86 26 L36 54 L34 119 L97 153 L145 125 L147 59Z' stroke='%231a1520' stroke-width='3.2' stroke-linejoin='round' fill='none'/><path d='M53 38 L74 31 L80 34 L59 41Z' fill='white' opacity='.5'/><rect x='44' y='80' width='15' height='19' rx='1' fill='%231a1520'/><rect x='52' y='81' width='5' height='7' rx='1' fill='white' opacity='.92'/><rect x='45' y='89' width='3' height='4' rx='.5' fill='white' opacity='.45'/><rect x='73' y='93' width='15' height='21' rx='1' fill='%231a1520'/><rect x='81' y='94' width='5' height='7' rx='1' fill='white' opacity='.92'/><rect x='74' y='104' width='3' height='5' rx='.5' fill='white' opacity='.45'/><path d='M57 113 Q68 121 78 113' stroke='%231a1520' stroke-width='1.5' fill='none' stroke-linecap='round' opacity='.45'/><ellipse cx='45' cy='103' rx='5.5' ry='4' fill='%23ffaaa2' opacity='.5'/><ellipse cx='84' cy='120' rx='6' ry='4' fill='%23feaca5' opacity='.5'/></svg>">
 <link rel="icon" type="image/svg+xml" href="static/icons/tofu-welcome.svg">
+<!-- Preload the Plus Jakarta Sans weights the toolbar/controls actually use
+     (400/600/700). font-display:swap otherwise lays out first-paint with
+     system-fallback metrics, then re-snaps toolbar width when the .ttf lands
+     (the "settle" reflow). crossorigin is REQUIRED so the preload and the
+     @font-face fetch share one cache entry. Only these 3 weights — not 300/500,
+     JetBrains Mono, or Pixelify — to keep first paint fast. -->
+<link rel="preload" as="font" type="font/ttf" crossorigin href="static/vendor/fonts/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_qU7NSg.ttf">
+<link rel="preload" as="font" type="font/ttf" crossorigin href="static/vendor/fonts/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_d0nNSg.ttf">
+<link rel="preload" as="font" type="font/ttf" crossorigin href="static/vendor/fonts/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_TknNSg.ttf">
 <link rel="stylesheet" href="static/vendor/google-fonts-local.css">
 <link rel="stylesheet" href="static/vendor/github-dark.min.css">
 <link rel="stylesheet" href="static/vendor/katex/katex.min.css">

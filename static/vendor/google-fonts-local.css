@@ -85,3 +85,34 @@
   font-display: swap;
   src: url(fonts/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_TknNSg.ttf) format('truetype');
 }
+
+/* 'Jakarta Toolbar' — WIDTH-SENSITIVE toolbar/control alias of Plus Jakarta
+   Sans (SAME .ttf files, all preloaded in index.html). font-display:optional
+   (not swap): the browser gets a ~100ms block window; with preload the font is
+   virtually always ready inside it, so first paint uses the real font and there
+   is NO swap. If a cold cache / slow FUSE mount misses the 100ms window, the
+   control renders with the fallback for the WHOLE session and NEVER swaps —
+   structurally removing the mid-session font-change reflow (the FOUT "settle").
+   Body text intentionally stays on 'Plus Jakarta Sans' (swap) — locking large
+   copy to fallback for a whole session is a worse trade than a brief swap. */
+@font-face {
+  font-family: 'Jakarta Toolbar';
+  font-style: normal;
+  font-weight: 400;
+  font-display: optional;
+  src: url(fonts/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_qU7NSg.ttf) format('truetype');
+}
+@font-face {
+  font-family: 'Jakarta Toolbar';
+  font-style: normal;
+  font-weight: 600;
+  font-display: optional;
+  src: url(fonts/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_d0nNSg.ttf) format('truetype');
+}
+@font-face {
+  font-family: 'Jakarta Toolbar';
+  font-style: normal;
+  font-weight: 700;
+  font-display: optional;
+  src: url(fonts/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_TknNSg.ttf) format('truetype');
+}

@@ -470,7 +470,22 @@ gate-on-merge-result Scenario C. Re-runnable.
    (11) + 26/26 through the fresh-HEAD gate (V6 + readonly-roots + conv-eviction),
    self-consistent, 0 orphans.
 3. Worktree-scoped path resolution (§3.1) + `run_command` cwd (§3.2), flag-gated
-   (rebase latency here IS V5).
+   (rebase latency here IS V5). **HELPER LANDED 2026-07-12 (`0a553f6`); WIRING
+   HELD (sibling-contaminated files).** The core seam is
+   `project_worktree.scoped_base_path(project_path, conv_id)`: under isolation
+   it resolves the base that FILE TOOLS + `run_command` cwd operate against to
+   the conv's own worktree (via `ensure_worktree`), else returns `project_path`
+   unchanged (OFF = byte-identical; fail-open to primary on error). Because the
+   tools thread `project_path` as an explicit PARAMETER (no `os.getcwd()`
+   dependence), this ONE helper covers reads/writes/grep/apply_diff + the
+   `run_command` cwd — a path-resolution swap, not a chdir. It scopes ONLY the
+   tool base; presence/feed/board/modifications keep the original
+   `project_path`. `tests/test_worktree_scoped_base.py` (7) + 34/34 fresh-HEAD
+   gate. The WIRING (calling the helper at the two tool-execution seams —
+   `lib/tasks_pkg/handlers/project.py` sync handler + `streaming_tool_executor.py`
+   pre-exec) is coded + tested on disk but HELD: both files currently carry a
+   sibling conversation's uncommitted work, so landing them would sweep foreign
+   hunks. It lands the moment the sibling commits those two files.
 4. `land_worktree` land flow (§5) + the CAS-with-retry integration-ref primitive
    (§5.1, REAL `git merge` in a scratch detached land-worktree → acceptance gate
    ON THE MERGE-RESULT tree inside the CAS critical section → `update-ref new

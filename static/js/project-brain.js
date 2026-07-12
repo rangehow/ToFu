@@ -62,6 +62,7 @@
   // ── Tabs: show one surface at a time (full width) ──────────────
   /** Switch the visible tab-panel. `name` ∈ charter|board|activity|peers. */
   function _selectTab(name) {
+    var prev = _state.tab;
     _state.tab = name;
     var tabs = document.querySelectorAll('.project-brain-tabs .pb-tab');
     for (var i = 0; i < tabs.length; i++) {
@@ -80,6 +81,25 @@
     if (typeof ProjectBrainI18n !== 'undefined' && ProjectBrainI18n &&
         typeof ProjectBrainI18n.applyAll === 'function') {
       try { ProjectBrainI18n.applyAll(); } catch (_e) { /* best-effort */ }
+    }
+    _onTabSelected(name, prev);
+  }
+
+  /** Pillar #7: refresh the STATUS lane only when it becomes newly active
+   *  (entering the Status tab from another tab) — fresh-on-open, no polling. */
+  function _onTabSelected(name, prev) {
+    if (name === 'status' && prev !== 'status') {
+      _refreshStatus(_state.path || _displayedProjectPath());
+    }
+  }
+
+  /** Delegate the STATUS lane refresh to project-brain-status.js when present
+   *  (bundle-load-order safe: a runtime lookup, never a load-time reference). */
+  function _refreshStatus(path) {
+    if (typeof window.ProjectBrainStatus !== 'undefined' &&
+        window.ProjectBrainStatus &&
+        typeof window.ProjectBrainStatus.refreshStatus === 'function') {
+      window.ProjectBrainStatus.refreshStatus(path);
     }
   }
 

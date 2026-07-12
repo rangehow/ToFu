@@ -899,6 +899,34 @@
     brainPeerAbort: (path, convId, toConvId) =>
       post('/api/v1/project/brain/peer-abort',
            { path, convId: convId || '', toConvId }),
+    brainStatus:   (path, opts) =>
+      get('/api/v1/project/brain/status',
+          { query: { path, refresh: (opts && opts.force) ? '1' : '' },
+            onError: 'null' }),
+    brainStatusHistory: (path, limit) =>
+      get('/api/v1/project/brain/status/history',
+          { query: { path, limit: limit || '' }, onError: 'null' }),
+    // Read-only synthesis Q&A about the project status. Writes NOTHING.
+    // Throws ApiError on refusal so the composer can surface the error.
+    brainStatusAsk: (path, question) =>
+      post('/api/v1/project/brain/status/ask', { path, question }),
+    // Pillar #7 WATCH lane — the human's standing "things I care about" list.
+    // brainWatchList(refresh) re-addresses open items on read (fresh-on-open).
+    brainWatchList: (path, refresh) =>
+      get('/api/v1/project/brain/watch',
+          { query: { path, refresh: refresh ? '1' : '' }, onError: 'null' }),
+    brainWatchAdd: (path, kind, text, convId) =>
+      post('/api/v1/project/brain/watch/add', { path, kind, text, convId: convId || '' }),
+    brainWatchUpdate: (itemId, action, extra) =>
+      post('/api/v1/project/brain/watch/update',
+           Object.assign({ itemId, action }, extra || {})),
+    brainWatchAddress: (itemId) =>
+      post('/api/v1/project/brain/watch/address', { itemId }),
+    // Promote a watch item into the charter — the ONLY bridge to sibling
+    // agents (human-gated charter commit). Throws ApiError on version skew.
+    brainWatchPromote: (itemId, convId, expectedVersion) =>
+      post('/api/v1/project/brain/watch/promote',
+           { itemId, convId: convId || '', expectedVersion: expectedVersion }),
   };
 
   // paper-reader (library + report + translate + QA) ---------------

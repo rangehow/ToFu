@@ -530,6 +530,9 @@
             <span class="pb-tab-label" data-i18n="projectBrain.team">Team</span>
             <span class="pb-tab-count" id="pbTabCountPeers" hidden></span>
           </button>
+          <button type="button" class="pb-tab" data-pb-tab="status" role="tab" aria-selected="false">
+            <span class="pb-tab-label" data-i18n="projectBrain.status">Status &amp; Watch</span>
+          </button>
         </div>
         <div class="project-brain-columns">
           <div class="project-brain-col project-brain-col-charter pb-tab-panel pb-tab-panel-active" data-pb-panel="charter">
@@ -558,6 +561,16 @@
           <div class="project-brain-col project-brain-col-peers pb-tab-panel" data-pb-panel="peers">
             <div class="project-brain-col-body" id="projectBrainPeersBody">
               <div class="pb-peers-empty" data-i18n="projectBrain.peersEmpty">No sibling conversations active</div>
+            </div>
+          </div>
+          <!-- ═══ Pillar #7 — Status & Watch ═══
+               The human↔brain status lane: a synthesized narrative + drift
+               read + the standing WATCH list. Populated by
+               project-brain-status.js from Api.project.brainStatus.
+               HUMAN-FACING ONLY — never injected into sibling agent prompts. -->
+          <div class="project-brain-col project-brain-col-status pb-tab-panel" data-pb-panel="status">
+            <div class="project-brain-col-body" id="projectBrainStatusBody">
+              <div class="pb-status-empty" data-i18n="projectBrain.statusEmpty">No status yet</div>
             </div>
           </div>
         </div>
@@ -2486,6 +2499,8 @@
 <script defer src="static/js/project-brain.js?v=20260630a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
 <!-- project-brain-peers.js — Team/Peers column (registered in lib/js_bundler.py:_BUNDLE_FILES). MUST load after project-brain.js. -->
 <script defer src="static/js/project-brain-peers.js?v=20260703a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
+<!-- project-brain-status.js — Pillar #7 Status & Watch lane (registered in lib/js_bundler.py:_BUNDLE_FILES). MUST load after project-brain.js. -->
+<script defer src="static/js/project-brain-status.js?v=20260708a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
 <!-- project-brain-i18n.js — content-translation display overlay (registered in lib/js_bundler.py:_BUNDLE_FILES). MUST load after project-brain.js + project-brain-peers.js. -->
 <script defer src="static/js/project-brain-i18n.js?v=20260706a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
 <!-- net-latency.js — topbar network-latency signal indicator (registered in lib/js_bundler.py:_BUNDLE_FILES). -->

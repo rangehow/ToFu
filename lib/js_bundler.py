@@ -469,6 +469,11 @@ _BUNDLE_FILES = [
     # after project-brain.js (which owns _state). No raw fetch.
     'project-brain-peers.js',
     # Project Brain — content-translation DISPLAY OVERLAY. Lays a translation
+    # Project Brain — Pillar #7 human↔brain STATUS lane tab. Renders the
+    # synthesized status narrative + drift read + the WATCH list. Reads
+    # Api.project.brainStatus*/brainWatch* + window.ProjectBrain._state at
+    # RUNTIME, so it MUST come after project-brain.js. No raw fetch.
+    'project-brain-status.js',
     # over the agent/human-authored free-text content (charter / decisions /
     # epic titles / activity + peer summaries) in the UI language, WITHOUT
     # mutating the originals (source stays in data-pb-src; commit/reject read

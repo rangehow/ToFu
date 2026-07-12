@@ -33,7 +33,9 @@ Environment-variable override: ``MEMORY_PREFETCH=0`` disables.
 from __future__ import annotations
 
 import json
+import os
 import re
+import threading
 import time
 from typing import Any
 
@@ -70,6 +72,25 @@ PREFETCH_BODY_PREVIEW_LEN = 500    # chars of body shown to cheap model
 
 # Bytes cap per-memory when building the context for the cheap model
 _SUMMARY_BODY_CAP = 800
+
+# ── Rerank wall-clock deadline (§10.1 hyperparameter) ──
+# Hard upper bound on how long the cheap-LLM rerank may block the turn's
+# critical path (round 0, before the main model's first token). On timeout
+# we inject NOTHING — matching the existing no-fallback policy: we would
+# rather add no memory than stall time-to-first-token or splice a noisy
+# BM25 top-K. This is a WALL-CLOCK abandon, not dispatch_chat's per-attempt
+# timeout: dispatch_chat cycles up to its full total budget (~90s for
+# 'cheap') on 429 contention, so a per-attempt timeout alone cannot bound
+# the call. We therefore run the rerank in a daemon worker and abandon it
+# on deadline. 0 disables the bound (legacy behaviour: block indefinitely).
+# Override per-deployment with MEMORY_PREFETCH_DEADLINE_MS.
+try:
+    PREFETCH_DEADLINE_MS = int(os.environ.get('MEMORY_PREFETCH_DEADLINE_MS', '800'))
+    if PREFETCH_DEADLINE_MS < 0:
+        PREFETCH_DEADLINE_MS = 0
+except (ValueError, TypeError) as _e:
+    logger.debug('[MemPrefetch] MEMORY_PREFETCH_DEADLINE_MS parse failed, using default: %s', _e)
+    PREFETCH_DEADLINE_MS = 800
 
 # Respect feature flag in the normal way (env > features.json > default).
 try:
@@ -464,6 +485,47 @@ def _format_active_environment(project_path: str | None,
             f'tools: {tools}')
 
 
+# Sentinel distinguishing a deadline timeout from a legitimate falsy result.
+_DEADLINE_SENTINEL = object()
+
+
+def _run_with_deadline(fn, deadline_ms: int):
+    """Run ``fn()`` with a hard wall-clock deadline.
+
+    Returns ``fn()``'s result if it completes within ``deadline_ms``. On
+    timeout returns ``_DEADLINE_SENTINEL`` and ABANDONS the worker — the
+    thread is a daemon so it can never block process exit, and its eventual
+    result is discarded. ``deadline_ms <= 0`` disables the bound (runs
+    ``fn()`` inline, blocking indefinitely — the legacy behaviour).
+
+    The no-exception-swallowing contract is preserved: if ``fn()`` raises,
+    the exception is re-raised on THIS thread so the caller's outer handler
+    sees it exactly as an inline call would. Only a timeout is special-cased.
+    """
+    if deadline_ms <= 0:
+        return fn()
+
+    box: dict[str, Any] = {}
+
+    def _worker():
+        try:
+            box['result'] = fn()
+        except BaseException as e:  # noqa: BLE001 — re-raised on caller thread
+            box['error'] = e
+
+    t = threading.Thread(target=_worker, name='mem-prefetch-rerank',
+                         daemon=True)
+    t.start()
+    t.join(deadline_ms / 1000.0)
+
+    if t.is_alive():
+        # Worker still running past the deadline — abandon it (daemon).
+        return _DEADLINE_SENTINEL
+    if 'error' in box:
+        raise box['error']
+    return box.get('result')
+
+
 def _call_cheap_reranker(memories: list[dict],
                          candidate_indices: list[int],
                          recent_turns: str,
@@ -489,7 +551,9 @@ def _call_cheap_reranker(memories: list[dict],
     diag: dict[str, Any] = {'elapsed_ms': 0}
 
     if len(candidate_indices) < PREFETCH_MIN_CANDIDATES:
-        # Trivially too few candidates — skip LLM, take all of them.
+        # Trivially too few candidates — skip LLM, take all of them. This is
+        # a FAST-SKIP, not a timeout: no dispatch happens, so the deadline
+        # does not apply.
         diag['elapsed_ms'] = int((time.time() - t0) * 1000)
         diag['skipped'] = 'too_few_candidates'
         return list(candidate_indices[:PREFETCH_MAX_INJECTED]), diag
@@ -509,19 +573,36 @@ def _call_cheap_reranker(memories: list[dict],
     )
     user_content = '\n\n'.join(sections)
 
-    # No timeout, no try/except — exceptions propagate to the caller.
-    content, usage = dispatch_chat(
-        [
-            {'role': 'system', 'content': _RERANK_SYSTEM_PROMPT},
-            {'role': 'user', 'content': user_content},
-        ],
-        max_tokens=5120,
-        temperature=0,
-        capability='cheap',
-        log_prefix='[MemPrefetch]',
-    )
+    def _do_dispatch():
+        # No internal timeout kwarg — dispatch_chat's per-attempt timeout does
+        # NOT bound total wall-clock (429 cycling runs to its full budget), so
+        # the hard bound is enforced by the caller's join() below, not here.
+        return dispatch_chat(
+            [
+                {'role': 'system', 'content': _RERANK_SYSTEM_PROMPT},
+                {'role': 'user', 'content': user_content},
+            ],
+            max_tokens=5120,
+            temperature=0,
+            capability='cheap',
+            log_prefix='[MemPrefetch]',
+        )
+
+    outcome = _run_with_deadline(_do_dispatch, PREFETCH_DEADLINE_MS)
 
     diag['elapsed_ms'] = int((time.time() - t0) * 1000)
+
+    if outcome is _DEADLINE_SENTINEL:
+        # Wall-clock deadline hit. Per the no-fallback policy, inject NOTHING
+        # — do not splice a BM25 top-K. The abandoned worker is a daemon that
+        # cannot block process exit; its eventual result is simply discarded.
+        diag['timed_out'] = True
+        diag['skipped'] = 'rerank_timeout'
+        logger.info('[MemPrefetch] rerank exceeded %dms deadline — '
+                    'injecting nothing (no fallback)', PREFETCH_DEADLINE_MS)
+        return [], diag
+
+    content, usage = outcome
     diag['usage'] = usage or {}
 
     selected_ranks = _parse_rerank_response(content or '', len(candidate_indices))
@@ -763,6 +844,7 @@ def run_memory_prefetch(messages: list,
               bm25_ms=bm25_ms,
               rerank_ms=rerank_ms,
               total_ms=int((time.time() - t_start) * 1000),
+              timed_out=bool(diag.get('timed_out')),
               reason=diag.get('skipped') or 'none_relevant')
         return []
 

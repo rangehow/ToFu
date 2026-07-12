@@ -464,6 +464,13 @@ def sync_worktree(project_path: str, conv_id: str) -> dict:
         return {'ok': False, 'error': f'integration branch {ib} missing'}
 
     before = _rev_parse(wt, 'HEAD')
+    # If the conv branch already CONTAINS integration (e.g. it was reconciled
+    # via resolve_worktree_conflict — a merge of integration into the branch),
+    # there is nothing to rebase: replaying the branch onto integration would
+    # re-hit the very conflict the merge already resolved. Short-circuit so the
+    # recovery loop converges (the merge-resolve → re-land fast-forward path).
+    if before and _is_ancestor(base, integ, before):
+        return {'ok': True, 'fast_forward': True, 'already_current': True}
     rc, _, err = _git(wt, 'rebase', ib)
     if rc != 0:
         # Conflict (or other rebase failure) — abort so the worktree is left
@@ -918,6 +925,121 @@ def execute_land_tool(fn_args: dict, *, current_conv_id: str = '',
         return f'Error executing worktree land: {e}'
 
 
+def resolve_worktree_conflict(project_path: str, conv_id: str) -> dict:
+    """Bring the latest integration HEAD INTO the conversation's worktree so a
+    held land can be resolved and RE-LANDED — the recovery half of the land
+    loop (design §5.2).
+
+    Why a MERGE, not the rebase ``sync_worktree`` does: ``sync_worktree`` does
+    ``git rebase integration`` and, on conflict, ABORTS — discarding the
+    conflict state, so the conversation has nothing to resolve and re-landing
+    just re-hits the same conflict forever (the "held → re-land → held" strand).
+    This instead MERGES integration into the conv branch, leaving standard
+    conflict markers in the worktree files. The conversation then resolves them
+    with its normal edit tools and lands again: once the merge is committed,
+    integration is an ANCESTOR of the conv branch, so the next
+    :func:`land_worktree` is a trivial fast-forward → the loop CONVERGES.
+
+    Any uncommitted worktree edits are committed onto the branch first (so they
+    are not lost in the merge). A clean fast-forward (integration merges with no
+    conflict) auto-commits and reports ``resolved`` with no markers.
+
+    Returns ``{ok, conflict?, files?, already_current?, committed_pending?,
+    disabled?, error?}``. Never raises.
+    """
+    out: dict = {'ok': False}
+    if not is_isolation_enabled():
+        out['disabled'] = True
+        out['error'] = 'worktree isolation disabled'
+        return out
+    base = _norm_base(project_path)
+    if not base or not _is_git_repo(base):
+        out['error'] = 'not a git repository'
+        return out
+    wt = worktree_path(project_path, conv_id)
+    if not (os.path.isdir(wt) and _is_git_repo(wt)):
+        out['error'] = 'worktree missing — call ensure_worktree first'
+        return out
+    ib = integration_branch()
+    integ = _rev_parse(base, f'refs/heads/{ib}')
+    if not integ:
+        out['error'] = f'integration branch {ib} missing'
+        return out
+
+    # Commit any pending worktree edits onto the branch so the merge can't lose
+    # them (commit_worktree is a benign no-op when the tree is clean).
+    commit = commit_worktree(project_path, conv_id,
+                             'Worktree work (pre-sync commit)')
+    if not commit.get('ok'):
+        out['error'] = f'could not commit pending work: {commit.get("error", "unknown")}'
+        return out
+    out['committed_pending'] = bool(commit.get('committed'))
+
+    branch = conv_branch(conv_id)
+    branch_tip = _rev_parse(base, f'refs/heads/{branch}')
+    # Already contains integration → nothing to reconcile.
+    if branch_tip and _is_ancestor(base, integ, branch_tip):
+        out['ok'] = True
+        out['already_current'] = True
+        return out
+
+    # Merge integration INTO the conv worktree branch (markers on conflict).
+    rc, _, err = _git(wt, 'merge', '--no-edit', ib)
+    if rc == 0:
+        out['ok'] = True
+        out['conflict'] = False
+        logger.info('[Worktree] resolve_worktree_conflict merged %s into '
+                    'conv=%s cleanly', ib, conv_id[:12])
+        return out
+    # Conflict → leave the markers in place for in-worktree resolution.
+    rc2, names, _ = _git(wt, 'diff', '--name-only', '--diff-filter=U')
+    files = [f for f in (names or '').splitlines() if f.strip()]
+    out['ok'] = True   # the SYNC succeeded; the conflict is now resolvable
+    out['conflict'] = True
+    out['files'] = files
+    logger.info('[Worktree] resolve_worktree_conflict conv=%s left %d '
+                'conflicted file(s) for resolution: %s',
+                conv_id[:12], len(files), ', '.join(files[:8]))
+    return out
+
+
+def execute_sync_tool(fn_args: dict, *, current_conv_id: str = '',
+                      project_path: str = '') -> str:
+    """Agent-tool entry point (isolation ``on`` mode) → human-readable string.
+
+    The recovery companion to :func:`execute_land_tool`: when a land is HELD on
+    a merge conflict, call this to pull the latest integration HEAD into the
+    worktree. A clean merge means you can land again immediately; a conflict
+    leaves standard ``<<<<<<<`` markers in the named files — edit them with your
+    normal file tools to resolve, then land again (it will fast-forward).
+    """
+    try:
+        if not project_path:
+            return ('Error: worktree sync is only available in project mode '
+                    '(open a project first).')
+        if not is_isolation_enabled():
+            return ('Worktree isolation is off — there is no integration branch '
+                    'to sync from; use project_commit on the shared checkout.')
+        res = resolve_worktree_conflict(project_path, current_conv_id)
+        if not res.get('ok'):
+            return f'Sync failed: {res.get("error", "unknown")}.'
+        if res.get('already_current'):
+            return (f'Already up to date with {integration_branch()} — nothing '
+                    f'to reconcile. If a prior land was held, just land again.')
+        if not res.get('conflict'):
+            return (f'Synced {integration_branch()} into your worktree cleanly '
+                    f'(no conflict). Land again — it will fast-forward.')
+        files = res.get('files') or []
+        listing = '\n'.join(f'  - {f}' for f in files[:20])
+        return (f'Synced {integration_branch()} into your worktree — {len(files)} '
+                f'file(s) have merge conflicts you must resolve with your edit '
+                f'tools (look for <<<<<<< / ======= / >>>>>>> markers), then '
+                f'land again (it will fast-forward):\n{listing}')
+    except Exception as e:
+        logger.warning('[Worktree] execute_sync_tool failed: %s', e, exc_info=True)
+        return f'Error executing worktree sync: {e}'
+
+
 def reset_for_test() -> None:
     """Test-only hook (parity with ``rate_limit_store.reset_for_test``). This
     module holds no memoized process state — env + filesystem are the truth — so
@@ -931,5 +1053,6 @@ __all__ = [
     'ensure_integration_setup', 'ensure_worktree', 'refresh_lease',
     'sync_worktree', 'release_worktree', 'gc_worktrees', 'land_worktree',
     'scoped_base_path', 'commit_worktree', 'execute_land_tool',
+    'resolve_worktree_conflict', 'execute_sync_tool',
     'reset_for_test', 'DEFAULT_LEASE_TTL_MS', 'MAX_LAND_RETRIES',
 ]

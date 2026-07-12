@@ -47,7 +47,10 @@ def test_connect_failure_closes_dumper_fd(monkeypatch):
     def _boom(*a, **k):
         raise requests.exceptions.ConnectionError('SYN dropped')
 
-    monkeypatch.setattr(stream.requests, 'post', _boom)
+    class _FakeSession:
+        post = staticmethod(_boom)
+
+    monkeypatch.setattr(stream, 'get_sync_session', lambda: _FakeSession())
 
     body = {'model': 'test-model', 'messages': [{'role': 'user', 'content': 'hi'}],
             'max_tokens': 16}
@@ -93,7 +96,10 @@ def test_success_path_still_closes_dumper_fd(monkeypatch):
         def close(self):
             pass
 
-    monkeypatch.setattr(stream.requests, 'post', lambda *a, **k: _FakeResp())
+    class _FakeSession:
+        post = staticmethod(lambda *a, **k: _FakeResp())
+
+    monkeypatch.setattr(stream, 'get_sync_session', lambda: _FakeSession())
 
     body = {'model': 'test-model', 'messages': [{'role': 'user', 'content': 'hi'}],
             'max_tokens': 16}

@@ -1131,6 +1131,14 @@ def execute_board_tool(fn_name: str, fn_args: dict, *,
             return execute_commit_tool(
                 fn_args, current_conv_id=current_conv_id,
                 project_path=project_path)
+        if fn_name == 'project_sync':
+            # Worktree isolation recovery: pull integration HEAD into the conv's
+            # worktree so a HELD land (merge conflict) can be resolved in-place
+            # and re-landed. No-op path off-mode (execute_sync_tool guards).
+            from lib.conversations.project_worktree import execute_sync_tool
+            return execute_sync_tool(
+                fn_args, current_conv_id=current_conv_id,
+                project_path=project_path)
         if fn_name == 'project_ready_land':
             from lib.conversations.project_ready import execute_ready_land_tool
             return execute_ready_land_tool(

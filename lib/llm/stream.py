@@ -22,6 +22,7 @@ from lib.llm._transport import (
     CONNECT_TIMEOUT,
     MAX_STREAM_RETRIES,
     abortable_sleep,
+    get_sync_session,
     retry_wait,
 )
 from lib.llm_errors import (
@@ -121,9 +122,10 @@ def _stream_chat_once(body, *, on_thinking=None, on_content=None,
     resp = None
     try:
         try:
-            resp = requests.post(plan.url, headers=plan.hdrs, json=plan.body,
-                                 stream=True, timeout=(CONNECT_TIMEOUT, 300),
-                                 proxies=proxies_for(plan.url))
+            resp = get_sync_session().post(
+                plan.url, headers=plan.hdrs, json=plan.body,
+                stream=True, timeout=(CONNECT_TIMEOUT, 300),
+                proxies=proxies_for(plan.url))
         except requests.exceptions.ConnectionError as e:
             # Connect-phase failure (ConnectTimeout / connection refused /
             # SYN dropped) = the endpoint is down. Convert to

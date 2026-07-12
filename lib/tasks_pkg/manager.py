@@ -11,6 +11,7 @@ preserved on top of the runtime by augmenting the task dict after
 """
 
 import json
+import os
 import threading
 import time
 import uuid
@@ -80,6 +81,28 @@ _conv_latest_task_lock = threading.Lock()
 # only decides WHO is newest.
 _LATEST_KIND = 'latest'
 _LATEST_TTL = 3600.0  # a conv's latest-task marker; refreshed on each new task
+
+# ── Partial-checkpoint coalescing (§10.1 hyperparameter) ──
+# Minimum content+thinking growth (chars) since the last conversations.messages
+# write before a mid-stream partial checkpoint bothers rewriting that whole
+# O(conv-size) JSON blob again. Small deltas are COALESCED (skipped), not
+# dropped: the delta is measured against the DB row, so a skip leaves the row
+# stale and the NEXT delta's measured growth includes the skipped chars — it is
+# inherently cumulative and always flushes once growth crosses the threshold.
+# The per-task task_results checkpoint (the cheap blob) is written EVERY
+# checkpoint regardless, and the terminal _sync_result_to_conversation always
+# writes the full final content — so the messages row is a derived mirror that
+# may lag by < this many chars mid-stream and always converges at completion.
+# The reconnect / poll-fallback reload path reads task_results + the task_events
+# log (never this row) so it is unaffected. 0 disables coalescing (write on
+# every delta — the legacy behaviour). Override with CHECKPOINT_MIN_DELTA_CHARS.
+try:
+    CHECKPOINT_MIN_DELTA_CHARS = int(os.environ.get('CHECKPOINT_MIN_DELTA_CHARS', '160'))
+    if CHECKPOINT_MIN_DELTA_CHARS < 0:
+        CHECKPOINT_MIN_DELTA_CHARS = 0
+except (ValueError, TypeError) as _e:
+    logger.debug('[Checkpoint] CHECKPOINT_MIN_DELTA_CHARS parse failed, using default: %s', _e)
+    CHECKPOINT_MIN_DELTA_CHARS = 160
 
 
 def _record_latest_task(conv_id: str, task_id: str) -> None:
@@ -1712,11 +1735,38 @@ def _sync_partial_to_conversation(task):
             # content didn't grow AND no new structural data is available.
             mutated = False
 
-            if content and len(content) > existing_content_len:
+            # ── Coalesce sub-threshold content/thinking growth ──
+            # The O(conv-size) messages-JSON rewrite is the expensive half of a
+            # partial checkpoint. Grown text is always applied to last_msg
+            # IN-MEMORY (free), but a tiny content/thinking delta on its own is
+            # NOT worth the whole-JSON write: we withhold the WRITE (not the
+            # data) until the delta crosses CHECKPOINT_MIN_DELTA_CHARS. Because
+            # the delta is measured against the (unwritten) DB row, growth is
+            # cumulative across skips and flushes as soon as it crosses the
+            # threshold. If any OTHER change (tool_rounds / metadata) triggers
+            # the write anyway, the already-applied fresh text rides along for
+            # free. The cheap task_results blob is written EVERY checkpoint and
+            # the terminal sync always writes the full final content, so nothing
+            # is lost — only the mid-stream messages mirror lags by < threshold.
+            _content_grew = bool(content and len(content) > existing_content_len)
+            _thinking_grew = bool(thinking and len(thinking) > existing_thinking_len)
+            _pending_delta = ((len(content) - existing_content_len if _content_grew else 0)
+                              + (len(thinking) - existing_thinking_len if _thinking_grew else 0))
+            _terminal = bool(task.get('finishReason')
+                             or task.get('status') in ('done', 'error', 'aborted'))
+            # The text delta alone justifies a write only when it is big enough
+            # (or coalescing is disabled, or the task is terminal).
+            _text_write_worthy = _pending_delta > 0 and (
+                CHECKPOINT_MIN_DELTA_CHARS == 0
+                or _terminal
+                or _pending_delta >= CHECKPOINT_MIN_DELTA_CHARS
+            )
+
+            if _content_grew:
                 last_msg['content'] = content
-                mutated = True
-            if thinking and len(thinking) > existing_thinking_len:
+            if _thinking_grew:
                 last_msg['thinking'] = thinking
+            if _text_write_worthy:
                 mutated = True
 
             if tool_rounds:
@@ -1760,16 +1810,25 @@ def _sync_partial_to_conversation(task):
             # ★ Segment-timeline SoT (epic pt_cb8f98b0cb9b47fb): mirror the THIN
             #   segments onto the message dict so a page-reload / Continue after
             #   a mid-prose crash can read the resumable tail from the same
-            #   conversations.messages row it reads everything else from. Unlike
-            #   the structural-metadata backfill above (fill-if-absent), segments
-            #   are backend-authoritative and refreshed every checkpoint, so we
-            #   overwrite. Best-effort — a serialize failure just skips the write.
+            #   conversations.messages row it reads everything else from.
+            #   Segments are a PROJECTION of content/thinking/toolRounds, so we
+            #   refresh last_msg in-memory every checkpoint — but the refresh
+            #   RIDES ALONG on a write already warranted by a real change; it
+            #   must NOT independently force the O(conv-size) write, or it would
+            #   defeat the delta coalescing above (segments change on every
+            #   token, exactly as content does). This is safe because
+            #   task_results.segments IS written every checkpoint (the
+            #   authoritative crash-recovery source that
+            #   _rehydrate_segments_from_task_results reads) and the terminal
+            #   persist writes final segments to messages — so the messages
+            #   segment mirror lags by the same < threshold window as content
+            #   and converges at completion. Best-effort — serialize failure
+            #   just skips the mirror.
             _seg_val = task.get('segments')
             if _seg_val:
                 try:
                     from lib.tasks_pkg.segments import segments_to_json
                     last_msg['segments'] = segments_to_json(_seg_val)
-                    mutated = True
                 except Exception as _msj_e:
                     logger.debug('[Checkpoint] conv=%s segments->msg serialize failed: %s',
                                  conv_id[:8], _msj_e)

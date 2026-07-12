@@ -91,16 +91,20 @@ def test_partial_does_not_touch_search_text():
         {'role': 'assistant', 'content': 'par', 'thinking': '', 'timestamp': 2},
     ], search_text='__STALE_SENTINEL__')
 
-    # A task whose content GROWS the tail (len('partial answer so far') > len('par')).
+    # A task whose content GROWS the tail by MORE than CHECKPOINT_MIN_DELTA_CHARS
+    # so the coalescing gate (landed 2026-07) still performs the messages write
+    # this test is checking. The point under test is search_text, not the
+    # threshold — a small delta would be legitimately coalesced away.
+    _grown = 'partial answer so far ' + 'x' * 200
     task = {
         'id': 'tk-partial-st', 'convId': conv_id,
-        'content': 'partial answer so far', 'thinking': '',
+        'content': _grown, 'thinking': '',
     }
     try:
         _mgr._sync_partial_to_conversation(task)
         msgs, search_text, msg_count = _read(db, conv_id)
         # messages column DID advance (reload-critical write happened).
-        assert msgs[-1]['content'] == 'partial answer so far', (
+        assert msgs[-1]['content'] == _grown, (
             f'partial checkpoint did not grow the tail content: {msgs[-1]!r}')
         assert msg_count == 2, f'msg_count wrong: {msg_count}'
         # search_text was NOT rebuilt — still the pre-existing sentinel.
@@ -118,7 +122,7 @@ def test_partial_does_not_touch_search_text():
             raise AssertionError('build_search_text called on the PARTIAL path')
         _conv.build_search_text = _boom
         try:
-            task2 = dict(task, content='partial answer so far and then some more')
+            task2 = dict(task, content=_grown + ' and then ' + 'y' * 200 + ' more')
             _mgr._sync_partial_to_conversation(task2)  # must NOT raise
             msgs2, st2, _ = _read(db, conv_id)
             assert msgs2[-1]['content'].endswith('more'), 'second partial did not write'

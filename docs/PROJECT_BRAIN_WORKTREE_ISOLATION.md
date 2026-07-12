@@ -494,6 +494,21 @@ gate-on-merge-result Scenario C. Re-runnable.
    `project_commit` becomes the `inproc`-mode path only.
 5. Dispatch-time write-set partitioning (§4) in `select_dispatchable` — add the
    epic `write_set` field to `post_task` / `dispatch_epic`.
+   **CORE LANDED 2026-07-12 (`39385a3`).** `project_tasks` gains a `write_set`
+   JSON column (schema v39→40, byte-equivalent PG+SQLite, parity-tested, in
+   `_CRITICAL_COLUMNS` both backends). `post_task(write_set=)` + a new
+   `set_write_set()` helper declare an epic's footprint; `select_dispatchable`
+   PREFERS a candidate whose write_set is DISJOINT from every live-claimed
+   epic's — a stable disjoint-first reorder. SOFT preference, never a hard filter
+   (a conflicting epic still dispatches last → no stall); an empty/undeclared
+   write_set is "unknown footprint" → non-conflicting → never demoted
+   (fail-open); `_paths_intersect` handles directory-containment overlap in
+   either direction. `tests/test_project_write_set.py` (9, incl. NC-WS) + 116/116
+   fresh-HEAD gate (write-set + board + dispatch + schema-parity). The board-TOOL
+   arg (a `write_set` field on the post_task tool spec in `lib/tools/conversation.py`)
+   is HELD — that file carries a sibling's uncommitted work; the backend already
+   accepts write_set via `post_task`/`set_write_set`, the tool-surface arg lands
+   when the sibling commits.
 6. Retire (§0.1) the byte-identity gate + overlap-hold once (1)–(5) are green
    under the flag and the flag defaults `on` — behind the strangler-fig
    invariant (legacy path stays until every consumer is migrated).

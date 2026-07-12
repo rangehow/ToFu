@@ -137,12 +137,18 @@ def test_select_includes_after_lease_expired(flask_app):
 #  select_dispatchable — wait-on-path (commit-dependency) skip
 # ════════════════════════════════════════════════════════════════════
 
-def test_select_excludes_epic_waiting_on_held_path(flask_app):
+def test_select_excludes_epic_waiting_on_held_path(flask_app, monkeypatch):
     """An epic whose wait_paths includes a path under a live lease held by a
     DIFFERENT conversation must NOT be dispatchable (the commit-dependency
-    hold). Ordered after the status/cooldown/dep filters."""
+    hold). Ordered after the status/cooldown/dep filters.
+
+    The hard WITHHOLD is a shared-tree behavior; pin isolation OFF so this test
+    is deterministic regardless of the ambient TOFU_WORKTREE_ISOLATION env (the
+    isolation=on soft-demote path has its own dedicated tests below)."""
+    import lib.conversations.project_dispatch as _pd
     from lib.conversations.project_board import claim_lease, post_task, set_wait_paths
     from lib.conversations.project_dispatch import select_dispatchable
+    monkeypatch.setattr(_pd, '_isolation_on', lambda: False)
     with flask_app.app_context():
         epic = post_task('/d/wait', 'cA', 'epic waiting on report.js')['id']
         set_wait_paths('/d/wait', 'cA', epic, ['static/js/paper/report.js'])
@@ -585,6 +591,10 @@ def test_sweep_skips_sibling_epic_while_path_dirty(flask_app, monkeypatch):
     [sibling] epic whose waited path is still dirty — the token-bleed fix."""
     import lib.conversations.project_dispatch as pd
     from lib.conversations.project_board import block_task, post_task
+    # The change-gate is a SHARED-TREE signal; pin isolation OFF so this test
+    # exercises the hard-skip (under isolation=on the gate is a no-op — see the
+    # dedicated isolation tests below).
+    monkeypatch.setattr(pd, '_isolation_on', lambda: False)
     # Stub the git probe: the waited path is dirty (sibling hasn't committed).
     monkeypatch.setattr(pd, '_project_dirty_set', lambda p: {'lib/x.py'})
     with flask_app.app_context():
@@ -629,6 +639,7 @@ def test_NC6_dropping_change_gate_redispatches_dirty_sibling(flask_app, monkeypa
     def run():
         import lib.conversations.project_dispatch as pd
         from lib.conversations.project_board import block_task, post_task
+        monkeypatch.setattr(pd, '_isolation_on', lambda: False)
         monkeypatch.setattr(pd, '_project_dirty_set', lambda p: {'lib/x.py'})
         with flask_app.app_context():
             from lib.database import DOMAIN_CHAT, get_thread_db
@@ -740,5 +751,95 @@ def test_NC7_isolation_demote_not_withhold_is_load_bearing(flask_app, monkeypatc
         _DISPATCH_SRC,
         "            if _isolation_on():\n                t = {**t, '_conflict_demote': True}\n            else:\n                continue",
         "            if _isolation_on():\n                continue\n            else:\n                continue",
+        run,
+    )
+
+
+# ════════════════════════════════════════════════════════════════════
+#  Change-gate is ISOLATION-GATED — no-op under worktree isolation
+#
+#  The change-gate's premise ("a waited path DIRTY vs HEAD ⇒ the sibling has
+#  not committed ⇒ blocker stands") is a SHARED-TREE signal. Under worktree
+#  isolation each conv edits its OWN checkout off the integration ref, so the
+#  PRIMARY checkout's dirty-set is unrelated cross-session WIP — probing it
+#  there hard-skips every [sibling]-blocked epic FOREVER (the reported
+#  "task stays unclaimed/blocked" deadlock). Real same-file collisions are
+#  caught at LAND time (land_worktree CAS-merge), not by refusing to start.
+# ════════════════════════════════════════════════════════════════════
+
+def test_change_gate_noop_under_isolation(flask_app, monkeypatch):
+    """ISOLATION on: a [sibling] epic whose waited path is DIRTY in the primary
+    checkout is NOT skipped — the change-gate is a no-op (dispatch proceeds)."""
+    import lib.conversations.project_dispatch as pd
+    monkeypatch.setattr(pd, '_isolation_on', lambda: True)
+    # Even a maximally-dirty primary tree must not suppress dispatch.
+    monkeypatch.setattr(pd, '_project_dirty_set', lambda p: {'lib/x.py'})
+    epic = _blocked_sibling_epic('[sibling] path=lib/x.py blocked', ['lib/x.py'])
+    assert pd._skip_unresolved_sibling('/iso/on', epic, {}) is False, \
+        'isolation: the change-gate must be a no-op (primary dirtiness is the ' \
+        'wrong signal — each conv works in its own worktree)'
+
+
+def test_change_gate_active_when_isolation_off(flask_app, monkeypatch):
+    """DEFAULT (inproc): the change-gate still fires — a dirty waited path skips
+    (byte-identical to the token-bleed fix)."""
+    import lib.conversations.project_dispatch as pd
+    monkeypatch.setattr(pd, '_isolation_on', lambda: False)
+    monkeypatch.setattr(pd, '_project_dirty_set', lambda p: {'lib/x.py'})
+    epic = _blocked_sibling_epic('[sibling] path=lib/x.py blocked', ['lib/x.py'])
+    assert pd._skip_unresolved_sibling('/iso/off', epic, {}) is True, \
+        'inproc: a still-dirty waited path must skip (shared-tree collision)'
+
+
+def test_sweep_dispatches_dirty_sibling_epic_under_isolation(flask_app, monkeypatch):
+    """INTEGRATION: with isolation on, the heartbeat DISPATCHES a [sibling] epic
+    whose waited path is dirty in the primary tree — this is the exact deadlock
+    fix (all such epics were frozen open forever before)."""
+    import lib.conversations.project_dispatch as pd
+    from lib.conversations.project_board import block_task, post_task
+    from lib.message_queue import KIND_WORKFLOW
+    monkeypatch.setattr(pd, '_isolation_on', lambda: True)
+    monkeypatch.setattr(pd, '_project_dirty_set', lambda p: {'lib/x.py'})
+    with flask_app.app_context():
+        epic = post_task('/s/isodirty', 'cP', 'epic')['id']
+        block_task('/s/isodirty', 'cP', epic, '[sibling] path=lib/x.py blocked')
+        from lib.database import DOMAIN_CHAT, get_thread_db
+        get_thread_db(DOMAIN_CHAT).execute(
+            'UPDATE project_tasks SET blocked_until=0 WHERE id=?', (epic,))
+        get_thread_db(DOMAIN_CHAT).commit()
+        n = pd.sweep_dispatch('/s/isodirty')
+    assert n == 1, \
+        'isolation: a dirty-path [sibling] epic must dispatch (not freeze forever)'
+    assert KIND_WORKFLOW in _queue_kinds(flask_app, 'cP')
+
+
+def test_NC8_change_gate_not_isolation_gated_refreezes_epic(flask_app, monkeypatch):
+    """NC-8: remove the isolation gate from _skip_unresolved_sibling → under
+    isolation the dirty primary tree hard-skips the epic again (the deadlock
+    returns). Proves the `if _isolation_on(): return False` line is load-bearing."""
+    def run():
+        import lib.conversations.project_dispatch as pd
+        from lib.conversations.project_board import block_task, post_task
+        monkeypatch.setattr(pd, '_isolation_on', lambda: True)
+        monkeypatch.setattr(pd, '_project_dirty_set', lambda p: {'lib/x.py'})
+        with flask_app.app_context():
+            from lib.database import DOMAIN_CHAT, get_thread_db
+            db = get_thread_db(DOMAIN_CHAT)
+            db.execute("DELETE FROM project_tasks WHERE project_path='/nc8s'")
+            db.execute("DELETE FROM message_queue WHERE conv_id='cNC8'")
+            db.commit()
+            epic = post_task('/nc8s', 'cNC8', 'epic')['id']
+            block_task('/nc8s', 'cNC8', epic, '[sibling] path=lib/x.py blocked')
+            db.execute('UPDATE project_tasks SET blocked_until=0 WHERE id=?', (epic,))
+            db.commit()
+            n = pd.sweep_dispatch('/nc8s')
+        assert n == 0, \
+            'NC-8: without the isolation gate, a dirty-path [sibling] epic is ' \
+            'hard-skipped under isolation too (the deadlock the fix removes)'
+
+    _patch_restore(
+        _DISPATCH_SRC,
+        "    if _isolation_on():\n        return False\n    if 'v' not in dirty_cache:",
+        "    if False:  # NC-8 (isolation gate disabled)\n        return False\n    if 'v' not in dirty_cache:",
         run,
     )

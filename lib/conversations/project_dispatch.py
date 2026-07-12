@@ -354,11 +354,31 @@ def _skip_unresolved_sibling(project_path: str, epic: dict, dirty_cache: dict) -
     project dirty-set at most ONCE per sweep. Pass the SAME ``dirty_cache`` dict
     across a sweep's candidate loop so the git probe is a single subprocess per
     sweep (and only when a genuine ``[sibling]``+``wait_paths`` candidate exists —
-    the cheap tag pre-check gates the probe). Fail-open on any error path."""
+    the cheap tag pre-check gates the probe). Fail-open on any error path.
+
+    ISOLATION-GATED (same ruling as the wait-on-path DEMOTE fix in
+    ``select_dispatchable``): under ``TOFU_WORKTREE_ISOLATION=on`` the
+    change-gate is a NO-OP. The gate's premise — "a waited path still DIRTY vs
+    HEAD means the sibling has not committed, so the blocker stands" — is a
+    SHARED-TREE signal. Under isolation each conversation edits its OWN worktree
+    branched off the integration ref, so the PRIMARY checkout's dirty-set is
+    unrelated cross-session WIP (typically hundreds of abandoned files that
+    isolation exists to make irrelevant); probing it there hard-skips every
+    ``[sibling]``-blocked epic FOREVER — never dispatched, never re-cooled — the
+    exact "task stays unclaimed/blocked" deadlock the owner reported. A genuine
+    same-file collision is not a dispatch concern under isolation: it is caught
+    (and CAS-merged / held) at LAND time by ``land_worktree``, not by refusing to
+    start the turn. So under isolation we let the epic dispatch (the block's own
+    self-expiring cooldown, set by ``block_task``, still throttles a truly-stuck
+    epic — it just isn't frozen out permanently by the wrong tree's dirtiness).
+    OFF stays byte-identical: the shared-tree change-gate is the right signal
+    there (two convs on one file genuinely collide at commit)."""
     from lib.conversations.project_board import _SIBLING_TAG
     if _SIBLING_TAG not in (epic.get('block_reason') or '').lower():
         return False
     if not (epic.get('wait_paths') or []):
+        return False
+    if _isolation_on():
         return False
     if 'v' not in dirty_cache:
         dirty_cache['v'] = _project_dirty_set(project_path)

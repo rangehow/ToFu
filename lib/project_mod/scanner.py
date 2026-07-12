@@ -63,9 +63,36 @@ def ensure_project_state(path_str, extra_paths=None, conv_id=None, readonly_path
     #   subsequent set_project* call is delayed, the conv's tool calls
     #   can still resolve via the conv registry.
     if conv_id:
+        # ★ Worktree isolation (§3.1, task-start seam): under
+        #   TOFU_WORKTREE_ISOLATION=on, register the conv's OWN git worktree as
+        #   its primary root — never the shared primary checkout. This is the
+        #   task-START companion to the tool-EXECUTION scoping in
+        #   handlers/project.py: registering the worktree HERE means the
+        #   system-prompt file tree (get_context_for_prompt reads the conv
+        #   registry) AND every path resolution see the isolated checkout from
+        #   the first turn, not only after the first file tool re-points. OFF
+        #   (default) leaves abs_path unchanged → byte-identical single-box.
+        #   Fail-open to the primary checkout on any error. ONLY the primary is
+        #   scoped; extra reference roots stay as-is (a worktree is of one repo).
+        conv_primary = abs_path
+        try:
+            from lib.conversations.project_worktree import (
+                is_isolation_enabled as _wt_on,
+                scoped_base_path as _wt_scope,
+            )
+            if _wt_on():
+                _scoped = _wt_scope(abs_path, conv_id)
+                if _scoped and _scoped != abs_path and os.path.isdir(_scoped):
+                    conv_primary = _scoped
+                    logger.info('[Project] worktree task-start scope conv=%s '
+                                'primary=%s', conv_id[:12], _scoped)
+        except Exception as _wt_e:
+            logger.warning('[Project] worktree task-start scoping skipped '
+                           '(using primary) conv=%s: %s',
+                           conv_id[:12] if conv_id else '?', _wt_e)
         try:
             from lib.project_mod.config import set_conv_roots
-            set_conv_roots(conv_id, abs_path, extras=abs_extras,
+            set_conv_roots(conv_id, conv_primary, extras=abs_extras,
                            readonly_paths=readonly_paths)
         except Exception as e:
             logger.warning('[Project] set_conv_roots failed conv=%s: %s',

@@ -590,7 +590,7 @@ def test_sweep_skips_sibling_epic_while_path_dirty(flask_app, monkeypatch):
     """INTEGRATION: the heartbeat must NOT dispatch (no billed kickoff) a
     [sibling] epic whose waited path is still dirty — the token-bleed fix."""
     import lib.conversations.project_dispatch as pd
-    from lib.conversations.project_board import block_task, post_task
+    from lib.conversations.project_board import post_task, set_wait_paths
     # The change-gate is a SHARED-TREE signal; pin isolation OFF so this test
     # exercises the hard-skip (under isolation=on the gate is a no-op — see the
     # dedicated isolation tests below).
@@ -599,13 +599,14 @@ def test_sweep_skips_sibling_epic_while_path_dirty(flask_app, monkeypatch):
     monkeypatch.setattr(pd, '_project_dirty_set', lambda p: {'lib/x.py'})
     with flask_app.app_context():
         epic = post_task('/s/sibdirty', 'cP', 'epic')['id']
-        # A [sibling] path= block: populates wait_paths AND a flat cooldown.
-        block_task('/s/sibdirty', 'cP', epic, '[sibling] path=lib/x.py blocked')
-        # Clear the cooldown so ONLY the change-gate can suppress dispatch
-        # (isolates the new mechanism from the pre-existing cooldown skip).
+        # Construct the [sibling]+wait_paths state DIRECTLY (not via block_task,
+        # whose isolation guard declines a [sibling] path= self-block) and clear
+        # the cooldown so ONLY the change-gate can suppress dispatch.
+        set_wait_paths('/s/sibdirty', 'cP', epic, ['lib/x.py'])
         from lib.database import DOMAIN_CHAT, get_thread_db
         get_thread_db(DOMAIN_CHAT).execute(
-            'UPDATE project_tasks SET blocked_until=0 WHERE id=?', (epic,))
+            "UPDATE project_tasks SET blocked_until=0, "
+            "block_reason='[sibling] path=lib/x.py blocked' WHERE id=?", (epic,))
         get_thread_db(DOMAIN_CHAT).commit()
         n = pd.sweep_dispatch('/s/sibdirty')
     assert n == 0, 'a [sibling] epic with a still-dirty waited path must NOT be dispatched'
@@ -819,7 +820,7 @@ def test_NC8_change_gate_not_isolation_gated_refreezes_epic(flask_app, monkeypat
     returns). Proves the `if _isolation_on(): return False` line is load-bearing."""
     def run():
         import lib.conversations.project_dispatch as pd
-        from lib.conversations.project_board import block_task, post_task
+        from lib.conversations.project_board import post_task, set_wait_paths
         monkeypatch.setattr(pd, '_isolation_on', lambda: True)
         monkeypatch.setattr(pd, '_project_dirty_set', lambda p: {'lib/x.py'})
         with flask_app.app_context():
@@ -829,8 +830,12 @@ def test_NC8_change_gate_not_isolation_gated_refreezes_epic(flask_app, monkeypat
             db.execute("DELETE FROM message_queue WHERE conv_id='cNC8'")
             db.commit()
             epic = post_task('/nc8s', 'cNC8', 'epic')['id']
-            block_task('/nc8s', 'cNC8', epic, '[sibling] path=lib/x.py blocked')
-            db.execute('UPDATE project_tasks SET blocked_until=0 WHERE id=?', (epic,))
+            # Construct the [sibling]+wait_paths state DIRECTLY — block_task's
+            # isolation guard would decline this [sibling] path= self-block.
+            set_wait_paths('/nc8s', 'cNC8', epic, ['lib/x.py'])
+            db.execute("UPDATE project_tasks SET blocked_until=0, "
+                       "block_reason='[sibling] path=lib/x.py blocked' WHERE id=?",
+                       (epic,))
             db.commit()
             n = pd.sweep_dispatch('/nc8s')
         assert n == 0, \

@@ -97,6 +97,93 @@ def _sql_errors_suppressed() -> bool:
     return getattr(_sql_log_local, 'suppress', False)
 
 
+# ── Process-level "PG is stopping" awareness ──
+# During a clean server shutdown the local postmaster is stopped (see
+# stop_local_pg_if_owned). Any DB write still in flight on a background daemon
+# (commit-round / profile-consolidation / a just-finished run_task's finalize
+# chain) then fails with "the database system is shutting down" /
+# "server closed the connection unexpectedly". Those are EXPECTED shutdown-race
+# errors, not bugs — but every call site would otherwise log a full ERROR
+# traceback, producing the scary multi-traceback restart log. When this flag is
+# set, the DB layer degrades those specific connection errors to a single
+# concise INFO line (no stack). Genuine errors while NOT stopping are untouched.
+_PG_STOPPING = False
+
+# Connection errors that are EXPECTED once the postmaster is stopping.
+_PG_SHUTDOWN_SIGNATURES = (
+    'the database system is shutting down',
+    'server closed the connection unexpectedly',
+    'terminating connection due to administrator command',
+    'the database system is in recovery mode',
+)
+
+
+def mark_pg_stopping():
+    """Flag that a local-PG stop is in progress, so the DB layer treats
+    connection failures as expected shutdown races (single INFO line, no
+    traceback) rather than genuine ERRORs. Idempotent."""
+    global _PG_STOPPING
+    _PG_STOPPING = True
+
+
+def pg_is_stopping() -> bool:
+    return _PG_STOPPING
+
+
+def _pg_error_is_shutdown(err_txt) -> bool:
+    """True if err_txt is an expected PG-shutting-down / connection-dropped
+    signature (matched only while a stop is in progress)."""
+    if not err_txt:
+        return False
+    return any(sig in err_txt for sig in _PG_SHUTDOWN_SIGNATURES)
+
+
+def _sql_error_is_expected_shutdown(err_txt) -> bool:
+    """True when a stop is in progress AND the error is a shutdown signature —
+    the condition under which a SQL/connection failure should log as a single
+    concise INFO line instead of a full ERROR traceback."""
+    return _PG_STOPPING and _pg_error_is_shutdown(err_txt)
+
+
+def is_expected_shutdown_error(exc) -> bool:
+    """Public predicate for UPPER-layer catch sites.
+
+    A background finalize write (checkpoint / result-sync / commit-round /
+    profile-consolidation / killed-recovery re-stamp) that races the postmaster
+    stop fails with a connection error that ORIGINATES at ``psycopg2.connect``
+    and propagates all the way up — so the DB layer cannot reformat the
+    caller's own ``exc_info=True`` log line. Those catch sites call THIS single
+    shared predicate: when it returns True they log a concise one-liner instead
+    of a full traceback. Centralises the "is this an expected shutdown race?"
+    decision in one place (never re-implemented per site). Returns True only
+    while a stop is in progress AND the error text is a shutdown signature."""
+    try:
+        return _sql_error_is_expected_shutdown(str(exc))
+    except Exception:
+        return False
+
+
+def log_db_finalize_error(log, level, exc, label):
+    """Log a background/finalize DB-write failure with shutdown awareness.
+
+    Background finalize writes (checkpoint / result-sync / commit-round /
+    profile-consolidation / killed-recovery re-stamp / queue auto-dispatch)
+    each catch their own DB exception and log it with ``exc_info=True``. During
+    a clean shutdown those are EXPECTED races, not bugs — this helper degrades
+    them to a single concise INFO line (no traceback) so the restart log stays
+    readable. When it is NOT an expected shutdown race, it logs at ``level``
+    (``'error'``/``'warning'``) WITH the traceback, exactly as before.
+
+    ``label`` is the pre-formatted context prefix (the caller interpolates its
+    own ids). Runs only on an exception path, so eager formatting is fine.
+    """
+    if is_expected_shutdown_error(exc):
+        log.info('%s — DB write aborted during shutdown (expected: %s)',
+                 label, type(exc).__name__)
+        return
+    getattr(log, level, log.warning)('%s: %s', label, exc, exc_info=True)
+
+
 class suppress_sql_error_log:
     """Context manager: demote SQL-execution-failure logs to DEBUG on this
     thread for queries that are expected to fail as normal control flow.
@@ -1937,6 +2024,10 @@ def stop_local_pg_if_owned():
     """
     if _BACKEND != 'pg':
         return
+    # Flag the stop BEFORE we begin, so any DB write racing on a background
+    # daemon during the teardown window is logged as an expected shutdown race
+    # (single INFO line) rather than a full ERROR traceback.
+    mark_pg_stopping()
     _stop_on_exit = getenv_compat('TOFU_STOP_PG_ON_EXIT',
                                   default='1').lower() \
         not in ('0', 'false', 'no', 'off')

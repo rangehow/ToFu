@@ -56,6 +56,11 @@ from lib.database._core import (  # noqa: F401
     pg_available,
     # Opt-in SQL-error log suppression (expected-to-fail probes)
     suppress_sql_error_log,
+    # Shutdown-race awareness (concise finalize logging during PG stop)
+    is_expected_shutdown_error,
+    log_db_finalize_error,
+    mark_pg_stopping,
+    pg_is_stopping,
     # Sanitization
     strip_null_bytes_deep,
     # SQL translation
@@ -99,6 +104,8 @@ __all__ = [
     '_column_exists',
     'db_available', 'pg_available',
     'suppress_sql_error_log',
+    'is_expected_shutdown_error', 'log_db_finalize_error',
+    'mark_pg_stopping', 'pg_is_stopping',
     '_tune_connection',
     'shutdown_pool',
     'backup_pg_database',

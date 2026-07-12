@@ -191,8 +191,17 @@ class PgCursor:
             # DEBUG (enable via TOFU_DB_LOG_LEVEL=DEBUG) to avoid leaking values.
             # A caller running an expected-to-fail probe (see
             # suppress_sql_error_log in _core) demotes this to DEBUG.
-            from lib.database._core import _sql_errors_suppressed
-            if _sql_errors_suppressed():
+            from lib.database._core import (
+                _sql_errors_suppressed,
+                _sql_error_is_expected_shutdown,
+            )
+            if _sql_error_is_expected_shutdown(str(e)):
+                # Expected race: the postmaster is stopping while a background
+                # finalize/daemon write is still in flight. One concise line,
+                # NO traceback — the caller still handles the raised exception.
+                logger.info('[DB] query aborted during shutdown — expected (%s)',
+                            type(e).__name__)
+            elif _sql_errors_suppressed():
                 logger.debug('[DB] SQL execution failed (%s) [suppressed]: %.120s', type(e).__name__, e)
             else:
                 logger.error('[DB] SQL execution failed (%s): %.120s', type(e).__name__, e)

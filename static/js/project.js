@@ -283,11 +283,15 @@ async function _restoreConvProject(conv) {
   const savedReadOnly = (Array.isArray(conv.readOnlyPaths) ? conv.readOnlyPaths : [])
     .filter(p => allPaths.includes(p));
   try {
-    // ★ Use multi-path API when there are extra roots OR any read-only root
-    //   (read-only is only expressible through the multi-path endpoint).
-    const resp = (hasExtras || savedReadOnly.length)
-      ? await Api.project.setPaths(allPaths, savedReadOnly)
-      : await Api.project.setPath(savedPath);
+    // ★ ALWAYS reconcile via the pruning multi-path endpoint — never the
+    //   single-path setPath. set_project()'s `same_primary` guard PRESERVES
+    //   any stale extra roots left in the process-global _roots registry by a
+    //   PRIOR conversation (or a background task's absolute-path write
+    //   auto-register), so setPath(chatui) would leave e.g. `tofu-search`
+    //   showing on a chatui-only conversation. setPaths([chatui], []) prunes
+    //   every global extra not in THIS conversation's saved set, making the
+    //   conversation the single source of truth for the project bar.
+    const resp = await Api.project.setPaths(allPaths, savedReadOnly);
     const data = resp ? await resp.json().catch(() => ({})) : {};
     if (resp && resp.ok) {
       _applyProjectData(data);
@@ -1033,7 +1037,7 @@ async function loadProjectStatus() {
       }
       const roMatch = savedReadOnly.length === currentRO.length &&
         savedReadOnly.every(p => currentRO.includes(p));
-      if ((!extrasMatch && savedExtras.length > 0) || !roMatch) {
+      if (!extrasMatch || !roMatch) {
         // Primary matches but extras or read-only policy don't. The server's
         // in-memory RO flag is ephemeral (reset on restart), so the durable
         // per-conv readOnlyPaths is the authority here — paint the bar from it
@@ -1068,9 +1072,9 @@ async function loadProjectStatus() {
         const savedReadOnly = (Array.isArray(conv.readOnlyPaths) ? conv.readOnlyPaths : [])
           .filter(p => allPaths.includes(p));
         const hasExtras = allPaths.length > 1;
-        const setResp = (hasExtras || savedReadOnly.length)
-          ? await Api.project.setPaths(allPaths, savedReadOnly)
-          : await Api.project.setPath(savedPath);
+        // ★ Always use the pruning multi-path endpoint (see _restoreConvProject):
+        //   setPath's `same_primary` guard would preserve stale global extras.
+        const setResp = await Api.project.setPaths(allPaths, savedReadOnly);
         const setData = setResp ? await setResp.json().catch(() => ({})) : {};
         if (setResp && setResp.ok) {
           _applyProjectData(setData);

@@ -12,7 +12,13 @@
 > two branches that each pass their own gate can merge textually-clean into a
 > semantically-broken trunk (A drops `foo()`, B adds a call to it), so a
 > pre-merge-only gate is a false green; content-preserved ≠ integration-correct.
-> No refactor code until the model is ratified in full on paper. Tier-2
+> **BUILD STARTED 2026-07-12: step 1 LANDED (`e313197`)** — the dark
+> `project_worktree.py` module (lifecycle + the CAS-merge land algorithm),
+> env-gated `inproc`/OFF (byte-identical single-box), 16 tests green through the
+> fresh-HEAD acceptance gate. Steps 2–6 (per-conv `_roots` binding, worktree-
+> scoped path resolution + `run_command` cwd, land-verb WIRING, dispatch write-
+> set partitioning, legacy-gate retirement) remain and each wire into shared
+> route/JS/tool files sibling conversations currently hold. Tier-2
 > bleeding-control (class-aware backoff + event-driven wait_paths) landed
 > already (`a73f824`) and is NOT a substitute for this.
 >
@@ -431,6 +437,23 @@ gate-on-merge-result Scenario C. Re-runnable.
    `TOFU_WORKTREE_ISOLATION=inproc` (no behavior change), with the soft-lease GC.
    Sets `core.logallrefupdates=false` on the shared `.git` (§7.1 constraint 2);
    GC via `rm -rf` + `worktree prune` (§7.1 constraint 1, git 2.11).
+   **LANDED 2026-07-12 (`e313197`).** The module ships the full lifecycle
+   (`ensure_worktree`/`sync_worktree`/`release_worktree`/`gc_worktrees`) AND the
+   CAS-with-retry land primitive from step 4 (`land_worktree` + `_merge_and_gate`)
+   in one dark unit, so steps 1 and 4's core algorithm are both in-tree behind
+   the flag; step 4 remains open for its WIRING (making `land_worktree` the
+   `on`-mode land verb in the tool surface). 16 tests green in a fresh-HEAD
+   worktree gate (OFF-mode inertness, content-verified two-lander merge,
+   same-file conflict reported-not-clobbered, Scenario-C broken-merge-never-
+   published + direct merge-result-gate red, GC unmerged-safety). Two git-2.11
+   findings folded in that the paper design had not yet pinned: (a)
+   `--no-optional-locks` (an OpenCode FUSE-hardening flag) was only ADDED in git
+   2.15 → on 2.11 it aborts every call with rc=129 "Unknown option", so it is
+   feature-detected once and included ONLY when supported; `-c core.fsmonitor=false`
+   (universally accepted) carries the FUSE lock hardening on the 2.11 baseline.
+   (b) `git worktree remove` absent on 2.11 → `_prune_worktree_dir` tries it then
+   falls back to a retry-on-EBUSY `rm -rf` + `worktree prune` (OpenCode's
+   network-FS rm-retry pattern).
 2. Per-conv `_roots` binding fix (§3.3) — prerequisite, independently testable
    (this IS V6).
 3. Worktree-scoped path resolution (§3.1) + `run_command` cwd (§3.2), flag-gated

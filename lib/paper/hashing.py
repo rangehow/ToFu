@@ -10,6 +10,10 @@ import hashlib
 import os
 import re
 
+from lib.log import get_logger
+
+logger = get_logger(__name__)
+
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -21,7 +25,9 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__fil
 try:
     from lib.runtime_paths import uploads_root as _uploads_root
     PAPER_DIR = os.path.join(_uploads_root(), 'papers')
-except Exception:  # pragma: no cover — defensive (keeps import-time robust)
+except Exception as e:  # pragma: no cover — defensive (keeps import-time robust)
+    logger.debug('[Paper:Hashing] runtime_paths.uploads_root unavailable, '
+                 'falling back to in-tree uploads/papers: %s', e)
     PAPER_DIR = os.path.join(BASE_DIR, 'uploads', 'papers')
 PAPER_IMG_DIR = os.path.join(PAPER_DIR, 'images')
 os.makedirs(PAPER_DIR, exist_ok=True)

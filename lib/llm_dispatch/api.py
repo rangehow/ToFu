@@ -27,7 +27,8 @@ try:
     _UNREACHABLE_COOLDOWN = float(os.environ.get('TOFU_UNREACHABLE_COOLDOWN', '30'))
     if _UNREACHABLE_COOLDOWN <= 0:
         _UNREACHABLE_COOLDOWN = 30.0
-except (ValueError, TypeError):
+except (ValueError, TypeError) as e:
+    logger.debug('[Dispatch] TOFU_UNREACHABLE_COOLDOWN parse failed, using default: %s', e)
     _UNREACHABLE_COOLDOWN = 30.0
 
 

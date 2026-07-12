@@ -635,6 +635,152 @@ def test_NC_delete_decision_ignores_index_deletes_wrong_row(flask_app):
 
 
 # ════════════════════════════════════════════════════════════════════
+#  Agent self-commit tool (owner-directed 2026-07-12): project_charter_commit
+#  appends a DECISION only, can NEVER write the north-star `content`, and a
+#  matching proposal drops out of pending via resolves_proposal.
+# ════════════════════════════════════════════════════════════════════
+
+def _charter_tool(fn_name, fn_args, *, conv='cAgent', project_path):
+    from lib.conversations.project_charter import execute_charter_tool
+    return execute_charter_tool(fn_name, fn_args,
+                                current_conv_id=conv, project_path=project_path)
+
+
+def test_agent_commit_appends_decision_and_bumps_version(flask_app):
+    """The agent tool commits a decision, bumps version, and it lands in the
+    charter (read + injected block) — no human in the loop."""
+    from lib.conversations.project_charter import read_charter, render_charter_block
+    p = os.path.abspath('/p/agent-commit')
+    with flask_app.app_context():
+        out = _charter_tool('project_charter_commit',
+                            {'decision': 'Adopt AST boundaries in lib/.'},
+                            project_path=p)
+        assert 'version 1' in out, out
+        rec = read_charter(p)
+        block = render_charter_block(p)
+    assert rec['version'] == 1
+    assert any(d['text'] == 'Adopt AST boundaries in lib/.' for d in rec['decisions'])
+    # The decision reaches the model via the injected block.
+    assert 'Adopt AST boundaries in lib/.' in block
+    # And it is auditable as a 'decided' event (same path as a human commit).
+    assert 'decided' in _feed_kinds(flask_app, p)
+
+
+def test_agent_commit_resolves_proposal_dequeues(flask_app):
+    """An agent that first proposed can commit passing resolves_proposal, and
+    the proposal drops out of the pending-review list (no over-count)."""
+    from lib.conversations.project_charter import pending_proposals, propose_amendment
+    p = os.path.abspath('/p/agent-resolve')
+    with flask_app.app_context():
+        pid = propose_amendment(p, 'cAgent', 'Move logic into lib/.')['proposalId']
+        assert len(pending_proposals(p)) == 1
+        out = _charter_tool('project_charter_commit',
+                            {'decision': 'Move logic into lib/.',
+                             'resolves_proposal': pid},
+                            project_path=p)
+        assert 'committed' in out.lower()
+        pend = pending_proposals(p)
+    assert pend == [], 'the agent-committed proposal must not stay pending'
+
+
+def test_agent_commit_cannot_write_content_NC(flask_app):
+    """THE decisive guard: the agent commit path can NEVER edit the north-star
+    `content`. Committing a decision on an existing charter leaves `content`
+    untouched, and there is no argument by which the tool can set it."""
+    from lib.conversations.project_charter import commit_charter, read_charter
+    p = os.path.abspath('/p/agent-no-content')
+    with flask_app.app_context():
+        # A human sets the north star.
+        commit_charter(p, content='HUMAN NORTH STAR', updated_by_conv='human')
+        # The agent commits a decision AND maliciously tries to smuggle a
+        # `content` arg — the tool must ignore it entirely.
+        _charter_tool('project_charter_commit',
+                      {'decision': 'agent decision',
+                       'content': 'AGENT-HIJACKED GOAL'},
+                      project_path=p)
+        rec = read_charter(p)
+    assert rec['content'] == 'HUMAN NORTH STAR', \
+        'the agent commit tool must NOT be able to change the north-star content'
+    assert any(d['text'] == 'agent decision' for d in rec['decisions'])
+
+
+def test_agent_commit_source_never_passes_content():
+    """Source-level: the project_charter_commit branch of execute_charter_tool
+    must call commit_charter with add_decision and NOT pass `content=` — the
+    structural guarantee behind the behavioral NC above."""
+    with open(_CHARTER_SRC, encoding='utf-8') as f:
+        src = f.read()
+    start = src.index("if fn_name == 'project_charter_commit':")
+    end = src.index("return f\"Error: Unknown charter tool", start)
+    branch = src[start:end]
+    assert 'add_decision=' in branch, 'agent commit must append a decision'
+    assert 'content=' not in branch, \
+        'agent commit branch must NEVER pass content= to commit_charter'
+
+
+def test_agent_commit_version_conflict_surfaced(flask_app):
+    """A stale expected_version is rejected and the tool tells the agent to
+    re-read and retry (optimistic lock preserved through the tool)."""
+    from lib.conversations.project_charter import commit_charter
+    p = os.path.abspath('/p/agent-conflict')
+    with flask_app.app_context():
+        commit_charter(p, add_decision='v1', updated_by_conv='human')  # version 1
+        out = _charter_tool('project_charter_commit',
+                            {'decision': 'stale', 'expected_version': 0},
+                            project_path=p)
+    assert 'NOT committed' in out and 'version 1' in out
+
+
+def test_agent_commit_hits_max_decisions_truncation(flask_app):
+    """No human reviews decisions after self-commit, so confirm the append path
+    hits the EXISTING _MAX_DECISIONS rolling truncation (no pagination added):
+    committing past the cap keeps only the most-recent _MAX_DECISIONS, and the
+    newest survives while the oldest is dropped."""
+    import lib.conversations.project_charter as pc
+    from lib.conversations.project_charter import read_charter
+    p = os.path.abspath('/p/agent-cap')
+    cap = pc._MAX_DECISIONS
+    with flask_app.app_context():
+        for i in range(cap + 5):
+            _charter_tool('project_charter_commit',
+                          {'decision': f'decision #{i}'}, project_path=p)
+        rec = read_charter(p)
+    texts = [d['text'] for d in rec['decisions']]
+    assert len(texts) == cap, 'rolling truncation must cap at _MAX_DECISIONS'
+    # The 5 oldest were dropped; the newest is retained.
+    assert f'decision #{cap + 4}' in texts
+    assert 'decision #0' not in texts
+
+
+def test_agent_commit_requires_decision_text(flask_app):
+    p = os.path.abspath('/p/agent-empty')
+    with flask_app.app_context():
+        out = _charter_tool('project_charter_commit', {'decision': '  '},
+                            project_path=p)
+    assert 'required' in out.lower()
+
+
+def test_promote_watch_item_still_routes_through_commit(flask_app):
+    """The watch→charter bridge unfreezes with the de-gate but is UNCHANGED: it
+    still routes through commit_charter, landing the promoted item as a
+    committed decision (the ONLY watch→agent path)."""
+    from lib.conversations.project_watch import add_watch_item, promote_watch_item
+    from lib.conversations.project_charter import read_charter
+    p = os.path.abspath('/p/promote')
+    with flask_app.app_context():
+        item = add_watch_item(p, 'goal', 'Keep the DB layer dual-backend',
+                              created_by_conv='human')
+        assert item['ok'], item
+        iid = item['item']['item_id']
+        res = promote_watch_item(iid, updated_by_conv='human')
+        assert res['ok'], res
+        rec = read_charter(p)
+    assert any('Keep the DB layer dual-backend' in d['text']
+               for d in rec['decisions']), \
+        'promote must land the item as a committed decision via commit_charter'
+
+
+# ════════════════════════════════════════════════════════════════════
 #  Source-level NEGATIVE CONTROLS
 # ════════════════════════════════════════════════════════════════════
 

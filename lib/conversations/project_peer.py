@@ -289,6 +289,15 @@ def build_peer_status(project_path: str, conv_id: str = '') -> dict:
 
     out['peers'] = view
     out['count'] = len(view)
+    # Backend-authoritative CONVERSATION count for the Team-panel headline/badge.
+    # A running conversation's sub-agents are separate presence peers (keyed
+    # convId#agentId) and must NOT inflate a "conversations here" count, or the
+    # Team panel would report e.g. 5 while the sidebar shows 3. Uses the SAME
+    # rule build_brain_summary applies for activePeers (dedup on convId, exclude
+    # agentId) so the collab bar and the Team panel can never drift. The full
+    # peer list (incl. sub-agents) is still returned + rendered as cards.
+    out['convCount'] = len({p.get('convId') for p in view
+                            if p.get('convId') and not p.get('agentId')})
     return out
 
 

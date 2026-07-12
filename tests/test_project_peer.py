@@ -164,6 +164,52 @@ def test_join_peers_excludes_self():
     assert {v['convId'] for v in view} == {'cB'}
 
 
+def test_build_peer_status_convCount_excludes_subagents(monkeypatch):
+    """The Team-panel headline/badge count is CONVERSATIONS, not raw peers: a
+    running conversation's sub-agents are separate presence peers (convId#agentId)
+    and must not inflate the count. build_peer_status returns a backend-computed
+    convCount using the SAME rule build_brain_summary applies for activePeers
+    (dedup on convId, exclude agentId) so the two views can never drift.
+    """
+    import lib.conversations.project_peer as pp
+    # 1 conversation (cA) running 2 sub-agents → presence has 3 peers total.
+    monkeypatch.setattr('lib.presence.registry.snapshot', lambda p: {'peers': [
+        {'convId': 'cA', 'agentId': '', 'title': 'Parser work', 'statusLabel': 'working'},
+        {'convId': 'cA', 'agentId': 'sub1', 'statusLabel': 'working'},
+        {'convId': 'cA', 'agentId': 'sub2', 'statusLabel': 'working'},
+    ]})
+    monkeypatch.setattr('lib.conversations.project_board.read_board',
+                        lambda p: {'tasks': []})
+    monkeypatch.setattr('lib.conversations.project_peer._live_task_by_conv', lambda: {})
+    monkeypatch.setattr('lib.conversations.project_peer._titles_by_conv', lambda ids: {})
+    out = pp.build_peer_status('/proj')
+    # All 3 peers are returned + rendered as cards …
+    assert out['count'] == 3, out
+    assert len(out['peers']) == 3, out
+    # … but the conversation count is 1 (the sub-agents do not inflate it).
+    assert out['convCount'] == 1, out
+
+
+def test_build_peer_status_convCount_counts_distinct_conversations(monkeypatch):
+    """Two distinct conversations (each with a sub-agent) → convCount == 2,
+    even though 4 peers are present. Excludes the caller's own conv."""
+    import lib.conversations.project_peer as pp
+    monkeypatch.setattr('lib.presence.registry.snapshot', lambda p: {'peers': [
+        {'convId': 'cA', 'agentId': '', 'statusLabel': 'working'},
+        {'convId': 'cA', 'agentId': 'sub1', 'statusLabel': 'working'},
+        {'convId': 'cB', 'agentId': '', 'statusLabel': 'generating'},
+        {'convId': 'cB', 'agentId': 'sub1', 'statusLabel': 'working'},
+    ]})
+    monkeypatch.setattr('lib.conversations.project_board.read_board',
+                        lambda p: {'tasks': []})
+    monkeypatch.setattr('lib.conversations.project_peer._live_task_by_conv', lambda: {})
+    monkeypatch.setattr('lib.conversations.project_peer._titles_by_conv', lambda ids: {})
+    # Caller is cA → excluded; only cB (+ its sub-agent) remains.
+    out = pp.build_peer_status('/proj', conv_id='cA')
+    assert out['convCount'] == 1, out
+    assert {p['convId'] for p in out['peers']} == {'cB'}, out
+
+
 # ════════════════════════════════════════════════════════════════════
 #  send_peer_message — refusals + rate-limit storm guard (DB-free)
 # ════════════════════════════════════════════════════════════════════

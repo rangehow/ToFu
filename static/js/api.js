@@ -872,8 +872,11 @@
       post('/api/v1/project/board/defer',
            { path, taskId, convId: convId || '', reason: reason || '' }),
     // Collaboration-bar one-shot summary (board + decisions + peer→epic join).
-    brainSummary:  (path) =>
-      get('/api/v1/project/brain/summary', { query: { path }, onError: 'null' }),
+    // convId (optional) is excluded from activePeers/peerEpics so the count is
+    // "OTHER conversations online" — matching the local push-mirror semantics.
+    brainSummary:  (path, convId) =>
+      get('/api/v1/project/brain/summary',
+          { query: { path, convId: convId || '' }, onError: 'null' }),
     // LIVE peer/team roster (presence ⋈ task ⋈ claimed-epic). convId optional
     // — when present it's excluded so a conv never lists itself as a peer.
     brainPeers:    (path, convId) =>

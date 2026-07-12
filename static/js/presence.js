@@ -78,11 +78,15 @@
     + '4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 '
     + '2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/></svg>';
 
-  /* Fetch the one-shot summary for a root (debounced), then re-render. */
+  /* Fetch the one-shot summary for a root (debounced), then re-render. The
+     displayed conv is passed so the backend excludes it from activePeers —
+     the count then means "OTHER conversations online", matching the local
+     push mirror (which drops self). */
   function _refetchSummary(root) {
     const api = (typeof Api !== "undefined" && Api.project) ? Api.project : null;
     if (!api || typeof api.brainSummary !== "function" || !root) return;
-    Promise.resolve(api.brainSummary(root)).then((s) => {
+    const selfId = (typeof activeConvId !== "undefined") ? activeConvId : "";
+    Promise.resolve(api.brainSummary(root, selfId || "")).then((s) => {
       _summary.set(root, s || null);
       _render();
     }).catch((e) => {
@@ -136,8 +140,17 @@
   function _peerEpicLines(summary, convSet, selfId) {
     if (!summary || !summary.peerEpics) return [];
     const lines = [];
-    for (const cid of convSet) {
-      if (selfId && cid === selfId) continue;
+    // Iterate the UNION of the backend peer→epic map and the local push
+    // mirror. The backend map is authoritative and present even when the push
+    // stream is degraded (so the "advancing «epic»" lines survive); the local
+    // mirror is unioned in only so a just-arrived push peer isn't missed.
+    const seen = new Set();
+    const ids = [];
+    for (const cid of Object.keys(summary.peerEpics)) ids.push(cid);
+    for (const cid of convSet) ids.push(cid);
+    for (const cid of ids) {
+      if (!cid || (selfId && cid === selfId) || seen.has(cid)) continue;
+      seen.add(cid);
       const epic = summary.peerEpics[cid];
       if (!epic) continue;
       lines.push(
@@ -164,8 +177,18 @@
     const convSet = new Set();
     const pm = _peerConvs.get(root);
     if (pm) { for (const cid of pm) { if (cid && cid !== selfId) convSet.add(cid); } }
-    const peerCount = convSet.size;
     const summary = _summary.get(root) || null;
+    // Peer count is BACKEND-AUTHORITATIVE (summary.activePeers), not the local
+    // push mirror. The mirror is filled only by live 'presence' push frames,
+    // so on a client whose push stream is degraded (exactly this tablet's
+    // case) it stays 0 and the bar would hide even though peers ARE online.
+    // Fall back to the local mirror when the summary hasn't loaded yet, and
+    // take the max so a just-arrived push peer the last snapshot missed is
+    // still counted (never under-report).
+    const backendCount = (summary && typeof summary.activePeers === "number")
+      ? summary.activePeers : null;
+    const peerCount = (backendCount != null)
+      ? Math.max(backendCount, convSet.size) : convSet.size;
 
     const segs = _segments(summary, peerCount);
     // Nothing collaborative to surface (solo, empty board, no pending) → hide.

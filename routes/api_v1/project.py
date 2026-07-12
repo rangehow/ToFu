@@ -980,19 +980,25 @@ def project_charter_delete():
     summary='One-shot Project Brain summary for the collaboration bar',
     description=(
         'Read-only, cheap aggregation across Board + Activity Feed + presence, '
-        'keyed strictly on the explicit ``path``. Returns ``{epicsOpen, '
-        'epicsClaimed, epicsDone, pendingDecisions, activePeers, peerEpics, '
-        'charterExists}``, where ``peerEpics`` maps an active peer conv_id → '
-        'the title of the epic it is currently advancing (a live claim).'),
+        'keyed strictly on the explicit ``path`` (+ optional ``convId``, '
+        'excluded from ``activePeers``/``peerEpics`` so the count is "OTHER '
+        'conversations online"). Returns ``{epicsOpen, epicsClaimed, '
+        'epicsDone, pendingDecisions, activePeers, peerEpics, charterExists}``, '
+        'where ``peerEpics`` maps an active peer conv_id → the title of the '
+        'epic it is currently advancing (a live claim).'),
     tags=['project'],
 )
 def project_brain_summary():
     project_path = _decoded_path_arg()
     if not project_path:
         return api_bad_request('path is required', field='path')
+    # convId is OPTIONAL: when present it's excluded from activePeers/peerEpics
+    # so the count means "OTHER conversations online" — the same self-exclusion
+    # the peers roster and the frontend's local push mirror apply.
+    conv_id = _decoded_path_arg('convId')
     try:
         from lib.conversations.project_brain_summary import build_brain_summary
-        return api_ok(build_brain_summary(project_path))
+        return api_ok(build_brain_summary(project_path, conv_id or ''))
     except Exception as e:
         logger.error('[Project.v1] brain summary failed for %s: %s',
                      project_path, e, exc_info=True)

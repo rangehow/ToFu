@@ -307,7 +307,7 @@ class CanonicaliseModelIdTest(unittest.TestCase):
         self.assertEqual(canonicalise_model_id('qwen'),
                           'qwen3.6-plus')
         self.assertEqual(canonicalise_model_id('gemini'),
-                          'gemini-3.1-flash-lite-preview')
+                          'gemini-3-flash-preview')
         self.assertEqual(canonicalise_model_id('low'), 'qwen3.6-plus')
 
     def test_compound_preset_rewritten_to_opus(self):

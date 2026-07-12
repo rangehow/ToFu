@@ -197,6 +197,96 @@ def test_two_convs_distinct_files_both_land(tmp_path, on):
     _clear_conv('dA'); _clear_conv('dB')
 
 
+# ─────────────────────────────────────────────────────────────────────────
+#  HELD-LAND RECOVERY — the conflicted conv must be able to escape, not strand
+# ─────────────────────────────────────────────────────────────────────────
+
+def _setup_held_land(repo):
+    """Drive two convs to the state where cB's land is HELD on a conflict.
+    Returns cB's worktree path."""
+    _clear_conv('rA'); _clear_conv('rB')
+    scanner.ensure_project_state(repo, conv_id='rA')
+    scanner.ensure_project_state(repo, conv_id='rB')
+    wt_a = pw.worktree_path(repo, 'rA')
+    wt_b = pw.worktree_path(repo, 'rB')
+    with open(os.path.join(wt_a, 'shared.py'), 'w') as f:
+        f.write('VALUE = 111\n')
+    with open(os.path.join(wt_b, 'shared.py'), 'w') as f:
+        f.write('VALUE = 222\n')
+    assert 'Landed into' in pw.execute_land_tool(
+        {'message': 'A'}, current_conv_id='rA', project_path=repo)
+    held = pw.execute_land_tool({'message': 'B'}, current_conv_id='rB',
+                                project_path=repo)
+    assert 'held' in held.lower(), held
+    return wt_b
+
+
+def test_held_land_recovers_via_sync_then_reland(tmp_path, on):
+    """The recovery loop CONVERGES: after a held land, project_sync pulls
+    integration into the conv worktree (conflict markers), the conv resolves +
+    re-lands, and the land now fast-forwards. Without this the conv strands."""
+    repo = _seed(tmp_path)
+    wt_b = _setup_held_land(repo)
+
+    # 1. Sync → integration merged into cB's worktree, conflict markers present.
+    sync_msg = pw.execute_sync_tool({}, current_conv_id='rB', project_path=repo)
+    assert 'conflict' in sync_msg.lower() and 'shared.py' in sync_msg, sync_msg
+    body = open(os.path.join(wt_b, 'shared.py')).read()
+    assert '<<<<<<<' in body and '>>>>>>>' in body, body
+
+    # 2. The conv resolves the markers with a normal edit (keep both intents).
+    with open(os.path.join(wt_b, 'shared.py'), 'w') as f:
+        f.write('VALUE = 111  # reconciled with integration\n')
+
+    # 3. Re-land → now a fast-forward, CONVERGES.
+    relanded = pw.execute_land_tool({'message': 'B reconciled'},
+                                    current_conv_id='rB', project_path=repo)
+    assert 'Landed into' in relanded, relanded
+    ib = pw.integration_branch()
+    final = _git(repo, 'show', f'{ib}:shared.py').stdout.strip()
+    assert final == 'VALUE = 111  # reconciled with integration', final
+    _clear_conv('rA'); _clear_conv('rB')
+
+
+def test_NC_reland_without_sync_does_not_converge(tmp_path, on):
+    """Load-bearing NC: WITHOUT project_sync, re-landing (even after editing the
+    worktree) re-hits the same conflict — proving the sync recovery seam is
+    what makes the loop converge, not an incidental pass."""
+    repo = _seed(tmp_path)
+    wt_b = _setup_held_land(repo)
+
+    # Edit the worktree to "reconcile" but DO NOT sync — re-land must still hold.
+    with open(os.path.join(wt_b, 'shared.py'), 'w') as f:
+        f.write('VALUE = 111\n')
+    again = pw.execute_land_tool({'message': 'B retry no-sync'},
+                                 current_conv_id='rB', project_path=repo)
+    assert 'held' in again.lower(), (
+        'without sync the re-land should STILL be held (rebase re-hits the '
+        f'original conflict); got: {again}')
+    _clear_conv('rA'); _clear_conv('rB')
+
+
+def test_sync_clean_when_no_conflict(tmp_path, on):
+    """project_sync on a non-conflicting divergence merges cleanly (no markers),
+    so the conv can immediately re-land."""
+    repo = _seed(tmp_path)
+    _clear_conv('sA'); _clear_conv('sB')
+    scanner.ensure_project_state(repo, conv_id='sA')
+    scanner.ensure_project_state(repo, conv_id='sB')
+    # A lands a DIFFERENT file → sB is behind integration but not conflicting.
+    with open(os.path.join(pw.worktree_path(repo, 'sA'), 'other.py'), 'w') as f:
+        f.write('A = 1\n')
+    assert 'Landed into' in pw.execute_land_tool(
+        {'message': 'A other'}, current_conv_id='sA', project_path=repo)
+    with open(os.path.join(pw.worktree_path(repo, 'sB'), 'mine.py'), 'w') as f:
+        f.write('B = 2\n')
+    msg = pw.execute_sync_tool({}, current_conv_id='sB', project_path=repo)
+    assert 'cleanly' in msg.lower() or 'up to date' in msg.lower(), msg
+    assert 'Landed into' in pw.execute_land_tool(
+        {'message': 'B mine'}, current_conv_id='sB', project_path=repo)
+    _clear_conv('sA'); _clear_conv('sB')
+
+
 def main():
     import pytest as _pt
     _pt.main([__file__, '-v'])

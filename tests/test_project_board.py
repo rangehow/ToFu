@@ -94,6 +94,39 @@ def test_complete(flask_app):
     assert 'completed' in _feed_kinds(flask_app, '/b/c')
 
 
+def test_long_title_survives_roundtrip_uncapped(flask_app):
+    """A multi-sentence epic description (~1500 chars) MUST survive
+    post_task → read_board → render_board_block with ZERO clipping.
+
+    Regression guard for the silent write-time clip that stood for a long
+    time: the epic-title cap had been set to project_feed._SUMMARY_MAX_CHARS
+    (280), so any epic longer than a feed-row summary was truncated mid-word
+    both in the panel and in the injected prompt block. The cap is now 2000;
+    this pins it so the next person who copies the feed-summary reasoning (or
+    'tidies' the cap back down) fails loudly instead of re-clipping silently.
+    """
+    from lib.conversations.project_board import (
+        _TITLE_MAX_CHARS, post_task, read_board, render_board_block,
+    )
+    from lib.conversations.project_feed import _SUMMARY_MAX_CHARS
+    # The title cap must stay well above the feed summary cap it was once
+    # accidentally equated with.
+    assert _TITLE_MAX_CHARS > _SUMMARY_MAX_CHARS, \
+        'epic-title cap must NOT be reduced to the feed-row summary cap'
+    tail = ' TAIL_SENTINEL_c0ffee_END'
+    long_title = ('D data-tier scale-out ceiling ' * 60).strip()[:1500] + tail
+    assert len(long_title) > _SUMMARY_MAX_CHARS * 4, 'title comfortably past any old cap'
+    with flask_app.app_context():
+        r = post_task('/b/long', 'cA', long_title)
+        assert r['ok']
+        board = read_board('/b/long')
+        block = render_board_block('/b/long', current_conv_id='cREADER')
+    stored = board['tasks'][0]['title']
+    assert stored == long_title, 'stored title must be BYTE-IDENTICAL (uncapped)'
+    assert stored.endswith(tail), 'the tail must survive (not clipped mid-word)'
+    assert tail in block, 'the full tail must appear in the injected board block'
+
+
 # ════════════════════════════════════════════════════════════════════
 #  claim writes owner + lease; emits claimed
 # ════════════════════════════════════════════════════════════════════

@@ -216,14 +216,42 @@ def get_roots():
         return {name: dict(st) for name, st in _roots.items()}
 
 
+def _worktree_isolation_on():
+    """True iff per-conversation git worktree isolation is active
+    (``TOFU_WORKTREE_ISOLATION=on``).
+
+    Under isolation the per-conv root registry is AUTHORITATIVE and the global
+    ``_roots`` / ``_state['path']`` fall-through is DISABLED for any conv-scoped
+    resolution — so conv A's tool can never resolve into conv B's worktree or
+    the shared primary checkout (design §3.3 / FUSE V6). OFF (the default) keeps
+    the global fall-through intact so a single-box install is byte-identical.
+
+    Lazy import (function-body) to avoid any import-time coupling between the
+    low-level project_mod config and the conversations package; fails closed to
+    OFF so a probe error never silently disables the legacy fallback.
+    """
+    try:
+        from lib.conversations.project_worktree import is_isolation_enabled
+        return is_isolation_enabled()
+    except Exception as e:
+        logger.debug('[Config] worktree-isolation probe failed: %s', e)
+        return False
+
+
 def get_conv_roots(conv_id):
     """Return a snapshot of a conversation's workspace roots.
 
-    Falls back to the global _roots if no conv-specific registry exists.
+    Falls back to the global _roots if no conv-specific registry exists —
+    EXCEPT under worktree isolation, where a conv-scoped query must never see
+    the global registry (that would be another conv's worktree / the shared
+    primary checkout); it returns an empty view so resolution fails closed
+    (§3.3 / V6).
     """
     with _lock:
         if conv_id and conv_id in _conv_roots:
             return {n: dict(s) for n, s in _conv_roots[conv_id].items()}
+        if conv_id and _worktree_isolation_on():
+            return {}
         return {n: dict(s) for n, s in _roots.items()}
 
 
@@ -616,6 +644,14 @@ def resolve_namespaced_path(rel_path, conv_id=None):
                 avail = ', '.join(conv_map.keys()) or 'none'
                 raise UnknownWorkspaceRootError(
                     f'Unknown workspace root: {name}  (available: {avail})')
+            # Worktree isolation: a conv-scoped resolution must NOT fall through
+            # to the global registry (another conv's worktree / the shared
+            # primary checkout). A conv without its own registry fails closed
+            # rather than leaking into the global tree (§3.3 / V6).
+            if conv_id and _worktree_isolation_on():
+                raise UnknownWorkspaceRootError(
+                    f'Unknown workspace root: {name}  (worktree isolation: '
+                    f'conv {conv_id[:12]} has no registered roots)')
             # 2) Global registry (no conv_id, or conv has no registry) —
             #    legacy / single-user UI path.
             r = _roots.get(name)
@@ -628,13 +664,20 @@ def resolve_namespaced_path(rel_path, conv_id=None):
             avail = ', '.join(_roots.keys()) or 'none'
             raise UnknownWorkspaceRootError(
                 f'Unknown workspace root: {name}  (available: {avail})')
-        # Fallback: primary (prefer conv-specific, else global)
+        # Fallback: primary (prefer conv-specific, else global).
+        # Under worktree isolation a conv-scoped call resolves ONLY to that
+        # conv's own primary — never the global _state['path'] (which is the
+        # shared primary checkout / another conv's tree) — §3.3 / V6.
         primary = None
         if conv_id:
             primary = _conv_primary.get(conv_id)
-        if not primary:
+        if not primary and not (conv_id and _worktree_isolation_on()):
             primary = _state['path']
         if not primary:
+            if conv_id and _worktree_isolation_on():
+                raise UnknownWorkspaceRootError(
+                    f'No registered root for conv {conv_id[:12]} '
+                    f'(worktree isolation: global primary fall-through disabled)')
             raise ValueError('No project path set')
         return primary, rel_path
 

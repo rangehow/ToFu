@@ -414,9 +414,12 @@ class LLMDispatcher:
 
                         # Auto-tag managed pricing tiers ('cheap' + any future
                         # PRICING_TIERS rows) from real pricing data.
-                        # Skip non-chat models — tier tags don't apply.
-                        if ('image_gen' not in slot_caps
-                                and 'embedding' not in slot_caps):
+                        # Skip non-chat models — tier tags don't apply, and a
+                        # spurious 'cheap' tag on a non-chat slot (e.g. a cheap
+                        # 'transcription' model) would make it chat-pickable
+                        # because {transcription,cheap} is no longer a subset of
+                        # _NON_CHAT_CAPS.
+                        if not (slot_caps & self._NON_CHAT_CAPS):
                             tiers = get_pricing_tiers(mid, fallback_cost_per_1k=slot_cost)
                             # Strip stale managed tags, then apply desired tier tags.
                             slot_caps -= (MANAGED_TIER_TAGS - tiers)
@@ -540,10 +543,11 @@ class LLMDispatcher:
 
                 # Auto-tag managed pricing tiers ('cheap' + any future
                 # PRICING_TIERS rows) from real pricing data.
-                # Skip non-chat models — tier tags don't apply.
+                # Skip non-chat models — tier tags don't apply (see the
+                # provider-build site for why a stray 'cheap' tag on a non-chat
+                # slot is harmful).
                 slot_caps = set(cfg['caps'])
-                if ('image_gen' not in slot_caps
-                        and 'embedding' not in slot_caps):
+                if not (slot_caps & self._NON_CHAT_CAPS):
                     tiers = get_pricing_tiers(model, fallback_cost_per_1k=cfg.get('cost'))
                     slot_caps -= (MANAGED_TIER_TAGS - tiers)
                     slot_caps |= tiers
@@ -763,8 +767,11 @@ class LLMDispatcher:
                           reserve=True, strict_model=strict_model)
 
     # Capabilities that are NOT chat-compatible — never dispatch these for
-    # chat/stream/cheap/text/vision/thinking operations.
-    _NON_CHAT_CAPS = frozenset({'embedding', 'image_gen'})
+    # chat/stream/cheap/text/vision/thinking operations. 'transcription'
+    # (audio → text via /audio/transcriptions) is selected directly by
+    # lib/transcription.py scanning the slot pool, never through the chat
+    # picker, so it belongs here alongside embedding / image_gen.
+    _NON_CHAT_CAPS = frozenset({'embedding', 'image_gen', 'transcription', 'audio_chat'})
 
     def _is_chat_compatible(self, slot) -> bool:
         """Return True if the slot is a chat-capable model (not embedding/image_gen only)."""

@@ -69,7 +69,12 @@ CHEAP_OUTPUT_THRESHOLD = 15.0
 CHEAP_BLENDED_THRESHOLD = 9.0
 
 # Caps that indicate a non-chat model — pricing tier tags never apply.
-_NON_CHAT_CAPS = frozenset({'image_gen', 'embedding'})
+# Must list EVERY non-chat cap: a stray managed tag (e.g. 'cheap') on a non-chat
+# slot makes {transcription, cheap} no longer a subset of the dispatcher's
+# _NON_CHAT_CAPS, so the slot leaks into the chat picker (and 404s). Keep this in
+# sync with LLMDispatcher._NON_CHAT_CAPS and the debug/reeval_pricing_tags.py
+# skip-sets.
+_NON_CHAT_CAPS = frozenset({'image_gen', 'embedding', 'transcription', 'audio_chat'})
 
 
 def _resolve_prices(model_id: str,
@@ -314,7 +319,10 @@ DEFAULT_SLOT_CONFIGS = {
     'gemini-2.0-flash-lite':         {'caps': {'text', 'cheap'},                   'rpm': 200, 'latency': 1000, 'cost': 0.001},
     'gemini-3.1-flash-lite-preview': {'caps': {'text', 'vision', 'cheap'},         'rpm': 30,  'latency': 1500, 'cost': 0.001},
     'gemini-3.1-pro-preview':        {'caps': {'text', 'vision', 'thinking', 'cheap'}, 'rpm': 5,   'latency': 3000, 'cost': 0.006},
-    'gemini-3-flash-preview':        {'caps': {'text', 'vision', 'thinking', 'cheap'}, 'rpm': 60,  'latency': 1500, 'cost': 0.001},
+    'gemini-3-flash-preview':        {'caps': {'text', 'vision', 'thinking', 'cheap', 'audio_chat'}, 'rpm': 60,  'latency': 1500, 'cost': 0.001},
+    # Omni chat model: audio arrives inline as an input_audio content-part via
+    # /chat/completions (audio_chat), NOT the /audio/transcriptions endpoint.
+    'LongCat-Flash-Omni-2603':       {'caps': {'text', 'vision', 'audio_chat'}, 'rpm': 60,  'latency': 2000, 'cost': 0.0},
     'gemini-3.5-flash':              {'caps': {'text', 'vision', 'thinking', 'cheap'}, 'rpm': 30,  'latency': 2000, 'cost': 0.005},
 
     # ── Qwen (DashScope) ──
@@ -350,6 +358,9 @@ DEFAULT_SLOT_CONFIGS = {
     'M2-her':                        {'caps': {'text', 'cheap'},                  'rpm': 60,  'latency': 2000, 'cost': 0.001},
 
     # ── Doubao (Volcengine) ──
+    # NOTE: the Doubao-Seed-ASR-2.0 speech-to-text model is a pure 'transcription'
+    # (non-chat) model — its slot config lives in the Speech-to-text block below,
+    # NOT here with the Doubao chat models.
     'Doubao-Seed-2.0-pro':           {'caps': {'text', 'vision', 'thinking', 'cheap'}, 'rpm': 60, 'latency': 2000, 'cost': 0.002},
     'Doubao-Seed-2.0-lite':          {'caps': {'text', 'cheap'},                   'rpm': 120, 'latency': 1500, 'cost': 0.001},
     'Doubao-Seed-2.0-mini':          {'caps': {'text', 'cheap'},                   'rpm': 200, 'latency': 1000, 'cost': 0.001},
@@ -410,6 +421,22 @@ DEFAULT_SLOT_CONFIGS = {
     'gemini-3-pro-image-preview':            {'caps': {'image_gen'},               'rpm': 10,  'latency': 30000, 'cost': 0.020},
     'gemini-2.5-flash-image':                {'caps': {'image_gen'},               'rpm': 10,  'latency': 30000, 'cost': 0.015},
     'gemini-2.0-flash-preview-image-generation': {'caps': {'image_gen'},           'rpm': 10,  'latency': 30000, 'cost': 0.010},
+
+    # ── Speech-to-text (transcription) ──
+    # Reference targets for the voice-input feature. Any provider exposing the
+    # standard POST /v1/audio/transcriptions endpoint works once a slot carries
+    # the 'transcription' capability — these are just pre-seeded metadata so a
+    # configured model routes without a hand-written entry. Selected directly by
+    # lib/transcription.py (NOT the chat picker); 'transcription' is a non-chat
+    # cap (see dispatcher._NON_CHAT_CAPS).
+    'gpt-4o-transcribe':             {'caps': {'transcription'},                   'rpm': 60,  'latency': 4000, 'cost': 0.006},
+    'gpt-4o-mini-transcribe':        {'caps': {'transcription'},                   'rpm': 60,  'latency': 3000, 'cost': 0.003},
+    'whisper-1':                     {'caps': {'transcription'},                   'rpm': 60,  'latency': 4000, 'cost': 0.006},
+    'whisper-large-v3-turbo':        {'caps': {'transcription'},                   'rpm': 120, 'latency': 2000, 'cost': 0.0004},
+    'whisper-large-v3':              {'caps': {'transcription'},                   'rpm': 120, 'latency': 3000, 'cost': 0.0004},
+    # Doubao-Seed-ASR-2.0 (Volcengine Seed-ASR 2.0) — served on the Meituan
+    # gateway's OpenAI-native multipart /audio/transcriptions surface.
+    'Doubao-Seed-ASR-2.0':           {'caps': {'transcription'},                   'rpm': 60,  'latency': 3000, 'cost': 0.001},
 
     # ── Embeddings ──
     'text-embedding-v4':             {'caps': {'embedding'},                       'rpm': 100, 'latency': 500,  'cost': 0.001},

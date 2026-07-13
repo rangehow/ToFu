@@ -1,198 +1,23 @@
-"""lib/conv_config.py — Conversation config + settings resolution.
+"""lib/conv_config/_resolve.py — the two big public config/settings resolvers.
 
 Server-side port of ``static/js/main.js:_buildConvConfig`` and
-``_buildConvSettings``. Centralised so:
-
-* The headless API can produce the same config the UI ships to chat
-  endpoints — no "what fields does the chat task expect?" guessing
-  for SDK callers.
-* The merge policy ("active conv reads global toolbar; inactive conv
-  reads stored conv settings") is documented and tested in one place.
-* Adding a new config field means editing one Python file, not two
-  JS functions + their 8 callsites.
-* Legacy preset names (``opus`` / ``high`` / ``qwen`` / etc.) get
-  canonicalised to real model_ids automatically — SDK callers passing
-  the old strings work transparently.
-
-Public API
-----------
-
-  resolve_conv_config(conv_settings, overrides, server_defaults, *, is_active)
-      → dict (32 fields) — drop-in for `_buildConvConfig` output
-
-  resolve_conv_settings(conv_settings, overrides)
-      → dict (19 fields) — drop-in for `_buildConvSettings` output
-
-  canonicalise_model_id(model_or_preset)
-      → str — rewrites legacy preset keys (``opus`` → ``aws.claude-opus-4.7``,
-              etc.) to canonical model_ids. Pass-through for already-canonical
-              strings.
-
-The inputs are plain dicts:
-  * ``conv_settings`` — per-conversation stored settings (from DB row's
-                        `settings` column, or `conversation.settings`).
-  * ``overrides`` — fields the user has changed in the toolbar this
-                    session (the JS impl reads these from globals like
-                    ``config.model``, ``searchMode``, etc.).
-  * ``server_defaults`` — fallback values when neither overrides nor
-                          per-conv has a value (e.g. ``serverModel``).
-
-This pattern matches the JS impl's logic exactly while making the
-boundary clean: client sends the small "what changed" delta;
-server merges it with persistent state and returns the canonical
-config that goes to the chat task.
+``_buildConvSettings``.
 """
 
 from __future__ import annotations
 
-from typing import Any, Mapping, Optional
+from typing import Mapping, Optional
 
+from lib.log import get_logger
 
-# ── Legacy preset → canonical model_id migration ─────────────────────
-#
-# Old configs stored brand keys like "qwen", "gemini", "opus", and
-# thinking-effort labels like "medium" / "high" / "max" in the same
-# field. The new design stores the actual model_id directly. This
-# table mirrors the JS ``_LEGACY_PRESET_TO_MODEL`` constant in
-# ``static/js/core.js`` so a config posted with a legacy preset name
-# resolves to the same model the UI would have applied.
+from lib.conv_config._flow import _parse_active_flow
+from lib.conv_config._legacy import (
+    canonicalise_model_id,
+    extract_legacy_thinking_depth,
+)
+from lib.conv_config._util import _coerce_bool, _first_defined, _pick
 
-_LEGACY_PRESET_TO_MODEL: dict[str, str] = {
-    'qwen': 'qwen3.6-plus',
-    'low': 'qwen3.6-plus',
-    'gemini': 'gemini-3-flash-preview',
-    'gemini_flash': 'gemini-3-flash-preview',
-    'minimax': 'MiniMax-M2.7',
-    'doubao': 'Doubao-Seed-2.0-pro',
-    'opus': 'aws.claude-opus-4.7',
-    # Compound preset → both a model AND a thinking depth. The model
-    # choice falls back to opus; the depth is extracted separately
-    # by ``extract_legacy_thinking_depth``.
-    'medium': 'aws.claude-opus-4.7',
-    'high': 'aws.claude-opus-4.7',
-    'xhigh': 'aws.claude-opus-4.7',
-    'max': 'aws.claude-opus-4.7',
-}
-
-# Compound preset → thinking depth label. Used to back-fill
-# ``thinkingDepth`` when a config carried only the legacy preset.
-_LEGACY_PRESET_TO_DEPTH: dict[str, str] = {
-    'medium': 'medium',
-    'high': 'high',
-    'xhigh': 'xhigh',
-    'max': 'max',
-}
-
-
-def canonicalise_model_id(value: Any) -> str:
-    """Rewrite a legacy preset name to its canonical model_id.
-
-    Pass-through for any value that's already a real model_id (or empty).
-    Returns ``''`` for non-string input — same defensive contract as
-    the JS impl.
-    """
-    if not isinstance(value, str) or not value:
-        return ''
-    return _LEGACY_PRESET_TO_MODEL.get(value, value)
-
-
-def extract_legacy_thinking_depth(value: Any) -> Optional[str]:
-    """Return a thinking-depth label when ``value`` is a compound legacy
-    preset (``medium`` / ``high`` / ``xhigh`` / ``max``); else None.
-
-    Used by ``resolve_conv_config`` to backfill ``thinkingDepth`` when
-    the caller still ships a config with a legacy preset string in
-    ``model``.
-    """
-    if not isinstance(value, str):
-        return None
-    return _LEGACY_PRESET_TO_DEPTH.get(value)
-
-
-#: Canonical default for the per-conversation ``autoTranslate`` flag when no
-#: explicit value exists anywhere. Translation costs an extra LLM round-trip
-#: plus latency on every turn, so it is OPT-IN (OFF). This single constant is
-#: the source of truth — every trigger-path read (input send-path, the
-#: server-side safety net, the incremental per-round gate, the headless API
-#: path) MUST resolve through :func:`resolve_auto_translate` so the three
-#: layers can never disagree (the historical three-way default split that made
-#: auto-translate fire unpredictably).
-AUTO_TRANSLATE_DEFAULT = False
-
-
-def resolve_auto_translate(*sources: Optional[Mapping]) -> bool:
-    """Resolve the effective ``autoTranslate`` decision from one or more dicts.
-
-    Each ``source`` is a settings/config-shaped mapping that MAY carry an
-    ``autoTranslate`` key. Sources are consulted left-to-right; the FIRST one
-    that defines the key (value is not ``None``) wins and its truthiness is
-    returned. When no source defines it, the canonical
-    :data:`AUTO_TRANSLATE_DEFAULT` (OFF) is returned.
-
-    This is the ONE backend entry point for the trigger decision — callers
-    (``routes/chat.py`` send path, ``lib/chat/turn_builder`` input path,
-    ``lib/message_queue``, the ``lib/tasks_pkg/auto_translate`` safety net, the
-    ``lib/translate/incremental`` gate, and the headless ``routes/api_v1/chat``
-    path) pass whichever dict they hold and never embed a literal default
-    again. Passing several sources lets a caller express precedence (e.g. an
-    explicit per-request config overriding stored conv settings) without
-    duplicating the "first-defined-wins, else OFF" rule.
-    """
-    for src in sources:
-        if not src:
-            continue
-        val = src.get('autoTranslate')
-        if val is not None:
-            return bool(val)
-    return AUTO_TRANSLATE_DEFAULT
-
-
-def _coerce_bool(v: Any, default: bool = False) -> bool:
-    """JS-compatible truthiness check.
-
-    The JS impl uses ``!!conv.X`` everywhere; in Python ``bool(0) == False``,
-    ``bool('') == False``, ``bool(None) == False``, which matches.
-    """
-    if v is None:
-        return default
-    return bool(v)
-
-
-def _first_defined(*candidates):
-    """Return the first non-``None`` candidate, falling back to ``None``."""
-    for c in candidates:
-        if c is not None:
-            return c
-    return None
-
-
-def _pick(active: Any, inactive: Any, *, is_active: bool):
-    """Pick ``active`` when current conv is active, else ``inactive``."""
-    return active if is_active else inactive
-
-
-#: Built-in flow names the toolbar's ``builtin:<name>`` selector maps to.
-#: Mirrors the builders registered in lib.orchestration_endpoint_runner.
-_KNOWN_FLOW_BUILTINS = frozenset({'endpoint', 'autopilot'})
-
-
-def _parse_active_flow(value: Any) -> tuple[str, str]:
-    """Split the toolbar ``activeFlow`` token into ``(flow_builtin, flow_id)``.
-
-    The frontend Mode dropdown stores ONE string:
-      * ``''`` / non-string        → no flow selected → ('', '')
-      * ``'builtin:<name>'``       → a canonical flow → (name, '')
-      * any other non-empty string → a stored orchestration id → ('', id)
-
-    These map directly onto the ``flowBuiltin`` / ``flowId`` fields that
-    ``lib.orchestration_endpoint_runner.resolve_chat_flow_entry`` reads.
-    """
-    if not isinstance(value, str) or not value:
-        return '', ''
-    if value.startswith('builtin:'):
-        name = value[len('builtin:'):]
-        return (name, '') if name in _KNOWN_FLOW_BUILTINS else ('', '')
-    return '', value
+logger = get_logger(__name__)
 
 
 def resolve_conv_config(
@@ -426,10 +251,3 @@ def resolve_conv_settings(
         'folderId': conv.get('folderId') or None,
     }
     return out
-
-
-__all__ = [
-    'resolve_conv_config', 'resolve_conv_settings',
-    'canonicalise_model_id', 'extract_legacy_thinking_depth',
-    'resolve_auto_translate', 'AUTO_TRANSLATE_DEFAULT',
-]

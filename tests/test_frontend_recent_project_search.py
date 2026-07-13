@@ -58,6 +58,10 @@ global.window = dom.window; global.document = dom.window.document;
 global.escapeHtml = (s) => String(s == null ? '' : s)
   .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
   .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+// project.js now delegates conv lookups to core.js's getConvById/getActiveConv;
+// stub them so the cross-file references resolve (not exercised by this test).
+global.getConvById = () => null;
+global.getActiveConv = () => null;
 
 let src = fs.readFileSync(SRC, 'utf8');
 // The recent-list state lives in a top-level `let` (module scope), unreachable
@@ -251,6 +255,8 @@ global.navigator = dom.window.navigator;
 global.escapeHtml = (s) => String(s == null ? '' : s)
   .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
   .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+global.getConvById = () => null;
+global.getActiveConv = () => null;
 
 eval(fs.readFileSync(I18N, 'utf8'));            // defines t(), _applyI18n(), _i18n (zh default)
 let src = fs.readFileSync(SRC, 'utf8');

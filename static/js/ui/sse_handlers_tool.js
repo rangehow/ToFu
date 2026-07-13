@@ -321,6 +321,7 @@ function _handleToolCompacted(ev, c) {
         return true;
       };
       let _stampedMsg = null;
+      let _stampedIdx = -1;
       // 1. Try the active critic bubble first (endpoint mode).
       if (_epCriticPhase && _epCriticMsg && _epCriticMsg.toolRounds
           && _applyCompacted(_epCriticMsg.toolRounds.find(r => r.toolCallId === ev.toolCallId))) {
@@ -339,26 +340,55 @@ function _handleToolCompacted(ev, c) {
             const m = _conv.messages[i];
             if (!m || m.role !== 'assistant' || !Array.isArray(m.toolRounds)) continue;
             const r = m.toolRounds.find(rr => rr.toolCallId === ev.toolCallId);
-            if (_applyCompacted(r)) { _stampedMsg = m; break; }
+            if (_applyCompacted(r)) { _stampedMsg = m; _stampedIdx = i; break; }
           }
         }
       }
       if (buf && assistantMsg && Array.isArray(assistantMsg.toolRounds))
         buf.toolRounds = assistantMsg.toolRounds;
-      twUpdate(convId);
-      /* If we stamped a round in an OLDER message (not the in-flight
-       * bubble), twUpdate alone won't re-render that message — it
-       * only refreshes the streaming bubble.  Trigger a full conv
-       * re-render so the COMPACTED pill on the older row materializes
-       * immediately.  Cheap: renderChat is fingerprint-guarded and
-       * the new compactedCount in _msgFingerprint forces re-render
-       * of just the message that changed. */
-      if (_stampedMsg && _stampedMsg !== assistantMsg
-          && convId === activeConvId
-          && typeof renderChat === 'function') {
+      /* Resolve the stamped message's array index if branch 1 (critic) matched
+       * — the surgical repaint below addresses the DOM node by `msg-<idx>`. */
+      if (_stampedMsg && _stampedIdx < 0) {
         const _conv = (typeof conversations !== 'undefined')
           ? conversations.find(c => c && c.id === convId) : null;
-        if (_conv) renderChat(_conv, false);
+        if (_conv && Array.isArray(_conv.messages)) _stampedIdx = _conv.messages.indexOf(_stampedMsg);
+      }
+      twUpdate(convId);
+      /* If we stamped a round in an OLDER message (not the in-flight bubble),
+       * twUpdate alone won't re-render it — twUpdate only refreshes the
+       * streaming bubble. The older row needs its COMPACTED pill materialized.
+       *
+       * ★ FLASH FIX: do NOT route this through renderChat() DURING an active
+       *   stream. A cold-round L1 compaction fires this handler roughly once
+       *   per compaction over a long editing turn, and while a stream is live
+       *   renderChat() is intercepted by Guard 1c (chat_render.js) → the full
+       *   `inner.innerHTML` destroy-and-rebuild in showStreamingUIForConv —
+       *   which flashes/re-renders the ENTIRE list (incl. the bottom file-edit
+       *   block) just to repaint one cold pill. Instead, surgically replace
+       *   ONLY the stamped older message's node, leaving the streaming bubble
+       *   and every other node untouched. When the message is lazy-windowed
+       *   out of the DOM there is nothing on screen to update (its data is
+       *   already stamped in memory, so persistence + a later render are
+       *   unaffected) — so a missing node is a clean no-op, never a wipe.
+       *
+       *   With NO active stream, renderChat(_conv,false) is already surgical
+       *   (its per-message data-mfp diff replaces only the changed node) AND
+       *   runs the post-render grouping / turn-nav passes, so keep it there. */
+      if (_stampedMsg && _stampedMsg !== assistantMsg
+          && convId === activeConvId) {
+        const _streamActive = typeof activeStreams !== 'undefined'
+          && activeStreams.has(convId)
+          && !!document.getElementById('streaming-msg');
+        if (_streamActive) {
+          if (_stampedIdx >= 0 && typeof renderMessage === 'function') {
+            const _el = document.getElementById('msg-' + _stampedIdx);
+            if (_el) _el.outerHTML = renderMessage(_stampedMsg, _stampedIdx);
+          }
+        } else if (typeof renderChat === 'function') {
+          const _conv = (typeof conversations !== 'undefined')
+            ? conversations.find(c => c && c.id === convId) : null;
+          if (_conv) renderChat(_conv, false);
+        }
       }
       /* ── Debug-panel alignment ──
        * The debug panel renders the api-form messages snapshot the model

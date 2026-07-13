@@ -98,6 +98,65 @@ def _block_cooldown_ms(block_count: int, block_class: str = 'human') -> int:
 # cannot self-resolve from a lease, so it never derives a path wait).
 _SIBLING_TAG = '[sibling]'
 
+# Substrings that identify a "cannot cleanly commit / land" block reason. Under
+# worktree isolation these are NOT genuine external gates (the work is safe on
+# the conv's own branch; a background reconcile merges it later), so block_task
+# refuses to convert them into a cooldown — see block_task's isolation guard.
+# Deliberately broad + lowercase-matched: the whole point is that no phrasing of
+# "I couldn't commit/land cleanly" should ever sleep an epic on a local project.
+_COMMIT_LAND_BLOCK_MARKERS = (
+    'commit', 'land', 'merge conflict', 'byte-identity', 'byte identity',
+    'split-brain', 'split brain', 'dirty tree', 'dirty working tree',
+    'uncommitted', 'not committable', 'contaminat', 'foreign hunk',
+    'cannot cleanly', "can't cleanly", 'held land', 'integration branch',
+)
+
+
+def _isolation_self_block_declined(reason: str) -> bool:
+    """True iff this block ``reason`` is a self-inflicted "my progress is
+    coupled to another conversation committing" excuse that must be REFUSED
+    under worktree isolation.
+
+    TWO classes are declined — both are the SAME disease (coupling this epic's
+    progress to a sibling's commit, which under isolation is never a real
+    blocker because each conversation edits its OWN worktree and a background
+    reconcile merges branches later):
+
+      1. "cannot cleanly commit/land" wording — merge conflict, byte-identity,
+         split-brain, dirty tree, held land, … (``_COMMIT_LAND_BLOCK_MARKERS``).
+      2. a ``[sibling]`` block carrying a ``path=`` token — i.e. "hold this
+         epic until sibling X commits file(s) Y". Under isolation a waited path
+         must only DEMOTE ordering at dispatch time (never withhold), so
+         stamping a ``blocked_until`` cooldown here is wrong from creation: the
+         cooldown filter short-circuits the demote path. Declining it at
+         creation is the complement to the dispatch-time skip — block never
+         created ⇒ nothing to skip.
+
+    Declines ONLY when (a) isolation is on AND (b) one of the two classes
+    matches AND (c) the reason is NOT tagged ``[human-gated]`` (a genuine human
+    infra gate is always honoured, even if its wording contains "merge" or a
+    path=). Reads the env-gated isolation flag; fail-open to False on any probe
+    error so a real block is never wrongly swallowed. Off (shared tree) →
+    always False (byte-identical single-box behaviour)."""
+    r = (reason or '').lower()
+    if not r:
+        return False
+    if '[human-gated]' in r:
+        return False
+    try:
+        from lib.conversations.project_worktree import is_isolation_enabled
+        if not is_isolation_enabled():
+            return False
+    except Exception as e:
+        logger.debug('[Board] isolation probe failed in block guard '
+                     '(honouring block): %s', e)
+        return False
+    # Class 2: a [sibling] "wait until you commit file(s)" block.
+    if _SIBLING_TAG in r and 'path=' in r:
+        return True
+    # Class 1: commit/land-cleanliness wording.
+    return any(m in r for m in _COMMIT_LAND_BLOCK_MARKERS)
+
 
 def _parse_sibling_wait_paths(reason: str) -> list:
     """Extract the wait-on-path list a ``[sibling]`` block reason declares.
@@ -485,6 +544,29 @@ def block_task(project_path: str, conv_id: str, task_id: str, reason: str) -> di
     if not project_path or not task_id:
         return {'ok': False, 'error': 'missing project/task'}
     reason = (reason or '').strip()[:_TITLE_MAX_CHARS]
+    # ── Isolation-mode guard: under worktree isolation, a block whose reason
+    #    couples this epic's progress to another conversation committing is
+    #    NEVER a real blocker — each conversation edits its OWN checkout and a
+    #    background reconcile merges branches later. Two classes are refused:
+    #    (1) "cannot cleanly commit/land" wording; (2) a [sibling] block with a
+    #    path= token ("wait until sibling X commits file Y"). Refusing to stamp
+    #    a blocked_until cooldown here is THE fix for the self-block token burn:
+    #    a finished epic used to sleep 1h→24h for nothing, and the cooldown
+    #    stamp also short-circuits the dispatch-time demote path. A genuine
+    #    [human-gated] infra gate still blocks normally. Off (shared tree) →
+    #    unchanged (byte-identical single-box behaviour). ──
+    if _isolation_self_block_declined(reason):
+        logger.info('[Board] declined isolation self-block (commit/land or '
+                    '[sibling] path=) proj=%.40r task=%s reason=%.80r',
+                    project_path, task_id, reason)
+        return {'ok': False, 'declined': True,
+                'error': 'this is not a valid block reason under worktree '
+                         'isolation — "cannot cleanly commit/land" and "wait '
+                         'for a sibling to commit file(s)" both couple your '
+                         'progress to another conversation, which never blocks '
+                         'you here: your work is safe on your own branch and a '
+                         'background reconcile merges it. Complete the epic and '
+                         'continue.'}
     from lib.conversations.project_feed import normalize_project_path
     project_path = normalize_project_path(project_path)
     try:
@@ -953,8 +1035,9 @@ def render_board_block(project_path: str, current_conv_id: str = '') -> str:
              'conversation is already advancing.']
     if held_t:
         lines.append('')
-        lines.append('Held (do NOT edit — a sibling is actively changing these '
-                     'paths; coordinate or wait for the hold to lift):')
+        lines.append('Being edited by a sibling (advisory — prefer other work to '
+                     'avoid a merge collision; you are never blocked, and a minor '
+                     'overlap is easily fixed at commit time):')
         for t in held_t:
             owner = t['owner_conv_id'] or 'another conversation'
             mine = ' (you)' if current_conv_id and owner == current_conv_id else ''
@@ -993,8 +1076,8 @@ def render_board_block(project_path: str, current_conv_id: str = '') -> str:
             lines.append(f'  • [{t["id"]}] {t["title"]}{dep}{_wait_annotation(t)}')
     if blocked_t:
         lines.append('')
-        lines.append('Blocked (waiting on an external gate — auto-retries after a '
-                     'cooldown, do NOT re-dispatch until then):')
+        lines.append('Waiting on an external gate (auto-retries on its own after a '
+                     'cooldown — no action needed):')
         for t in blocked_t:
             mins = max(0, (int(t.get('blocked_until') or 0) - now) // 60_000)
             reason = (t.get('block_reason') or '').strip()
@@ -1083,28 +1166,39 @@ def execute_board_tool(fn_name: str, fn_args: dict, *,
                         'for an immediate retry. Tag the reason with the block '
                         'class ([human-gated] vs [sibling]) so it is visible on '
                         'the board.')
+            if res.get('declined'):
+                # Isolation-mode: a commit/land-cleanliness reason is NOT a real
+                # blocker. Steer the conversation to complete + continue instead
+                # of sleeping the epic (the token-burn we are fixing).
+                return ('Block DECLINED — under worktree isolation "cannot '
+                        'cleanly commit/land" is not a valid block reason. Your '
+                        'work is safe on your own branch; a background reconcile '
+                        'will merge it. If the epic work is finished and your '
+                        'worktree tests are green, mark it done with '
+                        'project_board_complete and move to the next epic — do '
+                        'NOT idle.')
             return f'Error reporting block: {res.get("error", "unknown")}.'
         if fn_name == 'project_claim_path':
             res = claim_lease(project_path, current_conv_id,
                               fn_args.get('resource') or '',
                               ttl_ms=int(fn_args.get('ttl_ms') or DEFAULT_LEASE_TTL_MS))
             if res.get('ok'):
-                return ('Path(s) held. Siblings now see a "Held — do NOT edit" '
-                        'notice on the board (including a freshly-woken idle '
-                        'conversation on its next turn). Re-call to refresh the '
-                        'hold; release it with project_release_path when done. '
-                        'This is advisory — the lease auto-expires so it can '
-                        'never deadlock the project.')
+                return ('Path(s) flagged. Siblings now see a "being edited by a '
+                        'sibling" advisory on the board (including a freshly-woken '
+                        'idle conversation on its next turn). Re-call to refresh the '
+                        'signal; release it with project_release_path when done. '
+                        'This is advisory — the lease auto-expires and never blocks '
+                        'any conversation.')
             if res.get('error') == 'already_held':
-                return (f'NOT held — path(s) are already held by conversation '
-                        f'{res.get("owner", "?")}. Coordinate or wait for the '
-                        f'hold to lift; do not edit concurrently.')
+                return (f'Already flagged by conversation '
+                        f'{res.get("owner", "?")}. This is advisory — proceed if you '
+                        f'need to; a minor overlap is easily fixed at commit time.')
             return f'Error holding path(s): {res.get("error", "unknown")}.'
         if fn_name == 'project_release_path':
             res = release_lease(project_path, current_conv_id,
                                 fn_args.get('resource') or '')
             if res.get('ok'):
-                return 'Released. The "Held" notice is cleared for siblings.'
+                return 'Released. The "being edited" advisory is cleared for siblings.'
             if res.get('error') == 'held_by_other':
                 return (f'Not released — held by conversation '
                         f'{res.get("owner", "?")}, not you.')
@@ -1112,10 +1206,14 @@ def execute_board_tool(fn_name: str, fn_args: dict, *,
                 return 'No matching hold to release (already expired or released).'
             return f'Error releasing path(s): {res.get("error", "unknown")}.'
         if fn_name == 'project_commit':
-            # Worktree isolation (§5/§6): when on, `land_worktree` is the land
-            # verb — commit the conv's worktree edits onto its branch, then
-            # CAS-merge into the integration branch. Off (default) →
-            # byte-identity project_commit on the shared checkout (unchanged).
+            # Isolation OFF (the target single-shared-checkout model) → commit
+            # the conversation's declared files directly against the shared
+            # checkout; a sibling's minor hunk overlap is acceptable,
+            # hand-fixable interference, never a block. Isolation ON (legacy,
+            # while live worktrees still exist) → route to the worktree land so
+            # a mid-flight sibling editing in its own worktree still commits the
+            # right tree. Flipping TOFU_WORKTREE_ISOLATION=off makes this
+            # dumb-commit-only with no further code change.
             try:
                 from lib.conversations.project_worktree import (
                     execute_land_tool, is_isolation_enabled,
@@ -1132,9 +1230,8 @@ def execute_board_tool(fn_name: str, fn_args: dict, *,
                 fn_args, current_conv_id=current_conv_id,
                 project_path=project_path)
         if fn_name == 'project_sync':
-            # Worktree isolation recovery: pull integration HEAD into the conv's
-            # worktree so a HELD land (merge conflict) can be resolved in-place
-            # and re-landed. No-op path off-mode (execute_sync_tool guards).
+            # Worktree isolation recovery (legacy, only meaningful while
+            # isolation is ON with live worktrees). No-op off-mode.
             from lib.conversations.project_worktree import execute_sync_tool
             return execute_sync_tool(
                 fn_args, current_conv_id=current_conv_id,

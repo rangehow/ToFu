@@ -499,16 +499,31 @@ async def chat_completions():
         return api_error('Server at capacity; retry shortly.', status=503,
                          error_kind='overloaded', retry_after=5)
 
-    # Release the admission slot + dispose the BYO ephemeral slot exactly
-    # once, the moment the task reaches a terminal state. Event-driven
-    # (fired from manager.append_event) — no per-request polling thread.
+    # Release the admission slot + dispose the BYO ephemeral slot + SETTLE
+    # BILLING exactly once, the moment the task reaches a terminal state.
+    # Event-driven (fired from manager.append_event) — no per-request
+    # polling thread. Binding settlement HERE (not to the HTTP request
+    # lifecycle) is the root-cause fix for the reservation-leak paths: a
+    # blocking-timeout that outran the client, a mid-stream client
+    # disconnect, and an in-process reaper finalize all reach terminal via
+    # this callback, so the reservation is settled against ACTUAL usage
+    # rather than stranded until the 30-min janitor. settle_task is
+    # idempotent on ref_id=task_id, so the happy-path settle below (and the
+    # stream generator's own _settle_streaming_billing) is a harmless no-op
+    # second call.
     _released = {'done': False}
+    _model_for_settle = cfg.get('model', '') or ''
 
     def _on_done(_tid, _handle=_byo_handle):
         if _released['done']:
             return
         _released['done'] = True
         controller.release()
+        try:
+            settle_task(task, user_id=billing_user_id, model=_model_for_settle)
+        except Exception as ex:
+            logger.error('[api_v1.chat] terminal settle failed task=%s: %s',
+                         _tid[:8], ex, exc_info=True)
         if _handle is not None:
             from lib.llm_dispatch.ephemeral import dispose_ephemeral_slot
             try:

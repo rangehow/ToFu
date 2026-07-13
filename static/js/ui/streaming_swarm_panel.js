@@ -648,6 +648,112 @@ function _buildSwarmDoneHTML(round, showNums, allRounds) {
   `</div>`;
 }
 
+/* ── In-place panel morph (flicker fix) ──
+ * Every swarm_* SSE event (per-agent phase, each streamed preview char, each
+ * tool-call tick) previously did `slot.innerHTML = _buildSwarmPanelHTML(...)`,
+ * tearing down and recreating the ENTIRE `.sw-panel` subtree many times a
+ * second. Two visible consequences: (1) `.sw-panel.sw-active` carries
+ * `animation:swarmBorderPulse 2.5s infinite`, and a brand-new node RESTARTS
+ * that animation from 0% on every rebuild → the border/box-shadow flashes;
+ * (2) any agent card / tool-call row the user manually expanded collapses.
+ *
+ * `_morphSwarmSlot` patches the existing panel IN PLACE instead: it reuses
+ * the live `.sw-panel` DOM node (animation clock keeps running uninterrupted),
+ * recurses the tree syncing only changed attributes + text, and treats the
+ * user-toggle classes below as OLD-node-authoritative so an expanded card
+ * survives a re-render — the same surgical-diff principle the 1 Hz timer
+ * ticker already uses for `[data-sw-start]`, and that `renderChat`'s
+ * `data-mfp` diff uses for message bubbles. Node identity is preserved by
+ * index (agents/tool-calls are append-only and never reordered), so an
+ * agent's ID-remap just updates `data-agent-id` on the same node. */
+const _SW_PRESERVE_CLASSES = ["sw-collapsed", "sw-a-open", "sw-tl-open"];
+
+function _swSyncAttrs(oldEl, newEl) {
+  /* Remove attributes gone from the new render. */
+  for (const attr of Array.from(oldEl.attributes)) {
+    if (attr.name !== "class" && !newEl.hasAttribute(attr.name)) {
+      oldEl.removeAttribute(attr.name);
+    }
+  }
+  /* Add / update changed attributes (class handled separately). */
+  for (const attr of Array.from(newEl.attributes)) {
+    if (attr.name === "class") continue;
+    if (oldEl.getAttribute(attr.name) !== attr.value) {
+      oldEl.setAttribute(attr.name, attr.value);
+    }
+  }
+  /* Class: take the new class set, but let the OLD node's user-toggle
+     classes win — a card the user expanded (added `sw-a-open`) or a panel
+     they collapsed (`sw-collapsed`) must not be reset by the fresh render. */
+  const newSet = new Set((newEl.getAttribute("class") || "").split(/\s+/).filter(Boolean));
+  for (const c of _SW_PRESERVE_CLASSES) {
+    if (oldEl.classList.contains(c)) newSet.add(c);
+    else newSet.delete(c);
+  }
+  const finalCls = Array.from(newSet).join(" ");
+  if ((oldEl.getAttribute("class") || "") !== finalCls) {
+    oldEl.setAttribute("class", finalCls);
+  }
+}
+
+function _swMorphNode(oldNode, newNode) {
+  /* Text node → update value only when it actually changed (no-op = no
+     flicker while a preview streams char-by-char). */
+  if (oldNode.nodeType === 3 && newNode.nodeType === 3) {
+    if (oldNode.nodeValue !== newNode.nodeValue) oldNode.nodeValue = newNode.nodeValue;
+    return;
+  }
+  /* Different node type, or different element tag → replace outright. */
+  if (oldNode.nodeType !== newNode.nodeType
+      || (oldNode.nodeType === 1 && oldNode.tagName !== newNode.tagName)) {
+    if (oldNode.parentNode) oldNode.parentNode.replaceChild(newNode.cloneNode(true), oldNode);
+    return;
+  }
+  if (oldNode.nodeType === 1) {
+    _swSyncAttrs(oldNode, newNode);
+    _swMorphChildren(oldNode, newNode);
+  }
+  /* comments / other node types: leave untouched */
+}
+
+function _swMorphChildren(oldParent, newParent) {
+  const oldNodes = Array.from(oldParent.childNodes);
+  const newNodes = Array.from(newParent.childNodes);
+  for (let i = 0; i < newNodes.length; i++) {
+    const on = oldNodes[i];
+    if (!on) {
+      /* New trailing node (e.g. a freshly-spawned agent card, an appended
+         tool-call row) — clone it in; only this new node touches the DOM. */
+      oldParent.appendChild(newNodes[i].cloneNode(true));
+      continue;
+    }
+    _swMorphNode(on, newNodes[i]);
+  }
+  /* Remove surplus old children (from the tail, so indices stay valid). */
+  for (let i = oldNodes.length - 1; i >= newNodes.length; i--) {
+    oldParent.removeChild(oldNodes[i]);
+  }
+}
+
+/* Patch `slot`'s existing swarm panel toward `html` in place. Falls back to a
+   full `innerHTML` set on first render or if the panel root is absent /
+   structurally different (a genuine replace, not a per-event churn). */
+function _morphSwarmSlot(slot, html) {
+  const existing = slot.firstElementChild;
+  if (!existing || !(existing.classList && existing.classList.contains("sw-panel"))) {
+    slot.innerHTML = html;
+    return;
+  }
+  const tpl = document.createElement("template");
+  tpl.innerHTML = html;
+  const fresh = tpl.content.firstElementChild;
+  if (!fresh || fresh.tagName !== existing.tagName) {
+    slot.innerHTML = html;
+    return;
+  }
+  _swMorphNode(existing, fresh);
+}
+
 /* ── Stuck swarm-panel reconciler (Option 2) ──
  * The live `_swarmActive` / `_asyncRunning` flags are cleared ONLY by a
  * terminal `swarm_phase:complete` SSE event (sse_handlers_swarm.js) or an

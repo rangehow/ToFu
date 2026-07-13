@@ -269,6 +269,65 @@ class TestReactiveCompact:
         assert messages[0]['content'] == 'Important system prompt'
 
 
+    def test_head_truncate_running_total_matches_full_walk(self):
+        """The O(n) running-total rewrite of _head_truncate must drop EXACTLY
+        the same messages a naive O(n^2) re-sum-every-pop loop would.
+
+        _estimate_total_tokens == sum(_estimate_msg_tokens), so subtracting
+        each popped message keeps the running total bit-identical to a fresh
+        full walk. This guards that equivalence for BOTH trim modes so a
+        future refactor can't silently drift the drop boundary.
+        """
+        from lib.tasks_pkg.compaction import _head_truncate
+        from lib.tasks_pkg.compaction._tokens import _estimate_total_tokens
+
+        def _mk():
+            msgs = [{'role': 'system', 'content': 'sys ' * 100}]
+            # First real user turn is the objective anchor — must survive.
+            msgs.append({'role': 'user', 'content': 'ANCHOR goal ' * 200})
+            for i in range(40):
+                msgs.append({'role': 'assistant', 'content': f'A{i} ' * 400})
+                msgs.append({'role': 'user', 'content': f'U{i} ' * 400})
+            return msgs
+
+        # Reference: naive full-walk drop against the SAME target the impl uses
+        # (token mode: 0.60 * context_limit for gpt-4 = 128000).
+        def _ref_token_drop(msgs, target):
+            from lib.tasks_pkg.compaction._layer2 import _objective_anchor_index
+            system_end = 0
+            for i, m in enumerate(msgs):
+                if m.get('role') == 'system':
+                    system_end = i + 1
+                else:
+                    break
+
+            def _pos():
+                anchor = _objective_anchor_index(msgs)
+                if anchor == system_end and len(msgs) > system_end + 1:
+                    return system_end + 1
+                return system_end
+            dropped = 0
+            while _estimate_total_tokens(msgs) > target and len(msgs) > system_end + 4:
+                msgs.pop(_pos())
+                dropped += 1
+            return dropped
+
+        task = {'config': {'model': 'gpt-4'}}  # 128k window → token target 76800
+
+        impl_msgs = _mk()
+        ref_msgs = _mk()
+        target = int(128_000 * 0.60)
+
+        n_impl = _head_truncate(impl_msgs, task=task)
+        n_ref = _ref_token_drop(ref_msgs, target)
+
+        assert n_impl == n_ref, (n_impl, n_ref)
+        assert len(impl_msgs) == len(ref_msgs)
+        assert _estimate_total_tokens(impl_msgs) == _estimate_total_tokens(ref_msgs)
+        # Objective anchor (first real user msg) survived.
+        assert any('ANCHOR goal' in (m.get('content') or '') for m in impl_msgs)
+
+
 # ═══════════════════════════════════════════════════════════
 #  5. PromptTooLongError
 # ═══════════════════════════════════════════════════════════

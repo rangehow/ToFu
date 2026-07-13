@@ -13,12 +13,11 @@ heuristic (on loaded messages OR a stale `_needsLoad` shell's
 
 THE FUNDAMENTAL FIX
 -------------------
-The orphaned-user-turn verdict is now BACKEND-authoritative
-(`lib/conversations/reconcile.py::classify_orphan_resumable`, verified against
-the real messages + live-task state, exposed as `conv._orphanResumable` on the
-GET path). The frontend renders an EXPLICIT Resume affordance (renderChat); the
-click is a normal user-initiated send. `initActiveTasks` no longer contains ANY
-auto-dispatch or age heuristic.
+`initActiveTasks` no longer contains ANY auto-dispatch or age heuristic: the
+framework never mints a billed LLM turn from a client-side inference about an
+orphaned user turn. (An explicit backend-marked Resume affordance briefly
+replaced the auto-fire, then was removed entirely — leaving the invariant this
+test guards: NO auto-dispatch, full stop.)
 
 This test drives the REAL shipped `initActiveTasks` end-to-end under node and
 asserts `startAssistantResponse` is called ZERO times — for BOTH a ghost conv
@@ -63,9 +62,8 @@ def _node_available() -> bool:
 #  • conv-ghost: trailing EMPTY assistant ghost on top of a recent user msg.
 #    Case D must delete the ghost; it must NOT auto-start anything.
 #  • conv-orphan: a genuine trailing recent user msg. The OLD Case-E would have
-#    auto-started this; the fixed code must NOT. The Resume affordance (rendered
-#    from conv._orphanResumable on the GET path) is the replacement — out of
-#    scope for this init-loop test.
+#    auto-started this; the fixed code must NOT. The conv is simply left with
+#    its unanswered trailing user turn — no auto-dispatch.
 _HARNESS = r"""
 const fs = require('fs');
 global.window = global;

@@ -804,17 +804,31 @@ function _tmInjectStyles() {
 .tm-top-name{font-size:16px;font-weight:700;color:var(--text-primary)}
 .tm-top-sub{font-size:12px;color:var(--text-tertiary)}
 .tm-top-actions{display:flex;align-items:center;gap:7px}
-.tm-btn{font-family:inherit;font-size:12.5px;font-weight:600;border-radius:var(--tm-r-sm);padding:8px 12px;border:1px solid var(--border);background:var(--bg-tertiary);color:var(--text-secondary);cursor:pointer;transition:background .15s,color .15s,border-color .15s,transform .08s ease;white-space:nowrap;display:inline-flex;align-items:center;gap:5px}
-.tm-btn:hover{background:var(--bg-hover);color:var(--text-primary);border-color:var(--border-light)}
-.tm-btn:active{transform:translateY(1px)}
+/* ── Buttons: layered, theme-token only, shares the Studio's button language.
+   Default = quiet secondary surface with a soft hover lift; ghost = fully
+   transparent tertiary action; semantic fills get a colored lift on hover.
+   All colors resolve from live theme tokens (works across light/dark/tofu). */
+.tm-btn{font-family:inherit;font-size:12.5px;font-weight:600;letter-spacing:.01em;line-height:1.2;border-radius:var(--tm-r-sm);padding:8px 13px;border:1px solid var(--border);background:var(--bg-tertiary);color:var(--text-secondary);cursor:pointer;transition:background .15s,color .15s,border-color .15s,box-shadow .15s,transform .1s ease;white-space:nowrap;display:inline-flex;align-items:center;justify-content:center;gap:6px}
+.tm-btn:hover{background:var(--bg-hover);color:var(--text-primary);border-color:var(--border-light);box-shadow:var(--tm-elev-card);transform:translateY(-1px)}
+.tm-btn:active{transform:translateY(0);box-shadow:none}
+.tm-btn:focus-visible{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-subtle)}
+.tm-btn:disabled{opacity:.5;cursor:default;transform:none;box-shadow:none;filter:none}
 .tm-btn svg{width:1em;height:1em}
-.tm-btn-close{padding:8px 11px}
-.tm-btn-ok{background:var(--tm-ok);border-color:var(--tm-ok);color:#fff}
-.tm-btn-ok:hover{background:var(--tm-ok);border-color:var(--tm-ok);color:#fff;filter:brightness(1.05)}
-.tm-btn-danger{background:var(--error-bg);border-color:var(--error-border);color:var(--error-text)}
-.tm-btn-danger:hover{background:var(--error-bg);filter:brightness(1.06);color:var(--error-text)}
+/* close: quiet icon button that reddens on hover */
+.tm-btn-close{padding:8px 10px;color:var(--text-tertiary)}
+.tm-btn-close:hover{background:var(--error-bg);border-color:var(--error-border);color:var(--error-text);box-shadow:none;transform:none}
+/* ghost: transparent tertiary action (edit / abort / delete rows) */
+.tm-btn-ghost{background:transparent;border-color:transparent;color:var(--text-tertiary)}
+.tm-btn-ghost:hover{background:var(--bg-hover);border-color:var(--border);color:var(--text-primary);box-shadow:none;transform:none}
+.tm-btn-ghost.tm-btn-danger,.tm-btn-ghost.tm-btn-danger:hover{background:transparent;border-color:transparent;color:var(--text-tertiary);filter:none}
+.tm-btn-ghost.tm-btn-danger:hover{background:var(--error-bg);border-color:var(--error-border);color:var(--error-text)}
+/* semantic fills: colored lift + glow on hover */
 .tm-btn-primary{background:var(--accent);border-color:var(--accent);color:#fff}
-.tm-btn-primary:hover{background:var(--accent-hover);border-color:var(--accent-hover);color:#fff}
+.tm-btn-primary:hover{background:var(--accent-hover);border-color:var(--accent-hover);color:#fff;box-shadow:0 4px 14px var(--accent-subtle);transform:translateY(-1px)}
+.tm-btn-ok{background:var(--tm-ok);border-color:var(--tm-ok);color:#fff}
+.tm-btn-ok:hover{background:var(--tm-ok);border-color:var(--tm-ok);color:#fff;filter:brightness(1.06);box-shadow:0 4px 14px color-mix(in srgb,var(--tm-ok) 30%,transparent);transform:translateY(-1px)}
+.tm-btn-danger{background:var(--error-bg);border-color:var(--error-border);color:var(--error-text)}
+.tm-btn-danger:hover{background:var(--error-bg);border-color:var(--error-border);color:var(--error-text);filter:brightness(1.06);box-shadow:0 4px 14px color-mix(in srgb,var(--error-text) 26%,transparent);transform:translateY(-1px)}
 .tm-body{flex:1;display:flex;min-height:0}
 /* Safety net: any inline glyph from _ORCH_ICONS/_ORCH_GLYPHS used inside the
    shell is capped to a sane size, so Task Mode never depends on the Studio's

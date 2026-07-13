@@ -41,6 +41,7 @@ _GOLDEN_RUNTIME_STATE = (
     'uploads/',
     'outputs/',
     'overleaf_cache/',
+    'lib/.project_sessions/',
     'static/js/bundle-',
 )
 _GOLDEN_OVERLAY_SKIP = _GOLDEN_RUNTIME_STATE + (
@@ -77,7 +78,10 @@ def test_classification():
              'uploads/images/x.png', 'outputs/run1/report.md',
              'overleaf_cache/proj/main.tex', 'static/js/bundle-abc123.js',
              '.tofu/skills/mine.md', '.tofu/file-history/x',
-             '.tofu_trash/y', './data/tofu.db']
+             '.tofu_trash/y', './data/tofu.db',
+             # nested undo store (multi-segment registry prefix)
+             'lib/.project_sessions/abc/modifications.json',
+             'data/project_sessions/abc/modifications.json']
     for p in state:
         assert is_runtime_state(p), f'{p} should be runtime state'
         assert is_overlay_skipped(p), f'{p} should be overlay-skipped'
@@ -156,7 +160,7 @@ def test_export_covers_registry_internal_opensource():
     false expectation and break a real, intended behaviour.
     """
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    import export
+    export = pytest.importorskip('export', reason='export.py not shipped in opensource')
     # The dir set that internal/opensource _should_exclude keys on. bundle-*
     # is a GLOB (ALWAYS_EXCLUDE_GLOBS), so dir membership is the right check
     # only for the trailing-'/' entries.
@@ -164,10 +168,15 @@ def test_export_covers_registry_internal_opensource():
     opensource_dirs = export.ALWAYS_EXCLUDE_DIRS | export.OPENSOURCE_EXTRA_EXCLUDE_DIRS
     missing = []
     for d in _registry_dir_prefixes():
-        if d not in internal_dirs:
-            missing.append(('internal', d))
-        if d not in opensource_dirs:
-            missing.append(('opensource', d))
+        # export.py prunes by path-COMPONENT membership (``part in
+        # ALWAYS_EXCLUDE_DIRS`` over Path(rel).parts), so a nested registry
+        # prefix like ``lib/.project_sessions`` is excluded via its basename
+        # ``.project_sessions``. Compare on the final segment to mirror that.
+        seg = os.path.basename(d)
+        if seg not in internal_dirs:
+            missing.append(('internal', seg))
+        if seg not in opensource_dirs:
+            missing.append(('opensource', seg))
     assert not missing, (
         'export exclude-sets DRIFTED from the runtime_layout registry — these '
         'registry dirs are not excluded by export:\n  ' +
@@ -184,6 +193,7 @@ def test_neuter_export_guard_has_teeth():
     """Poison the registry with a fake dir → the export drift-guard must fail,
     proving it actually cross-checks the registry against export (not a
     tautology)."""
+    pytest.importorskip('export', reason='export.py not shipped in opensource')
     import lib.runtime_layout as rl
     orig = rl.INSTALL_STATE
     try:

@@ -395,7 +395,18 @@ async function sendMessage() {
       newEl.classList.add("message-new");
       newEl.addEventListener('animationend', () => newEl.classList.remove('message-new'), { once: true });
     }
-    scrollToBottom(true);
+    /* ★ SCROLL FIX (send-at-bottom lands mid-history): use the real-height
+     *   path, NOT plain scrollToBottom. `.message` carries
+     *   content-visibility:auto + contain-intrinsic-size:auto 120px, so a
+     *   single-rAF `scrollTop = scrollHeight` reads an UNDER-estimated height
+     *   whenever a rendered bubble's real size isn't cached — lazy-loaded
+     *   older bubbles (_loadOlderMessages never runs a cv-off pass) or a
+     *   far-off-screen bubble whose cached size the browser evicted. It then
+     *   clamps short and the reader is parked in the middle. _forceScrollToBottom
+     *   flips cv-off (content-visibility:visible → real heights), forces a
+     *   reflow, and re-asserts across double-rAF + a 150ms timer — the exact
+     *   dance conversation-open uses. */
+    _forceScrollToBottom(null, true);
   }
 
   // ── Wait for VLM parsing before sending (after user bubble is visible) ──

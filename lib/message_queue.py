@@ -343,6 +343,116 @@ def redispatch_orphaned_queue_on_startup() -> list[str]:
     return spawned
 
 
+def list_convs_with_pending_peer_msg() -> list[str]:
+    """Return every conv_id that currently holds a pending ``KIND_PEER_MSG`` row.
+
+    The durable source of truth for "which conversations have a peer message
+    that no running task will ever drain". A peer message (``project_message`` /
+    ``project_intervene``) is written as a ``KIND_PEER_MSG`` row and drained by
+    ``dispatch_next_queued`` — which fires ONLY on task-completion, a human
+    send, startup orphan-redispatch, or the brain KIND_WORKFLOW idle-drain. The
+    workflow idle-drain (``project_dispatch._reconcile_stranded_kickoffs`` /
+    ``_has_queued_kickoff``) filters STRICTLY on ``KIND_WORKFLOW``, so a peer
+    row landing in an IDLE, non-board conversation is drained by nothing — it
+    sits in the queue widget forever until a restart or a human types. This scan
+    is what the steady-state peer idle-drain consumes to close that gap.
+
+    Best-effort — returns [] on any failure.
+    """
+    try:
+        _maybe_ensure_table()
+        db = get_thread_db(DOMAIN_CHAT)
+        rows = db.execute(
+            'SELECT DISTINCT conv_id FROM message_queue WHERE kind=?',
+            (KIND_PEER_MSG,)
+        ).fetchall()
+        return [r['conv_id'] for r in rows if r['conv_id']]
+    except Exception as e:
+        logger.warning('[Queue] list_convs_with_pending_peer_msg failed: %s', e)
+        return []
+
+
+def drain_idle_peer_messages() -> list[str]:
+    """Steady-state idle-drain for peer messages — the brain heartbeat's peer
+    analogue of :func:`redispatch_orphaned_queue_on_startup`.
+
+    THE Symptom-A root fix. A ``KIND_PEER_MSG`` row that lands in an IDLE
+    conversation (no live task, and not the owner of a board epic the workflow
+    idle-drain would reconcile) is drained by nothing in steady state — so an
+    advisory peer note to an idle sibling is shown ONLY as a pending item in the
+    queue widget and never rendered as a turn. This pass, run on the existing
+    brain 30s heartbeat (NO new thread/global), drains ONE such row per idle
+    conv via the SAME ``dispatch_next_queued`` seam every other caller uses —
+    which appends the peer turn to ``conversations.messages`` (giving it the
+    ``.peer-msg-banner`` fresh-turn rendering) and spawns a task to answer it.
+
+    This is a deliberate, backend-owned dispatch of a DURABLE, RATE-CAPPED,
+    explicitly-sent signal — NOT the frontend age-heuristic auto-fire
+    anti-pattern (Case-E). The per-(sender,target) send-time rate cap bounds how
+    many peer rows can ever exist; the busy-guard + one-drain-per-conv-per-tick
+    bound the work this pass starts.
+
+    Safety (mirrors ``redispatch_orphaned_queue_on_startup``):
+      • Skip a conv that has a live non-aborted task — a live drain-eligible
+        turn already receives the fast-path inbox twin (delivered at its next
+        round boundary), and its completion hook drains the durable row anyway;
+        force-draining would double-dispatch. A conv with a live endpoint/VU
+        task is likewise "busy" so it keeps queue-lane (cycle-end) delivery.
+      • Skip a conv whose row is absent (a concurrent drain already popped it).
+      • ``dispatch_next_queued`` takes the non-reentrant ``_dispatch_lock``
+        itself, so we must NOT hold it here.
+      • Best-effort per conv: one failure never aborts the batch.
+
+    Returns the list of task_ids spawned (one per idle conv drained).
+    """
+    spawned: list[str] = []
+    try:
+        convs = list_convs_with_pending_peer_msg()
+    except Exception as e:
+        logger.warning('[Queue] peer idle-drain: scan failed: %s', e)
+        return spawned
+    if not convs:
+        return spawned
+
+    for conv_id in convs:
+        if not conv_id:
+            continue
+        # Busy guard: never force-drain a conv with a live task (the fast-path
+        # inbox twin / completion hook owns delivery there).
+        try:
+            from lib.tasks_pkg.manager import tasks, tasks_lock
+            with tasks_lock:
+                _live = any(
+                    t.get('convId') == conv_id
+                    and t.get('status') == 'running'
+                    and not t.get('aborted')
+                    for t in tasks.values()
+                )
+            if _live:
+                continue
+        except Exception as e:
+            logger.debug('[Queue] peer idle-drain live-task probe failed '
+                         'conv=%s (skipping): %s', conv_id[:8], e)
+            continue
+        try:
+            tid = dispatch_next_queued(conv_id)
+        except Exception as e:
+            logger.warning('[Queue] peer idle-drain: dispatch failed for '
+                           'conv=%s: %s', conv_id[:8], e, exc_info=True)
+            continue
+        if tid:
+            spawned.append(tid)
+            from lib.log import audit_log
+            audit_log('peer_message_idle_drain', conv_id=conv_id, task_id=tid)
+            logger.info('[Queue] peer idle-drain: woke idle conv=%s → task %s '
+                        '(pending peer message delivered as a fresh turn)',
+                        conv_id[:8], tid[:8])
+    if spawned:
+        logger.info('[Queue] peer idle-drain: woke %d idle conv(s) holding a '
+                    'pending peer message', len(spawned))
+    return spawned
+
+
 def has_autopilot_marker(conv_id: str) -> bool:
     """True iff a persistent autopilot armed-marker exists for the conv."""
     if not conv_id:
@@ -443,6 +553,40 @@ def remove_from_queue(conv_id: str, queue_id: str) -> bool:
 
     logger.info('[Queue] Removed message %s from conv=%s', queue_id[:8], conv_id[:8])
     return True
+
+
+def dedup_peer_durable_rows(conv_id: str, queue_ids) -> int:
+    """Delete peer-message durable rows by ``queueId`` (the FORWARD-race de-dup).
+
+    The Pillar #6 peer-message FORWARD-race twin of
+    :func:`lib.agent_inbox.consume_peer`. A live-target peer message is written
+    to BOTH a durable ``message_queue`` row AND a fast-path agent_inbox item
+    tagged with that row's ``queueId``. When the orchestrator's round-boundary
+    drain hook injects the inbox item (delivery), it calls THIS to delete the
+    matching durable row(s) so ``dispatch_next_queued`` can never later pop them
+    as a redundant fresh turn = zero double-delivery. The REVERSE race (durable
+    row dispatched first) is closed symmetrically by ``consume_peer``.
+
+    Best-effort — a delete failure logs and is skipped (the reverse-race guard
+    still protects against a double delivery). Returns the number removed.
+    """
+    ids = [q for q in (queue_ids or []) if q]
+    if not conv_id or not ids:
+        return 0
+    removed = 0
+    for qid in ids:
+        try:
+            if remove_from_queue(conv_id, qid):
+                removed += 1
+        except Exception as e:
+            logger.warning('[Queue] peer durable-row de-dup failed conv=%s '
+                           'queueId=%s: %s — the row may re-dispatch as a '
+                           'duplicate', conv_id[:8], str(qid)[:8], e)
+    if removed:
+        logger.info('[Queue] forward de-dup removed %d peer durable row(s) for '
+                    'conv=%s (delivered via the fast-path inbox)',
+                    removed, conv_id[:8])
+    return removed
 
 
 def clear_queue(conv_id: str) -> int:
@@ -619,6 +763,23 @@ def dispatch_next_queued(conv_id: str) -> str | None:
         payload = item['payload']
         config = item['config']
         text = payload.get('text', '')
+
+        # ── Pillar #6 REVERSE-race de-dup ──
+        # A live-target peer message is written to BOTH this durable row AND a
+        # fast-path agent_inbox twin tagged with this row's queueId. If the
+        # target's live turn ended BEFORE its next round-boundary drain, we pop
+        # the durable row HERE and dispatch it as a fresh turn — so the still-
+        # pending inbox twin must be dropped, or it would be re-injected on that
+        # fresh turn = double delivery. (The forward race — inbox drains first —
+        # is closed symmetrically in the orchestrator drain hook, which deletes
+        # this row by queueId.) The inbox is conv-keyed (swarm_key_for=convId).
+        if payload.get('_peerMessage') and item.get('queueId'):
+            try:
+                from lib.agent_inbox import consume_peer
+                consume_peer(conv_id, [item['queueId']])
+            except Exception as e:
+                logger.debug('[Queue] peer inbox-twin de-dup skipped conv=%s: %s',
+                             conv_id[:8], e)
         # ★ _user_msg: pre-built (and already translated) user message dict
         #   from /api/chat/send.  If present, skip translation and use directly.
         pre_built_user_msg = payload.get('_user_msg')
@@ -705,9 +866,26 @@ def dispatch_next_queued(conv_id: str) -> str | None:
             #    could not visually distinguish/attribute it. Propagate the
             #    markers onto the message so the arrival is observable + the
             #    sender is attributable (renderer keys on `_peerMessage`). ──
+            # ── Authoritative initiator stamp: a KIND_PEER_MSG / KIND_WORKFLOW
+            #    turn is injected without a human typing, so the persisted turn
+            #    must carry the ONE _initiator field every reader resolves
+            #    through — not just the legacy per-path booleans (which we keep
+            #    as read-aliases). Stamped here at the single dispatch seam. ──
+            from lib.conversations.turn_initiation import (INITIATOR_BRAIN,
+                                                           INITIATOR_OPERATOR,
+                                                           INITIATOR_PEER,
+                                                           stamp_initiator)
             if payload.get('_peerMessage'):
                 user_msg['_peerMessage'] = True
                 user_msg['_fromConv'] = payload.get('_fromConv', '')
+            # Authoritative initiator stamp — kept as its OWN sibling guard (NOT
+            # nested in the marker block above) so that block stays byte-identical
+            # to the peer-marker negative-control anchor and can be neutered
+            # independently without orphaning this call.
+            if payload.get('_peerMessage'):
+                stamp_initiator(
+                    user_msg,
+                    INITIATOR_OPERATOR if payload.get('_peerHuman') else INITIATOR_PEER)
             # A human operator nudge (sent from the Team panel) is stamped so the
             # receiving banner attributes it to the operator, not to an agent
             # peer. Distinct provenance, same KIND_PEER_MSG lane. Kept as its own
@@ -723,6 +901,7 @@ def dispatch_next_queued(conv_id: str) -> str | None:
             #    persisted user turn (mirrors the _peerMessage block). ──
             if payload.get('_brainDispatch'):
                 user_msg['_brainDispatch'] = True
+                stamp_initiator(user_msg, INITIATOR_BRAIN)
                 if payload.get('boardTaskId'):
                     user_msg['_boardTaskId'] = payload.get('boardTaskId')
             conv_ref_texts = payload.get('convRefTexts')
@@ -787,12 +966,13 @@ def dispatch_next_queued(conv_id: str) -> str | None:
             )
             return None
 
-        # Invalidate meta cache so frontend sees the new task
+        # Notify clients so the sidebar reflects the newly-dispatched task
+        # without a manual refresh (metadata-scope: rev unchanged by dispatch).
         try:
-            from lib.conversations import invalidate_meta_cache
-            invalidate_meta_cache()
+            from lib.conversations import notify_conv_changed
+            notify_conv_changed(conv_id, rev=None)
         except Exception as e:
-            logger.debug('[Queue] meta cache invalidation failed: %s', e)
+            logger.debug('[Queue] conv-changed notify failed: %s', e)
 
         return task_id
 

@@ -282,7 +282,20 @@ function _reflowToolbar() {
  * Once the real font loads, glyph widths change and the preset label
  * may need more space. */
 if (document.fonts && document.fonts.ready) {
-  document.fonts.ready.then(() => _scheduleReflow());
+  document.fonts.ready.then(() => {
+    /* ★ Suppress the .input-inner max-width .4s transition for THIS re-snap.
+     * With preload the metrics usually already match (no-op), but on a cold
+     * cache the glyph widths still change here — without this guard the width
+     * delta animates as a visible 0.4s "settle". Restore the transition on the
+     * next frame so genuine user-driven width changes still animate. */
+    const inner = document.querySelector('.input-inner');
+    const prev = inner ? inner.style.transition : null;
+    if (inner) inner.style.transition = 'none';
+    _reflowToolbar();
+    if (inner) {
+      requestAnimationFrame(() => { inner.style.transition = prev || ''; });
+    }
+  });
 }
 /* --chat-w is NOT synced — chat area uses its own fixed max-width (820px default)
  * independent of toolbar width, per §4.2 decoupled layout. */
@@ -646,9 +659,13 @@ function _resetToolsToDefaults() {
   _applyCodeExecUI(false);
   _applyBrowserUI(false);
   _applyMemoryUI(true);
-  _applySwarmUI(true);
+  /* ★ Swarm + Autopilot default OFF for a project-LESS chat. They are
+   * auto-enabled only when the user turns Project mode on (see
+   * _autoEnableProjectModes in project.js). A user can still enable either
+   * manually without a project — this only changes the default state. */
+  _applySwarmUI(false);
   _applyEndpointUI(false);
-  _applyAutopilotUI(true);
+  _applyAutopilotUI(false);
   _applyFlowUI('');
   _applyImageGenToolUI(false);
   _applyImageGenUI(false);
@@ -959,12 +976,34 @@ function _installViewportHeightGuard() {
         _scrollTicking = true;
         requestAnimationFrame(() => {
           updateActiveTurn();
+          _updateScrollToBottomBtn();
           _scrollTicking = false;
         });
       }
     },
     { passive: true },
   );
+  /* Keep the scroll-to-bottom button anchored just above the composer on
+   * every viewport (desktop full toolbar ≈150px, mobile compact ≈70-110px,
+   * grows with attachment previews / mode bars) — publish the live
+   * .input-area height as a CSS var instead of guessing a fixed offset. */
+  (function _trackInputAreaHeight() {
+    const inputArea = document.querySelector(".input-area");
+    const wrapper = document.querySelector(".chat-wrapper");
+    if (!inputArea || !wrapper) return;
+    const publish = () => {
+      wrapper.style.setProperty("--input-area-h", inputArea.offsetHeight + "px");
+      _updateScrollToBottomBtn();
+    };
+    publish();
+    if (typeof ResizeObserver === "function") {
+      try {
+        new ResizeObserver(publish).observe(inputArea);
+      } catch (err) {
+        console.warn("input-area ResizeObserver failed:", err);
+      }
+    }
+  })();
   document.addEventListener("keydown", (e) => {
     /* Ctrl/Cmd+K → toggle sidebar search */
     if ((e.ctrlKey || e.metaKey) && e.key === "k") {
@@ -1061,6 +1100,17 @@ function _installViewportHeightGuard() {
    *   Wired HERE (not at cross_tab_sync.js load) because that file is bundled
    *   before push.js, so pushSubscribe isn't defined yet at its IIFE time. */
   if (typeof _wireConvSyncPush === 'function') _wireConvSyncPush();
+
+  /* ★ Server→client history_rewrite alignment: subscribe to the `conv` push
+   *   channel so a backend reconcile (ghost-tail delete / husk collapse) is
+   *   applied in place the instant it lands — the "must refresh to sync state"
+   *   fix. Same late-wire reason as above (pushSubscribe defined by push.js). */
+  if (typeof _wireConvHistoryRewritePush === 'function') _wireConvHistoryRewritePush();
+
+  /* ★ Windowed-read scroll-up loader: when a long conversation is opened with
+   *   only its tail window, scrolling to the top fetches + prepends earlier
+   *   messages. Inert unless the server served a windowed response. */
+  if (typeof wireConvWindowScrollLoader === 'function') wireConvWindowScrollLoader();
 
   initActiveTasks().then(() => {
     /* ★ Decide reconnect by OBSERVABLE OUTCOME, not by a thrown error.
@@ -1215,14 +1265,37 @@ function _installViewportHeightGuard() {
     try {
       for (let i = 0; i < _delays.length; i++) {
         await new Promise(r => setTimeout(r, _delays[i]));
-        if (window._bootLoadInFlight) continue;  // another load (timer/cross-tab) is running
-        window._bootLoadInFlight = true;
+        /* Acquire the shared self-healing in-flight lease. `_acquireBootLoad`
+         *   is a no-op-returns-false when another load holds a FRESH lease, but
+         *   reclaims a STALE one (a prior load that never settled through the
+         *   tunnel) so a wedged load can't disable boot reconnect forever.
+         *   Fall back to the bare latch only if the helper isn't present
+         *   (cross_tab_sync.js is bundled before main.js, so it normally is). */
+        const _acq = (typeof window._acquireBootLoad === 'function')
+          ? window._acquireBootLoad
+          : () => { if (window._bootLoadInFlight) return false; window._bootLoadInFlight = Date.now(); return true; };
+        const _rel = (typeof window._releaseBootLoad === 'function')
+          ? window._releaseBootLoad
+          : () => { window._bootLoadInFlight = 0; };
+        if (!_acq()) continue;  // another load (timer/cross-tab) holds a fresh lease
         try {
           await loadConversationsFromServer();
           /* The call swallows errors + resolves, so success is the observable
            *   flag, not the absence of a throw. */
           if (typeof serverLoadOk !== 'function' || serverLoadOk()) {
             _clearBootReconnectBanner();
+            /* ★ Self-heal folders: loadFolders() runs ONCE at boot inside
+             *   initActiveTasks' Promise.all and has no retry of its own — a
+             *   failed first fetch leaves _foldersLoaded=false and the folder
+             *   rail hidden for the whole session ("sidebar folder gone after
+             *   refresh"). The reconnect loop only re-ran loadConversationsFromServer,
+             *   so folders never recovered. Re-fetch them here once the server
+             *   is reachable again. */
+            if (typeof loadFolders === 'function' &&
+                typeof areFoldersLoaded === 'function' && !areFoldersLoaded()) {
+              await Promise.resolve(loadFolders()).catch(e =>
+                debugLog(`[boot-reconnect] folder reload failed: ${e && e.message}`, 'warn'));
+            }
             renderConversationList();
             debugLog(`[boot-reconnect] recovered on attempt ${i + 1}`, 'success');
             return;
@@ -1231,7 +1304,7 @@ function _installViewportHeightGuard() {
         } catch (e) {
           debugLog(`[boot-reconnect] attempt ${i + 1} threw: ${e.message}`, 'warn');
         } finally {
-          window._bootLoadInFlight = false;
+          _rel();
         }
       }
       debugLog('[boot-reconnect] gave up after backoff; 60s timer will keep trying', 'warn');

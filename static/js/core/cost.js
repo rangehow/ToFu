@@ -12,7 +12,7 @@
 // New design stores the actual model_id directly in config.model.
 const _LEGACY_PRESET_TO_MODEL = {
   'qwen': 'qwen3.6-plus', 'low': 'qwen3.6-plus',
-  'gemini': 'gemini-3.1-flash-lite-preview', 'gemini_flash': 'gemini-3-flash-preview',
+  'gemini': 'gemini-3-flash-preview', 'gemini_flash': 'gemini-3-flash-preview',
   'minimax': 'MiniMax-M2.7', 'doubao': 'Doubao-Seed-2.0-pro',
   'opus': 'aws.claude-opus-4.7',
   'medium': 'aws.claude-opus-4.7', 'high': 'aws.claude-opus-4.7', 'max': 'aws.claude-opus-4.7',

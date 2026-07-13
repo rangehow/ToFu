@@ -248,7 +248,10 @@ def _nc(anchor, replacement, must_fail, must_still_pass):
     assert anchor in original, f'NC anchor not found: {anchor[:70]!r}'
     patched = original.replace(anchor, replacement, 1)
     assert patched != original, 'NC replacement was a no-op'
-    copy_path = _SRC + '.nc_copy.js'
+    # Suffix the copy with THIS test module's name so it can never collide
+    # with a sibling NC test that patches the SAME shipped source under xdist
+    # (test_frontend_project_rail also copies main_folders_mobile.js).
+    copy_path = _SRC + '.longpress.nc_copy.js'
     try:
         with open(copy_path, 'w', encoding='utf-8') as f:
             f.write(patched)

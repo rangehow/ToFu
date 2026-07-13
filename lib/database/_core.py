@@ -159,7 +159,8 @@ def is_expected_shutdown_error(exc) -> bool:
     while a stop is in progress AND the error text is a shutdown signature."""
     try:
         return _sql_error_is_expected_shutdown(str(exc))
-    except Exception:
+    except Exception as e:
+        logger.debug('[DB] is_expected_shutdown_error probe failed: %s', e)
         return False
 
 

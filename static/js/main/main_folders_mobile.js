@@ -264,6 +264,13 @@ function _toggleProjectRail() {
   sidebar.classList.toggle('rail-collapsed', collapsed);
   try { localStorage.setItem(_RAIL_COLLAPSE_KEY, collapsed ? '1' : '0'); }
   catch (e) { console.warn('[rail] persist collapse failed: %s', e); }
+  // Keep the pre-paint html[data-rail] hint in sync so the NEXT load paints at
+  // the matching (full vs collapsed) rail width — zero CLS across the toggle.
+  try {
+    if (document.documentElement.hasAttribute('data-rail')) {
+      document.documentElement.setAttribute('data-rail', collapsed ? 'collapsed' : 'full');
+    }
+  } catch (e) { /* non-DOM context */ }
   // Refresh the collapse button's tooltip to match the new state.
   const btn = document.querySelector('.project-rail-collapse');
   if (btn) {
@@ -760,12 +767,7 @@ const _CLIP_SVG = '<svg class="input-hint-clip" width="13" height="13" viewBox="
 // Turn a hint template containing the literal `{clip}` token into safe HTML:
 // every non-token segment is HTML-escaped, the token becomes the inline SVG.
 function _renderHintHtml(tmpl) {
-  const esc = (typeof escapeHtml === 'function')
-    ? escapeHtml
-    : function(s) { return String(s).replace(/[&<>"']/g, function(c) {
-        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
-      }); };
-  return String(tmpl).split('{clip}').map(esc).join(_CLIP_SVG);
+  return String(tmpl).split('{clip}').map(escapeHtml).join(_CLIP_SVG);
 }
 
 function _inputSendHintText() {

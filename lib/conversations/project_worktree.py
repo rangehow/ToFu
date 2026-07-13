@@ -904,18 +904,30 @@ def execute_land_tool(fn_args: dict, *, current_conv_id: str = '',
                     f'(after {res.get("retries", 1)} CAS round(s)). The human '
                     f'fast-forwards {integration_branch()} into their build '
                     f'branch at their own cadence.')
+        # NOTE: a HELD land is NOT a task failure and MUST NOT be turned into a
+        # project_board_block. The conversation's work is already safely
+        # committed on its OWN branch (commit_worktree ran above), so nothing is
+        # lost — the background reconcile merges it later. Every held branch
+        # below therefore steers the conversation to COMPLETE the epic (if the
+        # work is done) and move on, never to idle or self-block.
+        _safe = ('Your work is already committed on your own branch and is NOT '
+                 'lost. This is NOT a blocker: if the epic work is finished and '
+                 'your worktree tests are green, mark it done with '
+                 'project_board_complete and move on — do NOT project_board_block '
+                 'for a held land (a background reconcile merges your branch).')
         if res.get('conflict'):
             return (f'Land held — merge conflict against {integration_branch()}. '
-                    f'Resolve it in your worktree (sync_worktree rebases onto the '
-                    f'latest integration HEAD), then land again. Nothing was '
-                    f'published to the integration ref. Detail: {res.get("error", "")[:200]}')
+                    f'Optionally resolve it in your worktree (project_sync pulls '
+                    f'the latest integration HEAD in, then land again). {_safe} '
+                    f'Detail: {res.get("error", "")[:200]}')
         if res.get('merge_result_red'):
             return (f'Land held — the merge-result tests are RED (integration '
-                    f'would break). Fix on your branch and land again; the ref '
-                    f'was NOT moved.\n{res.get("testSummary", "")[-600:]}')
+                    f'would break); the ref was NOT moved. {_safe}\n'
+                    f'{res.get("testSummary", "")[-600:]}')
         if res.get('preflight_red'):
-            return (f'Land held — your branch\'s own tests are RED. Fix them '
-                    f'first.\n{res.get("testSummary", "")[-600:]}')
+            return (f'Land held — your branch\'s own tests are RED. Fix them on '
+                    f'your branch, then land again. {_safe}\n'
+                    f'{res.get("testSummary", "")[-600:]}')
         if res.get('exhausted'):
             return (f'Land exhausted after {MAX_LAND_RETRIES} CAS rounds under '
                     f'heavy contention — retry shortly.')

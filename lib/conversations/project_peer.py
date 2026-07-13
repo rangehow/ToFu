@@ -539,9 +539,10 @@ def intervene_peer(project_path: str, from_conv_id: str, to_conv_id: str,
     if not hard_abort:
         # Advisory path: a high-priority peer note. Reuses the rate-limited
         # messaging seam so an intervention storm is equally impossible.
-        note = message or ('Please pause and re-read the project board — a '
-                           'sibling conversation believes your current work '
-                           'overlaps or duplicates an epic in progress.')
+        note = message or ('Heads-up: a sibling conversation believes your current '
+                           'work may overlap or duplicate an epic in progress — '
+                           're-check the project board and reconcile. Advisory: keep '
+                           'making progress; you decide how to reconcile.')
         res = send_peer_message(project_path, from_conv_id, to_conv_id, note,
                                 config=config, _kind_label='intervention')
         res['mode'] = 'advisory'

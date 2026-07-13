@@ -79,6 +79,26 @@ def _db_safe(fn):
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_USER_ID = 1
 
+# ── Native mobile client (Android APK) download ──
+# The Android client lives in its OWN repo (github.com/rangehow/tofu-android),
+# so its CI publishes release APKs to that repo's /releases — NOT the backend's
+# rangehow/ToFu repo. The filename here MUST equal the asset that repo's CI
+# workflow publishes (.github/workflows/build-apk.yml). That two-repo coupling
+# is guarded by tests/test_mobile_client_apk_url.py so it can't silently drift
+# into a permanent 404.
+MOBILE_CLIENT_APK_ASSET = 'tofu-android.apk'
+# Direct-download DEEP LINK, not the releases HTML page. GitHub's
+# /releases/latest/download/<asset> is a stable redirect that always serves the
+# newest release's asset and triggers a real download on tap — exactly what a
+# phone needs. Before the first tagged release this 404s (honest "not published
+# yet"); that is a better mobile outcome than landing on the /releases/latest
+# page full of wrong-platform desktop installers. TOFU_MOBILE_CLIENT_URL
+# overrides it (e.g. to pin a specific version's asset).
+DEFAULT_MOBILE_CLIENT_URL = (
+    'https://github.com/rangehow/tofu-android/releases/latest/download/'
+    + MOBILE_CLIENT_APK_ASSET
+)
+
 common_bp = Blueprint('common', __name__)
 # v1 blueprint for the JSON routes (page-serving carve-outs above stay on common_bp).
 from routes.api_v1.common import api_v1_common_bp  # noqa: E402
@@ -90,6 +110,7 @@ from routes.api_v1.common import api_v1_common_bp  # noqa: E402
 # working for route modules that still import them from here.
 from lib.conversations.meta_cache import (  # noqa: E402,F401  — re-exported for route modules (conversations.py, chat.py)
     invalidate_meta_cache as _invalidate_meta_cache,
+    notify_conv_changed as _notify_conv_changed,
     refresh_meta_cache_if_stale as _refresh_meta_cache_if_stale,
 )
 
@@ -590,12 +611,13 @@ def health_check():
     from lib.version import __version__
     result = {'ok': True, 'ts': int(time.time() * 1000), 'db_ok': db_available, 'version': __version__}
 
-    # Optional native mobile-client download URL (e.g. a GitHub Releases link).
-    # Empty by default — the Settings footer entry stays hidden until an
-    # operator sets TOFU_MOBILE_CLIENT_URL, so no dead button ever ships.
-    _mobile_url = (os.environ.get('TOFU_MOBILE_CLIENT_URL') or '').strip()
-    if _mobile_url:
-        result['mobile_client_url'] = _mobile_url
+    # Native mobile-client download URL, surfaced in the Settings footer.
+    # Defaults to a DIRECT APK deep link (see DEFAULT_MOBILE_CLIENT_URL) so a
+    # phone tap downloads the app rather than landing on a wrong-platform
+    # releases page; TOFU_MOBILE_CLIENT_URL overrides.
+    _mobile_url = (os.environ.get('TOFU_MOBILE_CLIENT_URL') or '').strip() \
+        or DEFAULT_MOBILE_CLIENT_URL
+    result['mobile_client_url'] = _mobile_url
 
     # Report the active backend ('pg' or 'sqlite') — NOT a hardcoded value,
     # which previously mislabeled every PostgreSQL deployment as sqlite.

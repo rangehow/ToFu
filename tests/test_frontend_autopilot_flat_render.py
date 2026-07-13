@@ -164,6 +164,7 @@ check('nc_pattern_applied', _applied);
 (0, eval)(fs.readFileSync(process.argv[3], 'utf8'));  // escape_html.js
 (0, eval)(fs.readFileSync(process.argv[4], 'utf8'));  // safe_html.js
 (0, eval)(fs.readFileSync(process.argv[3].replace('escape_html.js', 'translation_model.js'), 'utf8'));  // core/translation_model.js (chat_render dep)
+(0, eval)(fs.readFileSync(process.argv[3].replace('core/escape_html.js', 'ui/translation_indicator.js'), 'utf8'));  // ui/translation_indicator.js (chat_render dep)
 (0, eval)(chatSrc);                                   // chat_render.js (real / neutered)
 
 if (typeof renderMessage !== 'function') {

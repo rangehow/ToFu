@@ -77,6 +77,54 @@ VU_DONE_SENTINEL = '[VU: TASK_DONE]'
 
 
 # ══════════════════════════════════════════════════════════
+#  Autopilot virtual-user HANDOFF (park-on-board) sentinel
+# ══════════════════════════════════════════════════════════
+
+# A virtual_user emits ``[VU: HANDOFF paths=<p1>,<p2>]`` when the objective's
+# remaining acceptance criteria are BLOCKED on an EXTERNAL commit the assistant
+# cannot itself resolve (a sibling conversation must land a file first). This
+# is the THIRD terminal verdict — distinct from TASK_DONE (met) and keep-going
+# (unmet + actionable in-conversation): the run is done in this conversation,
+# but the residual is parked onto the project board's wait-on-path primitive so
+# it auto-resumes when the dependency lands. See lib/tasks_pkg/autopilot.py
+# ``_conclude_handoff``.
+#
+# The ``paths=`` value follows the SAME structured-token contract as the board's
+# ``_parse_sibling_wait_paths`` (comma-separated, whitespace ends the token) so
+# the two never diverge — free-text scraping is forbidden.
+_VU_HANDOFF_RE = re.compile(
+    r'\[VU:\s*HANDOFF(?:\s+paths?=(\S+))?\s*\]', re.IGNORECASE)
+
+
+def parse_vu_handoff(text: str):
+    """Parse a ``[VU: HANDOFF paths=a,b]`` sentinel from a virtual-user reply.
+
+    Returns
+    -------
+    list | None
+        ``None`` when NO handoff sentinel is present (distinct from an empty
+        list). A list of paths when the sentinel is present — ``[]`` for a bare
+        ``[VU: HANDOFF]`` with no path token (still a handoff signal). Paths are
+        comma-separated; the value ends at the first whitespace run (trailing
+        prose is never consumed); de-duped, order-preserving.
+
+    Pure + side-effect-free.
+    """
+    m = _VU_HANDOFF_RE.search(text or '')
+    if m is None:
+        return None
+    raw = m.group(1)
+    if not raw:
+        return []
+    out = []
+    for p in raw.split(','):
+        s = p.strip()
+        if s and s not in out:
+            out.append(s)
+    return out
+
+
+# ══════════════════════════════════════════════════════════
 #  Replan kill-switch
 # ══════════════════════════════════════════════════════════
 
@@ -243,6 +291,18 @@ def classify_verdict(
     if verifier_role == 'virtual_user':
         low = (text or '').lower()
         fb = (text or '') if strip_feedback else None
+        # ── HANDOFF (park-on-board) — checked FIRST, ahead of TASK_DONE and
+        #    the unresolved-marker downgrade. HANDOFF is the most specific
+        #    signal: it MEANS "remaining but externally blocked", so a
+        #    co-emitted ❌ / "NOT met" marker (which downgrades a bare
+        #    TASK_DONE) must NOT override it — that residual is exactly why the
+        #    VU is handing off. The 'handoff' phase ends the loop (like 'stop')
+        #    but routes to _conclude_handoff instead of the clean close-out. ──
+        handoff_paths = parse_vu_handoff(text or '')
+        if handoff_paths is not None:
+            return {'phase': 'handoff', 'plan_defect': None,
+                    'feedback': fb, 'had_tag': False,
+                    'handoff_paths': handoff_paths}
         wants_stop = (VU_DONE_SENTINEL.lower() in low
                       or '[verdict: stop]' in low or 'verdict: stop' in low)
         if wants_stop:
@@ -268,6 +328,29 @@ def classify_verdict(
                     x_count=x_count,
                     phrase_hits=len(phrase_hits),
                     reason='unresolved_markers_in_vu_done',
+                )
+                return {'phase': 'worker', 'plan_defect': None,
+                        'feedback': fb, 'had_tag': False}
+            # ── Backend-authoritative gate: a TASK_DONE is SELF-CONTRADICTORY
+            #    when its own mandatory [PROGRESS: remaining=Y] has Y>0. This
+            #    is the ROOT-CAUSE fix for "VU stops early" — it does NOT trust
+            #    the model's done-claim over the hard progress signal it is
+            #    required to emit (the same signal detect_diminishing_returns
+            #    trusts). FAIL-OPEN: an absent/unparseable PROGRESS line yields
+            #    (None, None) → we cannot prove incompleteness → allow the stop.
+            _resolved, _remaining = parse_progress(text or '')
+            if _remaining is not None and _remaining > 0:
+                logger.warning(
+                    '[Verdict] Override VU TASK_DONE→CONTINUE: PROGRESS reports '
+                    'remaining=%d > 0 — done-claim contradicts its own signal',
+                    _remaining,
+                )
+                audit_log(
+                    'vu_done_override',
+                    original='stop',
+                    new='worker',
+                    remaining=_remaining,
+                    reason='progress_remaining_in_vu_done',
                 )
                 return {'phase': 'worker', 'plan_defect': None,
                         'feedback': fb, 'had_tag': False}
@@ -464,6 +547,15 @@ AUTOPILOT_MAX_TURNS_DEFAULT = 40
 # legitimate "you didn't do it, try again").
 AUTOPILOT_STUCK_WINDOW = 3
 
+# Minimum VU-driven follow-up turns a run must have spanned before it EARNS an
+# auto-generated close-out report.  ``settings.autopilotTurnCount`` counts the
+# VU continuations within a run (0 = the VU concluded on its first look, i.e. a
+# single agent turn a human can just read); only a run that drove at least this
+# many follow-up turns is "too much to read through" and worth an LLM debrief.
+# Runs BELOW the floor still conclude/fold (a report-less concluded record) —
+# they just skip the reporter turn.
+AUTOPILOT_SUMMARY_MIN_TURNS_DEFAULT = 1
+
 # Max concluded-run records retained in ``settings.autopilotSummaries`` on a
 # single long-lived conversation.  The map ACCRETES one record per run (each
 # carrying a full close-out report) and is re-serialized into every settings
@@ -489,6 +581,31 @@ def autopilot_summary_retention() -> int:
                        'int — using default %d', raw,
                        AUTOPILOT_SUMMARY_RETENTION_DEFAULT)
         return AUTOPILOT_SUMMARY_RETENTION_DEFAULT
+    return val if val > 0 else 0
+
+
+def autopilot_summary_min_turns() -> int:
+    """Min VU follow-up turns before a run earns an auto close-out report.
+
+    Reads ``TOFU_AUTOPILOT_SUMMARY_MIN_TURNS`` (default 1).  The value is
+    compared against ``settings.autopilotTurnCount`` (VU continuations within
+    the run): a run whose count is BELOW this floor is a short exchange a human
+    can just read, so it skips the LLM reporter turn while still folding.
+
+    FAIL-OPEN, mirroring :func:`autopilot_max_turns`: unset→default, ``0`` (or
+    <=0)→the gate is DISABLED (every clean run gets a report, the pre-gate
+    behaviour), garbage→default.
+    """
+    raw = getenv_compat('TOFU_AUTOPILOT_SUMMARY_MIN_TURNS', default='').strip()
+    if not raw:
+        return AUTOPILOT_SUMMARY_MIN_TURNS_DEFAULT
+    try:
+        val = int(raw)
+    except (ValueError, TypeError):
+        logger.warning('[Autopilot] TOFU_AUTOPILOT_SUMMARY_MIN_TURNS=%r not an '
+                       'int — using default %d', raw,
+                       AUTOPILOT_SUMMARY_MIN_TURNS_DEFAULT)
+        return AUTOPILOT_SUMMARY_MIN_TURNS_DEFAULT
     return val if val > 0 else 0
 
 
@@ -593,7 +710,9 @@ def parse_progress(text: str):
         return None, None
     try:
         return int(last.group(1)), int(last.group(2))
-    except (ValueError, TypeError):
+    except (ValueError, TypeError) as e:
+        logger.debug('[Verdict] parse_progress: non-int PROGRESS values (%s) — '
+                     'failing open', e)
         return None, None
 
 

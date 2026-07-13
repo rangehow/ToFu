@@ -14,6 +14,10 @@ last sanctioned tuning pass.
 import os
 import threading
 
+from lib.log import get_logger
+
+logger = get_logger(__name__)
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Layer 1 — Micro-compaction
@@ -118,7 +122,9 @@ def archive_retention() -> int:
         return _ARCHIVE_RETENTION_DEFAULT
     try:
         val = int(raw)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError) as e:
+        logger.debug('[Compact] TOFU_COMPACTION_ARCHIVE_RETENTION=%r not an int '
+                     '(%s) — using default %d', raw, e, _ARCHIVE_RETENTION_DEFAULT)
         return _ARCHIVE_RETENTION_DEFAULT
     return val if val > 0 else 0
 

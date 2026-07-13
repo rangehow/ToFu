@@ -215,7 +215,7 @@ BOARD_BLOCK_TOOL = {
     "function": {
         "name": "project_board_block",
         "description": (
-            "Report that a board epic is BLOCKED (you can't proceed — a dependency, a "
+            "Note that a board epic is WAITING on an external gate (a dependency, a "
             "missing decision, an external wait). This puts the epic on a "
             "SELF-EXPIRING, escalating cooldown so the autonomous heartbeat stops "
             "re-dispatching it (and burning a billed turn) while its gate is unmet — "
@@ -255,9 +255,9 @@ PATH_CLAIM_TOOL = {
         "name": "project_claim_path",
         "description": (
             "Reserve a file/path/subsystem you are about to change for a while, "
-            "so sibling conversations hold off editing it concurrently. Use this "
+            "so sibling conversations can SEE it and prefer other work. Use this "
             "BEFORE a big or long edit (e.g. 'I'm rewriting styles.css'): it "
-            "posts a durational 'Held — do NOT edit' notice onto the project "
+            "posts a durational 'being edited by a sibling' advisory onto the project "
             "board that EVERY sibling sees on its next turn — including a "
             "currently-idle conversation the autonomous heartbeat wakes later "
             "(a plain message would miss it). This is a soft, advisory, "
@@ -492,8 +492,8 @@ PEER_INTERVENE_TOOL = {
     "function": {
         "name": "project_intervene",
         "description": (
-            "Tell a sibling conversation (another AGENT) to STOP or change "
-            "course when it is going wrong — e.g. it is duplicating an epic you "
+            "Flag to a sibling conversation (another AGENT) that its work may "
+            "overlap or conflict — e.g. it is duplicating an epic you "
             "already own, or heading down a path a committed decision rules out. "
             "Write it as a direct coordination directive TO THE PEER AGENT "
             "('stop — I own the parser epic, drop it and re-check the board'), "

@@ -19,10 +19,34 @@
 function showStreamingUIForConv(convId) {
   const conv = conversations.find((c) => c.id === convId);
   if (!conv || conv.messages.length === 0) return;
+  const inner = document.getElementById("chatInner");
+  const container = document.getElementById("chatContainer");
+  /* ★ SCROLL FIX (parked-reader yank + flash): this function does a full
+   *   `inner.innerHTML` wipe + rebuild of the whole message list and used to
+   *   ALWAYS end in `_forceScrollToBottom`. During a live turn ANY renderChat()
+   *   funnels here via Guard 1c (chat_render.js) — e.g. a cold-round
+   *   `tool_compacted` fires `renderChat(conv,false)` once per tool round —
+   *   so a reader scrolled UP to read history was repeatedly yanked to the
+   *   bottom while the whole list flashed (the reported "keeps forcing me back
+   *   to the bottom + the bottom block re-renders several times"). Mirror the
+   *   fix already in renderChat's full-render path and `_bgRefreshChat`:
+   *   capture the reader's viewport anchor from the OLD DOM when they are parked
+   *   UP on the SAME conversation, then re-pin it after the rebuild instead of
+   *   force-scrolling. A genuine conversation SWITCH (DOM still shows a
+   *   different conv → `_sameConvDom` false), a first load, or a near-bottom
+   *   reader still lands at the bottom via `_forceScrollToBottom`. The check
+   *   MUST read `_lazyConvId` BEFORE the reassignment below. */
+  const _sameConvDom = _lazyConvId === convId
+    && inner && !!inner.querySelector('[id^="msg-"]');
+  const _readerNearBottom = (typeof isNearBottom === 'function')
+    ? isNearBottom(120) : true;
+  const _preSwapAnchor = (_sameConvDom && !_readerNearBottom
+      && typeof _captureScrollAnchor === 'function')
+    ? _captureScrollAnchor(container, inner)
+    : null;
   _destroyLazyObserver();
   _lazyConvId = convId;
   _lastRenderedFingerprint = "";
-  const inner = document.getElementById("chatInner");
 
   /* ★ FIX (Root Cause 3): Only drop the trailing message when it actually
    * owns the streaming bubble (in-progress assistant, or in-progress critic).
@@ -62,6 +86,8 @@ function showStreamingUIForConv(convId) {
     const _smMsgId = lastMsg._msgId || null;
     if (lastMsg.role === "assistant" && lastMsg._isEndpointPlanner) {
       html += _streamingBubbleHTML('planner', 'Planning…', _smTime, _smMsgId);
+    } else if (lastMsg.role === "assistant" && lastMsg._swarmAutoContinue) {
+      html += _streamingBubbleHTML('swarm', 'Continuing…', _smTime, _smMsgId);
     } else if (lastMsg.role === "assistant") {
       html += _streamingBubbleHTML('worker', 'Streaming…', _smTime, _smMsgId);
     } else if (lastMsg._isEndpointReview) {
@@ -74,7 +100,20 @@ function showStreamingUIForConv(convId) {
     if (sentinel) _lazyObserver.observe(sentinel);
   }
   requestAnimationFrame(() => buildTurnNav(conv));
-  _forceScrollToBottom(null, true);
+  /* ★ SCROLL FIX (see the _preSwapAnchor capture at the top): when the reader
+   *   was parked UP on this same conversation, re-pin their viewport instead of
+   *   yanking to the bottom. The innerHTML wipe above reset scrollTop→0, so
+   *   under the cv-off guard (real heights, not the content-visibility:auto
+   *   estimate) re-pin the anchor element to its prior offset. Otherwise
+   *   (switch / first load / near-bottom reader) land at the bottom as before. */
+  if (_preSwapAnchor && container && typeof _restoreScrollAnchor === 'function') {
+    inner.classList.add('cv-off');
+    void inner.scrollHeight;  // force real heights before re-pinning
+    _restoreScrollAnchor(container, _preSwapAnchor);
+    inner.classList.remove('cv-off');
+  } else {
+    _forceScrollToBottom(null, true);
+  }
   updateSendButton();
   if (_lastIsStreamingBubble) {
     const buf = streamBufs.get(convId);
@@ -99,7 +138,7 @@ function showStreamingUIForConv(convId) {
      *   translated yet or this isn't the streaming bubble. */
     if (lastMsg._translatePartial && lastMsg._msgId
         && typeof _renderStreamingTranslatePreview === 'function') {
-      _renderStreamingTranslatePreview(convId, lastMsg._msgId, lastMsg._translatePartial);
+      _renderStreamingTranslatePreview(convId, lastMsg._msgId, lastMsg._translatePartial, lastMsg._translatePartialByRound);
     }
     /* ★ FIX: After page refresh, SSE data may arrive AFTER this initial render.
      *   Schedule a deferred re-render (300ms) so that any SSE state event that
@@ -308,46 +347,67 @@ function finishStream(convId) {
     console.error('[finishStream] UI update error (non-fatal, translate will still run):', uiErr.message);
   }
   // ── Auto-translate assistant response ──
-  // ★ Use per-conversation setting, NOT the global (which reflects current viewed conv)
-  const _convAutoTranslate = convAutoTranslate(conv);
-  if (!_convAutoTranslate) {
-    console.info(`[finishStream] autoTranslate is OFF — skipping all ` +
+  // ★ UNIFICATION (2026-07-10): decide with TWO resolvers, not one.
+  //   • _frozen   = convAutoTranslate(conv)          — the send-time value the
+  //                 BACKEND safety net resolves off (settings.autoTranslate).
+  //   • _effective = convAutoTranslateEffective(conv) — the live intent (global
+  //                 toggle wins when ON), the SAME resolver the on-open retro
+  //                 path uses.
+  //   Old behaviour gated ONLY on _frozen, so a conv sent with autoTranslate
+  //   frozen-OFF that the user then toggles ON globally got NOTHING at
+  //   finalize — the translation only appeared when the user switched AWAY and
+  //   the retro (_resumePendingTranslations, effective-gated) path fired. That
+  //   is exactly the reported "nothing happens while focused, a big bar appears
+  //   the moment I switch conversations" bug. Fix: converge the finalize
+  //   decision on the effective resolver too.
+  const _frozen = convAutoTranslate(conv);
+  const _effective = convAutoTranslateEffective(conv);
+  if (!_effective) {
+    console.info(`[finishStream] autoTranslate is OFF (effective) — skipping all ` +
       `translation scheduling for conv=${convId.slice(0,8)} ` +
       `(conv.autoTranslate=${conv?.autoTranslate}, global=${autoTranslate})`);
   }
-  if (_convAutoTranslate && conv) {
-    /* ★ Auto-translate is now driven by the server-side safety net in
-     *   lib/tasks_pkg/manager.py::_maybe_auto_translate_assistant (and the
-     *   endpoint-mode equivalent _trigger_endpoint_auto_translate).  The
-     *   backend fires translation right after persisting assistant content
-     *   to the DB, so kicking off a parallel client-driven task here just
-     *   races the server task — and since /api/translate/start has no
-     *   conv+msgIdx-level dedup, both writes can land and the slower one
-     *   silently clobbers the faster (real) translation.  Skip in normal
-     *   stream-completion; manual click (translateMessage) and page-load
-     *   resume (_resumePendingTranslations) still go through their own
-     *   call sites and are unaffected. */
-    console.info(`[finishStream] Auto-translate handled by backend safety net — ` +
-      `skipping client-side scheduling for conv=${convId.slice(0,8)}`);
-    /* ★ Reliability: the backend delivers the translation to the live view
-     *   via a single fire-and-forget push frame, which the hub drops when no
-     *   client is subscribed at emit time. If BOTH the 'running' and 'done'
-     *   frames are lost, the active view shows the bare original until a
-     *   conversation switch re-reads the DB. Arm the DB-polling watchdog on
-     *   the trailing assistant so the translation surfaces live regardless of
-     *   push delivery. The watchdog short-circuits cheaply once
-     *   translatedContent / a client task is present, so it's a no-op when
-     *   the push path works. */
-    if (activeConvId === convId && typeof _armAutoTranslateWatchdog === 'function') {
-      for (let i = conv.messages.length - 1; i >= 0; i--) {
-        const m = conv.messages[i];
-        if (m.role !== 'assistant' || m._isVirtualUser) continue;
-        if (!m.content) break;
-        if (m.translatedContent || m._translateDone === true) break;
-        if (m._igResult || m._isImageGen || m._igResults) break;
-        _armAutoTranslateWatchdog(convId, i, m);
-        break;
+  if (_effective && conv) {
+    /* Resolve the trailing translatable assistant message once (shared by both
+     * branches below). Walk back past a trailing VU / image-gen row. */
+    let _atIdx = -1, _atMsg = null;
+    for (let i = conv.messages.length - 1; i >= 0; i--) {
+      const m = conv.messages[i];
+      if (m.role !== 'assistant' || m._isVirtualUser) continue;
+      if (!m.content) break;
+      if (m.translatedContent || m._translateDone === true) break;
+      if (m._igResult || m._isImageGen || m._igResults) break;
+      _atIdx = i; _atMsg = m;
+      break;
+    }
+
+    if (_frozen) {
+      /* ★ Backend-owned path (frozen-ON): translation is driven by the
+       *   server-side safety net in
+       *   lib/tasks_pkg/manager.py::_maybe_auto_translate_assistant (which
+       *   resolves off the SAME frozen settings.autoTranslate). Kicking off a
+       *   parallel client task here would race it (the slower clobbering the
+       *   faster). So we only ARM the DB-polling watchdog so a dropped push
+       *   frame still surfaces live without a conversation switch — it
+       *   short-circuits cheaply once translatedContent / a client task is
+       *   present, so it's a no-op when the push path works. */
+      console.info(`[finishStream] Auto-translate handled by backend safety net — ` +
+        `skipping client-side scheduling for conv=${convId.slice(0,8)}`);
+      if (activeConvId === convId && _atMsg
+          && typeof _armAutoTranslateWatchdog === 'function') {
+        _armAutoTranslateWatchdog(convId, _atIdx, _atMsg);
       }
+    } else if (_atMsg && typeof _startAutoTranslateForMsg === 'function') {
+      /* ★ Effective-ON but frozen-OFF (the reported gap): the BACKEND will NOT
+       *   translate (it resolves off the frozen-OFF settings.autoTranslate), so
+       *   nothing happens unless the user switches away and the retro path
+       *   fires. Schedule the client-side unified pipeline NOW so it translates
+       *   at finalize, in place, exactly like a frozen-ON conv. The pipeline's
+       *   translateClaim + server-side claim_inflight guards prevent any
+       *   double-fire against a manual click or a later retro pass. */
+      console.info(`[finishStream] Auto-translate effective-ON but frozen-OFF — ` +
+        `scheduling client-side pipeline for conv=${convId.slice(0,8)} msg=${_atIdx}`);
+      _startAutoTranslateForMsg(conv, convId, _atIdx, _atMsg);
     }
   }
   // ── ★ Autopilot in-band follow-up: when the done event carried

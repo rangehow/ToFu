@@ -319,6 +319,109 @@ def test_NC3_compare_before_swap_is_load_bearing(tmp_path):
         assert f.read() == original, 'shipped project-brain-i18n.js must be byte-identical'
 
 
+# ── Truncated-translation fallback: keep the COMPLETE original ─────
+# A standalone harness that drives ProjectBrainI18n.apply over a single
+# [data-pb-src] node, with a fake engine that reports `truncated:true`. The
+# overlay must NOT replace the complete original with the incomplete
+# translation (the reported "displayed incompletely" bug), and must NOT cache
+# it (a later pass can re-translate).
+_TRUNC_HARNESS = r'''
+const fs = require('fs');
+const path = require('path');
+const I18N = process.argv[2];
+const ROOT = process.argv[3];
+const { JSDOM } = require(path.join(ROOT, 'node_modules', 'jsdom'));
+const dom = new JSDOM(
+  '<!DOCTYPE html><body><div id="projectBrainOverlay">' +
+  '<div class="pb-tab-panel pb-tab-panel-active">' +
+  '<div id="node" data-pb-src="SRC_PH">SRC_PH</div>' +
+  '</div></div></body>', { url: 'http://localhost/' });
+const win = dom.window;
+global.window = win; global.document = win.document; global.console = console;
+global.localStorage = win.localStorage;
+global.requestAnimationFrame = win.requestAnimationFrame = (fn) => setTimeout(() => fn(Date.now()), 0);
+win._i18nLang = global._i18nLang = 'zh';
+win.t = global.t = (k, f) => (f || k);
+win.escapeHtml = global.escapeHtml = (s) => String(s == null ? '' : s);
+// jsdom has no indexedDB → the overlay's IDB layer fails open (no cache).
+let TR_CALLS = [];
+win.Api = global.Api = { project: {}, translate: {
+  run: (body) => { TR_CALLS.push(body.text);
+    // Report a TRUNCATED translation — the overlay must reject it.
+    return Promise.resolve({ _ok: true, translated: '译文前半段', truncated: true }); },
+} };
+
+eval(fs.readFileSync(I18N, 'utf8'));
+const I = win.ProjectBrainI18n;
+function drain(){ return new Promise((res)=>{ let n=0; (function t(){ if(n++>30) return res(); setTimeout(t,0);})(); }); }
+
+(async () => {
+  const out = {};
+  try { win.localStorage.setItem('tofu_pb_translate', '1'); } catch(_e){}
+  const node = win.document.getElementById('node');
+  I.apply(win.document.getElementById('projectBrainOverlay'));
+  await drain();
+  out.wasCalled = TR_CALLS.length > 0;               // engine WAS called
+  out.stillOriginal = node.textContent === 'SRC_PH'; // but original kept
+  out.noTrMarker = !node.getAttribute('data-pb-tr'); // never marked translated
+  out.memCacheEmpty = Object.keys(I._memCache).length === 0;  // not cached
+  console.log('__RESULT__' + JSON.stringify(out));
+})();
+'''.replace('SRC_PH', 'This is a long English peer message that must never be shown half-translated.')
+
+
+def _run_trunc(i18n=_I18N_SRC):
+    proc = subprocess.run(
+        ['node', '-e', _TRUNC_HARNESS, _BRAIN_SRC, i18n, ROOT],
+        capture_output=True, text=True, timeout=60)
+    if proc.returncode != 0:
+        raise AssertionError(f'harness failed: {proc.stderr or proc.stdout}')
+    for line in proc.stdout.splitlines():
+        if line.startswith('__RESULT__'):
+            return json.loads(line[len('__RESULT__'):])
+    raise AssertionError(f'no result line: {proc.stdout}\n{proc.stderr}')
+
+
+@pytest.mark.skipif(not _node_deps_available(),
+                    reason='node + jsdom dev-deps not installed (run npm install)')
+def test_truncated_translation_keeps_complete_original():
+    """A translation the engine flagged `truncated:true` must NOT replace the
+    complete original — the overlay keeps the source visible (the reported
+    'displayed incompletely' bug) and does not cache the partial."""
+    out = _run_trunc()
+    assert out['wasCalled'] is True, out
+    assert out['stillOriginal'] is True, \
+        f'a truncated translation must not replace the complete original: {out}'
+    assert out['noTrMarker'] is True, out
+    assert out['memCacheEmpty'] is True, \
+        f'a truncated translation must not be cached: {out}'
+
+
+@pytest.mark.skipif(not _node_deps_available(),
+                    reason='node + jsdom dev-deps not installed (run npm install)')
+def test_NC4_truncated_guard_is_load_bearing(tmp_path):
+    """NC-4: drop the `!d.truncated` guard in _translateOne → a truncated
+    translation IS applied over the original (the bug returns). Byte-identical
+    after."""
+    with open(_I18N_SRC, encoding='utf-8') as f:
+        original = f.read()
+    anchor = 'if (d && d._ok && d.translated && !d.truncated) return d.translated;'
+    assert anchor in original, 'truncated-guard anchor not found'
+    patched = original.replace(
+        anchor,
+        'if (d && d._ok && d.translated) return d.translated;  // NC-4 (guard removed)',
+        1)
+    assert patched != original, 'NC-4 patch did not apply'
+    src = os.path.join(tmp_path, 'i18n-nc4.js')
+    with open(src, 'w', encoding='utf-8') as f:
+        f.write(patched)
+    out = _run_trunc(i18n=src)
+    assert out['stillOriginal'] is False, \
+        f'NC-4: without the guard a truncated translation replaces the original: {out}'
+    with open(_I18N_SRC, encoding='utf-8') as f:
+        assert f.read() == original, 'shipped project-brain-i18n.js must be byte-identical'
+
+
 if __name__ == '__main__':
     import sys
     sys.exit(pytest.main([__file__, '-v']))

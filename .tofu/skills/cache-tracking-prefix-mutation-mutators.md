@@ -1,45 +1,68 @@
 ---
 name: cache-tracking-prefix-mutation-mutators
-description: Functions mutating cache prefix MUST call notify_compaction(conv_id) to suppress false positives
+description: Prefix mutators must pick the RIGHT notify — notify_compaction ONLY for expected drops, notify_history_rewrite for re-billing mutations (labels without masking the cost)
 enabled: true
-tags: [cache_tracking, logging, convention]
+tags: [cache_tracking, logging, convention, cost-visibility]
 created: 2026-05-13T14:50:24Z
-updated: 2026-05-13T14:50:24Z
+updated: 2026-07-08T00:00:00Z
 ---
 
 # Cache-tracking prefix mutation discipline
 
-`lib/tasks_pkg/cache_tracking.py:detect_cache_break` raises a
-`PREFIX MUTATION DETECTED` WARNING (logged to error.log) whenever the
-hash of `messages[0:N-2]` changes between rounds without a corresponding
-`notify_compaction(conv_id)` call. This both pollutes error.log AND
-indicates a real prompt-cache invalidation cost.
+`lib/tasks_pkg/cache_tracking.py:detect_cache_break` raises an ANONYMOUS
+`⚠ PREFIX MUTATION DETECTED … content hash changed without compaction`
+WARNING whenever the hash of the cache prefix (`messages[0 : len -
+EDITABLE_TAIL_COUNT]`) changes between rounds. That line is a LEADING
+INDICATOR whose only value is when the cause is UNKNOWN — it pollutes
+error.log AND flags a real prompt-cache re-bill.
 
-**Any code that legitimately mutates a message inside the cache prefix
-MUST call `notify_compaction(conv_id)` immediately after the mutation.**
+## ⚠ Two different signals — pick the RIGHT one (this is the load-bearing rule)
 
-Known prefix-mutating call sites (all live in the round prologue, BEFORE
-`detect_cache_break` runs at end of round):
+There are TWO notify functions, and they are NOT interchangeable. Choosing
+wrong either spams a false alarm or (worse) HIDES a real cost.
 
-| Function | Location | Notify? |
+| Function | Sets | Effect on `detect_cache_break` | Use ONLY when |
+|---|---|---|---|
+| `notify_compaction(cid)` | `compaction_pending` | **Blanket-suppresses ALL 4 break detectors + skips the wire diff + can flip `_wire_proven_identical→True`.** | The prefix genuinely SHRANK/DROPPED and the cache read-drop is EXPECTED and FREE (L2 force-summary, ancient-round drop). |
+| `notify_history_rewrite(cid)` | `history_rewrite_pending` | **NAMES the cause + silences ONLY the anonymous leading-indicator warning. Does NOT gate any break classifier and does NOT skip the wire diff.** The re-bill is still detected, attributed to the exact `msg[i].field`, counted in `total_breaks`, and surfaced as `prefix_mutation`. | The prefix BYTES CHANGED and it actually RE-BILLS (in-place edit of an in-prefix message: per-turn profile/detail splice, reconcile, committed-dict projection). |
+
+**The trap (the `notify_compaction` masking anti-pattern):** a mutation that
+re-bills is NOT a drop. Silencing it with `notify_compaction` launders a real,
+recurring cost into a false "server-side — PROVEN" verdict / invisibility —
+exactly the "backend must be the single source of truth for cost" violation.
+If your code changed prefix bytes and the body gets re-billed, you want
+`notify_history_rewrite` (label, don't mask). Reserve `notify_compaction` for
+genuine expected drops.
+
+## Known prefix-mutating call sites
+
+| Function | Location | Signal |
 |---|---|---|
-| `inject_relevant_memories` (memory prefetch) | `lib/memory/prefetch.py:570` | yes (added) |
-| `inject_attachments` (per-turn reminders) | `lib/tasks_pkg/attachments.py:198` | yes (added 2026-05-13) |
-| `run_compaction_pipeline` (L1/L2 compact) | `lib/tasks_pkg/compaction.py:3344` | yes |
+| `inject_relevant_memories` (memory prefetch) | `lib/memory/prefetch.py` | `notify_compaction` (drop semantics — audit if this should be history_rewrite) |
+| `inject_attachments` (per-turn reminders) | `lib/tasks_pkg/attachments.py` | `notify_compaction` |
+| user-profile / detail splice | `lib/tasks_pkg/system_context.py:~730` | **`notify_history_rewrite`** (fixed 2026-07-08 — was `notify_compaction`, which masked the re-bill) |
+| L1/L2 compaction pipeline | `lib/tasks_pkg/compaction/_pipeline.py` (NOTE: old `compaction.py:3344` path is gone post-refactor) | `notify_compaction` ONLY for prefix-touching edits (see `l1-compaction-notify-masks-detection` — default out-of-prefix L1 must NOT notify) |
 
-The bug pattern: mutator appends to "the last user message" walking
-backward from the end. After the first tool round, the original user
-turn is at index 1 — well INSIDE `messages[0:msg_count-2]`. So every
-subsequent round that re-enters the mutator triggers the warning unless
-`notify_compaction` is called.
+## How the anonymous warning is gated (2026-07-08)
 
-Symptom: WARNING `[CacheTrack] conv=X call=N ⚠ PREFIX MUTATION DETECTED`
-firing on regularly spaced rounds (e.g. every 5 rounds = the
-`_get_modified_files_attachment` throttle) and `total_breaks` climbing
-unexpectedly in the cache diagnostics. Found 458+ such warnings in
-error.log on 2026-05-13, 232 alone for one swe-bench conversation.
+`detect_cache_break` keeps `_prefix_mutated=True` on a hash change (so the
+CONFIRMED, NAMED break still fires), but the anonymous `PREFIX MUTATION
+DETECTED …without compaction` `logger.warning` is now gated on
+`if not _was_history_rewrite:`. So a `notify_history_rewrite` mutation is
+silent-on-the-anonymous-line yet fully detected + attributed downstream.
 
-When adding a NEW per-turn injection helper, audit the new function
-against this list and either (a) call `notify_compaction` after the
-real mutation OR (b) prove the mutated index is always >= msg_count-2.
+## Guardrail
 
+When adding a NEW per-turn injection helper that touches the cache prefix:
+1. If it DROPS/shrinks the prefix and the read-drop is expected+free →
+   `notify_compaction`.
+2. If it EDITS bytes in-place and re-bills → `notify_history_rewrite`
+   (NEVER `notify_compaction` — that hides the cost).
+3. Or prove the mutated index is always `>= len - EDITABLE_TAIL_COUNT` (in the
+   editable tail) so no signal is needed at all.
+
+Guarded by `tests/test_cache_prefix_stability.py`:
+`test_profile_splice_labels_without_suppressing_the_rebill` (3-arm:
+control alarm fires; history_rewrite silences the alarm YET surfaces
+`prefix_mutation` + increments `total_breaks`; compaction masks both) and
+`test_history_rewrite_does_not_flip_proven_server_side`.

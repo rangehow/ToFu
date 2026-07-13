@@ -379,9 +379,15 @@
       post(`/api/v1/conversations/${encodeURIComponent(convId)}/messages/${encodeURIComponent(msgIdx)}/branches`,
            body, { parse: 'response', onError: 'null' }),
     // Branch delete returns Response so the caller can inspect status / body.
-    deleteBranch: (convId, msgIdx, branchIdx) =>
-      del(`/api/v1/conversations/${encodeURIComponent(convId)}/messages/${encodeURIComponent(msgIdx)}/branches/${encodeURIComponent(branchIdx)}`,
-          { parse: 'response', onError: 'null' }),
+    // opts.msgId (when present) is sent as ?msgId= so the server resolves the
+    // anchor's CURRENT absolute index by stable id (windowed-read safe).
+    deleteBranch: (convId, msgIdx, branchIdx, opts) => {
+      const q = {};
+      const msgId = opts && opts.msgId;
+      if (msgId) q.msgId = msgId;
+      return del(`/api/v1/conversations/${encodeURIComponent(convId)}/messages/${encodeURIComponent(msgIdx)}/branches/${encodeURIComponent(branchIdx)}`,
+          { query: q, parse: 'response', onError: 'null' });
+    },
     // Hard delete a conversation. Fire-and-forget — caller may chain a
     // .catch() to log; we return Response so they can also inspect status.
     remove: (convId) =>
@@ -419,9 +425,16 @@
     },
     // Targeted message DELETE. mode='turn' deletes user+assistant pair;
     // mode='single' deletes only this index. Returns Response (status-aware).
-    deleteMessage: (convId, msgIdx, mode) =>
-      del(`/api/v1/conversations/${encodeURIComponent(convId)}/messages/${encodeURIComponent(msgIdx)}`,
-          { query: { mode: mode || 'single' }, parse: 'response', onError: 'null' }),
+    // opts.msgId (when present) is sent so the server resolves the CURRENT
+    // index by stable id — drift-proof if the persisted list shrank/shifted
+    // (server-side reconcile) between the client's read and this request.
+    deleteMessage: (convId, msgIdx, mode, opts) => {
+      const q = { mode: mode || 'single' };
+      const msgId = opts && opts.msgId;
+      if (msgId) q.msgId = msgId;
+      return del(`/api/v1/conversations/${encodeURIComponent(convId)}/messages/${encodeURIComponent(msgIdx)}`,
+          { query: q, parse: 'response', onError: 'null' });
+    },
     // Apply a pending tool-toggle change to an active conversation: clears the
     // per-conversation tool-schema latch so the next round re-assembles tools
     // from the current toggles (accepts a one-time prompt-cache rebuild).
@@ -564,6 +577,9 @@
     check:   (opts) => get('/api/v1/update/check', Object.assign({ onError: 'null' }, opts || {})),
     apply:   ()     => post('/api/v1/update/apply', {}),
     restart: ()     => post('/api/v1/update/restart', {}, { onError: 'null' }),
+    // shutdown: POST — graceful manual stop (writes the manual-shutdown
+    // marker so the next boot won't mistake it for an OS kill). No re-exec.
+    shutdown: ()    => post('/api/v1/update/shutdown', {}, { onError: 'null' }),
   };
 
   // swarm (multi-agent control plane) -------------------------------
@@ -847,6 +863,16 @@
     dismissProposal: (path, proposalId, body) =>
       post('/api/v1/project/charter/dismiss',
            Object.assign({ path, proposalId }, body || {})),
+    // Human-gated edit / delete of a committed decision (by list index) and
+    // deletion of the whole charter. All optimistic-locked (expected_version).
+    updateDecision: (path, index, text, body) =>
+      post('/api/v1/project/charter/decision/update',
+           Object.assign({ path, index, text }, body || {})),
+    deleteDecision: (path, index, body) =>
+      post('/api/v1/project/charter/decision/delete',
+           Object.assign({ path, index }, body || {})),
+    deleteCharter: (path, body) =>
+      post('/api/v1/project/charter/delete', Object.assign({ path }, body || {})),
     // Project-brain Board (coordination kanban). read-only.
     board:         (path) =>
       get('/api/v1/project/board', { query: { path }, onError: 'null' }),
@@ -855,6 +881,8 @@
     // it (becomes created_by_conv → dispatch target); complete/block/reopen
     // tolerate an empty convId (lifecycle actions on an existing epic, no
     // dispatch target — feed event + audit record a blank actor honestly).
+    /** @param {string} path
+     *  @param {{title?: string, convId?: string, dependsOn?: string[]}} [opts] */
     boardPost:     (path, { title, convId, dependsOn } = {}) =>
       post('/api/v1/project/board/post',
            { path, title, convId, depends_on: dependsOn || [] }),
@@ -865,12 +893,6 @@
            { path, taskId, convId: convId || '', reason: reason || '' }),
     boardReopen:   (path, taskId, convId) =>
       post('/api/v1/project/board/reopen', { path, taskId, convId: convId || '' }),
-    // PARK an epic pending a human decision (open|claimed → deferred). A parked
-    // epic stops autonomous dispatch and won't oscillate; the human resumes it
-    // later via boardReopen (deferred → open). convId optional (feed actor).
-    boardDefer:    (path, taskId, convId, reason) =>
-      post('/api/v1/project/board/defer',
-           { path, taskId, convId: convId || '', reason: reason || '' }),
     // Collaboration-bar one-shot summary (board + decisions + peer→epic join).
     brainSummary:  (path) =>
       get('/api/v1/project/brain/summary', { query: { path }, onError: 'null' }),
@@ -879,6 +901,39 @@
     brainPeers:    (path, convId) =>
       get('/api/v1/project/brain/peers',
           { query: { path, convId: convId || '' }, onError: 'null' }),
+    // Pillar #7 human↔brain status lane. Latest synthesized status snapshot
+    // (fresh-on-open via the staleness gate) + the append-only history trail.
+    // opts: { force } — force=true warms a fresh snapshot in the background
+    // (refresh=1). The response returns the cached snapshot instantly + a
+    // `refreshing` flag; it never blocks on the LLM synthesis.
+    brainStatus:   (path, opts) =>
+      get('/api/v1/project/brain/status',
+          { query: { path, refresh: (opts && opts.force) ? '1' : '' },
+            onError: 'null' }),
+    brainStatusHistory: (path, limit) =>
+      get('/api/v1/project/brain/status/history',
+          { query: { path, limit: limit || '' }, onError: 'null' }),
+    // Read-only synthesis Q&A about the project status. Writes NOTHING.
+    // Throws ApiError on refusal so the composer can surface the error.
+    brainStatusAsk: (path, question) =>
+      post('/api/v1/project/brain/status/ask', { path, question }),
+    // Pillar #7 WATCH lane — the human's standing "things I care about" list.
+    // brainWatchList(refresh) re-addresses open items on read (fresh-on-open).
+    brainWatchList: (path, refresh) =>
+      get('/api/v1/project/brain/watch',
+          { query: { path, refresh: refresh ? '1' : '' }, onError: 'null' }),
+    brainWatchAdd: (path, kind, text, convId) =>
+      post('/api/v1/project/brain/watch/add', { path, kind, text, convId: convId || '' }),
+    brainWatchUpdate: (itemId, action, extra) =>
+      post('/api/v1/project/brain/watch/update',
+           Object.assign({ itemId, action }, extra || {})),
+    brainWatchAddress: (itemId) =>
+      post('/api/v1/project/brain/watch/address', { itemId }),
+    // Promote a watch item into the charter — the ONLY bridge to sibling
+    // agents (human-gated charter commit). Throws ApiError on version skew.
+    brainWatchPromote: (itemId, convId, expectedVersion) =>
+      post('/api/v1/project/brain/watch/promote',
+           { itemId, convId: convId || '', expectedVersion: expectedVersion }),
     // Per-conversation brain INFLUENCE — how THIS conv is affected by the
     // brain (charter bound by, epics owned vs avoided, decisions awaiting).
     brainInfluence: (path, convId) =>
@@ -933,6 +988,21 @@
       request('/api/paper/chat',
               Object.assign({ method: 'POST', json: body, parse: 'response', timeout: 0 }, opts || {})),
     reparse:        (filename)            => post('/api/v1/paper/reparse', { filename }),
+    // Range-bypass fallback: download a stored PDF as bytes for pdf.js
+    // getDocument({data}) when a proxy strips HTTP Range. Goes through
+    // request() so base-path resolution stays single-sourced here; caller
+    // passes a client-owned AbortSignal + timeout:0 to own the deadline.
+    // Returns a Uint8Array. Throws on non-2xx / empty.
+    pdfArrayBuffer: async (path, opts) => {
+      const resp = await request(path, Object.assign({ method: 'GET', parse: 'response', timeout: 120000 }, opts || {}));
+      if (!resp || !resp.ok) {
+        throw new ApiError('HTTP ' + (resp ? resp.status : '0') + ' fetching PDF',
+                           { status: resp ? resp.status : 0, url: path });
+      }
+      const buf = await resp.arrayBuffer();
+      if (!buf || buf.byteLength === 0) throw new ApiError('Empty PDF response', { url: path });
+      return new Uint8Array(buf);
+    },
     // timeout:0 — /start does synchronous prep (image-manifest extraction,
     // injection sanitize, prompt build) that legitimately runs 10–40s before
     // it spawns the background task and returns. The default 30s client
@@ -1055,6 +1125,16 @@
     parse: (formData) => request('/api/doc/parse', { method: 'POST', body: formData, timeout: 0 }),
   };
 
+  // audio (speech-to-text / voice input) ---------------------------
+  // transcribe: multipart audio blob → { ok, text, model, ... } (mirrors
+  //   pdf.parse — timeout:0 because a transcription round-trip is slow).
+  // capabilities: { available, models, maxBytes, maxDurationS } — drives the
+  //   graceful hide of the mic button when no transcription model is configured.
+  const audio = {
+    transcribe:   (formData) => request('/api/v1/audio/transcribe', { method: 'POST', body: formData, timeout: 0 }),
+    capabilities: ()         => get('/api/v1/audio/capabilities', { onError: 'null' }),
+  };
+
   // artifacts (panel + library + version chain) ---------------------
   // v1 metadata routes are JSON; raw / view / export are intentional
   // carve-outs that ship typed binary or sandboxed HTML — we expose
@@ -1101,7 +1181,7 @@
     _resolve,         // exposed for SSE/WS path building
     // domains
     folders, orchestrations, memory, profile, timer, scheduler, optimizer, compactions,
-    conversations, text, translate, chat, images, pdf, doc, artifacts,
+    conversations, text, translate, chat, images, pdf, doc, audio, artifacts,
     health, pricing, clientError, serverConfig, browser, project, daily, paper,
     features, providers, dispatch, oauth, mcp, update, trading, authSources,
     swarm,

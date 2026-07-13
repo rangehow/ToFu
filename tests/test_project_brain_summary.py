@@ -141,7 +141,8 @@ def test_summary_empty_project(flask_app):
     assert build_brain_summary('') == {
         'epicsOpen': 0, 'epicsClaimed': 0, 'epicsDone': 0,
         'pendingDecisions': 0, 'activePeers': 0, 'peerEpics': {},
-        'charterExists': False, 'conflicts': 0, 'conflictMessages': []}
+        'charterExists': False, 'conflicts': 0, 'conflictMessages': [],
+        'statusLine': ''}
 
 
 def test_summary_conflicts_from_file_overlap(flask_app):
@@ -196,29 +197,14 @@ def test_route_brain_summary_requires_path(flask_client):
 
 # ── Source-level NEGATIVE CONTROL ──
 
-def _patch_restore(path, old, new, run):
-    with open(path, encoding='utf-8') as f:
-        original = f.read()
-    assert old in original, f'anchor not found in {path}'
-    try:
-        with open(path, 'w', encoding='utf-8') as f:
-            f.write(original.replace(old, new, 1))
-        run()
-    finally:
-        with open(path, 'w', encoding='utf-8') as f:
-            f.write(original)
-    with open(path, encoding='utf-8') as f:
-        assert f.read() == original, 'source not restored byte-identical'
+from tests._nc_harness import patch_restore as _patch_restore  # noqa: E402
 
 
 def test_NC_peer_epic_join_is_load_bearing(flask_app):
     """NC: no-op the peer→epic join loop → an active peer that DID claim an
     epic no longer appears in peerEpics → the join assertion FAILS."""
-    import importlib
-
     def run():
         import lib.conversations.project_brain_summary as bs
-        importlib.reload(bs)
         from lib.conversations.project_board import claim_task, post_task
         p = os.path.abspath('/tmp/bs-nc')
         with flask_app.app_context():
@@ -243,5 +229,3 @@ def test_NC_peer_epic_join_is_load_bearing(flask_app):
         "        pass  # NC (join disabled)",
         run,
     )
-    import lib.conversations.project_brain_summary as bs
-    importlib.reload(bs)

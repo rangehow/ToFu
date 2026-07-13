@@ -98,7 +98,7 @@ async function submitHumanGuidanceFreeText(guidanceId) {
 
   // ★ Auto-translate CN→EN: if autoTranslate is ON and text contains Chinese,
   //   translate before sending to backend — same as sendMessage() flow.
-  const conv = conversations.find(c => c.id === activeConvId);
+  const conv = getActiveConv();
   const _hgAutoTrans = convAutoTranslate(conv);
   const hasChinese = /[\u4e00-\u9fff\u3400-\u4dbf]/.test(text);
   let finalText = text;
@@ -161,7 +161,7 @@ async function submitHumanGuidanceChoice(guidanceId, choiceLabel) {
  * When tool_result arrives, it will overwrite status to "done" as normal.
  */
 function _collapseHgRoundAfterSubmit(guidanceId, responseText) {
-  const conv = conversations.find(c => c.id === activeConvId);
+  const conv = getActiveConv();
   if (!conv) return;
   const assistantMsg = [...conv.messages].reverse().find(m => m.role === 'assistant');
   if (!assistantMsg || !assistantMsg.toolRounds) return;
@@ -473,6 +473,47 @@ function _mpSelectBrowsed() {
   }
 }
 
+/* ★ Auto-enable the project-oriented execution modes when the user turns
+ * Project mode ON. Swarm + Autopilot default OFF for a bare chat (see
+ * core.js / _resetToolsToDefaults), and are switched on here as a
+ * convenience the moment a workspace is attached — the modes most useful for
+ * multi-step work on a real project.
+ *
+ * Guardrails:
+ *  - Only flips a mode that is currently OFF (never fights the user if they
+ *    already turned one on manually).
+ *  - Respects the autopilot ⇄ endpoint/flow mutual exclusion: if Endpoint
+ *    Mode or a custom Flow is already active, we do NOT force Autopilot on top
+ *    (that pairing would double-loop — see toggleAutopilot).
+ *  - Persists the new state via _saveConvToolState so it survives conv switch. */
+function _autoEnableProjectModes() {
+  let changed = false;
+  if (typeof swarmEnabled !== 'undefined' && !swarmEnabled
+      && typeof _applySwarmUI === 'function') {
+    _applySwarmUI(true);
+    changed = true;
+  }
+  const _endpointOn = (typeof endpointEnabled !== 'undefined') && endpointEnabled;
+  const _flowOn = (typeof activeFlow !== 'undefined') && !!activeFlow;
+  if (typeof autopilotEnabled !== 'undefined' && !autopilotEnabled
+      && !_endpointOn && !_flowOn
+      && typeof _applyAutopilotUI === 'function') {
+    _applyAutopilotUI(true);
+    changed = true;
+  }
+  if (changed) {
+    if (typeof _saveConvToolState === 'function') _saveConvToolState();
+    /* ★ Refresh the toolbar submenu count badges (e.g. 模式 "2") so they
+     * reflect the newly-enabled modes — _applySwarmUI/_applyAutopilotUI only
+     * repaint their own toggle+badge, not the aggregate count (mirrors
+     * _resetToolsToDefaults / _restoreConvToolState). */
+    if (typeof updateSubmenuCounts === 'function') updateSubmenuCounts();
+    if (typeof debugLog === 'function') {
+      debugLog('Project mode on — Swarm + Autopilot auto-enabled', 'info');
+    }
+  }
+}
+
 /* ★ mpApplyFolders — the "Set Project" action.
    First path → primary project; remaining → extra roots.
 
@@ -526,6 +567,10 @@ async function mpApplyFolders() {
   const nExtras = extras.length;
   const nRO = readOnly.length;
   debugLog(`Project set: ${primary}` + (nExtras ? ` + ${nExtras} extra folder(s)` : '') + (nRO ? ` (${nRO} read-only)` : ''), "success");
+  /* ★ Turning Project mode ON auto-enables Swarm + Autopilot (project-oriented
+   * execution modes), unless the user already enabled them or has Endpoint/Flow
+   * active. See _autoEnableProjectModes above. */
+  _autoEnableProjectModes();
 
   // ── Reconcile with the server in the background ──
   try {
@@ -1481,6 +1526,34 @@ function _clearFolderDropHighlight() {
     .forEach(function (r) { r.classList.remove('fb-drop-row'); });
 }
 
+/** Attached workspace roots (single source of truth: projectState). A drop is
+ *  only accepted inside one of these — the backend save_uploaded_file refuses
+ *  anything else, so we mirror that guard client-side for a clear, proactive
+ *  message instead of a generic post-hoc "failed to save". */
+function _attachedRootPaths() {
+  var roots = [];
+  if (typeof projectState !== 'undefined' && projectState) {
+    if (projectState.path) roots.push(projectState.path);
+    (projectState.extraRoots || []).forEach(function (r) {
+      var p = typeof r === 'string' ? r : (r && r.path);
+      if (p) roots.push(p);
+    });
+  }
+  return roots;
+}
+
+/** True if `dir` is (or is under) an attached root. Empty dir → the active
+ *  project root, which the backend resolves, so it's allowed. */
+function _dirInsideAttachedRoot(dir) {
+  if (!dir) return true;
+  var norm = function (p) { return String(p).replace(/\/+$/, ''); };
+  var d = norm(dir);
+  return _attachedRootPaths().some(function (root) {
+    var r = norm(root);
+    return d === r || d.indexOf(r + '/') === 0;
+  });
+}
+
 /** Save one dropped File into `dir` via the binary-safe upload endpoint. */
 async function _uploadDroppedFile(file, dir) {
   var fd = new FormData();
@@ -1516,7 +1589,7 @@ function _attachFolderDropZone() {
 
   el.addEventListener('dragleave', function (e) {
     // Only clear when the pointer actually leaves the browser box.
-    if (e.target === el && !el.contains(e.relatedTarget)) _clearFolderDropHighlight();
+    if (e.target === el && !el.contains(/** @type {Node} */(e.relatedTarget))) _clearFolderDropHighlight();
   }, true);
 
   el.addEventListener('drop', function (e) {
@@ -1531,8 +1604,54 @@ function _attachFolderDropZone() {
   }, true);
 }
 
+/** Add `dir` to the workspace as an extra root (or primary if none yet),
+ *  reusing the tested setPaths apply path. Preserves existing roots + their
+ *  read-only flags. Throws on server failure. */
+async function _addDropDirAsRoot(dir) {
+  var folders = _attachedRootPaths().slice();
+  if (folders.indexOf(dir) === -1) folders.push(dir);
+  var readOnly = [];
+  if (typeof projectState !== 'undefined' && projectState) {
+    if (projectState.readOnly && projectState.path) readOnly.push(projectState.path);
+    (projectState.extraRoots || []).forEach(function (r) {
+      if (r && typeof r === 'object' && r.readOnly && r.path) readOnly.push(r.path);
+    });
+  }
+  var resp = await Api.project.setPaths(folders, readOnly);
+  var data = resp ? await resp.json().catch(function () { return {}; }) : {};
+  if (!resp || !resp.ok) throw new Error((data && data.error) || 'Failed to add folder');
+  if (typeof _applyProjectData === 'function') _applyProjectData(data);
+  if (typeof _saveConvProjectPath === 'function') {
+    _saveConvProjectPath(data.path,
+      (data.extraRoots || []).map(function (r) { return typeof r === 'string' ? r : r.path; }),
+      readOnly);
+  }
+}
+
 async function _runFolderDrop(files, dir) {
   var dirLabel = dir ? (dir.split('/').filter(Boolean).slice(-1)[0] || dir) : 'project root';
+  // A drop outside every attached root would be refused by save_uploaded_file
+  // (it never auto-registers a workspace). Rather than dead-ending, OFFER to
+  // add the folder in one click — the upload itself is harmless, but adding a
+  // root has a visible side effect (a scan + a new project-bar folder), so we
+  // ask first instead of doing it silently.
+  if (dir && !_dirInsideAttachedRoot(dir)) {
+    var ok = (typeof showConfirm === 'function')
+      ? await showConfirm(t('folderDrop.addRootConfirm', { dir: dirLabel }),
+          { title: t('folderDrop.notInWorkspace'),
+            okText: t('folderDrop.addAndSave') })
+      : true;
+    if (!ok) return;
+    try {
+      await _addDropDirAsRoot(dir);
+    } catch (e) {
+      if (typeof showToast === 'function') {
+        showToast(t('folderDrop.failed', { n: files.length }), 'error',
+          (e && e.message) || '', 6000);
+      }
+      return;
+    }
+  }
   var results = await Promise.allSettled(files.map(function (f) {
     return _uploadDroppedFile(f, dir);
   }));
@@ -1543,7 +1662,9 @@ async function _runFolderDrop(files, dir) {
       saved++;
       if (r.value.data && r.value.data.renamed) renamed++;
     } else {
-      var msg = (r.status === 'fulfilled' && r.value) ? r.value.error : (r.reason && r.reason.message);
+      var msg = (r.status === 'fulfilled' && r.value)
+        ? r.value.error
+        : (r.status === 'rejected' && r.reason && r.reason.message);
       errors.push(files[i].name + ': ' + (msg || 'failed'));
     }
   });

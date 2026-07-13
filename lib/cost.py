@@ -104,7 +104,8 @@ def normalize_usage(usage: Optional[dict]) -> dict:
                 break
         try:
             out[canon] = int(val or 0)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError) as e:
+            logger.debug('[Cost] non-numeric usage value for %s (->0): %s', canon, e)
             out[canon] = 0
     return out
 

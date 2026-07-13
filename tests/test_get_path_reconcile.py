@@ -56,6 +56,14 @@ def _ok(msg): print(' ', _color('✓', '32'), msg)
 def _fail(msg): print(' ', _color('✗', '31'), msg); sys.exit(1)
 
 
+def _uid(stem):
+    """Unique per-run conv/task id so fixtures never collide across suites or
+    re-runs in the SAME pytest process (hardcoded ids leaked state and could
+    mask a real regression in CI)."""
+    import uuid
+    return f'{stem}-{uuid.uuid4().hex[:8]}'
+
+
 def _seed_conv(db, conv_id, messages, settings, *, updated_at=None):
     from lib.database._core_schema import CONVERSATIONS, upsert
     from lib.database import json_dumps_pg
@@ -108,7 +116,7 @@ def _run_reconcile(conv_id):
 
 def test_idle_ghost_reconciled_no_updated_at_bump():
     from lib.database import DOMAIN_CHAT, get_thread_db
-    conv_id = 'cv-getrecon-idle'
+    conv_id = _uid('cv-getrecon-idle')
     db = get_thread_db(DOMAIN_CHAT)
     orig_updated = 111222333  # a fixed, old timestamp
     _seed_conv(db, conv_id, [
@@ -139,8 +147,8 @@ def test_live_task_placeholder_not_deleted():
     """★ THE REGRESSION the gate exists to prevent."""
     from lib.database import DOMAIN_CHAT, get_thread_db
     from lib.tasks_pkg import manager as _mgr
-    conv_id = 'cv-getrecon-live'
-    task_id = 'tk-getrecon-live'
+    conv_id = _uid('cv-getrecon-live')
+    task_id = _uid('tk-getrecon-live')
     db = get_thread_db(DOMAIN_CHAT)
     _seed_conv(db, conv_id, [
         {'role': 'user', 'content': 'q1', 'timestamp': 1},
@@ -175,7 +183,7 @@ def test_live_task_placeholder_not_deleted():
 
 def test_clean_conv_no_write():
     from lib.database import DOMAIN_CHAT, get_thread_db
-    conv_id = 'cv-getrecon-clean'
+    conv_id = _uid('cv-getrecon-clean')
     db = get_thread_db(DOMAIN_CHAT)
     orig_updated = 444555666
     _seed_conv(db, conv_id, [
@@ -195,9 +203,48 @@ def test_clean_conv_no_write():
     _ok('clean idle conv → no reconcile write, no _reconciledAt (gate 2)')
 
 
+def test_superseded_error_husk_collapsed_on_get():
+    """★ The late-recovery artifact, END-TO-END on the GET path. A conv whose
+    persisted list is [user, error-husk, real-assistant] (the client showed an
+    error bubble after its recovery window, then a later orphan-recovery
+    reconnect appended the real reply) → GET-path reconcile COLLAPSES the error
+    husk, persists [user, real-assistant], stamps _reconciledAt, no updated_at
+    bump."""
+    from lib.database import DOMAIN_CHAT, get_thread_db
+    conv_id = _uid('cv-getrecon-errhusk')
+    db = get_thread_db(DOMAIN_CHAT)
+    orig_updated = 777888999
+    _seed_conv(db, conv_id, [
+        {'role': 'user', 'content': 'q1', 'timestamp': 1},
+        {'role': 'assistant', 'content': '', 'thinking': '',
+         'error': {'kind': 'internal', 'message': 'Regenerate timed out'},
+         'toolRounds': [], 'timestamp': 2},  # error husk
+        {'role': 'assistant', 'content': 'the real settled answer',
+         'finishReason': 'stop', 'timestamp': 3},  # real reply landed after
+    ], settings={}, updated_at=orig_updated)
+    try:
+        served, skipped = _run_reconcile(conv_id)
+        assert not skipped, 'idle conv must NOT be gated as live'
+        msgs, settings, updated_at = _read(db, conv_id)
+        roles = [m['role'] for m in msgs]
+        assert roles == ['user', 'assistant'], (
+            f'superseded error husk NOT collapsed on GET — roles={roles}')
+        assert msgs[-1]['content'] == 'the real settled answer', 'real reply lost'
+        assert msgs[-1].get('error') is None, 'survivor is the real reply, not the husk'
+        assert settings.get('_reconciledAt'), '_reconciledAt not stamped'
+        assert updated_at == orig_updated, (
+            f'updated_at was BUMPED ({updated_at} != {orig_updated}) — gate 3 violated')
+        assert [m['role'] for m in served['messages']] == ['user', 'assistant'], \
+            'served payload not collapsed'
+    finally:
+        _cleanup(db, conv_id)
+    _ok('★ superseded error husk collapsed + persisted on GET + _reconciledAt + NO updated_at bump')
+
+
 _POSITIVE = [test_idle_ghost_reconciled_no_updated_at_bump,
              test_live_task_placeholder_not_deleted,
-             test_clean_conv_no_write]
+             test_clean_conv_no_write,
+             test_superseded_error_husk_collapsed_on_get]
 
 
 def _run(fn):
@@ -214,31 +261,11 @@ def _run(fn):
         return False
 
 
-def _neuter(find, repl, label):
-    """Apply an on-disk edit to the real target, return (backup_src) for restore."""
-    with open(_TARGET, encoding='utf-8') as f:
-        src = f.read()
-    assert find in src, f'NC anchor not found for {label}: {find!r}'
-    with open(_TARGET, 'w', encoding='utf-8') as f:
-        f.write(src.replace(find, repl, 1))
-    return src
-
-
-def _restore(src):
-    with open(_TARGET, 'w', encoding='utf-8') as f:
-        f.write(src)
-
-
-def _subrun(test_name):
-    """Run ONE positive test in a FRESH subprocess (so the reloaded, neutered
-    module is imported cleanly) and return True on pass."""
-    code = (
-        'import tests.test_get_path_reconcile as t; '
-        f'import sys; sys.exit(0 if t._run(t.{test_name}) else 1)'
-    )
-    r = subprocess.run([sys.executable, '-c', code], cwd=_ROOT,
-                       capture_output=True, text=True)
-    return r.returncode == 0, r.stdout + r.stderr
+def _neuter_ctx(find, repl):
+    """In-memory neuter of _TARGET (routes.conversations) via the shared xdist-
+    safe harness — the shipped file is opened read-only, never written."""
+    from tests._nc_harness import neutered_source
+    return neutered_source(_TARGET, find, repl)
 
 
 def main():
@@ -257,56 +284,44 @@ def main():
     # ── NC-1: neuter the live-task gate → test #2 must FAIL, #1/#3 pass ──
     print()
     print(_color('NC-1 — neuter live-task gate (_conv_has_live_task → False):', '36'))
-    backup = _neuter(
-        'def _conv_has_live_task(conv_id):\n    ',
-        'def _conv_has_live_task(conv_id):\n    return False  # NC-1\n    ',
-        'live-task gate')
-    try:
-        live_ok, _ = _subrun('test_live_task_placeholder_not_deleted')
-        idle_ok, _ = _subrun('test_idle_ghost_reconciled_no_updated_at_bump')
-        clean_ok, _ = _subrun('test_clean_conv_no_write')
-        if live_ok:
-            _fail('NC-1: live-task test PASSED with gate neutered — gate is not load-bearing!')
-        if not (idle_ok and clean_ok):
-            _fail('NC-1: a control test failed — neuter had unintended blast radius')
-        _ok('NC-1: live-task test FAILS with gate off; idle+clean controls still pass')
-    finally:
-        _restore(backup)
+    with _neuter_ctx(
+            'def _conv_has_live_task(conv_id):\n    ',
+            'def _conv_has_live_task(conv_id):\n    return False  # NC-1\n    '):
+        live_ok = _run(test_live_task_placeholder_not_deleted)
+        idle_ok = _run(test_idle_ghost_reconciled_no_updated_at_bump)
+        clean_ok = _run(test_clean_conv_no_write)
+    if live_ok:
+        _fail('NC-1: live-task test PASSED with gate neutered — gate is not load-bearing!')
+    if not (idle_ok and clean_ok):
+        _fail('NC-1: a control test failed — neuter had unintended blast radius')
+    _ok('NC-1: live-task test FAILS with gate off; idle+clean controls still pass')
 
     # ── NC-2: make the reconcile UPDATE bump updated_at → test #1 must FAIL ──
     print()
     print(_color('NC-2 — neuter no-bump guard (add updated_at=now to UPDATE):', '36'))
-    backup = _neuter(
-        "'UPDATE conversations SET messages=?, settings=?, msg_count=?, '\n"
-        "        'search_text=? WHERE id=? AND user_id=?',\n"
-        "        (messages_json, settings_json, len(cleaned), search_text,\n"
-        "         conv_id, DEFAULT_USER_ID))",
-        "'UPDATE conversations SET messages=?, settings=?, msg_count=?, '\n"
-        "        'search_text=?, updated_at=? WHERE id=? AND user_id=?',\n"
-        "        (messages_json, settings_json, len(cleaned), search_text,\n"
-        "         int(time.time() * 1000), conv_id, DEFAULT_USER_ID))",
-        'no-updated_at-bump guard')
-    try:
-        idle_ok, out = _subrun('test_idle_ghost_reconciled_no_updated_at_bump')
-        live_ok, _ = _subrun('test_live_task_placeholder_not_deleted')
-        clean_ok, _ = _subrun('test_clean_conv_no_write')
-        if idle_ok:
-            _fail('NC-2: idle test PASSED with updated_at bumped — no-bump guard not load-bearing!')
-        if not (live_ok and clean_ok):
-            _fail('NC-2: a control test failed — neuter had unintended blast radius')
-        _ok('NC-2: idle no-bump test FAILS with updated_at bumped; live+clean controls still pass')
-    finally:
-        _restore(backup)
+    with _neuter_ctx(
+            "'UPDATE conversations SET messages=?, settings=?, msg_count=?, '\n"
+            "        'search_text=? WHERE id=? AND user_id=?',\n"
+            "        (messages_json, settings_json, len(cleaned), search_text,\n"
+            "         conv_id, DEFAULT_USER_ID))",
+            "'UPDATE conversations SET messages=?, settings=?, msg_count=?, '\n"
+            "        'search_text=?, updated_at=? WHERE id=? AND user_id=?',\n"
+            "        (messages_json, settings_json, len(cleaned), search_text,\n"
+            "         int(time.time() * 1000), conv_id, DEFAULT_USER_ID))"):
+        idle_ok = _run(test_idle_ghost_reconciled_no_updated_at_bump)
+        live_ok = _run(test_live_task_placeholder_not_deleted)
+        clean_ok = _run(test_clean_conv_no_write)
+    if idle_ok:
+        _fail('NC-2: idle test PASSED with updated_at bumped — no-bump guard not load-bearing!')
+    if not (live_ok and clean_ok):
+        _fail('NC-2: a control test failed — neuter had unintended blast radius')
+    _ok('NC-2: idle no-bump test FAILS with updated_at bumped; live+clean controls still pass')
 
-    # ── Verify byte-identical restore ──
-    with open(_TARGET, encoding='utf-8') as f:
-        restored = f.read()
-    # Re-run baseline to prove restore is clean and green.
+    # ── Post-neuter baseline (source was never mutated on disk) ──
     print()
     print(_color('Post-restore baseline:', '36'))
     if not all(_run(fn) for fn in _POSITIVE):
         _fail('post-restore baseline failed — file not restored correctly')
-    _ = restored
 
     print()
     print(_color('═══ ALL GET-PATH RECONCILE TESTS + DOUBLE-NEUTER PASSED ═══', '32'))

@@ -35,7 +35,9 @@ function _renderTranslatingBubble() {
       </div>
     </div>`;
   inner.appendChild(el);
-  scrollToBottom();
+  /* ★ Real-height scroll (see sendMessage): plain scrollToBottom under-measures
+   *   against content-visibility:auto estimates and lands mid-history. */
+  _forceScrollToBottom(null, true);
 }
 
 function _removeTranslatingBubble() {
@@ -59,6 +61,8 @@ function _renderStreamingBubble(conv, sendConfig, msgId) {
     el.classList.add('message-new');
     el.addEventListener('animationend', () => el.classList.remove('message-new'), { once: true });
   }
-  scrollToBottom();
+  /* ★ Real-height scroll (see sendMessage): plain scrollToBottom under-measures
+   *   against content-visibility:auto estimates and lands mid-history. */
+  _forceScrollToBottom(null, true);
 }
 

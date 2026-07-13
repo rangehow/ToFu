@@ -43,8 +43,7 @@ isn't a known alias passes through to the orchestrator unchanged.
   | thinking        | thinkingDepth (+   | string -> 'low'…   |
   |                 | thinkingEnabled)   | 'max'; bool also OK|
   | tools           | (per-tool toggles) | list[str] or '*'   |
-  | search          | searchMode         | 'multi'/'single'/  |
-  |                 |                    | 'off'              |
+  | search          | searchMode         | 'multi' / 'off'    |
   | memory          | memoryEnabled      | bool               |
   | preferences     | preferencesEnabled | bool               |
   | swarm           | swarmEnabled       | bool               |
@@ -125,7 +124,6 @@ _THINKING_DEPTHS = {'low', 'medium', 'high', 'xhigh', 'max'}
 # Friendly tool tags → orchestrator cfg toggles.
 _TOOL_TAG_MAP = {
     'search':       ('searchMode', 'multi'),
-    'search:single': ('searchMode', 'single'),
     'search:multi': ('searchMode', 'multi'),
     'fetch':        ('fetchEnabled', True),
     'memory':       ('memoryEnabled', True),
@@ -163,7 +161,7 @@ def _set_thinking(cfg: dict, value):
 
 
 def _set_search(cfg: dict, value):
-    if isinstance(value, str) and value.lower() in ('off', 'single', 'multi'):
+    if isinstance(value, str) and value.lower() in ('off', 'multi'):
         cfg['searchMode'] = value.lower()
     elif value is False:
         cfg['searchMode'] = 'off'
@@ -629,9 +627,17 @@ async def agent_run():
             'Server at capacity; retry shortly.', status=503,
             error_kind='overloaded', retry_after=5)
 
-    # Release the admission slot + dispose BYO/tool resources exactly
-    # once, the moment the task reaches a terminal state. Event-driven
-    # (fired from manager.append_event) — no per-request polling thread.
+    # Release the admission slot + dispose BYO/tool resources + SETTLE
+    # BILLING exactly once, the moment the task reaches a terminal state.
+    # Event-driven (fired from manager.append_event) — no per-request
+    # polling thread. Binding settlement HERE (not to the HTTP request
+    # lifecycle) is the root-cause fix for the reservation-leak paths: a
+    # blocking-timeout that outran the client, a mid-stream client
+    # disconnect, and an in-process reaper finalize all reach terminal via
+    # this callback, so the reservation is settled against ACTUAL usage
+    # rather than stranded until the 30-min janitor. settle_task is
+    # idempotent on ref_id=task_id, so the happy-path settle below is a
+    # harmless no-op second call.
     _slot_released = {'done': False}
 
     def _on_done(_tid, _handle=handle, _tool_env=tool_env):
@@ -639,6 +645,11 @@ async def agent_run():
             return
         _slot_released['done'] = True
         controller.release()
+        try:
+            settle_task(task, user_id=billing_user_id, model=model_id)
+        except Exception as ex:
+            logger.error('[agent.run] terminal settle failed task=%s: %s',
+                         _tid[:8], ex, exc_info=True)
         if _handle is not None:
             try:
                 dispose_ephemeral_slot(_handle)

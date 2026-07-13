@@ -22,8 +22,7 @@ no frontend PUT to lose → the resurrect bug is structurally impossible, and no
 frontend pop → the auto-fire leak is structurally impossible).
 
 The frontend keeps ONLY the network/DOM ORCHESTRATION (reconnect to a live SSE,
-poll a finished task, auto-start an orphaned user turn) — it no longer INFERS
-settled lifecycle state.
+poll a finished task) — it no longer INFERS settled lifecycle state.
 
 Verdict vocabulary (per message, mirrors the JS classifiers byte-for-byte in
 predicate logic):
@@ -67,11 +66,20 @@ def _has_real_round(msg: dict[str, Any]) -> bool:
 
 
 def _is_special_turn(msg: dict[str, Any]) -> bool:
-    """Endpoint / autopilot-VU / image-gen turns are never 'empty clutter'."""
+    """Endpoint / auto-initiated / image-gen turns are never 'empty clutter'.
+
+    Endpoint (planner/critic/worker-iteration) and image-gen markers stay
+    local (they are turn-KIND, not initiator). "Was this auto-initiated?" is
+    resolved through the ONE shared resolver — so autopilot-VU AND every other
+    auto-initiated source (proactive / timer / brain / peer / operator / swarm)
+    is protected from the ghost sweep, not just the two markers this predicate
+    used to hardcode.
+    """
+    from lib.conversations.turn_initiation import is_auto_initiated
     return bool(
         msg.get('_epIteration') is not None and msg.get('_epIteration') != 0
         or msg.get('_isEndpointReview') or msg.get('_isEndpointPlanner')
-        or msg.get('_isVirtualUser') or msg.get('_autopilotRunId')
+        or is_auto_initiated(msg)
         or msg.get('_igResult') or msg.get('_igResults') or msg.get('_igError')
     )
 
@@ -117,83 +125,77 @@ def classify_ghost_tail(msg: dict[str, Any]) -> str | None:
     return 'interrupt' if (msg.get('thinking') or '').strip() else 'delete'
 
 
-# ── Orphan-resumable freshness bound ──────────────────────────────────────
-# A trailing USER turn with no response is only offered as "resumable" when it
-# is younger than this. This is a SERVER-SIDE POLICY value (not a client guess);
-# it exists so a years-old dangling user turn isn't surfaced as resumable on
-# every open. Generous default — the point is to exclude ancient stragglers, not
-# to race a live turn (the live-task check does that authoritatively).
-ORPHAN_RESUMABLE_MAX_AGE_MS = 24 * 60 * 60 * 1000  # 24h
+def _is_settled_assistant(msg: dict[str, Any]) -> bool:
+    """True if ``msg`` is an assistant turn carrying a genuine settled reply
+    (real content, a finish reason, usage, or a result-bearing tool round).
 
-
-def _last_real_turn(messages: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """Return the authoritative trailing turn, or None for an empty list.
-
-    This is deliberately the RAW tail: the orphan classifier runs AFTER
-    reconcile_conversation_messages has already swept buried ghosts and
-    deleted/stamped a ghost trailing assistant, so by the time we classify an
-    orphan the tail is the genuine settled tail.
+    NOTE: an assistant whose ONLY payload is an ``error`` does NOT count as a
+    settled reply here — an error husk cannot 'supersede' another error husk.
     """
-    if not isinstance(messages, list) or not messages:
-        return None
-    return messages[-1] if isinstance(messages[-1], dict) else None
-
-
-def classify_orphan_resumable(
-    messages: list[dict[str, Any]],
-    *,
-    has_live_task: bool,
-    now_ms: int,
-    max_age_ms: int = ORPHAN_RESUMABLE_MAX_AGE_MS,
-) -> dict[str, Any] | None:
-    """Backend-authoritative "does this conv have an orphaned user turn that
-    needs a response?" verdict — the fundamental fix for the frontend Case-E
-    ``age<5min`` heuristic that could AUTO-FIRE a billed LLM turn.
-
-    Returns a structured marker dict when the AUTHORITATIVE message list ends in
-    a user turn with NO assistant response and NO live task — else None. The
-    frontend renders an explicit Resume affordance from this marker; it NEVER
-    auto-dispatches. Because it consults the real ``messages`` (not the stale
-    ``settings.lastMsgRole`` shell metadata), it closes the latent DOUBLE-ANSWER
-    bug: a conv whose real tail is already an assistant answer (task completed,
-    but shell metadata still says trailing-user, or the done event was missed)
-    is NOT marked resumable — the exact case a metadata-only frontend cannot
-    verify.
-
-    Args:
-        messages: the AUTHORITATIVE, already-reconciled message list.
-        has_live_task: True if a pending/running task exists for this conv
-            (caller supplies it from the runtime — same signal as the GET-path
-            live-task gate). A live task means a response IS coming; not orphaned.
-        now_ms: current epoch millis (injected for deterministic testing).
-        max_age_ms: freshness bound (server policy, default 24h).
-
-    Returns:
-        ``{'msgIndex': int, 'timestamp': int, 'isImageGen': bool}`` or None.
-    """
-    if has_live_task:
-        return None
-    tail = _last_real_turn(messages)
-    if tail is None or tail.get('role') != 'user':
-        return None
-    # An image-gen user turn is driven by the creative-mode pipeline, NOT the
-    # orchestrator; never offer it to startAssistantResponse.
-    content = tail.get('content')
-    is_image_gen = bool(
-        tail.get('_isImageGen')
-        or (isinstance(content, str) and content.startswith('🎨 '))
+    if not isinstance(msg, dict) or msg.get('role') != 'assistant':
+        return False
+    return bool(
+        (msg.get('content') or '').strip()
+        or msg.get('finishReason')
+        or msg.get('usage')
+        or _has_real_round(msg)
     )
-    ts = tail.get('timestamp')
-    if not isinstance(ts, (int, float)) or ts <= 0:
-        # No usable timestamp → cannot bound freshness → do not surface.
-        return None
-    if (now_ms - int(ts)) > max_age_ms:
-        return None
-    return {
-        'msgIndex': len(messages) - 1,
-        'timestamp': int(ts),
-        'isImageGen': is_image_gen,
-    }
+
+
+def is_error_husk(msg: dict[str, Any]) -> bool:
+    """A buried PURE-error assistant husk: carries an ``error`` but NO other
+    user-visible payload (empty content, empty thinking, no real tool round,
+    not a special turn).
+
+    This is precisely the ``errAssistant`` the frontend pushes on a
+    timeout/abort of an edit/regen/send (``main_regen_continue.js`` /
+    ``edit_message.js`` / ``main_send_pipeline.js``): ``{role:'assistant',
+    content:'', thinking:'', error:…, toolRounds:[]}``. The buried-ghost sweep
+    (``is_buried_empty_ghost``) deliberately SKIPS it (``if msg.get('error')``),
+    because in isolation an error block is real user-visible information — so
+    when it is NOT superseded it must be kept. It is only clutter when a real
+    reply landed right after it (see ``is_superseded_error_husk``).
+    """
+    if not isinstance(msg, dict) or msg.get('role') != 'assistant':
+        return False
+    if _is_special_turn(msg):
+        return False
+    if not msg.get('error'):
+        return False
+    if (msg.get('content') or '').strip():
+        return False
+    if (msg.get('thinking') or '').strip():
+        return False
+    if _has_real_round(msg):
+        return False
+    return True
+
+
+def is_superseded_error_husk(
+    messages: list[dict[str, Any]], idx: int,
+) -> bool:
+    """True if ``messages[idx]`` is a buried pure-error husk (``is_error_husk``)
+    that is DIRECTLY superseded by a settled assistant reply at ``idx+1``.
+
+    This is the late-recovery artifact: the client's edit/regen/send safety
+    timer fired and pushed a visible error bubble AFTER the ~30s recovery
+    window; the server task then actually appeared, and a later orphan-recovery
+    reconnect appended the REAL assistant right below the error. The result is a
+    persisted ``[user, error-husk, real-assistant]`` — a "user → error-bubble →
+    agent" duplicate for a SINGLE logical exchange. Once the real reply landed,
+    the error bubble is stale clutter and is collapsed away.
+
+    Guard rails (deliberately narrow — only the exact artifact, nothing else):
+      * ``idx+1`` must be a genuinely SETTLED assistant (``_is_settled_assistant``
+        — real content / finishReason / usage / result-bearing round). An error
+        husk followed by ANOTHER error husk, or by a still-empty placeholder, or
+        by a user turn (a different exchange), is NOT collapsed.
+    """
+    if idx < 0 or idx + 1 >= len(messages):
+        return False
+    if not is_error_husk(messages[idx]):
+        return False
+    return _is_settled_assistant(messages[idx + 1])
 
 
 def reconcile_conversation_messages(
@@ -203,9 +205,14 @@ def reconcile_conversation_messages(
     """Server-authoritative ghost reconcile for a conversation's message list.
 
     Applies, in order:
-      1. Buried-ghost SWEEP — remove every non-tail assistant that is a buried
+      1. Superseded-error-husk COLLAPSE — remove a buried pure-error husk that
+         is directly followed by a settled assistant reply
+         (``is_superseded_error_husk``); the late-recovery
+         ``[user, error-husk, real-assistant]`` "user → error → agent"
+         duplicate.
+      2. Buried-ghost SWEEP — remove every non-tail assistant that is a buried
          empty ghost (``is_buried_empty_ghost``).
-      2. Tail classification — on the (post-sweep) trailing assistant:
+      3. Tail classification — on the (post-sweep) trailing assistant:
            'delete'    → drop it;
            'interrupt' → stamp ``finishReason='interrupted'`` in place.
 
@@ -231,6 +238,28 @@ def reconcile_conversation_messages(
 
     changed = False
     out = list(messages)
+
+    # ── 0. Superseded-error-husk collapse (the late-recovery artifact) ──
+    #    Remove a buried pure-error husk directly followed by a settled reply:
+    #    [user, error-husk, real-assistant] → [user, real-assistant]. Runs
+    #    FIRST so the following sweep/tail passes see the cleaned list. Honours
+    #    the SAME cache-prefix guard as the sweep — never remove an in-prefix
+    #    message (it would shift prefix bytes and bust the prompt cache).
+    if len(out) >= 2:
+        _guard = max(0, cache_prefix_count)
+        kept: list[dict[str, Any]] = []
+        collapsed = 0
+        for i, m in enumerate(out):
+            if i >= _guard and is_superseded_error_husk(out, i):
+                collapsed += 1
+                continue
+            kept.append(m)
+        if collapsed:
+            out = kept
+            changed = True
+            logger.info('[Reconcile] Collapsed %d superseded error-husk(s) '
+                        '(late-recovery user\u2192error\u2192agent duplicate). '
+                        'Remaining=%d', collapsed, len(out))
 
     # ── 1. Buried-ghost sweep (all but the tail) ──
     if len(out) >= 2:
@@ -278,7 +307,7 @@ def reconcile_conversation_messages(
 __all__ = [
     'is_buried_empty_ghost',
     'classify_ghost_tail',
+    'is_error_husk',
+    'is_superseded_error_husk',
     'reconcile_conversation_messages',
-    'classify_orphan_resumable',
-    'ORPHAN_RESUMABLE_MAX_AGE_MS',
 ]

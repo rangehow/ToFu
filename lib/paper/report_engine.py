@@ -66,6 +66,130 @@ def _build_report_meta(model, provider_id, usage_total, round_count, elapsed_s):
     return meta
 
 
+def _maybe_run_insight(task, phash, ui_lang, report_md, *, truncated_paper, model):
+    """Run the gated insight second-pass after a report completes (best-effort).
+
+    Skips entirely unless ``TOFU_PAPER_INSIGHT`` is on and this is a plain
+    report (never Review Mode). Emits an ``insight_start`` event so the reader
+    can show a "synthesizing insight…" affordance, then either an ``insight``
+    event carrying the rendered section (gate fired + produced) or an
+    ``insight_skipped`` event (gate withheld / nothing produced). Persistence is
+    handled inside ``run_report_insight`` (``insight:<ui>`` key).
+
+    ``allow_personal_context`` is resolved via ``lib/agent_core/personal_scope``
+    from the task's cfg — the interactive report route leaves it unset → the
+    resolver defaults True (owner keeps the transfer moat); every headless
+    cfg-builder stamps ``paperInsightPersonalContext=False`` so a BYO caller's
+    analysis never gets the operator's library/memories.
+    """
+    from .insight_engine import insight_enabled, run_report_insight
+    from .review import is_review_lang
+
+    if not insight_enabled():
+        return
+    if is_review_lang(task.get('lang') or ''):
+        return
+    if not (report_md or '').strip():
+        return
+
+    from lib.agent_core.personal_scope import resolve_paper_insight_personal_context
+    allow_personal = resolve_paper_insight_personal_context(task.get('config'))
+
+    abort_event = task.get('abort_event')
+
+    def _abort():
+        return bool(abort_event and abort_event.is_set())
+
+    def _on_tool_event(ev):
+        # Forward the insight research tool_start/tool_done into the SAME event
+        # log the report uses, tagged so the frontend routes them to the insight
+        # affordance rather than the report's tool panel.
+        ev = dict(ev)
+        ev['insight'] = True
+        _append_report_event(task, ev)
+
+    _append_report_event(task, {'type': 'insight_start', 'paperHash': phash})
+    logger.info('[Paper:Insight] Starting gated second-pass — hash=%s ui_lang=%s '
+                'personal_ctx=%s', phash, ui_lang, allow_personal)
+
+    result = run_report_insight(
+        truncated_paper, report_md, ui_lang, phash=phash, model=model,
+        abort=_abort, on_tool_event=_on_tool_event,
+        allow_personal_context=allow_personal)
+
+    if result.get('markdown') and result.get('insight'):
+        task['insight_text'] = result['markdown']
+        _append_report_event(task, {
+            'type': 'insight', 'paperHash': phash,
+            'insight': result['markdown'],
+            'lang': ui_lang,
+            'baseline': result.get('baseline'),
+            'grounded': result.get('grounded', 0),
+            'selfref': result.get('selfref', 0),
+        })
+        logger.info('[Paper:Insight] Emitted insight — hash=%s fired=%s baseline=%s '
+                    '%d chars', phash, result['fired'], result.get('baseline'),
+                    len(result['markdown']))
+    else:
+        _append_report_event(task, {
+            'type': 'insight_skipped', 'paperHash': phash,
+            'fired': result.get('fired', False),
+            'baseline': result.get('baseline'),
+            'llmError': result.get('llmError', False),
+        })
+        logger.info('[Paper:Insight] No insight surfaced — hash=%s fired=%s baseline=%s',
+                    phash, result.get('fired'), result.get('baseline'))
+
+
+def _maybe_run_termfill(task, phash, ui_lang, report_md, report_meta, *, model):
+    """Run the gated definition-backfill second pass (best-effort, additive).
+
+    Skips unless ``TOFU_PAPER_TERMFILL`` is on, this is a plain report (never
+    Review Mode), and the terminology audit actually flagged a gap
+    (``report_meta['terminologyAudit']`` present). Generates a gap-closing
+    glossary addendum (pure body context, re-audit gated), persists it under the
+    SEPARATE ``termfill:<ui>`` key, and emits a ``termfill`` event carrying the
+    addendum so the live reader sees the added definitions and the frontend can
+    downgrade the warning card. The primary persisted report body is untouched
+    (byte-identical whether this runs or not) — mirrors the insight pass.
+    """
+    from lib.agent_core.personal_scope import resolve_paper_termfill_enabled
+
+    from .review import is_review_lang
+    from .terminology_backfill import run_report_termfill, termfill_globally_disabled
+
+    # Fleet-wide kill switch first, then the per-request gate (interactive ON,
+    # headless opt-in — resolved from task['config'] via the personal-scope
+    # registry, the same seam the insight pass uses).
+    if termfill_globally_disabled():
+        return
+    if not resolve_paper_termfill_enabled(task.get('config')):
+        return
+    if is_review_lang(task.get('lang') or ''):
+        return
+    audit = (report_meta or {}).get('terminologyAudit')
+    if not audit:
+        return
+    if not (report_md or '').strip():
+        return
+
+    logger.info('[Paper:TermFill] Starting gated backfill — hash=%s ui_lang=%s '
+                'gaps=%s', phash, ui_lang, audit.get('counts'))
+    result = run_report_termfill(report_md, ui_lang, phash=phash, model=model,
+                                 audit=audit)
+    if result.get('markdown') and result.get('closed'):
+        task['termfill_text'] = result['markdown']
+        _append_report_event(task, {
+            'type': 'termfill', 'paperHash': phash,
+            'addendum': result['markdown'], 'lang': ui_lang,
+        })
+        logger.info('[Paper:TermFill] Emitted addendum — hash=%s %d chars',
+                    phash, len(result['markdown']))
+    else:
+        _append_report_event(task, {'type': 'termfill_skipped', 'paperHash': phash})
+        logger.info('[Paper:TermFill] No gap-closing addendum surfaced — hash=%s', phash)
+
+
 def _run_report_task(task, messages, images):
     """Background worker: runs the tool loop and populates task events.
 
@@ -88,11 +212,13 @@ def _run_report_task(task, messages, images):
     # composite cache key (``review:<venue>:<uilang>``), so the route stamps
     # the decoded UI language on the task; fall back to `lang` when absent.
     inj_lang = task.get('ui_lang') or lang
-    # Review Mode (composite lang key ``review:<venue>:<uilang>``) suppresses
-    # the figure appendix — a peer review must not be padded with every
-    # extracted figure; only figures the reviewer actually cites land inline.
+    # Review Mode (composite lang key ``review:<venue>:<uilang>``) is TEXT-ONLY:
+    # a peer review is a decision document, not an illustrated explainer, so no
+    # figures are injected AND any image the model emitted itself is stripped.
     from .review import is_review_lang
-    inj_appendix = not is_review_lang(lang)
+    _is_review = is_review_lang(lang)
+    inj_appendix = not _is_review
+    inj_allow_images = not _is_review
     model = task['model']
     abort_event = task['abort_event']
 
@@ -407,17 +533,25 @@ def _run_report_task(task, messages, images):
         # persistence) so the enriched body, DB row, and `done` event all carry
         # smart quotes. Math ($...$ primes), code, and URLs are preserved.
         if is_review_lang(lang):
-            from .review import smarten_quotes
+            from .review import finalize_review_body, smarten_quotes, strip_slop_dashes
             _pre = full_content
-            full_content = smarten_quotes(full_content)
+            # Educate quotes + de-slop dashes, THEN make the body submittable:
+            # strip any leaked table / dangling-* caption artifact and relocate
+            # the venue scorecard below the non-submittable separator so the
+            # review text a human pastes carries no scores. Deterministic belt —
+            # the prompt asks for the same shape, but LLMs ignore format rules
+            # (see paper-report-image-injection), so the guarantee lives here.
+            full_content = finalize_review_body(
+                strip_slop_dashes(smarten_quotes(full_content)), inj_lang)
             if full_content != _pre:
                 task['full_text'] = full_content
-                logger.info('[Paper:Review] Task %s — educated straight quotes to '
-                            'smart quotes', task['task_id'])
+                logger.info('[Paper:Review] Task %s — educated quotes, removed slop '
+                            'dashes, and finalized submittable body', task['task_id'])
 
-        # Inject figures/tables into the report
+        # Inject figures/tables into the report (text-only for reviews)
         enriched = _inject_images_into_report(full_content, images, lang=inj_lang,
-                                              appendix=inj_appendix)
+                                              appendix=inj_appendix,
+                                              allow_images=inj_allow_images)
         task['enriched_text'] = enriched
 
         # ── Build the "finish tag" meta (model + token usage + cost) ──
@@ -442,6 +576,25 @@ def _run_report_task(task, messages, images):
                 report_meta['citationAudit'] = _audit
         except Exception as e:
             logger.warning('[Paper:Report] Citation audit failed (non-fatal): %s', e)
+
+        # ── Terminology self-containment audit (best-effort, zero-LLM) ──
+        # The report is a single forward pass with the glossary written EARLY,
+        # so it forecasts terms rather than indexing them: acronyms used later
+        # can lack a glossary row, and a glossary definition can lean on an
+        # undefined sibling term. This gate runs over the COMPLETE body (no
+        # forward blindness) and attaches an "undefined terms" card ONLY when a
+        # real gap is found. Skipped for Review Mode (a decision document, not a
+        # glossaried explainer). Wrapped: a failure must never break the report,
+        # and — like the citation audit — it only touches meta, never the body,
+        # so the double-render / terminal-round logic above is untouched.
+        if not _is_review:
+            try:
+                from lib.paper.terminology_audit import build_terminology_audit
+                _term_audit = build_terminology_audit(enriched or full_content)
+                if _term_audit:
+                    report_meta['terminologyAudit'] = _term_audit
+            except Exception as e:
+                logger.warning('[Paper:Report] Terminology audit failed (non-fatal): %s', e)
 
         task['report_meta'] = report_meta
         meta_json = json.dumps(report_meta, ensure_ascii=False)
@@ -488,6 +641,36 @@ def _run_report_task(task, messages, images):
         _append_report_event(task, {'type': 'done', 'report': enriched or full_content,
                                     'paperHash': phash, 'meta': report_meta,
                                     'resolvedTitle': resolved_title})
+
+        # ── Insight second-pass (opt-in, gated, non-destructive) ──
+        # After the fidelity report is DONE + persisted, optionally run the
+        # insight pass: score the report, and only if its own insight baseline
+        # has headroom (<= INSIGHT_GATE_THRESHOLD) generate a grounded
+        # synthesis/transfer section and persist it under the SEPARATE
+        # ``insight:<ui>`` key (never overwrites the report). Flag-gated OFF by
+        # default; skipped for Review Mode. Fully wrapped — a failure here must
+        # NEVER taint the already-emitted `done`/persisted report.
+        try:
+            _maybe_run_insight(task, phash, inj_lang, enriched or full_content,
+                               truncated_paper=(messages[1]['content'] if len(messages) > 1 else ''),
+                               model=report_model)
+        except Exception as e:
+            logger.warning('[Paper:Insight] second-pass wrapper failed (non-fatal) '
+                           'hash=%s: %s', phash, e, exc_info=True)
+
+        # ── Definition-backfill second-pass (opt-in, gated, non-destructive) ──
+        # After `done` + persist, optionally CURE the glossary gaps the
+        # terminology audit flagged: generate gap-closing definitions (pure body
+        # context) and append them under the SEPARATE ``termfill:<ui>`` key,
+        # kept ONLY if a re-audit proves the gap set shrank. Flag-gated OFF;
+        # skipped for Review Mode. Fully wrapped — a failure here must NEVER
+        # taint the already-emitted `done`/persisted report.
+        try:
+            _maybe_run_termfill(task, phash, inj_lang, enriched or full_content,
+                                report_meta, model=report_model)
+        except Exception as e:
+            logger.warning('[Paper:TermFill] second-pass wrapper failed (non-fatal) '
+                           'hash=%s: %s', phash, e, exc_info=True)
 
     except AbortedError:
         # Raised by the dispatcher when an abort is detected between stream

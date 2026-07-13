@@ -568,6 +568,30 @@ async function restartServer(opts) {
   setTimeout(function () { _restartPoll = setInterval(_restartCheckHealth, 1500); }, 2500);
 }
 
+/** Manual graceful shutdown — writes the manual-shutdown marker so the next
+ *  boot won't mistake this for an OS kill, then stops the server (no re-exec,
+ *  so it does NOT come back on its own). Admin-only; always confirms. */
+async function shutdownServer() {
+  if (_restartActive) return;   // a restart already owns the modal body
+  if (!await showConfirm(t('update.shutdownConfirm'), { danger: true })) return;
+  const rBtn = document.getElementById('updateRestartNowBtn');
+  const sBtn = document.getElementById('updateShutdownBtn');
+  if (rBtn) rBtn.disabled = true;
+  if (sBtn) { sBtn.disabled = true; }
+  try {
+    await Api.update.shutdown();
+  } catch (e) {
+    if (typeof debugLog === 'function') debugLog('[Shutdown] request failed: ' + (e && e.message), 'warning');
+  }
+  const body = document.getElementById('updateModalBody');
+  if (body) {
+    body.innerHTML =
+      '<div class="upd-checking-wrap"><span>' +
+      escapeHtml(t('update.shuttingDown')) + '</span></div>';
+  }
+  showToast('◐', t('update.shuttingDown'), t('update.shutdownHint'), 8000);
+}
+
 /** One health probe; on success finish, on overall timeout bail. */
 async function _restartCheckHealth() {
   if (_restartDone) return;

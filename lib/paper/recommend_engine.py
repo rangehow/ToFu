@@ -58,6 +58,17 @@ _GROUND_SEARCH_DEPTH = 5
 # verify a venue/award claim — but bounded so the describe box stays snappy.
 _MAX_RECOMMEND_TOOL_ROUNDS = 5
 
+# The interpretation agent researches KNOWN-TITLE papers, so its web_search
+# calls are forced onto the academic vertical (arXiv + Semantic Scholar JSON
+# APIs). Those APIs have their OWN uptime, independent of the Brave/Bing/DDG/
+# SearXNG HTML fleet and its per-engine circuit breakers — so a title lookup
+# still resolves during a window where every HTML engine is down/breaker-open.
+# The vertical runs CONCURRENTLY WITH and ADDITIVE TO the HTML pipeline (see
+# handlers/search.py::_web_search_one), so this widens coverage without losing
+# the web engines. We force it in code rather than trusting the model to pick
+# it — the ACL-26 "no results" trace was exactly the model NOT choosing it.
+_RESEARCH_VERTICAL = 'academic'
+
 # Tokens too generic to count toward a title-match (a lone "models" / "learning"
 # overlap must not ground an unrelated paper).
 _STOPWORDS = frozenset({
@@ -77,10 +88,15 @@ _RECOMMEND_SYSTEM = (
     "right now or already past, and the papers they mean may have been posted "
     "very recently. Use the provided tools to find the ACTUAL current papers:\n"
     "  1. web_search — search arXiv and the web for the topic/venue/award the "
-    "user describes. Prefer ``vertical='academic'`` for paper topics, and pass "
+    "user describes; the app already routes these to arXiv/Semantic Scholar for "
+    "you, so just pass plain search terms. Pass "
     "``freshness='month'``/``'year'`` when the user implies recency. Run a few "
     "targeted queries (e.g. the topic + the venue+year, and the specific "
-    "award/track if one is claimed).\n"
+    "award/track if one is claimed). When searching for a KNOWN or suspected "
+    "title, type the title words UNQUOTED — do NOT wrap it in exact-phrase "
+    "quotes (\"...\"). A quoted full-title phrase is brittle and often returns "
+    "zero when a search engine is busy; unquoted title tokens have far higher "
+    "recall, and the app grounds the real paper by title anyway.\n"
     "  2. fetch_url — open the most promising results (an arXiv listing, an "
     "awards page, a paper's abs page) to confirm titles, arXiv IDs, and any "
     "venue/award claim BEFORE you commit to it. Never assert an award/venue you "
@@ -355,7 +371,8 @@ def _research_and_interpret(description, max_results, *, abort=None, on_tool_eve
 
         tool_t0 = time.time()
         result, display_results, search_diag, engine_breakdown, verticals = _execute_report_tool(
-            fn_name, fn_args_raw, user_question=user_question, abort=abort_signal.is_set)
+            fn_name, fn_args_raw, user_question=user_question, abort=abort_signal.is_set,
+            force_vertical=_RESEARCH_VERTICAL)
         tool_elapsed = time.time() - tool_t0
         logger.info('[Paper:Recommend:Tool] %s → %d chars in %.1fs',
                     fn_name, len(result), tool_elapsed)

@@ -265,10 +265,20 @@ def sync_search_config():
     # and stays parity with the other knobs (default on = try proxied↔direct).
     proxy_dual_attempt = _env_bool('TOFU_SEARCH_PROXY_DUAL_ATTEMPT', True)
 
+    # ── Wall-clock deadlines (tofu-search >=0.5) ──
+    # configure() auto-reads these from env too, but pass them explicitly so the
+    # effective values are visible in the log line below and stay tunable from
+    # chatui. Safe defaults match the library (45s whole-call / 25s per-URL);
+    # 0 restores the legacy unbounded behaviour.
+    search_deadline_secs = int(os.environ.get('TOFU_SEARCH_DEADLINE_SECS', '45'))
+    fetch_url_deadline_secs = int(os.environ.get('TOFU_SEARCH_FETCH_URL_DEADLINE_SECS', '25'))
+
     tofu_search.configure(
         llm_function=_chatui_llm,
         fetch_top_n=_lib.FETCH_TOP_N,
         fetch_timeout=_lib.FETCH_TIMEOUT,
+        search_deadline_secs=search_deadline_secs,
+        fetch_url_deadline_secs=fetch_url_deadline_secs,
         fetch_max_chars_search=_lib.FETCH_MAX_CHARS_SEARCH,
         fetch_max_chars_direct=_lib.FETCH_MAX_CHARS_DIRECT,
         fetch_max_chars_pdf=_lib.FETCH_MAX_CHARS_PDF,
@@ -284,9 +294,11 @@ def sync_search_config():
         prefetch_gate_min_fetch=prefetch_gate_min_fetch,
     )
     logger.info('[Bridge] tofu-search config synced: top_n=%d timeout=%ds '
+                'deadline(call=%ds url=%ds) '
                 'max_chars(search=%d direct=%d pdf=%d) filter=%s model=%r proxy=%s '
                 'dual_attempt=%s prefetch_gate=%s(terms>=%d,floor=%d)',
                 _lib.FETCH_TOP_N, _lib.FETCH_TIMEOUT,
+                search_deadline_secs, fetch_url_deadline_secs,
                 _lib.FETCH_MAX_CHARS_SEARCH, _lib.FETCH_MAX_CHARS_DIRECT,
                 _lib.FETCH_MAX_CHARS_PDF,
                 'on' if filter_enabled else 'off',

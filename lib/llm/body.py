@@ -39,10 +39,22 @@ from lib.model_info import (
 
 logger = get_logger(__name__)
 
-# ── Claude image dimension limits ──
-_CLAUDE_SINGLE_IMAGE_MAX_PX = 7999
-_CLAUDE_MANY_IMAGE_MAX_PX = 1999
-_CLAUDE_MANY_IMAGE_THRESHOLD = 5
+# ── Claude image dimension cap ──
+# Claude's vision tower internally downscales EVERY image to a ~1568px long
+# edge (~1.15 MP) before tokenization — https://docs.claude.com/en/docs/
+# build-with-claude/vision — so anything larger conveys the SAME information
+# to the model while wasting wire bytes. A single uniform cap at 1568px:
+#   • is well under BOTH hard-reject limits (8000px single / 2000px many-image),
+#     so neither HTTP 400 can ever fire;
+#   • loses NO quality (the model never sees more than 1568px anyway);
+#   • is COUNT-INDEPENDENT, which removes the retroactive re-encode cliff the
+#     old two-tier design hit: previously an image rode at up to 7999px until
+#     the 5th image arrived, then ALL images were retro-shrunk to 1999px on
+#     that round → a guaranteed prompt-cache miss (and, in image-gen chats
+#     that cross 5 images fast, per-round churn). At a fixed cap an image is
+#     shrunk at most ONCE and then skipped by the idempotent size check
+#     forever, regardless of how many images accumulate.
+_CLAUDE_IMAGE_MAX_PX = 1568
 
 # Plain-prefix magics for the formats whose signature is a fixed head.
 # WebP is deliberately NOT here: its magic is a RIFF container whose 4-byte
@@ -258,31 +270,10 @@ def _downscale_oversized_images(messages: list, model: str) -> None:
             if isinstance(block, dict) and block.get('type') == 'image_url':
                 total_images += 1
 
-    max_px = (_CLAUDE_MANY_IMAGE_MAX_PX if total_images >= _CLAUDE_MANY_IMAGE_THRESHOLD
-              else _CLAUDE_SINGLE_IMAGE_MAX_PX)
-
-    # ── Cache-awareness note (2026-07) ──
-    # Crossing _CLAUDE_MANY_IMAGE_THRESHOLD drops max_px 7999 → 1999, which
-    # RETROACTIVELY re-encodes images already sent (and cached) at 7999px on a
-    # prior round — a guaranteed prompt-cache miss on the round the Nth image
-    # arrives. This is NOT avoidable by keeping the larger size: Anthropic
-    # HARD-REJECTS a >2000px image in a many-image (≥N) request with HTTP 400
-    # ("image dimensions exceed max allowed size for many-images requests:
-    # 2000 pixels"), so the shrink is a correctness requirement, not a tunable.
-    # We therefore keep the shrink but log it at WARNING so the resulting cache
-    # miss is ATTRIBUTABLE (greppable) instead of being laundered into the
-    # "stochastic server-side miss" bucket — the wire fingerprint
-    # (lib/tasks_pkg/wire_fingerprint.py) already names the changed image block
-    # as the culprit; this log ties that culprit to its root cause. The resize
-    # is idempotent: an image already at/under max_px is skipped, so once the
-    # threshold is crossed the per-round churn stops.
-    if total_images >= _CLAUDE_MANY_IMAGE_THRESHOLD:
-        logger.warning(
-            '[ImageDownscale] many-image request (%d ≥ %d images) → max_px '
-            'capped at %d; any image previously sent larger will be re-encoded '
-            'this round (a one-time, API-mandated prompt-cache miss — '
-            'attributable, not stochastic-server).',
-            total_images, _CLAUDE_MANY_IMAGE_THRESHOLD, _CLAUDE_MANY_IMAGE_MAX_PX)
+    # Uniform cap — count-independent (see _CLAUDE_IMAGE_MAX_PX rationale). An
+    # image already at/under the cap is skipped, so the resize is idempotent
+    # and a fixed-size image is never re-encoded across rounds → no cache churn.
+    max_px = _CLAUDE_IMAGE_MAX_PX
 
     _resized = 0
     for msg in messages:

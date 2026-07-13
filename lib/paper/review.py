@@ -219,6 +219,31 @@ Each score MUST cite the specific evidence above that forces it.""",
 
 每个分数都**必须**引用上文的具体证据来支撑。""",
     },
+    'nlpcc': {
+        'name': 'NLPCC',
+        'label_en': 'NLPCC (CCF International Conference on Natural Language Processing and Chinese Computing, Springer LNAI, double-blind)',
+        'label_zh': 'NLPCC（CCF 国际自然语言处理与中文计算会议，Springer LNAI，双盲评审）',
+        'scorecard_en': """\
+## Quantitative Scores (use NLPCC's review-form scales — give a number AND a one-line justification grounded in your analysis above)
+- **Soundness / Substance**: 1–5 (1 = claims unsupported / methodology flawed; 3 = acceptable, main claims supported; 5 = thorough, all claims well supported).
+- **Novelty / Originality**: 1–5 (1 = little new over prior NLP/CC work; 3 = a solid incremental contribution; 5 = clearly novel, opens a direction).
+- **Clarity**: 1–5 (1 = hard to follow; 3 = readable with effort; 5 = well written and well organized).
+- **Meaningful Comparison / Related Work**: 1–5 (1 = misses key baselines/prior work; 3 = adequate; 5 = thoroughly situated and fairly compared).
+- **Overall Rating**: 1–6 (1 = clear reject; 2 = reject; 3 = weak reject / borderline; 4 = weak accept / borderline; 5 = accept, good paper; 6 = strong accept, award-quality).
+- **Confidence**: 1–5 (5 = you know the area well and checked the details; 3 = fairly confident; 1 = educated guess / outside your expertise).
+
+Each score MUST cite the specific evidence above that forces it — a number with no justification is unacceptable.""",
+        'scorecard_zh': """\
+## 量化评分（使用 NLPCC 评审表的量表——每项都给出分数 **并** 一句话理由，理由必须挂钩上文你的分析）
+- **Soundness / Substance（可靠性/实质性）**：1–5（1=主张缺乏支撑/方法有缺陷；3=可接受，主要主张有支撑；5=充分，所有主张都得到很好支撑）。
+- **Novelty / Originality（新颖性/原创性）**：1–5（1=相较已有 NLP/CC 工作创新甚少；3=扎实的增量贡献；5=明显新颖，开辟一个方向）。
+- **Clarity（清晰度）**：1–5（1=难以读懂；3=花力气可读；5=行文与结构俱佳）。
+- **Meaningful Comparison / Related Work（有意义的对比/相关工作）**：1–5（1=遗漏关键基线/在先工作；3=尚可；5=定位充分、对比公允）。
+- **Overall Rating（总评分）**：1–6（1=明确拒稿；2=拒稿；3=弱拒/边缘；4=弱接收/边缘；5=接收，好论文；6=强接收，最佳论文级）。
+- **Confidence（置信度）**：1–5（5=熟悉该领域并核对了细节；3=较有把握；1=有依据的猜测/超出我的专长）。
+
+每个分数都**必须**引用上文的具体证据来支撑——只有数字没有理由不可接受。""",
+    },
     # ── Generic fallback ──
     'generic': {
         'name': 'Top-tier (generic)',
@@ -378,6 +403,286 @@ def smarten_quotes(text: str) -> str:
     return ''.join(out)
 
 
+# ── Typography: remove slop dashes ──────────────────────────────────────
+# The em-dash used as a sentence separator (``novel — it improves X``) is the
+# single most recognizable LLM-slop tell. A review must not use it; we rewrite
+# it deterministically to a comma on the final body, the same way quotes are
+# educated. Which dashes are "slop" vs. legitimate typography:
+#   • em-dash U+2014 / horizontal-bar U+2015 / double em-dash ``——`` — ALWAYS a
+#     prose separator → comma (fullwidth ``，`` in a CJK context, ASCII ``, ``
+#     otherwise).
+#   • en-dash U+2013 — ONLY slop when it is NOT a numeric range. ``1–10`` /
+#     ``2–4`` are real ranges (kept); ``method – result`` (letters/space around
+#     it) is a separator (→ comma).
+#   • ASCII hyphen-minus ``-`` is NEVER touched: it is a hyphen (``well-motivated``),
+#     a markdown bullet (``- x``), or a horizontal rule (``---``).
+# Protected spans (math/code/URLs) are masked exactly as smarten_quotes does.
+_CJK_RE = _re.compile(r'[\u3000-\u9fff\uff00-\uffef]')
+
+# An em-dash (optionally doubled) with optional surrounding whitespace.
+_EMDASH_RE = _re.compile(r'\s*[\u2014\u2015]+\s*')
+# An en-dash that is a SEPARATOR: not flanked on BOTH sides by digits. We match
+# an en-dash whose immediate neighbours are not both a digit.
+_ENDASH_SEP_RE = _re.compile(r'(?<!\d)\s*\u2013\s*|\s*\u2013\s*(?!\d)')
+
+
+def _deslop_segment(text: str) -> str:
+    """Rewrite slop dashes to commas in a plain-text segment."""
+    if '\u2014' not in text and '\u2015' not in text and '\u2013' not in text:
+        return text
+
+    def _comma_for(match: '_re.Match') -> str:
+        # Fullwidth comma when the character just before the dash run is CJK, so
+        # a Chinese review never gets a stray ASCII comma; else ``, ``.
+        start = match.start()
+        prev = text[start - 1] if start > 0 else ''
+        return '\uff0c' if _CJK_RE.match(prev) else ', '
+
+    text = _EMDASH_RE.sub(_comma_for, text)
+
+    # En-dash: only a separator (not a numeric range) becomes a comma. Replace
+    # occurrences where at least one side is a non-digit.
+    def _endash_sub(m: '_re.Match') -> str:
+        s, e = m.start(), m.end()
+        before = text[s - 1] if s > 0 else ''
+        after = text[e] if e < len(text) else ''
+        # Numeric range on BOTH sides → keep verbatim.
+        stripped = m.group(0).strip()
+        if before.isdigit() and after.isdigit() and stripped == '\u2013':
+            return m.group(0)
+        return '\uff0c' if _CJK_RE.match(before) else ', '
+
+    text = _re.sub(r'\s*\u2013\s*', _endash_sub, text)
+    return text
+
+
+def strip_slop_dashes(text: str) -> str:
+    """Rewrite LLM-slop dashes (em-dash / separator en-dash) to commas.
+
+    Applies ONLY to prose. Numeric en-dash ranges (``1–10``), ASCII hyphens
+    (``well-motivated``, markdown ``---`` / ``- ``), and syntax spans — KaTeX
+    math, inline/fenced code, URLs — are preserved verbatim.
+
+    Args:
+        text: The Markdown review body.
+
+    Returns:
+        The same text with prose slop dashes turned into commas; protected
+        spans and legitimate ranges/hyphens unchanged.
+    """
+    if not text or ('\u2014' not in text and '\u2015' not in text
+                    and '\u2013' not in text):
+        return text or ''
+    out = []
+    last = 0
+    for m in _PROTECT_RE.finditer(text):
+        out.append(_deslop_segment(text[last:m.start()]))
+        out.append(m.group(0))
+        last = m.end()
+    out.append(_deslop_segment(text[last:]))
+    return ''.join(out)
+
+
+# ── Submittable-copy finalization ──────────────────────────────────────
+# A peer review must be pasteable straight into the venue's review box: the
+# body is 100% prose, and the venue-calibrated SCORES (entered via the form's
+# UI fields, not the free-text box) are moved BELOW an obviously-non-submittable
+# separator so the reviewer transcribes them into those fields. This is the
+# deterministic "belt" that guarantees a clean copy REGARDLESS of what the model
+# emits — the prompt asks for the same shape, but the logged lesson
+# (``paper-report-image-injection``: LLMs universally ignore manifest/format
+# instructions) is exactly why the guarantee cannot live in the prompt alone.
+#
+# Three cleanups, all applied to the FINAL review body (backend is the source of
+# truth), all skipping protected spans (KaTeX math, inline/fenced code, URLs) so
+# a table or ``*`` shown INSIDE code is prose, not a rendered artifact:
+#   1. strip Markdown pipe tables + HTML <table>/<figure>-style blocks;
+#   2. collapse dangling/unpaired ``*`` emphasis left by degraded image captions
+#      (the ``…Howe*`` / ``…discrepancy.*`` artifact);
+#   3. relocate the scorecard section (its ``## Quantitative Scores`` / venue
+#      heading and everything after) below the separator.
+
+_SCORECARD_SEPARATOR_EN = '--- FOR THE REVIEW FORM (do not paste into the review text) ---'
+_SCORECARD_SEPARATOR_ZH = '--- 供评审表单填写（请勿粘贴进评审正文） ---'
+
+# Headings that begin the quantitative-scores block, in either language. The
+# scorecards all open with a level-2 heading whose text contains one of these.
+_SCORE_HEADING_RE = _re.compile(
+    r'^[ \t]{0,3}#{1,6}[ \t]+.*(?:Quantitative Scores|Overall Recommendation'
+    r'|量化评分|总体推荐)\b.*$',
+    _re.IGNORECASE | _re.MULTILINE)
+
+# A Markdown pipe-table row: a line that both starts and ends (bar trailing
+# space) with ``|``, i.e. a genuine table row, not a lone inline ``|``.
+_MD_TABLE_ROW_RE = _re.compile(r'^[ \t]{0,3}\|.*\|[ \t]*$')
+# A Markdown table delimiter row: ``| --- | :--: |`` etc.
+_MD_TABLE_DELIM_RE = _re.compile(r'^[ \t]{0,3}\|?[ \t]*:?-{2,}:?[ \t]*(?:\|[ \t]*:?-{2,}:?[ \t]*)+\|?[ \t]*$')
+
+
+def _strip_md_tables(text: str) -> str:
+    """Remove Markdown pipe-table blocks + raw HTML table/figure wrappers.
+
+    A run of two or more consecutive pipe rows (a header + delimiter, or any
+    multi-row table) is dropped whole; a lone line with a single inline ``|`` is
+    left alone. Raw ``<table>…</table>`` and ``<figure>…</figure>`` blocks are
+    removed with their inner cells (any prose caption between the tags is kept as
+    plain text by the tag neutralizer that follows). Operates on a
+    protected-span-masked string, so tables inside code fences are untouched.
+    """
+    if not text:
+        return text or ''
+    # 1) HTML table / figure blocks → drop the whole element (keep inner text).
+    #    Non-greedy so multiple blocks are handled independently.
+    def _drop_html_block(tag):
+        nonlocal text
+        text = _re.sub(rf'<{tag}\b[^>]*>.*?</{tag}>', '', text,
+                       flags=_re.IGNORECASE | _re.DOTALL)
+    for _tag in ('table', 'figure'):
+        _drop_html_block(_tag)
+
+    # 2) Markdown pipe tables: drop maximal runs of >=2 consecutive pipe rows.
+    lines = text.split('\n')
+    out, i, n = [], 0, len(lines)
+    while i < n:
+        if _MD_TABLE_ROW_RE.match(lines[i]) or _MD_TABLE_DELIM_RE.match(lines[i]):
+            j = i
+            while j < n and (_MD_TABLE_ROW_RE.match(lines[j])
+                             or _MD_TABLE_DELIM_RE.match(lines[j])):
+                j += 1
+            if j - i >= 2:          # a real table (>=2 rows) → drop it
+                i = j
+                continue
+        out.append(lines[i])
+        i += 1
+    return '\n'.join(out)
+
+
+def _collapse_dangling_emphasis(text: str) -> str:
+    """Remove unpaired ``*`` emphasis markers left by degraded image captions.
+
+    A stripped image embed becomes ``*alt*``; when the alt was truncated
+    mid-word the pair breaks and marked.js renders a literal trailing ``*``
+    (the ``…Howe*`` / ``…discrepancy.*`` artifact). We drop a ``*`` that is not
+    part of a balanced ``*...*`` / ``**...**`` pair on its line, and never touch
+    ``**`` bold runs that ARE balanced. Bullet markers (``* `` / ``- `` at line
+    start) and ``---`` rules are unaffected (only ``*`` glued to a word is
+    considered emphasis). Protected spans are handled by the caller.
+    """
+    if not text or '*' not in text:
+        return text or ''
+    result = []
+    for line in text.split('\n'):
+        # Leave list/HR lines and lines with no word-glued star untouched.
+        # An emphasis star touches a non-space on at least one side.
+        if '*' not in line:
+            result.append(line)
+            continue
+        # Count emphasis stars that are glued to a word char (skip a leading
+        # bullet ``* `` which is separated by a space).
+        # If the total run-count of ``*`` is odd, the line has a dangling one;
+        # drop trailing/leading stars that are adjacent to punctuation/word and
+        # have no partner. Simplest robust rule: if stars are unbalanced, remove
+        # any ``*`` immediately preceded by a word char / punctuation and not
+        # followed by a word char (a closing marker with no opener on the line).
+        stars = line.count('*')
+        if stars % 2 == 0:
+            result.append(line)
+            continue
+        # Unbalanced: strip a ``*`` that is glued to the char before it and sits
+        # at a word/sentence boundary (``Howe*`` → ``Howe``, ``discrepancy.*`` →
+        # ``discrepancy.``), leaving genuine paired emphasis alone.
+        fixed = _re.sub(r'(?<=[\w\u4e00-\u9fff.,;:!?)\]])\*(?![\w\u4e00-\u9fff])', '', line)
+        result.append(fixed)
+    return '\n'.join(result)
+
+
+def _split_scorecard(text: str):
+    """Split a review body into (prose_body, scorecard) at the scores heading.
+
+    Returns ``(body, scorecard)`` where ``scorecard`` is '' when the body has
+    no recognizable quantitative-scores section. The scorecard is everything
+    from the scores heading to the end of the document.
+    """
+    m = _SCORE_HEADING_RE.search(text)
+    if not m:
+        return text, ''
+    return text[:m.start()].rstrip(), text[m.start():].strip()
+
+
+def scorecard_separator(ui_lang: str) -> str:
+    """The literal, non-submittable separator that precedes the scorecard.
+
+    Shared by ``finalize_review_body`` (which inserts it) and the prompt (which
+    asks the model to emit the scorecard after it), so the two never drift.
+    """
+    return _SCORECARD_SEPARATOR_ZH if ui_lang == 'zh' else _SCORECARD_SEPARATOR_EN
+
+
+def finalize_review_body(text: str, ui_lang: str) -> str:
+    """Make a review body directly submittable to a venue's review box.
+
+    Deterministically enforces (regardless of what the model emitted):
+      • the review body proper is pure prose — no Markdown/HTML tables, no
+        dangling ``*`` emphasis from degraded captions;
+      • the venue scorecard (entered via the form's UI fields) is relocated
+        below an explicit, obviously-non-submittable separator.
+
+    Idempotent: re-running a finalized body is a no-op (the scorecard is already
+    past the separator, so it is not re-extracted). Protected spans — KaTeX
+    math, inline/fenced code, URLs — are masked before cleanup and restored
+    verbatim, so a table or ``*`` shown inside code is preserved as prose.
+
+    Args:
+        text: The final review Markdown.
+        ui_lang: 'zh' or anything else (→ English separator).
+
+    Returns:
+        The finalized review Markdown (body, separator, then the scorecard),
+        or the input unchanged when it has no scorecard and no table/star to
+        clean. Never raises — a cleanup failure returns the original text.
+    """
+    if not text:
+        return text or ''
+    sep = scorecard_separator(ui_lang)
+    try:
+        # If already finalized, split only the prose part; keep the footer.
+        existing_body, _, existing_footer = text.partition(sep)
+        target = existing_body if existing_footer else text
+
+        # Mask protected spans so tables/stars inside code/math/URLs are safe.
+        protected: list[str] = []
+
+        def _mask(m):
+            protected.append(m.group(0))
+            return f'\x00{len(protected) - 1}\x00'
+
+        masked = _PROTECT_RE.sub(_mask, target)
+
+        # Peel off the scorecard BEFORE table-strip so a pipe-formatted
+        # scorecard is relocated, not deleted.
+        body, scorecard = _split_scorecard(masked)
+        body = _strip_md_tables(body)
+        body = _collapse_dangling_emphasis(body)
+
+        def _unmask(s):
+            return _re.sub(r'\x00(\d+)\x00', lambda m: protected[int(m.group(1))], s)
+        body = _unmask(body).rstrip()
+        scorecard = _unmask(scorecard).strip()
+
+        if existing_footer:
+            # Re-attach the pre-existing footer (plus any newly-found scorecard,
+            # though a finalized body should have none above the line).
+            footer = (scorecard + '\n\n' if scorecard else '') + existing_footer.strip()
+            return f'{body}\n\n{sep}\n\n{footer.strip()}\n'
+        if not scorecard:
+            return f'{body}\n' if body != target.rstrip() else text
+        return f'{body}\n\n{sep}\n\n{scorecard}\n'
+    except Exception as e:
+        logger.warning('[Paper:Review] finalize_review_body failed (returning original): %s',
+                       e, exc_info=True)
+        return text
+
+
 # ── Prompt templates ────────────────────────────────────────────────────
 # The reviewer-discipline preamble is the anti-"AI-slop" core: it is the same
 # in spirit as the report's quality bar but reframed for a peer review, and it
@@ -397,6 +702,8 @@ the authors know exactly what to fix and the AC can make a decision from it alon
 - **Summarize the paper ONCE, briefly.** Outside the Summary section you are FORBIDDEN from re-narrating what the paper does. Reviewers who re-describe the method in the Strengths/Weaknesses sections are wasting the AC's time.
 - **Weaknesses: precise, not numerous — find the REAL problems and the hidden flaws.** The worth of a review is a small number (typically 2–4) of decisive, well-argued weaknesses that actually bear on the accept/reject decision — an unsound claim, an unfair or under-tuned baseline, a confound the experiments never rule out, a gap between what is claimed and what is shown, the one missing ablation the central claim rests on. Do NOT pad to a quota with cosmetic nitpicks (typos, "more datasets would be nice", "the writing could be clearer"): burying a real problem under ten trivial ones is how an AC misses it. Rank strictly by decision-impact and cut the long tail. **Every weakness MUST be anchored to concrete evidence** — a specific table, figure, equation, section, or number (e.g. "Table 3's +1.2 F1 is within the ±0.9 std it reports, so the headline gain is not clearly significant"). A weakness with no anchor is deleted.
 - **Banned phrases.** Never write "significantly improves", "substantially better", "novel approach", "promising results", "comprehensive experiments", "the authors should" without a concrete what/where. Vague praise and vague criticism are equally useless. Replace "improves significantly" with the actual delta and the comparison point.
+- **Typography.** Never use the em-dash or en-dash as a sentence separator — write a comma, a period, or a colon instead (the en-dash is reserved for numeric ranges, e.g. a rating scale). Use curly quotes ("" '') for prose, never straight typewriter quotes.
+- **Be short and incisive.** This is a decision document, not an essay. Cut every sentence that does not change the accept/reject call or tell the authors what to fix. No summarizing your own review, no "in conclusion", no restating a point you already made. If a section is genuinely empty (e.g. no real strength), say so in one line rather than manufacturing filler.
 - **Reviewer questions must be ACTIONABLE.** Each question must be answerable by the authors with a specific experiment, ablation, clarification, or number — not a rhetorical musing. Bad: "Have the authors considered other settings?" Good: "What is the result on {{benchmark}} when the auxiliary loss weight λ in Eq. 4 is set to 0 — does the gain survive?"
 - **Rating and confidence MUST be justified.** A score with no one-line reason tied to the evidence above is unacceptable. Calibrate honestly: most papers are borderline; reserve the extremes.
 - **Distinguish what the paper claims from what it shows.** When a claim lacks supporting evidence, that belongs in Weaknesses — say which experiment would be needed.
@@ -405,7 +712,8 @@ the authors know exactly what to fix and the AC can make a decision from it alon
 
 ## 🧮 Formatting
 - Use KaTeX for ALL math: inline ``$...$``, display ``$$...$$``. Never wrap math in backticks (renders as gray code, not a formula).
-- You may embed a figure/table from the provided image manifest (below the paper text) with ``![caption](EXACT_URL_FROM_MANIFEST)`` when a specific visual is central to a point. Use the exact manifest URL; never invent one. If the manifest is empty, skip images.
+- **No images.** A review is a text-only decision document. Do NOT embed any figure, table image, or ``![...](...)`` — refer to the paper's figures/tables by number in prose (e.g. "Figure 3", "Table 1") instead.
+- **No tables, no charts, no score lists in the body.** The review a human pastes into the box is PROSE ONLY. Do NOT reproduce the paper's tables or draw new ones (no Markdown ``| … |`` tables, no HTML ``<table>``, no ASCII charts). Report results in a sentence ("Table 4 shows ERNIE and GPT outperform Llama and Qwen on BLEU/CHRF"), never by re-typing the artifact. Do NOT copy a figure/table caption verbatim.
 - Begin your output IMMEDIATELY with the first heading ``# Review``. No preamble, no "I'll review this", no transition sentences — the very first characters must be ``# Review``.
 
 ---
@@ -437,6 +745,10 @@ Lead each with **✅ Yes / ⚠️ Partial / ❌ No / ❔ Could not verify** then
 ## Related Work & Novelty Check (must use web_search — not just the paper's bibliography)
 2–4 sentences placing the paper against the actual literature: is the core idea novel, or did prior/concurrent work already do it (name it, with venue/year)? Has later work superseded it? Cite arXiv IDs/DOIs where possible.
 
+Everything ABOVE the following line is the review text the authors and AC read — it must be pasteable as-is, with no scores in it. The numeric scores go into the venue form's separate UI fields, so emit them ONLY below this exact line (it is NOT part of the review text, do not paste it):
+
+--- FOR THE REVIEW FORM (do not paste into the review text) ---
+
 {venue_scorecard}
 
 ---
@@ -459,6 +771,8 @@ _REVIEW_PROMPT_ZH = """\
 - **全文只在 Summary 里复述论文一次，且简短。** Summary 之外**禁止**再复述论文做了什么。在优点/缺点里重新描述方法，是在浪费 AC 的时间。
 - **缺点：宁精勿多——去找真问题和暗病。** 一份评审的价值，在于少数（通常 2–4 条）有决定性、论证扎实、真正影响接收/拒稿的缺点：一个站不住的主张、一个不公平或没调好的基线、实验从未排除的混淆因素、"声称"与"证明"之间的落差、核心主张所依赖却缺失的那个消融。**绝不**为了凑数堆砌表面瑕疵（错别字、"多几个数据集会更好"、"写作可以更清楚"）——把一个真问题埋在十个琐碎问题里，正是 AC 漏掉它的原因。严格按对决策的影响排序，砍掉长尾。**每一条缺点都必须锚定到具体证据**——某个具体的表/图/公式/小节/数字（例如"表 3 的 +1.2 F1 落在它自己报告的 ±0.9 标准差之内，因此这个头部增益并不显著"）。没有锚点的缺点一律删除。
 - **禁用措辞。** 绝不写"显著提升""大幅更优""新颖的方法""结果令人鼓舞""实验充分""作者应当……"却不给出具体的"改什么/在哪"。空泛的表扬和空泛的批评一样无用。把"显著提升"换成真实的提升幅度和对比参照点。
+- **标点。** 绝不用破折号（—、－）作句子分隔——改用逗号、句号或冒号（连接号 – 只用于数字区间，如评分量表）。中文一律用全角标点；引号用弯引号（""''），不用直引号。
+- **短而锋利。** 这是一份决策文书，不是文章。凡是不影响接收/拒稿判断、也不告诉作者"改什么"的句子，一律删。不要给自己的评审做小结，不要"综上所述"，不要重复已经说过的点。若某节确实为空（如没有真正的优点），用一句话说明即可，不要硬造凑数。
 - **给作者的问题必须可执行。** 每个问题都要能被作者用一个具体的实验、消融、澄清或数字回答——不是修辞式的空想。差："作者是否考虑过其他设置？"；好："当式(4)的辅助损失权重 λ 设为 0 时，在 {{benchmark}} 上的结果是多少——增益还在吗？"
 - **评分与置信度必须给理由。** 一个没有挂钩上文证据、没有一句话理由的分数不可接受。诚实校准：多数论文都在边缘，极端分要留着慎用。
 - **区分论文"声称"与"证明"了什么。** 当某个主张缺乏证据支撑时，它属于缺点——并说明需要哪个实验才能补上。
@@ -467,7 +781,8 @@ _REVIEW_PROMPT_ZH = """\
 
 ## 🧮 格式
 - 所有数学**必须**用 KaTeX：行内 ``$...$``，独立 ``$$...$$``。绝不用反引号包公式（会渲染成灰色代码而非公式）。
-- 当某张图/表对某个论点至关重要时，可用 ``![说明](清单中的精确URL)`` 嵌入"论文正文"下方图像清单里的图（URL 照抄，严禁臆造）。清单为空则不嵌图。
+- **不嵌图。** 评审是纯文本的决策文书。**禁止**嵌入任何图、表图片或 ``![...](...)``——需要引用时，在正文里用编号指代论文的图/表即可（如"图 3""表 1"）。
+- **正文不要使用表格、图表或评分清单。** 人要粘贴进评审框的正文**只有散文**。**禁止**复制论文的表格或另画表格（不要 Markdown ``| … |`` 表格、不要 HTML ``<table>``、不要 ASCII 图表）。用一句话陈述结果（"表 4 显示 ERNIE 与 GPT 在 BLEU/CHRF 上优于 Llama 与 Qwen"），绝不逐字重打那个表/图。也不要逐字抄录图/表的标题。
 - 输出**立即**以第一个标题 ``# 评审意见`` 开头。不要任何前言、不要"我来评审一下"、不要过渡句——最前面的字符必须是 ``# 评审意见``。
 
 ---
@@ -498,6 +813,10 @@ _REVIEW_PROMPT_ZH = """\
 
 ## 相关工作与新颖性核查（必须用 web_search——不能只看论文参考文献）
 2–4 句，把论文放到真实文献中定位：核心想法是否新颖，还是已有在先/同期工作做过（点名，附会议/年份）？之后是否已被后续工作超越？尽量给出 arXiv ID / DOI。
+
+以下这条分隔线**之上**的全部内容，才是作者与 AC 阅读、可以直接粘贴的评审正文——正文里不得出现任何分数。量化分数要填进评审表单的独立 UI 字段，因此**只在这条分隔线之下**给出（这条线本身不是评审正文，请勿粘贴）：
+
+--- 供评审表单填写（请勿粘贴进评审正文） ---
 
 {venue_scorecard}
 

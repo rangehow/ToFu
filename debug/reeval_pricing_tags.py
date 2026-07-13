@@ -35,7 +35,6 @@ from __future__ import annotations
 import argparse
 import ast
 import json
-import os
 import re
 import sys
 from pathlib import Path
@@ -47,7 +46,6 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from lib.llm_dispatch.config import (  # noqa: E402
-    DEFAULT_SLOT_CONFIGS,
     MANAGED_TIER_TAGS,
     get_pricing_tiers,
     reevaluate_pricing_tags,
@@ -70,7 +68,7 @@ _JSON_CAPS_RE = re.compile(
 
 def _canonical_caps_order(caps: set[str]) -> list[str]:
     """Return caps in the project's canonical display order."""
-    order = ['text', 'vision', 'thinking', 'cheap', 'image_gen', 'embedding']
+    order = ['text', 'vision', 'thinking', 'cheap', 'image_gen', 'embedding', 'transcription', 'audio_chat']
     ordered = [c for c in order if c in caps]
     extras = sorted(c for c in caps if c not in order)
     return ordered + extras
@@ -275,7 +273,7 @@ def _rewrite_default_slot_configs(dry_run: bool) -> int:
         if caps is None:
             return match.group(0)
         # Non-chat models: leave tier tags untouched.
-        if caps & {'image_gen', 'embedding'}:
+        if caps & {'image_gen', 'embedding', 'transcription', 'audio_chat'}:
             return match.group(0)
         cost_m = _COST_RE.search(body)
         cost_val = float(cost_m.group('v')) if cost_m else None
@@ -386,7 +384,7 @@ def _rewrite_settings_js(dry_run: bool) -> int:
         if caps is None:
             return match.group(0)
         # Non-chat entries: leave untouched.
-        if caps & {'image_gen', 'embedding'}:
+        if caps & {'image_gen', 'embedding', 'transcription', 'audio_chat'}:
             return match.group(0)
 
         desired_tiers = get_pricing_tiers(mid, fallback_cost_per_1k=cost_val)

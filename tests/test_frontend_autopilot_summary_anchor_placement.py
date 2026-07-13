@@ -107,6 +107,12 @@ check('nc_pattern_applied', _applied);
 
 (0, eval)(fs.readFileSync(process.argv[3], 'utf8'));  // escape_html.js
 (0, eval)(fs.readFileSync(process.argv[4], 'utf8'));  // safe_html.js
+// chat_render's report panel calls readTranslation() from core/translation_model.js
+// (a load-order dep guaranteed by _BUNDLE_FILES: translation_model precedes
+// chat_render). Eval it here so _apReportPanelHTML doesn't ReferenceError and
+// get swallowed by its non-fatal try/catch — mirrors the sibling autopilot
+// harnesses (test_frontend_autopilot_report_affordance.py).
+(0, eval)(fs.readFileSync(process.argv[3].replace('escape_html.js', 'translation_model.js'), 'utf8'));  // core/translation_model.js
 (0, eval)(chatSrc);                                   // chat_render.js (real / neutered)
 
 if (typeof _apSummaryPlacements !== 'function' || typeof _applyAutopilotSummaryPanels !== 'function') {

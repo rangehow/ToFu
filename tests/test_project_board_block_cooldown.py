@@ -77,6 +77,19 @@ def _clean(flask_app):
 
 
 @pytest.fixture(autouse=True)
+def _shared_tree_mode(monkeypatch):
+    """This suite exercises the SHARED-TREE (isolation=off) block-cooldown model:
+    a commit/land or ``[sibling] path=`` reason IS stamped as a cooldown. Under
+    worktree isolation that reason is declined at creation (block_task's guard),
+    so pin isolation OFF here regardless of the ambient TOFU_WORKTREE_ISOLATION
+    so these cooldown tests are deterministic. The isolation-on decline has its
+    own coverage (the block-guard decline tests)."""
+    monkeypatch.setattr(
+        'lib.conversations.project_worktree.is_isolation_enabled',
+        lambda: False)
+
+
+@pytest.fixture(autouse=True)
 def _stub_push(monkeypatch):
     monkeypatch.setattr('lib.agent_core.push.push_event', lambda *a, **k: None)
 
@@ -256,7 +269,7 @@ def test_blocked_lane_renders_reason_and_retry(flask_app):
         tid = post_task('/b/8', 'cA', 'Epic D scale-out')['id']
         block_task('/b/8', 'cA', tid, '[human-gated] §10 infra sign-off required')
         block = render_board_block('/b/8', current_conv_id='cR')
-    assert 'Blocked' in block
+    assert 'Waiting on an external gate' in block
     assert '[human-gated]' in block, 'the block reason (with class) must be shown'
     # the blocked epic must NOT appear in the plain "Open" lane (it would read as
     # "claim me" — the exact invisible-blocker defect).
@@ -278,8 +291,8 @@ def test_expired_cooldown_epic_returns_to_open_lane(flask_app):
     _set_blocked_until(flask_app, '/b/9', tid, 1)  # expire cooldown
     with flask_app.app_context():
         block = render_board_block('/b/9', current_conv_id='cR')
-    # no live cooldown → not in a Blocked lane
-    assert 'Blocked (' not in block
+    # no live cooldown → not in a waiting-on-gate lane
+    assert 'Waiting on an external gate' not in block
 
 
 # ════════════════════════════════════════════════════════════════════

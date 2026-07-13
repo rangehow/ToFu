@@ -101,6 +101,15 @@ win._isRoundSwarm = global._isRoundSwarm = (r) => !!(r && r._swarm);
 win.convAutoTranslate = global.convAutoTranslate = (c) =>
   (c && c.autoTranslate !== undefined) ? !!c.autoTranslate
     : (typeof autoTranslate !== 'undefined' && autoTranslate !== undefined ? !!autoTranslate : false);
+// finishStream now also consults the EFFECTIVE resolver (unification fix —
+// live global toggle wins when ON). Stub it mirroring core/conversations.js.
+win.convAutoTranslateEffective = global.convAutoTranslateEffective = (c) =>
+  (typeof autoTranslate !== 'undefined' && autoTranslate) ? true
+    : global.convAutoTranslate(c);
+// _startAutoTranslateForMsg is defined in stream_lifecycle.js; the effective-ON
+// branch calls it. This test keeps autoTranslate OFF so it never fires, but
+// stub it defensively so a future ON case can't hit an undefined ref.
+win._startAutoTranslateForMsg = global._startAutoTranslateForMsg = () => {};
 win._renderUnifiedToolLine = global._renderUnifiedToolLine = () => '<div class="ptool-line"></div>';
 win._buildSwarmPanelHTML = global._buildSwarmPanelHTML = () => '<div class="sw-panel"></div>';
 win._renderTurnHead = global._renderTurnHead = () => '';

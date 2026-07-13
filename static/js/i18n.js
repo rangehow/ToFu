@@ -21,6 +21,13 @@ var _i18n = {
   // ══════════════════════════════════════
   'sidebar.search': { zh: '搜索对话', en: 'Search conversations' },
   'sidebar.settings': { zh: '设置', en: 'Settings' },
+  // Sidebar search results (conversation_list.js::_renderSearchResults)
+  'sidebar.searchResults': { zh: '{n} 条结果', en: '{n} results' },
+  'sidebar.searchResult': { zh: '{n} 条结果', en: '{n} result' },
+  'sidebar.searching': { zh: '搜索中…', en: 'searching…' },
+  'sidebar.searchNoMatches': { zh: '未找到与“{q}”匹配的结果', en: 'No matches for "{q}"' },
+  'sidebar.searchRoleYou': { zh: '你', en: 'You' },
+  'sidebar.searchRoleAssistant': { zh: '助手', en: 'Claude' },
 
   // Topbar feature launchers (relocated from the sidebar header)
   'topbar.paper': { zh: '论文', en: 'Paper' },
@@ -30,6 +37,8 @@ var _i18n = {
   'topbar.studio': { zh: '编排', en: 'Studio' },
   'topbar.tasks': { zh: '任务', en: 'Tasks' },
   'topbar.timer': { zh: '活动计数', en: 'Active Counter' },
+  'settings.mobileClient': { zh: '手机客户端', en: 'Mobile client' },
+  'settings.mobileClientTitle': { zh: '下载 Tofu 手机客户端', en: 'Download the Tofu mobile app' },
   'net.title': { zh: '网络延迟', en: 'Network latency' },
   'net.offline': { zh: '离线', en: 'Offline' },
   'net.offlineDesc': { zh: '推送连接已断开，正在重连…', en: 'Push connection dropped, reconnecting…' },
@@ -38,6 +47,16 @@ var _i18n = {
   'net.state.good': { zh: '良好', en: 'good' },
   'net.state.ok': { zh: '一般', en: 'ok' },
   'net.state.poor': { zh: '较差', en: 'poor' },
+  // ── Web search toggle (search-mode-toggle / main_toolbar_ui.js) ──
+  'search.toggleTooltip': { zh: '联网搜索 · 点击开关', en: 'Web search — click to toggle on/off' },
+  // ── Voice input (speech-to-text / voice.js) ──
+  'voice.tooltip': { zh: '语音输入', en: 'Voice input' },
+  'voice.recording': { zh: '正在录音 · 点击停止', en: 'Recording · click to stop' },
+  'voice.transcribing': { zh: '正在转写…', en: 'Transcribing…' },
+  'voice.micDenied': { zh: '麦克风权限被拒绝', en: 'Microphone access denied' },
+  'voice.noMic': { zh: '此浏览器不支持录音', en: 'Recording is not supported in this browser' },
+  'voice.empty': { zh: '未识别到语音', en: 'No speech detected' },
+  'voice.failed': { zh: '语音转写失败', en: 'Transcription failed' },
   // ── Connection-failure surfaces (banners + toasts shown when the server/DB
   //    drops or recovers). zh primary. {cmd}/{n} are interpolated at the call
   //    site; the DB-desc {cmd} carries the styled <code> install command. ──
@@ -109,8 +128,6 @@ var _i18n = {
   'sidebar.newChat': { zh: '新对话', en: 'New Chat' },
   'sidebar.uncategorized': { zh: '未分类', en: 'Uncategorized' },
   'sidebar.newFolder': { zh: '新建文件夹', en: 'New Folder' },
-  'sidebar.moreFolders': { zh: '展开更多文件夹', en: 'Show more folders' },
-  'sidebar.lessFolders': { zh: '收起', en: 'Collapse' },
   'sidebar.projects': { zh: '项目', en: 'Projects' },
   'sidebar.collapseRail': { zh: '收起项目栏', en: 'Collapse projects' },
   'sidebar.expandRail': { zh: '展开项目栏', en: 'Expand projects' },
@@ -175,6 +192,9 @@ var _i18n = {
   'prefs.added': { zh: '已记住', en: 'Remembered' },
   'prefs.editInSettings': { zh: '可在设置中修改', en: 'editable in Settings' },
   'prefs.learnedReinforced': { zh: '已更新你的偏好档案', en: 'Updated your preference profile' },
+  'prefs.learnedTagN': { zh: '记住 {n} 条偏好', en: 'remembered {n} preference' },
+  'prefs.learnedTagNs': { zh: '记住 {n} 条偏好', en: 'remembered {n} preferences' },
+  'prefs.learnedHeadline': { zh: '已更新你的偏好档案', en: 'Updated your preference profile' },
   'prefs.pendingHint': { zh: '待你确认后写入', en: 'Awaiting your confirmation' },
   'prefs.confirm': { zh: '确认', en: 'Confirm' },
   'prefs.dismiss': { zh: '忽略', en: 'Dismiss' },
@@ -219,13 +239,6 @@ var _i18n = {
   'sidebar.deleteFailed': { zh: '无法删除：未能加载对话内容，请重新连接后重试', en: 'Couldn\u2019t delete \u2014 failed to load the conversation; reconnect and try again' },
 
   // ══════════════════════════════════════
-  //  Welcome Screen
-  // ══════════════════════════════════════
-  'welcome.subtitle': { zh: '嫩，但能打 — search, code, browse, trade, and more.', en: 'Soft, but powerful — search, code, browse, trade, and more.' },
-  'orphanResume.label': { zh: '继续回答', en: 'Resume' },
-  'orphanResume.hint': { zh: '这条消息还没有回复', en: 'This message has no response yet' },
-
-  // ══════════════════════════════════════
   //  Toolbar & Input
   // ══════════════════════════════════════
   'toolbar.enhance': { zh: '增强', en: 'Enhance' },
@@ -247,6 +260,9 @@ var _i18n = {
   'toolbar.desktopControlDesc': { zh: '操作本地应用与文件', en: 'Operate local apps and files' },
   'toolbar.scheduledTasks': { zh: '定时任务', en: 'Scheduled Tasks' },
   'toolbar.scheduledTasksDesc': { zh: '计划任务与 Cron', en: 'Task scheduling & Cron' },
+  'toolbar.attachFiles': { zh: '附加文件（图片 / PDF / 文档）', en: 'Attach files (images, PDF, docs)' },
+  'toolbar.creativeMode': { zh: '创作模式', en: 'Creative Mode' },
+  'toolbar.creativeModeDesc': { zh: '切换到图像创作画布', en: 'Switch to the image canvas' },
   'toolbar.aiDrawing': { zh: 'AI 绘图', en: 'AI Drawing' },
   'toolbar.aiDrawingDesc': { zh: '对话中生成图片', en: 'Generate images in conversation' },
   'toolbar.humanAICollab': { zh: '人机协作', en: 'Human-AI Collab' },
@@ -269,6 +285,8 @@ var _i18n = {
   'autopilot.summarizeRun': { zh: '总结这次运行', en: 'Summarize this run' },
   'autopilot.viewReport': { zh: '查看报告', en: 'View report' },
   'autopilot.needsReview': { zh: '提前停止 · 待复核', en: 'stopped early · needs review' },
+  'autopilot.parkedWaitingOn': { zh: '已挂起 · 等待', en: 'parked · waiting on' },
+  'autopilot.parked': { zh: '已挂起 · 等待外部提交', en: 'parked · waiting on an external commit' },
   'tool.noContent': { zh: '无返回内容。', en: 'No content returned.' },
   'tool.hallucinated': { zh: '非真实工具', en: 'not a real tool' },
   'tool.hallucinatedTip': { zh: '模型调用了本轮不存在的工具，已被拒绝、未执行。', en: "The model called a tool that doesn't exist this turn — it was rejected and never run." },
@@ -645,6 +663,7 @@ var _i18n = {
   //  Debug Panel
   // ══════════════════════════════════════
   // ── Tool-schema latch ("apply on next conversation") ──
+  'chat.scrollToBottom': { zh: '滚动到最新', en: 'Scroll to latest' },
   'toolset.pending': { zh: '工具改动将在新会话生效（保持缓存命中）', en: 'Tool changes will apply in a new conversation (keeps cache hits)' },
   'toolset.pendingDiff': { zh: '以下工具改动将在新会话生效（保持缓存命中）：', en: 'These tool changes will apply in a new conversation (keeps cache hits):' },
   'toolset.applyNow': { zh: '立即应用', en: 'Apply now' },
@@ -775,7 +794,6 @@ var _i18n = {
   'memory.installError': { zh: '安装异常: {err}', en: 'Install error: {err}' },
   'settings.cancel': { zh: '取消', en: 'Cancel' },
   'settings.save': { zh: '保存', en: 'Save' },
-  'settings.mobileClient': { zh: '手机客户端', en: 'Mobile client' },
 
   // ══════════════════════════════════════
   //  Settings — General Tab
@@ -841,6 +859,8 @@ var _i18n = {
   'settings.debugModeDesc': { zh: '显示 trace_id、复制会话 ID 按钮等开发调试信息', en: 'Show trace_id, copy conv ID buttons, and other debug info' },
   'settings.optimizerModule': { zh: '每日优化器', en: 'Daily Optimizer' },
   'settings.optimizerModuleDesc': { zh: '每晚 03:30 分析当日日志并自动提出改进建议（如屏蔽垃圾搜索域名）。关闭后不再运行分析，顶栏 OPTIMIZER 徽章隐藏。已应用的改动会保留直到手动撤销。', en: 'Every night at 03:30 local, analyses the day\'s logs and auto-proposes improvements (e.g. blocking spammy search domains). When off, analysis stops and the top-bar OPTIMIZER badge is hidden. Already-applied changes persist until manually reverted.' },
+  'settings.segmentTimeline': { zh: '按工具内联时间线', en: 'Per-tool inline timeline' },
+  'settings.segmentTimelineDesc': { zh: '在已完成的多工具回复中，把每个工具调用之前的思考与说明文字就近显示在该工具旁边（交错时间线），而不是把所有工具、所有思考、所有正文分别聚成三大块。加载/刷新对话时生效；实时流式仍为分组视图，回复结束后切换为时间线。', en: 'In finished multi-tool replies, show each tool call\'s preceding thinking and narration right next to that tool (interleaved timeline), instead of grouping all tools, all thinking and all content into three separate blocks. Applies on conversation load/reload; live streaming stays grouped and switches to the timeline once the reply finishes.' },
   'settings.keepToolHistory': { zh: '保留工具调用历史', en: 'Keep Tool Call History' },
   'settings.keepToolHistoryDesc': { zh: '多轮对话时保留完整的工具调用记录（搜索内容、网页抓取结果等），模型能看到之前搜过什么，避免重复调用。关闭可节省 token 但模型会丢失工具上下文', en: 'Preserve full tool call records (search results, fetched pages, etc.) across conversation turns. Model can see what was searched before, avoiding redundant calls. Disable to save tokens but model loses tool context' },
   'settings.autoGenerateTitle': { zh: '自动生成对话标题', en: 'Auto-Generate Conversation Titles' },
@@ -901,6 +921,10 @@ var _i18n = {
   'update.restartBtn': { zh: '立即重启', en: 'Restart now' },
   'update.restartNow': { zh: '重启服务器', en: 'Restart server' },
   'update.restartNowHint': { zh: '无需手动停止再启动，直接原地重启。', en: 'Restarts in place — no manual stop-then-start needed.' },
+  'update.shutdownNow': { zh: '关闭服务器', en: 'Shut down' },
+  'update.shutdownConfirm': { zh: '确定要关闭服务器吗？服务将停止且不会自动重启，正在进行的任务会被标记为手动停止（不会自动恢复）。', en: 'Shut the server down? It will stop and NOT restart on its own; in-progress turns are marked as a manual stop (not auto-recovered).' },
+  'update.shuttingDown': { zh: '正在关闭服务器…', en: 'Shutting the server down…' },
+  'update.shutdownHint': { zh: '服务已停止，需要手动重新启动。', en: 'The server has stopped — start it again manually when needed.' },
   'update.restartConfirm': { zh: '确定要重启服务器吗？正在进行的任务会被中断。', en: 'Restart the server now? Any in-progress tasks will be interrupted.' },
   'update.restarting': { zh: '正在重启…', en: 'Restarting…' },
   'update.restartHint': { zh: '重启期间页面会短暂不可用，完成后会自动刷新。', en: 'The page will be briefly unavailable and will auto-refresh once back.' },
@@ -1162,6 +1186,30 @@ var _i18n = {
   // ══════════════════════════════════════
   //  Settings — Translation Tab
   // ══════════════════════════════════════
+  // ── Speech recognition (voice input / STT) ──
+  'settings.tabSpeech': { zh: '语音识别', en: 'Speech' },
+  'settings.sttService': { zh: '语音识别（语音输入）', en: 'Speech Recognition (Voice Input)' },
+  'settings.sttServiceDesc': { zh: '配置语音转文字（STT）服务后，聊天输入框会出现麦克风按钮，可直接说话转成文字。<br>未配置时麦克风按钮自动隐藏。', en: 'Configure a speech-to-text (STT) service and a microphone button appears in the composer — speak to transcribe into text.<br>When unconfigured the mic button is hidden.' },
+  'settings.sttEnable': { zh: '启用语音输入', en: 'Enable Voice Input' },
+  'settings.sttEnableDesc': { zh: '关闭后立即停用语音识别（麦克风按钮隐藏），已填写的凭证会保留', en: 'Disabling turns voice input off immediately (mic button hidden); saved credentials are kept' },
+  'settings.sttProvider': { zh: '识别服务商', en: 'Recognition Provider' },
+  'settings.sttProviderOpenai': { zh: 'OpenAI (gpt-4o-transcribe)', en: 'OpenAI (gpt-4o-transcribe)' },
+  'settings.sttProviderGroq': { zh: 'Groq (Whisper)', en: 'Groq (Whisper)' },
+  'settings.sttProviderOmni': { zh: 'Omni 对话模型 (audio_chat)', en: 'Omni chat model (audio_chat)' },
+  'settings.sttProviderCustom': { zh: '自定义 Whisper 端点', en: 'Custom Whisper endpoint' },
+  'settings.sttOpenaiDesc': { zh: '官方 /audio/transcriptions 端点 · 高准确率 · 需公网直连 OpenAI', en: 'Official /audio/transcriptions endpoint · high accuracy · needs direct OpenAI access' },
+  'settings.sttGroqDesc': { zh: 'LPU 上的 Whisper · 极快 · 极低价 · 兼容 /audio/transcriptions', en: 'Whisper on LPUs · very fast · very cheap · /audio/transcriptions compatible' },
+  'settings.sttOmniName': { zh: 'Omni 对话模型', en: 'Omni chat model' },
+  'settings.sttOmniDesc': { zh: '全模态对话模型内联识别（/chat/completions）· 适合无独立 Whisper 端点的网关（如美团 AIGC gemini-3-flash-preview / LongCat-Flash-Omni）', en: 'Omni chat model, audio sent inline (/chat/completions) · for gateways with no standalone Whisper endpoint (e.g. Meituan AIGC gemini-3-flash-preview / LongCat-Flash-Omni)' },
+  'settings.sttCustomName': { zh: '自定义端点', en: 'Custom endpoint' },
+  'settings.sttCustomDesc': { zh: '任何兼容 OpenAI /audio/transcriptions 的端点（自建 faster-whisper、vLLM 等）', en: 'Any endpoint compatible with OpenAI /audio/transcriptions (self-hosted faster-whisper, vLLM, …)' },
+  'settings.sttModelLabel': { zh: '模型', en: 'Model' },
+  'settings.sttBaseUrlLabel': { zh: 'API 地址', en: 'API URL' },
+  'settings.sttApplyKey': { zh: '获取 API Key', en: 'Get API Key' },
+  'settings.sttOptional': { zh: '（可选）', en: '(optional)' },
+  'settings.sttRequired': { zh: '（必填）', en: '(required)' },
+  'settings.sttStatusOn': { zh: '✓ 语音输入已就绪', en: '✓ Voice input is ready' },
+  'settings.sttStatusOff': { zh: '语音输入未就绪 — 保存有效凭证后麦克风按钮才会出现', en: 'Voice input not ready — the mic button appears once valid credentials are saved' },
   'settings.tabTranslate': { zh: '翻译', en: 'Translation' },
   'settings.mtService': { zh: '机器翻译服务', en: 'Machine Translation Service' },
   'settings.mtServiceDesc': { zh: '配置专用机器翻译 API，比 LLM 翻译更快、更便宜。<br>未配置或关闭时，翻译将自动使用 LLM cheap 模型。', en: 'Configure a dedicated machine translation API — faster and cheaper than LLM translation.<br>When not configured or disabled, translation falls back to LLM cheap model.' },
@@ -1417,6 +1465,7 @@ var _i18n = {
   'paper.pages': { zh: '{count} 页', en: '{count} pages' },
   'paper.myPapers': { zh: '我的论文', en: 'My Papers' },
   'paper.addPaper': { zh: '添加论文', en: 'Add paper' },
+  'paper.loadingLibrary': { zh: '正在加载书架…', en: 'Loading bookshelf…' },
   'paper.noPapersYet': { zh: '暂无论文', en: 'No papers yet' },
   'paper.noPapersHint': { zh: '上传 PDF 或从 arXiv 获取', en: 'Upload a PDF or fetch from arXiv' },
   'paper.landingDesc': { zh: '上传 PDF 或粘贴 arXiv 链接以开始', en: 'Upload a PDF or paste an arXiv URL to get started' },
@@ -1446,6 +1495,7 @@ var _i18n = {
   'paper.correctionTitle': { zh: '需要澄清一下', en: 'A quick correction' },
   'paper.correctionActual': { zh: '实际获奖的论文', en: 'The paper that actually won' },
   'paper.delete': { zh: '删除', en: 'Delete' },
+  'paper.recommended': { zh: '推荐', en: 'Rec' },
   'paper.tabQA': { zh: '问答', en: 'Q&A' },
   'paper.tabReport': { zh: '报告', en: 'Report' },
   'paper.tabReview': { zh: '审稿', en: 'Review' },
@@ -1479,6 +1529,7 @@ var _i18n = {
   'paper.reportEmptyTitle': { zh: '准备就绪，点击下方按钮生成分析报告', en: 'Ready — click below to generate the analysis report' },
   'paper.reportEmptyHint': { zh: '生成前可先在上方调整模型与语言；模型会联网搜索补充背景与相关工作', en: 'Adjust the model & language above first if needed; the model will search the web for additional context and related work' },
   'paper.reportGenerate': { zh: '生成报告', en: 'Generate report' },
+  'paper.loadingReport': { zh: '正在加载报告…', en: 'Loading report…' },
   'paper.reviewGenerate': { zh: '生成审稿', en: 'Generate review' },
   // Review tab (peer-review mode)
   'paper.reviewSelectVenue': { zh: '选择会议', en: 'Select venue' },
@@ -1627,6 +1678,9 @@ var _i18n = {
   'folderDrop.savedInto': { zh: '已保存到「{dir}」', en: 'Saved into “{dir}”' },
   'folderDrop.renamedNote': { zh: '{n} 个自动重命名以避免覆盖', en: '{n} auto-renamed to avoid overwrite' },
   'folderDrop.failed': { zh: '{n} 个文件保存失败', en: '{n} file(s) failed to save' },
+  'folderDrop.notInWorkspace': { zh: '该目录不在工作区内', en: 'Folder not in workspace' },
+  'folderDrop.addRootConfirm': { zh: '「{dir}」尚未加入工作区。要将其添加为项目文件夹并保存到这里吗？', en: '“{dir}” isn’t in your workspace yet. Add it as a project folder and save here?' },
+  'folderDrop.addAndSave': { zh: '添加并保存', en: 'Add & save' },
   'folder.renameTitle': { zh: '重命名文件夹', en: 'Rename Folder' },
   'folder.ok': { zh: '确定', en: 'OK' },
   'folder.deleteTitle': { zh: '删除文件夹', en: 'Delete Folder' },
@@ -1843,6 +1897,20 @@ var _i18n = {
   // the avatar+label identity is not byte-identical to human input.
   'peer.senderLabel': { zh: '其他对话', en: 'Peer' },
   'peer.operatorLabel': { zh: '操作者', en: 'Operator' },
+  // Header role labels for auto-initiated (non-human) turns — replaces "You"
+  // / "Agent" so every automatically-started turn is visually attributable.
+  // Keyed by the _initiator vocabulary (lib/conversations/turn_initiation.py).
+  'initiator.proactive': { zh: '定时代理', en: 'Proactive Agent' },
+  'initiator.timer': { zh: '定时器', en: 'Timer' },
+  'initiator.brain': { zh: '项目大脑', en: 'Project Brain' },
+  'initiator.swarm': { zh: '自动续跑', en: 'Auto-continued' },
+  // In-timeline chip (tool_rounds.js _renderPeerInjectRow) for a peer message
+  // delivered at a round boundary of a LIVE turn (Pillar #6 fast-path lane) —
+  // distinct from the queue-lane .peer-msg-banner user bubble.
+  'peer.injectRowLabel': { zh: '收到', en: 'Received' },
+  'peer.injectRowOne': { zh: '条对话消息', en: 'peer message' },
+  'peer.injectRowMany': { zh: '条对话消息', en: 'peer messages' },
+  'peer.injectRowBadge': { zh: '已注入上下文', en: 'injected → context' },
 
   // Swarm agent phase pills (streaming_swarm_panel.js)
   'swarm.phase.thinking': { zh: '思考中…', en: 'Thinking…' },
@@ -1864,6 +1932,8 @@ var _i18n = {
   // ══════════════════════════════════════
   'queue.messagesQueued': { zh: '条消息排队中', en: 'messages queued' },
   'queue.clearAll': { zh: '全部清空', en: 'Clear all' },
+  'queue.fromConv': { zh: '来自', en: 'from' },
+  'queue.fromOperator': { zh: '来自操作员', en: 'from operator' },
   'queue.images': { zh: '张图片', en: 'images' },
   'queue.attachment': { zh: '附件', en: 'Attachment' },
   'queue.cancelMsg': { zh: '取消此消息', en: 'Cancel this message' },
@@ -2018,6 +2088,10 @@ var _i18n = {
   // Card status badges + actions
   'mcp.statusOn': { zh: '已连接', en: 'ON' },
   'mcp.statusIdle': { zh: '空闲', en: 'IDLE' },
+  // Credential health (subprocess alive but stored cookie/token expired)
+  'mcp.credExpired': { zh: '凭据已过期', en: 'Credentials expired' },
+  'mcp.credExpiredTitle': { zh: '服务已连接，但保存的登录凭据（如 Overleaf 会话 Cookie）已失效——请更新凭据后功能才能恢复。', en: 'Connected, but the saved login credentials (e.g. the Overleaf session cookie) are no longer valid — update them to restore functionality.' },
+  'mcp.updateCreds': { zh: '更新凭据', en: 'Update credentials' },
   'mcp.repo': { zh: '仓库', en: 'Repo' },
   'mcp.repoTitle': { zh: '源代码仓库', en: 'Source Repository' },
   'mcp.uninstall': { zh: '卸载', en: 'Uninstall' },
@@ -2276,6 +2350,15 @@ var _i18n = {
   'collab.conflicts': { zh: '{n} 处文件冲突', en: '{n} file conflicts' },
 
   // ══════════════════════════════════════
+  //  Project-bar pet — scene switcher + day-report bubble
+  // ══════════════════════════════════════
+  // Click-to-report speech bubble — the pet summarises your day (daily report).
+  'pet.dayReport': { zh: '今日完成 {done}/{total}', en: '{done}/{total} done today' },
+  'pet.dayBlocked': { zh: '· {n} 项受阻', en: '\u00b7 {n} blocked' },
+  'pet.dayIdle': { zh: '今天还没有记录', en: 'Nothing logged yet today' },
+  'pet.dayGreeting': { zh: '你好呀！', en: 'Hi there!' },
+
+  // ══════════════════════════════════════
   //  Project Brain — cross-conversation Activity Feed (Pillar #1)
   // ══════════════════════════════════════
   'projectBrain.title': { zh: '项目大脑', en: 'Project Brain' },
@@ -2310,6 +2393,47 @@ var _i18n = {
   'projectBrain.peerStopConfirmOk': { zh: '终止任务', en: 'Stop the task' },
   'projectBrain.peerStopped': { zh: '已终止', en: 'Stopped' },
   'projectBrain.peerStopFailed': { zh: '终止失败', en: 'Stop failed' },
+  'projectBrain.status': { zh: '状态与关注', en: 'Status & Watch' },
+  'projectBrain.statusEmpty': { zh: '暂无状态 — 当项目有章程或任务板动态后自动综合生成。', en: 'No status yet — synthesized once the project has a charter or board activity.' },
+  'projectBrain.statusLoading': { zh: '正在综合项目状态…', en: 'Synthesizing project status…' },
+  'projectBrain.statusTitle': { zh: '项目当前状态', en: 'Where the project is' },
+  'projectBrain.statusUpdating': { zh: '更新中…', en: 'Updating…' },
+  'projectBrain.statusRefresh': { zh: '刷新状态', en: 'Refresh status' },
+  'projectBrain.statusHistory': { zh: '状态历史', en: 'Status history' },
+  'projectBrain.statusAskHead': { zh: '向项目提问', en: 'Ask the project' },
+  'projectBrain.statusAskPlaceholder': { zh: '例如：我们是否偏离了北极星？有什么被阻塞了？', en: 'e.g. Are we drifting from the north star? What is blocked?' },
+  'projectBrain.statusAsk': { zh: '提问', en: 'Ask' },
+  'projectBrain.statusAsking': { zh: '思考中…', en: 'Thinking…' },
+  'projectBrain.statusAskFailed': { zh: '提问失败', en: 'Could not ask' },
+  'projectBrain.statusTrigEpic': { zh: '任务完成', en: 'epic completed' },
+  'projectBrain.statusTrigDecision': { zh: '决策确认', en: 'decision committed' },
+  'projectBrain.statusTrigBlocked': { zh: '工作受阻', en: 'work blocked' },
+  'projectBrain.statusTrigOpen': { zh: '已刷新', en: 'refreshed' },
+  'projectBrain.statusTrigManual': { zh: '手动', en: 'manual' },
+  'projectBrain.statusEvOpen': { zh: '待认领', en: 'open' },
+  'projectBrain.statusEvInflight': { zh: '进行中', en: 'in-flight' },
+  'projectBrain.statusEvDone': { zh: '已完成', en: 'done' },
+  'projectBrain.statusEvBlocked': { zh: '受阻', en: 'blocked' },
+  'projectBrain.statusEvPending': { zh: '决策待定', en: 'decisions pending' },
+  'projectBrain.statusEvPeers': { zh: '活跃会话', en: 'active peers' },
+  'projectBrain.statusEvCharter': { zh: '章程 v', en: 'charter v' },
+  'projectBrain.watchHead': { zh: '我关心的事', en: 'Things I care about' },
+  'projectBrain.watchPlaceholder': { zh: '想让大脑持续关注的事…', en: 'Something you want the brain to keep an eye on…' },
+  'projectBrain.watchAdd': { zh: '添加', en: 'Add' },
+  'projectBrain.watchAdding': { zh: '添加中…', en: 'Adding…' },
+  'projectBrain.watchAddFailed': { zh: '添加失败', en: 'Could not add' },
+  'projectBrain.watchEmpty': { zh: '添加一个关注点、问题或目标，大脑会持续为你盯着它。', en: 'Add a concern, question, or goal and the brain will keep an eye on it.' },
+  'projectBrain.watchKindConcern': { zh: '关注点', en: 'Concern' },
+  'projectBrain.watchKindQuestion': { zh: '问题', en: 'Question' },
+  'projectBrain.watchKindGoal': { zh: '目标', en: 'Goal' },
+  'projectBrain.watchNotAddressed': { zh: '尚未回应', en: 'Not addressed yet' },
+  'projectBrain.watchResolved': { zh: '已解决', en: 'resolved' },
+  'projectBrain.watchPromoted': { zh: '已进章程', en: 'in charter' },
+  'projectBrain.watchRefresh': { zh: '重新评估', en: 'Re-check' },
+  'projectBrain.watchPromote': { zh: '提升为章程', en: 'Promote to charter' },
+  'projectBrain.watchResolveBtn': { zh: '标记解决', en: 'Resolve' },
+  'projectBrain.watchReopen': { zh: '重新打开', en: 'Reopen' },
+  'projectBrain.watchDelete': { zh: '删除', en: 'Delete' },
   'projectBrain.charterSoon': { zh: '北极星 · 即将推出', en: 'North star — coming soon' },
   'projectBrain.boardSoon': { zh: '协作任务板 · 即将推出', en: 'Coordination board — coming soon' },
   'projectBrain.activityEmpty': { zh: '暂无动态', en: 'No activity yet' },
@@ -2320,22 +2444,28 @@ var _i18n = {
   'projectBrain.commit': { zh: '确认', en: 'Commit' },
   'projectBrain.committing': { zh: '确认中…', en: 'Committing…' },
   'projectBrain.reject': { zh: '驳回', en: 'Reject' },
+  'projectBrain.editNorthStar': { zh: '编辑北极星目标', en: 'Edit north star' },
+  'projectBrain.editDecision': { zh: '编辑决策', en: 'Edit decision' },
+  'projectBrain.deleteDecision': { zh: '删除决策', en: 'Delete decision' },
+  'projectBrain.deleteCharter': { zh: '删除章程', en: 'Delete charter' },
+  'projectBrain.save': { zh: '保存', en: 'Save' },
+  'projectBrain.saving': { zh: '保存中…', en: 'Saving…' },
+  'projectBrain.cancel': { zh: '取消', en: 'Cancel' },
+  'projectBrain.confirmDelete': { zh: '确认删除？', en: 'Confirm?' },
   'projectBrain.laneOpen': { zh: '待认领', en: 'Open' },
   'projectBrain.laneClaimed': { zh: '推进中', en: 'In progress' },
-  'projectBrain.laneDeferred': { zh: '已搁置（待决策）', en: 'Parked (awaiting decision)' },
   'projectBrain.laneHeld': { zh: '占用中（请勿编辑）', en: 'Held (do not edit)' },
   'projectBrain.heldBy': { zh: '占用者', en: 'held by' },
   'projectBrain.laneDone': { zh: '已完成', en: 'Done' },
+  'projectBrain.laneBlocked': { zh: '受阻（等待外部条件）', en: 'Blocked (waiting on a gate)' },
+  'projectBrain.blockedRetry': { zh: '自动重试于', en: 'auto-retry in' },
   'projectBrain.newEpic': { zh: '新建 epic', en: 'New epic' },
   'projectBrain.newEpicNoConv': { zh: '打开一个会话后才能发布 epic', en: 'Open a conversation to post an epic' },
   'projectBrain.newEpicPrompt': { zh: 'epic 标题', en: 'New epic title' },
   'projectBrain.actComplete': { zh: '完成', en: 'Done' },
   'projectBrain.actBlock': { zh: '受阻', en: 'Block' },
   'projectBrain.actReopen': { zh: '重开', en: 'Reopen' },
-  'projectBrain.actDefer': { zh: '搁置', en: 'Park' },
-  'projectBrain.actResume': { zh: '恢复', en: 'Resume' },
   'projectBrain.blockReasonPrompt': { zh: '为什么受阻？', en: 'Why is this blocked?' },
-  'projectBrain.deferReasonPrompt': { zh: '为什么搁置？（待哪个决策）', en: 'Why park it? (which decision does it await)' },
   'projectBrain.peerNone': { zh: '当前没有活跃的协作会话。', en: 'No active peers right now.' },
   'projectBrain.peerRound': { zh: '第 {n} 轮', en: 'round {n}' },
   'projectBrain.proposalPending': { zh: '等待人工审核 — 在项目大脑面板确认或驳回', en: 'Awaiting human review — commit or reject in the Project Brain panel' },
@@ -2345,8 +2475,6 @@ var _i18n = {
   'projectBrain.boardVerb.complete': { zh: '完成', en: 'completed' },
   'projectBrain.boardVerb.block': { zh: '标记受阻', en: 'blocked' },
   'projectBrain.boardVerb.reopen': { zh: '重开', en: 'reopened' },
-  'projectBrain.boardVerb.defer': { zh: '搁置', en: 'parked' },
-  'projectBrain.boardVerb.resume': { zh: '恢复', en: 'resumed' },
   // ── Transcript tool-card: activity-feed + peer-message/intervene delivery ──
   'projectBrain.thisConv': { zh: '本对话', en: 'this conversation' },
   'projectBrain.pdMessage': { zh: '发送消息', en: 'Message' },
@@ -2387,6 +2515,13 @@ var _i18n = {
   'brainHead.intervene': { zh: '向另一个会话提示了工作重叠', en: 'Flagged an overlap to another conversation' },
   'brainHead.listConvs': { zh: '搜索了历史会话', en: 'Searched past conversations' },
   'brainHead.getConv': { zh: '打开了一个历史会话', en: 'Opened a past conversation' },
+  'brainHead.claimPath': { zh: '预定了要编辑的文件', en: 'Reserved files for editing' },
+  'brainHead.releasePath': { zh: '释放了文件预定', en: 'Released a file reservation' },
+  'brainHead.commit': { zh: '提交了本对话的改动', en: "Committed this conversation's work" },
+  // ── Checklist (todo_write) card ──
+  'todo.head': { zh: '任务清单', en: 'Checklist' },
+  'todo.cleared': { zh: '任务清单已清空', en: 'Checklist cleared' },
+  'todo.emptyBody': { zh: '暂无清单项。', en: 'No checklist items.' },
   // ── Conv-meta tool cards: at-a-glance count chip for collapsed reads ──
   'brainChip.peers': { zh: '{n} 个活跃', en: '{n} active' },
   'brainChip.openEpics': { zh: '{n} 项待认领', en: '{n} open' },
@@ -2396,6 +2531,7 @@ var _i18n = {
   'brainSrc.charter': { zh: '章程', en: 'Charter' },
   'brainSrc.conversations': { zh: '会话', en: 'Conversations' },
   'brainSrc.peer': { zh: '团队', en: 'Team' },
+  'brainSrc.git': { zh: 'Git', en: 'Git' },
   // ── Conv-meta tool cards: "why this ran / what it means" captions ──
   'brainWhy.peerStatus': { zh: '本项目中此刻正在运行的其他会话——用于避免重复正在进行中的工作。', en: 'Sibling conversations of this project that are running right now — used to avoid duplicating work already in progress.' },
   'brainWhy.boardRead': { zh: '本项目所有会话共享的待办看板——谁在做什么，避免重复工作。', en: 'The shared to-do board across all conversations of this project — who is doing what, so work isn\'t duplicated.' },
@@ -2405,6 +2541,19 @@ var _i18n = {
   'brainWhy.charterPropose': { zh: '提议一项决策，交由人工确认为项目级共享意图——确认前仅为建议。', en: 'Proposes a decision for the human to commit as shared project-wide intent — advisory until approved.' },
   'brainWhy.message': { zh: '给同项目某个会话的一条建议性留言，在它下一轮时送达——不会打断正在进行的回合。', en: 'An advisory note to a sibling conversation, delivered on its next turn — it never interrupts a running turn.' },
   'brainWhy.intervene': { zh: '提醒同项目某个会话重新核对看板（建议性）；强制终止需人工明确批准。', en: 'Nudges a sibling conversation to re-check the board (advisory); a hard stop needs explicit human approval.' },
+  'brainWhy.claimPath': { zh: '在共享看板上预定特定文件／路径，让其他会话在本会话工作期间暂缓编辑——这是有时效、会自动过期的建议性占用，而非硬锁。', en: 'Reserves specific files/paths on the shared board so sibling conversations hold off editing them while this conversation works — a durational, auto-expiring advisory lease, not a hard lock.' },
+  'brainWhy.releasePath': { zh: '清除先前的文件／路径占用，让其他会话可以再次编辑这些路径。', en: 'Clears a previously-held file/path reservation so sibling conversations may edit those paths again.' },
+  'brainWhy.commit': { zh: '只提交本对话可证明为自己所写的文件（与本会话上一次写入逐字节一致）；同时带有其他会话未提交改动的文件会被保留，绝不一并提交。', en: "Commits ONLY the files this conversation provably authored (byte-identical to its own last edit); files also carrying a sibling's uncommitted changes are held back, never swept in." },
+  // ── Commit result card (project_commit) ──
+  'commitCard.outCommitted': { zh: '已提交', en: 'committed' },
+  'commitCard.outPlanned': { zh: '仅预览', en: 'plan only' },
+  'commitCard.outVerifyMismatch': { zh: '校验不一致', en: 'verify mismatch' },
+  'commitCard.outFailed': { zh: '未提交', en: 'not committed' },
+  'commitCard.shaTitle': { zh: '提交哈希', en: 'commit hash' },
+  'commitCard.committedHead': { zh: '已提交（{n}）—— 确属本会话', en: 'Committed ({n}) — provably yours' },
+  'commitCard.wouldCommitHead': { zh: '将提交（{n}）—— 确属本会话', en: 'Would commit ({n}) — provably yours' },
+  'commitCard.heldHead': { zh: '已保留（{n}）—— 未提交', en: 'Held back ({n}) — not committed' },
+  'commitCard.noneClean': { zh: '没有可证明属于本会话的文件。', en: 'No files were provably attributable to this conversation.' },
   'projectBrain.justNow': { zh: '刚刚', en: 'just now' },
   'projectBrain.minutesAgo': { zh: '{n} 分钟前', en: '{n}m ago' },
   'projectBrain.hoursAgo': { zh: '{n} 小时前', en: '{n}h ago' },
@@ -2419,8 +2568,6 @@ var _i18n = {
   'projectBrain.infMineHead': { zh: '你正在推进的任务', en: 'Epics you are advancing' },
   'projectBrain.infAvoidHead': { zh: '避免重复 —— 其他对话正在推进', en: 'Avoid duplicating — advanced by a sibling' },
   'projectBrain.infOpenHead': { zh: '待认领 —— 你可以接手', en: 'Open — you could claim' },
-  'projectBrain.barLead': { zh: '本对话', en: 'This chat' },
-  'projectBrain.barOpenHint': { zh: '本对话如何被项目大脑影响 —— 点击跳转到影响详情', en: 'How THIS conversation is influenced — click to jump to its lens' },
 };
 
 /**

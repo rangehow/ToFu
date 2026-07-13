@@ -203,7 +203,7 @@ def _resolve_source_image(image_ref: str) -> dict | None:
     """
     import base64 as _b64
 
-    import requests as _requests
+    from lib.http_client import http_get
 
     if not image_ref:
         return None
@@ -239,7 +239,7 @@ def _resolve_source_image(image_ref: str) -> dict | None:
     # ── Remote URL ──
     if image_ref.startswith(('http://', 'https://')):
         try:
-            resp = _requests.get(image_ref, timeout=30)
+            resp = http_get(image_ref, timeout=30)
             resp.raise_for_status()
             image_b64 = _b64.b64encode(resp.content).decode('ascii')
             ct = resp.headers.get('Content-Type', 'image/png')

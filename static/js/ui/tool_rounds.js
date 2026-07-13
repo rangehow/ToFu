@@ -63,11 +63,13 @@ function _isRoundImageGen(round) {
    collapsible block that renders the full content as Markdown. */
 const _CONV_META_TOOLS = new Set([
   "project_board_read", "project_board_post", "project_board_claim",
-  "project_board_complete", "project_board_block", "project_board_defer",
+  "project_board_complete", "project_board_block",
   "project_charter_read", "project_charter_propose",
   "list_conversations", "get_conversation",
   "project_peer_status", "project_feed_read",
   "project_message", "project_intervene",
+  "project_claim_path", "project_release_path",
+  "project_commit",
 ]);
 function _isRoundConvMeta(round) {
   return _CONV_META_TOOLS.has(round.toolName);
@@ -104,6 +106,7 @@ const _TOOL_DISPLAY = {
   desktop_screenshot: { icon: "", label: "Desktop", color: "#94a3b8" },
   generate_image: { icon: "", label: "Image", color: "#e879f9" },
   ask_human: { icon: "", label: "Guidance", color: "#a5b4fc" },
+  todo_write: { icon: "", label: "Checklist", color: "#34d399" },
 };
 function _getToolDisplay(round) {
   if (_TOOL_DISPLAY[round.toolName]) return _TOOL_DISPLAY[round.toolName];
@@ -264,6 +267,9 @@ const _webToolSvg = {
   project_peer_status: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
   // Activity feed — a pulse/heartbeat line (the live cross-conversation stream).
   project_feed_read: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>',
+  // Git commit (project_commit) — the standard git-commit mark: a center circle
+  // on a horizontal line. Inline SVG per the icon convention (§3.4).
+  project_commit: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><line x1="3" y1="12" x2="9" y2="12"/><line x1="15" y1="12" x2="21" y2="12"/></svg>',
   // Async-swarm bookkeeping tools (spawn_agents gets the full panel instead).
   await_agents: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>',
   get_agent_result: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>',
@@ -271,6 +277,8 @@ const _webToolSvg = {
   mcp: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22v-5"/><path d="M15 8V2"/><path d="M17 8a1 1 0 0 1 1 1v4a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V9a1 1 0 0 1 1-1z"/><path d="M9 8V2"/></svg>',
   context_compact: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>',
   ask_human: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
+  // Structured task checklist (todo_write) — a clipboard with a check.
+  todo_write: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2h6a1 1 0 0 1 1 1v2H8V3a1 1 0 0 1 1-1z"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="m9 13 2 2 4-4"/></svg>',
   generic: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>',
 };
 
@@ -304,6 +312,8 @@ function _getToolSvg(round) {
     if (tn.startsWith("project_charter_")) return _webToolSvg.project_charter_read;
     if (tn === "project_feed_read") return _webToolSvg.project_feed_read;
     if (tn === "project_message" || tn === "project_intervene") return _webToolSvg.project_peer_status;
+    if (tn === "project_claim_path" || tn === "project_release_path") return _webToolSvg.project_board_read;
+    if (tn === "project_commit") return _webToolSvg.project_commit;
   }
   return _webToolSvg[icon] || _webToolSvg[round.toolName] || _webToolSvg.generic;
 }
@@ -397,12 +407,13 @@ function _renderHumanGuidanceCard(round, svg) {
  *   filesystem tool and (b) the workspace has more than one root.  We
  *   add an extra frontend guard so single-root sessions stay unprefixed
  *   even if a stale `_toolRoot` field arrives. */
-function _renderToolRootPill(round) {
+function _renderToolRootPill(round, noColon) {
   if (!round || !round._toolRoot) return "";
   const _ps = (typeof projectState !== "undefined") ? projectState : null;
   const _extrasCount = (_ps && Array.isArray(_ps.extraRoots)) ? _ps.extraRoots.length : 0;
   if (_extrasCount === 0) return "";
-  return `<span class="ptool-root" title="Workspace root">${escapeHtml(round._toolRoot)}:</span>`;
+  const _sep = noColon ? "" : ":";
+  return `<span class="ptool-root" title="Workspace root">${escapeHtml(round._toolRoot)}${_sep}</span>`;
 }
 
 
@@ -594,6 +605,49 @@ function _renderInboxInjectRow(round) {
      </details>`;
 }
 
+
+/* ── Peer-message inbox-injection row (Pillar #6 fast-path) ──
+ * Renders a synthetic toolRound (flagged `_peerInject`) marking the moment the
+ * orchestrator drained a peer message from a sibling conversation and injected
+ * it as a user message before the next LLM round — the round-boundary fast
+ * path (never mid-stream). Distinct from the queue-lane case, which renders as
+ * a persisted .peer-msg-banner user bubble. Collapsible: the header shows
+ * "Received N peer message(s)"; the body shows each sender + the message text
+ * the model actually saw. */
+function _renderPeerInjectRow(round) {
+  const previews = Array.isArray(round.peerPreviews) ? round.peerPreviews : [];
+  const count = round.peerCount || previews.length || 0;
+  const froms = previews.map(p => (p.fromConv || "").slice(0, 8)).filter(Boolean);
+  const fromLabel = froms.length
+    ? `<span class="sw-inbox-row-ids">[${froms.slice(0, 4).map(escapeHtml).join(", ")}${froms.length > 4 ? ` +${froms.length - 4}` : ""}]</span>`
+    : "";
+  const word = count === 1
+    ? (typeof t === "function" ? t("peer.injectRowOne") : "peer message")
+    : (typeof t === "function" ? t("peer.injectRowMany") : "peer messages");
+  const label = typeof t === "function" ? t("peer.injectRowLabel") : "Received";
+  const badge = typeof t === "function" ? t("peer.injectRowBadge") : "injected → context";
+  const bodyHtml = previews.length
+    ? previews.map(p => {
+        const fc = escapeHtml((p.fromConv || "").slice(0, 8));
+        const text = escapeHtml(p.text || "");
+        return `<div class="sw-inbox-row-item">` +
+          (fc ? `<div class="sw-inbox-row-agent">${fc}</div>` : "") +
+          `<pre class="sw-inbox-row-payload">${text}</pre>` +
+        `</div>`;
+      }).join("")
+    : `<div class="sw-inbox-row-empty">No message preview available.</div>`;
+  return `<details class="sw-inbox-row sw-peer-row" data-rn="${round.roundNum}">
+       <summary class="ptool-line sw-inbox-row-header">
+         <span class="ptool-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:1em;height:1em"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span>
+         <span class="ptool-text">${escapeHtml(label)} <b>${count}</b> ${escapeHtml(word)}</span>
+         ${fromLabel}
+         <span class="ptool-badge ptool-badge-info">${escapeHtml(badge)}</span>
+         <span class="sw-inbox-row-chev">▾</span>
+       </summary>
+       <div class="sw-inbox-row-body">${bodyHtml}</div>
+     </details>`;
+}
+
 /* ── Vertical-domain card: HF Papers / Semantic Scholar / arXiv / etc. ──
  * Distinct from web results: renders one labeled card per domain that
  * carried structured items, ranked by upvotes (HF) or citations (S2).
@@ -707,6 +761,76 @@ function _renderMemoryBlock(round, svg, q, compactionLabelHtml, rootPill, badgeH
      </details>`;
 }
 
+/* ★ Checklist block (todo_write) — a collapsible progress card rendered off
+   the STRUCTURED `meta.todos` the backend attaches (extra={'todos': todos} in
+   handlers/misc.py), never re-parsed from the result prose.
+
+   Design: reads like every other tool row — collapsed by default, same
+   monospace `.ptool-text` label + `.ptool-icon`. The header carries an
+   at-a-glance progress WITHOUT expanding: a slim inline mini-bar + a done/total
+   count chip (turns green at 100%) + the in-progress item's text as a subtle
+   "current step" preview. Expanded, the body is a vertical-timeline stepper:
+   a connector line threads the state glyphs (✓ done / ◔ in-progress / ○
+   pending), the in-progress step is highlighted (that's what's happening now)
+   and completed steps are struck through. */
+function _renderTodoBlock(round, svg, q, badgeHtml) {
+  const meta = (round.results || [])[0] || {};
+  let todos = Array.isArray(meta.todos) ? meta.todos : null;
+  // Fallback: some persisted/legacy rounds may carry the list on the round
+  // itself rather than in the first result meta.
+  if (!todos && Array.isArray(round.todos)) todos = round.todos;
+  if (!todos) return null;
+
+  const _t = (typeof t === "function") ? t : (k, d) => d;
+  const total = todos.length;
+  const done = todos.filter((x) => x && x.status === "completed").length;
+  const pct = total ? Math.round((done / total) * 100) : 0;
+  const allDone = total > 0 && done === total;
+
+  const headLabel = total
+    ? _t("todo.head", "Checklist")
+    : _t("todo.cleared", "Checklist cleared");
+
+  const _ICON = {
+    completed: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>',
+    in_progress: '<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M12 3a9 9 0 1 0 9 9A9 9 0 0 0 12 3zm0 2v7l4.5 2.6A7 7 0 0 1 12 5z"/></svg>',
+    pending: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/></svg>',
+  };
+
+  let rows = "";
+  for (const item of todos) {
+    if (!item || typeof item !== "object") continue;
+    const st = (item.status === "completed" || item.status === "in_progress") ? item.status : "pending";
+    const text = escapeHtml(String(item.content || "").trim());
+    rows += `<div class="ptool-todo-item ptool-todo-${st}">` +
+      `<span class="ptool-todo-mark">${_ICON[st]}</span>` +
+      `<span class="ptool-todo-text">${text}</span>` +
+      `</div>`;
+  }
+  if (!rows) {
+    rows = `<div class="ptool-todo-empty">${escapeHtml(_t("todo.emptyBody", "No checklist items."))}</div>`;
+  }
+
+  const barHtml = total
+    ? `<span class="ptool-todo-minibar" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100" title="${done}/${total}">` +
+        `<span class="ptool-todo-minibar-fill${allDone ? " ptool-todo-minibar-done" : ""}" style="width:${pct}%"></span>` +
+      `</span>`
+    : "";
+  const countChip = total
+    ? `<span class="ptool-todo-count${allDone ? " ptool-todo-count-done" : ""}">${done}/${total}</span>`
+    : "";
+
+  return `<details class="ptool-todo-block" data-rn="${round.roundNum}">
+       <summary class="ptool-line ptool-todo-header">
+         <span class="ptool-icon">${svg}</span>
+         <span class="ptool-text">${escapeHtml(headLabel)}</span>
+         ${barHtml}
+         ${countChip}
+       </summary>
+       <div class="ptool-todo-body"><div class="ptool-todo-list">${rows}</div></div>
+     </details>`;
+}
+
 /* ★ Project-brain / conversation-meta block — a collapsible card that renders
    the tool's full prose output (board listing, charter text, conversation
    digest, peer status) as Markdown. These tools return their real payload in
@@ -740,6 +864,9 @@ function _convMetaHeadLabel(round, tFn) {
     project_intervene: ["brainHead.intervene", "Flagged an overlap to another conversation"],
     list_conversations: ["brainHead.listConvs", "Searched past conversations"],
     get_conversation: ["brainHead.getConv", "Opened a past conversation"],
+    project_claim_path: ["brainHead.claimPath", "Reserved files for editing"],
+    project_release_path: ["brainHead.releasePath", "Released a file reservation"],
+    project_commit: ["brainHead.commit", "Committed this conversation's work"],
   };
   if (tn.startsWith("project_board_") && !M[tn]) {
     return _t("brainHead.boardMutate", "Updated the team board");
@@ -767,6 +894,12 @@ function _convMetaPurpose(round, tFn) {
       "An advisory note to a sibling conversation, delivered on its next turn — it never interrupts a running turn."],
     project_intervene: ["brainWhy.intervene",
       "Nudges a sibling conversation to re-check the board (advisory); a hard stop needs explicit human approval."],
+    project_claim_path: ["brainWhy.claimPath",
+      "Reserves specific files/paths on the shared board so sibling conversations hold off editing them while this conversation works — a durational, auto-expiring advisory lease, not a hard lock."],
+    project_release_path: ["brainWhy.releasePath",
+      "Clears a previously-held file/path reservation so sibling conversations may edit those paths again."],
+    project_commit: ["brainWhy.commit",
+      "Commits ONLY the files this conversation provably authored (byte-identical to its own last edit); files also carrying a sibling's uncommitted changes are held back, never swept in."],
   };
   if (tn.startsWith("project_board_") && !P[tn]) {
     return _t("brainWhy.boardMutate",
@@ -789,7 +922,6 @@ function _renderBoardSnapshot(snap) {
   const laneDef = [
     ["open", _t("projectBrain.laneOpen", "Open")],
     ["claimed", _t("projectBrain.laneClaimed", "In progress")],
-    ["deferred", _t("projectBrain.laneDeferred", "Parked (awaiting decision)")],
     ["done", _t("projectBrain.laneDone", "Done")],
   ];
   let html = '<div class="ptool-board-mini">';
@@ -941,7 +1073,13 @@ function _renderFeedActivity(fa) {
   for (const ev of events) {
     const kind = ev.kind || "note";
     const kindLabel = _t("projectBrain.kind." + kind, kind);
-    const who = ev.title || (ev.convId ? "conv " + String(ev.convId).slice(0, 8) : "");
+    // Prefer the (backend-backfilled) title; else resolve the id to a title
+    // via convTitleById — a raw `conv <id>` is meaningless to the user. Only
+    // fall back to a short id when nothing resolves (conversation not loaded).
+    const who = ev.title
+      || (ev.convId && typeof convTitleById === "function"
+        ? convTitleById(ev.convId)
+        : (ev.convId ? "conv " + String(ev.convId).slice(0, 8) : ""));
     const mine = ev.mine
       ? `<span class="ptool-feed-mine">${escapeHtml(_t("projectBrain.thisConv", "this conversation"))}</span>` : "";
     const when = _convMetaRelTime(ev.ts);
@@ -973,15 +1111,104 @@ function _renderPeerDelivery(pd) {
     pd.outcome || "delivered");
   const arrow = (typeof Icon === "function") ? Icon("chevronDown", 12) : "→";
   const body = (pd.text || "").trim();
+  // Show the TARGET conversation by its human-readable title, not a raw id
+  // (a bare `conv mradmzmd` is meaningless to the user). Falls back to a
+  // localized "Untitled chat" via convTitleById; a short id still resolves by
+  // unique prefix against the loaded conversation list.
+  const _target = (typeof convTitleById === "function" && pd.toConv)
+    ? convTitleById(pd.toConv)
+    : ("conv " + String(pd.toConv || "").slice(0, 8));
   return `<div class="ptool-peermsg ptool-peermsg-${escapeHtml(pd.outcome || "delivered")}">` +
     `<div class="ptool-peermsg-head">` +
     `<span class="ptool-peermsg-verb">${escapeHtml(verb)}</span>` +
     `<span class="ptool-peermsg-arrow">${arrow}</span>` +
-    `<span class="ptool-peermsg-target">conv ${escapeHtml(String(pd.toConv).slice(0, 8))}</span>` +
+    `<span class="ptool-peermsg-target" title="${escapeHtml(String(pd.toConv || ""))}">${escapeHtml(_target)}</span>` +
     `<span class="ptool-peermsg-outcome ptool-peermsg-outcome-${escapeHtml(pd.outcome || "delivered")}">${escapeHtml(outcomeLabel)}</span>` +
     `</div>` +
     (body ? `<div class="ptool-peermsg-text">${escapeHtml(body)}</div>` : "") +
     `</div>`;
+}
+
+/** Commit result card for project_commit: the mode (planned vs committed), the
+    files that were / would be committed, the files held back with the reason
+    each was excluded, and the resulting sha + verify state. Renders off the
+    STRUCTURED meta.commitResult the backend attaches — never re-parsed prose. */
+function _renderCommitResult(cr) {
+  if (!cr) return "";
+  const _t = (typeof t === "function") ? t : (k, d) => d;
+  const isPlan = cr.mode === "plan";
+  const committed = cr.committed || [];
+  const clean = cr.clean || [];
+  const excluded = cr.excluded || [];
+  // The "positive" set: committed files (real commit) or would-commit files (plan).
+  const posFiles = (!isPlan && cr.ok) ? committed : clean;
+
+  // ── Outcome chip: the single most important signal (committed / planned /
+  //    failed / verify-mismatch). ──
+  let outcome, outClass;
+  if (!cr.ok) {
+    outcome = _t("commitCard.outFailed", "not committed");
+    outClass = "failed";
+  } else if (isPlan) {
+    outcome = _t("commitCard.outPlanned", "plan only");
+    outClass = "planned";
+  } else if (cr.verified === false) {
+    outcome = _t("commitCard.outVerifyMismatch", "verify mismatch");
+    outClass = "warn";
+  } else {
+    outcome = _t("commitCard.outCommitted", "committed");
+    outClass = "committed";
+  }
+  const shaHtml = (cr.commitSha && !isPlan && cr.ok)
+    ? `<span class="ptool-commit-sha" title="${escapeHtml(_t("commitCard.shaTitle", "commit hash"))}">${escapeHtml(String(cr.commitSha).slice(0, 12))}</span>`
+    : "";
+
+  let html = `<div class="ptool-commit ptool-commit-${escapeHtml(outClass)}">`;
+  html += `<div class="ptool-commit-head">` +
+    `<span class="ptool-commit-outcome ptool-commit-outcome-${escapeHtml(outClass)}">${escapeHtml(outcome)}</span>` +
+    shaHtml + `</div>`;
+
+  if (!cr.ok && cr.error) {
+    html += `<div class="ptool-commit-err">${escapeHtml(cr.error)}</div>`;
+  }
+
+  // ── The clean / committed set. ──
+  if (posFiles.length) {
+    const headKey = (!isPlan && cr.ok) ? "commitCard.committedHead" : "commitCard.wouldCommitHead";
+    const headDef = (!isPlan && cr.ok)
+      ? "Committed ({n}) — provably yours"
+      : "Would commit ({n}) — provably yours";
+    html += `<div class="ptool-commit-group">` +
+      `<div class="ptool-commit-grouphead ptool-commit-grouphead-clean">` +
+      `${(typeof Icon === "function") ? Icon("check", 11) : ""}` +
+      `<span>${escapeHtml(_t(headKey, headDef).replace("{n}", posFiles.length))}</span></div>` +
+      `<div class="ptool-commit-files">` +
+      posFiles.map((p) => `<div class="ptool-commit-file">${escapeHtml(p)}</div>`).join("") +
+      `</div></div>`;
+  } else if (cr.ok) {
+    html += `<div class="ptool-commit-empty">${escapeHtml(_t("commitCard.noneClean", "No files were provably attributable to this conversation."))}</div>`;
+  }
+
+  // ── The held-back / excluded set (each with its reason). ──
+  if (excluded.length) {
+    html += `<div class="ptool-commit-group">` +
+      `<div class="ptool-commit-grouphead ptool-commit-grouphead-held">` +
+      `${(typeof Icon === "function") ? Icon("hourglass", 11) : ""}` +
+      `<span>${escapeHtml(_t("commitCard.heldHead", "Held back ({n}) — not committed").replace("{n}", excluded.length))}</span></div>` +
+      `<div class="ptool-commit-files">` +
+      excluded.map(function (e) {
+        const ns = e.numstat
+          ? `<span class="ptool-commit-numstat">${escapeHtml(e.numstat)}</span>` : "";
+        const reason = e.reason
+          ? `<span class="ptool-commit-reason">${escapeHtml(e.reason)}</span>` : "";
+        return `<div class="ptool-commit-file ptool-commit-file-held">` +
+          `<span class="ptool-commit-fpath">${escapeHtml(e.path || "")}</span>${ns}${reason}</div>`;
+      }).join("") +
+      `</div></div>`;
+  }
+
+  html += "</div>";
+  return html;
 }
 
 /* ★ Default-open policy for conv-meta cards. ROUTINE COORDINATION READS
@@ -998,7 +1225,7 @@ const _CONV_META_ROUTINE_READS = new Set([
 ]);
 function _convMetaDefaultOpen(round) {
   const tn = round.toolName || "";
-  // Board MUTATIONS (post/claim/complete/block/defer) are actions → open.
+  // Board MUTATIONS (post/claim/complete/block) are actions → open.
   if (tn.startsWith("project_board_") && tn !== "project_board_read") return true;
   return !_CONV_META_ROUTINE_READS.has(tn);
 }
@@ -1035,6 +1262,7 @@ function _structuredConvMetaBody(round, meta) {
   if (meta.feedActivity) return _renderFeedActivity(meta.feedActivity);
   if (meta.peerDelivery) return _renderPeerDelivery(meta.peerDelivery);
   if (meta.charterProposal) return _renderCharterProposal(meta.charterProposal);
+  if (meta.commitResult) return _renderCommitResult(meta.commitResult);
   return "";
 }
 
@@ -1046,12 +1274,15 @@ const _CONV_META_SOURCE_I18N = {
   Conversations: ["brainSrc.conversations", "Conversations"],
   ConvRef: ["brainSrc.conversations", "Conversations"],
   Peer: ["brainSrc.peer", "Team"],
+  Git: ["brainSrc.git", "Git"],
 };
 
 function _renderConvMetaBlock(round, svg, q, badgeHtml) {
   const meta = (round.results || [])[0] || {};
   const _t = (typeof t === "function") ? t : (k, d) => d;
-  const source = meta.source || "";
+  // project_commit is routed through the Board handler (source==="Board") but
+  // it is a git operation, not a board action — give it its own source chip.
+  const source = (round.toolName === "project_commit") ? "Git" : (meta.source || "");
   const srcEntry = _CONV_META_SOURCE_I18N[source];
   const sourceLabel = srcEntry ? _t(srcEntry[0], srcEntry[1]) : (source || "");
   const sourceChip = sourceLabel
@@ -1143,6 +1374,10 @@ function _renderUnifiedToolLine(round, isSearching) {
   const results = round.results || [];
   const meta = results[0] || {};
   const rootPill = _renderToolRootPill(round);
+  /* run_command / code_exec render the root prefix inline on the title
+   * line (alongside the description), where a trailing colon reads as if
+   * it introduces the description — so the command-header variant drops it. */
+  const cmdRootPill = _renderToolRootPill(round, true);
   /* ★ Harness self-repair badge — the backend auto-corrected this call's
    *   malformed arguments (truncated/invalid JSON, or schema-shape coercion).
    *   Surfacing it tells the user the displayed/executed args differ from
@@ -1156,6 +1391,10 @@ function _renderUnifiedToolLine(round, isSearching) {
   //   model was handed. Collapsible: expands to the raw payloads.
   if (round._inboxInject) {
     return _renderInboxInjectRow(round);
+  }
+
+  if (round._peerInject) {
+    return _renderPeerInjectRow(round);
   }
 
   // ★ Hallucinated / rejected tool — the model invented a tool that does not
@@ -1370,8 +1609,8 @@ function _renderUnifiedToolLine(round, isSearching) {
         const _a = typeof round.toolArgs === "string" ? JSON.parse(round.toolArgs) : (round.toolArgs || {});
         _cmdDesc = (_a && _a.description) || "";
       } catch (_e) { /* malformed toolArgs — skip description */ }
-      const descHtml = _cmdDesc
-        ? `<div class="ptool-cmd-desc">${escapeHtml(_cmdDesc)}</div>`
+      const descInlineHtml = _cmdDesc
+        ? `<span class="ptool-cmd-desc-inline" title="${escapeHtml(_cmdDesc)}">${escapeHtml(_cmdDesc)}</span>`
         : "";
       const partial = typeof round._partialOutput === "string" ? round._partialOutput : "";
       let liveOutHtml = "";
@@ -1387,11 +1626,11 @@ function _renderUnifiedToolLine(round, isSearching) {
       return `<div class="ptool-cmd-block ptool-cmd-running">
            <div class="ptool-cmd-header">
              <span class="ptool-cmd-icon">${svg}</span>
-             ${rootPill}
+             ${cmdRootPill}
+             ${descInlineHtml}
              <span class="ptool-cmd-label">Running...</span>
              <span class="ptool-spinner"></span>
            </div>
-           ${descHtml}
            <pre class="ptool-cmd-code"><code>$ ${cmdText}</code></pre>
            ${liveOutHtml}
          </div>`;
@@ -1416,8 +1655,8 @@ function _renderUnifiedToolLine(round, isSearching) {
   // ★ run_command / code_exec: render as inline terminal block with collapsible output
   if ((round.toolName === "run_command" || round.toolName === "code_exec") && (meta.command != null || meta.output != null)) {
     const cmd = escapeHtml(meta.command || round.query || "");
-    const descHtml = meta.description
-      ? `<div class="ptool-cmd-desc">${escapeHtml(meta.description)}</div>`
+    const descInlineHtml = meta.description
+      ? `<span class="ptool-cmd-desc-inline" title="${escapeHtml(meta.description)}">${escapeHtml(meta.description)}</span>`
       : "";
     const output = meta.output || "";
     const exitCode = meta.exitCode ?? "?";
@@ -1458,11 +1697,10 @@ function _renderUnifiedToolLine(round, isSearching) {
     return `<div class="ptool-cmd-block ${statusCls}" data-rn="${round.roundNum}">
          <div class="ptool-cmd-header">
            <span class="ptool-cmd-icon">${svg}</span>
-           ${rootPill}
-           <span class="ptool-cmd-label">${round.toolName === "code_exec" ? "Code Execution" : "Command"}</span>
+           ${cmdRootPill}
+           ${descInlineHtml}
            <span class="ptool-cmd-status">${statusLabel}</span>
          </div>
-         ${descHtml}
          <pre class="ptool-cmd-code"><code>$ ${cmd}</code></pre>
          ${outputHtml}
        </div>`;
@@ -1921,6 +2159,14 @@ function _renderUnifiedToolLine(round, isSearching) {
   if ((round.toolName === "create_memory" || round.toolName === "update_memory" || round.toolName === "merge_memories") && round.toolArgs) {
     const memHtml = _renderMemoryBlock(round, svg, q, compactionLabelHtml, rootPill, badgeHtml);
     if (memHtml) return memHtml;
+  }
+
+  // ★ todo_write — collapsible checklist progress card (state glyphs + a slim
+  //   progress bar), rendered off the structured meta.todos the backend
+  //   attaches. Falls through to the generic line only if the list is absent.
+  if (round.toolName === "todo_write") {
+    const todoHtml = _renderTodoBlock(round, svg, q, badgeHtml);
+    if (todoHtml) return todoHtml;
   }
 
   // ★ write_file — collapsible inline preview of the written content,
@@ -2426,7 +2672,7 @@ function _roundTagText(rno) {
  * display:contents (no box), so this renders as a thin label line above
  * the single tool row. */
 function _renderSoloRoundTag(rno) {
-  return `<div class="ptool-turn-rno ptool-turn-rno-solo">${escapeHtml(_roundTagText(rno))}</div>`;
+  return `<div class="ptool-turn-rno ptool-turn-rno-solo" title="${escapeHtml(_roundTagText(rno))}">${escapeHtml(String(rno))}</div>`;
 }
 
 /* The collapsible header shown atop a multi-call .ptool-turn container.
@@ -2434,8 +2680,8 @@ function _renderSoloRoundTag(rno) {
  * a finalize swap is seamless. `rno` (optional) prefixes the round number
  * so the header reads e.g. `第3轮 · 2 parallel calls`. */
 function _renderTurnHead(size, rno) {
-  const rnoHtml = rno != null ? `<span class="ptool-turn-rno">${escapeHtml(_roundTagText(rno))}</span>` : "";
-  return `<div class="ptool-turn-head">${_turnForkSvg}${rnoHtml}<span class="ptool-turn-label">${_turnLabelText(size)}</span><span class="ptool-turn-chev">▾</span></div>`;
+  const rnoHtml = rno != null ? `<span class="ptool-turn-rno" title="${escapeHtml(_roundTagText(rno))}">${escapeHtml(String(rno))}</span>` : "";
+  return `<div class="ptool-turn-head">${rnoHtml}${_turnForkSvg}<span class="ptool-turn-label">${_turnLabelText(size)}</span><span class="ptool-turn-chev">▾</span></div>`;
 }
 
 /* Render one tool round into its `[data-prn]` slot. Swarm rounds get the
@@ -2449,18 +2695,67 @@ function _renderToolSlot(r, allRounds) {
   return `<div data-prn="${r.roundNum}"${swarmAttr}>${inner}</div>`;
 }
 
+/* Build a llmRound-key → [narration text segments] map from a message's
+ * `segments`. Mirrors the timeline's narration selection EXACTLY (non-
+ * deliverable `text` segments only; thinking stays the grouped bottom block).
+ * Keyed "L<llmRound>" to match _computeToolBatches' batch key so the grouped
+ * panel can render each round's narration adjacent to that round's tools. */
+function _narrationByRound(segments) {
+  const m = new Map();
+  if (!Array.isArray(segments)) return m;
+  for (const s of segments) {
+    if (!s || s.type !== "text" || s.deliverable) continue;
+    if (s.llmRound == null) continue;
+    const en = s.text || "";
+    const zh = s.translatedText || "";
+    if (!en.trim() && !zh.trim()) continue;
+    const key = "L" + s.llmRound;
+    if (!m.has(key)) m.set(key, []);
+    m.get(key).push(s);
+  }
+  return m;
+}
+
+/* Render a round's narration segments as flat `.md-content.seg-narration`
+ * blocks — BYTE-IDENTICAL to the settled timeline (_renderTimelineBatch) and
+ * the streaming preview (.stream-seg-narration in translation.js): show the
+ * per-round Chinese (seg.translatedText, stamped by the incremental translator)
+ * when present, else the English narration. This is what makes per-round
+ * translation render IN PLACE in the grouped panel (toggle OFF / timeline
+ * fallback) instead of clumping into one block at the tail. */
+function _renderSegNarrationHTML(segs) {
+  let html = "";
+  for (const s of (segs || [])) {
+    const _segText = (s.translatedText && s.translatedText.trim()) ? s.translatedText : s.text;
+    if (!_segText || !_segText.trim()) continue;
+    const _segClean = (typeof stripNoTranslateTags === "function") ? stripNoTranslateTags(_segText) : _segText;
+    /* data-seg-round keys this narration block to its llmRound so the unified
+     * per-round translate painter (_applyPartialByRoundToSettled) can update
+     * just this block's Chinese in place when a retro/on-open translation
+     * streams round-by-round — no whole-bubble swap. Mirrors the streaming
+     * preview's .stream-seg-narration[data-seg-round]. */
+    const _rk = (s.llmRound != null) ? ` data-seg-round="L${escapeHtml(String(s.llmRound))}"` : '';
+    html += `<div class="md-content seg-narration"${_rk}>${renderMarkdown(_segClean)}</div>`;
+  }
+  return html;
+}
+
 /* Render the full grouped inner HTML of the panel body: one `.ptool-turn`
  * per batch. Solo turns get no chrome (CSS collapses the wrapper via
  * display:contents); multi-call turns get the collapsible parallel header.
+ * `narrByRound` (optional, from _narrationByRound) prepends each round's
+ * narration prose as a flat sibling BEFORE its `.ptool-turn` — the settled
+ * grouped-panel analogue of the timeline's inline narration slot.
  * Used by the static render path AND the upload.js "expand all" handler. */
-function _renderToolGroupsHTML(rounds, allRounds) {
+function _renderToolGroupsHTML(rounds, allRounds, narrByRound) {
   const ctx = allRounds || rounds;
   return _computeToolBatches(rounds).map((g) => {
     const slots = g.rounds.map((r) => _renderToolSlot(r, ctx)).join("");
     const size = g.rounds.length;
     const rno = _groupRoundNo(g);
     const head = size >= 2 ? _renderTurnHead(size, rno) : (rno != null ? _renderSoloRoundTag(rno) : "");
-    return `<div class="ptool-turn" data-llm-round="${escapeHtml(String(g.key))}" data-batch-size="${size}" data-round-no="${rno != null ? rno : ""}">${head}${slots}</div>`;
+    const narr = (narrByRound && narrByRound.get) ? _renderSegNarrationHTML(narrByRound.get(g.key)) : "";
+    return narr + `<div class="ptool-turn" data-llm-round="${escapeHtml(String(g.key))}" data-batch-size="${size}" data-round-no="${rno != null ? rno : ""}">${head}${slots}</div>`;
   }).join("");
 }
 
@@ -2492,10 +2787,21 @@ function _renderToolGroupsHTML(rounds, allRounds) {
  * `tofu_segment_timeline` = '1' (a settings switch can flip it later). Read
  * defensively so a storage-blocked context never throws. */
 function _segTimelineEnabled() {
+  /* Owner-facing switch: the Settings › General "Per-tool inline timeline"
+   * toggle, backed by config.segmentTimeline (persisted client config).
+   * DEFAULT ON — a missing/undefined flag means enabled (proven end-to-end;
+   * falls back gracefully to the grouped render for rows without segments).
+   * The localStorage key `tofu_segment_timeline` remains an explicit OVERRIDE
+   * ('0' force-off / '1' force-on) for debugging without opening Settings. */
   try {
-    return localStorage.getItem('tofu_segment_timeline') === '1';
-  } catch (_e) {
-    return false;
+    var ls = localStorage.getItem('tofu_segment_timeline');
+    if (ls === '0') return false;
+    if (ls === '1') return true;
+  } catch (_e) { /* storage blocked — fall through to config */ }
+  try {
+    return (typeof config !== 'undefined') ? (config.segmentTimeline !== false) : true;
+  } catch (_e2) {
+    return true;
   }
 }
 
@@ -2535,8 +2841,27 @@ function _renderTimelineBatch(batch, rounds, allRounds, idx) {
       html += `<div class="thinking-block seg-thinking" onclick="this.classList.toggle('expanded')"><div class="thinking-header"><span class="thinking-label">${escapeHtml(t('stream.thinking.done'))}${meta}</span><span class="thinking-toggle">▼</span></div><div class="thinking-content"><div class="thinking-text">${escapeHtml(s.text)}</div></div></div>`;
     } else if (s.type === "text" && !s.deliverable && s.text) {
       /* Inter-round narration ("Let me check the files.") rendered as its
-       * own quiet content block, adjacent to the tools it preceded. */
-      html += `<div class="md-content seg-narration">${renderMarkdown(s.text)}</div>`;
+       * own quiet content block, adjacent to the tools it preceded.
+       * ★ When auto-translate committed a per-round Chinese projection onto
+       *   this segment (seg.translatedText, stamped by the incremental
+       *   translator via _commit_translation_to_db → _stamp_segment_translations),
+       *   render THAT so the settled timeline stays interleaved exactly like
+       *   the streaming preview — no de-interleaved snap-back at finalize. The
+       *   bilingual 原文/译文 toggle still gives English on demand. Falls back
+       *   to English when the field is absent (auto-translate off / pre-v36). */
+      const _segText = (s.translatedText && s.translatedText.trim()) ? s.translatedText : s.text;
+      /* Strip any surviving <notranslate>/<nt> tags or ⟦NT_n⟧ placeholders
+       * (incl. the mangled/localized 【NT_n】 forms cheap LLMs leave behind —
+       * see lib/translate/notranslate.py) before rendering, exactly like the
+       * streaming preview (translation.js) and the settled bilingual view
+       * (chat_render.js) do. Without this the settled tool log was the one
+       * translated-content site that leaked the raw marker — a clean→dirty
+       * snap at finalize. */
+      const _segClean = (typeof stripNoTranslateTags === 'function') ? stripNoTranslateTags(_segText) : _segText;
+      /* data-seg-round: surgical-update key for the unified per-round translate
+       * painter (see _renderSegNarrationHTML). */
+      const _rk = (s.llmRound != null) ? ` data-seg-round="L${escapeHtml(String(s.llmRound))}"` : '';
+      html += `<div class="md-content seg-narration"${_rk}>${renderMarkdown(_segClean)}</div>`;
     }
   }
   // Then the tool rows for this batch (rich bodies from toolRounds).
@@ -2561,7 +2886,10 @@ function renderSegmentTimelineHTML(segments, msg, idx) {
   // caller renders the deliverable answer separately, after the panel.
   const batches = [];
   let cur = null;
-  let curKey = Symbol("start");
+  // Sentinel that never equals a real batch key ("L<n>" / "S"); `cur === null`
+  // on the first iteration forces a fresh batch regardless. (Was a Symbol,
+  // which tsc flags as a string-vs-symbol comparison that can never match.)
+  let curKey = null;
   for (const s of segments) {
     if (s.terminal) continue;               // deliverable answer / terminal thinking
     if (s.type === "text" && s.deliverable) continue;  // safety: never in timeline
@@ -2602,19 +2930,23 @@ function renderSegmentTimelineHTML(segments, msg, idx) {
     `</div>`;
 }
 
-function _renderUnifiedGroup(allRounds) {
+function _renderUnifiedGroup(allRounds, segments) {
   const anyActive = allRounds.some((r) => r.status === "searching" || r._swarmActive);
   const count = allRounds.length;
   const headerLabel = _toolPanelHeaderLabel(allRounds, anyActive);
+  /* Per-round narration (translated-in-place) for the SETTLED grouped panel.
+   * Empty map when no segments passed (streaming sync / branch / paper-reader
+   * / upload callers) → byte-identical to the pre-fix grouped render. */
+  const narrByRound = _narrationByRound(segments);
   const STATIC_LIMIT = 100;
   let lines, truncHtml = "";
   if (!anyActive && count > STATIC_LIMIT) {
     const tail = allRounds.slice(-50);
-    lines = _renderToolGroupsHTML(tail, allRounds);
+    lines = _renderToolGroupsHTML(tail, allRounds, narrByRound);
     const hiddenN = count - 50;
     truncHtml = `<div class="ptool-truncated" data-hidden-count="${hiddenN}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg><span>${escapeHtml(t("toolPanel.hidden", { n: hiddenN }))}</span></div>`;
   } else {
-    lines = _renderToolGroupsHTML(allRounds, allRounds);
+    lines = _renderToolGroupsHTML(allRounds, allRounds, narrByRound);
   }
   return `<div class="ptool-panel${anyActive ? " ptool-panel-active" : ""}">
        <div class="ptool-panel-header">
@@ -2932,6 +3264,40 @@ function _mcpLoginSegment(lh) {
   return { state, segHtml, detailHtml };
 }
 
+/* ── Learned-preferences segment for the unified turn-provenance strip ──
+   The layer-3 consolidation pass AUTO-APPLIES new/reinforced preference facts
+   and merely INFORMS the user (kind 'added' | 'reinforced'). Those are purely
+   informational — same status as a written memory — so they fold into the
+   quiet collapsible strip instead of a prominent standalone box, matching how
+   memory activity is surfaced. Actionable `pending` rows (propose-then-confirm,
+   with Confirm/Dismiss buttons) do NOT fold in — they stay in the prominent
+   renderPreferenceLearnedHtml box so the user can act on them.
+   learned: [{kind:'added'|'reinforced'|'pending', summary, pending, id}]. */
+function _prefsLearnedSegment(learned) {
+  if (!Array.isArray(learned)) return null;
+  const informational = learned.filter(p => p && !p.pending);
+  if (!informational.length) return null;
+  const _t = (typeof t === "function") ? t : (k => k);
+  const n = informational.length;
+
+  const segLabel = _t(n === 1 ? "prefs.learnedTagN" : "prefs.learnedTagNs", { n });
+  const segHtml =
+    `<span class="tp-seg tp-seg-prefs-learned tp-done">${Icon('check', 13)}` +
+    `<span class="tp-label">${escapeHtml(segLabel)}</span></span>`;
+
+  const lis = informational.map(p => {
+    const lead = (p.kind === "added") ? _t("prefs.added") : _t("prefs.learnedReinforced");
+    return `<li><span class="pl-seg-lead">${escapeHtml(lead)}</span> ${_tpInlineMd(p.summary || "")}</li>`;
+  }).join("");
+  const detailHtml =
+    `<div class="tp-detail-row tp-detail-prefs-learned mp-done">` +
+      `<div class="mp-text"><span class="mp-headline">${escapeHtml(_t("prefs.learnedHeadline"))}</span>` +
+      `<span class="mp-sub">${escapeHtml(_t("prefs.editInSettings"))}</span>` +
+      `<ul class="mp-mem-list pa-list">${lis}</ul>` +
+      `</div></div>`;
+  return { state: "done", segHtml, detailHtml };
+}
+
 /* ── UNIFIED turn-provenance strip ───────────────────────────────────
    Replaces the old stack of separate boxes (memory-prefetch +
    preferences-applied + resolved login) with ONE quiet, collapsible
@@ -2949,6 +3315,7 @@ function renderTurnProvenanceHtml(msg) {
   const segs = [_mcpLoginSegment(msg._mcpLoginHint),
                 _memPrefetchSegment(msg._memoryPrefetch),
                 _prefsAppliedSegment(msg._preferencesApplied),
+                _prefsLearnedSegment(msg._preferencesLearned),
                 _relatedConvsSegment(msg._relatedConversations)]
                 .filter(Boolean);
   if (segs.length === 0) return "";
@@ -2980,48 +3347,44 @@ function renderPreferencesAppliedHtml(pa) {
 function renderPreferenceLearnedHtml(learned) {
   /* "Remembered: X" moment(s) from the layer-3 consolidation pass.
      learned: [{kind:'added'|'reinforced'|'pending', summary, pending, id}].
-     New preferences/identity facts are now AUTO-APPLIED and the user is simply
-     INFORMED (kind 'added'); a reinforced one is a low-risk tightening of an
-     existing entry. Both are informational only — no confirm/dismiss — and the
-     hint points the user to Settings where they can edit or remove the entry.
-     The legacy 'pending' branch (propose-then-confirm) is retained for old
-     persisted messages that still carry staged proposals.
-     Backed by EventType.PREFERENCE_LEARNED. */
+     New/reinforced preferences are AUTO-APPLIED and purely INFORMATIONAL —
+     same status as a written memory — so they now fold into the quiet
+     turn-provenance strip (_prefsLearnedSegment), NOT this box. This box only
+     renders ACTIONABLE `pending` rows (the legacy propose-then-confirm gate
+     carried by old persisted messages) so the Confirm/Dismiss affordance stays
+     prominent. Backed by EventType.PREFERENCE_LEARNED. */
   if (!Array.isArray(learned) || !learned.length) return "";
   const _t = (typeof t === "function") ? t : (k => k);
-  const rows = learned.map(p => {
+  const rows = learned.filter(p => p && p.pending).map(p => {
     const sum = escapeHtml(p.summary || "");
-    if (p.pending) {
-      const pid = escapeHtml(p.id || "");
-      return `<div class="pl-row pl-pending" data-pref-id="${pid}">` +
-        `<span class="pl-lead">${Icon('lightbulb', 13)}</span>` +
-        `<span class="pl-text">${_t("prefs.learned")} <b>${sum}</b>` +
-        `<span class="pl-hint">${_t("prefs.pendingHint")}</span></span>` +
-        `<span class="pl-actions">` +
-        `<button class="pl-btn pl-confirm" onclick="window.resolvePreference&&resolvePreference(this,'${pid}',true)">${_t("prefs.confirm")}</button>` +
-        `<button class="pl-btn pl-dismiss" onclick="window.resolvePreference&&resolvePreference(this,'${pid}',false)">${_t("prefs.dismiss")}</button>` +
-        `</span></div>`;
-    }
-    const lead = (p.kind === "added")
-      ? `${_t("prefs.added")}: ` : `${_t("prefs.learnedReinforced")}: `;
-    return `<div class="pl-row pl-reinforced">` +
-      `<span class="pl-lead">${Icon('check', 13)}</span>` +
-      `<span class="pl-text">${lead}<b>${sum}</b>` +
-      `<span class="pl-hint">${_t("prefs.editInSettings")}</span></span>` +
-      `</div>`;
+    const pid = escapeHtml(p.id || "");
+    return `<div class="pl-row pl-pending" data-pref-id="${pid}">` +
+      `<span class="pl-lead">${Icon('lightbulb', 13)}</span>` +
+      `<span class="pl-text">${_t("prefs.learned")} <b>${sum}</b>` +
+      `<span class="pl-hint">${_t("prefs.pendingHint")}</span></span>` +
+      `<span class="pl-actions">` +
+      `<button class="pl-btn pl-confirm" onclick="window.resolvePreference&&resolvePreference(this,'${pid}',true)">${_t("prefs.confirm")}</button>` +
+      `<button class="pl-btn pl-dismiss" onclick="window.resolvePreference&&resolvePreference(this,'${pid}',false)">${_t("prefs.dismiss")}</button>` +
+      `</span></div>`;
   }).join("");
+  if (!rows) return "";
   return `<div class="pref-learned-box">${rows}</div>`;
 }
 
-function renderToolRoundsHTML(rounds, isStreaming) {
+function renderToolRoundsHTML(rounds, isStreaming, segments) {
   if (!rounds || rounds.length === 0) return "";
   /* ★ UNIFIED: every round — tool calls AND swarm panels — goes into
    *   the single ptool-panel in chronological order. Swarm rounds
    *   render the full agent dashboard inline as a "row" so the user
    *   sees the order in which the main agent issued spawn_agents,
    *   await_agents, get_agent_result, and any other tools, all in
-   *   one timeline. */
-  return _renderUnifiedGroup(rounds);
+   *   one timeline.
+   *   `segments` (optional): when the settled assistant message carries the
+   *   backend segment list, the grouped panel renders each round's narration
+   *   (translated-in-place) adjacent to its tools — so a translated turn does
+   *   NOT clump its narration into one tail block when the segment-timeline
+   *   toggle is OFF (or the timeline path fell back to grouped). */
+  return _renderUnifiedGroup(rounds, segments);
 }
 
 /* ── Lazy thinking expand ────────────────────────────────

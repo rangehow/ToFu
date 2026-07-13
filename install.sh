@@ -16,6 +16,10 @@
 #    --api-key <key>       Pre-configure LLM API key
 #    --no-launch           Install only, don't start
 #    --skip-playwright     Skip Playwright browser install
+#    --skip-node           Skip the OPTIONAL Node.js + esbuild step entirely
+#                          (conda-nodejs solve + npm). The JS bundle then uses
+#                          the dependency-free Python minifier — byte-identical
+#                          output, just a slightly larger gzip. Fastest install.
 #    --no-update-conda     Skip conda self-update (only relevant when we
 #                          install our OWN sibling Miniforge — we never
 #                          touch a pre-existing conda the user owns)
@@ -106,6 +110,7 @@ PORT="15000"
 API_KEY=""
 NO_LAUNCH=0
 SKIP_PLAYWRIGHT=0
+SKIP_NODE=0
 NO_UPDATE_CONDA=0
 RESET_ENV=0
 FORCE_SQLITE=0
@@ -127,6 +132,7 @@ while [[ $# -gt 0 ]]; do
         --api-key)          API_KEY="$2"; FORWARD_ARGS+=("--api-key" "$2"); shift 2 ;;
         --no-launch)        NO_LAUNCH=1; shift ;;
         --skip-playwright)  SKIP_PLAYWRIGHT=1; shift ;;
+        --skip-node)        SKIP_NODE=1; shift ;;
         --no-update-conda)  NO_UPDATE_CONDA=1; shift ;;
         --reset-env)        RESET_ENV=1; shift ;;
         --force-sqlite)     FORCE_SQLITE=1; shift ;;
@@ -1379,6 +1385,106 @@ if conda install -n "$ENV_NAME" -c conda-forge --override-channels -y ripgrep fd
     ok "ripgrep + fd-find + tmux installed"
 else
     warn "ripgrep/fd-find/tmux install failed — code search will fall back to grep / os.walk"
+fi
+
+
+# ═══════════════════════════════════════════════════════════════
+#  Node.js (OPTIONAL) — powers two best-effort, fail-open features:
+#    1. `node --check` syntax gate on the built JS bundle (lib/js_bundler.py)
+#    2. the optional esbuild stronger-minify pass (~12% smaller gzip bundle)
+#  Neither is required: without node the bundler uses its dependency-free
+#  Python minifier and the app is byte-identical. So this step NEVER fails
+#  the install — it only enhances.
+# ═══════════════════════════════════════════════════════════════
+if [[ "$SKIP_NODE" -eq 1 ]]; then
+    step "Skipping Node.js + esbuild (--skip-node)"
+    info "JS bundle will use the dependency-free Python minifier (byte-identical output)."
+elif conda install -n "$ENV_NAME" -c conda-forge --override-channels -y nodejs; then
+    step "Installing Node.js + esbuild (optional — stronger JS bundle minify)"
+    ok "Node.js installed"
+    # ── npm must FAIL-FAST, never hang ────────────────────────────────
+    # npm has no corp-mirror redirect and its defaults are fetch-timeout
+    # 300s × fetch-retries 2, so on a network that blocks
+    # registry.npmjs.org it STALLS for many minutes per package instead
+    # of erroring — the `|| warn` fallback below then never fires and the
+    # whole install appears frozen.  Since this step is OPTIONAL and
+    # fail-open (the Python minifier is byte-identical), we bound npm hard:
+    #   1. a ~5s PREFLIGHT reachability probe against the effective
+    #      registry — if it's unreachable we SKIP npm outright (turns the
+    #      worst case from 5 min into ~5s, generically, on ANY blocked net).
+    #   2. npm_config_* env vars cap per-request timeout + retries so a
+    #      registry that resolves-but-stalls errors in ~1 min, not ~15.
+    #   3. an outer `timeout` wrapper is an absolute ceiling regardless.
+    #   4. TOFU_NPM_REGISTRY (baked by export for corp hosts) redirects
+    #      the registry to a reachable mirror, same story as conda/pip.
+    export npm_config_fetch_timeout=60000
+    export npm_config_fetch_retries=1
+    export npm_config_fetch_retry_maxtimeout=20000
+    export npm_config_fetch_retry_mintimeout=5000
+    if [[ -n "${TOFU_NPM_REGISTRY:-}" ]]; then
+        info "npm registry override: ${TOFU_NPM_REGISTRY}"
+        export npm_config_registry="${TOFU_NPM_REGISTRY}"
+    fi
+    # Portable hard-timeout wrapper: GNU `timeout`, macOS `gtimeout`, else none.
+    _NPM_TIMEOUT=""
+    if command -v timeout >/dev/null 2>&1; then
+        _NPM_TIMEOUT="timeout 300"
+    elif command -v gtimeout >/dev/null 2>&1; then
+        _NPM_TIMEOUT="gtimeout 300"
+    fi
+    # ── Preflight: is the effective registry reachable in ~5s? ──────────
+    # This is the real speedup: on a network that can't reach the registry
+    # (the corp-proxy case), skip npm in ~5s instead of burning the full
+    # 5-min timeout cap. The probe MUST itself be hard-bounded so it can
+    # never become the new hang. `curl --max-time 5` is the ceiling; a
+    # `timeout 6` wrapper is a belt-and-braces backstop for a curl that
+    # ignores its own timeout (e.g. stuck in DNS).
+    #
+    # CRITICAL — probe a real PACKAGE endpoint, not the registry ROOT.
+    # A transparent corp proxy can 200/redirect the registry root while
+    # still 403-ing actual package traffic; a HEAD to the root would then
+    # FALSE-POSITIVE "reachable" and npm would stall on the first package
+    # fetch anyway. So we GET the metadata of a package we actually need
+    # (`esbuild`) — exactly the traffic npm will do — and rely on curl's
+    # `-f` (fail on HTTP >= 400) so a 403/404 on package traffic is
+    # correctly classified UNREACHABLE. Same for wget's `--server-response`
+    # gate via exit code on 4xx/5xx.
+    _NPM_REGISTRY_URL="${npm_config_registry:-https://registry.npmjs.org/}"
+    _NPM_PROBE_URL="${_NPM_REGISTRY_URL%/}/esbuild"
+    _NPM_REACHABLE=1
+    info "Checking npm registry reachability (5s preflight): ${_NPM_PROBE_URL}"
+    if command -v curl >/dev/null 2>&1; then
+        # -f → non-zero exit on 4xx/5xx (a proxy 403 on package traffic).
+        ${_NPM_TIMEOUT:+timeout 6} curl -fsS --max-time 5 -o /dev/null "$_NPM_PROBE_URL" \
+            2>/dev/null || _NPM_REACHABLE=0
+    elif command -v wget >/dev/null 2>&1; then
+        # wget exits non-zero on 4xx/5xx unless --content-on-error; a GET to
+        # /dev/null exercises real package traffic (not a HEAD --spider).
+        ${_NPM_TIMEOUT:+timeout 6} wget -q --timeout=5 --tries=1 -O /dev/null "$_NPM_PROBE_URL" \
+            2>/dev/null || _NPM_REACHABLE=0
+    else
+        # No probe tool — fall through to the timeout-bounded npm run.
+        _NPM_REACHABLE=1
+    fi
+    if [[ "$_NPM_REACHABLE" -eq 0 ]]; then
+        warn "npm registry unreachable (${_NPM_REGISTRY_URL}) — skipping npm; bundler falls back to the Python minifier (no impact on the app)"
+        warn "To enable esbuild later: set a reachable registry (export TOFU_NPM_REGISTRY=<mirror>) and re-run, or 'cd ${INSTALL_DIR} && npm ci'"
+    # One-time `npm ci` populates node_modules/ (esbuild + the typecheck
+    # harness). Persists across restarts — server.py never re-runs it.
+    elif [[ -f "${INSTALL_DIR}/package-lock.json" ]]; then
+        info "Installing JS devDependencies (npm ci — one-time, 5-min cap)..."
+        (cd "$INSTALL_DIR" && $_NPM_TIMEOUT npm ci --no-audit --no-fund) \
+            && ok "JS devDependencies installed (esbuild available to the bundler)" \
+            || warn "npm ci failed/timed out — bundler falls back to the Python minifier (no impact on the app)"
+    else
+        info "Installing esbuild (npm install — one-time, 5-min cap)..."
+        (cd "$INSTALL_DIR" && $_NPM_TIMEOUT npm install --no-audit --no-fund) \
+            && ok "esbuild installed" \
+            || warn "npm install failed/timed out — bundler falls back to the Python minifier (no impact on the app)"
+    fi
+else
+    step "Installing Node.js + esbuild (optional — stronger JS bundle minify)"
+    warn "Node.js install skipped/failed — JS bundle uses the dependency-free Python minifier (fine; the app is unaffected)"
 fi
 
 # ═══════════════════════════════════════════════════════════════

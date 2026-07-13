@@ -107,6 +107,26 @@ def _normalize_todos(raw) -> list[dict]:
             tid = str(i + 1)
         out.append({'id': tid.strip(), 'content': content.strip(),
                     'status': status})
+
+    # Enforce the tool contract: at most ONE item may be in_progress at a
+    # time. If the model sends several, keep the FIRST in document order and
+    # demote the rest to pending — the checklist is meant to reflect a single
+    # active step, and multiple in_progress defeats the continuation-enforcer
+    # signal that keys off it.
+    seen_in_progress = False
+    demoted = 0
+    for t in out:
+        if t['status'] != 'in_progress':
+            continue
+        if seen_in_progress:
+            t['status'] = 'pending'
+            demoted += 1
+        else:
+            seen_in_progress = True
+    if demoted:
+        logger.warning('todo_write: %d extra in_progress item(s) demoted to '
+                       'pending — exactly one may be in_progress at a time',
+                       demoted)
     return out
 
 

@@ -47,7 +47,12 @@ pytestmark = pytest.mark.unit
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, '..'))
 JS_DIR = os.path.join(ROOT, 'static', 'js')
-PAPER_JS = os.path.join(JS_DIR, 'paper-reader.js')
+# The divider + responsive-crossing IIFE was extracted to this self-contained
+# sibling (Epic E cut #4, 2026-07-11). The harness evals only this file (the
+# IIFE self-inits on DOMContentLoaded and its runtime deps — paperFitWidth /
+# _setPaperMobileView — are stubbed/overridden post-eval), and the triple-neuter
+# NC markers + the byte-identity assertion now target it.
+PAPER_JS = os.path.join(JS_DIR, 'paper', 'pdf_responsive.js')
 
 
 def _node_deps_available() -> bool:
@@ -111,7 +116,12 @@ win.__mql = mql;
 // care THAT it's called on a crossing, so replace it after eval.
 let fitCalls = 0;
 
-eval(fs.readFileSync(process.argv[2], 'utf8'));  // paper-reader.js (real, shipped)
+// argv[4] = core paper-reader.js (defines the REAL _setPaperMobileView the
+// crossing handler calls); argv[2] = pdf_responsive.js (the extracted IIFE
+// under test / neuter). Eval core FIRST so _setPaperMobileView exists when the
+// sibling's crossing handler runs, then the sibling in the SAME scope.
+if (process.argv[4] && fs.existsSync(process.argv[4])) eval(fs.readFileSync(process.argv[4], 'utf8'));
+eval(fs.readFileSync(process.argv[2], 'utf8'));  // pdf_responsive.js (real, shipped)
 
 // Post-eval overrides. _setPaperMobileView stays REAL (it's under test).
 paperFitWidth = win.paperFitWidth = () => { fitCalls++; };
@@ -174,7 +184,8 @@ def _run_harness(paper_js: str) -> subprocess.CompletedProcess:
         f.write(_HARNESS)
     try:
         return subprocess.run(
-            ['node', harness, paper_js, ROOT],
+            ['node', harness, paper_js, ROOT,
+             os.path.join(JS_DIR, 'paper-reader.js')],
             capture_output=True, text=True, timeout=60,
         )
     finally:

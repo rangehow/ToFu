@@ -234,6 +234,63 @@ class ConvRegistryAutoRegisterTest(_Base):
         self.assertIn(os.path.abspath(self._sibling), self._roots_paths())
 
 
+class RecentProjectPersistenceTest(_Base):
+    """Model-added workspace roots are persisted to the recent-projects list.
+
+    A root the ASSISTANT registers (create_project OR the absolute-path-write
+    auto-register) must land in recent_projects server-side — so it shows up
+    under "recent" even when the emitting conversation is NOT the active one
+    (the frontend workspace_root_added handler only refreshes for the active
+    conv). Temp-dir scratch paths must NOT be saved.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self._sibling = os.path.join(self._work, 'sibling')
+        os.makedirs(self._sibling)
+        # Capture save_recent_project calls without touching the DB. The
+        # helper imports it via ``from lib.project_mod.config import
+        # save_recent_project`` at call time, so patching the attribute on
+        # the config module is what the helper resolves.
+        self._saved_paths = []
+        self._orig_srp = cfg.save_recent_project
+        cfg.save_recent_project = lambda p: self._saved_paths.append(p)
+
+    def tearDown(self):
+        cfg.save_recent_project = self._orig_srp
+        super().tearDown()
+
+    def test_abs_write_auto_register_saves_recent(self):
+        target = os.path.join(self._sibling, 'pkg', 'mod.py')
+        tool_write_file(self._proj, target, 'x = 1\n', conv_id='c1', task_id='t1')
+        self.assertIn(os.path.abspath(self._sibling),
+                      [os.path.abspath(p) for p in self._saved_paths],
+                      'auto-registered root must be saved to recent projects')
+
+    def test_temp_write_does_not_save_recent(self):
+        target = os.path.join(self._tmp_scratch, 'scratch.py')
+        tool_write_file(self._proj, target, '1\n', conv_id='c1', task_id='t1')
+        self.assertEqual(self._saved_paths, [],
+                         'temp-dir scratch write must NOT pollute recent projects')
+
+    def test_subdir_of_existing_root_does_not_save_recent(self):
+        # A write under the already-registered primary registers no new root
+        # → nothing new should be saved to recent.
+        target = os.path.join(self._proj, 'sub', 'f.py')
+        tool_write_file(self._proj, target, '1\n', conv_id='c1', task_id='t1')
+        self.assertEqual(self._saved_paths, [],
+                         'a subdir write under an existing root saves nothing new')
+
+    def test_create_project_saves_recent(self):
+        from lib.project_mod.write_tools import tool_create_project
+        new_dir = os.path.join(self._work, 'brand_new')
+        res = tool_create_project(new_dir, conv_id='c1', task_id='t1')
+        self.assertTrue(res.get('ok'), res)
+        self.assertIn(os.path.abspath(new_dir),
+                      [os.path.abspath(p) for p in self._saved_paths],
+                      'create_project root must be saved to recent projects')
+
+
 class SubdirOfExistingRootTest(_Base):
     """Required scenario #3: write under an EXISTING root → no new root, no signal.
 

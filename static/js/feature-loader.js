@@ -99,7 +99,9 @@ function _installFeatureStub(name) {
   const stub = function () {
     const args = arguments;
     _loadFeatureBundle().then((loaded) => {
-      const real = window[name];
+      // `name` is a dynamic global key; index a string-record view of window
+      // (scoped cast, not a blanket Window index signature that would mask typos).
+      const real = /** @type {Record<string, any>} */ (window)[name];
       if (typeof real === 'function' && real !== stub) {
         try { real.apply(null, args); }
         catch (e) { console.error('[feature-loader] ' + name + ' threw:', e); }
@@ -110,7 +112,7 @@ function _installFeatureStub(name) {
       }
     });
   };
-  window[name] = stub;
+  /** @type {Record<string, any>} */ (window)[name] = stub;
 }
 
 /* The deferred entry points. Keep in sync with _DEFERRED_ENTRY_POINTS in
@@ -123,6 +125,31 @@ const _DEFERRED_ENTRY_POINTS = [
   'openOrchestration', 'openTaskMode', 'togglePaperMode',
   'enterImageGenMode', 'exitImageGenMode', 'generateImageDirect',
   'selectIgAspect', 'selectIgCount', 'selectIgResolution', 'toggleIgModelDropdown',
+  // Project Brain openers (deferred 2026-07-09). Only the user-triggered
+  // openers — projectBrainRefresh (conv-switch) + closeProjectBrain (overlay
+  // onclick) are intentionally NOT here so conv-switch never loads the bundle.
+  'openProjectBrain', 'toggleProjectBrain', 'openProjectBrainInfluence',
 ];
 _DEFERRED_ENTRY_POINTS.forEach(_installFeatureStub);
 window._DEFERRED_ENTRY_POINTS = _DEFERRED_ENTRY_POINTS;
+
+/* Warm the deferred feature bundle during browser idle time after boot.
+ * Without this, the FIRST click on Paper / Studio / Task-mode / Image-gen
+ * blocks on the whole feature bundle's network fetch + parse before the mode
+ * can open — a visible lag. Prefetching in the background turns that first
+ * click instant. _loadFeatureBundle() is idempotent (one shared promise), so
+ * a click that races the prefetch simply awaits the same in-flight load; and
+ * when there is nothing to defer (dev fallback) it no-ops. Deferred to idle so
+ * it never competes with first paint / chat boot. */
+if (window.__FEATURE_BUNDLE_SRC__) {
+  const _prefetchFeatureBundle = function () {
+    try { _loadFeatureBundle(); }
+    catch (e) {
+      if (typeof debugLog === 'function') debugLog('[feature-loader] prefetch failed: ' + (e && e.message), 'warn');
+    }
+  };
+  if (typeof requestIdleCallback === 'function')
+    requestIdleCallback(_prefetchFeatureBundle, { timeout: 5000 });
+  else
+    setTimeout(_prefetchFeatureBundle, 2000);
+}

@@ -379,6 +379,16 @@ class ConversationStore(Protocol):
         """
         ...
 
+    def notify_conversation_changed(self, conv_id: str) -> None:
+        """Emit a cross-device "conversation changed" notification.
+
+        Looks up the conversation's current ``rev`` and fires the host's
+        conv-changed push so a sibling tab with this conversation open
+        refetches its body without a manual refresh.  Best-effort — the store
+        swallows/logs its own failures; callers invoke it after a landed write.
+        """
+        ...
+
 
 # ═══════════════════════════════════════════════════════════
 #  Tool Handler Protocol

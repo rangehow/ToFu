@@ -53,10 +53,21 @@ async function _createBranchOnServer(convId, msgIdx, title, anchorText, parentSe
     //   per CLAUDE.md §3.2.0 — no JS file other than api.js may raw-fetch /api/*.
     //   (The old raw `fetch(url, …)` used a variable URL, which the isolation
     //   ratchet's inline-string regex couldn't even see — a silent violation.)
+    // ★ Send the anchor's stable _msgId so the server resolves the CURRENT
+    //   absolute index — drift-proof under windowed reads where msgIdx is only
+    //   a tail-window position, not the absolute index.
+    let _anchorMsgId = null;
+    try {
+      const _c = (typeof conversations !== 'undefined')
+        ? conversations.find((c) => c.id === convId) : null;
+      _anchorMsgId = _c && _c.messages && _c.messages[msgIdx]
+        ? _c.messages[msgIdx]._msgId : null;
+    } catch (_e) { /* best-effort */ }
     const r = await Api.conversations.createBranch(convId, msgIdx, {
       title,
       anchor_text: anchorText || '',
       parent_selection: parentSelection || '',
+      msg_id: _anchorMsgId || undefined,
     });
     if (!r || !r.ok) {
       if (typeof debugLog === 'function') {
@@ -418,7 +429,7 @@ async function deleteBranch(msgIdx, branchIdx) {
   //   in-memory branches array and force a re-render from server state.
   (async () => {
     try {
-      const res = await Api.conversations.deleteBranch(conv.id, msgIdx, branchIdx);
+      const res = await Api.conversations.deleteBranch(conv.id, msgIdx, branchIdx, { msgId: msg._msgId });
       if (!res || !res.ok) {
         let body = null;
         try { body = res ? await res.json() : null; } catch (_e) { /* ignore */ }
@@ -847,39 +858,16 @@ async function _branchStreamSSE(conv, msgIdx, branchIdx, branch, assistantMsg, t
   try {
     const res = await Api.chat.streamResponse(taskId, { signal: controller.signal });
     if (!res || !res.ok) throw new Error(`SSE HTTP ${res ? res.status : 'no response'}`);
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        // Process remaining buffer
-        if (buffer.trim()) {
-          for (const line of buffer.split("\n")) {
-            const l = line.trim();
-            if (l.startsWith("data: ")) {
-              try {
-                const ev = JSON.parse(l.slice(6));
-                if (_processEvent(ev) === "done") break;
-              } catch {}
-            }
-          }
-        }
-        break;
-      }
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() || "";
-      for (const line of lines) {
+    await readSSEStream(res, {
+      onLine(line) {
         const l = line.trim();
-        if (!l.startsWith("data: ")) continue;
+        if (!l.startsWith("data: ")) return false;
         try {
           const ev = JSON.parse(l.slice(6));
-          if (_processEvent(ev) === "done") return;
-        } catch {}
-      }
-    }
+          return _processEvent(ev) === "done";
+        } catch { return false; }
+      },
+    });
   } catch (e) {
     clearTimeout(sseTimeout);
     if (e.name === "AbortError") throw e;

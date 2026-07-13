@@ -155,15 +155,19 @@ def _objective_anchor_index(messages: list) -> int | None:
     and re-inserts it exactly once; ``_head_truncate`` never drops it).  The
     autopilot pin is a cross-run TEXT cache of the very same message.
 
-    Skips leading ``system`` messages and any VU directive / virtual-user turn
-    (defensive — those flags are autopilot-only and absent elsewhere).  Returns
-    ``None`` when no real user message exists (compaction then behaves exactly
-    as before — no anchor to protect).
+    Skips leading ``system`` messages, any VU directive / virtual-user turn
+    (defensive — those flags are autopilot-only and absent elsewhere), and the
+    synthetic ``_isMeta`` context carriers the builder prepends (CLAUDE.md /
+    user-preference profile) — those are a ``user`` message at index 1, BEFORE
+    the real user turn, so without this skip the anchor would protect injected
+    context instead of the human's goal. Same skip as ``_extract_objective``.
+    Returns ``None`` when no real user message exists (compaction then behaves
+    exactly as before — no anchor to protect).
     """
     for i, m in enumerate(messages):
         if not isinstance(m, dict) or m.get('role') != 'user':
             continue
-        if m.get('_isVuDirective') or m.get('_isVirtualUser'):
+        if m.get('_isVuDirective') or m.get('_isVirtualUser') or m.get('_isMeta'):
             continue
         content = m.get('content')
         if isinstance(content, str):
@@ -310,7 +314,9 @@ def _summary_input_char_budget(task: dict | None) -> int:
     """
     try:
         usable = _usable_context(_get_context_limit(task))
-    except Exception:
+    except Exception as e:
+        logger.debug('[Compact] usable-context lookup failed, using 96k '
+                     'fallback: %s', e)
         usable = 96_000
     input_token_budget = max(4_000, usable - _SUMMARY_MAX_TOKENS - 2_000)
     # Convert token budget → char budget at ~1 char/token. This is the
@@ -441,7 +447,9 @@ def _coerce_spec_list(value) -> list:
             return []
         try:
             parsed = json.loads(s)
-        except (ValueError, TypeError):
+        except (ValueError, TypeError) as e:
+            logger.debug('[Compact] _coerce_spec_list: unparseable spec '
+                         'string (%s) — dropping', e)
             return []
         return parsed if isinstance(parsed, list) else []
     return []

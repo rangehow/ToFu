@@ -38,20 +38,7 @@ _PEER_SRC = os.path.join(ROOT, 'lib', 'conversations', 'project_peer.py')
 _CONV_SRC = os.path.join(ROOT, 'lib', 'tools', 'conversation.py')
 
 
-def _patch_restore(path, old, new, run):
-    """Byte-revert a guard, run the neutered assertion, restore byte-identical."""
-    with open(path, encoding='utf-8') as f:
-        original = f.read()
-    assert old in original, f'anchor not found in {path}'
-    try:
-        with open(path, 'w', encoding='utf-8') as f:
-            f.write(original.replace(old, new, 1))
-        run()
-    finally:
-        with open(path, 'w', encoding='utf-8') as f:
-            f.write(original)
-    with open(path, encoding='utf-8') as f:
-        assert f.read() == original, 'source not restored byte-identical'
+from tests._nc_harness import patch_restore as _patch_restore  # noqa: E402
 
 
 def _events():
@@ -211,11 +198,12 @@ def test_feed_read_reachable_end_to_end_via_agent_dispatch(monkeypatch):
 #    session (the routing side is proven separately by
 #    test_registry_routes_feed_read_to_peer_handler). ──
 def test_NC_feed_read_schema_registration_is_load_bearing():
-    import importlib
-
     def run():
-        import lib.tools.conversation as conv
-        importlib.reload(conv)
+        import importlib
+        # The harness has swapped the neutered lib.tools.conversation into
+        # sys.modules; DON'T reload it (that would re-read the un-neutered
+        # file). Reload ONLY the facade so PEER_TOOLS/PEER_TOOL_NAMES are
+        # recomputed from the neutered child now live in sys.modules.
         import lib.tools as _tools
         importlib.reload(_tools)
         names = [t['function']['name'] for t in _tools.PEER_TOOLS]
@@ -237,27 +225,23 @@ def test_NC_feed_read_schema_registration_is_load_bearing():
         "                   'project_message', 'project_intervene'}",
         run,
     )
-    # Restore the facade from the byte-identical source (executor untouched).
+    # The harness restored the canonical lib.tools.conversation; recompute the
+    # facade off it so the tool is advertised again (positive restore proof).
+    import importlib
     import lib.tools as _tools
-    import lib.tools.conversation as conv
-    importlib.reload(conv)
     importlib.reload(_tools)
-    # Positive proof the restore worked: the tool is advertised again.
     assert 'project_feed_read' in _tools.PEER_TOOL_NAMES
 
 
 # ── NC-DISPATCH: no-op the feed branch in execute_peer_tool → the tool no
 #    longer reads the feed (falls through to the unknown-tool tail). ──
 def test_NC_feed_branch_noop_breaks_read(monkeypatch):
-    import importlib
-
     import lib.conversations.project_feed as pf
     monkeypatch.setattr(pf, 'read_project_feed',
                         lambda p, since_seq=0, limit=100: {'events': _events(), 'maxSeq': 3})
 
     def run():
         import lib.conversations.project_peer as pp
-        importlib.reload(pp)
         out = pp.execute_peer_tool('project_feed_read', {'limit': 5},
                                    current_conv_id='cA', project_path='/p')
         assert 'Recent project activity' not in out, \
@@ -271,8 +255,117 @@ def test_NC_feed_branch_noop_breaks_read(monkeypatch):
         "        if fn_name == '__nc_disabled_feed_read__':",
         run,
     )
-    import lib.conversations.project_peer as pp
-    importlib.reload(pp)
+
+
+# ════════════════════════════════════════════════════════════════════
+#  _post_build END-TO-END against a REAL DB — title backfill + full summary.
+#
+#  The dispatch test above STUBS read_project_feed, so it never proves the
+#  handler's _post_build actually (a) backfills a human title for a title-less
+#  lifecycle event from the conversations table (never a bare `conv <id>`), nor
+#  (b) forwards the untruncated summary_full. These two drive the REAL feed DB
+#  + the REAL _titles_by_conv resolver through _execute_tool_one — the exact
+#  path a live LLM turn uses — and assert on the structured meta the frontend
+#  card renders (round_entry['results'][0]['feedActivity']).
+# ════════════════════════════════════════════════════════════════════
+
+def _drive_feed_read_post_build(flask_app, monkeypatch, project_path):
+    """Run project_feed_read through _execute_tool_one against the live DB and
+    return the resulting feedActivity meta dict (events list included)."""
+    # Keep the round finalize's SSE append side-effect-free.
+    monkeypatch.setattr('lib.tasks_pkg.handlers.misc.append_event',
+                        lambda t, ev: None)
+    import threading
+
+    from lib.tasks_pkg.executor import _execute_tool_one
+    task = {
+        'id': 'tfeedpb', 'convId': 'cCaller', 'toolRounds': [], 'messages': [],
+        'events': [], 'events_lock': threading.Lock(),
+    }
+    round_entry = {'roundNum': 1, 'query': 'project_feed_read',
+                   'results': None, 'status': 'searching',
+                   'toolName': 'project_feed_read'}
+    task['toolRounds'].append(round_entry)
+    with flask_app.app_context():
+        _execute_tool_one(
+            task, {'id': 'tc1', 'function': {'name': 'project_feed_read'}},
+            'project_feed_read', 'tc1', {'limit': 30}, 1, round_entry,
+            {'model': 'x'}, project_path, True, None)
+    results = round_entry.get('results') or []
+    assert results, 'the round must be finalized with a result meta'
+    return results[0].get('feedActivity') or {}
+
+
+def test_post_build_backfills_title_from_db_for_titleless_event(flask_app, monkeypatch):
+    """A lifecycle event emitted with NO title (as manager/orchestrator do) for
+    a conv that HAS a real stored title must surface that title in the card —
+    never a bare `conv <id>`. Drives the real DB + _titles_by_conv."""
+    from lib.database import DOMAIN_CHAT, get_thread_db
+    from lib.conversations.project_feed import emit_project_event
+
+    proj = '/proj/feed_title_backfill'
+    conv_id = 'cRealTitled'
+    with flask_app.app_context():
+        db = get_thread_db(DOMAIN_CHAT)
+        db.execute('DELETE FROM project_events WHERE project_path=?', (proj,))
+        db.execute('DELETE FROM conversations WHERE id=?', (conv_id,))
+        now = 1
+        # Seed a real conversation row with a genuine stored title.
+        db.execute(
+            'INSERT INTO conversations (id, user_id, title, messages, settings, '
+            ' created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+            (conv_id, 1, 'Real Stored Title', '[]', '{}', now, now))
+        db.commit()
+        # Emit a lifecycle event with title='' — exactly how manager.py /
+        # orchestrator.py fire started/completed (no title= kwarg).
+        emit_project_event(proj, conv_id, 'completed', 'finished the parser work')
+
+    fa = _drive_feed_read_post_build(flask_app, monkeypatch, proj)
+    events = fa.get('events') or []
+    ours = [e for e in events if e.get('convId') == conv_id]
+    assert ours, 'the seeded lifecycle event must appear in feedActivity'
+    ev = ours[0]
+    assert ev['title'] == 'Real Stored Title', \
+        ('post_build must backfill the DB title for a title-less event, got '
+         f'{ev["title"]!r}')
+    # And it must NEVER be a bare id (the reported bug at the SOURCE).
+    assert not ev['title'].startswith('conv '), \
+        'a title-less event must not surface a bare `conv <id>`'
+
+
+def test_post_build_forwards_full_summary_not_capped(flask_app, monkeypatch):
+    """An event whose summary exceeds _SUMMARY_MAX_CHARS (so summary_full is
+    stored) must be forwarded FULL by _post_build — not the 280-char display
+    cap that truncates mid-word."""
+    from lib.database import DOMAIN_CHAT, get_thread_db
+    from lib.conversations.project_feed import (
+        emit_project_event, _SUMMARY_MAX_CHARS,
+    )
+
+    proj = '/proj/feed_full_summary'
+    conv_id = 'cLongSummary'
+    long_summary = ('Completed: ' + ('externalize the PushHub fan-out via a '
+                                      'Redis pub/sub substrate ') * 12).strip()
+    assert len(long_summary) > _SUMMARY_MAX_CHARS
+    with flask_app.app_context():
+        db = get_thread_db(DOMAIN_CHAT)
+        db.execute('DELETE FROM project_events WHERE project_path=?', (proj,))
+        db.execute('DELETE FROM conversations WHERE id=?', (conv_id,))
+        db.execute(
+            'INSERT INTO conversations (id, user_id, title, messages, settings, '
+            ' created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+            (conv_id, 1, 'Summary Conv', '[]', '{}', 1, 1))
+        db.commit()
+        emit_project_event(proj, conv_id, 'completed', long_summary)
+
+    fa = _drive_feed_read_post_build(flask_app, monkeypatch, proj)
+    ours = [e for e in (fa.get('events') or []) if e.get('convId') == conv_id]
+    assert ours, 'the long-summary event must appear in feedActivity'
+    fwd = ours[0]['summary']
+    assert fwd == long_summary, \
+        'post_build must forward the FULL summary (payload.summary_full)'
+    assert len(fwd) > _SUMMARY_MAX_CHARS, \
+        'the forwarded summary must exceed the 280-char display cap'
 
 
 # ════════════════════════════════════════════════════════════════════

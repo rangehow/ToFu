@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="tofu">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="../static/styles.css">
+<style>
+  body { margin:0; padding:32px; background: var(--bg-primary, #FAF7F0); }
+  #wrap { max-width: 760px; margin: 0 auto; }
+  /* stand-ins so the mock renders even if some vars/classes need a host */
+  .mock-note { font: 12px system-ui; color:#888; margin-bottom:16px; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div class="msg assistant">
+    <div class="msg-body">
+      <div class="md-content"></div>
+    </div>
+  </div>
+</div>
+<script>
+  const N = 12;
+  const think = "You're right on both corrections — the reservation model means \"steal a slot\" is wrong framing, and the A/B data means blanket 1h-tail is a net loss on fast turns. Let me ground everything against the actual code before editing.";
+  const narr = "Let me read the file and check the surrounding rules before editing.";
+  let inner = "";
+  for (let i = 0; i < N; i++) {
+    const meta = " (" + (300 + i * 40) + " chars)";
+    inner += '<div class="thinking-block seg-thinking" onclick="this.classList.toggle(\'expanded\')">'
+      + '<div class="thinking-header"><span class="thinking-label">思考过程' + meta + '</span><span class="thinking-toggle">▼</span></div>'
+      + '<div class="thinking-content"><div class="thinking-text">' + think + '</div></div></div>';
+    inner += '<div class="md-content seg-narration"><p>' + narr + '</p></div>';
+    // a couple of tool cards per round (rich bodies stubbed as ptool-turn)
+    inner += '<div class="ptool-turn" data-batch-size="2">'
+      + '<div class="ptool-head"><span class="ptool-name">grep_search</span></div></div>';
+    inner += '<div class="ptool-turn" data-batch-size="2">'
+      + '<div class="ptool-head"><span class="ptool-name">read_files</span></div></div>';
+  }
+  const html = '<div class="ptool-panel seg-timeline">'
+    + '<div class="ptool-panel-header"><span class="ptool-panel-label">' + (N*2) + ' tools used · ' + N + ' rounds</span></div>'
+    + '<div class="ptool-panel-body" data-full-count="' + (N*2) + '">' + inner + '</div></div>';
+  document.querySelector('.md-content').innerHTML = html;
+</script>
+</body>
+</html>

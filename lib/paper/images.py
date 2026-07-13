@@ -172,7 +172,8 @@ def _ensure_paper_images(filename, phash):
     return _extract_paper_figures(filepath, phash)
 
 
-def _inject_images_into_report(report_md, images, lang='en', appendix=True):
+def _inject_images_into_report(report_md, images, lang='en', appendix=True,
+                               allow_images=True):
     """Auto-insert extracted figures/tables into the report markdown.
 
     LLMs frequently ignore "please embed ``![caption](url)``" instructions in
@@ -191,16 +192,113 @@ def _inject_images_into_report(report_md, images, lang='en', appendix=True):
         lang: 'zh' or 'en' — controls the appendix heading.
         appendix: When True (default, the explainer-report case) every
             unreferenced figure is appended as an appendix gallery so nothing
-            is lost. When False (Review Mode) the appendix is SUPPRESSED —
-            only figures the text actually cites (``Figure N``) are placed
-            inline; a peer review should not be padded with a wall of every
-            extracted figure. Inline placement is unaffected either way.
+            is lost. When False the appendix is SUPPRESSED — only figures the
+            text actually cites (``Figure N``) are placed inline. Ignored when
+            ``allow_images`` is False.
+        allow_images: When True (default) figures are injected/kept as above.
+            When False (Review Mode) the report is TEXT-ONLY: no figure is
+            injected AND any paper-image embed the model emitted itself is
+            stripped to its alt text. A peer review is a decision document,
+            not an illustrated explainer — it must carry no figures at all.
 
     Returns:
         Enriched report Markdown, or the original string on failure / no-op.
     """
     if not report_md:
         return report_md
+    if not allow_images:
+        # Text-only mode (peer review): a review is a Markdown PROSE decision
+        # document — there is NO legitimate raw HTML in it. Rather than chase
+        # an ever-growing denylist of image-bearing tags (<img>/<picture>/
+        # <svg>/<object>/<embed>/<input type=image>/<image>/<video poster>/
+        # <iframe>/background=… — whack-a-mole, and the backstop must not lean
+        # on a downstream sanitizer), we degrade the Markdown image forms to
+        # *alt*, drop orphaned image link-defs, then neutralize ALL remaining
+        # raw HTML. That collapses the entire image-vector class (including any
+        # tag invented later) into one rule. Fenced/inline code, math, and
+        # escaped entities (&lt;img&gt; — no literal '<', so never matched) are
+        # preserved.
+        try:
+            # Protect code + math spans so their contents are never mangled
+            # (a code example showing <img> is text, not a rendered image).
+            protected: list[str] = []
+
+            def _mask(m):
+                protected.append(m.group(0))
+                return f'\x00{len(protected) - 1}\x00'
+
+            _PROTECT_RE = re.compile(
+                r'```.*?```'          # fenced code (```)
+                r'|~~~.*?~~~'         # fenced code (~~~)
+                r'|`[^`\n]+`'         # inline code
+                r'|\$\$.*?\$\$'       # display math
+                r'|\$[^$\n]+\$',      # inline math
+                re.DOTALL)
+            stripped = _PROTECT_RE.sub(_mask, report_md)
+
+            image_ref_labels = set()
+
+            def _strip_alt(m):
+                alt = (m.group(1) or '').strip()
+                return f'*{alt}*' if alt else ''
+
+            # 1) Inline Markdown image: ![alt](any-url) → italic alt (or drop).
+            stripped = re.sub(r'!\[([^\]]*)\]\([^)]*\)', _strip_alt, stripped)
+
+            # 2) Full / collapsed reference image: ![alt][ref] / ![alt][].
+            def _strip_ref_img(m):
+                alt = (m.group(1) or '').strip()
+                ref = (m.group(2) or '').strip()
+                image_ref_labels.add((ref or alt).lower())
+                return f'*{alt}*' if alt else ''
+            stripped = re.sub(r'!\[([^\]]*)\]\[([^\]]*)\]', _strip_ref_img, stripped)
+
+            # 3) Shortcut reference image: ![alt] (label == alt text).
+            def _strip_shortcut_img(m):
+                alt = (m.group(1) or '').strip()
+                image_ref_labels.add(alt.lower())
+                return f'*{alt}*' if alt else ''
+            stripped = re.sub(r'!\[([^\]]*)\]', _strip_shortcut_img, stripped)
+
+            # 4) Drop orphaned link-definition lines that only fed an image:
+            #    those referenced by an image above, or whose target is itself
+            #    an image URL. Non-image link defs are kept.
+            _img_url_re = re.compile(
+                r'\.(?:png|jpe?g|gif|webp|svg|bmp|tiff?|avif)(?:[?#]|$)', re.IGNORECASE)
+
+            def _keep_line(line):
+                m = re.match(r'^\s*\[([^\]]+)\]:\s*(\S+)', line)
+                if not m:
+                    return True
+                label, url = m.group(1).strip().lower(), m.group(2).strip()
+                is_img_url = bool(_img_url_re.search(url)
+                                  or url.lower().startswith('data:image')
+                                  or '/api/paper/images/' in url)
+                return not (label in image_ref_labels or is_img_url)
+            stripped = '\n'.join(ln for ln in stripped.split('\n') if _keep_line(ln))
+
+            # 5) Neutralize ALL remaining raw HTML tags (opening / closing /
+            #    void), keeping the inner text between them (e.g. an <object>
+            #    fallback or a <figcaption>'s prose). The tag name must start
+            #    with a letter, so an inequality (``a < b``, ``n <5``) and an
+            #    escaped entity (``&lt;img&gt;``, which has no literal ``<``)
+            #    are left untouched. The attribute span matches a full quoted
+            #    string OR any non-``>`` char, so a legal ``>`` INSIDE a quoted
+            #    attribute value (``<img alt="a>b" src=x>``) does NOT terminate
+            #    the tag early; it also spans newlines for a multi-line tag.
+            stripped = re.sub(
+                r'''</?[A-Za-z][A-Za-z0-9:-]*(?:\s(?:"[^"]*"|'[^']*'|[^>])*)?/?>''',
+                '', stripped)
+
+            # Restore protected code/math spans verbatim.
+            def _unmask(m):
+                return protected[int(m.group(1))]
+            stripped = re.sub(r'\x00(\d+)\x00', _unmask, stripped)
+            return stripped
+        except Exception as e:
+            logger.warning('[Paper:Report] Image strip failed (returning original): %s',
+                           e, exc_info=True)
+            return report_md
     try:
         # Strip "fake" image references the model invents when we ask it to
         # embed figures but no matching manifest entry exists.  E.g. for a

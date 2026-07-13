@@ -68,6 +68,11 @@ data/
 /outputs/
 /similar_fix.py/
 /pylint-*/
+# Root-level .project_sessions/ — a CWD-pollution variant of the per-project
+# undo store (the real one is lib/.project_sessions/, registry-derived below).
+# A harness wrote it relative to repo root; never track. Root-anchored so it
+# does NOT shadow the registry-managed lib/.project_sessions/ entry.
+/.project_sessions/
 
 # ── Test coverage ──
 .coverage
@@ -80,9 +85,23 @@ debug/ask.txt
 
 # ── Logs ──
 logs/
+# Stray root-level run logs (e.g. server_15000.log written by restart_<port>.sh
+# into CWD instead of logs/). Runtime-only, never source.
+*.log
+server_*.log
 
 # ── JS bundle (auto-generated at startup) ──
 static/js/bundle-*.js
+# Deferred feature bundle — also a content-hashed runtime artifact. Anchor to
+# the 8-hex-hash pattern, NEVER a bare `feature-*` glob: that would also match
+# the tracked SOURCE `feature-loader.js` (the lazy loader), the exact class of
+# bug _clean_old_bundles hit (see bundle-cleaner-must-not-delete-source).
+static/js/feature-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f].js
+# Bundle build-lock + private temp files (leading dot; written by
+# lib/js_bundler during the atomic temp→rename publish). Runtime-only.
+static/js/.bundle-build.lock
+static/js/.bundle-*.js
+static/js/.feature-*.js
 
 # ── Minified stylesheet (auto-generated at startup by lib/css_bundler) ──
 static/styles-*.css
@@ -111,7 +130,11 @@ node_modules/
 Thumbs.db
 
 # ── Sessions & caches (auto-generated, may contain sensitive context) ──
-**/.project_sessions/
+# lib/.project_sessions/ is the per-project undo/redo store (modifications.json
+# pre-image blobs). It is REGISTRY-DERIVED — see lib/runtime_layout.INSTALL_STATE
+# / gitignore_lines(); do not hand-maintain a parallel entry. The drift-guard
+# test_gitignore_covers_registry enforces this line matches the registry.
+lib/.project_sessions/
 **/.project_indexes/
 .chatui/
 
@@ -135,6 +158,8 @@ docs/RATE_LIMITING_DOS_AUDIT_REPORT.md
 uploads/images/*
 !uploads/images/.gitkeep
 uploads/pptx/
+# User-uploaded papers (Reading-Mode ingest) — runtime data, not source.
+uploads/papers/
 
 # ── Model-generated posters (output of generate_image into project) ──
 static/posters/

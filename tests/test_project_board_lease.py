@@ -84,20 +84,7 @@ def _set_lease(flask_app, project_path, task_id, lease_ms):
         db.commit()
 
 
-def _patch_restore(path, old, new, run):
-    """Byte-revert a guard, run the neutered assertion, restore byte-identical."""
-    with open(path, encoding='utf-8') as f:
-        original = f.read()
-    assert old in original, f'anchor not found in {path}'
-    try:
-        with open(path, 'w', encoding='utf-8') as f:
-            f.write(original.replace(old, new, 1))
-        run()
-    finally:
-        with open(path, 'w', encoding='utf-8') as f:
-            f.write(original)
-    with open(path, encoding='utf-8') as f:
-        assert f.read() == original, 'source not restored byte-identical'
+from tests._nc_harness import patch_restore as _patch_restore  # noqa: E402
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -192,7 +179,7 @@ def test_held_lane_renders_and_partitions_from_epics(flask_app):
         post_task('/l/8', 'cA', 'Refactor the parser')  # an open epic
         claim_lease('/l/8', 'cB', 'static/styles.css')  # a held path
         block = render_board_block('/l/8', current_conv_id='cREADER')
-    assert 'Held (do NOT edit' in block
+    assert 'Being edited by a sibling' in block
     assert 'static/styles.css' in block
     # the lease MUST NOT appear as an epic in any epic lane
     assert 'Open (unclaimed' in block and 'Refactor the parser' in block
@@ -209,7 +196,7 @@ def test_expired_lease_not_rendered_as_held(flask_app):
     with flask_app.app_context():
         block = render_board_block('/l/9', current_conv_id='cR')
     # An expired lease holds nothing → not rendered (and no epic lanes exist).
-    assert 'Held (do NOT edit' not in block
+    assert 'Being edited by a sibling' not in block
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -260,11 +247,8 @@ def test_NC_1_lease_dispatch_skip_is_load_bearing(flask_app):
     """Byte-revert the ``kind == 'lease'`` skip in select_dispatchable → an
     EXPIRED lease reads open and LEAKS into the candidate set (the exact defect
     that would spawn a spurious billed kickoff)."""
-    import importlib
-
     def run():
         import lib.conversations.project_dispatch as pd
-        importlib.reload(pd)
         from lib.conversations.project_board import claim_lease
         with flask_app.app_context():
             from lib.database import DOMAIN_CHAT, get_thread_db
@@ -286,8 +270,6 @@ def test_NC_1_lease_dispatch_skip_is_load_bearing(flask_app):
         "        if False:  # NC-1 (lease-skip disabled)\n            continue\n",
         run,
     )
-    import lib.conversations.project_dispatch as pd
-    importlib.reload(pd)
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -297,11 +279,8 @@ def test_NC_1_lease_dispatch_skip_is_load_bearing(flask_app):
 def test_NC_2_held_render_branch_is_load_bearing(flask_app):
     """Byte-neuter the held-lane render (force held_t empty) → a live lease is
     INVISIBLE to siblings (a held path a sibling can't see coordinates nothing)."""
-    import importlib
-
     def run():
         import lib.conversations.project_board as pb
-        importlib.reload(pb)
         with flask_app.app_context():
             from lib.database import DOMAIN_CHAT, get_thread_db
             get_thread_db(DOMAIN_CHAT).execute(
@@ -319,8 +298,6 @@ def test_NC_2_held_render_branch_is_load_bearing(flask_app):
         "    held_t = []  # NC-2 (held-lane render disabled)",
         run,
     )
-    import lib.conversations.project_board as pb
-    importlib.reload(pb)
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -358,11 +335,8 @@ def test_NC_3_kind_default_is_load_bearing():
     kind-less (pre-migration) row is read via a bare ``r['kind']`` → KeyError
     propagates out of _row_to_task. Proves the try/except default is what keeps
     pre-existing rows from crashing the board read."""
-    import importlib
-
     def run():
         import lib.conversations.project_board as pb
-        importlib.reload(pb)
         raised = False
         try:
             pb._row_to_task(_legacy_row(), now_ms=1_000_000)
@@ -378,8 +352,6 @@ def test_NC_3_kind_default_is_load_bearing():
         "    kind = r['kind']  # NC-3 (nullable default removed)",
         run,
     )
-    import lib.conversations.project_board as pb
-    importlib.reload(pb)
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -408,7 +380,7 @@ def test_execute_board_tool_claim_and_release(flask_app):
             'project_claim_path', {'resource': 'static/styles.css'},
             current_conv_id='cA', project_path='/l/14')
         board = read_board('/l/14')
-    assert 'held' in out.lower()
+    assert 'flagged' in out.lower()
     assert board['tasks'][0]['kind'] == 'lease'
     with flask_app.app_context():
         out2 = execute_board_tool(
@@ -417,3 +389,106 @@ def test_execute_board_tool_claim_and_release(flask_app):
         board2 = read_board('/l/14')
     assert 'released' in out2.lower()
     assert not board2['tasks']
+
+
+# ════════════════════════════════════════════════════════════════════
+#  Write-seam GC: expired lease rows are pruned on lease/epic writes so
+#  they don't accumulate forever (they are invisible to readers via
+#  _effective_status, but the ROW persisted → an epic-posting-budget leak
+#  against post_task's _MAX_BOARD_TASKS cap + project_tasks bloat).
+# ════════════════════════════════════════════════════════════════════
+
+def _count_leases(flask_app, project_path):
+    from lib.database import DOMAIN_CHAT, get_thread_db
+    with flask_app.app_context():
+        db = get_thread_db(DOMAIN_CHAT)
+        row = db.execute(
+            "SELECT COUNT(*) AS c FROM project_tasks WHERE project_path=? "
+            "AND kind='lease'", (project_path,)).fetchone()
+    return int(row['c'])
+
+
+def test_claim_lease_prunes_other_dead_leases(flask_app):
+    """A lease write GCs the project's OTHER expired leases (orphaned holds on
+    distinct paths that were never released) — bounding row growth at the
+    source — while leaving the LIVE lease and any epic untouched."""
+    from lib.conversations.project_board import claim_lease, post_task, read_board
+    with flask_app.app_context():
+        tid = post_task('/gc/1', 'cA', 'a real open epic')['id']
+        dead1 = claim_lease('/gc/1', 'cA', 'stale/one.py')['id']
+        dead2 = claim_lease('/gc/1', 'cA', 'stale/two.py')['id']
+        live = claim_lease('/gc/1', 'cB', 'live/held.py')['id']
+    _set_lease(flask_app, '/gc/1', dead1, 1)  # force-expire
+    _set_lease(flask_app, '/gc/1', dead2, 1)
+    # A fresh lease write on a NEW path triggers the sweep.
+    with flask_app.app_context():
+        claim_lease('/gc/1', 'cC', 'another/path.py')
+        board = read_board('/gc/1')
+    ids = {t['id'] for t in board['tasks']}
+    assert dead1 not in ids and dead2 not in ids, \
+        'expired leases must be pruned on a lease write'
+    assert live in ids, 'a LIVE lease must survive the prune'
+    assert tid in ids, 'an epic must NEVER be pruned by the lease GC'
+
+
+def test_post_task_prunes_dead_leases_before_cap(flask_app):
+    """post_task sweeps dead leases BEFORE its _MAX_BOARD_TASKS count, so an
+    orphaned lease can never falsely inflate the cap / block a real epic."""
+    from lib.conversations.project_board import claim_lease, post_task
+    with flask_app.app_context():
+        dead = claim_lease('/gc/2', 'cA', 'stale/x.py')['id']
+    _set_lease(flask_app, '/gc/2', dead, 1)  # force-expire
+    assert _count_leases(flask_app, '/gc/2') == 1
+    with flask_app.app_context():
+        res = post_task('/gc/2', 'cA', 'a real epic')
+    assert res['ok']
+    assert _count_leases(flask_app, '/gc/2') == 0, \
+        'post_task must GC the expired lease before counting toward the cap'
+
+
+def test_prune_never_touches_live_lease_or_epic(flask_app):
+    """A prune sweep with NO expired leases present is a no-op — a live lease
+    and an epic both survive (the DELETE is gated on lease_expires_at>0 AND
+    <=now, so a live/refreshed lease is never in range)."""
+    from lib.conversations.project_board import claim_lease, post_task, read_board
+    with flask_app.app_context():
+        tid = post_task('/gc/3', 'cA', 'epic')['id']
+        live = claim_lease('/gc/3', 'cA', 'live/a.py')['id']
+        claim_lease('/gc/3', 'cB', 'live/b.py')  # another lease write → sweep
+        board = read_board('/gc/3')
+    ids = {t['id'] for t in board['tasks']}
+    assert tid in ids and live in ids
+
+
+def test_NC_prune_is_load_bearing(flask_app):
+    """Byte-neuter the _prune_expired_leases body to a no-op → an expired lease
+    SURVIVES a subsequent lease write, reproducing the accumulate-forever leak.
+    Proves the prune is what bounds row growth (not some other guard)."""
+    def run():
+        import lib.conversations.project_board as pb
+        from lib.database import DOMAIN_CHAT, get_thread_db
+        with flask_app.app_context():
+            get_thread_db(DOMAIN_CHAT).execute(
+                "DELETE FROM project_tasks WHERE project_path='/ncp'")
+            get_thread_db(DOMAIN_CHAT).commit()
+            dead = pb.claim_lease('/ncp', 'cA', 'stale/x.py')['id']
+            get_thread_db(DOMAIN_CHAT).execute(
+                'UPDATE project_tasks SET lease_expires_at=1 WHERE id=?', (dead,))
+            get_thread_db(DOMAIN_CHAT).commit()
+            pb.claim_lease('/ncp', 'cB', 'other/y.py')  # sweep would fire here
+            row = get_thread_db(DOMAIN_CHAT).execute(
+                "SELECT COUNT(*) AS c FROM project_tasks WHERE project_path='/ncp' "
+                "AND kind='lease' AND id=?", (dead,)).fetchone()
+        assert int(row['c']) == 1, \
+            'NC: with the prune neutered, the expired lease must PERSIST ' \
+            '(reproduces the accumulate-forever leak)'
+
+    _patch_restore(
+        _BOARD_SRC,
+        "        cur = db.execute(\n"
+        "            \"DELETE FROM project_tasks WHERE project_path=? AND kind='lease' \"\n"
+        "            'AND lease_expires_at>0 AND lease_expires_at<=?',\n"
+        "            (project_path, now_ms))",
+        "        cur = None  # NC (prune disabled)",
+        run,
+    )

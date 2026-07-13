@@ -257,6 +257,14 @@ function _handleAutopilotVuEvent(convId, ev) {
       const finalMsg = ev.vuMessage || {};
       entry.msg.content = finalMsg.content || "";
       entry.msg.toolRounds = Array.isArray(finalMsg.toolRounds) ? finalMsg.toolRounds : [];
+      /* ★ Segments (epic pt_cb8f98b0cb9b47fb): project the backend's typed
+       * timeline VERBATIM so the settled VU bubble renders the IDENTICAL agent
+       * inline per-tool timeline (widened gate in chat_render.js). Without this
+       * the live stream shows the timeline but the settle repaint drops it →
+       * the grouped-panel snap-back. Same verbatim contract as content /
+       * toolRounds above: NO local-buffer fallback. Absent (legacy backend /
+       * assembly failure) → grouped render, graceful. */
+      entry.msg.segments = Array.isArray(finalMsg.segments) ? finalMsg.segments : [];
       delete entry.msg._streamingVu;
       console.info(
         `[Autopilot VU] ✓ done — finalized vuMsgId=${vuMsgId.slice(0,12)} ` +
@@ -534,7 +542,7 @@ function _handleAutopilotRunConcluded(convId, ev) {
 
 /**
  * Build the HTML string for a streaming bubble (#streaming-msg).
- * @param {'worker'|'planner'|'critic'|'autopilot'} role  - which phase / avatar
+ * @param {'worker'|'planner'|'critic'|'autopilot'|'swarm'} role  - which phase / avatar
  * @param {string} [status]   - status text shown inside the pulse
  * @param {string} [timeStr]  - formatted time string (defaults to now)
  * @param {string} [msgId]    - optional data-msg-id to stamp on the bubble
@@ -550,6 +558,14 @@ function _streamingBubbleHTML(role, status, timeStr, msgId) {
      * agent (incremental markdown, thinking, tool rounds, elapsed bar). */
     autopilot: { avatar: (typeof _TOFU_CRITIC_SVG !== 'undefined') ? _TOFU_CRITIC_SVG : '✦', label: 'Autopilot', cls: 'vu-user-msg', defaultStatus: (typeof t === 'function' ? t('autopilot.warming') : 'Autopilot…') },
   };
+  /* Swarm auto-continuation: a backend-started assistant turn draining
+   * sub-agent updates. Sourced from the shared INITIATOR_REGISTRY so its
+   * streaming avatar/label matches the settled bubble (chat_render.js). */
+  if (typeof INITIATOR_REGISTRY !== 'undefined' && INITIATOR_REGISTRY.swarm) {
+    const _sr = INITIATOR_REGISTRY.swarm;
+    const _sl = (typeof t === 'function' && t(_sr.labelKey) !== _sr.labelKey) ? t(_sr.labelKey) : _sr.fallback;
+    _cfg.swarm = { avatar: _sr.avatar, label: _sl, cls: 'ep-worker-msg ' + _sr.cls, defaultStatus: 'Continuing…' };
+  }
   const c = _cfg[role] || _cfg.worker;
   const st = status || c.defaultStatus;
   const tm = timeStr || formatClockTime();
@@ -693,6 +709,11 @@ const _INITIAL_RENDER = 20;
 let _lazyObserver = null;
 let _lazyConvId = null;
 let _lazyRenderedFrom = Infinity;
+/* Which conv's OPEN has already had its view positioned (see the open-scroll
+ * coalescing block in renderChat). Set by the force-scroll branch during an
+ * initial switch load; reset by loadConversation on a genuine switch so the
+ * next open force-scrolls exactly once. */
+let _openScrollConvId = null;
 
 function _destroyLazyObserver() {
   if (_lazyObserver) {

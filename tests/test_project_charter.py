@@ -603,6 +603,63 @@ def test_delete_missing_charter_is_noop_success(flask_app):
     assert r['ok'] is True and r.get('deleted') is False
 
 
+def test_routes_charter_edit_delete_roundtrip(flask_app, flask_client):
+    import json as _json
+    p = os.path.abspath('/p/route-editdel')
+    flask_client.post('/api/v1/project/charter/commit',
+                      json={'path': p, 'content': 'NS', 'add_decision': 'D0'})
+    flask_client.post('/api/v1/project/charter/commit',
+                      json={'path': p, 'add_decision': 'D1'})
+    ver = _json.loads(flask_client.get(
+        '/api/v1/project/charter?path=' + p).get_data(as_text=True))['version']
+    # Edit decision 0 via route.
+    re = flask_client.post('/api/v1/project/charter/decision/update', json={
+        'path': p, 'index': 0, 'text': 'D0-edited', 'expected_version': ver})
+    assert re.status_code == 200, re.get_data(as_text=True)
+    ver = _json.loads(re.get_data(as_text=True))['version']
+    # Delete decision 1 via route.
+    rd = flask_client.post('/api/v1/project/charter/decision/delete', json={
+        'path': p, 'index': 1, 'expected_version': ver})
+    assert rd.status_code == 200
+    data = _json.loads(flask_client.get(
+        '/api/v1/project/charter?path=' + p).get_data(as_text=True))
+    assert [d['text'] for d in data['decisions']] == ['D0-edited']
+    # Delete the whole charter via route.
+    ver = data['version']
+    ra = flask_client.post('/api/v1/project/charter/delete',
+                           json={'path': p, 'expected_version': ver})
+    assert ra.status_code == 200
+    gone = _json.loads(flask_client.get(
+        '/api/v1/project/charter?path=' + p).get_data(as_text=True))
+    assert gone['exists'] is False
+
+
+def test_routes_charter_edit_delete_version_conflict_409(flask_app, flask_client):
+    p = os.path.abspath('/p/route-editdel-409')
+    flask_client.post('/api/v1/project/charter/commit',
+                      json={'path': p, 'add_decision': 'D'})  # version 1
+    # A stale expected_version on each mutation route → 409.
+    assert flask_client.post('/api/v1/project/charter/decision/update', json={
+        'path': p, 'index': 0, 'text': 'X', 'expected_version': 0}).status_code == 409
+    assert flask_client.post('/api/v1/project/charter/decision/delete', json={
+        'path': p, 'index': 0, 'expected_version': 0}).status_code == 409
+    assert flask_client.post('/api/v1/project/charter/delete', json={
+        'path': p, 'expected_version': 0}).status_code == 409
+
+
+def test_routes_charter_edit_delete_require_path_and_index(flask_client):
+    # missing path
+    assert flask_client.post('/api/v1/project/charter/decision/update',
+                             json={'index': 0, 'text': 'x'}).status_code == 400
+    assert flask_client.post('/api/v1/project/charter/delete',
+                             json={}).status_code == 400
+    # missing/invalid index
+    assert flask_client.post('/api/v1/project/charter/decision/update',
+                             json={'path': '/p/x', 'text': 'y'}).status_code == 400
+    assert flask_client.post('/api/v1/project/charter/decision/delete',
+                             json={'path': '/p/x'}).status_code == 400
+
+
 def test_NC_delete_decision_ignores_index_deletes_wrong_row(flask_app):
     """NC: neuter delete_decision so it always pops index 0 regardless of the
     requested index → deleting index 1 wrongly removes the FIRST decision,

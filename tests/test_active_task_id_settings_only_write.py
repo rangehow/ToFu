@@ -184,4 +184,6 @@ def main():
 
 
 if __name__ == '__main__':
+    from tests._standalone_guard import guard_standalone_db
+    guard_standalone_db('test_active_task_id_settings_only_write.__main__')
     main()

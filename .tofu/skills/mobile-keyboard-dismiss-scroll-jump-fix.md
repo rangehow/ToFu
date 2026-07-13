@@ -4,7 +4,7 @@ description: Bug fix: mobile keyboard close after sendMessage causes chat to jum
 enabled: true
 tags: [mobile, scroll, keyboard, visualViewport, bug-fix]
 created: 2026-04-10T00:06:48Z
-updated: 2026-04-10T00:06:48Z
+updated: 2026-07-10T00:00:00Z
 ---
 
 # Mobile Keyboard Dismiss Scroll Jump Fix
@@ -30,4 +30,17 @@ The `onViewportResize` handler now distinguishes keyboard opening (viewport shri
 
 ## Key Detail
 The `growing` flag (`newH > lastHeight`) determines direction. This is reliable because `visualViewport.resize` fires incrementally as the keyboard animates.
+
+## Related: same symptom, DIFFERENT mechanism on desktop
+"Sending at the bottom lands mid-history" also happens on DESKTOP, but via a
+distinct cause — do NOT conflate them. Desktop = the single-rAF `scrollToBottom`
+clamps against the 120px `content-visibility:auto` estimate of the freshly-
+appended user + streaming bubbles BEFORE their real height paints, so
+`scrollHeight` grows below the fixed `scrollTop`. Fixed (2026-07-10, see JOURNAL)
+by routing the three send-path scrolls through the real-height
+`_forceScrollToBottom(null,true)` (cv-off + forced reflow). This mobile fix
+(`visualViewport` resize grows `clientHeight` while `scrollTop` stays fixed) and
+the desktop cv:auto fix are separate — the mobile keyboard site
+`main_folders_mobile.js:750 scrollToBottom(true)` is deliberately left on THIS
+path, not the cv-off path.
 

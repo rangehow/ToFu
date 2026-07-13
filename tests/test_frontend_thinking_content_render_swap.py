@@ -131,7 +131,8 @@ eval(fs.readFileSync(process.argv[8], 'utf8'));  // sse_handlers_misc.js
 eval(fs.readFileSync(process.argv[9], 'utf8'));  // sse_handlers_lifecycle.js
 eval(fs.readFileSync(process.argv[2], 'utf8'));  // sse_pipeline.js
 eval(fs.readFileSync(process.argv[4], 'utf8'));  // streaming_ui.js
-eval(fs.readFileSync(process.argv[10], 'utf8')); // translation.js (_renderStreamingTranslatePreview)
+eval(fs.readFileSync(process.argv[10], 'utf8')); // translation.js (engine)
+eval(fs.readFileSync(process.argv[11], 'utf8')); // ui/translation_render.js (_renderStreamingTranslatePreview — relocated)
 
 const T = win.__sse_test__;
 const out = [];
@@ -441,7 +442,8 @@ def _run_repro():
              os.path.join(JS_DIR, 'ui', 'sse_handlers_io.js'),
              os.path.join(JS_DIR, 'ui', 'sse_handlers_misc.js'),
              os.path.join(JS_DIR, 'ui', 'sse_handlers_lifecycle.js'),
-             os.path.join(JS_DIR, 'translation.js')],
+             os.path.join(JS_DIR, 'translation.js'),
+             os.path.join(JS_DIR, 'ui', 'translation_render.js')],
             capture_output=True, text=True, timeout=60,
         )
     finally:

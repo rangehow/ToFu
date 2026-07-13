@@ -1,10 +1,10 @@
 ---
 name: convview-controller-migration-ledger
-description: ConvView (static/js/conv_view.js) unified chatInner controller surface + ledger of migrated vs. unmigrated DOM-mutation sites
+description: ConvView (static/js/conv_view.js) unified chatInner controller: surface + migration ledger. NOW OWNS streaming-bubble insert via startStreaming (identity-keyed, _evictByMsgId) enforcing one _msgId=>one DOM node
 enabled: true
 tags: [frontend, chatInner, rendering, convention, ledger]
 created: 2026-05-15T04:40:31Z
-updated: 2026-05-15T04:40:31Z
+updated: 2026-07-09T07:26:02Z
 ---
 
 # ConvView controller — surface and migration ledger
@@ -13,128 +13,76 @@ Step 3 of the unified chatInner rendering refactor (2026-05-15).
 Companion to the `bilateral-msgid-and-data-msg-id` memory.
 
 `static/js/conv_view.js` exposes `window.ConvView` — the only
-intended mutator of `#chatInner`. It currently delegates to existing
-ui.js primitives; later steps will move keyed diffing and
-streaming-merge logic into it.
+intended mutator of `#chatInner`.
 
 ## Bundler position
-
-`'conv_view.js'` sits **immediately after `ui.js`** in
-`lib/js_bundler.py:_BUNDLE_FILES` and has a matching `<script defer>`
-tag in `index.html` next to the `ui.js` tag. Depends on:
-`renderMessage`, `_surgicalTruncateDOM`, `_convRenderFingerprint`,
-`renderChat`, `_lastRenderedFingerprint` (ui.js), `_ensureMsgId`
-(core.js).
+`'conv_view.js'` sits **last** in `lib/js_bundler.py:_BUNDLE_FILES`
+(after ui.js / streaming_render.js / sse_pipeline.js / stream_lifecycle.js),
+so `window.ConvView` is safe to reference at runtime from any earlier file.
+Depends on `renderMessage`, `_streamingBubbleHTML`, `_surgicalTruncateDOM`,
+`_convRenderFingerprint`, `renderChat`, `_lastRenderedFingerprint`, `_ensureMsgId`.
 
 ## API surface
-
-```js
+```
 ConvView.upsertMessage(convId, msg, {idx?, append?}) → bool
 ConvView.removeMessage(convId, msgOrIdOrIdx)         → bool
 ConvView.removeAfter(convId, cutoffIdx)              → bool
 ConvView.replaceAll(convId)                          → bool
+ConvView.startStreaming(convId, {role,status,timeStr,msgId}) → bool   ← 2026-07-09
 ConvView.finalizeStreaming(convId, msg, {removeIfTruncated?=true}) → bool
 ```
+All methods no-op when `activeConvId !== convId`. Identity lookup inside
+`_findMsgEl` prefers `[data-msg-id="..."]` (CSS.escape) → falls back to `msg-${idx}`.
 
-All methods are no-ops when `activeConvId !== convId` — caller is
-responsible for the model-side mutation; ConvView only handles DOM.
+## THE RENDER INVARIANT (2026-07-09): one `_msgId` ⇒ at most one DOM node
+Settled bubbles are keyed `id="msg-${idx}"` (MUTABLE array position) + a stable
+`data-msg-id`; the live turn is the `#streaming-msg` singleton. The
+"one data entry, two identical bubbles" RENDER duplicate (debug panel shows ONE
+`conv.messages` entry; self-heals on refresh) came from reconciling the streaming
+insert by INDEX: `connectToTask` did `getElementById('msg-'+lastIdx).remove()`,
+which MISSED the real static bubble when the tail index had DRIFTED (placeholder
+push / splice / lazy-window offset) → a fresh `#streaming-msg` inserted alongside
+the stranded static node, then `finalizeStreaming`'s bare `sm.outerHTML=...` left
+BOTH → two nodes for one `_msgId`.
+Fix (identity-keyed projection, in conv_view.js):
+- `_evictByMsgId(inner, msgId, exceptEl)` — removes every `[data-msg-id]` node
+  except the keeper. Enforcement primitive.
+- `startStreaming` — the SINGLE seam for inserting `#streaming-msg`; evicts any
+  node bound to this msgId + any leftover `#streaming-msg` BEFORE inserting.
+- `finalizeStreaming` sweep — after the outerHTML swap, `_evictByMsgId(inner,
+  msg._msgId, keep=getElementById('msg-'+idx))` removes any surviving twin.
+- `sse_pipeline.js connectToTask` reconnect: index eviction DELETED, routed
+  through `window.ConvView.startStreaming(...)` (raw insertAdjacentHTML kept only
+  as `!ConvView` fallback).
+- `showStreamingUIForConv` (stream_lifecycle.js) NOT rerouted: it builds one
+  batch `inner.innerHTML=html` = faithful full projection, can't strand a twin.
+Test: `tests/test_frontend_convview_identity_render_dedupe.py` (jsdom via
+`tests/_jsdom.py`): drift a static `msg-3` for `_msgId=m1`, drive
+startStreaming+finalize, assert 1 node; NEUTER `_evictByMsgId`→`return 0` proves
+2 nodes return. Harness gotcha: `_findConv` reads the BARE `conversations`
+global (globalThis under indirect-eval), NOT `window.conversations` — seed
+`globalThis.conversations` or finalizeStreaming silently no-ops (conv-not-found).
 
-`finalizeStreaming` centralizes:
-- chatContainer scrollTop save/restore (the "thinking-block collapse"
-  jump fix that was previously inlined in finishStream)
-- Auto-removal when `msg` is no longer in `conv.messages` (the
-  truncation-aware fallback for Edit/Regen mid-abort races)
-
-`removeAfter` delegates to `_surgicalTruncateDOM` and falls back to
-`renderChat` when the surgical path returns false (matches the
-pre-existing `if (!_surgicalTruncateDOM(...)) renderChat(...)` idiom).
-
-Identity lookup inside `_findMsgEl` prefers `[data-msg-id="..."]`
-(via `CSS.escape`) and falls back to `getElementById('msg-' + idx)`.
-
-## Migration ledger — MIGRATED (7 sites)
-
-### Streaming finalize (5)
-| File | Anchor | Was |
-|---|---|---|
-| `static/js/main.js:1268` | startAssistantResponse error path | `sm.outerHTML = renderMessage(assistantMsg, idx)` |
-| `static/js/ui.js:5337` | `finishStream` main path | inline scroll-save + outerHTML |
-| `static/js/ui.js:7204` | `endpoint_iteration` entering critic, finalize worker | inline outerHTML |
-| `static/js/ui.js:7261` | `endpoint_iteration` stale-planner detection | inline outerHTML |
-| `static/js/ui.js:7341` | `endpoint_planner_done` happy path | inline outerHTML |
-| `static/js/ui.js:7401` | `endpoint_critic_msg` finalize | inline outerHTML |
-
-### Truncate (2)
-| File | Anchor | Was |
-|---|---|---|
-| `static/js/main.js:2132` | regenerateFromUser | `if (!_surgicalTruncateDOM(...)) renderChat(...)` |
-| `static/js/ui.js:4101` | saveEditAndResend | same idiom |
+## Migration ledger — MIGRATED
+### Streaming finalize (5 sites): main.js startAssistantResponse error path;
+finishStream main path; endpoint entering-critic / stale-planner / planner-done /
+critic-msg finalize. All were inline `sm.outerHTML=renderMessage(...)`.
+### Truncate (2): regenerateFromUser, saveEditAndResend (`if(!_surgicalTruncateDOM())renderChat()`).
+### Streaming INSERT (2026-07-09): connectToTask reconnect → startStreaming. (DONE)
 
 ## Migration ledger — STILL BYPASSING ConvView
-
-These sites still mutate `#chatInner` directly. Each entry lists why
-it was deferred — useful for prioritising follow-up steps.
-
-### Single-message updates via `outerHTML = renderMessage(msg, idx)`
-- `static/js/main.js:1480` — sendMessage initial user-bubble append
-  (uses `insertAdjacentHTML('beforeend', ...)`; `ConvView.upsertMessage`
-  with `append:true` is the natural target).
-- `static/js/main.js:1548, 1632, 1830` — sendMessage pre-translate
-  user-bubble re-renders.
-- `static/js/main.js:2188` — regenerateFromUser surgical re-render.
-- `static/js/ui.js:3886, 3989, 4086, 4157` — saveEditOnly /
-  saveEditAndResend / saveEditOnly retry / cancelEditMessage.
-- `static/js/ui.js:3973` — async PATCH error-revert handler.
-- `static/js/ui.js:3744` — translation pipeline post-finish swap
-  (re-export through ConvView would also help `static/js/translation.js:57`).
-- `static/js/project.js:610` — project-mode message swap.
-
-### `endpoint_planner_done` dangling-ref recovery (`ui.js:7355-7367`)
-**Intentionally left inline.** The branch re-inserts `assistantMsg`
-into `conv.messages` before rendering — promoting it into ConvView
-would conflate two intents (DOM mutation + model recovery).
-Revisit when the controller grows a `_recoverDanglingMsg` primitive.
-
-### Streaming bubble creation — `inner.insertAdjacentHTML('beforeend', _streamingBubbleHTML(...))`
-- `static/js/main.js:1158, 1201`
-- `static/js/ui.js:5171-5175, 5541, 5845, 7224, 7299`
-
-These create the live `#streaming-msg`. A future
-`ConvView.startStreaming(convId, msgId, role, status?)` should own
-both the HTML emission and the `data-msg-id` threading — currently
-`_streamingBubbleHTML` accepts a `msgId` 4th arg but **no caller
-passes it yet**.
-
-### `_surgicalTruncateDOM` internals (`ui.js:686`)
-Still walks `[id^="msg-"]` by numeric index. Migrating it to
-`[data-msg-id]` is the cleanest unlock for stable identity but
-requires audit of every consumer of the `msg-${idx}` id (including
-turn-nav `data-msg-idx`, `scrollToTurn`, `copyMessage(idx)` button
-onclicks emitted by `renderMessage`).
-
-### branch.js / paper-reader.js
-Out of scope. Branch mode renders into its own `branch-streaming-…`
-regions; paper-reader uses a separate `_paperQAHistory`. Per the
-design doc, they get their own controllers later.
-
-## Behavioral parity notes
-
-- `finalizeStreaming` logs `[ConvView]` on outerHTML failure (was
-  `[finishStream]`). Adjust any log-grep alerts if needed.
-- `ConvView.removeAfter` returns `true` even when it falls back to
-  `renderChat` — slightly different from the original
-  `if (!_surgicalTruncateDOM(...)) renderChat(...)` which returned
-  the result of the surgical attempt. Consumers that ignore the
-  return value (which is all of them) are unaffected.
+- Single-message `outerHTML=renderMessage(msg,idx)`: main.js:1480/1548/1632/1830/2188;
+  ui.js saveEdit*/cancelEdit/PATCH-revert/translation-swap; project.js message swap.
+- endpoint_planner_done dangling-ref recovery — intentionally inline (re-inserts
+  into conv.messages; DOM+model intents shouldn't be conflated).
+- OTHER streaming-bubble creators still raw `insertAdjacentHTML(_streamingBubbleHTML())`:
+  main.js send-path, streaming_render.js `_beginVuStreaming` (autopilot VU),
+  finishStream queued-dispatch placeholder, endpoint critic/worker bubbles. These
+  are candidates to also route through `startStreaming` for full invariant coverage.
+- `_surgicalTruncateDOM` internals still walk `[id^="msg-"]` by numeric index.
 
 ## Verification
-
-```bash
-node --check static/js/conv_view.js
-python3 -c "from lib.js_bundler import build_bundle; print(build_bundle())"
-```
-
-Bundle build at 2026-05-15 produced `bundle-2de93b9b.js` with 8
-`ConvView.` call sites. After server restart, hard-refresh the
-browser (bundle hash changes invalidate cache).
-
+`node --check static/js/conv_view.js`;
+`python3 -c "from lib.js_bundler import build_bundle; print(build_bundle())"`.
+2026-07-09 build → `bundle-d3c94560.js`; `startStreaming:function` (def) +
+`startStreaming(convId` (call site) both survive esbuild. Restart + hard-refresh.

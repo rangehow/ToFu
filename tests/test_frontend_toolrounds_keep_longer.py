@@ -5,11 +5,9 @@ accumulated rounds with an EMPTY/SHORTER array.
 WHY
 ---
 `content`/`thinking` already go through `_snapshotLonger` (keep-the-longer), but
-`toolRounds` used to be assigned VERBATIM at all five state-snapshot sites and
-in the terminal `done` handler:
+`toolRounds` used to be assigned VERBATIM at all state-snapshot sites:
 
     assistantMsg.toolRounds = existing.concat(ev.toolRounds || []);   // state
-    assistantMsg.toolRounds = _cm.toolRounds;                         // done
 
 On a flaky network the reconnect snapshot can replay a COLD/empty 5s checkpoint
 whose `toolRounds` is `[]` (or shorter than what the client already accumulated
@@ -19,8 +17,17 @@ panel the user was watching, mid-stream. Same content-regression class as the
 
 The fix adds `_snapshotLongerRounds(current, incoming)` — a rounds snapshot may
 only GROW (adopt incoming only when `incoming.length >= current.length`) —
-applied at all five snapshot sites (2 planner, worker, plain-assistant merge)
-plus the terminal `done` committedMessage assignment.
+applied at the FOUR STATE-SNAPSHOT sites (2 planner, worker, plain-assistant
+merge). These replay a mid-stream CHECKPOINT that can be cold/shorter.
+
+The terminal `done` committedMessage site is DIFFERENT and DELIBERATELY NOT
+keep-longer (epic pt_78579f57be1c4f60, 2026-07-08): once the backend stamps
+`task['_committedMsg']` (manager.py, on CAS success) the done event ships the
+EXACT committed DB record, so the settled bubble PROJECTS IT VERBATIM (the
+separation-of-concerns directive: settled = verbatim backend record, not a
+local keep-longer reconstruction). committedMessage is ABSENT on skip/crash
+paths → the client keeps its transient buffer (offline fallback). So the `done`
+site is verbatim `= _cm.toolRounds`, NOT routed through the keep-longer helper.
 
 Tests (drive the REAL shipped `_snapshotLongerRounds` under node):
   1. empty incoming → keeps the current (longer) rounds. ★ THE FIX.
@@ -136,22 +143,32 @@ def _run():
         'fix regression: _snapshotLongerRounds no longer keeps-the-longer — a '
         'shorter/empty snapshot could collapse the tool-round panel.')
 
-    # Five call sites route through the helper (2 planner + worker +
-    # plain-assistant merge + done). The endpoint-critic snapshot block has no
-    # toolRounds assignment, so it is NOT among them. +1 for the definition.
+    # FOUR STATE-SNAPSHOT call sites route through the helper (2 planner +
+    # worker + plain-assistant merge). The endpoint-critic snapshot block has no
+    # toolRounds assignment; the terminal `done` site is now a VERBATIM
+    # committedMessage projection (epic pt_78579f57be1c4f60), NOT keep-longer.
+    # +1 for the definition = 5 occurrences.
     occurrences = len(re.findall(r'_snapshotLongerRounds\(', sse_src))
-    assert occurrences >= 6, (
-        f'expected >=5 _snapshotLongerRounds call sites (+1 def = 6 '
-        f'occurrences), found {occurrences} — a toolRounds site may have '
-        'regressed to a raw `= ev.toolRounds` / `= _cm.toolRounds` overwrite.')
+    assert occurrences >= 5, (
+        f'expected >=4 _snapshotLongerRounds state-snapshot call sites (+1 def '
+        f'= 5 occurrences), found {occurrences} — a STATE-SNAPSHOT toolRounds '
+        'site may have regressed to a raw `= ev.toolRounds` overwrite.')
 
-    # The specific old-shape raw assignments must be gone.
+    # The specific old-shape raw STATE-SNAPSHOT assignments must be gone. The
+    # `done` site is intentionally verbatim (`= _cm.toolRounds`) now, so it is
+    # NOT in this banned list.
     for bad in ('plannerMsg.toolRounds = ev.toolRounds',
                 'workerMsg.toolRounds = ev.toolRounds',
-                'assistantMsg.toolRounds = _cm.toolRounds',
                 'assistantMsg.toolRounds = existing.concat(ev.toolRounds || [])'):
         assert bad not in sse_src, (
             f'fix regression: raw toolRounds overwrite reintroduced: {bad!r}')
+
+    # The `done` committedMessage projection MUST be verbatim (backend record is
+    # authoritative + complete once _committedMsg is stamped) — guard it so a
+    # future edit doesn't silently re-route it back through keep-longer.
+    assert 'if (Array.isArray(_cm.toolRounds)) assistantMsg.toolRounds = _cm.toolRounds;' in sse_src, (
+        'done-site committedMessage toolRounds must be projected VERBATIM '
+        '(epic pt_78579f57be1c4f60) — not routed through _snapshotLongerRounds.')
 
 
 @pytest.mark.skipif(not _node_available(), reason='node not installed')

@@ -244,6 +244,65 @@ def test_image_gen_is_deferred_not_core():
     )
 
 
+# ── Project Brain deferral (residency pin + the no-load conv-switch design) ─
+
+_PROJECT_BRAIN_FILES = ('project-brain.js', 'project-brain-peers.js',
+                        'project-brain-status.js', 'project-brain-i18n.js')
+# ONLY the user-triggered openers are deferred entry points (loading stubs).
+_PROJECT_BRAIN_OPENERS = frozenset({
+    'openProjectBrain', 'toggleProjectBrain', 'openProjectBrainInfluence',
+})
+# These are called on boot / conv-switch (main.js:637 projectBrainRefresh) or
+# only when the panel is already open (closeProjectBrain, overlay onclick). They
+# must NOT be deferred entry points — a loading stub there would fetch the whole
+# feature bundle on every conversation switch, negating the deferral entirely.
+_PROJECT_BRAIN_NO_LOAD = frozenset({'projectBrainRefresh', 'closeProjectBrain'})
+
+
+def test_project_brain_is_deferred_not_core():
+    """The Project Brain cluster was moved from core to the deferred feature
+    bundle (2026-07-09, −16.2KB eager gzip). Pin the residency so a half-revert
+    (a file back in core, or dropped from _DEFERRED_FILES) fails HERE."""
+    from lib.js_bundler import _BUNDLE_FILES, _DEFERRED_FILES, _DEFERRED_ENTRY_POINTS
+    for name in _PROJECT_BRAIN_FILES:
+        assert name in _DEFERRED_FILES, f'{name} must be in _DEFERRED_FILES (deferred).'
+        assert name not in _BUNDLE_FILES, (
+            f'{name} is deferred — must NOT also be in core _BUNDLE_FILES '
+            '(double-load, and it would negate the eager-gzip win).'
+        )
+    # peers/status/i18n read window.ProjectBrain._state at runtime → they must
+    # order AFTER project-brain.js WITHIN the deferred list (same window scope).
+    order = [n for n in _DEFERRED_FILES if n in _PROJECT_BRAIN_FILES]
+    assert order[0] == 'project-brain.js', (
+        f'project-brain.js must precede its siblings in _DEFERRED_FILES: {order}'
+    )
+    missing = _PROJECT_BRAIN_OPENERS - set(_DEFERRED_ENTRY_POINTS)
+    assert not missing, (
+        f'Project Brain openers missing from _DEFERRED_ENTRY_POINTS: {sorted(missing)}'
+    )
+
+
+def test_project_brain_conv_switch_fns_are_not_loading_stubs():
+    """THE no-load design proof: projectBrainRefresh (conv-switch) and
+    closeProjectBrain (overlay onclick) must NOT be deferred entry points, in
+    EITHER _DEFERRED_ENTRY_POINTS list. If they were, feature-loader would install
+    a bundle-loading stub for them → the first conv-switch fetches the deferred
+    bundle seconds into boot → the cluster is no longer deferred at all."""
+    from lib.js_bundler import _DEFERRED_ENTRY_POINTS
+    loader = _read(os.path.join(JS_DIR, 'feature-loader.js'))
+    for fn in _PROJECT_BRAIN_NO_LOAD:
+        assert fn not in _DEFERRED_ENTRY_POINTS, (
+            f'{fn} is a boot/conv-switch path fn — it must NOT be a deferred '
+            'entry point (a loading stub would fetch the bundle on conv-switch).'
+        )
+        # It also must not be stubbed as a quoted entry-point token in the
+        # feature-loader array (its _DEFERRED_ENTRY_POINTS.forEach installs stubs).
+        assert not re.search(
+            r"_DEFERRED_ENTRY_POINTS\s*=\s*\[[^\]]*'" + re.escape(fn) + r"'",
+            loader, re.DOTALL,
+        ), f"{fn} must not appear in feature-loader.js's _DEFERRED_ENTRY_POINTS array."
+
+
 def test_feature_loader_entry_points_match_jsbundler():
     """feature-loader.js hard-codes its own _DEFERRED_ENTRY_POINTS array (it runs
     in the browser, can't import the Python list). Assert the two agree, so

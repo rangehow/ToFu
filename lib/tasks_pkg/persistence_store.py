@@ -252,3 +252,19 @@ class DefaultConversationStore:
             (messages_json, now_ms, len(messages), search_text, conv_id))
         update_conversation_fts(db, conv_id, search_text)
         return now_ms
+
+    def notify_conversation_changed(self, conv_id):
+        """Look up the conversation's current rev and fire the conv-changed push.
+
+        The rev (bumped by the messages-change trigger on the preceding write)
+        rides the notification so the client's rev-gate refetches this conv's
+        body exactly once.  Best-effort: a failure here must never break the
+        caller's write path.
+        """
+        from lib.conversations import notify_conv_changed
+        from lib.database import DOMAIN_CHAT, get_thread_db
+        db = get_thread_db(DOMAIN_CHAT)
+        rev_row = db.execute(
+            'SELECT rev FROM conversations WHERE id=? AND user_id=1',
+            (conv_id,)).fetchone()
+        notify_conv_changed(conv_id, rev=(rev_row[0] if rev_row else None))

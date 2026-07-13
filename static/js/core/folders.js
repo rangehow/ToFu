@@ -7,9 +7,60 @@
    core.js shell — symbols share `window` scope so no exports needed.
    ═══════════════════════════════════════════════════════════════════ */
 
+/* Bounded backoff retry for a failed FIRST folder load. loadFolders() has no
+ * caller-side retry (it runs once at boot), so without this a transient fetch
+ * failure permanently hides the folder rail until the next full page reload.
+ * The chain is self-cancelling: each attempt is a no-op once _foldersLoaded is
+ * true (a success — from this retry, a create, or a cross-device push refresh —
+ * flips it and the next scheduled tick returns early). */
+let _folderLoadRetryTimer = 0;
+let _folderLoadRetryAttempt = 0;
+const _FOLDER_LOAD_RETRY_DELAYS = [1500, 4000, 10000, 30000];
+function _scheduleFolderLoadRetry() {
+  if (_foldersLoaded) return;                       // already recovered
+  if (_folderLoadRetryTimer) return;                // a retry is already pending
+  const delay = _FOLDER_LOAD_RETRY_DELAYS[
+    Math.min(_folderLoadRetryAttempt, _FOLDER_LOAD_RETRY_DELAYS.length - 1)];
+  _folderLoadRetryTimer = setTimeout(() => {
+    _folderLoadRetryTimer = 0;
+    if (_foldersLoaded) return;
+    _folderLoadRetryAttempt++;
+    Promise.resolve(loadFolders()).catch(e =>
+      console.warn('[loadFolders] retry failed:', e && e.message));
+  }, delay);
+}
+
 async function loadFolders() {
-  const list = await Api.folders.list();
+  /* Api.folders.list() is best-effort ({onError:'null'}): a transient network
+   * failure resolves to [] (empty array), NOT the real folder list. Adopting
+   * that empty result would blank every folder tab on a flaky connection even
+   * though the folders still exist server-side (the "folders missing on
+   * desktop" symptom). Distinguish a genuine empty list (200 → []) from a
+   * fetch failure by re-requesting with onError:'throw' when the first call
+   * came back empty, so a real error is caught instead of masquerading as
+   * "no folders". On error we keep whatever folders were already loaded. */
+  let list = await Api.folders.list();
+  if (Array.isArray(list) && list.length === 0) {
+    try {
+      const verified = await Api.get('/api/v1/folders');
+      if (Array.isArray(verified)) list = verified;
+    } catch (e) {
+      console.warn('[loadFolders] fetch failed — keeping current folders:', e.message);
+      if (_foldersLoaded) return _folders;   // preserve already-loaded tabs
+      list = null;                            // first load ever failed → leave unloaded
+      /* ★ Self-heal: loadFolders() is called ONCE at boot (inside
+       *   initActiveTasks' Promise.all) and the boot-reconnect loop only
+       *   re-runs the CONVERSATION load — nothing re-fetches folders. So a
+       *   failed first load would hide the folder rail for the whole session
+       *   ("sidebar folder gone after refresh, only reappears on create").
+       *   Schedule a bounded backoff retry so folders recover on their own
+       *   once the transient fetch failure clears. Guarded by _foldersLoaded
+       *   so a later success (or a concurrent retry) cancels the chain. */
+      _scheduleFolderLoadRetry();
+    }
+  }
   if (Array.isArray(list)) _folders = list;
+  else return _folders;   // fetch failed before first success — don't mark loaded
   _foldersLoaded = true;
   /* ★ Trigger sidebar re-render so folder tabs appear immediately.
    *   On init, loadFolders() runs in parallel with loadConversationsFromServer().
@@ -51,7 +102,7 @@ async function deleteFolder(folderId) {
 }
 
 function setConversationFolder(convId, folderId) {
-  const c = conversations.find(x => x.id === convId);
+  const c = getConvById(convId);
   if (!c) return;
   c.folderId = folderId || null;
   saveConversations(null);  // null = metadata-only, don't bump updatedAt

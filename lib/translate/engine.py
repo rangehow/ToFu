@@ -24,6 +24,29 @@ from .prompt import _wrap_for_translation
 logger = get_logger(__name__)
 
 
+# Characters that legitimately END a complete translation. A result whose
+# last non-space char is NOT one of these ended mid-sentence — the dominant
+# silent-truncation mode where a cheap model stops early with
+# finish_reason=stop (NOT length) and the byte count still clears the ratio
+# floor. Covers CJK full-width terminators + Latin sentence enders + closing
+# brackets/quotes/fences a complete segment can legitimately end on.
+_SENTENCE_END_CHARS = frozenset(
+    '。．.！!？?…～~：:；;、,，)）]】》」』”"\'`’*_>')
+
+
+def _ends_midsentence(text: str) -> bool:
+    """True when ``text`` does NOT end on a sentence terminator/closer.
+
+    A complete translation ends on punctuation or a closing bracket/fence; a
+    body that ends on a bare word/identifier char stopped mid-generation. Pure;
+    empty / whitespace-only → False (the empty check handles that separately).
+    """
+    t = (text or '').rstrip()
+    if not t:
+        return False
+    return t[-1] not in _SENTENCE_END_CHARS
+
+
 def _build_trace(*, path, model, in_chars, out_chars, attempts=1,
                  content_fails=0, dispatch_fails=0, elapsed=0.0,
                  verdict='ok', target=''):
@@ -384,6 +407,14 @@ def _translate_one_chunk(chunk, system_prompt, chunk_label='',
         # finish_reason=stop) sail through undetected. Raise the floor for
         # Chinese targets so those drops are caught and retried.
         _short_floor = 0.30 if _target_is_chinese else 0.20
+        # A SOFT floor (above the hard floor) that only bites when the output
+        # ALSO ended mid-sentence — this catches the finish_reason=stop early
+        # stop that lands between the hard floor and a full translation (the
+        # exact bug: a 40%-length body ending on a bare word like "…are you"
+        # cleared the 0.30 hard floor and was accepted). Ratio alone can't
+        # raise the hard floor (a legit terse EN→ZH is ~0.35-0.5), so we
+        # require the mid-sentence signal to avoid false positives.
+        _soft_trunc_floor = 0.45 if _target_is_chinese else 0.35
         if _finish == 'length':
             _is_truncated = True
             _reason = f'finish_reason=length, model={_model}'
@@ -391,6 +422,12 @@ def _translate_one_chunk(chunk, system_prompt, chunk_label='',
             _is_truncated = True
             _reason = (f'output too short ({len(c)}/{clen} = {len(c)/clen*100:.0f}%, '
                        f'floor={_short_floor:.0%}), model={_model}')
+        elif (clen > 200 and len(c) < clen * _soft_trunc_floor
+              and _ends_midsentence(c)):
+            _is_truncated = True
+            _reason = (f'ends mid-sentence + short ({len(c)}/{clen} = '
+                       f'{len(c)/clen*100:.0f}%, soft floor={_soft_trunc_floor:.0%}, '
+                       f"tail={c.rstrip()[-16:]!r}), model={_model}")
 
         if _is_truncated:
             _content_fail_count += 1
@@ -558,7 +595,16 @@ def _translate_one_chunk(chunk, system_prompt, chunk_label='',
     if isinstance(u, dict):
         _disp = u.get('_dispatch', {}) or {}
         _model_for_cache = _disp.get('model', u.get('model', '')) or ''
-    translate_cache.put(chunk, source, target, final, model=_model_for_cache)
+    # Do NOT persist a KNOWN-incomplete translation: caching a truncated body
+    # pins the partial forever (every later request served the same cut-off
+    # text — the reported "displayed incompletely" bug). A fresh request then
+    # re-translates and a healthier model can produce a complete result.
+    if _terminal_verdict != 'truncated':
+        translate_cache.put(chunk, source, target, final, model=_model_for_cache)
+    else:
+        logger.warning('[Translate%s] NOT caching truncated result '
+                       '(%d/%d chars) so a later request can re-translate',
+                       chunk_label, len(final), clen)
 
     # ── 溯源: full lifecycle trace attached to the usage dict + one
     #    structured, grep-able line. Flags suspiciously-short output even

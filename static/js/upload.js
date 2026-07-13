@@ -587,26 +587,39 @@ document.addEventListener('dragend', (e) => {
 });
 document.addEventListener('dragover', (e) => {
   if (_imgDragFromIdx === null) return;
-  const hit = _imgChipFrom(e.target);
-  if (!hit) return;
-  e.preventDefault();  // allow drop
+  // A reorder drag is in flight → accept it EVERYWHERE, not only when the
+  // pointer is over a sibling chip. dropEffect='move' is what makes the OS
+  // show the reposition ("move") cursor; if dragover goes unhandled over the
+  // gaps between chips or the surrounding input area, the browser falls back
+  // to the no-drop/copy cursor and the gesture feels like a file upload
+  // instead of a reposition. Highlight still tracks only the chip under it.
+  e.preventDefault();  // allow drop → keeps the move cursor across the whole drag
   if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+  const hit = _imgChipFrom(e.target);
   document.querySelectorAll('.img-preview.img-drop-target')
-    .forEach((el) => { if (el !== hit.chip) el.classList.remove('img-drop-target'); });
-  if (hit.idx !== _imgDragFromIdx) hit.chip.classList.add('img-drop-target');
+    .forEach((el) => { if (!hit || el !== hit.chip) el.classList.remove('img-drop-target'); });
+  if (hit && hit.idx !== _imgDragFromIdx) hit.chip.classList.add('img-drop-target');
 });
 document.addEventListener('drop', (e) => {
   if (_imgDragFromIdx === null) return;
-  const hit = _imgChipFrom(e.target);
-  if (!hit) return;
+  // A reorder drag is in flight. Because dragover now accepts the drop
+  // EVERYWHERE (to keep the move cursor), we MUST also swallow the drop
+  // everywhere — otherwise releasing over the #userInput textarea (or any
+  // gap) runs the browser's native text-drop default and inserts our
+  // text/plain index payload straight into the input box. Reordering must
+  // NEVER mutate anything but the chip order.
   e.preventDefault();
   e.stopPropagation();
   const from = _imgDragFromIdx;
-  const to = hit.idx;
   _imgDragFromIdx = null;
-  if (from === to || from < 0 || from >= pendingImages.length) { renderImagePreviews(); return; }
+  const hit = _imgChipFrom(e.target);
+  // Off-chip release → no move, just repaint (drop already swallowed above).
+  if (!hit || from < 0 || from >= pendingImages.length || hit.idx === from) {
+    renderImagePreviews();
+    return;
+  }
   const moved = pendingImages.splice(from, 1)[0];
-  pendingImages.splice(to, 0, moved);
+  pendingImages.splice(hit.idx, 0, moved);
   renderImagePreviews();
 }, true);  // capture: run before the full-page file-drop handler
 function removePdfText(i) {
@@ -835,7 +848,7 @@ document.addEventListener('click', function(e) {
   const msgEl = trunc.closest('.message');
   if (msgEl) {
     const msgIdx = parseInt((msgEl.id || '').replace('msg-', ''), 10);
-    const conv = conversations.find(c => c.id === activeConvId);
+    const conv = getActiveConv();
     if (conv && conv.messages && conv.messages[msgIdx]) {
       const msg = conv.messages[msgIdx];
       const allRounds = getToolRoundsFromMsg(msg);

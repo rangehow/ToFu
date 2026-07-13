@@ -371,6 +371,73 @@ class ProjectSessionsCoLocationTest(unittest.TestCase):
         self.assertEqual(vals['CFG'], vals['MOD'])
 
 
+class ProjectSessionsRegistryTest(unittest.TestCase):
+    """The in-tree undo store ``lib/.project_sessions`` must be recognised by
+    the SINGLE runtime-state authority (``lib.runtime_layout``), not only by a
+    hand-maintained ``.gitignore`` line. Before this was registered, the
+    relocation shipped a false docstring claim AND the predicates returned
+    False → an overlay update could clobber undo history and a
+    registry-regenerated ``.gitignore`` would silently drop the ignore."""
+
+    def test_overlay_skip_and_runtime_state_recognise_undo_store(self):
+        import lib.runtime_layout as rl
+        p = 'lib/.project_sessions/abc/modifications.json'
+        self.assertTrue(rl.is_overlay_skipped(p),
+                        'undo store not overlay-skipped — an update could '
+                        'clobber it')
+        self.assertTrue(rl.is_runtime_state(p),
+                        'undo store not classified runtime state — a dirty '
+                        'tree would block updates on it')
+
+    def test_gitignore_lines_emits_undo_store(self):
+        import lib.runtime_layout as rl
+        joined = '\n'.join(rl.gitignore_lines())
+        self.assertIn('lib/.project_sessions/', joined,
+                      'gitignore_lines() omits the undo store — a regenerated '
+                      '.gitignore would leak it into version control')
+
+    def test_live_gitignore_line_is_registry_derived(self):
+        """The live .gitignore must carry the scoped ``lib/.project_sessions/``
+        entry (matching the registry), NOT the old over-broad ``**/`` glob —
+        proving the parallel hand-maintained list was retired."""
+        with open(os.path.join(_REPO, '.gitignore'), encoding='utf-8') as fh:
+            text = fh.read()
+        self.assertIn('lib/.project_sessions/', text)
+        self.assertNotIn('**/.project_sessions/', text,
+                         'stale over-broad glob still present — the parallel '
+                         'list was not retired')
+
+    def test_neuter_drop_undo_store_entry_defeats_guard(self):
+        """NEUTER: remove the registry entry → both predicates must go False
+        AND gitignore_lines() must drop it, proving the entry is load-bearing
+        (not covered incidentally by another prefix)."""
+        import lib.runtime_layout as rl
+        orig = rl.INSTALL_STATE
+        orig_rt = rl.RUNTIME_STATE_PREFIXES
+        orig_skip = rl.OVERLAY_SKIP_PREFIXES
+        try:
+            rl.INSTALL_STATE = tuple(
+                e for e in orig if e.prefix != 'lib/.project_sessions/')
+            rl.RUNTIME_STATE_PREFIXES = ('.tofu/',) + tuple(
+                e.prefix for e in rl.INSTALL_STATE)
+            rl.OVERLAY_SKIP_PREFIXES = (rl.RUNTIME_STATE_PREFIXES
+                                        + rl._VCS_BUILD_PREFIXES)
+            p = 'lib/.project_sessions/abc/modifications.json'
+            self.assertFalse(rl.is_overlay_skipped(p),
+                             'neuter failed: still overlay-skipped after '
+                             'removal — not reading the registry')
+            self.assertFalse(rl.is_runtime_state(p))
+            self.assertNotIn('lib/.project_sessions/',
+                             '\n'.join(rl.gitignore_lines()))
+        finally:
+            rl.INSTALL_STATE = orig
+            rl.RUNTIME_STATE_PREFIXES = orig_rt
+            rl.OVERLAY_SKIP_PREFIXES = orig_skip
+        # Restored → guard active again.
+        self.assertTrue(rl.is_overlay_skipped(
+            'lib/.project_sessions/abc/modifications.json'))
+
+
 class NonRuntimeStateDirsTest(unittest.TestCase):
     """``outputs/`` and ``overleaf_cache/`` are declared in
     ``runtime_layout.INSTALL_STATE`` (so an update never CLOBBERS them) but,

@@ -7,13 +7,30 @@ With the bundle, the browser fetches 1 file (gzip ~250KB) in a single request.
 The bundle is rebuilt at startup and whenever any source file changes.
 No npm/webpack/build step required — pure Python concatenation + a
 conservative, dependency-free minify pass (``_minify_js``, see below).
+
+When a ``node`` toolchain WITH ``esbuild`` happens to be present, an OPTIONAL
+stronger minify pass (``_esbuild_minify``) is layered on top of the concatenated
+bundle — it mangles function-local identifiers and shrinks syntax for a further
+~12% gzip / ~19% raw reduction. It is strictly best-effort and fail-open: absent
+or broken esbuild → the dependency-free ``_minify_js`` output is served
+unchanged, so a bare ``python server.py`` (e.g. a Mac with no node) is byte-for
+-byte identical to before. See ``_esbuild_minify`` for the safety argument (why
+script-mode esbuild never renames the top-level globals index.html's inline
+``onclick=`` handlers depend on, and never tree-shakes a top-level definition).
 """
+import contextlib
 import hashlib
 import os
 import re
 import shutil
 import subprocess
+import tempfile
 import time
+
+try:
+    import fcntl  # POSIX advisory locks — serialize concurrent bundle builds
+except ImportError:  # pragma: no cover - non-POSIX (Windows); temp+rename still safe
+    fcntl = None
 
 from lib.log import get_logger
 
@@ -255,6 +272,82 @@ def _node_syntax_ok(bundle_path):
     detail = (proc.stderr or proc.stdout or '').strip()
     return False, detail
 
+
+def _resolve_esbuild():
+    """Locate an ``esbuild`` binary, preferring the project's local install.
+
+    Checks ``node_modules/.bin/esbuild`` first (populated by ``npm ci`` /
+    ``npm install`` per package.json), then falls back to ``esbuild`` on PATH.
+    Deliberately never uses ``npx`` — an unresolved ``npx esbuild`` would try to
+    DOWNLOAD the package at server-startup time, which is exactly the network
+    surprise a self-hosted launcher must not incur. Returns the path or None.
+    """
+    local = os.path.join(BASE_DIR, 'node_modules', '.bin',
+                         'esbuild.cmd' if os.name == 'nt' else 'esbuild')
+    if os.path.isfile(local) and os.access(local, os.X_OK):
+        return local
+    return shutil.which('esbuild')
+
+
+def _esbuild_minify(src):
+    """Optional stronger minify via esbuild — best-effort, fail-open.
+
+    Mirrors the ``_node_syntax_ok`` philosophy exactly: when esbuild is present
+    AND its output passes a ``node --check`` gate, return the esbuild-minified
+    string; otherwise return None so the caller keeps the dependency-free
+    ``_minify_js`` output. A bare install with no node/esbuild is therefore
+    byte-identical to before.
+
+    SAFETY (why this can't break the app): the bundle has NO ``import`` /
+    ``export`` (verified) so esbuild processes it in SCRIPT mode, where every
+    top-level ``var`` / ``function`` / ``const`` / ``let`` is an observable
+    global and is NEVER renamed — so the names index.html's inline ``onclick=``
+    handlers rely on (``loadConversation``, ``closeSettings``, …) survive intact.
+    Only function-LOCAL identifiers are mangled, and those are private. No
+    bundling/tree-shaking is requested, so no top-level definition is dropped.
+    The trade-off vs ``_minify_js``: esbuild collapses everything to one line, so
+    the per-file ``// ═══ name ═══`` debug headers are lost (acceptable for a
+    minified artifact); the line-preserving ``_minify_js`` fallback keeps them.
+    """
+    esb = _resolve_esbuild()
+    if not esb:
+        return None
+    try:
+        proc = subprocess.run(
+            [esb, '--minify', '--loader=js'],
+            input=src, capture_output=True, text=True, timeout=60,
+        )
+    except Exception as e:
+        logger.debug('[Bundle] esbuild unavailable: %s', e)
+        return None
+    if proc.returncode != 0 or not proc.stdout.strip():
+        logger.warning('[Bundle] esbuild minify failed (exit=%s), keeping _minify_js: %.300s',
+                       proc.returncode, (proc.stderr or '').strip())
+        return None
+    out = proc.stdout
+    # Validate esbuild's own output before trusting it — a latent esbuild bug
+    # degrades to the _minify_js bundle, never to a broken served file.
+    try:
+        with tempfile.NamedTemporaryFile('w', suffix='.js', delete=False,
+                                         encoding='utf-8') as tf:
+            tf.write(out)
+            tmp_path = tf.name
+    except OSError as e:
+        logger.debug('[Bundle] esbuild temp write failed: %s', e)
+        return None
+    try:
+        ok, detail = _node_syntax_ok(tmp_path)
+    finally:
+        try:
+            os.remove(tmp_path)
+        except OSError as e:
+            logger.debug('[Bundle] could not remove esbuild temp %s: %s', tmp_path, e)
+    if not ok:
+        logger.warning('[Bundle] esbuild output failed syntax check, keeping '
+                       '_minify_js: %.300s', detail)
+        return None
+    return out
+
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 JS_DIR = os.path.join(BASE_DIR, 'static', 'js')
 
@@ -287,10 +380,19 @@ _BUNDLE_FILES = [
     'core/error_envelope.js',
     'core/cross_tab_sync.js',
     'core/conversations.js',
+    # Shared SSE fetch-response read/decode/buffer loop (readSSEStream) —
+    # extracted 2026-07-11 from branch.js / paper-reader.js / ui/sse_pipeline.js.
+    # Leaf module (touches only response.body.getReader + TextDecoder); load
+    # before all three consumers below.
+    'core/sse_reader.js',
     # Frontend per-(conv,msg) in-flight translate guard (mirrors the backend
     # lib/translate/inflight.py). Only references window/Map at load; CALLED at
     # runtime by translation.js + message_actions.js. Leaf module.
     'core/translate_guard.js',
+    # Canonical msg.translation model + displayContent resolver + bidirectional
+    # legacy projection (decoupling step 1). Pure, no DOM. After translate_guard,
+    # before translation.js (which will delegate to it in a later increment).
+    'core/translation_model.js',
     'core/cache_stats.js',
     'core/markdown.js',
     'core/health_stream_timer.js',
@@ -326,6 +428,14 @@ _BUNDLE_FILES = [
     'ui/conversation_list.js',
     'ui/streaming_render.js',
     'ui/chat_render.js',
+    # Translate progress/error indicator, extracted from chat_render.js
+    # (decoupling step 3). Reads msg.translation via the canonical model; called
+    # at runtime by renderMessage, so load order beyond "bundled" is free.
+    'ui/translation_indicator.js',
+    # Translation → DOM repaint subscriber (decoupling step 4): the 4 relocated
+    # painters + emitMessageChanged. Calls renderMessage, so load AFTER
+    # chat_render.js; consumed by translation.js, so load BEFORE it.
+    'ui/translation_render.js',
     'ui/popups.js',
     'ui/finish_info.js',
     'ui/tool_rounds.js',
@@ -374,6 +484,10 @@ _BUNDLE_FILES = [
     'toolset-apply.js',  # tool-schema latch "apply on next conversation" banner
     'translation.js',
     'upload.js',
+    # Voice input (speech-to-text) — mic button + MediaRecorder capture.
+    # Leaf composer feature: uses Api.audio.* at RUNTIME and its initVoiceInput()
+    # is called from main.js's boot, so it only needs to load before main.js.
+    'voice.js',
     # image-gen.js — MOVED to _DEFERRED_FILES (lazy-loaded on first entry into
     # Image-Gen mode; ~11KB gzip). No load-time side effect (its only load-time
     # core read is `const _escapeHtmlBasic = escapeHtml`, and core loads first).
@@ -419,6 +533,7 @@ _BUNDLE_FILES = [
     'settings/visibility_defaults.js',
     'settings/chip_input.js',
     'settings/other_tabs.js',
+    'settings/speech.js',
     'settings/auth_sources.js',
     'settings/save_export.js',
     'settings/system_prompt_editor.js',
@@ -442,33 +557,43 @@ _BUNDLE_FILES = [
     'main.js',
     # Post-orchestrator UI widgets (depend on conversations/activeConvId/config
     # globals declared in core.js + main.js, so they MUST come after main.js).
+    # Server→client history_rewrite alignment: applies the backend reconcile
+    # verdict push ('conv' channel) in place so no manual refresh is needed.
+    # Reads conversations/activeConvId/renderChat + calls pushSubscribe at
+    # runtime, so it MUST come after main.js AND push.js. Wired from main.js
+    # boot via _wireConvHistoryRewritePush().
+    'conv_sync_push.js',
+    # Client half of windowed conversation reads (tail-N first-open + scroll-up
+    # pagination). Inert unless the server returns windowed:true. Reads
+    # conversations/activeConvId/renderChat + Api at runtime → after main.js.
+    'conv_window.js',
     'compaction-viewer.js',
     'context-bar.js',
+    # The Tofu pet — a self-driven mascot mounted into #projectBar (tofu theme
+    # only via CSS). Queries the DOM + reads localStorage at RUNTIME only, so
+    # it can load anytime after main.js. No app-pipeline dependency; exposes
+    # window.TofuPet + listens on the 'tofu:activity'/'tofu:react' event seam.
+    'tofu-pet.js',
+    # The procedural Impressionist canvas backdrop for the project bar (tofu
+    # theme only via CSS). Asset-free brush-dab painter; reads the bar's
+    # [data-decor] (set by tofu-pet.js) + the app theme at RUNTIME only, no
+    # pipeline dependency, so it can load anytime after main.js. Exposes
+    # window.TofuScene; listens on the same 'tofu:decor' event seam.
+    'tofu-scene.js',
     # Cross-conversation live-presence strip — pure render subscriber on the
     # 'presence' push channel. Reads activeConvId / conversations /
     # getActiveConv (main.js) + _getConvProjectPath (project.js) + t (i18n.js)
     # at runtime, so it MUST come after main.js. No raw fetch (pushSubscribe
     # only).
     'presence.js',
-    # Project Brain — Pillar #1 cross-conversation Activity Feed tab. Reads
-    # loadConversation (main.js) + Api/pushSubscribe + Icon/t at RUNTIME only,
-    # so it MUST come after main.js. No raw fetch (Api.project.feed +
-    # pushSubscribe only). Independent tab, not a toggle.
-    'project-brain.js',
-    # Project Brain — Team/Peers column. The cohesion surface: LIVE sibling
-    # roster (presence ⋈ task ⋈ claimed-epic via Api.project.brainPeers) + the
-    # peer-message thread (extracted from the feed). Reads Api/Icon/t/
-    # loadConversation + window.ProjectBrain._state at RUNTIME, so it MUST come
-    # after project-brain.js (which owns _state). No raw fetch.
-    'project-brain-peers.js',
-    # Project Brain — content-translation DISPLAY OVERLAY. Lays a translation
-    # over the agent/human-authored free-text content (charter / decisions /
-    # epic titles / activity + peer summaries) in the UI language, WITHOUT
-    # mutating the originals (source stays in data-pb-src; commit/reject read
-    # their own data-text). Reads Api.translate / Icon / t / _i18nLang +
-    # ProjectBrain render call-sites at RUNTIME, so it MUST come after
-    # project-brain.js + project-brain-peers.js. No raw fetch (Api.translate).
-    'project-brain-i18n.js',
+    # NOTE: the Project Brain cluster (project-brain.js + -peers + -status +
+    # -i18n) was MOVED to _DEFERRED_FILES (2026-07-09). It is a self-contained
+    # panel opened only by a user action (openProjectBrain / toggleProjectBrain /
+    # openProjectBrainInfluence — the collab-bar click + conv-scoped deep-link);
+    # the only core caller, projectBrainRefresh (main.js:637, on conv-switch), is
+    # typeof-guarded and no-ops until the panel has been opened, so deferring the
+    # cluster does NOT trigger the feature fetch on boot/conv-switch. See
+    # _DEFERRED_FILES below + feature-loader.js.
     # Per-turn context note builder/renderer. Reads projectState + toolbar
     # globals + config to snapshot each turn's context, so it MUST come
     # after main.js. Consumed by ui/chat_render.js (renderTurnCtxNote) and
@@ -528,11 +653,35 @@ _CRITICAL_FILES = frozenset({
 _DEFERRED_FILES = [
     'orchestration.js',   # Orchestration Studio (openOrchestration) — ~36KB gz
     'task-mode.js',       # Task Mode viewer (openTaskMode) — reads _ORCH_* at runtime → AFTER orchestration.js
+    # paper-reader.js decomposition (Epic E, 2026-07-11). Cohesive leaf siblings
+    # load BEFORE paper-reader.js; all window-scope var (no load-time cross-read).
+    'paper/reader_prefs.js',  # reader comfort prefs (text-size + width); leaf
+    'paper/arxiv.js',     # arXiv search + describe-recommend + fetch; owns _recStream (read by core KaTeX hook at runtime) → load before paper-reader.js
+    'paper/qa.js',        # Q&A tab render+send+poll; QA state + _ensurePaperText stay in core → load before paper-reader.js
+    'paper/pdf_viewer.js',  # pdf.js load/render/zoom pipeline; owns _paperResizeObserver/_paperZoomDebounce → BEFORE pdf_responsive.js (calls paperFitWidth) + paper-reader.js
+    'paper/pdf_responsive.js',  # draggable divider + foldable/tablet responsive-crossing IIFE (self-contained; self-inits on DOMContentLoaded)
+    'paper/report.js',    # Report + Review Mode (task/poll/render/export + 7 load-time listeners); report/review STATE stays in core → load before paper-reader.js
+    'paper/babel.js',     # Babel PDF-translation tab; owns _babelTranslatedPages (read by core library-persist at runtime) → load before paper-reader.js
     'paper-reader.js',    # Paper Reader (togglePaperMode) — ~54KB gz; init via _onReady (feature-loader.js)
     # Image-Gen mode (enterImageGenMode + panel controls) — ~11KB gz. No
     # load-time side effect; only load-time core read is `escapeHtml` (present,
     # core loads first). Independent of the three above (no cross-read).
     'image-gen.js',
+    # Project Brain cluster (~18KB gz standalone) — the full three-column
+    # coordination panel. DEFERRED 2026-07-09: no load-time side effect (each
+    # file's top level is only decls + window.* exposes; project-brain.js's
+    # pushSubscribe lives INSIDE openFeed(), never at module scope). Opened only
+    # by a user action (the 3 openers below). The one core caller,
+    # projectBrainRefresh (main.js:637, conv-switch), and closeProjectBrain
+    # (overlay onclick) are typeof-guarded and deliberately NOT deferred entry
+    # points — leaving them absent-at-boot means conv-switch NEVER triggers the
+    # feature fetch (refresh has nothing to refresh, close nothing to close when
+    # the panel was never opened). Ordering: peers/status/i18n read
+    # window.ProjectBrain._state at RUNTIME → MUST come after project-brain.js.
+    'project-brain.js',
+    'project-brain-peers.js',
+    'project-brain-status.js',
+    'project-brain-i18n.js',
 ]
 
 # The entry-point functions the feature bundle DEFINES. feature-loader.js
@@ -546,6 +695,15 @@ _DEFERRED_ENTRY_POINTS = (
     # clickable after the panel opens, but are stubbed for defense-in-depth.
     'enterImageGenMode', 'exitImageGenMode', 'generateImageDirect',
     'selectIgAspect', 'selectIgCount', 'selectIgResolution', 'toggleIgModelDropdown',
+    # Project Brain openers (deferred 2026-07-09). ONLY the user-triggered
+    # openers are stubbed — these are the only fns invocable while the bundle is
+    # absent (collab-bar click → openProjectBrain; conv-scoped deep-link →
+    # openProjectBrainInfluence; topbar toggle → toggleProjectBrain). Deliberately
+    # ABSENT: projectBrainRefresh (main.js:637 conv-switch) + closeProjectBrain
+    # (overlay onclick) — a loading stub there would fetch the bundle on every
+    # conv-switch, negating the deferral. They are typeof-guarded at their call
+    # sites and safely no-op until the panel is first opened.
+    'openProjectBrain', 'toggleProjectBrain', 'openProjectBrainInfluence',
 )
 
 # Global state
@@ -687,31 +845,128 @@ def _assemble_bundle(files, prefix, critical):
         return None, 0
 
     bundle_content = ''.join(parts)
+
+    # Optional stronger minification via esbuild (mangle locals + shrink syntax)
+    # when a node toolchain is present. Fail-open: absent/broken → keep the
+    # dependency-free _minify_js output. Hashing the RESULT below means the
+    # content-hash (cache-buster) always reflects the bytes actually served.
+    enhanced = _esbuild_minify(bundle_content)
+    if enhanced is not None:
+        bundle_content = enhanced
+
     content_hash = hashlib.sha256(bundle_content.encode('utf-8')).hexdigest()[:8]
     filename = f'{prefix}{content_hash}.js'
     bundle_path = os.path.join(JS_DIR, filename)
 
+    # Short-circuit: a bundle of THIS content-hash already sits on disk (built
+    # by us earlier or by a concurrent builder that won the flock). The hash is
+    # over the exact bytes served, so an existing file is byte-identical — no
+    # rebuild, no node-gate, no write. This makes concurrent builders converge
+    # on the same artifact instead of racing to (re)create it.
+    if os.path.exists(bundle_path):
+        return filename, total_size
+
+    # Atomic publish: write to a UNIQUE temp file in the SAME dir, gate THAT,
+    # and only os.rename() it into the hash path on success. os.rename within a
+    # dir is atomic, so a reader (node --check on a sibling worker, or a browser
+    # fetch) never observes a partial write, and a failed gate deletes only the
+    # private temp — never a hash path another process may be using. This kills
+    # both the truncated-read SyntaxError and the MODULE_NOT_FOUND deletion race.
+    tmp_fd = None
+    tmp_path = None
     try:
-        with open(bundle_path, 'w', encoding='utf-8') as f:
+        # Suffix MUST be .js: the node --check gate infers the module type from
+        # the extension and hard-errors (ERR_UNKNOWN_FILE_EXTENSION) on .tmp.
+        # The leading dot + random stem keep it private and out of the served
+        # bundle set (_BUILT_BUNDLE_RE only matches bundle-/feature-<hash>.js).
+        tmp_fd, tmp_path = tempfile.mkstemp(
+            prefix=f'.{prefix}{content_hash}.', suffix='.js', dir=JS_DIR)
+        with os.fdopen(tmp_fd, 'w', encoding='utf-8') as f:
+            tmp_fd = None  # fdopen took ownership; don't double-close below
             f.write(bundle_content)
     except OSError as e:
-        logger.error('[Bundle] Failed to write %s: %s', bundle_path, e)
+        logger.error('[Bundle] Failed to write temp bundle for %s: %s', filename, e)
+        if tmp_fd is not None:
+            with contextlib.suppress(OSError):
+                os.close(tmp_fd)
+        if tmp_path:
+            with contextlib.suppress(OSError):
+                os.remove(tmp_path)
         return None, 0
 
-    # Final syntax gate (best-effort — no-op when node is absent). A broken
-    # bundle white-screens (core) / breaks the feature (deferred) with no
-    # recovery, so DON'T serve it: delete + None.
-    ok, detail = _node_syntax_ok(bundle_path)
+    # Final syntax gate on the TEMP file (best-effort — no-op when node is
+    # absent). A broken bundle white-screens (core) / breaks the feature
+    # (deferred) with no recovery, so DON'T publish it: drop the temp + None.
+    ok, detail = _node_syntax_ok(tmp_path)
     if not ok:
         logger.critical('[Bundle] Built bundle %s FAILED syntax check — refusing to '
                         'serve it. Detail: %.500s', filename, detail)
-        try:
-            os.remove(bundle_path)
-        except OSError as e:
-            logger.debug('[Bundle] could not remove bad bundle %s: %s', bundle_path, e)
+        with contextlib.suppress(OSError):
+            os.remove(tmp_path)
+        return None, 0
+
+    # Another builder may have published the identical hash between our
+    # existence check and now (they'd have written byte-identical content).
+    # If so, adopt theirs and drop our temp — never rename over a file a peer
+    # may already be serving.
+    if os.path.exists(bundle_path):
+        with contextlib.suppress(OSError):
+            os.remove(tmp_path)
+        return filename, total_size
+
+    try:
+        os.rename(tmp_path, bundle_path)
+    except OSError as e:
+        # Lost the publish race (peer renamed first) → their file is identical.
+        if os.path.exists(bundle_path):
+            with contextlib.suppress(OSError):
+                os.remove(tmp_path)
+            return filename, total_size
+        logger.error('[Bundle] Failed to publish bundle %s: %s', filename, e)
+        with contextlib.suppress(OSError):
+            os.remove(tmp_path)
         return None, 0
 
     return filename, total_size
+
+
+# Cross-process build lock. Serializes concurrent `build_bundle()` calls (many
+# processes importing/starting at once, or racing `GET /` requests on first
+# boot) so only one runs the scan→gate→publish at a time; the others block,
+# then hit the content-hash short-circuit in _assemble_bundle and adopt the
+# just-published artifact instead of rebuilding it. Lives next to the sources
+# so it is shared across every process that bundles THIS tree. Advisory
+# (fcntl.flock) — a foreign reader is never blocked; only our own builders
+# coordinate. Fail-open: if the lock can't be taken (no fcntl / OSError), the
+# build still proceeds — the temp+rename atomicity keeps it correct, just
+# without the serialization optimization.
+_BUILD_LOCK_PATH = os.path.join(JS_DIR, '.bundle-build.lock')
+
+
+@contextlib.contextmanager
+def _build_lock():
+    """Best-effort cross-process advisory lock around a bundle build."""
+    if fcntl is None:
+        yield
+        return
+    fd = None
+    try:
+        fd = os.open(_BUILD_LOCK_PATH, os.O_CREAT | os.O_RDWR, 0o644)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+    except OSError as e:
+        logger.debug('[Bundle] build lock unavailable (%s) — proceeding unlocked', e)
+        if fd is not None:
+            with contextlib.suppress(OSError):
+                os.close(fd)
+        fd = None
+    try:
+        yield
+    finally:
+        if fd is not None:
+            with contextlib.suppress(OSError):
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            with contextlib.suppress(OSError):
+                os.close(fd)
 
 
 def build_bundle():
@@ -732,17 +987,18 @@ def build_bundle():
 
     t0 = time.time()
 
-    core_name, core_size = _assemble_bundle(_BUNDLE_FILES, 'bundle-', critical=True)
-    if not core_name:
-        return None
+    with _build_lock():
+        core_name, core_size = _assemble_bundle(_BUNDLE_FILES, 'bundle-', critical=True)
+        if not core_name:
+            return None
 
-    # Deferred bundle — non-fatal. If it fails to build, ship core alone.
-    feature_name, feature_size = _assemble_bundle(_DEFERRED_FILES, 'feature-', critical=False)
+        # Deferred bundle — non-fatal. If it fails to build, ship core alone.
+        feature_name, feature_size = _assemble_bundle(_DEFERRED_FILES, 'feature-', critical=False)
 
-    _clean_old_bundles(core_name, feature_name)
-    _bundle_filename = core_name
-    _feature_filename = feature_name
-    _bundle_mtime = _source_max_mtime()
+        _clean_old_bundles(core_name, feature_name)
+        _bundle_filename = core_name
+        _feature_filename = feature_name
+        _bundle_mtime = _source_max_mtime()
 
     elapsed = time.time() - t0
     if feature_name:
@@ -783,6 +1039,38 @@ def get_feature_bundle_filename():
     """
     get_bundle_filename()   # keeps the pair coherent; sets _feature_filename
     return _feature_filename
+
+
+def resolve_stale_bundle(filename):
+    """Map a requested built-bundle filename to the CURRENT one if it is stale.
+
+    A client holding a stale ``index.html`` (bfcache / long-lived tab /
+    caching proxy) asks for a ``bundle-<hash>.js`` / ``feature-<hash>.js`` whose
+    hash was already deleted by ``_clean_old_bundles`` on the last rebuild →
+    404 → the LoadGuard banner. This resolver lets the 404 handler self-heal
+    such a request by redirecting to the current bundle of the SAME KIND.
+
+    Args:
+        filename: the bare filename requested (e.g. ``'bundle-95e8203d.js'``),
+            with no directory or query string.
+
+    Returns:
+        The current bundle filename (e.g. ``'bundle-3af2a182.js'``) when
+        ``filename`` is a genuinely-built bundle of the same kind but a
+        DIFFERENT (stale) hash and the current one is available; otherwise
+        None. Returns None when the request already names the current file
+        (let it serve normally) or is not a built-bundle name at all (a real
+        404 — must NOT be masked).
+    """
+    if not filename or not _BUILT_BUNDLE_RE.match(filename):
+        return None
+    if filename.startswith('bundle-'):
+        current = get_bundle_filename()
+    else:  # 'feature-'
+        current = get_feature_bundle_filename()
+    if not current or filename == current:
+        return None
+    return current
 
 
 def get_bundle_script_tag():

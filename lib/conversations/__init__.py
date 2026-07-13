@@ -11,6 +11,7 @@ only. The route modules re-export these names for backward compatibility.
 
 from lib.conversations.meta_cache import (
     invalidate_meta_cache,
+    notify_conv_changed,
     refresh_meta_cache_if_stale,
 )
 from lib.conversations.search_index import build_search_text, update_conversation_fts
@@ -24,6 +25,7 @@ __all__ = [
     'build_search_text',
     'update_conversation_fts',
     'invalidate_meta_cache',
+    'notify_conv_changed',
     'refresh_meta_cache_if_stale',
     'generate_conversation_title',
     'first_user_text',

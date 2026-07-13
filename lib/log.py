@@ -102,7 +102,9 @@ def _writable_base_dir() -> str:
                 pass
             os.remove(probe)
             return exe_dir
-        except OSError:
+        except OSError as e:
+            logging.getLogger('lib.log').debug(
+                '[log] exe-dir %s not writable (%s) — using per-user base', exe_dir, e)
             return _per_user_base()
     # Source checkout — mirror runtime_paths._source_checkout_base() exactly:
     # keep user state OUT of the code tree by default (fresh clone → per-user),
@@ -118,7 +120,9 @@ def _writable_base_dir() -> str:
         try:
             with os.scandir(data_dir) as it:
                 populated = any(True for _ in it)
-        except OSError:
+        except OSError as e:
+            logging.getLogger('lib.log').debug(
+                '[log] scandir(%s) failed (%s) — treating as unpopulated', data_dir, e)
             populated = False
         return BASE_DIR if populated else _per_user_base()
     # Unknown value → treat as auto's fresh-clone default (per-user).
@@ -126,7 +130,9 @@ def _writable_base_dir() -> str:
     try:
         with os.scandir(data_dir) as it:
             populated = any(True for _ in it)
-    except OSError:
+    except OSError as e:
+        logging.getLogger('lib.log').debug(
+            '[log] scandir(%s) failed (%s) — treating as unpopulated', data_dir, e)
         populated = False
     return BASE_DIR if populated else _per_user_base()
 

@@ -34,7 +34,10 @@ from .review import (
     list_venues,
     make_review_lang,
     parse_report_lang,
+    finalize_review_body,
+    scorecard_separator,
     smarten_quotes,
+    strip_slop_dashes,
 )
 
 # Prompt-injection hardening for untrusted paper text
@@ -145,7 +148,8 @@ __all__ = [
     # review mode
     'REVIEW_VENUES', 'DEFAULT_VENUE', 'parse_report_lang', 'is_review_lang',
     'make_review_lang', 'list_venues', 'build_review_prompt',
-    'build_review_tool_instruction', 'smarten_quotes',
+    'build_review_tool_instruction', 'smarten_quotes', 'strip_slop_dashes',
+    'finalize_review_body', 'scorecard_separator',
     # injection guard
     'sanitize_paper_text', 'wrap_untrusted', 'injection_notice',
     # llm + tools

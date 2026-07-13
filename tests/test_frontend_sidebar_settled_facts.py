@@ -67,6 +67,10 @@ global.activeStreams = new Map();
 global._FINISH_NORMAL = new Set(['stop', 'end_turn', 'stop_sequence', 'tool_use', 'tool_calls']);
 global._FINISH_ERR = new Set(['error', 'server_offline']);
 global._autopilotRunConcluded = function () { return false; };
+global.convIsBusy = function (conv) {
+  if (!conv) return false;
+  return activeStreams.has(conv.id) || !!conv.activeTaskId;
+};
 
 eval(fs.readFileSync(process.argv[2], 'utf8'));   // _convStatusFlags (real or neutered)
 check('fn_exposed', typeof _convStatusFlags === 'function');

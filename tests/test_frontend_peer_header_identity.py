@@ -106,6 +106,8 @@ function loadAll(chatRenderSrc) {
   // escape_html + safe_html are REAL; chat_render is the (possibly neutered) arg.
   (0, eval)(fs.readFileSync(process.argv[2], 'utf8'));  // escape_html.js
   (0, eval)(fs.readFileSync(process.argv[3], 'utf8'));  // safe_html.js
+  (0, eval)(fs.readFileSync(process.argv[2].replace('escape_html.js', 'translation_model.js'), 'utf8'));  // core/translation_model.js (chat_render dep)
+  (0, eval)(fs.readFileSync(process.argv[2].replace('core/escape_html.js', 'ui/translation_indicator.js'), 'utf8'));  // ui/translation_indicator.js (chat_render dep)
   (0, eval)(chatRenderSrc);                             // chat_render.js
 }
 

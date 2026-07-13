@@ -60,6 +60,23 @@ global.renderMarkdown = (s) => 'MD-DUMP:' + String(s);
 global.Icon = (n) => '<svg data-icon="' + n + '"></svg>';
 global._shortUrl = (u) => u;
 global.formatNumber = (n) => String(n);
+// The delivery card routes toConv through convTitleById (a real global in the
+// bundle). Provide it + a loaded conversation list so the id→title resolution
+// path is actually EXERCISED here (previously it was undefined → the card fell
+// back to `conv cdef1234`, so the resolution was never tested).
+global.conversations = [
+  { id: 'cdef1234deadbeef', title: 'Overlap Watch Conv' },
+  { id: 'cghi5678cafef00d', title: 'Dup Epic Conv' },
+];
+global.convTitleById = function (cid) {
+  if (!cid) return '';
+  let hit = global.conversations.find((c) => c.id === cid);
+  if (!hit) {
+    const pre = global.conversations.filter((c) => c.id && c.id.indexOf(cid) === 0);
+    if (pre.length === 1) hit = pre[0];
+  }
+  return hit ? hit.title : 'Untitled chat';
+};
 
 eval(fs.readFileSync(process.argv[2], 'utf8'));  // ui/tool_rounds.js
 
@@ -183,6 +200,20 @@ const feedEmpty = {
 };
 check('feed_empty', _renderUnifiedToolLine(feedEmpty, false).includes('ptool-feed-empty'));
 
+// feed event with NO title but a resolvable convId → the row must show the
+// TITLE via convTitleById, never a raw `conv <id>` (the reported bug). Uses a
+// loaded id (cdef1234deadbeef → 'Overlap Watch Conv').
+const feedNoTitle = {
+  status: 'done', toolName: 'project_feed_read', query: 'project_feed_read',
+  toolContent: 'RAW', toolRounds: [],
+  results: [{ source: 'Peer', feedActivity: { count: 1, events: [
+    { kind: 'started', title: '', convId: 'cdef1234deadbeef',
+      summary: 'The team panel is too ugly', ts: Date.now() - 60000, mine: false } ] } }],
+};
+const fntHtml = _renderUnifiedToolLine(feedNoTitle, false);
+check('feed_notitle_resolves_title', fntHtml.includes('Overlap Watch Conv'));
+check('feed_notitle_not_raw_id', !fntHtml.includes('conv cdef1234'));
+
 // ── project_message → delivery card ──
 const msgRound = {
   status: 'done', toolName: 'project_message', query: 'project_message',
@@ -194,7 +225,11 @@ const msgRound = {
 };
 const mHtml = _renderUnifiedToolLine(msgRound, false);
 check('peermsg_class', mHtml.includes('ptool-peermsg'));
-check('peermsg_target', mHtml.includes('cdef1234'));
+// The target is resolved to its TITLE (not the raw id); the id survives only
+// in the title= tooltip. This exercises the real convTitleById path.
+check('peermsg_target', mHtml.includes('Overlap Watch Conv'));
+check('peermsg_target_id_in_tooltip', mHtml.includes('title="cdef1234"'));
+check('peermsg_target_not_raw', !mHtml.includes('conv cdef1234'));
 check('peermsg_text', mHtml.includes('Watch out for the overlap'));
 check('peermsg_outcome', mHtml.includes('ptool-peermsg-outcome-delivered'));
 check('peermsg_not_md_dump', !mHtml.includes('MD-DUMP:'));
@@ -254,6 +289,58 @@ check('feed_count_chip', fHtml.includes('ptool-convmeta-count') && fHtml.include
 // OPEN cards do NOT get a redundant count chip (body is already visible)
 check('open_no_count_chip', !trHtml.includes('ptool-convmeta-count') && !mHtml.includes('ptool-convmeta-count'));
 
+// ── project_commit → commit result card (committed) ──
+const commitRound = {
+  status: 'done', toolName: 'project_commit', query: 'project_commit',
+  toolContent: 'RAW COMMIT PROSE', toolRounds: [],
+  results: [{ source: 'Board', commitResult: {
+    mode: 'commit', ok: true, verified: true, commitSha: 'abc123def456',
+    committed: ['lib/foo.py', 'static/bar.js'], clean: ['lib/foo.py', 'static/bar.js'],
+    excluded: [{ path: 'shared.py', reason: 'foreign hunks present', numstat: '+3/-1' }],
+  } }],
+};
+const cHtml = _renderUnifiedToolLine(commitRound, false);
+check('commit_class', cHtml.includes('ptool-commit'));
+check('commit_outcome_committed', cHtml.includes('ptool-commit-outcome-committed'));
+check('commit_sha', cHtml.includes('abc123def456'));
+check('commit_file', cHtml.includes('lib/foo.py') && cHtml.includes('static/bar.js'));
+check('commit_held_file', cHtml.includes('shared.py'));
+check('commit_held_reason', cHtml.includes('foreign hunks present'));
+check('commit_held_numstat', cHtml.includes('+3/-1'));
+check('commit_not_md_dump', !cHtml.includes('MD-DUMP:RAW COMMIT PROSE'));
+check('commit_is_conv_meta', _isRoundConvMeta({ toolName: 'project_commit' }));
+check('commit_head_friendly', cHtml.includes('Committed this conversation'));
+check('commit_why_caption', cHtml.includes('ptool-convmeta-why') && cHtml.includes('provably authored'));
+check('commit_src_git', cHtml.includes('ptool-convmeta-src') && cHtml.includes('Git'));
+// icon must be the git-commit glyph (center circle on a line), NOT the generic wrench
+check('commit_icon_gitcommit', cHtml.includes('<line x1="3" y1="12" x2="9" y2="12"/>'));
+check('commit_icon_not_wrench', !cHtml.includes('M14.7 6.3a1 1 0 0 0 0 1.4'));
+// action card ⇒ open by default
+check('commit_open', _isOpen(cHtml));
+
+// ── project_commit plan (dry-run) → would-commit + plan-only outcome ──
+const commitPlan = {
+  status: 'done', toolName: 'project_commit', query: 'project_commit',
+  toolContent: 'RAW', toolRounds: [],
+  results: [{ source: 'Board', commitResult: {
+    mode: 'plan', ok: true, clean: ['lib/baz.py'], committed: [], excluded: [] } }],
+};
+const cpHtml = _renderUnifiedToolLine(commitPlan, false);
+check('commit_plan_outcome', cpHtml.includes('ptool-commit-outcome-planned'));
+check('commit_plan_would', cpHtml.includes('lib/baz.py'));
+
+// ── project_commit failure (nothing clean) → failed outcome + error ──
+const commitFail = {
+  status: 'done', toolName: 'project_commit', query: 'project_commit',
+  toolContent: 'RAW', toolRounds: [],
+  results: [{ source: 'Board', commitResult: {
+    mode: 'commit', ok: false, error: 'nothing clean to commit',
+    clean: [], committed: [], excluded: [] } }],
+};
+const cfHtml = _renderUnifiedToolLine(commitFail, false);
+check('commit_fail_outcome', cfHtml.includes('ptool-commit-outcome-failed'));
+check('commit_fail_error', cfHtml.includes('nothing clean to commit'));
+
 console.log(out.join('\n'));
 """
 
@@ -295,7 +382,10 @@ def test_structured_brain_tool_renderers():
         'PASS feed_list_class', 'PASS feed_who', 'PASS feed_summary',
         'PASS feed_kind', 'PASS feed_not_md_dump', 'PASS feed_empty',
         'PASS feed_is_conv_meta', 'PASS board_defer_is_conv_meta',
-        'PASS peermsg_class', 'PASS peermsg_target', 'PASS peermsg_text',
+        'PASS feed_notitle_resolves_title', 'PASS feed_notitle_not_raw_id',
+        'PASS peermsg_class', 'PASS peermsg_target',
+        'PASS peermsg_target_id_in_tooltip', 'PASS peermsg_target_not_raw',
+        'PASS peermsg_text',
         'PASS peermsg_outcome', 'PASS peermsg_not_md_dump',
         'PASS intervene_class', 'PASS intervene_denied',
         'PASS peer_head_friendly', 'PASS peer_why_caption',
@@ -309,6 +399,15 @@ def test_structured_brain_tool_renderers():
         'PASS intervene_open', 'PASS proposal_open',
         'PASS peer_count_chip', 'PASS board_count_chip',
         'PASS feed_count_chip', 'PASS open_no_count_chip',
+        'PASS commit_class', 'PASS commit_outcome_committed',
+        'PASS commit_sha', 'PASS commit_file', 'PASS commit_held_file',
+        'PASS commit_held_reason', 'PASS commit_held_numstat',
+        'PASS commit_not_md_dump', 'PASS commit_is_conv_meta',
+        'PASS commit_head_friendly', 'PASS commit_why_caption',
+        'PASS commit_src_git', 'PASS commit_icon_gitcommit',
+        'PASS commit_icon_not_wrench', 'PASS commit_open',
+        'PASS commit_plan_outcome', 'PASS commit_plan_would',
+        'PASS commit_fail_outcome', 'PASS commit_fail_error',
     ):
         assert must in output, output
 
@@ -404,6 +503,63 @@ def test_NC_peer_delivery_renderer_is_load_bearing():
         replacement='  if (false) return _renderPeerDelivery(meta.peerDelivery);',
         must_fail=['peermsg_class', 'peermsg_not_md_dump'],
         must_still_pass=['board_mini_class', 'peer_list_class'],
+    )
+
+
+@pytest.mark.skipif(not _node_deps_available(),
+                    reason='node + jsdom dev-deps not installed (run npm install)')
+def test_NC_commit_result_renderer_is_load_bearing():
+    """Disable the commitResult branch → project_commit falls back to the MD
+    dump → commit_class FAILS while board + peer renderers still work."""
+    _nc(
+        anchor='  if (meta.commitResult) return _renderCommitResult(meta.commitResult);',
+        replacement='  if (false) return _renderCommitResult(meta.commitResult);',
+        must_fail=['commit_class', 'commit_not_md_dump'],
+        must_still_pass=['board_mini_class', 'peer_list_class'],
+    )
+
+
+@pytest.mark.skipif(not _node_deps_available(),
+                    reason='node + jsdom dev-deps not installed (run npm install)')
+def test_NC_commit_icon_glyph_is_load_bearing():
+    """Swap the project_commit git-commit glyph paths for the generic wrench in
+    _webToolSvg → the commit round now wears the wrench → commit_icon_gitcommit
+    AND commit_icon_not_wrench both FAIL, while the card body (commit_class) and
+    other family icons (board_mini_class) still render. This pins the ACTUAL
+    glyph source (the map entry); the explicit _getToolSvg branch is a redundant
+    clarity alias since the toolName-keyed fallback resolves the same entry."""
+    _nc(
+        anchor='<circle cx="12" cy="12" r="3"/><line x1="3" y1="12" x2="9" y2="12"/><line x1="15" y1="12" x2="21" y2="12"/>',
+        replacement='<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>',
+        must_fail=['commit_icon_gitcommit', 'commit_icon_not_wrench'],
+        must_still_pass=['board_mini_class', 'commit_class'],
+    )
+
+
+@pytest.mark.skipif(not _node_deps_available(),
+                    reason='node + jsdom dev-deps not installed (run npm install)')
+def test_NC_commit_coverage_in_conv_meta_set():
+    """Remove project_commit from _CONV_META_TOOLS → it stops routing to the
+    structured card (commit_is_conv_meta FAILS) while feed stays covered."""
+    _nc(
+        anchor='  "project_claim_path", "project_release_path",\n  "project_commit",',
+        replacement='  "project_claim_path", "project_release_path",',
+        must_fail=['commit_is_conv_meta', 'commit_class'],
+        must_still_pass=['feed_is_conv_meta', 'board_mini_class'],
+    )
+
+
+@pytest.mark.skipif(not _node_deps_available(),
+                    reason='node + jsdom dev-deps not installed (run npm install)')
+def test_NC_delivery_card_title_resolution_is_load_bearing():
+    """Neuter the convTitleById branch in _renderPeerDelivery → the target
+    reverts to the raw `conv cdef1234` id, so peermsg_target (title) and
+    peermsg_target_not_raw FAIL while the card itself still renders."""
+    _nc(
+        anchor='  const _target = (typeof convTitleById === "function" && pd.toConv)\n    ? convTitleById(pd.toConv)\n    : ("conv " + String(pd.toConv || "").slice(0, 8));',
+        replacement='  const _target = ("conv " + String(pd.toConv || "").slice(0, 8));',
+        must_fail=['peermsg_target', 'peermsg_target_not_raw'],
+        must_still_pass=['peermsg_class', 'peermsg_text', 'peer_list_class'],
     )
 
 

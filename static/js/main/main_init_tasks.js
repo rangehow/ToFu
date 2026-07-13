@@ -184,12 +184,9 @@ async function initActiveTasks() {
          top of an answer that already existed but whose metadata still said
          trailing-user).
 
-         The verdict now lives on the backend: the conversation GET path runs
-         classify_orphan_resumable against the AUTHORITATIVE messages (real tail
-         is user, no live task, within a server freshness bound) and stamps
-         conv._orphanResumable. renderChat renders an EXPLICIT Resume affordance
-         from that marker; the click is a normal user-initiated send. There is
-         NO auto-dispatch and NO age heuristic here anymore — the race class is
+         That auto-fire is GONE and NOT replaced: an orphaned user turn is
+         simply left unanswered until the user re-sends. There is NO
+         auto-dispatch and NO age heuristic here anymore — the race class is
          eliminated, not managed. Nothing to do in this loop. */
     }
 
@@ -269,19 +266,31 @@ async function initActiveTasks() {
                   `base=${baseMsgs.length} epTurns=${td.endpointTurns.length} total=${conv.messages.length}`);
               }
 
-              /* ★ BUG FIX: If local already has more content than server, KEEP local content
-                 This prevents data loss when SSE accumulated content but task result was incomplete */
+              /* ★ Server-authoritative merge (separation-of-concerns): the
+                 local-vs-server winner is decided by the SERVER-ISSUED task
+                 STATUS, never by a frontend content-length compare. A `done`
+                 poll is a settled TERMINAL verdict — the persisted tail IS the
+                 single source of truth, so adopt it VERBATIM even when a stale
+                 local buffer happens to be longer. The old
+                 `localContentLen > serverContentLen` referee let a stale-longer
+                 local win and then re-PUT over fresh server truth (the same
+                 "looks-longer wins" data-conflict class as the retired
+                 wall-clock tiebreaker). Keep-longer-local survives ONLY as an
+                 OFFLINE RESCUE when the task did NOT cleanly settle
+                 (interrupted / server crash): the local SSE buffer may hold
+                 un-acked stream content the checkpoint never captured. */
               if (am && am.role === "assistant") {
+                const _serverSettled = td.status === 'done';
                 if (td.content) {
-                  if (localContentLen > serverContentLen) {
-                    console.warn(`[initActiveTasks CaseB] ⚠️ KEEPING LOCAL content (${localContentLen} > server ${serverContentLen}) — would lose data!`);
+                  if (!_serverSettled && localContentLen > serverContentLen) {
+                    console.warn(`[initActiveTasks CaseB] ⚠️ KEEPING LOCAL content (${localContentLen} > server ${serverContentLen}, status=${td.status||'?'}) — task not cleanly settled, local SSE buffer may hold un-acked content`);
                   } else {
                     am.content = td.content;
                   }
                 }
                 if (td.thinking) {
-                  if (localThinkingLen > serverThinkingLen) {
-                    console.warn(`[initActiveTasks CaseB] ⚠️ KEEPING LOCAL thinking (${localThinkingLen} > server ${serverThinkingLen}) — would lose data!`);
+                  if (!_serverSettled && localThinkingLen > serverThinkingLen) {
+                    console.warn(`[initActiveTasks CaseB] ⚠️ KEEPING LOCAL thinking (${localThinkingLen} > server ${serverThinkingLen}, status=${td.status||'?'}) — task not cleanly settled`);
                   } else {
                     am.thinking = td.thinking;
                   }
@@ -453,11 +462,10 @@ async function initActiveTasks() {
       }
     }
 
-    /* ── Case E: no auto-dispatch. The orphaned-user-turn verdict is
-     *   backend-authoritative (conv._orphanResumable from the GET path); the
-     *   explicit Resume affordance is rendered by renderChat. Deleting the
-     *   old 3s setTimeout + startAssistantResponse auto-fire is the fundamental
-     *   fix — a billed turn is never minted from a client-side inference. ── */
+    /* ── Case E: no auto-dispatch. Deleting the old 3s setTimeout +
+     *   startAssistantResponse auto-fire is the fundamental fix — a billed turn
+     *   is never minted from a client-side inference. An orphaned user turn is
+     *   left unanswered until the user re-sends. ── */
     }; /* end _bgRecovery */
 
     /* Fire background recovery — don't await it */

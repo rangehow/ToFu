@@ -53,6 +53,19 @@ def _ensure_schema(flask_app):
 
 
 @pytest.fixture(autouse=True)
+def _shared_tree_mode(monkeypatch):
+    """This suite exercises the SHARED-TREE (isolation=off) board model (see the
+    module docstring: 'CURRENT (shared-tree) board model'): a ``[sibling] path=``
+    block IS created and derives wait_paths + cooldown. Under worktree isolation
+    that block is declined at creation (block_task's guard), so pin isolation OFF
+    here regardless of the ambient TOFU_WORKTREE_ISOLATION so these tests are
+    deterministic. The isolation-on decline has its own coverage."""
+    monkeypatch.setattr(
+        'lib.conversations.project_worktree.is_isolation_enabled',
+        lambda: False)
+
+
+@pytest.fixture(autouse=True)
 def _clean(flask_app):
     from lib.database import DOMAIN_CHAT, get_thread_db
     with flask_app.app_context():

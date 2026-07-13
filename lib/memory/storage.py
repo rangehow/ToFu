@@ -798,11 +798,22 @@ def merge_memories(memory_ids, name, description, body, tags=None, scope='projec
                           tags=tags, scope=scope, project_path=project_path)
 
     deleted_ids = []
+    failed_ids = []
     for sid in memory_ids:
         if delete_memory(sid, project_path, extra_paths=extra_paths):
             deleted_ids.append(sid)
+        else:
+            failed_ids.append(sid)
+    if failed_ids:
+        # A source that could not be deleted still lives ALONGSIDE the merged
+        # copy → duplicated content. Surface it (delete_memory already logged
+        # the OSError/guard reason) so the half-merge is not silent.
+        logger.warning('[Memory] merge_memories: %d source memory(ies) could not '
+                       'be deleted and remain as duplicates of the merged memory '
+                       '%s: %s', len(failed_ids), merged['id'], ', '.join(failed_ids))
 
-    return {'merged_memory': merged, 'deleted_ids': deleted_ids}
+    return {'merged_memory': merged, 'deleted_ids': deleted_ids,
+            'failed_ids': failed_ids}
 
 
 def toggle_memory(memory_id, enabled=None, project_path=None, extra_paths=None):

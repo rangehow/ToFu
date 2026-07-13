@@ -276,6 +276,7 @@ def _persist_web_search_split(content: str, persist_dir: str,
 
         title = ''
         url = ''
+        authority = ''
         has_content = False
         content_chars = 0
         for line in lines:
@@ -284,6 +285,8 @@ def _persist_web_search_split(content: str, persist_dir: str,
                 title = m_title.group(2).strip()
             if line.strip().startswith('URL:'):
                 url = line.strip()[4:].strip()
+            if line.strip().startswith('Authority:'):
+                authority = line.strip()[len('Authority:'):].strip()
             if '──── Full Page Content' in line:
                 has_content = True
 
@@ -323,9 +326,10 @@ def _persist_web_search_split(content: str, persist_dir: str,
             snippet = ' '.join(snippet_buf)[:_SNIPPET_CHARS].strip()
 
         status = f'{_human_size(content_chars)} fetched' if has_content else 'snippet only'
+        _auth_line = f'\n    Authority: {authority}' if authority else ''
         index_lines.append(
             f'[{i}] {title}\n'
-            f'    URL: {url}\n'
+            f'    URL: {url}{_auth_line}\n'
             f'    Status: {status}\n'
             f'    File: {filepath}'
         )

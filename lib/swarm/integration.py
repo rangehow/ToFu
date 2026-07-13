@@ -536,6 +536,9 @@ def _start_autocontinue_turn(conv_id: str) -> bool:
             'timestamp': time.strftime('%Y-%m-%dT%H:%M:%S'),
             '_swarmAutoContinue': True,
         }
+        from lib.conversations.turn_initiation import (INITIATOR_SWARM,
+                                                       stamp_initiator)
+        stamp_initiator(assistant_msg, INITIATOR_SWARM)
         messages.append(assistant_msg)
 
         from lib.conversations import build_search_text, update_conversation_fts
@@ -550,6 +553,19 @@ def _start_autocontinue_turn(conv_id: str) -> bool:
             update_conversation_fts(db, conv_id, search_text)
         except Exception as e:
             logger.debug('[Swarm:%s] autocontinue fts update failed: %s', conv_id, e)
+
+        # Event-driven cross-device sync: a brand-new assistant turn was
+        # appended, so push the post-write rev → a sibling tab with this conv
+        # open shows the new (streaming) bubble without a manual refresh.
+        try:
+            from lib.conversations import notify_conv_changed
+            _ac_rev_row = db.execute(
+                'SELECT rev FROM conversations WHERE id=? AND user_id=1',
+                (conv_id,)).fetchone()
+            notify_conv_changed(conv_id, rev=(_ac_rev_row[0] if _ac_rev_row else None))
+        except Exception as _ne:
+            logger.debug('[Swarm:%s] autocontinue conv-changed notify skipped: %s',
+                         conv_id, _ne)
 
         # Build a task config from the conversation's own settings so the
         # continuation runs with the SAME model / tools / swarm-enabled the

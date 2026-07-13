@@ -135,7 +135,9 @@ let src = fs.readFileSync(process.argv[2], 'utf8');  // ui/chat_render.js
 // ── NEUTER injection (per-invariant double-neuter) ─────────────────────────
 if (NEUTER === 'anchor') {
   // Break the anchor compensation → behaves like a raw scrollTop restore.
-  src = src.replace('container.scrollTop += (newOffset - anchorOffset);  // re-pin the anchor',
+  // The re-pin arithmetic now lives in the extracted `_restoreScrollAnchor`
+  // helper (shared by _bgRefreshChat + the full-render path).
+  src = src.replace('container.scrollTop += (newOffset - anchor.offset);  // re-pin the anchor',
                     'container.scrollTop += (0);  // NEUTERED-anchor');
   if (src.indexOf('// NEUTERED-anchor') < 0) { console.log('FAIL neuter_anchor_not_applied'); process.exit(0); }
 }

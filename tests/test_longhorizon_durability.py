@@ -102,6 +102,42 @@ def test_anchor_index_none_when_no_user():
     assert l2._objective_anchor_index([_sys(), _assistant('hi')]) is None
 
 
+def test_anchor_index_skips_ismeta_context_carrier():
+    """The builder prepends a synthetic ``_isMeta`` user message (CLAUDE.md /
+    preference carrier) BEFORE the real user turn. The anchor must protect the
+    human's objective, not that injected carrier — same skip as autopilot's
+    ``_extract_objective`` (ONE notion of objective, not parallel)."""
+    msgs = [_sys(),
+            {'role': 'user', 'content': 'CLAUDE.md project intel',
+             '_isMeta': True},
+            _user(OBJECTIVE)]
+    assert l2._objective_anchor_index(msgs) == 2
+
+
+def test_NC_anchor_ismeta_skip_is_load_bearing(monkeypatch):
+    """NEUTER: if the anchor did NOT skip ``_isMeta`` it would return the
+    injected carrier's index (1) instead of the human objective (2)."""
+    import lib.tasks_pkg.compaction._layer2 as _l2mod
+    src = _l2mod._objective_anchor_index.__doc__  # sanity: fn exists
+    assert src is not None
+    msgs = [_sys(),
+            {'role': 'user', 'content': 'injected carrier', '_isMeta': True},
+            _user(OBJECTIVE)]
+    # Reference implementation WITHOUT the _isMeta skip → picks the carrier.
+    def _neutered(messages):
+        for i, m in enumerate(messages):
+            if not isinstance(m, dict) or m.get('role') != 'user':
+                continue
+            if m.get('_isVuDirective') or m.get('_isVirtualUser'):
+                continue
+            c = m.get('content')
+            if isinstance(c, str) and c.strip():
+                return i
+        return None
+    assert _neutered(msgs) == 1           # neutered picks the carrier
+    assert l2._objective_anchor_index(msgs) == 2  # real impl skips it
+
+
 # ══════════════════════════════════════════════════════════
 #  #3 — objective survives N successive compactions (VERBATIM)
 # ══════════════════════════════════════════════════════════

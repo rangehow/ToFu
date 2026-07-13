@@ -60,7 +60,7 @@ from typing import Any, Mapping, Optional
 _LEGACY_PRESET_TO_MODEL: dict[str, str] = {
     'qwen': 'qwen3.6-plus',
     'low': 'qwen3.6-plus',
-    'gemini': 'gemini-3.1-flash-lite-preview',
+    'gemini': 'gemini-3-flash-preview',
     'gemini_flash': 'gemini-3-flash-preview',
     'minimax': 'MiniMax-M2.7',
     'doubao': 'Doubao-Seed-2.0-pro',

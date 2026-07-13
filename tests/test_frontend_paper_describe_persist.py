@@ -11,12 +11,12 @@ recommend feature shipped):
      DRIVES the REAL ``_showPaperLanding`` under jsdom: seed a draft, re-render
      (simulating leave→return), assert the textarea now contains the draft.
 
-  2. **Global Project-Brain bars bleeding through.** Paper mode is a full-screen
-     overlay in the same SPA; the docked ``#presenceStrip`` (presence.js) +
-     ``#convInfluenceBar`` (project-brain.js) stayed visible under it. Fix: a
+  2. **Global Project-Brain bar bleeding through.** Paper mode is a full-screen
+     overlay in the same SPA; the docked ``#presenceStrip`` (presence.js — the
+     merged collaboration + conv-influence bar) stayed visible under it. Fix: a
      ``body.paper-mode-active`` class (added in enterPaperMode, removed in
      exitPaperMode) + a CSS ``display:none !important`` override — decoupled from
-     the bars' own push-driven visibility toggling. Verified via source-contract
+     the bar's own push-driven visibility toggling. Verified via source-contract
      asserts with an on-disk double-neuter.
 
 Skips cleanly when node/jsdom dev-deps are absent.
@@ -162,11 +162,10 @@ def test_paper_mode_toggles_body_class():
 def test_css_hides_global_bars_in_paper_mode():
     with open(CSS, encoding='utf-8') as f:
         css = f.read()
-    # The override rule must target BOTH docked bars under the body class and be
-    # display:none !important (wins over their own push-driven toggling).
-    m = re.search(r'body\.paper-mode-active\s+#presenceStrip\s*,\s*'
-                  r'body\.paper-mode-active\s+#convInfluenceBar\s*\{([^}]*)\}', css)
-    assert m, 'CSS override for #presenceStrip + #convInfluenceBar under paper-mode-active is missing'
+    # The override rule must target the merged docked bar under the body class
+    # and be display:none !important (wins over its push-driven toggling).
+    m = re.search(r'body\.paper-mode-active\s+#presenceStrip\s*\{([^}]*)\}', css)
+    assert m, 'CSS override for #presenceStrip under paper-mode-active is missing'
     assert 'display:none' in m.group(1) and '!important' in m.group(1), \
         f'override must be display:none !important — got {m.group(1)!r}'
 

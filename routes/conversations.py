@@ -15,7 +15,7 @@ from lib.database import (
     run_pooled,
 )
 from lib.log import audit_log, get_logger
-from lib.api_response import api_bad_request, api_internal_error, api_not_found, api_ok
+from lib.api_response import api_bad_request, api_error, api_internal_error, api_not_found, api_ok
 from lib.openapi import api_meta
 from lib.request_parser import async_parse_body, parse_body  # noqa: F401
 from lib.utils import safe_json as _safe_json
@@ -31,7 +31,7 @@ from lib.database._core_schema import CONVERSATIONS, upsert
 # search_text) — so the partial insert lets the trigger own that column.
 _CONV_INSERT_COLS = ['id', 'user_id', 'title', 'messages', 'created_at',
                      'updated_at', 'settings', 'msg_count', 'search_text']
-from routes.common import DEFAULT_USER_ID, _db_safe, _invalidate_meta_cache, _refresh_meta_cache_if_stale
+from routes.common import DEFAULT_USER_ID, _db_safe, _invalidate_meta_cache, _notify_conv_changed, _refresh_meta_cache_if_stale
 
 # Whitelisted keys for PATCH /messages/<idx> — only these fields can be mutated
 # in-place on a single message without writing the whole conversation.
@@ -142,7 +142,8 @@ def _row_rev(r):
     that ignores it is unaffected (fail-open)."""
     try:
         keys = r.keys()
-    except Exception:
+    except Exception as e:
+        logger.debug('[conversations] _row_rev: row has no keys(): %s', e)
         keys = ()
     if 'rev' in keys:
         try:
@@ -385,41 +386,36 @@ def _rehydrate_segments_from_task_results(db, conv_id, messages):
     return filled
 
 
-def _reconcile_conv_on_get_blocking(db, conv_id, r):
-    """Server-authoritative ghost reconcile on the conversation GET path.
+def _compute_reconcile(conv_id, r):
+    """READ-ONLY ghost-reconcile verdict — the pure judgment half, no DB write.
 
-    Runs the SAME pure verdict as startup recovery
+    Runs the SAME verdict as startup recovery
     (``reconcile_conversation_messages``) so the frontend never has to INFER
-    settled lifecycle state (separation-of-concerns directive). Returns the
-    (possibly cleaned) row dict to serialize.
+    settled lifecycle state (separation-of-concerns directive), but performs
+    NO ``UPDATE``/``commit`` — that is deferred to ``_persist_reconcile`` so the
+    conversation GET read path never does an inline (FUSE-fsync) write.
 
-    Four gates (see the epic pt_e02044f4ab084dff design):
-      1. LIVE-TASK gate — never reconcile a conv with a pending/running task
-         (checked by the caller BEFORE this runs); a live empty placeholder
-         must not be deleted+persisted.
-      2. changed-only — skip the DB write entirely when the verdict changed
-         nothing (no write-amplification on every conversation open).
-      3. NO ``updated_at`` bump — persist the cleaned list WITHOUT touching the
-         timestamp, else the sidebar re-sorts to "now" on every open (backend
-         mirror of the ``saveConversations`` load-time-restamp gotcha).
-      4. cache-neutral — pass the LIVE ``get_cache_prefix_count`` so the sweep
-         never removes an in-prefix message (which would bust the prompt cache);
-         and signal ``notify_history_rewrite`` so cache-break detection names the
-         cause honestly instead of laundering it into a false "PROVEN" verdict.
+    Returns ``(cleaned, changed, settings_dict)``:
+      • ``(None, False, None)``   — empty history or reconcile deps unavailable;
+        the caller serves the unreconciled row verbatim.
+      • ``(cleaned, False, None)``— reconcile changed nothing (no write needed).
+      • ``(cleaned, True, sd)``   — history was rewritten; ``sd`` is the settings
+        dict with ``_reconciledAt`` stamped, ready to persist + serve.
+
+    Cache-neutral: passes the LIVE ``get_cache_prefix_count`` so the sweep never
+    removes an in-prefix message (which would bust the prompt cache).
     """
     messages = _safe_json(r['messages'], default=[], label='messages')
     if not messages:
-        return _conv_row_to_dict(r)
+        return None, False, None
 
     try:
         from lib.conversations.reconcile import reconcile_conversation_messages
-        from lib.tasks_pkg.cache_tracking import (
-            get_cache_prefix_count, notify_history_rewrite,
-        )
+        from lib.tasks_pkg.cache_tracking import get_cache_prefix_count
     except Exception as e:
         logger.warning('[get_conv] reconcile deps unavailable for conv=%s: %s',
                        conv_id[:8], e)
-        return _conv_row_to_dict(r)
+        return None, False, None
 
     prefix_n = 0
     try:
@@ -430,26 +426,30 @@ def _reconcile_conv_on_get_blocking(db, conv_id, r):
 
     cleaned, changed = reconcile_conversation_messages(messages, prefix_n)
     if not changed:
-        d = _conv_row_to_dict(r)
-        # Backstop: fill segments lost before the save_conv preservation fix
-        # (display-only, no persist). New/re-synced turns already carry them.
-        try:
-            _rehydrate_segments_from_task_results(db, conv_id, d['messages'])
-        except Exception as _rse:
-            logger.debug('[get_conv] segments rehydrate (unchanged path) '
-                         'conv=%s: %s', conv_id[:8], _rse)
-        _attach_orphan_marker(d, cleaned, conv_id)
-        return d
+        return cleaned, False, None
 
-    # ── Persist the cleaned list in the SAME request that serves it.
-    #    NO updated_at bump (gate 3): re-use the stored value verbatim so the
-    #    sidebar sort order is untouched. Stamp settings._reconciledAt so the
-    #    frontend Case-D path DEFERS (it is gated on !conv._reconciledAt) and
-    #    does not re-infer lifecycle state. ──
     settings_dict = _safe_json(r['settings'], default={}, label='settings') or {}
     if not isinstance(settings_dict, dict):
         settings_dict = {}
     settings_dict['_reconciledAt'] = int(time.time() * 1000)
+    return cleaned, True, settings_dict
+
+
+def _persist_reconcile(db, conv_id, cleaned, settings_dict):
+    """WRITE half of the reconcile — the (FUSE-fsync) ``UPDATE``+``commit`` that
+    the GET read path defers to a background task (see ``_schedule_reconcile_persist``).
+
+    Caller guarantees the verdict was ``changed=True``. Gates preserved:
+      • NO ``updated_at`` bump — re-use the stored value verbatim so the sidebar
+        sort order is untouched (backend mirror of the ``saveConversations``
+        load-time-restamp gotcha).
+      • ``_reconciledAt`` already stamped into ``settings_dict`` by ``_compute_reconcile``.
+    After the write it signals ``notify_history_rewrite`` (honest cache-break
+    naming) AND emits ``push_event('conv', conv_id, {kind:'history_rewrite', rev})``
+    so every client that has this conversation open re-aligns WITHOUT a manual
+    refresh. Returns the post-write ``rev`` (0 if unreadable).
+    """
+    from lib.tasks_pkg.cache_tracking import notify_history_rewrite
 
     messages_json = json_dumps_pg(cleaned)
     settings_json = json.dumps(settings_dict, ensure_ascii=False)
@@ -461,15 +461,63 @@ def _reconcile_conv_on_get_blocking(db, conv_id, r):
          conv_id, DEFAULT_USER_ID))
     db.commit()
 
+    # The ``conversations_rev_bump_trg`` trigger advanced rev on the UPDATE;
+    # read it back so the push carries the NEW version the client can dedupe on.
+    new_rev = 0
+    try:
+        cur = db.execute('SELECT rev FROM conversations WHERE id=? AND user_id=?',
+                         (conv_id, DEFAULT_USER_ID))
+        row = cur.fetchone() if cur is not None else None
+        if row is not None:
+            try:
+                new_rev = int(row['rev'] if hasattr(row, 'keys') else row[0])
+            except (TypeError, ValueError, KeyError, IndexError):
+                new_rev = 0
+    except Exception as e:
+        logger.debug('[get_conv] read post-reconcile rev conv=%s: %s',
+                     conv_id[:8], e)
+
     try:
         notify_history_rewrite(conv_id)
     except Exception as e:
         logger.debug('[get_conv] notify_history_rewrite failed conv=%s: %s',
                      conv_id[:8], e)
 
-    logger.info('[get_conv] Reconciled ghost message(s) on GET for conv=%s '
-                '(%d→%d msgs, no updated_at bump)',
-                conv_id[:8], len(messages), len(cleaned))
+    try:
+        from lib.push import push_event
+        push_event('conv', conv_id, {'kind': 'history_rewrite', 'rev': new_rev})
+    except Exception as e:
+        logger.debug('[get_conv] push history_rewrite failed conv=%s: %s',
+                     conv_id[:8], e)
+
+    logger.info('[get_conv] Reconciled ghost message(s) for conv=%s '
+                '(→%d msgs, no updated_at bump, rev=%d)',
+                conv_id[:8], len(cleaned), new_rev)
+    return new_rev
+
+
+def _reconcile_conv_served_readonly(db, conv_id, r):
+    """Build the GET response dict WITHOUT writing the DB (read path zero-fsync).
+
+    Returns ``(served, changed, cleaned, settings_dict)``. When ``changed`` is
+    True the ``served`` dict already carries the ``cleaned`` messages + stamped
+    settings (so the OPENING client sees correct state immediately), but the row
+    is NOT yet persisted — the caller schedules ``_persist_reconcile`` off the
+    request; its post-write ``push_event`` (rev+1) then re-aligns every other
+    open client. ``served.rev`` stays the pre-write value on purpose so a client
+    can tell the push's newer rev apart.
+    """
+    cleaned, changed, settings_dict = _compute_reconcile(conv_id, r)
+    if not changed:
+        d = _conv_row_to_dict(r)
+        # Backstop: fill segments lost before the save_conv preservation fix
+        # (display-only, no persist). New/re-synced turns already carry them.
+        try:
+            _rehydrate_segments_from_task_results(db, conv_id, d['messages'])
+        except Exception as _rse:
+            logger.debug('[get_conv] segments rehydrate (unchanged path) '
+                         'conv=%s: %s', conv_id[:8], _rse)
+        return d, False, None, None
 
     d = {
         'id': r['id'], 'title': r['title'],
@@ -477,43 +525,192 @@ def _reconcile_conv_on_get_blocking(db, conv_id, r):
         'createdAt': r['created_at'], 'created_at': r['created_at'],
         'updatedAt': r['updated_at'], 'updated_at': r['updated_at'],
         'settings': settings_dict,
+        'rev': _row_rev(r),
     }
-    # Backstop: fill segments lost before the save_conv preservation fix
-    # (display-only — the reconcile write above already committed the cleaned
-    # list; rehydration enriches ONLY the served dict, never re-persisted).
     try:
         _rehydrate_segments_from_task_results(db, conv_id, d['messages'])
     except Exception as _rse:
         logger.debug('[get_conv] segments rehydrate (changed path) '
                      'conv=%s: %s', conv_id[:8], _rse)
-    _attach_orphan_marker(d, cleaned, conv_id)
+    return d, True, cleaned, settings_dict
+
+
+# Strong refs to in-flight background reconcile-persist tasks (create_task does
+# not keep its own ref; without this they can be GC'd mid-flight).
+_bg_reconcile_persist_tasks: set = set()
+
+
+def _schedule_reconcile_persist(conv_id, cleaned, settings_dict):
+    """Fire-and-forget the reconcile WRITE off the GET request.
+
+    The read handler has already returned the cleaned dict to the opening
+    client; this persists the same verdict on a background task so the request
+    never blocks on a (FUSE-fsync) ``UPDATE``+``commit``. On completion
+    ``_persist_reconcile`` emits the ``history_rewrite`` push so all open
+    clients converge. Reconcile is idempotent, so a redundant re-fire from a
+    concurrent GET is harmless (the second verdict is ``changed=False``).
+    """
+    import asyncio
+
+    async def _run():
+        try:
+            await run_pooled(
+                lambda db: _persist_reconcile(db, conv_id, cleaned, settings_dict))
+        except Exception as e:
+            logger.warning('[get_conv] background reconcile persist failed '
+                           'conv=%s: %s', conv_id[:8], e, exc_info=True)
+        finally:
+            _bg_reconcile_persist_tasks.discard(asyncio.current_task())
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    if loop is None:
+        # No running loop (non-async caller): skip — reconcile is idempotent, so
+        # the next GET from an async context will re-detect and persist. The
+        # served dict was already correct, so nothing is lost visually.
+        logger.debug('[get_conv] no running loop; deferring reconcile persist '
+                     'conv=%s to next GET', conv_id[:8])
+        return
+    t = loop.create_task(_run())
+    _bg_reconcile_persist_tasks.add(t)
+
+
+def _reconcile_conv_on_get_blocking(db, conv_id, r):
+    """SYNCHRONOUS persist-in-place reconcile (compute + write in one call).
+
+    Retained for the ``?prefetch=<id>`` branch of ``list_convs``
+    (``_prefetch_reconciled_dict``), which inlines the body so the frontend sets
+    ``_needsLoad=false`` and never issues the reconciling GET — that path MUST
+    persist within the request. The GET read path itself no longer calls this;
+    it uses ``_reconcile_conv_served_readonly`` + a background
+    ``_schedule_reconcile_persist`` so the read never does an inline fsync write.
+    """
+    cleaned, changed, settings_dict = _compute_reconcile(conv_id, r)
+    if not changed:
+        d = _conv_row_to_dict(r)
+        try:
+            _rehydrate_segments_from_task_results(db, conv_id, d['messages'])
+        except Exception as _rse:
+            logger.debug('[get_conv] segments rehydrate (unchanged path) '
+                         'conv=%s: %s', conv_id[:8], _rse)
+        return d
+
+    new_rev = _persist_reconcile(db, conv_id, cleaned, settings_dict)
+    d = {
+        'id': r['id'], 'title': r['title'],
+        'messages': cleaned,
+        'createdAt': r['created_at'], 'created_at': r['created_at'],
+        'updatedAt': r['updated_at'], 'updated_at': r['updated_at'],
+        'settings': settings_dict,
+        'rev': new_rev,
+    }
+    try:
+        _rehydrate_segments_from_task_results(db, conv_id, d['messages'])
+    except Exception as _rse:
+        logger.debug('[get_conv] segments rehydrate (changed path) '
+                     'conv=%s: %s', conv_id[:8], _rse)
     return d
 
 
-def _attach_orphan_marker(conv_dict, messages, conv_id):
-    """Stamp ``_orphanResumable`` on the served conv dict when the AUTHORITATIVE
-    reconciled tail is an unanswered user turn with no live task.
-
-    Side-effect-free (this is NOT persisted — the marker is a render hint on the
-    served payload only, so no ``updated_at`` bump / DB write). The frontend
-    renders an explicit Resume affordance from it and NEVER auto-dispatches — the
-    fundamental fix replacing the Case-E ``age<5min`` auto-fire heuristic. Runs
-    only on the idle GET path (caller already gated live tasks), so
-    ``has_live_task=False``; the classifier's live-task branch is the belt for
-    any future caller. Best-effort: never let it break the GET response.
+def _parse_window_args():
+    """Read the windowed-read query params. Returns ``(window, before_seq)``:
+    ``window`` is the tail size (0/absent = no window), ``before_seq`` is the
+    page-up cursor (None = tail). Both best-effort int-parsed; junk → default.
     """
     try:
-        from lib.conversations.reconcile import classify_orphan_resumable
-        marker = classify_orphan_resumable(
-            messages, has_live_task=False, now_ms=int(time.time() * 1000))
-        if marker:
-            conv_dict['_orphanResumable'] = marker
-            logger.info('[get_conv] conv=%s trailing user turn is resumable '
-                        '(idx=%d) — surfacing explicit Resume affordance',
-                        conv_id[:8], marker['msgIndex'])
+        window = int(request.args.get('window', '') or 0)
+    except (TypeError, ValueError):
+        window = 0
+    if window < 0:
+        window = 0
+    before_seq = None
+    bs = request.args.get('before_seq', '')
+    if bs:
+        try:
+            before_seq = int(bs)
+        except (TypeError, ValueError):
+            before_seq = None
+    return window, before_seq
+
+
+def _windowed_served_readonly(db, conv_id, r, window, before_seq):
+    """Serve a WINDOW of the conversation from the normalized row store.
+
+    The root-cause fix for slow first-open of long conversations: read only the
+    tail ``window`` messages via ``load_message_window`` (cost O(window), not
+    O(history)) instead of detoasting + parsing the whole ``messages`` blob.
+
+    reconcile runs WITHIN the tail window: a ghost tail / superseded-error-husk
+    can only be at the very end, so the tail window is sufficient to reach the
+    same verdict WITHOUT deserializing the full history. The cache-prefix
+    protection guards the HEAD prefix, which the tail window never includes, so
+    a windowed reconcile can never delete a prefix message. When the window
+    reconcile shortens the tail, the change is persisted off-request exactly
+    like the full path (``_schedule_reconcile_persist`` on the full cleaned
+    list) so the authoritative JSONB + rows stay correct.
+
+    Returns ``(served, changed, cleaned_full, settings_dict)`` mirroring
+    ``_reconcile_conv_served_readonly``; ``cleaned_full`` is None unless a
+    tail-window reconcile fired (then it is the FULL cleaned list to persist).
+    Raises on any row-store failure so the caller can fail open to the blob.
+    """
+    from lib.database.messages_rows import load_message_window
+
+    win = load_message_window(db, conv_id, limit=window, before_seq=before_seq)
+    win_msgs = win['messages']
+
+    base = {
+        'id': r['id'], 'title': r['title'],
+        'createdAt': r['created_at'], 'created_at': r['created_at'],
+        'updatedAt': r['updated_at'], 'updated_at': r['updated_at'],
+        'settings': _safe_json(r['settings'], default={}, label='settings') or {},
+        'rev': _row_rev(r),
+        # pagination envelope the frontend uses for scroll-up loading
+        'windowed': True,
+        'totalCount': win['totalCount'],
+        'firstLoadedSeq': win['firstLoadedSeq'],
+        'lastLoadedSeq': win['lastLoadedSeq'],
+        'hasMore': win['hasMore'],
+    }
+
+    # A page-up request (before_seq set) is a pure slice — never reconcile it,
+    # only the tail (before_seq=None) can carry a ghost/husk.
+    if before_seq is not None:
+        base['messages'] = win_msgs
+        return base, False, None, None
+
+    # Tail window: run reconcile on the window only. reconcile is idempotent and
+    # operates on trailing pairs, so the tail window verdict matches the full
+    # verdict for trailing ghost/husk.
+    try:
+        from lib.conversations.reconcile import reconcile_conversation_messages
+        cleaned_win, changed = reconcile_conversation_messages(win_msgs, 0)
     except Exception as e:
-        logger.debug('[get_conv] orphan-resumable classify failed conv=%s: %s',
+        logger.debug('[get_conv] windowed reconcile skipped conv=%s: %s',
                      conv_id[:8], e)
+        cleaned_win, changed = win_msgs, False
+
+    base['messages'] = cleaned_win
+    if not changed:
+        return base, False, None, None
+
+    # The window shortened. Compute the FULL cleaned list to persist off-request
+    # (the persisted JSONB stays authoritative). Reconcile the full array once
+    # here — this is the ONLY full deserialize, and only when the tail actually
+    # changed (rare), so the common open stays O(window).
+    settings_dict = base['settings'] if isinstance(base['settings'], dict) else {}
+    settings_dict['_reconciledAt'] = int(time.time() * 1000)
+    base['settings'] = settings_dict
+    # Authoritative FULL verdict + settings for the deferred persist. This is
+    # the only full-array deserialize on the windowed path, and only when the
+    # tail actually changed (rare) — the common open stays O(window).
+    cleaned_full, settings_for_persist = None, None
+    c_full, ch_full, sd_full = _compute_reconcile(conv_id, r)
+    if ch_full:
+        cleaned_full, settings_for_persist = c_full, sd_full
+    return base, bool(cleaned_full is not None), cleaned_full, settings_for_persist
 
 
 @conversations_bp.route('/api/v1/conversations/<conv_id>', methods=['GET'])
@@ -528,12 +725,38 @@ async def get_conv(conv_id):
     (``reconcile_conversation_messages``) so the frontend no longer has to infer
     settled lifecycle state — GATED so it never touches a conv with a live task
     (see ``_conv_has_live_task`` / ``_reconcile_conv_on_get_blocking``).
+
+    Windowed read (gated on ``rows_read_enabled()`` + a ``window`` query param):
+    serve only the tail N messages from the normalized ``conversation_messages``
+    row store so first-open cost is O(window) not O(history). Fails open to the
+    single-blob path on any error; no param / flag off = byte-identical to the
+    legacy full-array behavior.
     """
     r = await async_fetchone(
         'SELECT id, title, messages, created_at, updated_at, settings, rev FROM conversations WHERE id=? AND user_id=?',
         (conv_id, DEFAULT_USER_ID), domain=DOMAIN_CHAT)
     if not r:
         return api_not_found('Not found')
+
+    # ── Windowed read cutover (gated + fail-open). Only when the row-store read
+    #    flag is on AND the client asked for a window. ──
+    try:
+        from lib.database.messages_rows import rows_read_enabled
+        _window, _before_seq = _parse_window_args()
+        if _window > 0 and rows_read_enabled() and not _conv_has_live_task(conv_id):
+            try:
+                served, changed, cleaned_full, sd = await run_pooled(
+                    lambda db: _windowed_served_readonly(
+                        db, conv_id, r, _window, _before_seq))
+                if changed and cleaned_full is not None:
+                    _schedule_reconcile_persist(conv_id, cleaned_full, sd)
+                return jsonify(served)
+            except Exception as e:
+                logger.warning('[get_conv] windowed read failed conv=%s: %s — '
+                               'failing open to full-blob path', conv_id[:8], e)
+    except Exception as e:
+        logger.debug('[get_conv] window gate check failed conv=%s: %s',
+                     conv_id[:8], e)
 
     # GATE 1 (live-task): reconcile ONLY when the conv is idle. A pending/running
     # task's empty placeholder is indistinguishable from a ghost tail; deleting
@@ -543,9 +766,15 @@ async def get_conv(conv_id):
         return jsonify(_conv_row_to_dict(r))
 
     try:
-        cleaned = await run_pooled(
-            lambda db: _reconcile_conv_on_get_blocking(db, conv_id, r))
-        return jsonify(cleaned)
+        served, changed, cleaned, settings_dict = await run_pooled(
+            lambda db: _reconcile_conv_served_readonly(db, conv_id, r))
+        # ── Read path is now write-free: the response carries the cleaned
+        #    state immediately (correct for the OPENING client), and the
+        #    persist + history_rewrite push are deferred off-request so this GET
+        #    never blocks on a FUSE-fsync UPDATE+commit. ──
+        if changed:
+            _schedule_reconcile_persist(conv_id, cleaned, settings_dict)
+        return jsonify(served)
     except Exception as e:
         logger.warning('[get_conv] GET-path reconcile failed for conv=%s: %s — '
                        'serving unreconciled row', conv_id[:8], e, exc_info=True)
@@ -743,6 +972,78 @@ def _save_conv_blocking(db, conv_id, data):
     existing_count = existing_row['msg_count'] if existing_row else 0
     server_rev = _row_rev(existing_row) if existing_row else 0
 
+    # ── Backend-authoritative ghost-husk sweep on the WRITE seam ──
+    # Mirror the GET-path reconcile (``_reconcile_conv_on_get_blocking``) HERE so
+    # an empty ghost assistant placeholder — pushed by a frontend reconnect /
+    # queue-drain recovery path (``main_send_pipeline.js`` _checkForQueuedTask /
+    # _recoverTimedOutChatTask) and PUT verbatim — can never PERSIST, not even
+    # transiently, instead of relying on a later GET to scrub it. Reuses the SAME
+    # pure verdict (``reconcile_conversation_messages``: buried-ghost sweep + tail
+    # delete/interrupt) as the GET path and ``_sync_partial_to_conversation``'s
+    # anti-husk guard, making the write seam symmetric.
+    #
+    # GATE (identical to the GET path): skip when a task is pending/running — a
+    # live streaming placeholder is byte-identical to a ghost tail, so sweeping
+    # mid-stream would delete the live stream's target and PERSIST that deletion.
+    # Also skip on allowTruncate (edit/regen owns the tail) and 0-msg writes.
+    #
+    # ORDERING TRAP: the sweep runs BEFORE the count-regression / stale-checkpoint
+    # guards, and those guards compare against a husk-FREE view of BOTH sides
+    # (``_existing_effective_count``). Otherwise a clean shorter PUT against an
+    # already-husk-bloated row (or this sweep's own shrunk output vs a still-
+    # bloated row) would trip ``blocked_msg_regression`` and the guard would
+    # actively PRESERVE the husks. Cache-neutral: passes the live
+    # ``get_cache_prefix_count`` so the buried sweep never removes an in-prefix
+    # message. No ``updated_at`` bump (the shared no-op guard below keeps the
+    # stored timestamp when the swept content matches — consistent with GET).
+    _existing_effective_count = existing_count
+    _husk_swept = 0
+    if msg_count > 0 and not allow_truncate and not _conv_has_live_task(conv_id):
+        try:
+            from lib.conversations.reconcile import reconcile_conversation_messages
+            from lib.tasks_pkg.cache_tracking import get_cache_prefix_count
+            try:
+                _prefix_n = get_cache_prefix_count(conv_id)
+            except Exception as _pe:
+                logger.debug('[save_conv] get_cache_prefix_count failed conv=%s: %s',
+                             conv_id[:12], _pe)
+                _prefix_n = 0
+            # (a) Sweep the INCOMING payload so husks never land.
+            _cleaned, _changed = reconcile_conversation_messages(raw_messages, _prefix_n)
+            if _changed:
+                _husk_swept = len(raw_messages) - len(_cleaned)
+                raw_messages = _cleaned
+                msg_count = len(raw_messages)
+                messages = json_dumps_pg(raw_messages)
+                # Re-derive lastMsgRole/lastMsgTimestamp (Case-E orphan detection)
+                # from the POST-sweep tail so settings don't point at a removed husk.
+                if msg_count > 0:
+                    _lm = raw_messages[-1]
+                    settings_dict['lastMsgRole'] = _lm.get('role')
+                    settings_dict['lastMsgTimestamp'] = _lm.get('timestamp')
+                    settings = json.dumps(settings_dict, ensure_ascii=False)
+                logger.info('[save_conv] \U0001f9f9 Swept %d ghost husk(s) from '
+                            'incoming PUT conv=%s (%d\u2192%d) — write-seam symmetry '
+                            'with GET reconcile', _husk_swept, conv_id[:12],
+                            _husk_swept + msg_count, msg_count)
+            # (b) Husk-free view of the EXISTING row for the guards below (only
+            #     needed when the incoming is NOT a strict growth).
+            if existing_row is not None and existing_count > 0 and msg_count <= existing_count:
+                _ex_row = db.execute(
+                    'SELECT messages FROM conversations WHERE id=? AND user_id=?',
+                    (conv_id, DEFAULT_USER_ID)).fetchone()
+                if _ex_row:
+                    try:
+                        _ex_msgs = json.loads(_ex_row[0] or '[]') or []
+                    except (json.JSONDecodeError, TypeError):
+                        _ex_msgs = []
+                    if _ex_msgs:
+                        _ex_clean, _ = reconcile_conversation_messages(_ex_msgs, _prefix_n)
+                        _existing_effective_count = len(_ex_clean)
+        except Exception as _sw:
+            logger.warning('[save_conv] ghost-husk sweep failed conv=%s: %s '
+                           '(continuing unswept)', conv_id[:12], _sw, exc_info=True)
+
     # ── Guard: compare-and-swap on the server-issued monotonic `rev` ──
     # A CAS-aware client sends the `rev` it last saw (baseRev). The write is
     # accepted only if baseRev == the row's current rev; otherwise the client's
@@ -787,7 +1088,7 @@ def _save_conv_blocking(db, conv_id, data):
         return _Defer(jsonify, {'ok': False, 'error': 'blocked_empty_overwrite',
                         'serverMsgCount': existing_count}, status=409)
 
-    if msg_count > 0 and msg_count < existing_count and not allow_truncate:
+    if msg_count > 0 and msg_count < _existing_effective_count and not allow_truncate:
         # 2026-05-05: this guard fires during NORMAL concurrent syncs
         # (e.g. translate poll). Log at INFO — the 409 already tells the
         # client to retry with fresh state; not worth an error.log entry.
@@ -809,7 +1110,7 @@ def _save_conv_blocking(db, conv_id, data):
     # and PUTs it back, erasing the completed result.
     # Fix: if server has a completed assistant message (finishReason set) but client
     # is sending one without finishReason AND with less content, block the overwrite.
-    if msg_count > 0 and msg_count == existing_count and not allow_truncate:
+    if msg_count > 0 and msg_count == _existing_effective_count and not allow_truncate:
         incoming_last = raw_messages[-1] if raw_messages else {}
         incoming_fr = incoming_last.get('finishReason') or ''
         # Block if: (a) no finishReason (stale streaming snapshot), or
@@ -1073,7 +1374,7 @@ def _save_conv_blocking(db, conv_id, data):
     # updated_at instead of the client's bumped value. Genuine edits change
     # search_text (or msg_count/title), so they still update the timestamp.
     if (existing_row is not None
-            and msg_count == existing_count
+            and msg_count == _existing_effective_count
             and title == existing_row['title']
             and search_text == (existing_row['search_text'] or '')):
         _existing_updated = existing_row['updated_at']
@@ -1093,13 +1394,17 @@ def _save_conv_blocking(db, conv_id, data):
     # into conversation_messages rows. No-op unless TOFU_MESSAGES_ROWS.
     from lib.database.messages_rows import dual_write_conv
     dual_write_conv(db, conv_id, raw_messages, now_ms=updated)
-    _invalidate_meta_cache()
     # Return the post-write rev (the trigger bumped it iff messages changed) so
     # a CAS-aware client advances its baseRev in lockstep and its NEXT PUT
     # carries a fresh base. A client that ignores `rev` is unaffected.
     new_row = db.execute('SELECT rev FROM conversations WHERE id=? AND user_id=?',
                          (conv_id, DEFAULT_USER_ID)).fetchone()
-    return _Defer(api_ok, rev=_row_rev(new_row) if new_row else server_rev)
+    new_rev = _row_rev(new_row) if new_row else server_rev
+    # Event-driven cross-device sync: push the change (carrying the new rev) so
+    # a sibling device reconciles this conv without a manual refresh. Rev-gated
+    # on the client → self-echo is a cheap no-op.
+    _notify_conv_changed(conv_id, rev=new_rev)
+    return _Defer(api_ok, rev=new_rev)
 
 
 @conversations_bp.route('/api/v1/conversations/<conv_id>/settings', methods=['PATCH'])
@@ -1139,7 +1444,9 @@ async def patch_conv_settings(conv_id):
     ok = await asyncio.to_thread(_work)
     if ok is None:
         return api_not_found('Not found')
-    _invalidate_meta_cache()
+    # Metadata-only change (folder move / pin / activeTaskId): rev unchanged →
+    # client does a debounced sidebar refresh, not a body refetch.
+    _notify_conv_changed(conv_id, rev=None)
     logger.info('[patch_settings] Conv %s — patched keys: %s', conv_id[:12], list(data.keys()))
     return api_ok()
 
@@ -1170,7 +1477,10 @@ async def rename_conv(conv_id):
     await async_execute(
         'UPDATE conversations SET title=? WHERE id=? AND user_id=?',
         (title, conv_id, DEFAULT_USER_ID), domain=DOMAIN_CHAT)
-    _invalidate_meta_cache()
+    # Metadata-only change (rev=None): the DB rev trigger only bumps on a
+    # messages change, so a rename doesn't move rev — the client falls back to
+    # a debounced sidebar refresh (title/folder) rather than a body refetch.
+    _notify_conv_changed(conv_id, rev=None)
     logger.info('[rename_conv] Conv %s — title=%.50s', conv_id[:12], title)
     audit_log('conversation_renamed', conv_id=conv_id, title=title[:60])
     return api_ok(title=title)
@@ -1208,7 +1518,7 @@ async def generate_conv_title(conv_id):
     await async_execute(
         'UPDATE conversations SET title=? WHERE id=? AND user_id=?',
         (title, conv_id, DEFAULT_USER_ID), domain=DOMAIN_CHAT)
-    _invalidate_meta_cache()
+    _notify_conv_changed(conv_id, rev=None)
     logger.info('[generate_title] Conv %s — title=%.50s', conv_id[:12], title)
     audit_log('conversation_title_generated', conv_id=conv_id, title=title[:60])
     return api_ok(title=title)
@@ -1230,11 +1540,18 @@ async def delete_message(conv_id, msg_idx):
     """
     mode = request.args.get('mode', 'single')
     if mode not in ('single', 'turn'):
-        return jsonify({'error': 'mode must be "single" or "turn"'}), 400
-    return _finish(await run_pooled(lambda db: _delete_message_blocking(db, conv_id, msg_idx, mode)))
+        return api_error('mode must be "single" or "turn"', status=400)
+    # Stable-id addressing (mirrors chat_regenerate's truncateToMsgId): the
+    # client sends the target's ``_msgId`` so a list-length drift between its
+    # read and this request (e.g. a server-side ghost-sweep / reconcile shrank
+    # the persisted messages) resolves to the CURRENT index instead of a stale
+    # one — the root cause of "delete does nothing / deletes the wrong turn".
+    msg_id = request.args.get('msgId') or None
+    return _finish(await run_pooled(
+        lambda db: _delete_message_blocking(db, conv_id, msg_idx, mode, msg_id)))
 
 
-def _delete_message_blocking(db, conv_id, msg_idx, mode):
+def _delete_message_blocking(db, conv_id, msg_idx, mode, msg_id=None):
     row = db.execute(
         'SELECT messages, title, settings FROM conversations WHERE id=? AND user_id=?',
         (conv_id, DEFAULT_USER_ID)
@@ -1247,6 +1564,20 @@ def _delete_message_blocking(db, conv_id, msg_idx, mode):
     except (json.JSONDecodeError, TypeError) as e:
         logger.warning('[delete_message] Failed to parse messages for conv=%s: %s', conv_id[:8], e)
         return _ie('Failed to parse conversation messages')
+
+    # ── Stable-id resolution: msgId is authoritative, index is the fallback ──
+    if msg_id:
+        from lib.tasks_pkg.manager import find_message_by_id
+        _resolved_idx, _ = find_message_by_id(messages, msg_id)
+        if _resolved_idx is not None:
+            if _resolved_idx != msg_idx:
+                logger.info('[delete_message] conv=%s msgId=%s resolved to index %d '
+                            '(client sent index %d — drift corrected)',
+                            conv_id[:8], str(msg_id)[:12], _resolved_idx, msg_idx)
+            msg_idx = _resolved_idx
+        else:
+            logger.debug('[delete_message] conv=%s msgId=%s did not resolve — '
+                         'using index %d', conv_id[:8], str(msg_id)[:12], msg_idx)
 
     if msg_idx < 0 or msg_idx >= len(messages):
         return _br(f'Index {msg_idx} out of range (0..{len(messages) - 1})')
@@ -1304,7 +1635,9 @@ def _delete_message_blocking(db, conv_id, msg_idx, mode):
 
     update_conversation_fts(db, conv_id, search_text)
 
-    _invalidate_meta_cache()
+    _dm_rev_row = db.execute('SELECT rev FROM conversations WHERE id=? AND user_id=?',
+                             (conv_id, DEFAULT_USER_ID)).fetchone()
+    _notify_conv_changed(conv_id, rev=(_row_rev(_dm_rev_row) if _dm_rev_row else None))
     # Invalidate persisted per-day cost cache — but ONLY for the day(s) the
     # deleted messages actually contributed cost to.  A whole-table wipe
     # would force the next calendar open to live-rescan the entire month.
@@ -1396,6 +1729,29 @@ def _patch_message_blocking(db, conv_id, msg_idx, data):
     _preview = ''
     if 'content' in data and isinstance(data['content'], str):
         _preview = data['content'][:50]
+        # ── Keep the segment SoT consistent with the edited deliverable ──
+        # A finished assistant/critic/VU turn stores its answer BOTH as
+        # ``content`` and as the terminal deliverable ``text`` segment in
+        # ``segments`` (the authoritative render/wire source — deliverable_text
+        # / derive_content read it first). An in-place edit only PATCHes
+        # ``content``; without this the segment list keeps the PRE-EDIT answer
+        # and a segment-driven read (headless/compat, next-turn wire rebuild)
+        # resurfaces the stale text. Realign the terminal deliverable segment
+        # in place (no-op when absent/already consistent). Best-effort — a
+        # failure here must never block the content edit itself.
+        seg_list = msg.get('segments')
+        if seg_list:
+            try:
+                from lib.tasks_pkg.segments import apply_edited_deliverable
+                _realigned = apply_edited_deliverable(seg_list, data['content'])
+                if _realigned is not None:
+                    msg['segments'] = _realigned
+                    logger.info('[patch_msg] conv=%s idx=%d realigned terminal '
+                                'deliverable segment to edited content',
+                                conv_id[:8], msg_idx)
+            except Exception as _seg_e:
+                logger.warning('[patch_msg] conv=%s idx=%d segment realign '
+                               'skipped: %s', conv_id[:8], msg_idx, _seg_e)
 
     # Backfill stable per-message IDs for any messages that lack one.
     try:
@@ -1436,7 +1792,9 @@ def _patch_message_blocking(db, conv_id, msg_idx, data):
 
     update_conversation_fts(db, conv_id, search_text)
 
-    _invalidate_meta_cache()
+    _pm_rev_row = db.execute('SELECT rev FROM conversations WHERE id=? AND user_id=?',
+                             (conv_id, DEFAULT_USER_ID)).fetchone()
+    _notify_conv_changed(conv_id, rev=(_row_rev(_pm_rev_row) if _pm_rev_row else None))
     logger.info('[patch_msg] conv=%s idx=%d keys=%s preview=%.50s',
                 conv_id[:8], msg_idx, applied_keys, _preview)
     try:
@@ -1547,7 +1905,9 @@ def _patch_message_by_id_blocking(db, conv_id, msg_id, data):
 
     update_conversation_fts(db, conv_id, search_text)
 
-    _invalidate_meta_cache()
+    _pmi_rev_row = db.execute('SELECT rev FROM conversations WHERE id=? AND user_id=?',
+                              (conv_id, DEFAULT_USER_ID)).fetchone()
+    _notify_conv_changed(conv_id, rev=(_row_rev(_pmi_rev_row) if _pmi_rev_row else None))
     logger.info('[patch_msg_id] conv=%s id=%s idx=%d keys=%s preview=%.50s',
                 conv_id[:8], msg_id[:8], target_idx, applied_keys, _preview)
     try:
@@ -1574,15 +1934,24 @@ async def delete_branch(conv_id, msg_idx, branch_idx):
     The branch index is positional — after deletion, callers must re-index
     the remaining branches on their side (the DOM remap in ``branch.js``).
 
+    Query params:
+        msgId: the anchor message's stable ``_msgId``. Authoritative when
+            present — the server resolves the CURRENT absolute index by id, so
+            a windowed-read client (whose ``conv.messages`` holds only a tail
+            window, making its local ``msg_idx`` NOT the absolute index) still
+            targets the correct message. ``msg_idx`` is the fallback.
+
     Returns:
         {ok, branchCount}
 
     Native-async: blocking DB body runs off-loop via ``run_pooled``.
     """
-    return _finish(await run_pooled(lambda db: _delete_branch_blocking(db, conv_id, msg_idx, branch_idx)))
+    msg_id = request.args.get('msgId') or None
+    return _finish(await run_pooled(
+        lambda db: _delete_branch_blocking(db, conv_id, msg_idx, branch_idx, msg_id)))
 
 
-def _delete_branch_blocking(db, conv_id, msg_idx, branch_idx):
+def _delete_branch_blocking(db, conv_id, msg_idx, branch_idx, msg_id=None):
     row = db.execute(
         'SELECT messages, title, settings FROM conversations WHERE id=? AND user_id=?',
         (conv_id, DEFAULT_USER_ID)
@@ -1595,6 +1964,18 @@ def _delete_branch_blocking(db, conv_id, msg_idx, branch_idx):
     except (json.JSONDecodeError, TypeError) as e:
         logger.warning('[delete_branch] conv=%s failed to parse messages: %s', conv_id[:8], e)
         return _ie('Failed to parse conversation messages')
+
+    # ── Stable-id resolution: msgId is authoritative, index is the fallback
+    #    (mirrors delete_message). Drift-proof under windowed reads. ──
+    if msg_id:
+        from lib.tasks_pkg.manager import find_message_by_id
+        _resolved_idx, _ = find_message_by_id(messages, msg_id)
+        if _resolved_idx is not None:
+            if _resolved_idx != msg_idx:
+                logger.info('[delete_branch] conv=%s msgId=%s resolved to index %d '
+                            '(client sent %d — drift corrected)',
+                            conv_id[:8], str(msg_id)[:12], _resolved_idx, msg_idx)
+            msg_idx = _resolved_idx
 
     if msg_idx < 0 or msg_idx >= len(messages):
         logger.warning('[delete_branch] conv=%s msg_idx=%d OUT OF RANGE (len=%d)',
@@ -1644,7 +2025,13 @@ def _delete_branch_blocking(db, conv_id, msg_idx, branch_idx):
 
     update_conversation_fts(db, conv_id, search_text)
 
-    _invalidate_meta_cache()
+    # Event-driven cross-device sync: a branch delete changes the conversation
+    # body, so carry the post-write rev → a sibling tab with this conv open
+    # refetches without a manual refresh. notify_conv_changed also invalidates
+    # the sidebar meta cache, so it replaces the bare _invalidate_meta_cache().
+    _db_rev_row = db.execute('SELECT rev FROM conversations WHERE id=? AND user_id=?',
+                             (conv_id, DEFAULT_USER_ID)).fetchone()
+    _notify_conv_changed(conv_id, rev=(_row_rev(_db_rev_row) if _db_rev_row else None))
     logger.info('[delete_branch] conv=%s msg_idx=%d branch_idx=%d remaining=%d',
                 conv_id[:8], msg_idx, branch_idx, branch_count)
     try:
@@ -1661,6 +2048,37 @@ async def delete_conv(conv_id):
 
 
 def _delete_conv_blocking(db, conv_id):
+    # ── Stop the conversation's live work BEFORE wiping its rows ──
+    # A conversation under autopilot is a self-spawning loop: each finished
+    # turn's end-of-turn hook spawns a follow-up task. Deleting the conv row
+    # without first aborting leaves that loop running against a conv that no
+    # longer exists — it burns tokens and, worse, its terminal / checkpoint
+    # write to ``task_results`` lands AFTER step-2's DELETE and re-inserts an
+    # ORPHAN row (the "Conversation not found in DB — cannot sync result back"
+    # signature). Abort + disarm the marker FIRST so no new follow-up can be
+    # spawned after we wipe; the orphan-write RACE TAIL that cooperative abort
+    # still leaves open is closed by the conv-existence guard in
+    # ``_upsert_task_row``. Both are best-effort: an abort/disarm failure must
+    # NEVER prevent the delete from completing (that would leave the user
+    # unable to remove the conversation at all).
+    try:
+        from lib.tasks_pkg import abort_running_tasks_for_conv
+        _n_aborted = abort_running_tasks_for_conv(conv_id)
+        if _n_aborted:
+            logger.info('[delete_conv] Aborted %d running task(s) for conv=%s '
+                        'before delete', _n_aborted, conv_id[:12])
+    except Exception as _ab_e:
+        logger.warning('[delete_conv] pre-delete task abort failed for conv=%s '
+                       '(continuing with delete): %s', conv_id[:12], _ab_e)
+    try:
+        from lib.message_queue import clear_autopilot_marker
+        if clear_autopilot_marker(conv_id):
+            logger.info('[delete_conv] Disarmed autopilot marker for conv=%s',
+                        conv_id[:12])
+    except Exception as _cm_e:
+        logger.warning('[delete_conv] autopilot marker disarm failed for conv=%s '
+                       '(continuing with delete): %s', conv_id[:12], _cm_e)
+
     # Capture the conv's messages + timestamps BEFORE deleting so we can scope
     # the cost-cache invalidation to only the day(s) it contributed cost to.
     _conv_msgs, _conv_created, _conv_updated = [], 0, 0
@@ -1679,8 +2097,10 @@ def _delete_conv_blocking(db, conv_id):
     c1 = db.execute('DELETE FROM conversations WHERE id=? AND user_id=?', (conv_id, DEFAULT_USER_ID))
     c2 = db.execute('DELETE FROM task_results WHERE conv_id=?', (conv_id,))
     c3 = db.execute('DELETE FROM transcript_archive WHERE conv_id=?', (conv_id,))
+    _deleted_committed = False
     try:
         db.commit()
+        _deleted_committed = True
     except Exception as exc:
         _is_db_err = isinstance(exc, sqlite3.OperationalError)
         if not _is_db_err:
@@ -1694,7 +2114,13 @@ def _delete_conv_blocking(db, conv_id):
         c2 = db.execute('DELETE FROM task_results WHERE conv_id=?', (conv_id,))
         c3 = db.execute('DELETE FROM transcript_archive WHERE conv_id=?', (conv_id,))
         db.commit()
-    _invalidate_meta_cache()
+        _deleted_committed = True
+    # Event-driven cross-device sync: tell siblings this conv is gone so they
+    # drop it from the sidebar (+ IDB cache) without a manual refresh.
+    if _deleted_committed:
+        _notify_conv_changed(conv_id, deleted=True)
+    else:
+        _invalidate_meta_cache()
     # Invalidate persisted per-day cost cache — but ONLY for the day(s) this
     # conversation actually contributed cost to, so other days' cache survives
     # (a whole-table wipe forces a full-month live rescan on the next open).

@@ -6,12 +6,12 @@ import time
 
 import orjson
 
-from flask import Blueprint, Response, jsonify, request
+from flask import Blueprint, jsonify, request
 
 from lib.agent_core.events import EventType, build_event
 from lib.database import DOMAIN_CHAT, get_db
 from lib.log import audit_log, get_logger
-from lib.api_response import api_bad_request, api_internal_error, api_not_found, api_ok
+from lib.api_response import api_bad_request, api_internal_error, api_not_found, api_ok, sse_response
 from lib.request_parser import parse_body
 from routes.api_v1.auth import current_auth, require_scope
 
@@ -37,7 +37,7 @@ from lib.chat import (  # noqa: F401
     scan_continue_checkpoint as _scan_continue_checkpoint,
 )
 from lib.idempotency import idempotent_post
-from routes.common import DEFAULT_USER_ID, _invalidate_meta_cache
+from routes.common import DEFAULT_USER_ID, _invalidate_meta_cache, _notify_conv_changed
 
 logger = get_logger(__name__)
 
@@ -634,7 +634,7 @@ def chat_send():
             if is_new:
                 _persist_conv_messages(db, conv_id, messages, title, settings_patch)
 
-            _invalidate_meta_cache()
+            _notify_conv_changed(conv_id, rev=None)
 
             return jsonify({
                 'queued': True,
@@ -677,7 +677,7 @@ def chat_send():
         except Exception as e:
             logger.warning('[Send] Failed to update activeTaskId: %s', e)
 
-        _invalidate_meta_cache()
+        _notify_conv_changed(conv_id, rev=None)
 
         return jsonify({
             'taskId': task_id,
@@ -987,7 +987,7 @@ def chat_regenerate():
         except Exception as e:
             logger.warning('[Regen] Failed to update activeTaskId: %s', e)
 
-        _invalidate_meta_cache()
+        _notify_conv_changed(conv_id, rev=None)
 
         return jsonify({
             'taskId': task_id,
@@ -1065,7 +1065,7 @@ def _continue_via_prefill_only(db, conv_id, messages, assistant_msg, title,
     except Exception as e:
         logger.warning('[Continue] Failed to update activeTaskId (prefill-only): %s', e)
 
-    _invalidate_meta_cache()
+    _notify_conv_changed(conv_id, rev=None)
     try:
         from lib.log import audit_log as _audit_log
         _audit_log('continue_prefill_only', conv_id=conv_id,
@@ -1282,7 +1282,7 @@ def chat_continue():
         except Exception as e:
             logger.warning('[Continue] Failed to update activeTaskId: %s', e)
 
-        _invalidate_meta_cache()
+        _notify_conv_changed(conv_id, rev=None)
         try:
             from lib.log import audit_log as _audit_log
             _audit_log(
@@ -1478,12 +1478,7 @@ async def chat_stream(task_id):
                         except Exception as _e:
                             logger.debug('[Chat] cold-replay synthetic done failed: %s', _e)
 
-                    return Response(gen_persisted(), mimetype='text/event-stream', headers={
-                        'Content-Type': 'text/event-stream; charset=utf-8',
-                        'Cache-Control': 'no-cache, no-transform',
-                        'X-Accel-Buffering': 'no',
-                        'Connection': 'keep-alive',
-                    })
+                    return sse_response(gen_persisted())
 
         db = get_db(DOMAIN_CHAT)
         row = await asyncio.to_thread(
@@ -1552,12 +1547,7 @@ async def chat_stream(task_id):
                 yield f'data: {_dumps_yielding(state)}\n\n'
                 yield f'data: {_dumps_yielding(done_evt)}\n\n'
 
-            return Response(gen_done(), mimetype='text/event-stream', headers={
-                'Content-Type': 'text/event-stream; charset=utf-8',
-                'Cache-Control': 'no-cache, no-transform',
-                'X-Accel-Buffering': 'no',
-                'Connection': 'keep-alive',
-            })
+            return sse_response(gen_done())
         logger.warning('[Chat] Task %s not found (stream)', task_id)
         return api_not_found('Task not found')
 
@@ -1644,6 +1634,30 @@ async def chat_stream(task_id):
 
         if resume_from is not None:
             cursor = resume_from
+            # ★ Reassert a leading full-state snapshot BEFORE replaying the
+            #   post-cursor deltas. A warm resume that landed on a fresh empty
+            #   assistant placeholder (initActiveTasks Case-A stale-tail /
+            #   connectToTask stale-turn guard → toolRounds:[]) has NO cached
+            #   rounds, so a delta-only replay would render starting at whatever
+            #   round the first missed tool_start carried (the round-10 strand,
+            #   conv mrbf9px2g5mct3). Emit the COMPLETE task['toolRounds']
+            #   (+ content/thinking) read under the lock; the frontend's
+            #   _snapshotLongerRounds keep-longer guard ADOPTS it when the client
+            #   cache is short and harmlessly IGNORES it when equal/longer — so a
+            #   shorter buffer can never collapse a longer one. Like the fresh
+            #   path it carries NO id: (synthetic; avoids a cursor collision with
+            #   the first replayed event).
+            with task['events_lock']:
+                resume_state = build_event(
+                    EventType.STATE, content=task['content'],
+                    thinking=task['thinking'], status=task['status'],
+                )
+                if task['error']:
+                    resume_state['error'] = task['error']
+                resume_state['toolRounds'] = task['toolRounds']
+            _resume_state_payload = json.dumps(resume_state, ensure_ascii=False)
+            yield f'data: {_resume_state_payload}\n\n'
+            _events_sent += 1
             # Resume path: replay missed events since Last-Event-ID
             for idx, ev in enumerate(missed_evts):
                 eid = resume_from + idx
@@ -1883,14 +1897,7 @@ async def chat_stream(task_id):
         resp.headers['Retry-After'] = '5'
         return resp, 429
 
-    resp = Response(generate_with_disconnect_log(), mimetype='text/event-stream', headers={
-        'Content-Type': 'text/event-stream; charset=utf-8',
-        'Cache-Control': 'no-cache, no-transform',
-        'X-Accel-Buffering': 'no',
-        'Connection': 'keep-alive',
-    })
-    resp.timeout = None
-    return resp
+    return sse_response(generate_with_disconnect_log(), timeout_none=True)
 
 
 @api_v1_chat_bp.route('/api/v1/chat/abort-conv/<conv_id>', methods=['POST'], endpoint='ui_chat_abort_conv')

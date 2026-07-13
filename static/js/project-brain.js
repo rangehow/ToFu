@@ -60,8 +60,9 @@
   };
 
   // ── Tabs: show one surface at a time (full width) ──────────────
-  /** Switch the visible tab-panel. `name` ∈ charter|board|activity|peers. */
+  /** Switch the visible tab-panel. `name` ∈ charter|board|activity|peers|status. */
   function _selectTab(name) {
+    var prev = _state.tab;
     _state.tab = name;
     var tabs = document.querySelectorAll('.project-brain-tabs .pb-tab');
     for (var i = 0; i < tabs.length; i++) {
@@ -80,6 +81,21 @@
     if (typeof ProjectBrainI18n !== 'undefined' && ProjectBrainI18n &&
         typeof ProjectBrainI18n.applyAll === 'function') {
       try { ProjectBrainI18n.applyAll(); } catch (_e) { /* best-effort */ }
+    }
+    _onTabSelected(name, prev);
+  }
+
+  /**
+   * Per-tab on-select hook. Decision #4 (fresh-on-tab-open): selecting INTO the
+   * Status tab must re-fetch, because switching tabs only toggles CSS
+   * visibility — the panel-open refresh could be minutes stale while siblings
+   * finished epics on another tab. Gated on switching INTO status (prev!==name)
+   * so an unrelated tab click never triggers it. Cheap: the backend staleness
+   * gate returns the cached snapshot with no LLM call on a quiescent project.
+   */
+  function _onTabSelected(name, prev) {
+    if (name === 'status' && prev !== 'status') {
+      _refreshStatus(_state.path || _displayedProjectPath());
     }
   }
 
@@ -619,16 +635,28 @@
   }
 
   function _esc(s) {
-    if (typeof escapeHtml === 'function') return escapeHtml(String(s == null ? '' : s));
-    return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
-      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
-    });
+    return escapeHtml(String(s == null ? '' : s));
   }
 
   // ── Charter column ──────────────────────────────────────────────
   // Renders the north-star content + committed decisions, plus PENDING
   // proposed_decision events (pulled from the live feed state) each with a
   // human commit/reject control — the human gate for commit_charter.
+  //
+  // The committed north-star + each decision carry HUMAN edit/delete controls
+  // (backend-authoritative: every mutation hits the optimistic-locked
+  // Api.project.charter* route with the current `version`, then refreshCharter
+  // re-renders from the server — never a local DOM mutation). The editor reads
+  // the ORIGINAL text from `data-pb-src` (never the translation overlay), so an
+  // active content-translation view can never leak into a saved decision.
+
+  /** Small icon+label action button for a charter edit/delete affordance. */
+  function _charterActBtn(cls, glyph, labelKey, fallback, extraAttrs) {
+    return '<button type="button" class="pb-charter-act ' + cls + '" title="' +
+      _esc(_t(labelKey, fallback)) + '"' + (extraAttrs || '') + '>' +
+      ((typeof Icon === 'function') ? Icon(glyph, 12) : '') + '</button>';
+  }
+
   function renderCharter(rec, pendingProposals) {
     var el = document.getElementById('projectBrainCharterBody');
     if (!el) return;
@@ -637,14 +665,22 @@
     var parts = [];
     var content = (rec && rec.content) || '';
     var decisions = (rec && rec.decisions) || [];
+    var charterExists = !!(rec && rec.exists) || !!content || !!decisions.length;
     if (!content && !decisions.length && !(pendingProposals || []).length) {
       el.innerHTML = '<div class="pb-charter-empty">' +
         _esc(_t('projectBrain.charterEmpty', 'No charter yet')) + '</div>';
+      _setTabCount('pbTabCountCharter', 0);
       return;
     }
     if (content) {
-      parts.push('<div class="pb-charter-northstar">' +
-        _clampBlock(_esc(content), content) + '</div>');
+      parts.push('<div class="pb-charter-northstar-row">' +
+        '<div class="pb-charter-northstar" data-charter-northstar="1">' +
+        _clampBlock(_esc(content), content) + '</div>' +
+        '<div class="pb-charter-row-actions">' +
+        _charterActBtn('pb-charter-edit-northstar', 'edit',
+          'projectBrain.editNorthStar', 'Edit north star',
+          ' data-ver="' + version + '"') +
+        '</div></div>');
     }
     if (decisions.length) {
       parts.push('<div class="pb-charter-section">' +
@@ -653,7 +689,16 @@
       for (var i = 0; i < decisions.length; i++) {
         var d = decisions[i];
         var txt = (d && typeof d === 'object') ? (d.text || '') : String(d);
-        parts.push('<li>' + _clampBlock(_esc(txt), txt) + '</li>');
+        parts.push('<li data-decision-idx="' + i + '">' +
+          '<div class="pb-decision-text">' + _clampBlock(_esc(txt), txt) + '</div>' +
+          '<div class="pb-charter-row-actions">' +
+          _charterActBtn('pb-decision-edit', 'edit',
+            'projectBrain.editDecision', 'Edit',
+            ' data-idx="' + i + '" data-ver="' + version + '"') +
+          _charterActBtn('pb-decision-delete', 'trash',
+            'projectBrain.deleteDecision', 'Delete',
+            ' data-idx="' + i + '" data-ver="' + version + '"') +
+          '</div></li>');
       }
       parts.push('</ul>');
     }
@@ -682,6 +727,15 @@
           '</div></div>');
       }
     }
+    // Footer: delete the WHOLE charter (only when one exists). Two-step
+    // confirm inline (no window.confirm) so an accidental click is recoverable.
+    if (charterExists) {
+      parts.push('<div class="pb-charter-footer">' +
+        '<button type="button" class="pb-charter-delete-all" data-ver="' + version + '">' +
+        ((typeof Icon === 'function') ? Icon('trash', 12) : '') +
+        '<span>' + _esc(_t('projectBrain.deleteCharter', 'Delete charter')) + '</span>' +
+        '</button></div>');
+    }
     el.innerHTML = parts.join('');
     _wireClampToggles(el);
     _applyContentI18n(el);
@@ -708,6 +762,163 @@
         _dismissProposal(path, pid, btn);
       });
     }
+    _wireCharterEditControls(el, path);
+  }
+
+  /** The ORIGINAL (authoritative) text of a rendered charter block — always
+   *  data-pb-src (the source of truth), never the translation overlay that may
+   *  be laid over innerHTML. Falls back to textContent when unstamped. */
+  function _charterSrcText(rowEl, srcSelector) {
+    var node = rowEl.querySelector(srcSelector + ' [data-pb-src]') ||
+               rowEl.querySelector(srcSelector);
+    if (!node) return '';
+    return node.getAttribute('data-pb-src') != null
+      ? node.getAttribute('data-pb-src')
+      : (node.textContent || '');
+  }
+
+  /** Replace a charter row's body with an inline textarea editor (Save /
+   *  Cancel). `onSave(newText)` performs the backend mutation. */
+  function _openInlineEditor(rowEl, bodySelector, originalText, onSave) {
+    if (!rowEl || rowEl.querySelector('.pb-inline-editor')) return;
+    var body = rowEl.querySelector(bodySelector);
+    var actions = rowEl.querySelector('.pb-charter-row-actions');
+    if (body) body.style.display = 'none';
+    if (actions) actions.style.display = 'none';
+    var ed = document.createElement('div');
+    ed.className = 'pb-inline-editor';
+    var ta = document.createElement('textarea');
+    ta.className = 'pb-inline-editor-input';
+    ta.value = originalText;
+    var btnRow = document.createElement('div');
+    btnRow.className = 'pb-inline-editor-actions';
+    var save = document.createElement('button');
+    save.type = 'button'; save.className = 'pb-inline-save';
+    save.textContent = _t('projectBrain.save', 'Save');
+    var cancel = document.createElement('button');
+    cancel.type = 'button'; cancel.className = 'pb-inline-cancel';
+    cancel.textContent = _t('projectBrain.cancel', 'Cancel');
+    btnRow.appendChild(save); btnRow.appendChild(cancel);
+    ed.appendChild(ta); ed.appendChild(btnRow);
+    rowEl.appendChild(ed);
+    try { ta.focus(); } catch (_e) { /* jsdom */ }
+    function close() {
+      if (ed.parentNode) ed.parentNode.removeChild(ed);
+      if (body) body.style.display = '';
+      if (actions) actions.style.display = '';
+    }
+    cancel.addEventListener('click', close);
+    save.addEventListener('click', function () {
+      var next = (ta.value || '').trim();
+      if (!next) { close(); return; }
+      save.disabled = true; cancel.disabled = true;
+      save.textContent = _t('projectBrain.saving', 'Saving…');
+      Promise.resolve(onSave(next)).then(function () {
+        // refreshCharter re-renders the whole panel from the server, which
+        // removes this editor implicitly; nothing more to do here.
+      }).catch(function (e) {
+        if (typeof console !== 'undefined') console.warn('[ProjectBrain] charter save failed', e);
+        save.disabled = false; cancel.disabled = false;
+        save.textContent = _t('projectBrain.save', 'Save');
+      });
+    });
+  }
+
+  /** Wire the north-star edit, per-decision edit/delete, and delete-charter
+   *  controls. All mutations go through the optimistic-locked routes carrying
+   *  the rendered `version`, then refreshCharter. */
+  function _wireCharterEditControls(el, path) {
+    var api = (typeof Api !== 'undefined' && Api.project) ? Api.project : null;
+    // North-star edit → commitCharter(content=...).
+    var nsBtn = el.querySelector('.pb-charter-edit-northstar');
+    if (nsBtn) {
+      nsBtn.addEventListener('click', function (ev) {
+        var ver = parseInt(ev.currentTarget.getAttribute('data-ver') || '0', 10);
+        var row = ev.currentTarget.closest('.pb-charter-northstar-row');
+        if (!row || !api) return;
+        var original = _charterSrcText(row, '.pb-charter-northstar');
+        _openInlineEditor(row, '.pb-charter-northstar', original, function (next) {
+          return Promise.resolve(api.commitCharter(path, {
+            content: next, expected_version: ver,
+          })).then(function () { refreshCharter(path); });
+        });
+      });
+    }
+    // Per-decision edit.
+    var editBtns = el.querySelectorAll('.pb-decision-edit');
+    for (var e = 0; e < editBtns.length; e++) {
+      editBtns[e].addEventListener('click', function (ev) {
+        var btn = ev.currentTarget;
+        var idx = parseInt(btn.getAttribute('data-idx') || '-1', 10);
+        var ver = parseInt(btn.getAttribute('data-ver') || '0', 10);
+        var row = btn.closest('li[data-decision-idx]');
+        if (!row || !api || typeof api.updateDecision !== 'function') return;
+        var original = _charterSrcText(row, '.pb-decision-text');
+        _openInlineEditor(row, '.pb-decision-text', original, function (next) {
+          return Promise.resolve(api.updateDecision(path, idx, next, {
+            expected_version: ver,
+          })).then(function () { refreshCharter(path); });
+        });
+      });
+    }
+    // Per-decision delete (two-step inline confirm).
+    var delBtns = el.querySelectorAll('.pb-decision-delete');
+    for (var dbi = 0; dbi < delBtns.length; dbi++) {
+      delBtns[dbi].addEventListener('click', function (ev) {
+        var btn = ev.currentTarget;
+        var idx = parseInt(btn.getAttribute('data-idx') || '-1', 10);
+        var ver = parseInt(btn.getAttribute('data-ver') || '0', 10);
+        _confirmInline(btn, function () {
+          if (!api || typeof api.deleteDecision !== 'function') return;
+          Promise.resolve(api.deleteDecision(path, idx, { expected_version: ver }))
+            .then(function () { refreshCharter(path); })
+            .catch(function (er) {
+              if (typeof console !== 'undefined') console.warn('[ProjectBrain] decision delete failed', er);
+            });
+        });
+      });
+    }
+    // Delete the whole charter (two-step inline confirm).
+    var delAll = el.querySelector('.pb-charter-delete-all');
+    if (delAll) {
+      delAll.addEventListener('click', function (ev) {
+        var btn = ev.currentTarget;
+        var ver = parseInt(btn.getAttribute('data-ver') || '0', 10);
+        _confirmInline(btn, function () {
+          if (!api || typeof api.deleteCharter !== 'function') return;
+          Promise.resolve(api.deleteCharter(path, { expected_version: ver }))
+            .then(function () { refreshCharter(path); })
+            .catch(function (er) {
+              if (typeof console !== 'undefined') console.warn('[ProjectBrain] charter delete failed', er);
+            });
+        });
+      });
+    }
+  }
+
+  /** Two-step inline confirm: first click swaps the button label to a
+   *  "Confirm?" affordance; a second click within 4s runs `onConfirm`. Avoids
+   *  window.confirm (blocked/ugly in the overlay) while keeping a destructive
+   *  action recoverable. */
+  function _confirmInline(btn, onConfirm) {
+    if (btn._pbConfirmArmed) {
+      btn._pbConfirmArmed = false;
+      if (btn._pbConfirmTimer) { clearTimeout(btn._pbConfirmTimer); btn._pbConfirmTimer = null; }
+      onConfirm();
+      return;
+    }
+    btn._pbConfirmArmed = true;
+    btn.classList.add('pb-confirm-armed');
+    var label = btn.querySelector('span');
+    var prev = label ? label.textContent : null;
+    if (label) label.textContent = _t('projectBrain.confirmDelete', 'Confirm?');
+    else { btn._pbPrevTitle = btn.title; btn.title = _t('projectBrain.confirmDelete', 'Confirm?'); }
+    btn._pbConfirmTimer = setTimeout(function () {
+      btn._pbConfirmArmed = false;
+      btn.classList.remove('pb-confirm-armed');
+      if (label && prev != null) label.textContent = prev;
+      else if (btn._pbPrevTitle != null) { btn.title = btn._pbPrevTitle; btn._pbPrevTitle = null; }
+    }, 4000);
   }
 
   function _commitCharterDecision(path, text, expectedVersion, proposalId, btn) {
@@ -787,7 +998,7 @@
     } catch (_e) { return ''; }
   }
 
-  /** One action button (SVG icon + label). `act` ∈ complete|block|defer|reopen|resume. */
+  /** One action button (SVG icon + label). `act` ∈ complete|block|reopen. */
   function _boardActionBtn(act, glyph, labelKey, fallback) {
     return '<button type="button" class="pb-board-act pb-board-act-' + act +
       '" data-act="' + act + '" title="' + _esc(_t(labelKey, fallback)) + '">' +
@@ -810,22 +1021,17 @@
         + '<span>' + _esc(_t('projectBrain.dispatched', 'auto')) + '</span></span>'
       : '';
     // Human lifecycle controls, gated by status:
-    //   • complete + block + park(defer) on open|claimed (live-work lifecycle)
+    //   • complete + block on open|claimed (live-work lifecycle)
     //   • reopen on claimed (break a stuck live claim) AND done (revive)
-    //   • resume(=reopen, deferred→open) on deferred — the human DECISION lever
-    //     that unparks a human-gated epic once the blocking question is answered
+    // (There is no park/shelve control — the project pushes every open epic
+    //  forward at full speed rather than holding work pending a human decision.)
     var acts = [];
     if (t.status === 'open' || t.status === 'claimed') {
       acts.push(_boardActionBtn('complete', 'check', 'projectBrain.actComplete', 'Done'));
       acts.push(_boardActionBtn('block', 'ban', 'projectBrain.actBlock', 'Block'));
-      acts.push(_boardActionBtn('defer', 'clock', 'projectBrain.actDefer', 'Park'));
     }
     if (t.status === 'claimed' || t.status === 'done') {
       acts.push(_boardActionBtn('reopen', 'refresh', 'projectBrain.actReopen', 'Reopen'));
-    }
-    if (t.status === 'deferred') {
-      // "Resume" is the reopen path (deferred → open) with decision-focused copy.
-      acts.push(_boardActionBtn('resume', 'play', 'projectBrain.actResume', 'Resume'));
     }
     var actionsRow = acts.length
       ? '<div class="pb-board-card-actions">' + acts.join('') + '</div>' : '';
@@ -862,6 +1068,34 @@
       '</div></div>';
   }
 
+  /** Render one BLOCKED epic card. The epic hit a genuine external gate and is
+   *  on a self-expiring cooldown; the card shows WHY (block reason, which
+   *  carries the [human-gated]/[sibling] class tag) and the approximate
+   *  retry-in minutes — the answer to "why is nothing happening" that was
+   *  invisible before. It still offers reopen (human forces an immediate retry,
+   *  resetting the cooldown) and complete. */
+  function _blockedCard(t) {
+    var mins = Math.max(0, Math.round((Number(t.blocked_until || 0) - Date.now()) / 60000));
+    var reason = (t.block_reason || '').trim();
+    var cnt = Number(t.block_count || 0);
+    var meta = _esc(_t('projectBrain.blockedRetry', 'auto-retry in') + ' ~' + mins + 'm')
+      + (cnt ? ' · ' + _esc('' + cnt + '×') : '');
+    var reasonHtml = reason
+      ? '<div class="pb-board-block-reason">' + _clampBlock(_esc(reason), reason) + '</div>'
+      : '';
+    var acts = [
+      _boardActionBtn('reopen', 'refresh', 'projectBrain.actReopen', 'Reopen'),
+      _boardActionBtn('complete', 'check', 'projectBrain.actComplete', 'Done'),
+    ];
+    var titleHtml = _clampBlock(_esc(t.title), t.title || '');
+    return '<div class="pb-board-card pb-board-blocked" data-task-id="' +
+      _esc(t.id) + '">' +
+      '<div class="pb-board-title">' + titleHtml + '</div>' +
+      reasonHtml +
+      '<div class="pb-board-card-meta pb-board-block-meta">' + meta + '</div>' +
+      '<div class="pb-board-card-actions">' + acts.join('') + '</div></div>';
+  }
+
   /** Dispatch a per-card human mutation → backend → refreshBoard (no local
    *  DOM mutation; the board re-renders verbatim from the backend). */
   function _boardMutate(act, taskId, btn) {
@@ -872,10 +1106,7 @@
     var call = null;
     if (act === 'complete' && typeof api.boardComplete === 'function') {
       call = api.boardComplete(path, taskId, convId);
-    } else if ((act === 'reopen' || act === 'resume') &&
-               typeof api.boardReopen === 'function') {
-      // "resume" is the same backend reopen (deferred → open); the distinct
-      // verb only drives decision-focused UI copy on a parked card.
+    } else if (act === 'reopen' && typeof api.boardReopen === 'function') {
       call = api.boardReopen(path, taskId, convId);
     } else if (act === 'block' && typeof api.boardBlock === 'function') {
       var reason = '';
@@ -883,20 +1114,12 @@
         reason = prompt(_t('projectBrain.blockReasonPrompt', 'Why is this blocked?')) || '';
       }
       call = api.boardBlock(path, taskId, convId, reason);
-    } else if (act === 'defer' && typeof api.boardDefer === 'function') {
-      var dreason = '';
-      if (typeof prompt === 'function') {
-        dreason = prompt(_t('projectBrain.deferReasonPrompt',
-                            'Park this epic — what human decision is it waiting on?')) || '';
-      }
-      call = api.boardDefer(path, taskId, convId, dreason);
     }
     if (!call) return;
     if (btn) btn.disabled = true;
     Promise.resolve(call).then(function () {
       refreshBoard(path);
       refreshInfluence(path);
-      refreshConvInfluenceBar();
     }).catch(function (e) {
       if (typeof console !== 'undefined') console.warn('[ProjectBrain] board ' + act + ' failed', e);
       if (btn) btn.disabled = false;
@@ -931,20 +1154,32 @@
       _setTabCount('pbTabCountBoard', 0);
       return;
     }
-    var cols = { open: [], claimed: [], deferred: [], done: [] };
+    var cols = { open: [], claimed: [], done: [], blocked: [] };
     var held = [];
+    var _nowMs = Date.now();
     for (var i = 0; i < tasks.length; i++) {
       var t = tasks[i];
       // A path-LEASE (kind='lease') is a durational resource reservation, not
-      // an epic. It carries status='claimed' but MUST NOT render in the
-      // Claimed lane (it isn't work being advanced) nor inflate the attention
-      // badge — it goes to a dedicated Held lane, same shape as the Parked
-      // (deferred) lane. Mirrors render_board_block's backend partition.
-      if (t.kind === 'lease') { held.push(t); continue; }
+      // an epic. A LIVE lease carries status='claimed' and goes to a dedicated
+      // Held lane — never the Claimed
+      // epic lane (it isn't work being advanced) nor the attention badge. An
+      // EXPIRED lease is downgraded by read_board to status:'open'/blank-owner;
+      // it holds nothing, so it is DROPPED (not rendered as an ownerless ghost)
+      // — matching render_board_block's Held filter (kind=='lease' AND
+      // status=='claimed').
+      if (t.kind === 'lease') { if (t.status === 'claimed') held.push(t); continue; }
+      // An epic on a LIVE block cooldown (stored status='open' but
+      // blocked_until in the future) goes to its own Blocked lane — NOT the
+      // Open lane (where it would read as "claim me"), mirroring the backend
+      // render_board_block partition. Once the cooldown lapses (blocked_until
+      // <= now) it falls back to Open automatically.
+      if (t.status === 'open' && Number(t.blocked_until || 0) > _nowMs) {
+        cols.blocked.push(t); continue;
+      }
       (cols[t.status] || cols.open).push(t);
     }
     // Board badge = live epics needing attention (open + claimed), not done,
-    // and NOT path leases (a held path is not an epic awaiting action).
+    // blocked (waiting on a gate), or path leases.
     _setTabCount('pbTabCountBoard', cols.open.length + cols.claimed.length);
     function lane(key, labelKey) {
       var cards = cols[key].map(_boardCard).join('') ||
@@ -977,12 +1212,25 @@
         ' <span class="pb-board-count">' + held.length + '</span></div>' +
         heldCards + '</div>';
     }
+    // Blocked lane (epics on a live cooldown) — rendered only when non-empty,
+    // its own lane with the block reason + retry-in so the human can see WHY
+    // an epic is stalled (the answer to "why is nothing happening").
+    var blockedLane = '';
+    if (cols.blocked.length) {
+      var blockedCards = cols.blocked.map(_blockedCard).join('');
+      blockedLane = '<div class="pb-board-lane pb-board-lane-blocked">' +
+        '<div class="pb-board-lane-head">' +
+        ((typeof Icon === 'function') ? Icon('ban', 12) : '') +
+        ' ' + _esc(_t('projectBrain.laneBlocked', 'Blocked (waiting on a gate)')) +
+        ' <span class="pb-board-count">' + cols.blocked.length + '</span></div>' +
+        blockedCards + '</div>';
+    }
     el.innerHTML =
       '<div class="pb-board-toolbar">' + newBtn + '</div>' +
       lane('open', 'projectBrain.laneOpen') +
       lane('claimed', 'projectBrain.laneClaimed') +
+      blockedLane +
       heldLane +
-      (cols.deferred.length ? lane('deferred', 'projectBrain.laneDeferred') : '') +
       lane('done', 'projectBrain.laneDone');
     // conv-chip click → open that conversation
     var chips = el.querySelectorAll('.pb-conv-chip');
@@ -1191,91 +1439,6 @@
     });
   }
 
-  // ── Always-visible per-conversation Influence BAR (docked on chat view) ──
-  // The full Influence lens (renderInfluence) lives inside the Project Brain
-  // overlay, which is closed by default. This bar is the ALWAYS-ON entry point
-  // docked on the conversation view itself: a slim chip strip summarising how
-  // THIS conversation is affected (bound by charter · N owned · M to avoid ·
-  // K awaiting), updated on every conversation switch, hidden when there's no
-  // influence. Same backend-authoritative source (Api.project.brainInfluence);
-  // clicking opens the full lens. NO second client-side computation.
-
-  /** Compute the same influence shape from a verdict → {charterActive, mine, avoid, pending}. */
-  function _influenceShape(inf) {
-    inf = inf || {};
-    var charter = inf.charter || {};
-    var board = inf.board || {};
-    return {
-      charterActive: !!charter.injected &&
-        (!!charter.content || (charter.decisions || []).length),
-      mine: (board.mine || []).length,
-      avoid: (board.avoid || []).length,
-      pending: (inf.pendingDecisions || []).length,
-    };
-  }
-
-  /**
-   * Render the inline conversation-influence bar from a backend verdict.
-   * Hides the bar entirely when nothing influences this conversation (a solo/
-   * empty project adds no chrome). Pure renderer of the structured verdict.
-   */
-  function renderConvInfluenceBar(inf) {
-    var bar = document.getElementById('convInfluenceBar');
-    if (!bar) return;
-    var s = _influenceShape(inf);
-    if (!s.charterActive && !s.mine && !s.avoid && !s.pending) {
-      bar.hidden = true;
-      bar.innerHTML = '';
-      return;
-    }
-    var chips = '';
-    // Lead glyph is a map-pin ("you are here in the project"), deliberately
-    // NOT the brain glyph the collab bar above uses — two identical brains
-    // stacked read as a duplicate. This bar is the conv-scoped sub-lens.
-    chips += '<span class="conv-inf-lead">' +
-      ((typeof Icon === 'function') ? Icon('mapPin', 13) : '') +
-      '<span>' + _esc(_t('projectBrain.barLead', 'This chat')) + '</span></span>';
-    if (s.charterActive) {
-      chips += _influenceChip('lightbulb', 1, 'infCharterBound',
-        'bound by charter', 'pb-inf-chip-charter');
-    }
-    chips += _influenceChip('package', s.mine, 'infOwns',
-      '{n} owned by you', 'pb-inf-chip-mine');
-    chips += _influenceChip('alertTriangle', s.avoid, 'infAvoid',
-      '{n} to avoid', 'pb-inf-chip-avoid');
-    chips += _influenceChip('messageSquare', s.pending, 'infPending',
-      '{n} awaiting you', 'pb-inf-chip-pending');
-    bar.innerHTML = chips;
-    bar.hidden = false;
-    bar.title = _t('projectBrain.barOpenHint', 'How THIS conversation is influenced — click to jump to its lens');
-  }
-
-  /**
-   * Resolve (path, active conv) and refetch the inline influence bar. Called
-   * by main.js on every conversation switch (window.convInfluenceRefresh) and
-   * by the live push refresh. Backend-authoritative — never recomputed here.
-   */
-  function refreshConvInfluenceBar() {
-    var bar = document.getElementById('convInfluenceBar');
-    var api = (typeof Api !== 'undefined' && Api.project) ? Api.project : null;
-    var path = _displayedProjectPath();
-    var convId = (typeof activeConvId !== 'undefined' && activeConvId)
-      ? activeConvId : '';
-    if (!api || typeof api.brainInfluence !== 'function' || !path || !convId) {
-      if (bar) { bar.hidden = true; bar.innerHTML = ''; }
-      return;
-    }
-    Promise.resolve(api.brainInfluence(path, convId)).then(function (inf) {
-      // A conversation switch may have landed mid-flight — drop a stale reply.
-      if (typeof activeConvId !== 'undefined' && inf && inf.convId &&
-          inf.convId !== activeConvId) return;
-      renderConvInfluenceBar(inf || {});
-    }).catch(function (e) {
-      if (typeof console !== 'undefined') console.warn('[ProjectBrain] conv-influence bar load failed', e);
-      if (bar) { bar.hidden = true; bar.innerHTML = ''; }
-    });
-  }
-
   // ── Live Charter/Board refresh ──────────────────────────────────
   // While the panel is open, ANY project-channel frame (board claim/complete,
   // charter propose/commit) debounce-refetches the Charter + Board columns so
@@ -1293,8 +1456,8 @@
         refreshCharter(path);
         refreshBoard(path);
         refreshInfluence(path);
-        refreshConvInfluenceBar();
         _refreshPeers(path);
+        _refreshStatus(path);
       }, 300);
     };
     pushSubscribe('project', '*', handler);
@@ -1335,6 +1498,7 @@
       refreshBoard(path);
       refreshInfluence(path);
       _refreshPeers(path);
+      _refreshStatus(path);
       _subscribePanelLive(path);
     }
   }
@@ -1345,6 +1509,15 @@
         window.ProjectBrainPeers &&
         typeof window.ProjectBrainPeers.refreshPeers === 'function') {
       window.ProjectBrainPeers.refreshPeers(path);
+    }
+  }
+
+  /** Drive the Status tab (project-brain-status.js) if it's loaded. */
+  function _refreshStatus(path) {
+    if (typeof window.ProjectBrainStatus !== 'undefined' &&
+        window.ProjectBrainStatus &&
+        typeof window.ProjectBrainStatus.refreshStatus === 'function') {
+      window.ProjectBrainStatus.refreshStatus(path);
     }
   }
 
@@ -1403,6 +1576,7 @@
       refreshCharter(path);
       refreshBoard(path);
       refreshInfluence(path);
+      _refreshStatus(path);
       _refreshPeers(path);
       _subscribePanelLive(path);
     } else if (path) {
@@ -1436,8 +1610,6 @@
     refreshBoard: refreshBoard,
     renderInfluence: renderInfluence,
     refreshInfluence: refreshInfluence,
-    renderConvInfluenceBar: renderConvInfluenceBar,
-    refreshConvInfluenceBar: refreshConvInfluenceBar,
     buildConvPreviewCard: buildConvPreviewCard,
     _fetchConvPreview: _fetchConvPreview,
     _showConvPreview: _showConvPreview,
@@ -1445,11 +1617,11 @@
     _initConvPreview: _initConvPreview,
     _onPush: _onPush,
     _state: _state,
+    _boardConvId: _boardConvId,
   };
   window.toggleProjectBrain = toggleProjectBrain;
   window.openProjectBrain = openProjectBrain;
   window.openProjectBrainInfluence = openProjectBrainInfluence;
   window.closeProjectBrain = closeProjectBrain;
   window.projectBrainRefresh = projectBrainRefresh;
-  window.convInfluenceRefresh = refreshConvInfluenceBar;
 })();

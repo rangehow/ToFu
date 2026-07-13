@@ -29,9 +29,7 @@ Run:  pytest tests/test_persist_vertical_block_relocate.py -v
 from __future__ import annotations
 
 import glob
-import importlib
 import os
-import subprocess
 import sys
 import tempfile
 import uuid
@@ -259,63 +257,32 @@ _NEUTER_REPLACE = "    vert_blocks = []  # NEUTERED: relocation disabled\n"
 
 @pytest.mark.unit
 def test_neuter_relocation_is_load_bearing():
-    """On-disk neuter: disable the relocation → the index loses the vertical block."""
-    with open(_PERSIST_SRC, encoding='utf-8') as f:
-        original = f.read()
-    assert _NEUTER_FIND in original, 'relocation lines not found — did the source drift?'
+    """In-memory neuter (xdist-safe): disable the relocation → the index loses
+    the vertical block. Uses the shared NC harness so the SHIPPED source is
+    opened read-only and never written — a crash can't poison the tree."""
+    from tests._nc_harness import neutered_source
 
-    neutered = original.replace(_NEUTER_FIND, _NEUTER_REPLACE, 1)
-    assert neutered != original
-
-    driver = (
-        "import glob, os, tempfile, uuid\n"
-        "from lib.tasks_pkg.compaction._persist import _persist_web_search_split\n"
-        "SEP='" + _SEP + "'\n"
-        "HDR='" + _VERT_HDR + "'\n"
-        "CLOSE='" + _VERT_CLOSE + "'\n"
-        "def one(n):\n"
-        "    body=('lorem ipsum dolor '*40+'\\n')*1000\n"
-        "    return f'[{n}] Result {n}\\nURL: https://example.com/{n}\\n──── Full Page Content ────\\n'+body\n"
-        "vb=f'{HDR} (academic: HF) ═══\\n\\n## Papers\\n- X\\n\\n{CLOSE}\\n\\n'\n"
-        "content=vb+SEP.join(one(i) for i in range(1,5))\n"
-        "with tempfile.TemporaryDirectory() as d:\n"
-        "    idx=_persist_web_search_split(content, d, 'neut'+uuid.uuid4().hex[:6])\n"
-        "    files=[open(p,encoding='utf-8').read() for p in glob.glob(os.path.join(d,'search_*.txt'))]\n"
-        "in_index = HDR in idx\n"
-        "in_files = any(HDR in b for b in files)\n"
-        "print('IN_INDEX=%s IN_FILES=%s' % (in_index, in_files))\n"
-    )
-
-    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    try:
-        with open(_PERSIST_SRC, 'w', encoding='utf-8') as f:
-            f.write(neutered)
-        # Run in a FRESH subprocess so the neutered module is imported clean.
-        proc = subprocess.run(
-            [sys.executable, '-c', driver],
-            capture_output=True, text=True, cwd=root, timeout=120,
-        )
-    finally:
-        with open(_PERSIST_SRC, 'w', encoding='utf-8') as f:
-            f.write(original)
-
-    # Restore is byte-identical.
-    with open(_PERSIST_SRC, encoding='utf-8') as f:
-        assert f.read() == original, 'source not restored byte-identical'
-
-    out = proc.stdout.strip()
-    assert 'IN_INDEX=' in out, f'driver failed: stdout={proc.stdout!r} stderr={proc.stderr[-800:]!r}'
-    # With the fix neutered: the header is NOT in the index (bug reproduced),
-    # and IS glued into a split file.
-    assert 'IN_INDEX=False' in out, f'neuter did not drop the block from the index: {out}'
-    assert 'IN_FILES=True' in out, f'neuter should leave the block glued in a split file: {out}'
+    with neutered_source(_PERSIST_SRC, _NEUTER_FIND, _NEUTER_REPLACE) as _p:
+        # The swapped module's own _persist_web_search_split is the neutered one.
+        content = _make_single_search_content()
+        with tempfile.TemporaryDirectory() as d:
+            idx = _p._persist_web_search_split(content, d, 'neut' + uuid.uuid4().hex[:6])
+            files = [open(p, encoding='utf-8').read()
+                     for p in glob.glob(os.path.join(d, 'search_*.txt'))]
+        # With the fix neutered: the header is NOT in the index (bug reproduced),
+        # and IS glued into a split file.
+        assert idx is not None
+        assert _VERT_HDR not in idx, \
+            'neuter did not drop the block from the index'
+        assert any(_VERT_HDR in b for b in files), \
+            'neuter should leave the block glued in a split file'
 
 
 @pytest.mark.unit
 def test_source_restored_and_reimport_still_works():
-    """After the neuter test restores the file, a fresh import still relocates."""
+    """After the in-memory neuter context exits, the canonical module still
+    relocates (it was never mutated/reloaded)."""
     import lib.tasks_pkg.compaction._persist as _p
-    importlib.reload(_p)
     content = _make_single_search_content()
     with tempfile.TemporaryDirectory() as d:
         index = _p._persist_web_search_split(content, d, 'restorechk')

@@ -19,11 +19,12 @@ Schema is bootstrapped once into the forced test SQLite DB (autouse fixture),
 mirroring tests/test_artifacts_meta_sanitize.py.
 """
 
-import importlib
 import os
 import threading
 
 import pytest
+
+from tests._nc_harness import patch_restore as _patch_restore
 
 pytestmark = pytest.mark.unit
 
@@ -353,8 +354,13 @@ def test_auto_path_emits_one_run_concluded(flask_app, monkeypatch):
     # CALLER wiring, not the report content.
     monkeypatch.setattr(autopilot, 'run_summary_reporter',
                         lambda task: {'text': 'All green. Shipped pillar #1.'})
-    monkeypatch.setattr(autopilot, '_store_run_summary',
-                        lambda conv_id, run_id, text, translated='': {'runId': run_id})
+    # _emit_run_summary persists via _store_run_record (the single-source
+    # sidecar writer); _store_run_summary is only a thin task_done wrapper the
+    # auto path no longer calls directly. Stub the real writer so the caller
+    # reaches _emit_run_concluded (a None record would short-circuit it).
+    monkeypatch.setattr(autopilot, '_store_run_record',
+                        lambda conv_id, run_id, *, reason='task_done', text='',
+                        translated='': {'runId': run_id, 'status': 'concluded'})
     monkeypatch.setattr(autopilot, '_translate_summary_sync', lambda t: '')
     task = {'id': 'task-auto-1', 'convId': 'conv-auto',
             'config': {'projectPath': '/proj/auto'}}
@@ -477,31 +483,12 @@ _MANAGER_SRC = os.path.join(os.path.dirname(__file__), '..',
                             'lib', 'tasks_pkg', 'manager.py')
 
 
-def _patch_restore(path, old, new, run):
-    """Replace `old`→`new` in file at `path`, run `run()`, restore byte-identical."""
-    with open(path, encoding='utf-8') as f:
-        original = f.read()
-    assert old in original, f'anchor not found for NC patch in {path}'
-    try:
-        with open(path, 'w', encoding='utf-8') as f:
-            f.write(original.replace(old, new, 1))
-        run()
-    finally:
-        with open(path, 'w', encoding='utf-8') as f:
-            f.write(original)
-    # prove byte-identical restore
-    with open(path, encoding='utf-8') as f:
-        assert f.read() == original, 'source not restored byte-identical'
-
-
 def test_NC1_seq_constant_breaks_monotonicity(flask_app):
     """NC-1: freeze seq to a constant → concurrent/sequential emits collide."""
 
     def run():
         import lib.conversations.project_feed as pf
-        importlib.reload(pf)
-        # re-stub push on the reloaded module's dependency is unnecessary
-        # (push import is lazy); just drive sequential emits on one project.
+        # just drive sequential emits on one project.
         failed = False
         with flask_app.app_context():
             from lib.database import DOMAIN_CHAT, get_thread_db
@@ -525,9 +512,6 @@ def test_NC1_seq_constant_breaks_monotonicity(flask_app):
         "seq = 1  # NC-1",
         run,
     )
-    # restore the module after the reload-based NC so later tests use real code
-    import lib.conversations.project_feed as pf
-    importlib.reload(pf)
 
 
 def test_NC2_neutered_started_callsite_breaks_exactly_once(flask_app, monkeypatch):
@@ -536,7 +520,6 @@ def test_NC2_neutered_started_callsite_breaks_exactly_once(flask_app, monkeypatc
 
     def run():
         from lib.tasks_pkg import manager as mgr
-        importlib.reload(mgr)
         captured = []
         import lib.conversations.project_feed as pf
         monkeypatch.setattr(pf, 'emit_project_event',
@@ -558,9 +541,6 @@ def test_NC2_neutered_started_callsite_breaks_exactly_once(flask_app, monkeypatc
         "            pass  # NC-2",
         run,
     )
-    # restore manager module
-    from lib.tasks_pkg import manager as mgr
-    importlib.reload(mgr)
 
 
 
@@ -576,7 +556,6 @@ def test_NC3_neutered_run_concluded_callsite_breaks_rollup(flask_app, monkeypatc
 
     def run():
         from lib.tasks_pkg import autopilot as ap
-        importlib.reload(ap)
         captured = []
         import lib.conversations.project_feed as pf
         monkeypatch.setattr(pf, 'emit_project_event',
@@ -594,10 +573,7 @@ def test_NC3_neutered_run_concluded_callsite_breaks_rollup(flask_app, monkeypatc
 
     _patch_restore(
         _AUTOPILOT_SRC,
-        "    _emit_run_concluded(conv_id, run_id, report['text'], task.get('config'))\n",
+        "    _emit_run_concluded(conv_id, run_id, text, task.get('config'))\n",
         "    pass  # NC-3\n",
         run,
     )
-    # restore autopilot module
-    from lib.tasks_pkg import autopilot as ap
-    importlib.reload(ap)

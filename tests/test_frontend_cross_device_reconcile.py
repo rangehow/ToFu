@@ -92,6 +92,13 @@ global.clearTimeout = () => {};
 // Count reconciling loads.
 let loadCalls = 0;
 global.loadConversationsFromServer = async () => { loadCalls++; };
+// The reconcile fn piggybacks the /api/v1/chat/active probe for its stale-pin
+// sweep (Api.chat.active). Stub it so the fn doesn't throw ReferenceError.
+global.Api = { chat: { active: async () => [] } };
+global.pushIsConnected = () => false;
+global._healStuckPlaceholder = () => false;
+global.AbortSignal = { timeout: () => null };
+global.requestIdleCallback = null;
 
 const SRC = fs.readFileSync(process.argv[2], 'utf8');
 
@@ -101,13 +108,20 @@ function loadModule(src) {
 }
 
 // Reset per-scenario state.
+//
+// ★ `_bootLoadInFlight` is now a self-healing LEASE: the source defines it as a
+//   FUNCTION (predicate) plus _acquireBootLoad/_releaseBootLoad, and stores the
+//   acquire TIMESTAMP (not a bare boolean) in window._bootLoadInFlight. So the
+//   harness must NOT overwrite window._bootLoadInFlight with a boolean (that
+//   would clobber the predicate the source reads). Release via the real helper;
+//   simulate a HELD lease by acquiring one (fresh timestamp → predicate true).
 function reset(state) {
   loadCalls = 0;
-  window._bootLoadInFlight = false;
+  _releaseBootLoad();
   global.document.visibilityState = state.vis || 'visible';
   global.activeStreams = state.streams || new Map();
   global._editingMsgIdx = ('editing' in state) ? state.editing : null;
-  if ('inFlight' in state) window._bootLoadInFlight = state.inFlight;
+  if (state.inFlight) _acquireBootLoad();
 }
 
 // Await microtasks so the async loadConversationsFromServer + .finally settle.
@@ -125,10 +139,10 @@ const flush = () => new Promise((r) => setImmediate(r));
     reset({ vis: 'visible', streams: new Map(), editing: null });
     const ret = _crossDeviceReconcile();
     check('idle_returned_true', ret === true);
-    check('idle_latch_set_sync', window._bootLoadInFlight === true);
+    check('idle_latch_set_sync', _bootLoadHeld() === true);
     await flush();
     check('idle_loaded_once', loadCalls === 1);
-    check('idle_latch_cleared', window._bootLoadInFlight === false);
+    check('idle_latch_cleared', _bootLoadHeld() === false);
   }
 
   // ══ 2. ACTIVE STREAM → suppressed ══
@@ -139,7 +153,7 @@ const flush = () => new Promise((r) => setImmediate(r));
     await flush();
     check('stream_suppressed_ret', ret === false);
     check('stream_no_load', loadCalls === 0);
-    check('stream_latch_untouched', window._bootLoadInFlight === false);
+    check('stream_latch_untouched', _bootLoadHeld() === false);
   }
 
   // ══ 3. HIDDEN TAB → suppressed ══
@@ -167,7 +181,7 @@ const flush = () => new Promise((r) => setImmediate(r));
     await flush();
     check('inflight_suppressed_ret', ret === false);
     check('inflight_no_load', loadCalls === 0);
-    check('inflight_latch_preserved', window._bootLoadInFlight === true);
+    check('inflight_latch_preserved', _bootLoadHeld() === true);
   }
 
   // ══ 6. DOUBLE-NEUTER: strip the idle guard → it fires when it shouldn't ══

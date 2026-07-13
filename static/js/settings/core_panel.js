@@ -97,6 +97,9 @@ function switchSettingsTab(tabId) {
   if (tabId === 'preferences' && typeof _populatePreferencesTab === 'function') {
     _populatePreferencesTab();
   }
+  if (tabId === 'speech' && typeof _refreshSttStatus === 'function') {
+    _refreshSttStatus();
+  }
 }
 
 async function _loadServerConfig() {
@@ -180,6 +183,15 @@ function openSettings() {
     kthCb.checked = config.keepToolHistory !== false; // default true
   }
 
+  // Per-tool inline timeline (segment render) toggle — defaults to true.
+  //   Owner-facing switch for the interleaved per-tool render on the
+  //   static/DB path (epic pt_8b406df8fbe24ae5). Backed by config.segmentTimeline
+  //   (persisted client config), not a raw localStorage key.
+  var segTlCb = document.getElementById('settingSegmentTimeline');
+  if (segTlCb) {
+    segTlCb.checked = config.segmentTimeline !== false; // default true
+  }
+
   // Auto-generate conversation title toggle — defaults to false (manual)
   var agtCb = document.getElementById('settingAutoGenerateTitle');
   if (agtCb) {
@@ -205,33 +217,28 @@ function openSettings() {
   // Load OAuth status
   _loadOAuthStatus();
 
-  // Show version in footer + (config-gated) mobile-client download entry.
+  // Show version + the mobile-client download link in the footer. Both read
+  // from GET /api/health in one call. The link is config-gated: it renders only
+  // when the server exposes `mobile_client_url` (TOFU_MOBILE_CLIENT_URL /
+  // DEFAULT_MOBILE_CLIENT_URL) — otherwise it stays hidden so no dead link ever
+  // ships before a release APK exists. Moved here from the topbar: it's a
+  // one-time action, so it belongs in Settings rather than the always-visible
+  // bar (see routes/common.py mobile_client_url).
   var verEl = document.getElementById('settingsVersion');
-  if (verEl) {
-    Api.health.info().then(function(d){
-      if(d && d.version) verEl.textContent = 'v' + d.version;
-      // Discreet mobile-client link — renders ONLY when the server exposes a
-      // download URL (TOFU_MOBILE_CLIENT_URL). Absent → stays hidden, no dead
-      // button. SVG glyph per §3.4 (no emoji), no raw fetch (piggybacks health).
-      var mcEl = document.getElementById('settingsMobileClient');
-      if (mcEl) {
-        var url = d && d.mobile_client_url;
-        if (url) {
-          mcEl.href = url;
-          mcEl.innerHTML =
-            '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" ' +
-            'stroke="currentColor" stroke-width="2" stroke-linecap="round" ' +
-            'stroke-linejoin="round" aria-hidden="true">' +
-            '<rect x="5" y="2" width="14" height="20" rx="2" ry="2"></rect>' +
-            '<line x1="12" y1="18" x2="12" y2="18"></line></svg>' +
-            '<span>' + t('settings.mobileClient') + '</span>';
-          mcEl.style.display = '';
-        } else {
-          mcEl.style.display = 'none';
-        }
+  Api.health.info().then(function(d){
+    if (verEl && d && d.version) verEl.textContent = 'v' + d.version;
+    var mcEl = document.getElementById('settingsMobileClient');
+    if (mcEl) {
+      var url = d && d.mobile_client_url;
+      if (url) {
+        mcEl.href = url;
+        mcEl.innerHTML = '<img src="static/icons/tofu-welcome.svg" alt="Tofu" width="15" height="15"> ' + t('settings.mobileClient');
+        mcEl.style.display = '';
+      } else {
+        mcEl.style.display = 'none';
       }
-    }).catch(function(){});
-  }
+    }
+  }).catch(function(){});
 
   // Show loading states
   var provList = document.getElementById('stgProviderList');
@@ -274,6 +281,7 @@ function openSettings() {
     _populateAdvancedTab(cfg);
     _populateFeishuTab(cfg);
     _populateMtProviderSection(cfg);
+    if (typeof _populateSpeechTab === 'function') _populateSpeechTab(cfg);
     _populateMcpTab();
     if (typeof _populateSkillsTab === 'function') _populateSkillsTab();
     if (typeof _populatePreferencesTab === 'function') _populatePreferencesTab();

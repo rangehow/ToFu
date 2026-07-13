@@ -113,7 +113,8 @@ class _Patched:
             return ({'role': 'assistant', 'content': body, 'tool_calls': None},
                     'stop', {'prompt_tokens': 1, 'completion_tokens': 1})
 
-        def _fake_execute_report_tool(name, args_str, user_question='', abort=None):
+        def _fake_execute_report_tool(name, args_str, user_question='', abort=None,
+                                      force_vertical=None):
             rec.executed_tools.append(name)
             return ('SEARCH RESULT: Large Language Diffusion Models (arXiv:2502.09992) '
                     'appeared at ICML 2025.', [{'title': 'x'}], None, None, None)

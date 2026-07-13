@@ -106,6 +106,24 @@
       '" style="vertical-align:middle;flex-shrink:0"><circle cx="12" cy="12" r="10"/></svg>';
   }
 
+  // Welcome-screen capability chips — icon + label. Shared by the three
+  // welcome render sites (index.html static markup, newChat(), renderChat()'s
+  // empty-conv branch) so the pill set stays identical everywhere.
+  var _WELCOME_PILLS = [
+    ['brain',   'Extended Thinking'],
+    ['search',  'Search'],
+    ['download', 'URL Fetch'],
+    ['image',   'Image Input'],
+    ['zap',     'Co-Pilot'],
+    ['compass', 'Browser'],
+  ];
+  function _welcomePillsHtml() {
+    return _WELCOME_PILLS.map(function (p) {
+      return '<span class="feature-pill">' + Icon(p[0], 13) + p[1] + '</span>';
+    }).join('');
+  }
+
   window.Icon = Icon;
   window.IconDot = IconDot;
+  window._welcomePillsHtml = _welcomePillsHtml;
 })();

@@ -145,7 +145,8 @@ def _close_inheritable_listen_sockets():
     # potentially huge SC_OPEN_MAX range; fall back to a bounded range elsewhere.
     try:
         fds = [int(name) for name in os.listdir('/proc/self/fd') if name.isdigit()]
-    except OSError:
+    except OSError as e:
+        logger.debug('[Update] /proc/self/fd unavailable (%s) — scanning bounded FD range', e)
         _max = os.sysconf('SC_OPEN_MAX') if hasattr(os, 'sysconf') else 4096
         fds = range(3, min(_max, 65536))
     closed = 0
@@ -156,7 +157,8 @@ def _close_inheritable_listen_sockets():
             if os.get_inheritable(fd):
                 os.set_inheritable(fd, False)
                 closed += 1
-        except OSError:
+        except OSError as e:
+            logger.debug('[Update] could not clear inheritable flag on fd %d: %s', fd, e)
             continue
     if closed:
         logger.info('[Update] Cleared inheritable flag on %d FD(s) before re-exec '
@@ -173,6 +175,13 @@ def _deferred_reexec(delay: float = 0.6):
     time.sleep(delay)
     logger.info('[Update] Re-execing server: %s %s',
                 sys.executable, ' '.join(sys.argv))
+    # Flip the clean-shutdown dirty-bit: an in-place re-exec is a controlled
+    # exit, so the fresh image must NOT flag the previous PID as an OS kill.
+    try:
+        from lib.shutdown_marker import mark_clean
+        mark_clean('restart')
+    except Exception as _sm_e:
+        logger.warning('[Update] mark_clean(restart) failed: %s', _sm_e)
     try:
         # Let the env-reexec guard run again from a clean slate.
         os.environ.pop('_TOFU_ENV_REEXEC', None)
@@ -212,6 +221,54 @@ def update_restart():
     threading.Thread(target=_deferred_reexec, name='tofu-restart',
                      daemon=True).start()
     return api_ok({'restarting': True})
+
+
+def _deferred_shutdown(delay: float = 0.6):
+    """Gracefully stop the server after a short delay (response flushes first).
+
+    Marks the clean-shutdown dirty-bit ``manual`` FIRST, then raises SIGTERM on
+    ourselves so the existing handler (server.py) drains in-flight requests and
+    exits cleanly. Because the marker is already ``clean``, the NEXT boot
+    classifies this exit as a deliberate manual stop — NOT an OS kill — so
+    recovery leaves those turns tagged ``manual`` and does not auto-recover
+    them. Runs in a daemon thread.
+    """
+    import signal as _signal
+    time.sleep(delay)
+    try:
+        from lib.shutdown_marker import mark_clean
+        mark_clean('manual')
+    except Exception as e:
+        logger.warning('[Shutdown] mark_clean(manual) failed: %s', e)
+    logger.warning('[Shutdown] Manual shutdown requested — raising SIGTERM (pid=%d)',
+                   os.getpid())
+    try:
+        os.kill(os.getpid(), _signal.SIGTERM)
+    except OSError as e:
+        logger.critical('[Shutdown] SIGTERM to self failed: %s', e, exc_info=True)
+
+
+@api_v1_update_bp.route('/api/v1/update/shutdown', methods=['POST'])
+@require_scope('admin')
+@api_meta(
+    summary='Shut the server down (manual, graceful)',
+    description=(
+        'Marks the clean-shutdown dirty-bit as a MANUAL stop, then gracefully '
+        'stops the server (drains in-flight requests via SIGTERM). This is the '
+        'operator marker for a deliberate shutdown: the next boot classifies '
+        'the exit as intentional rather than an OS SIGKILL/OOM, so '
+        'crash-recovery does NOT auto-recover the interrupted turns. Unlike '
+        'restart there is no re-exec — the process exits and does not come '
+        'back on its own.'
+    ),
+    tags=['system'],
+)
+def update_shutdown():
+    audit_log('manual_shutdown', pid=os.getpid())
+    logger.warning('[Shutdown] Manual shutdown requested (pid=%d)', os.getpid())
+    threading.Thread(target=_deferred_shutdown, name='tofu-shutdown',
+                     daemon=True).start()
+    return api_ok({'shuttingDown': True})
 
 
 __all__ = ['api_v1_update_bp']

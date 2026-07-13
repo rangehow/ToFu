@@ -54,8 +54,9 @@ const { document, check, report } = setup({
   html: '<!DOCTYPE html><body>'
       + '<div id="streaming-msg" data-msg-id="mLive"><div id="streaming-body"></div></div>'
       + '</body>',
-  // streaming_ui.js (argv[2]) then translation.js (argv[4]).
-  targets: [process.argv[2], process.argv[4]],
+  // streaming_ui.js (argv[2]), translation.js (argv[4]),
+  // ui/translation_render.js (argv[5] — the relocated _renderStreamingTranslatePreview).
+  targets: [process.argv[2], process.argv[4], process.argv[5]],
   globals: {
     activeConvId: 'c1',
     conversations: [{ id: 'c1', messages: [
@@ -178,7 +179,8 @@ def test_streaming_translate_render_unification():
     run_harness(
         target_js=os.path.join(JS_DIR, 'ui', 'streaming_ui.js'),
         body_js=_BODY,
-        extra_targets=[os.path.join(JS_DIR, 'translation.js')],
+        extra_targets=[os.path.join(JS_DIR, 'translation.js'),
+                       os.path.join(JS_DIR, 'ui', 'translation_render.js')],
         min_pass=15,
         label='streaming-translate-unified',
     )
@@ -206,7 +208,7 @@ const { document, check, report } = setup({
   html: '<!DOCTYPE html><body>'
       + '<div id="streaming-msg" data-msg-id="mLive"><div id="streaming-body"></div></div>'
       + '</body>',
-  targets: [process.argv[2], process.argv[4]],
+  targets: [process.argv[2], process.argv[4], process.argv[5]],
   globals: {
     activeConvId: 'c1',
     conversations: [{ id: 'c1', messages: [
@@ -229,7 +231,8 @@ const { document, check, report } = setup({
 
 const body = document.getElementById('streaming-body');
 _ensureStreamZones(body);
-// Simulate the live tool panel: two rounds, each its own .ptool-turn group
+// NB targets includes translation_render.js (argv[5]) for the relocated painter.
+// Simulate the live tool panel (interleave): two rounds, each its own .ptool-turn group
 // with one tool slot (as _syncToolRoundsDOM builds them).
 const toolZone = body.querySelector('[data-zone="tool"]');
 toolZone.innerHTML =
@@ -316,7 +319,8 @@ def test_streaming_translate_per_round_interleave():
     run_harness(
         target_js=os.path.join(JS_DIR, 'ui', 'streaming_ui.js'),
         body_js=_BODY_INTERLEAVE,
-        extra_targets=[os.path.join(JS_DIR, 'translation.js')],
+        extra_targets=[os.path.join(JS_DIR, 'translation.js'),
+                       os.path.join(JS_DIR, 'ui', 'translation_render.js')],
         min_pass=11,
         label='streaming-translate-interleave',
     )

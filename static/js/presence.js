@@ -4,16 +4,26 @@
    A single slim line docked under the top bar (project mode only, shown only
    when there is something collaborative to surface). It REPLACES the old
    multi-row "who's working" presence strip — which merely echoed activity you
-   already see in the sidebar — with the Project Brain's coordination state,
-   ordered by ACTION VALUE:
+   already see in the sidebar — with the Project Brain's coordination state:
+   a plain "Project" label leads, followed by the action-ordered counts:
 
        🧠 Project · N decisions awaiting you · M epics in progress ·
           K open · P conversations online
 
-   "decisions awaiting you" comes first because it is the only thing that needs
+   The bar deliberately does NOT surface the Pillar #7 ambient status headline
+   (summary.statusLine — the first sentence of the latest synthesized
+   project-status snapshot): a one-line narrative truncated to fit the bar
+   carries no useful signal and pushes the counts around. The full snapshot
+   lives in the Project Brain Status tab, one click away. "decisions awaiting
+   you" comes first among the counts because it is the only thing that needs
    the human to act (the Charter human-gate). Each online peer is joined to the
    epic it is *advancing* (summary.peerEpics: convId → epic title) so the bar
    shows "conversation X · «Refactor the parser»", not "(untitled) · generating".
+
+   This bar is PROJECT-scoped only. The per-conversation influence lens ("how
+   is THIS chat affected — bound by charter / owns / must avoid") lives in full
+   inside the Project Brain panel, one click away; it is deliberately NOT
+   duplicated onto this always-visible line.
 
    Clicking the whole bar opens the full three-column Project Brain panel.
 
@@ -63,8 +73,7 @@
   }
 
   function _esc(s) {
-    return (typeof escapeHtml === "function") ? escapeHtml(String(s == null ? "" : s))
-      : String(s == null ? "" : s);
+    return escapeHtml(String(s == null ? "" : s));
   }
 
   function _t(key, params, fallback) {
@@ -167,17 +176,28 @@
     const peerCount = convSet.size;
     const summary = _summary.get(root) || null;
 
+    // The bar leads with the plain "Project" label. The Pillar #7 ambient
+    // status headline is intentionally NOT surfaced here: a one-line narrative
+    // truncated to fit the bar carries no useful signal. The full synthesized
+    // snapshot lives in the Project Brain Status tab, one click away.
+    const leadHTML = `<span class="collab-label">${_esc(_t("collab.project", null, "Project"))}</span>`;
+
+    // ── Coordination counts (brainSummary — decisions/epics/peers) ──
     const segs = _segments(summary, peerCount);
-    // Nothing collaborative to surface (solo, empty board, no pending) → hide.
-    if (segs.length === 0) {
+    const hasDecisions = !!(summary && (summary.pendingDecisions || 0) > 0);
+    const hasConflicts = !!(summary && (summary.conflicts || 0) > 0);
+
+    // Nothing to surface at all (solo, empty board) → hide the whole bar. The
+    // bar shows only when there is at least one coordination count.
+    if (!segs.length) {
       if (_lastFingerprint !== "") { el.hidden = true; el.innerHTML = ""; _lastFingerprint = ""; }
       return;
     }
 
-    const hasDecisions = summary && (summary.pendingDecisions || 0) > 0;
-    const hasConflicts = summary && (summary.conflicts || 0) > 0;
     const segHTML = segs.map(s => `<span class="collab-seg ${s.cls}">${s.html}</span>`)
       .join('<span class="collab-sep">·</span>');
+    // A separator between the lead and the counts only when counts exist.
+    const leadSep = segs.length ? `<span class="collab-sep">·</span>` : "";
     const epicLines = _peerEpicLines(summary, convSet, selfId);
     const epicHTML = epicLines.length
       ? `<span class="collab-peer-epics">${epicLines.join("")}</span>` : "";
@@ -188,6 +208,15 @@
       ? `<span class="collab-conflicts">` + conflictMsgs.map(m =>
           `<span class="collab-conflict-line">${_esc(m)}</span>`).join("") + `</span>`
       : "";
+    const projectHTML =
+      `<span class="collab-cluster collab-cluster-project">`
+      + `<span class="collab-brain">${_BRAIN_SVG}</span>`
+      + leadHTML
+      + leadSep
+      + segHTML
+      + epicHTML
+      + conflictHTML
+      + `</span>`;
 
     const cls = "collab-bar-inner"
       + (hasConflicts ? " collab-has-conflicts" : "")
@@ -195,12 +224,7 @@
     const html =
       `<button type="button" class="${cls}" `
       + `data-testid="collab-bar" title="${_esc(_t("collab.openBrain", null, "Open Project Brain"))}">`
-      + `<span class="collab-brain">${_BRAIN_SVG}</span>`
-      + `<span class="collab-label">${_esc(_t("collab.project", null, "Project"))}</span>`
-      + `<span class="collab-sep">·</span>`
-      + segHTML
-      + epicHTML
-      + conflictHTML
+      + projectHTML
       + `</button>`;
 
     const fp = root + "|" + html;

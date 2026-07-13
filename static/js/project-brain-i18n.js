@@ -40,14 +40,20 @@
 var ProjectBrainI18n = (function () {
   'use strict';
 
-  var PREF_KEY = 'tofu_pb_translate';   // '1' | '0' (PB-scoped, default OFF)
+  var PREF_KEY = 'tofu_pb_translate';   // '1' | '0' (PB-scoped, default ON)
   var POOL_LIMIT = 6;                   // max concurrent translate requests
   var _memCache = Object.create(null);  // "hash|lang" → translated string
 
   // ── Preference (Project-Brain-scoped, NOT the chat autoTranslate flag) ──
+  // Default ON (opt-out): the Project Brain content (charter north-star +
+  // committed decisions, board titles, activity/peer notes) is agent-authored
+  // and often in a different language than the UI. Showing it in the UI
+  // language by default is the expected behaviour; the already-target CJK gate
+  // keeps a same-language surface at ZERO cost, so default-on is free when the
+  // content already matches the UI language. Only an explicit '0' disables it.
   function isEnabled() {
-    try { return localStorage.getItem(PREF_KEY) === '1'; }
-    catch (_e) { return false; }
+    try { return localStorage.getItem(PREF_KEY) !== '0'; }
+    catch (_e) { return true; }
   }
   function _setEnabled(on) {
     try { localStorage.setItem(PREF_KEY, on ? '1' : '0'); }
@@ -92,13 +98,18 @@ var ProjectBrainI18n = (function () {
     }
     return h.toString(36);
   }
-  function _cacheKey(src, target) { return _hash32(src) + '|' + target; }
+  // Cache-key version salt. Bump when a translation-quality fix could make a
+  // PREVIOUSLY-cached entry wrong (e.g. v2: truncated bodies are no longer
+  // cached — old entries may hold a mid-sentence partial). Bumping it makes
+  // every prior (src,target) key miss so the stale partial is never served
+  // again; a fresh (now complete) translation replaces it under the new key.
+  var _CACHE_VER = 'v2';
+  function _cacheKey(src, target) {
+    return _hash32(src) + '|' + target + '|' + _CACHE_VER;
+  }
 
   function _esc(s) {
-    if (typeof escapeHtml === 'function') return escapeHtml(String(s == null ? '' : s));
-    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
-      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
-    });
+    return escapeHtml(String(s == null ? '' : s));
   }
 
   // ── IndexedDB persistence (best-effort, fail-open) ──────────────
@@ -228,7 +239,16 @@ var ProjectBrainI18n = (function () {
     return Promise.resolve(
       api.run({ text: src, targetLang: target, sourceLang: '' }, { onError: 'null' })
     ).then(function (d) {
-      if (d && d._ok && d.translated) return d.translated;
+      // Refuse a KNOWN-incomplete translation: the engine flags a body it had
+      // to accept mid-truncation with `truncated:true`. Showing it would
+      // REPLACE the complete original (preserved in data-pb-src) with a
+      // cut-off view — the reported "displayed incompletely" bug. Returning
+      // null keeps the full original visible (in its source language) and
+      // skips the IDB cache so a later pass can re-translate completely.
+      if (d && d._ok && d.translated && !d.truncated) return d.translated;
+      if (d && d.truncated && typeof console !== 'undefined') {
+        console.warn('[PB-i18n] dropping truncated translation, keeping original');
+      }
       return null;
     }).catch(function (e) {
       if (typeof console !== 'undefined') console.warn('[PB-i18n] translate failed:', e && e.message);

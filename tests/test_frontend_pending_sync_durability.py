@@ -261,9 +261,13 @@ def test_reconcile_pending_term_double_neuter():
     conv_js = os.path.join(JS_DIR, 'core', 'conversations.js')
     with open(conv_js, encoding='utf-8') as f:
         src = f.read()
-    frag = '_localHasPendingSync ||\n'
+    # `_localHasPendingSync` is the FINAL disjunct of localHasUnsynced (the old
+    # third `localNewest > serverNewest` term was removed in the rev-CAS
+    # refactor), so it carries no trailing `||`. Neuter by removing the ` ||`
+    # that joins it plus the term itself, leaving only _hasFreshLocalActivity.
+    frag = ' ||\n      _localHasPendingSync;'
     assert frag in src, 'pending term fragment drifted — update the neuter target'
-    neutered = src.replace(frag, '', 1)
+    neutered = src.replace(frag, ';', 1)
     m = re.search(r'const localHasUnsynced\s*=([\s\S]*?);', neutered)
     assert m, 'neutered source lost the localHasUnsynced anchor'
     assert '_localHasPendingSync' not in m.group(1), (

@@ -7,7 +7,8 @@ The load-bearing contract:
     cache_control markers, tool-call `arguments` key reordering (the
     ensure_ascii=False re-dump on the anthropic path).
   * REAL content changes the server WOULD see are CAUGHT and named: a mutated
-    tool result, a re-encoded image (the _downscale threshold=5 retro-shrink).
+    tool result, a re-encoded image (e.g. the _downscale first-send shrink to
+    the uniform 1568px cap).
   * OpenAI-shape and Anthropic-shape messages for the SAME conversation
     produce the SAME fingerprint (a protocol switch alone is not a change).
 
@@ -76,8 +77,9 @@ def test_mutated_tool_result_caught():
 
 
 def test_reencoded_image_caught():
-    """The _downscale threshold=5 retro-shrink re-encodes an image → new
-    base64 bytes. The canonicaliser hashes image identity, so this shows."""
+    """A _downscale re-encode (shrinking an oversized image to the uniform
+    1568px cap) produces new base64 bytes. The canonicaliser hashes image
+    identity, so this shows."""
     a = [{'role': 'user', 'content': [
         {'type': 'text', 'text': 'x'},
         {'type': 'image_url', 'image_url': {'url': 'data:image/png;base64,AAAA'}}]}]

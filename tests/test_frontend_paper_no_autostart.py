@@ -143,7 +143,11 @@ function reportBtn(id) {
   check('report_button_present', !!rbtn);
   check('report_button_wired', !!rbtn && rbtn.getAttribute('onclick') === '_generatePaperReport()');
   // Steps 1-3 still ran (we exercised the real loader, not a short-circuit).
-  check('report_lookup_and_cache_consulted', calls.lookup === 1 && calls.cache === 1);
+  // cache is consulted TWICE on a clean miss: once for the active language,
+  // then step 3.5 probes the OTHER report language before falling through to
+  // the Generate prompt (so a report generated in the other language is shown
+  // instead of the manual trigger). Both miss here → Generate prompt renders.
+  check('report_lookup_and_cache_consulted', calls.lookup === 1 && calls.cache === 2);
 
   // Clicking Generate (invoking the wired fn) DOES start — proving the manual
   // path works AND that the no-start assertion above can distinguish states.

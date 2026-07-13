@@ -194,8 +194,30 @@ function _convRenderFingerprint(conv) {
     ":" +
     (last._igError ? "IGE" : "") +
     ":" +
-    (conv.title || "")
+    (conv.title || "") +
+    /* Autopilot run summaries live in a SIDECAR (conv.autopilotSummaries),
+     * NOT in conv.messages — so a background-sync / settings-round-trip that
+     * delivers a newly-concluded report leaves every message-derived term
+     * above unchanged, and Guard 2 would skip the re-render that surfaces the
+     * inline summary panel. Fold a cheap digest (count + per-run status/report
+     * length) so an arriving/growing report bumps the fingerprint. */
+    ":" +
+    _apSummariesFp(conv)
   );
+}
+/* Cheap fingerprint of the autopilot run-summary sidecar — count of runs plus
+ * each run's reason + report length, so a newly-arrived or newly-populated
+ * concluded record changes the value and forces a re-render. */
+function _apSummariesFp(conv) {
+  const s = conv && conv.autopilotSummaries;
+  if (!s || typeof s !== "object") return "0";
+  const ids = Object.keys(s);
+  let fp = ids.length + "|";
+  for (const id of ids) {
+    const r = s[id] || {};
+    fp += (r.reason || "") + (r.content ? r.content.length : 0) + ";";
+  }
+  return fp;
 }
 let thinkingEnabled = true,
   fetchEnabled = true,
@@ -204,9 +226,9 @@ let thinkingEnabled = true,
   desktopEnabled = false,
   memoryEnabled = true,
   schedulerEnabled = false,
-  swarmEnabled = true,
+  swarmEnabled = false,
   endpointEnabled = false,
-  autopilotEnabled = true,
+  autopilotEnabled = false,
   activeFlow = "",   // "" | "builtin:endpoint" | "builtin:autopilot" | <orchId>
   imageGenEnabled = false,
   imageGenMode = false,
@@ -270,8 +292,17 @@ function _ensureMsgId(msg) {
 
 /* ── (escape_html.js, error_envelope.js extracted here) ── */
 
+/* Look up a conversation object by id. Tolerates the `conversations`
+ * global not being ready yet (very early init) and returns null when the
+ * id is falsy or unknown. Canonical replacement for the open-coded
+ * `conversations.find((c) => c.id === X)` scattered across the frontend;
+ * `getActiveConv()` delegates to it. */
+function getConvById(id) {
+  if (!id || typeof conversations === "undefined" || !Array.isArray(conversations)) return null;
+  return conversations.find((c) => c && c.id === id) || null;
+}
 function getActiveConv() {
-  return conversations.find((c) => c.id === activeConvId);
+  return getConvById(activeConvId);
 }
 /* ★ Perf: cache chatContainer ref — avoids getElementById on every scroll check */
 let _chatContainerEl = null;
@@ -290,7 +321,12 @@ let _scrollRafId = null;
 function scrollToBottom(force) {
   const c = _getChatContainer();
   if (!c) return;
-  if (!force && !isNearBottom(200)) return;
+  if (!force && !isNearBottom(200)) {
+    /* Reader is scrolled up while content grows (e.g. live streaming) — no
+     * scroll event fires, so refresh the scroll-to-bottom affordance here. */
+    _updateScrollToBottomBtn();
+    return;
+  }
   /* ★ PERF: Coalesce scroll updates and use single rAF (not double).
    * During streaming, updateStreamingUI already runs inside a rAF callback
    * from twUpdate, so the DOM is already updated.  A single rAF is sufficient
@@ -301,6 +337,37 @@ function scrollToBottom(force) {
     c.scrollTop = c.scrollHeight;
   });
 }
+/* ── Scroll-to-bottom button ──────────────────────────────────────────
+ * A simple, always-available fallback affordance: when the reader scrolls
+ * up away from the latest message, a floating pill appears; clicking it jumps
+ * to the bottom via the real-height force-scroll path. This does NOT fix the
+ * underlying "chat jumps to the middle" bug — it just gives the user a
+ * reliable one-click way back to the newest content. */
+function scrollChatToBottom() {
+  if (typeof _forceScrollToBottom === "function") {
+    _forceScrollToBottom(null, true);
+  } else {
+    const c = _getChatContainer();
+    if (c) c.scrollTop = c.scrollHeight;
+  }
+  _updateScrollToBottomBtn();
+}
+function _updateScrollToBottomBtn() {
+  const btn = document.getElementById("scrollToBottomBtn");
+  if (!btn) return;
+  const c = _getChatContainer();
+  /* Show only when there's real overflow AND the reader is scrolled up. The
+   * 120px threshold keeps the button hidden while effectively at the bottom
+   * (matches the near-bottom slack the streaming auto-scroll uses). */
+  const hasOverflow = !!c && c.scrollHeight - c.clientHeight > 40;
+  const show = hasOverflow && !isNearBottom(120);
+  btn.classList.toggle("visible", show);
+}
+if (typeof window !== "undefined") {
+  window.scrollChatToBottom = scrollChatToBottom;
+  window._updateScrollToBottomBtn = _updateScrollToBottomBtn;
+}
+
 function getToolRoundsFromMsg(msg) {
   if (msg.toolRounds && msg.toolRounds.length > 0) return msg.toolRounds;
   // ── Backward compat: old conversations stored under 'searchRounds' ──

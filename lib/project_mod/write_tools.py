@@ -119,6 +119,31 @@ def drain_root_added_signals():
     return pending
 
 
+def _save_model_added_root_to_recent(abs_path):
+    """Persist a model-registered workspace root into the recent-projects list.
+
+    The interactive UI already saves every folder the user opens (see
+    static/js/project.js), but a root the ASSISTANT registers itself —
+    ``create_project`` or the absolute-path-write auto-register (§2 of
+    _resolve_write_path) — never went through that path, so it never appeared
+    in "recent". Save it server-side here so it shows up regardless of whether
+    the emitting conversation is the active one (the frontend
+    ``workspace_root_added`` handler only refreshes for the ACTIVE conv).
+
+    Temp-dir scratch paths are skipped — they are ephemeral and must not
+    pollute the recent list (mirrors the untracked-root policy). Best-effort:
+    a persistence failure is a debug-level, self-recovering fallback.
+    """
+    if not abs_path or _is_temp_path(abs_path):
+        return
+    try:
+        from lib.project_mod.config import save_recent_project
+        save_recent_project(abs_path)
+    except Exception as e:
+        logger.debug('[WriteTools] save_recent_project failed for %s: %s',
+                     abs_path, e)
+
+
 # ═══════════════════════════════════════════════════════
 #  create_project — bootstrap a new workspace root
 # ═══════════════════════════════════════════════════════
@@ -295,6 +320,8 @@ def tool_create_project(path, name=None, overwrite=False, conv_id=None, task_id=
     logger.info('[Project] create_project: path=%s root=%s created=%s overwrite=%s',
                 abs_path, root_name, created, bool(overwrite))
 
+    _save_model_added_root_to_recent(abs_path)
+
     hint = (f'Use path prefix "{root_name}:<rel>" (e.g. '
             f'write_file(path=\'{root_name}:README.md\', ...)) or absolute paths '
             f'under {abs_path} for subsequent write operations.')
@@ -451,6 +478,7 @@ def _resolve_write_path(base, rel_path, conv_id=None):
                                          'anchor=%s (non-fatal): %s',
                                          conv_id[:12] if conv_id else '?', anchor, e)
                     _signal_root_added(_new_name or os.path.basename(anchor), anchor)
+                    _save_model_added_root_to_recent(anchor)
                 _enforce_not_readonly(abs_path, conv_id=conv_id)
                 return abs_path
             except Exception as e:
@@ -506,7 +534,9 @@ def _mod_attribution(target, base, rel_path):
     for root_path in roots_snapshot:
         try:
             norm_root = os.path.abspath(root_path).rstrip(os.sep) or root_path
-        except Exception:
+        except Exception as e:
+            logger.debug('[WriteTools] _mod_attribution root normalize failed for %r: %s',
+                         root_path, e)
             continue
         if abs_target == norm_root or abs_target.startswith(norm_root + os.sep):
             # Prefer the DEEPEST (longest) matching root so a nested extra
@@ -821,6 +851,7 @@ def save_uploaded_file(base, rel_path, data, description='', conv_id=None,
         try:
             _enforce_not_readonly(abs_path, conv_id=conv_id)
         except ValueError as e:
+            logger.debug('[Tools] upload rejected (readonly) %s: %s', rel_path, e)
             return {'ok': False, 'error': str(e), 'action': 'upload_file', 'path': rel_path}
         target = abs_path
     else:

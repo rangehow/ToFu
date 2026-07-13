@@ -215,8 +215,9 @@ def _run_profile_consolidation_async(task: dict, messages: list) -> None:
     try:
         _patch_assistant_message_with_prefs(task, learned)
     except Exception as e:
-        logger.warning('[Task:%s] persist preferences_learned failed: %s',
-                       tid, e, exc_info=True)
+        from lib.database import log_db_finalize_error
+        log_db_finalize_error(logger, 'warning', e,
+                              f'[Task:{tid}] persist preferences_learned failed')
 
 
 def _patch_assistant_message_with_prefs(task: dict, learned: list) -> None:
@@ -534,8 +535,9 @@ def _run_commit_round_async(task: dict, project_path: str) -> None:
         try:
             _patch_assistant_message_with_git(task, amend_evt)
         except Exception as _e:
-            logger.warning('[Task:%s] failed to patch assistant message with snapshotId: %s',
-                           tid, _e, exc_info=True)
+            from lib.database import log_db_finalize_error
+            log_db_finalize_error(logger, 'warning', _e,
+                                  f'[Task:{tid}] failed to patch assistant message with snapshotId')
     except Exception as e:
         logger.warning('[Task:%s] async make_snapshot failed: %s',
                        tid, e, exc_info=True)

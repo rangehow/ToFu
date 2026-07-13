@@ -103,7 +103,9 @@ def _read_version() -> str:
     """Read the current version from VERSION file."""
     try:
         return _VERSION_FILE.read_text(encoding='utf-8').strip()
-    except Exception:
+    except Exception as e:
+        logger.debug('[export] VERSION file read failed (%s), defaulting: %s',
+                     _VERSION_FILE, e)
         return '0.0.0'
 
 
@@ -237,6 +239,7 @@ PERSONAL_EXCLUDE_DIRS = {
     'promo',                       # promotional slides/screenshots (~10MB, not runtime)
     'django',                      # stray empty dir (not part of tofu)
     '.tofu_trash',                 # trash/undo bin (transient, per-host)
+    '_candidates',                 # raw AI-gen asset candidates + proof strips (review-only, multi-MB)
 }
 
 # Dirs excluded ONLY at the project root (not inside subdirs like lib/)
@@ -311,6 +314,7 @@ ALWAYS_EXCLUDE_DIRS = {
     'promo',                       # promotional slides/screenshots (~10MB, not runtime)
     'django',                      # stray empty dir (not part of tofu)
     '.tofu_trash',                 # trash/undo bin (transient, per-host)
+    '_candidates',                 # raw AI-gen asset candidates + proof strips (review-only, multi-MB)
 }
 
 ALWAYS_EXCLUDE_FILES = {
@@ -360,6 +364,8 @@ ALWAYS_EXCLUDE_FILES = {
     'overleaf-mcp:cat_dog_manor.png',          # stray scratch image
     'claude_code_run_command_report.html',     # generated scratch report
     'thesis_references.bib',                   # personal academic file
+    '解答260505.pdf',                          # scratch answer PDF (personal)
+    '解答260505_v2.pdf',                       # scratch answer PDF (personal)
 }
 
 # Glob patterns always excluded
@@ -1579,6 +1585,14 @@ def _patch_install_sh_proxy(dest: Path, mode: str):
     pypi_index = cfg.get('pypi_index') or 'https://mirrors.sankuai.com/pypi/web/simple/'
     if pypi_index:
         block_lines.append(f'export TOFU_PYPI_INDEX="{pypi_index}"')
+    # npm registry redirect — same story again; proxy blocks
+    # registry.npmjs.org, and npm's install of the OPTIONAL esbuild/typecheck
+    # devDependencies would otherwise hang for minutes. Only emitted when a
+    # mirror is configured; without it install.sh still fail-fasts + falls
+    # back to the Python minifier.
+    npm_registry = cfg.get('npm_registry') or ''
+    if npm_registry:
+        block_lines.append(f'export TOFU_NPM_REGISTRY="{npm_registry}"')
     block_lines.append(_INSTALL_SH_PROXY_END)
     block = '\n'.join(block_lines) + '\n'
 
@@ -2346,8 +2360,9 @@ def export_project(mode: str, dest: Path, dry_run: bool = False,
                               f"{C_DIM}(would sanitize){C_END}")
                         stats['sanitized'] += 1
                         continue
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug('[export] dry-run sanitize preview failed for '
+                                 '%s: %s', relpath, e)
             print(f"  {C_GREEN}\U0001f4c4{C_END} {relpath}")
             stats['copied'] += 1
 

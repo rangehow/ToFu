@@ -1,65 +1,54 @@
-"""Ground-truth equivalence: the BACKEND ghost reconcile
-(``lib.conversations.reconcile.reconcile_conversation_messages``) must produce
-the SAME swept-set + tail verdict as the FRONTEND Case-D sequence
-(``_sweepBuriedGhostAssistants`` then ``_classifyGhostTail`` in
-``static/js/main/main_init_tasks.js``), over ONE shared fixture corpus.
+"""Ground-truth corpus regression for the BACKEND ghost reconcile
+(``lib.conversations.reconcile.reconcile_conversation_messages``).
 
-WHY
----
-The frontend Case-D path INFERS settled lifecycle state in JS and truncates
-persisted history (``syncConversationToServer(conv, {allowTruncate:true})``) —
-the separation-of-concerns violation the backend GET-path reconcile
-(``routes/conversations.py::_reconcile_conv_on_get_blocking``) was built to
-retire. Before deleting the JS sweep + its truncating PUTs we must PROVE the
-backend produces the identical tail decision the JS did — including the
-buried-ghost, special-turn, and tail cases — not assume "it should be covered".
+HISTORY
+-------
+This suite originally proved byte-equivalence between the BACKEND reconcile and
+the FRONTEND Case-D sequence (``_sweepBuriedGhostAssistants`` then
+``_classifyGhostTail`` in ``static/js/main/main_init_tasks.js``) over a shared
+fixture corpus — the gate that had to pass BEFORE the JS sweep could be safely
+deleted. That migration is now COMPLETE: the buried-ghost sweep
+(``_isBuriedEmptyGhost`` / ``_sweepBuriedGhostAssistants``) was removed from the
+frontend (the verdict lives on the backend GET path,
+``routes/conversations.py::_reconcile_conv_on_get_blocking``), so there is no
+longer a live JS implementation to compare against.
+
+Rather than lose the 15-fixture corpus, this suite now FREEZES the authentic JS
+golden output (captured from the last commit that still shipped the JS
+classifiers, confirmed byte-identical to the backend at capture time) as the
+reference. The backend must continue to reproduce EXACTLY what the retired JS
+produced — so a future change to the backend reconcile that would have silently
+diverged from the frontend's historical behaviour is still caught.
 
 EQUIVALENCE AXIS — ``cache_prefix_count=0``
 -------------------------------------------
-The JS has NO prompt-cache-prefix guard; the backend has one
-(``cache_prefix_count``). We therefore run the backend at ``cache_prefix_count=0``
-— the documented byte-identical-behaviour default — so the two are compared on
-the same axis. The LIVE GET path passes the real prefix count, so the backend
-deliberately will NOT sweep a buried ghost sitting inside the immutable cache
-prefix (a ghost the JS WOULD have swept). That is a FEATURE (cache-neutrality),
-not a regression: ``get_cache_prefix_count`` reflects LIVE in-memory cache state,
-which resets to 0 on server restart / cache eviction, so the next idle GET
-sweeps the formerly-in-prefix ghost — it is never stranded forever. This is
-pinned by ``test_in_prefix_ghost_divergence_is_prefix_gated`` below.
+The retired JS had NO prompt-cache-prefix guard; the backend has one
+(``cache_prefix_count``). The golden was captured at ``cache_prefix_count=0`` —
+the documented byte-identical-behaviour default. The LIVE GET path passes the
+real prefix count, so the backend deliberately will NOT sweep a buried ghost
+sitting inside the immutable cache prefix (a ghost the JS WOULD have swept).
+That is a FEATURE (cache-neutrality), pinned by
+``test_in_prefix_ghost_divergence_is_prefix_gated`` below.
 
-We compare the APPLIED RESULT (surviving message keys in order + each survivor's
-``finishReason`` + a ``changed`` flag), NOT the raw verdict string — the backend
-verdict token is ``'interrupt'`` while the JS token is ``'interrupted'``, but
-BOTH apply the same mutation (stamp ``finishReason='interrupted'``, keep the
-message), so the applied output is identical.
-
-Runs the REAL shipped JS under node (per project convention: node for
-extraction/eval, no JSDOM); skips cleanly when node isn't installed.
+The compared shape is the APPLIED RESULT (surviving message keys in order +
+each survivor's ``finishReason`` + a ``changed`` flag), NOT the raw verdict
+string — the backend verdict token is ``'interrupt'`` while the JS token was
+``'interrupted'``, but BOTH apply the same mutation (stamp
+``finishReason='interrupted'``, keep the message), so the applied output is
+identical.
 """
 
 from __future__ import annotations
 
 import copy
 import json
-import os
-import shutil
-import subprocess
 
 import pytest
 
 pytestmark = pytest.mark.unit
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-ROOT = os.path.normpath(os.path.join(HERE, '..'))
-JS_DIR = os.path.join(ROOT, 'static', 'js')
-INIT_TASKS_JS = os.path.join(JS_DIR, 'main', 'main_init_tasks.js')
 
-
-def _node_available() -> bool:
-    return bool(shutil.which('node'))
-
-
-# ── The shared corpus (single source of truth for BOTH sides) ──────────────
+# ── The shared corpus (single source of truth) ────────────────────────────
 # Each message carries a unique 'k' key so we compare surviving SETS by identity
 # (not by content). 'k' is ignored by every reconcile predicate, so it does not
 # perturb the verdict.
@@ -116,10 +105,16 @@ FIXTURES = [
         _a('g1', toolRounds=[{'status': 'done', 'toolName': 'run_command'}]),  # keep
         _a('t1', content='reply', finishReason='stop'),
     ]},
-    # 9. Buried error envelope → kept.
+    # 9. Buried error envelope NOT superseded (followed by a USER turn, i.e. a
+    #    genuine prior-exchange error the user should keep seeing) → kept.
+    #    (The SUPERSEDED shape [u, error, real-assistant] is collapsed by the
+    #    new pass and is covered by tests/test_reconcile_error_husk_collapse.py,
+    #    NOT here — this corpus freezes the RETIRED JS behaviour, which had no
+    #    collapse pass, so its fixtures must be collapse-neutral.)
     {'name': 'buried_error_kept', 'messages': [
         _u('u0'),
         _a('g1', error={'kind': 'internal'}),  # keep (renders an error block)
+        _u('u1', content='Q2'),                # user turn → error NOT superseded
         _a('t1', content='reply', finishReason='stop'),
     ]},
     # 10. Buried thinking-only → kept (recovered reasoning renders a block).
@@ -148,6 +143,31 @@ FIXTURES = [
 ]
 
 
+# ── FROZEN JS GOLDEN ────────────────────────────────────────────────────────
+# Captured by replaying the EXACT retired Case-D sequence (sweep buried ghosts,
+# then classify + apply the tail verdict) of the LAST commit that shipped
+# ``_sweepBuriedGhostAssistants`` / ``_classifyGhostTail``, over the corpus
+# above, and confirmed byte-identical to the backend at capture time. This is
+# the historical frontend behaviour the backend must continue to reproduce.
+JS_GOLDEN = {
+    'bare_empty_tail': {'survivors': ['u0'], 'finish': {'u0': None}, 'changed': True},
+    'thinking_only_tail': {'survivors': ['u0', 'a1'], 'finish': {'u0': None, 'a1': 'interrupted'}, 'changed': True},
+    'settled_tail_finish': {'survivors': ['u0', 'a1'], 'finish': {'u0': None, 'a1': 'stop'}, 'changed': False},
+    'content_tail': {'survivors': ['u0', 'a1'], 'finish': {'u0': None, 'a1': 'stop'}, 'changed': False},
+    'buried_4_ghosts': {'survivors': ['u0', 'r1', 'u1', 't1'], 'finish': {'u0': None, 'r1': 'stop', 'u1': None, 't1': 'stop'}, 'changed': True},
+    'buried_settled_bodyless': {'survivors': ['u0', 'u1', 't1'], 'finish': {'u0': None, 'u1': None, 't1': 'stop'}, 'changed': True},
+    'special_turns_kept': {'survivors': ['u0', 'vu', 'ep', 't1'], 'finish': {'u0': None, 'vu': None, 'ep': None, 't1': 'stop'}, 'changed': False},
+    'buried_real_round_kept': {'survivors': ['u0', 'g1', 't1'], 'finish': {'u0': None, 'g1': None, 't1': 'stop'}, 'changed': False},
+    'buried_error_kept': {'survivors': ['u0', 'g1', 'u1', 't1'], 'finish': {'u0': None, 'g1': None, 'u1': None, 't1': 'stop'}, 'changed': False},
+    'buried_thinking_kept': {'survivors': ['u0', 'g1', 't1'], 'finish': {'u0': None, 'g1': None, 't1': 'stop'}, 'changed': False},
+    'ep_iteration_zero_nonspecial': {'survivors': ['u0', 't1'], 'finish': {'u0': None, 't1': 'stop'}, 'changed': True},
+    'all_ghosts_empty_tail': {'survivors': [], 'finish': {}, 'changed': True},
+    'single_empty': {'survivors': [], 'finish': {}, 'changed': True},
+    'empty_list': {'survivors': [], 'finish': {}, 'changed': False},
+    'tail_real_round_kept': {'survivors': ['u0', 'a1'], 'finish': {'u0': None, 'a1': None}, 'changed': False},
+}
+
+
 def _normalize(messages, changed):
     return {
         'survivors': [m['k'] for m in messages],
@@ -166,84 +186,22 @@ def _backend_results(fixtures, prefix=0):
     return res
 
 
-_JS_HARNESS = r"""
-const fs = require('fs');
-eval(fs.readFileSync(process.argv[2], 'utf8'));  // main_init_tasks.js (declarations only)
-const fixtures = JSON.parse(fs.readFileSync(process.argv[3], 'utf8'));
-
-// Replay the EXACT Case-D sequence: sweep buried ghosts, then classify the
-// (post-sweep) tail and apply delete/interrupt — mirroring
-// static/js/main/main_init_tasks.js Case D.
-function reconcileJS(messages) {
-  const conv = { id: 'x', messages: messages.map(m => Object.assign({}, m)) };
-  let changed = false;
-  const removed = _sweepBuriedGhostAssistants(conv);
-  if (removed > 0) changed = true;
-  if (conv.messages.length) {
-    const tail = conv.messages[conv.messages.length - 1];
-    const v = _classifyGhostTail(tail);
-    if (v === 'delete') { conv.messages.pop(); changed = true; }
-    else if (v === 'interrupted') { tail.finishReason = 'interrupted'; changed = true; }
-  }
-  return { messages: conv.messages, changed };
-}
-
-const res = {};
-for (const fx of fixtures) {
-  const { messages, changed } = reconcileJS(fx.messages);
-  const finish = {};
-  for (const m of messages) finish[m.k] = (m.finishReason === undefined ? null : m.finishReason);
-  res[fx.name] = {
-    survivors: messages.map(m => m.k),
-    finish,
-    changed,
-  };
-}
-console.log(JSON.stringify(res));
-"""
-
-
-def _js_results(fixtures):
-    harness = os.path.join(HERE, '_recon_equiv_harness.js')
-    fx_file = os.path.join(HERE, '_recon_equiv_fixtures.json')
-    with open(harness, 'w') as f:
-        f.write(_JS_HARNESS)
-    with open(fx_file, 'w') as f:
-        json.dump(fixtures, f)
-    try:
-        proc = subprocess.run(
-            ['node', harness, INIT_TASKS_JS, fx_file],
-            capture_output=True, text=True, timeout=60,
-        )
-    finally:
-        for p in (harness, fx_file):
-            try:
-                os.remove(p)
-            except OSError:
-                pass
-    assert proc.returncode == 0, f'node failed: {proc.stderr}\n{proc.stdout}'
-    return json.loads(proc.stdout.strip())
-
-
-@pytest.mark.skipif(not _node_available(), reason='node not installed')
-def test_reconcile_js_backend_equivalence():
-    """Backend == JS on every fixture (applied survivors + finishReason + changed)."""
+def test_backend_matches_frozen_js_golden():
+    """Backend == the frozen historical JS golden on every fixture."""
     backend = _backend_results(FIXTURES, prefix=0)
-    js = _js_results(FIXTURES)
-    assert set(backend) == set(js)
-    mismatches = {name: {'backend': backend[name], 'js': js[name]}
-                  for name in backend if backend[name] != js[name]}
+    assert set(backend) == set(JS_GOLDEN)
+    mismatches = {name: {'backend': backend[name], 'golden': JS_GOLDEN[name]}
+                  for name in backend if backend[name] != JS_GOLDEN[name]}
     assert not mismatches, (
-        'backend/JS reconcile DIVERGED on:\n' + json.dumps(mismatches, indent=2))
+        'backend reconcile DIVERGED from the frozen JS golden on:\n'
+        + json.dumps(mismatches, indent=2))
 
 
-@pytest.mark.skipif(not _node_available(), reason='node not installed')
 def test_neuter_special_turn_guard_detects_divergence(monkeypatch):
     """NC-1 (teeth): if the backend's buried predicate DROPS the special-turn
-    guard, it sweeps the buried VU/planner turns the JS keeps → the equivalence
-    test MUST detect divergence on `special_turns_kept`. Proves the test isn't a
-    tautology."""
-    js = _js_results(FIXTURES)
+    guard, it sweeps the buried VU/planner turns the golden keeps → the
+    comparison MUST detect divergence on `special_turns_kept`. Proves the test
+    isn't a tautology."""
     import lib.conversations.reconcile as rec
 
     def _fake_buried(msg):
@@ -262,17 +220,15 @@ def test_neuter_special_turn_guard_detects_divergence(monkeypatch):
 
     monkeypatch.setattr(rec, 'is_buried_empty_ghost', _fake_buried)
     backend = _backend_results(FIXTURES, prefix=0)
-    assert backend['special_turns_kept'] != js['special_turns_kept'], (
-        'neuter dropped the special-turn guard but the equivalence comparison '
-        'failed to notice — the test has no teeth')
+    assert backend['special_turns_kept'] != JS_GOLDEN['special_turns_kept'], (
+        'neuter dropped the special-turn guard but the comparison failed to '
+        'notice — the test has no teeth')
 
 
-@pytest.mark.skipif(not _node_available(), reason='node not installed')
 def test_neuter_thinking_tail_detects_divergence(monkeypatch):
     """NC-2 (teeth): if the backend tail classifier IGNORES `thinking` (deletes
-    a thinking-only husk instead of stamping interrupt), it diverges from the JS
-    on `thinking_only_tail` → the comparison MUST catch it."""
-    js = _js_results(FIXTURES)
+    a thinking-only husk instead of stamping interrupt), it diverges from the
+    golden on `thinking_only_tail` → the comparison MUST catch it."""
     import lib.conversations.reconcile as rec
     _orig = rec.classify_ghost_tail
 
@@ -282,22 +238,22 @@ def test_neuter_thinking_tail_detects_divergence(monkeypatch):
 
     monkeypatch.setattr(rec, 'classify_ghost_tail', _fake_tail)
     backend = _backend_results(FIXTURES, prefix=0)
-    assert backend['thinking_only_tail'] != js['thinking_only_tail'], (
+    assert backend['thinking_only_tail'] != JS_GOLDEN['thinking_only_tail'], (
         'neuter collapsed interrupt→delete but the comparison failed to notice')
 
 
 def test_in_prefix_ghost_divergence_is_prefix_gated():
     """Constraint #1: a buried ghost INSIDE the cache prefix is NOT swept by the
     backend (cache-neutrality), but IS swept once the prefix is 0. Same input,
-    two prefix values — proves the divergence from JS is purely prefix-gated and
-    SELF-HEALS when the prefix resets (server restart / cache eviction → next
-    idle GET sweeps it). It is never stranded forever."""
+    two prefix values — proves the divergence from the golden is purely
+    prefix-gated and SELF-HEALS when the prefix resets (server restart / cache
+    eviction → next idle GET sweeps it). It is never stranded forever."""
     from lib.conversations.reconcile import reconcile_conversation_messages
     msgs = [_u('u0'),
             _a('g1'),  # buried empty ghost at idx 1
             _a('t1', content='reply', finishReason='stop')]
 
-    # prefix=0 → swept (matches JS).
+    # prefix=0 → swept (matches the golden).
     out0, changed0 = reconcile_conversation_messages(copy.deepcopy(msgs), 0)
     assert [m['k'] for m in out0] == ['u0', 't1']
     assert changed0 is True
@@ -309,25 +265,20 @@ def test_in_prefix_ghost_divergence_is_prefix_gated():
     assert changed2 is False
 
 
-@pytest.mark.skipif(not _node_available(), reason='node not installed')
 def test_known_whitespace_thinking_tail_divergence():
     """DOCUMENTED, INTENTIONAL non-equivalence (found while checking predicate
     parity): a tail whose `thinking` is WHITESPACE-ONLY.
 
     Backend ``classify_ghost_tail`` uses ``(thinking or '').strip()`` → '   '
-    → falsy → DELETE. JS ``_classifyGhostTail`` uses truthy ``lastMsg.thinking``
-    (no trim) → '   ' truthy → INTERRUPTED (keep+stamp). The backend is stricter
-    and more correct (whitespace is not real reasoning), and since the backend
-    becomes the AUTHORITATIVE reconciler this is an improvement, not a
-    regression. Pinned here so the difference is RECORDED, not hidden — this is
-    the one predicate-level divergence in the corpus, and it is on a shape that
-    does not occur in practice (reasoning deltas are never pure whitespace)."""
+    → falsy → DELETE. The retired JS ``_classifyGhostTail`` used truthy
+    ``lastMsg.thinking`` (no trim) → '   ' truthy → INTERRUPTED (keep+stamp).
+    The backend is stricter and more correct (whitespace is not real reasoning),
+    and since the backend is the AUTHORITATIVE reconciler this is an improvement,
+    not a regression. Pinned here so the difference is RECORDED, not hidden —
+    this is the one predicate-level divergence in the corpus, and it is on a
+    shape that does not occur in practice (reasoning deltas are never pure
+    whitespace)."""
     from lib.conversations.reconcile import reconcile_conversation_messages
     fx = [_u('u0'), _a('a1', thinking='   ')]
     out, _changed = reconcile_conversation_messages(copy.deepcopy(fx), 0)
     assert [m['k'] for m in out] == ['u0'], 'backend deletes whitespace-thinking tail'
-
-    if _node_available():
-        js = _js_results([{'name': 'ws', 'messages': fx}])['ws']
-        assert js['survivors'] == ['u0', 'a1'], 'JS keeps whitespace-thinking tail'
-        assert js['finish']['a1'] == 'interrupted', 'JS stamps interrupted'

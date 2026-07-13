@@ -376,11 +376,32 @@ def _fmt_excluded(excluded: list[dict]) -> str:
     return '\n'.join(lines)
 
 
+def _stash_result(fn_args: dict, payload: dict) -> None:
+    """Attach a STRUCTURED commit descriptor onto the tool args so the round's
+    ``_post_build`` hook (lib/tasks_pkg/handlers/misc.py) can surface it as
+    ``meta['commitResult']`` — the frontend renders a rich card off this, never
+    by re-parsing the human-readable string this function returns. Best-effort:
+    a non-dict ``fn_args`` (never happens for a real tool call) is ignored."""
+    try:
+        fn_args['_commitResult'] = payload
+    except (TypeError, AttributeError) as e:
+        logger.debug('[Commit] could not stash structured result: %s', e)
+
+
 def execute_commit_tool(fn_args: dict, *, current_conv_id: str = '',
                         project_path: str = '') -> str:
-    """Agent-tool entry point → human-readable result string."""
+    """Agent-tool entry point → human-readable result string.
+
+    In addition to the returned string (what the LLM reads), this stashes a
+    structured ``_commitResult`` descriptor on ``fn_args`` so the frontend can
+    render an explicit commit card (mode, committed/would-commit paths, held-
+    back files with reasons, sha, verify state) instead of a vague one-liner.
+    """
     try:
         if not project_path:
+            _stash_result(fn_args, {'mode': 'plan', 'ok': False,
+                                    'error': 'not in project mode',
+                                    'clean': [], 'committed': [], 'excluded': []})
             return ('Error: project_commit is only available in project mode '
                     '(open a project first).')
         files = fn_args.get('files') or None
@@ -392,7 +413,17 @@ def execute_commit_tool(fn_args: dict, *, current_conv_id: str = '',
         if dry_run or not message:
             plan = plan_commit(project_path, current_conv_id, files=files)
             if not plan.get('ok'):
+                _stash_result(fn_args, {'mode': 'plan', 'ok': False,
+                                        'error': plan.get('error', 'unknown'),
+                                        'clean': [], 'committed': [], 'excluded': []})
                 return f'Cannot plan commit: {plan.get("error", "unknown")}.'
+            excl = plan['contaminated'] + plan['ignored']
+            _stash_result(fn_args, {
+                'mode': 'plan', 'ok': True,
+                'clean': list(plan['clean']), 'committed': [], 'excluded': excl,
+                'candidatesN': len(plan.get('candidates') or []),
+                'needsMessage': not message,
+            })
             parts = [f'Commit plan for this conversation '
                      f'({len(plan["clean"])} clean, '
                      f'{len(plan["contaminated"])} contaminated, '
@@ -400,7 +431,6 @@ def execute_commit_tool(fn_args: dict, *, current_conv_id: str = '',
             if plan['clean']:
                 parts.append('\nWould commit (provably yours, byte-identical):')
                 parts += [f'  • {p}' for p in plan['clean']]
-            excl = plan['contaminated'] + plan['ignored']
             if excl:
                 parts.append('\nExcluded (NOT committed):')
                 parts.append(_fmt_excluded(excl))
@@ -411,16 +441,25 @@ def execute_commit_tool(fn_args: dict, *, current_conv_id: str = '',
         res = do_commit(project_path, current_conv_id, message, files=files,
                         author=fn_args.get('author') or None)
         if not res.get('ok'):
-            body = f'Commit not made: {res.get("error", "unknown")}.'
             excl = res.get('excluded') or []
+            _stash_result(fn_args, {'mode': 'commit', 'ok': False,
+                                    'error': res.get('error', 'unknown'),
+                                    'clean': [], 'committed': [], 'excluded': excl})
+            body = f'Commit not made: {res.get("error", "unknown")}.'
             if excl:
                 body += '\nExcluded:\n' + _fmt_excluded(excl)
             return body
+        excl = res.get('excluded') or []
+        _stash_result(fn_args, {
+            'mode': 'commit', 'ok': True,
+            'committed': list(res['committed']), 'clean': list(res['committed']),
+            'excluded': excl, 'commitSha': res.get('commitSha', ''),
+            'verified': bool(res.get('verified')),
+        })
         parts = [f'Committed {len(res["committed"])} file(s) as {res["commitSha"]}'
                  + ('' if res.get('verified') else ' (⚠ post-commit verify mismatch — check `git show HEAD`)')
                  + ':']
         parts += [f'  • {p}' for p in res['committed']]
-        excl = res.get('excluded') or []
         if excl:
             parts.append('\nHeld back (commit yours after the sibling lands, '
                          'or coordinate):')

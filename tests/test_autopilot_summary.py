@@ -26,6 +26,8 @@ No live LLM / orchestrator — ``_run_single_turn`` is stubbed.
 
 import hashlib
 import json
+import threading
+import time
 
 import pytest
 
@@ -404,3 +406,408 @@ def test_store_run_record_task_done_reason_is_sticky(monkeypatch):
     assert rec['reason'] == 'task_done'       # never downgraded
     assert rec['content'] == 'Outcome: shipped.'  # report preserved
     assert rec['status'] == 'concluded'
+
+
+
+# ── _emit_run_summary: report ONLY on a NORMAL end ─────────────────────
+#  A run that finishes cleanly ([VU: TASK_DONE]) earns the close-out report.
+#  A run CUT OFF by the budget/stuck/no_progress guard is an ABNORMAL end —
+#  the objective is unverified, so we conclude the run (fold + disarm) but
+#  must NOT spend an LLM reporter turn. `with_report=False` is that gate.
+
+def _emit_task():
+    return {
+        'id': 'task-emit-0001',
+        'convId': 'conv-emit',
+        'config': {'model': 'm', 'autopilot': True, 'projectPath': '/proj/e'},
+        'messages': [
+            {'role': 'user', 'content': 'Ship it.'},
+            {'role': 'assistant', 'content': 'Working on it.'},
+        ],
+    }
+
+
+def test_emit_run_summary_normal_end_generates_report(monkeypatch):
+    """A NORMAL end (with_report=True, the default) runs the reporter and
+    persists the report content into the concluded record."""
+    import lib.tasks_pkg.autopilot as ap
+
+    reporter_calls = []
+    monkeypatch.setattr(ap, 'run_summary_reporter',
+                        lambda task: (reporter_calls.append(task),
+                                      {'text': 'Outcome: met. Shipped it.'})[1])
+    stored = {}
+    monkeypatch.setattr(ap, '_store_run_record',
+                        lambda conv_id, run_id, *, reason='task_done', text='',
+                        translated='': stored.update(
+                            reason=reason, text=text) or
+                        {'runId': run_id, 'status': 'concluded',
+                         'reason': reason, 'content': text})
+    monkeypatch.setattr(ap, '_translate_summary_sync', lambda t: '')
+    monkeypatch.setattr(ap, '_emit_run_concluded', lambda *a, **k: None)
+    monkeypatch.setattr('lib.tasks_pkg.manager.append_event', lambda *a, **k: None)
+
+    rec = ap._emit_run_summary(_emit_task(), 'conv-emit', 'ar-e')
+    assert len(reporter_calls) == 1, 'normal end MUST run the reporter'
+    assert rec is not None
+    assert stored['reason'] == 'task_done'
+    assert stored['text'] == 'Outcome: met. Shipped it.'
+
+
+def test_emit_run_summary_abnormal_end_skips_reporter(monkeypatch):
+    """An ABNORMAL end (with_report=False) must NOT run the reporter, yet still
+    conclude the run: a concluded record (with the incomplete reason, NO report
+    text) is persisted and the run_concluded pulse is emitted."""
+    import lib.tasks_pkg.autopilot as ap
+
+    reporter_calls = []
+    monkeypatch.setattr(ap, 'run_summary_reporter',
+                        lambda task: (reporter_calls.append(task),
+                                      {'text': 'SHOULD NOT APPEAR'})[1])
+    stored = {}
+    monkeypatch.setattr(ap, '_store_run_record',
+                        lambda conv_id, run_id, *, reason='task_done', text='',
+                        translated='': stored.update(
+                            reason=reason, text=text) or
+                        {'runId': run_id, 'status': 'concluded',
+                         'reason': reason})
+    concluded = []
+    monkeypatch.setattr(ap, '_emit_run_concluded',
+                        lambda conv_id, run_id, text, cfg: concluded.append(text))
+    monkeypatch.setattr(ap, '_translate_summary_sync', lambda t: '')
+    monkeypatch.setattr('lib.tasks_pkg.manager.append_event', lambda *a, **k: None)
+
+    rec = ap._emit_run_summary(_emit_task(), 'conv-emit', 'ar-e',
+                               reason='budget_exhausted', with_report=False)
+
+    assert reporter_calls == [], 'abnormal end must NOT run the LLM reporter'
+    assert rec is not None, 'the run is still concluded (fold + disarm)'
+    assert stored['reason'] == 'budget_exhausted'
+    assert stored['text'] == '', 'no report text on an abnormal end'
+    # The run_concluded feed pulse still fires (empty summary text is fine).
+    assert concluded == [''], 'run_concluded still emitted with no report text'
+
+
+def test_budget_stop_callsite_passes_with_report_false():
+    """The budget/stuck guard call site must invoke _emit_run_summary with
+    with_report=False — the wiring, not just the helper, is load-bearing.
+
+    NEGATIVE CONTROL companion: were the call site to omit with_report (default
+    True), an abnormal cap-stop would spend a full LLM reporter turn — exactly
+    the behaviour the owner asked to remove ("if autopilot does not end
+    normally, we should not proceed to generate the summary")."""
+    import os
+    src_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                            'lib', 'tasks_pkg', 'autopilot.py')
+    src = open(src_path, encoding='utf-8').read()
+    # The clean-close-out (normal end) call site: with_report is still gated on
+    # the per-run VU turn count (a single-/short-run clean close-out skips the
+    # reporter), but the summary generation is now dispatched OFF the hot path
+    # (daemon thread) so it can't hold the SSE stream open inside the
+    # _autopilot_deciding window. The turn-count read MUST be captured on the
+    # synchronous path (before _clear_run_id clears autopilotTurnCount) and
+    # handed to the async spawn.
+    assert 'with_report = _should_generate_run_summary(conv_id)' in src, \
+        'the clean [VU: TASK_DONE] call site must gate the report on turn count'
+    assert '_spawn_async_run_summary(task, conv_id, run_id, with_report)' in src, \
+        'the clean call site must dispatch the summary OFF-THREAD (async spawn)'
+    # The budget-guard (abnormal end) call site: explicitly with_report=False.
+    assert ('_emit_run_summary(task, conv_id, run_id, reason=reason,\n'
+            '                                            with_report=False)') in src, \
+        'the budget/stuck guard call site must pass with_report=False'
+
+
+# ── _should_generate_run_summary: report ONLY for a MULTI-ROUND run ────
+#  A clean [VU: TASK_DONE] always CONCLUDES, but the LLM reporter turn is only
+#  worth it when the run drove enough VU follow-up turns to be "too much to
+#  read". A conversation with autopilot merely toggled ON, where the VU
+#  concludes on its first look (autopilotTurnCount 0), skips the report.
+
+def _seed_turncount_db(monkeypatch, settings_dict):
+    """Wire a fake DB returning the given settings blob for the eligibility
+    read (`SELECT settings FROM conversations`)."""
+    import json as _json
+    blob = _json.dumps(settings_dict)
+
+    class _FakeDB:
+        def execute(self, sql, params=None):
+            class _R:
+                def fetchone(_self):
+                    return (blob,)
+            return _R()
+
+    import lib.database as _db
+    monkeypatch.setattr(_db, 'get_thread_db', lambda domain: _FakeDB())
+
+
+def test_should_generate_run_summary_skips_single_round_run(monkeypatch):
+    """turns=0 (< default floor 1) → no report (the reported waste case)."""
+    import lib.tasks_pkg.autopilot as ap
+    monkeypatch.delenv('TOFU_AUTOPILOT_SUMMARY_MIN_TURNS', raising=False)
+    _seed_turncount_db(monkeypatch, {'autopilotTurnCount': 0})
+    assert ap._should_generate_run_summary('conv-single') is False
+
+
+def test_should_generate_run_summary_reports_multi_round_run(monkeypatch):
+    """turns>=floor → report (a genuine multi-round run)."""
+    import lib.tasks_pkg.autopilot as ap
+    monkeypatch.delenv('TOFU_AUTOPILOT_SUMMARY_MIN_TURNS', raising=False)
+    _seed_turncount_db(monkeypatch, {'autopilotTurnCount': 3})
+    assert ap._should_generate_run_summary('conv-multi') is True
+
+
+def test_should_generate_run_summary_gate_disabled_env(monkeypatch):
+    """min-turns 0 disables the gate: even a single-round run reports (the
+    pre-gate behaviour is recoverable via env)."""
+    import lib.tasks_pkg.autopilot as ap
+    monkeypatch.setenv('TOFU_AUTOPILOT_SUMMARY_MIN_TURNS', '0')
+    _seed_turncount_db(monkeypatch, {'autopilotTurnCount': 0})
+    assert ap._should_generate_run_summary('conv-disabled') is True
+
+
+def test_should_generate_run_summary_fail_open_on_error(monkeypatch):
+    """A DB/settings error must fail OPEN (report) — never silently suppress a
+    legitimate report because of a glitch."""
+    import lib.tasks_pkg.autopilot as ap
+    monkeypatch.setenv('TOFU_AUTOPILOT_SUMMARY_MIN_TURNS', '1')
+
+    class _BoomDB:
+        def execute(self, sql, params=None):
+            raise RuntimeError('db down')
+
+    import lib.database as _db
+    monkeypatch.setattr(_db, 'get_thread_db', lambda domain: _BoomDB())
+    assert ap._should_generate_run_summary('conv-err') is True
+
+
+def test_should_generate_run_summary_respects_custom_floor(monkeypatch):
+    """A custom floor of 3: turns=2 skips, turns=3 reports."""
+    import lib.tasks_pkg.autopilot as ap
+    monkeypatch.setenv('TOFU_AUTOPILOT_SUMMARY_MIN_TURNS', '3')
+    _seed_turncount_db(monkeypatch, {'autopilotTurnCount': 2})
+    assert ap._should_generate_run_summary('conv-below') is False
+    _seed_turncount_db(monkeypatch, {'autopilotTurnCount': 3})
+    assert ap._should_generate_run_summary('conv-at') is True
+
+
+
+# ── maybe_run_autopilot TASK_DONE: SETTLE FIRST, summarise OFF-THREAD ──
+#  The reported bug: on a clean [VU: TASK_DONE], maybe_run_autopilot used to run
+#  the reporter LLM turn + synchronous EN→ZH translation (~63s measured) BEFORE
+#  it emitted the terminal signal — all INSIDE the _autopilot_deciding window
+#  that _task_terminal()/chat_poll treat as still-running. The SSE stream stayed
+#  open and the conv froze on "回答中" for a minute (and if the stream then
+#  exceeded an idle/proxy timeout the client dropped to poll, which — with NO
+#  follow-up baton on TASK_DONE — could stay stuck until a manual refresh).
+#
+#  Fix: settle the turn FIRST (disarm marker + clear run pin + let done fire) and
+#  run the summary in a daemon thread. These tests pin that maybe_run_autopilot
+#  RETURNS + clears _autopilot_deciding WITHOUT the reporter on the sync path,
+#  and that the async body still lands the concluded record.
+
+def _task_done_task():
+    return {
+        'id': 'task-done-0001',
+        'convId': 'conv-td',
+        'config': {'model': 'm', 'autopilot': True},
+        'messages': [
+            {'role': 'user', 'content': 'Ship it.'},
+            {'role': 'assistant', 'content': 'Done.'},
+        ],
+        '_autopilot_deciding': True,
+    }
+
+
+def _stub_task_done_path(monkeypatch, ap, *, on_summary=None):
+    """Wire maybe_run_autopilot's TASK_DONE branch for a no-DB unit test.
+
+    - is_autopilot_enabled → True (config-driven, no marker probe).
+    - _get_or_persist_run_id → a fixed run id.
+    - run_virtual_user → None + stamp _vu_emitted_done (the TASK_DONE verdict).
+    - _should_generate_run_summary → True (so a report WOULD be generated
+      synchronously in the buggy path — the test proves it is NOT).
+    - clear_autopilot_marker / _clear_run_id → captured, no DB.
+    - append_event → captured (the vu_cancel emit).
+    - _emit_run_summary → routed through `on_summary` so the test can observe
+      WHICH THREAD invokes the reporter and WHEN.
+    """
+    monkeypatch.setattr(ap, 'is_autopilot_enabled', lambda task: True)
+    monkeypatch.setattr(ap, '_get_or_persist_run_id', lambda conv_id: 'ar-td')
+
+    def _fake_vu(task, vu_msg_id=None):
+        task['_vu_emitted_done'] = True
+        return None
+    monkeypatch.setattr(ap, 'run_virtual_user', _fake_vu)
+    monkeypatch.setattr(ap, '_should_generate_run_summary', lambda conv_id: True)
+    monkeypatch.setattr(ap, '_has_pending_real_message', lambda conv_id: False)
+    monkeypatch.setattr(ap, '_successor_already_running',
+                        lambda task, conv_id: False)
+
+    cleared = {'marker': [], 'run_pin': []}
+    import lib.message_queue as _mq
+    monkeypatch.setattr(_mq, 'clear_autopilot_marker',
+                        lambda cid: cleared['marker'].append(cid))
+    monkeypatch.setattr(ap, '_clear_run_id',
+                        lambda cid: cleared['run_pin'].append(cid))
+
+    events = []
+    monkeypatch.setattr('lib.tasks_pkg.manager.append_event',
+                        lambda task, ev: events.append(ev))
+
+    if on_summary is not None:
+        monkeypatch.setattr(ap, '_emit_run_summary', on_summary)
+    return cleared, events
+
+
+def test_task_done_settles_without_synchronous_reporter(monkeypatch):
+    """On [VU: TASK_DONE], maybe_run_autopilot must RETURN None and clear
+    _autopilot_deciding WITHOUT running the reporter on the calling thread.
+
+    NEGATIVE CONTROL: reverting to the synchronous `_emit_run_summary(...)` call
+    (the pre-fix behaviour) makes ``reporter_thread`` equal the main thread here
+    — i.e. the assertion `!= main thread` fails. This is the regression that
+    would have caught the ~63s freeze.
+    """
+    import lib.tasks_pkg.autopilot as ap
+
+    main_thread = threading.current_thread()
+    summary_done = threading.Event()
+    seen = {'thread': None, 'run_id': None, 'with_report': None}
+
+    def _obs_summary(task, conv_id, run_id, *, reason='task_done',
+                     with_report=True):
+        # Record WHICH thread ran the reporter + WHAT args it captured.
+        seen['thread'] = threading.current_thread()
+        seen['run_id'] = run_id
+        seen['with_report'] = with_report
+        summary_done.set()
+        return {'runId': run_id, 'status': 'concluded', 'reason': 'task_done'}
+
+    cleared, events = _stub_task_done_path(monkeypatch, ap,
+                                           on_summary=_obs_summary)
+
+    task = _task_done_task()
+    result = ap.maybe_run_autopilot(task)
+
+    # The hook returned immediately with NO follow-up baton (loop is ending).
+    assert result is None
+    # The deciding latch is cleared by the caller (orchestrator) — but the
+    # SYNC path must not have run the reporter before returning.
+    # The turn was settled synchronously: marker + run pin cleared, vu_cancel
+    # emitted — all on the calling thread, cheaply.
+    assert cleared['marker'] == ['conv-td']
+    assert cleared['run_pin'] == ['conv-td']
+    assert any(ev.get('type') == 'autopilot_vu_cancel' for ev in events)
+
+    # The summary MUST land — but OFF the calling thread. Wait for the daemon.
+    assert summary_done.wait(timeout=5), 'async summary never ran'
+    assert seen['thread'] is not None
+    assert seen['thread'] is not main_thread, \
+        'the reporter ran on the CALLING thread (synchronous) — the freeze bug'
+    # The ordering-hazard capture: run_id + with_report were passed through to
+    # the async body (not re-read after _clear_run_id wiped the pin).
+    assert seen['run_id'] == 'ar-td'
+    assert seen['with_report'] is True
+
+
+def test_task_done_captures_with_report_before_clearing_run_pin(monkeypatch):
+    """The with-report decision (reads autopilotTurnCount) MUST be captured on
+    the sync path BEFORE _clear_run_id clears it — proving the ordering hazard
+    is handled by capture-up-front, not by the async body re-reading cleared
+    state.
+
+    We make _should_generate_run_summary observe call order relative to
+    _clear_run_id: the eligibility read must happen first.
+    """
+    import lib.tasks_pkg.autopilot as ap
+
+    order = []
+    monkeypatch.setattr(ap, 'is_autopilot_enabled', lambda task: True)
+    monkeypatch.setattr(ap, '_get_or_persist_run_id', lambda conv_id: 'ar-td')
+    monkeypatch.setattr(ap, '_has_pending_real_message', lambda conv_id: False)
+    monkeypatch.setattr(ap, '_successor_already_running',
+                        lambda task, conv_id: False)
+
+    def _fake_vu(task, vu_msg_id=None):
+        task['_vu_emitted_done'] = True
+        return None
+    monkeypatch.setattr(ap, 'run_virtual_user', _fake_vu)
+
+    def _elig(conv_id):
+        order.append('should_generate')
+        return True
+    monkeypatch.setattr(ap, '_should_generate_run_summary', _elig)
+    monkeypatch.setattr(ap, '_clear_run_id',
+                        lambda cid: order.append('clear_run_id'))
+    import lib.message_queue as _mq
+    monkeypatch.setattr(_mq, 'clear_autopilot_marker', lambda cid: None)
+    monkeypatch.setattr('lib.tasks_pkg.manager.append_event',
+                        lambda task, ev: None)
+    # Swallow the async spawn so the daemon summary doesn't run in this test.
+    spawned = {}
+    monkeypatch.setattr(ap, '_spawn_async_run_summary',
+                        lambda task, conv_id, run_id, with_report:
+                        spawned.update(run_id=run_id, with_report=with_report))
+
+    ap.maybe_run_autopilot(_task_done_task())
+
+    # The eligibility read (autopilotTurnCount) precedes the run-pin clear.
+    assert order == ['should_generate', 'clear_run_id']
+    # And the captured decision is what gets handed to the async spawn.
+    assert spawned == {'run_id': 'ar-td', 'with_report': True}
+
+
+def test_run_summary_async_falls_back_to_bare_concluded_record(monkeypatch):
+    """The daemon body must ALWAYS conclude the run: when _emit_run_summary
+    returns None (empty/errored report), fall back to a bare
+    _store_run_record(reason='task_done') so the run can still fold."""
+    import lib.tasks_pkg.autopilot as ap
+
+    monkeypatch.setattr(ap, '_emit_run_summary',
+                        lambda task, conv_id, run_id, with_report=True: None)
+    stored = {}
+    monkeypatch.setattr(ap, '_store_run_record',
+                        lambda conv_id, run_id, *, reason='task_done', text='',
+                        translated='': stored.update(conv_id=conv_id,
+                                                     run_id=run_id,
+                                                     reason=reason))
+
+    ap._run_summary_async(_task_done_task(), 'conv-td', 'ar-td', True)
+    assert stored == {'conv_id': 'conv-td', 'run_id': 'ar-td',
+                      'reason': 'task_done'}
+
+
+def test_run_summary_async_skips_fallback_when_report_written(monkeypatch):
+    """When _emit_run_summary DID write a concluded record, the daemon body must
+    NOT also write the bare fallback (no redundant second write)."""
+    import lib.tasks_pkg.autopilot as ap
+
+    monkeypatch.setattr(ap, '_emit_run_summary',
+                        lambda task, conv_id, run_id, with_report=True:
+                        {'runId': run_id, 'status': 'concluded',
+                         'reason': 'task_done', 'content': 'Report.'})
+    fallback_calls = []
+    monkeypatch.setattr(ap, '_store_run_record',
+                        lambda *a, **k: fallback_calls.append((a, k)))
+
+    ap._run_summary_async(_task_done_task(), 'conv-td', 'ar-td', True)
+    assert fallback_calls == [], 'no bare fallback when the reporter wrote a record'
+
+
+def test_spawn_async_run_summary_is_daemon_thread(monkeypatch):
+    """The summary MUST be dispatched on a daemon thread (mirrors
+    _spawn_async_commit_round) so it can never wedge shutdown or the hot path."""
+    import lib.tasks_pkg.autopilot as ap
+
+    ran = threading.Event()
+    observed = {}
+
+    def _fake_body(task, conv_id, run_id, with_report):
+        observed['thread'] = threading.current_thread()
+        ran.set()
+    monkeypatch.setattr(ap, '_run_summary_async', _fake_body)
+
+    ap._spawn_async_run_summary(_task_done_task(), 'conv-td', 'ar-td', True)
+    assert ran.wait(timeout=5), 'daemon summary body never ran'
+    assert observed['thread'].daemon is True
+    assert observed['thread'] is not threading.current_thread()

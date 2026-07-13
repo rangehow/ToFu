@@ -85,7 +85,7 @@ HARNESS = textwrap.dedent("""
     const shown = el.style.display !== 'none';
     const hasHref = el.getAttribute('href') === 'https://github.com/x/y/releases';
     const hasLabel = el.textContent.includes('Mobile client');
-    const hasSvg = el.innerHTML.includes('<svg');
+    const hasSvg = el.innerHTML.includes('tofu-welcome.svg');
 
     // Case 2: URL absent → stays hidden.
     let el2 = runWith({{ version: '1.0' }});
@@ -111,7 +111,7 @@ def test_mobile_client_entry_renders_only_when_url_present():
     assert out["shown"] is True, "link must be visible when URL present"
     assert out["hasHref"] is True, "href must be the release URL"
     assert out["hasLabel"] is True, "label must use the i18n key"
-    assert out["hasSvg"] is True, "must use an SVG glyph (no emoji, §3.4)"
+    assert out["hasSvg"] is True, "must use the tofu-welcome.svg mascot icon (no emoji, §3.4)"
     assert out["hidden"] is True, "must stay hidden when URL absent"
 
 

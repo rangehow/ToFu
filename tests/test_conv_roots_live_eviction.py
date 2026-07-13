@@ -54,7 +54,6 @@ Double-neuter (on-disk, restored byte-identical):
 
 import os
 import shutil
-import subprocess
 import sys
 import tempfile
 
@@ -208,30 +207,17 @@ def _run(fn):
         return False
 
 
-def _neuter(find, repl, label):
-    with open(_TARGET, encoding='utf-8') as f:
-        src = f.read()
-    if src.count(find) != 1:
-        raise AssertionError(f'NC anchor not unique/found for {label}: {find!r} '
-                             f'(count={src.count(find)})')
-    with open(_TARGET, 'w', encoding='utf-8') as f:
-        f.write(src.replace(find, repl, 1))
-    return src
+def _neuter_ctx(find, repl):
+    """In-memory neuter of _TARGET (lib.project_mod.config) via the shared
+    xdist-safe harness — the shipped file is opened read-only, never written."""
+    from tests._nc_harness import neutered_source
+    return neutered_source(_TARGET, find, repl)
 
 
-def _restore(src):
-    with open(_TARGET, 'w', encoding='utf-8') as f:
-        f.write(src)
-
-
-def _subrun(test_name):
-    code = (
-        'import tests.test_conv_roots_live_eviction as t; '
-        f'import sys; sys.exit(0 if t._run(t.{test_name}) else 1)'
-    )
-    r = subprocess.run([sys.executable, '-c', code], cwd=_ROOT,
-                       capture_output=True, text=True)
-    return r.returncode == 0, r.stdout + r.stderr
+def _subrun(test_fn):
+    """Run ONE positive test IN-PROCESS (under the active in-memory neuter) and
+    return (passed, ''). No subprocess, no on-disk source mutation."""
+    return _run(test_fn), ''
 
 
 def main():
@@ -246,53 +232,41 @@ def main():
     # ── NC-1: disable the live-pin -> live conv evicted -> silent misroute ──
     print()
     print(_color('NC-1 — disable live-pin (_conv_has_live_task body → return False):', '36'))
-    # The REAL _conv_has_live_task early-returns False only when the probe
-    # can't run; neuter its live branch by short-circuiting the whole fn.
-    backup = _neuter(
-        'def _conv_has_live_task(conv_id):\n    ',
-        'def _conv_has_live_task(conv_id):\n    return False  # NC-1 neuter\n    ',
-        'live-pin')
-    try:
-        # NOTE: the tests install their OWN cfg._conv_has_live_task stub at
-        # runtime, which would MASK a source-level neuter. So for NC-1 we must
-        # neuter the EVICTION's view of liveness, not the fn the test stubs.
-        # Re-do: the eviction loop calls the MODULE-GLOBAL _conv_has_live_task
-        # name; the test rebinds that same attribute. To test the SOURCE, the
-        # neuter below is validated by a dedicated subprocess test that does
-        # NOT install a stub. See _run_nc1.
-        ok_mis, out = _subrun('_nc1_live_conv_misroutes_when_pin_disabled')
-        ok_idle, _ = _subrun('test_idle_conv_still_evicted')
-        if ok_mis:
-            _fail('NC-1: misroute test PASSED with pin disabled — pin not load-bearing!')
-        if not ok_idle:
-            _fail('NC-1: idle-eviction control failed — unintended blast radius')
-        _ok('NC-1: live conv MISROUTES with pin disabled; idle-eviction control holds')
-    finally:
-        _restore(backup)
+    # The NC-1 dedicated variant does NOT install a cfg._conv_has_live_task stub
+    # (it registers a real running task instead), so the SOURCE-level neuter of
+    # _conv_has_live_task governs. Under the in-memory harness, cfg is the
+    # neutered module for the ``with`` duration, so cfg._conv_has_live_task is
+    # the return-False variant — no subprocess, no on-disk write.
+    with _neuter_ctx(
+            'def _conv_has_live_task(conv_id):\n    ',
+            'def _conv_has_live_task(conv_id):\n    return False  # NC-1 neuter\n    '):
+        ok_mis, _ = _subrun(_nc1_live_conv_misroutes_when_pin_disabled)
+        ok_idle, _ = _subrun(test_idle_conv_still_evicted)
+    if ok_mis:
+        _fail('NC-1: misroute test PASSED with pin disabled — pin not load-bearing!')
+    if not ok_idle:
+        _fail('NC-1: idle-eviction control failed — unintended blast radius')
+    _ok('NC-1: live conv MISROUTES with pin disabled; idle-eviction control holds')
 
     # ── NC-2: make eviction a no-op -> unbounded growth (invariant) ──
     print()
     print(_color('NC-2 — neuter eviction (all-live force-evict removed → unbounded):', '36'))
-    backup = _neuter(
-        "        if victim is None:\n"
-        "            # All entries are live — evict strict-oldest to bound memory.\n"
-        "            victim, _ = _conv_roots.popitem(last=False)",
-        "        if victim is None:\n"
-        "            break  # NC-2 neuter: drop the force-evict fallback\n"
-        "            victim, _ = _conv_roots.popitem(last=False)",
-        'force-evict fallback')
-    try:
-        ok_bound, out = _subrun('test_all_live_force_evicts_oldest')
-        ok_mis2, _ = _subrun('test_live_conv_survives_cap_pressure_no_misroute')
-        if ok_bound:
-            _fail('NC-2: all-live bound test PASSED with force-evict removed — not load-bearing!')
-        if not ok_mis2:
-            _fail('NC-2: misroute control failed — unintended blast radius')
-        _ok('NC-2: unbounded growth when all live + force-evict removed; misroute control holds')
-    finally:
-        _restore(backup)
+    with _neuter_ctx(
+            "        if victim is None:\n"
+            "            # All entries are live — evict strict-oldest to bound memory.\n"
+            "            victim, _ = _conv_roots.popitem(last=False)",
+            "        if victim is None:\n"
+            "            break  # NC-2 neuter: drop the force-evict fallback\n"
+            "            victim, _ = _conv_roots.popitem(last=False)"):
+        ok_bound, _ = _subrun(test_all_live_force_evicts_oldest)
+        ok_mis2, _ = _subrun(test_live_conv_survives_cap_pressure_no_misroute)
+    if ok_bound:
+        _fail('NC-2: all-live bound test PASSED with force-evict removed — not load-bearing!')
+    if not ok_mis2:
+        _fail('NC-2: misroute control failed — unintended blast radius')
+    _ok('NC-2: unbounded growth when all live + force-evict removed; misroute control holds')
 
-    # ── byte-identical restore + post-restore baseline ──
+    # ── post-neuter baseline (source never mutated on disk) ──
     print()
     print(_color('Post-restore baseline:', '36'))
     if not all(_run(fn) for fn in _POSITIVE):

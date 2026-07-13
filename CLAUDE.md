@@ -17,11 +17,16 @@ new endpoints can be `async def` for native async I/O.
 > (single-file visual diagram in Claude-Code-style layered cards).  Re-scan those
 > files whenever you add a new sub-package or Blueprint.
 
+> **👤 Human-facing docs:** [`README.md`](README.md) / [`README_CN.md`](README_CN.md) are the
+> USER-facing product docs (features, how to use them). THIS file is the agent-facing
+> rules doc. When you ship a user-visible feature, update the README too — and keep the
+> Chinese README in sync.
+
 ```
 bootstrap.py           — Smart launcher: auto-installs missing pip packages via LLM diagnosis
 server.py              — App entry (Quart + Hypercorn), Flask→Quart shim, middleware,
                          logging bootstrap, auto-TLS for HTTP/2, VS Code proxy detection
-export.py              — Three-level sanitization export (personal / internal / opensource) — see §11
+export.py              — Three-level sanitization export (personal / internal / opensource) — see §10
 lib/                   — Core business logic
   log.py               — Centralized logging utilities (get_logger, log_exception, audit_log, log_context)
   # ── Shared infrastructure (used everywhere; see §4.6) ──
@@ -50,7 +55,7 @@ lib/                   — Core business logic
   ttl_cache.py         — Generic in-memory TTL cache with LRU eviction +
                          get_or_compute serialization (TTLCache class)
   task_runtime.py      — Compatibility shim → re-exports TaskRuntime from
-                         lib/agent_core/task_runtime.py (relocated 2026-06). See §14.
+                         lib/agent_core/task_runtime.py (relocated 2026-06). See §13.
   push.py              — Compatibility shim → re-exports PushHub + push_event() from
                          lib/agent_core/push.py — backs the /api/push WebSocket multiplexer (see §4.7)
   agent_core/          — Reusable agent base, as one browsable package (relocated 2026-06):
@@ -81,7 +86,7 @@ lib/                   — Core business logic
     dispatcher.py      — Core dispatch loop, fallback chains
     factory.py         — Client/provider factory
     slot.py            — Slot / key-pool state management
-  model_info.py        — Per-model capabilities + _clamp_max_tokens (see §13)
+  model_info.py        — Per-model capabilities + _clamp_max_tokens (see §12)
   tools/               — Tool definitions (package)
     project.py         — list_dir, read_files, grep_search, find_files, write_file, apply_diff, …
     search.py          — web_search
@@ -136,6 +141,10 @@ lib/                   — Core business logic
   search/              — Search orchestration + rerank + dedup (engines/ sub-package)
   mcp/                 — Model Context Protocol client, registry, config
   memory/              — Memory / stored-notes layer (storage, relevance, injection, tools)
+  conversations/       — Conversation persistence + the Project Brain (cross-conversation
+                         coordination): charter, board/epics, activity feed, peer messaging
+                         (project_peer.py), path leases, status lane, reconcile. See
+                         docs/PROJECT_BRAIN.md + docs/PROJECT_BRAIN_STATUS_LANE.md.
   oauth/               — OAuth subscription login (Claude Pro/Max, ChatGPT Codex):
                          manager, PKCE, token store. outbound.py bridges a logged-in
                          subscription into a managed server_config provider (the slot's
@@ -177,7 +186,7 @@ routes/                — Quart Blueprints. Top-level: chat (+ chat_queue / cha
                          _compaction), common, desktop, oauth, translate, upload, artifacts,
                          paper, push, compat_openai, compat_anthropic, api_docs, metrics,
                          legacy_redirects.
-  api_v1/              — Headless `/api/v1/*` surface (the canonical API — see §16):
+  api_v1/              — Headless `/api/v1/*` surface (the canonical API — see §15):
                          agents, agent_run, auth, billing, capabilities, chat,
                          conversations, daily_report, folders, keys, logs, mcp, memory,
                          oauth, optimizer, orchestrations, paper, project, providers,
@@ -210,7 +219,7 @@ tests/                 — pytest-style suites + standalone runners. Suites for 
                            test_trading_simulator_migration.py
                          Migration scripts (one-shot, idempotent, dry-run-safe):
                            _migrate_api_response.py, _migrate_request_parser.py,
-                           _migrate_http_client.py — see §15 for usage rules
+                           _migrate_http_client.py — see §14 for usage rules
 logs/
   app.log              — Business logic only (lib.*, routes.*, server) INFO+, daily rotation, 30 days
   access.log           — HTTP request log (werkzeug), daily rotation, 14 days
@@ -448,6 +457,30 @@ diff <(grep -oE 'static/js/[a-z_-]+\.js' index.html | sed 's|static/js/||' | sor
 - **Inline SVG preferred**: Embed the SVG inline in HTML for color control and no external dependency.
 - **Size to context**: Use `width`/`height` attributes matching the surrounding text size (e.g. 15×15 for tab buttons, 20×16 for section titles).
 - **Never use**: 💬 for Feishu, 🔍 for Google, 🐙 for GitHub, etc. — always the real logo.
+- **No unicode glyphs as controls either**: `⤢` / `−` / `+` / `⟳` etc. are
+  glyphs with font-dependent metrics that render off-center and font-fallback
+  differently across platforms — same prohibition as emoji. Use an inline SVG.
+
+**Alignment — the decision rule (this is a recurring bug class):** an inline
+`<svg>` sits on the text baseline and reserves descender space, so it renders
+~2–3px low next to text and floats off-center in a fixed box. Two correct
+patterns:
+
+- **Standalone affordance** (button, tile, logo+label row, toolbar control) →
+  make the PARENT a flex box and give the icon `display:block`. Use the shared
+  `.icon-box` utility (`static/styles.css`, base layer):
+  `display:inline-flex;align-items:center;justify-content:center` + `>svg{display:block}`.
+  Just add `class="icon-box"` to the icon's container.
+- **Icon inline within a sentence** → use `vertical-align` (the `Icon()` helper
+  in `static/js/core/icons.js` already bakes in `vertical-align:-0.125em`), and
+  match the icon `height` to the surrounding `font-size`.
+
+Traps: (1) `vertical-align` does NOTHING on a flex child — use `align-items:center`
+instead; (2) a centered flex box still looks low if you forget `svg{display:block}`
+(that line, not the parent centering, removes the descender gap); (3) `Icon(name,size)`
+already carries `vertical-align`, so don't also fight it — inside a flex parent just
+let `.icon-box`'s `display:block` win. The `.icon-box` invariant is guarded by
+`tests/test_frontend_icon_box_alignment.py`.
 
 > **Scope note**: this rule governs *icons* (visual UI affordances). It does NOT
 > touch the separate structured-protocol tokens (e.g. the `✅`/`❌` critic-verdict
@@ -475,6 +508,12 @@ if hostname.startswith('set-zw05'):
 
 # ✅ CORRECT — environment-driven, auto-detected
 _CLUSTER_MOUNTS_ENV = os.environ.get('CROSS_DC_CLUSTER_MOUNTS', '')
+_LOCAL_IDC = os.environ.get('CROSS_DC_LOCAL_IDC', '')
+# Benchmark latency at startup to classify local vs remote
+```
+
+---
+
 ### 3.6 Agent-Written Project Artifacts — the `.tofu` prefix convention
 
 > **Any hidden file or directory the assistant writes INTO a user's project
@@ -560,13 +599,6 @@ PROFILE]`), so the fix is purely about the DEFAULT a headless caller lands on.
 ---
 
 ## 4. Architecture Patterns
-_LOCAL_IDC = os.environ.get('CROSS_DC_LOCAL_IDC', '')
-# Benchmark latency at startup to classify local vs remote
-```
-
----
-
-## 4. Architecture Patterns
 
 ### 4.1 Flask Blueprint registration
 
@@ -575,7 +607,7 @@ The authoritative core list is `ALL_BLUEPRINTS` in `routes/__init__.py`. Optiona
 (e.g. the now-external `tofu-trading` package) are NOT imported here — they mount via the
 `tofu.blueprints` / `tofu.startup` entry-point groups discovered by `routes/plugin_registry.py`.
 The canonical API surface is `/api/v1/*` (`routes/api_v1/`); legacy `/api/*` routes redirect there
-(see §16). New endpoints land on `/api/v1/*` first.
+(see §15). New endpoints land on `/api/v1/*` first.
 
 ```python
 # routes/my_feature.py
@@ -677,7 +709,7 @@ logger.error('[Tool:%s] failed: %s', tool_name, error, exc_info=True)
 | Outbound HTTP (async, in `async def` routes) | `await async_http_get / async_http_post / async with async_http_stream(...)` | bare `httpx.AsyncClient` per call |
 | Reading/writing JSON files | `lib.json_store.read_json / write_json_atomic / update_json_atomic` | hand-rolled `tempfile.mkstemp + os.replace`, `json.load/dump` |
 | Background TTL caches | `lib.ttl_cache.TTLCache(ttl=..., max_size=..., name=...)` | hand-rolled `_cache = {}` + `_cache_lock = threading.Lock()` |
-| Background tasks (chat / paper / translate / trading-sim style) | `lib.task_runtime.TaskRuntime` (one instance per task kind) — see §14 | local `_tasks = {}` registry with custom append/poll/abort logic |
+| Background tasks (chat / paper / translate / trading-sim style) | `lib.task_runtime.TaskRuntime` (one instance per task kind) — see §13 | local `_tasks = {}` registry with custom append/poll/abort logic |
 | Multi-round tool-calling loop + abort/stop | `lib.agent_loop.run_agent_loop(...)` + `AbortSignal.from_event / from_task_flag / from_callback / never` | hand-rolled `for rnd in range(max+1)` shell with per-engine before/post-stream/between-tools abort checks |
 | Server-side push (real-time event channel) | `lib.push.push_event(channel, task_id, event)` (auto-fired from `TaskRuntime.append_event`) — see §4.7 | per-feature WebSocket endpoints |
 
@@ -801,8 +833,8 @@ Before submitting any code change, verify:
 - [ ] **Secrets not logged**: API keys, tokens, passwords never appear in log output.
 - [ ] **Large data truncated**: Use `%.500s` or `[:500]` to cap logged payloads.
 - [ ] **No hardcoded env values**: No hardcoded paths, hostnames, cluster names, or datacenter IDs — use env vars or config files (see §3.5).
-- [ ] **Use the shared infrastructure** (see §4.6): new routes use `api_ok` / `api_error` / `parse_body`; new outbound HTTP uses `http_client.http_get / http_post`; new JSON-on-disk uses `json_store`; new background tasks use `TaskRuntime` (§14); new TTL caches use `TTLCache`. Don't re-grow the patterns we just deleted.
-- [ ] **Export sync**: If this change adds/modifies secrets, endpoints, credentials, data dirs, or internal identifiers → update `export.py` (see §11.3).
+- [ ] **Use the shared infrastructure** (see §4.6): new routes use `api_ok` / `api_error` / `parse_body`; new outbound HTTP uses `http_client.http_get / http_post`; new JSON-on-disk uses `json_store`; new background tasks use `TaskRuntime` (§13); new TTL caches use `TTLCache`. Don't re-grow the patterns we just deleted.
+- [ ] **Export sync**: If this change adds/modifies secrets, endpoints, credentials, data dirs, or internal identifiers → update `export.py` (see §10.3).
 
 ---
 
@@ -831,13 +863,13 @@ Before submitting any code change, verify:
 | Make an outbound HTTP call (sync or async) | `lib/http_client.py` — `http_get` / `http_post` / `async_http_get` / `async_http_post` / `http_stream` / `async_http_stream` (§4.6) |
 | Read/write a JSON file safely | `lib/json_store.py` — `read_json` / `write_json_atomic` / `update_json_atomic` (§4.6) |
 | Add an in-memory TTL cache | `lib/ttl_cache.py` — `TTLCache(ttl=, max_size=, name=)` (§4.6) |
-| Add a background task (poll/abort/events) | `lib/task_runtime.py` — `TaskRuntime` + `routes/_task_routes.py::register_task_routes` (§14) |
+| Add a background task (poll/abort/events) | `lib/task_runtime.py` — `TaskRuntime` + `routes/_task_routes.py::register_task_routes` (§13) |
 | Run a multi-round tool-calling loop with Stop support | `lib/agent_loop.py` — `run_agent_loop(...)` + `AbortSignal` (wraps Event / task-flag / callback) (§4.6) |
 | Push a real-time event to the frontend | `lib/push.py::push_event(channel, task_id, event)` — auto-fired by `TaskRuntime.append_event` (§4.7) |
 | Change LLM behavior | `lib/llm/` (package), `lib/llm_dispatch/` (package) |
 | Adjust per-model token caps | `lib/model_info.py` (`_clamp_max_tokens`) |
 | Add a new tool | Define in `lib/tools/` (pick the right submodule or add one) → register routing in `lib/tasks_pkg/tool_dispatch.py` → add handler in `lib/tasks_pkg/handlers/` |
-| Add a new API endpoint | Land it on `/api/v1/*` first: `routes/api_v1/` (Blueprint) → `routes/api_v1/__init__.py` (`ALL_V1_BLUEPRINTS`); use `api_ok` / `api_error` (§4.6) + `@require_scope` + `@api_meta` (§16) |
+| Add a new API endpoint | Land it on `/api/v1/*` first: `routes/api_v1/` (Blueprint) → `routes/api_v1/__init__.py` (`ALL_V1_BLUEPRINTS`); use `api_ok` / `api_error` (§4.6) + `@require_scope` + `@api_meta` (§15) |
 | Mount an optional feature bundle (e.g. trading) | `routes/plugin_registry.py` — `tofu.blueprints` / `tofu.startup` / `tofu.task_runtimes` entry-point groups |
 | Fix streaming issues | `lib/llm/stream.py` (SSE) → `routes/chat.py` (delivery) |
 | Debug task flow | `lib/tasks_pkg/orchestrator.py`, `lib/tasks_pkg/manager.py` |
@@ -866,7 +898,7 @@ Before submitting any code change, verify:
 | Nightly optimizer (self-tuning) | `lib/optimizer/` (orchestrator, analyzer, proposer, applier, storage, actions/), `routes/api_v1/optimizer.py`, `static/js/optimizer.js` |
 | Folder / conversation organization | `routes/api_v1/folders.py`, `routes/conversations.py` |
 | Check recent errors | `tail -f logs/error.log` or `grep_search` the `logs/` directory |
-| Export / sanitize project | `export.py` (three modes: `--mode personal` / `--mode internal` / `--mode opensource`) — see §11 |
+| Export / sanitize project | `export.py` (three modes: `--mode personal` / `--mode internal` / `--mode opensource`) — see §10 |
 | Cross-platform compat | `lib/compat/_platform.py` (core, re-exported from `lib/compat/__init__.py`) → `debug/test_cross_platform.py` (smoke test) |
 | Cross-DC FUSE latency | `lib/cross_dc.py` (detection) → `data/config/cross_dc.json` (config) |
 
@@ -1003,61 +1035,13 @@ conversation itself — that's always the DB query above.
 
 ---
 
-## 10. 🚫 Change Approval Requirements — ASK BEFORE MODIFYING
-
-> **The following categories of changes require explicit user approval.**
-> Do NOT modify these autonomously — always present the proposed change,
-> explain the rationale, and **wait for confirmation** before applying.
-
-### 10.1 Hyperparameter & Configuration Changes
-Any numeric/boolean constant that affects model behavior or system performance:
-- **LLM parameters**: temperature, top_p, top_k, max_tokens, frequency_penalty, presence_penalty, stop sequences
-- **Retry & timeout settings**: retry counts, backoff multipliers, request timeouts, SSE timeouts
-- **Token budgets**: context window sizes, compaction thresholds, layer boundaries, max tool result lengths
-- **Rate limiter settings**: RPM, TPM, concurrency caps, cooldown periods
-- **Batch/queue sizes**: thread pool sizes, chunk sizes, polling intervals
-
-### 10.2 Model Routing & Dispatch Logic
-- Default model assignments or model aliases
-- API key rotation rules or priority ordering
-- Fallback chains or model capability mappings
-- Any change to `lib/llm_dispatch/` routing tables (esp. `config.py`, `dispatcher.py`)
-
-### 10.3 Database Schema Changes
-- **New tables / column changes**: define the table ONCE in
-  `lib/database/_core_schema.py` (SQLAlchemy Core), add a byte-equivalence
-  parity test in `tests/test_core_schema_parity.py` (green on BOTH backends),
-  then wire it into bootstrap via `create_if_absent(...)` in BOTH
-  `_schema_pg.py` and `_schema_sqlite.py`. The full table migration is complete
-  (2026-06) — do NOT hand-author a `CREATE TABLE` in the `_schema_*.py` files.
-- **Backend-specific extras** (indexes, PG-only tsvector/GIN/trigger infra, and
-  upgrade-only `ALTER TABLE` migrations) DO still live in `_schema_pg.py` /
-  `_schema_sqlite.py` and must be kept in sync across backends.
-- Changes to migration scripts or DB initialization logic
-- Changes to `lib/database/_sql_translate.py` (SQLite→PG SQL translation rules)
-
-### 10.4 Security-Sensitive Changes
-- Authentication/authorization logic
-- CORS, CSP, or proxy configurations
-- API key handling or storage
-- File system access permissions in `lib/project_mod/`
-
-### 10.5 How to Comply
-When a task touches any of the above:
-1. **Stop** before making the change.
-2. **Present** the current value, proposed new value, and reasoning.
-3. **Wait** for explicit user approval (e.g., "yes", "go ahead", "approved").
-4. **Log** the change with `audit_log('config_change', param=name, old=old_val, new=new_val, approved_by='user')`.
-
----
-
-## 11. ⚠️ MANDATORY: Export Sanitization & Sensitive Data Sync
+## 10. ⚠️ MANDATORY: Export Sanitization & Sensitive Data Sync
 
 > **Whenever you add, move, or modify ANY sensitive data in the codebase, you MUST
 > also update `export.py` to ensure it is properly sanitized on export.**
 > Failure to keep `export.py` in sync means secrets will leak to colleagues or the public.
 
-### 11.1 What `export.py` does
+### 10.1 What `export.py` does
 
 `export.py` copies the project to a clean destination with three sanitization levels:
 
@@ -1075,7 +1059,7 @@ python3 export.py --mode opensource --dest ~/tofu-public
 python3 export.py --mode opensource --dry-run
 ```
 
-### 11.2 Sanitization matrix
+### 10.2 Sanitization matrix
 
 | Data category | `personal` | `internal` | `opensource` | Where defined in export.py |
 |---|---|---|---|---|
@@ -1100,7 +1084,7 @@ python3 export.py --mode opensource --dry-run
 | `export.py` itself | ✓ kept | ✗ removed | ✗ removed | `ALWAYS_EXCLUDE_FILES` |
 | `CLAUDE.md` | ✓ kept | ✗ removed | ✗ removed | `ALWAYS_EXCLUDE_FILES` |
 
-### 11.3 ⚠️ When to update `export.py` — MANDATORY triggers
+### 10.3 ⚠️ When to update `export.py` — MANDATORY triggers
 
 You **MUST** update `export.py` when any of the following happens:
 
@@ -1118,7 +1102,7 @@ You **MUST** update `export.py` when any of the following happens:
 | **New `.env` variable with secret default** | Ensure `.env` is excluded (already is) and `.env.example` uses placeholders |
 | **New feature flag that should be OFF in exports** | Add to the `.env` written by `_create_skeleton()` in `export.py` |
 
-### 11.4 How to comply
+### 10.4 How to comply
 
 When making a code change that introduces sensitive data:
 
@@ -1140,7 +1124,7 @@ _SECRETS = {
 }
 ```
 
-### 11.5 Post-export verification
+### 10.5 Post-export verification
 
 The `opensource` mode automatically runs `_verify_opensource()` after export, which scans
 all text files for known secret patterns. If any leak is detected, it prints file:line
@@ -1150,7 +1134,7 @@ To add new patterns to the verifier, update the `leak_patterns` list in `_verify
 
 ---
 
-### 11.6 Database auto-creation on exported copies
+### 10.6 Database auto-creation on exported copies
 
 Exported projects ship with no database file or PG data directory. On first
 `python3 server.py` the dual-backend layer (`lib/database/`) will:
@@ -1164,20 +1148,20 @@ Either way, colleagues can `cd tofu-team && python3 server.py` with zero manual 
 
 ---
 
-## 12. ⚠️ Process Safety
+## 11. ⚠️ Process Safety
 
 Unless explicitly requested, do not kill server.py on your own.
 
 ---
 
-## 13. ⚠️ MANDATORY: No Artificial `max_tokens` Cap on Long-Form Generation
+## 12. ⚠️ MANDATORY: No Artificial `max_tokens` Cap on Long-Form Generation
 
 > **For long-form generation (paper reports, deep analyses, full translations,
 > multi-section writeups), NEVER hardcode a small `max_tokens` value.**
 > The output must be allowed to run to the model's native ceiling so the
 > content is not silently truncated mid-section.
 
-### 13.1 The rule
+### 12.1 The rule
 
 - **Pass a very large ceiling** (use `128000` as the convention) to
   `dispatch_stream(...)` / `dispatch_chat(...)` / `_stream_llm_sse(...)` for
@@ -1190,7 +1174,7 @@ Unless explicitly requested, do not kill server.py on your own.
   long-form output. 4096 tokens ≈ 3k words — it truncates complex reports
   (e.g. Reading Mode's 9-section paper report) mid-Technical-Reference.
 
-### 13.2 Why this exists
+### 12.2 Why this exists
 
 - Users reported that Reading Mode reports were silently cut off before the
   last sections (Research Landscape, Technical Reference, Reproducibility
@@ -1199,7 +1183,7 @@ Unless explicitly requested, do not kill server.py on your own.
 - The fix is to pass a large ceiling and let `_clamp_max_tokens` do its job
   per model, rather than picking any magic number.
 
-### 13.3 Where this applies
+### 12.3 Where this applies
 
 | Code path | Required behavior |
 |---|---|
@@ -1208,12 +1192,12 @@ Unless explicitly requested, do not kill server.py on your own.
 | Any future "generate a complete/full/comprehensive X" tool | `max_tokens=128000` |
 | Short, bounded outputs (e.g. title summarization, 1-line labels) | Small cap is fine (explain why in a comment) |
 
-### 13.4 How to comply
+### 12.4 How to comply
 
 - When adding a new long-form generation path, grep for `max_tokens=` in
   the existing file and set it to `128000` (or document why a smaller
   value is correct for that specific path).
-- **Note on §10.1**: Bumping `max_tokens` caps for long-form generation
+- **Note on approval**: Bumping `max_tokens` caps for long-form generation
   to follow this rule is NOT a hyperparameter tuning change — it is a
   correctness fix to prevent truncation, and does not require separate
   approval. Reducing it back to a small cap, however, does require
@@ -1221,7 +1205,7 @@ Unless explicitly requested, do not kill server.py on your own.
 
 ---
 
-## 14. Background tasks — `TaskRuntime` and `spawn_task`
+## 13. Background tasks — `TaskRuntime` and `spawn_task`
 
 `TaskRuntime` is the **single source of truth** for every server-side
 background task pattern. Five legacy registries (chat, paper-report,
@@ -1231,7 +1215,7 @@ must follow suit. It now lives in `lib/agent_core/task_runtime.py`
 `from lib.task_runtime import TaskRuntime` still works. New code may
 import `from lib.agent_core import TaskRuntime`.
 
-### 14.1 Standard task dict
+### 13.1 Standard task dict
 
 ```python
 {
@@ -1248,7 +1232,7 @@ Custom fields go in `meta` (or, for legacy compatibility, augment the
 dict directly after `runtime.create()` — chat does this for `convId`,
 `messages`, `content_lock`, etc.).
 
-### 14.2 Adding a new task kind
+### 13.2 Adding a new task kind
 
 ```python
 # lib/foo.py
@@ -1279,7 +1263,7 @@ Then expose poll/abort routes by calling
 `routes._task_routes.register_task_routes(bp, _foo_runtime, url_prefix='/api/foo')`
 and writing only the start handler by hand.
 
-### 14.3 Spawning rules
+### 13.3 Spawning rules
 
 - **Use `runtime.spawn(task_id, fn, *args)`** — picks `asyncio.to_thread`
   inside the event loop or a daemon thread outside. NEVER use raw
@@ -1290,7 +1274,7 @@ and writing only the start handler by hand.
   message_queue, agent_backends, autopilot) all routed through
   `spawn_task`.
 
-### 14.4 Aborting
+### 13.4 Aborting
 
 - Workers MUST poll `task['abort_event'].is_set()` at safe checkpoints
   and call `runtime.finish(id)` (no `error=`) when they observe it —
@@ -1299,7 +1283,7 @@ and writing only the start handler by hand.
   error wins (matches the legacy behaviour).
 - `runtime.finish` is idempotent — second call returns `False`.
 
-### 14.5 Why this matters
+### 13.5 Why this matters
 
 The five legacy registries each had subtly different semantics
 (cursor-based polling, dedup-by-tuple, per-channel push). Migrating them
@@ -1309,7 +1293,7 @@ is battle-tested with 28 unit tests + 5 migration test suites.
 
 ---
 
-## 15. Migration scripts in `tests/_migrate_*.py`
+## 14. Migration scripts in `tests/_migrate_*.py`
 
 Three checked-in **one-shot** migration scripts exist in `tests/`:
 
@@ -1319,7 +1303,7 @@ Three checked-in **one-shot** migration scripts exist in `tests/`:
 | `tests/_migrate_request_parser.py` | `data = request.get_json(silent=True) or {}` → `data = parse_body()` |
 | `tests/_migrate_http_client.py` | `requests.X(url, ..., proxies=_proxies_for(url), ...)` → `http_X(url, ...)` |
 
-### 15.1 Common contract
+### 14.1 Common contract
 
 - **Dry-run by default** (`python tests/_migrate_X.py`); pass `--apply`
   to write changes; pass `--file BASENAME` to restrict (api_response
@@ -1332,7 +1316,7 @@ Three checked-in **one-shot** migration scripts exist in `tests/`:
   the script extends `from lib.X import …` or inserts a fresh import
   line in the right group.
 
-### 15.2 When to run
+### 14.2 When to run
 
 These were applied once during the initial migration and shouldn't
 need re-running. But if you write new code in the legacy patterns by
@@ -1342,7 +1326,7 @@ scripts skip docstrings and unknown statuses but cannot detect
 semantic edge cases (e.g. a route that intentionally uses a custom
 response shape).
 
-### 15.3 Don't add new scripts in this style
+### 14.3 Don't add new scripts in this style
 
 If you're tempted to write a fourth `_migrate_X.py`, the right move is
 usually:
@@ -1355,7 +1339,7 @@ usually:
 
 ---
 
-## 16. ⚠️ MANDATORY: Headless API + Frontend/Backend Boundary
+## 15. ⚠️ MANDATORY: Headless API + Frontend/Backend Boundary
 
 > **Every UI feature MUST be a `frontend → POST → backend does the
 > work → returns result` round trip.** The browser is one client of
@@ -1369,7 +1353,7 @@ The full guide for headless callers lives in
 backlog (per-file leak audit) is in
 [`docs/JS_LEAK_AUDIT.md`](docs/JS_LEAK_AUDIT.md).
 
-### 16.1 Three API surfaces (all wired to the same orchestrator)
+### 15.1 Three API surfaces (all wired to the same orchestrator)
 
 | Path prefix     | Purpose                                   | Auth                       |
 |-----------------|-------------------------------------------|----------------------------|
@@ -1383,7 +1367,7 @@ becomes a client of that endpoint. Compat adapters
 (`lib/compat/openai.py`, `lib/compat/anthropic.py`) translate the
 ecosystem shapes onto the same backend.
 
-### 16.2 Single auth model — Bearer everywhere (UI included)
+### 15.2 Single auth model — Bearer everywhere (UI included)
 
 Tofu has **one** authentication system: API keys minted by
 `lib/api_keys.py`. The UI, the SDK, the OpenAI / Anthropic compat
@@ -1459,7 +1443,7 @@ first visit; SDK clients via the `Authorization` header.
 >    the URL before any route sees it; subsequent navigation cannot
 >    leak the token via referer / address bar.
 
-### 16.3 OpenAPI 3.1 self-description
+### 15.3 OpenAPI 3.1 self-description
 
 Routes annotate themselves via `@api_meta(...)`:
 
@@ -1482,13 +1466,13 @@ emits the full spec at `/api/openapi.json`. Routes without
 `@api_meta` still appear (with auto-derived tags) so the spec stays
 drift-free.
 
-### 16.4 Idempotency
+### 15.4 Idempotency
 
 Use `@idempotent_post()` on any POST that creates a side-effect
 resource. Clients send `Idempotency-Key: <uuid>`; replays within
 24h return the cached response with `Idempotency-Replay: true`.
 
-### 16.5 What lives where — the boundary rule
+### 15.5 What lives where — the boundary rule
 
 | In `static/js/*`                                     | In `lib/`, `routes/`        |
 |------------------------------------------------------|------------------------------|
@@ -1499,10 +1483,10 @@ resource. Clients send `Idempotency-Key: <uuid>`; replays within
 | Fetch wrappers + render of returned structured data  | Derivation of structured data|
 | i18n string lookup                                   | Tool round / turn summary    |
 
-Adding code to a `.js` file?  Run the self-test in §16.6 before you
+Adding code to a `.js` file?  Run the self-test in §15.6 before you
 commit.
 
-### 16.6 Self-test for new JS
+### 15.6 Self-test for new JS
 
 Ask:
 
@@ -1520,7 +1504,7 @@ keyboard shortcut) → JS is the right place.
 Every new top-level JS file still has to be added to `_BUNDLE_FILES`
 in `lib/js_bundler.py` (see §3.2.1) — that hasn't changed.
 
-### 16.7 PR checklist additions
+### 15.7 PR checklist additions
 
 - [ ] **API parity**: any new UI feature is reachable via `/api/v1/*`
       in the same PR.

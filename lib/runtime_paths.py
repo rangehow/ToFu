@@ -72,7 +72,8 @@ def _dir_is_writable(path: str) -> bool:
             fh.write('')
         os.remove(probe)
         return True
-    except OSError:
+    except OSError as e:
+        logger.debug('[runtime_paths] _dir_is_writable(%r) failed: %s', path, e)
         return False
 
 
@@ -88,7 +89,8 @@ def _dir_is_populated(path: str) -> bool:
     try:
         with os.scandir(path) as it:
             return any(True for _ in it)
-    except OSError:
+    except OSError as e:
+        logger.debug('[runtime_paths] _dir_is_populated(%r) failed: %s', path, e)
         return False
 
 
@@ -214,10 +216,14 @@ def project_sessions_root() -> str:
 
     Holds per-project undo/redo history — ``<session_id>/modifications.json``,
     which carries the PRE-image of every file the assistant edited (personal
-    conversation content). This is mutable USER STATE (``.project_sessions/``
-    in :data:`lib.runtime_layout.INSTALL_STATE`), historically written INTO the
-    code tree at ``<repo>/lib/.project_sessions`` — so a frozen / read-only /
-    relocated install would try to write under a read-only ``lib/``.
+    conversation content). This is mutable USER STATE: the in-tree location is
+    registered as ``lib/.project_sessions/`` in
+    :data:`lib.runtime_layout.INSTALL_STATE` (so the update skip-list / export
+    excludes / ``.gitignore`` all recognise it from ONE source), and the
+    relocated location falls under that registry's ``data/`` entry. Historically
+    written INTO the code tree at ``<repo>/lib/.project_sessions`` — so a frozen
+    / read-only / relocated install would try to write under a read-only
+    ``lib/``.
 
     Layout policy, chosen to keep EXISTING in-tree installs byte-identical (a
     populated ``lib/.project_sessions`` must keep resolving to the SAME dir so

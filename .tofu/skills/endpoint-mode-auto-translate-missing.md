@@ -1,229 +1,44 @@
 ---
 name: endpoint-mode-auto-translate-missing
-description: Endpoint mode auto-translate — 4 stacked fixes; Fix 3 protects translatedContent against save_conv INSERT OR REPLACE overwrite, Fix 4 extends the pipeline to critic messages (role=user + _isEndpointReview) end-to-end
+description: Auto-translate safety net misses messages persisted OFF the main assistant finalize (endpoint-critic + autopilot VU turns): wire _maybe_auto_translate_* at each separate persist site (fwd) AND one-shot backfill (vu_translate_backfill.py + _migrate_backfill_vu_translations.py) that delegates to the same wire; writes translatedContent not originalContent
 enabled: true
 tags: [javascript, python, translation, endpoint, bug-fix, auto-translate, race-condition, cas, parallel-writes, finishStream, safety-net, critic, save_conv, overwrite]
 created: 2026-04-21T04:42:42Z
-updated: 2026-04-22T00:00:00Z
+updated: 2026-07-10T00:44:53Z
 ---
 
-# Endpoint Mode Auto-Translate Missing — Multi-Layer Bug
-
 ## Symptom
-In endpoint mode (planner → worker → critic loop) with `autoTranslate=ON`,
-none (or only one) of the endpoint turns are auto-translated — planner, most
-worker iterations, and **critic** stay in English forever. Only the LAST-to-
-finish translation (typically the final worker turn) survives in the DB.
+An assistant-like reply is never auto-translated even though `autoTranslate` is ON — only translated if a viewer happens to fire a manual `/api/translate`. Happens for message classes persisted on a code path SEPARATE from `manager._sync_result_to_conversation` (which owns the assistant safety net).
 
-## Fix 1 (2026-04-21) — dual-skip bypass
+## The pattern (recurring)
+`manager._sync_result_to_conversation → _maybe_auto_translate_assistant` (lib/tasks_pkg/auto_translate.py) is the server-side safety net, but it ONLY fires for the normal assistant finalize. Any turn persisted elsewhere needs an EXPLICIT wire at its own persist site. Two instances found + fixed:
 
-### Skip 1: Frontend `finishStream(convId)` (static/js/ui.js)
-Translation block only inspected `conv.messages[conv.messages.length - 1]`.
-In endpoint mode the last message is usually a critic review or an
-approved-worker turn, so earlier planner + worker turns were never considered.
+### 1. Endpoint-mode critic (role=user + `_isEndpointReview`)
+Fixed via `endpoint._trigger_endpoint_auto_translate` → `_maybe_auto_translate_critic` (delegates to `_maybe_auto_translate_assistant`, role-agnostic at commit layer).
 
-### Skip 2: Backend `persist_task_result` (lib/tasks_pkg/manager.py)
-Endpoint tasks deliberately skip `_sync_result_to_conversation`, taking with
-it `_maybe_auto_translate_assistant`. Dedicated
-`_sync_endpoint_turns_to_conversation` in `endpoint.py` had no translate hook.
+### 2. Autopilot VU turns (role=user + `_isVirtualUser`) — fixed 2026-07-10
+`autopilot._append_vu_message_to_conv` persists VU turns on a path with ZERO `_maybe_auto_translate_*` calls → every VU turn untranslated. Confirmed on conv mre58lxth33ncr (msg2 only via manual translate because on-screen; msg4 nothing).
 
-Fix v1 added:
-- Frontend loop over all `_isEndpointPlanner || _epIteration` assistant turns.
-- Backend `_trigger_endpoint_auto_translate(task, endpoint_turns)` in
-  `endpoint.py`, called from `_finalize()` and the fatal-error path.
+**Forward fix:** new `_maybe_auto_translate_vu(conv_id, vu_msg_id, content)` in autopilot.py, called at the VU-append success site in `maybe_run_autopilot`. It re-reads persisted messages, resolves the row INDEX by `m.get('_msgId') == vu_msg_id` (authoritative — NEVER positional), delegates to `_maybe_auto_translate_assistant(conv_id, content, vu_idx, db=db)`, passes **NO `task`** (parent task's `_assistantMsgId`+accumulator belong to the ASSISTANT turn), best-effort. `_run_autopilot_kick` needs NO separate wire (calls `maybe_run_autopilot`).
 
-## Fix 2 (2026-04-21 follow-up) — race in `_commit_translation_to_db`
+## Forward-wire is only HALF — you MUST also backfill already-persisted rows
+Owner pushback: the forward wire fixes NEW turns; a conversation named in the objective already has its VU turn on disk untranslated → still broken. Backfill (mirrors `segments_backfill` REUSE pattern):
+- **Shared pure collector** `lib/conversations/vu_translate_backfill.py::collect_untranslated_vu_turns(messages)` → `[{idx,msgId,content}]` for `role=user`+`_isVirtualUser` rows with non-empty `content` but no `translatedContent`. Pre-filter ONLY (no language/settings gate — those belong to the safety net).
+- **Migration** `tests/_migrate_backfill_vu_translations.py` (dry-run default; `--id`/`--limit`/`--apply`) uses the collector then DELEGATES each hit to the SAME `_maybe_auto_translate_vu` → the safety net's gates run verbatim; NO gate/raw-write of its own. The safety net spawns a daemon thread, so `--apply` POLLS the row until `translatedContent` lands (`--settle-timeout` default 120s) to report a VERIFIED result. Idempotent (collector skips rows with `translatedContent`).
+- **Ran on mre58lxth33ncr:** dry-run flagged idx=4; `--apply` committed 1227 chars; re-run = 0 (idempotent).
 
-After Fix 1, logs showed `[Endpoint:AutoTranslate] scheduled=N` with N
-correct and each `[Translate] Task X done` line completed. But the DB
-still showed `translatedContent` missing for some turns.
+## Idempotency vs frontend manual translate
+Safe to double-fire: safety-net gates — `resolve_auto_translate(settings)` off, `is_predominantly_chinese`, existing `translatedContent`, `claim_inflight(conv_id, msgId, idx)` dedup keyed by stable `_msgId`.
 
-### Root cause
-`_commit_translation_to_db` (routes/translate.py) did a **naive
-read-modify-write** on the full `conversation.messages` JSON with **no CAS
-and no per-conv lock**. N parallel translate threads (one per turn) all
-read the same snapshot, each injected its own `translatedContent` into a
-different index, and the last UPDATE wipes the earlier threads' writes.
+## VU/critic bilingual wiring is INVERTED — writes translatedContent NOT originalContent
+DISPLAY-translated: `content` = model-language original (原文 toggle), `translatedContent` = UI-language outer 译文 bubble. Opposite of a normal user msg (`originalContent`=源文, `content`=English-for-model). `_do_translate(..., field='translatedContent', targetLang='Chinese')` → `_commit_translation_to_db` sets `msg['translatedContent']`. ACCEPTANCE CHECK: after backfill, msg4 had translatedContent=1227(zh), `originalContent` ABSENT — proves it did NOT corrupt into the user→English path.
 
-### Fix
-1. Per-conversation `threading.Lock` (module-level `_commit_locks` dict).
-2. CAS loop on `updated_at` inside the lock (5 retries, exponential backoff).
-3. Raw `db.execute` for the UPDATE (need `cur.rowcount` to detect CAS miss —
-   `db_execute_with_retry` returns None).
-4. Logs `[Translate] Committed …attempt=N`, `[Translate] commit CAS miss …
-   retrying`, `[Translate] commit gave up after N attempts`.
+## Tests
+`tests/test_autopilot_vu_auto_translate.py` (4): real append+`_maybe_auto_translate_vu` vs fake DB; enqueued once at resolved index (not guessed), db threaded, `task=None`; missing-`_msgId` fires nothing; source-order guard; in-memory NEUTER (`tests._nc_harness.neutered_source`, read-only → no `_NC_GUARDED_SOURCES` entry) breaking the resolver makes it MISS. `tests/test_vu_translate_backfill.py` (6): collector selection + skips + reuse-guard + NEUTER dropping the `translatedContent` skip → translated row re-flags.
 
-## Fix 3 (2026-04-22) — `save_conv` INSERT OR REPLACE overwrites backend-committed translations
+## Deploy-gap sibling lesson (symptom 2 in the same report)
+"Translation/render still broken" can be a DEPLOY gap not a code bug: an uncommitted frontend fix with NO `static/js/bundle-*.js` on disk means the custom no-hot-reload bundler never shipped it. `build_bundle()` + `get_styles_filename()`; VERIFY by curl-ing the SERVED bytes on :15000 (`GET /` tag + `curl static/js/bundle-<hash>.js | grep <symbol>`), not just the file on disk.
 
-After Fix 2, logs confirmed every translate thread completed AND committed
-successfully. But DB inspection still showed PLANNER translations missing
-while worker translations survived — an **asymmetric** data loss that Fix 2's
-CAS/lock couldn't explain.
+## Guardrail
+Any message class persisted OUTSIDE `_sync_result_to_conversation` (autopilot VU, endpoint critic, future) is INVISIBLE to the safety net → (a) wire `_maybe_auto_translate_assistant` at that path's persist site (resolve index by `_msgId`, `task=None` unless the accumulator is that same turn's), AND (b) ship a one-shot backfill that REUSES the same wire for already-persisted rows. Forward-wire + backfill are the two halves.
 
-### Root cause
-Finish-sequence in endpoint mode is:
-1. Backend `_trigger_endpoint_auto_translate` spawns N translate threads.
-2. SSE `done` arrives on frontend → `finishStream(convId)` →
-   `syncConversationToServer(conv)` → PUT `/api/conversations/<id>`.
-3. `lightMsgs` passed in the PUT body is mapped from in-memory `conv.messages`
-   which has **no `translatedContent`** (backend just committed, frontend
-   hasn't reloaded).
-4. `save_conv` did a blind `INSERT OR REPLACE INTO conversations ... messages=?`
-   — unconditional full-row overwrite.
-5. Planner translate threads typically finish BEFORE step 4 (planner was
-   produced first) → save_conv wipes planner's `translatedContent`.
-6. Worker translate threads typically finish AFTER step 4 → the Fix 2 CAS
-   loop retries against the new `updated_at` and the worker's translation
-   survives.
-
-CAS inside the translate path defends against other translate threads; it
-does **not** defend against the frontend-initiated full-row overwrite.
-
-### Fix
-`save_conv` (routes/conversations.py) now:
-1. Reads the existing `messages` from the DB **before** the INSERT OR REPLACE.
-2. Merges a fixed set of preserved keys — `translatedContent`,
-   `_showingTranslation`, `_translateDone`, `_translateModel`, `_translateField`,
-   `_translatedCache`, `originalContent` — from the DB row into the incoming
-   payload for any matching message where the incoming snapshot lacks a
-   translation but the DB has one.
-3. **Strict identity check** before merge:
-   - same `role`
-   - same `_isEndpointPlanner` / `_isEndpointReview` / `_epIteration` markers
-   - **byte-for-byte content equality** (rejects merge onto edited messages
-     so we don't resurrect stale translations)
-   - skip image-gen outputs (`_igResult`, `_isImageGen`)
-4. Skipped entirely when `allowTruncate=true` (edit / regen intentionally
-   rewrites the tail).
-5. Emits `[save_conv] 🈯 Preserved N translatedContent entries ... (by role=...)`
-   on success and `[save_conv] ⚠️ translatedContent loss ...` when the server
-   had a translation that could not be preserved (content mismatch or
-   non-truncate tail drop).
-6. Also relaxed the frontend merge gate in `core.js::loadConvMsgs` — new
-   helper `_mergeServerTranslations(server, local)` is called in every
-   reconciliation branch (localHasUnsynced, activeTaskId, cache-fresh,
-   cache-stale is natural because it assigns `serverMsgs` wholesale).
-
-## Fix 4 (2026-04-22) — critic messages outside the pipeline
-
-The plan explicitly required critic auto-translation (previously scoped out
-by the Fix 1 docstring: "Critic review messages … intentionally skipped —
-content in this project is English-authored.").
-
-### Backend
-- New `_maybe_auto_translate_critic(conv_id, content, msg_idx, db)` in
-  `lib/tasks_pkg/manager.py` — thin wrapper that delegates to
-  `_maybe_auto_translate_assistant` (the commit layer is role-agnostic:
-  it writes to `messages[msg_idx]` by index) with a `[AutoTranslate:Critic]`
-  log prefix for observability.
-- `_trigger_endpoint_auto_translate` in `endpoint.py` iterates
-  planner + worker + critic now and counts per-role:
-  `[Endpoint:AutoTranslate] conv=X Done — scheduled=N (planner=P worker=W
-   critic=C) skipped=S (messages=M)`.
-
-### Frontend — `renderMessage` (static/js/ui.js)
-- `_isCritic = isUser && msg._isEndpointReview`; `showTrans` now covers both
-  `!isUser` and `_isCritic`.
-- Added a critic bilingual 原文/译文 block symmetric with the assistant one
-  (`copyBilingualOriginal(this, 'critic', idx)`).
-- Translate-loading indicator also fires for critic.
-- Translate action button allowed for `!isUser || _isCritic`.
-- `translateMessage(idx)` guard relaxed:
-  `if (msg.role === "user" && !msg._isEndpointReview) return;`
-
-### Frontend — `finishStream` endpoint loop (static/js/ui.js)
-- `_isEndpoint` now also triggers on `_isEndpointReview`.
-- New `_maybeTranslateCritic(msg, idx)` closure mirrors `_maybeTranslateMsg`
-  but targets `role==='user' && _isEndpointReview`.
-- Per-turn iterator calls the right helper depending on role; log line now
-  reads `Scheduling N across M assistant turn(s) + K/C critic turn(s)`.
-
-## Verification
-
-### Reproduction query
-```python
-from lib.database import get_thread_db, DOMAIN_CHAT
-import json
-db = get_thread_db(DOMAIN_CHAT)
-row = db.execute(
-    'SELECT id, messages FROM conversations WHERE id LIKE ? AND user_id=1',
-    ('<conv-prefix>%',)
-).fetchone()
-msgs = json.loads(row[0])
-for i, m in enumerate(msgs):
-    tag = ('planner' if m.get('_isEndpointPlanner')
-           else f"worker#{m.get('_epIteration')}" if (m.get('_epIteration') and not m.get('_isEndpointReview'))
-           else 'critic' if m.get('_isEndpointReview')
-           else m.get('role'))
-    tc = len(m.get('translatedContent') or '')
-    print(i, tag, 'translatedLen=%d' % tc, 'showingTranslation=%s' % m.get('_showingTranslation'))
-```
-
-All 4 fixes applied: every planner, every worker iteration, and every critic
-row must show `translatedLen > 0` and `showingTranslation=True`.
-
-### Log grep tags (fresh endpoint run, autoTranslate=ON)
-- `[Endpoint:AutoTranslate] conv=X Done — scheduled=N (planner=P worker=W critic=C)`
-- `[AutoTranslate:Critic] conv=X msg=Y ... — delegating ...`
-- `[Translate] Committed translatedContent to conv=X msg=Y (…, attempt=N)`
-- `[save_conv] 🈯 Preserved N translatedContent entries … (by role={'planner':1,'worker#1':1,'critic':1})`
-- Must NOT see: `[save_conv] ⚠️ translatedContent loss` (fires only on edit
-  truncation), `[Translate] commit gave up after N attempts`.
-
-## Files Modified (cumulative across all 4 fixes)
-
-### Python
-- `lib/tasks_pkg/endpoint.py` — `_trigger_endpoint_auto_translate()`:
-  iterates planner + worker + critic; per-role counter log; entry log +
-  empty-turns guard.
-- `lib/tasks_pkg/manager.py` — `_maybe_auto_translate_assistant()` upgraded
-  skip-log to INFO with actual value; new `_maybe_auto_translate_critic`
-  wrapper (Fix 4).
-- `routes/translate.py` — per-conv `threading.Lock` + CAS loop in
-  `_commit_translation_to_db` (Fix 2); split into public shim +
-  `_commit_translation_inner`.
-- `routes/conversations.py` — `save_conv` pre-INSERT merge of preserved
-  translation keys with strict identity check (Fix 3).
-
-### JavaScript
-- `static/js/ui.js`
-  - `renderMessage()`: critic-aware `showTrans` + critic bilingual block +
-    translate button enabled for critic + translate-loading for critic.
-  - `translateMessage()`: guard relaxed for `_isEndpointReview`.
-  - `finishStream()`: endpoint loop includes critic via
-    `_maybeTranslateCritic` + per-skip diagnostics + outer-gate OFF log.
-- `static/js/core.js`
-  - `loadConvMsgs()`: new shared `_mergeServerTranslations(src, dst)` helper
-    called in all reconciliation branches so server translations merge in
-    regardless of `activeTaskId`/cacheHit state.
-- `index.html` — bumped `?v=` on `core.js` and `ui.js`.
-
-## What NOT to do
-- Do NOT remove the per-conv `threading.Lock` in `_commit_translation_to_db`
-  (Fix 2) — CAS alone can live-lock under many identical-time retries.
-- Do NOT remove the strict content-equality check in the `save_conv` merge
-  (Fix 3) — merging without it resurrects stale translations on edited messages.
-- Do NOT skip the `save_conv` merge when `allowTruncate=true` is set —
-  that is the edit / regen flow's explicit "rewrite the tail" signal.
-- Do NOT treat critic messages as generic `role=user` in `renderMessage` /
-  `translateMessage` — they need both the translated-display path AND the
-  user-role visual styling.  Check `_isEndpointReview` explicitly.
-- Do NOT call `db_execute_with_retry` when you need `rowcount` — it returns
-  None.  Use raw `db.execute` + explicit `db.commit()` inside a retry loop.
-- Do NOT remove the `if not task.get('endpoint_mode')...` skip in
-  `persist_task_result` — it protects the single-turn sync path; the
-  endpoint-mode translate trigger lives in `_finalize` instead.
-
-## Grep tags for debugging
-- Backend:
-  - `[Endpoint:AutoTranslate]` — per-run scheduling summary
-  - `[AutoTranslate]` — per-message dispatch (assistant + critic)
-  - `[AutoTranslate:Critic]` — critic-path delegation
-  - `[Translate] Committed translatedContent` — successful commit
-  - `[Translate] commit CAS miss … retrying` — Fix 2 CAS loop
-  - `[save_conv] 🈯 Preserved N translatedContent entries` — Fix 3 merge
-  - `[save_conv] ⚠️ translatedContent loss` — Fix 3 failed merge (investigate)
-- Frontend (DevTools console):
-  - `[finishStream:endpoint] Scheduling N … + K/C critic turn(s)`
-  - `[finishStream] skip idx=N: <reason>` — per-skip diagnostics
-  - `[loadConvMsgs] 🈯 Merged N server translation(s)` — merge helper hits

@@ -283,8 +283,9 @@ function _forceFinishDeadStream(convId) {
  * re-routed), false otherwise.  Best-effort, idempotent.
  *
  * @param {string} convId
- * @param {{status?: string, notFound?: boolean}} probe — poll outcome:
- *        ``notFound`` for a 404, else the task's terminal ``status``.
+ * @param {{status?: string, notFound?: boolean, background?: boolean}} probe — poll
+ *        outcome: ``notFound`` for a 404, else the task's terminal ``status``.
+ *        ``background`` gates the conv-agnostic sweep (no live stream) branch.
  */
 function _healStuckPlaceholder(convId, probe) {
   const conv = conversations.find(c => c.id === convId);
@@ -338,6 +339,37 @@ function _healStuckPlaceholder(convId, probe) {
     );
     stream._probeAbort = true;
     stream.controller.abort();
+    return true;
+  }
+  /* ★ Background orphan-pin clear (conv-agnostic sweep — _reconcileStuckActiveTaskPins).
+   *   There is NO live stream for this conv in THIS tab, and the caller has
+   *   confirmed the task is gone/terminal server-side (reaped by
+   *   reap_stuck_running_tasks, TTL-evicted, or a finished task whose done was
+   *   swallowed). This is the exact "sidebar dot outlives the work" shape: a
+   *   stale ``activeTaskId`` pin with no stream to poll-fallback through. There
+   *   is nothing to recover — the partial content (if any) is already on the
+   *   message — so just clear the pin so ``convIsBusy`` flips false. Stamp an
+   *   honest finishReason on unsettled partial content so the bubble settles.
+   *   Gated on ``probe.background`` so the foreground timer path (which always
+   *   has a live stream) is byte-identical to before. */
+  if (probe && probe.background) {
+    console.warn(
+      `[StreamTimer] ★ SELF-HEAL (background) — conv=${convId.slice(0,8)} task=${taskId.slice(0,8)} ` +
+      `is gone/terminal server-side with no live stream — clearing stale busy pin.`
+    );
+    if (last && last.role === 'assistant' && !last.finishReason && !last.error
+        && (last.content || last.thinking
+            || (Array.isArray(last.toolRounds) && last.toolRounds.length))) {
+      last.finishReason = 'interrupted';
+    }
+    conv.activeTaskId = null;
+    conv._activeTaskClearedAt = Date.now();
+    activeStreams.delete(convId);
+    twStop(convId);
+    if (typeof saveConversations === 'function') saveConversations(null);
+    if (typeof ConvCache !== 'undefined') { try { ConvCache.put(conv); } catch (e) { /* non-fatal */ } }
+    if (activeConvId === convId && typeof renderChat === 'function') renderChat(conv);
+    if (typeof renderConversationList === 'function') renderConversationList();
     return true;
   }
   return false;

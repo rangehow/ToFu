@@ -1,63 +1,44 @@
 ---
 name: audit-logging-script
-description: debug/audit_logging.py (5-tier A1/A2/B1/B2/C + per-finding context) + tests/test_code_quality.py (cached AST, detailed failures) logging audit
+description: debug/audit_logging.py (5-tier) + debug/check_silent_catches.py (fast per-file, reuses test finders) + tests/test_code_quality.py logging-discipline guard; how to clear drift
 enabled: true
 tags: [logging, audit, tooling, convention]
 created: 2026-05-26T22:21:43Z
-updated: 2026-06-07T09:28:04Z
+updated: 2026-07-08T02:28:03Z
 ---
 
-# Logging Discipline Audit Script + Regression Test
+# Logging Discipline Audit + Regression Test + Fast Checker
 
-Two layers enforce CLAUDE.md §2.2 logging discipline:
+Three layers enforce CLAUDE.md §2.2 logging discipline:
 
-1. **`debug/audit_logging.py`** — diagnostic AST scan (manual, ~10s on FUSE; uses `os.scandir`, NOT `Path.rglob`).
-2. **`tests/test_code_quality.py`** — CI regression guard (pytest, 7 tests).
+1. **`debug/audit_logging.py`** — diagnostic AST scan (manual, ~10s on FUSE; `os.scandir`, 5-tier A1/A2/B1/B2/C).
+2. **`tests/test_code_quality.py`** — CI regression guard (pytest, `-m slow`, 7 tests). **Takes ~9-10 min** (walks+parses all lib/+routes/); needs `-p no:napari` in this env (vispy GL ES import fails). Run withOUT a pipe or use `${PIPESTATUS[0]}` — a pipe to tail masks the real exit code.
+3. **`debug/check_silent_catches.py`** (NEW 2026-07) — FAST per-file checker. `python3 debug/check_silent_catches.py <files...>` reuses the EXACT finders + ACCEPTABLE allowlists from test_code_quality.py, so a single-file result agrees byte-for-byte with the slow pytest but parses only the named files. Use this to iterate; run the full pytest only for final sign-off.
 
-## debug/audit_logging.py — four checks across lib/ + routes/
+## The two test finders (what makes a handler "silent")
+- `_SilentCatchFinder`: except body is a SINGLE `pass`/`return`/`continue` with no log/raise/api_* call.
+- `_AssignSilentCatchFinder`: except body ONLY assigns/pass/return/continue/break, no log.
+- BOTH exempt handlers where EVERY caught type is control-flow/optional-dep (`_EXEMPT_EXC_TYPES`: ImportError/StopIteration/CancelledError/TimeoutError/Empty/Full/BlockingIOError/TimeoutExpired/…). A tuple like `(ImportError, ValueError)` is NOT exempt (ValueError is data).
+- **A handler clears the check the moment it contains ANY `logger.*`/`log_exception`/`audit_log`/`api_*` call OR a `raise`.** So the fix is: bind `as e`, insert one `logger.debug('[Module] ... : %s', e)` as the first statement, keep the fallback.
 
-1. **Silent except blocks** (no `logger.*`/`log_exception`/`audit_log`/`api_*` helper/`raise` inside)
-2. `print()` calls
-3. f-strings as `logger.*` message arg
-4. Modules with funcs/classes but no `get_logger(__name__)`
+## Clearing a big drift (did this 2026-07: 132 sites → 0)
+New code accumulates unlogged narrow config/env/JSON/FS-probe catches. To fix at scale:
+1. Get authoritative list: `python3 debug/check_silent_catches.py` (no args = whole tree).
+2. Fix stale ACCEPTABLE line-drift in test first (line numbers move as files grow: api_response 296/304→340/348 etc). A false-positive that trips BOTH finders (e.g. `_db_safe` `return _handle(e)`, `_trace_fallback`) must be listed in BOTH `TestSilentCatches.ACCEPTABLE` AND `TestAssignmentSilentCatches.ACCEPTABLE`.
+3. Parallelize the mechanical source edits with coder sub-agents grouped by subsystem (no file overlap), each given the convention + `check_silent_catches.py <files>` to self-verify.
+4. LEVEL: self-recovering fallback → `logger.debug` (warning+ → error.log = noise). sandbox/exec failure, DB write, retry-exhausted → warning/error. See `log-level-discipline-self-recovering-fallbacks`.
 
-### 5-level silent-catch tiering (severity = exception breadth × body action)
-- **A1** — bare `except:` / `except BaseException` (also swallows SystemExit/KeyboardInterrupt). CRITICAL.
-- **A2** — broad `except Exception`. HIGH.
-- **B1** — narrow data-coercion catch that DISCARDS (pure `pass`) OR runs unlogged non-trivial logic (`action=logic`). MEDIUM — review.
-- **B2** — narrow catch with clean unlogged fallback (assign/return/continue/break). LOW — add `logger.debug`.
-- **C** — optional-dep/control-flow exc types only (ImportError, queue.Empty, CancelledError, TimeoutExpired, …). LEGITIMATE.
-
-Body action classified by `_classify_body_action`: pass / return / assign / continue / break / logic.
-Tier from `_classify_tier(exc_names, action)`.
-
-### Per-finding context (greater detail)
-Each finding reports: line, **enclosing function qualname** (via `_ContextVisitor` func-stack), **in-loop** flag (loop-depth), **unbound** flag (no `as e`), **body action**, exc spec, preview. Summary shows per-tier action breakdown `[logic=8, pass=7, ...]`.
-
-### CLI flags
-`--limit N` (default 12 per file per tier), `--full` (no truncation), `--tiers A1,A2,B1` (filter detail; summary always all). Unknown tier → exit 2.
-
-## tests/test_code_quality.py — 4 test classes, 7 tests
-- **TestSilentCatches** — single `pass`/`return`/`continue` body, no log. Exempts pure control-flow/optional-dep via `_all_exc_exempt` (mirrors TIER C). `ACCEPTABLE` allowlist (file,line) incl. api_response.py:296/304 (`except Exception: return _handle(e)` — _handle→api_internal_error, invisible through local indirection).
-- **TestAssignmentSilentCatches** — body ONLY assigns fallback (`body=''`)/pass/return/continue/break, no log. Same `_all_exc_exempt` exemption. Catches the class TestSilentCatches misses. `ACCEPTABLE`: api_response 296/304 + provider_registry.py:171 + tools/registry.py:594 (`entry_points().get()` Py<3.10 control-flow; TypeError NOT exempt so needs allowlist).
-- **TestNoFStringInLoggerCalls** / **TestLoggerStandardization** — f-string + raw `logging.getLogger` (RAW_LOGGING_ALLOWLIST).
-
-Shared helpers (module-level): `_handler_has_log_or_raise`, `_exc_type_str`, `_body_action`, `_ContextMixin` (func/loop tracking + `_record`), `_all_exc_exempt`, `_render_violations` (grouped-by-action detailed fail msg), `_EXEMPT_EXC_TYPES`.
-
-### PERF — `_parsed_trees(directory)` lru_cache (CRITICAL on FUSE)
-Walk+read+parse each dir ONCE, shared across all tests. WITHOUT it, 7 tests each re-walk+re-parse lib/+routes/ → suite exceeds 600s and times out. WITH it: well under budget.
+## Legitimately-exempt patterns (allowlist, don't "fix")
+- `safe_route.wrapper`/`_db_safe.wrapper`: `except: return _handle(e)` — _handle logs via local indirection (invisible to the AST walker).
+- `system_context._trace_fallback`: deliberate last-resort silent swallow of pure instrumentation.
+- `entry_points().get(...)` `except TypeError:` — Py<3.10 API-shape control-flow, mirrored in EVERY plugin-discovery seam (tools/providers/schema/flags/blueprints/task_runtimes registries).
+- `lib/log.py` `_writable_base_dir` OSError probes: log via `logging.getLogger('lib.log').debug(...)` (it IS the logging module, on RAW_LOGGING_ALLOWLIST, runs at import bootstrap).
+- `lib/database/pg_admin.py` `print()`s: it's a `python -m` CLI tool — stdout is user-facing output, NOT diagnostics. The 24 prints are legit; audit flags them but the test does not.
 
 ## ⚠️ pytest exit code via pipe
-`pytest ... | tail` returns **tail's** exit (0), MASKING failures. Use `${PIPESTATUS[0]}`/`${PIPESTATUS[1]}` or run without a pipe to see the real verdict. (Bit me: a 2-failure run looked green.)
+`pytest ... | tail` returns tail's exit (0), MASKING failures. Use `${PIPESTATUS[0]}` or no pipe.
 
-## Current baseline (2026-06, granular sweep)
-- A1: 0, A2: 2 (api_response `_handle`, false-pos), B1: 0, B2: 2 (`entry_points().get()` control-flow), C: 28
-- print(): 0, f-string logger: 0, parse errors: 0
-- Test suite: 7 passed
-
-## Log-level rule (per `log-level-discipline-self-recovering-fallbacks`)
-- debug: recovers/fallback works · warning+exc_info: needs attention · error+exc_info: blocks pipeline/data loss · `api_internal_error(exc,...)` positional → auto error+exc_info
-
-## Common narrow-catch types per pattern
-- `urlparse`/`ipaddress.ip_address` → ValueError · optional dep `from lib.X import Y` → ImportError · `int/float(env)` → (ValueError,TypeError) · `os.listdir/getsize/remove` → OSError · `requests.get` → requests.RequestException
+## Baseline after 2026-07 cleanup
+- Test suite: 7 passed. check_silent_catches: 0 violations across 479 files.
+- Audit still shows A2=6/B1=9/B2=8 — ALL are the intentional/allowlisted patterns above (audit tiering ≠ test finders; the test is the source of truth for CI).
 

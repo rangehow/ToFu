@@ -37,7 +37,8 @@ logger = get_logger(__name__)
 __all__ = ['_execute_report_tool', 'parse_and_repair_tool_args', 'display_query_for']
 
 
-def _execute_report_tool(name, args_str, user_question='', abort=None):
+def _execute_report_tool(name, args_str, user_question='', abort=None,
+                         force_vertical=None):
     """Execute a tool call from the report agent.
 
     Args:
@@ -49,6 +50,15 @@ def _execute_report_tool(name, args_str, user_question='', abort=None):
             — so a Stop pressed while a report is mid-search does not spray the
             remaining batched queries/fetches. Threaded down to
             ``run_batch_concurrent``.
+        force_vertical: optional vertical domain (e.g. ``'academic'``) that
+            OVERRIDES whatever vertical the model chose for every web_search
+            query in this call — including ``'auto'`` / ``'off'`` / a wrong
+            domain. Default ``None`` leaves the model's choice untouched, so
+            the shared report / QA / insight callers are byte-identical. The
+            describe-to-recommend engine passes ``'academic'`` so a known-title
+            lookup always consults the arXiv / Semantic Scholar JSON APIs
+            (whose uptime is independent of the HTML-engine fleet and its
+            per-engine circuit breakers), rather than hoping the model asks.
 
     Returns:
         tuple: (tool_content_str, display_results, search_diag, engine_breakdown, verticals)
@@ -95,6 +105,11 @@ def _execute_report_tool(name, args_str, user_question='', abort=None):
                 q, f, v = qobj, freshness, batch_vertical
             else:
                 continue
+            # A forced vertical (e.g. the recommend engine's 'academic') wins
+            # over the model's choice — the robust JSON-API path is guaranteed
+            # by code, not left to the model's discretion.
+            if force_vertical:
+                v = force_vertical
             if q and q.strip():
                 query_specs.append((q.strip(), f, v))
         if not query_specs:
@@ -110,7 +125,7 @@ def _execute_report_tool(name, args_str, user_question='', abort=None):
             # added latency) and we get the engine breakdown for free.
             results, search_diag, engine_breakdown, vertical_result = _web_search_one(
                 q, user_question, f, vertical=v)
-            formatted = format_search_for_tool_response(results, search_diag=search_diag)
+            formatted = format_search_for_tool_response(results, search_diag=search_diag, query=q)
             if vertical_result:
                 formatted = _vertical_header_for_llm(vertical_result) + formatted
             display = _format_search_display_for_results(results)

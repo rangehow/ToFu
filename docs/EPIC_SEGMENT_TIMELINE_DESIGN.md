@@ -66,6 +66,47 @@ typed segments** and make every consumer render *from that list*.
 > authoritative render log. This epic should absorb that one, not compete
 > with it. Flagged to the owner in §7.
 
+
+### 1.1 The generalizing rule this epic is an instance of
+
+Both symptoms above are the same *class* of fault, and it recurs far beyond
+this epic: **the frontend inferring a decision the backend should own.** The
+backend streams raw fragments; the frontend reconstructs meaning (lifecycle,
+placement, ordering) by guessing from transient client state — and each guess
+breaks when its inputs are incomplete, so every fix patches one guess while the
+next feature invalidates another ("rob Peter to pay Paul").
+
+Confirmed instances, all cured by the *same* move (compute the decision
+server-side, ship it as a typed fact with a stable id, make the frontend a pure
+reducer that renders the fact):
+
+| Decision inferred in JS | Was inferred from | Backend fact that fixed it |
+|---|---|---|
+| autopilot run-fold timing | `!activeStreams && !activeTaskId` | `autopilot_run_concluded` record (skill `autopilot-fold-gating-and-sidecar-summary`) |
+| deliverable vs scaffolding prose (narrator leak) | out-of-band `DELTA_RESET` | the `deliverable` segment flag (Symptom A, this doc) |
+| autopilot summary-report **placement** (reports stacking) | scanning `_autopilotRunId` stamps + tail-dock any run outside the window | `record.anchorMsgId` = the run boundary turn's stable `_msgId`, resolved server-side by `_resolve_run_anchor_msgid`; `_apSummaryPlacements` is now a pure lookup, tail is a genuine last-resort for a compacted-out anchor only (`tests/test_autopilot_summary_anchor.py` + `tests/test_frontend_autopilot_summary_anchor_placement.py`, 2026-07-11) |
+| turn interleaving order (this epic) | three unordered channels + reset event | the ordered typed `segments` log |
+
+> **THE RULE (proposed as a project-wide charter invariant, 2026-07-11):** *Any
+> lifecycle / placement / ordering decision is computed by the BACKEND and
+> shipped as a typed fact carrying STABLE IDS; the frontend is a REDUCER over
+> the event log + persisted record — it renders what a fact says and NEVER
+> infers such a decision from transient client state (stream/task presence,
+> array indices, stamp scans, IDB-window contents).* Two concrete corollaries:
+> (a) anchoring uses a server-assigned stable id (`_msgId`), never a mutable
+> array index (the `stream-target-resolution-by-msgid` convention); (b) when the
+> backend genuinely cannot resolve the fact (e.g. the anchor turn is compacted
+> out of the loaded window) it OMITS the field and the frontend's last-resort
+> branch handles *only that residual* — a test must assert the fact makes the
+> decision DETERMINISTIC for every in-window entity, so the fallback can never
+> become the common path.
+>
+> `lib/agent_core/events.py` is the typed vocabulary for the *streaming* half of
+> this contract; the persisted sidecar/record is the *durable* half. **This
+> epic's ordered, id'd, append-only segment log is the structural COMPLETION of
+> the rule** — the single authoritative render source that makes "the frontend
+> is a reducer" true for the whole assistant turn, not just per-decision.
+
 ---
 
 ## 2. The segment model (the new source of truth)

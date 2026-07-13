@@ -41,7 +41,10 @@ pytestmark = pytest.mark.unit
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, '..'))
-PAPER_JS = os.path.join(ROOT, 'static', 'js', 'paper-reader.js')
+# Reader-comfort-prefs cluster was extracted from paper-reader.js into this
+# self-contained sibling (Epic E cut #1, 2026-07-11). The functions/consts
+# live here now; eval it directly (it only needs localStorage/document/t stubs).
+PAPER_JS = os.path.join(ROOT, 'static', 'js', 'paper', 'reader_prefs.js')
 
 
 def _node_deps_available() -> bool:
@@ -72,7 +75,7 @@ global.window = win; global.document = win.document;
 global.localStorage = win.localStorage; global.console = console;
 win.t = global.t = (k) => k;   // identity i18n
 
-eval(fs.readFileSync(process.argv[2], 'utf8'));  // real paper-reader.js
+eval(fs.readFileSync(process.argv[2], 'utf8'));  // real paper/reader_prefs.js
 
 const out = [];
 function check(name, cond) { out.push((cond ? 'PASS ' : 'FAIL ') + name); }

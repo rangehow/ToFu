@@ -119,6 +119,17 @@ def inject_and_run_task(
             settings = {}
 
         # 2. Append caller-provided user message ─────────────────────
+        # Stamp the authoritative _initiator from the legacy source tag the
+        # caller carried (timer / proactive), so the turn is attributable
+        # through the ONE resolver rather than each reader re-sniffing tags.
+        from lib.conversations.turn_initiation import (INITIATOR_PROACTIVE,
+                                                       INITIATOR_TIMER,
+                                                       stamp_initiator)
+        _initiator = (INITIATOR_TIMER if user_message.get('_timer')
+                      else INITIATOR_PROACTIVE if user_message.get('_proactive')
+                      else None)
+        if _initiator:
+            stamp_initiator(user_message, _initiator)
         messages.append(user_message)
 
         # 3. Append placeholder assistant message ────────────────────
@@ -132,6 +143,8 @@ def inject_and_run_task(
         for tag in ('_timer', '_proactive'):
             if user_message.get(tag):
                 assistant_msg[tag] = True
+        if _initiator:
+            stamp_initiator(assistant_msg, _initiator)
         messages.append(assistant_msg)
 
         # 4. Write messages back to DB ───────────────────────────────
@@ -149,6 +162,18 @@ def inject_and_run_task(
         )
         from lib.conversations import update_conversation_fts
         update_conversation_fts(db, conv_id, search_text)
+
+        # Event-driven cross-device sync: a proactive/timer turn appended a new
+        # user+assistant pair, so push the post-write rev → a sibling tab with
+        # this conv open surfaces the new turn without a manual refresh.
+        try:
+            from lib.conversations import notify_conv_changed as _notify_cc
+            _sch_rev_row = db.execute(
+                'SELECT rev FROM conversations WHERE id=? AND user_id=1',
+                (conv_id,)).fetchone()
+            _notify_cc(conv_id, rev=(_sch_rev_row[0] if _sch_rev_row else None))
+        except Exception as _ne:
+            logger.debug('%s conv-changed notify skipped: %s', log_prefix, _ne)
 
         # 5. Build config ────────────────────────────────────────────
         if isinstance(tools_config_json, str):

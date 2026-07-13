@@ -158,4 +158,6 @@ def main():
 
 
 if __name__ == '__main__':
+    from tests._standalone_guard import guard_standalone_db
+    guard_standalone_db('test_queue_append_cas.__main__')
     main()

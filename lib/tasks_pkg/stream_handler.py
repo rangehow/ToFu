@@ -103,7 +103,10 @@ def _todo_continuation_max() -> int:
         return _TODO_CONTINUATION_MAX_DEFAULT
     try:
         val = int(raw)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError) as e:
+        logger.debug('[stream_handler] TOFU_TODO_CONTINUATION_MAX=%r not an int '
+                     '(%s) — using default %d', raw, e,
+                     _TODO_CONTINUATION_MAX_DEFAULT)
         return _TODO_CONTINUATION_MAX_DEFAULT
     return val if val > 0 else 0
 

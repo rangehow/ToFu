@@ -484,10 +484,23 @@ var ConvCache = (function () {
     return _open().then(function (db) {
       if (!db) return;
 
+      // Transient in-flight autopilot VU placeholders (`_streamingVu`) are
+      // in-memory-only by backend design: a VU turn is persisted ONLY on
+      // autopilot_vu_done (which deletes _streamingVu before finalizing), and
+      // the backend writes NOTHING for autopilot_vu_start. Caching the
+      // streaming placeholder freezes it as a static "Autopilot starting…"
+      // pulse after a page refresh — on reconnect the restored ghost makes the
+      // vu_start replay early-return (_findVuMsgById hit) instead of standing
+      // up a fresh live stream, so it never resumes. Drop it here so the cache
+      // agrees with the server (which never has it): the replay then re-creates
+      // a live bubble, or autopilot_vu_done supplies the settled one.
+      var msgs = conv.messages.filter(function (m) { return !(m && m._streamingVu); });
+      if (msgs.length === 0) return;
+
       // Build the new msgOrder + a map id → stripped message.
       var newOrder = [];
       var newById = Object.create(null);
-      conv.messages.forEach(function (m, i) {
+      msgs.forEach(function (m, i) {
         var stripped = _stripMessage(m);
         var id = _msgKey(m, i);
         var serialized = JSON.stringify(stripped);

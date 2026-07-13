@@ -50,7 +50,9 @@ const _html = '<!DOCTYPE html><body><div id="chatContainer"><div id="chatInner">
 const { document, check, report } = setup({
   root: process.argv[3],
   html: _html,
-  targets: [process.argv[2]],   // translation.js
+  // translation.js (engine) + ui/translation_render.js (the relocated
+  // _applyPartialByRoundToSettled painter, decoupling step 4).
+  targets: [process.argv[2], process.argv[4]],
   globals: {
     activeConvId: 'c1',
     conversations: [{ id: 'c1', messages: [
@@ -59,10 +61,9 @@ const { document, check, report } = setup({
     ] }],
     pushSubscribe: (channel, taskId, fn) => { if (channel === 'translate') _pushHandler = fn; },
     stripNoTranslateTags: (s) => s,
+    renderMarkdown: (s) => s,
     saveConversations: () => {},
     _patchMessageOnServer: () => {},
-    // Count whole-bubble re-renders so we can PROVE the surgical path avoided them.
-    _renderMsgInPlace: () => { _fullRerenders++; },
     _armAutoTranslateWatchdog: () => {},
     _applyTranslationStatus: () => {},
     _renderStreamingTranslatePreview: () => false,  // no live #streaming-msg here
@@ -70,6 +71,16 @@ const { document, check, report } = setup({
     scrollToBottom: () => {},
   },
 });
+
+// The engine now requests whole-bubble repaints via the emitMessageChanged
+// seam (not _renderMsgInPlace directly). translation_render.js defined the real
+// one at load; override it with a COUNTING SPY so we can prove the surgical
+// per-round painter avoided a whole-bubble re-render. (A 'full'/'status' kind
+// would be a whole-bubble repaint; the surgical path returns before emitting.)
+emitMessageChanged = window.emitMessageChanged = (convId, idx, msg, detail) => {
+  if (!detail || detail.kind === 'full' || detail.kind === 'status') _fullRerenders++;
+  return true;
+};
 
 if (typeof _applyPartialByRoundToSettled !== 'function') {
   check('painter_exposed', false); report(); return;
@@ -124,4 +135,5 @@ def test_settled_perround_translate():
         body_js=_BODY,
         min_pass=10,
         label='settled-perround-translate',
+        extra_targets=[os.path.join(JS_DIR, 'ui', 'translation_render.js')],
     )

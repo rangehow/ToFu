@@ -29,7 +29,6 @@ Two MANDATORY byte-reverting negative controls:
 
 from __future__ import annotations
 
-import importlib
 import os
 
 import pytest
@@ -201,19 +200,7 @@ def test_agent_peer_dispatch_has_no_human_marker(monkeypatch):
 #  Byte-reverting NEGATIVE CONTROLS
 # ════════════════════════════════════════════════════════════════════
 
-def _patch_restore(path, old, new, run):
-    with open(path, encoding='utf-8') as f:
-        original = f.read()
-    assert old in original, f'anchor not found in {path}'
-    try:
-        with open(path, 'w', encoding='utf-8') as f:
-            f.write(original.replace(old, new, 1))
-        run()
-    finally:
-        with open(path, 'w', encoding='utf-8') as f:
-            f.write(original)
-    with open(path, encoding='utf-8') as f:
-        assert f.read() == original, 'source not restored byte-identical'
+from tests._nc_harness import patch_restore as _patch_restore  # noqa: E402
 
 
 def test_NC_send_drops_peer_human_stamp(_stub_io):
@@ -223,7 +210,6 @@ def test_NC_send_drops_peer_human_stamp(_stub_io):
     makes the operator arrival distinguishable)."""
     def run():
         import lib.conversations.project_peer as pp
-        importlib.reload(pp)
         pp._resolve_target_conv_id = lambda t: ((t or '').strip(), '')
         pp.send_peer_message('/proj', 'cOP', 'cB', 'focus', human=True)
         pl = _stub_io['enqueue'][-1]['payload']
@@ -239,8 +225,6 @@ def test_NC_send_drops_peer_human_stamp(_stub_io):
         "    # NC-HUMAN-PAYLOAD (stamp disabled)",
         run,
     )
-    import lib.conversations.project_peer as pp
-    importlib.reload(pp)
 
 
 def test_NC_dispatch_drops_peer_human_marker(monkeypatch):
@@ -248,8 +232,6 @@ def test_NC_dispatch_drops_peer_human_marker(monkeypatch):
     dispatch_next_queued → the persisted operator turn loses its marker →
     the propagation test FAILS."""
     def run():
-        import lib.message_queue as mq
-        importlib.reload(mq)
         m = _drive_dispatch(monkeypatch, {
             'text': 'op', '_peerMessage': True,
             '_fromConv': 'cOP', '_peerHuman': True})
@@ -263,5 +245,3 @@ def test_NC_dispatch_drops_peer_human_marker(monkeypatch):
         "            pass  # NC-DISPATCH-HUMAN (human marker propagation disabled)",
         run,
     )
-    import lib.message_queue as mq
-    importlib.reload(mq)

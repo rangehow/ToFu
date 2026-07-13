@@ -4,7 +4,7 @@ description: Cache breakpoint placement (v1-v6): BP4 tail fix, mixed TTL strateg
 enabled: true
 tags: [python, debugging, anthropic, cache_control, llm-client, prompt-caching, openai]
 created: 2026-03-20T00:50:21Z
-updated: 2026-04-04T15:13:59Z
+updated: 2026-07-08T00:00:00Z
 ---
 
 # Anthropic Cache Breakpoints — Full History & Mixed TTL
@@ -82,9 +82,26 @@ Anthropic API returns `prompt_tokens` as **uncached only** (NOT total).
 - Tail evictions (BP4) still happen but cost less since tail is smaller
 
 ## Files
-- `lib/llm_client.py`: `add_cache_breakpoints()` — mixed TTL implementation
-- `lib/__init__.py`: `CACHE_EXTENDED_TTL` setting (default ON)
+- `lib/llm/cache.py`: `add_cache_breakpoints()` — mixed TTL + 4-marker RESERVATION model (was `lib/llm_client.py` pre-`llm/`-package refactor; path corrected 2026-07-08)
+- `lib/__init__.py:195`: `CACHE_EXTENDED_TTL` setting (default ON) — still valid
 - `routes/common.py`: `/api/features` GET/POST for hot-reload
-- `tests/test_cache_breakpoints.py`: 41 tests (32 existing + 9 mixed TTL)
+- `tests/test_cache_breakpoints.py`: mixed-TTL + reservation tests
 - `debug/test_cache_validation.py`: A/B test with `--ttl` flag for 3-arm comparison
+
+## Reservation model (the current shape — see `cache-breakpoint-tail-starvation-system-blocks`)
+`add_cache_breakpoints` RESERVES 1 marker for the last tool def + 1 for the
+conversation tail UP FRONT (`_MAX_CACHE_BP=4`, `_system_bp_budget = 4 -
+_reserve`); the system phase gets only the leftover (≤2). All 4 markers are
+consumed in the production shape (system×2 + tool×1 + tail×1). There is NO
+idle 5th slot.
+
+## P5 (open design note, not implemented — see JOURNAL 2026-07-08)
+The tail marker anchors the growing body incrementally but at 5m TTL, so a
+turn-gap > tail TTL (overnight resume) expires it → whole-body re-bill. Because
+no marker is free, P5 = RE-PURPOSE the tail marker's TTL/placement (gap-gated
+1h at the immutable-prefix bound), NOT add one. Blanket 1h-tail is REJECTED by
+the A/B data above (hurts fast turns B +3.3% / C +3.2%, only wins on long-gap
+D −16.1%, since 1h writes cost 2.0×). Any change must benchmark net-neutral on
+the fast-turn arms via `debug/test_cache_validation.py --ttl`. Ordering rule:
+1h entries MUST precede 5m entries or Anthropic returns HTTP 400.
 

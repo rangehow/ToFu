@@ -105,6 +105,7 @@ for (const [name, fn] of [
   ['_renderFileChangesHtml', _noopStr],
   ['_extractFileChangesFromRoundsAsync', () => Promise.resolve([])],
   ['normalizeErrorEnvelope', (x) => x],
+  ['Icon', (n) => '<svg data-icon="' + n + '"></svg>'],
 ]) {
   if (typeof win[name] === 'undefined') { win[name] = global[name] = fn; }
 }
@@ -258,6 +259,7 @@ for (const [name, fn] of [
   ['_renderFileChangesHtml', _noopStr],
   ['_extractFileChangesFromRoundsAsync', () => Promise.resolve([])],
   ['normalizeErrorEnvelope', (x) => x], ['saveConversations', _noop],
+  ['Icon', (n) => '<svg data-icon="' + n + '"></svg>'],
 ]) {
   if (typeof win[name] === 'undefined') { win[name] = global[name] = fn; }
 }

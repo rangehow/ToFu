@@ -51,7 +51,11 @@ function toggleThinking() {
 /* ★ Populate model dropdown dynamically from the registered models list.
  * Called once at startup from _loadServerConfigAndPopulate(). */
 function _populateModelDropdown(models) {
-  const dropdown = document.getElementById("presetDropdown");
+  /* ★ Write into the inner list container, NOT #presetDropdown itself — the
+   * dropdown now also holds the folded-in thinking-depth footer, which must
+   * survive a model-list rebuild. Fall back to the dropdown for older markup. */
+  const dropdown = document.getElementById("presetDropdownList")
+    || document.getElementById("presetDropdown");
   if (!dropdown || !models || models.length === 0) return;
   _registeredModels = models;
   dropdown.innerHTML = '';

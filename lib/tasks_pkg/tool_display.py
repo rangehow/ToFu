@@ -320,6 +320,25 @@ def _tool_display_brain(fn_name, fn_args, tc_id, tc_args_str):
     return display, {'toolName': fn_name}
 
 
+def _tool_display_todo(fn_name, fn_args, tc_id, tc_args_str):
+    """Build a friendly progress label for the ``todo_write`` checklist tool.
+
+    Without a dedicated handler this falls through to ``_tool_display_generic``,
+    which logs a spurious WARNING on EVERY call. ``todo_write`` fires several
+    times per multi-step task, so that WARNING dominated logs/error.log. Render
+    a compact "Planning: N steps (d done)" label instead.
+    """
+    todos = fn_args.get('todos') if isinstance(fn_args, dict) else None
+    if not isinstance(todos, list) or not todos:
+        return 'Updating checklist', {'toolName': fn_name}
+    total = len(todos)
+    done = sum(1 for t in todos if isinstance(t, dict) and t.get('status') == 'completed')
+    display = f'Checklist: {total} step{"s" if total != 1 else ""}'
+    if done:
+        display += f' ({done} done)'
+    return display, {'toolName': fn_name}
+
+
 def _tool_display_scheduler(fn_name, fn_args, tc_id, tc_args_str):
     """Build display info for scheduler tool calls (frontend renders SVG icon)."""
     return fn_name, {'toolName': fn_name}
@@ -932,6 +951,10 @@ def _build_display_dispatch_table():
 
     # Human guidance tool
     table['ask_human'] = _tool_display_human_guidance
+
+    # Structured task-checklist tool (todo_write) — friendly progress label,
+    # no spurious "unregistered tool" WARNING on every checklist update.
+    table['todo_write'] = _tool_display_todo
 
     return table
 

@@ -82,6 +82,24 @@ def test_autopilot_max_turns_fail_open(monkeypatch):
     assert av.autopilot_max_turns() == 7
 
 
+def test_autopilot_summary_min_turns_fail_open(monkeypatch):
+    """Unset → default 1; '0'/<=0 → 0 (gate disabled); garbage → default; N → N."""
+    monkeypatch.delenv('TOFU_AUTOPILOT_SUMMARY_MIN_TURNS', raising=False)
+    assert av.autopilot_summary_min_turns() == av.AUTOPILOT_SUMMARY_MIN_TURNS_DEFAULT == 1
+
+    monkeypatch.setenv('TOFU_AUTOPILOT_SUMMARY_MIN_TURNS', '0')
+    assert av.autopilot_summary_min_turns() == 0  # gate disabled
+
+    monkeypatch.setenv('TOFU_AUTOPILOT_SUMMARY_MIN_TURNS', '-3')
+    assert av.autopilot_summary_min_turns() == 0  # <=0 → disabled
+
+    monkeypatch.setenv('TOFU_AUTOPILOT_SUMMARY_MIN_TURNS', 'not-an-int')
+    assert av.autopilot_summary_min_turns() == 1  # fail-open to default
+
+    monkeypatch.setenv('TOFU_AUTOPILOT_SUMMARY_MIN_TURNS', '2')
+    assert av.autopilot_summary_min_turns() == 2
+
+
 def test_is_incomplete_stop_membership():
     for r in ('max_iterations', 'max_replans', 'stuck',
               'budget_exhausted', 'no_progress'):

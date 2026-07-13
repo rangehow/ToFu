@@ -1178,6 +1178,16 @@ def run_virtual_user(task: dict, vu_msg_id: str | None = None) -> dict | None:
     sub_task['_inline_messages'] = True
     sub_task['_vu_subtask'] = True
     sub_task['_autopilotParent'] = task.get('id', '')
+    # ── Peer-message fast path (Pillar #6) ──
+    #   The VU sub-task runs with convId='' (to stay out of the latest-task
+    #   registry), so its swarm/inbox key would be the sub-task id — but a peer
+    #   twin for this conversation is enqueued under the PARENT conv id. Carry
+    #   the parent conv as the peer-drain key so the sub-task's nested run_task
+    #   round loop drains + flushes peer messages under the SAME key the twin
+    #   was enqueued under (otherwise a peer message arriving mid-VU-turn would
+    #   strand). This is what makes an endpoint/VU "big task" deliver a sibling's
+    #   message at its next round boundary instead of the input-box queue.
+    sub_task['_peer_drain_key'] = task.get('convId') or ''
 
     # Swap in a forwarding event list so the VU sub-task's events
     # surface live on the parent stream:

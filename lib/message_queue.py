@@ -418,12 +418,16 @@ def drain_idle_peer_messages() -> list[str]:
         if not conv_id:
             continue
         # Busy guard: never force-drain a conv with a live task (the fast-path
-        # inbox twin / completion hook owns delivery there).
+        # inbox twin / completion hook owns delivery there). Match on EITHER
+        # convId OR _peer_drain_key — a VU sub-task runs with convId='' but
+        # carries the parent conv in _peer_drain_key and now drains peer at its
+        # own round boundary, so a live VU sub-task marks the parent conv busy.
         try:
             from lib.tasks_pkg.manager import tasks, tasks_lock
             with tasks_lock:
                 _live = any(
-                    t.get('convId') == conv_id
+                    (t.get('convId') == conv_id
+                     or t.get('_peer_drain_key') == conv_id)
                     and t.get('status') == 'running'
                     and not t.get('aborted')
                     for t in tasks.values()

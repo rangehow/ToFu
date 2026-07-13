@@ -153,8 +153,10 @@ def enqueue(task_id: str, value: str, *,
 
 
 def drain(task_id: str, *,
-          max_items: int = 0) -> list[dict[str, Any]]:
-    """Remove and return all queued items for *task_id*, sorted by priority.
+          max_items: int = 0,
+          modes: list[str] | None = None,
+          exclude_modes: list[str] | None = None) -> list[dict[str, Any]]:
+    """Remove and return queued items for *task_id*, sorted by priority.
 
     Within a priority bucket items keep FIFO order (the order in which the
     sub-agents completed).
@@ -162,35 +164,55 @@ def drain(task_id: str, *,
     Args:
         task_id: The owning task.
         max_items: If >0, drain at most this many; the rest stay queued for
-            the next round. 0 (default) drains everything.
+            the next round. 0 (default) drains everything (that matches the
+            mode filter).
+        modes: If given, drain ONLY items whose ``mode`` is in this list.
+            Non-matching items stay queued. Used by the endpoint/VU driver
+            loops to drain only ``peer-msg`` items while leaving swarm updates
+            for the main loop (and vice-versa).
+        exclude_modes: If given, drain everything EXCEPT items whose ``mode``
+            is in this list. Mutually usable with a bare call. The main
+            orchestrator drains swarm items with ``exclude_modes=['peer-msg']``
+            so peer items are left for whichever party owns peer delivery.
 
     Returns:
         List of items, oldest-and-most-urgent first. Empty list if nothing
-        was queued or the task has no inbox.
+        matched. Items filtered OUT by ``modes`` / ``exclude_modes`` remain in
+        the inbox.
     """
     if not task_id:
         return []
+
+    def _match(it: dict) -> bool:
+        m = it.get('mode', '')
+        if modes is not None and m not in modes:
+            return False
+        if exclude_modes is not None and m in exclude_modes:
+            return False
+        return True
 
     with _lock:
         bucket = _inboxes.get(task_id)
         if not bucket:
             return []
 
+        # Only consider items that pass the mode filter; the rest are retained.
+        candidates = [(i, it) for i, it in enumerate(bucket) if _match(it)]
         sorted_items = sorted(
-            enumerate(bucket),
+            candidates,
             key=lambda pair: (_PRIORITY.get(pair[1].get('priority', 'later'), 2), pair[0]),
         )
 
         if max_items > 0:
             sorted_items = sorted_items[:max_items]
-            drained_indices = {idx for idx, _ in sorted_items}
+
+        drained_indices = {idx for idx, _ in sorted_items}
+        if drained_indices:
             _inboxes[task_id] = [
                 it for i, it in enumerate(bucket) if i not in drained_indices
             ]
             if not _inboxes[task_id]:
                 del _inboxes[task_id]
-        else:
-            del _inboxes[task_id]
 
         result = [it for _, it in sorted_items]
 

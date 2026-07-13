@@ -164,20 +164,34 @@ class PeerRoundBoundaryTest(unittest.TestCase):
         self.assertEqual(len(get_queue(self._target)), 1)
         self.assertEqual(agent_inbox.peek(self._target), 0)
 
-    def test_endpoint_target_keeps_queue_lane_no_inbox(self):
-        """Endpoint mode does NOT run the round-boundary drain — no fast-path."""
+    def test_endpoint_target_now_gets_fast_path_twin(self):
+        """Endpoint mode gained an iteration-boundary drain hook
+        (drain_peer_messages_into), so it is now fast-path eligible — the twin
+        IS enqueued (previously the endpoint loop had no round boundary so the
+        message stranded in the queue until the whole task ended)."""
         from lib import agent_inbox
         with _fake_live_task(self._target, endpoint=True):
             res = self._send()
         self.assertTrue(res.get('ok'), res)
-        self.assertEqual(agent_inbox.peek(self._target), 0)
+        self.assertEqual(agent_inbox.peek(self._target), 1,
+                         'endpoint task now drains peer at its iteration '
+                         'boundary → the fast-path twin must be offered')
 
-    def test_vu_subtask_target_keeps_queue_lane_no_inbox(self):
+    def test_vu_subtask_target_now_gets_fast_path_twin(self):
+        """A live VU sub-task carries the parent conv in _peer_drain_key, so the
+        target conv is fast-path eligible and gets the twin."""
         from lib import agent_inbox
-        with _fake_live_task(self._target, vu=True):
+        from lib.tasks_pkg.manager import tasks, tasks_lock
+        # A VU sub-task runs with convId='' and _peer_drain_key=<parent conv>.
+        with _fake_live_task(self._target, vu=True) as t:
+            with tasks_lock:
+                t['convId'] = ''
+                t['_peer_drain_key'] = self._target
             res = self._send()
         self.assertTrue(res.get('ok'), res)
-        self.assertEqual(agent_inbox.peek(self._target), 0)
+        self.assertEqual(agent_inbox.peek(self._target), 1,
+                         'a live VU sub-task (matched via _peer_drain_key) makes '
+                         'the parent conv fast-path eligible')
 
     def test_aborted_task_is_not_drain_eligible(self):
         from lib import agent_inbox

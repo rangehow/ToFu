@@ -1868,10 +1868,24 @@ def run_task(task: dict[str, Any]) -> None:
                     # inbox is keyed by ``swarm_key_for(task)`` (conv id when
                     # present, else task id) so <swarm-update>s enqueued by a
                     # PRIOR turn's background agents are still drained on a
-                    # later "continue" turn of the same conversation. (Before
-                    # Option A this used ``task['id']`` and cross-turn updates
-                    # were stranded.) ``tid`` is just the 8-char log prefix.
-                    _inbox_items = _drain_inbox(_swarm_key_for(task))
+                    # later "continue" turn of the same conversation. ``tid`` is
+                    # just the 8-char log prefix.
+                    _swarm_key = _swarm_key_for(task)
+                    # ── Peer key can DIFFER from the swarm key ──
+                    #   A VU sub-task runs with convId='' (swarm key = sub-task
+                    #   id) but its peer twin lives under the PARENT conv, passed
+                    #   via ``_peer_drain_key``. And when a DRIVER loop (endpoint)
+                    #   owns peer delivery at its OWN iteration boundary it sets
+                    #   ``_peer_driver_owned`` — run_task must then NOT drain peer
+                    #   here (only swarm), or the two paths would double-drain.
+                    _peer_owned = bool(task.get('_peer_driver_owned'))
+                    _peer_key = task.get('_peer_drain_key') or _swarm_key
+                    # Swarm items (peer-msg excluded — peer is drained separately,
+                    # possibly under a different key / by a driver loop).
+                    _swarm_items = _drain_inbox(_swarm_key, exclude_modes=['peer-msg'])
+                    _peer_items = ([] if _peer_owned
+                                   else _drain_inbox(_peer_key, modes=['peer-msg']))
+                    _inbox_items = list(_swarm_items) + list(_peer_items)
                     if _inbox_items:
                         # Coalesce ALL drained items into a single user
                         # message — one message with N <swarm-update>
@@ -1890,18 +1904,13 @@ def run_task(task: dict[str, Any]) -> None:
                                 'role':    'user',
                                 'content': '\n\n'.join(_payloads),
                             })
-                            # ── Partition the drained items by mode ──
-                            #   Peer messages (Pillar #6 fast-path lane) carry
-                            #   mode='peer-msg' + a durable-row queueId; swarm
-                            #   sub-agent results carry an agent_id. Both share
-                            #   the ONE coalesced user message above, but their
-                            #   de-dup + observability handling differ.
-                            _peer_items = [it for it in _inbox_items
-                                           if it.get('mode') == 'peer-msg'
-                                           and it.get('value')]
-                            _swarm_items = [it for it in _inbox_items
-                                            if it.get('mode') != 'peer-msg'
-                                            and it.get('value')]
+                            # Items already partitioned by the two drains above:
+                            # ``_swarm_items`` (sub-agent results, carry agent_id)
+                            # and ``_peer_items`` (Pillar #6, carry queueId). They
+                            # share the ONE coalesced user message but their de-dup
+                            # + observability handling differ.
+                            _swarm_items = [it for it in _swarm_items if it.get('value')]
+                            _peer_items = [it for it in _peer_items if it.get('value')]
 
                             # Swarm: persist the delivered flag so a restart
                             # mid-turn doesn't re-inject these <swarm-update>s.
@@ -2076,7 +2085,12 @@ def run_task(task: dict[str, Any]) -> None:
                     except Exception as _pce:
                         logger.warning('[Task %s] peer inject chip emit failed: %s',
                                        tid, _pce)
-                    _conv_dd = task.get('convId', '') or ''
+                    # Resolve the peer conv key: a VU sub-task runs with
+                    # convId='' and carries the parent conv in _peer_drain_key,
+                    # so dedup the durable rows under that key (the same key the
+                    # twin was enqueued under), not the empty sub-task convId.
+                    _conv_dd = (task.get('_peer_drain_key')
+                                or task.get('convId', '') or '')
                     _dd_ids = [_pit.get('queueId') for _pit in _peer_inject
                                if _pit.get('queueId')]
                     if _conv_dd and _dd_ids:
@@ -2648,6 +2662,63 @@ def run_task(task: dict[str, Any]) -> None:
 # ══════════════════════════════════════════════════════════
 #  _run_single_turn — reusable building block for endpoint mode
 # ══════════════════════════════════════════════════════════
+
+def drain_peer_messages_into(task: dict[str, Any],
+                             messages: list[dict[str, Any]], *,
+                             round_label: int = 0) -> int:
+    """Driver-loop peer-message drain hook (Pillar #6 fast path for big tasks).
+
+    The main ``run_task`` round loop drains the peer inbox at each round
+    boundary, but the endpoint (Planner→Worker→Critic) and VU loops are DRIVER
+    loops that own their own iteration boundary — they must call THIS at the top
+    of each iteration so a peer message reaches the model on the NEXT iteration
+    (as a tool turn), not only when the whole task ends.
+
+    Contract (mirrors the run_task hook exactly so delivery is byte-identical):
+      • Respects the unmatched-tool_call guard: if the last message is an
+        assistant tool_call awaiting its tool_result, DEFER (return 0) — a peer
+        turn must never split a tool_call/tool_result pair.
+      • Drains ONLY ``peer-msg`` items, under ``_peer_drain_key`` (VU sub-task)
+        or ``swarm_key_for(task)`` (conv-scoped, matches where the twin was
+        enqueued), so a cross-iteration peer message is never stranded.
+      • Appends ONE coalesced user message to ``messages`` and STASHES the
+        drained items under ``task['_peer_inject_pending']``. It deliberately
+        does NOT emit the PEER_INBOX_INJECT chip nor delete the durable rows —
+        that DEFERRED flush is owned by the run_task the driver invokes for this
+        iteration (it fires right after the LLM call confirms consumption), so
+        the never-zero / exactly-once invariants are preserved unchanged.
+
+    The caller MUST set ``task['_peer_driver_owned'] = True`` so the nested
+    ``run_task`` does not ALSO drain peer items (which would double-drain).
+
+    Returns the number of peer items injected (0 when none / deferred).
+    """
+    try:
+        from lib.agent_inbox import drain as _drain_inbox
+        from lib.swarm.integration import swarm_key_for as _swarm_key_for
+        _last = messages[-1] if messages else None
+        if (_last and _last.get('role') == 'assistant'
+                and _last.get('tool_calls')):
+            return 0  # unmatched tool_call — defer to the next boundary
+        _key = task.get('_peer_drain_key') or _swarm_key_for(task)
+        _peer_items = _drain_inbox(_key, modes=['peer-msg'])
+        _peer_items = [it for it in _peer_items if it.get('value')]
+        if not _peer_items:
+            return 0
+        messages.append({
+            'role': 'user',
+            'content': '\n\n'.join(it['value'] for it in _peer_items),
+        })
+        task.setdefault('_peer_inject_pending', []).extend(_peer_items)
+        logger.info('[Task %s] driver-loop injected %d peer message(s) at '
+                    'iteration %s', task.get('id', '?')[:8], len(_peer_items),
+                    round_label)
+        return len(_peer_items)
+    except Exception as e:
+        logger.error('[Task %s] driver-loop peer drain failed (continuing): %s',
+                     task.get('id', '?')[:8], e, exc_info=True)
+        return 0
+
 
 def _run_single_turn(
     task: dict[str, Any],

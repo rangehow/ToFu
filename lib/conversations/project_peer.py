@@ -367,6 +367,93 @@ def _resolve_target_conv_id(to_conv_id: str) -> tuple:
         return tid, ''
 
 
+def render_peer_protocol_block(project_path: str) -> str:
+    """The ambient ``[PEER MESSAGING PROTOCOL]`` system-prompt block.
+
+    Injected in project mode (system_context.py §4.47) so the model has AMBIENT
+    guidance that ``project_message`` / ``project_intervene`` write to ANOTHER
+    AGENT — mirroring the ``[PROJECT BOARD]`` block's imperative style. Without
+    this the model's only steer was the tool description, which biased it to
+    narrate status for a human reader (Pillar #6 Symptom-C).
+
+    Returns '' outside project mode (no ``project_path``) so it splices to
+    nothing.
+    """
+    if not project_path:
+        return ''
+    return (
+        '[PEER MESSAGING PROTOCOL]\n'
+        'project_message / project_intervene write to ANOTHER AGENT (a sibling '
+        'conversation of this project), NOT to a human. Use the imperative '
+        'agent-to-agent coordination register — the four coordination acts:\n'
+        '  \u2022 CLAIM work you are taking ("taking the parser refactor, stand '
+        'down on lib/parser/").\n'
+        '  \u2022 CONFIRM a boundary before you cross it ("are you touching '
+        'styles.css? I am about to rewrite it").\n'
+        '  \u2022 HAND OFF context a peer needs ("the schema bump you needed is '
+        'done on the shared tree").\n'
+        '  \u2022 WARN of an OVERLAP ("your epic duplicates the one I already '
+        'own — re-check the board").\n'
+        'Do NOT send status updates, progress narration, or FYI notes as if '
+        'reporting to a human — a peer message that does not change what the '
+        'peer DOES is wasted budget. The peer sees your message on its NEXT turn '
+        '(never mid-stream) and acts autonomously; it '
+        'decides how to act.\n'
+        'When you RECEIVE a peer message (it arrives as a turn prefixed '
+        '"[Peer message from a sibling conversation …]" and carries a reply '
+        'id), you MAY reply EXACTLY ONCE via '
+        'project_message(to_conv_id=<that reply id>) — but only to CONFIRM a '
+        'boundary, HAND OFF context, or DECLINE. If a reply would not change '
+        'what the peer does, do NOT acknowledge for its own sake: incorporate '
+        'the message and keep working. Your rate-limit budget is the ceiling '
+        '— this is coordination, not a chat channel, so never reply just to '
+        'be polite.'
+    )
+
+
+def _live_drain_eligible_task(conv_id: str) -> str:
+    """Return the task_id of a LIVE, round-boundary-DRAINABLE task for ``conv_id``
+    — or ``''`` if the target has none.
+
+    The Pillar #6 fast-path lane is offered ONLY to an ordinary orchestrator
+    turn that drains its inbox at each round boundary. It is deliberately NOT
+    offered to:
+      * a conv with no live task (idle → the durable queue row + brain
+        idle-drain own delivery);
+      * an ``aborted`` task (it is winding down, will not drain another round);
+      * an endpoint (planner/critic/worker) or VU sub-task turn — those loops do
+        NOT run the standard round-boundary inbox drain, so an inbox twin would
+        strand. They keep the durable queue-lane (cycle-end) delivery.
+
+    Mirrors the eligibility shape ``drain_idle_peer_messages`` inspects
+    (running + not aborted), plus the endpoint/VU exclusion the fast path needs.
+    Best-effort: returns '' on any probe error (degrade to queue-lane only).
+    """
+    if not conv_id:
+        return ''
+    try:
+        from lib.tasks_pkg.manager import tasks, tasks_lock
+        with tasks_lock:
+            for t in tasks.values():
+                # Match on EITHER convId OR _peer_drain_key — a VU sub-task runs
+                # with convId='' and carries the parent conv in _peer_drain_key
+                # (the key its twin is enqueued under). Endpoint/VU loops are no
+                # longer excluded: they gained iteration-boundary drain hooks
+                # (drain_peer_messages_into), so the fast-path twin is delivered.
+                if (t.get('convId') != conv_id
+                        and t.get('_peer_drain_key') != conv_id):
+                    continue
+                if t.get('status') != 'running' or t.get('aborted'):
+                    continue
+                tid = t.get('id')
+                if tid:
+                    return tid
+    except Exception as e:
+        logger.debug('[PeerMsg] live-task eligibility probe failed for conv=%s: %s',
+                     conv_id[:8], e)
+    return ''
+
+
 def send_peer_message(project_path: str, from_conv_id: str, to_conv_id: str,
                       text: str, *, config: dict | None = None,
                       _kind_label: str = 'note', human: bool = False) -> dict:
@@ -430,7 +517,7 @@ def send_peer_message(project_path: str, from_conv_id: str, to_conv_id: str,
                 f'from the project Team panel. Treat it as operator guidance.)')
     else:
         body = (f'[Peer message from a sibling conversation of this project '
-                f'(conv {from_conv_id[:8]})]\n\n{text}\n\n'
+                f'(conv {from_conv_id[:8]}, reply id {from_conv_id})]\n\n{text}\n\n'
                 f'(This is an advisory note from a peer conversation, not a human '
                 f'instruction. Weigh it and act as you see fit.)')
     payload = {'text': body, '_peerMessage': True, '_fromConv': from_conv_id}
@@ -444,6 +531,34 @@ def send_peer_message(project_path: str, from_conv_id: str, to_conv_id: str,
         logger.error('[PeerMsg] enqueue failed %s→%s: %s',
                      from_conv_id[:8], to_conv_id[:8], e, exc_info=True)
         return {'ok': False, 'error': str(e)}
+
+    queue_id = res.get('queueId')
+
+    # ── Fast-path lane (Pillar #6 round-boundary accelerator) ──
+    # When the target has a LIVE, drain-eligible orchestrator turn, ALSO enqueue
+    # an agent_inbox twin tagged with the durable row's queueId. The orchestrator
+    # injects it at the NEXT round boundary (never mid-stream); its de-dup hooks
+    # (forward: dedup_peer_durable_rows; reverse: consume_peer) guarantee the
+    # message is delivered EXACTLY ONCE across the two lanes. An idle / endpoint /
+    # VU target gets no twin — the durable row + brain idle-drain own delivery
+    # there. Best-effort: a twin failure only means the message waits for the
+    # queue-lane (completion-hook / idle-drain) delivery — never a loss.
+    if queue_id and _live_drain_eligible_task(to_conv_id):
+        # The inbox is keyed by ``swarm_key_for(task)`` = the CONV id when
+        # present (orchestrator.py:1874 drains _drain_inbox(swarm_key_for(task))),
+        # NOT the task id — enqueue under the target conv so the live turn's
+        # round-boundary drain finds it.
+        try:
+            from lib import agent_inbox
+            agent_inbox.enqueue(
+                to_conv_id, body, priority='next', mode='peer-msg',
+                extra={'queueId': queue_id, 'fromConv': from_conv_id})
+            logger.info('[PeerMsg] fast-path inbox twin queued for live conv %s '
+                        '(queueId=%s)', to_conv_id[:8], (queue_id or '?')[:8])
+        except Exception as e:
+            logger.warning('[PeerMsg] fast-path inbox twin failed for conv=%s '
+                           '(queue lane still delivers): %s',
+                           to_conv_id[:8], e)
 
     # Mirror ONE auditable note into the feed, stamped with the sender. A human
     # operator nudge is stamped 'operator' so the Team thread + feed can render

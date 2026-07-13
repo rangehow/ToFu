@@ -66,7 +66,8 @@ from lib.tasks_pkg.endpoint_review import (
 from lib.agent_verdict import is_incomplete_stop
 from lib.agent_core.events import EventType, build_event
 from lib.tasks_pkg.manager import append_event, create_task, persist_task_result
-from lib.tasks_pkg.orchestrator import _run_single_turn, run_task
+from lib.tasks_pkg.orchestrator import (_run_single_turn,
+                                        drain_peer_messages_into, run_task)
 
 MAX_ITERATIONS = 10   # hard cap — safety valve to prevent runaway loops
 MAX_REPLANS = 3       # hard cap on CONTINUE_PLANNER branches per task
@@ -782,12 +783,28 @@ def run_endpoint_task(task):
         # ══════════════════════════════════════
         #  Worker → Critic loop
         # ══════════════════════════════════════
+        # This DRIVER loop owns peer-message delivery at its own iteration
+        # boundary (Pillar #6 fast path for big tasks): drain_peer_messages_into
+        # injects a sibling's peer message as a tool turn on the NEXT iteration
+        # instead of leaving it in the input-box queue until the whole endpoint
+        # task ends. ``_peer_driver_owned`` tells the nested run_task NOT to also
+        # drain peer items (the flush inside run_task still emits the chip +
+        # de-dups the durable row after the LLM consumes them).
+        task['_peer_driver_owned'] = True
         iteration = 0
         while True:
             iteration += 1
             if task.get('aborted'):
                 stop_reason = 'aborted'
                 break
+
+            # ── Peer-message drain (Pillar #6 fast path) ──
+            #   At the TOP of each iteration, before the Worker turn, inject any
+            #   pending peer message so it reaches the model this iteration. The
+            #   helper respects the unmatched-tool_call guard and stashes items
+            #   for the run_task flush (chip + durable-row de-dup) that fires
+            #   after the Worker's LLM call — preserving exactly-once / never-zero.
+            drain_peer_messages_into(task, messages, round_label=iteration)
 
             if iteration > MAX_ITERATIONS:
                 stop_reason = 'max_iterations'

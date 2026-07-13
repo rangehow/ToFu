@@ -134,57 +134,6 @@ def test_select_includes_after_lease_expired(flask_app):
 
 
 # ════════════════════════════════════════════════════════════════════
-#  select_dispatchable — wait-on-path (commit-dependency) skip
-# ════════════════════════════════════════════════════════════════════
-
-def test_select_demotes_but_never_excludes_epic_waiting_on_held_path(flask_app):
-    """NEVER-BLOCK invariant: an epic whose wait_paths includes a path under a
-    live lease held by a DIFFERENT conversation is still DISPATCHABLE (demoted
-    in ordering, never withheld). A conversation must never be blocked from
-    progressing; a minor same-file overlap is hand-fixable at commit time."""
-    from lib.conversations.project_board import claim_lease, post_task, set_wait_paths
-    from lib.conversations.project_dispatch import select_dispatchable
-    with flask_app.app_context():
-        epic = post_task('/d/wait', 'cA', 'epic waiting on report.js')['id']
-        set_wait_paths('/d/wait', 'cA', epic, ['static/js/paper/report.js'])
-        claim_lease('/d/wait', 'cB', 'static/js/paper/report.js')  # sibling holds it
-        cands = [c['id'] for c in select_dispatchable('/d/wait')]
-    assert epic in cands, \
-        'never-block: a waited epic must stay dispatchable (demoted, not withheld)'
-
-
-def test_select_includes_epic_after_waited_lease_released(flask_app):
-    """SELF-EXPIRY: once the sibling's lease on the waited path expires, the
-    epic is dispatchable again (at read time, no reaper)."""
-    from lib.conversations.project_board import claim_lease, post_task, set_wait_paths
-    from lib.conversations.project_dispatch import select_dispatchable
-    from lib.database import DOMAIN_CHAT, get_thread_db
-    with flask_app.app_context():
-        epic = post_task('/d/wait2', 'cA', 'epic')['id']
-        set_wait_paths('/d/wait2', 'cA', epic, ['lib/x.py'])
-        claim_lease('/d/wait2', 'cB', 'lib/x.py')
-        # expire the sibling's lease
-        get_thread_db(DOMAIN_CHAT).execute(
-            "UPDATE project_tasks SET lease_expires_at=1 WHERE kind='lease' AND title='lib/x.py'")
-        get_thread_db(DOMAIN_CHAT).commit()
-        cands = [c['id'] for c in select_dispatchable('/d/wait2')]
-    assert epic in cands, 'after the waited lease expires the epic is dispatchable'
-
-
-def test_select_includes_epic_waiting_on_own_lease(flask_app):
-    """FAIL-OPEN: an epic waiting on a path IT ITSELF holds a lease on must not
-    be self-deadlocked."""
-    from lib.conversations.project_board import claim_lease, post_task, set_wait_paths
-    from lib.conversations.project_dispatch import select_dispatchable
-    with flask_app.app_context():
-        epic = post_task('/d/wait3', 'cA', 'epic')['id']
-        set_wait_paths('/d/wait3', 'cA', epic, ['lib/x.py'])
-        claim_lease('/d/wait3', 'cA', 'lib/x.py')  # the SAME conv holds it
-        cands = [c['id'] for c in select_dispatchable('/d/wait3')]
-    assert epic in cands, 'an epic must not be held by its OWN path lease'
-
-
-# ════════════════════════════════════════════════════════════════════
 #  dispatch_epic — claim-on-dispatch idempotency
 # ════════════════════════════════════════════════════════════════════
 
@@ -475,57 +424,5 @@ def test_NC4_no_busy_guard_stacks_duplicate(flask_app, monkeypatch):
         "            if False:  # NC-4 (busy guard disabled)\n                continue",
         run,
     )
-
-
-def test_wait_on_path_demotes_epic_below_disjoint_work(flask_app):
-    """The waited epic is handed out AFTER a disjoint alternative (soft demote),
-    but is still present — so no colliding pair is dispatched concurrently while
-    independent work exists, yet the waited epic is never dropped."""
-    from lib.conversations.project_board import (
-        claim_lease, post_task, set_wait_paths,
-    )
-    with flask_app.app_context():
-        from lib.database import DOMAIN_CHAT, get_thread_db
-        get_thread_db(DOMAIN_CHAT).execute(
-            "DELETE FROM project_tasks WHERE project_path='/nc5w'")
-        get_thread_db(DOMAIN_CHAT).commit()
-        conflicted = post_task('/nc5w', 'cA', 'conflicted')['id']
-        set_wait_paths('/nc5w', 'cA', conflicted, ['lib/x.py'])
-        claim_lease('/nc5w', 'cB', 'lib/x.py')
-        free = post_task('/nc5w', 'cA', 'disjoint')['id']
-        from lib.conversations.project_dispatch import select_dispatchable
-        cands = [c['id'] for c in select_dispatchable('/nc5w')]
-    assert conflicted in cands and free in cands, \
-        'never-block: both epics stay dispatchable'
-    assert cands.index(free) < cands.index(conflicted), \
-        'the disjoint epic is preferred; the conflicting one is demoted last'
-
-
-
-# ════════════════════════════════════════════════════════════════════
-#  Wait-on-path: soft demote, NEVER withhold
-#
-#  A waited-path overlap only DEMOTES the epic in ordering (handed out last),
-#  never blocks it. A conversation must never be stranded; a same-file overlap
-#  is minor, hand-fixable interference at commit time. (The [sibling] change-gate
-#  and its git dirty-set probe were REMOVED with the worktree/commit machinery
-#  on 2026-07-13 — a [sibling] block is now throttled only by its self-expiring
-#  cooldown, never by a commit-keyed gate.)
-# ════════════════════════════════════════════════════════════════════
-
-def test_wait_on_path_never_withholds(flask_app):
-    """NEVER-BLOCK: a waited epic held by a live sibling lease is ALWAYS still
-    dispatchable (demoted in ordering, never withheld)."""
-    from lib.conversations.project_board import claim_lease, post_task, set_wait_paths
-    from lib.conversations.project_dispatch import select_dispatchable
-    with flask_app.app_context():
-        epic = post_task('/w/off', 'cA', 'epic')['id']
-        set_wait_paths('/w/off', 'cA', epic, ['lib/x.py'])
-        claim_lease('/w/off', 'cB', 'lib/x.py')   # sibling holds it live
-        cands = [c['id'] for c in select_dispatchable('/w/off')]
-    assert epic in cands, \
-        'never-block: a waited epic must stay dispatchable (demoted, not withheld)'
-
-
 
 

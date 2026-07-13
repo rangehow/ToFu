@@ -1,32 +1,19 @@
 """tests/test_project_board_class_aware_backoff.py — Tier-2 bleeding-control.
 
-Interim corrections to the CURRENT (shared-tree) board model while the
-worktree-isolation redesign (docs/PROJECT_BRAIN_WORKTREE_ISOLATION.md) is built.
-They stop the reported "autonomous promotion always blocked by collaboration"
-oscillation without removing the shared tree.
+Guards the CLASS-AWARE block backoff on the shared-tree board model: a transient
+``[sibling]`` block (auto-resolves the instant a sibling commits, visible
+immediately on the shared checkout) must use a FLAT cooldown
+(``SIBLING_BLOCK_COOLDOWN_MS`` == ``DEFAULT_LEASE_TTL_MS``, NO escalation), while
+a ``[human-gated]`` / untagged block rides the exponential curve. Without the
+flat class the transient block would ratchet an epic toward a 24 h sleep on
+ordinary collaboration churn.
 
-Two faults, two fixes:
-
-(a) CLASS-AWARE BACKOFF — ``_block_cooldown_ms`` was class-agnostic: a transient
-    ``[sibling]`` block (auto-resolves the instant a sibling commits) escalated
-    the SAME exponential curve as a ``[human-gated]`` block, ratcheting an epic
-    toward a 24 h sleep on ordinary collaboration churn. Fix: a ``[sibling]``
-    block tracks the LEASE clock (flat ``SIBLING_BLOCK_COOLDOWN_MS`` ==
-    ``DEFAULT_LEASE_TTL_MS``, NO escalation); the exponential curve is reserved
-    strictly for ``[human-gated]`` / untagged.
-
-(b) EVENT-DRIVEN wait_paths — after a sibling RELEASED a contested path, the
-    waiting epic still slept out its (now separate) cooldown, so the recovery
-    latency exceeded the actual blocker. Fix: ``release_lease`` WAKES every epic
-    whose ``wait_paths`` contains the released resource by clearing its
-    ``blocked_until`` → the epic is dispatchable on the next sweep, not one
-    cooldown later. Lease rows carry ``wait_paths='[]'`` so they are never woken;
-    the crash path stays covered because the sibling cooldown now equals the
-    lease TTL (aligned expiry).
-
-Load-bearing negative control:
-  • NC — byte-revert the ``release_lease`` wake call → an epic waiting on a
-    released path stays cooldown-suppressed (reproduces the recovery-latency gap).
+NOTE: the former event-driven wait-on-path wake tests were removed together with
+the orphaned wait-on-path/lease apparatus (the path-lease agent tools were
+deleted 2026-07-13, so no ``kind='lease'`` row is ever created and the wake path
+was permanently dead). The flat cooldown is now the sole ``[sibling]`` throttle;
+it converges because a sibling's commit is visible immediately on the single
+shared checkout.
 """
 
 from __future__ import annotations
@@ -39,11 +26,6 @@ pytestmark = pytest.mark.unit
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, '..'))
-_BOARD_SRC = os.path.join(ROOT, 'lib', 'conversations', 'project_board.py')
-
-from tests._nc_harness import patch_restore as _patch_restore  # noqa: E402
-
-
 @pytest.fixture(scope='module', autouse=True)
 def _ensure_schema(flask_app):
     from lib.database import init_db
@@ -74,7 +56,7 @@ def _row(flask_app, project_path, task_id):
     with flask_app.app_context():
         db = get_thread_db(DOMAIN_CHAT)
         r = db.execute(
-            'SELECT blocked_until, block_count, block_reason, wait_paths, status '
+            'SELECT blocked_until, block_count, block_reason, status '
             'FROM project_tasks WHERE id=? AND project_path=?',
             (task_id, project_path)).fetchone()
     return dict(r) if r else None
@@ -167,90 +149,3 @@ def test_untagged_block_treated_as_human(flask_app):
         block_task('/caw/3', 'cA', tid, 'gate 2')
     row = _row(flask_app, '/caw/3', tid)
     assert row['blocked_until'] > before2 + SIBLING_BLOCK_COOLDOWN_MS
-
-
-# ════════════════════════════════════════════════════════════════════
-#  (b) release_lease wakes wait-path waiters (event-driven recovery)
-# ════════════════════════════════════════════════════════════════════
-
-def _blocked_and_held(flask_app, project_path, path, *, holder='cB', owner='cA'):
-    """Set up: sibling ``holder`` leases ``path``; an epic owned by ``owner`` is
-    blocked [sibling] on that path (→ wait_paths + future cooldown). Returns tid."""
-    from lib.conversations.project_board import block_task, claim_lease, post_task
-    with flask_app.app_context():
-        claim_lease(project_path, holder, path)
-        tid = post_task(project_path, owner, f'epic waiting on {path}')['id']
-        block_task(project_path, owner, tid, f'[sibling] path={path} waiting on commit')
-    return tid
-
-
-def test_release_lease_wakes_wait_path_waiter(flask_app):
-    from lib.conversations.project_board import release_lease
-    from lib.conversations.project_dispatch import select_dispatchable
-    tid = _blocked_and_held(flask_app, '/caw/4', 'lib/x.py')
-    with flask_app.app_context():
-        # held on BOTH gates (live lease + cooldown) → not dispatchable
-        assert tid not in [c['id'] for c in select_dispatchable('/caw/4')]
-        release_lease('/caw/4', 'cB', 'lib/x.py')
-        cands = [c['id'] for c in select_dispatchable('/caw/4')]
-    row = _row(flask_app, '/caw/4', tid)
-    assert row['blocked_until'] == 0, \
-        'releasing the awaited path must clear the waiting epic cooldown'
-    assert tid in cands, \
-        'the epic must be dispatchable immediately on release, not one cooldown later'
-
-
-def test_release_only_wakes_epics_waiting_on_that_path(flask_app):
-    from lib.conversations.project_board import release_lease
-    tid_x = _blocked_and_held(flask_app, '/caw/5', 'lib/x.py', owner='cA')
-    tid_y = _blocked_and_held(flask_app, '/caw/5', 'lib/y.py', holder='cC', owner='cA')
-    with flask_app.app_context():
-        release_lease('/caw/5', 'cB', 'lib/x.py')
-    row_x = _row(flask_app, '/caw/5', tid_x)
-    row_y = _row(flask_app, '/caw/5', tid_y)
-    assert row_x['blocked_until'] == 0, 'the x.py waiter is woken'
-    assert row_y['blocked_until'] > 0, 'the y.py waiter is NOT woken (wrong path)'
-
-
-def test_release_nonwaited_path_is_noop(flask_app):
-    from lib.conversations.project_board import claim_lease, release_lease
-    tid = _blocked_and_held(flask_app, '/caw/6', 'lib/x.py')
-    with flask_app.app_context():
-        # a lease on an unrelated path, released → must not touch the x.py waiter
-        claim_lease('/caw/6', 'cB', 'lib/unrelated.py')
-        release_lease('/caw/6', 'cB', 'lib/unrelated.py')
-    row = _row(flask_app, '/caw/6', tid)
-    assert row['blocked_until'] > 0, \
-        'releasing an unrelated path must not wake the x.py waiter'
-
-
-# ════════════════════════════════════════════════════════════════════
-#  NC — the release_lease wake call is load-bearing
-# ════════════════════════════════════════════════════════════════════
-
-def test_NC_release_wake_is_load_bearing(flask_app):
-    def run():
-        import lib.conversations.project_board as pb
-        from lib.conversations.project_dispatch import select_dispatchable
-        with flask_app.app_context():
-            from lib.database import DOMAIN_CHAT, get_thread_db
-            get_thread_db(DOMAIN_CHAT).execute(
-                "DELETE FROM project_tasks WHERE project_path='/ncw'")
-            get_thread_db(DOMAIN_CHAT).commit()
-            pb.claim_lease('/ncw', 'cB', 'lib/x.py')
-            tid = pb.post_task('/ncw', 'cA', 'epic waiting on x.py')['id']
-            pb.block_task('/ncw', 'cA', tid, '[sibling] path=lib/x.py waiting')
-            pb.release_lease('/ncw', 'cB', 'lib/x.py')
-            row = get_thread_db(DOMAIN_CHAT).execute(
-                'SELECT blocked_until FROM project_tasks WHERE id=? AND project_path=?',
-                (tid, '/ncw')).fetchone()
-        assert int(row['blocked_until'] or 0) > 0, \
-            'NC: with the release wake removed, a released-path waiter stays ' \
-            'cooldown-suppressed (reproduces the recovery-latency gap)'
-
-    _patch_restore(
-        _BOARD_SRC,
-        '        _wake_wait_path_waiters(db, project_path, resource, now)\n',
-        '        pass  # NC (release wake disabled)\n',
-        run,
-    )

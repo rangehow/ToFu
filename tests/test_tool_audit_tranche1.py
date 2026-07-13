@@ -45,7 +45,7 @@ def test_spawn_agents_item_schema_has_id():
 def test_spawn_agents_backend_honors_caller_id():
     # The whole point of the schema id: the backend must use a caller-supplied
     # id rather than always minting a uuid.
-    integ = _src('lib/swarm/integration.py')
+    integ = _src('lib/swarm/integration/_tools.py')
     assert "agent_def.get('id'" in integ, (
         'integration._handle_spawn_agents must read the caller id (else '
         'depends_on stays un-referenceable)')
@@ -109,7 +109,10 @@ def test_merge_memories_reports_failed_deletes(tmp_path, monkeypatch):
     monkeypatch.setattr(storage, 'delete_memory', fake_delete)
 
     warnings = []
-    monkeypatch.setattr(storage.logger, 'warning',
+    # merge_memories logs via its own submodule logger (lib.memory.storage._crud)
+    # after the storage package split; patch that logger where the warning fires.
+    import lib.memory.storage._crud as _crud
+    monkeypatch.setattr(_crud.logger, 'warning',
                         lambda *a, **k: warnings.append(a))
 
     res = storage.merge_memories(['x', 'y'], 'Merged', 'desc', 'body',

@@ -293,22 +293,7 @@ class StreamingToolAccumulator:
                 #   conversation's root registry (prevents concurrent-task
                 #   clobber — see lib/project_mod/config.py::set_conv_roots).
                 _conv_id = self._task.get('convId') or self._task.get('id') or ''
-                # ★ Worktree isolation (§3.1, build step 3): scope the read
-                #   base to this conv's worktree when TOFU_WORKTREE_ISOLATION=on
-                #   so a pre-executed read sees the SAME isolated tree the
-                #   serial handler will. OFF (default) → base unchanged.
                 _base = self._project_path or '.'
-                if self._project_path and _conv_id:
-                    try:
-                        from lib.conversations.project_worktree import (
-                            is_isolation_enabled as _wt_on,
-                            scoped_base_path as _wt_scope,
-                        )
-                        if _wt_on():
-                            _base = _wt_scope(self._project_path, _conv_id) or _base
-                    except Exception as _wt_e:
-                        logger.debug('[%s] StreamingToolExec: worktree scoping '
-                                     'skipped: %s', self._tid, _wt_e)
                 return execute_tool(fn_name, fn_args, _base, conv_id=_conv_id)
 
             elif fn_name == 'web_search':

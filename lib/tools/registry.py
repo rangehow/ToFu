@@ -1030,7 +1030,6 @@ def _register_builtins() -> None:
                                      'project_board_read', 'project_board_post',
                                      'project_board_claim', 'project_board_complete',
                                      'project_board_block', 'project_commit',
-                                     'project_sync',
                                      'project_peer_status', 'project_feed_read',
                                      'project_message', 'project_intervene'}),
                  idempotent_tools=frozenset({'list_conversations', 'get_conversation',

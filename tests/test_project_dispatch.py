@@ -635,19 +635,16 @@ def test_dirty_sibling_epic_dispatches_when_cooldown_clear(flask_app, monkeypatc
 
 
 # ════════════════════════════════════════════════════════════════════
-#  Wait-on-path: hard withhold (shared tree) vs soft demote (isolation)
+#  Wait-on-path: soft demote, NEVER withhold
 #
-#  Under the default shared inproc tree a waited-path overlap is a real
-#  collision (byte-identity refuses the 2nd commit) → HARD withhold, exactly
-#  as before (OFF byte-identical). Under worktree isolation each conv edits
-#  its own checkout → the overlap only DEMOTES the epic in ordering (handed
-#  out last), never blocks it.
+#  A waited-path overlap only DEMOTES the epic in ordering (handed out last),
+#  never blocks it. A conversation must never be stranded; a same-file overlap
+#  is minor, hand-fixable interference at commit time.
 # ════════════════════════════════════════════════════════════════════
 
 def test_wait_on_path_never_withholds(flask_app):
     """NEVER-BLOCK: a waited epic held by a live sibling lease is ALWAYS still
-    dispatchable (demoted in ordering, never withheld) — regardless of the
-    ambient TOFU_WORKTREE_ISOLATION. The old shared-tree hard withhold is gone."""
+    dispatchable (demoted in ordering, never withheld)."""
     from lib.conversations.project_board import claim_lease, post_task, set_wait_paths
     from lib.conversations.project_dispatch import select_dispatchable
     with flask_app.app_context():
@@ -657,67 +654,6 @@ def test_wait_on_path_never_withholds(flask_app):
         cands = [c['id'] for c in select_dispatchable('/w/off')]
     assert epic in cands, \
         'never-block: a waited epic must stay dispatchable (demoted, not withheld)'
-
-
-def test_wait_on_path_soft_demote_when_isolation_on(flask_app, monkeypatch):
-    """ISOLATION on: the SAME waited epic is NOT withheld — it stays
-    dispatchable but is DEMOTED below a disjoint candidate (conflict =
-    preference, never an idle block)."""
-    import lib.conversations.project_dispatch as pd
-    from lib.conversations.project_board import claim_lease, post_task, set_wait_paths
-    monkeypatch.setattr(pd, '_isolation_on', lambda: True)
-    with flask_app.app_context():
-        conflicted = post_task('/w/on', 'cA', 'conflicted epic')['id']
-        set_wait_paths('/w/on', 'cA', conflicted, ['lib/x.py'])
-        claim_lease('/w/on', 'cB', 'lib/x.py')      # sibling holds the path
-        free = post_task('/w/on', 'cA', 'disjoint epic')['id']  # no wait
-        cands = [c['id'] for c in pd.select_dispatchable('/w/on')]
-    assert conflicted in cands, \
-        'isolation: a waited epic must NOT be withheld — only demoted'
-    assert free in cands
-    # disjoint work is handed out FIRST; the conflicting epic is last.
-    assert cands.index(free) < cands.index(conflicted), \
-        'isolation: the disjoint epic must be preferred over the conflicting one'
-
-
-def test_wait_on_path_demote_still_dispatchable_alone(flask_app, monkeypatch):
-    """ISOLATION on: a demoted epic with NO disjoint alternative is still the
-    (only) candidate — demotion never drops it (non-stranding)."""
-    import lib.conversations.project_dispatch as pd
-    from lib.conversations.project_board import claim_lease, post_task, set_wait_paths
-    monkeypatch.setattr(pd, '_isolation_on', lambda: True)
-    with flask_app.app_context():
-        epic = post_task('/w/alone', 'cA', 'only epic')['id']
-        set_wait_paths('/w/alone', 'cA', epic, ['lib/x.py'])
-        claim_lease('/w/alone', 'cB', 'lib/x.py')
-        cands = [c['id'] for c in pd.select_dispatchable('/w/alone')]
-    assert epic in cands, \
-        'isolation: a demoted epic with no alternative is still dispatchable'
-
-
-# ════════════════════════════════════════════════════════════════════
-#  Change-gate is ISOLATION-GATED — no-op under worktree isolation
-#
-#  The change-gate's premise ("a waited path DIRTY vs HEAD ⇒ the sibling has
-#  not committed ⇒ blocker stands") is a SHARED-TREE signal. Under worktree
-#  isolation each conv edits its OWN checkout off the integration ref, so the
-#  PRIMARY checkout's dirty-set is unrelated cross-session WIP — probing it
-#  there hard-skips every [sibling]-blocked epic FOREVER (the reported
-#  "task stays unclaimed/blocked" deadlock). Real same-file collisions are
-#  caught at LAND time (land_worktree CAS-merge), not by refusing to start.
-# ════════════════════════════════════════════════════════════════════
-
-def test_change_gate_noop_under_isolation(flask_app, monkeypatch):
-    """ISOLATION on: a [sibling] epic whose waited path is DIRTY in the primary
-    checkout is NOT skipped — the change-gate is a no-op (dispatch proceeds)."""
-    import lib.conversations.project_dispatch as pd
-    monkeypatch.setattr(pd, '_isolation_on', lambda: True)
-    # Even a maximally-dirty primary tree must not suppress dispatch.
-    monkeypatch.setattr(pd, '_project_dirty_set', lambda p: {'lib/x.py'})
-    epic = _blocked_sibling_epic('[sibling] path=lib/x.py blocked', ['lib/x.py'])
-    assert pd._skip_unresolved_sibling('/iso/on', epic, {}) is False, \
-        'isolation: the change-gate must be a no-op (primary dirtiness is the ' \
-        'wrong signal — each conv works in its own worktree)'
 
 
 def test_change_gate_never_skips_any_more(flask_app, monkeypatch):
@@ -731,24 +667,5 @@ def test_change_gate_never_skips_any_more(flask_app, monkeypatch):
         'never-block: the change-gate must never skip (dispatch is never frozen)'
 
 
-def test_sweep_dispatches_dirty_sibling_epic_under_isolation(flask_app, monkeypatch):
-    """INTEGRATION: with isolation on, the heartbeat DISPATCHES a [sibling] epic
-    whose waited path is dirty in the primary tree — this is the exact deadlock
-    fix (all such epics were frozen open forever before)."""
-    import lib.conversations.project_dispatch as pd
-    from lib.conversations.project_board import block_task, post_task
-    from lib.message_queue import KIND_WORKFLOW
-    monkeypatch.setattr(pd, '_isolation_on', lambda: True)
-    monkeypatch.setattr(pd, '_project_dirty_set', lambda p: {'lib/x.py'})
-    with flask_app.app_context():
-        epic = post_task('/s/isodirty', 'cP', 'epic')['id']
-        block_task('/s/isodirty', 'cP', epic, '[sibling] path=lib/x.py blocked')
-        from lib.database import DOMAIN_CHAT, get_thread_db
-        get_thread_db(DOMAIN_CHAT).execute(
-            'UPDATE project_tasks SET blocked_until=0 WHERE id=?', (epic,))
-        get_thread_db(DOMAIN_CHAT).commit()
-        n = pd.sweep_dispatch('/s/isodirty')
-    assert n == 1, \
-        'isolation: a dirty-path [sibling] epic must dispatch (not freeze forever)'
-    assert KIND_WORKFLOW in _queue_kinds(flask_app, 'cP')
+
 

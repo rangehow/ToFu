@@ -400,42 +400,14 @@ PROJECT_COMMIT_TOOL = {
     },
 }
 
-# ── Worktree conflict-recovery seam (isolation on-mode) ──
-# When TOFU_WORKTREE_ISOLATION=on, a land can be HELD on a merge conflict
-# against the integration branch. project_sync is the recovery companion to
-# project_commit's land: it pulls the latest integration HEAD INTO the conv's
-# worktree (a MERGE that leaves standard conflict markers), so the conflict is
-# resolvable in-place with normal edit tools and the next land fast-forwards.
-# Without it a conflicted conversation would re-land → held → re-land forever.
-PROJECT_SYNC_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "project_sync",
-        "description": (
-            "Recover a HELD land (worktree-isolation mode). When project_commit "
-            "reports 'Land held — merge conflict against the integration "
-            "branch', call this to pull the latest integration HEAD INTO your "
-            "worktree. A clean merge → land again immediately (it "
-            "fast-forwards). A conflict → standard <<<<<<< / ======= / >>>>>>> "
-            "markers are written into the named files; resolve them with your "
-            "normal edit tools (read_files + apply_diff), then land again. This "
-            "is the ONLY way to escape a held land — re-landing without syncing "
-            "just re-hits the same conflict. Only meaningful in project mode "
-            "with worktree isolation enabled."
-        ),
-        "parameters": {"type": "object", "properties": {}, "required": []},
-    },
-}
-
 BOARD_TOOLS = [BOARD_READ_TOOL, BOARD_POST_TOOL, BOARD_CLAIM_TOOL,
                BOARD_COMPLETE_TOOL, BOARD_BLOCK_TOOL,
-               PATH_CLAIM_TOOL, PATH_RELEASE_TOOL, PROJECT_COMMIT_TOOL,
-               PROJECT_SYNC_TOOL]
+               PATH_CLAIM_TOOL, PATH_RELEASE_TOOL, PROJECT_COMMIT_TOOL]
 BOARD_TOOL_NAMES = {'project_board_read', 'project_board_post',
                     'project_board_claim', 'project_board_complete',
                     'project_board_block',
                     'project_claim_path', 'project_release_path',
-                    'project_commit', 'project_sync'}
+                    'project_commit'}
 
 
 # ── Project Peer tools (Pillar #6 — cross-conversation communication) ──
@@ -588,7 +560,6 @@ __all__ = [
     'BOARD_READ_TOOL', 'BOARD_POST_TOOL', 'BOARD_CLAIM_TOOL',
     'BOARD_COMPLETE_TOOL', 'BOARD_BLOCK_TOOL',
     'PATH_CLAIM_TOOL', 'PATH_RELEASE_TOOL', 'PROJECT_COMMIT_TOOL',
-    'PROJECT_SYNC_TOOL',
     'BOARD_TOOLS', 'BOARD_TOOL_NAMES',
     'PEER_STATUS_TOOL', 'PEER_FEED_TOOL', 'PEER_MESSAGE_TOOL',
     'PEER_INTERVENE_TOOL', 'PEER_TOOLS', 'PEER_TOOL_NAMES',

@@ -285,28 +285,6 @@ def _handle_project_tool(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg
     #   workspace root" while its read_files/grep (routed via the streaming
     #   executor's convId-or-id) worked. Use the same key everywhere.
     _root_conv_id = task.get('convId') or task.get('id') or ''
-    # ★ Worktree isolation (§3.1/§3.2, build step 3): under
-    #   TOFU_WORKTREE_ISOLATION=on, resolve the tool base to THIS conversation's
-    #   own git worktree so its reads/writes/grep/apply_diff AND run_command cwd
-    #   operate on an isolated checkout — never the shared primary tree. OFF
-    #   (default) returns project_path unchanged (byte-identical). Fail-open to
-    #   the primary on any error. The conv's root registry is re-pointed at the
-    #   worktree so namespaced-path + read-only resolution follow it too. The
-    #   Project-Brain coordination surfaces keep using the ORIGINAL project_path.
-    if project_path and _root_conv_id:
-        try:
-            from lib.conversations.project_worktree import (
-                is_isolation_enabled as _wt_on, scoped_base_path as _wt_scope,
-            )
-            if _wt_on():
-                _scoped = _wt_scope(project_path, _root_conv_id)
-                if _scoped and _scoped != project_path:
-                    from lib.project_mod.config import set_conv_roots
-                    set_conv_roots(_root_conv_id, _scoped)
-                    project_path = _scoped
-        except Exception as _wt_e:
-            logger.warning('[Worktree] tool base scoping skipped (using primary): %s',
-                           _wt_e)
     try:
         # read_files is globally available — when no project is attached,
         # absolute paths still work (routed inside tool_read_files via

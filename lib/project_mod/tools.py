@@ -320,30 +320,6 @@ def _resolve_base(base_path, rel_path, conv_id=None):
                 if base_path:
                     bp_basename = os.path.basename(os.path.abspath(base_path))
                     if bp_basename == _name or bp_basename.lower() == _name.lower():
-                        # ── Worktree isolation (§3.3 / V6): the self-heal is a
-                        #   conv-state race workaround for the SHARED-global era.
-                        #   Under isolation there is no global fall-through to be
-                        #   clobbered, so the heal must be conv-keyed: only resolve
-                        #   to base_path when base_path is genuinely one of THIS
-                        #   conv's registered roots. Otherwise a stale/mismatched
-                        #   base_path could route a write into the wrong worktree.
-                        from lib.project_mod.config import (
-                            _worktree_isolation_on, get_conv_roots,
-                        )
-                        if _worktree_isolation_on() and conv_id:
-                            abs_bp = os.path.abspath(base_path)
-                            conv_root_paths = {
-                                os.path.abspath(s['path'])
-                                for s in get_conv_roots(conv_id).values()
-                            }
-                            if abs_bp not in conv_root_paths:
-                                logger.warning(
-                                    '[Tools] isolation: refusing self-heal of %r '
-                                    'to base_path %s — not a registered root of '
-                                    'conv %s (V6 cross-root guard)',
-                                    rel_path, abs_bp,
-                                    conv_id[:12] if conv_id else '?')
-                                raise
                         logger.info('[Tools] Self-heal namespaced path %r: '
                                     'base_path basename matches unknown root — '
                                     'resolving to base_path (conv-state race workaround). '

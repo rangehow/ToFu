@@ -71,12 +71,10 @@ USER_PROFILE_PENDING_FILE = '.tofu_user_profile_pending.json'
 # startup reconciliation / sweep). Written by ``lib/presence/registry.py``.
 PRESENCE_SUBDIR = 'presence'          # under FILE_HISTORY_ROOT_DIR (.tofu/)
 PRESENCE_REGISTRY_FILE = 'registry.json'
-# Per-conversation git worktree isolation state dir (Project Brain scale-out —
-# docs/PROJECT_BRAIN_WORKTREE_ISOLATION.md). Houses one linked git worktree per
-# active conversation (``<root>/.tofu_worktrees/<conv_id>/``) plus a lease
-# registry.json. The ``.tofu`` prefix means the ``.tofu*`` gitignore glob +
-# every artifact consumer already exclude it with no code change. Written by
-# lib/conversations/project_worktree.py, only when TOFU_WORKTREE_ISOLATION=on.
+# Legacy per-conversation git worktree isolation state dir. The isolation
+# feature was REMOVED; this constant is retained only so the ``.tofu*`` gitignore
+# glob + artifact consumers still recognise any stale ``.tofu_worktrees/`` dirs
+# left on disk as agent junk (safe to delete).
 WORKTREES_DIR = '.tofu_worktrees'
 
 # Explicit set of the artifacts known TODAY — useful for documentation,

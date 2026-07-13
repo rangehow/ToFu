@@ -77,19 +77,6 @@ def _clean(flask_app):
 
 
 @pytest.fixture(autouse=True)
-def _shared_tree_mode(monkeypatch):
-    """This suite exercises the SHARED-TREE (isolation=off) block-cooldown model:
-    a commit/land or ``[sibling] path=`` reason IS stamped as a cooldown. Under
-    worktree isolation that reason is declined at creation (block_task's guard),
-    so pin isolation OFF here regardless of the ambient TOFU_WORKTREE_ISOLATION
-    so these cooldown tests are deterministic. The isolation-on decline has its
-    own coverage (the block-guard decline tests)."""
-    monkeypatch.setattr(
-        'lib.conversations.project_worktree.is_isolation_enabled',
-        lambda: False)
-
-
-@pytest.fixture(autouse=True)
 def _stub_push(monkeypatch):
     monkeypatch.setattr('lib.agent_core.push.push_event', lambda *a, **k: None)
 

@@ -191,21 +191,12 @@ def select_dispatchable(project_path: str) -> list[dict]:
         deps = t.get('depends_on') or []
         if any(d not in done_ids for d in deps):
             continue
-        # ── wait-on-path (commit-dependency) filter: an epic that declared a
-        #    wait on path(s) another conversation is actively editing (a live
-        #    lease) is HELD until that lease clears — the precise complement to
-        #    the cooldown. Resolved as the inverse read of the path-lease at
-        #    read time, so it self-expires when the holder releases/crashes
-        #    (within one lease TTL); a path nobody leases never strands.
-        #
-        #    ISOLATION-GATED (the "conflict = preference, never idle block"
-        #    fix): under worktree isolation each conversation edits its OWN
-        #    checkout, so a waited-path overlap causes NO collision — it must
-        #    only DEMOTE the epic in ordering (handed out last, after disjoint
-        #    work), never withhold it. Under the default shared inproc tree two
-        #    convs editing the same file DO collide (byte-identity refuses the
-        #    2nd commit), so the hard withhold stays — OFF is byte-identical to
-        #    today, and Slice A already stopped its re-dispatch churn. ──
+        # ── wait-on-path (commit-dependency) preference: an epic that declared
+        #    a wait on path(s) another conversation is actively editing (a live
+        #    lease) is DEMOTED in ordering — never withheld. A conversation must
+        #    NEVER be blocked from progressing; a same-file overlap is minor,
+        #    hand-fixable interference at commit time, not a reason to strand
+        #    the epic. Self-expires when the holder releases/crashes. ──
         if _paths_waited_but_held(t, tasks, now_ms):
             # DEMOTE, never withhold: a conversation must NEVER be blocked from
             # progressing (the owner's one hard invariant). A wait-on-path
@@ -215,8 +206,7 @@ def select_dispatchable(project_path: str) -> list[dict]:
             t = {**t, '_conflict_demote': True}
         candidates.append(t)
 
-    # ── Write-set partitioning (worktree isolation §4): shift collision
-    #    detection LEFT from land-time to dispatch-time. Prefer a candidate
+    # ── Write-set partitioning: prefer a candidate
     #    whose declared write_set is DISJOINT from every LIVE-CLAIMED epic's
     #    write_set, so two conversations aren't handed epics that will fight
     #    over the same files. This is a SOFT preference (stable reorder,
@@ -243,21 +233,6 @@ def select_dispatchable(project_path: str) -> list[dict]:
             return 0
         candidates.sort(key=_demote_key)
     return candidates
-
-
-def _isolation_on() -> bool:
-    """True iff worktree isolation is active (``TOFU_WORKTREE_ISOLATION=on``).
-
-    Gates the wait-on-path DEMOTE-vs-WITHHOLD choice in select_dispatchable.
-    Fails CLOSED to OFF (the shared-tree hard-withhold, byte-identical to
-    today) on any probe error — a broken probe must never silently disable the
-    collision protection the shared tree still needs."""
-    try:
-        from lib.conversations.project_worktree import is_isolation_enabled
-        return bool(is_isolation_enabled())
-    except Exception as e:
-        logger.debug('[Dispatch] isolation probe failed (assuming OFF): %s', e)
-        return False
 
 
 def _write_set_of(task: dict) -> list:
@@ -352,41 +327,13 @@ def _sibling_block_unresolved(epic: dict, dirty) -> bool:
 
 
 def _skip_unresolved_sibling(project_path: str, epic: dict, dirty_cache: dict) -> bool:
-    """Heartbeat wrapper around ``_sibling_block_unresolved`` that probes the
-    project dirty-set at most ONCE per sweep. Pass the SAME ``dirty_cache`` dict
-    across a sweep's candidate loop so the git probe is a single subprocess per
-    sweep (and only when a genuine ``[sibling]``+``wait_paths`` candidate exists —
-    the cheap tag pre-check gates the probe). Fail-open on any error path.
+    """NEVER-BLOCK invariant: a conversation is NEVER withheld from dispatch.
 
-    ISOLATION-GATED (same ruling as the wait-on-path DEMOTE fix in
-    ``select_dispatchable``): under ``TOFU_WORKTREE_ISOLATION=on`` the
-    change-gate is a NO-OP. The gate's premise — "a waited path still DIRTY vs
-    HEAD means the sibling has not committed, so the blocker stands" — is a
-    SHARED-TREE signal. Under isolation each conversation edits its OWN worktree
-    branched off the integration ref, so the PRIMARY checkout's dirty-set is
-    unrelated cross-session WIP (typically hundreds of abandoned files that
-    isolation exists to make irrelevant); probing it there hard-skips every
-    ``[sibling]``-blocked epic FOREVER — never dispatched, never re-cooled — the
-    exact "task stays unclaimed/blocked" deadlock the owner reported. A genuine
-    same-file collision is not a dispatch concern under isolation: it is caught
-    (and CAS-merged / held) at LAND time by ``land_worktree``, not by refusing to
-    start the turn. So under isolation we let the epic dispatch (the block's own
-    self-expiring cooldown, set by ``block_task``, still throttles a truly-stuck
-    epic — it just isn't frozen out permanently by the wrong tree's dirtiness).
-    OFF stays byte-identical: the shared-tree change-gate is the right signal
-    there (two convs on one file genuinely collide at commit)."""
-    from lib.conversations.project_board import _SIBLING_TAG
-    if _SIBLING_TAG not in (epic.get('block_reason') or '').lower():
-        return False
-    if not (epic.get('wait_paths') or []):
-        return False
-    # NEVER-BLOCK invariant: a [sibling]-blocked epic is throttled ONLY by its
-    # own self-expiring, escalating cooldown (blocked_until) — NEVER permanently
-    # frozen by a change-gate keyed on a sibling COMMIT (dirty→clean). Commits
-    # are disposable, so keying dispatch on one could strand an epic forever.
-    return False
-
-
+    A ``[sibling]``-blocked epic is throttled ONLY by its own self-expiring,
+    escalating cooldown (``blocked_until``) — never permanently frozen by a
+    change-gate keyed on a sibling COMMIT. Commits are disposable, so keying
+    dispatch on one could strand an epic forever. Always returns False (the
+    heartbeat sweeps call this; the signature is kept for their call sites)."""
     return False
 
 
@@ -421,57 +368,23 @@ def dispatch_epic(project_path: str, epic: dict, target_conv_id: str, *,
         if not claim.get('ok'):
             return {'ok': False, 'error': claim.get('error', 'claim_failed')}
 
-        # ── Kickoff wording is ISOLATION-AWARE. Under worktree isolation each
-        #    conversation edits its OWN checkout, so editing collisions cannot
-        #    happen and "I can't cleanly commit/land" is NO LONGER a real
-        #    blocker — the work is safe on the conv's own branch and a
-        #    background reconcile merges it later. The completion criterion is
-        #    therefore decoupled from landing: done = the work is finished and
-        #    the conv's own worktree tests are GREEN. A held land must NOT be
-        #    turned into a self-block (that is what burned tokens sleeping in
-        #    the 1h→24h cooldown for a local-only project). The SHARED-tree
-        #    (isolation off) wording keeps the original block-and-cooldown
-        #    guidance unchanged (byte-identical single-box behaviour). ──
-        if _isolation_on():
-            kickoff = (
-                f"[Project Brain — autonomous dispatch] You are picking up an "
-                f"open project epic so it does not stall waiting for a human. "
-                f"Epic: \"{title}\". Read the project board and charter for "
-                f"context and do the work in YOUR OWN worktree (isolation is "
-                f"on — your edits never collide with a sibling's). "
-                f"COMPLETION CRITERION: the epic is DONE when the work is "
-                f"finished and your worktree's own tests are GREEN — mark it "
-                f"with project_board_complete then. Landing is decoupled: "
-                f"attempt project_commit to land into the integration branch, "
-                f"but if it is HELD (merge conflict / red merge-result), your "
-                f"work is already safely committed on your own branch and is "
-                f"NOT lost — DO NOT stop, DO NOT idle, and DO NOT "
-                f"project_board_block for it. 'Cannot cleanly commit/land' is "
-                f"NOT a valid block reason under isolation; the background "
-                f"reconcile merges your branch later. Just complete the epic "
-                f"and move to the next one. Reserve project_board_block ONLY "
-                f"for a genuine external gate you truly cannot proceed past "
-                f"(e.g. a human-only infra sign-off) with a '[human-gated] …' "
-                f"reason. Do NOT silently no-op."
-            )
-        else:
-            kickoff = (
-                f"[Project Brain — autonomous dispatch] You are picking up an open "
-                f"project epic so it does not stall waiting for a human. Epic: "
-                f"\"{title}\". Read the project board and charter for context, do the "
-                f"work, and mark the epic done with project_board_complete when "
-                f"finished. If you hit a genuine external gate you cannot clear "
-                f"yourself, report it with project_board_block and PREFIX the reason "
-                f"with the block class — '[human-gated] …' (only a human can satisfy "
-                f"it) or '[sibling] …' (auto-resolves when another conversation "
-                f"commits). When the blocker is a sibling that must commit specific "
-                f"file(s) first, name them in a structured token "
-                f"'[sibling] path=lib/x.py,static/js/y.js …' — the brain then HOLDS "
-                f"this epic precisely while a sibling holds a lease on those paths "
-                f"(releasing automatically when they do), instead of blind retries. "
-                f"Either way the block puts the epic on a self-expiring cooldown so "
-                f"it is not pointlessly re-dispatched. Do NOT silently no-op."
-            )
+        kickoff = (
+            f"[Project Brain — autonomous dispatch] You are picking up an open "
+            f"project epic so it does not stall waiting for a human. Epic: "
+            f"\"{title}\". Read the project board and charter for context, do the "
+            f"work, and mark the epic done with project_board_complete when "
+            f"finished. If you hit a genuine external gate you cannot clear "
+            f"yourself, report it with project_board_block and PREFIX the reason "
+            f"with the block class — '[human-gated] …' (only a human can satisfy "
+            f"it) or '[sibling] …' (auto-resolves when another conversation "
+            f"commits). When the blocker is a sibling that must commit specific "
+            f"file(s) first, name them in a structured token "
+            f"'[sibling] path=lib/x.py,static/js/y.js …' — the brain then HOLDS "
+            f"this epic precisely while a sibling holds a lease on those paths "
+            f"(releasing automatically when they do), instead of blind retries. "
+            f"Either way the block puts the epic on a self-expiring cooldown so "
+            f"it is not pointlessly re-dispatched. Do NOT silently no-op."
+        )
         # Resolve a REAL config from the target conv's settings when the caller
         # passed none (the sweep/completion callers do): the kickoff is later
         # drained into create_task, which needs a model + projectPath to work.

@@ -410,6 +410,10 @@ _BUNDLE_FILES = [
     'feature-loader.js',
     'export-images.js',
     'branch.js',
+    # Branch SSE/poll transport + reconnect (extracted from branch.js 2026-07).
+    # Shares _branchStreams/_activeBranch/_branchKey with branch.js at runtime
+    # (window scope); load order among the two is free — both before main.js.
+    'branch_stream.js',
     # Artifacts panel — depends on core.js (renderMarkdown, escapeHtml,
     # apiUrl) but is consumed by ui.js's chip-rendering path, so it
     # MUST come before ui.js.
@@ -484,6 +488,10 @@ _BUNDLE_FILES = [
     'toolset-apply.js',  # tool-schema latch "apply on next conversation" banner
     'translation.js',
     'upload.js',
+    # Attachment + tool-content preview modals (extracted from upload.js 2026-07).
+    # Window-scope siblings; called at runtime from onclick / main.js / chat_render.js
+    # so load order is free — anywhere before main.js.
+    'upload_preview.js',
     # Voice input (speech-to-text) — mic button + MediaRecorder capture.
     # Leaf composer feature: uses Api.audio.* at RUNTIME and its initVoiceInput()
     # is called from main.js's boot, so it only needs to load before main.js.
@@ -509,6 +517,10 @@ _BUNDLE_FILES = [
     'update.js',
     'timer.js',
     'myday.js',
+    # My Day TODO/stream mutation handlers (extracted from myday.js 2026-07).
+    # Window-scope siblings; invoked at runtime from onclick in myday.js render
+    # fns, share the _myday state object → load order free (after myday.js).
+    'myday_tasks.js',
     # settings.js is now a slim head (var _serverConfig = null;
     # var _keyStatsCache = {...}; var _keyStatsLoading = false;) followed
     # by a pointer comment. It MUST come BEFORE the settings/ subpackage
@@ -553,20 +565,34 @@ _BUNDLE_FILES = [
     'main/main_folders_mobile.js',
     'main/main_input_handling.js',
     'main/main_init_tasks.js',
+    # Server→client history_rewrite alignment: applies the backend reconcile
+    # verdict push ('conv' channel) in place so no manual refresh is needed.
+    # MUST load BEFORE main.js (mirrors core/cross_tab_sync.js): the bundler
+    # concatenates every file into ONE shared lexical scope, and main.js's
+    # synchronous boot IIFE calls _wireConvHistoryRewritePush(), which reads the
+    # module-level `let _convSyncPushChannelWired`. A `let` is hoisted but stays
+    # in the TDZ until its own line executes — so if this file came AFTER
+    # main.js the boot IIFE would hit `ReferenceError: Cannot access
+    # '_convSyncPushChannelWired' before initialization` (the hoisted function
+    # is callable, its `let` is not yet initialized) and abort the whole init.
+    # Only touches window/Map at load; conversations/Api/renderChat/pushSubscribe
+    # are referenced only inside function bodies (runtime, after boot).
+    'conv_sync_push.js',
+    # Client half of windowed conversation reads (tail-N first-open + scroll-up
+    # pagination). MUST load BEFORE main.js for the SAME TDZ reason as
+    # conv_sync_push.js above: main.js's synchronous boot IIFE calls
+    # wireConvWindowScrollLoader(), whose body reads the module-level
+    # `let _scrollUpWired`. If this file came AFTER main.js the boot IIFE would
+    # hit `ReferenceError: Cannot access '_scrollUpWired' before
+    # initialization` and abort the whole init (observed 2026-07-13). Only
+    # defines functions + attaches window.* at load; conversations/activeConvId/
+    # renderChat/Api/document are referenced only inside function bodies
+    # (runtime, after boot). Inert unless the server returns windowed:true.
+    'conv_window.js',
     # Orchestrator (MUST be last) — boot IIFE that wires the app
     'main.js',
     # Post-orchestrator UI widgets (depend on conversations/activeConvId/config
     # globals declared in core.js + main.js, so they MUST come after main.js).
-    # Server→client history_rewrite alignment: applies the backend reconcile
-    # verdict push ('conv' channel) in place so no manual refresh is needed.
-    # Reads conversations/activeConvId/renderChat + calls pushSubscribe at
-    # runtime, so it MUST come after main.js AND push.js. Wired from main.js
-    # boot via _wireConvHistoryRewritePush().
-    'conv_sync_push.js',
-    # Client half of windowed conversation reads (tail-N first-open + scroll-up
-    # pagination). Inert unless the server returns windowed:true. Reads
-    # conversations/activeConvId/renderChat + Api at runtime → after main.js.
-    'conv_window.js',
     'compaction-viewer.js',
     'context-bar.js',
     # The Tofu pet — a self-driven mascot mounted into #projectBar (tofu theme
@@ -651,6 +677,7 @@ _CRITICAL_FILES = frozenset({
 # in image-gen.js, whose own top-level is only var/let/const declarations. It
 # is now correctly DEFERRED (below).
 _DEFERRED_FILES = [
+    'orchestration-catalog.js',  # role/control/glyph/icon catalog + icon-URL helpers; read at runtime by orchestration.js AND task-mode.js → load FIRST
     'orchestration.js',   # Orchestration Studio (openOrchestration) — ~36KB gz
     'task-mode.js',       # Task Mode viewer (openTaskMode) — reads _ORCH_* at runtime → AFTER orchestration.js
     # paper-reader.js decomposition (Epic E, 2026-07-11). Cohesive leaf siblings
@@ -662,11 +689,16 @@ _DEFERRED_FILES = [
     'paper/pdf_responsive.js',  # draggable divider + foldable/tablet responsive-crossing IIFE (self-contained; self-inits on DOMContentLoaded)
     'paper/report.js',    # Report + Review Mode (task/poll/render/export + 7 load-time listeners); report/review STATE stays in core → load before paper-reader.js
     'paper/babel.js',     # Babel PDF-translation tab; owns _babelTranslatedPages (read by core library-persist at runtime) → load before paper-reader.js
+    'paper/library.js',   # Paper Library (bookshelf) cache+CRUD+render; owns _paperLibrary state (extracted from paper-reader.js 2026-07) → runtime cross-refs, order free; before paper-reader.js
     'paper-reader.js',    # Paper Reader (togglePaperMode) — ~54KB gz; init via _onReady (feature-loader.js)
     # Image-Gen mode (enterImageGenMode + panel controls) — ~11KB gz. No
     # load-time side effect; only load-time core read is `escapeHtml` (present,
     # core loads first). Independent of the three above (no cross-read).
     'image-gen.js',
+    # Gacha (batch) image generation (extracted from image-gen.js 2026-07).
+    # _igGenerateBatch/_igBatchModels; called at runtime from generateImageDirect,
+    # shares _igGenerating/_IG_ALL_MODELS via window scope → load order free.
+    'image-gen-batch.js',
     # Project Brain cluster (~18KB gz standalone) — the full three-column
     # coordination panel. DEFERRED 2026-07-09: no load-time side effect (each
     # file's top level is only decls + window.* exposes; project-brain.js's
@@ -713,7 +745,16 @@ _bundle_mtime = 0          # max mtime of source files when bundle was built
 
 
 def _source_max_mtime():
-    """Get the newest mtime among all source JS files (core + deferred)."""
+    """Get the newest mtime among all source JS files (core + deferred).
+
+    Includes THIS module's own file (``lib/js_bundler.py``) in the max, because
+    the load ORDER and membership of the bundle live in ``_BUNDLE_FILES`` here —
+    NOT in any ``.js`` source. A reorder (e.g. moving a module before ``main.js``
+    to fix a TDZ crash) or an add/remove leaves every ``.js`` mtime untouched, so
+    without this the rebuild gate (`get_bundle_filename`) would keep serving the
+    stale bundle built from the OLD order. Stat'ing the manifest file makes any
+    ordering/membership change trigger a rebuild automatically.
+    """
     max_mt = 0
     for name in (*_BUNDLE_FILES, *_DEFERRED_FILES):
         path = os.path.join(JS_DIR, name)
@@ -723,6 +764,12 @@ def _source_max_mtime():
                 max_mt = mt
         except OSError as e:
             logger.debug('[Bundle] Cannot stat %s: %s', name, e)
+    try:
+        mt = os.path.getmtime(__file__)
+        if mt > max_mt:
+            max_mt = mt
+    except OSError as e:
+        logger.debug('[Bundle] Cannot stat manifest module %s: %s', __file__, e)
     return max_mt
 
 

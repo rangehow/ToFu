@@ -127,8 +127,13 @@ function formatConvTime(ts) {
  * contiguous run. Each bucket gets a clickable header that folds its rows.
  * The ">30 days" ("older") bucket starts collapsed. */
 const _CONV_OLDER_DAYS = 30;
-/** Set of date-group keys the user has collapsed. "older" starts collapsed. */
+/** Set of date-group keys currently collapsed. "older" starts collapsed by
+ *  default; every other key only lands here via an explicit user toggle. */
 const _collapsedConvGroups = new Set(['older']);
+/** Keys the user has EXPLICITLY toggled this session. A user's choice always
+ *  wins over the force-expand guards below (which exist only to stop the
+ *  default-collapsed "older" bucket from hiding the whole list on load). */
+const _userToggledConvGroups = new Set();
 
 /** Classify a timestamp into a date-group key. */
 function _convDateGroupKey(ts) {
@@ -161,6 +166,7 @@ function _convGroupHeaderHtml(key, count, collapsed) {
 
 /** Toggle a date group's collapsed state and re-render. */
 function _toggleConvGroup(key) {
+  _userToggledConvGroups.add(key);
   if (_collapsedConvGroups.has(key)) _collapsedConvGroups.delete(key);
   else _collapsedConvGroups.add(key);
   _lastConvListHash = "";          // force a full rebuild past the hash guard
@@ -524,7 +530,11 @@ function _buildConvPlan(filtered) {
   for (const c of filtered) {
     const key = _convDateGroupKey(c.updatedAt || c.createdAt);
     if (key !== curGroup) {
-      curCollapsed = _collapsedConvGroups.has(key) && key !== activeKey && key !== _soleGroupKey;
+      /* An explicit user toggle always wins; the active-conv / sole-group
+       * force-expand only guards the default (never-user-touched) state so a
+       * default-collapsed "older" bucket can't hide the whole list on load. */
+      curCollapsed = _collapsedConvGroups.has(key) &&
+        (_userToggledConvGroups.has(key) || (key !== activeKey && key !== _soleGroupKey));
       plan.push({ type: 'header', key, count: counts[key], collapsed: curCollapsed });
       curGroup = key;
     }

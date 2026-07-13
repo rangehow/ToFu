@@ -7,6 +7,29 @@
    core.js shell — symbols share `window` scope so no exports needed.
    ═══════════════════════════════════════════════════════════════════ */
 
+/* Bounded backoff retry for a failed FIRST folder load. loadFolders() has no
+ * caller-side retry (it runs once at boot), so without this a transient fetch
+ * failure permanently hides the folder rail until the next full page reload.
+ * The chain is self-cancelling: each attempt is a no-op once _foldersLoaded is
+ * true (a success — from this retry, a create, or a cross-device push refresh —
+ * flips it and the next scheduled tick returns early). */
+let _folderLoadRetryTimer = 0;
+let _folderLoadRetryAttempt = 0;
+const _FOLDER_LOAD_RETRY_DELAYS = [1500, 4000, 10000, 30000];
+function _scheduleFolderLoadRetry() {
+  if (_foldersLoaded) return;                       // already recovered
+  if (_folderLoadRetryTimer) return;                // a retry is already pending
+  const delay = _FOLDER_LOAD_RETRY_DELAYS[
+    Math.min(_folderLoadRetryAttempt, _FOLDER_LOAD_RETRY_DELAYS.length - 1)];
+  _folderLoadRetryTimer = setTimeout(() => {
+    _folderLoadRetryTimer = 0;
+    if (_foldersLoaded) return;
+    _folderLoadRetryAttempt++;
+    Promise.resolve(loadFolders()).catch(e =>
+      console.warn('[loadFolders] retry failed:', e && e.message));
+  }, delay);
+}
+
 async function loadFolders() {
   /* Api.folders.list() is best-effort ({onError:'null'}): a transient network
    * failure resolves to [] (empty array), NOT the real folder list. Adopting
@@ -25,6 +48,15 @@ async function loadFolders() {
       console.warn('[loadFolders] fetch failed — keeping current folders:', e.message);
       if (_foldersLoaded) return _folders;   // preserve already-loaded tabs
       list = null;                            // first load ever failed → leave unloaded
+      /* ★ Self-heal: loadFolders() is called ONCE at boot (inside
+       *   initActiveTasks' Promise.all) and the boot-reconnect loop only
+       *   re-runs the CONVERSATION load — nothing re-fetches folders. So a
+       *   failed first load would hide the folder rail for the whole session
+       *   ("sidebar folder gone after refresh, only reappears on create").
+       *   Schedule a bounded backoff retry so folders recover on their own
+       *   once the transient fetch failure clears. Guarded by _foldersLoaded
+       *   so a later success (or a concurrent retry) cancels the chain. */
+      _scheduleFolderLoadRetry();
     }
   }
   if (Array.isArray(list)) _folders = list;

@@ -1253,6 +1253,18 @@ function _installViewportHeightGuard() {
            *   flag, not the absence of a throw. */
           if (typeof serverLoadOk !== 'function' || serverLoadOk()) {
             _clearBootReconnectBanner();
+            /* ★ Self-heal folders: loadFolders() runs ONCE at boot inside
+             *   initActiveTasks' Promise.all and has no retry of its own — a
+             *   failed first fetch leaves _foldersLoaded=false and the folder
+             *   rail hidden for the whole session ("sidebar folder gone after
+             *   refresh"). The reconnect loop only re-ran loadConversationsFromServer,
+             *   so folders never recovered. Re-fetch them here once the server
+             *   is reachable again. */
+            if (typeof loadFolders === 'function' &&
+                typeof areFoldersLoaded === 'function' && !areFoldersLoaded()) {
+              await Promise.resolve(loadFolders()).catch(e =>
+                debugLog(`[boot-reconnect] folder reload failed: ${e && e.message}`, 'warn'));
+            }
             renderConversationList();
             debugLog(`[boot-reconnect] recovered on attempt ${i + 1}`, 'success');
             return;

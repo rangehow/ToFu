@@ -101,7 +101,8 @@ def _hash_password(plaintext: str) -> str:
         h = bcrypt.hashpw(plaintext.encode('utf-8'),
                           bcrypt.gensalt(rounds=12))
         return 'bcrypt$' + h.decode('utf-8')
-    except ImportError:
+    except ImportError as e:
+        logger.debug('[Users] bcrypt unavailable, using pbkdf2 fallback: %s', e)
         salt = os.urandom(16)
         dk = hashlib.pbkdf2_hmac('sha256',
                                  plaintext.encode('utf-8'),

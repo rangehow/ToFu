@@ -929,7 +929,8 @@ def _run_grep_subprocess(cmd, base, io_timeout):
         proc.kill()
         try:
             stdout, _ = proc.communicate(timeout=5)
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as e:
+            logger.debug('[read_tools] grep communicate timed out, using fallback: %s', e)
             stdout = ''
         # Drop the last (possibly truncated) line — same trick as
         # claude-code/src/utils/ripgrep.ts so we don't emit a half-line.

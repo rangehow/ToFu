@@ -6,20 +6,28 @@ coordinating conversation reads: the project goal/north-star (``content``) plus
 the COMMITTED key decisions (``decisions``). It is the thing that makes N
 conversations feel like one mind instead of N amnesiac sessions.
 
-Three-stage discipline (locked by owner, 2026-06-30):
+Discipline (locked 2026-06-30; DECISION-commit de-gated by owner 2026-07-12 to
+"further reduce human involvement — humans no longer participate in charter
+decision-making"):
 
   • **read** — any project-mode conversation may read the charter
     (``read_charter`` / the ``project_charter_read`` tool). Read-only.
-  • **propose** — an agent may only PROPOSE an amendment
-    (``propose_amendment`` / the ``project_charter_propose`` tool). A proposal
-    writes ONE ``proposed_decision`` event into the Activity Feed and NEVER
-    touches the ``project_charter`` table. Proposal ≠ commit.
-  • **commit** — the actual charter mutation is HUMAN-GATED
-    (``commit_charter``). It bumps ``version`` under an optimistic lock so two
-    concurrent commits can't silently clobber, and emits ONE ``decided`` event
-    so the commit is auditable in the feed. The frontend gate (a confirm UI)
-    is wired in a later slice; this module provides the gated function +
-    audit.
+  • **propose** — an agent may PROPOSE an amendment (``propose_amendment`` /
+    the ``project_charter_propose`` tool). A proposal writes ONE
+    ``proposed_decision`` event into the Activity Feed and NEVER touches the
+    ``project_charter`` table. Now optional — a suggestion the agent is not yet
+    ready to make binding.
+  • **commit** — an agent may now self-COMMIT a DECISION
+    (``commit_charter(add_decision=…)`` via the ``project_charter_commit``
+    tool): it bumps ``version`` under an optimistic lock so two concurrent
+    commits can't silently clobber, and emits ONE ``decided`` event so the
+    commit is auditable. The agent path is ``add_decision``-ONLY — it can never
+    edit the north-star ``content``.
+
+HUMAN-ONLY corrective levers (optional, NOT required for normal progress): the
+north-star ``content`` edit, ``update_decision`` / ``delete_decision`` /
+``delete_charter`` — all reachable only through the REST routes. The human
+defines the goal and can veto/correct a decision; it need not approve each one.
 
 All functions key STRICTLY on ``project_path`` (a string) — never a
 process-global singleton (the read/write-badge thrash trap). Best-effort feed
@@ -140,10 +148,13 @@ def commit_charter(project_path: str, *, content: str | None = None,
                    expected_version: int | None = None,
                    updated_by_conv: str = '',
                    resolves_proposal: str = '') -> dict:
-    """HUMAN-GATED commit of a charter change (optimistic-locked).
+    """Commit a charter change (optimistic-locked).
 
-    Updates ``content`` and/or appends one committed ``decision``, bumping
-    ``version``. If ``expected_version`` is provided and does NOT match the
+    Two callers: the human REST route (may set ``content`` AND/OR append a
+    decision) and the ``project_charter_commit`` agent tool (append a decision
+    ONLY — never ``content``). Updates ``content`` and/or appends one committed
+    ``decision``, bumping ``version``. If ``expected_version`` is provided and
+    does NOT match the
     current row version, the commit is REJECTED (concurrent-edit guard) — the
     caller must re-read and retry. On success emits ONE ``decided`` event.
 
@@ -592,9 +603,13 @@ def execute_charter_tool(fn_name: str, fn_args: dict, *,
                          project_path: str = '') -> str:
     """Execute a charter agent tool → human-readable string.
 
-    Only ``project_charter_read`` and ``project_charter_propose`` are exposed
-    to agents. There is intentionally NO commit tool — commit is human-gated
-    (``commit_charter`` is called only from the human-confirm route).
+    Exposes ``project_charter_read``, ``project_charter_propose`` and (since
+    2026-07-12, owner-directed) ``project_charter_commit``. The commit tool
+    calls ``commit_charter`` with ``add_decision`` ONLY — an agent can append a
+    committed DECISION (implementation-level shared intent) but can NEVER edit
+    the north-star ``content`` through this path. Editing/removing a committed
+    decision and deleting the charter stay human-only (the REST routes), as the
+    human's corrective levers.
     """
     try:
         if not project_path:
@@ -604,8 +619,9 @@ def execute_charter_tool(fn_name: str, fn_args: dict, *,
             rec = read_charter(project_path)
             if not rec.get('exists') or not (rec['content'] or rec['decisions']):
                 return ('This project has no charter yet. If you reach a '
-                        'project-wide decision, use project_charter_propose to '
-                        'suggest one (a human commits it).')
+                        'project-wide decision, commit it with '
+                        'project_charter_commit so every sibling conversation '
+                        'aligns to it (the human sets the north-star goal).')
             block = render_charter_block(project_path)
             return block + f'\n\n(charter version {rec["version"]})'
         if fn_name == 'project_charter_propose':
@@ -616,10 +632,42 @@ def execute_charter_tool(fn_name: str, fn_args: dict, *,
                 project_path, current_conv_id, proposal,
                 title=(fn_args.get('title') or '').strip())
             if res.get('ok'):
-                return ('Proposal recorded for human review (it appears in the '
-                        'project activity feed as a proposed decision). The '
-                        'charter is unchanged until a human commits it.')
+                return ('Proposal recorded (it appears in the project activity '
+                        'feed as a proposed decision). Note: you can COMMIT a '
+                        'decision directly with project_charter_commit — a '
+                        'proposal is only for suggestions you are not yet ready '
+                        'to make binding.')
             return f'Error: could not record proposal ({res.get("error", "unknown")}).'
+        if fn_name == 'project_charter_commit':
+            # Agent self-commit of a DECISION (owner-directed 2026-07-12). The
+            # SAME commit_charter the human REST route uses, exposed to agents
+            # so shared intent advances without a human gate. add_decision-ONLY:
+            # the north-star `content` is NOT passed, so this tool can never
+            # edit the goal/direction (guarded by test). resolves_proposal drops
+            # a matching pending proposal out of the human-review list. The
+            # _MAX_DECISIONS rolling truncation in commit_charter applies
+            # unchanged (no pagination).
+            decision = (fn_args.get('decision') or '').strip()
+            if not decision:
+                return 'Error: decision text is required.'
+            ev = fn_args.get('expected_version')
+            res = commit_charter(
+                project_path, add_decision=decision,
+                updated_by_conv=current_conv_id,
+                expected_version=(int(ev) if isinstance(ev, (int, float))
+                                  or (isinstance(ev, str) and ev.isdigit())
+                                  else None),
+                resolves_proposal=(fn_args.get('resolves_proposal') or '').strip())
+            if res.get('ok'):
+                return (f'Decision committed to the charter (version '
+                        f'{res.get("version")}). Every sibling conversation now '
+                        f'reads it as shared intent. A human can still edit or '
+                        f'remove it later if it needs correcting.')
+            if res.get('error') == 'version_conflict':
+                return ('NOT committed — the charter changed since you read it '
+                        f'(current version {res.get("current_version")}). '
+                        'Re-read it with project_charter_read and retry.')
+            return f'Error: could not commit decision ({res.get("error", "unknown")}).'
         return f"Error: Unknown charter tool '{fn_name}'"
     except Exception as e:
         logger.warning('[Charter] tool %s failed: %s', fn_name, e, exc_info=True)

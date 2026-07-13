@@ -126,8 +126,8 @@ producers:
 | `run_concluded` | autopilot run close-out | a whole autopilot run finished |
 | `claimed` | Board claim | a conversation took ownership of an epic |
 | `blocked` | Board block | an epic is stuck |
-| `decided` | Charter commit | a decision was committed |
-| `proposed_decision` | Charter propose | a decision was proposed for human review |
+| `decided` | Charter commit (agent self-commit or human) | a decision was committed |
+| `proposed_decision` | Charter propose | a decision was suggested (optional, non-binding) |
 | `note` | fallback | generic |
 
 **Granularity rule (important):** an autopilot run is dozens of tasks. Emitting
@@ -182,19 +182,39 @@ upsert semantics):
 - **`version`** — an **optimistic-lock** integer (defined below).
 - **`updated_by_conv`, `updated_at`**.
 
-### The three-stage discipline: read → propose → commit
-This is the heart of "shared intent that doesn't drift autonomously":
+### The discipline: read → propose → commit (DECISION-commit de-gated 2026-07-12)
+This is the heart of "shared intent that advances without a human in the loop":
 
 - **read** — any project-mode conversation may read the charter (tool
   `project_charter_read`). Read-only.
-- **propose** — an agent may only *propose* an amendment (tool
+- **propose** — an agent may *propose* an amendment (tool
   `project_charter_propose`). A proposal writes **exactly one
   `proposed_decision` event into the Activity Feed** and **never touches the
-  `project_charter` table**. This distinction — *proposal ≠ commit* — is
-  enforced at the source, not by convention.
-- **commit** — the actual charter change is **human-gated**: only a human,
-  through the UI, calls the commit route. It is **optimistic-locked** and, on
-  success, emits one `decided` event.
+  `project_charter` table**. Now OPTIONAL — a suggestion the agent is not yet
+  ready to make binding.
+- **commit** — an agent may now **self-COMMIT a DECISION** (tool
+  `project_charter_commit` → `commit_charter(add_decision=…)`), so shared
+  intent advances **without a human gate**. It is **optimistic-locked** and, on
+  success, emits one `decided` event. The agent path is **`add_decision`-only**
+  — it can NEVER edit the north-star `content` (the project goal/direction).
+
+> **Owner directive (2026-07-12): "further reduce human involvement — humans
+> no longer participate in charter decision-making or set task statuses; they
+> only receive information, set things about themselves, and define
+> problems/goals."** So decision-commit and every task status are
+> agent-autonomous. The **human retains only optional corrective levers** (NOT
+> required for normal progress): editing the north-star `content`,
+> `update_decision` / `delete_decision` / `delete_charter`, and board
+> `reopen_task` (override a stuck/wrong claim) — all reachable only through the
+> REST routes. The human defines the goal and can veto/correct a decision; it
+> need not approve each one.
+>
+> This does **not** widen the write surface: `commit_charter` already existed
+> (previously reached only via the human route); the agent tool exposes the
+> **same** function, one decision + one `decided` event per call — the
+> no-broadcast / anti-N²-storm invariant stands unchanged. The
+> `_MAX_DECISIONS`-cap rolling truncation applies to agent commits exactly as
+> before (no pagination).
 
 **Optimistic lock** — a concurrency-safety scheme where the writer supplies the
 `version` it *expects* the row to currently hold (`expected_version`). If the
@@ -341,11 +361,12 @@ columns, all keyed on the *displayed conversation's* project path (resolved via
 the same accessor the rest of the UI uses — never a global):
 
 - **Activity** — the live feed (backfill + PushHub stream, deduped as in §3).
-- **Charter** — north-star text + committed decisions, plus **pending
-  `proposed_decision` events** each with a human **Commit / Reject** control.
-  Commit calls the human-gated commit route with the proposal text +
-  `expected_version`; this is the *only* path that mutates the charter — the
-  human gate that was otherwise unreachable.
+- **Charter** — north-star text + committed decisions. Agents self-commit
+  decisions (they land here directly), so the panel is primarily the human's
+  window in + the **corrective levers**: edit the north-star `content`, and
+  edit/remove a committed decision (`update_decision` / `delete_decision` /
+  `delete_charter`), all optimistic-locked. Any residual `proposed_decision`
+  events still expose a **Commit / Reject** control for the human.
 - **Board** — a kanban (open / claimed / done) of epics; claimed cards show the
   owner-conversation chip (clicking it opens that conversation).
 
@@ -372,13 +393,14 @@ several conversations:
    redo it."* B **auto-avoids** the collision and picks different work.
    Meanwhile B reads the `[PROJECT CHARTER]` block and aligns to the shared
    north star.
-4. B reaches a project-wide decision → `project_charter_propose` → a
-   `proposed_decision` event appears in the feed and in the panel's Charter
-   column.
-5. The **human** sees the proposal in the panel, clicks **Commit** → the
-   optimistic-locked commit route writes it into the Charter (`version` bumps),
-   emits a `decided` event → from now on every conversation's prompt carries
-   that committed decision.
+4. B reaches a project-wide decision → `project_charter_commit` → the
+   optimistic-locked commit writes it into the Charter (`version` bumps), emits
+   a `decided` event → from now on every conversation's prompt carries that
+   committed decision — **with no human in the loop**. (B may instead
+   `project_charter_propose` when it wants to leave a non-binding suggestion.)
+5. The **human** watches the decision land in the panel and, if it needs
+   correcting, uses a corrective lever (edit/remove the decision) — an optional
+   veto, not a required approval.
 6. A finishes → `project_board_complete` → `completed` event + the completion
    trigger dispatches any dependents that just unblocked.
 7. Throughout, the human watches the whole pulse — who's doing what, what's
@@ -409,10 +431,13 @@ To rebuild this from scratch you need exactly:
 4. **Prompt injection** of `[PROJECT CHARTER]` and `[PROJECT BOARD]` blocks
    (with the per-epic avoid-duplication hint) — ambient, existence-gated,
    path-keyed.
-5. **Agent tools** gated to project mode: charter read/propose (never commit),
+5. **Agent tools** gated to project mode: charter read/propose/**commit**
+   (commit appends a DECISION only, never the north-star `content`),
    board read/post/claim/complete/block.
-6. **A human-gated commit route** (optimistic-locked, emits `decided`) — the
-   only charter mutator.
+6. **A charter commit path** (optimistic-locked, emits `decided`) reachable by
+   BOTH the agent tool (decision-append only) and the human REST route (which
+   additionally owns the north-star `content` + the corrective edit/delete
+   levers).
 7. **A dispatch engine**: pure `select_dispatchable` + idempotent `dispatch_epic`
    (claim-then-enqueue a `workflow_step` kickoff, reusing the existing message
    queue) + a completion trigger + a **heartbeat sweep on the existing

@@ -242,7 +242,8 @@ def _shrink_upload_image(img_bytes: bytes, detected_fmt: str) -> tuple[bytes, st
 
     try:
         from PIL import Image
-    except ImportError:
+    except ImportError as e:
+        logger.debug('[Upload] PIL unavailable, using fallback: %s', e)
         info['reason'] = 'pillow_missing'
         ext = '.' + ('jpg' if detected_fmt == 'jpeg' else detected_fmt)
         return img_bytes, ext, info

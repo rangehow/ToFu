@@ -363,14 +363,21 @@ function _handleWorkspaceRootAdded(ev, c) {
       } catch (e) { console.warn('[workspace_root_added] toast failed', e); }
       console.log('[workspace_root_added]', { convId, roots });
 
-      /* ── State parity with the create_project branch ──────────────────
-       * The toast alone left projectState.extraRoots empty, so the new
-       * root never lit up the info-rail / per-turn context note / fc-root
-       * & ptool-root pills, and — not being written into conv.projectPaths
-       * — was PRUNED by the next set_project_paths (page reload / conv
-       * switch / send). Mirror the create_project post-hook in
-       * ui/sse_handlers_tool.js: pull the authoritative status, apply it to
-       * projectState, propagate extraRoots into conv.projectPaths, persist.
+      /* ── EPHEMERAL bar paint ONLY — provenance split ──────────────────
+       * An absolute-path write auto-registered a NEW extra root. This is an
+       * INCIDENTAL expansion of the workspace (a side effect of a write to a
+       * path outside all roots), NOT an explicit workspace choice the user
+       * made. So it may light up the bar for the CURRENT page load, but it
+       * must NEVER be written into the DURABLE conv.projectPaths / synced to
+       * the server. Persisting it was the "comes back after I delete it" bug:
+       * the durable record got the root, so the next reload's
+       * _restoreConvProject faithfully repainted exactly the root the user
+       * had just removed.
+       *
+       * Only EXPLICIT additions (create_project, the project modal, picking a
+       * folder) persist to conv.projectPaths — they go through their own
+       * paths and thus survive a reload. Incidental auto-registers evaporate
+       * on reload, as they should.
        *
        * GATE on the emitting conv being the ACTIVE one: the global project
        * _state a background task's write mutated may reflect a DIFFERENT
@@ -381,28 +388,17 @@ function _handleWorkspaceRootAdded(ev, c) {
         if (convId && _active && convId === _active
             && typeof Api !== 'undefined' && Api.project
             && typeof Api.project.status === 'function') {
-          Api.project.status()
+          Api.project.status(convId)
             .then(data => {
               if (!data) return;
+              // Ephemeral: paint the bar so the new root is visible THIS
+              // session. Deliberately do NOT touch conv.projectPath /
+              // conv.projectPaths and do NOT persist/sync — see above.
               if (typeof _applyProjectData === 'function') _applyProjectData(data);
-              const conv = (typeof getActiveConv === 'function') ? getActiveConv() : null;
-              if (conv && data.path) {
-                const paths = [data.path];
-                if (Array.isArray(data.extraRoots)) {
-                  for (const r of data.extraRoots) {
-                    const pp = typeof r === 'string' ? r : (r && r.path);
-                    if (pp && !paths.includes(pp)) paths.push(pp);
-                  }
-                }
-                conv.projectPath = data.path;
-                conv.projectPaths = paths;
-                if (typeof saveConversations === 'function') saveConversations(conv.id);
-                if (typeof syncConversationToServer === 'function') syncConversationToServer(conv);
-              }
             })
             .catch(e => { console.warn('[workspace_root_added] status refresh failed', e); });
         }
-      } catch (e) { console.warn('[workspace_root_added] state parity failed', e); }
+      } catch (e) { console.warn('[workspace_root_added] ephemeral paint failed', e); }
 
 }
 

@@ -26,6 +26,48 @@ function convAutoTranslate(conv) {
 }
 
 /* ═══════════════════════════════════════════════════════════════════
+   Canonical "does this assistant tail belong to a PRIOR, already-settled
+   turn?" reducer (frontend single source of truth).
+
+   When a task's SSE stream connects (live connect in ui/sse_pipeline.js) or
+   is reconnected on startup (main/main_init_tasks.js Case A), the tail
+   assistant message might be the PREVIOUS, completed turn rather than an
+   empty placeholder for the incoming turn. Streaming into it replays the old
+   turn's content into the new bubble ("上一轮对话又重新流式吐出"). The fix is
+   to push a fresh placeholder — but ONLY when the tail is genuinely a prior
+   turn.
+
+   This is NOT lifecycle INFERENCE (the retired ghost-classifier anti-pattern):
+   the decision reads only BACKEND-ISSUED FACTS already stamped on the message —
+   `_taskId` (the task→msg bind set from the SSE `state` event / poll payload;
+   the backend even keys segment recovery on it in reconcile.py) and
+   `finishReason` (from the done/poll payload). It is a pure equality/presence
+   reducer over those facts, which is exactly what the front/back-contract
+   invariant PRESCRIBES for placement decisions ("use a server-assigned stable
+   id, never transient client state").
+
+   Historically the identical predicate was copy-pasted at the two connect
+   sites and could drift (one comment aspired to a `_doneAt` check the code
+   never had). Centralising it here removes that drift. Endpoint-mode gating is
+   deliberately LEFT at each call site — the two contexts guard it differently
+   (outer `_epIteration` scan vs inline `_isEndpointReview` flags) and both are
+   correct for their path.
+
+   @param {object} msg - the candidate tail message (may be undefined).
+   @param {string} activeTaskId - the task now connecting/reconnecting.
+   @returns {boolean} true iff `msg` is an assistant tail owned by a different
+     task, or already carries a terminal `finishReason` — i.e. a prior turn a
+     fresh placeholder must be pushed ahead of.
+   ═══════════════════════════════════════════════════════════════════ */
+function assistantTailIsPriorTurn(msg, activeTaskId) {
+  if (!msg || msg.role !== 'assistant') return false;
+  const _staleTaskId = !!(msg._taskId && msg._taskId !== activeTaskId);
+  const _isCompletedTurn = !!msg.finishReason;
+  return _staleTaskId || _isCompletedTurn;
+}
+if (typeof window !== 'undefined') window.assistantTailIsPriorTurn = assistantTailIsPriorTurn;
+
+/* ═══════════════════════════════════════════════════════════════════
    convTitleById(cid) — resolve a conversation id to its human-readable TITLE.
 
    Peer/operator surfaces (the queued-message bar, the project_message /

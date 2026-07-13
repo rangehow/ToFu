@@ -319,6 +319,20 @@ function _healStuckPlaceholder(convId, probe) {
     if (typeof ConvCache !== 'undefined') { try { ConvCache.put(conv); } catch (e) { /* non-fatal */ } }
     if (activeConvId === convId && typeof renderChat === 'function') renderChat(conv);
     if (typeof renderConversationList === 'function') renderConversationList();
+    /* ★ SELF-HEAL CONTINUATION (root-cause fix): clearing the running predicate
+     *   above is NOT enough. When the swallowed terminal event belonged to a
+     *   self-driving turn, the backend may ALREADY have spawned an autopilot
+     *   follow-up or auto-dispatched a queued message that is waiting behind
+     *   this reclaimed ghost. finishStream runs that continuation; this branch
+     *   used to `return true` WITHOUT it, so the follow-up/queued task stayed
+     *   invisible until a manual refresh (the "autonomous flow must self-heal"
+     *   invariant, violated). Route through the SAME server-authoritative
+     *   funnel finishStream uses — the inline baton was never stamped on a
+     *   swallowed done, so its /api/chat/active probe is what actually
+     *   discovers and attaches to the follow-up. */
+    if (typeof _runTerminalContinuation === 'function') {
+      _runTerminalContinuation(convId);
+    }
     return true;
   }
   // The placeholder DID accumulate content — route the stale SSE to the poll

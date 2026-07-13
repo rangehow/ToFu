@@ -407,7 +407,7 @@ def _handle_conv_ref_tool(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cf
 
 
 @tool_registry.tool_set(CHARTER_TOOL_NAMES, category='conversations',
-                        description='Read / propose to the project charter (north star)')
+                        description='Read / propose / commit project charter decisions (north star)')
 def _handle_charter_tool(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg, project_path, project_enabled, all_tools=None):
     current_conv_id = task.get('convId', '')
 
@@ -418,7 +418,9 @@ def _handle_charter_tool(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg
             current_conv_id=current_conv_id,
             project_path=project_path if project_enabled else '')
 
-    verb = 'read' if fn_name == 'project_charter_read' else 'propose'
+    verb = {'project_charter_read': 'read',
+            'project_charter_propose': 'propose',
+            'project_charter_commit': 'commit'}.get(fn_name, 'charter')
     # Structured enrichment (rendered off engine/args data, NOT re-parsed prose):
     # a propose carries the proposal text + a pending-human-review marker so the
     # frontend can render a distinct "awaiting review" affordance.

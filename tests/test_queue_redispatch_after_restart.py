@@ -339,6 +339,93 @@ def test_list_orphaned_excludes_autopilot(monkeypatch):
     _ok('list_orphaned_dispatchable_convs excludes autopilot-only convs')
 
 
+def test_live_task_conv_not_double_dispatched(monkeypatch):
+    """A conv that ALREADY has a live running task must NOT be re-dispatched by
+    the orphaned-queue scan — its queue is left for the post-completion hook.
+
+    This guards the exact timing the boot wiring depends on: recovery clears
+    dead activeTaskId first, but a task spawned earlier in the SAME boot (or a
+    racing send) is live in ``tasks`` — draining it here would double-dispatch.
+    """
+    import lib.tasks_pkg as tp
+    from lib.tasks_pkg import manager
+    from lib.database import DOMAIN_CHAT, get_thread_db
+    from lib import message_queue as mq
+
+    conv_id = 'cv-requeue-livetask'
+    db = get_thread_db(DOMAIN_CHAT)
+    _seed_conv(db, conv_id, [
+        {'role': 'user', 'content': 'q', 'timestamp': 1},
+        {'role': 'assistant', 'content': 'a', 'timestamp': 2, 'finishReason': 'stop'},
+    ])
+
+    spawned_tasks = []
+    monkeypatch.setattr(tp, 'spawn_task', lambda task: spawned_tasks.append(task['id']))
+
+    # A dispatchable queued turn exists…
+    mq.enqueue_message(conv_id, {'_user_msg': {
+        'role': 'user', 'content': 'queued behind a live task', 'timestamp': 3},
+        'text': 'queued behind a live task'}, {'model': 'gpt-4o'}, kind=mq.KIND_REAL)
+
+    # …but a live running task already owns the conv (the double-dispatch trap).
+    import threading
+    fake_task = {'id': 'live-task-1', 'convId': conv_id, 'status': 'running',
+                 'aborted': False, 'events': [], 'events_lock': threading.Lock()}
+    with manager.tasks_lock:
+        manager.tasks['live-task-1'] = fake_task
+
+    try:
+        mq.redispatch_orphaned_queue_on_startup()
+        # No task was spawned for this conv (the live-task guard held).
+        assert not spawned_tasks, (
+            f'live-task conv was double-dispatched: {spawned_tasks}')
+        # The queued row is UNTOUCHED — left for the completion hook.
+        assert mq.get_queue_depth(conv_id) == 1, (
+            'queued row must survive: the live task drains it on completion')
+        # The transcript is unchanged (queued msg NOT appended).
+        row = db.execute('SELECT messages FROM conversations WHERE id=? AND user_id=1',
+                         (conv_id,)).fetchone()
+        msgs = _json.loads(row[0]) if isinstance(row[0], str) else row[0]
+        assert len(msgs) == 2, f'transcript must be untouched, got {len(msgs)} msgs'
+    finally:
+        with manager.tasks_lock:
+            manager.tasks.pop('live-task-1', None)
+        _cleanup(db, conv_id)
+    _ok('conv with a live task is NOT double-dispatched by the orphaned-queue scan')
+
+
+def test_server_wires_orphan_redispatch_on_serving_loop(monkeypatch):
+    """WIRING regression: server.py::_serve must schedule the orphaned-queue
+    re-dispatch on the SERVING loop, gated on _shutdown_requested — NOT leave
+    ``redispatch_orphaned_queue_on_startup`` as dead code (the confirmed gap).
+
+    We assert against the server.py SOURCE (not a live boot): the function is
+    referenced, scheduled via loop.create_task on an asyncio.to_thread call,
+    and guarded by the shutdown flag. A source assertion is the right grain
+    here — it fails loudly if a refactor drops the call site again.
+    """
+    import os as _os
+    server_path = _os.path.join(
+        _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), 'server.py')
+    with open(server_path, 'r', encoding='utf-8') as f:
+        src = f.read()
+    assert 'redispatch_orphaned_queue_on_startup' in src, (
+        'server.py never references redispatch_orphaned_queue_on_startup — '
+        'the orphaned-queue drain is dead code again')
+    # It must be scheduled on the loop (not awaited inline in startup) …
+    assert 'loop.create_task(_run_orphan_queue_redispatch())' in src, (
+        'orphaned-queue redispatch is not scheduled on the serving loop')
+    # … via to_thread (it does blocking DB + spawn work) …
+    assert 'asyncio.to_thread(redispatch_orphaned_queue_on_startup)' in src, (
+        'orphaned-queue redispatch must run in a thread (blocking DB/spawn work)')
+    # … and gated on the shutdown flag so a ^C during boot skips it.
+    _fn_start = src.index('async def _run_orphan_queue_redispatch')
+    _fn_body = src[_fn_start:_fn_start + 800]
+    assert '_shutdown_requested.is_set()' in _fn_body, (
+        'orphaned-queue redispatch is not gated on _shutdown_requested')
+    _ok('server.py wires redispatch_orphaned_queue_on_startup on the serving loop, shutdown-gated')
+
+
 def main():
     print()
     print(_color('═══ queue re-dispatch after restart tests ═══', '36'))

@@ -870,7 +870,8 @@ def _store_run_record(conv_id: str, run_id: str, *,
                         return float('inf')  # never evict the current run
                     try:
                         return float((rec or {}).get('ts') or 0)
-                    except (TypeError, ValueError):
+                    except (TypeError, ValueError) as e:
+                        logger.debug('[Autopilot] float ts parse failed, using fallback: %s', e)
                         return 0.0
                 kept = sorted(summaries.items(), key=_rec_ts, reverse=True)[:retain]
                 evicted = len(summaries) - len(kept)
@@ -1693,14 +1694,16 @@ def _resolve_recent_run_id(conv_id: str) -> str:
             return ''
         try:
             settings = json.loads(row[0] or '{}') if row[0] else {}
-        except (json.JSONDecodeError, TypeError):
+        except (json.JSONDecodeError, TypeError) as e:
+            logger.debug('[Autopilot] settings JSON parse failed, using fallback: %s', e)
             settings = {}
         pinned = (settings.get('autopilotRunId') or '').strip()
         if pinned:
             return pinned
         try:
             msgs = json.loads(row[1] or '[]') if row[1] else []
-        except (json.JSONDecodeError, TypeError):
+        except (json.JSONDecodeError, TypeError) as e:
+            logger.debug('[Autopilot] messages JSON parse failed, using fallback: %s', e)
             msgs = []
         for m in reversed(msgs):
             if isinstance(m, dict) and (m.get('_autopilotRunId') or '').strip():

@@ -312,7 +312,8 @@ def _read_latest_snapshot(project_path: str) -> dict | None:
 def _row_to_snapshot(r) -> dict:
     try:
         pillar_state = json.loads(r['pillar_state']) if r['pillar_state'] else {}
-    except (TypeError, ValueError):
+    except (TypeError, ValueError) as e:
+        logger.debug('[ProjStatus] pillar_state parse failed, defaulting: %s', e)
         pillar_state = {}
     return {
         'seq': int(r['seq']), 'snapshot_id': r['snapshot_id'],
@@ -357,7 +358,8 @@ def _persist_snapshot(project_path: str, narrative: str, pillar_state: dict,
     ts = _now_ms()
     try:
         pillar_json = json.dumps(pillar_state, ensure_ascii=False)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError) as e:
+        logger.debug('[ProjStatus] pillar_state dump failed, defaulting: %s', e)
         pillar_json = '{}'
     try:
         with _snapshot_lock:

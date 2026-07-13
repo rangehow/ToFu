@@ -1791,8 +1791,9 @@ def _validate_imports():
     for _mod in _NATIVE_PRELOADS_OPTIONAL:
         try:
             __import__(_mod)
-        except ImportError:
-            pass  # optional — not all deployments have these
+        except ImportError as _ie:
+            _server_log.debug('Optional native preload %s unavailable: %s',
+                              _mod, _ie)  # optional — not all deployments have these
     _boot('Native extensions preloaded.')
 
 
@@ -2097,7 +2098,9 @@ if __name__ == '__main__':
     if _reexec_port_env:
         try:
             port = int(_reexec_port_env)
-        except (ValueError, TypeError):
+        except (ValueError, TypeError) as _e:
+            _server_log.debug('[Server] bad _TOFU_REEXEC_PORT %r, using %s: %s',
+                              _reexec_port_env, args.port, _e)
             port = args.port
         if _wait_port_free(host, port):
             _server_log.info('[Restart] Reclaimed original port %d', port)
@@ -2330,7 +2333,8 @@ if __name__ == '__main__':
     # still caps this at net.core.somaxconn. Override via TOFU_LISTEN_BACKLOG.
     try:
         _listen_backlog = int(os.environ.get('TOFU_LISTEN_BACKLOG', '0') or '0')
-    except (ValueError, TypeError):
+    except (ValueError, TypeError) as _e:
+        _server_log.debug('[Server] bad TOFU_LISTEN_BACKLOG, defaulting: %s', _e)
         _listen_backlog = 0
     if _listen_backlog <= 0:
         _listen_backlog = 1024
@@ -2366,7 +2370,8 @@ if __name__ == '__main__':
         from concurrent.futures import ThreadPoolExecutor
         try:
             _sync_workers = int(os.environ.get('TOFU_SYNC_WORKERS', '0') or '0')
-        except (ValueError, TypeError):
+        except (ValueError, TypeError) as _e:
+            _server_log.debug('[Server] bad TOFU_SYNC_WORKERS, auto-sizing: %s', _e)
             _sync_workers = 0
         if _sync_workers <= 0:
             _sync_workers = min(128, (os.cpu_count() or 4) * 8)
@@ -2383,7 +2388,8 @@ if __name__ == '__main__':
         # in-flight ceiling + headroom; override via TOFU_AGENT_WORKERS.
         try:
             _agent_workers = int(os.environ.get('TOFU_AGENT_WORKERS', '') or '0')
-        except (ValueError, TypeError):
+        except (ValueError, TypeError) as _e:
+            _server_log.debug('[Server] bad TOFU_AGENT_WORKERS, auto-sizing: %s', _e)
             _agent_workers = 0
         if _agent_workers <= 0:
             _agent_workers = min(256, (os.cpu_count() or 4) * 16)
@@ -2412,7 +2418,8 @@ if __name__ == '__main__':
         try:
             _cleanup_interval = int(
                 os.environ.get('TOFU_TASK_CLEANUP_INTERVAL', '') or '60')
-        except (ValueError, TypeError):
+        except (ValueError, TypeError) as _e:
+            _server_log.debug('[Server] bad TOFU_TASK_CLEANUP_INTERVAL, using 60: %s', _e)
             _cleanup_interval = 60
 
         async def _task_reaper():
@@ -2463,12 +2470,14 @@ if __name__ == '__main__':
         try:
             _stall_threshold = float(
                 os.environ.get('TOFU_LOOP_STALL_SECS', '') or '5')
-        except (ValueError, TypeError):
+        except (ValueError, TypeError) as _e:
+            _server_log.debug('[Server] bad TOFU_LOOP_STALL_SECS, using 5.0: %s', _e)
             _stall_threshold = 5.0
         try:
             _stall_bump_interval = float(
                 os.environ.get('TOFU_LOOP_HEARTBEAT_SECS', '') or '1')
-        except (ValueError, TypeError):
+        except (ValueError, TypeError) as _e:
+            _server_log.debug('[Server] bad TOFU_LOOP_HEARTBEAT_SECS, using 1.0: %s', _e)
             _stall_bump_interval = 1.0
         if _stall_bump_interval <= 0:
             _stall_bump_interval = 1.0

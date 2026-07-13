@@ -144,6 +144,7 @@ def test_select_demotes_but_never_excludes_epic_waiting_on_held_path(flask_app):
     progressing; a minor same-file overlap is hand-fixable at commit time."""
     from lib.conversations.project_board import claim_lease, post_task, set_wait_paths
     from lib.conversations.project_dispatch import select_dispatchable
+    monkeypatch.setattr(_pd, '_isolation_on', lambda: False)
     with flask_app.app_context():
         epic = post_task('/d/wait', 'cA', 'epic waiting on report.js')['id']
         set_wait_paths('/d/wait', 'cA', epic, ['static/js/paper/report.js'])

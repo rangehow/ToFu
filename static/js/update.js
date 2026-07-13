@@ -555,7 +555,11 @@ async function restartServer(opts) {
 
   _renderRestartProgress();
   try {
-    await Api.update.restart();
+    // force:true — a human clicking Restart is a deliberate action (the
+    // footer button confirms "in-progress tasks will be interrupted"). The
+    // backend guard's 409 refusal targets UNATTENDED / agent-initiated
+    // restarts that would silently kill sibling conversations, not this.
+    await Api.update.restart({ force: true });
   } catch (e) {
     if (typeof debugLog === 'function') debugLog('[Update] restart request failed: ' + (e && e.message), 'warning');
   }

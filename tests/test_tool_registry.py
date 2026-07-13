@@ -109,10 +109,13 @@ class TestPhaseSemantics(unittest.TestCase):
         names = _names(tl_proj)
         self.assertIn('project_charter_read', names)
         self.assertIn('project_charter_propose', names)
+        # Agent self-commit tool (owner-directed 2026-07-12) rides the same gate.
+        self.assertIn('project_charter_commit', names)
         # No project → no charter tools (a charter is per-project).
         tl_none, _ = assemble_tool_list(_ctx())
         self.assertNotIn('project_charter_read', _names(tl_none))
         self.assertNotIn('project_charter_propose', _names(tl_none))
+        self.assertNotIn('project_charter_commit', _names(tl_none))
 
     def test_conv_ref_not_triggered_by_assistant_prose(self):
         # REGRESSION: a conversation *about* the feature, where the assistant

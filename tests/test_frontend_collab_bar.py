@@ -283,6 +283,132 @@ def test_NC_conflict_segment_is_load_bearing():
             os.remove(copy_path)
         except OSError:
             pass
+# ════════════════════════════════════════════════════════════════════
+#  Degraded-push resilience: the collab bar must survive a client whose
+#  'presence' push stream never delivered a frame (empty LOCAL mirror), by
+#  rendering its peer count + peer→epic lines from the BACKEND-authoritative
+#  summary (activePeers / peerEpics). Regression for a tablet whose static
+#  assets / WebSocket were flaky: the bar was permanently hidden even though
+#  the backend summary reported peers online.
+# ════════════════════════════════════════════════════════════════════
+
+# Same harness, but: activePeers=2 + a peerEpics map, and the local mirror is
+# left EMPTY (no CB._setPeers) — simulating a dead presence push stream.
+_HARNESS_DEADPUSH = _HARNESS.replace(
+    "CB._setSummary('/proj/real', {\n"
+    "  epicsOpen: 2, epicsClaimed: 1, epicsDone: 0, pendingDecisions: 1,\n"
+    "  activePeers: 1, charterExists: true,\n"
+    "  peerEpics: { 'c-worker': 'Refactor the parser' },\n"
+    "});\n"
+    "CB._setPeers('/proj/real', ['c-worker']);\n"
+    "CB._render();",
+    "CB._setSummary('/proj/real', {\n"
+    "  epicsOpen: 0, epicsClaimed: 0, epicsDone: 0, pendingDecisions: 0,\n"
+    "  activePeers: 2, charterExists: true,\n"
+    "  peerEpics: { 'c-worker': 'Refactor the parser' },\n"
+    "});\n"
+    "// NO CB._setPeers — the local push mirror is EMPTY (degraded stream).\n"
+    "CB._render();"
+).replace(
+    "const html = stripEl.innerHTML;\n"
+    "// Action-first headline: the decisions segment renders (and is the emphasised one).\n"
+    "check('decisions_segment', html.indexOf('decisionsAwaiting') !== -1 && html.indexOf('collab-seg-decisions') !== -1);\n"
+    "check('decisions_count', html.indexOf('1') !== -1);\n"
+    "check('has_decisions_accent', html.indexOf('collab-has-decisions') !== -1);\n"
+    "// In-progress + open segments render.\n"
+    "check('progress_segment', html.indexOf('epicsInProgress') !== -1);\n"
+    "check('open_segment', html.indexOf('collab-seg-open') !== -1);\n"
+    "// The DEEP join: the online peer's epic title renders as \"advancing «title»\".\n"
+    "check('peer_epic_title', html.indexOf('Refactor the parser') !== -1);\n"
+    "check('peer_advancing', html.indexOf('collab-peer-epic') !== -1);\n"
+    "// Not shown: raw activity noise like a \"generating\" status word (the whole\n"
+    "// point — the bar shows collaboration semantics, not activity state).\n"
+    "check('no_generating_noise', html.indexOf('generating') === -1);\n"
+    "// Single slim line — no multi-row peer box.\n"
+    "check('single_line_bar', !!stripEl.querySelector('.collab-bar-inner')\n"
+    "  && !stripEl.querySelector('.presence-peer-meta'));\n"
+    "// Click opens the Project Brain panel.\n"
+    "const inner = stripEl.querySelector('.collab-bar-inner');\n"
+    "if (inner) { inner.click(); check('click_opens_brain', _opened === 1); }",
+    "const html = stripEl.innerHTML;\n"
+    "// The bar is VISIBLE even though the local push mirror is empty — the\n"
+    "// peer segment comes from the backend summary.activePeers.\n"
+    "check('bar_visible_on_dead_push', stripEl.hidden === false);\n"
+    "check('peers_segment_from_backend', html.indexOf('collab-seg-peers') !== -1);\n"
+    "check('peers_count_two', html.indexOf('peersOnline 2') !== -1);\n"
+    "// The peer→epic join line renders from backend peerEpics, NOT the mirror.\n"
+    "check('peer_epic_title', html.indexOf('Refactor the parser') !== -1);\n"
+    "check('peer_advancing', html.indexOf('collab-peer-epic') !== -1);"
+)
+
+
+def _run_deadpush(src):
+    frag_file = os.path.join(HERE, '_collab_dpfrag.html')
+    harness = os.path.join(HERE, '_collab_dpharness.js')
+    with open(frag_file, 'w', encoding='utf-8') as f:
+        f.write(_extract_strip_fragment())
+    with open(harness, 'w', encoding='utf-8') as f:
+        f.write(_HARNESS_DEADPUSH)
+    try:
+        proc = subprocess.run(['node', harness, src, ROOT, frag_file],
+                              capture_output=True, text=True, timeout=60)
+    finally:
+        for p in (frag_file, harness):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+    output = proc.stdout.strip()
+    assert proc.returncode == 0, f'node failed: {proc.stderr}\n{output}'
+    return output
+
+
+@pytest.mark.skipif(not _node_deps_available(),
+                    reason='node + jsdom dev-deps not installed (run npm install)')
+def test_collab_bar_survives_degraded_push_via_backend_count():
+    """A client with an empty local push mirror (degraded presence stream)
+    still shows the collab bar: the peer count + peer→epic lines come from the
+    backend-authoritative summary (activePeers / peerEpics), not the mirror."""
+    output = _run_deadpush(_PRESENCE_SRC)
+    fails = [ln for ln in output.splitlines() if ln.startswith('FAIL')]
+    assert not fails, 'collab-bar dead-push failures:\n' + output
+    for must in ('PASS bar_visible_on_dead_push', 'PASS peers_segment_from_backend',
+                 'PASS peers_count_two', 'PASS peer_epic_title',
+                 'PASS peer_advancing'):
+        assert must in output, output
+
+
+@pytest.mark.skipif(not _node_deps_available(),
+                    reason='node + jsdom dev-deps not installed (run npm install)')
+def test_NC_peer_count_uses_backend_activePeers_is_load_bearing():
+    """NC: pin the peer count back to the LOCAL mirror only (ignore
+    summary.activePeers) → with an empty mirror the bar hides → the
+    bar_visible_on_dead_push assertion FAILS. Byte-identical restore. Proves
+    the backend-count fallback is load-bearing, not incidental."""
+    with open(_PRESENCE_SRC, encoding='utf-8') as f:
+        original = f.read()
+    anchor = ("    const peerCount = (backendCount != null)\n"
+              "      ? Math.max(backendCount, convSet.size) : convSet.size;")
+    assert anchor in original, 'peer-count anchor not found'
+    patched = original.replace(
+        anchor, "    const peerCount = convSet.size;  // NC (mirror-only)", 1)
+    copy_path = os.path.join(HERE, '_collab_pcnc_copy.js')
+    try:
+        with open(copy_path, 'w', encoding='utf-8') as f:
+            f.write(patched)
+        output = _run_deadpush(copy_path)
+        assert 'FAIL bar_visible_on_dead_push' in output, \
+            ('NC: mirror-only peer count must hide the bar on an empty mirror '
+             'even when the backend reports peers:\n' + output)
+    finally:
+        try:
+            os.remove(copy_path)
+        except OSError:
+            pass
+    with open(_PRESENCE_SRC, encoding='utf-8') as f:
+        assert f.read() == original, 'shipped presence.js must be byte-identical'
+
+
     with open(_PRESENCE_SRC, encoding='utf-8') as f:
         assert f.read() == original, 'shipped presence.js must be byte-identical'
 

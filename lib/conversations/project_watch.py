@@ -11,10 +11,11 @@ Owner-locked decisions (2026-07-08):
   1. **Human-facing-only, with ONE explicit bridge.** A watch item is authored
      by the HUMAN and is NEVER injected into sibling agent prompts (same
      source-grep guard as the status memory). The ONLY way an item reaches
-     agents is ``promote_watch_item`` → a HUMAN-GATED charter commit
-     (``commit_charter``), because the charter is already the ambient-to-agents
-     surface and already human-gated. No auto-steering, no new inter-conv write,
-     no fan-out.
+     agents is ``promote_watch_item`` → a charter commit (``commit_charter``),
+     because the charter is already the ambient-to-agents surface. This is a
+     HUMAN action on a HUMAN-authored item (the human decides to promote their
+     own watch item), distinct from an agent self-committing a decision. No
+     auto-steering, no new inter-conv write, no fan-out.
   2. **Append-only response trail per item** (bounded), not latest-only — the
      drift is the signal.
   3. **Cadence = on-tab-open + event-driven now** (reuse the staleness gate so a
@@ -210,7 +211,8 @@ def _response_trail(db, item_id: str, limit: int = 20) -> list[dict]:
     for r in rows:
         try:
             ps = json.loads(r['pillar_state']) if r['pillar_state'] else {}
-        except (TypeError, ValueError):
+        except (TypeError, ValueError) as e:
+            logger.debug('[Watch] response pillar_state parse failed, defaulting: %s', e)
             ps = {}
         out.append({'seq': int(r['seq']), 'response': r['response'] or '',
                     'pillar_state': ps, 'trigger': r['trigger'] or '',
@@ -302,7 +304,8 @@ def _persist_response(db, item_id: str, project_path: str, response: str,
                       pillar_state: dict, trigger: str) -> dict | None:
     try:
         pillar_json = json.dumps(pillar_state, ensure_ascii=False)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError) as e:
+        logger.debug('[Watch] pillar_state dump failed, defaulting: %s', e)
         pillar_json = '{}'
     ts = _now_ms()
     try:
@@ -424,8 +427,9 @@ def promote_watch_item(item_id: str, *, updated_by_conv: str = '',
                        expected_version: int | None = None) -> dict:
     """Bridge a watch item into the charter as a committed decision — the ONLY
     path by which a watch item reaches sibling agents. Routes strictly through
-    the HUMAN-GATED ``commit_charter`` (no new write path, no fan-out). Marks
-    the item ``promoted``. Returns ``{'ok', 'version'?, 'error'?}``.
+    ``commit_charter`` (no new write path, no fan-out) as a HUMAN action on a
+    HUMAN-authored item. Marks the item ``promoted``. Returns ``{'ok',
+    'version'?, 'error'?}``.
     """
     if not item_id:
         return {'ok': False, 'error': 'no item'}
@@ -442,9 +446,9 @@ def promote_watch_item(item_id: str, *, updated_by_conv: str = '',
     label = {'goal': 'Goal', 'concern': 'Concern', 'question': 'Question'}.get(
         row['kind'], 'Watch item')
     decision = f'[{label} — promoted by owner] {row["text"]}'
-    # The bridge: a human-gated charter commit. NOTHING here writes into the
-    # agent prompt path directly — the charter is the ambient-to-agents surface
-    # and is itself human-gated.
+    # The bridge: a charter commit invoked by a HUMAN promoting their own
+    # watch item. NOTHING here writes into the agent prompt path directly — the
+    # charter is the ambient-to-agents surface.
     from lib.conversations.project_charter import commit_charter
     res = commit_charter(project_path, add_decision=decision,
                          updated_by_conv=updated_by_conv or '',

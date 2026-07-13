@@ -147,11 +147,17 @@ class NonTempAutoRegisterSignalTest(_Base):
 
         self.assertTrue(res['ok'], res)
         self.assertTrue(os.path.isfile(target))
-        # A NEW root was registered (the nearest existing ancestor).
-        roots_after = self._roots_paths()
-        self.assertGreater(len(roots_after), len(roots_before),
-                           'non-temp abs write should auto-register a new root')
-        self.assertIn(os.path.abspath(self._sibling), roots_after)
+        # A NEW root was registered — but CONV-SCOPED, never in the global
+        # registry (a background write must never pollute the UI-facing
+        # global _roots). c1 had no scoped registry, so the fallback seeds
+        # one from the primary and registers the sibling there.
+        self.assertEqual(self._roots_paths(), roots_before,
+                         'background write must not pollute global _roots')
+        conv_roots = cfg.get_conv_roots('c1')
+        self.assertTrue(
+            any(os.path.abspath(rs['path']) == os.path.abspath(self._sibling)
+                for rs in conv_roots.values()),
+            f'sibling root must land in the conv registry: {conv_roots}')
         # And a workspace_root_added signal was queued for the handler.
         signals = drain_root_added_signals()
         self.assertEqual(len(signals), 1, signals)
@@ -221,17 +227,36 @@ class ConvRegistryAutoRegisterTest(_Base):
                 for rs in other.values()),
             f'sibling conv registry must be untouched: {other}')
 
-    def test_add_conv_root_noop_when_conv_has_no_registry(self):
-        # A background write for a conv that never had a registry must NOT
-        # conjure one (that would flip the conv-scoped resolver into strict
-        # isolation for a conv the UI never wired a project to).
+    def test_bg_write_no_registry_seeds_conv_scope_not_global(self):
+        # A background write for a conv that never had a scoped registry must
+        # NOT pollute the process-global _roots (the UI-facing "active project"
+        # every conv's bar reflects — the "extra path appears on another conv"
+        # leak). Instead it SEEDS a conv-scoped registry from the task's own
+        # primary (``base``) and registers the sibling root THERE.
         self.assertNotIn('cGhost', cfg._conv_roots)
+        roots_before = self._roots_paths()
         target = os.path.join(self._sibling, 'ghost.py')
-        tool_write_file(self._proj, target, '1\n', conv_id='cGhost', task_id='t1')
-        self.assertNotIn('cGhost', cfg._conv_roots,
-                         'auto-register must not create a conv registry from nothing')
-        # The global registry still gained the root (legacy fallback path).
-        self.assertIn(os.path.abspath(self._sibling), self._roots_paths())
+        res = tool_write_file(self._proj, target, '1\n',
+                              conv_id='cGhost', task_id='t1')
+        self.assertTrue(res['ok'], res)
+        self.assertTrue(os.path.isfile(target))
+        # The global registry did NOT gain the sibling root.
+        self.assertEqual(self._roots_paths(), roots_before,
+                         'background write must never pollute global _roots')
+        self.assertNotIn(os.path.abspath(self._sibling), self._roots_paths())
+        # A conv-scoped registry was seeded (primary) and gained the sibling.
+        self.assertIn('cGhost', cfg._conv_roots,
+                      'fallback must seed a conv-scoped registry from the primary')
+        conv_roots = cfg.get_conv_roots('cGhost')
+        self.assertTrue(
+            any(os.path.abspath(rs['path']) == os.path.abspath(self._sibling)
+                for rs in conv_roots.values()),
+            f'sibling root must land in the conv registry: {conv_roots}')
+        # And the primary itself is present as the seeded scope root.
+        self.assertTrue(
+            any(os.path.abspath(rs['path']) == os.path.abspath(self._proj)
+                for rs in conv_roots.values()),
+            f'seeded registry must include the primary: {conv_roots}')
 
 
 class RecentProjectPersistenceTest(_Base):

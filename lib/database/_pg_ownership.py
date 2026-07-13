@@ -275,7 +275,8 @@ def _probe_flock_enforced(pgdata):
             return False
         try:
             import fcntl
-        except ImportError:
+        except ImportError as e:
+            logger.debug('[PgOwnership] fcntl unavailable, disabling flock fallback: %s', e)
             _flock_enforced = False
             return False
 

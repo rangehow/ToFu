@@ -440,20 +440,70 @@ def _resolve_write_path(base, rel_path, conv_id=None):
         anchor = _nearest_existing_dir(abs_path)
         if anchor and not _is_forbidden_create_path(anchor):
             try:
-                # Detect whether this anchor is genuinely NEW (vs. an existing
-                # root re-resolved) so we only signal real workspace expansion.
-                with _lock:
-                    _anchor_norm = os.path.abspath(anchor).rstrip(os.sep) or anchor
+                _anchor_norm = os.path.abspath(anchor).rstrip(os.sep) or anchor
+                # ★ 2026-07-12 — scope the auto-register to the CALLER.
+                #   A background run_task (conv_id present) MUST NOT mutate the
+                #   process-global _state/_roots (committed 2026-06-22
+                #   invariant): the global registry is the UI-facing "active
+                #   project" every conversation's project bar reflects via
+                #   get_state(), so a task's absolute-path write to a sibling
+                #   repo used to spray that repo (e.g. tofu-search) onto every
+                #   conv's bar. Register the anchor into THIS conv's OWN scoped
+                #   registry only; the global registry stays reserved for the
+                #   interactive / no-conv_id path (the human explicitly opening
+                #   a folder). _mod_attribution / _should_record_modification are
+                #   conv-scope-aware so the file-changes bar + undo journal
+                #   still resolve the conv-scoped root correctly.
+                if conv_id:
+                    from lib.project_mod.config import (
+                        add_conv_root, get_conv_roots, set_conv_roots,
+                    )
                     _existing = any(
                         (os.path.abspath(rs['path']).rstrip(os.sep) or rs['path']) == _anchor_norm
-                        for rs in _roots.values()
+                        for rs in get_conv_roots(conv_id).values()
                     )
-                add_project_root(anchor)
-                logger.info('[WriteTools] Auto-registered workspace root %s for '
-                            'absolute-path write to %s', anchor, abs_path)
-                if not _existing:
-                    # Look up the assigned root name so the signal carries it.
-                    _new_name = None
+                    _rname = add_conv_root(conv_id, anchor,
+                                           name=os.path.basename(anchor))
+                    if _rname is None:
+                        # The conv owns no scoped registry yet. A background task
+                        # MUST NOT fall back to writing the process-global _roots
+                        # (that is the UI-facing "active project" every conv's
+                        # bar reflects via get_state() — the exact leak this fix
+                        # removes). Instead SEED a conv-scoped registry from the
+                        # task's own primary (``base``), then register the anchor
+                        # there. This keeps the auto-register isolated to the
+                        # writing conv and never bleeds onto another conv's bar.
+                        _base_abs = os.path.abspath(os.path.expanduser(base)) if base else ''
+                        if _base_abs and os.path.isdir(_base_abs):
+                            set_conv_roots(conv_id, _base_abs)
+                            _rname = add_conv_root(conv_id, anchor,
+                                                   name=os.path.basename(anchor))
+                        if _rname is None:
+                            # No usable primary to scope to (no base / vanished).
+                            # Resolve the write directly without registering ANY
+                            # root — degraded but never a global-registry mutation
+                            # and never a hard failure. Attribution simply falls
+                            # to no root (like a temp-dir write).
+                            logger.warning('[WriteTools] conv=%s has no scoped '
+                                           'registry and no usable primary; '
+                                           'resolving %s without registering a '
+                                           'root (no global pollution)',
+                                           conv_id[:12], abs_path)
+                            _enforce_not_readonly(abs_path, conv_id=conv_id)
+                            return abs_path
+                        logger.info('[WriteTools] seeded conv-scoped registry from '
+                                    'primary %s and auto-registered root %s '
+                                    '(conv=%s) for absolute-path write to %s',
+                                    _base_abs, anchor, conv_id[:12], abs_path)
+                    else:
+                        logger.info('[WriteTools] Auto-registered conv-scoped workspace '
+                                    'root %s (conv=%s) for absolute-path write to %s',
+                                    anchor, conv_id[:12], abs_path)
+                    if not _existing:
+                        _signal_root_added(_rname or os.path.basename(anchor), anchor)
+                else:
+                    # Interactive / no-task path: the human explicitly drove this
+                    # write, so expanding the shared UI workspace is correct.
                     with _lock:
                         for rn, rs in _roots.items():
                             if (os.path.abspath(rs['path']).rstrip(os.sep) or rs['path']) == _anchor_norm:
@@ -498,7 +548,7 @@ def _resolve_write_path(base, rel_path, conv_id=None):
     return target
 
 
-def _mod_attribution(target, base, rel_path):
+def _mod_attribution(target, base, rel_path, conv_id=None):
     """Map a resolved on-disk ``target`` back to the workspace root that owns it.
 
     Returns ``(mod_base, mod_rel_path)`` for the modifications journal so that
@@ -526,8 +576,12 @@ def _mod_attribution(target, base, rel_path):
         return base, rel_path
     best_path = None
     try:
-        with _lock:
-            roots_snapshot = [rs['path'] for rs in _roots.values()]
+        if conv_id:
+            from lib.project_mod.config import get_conv_roots
+            roots_snapshot = [rs['path'] for rs in get_conv_roots(conv_id).values()]
+        else:
+            with _lock:
+                roots_snapshot = [rs['path'] for rs in _roots.values()]
     except Exception as e:
         logger.debug('[WriteTools] _mod_attribution roots snapshot failed: %s', e)
         roots_snapshot = []
@@ -549,7 +603,7 @@ def _mod_attribution(target, base, rel_path):
     return best_path, mod_rel
 
 
-def _should_record_modification(target):
+def _should_record_modification(target, conv_id=None):
     """False when *target* is an OS temp-dir scratch write OUTSIDE all roots.
 
     Temp scratch writes are deliberately untracked: no undo journal entry and
@@ -569,8 +623,12 @@ def _should_record_modification(target):
     if not _is_temp_path(abs_target):
         return True
     # Temp path — record only if it sits inside a registered workspace root.
-    with _lock:
-        roots_snapshot = [rs['path'] for rs in _roots.values()]
+    if conv_id:
+        from lib.project_mod.config import get_conv_roots
+        roots_snapshot = [rs['path'] for rs in get_conv_roots(conv_id).values()]
+    else:
+        with _lock:
+            roots_snapshot = [rs['path'] for rs in _roots.values()]
     for root_path in roots_snapshot:
         norm_root = os.path.abspath(root_path).rstrip(os.sep) or root_path
         if abs_target == norm_root or abs_target.startswith(norm_root + os.sep):
@@ -753,8 +811,8 @@ def tool_write_file(base, rel_path, content, description='', conv_id=None, task_
         new_lines = content.count('\n') + 1
         sz = len(content.encode('utf-8'))
 
-        if _should_record_modification(target):
-            _mod_base, _mod_rel = _mod_attribution(target, base, rel_path)
+        if _should_record_modification(target, conv_id=conv_id):
+            _mod_base, _mod_rel = _mod_attribution(target, base, rel_path, conv_id=conv_id)
             _record_modification(_mod_base, 'write_file', _mod_rel, original_content,
                                  conv_id=conv_id, task_id=task_id)
 
@@ -893,8 +951,8 @@ def save_uploaded_file(base, rel_path, data, description='', conv_id=None,
         _touch_for_vscode(target)
         sz = len(data)
 
-        if _should_record_modification(target):
-            _mod_base, _mod_rel = _mod_attribution(target, base, target if is_abs else rel_path)
+        if _should_record_modification(target, conv_id=conv_id):
+            _mod_base, _mod_rel = _mod_attribution(target, base, target if is_abs else rel_path, conv_id=conv_id)
             _record_modification(_mod_base, 'write_file', _mod_rel, original_content,
                                  conv_id=conv_id, task_id=task_id)
 
@@ -1074,8 +1132,8 @@ def _apply_one_diff(base, rel_path, search, replace, description='', conv_id=Non
         new_lines = new_content.count('\n') + 1
         diff_lines = len(search.split('\n'))
 
-        if _should_record_modification(target):
-            _mod_base, _mod_rel = _mod_attribution(target, base, rel_path)
+        if _should_record_modification(target, conv_id=conv_id):
+            _mod_base, _mod_rel = _mod_attribution(target, base, rel_path, conv_id=conv_id)
             _record_modification(_mod_base, 'apply_diff', _mod_rel,
                                  original_content=content,
                                  reverse_patch=reverse_patch,
@@ -1386,8 +1444,8 @@ def _insert_one(base, rel_path, anchor, content, position='after', description='
         new_lines = new_content.count('\n') + 1
         inserted_lines = content.count('\n') + 1
 
-        if _should_record_modification(target):
-            _mod_base, _mod_rel = _mod_attribution(target, base, rel_path)
+        if _should_record_modification(target, conv_id=conv_id):
+            _mod_base, _mod_rel = _mod_attribution(target, base, rel_path, conv_id=conv_id)
             _record_modification(_mod_base, 'apply_diff', _mod_rel,
                                  original_content=file_content,
                                  reverse_patch=reverse_patch,

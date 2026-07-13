@@ -806,7 +806,9 @@
   // Backend mostly returns {ok, ...} JSON; mutations return Response so
   // callers can read .ok and parse error envelopes.
   const project = {
-    status:        ()         => get('/api/v1/project/status', { onError: 'null' }),
+    status:        (convId)   => get('/api/v1/project/status'
+                                     + (convId ? ('?conv_id=' + encodeURIComponent(convId)) : ''),
+                                     { onError: 'null' }),
     setPaths:      (folders, readOnlyPaths)  =>
       request('/api/v1/project/paths',
               { method: 'PUT',
@@ -894,8 +896,11 @@
     boardReopen:   (path, taskId, convId) =>
       post('/api/v1/project/board/reopen', { path, taskId, convId: convId || '' }),
     // Collaboration-bar one-shot summary (board + decisions + peer→epic join).
-    brainSummary:  (path) =>
-      get('/api/v1/project/brain/summary', { query: { path }, onError: 'null' }),
+    // convId (optional) is excluded from activePeers/peerEpics so the count is
+    // "OTHER conversations online" — matching the local push-mirror semantics.
+    brainSummary:  (path, convId) =>
+      get('/api/v1/project/brain/summary',
+          { query: { path, convId: convId || '' }, onError: 'null' }),
     // LIVE peer/team roster (presence ⋈ task ⋈ claimed-epic). convId optional
     // — when present it's excluded so a conv never lists itself as a peer.
     brainPeers:    (path, convId) =>
@@ -954,6 +959,34 @@
     brainPeerAbort: (path, convId, toConvId) =>
       post('/api/v1/project/brain/peer-abort',
            { path, convId: convId || '', toConvId }),
+    brainStatus:   (path, opts) =>
+      get('/api/v1/project/brain/status',
+          { query: { path, refresh: (opts && opts.force) ? '1' : '' },
+            onError: 'null' }),
+    brainStatusHistory: (path, limit) =>
+      get('/api/v1/project/brain/status/history',
+          { query: { path, limit: limit || '' }, onError: 'null' }),
+    // Read-only synthesis Q&A about the project status. Writes NOTHING.
+    // Throws ApiError on refusal so the composer can surface the error.
+    brainStatusAsk: (path, question) =>
+      post('/api/v1/project/brain/status/ask', { path, question }),
+    // Pillar #7 WATCH lane — the human's standing "things I care about" list.
+    // brainWatchList(refresh) re-addresses open items on read (fresh-on-open).
+    brainWatchList: (path, refresh) =>
+      get('/api/v1/project/brain/watch',
+          { query: { path, refresh: refresh ? '1' : '' }, onError: 'null' }),
+    brainWatchAdd: (path, kind, text, convId) =>
+      post('/api/v1/project/brain/watch/add', { path, kind, text, convId: convId || '' }),
+    brainWatchUpdate: (itemId, action, extra) =>
+      post('/api/v1/project/brain/watch/update',
+           Object.assign({ itemId, action }, extra || {})),
+    brainWatchAddress: (itemId) =>
+      post('/api/v1/project/brain/watch/address', { itemId }),
+    // Promote a watch item into the charter — the ONLY bridge to sibling
+    // agents (human-gated charter commit). Throws ApiError on version skew.
+    brainWatchPromote: (itemId, convId, expectedVersion) =>
+      post('/api/v1/project/brain/watch/promote',
+           { itemId, convId: convId || '', expectedVersion: expectedVersion }),
   };
 
   // paper-reader (library + report + translate + QA) ---------------

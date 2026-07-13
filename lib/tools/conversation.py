@@ -71,10 +71,13 @@ CONV_REF_TOOL_NAMES = {'list_conversations', 'get_conversation'}
 
 # ── Project Charter tools (Pillar #2 of the project brain) ──
 # The Charter is the shared "north star" of a project — read by every
-# conversation, so they coordinate around one intent. An agent may READ it and
-# PROPOSE amendments; it can NEVER commit a charter change directly (commit is
-# human-gated). Both tools are project-scoped and registered only in project
-# mode (registry._build_conv_ref).
+# conversation, so they coordinate around one intent. An agent may READ it,
+# PROPOSE amendments, and (2026-07-12, owner-directed) self-COMMIT a DECISION
+# (append implementation-level consensus) so shared intent advances without a
+# human in the loop. The agent path can ONLY append a decision — it can never
+# edit the north-star `content` (goal/direction stays human-owned), and a human
+# retains the corrective levers (edit/remove a decision, delete the charter).
+# Project-scoped, registered only in project mode (registry._build_conv_ref).
 
 CHARTER_READ_TOOL = {
     "type": "function",
@@ -120,8 +123,51 @@ CHARTER_PROPOSE_TOOL = {
     },
 }
 
-CHARTER_TOOLS = [CHARTER_READ_TOOL, CHARTER_PROPOSE_TOOL]
-CHARTER_TOOL_NAMES = {'project_charter_read', 'project_charter_propose'}
+CHARTER_COMMIT_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "project_charter_commit",
+        "description": (
+            "COMMIT a new key DECISION to the project charter — this makes it "
+            "project-wide shared intent that every sibling conversation reads. "
+            "Unlike project_charter_propose (which only records a suggestion for "
+            "later), this WRITES the decision immediately and bumps the charter "
+            "version. Use it when you and/or siblings have reached an "
+            "implementation-level consensus other conversations must align to "
+            "(an architecture invariant, a build-order rule, a resolved design "
+            "question). Be specific and actionable; anchor to concrete evidence.\n"
+            "SCOPE: this tool can ONLY append a decision — it can NOT edit the "
+            "project's north-star goal/direction text (that stays human-owned). "
+            "A human retains the ability to edit or remove a committed decision "
+            "afterwards, so this is self-service progress, not an irreversible "
+            "act. If this decision resolves a proposal you (or a sibling) raised "
+            "earlier with project_charter_propose, pass its proposalId as "
+            "`resolves_proposal` so it drops out of the pending-review list."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "decision": {
+                    "type": "string",
+                    "description": "The decision text to commit. Specific and actionable — it becomes injected shared intent for all conversations."
+                },
+                "resolves_proposal": {
+                    "type": "string",
+                    "description": "Optional. The proposalId of a pending project_charter_propose this decision resolves, so it no longer shows as awaiting review."
+                },
+                "expected_version": {
+                    "type": "integer",
+                    "description": "Optional concurrency guard: the charter version you last read. If the charter has since changed, the commit is rejected and you should re-read and retry."
+                },
+            },
+            "required": ["decision"],
+        },
+    },
+}
+
+CHARTER_TOOLS = [CHARTER_READ_TOOL, CHARTER_PROPOSE_TOOL, CHARTER_COMMIT_TOOL]
+CHARTER_TOOL_NAMES = {'project_charter_read', 'project_charter_propose',
+                      'project_charter_commit'}
 
 
 # ── Project Board tools (Pillar #3 — the coordination board) ──
@@ -537,7 +583,7 @@ PEER_TOOL_NAMES = {'project_peer_status', 'project_feed_read',
 __all__ = [
     'CONV_REF_LIST_TOOL', 'CONV_REF_GET_TOOL',
     'CONV_REF_TOOLS', 'CONV_REF_TOOL_NAMES',
-    'CHARTER_READ_TOOL', 'CHARTER_PROPOSE_TOOL',
+    'CHARTER_READ_TOOL', 'CHARTER_PROPOSE_TOOL', 'CHARTER_COMMIT_TOOL',
     'CHARTER_TOOLS', 'CHARTER_TOOL_NAMES',
     'BOARD_READ_TOOL', 'BOARD_POST_TOOL', 'BOARD_CLAIM_TOOL',
     'BOARD_COMPLETE_TOOL', 'BOARD_BLOCK_TOOL',

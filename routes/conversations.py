@@ -148,7 +148,8 @@ def _row_rev(r):
     if 'rev' in keys:
         try:
             return int(r['rev'] or 0)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError) as e:
+            logger.debug('[conversations] _row_rev: bad rev value, using fallback: %s', e)
             return 0
     return 0
 
@@ -519,6 +520,63 @@ def _reconcile_conv_served_readonly(db, conv_id, r):
                          'conv=%s: %s', conv_id[:8], _rse)
         return d, False, None, None
 
+    The read handler has already returned the cleaned dict to the opening
+    client; this persists the same verdict on a background task so the request
+    never blocks on a (FUSE-fsync) ``UPDATE``+``commit``. On completion
+    ``_persist_reconcile`` emits the ``history_rewrite`` push so all open
+    clients converge. Reconcile is idempotent, so a redundant re-fire from a
+    concurrent GET is harmless (the second verdict is ``changed=False``).
+    """
+    import asyncio
+
+    async def _run():
+        try:
+            await run_pooled(
+                lambda db: _persist_reconcile(db, conv_id, cleaned, settings_dict))
+        except Exception as e:
+            logger.warning('[get_conv] background reconcile persist failed '
+                           'conv=%s: %s', conv_id[:8], e, exc_info=True)
+        finally:
+            _bg_reconcile_persist_tasks.discard(asyncio.current_task())
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError as e:
+        logger.debug('[get_conv] no running loop for bg reconcile, running sync: %s', e)
+        loop = None
+    if loop is None:
+        # No running loop (non-async caller): skip — reconcile is idempotent, so
+        # the next GET from an async context will re-detect and persist. The
+        # served dict was already correct, so nothing is lost visually.
+        logger.debug('[get_conv] no running loop; deferring reconcile persist '
+                     'conv=%s to next GET', conv_id[:8])
+        return
+    t = loop.create_task(_run())
+    _bg_reconcile_persist_tasks.add(t)
+
+
+def _reconcile_conv_on_get_blocking(db, conv_id, r):
+    """SYNCHRONOUS persist-in-place reconcile (compute + write in one call).
+
+    Retained for the ``?prefetch=<id>`` branch of ``list_convs``
+    (``_prefetch_reconciled_dict``), which inlines the body so the frontend sets
+    ``_needsLoad=false`` and never issues the reconciling GET — that path MUST
+    persist within the request. The GET read path itself no longer calls this;
+    it uses ``_reconcile_conv_served_readonly`` + a background
+    ``_schedule_reconcile_persist`` so the read never does an inline fsync write.
+    """
+    cleaned, changed, settings_dict = _compute_reconcile(conv_id, r)
+    if not changed:
+        d = _conv_row_to_dict(r)
+        try:
+            _rehydrate_segments_from_task_results(db, conv_id, d['messages'])
+        except Exception as _rse:
+            logger.debug('[get_conv] segments rehydrate (unchanged path) '
+                         'conv=%s: %s', conv_id[:8], _rse)
+        _attach_orphan_marker(d, cleaned, conv_id)
+        return d
+
+    new_rev = _persist_reconcile(db, conv_id, cleaned, settings_dict)
     d = {
         'id': r['id'], 'title': r['title'],
         'messages': cleaned,
@@ -713,6 +771,142 @@ def _windowed_served_readonly(db, conv_id, r, window, before_seq):
     return base, bool(cleaned_full is not None), cleaned_full, settings_for_persist
 
 
+def _maybe_backfill_narration_on_open(conv_id, conv_dict):
+    """FORWARD fix for the "tool prose reappears but stays English" gap.
+
+    A turn translated before its narration segments were stamped keeps its
+    Chinese only in the bottom ``translatedContent`` — the interleaved narration
+    segments lack ``translatedText`` and no client/server path re-requests it
+    (both ``needsTranslation`` and the retro guard treat the turn as done). On
+    conversation OPEN, when auto-translate is on for this conv and it carries any
+    such candidate, spawn a BACKGROUND task that translates + stamps the missing
+    narration segments (reusing the live translate core; rev-CAS neutral). The
+    stamped Chinese then surfaces on the next open / re-render.
+
+    Fire-and-forget: makes LLM calls, so it MUST run off the GET path and never
+    block or fail the response. Guarded on a cheap candidate pre-check so the
+    common (fully-stamped) conversation does zero extra work. No-op when
+    auto-translate is off or no event loop is running (sync caller).
+    """
+    try:
+        settings = conv_dict.get('settings') if isinstance(conv_dict, dict) else None
+        from lib.conv_config import resolve_auto_translate
+        if not resolve_auto_translate(settings if isinstance(settings, dict) else {}):
+            return
+        from lib.translate.segment_backfill import (
+            backfill_conv_narration_segments, conv_has_backfill_candidates)
+        if not conv_has_backfill_candidates(conv_dict.get('messages')):
+            return
+        import asyncio
+        loop = asyncio.get_running_loop()
+        loop.create_task(backfill_conv_narration_segments(conv_id))
+        logger.info('[get_conv] conv=%s spawned on-open narration backfill', conv_id[:8])
+    except RuntimeError as e:
+        # No running loop (sync context) — skip; the migration covers offline rows.
+        logger.debug('[get_conv] no running loop, skipping on-open backfill: %s', e)
+    except Exception as e:
+        logger.debug('[get_conv] narration backfill spawn skipped conv=%s: %s',
+                     conv_id[:8], e)
+
+
+def _parse_window_args():
+    """Read the windowed-read query params. Returns ``(window, before_seq)``:
+    ``window`` is the tail size (0/absent = no window), ``before_seq`` is the
+    page-up cursor (None = tail). Both best-effort int-parsed; junk → default.
+    """
+    try:
+        window = int(request.args.get('window', '') or 0)
+    except (TypeError, ValueError) as e:
+        logger.debug('[conversations] _parse_window_args: bad window arg, using fallback: %s', e)
+        window = 0
+    if window < 0:
+        window = 0
+    before_seq = None
+    bs = request.args.get('before_seq', '')
+    if bs:
+        try:
+            before_seq = int(bs)
+        except (TypeError, ValueError) as e:
+            logger.debug('[conversations] _parse_window_args: bad before_seq arg, using fallback: %s', e)
+            before_seq = None
+    return window, before_seq
+
+
+def _windowed_served_readonly(db, conv_id, r, window, before_seq):
+    """Serve a WINDOW of the conversation from the normalized row store.
+
+    The root-cause fix for slow first-open of long conversations: read only the
+    tail ``window`` messages via ``load_message_window`` (cost O(window), not
+    O(history)) instead of detoasting + parsing the whole ``messages`` blob.
+
+    reconcile runs WITHIN the tail window: a ghost tail / superseded-error-husk
+    can only be at the very end, so the tail window is sufficient to reach the
+    same verdict WITHOUT deserializing the full history. The cache-prefix
+    protection guards the HEAD prefix, which the tail window never includes, so
+    a windowed reconcile can never delete a prefix message. When the window
+    reconcile shortens the tail, the change is persisted off-request exactly
+    like the full path (``_schedule_reconcile_persist`` on the full cleaned
+    list) so the authoritative JSONB + rows stay correct.
+
+    Returns ``(served, changed, cleaned_full, settings_dict)`` mirroring
+    ``_reconcile_conv_served_readonly``; ``cleaned_full`` is None unless a
+    tail-window reconcile fired (then it is the FULL cleaned list to persist).
+    Raises on any row-store failure so the caller can fail open to the blob.
+    """
+    from lib.database.messages_rows import load_message_window
+
+    win = load_message_window(db, conv_id, limit=window, before_seq=before_seq)
+    win_msgs = win['messages']
+
+    base = {
+        'id': r['id'], 'title': r['title'],
+        'createdAt': r['created_at'], 'created_at': r['created_at'],
+        'updatedAt': r['updated_at'], 'updated_at': r['updated_at'],
+        'settings': _safe_json(r['settings'], default={}, label='settings') or {},
+        'rev': _row_rev(r),
+        # pagination envelope the frontend uses for scroll-up loading
+        'windowed': True,
+        'totalCount': win['totalCount'],
+        'firstLoadedSeq': win['firstLoadedSeq'],
+        'lastLoadedSeq': win['lastLoadedSeq'],
+        'hasMore': win['hasMore'],
+    }
+
+    # A page-up request (before_seq set) is a pure slice — never reconcile it,
+    # only the tail (before_seq=None) can carry a ghost/husk.
+    if before_seq is not None:
+        base['messages'] = win_msgs
+        return base, False, None, None
+
+    # Tail window: run reconcile on the window only. reconcile is idempotent and
+    # operates on trailing pairs, so the tail window verdict matches the full
+    # verdict for trailing ghost/husk.
+    try:
+        from lib.conversations.reconcile import reconcile_conversation_messages
+        cleaned_win, changed = reconcile_conversation_messages(win_msgs, 0)
+    except Exception as e:
+        logger.debug('[get_conv] windowed reconcile skipped conv=%s: %s',
+                     conv_id[:8], e)
+        cleaned_win, changed = win_msgs, False
+
+    base['messages'] = cleaned_win
+    if not changed:
+        return base, False, None, None
+
+    # The window shortened. Compute the FULL cleaned list to persist off-request
+    # (the persisted JSONB stays authoritative). This is the ONLY full
+    # deserialize on the windowed path, and only when the tail actually changed
+    # (rare), so the common open stays O(window).
+    settings_dict = base['settings'] if isinstance(base['settings'], dict) else {}
+    settings_dict['_reconciledAt'] = int(time.time() * 1000)
+    base['settings'] = settings_dict
+    cleaned_full, settings_for_persist = None, None
+    c_full, ch_full, sd_full = _compute_reconcile(conv_id, r)
+    if ch_full:
+        cleaned_full, settings_for_persist = c_full, sd_full
+    return base, bool(cleaned_full is not None), cleaned_full, settings_for_persist
+
+
 @conversations_bp.route('/api/v1/conversations/<conv_id>', methods=['GET'])
 @_db_safe
 async def get_conv(conv_id):
@@ -763,7 +957,9 @@ async def get_conv(conv_id):
     # it would corrupt the live stream. Skip reconcile AND leave _reconciledAt
     # unstamped so the frontend keeps deferring rather than treating it as clean.
     if _conv_has_live_task(conv_id):
-        return jsonify(_conv_row_to_dict(r))
+        _served = _conv_row_to_dict(r)
+        _maybe_backfill_narration_on_open(conv_id, _served)
+        return jsonify(_served)
 
     try:
         served, changed, cleaned, settings_dict = await run_pooled(
@@ -778,7 +974,9 @@ async def get_conv(conv_id):
     except Exception as e:
         logger.warning('[get_conv] GET-path reconcile failed for conv=%s: %s — '
                        'serving unreconciled row', conv_id[:8], e, exc_info=True)
-        return jsonify(_conv_row_to_dict(r))
+        _served = _conv_row_to_dict(r)
+        _maybe_backfill_narration_on_open(conv_id, _served)
+        return jsonify(_served)
 
 
 @conversations_bp.route('/api/v1/conversations/<conv_id>/preview', methods=['GET'])

@@ -419,6 +419,13 @@
     status = status || {};
     var peers = status.peers || [];
     thread = thread || [];
+    // Backend-authoritative count of CONVERSATIONS present (excludes a running
+    // conv's sub-agents, which are separate presence peers). The frontend is a
+    // pure reducer here — it renders the server's convCount, never recomputes
+    // liveness/attribution from the peer array. Fallback to the peer count only
+    // when the field is absent (e.g. a stale cached bundle hitting a new API).
+    var convCount = (typeof status.convCount === 'number')
+      ? status.convCount : peers.length;
 
     var parts = document.createDocumentFragment();
 
@@ -434,7 +441,7 @@
       var head = document.createElement('div');
       head.className = 'pb-peers-roster-head';
       head.textContent = _t('projectBrain.peersHere', '{n} here now')
-        .replace('{n}', peers.length);
+        .replace('{n}', convCount);
       roster.appendChild(head);
       for (var i = 0; i < peers.length; i++) {
         roster.appendChild(buildPeerCard(peers[i]));
@@ -472,8 +479,8 @@
     // server-side). Set here so it stays in lockstep with the rendered roster.
     var badge = document.getElementById('pbTabCountPeers');
     if (badge) {
-      if (peers.length > 0) {
-        badge.textContent = peers.length > 99 ? '99+' : String(peers.length);
+      if (convCount > 0) {
+        badge.textContent = convCount > 99 ? '99+' : String(convCount);
         badge.hidden = false;
       } else { badge.textContent = ''; badge.hidden = true; }
     }

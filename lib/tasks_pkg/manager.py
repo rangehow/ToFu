@@ -294,6 +294,41 @@ def discard_task(task_id: str, conv_id: str | None = None) -> None:
             if _conv_latest_task.get(conv_id) == task_id:
                 del _conv_latest_task[conv_id]
 
+def list_running_tasks(exclude_conv_id: str | None = None) -> list[dict]:
+    """Return a snapshot of currently-running tasks.
+
+    Used by the self-update restart guard to refuse a process re-exec that
+    would kill sibling conversations' in-flight work. A restart is an
+    unconditional ``os.execv`` of the whole server, so EVERY running task
+    dies with it — this lets the caller detect that and require an explicit
+    override.
+
+    Args:
+        exclude_conv_id: When set, running tasks belonging to this conversation
+            are omitted (the caller triggering the restart doesn't count its
+            own conversation against itself).
+
+    Returns:
+        A list of ``{'taskId', 'convId', 'elapsed'}`` dicts, one per running
+        task. Best-effort snapshot taken under ``tasks_lock``.
+    """
+    now = time.time()
+    out: list[dict] = []
+    with tasks_lock:
+        for tid, t in tasks.items():
+            if t.get('status') != 'running' or t.get('aborted'):
+                continue
+            conv = t.get('convId') or ''
+            if exclude_conv_id and conv == exclude_conv_id:
+                continue
+            out.append({
+                'taskId': tid,
+                'convId': conv,
+                'elapsed': round(now - t.get('created_at', now), 1),
+            })
+    return out
+
+
 def abort_running_tasks_for_conv(conv_id: str, exclude_task_id: str | None = None) -> int:
     """Abort all running tasks for a conversation, except the excluded one.
 
@@ -2495,13 +2530,15 @@ def recover_stale_tasks_on_startup(prev_shutdown=None, dispatch=True):
             # NOT a separate SELECT→mutate→UPDATE (that would clobber).
             try:
                 _final_msgs = json.loads(messages_json) if messages_json else json.loads(crow['messages'] or '[]')
-            except (json.JSONDecodeError, TypeError):
+            except (json.JSONDecodeError, TypeError) as e:
+                logger.debug('[Manager] final_msgs JSON parse failed, using fallback: %s', e)
                 _final_msgs = []
             if _final_msgs:
                 _lm = _final_msgs[-1]
                 try:
                     _s = json.loads(settings_json or '{}')
-                except (json.JSONDecodeError, TypeError):
+                except (json.JSONDecodeError, TypeError) as e:
+                    logger.debug('[Manager] settings JSON parse failed, using fallback: %s', e)
                     _s = {}
                 _s['lastMsgRole'] = _lm.get('role')
                 _s['lastMsgTimestamp'] = _lm.get('timestamp')
@@ -2838,7 +2875,8 @@ def _stuck_task_max_silent_secs() -> int:
     import os
     try:
         return int(os.environ.get('TOFU_STUCK_TASK_MAX_SILENT_SECS', '') or '1800')
-    except (ValueError, TypeError):
+    except (ValueError, TypeError) as e:
+        logger.debug('[Manager] TOFU_STUCK_TASK_MAX_SILENT_SECS parse failed, using fallback: %s', e)
         return 1800
 
 

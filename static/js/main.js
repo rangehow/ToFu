@@ -648,6 +648,12 @@ function _restoreConvToolState(conv) {
   /* ★ If the Project Brain panel is open, re-resolve its feed to the new
    *   conversation's project (two projects must never bleed into one view). */
   if (typeof projectBrainRefresh === 'function') projectBrainRefresh();
+  /* ★ The always-visible per-conversation influence bar (#convInfluenceBar)
+   *   is conv-scoped, so re-pull it on every switch. It's exposed as
+   *   window.convInfluenceRefresh but was never wired here, so it only ever
+   *   populated while the Brain panel was already open and a push frame fired
+   *   (see index.html's own "Updates on conversation switch" comment). */
+  if (typeof convInfluenceRefresh === 'function') convInfluenceRefresh();
   /* ★ Reflow toolbar after restoring conv tool state (toolbar width may differ). */
   _scheduleReflow();
 }

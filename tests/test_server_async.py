@@ -189,6 +189,31 @@ class TestCompression:
             # Just verify the request doesn't crash
         _run_async(go())
 
+    def test_range_response_not_gzipped(self, client):
+        """A 206 Partial Content (Range) response MUST NOT be gzipped.
+
+        Gzipping a 206 while keeping Content-Range and rewriting
+        Content-Length to the compressed slice length hands the client a
+        corrupt byte range — the confirmed cause of vendor .js "failed to
+        load" on tablet/mobile browsers that request scripts via Range.
+        The _compress_response guard must suppress compression for any
+        non-200 / Content-Range response.
+        """
+        async def go():
+            resp = await client.get(
+                '/static/vendor/highlight.min.js',
+                headers={'Range': 'bytes=0-1023',
+                         'Accept-Encoding': 'gzip'},
+            )
+            # A range-capable static handler answers 206; a handler that
+            # ignores Range answers a whole 200. Either way, a partial /
+            # ranged body must never carry gzip.
+            if resp.status_code == 206 or 'Content-Range' in resp.headers:
+                assert resp.content_encoding != 'gzip', (
+                    'partial (206/Content-Range) response was gzipped — '
+                    'corrupts the byte range on Range-requesting clients')
+        _run_async(go())
+
 
     def test_range_response_not_gzipped(self, client):
         """A 206 Partial Content (Range) response MUST NOT be gzipped.

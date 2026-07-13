@@ -735,7 +735,8 @@ def _append_user_msg_with_cas(db, conv_id: str, user_msg: dict) -> bool:
         return False
     try:
         messages = json.loads(row['messages'] or '[]')
-    except (json.JSONDecodeError, TypeError):
+    except (json.JSONDecodeError, TypeError) as e:
+        logger.debug('[Queue] messages JSON parse failed, using fallback: %s', e)
         messages = []
     append_user_msg_idempotent(messages, user_msg)
     now_ms = int(time.time() * 1000)

@@ -236,7 +236,8 @@ def inspect_image_file(path, *, crop=None, rotate=0, zoom=None, grid=False):
 
     try:
         from PIL import Image, ImageDraw
-    except ImportError:
+    except ImportError as e:
+        logger.debug('[FileReader] Pillow import failed, using fallback: %s', e)
         return ('Error: image inspection requires Pillow (PIL), which is not '
                 'installed on the server.')
 

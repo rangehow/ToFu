@@ -790,7 +790,9 @@
   // Backend mostly returns {ok, ...} JSON; mutations return Response so
   // callers can read .ok and parse error envelopes.
   const project = {
-    status:        ()         => get('/api/v1/project/status', { onError: 'null' }),
+    status:        (convId)   => get('/api/v1/project/status'
+                                     + (convId ? ('?conv_id=' + encodeURIComponent(convId)) : ''),
+                                     { onError: 'null' }),
     setPaths:      (folders, readOnlyPaths)  =>
       request('/api/v1/project/paths',
               { method: 'PUT',

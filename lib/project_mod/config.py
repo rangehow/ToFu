@@ -756,6 +756,71 @@ def get_state():
         return s
 
 
+def get_state_for_conv(conv_id):
+    """Return project state scoped to *conv_id*'s OWN root registry.
+
+    ``get_state()`` builds ``extraRoots`` from the PROCESS-GLOBAL ``_roots``,
+    which every conversation shares. A background task's absolute-path write
+    (or a prior conversation's extras) lands in that global registry, so
+    ``get_state()`` would paint those roots onto whatever conversation happens
+    to be reading ``/api/v1/project/status`` — the "extra paths appear on a
+    conv that never had them" leak.
+
+    This variant sources the primary + extras from the conversation's SCOPED
+    registry (``_conv_roots`` / ``_conv_primary``) when it owns one, so a
+    background task touching the global registry can never bleed onto another
+    conv's bar. When the conv has no scoped registry (legacy / single-user UI
+    path, or a conv the UI never wired a project to) it degrades to the global
+    :func:`get_state` — byte-identical to today.
+
+    Non-root fields (modificationsCount, crossDC) mirror ``get_state()``.
+    """
+    if not conv_id:
+        return get_state()
+    with _lock:
+        conv_map = _conv_roots.get(conv_id)
+        if not conv_map:
+            # No scoped registry — fall through to the legacy global view.
+            return get_state()
+        primary = _conv_primary.get(conv_id)
+        s = dict(_state)
+        # The conv's own primary is authoritative for its bar — NOT the
+        # global _state['path'] (which may be another conv's project).
+        if primary:
+            s['path'] = primary
+        s['modificationsCount'] = len(_state.get('modifications', []))
+        s.pop('modifications', None)
+        extra = []
+        for rn, rs in conv_map.items():
+            if rs['path'] != primary:
+                extra.append({'path': rs['path'], 'name': rn,
+                              'fileCount': rs['fileCount'],
+                              'scanning': rs['scanning'],
+                              'readOnly': rs.get('access') == 'ro'})
+        s['extraRoots'] = extra
+        # Primary root's own access flag (the primary may itself be RO).
+        if primary:
+            for rs in conv_map.values():
+                if rs['path'] == primary:
+                    s['readOnly'] = rs.get('access') == 'ro'
+                    break
+    # Cross-DC latency indicator (outside _lock — cross_dc has its own cache).
+    try:
+        from lib.cross_dc import get_cluster_for_path, get_latency_class, get_latency_s
+        if primary:
+            lat_class = get_latency_class(primary)
+            if lat_class != 'unknown':
+                s['crossDC'] = {
+                    'latencyClass': lat_class,
+                    'cluster': get_cluster_for_path(primary),
+                    'latencyMs': round(get_latency_s(primary) * 1000, 1) if get_latency_s(primary) else None,
+                }
+    except Exception as e:
+        logger.debug('[Config] cross_dc info unavailable (conv=%s): %s',
+                     conv_id[:12] if conv_id else '?', e)
+    return s
+
+
 def get_project_path():
     with _lock:
         return _state['path']

@@ -630,37 +630,56 @@ function line(obj) { return 'data: ' + JSON.stringify(obj); }
   check('no_committed_no_projection_flag', am._committedProjection === undefined);
 }
 
-// ── 30. workspace_root_added: state parity — the handler refreshes
-//        projectState via Api.project.status(), mutates extraRoots, and
-//        persists the new root into conv.projectPaths (was toast-ONLY).
+// ── 30. workspace_root_added: PROVENANCE SPLIT — an INCIDENTAL auto-register
+//        (absolute-path write outside all roots) paints the bar EPHEMERALLY
+//        for this session but must NEVER be written into the durable
+//        conv.projectPaths / synced to the server. Persisting it was the
+//        "comes back after I delete it" resurrection bug: the durable record
+//        got the root, so the next reload's _restoreConvProject repainted
+//        exactly the root the user had just removed. Only EXPLICIT additions
+//        (create_project / modal / folder pick) persist.
 //        ASYNC: the refresh runs in a status().then() microtask, so this
 //        scenario awaits a microtask flush before asserting, and the final
 //        console.log is deferred until after asyncTests() resolves. ──
 async function asyncTests() {
-  // (a) ACTIVE-conv event → full parity refresh.
+  // (a) ACTIVE-conv event → EPHEMERAL bar paint, but NO durable persist.
   {
     const { conv, ctx } = setup();          // conv 'c1', activeConvId 'c1'
+    // The conv's durable record before the incidental root arrives: the user
+    // has an explicit primary and has NO extras (they removed the sibling).
+    conv.projectPath = '/proj';
+    conv.projectPaths = ['/proj'];
     let ps = { extraRoots: [] };
     // Real-ish _applyProjectData: mirrors project.js — sets extraRoots.
     win._applyProjectData = global._applyProjectData = (data) => {
       if (data && Array.isArray(data.extraRoots)) ps.extraRoots = data.extraRoots;
     };
-    let statusCalls = 0;
-    win.Api = global.Api = { project: { status: () => { statusCalls++;
+    let statusCalls = 0, statusConvArg = undefined;
+    win.Api = global.Api = { project: { status: (cid) => { statusCalls++;
+      statusConvArg = cid;
       return Promise.resolve({ path: '/proj',
         extraRoots: [{ path: '/proj/sib', name: 'sib', readOnly: false }] }); } } };
+    // Spy counters are CUMULATIVE across all scenarios — snapshot before the
+    // event and assert no INCREASE (not an absolute === 0).
+    const _saveBefore = calls.saveConversations;
+    const _syncBefore = calls.syncConversationToServer;
     T.dispatchSSEEvent(line({ type: 'workspace_root_added',
       roots: [{ rootName: 'sib', path: '/proj/sib' }] }), ctx);
     await Promise.resolve(); await Promise.resolve();   // flush the .then chain
     check('wra_toast_shown', calls.showToast >= 1);
     check('wra_status_refreshed', statusCalls === 1);
+    // Conv-scoped: the status probe passes the conv id (Fix 2).
+    check('wra_status_conv_scoped', statusConvArg === 'c1');
+    // Ephemeral paint: the bar DOES light up the incidental root this session.
     check('wra_mutates_projectState_extraRoots',
       ps.extraRoots.length === 1 && ps.extraRoots[0].path === '/proj/sib');
-    check('wra_persists_conv_projectPaths',
-      Array.isArray(conv.projectPaths) && conv.projectPaths[0] === '/proj' &&
-      conv.projectPaths.includes('/proj/sib'));
-    check('wra_calls_saveConversations', calls.saveConversations >= 1);
-    check('wra_calls_syncConversationToServer', calls.syncConversationToServer >= 1);
+    // ★ THE FIX: the incidental root is NOT written into the durable record.
+    check('wra_does_NOT_persist_conv_projectPaths',
+      Array.isArray(conv.projectPaths) && conv.projectPaths.length === 1 &&
+      conv.projectPaths[0] === '/proj' &&
+      !conv.projectPaths.includes('/proj/sib'));
+    check('wra_does_NOT_save', calls.saveConversations === _saveBefore);
+    check('wra_does_NOT_sync', calls.syncConversationToServer === _syncBefore);
   }
   // (b) GATE: an event whose conv is NOT the active one must NOT refresh
   //     projectState (a background task's global _state may hold a different
@@ -680,6 +699,29 @@ async function asyncTests() {
       roots: [{ rootName: 'sib', path: '/proj/sib' }] }), ctx);
     await Promise.resolve(); await Promise.resolve();
     check('wra_inactive_conv_no_refresh', statusCalls === 0 && ps.extraRoots.length === 0);
+  }
+  // (c) RELOAD-NO-REPAINT: after an incidental auto-register, a page reload
+  //     restores the bar from the DURABLE conv.projectPaths. Because (a) did
+  //     not persist the sibling, the durable set the reload reads has ONLY the
+  //     explicit primary — so the removed/incidental root is NOT repainted.
+  //     This is the end-state proof the resurrection loop is broken.
+  {
+    const { conv, ctx } = setup();          // conv 'c1', activeConvId 'c1'
+    conv.projectPath = '/proj';
+    conv.projectPaths = ['/proj'];          // user removed the sibling earlier
+    win._applyProjectData = global._applyProjectData = () => {};
+    win.Api = global.Api = { project: { status: () => Promise.resolve({
+      path: '/proj', extraRoots: [{ path: '/proj/sib', name: 'sib' }] }) } };
+    T.dispatchSSEEvent(line({ type: 'workspace_root_added',
+      roots: [{ rootName: 'sib', path: '/proj/sib' }] }), ctx);
+    await Promise.resolve(); await Promise.resolve();
+    // Simulate what _restoreConvProject reads on the next reload: the durable
+    // per-conv path set. It must NOT contain the incidental sibling, so the
+    // reload cannot repaint it.
+    const reloadPaths = (Array.isArray(conv.projectPaths) && conv.projectPaths.length)
+      ? conv.projectPaths : [conv.projectPath];
+    check('reload_paths_exclude_incidental_root',
+      !reloadPaths.includes('/proj/sib') && reloadPaths.length === 1);
   }
 }
 

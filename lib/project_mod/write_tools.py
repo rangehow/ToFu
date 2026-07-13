@@ -428,7 +428,9 @@ def _resolve_write_path(base, rel_path, conv_id=None):
                 #   conv-scope-aware so the file-changes bar + undo journal
                 #   still resolve the conv-scoped root correctly.
                 if conv_id:
-                    from lib.project_mod.config import add_conv_root, get_conv_roots
+                    from lib.project_mod.config import (
+                        add_conv_root, get_conv_roots, set_conv_roots,
+                    )
                     _existing = any(
                         (os.path.abspath(rs['path']).rstrip(os.sep) or rs['path']) == _anchor_norm
                         for rs in get_conv_roots(conv_id).values()
@@ -436,15 +438,36 @@ def _resolve_write_path(base, rel_path, conv_id=None):
                     _rname = add_conv_root(conv_id, anchor,
                                            name=os.path.basename(anchor))
                     if _rname is None:
-                        # The conv owns no scoped registry (should not happen for
-                        # a task started via set_conv_roots). Fall back to the
-                        # global registry so the write still resolves — degraded,
-                        # but never a hard failure.
-                        add_project_root(anchor)
-                        _rname = os.path.basename(anchor)
-                        logger.warning('[WriteTools] conv=%s has no scoped registry; '
-                                       'auto-registered %s GLOBALLY as a fallback',
-                                       conv_id[:12], anchor)
+                        # The conv owns no scoped registry yet. A background task
+                        # MUST NOT fall back to writing the process-global _roots
+                        # (that is the UI-facing "active project" every conv's
+                        # bar reflects via get_state() — the exact leak this fix
+                        # removes). Instead SEED a conv-scoped registry from the
+                        # task's own primary (``base``), then register the anchor
+                        # there. This keeps the auto-register isolated to the
+                        # writing conv and never bleeds onto another conv's bar.
+                        _base_abs = os.path.abspath(os.path.expanduser(base)) if base else ''
+                        if _base_abs and os.path.isdir(_base_abs):
+                            set_conv_roots(conv_id, _base_abs)
+                            _rname = add_conv_root(conv_id, anchor,
+                                                   name=os.path.basename(anchor))
+                        if _rname is None:
+                            # No usable primary to scope to (no base / vanished).
+                            # Resolve the write directly without registering ANY
+                            # root — degraded but never a global-registry mutation
+                            # and never a hard failure. Attribution simply falls
+                            # to no root (like a temp-dir write).
+                            logger.warning('[WriteTools] conv=%s has no scoped '
+                                           'registry and no usable primary; '
+                                           'resolving %s without registering a '
+                                           'root (no global pollution)',
+                                           conv_id[:12], abs_path)
+                            _enforce_not_readonly(abs_path, conv_id=conv_id)
+                            return abs_path
+                        logger.info('[WriteTools] seeded conv-scoped registry from '
+                                    'primary %s and auto-registered root %s '
+                                    '(conv=%s) for absolute-path write to %s',
+                                    _base_abs, anchor, conv_id[:12], abs_path)
                     else:
                         logger.info('[WriteTools] Auto-registered conv-scoped workspace '
                                     'root %s (conv=%s) for absolute-path write to %s',

@@ -143,6 +143,16 @@ def project_paths():
 @require_auth
 @api_meta(summary='Active project state', tags=['project'])
 def project_status():
+    # ★ Conv-scoped bar: when the client passes ?conv_id=<id>, source the
+    #   project state from THAT conversation's own scoped registry rather than
+    #   the process-global _roots. This stops a background task's absolute-path
+    #   write (which registers into the global registry) from bleeding extra
+    #   paths onto a different conversation's project bar. Without conv_id the
+    #   legacy global view is returned (byte-identical to before).
+    conv_id = (request.args.get('conv_id') or '').strip()
+    if conv_id:
+        from lib.project_mod import get_state_for_conv
+        return jsonify(get_state_for_conv(conv_id))
     from lib.project_mod import get_state
     return jsonify(get_state())
 

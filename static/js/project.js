@@ -1013,9 +1013,10 @@ async function loadProjectStatus() {
     _clearProjectStateLocal();
     return;
   }
-  // Try to check server status first
+  // Try to check server status first — CONV-SCOPED so a background task's
+  // global-registry mutation can never paint another conversation's bar.
   try {
-    const data = await Api.project.status();
+    const data = await Api.project.status(conv && conv.id);
     if (!data) return;
     if (data.path && data.path === savedPath) {
       // Server already has this project active — check extras too

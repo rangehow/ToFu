@@ -1,159 +1,66 @@
-"""LLM call with automatic fallback to Opus on failure.
+"""Core LLM-call-with-fallback entry point.
 
-Extracted from ``orchestrator.py`` to keep the main orchestration loop
-focused on control flow.  The single public entry-point is
-:func:`_llm_call_with_fallback`, which streams one LLM round and
-transparently retries with Claude Opus 4 (medium preset) when the
-primary model errors out.
+Streams one LLM round and transparently retries with the configured
+fallback model (Claude Opus 4, medium preset) when the primary model
+errors out; also drives reactive compaction on ``PromptTooLongError``.
+
+Collaborators that tests may monkeypatch (``stream_llm_response``,
+``_get_fallback_model``, ``_flag_empty_stop_for_retry``, ``_emit_round_usage``)
+are resolved through the package facade at CALL TIME, so a
+``patch('lib.tasks_pkg.llm_fallback.<name>')`` is honoured here.
+
+The reactive-compaction retry state (``_reactive_compact_attempts`` /
+``_REACTIVE_COMPACT_MAX_RETRIES``) is imported BY REFERENCE from
+``._state`` — there is exactly one such dict in the process.
 """
 
 from lib.llm import build_body
 from lib.llm_error_format import format_llm_error_for_user
 from lib.log import audit_log, get_logger
-from lib.tasks_pkg.manager import append_event, stream_llm_response
+
+# Shared reactive-compaction state — imported by reference (never reassigned)
+# so cleanup_reactive_compact_state mutates the SAME dict this module reads.
+from lib.tasks_pkg.llm_fallback._state import (
+    _reactive_compact_attempts,
+    _REACTIVE_COMPACT_MAX_RETRIES,
+)
 
 logger = get_logger(__name__)
 
 
-def _get_fallback_model(task: dict | None = None) -> str:
-    """Return the configured fallback model, or empty string if disabled.
+def _facade():
+    """Return the package facade so collaborators resolve at call time.
 
-    Reads from ``lib.FALLBACK_MODEL`` which is backed by
-    ``data/config/server_config.json`` → ``model_defaults.fallback_model``.
-    Users can set this via Settings UI > 显示 > 模型默认.
-
-    A per-task opt-out (``task['config']['disableModelFallback'] == True``)
-    forces an empty string regardless of global config. This is essential
-    for controlled experiments: without it, a transient primary-model
-    error silently switches the round to the global fallback model
-    (e.g. Opus), cross-contaminating a benchmark that is supposed to
-    measure ONLY the requested model. With it, the round simply errors
-    and the caller/harness retries on the SAME model.
+    Lets ``patch('lib.tasks_pkg.llm_fallback.<name>')`` in tests take effect
+    even though the core loop calls the helper by a bare name below.
     """
-    if task is not None:
-        try:
-            if (task.get('config') or {}).get('disableModelFallback'):
-                return ''
-        except Exception as e:
-            logger.debug('disableModelFallback check failed: %s', e)
-    import lib as _lib
-    return getattr(_lib, 'FALLBACK_MODEL', '') or ''
-
-# Track reactive compact attempts per task to avoid infinite loops
-_reactive_compact_attempts: dict[str, int] = {}
-_REACTIVE_COMPACT_MAX_RETRIES = 2
+    import lib.tasks_pkg.llm_fallback as _pkg
+    return _pkg
 
 
-def _flag_empty_stop_for_retry(assistant_msg: dict, finish_reason, task: dict,
-                               round_num: int, usage: dict) -> bool:
-    """Recognise a round-0 empty/whitespace-only ``stop`` and flag it for RETRY.
-
-    Replaces the old "empty stop on round 0 ⇒ content_filter" heuristic, which
-    was too aggressive: it declared a terminal content-policy block (NO retry)
-    on any 200-OK ``finish=stop`` that produced no visible content. But a
-    GENUINE policy violation arrives as :class:`ContentFilterError` (HTTP 450),
-    handled separately and terminal. A plain empty stop is a TRANSIENT gateway
-    artifact — proven by ``debug/repro_conv_empty_stop.py``, which replays the
-    exact large request that empty-stopped in production and gets clean content
-    6/6 times.
-
-    The stream layer (``lib/llm/_sse_core.py``) only sets the
-    ``_empty_stop`` / ``_stream_anomaly`` flags when ``finish=stop AND not
-    content AND chunk_count > 0`` — so a whitespace-only body (``content`` is
-    truthy) or a zero-chunk clean-``[DONE]`` close slips through UNFLAGGED and
-    the empty_stop retry bucket (cap 2, in ``analyse_stream_result``) never
-    fires. This helper closes that gap: when the round is a bare empty stop on
-    the FIRST round that the stream layer did NOT already flag, it sets the
-    ``_empty_stop`` + ``_stream_anomaly`` flags on ``usage`` (mutated in place)
-    so ``analyse_stream_result`` retries it via the empty_stop / zero_byte
-    bucket. Only after those retries are exhausted does it surface honestly as
-    ``abnormal_stop`` — never as a fabricated content-policy block.
-
-    Returns ``True`` iff it flagged this round for retry (so the caller can log
-    it). Round > 0 is left alone (empty content after tool calls is legitimate).
-    """
-    if finish_reason != 'stop':
-        return False
-    if round_num != 0:
-        return False
-    if (assistant_msg.get('content', '') or '').strip():
-        return False
-    if (task.get('content') or '').strip() or (task.get('thinking') or '').strip():
-        return False
-    # Already flagged by the stream layer → the existing retry machinery picks
-    # it up unchanged; nothing to add.
-    if usage.get('_stream_anomaly'):
-        return False
-    usage['_empty_stop'] = True
-    usage['_stream_anomaly'] = True
-    return True
+def stream_llm_response(*args, **kwargs):
+    """Facade-resolved shim for the streaming primitive (patchable at package level)."""
+    return _facade().stream_llm_response(*args, **kwargs)
 
 
-def cleanup_reactive_compact_state(task_id: str):
-    """Remove reactive compact tracking for a finished task.
-
-    Called from orchestrator._finalize_and_emit_done to prevent memory leak.
-    """
-    _reactive_compact_attempts.pop(task_id, None)
+def append_event(*args, **kwargs):
+    """Facade-resolved shim for SSE delivery (patchable at package level)."""
+    return _facade().append_event(*args, **kwargs)
 
 
-def _emit_round_usage(task, round_num, model, usage, *, tag=''):
-    """Emit a per-round usage SSE event so the frontend context-health
-    gauge can reflect the size of the prompt JUST sent to the model,
-    without waiting for the final ``done`` event to land ``apiRounds``.
+def _get_fallback_model(*args, **kwargs):
+    """Facade-resolved shim (patchable at package level)."""
+    return _facade()._get_fallback_model(*args, **kwargs)
 
-    The orchestrator's ``accumulated_usage`` is the per-message running
-    sum across all rounds (see :func:`_llm_call_with_fallback`), so the
-    only intra-task data that maps to "next-prompt size" is the raw
-    ``usage`` dict from THIS round.  We forward exactly that, plus a
-    pre-computed ``tokensIn`` (total input tokens including cache) so
-    the frontend doesn't need to know the Anthropic-vs-OpenAI cache
-    convention.
 
-    Parameters
-    ----------
-    task : dict
-        Live task dict — used by ``append_event`` for SSE delivery.
-    round_num : int
-        1-based round number (matches the value pushed into
-        ``api_rounds``).
-    model : str
-        Model id actually used for this round (may differ from the
-        primary on fallback / reactive paths).
-    usage : dict
-        Raw usage dict returned by the LLM (post-streaming).
-    tag : str
-        Diagnostic label such as ``R1`` / ``R3-FALLBACK`` /
-        ``R5-REACTIVE``.  Logged only.
-    """
-    if not usage:
-        return
-    try:
-        inp = usage.get('prompt_tokens') or usage.get('input_tokens') or 0
-        cw = (usage.get('cache_write_tokens')
-              or usage.get('cache_creation_input_tokens') or 0)
-        cr = (usage.get('cache_read_tokens')
-              or usage.get('cache_read_input_tokens') or 0)
-        # Anthropic convention: prompt_tokens excludes cache. OpenAI
-        # convention: prompt_tokens already includes cache. Mirrors the
-        # frontend test in ui.js:1853 / context-bar.js:_promptTokensFromUsage.
-        if (cw > 0 or cr > 0) and inp <= cw + cr:
-            tokens_in = inp + cw + cr
-        else:
-            tokens_in = inp
-        out = usage.get('completion_tokens') or usage.get('output_tokens') or 0
-        append_event(task, {
-            'type': 'round_usage',
-            'round': round_num,
-            'model': model,
-            'tag': tag,
-            'tokensIn': int(tokens_in or 0),
-            'tokensOut': int(out or 0),
-            'usage': dict(usage),
-        })
-    except Exception as e:
-        logger.debug('[round_usage] emit failed (round=%s tag=%s): %s',
-                     round_num, tag, e)
+def _flag_empty_stop_for_retry(*args, **kwargs):
+    """Facade-resolved shim (patchable at package level)."""
+    return _facade()._flag_empty_stop_for_retry(*args, **kwargs)
+
+
+def _emit_round_usage(*args, **kwargs):
+    """Facade-resolved shim (patchable at package level)."""
+    return _facade()._emit_round_usage(*args, **kwargs)
 
 
 def _llm_call_with_fallback(task, body, model, round_num, max_tokens,

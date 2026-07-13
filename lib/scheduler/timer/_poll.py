@@ -1,236 +1,33 @@
-"""lib/scheduler/timer.py — Timer Watcher: async poll → decide → continue.
+"""lib/scheduler/timer/_poll.py — Timer poll logic (LLM poll agent loop).
 
-The Timer Watcher is a simplified, conversation-inline variant of the
-proactive agent.  An agent tool call creates a timer; a background thread
-polls independently until conditions are met, then injects a follow-up
-user message and kicks off a new agentic task.
-
-Key design decisions:
-  • Each poll is *independent* — no cross-poll history (token-saving).
-  • The poll optionally runs a shell command first and feeds its output
-    to the LLM for grounded decision-making.
-  • Single-shot by default (auto-cancels after triggering).
-  • Timer threads are daemon threads so they don't block server shutdown.
+Runs each independent poll as a mini-agent loop with tool access, feeds an
+optional shell check_command's output to the LLM for grounded decisions, and
+persists poll outcomes. Also owns the DB status-transition writers
+(``_increment_poll_count`` / ``_mark_exhausted`` / ``_mark_expired``) since
+they mutate the shared in-memory registry alongside the poll flow.
 """
 
 from __future__ import annotations
 
 import json
 import subprocess
-import threading
 import time
 import uuid
 from datetime import datetime
-from typing import Any
 
 from lib.agent_loop import AbortSignal, run_agent_loop
 from lib.log import get_logger, log_context
+from lib.scheduler._shared import build_poll_system_prompt, fence_untrusted
+
+from ._crud import _get_timer_row
+from ._state import _active_timers, _cmd_outputs_lock, _last_cmd_outputs, _timers_lock
 
 logger = get_logger(__name__)
-
-# ── In-memory registry of active timer threads ──────────────────────────────
-
-_active_timers: dict[str, threading.Thread] = {}
-_timers_lock = threading.Lock()
-
-# ── Per-timer cache of last check_command output for early-exit filtering ────
-# If the command output hasn't changed since the last poll, we skip the LLM
-# call entirely — saves tokens and reduces frontend noise.
-_last_cmd_outputs: dict[str, str] = {}
-_cmd_outputs_lock = threading.Lock()
-
-# ── Boot-time resume guardrails (env-tunable) ───────────────────────────────
-# A timer that is still ``active`` long after its own poll budget should have
-# elapsed is, by definition, failing to make progress (e.g. its poll_count
-# never advanced because a DB error swallowed the increment). Resuming such a
-# zombie on every restart caused the 2026-06-26 search storm. On resume we
-# auto-expire any active timer older than a generous age cap, and we cap how
-# many timers a single boot will re-spawn so a leaked batch can never flood the
-# poll workers again.
-import os as _os
-
-
-def _resume_max_age_seconds(timer: dict[str, Any]) -> float:
-    """Max wall-clock age (seconds) before an active timer is force-expired.
-
-    Defaults to the larger of 24h and 1.5× the timer's own theoretical poll
-    budget (poll_interval × max_polls), so a legitimately long timer is never
-    expired prematurely. Override the 24h floor via TOFU_TIMER_MAX_AGE_HOURS.
-    """
-    try:
-        floor_hours = float(_os.environ.get('TOFU_TIMER_MAX_AGE_HOURS', '24'))
-    except (TypeError, ValueError) as e:
-        logger.debug('[Timer] TOFU_TIMER_MAX_AGE_HOURS parse failed, using default: %s', e)
-        floor_hours = 24.0
-    floor = max(floor_hours, 0.0) * 3600.0
-    try:
-        budget = float(timer.get('poll_interval') or 60) * float(timer.get('max_polls') or 0)
-    except (TypeError, ValueError) as e:
-        logger.debug('[Timer] timer poll-budget computation failed, using 0: %s', e)
-        budget = 0.0
-    return max(floor, budget * 1.5)
-
-
-def _resume_concurrency_cap() -> int:
-    """Max number of timers a single server boot will re-spawn (0 = unlimited)."""
-    try:
-        return int(_os.environ.get('TOFU_TIMER_RESUME_CAP', '20'))
-    except (TypeError, ValueError) as e:
-        logger.debug('[Timer] TOFU_TIMER_RESUME_CAP parse failed, using default: %s', e)
-        return 20
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-#  CRUD
-# ═════════════════════════════════════════════════════════════════════════════
-
-def create_timer(conv_id: str,
-                 check_instruction: str,
-                 continuation_message: str,
-                 poll_interval: int = 60,
-                 max_polls: int = 120,
-                 check_command: str = '',
-                 tools_config: dict | None = None,
-                 source_task_id: str = '') -> dict[str, Any]:
-    """Create a timer watcher and persist to DB.
-
-    Args:
-        conv_id: Conversation to inject the continuation into.
-        check_instruction: Natural-language instruction for the LLM poll.
-        continuation_message: The user message to inject when ready.
-        poll_interval: Seconds between polls (minimum 10).
-        max_polls: Maximum number of polls before exhaustion (0=unlimited).
-        check_command: Optional shell command to run before each poll.
-        tools_config: Tool settings for the continuation task.
-        source_task_id: The task that created this timer.
-
-    Returns:
-        Timer record dict.
-    """
-    from lib.database import DOMAIN_SYSTEM, get_thread_db
-
-    timer_id = 'tmr_' + str(uuid.uuid4())[:8]
-    now = datetime.now().isoformat()
-
-    # ── Defensive coercion: LLM tool-calls sometimes arrive with
-    #    string-valued numeric args (e.g. "60"). Coerce to int with a
-    #    safe fallback so ``max()`` below never raises TypeError.
-    def _coerce_int(name, raw, default):
-        try:
-            return int(raw)
-        except (TypeError, ValueError) as _e:
-            logger.warning('[Timer] Non-integer %s=%r — coerced to default %d '
-                           '(reason: %s)', name, raw, default, _e)
-            return default
-    poll_interval = _coerce_int('poll_interval', poll_interval, 60)
-    max_polls = _coerce_int('max_polls', max_polls, 120)
-
-    poll_interval = max(poll_interval, 10)  # floor at 10s
-
-    db = get_thread_db(DOMAIN_SYSTEM)
-    db.execute(
-        '''INSERT INTO timer_watchers
-           (id, conv_id, source_task_id, check_instruction, check_command,
-            continuation_message, poll_interval, max_polls, status,
-            tools_config, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)''',
-        [timer_id, conv_id, source_task_id, check_instruction, check_command,
-         continuation_message, poll_interval, max_polls,
-         json.dumps(tools_config or {}, ensure_ascii=False), now, now]
-    )
-    db.commit()
-
-    timer = _get_timer_row(timer_id)
-    logger.info('[Timer:%s] Created — conv=%s poll_interval=%ds max_polls=%d check_cmd=%s',
-                timer_id, conv_id[:12], poll_interval, max_polls,
-                (check_command[:80] + '…') if len(check_command) > 80 else check_command or '(none)')
-    return timer
-
-
-def cancel_timer(timer_id: str) -> bool:
-    """Cancel an active timer."""
-    from lib.database import DOMAIN_SYSTEM, get_thread_db
-
-    db = get_thread_db(DOMAIN_SYSTEM)
-    now = datetime.now().isoformat()
-    db.execute(
-        "UPDATE timer_watchers SET status='cancelled', cancelled_at=?, updated_at=? WHERE id=? AND status='active'",
-        [now, now, timer_id]
-    )
-    db.commit()
-
-    # Signal the background thread to stop
-    with _timers_lock:
-        _active_timers.pop(timer_id, None)
-    with _cmd_outputs_lock:
-        _last_cmd_outputs.pop(timer_id, None)
-
-    logger.info('[Timer:%s] Cancelled', timer_id)
-    return True
-
-
-def force_trigger_timer(timer_id: str) -> str | None:
-    """Force-trigger a timer, skipping the poll.
-
-    Returns:
-        The execution task_id, or None on failure.
-    """
-    timer = get_timer(timer_id)
-    if not timer:
-        return None
-    if timer['status'] != 'active':
-        logger.warning('[Timer:%s] Cannot trigger — status=%s', timer_id, timer['status'])
-        return None
-
-    return _execute_continuation(timer)
-
-
-def get_timer(timer_id: str) -> dict[str, Any] | None:
-    """Get a single timer by ID."""
-    return _get_timer_row(timer_id)
-
-
-def list_active_timers() -> list[dict[str, Any]]:
-    """Return all timers (active first, then recent triggered/cancelled)."""
-    from lib.database import DOMAIN_SYSTEM, get_thread_db
-    db = get_thread_db(DOMAIN_SYSTEM)
-    rows = db.execute(
-        '''SELECT * FROM timer_watchers
-           ORDER BY CASE status WHEN 'active' THEN 0 ELSE 1 END,
-                    created_at DESC
-           LIMIT 50'''
-    ).fetchall()
-    return [dict(r) for r in rows]
-
-
-def get_timer_poll_log(timer_id: str, limit: int = 30) -> list[dict]:
-    """Retrieve recent poll log entries for a timer."""
-    from lib.database import DOMAIN_SYSTEM, get_thread_db
-    try:
-        db = get_thread_db(DOMAIN_SYSTEM)
-        rows = db.execute(
-            'SELECT * FROM timer_poll_log WHERE timer_id=? ORDER BY poll_time DESC LIMIT ?',
-            [timer_id, limit]
-        ).fetchall()
-        return [dict(r) for r in rows]
-    except Exception as e:
-        logger.warning('[Timer] Failed to get poll log for %s: %s', timer_id, e, exc_info=True)
-        return []
-
-
-def _get_timer_row(timer_id: str) -> dict[str, Any] | None:
-    """Fetch a timer record from DB."""
-    from lib.database import DOMAIN_SYSTEM, get_thread_db
-    db = get_thread_db(DOMAIN_SYSTEM)
-    row = db.execute('SELECT * FROM timer_watchers WHERE id=?', [timer_id]).fetchone()
-    return dict(row) if row else None
 
 
 # ═════════════════════════════════════════════════════════════════════════════
 #  Poll logic
 # ═════════════════════════════════════════════════════════════════════════════
-
-from lib.scheduler._shared import build_poll_system_prompt, fence_untrusted
 
 _POLL_SYSTEM_PROMPT = build_poll_system_prompt(
     'ready', tools_available=True,
@@ -504,7 +301,13 @@ def poll_timer(timer_id: str) -> tuple[bool, str, int, bool, bool, str, str, lis
     """
     from lib.llm_dispatch import smart_chat
 
-    timer = _get_timer_row(timer_id)
+    # Resolve hookable indirection points through the package facade so a
+    # ``monkeypatch.setattr(lib.scheduler.timer, '_get_timer_row', …)`` (or
+    # '_execute_poll_tool') takes effect here, exactly as it did when this all
+    # lived in one module.
+    import lib.scheduler.timer as _timer_pkg
+
+    timer = _timer_pkg._get_timer_row(timer_id)
     if not timer or timer['status'] != 'active':
         return False, 'Timer no longer active', 0, False, False, '', '', [], ''
 
@@ -605,7 +408,7 @@ def poll_timer(timer_id: str) -> tuple[bool, str, int, bool, bool, str, str, lis
     def _poll_execute(rnd, tc):
         tc_id = tc.get('id', uuid.uuid4().hex[:8])
         _fn = tc.get('function', {})
-        result, _elapsed, _is_err = _execute_poll_tool(tc, timer_id, project_path)
+        result, _elapsed, _is_err = _timer_pkg._execute_poll_tool(tc, timer_id, project_path)
         # Record a timeline entry so the UI can show the poll's tool activity
         # (name + brief args + duration + ok/error), the same shape the swarm
         # panel renders per sub-agent.
@@ -690,205 +493,6 @@ def _record_poll(timer_id: str, decision: str, reason: str,
         logger.warning('[Timer:%s] Failed to record poll: %s', timer_id, e, exc_info=True)
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-#  Continuation execution — inject user message + start agentic task
-# ═════════════════════════════════════════════════════════════════════════════
-
-def _execute_continuation(timer: dict[str, Any]) -> str | None:
-    """Inject user message and start agentic task in the target conversation.
-
-    Args:
-        timer: The timer record dict.
-
-    Returns:
-        The agentic task_id, or None on failure.
-    """
-    from lib.scheduler._shared import inject_and_run_task
-
-    timer_id = timer['id']
-    conv_id = timer['conv_id']
-    continuation_msg = timer['continuation_message']
-    log_prefix = f'[Timer:{timer_id}]'
-
-    logger.info('%s 🚀 Executing continuation in conv=%s', log_prefix, conv_id[:12])
-
-    # Build the timer-specific user message
-    user_message = {
-        'role': 'user',
-        'content': (
-            f'⏱️ **[Timer Watcher Triggered — {timer_id}]**\n\n'
-            f'{continuation_msg}'
-        ),
-        'timestamp': datetime.now().isoformat(),
-        '_timer': True,
-        '_timerId': timer_id,
-    }
-
-    agentic_task_id = inject_and_run_task(
-        conv_id=conv_id,
-        user_message=user_message,
-        tools_config_json=timer.get('tools_config', '{}'),
-        log_prefix=log_prefix,
-    )
-
-    if agentic_task_id:
-        # Mark timer as triggered in DB
-        try:
-            from lib.database import DOMAIN_SYSTEM, get_thread_db
-            sysdb = get_thread_db(DOMAIN_SYSTEM)
-            now_iso = datetime.now().isoformat()
-            sysdb.execute(
-                "UPDATE timer_watchers SET status='triggered', triggered_at=?, "
-                "execution_task_id=?, updated_at=? WHERE id=?",
-                [now_iso, agentic_task_id, now_iso, timer_id]
-            )
-            sysdb.commit()
-        except Exception as e:
-            logger.error('%s Failed to mark timer as triggered: %s',
-                         log_prefix, e, exc_info=True)
-
-    # Clean up in-memory state regardless of outcome
-    with _timers_lock:
-        _active_timers.pop(timer_id, None)
-    with _cmd_outputs_lock:
-        _last_cmd_outputs.pop(timer_id, None)
-
-    return agentic_task_id
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-#  Background poll loop
-# ═════════════════════════════════════════════════════════════════════════════
-
-def start_timer_loop(timer_id: str) -> None:
-    """Start a background daemon thread that polls the timer at its interval.
-
-    The thread self-terminates after:
-      - Conditions are met and continuation is executed, OR
-      - max_polls is exhausted, OR
-      - Timer is cancelled.
-    """
-    timer = _get_timer_row(timer_id)
-    if not timer:
-        logger.error('[Timer:%s] Cannot start loop — timer not found', timer_id)
-        return
-
-    def _loop():
-        tid = timer_id
-        logger.info('[Timer:%s] Poll loop started (interval=%ds, max_polls=%d)',
-                     tid, timer['poll_interval'], timer['max_polls'])
-        poll_interval = timer['poll_interval']
-        max_polls = timer['max_polls']
-
-        while True:
-            # Release any thread-local DB connection acquired in the PREVIOUS
-            # iteration before we sleep again — a long-lived (or unlimited)
-            # timer would otherwise pin a connection across every poll_interval
-            # sleep, leaking a connection-semaphore slot for its whole life.
-            # Placed at loop top so every continue/break path is covered.
-            try:
-                from lib.database import close_thread_db
-                close_thread_db()
-            except Exception as _ce:
-                logger.debug('[Timer:%s] close_thread_db failed: %s', tid, _ce)
-
-            # Check if still active
-            with _timers_lock:
-                if tid not in _active_timers:
-                    logger.info('[Timer:%s] Removed from active registry — stopping', tid)
-                    break
-
-            # Sleep first (give the initial task time to finish before first poll)
-            time.sleep(poll_interval)
-
-            # Re-check after sleep
-            with _timers_lock:
-                if tid not in _active_timers:
-                    logger.info('[Timer:%s] Removed from active registry after sleep — stopping', tid)
-                    break
-
-            # Refresh timer state from DB (in case of external cancel)
-            current = _get_timer_row(tid)
-            if not current or current['status'] != 'active':
-                logger.info('[Timer:%s] Status is %s — stopping poll loop',
-                            tid, current['status'] if current else 'deleted')
-                break
-
-            # Check max_polls
-            poll_count = current.get('poll_count', 0)
-            if max_polls > 0 and poll_count >= max_polls:
-                logger.info('[Timer:%s] Max polls (%d) exhausted — marking exhausted',
-                            tid, max_polls)
-                _mark_exhausted(tid)
-                break
-
-            # poll_count is the DB count BEFORE this poll; the poll about to
-            # run is therefore #(poll_count+1). Mint a stable id so this exact
-            # check is locatable across the log, the DB row, and the UI.
-            this_poll_num = poll_count + 1
-            poll_id = f'{tid}.p{this_poll_num}'
-            # Run poll
-            try:
-                (ready, reason, tokens_used, skipped, parse_error, cmd_output,
-                 poll_model, _tool_trace, raw_content) = poll_timer(tid)
-            except Exception as e:
-                logger.error('[Timer:%s] Poll %s error: %s', tid, poll_id, e, exc_info=True)
-                _record_poll(tid, 'error', str(e)[:200], 0, poll_id=poll_id,
-                             raw_output=str(e)[:2000])
-                _increment_poll_count(tid, 'error', str(e)[:200])
-                continue
-
-            # Skipped polls (unchanged command output) — no LLM call,
-            # no DB record, no SSE event — just silently wait. We STILL
-            # increment poll_count so a timer whose check_command output never
-            # changes deterministically reaches max_polls and retires, instead
-            # of polling forever (zombie-timer leak).
-            if skipped:
-                logger.debug('[Timer:%s] Poll #%d skipped (output unchanged)',
-                             tid, this_poll_num)
-                _increment_poll_count(tid, 'skipped', 'output unchanged')
-                continue
-
-            decision = 'ready' if ready else ('parse_error' if parse_error else 'wait')
-            # Persist the raw LLM output only when it carries diagnostic value
-            # (a malformed decision) — a clean wait/ready needs no raw dump.
-            _raw_to_store = raw_content if parse_error else ''
-            _record_poll(tid, decision, reason, tokens_used, cmd_output, poll_model,
-                         poll_id=poll_id, raw_output=_raw_to_store)
-            _increment_poll_count(tid, decision, reason)
-
-            logger.info('[Timer:%s] Poll %s: %s — %s (tokens=%d, model=%s)',
-                        tid, poll_id, decision, reason[:80], tokens_used,
-                        poll_model or '?')
-
-            if ready:
-                logger.info('[Timer:%s] ✅ Conditions met — executing continuation', tid)
-                exec_id = _execute_continuation(current)
-                if exec_id:
-                    logger.info('[Timer:%s] 🚀 Continuation started: task=%s', tid, exec_id[:8])
-                else:
-                    logger.error('[Timer:%s] ❌ Continuation execution failed', tid)
-                break
-
-        logger.info('[Timer:%s] Poll loop ended', tid)
-        # Clean up registry
-        with _timers_lock:
-            _active_timers.pop(tid, None)
-        # Final release of this thread's DB connection back to the pool.
-        try:
-            from lib.database import close_thread_db
-            close_thread_db()
-        except Exception as _ce:
-            logger.debug('[Timer:%s] close_thread_db failed at loop end: %s', tid, _ce)
-
-    # Register and start
-    t = threading.Thread(target=_loop, daemon=True, name=f'timer-poll-{timer_id}')
-    with _timers_lock:
-        _active_timers[timer_id] = t
-    t.start()
-    logger.info('[Timer:%s] Background poll thread started', timer_id)
-
-
 def _increment_poll_count(timer_id: str, decision: str, reason: str) -> None:
     """Update the timer's poll count and last-poll fields in DB."""
     try:
@@ -943,97 +547,3 @@ def _mark_expired(timer_id: str) -> None:
         _active_timers.pop(timer_id, None)
     with _cmd_outputs_lock:
         _last_cmd_outputs.pop(timer_id, None)
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-#  Resume on server restart
-# ═════════════════════════════════════════════════════════════════════════════
-
-def resume_active_timers() -> int:
-    """Resume all timers with status='active' from DB.
-
-    Called on server startup. Returns the number of timers resumed.
-    """
-    try:
-        from lib.database import DOMAIN_SYSTEM, get_thread_db
-        db = get_thread_db(DOMAIN_SYSTEM)
-        rows = db.execute(
-            "SELECT * FROM timer_watchers WHERE status='active' "
-            "ORDER BY created_at ASC"
-        ).fetchall()
-        rows = [dict(r) for r in rows]
-
-        now = datetime.now()
-        cap = _resume_concurrency_cap()
-
-        # ── Pass 1: age-sweep — expire zombies that outlived their budget ──
-        survivors: list[dict] = []
-        expired = 0
-        for timer in rows:
-            created_raw = timer.get('created_at') or ''
-            age = None
-            try:
-                if created_raw:
-                    age = (now - datetime.fromisoformat(created_raw)).total_seconds()
-            except (TypeError, ValueError) as _pe:
-                logger.debug('[Timer:%s] Unparseable created_at=%r: %s',
-                             timer.get('id'), created_raw, _pe)
-            if age is not None and age > _resume_max_age_seconds(timer):
-                _mark_expired(timer['id'])
-                expired += 1
-                logger.warning('[Timer:%s] Auto-expired on resume — age %.0fh exceeds '
-                               'budget (poll_count=%s/%s)', timer['id'], age / 3600.0,
-                               timer.get('poll_count'), timer.get('max_polls'))
-                continue
-            survivors.append(timer)
-
-        if expired:
-            logger.warning('[Timer] Auto-expired %d over-age zombie timer(s) on startup',
-                           expired)
-
-        # ── Pass 2: re-spawn survivors, capped ─────────────────────────────
-        count = 0
-        skipped = 0
-        for timer in survivors:
-            timer_id = timer['id']
-            # NB: must NOT hold _timers_lock across start_timer_loop() — that
-            # function re-acquires the (non-reentrant) _timers_lock to register
-            # the thread, so calling it while holding the lock self-deadlocks
-            # the resume thread and pins _timers_lock forever.
-            with _timers_lock:
-                already_active = timer_id in _active_timers
-            if already_active:
-                continue
-            if cap > 0 and count >= cap:
-                skipped += 1
-                continue
-            start_timer_loop(timer_id)
-            count += 1
-            logger.info('[Timer:%s] Resumed on server startup', timer_id)
-
-        if skipped:
-            logger.warning('[Timer] Resume cap (%d) reached — %d active timer(s) NOT '
-                           'resumed this boot (will retry next restart). Set '
-                           'TOFU_TIMER_RESUME_CAP to raise.', cap, skipped)
-        if count > 0:
-            logger.info('[Timer] Resumed %d active timer(s) on startup', count)
-        return count
-    except Exception as e:
-        logger.warning('[Timer] Failed to resume active timers: %s', e, exc_info=True)
-        return 0
-
-
-def get_active_timer_count() -> int:
-    """Return count of in-memory active timer threads."""
-    with _timers_lock:
-        return len(_active_timers)
-
-
-__all__ = [
-    'create_timer', 'cancel_timer', 'force_trigger_timer',
-    'get_timer', 'list_active_timers', 'get_timer_poll_log',
-    'poll_timer', 'start_timer_loop', 'resume_active_timers',
-    'get_active_timer_count',
-    # Used by scheduler/executor.py for inline blocking poll:
-    '_record_poll', '_increment_poll_count', '_mark_exhausted',
-]

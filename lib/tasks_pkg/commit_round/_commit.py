@@ -1,12 +1,5 @@
-"""Per-round file-history commit + modified-file derivation.
+"""Per-round file-history SNAPSHOT daemon.
 
-Extracted from ``lib/tasks_pkg/orchestrator.py`` (2026-06-24) — a
-self-contained, daemon-thread-decoupled file-history concern with no
-coupling to the orchestration loop beyond the task dict + event helpers.
-
-  - ``derive_round_modified_files`` — build a round's authoritative file-change
-    list from the per-root modifications journal (conversation-isolated via
-    taskId stamping). Called by ``_finalize_and_emit_done``.
   - ``_spawn_async_commit_round`` / ``_run_commit_round_async`` — run
     ``file_history.make_snapshot`` in a daemon thread so the snapshot persist
     can't block ``persist_task_result`` → ``_dispatch_queued_message``; emit a
@@ -15,10 +8,10 @@ coupling to the orchestration loop beyond the task dict + event helpers.
   - ``_patch_assistant_message_with_git`` — persist the snapshotId onto the
     conversation's assistant message after the SSE reader may have closed.
 
-``orchestrator`` imports all four back, so its internal call sites are
-unchanged. Dependency is one-directional: this module imports from
-``lib.agent_core.events`` + ``lib.tasks_pkg.manager`` (append_event), never the
-reverse.
+Dependency is one-directional: imports from ``lib.agent_core.events`` +
+``lib.tasks_pkg.manager`` (append_event), never the reverse.  The actual
+``make_snapshot`` lives in ``lib.file_history`` (imported lazily inside the
+daemon body) — this module never redefines it.
 """
 
 from __future__ import annotations
@@ -32,97 +25,6 @@ from lib.log import get_logger
 from lib.tasks_pkg.manager import append_event
 
 logger = get_logger(__name__)
-
-
-def derive_round_modified_files(task: dict, project_path: str | None,
-                                project_paths: list[str] | None) -> tuple[list[dict], int, bool]:
-    """Build this round's authoritative file-change list from the journal.
-
-    The modifications journal is keyed per-root (``session_dir =
-    md5(base_path)``), so a write to an EXTRA workspace root lands in THAT
-    root's journal — not the primary's.  Scanning only ``project_path``
-    (the primary) makes extra-root edits invisible, which in turn lets the
-    project-global file-history side-channel seed ``modifiedFileList`` with
-    a CONCURRENT conversation's edit instead of this round's real edits.
-
-    This helper scans the primary root PLUS every extra root in
-    ``project_paths[1:]``, keeps only modifications stamped with THIS
-    task's id (falling back to a start-timestamp filter for legacy mods),
-    and returns ``(file_list, count, used_ts_fallback)``.  Because each mod
-    is taskId-stamped at write time, the result is conversation-isolated
-    and cannot leak across conversations.
-
-    Args:
-        task: The task dict (needs ``id``, ``convId``, ``created_at``).
-        project_path: Primary workspace root abs path.
-        project_paths: Full ``cfg['projectPaths']`` list (index 0 == primary);
-            indices 1.. are extra roots.
-
-    Returns:
-        ``(file_list, count, used_ts_fallback)`` where ``file_list`` is a
-        list of ``{path, action, root?}`` dicts keyed uniquely by
-        ``(root, path)``.
-    """
-    from lib.project_mod import get_modifications
-
-    conv_id = task.get('convId')
-    scan_roots: list[str] = []
-    seen_roots: set[str] = set()
-    for p in ([project_path] + list((project_paths or [])[1:])):
-        if p and p not in seen_roots:
-            seen_roots.add(p)
-            scan_roots.append(p)
-
-    turn_mods: list[dict] = []
-    used_ts_fallback = False
-    for root in scan_roots:
-        root_mods = get_modifications(root, conv_id=conv_id) or []
-        if not root_mods:
-            continue
-        own = [m for m in root_mods if m.get('taskId') == task.get('id')]
-        if not own:
-            task_start = task.get('created_at', 0)
-            own = [m for m in root_mods if m.get('timestamp', 0) >= task_start]
-            if own:
-                used_ts_fallback = True
-        turn_mods.extend(own)
-
-    if not turn_mods:
-        return [], 0, used_ts_fallback
-
-    seen: dict[tuple[str, str], dict] = {}
-    for m in turn_mods:
-        p = m.get('path', '?')
-        t = m.get('type', '')
-        root_name = m.get('root', '') or ''
-        if t == 'write_file':
-            action = 'created' if not m.get('existed', True) else 'written'
-        elif t in ('apply_diff', 'apply_diffs'):
-            action = 'patched'
-        elif t in ('insert_content', 'insert_contents'):
-            action = 'inserted'
-        elif t == 'run_command':
-            # Resolve the exists-check against the mod's OWN root
-            # (basePath), not the primary, so extra-root deletes classify
-            # correctly.
-            base = m.get('basePath') or project_path or ''
-            abs_p = p if os.path.isabs(p) else os.path.join(base, p)
-            if not m.get('existed', True):
-                action = 'created'
-            elif 'originalContent' in m and not os.path.exists(abs_p):
-                action = 'deleted'
-            else:
-                action = 'modified'
-        else:
-            action = t
-        seen[(root_name, p)] = {'action': action, 'root': root_name}
-
-    file_list = [
-        {'path': p, 'action': info['action'],
-         **({'root': info['root']} if info['root'] else {})}
-        for (root_name, p), info in seen.items()
-    ]
-    return file_list, len(turn_mods), used_ts_fallback
 
 
 def _spawn_async_commit_round(task: dict, project_enabled: bool, project_path: str | None) -> None:
@@ -146,119 +48,6 @@ def _spawn_async_commit_round(task: dict, project_enabled: bool, project_path: s
     except Exception as e:
         logger.warning('[Task:%s] failed to spawn async commit thread: %s',
                        task['id'][:8], e, exc_info=True)
-
-
-def _spawn_async_profile_consolidation(task: dict, messages: list,
-                                       cfg: dict | None = None) -> None:
-    """Run the layer-3 preference consolidation in a daemon thread.
-
-    Decoupled from ``_finalize_and_emit_done`` so the per-turn cheap-LLM
-    consolidation round-trip can NEVER sit on the path between loop-exit and
-    the ``done`` event — the user sees the turn finish immediately, and any
-    "Noted: you prefer X" moment arrives a beat later as a post-done
-    ``preference_learned`` event (best-effort live + persisted for reload).
-
-    Gated on ``task['_profileConsolidateEligible']`` (set at the prefetch gate
-    where ``memory_enabled``/``has_real_tools`` are in scope) and a clean
-    finish (no error). ``messages`` is captured by reference — the consolidation
-    pass only READS it (recent-surface extraction), so the post-done snapshot
-    is fine.
-    """
-    if task.get('error') or not task.get('_profileConsolidateEligible'):
-        return
-    if not task.get('id'):
-        return
-    try:
-        threading.Thread(
-            target=_run_profile_consolidation_async,
-            args=(task, messages),
-            name=f'profile-consolidate-{task["id"][:8]}',
-            daemon=True,
-        ).start()
-    except Exception as e:
-        logger.warning('[Task:%s] failed to spawn consolidation thread: %s',
-                       task['id'][:8], e, exc_info=True)
-
-
-def _run_profile_consolidation_async(task: dict, messages: list) -> None:
-    """Daemon-thread body: run consolidation, emit + persist learned prefs."""
-    tid = task['id'][:8]
-    try:
-        from lib.memory.profile_consolidate import run_profile_consolidation
-        learned = run_profile_consolidation(messages, task=task)
-    except Exception as e:
-        logger.warning('[Task:%s] profile consolidation failed: %s',
-                       tid, e, exc_info=True)
-        return
-    if not learned:
-        return
-
-    task['_preferencesLearned'] = learned
-    # Best-effort LIVE delivery: append_event fans out over SSE + push to any
-    # still-connected client (and a disconnected client recovers it via the
-    # DB patch below on reload).
-    for pref in learned:
-        try:
-            append_event(task, build_event(
-                EventType.PREFERENCE_LEARNED,
-                kind=pref.get('kind', ''),
-                summary=pref.get('summary', ''),
-                pending=bool(pref.get('pending')),
-                id=pref.get('id', ''),
-            ))
-        except Exception as e:
-            logger.debug('[Task:%s] preference_learned emit failed: %s', tid, e)
-
-    # Persist onto the conversation's assistant message so the chip survives a
-    # reload even when the SSE reader already closed (mirrors
-    # _patch_assistant_message_with_git).
-    try:
-        _patch_assistant_message_with_prefs(task, learned)
-    except Exception as e:
-        from lib.database import log_db_finalize_error
-        log_db_finalize_error(logger, 'warning', e,
-                              f'[Task:{tid}] persist preferences_learned failed')
-
-
-def _patch_assistant_message_with_prefs(task: dict, learned: list) -> None:
-    """Write ``_preferencesLearned`` onto the conversation's assistant message.
-
-    Called from the consolidation daemon AFTER ``persist_task_result`` ran, so
-    the chip is recoverable on reload. Mirrors
-    :func:`_patch_assistant_message_with_git`'s message-locating logic.
-    """
-    conv_id = task.get('convId') or ''
-    task_id = task.get('id') or ''
-    if not (conv_id and task_id and learned):
-        return
-    from lib.agent_core.store import get_conversation_store
-    store = get_conversation_store()
-    loaded = store.load_conversation_messages(conv_id)
-    if loaded is None:
-        return
-    messages, _updated_at = loaded
-    if not isinstance(messages, list) or not messages:
-        return
-    target_idx = -1
-    for i in range(len(messages) - 1, -1, -1):
-        m = messages[i]
-        if not isinstance(m, dict) or m.get('role') != 'assistant':
-            continue
-        if m.get('_taskId') == task_id:
-            target_idx = i
-            break
-        if target_idx == -1:
-            target_idx = i
-    if target_idx < 0:
-        return
-    messages[target_idx]['_preferencesLearned'] = learned
-    try:
-        store.save_conversation_messages(conv_id, messages)
-        logger.info('[Task:%s] persisted %d preference_learned to conv=%s msg[%d]',
-                    task_id[:8], len(learned), conv_id[:8], target_idx)
-    except Exception as e:
-        logger.warning('[Task:%s] preferences_learned DB write failed: %s',
-                       task_id[:8], e, exc_info=True)
 
 
 def _run_commit_round_async(task: dict, project_path: str) -> None:
@@ -597,4 +386,3 @@ def _patch_assistant_message_with_git(task: dict, amend_evt: dict) -> None:
     except Exception as _e:
         logger.warning('[Task:%s] gitSha DB write failed: %s',
                        task_id[:8], _e, exc_info=True)
-

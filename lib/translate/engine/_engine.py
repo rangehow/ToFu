@@ -18,33 +18,11 @@ import time
 from lib import translate_cache
 from lib.log import get_logger
 
-from .dedup import _dedup_repetition_loop
-from .prompt import _wrap_for_translation
+from ..dedup import _dedup_repetition_loop
+from ..prompt import _wrap_for_translation
+from ._split import _ends_midsentence
 
 logger = get_logger(__name__)
-
-
-# Characters that legitimately END a complete translation. A result whose
-# last non-space char is NOT one of these ended mid-sentence — the dominant
-# silent-truncation mode where a cheap model stops early with
-# finish_reason=stop (NOT length) and the byte count still clears the ratio
-# floor. Covers CJK full-width terminators + Latin sentence enders + closing
-# brackets/quotes/fences a complete segment can legitimately end on.
-_SENTENCE_END_CHARS = frozenset(
-    '。．.！!？?…～~：:；;、,，)）]】》」』”"\'`’*_>')
-
-
-def _ends_midsentence(text: str) -> bool:
-    """True when ``text`` does NOT end on a sentence terminator/closer.
-
-    A complete translation ends on punctuation or a closing bracket/fence; a
-    body that ends on a bare word/identifier char stopped mid-generation. Pure;
-    empty / whitespace-only → False (the empty check handles that separately).
-    """
-    t = (text or '').rstrip()
-    if not t:
-        return False
-    return t[-1] not in _SENTENCE_END_CHARS
 
 
 def _build_trace(*, path, model, in_chars, out_chars, attempts=1,
@@ -481,8 +459,7 @@ def _translate_one_chunk(chunk, system_prompt, chunk_label='',
         _src_stripped = chunk.strip()
         # When the source is ALREADY in the target language, verbatim output
         # is a legitimate pass-through, not an echo. Translating Chinese→Chinese
-        # correctly returns (near-)identical text; flagging that as a no-op
-        # would burn the retry budget and then fail the whole translation.
+        # corre
         _target_is_chinese = ((target or '').lower().startswith('chinese')
                               or 'zh' in (target or '').lower())
         _src_already_target = _target_is_chinese and is_predominantly_chinese(_src_stripped)

@@ -30,13 +30,34 @@ async function initActiveTasks() {
        its messages in the same request, eliminating the second round-trip
        that shows "loading..." */
     const prefetchTarget = activeConvId || sessionStorage.getItem('tofu_activeConvId') || null;
-    const [, , activeResp] = await Promise.all([
+
+    /* ★ Folder loading is DECOUPLED from the conversation/active-task fetch.
+     *   It used to be a third leg of the Promise.all below — but Promise.all
+     *   short-circuits on the FIRST sibling rejection and discards the other
+     *   legs, so a transient failure in loadConversationsFromServer /
+     *   activeResponse would skip folder loading entirely AND jump past the
+     *   catch, leaving _folders empty with no recovery (the folder rail
+     *   vanishes and only the "+ New folder" quick-add shows even though 19
+     *   folders exist server-side). loadFolders owns its own bounded-backoff
+     *   self-heal, but that only fires from loadFolders' OWN catch — which
+     *   never ran when a sibling sank the shared Promise.all first. Kick it off
+     *   in parallel (no perf loss) but isolate its fate: its own .catch fires
+     *   the retry, and _migratePinnedToFolder is chained AFTER folders resolve
+     *   so it doesn't race an unloaded folder list. */
+    const _foldersDone = (typeof loadFolders === 'function'
+      ? Promise.resolve(loadFolders())
+      : Promise.resolve()
+    ).then(() => {
+      if (typeof _migratePinnedToFolder === 'function') _migratePinnedToFolder();
+    }).catch((e) => {
+      console.warn('[initActiveTasks] folder load failed (isolated):', e && e.message);
+      if (typeof _scheduleFolderLoadRetry === 'function') _scheduleFolderLoadRetry();
+    });
+
+    const [, activeResp] = await Promise.all([
       loadConversationsFromServer(prefetchTarget),
-      typeof loadFolders === 'function' ? loadFolders() : Promise.resolve(),
       Api.chat.activeResponse(),
     ]);
-    /* ★ Migrate pinned conversations to a "⭐ 置顶" folder (one-time) */
-    if (typeof _migratePinnedToFolder === 'function') _migratePinnedToFolder();
     if (!activeResp || !activeResp.ok) {
       _ensureNewest();
       return;

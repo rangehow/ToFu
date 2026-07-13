@@ -36,6 +36,8 @@ class _FakeStore:
         self._next_archive_id = 100
         self.saved = None           # the messages passed to CAS (post-rewrite)
         self._fail_cas = False
+        self.search_synced = False  # True iff the search-aware CAS path ran
+        self.notified = False       # True iff conv-changed was pushed
 
     def load_conversation_messages(self, conv_id):
         return (list(self.messages), self.updated_at)
@@ -66,6 +68,16 @@ class _FakeStore:
         self.saved = list(messages)
         self.updated_at += 1
         return 1
+
+    def cas_sync_conversation_with_search(self, conv_id, messages, expected_updated_at):
+        # CAS variant that ALSO refreshes msg_count + search_text + FTS. The
+        # engine MUST use this (not the plain cas_update) because compaction
+        # removes whole messages. Record that it was the path taken.
+        self.search_synced = True
+        return self.cas_update_conversation_messages(conv_id, messages, expected_updated_at)
+
+    def notify_conversation_changed(self, conv_id):
+        self.notified = True
 
 
 def _install(monkeypatch, store, summary='COMPRESSED SUMMARY'):
@@ -162,6 +174,11 @@ def test_manual_compaction_persists_summary(monkeypatch):
 
     assert res['ok'] is True
     assert store.saved is not None, 'CAS write must have happened'
+    # Must use the search-aware CAS path (refreshes msg_count+search_text+FTS)
+    # because compaction removes whole messages; a plain cas_update would leave
+    # the sidebar count stale and search matching compacted-away text.
+    assert store.search_synced is True, 'must persist via cas_sync_conversation_with_search'
+    assert store.notified is True, 'must notify conv-changed after a landed write'
     assert res['msgsAfter'] < res['msgsBefore'] == before
     # summary message present, exactly one
     summaries = [m for m in store.messages if m.get('_isCompactionSummary')]

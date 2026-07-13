@@ -105,6 +105,45 @@ class DefaultConversationStore:
         affected = getattr(cur, 'rowcount', None)
         return affected if affected is not None else 0
 
+    def cas_sync_conversation_with_search(self, conv_id, messages, expected_updated_at):
+        """CAS overwrite that ALSO refreshes msg_count + search_text + FTS.
+
+        The CAS-guarded sibling of :meth:`sync_conversation_with_search`: writes
+        only if the row's ``updated_at`` still equals ``expected_updated_at``
+        (0 rows affected → a concurrent writer won → caller treats as a skip),
+        and updates the full-text-search index ONLY on a landed write so a
+        losing race never repoints FTS at content it didn't commit.
+
+        Use this (not the plain ``cas_update_conversation_messages``) whenever a
+        write CHANGES THE MESSAGE SET — e.g. manual /compact removes whole
+        messages, so msg_count and the searchable text genuinely change; a plain
+        CAS would leave the sidebar count stale and let search still match
+        compacted-away text.  Returns affected-row count (0 = skipped).
+        """
+        import time
+        from lib.conversations import build_search_text, update_conversation_fts
+        from lib.database import DOMAIN_CHAT, get_thread_db, json_dumps_pg
+        db = get_thread_db(DOMAIN_CHAT)
+        messages_json = json_dumps_pg(messages)
+        search_text = build_search_text(messages)
+        now_ms = int(time.time() * 1000)
+        cur = db.execute(
+            'UPDATE conversations SET messages=?, updated_at=?, msg_count=?, '
+            'search_text=? WHERE id=? AND user_id=1 AND updated_at=?',
+            (messages_json, now_ms, len(messages), search_text, conv_id,
+             expected_updated_at),
+        )
+        db.commit()
+        affected = getattr(cur, 'rowcount', None)
+        affected = affected if affected is not None else 0
+        if affected:
+            try:
+                update_conversation_fts(db, conv_id, search_text)
+            except Exception as e:
+                logger.debug('[Store] cas_sync FTS update skipped conv=%s: %s',
+                             conv_id[:8] if conv_id else '?', e)
+        return affected
+
     def ensure_compaction_schema(self):
         """Create transcript_archive table + index if absent (safety net)."""
         from lib.database import DOMAIN_CHAT, get_thread_db

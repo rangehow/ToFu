@@ -360,7 +360,12 @@ def compact_conversation_now(
                            'reductionPct': reduction_pct})
 
     # ── PERSIST (CAS on updated_at — a concurrent writer aborts us) ──
-    affected = store.cas_update_conversation_messages(
+    # Manual compaction REMOVES whole messages, so we must refresh msg_count +
+    # search_text + FTS in the same write (a plain cas_update leaves the sidebar
+    # count stale and lets search still match compacted-away text). The CAS
+    # guard closes the idle-check→write race: any turn that started meanwhile
+    # bumped updated_at → 0 rows → we abort as `stale` rather than clobber it.
+    affected = store.cas_sync_conversation_with_search(
         conv_id, new_messages, updated_at)
     if not affected:
         logger.warning('[ManualCompact] conv=%s CAS lost — concurrent write, '
@@ -373,6 +378,15 @@ def compact_conversation_now(
                 archive_id, summary_text, int(tokens_after), int(msgs_after))
         except Exception as e:
             logger.debug('[ManualCompact] archive row update failed: %s', e)
+
+    # Cross-device sync: the body was rewritten (and rev bumped), so push the
+    # post-write rev → a sibling tab with this conv open refetches without a
+    # manual refresh (mirrors the L1-persist path). Best-effort.
+    try:
+        store.notify_conversation_changed(conv_id)
+    except Exception as e:
+        logger.debug('[ManualCompact] conv=%s conv-changed notify skipped: %s',
+                     log_id, e)
 
     audit_log('manual_compaction', conv_id=conv_id, archive_id=archive_id,
               tokens_before=int(tokens_before), tokens_after=int(tokens_after),

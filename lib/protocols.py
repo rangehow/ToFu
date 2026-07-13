@@ -330,6 +330,22 @@ class ConversationStore(Protocol):
         """
         ...
 
+    def cas_sync_conversation_with_search(self, conv_id: str, messages: list,
+                                          expected_updated_at: int) -> int:
+        """CAS overwrite that ALSO refreshes ``msg_count`` + ``search_text`` +
+        the FTS index (the CAS-guarded sibling of
+        :meth:`sync_conversation_with_search`).
+
+        Writes only if the row's ``updated_at`` still equals
+        ``expected_updated_at`` (0 rows affected → a concurrent writer won → the
+        caller treats it as a skip), and updates FTS ONLY on a landed write.
+        Use it — not :meth:`cas_update_conversation_messages` — whenever a write
+        CHANGES THE MESSAGE SET (e.g. manual compaction removes whole messages),
+        so the sidebar count and full-text search stay consistent with the
+        rewritten body.  Returns affected-row count.
+        """
+        ...
+
     def ensure_compaction_schema(self) -> None:
         """Create the ``transcript_archive`` table/index if absent (idempotent).
 

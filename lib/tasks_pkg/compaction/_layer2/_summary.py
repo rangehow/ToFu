@@ -1,0 +1,115 @@
+"""Layer 2 — query-aware LLM summary generation.
+
+Wraps the cheap-model dispatch that turns the OLD conversation region into a
+concise working-state snapshot (``_generate_query_aware_summary``).
+"""
+
+import re
+
+from lib.log import get_logger
+from lib.tasks_pkg.compaction._constants import _SUMMARY_MAX_TOKENS
+from lib.tasks_pkg.compaction._tokens import _human_size
+from lib.tasks_pkg.compaction._layer2._prompt import (
+    _SUMMARY_SYSTEM_PROMPT,
+    _format_messages_for_summary,
+    _summary_input_char_budget,
+)
+
+logger = get_logger(__name__)
+
+
+def _generate_query_aware_summary(messages: list, current_query: str,
+                                   log_prefix: str = '',
+                                   conv_id: str = '',
+                                   task: dict | None = None) -> str | None:
+    """Call a cheap model to generate a query-aware summary.
+
+    Degrades gracefully so the proactive path actually works on a
+    vanilla/exported deploy: the input is capped to the model's real token
+    window (see ``_summary_input_char_budget``), and if the preferred
+    ``capability='cheap'`` dispatch fails (no model tagged cheap, or the
+    single model is momentarily exhausted) it retries once against any
+    text-capable slot before giving up.
+    """
+    from lib.llm_dispatch import dispatch_chat
+
+    formatted = _format_messages_for_summary(messages)
+    tag = f'{log_prefix}[Summary]' if log_prefix else '[Summary]'
+
+    logger.info('%s Formatting %d messages for summary (%s), query=%.80s',
+                tag, len(messages), _human_size(len(formatted)), current_query)
+
+    _char_budget = _summary_input_char_budget(task)
+    if len(formatted) > _char_budget:
+        original_len = len(formatted)
+        # Keep the head (early goals/decisions) and a larger tail (recent
+        # working state), eliding the middle — 1/3 head, 2/3 tail.
+        _head = _char_budget // 3
+        _tail = _char_budget - _head
+        formatted = (
+            formatted[:_head]
+            + '\n\n... [middle of conversation omitted for summary] ...\n\n'
+            + formatted[-_tail:]
+        )
+        logger.info('%s Input truncated to model window: %s → %s (budget %s)',
+                    tag, _human_size(original_len), _human_size(len(formatted)),
+                    _human_size(_char_budget))
+
+    user_content = (
+        f'## Current User Query\n{current_query}\n\n'
+        f'## Conversation History to Compress\n\n{formatted}'
+    )
+
+    def _dispatch(capability: str):
+        return dispatch_chat(
+            [
+                {'role': 'system', 'content': _SUMMARY_SYSTEM_PROMPT},
+                {'role': 'user', 'content': user_content},
+            ],
+            max_tokens=_SUMMARY_MAX_TOKENS,
+            temperature=0,
+            capability=capability,
+            log_prefix=tag,
+        )
+
+    try:
+        try:
+            content, usage = _dispatch('cheap')
+        except Exception as _cheap_e:
+            # Preferred cheap tier failed — retry once against ANY text slot
+            # (a deploy may have no model tagged 'cheap' at all). The
+            # dispatcher already widens 'cheap'→'text' internally when no
+            # cheap slot exists, so this mainly covers a transient cheap-slot
+            # exhaustion; it's cheap insurance and makes the intent explicit.
+            logger.warning('%s cheap-tier summary dispatch failed (%s: %s) — '
+                           'retrying on any text-capable slot',
+                           tag, type(_cheap_e).__name__, _cheap_e)
+            content, usage = _dispatch('text')
+
+        if content:
+            in_tok = usage.get('prompt_tokens', 0)
+            out_tok = usage.get('completion_tokens', 0)
+            # Count this summary call's tokens toward the conversation's
+            # compaction cost — otherwise the L2 (chatui 'tofu') summary is
+            # invisible in task['usage'] and the arm looks cheaper than it is.
+            try:
+                from lib.tasks_pkg.compaction._compaction_usage import (
+                    record_compaction_usage)
+                record_compaction_usage(conv_id, usage, kind='L2')
+            except Exception as _ru_e:
+                logger.debug('%s record_compaction_usage failed: %s', tag, _ru_e)
+            content = re.sub(
+                r'<analysis>.*?</analysis>\s*',
+                '', content, flags=re.DOTALL,
+            )
+            logger.info('%s Summary generated: %d chars  in=%d  out=%d tokens',
+                        tag, len(content), in_tok, out_tok)
+            return content.strip()
+        else:
+            logger.warning('%s Summary model returned empty content', tag)
+            return None
+
+    except Exception as e:
+        logger.warning('%s Summary generation failed (will keep messages intact): %s: %s',
+                       tag, type(e).__name__, e)
+        return None

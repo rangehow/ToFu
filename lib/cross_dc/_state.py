@@ -1,58 +1,12 @@
 #!/usr/bin/env python3
-"""Cross-datacenter FUSE filesystem latency detection and mitigation.
+"""Cross-DC detection — shared state + all functions that rebind/read it.
 
-Problem
--------
-Distributed FUSE filesystems (e.g. BeeGFS, CephFS, GlusterFS) can mount
-paths from multiple storage clusters, some of which may be in remote
-datacenters.  When the server is in datacenter A but the user's project is
-on a path served by a remote cluster in datacenter B, every file I/O
-operation has cross-datacenter round-trip latency — typically 10-50× slower
-for metadata (stat, readdir) and even worse for recursive tree walks.
-
-Solution
---------
-This module:
-  1. Discovers storage clusters via configurable environment variables
-  2. Benchmarks each cluster on startup to measure actual I/O latency
-  3. Classifies clusters as local / slow / very_slow based on thresholds
-  4. Provides ``get_timeout_multiplier(path)`` for adaptive timeout adjustment
-  5. Provides ``cross_dc_warning(path)`` for tool-level user warnings
-
-Configuration
--------------
-All behavior is driven by environment variables and optional config overrides.
-No paths, cluster names, or datacenter identifiers are hardcoded.
-
-**Environment variables** (auto-detected):
-  - ``CROSS_DC_CLUSTER_MOUNTS`` — Primary. Format: ``cluster1:/path/a,cluster2:/path/b,...``
-  - ``LIBBGFS_CLUSTERMOUNTPATHS`` — Fallback (BeeGFS-specific).  Same format.
-  - ``CROSS_DC_LOCAL_IDC`` — Override for local datacenter identifier.
-  - ``HULK_IDC`` — Fallback for local datacenter identifier.
-
-**Config file** (optional): ``data/config/cross_dc.json``
-  .. code-block:: json
-
-     {
-       "cluster_mounts_env": "MY_CUSTOM_ENV_VAR",
-       "local_idc_env": "MY_IDC_VAR",
-       "slow_threshold_ms": 10,
-       "very_slow_threshold_ms": 30,
-       "slow_timeout_multiplier": 3,
-       "very_slow_timeout_multiplier": 5,
-       "enabled": true
-     }
-
-**On machines without these env vars, the module is a silent no-op.**
-
-Usage
------
-Called from ``set_project()`` and tool dispatch::
-
-    from lib.cross_dc import is_cross_dc, get_timeout_multiplier, cross_dc_warning
-
-    if is_cross_dc(project_path):
-        timeout *= get_timeout_multiplier(project_path)
+CRITICAL: every process-wide detection singleton lives HERE, and so does
+every function that ``global``-rebinds or reads it.  This keeps the
+``global`` declarations and their target variables in a single module so
+detection state never diverges.  The threshold/multiplier constants are
+also here because ``_apply_config`` rebinds them and ``_benchmark_clusters``
+/ ``get_latency_class`` read them.
 """
 
 import json
@@ -61,6 +15,8 @@ import threading
 import time
 
 from lib.log import get_logger
+
+from lib.cross_dc._probe import _PROBE_TIMEOUT_S, _probe_latency
 
 logger = get_logger(__name__)
 
@@ -82,9 +38,6 @@ _VERY_SLOW_THRESHOLD_S = 0.030  # 30ms
 # Timeout multipliers for cross-DC paths
 _SLOW_TIMEOUT_MULTIPLIER = 3       # 3× timeout for moderately slow clusters
 _VERY_SLOW_TIMEOUT_MULTIPLIER = 5  # 5× timeout for very slow clusters
-
-# Benchmark probe timeout per cluster
-_PROBE_TIMEOUT_S = 10.0
 
 # Cache duration — re-benchmark if older than this
 _BENCHMARK_TTL_S = 3600  # 1 hour
@@ -218,49 +171,6 @@ def _build_path_index(clusters):
             key = path.rstrip('/') + '/'
             index[key] = cluster_name
     return dict(sorted(index.items(), key=lambda x: -len(x[0])))
-
-
-def _probe_latency(path, timeout=_PROBE_TIMEOUT_S):
-    """Measure real I/O latency to a storage cluster.
-
-    Uses stat() on a non-existent path to avoid FUSE metadata cache hits.
-    Cached stat() on existing paths returns ~0ms even for cross-DC clusters,
-    so we must probe paths that force a round-trip to the metadata server.
-
-    Returns latency in seconds, or None if the probe timed out.
-    """
-    import random
-    result = [None]
-    event = threading.Event()
-
-    def _do_probe():
-        t0 = time.monotonic()
-        try:
-            # Probe a non-existent path to bypass FUSE metadata cache
-            probe_name = f'_latency_probe_{random.randint(100000, 999999)}'
-            probe_path = os.path.join(path, probe_name)
-            try:
-                os.stat(probe_path)
-            except FileNotFoundError as _e_audit:
-                logger.debug('[cross_dc] _do_probe caught %s: %s', type(_e_audit).__name__, _e_audit)
-                pass  # Expected — we're measuring the round-trip time
-            result[0] = time.monotonic() - t0
-        except OSError as _e_audit:
-            # Mount point itself is inaccessible
-            logger.debug('[cross_dc] _do_probe caught %s: %s', type(_e_audit).__name__, _e_audit)
-            result[0] = time.monotonic() - t0
-        finally:
-            event.set()
-
-    t = threading.Thread(target=_do_probe, daemon=True, name='cross-dc-probe')
-    t.start()
-    completed = event.wait(timeout=timeout)
-
-    if not completed:
-        logger.warning('[CrossDC] Probe timed out for %s (>%.0fs)', path, timeout)
-        return None
-
-    return result[0]
 
 
 def _benchmark_clusters(clusters):

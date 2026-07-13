@@ -16,7 +16,6 @@ from urllib.parse import unquote, urlparse
 
 import lib as _lib
 from lib.log import get_logger
-from tofu_search import fetch_page_content, looks_like_text_asset, perform_web_search
 from tofu_search.search.vertical import (detect_vertical_intent, search_vertical,
                                           search_vertical_domain, list_domains)
 
@@ -82,8 +81,9 @@ def _web_search_one(query: str, user_question: str, freshness: str = '',
         _vertical_pool = _TPE(max_workers=1)
         vertical_future = _vertical_pool.submit(plan)
 
+    from lib.tasks_pkg.handlers import search as _facade
     try:
-        results = perform_web_search(query, user_question=user_question, freshness=freshness)
+        results = _facade.perform_web_search(query, user_question=user_question, freshness=freshness)
     except Exception as e:
         logger.error('[Executor] web_search failed for query=%r: %s', query, e, exc_info=True)
         results = []
@@ -199,8 +199,9 @@ def _fetch_url_one(target_url: str, user_question: str, fetch_reason: str = ''):
             'error_msg': f'Rejected: {scheme}:// scheme (use read_files for local paths)',
         }
 
+    from lib.tasks_pkg.handlers import search as _facade
     try:
-        page_content = fetch_page_content(
+        page_content = _facade.fetch_page_content(
             target_url,
             max_chars=_lib.FETCH_MAX_CHARS_DIRECT,
             pdf_max_chars=_lib.FETCH_MAX_CHARS_PDF,
@@ -216,7 +217,7 @@ def _fetch_url_one(target_url: str, user_question: str, fetch_reason: str = ''):
     # Text assets (SVG / source / config files) come back from fetch_page_content
     # verbatim — they're NOT prose, so skip the article relevance/noise filter
     # which would mangle or wrongly drop them.
-    is_text_asset = looks_like_text_asset(target_url)
+    is_text_asset = _facade.looks_like_text_asset(target_url)
 
     if page_content and not is_pdf and not is_text_asset:
         from tofu_search.fetch.content_filter import IRRELEVANT_SENTINEL

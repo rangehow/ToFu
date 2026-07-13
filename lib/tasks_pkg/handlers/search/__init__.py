@@ -20,6 +20,17 @@ from lib.log import get_logger
 
 logger = get_logger(__name__)
 
+# ── tofu_search primitives re-exported as PACKAGE ATTRS so a test/consumer
+#    patching ``lib.tasks_pkg.handlers.search.perform_web_search`` (etc.) steers
+#    the _core primitives, which resolve these through this facade at call time.
+#    (The old single-file module imported them at module level, making them
+#    patchable on the module; this preserves that byte-identically.) ──
+from tofu_search import (  # noqa: E402,F401
+    perform_web_search,
+    fetch_page_content,
+    looks_like_text_asset,
+)
+
 # ── Core primitives (search/fetch) ──────────────────────────────────────────
 from lib.tasks_pkg.handlers.search._core import (  # noqa: E402,F401
     resolve_vertical,
@@ -46,6 +57,9 @@ from lib.tasks_pkg.handlers.search._handlers import (  # noqa: E402,F401
 )
 
 __all__ = [
+    'perform_web_search',
+    'fetch_page_content',
+    'looks_like_text_asset',
     'resolve_vertical',
     '_web_search_one',
     '_fetch_url_one',

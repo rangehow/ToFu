@@ -21,6 +21,17 @@ Only ONE top-level app script is intentionally unbundled — ``relay-admin.js``
 that would let a genuinely-orphaned new file hide behind it, we assert the
 invariant that MAKES it safe: it is a ``<script>`` tag in ``static/admin.html``
 and NOT in ``index.html``.
+
+SUBDIRECTORY BLIND SPOT (2026-07-13 paper-modes outage): the disk-orphan edge
+(Edge 1) only scans TOP-LEVEL ``static/js/*.js``. A file in a SUBDIRECTORY
+(e.g. ``paper/library.js``) forgotten from ``_DEFERRED_FILES`` is NOT caught by
+Edge 1, so its cross-file globals go undefined in the built bundle and every
+sibling that references them throws at runtime. ``paper-reader.js`` was
+decomposed (Epic E) and its library state moved to ``paper/library.js``; that
+file was missing from the manifest → the whole deferred bundle omitted it →
+``_paperLibrary``/``_loadPaperLibrary``/``_saveActivePaperState`` were undefined
+and EVERY paper sub-mode crashed on open. ``test_paper_reader_cross_file_globals_are_bundled``
+closes that specific gap structurally.
 """
 from __future__ import annotations
 
@@ -316,6 +327,93 @@ def test_feature_loader_entry_points_match_jsbundler():
             "feature-loader.js's _DEFERRED_ENTRY_POINTS array — its lazy stub "
             'would never be installed.'
         )
+
+
+# ── Paper decomposition: cross-file globals must be bundled (subdir gap) ──
+
+# The library-state globals that moved OUT of paper-reader.js into
+# paper/library.js (Epic E, 2026-07-11). paper-reader.js references these
+# inside enterPaperMode / exitPaperMode / _onReady; if library.js is missing
+# from the manifest they are undefined in the built bundle and every paper
+# sub-mode throws on open. These three are the ones observed in the outage.
+_PAPER_LIBRARY_GLOBALS = frozenset({
+    '_paperLibrary', '_loadPaperLibrary', '_saveActivePaperState',
+})
+
+
+def test_paper_library_is_deferred_not_core():
+    """paper/library.js (extracted from paper-reader.js, Epic E) must be in the
+    deferred bundle alongside paper-reader.js and NOT in the core bundle. A
+    half-revert (dropped from _DEFERRED_FILES) recreates the 2026-07-13 outage
+    where every paper mode crashed because library.js's globals were undefined."""
+    from lib.js_bundler import _BUNDLE_FILES, _DEFERRED_FILES
+    assert 'paper/library.js' in _DEFERRED_FILES, (
+        'paper/library.js must be in _DEFERRED_FILES — it owns _paperLibrary / '
+        '_loadPaperLibrary / _saveActivePaperState which paper-reader.js '
+        'references at runtime. Missing → every paper sub-mode crashes on open.'
+    )
+    assert 'paper/library.js' not in _BUNDLE_FILES, (
+        'paper/library.js is a deferred paper leaf — it must NOT also be in the '
+        'core _BUNDLE_FILES (double-load / duplicate-decl hazard).'
+    )
+    # library.js must precede paper-reader.js is NOT required (all cross-refs are
+    # inside function bodies, runtime), but both must be in the SAME deferred
+    # bundle so the concatenated window scope contains the definitions.
+    assert 'paper-reader.js' in _DEFERRED_FILES
+
+
+def test_paper_reader_cross_file_globals_are_bundled():
+    """The structural guard for the 2026-07-13 outage class: every paper-library
+    global that paper-reader.js REFERENCES but does NOT itself DEFINE must be
+    DEFINED in some other file listed in _DEFERRED_FILES. Because the whole
+    deferred list is concatenated into ONE window scope, "defined in a manifest
+    file" is exactly the condition that keeps the reference from being a runtime
+    ReferenceError.
+
+    This catches the subdirectory blind spot Edge 1 misses: a paper leaf module
+    extracted from paper-reader.js but forgotten from the manifest makes these
+    globals undefined in the built bundle, and paper-reader.js throws on the
+    first togglePaperMode → enterPaperMode call (taking down ALL paper modes)."""
+    from lib.js_bundler import _DEFERRED_FILES
+
+    reader_src = _read(os.path.join(JS_DIR, 'paper-reader.js'))
+
+    def _defined_in(src, sym):
+        return bool(
+            re.search(r'\b(?:function|var|let|const)\s+' + re.escape(sym) + r'\b', src)
+            or re.search(r'\basync\s+function\s+' + re.escape(sym) + r'\b', src)
+            or re.search(r'\bwindow\.' + re.escape(sym) + r'\s*=', src)
+        )
+
+    # Sanity: the globals we guard are genuinely REFERENCED by paper-reader.js
+    # (else the test is vacuous) and NOT defined there (they moved to library.js).
+    for sym in _PAPER_LIBRARY_GLOBALS:
+        assert re.search(r'\b' + re.escape(sym) + r'\b', reader_src), (
+            f'{sym} is no longer referenced in paper-reader.js — update this '
+            'guard to track the current paper cross-file globals.'
+        )
+        assert not _defined_in(reader_src, sym), (
+            f'{sym} is now DEFINED in paper-reader.js again — the extraction '
+            'was reverted; update this guard.'
+        )
+
+    # The real assertion: each referenced-but-not-locally-defined global must be
+    # defined in SOME _DEFERRED_FILES source (the concatenated bundle scope).
+    deferred_srcs = {
+        name: _read(os.path.join(JS_DIR, name))
+        for name in _DEFERRED_FILES
+        if os.path.exists(os.path.join(JS_DIR, name))
+    }
+    undefined = []
+    for sym in _PAPER_LIBRARY_GLOBALS:
+        if not any(_defined_in(src, sym) for src in deferred_srcs.values()):
+            undefined.append(sym)
+    assert not undefined, (
+        'paper-reader.js references these globals but NO file in _DEFERRED_FILES '
+        f'defines them (the leaf module is missing from the manifest): {sorted(undefined)}. '
+        'This is the 2026-07-13 outage: the built deferred bundle omits the file, '
+        'the globals are undefined, and every paper sub-mode throws on open.'
+    )
 
 
 # ── Whitelist justification (self-documenting exemption) ──────────────────

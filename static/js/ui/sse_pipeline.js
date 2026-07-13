@@ -128,10 +128,83 @@ async function _connectAutopilotKick(convId, taskId) {
     }
     debugLog(`Autopilot kick SSE failed: ${e.message}`, 'warn');
   }
+  /* ★ Tunnel-stutter fix (#2): bounded SSE resume before poll surrender — same
+   *   as connectToTask. The autopilot-kick carrier is short-lived but still
+   *   drops on a flaky tunnel; a resume keeps it on SSE. */
+  if (!sseWorked && !stream.controller.signal.aborted) {
+    try {
+      sseWorked = await _resumeSSEWithRetry(convId, taskId, stream, dummyAssistant);
+    } catch (e) {
+      if (e.name === 'AbortError') { twStop(convId); finishStream(convId); return; }
+      debugLog(`Autopilot kick SSE resume-retry failed: ${e.message}`, 'warn');
+    }
+  }
   if (!sseWorked && !stream.controller.signal.aborted) {
     debugLog(`Autopilot kick falling back to polling for ${taskId.slice(0, 8)}`, 'warn');
     await _pollFallback(convId, taskId, stream, dummyAssistant);
   }
+}
+
+/* ★ Bounded SSE resume-retry — the tunnel-stutter root-cause fix (#2).
+ *
+ *   On a buffering / flaky tunnel (VS Code port-forward, nginx, corporate
+ *   proxy) the SSE connection is dropped MID-TURN. `_trySSE` returns false on
+ *   that premature close, and the OLD path dropped STRAIGHT to `_pollFallback`
+ *   and stayed there for the entire rest of the turn → lumpy 300–2000ms
+ *   RTT-adaptive full-repaints (the reported stutter). But `_trySSE` already
+ *   stashed `stream._lastEventId` (the last received `id:` cursor) and re-armed
+ *   a fresh `stream.controller` right before returning false — everything
+ *   needed to RESUME a live SSE. The server replays post-cursor events via the
+ *   `Last-Event-ID` header (routes/chat.py) and live streaming continues.
+ *
+ *   So: re-open SSE while it keeps making PROGRESS instead of surrendering to
+ *   poll on the first drop. "Progress" = the cursor advanced since the previous
+ *   attempt; a reconnect that stalls (cursor unchanged → no new events) bails to
+ *   poll immediately. Only genuinely-blocked SSE (never delivered a tagged event
+ *   → NO cursor, or a stalled/exhausted resume) falls to poll — the correct
+ *   last resort for a proxy that strips event-stream entirely.
+ *
+ *   This never amplifies dead air: no cursor (zero real events ever) → return
+ *   false at once, no retry. Returns true iff a resume ran the stream to `done`
+ *   (SSE owns finishStream); false → caller falls through to poll. Lets a
+ *   user-stop AbortError propagate so connectToTask's single catch handles it.
+ */
+const _MAX_SSE_RESUME_ATTEMPTS = 6;
+async function _resumeSSEWithRetry(convId, taskId, stream, assistantMsg) {
+  let attempts = 0;
+  while (attempts < _MAX_SSE_RESUME_ATTEMPTS) {
+    if (stream.controller.signal.aborted) return false;
+    /* No cursor → SSE never delivered a real (id:-tagged) event this turn, so
+     * a resume would just replay the same snapshot and drop again. Surrender to
+     * poll — the right call when the proxy strips event-stream wholesale. */
+    const cursor = stream._lastEventId;
+    if (!cursor) return false;
+    attempts++;
+    debugLog(
+      `[connectToTask] ↻ SSE resume attempt ${attempts}/${_MAX_SSE_RESUME_ATTEMPTS} ` +
+      `via Last-Event-ID=${cursor} for task=${taskId.slice(0,8)} (tunnel premature-close recovery)`,
+      'warn'
+    );
+    const _ok = await _trySSE(convId, taskId, stream, assistantMsg);
+    if (_ok) return true;                       // resumed and ran to done
+    if (stream.controller.signal.aborted) return false;
+    /* The cursor did NOT advance vs the attempt we just made → the resume is
+     * stalled (reconnecting but no new events land). Stop retrying and let poll
+     * take over rather than spin. A cursor that DID advance = genuine choppy
+     * progress → loop again (still bounded by _MAX_SSE_RESUME_ATTEMPTS). */
+    if (stream._lastEventId === cursor) {
+      debugLog(
+        `[connectToTask] SSE resume stalled at cursor=${cursor} — surrendering to poll ` +
+        `for task=${taskId.slice(0,8)}`, 'warn'
+      );
+      return false;
+    }
+  }
+  debugLog(
+    `[connectToTask] SSE resume exhausted (${_MAX_SSE_RESUME_ATTEMPTS} attempts) ` +
+    `for task=${taskId.slice(0,8)} — surrendering to poll`, 'warn'
+  );
+  return false;
 }
 
 // ── Stream connection ──
@@ -489,6 +562,18 @@ async function connectToTask(convId, taskId, retries = 0, opts = {}) {
       return;
     }
     debugLog(`SSE failed: ${e.message}`, "warn");
+  }
+  /* ★ Tunnel-stutter fix (#2): before surrendering to the lumpy poll fallback,
+   *   try a bounded SSE resume via Last-Event-ID. On a buffering tunnel the SSE
+   *   drops mid-turn but can re-attach and keep live-streaming; only genuinely
+   *   blocked SSE falls through to poll. Idempotent + abort-safe (see helper). */
+  if (!sseWorked && !stream.controller.signal.aborted) {
+    try {
+      sseWorked = await _resumeSSEWithRetry(convId, taskId, stream, assistantMsg);
+    } catch (e) {
+      if (e.name === "AbortError") { twStop(convId); finishStream(convId); return; }
+      debugLog(`SSE resume-retry failed: ${e.message}`, "warn");
+    }
   }
   if (!sseWorked && !stream.controller.signal.aborted) {
     debugLog(`Falling back to polling for ${taskId.slice(0, 8)}`, "warn");

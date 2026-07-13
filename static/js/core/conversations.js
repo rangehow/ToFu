@@ -1866,7 +1866,15 @@ async function loadConversationMessages(convId) {
       }
 
       conv._needsLoad = false;
-      conv._serverMsgCount = Math.max(serverMsgs.length, conv.messages.length);
+      /* ★ Windowed-read truncation guard: when the server served only the tail
+       *   window (N msgs) of a longer conversation, stamp the sync baseline
+       *   from the AUTHORITATIVE full count (data.totalCount), NOT the window
+       *   length — otherwise syncConversationToServer's count-drop guard reads
+       *   `N < N` = false and a later PUT of the N-msg tail TRUNCATES the full
+       *   server conversation (permanent head loss on every windowed open). */
+      conv._serverMsgCount = _isWindowed && typeof data.totalCount === 'number'
+        ? data.totalCount
+        : Math.max(serverMsgs.length, conv.messages.length);
 
       /* ★ Update IndexedDB cache with authoritative server data */
       ConvCache.put(conv);

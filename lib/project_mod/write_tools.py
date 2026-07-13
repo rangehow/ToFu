@@ -504,11 +504,35 @@ def _resolve_write_path(base, rel_path, conv_id=None):
                 else:
                     # Interactive / no-task path: the human explicitly drove this
                     # write, so expanding the shared UI workspace is correct.
+                    _new_name = None
                     with _lock:
                         for rn, rs in _roots.items():
                             if (os.path.abspath(rs['path']).rstrip(os.sep) or rs['path']) == _anchor_norm:
                                 _new_name = rn
                                 break
+                    # ★ If the anchor is NOT already a registered root, actually
+                    #   REGISTER it globally so the interactive absolute-path
+                    #   write expands the shared workspace (the project bar's
+                    #   extraRoots). Gated on ``not conv_id`` so a background
+                    #   task can never reach here and pollute the global registry
+                    #   (that path is handled above). Without this the new root
+                    #   was only *signalled* to the UI but never populated into
+                    #   get_state().extraRoots.
+                    if _new_name is None and not conv_id:
+                        try:
+                            _info = add_project_root(anchor,
+                                                     name=os.path.basename(anchor))
+                            # add_project_root dedups the name on collision; find
+                            # the name it actually assigned for this anchor.
+                            with _lock:
+                                for rn, rs in _roots.items():
+                                    if (os.path.abspath(rs['path']).rstrip(os.sep)
+                                            or rs['path']) == _anchor_norm:
+                                        _new_name = rn
+                                        break
+                        except Exception as e:
+                            logger.warning('[WriteTools] global add_project_root '
+                                           'failed for %s: %s', anchor, e)
                     # ★ Also register the new root into THIS conversation's own
                     #   scoped registry (not just the global _roots). Without
                     #   this, a subsequent ``newroot:rel/path`` namespaced write

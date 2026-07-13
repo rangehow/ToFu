@@ -607,14 +607,53 @@ def chat_send():
         #   and immediately sends a new message, the old task may still
         #   have status='running' (abort is cooperative) but should NOT
         #   cause the new message to be enqueued.
-        has_running_task = False
+        #   ★ Classify the running tasks: a genuine (normal) worker turn must
+        #   still make the human wait, but an INVISIBLE autopilot follow-up
+        #   turn (a VU-spawned background turn carrying ``_autopilotParent`` /
+        #   ``_vu_subtask``) must NOT — the human once sat "QUEUED" for minutes
+        #   behind a background autopilot reply. So: if the ONLY running tasks
+        #   are autopilot follow-ups (and autopilot is armed), supersede them.
+        #   Keyed on the background MARKER, not the bare ``config.autopilot``
+        #   flag — the armed PRIMARY turn the user is watching carries the flag
+        #   but no marker, and must be queued behind, never aborted.
+        running_tasks = []
         with tasks_lock:
             for t in tasks.values():
                 if (t.get('convId') == conv_id
                         and t.get('status') == 'running'
                         and not t.get('aborted')):
-                    has_running_task = True
-                    break
+                    running_tasks.append(t)
+
+        from lib.message_queue import has_autopilot_marker
+
+        def _is_autopilot_followup(t):
+            return bool(t.get('_autopilotParent') or t.get('_vu_subtask')
+                        or t.get('_autopilot_kick'))
+
+        has_running_task = bool(running_tasks)
+        only_autopilot_followups = (
+            has_running_task
+            and all(_is_autopilot_followup(t) for t in running_tasks))
+
+        if (has_running_task and only_autopilot_followups
+                and has_autopilot_marker(conv_id)):
+            # Supersede: abort the invisible autopilot follow-up(s) for real
+            # (backend stop, so the zombie is reclaimed), disarm autopilot, and
+            # fall through to start the human message immediately.
+            for t in running_tasks:
+                t['aborted'] = True
+                t['_abort_timestamp'] = time.time()
+                t['_abort_reason'] = 'superseded_by_user_send'
+            logger.info('[Send] conv=%s ⚡ superseding %d in-flight autopilot '
+                        'follow-up turn(s) for a real user send',
+                        conv_id[:8], len(running_tasks))
+            try:
+                from lib.tasks_pkg.autopilot import disarm_autopilot
+                disarm_autopilot(conv_id)
+            except Exception as e:
+                logger.warning('[Send] conv=%s disarm_autopilot on supersede '
+                               'failed (non-fatal): %s', conv_id[:8], e)
+            has_running_task = False
 
         if has_running_task:
             from lib.message_queue import enqueue_message

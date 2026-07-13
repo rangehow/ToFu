@@ -131,7 +131,7 @@ def test_merge_memories_handler_surfaces_failed_count():
 # ── 4. search/fetch batch abort wiring ──────────────────────────────
 
 def test_search_batch_handlers_pass_abort():
-    src = _src('lib/tasks_pkg/handlers/search.py')
+    src = _src('lib/tasks_pkg/handlers/search/_handlers.py')
     # Both run_batch_concurrent call sites must pass an abort predicate keyed
     # on task['aborted']. Match across the multi-line call up to the abort arg.
     calls = re.findall(r"run_batch_concurrent\(.*?abort=lambda: bool\(task\.get\('aborted'\)\)",
@@ -249,7 +249,7 @@ def test_ask_human_attended_still_blocks(monkeypatch):
 def test_ask_human_guard_neuter_bites():
     # The attendance branch must exist in source; removing it reinstates the
     # unconditional block.
-    src = _src('lib/tasks_pkg/handlers/misc.py')
+    src = _src('lib/tasks_pkg/handlers/misc/_human.py')
     # Contiguous source markers (the sentinel sentence is split across string
     # concatenation, so assert on the branch guard + the round-status stamp).
     assert "elif not task.get('_attended'):" in src

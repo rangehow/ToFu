@@ -1,36 +1,10 @@
-"""lib/agent_inbox.py — Per-task model-facing inbox for async swarm updates.
+"""lib/agent_inbox/_queue.py — thread-safe queue operations over the shared state.
 
-This is the **model's** inbox (distinct from ``lib/push.py`` which is the UI's
-push channel). When a sub-agent finishes in async swarm mode, its summary is
-formatted as ``<swarm-update>...</swarm-update>`` XML and enqueued here. The
-main task's orchestrator drains the inbox **between rounds** and prepends each
-entry as a synthetic ``user`` message, so the main agent sees sub-agent results
-naturally on its next turn — no polling, no busy-waiting.
-
-Design borrows from Claude Code's ``messageQueueManager.ts`` (priority-sorted
-single queue) but is scoped per task_id to avoid cross-task contamination.
-
-Usage::
-
-    # 1) Sub-agent finishes — enqueue a notification
-    from lib.agent_inbox import enqueue
-    enqueue(task_id, payload, priority='later', mode='swarm-update')
-
-    # 2) Orchestrator's between-round hook (coalesce all drained items
-    #    into a single user-role message — no _isMeta flag, since
-    #    <swarm-update> is factual data, not a system reminder).
-    from lib.agent_inbox import drain
-    items = drain(task_id)
-    if items:
-        messages.append({
-            'role': 'user',
-            'content': '\n\n'.join(it['value'] for it in items),
-        })
-
-    # 3) Task completes — clear the inbox AND tombstone it so late
-    #    sub-agents can't recreate the bucket.
-    from lib.agent_inbox import clear
-    clear(task_id)
+All functions here mutate the single-home objects imported from
+:mod:`lib.agent_inbox._state` (``_inboxes`` / ``_lock`` / ``_tombstones`` /
+``_PRIORITY`` / ``MAX_PER_TASK`` / ``_TOMBSTONE_MAX``).  They are imported by
+reference so every caller touches the SAME objects — this is what preserves the
+exactly-once delivery semantics.
 
 Concurrency: every public function is thread-safe. The orchestrator runs
 ``drain()`` on the main task thread; ``enqueue()`` is called from the swarm
@@ -39,45 +13,22 @@ scheduler's worker threads.
 
 from __future__ import annotations
 
-import threading
+import threading  # noqa: F401 — carried per repo convention (batch-18 lesson)
 import time
 from typing import Any
 
 from lib.log import get_logger
 
+from ._state import (
+    MAX_PER_TASK,
+    _PRIORITY,
+    _TOMBSTONE_MAX,
+    _inboxes,
+    _lock,
+    _tombstones,
+)
+
 logger = get_logger(__name__)
-
-
-# ═══════════════════════════════════════════════════════════
-#  Priority order (lower number = higher priority)
-# ═══════════════════════════════════════════════════════════
-
-_PRIORITY: dict[str, int] = {
-    'now':   0,   # urgent — drained before user-typed input
-    'next':  1,   # default — drained alongside user input
-    'later': 2,   # background — system notifications, never starves user
-}
-
-
-# ═══════════════════════════════════════════════════════════
-#  Per-task storage
-# ═══════════════════════════════════════════════════════════
-
-# task_id → list[InboxItem]; never grows beyond MAX_PER_TASK
-_inboxes: dict[str, list[dict[str, Any]]] = {}
-_lock = threading.Lock()
-
-#: Hard cap per task to prevent runaway memory if orchestrator stops draining.
-#: Items beyond this are dropped with a warning — the main agent will see fewer
-#: notifications, but at least the process won't OOM. Calibrated to ~500 KB
-#: assuming 2KB per swarm-update.
-MAX_PER_TASK = 256
-
-#: Tombstone: task_ids whose owning task has ended.  Late-arriving sub-agents
-#: (a swarm worker that finished after ``clear()`` was called) will be
-#: prevented from re-creating the inbox.  Bounded to avoid unbounded growth.
-_tombstones: set[str] = set()
-_TOMBSTONE_MAX = 1024
 
 
 # ═══════════════════════════════════════════════════════════
@@ -372,60 +323,3 @@ def stats() -> dict[str, int]:
     """Return ``{task_id: queue_depth}`` snapshot for diagnostics."""
     with _lock:
         return {tid: len(items) for tid, items in _inboxes.items()}
-
-
-# ═══════════════════════════════════════════════════════════
-#  XML payload helpers — keep formatting consistent across callers
-# ═══════════════════════════════════════════════════════════
-
-def format_swarm_update(*,
-                         agent_id: str,
-                         role: str,
-                         status: str,
-                         elapsed_seconds: float,
-                         tokens: int,
-                         preview: str,
-                         output_file: str = '',
-                         remaining_running: int = 0,
-                         remaining_pending: int = 0,
-                         error: str = '') -> str:
-    """Build a ``<swarm-update>`` XML payload for a single agent completion.
-
-    Mirrors Claude Code's ``<task-notification>`` shape. The 200-char preview
-    cap matches what we agreed in the design doc.
-    """
-    preview_clean = (preview or '').replace('\r', ' ').strip()
-    if len(preview_clean) > 200:
-        preview_clean = preview_clean[:200].rstrip() + '…'
-
-    parts = [
-        '<swarm-update>',
-        f'  <agent-id>{_escape(agent_id)}</agent-id>',
-        f'  <role>{_escape(role)}</role>',
-        f'  <status>{_escape(status)}</status>',
-        f'  <elapsed-seconds>{elapsed_seconds:.1f}</elapsed-seconds>',
-        f'  <tokens>{int(tokens)}</tokens>',
-    ]
-    if output_file:
-        parts.append(f'  <output-file>{_escape(output_file)}</output-file>')
-    if error:
-        parts.append(f'  <error>{_escape(error[:300])}</error>')
-    if preview_clean:
-        parts.append(f'  <preview>{_escape(preview_clean)}</preview>')
-    if remaining_running or remaining_pending:
-        parts.append(
-            f'  <remaining running="{remaining_running}" '
-            f'pending="{remaining_pending}"/>'
-        )
-    parts.append('</swarm-update>')
-    return '\n'.join(parts)
-
-
-def _escape(text: str) -> str:
-    """Minimal XML escape for inline values."""
-    if not text:
-        return ''
-    return (text
-            .replace('&', '&amp;')
-            .replace('<', '&lt;')
-            .replace('>', '&gt;'))

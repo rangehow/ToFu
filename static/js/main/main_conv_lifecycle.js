@@ -73,6 +73,53 @@ function newChat() {
   }
   if (typeof updateContextBar === 'function') updateContextBar();
 }
+/* ★ Reconnect-on-open — the root-cause fix for "click into a conversation →
+ *   stuck / stalled bubble that only a full page refresh clears".
+ *
+ *   loadConversation historically re-attached ONLY a stream already live in
+ *   THIS tab (activeStreams). It never reconnected to a task still RUNNING on
+ *   the SERVER when this tab holds no stream entry — the task was started in
+ *   another tab, or the SSE dropped and finishStream cleared activeStreams while
+ *   the backend kept generating. The conversation then rendered STATICALLY with
+ *   no SSE, no poll and no twStart, so the trailing assistant placeholder sat
+ *   frozen ("等待中…") until a full refresh ran initActiveTasks' reconnect.
+ *
+ *   The reconnect decision keys off the SERVER-AUTHORITATIVE conv.activeTaskId
+ *   (persisted settings.activeTaskId) — never an inferred client guess — and
+ *   delegates to the existing connectToTask, the single reconnect mechanism used
+ *   by boot init / send / regen / edit / cross-tab. connectToTask resolves its
+ *   accumulation slot by identity (_taskId / _msgId), so it re-targets the
+ *   running task's already-persisted placeholder instead of appending a second
+ *   assistant bubble, and it self-heals a stale activeTaskId for an
+ *   already-finished task via its poll → 404 → finishStream path (no permanent
+ *   placeholder, no hang).
+ *
+ *   Idempotent: a no-op when a stream is already live in this tab (the caller's
+ *   activeStreams.has branch handles that) and connectToTask itself re-guards on
+ *   !activeStreams.has(convId). Returns true when it kicked off a reconnect so
+ *   the caller skips the static-render fall-through.
+ */
+function _reconnectServerTaskIfIdle(id) {
+  if (typeof activeStreams === 'undefined' || activeStreams.has(id)) return false;
+  const conv = conversations.find((x) => x.id === id);
+  if (!conv || !conv.activeTaskId) return false;
+  if (typeof connectToTask !== 'function') return false;
+  console.info(
+    `[loadConversation] 🔗 Reconnect-on-open — conv=${id.slice(0,8)} ` +
+    `activeTaskId=${conv.activeTaskId.slice(0,8)} (no live stream in this tab, ` +
+    `task running server-side)`
+  );
+  connectToTask(id, conv.activeTaskId);
+  /* connectToTask synchronously sets the activeStreams entry + arms twStart
+   * (before its first await), then inserts the streaming bubble. Repaint the
+   * statics + the single streaming bubble exactly like boot's _ensureNewest so
+   * the click-open paint matches a fresh reconnect (showStreamingUIForConv
+   * slices the streaming bubble off the static list — no duplicate). */
+  if (activeStreams.has(id) && typeof showStreamingUIForConv === 'function') {
+    showStreamingUIForConv(id);
+  }
+  return true;
+}
 function loadConversation(id) {
   _sendGeneration++;           // ★ invalidate any in-flight sendMessage
   _purgeEmptyConvs();
@@ -181,6 +228,11 @@ function loadConversation(id) {
       if (activeConvId === id) {
         if (activeStreams.has(id)) {
           showStreamingUIForConv(id);
+        } else if (_reconnectServerTaskIfIdle(id)) {
+          /* ★ Task still running server-side (persisted activeTaskId) but no
+           *   live stream in this tab → reconnect instead of static-rendering a
+           *   frozen placeholder. connectToTask + showStreamingUIForConv already
+           *   painted; nothing more to do here. */
         } else if (c._needsLoad || c.messages.length === 0) {
           renderChat(c);
           if (typeof _restoreConvToolState === "function") _restoreConvToolState(c);
@@ -198,6 +250,11 @@ function loadConversation(id) {
     });
   } else if (activeStreams.has(id)) {
     showStreamingUIForConv(id);
+  } else if (_reconnectServerTaskIfIdle(id)) {
+    /* ★ Reconnect-on-open (already-loaded conv): persisted activeTaskId points
+     *   at a task still running server-side, but this tab holds no stream →
+     *   connectToTask re-attaches (self-healing to poll/finishStream if the task
+     *   already finished) instead of leaving a static, frozen placeholder. */
   } else {
     renderChat(c);
     _resumePendingTranslations(id);
@@ -415,7 +472,7 @@ async function duplicateConversation(id, e) {
       await loadConversationMessages(srcConv.id);
     } catch (err) {
       console.warn(`[duplicateConv] Failed to load source conv: ${err.message}`);
-      if (typeof showToast === "function") showToast("", "复制失败", "无法加载原始对话内容", 4000);
+      if (typeof showToast === "function") showToast("", t('convLifecycle.copyFailed'), t('convLifecycle.copyFailedBody'), 4000);
       return;
     }
   }
@@ -425,7 +482,7 @@ async function duplicateConversation(id, e) {
 
   // ★ PERF: Show toast immediately for instant feedback
   if (typeof showToast === "function") {
-    showToast("", "对话复制中…", `正在复制 "${srcConv.title}"`, 2000);
+    showToast("", t('convLifecycle.copying'), t('convLifecycle.copyingBody', { title: srcConv.title }), 2000);
   }
 
   // ★ PERF: Defer heavy work (deep clone + serialize) to next frame
@@ -444,7 +501,7 @@ async function duplicateConversation(id, e) {
 
     const newConv = {
       id: newId,
-      title: (srcConv.title || "Untitled") + " (副本)",
+      title: (srcConv.title || "Untitled") + t('convLifecycle.copySuffix'),
       messages: clonedMessages,
       createdAt: now,
       updatedAt: now,
@@ -475,7 +532,7 @@ async function duplicateConversation(id, e) {
     loadConversation(newId);
 
     if (typeof showToast === "function") {
-      showToast("", "对话已复制 ✓", `"${srcConv.title}" → 独立副本已创建`, 3000);
+      showToast("", t('convLifecycle.copied'), t('convLifecycle.copiedBody', { title: srcConv.title }), 3000);
     }
     console.log(`[duplicateConv] Duplicated conv ${id.slice(0,8)} → ${newId.slice(0,8)} (${clonedMessages.length} msgs)`);
   });

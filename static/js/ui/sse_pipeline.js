@@ -278,24 +278,15 @@ async function connectToTask(convId, taskId, retries = 0, opts = {}) {
    *   its own logic that already handles critic→worker transitions. */
   if (assistantMsg && assistantMsg.role === 'assistant'
       && !conv.messages.some(m => m._epIteration)) {
-    const _staleTaskId = assistantMsg._taskId && assistantMsg._taskId !== taskId;
-    /* ★ A completed turn (finishReason set) is only OUR slot to reuse when it
-     *   is bound to THIS taskId.  Any other completed tail is stale → push
-     *   fresh.  Two cases collapse into `_taskId !== taskId`:
-     *     • carries a DIFFERENT _taskId → a prior turn, stale (push fresh).
-     *     • carries NO _taskId → AMBIGUOUS, and _taskId is NOT persisted to the
-     *       DB, so a page-reload DB-loaded completed tail always lacks it.  On
-     *       reload it is a FOREIGN previous turn (the running task's own reply
-     *       is not yet persisted; Case A already pushes a placeholder for it),
-     *       so it MUST push fresh — reusing it would replay the old turn into
-     *       the new bubble (the original stale-tail bug).
-     *   A fresh placeholder we're about to stream into has NO finishReason, so
-     *   it never reaches here — the `finishReason` gate already protects it, and
-     *   the reconnect-to-just-finished slot is stamped `_taskId===taskId` at
-     *   bind time so it correctly reuses (no duplicate bubble). */
-    const _isCompletedTurn = !!assistantMsg.finishReason
-      && assistantMsg._taskId !== taskId;
-    if (_staleTaskId || _isCompletedTurn) {
+    /* ★ Single-source-of-truth: the "is this tail a prior turn?" decision is
+     *   the shared reducer in core/conversations.js — a pure reducer over the
+     *   backend-issued facts (`_taskId` bind + `finishReason`), NOT a re-inlined
+     *   client-state predicate that can drift from the init_tasks Case-A call
+     *   site. A tail owned by a different task, OR any completed tail
+     *   (finishReason set), is a prior turn a fresh placeholder must precede —
+     *   reusing it would replay the old turn's content into the new bubble
+     *   ("上一轮对话又重新流式吐出"). Endpoint mode is gated out above. */
+    if (assistantTailIsPriorTurn(assistantMsg, taskId)) {
       console.info(
         `[connectToTask] 🆕 Last assistant belongs to a prior turn ` +
         `(taskId=${assistantMsg._taskId?.slice(0,8) || 'none'} vs new=${taskId.slice(0,8)}, ` +

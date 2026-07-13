@@ -103,7 +103,9 @@ def _read_version() -> str:
     """Read the current version from VERSION file."""
     try:
         return _VERSION_FILE.read_text(encoding='utf-8').strip()
-    except Exception:
+    except Exception as e:
+        logger.debug('[export] VERSION file read failed (%s), defaulting: %s',
+                     _VERSION_FILE, e)
         return '0.0.0'
 
 
@@ -2346,8 +2348,9 @@ def export_project(mode: str, dest: Path, dry_run: bool = False,
                               f"{C_DIM}(would sanitize){C_END}")
                         stats['sanitized'] += 1
                         continue
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug('[export] dry-run sanitize preview failed for '
+                                 '%s: %s', relpath, e)
             print(f"  {C_GREEN}\U0001f4c4{C_END} {relpath}")
             stats['copied'] += 1
 

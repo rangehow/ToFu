@@ -310,7 +310,9 @@ def _summary_input_char_budget(task: dict | None) -> int:
     """
     try:
         usable = _usable_context(_get_context_limit(task))
-    except Exception:
+    except Exception as e:
+        logger.debug('[Compact] context-limit lookup failed, using 96k '
+                     'default budget: %s', e)
         usable = 96_000
     input_token_budget = max(4_000, usable - _SUMMARY_MAX_TOKENS - 2_000)
     # Convert token budget → char budget at ~1 char/token. This is the

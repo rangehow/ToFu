@@ -590,7 +590,9 @@ def tool_run_command(base, command, timeout=None, stdin_callback=None, task=None
         try:
             from lib.project_mod.abs_path_guard import is_restricted
             _restricted_now = is_restricted()
-        except Exception:
+        except Exception as e:
+            logger.debug('[RunCommand] is_restricted probe failed, assuming '
+                         'unrestricted: %s', e)
             _restricted_now = False
         if not _restricted_now:
             try:

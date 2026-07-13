@@ -2271,8 +2271,10 @@ def reap_stuck_running_tasks() -> int:
             try:
                 with t['events_lock']:
                     n_events = len(t['events'])
-            except Exception:
+            except Exception as e:
                 # No events structure (legacy/malformed) — treat as no output.
+                logger.debug('[reap] task %s has no readable events '
+                             'structure: %s', t.get('id', '?'), e)
                 n_events = 0
             if n_events > 0:
                 continue

@@ -2175,7 +2175,9 @@ def _marker_exists(conv_id: str) -> bool:
     try:
         from lib.message_queue import has_autopilot_marker
         return has_autopilot_marker(conv_id)
-    except Exception:
+    except Exception as e:
+        logger.debug('[Autopilot] _marker_exists probe failed for conv=%s: %s',
+                     conv_id[:8] if conv_id else '?', e)
         return False
 
 

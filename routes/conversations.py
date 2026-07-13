@@ -142,7 +142,8 @@ def _row_rev(r):
     that ignores it is unaffected (fail-open)."""
     try:
         keys = r.keys()
-    except Exception:
+    except Exception as e:
+        logger.debug('[conversations] _row_rev: row has no keys(): %s', e)
         keys = ()
     if 'rev' in keys:
         try:

@@ -529,7 +529,9 @@ def _mod_attribution(target, base, rel_path, conv_id=None):
     for root_path in roots_snapshot:
         try:
             norm_root = os.path.abspath(root_path).rstrip(os.sep) or root_path
-        except Exception:
+        except Exception as e:
+            logger.debug('[WriteTools] _mod_attribution normalize root %r '
+                         'failed, skipping: %s', root_path, e)
             continue
         if abs_target == norm_root or abs_target.startswith(norm_root + os.sep):
             # Prefer the DEEPEST (longest) matching root so a nested extra

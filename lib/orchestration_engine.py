@@ -1515,7 +1515,9 @@ class _AbortAwareShim:
         if key == 'aborted':
             try:
                 return bool(self._abort_check())
-            except Exception:
+            except Exception as e:
+                logger.debug('[OrchEngine] abort_check raised, treating as '
+                             'not-aborted: %s', e)
                 return False
         if key == 'id':
             return self._id

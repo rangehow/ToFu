@@ -35,7 +35,6 @@ Routes (legacy snake_case path → new hyphen-case path):
   POST   /api/v1/project/board/block        — Project Brain: human flags epic blocked
   POST   /api/v1/project/board/reopen       — Project Brain: human reopens an epic
   GET    /api/v1/project/brain/summary      — Project Brain: collab-bar summary
-  GET    /api/v1/project/brain/ready        — Project Brain: ready-to-land queue (landable/held)
   GET    /api/v1/project/brain/peers        — Project Brain: LIVE peer/team roster
   GET    /api/v1/project/brain/influence    — Project Brain: per-conversation influence
   POST   /api/v1/project/brain/peer-message — Project Brain: human nudges a sibling conversation

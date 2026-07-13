@@ -397,7 +397,9 @@ def test_NC_3_blocked_until_default_is_load_bearing():
     _patch_restore(
         _BOARD_SRC,
         "    try:\n        blocked_until = int(r['blocked_until'] or 0)\n"
-        "    except (KeyError, IndexError, TypeError):\n        blocked_until = 0",
+        "    except (KeyError, IndexError, TypeError) as e:\n"
+        "        logger.debug('[Board] blocked_until field parse failed, defaulting: %s', e)\n"
+        "        blocked_until = 0",
         "    blocked_until = r['blocked_until']  # NC-3 (nullable default removed)",
         run,
     )

@@ -348,7 +348,10 @@ def test_NC_3_kind_default_is_load_bearing():
 
     _patch_restore(
         _BOARD_SRC,
-        "    try:\n        kind = r['kind'] or 'epic'\n    except (KeyError, IndexError, TypeError):\n        kind = 'epic'",
+        "    try:\n        kind = r['kind'] or 'epic'\n"
+        "    except (KeyError, IndexError, TypeError) as e:\n"
+        "        logger.debug('[Board] kind field parse failed, defaulting: %s', e)\n"
+        "        kind = 'epic'",
         "    kind = r['kind']  # NC-3 (nullable default removed)",
         run,
     )

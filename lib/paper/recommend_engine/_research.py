@@ -21,6 +21,7 @@ import time
 
 from lib.agent_loop import AbortSignal, run_agent_loop
 from lib.log import get_logger
+from lib.llm.json_extract import extract_first_json_object
 
 from ..prompts import _REPORT_TOOLS, date_anchor_clause
 from ..tools import display_query_for, parse_and_repair_tool_args
@@ -103,22 +104,7 @@ _RECOMMEND_SYSTEM = (
 
 def _parse_llm_json(content):
     """Extract the first JSON object from an LLM reply (tolerates code fences)."""
-    if not content:
-        return None
-    text = content.strip()
-    # Strip a leading ```json / ``` fence if present.
-    fence = re.search(r'```(?:json)?\s*(\{.*\})\s*```', text, re.DOTALL)
-    if fence:
-        text = fence.group(1)
-    else:
-        brace = text.find('{')
-        if brace > 0:
-            text = text[brace:]
-    try:
-        return json.loads(text)
-    except (json.JSONDecodeError, TypeError) as e:
-        logger.warning('[Paper:Recommend] LLM reply was not parseable JSON: %s', e)
-        return None
+    return extract_first_json_object(content, log_prefix='[Paper:Recommend]', log=logger)
 
 
 def _research_and_interpret(description, max_results, *, abort=None, on_tool_event=None):

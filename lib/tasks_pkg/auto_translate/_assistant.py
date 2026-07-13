@@ -1,19 +1,16 @@
-"""Server-side auto-translate safety net (assistant + endpoint-critic messages).
+"""The core server-side auto-translate safety net for assistant replies.
 
-Extracted from ``lib/tasks_pkg/manager.py`` (2026-06-24). This is the
-server-side guarantee that an assistant reply (or endpoint-mode critic review)
-gets translated even when the frontend is offline / switched away / the SSE
-stream closed early. It honours the per-conversation ``autoTranslate`` setting,
-dedups against an already-running frontend translate task, detects + re-does
-stale partial translations, short-circuits already-Chinese content, and hands
-off to the incremental per-round translator when one is active.
+Home of ``_maybe_auto_translate_assistant`` — the index-based, post-persist
+translation trigger. It honours the per-conversation ``autoTranslate`` setting,
+dedups against an already-running frontend translate task via the in-flight
+guard, detects + re-does stale partial translations, short-circuits already-
+Chinese content, and hands off to the incremental per-round translator when
+one is active.
 
-Called from ``manager._sync_result_to_conversation`` (single-turn safety net)
-and ``endpoint._trigger_*_auto_translate`` (per-turn + final). ``manager`` and
-``endpoint`` import these back, so call sites are unchanged. Dependency is
-one-directional: this module imports DB helpers from ``lib.database`` and the
-translate engine lazily from ``lib.translate``/``lib.text_lang`` — never
-``manager``.
+Dependencies are one-directional: DB helpers from ``lib.database``, the
+translate engine lazily from ``lib.translate`` (facade path
+``lib.translate.runtime._do_translate`` stays valid) and ``lib.text_lang`` —
+never ``manager``.
 """
 
 import json
@@ -303,34 +300,3 @@ def _maybe_auto_translate_assistant(conv_id, content, msg_idx, db=None, task=Non
             except Exception as re:
                 logger.debug('%s conv=%s release_inflight (skip path) failed: %s',
                              pfx, conv_id[:8] if conv_id else '?', re)
-
-
-def _maybe_auto_translate_critic(conv_id, content, msg_idx, db=None):
-    """Server-side auto-translate for endpoint-mode critic review messages.
-
-    Endpoint-mode critic output is authored by the Critic LLM (English by
-    default, sometimes mixed) and is stored as ``role='user'`` with
-    ``_isEndpointReview=true`` in the conversation's ``messages`` list.  The
-    existing ``_maybe_auto_translate_assistant`` safety-net commits to
-    ``messages[msg_idx]`` by index regardless of role, so we reuse it
-    directly and only override the log prefix + source-lang hint for
-    observability.
-
-    This path is only invoked from
-    ``endpoint._trigger_endpoint_auto_translate``.  The per-conv
-    ``autoTranslate`` gate, dedup against running frontend translate tasks,
-    and stale-partial re-translation logic are inherited verbatim.
-    """
-    pfx = '[AutoTranslate:Critic]'
-    if not conv_id or not content:
-        logger.debug('%s conv=%s msg=%s — empty conv/content; skipping',
-                     pfx, conv_id[:8] if conv_id else '?', msg_idx)
-        return
-    # Delegate to the shared helper — it is role-agnostic at the commit
-    # layer (writes to messages[msg_idx]).  We only log the role flavour
-    # here so operators can distinguish critic translations in the log.
-    logger.info('%s conv=%s msg=%d content=%dchars — delegating to '
-                '_maybe_auto_translate_assistant safety net',
-                pfx, conv_id[:8], msg_idx, len(content))
-    _maybe_auto_translate_assistant(conv_id, content, msg_idx, db)
-

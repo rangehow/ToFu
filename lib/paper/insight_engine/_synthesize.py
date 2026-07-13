@@ -18,6 +18,7 @@ import time
 from lib.agent_loop import AbortSignal, run_agent_loop
 from lib.llm_errors import AbortedError
 from lib.log import get_logger
+from lib.llm.json_extract import extract_first_json_object
 
 from ._config import (
     _INSIGHT_TEMPERATURE,
@@ -33,21 +34,7 @@ logger = get_logger(__name__)
 
 def _parse_llm_json(content):
     """Extract the first JSON object from an LLM reply (tolerates code fences)."""
-    if not content:
-        return None
-    text = content.strip()
-    fence = re.search(r'```(?:json)?\s*(\{.*\})\s*```', text, re.DOTALL)
-    if fence:
-        text = fence.group(1)
-    else:
-        brace = text.find('{')
-        if brace > 0:
-            text = text[brace:]
-    try:
-        return json.loads(text)
-    except (json.JSONDecodeError, TypeError) as e:
-        logger.warning('[Paper:Insight] LLM reply was not parseable JSON: %s', e)
-        return None
+    return extract_first_json_object(content, log_prefix='[Paper:Insight]', log=logger)
 
 
 _REPAIR_INSTRUCTION = (

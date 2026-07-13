@@ -34,7 +34,8 @@ logger = get_logger(__name__)
 
 # Re-exported canonical helpers (chat's seams) the paper engines import from
 # this module. Listed here so the re-export is intentional, not dead code.
-__all__ = ['_execute_report_tool', 'parse_and_repair_tool_args', 'display_query_for']
+__all__ = ['_execute_report_tool', 'parse_and_repair_tool_args', 'display_query_for',
+           'make_research_tool_executor']
 
 
 def _execute_report_tool(name, args_str, user_question='', abort=None,
@@ -233,3 +234,82 @@ def _execute_report_tool(name, args_str, user_question='', abort=None,
 
     else:
         return f'Unknown tool: {name}', [], None, None, None
+
+
+
+def make_research_tool_executor(messages, *, user_question, abort_signal,
+                                execute_report_tool=None,
+                                on_tool_event=None, log_prefix='[Paper]',
+                                force_vertical=None):
+    """Build the ``run_agent_loop`` ``execute_tool(rnd, tc)`` closure shared by
+    the paper insight + recommend research agents.
+
+    The two engines' per-tool-call handling was line-identical except for three
+    axes — the log prefix, whether web_search is forced onto a vertical, and
+    which ``_execute_report_tool`` binding is used — so all three are
+    parameters here. The closure:
+      1. parse+schema-repairs the tool args (``parse_and_repair_tool_args``),
+      2. fires an ``on_tool_event`` ``tool_start`` (round-numbered),
+      3. runs ``execute_report_tool`` (passing ``force_vertical`` through),
+      4. fires ``tool_done`` with results + optional engineBreakdown/verticals,
+      5. appends the ``role:'tool'`` message (30k-char capped) to ``messages``.
+
+    ``execute_report_tool`` MUST be the caller's OWN facade-resolved binding
+    (e.g. ``lib.paper.insight_engine._execute_report_tool``) so a test patching
+    that engine's attribute still steers the executor exactly as the former
+    inline closure did; it defaults to this module's ``_execute_report_tool``.
+    ``messages`` is mutated in place (the loop appends the tool turn), matching
+    the former inline closures exactly. A private per-executor round counter
+    numbers the tool-events independently of the loop's round index (parity
+    with the original ``_round_counter`` closure state).
+    """
+    _exec_report = execute_report_tool or _execute_report_tool
+    _round_counter = {'n': 0}
+
+    def _execute_tool(rnd, tc):
+        fn_name = tc['function']['name']
+        fn_args_raw = tc['function']['arguments']
+        tc_id = tc.get('id', '')
+        # Parse + schema-repair once so the display label and the executor see
+        # the same normalized shape (a bare-string queries/urls → array).
+        fn_args, _ = parse_and_repair_tool_args(fn_name, fn_args_raw)
+        _round_counter['n'] += 1
+        rn = _round_counter['n']
+        display_query = display_query_for(fn_name, fn_args)
+
+        if on_tool_event:
+            on_tool_event({
+                'type': 'tool_start', 'roundNum': rn, 'toolName': fn_name,
+                'query': display_query, 'toolCallId': tc_id,
+            })
+
+        import time as _time
+        tool_t0 = _time.time()
+        # Only pass force_vertical when set, so the insight path's call is
+        # byte-identical to its former inline closure (which passed no such
+        # kwarg); the recommend path passes its 'academic' vertical.
+        _extra = {'force_vertical': force_vertical} if force_vertical else {}
+        result, display_results, search_diag, engine_breakdown, verticals = _exec_report(
+            fn_name, fn_args_raw, user_question=user_question,
+            abort=abort_signal.is_set, **_extra)
+        tool_elapsed = _time.time() - tool_t0
+        logger.info('%s:Tool %s → %d chars in %.1fs',
+                    log_prefix, fn_name, len(result), tool_elapsed)
+
+        if on_tool_event:
+            done_ev = {
+                'type': 'tool_done', 'roundNum': rn, 'toolName': fn_name,
+                'toolCallId': tc_id, 'elapsed': round(tool_elapsed, 1),
+                'results': display_results,
+            }
+            if engine_breakdown:
+                done_ev['engineBreakdown'] = engine_breakdown
+            if verticals:
+                done_ev['verticals'] = verticals
+            on_tool_event(done_ev)
+
+        messages.append({
+            'role': 'tool', 'tool_call_id': tc_id, 'content': result[:30000],
+        })
+
+    return _execute_tool

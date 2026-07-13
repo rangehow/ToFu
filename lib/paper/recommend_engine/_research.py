@@ -15,16 +15,12 @@ The patchable seams (``dispatch_stream`` / ``_execute_report_tool`` /
 ``re_mod._RESEARCH_VERTICAL = None`` — bites here exactly as in the flat module.
 """
 
-import json
-import re
-import time
-
 from lib.agent_loop import AbortSignal, run_agent_loop
 from lib.log import get_logger
 from lib.llm.json_extract import extract_first_json_object
 
 from ..prompts import _REPORT_TOOLS, date_anchor_clause
-from ..tools import display_query_for, parse_and_repair_tool_args
+from ..tools import make_research_tool_executor
 from ._ground import _detect_lang
 
 logger = get_logger(__name__)
@@ -159,7 +155,6 @@ def _research_and_interpret(description, max_results, *, abort=None, on_tool_eve
     # message rather than streaming it.
     _round = {'content': ''}
     _last = {'msg': None}
-    _round_counter = {'n': 0}
 
     def _dispatch(rnd, tools):
         _round['content'] = ''
@@ -191,46 +186,15 @@ def _research_and_interpret(description, max_results, *, abort=None, on_tool_eve
         _round['content'] = ''
         messages.append(msg)
 
-    def _execute_tool(rnd, tc):
-        fn_name = tc['function']['name']
-        fn_args_raw = tc['function']['arguments']
-        tc_id = tc.get('id', '')
-        # Parse + schema-repair once so the display label and the executor see
-        # the same normalized shape (a bare-string queries/urls → array).
-        fn_args, _ = parse_and_repair_tool_args(fn_name, fn_args_raw)
-        _round_counter['n'] += 1
-        rn = _round_counter['n']
-        display_query = display_query_for(fn_name, fn_args)
-
-        if on_tool_event:
-            on_tool_event({
-                'type': 'tool_start', 'roundNum': rn, 'toolName': fn_name,
-                'query': display_query, 'toolCallId': tc_id,
-            })
-
-        tool_t0 = time.time()
-        result, display_results, search_diag, engine_breakdown, verticals = _execute_report_tool(
-            fn_name, fn_args_raw, user_question=user_question, abort=abort_signal.is_set,
-            force_vertical=_pkg._RESEARCH_VERTICAL)
-        tool_elapsed = time.time() - tool_t0
-        logger.info('[Paper:Recommend:Tool] %s → %d chars in %.1fs',
-                    fn_name, len(result), tool_elapsed)
-
-        if on_tool_event:
-            done_ev = {
-                'type': 'tool_done', 'roundNum': rn, 'toolName': fn_name,
-                'toolCallId': tc_id, 'elapsed': round(tool_elapsed, 1),
-                'results': display_results,
-            }
-            if engine_breakdown:
-                done_ev['engineBreakdown'] = engine_breakdown
-            if verticals:
-                done_ev['verticals'] = verticals
-            on_tool_event(done_ev)
-
-        messages.append({
-            'role': 'tool', 'tool_call_id': tc_id, 'content': result[:30000],
-        })
+    # Shared research tool-round executor (see lib/paper/tools.make_research_tool_executor):
+    # recommend FORCES the academic vertical (resolved through the facade at call
+    # time so re_mod._RESEARCH_VERTICAL patches bite) and passes its facade
+    # _execute_report_tool so re_mod._execute_report_tool patches bite.
+    _execute_tool = make_research_tool_executor(
+        messages, user_question=user_question, abort_signal=abort_signal,
+        execute_report_tool=_execute_report_tool,
+        on_tool_event=on_tool_event, log_prefix='[Paper:Recommend]',
+        force_vertical=_pkg._RESEARCH_VERTICAL)
 
     run_agent_loop(
         abort=abort_signal,

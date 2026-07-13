@@ -11,10 +11,6 @@ test patching ``ie.dispatch_stream`` / ``ie._execute_report_tool`` bites exactly
 as it did in the original flat module.
 """
 
-import json
-import re
-import time
-
 from lib.agent_loop import AbortSignal, run_agent_loop
 from lib.llm_errors import AbortedError
 from lib.log import get_logger
@@ -27,7 +23,7 @@ from ._config import (
 )
 from ..insight_prompts import insight_system_prompt
 from ..prompts import _REPORT_TOOLS, date_anchor_clause
-from ..tools import display_query_for, parse_and_repair_tool_args
+from ..tools import make_research_tool_executor  # noqa: F401
 
 logger = get_logger(__name__)
 
@@ -136,7 +132,6 @@ def _research_and_synthesize(paper_text, report_md, reader_context, ui_lang, *,
 
     _round = {'content': ''}
     _last = {'msg': None}
-    _round_counter = {'n': 0}
     model_name = model or None
 
     def _dispatch(rnd, tools):
@@ -170,43 +165,13 @@ def _research_and_synthesize(paper_text, report_md, reader_context, ui_lang, *,
         _round['content'] = ''
         messages.append(msg)
 
-    def _execute_tool(rnd, tc):
-        fn_name = tc['function']['name']
-        fn_args_raw = tc['function']['arguments']
-        tc_id = tc.get('id', '')
-        fn_args, _ = parse_and_repair_tool_args(fn_name, fn_args_raw)
-        _round_counter['n'] += 1
-        rn = _round_counter['n']
-        display_query = display_query_for(fn_name, fn_args)
-
-        if on_tool_event:
-            on_tool_event({
-                'type': 'tool_start', 'roundNum': rn, 'toolName': fn_name,
-                'query': display_query, 'toolCallId': tc_id,
-            })
-
-        tool_t0 = time.time()
-        result, display_results, search_diag, engine_breakdown, verticals = _execute_report_tool(
-            fn_name, fn_args_raw, user_question=user_question, abort=abort_signal.is_set)
-        tool_elapsed = time.time() - tool_t0
-        logger.info('[Paper:Insight:Tool] %s → %d chars in %.1fs',
-                    fn_name, len(result), tool_elapsed)
-
-        if on_tool_event:
-            done_ev = {
-                'type': 'tool_done', 'roundNum': rn, 'toolName': fn_name,
-                'toolCallId': tc_id, 'elapsed': round(tool_elapsed, 1),
-                'results': display_results,
-            }
-            if engine_breakdown:
-                done_ev['engineBreakdown'] = engine_breakdown
-            if verticals:
-                done_ev['verticals'] = verticals
-            on_tool_event(done_ev)
-
-        messages.append({
-            'role': 'tool', 'tool_call_id': tc_id, 'content': result[:30000],
-        })
+    # Shared research tool-round executor (see lib/paper/tools.make_research_tool_executor):
+    # insight uses the model's own vertical choice (no force_vertical). Pass the
+    # facade-resolved _execute_report_tool so ie._execute_report_tool patches bite.
+    _execute_tool = make_research_tool_executor(
+        messages, user_question=user_question, abort_signal=abort_signal,
+        execute_report_tool=_execute_report_tool,
+        on_tool_event=on_tool_event, log_prefix='[Paper:Insight]')
 
     run_agent_loop(
         abort=abort_signal,

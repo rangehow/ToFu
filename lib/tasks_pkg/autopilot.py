@@ -1843,21 +1843,26 @@ def _emit_run_summary(task: dict, conv_id: str, run_id: str,
 
 def _conclude_handoff(task: dict, conv_id: str, run_id: str) -> dict | None:
     """Conclude a run PARKED via ``[VU: HANDOFF]``: post the residual to the
-    board's wait-on-path, then store a ``reason='parked'`` sidecar record.
+    board on a self-expiring ``[sibling]`` cooldown, then store a
+    ``reason='parked'`` sidecar record.
 
     The VU already recognised that the objective's remaining criteria are
     blocked on an EXTERNAL commit (a sibling must land a file first) and stamped
     ``task['_vu_handoff_paths']`` + ``_vu_handoff_text``. This routes the
-    residual into the project board's EXISTING self-expiring primitive rather
+    residual into the project board's self-expiring cooldown primitive rather
     than inventing a resume engine:
 
       1. ``post_task`` — one OPEN epic capturing the residual work (title =
          objective + waited paths).
-      2. ``block_task`` with a ``[sibling] … path=a,b`` reason — the board's
-         ``_parse_sibling_wait_paths`` derives the epic's ``wait_paths`` from
-         that structured token, so the epic is HELD (not dispatched) exactly
-         while a sibling actively leases those paths, and auto-clears at read
-         time when the lease releases (the commit lands). No reaper, no timer.
+      2. ``block_task`` with a ``[sibling]`` reason — the board stamps a FLAT,
+         non-escalating ``SIBLING_BLOCK_COOLDOWN_MS`` cooldown (one lease clock),
+         so the heartbeat stops re-dispatching the epic every sweep but retries
+         it after the cooldown lapses. On a single shared checkout the sibling's
+         commit is visible immediately, so a plain cooldown retry converges — no
+         lease, no reaper, no timer. (The precise wait-on-path HOLD this once
+         used was removed 2026-07-13 with the path-lease tools; the flat cooldown
+         is the surviving throttle. The waited paths are recorded on the record
+         and named in the epic title for human context only.)
       3. A ``parked`` concluded record (with the wait paths + board epic id +
          the VU's reasoning as the human-only report) so the fold renders a
          distinct "parked — waiting on X" state, not a false "concluded ✓".
@@ -1885,14 +1890,17 @@ def _conclude_handoff(task: dict, conv_id: str, run_id: str) -> dict | None:
             posted = board.post_task(project_path, conv_id, title)
             if posted.get('ok') and posted.get('id'):
                 board_task_id = posted['id']
-                # The '[sibling] … path=<p1>,<p2>' reason is the CONTRACT the
-                # board parses into a wait-on-path hold — the class tag + the
-                # structured path= token are both required (see
-                # _parse_sibling_wait_paths). Without a project the block is
-                # skipped; the parked record alone is the honest terminal state.
-                reason = '[sibling] autopilot parked; residual auto-resumes when committed'
-                if paths:
-                    reason += ' path=' + ','.join(paths)
+                # A '[sibling]' class tag puts the epic on the board's FLAT,
+                # self-expiring cooldown (SIBLING_BLOCK_COOLDOWN_MS, no
+                # escalation): the heartbeat stops churning it every sweep but
+                # retries after the window lapses. On the single shared checkout
+                # the sibling's commit is visible immediately, so a plain
+                # cooldown retry converges. (No 'path=' token — the precise
+                # wait-on-path hold was removed with the path-lease tools; the
+                # waited paths live on the parked record for human context.)
+                waited_ctx = (' (waiting on ' + ', '.join(paths) + ')') if paths else ''
+                reason = ('[sibling] autopilot parked; residual retried after '
+                          'cooldown once the blocking commit lands' + waited_ctx)
                 board.block_task(project_path, conv_id, board_task_id, reason)
             else:
                 logger.warning('[Autopilot %s] handoff board post failed: %s',

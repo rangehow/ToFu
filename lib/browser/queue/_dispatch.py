@@ -1,18 +1,13 @@
-"""lib/browser/queue.py — Command queue infrastructure for Chrome Extension.
+"""lib/browser/queue/_dispatch.py — SYNC + ASYNC command dispatch & resolution.
 
-Architecture (single-endpoint, proxy-safe):
-  LLM tool_call  →  send_browser_command() [blocks with timeout]
-                          ↓ (added to queue)
-  Extension polls  →  POST /api/browser/poll  { results: [...] }
-                          ↓
-  Server:  1) resolves any results from the body
-           2) returns new pending commands in the response
-                          ↓
-  Extension executes  →  stashes results  →  sends with next poll
-                          ↓
-  send_browser_command() unblocks and returns
+The core queue verbs: enqueue-and-block (``send_browser_command``), delivery
+(``get_pending_commands``), the SYNC and ASYNC long-poll waits
+(``wait_for_commands`` / ``wait_for_commands_async``), and result resolution
+(``resolve_command`` / ``resolve_batch``).
 
-v4: single POST endpoint eliminates separate result POST that VSCode proxy drops.
+All shared state is owned by ``_state`` and touched through it (so the process
+has a single queue). ``wait_for_commands`` rebinds the process-wide
+``_last_poll_time`` as ``_state._last_poll_time`` to keep one binding.
 """
 
 import asyncio
@@ -22,130 +17,14 @@ import uuid
 
 from lib.log import get_logger
 
+from . import _state
+from ._state import (
+    _async_waiters, _async_waiters_lock, _commands, _commands_lock, _notify,
+    _get_active_client, _wake_async_waiters, POLL_WAIT_TIMEOUT,
+)
+from ._registry import mark_poll, _cleanup_stale
+
 logger = get_logger(__name__)
-
-__all__ = [
-    'mark_poll', 'get_connected_clients', 'send_browser_command',
-    'get_pending_commands', 'wait_for_commands', 'wait_for_commands_async',
-    'resolve_command', 'resolve_batch', 'is_extension_connected',
-    '_set_active_client', '_get_active_client',
-    '_last_poll_time', '_commands', '_commands_lock',
-]
-
-# ══════════════════════════════════════════
-#  Command Queue — Per-Client Routing
-# ══════════════════════════════════════════
-
-_commands = {}          # cmd_id → {id, type, params, event, result, error, created_at, picked_up, target_client, timeout, cancelled}
-_commands_lock = threading.Lock()
-_notify = threading.Event()   # Signaled when a new command is added (SYNC waiters)
-
-# ── Async-waiter registry (for async def poll routes) ──────────────────
-# An async poll handler runs ON the event loop, so it cannot block on the
-# threading.Event without pinning a worker thread (the whole point of the
-# async route). Instead each async waiter registers an asyncio.Event here;
-# the SYNC enqueue path (send_browser_command, on a tool thread) wakes them
-# via loop.call_soon_threadsafe — the only thread-safe way to touch an
-# asyncio.Event from outside its loop. Each waiter is
-#   {'loop':, 'event':, 'client_id':}
-# and is responsible for removing ITSELF in a finally block (covers the
-# timeout, success, AND CancelledError/disconnect paths) so nothing leaks.
-_async_waiters = []           # list[dict]
-_async_waiters_lock = threading.Lock()
-
-
-def _wake_async_waiters(client_id=None):
-    """Wake async poll waiters after a command was enqueued (called sync).
-
-    Wakes a waiter when the new command could be FOR it: unrouted commands
-    (client_id is None) wake everyone; a client-targeted command wakes only
-    the matching waiter and the anonymous (client_id-less) waiters. The
-    waiter re-checks get_pending_commands after waking, so an over-broad
-    wake is merely a harmless spurious loop, never a mis-delivery.
-    """
-    with _async_waiters_lock:
-        waiters = list(_async_waiters)
-    for w in waiters:
-        wcid = w.get('client_id')
-        if client_id and wcid and wcid != client_id:
-            continue
-        loop, event = w.get('loop'), w.get('event')
-        if loop is None or event is None:
-            continue
-        try:
-            loop.call_soon_threadsafe(event.set)
-        except RuntimeError as e:
-            # Loop already closed (handler torn down between snapshot and
-            # wake). The waiter's finally has/will deregister it; ignore.
-            logger.debug('[Browser] async waiter wake skipped (loop closed): %s', e)
-
-# Grace period (seconds) a command lingers in the queue PAST its caller's
-# timeout before _cleanup_stale forcibly evicts it. The caller has already
-# given up by then; the grace only lets a near-miss result resolve without a
-# KeyError. Delivery itself is cut off at exactly the caller's timeout (see
-# get_pending_commands) so a command never executes after the model moved on.
-_STALE_GRACE = 15
-
-# Long-poll wait window (seconds) the async poll route blocks for before
-# returning empty so the extension re-polls. Env-overridable (e.g. tests set a
-# small value); MUST stay < the extension's FETCH_TIMEOUT (12s) so the server
-# replies before the client aborts.
-import os as _os
-try:
-    POLL_WAIT_TIMEOUT = float(_os.environ.get('TOFU_BROWSER_POLL_WAIT', '8'))
-except (ValueError, TypeError) as _e:
-    logger.debug('[Browser] bad TOFU_BROWSER_POLL_WAIT %r (%s) — using 8.0s default',
-                 _os.environ.get('TOFU_BROWSER_POLL_WAIT'), _e)
-    POLL_WAIT_TIMEOUT = 8.0
-
-# Per-client tracking: client_id → {last_poll, first_seen, name}
-_clients = {}           # client_id → metadata dict
-_clients_lock = threading.Lock()
-
-# Legacy global poll time (kept for backward compat with is_extension_connected)
-_last_poll_time = 0
-
-
-def mark_poll(client_id=None, chrome_major=0):
-    """Record a poll from a client (or anonymous legacy client).
-
-    Args:
-        client_id: Stable per-device extension id, or None for a legacy client.
-        chrome_major: Chromium major version reported by the extension (0 if
-            unknown). Stored so the UI can surface Chrome 142+ Local Network
-            Access prompt guidance for the browser actually running the bridge.
-    """
-    global _last_poll_time
-    now = time.time()
-    _last_poll_time = now
-    if client_id:
-        with _clients_lock:
-            if client_id not in _clients:
-                _clients[client_id] = {'first_seen': now, 'last_poll': now, 'name': '',
-                                       'poll_count': 1, 'chrome_major': chrome_major or 0}
-                logger.info('[Browser] New client registered: %s (total clients: %d)',
-                            client_id[:12], len(_clients))
-            else:
-                _clients[client_id]['last_poll'] = now
-                _clients[client_id]['poll_count'] = _clients[client_id].get('poll_count', 0) + 1
-                if chrome_major:
-                    _clients[client_id]['chrome_major'] = chrome_major
-
-
-def get_connected_clients():
-    """Return list of currently connected client dicts."""
-    now = time.time()
-    with _clients_lock:
-        return [
-            {'client_id': cid, 'last_poll': info['last_poll'],
-             'seconds_ago': round(now - info['last_poll'], 1),
-             'name': info.get('name', ''),
-             'poll_count': info.get('poll_count', 0),
-             'chrome_major': info.get('chrome_major', 0),
-             'first_seen': info.get('first_seen', 0)}
-            for cid, info in _clients.items()
-            if now - info['last_poll'] < 15
-        ]
 
 
 def send_browser_command(cmd_type, params=None, timeout=30, client_id=None):
@@ -166,16 +45,16 @@ def send_browser_command(cmd_type, params=None, timeout=30, client_id=None):
 
     # Check if the target client (or any client) is connected
     if client_id:
-        with _clients_lock:
-            info = _clients.get(client_id)
+        with _state._clients_lock:
+            info = _state._clients.get(client_id)
         if not info or time.time() - info['last_poll'] > 30:
             logger.warning('[Browser] Target client %s not connected', client_id[:12])
             return None, (f"Browser extension client {client_id[:8]} is not connected. "
                           "Check that the extension is running on the correct device.")
     else:
-        if time.time() - _last_poll_time > 30:
+        if time.time() - _state._last_poll_time > 30:
             logger.warning('[Browser] No extension connected (last poll %.0fs ago)',
-                           time.time() - _last_poll_time)
+                           time.time() - _state._last_poll_time)
             return None, ("Browser extension is not connected. "
                           "Install the extension and enable it.")
 
@@ -272,8 +151,7 @@ def get_pending_commands(client_id=None):
 
 def wait_for_commands(timeout=8, client_id=None):
     """Block until commands are available for this client, or timeout."""
-    global _last_poll_time
-    _last_poll_time = time.time()
+    _state._last_poll_time = time.time()
     mark_poll(client_id)
     _cleanup_stale()
 
@@ -369,47 +247,3 @@ def resolve_batch(results):
         if resolve_command(cmd_id, result=r.get('result'), error=r.get('error')):
             resolved += 1
     return resolved
-
-
-def is_extension_connected(client_id=None):
-    """Check if any extension (or a specific client) is connected."""
-    if client_id:
-        with _clients_lock:
-            info = _clients.get(client_id)
-        if not info:
-            return False
-        return time.time() - info['last_poll'] < 15
-    return time.time() - _last_poll_time < 15
-
-
-# ── Thread-local active client for per-device routing ──
-_active_client = threading.local()
-
-def _set_active_client(client_id):
-    """Set the active browser client ID for the current thread."""
-    _active_client.client_id = client_id
-
-def _get_active_client():
-    """Get the active browser client ID for the current thread, or None."""
-    return getattr(_active_client, 'client_id', None)
-
-
-def _cleanup_stale():
-    """Remove expired commands and stale clients."""
-    now = time.time()
-    with _commands_lock:
-        stale = [cid for cid, cmd in _commands.items()
-                 if now - cmd['created_at'] > cmd.get('timeout', 30) + _STALE_GRACE]
-        for cid in stale:
-            cmd = _commands.pop(cid, None)
-            if cmd and cmd.get('event') and not cmd['event'].is_set():
-                cmd['error'] = 'Command expired (stale cleanup)'
-                cmd['event'].set()
-    # Also clean up clients that haven't polled in > 5 minutes
-    with _clients_lock:
-        stale_clients = [cid for cid, info in _clients.items()
-                         if now - info['last_poll'] > 300]
-        for cid in stale_clients:
-            info = _clients.pop(cid, {})
-            logger.info('[Browser] Cleaned up stale client %s (polls=%d, last_poll=%.0fs ago)',
-                        cid[:12], info.get('poll_count', 0), now - info.get('last_poll', now))

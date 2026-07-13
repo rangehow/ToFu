@@ -150,9 +150,7 @@ def select_dispatchable(project_path: str) -> list[dict]:
         return []
     import time as _time
 
-    from lib.conversations.project_board import (
-        _paths_waited_but_held, read_board,
-    )
+    from lib.conversations.project_board import read_board
     board = read_board(project_path)
     tasks = board['tasks']
     now_ms = int(_time.time() * 1000)
@@ -189,19 +187,6 @@ def select_dispatchable(project_path: str) -> list[dict]:
         deps = t.get('depends_on') or []
         if any(d not in done_ids for d in deps):
             continue
-        # ── wait-on-path (commit-dependency) preference: an epic that declared
-        #    a wait on path(s) another conversation is actively editing (a live
-        #    lease) is DEMOTED in ordering — never withheld. A conversation must
-        #    NEVER be blocked from progressing; a same-file overlap is minor,
-        #    hand-fixable interference at commit time, not a reason to strand
-        #    the epic. Self-expires when the holder releases/crashes. ──
-        if _paths_waited_but_held(t, tasks, now_ms):
-            # DEMOTE, never withhold: a conversation must NEVER be blocked from
-            # progressing (the owner's one hard invariant). A wait-on-path
-            # overlap only re-orders this epic AFTER disjoint work; a genuine
-            # same-file collision is minor, hand-fixable interference at commit
-            # time, not a reason to strand the epic.
-            t = {**t, '_conflict_demote': True}
         candidates.append(t)
 
     # ── Write-set partitioning: prefer a candidate
@@ -548,11 +533,8 @@ def _originator_stuck(project_path: str, epic: dict, board_tasks: list,
         target = _dispatch_target(epic)
         if not target:
             return False
-        # 3 — correctly held (cooldown / wait) is NOT stuck.
+        # 3 — correctly held (cooldown) is NOT stuck.
         if int(epic.get('blocked_until') or 0) > now_ms:
-            return False
-        from lib.conversations.project_board import _paths_waited_but_held
-        if _paths_waited_but_held(epic, board_tasks, now_ms):
             return False
         # 2 — a busy target is working, not stuck.
         if _conv_has_live_task(target):

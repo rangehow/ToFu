@@ -68,6 +68,7 @@ var _i18n = {
   'conn.restoredTitle': { zh: '连接已恢复', en: 'Connection Restored' },
   'conn.restoredReattach': { zh: '已重连 {n} 个进行中的任务，流式已恢复。', en: 'Reconnected {n} running task(s) — streaming resumed.' },
   'conn.restoredRecovered': { zh: '已从服务器恢复 {n} 个对话，结果已更新。', en: 'Recovered {n} conversation(s) from server. Results updated.' },
+  'conn.loadTimedOut': { zh: '加载超时 — 服务器可能繁忙，请重试。', en: 'Loading timed out — the server may be busy.' },
   // ── Recoverable connection-drop block (server_offline ONLY): a friendly,
   //    TRUTHFUL headline + recovery hint shown in the assistant error bubble
   //    instead of raw "Server offline" jargon. The key message: the drop is a
@@ -926,6 +927,7 @@ var _i18n = {
   'update.shuttingDown': { zh: '正在关闭服务器…', en: 'Shutting the server down…' },
   'update.shutdownHint': { zh: '服务已停止，需要手动重新启动。', en: 'The server has stopped — start it again manually when needed.' },
   'update.restartConfirm': { zh: '确定要重启服务器吗？正在进行的任务会被中断。', en: 'Restart the server now? Any in-progress tasks will be interrupted.' },
+  'update.restartForceConfirm': { zh: '有 %s 个其他会话正在运行任务，重启会中断它们。确定要继续吗？', en: '%s other conversation(s) have running tasks that a restart will interrupt. Continue anyway?' },
   'update.restarting': { zh: '正在重启…', en: 'Restarting…' },
   'update.restartHint': { zh: '重启期间页面会短暂不可用，完成后会自动刷新。', en: 'The page will be briefly unavailable and will auto-refresh once back.' },
   'update.restartWait': { zh: '正在等待服务器恢复…', en: 'Waiting for the server to come back…' },
@@ -1751,6 +1753,7 @@ var _i18n = {
   // ══════════════════════════════════════
   // {s} carries the English plural suffix ('' | 's'); zh ignores it.
   'toolPanel.working': { zh: '处理中…（{n}）', en: 'Working… ({n})' },
+  'toolPanel.cmdRunning': { zh: '运行中', en: 'Running' },
   'toolPanel.toolsUsed': { zh: '使用了 {n} 个工具', en: '{n} tool{s} used' },
   'toolPanel.turnsSuffix': { zh: ' · {n} 轮', en: ' · {n} turn{s}' },
   'toolPanel.roundTag': { zh: '第{n}轮', en: 'Round {n}' },
@@ -2240,6 +2243,24 @@ var _i18n = {
   'relayAdmin.page.paymentsDesc': { zh: '所有 Stripe / Alipay 完成的充值。Webhook 处理是幂等的——同一笔重复回调不会被重复入账。', en: 'All completed Stripe / Alipay top-ups. Webhook handling is idempotent — a duplicate callback for the same payment is never credited twice.' },
 
   // ══════════════════════════════════════
+  //  Manual /compact — boundary card (chat_render.js) + trigger (context-bar.js)
+  // ══════════════════════════════════════
+  'compactCard.title': { zh: '上下文已压缩（主动）', en: 'Context compacted (manual)' },
+  'compactCard.expand': { zh: '展开摘要', en: 'Show summary' },
+  'compactCard.viewSnapshot': { zh: '查看压缩前快照', en: 'View pre-compaction snapshot' },
+  'compactCard.msgs': { zh: '{before} → {after} 条消息', en: '{before} → {after} msgs' },
+  'compactNow.action': { zh: '立即压缩上下文', en: 'Compact context now' },
+  'compactNow.viewHistory': { zh: '查看压缩历史', en: 'View compaction history' },
+  'compactNow.busy': { zh: '任务进行中，无法压缩', en: 'A task is running — cannot compact' },
+  'compactNow.running': { zh: '正在压缩上下文…', en: 'Compacting context…' },
+  'compactNow.done': { zh: '已压缩：{before} → {after} tokens（-{pct}%）', en: 'Compacted: {before} → {after} tokens (-{pct}%)' },
+  'compactNow.nothing': { zh: '上下文太短，无需压缩', en: 'Context is too short to compact' },
+  'compactNow.failed': { zh: '压缩失败', en: 'Compaction failed' },
+
+  // ══════════════════════════════════════
+  //  Compaction viewer drawer (compaction-viewer.js)
+  // ══════════════════════════════════════
+  // ══════════════════════════════════════
   //  Compaction viewer drawer (compaction-viewer.js)
   // ══════════════════════════════════════
   // Trigger labels (icon prepended in JS; text keeps the English (kind) suffix)
@@ -2434,47 +2455,6 @@ var _i18n = {
   'projectBrain.peerStopConfirmOk': { zh: '终止任务', en: 'Stop the task' },
   'projectBrain.peerStopped': { zh: '已终止', en: 'Stopped' },
   'projectBrain.peerStopFailed': { zh: '终止失败', en: 'Stop failed' },
-  'projectBrain.status': { zh: '状态与关注', en: 'Status & Watch' },
-  'projectBrain.statusEmpty': { zh: '暂无状态 — 当项目有章程或任务板动态后自动综合生成。', en: 'No status yet — synthesized once the project has a charter or board activity.' },
-  'projectBrain.statusLoading': { zh: '正在综合项目状态…', en: 'Synthesizing project status…' },
-  'projectBrain.statusTitle': { zh: '项目当前状态', en: 'Where the project is' },
-  'projectBrain.statusUpdating': { zh: '更新中…', en: 'Updating…' },
-  'projectBrain.statusRefresh': { zh: '刷新状态', en: 'Refresh status' },
-  'projectBrain.statusHistory': { zh: '状态历史', en: 'Status history' },
-  'projectBrain.statusAskHead': { zh: '向项目提问', en: 'Ask the project' },
-  'projectBrain.statusAskPlaceholder': { zh: '例如：我们是否偏离了北极星？有什么被阻塞了？', en: 'e.g. Are we drifting from the north star? What is blocked?' },
-  'projectBrain.statusAsk': { zh: '提问', en: 'Ask' },
-  'projectBrain.statusAsking': { zh: '思考中…', en: 'Thinking…' },
-  'projectBrain.statusAskFailed': { zh: '提问失败', en: 'Could not ask' },
-  'projectBrain.statusTrigEpic': { zh: '任务完成', en: 'epic completed' },
-  'projectBrain.statusTrigDecision': { zh: '决策确认', en: 'decision committed' },
-  'projectBrain.statusTrigBlocked': { zh: '工作受阻', en: 'work blocked' },
-  'projectBrain.statusTrigOpen': { zh: '已刷新', en: 'refreshed' },
-  'projectBrain.statusTrigManual': { zh: '手动', en: 'manual' },
-  'projectBrain.statusEvOpen': { zh: '待认领', en: 'open' },
-  'projectBrain.statusEvInflight': { zh: '进行中', en: 'in-flight' },
-  'projectBrain.statusEvDone': { zh: '已完成', en: 'done' },
-  'projectBrain.statusEvBlocked': { zh: '受阻', en: 'blocked' },
-  'projectBrain.statusEvPending': { zh: '决策待定', en: 'decisions pending' },
-  'projectBrain.statusEvPeers': { zh: '活跃会话', en: 'active peers' },
-  'projectBrain.statusEvCharter': { zh: '章程 v', en: 'charter v' },
-  'projectBrain.watchHead': { zh: '我关心的事', en: 'Things I care about' },
-  'projectBrain.watchPlaceholder': { zh: '想让大脑持续关注的事…', en: 'Something you want the brain to keep an eye on…' },
-  'projectBrain.watchAdd': { zh: '添加', en: 'Add' },
-  'projectBrain.watchAdding': { zh: '添加中…', en: 'Adding…' },
-  'projectBrain.watchAddFailed': { zh: '添加失败', en: 'Could not add' },
-  'projectBrain.watchEmpty': { zh: '添加一个关注点、问题或目标，大脑会持续为你盯着它。', en: 'Add a concern, question, or goal and the brain will keep an eye on it.' },
-  'projectBrain.watchKindConcern': { zh: '关注点', en: 'Concern' },
-  'projectBrain.watchKindQuestion': { zh: '问题', en: 'Question' },
-  'projectBrain.watchKindGoal': { zh: '目标', en: 'Goal' },
-  'projectBrain.watchNotAddressed': { zh: '尚未回应', en: 'Not addressed yet' },
-  'projectBrain.watchResolved': { zh: '已解决', en: 'resolved' },
-  'projectBrain.watchPromoted': { zh: '已进章程', en: 'in charter' },
-  'projectBrain.watchRefresh': { zh: '重新评估', en: 'Re-check' },
-  'projectBrain.watchPromote': { zh: '提升为章程', en: 'Promote to charter' },
-  'projectBrain.watchResolveBtn': { zh: '标记解决', en: 'Resolve' },
-  'projectBrain.watchReopen': { zh: '重新打开', en: 'Reopen' },
-  'projectBrain.watchDelete': { zh: '删除', en: 'Delete' },
   'projectBrain.charterSoon': { zh: '北极星 · 即将推出', en: 'North star — coming soon' },
   'projectBrain.boardSoon': { zh: '协作任务板 · 即将推出', en: 'Coordination board — coming soon' },
   'projectBrain.activityEmpty': { zh: '暂无动态', en: 'No activity yet' },

@@ -344,9 +344,20 @@ def compact_conversation_now(
     new_messages = apply_manual_compaction(
         raw_messages, plan, summary_text, archive_id=archive_id, tokens_after=0)
     tokens_after = _raw_estimate_tokens(new_messages, config)
+    msgs_after = len(new_messages)
+    reduction_pct = round((1 - tokens_after / max(1, tokens_before)) * 100, 1)
+    # Stamp the full stats onto the summary message + its compaction marker so
+    # the frontend card is a PURE render of a backend-downloaded fact (never a
+    # client-side inference). See docs/MANUAL_COMPACTION_DESIGN.md §5.3.
     for m in new_messages:
         if isinstance(m, dict) and m.get('_isCompactionSummary'):
             m['_estimatedPromptTokens'] = int(tokens_after)
+            for mk in m.get('_compactions', []):
+                mk.update({'tokensBefore': int(tokens_before),
+                           'tokensAfter': int(tokens_after),
+                           'msgsBefore': int(msgs_before),
+                           'msgsAfter': int(msgs_after),
+                           'reductionPct': reduction_pct})
 
     # ── PERSIST (CAS on updated_at — a concurrent writer aborts us) ──
     affected = store.cas_update_conversation_messages(
@@ -359,18 +370,17 @@ def compact_conversation_now(
     if archive_id is not None:
         try:
             store.update_archive_summary(
-                archive_id, summary_text, int(tokens_after), int(len(new_messages)))
+                archive_id, summary_text, int(tokens_after), int(msgs_after))
         except Exception as e:
             logger.debug('[ManualCompact] archive row update failed: %s', e)
 
-    reduction_pct = (1 - tokens_after / max(1, tokens_before)) * 100
     audit_log('manual_compaction', conv_id=conv_id, archive_id=archive_id,
               tokens_before=int(tokens_before), tokens_after=int(tokens_after),
-              msgs_before=int(msgs_before), msgs_after=int(len(new_messages)))
+              msgs_before=int(msgs_before), msgs_after=int(msgs_after))
     logger.info('[ManualCompact] conv=%s DONE  tokens: %d → %d (%.0f%%)  '
                 'msgs: %d → %d  archive=%s',
                 log_id, tokens_before, tokens_after, reduction_pct,
-                msgs_before, len(new_messages), archive_id)
+                msgs_before, msgs_after, archive_id)
 
     return {
         'ok': True,
@@ -378,7 +388,7 @@ def compact_conversation_now(
         'tokensBefore': int(tokens_before),
         'tokensAfter': int(tokens_after),
         'msgsBefore': int(msgs_before),
-        'msgsAfter': int(len(new_messages)),
-        'reductionPct': round(reduction_pct, 1),
+        'msgsAfter': int(msgs_after),
+        'reductionPct': reduction_pct,
         'summaryPreview': summary_text[:500],
     }

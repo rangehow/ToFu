@@ -168,6 +168,16 @@
         const n = (Array.isArray(m.apiRounds) && m.apiRounds.length) || 1;
         if (t > 0) return n > 1 ? Math.round(t / n) : t;
       }
+      // 4. Manual-compaction summary (gauge scheme B): a just-compacted conv
+      //    whose newest assistant is the synthetic summary message carries NO
+      //    real usage, so the level would otherwise stay pinned at the old
+      //    (pre-compaction) height until the next real turn. The backend
+      //    stamps `_estimatedPromptTokens` = post-compaction size on it — read
+      //    that so the liquid drops immediately after compaction. It's a
+      //    server-computed fact, not a client inference.
+      if (m._isCompactionSummary && m._estimatedPromptTokens > 0) {
+        return m._estimatedPromptTokens;
+      }
     }
     return 0;
   }
@@ -369,18 +379,154 @@
       lastClickable: null,
       compactions: [],
     };
-    /* Click on chip body → open viewer for active conv, letting the
-     * drawer auto-select the most recent archive.  In-gauge per-tick
-     * clicks are gone with the bubble redesign — the counter badge +
-     * viewer drawer now own the timeline. */
-    el.addEventListener('click', () => {
-      if (!_state || !_state.compactions.length) return;
+    /* Click on chip body → open a small popover with two actions:
+     *   • 立即压缩 (manual /compact) — always available when a conv is open;
+     *   • 查看压缩历史 (open the viewer) — only when this conv has snapshots.
+     * The in-gauge per-tick clicks are gone with the bubble redesign. */
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
       if (typeof activeConvId === 'undefined' || !activeConvId) return;
-      if (typeof window.openCompactionViewer === 'function') {
-        window.openCompactionViewer(activeConvId);
-      }
+      _toggleCtxPopover(el);
     });
     return _state;
+  }
+
+  /* ── "立即压缩" popover ─────────────────────────────────────────────
+   * A tiny anchored menu on the chip. Kept dead-simple: rebuilt each open,
+   * removed on any outside click / action. No ambient state. */
+  function _closeCtxPopover() {
+    const ex = document.getElementById('ctxBarPopover');
+    if (ex) ex.remove();
+    document.removeEventListener('click', _closeCtxPopover, true);
+  }
+
+  function _tt(key, fallback, vars) {
+    return (typeof t === 'function') ? t(key, vars) : fallback;
+  }
+
+  function _convHasLiveTask(conv) {
+    const cid = conv && conv.id;
+    if (!cid) return false;
+    if (typeof activeStreams !== 'undefined' && activeStreams &&
+        typeof activeStreams.has === 'function' && activeStreams.has(cid)) return true;
+    return !!(conv && conv.activeTaskId);
+  }
+
+  function _toggleCtxPopover(anchorEl) {
+    if (document.getElementById('ctxBarPopover')) { _closeCtxPopover(); return; }
+    const conv = _activeConv();
+    if (!conv) return;
+    const hasHistory = !!(_state && _state.compactions.length);
+    const busy = _convHasLiveTask(conv);
+
+    const pop = document.createElement('div');
+    pop.id = 'ctxBarPopover';
+    pop.className = 'ctx-bar-popover';
+    const _scissors = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="3"/><path d="M8.12 8.12 12 12"/><path d="M20 4 8.12 15.88"/><circle cx="6" cy="18" r="3"/><path d="M14.8 14.8 20 20"/></svg>';
+    const _history = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>';
+    const compactLabel = busy
+      ? _tt('compactNow.busy', '任务进行中，无法压缩')
+      : _tt('compactNow.action', '立即压缩上下文');
+    pop.innerHTML =
+      `<button type="button" class="ctx-pop-item ctx-pop-compact"${busy ? ' disabled' : ''}>` +
+        `<span class="ctx-pop-icon">${_scissors}</span>` +
+        `<span>${compactLabel}</span></button>` +
+      (hasHistory
+        ? `<button type="button" class="ctx-pop-item ctx-pop-history">` +
+            `<span class="ctx-pop-icon">${_history}</span>` +
+            `<span>${_tt('compactNow.viewHistory', '查看压缩历史')}</span></button>`
+        : '');
+    document.body.appendChild(pop);
+
+    /* Anchor to the chip (fixed, so it survives the chat scroll). */
+    const r = anchorEl.getBoundingClientRect();
+    pop.style.position = 'fixed';
+    pop.style.left = Math.round(r.left) + 'px';
+    pop.style.top = Math.round(r.bottom + 6) + 'px';
+
+    const compactBtn = pop.querySelector('.ctx-pop-compact');
+    if (compactBtn && !busy) {
+      compactBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        _closeCtxPopover();
+        _runManualCompaction(conv.id);
+      });
+    }
+    const histBtn = pop.querySelector('.ctx-pop-history');
+    if (histBtn) {
+      histBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        _closeCtxPopover();
+        if (typeof window.openCompactionViewer === 'function') {
+          window.openCompactionViewer(conv.id);
+        }
+      });
+    }
+    /* Close on any outside click (capture so it fires before re-open). */
+    setTimeout(() => document.addEventListener('click', _closeCtxPopover, true), 0);
+  }
+
+  /* ── The full success CLOSURE: POST → reload messages → re-render the
+   *    boundary card → drop the gauge (scheme B) → flash the badge. Without
+   *    the reload+re-render the user would click and see nothing change
+   *    (conversations.messages was rewritten server-side). */
+  async function _runManualCompaction(convId) {
+    if (!convId) return;
+    const conv = getConvById(convId);
+    if (conv && _convHasLiveTask(conv)) {
+      if (typeof showToast === 'function') {
+        showToast(_tt('compactNow.busy', '任务进行中，无法压缩'), 'warning');
+      }
+      return;
+    }
+    if (typeof showToast === 'function') {
+      showToast(_tt('compactNow.running', '正在压缩上下文…'), 'info');
+    }
+    let res;
+    try {
+      res = await Api.compactions.compactNow(convId, {});
+    } catch (err) {
+      const code = err && err.code;
+      let msg = _tt('compactNow.failed', '压缩失败');
+      if (code === 'task_active') msg = _tt('compactNow.busy', '任务进行中，无法压缩');
+      else if (code === 'nothing_to_compact') msg = _tt('compactNow.nothing', '上下文太短，无需压缩');
+      if (typeof showToast === 'function') showToast(msg, 'warning');
+      return;
+    }
+    if (!res || !res.ok) {
+      if (typeof showToast === 'function') showToast(_tt('compactNow.failed', '压缩失败'), 'error');
+      return;
+    }
+    /* ── CLOSURE: make the rewrite visible ── */
+    try {
+      if (typeof ConvCache !== 'undefined' && ConvCache && ConvCache.remove) {
+        await ConvCache.remove(convId);       // drop stale IDB copy
+      }
+    } catch (e) { console.warn('[compactNow] cache invalidate failed', e); }
+    const c = getConvById(convId);
+    if (c) {
+      c._needsLoad = true;                     // force a server re-fetch
+      try {
+        if (typeof loadConversationMessages === 'function') {
+          await loadConversationMessages(convId);
+        }
+      } catch (e) { console.warn('[compactNow] reload failed', e); }
+      if (convId === activeConvId && typeof renderChat === 'function') {
+        renderChat(c, false);                  // re-render → boundary card shows
+      }
+    }
+    updateContextBar();                        // gauge scheme B drops the level
+    if (res.archiveId != null && typeof flashGaugeForArchive === 'function') {
+      flashGaugeForArchive(res.archiveId);     // badge +1 flash
+    }
+    if (typeof showToast === 'function') {
+      const tb = res.tokensBefore || 0, ta = res.tokensAfter || 0;
+      const fmt = (n) => n >= 1000 ? (n / 1000).toFixed(0) + 'k' : String(n);
+      showToast(
+        _tt('compactNow.done', '已压缩：{before} → {after} tokens（-{pct}%）',
+            { before: fmt(tb), after: fmt(ta), pct: res.reductionPct != null ? res.reductionPct : 0 }),
+        'success');
+    }
   }
 
   let _scheduled = false;
@@ -536,6 +682,7 @@
   window.updateContextBar = updateContextBar;
   window.flashGaugeForArchive = flashGaugeForArchive;
   window._resolveContextLimit = _resolveContextLimit;
+  window.runManualCompaction = _runManualCompaction;
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', updateContextBar, { once: true });

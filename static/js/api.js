@@ -326,6 +326,11 @@
   const compactions = {
     list: (convId)            => get(`/api/v1/conversations/${encodeURIComponent(convId)}/compactions`),
     get:  (convId, archiveId) => get(`/api/v1/conversations/${encodeURIComponent(convId)}/compactions/${encodeURIComponent(archiveId)}`),
+    // Manual /compact: persistently compress old history into a summary.
+    // Throws ApiError on 409 task_active / 422 nothing_to_compact / etc. so
+    // the caller can branch on `.code`.
+    compactNow: (convId, opts) =>
+      post(`/api/v1/conversations/${encodeURIComponent(convId)}/compact`, opts || {}),
   };
 
   // conversations ---------------------------------------------------
@@ -450,6 +455,15 @@
     // file-changes-bar cache for a whole conversation in one round-trip.
     extractFileChangesBatch: (items) =>
       post('/api/v1/messages/extract-file-changes/batch', { items }, { onError: 'null' }),
+    // Server-authoritative per-usage cost. Returns parsed { ...cost } / { no_charge }
+    // or null on error. See lib/cost.py + lib/pricing.py.
+    cost: (usage, model, providerId) =>
+      post('/api/v1/messages/cost',
+           { usage, model, provider_id: providerId || null }, { onError: 'null' }),
+    // Batch cost over an array of { usage, model, provider_id } items; the
+    // response `costs` array aligns by index. Returns parsed body or null.
+    costBatch: (items) =>
+      post('/api/v1/messages/cost/batch', { items }, { onError: 'null' }),
   };
 
   // text utilities --------------------------------------------------
@@ -576,7 +590,13 @@
   const update = {
     check:   (opts) => get('/api/v1/update/check', Object.assign({ onError: 'null' }, opts || {})),
     apply:   ()     => post('/api/v1/update/apply', {}),
-    restart: ()     => post('/api/v1/update/restart', {}, { onError: 'null' }),
+    // restart takes {force, convId}. onError:'throw' (NOT 'null') is load-bearing:
+    // the backend returns 409 {needsForce, runningTasks} when sibling
+    // conversations have in-flight tasks, and update.js must READ that body to
+    // show the informed force-confirm dialog. Swallowing it to null would make
+    // the button silently no-op (the historical bug: a fixed empty {} body
+    // dropped the caller's {force:true} → always force=false → always 409).
+    restart: (payload) => post('/api/v1/update/restart', payload || {}, { onError: 'throw' }),
     // shutdown: POST — graceful manual stop (writes the manual-shutdown
     // marker so the next boot won't mistake it for an OS kill). No re-exec.
     shutdown: ()    => post('/api/v1/update/shutdown', {}, { onError: 'null' }),
@@ -959,34 +979,6 @@
     brainPeerAbort: (path, convId, toConvId) =>
       post('/api/v1/project/brain/peer-abort',
            { path, convId: convId || '', toConvId }),
-    brainStatus:   (path, opts) =>
-      get('/api/v1/project/brain/status',
-          { query: { path, refresh: (opts && opts.force) ? '1' : '' },
-            onError: 'null' }),
-    brainStatusHistory: (path, limit) =>
-      get('/api/v1/project/brain/status/history',
-          { query: { path, limit: limit || '' }, onError: 'null' }),
-    // Read-only synthesis Q&A about the project status. Writes NOTHING.
-    // Throws ApiError on refusal so the composer can surface the error.
-    brainStatusAsk: (path, question) =>
-      post('/api/v1/project/brain/status/ask', { path, question }),
-    // Pillar #7 WATCH lane — the human's standing "things I care about" list.
-    // brainWatchList(refresh) re-addresses open items on read (fresh-on-open).
-    brainWatchList: (path, refresh) =>
-      get('/api/v1/project/brain/watch',
-          { query: { path, refresh: refresh ? '1' : '' }, onError: 'null' }),
-    brainWatchAdd: (path, kind, text, convId) =>
-      post('/api/v1/project/brain/watch/add', { path, kind, text, convId: convId || '' }),
-    brainWatchUpdate: (itemId, action, extra) =>
-      post('/api/v1/project/brain/watch/update',
-           Object.assign({ itemId, action }, extra || {})),
-    brainWatchAddress: (itemId) =>
-      post('/api/v1/project/brain/watch/address', { itemId }),
-    // Promote a watch item into the charter — the ONLY bridge to sibling
-    // agents (human-gated charter commit). Throws ApiError on version skew.
-    brainWatchPromote: (itemId, convId, expectedVersion) =>
-      post('/api/v1/project/brain/watch/promote',
-           { itemId, convId: convId || '', expectedVersion: expectedVersion }),
   };
 
   // paper-reader (library + report + translate + QA) ---------------

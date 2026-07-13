@@ -435,10 +435,22 @@ function _msgFingerprint(msg) {
    * swarm-owning message as "unchanged" and the panel never repaints when an
    * agent flips running→done. Piggyback on the existing toolRounds loop. */
   let swarmFp = '';
+  /* Tool-round translation token: async auto-translate (stream_lifecycle.js)
+   * mutates round._translatedToolContent / _translatedQuestion / the in-flight
+   * _toolContentTranslating flag AFTER a message is committed, and the tool
+   * renderer (tool_rounds.js) reads them at render time. Like the swarm state
+   * above, these live INSIDE toolRounds and were invisible to this fingerprint,
+   * so a translation landing on a finalized message was a render no-op (the
+   * surgical diff marked the row unchanged) — the reported "translation arrives
+   * but UI doesn't refresh" bug. Fold them in on the same cheap loop. */
+  let xlFp = '';
   if (Array.isArray(msg.toolRounds)) {
     for (const r of msg.toolRounds) {
       if (r.compactionLayer) compactedCount++;
       compactedToSum += (r.compactedToChars | 0);
+      if (r._translatedToolContent) xlFp += 't' + r._translatedToolContent.length;
+      if (r._translatedQuestion) xlFp += 'q' + r._translatedQuestion.length;
+      if (r._toolContentTranslating) xlFp += 'X';
       if (r._swarm) {
         swarmFp += (r._swarmActive ? 'A' : '') + (r._asyncRunning ? 'R' : '')
                  + (r._swarmEndTime ? 'E' : '') + '|';
@@ -504,36 +516,17 @@ function _msgFingerprint(msg) {
     (msg._isAutopilotSummary ? "S" : "") + ":" +
     "c" + compactedCount + "ts" + compactedToSum +
     (swarmFp ? ":sw" + swarmFp : "") +
-    (_segTrFp ? ":st" + _segTrFp : "");
+    (_segTrFp ? ":st" + _segTrFp : "") +
+    (xlFp ? ":xl" + xlFp : "");
 }
 
 /* ── Tool-round freshness gradient ──
  *
  * The server compaction cliff (lib/tasks_pkg/compaction.py:MICRO_HOT_TAIL=40)
  * is correct for performance (most runs <40 tool calls) but invisible to
- * the user.  A binary hot/cold cutoff also reads as "broken UI" in the
- * common case where everything is hot.
- *
- * Better signal: a continuous fade of every tool row by its distance
- * from the newest round.  Newest = 100 % opacity, gradually receding
- * toward an older floor.  The user sees AT A GLANCE that recent rounds
- * are bright and older ones recede — the same intuition the model has,
- * surfaced visually.  No magic numbers exposed in the UI; the cliff
- * still exists server-side, but the user sees a smooth gradient.
- *
- * Position-based (NOT length-normalized) so the same round in the same
- * place always renders the same way regardless of how long the conv
- * grows: position 0 from end = 1.00, pos 30 = 0.70, pos 80+ = 0.55 floor.
- *
- * Compacted rows (`compactionLayer` set) skip the fade — they have
- * their own purple/pink stripe and shouldn't compete with the gradient. */
-/* Age-based fading was REMOVED per UX directive: transparency is too
- * quiet, and the thing the user actually needs to see — compaction
- * state — is now expressed with a SOLID, opaque label per row (see
- * compactionLabel logic in _renderUnifiedToolLine).
- *
- * Kept callable from existing render entry points so callers don't NPE. */
-function _stampFreshness(_conv) { /* no-op */ }
+ * the user.  Age-based fading was REMOVED per UX directive: the thing the
+ * user actually needs to see — compaction state — is now a SOLID, opaque
+ * label per row (see compactionLabel logic in _renderUnifiedToolLine). */
 
 /* ── Background data-refresh repaint (scroll-preserving) ──────────────────
  * Cost + file-change batch prefetches (and their per-message async fallback)
@@ -659,10 +652,6 @@ function _bgRefreshChat(conv) {
 function renderChat(conv, forceScroll) {
   /* ── Guard 1: skip if user is editing a message in this conversation ── */
   if (_editingMsgIdx !== null && conv.id === activeConvId) return;
-  /* Stamp freshness on every render so the panel chrome always reflects
-   * the current cross-message position of each round.  Cheap pass —
-   * one assignment per round, no DOM work. */
-  _stampFreshness(conv);
   /* Prefetch all per-message costs in ONE batch round-trip so the
    * synchronous calcCostCny() calls inside renderFinishInfo() hit the
    * cache.  Fire-and-forget; if fresh entries landed, force a re-render
@@ -983,6 +972,53 @@ function _isOrphanEmptyAssistant(msg) {
   if (msg.finishReason) return false;
   if (msg.error) return false;
   return true;
+}
+
+/* Build the manual /compact boundary card (docs/MANUAL_COMPACTION_DESIGN.md
+ * §5.3). A PURE render of the backend-stamped compaction marker fact — no
+ * client-side lifecycle inference. Default COLLAPSED; the head toggles the
+ * body; "查看压缩前快照" opens the existing viewer. All stats come from
+ * `msg._compactions[0]` (the backend stamps tokensBefore/After + msgs +
+ * reductionPct there); the summary text is `msg.content` minus its header
+ * line. Extracted as a standalone fn so it can be unit-tested without driving
+ * the whole renderMessage dependency graph. */
+function buildCompactionCardHtml(msg) {
+  const _cm = (Array.isArray(msg._compactions) && msg._compactions[0]) || {};
+  const _archiveId = (msg._compactionArchiveId != null)
+    ? msg._compactionArchiveId : _cm.archiveId;
+  const _convId = _cm.convId || (typeof activeConvId !== 'undefined' ? activeConvId : '');
+  const _tb = _cm.tokensBefore || 0, _ta = _cm.tokensAfter || 0;
+  const _mb = _cm.msgsBefore || 0, _ma = _cm.msgsAfter || 0;
+  const _rp = (_cm.reductionPct != null) ? _cm.reductionPct
+            : (_tb > 0 ? Math.round((1 - _ta / _tb) * 100) : 0);
+  const _fmtK = (n) => n >= 1000 ? (n / 1000).toFixed(n >= 10000 ? 0 : 1) + 'k' : String(n);
+  const _tokStat = (_tb > 0 && _ta > 0)
+    ? `${_fmtK(_tb)} → ${_fmtK(_ta)} tokens · -${_rp}%` : '';
+  const _msgStat = (_mb > 0 && _ma > 0)
+    ? (typeof t === 'function' ? t('compactCard.msgs', { before: _mb, after: _ma })
+                               : `${_mb} → ${_ma} msgs`) : '';
+  // Strip the leading header line ("## 上下文已压缩…") — the card has its own title.
+  const _rawSummary = String(msg.content || '').replace(/^##[^\n]*\n+/, '');
+  const _summaryHtml = renderMarkdown(_rawSummary);
+  const _title = (typeof t === 'function') ? t('compactCard.title') : '上下文已压缩';
+  const _expandLabel = (typeof t === 'function') ? t('compactCard.expand') : '展开摘要';
+  const _viewLabel = (typeof t === 'function') ? t('compactCard.viewSnapshot') : '查看压缩前快照';
+  const _scissorsSvg = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="3"/><path d="M8.12 8.12 12 12"/><path d="M20 4 8.12 15.88"/><circle cx="6" cy="18" r="3"/><path d="M14.8 14.8 20 20"/></svg>';
+  const _viewBtn = (_archiveId != null)
+    ? `<button type="button" class="compact-card-view"
+         data-conv-id="${escapeHtml(_convId)}" data-archive-id="${_archiveId}"
+         onclick="if(window.openCompactionViewer){window.openCompactionViewer(this.dataset.convId, parseInt(this.dataset.archiveId,10))}">${escapeHtml(_viewLabel)}</button>`
+    : '';
+  return `<div class="compact-card" data-collapsed="1">
+    <button type="button" class="compact-card-head" onclick="this.parentElement.dataset.collapsed = this.parentElement.dataset.collapsed==='1'?'0':'1'">
+      <span class="compact-card-icon">${_scissorsSvg}</span>
+      <span class="compact-card-title">${escapeHtml(_title)}</span>
+      ${_tokStat ? `<span class="compact-card-stat">${escapeHtml(_tokStat)}</span>` : ''}
+      ${_msgStat ? `<span class="compact-card-stat compact-card-stat-msgs">${escapeHtml(_msgStat)}</span>` : ''}
+      <span class="compact-card-toggle" aria-hidden="true">${escapeHtml(_expandLabel)}</span>
+    </button>
+    <div class="compact-card-body"><div class="md-content">${_summaryHtml}</div>${_viewBtn}</div>
+  </div>`;
 }
 
 function renderMessage(msg, idx) {
@@ -1357,6 +1393,9 @@ function renderMessage(msg, idx) {
       }
       body += `</div></div>`;
     }
+  } else if (!isUser && msg._isCompactionSummary) {
+    // Manual /compact boundary card — built by a standalone, testable fn.
+    body += buildCompactionCardHtml(msg);
   } else if (msg.content) {
     try {
       let mdHtml;

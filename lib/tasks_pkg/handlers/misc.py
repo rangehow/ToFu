@@ -450,35 +450,12 @@ def _handle_board_tool(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg, 
             current_conv_id=current_conv_id,
             project_path=project_path if project_enabled else '')
 
-    # Path-lease tools (project_claim_path/project_release_path) are also routed
-    # here (they're in BOARD_TOOL_NAMES), but they carry no epic task_id and are
-    # NOT a board-epic mutation — a stripped 'project_board_' prefix would leave
-    # the ugly full name as the badge. Map them to a lease verb instead.
-    _LEASE_VERB = {'project_claim_path': 'hold', 'project_release_path': 'release',
-                   'project_commit': 'commit'}
-    _is_lease_tool = fn_name in _LEASE_VERB
-    _verb = _LEASE_VERB.get(fn_name) or fn_name.replace('project_board_', '', 1)
+    _verb = fn_name.replace('project_board_', '', 1)
 
     def _post_build(meta, _tool_content, _fn_args):
         """Attach a STRUCTURED board snapshot (read) or transition (mutation),
         read off the engine — never re-parsed from the prose result."""
         if not project_enabled or not project_path:
-            return
-        # project_commit has no board epic, but it DOES carry a rich structured
-        # result (mode / committed / held-back-with-reasons / sha / verify) that
-        # execute_commit_tool stashed on fn_args — surface it so the frontend
-        # renders an explicit commit card instead of a vague one-liner.
-        if fn_name == 'project_commit':
-            cr = _fn_args.get('_commitResult')
-            if isinstance(cr, dict):
-                meta['commitResult'] = cr
-            return
-        # A path-lease op (hold / release) has no epic to describe (no task_id →
-        # the epic lookup below yields empty title/status, and boardTransition
-        # would then SUPPRESS the accurate prose body in _structuredConvMetaBody).
-        # Its outcome string already conveys held / advisory-refusal / released,
-        # so let it render as the Markdown body — attach no transition.
-        if _is_lease_tool:
             return
         try:
             from lib.conversations.project_board import read_board

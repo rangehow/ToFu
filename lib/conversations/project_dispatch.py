@@ -168,9 +168,7 @@ def select_dispatchable(project_path: str) -> list[dict]:
         #    sweep + _drain_idle_target would spawn a spurious BILLED kickoff at
         #    TTL expiry. DENYLIST (not an allowlist on 'epic') so a
         #    pre-migration None/'' kind still reads as a dispatchable epic. ──
-        #    A 'ready' row is a ready-to-land slice MARKER (a green acceptance-
-        #    gate result awaiting autonomous landing), likewise never work. ──
-        if t.get('kind') in ('lease', 'ready'):
+        if t.get('kind') == 'lease':
             continue
         # ── live-claim filter: only OPEN epics are pickable. A claimed epic
         #    with an unexpired lease (effective status 'claimed') is excluded
@@ -267,76 +265,6 @@ def _write_set_conflicts(ws: list, others: list) -> bool:
             for y in other:
                 if _paths_intersect(x, y):
                     return True
-def _project_dirty_set(project_path: str):
-    """Every working-tree path dirty vs HEAD (modified/added/untracked), as
-    project-relative posix paths — the UNBILLED change-detection probe behind
-    the sibling-block re-dispatch gate.
-
-    Reuses ``project_commit._dirty_paths`` (the single source of truth for
-    "what differs from HEAD", incl. the porcelain ``-z`` / rename parsing) so
-    this never re-implements the git plumbing. Returns ``None`` on a git-probe
-    failure (not a repo / spawn error) so the caller FAILS OPEN — a transient
-    git error must never strand an epic. One subprocess; the caller memoizes it
-    across a sweep's candidates.
-    """
-    try:
-        from lib.conversations.project_commit import _dirty_paths, _is_git_repo
-        from lib.conversations.project_feed import normalize_project_path
-        base = normalize_project_path(project_path)
-        if not _is_git_repo(base):
-            return None
-        return _dirty_paths(base)
-    except Exception as e:
-        logger.debug('[Dispatch] dirty-set probe failed proj=%.40r: %s',
-                     project_path, e)
-        return None
-
-
-def _sibling_block_unresolved(epic: dict, dirty) -> bool:
-    """PURE change-gate core: True iff ``epic`` is held by an UNRESOLVED
-    ``[sibling]`` block — it was blocked with the ``[sibling]`` class, declares
-    ``wait_paths``, and at least one of those paths is STILL dirty vs HEAD
-    (the sibling has not committed).
-
-    Rationale — the root-cause fix for the token bleed. A ``[sibling]`` block
-    means "auto-resolves when a sibling commits path X". Its TRUE resolution
-    signal is therefore "X is clean vs HEAD", NOT "a flat cooldown lapsed". The
-    old flat 30-min cooldown re-dispatched a BILLED turn every cycle just to
-    re-discover the same unmet blocker and re-block. This gate lets the heartbeat
-    consult the free ``dirty`` set instead: while a waited path is dirty the real
-    blocker still stands → skip (no billed turn); once it goes clean → dispatch,
-    so a resolved blocker is retried the instant its inputs actually change —
-    convergent (no churn) AND non-stranding (no lease/release event required,
-    which siblings rarely emit).
-
-    FAIL-OPEN: a non-``[sibling]`` block, no declared ``wait_paths``, or a failed
-    probe (``dirty is None``) → False (dispatch as before). Pure given ``dirty``.
-    """
-    from lib.conversations.project_board import _SIBLING_TAG
-    if _SIBLING_TAG not in (epic.get('block_reason') or '').lower():
-        return False
-    want = epic.get('wait_paths') or []
-    if not want or dirty is None:
-        return False
-    for p in want:
-        if p in dirty:
-            return True
-        if any(_paths_intersect(p, d) for d in dirty):
-            return True
-    return False
-
-
-def _skip_unresolved_sibling(project_path: str, epic: dict, dirty_cache: dict) -> bool:
-    """NEVER-BLOCK invariant: a conversation is NEVER withheld from dispatch.
-
-    A ``[sibling]``-blocked epic is throttled ONLY by its own self-expiring,
-    escalating cooldown (``blocked_until``) — never permanently frozen by a
-    change-gate keyed on a sibling COMMIT. Commits are disposable, so keying
-    dispatch on one could strand an epic forever. Always returns False (the
-    heartbeat sweeps call this; the signature is kept for their call sites)."""
-    return False
-
-
 def dispatch_epic(project_path: str, epic: dict, target_conv_id: str, *,
                   config: dict | None = None) -> dict:
     """Kick off ONE board epic into ``target_conv_id`` autonomously.
@@ -809,37 +737,6 @@ def _migrate_stranded_epics(project_path: str) -> int:
     return 0
 
 
-def _auto_land_ready_markers(project_path: str) -> int:
-    """Autonomously land ready-to-land slice markers on this project — the
-    arming of the continuous-atomic-slice-landing loop into the heartbeat.
-
-    Delegates to ``project_ready.auto_land_ready`` which RE-GATES each pending
-    marker at HEAD (never lands a stale marker blind), lands the maximal
-    file-set-DISJOINT set via ``project_commit`` (agent author), and HOLDS any
-    file-set-overlapping markers for human authorization. Best-effort; never
-    raises into the sweep. Returns the number of slices landed this pass.
-
-    Placed at the TOP of ``sweep_dispatch`` (before the epic dispatch loop) so
-    a landed slice refreshes HEAD before any epic that then dispatches picks up
-    work against a stale tree.
-    """
-    if not project_path:
-        return 0
-    try:
-        from lib.conversations.project_ready import auto_land_ready
-        res = auto_land_ready(project_path)
-        landed = res.get('landed') or []
-        if landed:
-            logger.info('[Dispatch] auto-landed %d ready slice(s) on proj=%.40r '
-                        '(held=%d)', len(landed), project_path,
-                        len(res.get('held') or []))
-        return len(landed)
-    except Exception as e:
-        logger.warning('[Dispatch] auto-land ready markers failed proj=%.40r: %s',
-                       project_path, e)
-        return 0
-
-
 def sweep_dispatch(project_path: str, *, max_per_sweep: int = 3) -> int:
     """The HEARTBEAT: dispatch genuinely-pickable epics on an idle project,
     even when nothing just completed (the completion trigger can only propagate
@@ -862,14 +759,6 @@ def sweep_dispatch(project_path: str, *, max_per_sweep: int = 3) -> int:
     if not project_path:
         return 0
     dispatched = 0
-    # ── Arm the continuous-atomic-slice-landing loop: land any green ready
-    #    markers FIRST (before the epic dispatch loop) so a just-landed slice
-    #    refreshes HEAD for any epic that then dispatches. Best-effort; the
-    #    loop re-gates at HEAD + holds overlaps, so this is safe on the tick. ──
-    try:
-        _auto_land_ready_markers(project_path)
-    except Exception as e:
-        logger.debug('[Dispatch] auto-land pass skipped proj=%.40r: %s', project_path, e)
     # ── Self-heal FIRST: re-drain any idle conv still holding an undrained
     #    kickoff (a broken completion chain / restart / a prior multi-dispatch
     #    sweep). Without this, a stranded kickoff stays queued forever — the
@@ -888,18 +777,9 @@ def sweep_dispatch(project_path: str, *, max_per_sweep: int = 3) -> int:
     except Exception as e:
         logger.debug('[Dispatch] migrate pass skipped proj=%.40r: %s', project_path, e)
     try:
-        dirty_cache: dict = {}  # memoize the git dirty-set probe: ≤1 subprocess/sweep
         for epic in select_dispatchable(project_path):
             if dispatched >= max(1, max_per_sweep):
                 break
-            # ── Change-gated sibling re-dispatch: an epic held by a [sibling]
-            #    block auto-resolves only when the sibling COMMITS its path(s).
-            #    While a waited path is still dirty vs HEAD the real blocker
-            #    stands → skip WITHOUT spending a billed kickoff turn (the fix
-            #    for the flat-cooldown re-dispatch bleed). Cheap, unbilled,
-            #    fail-open; the epic is re-evaluated for free next sweep. ──
-            if _skip_unresolved_sibling(project_path, epic, dirty_cache):
-                continue
             target = _dispatch_target(epic)
             if not target:
                 continue  # never invent a conversation
@@ -963,12 +843,7 @@ def on_epic_completed(project_path: str, completed_conv_id: str = '') -> int:
     dispatched = 0
     try:
         candidates = select_dispatchable(project_path)
-        dirty_cache: dict = {}
         for epic in candidates:
-            # Same change-gate as the sweep: don't spend a billed turn on an
-            # epic whose [sibling] blocker (a waited path) is still dirty.
-            if _skip_unresolved_sibling(project_path, epic, dirty_cache):
-                continue
             target = _dispatch_target(epic) or completed_conv_id
             if not target:
                 # No conversation to route the work to — leave it open for a

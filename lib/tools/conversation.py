@@ -289,125 +289,19 @@ BOARD_BLOCK_TOOL = {
     },
 }
 
-# ── Resource/path LEASE tools (durational file-avoidance) ──
-# A lease is a PROACTIVE, path-level reservation posted BEFORE editing that
-# reaches EVERY sibling (incl. an idle one the heartbeat wakes later) via the
-# ambient [PROJECT BOARD] block. It is the STATE-based answer to "hold off on
-# these paths" — complementary to the reactive, active-peers-only file-overlap
-# advisory (lib/presence/conflict.py). NOT a broadcast (no fan-out messaging).
-PATH_CLAIM_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "project_claim_path",
-        "description": (
-            "Reserve a file/path/subsystem you are about to change for a while, "
-            "so sibling conversations can SEE it and prefer other work. Use this "
-            "BEFORE a big or long edit (e.g. 'I'm rewriting styles.css'): it "
-            "posts a durational 'being edited by a sibling' advisory onto the project "
-            "board that EVERY sibling sees on its next turn — including a "
-            "currently-idle conversation the autonomous heartbeat wakes later "
-            "(a plain message would miss it). This is a soft, advisory, "
-            "auto-expiring lease (it can never deadlock the project); re-call to "
-            "refresh the hold on a long job, and release it with "
-            "project_release_path when done. It is NOT a lock and NOT a "
-            "broadcast — it reserves a resource, it does not message anyone."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "resource": {
-                    "type": "string",
-                    "description": "The path(s)/subsystem to hold, e.g. 'static/styles.css' or 'the CSS layer'. Free text; one reservation per string."
-                },
-                "ttl_ms": {
-                    "type": "integer",
-                    "description": "Optional hold duration in ms (default 30 min). Ask for longer up front on a known-long job; a live holder can also just re-call to refresh."
-                },
-            },
-            "required": ["resource"],
-        },
-    },
-}
-
-PATH_RELEASE_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "project_release_path",
-        "description": (
-            "Release a file/path reservation you previously took with "
-            "project_claim_path, once you're done editing — clears the 'Held' "
-            "notice for siblings. Only the holder can release its own hold; an "
-            "unreleased hold simply auto-expires."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "resource": {
-                    "type": "string",
-                    "description": "The exact resource string you held with project_claim_path."
-                },
-            },
-            "required": ["resource"],
-        },
-    },
-}
-
-# ── Safe commit seam (contamination-proof) ──
-# The one clean way for an agent to turn its OWN finished work into a git
-# commit in this large, multi-conversation, persistently-dirty working tree.
-# It NEVER runs `git add -A` and never commits a pathspec: it stages ONLY the
-# files this conversation can PROVE it authored (byte-identical to its own last
-# file-history record), excluding any file that also carries a live sibling's
-# uncommitted hunks, then commits the index with no pathspec. Project-scoped.
-PROJECT_COMMIT_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "project_commit",
-        "description": (
-            "Safely commit THIS conversation's own finished work to git. Use "
-            "this instead of raw `git add`/`git commit` via run_command: this "
-            "project's working tree is large and shared by several sibling "
-            "conversations at once, so a plain `git add <file>` sweeps a "
-            "sibling's uncommitted hunks in the SAME file into your commit. "
-            "This tool stages ONLY files it can prove you authored "
-            "(byte-identical to your own last recorded edit), EXCLUDES any file "
-            "that also carries foreign/sibling hunks or is a generated bundle, "
-            "then commits the index with no pathspec. Excluded files are "
-            "reported, never silently committed. You MUST pass `files` (the "
-            "exact paths you edited this turn — it does NOT auto-discover your "
-            "work). Omit `message` (or pass dry_run) to PREVIEW the "
-            "clean/contaminated/ignored split without committing. Only "
-            "available in project mode."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "message": {
-                    "type": "string",
-                    "description": "Commit message. Omit to get a dry-run plan (clean vs excluded) instead of committing."
-                },
-                "files": {
-                    "type": "array", "items": {"type": "string"},
-                    "description": "REQUIRED. The project-relative paths YOU edited this turn. The tool does NOT auto-discover your work — declare exactly what you changed; it then commits only the subset provably yours (byte-identical to your recorded edit) and holds any file carrying foreign/sibling hunks."
-                },
-                "dry_run": {
-                    "type": "boolean",
-                    "description": "If true, only report the clean/contaminated/ignored split; do not commit."
-                },
-            },
-            "required": ["files"],
-        },
-    },
-}
+# ── (Removed 2026-07-13) The path-lease (project_claim_path/project_release_path)
+# and project_commit agent tools were deleted along with the multi-worktree /
+# auto-land machinery. The project now uses a single shared checkout: agent
+# edits write straight to the served tree and take effect on the next restart —
+# no lease, no commit, no land step. A minor same-file overlap between siblings
+# is hand-fixable interference, never a block. The board/charter/feed/peer
+# blackboard (advisory, never blocking) remains the coordination surface.
 
 BOARD_TOOLS = [BOARD_READ_TOOL, BOARD_POST_TOOL, BOARD_CLAIM_TOOL,
-               BOARD_COMPLETE_TOOL, BOARD_BLOCK_TOOL,
-               PATH_CLAIM_TOOL, PATH_RELEASE_TOOL, PROJECT_COMMIT_TOOL]
+               BOARD_COMPLETE_TOOL, BOARD_BLOCK_TOOL]
 BOARD_TOOL_NAMES = {'project_board_read', 'project_board_post',
                     'project_board_claim', 'project_board_complete',
-                    'project_board_block',
-                    'project_claim_path', 'project_release_path',
-                    'project_commit'}
+                    'project_board_block'}
 
 
 # ── Project Peer tools (Pillar #6 — cross-conversation communication) ──
@@ -559,7 +453,6 @@ __all__ = [
     'CHARTER_TOOLS', 'CHARTER_TOOL_NAMES',
     'BOARD_READ_TOOL', 'BOARD_POST_TOOL', 'BOARD_CLAIM_TOOL',
     'BOARD_COMPLETE_TOOL', 'BOARD_BLOCK_TOOL',
-    'PATH_CLAIM_TOOL', 'PATH_RELEASE_TOOL', 'PROJECT_COMMIT_TOOL',
     'BOARD_TOOLS', 'BOARD_TOOL_NAMES',
     'PEER_STATUS_TOOL', 'PEER_FEED_TOOL', 'PEER_MESSAGE_TOOL',
     'PEER_INTERVENE_TOOL', 'PEER_TOOLS', 'PEER_TOOL_NAMES',

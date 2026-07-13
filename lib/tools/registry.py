@@ -1029,7 +1029,7 @@ def _register_builtins() -> None:
                                      'project_charter_read', 'project_charter_propose',
                                      'project_board_read', 'project_board_post',
                                      'project_board_claim', 'project_board_complete',
-                                     'project_board_block', 'project_commit',
+                                     'project_board_block',
                                      'project_peer_status', 'project_feed_read',
                                      'project_message', 'project_intervene'}),
                  idempotent_tools=frozenset({'list_conversations', 'get_conversation',

@@ -266,7 +266,7 @@ def test_NC_1_lease_dispatch_skip_is_load_bearing(flask_app):
 
     _patch_restore(
         _DISPATCH_SRC,
-        "        if t.get('kind') in ('lease', 'ready'):\n            continue\n",
+        "        if t.get('kind') == 'lease':\n            continue\n",
         "        if False:  # NC-1 (lease-skip disabled)\n            continue\n",
         run,
     )
@@ -361,37 +361,11 @@ def test_NC_3_kind_default_is_load_bearing():
 #  Tool surface + agent reachability
 # ════════════════════════════════════════════════════════════════════
 
-def test_lease_tools_in_schema_and_name_set():
-    from lib.tools import BOARD_TOOLS, BOARD_TOOL_NAMES
-    names = [t['function']['name'] for t in BOARD_TOOLS]
-    assert 'project_claim_path' in names and 'project_release_path' in names
-    assert 'project_claim_path' in BOARD_TOOL_NAMES
-    assert 'project_release_path' in BOARD_TOOL_NAMES
-
-
-def test_registry_routes_lease_tools_to_board_handler():
-    from lib.tasks_pkg.executor import tool_registry
-    from lib.tasks_pkg.handlers.misc import _handle_board_tool
-    assert tool_registry.lookup('project_claim_path', {}) is _handle_board_tool
-    assert tool_registry.lookup('project_release_path', {}) is _handle_board_tool
-
-
-def test_execute_board_tool_claim_and_release(flask_app):
-    from lib.conversations.project_board import execute_board_tool, read_board
-    with flask_app.app_context():
-        out = execute_board_tool(
-            'project_claim_path', {'resource': 'static/styles.css'},
-            current_conv_id='cA', project_path='/l/14')
-        board = read_board('/l/14')
-    assert 'flagged' in out.lower()
-    assert board['tasks'][0]['kind'] == 'lease'
-    with flask_app.app_context():
-        out2 = execute_board_tool(
-            'project_release_path', {'resource': 'static/styles.css'},
-            current_conv_id='cA', project_path='/l/14')
-        board2 = read_board('/l/14')
-    assert 'released' in out2.lower()
-    assert not board2['tasks']
+# NOTE (2026-07-13): the agent-facing lease TOOLS (project_claim_path /
+# project_release_path) were removed along with the worktree/commit machinery.
+# The underlying claim_lease/release_lease functions + kind='lease' rows remain
+# as internal advisory board state (Held lane + wait-path demote), exercised by
+# the behaviour tests above; only the agent-tool surface was retired.
 
 
 # ════════════════════════════════════════════════════════════════════

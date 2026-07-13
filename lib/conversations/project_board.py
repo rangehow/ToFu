@@ -926,7 +926,7 @@ def render_board_block(project_path: str, current_conv_id: str = '') -> str:
     # out of every epic section and render them in their own "Held" block. Only
     # a LIVE lease (effective status still 'claimed') is a held reservation; an
     # expired one reads 'open' and is simply dropped (it holds nothing).
-    epics = [t for t in tasks if t.get('kind') not in ('lease', 'ready')]
+    epics = [t for t in tasks if t.get('kind') != 'lease']
     held_t = [t for t in tasks if t.get('kind') == 'lease' and t['status'] == 'claimed']
     now = _now_ms()
     # An epic whose block cooldown is still LIVE (blocked_until > now) is
@@ -939,22 +939,7 @@ def render_board_block(project_path: str, current_conv_id: str = '') -> str:
     open_t = [t for t in epics if t['status'] == 'open' and t['id'] not in blocked_ids]
     claimed_t = [t for t in epics if t['status'] == 'claimed']
     done_t = [t for t in epics if t['status'] == 'done']
-    # Ready-to-land MARKERS (kind='ready') — the continuous-atomic-slice-landing
-    # queue. Partitioned into their own "Landing" section (never an epic lane):
-    # the human perceives which slices are pending, which land cleanly (file-set
-    # disjoint from every other pending marker → the heartbeat lands them), and
-    # which OVERLAP a sibling slice and so are HELD for the human to sequence.
-    try:
-        from lib.conversations.project_ready import (
-            held_markers, landable_markers)
-        _land_markers = landable_markers(project_path)
-        _held_markers = held_markers(project_path)
-    except Exception as e:
-        logger.debug('[Board] ready-marker read failed proj=%.40r: %s',
-                     project_path, e)
-        _land_markers, _held_markers = [], []
-    if not (open_t or claimed_t or done_t or held_t or blocked_t
-            or _land_markers or _held_markers):
+    if not (open_t or claimed_t or done_t or held_t or blocked_t):
         return ''
     lines = ['[PROJECT BOARD] — shared coordination board for this project. '
              'Before starting work, CHECK it: claim an open epic so siblings '
@@ -1012,29 +997,6 @@ def render_board_block(project_path: str, current_conv_id: str = '') -> str:
             cnt = int(t.get('block_count') or 0)
             lines.append(f'  • [{t["id"]}] {t["title"]}{why} '
                          f'(retry in ~{mins}m, blocked {cnt}×){_wait_annotation(t)}')
-    if _land_markers or _held_markers:
-        lines.append('')
-        lines.append('Landing (green slices awaiting autonomous commit — the '
-                     'continuous-atomic-slice-landing queue):')
-        for m in _land_markers:
-            owner = m.get('conv') or 'a conversation'
-            mine = ' (you)' if current_conv_id and owner == current_conv_id else ''
-            files = ', '.join(m.get('files') or []) or '(no files)'
-            lines.append(f'  • [{m["id"]}] {files} — by {owner}{mine} — READY, '
-                         f'file-set disjoint; the heartbeat will land it '
-                         f'automatically')
-        if _held_markers:
-            # Group held markers by their overlapping file so the human sees the
-            # exact collision they must SEQUENCE (two green slices touching the
-            # same file are each self-consistent but conflict if landed together).
-            lines.append('  Held for human sequencing (these green slices '
-                         'OVERLAP on shared files — authorize a landing order; '
-                         'the heartbeat will NOT auto-land an overlapping pair):')
-            for m in _held_markers:
-                owner = m.get('conv') or 'a conversation'
-                mine = ' (you)' if current_conv_id and owner == current_conv_id else ''
-                files = ', '.join(m.get('files') or []) or '(no files)'
-                lines.append(f'    • [{m["id"]}] {files} — by {owner}{mine}')
     if done_t:
         lines.append('')
         lines.append('Recently done:')
@@ -1094,46 +1056,6 @@ def execute_board_tool(fn_name: str, fn_args: dict, *,
                         'class ([human-gated] vs [sibling]) so it is visible on '
                         'the board.')
             return f'Error reporting block: {res.get("error", "unknown")}.'
-        if fn_name == 'project_claim_path':
-            res = claim_lease(project_path, current_conv_id,
-                              fn_args.get('resource') or '',
-                              ttl_ms=int(fn_args.get('ttl_ms') or DEFAULT_LEASE_TTL_MS))
-            if res.get('ok'):
-                return ('Path(s) flagged. Siblings now see a "being edited by a '
-                        'sibling" advisory on the board (including a freshly-woken '
-                        'idle conversation on its next turn). Re-call to refresh the '
-                        'signal; release it with project_release_path when done. '
-                        'This is advisory — the lease auto-expires and never blocks '
-                        'any conversation.')
-            if res.get('error') == 'already_held':
-                return (f'Already flagged by conversation '
-                        f'{res.get("owner", "?")}. This is advisory — proceed if you '
-                        f'need to; a minor overlap is easily fixed at commit time.')
-            return f'Error holding path(s): {res.get("error", "unknown")}.'
-        if fn_name == 'project_release_path':
-            res = release_lease(project_path, current_conv_id,
-                                fn_args.get('resource') or '')
-            if res.get('ok'):
-                return 'Released. The "being edited" advisory is cleared for siblings.'
-            if res.get('error') == 'held_by_other':
-                return (f'Not released — held by conversation '
-                        f'{res.get("owner", "?")}, not you.')
-            if res.get('error') == 'no such lease':
-                return 'No matching hold to release (already expired or released).'
-            return f'Error releasing path(s): {res.get("error", "unknown")}.'
-        if fn_name == 'project_commit':
-            # Single shared-checkout model: commit the conversation's declared
-            # files directly. A sibling's minor hunk overlap is acceptable,
-            # hand-fixable interference — never a block.
-            from lib.conversations.project_commit import execute_commit_tool
-            return execute_commit_tool(
-                fn_args, current_conv_id=current_conv_id,
-                project_path=project_path)
-        if fn_name == 'project_ready_land':
-            from lib.conversations.project_ready import execute_ready_land_tool
-            return execute_ready_land_tool(
-                fn_args, current_conv_id=current_conv_id,
-                project_path=project_path)
         return f"Error: Unknown board tool '{fn_name}'"
     except Exception as e:
         logger.warning('[Board] tool %s failed: %s', fn_name, e, exc_info=True)

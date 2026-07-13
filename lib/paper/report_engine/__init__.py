@@ -1,9 +1,31 @@
-"""Background worker for paper report generation.
+"""Background worker for paper report generation (facade package).
 
 Drives the LLM tool-calling loop (web_search / fetch_url for landscape
 research), emits chat-compatible events (tool_start / tool_done / delta /
 thinking / done / enriched / error), and persists the enriched report to
 ``paper_reports`` on completion.
+
+This module split out of a single ``report_engine.py`` into cohesive
+sub-modules while preserving ``from lib.paper.report_engine import X`` and
+``from .report_engine import _run_report_task`` (lib/paper/__init__.py) BYTE-FOR-
+BYTE. The import path is UNCHANGED.
+
+Partition:
+  * ``_meta``   — :func:`_build_report_meta`, the finish-tag metadata builder.
+  * ``_hooks``  — :func:`_maybe_run_insight` / :func:`_maybe_run_termfill`, the
+                  gated post-report agentic second-pass hooks.
+  * this file   — :func:`_run_report_task`, the main orchestrator that runs the
+                  tool loop and calls the hooks + ``_build_report_meta``.
+
+``_run_report_task`` lives HERE (not a ``_run`` sub-module) on purpose: the
+de-dup regression's source-level negative-control test reads
+``report_engine.__file__`` and exec's the WHOLE module source with
+``__package__='lib.paper'`` — so the orchestrator (and the patchable
+``dispatch_stream`` / ``_execute_report_tool`` seams the abort/dedup tests
+monkeypatch on the package) must be defined at the top level of this file with a
+self-contained (absolute-import) body. The ``_build_report_meta`` /
+``_maybe_run_insight`` / ``_maybe_run_termfill`` re-imports below are absolute so
+that exec'd copy resolves the real sub-modules regardless of ``__package__``.
 """
 
 import json
@@ -17,177 +39,31 @@ from lib.llm_dispatch.api import dispatch_stream
 from lib.llm_errors import AbortedError
 from lib.log import get_logger
 
-from .images import (
+from lib.paper.images import (
     _backfill_library_title,
     _extract_title_from_report,
     _inject_images_into_report,
     _is_placeholder_title,
     _lookup_paper_title,
 )
-from .prompts import _MAX_REPORT_TOOL_ROUNDS, _REPORT_TOOLS
-from .report_runtime import _append_report_event, _cleanup_stale_report_tasks
-from .tools import (
+from lib.paper.prompts import _MAX_REPORT_TOOL_ROUNDS, _REPORT_TOOLS
+from lib.paper.report_runtime import _append_report_event, _cleanup_stale_report_tasks
+from lib.paper.tools import (
     _execute_report_tool,
     display_query_for,
     parse_and_repair_tool_args,
 )
 
+# ── Split-out cohesive pieces, re-exported so the facade is byte-identical.
+#    Absolute imports so the negative-control test's exec'd copy (which sets
+#    ``__package__='lib.paper'``) resolves the real sub-modules too. ──────────
+from lib.paper.report_engine._meta import _build_report_meta  # noqa: E402
+from lib.paper.report_engine._hooks import (  # noqa: E402
+    _maybe_run_insight,
+    _maybe_run_termfill,
+)
+
 logger = get_logger(__name__)
-
-
-def _build_report_meta(model, provider_id, usage_total, round_count, elapsed_s):
-    """Assemble the report "finish tag" metadata dict.
-
-    Combines the resolved generation model, accumulated token usage, and the
-    computed cost (via ``lib.cost.compute_cost`` — the same math the chat
-    finish-info bar uses) into a small JSON-serialisable dict the frontend
-    renders as a badge under the report. Cost is best-effort: a pricing miss
-    leaves ``costCny``/``costUsd`` as None but the model + token counts still
-    show.
-    """
-    cost = None
-    try:
-        from lib.cost import compute_cost
-        cost = compute_cost(usage_total, model_id=model, provider_id=provider_id)
-    except Exception as e:
-        logger.warning('[Paper:Report] cost computation failed: %s', e)
-    meta = {
-        'model': model or '',
-        'providerId': provider_id or '',
-        'rounds': round_count,
-        'elapsedSec': round(elapsed_s, 1),
-        'promptTokens': usage_total.get('prompt_tokens', 0),
-        'completionTokens': usage_total.get('completion_tokens', 0),
-        'cacheReadTokens': usage_total.get('cache_read_tokens', 0),
-        'cacheWriteTokens': usage_total.get('cache_write_tokens', 0),
-        'costUsd': cost.get('costUsd') if cost else None,
-        'costCny': cost.get('costCny') if cost else None,
-    }
-    return meta
-
-
-def _maybe_run_insight(task, phash, ui_lang, report_md, *, truncated_paper, model):
-    """Run the gated insight second-pass after a report completes (best-effort).
-
-    Skips entirely unless ``TOFU_PAPER_INSIGHT`` is on and this is a plain
-    report (never Review Mode). Emits an ``insight_start`` event so the reader
-    can show a "synthesizing insight…" affordance, then either an ``insight``
-    event carrying the rendered section (gate fired + produced) or an
-    ``insight_skipped`` event (gate withheld / nothing produced). Persistence is
-    handled inside ``run_report_insight`` (``insight:<ui>`` key).
-
-    ``allow_personal_context`` is resolved via ``lib/agent_core/personal_scope``
-    from the task's cfg — the interactive report route leaves it unset → the
-    resolver defaults True (owner keeps the transfer moat); every headless
-    cfg-builder stamps ``paperInsightPersonalContext=False`` so a BYO caller's
-    analysis never gets the operator's library/memories.
-    """
-    from .insight_engine import insight_enabled, run_report_insight
-    from .review import is_review_lang
-
-    if not insight_enabled():
-        return
-    if is_review_lang(task.get('lang') or ''):
-        return
-    if not (report_md or '').strip():
-        return
-
-    from lib.agent_core.personal_scope import resolve_paper_insight_personal_context
-    allow_personal = resolve_paper_insight_personal_context(task.get('config'))
-
-    abort_event = task.get('abort_event')
-
-    def _abort():
-        return bool(abort_event and abort_event.is_set())
-
-    def _on_tool_event(ev):
-        # Forward the insight research tool_start/tool_done into the SAME event
-        # log the report uses, tagged so the frontend routes them to the insight
-        # affordance rather than the report's tool panel.
-        ev = dict(ev)
-        ev['insight'] = True
-        _append_report_event(task, ev)
-
-    _append_report_event(task, {'type': 'insight_start', 'paperHash': phash})
-    logger.info('[Paper:Insight] Starting gated second-pass — hash=%s ui_lang=%s '
-                'personal_ctx=%s', phash, ui_lang, allow_personal)
-
-    result = run_report_insight(
-        truncated_paper, report_md, ui_lang, phash=phash, model=model,
-        abort=_abort, on_tool_event=_on_tool_event,
-        allow_personal_context=allow_personal)
-
-    if result.get('markdown') and result.get('insight'):
-        task['insight_text'] = result['markdown']
-        _append_report_event(task, {
-            'type': 'insight', 'paperHash': phash,
-            'insight': result['markdown'],
-            'lang': ui_lang,
-            'baseline': result.get('baseline'),
-            'grounded': result.get('grounded', 0),
-            'selfref': result.get('selfref', 0),
-        })
-        logger.info('[Paper:Insight] Emitted insight — hash=%s fired=%s baseline=%s '
-                    '%d chars', phash, result['fired'], result.get('baseline'),
-                    len(result['markdown']))
-    else:
-        _append_report_event(task, {
-            'type': 'insight_skipped', 'paperHash': phash,
-            'fired': result.get('fired', False),
-            'baseline': result.get('baseline'),
-            'llmError': result.get('llmError', False),
-        })
-        logger.info('[Paper:Insight] No insight surfaced — hash=%s fired=%s baseline=%s',
-                    phash, result.get('fired'), result.get('baseline'))
-
-
-def _maybe_run_termfill(task, phash, ui_lang, report_md, report_meta, *, model):
-    """Run the gated definition-backfill second pass (best-effort, additive).
-
-    Skips unless ``TOFU_PAPER_TERMFILL`` is on, this is a plain report (never
-    Review Mode), and the terminology audit actually flagged a gap
-    (``report_meta['terminologyAudit']`` present). Generates a gap-closing
-    glossary addendum (pure body context, re-audit gated), persists it under the
-    SEPARATE ``termfill:<ui>`` key, and emits a ``termfill`` event carrying the
-    addendum so the live reader sees the added definitions and the frontend can
-    downgrade the warning card. The primary persisted report body is untouched
-    (byte-identical whether this runs or not) — mirrors the insight pass.
-    """
-    from lib.agent_core.personal_scope import resolve_paper_termfill_enabled
-
-    from .review import is_review_lang
-    from .terminology_backfill import run_report_termfill, termfill_globally_disabled
-
-    # Fleet-wide kill switch first, then the per-request gate (interactive ON,
-    # headless opt-in — resolved from task['config'] via the personal-scope
-    # registry, the same seam the insight pass uses).
-    if termfill_globally_disabled():
-        return
-    if not resolve_paper_termfill_enabled(task.get('config')):
-        return
-    if is_review_lang(task.get('lang') or ''):
-        return
-    audit = (report_meta or {}).get('terminologyAudit')
-    if not audit:
-        return
-    if not (report_md or '').strip():
-        return
-
-    logger.info('[Paper:TermFill] Starting gated backfill — hash=%s ui_lang=%s '
-                'gaps=%s', phash, ui_lang, audit.get('counts'))
-    result = run_report_termfill(report_md, ui_lang, phash=phash, model=model,
-                                 audit=audit)
-    if result.get('markdown') and result.get('closed'):
-        task['termfill_text'] = result['markdown']
-        _append_report_event(task, {
-            'type': 'termfill', 'paperHash': phash,
-            'addendum': result['markdown'], 'lang': ui_lang,
-        })
-        logger.info('[Paper:TermFill] Emitted addendum — hash=%s %d chars',
-                    phash, len(result['markdown']))
-    else:
-        _append_report_event(task, {'type': 'termfill_skipped', 'paperHash': phash})
-        logger.info('[Paper:TermFill] No gap-closing addendum surfaced — hash=%s', phash)
 
 
 def _run_report_task(task, messages, images):
@@ -215,7 +91,7 @@ def _run_report_task(task, messages, images):
     # Review Mode (composite lang key ``review:<venue>:<uilang>``) is TEXT-ONLY:
     # a peer review is a decision document, not an illustrated explainer, so no
     # figures are injected AND any image the model emitted itself is stripped.
-    from .review import is_review_lang
+    from lib.paper.review import is_review_lang
     _is_review = is_review_lang(lang)
     inj_appendix = not _is_review
     inj_allow_images = not _is_review
@@ -533,7 +409,7 @@ def _run_report_task(task, messages, images):
         # persistence) so the enriched body, DB row, and `done` event all carry
         # smart quotes. Math ($...$ primes), code, and URLs are preserved.
         if is_review_lang(lang):
-            from .review import finalize_review_body, smarten_quotes, strip_slop_dashes
+            from lib.paper.review import finalize_review_body, smarten_quotes, strip_slop_dashes
             _pre = full_content
             # Educate quotes + de-slop dashes, THEN make the body submittable:
             # strip any leaked table / dangling-* caption artifact and relocate
@@ -695,3 +571,26 @@ def _run_report_task(task, messages, images):
         _append_report_event(task, {'type': 'error', 'error': envelope})
     finally:
         _cleanup_stale_report_tasks()
+
+
+__all__ = [
+    '_run_report_task',
+    '_build_report_meta',
+    '_maybe_run_insight',
+    '_maybe_run_termfill',
+    # ── patchable dependency seams (abort/dedup tests monkeypatch these on
+    #    ``report_engine``) + helpers re-exported for parity with the flat module ──
+    'dispatch_stream',
+    '_execute_report_tool',
+    'display_query_for',
+    'parse_and_repair_tool_args',
+    '_append_report_event',
+    '_cleanup_stale_report_tasks',
+    '_inject_images_into_report',
+    '_backfill_library_title',
+    '_extract_title_from_report',
+    '_is_placeholder_title',
+    '_lookup_paper_title',
+    '_MAX_REPORT_TOOL_ROUNDS',
+    '_REPORT_TOOLS',
+]

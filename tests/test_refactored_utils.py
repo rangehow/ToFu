@@ -362,7 +362,7 @@ class TestCompressImage:
                     except (OSError, UnicodeDecodeError):
                         continue
         assert len(hits) == 1, f"Expected 1 definition, found {len(hits)}: {hits}"
-        assert hits[0].replace(os.sep, '/') == 'lib/file_reader.py'
+        assert hits[0].replace(os.sep, '/') == 'lib/file_reader/_image.py'
 
 
 # ═══════════════════════════════════════════════════════════

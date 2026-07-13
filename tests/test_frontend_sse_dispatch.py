@@ -82,6 +82,11 @@ for (const n of ['twUpdate','twStart','twStop','finishStream','renderChat',
 win._streamingBubbleHTML = global._streamingBubbleHTML = () => '<div id="streaming-msg"></div>';
 win._TOFU_PLANNER_SVG = global._TOFU_PLANNER_SVG = '<svg></svg>';
 win.renderMarkdown = global.renderMarkdown = (s) => s;
+// i18n: the real t(key, params) interpolates; the harness only needs a
+// deterministic non-crashing string. Handlers like _handleMessagesSnapshot
+// call t('stream.roundMessages', {round,n}) — without this stub the whole
+// node process throws ReferenceError before later cases run.
+win.t = global.t = (key, params) => key;
 win.ConvView = global.ConvView = { finalizeStreaming: spy('finalizeStreaming') };
 win.Artifacts = global.Artifacts = { attachToMessage: spy('attachToMessage') };
 win.flashGaugeForArchive = global.flashGaugeForArchive = spy('flashGaugeForArchive');

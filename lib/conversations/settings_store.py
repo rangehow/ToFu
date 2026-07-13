@@ -74,7 +74,8 @@ def _row_settings(row: Any) -> Any:
     """Extract the raw settings value from a DB row (key- or index-access)."""
     try:
         return row['settings']
-    except (TypeError, KeyError, IndexError):
+    except (TypeError, KeyError, IndexError) as e:
+        logger.debug('[settings_store] settings key access failed, trying index: %s', e)
         try:
             return row[0]
         except (TypeError, KeyError, IndexError):

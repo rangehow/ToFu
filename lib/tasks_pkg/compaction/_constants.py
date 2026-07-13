@@ -118,7 +118,8 @@ def archive_retention() -> int:
         return _ARCHIVE_RETENTION_DEFAULT
     try:
         val = int(raw)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError) as e:
+        logger.debug('[Compaction] TOFU_COMPACTION_ARCHIVE_RETENTION parse failed, using fallback: %s', e)
         return _ARCHIVE_RETENTION_DEFAULT
     return val if val > 0 else 0
 

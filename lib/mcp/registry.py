@@ -1016,14 +1016,16 @@ def _reload_catalog_if_changed() -> None:
     path = _registry_path()
     try:
         mtime = os.path.getmtime(path)
-    except OSError:
+    except OSError as e:
+        logger.debug('[MCP:Registry] catalog stat failed, skipping reload check: %s', e)
         return
     if mtime <= _catalog_mtime:
         return
     with _catalog_reload_lock:
         try:
             mtime = os.path.getmtime(path)
-        except OSError:
+        except OSError as e:
+            logger.debug('[MCP:Registry] catalog stat failed under lock: %s', e)
             return
         if mtime <= _catalog_mtime:
             return

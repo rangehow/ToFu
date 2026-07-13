@@ -100,7 +100,8 @@ _MIN_SHRINK_FACTOR = 0.10  # never shrink below 10% of prior ceiling
 # expire. See module docstring for the expand-starvation rationale.
 try:
     _SHRINK_TTL_DAYS = float(os.environ.get('TOFU_CTX_SHRINK_TTL_DAYS', '7') or 7)
-except (TypeError, ValueError):
+except (TypeError, ValueError) as e:
+    logger.debug('[ContextLimits] TOFU_CTX_SHRINK_TTL_DAYS parse failed, using fallback: %s', e)
     _SHRINK_TTL_DAYS = 7.0
 _SHRINK_TTL_SEC = _SHRINK_TTL_DAYS * 86400.0
 

@@ -1303,7 +1303,8 @@ def project_brain_watch_promote():
     expected_version = data.get('expectedVersion')
     try:
         expected_version = int(expected_version) if expected_version is not None else None
-    except (ValueError, TypeError):
+    except (ValueError, TypeError) as e:
+        logger.debug('[Project] bad expectedVersion arg, using fallback: %s', e)
         expected_version = None
     try:
         from lib.conversations.project_watch import promote_watch_item

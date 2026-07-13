@@ -683,7 +683,8 @@ def execute_peer_tool(fn_name: str, fn_args: dict, *,
             # charter summaries are injected; the chronological pulse is pulled.
             try:
                 limit = int(fn_args.get('limit') or 25)
-            except (TypeError, ValueError):
+            except (TypeError, ValueError) as e:
+                logger.debug('[Peer] feed limit parse failed, defaulting: %s', e)
                 limit = 25
             limit = max(1, min(limit, 60))
             from lib.conversations.project_feed import read_project_feed

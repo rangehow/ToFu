@@ -493,7 +493,8 @@ def _cwd_within_conv_roots(conv_id, abs_cwd):
         return False
     try:
         target = os.path.realpath(abs_cwd)
-    except OSError:
+    except OSError as e:
+        logger.debug('[Config] realpath of cwd failed, using fallback: %s', e)
         return False
     with _lock:
         if conv_id and conv_id in _conv_roots:
@@ -503,7 +504,8 @@ def _cwd_within_conv_roots(conv_id, abs_cwd):
     for rs in roots:
         try:
             rp = os.path.realpath(rs['path'])
-        except OSError:
+        except OSError as e:
+            logger.debug('[Config] realpath of root failed, using fallback: %s', e)
             continue
         if target == rp or target.startswith(rp + os.sep):
             return True

@@ -55,7 +55,8 @@ def _round_handle_ids(round_entry: dict) -> set[str]:
         return set()
     try:
         handle = json.loads(raw)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError) as e:
+        logger.debug('[Snapshot] toolContent JSON parse failed, using fallback: %s', e)
         return set()
     agents = handle.get('agents') if isinstance(handle, dict) else None
     if not isinstance(agents, list):

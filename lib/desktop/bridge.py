@@ -60,7 +60,8 @@ _COMMAND_TTL_S = 90
 import os as _os
 try:
     POLL_WAIT_TIMEOUT = float(_os.environ.get('TOFU_DESKTOP_POLL_WAIT', '8'))
-except (ValueError, TypeError):
+except (ValueError, TypeError) as _e:
+    logger.debug('[Desktop] bad TOFU_DESKTOP_POLL_WAIT, using 8.0: %s', _e)
     POLL_WAIT_TIMEOUT = 8.0
 
 
@@ -182,8 +183,8 @@ async def take_pending_commands_async(timeout: float = None) -> list:
         with _async_waiters_lock:
             try:
                 _async_waiters.remove(waiter)
-            except ValueError:
-                pass
+            except ValueError as _e:
+                logger.debug('[Desktop] waiter already removed: %s', _e)
 
 
 def pending_commands_count() -> int:

@@ -1177,7 +1177,8 @@ async def search_arxiv_route():
 
     try:
         max_results = int(data.get('max_results') or 10)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError) as e:
+        logger.debug('[Paper] bad max_results arg, using fallback: %s', e)
         max_results = 10
 
     results = await asyncio.to_thread(search_arxiv, query, max_results)
@@ -1210,7 +1211,8 @@ async def recommend_papers_route():
 
     try:
         max_results = int(data.get('max_results') or 6)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError) as e:
+        logger.debug('[Paper] bad max_results arg, using fallback: %s', e)
         max_results = 6
 
     out = await asyncio.to_thread(recommend_papers, description, max_results)
@@ -1241,7 +1243,8 @@ async def start_recommend_task():
 
     try:
         max_results = int(data.get('max_results') or 6)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError) as e:
+        logger.debug('[Paper] bad max_results arg, using fallback: %s', e)
         max_results = 6
 
     task_id = f'rec_{int(time.time() * 1000)}_{_recommend_key(description)}'

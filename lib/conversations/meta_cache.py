@@ -112,7 +112,8 @@ def _sidebar_limit() -> int:
     recommended)."""
     try:
         n = int(os.environ.get('TOFU_SIDEBAR_MAX', '') or '500')
-    except (ValueError, TypeError):
+    except (ValueError, TypeError) as e:
+        logger.debug('[meta_cache] TOFU_SIDEBAR_MAX parse failed, defaulting to 500: %s', e)
         n = 500
     return max(0, n)
 

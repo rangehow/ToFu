@@ -88,13 +88,15 @@ def _canon_args(raw: Any) -> str:
     if isinstance(raw, (dict, list)):
         try:
             return json.dumps(raw, sort_keys=True, ensure_ascii=False)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError) as e:
+            logger.debug('[WireFingerprint] JSON dump failed, using fallback: %s', e)
             return str(raw)
     s = '' if raw is None else str(raw)
     try:
         obj = json.loads(s or '{}')
         return json.dumps(obj, sort_keys=True, ensure_ascii=False)
-    except (json.JSONDecodeError, TypeError, ValueError):
+    except (json.JSONDecodeError, TypeError, ValueError) as e:
+        logger.debug('[WireFingerprint] JSON reparse failed, using fallback: %s', e)
         return s.strip()
 
 

@@ -850,6 +850,7 @@ def save_uploaded_file(base, rel_path, data, description='', conv_id=None,
         try:
             _enforce_not_readonly(abs_path, conv_id=conv_id)
         except ValueError as e:
+            logger.debug('[write_tools] readonly enforcement failed, using fallback: %s', e)
             return {'ok': False, 'error': str(e), 'action': 'upload_file', 'path': rel_path}
         target = abs_path
     else:

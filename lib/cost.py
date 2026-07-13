@@ -104,7 +104,8 @@ def normalize_usage(usage: Optional[dict]) -> dict:
                 break
         try:
             out[canon] = int(val or 0)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError) as e:
+            logger.debug('[Cost] usage int parse failed, using fallback: %s', e)
             out[canon] = 0
     return out
 

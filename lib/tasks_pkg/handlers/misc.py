@@ -581,7 +581,8 @@ def _handle_peer_tool(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg, p
         if fn_name == 'project_feed_read':
             try:
                 limit = int(_fn_args.get('limit') or 25)
-            except (TypeError, ValueError):
+            except (TypeError, ValueError) as e:
+                logger.debug('[Peer] limit int parse failed, using fallback: %s', e)
                 limit = 25
             limit = max(1, min(limit, 60))
             try:

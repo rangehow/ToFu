@@ -193,34 +193,40 @@ def _row_to_task(r, now_ms: int) -> dict:
         depends_on = json.loads(r['depends_on']) if r['depends_on'] else []
         if not isinstance(depends_on, list):
             depends_on = []
-    except (TypeError, ValueError):
+    except (TypeError, ValueError) as e:
+        logger.debug('[Board] depends_on parse failed, defaulting: %s', e)
         depends_on = []
     stored = r['status'] or 'open'
     lease = int(r['lease_expires_at'] or 0)
     eff = _effective_status(stored, lease, now_ms)
     try:
         dispatched = bool(r['dispatched'])
-    except (KeyError, IndexError, TypeError):
+    except (KeyError, IndexError, TypeError) as e:
+        logger.debug('[Board] dispatched field parse failed, defaulting: %s', e)
         dispatched = False
     # kind is nullable-safe: a pre-migration row (no column / NULL) reads as
     # 'epic' so it is NEVER silently dropped off the dispatch board.
     try:
         kind = r['kind'] or 'epic'
-    except (KeyError, IndexError, TypeError):
+    except (KeyError, IndexError, TypeError) as e:
+        logger.debug('[Board] kind field parse failed, defaulting: %s', e)
         kind = 'epic'
     # Block-cooldown fields are nullable-safe: a pre-migration row (no column)
     # reads as never-blocked (0/'') so it is NEVER wrongly cooldown-suppressed.
     try:
         blocked_until = int(r['blocked_until'] or 0)
-    except (KeyError, IndexError, TypeError):
+    except (KeyError, IndexError, TypeError) as e:
+        logger.debug('[Board] blocked_until field parse failed, defaulting: %s', e)
         blocked_until = 0
     try:
         block_count = int(r['block_count'] or 0)
-    except (KeyError, IndexError, TypeError):
+    except (KeyError, IndexError, TypeError) as e:
+        logger.debug('[Board] block_count field parse failed, defaulting: %s', e)
         block_count = 0
     try:
         block_reason = r['block_reason'] or ''
-    except (KeyError, IndexError, TypeError):
+    except (KeyError, IndexError, TypeError) as e:
+        logger.debug('[Board] block_reason field parse failed, defaulting: %s', e)
         block_reason = ''
     # wait_paths is nullable-safe: a pre-migration row (no column) reads as an
     # empty list -> no wait -> never wrongly held. Malformed JSON also -> [].
@@ -228,13 +234,15 @@ def _row_to_task(r, now_ms: int) -> dict:
         wait_paths = json.loads(r['wait_paths'] or '[]')
         if not isinstance(wait_paths, list):
             wait_paths = []
-    except (KeyError, IndexError, TypeError, ValueError):
+    except (KeyError, IndexError, TypeError, ValueError) as e:
+        logger.debug('[Board] wait_paths parse failed, defaulting: %s', e)
         wait_paths = []
     # dispatch_target is nullable-safe: a pre-migration row (no column) reads as
     # '' -> dispatch routes to created_by_conv (unchanged).
     try:
         dispatch_target = r['dispatch_target'] or ''
-    except (KeyError, IndexError, TypeError):
+    except (KeyError, IndexError, TypeError) as e:
+        logger.debug('[Board] dispatch_target field parse failed, defaulting: %s', e)
         dispatch_target = ''
     # write_set is nullable-safe: a pre-migration row (no column) reads as an
     # empty list -> unknown footprint -> treated as non-conflicting (never
@@ -244,7 +252,8 @@ def _row_to_task(r, now_ms: int) -> dict:
         write_set = json.loads(r['write_set'] or '[]')
         if not isinstance(write_set, list):
             write_set = []
-    except (KeyError, IndexError, TypeError, ValueError):
+    except (KeyError, IndexError, TypeError, ValueError) as e:
+        logger.debug('[Board] write_set parse failed, defaulting: %s', e)
         write_set = []
     return {
         'id': r['id'], 'title': r['title'] or '', 'status': eff,

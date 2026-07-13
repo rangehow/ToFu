@@ -2098,13 +2098,15 @@ def recover_stale_tasks_on_startup():
             # NOT a separate SELECT→mutate→UPDATE (that would clobber).
             try:
                 _final_msgs = json.loads(messages_json) if messages_json else json.loads(crow['messages'] or '[]')
-            except (json.JSONDecodeError, TypeError):
+            except (json.JSONDecodeError, TypeError) as e:
+                logger.debug('[Manager] final_msgs JSON parse failed, using fallback: %s', e)
                 _final_msgs = []
             if _final_msgs:
                 _lm = _final_msgs[-1]
                 try:
                     _s = json.loads(settings_json or '{}')
-                except (json.JSONDecodeError, TypeError):
+                except (json.JSONDecodeError, TypeError) as e:
+                    logger.debug('[Manager] settings JSON parse failed, using fallback: %s', e)
                     _s = {}
                 _s['lastMsgRole'] = _lm.get('role')
                 _s['lastMsgTimestamp'] = _lm.get('timestamp')
@@ -2230,7 +2232,8 @@ def _stuck_task_max_silent_secs() -> int:
     import os
     try:
         return int(os.environ.get('TOFU_STUCK_TASK_MAX_SILENT_SECS', '') or '1800')
-    except (ValueError, TypeError):
+    except (ValueError, TypeError) as e:
+        logger.debug('[Manager] TOFU_STUCK_TASK_MAX_SILENT_SECS parse failed, using fallback: %s', e)
         return 1800
 
 

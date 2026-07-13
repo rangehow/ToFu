@@ -106,7 +106,8 @@ def _open_mode_rpm() -> int:
     import os
     try:
         n = int(os.environ.get('TOFU_OPEN_MODE_RPM', '') or '120')
-    except (ValueError, TypeError):
+    except (ValueError, TypeError) as e:
+        logger.debug('[RateLimitApi] TOFU_OPEN_MODE_RPM parse failed, using fallback: %s', e)
         n = 120
     return max(0, n)
 

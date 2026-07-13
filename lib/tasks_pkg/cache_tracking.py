@@ -328,7 +328,8 @@ def _hash_prefix_fields(messages: list, prefix_count: int) -> list[dict]:
             try:
                 fh['reasoning_details'] = _md5(
                     json.dumps(rd, sort_keys=True, ensure_ascii=False))
-            except (TypeError, ValueError):
+            except (TypeError, ValueError) as e:
+                logger.debug('[CacheTracking] reasoning_details JSON dump failed, using fallback: %s', e)
                 fh['reasoning_details'] = _md5(str(rd))
         out.append(fh)
     return out

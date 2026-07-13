@@ -105,13 +105,15 @@ def _row_to_marker(r) -> dict:
         files = json.loads(r['wait_paths'] or '[]')
         if not isinstance(files, list):
             files = []
-    except (TypeError, ValueError, KeyError, IndexError):
+    except (TypeError, ValueError, KeyError, IndexError) as e:
+        logger.debug('[Ready] marker files parse failed, defaulting: %s', e)
         files = []
     try:
         desc = json.loads(r['block_reason'] or '{}')
         if not isinstance(desc, dict):
             desc = {}
-    except (TypeError, ValueError, KeyError, IndexError):
+    except (TypeError, ValueError, KeyError, IndexError) as e:
+        logger.debug('[Ready] marker desc parse failed, defaulting: %s', e)
         desc = {}
     return {
         'id': r['id'],

@@ -443,7 +443,8 @@ def _coerce_spec_list(value) -> list:
             return []
         try:
             parsed = json.loads(s)
-        except (ValueError, TypeError):
+        except (ValueError, TypeError) as e:
+            logger.debug('[Compaction] JSON parse failed, using fallback: %s', e)
             return []
         return parsed if isinstance(parsed, list) else []
     return []

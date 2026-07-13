@@ -148,7 +148,8 @@ def _row_rev(r):
     if 'rev' in keys:
         try:
             return int(r['rev'] or 0)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError) as e:
+            logger.debug('[conversations] _row_rev: bad rev value, using fallback: %s', e)
             return 0
     return 0
 
@@ -471,7 +472,8 @@ def _persist_reconcile(db, conv_id, cleaned, settings_dict):
         if row is not None:
             try:
                 new_rev = int(row['rev'] if hasattr(row, 'keys') else row[0])
-            except (TypeError, ValueError, KeyError, IndexError):
+            except (TypeError, ValueError, KeyError, IndexError) as e:
+                logger.debug('[conversations] read post-reconcile new_rev parse failed, using fallback: %s', e)
                 new_rev = 0
     except Exception as e:
         logger.debug('[get_conv] read post-reconcile rev conv=%s: %s',
@@ -566,7 +568,8 @@ def _schedule_reconcile_persist(conv_id, cleaned, settings_dict):
 
     try:
         loop = asyncio.get_running_loop()
-    except RuntimeError:
+    except RuntimeError as e:
+        logger.debug('[get_conv] no running loop for bg reconcile, running sync: %s', e)
         loop = None
     if loop is None:
         # No running loop (non-async caller): skip — reconcile is idempotent, so
@@ -674,9 +677,9 @@ def _maybe_backfill_narration_on_open(conv_id, conv_dict):
         loop = asyncio.get_running_loop()
         loop.create_task(backfill_conv_narration_segments(conv_id))
         logger.info('[get_conv] conv=%s spawned on-open narration backfill', conv_id[:8])
-    except RuntimeError:
+    except RuntimeError as e:
         # No running loop (sync context) — skip; the migration covers offline rows.
-        pass
+        logger.debug('[get_conv] no running loop, skipping on-open backfill: %s', e)
     except Exception as e:
         logger.debug('[get_conv] narration backfill spawn skipped conv=%s: %s',
                      conv_id[:8], e)
@@ -689,7 +692,8 @@ def _parse_window_args():
     """
     try:
         window = int(request.args.get('window', '') or 0)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError) as e:
+        logger.debug('[conversations] _parse_window_args: bad window arg, using fallback: %s', e)
         window = 0
     if window < 0:
         window = 0
@@ -698,7 +702,8 @@ def _parse_window_args():
     if bs:
         try:
             before_seq = int(bs)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError) as e:
+            logger.debug('[conversations] _parse_window_args: bad before_seq arg, using fallback: %s', e)
             before_seq = None
     return window, before_seq
 

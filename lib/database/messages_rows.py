@@ -256,7 +256,8 @@ def load_message_window(db, conv_id: str, limit: int, before_seq=None) -> dict:
     def _seq(r):
         try:
             return int(r['seq'] if hasattr(r, 'keys') else r[1])
-        except (KeyError, IndexError, TypeError, ValueError):
+        except (KeyError, IndexError, TypeError, ValueError) as e:
+            logger.debug('[MessagesRows] seq parse failed, using fallback: %s', e)
             return None
 
     msgs = rows_to_messages(rows)

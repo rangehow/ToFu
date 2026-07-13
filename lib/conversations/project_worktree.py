@@ -81,7 +81,8 @@ def _detect_no_optional_locks() -> bool:
                            timeout=10, check=False)
         # rc 128 (not a repo) still means the FLAG parsed; 129 = unknown option.
         return p.returncode != 129
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, subprocess.SubprocessError) as e:
+        logger.debug('[Worktree] no-optional-locks probe failed, assuming unsupported: %s', e)
         return False
 
 
@@ -224,7 +225,8 @@ def _rmtree_retry(path: str) -> None:
         try:
             shutil.rmtree(path, ignore_errors=False)
             return
-        except FileNotFoundError:
+        except FileNotFoundError as e:
+            logger.debug('[Worktree] rmtree %s already absent, nothing to remove: %s', path, e)
             return
         except OSError as e:
             if attempt == _RM_RETRIES - 1:
@@ -394,6 +396,7 @@ def ensure_worktree(project_path: str, conv_id: str, *,
     try:
         os.makedirs(os.path.dirname(wt), exist_ok=True)
     except OSError as e:
+        logger.debug('[Worktree] worktree parent mkdir failed, using fallback: %s', e)
         return {'ok': False, 'error': f'cannot create worktree parent: {e}'}
 
     # Create the branch off integration HEAD if it doesn't yet exist, then add
@@ -552,7 +555,8 @@ def gc_worktrees(project_path: str, *, now: int | None = None) -> dict:
     for key, entry in list(reg.items()):
         try:
             lease = int((entry or {}).get('lease_expires_at') or 0)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError) as e:
+            logger.debug('[Worktree] lease_expires_at parse failed, defaulting: %s', e)
             lease = 0
         if lease and lease <= now:
             conv_id = (entry or {}).get('conv_id') or key

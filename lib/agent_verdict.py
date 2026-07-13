@@ -593,7 +593,8 @@ def parse_progress(text: str):
         return None, None
     try:
         return int(last.group(1)), int(last.group(2))
-    except (ValueError, TypeError):
+    except (ValueError, TypeError) as e:
+        logger.debug('[AgentVerdict] progress int parse failed, using fallback: %s', e)
         return None, None
 
 

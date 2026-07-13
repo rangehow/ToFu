@@ -153,7 +153,8 @@ async def backfill_conv_narration_segments(conv_id: str, *, log_tag: str = '') -
 
         try:
             expected_rev = int(row['rev'] or 0)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError) as e:
+            logger.debug('[SegmentBackfill] rev int parse failed, using fallback: %s', e)
             expected_rev = 0
 
         messages_json = json_dumps_pg(messages)

@@ -1267,7 +1267,8 @@ class FlowExecutor:
         timeout = params.get('timeout_sec')
         try:
             timeout = int(timeout) if timeout not in (None, '') else 300
-        except (ValueError, TypeError):
+        except (ValueError, TypeError) as e:
+            logger.debug('[FlowEngine] timeout int parse failed, using fallback: %s', e)
             timeout = 300
         approved = request_write_approval(req_id, timeout=timeout)
         self._emit({'type': 'human_resolved', 'node_id': nid, 'mode': mode,
@@ -1539,6 +1540,7 @@ def compile_plan(definition: dict) -> dict:
     try:
         definition = expand_subflows(definition)
     except ValueError as e:
+        logger.debug('[FlowEngine] expand_subflows failed, using fallback: %s', e)
         return {'ok': False, 'steps': [], 'error': f'subflow: {e}'}
 
     nodes = {n['id']: n for n in definition.get('nodes', [])}

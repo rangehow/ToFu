@@ -261,7 +261,8 @@ def read_project_feed(project_path: str, since_seq: int = 0,
     for r in rows:
         try:
             payload = json.loads(r['payload']) if r['payload'] else {}
-        except (TypeError, ValueError):
+        except (TypeError, ValueError) as e:
+            logger.debug('[ProjFeed] payload parse failed, defaulting: %s', e)
             payload = {}
         seq = int(r['seq'])
         max_seq = max(max_seq, seq)

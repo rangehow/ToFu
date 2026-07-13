@@ -182,7 +182,8 @@ def _remote_is_loopback() -> bool:
     addr = addr.split('%', 1)[0]
     try:
         ip = ipaddress.ip_address(addr)
-    except ValueError:
+    except ValueError as e:
+        logger.debug('[Auth] ip_address parse failed, using fallback: %s', e)
         return False
     if ip.is_loopback:
         return True

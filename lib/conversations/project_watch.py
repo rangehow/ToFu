@@ -211,7 +211,8 @@ def _response_trail(db, item_id: str, limit: int = 20) -> list[dict]:
     for r in rows:
         try:
             ps = json.loads(r['pillar_state']) if r['pillar_state'] else {}
-        except (TypeError, ValueError):
+        except (TypeError, ValueError) as e:
+            logger.debug('[Watch] response pillar_state parse failed, defaulting: %s', e)
             ps = {}
         out.append({'seq': int(r['seq']), 'response': r['response'] or '',
                     'pillar_state': ps, 'trigger': r['trigger'] or '',
@@ -303,7 +304,8 @@ def _persist_response(db, item_id: str, project_path: str, response: str,
                       pillar_state: dict, trigger: str) -> dict | None:
     try:
         pillar_json = json.dumps(pillar_state, ensure_ascii=False)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError) as e:
+        logger.debug('[Watch] pillar_state dump failed, defaulting: %s', e)
         pillar_json = '{}'
     ts = _now_ms()
     try:

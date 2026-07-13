@@ -58,12 +58,14 @@ def _resume_max_age_seconds(timer: dict[str, Any]) -> float:
     """
     try:
         floor_hours = float(_os.environ.get('TOFU_TIMER_MAX_AGE_HOURS', '24'))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError) as e:
+        logger.debug('[Timer] TOFU_TIMER_MAX_AGE_HOURS parse failed, using fallback: %s', e)
         floor_hours = 24.0
     floor = max(floor_hours, 0.0) * 3600.0
     try:
         budget = float(timer.get('poll_interval') or 60) * float(timer.get('max_polls') or 0)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError) as e:
+        logger.debug('[Timer] poll budget parse failed, using fallback: %s', e)
         budget = 0.0
     return max(floor, budget * 1.5)
 
@@ -72,7 +74,8 @@ def _resume_concurrency_cap() -> int:
     """Max number of timers a single server boot will re-spawn (0 = unlimited)."""
     try:
         return int(_os.environ.get('TOFU_TIMER_RESUME_CAP', '20'))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError) as e:
+        logger.debug('[Timer] TOFU_TIMER_RESUME_CAP parse failed, using fallback: %s', e)
         return 20
 
 

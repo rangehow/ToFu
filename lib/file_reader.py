@@ -236,7 +236,8 @@ def inspect_image_file(path, *, crop=None, rotate=0, zoom=None, grid=False):
 
     try:
         from PIL import Image, ImageDraw
-    except ImportError:
+    except ImportError as e:
+        logger.debug('[FileReader] Pillow import failed, using fallback: %s', e)
         return ('Error: image inspection requires Pillow (PIL), which is not '
                 'installed on the server.')
 
@@ -254,7 +255,8 @@ def inspect_image_file(path, *, crop=None, rotate=0, zoom=None, grid=False):
     # ── 1. Rotate ──────────────────────────────────────────────────
     try:
         rotate = int(rotate or 0) % 360
-    except (TypeError, ValueError):
+    except (TypeError, ValueError) as e:
+        logger.debug('[FileReader] rotate parse failed, using fallback: %s', e)
         rotate = 0
     if rotate not in (0, 90, 180, 270):
         return f'Error: rotate must be one of 0, 90, 180, 270 (got {rotate}).'
@@ -271,7 +273,8 @@ def inspect_image_file(path, *, crop=None, rotate=0, zoom=None, grid=False):
                     '(fractions 0-1 or absolute pixels).')
         try:
             x0, y0, x1, y1 = (float(v) for v in crop)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError) as e:
+            logger.debug('[FileReader] crop parse failed, using fallback: %s', e)
             return 'Error: crop values must be numbers.'
         # Fractional (all within 0..1) → scale to pixels.
         if max(x0, y0, x1, y1) <= 1.0:
@@ -290,7 +293,8 @@ def inspect_image_file(path, *, crop=None, rotate=0, zoom=None, grid=False):
     if zoom is not None:
         try:
             zoom = float(zoom)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError) as e:
+            logger.debug('[FileReader] zoom parse failed, using fallback: %s', e)
             return 'Error: zoom must be a number > 1.'
         if zoom > 1.0:
             cw, ch = max(1, int(w / zoom)), max(1, int(h / zoom))

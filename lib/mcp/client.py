@@ -459,7 +459,8 @@ def _reload_vendored_if_changed() -> None:
     global _vendored_mtime
     try:
         mtime = os.path.getmtime(path)
-    except OSError:
+    except OSError as e:
+        logger.debug('[MCP] vendored.py stat failed, skipping reload check: %s', e)
         return
     if mtime <= _vendored_mtime:
         return
@@ -467,7 +468,8 @@ def _reload_vendored_if_changed() -> None:
         # Re-check under lock — another thread may have just reloaded.
         try:
             mtime = os.path.getmtime(path)
-        except OSError:
+        except OSError as e:
+            logger.debug('[MCP] vendored.py stat failed under lock: %s', e)
             return
         if mtime <= _vendored_mtime:
             return
@@ -552,7 +554,8 @@ def _vendor_tree_signature(base: str) -> dict[str, tuple[int, int]]:
             full = os.path.join(dirpath, fn)
             try:
                 st = os.stat(full)
-            except OSError:
+            except OSError as e:
+                logger.debug('[MCP] vendor scan stat %s failed, skipping: %s', full, e)
                 continue
             sig[os.path.relpath(full, base)] = (st.st_size, int(st.st_mtime))
     return sig
@@ -666,7 +669,8 @@ def _check_snapshot_staleness(command: str) -> None:
         # Recompute so we report the fresh state (and don't re-warn next time).
         try:
             new_reason = _snapshot_stale_reason(sibling, snapshot)
-        except OSError:
+        except OSError as e:
+            logger.debug('[MCP] snapshot stale-reason recompute failed: %s', e)
             new_reason = ''
         with _snapshot_lock:
             _snapshot_reported[command] = new_reason

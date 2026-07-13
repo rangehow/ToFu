@@ -103,7 +103,8 @@ def _todo_continuation_max() -> int:
         return _TODO_CONTINUATION_MAX_DEFAULT
     try:
         val = int(raw)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError) as e:
+        logger.debug('[StreamHandler] TOFU_TODO_CONTINUATION_MAX parse failed, using fallback: %s', e)
         return _TODO_CONTINUATION_MAX_DEFAULT
     return val if val > 0 else 0
 

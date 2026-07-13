@@ -639,7 +639,8 @@ def _kickoff_age_ms(conv_id: str, board_task_id: str, now_ms: int) -> int | None
         for r in rows:
             try:
                 p = _json.loads(r['payload']) if r['payload'] else {}
-            except (TypeError, ValueError):
+            except (TypeError, ValueError) as e:
+                logger.debug('[Dispatch] kickoff payload parse failed, skipping: %s', e)
                 continue
             if p.get('boardTaskId') != board_task_id:
                 continue
@@ -755,7 +756,8 @@ def _drop_epic_kickoffs(conv_id: str, board_task_id: str) -> int:
         for r in rows:
             try:
                 p = _json.loads(r['payload']) if r['payload'] else {}
-            except (TypeError, ValueError):
+            except (TypeError, ValueError) as e:
+                logger.debug('[Dispatch] drop-kickoff payload parse failed, skipping: %s', e)
                 continue
             if p.get('boardTaskId') == board_task_id:
                 db.execute('DELETE FROM message_queue WHERE id=?', (r['id'],))

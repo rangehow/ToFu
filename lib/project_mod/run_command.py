@@ -229,7 +229,8 @@ def _read_cwd_capture(capture_file):
     finally:
         try:
             os.unlink(capture_file)
-        except OSError:
+        except OSError as e:
+            logger.debug('[run_command] capture file unlink failed, using fallback: %s', e)
             pass
     return val or None
 

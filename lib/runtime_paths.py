@@ -72,7 +72,8 @@ def _dir_is_writable(path: str) -> bool:
             fh.write('')
         os.remove(probe)
         return True
-    except OSError:
+    except OSError as e:
+        logger.debug('[RuntimePaths] write probe failed, using fallback: %s', e)
         return False
 
 
@@ -88,7 +89,8 @@ def _dir_is_populated(path: str) -> bool:
     try:
         with os.scandir(path) as it:
             return any(True for _ in it)
-    except OSError:
+    except OSError as e:
+        logger.debug('[RuntimePaths] scandir failed, using fallback: %s', e)
         return False
 
 

@@ -83,7 +83,6 @@ logger = get_logger(__name__)
 
 from lib.agent_verdict import VU_DONE_SENTINEL as _VU_DONE_SENTINEL
 from lib.agent_verdict import classify_verdict as _classify_verdict
-from lib.agent_verdict import _VU_HANDOFF_RE
 
 
 _VU_ROLE_PROMPT = (
@@ -149,20 +148,6 @@ _VU_ROLE_PROMPT = (
     '- If the objective is NOT yet met, give the assistant the specific '
     'unmet criterion or the next concrete step. Do not emit '
     f'{_VU_DONE_SENTINEL} while anything remains unresolved.\n'
-    '- HANDOFF (park the residual): if the ONLY thing keeping the objective '
-    'from being met is BLOCKED on an EXTERNAL commit the assistant cannot '
-    'itself resolve — e.g. a SIBLING conversation must land a file first, or a '
-    'fresh-HEAD verification cannot run until another workstream commits — then '
-    'do NOT keep nudging (it would only churn) and do NOT falsely declare '
-    'victory. Instead reply with your concise reasoning (what is done, what '
-    'remains, which files/commits it waits on) and end with EXACTLY:\n'
-    '  [VU: HANDOFF paths=<file1>,<file2>]\n'
-    'listing the repo-relative path(s) the residual waits on (comma-separated, '
-    'no spaces inside the list). This parks the remaining work on the project '
-    'board keyed on those paths, so it AUTO-RESUMES the moment the dependency '
-    'is committed — no human babysitting. Use HANDOFF only for a genuine '
-    'external block, never as an escape hatch from work the assistant could do '
-    'now.\n'
     '- Never invent product requirements beyond the stated objective.\n'
     '- Reply in the first person as the owner, in the same language the '
     'assistant used. Be concise but cite the specific evidence you '
@@ -751,9 +736,7 @@ def run_summary_reporter(task: dict) -> dict | None:
 def _store_run_record(conv_id: str, run_id: str, *,
                       reason: str,
                       text: str = '',
-                      translated: str = '',
-                      wait_paths: list | None = None,
-                      board_task_id: str = '') -> dict | None:
+                      translated: str = '') -> dict | None:
     """Persist the SINGLE authoritative per-run record in the SIDECAR.
 
     ONE record per run carries BOTH facts the frontend needs — that the run has
@@ -806,11 +789,10 @@ def _store_run_record(conv_id: str, run_id: str, *,
             content = text or (prior.get('content') or '')
             translated_final = translated or (prior.get('translatedContent') or '')
             # Reason precedence (a later conclude never downgrades a stronger
-            # prior — manual stop / task_done / parked can race): 'task_done'
-            # (verified-complete) is strongest; 'parked' (deliberate board
-            # handoff) beats a bare 'stopped' but yields to a real task_done;
-            # everything else (stopped / budget_exhausted / …) is weakest.
-            _RANK = {'task_done': 3, 'parked': 2}
+            # prior — manual stop / task_done can race): 'task_done'
+            # (verified-complete) is strongest; everything else
+            # (stopped / budget_exhausted / …) is weaker.
+            _RANK = {'task_done': 3}
             _prior_reason = prior.get('reason') or ''
             reason_final = (_prior_reason
                             if _RANK.get(_prior_reason, 0) > _RANK.get(reason, 0)
@@ -831,17 +813,6 @@ def _store_run_record(conv_id: str, run_id: str, *,
             anchor_final = anchor_msgid or (prior.get('anchorMsgId') or '')
             if anchor_final:
                 record['anchorMsgId'] = anchor_final
-            # ★ HANDOFF (parked) provenance — the wait-on-path list the residual
-            #   waits on + the board epic that captures it. Preserved across a
-            #   racing re-conclude (like content) so the fold can link to the
-            #   board and show what it waits on. Only present on a parked run.
-            wp_final = wait_paths if wait_paths else (prior.get('waitPaths') or [])
-            board_final = board_task_id or (prior.get('boardTaskId') or '')
-            if reason_final == 'parked':
-                if wp_final:
-                    record['waitPaths'] = wp_final
-                if board_final:
-                    record['boardTaskId'] = board_final
             # ★ A run cut off by a safety cap (budget_exhausted / stuck /
             #   no_progress) is UNFINISHED — the objective is unverified. Flag
             #   it so the fold renders "stopped early — needs review" instead of
@@ -1253,25 +1224,6 @@ def run_virtual_user(task: dict, vu_msg_id: str | None = None) -> dict | None:
     # unresolved work (❌ / "NOT met" / "still failing" / "unresolved") — the
     # anti-premature-done guard lives in lib/agent_verdict.py, NOT here.
     verdict = _classify_verdict(text, verifier_role='virtual_user')
-    if verdict['phase'] == 'handoff':
-        # The residual is blocked on an EXTERNAL commit — end the loop and let
-        # the hook PARK it on the board's wait-on-path (auto-resumes when the
-        # dependency lands). Same loop-ending shape as TASK_DONE, but via the
-        # handoff flag so maybe_run_autopilot routes to _conclude_handoff. The
-        # VU's own reasoning is the parked report (strip the machine sentinel).
-        paths = verdict.get('handoff_paths') or []
-        handoff_text = _VU_HANDOFF_RE.sub('', text).strip()
-        task['_vu_emitted_handoff'] = True
-        task['_vu_handoff_paths'] = paths
-        task['_vu_handoff_text'] = handoff_text
-        logger.info('[Autopilot %s] VU emitted HANDOFF — parking residual on '
-                    'board (waits on %d path(s): %.200s)', tid, len(paths),
-                    ', '.join(paths))
-        audit_log('autopilot_stop',
-                  task_id=task.get('id', ''),
-                  conv_id=task.get('convId', ''),
-                  reason='vu_handoff')
-        return None
     if verdict['phase'] == 'stop':
         logger.info('[Autopilot %s] VU emitted TASK_DONE — stopping loop', tid)
         # Signal the hook to clear the persistent armed-marker (disarm) so the
@@ -1851,110 +1803,6 @@ def _emit_run_summary(task: dict, conv_id: str, run_id: str,
     return record
 
 
-def _conclude_handoff(task: dict, conv_id: str, run_id: str) -> dict | None:
-    """Conclude a run PARKED via ``[VU: HANDOFF]``: post the residual to the
-    board on a self-expiring ``[sibling]`` cooldown, then store a
-    ``reason='parked'`` sidecar record.
-
-    The VU already recognised that the objective's remaining criteria are
-    blocked on an EXTERNAL commit (a sibling must land a file first) and stamped
-    ``task['_vu_handoff_paths']`` + ``_vu_handoff_text``. This routes the
-    residual into the project board's self-expiring cooldown primitive rather
-    than inventing a resume engine:
-
-      1. ``post_task`` — one OPEN epic capturing the residual work (title =
-         objective + waited paths).
-      2. ``block_task`` with a ``[sibling]`` reason — the board stamps a FLAT,
-         non-escalating ``SIBLING_BLOCK_COOLDOWN_MS`` cooldown (one lease clock),
-         so the heartbeat stops re-dispatching the epic every sweep but retries
-         it after the cooldown lapses. On a single shared checkout the sibling's
-         commit is visible immediately, so a plain cooldown retry converges — no
-         lease, no reaper, no timer. (The precise wait-on-path HOLD this once
-         used was removed 2026-07-13 with the path-lease tools; the flat cooldown
-         is the surviving throttle. The waited paths are recorded on the record
-         and named in the epic title for human context only.)
-      3. A ``parked`` concluded record (with the wait paths + board epic id +
-         the VU's reasoning as the human-only report) so the fold renders a
-         distinct "parked — waiting on X" state, not a false "concluded ✓".
-
-    Costs ZERO extra LLM turns — the VU's own handoff reasoning is the report.
-    Best-effort on the board write: a non-project conversation (no
-    ``projectPath``) still parks honestly, it just posts no epic. Returns the
-    stored sidecar record, or ``None`` on persist failure.
-    """
-    from lib.tasks_pkg.manager import append_event
-
-    tid = task['id'][:8]
-    paths = [p for p in (task.get('_vu_handoff_paths') or []) if p]
-    handoff_text = (task.get('_vu_handoff_text') or '').strip()
-    project_path = ((task.get('config') or {}).get('projectPath') or '').strip()
-
-    board_task_id = ''
-    if project_path:
-        try:
-            from lib.conversations import project_board as board
-            objective = _get_or_persist_objective(conv_id, task.get('messages') or [])
-            waited = ', '.join(paths) if paths else 'an external commit'
-            title = ('[autopilot handoff] ' + (objective or 'residual work')
-                     + ' — blocked pending ' + waited)
-            posted = board.post_task(project_path, conv_id, title)
-            if posted.get('ok') and posted.get('id'):
-                board_task_id = posted['id']
-                # A '[sibling]' class tag puts the epic on the board's FLAT,
-                # self-expiring cooldown (SIBLING_BLOCK_COOLDOWN_MS, no
-                # escalation): the heartbeat stops churning it every sweep but
-                # retries after the window lapses. On the single shared checkout
-                # the sibling's commit is visible immediately, so a plain
-                # cooldown retry converges. (No 'path=' token — the precise
-                # wait-on-path hold was removed with the path-lease tools; the
-                # waited paths live on the parked record for human context.)
-                waited_ctx = (' (waiting on ' + ', '.join(paths) + ')') if paths else ''
-                reason = ('[sibling] autopilot parked; residual retried after '
-                          'cooldown once the blocking commit lands' + waited_ctx)
-                board.block_task(project_path, conv_id, board_task_id, reason)
-            else:
-                logger.warning('[Autopilot %s] handoff board post failed: %s',
-                               tid, posted.get('error'))
-        except Exception as e:
-            logger.warning('[Autopilot %s] handoff board write failed '
-                           '(non-fatal, still parking): %s', tid, e, exc_info=True)
-
-    report_text = handoff_text
-    if not report_text:
-        waited = ', '.join(paths) if paths else 'an external commit'
-        report_text = ('Autopilot parked this run: the remaining work is '
-                       'blocked pending ' + waited + '.')
-
-    translated = ''
-    try:
-        from lib.conv_config import resolve_auto_translate
-        if resolve_auto_translate(task.get('config') or {}):
-            translated = _translate_summary_sync(report_text)
-    except Exception as e:
-        logger.debug('[Autopilot %s] parked translate skipped: %s', tid, e)
-
-    record = _store_run_record(conv_id, run_id, reason='parked',
-                               text=report_text, translated=translated,
-                               wait_paths=paths, board_task_id=board_task_id)
-    if record is None:
-        return None
-
-    _emit_run_concluded(conv_id, run_id, report_text, task.get('config'))
-    try:
-        append_event(task, build_event(
-            EventType.AUTOPILOT_RUN_CONCLUDED,
-            runId=run_id,
-            record=record,
-        ))
-    except Exception as e:
-        logger.debug('[Autopilot %s] handoff run-concluded emit failed: %s', tid, e)
-    audit_log('autopilot_parked', conv_id=conv_id, run_id=run_id,
-              board_task_id=board_task_id, wait_paths=len(paths))
-    logger.info('[Autopilot %s] run PARKED (board=%s, waits on %d path(s))',
-                tid, board_task_id or 'none', len(paths))
-    return record
-
-
 def summarize_run(conv_id: str, run_id: str = '', config: dict | None = None) -> dict:
     """On-demand close-out report for a concluded (e.g. manually-stopped) run.
 
@@ -2194,32 +2042,10 @@ def maybe_run_autopilot(task: dict) -> dict | None:
 
     vu_result = run_virtual_user(task, vu_msg_id=vu_msg_id)
     if vu_result is None:
-        # VU emitted [VU: TASK_DONE] / [VU: HANDOFF], errored, or was aborted.
-        # On a graceful TASK_DONE / HANDOFF, disarm the persistent marker so the
-        # loop ends and the queue-bar sentinel disappears.  (Abort/error leave
-        # the marker intact — a transient failure shouldn't silently disarm.)
-        if task.get('_vu_emitted_handoff'):
-            # The residual is blocked on an EXTERNAL commit — PARK it on the
-            # board's wait-on-path (auto-resumes when the dependency lands).
-            # Settle synchronously (no LLM reporter turn: the VU's handoff
-            # reasoning IS the parked report), disarm, clear the run pin.
-            try:
-                _conclude_handoff(task, conv_id, run_id)
-            except Exception as e:
-                logger.warning('[Autopilot %s] handoff conclude failed '
-                               '(non-fatal): %s', tid, e, exc_info=True)
-            try:
-                from lib.message_queue import clear_autopilot_marker
-                clear_autopilot_marker(conv_id)
-            except Exception as e:
-                logger.debug('[Autopilot %s] marker clear failed: %s', tid, e)
-            _clear_run_id(conv_id)
-            try:
-                append_event(task, build_event(EventType.AUTOPILOT_VU_CANCEL,
-                                     vuMsgId=vu_msg_id))
-            except Exception as e:
-                logger.debug('[Autopilot %s] vu_cancel emit failed: %s', tid, e)
-            return None
+        # VU emitted [VU: TASK_DONE], errored, or was aborted. On a graceful
+        # TASK_DONE, disarm the persistent marker so the loop ends and the
+        # queue-bar sentinel disappears.  (Abort/error leave the marker intact
+        # — a transient failure shouldn't silently disarm.)
         if task.get('_vu_emitted_done'):
             # The run reached its objective. SETTLE THE TURN FIRST, then
             # generate the (expensive) close-out summary OFF-THREAD.

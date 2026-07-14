@@ -342,27 +342,12 @@ function _apReportPanelHTML(conv, runId) {
     const _needs = _tOr('autopilot.needsReview', 'stopped early · needs review');
     incompleteH = `<span class="aps-incomplete"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg> ${escapeHtml(_needs)}</span>`;
   }
-  /* ★ PARKED (HANDOFF) chip: the run concluded by parking its residual on the
-   * board's wait-on-path (blocked on an external commit) — a DELIBERATE clean
-   * handoff, NOT a safety-cap cutoff, so it reads "parked · waiting on X"
-   * (distinct from the amber "needs review" incomplete chip). The waited paths
-   * come from the parked sidecar record so a human sees exactly what it waits
-   * on; it auto-resumes on the board when the dependency commits. */
-  let parkedH = '';
-  if (rec.reason === 'parked') {
-    const _paths = Array.isArray(rec.waitPaths) ? rec.waitPaths : [];
-    const _on = _paths.length
-      ? `${_tOr('autopilot.parkedWaitingOn', 'parked · waiting on')} ${escapeHtml(_paths.join(', '))}`
-      : _tOr('autopilot.parked', 'parked · waiting on an external commit');
-    parkedH = `<span class="aps-parked" title="${escapeHtml(_on)}"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="10" y1="15" x2="10" y2="9"/><line x1="14" y1="15" x2="14" y2="9"/></svg> ${escapeHtml(_on)}</span>`;
-  }
   const expandTitle = _tOr('autopilot.viewReport', 'View report');
   return `<details class="ap-summary-panel" open data-ap-report-run="${_rid}">`
     + `<summary class="aps-summary">`
     + `<svg class="aps-doc-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M16 13H8"/><path d="M16 17H8"/><path d="M10 9H8"/></svg>`
     + `<span class="aps-title">${escapeHtml(title)}</span>`
     + incompleteH
-    + parkedH
     + `<span class="aps-private">${escapeHtml(priv)}</span>`
     + `<button class="aps-expand-btn" onclick="event.preventDefault();event.stopPropagation();_openApSummaryModal('${_rid}')" title="${escapeHtml(expandTitle)}"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg></button>`
     + `<svg class="aps-toggle" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>`
@@ -921,13 +906,25 @@ function renderChat(conv, forceScroll) {
     void inner.scrollHeight;  // force real heights before re-pinning
     _restoreScrollAnchor(container, _preSwapAnchor);
     inner.classList.remove('cv-off');
-  } else {
-    _forceScrollToBottom(container, true);
-    /* ★ Latch this open so subsequent same-open full renders (Phase-2
-     *   reconcile, .then() fallback) preserve the viewport instead of
-     *   re-snapping to the bottom. Only meaningful while _initialSwitchLoad
-     *   is set; loadConversation clears both flags when the open completes. */
+  } else if (!_sameConvDom || conv._initialSwitchLoad) {
+    /* ★ No-auto-scroll-on-OPEN (owner directive). A conversation OPEN — a
+     *   genuine switch (`!_sameConvDom`: the DOM currently shows a different
+     *   conv / welcome), a first load, or any render during the initial switch
+     *   load (`_initialSwitchLoad`) — must NOT yank the view to the bottom.
+     *   The `inner.innerHTML` wipe above already reset scrollTop→0 (the top of
+     *   the rendered tail window); we simply leave it there so opening a
+     *   conversation keeps a stable position instead of jumping. Still latch
+     *   this open so LATER same-open renders (Phase-2 reconcile, the
+     *   loadConversation .then fallback) take the anchor-preserve branch above
+     *   and HOLD this position rather than re-snapping. (The streaming-follow
+     *   path — showStreamingUIForConv / the send pipeline — is deliberately
+     *   untouched and still lands at the bottom.) */
     if (conv._initialSwitchLoad) _openScrollConvId = conv.id;
+  } else {
+    /* Same-conv background full re-render with a near-bottom reader (a settle /
+     *   poll following new content — NOT a conversation open): keep them pinned
+     *   to the bottom so the newest content stays in view. */
+    _forceScrollToBottom(container, true);
   }
 }
 

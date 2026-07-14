@@ -5,8 +5,6 @@ Carries the small pieces that classify_verdict and the autopilot loop consume:
 
   * the state-changing ("deliverable") tool sets;
   * the virtual-user completion sentinel (``VU_DONE_SENTINEL``);
-  * the virtual-user HANDOFF sentinel + parser (``_VU_HANDOFF_RE`` /
-    ``parse_vu_handoff``) — imported DIRECTLY by autopilot.py;
   * the replan kill-switch (``replan_enabled``);
   * the state-changing tool-round counter (``count_state_changing_rounds``);
   * the structured ``[PROGRESS: resolved=X remaining=Y]`` parser
@@ -64,54 +62,6 @@ STATE_CHANGING_TOOLS_WITH_CODE_EXEC = STATE_CHANGING_TOOLS | {'code_exec'}
 # Used by autopilot's role prompt + done check, and by the engine's
 # virtual_user verdict inversion.
 VU_DONE_SENTINEL = '[VU: TASK_DONE]'
-
-
-# ══════════════════════════════════════════════════════════
-#  Autopilot virtual-user HANDOFF (park-on-board) sentinel
-# ══════════════════════════════════════════════════════════
-
-# A virtual_user emits ``[VU: HANDOFF paths=<p1>,<p2>]`` when the objective's
-# remaining acceptance criteria are BLOCKED on an EXTERNAL commit the assistant
-# cannot itself resolve (a sibling conversation must land a file first). This
-# is the THIRD terminal verdict — distinct from TASK_DONE (met) and keep-going
-# (unmet + actionable in-conversation): the run is done in this conversation,
-# but the residual is parked onto the project board's wait-on-path primitive so
-# it auto-resumes when the dependency lands. See lib/tasks_pkg/autopilot.py
-# ``_conclude_handoff``.
-#
-# The ``paths=`` value follows the SAME structured-token contract as the board's
-# ``_parse_sibling_wait_paths`` (comma-separated, whitespace ends the token) so
-# the two never diverge — free-text scraping is forbidden.
-_VU_HANDOFF_RE = re.compile(
-    r'\[VU:\s*HANDOFF(?:\s+paths?=(\S+))?\s*\]', re.IGNORECASE)
-
-
-def parse_vu_handoff(text: str):
-    """Parse a ``[VU: HANDOFF paths=a,b]`` sentinel from a virtual-user reply.
-
-    Returns
-    -------
-    list | None
-        ``None`` when NO handoff sentinel is present (distinct from an empty
-        list). A list of paths when the sentinel is present — ``[]`` for a bare
-        ``[VU: HANDOFF]`` with no path token (still a handoff signal). Paths are
-        comma-separated; the value ends at the first whitespace run (trailing
-        prose is never consumed); de-duped, order-preserving.
-
-    Pure + side-effect-free.
-    """
-    m = _VU_HANDOFF_RE.search(text or '')
-    if m is None:
-        return None
-    raw = m.group(1)
-    if not raw:
-        return []
-    out = []
-    for p in raw.split(','):
-        s = p.strip()
-        if s and s not in out:
-            out.append(s)
-    return out
 
 
 # ══════════════════════════════════════════════════════════

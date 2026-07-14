@@ -4,10 +4,10 @@ Single source of truth for the small bundle of *decision logic* that the
 agent loops share:
 
   * the set of "state-changing" (deliverable) tool names;
-  * the autopilot virtual-user completion + HANDOFF sentinels;
+  * the autopilot virtual-user completion sentinel;
   * counting state-changing vs exploratory tool rounds in a worker turn;
   * parsing a critic / verifier verdict into a next-phase
-    (``stop`` / ``worker`` / ``planner`` / ``handoff``) with the
+    (``stop`` / ``worker`` / ``planner``) with the
     anti-analysis-spiral gating (STOP-with-unresolved-markers downgrade,
     CONTINUE_PLANNER requires a gated PLAN_DEFECT reason, replan kill-switch,
     the backend-authoritative done gate);
@@ -33,8 +33,7 @@ The module is pure logic — it imports only ``lib.log`` (audit/log) and
 This file is a PURE RE-EXPORT FACADE.  The implementations live in the
 sub-modules (``_handoff``, ``_verdict``, ``_stuck``, ``_rounds``,
 ``_config``); ``from lib.agent_verdict import X`` continues to work
-byte-identically for every public + consumer-imported symbol — including the
-private ``_VU_HANDOFF_RE`` that ``lib/tasks_pkg/autopilot.py`` imports directly.
+byte-identically for every public + consumer-imported symbol.
 
 ``audit_log`` is re-exported at the package level so tests that monkeypatch
 ``lib.agent_verdict.audit_log`` still capture ``classify_verdict``'s override
@@ -57,8 +56,6 @@ from lib.agent_verdict._handoff import (  # noqa: E402,F401
     STATE_CHANGING_TOOLS,
     STATE_CHANGING_TOOLS_WITH_CODE_EXEC,
     VU_DONE_SENTINEL,
-    _VU_HANDOFF_RE,          # imported DIRECTLY by lib/tasks_pkg/autopilot.py
-    parse_vu_handoff,
     replan_enabled,
     count_state_changing_rounds,
     _PROGRESS_RE,
@@ -130,7 +127,6 @@ __all__ = [
     'STATE_CHANGING_TOOLS',
     'STATE_CHANGING_TOOLS_WITH_CODE_EXEC',
     'VU_DONE_SENTINEL',
-    'parse_vu_handoff',
     'replan_enabled',
     'count_state_changing_rounds',
     'parse_progress',

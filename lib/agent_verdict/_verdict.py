@@ -1,5 +1,5 @@
 """lib/agent_verdict/_verdict.py — Verdict parsing + terminal-outcome
-classification (the core of the STOP/CONTINUE/HANDOFF gate).
+classification (the core of the STOP/CONTINUE gate).
 
 Carries:
 
@@ -13,8 +13,8 @@ Carries:
     escalate on.
 
 Pure logic — imports only ``lib.log`` plus the sibling ``_handoff`` module
-(for ``VU_DONE_SENTINEL``, ``parse_vu_handoff``, ``replan_enabled``, and
-``parse_progress`` used by the backend-authoritative done gate).
+(for ``VU_DONE_SENTINEL``, ``replan_enabled``, and ``parse_progress`` used by
+the backend-authoritative done gate).
 """
 
 from __future__ import annotations
@@ -26,7 +26,6 @@ from lib.log import audit_log, get_logger
 from lib.agent_verdict._handoff import (
     VU_DONE_SENTINEL,
     parse_progress,
-    parse_vu_handoff,
     replan_enabled,
 )
 
@@ -158,18 +157,6 @@ def classify_verdict(
     if verifier_role == 'virtual_user':
         low = (text or '').lower()
         fb = (text or '') if strip_feedback else None
-        # ── HANDOFF (park-on-board) — checked FIRST, ahead of TASK_DONE and
-        #    the unresolved-marker downgrade. HANDOFF is the most specific
-        #    signal: it MEANS "remaining but externally blocked", so a
-        #    co-emitted ❌ / "NOT met" marker (which downgrades a bare
-        #    TASK_DONE) must NOT override it — that residual is exactly why the
-        #    VU is handing off. The 'handoff' phase ends the loop (like 'stop')
-        #    but routes to _conclude_handoff instead of the clean close-out. ──
-        handoff_paths = parse_vu_handoff(text or '')
-        if handoff_paths is not None:
-            return {'phase': 'handoff', 'plan_defect': None,
-                    'feedback': fb, 'had_tag': False,
-                    'handoff_paths': handoff_paths}
         wants_stop = (VU_DONE_SENTINEL.lower() in low
                       or '[verdict: stop]' in low or 'verdict: stop' in low)
         if wants_stop:

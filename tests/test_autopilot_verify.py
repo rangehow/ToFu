@@ -377,3 +377,64 @@ def test_vu_prompt_version_is_content_derived():
         ap._VU_ROLE_PROMPT.encode('utf-8')).hexdigest()[:8]
     assert ap.VU_PROMPT_VERSION == expected
     assert len(ap.VU_PROMPT_VERSION) == 8
+
+
+# ══════════════════════════════════════════════════════════
+#  TASK_DONE-with-remaining>0 gate — the backend-authoritative backstop
+# ══════════════════════════════════════════════════════════
+#
+#  A VU can emit a clean [VU: TASK_DONE] while work remains. The verdict path
+#  must NOT trust that done-claim over the mandatory [PROGRESS: remaining=Y]
+#  signal the VU is required to emit — a self-contradictory done (done-claim vs
+#  its own remaining>0) is refused regardless of prompt behaviour. It
+#  cross-checks the SAME hard signal detect_diminishing_returns trusts, and
+#  fails open when PROGRESS is unparseable (can't prove incompleteness).
+
+def test_taskdone_with_remaining_downgrades_to_worker():
+    """A [VU: TASK_DONE] whose own [PROGRESS: remaining=1] contradicts the
+    done-claim must NOT stop — downgrade to 'worker' (keep going).
+
+    NEGATIVE CONTROL: deleting the remaining>0 gate makes this return
+    phase='stop' (a false green), failing here.
+    """
+    v = classify_verdict(
+        'Everything looks complete to me.\n[VU: TASK_DONE]\n'
+        '[PROGRESS: resolved=3 remaining=1]',
+        verifier_role='virtual_user')
+    assert v['phase'] == 'worker'
+
+
+def test_taskdone_with_remaining_zero_still_stops():
+    """The complementary case: TASK_DONE with remaining=0 is internally
+    consistent → still stops (clean close-out). The gate only bites on a
+    CONTRADICTION, never on a genuinely-complete run."""
+    v = classify_verdict('Objective met and verified.\n[VU: TASK_DONE]\n'
+                         '[PROGRESS: resolved=4 remaining=0]',
+                         verifier_role='virtual_user')
+    assert v['phase'] == 'stop'
+
+
+def test_taskdone_without_parseable_progress_fails_open_stops():
+    """FAIL-OPEN: a TASK_DONE with NO parseable [PROGRESS] line still stops —
+    we cannot prove incompleteness without the hard signal, so we do not block
+    a done-claim on a missing signal (mirrors detect_diminishing_returns)."""
+    v = classify_verdict('All done here.\n[VU: TASK_DONE]',
+                         verifier_role='virtual_user')
+    assert v['phase'] == 'stop'
+    # A malformed / non-numeric PROGRESS also fails open.
+    v2 = classify_verdict('Done.\n[VU: TASK_DONE]\n[PROGRESS: resolved=x remaining=y]',
+                          verifier_role='virtual_user')
+    assert v2['phase'] == 'stop'
+
+
+def test_taskdone_remaining_gate_audits(monkeypatch):
+    """The downgrade is AUDITED so it is visible (mirrors the ❌-downgrade
+    vu_done_override audit) — the reason distinguishes it from the marker scan."""
+    import lib.agent_verdict as av
+    audits = []
+    monkeypatch.setattr(av, 'audit_log',
+                        lambda ev, **kw: audits.append((ev, kw)))
+    av.classify_verdict('Done.\n[VU: TASK_DONE]\n[PROGRESS: resolved=1 remaining=2]',
+                        verifier_role='virtual_user')
+    assert any(kw.get('reason') == 'progress_remaining_in_vu_done'
+               for _ev, kw in audits), audits

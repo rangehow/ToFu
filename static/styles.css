@@ -16589,14 +16589,6 @@ html:not([data-theme="tofu"]) .tofu-pet{display:none}
   padding:1px 7px;border-radius:10px;flex-shrink:0;
 }
 .aps-incomplete svg{flex-shrink:0;}
-.aps-parked{
-  display:inline-flex;align-items:center;gap:4px;
-  font-size:11px;font-weight:600;
-  color:#60a5fa;background:rgba(96,165,250,0.14);
-  padding:1px 7px;border-radius:10px;flex-shrink:0;
-  max-width:280px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
-}
-.aps-parked svg{flex-shrink:0;}
 .aps-expand-btn{
   display:inline-flex;align-items:center;justify-content:center;
   flex-shrink:0;
@@ -21932,6 +21924,12 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .topbar{
 .pb-board-badge{display:inline-flex;align-items:center;gap:4px;font-size:10px;font-weight:600;padding:2px 8px;border-radius:var(--pb-radius-chip);line-height:1.5}
 .pb-board-badge-dispatched{background:var(--accent-subtle);color:var(--accent);border:1px solid color-mix(in srgb,var(--accent) 30%,transparent)}
 .pb-board-badge-dispatched svg{width:11px;height:11px}
+/* "auto-starts ~30s" — a genuinely-pickable open epic the heartbeat will
+   dispatch on its next sweep (backend-stamped `dispatchable`). Amber pulse to
+   read as "imminent", distinct from the accent "already dispatched" badge. */
+.pb-board-badge-pending{background:color-mix(in srgb,var(--pb-amber) 14%,transparent);color:var(--pb-amber);border:1px solid color-mix(in srgb,var(--pb-amber) 34%,transparent);animation:pbPendingPulse 2s ease-in-out infinite}
+.pb-board-badge-pending svg{width:11px;height:11px}
+@keyframes pbPendingPulse{0%,100%{opacity:1}50%{opacity:0.55}}
 /* Board human-action controls (post / complete / block / reopen) */
 .pb-board-toolbar{display:flex;justify-content:flex-end;margin-bottom:12px}
 .pb-board-new{display:inline-flex;align-items:center;gap:5px;background:var(--accent-subtle);color:var(--accent);border:1px solid color-mix(in srgb,var(--accent) 34%,transparent);border-radius:var(--pb-radius-sm);padding:6px 11px;font-size:12px;font-weight:600;font-family:inherit;cursor:pointer;transition:background var(--transition),border-color var(--transition)}

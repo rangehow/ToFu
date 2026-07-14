@@ -143,7 +143,7 @@ constants (ported from Claude Code) — large but low-complexity, leave it.
 
 | Module | LOC | Size verdict | Status | Tests |
 |---|--:|---|---|---|
-| `autopilot.py` | 2768 | **MISCUT** | live | `test_autopilot_*` (~18 suites) incl. `test_autopilot_handoff`, `test_autopilot_arm`, `test_autopilot_resume_after_crash` |
+| `autopilot.py` | 2768 | **MISCUT** | live | `test_autopilot_*` (~18 suites) incl. `test_autopilot_verify`, `test_autopilot_arm`, `test_autopilot_resume_after_crash` |
 | `endpoint.py` | 1562 | **BIG** | live | `test_endpoint_flow_parity`, `test_endpoint_messages`, `test_endpoint_finalize_status`, `test_endpoint_poll_recovery` |
 | `endpoint_prompts.py` | 593 | OK (prompt constants) | live | `test_cc_alignment` (indirect) |
 | `endpoint_review.py` | 426 | OK | live | `test_endpoint_flow_parity` |
@@ -151,11 +151,11 @@ constants (ported from Claude Code) — large but low-complexity, leave it.
 
 `autopilot.py` — MISCUT. It bundles: objective/run-id persistence, the
 virtual-user turn (`run_virtual_user`), run-summary generation +
-translation, the three terminal verdicts incl. the HANDOFF/park path
-(`_conclude_handoff`), follow-up task spawning, crash-resume arm/disarm, and
+translation, the terminal verdicts (TASK_DONE close-out + manual-stop /
+safety-cap conclude), follow-up task spawning, crash-resume arm/disarm, and
 the kick/dispatch entry points. The **VU decision logic itself correctly lives
 elsewhere** (`lib/agent_verdict.py`, the single source of truth for
-`classify_verdict`/HANDOFF/`parse_progress`) — autopilot only routes into it.
+`classify_verdict`/`parse_progress`) — autopilot only routes into it.
 Split candidates: run-record persistence, summary generation, and crash-resume
 are three separable concerns.
 
@@ -263,7 +263,7 @@ candidate → `handlers/coordination.py`.
 **Outbound (what the engine depends on):**
 - `lib/llm/` (stream/build_body), `lib/llm_dispatch/` (routing) — via
   `manager.stream_llm_response` + `llm_fallback`.
-- `lib/agent_verdict.py` — SoT for STOP/CONTINUE/HANDOFF verdicts
+- `lib/agent_verdict.py` — SoT for STOP/CONTINUE verdicts
   (endpoint + autopilot both delegate here; they do NOT re-implement it).
 - `lib/agent_core/` — `TaskRuntime` (backs `manager`), `events` (EventType),
   `push` (SSE fan-out), `store` (persistence seam), `personal_scope`
@@ -304,7 +304,7 @@ lazy (`_LAZY_MAP`) to save ~600ms startup. Several modules use function-body
    signature/behaviour is a contract for the drivers.
 6. **Verdict logic is centralized in `lib/agent_verdict.py`.** endpoint +
    autopilot must NOT fork it (it was hand-copied 4× before centralization).
-   HANDOFF/`parse_progress` cross-checks are backend-authoritative there.
+   The `parse_progress` remaining>0 cross-check is backend-authoritative there.
 7. **`segments` is a strangler-fig SoT that ships dark.** The three legacy
    channels (`content`/`thinking`/`toolRounds`) remain DERIVED projections
    proven byte-identical by golden test; do not retire them until each of the
@@ -393,7 +393,7 @@ the cores that were left behind after those extractions.
    `autopilot_runrecord.py` (`_store_run_record` + `_store_run_summary` +
    run-id persistence), `autopilot_summary.py` (summary generation +
    translation + reporter), `autopilot_resume.py` (arm/disarm/crash-resume).
-   The VU turn + conclude/handoff + kick stay in `autopilot.py`. Verdict logic
+   The VU turn + conclude + kick stay in `autopilot.py`. Verdict logic
    already correctly external (`agent_verdict`).
 
 4. **`handlers/misc.py` (716) → extract `handlers/coordination.py`** for the

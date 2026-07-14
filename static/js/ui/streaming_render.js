@@ -709,6 +709,22 @@ const _INITIAL_RENDER = 20;
 let _lazyObserver = null;
 let _lazyConvId = null;
 let _lazyRenderedFrom = Infinity;
+/* Exclusive upper bound of the currently-rendered message range. Finite only
+ * AFTER a downward eviction has capped the window (tail bubbles removed while
+ * the reader scrolled up to read history); otherwise it tracks `total` (the
+ * tail is rendered). Mirror of `_lazyRenderedFrom`. */
+let _lazyRenderedTo = Infinity;
+/* Hard upper bound on how many `.message` nodes live in the DOM at once. Upward
+ * lazy-load (`_loadOlderMessages`) and downward re-render (`_loadNewerMessages`)
+ * each evict from the FAR side once the rendered span exceeds this, so scroll /
+ * re-render / hit-test cost is O(window) not O(history). This is the structural
+ * fix for "the longer the conversation, the laggier scrolling gets": without a
+ * cap, scrolling up in a 500-message conversation accretes hundreds of heavy
+ * bubbles that are never reclaimed. MUST exceed _INITIAL_RENDER + one BATCH so a
+ * first upward load never immediately evicts what it just added. */
+const _MAX_RENDER_WINDOW = 80;
+let _lazyBottomObserver = null;
+let _loadingNewer = false;
 /* Which conv's OPEN has already had its view positioned (see the open-scroll
  * coalescing block in renderChat). Set by the force-scroll branch during an
  * initial switch load; reset by loadConversation on a genuine switch so the
@@ -721,6 +737,18 @@ function _destroyLazyObserver() {
     _lazyObserver = null;
   }
   _loadingOlder = false;
+  /* The full-render / show-streaming paths that call this wipe innerHTML and
+   * rebuild the UNCAPPED tail window, so the downward-load machinery must reset
+   * in lockstep — otherwise the bottom observer keeps a handle on a removed
+   * sentinel and the stale cap survives the rebuild. */
+  _destroyBottomObserver();
+}
+function _destroyBottomObserver() {
+  if (_lazyBottomObserver) {
+    _lazyBottomObserver.disconnect();
+    _lazyBottomObserver = null;
+  }
+  _loadingNewer = false;
 }
 
 function _ensureLazyObserver() {
@@ -741,6 +769,62 @@ function _ensureLazyObserver() {
   );
 }
 
+/* Build (or update) a bottom sentinel mirroring the top `_lazyLoadSentinel`.
+ * It marks the `hiddenBelow` count of tail messages evicted downward and is the
+ * IntersectionObserver trigger that re-renders them when the reader scrolls
+ * back down. Absent (removed) when the window reaches the true tail. */
+function _ensureBottomSentinel(inner, hiddenBelow) {
+  let s = document.getElementById("_lazyLoadSentinelBottom");
+  if (hiddenBelow <= 0) {
+    if (s) s.remove();
+    return null;
+  }
+  if (!s) {
+    s = document.createElement("div");
+    s.id = "_lazyLoadSentinelBottom";
+    s.className = "lazy-sentinel";
+    s.innerHTML = '<span class="lazy-sentinel-text">⬇ <span class="_lazy-count-bottom">0</span> newer messages</span>';
+    inner.appendChild(s);
+  } else if (s !== inner.lastElementChild) {
+    inner.appendChild(s);  // keep it pinned at the very bottom after appends
+  }
+  const c = s.querySelector("._lazy-count-bottom");
+  if (c) c.textContent = String(hiddenBelow);
+  return s;
+}
+
+/* Evict the topmost rendered messages so the rendered span never exceeds
+ * `_MAX_RENDER_WINDOW`. Called AFTER a downward re-render appended tail
+ * bubbles. Mirror of the tail eviction in `_loadOlderMessages`. Advances
+ * `_lazyRenderedFrom` and refreshes the top sentinel; preserves the scroll
+ * anchor via the caller's height-delta compensation. Returns px height removed
+ * above the fold so the caller can keep the viewport pinned. */
+function _evictAboveWindow(inner, container) {
+  let removedPx = 0;
+  while ((_lazyRenderedTo - _lazyRenderedFrom) > _MAX_RENDER_WINDOW && _lazyRenderedFrom < _lazyRenderedTo) {
+    const el = document.getElementById("msg-" + _lazyRenderedFrom);
+    if (!el) { _lazyRenderedFrom++; continue; }
+    removedPx += el.getBoundingClientRect().height;
+    el.remove();
+    _lazyRenderedFrom++;
+  }
+  if (_lazyRenderedFrom > 0) {
+    _ensureLazyObserver();
+    let top = document.getElementById("_lazyLoadSentinel");
+    if (!top) {
+      top = document.createElement("div");
+      top.id = "_lazyLoadSentinel";
+      top.className = "lazy-sentinel";
+      top.innerHTML = '<span class="lazy-sentinel-text">⬆ <span class="_lazy-count">0</span> older messages</span>';
+      inner.insertBefore(top, inner.firstChild);
+    }
+    const c = top.querySelector("._lazy-count");
+    if (c) c.textContent = String(_lazyRenderedFrom);
+    _lazyObserver.observe(top);
+  }
+  return removedPx;
+}
+
 let _loadingOlder = false;
 function _loadOlderMessages() {
   if (_loadingOlder) return;
@@ -759,6 +843,13 @@ function _loadOlderMessages() {
   }
 
   const container = document.getElementById("chatContainer");
+
+  /* Seed the upper bound on first upward load: before any eviction the tail
+   * (through the last rendered message) is on screen, so the current window
+   * ends at the last rendered msg index + 1. */
+  if (!Number.isFinite(_lazyRenderedTo)) {
+    _lazyRenderedTo = _highestRenderedMsgIdx(inner) + 1;
+  }
 
   /* Build all HTML strings first (cheaper than individual DOM creates) */
   let html = "";
@@ -782,14 +873,137 @@ function _loadOlderMessages() {
   container.scrollTop =
     prevScrollTop + (container.scrollHeight - prevScrollHeight);
 
-  /* Update or remove sentinel */
+  /* Update or remove the TOP sentinel */
   if (startIdx <= 0) {
     sentinel.remove();
   } else {
     sentinel.querySelector("._lazy-count").textContent = startIdx;
     _lazyObserver.observe(sentinel);
   }
+
+  /* ★ BOUNDED WINDOW: having grown the head, evict the TAIL so the DOM never
+   * accretes without bound. This is the structural fix — without it, scrolling
+   * up through a long conversation keeps every bubble alive forever, and every
+   * scroll frame / re-render / hit-test pays for all of them. The reader is
+   * near the top here, so removing far-below bubbles is invisible and does NOT
+   * move the viewport (content below the fold shrinking never shifts what's
+   * above it). A bottom sentinel is (re)placed so scrolling back down
+   * re-renders them. */
+  _evictBelowWindow(inner, container, /*anchorFromTop=*/true);
+  _lazyObserver.observe(document.getElementById("_lazyLoadSentinel") || sentinel);
   _loadingOlder = false;
+}
+
+/* Highest msg-N index currently in the DOM (or -1 when none). */
+function _highestRenderedMsgIdx(inner) {
+  const els = inner.querySelectorAll('[id^="msg-"]');
+  let hi = -1;
+  els.forEach((el) => {
+    const m = el.id.match(/^msg-(\d+)$/);
+    if (m) { const i = parseInt(m[1], 10); if (i > hi) hi = i; }
+  });
+  return hi;
+}
+
+/* Evict the bottom-most rendered messages so the rendered span never exceeds
+ * `_MAX_RENDER_WINDOW`, and (re)place the bottom sentinel for the hidden tail.
+ * `anchorFromTop` true means the reader is anchored near the head (upward-load
+ * case) so removing tail bubbles is invisible and needs no scroll compensation.
+ * Retracts `_lazyRenderedTo`. */
+function _evictBelowWindow(inner, container, anchorFromTop) {
+  const conv = conversations.find((c) => c.id === _lazyConvId);
+  const total = conv ? conv.messages.length : _lazyRenderedTo;
+  if (!Number.isFinite(_lazyRenderedTo)) _lazyRenderedTo = _highestRenderedMsgIdx(inner) + 1;
+  /* Never evict the live streaming bubble's message or anything a stream owns —
+   * the bounded window is a settled-history optimisation only. */
+  if (conv && activeStreams.has(conv.id)) return;
+  while ((_lazyRenderedTo - _lazyRenderedFrom) > _MAX_RENDER_WINDOW && _lazyRenderedTo > _lazyRenderedFrom + 1) {
+    const idx = _lazyRenderedTo - 1;
+    const el = document.getElementById("msg-" + idx);
+    if (el) el.remove();
+    _lazyRenderedTo = idx;
+  }
+  const hiddenBelow = Math.max(0, total - _lazyRenderedTo);
+  const s = _ensureBottomSentinel(inner, hiddenBelow);
+  if (s) {
+    _ensureBottomObserver();
+    _lazyBottomObserver.observe(s);
+  } else {
+    _destroyBottomObserver();
+  }
+}
+
+function _ensureBottomObserver() {
+  if (_lazyBottomObserver) return;
+  _lazyBottomObserver = new IntersectionObserver(
+    (entries) => {
+      entries.forEach((e) => {
+        if (!e.isIntersecting) return;
+        _lazyBottomObserver.unobserve(e.target);
+        _loadNewerMessages();
+      });
+    },
+    {
+      root: document.getElementById("chatContainer"),
+      rootMargin: "0px 0px 600px 0px",
+    },
+  );
+}
+
+/* Symmetric downward loader: when the reader scrolls back down to the bottom
+ * sentinel, re-render the next BATCH of tail messages that were evicted, then
+ * evict from the HEAD to keep the window bounded. Mirror of
+ * `_loadOlderMessages`; preserves the scroll anchor via the same
+ * `prevScrollTop + (newHeight - prevHeight)` head-compensation used on upward
+ * load. */
+function _loadNewerMessages() {
+  if (_loadingNewer) return;
+  const conv = conversations.find((c) => c.id === _lazyConvId);
+  if (!conv) return;
+  if (activeStreams.has(conv.id)) return;  // stream owns the tail — don't fight it
+  const total = conv.messages.length;
+  const BATCH = 20;
+  if (!Number.isFinite(_lazyRenderedTo) || _lazyRenderedTo >= total) return;
+  const inner = document.getElementById("chatInner");
+  const sentinel = document.getElementById("_lazyLoadSentinelBottom");
+  if (!inner || !sentinel) return;
+  const container = document.getElementById("chatContainer");
+  _loadingNewer = true;
+
+  const startIdx = _lazyRenderedTo;
+  const endIdx = Math.min(total, startIdx + BATCH);
+  let html = "";
+  for (let i = startIdx; i < endIdx; i++) html += renderMessage(conv.messages[i], i);
+
+  const prevScrollTop = container.scrollTop;
+  const prevScrollHeight = container.scrollHeight;
+
+  const wrapper = document.createElement("div");
+  wrapper.innerHTML = html;
+  const frag = document.createDocumentFragment();
+  while (wrapper.firstChild) frag.appendChild(wrapper.firstChild);
+  sentinel.before(frag);  // insert the newer bubbles ABOVE the bottom sentinel
+  _lazyRenderedTo = endIdx;
+
+  /* Growing content BELOW the fold does not move what the reader currently
+   * sees, so the head stays put — no scroll compensation needed for the append
+   * itself. (prevScrollTop/prevScrollHeight are captured only for symmetry with
+   * the head-eviction compensation below.) */
+  void prevScrollTop; void prevScrollHeight;
+
+  /* Now evict from the HEAD to keep the window bounded. The reader is anchored
+   * near the bottom, so compensate the viewport for removed head height. */
+  const beforeH = container.scrollHeight;
+  const removedTop = _evictAboveWindow(inner, container);
+  void beforeH;
+  if (removedTop > 0) container.scrollTop = Math.max(0, container.scrollTop - removedTop);
+
+  /* Refresh / remove the bottom sentinel for the remaining hidden tail. */
+  const hiddenBelow = Math.max(0, total - _lazyRenderedTo);
+  const s = _ensureBottomSentinel(inner, hiddenBelow);
+  if (s) { _ensureBottomObserver(); _lazyBottomObserver.observe(s); }
+  else { _destroyBottomObserver(); }
+  _loadingNewer = false;
 }
 
 /**

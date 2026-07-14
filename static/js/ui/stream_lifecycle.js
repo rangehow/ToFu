@@ -65,6 +65,9 @@ function showStreamingUIForConv(convId) {
   const total = renderMsgs.length;
   const startIdx = Math.max(0, total - _INITIAL_RENDER);
   _lazyRenderedFrom = startIdx;
+  /* Tail is uncapped after this full rebuild (streaming bubble owns the very
+   * bottom); reset the upper window bound. */
+  _lazyRenderedTo = total;
 
   let html = "";
   if (startIdx > 0) {

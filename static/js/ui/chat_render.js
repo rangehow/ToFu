@@ -751,7 +751,16 @@ function renderChat(conv, forceScroll) {
      *   message, then step 3 would remove the live streaming bubble. */
     const _streamingActive = activeStreams.has(conv.id) && document.getElementById('streaming-msg');
     const _skipIdx = _streamingActive ? (total - 1) : -1;
-    for (let i = startIdx; i < total; i++) {
+    /* ★ BOUNDED WINDOW: when a downward eviction has capped the tail
+     * (_lazyRenderedTo < total, set by _loadOlderMessages while the reader is
+     * up in history), the surgical diff must NOT re-append the evicted tail —
+     * that would silently rebuild the unbounded DOM this optimisation removes.
+     * The bottom sentinel + _loadNewerMessages own re-rendering the tail on
+     * scroll-down. Uncapped (Infinity, the common case incl. all streaming) →
+     * this equals `total`, byte-identical to before. */
+    const _surgTo = (_lazyConvId === conv.id && Number.isFinite(_lazyRenderedTo))
+      ? Math.min(total, _lazyRenderedTo) : total;
+    for (let i = startIdx; i < _surgTo; i++) {
       if (i === _skipIdx) continue;  // streaming message — leave #streaming-msg alone
       const msg = conv.messages[i];
       const el = document.getElementById("msg-" + i);
@@ -862,6 +871,10 @@ function renderChat(conv, forceScroll) {
   const total = conv.messages.length;
   const startIdx = Math.max(0, total - _INITIAL_RENDER);
   _lazyRenderedFrom = startIdx;
+  /* Full render paints the TAIL [startIdx, total) — the bottom is uncapped, so
+   * reset the upper window bound. A later upward lazy-load seeds a finite cap
+   * and installs the bottom sentinel. */
+  _lazyRenderedTo = total;
 
   let html = "";
 

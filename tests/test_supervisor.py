@@ -184,31 +184,15 @@ def test_do_stop_refused_exit1(tmp_path, monkeypatch):
 
 # ── auth helpers ──────────────────────────────────────────────────────
 
-def test_extract_bearer():
-    assert supervisor.extract_bearer('Bearer abc123') == 'abc123'
-    assert supervisor.extract_bearer('bearer xyz') == 'xyz'
-    assert supervisor.extract_bearer('Basic abc') == ''
-    assert supervisor.extract_bearer('') == ''
-    assert supervisor.extract_bearer(None) == ''
-
-
-def test_token_matches():
-    assert supervisor.token_matches('s3cret', 's3cret') is True
-    assert supervisor.token_matches('wrong', 's3cret') is False
-    assert supervisor.token_matches('', 's3cret') is False
-    assert supervisor.token_matches('s3cret', '') is False
-
-
 # ── live HTTP round-trip ──────────────────────────────────────────────
 
 @pytest.fixture
 def live_server(tmp_path, monkeypatch):
-    """Start the real ThreadingHTTPServer on an ephemeral port with a token."""
+    """Start the real ThreadingHTTPServer on an ephemeral port (no auth)."""
     proj = _make_project(tmp_path)
     canon = os.path.realpath(str(proj))
     monkeypatch.setenv(supervisor.ENV_HOST, '127.0.0.1')
     monkeypatch.setenv(supervisor.ENV_PORT, '0')      # ephemeral
-    monkeypatch.setenv(supervisor.ENV_TOKEN, 'testtoken')
     monkeypatch.setenv(supervisor.ENV_PROJECTS, canon)
     # Never actually spawn server.py in the HTTP test.
     monkeypatch.setattr(supervisor, '_pid_is_server', lambda pid: False)
@@ -241,66 +225,38 @@ def test_http_health_no_auth(live_server):
     assert body['ok'] is True
 
 
-def test_http_status_no_token_readonly(live_server):
-    # /status is read-only (least-privilege) → no token required; the
-    # code-server cookie fronting the proxy is the gate.
+def test_http_status_no_auth(live_server):
+    # Personal app: no token anywhere. /status just works.
     url = live_server['base'] + '/status?projectPath=' + live_server['proj']
-    status, body = _req(url)  # no token
+    status, body = _req(url)
     assert status == 200
     assert body['ok'] is True
     assert body['running'] is False
 
 
-def test_http_status_still_enforces_allowlist(live_server):
-    # Even token-free, /status must reject a path outside the allow-list.
+def test_http_status_enforces_allowlist(live_server):
+    # The allow-list is the ONLY guard kept (config, not auth).
     status, body = _req(live_server['base'] + '/status?projectPath=/etc')
     assert status == 403
 
 
-def test_http_start_requires_token(live_server):
-    # State-changing → token still mandatory.
+def test_http_start_no_auth_works(live_server):
+    # start needs no token now; but stub server.py never binds so it reports
+    # not-yet-running — the call itself must be accepted (200, ok).
     status, body = _req(live_server['base'] + '/start', method='POST',
-                        body={'projectPath': live_server['proj']})  # no token
-    assert status == 401
+                        body={'projectPath': live_server['proj']})
+    assert status == 200
+    assert body['ok'] is True
 
 
 def test_http_start_rejects_unlisted_path(live_server):
     status, body = _req(live_server['base'] + '/start', method='POST',
-                        token='testtoken', body={'projectPath': '/etc'})
+                        body={'projectPath': '/etc'})
     assert status == 403
 
 
 def test_http_stop_roundtrip(live_server):
     status, body = _req(live_server['base'] + '/stop', method='POST',
-                        token='testtoken', body={'projectPath': live_server['proj']})
+                        body={'projectPath': live_server['proj']})
     assert status == 200
     assert body['ok'] is True   # stub stop.sh exits 0
-
-
-def test_http_fail_closed_without_token(tmp_path, monkeypatch):
-    """No TOFU_SUPERVISOR_TOKEN → STATE-CHANGING endpoints return 503 (fail-closed).
-
-    /status stays reachable (read-only), so fail-closed is asserted on /start.
-    """
-    proj = _make_project(tmp_path)
-    canon = os.path.realpath(str(proj))
-    monkeypatch.setenv(supervisor.ENV_HOST, '127.0.0.1')
-    monkeypatch.setenv(supervisor.ENV_PORT, '0')
-    monkeypatch.delenv(supervisor.ENV_TOKEN, raising=False)
-    monkeypatch.setenv(supervisor.ENV_PROJECTS, canon)
-    httpd = supervisor.build_server()
-    host, port = httpd.server_address
-    t = threading.Thread(target=httpd.serve_forever, daemon=True)
-    t.start()
-    try:
-        status, body = _req(f'http://{host}:{port}/start', method='POST',
-                            token='anything', body={'projectPath': canon})
-        assert status == 503
-        assert body['ok'] is False
-        # And /status is STILL reachable read-only even with no token configured.
-        s2, b2 = _req(f'http://{host}:{port}/status?projectPath={canon}')
-        assert s2 == 200
-        assert b2['ok'] is True
-    finally:
-        httpd.shutdown()
-        httpd.server_close()

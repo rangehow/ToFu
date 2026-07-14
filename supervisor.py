@@ -13,10 +13,12 @@ Design (see docs/SUPERVISOR_DESIGN.md in the tofu-android repo):
   * Runs on a fixed port (default 15001), exposed behind the SAME code-server
     that proxies Tofu (``…/proxy/15001/``), so it inherits the code-server
     password gate.
-  * Defence in depth: EVERY control endpoint also requires a Bearer token
-    (``TOFU_SUPERVISOR_TOKEN``). If the token is unset the daemon runs
-    FAIL-CLOSED — control endpoints refuse — because a remote process-spawner
-    must never sit behind a single gate.
+  * NO separate auth. Tofu is a PERSONAL app; the code-server password already
+    gates the whole proxy (and code-server's own terminal can already run any
+    shell command), so a second supervisor token would guard a door that is
+    already locked — pure friction for the single user. The only guard kept is
+    the ``projectPath`` allow-list, which is CONFIG ("which projects may I
+    manage"), not authentication — it needs nothing typed at runtime.
   * Start is idempotent (a live lock → no second process). Stop reuses the
     project's own ``stop.sh`` verbatim (SIGTERM→graceful→SIGKILL, host-scoped,
     PID-reuse-guarded) rather than reimplementing kill logic.
@@ -28,21 +30,15 @@ Design (see docs/SUPERVISOR_DESIGN.md in the tofu-android repo):
 
 Endpoints (all under the proxied prefix):
 
-    GET  /health                     → {ok, version}            (no auth)
-    GET  /status?projectPath=<abs>   → {running, pid, host, …}  (no auth, read-only)
-    POST /start   {projectPath}      → {ok, running, pid, …}    (auth)
-    POST /stop    {projectPath}      → {ok, wasRunning, …}      (auth)
-
-Least-privilege: only the STATE-CHANGING endpoints (/start, /stop) require the
-Bearer token. /status is read-only (it reports running/pid, mutates nothing) so
-it is gated by the code-server cookie alone — the same door that protects the
-proxied Tofu UI — not the token.
+    GET  /health                     → {ok, version}
+    GET  /status?projectPath=<abs>   → {running, pid, host, …}
+    POST /start   {projectPath}      → {ok, running, pid, …}
+    POST /stop    {projectPath}      → {ok, wasRunning, …}
 
 Launch (owner-ratified): a systemd USER UNIT with ``Restart=always``; fall back
 to ``supervisor.sh`` + nohup where user-lingering is unavailable.
 """
 
-import hmac
 import json
 import os
 import signal
@@ -74,7 +70,6 @@ SUPERVISOR_VERSION = '0.1.0'
 DEFAULT_PORT = 15001
 
 # ── Environment knobs ─────────────────────────────────────────────────
-ENV_TOKEN = 'TOFU_SUPERVISOR_TOKEN'         # Bearer token (mandatory, fail-closed)
 ENV_PROJECTS = 'TOFU_SUPERVISOR_PROJECTS'   # ':'-separated absolute project paths
 ENV_PORT = 'TOFU_SUPERVISOR_PORT'
 ENV_HOST = 'TOFU_SUPERVISOR_HOST'
@@ -311,23 +306,6 @@ def do_stop(project_path, timeout=30):
             'output': out[-2000:], 'message': 'stopped' if ok else 'stop refused'}
 
 
-def token_matches(provided, expected):
-    """Constant-time Bearer-token comparison. False when either side is empty."""
-    if not expected or not provided:
-        return False
-    return hmac.compare_digest(str(provided), str(expected))
-
-
-def extract_bearer(auth_header):
-    """Pull the raw token out of an ``Authorization: Bearer <token>`` header."""
-    if not auth_header:
-        return ''
-    parts = auth_header.split(None, 1)
-    if len(parts) == 2 and parts[0].lower() == 'bearer':
-        return parts[1].strip()
-    return ''
-
-
 # ══════════════════════════════════════════════════════════════════════
 #  HTTP layer (thin — delegates to the pure logic above)
 # ══════════════════════════════════════════════════════════════════════
@@ -349,19 +327,6 @@ class SupervisorHandler(BaseHTTPRequestHandler):
         self.send_header('Content-Length', str(len(body)))
         self.end_headers()
         self.wfile.write(body)
-
-    def _authed(self):
-        expected = getattr(self.server, 'auth_token', '') or ''
-        if not expected:
-            # Fail-closed: token unset → refuse all control endpoints.
-            self._send_json(503, {'ok': False,
-                                  'error': 'supervisor token not configured'})
-            return False
-        provided = extract_bearer(self.headers.get('Authorization', ''))
-        if not token_matches(provided, expected):
-            self._send_json(401, {'ok': False, 'error': 'unauthorized'})
-            return False
-        return True
 
     def _read_json_body(self):
         try:
@@ -394,9 +359,6 @@ class SupervisorHandler(BaseHTTPRequestHandler):
             self._send_json(200, {'ok': True, 'version': SUPERVISOR_VERSION})
             return
         if path == '/status':
-            # Read-only: no token (least-privilege). The code-server cookie
-            # that fronts the proxy is the gate; only state-changing endpoints
-            # (/start, /stop) require the Bearer token.
             qs = parse_qs(route.query)
             project_path = (qs.get('projectPath', [''])[0] or '').strip()
             if not self._check_allowed(project_path):
@@ -409,8 +371,6 @@ class SupervisorHandler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path.rstrip('/') or '/'
         if path not in ('/start', '/stop'):
             self._send_json(404, {'ok': False, 'error': 'not found'})
-            return
-        if not self._authed():
             return
         body = self._read_json_body()
         project_path = (body.get('projectPath') or '').strip()
@@ -430,15 +390,10 @@ def build_server():
     except (ValueError, TypeError):
         port = DEFAULT_PORT
     allowlist = parse_allowlist(os.environ.get(ENV_PROJECTS, ''))
-    token = os.environ.get(ENV_TOKEN, '')
 
     httpd = ThreadingHTTPServer((host, port), SupervisorHandler)
     httpd.allowlist = allowlist
-    httpd.auth_token = token
 
-    if not token:
-        logger.warning('%s is not set — control endpoints will FAIL CLOSED '
-                       '(503). Set it before use.', ENV_TOKEN)
     if not allowlist:
         logger.warning('%s is empty — no project is startable/stoppable until '
                        'you allow-list one.', ENV_PROJECTS)

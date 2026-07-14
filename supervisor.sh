@@ -16,8 +16,8 @@
 #    ./supervisor.sh uninstall   # disable + remove the unit
 #
 #  Configuration (env — set these before `install`, they are baked into the
-#  unit's Environment= lines):
-#    TOFU_SUPERVISOR_TOKEN     Bearer token (MANDATORY — daemon fails closed).
+#  unit's Environment= lines). No auth token: Tofu is a personal app and the
+#  code-server password already gates the proxy.
 #    TOFU_SUPERVISOR_PROJECTS  ':'-separated ABSOLUTE project paths to allow.
 #    TOFU_SUPERVISOR_PORT      default 15001
 #    TOFU_SUPERVISOR_HOST      default 127.0.0.1
@@ -31,12 +31,7 @@ UNIT_NAME="tofu-supervisor.service"
 UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 UNIT_PATH="$UNIT_DIR/$UNIT_NAME"
 
-_check_token() {
-    if [[ -z "${TOFU_SUPERVISOR_TOKEN:-}" ]]; then
-        echo "ERROR: TOFU_SUPERVISOR_TOKEN is not set. The daemon fails closed" >&2
-        echo "       (503 on every control endpoint) without it. Set it first." >&2
-        exit 1
-    fi
+_check_projects() {
     if [[ -z "${TOFU_SUPERVISOR_PROJECTS:-}" ]]; then
         echo "WARNING: TOFU_SUPERVISOR_PROJECTS is empty — no project will be" >&2
         echo "         startable/stoppable until you allow-list one." >&2
@@ -44,12 +39,12 @@ _check_token() {
 }
 
 cmd_run() {
-    _check_token
+    _check_projects
     exec "$PY" "$BASE_DIR/supervisor.py"
 }
 
 cmd_nohup() {
-    _check_token
+    _check_projects
     local log="$BASE_DIR/data/supervisor.log"
     mkdir -p "$BASE_DIR/data"
     nohup "$PY" "$BASE_DIR/supervisor.py" >>"$log" 2>&1 &
@@ -59,7 +54,7 @@ cmd_nohup() {
 }
 
 cmd_install() {
-    _check_token
+    _check_projects
     if ! command -v systemctl >/dev/null 2>&1; then
         echo "systemctl not found — this host has no systemd." >&2
         echo "Use './supervisor.sh nohup' instead." >&2
@@ -67,7 +62,7 @@ cmd_install() {
     fi
     mkdir -p "$UNIT_DIR"
     # Bake the current env into the unit so the daemon starts with the same
-    # allow-list / token after a reboot. Only non-empty vars are emitted.
+    # allow-list after a reboot. Only non-empty vars are emitted.
     {
         echo "[Unit]"
         echo "Description=Tofu process supervisor (remote start/stop)"
@@ -79,7 +74,6 @@ cmd_install() {
         echo "ExecStart=$PY $BASE_DIR/supervisor.py"
         echo "Restart=always"
         echo "RestartSec=2"
-        echo "Environment=TOFU_SUPERVISOR_TOKEN=$TOFU_SUPERVISOR_TOKEN"
         [[ -n "${TOFU_SUPERVISOR_PROJECTS:-}" ]] && echo "Environment=TOFU_SUPERVISOR_PROJECTS=$TOFU_SUPERVISOR_PROJECTS"
         [[ -n "${TOFU_SUPERVISOR_PORT:-}" ]] && echo "Environment=TOFU_SUPERVISOR_PORT=$TOFU_SUPERVISOR_PORT"
         [[ -n "${TOFU_SUPERVISOR_HOST:-}" ]] && echo "Environment=TOFU_SUPERVISOR_HOST=$TOFU_SUPERVISOR_HOST"

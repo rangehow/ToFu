@@ -95,15 +95,6 @@ function updateStreamingUI(msg) {
   const { body, memprefetch: memprefetchZone, tool: toolZone, think: thinkZone, content: contentZone, fc: fcZone, status: statusZone } = zones;
   const rounds = msg.toolRounds || [];
   const hasActiveSearch = rounds.some((r) => r.status === "searching");
-  /* Stamp freshness across the WHOLE active conversation so the gradient
-   * shifts in real time as new tool rounds stream in.  Per-message
-   * stamping would be wrong: freshness is relative to the newest round
-   * in the conversation, not within a single assistant message. */
-  if (typeof activeConvId !== 'undefined' && activeConvId
-      && typeof conversations !== 'undefined') {
-    const _conv = conversations.find(c => c && c.id === activeConvId);
-    if (_conv) _stampFreshness(_conv);
-  }
   _syncToolRoundsDOM(toolZone, rounds);
   /* ★ Async swarm: render inbox-inject chips above the tool zone so the
    *   user sees "received N async swarm updates" the moment they land. */

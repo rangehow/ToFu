@@ -139,6 +139,8 @@ def test_tail_ghost_reconciled_in_window():
 
 
 if __name__ == '__main__':
+    from tests._standalone_guard import guard_standalone_db
+    guard_standalone_db('test_conv_windowed_read.__main__')
     print(_color('\n=== windowed GET read ===', '1;36'))
     test_tail_window()
     test_page_up_pure_slice()

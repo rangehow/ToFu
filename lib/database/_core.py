@@ -1699,7 +1699,13 @@ def db_execute_with_retry(db, sql, params=(), *, commit=True, max_retries=3):
             # Determine if retryable
             is_retryable = False
             if _BACKEND == 'sqlite':
-                is_retryable = ('database is locked' in err_msg or 'busy' in err_msg)
+                # 'disk i/o error' (SQLITE_IOERR) is transient on a FUSE/NFS
+                # mount (backend hiccup → pread/pwrite EIO); a bounded retry
+                # rides out the blip instead of failing the whole task. A
+                # genuinely broken mount still exhausts max_retries and raises.
+                is_retryable = ('database is locked' in err_msg
+                                or 'busy' in err_msg
+                                or 'disk i/o error' in err_msg)
             else:
                 # PG: OperationalError, InterfaceError, SerializationFailure
                 etype = type(e).__name__

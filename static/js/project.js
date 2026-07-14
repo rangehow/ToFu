@@ -108,7 +108,7 @@ async function submitHumanGuidanceFreeText(guidanceId) {
     const submitBtn = card?.querySelector('.hg-submit-btn');
     if (submitBtn) {
       submitBtn.disabled = true;
-      submitBtn.innerHTML = '<span class="hg-spinner"></span> 翻译中…';
+      submitBtn.innerHTML = '<span class="hg-spinner"></span> ' + escapeHtml(t('project.hgTranslating'));
     }
     try {
       console.log(`[HG-Submit] Auto-translating user response CN→EN (${text.length} chars)`);
@@ -117,12 +117,12 @@ async function submitHumanGuidanceFreeText(guidanceId) {
     } catch (e) {
       console.warn(`[HG-Submit] Translation failed, sending original: ${e.message}`);
       if (typeof showToast === 'function')
-        showToast('翻译失败，已发送原文', 'warning');
+        showToast(t('project.hgTranslateFailed'), 'warning');
       finalText = text; // fallback to original
     }
     if (submitBtn) {
       submitBtn.disabled = false;
-      submitBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg> 提交';
+      submitBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg> ' + escapeHtml(t('project.hgSubmit'));
     }
   }
 
@@ -761,7 +761,7 @@ async function undoConvModifications(msgIdx) {
   const count = msg.modifiedFiles;
   if (
     !await showConfirm(
-      `确定要撤销本轮对话的 ${count} 处代码修改吗？\n此操作将恢复这些文件到修改前的状态。`,
+      t('project.undoTurnConfirm', { count: count }),
       { danger: true },
     )
   )
@@ -808,7 +808,7 @@ async function undoAllModifications() {
   if (!projectState.active) return;
   if (
     !await showConfirm(
-      "确定要撤销所有代码修改吗？\n\n此操作将恢复所有被修改的文件到原始状态，包括所有对话中的修改。",
+      t('project.undoAllConfirm'),
       { danger: true },
     )
   )

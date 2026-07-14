@@ -39,7 +39,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.normpath(os.path.join(HERE, '..'))
 SCAN_ROOTS = ('lib', 'routes')
 EXCL_DIRS = {'.tofu', '__pycache__', 'node_modules', '.git',
-             '.tofu_worktrees', 'tofu_worktrees'}
+             '.tofu_worktrees', 'tofu_worktrees', '.project_sessions'}
 
 _LOG_ATTRS = {'debug', 'info', 'warning', 'warn', 'error', 'critical',
               'exception', 'log', 'log_exception', 'audit_log', 'log_context'}

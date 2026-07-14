@@ -216,6 +216,8 @@ def test_NC1_persist_without_push_fails_alignment():
 
 
 if __name__ == '__main__':
+    from tests._standalone_guard import guard_standalone_db
+    guard_standalone_db('test_conv_get_readonly_push.__main__')
     print(_color('\n=== conv GET read-only + history_rewrite push ===', '1;36'))
     test_readonly_serves_cleaned_without_write()
     test_persist_writes_and_pushes_new_rev()

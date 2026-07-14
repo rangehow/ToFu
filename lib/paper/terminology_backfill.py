@@ -154,8 +154,8 @@ def _parse_json_obj(text: str) -> dict:
     try:
         obj = json.loads(s)
         return obj if isinstance(obj, dict) else {}
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug('[Paper:TermFill] direct JSON parse failed, trying salvage: %s', e)
     m = re.search(r'\{.*\}', s, re.DOTALL)
     if m:
         try:

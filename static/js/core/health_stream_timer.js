@@ -389,16 +389,215 @@ function _healStuckPlaceholder(convId, probe) {
   return false;
 }
 
-async function _updateStreamTimerUI(convId) {
-  if (activeConvId !== convId) return;
+/**
+ * Probe a (possibly stuck) stream and self-heal it — CONV-AGNOSTIC.
+ *
+ * Extracted verbatim from the inline block that used to live inside
+ * `_updateStreamTimerUI`, so it can be driven from BOTH the per-second timer
+ * (for every streaming conv, not just the one on screen) AND the wake hooks
+ * below.  The timer path (`opts.wake` falsy) is byte-identical to the old
+ * inline behaviour: health-check → poll → `_healStuckPlaceholder` on
+ * 404/terminal, or stamp `_taskStillRunning` when the task is genuinely still
+ * running (silence is then expected — slow SSE, not a hang).
+ *
+ * The wake path (`opts.wake === true`) adds the recovery the per-second timer
+ * cannot do after a tablet has been backgrounded/locked: Page-Lifecycle
+ * "frozen" pauses every setInterval/rAF, so the silence detection never fired
+ * during the freeze and the SSE TCP socket is almost certainly dead even though
+ * the task keeps running server-side.  On wake we therefore (a) clear a
+ * possibly-stuck `_healthChecking` flag whose `.then` never ran while frozen,
+ * (b) force-finish a confirmed-dead server, and (c) when the task is STILL
+ * running, abort this tab's stale SSE reader with `_probeAbort` so
+ * `connectToTask`'s suspended await chain falls through to `_resumeSSEWithRetry`
+ * (which offset-resumes from the stashed `Last-Event-ID` cursor) — or reconnect
+ * fresh via `connectToTask` when this tab holds no live stream.
+ *
+ * @param {string} convId
+ * @param {{silentSec?: number, wake?: boolean}} [opts]
+ */
+function _probeStuckStream(convId, opts) {
+  opts = opts || {};
   const info = _streamTimers.get(convId);
   if (!info) return;
-  const el = document.getElementById('stream-elapsed-timer');
-  if (!el) return;
+  /* On wake, a prior probe may have left `_healthChecking` stuck true (its
+   * `.then` never ran because the tab was frozen mid-probe) — clear it so the
+   * wake probe is not silently swallowed. */
+  if (opts.wake) info._healthChecking = false;
+  if (info._healthChecking) return;
+  info._healthChecking = true;
+  _checkServerHealth().then(async (alive) => {
+    info._healthChecking = false;
+    info._lastHealthResult = alive;
+    const silentSec = (opts.silentSec != null)
+      ? opts.silentSec
+      : Math.floor((Date.now() - info.lastDataTime) / 1000);
+    if (!alive) {
+      console.error(`[StreamTimer] Server health check FAILED for conv=${convId.slice(0,8)} after ${silentSec}s silence${opts.wake ? ' (wake)' : ''}`);
+      // Auto-finish if server is dead and silence > severe threshold (or on wake).
+      if (silentSec >= _SILENCE_SEVERE || opts.wake) {
+        _forceFinishDeadStream(convId);
+      }
+      return;
+    }
+    /* ★ SERVER IS ALIVE but SSE is silent — the proxy (VS Code port forwarding,
+     *   nginx, corporate proxy) may have swallowed the 'done' event.
+     *   Proactively poll the task to check if it already finished. If so, abort
+     *   the stale SSE connection so connectToTask falls through to _pollFallback,
+     *   which will retrieve the completed result. */
+    const conv = conversations.find(c => c.id === convId);
+    const taskId = conv?.activeTaskId;
+    if (!taskId) return;
+    try {
+      const probeResp = await Api.chat.poll(taskId, { signal: AbortSignal.timeout(5000) });
+      if (!probeResp) return;
+      if (!probeResp.ok) {
+        /* ★ 404 = the task is GONE from the server (discarded carrier,
+         *   TTL-evicted, or one that never finalized — e.g. the autopilot
+         *   summarize phantom). An open SSE to it will NEVER complete, so the
+         *   bubble would stay "等待中…" forever. Self-heal: reclaim the orphan
+         *   placeholder (or land any partial via poll fallback). This is the
+         *   init-reconcile semantic applied LIVE, without a force-refresh. */
+        if (probeResp.status === 404) {
+          if (!_healStuckPlaceholder(convId, { notFound: true }) && opts.wake) {
+            /* Wake sweep: no live stream in this tab to poll-fallback through —
+             * clear the stale busy pin so the bubble settles. */
+            _healStuckPlaceholder(convId, { notFound: true, background: true });
+          }
+        }
+        return;
+      }
+      const probeData = await probeResp.json();
+      if (probeData.status && probeData.status !== 'running') {
+        console.warn(
+          `[StreamTimer] ★ TASK ALREADY DONE but SSE stuck — conv=${convId.slice(0,8)} ` +
+          `task=${taskId.slice(0,8)} status=${probeData.status} ` +
+          `content=${(probeData.content||'').length}chars${opts.wake ? ' (wake)' : ''} — ` +
+          `aborting stale SSE to trigger poll fallback recovery`
+        );
+        // Unified self-heal: empty orphan placeholder → reclaim; accumulated
+        // content → abort stale SSE with _probeAbort so _trySSE falls through
+        // to _pollFallback (which lands the authoritative result).
+        if (!_healStuckPlaceholder(convId, { status: probeData.status })) {
+          const _bgHealed = opts.wake && _healStuckPlaceholder(convId, { status: probeData.status, background: true });
+          if (!_bgHealed) {
+            // Defensive fallback (no conv / no trailing ghost matched): keep the
+            // original direct-abort so a terminal task never streams forever.
+            const stream = activeStreams.get(convId);
+            if (stream && stream.controller) {
+              stream._probeAbort = true;
+              stream.controller.abort();
+            }
+          }
+        }
+      } else {
+        // Task is still running.
+        info._taskStillRunning = true;
+        info._taskProbedAt = Date.now();
+        if (opts.wake) {
+          /* ★ WAKE reconnect (the tablet-freeze root cause): the task runs
+           *   server-side but this tab's SSE reader almost certainly died while
+           *   the tab was frozen. Abort it so connectToTask's suspended await
+           *   chain surrenders to _resumeSSEWithRetry (Last-Event-ID cursor
+           *   resume), or reconnect fresh if this tab holds no live stream. */
+          const stream = activeStreams.get(convId);
+          if (stream && stream.controller) {
+            console.warn(
+              `[StreamTimer] ★ WAKE reconnect — conv=${convId.slice(0,8)} task=${taskId.slice(0,8)} ` +
+              `still running; aborting stale SSE reader to resume via Last-Event-ID cursor`
+            );
+            stream._probeAbort = true;
+            stream.controller.abort();
+          } else if (typeof connectToTask === 'function') {
+            console.warn(
+              `[StreamTimer] ★ WAKE reconnect — conv=${convId.slice(0,8)} task=${taskId.slice(0,8)} ` +
+              `running server-side, no live stream in this tab; reconnecting`
+            );
+            connectToTask(convId, taskId);
+          }
+        } else {
+          // The SSE pipe might just be slow. Record this so the UI can reassure the
+          // user that the server is still actively working instead of showing a
+          // scary "no update" warning.
+          console.debug(`[StreamTimer] Task ${taskId.slice(0,8)} still running — silence is expected`);
+        }
+      }
+    } catch (probeErr) {
+      // Probe failed — don't take action, next tick will retry
+      console.debug(`[StreamTimer] Task probe failed: ${probeErr.message}`);
+    }
+  });
+}
+
+/**
+ * Sweep EVERY silent stream on wake (tab foregrounded, device resumed from
+ * freeze, or network back) and probe/reconnect it.  This is the piece that a
+ * per-second setInterval cannot cover: on a backgrounded/locked tablet the
+ * interval is FROZEN, so the elapsed timer silently keeps counting (up to the
+ * reported ~19 minutes) without ever health-checking — and the existing
+ * `visibilitychange`/`online` hooks only run `_recoverOfflineConversations`,
+ * which acts solely on `finishReason==='server_offline'/'interrupted'` and
+ * SKIPS a still-blank ACTIVE stream (no finishReason, `activeStreams` still
+ * holding an entry).  Here we walk `_streamTimers` (the silence ledger) and
+ * force a wake-probe on each one that is past the silence threshold.
+ *
+ * @param {string} trigger — for logging (visibilitychange / resume / online).
+ * @returns {number} how many streams were probed.
+ */
+function _probeAllStuckStreamsOnWake(trigger) {
+  const now = Date.now();
+  let n = 0;
+  for (const [convId, info] of _streamTimers.entries()) {
+    const silentSec = Math.floor((now - info.lastDataTime) / 1000);
+    if (silentSec >= _SILENCE_THRESHOLD) {
+      _probeStuckStream(convId, { silentSec, wake: true });
+      n++;
+    }
+  }
+  if (n) console.info(`[StreamTimer] ★ wake sweep (${trigger}) — probed ${n} silent stream(s)`);
+  return n;
+}
+
+/* ── Wake hooks: re-run the stuck-stream probe when the device/tab wakes ──
+ *   A backgrounded/locked tablet freezes timers (Page Lifecycle), so the
+ *   per-second silence detection never fires during the freeze. These events
+ *   fire the instant the page becomes usable again — that is exactly when a
+ *   stream that died during the freeze must be probed + reconnected. Guarded
+ *   for the jsdom harnesses that eval this file without a full document. */
+if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') _probeAllStuckStreamsOnWake('visibilitychange');
+  });
+  /* Page Lifecycle 'resume' fires when a FROZEN page is un-frozen (the precise
+   * tablet lock→unlock signal); 'pageshow' covers bfcache restores. */
+  document.addEventListener('resume', () => _probeAllStuckStreamsOnWake('resume'));
+}
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+  window.addEventListener('pageshow', () => _probeAllStuckStreamsOnWake('pageshow'));
+  window.addEventListener('online', () => _probeAllStuckStreamsOnWake('online'));
+}
+
+async function _updateStreamTimerUI(convId) {
+  const info = _streamTimers.get(convId);
+  if (!info) return;
 
   const now = Date.now();
-  const elapsedSec = Math.floor((now - info.startTime) / 1000);
   const silentSec = Math.floor((now - info.lastDataTime) / 1000);
+
+  /* ★ Stuck-stream probe runs for EVERY streaming conv — NOT just the one on
+   *   screen. The old `if (activeConvId !== convId) return;` at the very top of
+   *   this function meant a stream you had scrolled away from (started in
+   *   another conv, or a background tab) was NEVER health-checked / polled, so
+   *   it could hang blank forever. The probe is conv-agnostic and writes no
+   *   DOM; only the visible-timer paint below stays gated on activeConvId (the
+   *   `stream-elapsed-timer` element only exists in the active bubble). */
+  if (silentSec >= _SILENCE_THRESHOLD) {
+    _probeStuckStream(convId, { silentSec });
+  }
+
+  // ── Visible timer paint — active conv only (the timer element lives in it) ──
+  if (activeConvId !== convId) return;
+  const el = document.getElementById('stream-elapsed-timer');
+  if (!el) return;
 
   // Show elapsed time always (subtle)
   let elapsedHtml = `<span class="stream-elapsed">${_fmtElapsed(now - info.startTime)}</span>`;
@@ -417,79 +616,6 @@ async function _updateStreamTimerUI(convId) {
     el.innerHTML = elapsedHtml;
     _setBubbleLiveness(convId, '');
     return;
-  }
-
-  // Extended silence — run health check + task completion probe (async, non-blocking)
-  if (silentSec >= _SILENCE_THRESHOLD && !info._healthChecking) {
-    info._healthChecking = true;
-    _checkServerHealth().then(async (alive) => {
-      info._healthChecking = false;
-      info._lastHealthResult = alive;
-      if (!alive) {
-        console.error(`[StreamTimer] Server health check FAILED for conv=${convId.slice(0,8)} after ${silentSec}s silence`);
-        // Auto-finish if server is dead and silence > severe threshold
-        if (silentSec >= _SILENCE_SEVERE) {
-          _forceFinishDeadStream(convId);
-        }
-        return;
-      }
-      /* ★ SERVER IS ALIVE but SSE is silent — the proxy (VS Code port forwarding,
-       *   nginx, corporate proxy) may have swallowed the 'done' event.
-       *   Proactively poll the task to check if it already finished. If so, abort
-       *   the stale SSE connection so connectToTask falls through to _pollFallback,
-       *   which will retrieve the completed result. */
-      const conv = conversations.find(c => c.id === convId);
-      const taskId = conv?.activeTaskId;
-      if (!taskId) return;
-      try {
-        const probeResp = await Api.chat.poll(taskId, { signal: AbortSignal.timeout(5000) });
-        if (!probeResp) return;
-        if (!probeResp.ok) {
-          /* ★ 404 = the task is GONE from the server (discarded carrier,
-           *   TTL-evicted, or one that never finalized — e.g. the autopilot
-           *   summarize phantom). An open SSE to it will NEVER complete, so the
-           *   bubble would stay "等待中…" forever. Self-heal: reclaim the orphan
-           *   placeholder (or land any partial via poll fallback). This is the
-           *   init-reconcile semantic applied LIVE, without a force-refresh. */
-          if (probeResp.status === 404) {
-            _healStuckPlaceholder(convId, { notFound: true });
-          }
-          return;
-        }
-        const probeData = await probeResp.json();
-        if (probeData.status && probeData.status !== 'running') {
-          console.warn(
-            `[StreamTimer] ★ TASK ALREADY DONE but SSE stuck — conv=${convId.slice(0,8)} ` +
-            `task=${taskId.slice(0,8)} status=${probeData.status} ` +
-            `content=${(probeData.content||'').length}chars — ` +
-            `aborting stale SSE to trigger poll fallback recovery`
-          );
-          // Unified self-heal: empty orphan placeholder → reclaim; accumulated
-          // content → abort stale SSE with _probeAbort so _trySSE falls through
-          // to _pollFallback (which lands the authoritative result).
-          if (!_healStuckPlaceholder(convId, { status: probeData.status })) {
-            // Defensive fallback (no conv / no trailing ghost matched): keep the
-            // original direct-abort so a terminal task never streams forever.
-            const stream = activeStreams.get(convId);
-            if (stream && stream.controller) {
-              stream._probeAbort = true;
-              stream.controller.abort();
-            }
-          }
-        } else {
-          // Task is still running — silence is expected (LLM thinking, tool executing).
-          // The SSE pipe might just be slow. Record this so the UI can reassure the
-          // user that the server is still actively working instead of showing a
-          // scary "no update" warning.
-          info._taskStillRunning = true;
-          info._taskProbedAt = Date.now();
-          console.debug(`[StreamTimer] Task ${taskId.slice(0,8)} still running — silence is expected`);
-        }
-      } catch (probeErr) {
-        // Probe failed — don't take action, next tick will retry
-        console.debug(`[StreamTimer] Task probe failed: ${probeErr.message}`);
-      }
-    });
   }
 
   // A recent probe (within 2× the health-check interval) confirmed the task is

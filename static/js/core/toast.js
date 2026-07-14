@@ -172,3 +172,38 @@ function showToast(iconOrMsg, titleOrType, detail, durationMs, opts) {
     timer = setTimeout(dismiss, 1500);
   });
 }
+
+
+/**
+ * _ephemeralToast — a minimal "append a styled div to a scoped parent, fade it
+ * out after N ms" toast. This is the shared skeleton behind the bespoke
+ * scoped toasts (_showInstallToast in the memory modal card, _skillsToast on
+ * document.body) that deliberately do NOT use the rich global showToast() —
+ * they need their OWN parent + CSS class (in-modal placement, distinct
+ * styling). De-dups the create/append/fade-remove plumbing while leaving each
+ * caller its parent, class and duration.
+ *
+ * @param {Element} parent    node to append the toast to
+ * @param {string}  className  full class string for the toast element
+ * @param {string}  text       textContent (NOT html — safe by construction)
+ * @param {number}  [ms=3500]  visible duration before fade-out
+ * @param {boolean} [replace=true] remove existing toasts of the same class first
+ * @returns {Element|null} the toast element (or null if parent missing)
+ */
+function _ephemeralToast(parent, className, text, ms, replace) {
+  if (!parent) return null;
+  if (replace !== false) {
+    parent.querySelectorAll('.' + className.split(/\s+/)[0]).forEach((n) => n.remove());
+  }
+  const el = document.createElement('div');
+  el.className = className;
+  el.textContent = text;
+  parent.appendChild(el);
+  setTimeout(() => {
+    el.style.transition = 'opacity .3s';
+    el.style.opacity = '0';
+    setTimeout(() => el.remove(), 300);
+  }, ms || 3500);
+  return el;
+}
+if (typeof window !== 'undefined') window._ephemeralToast = _ephemeralToast;

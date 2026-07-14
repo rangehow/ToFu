@@ -566,6 +566,8 @@ def test_drain_stops_mid_queue_when_shutdown_arrives():
 
 
 if __name__ == '__main__':
+    from tests._standalone_guard import guard_standalone_db
+    guard_standalone_db('test_killed_recovery.__main__')
     fns = [v for k, v in sorted(globals().items())
            if k.startswith('test_') and callable(v)]
     failed = 0

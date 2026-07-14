@@ -154,7 +154,7 @@ function _handleMessagesSnapshot(ev, c) {
       if (typeof showMessagesInDebug === "function")
         showMessagesInDebug(
           ev.messages,
-          ev.label || `Round ${ev.round} · ${ev.messageCount}条`,
+          ev.label || t('stream.roundMessages', { round: ev.round, n: ev.messageCount }),
           true,
           convId,
           ev.tools || undefined,

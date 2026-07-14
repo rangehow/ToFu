@@ -141,6 +141,8 @@ def test_NC_index_only_deletes_wrong_message():
 
 
 if __name__ == '__main__':
+    from tests._standalone_guard import guard_standalone_db
+    guard_standalone_db('test_windowed_mutation_stable_id.__main__')
     print(_color('\n=== windowed mutation stable-id safety ===', '1;36'))
     test_delete_by_msgid_hits_absolute_not_local_index()
     test_delete_branch_by_msgid_hits_absolute()

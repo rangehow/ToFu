@@ -85,9 +85,9 @@ function showLogCleanBanner(result) {
   const details = document.getElementById('logCleanDetails');
   if (!banner || !info || !details) return;
 
-  info.innerHTML =
-    `检测到日志噪音，可节省 <strong>${result.savedChars.toLocaleString()}</strong>` +
-    ` 字符（<strong>${result.savedPct}%</strong>）`;
+  info.innerHTML = t('logClean.banner', {
+    chars: result.savedChars.toLocaleString(), pct: result.savedPct,
+  });
 
   const tagsHtml = (result.ops || []).map(op =>
     `<span class="log-clean-tag">• ${_escForBanner(op.desc)}</span>`
@@ -150,7 +150,7 @@ async function aiCompressLog() {
 
   btn.disabled = true;
   const origLabel = btn.innerHTML;
-  btn.innerHTML = _aiBtnIconHtml() + ' 压缩中…';
+  btn.innerHTML = _aiBtnIconHtml() + ' ' + t('logClean.compressing');
 
   try {
     const resp = await fetch(_logCleanApiUrl('/api/v1/logs/compress'), {
@@ -186,7 +186,7 @@ async function aiCompressLog() {
     if (typeof debugLog === 'function') {
       debugLog(`[AI Compress] failed: ${err.message}`, 'error');
     }
-    btn.innerHTML = _aiBtnIconHtml() + ' 失败，重试';
+    btn.innerHTML = _aiBtnIconHtml() + ' ' + t('logClean.retry');
     btn.disabled = false;
   }
 }
@@ -228,15 +228,15 @@ function previewLogClean() {
       ${breakdownHtml}
       <div class="log-clean-section">
         <div class="log-clean-section-header">
-          <span class="log-clean-section-title">清理前</span>
-          <span class="log-clean-section-meta">${beforeLen.toLocaleString()} 字符 · ${r.totalLines} 行</span>
+          <span class="log-clean-section-title">${_esc(t('logClean.before'))}</span>
+          <span class="log-clean-section-meta">${_esc(t('logClean.metaBefore', { chars: beforeLen.toLocaleString(), lines: r.totalLines }))}</span>
         </div>
         <pre class="log-clean-code">${_esc(r.originalText.slice(0, 3000))}${beforeLen > 3000 ? '\n... (' + (beforeLen - 3000).toLocaleString() + ' more chars)' : ''}</pre>
       </div>
       <div class="log-clean-section">
         <div class="log-clean-section-header">
-          <span class="log-clean-section-title">清理后</span>
-          <span class="log-clean-section-meta">${afterLen.toLocaleString()} 字符 · 节省 ${r.savedPct}%</span>
+          <span class="log-clean-section-title">${_esc(t('logClean.after'))}</span>
+          <span class="log-clean-section-meta">${_esc(t('logClean.metaAfter', { chars: afterLen.toLocaleString(), pct: r.savedPct }))}</span>
         </div>
         <pre class="log-clean-code">${_esc(r.cleanedText.slice(0, 3000))}${afterLen > 3000 ? '\n... (' + (afterLen - 3000).toLocaleString() + ' more chars)' : ''}</pre>
       </div>
@@ -248,8 +248,8 @@ function previewLogClean() {
   previewBody.innerHTML =
     `<div class="preview-text-panel" style="width:min(900px,90vw)">` +
     `<div class="preview-text-header">` +
-    `<span class="preview-text-title">日志噪音清理预览</span>` +
-    `<span class="preview-text-meta">节省 ${r.savedChars.toLocaleString()} 字符 (${r.savedPct}%)</span>` +
+    `<span class="preview-text-title">${_esc(t('logClean.previewTitle'))}</span>` +
+    `<span class="preview-text-meta">${_esc(t('logClean.previewMeta', { chars: r.savedChars.toLocaleString(), pct: r.savedPct }))}</span>` +
     `</div>` +
     `<div style="padding:16px 20px;overflow-y:auto;max-height:calc(85vh - 60px)">${previewHtml}</div>` +
     `</div>`;

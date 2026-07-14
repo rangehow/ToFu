@@ -106,6 +106,8 @@ def test_empty_conv():
 
 
 if __name__ == '__main__':
+    from tests._standalone_guard import guard_standalone_db
+    guard_standalone_db('test_messages_window.__main__')
     print(_color('\n=== load_message_window ===', '1;36'))
     test_window()
     test_empty_conv()

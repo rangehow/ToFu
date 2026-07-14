@@ -360,7 +360,8 @@ def finalize_review_body(text: str, ui_lang: str) -> str:
             _strip = getattr(_facade, '_strip_md_tables', _strip_md_tables)
             _collapse = getattr(_facade, '_collapse_dangling_emphasis',
                                 _collapse_dangling_emphasis)
-        except Exception:
+        except Exception as e:
+            logger.debug('[Paper:Review] facade resolve failed, using local defs: %s', e)
             _strip, _collapse = _strip_md_tables, _collapse_dangling_emphasis
         body, scorecard = _split_scorecard(masked)
         body = _strip(body)

@@ -378,6 +378,13 @@ _BUNDLE_FILES = [
     'core/escape_html.js',
     'core/safe_html.js',   # after escape_html.js (uses escapeHtml), before ui/ consumers
     'core/error_envelope.js',
+    # Shared bytes->human size formatter (formatFileSize) — de-dupes
+    # image-gen.js _formatFileSize + skills.js _skillsFmtSize. Load before them.
+    'core/format_size.js',
+    # Shared OS-file .zip drag/drop wiring (attachZipDropZone) — de-dupes the
+    # memory + skills install dropzones. Load before memory_skill_install.js
+    # and skills_install.js (both call it at runtime; core loads first anyway).
+    'core/zip_drop_zone.js',
     'core/cross_tab_sync.js',
     'core/conversations.js',
     # Shared SSE fetch-response read/decode/buffer loop (readSSEStream) —
@@ -504,7 +511,11 @@ _BUNDLE_FILES = [
     # Reader open; ~54KB gzip). See feature-loader.js.
     'project.js',
     'memory.js',
+    # Skill-package (.zip) drag/drop install (extracted from memory.js 2026-07).
+    'memory_skill_install.js',
     'skills.js',
+    # Skills-tab zip drag/drop + upload transport (extracted from skills.js 2026-07).
+    'skills_install.js',
     'preferences.js',
     # orchestration.js + task-mode.js — MOVED to _DEFERRED_FILES (lazy-loaded
     # on first Orchestration Studio / Task Mode open; ~48KB gzip combined).

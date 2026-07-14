@@ -651,7 +651,7 @@ function _indexHeadings(article) {
 
 function _buildReportTOC(entries) {
   if (entries.length < 3) return '';  // not worth a sidebar for a tiny report
-  var label = (typeof _i18nLang !== 'undefined' && _i18nLang === 'zh') ? '目录' : 'Contents';
+  var label = t('paper.reportTocLabel');
   var html = '<nav class="paper-report-toc" aria-label="' + label + '">'
     + '<div class="paper-report-toc-title">' + label + '</div><ul>';
   for (var i = 0; i < entries.length; i++) {
@@ -711,33 +711,27 @@ function _wireReportScrollSpy(scrollEl, article, toc) {
  *  `audit` = {total, counts:{verified,suspicious,unverifiable}, suspicious:[…]} */
 function _renderCitationAuditCard(audit) {
   if (!audit || !audit.suspicious || !audit.suspicious.length) return '';
-  var zh = (typeof _i18nLang !== 'undefined' && _i18nLang === 'zh');
   var c = audit.counts || {};
   var n = audit.suspicious.length;
-  var title = zh
-    ? ('引用完整性警告 — ' + n + ' 条可疑引用')
-    : ('Citation integrity — ' + n + ' suspicious reference' + (n === 1 ? '' : 's'));
-  var sub = zh
-    ? ('已核验 ' + (audit.total || 0) + ' 条引用标识符：' +
-       (c.verified || 0) + ' 条确认存在、' + (c.suspicious || 0) + ' 条可疑、' +
-       (c.unverifiable || 0) + ' 条无法核验（无法核验 ≠ 虚构）。')
-    : ('Checked ' + (audit.total || 0) + ' cited identifiers: ' +
-       (c.verified || 0) + ' verified, ' + (c.suspicious || 0) + ' suspicious, ' +
-       (c.unverifiable || 0) + ' unverifiable (unverifiable ≠ fabricated).');
+  var title = t('paper.citeAuditTitle', { n: n });
+  var sub = t('paper.citeAuditSub', {
+    total: (audit.total || 0), verified: (c.verified || 0),
+    suspicious: (c.suspicious || 0), unverifiable: (c.unverifiable || 0)
+  });
   var rows = audit.suspicious.map(function (it) {
     var idLabel = escapeHtml((it.kind || '') + ' ' + (it.identifier || ''));
-    var reason = escapeHtml(it.reason || (zh ? '未能解析' : 'did not resolve'));
+    var reason = escapeHtml(it.reason || t('paper.citeDidNotResolve'));
     var checked = it.checked
       ? ('<a class="paper-cite-checked" href="' + escapeHtml(it.checked) +
          '" target="_blank" rel="noopener noreferrer">' +
-         escapeHtml(zh ? '查证来源' : 'checked source') + '</a>')
+         escapeHtml(t('paper.citeCheckedSource')) + '</a>')
       : '';
     var titles = '';
     if (it.matchedTitle && it.claimedTitle) {
       titles = '<div class="paper-cite-titles">' +
-        '<span class="paper-cite-claimed">' + escapeHtml(zh ? '声称：' : 'claimed: ') +
+        '<span class="paper-cite-claimed">' + escapeHtml(t('paper.citeClaimed')) +
         escapeHtml(it.claimedTitle) + '</span>' +
-        '<span class="paper-cite-matched">' + escapeHtml(zh ? '实际解析为：' : 'resolves to: ') +
+        '<span class="paper-cite-matched">' + escapeHtml(t('paper.citeResolvesTo')) +
         escapeHtml(it.matchedTitle) + '</span></div>';
     }
     return '<li class="paper-cite-item">' +
@@ -766,24 +760,17 @@ function _renderTerminologyAuditCard(audit) {
   var missing = (audit.missing || []);
   var dangling = (audit.dangling || []);
   if (!missing.length && !dangling.length) return '';
-  var zh = (typeof _i18nLang !== 'undefined' && _i18nLang === 'zh');
   var total = missing.length + dangling.length;
-  var title = zh
-    ? ('术语完整性 — ' + total + ' 处未定义')
-    : ('Terminology completeness — ' + total + ' undefined term' + (total === 1 ? '' : 's'));
-  var sub = zh
-    ? ('术语表共 ' + (audit.glossaryCount || 0) + ' 条：' + missing.length +
-       ' 个术语在正文中出现却未收录、' + dangling.length +
-       ' 处术语表定义引用了未定义的术语。以下条目缺少可供理解的解释。')
-    : ('Glossary has ' + (audit.glossaryCount || 0) + ' entries: ' + missing.length +
-       ' term(s) used in the body but never defined, ' + dangling.length +
-       ' glossary definition(s) leaning on an undefined term. The items below '
-       + 'lack an explanation the reader can rely on.');
+  var title = t('paper.termAuditTitle', { n: total });
+  var sub = t('paper.termAuditSub', {
+    glossaryCount: (audit.glossaryCount || 0),
+    missing: missing.length, dangling: dangling.length
+  });
   var items = [];
   missing.forEach(function (m) {
     var where = m.section
       ? ('<span class="paper-term-where">' +
-         escapeHtml((zh ? '出现于：' : 'appears in: ') + m.section) + '</span>')
+         escapeHtml(t('paper.termAppearsIn') + m.section) + '</span>')
       : '';
     var ev = m.evidence
       ? ('<span class="paper-term-evidence">' + escapeHtml(m.evidence) + '</span>')
@@ -791,14 +778,11 @@ function _renderTerminologyAuditCard(audit) {
     items.push('<li class="paper-term-item paper-term-missing">' +
       '<code class="paper-term-id">' + escapeHtml(m.term || '') + '</code>' +
       '<span class="paper-term-reason">' +
-        escapeHtml(zh ? '正文使用但术语表未收录' : 'used but not in the glossary') + '</span>' +
+        escapeHtml(t('paper.termUsedNotInGlossary')) + '</span>' +
       where + ev + '</li>');
   });
   dangling.forEach(function (d) {
-    var reason = zh
-      ? ('术语表中「' + (d.term || '') + '」的定义引用了未定义的「' + (d.referencedTerm || '') + '」')
-      : ('the glossary definition of “' + (d.term || '') + '” references undefined “' +
-         (d.referencedTerm || '') + '”');
+    var reason = t('paper.termDanglingReason', { term: (d.term || ''), referencedTerm: (d.referencedTerm || '') });
     items.push('<li class="paper-term-item paper-term-dangling">' +
       '<code class="paper-term-id">' + escapeHtml(d.referencedTerm || '') + '</code>' +
       '<span class="paper-term-reason">' + escapeHtml(reason) + '</span></li>');
@@ -819,11 +803,10 @@ function _renderTerminologyAuditCard(audit) {
  *  completionTokens, rounds, elapsedSec}). Returns '' when meta is absent. */
 function _renderReportFinishTag(meta) {
   if (!meta || !meta.model) return '';
-  var zh = (typeof _i18nLang !== 'undefined' && _i18nLang === 'zh');
   var parts = [];
   // Model — the headline of the tag.
   parts.push('<span class="paper-finish-model" title="' +
-    escapeHtml(zh ? '生成本报告的模型' : 'Model that generated this report') + '">' +
+    escapeHtml(t('paper.finishModelTitle')) + '">' +
     '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v1a3 3 0 0 0-3 3 3 3 0 0 0 0 6 3 3 0 0 0 3 3v1a3 3 0 0 0 6 0v-1a3 3 0 0 0 3-3 3 3 0 0 0 0-6 3 3 0 0 0-3-3V5a3 3 0 0 0-3-3z"/></svg>' +
     escapeHtml(meta.model) + '</span>');
   // Cost — prefer CNY (matches the rest of the app), fall back to USD.
@@ -836,7 +819,7 @@ function _renderReportFinishTag(meta) {
   }
   if (costStr) {
     parts.push('<span class="paper-finish-cost" title="' +
-      escapeHtml(zh ? '本次生成的预估费用' : 'Estimated cost of this generation') +
+      escapeHtml(t('paper.finishCostTitle')) +
       '">' + escapeHtml(costStr) + '</span>');
   }
   // Tokens (compact) — secondary detail.
@@ -849,10 +832,10 @@ function _renderReportFinishTag(meta) {
       return String(n);
     };
     parts.push('<span class="paper-finish-tokens" title="' +
-      escapeHtml(zh ? '输入 / 输出 tokens' : 'input / output tokens') + '">' +
+      escapeHtml(t('paper.finishTokensTitle')) + '">' +
       fmt(inTok) + ' \u2192 ' + fmt(outTok) + ' tok</span>');
   }
-  var label = zh ? '由以下模型生成' : 'Generated by';
+  var label = t('paper.finishGeneratedBy');
   return '<div class="paper-report-finish-tag" role="contentinfo">' +
     '<span class="paper-finish-label">' + escapeHtml(label) + '</span>' +
     parts.join('') + '</div>';

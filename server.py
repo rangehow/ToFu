@@ -2576,6 +2576,30 @@ if __name__ == '__main__':
                                         _dbd_err)
             loop.create_task(_run_deferred_boot_dispatch())
 
+        # ── Orphaned-queue re-dispatch (message_queue) ──
+        #   A human message QUEUED while a task was running lives ONLY in
+        #   message_queue (never in conversations.messages). Nothing drains it
+        #   on a fresh boot for a conv whose running task died with the process
+        #   → the message is shown in the queue bar but never processed = total
+        #   loss. Drain it on the SERVING loop (blocking DB + spawn work → a
+        #   thread), gated on the shutdown flag so a ^C during boot skips it.
+        #   Runs AFTER recover_stale_tasks_on_startup cleared dead activeTaskId
+        #   pointers, so it cannot double-dispatch (plus a per-conv live guard).
+        async def _run_orphan_queue_redispatch():
+            if _shutdown_requested.is_set():
+                return
+            try:
+                from lib.message_queue import redispatch_orphaned_queue_on_startup
+                spawned = await asyncio.to_thread(redispatch_orphaned_queue_on_startup)
+                if spawned:
+                    _server_log.info('[Server] orphaned-queue redispatch spawned '
+                                     '%d task(s) from stranded queue rows',
+                                     len(spawned))
+            except Exception as _oq_err:
+                _server_log.warning('[Server] orphaned-queue redispatch failed: %s',
+                                    _oq_err)
+        loop.create_task(_run_orphan_queue_redispatch())
+
         # Bridge the SIGTERM threading.Event to an async trigger Hypercorn
         # awaits. When set, Hypercorn stops accepting new connections and
         # drains in-flight ones within graceful_timeout. Poll cheaply (the

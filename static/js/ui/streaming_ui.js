@@ -13,6 +13,21 @@
 // ══════════════════════════════════════════════
 function _ensureStreamZones(body) {
   if (body.querySelector('[data-zone="tool"]')) return;
+  /* ★ FIX (blank streaming bubble on tablet): this innerHTML assignment WIPES
+   *   the "Preparing…/等待中…" pulse that _streamingBubbleHTML seeded into
+   *   #streaming-body. updateStreamingUI can then hit an early return before it
+   *   repopulates the status zone — the _hasSelectionInStreaming() guard (a
+   *   long-press text selection inside the bubble is common on tablets) or a
+   *   coalesced background-tab frame whose buffer is still empty. That left the
+   *   body as empty zones with NO pulse and NO content: a permanently blank
+   *   Agent bubble while the independent elapsed timer kept ticking. Seed the
+   *   same waiting pulse directly into the status zone so the wipe can never
+   *   produce a fully-blank body; the normal status logic overwrites it (keyed
+   *   on data-phase-key) the moment a real frame paints. */
+  const _waitPulse =
+    '<div class="stream-status"><div class="pulse"></div> ' +
+    escapeHtml(typeof t === 'function' ? t('stream.phase.waiting') : 'Waiting…') +
+    '</div>';
   body.innerHTML =
     '<div data-zone="memprefetch"></div>' +
     '<div data-zone="swarmInbox"></div>' +  /* async swarm-update chips */
@@ -30,7 +45,7 @@ function _ensureStreamZones(body) {
     '<div data-zone="translatedPrimary"></div>' +
     '<div data-zone="content"></div>' +
     '<div data-zone="fc"></div>' +
-    '<div data-zone="status"></div>' +
+    '<div data-zone="status">' + _waitPulse + '</div>' +
     /* Legacy fallback slot — retained (hidden by default) only so a stale
      * caller that predates translatedPrimary still has a target and degrades
      * gracefully instead of throwing. The primary live-translation path no

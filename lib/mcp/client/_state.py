@@ -20,8 +20,7 @@ Facade contract (IMPORTANT):
 
 from __future__ import annotations
 
-import importlib  # noqa: F401 — re-exported on the facade; patched by tests as mc.importlib
-import subprocess  # noqa: F401 — re-exported on the facade; patched by tests as mc.subprocess
+import os
 import sys
 import threading
 
@@ -80,6 +79,15 @@ _install_last_error: dict[str, str] = {}
 # changes and MERGES new/changed rows into the LIVE dict (identity preserved).
 _vendored_mtime: float = 0.0
 _vendored_reload_lock = threading.Lock()
+
+# Baseline the mtime at import time so an edit made BETWEEN process start and
+# the first connect is still detected (mtime then strictly advances).
+try:
+    _vp = getattr(_vendored_mod, '__file__', '') or ''
+    _vendored_mtime = os.path.getmtime(_vp) if _vp else 0.0
+except OSError as _e:
+    logger.debug('[MCP] vendored.py baseline stat failed (%s) — defaulting mtime=0', _e)
+    _vendored_mtime = 0.0
 
 
 # ── Vendored-snapshot staleness bookkeeping ──────────────

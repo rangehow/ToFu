@@ -218,8 +218,8 @@ async function sendMessage() {
     const r = _pendingLogClean;
     const opsDesc = r.ops.map((o) => o.desc).join("、");
     const doClean = await showConfirm(
-      `检测到日志噪音，可节省 ${r.savedChars.toLocaleString()} 字符（${r.savedPct}%）\n\n清理项: ${opsDesc}\n\n点击「确定」清理后发送，「取消」保持原文发送。`,
-      { okText: '清理并发送', cancelText: '保持原文' },
+      t('send.logNoiseConfirm', { chars: r.savedChars.toLocaleString(), pct: r.savedPct, ops: opsDesc }),
+      { okText: t('send.logNoiseClean'), cancelText: t('send.logNoiseKeep') },
     );
     if (doClean) {
       input.value = input.value.replace(r.originalText, r.cleanedText);
@@ -956,7 +956,7 @@ function renderPendingQueueUI(convId) {
     const i = _realCount++;
     const preview = item.text
       ? item.text
-      : (item.images?.length ? `${item.images.length} 张图片` : "附件");
+      : (item.images?.length ? t('queue.imagesCount', { n: item.images.length }) : t('queue.attachment'));
     // Attachment badges
     const badges = [];
     if (item.images?.length) badges.push(`<span>${item.images.length} img</span>`);
@@ -987,8 +987,8 @@ function renderPendingQueueUI(convId) {
         <span class="queue-item-text">${escapeHtml(preview)}</span>
       </div>
       ${badges.length ? `<span class="queue-item-attachments">${badges.join('')}</span>` : ''}
-      <button class="queue-item-cancel" onclick="removePendingQueueItem('${convId}', ${i})" title="取消此消息">✕</button>
-      ${item.queueId ? '<span class="queue-item-synced" title="已同步到服务器">☁</span>' : ''}
+      <button class="queue-item-cancel" onclick="removePendingQueueItem('${convId}', ${i})" title="${escapeHtml(t('queue.cancelMsg'))}">✕</button>
+      ${item.queueId ? `<span class="queue-item-synced" title="${escapeHtml(t('queue.syncedToServer'))}">☁</span>` : ''}
     </div>`;
   }).join("");
   const headerSvg = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4m0 12v4M4.93 4.93l2.83 2.83m8.48 8.48l2.83 2.83M2 12h4m12 0h4M4.93 19.07l2.83-2.83m8.48-8.48l2.83-2.83"/></svg>`;

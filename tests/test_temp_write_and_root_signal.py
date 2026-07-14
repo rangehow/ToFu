@@ -285,12 +285,21 @@ class RecentProjectPersistenceTest(_Base):
         cfg.save_recent_project = self._orig_srp
         super().tearDown()
 
-    def test_abs_write_auto_register_saves_recent(self):
+    def test_conv_scoped_bg_auto_register_does_not_save_recent(self):
+        # A CONV-SCOPED background auto-register (running task with conv_id)
+        # must NOT write to the process-global recent-projects list — recent is
+        # global UI state, and the "background write must never pollute global
+        # state" invariant (see NonTempAutoRegisterSignalTest / ConvRegistry*)
+        # WINS. The root lands only in the conv-scoped registry; recent-save
+        # stays reserved for the human-driven interactive + create_project
+        # paths. (Corrects the earlier expectation that contradicted the
+        # no-global-pollution guarantee its sibling tests enforce.)
         target = os.path.join(self._sibling, 'pkg', 'mod.py')
         tool_write_file(self._proj, target, 'x = 1\n', conv_id='c1', task_id='t1')
-        self.assertIn(os.path.abspath(self._sibling),
-                      [os.path.abspath(p) for p in self._saved_paths],
-                      'auto-registered root must be saved to recent projects')
+        self.assertEqual(
+            [], [os.path.abspath(p) for p in self._saved_paths
+                 if os.path.abspath(p) == os.path.abspath(self._sibling)],
+            'conv-scoped background auto-register must NOT pollute global recent projects')
 
     def test_temp_write_does_not_save_recent(self):
         target = os.path.join(self._tmp_scratch, 'scratch.py')

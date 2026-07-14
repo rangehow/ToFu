@@ -348,7 +348,7 @@ function _renderHumanGuidanceCard(round, svg) {
 
   // ★ Translating indicator (shown while async EN→CN translation is in-flight)
   const translatingIndicator = isTranslating
-    ? `<div class="hg-translating-indicator"><span class="hg-spinner"></span> 正在翻译问题…</div>`
+    ? `<div class="hg-translating-indicator"><span class="hg-spinner"></span> ${escapeHtml(t('project.hgTranslatingQuestion'))}</div>`
     : '';
 
   let inputHtml = '';
@@ -378,12 +378,12 @@ function _renderHumanGuidanceCard(round, svg) {
     //   on submit (CN→EN) when conv.autoTranslate is ON.
     inputHtml = `<div class="hg-freetext-wrap">
       <textarea class="hg-textarea" id="hg-input-${gid}" rows="3"
-                placeholder="输入你的回答（支持中文，会自动翻译）…"
+                placeholder="${escapeHtml(t('project.hgTextareaPlaceholder'))}"
                 onkeydown="if(event.key==='Enter'&&(event.ctrlKey||event.metaKey)){event.preventDefault();submitHumanGuidanceFreeText('${gid}')}"></textarea>
       <div class="hg-freetext-actions">
         <button class="hg-submit-btn" onclick="event.stopPropagation();submitHumanGuidanceFreeText('${gid}')">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
-          提交
+          ${escapeHtml(t('project.hgSubmit'))}
         </button>
       </div>
     </div>`;
@@ -392,8 +392,8 @@ function _renderHumanGuidanceCard(round, svg) {
   return `<div class="hg-card" data-gid="${gid}">
     <div class="hg-header">
       
-      <span class="hg-title">AI 需要你的指导</span>
-      <span class="hg-badge">等待回复</span>
+      <span class="hg-title">${escapeHtml(t('project.hgPanelTitle'))}</span>
+      <span class="hg-badge">${escapeHtml(t('project.hgWaitingReply'))}</span>
     </div>
     ${translatingIndicator}
     <div class="hg-question">${questionHtml}</div>
@@ -1417,7 +1417,7 @@ function _renderUnifiedToolLine(round, isSearching) {
     return `<div class="ptool-line hg-skipped-line">
       <span class="ptool-icon">${svg}</span>
       <span class="ptool-text">${td.label || 'Guidance'}${skippedQ ? ' — ' + skippedQ : ''}</span>
-      <span class="ptool-badge ptool-badge-skip">未回答</span>
+      <span class="ptool-badge ptool-badge-skip">${escapeHtml(t('project.hgUnanswered'))}</span>
     </div>`;
   }
 
@@ -1427,8 +1427,8 @@ function _renderUnifiedToolLine(round, isSearching) {
     return `<div class="ptool-line hg-submitted-line">
       <span class="ptool-icon">${svg}</span>
       <span class="ptool-text">${td.label || 'Guidance'}${respPreview ? ' — ' + respPreview : ''}</span>
-      <span class="ptool-badge ptool-badge-done">✓ 已回答</span>
-      <span class="hg-submitted-spinner" title="等待 AI 继续…"></span>
+      <span class="ptool-badge ptool-badge-done">${escapeHtml(t('project.hgAnswered'))}</span>
+      <span class="hg-submitted-spinner" title="${escapeHtml(t('project.hgWaitingContinue'))}"></span>
     </div>`;
   }
 

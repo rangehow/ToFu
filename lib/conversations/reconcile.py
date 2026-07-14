@@ -198,6 +198,75 @@ def is_superseded_error_husk(
     return _is_settled_assistant(messages[idx + 1])
 
 
+ORPHAN_RESUMABLE_MAX_AGE_MS = 24 * 60 * 60 * 1000  # 24h
+
+
+def _last_real_turn(messages: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Return the authoritative trailing turn, or None for an empty list.
+
+    The orphan classifier runs AFTER reconcile has swept buried ghosts and
+    deleted/stamped a ghost trailing assistant, so by the time we classify an
+    orphan the tail is the genuine settled tail.
+    """
+    if not isinstance(messages, list) or not messages:
+        return None
+    return messages[-1] if isinstance(messages[-1], dict) else None
+
+
+def classify_orphan_resumable(
+    messages: list[dict[str, Any]],
+    *,
+    has_live_task: bool,
+    now_ms: int,
+    max_age_ms: int = ORPHAN_RESUMABLE_MAX_AGE_MS,
+) -> dict[str, Any] | None:
+    """Backend-authoritative "does this conv have an orphaned user turn that
+    needs a response?" verdict — the fundamental fix for the frontend Case-E
+    ``age<5min`` heuristic that could AUTO-FIRE a billed LLM turn.
+
+    Returns a structured marker dict when the AUTHORITATIVE message list ends in
+    a user turn with NO assistant response and NO live task — else None. The
+    frontend renders an explicit Resume affordance from this marker; it NEVER
+    auto-dispatches. Because it consults the real ``messages`` (not the stale
+    ``settings.lastMsgRole`` shell metadata), it closes the latent DOUBLE-ANSWER
+    bug: a conv whose real tail is already an assistant answer is NOT marked
+    resumable — the exact case a metadata-only frontend cannot verify.
+
+    Args:
+        messages: the AUTHORITATIVE, already-reconciled message list.
+        has_live_task: True if a pending/running task exists for this conv
+            (caller supplies it from the runtime — same signal as the GET-path
+            live-task gate). A live task means a response IS coming; not orphaned.
+        now_ms: current epoch millis (injected for deterministic testing).
+        max_age_ms: freshness bound (server policy, default 24h).
+
+    Returns:
+        ``{'msgIndex': int, 'timestamp': int, 'isImageGen': bool}`` or None.
+    """
+    if has_live_task:
+        return None
+    tail = _last_real_turn(messages)
+    if tail is None or tail.get('role') != 'user':
+        return None
+    # An image-gen user turn is driven by the creative-mode pipeline, NOT the
+    # orchestrator; never offer it to startAssistantResponse.
+    content = tail.get('content')
+    is_image_gen = bool(
+        tail.get('_isImageGen')
+        or (isinstance(content, str) and content.startswith('\U0001f3a8 '))
+    )
+    ts = tail.get('timestamp')
+    if not isinstance(ts, (int, float)) or ts <= 0:
+        return None
+    if (now_ms - int(ts)) > max_age_ms:
+        return None
+    return {
+        'msgIndex': len(messages) - 1,
+        'timestamp': int(ts),
+        'isImageGen': is_image_gen,
+    }
+
+
 def reconcile_conversation_messages(
     messages: list[dict[str, Any]],
     cache_prefix_count: int = 0,
@@ -310,4 +379,6 @@ __all__ = [
     'is_error_husk',
     'is_superseded_error_husk',
     'reconcile_conversation_messages',
+    'classify_orphan_resumable',
+    'ORPHAN_RESUMABLE_MAX_AGE_MS',
 ]

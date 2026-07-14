@@ -57,6 +57,7 @@ def validate_pdf_bytes(pdf_bytes):
             return False, 0, 'PDF has no pages'
         return True, pages, ''
     except Exception as e:
+        logger.debug('[PDF] validate_pdf_bytes: open/validate failed: %s', e)
         return False, 0, '%s: %s' % (type(e).__name__, e)
     finally:
         if doc is not None:

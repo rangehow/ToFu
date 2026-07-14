@@ -1107,11 +1107,11 @@ function renderMessage(msg, idx) {
     if (msg.convRefs && msg.convRefs.length > 0) {
       for (const cr of msg.convRefs) {
         const crTitle = escapeHtml(cr.title || cr.id);
-        body += `<div class="reply-quote-badge conv-ref-badge" title="引用对话: ${crTitle}">
+        body += `<div class="reply-quote-badge conv-ref-badge" title="${escapeHtml(t('chat.convRefTitle', { title: crTitle }))}">
           <span class="reply-quote-badge-icon">@</span>
           <span class="reply-quote-badge-info">
             <span class="reply-quote-badge-name">${crTitle}</span>
-            <span class="reply-quote-badge-meta">引用对话</span>
+            <span class="reply-quote-badge-meta">${escapeHtml(t('chat.convRefMeta'))}</span>
           </span></div>`;
       }
     }
@@ -1337,8 +1337,8 @@ function renderMessage(msg, idx) {
       const _fmtSize = typeof _formatFileSize === 'function' ? _formatFileSize : (b => b > 0 ? Math.round(b / 1024) + ' KB' : '');
       const _shortModel = typeof _IG_MODEL_SHORT !== 'undefined' ? _IG_MODEL_SHORT : {};
       const distinctModels = new Set(results.map(r => r.model)).size;
-      const bannerLabel = distinctModels > 1 ? `全模型 ${results.length}连抽` : `${results.length}连抽`;
-      body += `<div class="ig-batch-wrapper"><div class="ig-batch-banner">${bannerLabel} · ${okResults.length}/${results.length} 成功</div><div class="ig-batch-grid ig-cols-${cols}">`;
+      const bannerLabel = distinctModels > 1 ? t('chat.igBatchAll', { n: results.length }) : t('chat.igBatchN', { n: results.length });
+      body += `<div class="ig-batch-wrapper"><div class="ig-batch-banner">${escapeHtml(bannerLabel)} · ${escapeHtml(t('chat.igBatchSuccess', { ok: okResults.length, total: results.length }))}</div><div class="ig-batch-grid ig-cols-${cols}">`;
       for (let ri = 0; ri < results.length; ri++) {
         const r = results[ri];
         if (r.ok && r.image_url) {
@@ -1435,15 +1435,15 @@ function renderMessage(msg, idx) {
       const _wrenchSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.106-3.105c.32-.322.863-.22.983.218a6 6 0 0 1-8.259 7.057l-7.91 7.91a1 1 0 0 1-2.999-3l7.91-7.91a6 6 0 0 1 7.057-8.259c.438.12.54.662.219.984z"/></svg>';
       const _archiveSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>';
       const trigLabel = trig === 'reactive'
-        ? _zapSvg + ' 紧急压缩'
-        : (trig === 'manual' ? _wrenchSvg + ' 手动压缩' : _archiveSvg + ' 自动压缩');
+        ? _zapSvg + ' ' + escapeHtml(t('chat.compactReactive'))
+        : (trig === 'manual' ? _wrenchSvg + ' ' + escapeHtml(t('chat.compactManual')) : _archiveSvg + ' ' + escapeHtml(t('chat.compactAuto')));
       const before = c.tokensBefore || 0;
       const after  = c.tokensAfter  || 0;
       const reductionPct = (c.reductionPct != null) ? c.reductionPct
                           : (before > 0 ? Math.round((1 - after / before) * 100) : 0);
       const sizeFrag = before > 0 && after > 0
         ? `${(before/1000).toFixed(0)}k → ${(after/1000).toFixed(0)}k tokens · -${reductionPct}%`
-        : (before > 0 ? `${(before/1000).toFixed(0)}k tokens 已归档` : '已归档');
+        : (before > 0 ? t('chat.compactArchivedTokens', { k: (before/1000).toFixed(0) }) : t('chat.compactArchived'));
       const reasonFrag = c.reason ? `<span class="compaction-marker-reason">${escapeHtml(c.reason)}</span>` : '';
       const statusCls = (c.status === 'done') ? 'is-done' : 'is-progress';
       const archiveAttr = (c.archiveId == null) ? '' : `data-archive-id="${c.archiveId}"`;
@@ -1451,12 +1451,12 @@ function renderMessage(msg, idx) {
       return `<button type="button" class="compaction-marker ${statusCls}"
         ${archiveAttr} ${convAttr}
         onclick="if(window.openCompactionViewer){window.openCompactionViewer(this.dataset.convId, parseInt(this.dataset.archiveId,10))}else{console.warn('compaction-viewer not loaded')}"
-        title="点击查看压缩前的完整上下文">
+        title="${escapeHtml(t('chat.compactViewSnapshot'))}">
         <span class="compaction-marker-icon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8v13H3V8"/><path d="M1 3h22v5H1z"/><path d="M10 12h4"/></svg></span>
         <span class="compaction-marker-trigger">${trigLabel}</span>
         <span class="compaction-marker-stat">${escapeHtml(sizeFrag)}</span>
         ${reasonFrag}
-        <span class="compaction-marker-cta">查看历史</span>
+        <span class="compaction-marker-cta">${escapeHtml(t('chat.compactViewHistory'))}</span>
       </button>`;
     }).join('');
     body += `<div class="compaction-marker-row">${_ccDom}</div>`;
@@ -1469,7 +1469,7 @@ function renderMessage(msg, idx) {
     const _tmUser = _tr.model ? `<span class="bilingual-model" title="${escapeHtml(_tr.model)}">${escapeHtml(_tr.model)}</span>` : '';
     // Strip any leaked <notranslate>/<nt> tags from the translation display.
     const _userTrans = stripNoTranslateTags(msg.content || '');
-    body += `<div class="bilingual-block bilingual-translated"><div class="bilingual-header" onclick="if(event.target.closest('.bilingual-copy-btn'))return;this.parentElement.classList.toggle('expanded')"><span class="bilingual-label"><span class="bilingual-type">原文</span><span class="bilingual-sep">/</span><span class="bilingual-type active">译文</span>${_tmUser}</span><button class="bilingual-copy-btn" onclick="event.stopPropagation();copyBilingualOriginal(this,'user',${idx})" title="Copy translation"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button><span class="bilingual-toggle">▼</span></div><div class="bilingual-body"><div class="md-content user-content">${escapeHtml(_userTrans)}</div></div></div>`;
+    body += `<div class="bilingual-block bilingual-translated"><div class="bilingual-header" onclick="if(event.target.closest('.bilingual-copy-btn'))return;this.parentElement.classList.toggle('expanded')"><span class="bilingual-label"><span class="bilingual-type">${escapeHtml(t('chat.bilingualOriginal'))}</span><span class="bilingual-sep">/</span><span class="bilingual-type active">${escapeHtml(t('chat.bilingualTranslated'))}</span>${_tmUser}</span><button class="bilingual-copy-btn" onclick="event.stopPropagation();copyBilingualOriginal(this,'user',${idx})" title="Copy translation"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button><span class="bilingual-toggle">▼</span></div><div class="bilingual-body"><div class="md-content user-content">${escapeHtml(_userTrans)}</div></div></div>`;
   }
   // ── Auto-translate failed notice (user messages) ──
   // The send-path auto-translate was attempted but failed / timed out, so the
@@ -1499,7 +1499,7 @@ function renderMessage(msg, idx) {
     const _tmAsst = _tr.model ? `<span class="bilingual-model" title="${escapeHtml(_tr.model)}">${escapeHtml(_tr.model)}</span>` : '';
     // Defense in depth — strip any leaked <notranslate>/<nt> tags.
     const _asstOrig = stripNoTranslateTags(msg.content || '');
-    body += `<div class="bilingual-block bilingual-original"><div class="bilingual-header" onclick="if(event.target.closest('.bilingual-copy-btn'))return;this.parentElement.classList.toggle('expanded')"><span class="bilingual-label"><span class="bilingual-type active">原文</span><span class="bilingual-sep">/</span><span class="bilingual-type">译文</span>${_tmAsst}</span><button class="bilingual-copy-btn" onclick="event.stopPropagation();copyBilingualOriginal(this,'assistant',${idx})" title="Copy original text"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button><span class="bilingual-toggle">▼</span></div><div class="bilingual-body"><div class="md-content">${renderMarkdown(_asstOrig)}</div></div></div>`;
+    body += `<div class="bilingual-block bilingual-original"><div class="bilingual-header" onclick="if(event.target.closest('.bilingual-copy-btn'))return;this.parentElement.classList.toggle('expanded')"><span class="bilingual-label"><span class="bilingual-type active">${escapeHtml(t('chat.bilingualOriginal'))}</span><span class="bilingual-sep">/</span><span class="bilingual-type">${escapeHtml(t('chat.bilingualTranslated'))}</span>${_tmAsst}</span><button class="bilingual-copy-btn" onclick="event.stopPropagation();copyBilingualOriginal(this,'assistant',${idx})" title="Copy original text"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button><span class="bilingual-toggle">▼</span></div><div class="bilingual-body"><div class="md-content">${renderMarkdown(_asstOrig)}</div></div></div>`;
   }
   // ── Critic (endpoint review) / Autopilot VU bilingual block — symmetric with assistant ──
   // (isUser && _showTrans) is true ONLY for critic/VU users — a normal user has
@@ -1508,7 +1508,7 @@ function renderMessage(msg, idx) {
   if (isUser && _showTrans) {
     const _tmCritic = _tr.model ? `<span class="bilingual-model" title="${escapeHtml(_tr.model)}">${escapeHtml(_tr.model)}</span>` : '';
     const _critOrig = stripNoTranslateTags(msg.content || '');
-    body += `<div class="bilingual-block bilingual-original"><div class="bilingual-header" onclick="if(event.target.closest('.bilingual-copy-btn'))return;this.parentElement.classList.toggle('expanded')"><span class="bilingual-label"><span class="bilingual-type active">原文</span><span class="bilingual-sep">/</span><span class="bilingual-type">译文</span>${_tmCritic}</span><button class="bilingual-copy-btn" onclick="event.stopPropagation();copyBilingualOriginal(this,'critic',${idx})" title="Copy original text"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button><span class="bilingual-toggle">▼</span></div><div class="bilingual-body"><div class="md-content">${renderMarkdown(_critOrig)}</div></div></div>`;
+    body += `<div class="bilingual-block bilingual-original"><div class="bilingual-header" onclick="if(event.target.closest('.bilingual-copy-btn'))return;this.parentElement.classList.toggle('expanded')"><span class="bilingual-label"><span class="bilingual-type active">${escapeHtml(t('chat.bilingualOriginal'))}</span><span class="bilingual-sep">/</span><span class="bilingual-type">${escapeHtml(t('chat.bilingualTranslated'))}</span>${_tmCritic}</span><button class="bilingual-copy-btn" onclick="event.stopPropagation();copyBilingualOriginal(this,'critic',${idx})" title="Copy original text"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button><span class="bilingual-toggle">▼</span></div><div class="bilingual-body"><div class="md-content">${renderMarkdown(_critOrig)}</div></div></div>`;
   }
   // ── Persistent "translating..." indicator (survives re-render / tab switch) ──
   // Owned by ui/translation_indicator.js, which reads translation state via the

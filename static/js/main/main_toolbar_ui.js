@@ -8,42 +8,6 @@
    scope — no imports / exports needed.
    ═══════════════════════════════════════════════════════════════════ */
 
-function _buildToolHistoryRound(batch) {
-  const round = {
-    assistantContent: "",
-    toolCalls: [],
-    toolResults: [],
-  };
-  // ★ Pick up per-round assistantContent + thinking from the first entry in
-  //   the batch (tool_dispatch tags only the first entry per LLM round).
-  for (const r of batch) {
-    if (!round.assistantContent && r.assistantContent) {
-      round.assistantContent = r.assistantContent;
-    }
-    if (!round.thinking && r.thinking) {
-      round.thinking = r.thinking;
-    }
-    if (!round.thinkingSignature && r.thinkingSignature) {
-      round.thinkingSignature = r.thinkingSignature;
-    }
-    const tc = {
-      id: r.toolCallId,
-      name: r.toolName,
-      arguments: r.toolArgs || "{}",
-    };
-    // Gemini 3.x thought_signature — carried on the tool_call entry itself.
-    if (r.extraContent) {
-      tc.extraContent = r.extraContent;
-    }
-    round.toolCalls.push(tc);
-    round.toolResults.push({
-      tool_call_id: r.toolCallId,
-      content: r.toolContent || "",
-    });
-  }
-  return round;
-}
-
 // ── Toggles ──
 function toggleThinking() {
   thinkingEnabled = !thinkingEnabled;

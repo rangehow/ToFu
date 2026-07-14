@@ -1124,6 +1124,12 @@ def _continue_via_prefill_only(db, conv_id, messages, assistant_msg, title,
             'preservedThinkingChars': 0,
             'discardedThinking': 0,
             'resumeMode': 'prefill',
+            # Prefill CONTINUES the same string — nothing discarded, so the
+            # full prior answer is the continuation base and there is NO
+            # priorContent block. The reasoning tail is display-only.
+            'contentPrefix': orig_full_content,
+            'priorContent': '',
+            'priorThinking': assistant_msg.get('priorThinking') or '',
         },
     })
 
@@ -1348,6 +1354,16 @@ def chat_continue():
                 'discardedContentLen': scan['discarded_content'],
                 'preservedThinkingChars': scan['preserved_thinking_chars'],
                 'discardedThinking': scan['discarded_thinking'],
+                # ── Authoritative anchor DATA (typed fact) ──────────────
+                # The rollback the server ALREADY computed + persisted. The
+                # frontend is a pure reducer over these: it slices its local
+                # rounds to `keptRounds` and adopts these strings verbatim,
+                # rather than re-deriving the checkpoint by scanning
+                # status==='done' (which duplicated this exact logic).
+                'resumeMode': 'checkpoint',
+                'contentPrefix': preserved_content,
+                'priorContent': scan.get('discarded_content_text') or '',
+                'priorThinking': scan.get('discarded_thinking_text') or '',
             },
         })
 

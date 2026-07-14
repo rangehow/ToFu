@@ -378,7 +378,7 @@ function _initFolderTabs() {
     setConversationFolder(convId, folderId);
     const f = folderId ? getFolderById(folderId) : null;
     if (f) {
-      if (typeof showToast === 'function') showToast('', '已移入文件夹', f.name, 2000);
+      if (typeof showToast === 'function') showToast('', t('folder.movedToFolder'), f.name, 2000);
     } else if (!folderId) {
       if (typeof showToast === 'function') showToast('', t('folder.removedFromFolder'), '', 2000);
     }

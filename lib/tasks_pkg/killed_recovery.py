@@ -107,7 +107,8 @@ def _stop_requested(stop_event) -> bool:
     """True when a shutdown Event is present AND set. Fail-open to False."""
     try:
         return stop_event is not None and stop_event.is_set()
-    except Exception:
+    except Exception as e:
+        logger.debug('[KilledRecovery] stop-event probe failed, assuming not set: %s', e)
         return False
 
 
@@ -123,8 +124,8 @@ def _interruptible_wait(secs: float, stop_event) -> None:
         try:
             stop_event.wait(secs)
             return
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug('[KilledRecovery] stop-event wait failed, falling back to sleep: %s', e)
     time.sleep(secs)
 
 

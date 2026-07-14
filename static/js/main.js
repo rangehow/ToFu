@@ -614,7 +614,7 @@ function _restoreConvToolState(conv) {
     document.querySelectorAll('#igCountBar .ig-pill').forEach(b =>
       b.classList.toggle('active', parseInt(b.dataset.count) === _igSelectedCount));
     const genText = document.querySelector('.ig-gen-text');
-    if (genText) genText.textContent = _igSelectedCount > 1 ? `${_igSelectedCount}连抽!` : '生成';
+    if (genText) genText.textContent = _igSelectedCount > 1 ? t('main.igBatchGo', { n: _igSelectedCount }) : t('main.igGenerate');
   }
   /* ★ Restore aspect ratio selection */
   if (conv.imageGenAspect) {

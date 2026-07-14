@@ -241,18 +241,27 @@ def test_http_health_no_auth(live_server):
     assert body['ok'] is True
 
 
-def test_http_status_requires_token(live_server):
+def test_http_status_no_token_readonly(live_server):
+    # /status is read-only (least-privilege) → no token required; the
+    # code-server cookie fronting the proxy is the gate.
     url = live_server['base'] + '/status?projectPath=' + live_server['proj']
     status, body = _req(url)  # no token
-    assert status == 401
-
-
-def test_http_status_with_token(live_server):
-    url = live_server['base'] + '/status?projectPath=' + live_server['proj']
-    status, body = _req(url, token='testtoken')
     assert status == 200
     assert body['ok'] is True
     assert body['running'] is False
+
+
+def test_http_status_still_enforces_allowlist(live_server):
+    # Even token-free, /status must reject a path outside the allow-list.
+    status, body = _req(live_server['base'] + '/status?projectPath=/etc')
+    assert status == 403
+
+
+def test_http_start_requires_token(live_server):
+    # State-changing → token still mandatory.
+    status, body = _req(live_server['base'] + '/start', method='POST',
+                        body={'projectPath': live_server['proj']})  # no token
+    assert status == 401
 
 
 def test_http_start_rejects_unlisted_path(live_server):
@@ -269,7 +278,10 @@ def test_http_stop_roundtrip(live_server):
 
 
 def test_http_fail_closed_without_token(tmp_path, monkeypatch):
-    """No TOFU_SUPERVISOR_TOKEN → control endpoints return 503 (fail-closed)."""
+    """No TOFU_SUPERVISOR_TOKEN → STATE-CHANGING endpoints return 503 (fail-closed).
+
+    /status stays reachable (read-only), so fail-closed is asserted on /start.
+    """
     proj = _make_project(tmp_path)
     canon = os.path.realpath(str(proj))
     monkeypatch.setenv(supervisor.ENV_HOST, '127.0.0.1')
@@ -281,10 +293,14 @@ def test_http_fail_closed_without_token(tmp_path, monkeypatch):
     t = threading.Thread(target=httpd.serve_forever, daemon=True)
     t.start()
     try:
-        status, body = _req(f'http://{host}:{port}/status?projectPath={canon}',
-                            token='anything')
+        status, body = _req(f'http://{host}:{port}/start', method='POST',
+                            token='anything', body={'projectPath': canon})
         assert status == 503
         assert body['ok'] is False
+        # And /status is STILL reachable read-only even with no token configured.
+        s2, b2 = _req(f'http://{host}:{port}/status?projectPath={canon}')
+        assert s2 == 200
+        assert b2['ok'] is True
     finally:
         httpd.shutdown()
         httpd.server_close()

@@ -29,9 +29,14 @@ Design (see docs/SUPERVISOR_DESIGN.md in the tofu-android repo):
 Endpoints (all under the proxied prefix):
 
     GET  /health                     → {ok, version}            (no auth)
-    GET  /status?projectPath=<abs>   → {running, pid, host, …}  (auth)
+    GET  /status?projectPath=<abs>   → {running, pid, host, …}  (no auth, read-only)
     POST /start   {projectPath}      → {ok, running, pid, …}    (auth)
     POST /stop    {projectPath}      → {ok, wasRunning, …}      (auth)
+
+Least-privilege: only the STATE-CHANGING endpoints (/start, /stop) require the
+Bearer token. /status is read-only (it reports running/pid, mutates nothing) so
+it is gated by the code-server cookie alone — the same door that protects the
+proxied Tofu UI — not the token.
 
 Launch (owner-ratified): a systemd USER UNIT with ``Restart=always``; fall back
 to ``supervisor.sh`` + nohup where user-lingering is unavailable.
@@ -389,8 +394,9 @@ class SupervisorHandler(BaseHTTPRequestHandler):
             self._send_json(200, {'ok': True, 'version': SUPERVISOR_VERSION})
             return
         if path == '/status':
-            if not self._authed():
-                return
+            # Read-only: no token (least-privilege). The code-server cookie
+            # that fronts the proxy is the gate; only state-changing endpoints
+            # (/start, /stop) require the Bearer token.
             qs = parse_qs(route.query)
             project_path = (qs.get('projectPath', [''])[0] or '').strip()
             if not self._check_allowed(project_path):

@@ -172,9 +172,14 @@ def test_display_handler():
     from lib.tasks_pkg.tool_display import _tool_display_generic
 
     display, extra = _tool_display_generic('mcp__github__list_issues', {'repo': 'test'}, 'tc_1', '{}')
-    assert '🔌' in display, f'Expected plug icon, got: {display}'
+    # §3.4: the plug glyph is now a frontend SVG, not an emoji baked into the
+    # display text. The MCP display is the composed "server/tool — resource"
+    # label (compose_mcp_display), with the raw mcp__ namespace stripped and
+    # the full tool name carried in extra['toolName'].
+    assert 'mcp__' not in display, f'raw namespaced name leaked into display: {display}'
     assert 'github' in display
     assert 'list_issues' in display
+    assert extra.get('toolName') == 'mcp__github__list_issues'
 
     print('✅ display handler tests passed')
 

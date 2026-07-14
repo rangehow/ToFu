@@ -107,19 +107,27 @@ _install_jobs_lock = threading.Lock()
 
 
 # ── get_bridge() singleton ───────────────────────────────
-_bridge = None  # type: ignore[assignment]  # MCPBridge | None
+# NOTE: this global MUST NOT be named ``_bridge`` — the package also has a
+# submodule ``lib/mcp/client/_bridge.py``, and Python binds every imported
+# submodule as an attribute of its parent package. A global named ``_bridge``
+# is therefore silently CLOBBERED by the ``_bridge`` submodule object on the
+# facade, so ``get_bridge()`` would return the MODULE (truthy, not None) and
+# ``bridge.list_servers()`` raises ``module ... has no attribute 'list_servers'``.
+# The singleton lives under a distinct name to keep it disjoint from any
+# submodule name.
+_bridge_singleton = None  # type: ignore[assignment]  # MCPBridge | None
 _bridge_lock = threading.Lock()
 
 
 def get_bridge():
     """Get the global MCPBridge singleton (lazy-initialized)."""
     pkg = _pkg()
-    if pkg._bridge is not None:
-        return pkg._bridge
+    if pkg._bridge_singleton is not None:
+        return pkg._bridge_singleton
     with pkg._bridge_lock:
-        if pkg._bridge is None:
+        if pkg._bridge_singleton is None:
             # Import lazily to avoid an import cycle at package-init time and
             # to resolve the class through the facade (so it's the same object
             # regardless of import ordering).
-            pkg._bridge = pkg.MCPBridge()
-    return pkg._bridge
+            pkg._bridge_singleton = pkg.MCPBridge()
+    return pkg._bridge_singleton

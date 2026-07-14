@@ -8,7 +8,9 @@ module so ``from lib.mcp.client import X`` and ``from lib.mcp import get_bridge`
 keep working byte-identically.
 
 FACADE CONTRACT (load-bearing — see ``_state._pkg``): every process-global
-(the ``get_bridge`` singleton ``_bridge``, the install-job registry
+(the ``get_bridge`` singleton ``_bridge_singleton`` — deliberately NOT named
+``_bridge`` because the ``_bridge`` submodule would clobber it on this facade —
+the install-job registry
 ``_install_jobs``, the vendored hot-reload baseline, the snapshot bookkeeping)
 lives EXACTLY ONCE in ``_state``; submodules resolve monkeypatchable names
 THROUGH this facade module at call time (``sys.modules['lib.mcp.client']``),
@@ -61,7 +63,7 @@ from lib.mcp.client._state import (  # noqa: E402,F401
     _snapshot_lock,
     _install_jobs,
     _install_jobs_lock,
-    _bridge,
+    _bridge_singleton,
     _bridge_lock,
 )
 
@@ -123,5 +125,5 @@ __all__ = [
     '_extract_read_only_hint',
     '_install_attempted',
     '_install_jobs',
-    '_bridge',
+    '_bridge_singleton',
 ]

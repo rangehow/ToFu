@@ -110,7 +110,8 @@ def _task_partitions(task: dict[str, Any]) -> tuple[frozenset, frozenset]:
         import lib.tasks_pkg.tool_dispatch as _facade
         _wt = getattr(_facade, '_WRITE_TOOLS', _WRITE_TOOLS)
         _it = getattr(_facade, '_IDEMPOTENT_TOOLS', _IDEMPOTENT_TOOLS)
-    except Exception:
+    except Exception as e:
+        logger.debug('[tool_dispatch] facade partition resolve failed, using local: %s', e)
         _wt, _it = _WRITE_TOOLS, _IDEMPOTENT_TOOLS
     write = set(_wt)
     idem = set(_it)

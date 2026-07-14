@@ -84,7 +84,8 @@ def _emit_tool_heartbeat(task: dict, parallel_items: list, t0: float) -> int:
     try:
         import lib.tasks_pkg.tool_dispatch as _facade
         _append_event = getattr(_facade, 'append_event', append_event)
-    except Exception:
+    except Exception as e:
+        logger.debug('[tool_dispatch] facade append_event resolve failed, using local: %s', e)
         _append_event = append_event
     task['_dispatch_heartbeat'] = time.time()
     if task.get('aborted'):

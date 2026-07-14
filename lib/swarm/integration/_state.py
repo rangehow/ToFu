@@ -202,8 +202,8 @@ def _start_cleanup_timer():
     try:
         import lib.swarm.integration as _pkg
         _pkg._cleanup_timer = _cleanup_timer
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug('[Swarm] facade _cleanup_timer sync skipped (import incomplete): %s', e)
 
 
 _start_cleanup_timer()  # launch on module import

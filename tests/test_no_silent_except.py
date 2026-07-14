@@ -54,12 +54,14 @@ ALLOWED: dict[str, int] = {
     # logs the full traceback (exc_info=True). Logging here too would
     # double-log; the trace exists one call downstream.
     'lib/api_response.py': 2,
-    # _worker stores the exception in box['error'] and it is re-raised on
-    # the caller thread — surfaced, not swallowed.
-    'lib/memory/prefetch.py': 1,
+    # _run_with_deadline's _worker stores the exception in box['error'] and it
+    # is re-raised on the caller thread — surfaced, not swallowed. (Relocated
+    # from lib/memory/prefetch.py when that module was split into a package.)
+    'lib/memory/prefetch/_rerank.py': 1,
     # _trace_fallback guards the logging call ITSELF; logging here could
     # recurse into a failing logging backend. §2.2 logging-path exemption.
-    'lib/tasks_pkg/system_context.py': 1,
+    # (Relocated from lib/tasks_pkg/system_context.py when it became a package.)
+    'lib/tasks_pkg/system_context/_inject.py': 1,
 }
 
 

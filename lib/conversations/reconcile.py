@@ -198,6 +198,91 @@ def is_superseded_error_husk(
     return _is_settled_assistant(messages[idx + 1])
 
 
+def is_superseded_incomplete_fragment(
+    messages: list[dict[str, Any]], idx: int,
+) -> bool:
+    """True if ``messages[idx]`` is a content-bearing assistant fragment that
+    carries NO terminal reason (``finishReason`` falsy) and sits DIRECTLY
+    adjacent to a genuinely-settled assistant sibling (an assistant with a
+    truthy ``finishReason``) for the SAME user turn — i.e. two assistant
+    messages in a row with no user turn between them.
+
+    ROOT CAUSE this guards (the reported "truncated answer shown as a finished
+    turn" bug): a Stop→Regenerate leaves the aborted task's partial-checkpoint
+    fragment persisted with real content but ``finishReason=None`` (the
+    checkpoint writer omits terminal fields on purpose), while the regenerate's
+    completed answer lands as a sibling assistant message. The fragment then
+    renders in full completed chrome (action row, translate footer, branch
+    button) even though it is a truncated abort partial. The BACKEND source
+    stamp (``_stamp_aborted_fragment_finish_reason``) closes this at write time,
+    but this predicate is the reconcile safety net for fragments already in the
+    DB (or written by a path that had no stable ``_assistantMsgId`` to target).
+
+    The verdict is a MARK, not a delete: the caller stamps
+    ``finishReason='aborted'`` so the content is PRESERVED but renders as the
+    aborted partial it truthfully is. Deliberately narrow — fires ONLY on the
+    exact two-answers-one-turn artifact:
+
+      * ``messages[idx]`` is an assistant with non-empty content, NO
+        finishReason, and is not a special turn.
+      * A DIRECTLY-adjacent assistant sibling (``idx-1`` or ``idx+1``) is
+        genuinely settled AND carries a truthy ``finishReason``. Adjacency with
+        no user turn between is what proves they answer the SAME user turn.
+    """
+    if idx < 0 or idx >= len(messages):
+        return False
+    frag = messages[idx]
+    if not isinstance(frag, dict) or frag.get('role') != 'assistant':
+        return False
+    if _is_special_turn(frag):
+        return False
+    if frag.get('finishReason'):
+        return False
+    # An `error` field is itself a truthful terminal state (the bubble renders
+    # as a failed reply, not completed chrome) — that is the error-husk pass's
+    # domain, not this one. Never re-stamp it 'aborted'.
+    if frag.get('error'):
+        return False
+    if not (frag.get('content') or '').strip():
+        return False
+
+    def _settled_sibling(j: int) -> bool:
+        if j < 0 or j >= len(messages):
+            return False
+        sib = messages[j]
+        return (isinstance(sib, dict) and sib.get('role') == 'assistant'
+                and bool(sib.get('finishReason')) and _is_settled_assistant(sib))
+
+    return _settled_sibling(idx - 1) or _settled_sibling(idx + 1)
+
+
+def mark_superseded_incomplete_fragments(
+    messages: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], int]:
+    """Stamp ``finishReason='aborted'`` on every superseded incomplete fragment
+    in ``messages`` (see :func:`is_superseded_incomplete_fragment`).
+
+    Pure + in-place-safe: it MUTATES a field on matched entries (copying each
+    matched dict so the caller's originals are untouched) and NEVER deletes or
+    reindexes — so it is both cache-prefix-neutral (``finishReason`` is not a
+    wire fingerprint field) and safe to run inside a terminal write path that
+    must not change message COUNT. Returns ``(messages, marked_count)``.
+
+    Two call sites share this ONE implementation: the GET/startup-path
+    ``reconcile_conversation_messages`` (render self-heal) and the terminal
+    sync write of the SUPERSEDING task (so a Stop→Regenerate self-heals the
+    aborted sibling at the regenerate's settle, not only on the next GET).
+    """
+    marked = 0
+    for i in range(len(messages)):
+        if is_superseded_incomplete_fragment(messages, i):
+            m = dict(messages[i])
+            m['finishReason'] = 'aborted'
+            messages[i] = m
+            marked += 1
+    return messages, marked
+
+
 ORPHAN_RESUMABLE_MAX_AGE_MS = 24 * 60 * 60 * 1000  # 24h
 
 
@@ -330,6 +415,24 @@ def reconcile_conversation_messages(
                         '(late-recovery user\u2192error\u2192agent duplicate). '
                         'Remaining=%d', collapsed, len(out))
 
+    # ── 0b. Superseded-incomplete-fragment MARK (two answers, one turn) ──
+    #    Stamp finishReason='aborted' on a content-bearing assistant fragment
+    #    that has NO terminal reason but is directly adjacent to a settled
+    #    assistant sibling for the same user turn. This is the render-side
+    #    safety net for the "truncated abort fragment shown as a finished turn"
+    #    bug (the backend source stamp closes it at write time; this catches
+    #    fragments already in the DB). It is a MARK, never a delete — content is
+    #    preserved and now renders as the aborted partial it truthfully is.
+    #    No cache-prefix concern: this MUTATES a field in place (no reindex),
+    #    so it never shifts prefix bytes.
+    if len(out) >= 2:
+        out, _marked = mark_superseded_incomplete_fragments(out)
+        if _marked:
+            changed = True
+            logger.info('[Reconcile] Marked %d superseded incomplete fragment(s) '
+                        'finishReason=aborted (truncated partial adjacent to a '
+                        'settled answer for the same turn).', _marked)
+
     # ── 1. Buried-ghost sweep (all but the tail) ──
     if len(out) >= 2:
         last_idx = len(out) - 1
@@ -378,6 +481,8 @@ __all__ = [
     'classify_ghost_tail',
     'is_error_husk',
     'is_superseded_error_husk',
+    'is_superseded_incomplete_fragment',
+    'mark_superseded_incomplete_fragments',
     'reconcile_conversation_messages',
     'classify_orphan_resumable',
     'ORPHAN_RESUMABLE_MAX_AGE_MS',

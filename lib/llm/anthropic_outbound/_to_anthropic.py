@@ -64,6 +64,43 @@ def _image_block(image_url: dict) -> dict:
     return {'type': 'image', 'source': {'type': 'url', 'url': url}}
 
 
+def _block_cache_control(content):
+    """Extract a ``cache_control`` marker carried on OpenAI-shape message
+    content, if any.
+
+    ``add_cache_breakpoints`` places the conversation-tail (and system)
+    breakpoint by wrapping ``str`` content into ``[{'type':'text','text':…,
+    'cache_control':…}]`` or by stamping the LAST block of an existing list.
+    When such a message is a ``tool`` role (→ Anthropic ``tool_result``) or an
+    ``assistant`` (→ ``tool_use``/``thinking`` blocks), the marker must be
+    hoisted onto the emitted Anthropic block ITSELF — Anthropic reads
+    ``cache_control`` on the tool_result/tool_use block, not on a text block
+    nested inside it. Returns the marker dict or ``None``.
+    """
+    if isinstance(content, list):
+        for block in content:
+            if isinstance(block, dict) and block.get('cache_control'):
+                return block['cache_control']
+    return None
+
+
+def _strip_cc(blocks) -> list:
+    """Return ``blocks`` with any ``cache_control`` removed from every block.
+
+    Used when hoisting a message-level marker onto the OUTER Anthropic block
+    (tool_result / last assistant block): the inner text block that carried the
+    marker in the OpenAI shape must be stripped, else the request ends up with
+    TWO markers for one message and blows past Anthropic's 4-marker ceiling.
+    """
+    out = []
+    for b in blocks or []:
+        if isinstance(b, dict) and 'cache_control' in b:
+            out.append({k: v for k, v in b.items() if k != 'cache_control'})
+        else:
+            out.append(b)
+    return out
+
+
 def _convert_content_blocks(content) -> list:
     """OpenAI message content (str | list) → Anthropic content blocks."""
     if isinstance(content, str):
@@ -137,6 +174,17 @@ def _assistant_blocks(msg: dict) -> list:
             'name': fn.get('name', ''),
             'input': args,
         })
+    # ★ Carry a cache breakpoint onto the LAST emitted block. When an
+    #   assistant turn is the conversation tail (e.g. a prefill-resume round),
+    #   add_cache_breakpoints stamps the marker on its content; it must ride
+    #   the last Anthropic block (tool_use / text) so the tail breakpoint is
+    #   not lost — same class of bug as the tool_result path above.
+    _cc = _block_cache_control(msg.get('content'))
+    if _cc and blocks:
+        # Strip any inner marker first so exactly ONE lands on the last block
+        # (a doubled marker would overflow Anthropic's 4-marker ceiling).
+        blocks = _strip_cc(blocks)
+        blocks[-1] = {**blocks[-1], 'cache_control': _cc}
     return blocks
 
 
@@ -173,12 +221,26 @@ def openai_body_to_anthropic(body: dict) -> dict:
         if role == 'system':
             system_blocks.extend(_convert_content_blocks(msg.get('content') or ''))
         elif role == 'tool':
+            _tool_content = (msg.get('content') if isinstance(msg.get('content'), str)
+                             else (_convert_content_blocks(msg.get('content')) or ''))
+            # ★ Carry the cache breakpoint onto the tool_result block itself.
+            #   add_cache_breakpoints stamps the tail marker on the (wrapped)
+            #   tool message content; Anthropic reads cache_control on the
+            #   tool_result block, NOT on a text block nested inside it. Without
+            #   this hoist the tail breakpoint is silently lost on every
+            #   tool-ending round → cache_read pins at the system floor. Strip
+            #   the inner marker first so we place EXACTLY ONE (else 2 markers
+            #   for one message overflows Anthropic's 4-marker ceiling).
+            _cc = _block_cache_control(msg.get('content'))
+            if _cc and isinstance(_tool_content, list):
+                _tool_content = _strip_cc(_tool_content)
             block = {
                 'type': 'tool_result',
                 'tool_use_id': msg.get('tool_call_id', ''),
-                'content': msg.get('content') if isinstance(msg.get('content'), str)
-                else (_convert_content_blocks(msg.get('content')) or ''),
+                'content': _tool_content,
             }
+            if _cc:
+                block['cache_control'] = _cc
             # Merge into the preceding user turn when it's a tool_result batch.
             if (messages and messages[-1]['role'] == 'user'
                     and isinstance(messages[-1]['content'], list)

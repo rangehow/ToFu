@@ -75,6 +75,76 @@ logger = get_logger(__name__)
 _INTERNAL_TOOL_PREFIXES = ('antml:', 'anthropic.', '__')
 _MAX_CONSECUTIVE_PARSE_ERRORS = 10
 
+# ── Cache byte-probe (diagnostic, default OFF, zero production impact) ──
+# When TOFU_CACHE_BYTE_PROBE is set to a conv-id prefix, prepare_request dumps
+# the FINAL post-translation body (the exact messages+system+tools bytes handed
+# to the transport, AFTER add_cache_breakpoints AND openai_body_to_anthropic)
+# for the matching conversation, on each round, to
+# ``.tofu_cache_probe/<conv>/round_NNNN_<trace>.json``. A standalone analyzer
+# (debug/cache_byte_probe_diff.py) then diffs two consecutive rounds at the RAW
+# byte level — deliberately NOT through canonical_messages — to settle whether
+# a "PROVEN server-side" cache miss is actually a client-caused prefix mutation
+# the canonical fingerprint erased. Unset ⇒ the whole block is skipped.
+_CACHE_PROBE_ROUND: dict = {}
+
+
+def _maybe_dump_cache_probe(body, task_id, log_prefix=''):
+    """Dump the final post-translation body for a targeted conv (diagnostic).
+
+    Gated on ``TOFU_CACHE_BYTE_PROBE`` (a conv-id prefix). Resolves the conv id
+    from ``task_id`` via the chat runtime, and only dumps when it matches the
+    target. Best-effort: any failure is logged at debug and never blocks a
+    request. This does NOT canonicalize — it writes the literal body dict so
+    the analyzer sees the exact wire bytes.
+    """
+    import os
+    target = os.environ.get('TOFU_CACHE_BYTE_PROBE', '').strip()
+    if not target:
+        return
+    try:
+        conv_id = ''
+        if task_id:
+            try:
+                from lib.tasks_pkg.manager._state import _chat_runtime
+                _t = _chat_runtime.get(task_id)
+                if _t:
+                    conv_id = _t.get('convId') or ''
+            except Exception as _re:
+                logger.debug('%s cache-probe conv resolve failed: %s', log_prefix, _re)
+        # Match on conv-id prefix; if the conv is unknown, fall back to task id
+        # so a probe can still target a task that isn't in the conv index.
+        key = conv_id or task_id
+        if not key or not key.startswith(target):
+            return
+
+        import json as _json
+        import time as _time
+        from lib.agent_artifacts import ARTIFACT_PREFIX
+        base = os.path.join(os.getcwd(), f'{ARTIFACT_PREFIX}_cache_probe', key)
+        os.makedirs(base, exist_ok=True)
+        rnd = _CACHE_PROBE_ROUND.get(key, 0)
+        _CACHE_PROBE_ROUND[key] = rnd + 1
+        # Dump the exact system/messages/tools that go on the wire. Use the
+        # SAME serialization the transport uses (ensure_ascii=False) so byte
+        # lengths match what is actually sent.
+        snapshot = {
+            'round': rnd,
+            'ts': _time.time(),
+            'conv_id': conv_id,
+            'task_id': task_id,
+            'model': body.get('model', ''),
+            'system': body.get('system'),
+            'tools': body.get('tools'),
+            'messages': body.get('messages') or [],
+        }
+        path = os.path.join(base, f'round_{rnd:04d}.json')
+        with open(path, 'w', encoding='utf-8') as fh:
+            _json.dump(snapshot, fh, ensure_ascii=False)
+        logger.warning('%s [CacheProbe] dumped round=%d conv=%s → %s',
+                       log_prefix, rnd, key[:12], path)
+    except Exception as e:
+        logger.debug('%s cache byte-probe dump failed: %s', log_prefix, e)
+
 
 @dataclass
 class RequestPlan:
@@ -191,14 +261,35 @@ def prepare_request(body, *, attempt=0, log_prefix='', api_key=None,
     # names a client-caused culprit. Best-effort: never block a request.
     raw_dumper.wire_fp = None
     raw_dumper.wire_static = ''
+    raw_dumper.wire_system = None
+    raw_dumper.wire_markers = None
     try:
         from lib.tasks_pkg.wire_fingerprint import (
-            canonical_messages, static_prefix_hash,
+            canonical_messages, marker_signature, static_prefix_hash,
+            system_fingerprint,
         )
         raw_dumper.wire_fp = canonical_messages(body.get('messages') or [])
         raw_dumper.wire_static = static_prefix_hash(body.get('messages') or [])
+        # Capture WHERE the cache_control breakpoints sit — canonical_messages
+        # deliberately strips them, so a miss caused purely by a breakpoint
+        # being LOST in translation (byte-identical content) would otherwise be
+        # mislabeled "server-side PROVEN". detect_cache_break folds this in.
+        raw_dumper.wire_markers = marker_signature(body)
+        # Also fingerprint the HOISTED system block + tools. On the Anthropic
+        # path these live OUTSIDE body['messages'] (openai_body_to_anthropic
+        # lifts system to the top-level field), so canonical_messages is blind
+        # to them — a per-turn system change (digest/charter/board) was
+        # laundered into a false "server-side PROVEN" verdict. This closes that
+        # blind spot.
+        raw_dumper.wire_system = system_fingerprint(
+            body.get('system'), body.get('tools'))
     except Exception as _wfe:
         logger.debug('%s wire fingerprint capture failed: %s', log_prefix, _wfe)
+
+    # Diagnostic byte-probe (default OFF): dump the exact post-translation body
+    # for a targeted conv so a raw-byte round-over-round diff can settle whether
+    # a "server-side PROVEN" miss is actually a client-caused prefix mutation.
+    _maybe_dump_cache_probe(body, _task_id_for_latch, log_prefix)
 
     return RequestPlan(url=url, hdrs=hdrs, body=body, trace_id=trace_id,
                        raw_dumper=raw_dumper, codex_translator=codex_translator,
@@ -776,6 +867,12 @@ class SSEAccumulator:
         if _wfp is not None:
             usage['_wire_fp'] = _wfp
             usage['_wire_static'] = getattr(self.raw_dumper, 'wire_static', '')
+            _wsys = getattr(self.raw_dumper, 'wire_system', None)
+            if _wsys is not None:
+                usage['_wire_system'] = _wsys
+            _wmk = getattr(self.raw_dumper, 'wire_markers', None)
+            if _wmk is not None:
+                usage['_wire_markers'] = _wmk
 
         # Stream anomaly flags
         _has_anomaly = False

@@ -12,7 +12,7 @@ import time
 from typing import Any
 
 from lib.log import get_logger
-from lib.tasks_pkg.wire_fingerprint import diff_canonical
+from lib.tasks_pkg.wire_fingerprint import diff_canonical, markers_regressed
 from lib.tasks_pkg.cache_tracking._state import (
     CacheState,
     _cache_lock,
@@ -131,6 +131,16 @@ def _resolve_break_cause(
     _culprits = ', '.join(prefix_culprits) if prefix_culprits else ''
     if client_changes:
         return ', '.join(f'{k}={v}' for k, v in client_changes.items())
+    # ── Breakpoint LOST in translation (the tool_result/assistant-tail bug) ──
+    # A cache_control marker the client placed vanished before the wire (or the
+    # system/tools marker count changed) while the CONTENT bytes were identical.
+    # This is a CLIENT-side bug (a dropped breakpoint), not a server miss — name
+    # it precisely so it is never laundered into "server-side PROVEN".
+    if prefix_culprits and '<breakpoint-lost>' in prefix_culprits:
+        return ('cache breakpoint lost between turns (a cache_control marker '
+                'the client placed did not survive to the wire — e.g. dropped '
+                'in the tool_result translation) — the body past the last '
+                'surviving marker was re-billed uncached')
     if prefix_mutation_break:
         _base = ('cached prefix bytes changed between turns '
                  '(non-idempotent history edit) — the whole body '
@@ -362,9 +372,13 @@ def detect_cache_break(
         #   * differ     → names the exact msg.field WE mutated → client-caused.
         _cur_wire_fp = None
         _wire_static = ''
+        _cur_wire_system = None
+        _cur_wire_markers = None
         if usage:
             _cur_wire_fp = usage.get('_wire_fp')
             _wire_static = usage.get('_wire_static') or ''
+            _cur_wire_system = usage.get('_wire_system')
+            _cur_wire_markers = usage.get('_wire_markers')
         _wire_available = _cur_wire_fp is not None
         _wire_prefix_changed = False
         _wire_culprits: list = []
@@ -375,6 +389,28 @@ def detect_cache_break(
             _shared = len(prev.wire_fp)
             _wire_culprits = diff_canonical(
                 prev.wire_fp[:_shared], (_cur_wire_fp or [])[:_shared])
+            # ── System/tools diff (the hoisted-prefix blind spot) ──
+            # On the Anthropic path system+tools live OUTSIDE body['messages'],
+            # so the diff above never sees them. A per-turn system change
+            # (cross-conv digest / charter / board) would otherwise leave
+            # _wire_culprits empty → a false "server-side PROVEN" verdict on a
+            # genuinely client-caused miss. Fold the system fingerprint diff in
+            # so a system-block mutation is NAMED and blocks that false verdict.
+            if _cur_wire_system is not None and prev.wire_system is not None:
+                for _fld in ('system', 'tools'):
+                    if prev.wire_system.get(_fld) != _cur_wire_system.get(_fld):
+                        _wire_culprits.append(f'<hoisted>.{_fld}')
+            # ── Marker-layout regression (the breakpoint-lost blind spot) ──
+            # canonical_messages STRIPS cache_control, so a miss caused purely
+            # by a breakpoint being LOST between rounds (byte-identical content,
+            # e.g. the tail marker dropped in the anthropic tool_result
+            # translation) leaves _wire_culprits empty → false "server-side
+            # PROVEN". markers_regressed fires ONLY on a marker COUNT DROP /
+            # system-tools marker change (NOT on the rolling tail's normal
+            # forward move), so folding it in names the dropped breakpoint and
+            # blocks the false verdict without crying wolf every round.
+            if markers_regressed(prev.wire_markers, _cur_wire_markers):
+                _wire_culprits.append('<breakpoint-lost>')
             _wire_prefix_changed = bool(_wire_culprits)
             if _wire_prefix_changed:
                 logger.warning(
@@ -409,6 +445,8 @@ def detect_cache_break(
         if _wire_available:
             prev.wire_fp = _cur_wire_fp
             prev.wire_static = _wire_static
+            prev.wire_system = _cur_wire_system
+            prev.wire_markers = _cur_wire_markers
         prev.model = model
         prev.message_count = msg_count
         prev.last_cache_read_tokens = cache_read

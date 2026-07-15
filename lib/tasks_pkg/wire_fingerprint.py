@@ -347,6 +347,152 @@ def diff_canonical(old: list, new: list, max_report: int = 8) -> list[str]:
     return changes
 
 
+def system_fingerprint(system: Any, tools: Any) -> dict[str, str]:
+    """Fingerprint the top-level ``system`` field + tool schemas.
+
+    THE INSTRUMENT-BLINDSPOT FIX. ``canonical_messages`` only sees
+    ``body['messages']`` — but on the Anthropic path ``openai_body_to_anthropic``
+    HOISTS the system prompt out of ``messages`` into the top-level ``system``
+    field (a ``str`` or a list of ``{type:text,text}`` blocks). So a per-turn
+    change to anything assembled INTO the system prompt (the cross-conversation
+    digest, the charter, the board — the 29298-pin bug) was invisible to the
+    detector, which then mislabeled the miss ``server-side — PROVEN``. This
+    hashes exactly that hoisted region (and the tool schemas, the other cached
+    prefix segment) so ``detect_cache_break`` can see a system-block mutation
+    and STOP laundering it into "server-side".
+
+    ``cache_control`` markers are stripped (cache metadata the server ignores);
+    the str↔block wrapping is collapsed via ``_text_of`` so a marker flip alone
+    is not a false positive — mirroring the message canonicalisation rules.
+
+    Returns ``{'system': md5, 'tools': md5}`` (fields absent → hash of '').
+    """
+    # System: collapse str | block-list to the canonical text stream.
+    if system is None:
+        _sys_text = ''
+    elif isinstance(system, str):
+        _sys_text = system
+    elif isinstance(system, list):
+        _sys_text = _text_of(system)
+    else:
+        _sys_text = str(system)
+
+    # Tools: hash the ordered (name, description, canonical-params) triples,
+    # ignoring cache_control. A tool add/remove/reorder or a schema edit shows;
+    # a marker move does not.
+    _tool_specs: list[str] = []
+    for t in tools or ():
+        if not isinstance(t, dict):
+            continue
+        fn = t.get('function') if isinstance(t.get('function'), dict) else t
+        name = fn.get('name') or ''
+        desc = fn.get('description') or ''
+        params = fn.get('parameters')
+        try:
+            _pj = json.dumps(params, sort_keys=True, ensure_ascii=False)
+        except (TypeError, ValueError):
+            _pj = str(params)
+        _tool_specs.append(name + '\x03' + desc + '\x03' + _pj)
+
+    return {'system': _md5(_sys_text),
+            'tools': _md5('\x01'.join(_tool_specs))}
+
+
+def marker_signature(body: dict) -> dict[str, Any]:
+    """Fingerprint WHERE the ``cache_control`` breakpoints sit in the final
+    wire body — the ONE thing ``canonical_messages`` deliberately erases.
+
+    ``canonical_messages`` strips ``cache_control`` (it proves whether the
+    tokenized CONTENT bytes changed). But a cache miss can be caused purely by
+    the breakpoints moving / disappearing while the content is byte-identical —
+    exactly the "tail breakpoint lost in the anthropic translation on a
+    tool-ending round" bug. When that happens the content fingerprint says
+    "identical" and the detector would wrongly assert "server-side PROVEN".
+
+    This captures the marker LAYOUT so ``detect_cache_break`` can tell a
+    genuine byte-identical-AND-same-markers round (→ provably server-side) from
+    a same-content-but-markers-moved round (→ client-caused). Returns::
+
+        {'count': N,                       # total cache_control markers
+         'msg': [(align_key, block_ord), …],  # per-message-block marker slots
+         'sys': K, 'tools': K}             # markers on hoisted system / tools
+
+    The per-message slot uses the stable ``canonical_key`` (not the list index)
+    so a benign reindex does not register as a move.
+    """
+    sig: dict[str, Any] = {'count': 0, 'msg': [], 'sys': 0, 'tools': 0}
+    if not isinstance(body, dict):
+        return sig
+
+    def _count_cc(blocks) -> int:
+        n = 0
+        if isinstance(blocks, list):
+            for b in blocks:
+                if isinstance(b, dict) and b.get('cache_control'):
+                    n += 1
+        return n
+
+    # Messages (both envelopes: OpenAI shape + translated Anthropic shape).
+    for msg in body.get('messages') or ():
+        if not isinstance(msg, dict):
+            continue
+        content = msg.get('content')
+        if not isinstance(content, list):
+            continue
+        marked = [bi for bi, b in enumerate(content)
+                  if isinstance(b, dict) and b.get('cache_control')]
+        if marked:
+            entry = {'role': msg.get('role', ''),
+                     'fields': _fields_of(msg), 'brief': _brief(msg)}
+            key = canonical_key(entry)
+            for bi in marked:
+                sig['msg'].append((key, bi))
+                sig['count'] += 1
+
+    # Hoisted system (Anthropic path: list of blocks) + tools.
+    system = body.get('system')
+    if isinstance(system, list):
+        _s = _count_cc(system)
+        sig['sys'] = _s
+        sig['count'] += _s
+    for t in body.get('tools') or ():
+        if isinstance(t, dict):
+            fn = t.get('function') if isinstance(t.get('function'), dict) else t
+            if isinstance(fn, dict) and fn.get('cache_control'):
+                sig['tools'] += 1
+                sig['count'] += 1
+    return sig
+
+
+def markers_regressed(prev: dict | None, cur: dict | None) -> bool:
+    """True if breakpoints were LOST between rounds — the precise, false-
+    positive-free signal that a cache miss is client-caused, not server-side.
+
+    Why NOT a full position set-diff: the rolling TAIL breakpoint (and the
+    quantized MID stepping-stone on its jump rounds) legitimately MOVE forward
+    every round. A naive "any marker moved" test would fire on every single
+    round and permanently disable the honest "server-side PROVEN" verdict. That
+    move does not cause a miss — the new tail reads back through the prior
+    entry — so it must NOT count.
+
+    What DOES count is a breakpoint DISAPPEARING: the total marker count
+    dropping, or the system/tools marker count changing, between rounds. That
+    is exactly the "tail breakpoint silently lost in the anthropic translation
+    on a tool-ending round" bug — the code intended to place N markers but the
+    final wire body carries fewer. In steady state the count is constant
+    (system + tool + mid + tail = 4), so a decrease is unambiguous.
+    """
+    if prev is None or cur is None:
+        return False
+    if cur.get('count', 0) < prev.get('count', 0):
+        return True
+    if prev.get('sys', 0) != cur.get('sys', 0):
+        return True
+    if prev.get('tools', 0) != cur.get('tools', 0):
+        return True
+    return False
+
+
 def static_prefix_hash(messages: list) -> str:
     """Hash the leading static floor (system message(s) + first user turn).
 

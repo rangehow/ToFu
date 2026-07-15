@@ -56,7 +56,7 @@ class CacheState:
         'prefix_content_count',
         'prefix_field_hashes',
         # Authoritative post-translation wire fingerprint (see wire_fingerprint.py)
-        'wire_fp', 'wire_static',
+        'wire_fp', 'wire_static', 'wire_system', 'wire_markers',
         'total_cache_read', 'total_cache_write',
         'total_breaks', 'total_input_tokens',
         'first_call_time',
@@ -95,6 +95,20 @@ class CacheState:
         # reconstruction. See lib/tasks_pkg/wire_fingerprint.py.
         self.wire_fp: list | None = None
         self.wire_static: str = ''
+        # Fingerprint of the HOISTED system block + tool schemas from the
+        # PREVIOUS round ({'system': md5, 'tools': md5}). On the Anthropic path
+        # these live OUTSIDE body['messages'], so wire_fp (canonical_messages)
+        # is blind to them; folding this into the prefix-mutation verdict is
+        # what stops a per-turn system change (digest/charter/board) from being
+        # laundered into a false "server-side PROVEN". See wire_fingerprint.system_fingerprint.
+        self.wire_system: dict | None = None
+        # Marker LAYOUT (cache_control breakpoint positions/counts) from the
+        # PREVIOUS round. canonical_messages strips cache_control, so this is
+        # the ONLY signal that catches a breakpoint LOST in translation (a
+        # byte-identical round whose tail marker vanished) — see
+        # wire_fingerprint.markers_regressed. Folded into detect_cache_break so
+        # a dropped breakpoint can never be laundered into "server-side PROVEN".
+        self.wire_markers: dict | None = None
         self.total_cache_read: int = 0
         self.total_cache_write: int = 0
         self.total_breaks: int = 0

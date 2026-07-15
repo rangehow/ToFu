@@ -114,10 +114,8 @@ from lib.agent_verdict._rounds import (  # noqa: E402,F401
 from lib.agent_verdict._config import (  # noqa: E402,F401
     AUTOPILOT_MAX_TURNS_DEFAULT,
     AUTOPILOT_STUCK_WINDOW,
-    AUTOPILOT_SUMMARY_MIN_TURNS_DEFAULT,
     AUTOPILOT_SUMMARY_RETENTION_DEFAULT,
     autopilot_summary_retention,
-    autopilot_summary_min_turns,
     autopilot_max_turns,
 )
 
@@ -147,9 +145,7 @@ __all__ = [
     # ._config
     'AUTOPILOT_MAX_TURNS_DEFAULT',
     'AUTOPILOT_STUCK_WINDOW',
-    'AUTOPILOT_SUMMARY_MIN_TURNS_DEFAULT',
     'AUTOPILOT_SUMMARY_RETENTION_DEFAULT',
     'autopilot_summary_retention',
-    'autopilot_summary_min_turns',
     'autopilot_max_turns',
 ]

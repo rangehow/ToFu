@@ -6,10 +6,8 @@ module-level defaults they fall back to:
   * ``AUTOPILOT_MAX_TURNS_DEFAULT`` / ``autopilot_max_turns`` — hard VU-turn
     ceiling (safety valve);
   * ``AUTOPILOT_STUCK_WINDOW`` — the detect_stuck window autopilot feeds;
-  * ``AUTOPILOT_SUMMARY_MIN_TURNS_DEFAULT`` / ``autopilot_summary_min_turns`` —
-    the floor a run must span to earn an auto close-out report;
   * ``AUTOPILOT_SUMMARY_RETENTION_DEFAULT`` / ``autopilot_summary_retention`` —
-    max concluded-run records retained in settings.
+    max concluded-run (fold) records retained in settings.
 
 Pure logic — imports only ``lib.log`` and ``lib.env_compat``.
 """
@@ -38,20 +36,11 @@ AUTOPILOT_MAX_TURNS_DEFAULT = 40
 # legitimate "you didn't do it, try again").
 AUTOPILOT_STUCK_WINDOW = 3
 
-# Minimum VU-driven follow-up turns a run must have spanned before it EARNS an
-# auto-generated close-out report.  ``settings.autopilotTurnCount`` counts the
-# VU continuations within a run (0 = the VU concluded on its first look, i.e. a
-# single agent turn a human can just read); only a run that drove at least this
-# many follow-up turns is "too much to read through" and worth an LLM debrief.
-# Runs BELOW the floor still conclude/fold (a report-less concluded record) —
-# they just skip the reporter turn.
-AUTOPILOT_SUMMARY_MIN_TURNS_DEFAULT = 1
-
-# Max concluded-run records retained in ``settings.autopilotSummaries`` on a
-# single long-lived conversation.  The map ACCRETES one record per run (each
-# carrying a full close-out report) and is re-serialized into every settings
-# PUT + IndexedDB write, so an unbounded map makes every turn's write cost grow
-# O(n) on a year-scale conversation.  Cap it to the most-recent N by ``ts``.
+# Max concluded-run (fold) records retained in ``settings.autopilotSummaries``
+# on a single long-lived conversation.  The map ACCRETES one record per run and
+# is re-serialized into every settings PUT + IndexedDB write, so an unbounded
+# map makes every turn's write cost grow O(n) on a year-scale conversation.
+# Cap it to the most-recent N by ``ts``.
 AUTOPILOT_SUMMARY_RETENTION_DEFAULT = 30
 
 
@@ -72,31 +61,6 @@ def autopilot_summary_retention() -> int:
                        'int — using default %d', raw,
                        AUTOPILOT_SUMMARY_RETENTION_DEFAULT)
         return AUTOPILOT_SUMMARY_RETENTION_DEFAULT
-    return val if val > 0 else 0
-
-
-def autopilot_summary_min_turns() -> int:
-    """Min VU follow-up turns before a run earns an auto close-out report.
-
-    Reads ``TOFU_AUTOPILOT_SUMMARY_MIN_TURNS`` (default 1).  The value is
-    compared against ``settings.autopilotTurnCount`` (VU continuations within
-    the run): a run whose count is BELOW this floor is a short exchange a human
-    can just read, so it skips the LLM reporter turn while still folding.
-
-    FAIL-OPEN, mirroring :func:`autopilot_max_turns`: unset→default, ``0`` (or
-    <=0)→the gate is DISABLED (every clean run gets a report, the pre-gate
-    behaviour), garbage→default.
-    """
-    raw = getenv_compat('TOFU_AUTOPILOT_SUMMARY_MIN_TURNS', default='').strip()
-    if not raw:
-        return AUTOPILOT_SUMMARY_MIN_TURNS_DEFAULT
-    try:
-        val = int(raw)
-    except (ValueError, TypeError):
-        logger.warning('[Autopilot] TOFU_AUTOPILOT_SUMMARY_MIN_TURNS=%r not an '
-                       'int — using default %d', raw,
-                       AUTOPILOT_SUMMARY_MIN_TURNS_DEFAULT)
-        return AUTOPILOT_SUMMARY_MIN_TURNS_DEFAULT
     return val if val > 0 else 0
 
 

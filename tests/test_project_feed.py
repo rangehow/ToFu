@@ -346,57 +346,24 @@ def test_emit_run_concluded_helper(flask_app, monkeypatch):
 
 
 def test_auto_path_emits_one_run_concluded(flask_app, monkeypatch):
-    """The auto TASK_DONE path (_emit_run_summary) emits exactly one
-    run_concluded for the run."""
+    """The report-free close-out helper (_emit_run_concluded_event, used by the
+    clean TASK_DONE + budget-guard paths) emits exactly one run_concluded."""
     captured = _spy_feed(monkeypatch)
     from lib.tasks_pkg import autopilot
-    # Stub the heavy reporter (LLM) + sidecar store (DB) — we are testing the
-    # CALLER wiring, not the report content.
-    monkeypatch.setattr(autopilot, 'run_summary_reporter',
-                        lambda task: {'text': 'All green. Shipped pillar #1.'})
-    # _emit_run_summary persists via _store_run_record (the single-source
-    # sidecar writer); _store_run_summary is only a thin task_done wrapper the
-    # auto path no longer calls directly. Stub the real writer so the caller
-    # reaches _emit_run_concluded (a None record would short-circuit it).
+    # Stub the sidecar store (DB) — we are testing the CALLER wiring. A None
+    # record would short-circuit before _emit_run_concluded.
     monkeypatch.setattr(autopilot, '_store_run_record',
-                        lambda conv_id, run_id, *, reason='task_done', text='',
-                        translated='': {'runId': run_id, 'status': 'concluded'})
-    monkeypatch.setattr(autopilot, '_translate_summary_sync', lambda t: '')
+                        lambda conv_id, run_id, *, reason='task_done':
+                        {'runId': run_id, 'status': 'concluded'})
+    monkeypatch.setattr('lib.tasks_pkg.manager.append_event', lambda *a, **k: None)
     task = {'id': 'task-auto-1', 'convId': 'conv-auto',
             'config': {'projectPath': '/proj/auto'}}
     with flask_app.app_context():
-        autopilot._emit_run_summary(task, 'conv-auto', 'ar-auto')
+        autopilot._emit_run_concluded_event(task, 'conv-auto', 'ar-auto')
     rc = [c for c in captured if c[2] == 'run_concluded']
     assert len(rc) == 1, f'auto path must emit ONE run_concluded, got {captured}'
     assert rc[0][0] == '/proj/auto'
     assert rc[0][4].get('payload', {}).get('runId') == 'ar-auto'
-
-
-def test_manual_path_emits_one_run_concluded(flask_app, monkeypatch):
-    """The manual summarize_run path emits exactly one run_concluded."""
-    captured = _spy_feed(monkeypatch)
-    from lib.tasks_pkg import autopilot
-    monkeypatch.setattr(autopilot, 'run_summary_reporter',
-                        lambda task: {'text': 'Manual debrief line.'})
-    monkeypatch.setattr(autopilot, '_store_run_summary',
-                        lambda conv_id, run_id, text, translated='': {'runId': run_id})
-    # build_api_messages_from_db is a LOCAL import inside summarize_run — patch
-    # it at its defining module so the local `from ... import` resolves the stub.
-    import lib.tasks_pkg.conv_message_builder as cmb
-    monkeypatch.setattr(cmb, 'build_api_messages_from_db',
-                        lambda conv_id, cfg: [{'role': 'user', 'content': 'go'}])
-    # summarize_run uses create_task as a throwaway carrier (conv_id='') then
-    # discards it — that carrier has no projectPath in its own emit path
-    # because we pass cfg with projectPath only into _emit_run_concluded; but
-    # create_task('') would also try a 'started' (no conv_id → skipped). Guard
-    # by asserting on run_concluded only.
-    with flask_app.app_context():
-        res = autopilot.summarize_run('conv-man', 'ar-man',
-                                      {'projectPath': '/proj/man'})
-    assert res.get('ok'), f'summarize_run failed: {res}'
-    rc = [c for c in captured if c[2] == 'run_concluded']
-    assert len(rc) == 1, f'manual path must emit ONE run_concluded, got {captured}'
-    assert rc[0][4].get('payload', {}).get('runId') == 'ar-man'
 
 
 def test_autopilot_run_suppression_and_rollup_complementary(flask_app, monkeypatch):
@@ -480,7 +447,7 @@ def test_route_feed_never_reads_global_state(flask_app, flask_client, monkeypatc
 _FEED_SRC = os.path.join(os.path.dirname(__file__), '..',
                          'lib', 'conversations', 'project_feed.py')
 _MANAGER_SRC = os.path.join(os.path.dirname(__file__), '..',
-                            'lib', 'tasks_pkg', 'manager.py')
+                            'lib', 'tasks_pkg', 'manager', '_registry.py')
 
 
 def test_NC1_seq_constant_breaks_monotonicity(flask_app):
@@ -518,14 +485,18 @@ def test_NC2_neutered_started_callsite_breaks_exactly_once(flask_app, monkeypatc
     """NC-2: replace the started emit call in create_task with pass → the
     'exactly one started' wiring assertion fails (call site is load-bearing)."""
 
-    def run():
-        from lib.tasks_pkg import manager as mgr
+    def run(mod):
+        # ``manager.create_task`` is re-exported from ``manager._registry``
+        # (``from ._registry import create_task``), so neutering the _registry
+        # module in sys.modules does NOT rebind the reference cached on the
+        # ``manager`` package. Call the neutered module's OWN ``create_task``
+        # (handed to us by the harness) so the emit-callsite neuter bites.
         captured = []
         import lib.conversations.project_feed as pf
         monkeypatch.setattr(pf, 'emit_project_event',
                             lambda *a, **k: captured.append((a[2] if len(a) > 2 else None)))
         with flask_app.app_context():
-            mgr.create_task('conv-nc2', [{'role': 'user', 'content': 'x'}],
+            mod.create_task('conv-nc2', [{'role': 'user', 'content': 'x'}],
                             {'projectPath': '/nc2'})
         started = [k for k in captured if k == 'started']
         assert len(started) == 0, \
@@ -549,10 +520,10 @@ _AUTOPILOT_SRC = os.path.join(os.path.dirname(__file__), '..',
 
 
 def test_NC3_neutered_run_concluded_callsite_breaks_rollup(flask_app, monkeypatch):
-    """NC-3: replace the _emit_run_concluded call in _emit_run_summary with
-    pass → the auto path emits ZERO run_concluded → the 'exactly one' wiring
-    assertion fails (the roll-up CALL SITE is load-bearing, complementary to
-    the per-turn suppression)."""
+    """NC-3: replace the _emit_run_concluded call inside _emit_run_concluded_event
+    with pass → the close-out helper emits ZERO run_concluded → the 'exactly
+    one' wiring assertion fails (the roll-up CALL SITE is load-bearing,
+    complementary to the per-turn suppression)."""
 
     def run():
         from lib.tasks_pkg import autopilot as ap
@@ -560,20 +531,19 @@ def test_NC3_neutered_run_concluded_callsite_breaks_rollup(flask_app, monkeypatc
         import lib.conversations.project_feed as pf
         monkeypatch.setattr(pf, 'emit_project_event',
                             lambda *a, **k: captured.append(a[2] if len(a) > 2 else None))
-        monkeypatch.setattr(ap, 'run_summary_reporter',
-                            lambda task: {'text': 'x'})
-        monkeypatch.setattr(ap, '_store_run_summary',
-                            lambda conv_id, run_id, text, translated='': {'runId': run_id})
-        monkeypatch.setattr(ap, '_translate_summary_sync', lambda t: '')
+        monkeypatch.setattr(ap, '_store_run_record',
+                            lambda conv_id, run_id, *, reason='task_done':
+                            {'runId': run_id, 'status': 'concluded'})
+        monkeypatch.setattr('lib.tasks_pkg.manager.append_event', lambda *a, **k: None)
         task = {'id': 't', 'convId': 'c', 'config': {'projectPath': '/nc3'}}
         with flask_app.app_context():
-            ap._emit_run_summary(task, 'c', 'ar-nc3')
+            ap._emit_run_concluded_event(task, 'c', 'ar-nc3')
         rc = [k for k in captured if k == 'run_concluded']
         assert len(rc) == 0, 'NC-3: neutered call site must emit NO run_concluded'
 
     _patch_restore(
         _AUTOPILOT_SRC,
-        "    _emit_run_concluded(conv_id, run_id, text, task.get('config'))\n",
+        "    _emit_run_concluded(conv_id, run_id, '', task.get('config'))\n",
         "    pass  # NC-3\n",
         run,
     )

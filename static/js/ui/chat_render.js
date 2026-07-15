@@ -43,15 +43,6 @@ function _apRunRecord(conv, runId) {
   return (rec && typeof rec === 'object') ? rec : null;
 }
 
-/* The run's close-out REPORT — only when the record carries report content
- * (a clean [VU: TASK_DONE]). A manual-stop concluded record has a status but
- * NO content, so this returns null for it (the run still folds, but shows no
- * report panel — the "Summarize this run" affordance appears instead). */
-function _apRunSummary(conv, runId) {
-  const rec = _apRunRecord(conv, runId);
-  return (rec && rec.content) ? rec : null;
-}
-
 /* ★ BACKEND-AUTHORITATIVE "run has concluded" — the frontend NEVER infers
  * run-end from stream / task / pending-carrier state anymore (that inference
  * WAS the inter-turn-gap mis-fold bug: between turns the stream is briefly
@@ -103,337 +94,6 @@ function _applyAutopilotRunFolds(inner, conv) {
   } catch (e) {
     console.warn('[Autopilot fold] unwrap failed (non-fatal):', e && e.message);
   }
-}
-
-/* ★ Post-render DOM pass that docks each concluded run's REPORT as a
- * STANDALONE boundary node — the clean successor to the two-anchor graft.
- * Mirrors `_applyAutopilotRunFolds`: it runs at every render exit (surgical /
- * full / bg-refresh), operates purely on the finished DOM, and is fully
- * idempotent (removes all existing summary nodes, then re-inserts from the
- * current sidecar). The panel is NEVER a `msg-N` node, so renderChat's
- * index-based surgical diff + stale-removal loop ignore it entirely.
- * Placement (see `_apSummaryPlacements`):
- *   • boundary — inserted immediately AFTER the run's last stamped turn's
- *     `#msg-<afterMsgIdx>` element (the run boundary), so the agent's own
- *     work-summary sits at the end of that run, not under a synthetic user
- *     bubble and not detached at the transcript tail.
- *   • tail (compacted/orphaned run) — appended at the end of the message list.
- * A boundary whose `#msg-N` is outside the loaded lazy window is treated as a
- * tail placement so the report is still reachable. */
-function _applyAutopilotSummaryPanels(inner, conv) {
-  if (!inner) return;
-  try {
-    // Idempotent: clear any panels a previous pass inserted.
-    inner.querySelectorAll(':scope > .ap-summary-panel[data-ap-report-run]').forEach(n => n.remove());
-    const placements = _apSummaryPlacements(conv);
-    if (!placements.length) return;
-    for (const p of placements) {
-      const html = _apReportPanelHTML(conv, p.runId);
-      if (!html) continue;
-      const wrapper = document.createElement('div');
-      wrapper.innerHTML = html;
-      const node = wrapper.firstElementChild;
-      if (!node) continue;
-      let anchorEl = null;
-      if (!p.tail && typeof p.afterMsgIdx === 'number') {
-        anchorEl = document.getElementById('msg-' + p.afterMsgIdx);
-      }
-      if (anchorEl && anchorEl.parentNode === inner) {
-        // Dock right after the run's boundary turn (before the next sibling).
-        inner.insertBefore(node, anchorEl.nextSibling);
-      } else {
-        // Tail placement, or the boundary turn is outside the lazy window.
-        inner.appendChild(node);
-      }
-    }
-  } catch (e) {
-    console.warn('[Autopilot summary] panel placement failed (non-fatal):', e && e.message);
-  }
-}
-
-/* Open the run's close-out REPORT in a read-only sub-window (modal overlay).
- * The report is a human-only debrief (mirrors the vu-private-zone framing) —
- * never sent to the agent, never part of the transcript. Reached from the
- * "View report" button in the autopilot run fold's summary card. Idempotent:
- * a second call replaces any open report modal. Closes on overlay click, the
- * × button, or Escape. */
-function _openApSummaryModal(runId) {
-  try {
-    const conv = (typeof getActiveConv === 'function') ? getActiveConv() : null;
-    const rec = _apRunRecord(conv, runId);
-    if (!rec || !rec.content) {
-      console.warn('[Autopilot report] no report content for run', runId);
-      return;
-    }
-    /* Drop any previously-open report modal. */
-    const prev = document.getElementById('apReportModal');
-    if (prev) prev.remove();
-
-    const _title = (typeof t === 'function' && t('autopilot.summaryLabel') !== 'autopilot.summaryLabel')
-      ? t('autopilot.summaryLabel') : 'Run summary report';
-    const _privNote = (typeof t === 'function' && t('autopilot.summaryHumanOnly') !== 'autopilot.summaryHumanOnly')
-      ? t('autopilot.summaryHumanOnly') : 'For you only · not sent to the agent';
-    /* Prefer the translated text for a Chinese UI when present. */
-    const _recTr = readTranslation(rec).text;
-    const _useTranslated = !!(_recTr
-      && typeof convAutoTranslate === 'function' && conv && convAutoTranslate(conv));
-    const _body = _useTranslated ? _recTr : (rec.content || '');
-    const _bodyHtml = (typeof renderMarkdown === 'function')
-      ? renderMarkdown(_body) : escapeHtml(_body);
-
-    const overlay = document.createElement('div');
-    overlay.id = 'apReportModal';
-    overlay.className = 'ap-report-overlay';
-    overlay.setAttribute('data-ap-report-run', runId);
-    overlay.innerHTML =
-      `<div class="ap-report-modal" role="dialog" aria-modal="true">`
-      + `<div class="ap-report-head">`
-      + `<svg class="aps-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M16 13H8"/><path d="M16 17H8"/><path d="M10 9H8"/></svg>`
-      + `<span class="ap-report-title">${escapeHtml(_title)}</span>`
-      + `<span class="ap-report-private">${escapeHtml(_privNote)}</span>`
-      + `<button class="ap-report-close" aria-label="Close" title="Close">`
-      + `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`
-      + `</button>`
-      + `</div>`
-      + `<div class="ap-report-body md-content">${_bodyHtml}</div>`
-      + `</div>`;
-
-    const close = () => {
-      overlay.remove();
-      document.removeEventListener('keydown', onKey);
-    };
-    const onKey = (e) => { if (e.key === 'Escape') close(); };
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
-    overlay.querySelector('.ap-report-close').addEventListener('click', close);
-    document.addEventListener('keydown', onKey);
-
-    document.body.appendChild(overlay);
-  } catch (e) {
-    console.warn('[Autopilot report modal] open failed (non-fatal):', e && e.message);
-  }
-}
-if (typeof window !== 'undefined') window._openApSummaryModal = _openApSummaryModal;
-
-/* Click handler for the "Summarize this run" button on a manual-stop run's
- * concluding VU turn. Reached from renderMessage's action bar (the run-fold
- * that used to carry it was deleted in the 2026-07-07 flatten). */
-async function _summarizeAutopilotRun(runId, btn) {
-  const conv = (typeof getActiveConv === 'function') ? getActiveConv() : null;
-  if (!conv) return;
-  const _restore = () => {
-    if (btn) {
-      btn.disabled = false;
-      btn.textContent = (typeof t === 'function' ? t('autopilot.summarizeRun') : 'Summarize this run');
-    }
-  };
-  if (btn) { btn.disabled = true; btn.textContent = (typeof t === 'function' ? t('common.loading') : 'Loading…'); }
-  let cfg = {};
-  try {
-    if (typeof _buildConvConfig === 'function') cfg = await _buildConvConfig(conv);
-  } catch (e) {
-    console.warn('[Autopilot] summarize: _buildConvConfig failed, using defaults:', e && e.message);
-  }
-  try {
-    const res = await Api.chat.summarizeAutopilotRun(conv.id, runId, cfg);
-    if (res && res.ok && res.summary && res.summary.content) {
-      /* ★ The summary is a human-only SIDECAR record (NOT a chat message).
-       * Store it on conv.autopilotSummaries so the fold renders its report
-       * panel — never push it into conv.messages. */
-      if (!conv.autopilotSummaries || typeof conv.autopilotSummaries !== 'object') {
-        conv.autopilotSummaries = {};
-      }
-      conv.autopilotSummaries[res.runId || runId] = res.summary;
-      if (typeof saveConversations === 'function') saveConversations(conv.id);
-      try { if (typeof ConvCache !== 'undefined') ConvCache.put(conv); } catch (e) { /* non-fatal */ }
-      if (typeof renderChat === 'function') renderChat(conv, true);
-    } else {
-      _restore();
-    }
-  } catch (e) {
-    console.warn('[Autopilot] summarize run failed:', e && e.message);
-    _restore();
-  }
-}
-if (typeof window !== 'undefined') window._summarizeAutopilotRun = _summarizeAutopilotRun;
-
-/* Is THIS VU turn the run's CONCLUDING turn — i.e. the newest message in the
- * conversation stamped with this run id? A run's report affordance belongs on
- * exactly one turn: its last VU turn. Because only VU turns carry
- * `_autopilotRunId` (never the agent follow-ups) and a NEWER run / a real user
- * message carries a DIFFERENT (or no) run id, "newest turn with this runId" is
- * the correct owner even when the run was superseded — no boundary-walk needed.
- * Returns false when the run has no surviving turn in the loaded window (e.g.
- * after compaction) so the caller renders nothing; see the known-gap note in
- * _apRunReportAffordance. */
-function _isRunConcludingTurn(conv, msg) {
-  const runId = msg && msg._autopilotRunId;
-  if (!conv || !runId || !Array.isArray(conv.messages)) return false;
-  let lastIdx = -1;
-  for (let i = 0; i < conv.messages.length; i++) {
-    const m = conv.messages[i];
-    if (m && m._autopilotRunId === runId) lastIdx = i;
-  }
-  if (lastIdx === -1) return false;
-  return conv.messages[lastIdx] === msg;
-}
-
-/* Build the run-close-out affordance button for a VU turn's action bar, or ''.
- * ONLY on the run's concluding turn (newest turn with the run id), and only
- * once the backend wrote the run's concluded record:
- *   • report present (clean [VU: TASK_DONE]) → "View report" → _openApSummaryModal.
- *   • concluded, reason='stopped', no report (manual stop) → "Summarize this
- *     run" → _summarizeAutopilotRun.
- * A running / un-concluded run gets nothing. Inline SVG glyphs per §3.4.
- * KNOWN GAP (flagged, not silently dropped): if a run's report exists in
- * conv.autopilotSummaries[runId] but NONE of its VU turns survive in the loaded
- * message window (e.g. compaction dropped them), there is no turn to hang this
- * on and the report is currently unreachable from the transcript. The record is
- * NOT lost (still in settings.autopilotSummaries) — a future run-index surface
- * could reach it; today that path is out of scope. */
-function _apRunReportAffordance(conv, msg) {
-  if (!msg || !msg._isVirtualUser || !msg._autopilotRunId) return '';
-  if (!_isRunConcludingTurn(conv, msg)) return '';
-  const runId = msg._autopilotRunId;
-  const rec = _apRunRecord(conv, runId);
-  if (!rec || rec.status !== 'concluded') return '';
-  const _tOr = (k, fb) => (typeof t === 'function' && t(k) !== k) ? t(k) : fb;
-  const _rid = escapeHtml(runId);
-  if (rec.content) {
-    const label = _tOr('autopilot.viewReport', 'View report');
-    return `<button class="msg-action-btn ap-report-btn" onclick="event.stopPropagation();_openApSummaryModal('${_rid}')" title="${escapeHtml(label)}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M16 13H8"/><path d="M16 17H8"/><path d="M10 9H8"/></svg> ${escapeHtml(label)}</button>`;
-  }
-  if (rec.reason === 'stopped') {
-    const label = _tOr('autopilot.summarizeRun', 'Summarize this run');
-    return `<button class="msg-action-btn ap-summarize-btn" onclick="event.stopPropagation();_summarizeAutopilotRun('${_rid}',this)" title="${escapeHtml(label)}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M12 18v-6"/><path d="M9 15h6"/></svg> ${escapeHtml(label)}</button>`;
-  }
-  return '';
-}
-
-/* ★ ALWAYS-VISIBLE inline run-summary PANEL (owner directive 2026-07-08).
- * The 2026-07-07 flatten deleted the `autopilot-run-fold` <details> that used
- * to auto-render a concluded run's close-out report; the report was left
- * reachable ONLY via a hover "View report" button → functionally invisible.
- * This builds an open-by-default collapsible card, rendered INLINE below the
- * run's concluding turn by renderMessage — no hover, no click required. The
- * body reuses the SAME markdown + translated-preference rendering as the modal
- * (`_openApSummaryModal`); the header carries a small "expand" button that
- * opens that modal for a focused full-screen read of a long report. The panel
- * is human-only — never a chat message, never sent to the agent.
- * Returns '' when the run has no report content (a bare manual-stop record — a
- * `status:'concluded'` with no `content` — keeps only the "Summarize this run"
- * action-bar affordance). */
-function _apReportPanelHTML(conv, runId) {
-  const rec = _apRunSummary(conv, runId);   // content-present records only
-  if (!rec) return '';
-  const _tOr = (k, fb) => (typeof t === 'function' && t(k) !== k) ? t(k) : fb;
-  const title = _tOr('autopilot.summaryLabel', 'Run summary report');
-  const priv = _tOr('autopilot.summaryHumanOnly', 'For you only · not sent to the agent');
-  /* Prefer the translated debrief for a Chinese UI when present — identical
-   * selection to _openApSummaryModal so the panel and the modal agree. */
-  const _recTr = readTranslation(rec).text;
-  const _useTranslated = !!(_recTr
-    && typeof convAutoTranslate === 'function' && conv && convAutoTranslate(conv));
-  const bodyText = _useTranslated ? _recTr : (rec.content || '');
-  const bodyHtml = (typeof renderMarkdown === 'function')
-    ? renderMarkdown(bodyText) : escapeHtml(bodyText);
-  const _rid = escapeHtml(runId);
-  let incompleteH = '';
-  if (rec.incomplete) {
-    const _needs = _tOr('autopilot.needsReview', 'stopped early · needs review');
-    incompleteH = `<span class="aps-incomplete"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg> ${escapeHtml(_needs)}</span>`;
-  }
-  const expandTitle = _tOr('autopilot.viewReport', 'View report');
-  return `<details class="ap-summary-panel" open data-ap-report-run="${_rid}">`
-    + `<summary class="aps-summary">`
-    + `<svg class="aps-doc-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M16 13H8"/><path d="M16 17H8"/><path d="M10 9H8"/></svg>`
-    + `<span class="aps-title">${escapeHtml(title)}</span>`
-    + incompleteH
-    + `<span class="aps-private">${escapeHtml(priv)}</span>`
-    + `<button class="aps-expand-btn" onclick="event.preventDefault();event.stopPropagation();_openApSummaryModal('${_rid}')" title="${escapeHtml(expandTitle)}"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg></button>`
-    + `<svg class="aps-toggle" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>`
-    + `</summary>`
-    + `<div class="aps-body md-content">${bodyHtml}</div>`
-    + `</details>`;
-}
-
-/* Where each concluded-run REPORT docks in the transcript. A report is a
- * SIDECAR fact (conv.autopilotSummaries[runId]), NOT a messages[] entry, so it
- * has no natural row — it is rendered as a STANDALONE boundary node by the
- * post-render pass `_applyAutopilotSummaryPanels`, never grafted onto a
- * neighbouring bubble. This resolver decides the dock point for each run that
- * has report content — a PURE LOOKUP of the BACKEND-AUTHORITATIVE
- * `record.anchorMsgId` (the stable `_msgId` of the run's boundary turn,
- * resolved server-side by `_resolve_run_anchor_msgid` where the run's turns are
- * known). The frontend NEVER re-derives the boundary from `_autopilotRunId`
- * stamps — that inference is what let two runs whose stamps fell outside the
- * loaded window both tail-dock and STACK together.
- *   • { runId, afterMsgIdx } — the run's `anchorMsgId` maps to a loaded
- *     message: dock the panel right after that turn's `#msg-<idx>` element.
- *   • { runId, tail: true } — GENUINE LAST RESORT ONLY: the anchor message is
- *     NOT in the loaded window (compaction / lazy window), or a legacy pre-fix
- *     record carries no `anchorMsgId`. Render at the conversation tail (oldest
- *     orphan first) so the report is never unreachable. Because every LOADED
- *     run resolves to its OWN distinct anchor index, two distinct loaded runs
- *     can never collapse onto one tail stack.
- * Deterministic order: anchored docks by afterMsgIdx ascending, then all tail
- * orphans by run ts ascending. */
-function _apSummaryPlacements(conv) {
-  if (!conv || !conv.autopilotSummaries || typeof conv.autopilotSummaries !== 'object') return [];
-  const msgs = Array.isArray(conv.messages) ? conv.messages : [];
-  // Stable _msgId → loaded index (the only handle placement is allowed to use).
-  const idxByMsgId = new Map();
-  for (let i = 0; i < msgs.length; i++) {
-    const mid = msgs[i] && msgs[i]._msgId;
-    if (mid) idxByMsgId.set(mid, i);
-  }
-  const anchored = [];
-  const tail = [];
-  for (const runId of Object.keys(conv.autopilotSummaries)) {
-    if (!_apRunSummary(conv, runId)) continue;   // only reports with content
-    const rec = conv.autopilotSummaries[runId] || {};
-    const anchorId = rec.anchorMsgId || '';
-    const idx = anchorId ? idxByMsgId.get(anchorId) : undefined;
-    if (typeof idx === 'number') {
-      anchored.push({ runId, afterMsgIdx: idx });
-    } else {
-      /* ★ RUN-BOUNDARY FALLBACK (the offset fix): the backend anchor _msgId is
-       * NOT in the loaded window (compaction / lazy window / a legacy record
-       * with no anchor). Before docking at the WHOLE-LIST tail — which lands
-       * the report AFTER any later run / real human turn the user has since
-       * started (the reported "summary jumped past my new round" offset) —
-       * try to anchor after THIS run's own last LOADED turn: the highest-index
-       * message whose `_autopilotRunId === runId`, EXTENDED forward over the
-       * unstamped agent follow-up(s) it prompted (mirrors the backend
-       * `_resolve_run_anchor_msgid` boundary rule, computed here on loaded
-       * rows). This keeps the report at the end of its own (VU→assistant)×N
-       * sequence even when the exact anchor msg scrolled out of the window.
-       * Only when the run has NO loaded turn at all do we fall to the genuine
-       * whole-list tail last resort. */
-      let boundaryIdx = -1;
-      for (let i = 0; i < msgs.length; i++) {
-        const m = msgs[i];
-        if (m && (m._autopilotRunId || '') === runId) boundaryIdx = i;
-      }
-      if (boundaryIdx >= 0) {
-        // Extend past the VU turn over the unstamped agent follow-up(s):
-        // stop at the next run-stamped turn, a real (non-VU) human turn, or EOL.
-        for (let j = boundaryIdx + 1; j < msgs.length; j++) {
-          const m = msgs[j];
-          if (!m) break;
-          if ((m._autopilotRunId || '')) break;
-          if (m.role === 'user' && !m._isVirtualUser) break;
-          boundaryIdx = j;
-        }
-        anchored.push({ runId, afterMsgIdx: boundaryIdx });
-      } else {
-        // No loaded turn for this run at all — genuine last resort.
-        tail.push({ runId, tail: true, ts: rec.ts || 0 });
-      }
-    }
-  }
-  anchored.sort((a, b) => a.afterMsgIdx - b.afterMsgIdx);
-  tail.sort((a, b) => a.ts - b.ts);   // oldest orphan first
-  return anchored.concat(tail);
 }
 
 function _msgFingerprint(msg) {
@@ -497,13 +157,6 @@ function _msgFingerprint(msg) {
       _segTrFp += (s.llmRound == null ? '?' : s.llmRound) + '=' + zh.length + ';';
     }
   }
-  /* NOTE: the autopilot run-summary REPORT is deliberately NOT folded into this
-   * per-message fingerprint. It is not owned by any message — it renders as a
-   * standalone boundary node via the post-render `_applyAutopilotSummaryPanels`
-   * pass, and a background-sync arrival is caught by the conv-level Guard 2
-   * fingerprint (`_apSummariesFp` in core.js), which triggers renderChat →
-   * the panel pass re-docks it. Keeping it out of `_msgFingerprint` avoids
-   * repainting the neighbouring bubble just because a sidecar report arrived. */
   /* Error envelope: include kind + message length so a re-classification
    * (e.g. quota → ratelimit) bumps the fingerprint and the row re-renders. */
   let _errFp = '';
@@ -659,7 +312,6 @@ function _bgRefreshChat(conv) {
   inner.classList.remove('cv-off');
   if (!activeStreams.has(conv.id)) {
     _applyAutopilotRunFolds(inner, conv);
-    _applyAutopilotSummaryPanels(inner, conv);
   }
   _lastRenderedFingerprint = _convRenderFingerprint(conv);
 }
@@ -845,7 +497,6 @@ function renderChat(conv, forceScroll) {
     }
     if (!activeStreams.has(conv.id)) {
       _applyAutopilotRunFolds(inner, conv);
-      _applyAutopilotSummaryPanels(inner, conv);
     }
     _lastRenderedFingerprint = fp;
     _lazyConvId = conv.id;
@@ -922,7 +573,6 @@ function renderChat(conv, forceScroll) {
   inner.innerHTML = html;
   if (!activeStreams.has(conv.id)) {
     _applyAutopilotRunFolds(inner, conv);
-    _applyAutopilotSummaryPanels(inner, conv);
   }
   _lastRenderedFingerprint = fp;
 
@@ -1650,8 +1300,7 @@ function renderMessage(msg, idx) {
     const deleteH = canDelete
       ? `<button class="msg-action-btn msg-delete-btn" onclick="event.stopPropagation();deleteTurn(${idx})" title="${isUser ? 'Delete this turn' : 'Delete this message'}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>`
       : "";
-    const apReportH = _apRunReportAffordance(conv_, msg);
-    actionBtns = `<div class="message-actions">${copyH}${editH}${regenH}${continueH}${translateH}${apReportH}${exportImgH}${deleteH}</div>`;
+    actionBtns = `<div class="message-actions">${copyH}${editH}${regenH}${continueH}${translateH}${exportImgH}${deleteH}</div>`;
   }
   // ★ Tofu mascot avatars: Worker gets worker tofu, Planner gets planner tofu
   let avatarContent = (typeof _TOFU_WORKER_SVG !== 'undefined') ? _TOFU_WORKER_SVG : "✦",

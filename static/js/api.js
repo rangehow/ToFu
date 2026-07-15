@@ -548,12 +548,6 @@
     // Returns {taskId} or throws ApiError (409 when a task is already running).
     kickAutopilot: (convId, config) => post('/api/v1/chat/autopilot/kick',
                                             { convId, config }),
-    // Summarize a concluded autopilot run — on-demand close-out report for a
-    // run that ended without a clean TASK_DONE (Stop / new user message).
-    // Returns {ok, summary, runId} (summary = human-only sidecar record,
-    // NOT a chat message) or throws ApiError.
-    summarizeAutopilotRun: (convId, runId, config) =>
-      post('/api/v1/chat/autopilot/summarize', { convId, runId, config }),
     // Active-tasks listing — used on init to reconnect SSE streams.
     active:       (opts)        => get('/api/v1/chat/active', Object.assign({ onError: 'null' }, opts || {})),
     activeResponse: (opts)      => request('/api/v1/chat/active', Object.assign({ method: 'GET', parse: 'response', onError: 'null' }, opts || {})),

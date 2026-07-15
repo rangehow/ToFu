@@ -82,24 +82,6 @@ def test_autopilot_max_turns_fail_open(monkeypatch):
     assert av.autopilot_max_turns() == 7
 
 
-def test_autopilot_summary_min_turns_fail_open(monkeypatch):
-    """Unset → default 1; '0'/<=0 → 0 (gate disabled); garbage → default; N → N."""
-    monkeypatch.delenv('TOFU_AUTOPILOT_SUMMARY_MIN_TURNS', raising=False)
-    assert av.autopilot_summary_min_turns() == av.AUTOPILOT_SUMMARY_MIN_TURNS_DEFAULT == 1
-
-    monkeypatch.setenv('TOFU_AUTOPILOT_SUMMARY_MIN_TURNS', '0')
-    assert av.autopilot_summary_min_turns() == 0  # gate disabled
-
-    monkeypatch.setenv('TOFU_AUTOPILOT_SUMMARY_MIN_TURNS', '-3')
-    assert av.autopilot_summary_min_turns() == 0  # <=0 → disabled
-
-    monkeypatch.setenv('TOFU_AUTOPILOT_SUMMARY_MIN_TURNS', 'not-an-int')
-    assert av.autopilot_summary_min_turns() == 1  # fail-open to default
-
-    monkeypatch.setenv('TOFU_AUTOPILOT_SUMMARY_MIN_TURNS', '2')
-    assert av.autopilot_summary_min_turns() == 2
-
-
 def test_is_incomplete_stop_membership():
     for r in ('max_iterations', 'max_replans', 'stuck',
               'budget_exhausted', 'no_progress'):
@@ -128,7 +110,9 @@ class _FakeSettingsStore:
     def ensure(self, conv_id, **initial):
         self.rows.setdefault(conv_id, {}).update(initial)
 
-    def update(self, conv_id, mutate, *, user_id=1, db=None):
+    def update(self, conv_id, mutate, *, user_id=1, db=None, notify=True):
+        # ``notify`` mirrors the real update_conversation_settings signature
+        # (gate-level cache invalidation control) — accepted + ignored here.
         if conv_id not in self.rows:
             return None
         settings = self.rows[conv_id]

@@ -172,13 +172,14 @@ def _task_done_task():
 
 
 def test_task_done_prestamps_anchor_before_clearing_run_pin(monkeypatch):
-    """On [VU: TASK_DONE], the anchor pre-stamp (_store_run_record) MUST run on
-    the CALLING thread and BEFORE _clear_run_id — so the boundary is captured
-    while the conv tail is still stable (no new round yet).
+    """On [VU: TASK_DONE], the anchor pre-stamp (_store_run_record, now reached
+    via the report-free _emit_run_concluded_event) MUST run on the CALLING
+    thread and BEFORE _clear_run_id — so the boundary is captured while the
+    conv tail is still stable (no new round yet).
 
-    NEGATIVE CONTROL: reverting the sync pre-stamp (only the async daemon
-    resolves the anchor) drops the ``store_run_record`` entry from ``order``
-    before ``clear_run_id`` — this assertion then fails.
+    NEGATIVE CONTROL: reverting the synchronous conclude (e.g. deferring it)
+    drops the ``store_run_record`` entry from ``order`` before ``clear_run_id``
+    — this assertion then fails.
     """
     import lib.tasks_pkg.autopilot as ap
 
@@ -191,7 +192,6 @@ def test_task_done_prestamps_anchor_before_clearing_run_pin(monkeypatch):
     monkeypatch.setattr(ap, '_has_pending_real_message', lambda conv_id: False)
     monkeypatch.setattr(ap, '_successor_already_running',
                         lambda task, conv_id: False)
-    monkeypatch.setattr(ap, '_should_generate_run_summary', lambda conv_id: True)
 
     def _fake_vu(task, vu_msg_id=None):
         task['_vu_emitted_done'] = True
@@ -205,6 +205,9 @@ def test_task_done_prestamps_anchor_before_clearing_run_pin(monkeypatch):
         return {'runId': run_id, 'status': 'concluded', 'reason': reason,
                 'anchorMsgId': 'm-boundary'}
     monkeypatch.setattr(ap, '_store_run_record', _fake_store)
+    # The report-free close-out helper reaches _store_run_record; keep its feed
+    # pulse + SSE emit inert so the test observes only the store/clear order.
+    monkeypatch.setattr(ap, '_emit_run_concluded', lambda *a, **k: None)
 
     monkeypatch.setattr(ap, '_clear_run_id',
                         lambda cid: order.append('clear_run_id'))
@@ -212,20 +215,16 @@ def test_task_done_prestamps_anchor_before_clearing_run_pin(monkeypatch):
     monkeypatch.setattr(_mq, 'clear_autopilot_marker', lambda cid: None)
     monkeypatch.setattr('lib.tasks_pkg.manager.append_event',
                         lambda task, ev: None)
-    # Swallow the async spawn so its daemon doesn't run here (we're testing the
-    # SYNC pre-stamp, not the async body).
-    monkeypatch.setattr(ap, '_spawn_async_run_summary',
-                        lambda task, conv_id, run_id, with_report: None)
 
     ap.maybe_run_autopilot(_task_done_task())
 
     # The sync pre-stamp ran, on the calling thread, BEFORE the run pin clear.
     assert 'store_run_record' in order, \
-        'TASK_DONE must synchronously pre-stamp the anchor (missing → NC bites)'
+        'TASK_DONE must synchronously conclude+pre-stamp the anchor (missing → NC bites)'
     assert order.index('store_run_record') < order.index('clear_run_id'), \
         'the anchor pre-stamp must precede _clear_run_id (boundary still stable)'
     assert seen['prestamp_thread'] is main_thread, \
-        'the pre-stamp must run on the calling thread, not deferred to async'
+        'the conclude must run on the calling thread, not deferred to async'
 
 
 if __name__ == '__main__':

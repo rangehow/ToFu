@@ -120,12 +120,6 @@ def test_post_terminal_readers_tolerate_none_messages():
         assert isinstance(out, dict) and out.get('format') == fmt, \
             f'flatten({fmt}) failed on released messages'
 
-    # autopilot summary input helper reads `task.get('messages') or []` then
-    # bails on empty — must NOT raise on None (call with the real 3-arg sig).
-    from lib.tasks_pkg import autopilot as ap
-    out = ap._emit_run_summary(task, 'c', 'run-x')
-    assert out is None, 'summary should no-op (return None) on released messages'
-
     _ok('real post-terminal readers treat released (None) messages as [] — no crash')
 
 

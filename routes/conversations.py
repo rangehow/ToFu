@@ -713,6 +713,194 @@ def _windowed_served_readonly(db, conv_id, r, window, before_seq):
     return base, bool(cleaned_full is not None), cleaned_full, settings_for_persist
 
 
+
+# Heavy per-message fields stripped from a WINDOWED serve so the response body
+# is bounded by BYTES, not just message count. These restate content already
+# rendered elsewhere or drive only the (lazy) tool-timeline / finish fold:
+#   • segments / toolRounds / apiRounds — the interleaved tool timeline + raw
+#     per-round transcripts (the bulk of a heavy assistant turn's bytes).
+#   • _continueToolRounds / _continueApiRounds — regen/continue-only, never
+#     first-paint.
+#   • toolSummary — written by the stream but READ by no renderer (dead weight).
+# The renderer degrades gracefully to a plain content/thinking render when these
+# are absent (chat_render.js guards on Array.isArray(segments)&&length, and
+# getToolRoundsFromMsg → []); the frontend lazy-hydrates the full message via the
+# existing _needsLoad + full (non-windowed) refetch seam when the tool timeline
+# is exercised. This trim is READ-ONLY on the serve path — the authoritative
+# blob keeps every field, and the PUT path refills any trimmed field back from
+# the stored blob by _msgId (see _save_conv_blocking's heavy-field preservation).
+_TRIMMABLE_HEAVY_FIELDS = (
+    'segments', 'toolRounds', 'apiRounds',
+    '_continueToolRounds', '_continueApiRounds', 'toolSummary',
+)
+
+
+def _trim_heavy_for_window(messages):
+    """Return a shallow-copied message list with heavy fields stripped for
+    transport, each trimmed message stamped ``_trimmed=True`` + light counts so
+    the frontend knows tool activity existed and can lazy-hydrate on demand.
+
+    Pure + read-only: never mutates the input dicts (shallow-copies only the
+    messages it trims), so the caller's authoritative array is untouched.
+    """
+    out = []
+    for m in messages:
+        if not isinstance(m, dict) or not any(k in m for k in _TRIMMABLE_HEAVY_FIELDS):
+            out.append(m)
+            continue
+        lite = {k: v for k, v in m.items() if k not in _TRIMMABLE_HEAVY_FIELDS}
+        lite['_trimmed'] = True
+        # Preserve just the SHAPE the renderer needs to show a tool-activity
+        # affordance without the payload: how many rounds existed.
+        _tr = m.get('toolRounds')
+        if isinstance(_tr, list) and _tr:
+            lite['_trimmedToolRoundCount'] = len(_tr)
+        out.append(lite)
+    return out
+
+
+def _windowed_blob_slice_readonly(conv_id, r, window, before_seq):
+    """Serve a WINDOW by tail-slicing the AUTHORITATIVE ``messages`` JSONB blob.
+
+    The safe, migration-flag-independent default for windowed reads. It parses
+    the whole authoritative blob (cheap: ~0.02s even at 6 MB — the blob was
+    never the bottleneck) but returns only the tail ``window`` messages, so the
+    *response body* shrinks from megabytes to the window size. That is what cuts
+    the client-side first-open cliff (network transfer + browser JSON parse over
+    the tunnel), NOT server CPU.
+
+    Unlike :func:`_windowed_served_readonly` (which reads the ``conversation_messages``
+    row store and is gated on ``rows_read_enabled()``), this path reads the same
+    always-complete, always-authoritative array every other read path uses — so
+    it is correct for the 116 not-yet-backfilled convs where the row store would
+    serve an empty/short window and risk a PUT truncating real history.
+
+    ``seq`` is the message's index in the full array — identical to the row
+    store's ``seq`` (``backfill_conv`` assigns ``enumerate``), so the envelope
+    and the ``before_seq`` page-up cursor are interchangeable between the two
+    paths and the frontend needs no branch.
+
+    Returns ``(served, changed, cleaned_full, settings_dict)`` mirroring
+    :func:`_windowed_served_readonly`. Raises on a genuinely malformed blob so
+    the caller fails open to the full-blob path.
+    """
+    messages = _safe_json(r['messages'], default=[], label='messages')
+    if not isinstance(messages, list):
+        messages = []
+    total = len(messages)
+
+    # Resolve the slice bounds. seq == array index. Tail window = the newest
+    # `window`; page-up (before_seq set) = the `window` messages ending just
+    # before that seq.
+    if before_seq is not None:
+        end = max(0, min(int(before_seq), total))
+        start = max(0, end - window)
+    else:
+        start = max(0, total - window)
+        end = total
+    win_msgs = messages[start:end]
+
+    first_seq = start if win_msgs else None
+    last_seq = (end - 1) if win_msgs else None
+    has_more = bool(first_seq is not None and first_seq > 0)
+
+    base = {
+        'id': r['id'], 'title': r['title'],
+        'createdAt': r['created_at'], 'created_at': r['created_at'],
+        'updatedAt': r['updated_at'], 'updated_at': r['updated_at'],
+        'settings': _safe_json(r['settings'], default={}, label='settings') or {},
+        'rev': _row_rev(r),
+        'windowed': True,
+        # Heavy per-message fields (toolRounds/segments/apiRounds/...) are
+        # trimmed from the served messages for transport; the frontend
+        # lazy-hydrates them on demand and the PUT path refills them from the
+        # stored blob so nothing is ever persisted trimmed.
+        'trimmed': True,
+        'totalCount': total,
+        'firstLoadedSeq': first_seq,
+        'lastLoadedSeq': last_seq,
+        'hasMore': has_more,
+    }
+
+    # A page-up request is a pure slice — never reconcile it; only the tail
+    # (before_seq=None) can carry a trailing ghost/husk. Trim heavy fields for
+    # transport (read-only; the authoritative array is untouched).
+    if before_seq is not None:
+        base['messages'] = _trim_heavy_for_window(win_msgs)
+        return base, False, None, None
+
+    # Tail window: reconcile the window only, on the UNTRIMMED slice (reconcile
+    # inspects toolRounds to spot a trailing ghost), THEN trim for transport.
+    # reconcile operates on trailing pairs, so the tail-window verdict matches
+    # the full verdict for a trailing ghost/husk (the HEAD prefix — which the
+    # window excludes — is never touched).
+    try:
+        from lib.conversations.reconcile import reconcile_conversation_messages
+        cleaned_win, changed = reconcile_conversation_messages(win_msgs, 0)
+    except Exception as e:
+        logger.debug('[get_conv] blob-slice reconcile skipped conv=%s: %s',
+                     conv_id[:8], e)
+        cleaned_win, changed = win_msgs, False
+
+    base['messages'] = _trim_heavy_for_window(cleaned_win)
+    if not changed:
+        return base, False, None, None
+
+    # The tail shortened — compute the FULL cleaned list to persist off-request
+    # so the authoritative JSONB converges (same as the full path). This is the
+    # only place we walk the whole array, and only when the tail actually
+    # changed (rare), so the common open stays bounded to the window.
+    cleaned_full, settings_for_persist = None, None
+    c_full, ch_full, sd_full = _compute_reconcile(conv_id, r)
+    if ch_full:
+        cleaned_full, settings_for_persist = c_full, sd_full
+    return base, bool(cleaned_full is not None), cleaned_full, settings_for_persist
+
+
+def _maybe_backfill_narration_on_open(conv_id, conv_dict):
+    """FORWARD fix for the "tool prose reappears but stays English" gap.
+
+    A turn translated before its narration segments were stamped keeps its
+    Chinese only in the bottom ``translatedContent`` — the interleaved narration
+    segments lack ``translatedText`` and no client/server path re-requests it
+    (both ``needsTranslation`` and the retro guard treat the turn as done). On
+    conversation OPEN, when auto-translate is on for this conv and it carries any
+    such candidate, spawn a BACKGROUND task that translates + stamps the missing
+    narration segments (reusing the live translate core; rev-CAS neutral). The
+    stamped Chinese then surfaces on the next open / re-render.
+
+    Fire-and-forget: makes LLM calls, so it MUST run off the GET path and never
+    block or fail the response. Guarded on a cheap candidate pre-check so the
+    common (fully-stamped) conversation does zero extra work. No-op when
+    auto-translate is off or no event loop is running (sync caller).
+    """
+    try:
+        settings = conv_dict.get('settings') if isinstance(conv_dict, dict) else None
+        from lib.conv_config import resolve_auto_translate
+        if not resolve_auto_translate(settings if isinstance(settings, dict) else {}):
+            return
+        from lib.translate.segment_backfill import (
+            backfill_conv_narration_segments, conv_has_backfill_candidates,
+            is_backfill_inflight)
+        if is_backfill_inflight(conv_id):
+            # A backfill for this conv is already running; the candidate gate
+            # reads the still-uncommitted served messages, so spawning again
+            # would burn duplicate LLM calls for the same segments.
+            return
+        if not conv_has_backfill_candidates(conv_dict.get('messages')):
+            return
+        import asyncio
+        loop = asyncio.get_running_loop()
+        loop.create_task(backfill_conv_narration_segments(conv_id))
+        logger.info('[get_conv] conv=%s spawned on-open narration backfill', conv_id[:8])
+    except RuntimeError:
+        # No running loop (sync context) — skip; the migration covers offline rows.
+        pass
+    except Exception as e:
+        logger.debug('[get_conv] narration backfill spawn skipped conv=%s: %s',
+                     conv_id[:8], e)
+
+
 @conversations_bp.route('/api/v1/conversations/<conv_id>', methods=['GET'])
 @_db_safe
 async def get_conv(conv_id):
@@ -738,18 +926,39 @@ async def get_conv(conv_id):
     if not r:
         return api_not_found('Not found')
 
-    # ── Windowed read cutover (gated + fail-open). Only when the row-store read
-    #    flag is on AND the client asked for a window. ──
+    # ── Windowed read (fail-open). When the client asks for a window and the
+    #    conv is idle, serve only the tail N messages so the RESPONSE BODY is
+    #    bounded (the fix for slow first-open of long conversations over the
+    #    tunnel). Two backends, same envelope + before_seq cursor:
+    #      • row store (O(window)) — ONLY when rows_read_enabled() (migration
+    #        flag) AND the conv is backfilled; the fast path once proven.
+    #      • blob tail-slice — the SAFE DEFAULT, migration-flag-independent: it
+    #        slices the authoritative always-complete ``messages`` array, so it
+    #        is correct even for not-yet-backfilled convs (where the row store
+    #        would serve an empty window and risk a PUT truncating history).
+    #    Any failure falls open to the full-blob path below. ──
     try:
-        from lib.database.messages_rows import rows_read_enabled
         _window, _before_seq = _parse_window_args()
-        if _window > 0 and rows_read_enabled() and not _conv_has_live_task(conv_id):
+        if _window > 0 and not _conv_has_live_task(conv_id):
             try:
-                served, changed, cleaned_full, sd = await run_pooled(
-                    lambda db: _windowed_served_readonly(
-                        db, conv_id, r, _window, _before_seq))
+                from lib.database.messages_rows import rows_read_enabled
+                _use_rows = rows_read_enabled()
+            except Exception as e:
+                logger.debug('[get_conv] rows_read_enabled check failed conv=%s: %s',
+                             conv_id[:8], e)
+                _use_rows = False
+            try:
+                if _use_rows:
+                    served, changed, cleaned_full, sd = await run_pooled(
+                        lambda db: _windowed_served_readonly(
+                            db, conv_id, r, _window, _before_seq))
+                else:
+                    served, changed, cleaned_full, sd = await run_pooled(
+                        lambda db: _windowed_blob_slice_readonly(
+                            conv_id, r, _window, _before_seq))
                 if changed and cleaned_full is not None:
                     _schedule_reconcile_persist(conv_id, cleaned_full, sd)
+                _maybe_backfill_narration_on_open(conv_id, served)
                 return jsonify(served)
             except Exception as e:
                 logger.warning('[get_conv] windowed read failed conv=%s: %s — '
@@ -763,7 +972,9 @@ async def get_conv(conv_id):
     # it would corrupt the live stream. Skip reconcile AND leave _reconciledAt
     # unstamped so the frontend keeps deferring rather than treating it as clean.
     if _conv_has_live_task(conv_id):
-        return jsonify(_conv_row_to_dict(r))
+        _served = _conv_row_to_dict(r)
+        _maybe_backfill_narration_on_open(conv_id, _served)
+        return jsonify(_served)
 
     try:
         served, changed, cleaned, settings_dict = await run_pooled(
@@ -774,11 +985,14 @@ async def get_conv(conv_id):
         #    never blocks on a FUSE-fsync UPDATE+commit. ──
         if changed:
             _schedule_reconcile_persist(conv_id, cleaned, settings_dict)
+        _maybe_backfill_narration_on_open(conv_id, served)
         return jsonify(served)
     except Exception as e:
         logger.warning('[get_conv] GET-path reconcile failed for conv=%s: %s — '
                        'serving unreconciled row', conv_id[:8], e, exc_info=True)
-        return jsonify(_conv_row_to_dict(r))
+        _served = _conv_row_to_dict(r)
+        _maybe_backfill_narration_on_open(conv_id, _served)
+        return jsonify(_served)
 
 
 @conversations_bp.route('/api/v1/conversations/<conv_id>/preview', methods=['GET'])
@@ -1288,6 +1502,20 @@ def _save_conv_blocking(db, conv_id, data):
     # identity (_msgId, falling back to _taskId), only when the client's copy
     # lacks them. Skip on allowTruncate (edit/regen intentionally rewrites, and
     # a regenerated turn's stale segments must NOT be resurrected).
+    # ── Heavy-field preservation (data-loss guard for windowed/trimmed reads) ──
+    # A windowed serve strips heavy per-message fields (segments, toolRounds,
+    # apiRounds, _continue*) for transport, and _trimMsgForPersist strips some of
+    # them on EVERY PUT regardless. A blind full-array replace would then drop
+    # those fields from the authoritative blob permanently. So before the write,
+    # refill any heavy field the incoming message LACKS from the stored blob,
+    # matched by stable _msgId (fallback _taskId) so positional drift / a tail
+    # window can never mismatch. Generalizes the original segments-only merge to
+    # every trimmable heavy field. Skipped on allow_truncate (edit/regen owns
+    # the tail and may legitimately drop fields).
+    _HEAVY_PRESERVE_FIELDS = (
+        'segments', 'toolRounds', 'apiRounds',
+        '_continueToolRounds', '_continueApiRounds',
+    )
     _seg_preserved = 0
     if msg_count > 0 and not allow_truncate:
         try:
@@ -1300,56 +1528,64 @@ def _save_conv_blocking(db, conv_id, data):
                     _seg_db_msgs = json.loads(_seg_row[0] or '[]') or []
                 except (json.JSONDecodeError, TypeError) as _sje:
                     logger.warning('[save_conv] Failed to parse existing messages '
-                                   'for segments merge conv=%s: %s',
+                                   'for heavy-field merge conv=%s: %s',
                                    conv_id[:12], _sje)
                     _seg_db_msgs = []
 
-                # Index the DB messages that carry segments by their stable id
-                # so we can match regardless of any positional shift.
-                _seg_by_msgid = {}
-                _seg_by_taskid = {}
+                # Index DB messages that carry ANY heavy field, by stable id, so
+                # we can refill regardless of positional shift. Value is a dict
+                # of {field: stored_value} for the fields that DB row carries.
+                _heavy_by_msgid = {}
+                _heavy_by_taskid = {}
                 for _dbm in _seg_db_msgs:
                     if not isinstance(_dbm, dict):
                         continue
-                    _dbsegs = _dbm.get('segments')
-                    if not _dbsegs:
+                    _present = {f: _dbm[f] for f in _HEAVY_PRESERVE_FIELDS
+                                if _dbm.get(f)}
+                    if not _present:
                         continue
                     _mid = _dbm.get('_msgId')
                     _tid = _dbm.get('_taskId')
                     if _mid:
-                        _seg_by_msgid[_mid] = _dbsegs
+                        _heavy_by_msgid[_mid] = _present
                     if _tid:
-                        _seg_by_taskid[_tid] = _dbsegs
+                        _heavy_by_taskid[_tid] = _present
 
-                if _seg_by_msgid or _seg_by_taskid:
+                if _heavy_by_msgid or _heavy_by_taskid:
                     for _dst in raw_messages:
                         if not isinstance(_dst, dict):
                             continue
-                        if _dst.get('segments'):
-                            continue  # client already carries segments — leave it
-                        _src_segs = None
                         _mid = _dst.get('_msgId')
-                        if _mid and _mid in _seg_by_msgid:
-                            _src_segs = _seg_by_msgid[_mid]
-                        else:
+                        _src = _heavy_by_msgid.get(_mid) if _mid else None
+                        if _src is None:
                             _tid = _dst.get('_taskId')
-                            if _tid and _tid in _seg_by_taskid:
-                                _src_segs = _seg_by_taskid[_tid]
-                        if _src_segs:
-                            _dst['segments'] = _src_segs
-                            _seg_preserved += 1
+                            _src = _heavy_by_taskid.get(_tid) if _tid else None
+                        if not _src:
+                            continue
+                        for _f, _val in _src.items():
+                            # Only refill a field the client did NOT send — never
+                            # overwrite a fresh client value (e.g. a regen that
+                            # legitimately rewrote toolRounds).
+                            if not _dst.get(_f):
+                                _dst[_f] = _val
+                                _seg_preserved += 1
+                        # A message served trimmed carries the _trimmed marker;
+                        # once refilled it's whole again — drop the transient flag
+                        # so it never persists into the authoritative blob.
+                        _dst.pop('_trimmed', None)
+                        _dst.pop('_trimmedToolRoundCount', None)
 
                 if _seg_preserved > 0:
                     # Re-materialize the payload so the write below carries the
-                    # merged segments back into the messages column.
+                    # merged heavy fields back into the messages column.
                     messages = json_dumps_pg(raw_messages)
                     logger.info(
-                        '[save_conv] 🧩 Preserved segments on %d message(s) '
-                        'from DB into incoming payload conv=%s',
+                        '[save_conv] 🧩 Preserved %d heavy field(s) from DB into '
+                        'incoming payload conv=%s (windowed/trimmed-read guard)',
                         _seg_preserved, conv_id[:12],
                     )
         except Exception as _seg_me:
-            logger.warning('[save_conv] segments-merge pre-step failed '
+            logger.warning('[save_conv] heavy-field merge pre-step failed '
                            'conv=%s: %s (continuing without merge)',
                            conv_id[:12], _seg_me, exc_info=True)
 

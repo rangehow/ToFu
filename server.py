@@ -696,6 +696,60 @@ _load_dotenv()
 
 
 # ═══════════════════════════════════════════════════════════════════════
+#  Sync→loop body-read bounded wait (extracted for testability)
+# ═══════════════════════════════════════════════════════════════════════
+# ``_run_coro_sync`` (installed by the Flask→Quart shim below) bridges a sync
+# route handler running in an executor thread to the MAIN event loop to read
+# the request body (get_json / form / files / data). If the loop is EVER wedged
+# (a blocking call slipped onto it, a FUSE/PG stall), an UNBOUNDED
+# ``future.result()`` there blocks the worker thread FOREVER; every subsequent
+# request-body read queues behind it and the whole sync-executor pool is
+# exhausted — the "whole site frozen, must restart" failure mode. Bounding the
+# wait severs that one failure mode WITHOUT hurting legitimate slow large
+# uploads. These two helpers are module-level (not closure-local) so a unit test
+# can exercise the bound directly, mirroring the ``timeout=30`` contract the
+# sibling ``_sync_safe`` wrapper already carries.
+
+def _resolve_sync_body_timeout():
+    """Seconds to wait for a cross-thread request-body read before aborting.
+
+    Reads ``TOFU_SYNC_BODY_TIMEOUT`` (default 300s — generous so a genuine slow
+    upload is never cut short; this is a backstop against an infinitely wedged
+    loop, NOT a tight per-request budget). A value ``<= 0`` opts out (unbounded,
+    the legacy behaviour) and returns ``None``.
+    """
+    raw = os.environ.get('TOFU_SYNC_BODY_TIMEOUT', '') or '300'
+    try:
+        val = float(raw)
+    except (ValueError, TypeError) as e:
+        logging.getLogger('server').debug(
+            '[Server] bad TOFU_SYNC_BODY_TIMEOUT=%r, using 300s: %s', raw, e)
+        return 300.0
+    return None if val <= 0 else val
+
+
+def _await_coro_on_loop(coro, main_loop, timeout):
+    """Run ``coro`` on ``main_loop`` from a sync thread, bounded by ``timeout``.
+
+    On timeout the coroutine is best-effort cancelled, an ERROR is logged (per
+    CLAUDE.md §2.2), and ``concurrent.futures.TimeoutError`` propagates so the
+    handler fails fast instead of hanging the worker thread indefinitely.
+    """
+    from concurrent.futures import TimeoutError as _FuturesTimeoutError
+    future = asyncio.run_coroutine_threadsafe(coro, main_loop)
+    try:
+        return future.result(timeout=timeout)
+    except _FuturesTimeoutError:
+        future.cancel()
+        logging.getLogger('server').error(
+            '[Server] _run_coro_sync timed out after %ss waiting on the main '
+            'event loop for a request-body read — the loop is likely wedged. '
+            'Aborting this read instead of hanging the worker thread (raise '
+            'TOFU_SYNC_BODY_TIMEOUT if this is a genuine slow upload).', timeout)
+        raise
+
+
+# ═══════════════════════════════════════════════════════════════════════
 #  Framework Compatibility Shim
 # ═══════════════════════════════════════════════════════════════════════
 # Quart is API-compatible with Flask but lives under `quart.*` imports.
@@ -817,7 +871,16 @@ def _install_flask_shim():
     _orig_get_json = _QuartRequest.get_json
 
     def _run_coro_sync(coro):
-        """Run a coroutine from a sync context (executor thread)."""
+        """Run a coroutine from a sync context (executor thread).
+
+        The cross-thread wait is bounded by ``TOFU_SYNC_BODY_TIMEOUT`` (default
+        300s, see :func:`_resolve_sync_body_timeout`) so a wedged event loop can
+        never hang a worker thread forever and exhaust the sync-executor pool.
+        On timeout the coroutine is cancelled and
+        ``concurrent.futures.TimeoutError`` propagates instead of blocking
+        indefinitely. Delegates to the module-level :func:`_await_coro_on_loop`
+        so the bound is unit-testable.
+        """
         if not inspect.iscoroutine(coro):
             return coro
         try:
@@ -826,8 +889,8 @@ def _install_flask_shim():
         except Exception:
             main_loop = None
         if main_loop is not None and main_loop.is_running():
-            future = asyncio.run_coroutine_threadsafe(coro, main_loop)
-            return future.result()
+            return _await_coro_on_loop(
+                coro, main_loop, _resolve_sync_body_timeout())
         return asyncio.run(coro)
 
     def _sync_safe_get_json(self, *args, **kwargs):

@@ -358,6 +358,11 @@ html[data-rail] .folder-quickadd{display:none}
 /* ★ Perf: contain:content isolates thinking block layout from parent reflows */
 .thinking-block{margin-bottom:12px;border:1px solid var(--thinking-border);border-radius:var(--radius-sm);background:var(--thinking-bg);overflow:hidden;contain:content}
 
+/* Windowed/trimmed open: click-to-load affordance for a message whose heavy
+   tool timeline was stripped for transport (hydrateFullConversation). */
+.trimmed-tool-activity{margin-bottom:12px;padding:6px 12px;border:1px dashed var(--thinking-border);border-radius:var(--radius-sm);background:var(--thinking-bg);color:var(--text-secondary,#9aa);font-size:.85em;cursor:pointer;user-select:none;display:inline-block}
+.trimmed-tool-activity:hover{opacity:.85}
+
 /* Display-only "Earlier Thinking" block surfaced on Continue rollback —
    the trailing reasoning that was discarded because no provider can
    accept it on replay. Visually distinguished from live thinking via

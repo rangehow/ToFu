@@ -1267,6 +1267,19 @@ function renderMessage(msg, idx) {
      * timeline DID render (_segTimelineRendered) we never reach here. */
     body += renderToolRoundsHTML(rounds, false, msg.segments);
   }
+  /* ★ Windowed/trimmed open: the heavy tool timeline was stripped for transport
+   *   (msg._trimmed) to keep first-open tiny. Show a lightweight affordance so
+   *   the user can pull the full tool activity on demand — a click hydrates the
+   *   FULL conversation (heavy fields refilled by _msgId) and repaints. Only
+   *   when this turn actually had tool rounds and none are currently present. */
+  if (!_segTimelineRendered && rounds.length === 0 && msg && msg._trimmed
+      && msg._trimmedToolRoundCount > 0) {
+    const _n = msg._trimmedToolRoundCount;
+    const _cid = (typeof activeConvId !== 'undefined') ? activeConvId : '';
+    const _label = (typeof t === 'function')
+      ? t('convWindow.loadToolActivity', { n: _n }) : `Load tool activity (${_n})`;
+    body += `<div class="trimmed-tool-activity" onclick="hydrateFullConversation('${escapeHtml(_cid)}')" title="${escapeHtml(_label)}">${escapeHtml(_label)}</div>`;
+  }
   if (msg.thinking && !_segTimelineRendered) {
     const thinkLen = msg.thinking.length;
     const thinkMeta = thinkLen >= 1024 ? ` (${Math.round(thinkLen / 1024)}k chars)` : ` (${thinkLen} chars)`;

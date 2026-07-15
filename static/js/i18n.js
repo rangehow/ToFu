@@ -69,6 +69,7 @@ var _i18n = {
   'conn.restoredReattach': { zh: '已重连 {n} 个进行中的任务，流式已恢复。', en: 'Reconnected {n} running task(s) — streaming resumed.' },
   'conn.restoredRecovered': { zh: '已从服务器恢复 {n} 个对话，结果已更新。', en: 'Recovered {n} conversation(s) from server. Results updated.' },
   'conn.loadTimedOut': { zh: '加载超时 — 服务器可能繁忙，请重试。', en: 'Loading timed out — the server may be busy.' },
+  'convWindow.loadToolActivity': { zh: '加载工具活动（{n} 轮）', en: 'Load tool activity ({n})' },
   // ── Recoverable connection-drop block (server_offline ONLY): a friendly,
   //    TRUTHFUL headline + recovery hint shown in the assistant error bubble
   //    instead of raw "Server offline" jargon. The key message: the drop is a

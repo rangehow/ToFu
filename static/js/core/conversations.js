@@ -1457,8 +1457,18 @@ async function loadConversationMessages(convId) {
     const _mkSignal = typeof AbortSignal !== 'undefined' && AbortSignal.timeout
       ? (ms) => AbortSignal.timeout(ms)
       : (ms) => { const c = new AbortController(); setTimeout(() => c.abort(), ms); return c.signal; };
+    /* ★ Windowed first-open: request only the tail N messages so the response
+     *   body is bounded (root-cause fix for slow first-open of long convs over
+     *   the tunnel — a 6 MB blob was timing the fetch out). '' when windowing
+     *   is disabled → legacy full-blob load. recordWindowState() below stamps
+     *   the pagination state and scroll-up loads earlier pages on demand. */
+    const _winParam = (typeof convWindowParam === 'function') ? convWindowParam() : '';
+    const _fetchOpts = _winParam
+      ? { query: { window: _winParam } }
+      : {};
     for (let _attempt = 0; _attempt < 3; _attempt++) {
-      resp = await Api.conversations.getResponse(convId, { signal: _mkSignal(_fetchTimeout) });
+      resp = await Api.conversations.getResponse(
+        convId, Object.assign({ signal: _mkSignal(_fetchTimeout) }, _fetchOpts));
       if (!resp) { /* network/abort — retry */ continue; }
       if (resp.status === 503) {
         /* DB temporarily busy — wait and retry */

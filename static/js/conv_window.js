@@ -26,13 +26,20 @@
    and the scroll handler short-circuits. Single-box default is byte-identical.
    ═══════════════════════════════════════════════════════════════════ */
 
-/* Requested tail size. 0 disables the window (full load) — the default until a
- *   deployment opts in via window.TOFU_CONV_WINDOW (set from a served config).
- *   Kept conservative; the backend also has its own TOFU_CONV_WINDOW ceiling. */
+/* Requested tail size. Defaults to _DEFAULT_CONV_WINDOW so windowed first-open
+ *   is ON by default — the backend blob tail-slice path (safe for every conv,
+ *   no migration flag) bounds the RESPONSE BODY to this many messages, which is
+ *   what cuts the slow first-open of long conversations over the tunnel.
+ *   A deployment may override the size via window.TOFU_CONV_WINDOW, or set it
+ *   to 0 to explicitly DISABLE windowing (full-blob load, legacy behavior). */
+const _DEFAULT_CONV_WINDOW = 60;
 function _convWindowSize() {
-  const n = (typeof window !== 'undefined' && window.TOFU_CONV_WINDOW) || 0;
-  const v = parseInt(n, 10);
-  return Number.isFinite(v) && v > 0 ? v : 0;
+  const raw = (typeof window !== 'undefined') ? window.TOFU_CONV_WINDOW : undefined;
+  /* Explicit 0 / '0' → disabled (full load). Unset/undefined/null → default. */
+  if (raw === 0 || raw === '0') return 0;
+  const v = parseInt(raw, 10);
+  if (Number.isFinite(v) && v > 0) return v;
+  return _DEFAULT_CONV_WINDOW;
 }
 
 /* The ?window= value to attach to a first-open GET, or '' to request the full
@@ -57,7 +64,54 @@ function recordWindowState(conv, data) {
   conv._firstLoadedSeq = data.firstLoadedSeq;
   conv._lastLoadedSeq = data.lastLoadedSeq;
   conv._hasMoreEarlier = !!data.hasMore;
+  /* Heavy per-message fields (toolRounds/segments/apiRounds/...) were stripped
+   *   for transport (data.trimmed). Note it so the renderer shows a "load tool
+   *   activity" affordance and hydrateFullConversation() can refill on demand. */
+  conv._trimmed = data.trimmed === true;
   return true;
+}
+
+/* Lazy-hydrate a windowed conv's TRIMMED heavy fields (toolRounds / segments /
+ *   apiRounds / _continue*) by fetching the FULL, un-windowed conversation once
+ *   and merging the heavy fields back into the in-memory messages by stable
+ *   _msgId (fallback index). Called on demand when the user expands a trimmed
+ *   message's tool timeline — first-paint stayed tiny, the heavy payload is
+ *   pulled only if actually needed. Re-entrant-guarded; repaints on success. */
+async function hydrateFullConversation(convId) {
+  const conv = (typeof conversations !== 'undefined')
+    ? conversations.find((c) => c.id === convId) : null;
+  if (!conv || conv._hydratingFull) return false;
+  if (!conv._trimmed) return false;  // nothing trimmed → nothing to hydrate
+  conv._hydratingFull = true;
+  try {
+    /* Explicit window=0 → the server serves the FULL untrimmed array. */
+    const data = await Api.conversations.get(convId, { query: { window: '0' } });
+    if (!data || !Array.isArray(data.messages)) return false;
+    const _HEAVY = ['segments', 'toolRounds', 'apiRounds',
+                    '_continueToolRounds', '_continueApiRounds', 'toolSummary'];
+    const bySrcId = new Map();
+    data.messages.forEach((m, i) => {
+      if (m && m._msgId) bySrcId.set(m._msgId, m);
+    });
+    (conv.messages || []).forEach((dst, i) => {
+      if (!dst) return;
+      const src = (dst._msgId && bySrcId.get(dst._msgId)) || data.messages[i];
+      if (!src) return;
+      for (const f of _HEAVY) { if (src[f] !== undefined) dst[f] = src[f]; }
+      delete dst._trimmed;
+      delete dst._trimmedToolRoundCount;
+    });
+    conv._trimmed = false;
+    if (typeof activeConvId !== 'undefined' && activeConvId === convId
+        && typeof renderChat === 'function') renderChat(conv, false);
+    return true;
+  } catch (e) {
+    console.warn('[conv-window] hydrateFull failed for %s: %s',
+                 convId.slice(0, 8), e && e.message);
+    return false;
+  } finally {
+    conv._hydratingFull = false;
+  }
 }
 
 /* Whether there are older messages above the loaded window. */
@@ -141,4 +195,5 @@ if (typeof window !== 'undefined') {
   window.convHasMoreEarlier = convHasMoreEarlier;
   window.loadEarlierMessages = loadEarlierMessages;
   window.wireConvWindowScrollLoader = wireConvWindowScrollLoader;
+  window.hydrateFullConversation = hydrateFullConversation;
 }

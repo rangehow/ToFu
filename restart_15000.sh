@@ -198,13 +198,18 @@ fi
 #     found), SKIP rather than fail (the endpoint contract is still checked by
 #     tests/test_conv_windowed_blob_slice.py); only FAIL if it exists but is
 #     served UNwindowed or over-size.
+probe_c_skipped=0
 PROBE_CONV="${TOFU_WINDOW_PROBE_CONV:-mrbu5j9azz8gi8}"
 PROBE_URL="${BASE}/api/v1/conversations/${PROBE_CONV}?window=60"
 PROBE_JSON="$(curl -s --max-time 20 "${PROBE_URL}" 2>/dev/null)"
 if [ -z "${PROBE_JSON}" ] || printf '%s' "${PROBE_JSON}" | grep -qiE '"error"|not.?found'; then
-  echo "⏭️  (c) WINDOWED-OPEN probe SKIPPED: conv '${PROBE_CONV}' not present on this"
-  echo "       deployment (override with TOFU_WINDOW_PROBE_CONV=<id>). Endpoint"
-  echo "       contract still covered by tests/test_conv_windowed_blob_slice.py."
+  probe_c_skipped=1
+  echo "⏭️  (c) SKIPPED — windowed byte-trim NOT VERIFIED: probe conv '${PROBE_CONV}'"
+  echo "       is not present on this deployment (override with"
+  echo "       TOFU_WINDOW_PROBE_CONV=<an existing large conv id> to actually"
+  echo "       verify the live byte-trim). The endpoint contract is still covered"
+  echo "       offline by tests/test_conv_windowed_blob_slice.py, but THIS restart"
+  echo "       did NOT confirm the trim is live — do not treat it as fully proven."
 else
   # Parse windowed/trimmed flags + byte size with the server interpreter (no jq dep).
   PROBE_VERDICT="$("${PY}" - "$PROBE_URL" <<'PYEOF' 2>/dev/null
@@ -242,5 +247,14 @@ if [ "${probe_fail}" = "1" ]; then
   echo "FATAL: a fix is NOT fully live on :${PORT} (pid ${NEWPID}). See above."
   exit 5
 fi
-echo "✅ FIX LIVE: off-loop backfill + new _serve guard + windowed byte-bounded open on :${PORT} (pid ${NEWPID})."
-echo "════════════════════════════════════════════════════════════════"
+if [ "${probe_c_skipped}" = "1" ]; then
+  echo "────────────────────────────────────────────────────────────────"
+  echo "⚠️  PARTIAL: off-loop backfill + new _serve guard are LIVE on :${PORT}"
+  echo "    (pid ${NEWPID}), but the windowed byte-trim (c) was SKIPPED and is"
+  echo "    NOT verified live this restart (probe conv absent). Re-run with"
+  echo "    TOFU_WINDOW_PROBE_CONV=<existing large conv id> to confirm the trim."
+  echo "════════════════════════════════════════════════════════════════"
+else
+  echo "✅ FIX LIVE: off-loop backfill + new _serve guard + windowed byte-bounded open on :${PORT} (pid ${NEWPID})."
+  echo "════════════════════════════════════════════════════════════════"
+fi

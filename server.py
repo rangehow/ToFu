@@ -2395,30 +2395,83 @@ if __name__ == '__main__':
                               exc_info=exc if exc else False)
         loop.set_exception_handler(_loop_exception_handler)
 
-        # ── Event-loop BLOCKING guard (sub-stall early warning) ──
-        # The stall watchdog above only fires once the loop is wedged past
-        # _stall_threshold (5s). This complementary guard catches a SINGLE
-        # on-loop step (a coroutine/callback ``_run``) that hogs the loop
-        # longer than TOFU_LOOP_SLOW_CALLBACK_SECS — BEFORE it snowballs into a
-        # full stall — and names the exact callable. asyncio's debug mode emits
-        # "Executing <...> took N seconds" via the 'asyncio' logger whenever a
-        # step exceeds loop.slow_callback_duration; we lower that threshold and
-        # route the logger through our sink so it lands in error.log with the
-        # culprit. Enabled by default at 1.0s; set to 0 to disable (debug mode
-        # adds minor per-step overhead but no blocking).
+        # ── Event-loop BLOCKING guard (sub-stall early warning) — OPT-IN ──
+        # The always-on stall watchdog (LoopWatch, 5s) is the safe 24/7 net:
+        # it's a separate sampling thread with ZERO per-step instrumentation
+        # and dumps once per stall — no overhead, no log flood, and it already
+        # names the culprit top frame via _extract_loop_top_frame.
+        #
+        # THIS guard is the finer, sub-stall detector: it catches a SINGLE
+        # on-loop step that hogs the loop past TOFU_LOOP_SLOW_CALLBACK_SECS
+        # BEFORE it snowballs. It relies on ``loop.set_debug(True)``, and here
+        # is the cost that makes it UNSAFE as a default on a high-concurrency
+        # SSE/WebSocket service: in CPython, debug mode makes EVERY call_soon
+        # run format_helpers.extract_stack() (a Python stack walk) per Handle,
+        # and the slow-callback timing/logging is gated on ``self._debug``.
+        # On a long-connection storm the per-schedule stack-walk cost is real,
+        # and a burst of just-over-threshold steps would flood the 'asyncio'
+        # logger into error.log (log I/O can itself back-pressure the loop —
+        # the diagnostic aggravating the very stall it hunts).
+        #
+        # So this guard is DEFAULT OFF. Enable it deliberately for a diagnostic
+        # window via TOFU_LOOP_DEBUG_GUARD=1 (threshold via
+        # TOFU_LOOP_SLOW_CALLBACK_SECS, default 1.0s). When on, a rate-limiting
+        # filter caps the 'asyncio' warnings so it can't flood the log even if
+        # many steps trip at once. Normal production pays NOTHING and keeps the
+        # cheap LoopWatch net.
+        _debug_guard = (os.environ.get('TOFU_LOOP_DEBUG_GUARD', '') or '').strip().lower()
+        _guard_on = _debug_guard in ('1', 'true', 'yes', 'on')
         try:
             _slow_cb = float(os.environ.get('TOFU_LOOP_SLOW_CALLBACK_SECS', '') or '1.0')
         except (ValueError, TypeError) as _e:
             _server_log.debug('[Server] bad TOFU_LOOP_SLOW_CALLBACK_SECS, using 1.0: %s', _e)
             _slow_cb = 1.0
-        if _slow_cb > 0:
+        if _guard_on and _slow_cb > 0:
             loop.slow_callback_duration = _slow_cb
             loop.set_debug(True)
-            # Surface asyncio's own "took N seconds" WARNING through error.log.
-            logging.getLogger('asyncio').setLevel(logging.WARNING)
+            _asyncio_log = logging.getLogger('asyncio')
+            _asyncio_log.setLevel(logging.WARNING)
+            # Rate-limit so a burst of just-over-threshold steps can't flood
+            # error.log (and back-pressure the loop via log I/O). Token-ish:
+            # at most _burst warnings per _window seconds, then a single
+            # suppression note. Cheap, allocation-free, no lock (loop thread
+            # touches it; the 'asyncio' logger emits from the loop thread).
+            class _SlowCallbackRateLimit(logging.Filter):
+                def __init__(self, burst=20, window=10.0):
+                    super().__init__()
+                    self._burst = burst
+                    self._window = window
+                    self._win_start = 0.0
+                    self._count = 0
+                    self._suppressed = 0
+
+                def filter(self, record):
+                    now = time.monotonic()
+                    if now - self._win_start >= self._window:
+                        if self._suppressed:
+                            record.msg = ('%s [+%d more slow-callback warnings '
+                                          'suppressed in the last %.0fs]'
+                                          % (record.getMessage(), self._suppressed,
+                                             self._window))
+                            record.args = ()
+                        self._win_start = now
+                        self._count = 0
+                        self._suppressed = 0
+                    if self._count < self._burst:
+                        self._count += 1
+                        return True
+                    self._suppressed += 1
+                    return False
+
+            _asyncio_log.addFilter(_SlowCallbackRateLimit())
             _server_log.info('[Server] Loop blocking-guard armed '
-                             '(slow_callback_duration=%.1fs) — a single on-loop '
-                             'step over this logs "Executing … took N seconds"', _slow_cb)
+                             '(slow_callback_duration=%.1fs, rate-limited) — a '
+                             'single on-loop step over this logs "Executing … '
+                             'took N seconds". DIAGNOSTIC MODE (debug loop).', _slow_cb)
+        else:
+            _server_log.info('[Server] Loop blocking-guard OFF (default) — cheap '
+                             'LoopWatch 5s net remains active. Set '
+                             'TOFU_LOOP_DEBUG_GUARD=1 to enable sub-stall detection.')
 
         # ── Size the default executor ──
         # Every sync route handler runs in this loop's default executor via

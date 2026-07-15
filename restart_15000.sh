@@ -142,12 +142,18 @@ fi
 #                interpreter that launched the server. If HEAD predates the fix
 #                these names don't exist → ImportError. This proves the code is
 #                on disk + importable for the launch interpreter.
-#            (b) RUNTIME: the on-loop blocking guard actually armed itself during
-#                THIS boot — i.e. the running process emitted
-#                "Loop blocking-guard armed" to ${LOG}. A static import can't
-#                prove the guard ran; only the live log line does. This is the
-#                behavioural proof that the watchdog half is live, not just
-#                present.
+#            (b) RUNTIME: the new _serve guard code actually executed during
+#                THIS boot — the running process emitted a "Loop blocking-guard"
+#                line to ${LOG}. NOTE: that guard is DEFAULT OFF (set_debug is
+#                unsafe as a 24/7 default on this high-concurrency service), so
+#                the normal boot prints "Loop blocking-guard OFF (default)"; a
+#                diagnostic boot (TOFU_LOOP_DEBUG_GUARD=1) prints "... armed".
+#                EITHER line proves the NEW _serve code ran (both are new in
+#                this fix); a boot on OLD code prints neither. A static import
+#                can't prove the running process executed the new path — the
+#                live log line does. The always-on LoopWatch 5s net is what
+#                actually protects production; this guard is the opt-in
+#                sub-stall detector.
 #          Why probe THIS and not sticky-cwd: the previous [5/5] verified
 #          get_conv_cwd/set_conv_cwd (a DIFFERENT commit). A green there says
 #          nothing about whether the freeze fix shipped — the probe must assert
@@ -165,20 +171,21 @@ else
   probe_fail=1
 fi
 
-# (b) RUNTIME — the on-loop blocking guard must have armed during THIS boot.
-#     Poll ${LOG} briefly: the line is emitted early in _serve, but give boot a
-#     moment in case health came up first.
+# (b) RUNTIME — the new _serve guard code must have run this boot. Match the
+#     shared "Loop blocking-guard" prefix so BOTH the default "OFF" line and the
+#     opt-in "armed" line count as proof the new path executed. The line is
+#     emitted early in _serve; poll briefly in case health came up first.
 guard_ok=0
 for i in $(seq 1 10); do
-  if grep -q "Loop blocking-guard armed" "${LOG}" 2>/dev/null; then guard_ok=1; break; fi
+  if grep -q "Loop blocking-guard" "${LOG}" 2>/dev/null; then guard_ok=1; break; fi
   sleep 1
 done
 if [ "${guard_ok}" = "1" ]; then
-  echo "✅ (b) GUARD LIVE: '$(grep -m1 "Loop blocking-guard armed" "${LOG}" | sed 's/^[^[]*//')'"
+  echo "✅ (b) NEW _serve CODE RAN: '$(grep -m1 "Loop blocking-guard" "${LOG}" | sed 's/^[^[]*//')'"
 else
-  echo "❌ (b) GUARD NOT ARMED: no 'Loop blocking-guard armed' line in ${LOG}."
-  echo "       The running process is NOT executing the new _serve guard code"
-  echo "       (or TOFU_LOOP_SLOW_CALLBACK_SECS=0 disabled it — check the env)."
+  echo "❌ (b) NEW _serve CODE DID NOT RUN: no 'Loop blocking-guard' line in ${LOG}."
+  echo "       The running process is NOT executing the new _serve code —"
+  echo "       git HEAD likely predates the fix, or the wrong file booted."
   probe_fail=1
 fi
 
@@ -187,5 +194,5 @@ if [ "${probe_fail}" = "1" ]; then
   echo "FATAL: the freeze fix is NOT fully live on :${PORT} (pid ${NEWPID}). See above."
   exit 5
 fi
-echo "✅ FIX LIVE: off-loop backfill code present AND blocking-guard armed on :${PORT} (pid ${NEWPID})."
+echo "✅ FIX LIVE: off-loop backfill code present AND new _serve guard path ran on :${PORT} (pid ${NEWPID})."
 echo "════════════════════════════════════════════════════════════════"

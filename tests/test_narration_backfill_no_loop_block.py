@@ -269,10 +269,19 @@ def test_loopwatch_emits_structured_stall_audit():
     assert 'top_frame=' in src
 
 
-def test_loop_blocking_guard_armed():
+def test_loop_blocking_guard_is_optin_and_rate_limited():
     src = _server_src()
+    # The sub-stall detector exists...
     assert 'slow_callback_duration' in src and 'set_debug(True)' in src, \
-        'the on-loop blocking guard (slow-callback detector) must be armed'
+        'the on-loop blocking guard (slow-callback detector) must be present'
+    # ...but it is DEFAULT OFF (opt-in) — set_debug is unsafe as a 24/7 default
+    # on this high-concurrency service (per-call_soon stack walk + log flood).
+    assert 'TOFU_LOOP_DEBUG_GUARD' in src, \
+        'the debug guard must be opt-in via TOFU_LOOP_DEBUG_GUARD, not always-on'
+    # ...and when enabled, its warnings are rate-limited so a burst cannot
+    # flood error.log (which would back-pressure the loop).
+    assert 'addFilter' in src and 'suppressed' in src, \
+        'the enabled guard must rate-limit the asyncio slow-callback warnings'
 
 
 def test_backfill_offloads_blocking_core_under_semaphore():

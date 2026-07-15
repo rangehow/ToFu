@@ -855,6 +855,83 @@ def _gitignored_excludes(src: Path) -> list[str]:
     return excludes
 
 
+def _untracked_root_excludes(src: Path) -> list[str]:
+    """Return tar ``--exclude=`` args for untracked, NON-gitignored root dirs.
+
+    ``_gitignored_excludes`` handles paths git IGNORES, and the hand-maintained
+    ``ALWAYS_EXCLUDE_*`` sets handle known product dirs. But a directory that is
+    BOTH untracked AND not gitignored falls through both — e.g. agent scratch a
+    code-exec run leaves at the repo root (``module1/``, ``module2/``), a stray
+    ``scratchpad/`` / ``fix-xr/``, a ``.pytest_cache/`` or ``*.local_bak.*``
+    backup. tar copies it verbatim, leaking non-product junk into the export
+    (and, for opensource, breaking the ruff gate on unformatted scratch Python).
+
+    We target ROOT-LEVEL DIRECTORIES only: ``git ls-files -o --directory``
+    collapses a fully-untracked directory to a single ``dir/`` entry, while
+    listing untracked files INSIDE a tracked dir (a new ``lib/foo.py``, a new
+    ``tests/test_*.py``) individually — those are legitimate new source and MUST
+    NOT be excluded. So we keep only depth-1 ``dir/`` entries and ignore every
+    file entry.
+
+    Each skipped dir is logged AND printed as a warning, so a genuinely-new
+    source directory the operator forgot to ``git add`` is surfaced loudly
+    rather than silently dropped.
+
+    Best-effort: returns ``[]`` if ``src`` is not a git repo or git is
+    unavailable. Used for internal/opensource exports only — personal mode is a
+    full self-use backup and keeps everything.
+
+    Args:
+        src: Source project root (the git work tree).
+
+    Returns:
+        A list of ``--exclude=./<dir>`` args, one per stray root directory.
+    """
+    if not _have_tool('git'):
+        logger.debug('git not on PATH; skipping untracked-root excludes')
+        return []
+    try:
+        proc = subprocess.run(
+            ['git', 'ls-files', '-z', '-o',
+             '--exclude-standard', '--directory'],
+            cwd=str(src), capture_output=True, text=True,
+        )
+    except Exception as e:
+        logger.warning('git ls-files for untracked-root excludes failed: %s', e)
+        return []
+    if proc.returncode != 0:
+        logger.debug('git ls-files -o rc=%s (src not a repo?); '
+                     'skipping untracked-root excludes: %.200s',
+                     proc.returncode, proc.stderr)
+        return []
+
+    excludes: list[str] = []
+    stray_dirs: list[str] = []
+    for raw in proc.stdout.split('\0'):
+        entry = raw.strip()
+        # Only fully-untracked DIRECTORIES (git appends a trailing '/'). File
+        # entries are untracked files inside tracked dirs — legit new source.
+        if not entry or not entry.endswith('/'):
+            continue
+        path = entry.rstrip('/')
+        # Root-level only: a nested collapsed dir means its parent is tracked,
+        # so it's a new source subtree, not a stray top-level scratch dir.
+        if '/' in path:
+            continue
+        stray_dirs.append(path)
+        excludes.append(f'--exclude=./{path}')
+
+    if stray_dirs:
+        listed = ', '.join(sorted(stray_dirs))
+        logger.warning('[Export] Skipping %d untracked, non-gitignored '
+                       'root dir(s): %s', len(stray_dirs), listed)
+        print(f"  {C_YELLOW}\u26a0 Skipping {len(stray_dirs)} untracked, "
+              f"non-gitignored root dir(s) (agent scratch?): {listed}{C_END}")
+        print(f"  {C_DIM}  \u2192 if any is real source, `git add` it before "
+              f"exporting (or `.gitignore` it if it's junk).{C_END}")
+    return excludes
+
+
 def _build_tar_excludes_for_mode(mode: str, dest: Path) -> tuple[list[str], list[str]]:
     """Build ``--exclude=`` args for the streaming tar copy, per mode.
 
@@ -913,6 +990,11 @@ def _build_tar_excludes_for_mode(mode: str, dest: Path) -> tuple[list[str], list
     # backup that keeps gitignored data (.env, data/, uploads/, .chatui/).
     if mode != 'personal':
         tar_excludes.extend(_gitignored_excludes(ROOT))
+        # Also skip untracked, NON-gitignored root dirs (agent scratch that
+        # neither git ignores nor the hand-maintained lists cover) — see
+        # _untracked_root_excludes. Prevents stray code-exec dirs (module1/,
+        # scratchpad/, …) leaking into the export and breaking the ruff gate.
+        tar_excludes.extend(_untracked_root_excludes(ROOT))
 
     # Preserve dest user data + git history across re-exports. Same set for
     # all modes — these dirs belong to the destination user, not source.

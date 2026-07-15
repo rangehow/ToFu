@@ -391,7 +391,11 @@ def upload_image():
                            e, exc_info=True)
             shrink_info = {'shrunk': False, 'reason': f'exc:{e}'}
 
-        filename = f"{int(time.time()*1000)}{ext}"
+        # Append a short random suffix so two images uploaded in the SAME
+        # millisecond (the frontend now fires parallel uploads) can't collide
+        # on one filename — a collision would overwrite the first file and
+        # leave BOTH message rows pointing at the same image.
+        filename = f"{int(time.time()*1000)}_{os.urandom(4).hex()}{ext}"
         filepath = os.path.join(UPLOAD_DIR, filename)
         try:
             with open(filepath, 'wb') as f:
@@ -448,7 +452,7 @@ def upload_image():
 
     # Preserve user-supplied filename stem but use the (possibly new) extension
     stem = os.path.splitext(file.filename)[0]
-    filename = f"{int(time.time()*1000)}_{stem}{new_ext}"
+    filename = f"{int(time.time()*1000)}_{os.urandom(4).hex()}_{stem}{new_ext}"
     filepath = os.path.join(UPLOAD_DIR, filename)
     try:
         with open(filepath, 'wb') as f:

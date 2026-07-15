@@ -635,9 +635,19 @@ async function cmdScreenshotTab(params) {
   }
 }
 
+// A desktop-class viewport width forced via CDP so full-page capture is
+// DECOUPLED from the user's real window size. If the user shrinks the window,
+// a responsive page reflows to a narrow/mobile layout (or skips rendering
+// off-viewport content); overriding device metrics to a stable large viewport
+// makes it re-render the full desktop layout before we capture. Height floor
+// gives lazy-loaded content a tall "viewport" so it triggers on reflow.
+const FULL_PAGE_OVERRIDE_MIN_WIDTH_PX  = 1280;
+const FULL_PAGE_OVERRIDE_MIN_HEIGHT_PX = 800;
+
 async function _screenshotFullPageCDP(tabId, format, quality) {
   const target = { tabId };
   let attached = false;
+  let overridden = false;
   try {
     await chrome.debugger.attach(target, '1.3');
     attached = true;
@@ -645,6 +655,42 @@ async function _screenshotFullPageCDP(tabId, format, quality) {
     // Page domain must be enabled before layout/screenshot commands
     await chrome.debugger.sendCommand(target, 'Page.enable');
 
+    // Read the content size FIRST so we can size the forced viewport to it.
+    const pre = await chrome.debugger.sendCommand(target, 'Page.getLayoutMetrics');
+    const preCs = pre.cssContentSize || pre.contentSize || { width: 0, height: 0 };
+
+    // Force a stable desktop viewport that is never smaller than the content —
+    // independent of how small the user shrank the real window. deviceScaleFactor:1
+    // and mobile:false keep it a plain desktop render at native resolution.
+    const overrideWidth = Math.min(
+      Math.max(Math.ceil(preCs.width), FULL_PAGE_OVERRIDE_MIN_WIDTH_PX),
+      FULL_PAGE_MAX_HEIGHT_PX,
+    );
+    const overrideHeight = Math.min(
+      Math.max(Math.ceil(preCs.height), FULL_PAGE_OVERRIDE_MIN_HEIGHT_PX),
+      FULL_PAGE_MAX_HEIGHT_PX,
+    );
+    try {
+      await chrome.debugger.sendCommand(target, 'Emulation.setDeviceMetricsOverride', {
+        width: overrideWidth,
+        height: overrideHeight,
+        deviceScaleFactor: 1,
+        mobile: false,
+        screenWidth: overrideWidth,
+        screenHeight: overrideHeight,
+      });
+      overridden = true;
+      // Give the page a beat to reflow to the forced viewport (responsive
+      // breakpoints, lazy-load observers) before we measure + capture.
+      await new Promise(r => setTimeout(r, 350));
+    } catch (errOverride) {
+      // Non-fatal: if the override is rejected we still capture, just without
+      // the window-size decoupling (better a viewport-derived shot than none).
+      console.warn('[Screenshot] setDeviceMetricsOverride failed, capturing without override:', errOverride && errOverride.message);
+      overridden = false;
+    }
+
+    // Re-measure AFTER the reflow so the clip matches the forced layout.
     const metrics = await chrome.debugger.sendCommand(target, 'Page.getLayoutMetrics');
     // Prefer CSS content size (Chromium 90+); fall back to legacy contentSize.
     const cs = metrics.cssContentSize || metrics.contentSize || { width: 0, height: 0 };
@@ -674,6 +720,17 @@ async function _screenshotFullPageCDP(tabId, format, quality) {
       truncatedHeight: height > FULL_PAGE_MAX_HEIGHT_PX,
     };
   } finally {
+    // ALWAYS clear the override before detaching, on every path (success,
+    // capture error, or empty-shot throw) — leaving it set would corrupt the
+    // user's real page layout. clearDeviceMetricsOverride needs the debugger
+    // session, so it must run before detach.
+    if (overridden) {
+      try {
+        await chrome.debugger.sendCommand(target, 'Emulation.clearDeviceMetricsOverride');
+      } catch (errClear) {
+        console.warn('[Screenshot] clearDeviceMetricsOverride failed:', errClear && errClear.message);
+      }
+    }
     if (attached) {
       try { await chrome.debugger.detach(target); } catch (_) {}
     }

@@ -207,13 +207,16 @@ def fill_form_sequential(
             field_type = field.get('type', 'type')
 
             if field_type == 'type':
-                send_browser_command('click_element', {
-                    'tabId': tab_id, 'selector': selector, 'scrollTo': True
-                }, timeout=2)
-                time.sleep(0.1)
-                send_browser_command('keyboard_input', {
-                    'tabId': tab_id, 'keys': value, 'selector': selector
-                }, timeout=2)
+                # Use type_text (not keyboard_input): it clears the field FIRST
+                # (clearFirst defaults True) and sets the value via the native
+                # input setter, so changing an existing value (e.g. origin
+                # A→B) REPLACES it instead of appending "AB". keyboard_input
+                # only appends keystrokes and would concatenate onto the old
+                # value.
+                send_browser_command('type_text', {
+                    'tabId': tab_id, 'selector': selector, 'text': value,
+                    'clearFirst': True,
+                }, timeout=3)
             elif field_type == 'click':
                 send_browser_command('click_element', {
                     'tabId': tab_id, 'selector': selector, 'scrollTo': True
@@ -311,8 +314,15 @@ ADVANCED_BROWSER_TOOL_FILL_FORM = {
     "function": {
         "name": "browser_fill_form",
         "description": (
-            "Fill form fields sequentially and optionally submit. "
+            "Fill MULTIPLE form fields in ONE call, then optionally submit. "
             "Supports text input, clicks, and select dropdowns.\n"
+            "PREFER THIS whenever you need to fill or change 2+ fields (e.g. a "
+            "booking form's origin AND destination AND date). Do NOT loop "
+            "browser_click + browser_keyboard field-by-field — that is slower "
+            "and error-prone. One browser_fill_form call handles the whole set.\n"
+            "For type='type' fields the existing value is CLEARED first, so "
+            "changing a pre-filled field (origin A→B) replaces it cleanly "
+            "instead of concatenating.\n"
             "Fields format: [{selector, value, type}, ...] where type is 'type', 'click', or 'select'.\n"
             "Automatically handles focusing, typing delays, and dropdown interactions."
         ),

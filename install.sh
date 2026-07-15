@@ -1661,6 +1661,81 @@ fi
 #  If we chose to use PG, try `pg_ctl start` once under a timeout so
 #  config-file errors surface NOW instead of during first /api call.
 # ═══════════════════════════════════════════════════════════════
+# ── PG recovery helpers (borrowed/user-owned env with a broken PostgreSQL) ──
+# Step 7 already (re)installs postgresql into the env, but a corrupt shared dep
+# (icu / libpq) can survive a plain remove+install because conda deems it
+# "satisfied" and never re-fetches it — so initdb/pg_ctl can still hang or fail
+# on a borrowed env (owned_by_tofu_install=false). When the bootstrap/smoke-test
+# below fails on such an env we try ONE --force-reinstall of the PG stack (which
+# re-fetches even satisfied builds) and retry; if it STILL fails the reliable
+# remedy is a clean Tofu-owned env, which _pg_broken_env_advice prints. We only
+# touch PG packages here (never the base conda), consistent with Step 7 which
+# already installs postgresql into the same env.
+_pg_force_reinstall() {
+    warn "Recovery: force-reinstalling PostgreSQL stack in env '${ENV_NAME}' (postgresql=${PG_INSTALLED_MAJOR} + libpq + icu)"
+    conda install -n "$ENV_NAME" -c conda-forge --override-channels -y \
+        --force-reinstall "postgresql=${PG_INSTALLED_MAJOR}" libpq icu 'psycopg2>=2.9'
+}
+
+_pg_broken_env_advice() {
+    warn ""
+    if [[ "$CONDA_OWNED_BY_US" -eq 0 ]]; then
+        warn "The conda env '${ENV_NAME}' is a pre-existing / borrowed conda"
+        warn "(owned_by_tofu_install=false) and its PostgreSQL build appears broken"
+        warn "(initdb/pg_ctl failed even after a force-reinstall)."
+        warn "For a reliable PG cluster, re-run with a clean Tofu-owned env:"
+        warn "    bash install.sh --force-sibling-conda --reset-env"
+        warn "or repair PG in the current env yourself:"
+        warn "    conda install -n ${ENV_NAME} -c conda-forge --force-reinstall postgresql=${PG_INSTALLED_MAJOR} libpq icu"
+    fi
+    warn ""
+}
+
+# Delegated runtime bootstrap (initdb + start-verify) — factored into a function
+# so the borrowed-env recovery path can retry it after a force-reinstall. Reads
+# the global $_PG_BOOTSTRAP_TIMEOUT wrapper set by the caller. Returns the
+# delegate's rc (124/137 = outer hard-timeout fired).
+_run_pg_bootstrap_delegate() {
+    local _rc=0
+    (cd "$INSTALL_DIR" && $_PG_BOOTSTRAP_TIMEOUT "$ENV_PYTHON" - <<'PYEOF'
+import sys
+from lib.runtime_paths import data_root
+from lib.database.db_paths import resolve_pgdata_dir
+from lib.database._core import (
+    BASE_DIR, PG_HOST, PG_PORT, PG_USER, PG_PASSWORD, PG_DBNAME)
+from lib.database._bootstrap import _ensure_pg_running, _stop_local_pg_quietly
+pgdata = resolve_pgdata_dir(data_root())
+res = _ensure_pg_running(pgdata, BASE_DIR, PG_HOST, PG_PORT,
+                         PG_USER, PG_PASSWORD, PG_DBNAME)
+if not res:
+    print('ensure_pg_running returned no result', file=sys.stderr)
+    sys.exit(1)
+# Leave the cluster the way the server expects to find it on first boot.
+try:
+    _stop_local_pg_quietly(pgdata)
+except Exception as e:
+    print(f'(non-fatal) stop after bootstrap failed: {e}', file=sys.stderr)
+print(f"OK pgdata={pgdata} port={res.get('PG_PORT')}")
+PYEOF
+    ) || _rc=$?
+    return $_rc
+}
+
+# pg_ctl smoke-test of an EXISTING cluster — factored so the recovery path can
+# retry it after a force-reinstall. Returns 0 if PG started (then stopped) OK.
+_run_pg_ctl_smoke() {
+    local _pgctl="${CONDA_BASE}/envs/${ENV_NAME}/bin/pg_ctl"
+    local _logdir="${INSTALL_DIR}/logs"
+    mkdir -p "$_logdir"
+    "$_pgctl" -D "$PGDATA_DIR" stop -m fast >/dev/null 2>&1 || true
+    rm -f "${PGDATA_DIR}/postmaster.pid" 2>/dev/null || true
+    if "$_pgctl" -D "$PGDATA_DIR" -l "${_logdir}/postgresql.log" -w -t 15 start >/dev/null 2>&1; then
+        "$_pgctl" -D "$PGDATA_DIR" stop -m fast >/dev/null 2>&1 || true
+        return 0
+    fi
+    return 1
+}
+
 if [[ -z "$DB_BACKEND_CHOICE" && -n "$PG_INSTALLED_MAJOR" && "$PGDATA_SPLIT" == "1" && ! -d "$PGDATA_DIR" ]]; then
     # ── Split engaged + resolved cluster not yet created ──
     # The bash pg_ctl smoke-test below can only START an EXISTING cluster; it
@@ -1687,55 +1762,48 @@ if [[ -z "$DB_BACKEND_CHOICE" && -n "$PG_INSTALLED_MAJOR" && "$PGDATA_SPLIT" == 
         _PG_BOOTSTRAP_TIMEOUT="gtimeout -k 10 300"
     fi
     _pg_boot_rc=0
-    (cd "$INSTALL_DIR" && $_PG_BOOTSTRAP_TIMEOUT "$ENV_PYTHON" - <<'PYEOF'
-import sys
-from lib.runtime_paths import data_root
-from lib.database.db_paths import resolve_pgdata_dir
-from lib.database._core import (
-    BASE_DIR, PG_HOST, PG_PORT, PG_USER, PG_PASSWORD, PG_DBNAME)
-from lib.database._bootstrap import _ensure_pg_running, _stop_local_pg_quietly
-pgdata = resolve_pgdata_dir(data_root())
-res = _ensure_pg_running(pgdata, BASE_DIR, PG_HOST, PG_PORT,
-                         PG_USER, PG_PASSWORD, PG_DBNAME)
-if not res:
-    print('ensure_pg_running returned no result', file=sys.stderr)
-    sys.exit(1)
-# Leave the cluster the way the server expects to find it on first boot.
-try:
-    _stop_local_pg_quietly(pgdata)
-except Exception as e:
-    print(f'(non-fatal) stop after bootstrap failed: {e}', file=sys.stderr)
-print(f"OK pgdata={pgdata} port={res.get('PG_PORT')}")
-PYEOF
-    ) || _pg_boot_rc=$?
+    _run_pg_bootstrap_delegate || _pg_boot_rc=$?
+    # If a borrowed env's corrupt PG stack made the delegate fail (but NOT a
+    # FUSE-wedge hard-timeout — force-reinstall can't fix a hung mount), try one
+    # force-reinstall of the PG stack and retry the delegate once.
+    if [[ "$_pg_boot_rc" -ne 0 && "$_pg_boot_rc" -ne 124 && "$_pg_boot_rc" -ne 137 ]]; then
+        warn "Runtime PG bootstrap failed (rc=${_pg_boot_rc}) \u2014 attempting PG stack recovery"
+        if _pg_force_reinstall; then
+            _pg_boot_rc=0
+            _run_pg_bootstrap_delegate || _pg_boot_rc=$?
+        else
+            warn "PG force-reinstall itself failed"
+        fi
+    fi
     if [[ "$_pg_boot_rc" -eq 0 ]]; then
         ok "PostgreSQL cluster initialized + start-verified at ${PGDATA_DIR}"
     else
         if [[ "$_pg_boot_rc" -eq 124 || "$_pg_boot_rc" -eq 137 ]]; then
             warn "Runtime PG bootstrap exceeded the 300s hard timeout (possible wedged FUSE mount) \u2014 aborted"
         else
-            warn "Runtime PG bootstrap failed \u2014 see ${INSTALL_DIR}/logs/postgresql.log"
+            warn "Runtime PG bootstrap failed even after force-reinstall \u2014 see ${INSTALL_DIR}/logs/postgresql.log"
+            _pg_broken_env_advice
         fi
         warn "Pinning TOFU_DB_BACKEND=sqlite to avoid scheduler retry storms"
         DB_BACKEND_CHOICE="sqlite"
     fi
 elif [[ -z "$DB_BACKEND_CHOICE" && -n "$PG_INSTALLED_MAJOR" && -d "$PGDATA_DIR" ]]; then
     step "Smoke-testing PostgreSQL startup"
-    _PG_CTL="${CONDA_BASE}/envs/${ENV_NAME}/bin/pg_ctl"
-    _PG_LOG_DIR="${INSTALL_DIR}/logs"
-    mkdir -p "$_PG_LOG_DIR"
-    # Stop any stale process first (best-effort), then try to start.
-    "$_PG_CTL" -D "$PGDATA_DIR" stop -m fast >/dev/null 2>&1 || true
-    # Remove stale pidfile left by killed/crashed prior runs
-    rm -f "${PGDATA_DIR}/postmaster.pid" 2>/dev/null || true
-    if "$_PG_CTL" -D "$PGDATA_DIR" -l "${_PG_LOG_DIR}/postgresql.log" -w -t 15 start >/dev/null 2>&1; then
+    if _run_pg_ctl_smoke; then
         ok "PostgreSQL started successfully (smoke test)"
-        "$_PG_CTL" -D "$PGDATA_DIR" stop -m fast >/dev/null 2>&1 || true
     else
-        warn "PG failed to start during smoke test \u2014 see ${_PG_LOG_DIR}/postgresql.log"
-        warn "Pinning TOFU_DB_BACKEND=sqlite to avoid scheduler retry storms"
-        warn "Re-run with --reinit-pgdata after moving ${PGDATA_DIR} aside if you want fresh PG"
-        DB_BACKEND_CHOICE="sqlite"
+        # A borrowed env's corrupt PG binary can fail to start an otherwise-valid
+        # cluster. Try one force-reinstall of the PG stack and re-smoke-test.
+        warn "PG failed to start during smoke test \u2014 attempting PG stack recovery"
+        if _pg_force_reinstall && _run_pg_ctl_smoke; then
+            ok "PostgreSQL started successfully after force-reinstall"
+        else
+            warn "PG still fails to start after force-reinstall \u2014 see ${INSTALL_DIR}/logs/postgresql.log"
+            _pg_broken_env_advice
+            warn "Pinning TOFU_DB_BACKEND=sqlite to avoid scheduler retry storms"
+            warn "Re-run with --reinit-pgdata after moving ${PGDATA_DIR} aside if you want fresh PG"
+            DB_BACKEND_CHOICE="sqlite"
+        fi
     fi
 fi
 

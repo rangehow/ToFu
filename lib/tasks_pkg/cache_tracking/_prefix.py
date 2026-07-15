@@ -8,6 +8,7 @@ both ``_cache_states`` and the TTL-latch table.
 
 from __future__ import annotations
 
+import sys as _sys
 import time
 from typing import Any
 
@@ -21,6 +22,24 @@ from lib.tasks_pkg.cache_tracking._detect import EDITABLE_TAIL_COUNT
 from lib.tasks_pkg.cache_tracking._ttl import _ttl_latch
 
 logger = get_logger(__name__)
+
+
+def _resolve_prefix_count(conv_id: str) -> int:
+    """Return the cache-prefix boundary, resolving ``get_cache_prefix_count``
+    through the package facade at CALL time.
+
+    Both this and ``get_cache_prefix_count`` live in ``_prefix``, so a bare
+    call would bind the submodule-local function and a facade patch of
+    ``lib.tasks_pkg.cache_tracking.get_cache_prefix_count`` (how callers and
+    tests stub the boundary) could not intercept it — the same facade-vs-local
+    drift fixed for ``_roi._audit_log``. Resolving through the facade keeps the
+    boundary honestly interceptable (falls back to the local binding if the
+    facade isn't importable).
+    """
+    fac = _sys.modules.get('lib.tasks_pkg.cache_tracking')
+    fn = getattr(fac, 'get_cache_prefix_count', get_cache_prefix_count) if fac \
+        else get_cache_prefix_count
+    return fn(conv_id)
 
 
 def sort_tool_results(messages: list, conv_id: str = '') -> None:
@@ -60,7 +79,7 @@ def sort_tool_results(messages: list, conv_id: str = '') -> None:
     _prefix_count = 0
     if conv_id:
         try:
-            _prefix_count = get_cache_prefix_count(conv_id)
+            _prefix_count = _resolve_prefix_count(conv_id)
         except Exception as e:
             logger.debug('[CacheTrack] sort_tool_results prefix lookup failed: %s', e)
 

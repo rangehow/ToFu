@@ -504,7 +504,21 @@ def execute_tool_pipeline(
     # ══════════════════════════════════════════
     _round_results_for_budget: list[tuple[str, str, str]] = []  # (tc_id, content, tool_name)
     for tc, fn_name, tc_id, fn_args, rn, round_entry, _pe in parsed_tcs:
-        tool_content, is_search = tool_results.get(tc_id, (f'Unknown tool: {fn_name}', False))
+        if tc_id in tool_results:
+            tool_content, is_search = tool_results[tc_id]
+        else:
+            # SHOULD-NOT-HAPPEN: every dispatch branch above is expected to
+            # populate tool_results[tc_id]. If a tc_id reaches here unfilled,
+            # a dispatch branch silently skipped writing its result — the model
+            # would get a misleading "Unknown tool" with no trace of the real
+            # cause. Log it so the silent-skip is diagnosable (§2 zero-silent-failure).
+            logger.warning(
+                '[Task %s] conv=%s tool result missing for tool=%s tc_id=%s '
+                'round=%d — no dispatch branch populated it; returning '
+                'Unknown-tool fallback to LLM (should not happen)',
+                tid, task.get('convId', '') if task else '',
+                fn_name, tc_id, round_num)
+            tool_content, is_search = (f'Unknown tool: {fn_name}', False)
         if is_search:
             all_search_results_text.append(tool_content)
 

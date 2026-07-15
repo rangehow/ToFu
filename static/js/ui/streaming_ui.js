@@ -186,6 +186,19 @@ function updateStreamingUI(msg) {
     const _thinkLbl = msg.content ? t('stream.thinking.done') : t('stream.thinking.active');
     if (labelEl && labelEl.textContent !== _thinkLbl)
       labelEl.textContent = _thinkLbl;
+  } else if (thinkZone.firstChild) {
+    /* ★ FIX (stale thinking pinned below the tool panel across rounds):
+     * clear the top-level thinking zone the instant the live buffer's thinking
+     * goes empty — SYMMETRIC with the content zone's clear-on-empty below
+     * (contentZone.innerHTML = ""). Without this, a round that streamed
+     * reasoning before its tool calls leaves its .thinking-block orphaned in
+     * this zone: delta_reset zeroes assistantMsg.thinking (the prose is moved
+     * onto the round's per-round .seg-thinking inside the tool panel), so every
+     * subsequent tool-only round skips the `if (msg.thinking)` write and the
+     * old block persists — visually stuck under the tool panel for the rest of
+     * the turn. Backend stays authoritative: finalize's committedMessage
+     * projection re-renders the bubble regardless. */
+    thinkZone.innerHTML = "";
   }
   /* ★ FIX: Skip content DOM update while user has active selection to prevent flicker/deselect */
   if (_hasSelectionInStreaming()) {

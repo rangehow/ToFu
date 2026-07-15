@@ -25,6 +25,21 @@ _CRITICAL_COLUMNS = {
         'blocked_until', 'block_count', 'block_reason',
         'wait_paths', 'dispatch_target', 'write_set',
     ),
+    # Scheduler predicate-condition paradigm: these columns are named directly
+    # in the create_timer / create_task / _record_poll INSERTs, so an existing
+    # DB missing them throws on every timer/proactive create until re-migrated.
+    'timer_watchers': (
+        'condition_kind', 'condition_command', 'condition_regex',
+    ),
+    'scheduled_tasks': (
+        'condition_kind', 'condition_command', 'condition_regex',
+    ),
+    'timer_poll_log': (
+        'tier', 'predicate_matched', 'llm_agreed',
+    ),
+    'proactive_poll_log': (
+        'tier', 'predicate_matched', 'llm_agreed',
+    ),
 }
 
 

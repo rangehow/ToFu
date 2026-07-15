@@ -428,6 +428,41 @@ def _loop_stall_decide(age, threshold, already_dumped):
     return (True, True)                  # stalled and not yet captured → dump
 
 
+def _extract_loop_top_frame(frame, project_root=None):
+    """Pure: given the event-loop thread's current frame, return a one-line
+    ``file:line in func`` locator for the STALL culprit.
+
+    Walks OUTWARD from the innermost frame and returns the first frame whose
+    file lives under *project_root* (our own code) — i.e. the deepest
+    application frame, skipping stdlib/site-packages leaf frames like
+    ``ssl.read`` so the audit line names ``segment_backfill.py:257`` rather
+    than a generic C-level socket read. Falls back to the innermost frame when
+    none match (all-stdlib stall). Returns ``''`` when *frame* is None.
+
+    Kept pure + arg-injected (no globals) so a unit test can build a synthetic
+    frame chain and assert the culprit is picked without a real stall.
+    """
+    if frame is None:
+        return ''
+    if project_root is None:
+        project_root = os.path.dirname(os.path.abspath(__file__))
+    innermost = None
+    f = frame
+    while f is not None:
+        code = f.f_code
+        fname = code.co_filename
+        if innermost is None:
+            innermost = '%s:%d in %s' % (fname, f.f_lineno, code.co_name)
+        try:
+            in_project = os.path.abspath(fname).startswith(project_root + os.sep)
+        except Exception:
+            in_project = False
+        if in_project and 'site-packages' not in fname:
+            return '%s:%d in %s' % (fname, f.f_lineno, code.co_name)
+        f = f.f_back
+    return innermost or ''
+
+
 def _should_arm_ctimer(threshold, sink):
     """Pure gate for the GIL-INDEPENDENT capture path.
 
@@ -2360,6 +2395,31 @@ if __name__ == '__main__':
                               exc_info=exc if exc else False)
         loop.set_exception_handler(_loop_exception_handler)
 
+        # ── Event-loop BLOCKING guard (sub-stall early warning) ──
+        # The stall watchdog above only fires once the loop is wedged past
+        # _stall_threshold (5s). This complementary guard catches a SINGLE
+        # on-loop step (a coroutine/callback ``_run``) that hogs the loop
+        # longer than TOFU_LOOP_SLOW_CALLBACK_SECS — BEFORE it snowballs into a
+        # full stall — and names the exact callable. asyncio's debug mode emits
+        # "Executing <...> took N seconds" via the 'asyncio' logger whenever a
+        # step exceeds loop.slow_callback_duration; we lower that threshold and
+        # route the logger through our sink so it lands in error.log with the
+        # culprit. Enabled by default at 1.0s; set to 0 to disable (debug mode
+        # adds minor per-step overhead but no blocking).
+        try:
+            _slow_cb = float(os.environ.get('TOFU_LOOP_SLOW_CALLBACK_SECS', '') or '1.0')
+        except (ValueError, TypeError) as _e:
+            _server_log.debug('[Server] bad TOFU_LOOP_SLOW_CALLBACK_SECS, using 1.0: %s', _e)
+            _slow_cb = 1.0
+        if _slow_cb > 0:
+            loop.slow_callback_duration = _slow_cb
+            loop.set_debug(True)
+            # Surface asyncio's own "took N seconds" WARNING through error.log.
+            logging.getLogger('asyncio').setLevel(logging.WARNING)
+            _server_log.info('[Server] Loop blocking-guard armed '
+                             '(slow_callback_duration=%.1fs) — a single on-loop '
+                             'step over this logs "Executing … took N seconds"', _slow_cb)
+
         # ── Size the default executor ──
         # Every sync route handler runs in this loop's default executor via
         # Quart's run_sync. Python's default ThreadPoolExecutor is capped at
@@ -2528,9 +2588,30 @@ if __name__ == '__main__':
                     age, _stall_threshold, already_dumped)
                 if not should_dump:
                     continue
+                # Structured, grep-able culprit line so the NEXT stall needs no
+                # stack-diving: pull the event-loop thread's current frame and
+                # name the deepest application frame (skips stdlib leaves like
+                # ssl.read → names segment_backfill.py:257). audit_log is
+                # thread-safe; best-effort — a failure must not skip the dump.
+                _top_frame = ''
+                try:
+                    import sys as _sys
+                    _loop_tid = threading.main_thread().ident
+                    _frames = _sys._current_frames()
+                    _top_frame = _extract_loop_top_frame(_frames.get(_loop_tid))
+                except Exception as _tf_err:
+                    _server_log.debug('[LoopWatch] top-frame extract failed: %s', _tf_err)
+                try:
+                    from lib.log import audit_log as _audit_log
+                    _audit_log('event_loop_stall', duration=round(age, 1),
+                               threshold=_stall_threshold, top_frame=_top_frame,
+                               pid=os.getpid())
+                except Exception as _al_err:
+                    _server_log.debug('[LoopWatch] audit_log failed: %s', _al_err)
                 _server_log.error(
-                    '[LoopWatch] event loop STALLED ~%.1fs (threshold=%.1fs) — '
-                    'dumping all-thread stacks to faulthandler sinks', age, _stall_threshold)
+                    '[LoopWatch] event loop STALLED ~%.1fs (threshold=%.1fs) at %s — '
+                    'dumping all-thread stacks to faulthandler sinks',
+                    age, _stall_threshold, _top_frame or '?')
                 for _sink in (_fault_shm_log, _fault_log):
                     if _sink is None:
                         continue

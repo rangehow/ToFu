@@ -123,6 +123,24 @@ def test_page_up_before_seq_slice():
     assert changed is False and cleaned_full is None
 
 
+def test_page_up_slice_is_also_trimmed():
+    """A scrolled-in EARLIER page must be heavy-field-trimmed too — else page-up
+    re-imports the megabytes the tail open just avoided. Its trimmed messages
+    carry the _trimmed marker so the frontend can (re-)arm hydration for them."""
+    fn = _slice()
+    msgs = _heavy_msgs(120)                       # 120 heavy assistant turns
+    r = _fake_row(msgs)
+    # Page up from seq 60 → the 60 messages [0, 60): all heavy → all trimmed.
+    served, _, _, _ = fn('bigconv', r, window=60, before_seq=60)
+    assert len(served['messages']) == 60
+    assert served['firstLoadedSeq'] == 0
+    for m in served['messages']:
+        for f in _HEAVY:
+            assert f not in m, f'heavy field {f!r} leaked into a page-up message'
+        assert m.get('_trimmed') is True          # marker present for re-hydration
+    assert served['trimmed'] is True
+
+
 def test_short_conv_returns_all_no_hasmore():
     fn = _slice()
     msgs = _big_messages(5)
@@ -493,6 +511,91 @@ global.conversations = conversations;
   process.exit(0);
 })();
 """
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  Frontend: page-up re-arms _trimmed AND hydrate refills a scroll-in message
+# ═══════════════════════════════════════════════════════════════════════
+
+_SCROLLUP_HYDRATE_HARNESS = r"""
+const fs = require('fs');
+global.window = global;
+global.activeConvId = 'c1';
+global.renderChat = () => {};   // no DOM
+global.document = { getElementById: () => null };  // loadEarlier reads #chatInner
+eval(fs.readFileSync(process.argv[2], 'utf8'));  // conv_window.js (argv[2]: argv[1] is this harness)
+
+const out = [];
+function check(name, cond){ out.push((cond?'PASS ':'FAIL ')+name); }
+
+// Conv opened windowed: initial tail was ALL LIGHT (no _trimmed) so the flag is
+// false. Then the user scrolls up and an EARLIER page arrives trimmed.
+const conv = {
+  id: 'c1', _windowed: true, _trimmed: false, _hasMoreEarlier: true,
+  _firstLoadedSeq: 2,
+  messages: [ { role:'user', content:'q', _msgId:'u2', timestamp:3 } ],  // light tail
+};
+global.conversations = [conv];
+
+// before_seq page: 2 earlier messages, one heavy assistant TRIMMED.
+const EARLIER = {
+  windowed:true, trimmed:true, firstLoadedSeq:0, hasMore:false,
+  messages: [
+    { role:'user', content:'older-q', _msgId:'u0', timestamp:1 },
+    { role:'assistant', content:'older-a', _msgId:'a0', timestamp:2,
+      _trimmed:true, _trimmedToolRoundCount:3 },
+  ],
+};
+// Full (window=0) hydrate source: a0 carries the heavy toolRounds.
+const FULL = {
+  windowed:false, messages: [
+    { role:'user', content:'older-q', _msgId:'u0', timestamp:1 },
+    { role:'assistant', content:'older-a', _msgId:'a0', timestamp:2,
+      toolRounds:[{roundNum:0,status:'done',big:'X'}], segments:[{type:'tool'}] },
+    { role:'user', content:'q', _msgId:'u2', timestamp:3 },
+  ],
+};
+global.Api = { conversations: {
+  get: async (id, opts) => {
+    const q = (opts && opts.query) || {};
+    if (String(q.window) === '0') return FULL;       // hydrate full
+    if (q.before_seq !== undefined) return EARLIER;  // page-up
+    return null;
+  },
+}};
+
+(async () => {
+  // 1) scroll-up loads the earlier trimmed page.
+  const n = await loadEarlierMessages('c1');
+  check('page_up_prepended', n === 2 && conv.messages.length === 3);
+  // 2) the scroll-in trimmed message RE-ARMS conv._trimmed (was false).
+  check('scrollup_rearms_trimmed', conv._trimmed === true);
+  // 3) expanding that scrolled-in message hydrates: heavy fields refilled by _msgId.
+  const ok = await hydrateFullConversation('c1');
+  const a0 = conv.messages.find(m => m._msgId === 'a0');
+  check('hydrate_refilled_scrollin_msg',
+        ok === true && Array.isArray(a0.toolRounds) && a0.toolRounds.length === 1
+        && !a0._trimmed);
+  console.log(out.join('\n'));
+  process.exit(0);
+})();
+"""
+
+
+@pytest.mark.skipif(not _node_available(), reason='node not installed')
+def test_scrollup_rearms_trimmed_and_hydrates(tmp_path):
+    """Edge case: after a windowed open, scroll-up prepends an EARLIER trimmed
+    page; that must re-arm conv._trimmed so expanding a scrolled-in message's
+    tool timeline still hydrates its heavy fields (by _msgId)."""
+    harness = tmp_path / '_scrollup_harness.js'
+    harness.write_text(_SCROLLUP_HYDRATE_HARNESS, encoding='utf-8')
+    proc = subprocess.run(
+        ['node', str(harness), os.path.join(JS_DIR, 'conv_window.js')],
+        capture_output=True, text=True, timeout=60)
+    out = proc.stdout.strip()
+    assert proc.returncode == 0, f'node failed: {proc.stderr}\n{out}'
+    fails = [ln for ln in out.splitlines() if ln.startswith('FAIL')]
+    assert not fails, 'scroll-up/hydrate failures:\n' + out
 
 
 if __name__ == '__main__':

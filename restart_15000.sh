@@ -189,10 +189,58 @@ else
   probe_fail=1
 fi
 
+# (c) WINDOWED FIRST-OPEN — the byte-bounded conversation-open fix (commit
+#     0c03be2) must be live: a large conversation served over ?window=N must
+#     come back WINDOWED + heavy-field-TRIMMED and its body must be a fraction
+#     of the multi-MB full blob (the reported freeze-victim mrbu5j9azz8gi8 was
+#     5.78 MB → ~237 KB). This proves THIS fix shipped, not just the freeze fix.
+#     Resilient: if the probe conv is absent on this deployment (404 / not
+#     found), SKIP rather than fail (the endpoint contract is still checked by
+#     tests/test_conv_windowed_blob_slice.py); only FAIL if it exists but is
+#     served UNwindowed or over-size.
+PROBE_CONV="${TOFU_WINDOW_PROBE_CONV:-mrbu5j9azz8gi8}"
+PROBE_URL="${BASE}/api/v1/conversations/${PROBE_CONV}?window=60"
+PROBE_JSON="$(curl -s --max-time 20 "${PROBE_URL}" 2>/dev/null)"
+if [ -z "${PROBE_JSON}" ] || printf '%s' "${PROBE_JSON}" | grep -qiE '"error"|not.?found'; then
+  echo "⏭️  (c) WINDOWED-OPEN probe SKIPPED: conv '${PROBE_CONV}' not present on this"
+  echo "       deployment (override with TOFU_WINDOW_PROBE_CONV=<id>). Endpoint"
+  echo "       contract still covered by tests/test_conv_windowed_blob_slice.py."
+else
+  # Parse windowed/trimmed flags + byte size with the server interpreter (no jq dep).
+  PROBE_VERDICT="$("${PY}" - "$PROBE_URL" <<'PYEOF' 2>/dev/null
+import sys, json, urllib.request
+url = sys.argv[1]
+try:
+    raw = urllib.request.urlopen(url, timeout=20).read()
+except Exception as e:
+    print("ERR fetch %s" % e); sys.exit(0)
+n = len(raw)
+try:
+    d = json.loads(raw)
+except Exception as e:
+    print("ERR json %s" % e); sys.exit(0)
+w = d.get('windowed') is True
+t = d.get('trimmed') is True
+under = n < 1024 * 1024
+print("bytes=%d windowed=%s trimmed=%s under1MB=%s served=%d total=%s"
+      % (n, w, t, under, len(d.get('messages') or []), d.get('totalCount')))
+print("VERDICT_OK" if (w and t and under) else "VERDICT_BAD")
+PYEOF
+)"
+  echo "      ${PROBE_VERDICT}" | grep -v VERDICT_
+  if printf '%s' "${PROBE_VERDICT}" | grep -q "VERDICT_OK"; then
+    echo "✅ (c) WINDOWED-OPEN LIVE: '${PROBE_CONV}' served windowed+trimmed, body < 1 MB."
+  else
+    echo "❌ (c) WINDOWED-OPEN NOT LIVE: '${PROBE_CONV}' served UNwindowed or over 1 MB."
+    echo "       get_conv is shipping the full blob — commit 0c03be2 did not load."
+    probe_fail=1
+  fi
+fi
+
 if [ "${probe_fail}" = "1" ]; then
   echo "────────────────────────────────────────────────────────────────"
-  echo "FATAL: the freeze fix is NOT fully live on :${PORT} (pid ${NEWPID}). See above."
+  echo "FATAL: a fix is NOT fully live on :${PORT} (pid ${NEWPID}). See above."
   exit 5
 fi
-echo "✅ FIX LIVE: off-loop backfill code present AND new _serve guard path ran on :${PORT} (pid ${NEWPID})."
+echo "✅ FIX LIVE: off-loop backfill + new _serve guard + windowed byte-bounded open on :${PORT} (pid ${NEWPID})."
 echo "════════════════════════════════════════════════════════════════"

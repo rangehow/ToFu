@@ -147,6 +147,13 @@ async function loadEarlierMessages(convId) {
     // advance the cursor + hasMore from this page's envelope
     if (typeof data.firstLoadedSeq === 'number') conv._firstLoadedSeq = data.firstLoadedSeq;
     conv._hasMoreEarlier = !!data.hasMore;
+    /* Earlier pages are heavy-field-trimmed too (server before_seq branch). If
+     *   any scrolled-in message is trimmed, (re-)arm conv._trimmed so expanding
+     *   its tool timeline can still hydrate — even AFTER an earlier
+     *   hydrateFullConversation() cleared the flag for the initial tail. */
+    if (data.trimmed === true || earlier.some((m) => m && m._trimmed)) {
+      conv._trimmed = true;
+    }
 
     if (typeof activeConvId !== 'undefined' && activeConvId === convId
         && typeof renderChat === 'function') {

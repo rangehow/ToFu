@@ -198,10 +198,15 @@ def fill_form_sequential(
     """Fill form fields sequentially and optionally submit."""
     start_time = time.time()
     fields_filled = 0
+    field_results: list[dict[str, Any]] = []
     try:
         for i, field in enumerate(fields):
             if time.time() - start_time > timeout:
-                return {'success': False, 'fields_filled': fields_filled, 'error': 'Timeout'}
+                field_results.append({'index': i, 'selector': field.get('selector'),
+                                      'ok': False, 'error': 'Timeout before field'})
+                return {'success': False, 'fields_filled': fields_filled,
+                        'fields_failed': len(fields) - fields_filled,
+                        'field_results': field_results, 'error': 'Timeout'}
             selector = field.get('selector')
             value = field.get('value')
             field_type = field.get('type', 'type')
@@ -213,14 +218,26 @@ def fill_form_sequential(
                 # A→B) REPLACES it instead of appending "AB". keyboard_input
                 # only appends keystrokes and would concatenate onto the old
                 # value.
-                send_browser_command('type_text', {
+                _res, _err = send_browser_command('type_text', {
                     'tabId': tab_id, 'selector': selector, 'text': value,
                     'clearFirst': True,
                 }, timeout=3)
+                if _err:
+                    field_results.append({'index': i, 'selector': selector, 'type': 'type',
+                                          'ok': False, 'error': f'type_text failed: {_err}'})
+                else:
+                    fields_filled += 1
+                    field_results.append({'index': i, 'selector': selector, 'type': 'type', 'ok': True})
             elif field_type == 'click':
-                send_browser_command('click_element', {
+                _res, _err = send_browser_command('click_element', {
                     'tabId': tab_id, 'selector': selector, 'scrollTo': True
                 }, timeout=2)
+                if _err:
+                    field_results.append({'index': i, 'selector': selector, 'type': 'click',
+                                          'ok': False, 'error': f'click failed: {_err}'})
+                else:
+                    fields_filled += 1
+                    field_results.append({'index': i, 'selector': selector, 'type': 'click', 'ok': True})
             elif field_type == 'select':
                 send_browser_command('click_element', {
                     'tabId': tab_id, 'selector': selector, 'scrollTo': True
@@ -230,29 +247,68 @@ def fill_form_sequential(
                     'tabId': tab_id, 'viewport': True, 'maxElements': 100
                 }, timeout=2)
                 elements = (result or {}).get('elements', []) if isinstance(result, dict) else []
+                matched = None
                 for el in elements:
                     if value.lower() in el.get('text', '').lower():
-                        send_browser_command('click_element', {
-                            'tabId': tab_id, 'selector': el['selector'], 'scrollTo': False
-                        }, timeout=2)
+                        matched = el
                         break
-            fields_filled += 1
+                if matched is None:
+                    # Silent no-match is the real failure mode: the option never
+                    # got clicked but the loop used to march on and report
+                    # success. Report it explicitly with candidate options so
+                    # the model can retry with a corrected value.
+                    candidates = [e.get('text', '').strip() for e in elements
+                                  if e.get('text', '').strip()][:20]
+                    field_results.append({'index': i, 'selector': selector, 'type': 'select',
+                                          'ok': False,
+                                          'error': f"Option matching '{value}' not found",
+                                          'available_options': candidates})
+                    logger.warning("fill_form_sequential: select option '%s' not matched "
+                                   "for selector=%s (%d candidates)", value, selector, len(candidates))
+                else:
+                    _res, _err = send_browser_command('click_element', {
+                        'tabId': tab_id, 'selector': matched['selector'], 'scrollTo': False
+                    }, timeout=2)
+                    if _err:
+                        field_results.append({'index': i, 'selector': selector, 'type': 'select',
+                                              'ok': False, 'error': f'select click failed: {_err}'})
+                    else:
+                        fields_filled += 1
+                        field_results.append({'index': i, 'selector': selector, 'type': 'select',
+                                              'ok': True, 'matched': matched.get('text', '').strip()})
+            else:
+                field_results.append({'index': i, 'selector': selector, 'ok': False,
+                                      'error': f"Unknown field type '{field_type}'"})
             time.sleep(field_delay)
 
+        fields_failed = len(fields) - fields_filled
+        all_ok = fields_failed == 0
+
         submitted = False
-        if submit_selector:
+        if submit_selector and all_ok:
+            # Never submit a form with failed/missing fields — that would post a
+            # half-filled booking. Skip submit and report the failures instead.
             send_browser_command('click_element', {
                 'tabId': tab_id, 'selector': submit_selector, 'scrollTo': True
             }, timeout=2)
             submitted = True
             time.sleep(0.5)
 
-        return {'success': True, 'fields_filled': fields_filled, 'submitted': submitted,
-                'elapsed_ms': round((time.time() - start_time) * 1000, 2)}
+        result_out = {'success': all_ok, 'fields_filled': fields_filled,
+                      'fields_failed': fields_failed, 'field_results': field_results,
+                      'submitted': submitted,
+                      'elapsed_ms': round((time.time() - start_time) * 1000, 2)}
+        if not all_ok:
+            result_out['error'] = (f'{fields_failed} of {len(fields)} field(s) failed; '
+                                   f'submit skipped' if submit_selector else
+                                   f'{fields_failed} of {len(fields)} field(s) failed')
+        return result_out
     except Exception as e:
         logger.warning('fill_form_sequential failed after %d/%d fields filled: %s',
                        fields_filled, len(fields), e, exc_info=True)
-        return {'success': False, 'fields_filled': fields_filled, 'submitted': False,
+        return {'success': False, 'fields_filled': fields_filled,
+                'fields_failed': len(fields) - fields_filled,
+                'field_results': field_results, 'submitted': False,
                 'error': f"Exception: {str(e)}",
                 'elapsed_ms': round((time.time() - start_time) * 1000, 2)}
 

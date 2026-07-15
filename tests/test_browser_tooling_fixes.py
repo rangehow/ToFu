@@ -154,6 +154,133 @@ def test_click_and_keyboard_point_back_to_fill_form():
         'keyboard must reverse-point to fill_form (it appends)')
 
 
+# ── 2b. screenshot waits for layout stability (no fixed sleep) ──────
+
+def test_screenshot_waits_for_content_stability_not_fixed_sleep():
+    src = _src('browser_extension/background.js')
+    body = _extract_fn_body(src, 'async function _screenshotFullPageCDP(')
+    # After the override we must converge on layout stability, not sleep a
+    # fixed 350ms (which truncates async result lists like flights/tickets).
+    assert '_waitForContentStable(target)' in body, (
+        'must wait for content stability after forcing the viewport')
+    assert 'setTimeout(r, 350)' not in body, (
+        'the brittle fixed 350ms sleep must be gone from the capture path')
+
+
+def test_content_stability_polls_size_and_readystate():
+    src = _src('browser_extension/background.js')
+    body = _extract_fn_body(src, 'async function _waitForContentStable(')
+    # Convergence = content size unchanged for N consecutive polls AND
+    # readyState complete, capped by a max-wait budget.
+    assert 'getLayoutMetrics' in body, 'must poll layout metrics'
+    assert 'readyState' in body, 'must gate on document.readyState complete'
+    assert 'STABILITY_MAX_WAIT_MS' in body, 'must have a bounded wait budget'
+    assert re.search(r'stableCount\s*>=\s*STABILITY_STABLE_READS', body), (
+        'must require consecutive stable reads before declaring stable')
+
+
+# ── 2c. fill_form select failure surfaces (not silent) ──────────────
+
+def _install_fake_bc(monkeypatch, script):
+    """Install a fake send_browser_command driven by a per-command script.
+
+    `script` maps command name -> (result, error). get_interactive_elements
+    may map to a callable returning (result, error) so tests control options.
+    Records every call for assertions.
+    """
+    import lib.browser.advanced as adv
+    calls = []
+
+    def fake(cmd, params, timeout=None):
+        calls.append((cmd, params))
+        entry = script.get(cmd, ({'clicked': True}, None))
+        if callable(entry):
+            return entry(params)
+        return entry
+
+    monkeypatch.setattr(adv, 'send_browser_command', fake)
+    return calls
+
+
+def test_fill_form_select_no_match_reports_failure_with_candidates(monkeypatch):
+    from lib.browser.advanced import fill_form_sequential
+    options = {'elements': [
+        {'text': 'Economy', 'selector': '#opt1'},
+        {'text': 'Business', 'selector': '#opt2'},
+    ]}
+    calls = _install_fake_bc(monkeypatch, {
+        'get_interactive_elements': (options, None),
+        'click_element': ({'clicked': True}, None),
+        'type_text': ({'typed': True}, None),
+    })
+    out = fill_form_sequential(1, [
+        {'selector': '#from', 'value': 'PEK', 'type': 'type'},
+        {'selector': '#cabin', 'value': 'First Class', 'type': 'select'},  # no match
+    ], field_delay=0)
+
+    assert out['success'] is False, 'a missing select option must fail the whole call'
+    assert out['fields_filled'] == 1
+    assert out['fields_failed'] == 1
+    sel = [r for r in out['field_results'] if r.get('type') == 'select'][0]
+    assert sel['ok'] is False
+    assert 'available_options' in sel and 'Economy' in sel['available_options']
+    # The unmatched option must NOT have been clicked.
+    clicked_selectors = [p.get('selector') for c, p in calls if c == 'click_element']
+    assert '#opt1' not in clicked_selectors and '#opt2' not in clicked_selectors
+
+
+def test_fill_form_select_match_succeeds(monkeypatch):
+    from lib.browser.advanced import fill_form_sequential
+    options = {'elements': [{'text': 'Business', 'selector': '#opt2'}]}
+    _install_fake_bc(monkeypatch, {
+        'get_interactive_elements': (options, None),
+        'click_element': ({'clicked': True}, None),
+        'type_text': ({'typed': True}, None),
+    })
+    out = fill_form_sequential(1, [
+        {'selector': '#cabin', 'value': 'business', 'type': 'select'},
+    ], field_delay=0)
+    assert out['success'] is True
+    assert out['fields_failed'] == 0
+    sel = out['field_results'][0]
+    assert sel['ok'] is True and sel['matched'] == 'Business'
+
+
+def test_fill_form_skips_submit_when_a_field_failed(monkeypatch):
+    from lib.browser.advanced import fill_form_sequential
+    calls = _install_fake_bc(monkeypatch, {
+        'get_interactive_elements': ({'elements': []}, None),  # select finds nothing
+        'click_element': ({'clicked': True}, None),
+        'type_text': ({'typed': True}, None),
+    })
+    out = fill_form_sequential(1, [
+        {'selector': '#cabin', 'value': 'X', 'type': 'select'},  # will fail
+    ], submit_selector='#go', field_delay=0)
+    assert out['success'] is False
+    assert out['submitted'] is False, 'must not submit a half-filled form'
+    submit_clicks = [p for c, p in calls if c == 'click_element' and p.get('selector') == '#go']
+    assert submit_clicks == [], 'submit button must not be clicked when a field failed'
+
+
+def test_fill_form_select_silent_success_neuter_bites(monkeypatch):
+    # Sanity that the assertion is load-bearing: if fill_form regressed to the
+    # old silent behavior (no match → still success), the failure test above
+    # would flip. Here we assert the CURRENT code makes success depend on
+    # fields_failed == 0 by checking a mixed batch.
+    from lib.browser.advanced import fill_form_sequential
+    _install_fake_bc(monkeypatch, {
+        'get_interactive_elements': ({'elements': [{'text': 'Y', 'selector': '#y'}]}, None),
+        'click_element': ({'clicked': True}, None),
+        'type_text': ({'typed': True}, None),
+    })
+    out = fill_form_sequential(1, [
+        {'selector': '#a', 'value': 'ok', 'type': 'type'},
+        {'selector': '#b', 'value': 'ZZZ', 'type': 'select'},  # no match
+    ], field_delay=0)
+    assert out['success'] is False and out['fields_filled'] == 1, (
+        'overall success must be gated on every field succeeding')
+
+
 # ── 3. search-first URL guidance ────────────────────────────────────
 
 def test_create_tab_and_navigate_tell_model_to_search_first():

@@ -1671,7 +1671,23 @@ if [[ -z "$DB_BACKEND_CHOICE" && -n "$PG_INSTALLED_MAJOR" && "$PGDATA_SPLIT" == 
     # error surfaces NOW instead of at the first API call. This is exactly what
     # the runtime does on first boot; doing it here just moves it earlier.
     step "Bootstrapping PostgreSQL at ${PGDATA_DIR} (initdb via runtime)"
-    if (cd "$INSTALL_DIR" && "$ENV_PYTHON" - <<'PYEOF'
+    # Portable hard-timeout wrapper for the delegated bootstrap: GNU `timeout`,
+    # macOS `gtimeout`, else none. Mirrors the npm-install wrapper above (~L1428).
+    # The runtime bootstrap it delegates to is ALREADY internally bounded
+    # (initdb 60s / pg_ctl 30s / createdb 15s ≈ 2min worst case), so this outer
+    # ceiling is pure defense-in-depth: subprocess's SIGKILL cannot reap a
+    # D-state (uninterruptible-sleep) process wedged on a hung FUSE mount, and
+    # without an outer wrapper such a process would hang the whole installer.
+    # `-k` escalates TERM→KILL; 300s is well above the internal budget so a
+    # slow-but-progressing initdb is never killed prematurely.
+    _PG_BOOTSTRAP_TIMEOUT=""
+    if command -v timeout >/dev/null 2>&1; then
+        _PG_BOOTSTRAP_TIMEOUT="timeout -k 10 300"
+    elif command -v gtimeout >/dev/null 2>&1; then
+        _PG_BOOTSTRAP_TIMEOUT="gtimeout -k 10 300"
+    fi
+    _pg_boot_rc=0
+    (cd "$INSTALL_DIR" && $_PG_BOOTSTRAP_TIMEOUT "$ENV_PYTHON" - <<'PYEOF'
 import sys
 from lib.runtime_paths import data_root
 from lib.database.db_paths import resolve_pgdata_dir
@@ -1691,10 +1707,15 @@ except Exception as e:
     print(f'(non-fatal) stop after bootstrap failed: {e}', file=sys.stderr)
 print(f"OK pgdata={pgdata} port={res.get('PG_PORT')}")
 PYEOF
-    ); then
+    ) || _pg_boot_rc=$?
+    if [[ "$_pg_boot_rc" -eq 0 ]]; then
         ok "PostgreSQL cluster initialized + start-verified at ${PGDATA_DIR}"
     else
-        warn "Runtime PG bootstrap failed \u2014 see ${INSTALL_DIR}/logs/postgresql.log"
+        if [[ "$_pg_boot_rc" -eq 124 || "$_pg_boot_rc" -eq 137 ]]; then
+            warn "Runtime PG bootstrap exceeded the 300s hard timeout (possible wedged FUSE mount) \u2014 aborted"
+        else
+            warn "Runtime PG bootstrap failed \u2014 see ${INSTALL_DIR}/logs/postgresql.log"
+        fi
         warn "Pinning TOFU_DB_BACKEND=sqlite to avoid scheduler retry storms"
         DB_BACKEND_CHOICE="sqlite"
     fi

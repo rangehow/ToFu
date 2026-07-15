@@ -17500,14 +17500,14 @@ html:not([data-theme="tofu"]) .tofu-pet{display:none}
   .turn-nav{display:none!important}
 
   /* --- Modals: full screen on mobile --- */
-  .modal{padding:16px;padding-bottom:calc(16px + env(safe-area-inset-bottom,0px));width:100%;max-width:100%;max-height:100dvh;height:100dvh;border-radius:0;border:none}
+  .modal{padding:16px;padding-bottom:calc(16px + env(safe-area-inset-bottom,0px));width:100%;max-width:100%;max-height:var(--vh100,100dvh);height:var(--vh100,100dvh);border-radius:0;border:none}
   .modal-overlay.open{align-items:stretch}
   .modal h3{font-size:16px;margin-bottom:16px}
   .modal .modal-actions{flex-wrap:wrap}
   .modal .btn{padding:12px 20px;font-size:14px;flex:1;min-width:0}
 
   /* Settings panel — stack tabs on top for mobile */
-  .settings-panel{width:100%;max-width:100%;max-height:100dvh;height:100dvh;box-shadow:none;border-width:0;padding-bottom:env(safe-area-inset-bottom,0px)}
+  .settings-panel{width:100%;max-width:100%;max-height:var(--vh100,100dvh);height:var(--vh100,100dvh);box-shadow:none;border-width:0;padding-bottom:env(safe-area-inset-bottom,0px)}
   .settings-body{flex-direction:column}
   .settings-tabs{flex-direction:row;width:100%;min-width:0;border-right:none;border-bottom:3px solid #1a1814;padding:8px;overflow-x:auto;overflow-y:hidden}
   .settings-tabs::before{display:none}
@@ -17532,7 +17532,7 @@ html:not([data-theme="tofu"]) .tofu-pet{display:none}
 
   /* Project modal — tabbed single-pane layout (one full-height pane at a time) */
   .project-modal{max-width:100%}
-  .project-modal.pm-workbench{width:100%;max-width:100%;height:100dvh;max-height:none}
+  .project-modal.pm-workbench{width:100%;max-width:100%;height:var(--vh100,100dvh);max-height:none}
   .pm-header{padding:14px 16px 12px}
 
   /* Segmented Browse / Workspace tabs */

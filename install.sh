@@ -1562,9 +1562,55 @@ fi
 #    - mismatch without --reinit-pgdata → pin TOFU_DB_BACKEND=sqlite (data preserved).
 #    - pgdata exists but no PG installed locally → pin TOFU_DB_BACKEND=sqlite.
 # ═══════════════════════════════════════════════════════════════
-step "Validating data/pgdata/ (version compatibility)"
+step "Validating PostgreSQL data directory (version compatibility)"
 
-PGDATA_DIR="${INSTALL_DIR}/data/pgdata"
+# Resolve the pgdata path the SAME way the runtime does (lib/database/db_paths.py):
+# on a network/FUSE mount the LIVE cluster is redirected to local disk
+# ($TOFU_DB_LOCAL_ROOT/pgdata, default /tmp/tofu/pgdata); on a vanilla local box
+# it stays at <data>/pgdata (byte-identical). Querying the resolver — instead of
+# hardcoding data/pgdata — is what keeps install.sh and server.py from EVER
+# disagreeing on where the cluster lives (the exact bug that made PG silently
+# fall back to SQLite). Run under TOFU_DB_BACKEND=sqlite so merely importing the
+# DB layer to ASK the question can never auto-start PG as a side-effect.
+PGDATA_SPLIT="0"
+PGDATA_LEGACY="${INSTALL_DIR}/data/pgdata"
+_PGDATA_INFO="$(cd "$INSTALL_DIR" && TOFU_DB_BACKEND=sqlite "$ENV_PYTHON" - <<'PYEOF' 2>/dev/null
+import sys
+try:
+    from lib.runtime_paths import data_root
+    from lib.database.db_paths import (
+        resolve_pgdata_dir, legacy_pgdata_dir, local_data_split_enabled)
+    dr = data_root()
+    print(resolve_pgdata_dir(dr))
+    print(legacy_pgdata_dir(dr))
+    print('1' if local_data_split_enabled(dr) else '0')
+except Exception:
+    sys.exit(1)
+PYEOF
+)"
+if [[ -n "$_PGDATA_INFO" ]]; then
+    PGDATA_DIR="$(sed -n '1p' <<<"$_PGDATA_INFO")"
+    PGDATA_LEGACY="$(sed -n '2p' <<<"$_PGDATA_INFO")"
+    PGDATA_SPLIT="$(sed -n '3p' <<<"$_PGDATA_INFO")"
+else
+    # Resolver query failed (unexpected post-install) — degrade to the historical
+    # in-tree path so the rest of the step still runs.
+    warn "Could not query the runtime pgdata resolver \u2014 falling back to data/pgdata"
+    PGDATA_DIR="${INSTALL_DIR}/data/pgdata"
+fi
+
+if [[ "$PGDATA_DIR" != "$PGDATA_LEGACY" ]]; then
+    info "Runtime pgdata resolves to ${PGDATA_DIR}"
+    info "(local-disk split engaged; the legacy in-tree path would be ${PGDATA_LEGACY})"
+fi
+# /tmp is a common but VOLATILE default for the local-disk split — warn so the
+# user doesn't assume the cluster lives on persistent storage.
+if [[ "$PGDATA_DIR" == /tmp/* ]]; then
+    warn "Resolved pgdata is under /tmp (${PGDATA_DIR})."
+    warn "If this /tmp is cleared on reboot, the live PostgreSQL cluster will NOT persist."
+    warn "Set TOFU_DB_LOCAL_ROOT to a persistent local volume to keep DB data across reboots."
+fi
+
 PGDATA_MAJOR=""
 if [[ -f "${PGDATA_DIR}/PG_VERSION" ]]; then
     PGDATA_MAJOR="$(tr -d '[:space:]' < "${PGDATA_DIR}/PG_VERSION" | cut -d. -f1)"
@@ -1615,7 +1661,44 @@ fi
 #  If we chose to use PG, try `pg_ctl start` once under a timeout so
 #  config-file errors surface NOW instead of during first /api call.
 # ═══════════════════════════════════════════════════════════════
-if [[ -z "$DB_BACKEND_CHOICE" && -n "$PG_INSTALLED_MAJOR" && -d "$PGDATA_DIR" ]]; then
+if [[ -z "$DB_BACKEND_CHOICE" && -n "$PG_INSTALLED_MAJOR" && "$PGDATA_SPLIT" == "1" && ! -d "$PGDATA_DIR" ]]; then
+    # ── Split engaged + resolved cluster not yet created ──
+    # The bash pg_ctl smoke-test below can only START an EXISTING cluster; it
+    # cannot fulfil the "bootstrap will initdb on first server.py run" promise
+    # for the local-disk path. So DELEGATE the real initdb + start-verify to the
+    # runtime's own bootstrap (_ensure_pg_running) against the RESOLVED path —
+    # install.sh and server.py then run the identical code, so a config-file
+    # error surfaces NOW instead of at the first API call. This is exactly what
+    # the runtime does on first boot; doing it here just moves it earlier.
+    step "Bootstrapping PostgreSQL at ${PGDATA_DIR} (initdb via runtime)"
+    if (cd "$INSTALL_DIR" && "$ENV_PYTHON" - <<'PYEOF'
+import sys
+from lib.runtime_paths import data_root
+from lib.database.db_paths import resolve_pgdata_dir
+from lib.database._core import (
+    BASE_DIR, PG_HOST, PG_PORT, PG_USER, PG_PASSWORD, PG_DBNAME)
+from lib.database._bootstrap import _ensure_pg_running, _stop_local_pg_quietly
+pgdata = resolve_pgdata_dir(data_root())
+res = _ensure_pg_running(pgdata, BASE_DIR, PG_HOST, PG_PORT,
+                         PG_USER, PG_PASSWORD, PG_DBNAME)
+if not res:
+    print('ensure_pg_running returned no result', file=sys.stderr)
+    sys.exit(1)
+# Leave the cluster the way the server expects to find it on first boot.
+try:
+    _stop_local_pg_quietly(pgdata)
+except Exception as e:
+    print(f'(non-fatal) stop after bootstrap failed: {e}', file=sys.stderr)
+print(f"OK pgdata={pgdata} port={res.get('PG_PORT')}")
+PYEOF
+    ); then
+        ok "PostgreSQL cluster initialized + start-verified at ${PGDATA_DIR}"
+    else
+        warn "Runtime PG bootstrap failed \u2014 see ${INSTALL_DIR}/logs/postgresql.log"
+        warn "Pinning TOFU_DB_BACKEND=sqlite to avoid scheduler retry storms"
+        DB_BACKEND_CHOICE="sqlite"
+    fi
+elif [[ -z "$DB_BACKEND_CHOICE" && -n "$PG_INSTALLED_MAJOR" && -d "$PGDATA_DIR" ]]; then
     step "Smoke-testing PostgreSQL startup"
     _PG_CTL="${CONDA_BASE}/envs/${ENV_NAME}/bin/pg_ctl"
     _PG_LOG_DIR="${INSTALL_DIR}/logs"

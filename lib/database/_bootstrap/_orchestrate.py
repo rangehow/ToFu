@@ -64,6 +64,24 @@ def _bootstrap_pg(pgdata, base_dir, pg_host, pg_port, pg_user, pg_password, pg_d
     os.makedirs(os.path.dirname(pgdata), exist_ok=True)
     os.makedirs(os.path.join(base_dir, 'logs'), exist_ok=True)
 
+    # initdb refuses a non-empty target dir. Earlier steps (the flock probe and
+    # the cross-host startup lock) place tofu-owned marker files INSIDE pgdata
+    # (.tofu_pg_start.lock, .tofu_flock_probe) before we get here, which would
+    # make initdb fail with "directory not empty". Strip ONLY our own .tofu*
+    # artifacts (never anything else — a genuinely populated cluster never
+    # reaches this function because the caller gates on pgdata_is_populated).
+    if os.path.isdir(pgdata):
+        try:
+            for _name in os.listdir(pgdata):
+                if _name.startswith('.tofu'):
+                    _p = os.path.join(pgdata, _name)
+                    try:
+                        os.remove(_p)
+                    except OSError as _e:
+                        logger.debug('[DB] Could not remove pre-initdb artifact %s: %s', _p, _e)
+        except OSError as _e:
+            logger.debug('[DB] Could not scan pgdata for pre-initdb artifacts: %s', _e)
+
     # initdb
     initdb_bin = _find_pg_binary('initdb')
     try:
@@ -464,8 +482,22 @@ def _ensure_pg_running(pgdata, base_dir, pg_host, pg_port, pg_user, pg_password,
     if not _verify_flock_support_or_warn(pgdata):
         return None
 
-    if not os.path.isdir(pgdata):
-        logger.info('[DB] No pgdata directory — bootstrapping new PostgreSQL instance')
+    # Gate initdb on whether pgdata is a POPULATED cluster (has PG_VERSION /
+    # postgresql.conf), NOT on mere directory existence. Earlier steps in this
+    # function create the directory as a side-effect of placing their lock/probe
+    # files — _verify_flock_support_or_warn()'s _probe_flock_enforced and
+    # _try_acquire_startup_lock both os.makedirs(pgdata). On a first-ever boot of
+    # a RESOLVED path that didn't exist yet (the local-disk split's
+    # $TOFU_DB_LOCAL_ROOT/pgdata is the common case), that left an EMPTY dir here,
+    # so `not os.path.isdir(pgdata)` was False → initdb was skipped → we fell
+    # through to `pg_ctl start` on an empty dir → "is not a database cluster
+    # directory" → silent SQLite fallback (the exact reported bug). initdb
+    # accepts an existing EMPTY dir, and _bootstrap_pg strips any leftover tofu
+    # lock/probe artifacts first, so bootstrapping here is safe and idempotent.
+    from lib.database.db_paths import pgdata_is_populated as _pgdata_populated
+    if not _pgdata_populated(pgdata):
+        logger.info('[DB] pgdata %s is not an initialized cluster — '
+                    'bootstrapping new PostgreSQL instance', pgdata)
         result = _bootstrap_pg(pgdata, base_dir, pg_host, pg_port, pg_user, pg_password, pg_dbname)
         if not result:
             logger.error('[DB] Bootstrap failed — refusing to connect to '

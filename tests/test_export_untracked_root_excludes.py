@@ -6,7 +6,9 @@ Why this exists
 ``export.py`` decides what to copy via three layers:
   1. ``_gitignored_excludes`` — everything git IGNORES.
   2. hand-maintained ``ALWAYS_EXCLUDE_*`` sets — known product dirs.
-  3. ``_untracked_root_excludes`` — the gap this test guards.
+  3. ``_untracked_root_dirs`` / ``_untracked_root_excludes`` — the gap this
+     test guards. Both the real tar-copy path AND the ``--dry-run`` preview
+     walk consult the same set, so preview == reality.
 
 A directory that is BOTH untracked AND not gitignored (a code-exec run's
 ``module1/`` / ``module2/`` at the repo root, a stray ``scratchpad/``, a
@@ -88,6 +90,37 @@ def test_stray_root_dirs_excluded_source_kept(tmp_path):
     assert not any('ignored_junk' in e for e in excludes)
 
 
+def test_pure_scan_returns_names_only(tmp_path):
+    """The pure query both paths share: names only, no ./ prefix / trailing /."""
+    export = pytest.importorskip('export', reason='export.py not shipped')
+    repo = _make_repo(tmp_path)
+    strays = export._untracked_root_dirs(repo)
+    assert strays == {'module1', 'scratchpad'}
+    # new source inside a tracked dir and gitignored dirs are NOT in the set
+    assert 'lib' not in strays and 'ignored_junk' not in strays
+
+
+def test_dry_run_preview_matches_real_run(tmp_path, monkeypatch, capsys):
+    """--dry-run preview must report stray root dirs as EXCLUDED, not "will
+    copy" — otherwise the pre-flight lies about what the real tar copy drops."""
+    export = pytest.importorskip('export', reason='export.py not shipped')
+    repo = _make_repo(tmp_path)
+    # The dry-run walk enumerates the module-level ROOT; point it at our repo.
+    monkeypatch.setattr(export, 'ROOT', repo)
+    dest = tmp_path / 'out'
+
+    export.export_project('opensource', dest, dry_run=True, push=False)
+    out = capsys.readouterr().out
+
+    # stray dirs and their contents are NOT previewed as "would copy"
+    assert 'module1/a.py' not in out
+    assert 'scratchpad/n.txt' not in out
+    # they ARE attributed to the untracked-root exclusion reason
+    assert 'untracked non-gitignored root dir' in out
+    # genuine tracked/new source IS still previewed as copied
+    assert 'lib/core.py' in out or 'lib/new_feature.py' in out
+
+
 def test_neuter_guard_has_teeth(tmp_path):
     """If the stray dirs weren't created, the function must return nothing for
     them — proving the assertion tracks real git state, not a constant."""
@@ -124,6 +157,7 @@ def main():
     import tempfile
     from pathlib import Path
     for fn in (test_stray_root_dirs_excluded_source_kept,
+               test_pure_scan_returns_names_only,
                test_neuter_guard_has_teeth,
                test_non_git_dir_is_best_effort_empty):
         try:

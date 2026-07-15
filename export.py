@@ -855,8 +855,8 @@ def _gitignored_excludes(src: Path) -> list[str]:
     return excludes
 
 
-def _untracked_root_excludes(src: Path) -> list[str]:
-    """Return tar ``--exclude=`` args for untracked, NON-gitignored root dirs.
+def _untracked_root_dirs(src: Path) -> set[str]:
+    """Return the names of untracked, NON-gitignored ROOT directories.
 
     ``_gitignored_excludes`` handles paths git IGNORES, and the hand-maintained
     ``ALWAYS_EXCLUDE_*`` sets handle known product dirs. But a directory that is
@@ -873,11 +873,13 @@ def _untracked_root_excludes(src: Path) -> list[str]:
     NOT be excluded. So we keep only depth-1 ``dir/`` entries and ignore every
     file entry.
 
-    Each skipped dir is logged AND printed as a warning, so a genuinely-new
-    source directory the operator forgot to ``git add`` is surfaced loudly
-    rather than silently dropped.
+    Pure query (no printing / no side effects) so BOTH the real tar-copy path
+    (via ``_untracked_root_excludes``) and the ``--dry-run`` preview walk can
+    consult the SAME set — otherwise the preview would list ``module1/`` etc. as
+    "will copy" while the real run drops them, and an operator trusting the
+    pre-flight gets bitten at release time.
 
-    Best-effort: returns ``[]`` if ``src`` is not a git repo or git is
+    Best-effort: returns an empty set if ``src`` is not a git repo or git is
     unavailable. Used for internal/opensource exports only — personal mode is a
     full self-use backup and keeps everything.
 
@@ -885,11 +887,11 @@ def _untracked_root_excludes(src: Path) -> list[str]:
         src: Source project root (the git work tree).
 
     Returns:
-        A list of ``--exclude=./<dir>`` args, one per stray root directory.
+        A set of root directory names (no ``./`` prefix, no trailing ``/``).
     """
     if not _have_tool('git'):
-        logger.debug('git not on PATH; skipping untracked-root excludes')
-        return []
+        logger.debug('git not on PATH; skipping untracked-root scan')
+        return set()
     try:
         proc = subprocess.run(
             ['git', 'ls-files', '-z', '-o',
@@ -897,16 +899,15 @@ def _untracked_root_excludes(src: Path) -> list[str]:
             cwd=str(src), capture_output=True, text=True,
         )
     except Exception as e:
-        logger.warning('git ls-files for untracked-root excludes failed: %s', e)
-        return []
+        logger.warning('git ls-files for untracked-root scan failed: %s', e)
+        return set()
     if proc.returncode != 0:
         logger.debug('git ls-files -o rc=%s (src not a repo?); '
-                     'skipping untracked-root excludes: %.200s',
+                     'skipping untracked-root scan: %.200s',
                      proc.returncode, proc.stderr)
-        return []
+        return set()
 
-    excludes: list[str] = []
-    stray_dirs: list[str] = []
+    stray_dirs: set[str] = set()
     for raw in proc.stdout.split('\0'):
         entry = raw.strip()
         # Only fully-untracked DIRECTORIES (git appends a trailing '/'). File
@@ -918,9 +919,19 @@ def _untracked_root_excludes(src: Path) -> list[str]:
         # so it's a new source subtree, not a stray top-level scratch dir.
         if '/' in path:
             continue
-        stray_dirs.append(path)
-        excludes.append(f'--exclude=./{path}')
+        stray_dirs.add(path)
+    return stray_dirs
 
+
+def _untracked_root_excludes(src: Path) -> list[str]:
+    """Build tar ``--exclude=./<dir>`` args for the stray root dirs.
+
+    Thin wrapper over :func:`_untracked_root_dirs` that formats each name as a
+    tar exclude AND surfaces the set loudly (log + terminal warning), so a
+    genuinely-new source directory the operator forgot to ``git add`` is not
+    silently dropped from the real copy.
+    """
+    stray_dirs = _untracked_root_dirs(src)
     if stray_dirs:
         listed = ', '.join(sorted(stray_dirs))
         logger.warning('[Export] Skipping %d untracked, non-gitignored '
@@ -929,7 +940,7 @@ def _untracked_root_excludes(src: Path) -> list[str]:
               f"non-gitignored root dir(s) (agent scratch?): {listed}{C_END}")
         print(f"  {C_DIM}  \u2192 if any is real source, `git add` it before "
               f"exporting (or `.gitignore` it if it's junk).{C_END}")
-    return excludes
+    return [f'--exclude=./{d}' for d in sorted(stray_dirs)]
 
 
 def _build_tar_excludes_for_mode(mode: str, dest: Path) -> tuple[list[str], list[str]]:
@@ -2401,20 +2412,37 @@ def export_project(mode: str, dest: Path, dry_run: bool = False,
 
     excluded_log = []
 
+    # Mirror the real tar-copy path: internal/opensource also skip untracked,
+    # non-gitignored ROOT dirs (agent scratch). ``_should_exclude`` is a pure
+    # per-file predicate with no git knowledge, so consult the same set here —
+    # otherwise the preview would list ``module1/`` etc. as "will copy" while
+    # the real run drops them. Computed once (one git call) before the walk.
+    _stray_root_dirs: set[str] = (
+        set() if mode == 'personal' else _untracked_root_dirs(ROOT))
+
     for dirpath, dirnames, filenames in os.walk(ROOT):
         # Compute relative path
         rel_dir = os.path.relpath(dirpath, ROOT)
         if rel_dir == '.':
             rel_dir = ''
 
-        # Pre-filter directories (modifying dirnames in-place skips subtrees)
-        dirnames[:] = [
-            d for d in sorted(dirnames)
-            if not _should_exclude(
-                os.path.join(rel_dir, d) if rel_dir else d,
-                d, mode
-            )
-        ]
+        # Pre-filter directories (modifying dirnames in-place skips subtrees).
+        # At the root, also prune stray untracked dirs and log them so the
+        # dry-run's exclude count matches what the real copy actually drops.
+        kept = []
+        for d in sorted(dirnames):
+            if not rel_dir and d in _stray_root_dirs:
+                stats['excluded'] += 1
+                reason = 'untracked non-gitignored root dir'
+                stats['excluded_reasons'][reason] = \
+                    stats['excluded_reasons'].get(reason, 0) + 1
+                excluded_log.append((d, f'{reason}: {d}'))
+                continue
+            if _should_exclude(
+                    os.path.join(rel_dir, d) if rel_dir else d, d, mode):
+                continue
+            kept.append(d)
+        dirnames[:] = kept
 
         for filename in sorted(filenames):
             relpath = os.path.join(rel_dir, filename) if rel_dir else filename

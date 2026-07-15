@@ -125,6 +125,14 @@ function updateSendButton() {
       const s = activeStreams.get(activeConvId);
       if (s) {
         console.log(`[stopBtn] Aborting main stream — conv=${activeConvId.slice(0,8)} task=${s.taskId?.slice(0,8)}`);
+        // ★ Autopilot VU streaming: abort() below tears down the SSE reader
+        //   BEFORE the backend's autopilot_vu_cancel frame can be read, so the
+        //   event-driven splice never runs and a dangling _streamingVu ghost
+        //   bubble is left rendering the frozen "Autopilot…" pulse. Remove it
+        //   LOCALLY here (preserves conv._apPendingBaton — see the helper).
+        if (conv && typeof _removeStreamingVuBubbleIfTail === 'function') {
+          _removeStreamingVuBubbleIfTail(conv, activeConvId);
+        }
         // ★ Pre-set finishReason before abort kills the SSE reader
         if (conv) {
           const _stopMsg = conv.messages[conv.messages.length - 1];

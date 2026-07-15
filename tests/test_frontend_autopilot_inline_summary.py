@@ -108,11 +108,18 @@ if (NC === 'nc_neuter_pass') {
     'function _applyAutopilotSummaryPanels(inner, conv) {\n  if (!inner) return;',
     'function _applyAutopilotSummaryPanels(inner, conv) {\n  if (inner) return;  /* neutered */\n  if (!inner) return;');
 } else if (NC === 'nc_boundary_to_tail') {
-  // NC-2: force the anchor lookup to miss so every report becomes a tail
-  // placement — the report should then NOT dock after its #msg-N.
+  // NC-2: force BOTH resolution paths to miss so every report becomes a tail
+  // placement — the report should then NOT dock after its #msg-N. Both the
+  // backend-anchor lookup AND the run-boundary fallback (the run's own loaded
+  // stamped turn) must be neutered — with the fallback alive, a run whose VU
+  // turn IS loaded (Case B) would still resolve a boundary and the NC wouldn't
+  // bite.
   chatSrc = CHAT.replace(
     'const idx = anchorId ? idxByMsgId.get(anchorId) : undefined;',
-    'const idx = undefined; /* neutered: ignore backend anchor */');
+    'const idx = undefined; /* neutered: ignore backend anchor */')
+  .replace(
+    'if (m && (m._autopilotRunId || \'\') === runId) boundaryIdx = i;',
+    'boundaryIdx = -1; /* neutered: ignore run-boundary fallback */');
 }
 const _applied = (NC === '') || (chatSrc !== CHAT);
 check('nc_pattern_applied', _applied);

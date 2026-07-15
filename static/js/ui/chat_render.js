@@ -396,9 +396,39 @@ function _apSummaryPlacements(conv) {
     if (typeof idx === 'number') {
       anchored.push({ runId, afterMsgIdx: idx });
     } else {
-      // Anchor not in the loaded window (or legacy record with no anchor):
-      // genuine last resort — dock at the tail, oldest run first.
-      tail.push({ runId, tail: true, ts: rec.ts || 0 });
+      /* ★ RUN-BOUNDARY FALLBACK (the offset fix): the backend anchor _msgId is
+       * NOT in the loaded window (compaction / lazy window / a legacy record
+       * with no anchor). Before docking at the WHOLE-LIST tail — which lands
+       * the report AFTER any later run / real human turn the user has since
+       * started (the reported "summary jumped past my new round" offset) —
+       * try to anchor after THIS run's own last LOADED turn: the highest-index
+       * message whose `_autopilotRunId === runId`, EXTENDED forward over the
+       * unstamped agent follow-up(s) it prompted (mirrors the backend
+       * `_resolve_run_anchor_msgid` boundary rule, computed here on loaded
+       * rows). This keeps the report at the end of its own (VU→assistant)×N
+       * sequence even when the exact anchor msg scrolled out of the window.
+       * Only when the run has NO loaded turn at all do we fall to the genuine
+       * whole-list tail last resort. */
+      let boundaryIdx = -1;
+      for (let i = 0; i < msgs.length; i++) {
+        const m = msgs[i];
+        if (m && (m._autopilotRunId || '') === runId) boundaryIdx = i;
+      }
+      if (boundaryIdx >= 0) {
+        // Extend past the VU turn over the unstamped agent follow-up(s):
+        // stop at the next run-stamped turn, a real (non-VU) human turn, or EOL.
+        for (let j = boundaryIdx + 1; j < msgs.length; j++) {
+          const m = msgs[j];
+          if (!m) break;
+          if ((m._autopilotRunId || '')) break;
+          if (m.role === 'user' && !m._isVirtualUser) break;
+          boundaryIdx = j;
+        }
+        anchored.push({ runId, afterMsgIdx: boundaryIdx });
+      } else {
+        // No loaded turn for this run at all — genuine last resort.
+        tail.push({ runId, tail: true, ts: rec.ts || 0 });
+      }
     }
   }
   anchored.sort((a, b) => a.afterMsgIdx - b.afterMsgIdx);

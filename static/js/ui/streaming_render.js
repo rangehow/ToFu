@@ -26,6 +26,54 @@ function _findVuMsgById(conv, vuMsgId) {
 }
 
 /**
+ * Remove a still-streaming VU placeholder bubble LOCALLY (client-side).
+ *
+ * WHY this exists separate from the `autopilot_vu_cancel` handler: when the
+ * user clicks Stop WHILE the VU is streaming, the SSE reader is torn down by
+ * `controller.abort()` BEFORE the backend's `autopilot_vu_cancel` frame can be
+ * read — so the splice in `_handleAutopilotVuEvent` never runs and a dangling
+ * `_streamingVu:true` bubble is left rendering the frozen "Autopilot…" pulse
+ * forever (only a page reload cleared it, via the idb-cache `_streamingVu`
+ * filter). The Stop handler + `finishStream`'s autopilot branch call THIS to do
+ * the removal locally instead of waiting for an event that can't arrive.
+ *
+ * Mirrors the `autopilot_vu_cancel` teardown (splice + `#streaming-msg`
+ * removal + `twStop` + `buildTurnNav` + persist), and is a no-op unless the
+ * conversation's TAIL message is a streaming VU bubble (so it can never remove
+ * a settled VU turn or a real message).
+ *
+ * ★ BATON PRESERVED: this removes only the message object. `conv._apPendingBaton`
+ * (the authoritative conv-level autopilot follow-up baton) is a conv FIELD, not
+ * a message — the splice cannot touch it, and this function deliberately never
+ * clears it. So `_findAutopilotPendingCarrier` still resolves any pending
+ * follow-up after the ghost bubble is gone (the
+ * test_frontend_autopilot_baton_survives_splice.py contract).
+ *
+ * @returns {boolean} true if a streaming VU bubble was removed.
+ */
+function _removeStreamingVuBubbleIfTail(conv, convId) {
+  if (!conv || !Array.isArray(conv.messages) || !conv.messages.length) return false;
+  const last = conv.messages[conv.messages.length - 1];
+  if (!last || !last._isVirtualUser || !last._streamingVu) return false;
+  conv.messages.pop();
+  console.info(
+    `[Autopilot VU] ✂ local splice on stop — removed streaming placeholder ` +
+    `vuMsgId=${(last._msgId || '').slice(0,12)} for conv=${(convId || conv.id || '').slice(0,8)}`
+  );
+  if (activeConvId === convId) {
+    const sm = document.getElementById("streaming-msg");
+    if (sm) { try { sm.remove(); } catch (e) { /* already detached */ } }
+    if (typeof twStop === "function") { try { twStop(convId); } catch (e) { /* idempotent */ } }
+    if (typeof buildTurnNav === "function") buildTurnNav(conv);
+  }
+  if (typeof saveConversations === "function") saveConversations(convId);
+  try { if (typeof ConvCache !== "undefined") ConvCache.put(conv); }
+  catch (e) { /* non-fatal */ }
+  return true;
+}
+if (typeof window !== 'undefined') window._removeStreamingVuBubbleIfTail = _removeStreamingVuBubbleIfTail;
+
+/**
  * Surgically re-render a single message by index.  Used by the
  * autopilot VU streaming pipeline so each delta / tool_start /
  * tool_result update repaints just that bubble — far cheaper than a

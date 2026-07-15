@@ -95,12 +95,18 @@ const CHAT = fs.readFileSync(process.argv[2], 'utf8');
 const NC = process.argv[6] || '';
 let chatSrc = CHAT;
 if (NC === 'nc_tail_scan') {
-  // Revert to the pre-fix inference: ignore the backend anchor and dock EVERY
-  // run at the transcript tail (what happened when stamp-scan couldn't find a
-  // boundary). The two distinct runs then collapse onto one tail stack.
+  // Revert to the pre-fix inference: ignore BOTH the backend anchor lookup AND
+  // the run-boundary fallback, so EVERY run docks at the transcript tail (what
+  // happened when stamp-scan couldn't find a boundary). The two distinct runs
+  // then collapse onto one tail stack. Both paths must be neutered — with the
+  // run-boundary fallback alive, a run with a loaded VU turn would still
+  // resolve a distinct anchor and the stack would not form.
   chatSrc = CHAT.replace(
     'const idx = anchorId ? idxByMsgId.get(anchorId) : undefined;',
-    'const idx = undefined; /* neutered: ignore backend anchor */');
+    'const idx = undefined; /* neutered: ignore backend anchor */')
+  .replace(
+    'if (m && (m._autopilotRunId || \'\') === runId) boundaryIdx = i;',
+    'boundaryIdx = -1; /* neutered: ignore run-boundary fallback */');
 }
 const _applied = (NC === '') || (chatSrc !== CHAT);
 check('nc_pattern_applied', _applied);
@@ -194,14 +200,52 @@ function rep(runId, anchorMsgId, ts) { return { runId, status: 'concluded', reas
   check('C_distinct_indices', idxs[0] === 1 && idxs[1] === 3 && idxs[2] === 5);
 }
 
-// ── Case D — legacy record with NO anchorMsgId → ts-tail fallback (compat) ──
+// ── Case D — legacy record, NO anchorMsgId, but the run's VU turn IS loaded →
+//    the run-boundary fallback anchors it at its OWN boundary (NOT the
+//    whole-list tail). This is the offset fix: a report can never leapfrog a
+//    later round when its own run turn is still on screen. ──
 {
   const legacy = { runId: 'R1', status: 'concluded', reason: 'task_done', content: '# Legacy', ts: 5 };
   _activeConv = { id: 'cD', messages: [human('m0', 'obj'), vu('R1', 'm1'), agent('m2')],
     autopilotSummaries: { R1: legacy } };
   const pl = _apSummaryPlacements(_activeConv);
   check('D_one_placement', pl.length === 1);
-  check('D_legacy_tail', pl[0] && pl[0].runId === 'R1' && pl[0].tail === true);
+  // Boundary = the VU turn (idx 1) extended over its follow-up agent (idx 2).
+  check('D_boundary_anchored_not_tail', pl[0] && pl[0].runId === 'R1'
+        && pl[0].afterMsgIdx === 2 && !pl[0].tail);
+}
+
+// ── Case E — the offset scenario itself: run R1 concluded (anchor _msgId NOT
+//    loaded), and the user has since started a NEW round (R2's VU turn + a real
+//    human turn are now the tail). R1's report must dock after R1's OWN loaded
+//    turn — NEVER at the whole-list tail past the new round. ──
+{
+  _activeConv = { id: 'cE', messages: [
+      human('m0', 'obj'),
+      vu('R1', 'm1'), agent('m2', 'a-R1'),
+      vu('R2', 'm3'), agent('m4', 'a-R2')],
+    autopilotSummaries: {
+      // R1 anchor msg not in the loaded window (scrolled out / compacted),
+      // but R1's VU turn m1 + follow-up m2 ARE loaded.
+      R1: { runId: 'R1', status: 'concluded', reason: 'task_done',
+            content: '# R1', anchorMsgId: 'm-gone', ts: 10 } } };
+  const pl = _apSummaryPlacements(_activeConv);
+  check('E_one_placement', pl.length === 1);
+  // Docks after R1's boundary (idx 2 = a-R1), NOT after R2's tail (idx 4).
+  check('E_docks_at_own_boundary_not_tail',
+        pl[0] && pl[0].afterMsgIdx === 2 && !pl[0].tail);
+}
+
+// ── Case F — genuine last resort: the run has NO loaded turn at all (fully
+//    compacted out) → the ts-tail fallback still applies (report stays
+//    reachable). ──
+{
+  const orphan = { runId: 'R9', status: 'concluded', reason: 'task_done', content: '# Orphan', ts: 5 };
+  _activeConv = { id: 'cF', messages: [human('m0', 'obj'), agent('m1')],
+    autopilotSummaries: { R9: orphan } };
+  const pl = _apSummaryPlacements(_activeConv);
+  check('F_one_placement', pl.length === 1);
+  check('F_orphan_tail', pl[0] && pl[0].runId === 'R9' && pl[0].tail === true);
 }
 
 console.log(out.join('\n'));
@@ -234,7 +278,7 @@ def test_two_loaded_runs_dock_at_distinct_anchors():
     output = _run('')
     fails = [ln for ln in output.splitlines() if ln.startswith('FAIL')]
     assert not fails, 'anchor-placement failures:\n' + output
-    assert output.count('PASS') >= 16, f'expected >=16 PASS lines, got:\n{output}'
+    assert output.count('PASS') >= 20, f'expected >=20 PASS lines, got:\n{output}'
 
 
 @pytest.mark.skipif(not _node_deps_available(),

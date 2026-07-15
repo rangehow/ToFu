@@ -317,6 +317,19 @@ function finishStream(convId) {
         console.info(`[finishStream] 🤖 Autopilot tail detected — finalizing parent assistant ` +
           `(idx=${conv.messages.indexOf(_fsAutopilotAssistant)}, lastRole=${_fsLast.role}, ` +
           `lastIsVU=${!!_fsLast._isVirtualUser}) for conv=${convId.slice(0,8)}`);
+        /* ★ Stop-during-VU cleanup: if the tail is a STILL-STREAMING VU
+         *   placeholder (user clicked Stop mid-VU, so autopilot_vu_cancel was
+         *   never read off the aborted stream), splice it out LOCALLY before
+         *   finalizing the parent. Without this the ghost _streamingVu bubble
+         *   survives to the next render. The helper preserves
+         *   conv._apPendingBaton (a conv field, not a message). No-op when the
+         *   VU already settled (autopilot_vu_done cleared _streamingVu). */
+        if (_fsLast && _fsLast._isVirtualUser && _fsLast._streamingVu
+            && typeof _removeStreamingVuBubbleIfTail === 'function') {
+          _removeStreamingVuBubbleIfTail(conv, convId);
+          const _smNow = document.getElementById("streaming-msg");
+          if (_smNow) { try { _smNow.remove(); } catch (e) { /* detached */ } }
+        }
         window.ConvView.finalizeStreaming(convId, _fsAutopilotAssistant);
       } else if (sm && conv) {
         /* Normal streaming finish — funnel through ConvView so scroll

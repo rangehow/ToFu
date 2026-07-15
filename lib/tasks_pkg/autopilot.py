@@ -808,9 +808,16 @@ def _store_run_record(conv_id: str, run_id: str, *,
             #   boundary turn. Resolved server-side (above) where the run's turns
             #   are known; the frontend docks the report at this id (a pure
             #   lookup) instead of inferring the boundary from run-id stamps.
-            #   Preserve a prior anchor if this conclude couldn't re-resolve one
-            #   (e.g. a racing manual stop before the turns settled to disk).
-            anchor_final = anchor_msgid or (prior.get('anchorMsgId') or '')
+            #   ★ STICKY: a prior anchor ALWAYS wins over a fresh re-resolution.
+            #   The anchor is resolved+persisted ONCE, synchronously, at the
+            #   conclude point (the TASK_DONE sync pre-stamp below, or the
+            #   manual-stop conclude_run) — while the run's boundary is known
+            #   and stable. A later write (the async report-content fill ~63s
+            #   later, which may run AFTER the user started a new round) must
+            #   NEVER move it: recomputing then could drift the boundary past a
+            #   newer turn and offset the report to the transcript tail. So once
+            #   stamped, keep it; only compute fresh when there is no prior.
+            anchor_final = (prior.get('anchorMsgId') or '') or anchor_msgid
             if anchor_final:
                 record['anchorMsgId'] = anchor_final
             # ★ A run cut off by a safety cap (budget_exhausted / stuck /
@@ -2088,6 +2095,23 @@ def maybe_run_autopilot(task: dict) -> dict | None:
                                '(non-fatal, failing open to report): %s',
                                tid, e, exc_info=True)
                 with_report = True
+            # ★ PRE-STAMP THE ANCHOR SYNCHRONOUSLY — position authority.
+            #   `_resolve_run_anchor_msgid` reads the run's boundary turn from
+            #   the conv DB, which is STABLE right now (the VU turn + its
+            #   follow-up were just committed; no new round has started yet).
+            #   Writing a bare concluded(task_done) record HERE stamps
+            #   `anchorMsgId` while the boundary is unambiguous. The async
+            #   summary a beat later only FILLS the report `content` (the anchor
+            #   is now sticky — see `_store_run_record`), so even if the user
+            #   opens a new round before the reporter LLM finishes, the report
+            #   still docks at THIS run's (VU→assistant)×N tail, never offset to
+            #   the transcript end. Best-effort: a failure here just falls back
+            #   to the async resolve (the pre-fix behaviour).
+            try:
+                _store_run_record(conv_id, run_id, reason='task_done')
+            except Exception as e:
+                logger.warning('[Autopilot %s] anchor pre-stamp failed '
+                               '(non-fatal, async will resolve): %s', tid, e)
             # Disarm + clear the run pin SYNCHRONOUSLY so the turn settles now.
             try:
                 from lib.message_queue import clear_autopilot_marker

@@ -135,26 +135,57 @@ if [ "${up_ok}" != "1" ]; then
   exit 4
 fi
 
-# ── [5/5] Self-verify the sticky-cwd CODE is present in the interpreter this
-#          server runs under. NOTE: we do NOT grep /api/v1/capabilities — that
-#          endpoint emits only each tool's truncated top-level `description`, not
-#          parameter-level fields, so `working_dir`/"STICKY" is ABSENT from the
-#          JSON regardless of the running code (a guaranteed false-negative). The
-#          valid probe is that the sticky-cwd symbols import cleanly from
-#          lib.project_mod under the SAME interpreter used to launch the server.
-#          (Full behavioral proof is the two-call test: working_dir on call 1,
-#          bare `pwd` on call 2 resumes in that dir — see the JOURNAL entry.)
-echo "[5/5] Verifying the sticky-cwd code is importable under the server interpreter ..."
+# ── [5/5] Self-verify the EVENT-LOOP-FREEZE FIX (commit c194e18) is actually
+#          loaded in THIS running server — NOT some unrelated older feature.
+#          Two independent, fix-specific probes, BOTH must pass:
+#            (a) STATIC: the fix's new symbols import cleanly under the SAME
+#                interpreter that launched the server. If HEAD predates the fix
+#                these names don't exist → ImportError. This proves the code is
+#                on disk + importable for the launch interpreter.
+#            (b) RUNTIME: the on-loop blocking guard actually armed itself during
+#                THIS boot — i.e. the running process emitted
+#                "Loop blocking-guard armed" to ${LOG}. A static import can't
+#                prove the guard ran; only the live log line does. This is the
+#                behavioural proof that the watchdog half is live, not just
+#                present.
+#          Why probe THIS and not sticky-cwd: the previous [5/5] verified
+#          get_conv_cwd/set_conv_cwd (a DIFFERENT commit). A green there says
+#          nothing about whether the freeze fix shipped — the probe must assert
+#          the change this restart is FOR.
+echo "[5/5] Verifying the event-loop-freeze fix (c194e18) is loaded ..."
 echo "────────────────────────────────────────────────────────────────"
-if "${PY}" -c "from lib.project_mod import get_conv_cwd, set_conv_cwd" 2>/dev/null; then
-  echo "✅ CODE PRESENT: get_conv_cwd/set_conv_cwd import from lib.project_mod."
-  echo "   Server is up on :${PORT} (pid ${NEWPID})."
-  echo "   Behavioral proof: run two run_command calls in one conversation —"
-  echo "   call 1 with working_dir=<subdir>, call 2 with none + \`pwd\` resumes there."
+probe_fail=0
+
+# (a) STATIC — the fix's new symbols must import under the server interpreter.
+if "${PY}" -c "from lib.translate.segment_backfill import _get_backfill_semaphore, _translate_and_stamp_eligible" 2>/dev/null; then
+  echo "✅ (a) CODE PRESENT: off-loop backfill symbols import from lib.translate.segment_backfill."
 else
-  echo "❌ CODE ABSENT: get_conv_cwd/set_conv_cwd do NOT import from lib.project_mod."
-  echo "   git HEAD is missing the sticky-cwd commit (expected 1e8ba20), or ${PY}"
-  echo "   is the wrong interpreter. The server started but WITHOUT the feature."
+  echo "❌ (a) CODE ABSENT: _get_backfill_semaphore/_translate_and_stamp_eligible do NOT import."
+  echo "       git HEAD is missing commit c194e18, or ${PY} is the wrong interpreter."
+  probe_fail=1
+fi
+
+# (b) RUNTIME — the on-loop blocking guard must have armed during THIS boot.
+#     Poll ${LOG} briefly: the line is emitted early in _serve, but give boot a
+#     moment in case health came up first.
+guard_ok=0
+for i in $(seq 1 10); do
+  if grep -q "Loop blocking-guard armed" "${LOG}" 2>/dev/null; then guard_ok=1; break; fi
+  sleep 1
+done
+if [ "${guard_ok}" = "1" ]; then
+  echo "✅ (b) GUARD LIVE: '$(grep -m1 "Loop blocking-guard armed" "${LOG}" | sed 's/^[^[]*//')'"
+else
+  echo "❌ (b) GUARD NOT ARMED: no 'Loop blocking-guard armed' line in ${LOG}."
+  echo "       The running process is NOT executing the new _serve guard code"
+  echo "       (or TOFU_LOOP_SLOW_CALLBACK_SECS=0 disabled it — check the env)."
+  probe_fail=1
+fi
+
+if [ "${probe_fail}" = "1" ]; then
+  echo "────────────────────────────────────────────────────────────────"
+  echo "FATAL: the freeze fix is NOT fully live on :${PORT} (pid ${NEWPID}). See above."
   exit 5
 fi
+echo "✅ FIX LIVE: off-loop backfill code present AND blocking-guard armed on :${PORT} (pid ${NEWPID})."
 echo "════════════════════════════════════════════════════════════════"

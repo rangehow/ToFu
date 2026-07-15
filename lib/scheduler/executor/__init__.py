@@ -48,6 +48,8 @@ def execute_scheduler_tool(fn_name, fn_args):
                 task_type=task_type,
                 description=fn_args.get('description', ''),
                 max_runtime=fn_args.get('max_runtime', 300),
+                condition_command=fn_args.get('condition_command', ''),
+                condition_regex=fn_args.get('condition_regex', ''),
             )
 
             # Agent-specific fields

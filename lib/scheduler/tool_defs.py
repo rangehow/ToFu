@@ -94,6 +94,26 @@ SCHEDULE_TOOL_CREATE = {
                 "expires_at": {
                     "type": "string",
                     "description": "ISO datetime after which the task auto-disables (e.g. '2026-04-01 00:00')"
+                },
+                "condition_command": {
+                    "type": "string",
+                    "description": (
+                        "For task_type='agent' ONLY: an optional shell PREDICATE that decides "
+                        "whether to act this poll (exit code 0 = act, or match condition_regex). "
+                        "Given ALONE it makes a zero-LLM 'code' agent (each poll just runs the "
+                        "predicate); given WITH command (the standing instruction) it makes a "
+                        "'hybrid' agent — the LLM decides but the predicate is reconciled and "
+                        "AUTO-PROMOTED to pure code once it consistently agrees (poll cost → 0). "
+                        "Use for deterministic triggers. Example: "
+                        "'test $(cat /path/state) = ready'."
+                    )
+                },
+                "condition_regex": {
+                    "type": "string",
+                    "description": (
+                        "Optional regex matched against condition_command's stdout to decide. "
+                        "If omitted, the exit code decides (0 = act). Agent tasks only."
+                    )
                 }
             },
             "required": ["name", "schedule", "command"]
@@ -257,6 +277,28 @@ TIMER_TOOL_CREATE = {
                         "'ssh server \"cat ~/job_status.txt\"'. "
                         "If omitted, the LLM decides based on the check_instruction alone "
                         "(less reliable for external processes)."
+                    )
+                },
+                "condition_command": {
+                    "type": "string",
+                    "description": (
+                        "Optional shell PREDICATE that DECIDES readiness by its result "
+                        "(exit code 0 = ready, or match condition_regex) — distinct from "
+                        "check_command, which only feeds output to the LLM. Giving this "
+                        "ALONE runs a zero-LLM 'code' watcher (cheapest); giving it TOGETHER "
+                        "with check_instruction runs a 'hybrid' watcher where the LLM decides "
+                        "but the predicate is reconciled each poll and AUTO-PROMOTED to "
+                        "pure code after it agrees with the LLM enough times (cost → 0). "
+                        "Prefer this for deterministic conditions. Example: "
+                        "'grep -q DONE /path/train.log'."
+                    )
+                },
+                "condition_regex": {
+                    "type": "string",
+                    "description": (
+                        "Optional regex matched against condition_command's stdout to decide "
+                        "readiness. If omitted, the command's EXIT CODE decides (0 = ready). "
+                        "Only meaningful alongside condition_command."
                     )
                 },
                 "poll_interval": {

@@ -365,6 +365,16 @@ SCHEDULED_TASKS = define_table(
     sa.Column('execution_count', sa.Integer, nullable=False, server_default=sa.text('0')),
     sa.Column('max_executions', sa.Integer, nullable=False, server_default=sa.text('0')),
     sa.Column('expires_at', sa.Text, server_default=''),
+    # ── Predicate-promotion columns (scheduler condition paradigm) ──
+    # condition_kind: 'llm' (default, unchanged behaviour) | 'code' (pure
+    # predicate, zero-LLM) | 'hybrid' (LLM authoritative + reconcile a predicate
+    # each poll, auto-promote to 'code' after promotion_streak agreements).
+    sa.Column('condition_kind', sa.Text, nullable=False, server_default='llm'),
+    sa.Column('condition_command', sa.Text, nullable=False, server_default=''),
+    sa.Column('condition_regex', sa.Text, nullable=False, server_default=''),
+    sa.Column('promotion_streak', sa.Integer, nullable=False, server_default=sa.text('0')),
+    sa.Column('fallback_streak', sa.Integer, nullable=False, server_default=sa.text('0')),
+    sa.Column('promoted_at', sa.Text, server_default=''),
 )
 
 # proactive_poll_log — append-only poll decisions. Auto-increment PK
@@ -380,6 +390,14 @@ PROACTIVE_POLL_LOG = define_table(
     sa.Column('model', sa.Text, nullable=False, server_default=''),
     sa.Column('tokens_used', sa.Integer, nullable=False, server_default=sa.text('0')),
     sa.Column('execution_task_id', sa.Text, server_default=''),
+    # ── Predicate-promotion audit columns (machine-queryable, not free text) ──
+    # tier: which mechanism decided this poll — 'llm'|'code'|'predicate'.
+    # predicate_matched: 1/0 predicate outcome, -1 = not run or ambiguous.
+    # llm_agreed: 1/0 hybrid reconciliation, -1 = not applicable. The current
+    # promotion streak is reconstructable by counting trailing llm_agreed=1.
+    sa.Column('tier', sa.Text, nullable=False, server_default='llm'),
+    sa.Column('predicate_matched', sa.Integer, nullable=False, server_default=sa.text('-1')),
+    sa.Column('llm_agreed', sa.Integer, nullable=False, server_default=sa.text('-1')),
     sqlite_autoincrement=True,
 )
 
@@ -406,6 +424,14 @@ TIMER_WATCHERS = define_table(
     sa.Column('last_poll_at', sa.Text, server_default=''),
     sa.Column('last_poll_decision', sa.Text, server_default=''),
     sa.Column('last_poll_reason', sa.Text, server_default=''),
+    # ── Predicate-promotion columns (scheduler condition paradigm) ──
+    # See SCHEDULED_TASKS for the condition_kind semantics — identical here.
+    sa.Column('condition_kind', sa.Text, nullable=False, server_default='llm'),
+    sa.Column('condition_command', sa.Text, nullable=False, server_default=''),
+    sa.Column('condition_regex', sa.Text, nullable=False, server_default=''),
+    sa.Column('promotion_streak', sa.Integer, nullable=False, server_default=sa.text('0')),
+    sa.Column('fallback_streak', sa.Integer, nullable=False, server_default=sa.text('0')),
+    sa.Column('promoted_at', sa.Text, server_default=''),
 )
 
 # timer_poll_log — append-only timer poll decisions. Auto-increment PK.
@@ -421,6 +447,11 @@ TIMER_POLL_LOG = define_table(
     sa.Column('model', sa.Text, nullable=False, server_default=''),
     sa.Column('poll_id', sa.Text, nullable=False, server_default=''),
     sa.Column('raw_output', sa.Text, nullable=False, server_default=''),
+    # ── Predicate-promotion audit columns (machine-queryable, not free text) ──
+    # See PROACTIVE_POLL_LOG for the tier/predicate_matched/llm_agreed semantics.
+    sa.Column('tier', sa.Text, nullable=False, server_default='llm'),
+    sa.Column('predicate_matched', sa.Integer, nullable=False, server_default=sa.text('-1')),
+    sa.Column('llm_agreed', sa.Integer, nullable=False, server_default=sa.text('-1')),
     sqlite_autoincrement=True,
 )
 

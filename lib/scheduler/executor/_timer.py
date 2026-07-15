@@ -34,8 +34,14 @@ def _execute_timer_create(fn_args):
 
     check_instruction = fn_args.get('check_instruction', '')
     continuation_message = fn_args.get('continuation_message', '')
-    if not check_instruction or not continuation_message:
-        return 'Error: Both check_instruction and continuation_message are required.'
+    condition_command = fn_args.get('condition_command', '')
+    # A pure-code timer needs only a predicate + continuation (no LLM
+    # instruction). Otherwise an LLM/hybrid timer needs a check_instruction.
+    if not continuation_message:
+        return 'Error: continuation_message is required.'
+    if not check_instruction and not condition_command:
+        return ('Error: provide check_instruction (LLM/hybrid) and/or '
+                'condition_command (pure-code predicate).')
 
     conv_id = fn_args.get('_source_conv_id', '')
     if not conv_id:
@@ -73,6 +79,8 @@ def _execute_timer_create(fn_args):
             check_command=fn_args.get('check_command', ''),
             tools_config=_poll_tools_config,
             source_task_id=fn_args.get('_source_task_id', ''),
+            condition_command=fn_args.get('condition_command', ''),
+            condition_regex=fn_args.get('condition_regex', ''),
         )
         timer_id = timer['id']
         poll_interval = timer['poll_interval']
@@ -308,10 +316,13 @@ def _execute_timer_create(fn_args):
                 )
                 sysdb.commit()
 
-                # Clean up command output cache
+                # Clean up command output cache + reconcile audit stash
                 from lib.scheduler.timer import _cmd_outputs_lock, _last_cmd_outputs
                 with _cmd_outputs_lock:
                     _last_cmd_outputs.pop(timer_id, None)
+                from lib.scheduler.timer import _reconcile_audit, _reconcile_audit_lock
+                with _reconcile_audit_lock:
+                    _reconcile_audit.pop(timer_id, None)
 
                 # Return the result as the tool call output —
                 # the LLM continues its loop as if this was a normal tool result

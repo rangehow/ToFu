@@ -930,7 +930,13 @@ LIVE_PG_SCHEDULED_TASKS = """
         last_execution_status TEXT DEFAULT '',
         execution_count INTEGER NOT NULL DEFAULT 0,
         max_executions INTEGER NOT NULL DEFAULT 0,
-        expires_at TEXT DEFAULT ''
+        expires_at TEXT DEFAULT '',
+        condition_kind TEXT NOT NULL DEFAULT 'llm',
+        condition_command TEXT NOT NULL DEFAULT '',
+        condition_regex TEXT NOT NULL DEFAULT '',
+        promotion_streak INTEGER NOT NULL DEFAULT 0,
+        fallback_streak INTEGER NOT NULL DEFAULT 0,
+        promoted_at TEXT DEFAULT ''
     )
 """
 LIVE_SQLITE_SCHEDULED_TASKS = """
@@ -964,7 +970,13 @@ LIVE_SQLITE_SCHEDULED_TASKS = """
         last_execution_status TEXT DEFAULT '',
         execution_count INTEGER NOT NULL DEFAULT 0,
         max_executions INTEGER NOT NULL DEFAULT 0,
-        expires_at TEXT DEFAULT ''
+        expires_at TEXT DEFAULT '',
+        condition_kind TEXT NOT NULL DEFAULT 'llm',
+        condition_command TEXT NOT NULL DEFAULT '',
+        condition_regex TEXT NOT NULL DEFAULT '',
+        promotion_streak INTEGER NOT NULL DEFAULT 0,
+        fallback_streak INTEGER NOT NULL DEFAULT 0,
+        promoted_at TEXT DEFAULT ''
     )
 """
 
@@ -979,7 +991,10 @@ LIVE_PG_PROACTIVE_POLL_LOG = """
         status_snapshot TEXT NOT NULL DEFAULT '',
         model TEXT NOT NULL DEFAULT '',
         tokens_used INTEGER NOT NULL DEFAULT 0,
-        execution_task_id TEXT DEFAULT ''
+        execution_task_id TEXT DEFAULT '',
+        tier TEXT NOT NULL DEFAULT 'llm',
+        predicate_matched INTEGER NOT NULL DEFAULT -1,
+        llm_agreed INTEGER NOT NULL DEFAULT -1
     )
 """
 LIVE_SQLITE_PROACTIVE_POLL_LOG = """
@@ -992,7 +1007,10 @@ LIVE_SQLITE_PROACTIVE_POLL_LOG = """
         status_snapshot TEXT NOT NULL DEFAULT '',
         model TEXT NOT NULL DEFAULT '',
         tokens_used INTEGER NOT NULL DEFAULT 0,
-        execution_task_id TEXT DEFAULT ''
+        execution_task_id TEXT DEFAULT '',
+        tier TEXT NOT NULL DEFAULT 'llm',
+        predicate_matched INTEGER NOT NULL DEFAULT (-1),
+        llm_agreed INTEGER NOT NULL DEFAULT (-1)
     )
 """
 
@@ -1017,7 +1035,13 @@ LIVE_PG_TIMER_WATCHERS = """
         execution_task_id TEXT DEFAULT '',
         last_poll_at TEXT DEFAULT '',
         last_poll_decision TEXT DEFAULT '',
-        last_poll_reason TEXT DEFAULT ''
+        last_poll_reason TEXT DEFAULT '',
+        condition_kind TEXT NOT NULL DEFAULT 'llm',
+        condition_command TEXT NOT NULL DEFAULT '',
+        condition_regex TEXT NOT NULL DEFAULT '',
+        promotion_streak INTEGER NOT NULL DEFAULT 0,
+        fallback_streak INTEGER NOT NULL DEFAULT 0,
+        promoted_at TEXT DEFAULT ''
     )
 """
 LIVE_SQLITE_TIMER_WATCHERS = LIVE_PG_TIMER_WATCHERS  # identical (all TEXT/INTEGER)
@@ -1034,7 +1058,10 @@ LIVE_PG_TIMER_POLL_LOG = """
         tokens_used INTEGER NOT NULL DEFAULT 0,
         model TEXT NOT NULL DEFAULT '',
         poll_id TEXT NOT NULL DEFAULT '',
-        raw_output TEXT NOT NULL DEFAULT ''
+        raw_output TEXT NOT NULL DEFAULT '',
+        tier TEXT NOT NULL DEFAULT 'llm',
+        predicate_matched INTEGER NOT NULL DEFAULT -1,
+        llm_agreed INTEGER NOT NULL DEFAULT -1
     )
 """
 LIVE_SQLITE_TIMER_POLL_LOG = """
@@ -1048,7 +1075,10 @@ LIVE_SQLITE_TIMER_POLL_LOG = """
         tokens_used INTEGER NOT NULL DEFAULT 0,
         model TEXT NOT NULL DEFAULT '',
         poll_id TEXT NOT NULL DEFAULT '',
-        raw_output TEXT NOT NULL DEFAULT ''
+        raw_output TEXT NOT NULL DEFAULT '',
+        tier TEXT NOT NULL DEFAULT 'llm',
+        predicate_matched INTEGER NOT NULL DEFAULT (-1),
+        llm_agreed INTEGER NOT NULL DEFAULT (-1)
     )
 """
 

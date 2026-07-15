@@ -71,7 +71,9 @@ def create_timer(conv_id: str,
                  max_polls: int = 120,
                  check_command: str = '',
                  tools_config: dict | None = None,
-                 source_task_id: str = '') -> dict[str, Any]:
+                 source_task_id: str = '',
+                 condition_command: str = '',
+                 condition_regex: str = '') -> dict[str, Any]:
     """Create a timer watcher and persist to DB.
 
     Args:
@@ -80,17 +82,26 @@ def create_timer(conv_id: str,
         continuation_message: The user message to inject when ready.
         poll_interval: Seconds between polls (minimum 10).
         max_polls: Maximum number of polls before exhaustion (0=unlimited).
-        check_command: Optional shell command to run before each poll.
+        check_command: Optional shell command whose output grounds the LLM poll.
         tools_config: Tool settings for the continuation task.
         source_task_id: The task that created this timer.
+        condition_command: Optional pure-code PREDICATE command. When set the
+            timer runs the predicate-promotion paradigm: with an instruction it
+            starts 'hybrid' (LLM authoritative + reconcile the predicate, then
+            auto-promote to 'code'); alone it starts 'code' (zero-LLM). Derived,
+            not caller-specified: see ``derive_condition_kind``.
+        condition_regex: Optional regex over the predicate's stdout; empty →
+            use the exit code (0=ready) per the Unix contract.
 
     Returns:
         Timer record dict.
     """
     from lib.database import DOMAIN_SYSTEM, get_thread_db
+    from lib.scheduler._shared import derive_condition_kind
 
     timer_id = 'tmr_' + str(uuid.uuid4())[:8]
     now = datetime.now().isoformat()
+    condition_kind = derive_condition_kind(check_instruction, condition_command)
 
     # ── Defensive coercion: LLM tool-calls sometimes arrive with
     #    string-valued numeric args (e.g. "60"). Coerce to int with a
@@ -112,18 +123,21 @@ def create_timer(conv_id: str,
         '''INSERT INTO timer_watchers
            (id, conv_id, source_task_id, check_instruction, check_command,
             continuation_message, poll_interval, max_polls, status,
-            tools_config, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)''',
+            tools_config, created_at, updated_at,
+            condition_kind, condition_command, condition_regex)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?)''',
         [timer_id, conv_id, source_task_id, check_instruction, check_command,
          continuation_message, poll_interval, max_polls,
-         json.dumps(tools_config or {}, ensure_ascii=False), now, now]
+         json.dumps(tools_config or {}, ensure_ascii=False), now, now,
+         condition_kind, condition_command, condition_regex]
     )
     db.commit()
 
     timer = _get_timer_row(timer_id)
-    logger.info('[Timer:%s] Created — conv=%s poll_interval=%ds max_polls=%d check_cmd=%s',
-                timer_id, conv_id[:12], poll_interval, max_polls,
-                (check_command[:80] + '…') if len(check_command) > 80 else check_command or '(none)')
+    logger.info('[Timer:%s] Created — conv=%s poll_interval=%ds max_polls=%d kind=%s check_cmd=%s pred=%s',
+                timer_id, conv_id[:12], poll_interval, max_polls, condition_kind,
+                (check_command[:80] + '…') if len(check_command) > 80 else check_command or '(none)',
+                (condition_command[:80] + '…') if len(condition_command) > 80 else condition_command or '(none)')
     return timer
 
 
@@ -144,6 +158,9 @@ def cancel_timer(timer_id: str) -> bool:
         _active_timers.pop(timer_id, None)
     with _cmd_outputs_lock:
         _last_cmd_outputs.pop(timer_id, None)
+    from ._poll import _reconcile_audit, _reconcile_audit_lock
+    with _reconcile_audit_lock:
+        _reconcile_audit.pop(timer_id, None)
 
     logger.info('[Timer:%s] Cancelled', timer_id)
     return True

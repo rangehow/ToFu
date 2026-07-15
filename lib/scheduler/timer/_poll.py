@@ -11,18 +11,132 @@ from __future__ import annotations
 
 import json
 import subprocess
+import threading
 import time
 import uuid
 from datetime import datetime
 
 from lib.agent_loop import AbortSignal, run_agent_loop
-from lib.log import get_logger, log_context
-from lib.scheduler._shared import build_poll_system_prompt, fence_untrusted
+from lib.log import audit_log, get_logger, log_context
+from lib.scheduler._shared import (
+    build_poll_system_prompt,
+    evaluate_predicate,
+    fence_untrusted,
+    reconcile_and_decide,
+)
 
 from ._crud import _get_timer_row
 from ._state import _active_timers, _cmd_outputs_lock, _last_cmd_outputs, _timers_lock
 
 logger = get_logger(__name__)
+
+# ── Per-poll reconcile audit stash ──────────────────────────────────────────
+# poll_timer() runs the predicate/reconcile and stashes this poll's audit trio
+# (tier / predicate_matched / llm_agreed) here, keyed by timer_id; _record_poll
+# pops it so the machine-queryable columns land in timer_poll_log WITHOUT
+# widening poll_timer's return tuple or touching the two consumer call sites.
+# Mirrors the established _last_cmd_outputs per-timer dict pattern. A poll that
+# never reaches reconcile (skip / error / pure-llm tier) leaves no stash, so
+# _record_poll correctly defaults to tier='llm', matched=-1, agreed=-1.
+_reconcile_audit: dict[str, dict] = {}
+_reconcile_audit_lock = threading.Lock()
+
+
+def _count_trailing_ambiguous_code_polls(timer_id: str, lookback: int = 20) -> int:
+    """Count consecutive most-recent `code`-tier polls whose predicate was
+    ambiguous (predicate_matched=-1), reconstructed from the poll ledger.
+
+    This is the demotion counter (code→hybrid) — derived from the audit table
+    rather than a dedicated column, so it survives a restart with no extra
+    state. Any non-ambiguous / non-code row at the tail breaks the run.
+    """
+    try:
+        from lib.database import DOMAIN_SYSTEM, get_thread_db
+        db = get_thread_db(DOMAIN_SYSTEM)
+        rows = db.execute(
+            'SELECT tier, predicate_matched FROM timer_poll_log '
+            'WHERE timer_id=? ORDER BY id DESC LIMIT ?',
+            [timer_id, lookback]
+        ).fetchall()
+    except Exception as e:
+        logger.warning('[Timer:%s] Failed to reconstruct ambiguity streak: %s',
+                       timer_id, e, exc_info=True)
+        return 0
+    streak = 0
+    for r in rows:
+        rd = dict(r)
+        if rd.get('tier') == 'code' and rd.get('predicate_matched', -1) == -1:
+            streak += 1
+        else:
+            break
+    return streak
+
+
+def _apply_reconcile_poll(timer: dict, predicate_result, llm_ready,
+                          llm_available: bool):
+    """Run reconcile_and_decide for a code/hybrid timer and persist its effects.
+
+    Persists the promotion/demotion transition to timer_watchers (authoritative
+    fast path) and stashes the audit trio for _record_poll. Returns the
+    :class:`ReconcileOutcome`.
+    """
+    timer_id = timer['id']
+    kind = timer.get('condition_kind', 'llm')
+    current_streak = int(timer.get('promotion_streak', 0) or 0)
+    fallback_streak = (_count_trailing_ambiguous_code_polls(timer_id)
+                       if kind == 'code' else 0)
+
+    outcome = reconcile_and_decide(
+        kind=kind,
+        predicate=predicate_result,
+        llm_ready=llm_ready,
+        llm_available=llm_available,
+        current_streak=current_streak,
+        fallback_streak=fallback_streak,
+    )
+
+    # Persist promotion-streak / condition_kind transition (authoritative).
+    try:
+        from lib.database import DOMAIN_SYSTEM, get_thread_db
+        db = get_thread_db(DOMAIN_SYSTEM)
+        now = datetime.now().isoformat()
+        if outcome.promoted:
+            db.execute(
+                "UPDATE timer_watchers SET condition_kind='code', "
+                "promotion_streak=?, promoted_at=?, updated_at=? WHERE id=?",
+                [outcome.new_streak, now, now, timer_id])
+            audit_log('timer_predicate_promoted', timer_id=timer_id,
+                      predicate=timer.get('condition_command', '')[:200],
+                      streak=outcome.new_streak)
+            logger.info('[Timer:%s] ✅ Predicate PROMOTED to code (streak=%d) — '
+                        'LLM drops out of future polls', timer_id, outcome.new_streak)
+        elif outcome.demoted:
+            db.execute(
+                "UPDATE timer_watchers SET condition_kind='hybrid', "
+                "promotion_streak=0, promoted_at='', updated_at=? WHERE id=?",
+                [now, timer_id])
+            audit_log('timer_predicate_demoted', timer_id=timer_id,
+                      predicate=timer.get('condition_command', '')[:200],
+                      reason=outcome.note[:200])
+            logger.warning('[Timer:%s] ⚠️ Predicate DEMOTED to hybrid — %s',
+                           timer_id, outcome.note)
+        elif outcome.new_streak != current_streak or outcome.new_kind != kind:
+            db.execute(
+                "UPDATE timer_watchers SET condition_kind=?, promotion_streak=?, "
+                "updated_at=? WHERE id=?",
+                [outcome.new_kind, outcome.new_streak, now, timer_id])
+        db.commit()
+    except Exception as e:
+        logger.error('[Timer:%s] Failed to persist reconcile transition: %s',
+                     timer_id, e, exc_info=True)
+
+    with _reconcile_audit_lock:
+        _reconcile_audit[timer_id] = {
+            'tier': outcome.tier,
+            'predicate_matched': outcome.predicate_matched,
+            'llm_agreed': outcome.llm_agreed,
+        }
+    return outcome
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -313,6 +427,25 @@ def poll_timer(timer_id: str) -> tuple[bool, str, int, bool, bool, str, str, lis
 
     check_instruction = timer['check_instruction']
     check_command = timer.get('check_command', '')
+    condition_kind = timer.get('condition_kind', 'llm')
+    condition_command = timer.get('condition_command', '') or ''
+    condition_regex = timer.get('condition_regex', '') or ''
+
+    # ── Tier A: pure `code` predicate — ZERO LLM ─────────────────────
+    # A deterministic condition decided entirely by a shell predicate. If the
+    # predicate is ambiguous/errored (spawn failure / exit 127 / timeout) the
+    # reconcile primitive returns authoritative_ready=False (never a
+    # false-positive trigger) and, on a sustained ambiguity run, DEMOTES back to
+    # hybrid so the LLM re-takes the wheel — the timer neither fires wrongly nor
+    # dies. cmd_output carries the predicate output for the UI evidence panel.
+    if condition_kind == 'code':
+        pred = evaluate_predicate(condition_command, condition_regex,
+                                  log_id=timer_id)
+        outcome = _apply_reconcile_poll(timer, pred, llm_ready=None,
+                                        llm_available=False)
+        reason = outcome.note
+        return (outcome.authoritative_ready, reason, 0, False, False,
+                pred.output, 'predicate', [], '')
 
     # Optionally run the check command for grounded data
     cmd_output = _run_check_command(check_command, timer_id)
@@ -460,6 +593,21 @@ def poll_timer(timer_id: str) -> tuple[bool, str, int, bool, bool, str, str, lis
         reason = ('Could not parse the verification decision (LLM did not '
                   'return valid JSON). See raw output below.')
 
+    # ── Tier C: hybrid reconcile — LLM authoritative, predicate learns ──
+    # The LLM verdict above stays the steering wheel; run the predicate
+    # alongside and reconcile so the condition can auto-promote to `code`
+    # after enough consecutive agreements. A parse failure means no usable LLM
+    # verdict → llm_available=False → reconcile resets the streak (never
+    # promotes on an unparsed poll) but keeps ready=False.
+    if condition_kind == 'hybrid':
+        pred = evaluate_predicate(condition_command, condition_regex,
+                                  log_id=timer_id)
+        outcome = _apply_reconcile_poll(
+            timer, pred, llm_ready=ready, llm_available=not parse_error)
+        ready = outcome.authoritative_ready
+        if not parse_error:
+            reason = f'{reason} [{outcome.note}]'
+
     return (ready, reason, total_tokens, False, parse_error, cmd_output,
             poll_model, tool_trace, raw_content)
 
@@ -476,6 +624,14 @@ def _record_poll(timer_id: str, decision: str, reason: str,
     diagnostically useful (parse/LLM errors) so a malformed decision survives
     a page refresh / server restart for inspection.
     """
+    # Pop this poll's reconcile audit trio (tier / predicate_matched /
+    # llm_agreed) stashed by poll_timer. Absent for skip/error/pure-llm polls →
+    # the machine-queryable defaults ('llm', -1, -1) preserve the legacy meaning.
+    with _reconcile_audit_lock:
+        _audit = _reconcile_audit.pop(timer_id, None)
+    _tier = _audit['tier'] if _audit else 'llm'
+    _pred_matched = _audit['predicate_matched'] if _audit else -1
+    _llm_agreed = _audit['llm_agreed'] if _audit else -1
     try:
         from lib.database import DOMAIN_SYSTEM, get_thread_db
         db = get_thread_db(DOMAIN_SYSTEM)
@@ -483,10 +639,11 @@ def _record_poll(timer_id: str, decision: str, reason: str,
         db.execute(
             '''INSERT INTO timer_poll_log
                (timer_id, poll_time, decision, reason, check_output, tokens_used,
-                model, poll_id, raw_output)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                model, poll_id, raw_output, tier, predicate_matched, llm_agreed)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
             [timer_id, now, decision, reason[:500], check_output[:5000], tokens_used,
-             (model or '')[:120], (poll_id or '')[:80], (raw_output or '')[:5000]]
+             (model or '')[:120], (poll_id or '')[:80], (raw_output or '')[:5000],
+             _tier, _pred_matched, _llm_agreed]
         )
         db.commit()
     except Exception as e:
@@ -528,6 +685,8 @@ def _mark_exhausted(timer_id: str) -> None:
         _active_timers.pop(timer_id, None)
     with _cmd_outputs_lock:
         _last_cmd_outputs.pop(timer_id, None)
+    with _reconcile_audit_lock:
+        _reconcile_audit.pop(timer_id, None)
 
 
 def _mark_expired(timer_id: str) -> None:
@@ -547,3 +706,5 @@ def _mark_expired(timer_id: str) -> None:
         _active_timers.pop(timer_id, None)
     with _cmd_outputs_lock:
         _last_cmd_outputs.pop(timer_id, None)
+    with _reconcile_audit_lock:
+        _reconcile_audit.pop(timer_id, None)

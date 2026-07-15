@@ -46,6 +46,11 @@ def _init_system_schema(conn):
     create_if_absent(conn, SCHEDULED_TASKS, table_exists=_table_exists)
     create_if_absent(conn, PROACTIVE_POLL_LOG, table_exists=_table_exists)
     cur.execute('CREATE INDEX IF NOT EXISTS idx_poll_log_task ON proactive_poll_log(task_id, poll_time DESC)')
+    # Migration: predicate-promotion audit columns (tier / predicate_matched /
+    # llm_agreed). Pre-existing rows default to 'llm'/-1/-1 → read as pure-LLM.
+    cur.execute("ALTER TABLE proactive_poll_log ADD COLUMN IF NOT EXISTS tier TEXT NOT NULL DEFAULT 'llm'")
+    cur.execute('ALTER TABLE proactive_poll_log ADD COLUMN IF NOT EXISTS predicate_matched INTEGER NOT NULL DEFAULT -1')
+    cur.execute('ALTER TABLE proactive_poll_log ADD COLUMN IF NOT EXISTS llm_agreed INTEGER NOT NULL DEFAULT -1')
 
     # ── Migration: add proactive agent columns ──
     _proactive_cols = [
@@ -62,6 +67,13 @@ def _init_system_schema(conn):
         ('execution_count', "INTEGER NOT NULL DEFAULT 0"),
         ('max_executions', "INTEGER NOT NULL DEFAULT 0"),
         ('expires_at', "TEXT DEFAULT ''"),
+        # Predicate-promotion columns (scheduler condition paradigm).
+        ('condition_kind', "TEXT NOT NULL DEFAULT 'llm'"),
+        ('condition_command', "TEXT NOT NULL DEFAULT ''"),
+        ('condition_regex', "TEXT NOT NULL DEFAULT ''"),
+        ('promotion_streak', "INTEGER NOT NULL DEFAULT 0"),
+        ('fallback_streak', "INTEGER NOT NULL DEFAULT 0"),
+        ('promoted_at', "TEXT DEFAULT ''"),
         # ── Older installs created scheduled_tasks via a minimal CREATE
         #    TABLE in lib/scheduler/manager.py::_init_table; the columns
         #    below need to exist for create_task() to succeed. ──
@@ -102,6 +114,18 @@ def _init_system_schema(conn):
         if not _column_exists(conn, 'timer_poll_log', _tpl_col):
             cur.execute(_tpl_sql)
             logger.info('[DB] Migration: added column %s to timer_poll_log', _tpl_col)
+    # Migration: predicate-promotion columns on timer_watchers. Pre-existing
+    # rows default to condition_kind='llm' → unchanged pure-LLM behaviour.
+    cur.execute("ALTER TABLE timer_watchers ADD COLUMN IF NOT EXISTS condition_kind TEXT NOT NULL DEFAULT 'llm'")
+    cur.execute("ALTER TABLE timer_watchers ADD COLUMN IF NOT EXISTS condition_command TEXT NOT NULL DEFAULT ''")
+    cur.execute("ALTER TABLE timer_watchers ADD COLUMN IF NOT EXISTS condition_regex TEXT NOT NULL DEFAULT ''")
+    cur.execute('ALTER TABLE timer_watchers ADD COLUMN IF NOT EXISTS promotion_streak INTEGER NOT NULL DEFAULT 0')
+    cur.execute('ALTER TABLE timer_watchers ADD COLUMN IF NOT EXISTS fallback_streak INTEGER NOT NULL DEFAULT 0')
+    cur.execute("ALTER TABLE timer_watchers ADD COLUMN IF NOT EXISTS promoted_at TEXT DEFAULT ''")
+    # Migration: predicate-promotion audit columns on timer_poll_log.
+    cur.execute("ALTER TABLE timer_poll_log ADD COLUMN IF NOT EXISTS tier TEXT NOT NULL DEFAULT 'llm'")
+    cur.execute('ALTER TABLE timer_poll_log ADD COLUMN IF NOT EXISTS predicate_matched INTEGER NOT NULL DEFAULT -1')
+    cur.execute('ALTER TABLE timer_poll_log ADD COLUMN IF NOT EXISTS llm_agreed INTEGER NOT NULL DEFAULT -1')
 
     # ── Swarm durable state (see lib/swarm/persistence.py) ──
     # Persists conversation-scoped swarm sessions and per-agent message

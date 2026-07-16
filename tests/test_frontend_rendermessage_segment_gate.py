@@ -1,5 +1,5 @@
 """tests/test_frontend_rendermessage_segment_gate.py — the LAST MILE:
-prove `renderMessage` itself flips behavior on the segment-timeline toggle.
+prove `renderMessage` itself interleaves whenever a turn carries `segments`.
 
 WHY
 ---
@@ -8,31 +8,30 @@ called DIRECTLY, and (b) the server DELIVERS `segments` to `msg.segments`
 through the real GET route. But nothing exercised the DECISION inside
 `renderMessage` (chat_render.js): the
 
-    if (!isUser && !_vuPrivate && _segTimelineEnabled()
+    if (_segTimelineAllowed
         && Array.isArray(msg.segments) && msg.segments.length > 0) { … }
 
-gate firing AND the `_segTimelineRendered` suppression of the duplicate
+branch firing AND the `_segTimelineRendered` suppression of the duplicate
 standalone `msg.thinking` block. A wrong condition or a double-rendered
 thinking block would leave every other test green while the owner-visible
-output was wrong. This is the "flipping the toggle actually changes what I
-see" seam — the whole point of the toggle.
+output was wrong.
 
-This harness evals the REAL shipped escape_html.js + safe_html.js +
-tool_rounds.js (for the REAL renderSegmentTimelineHTML + _segTimelineEnabled)
-+ chat_render.js, and drives the REAL `renderMessage(msg)` over a
-segments-carrying multi-tool assistant message. It asserts:
+The interleaved timeline is now the ONLY user-facing render path (the former
+`_segTimelineEnabled` toggle was removed) — so the decision reduces to "does
+this turn carry segments?". This harness evals the REAL shipped escape_html.js
++ safe_html.js + tool_rounds.js (for the REAL renderSegmentTimelineHTML) +
+chat_render.js, and drives the REAL `renderMessage(msg)`. It asserts:
 
-  FLAG ON:
+  SEGMENTS PRESENT → the interleaved timeline is the render:
     • the interleaved `seg-timeline` panel IS emitted, AND
     • the standalone `thinking-block` (msg.thinking) is NOT ALSO rendered
       (no duplicate thinking — the _segTimelineRendered suppression fired).
-  FLAG OFF (control):
+  SEGMENTS ABSENT (control / the sole remaining fallback):
     • the legacy grouped tool panel is emitted (via renderToolRoundsHTML),
       NOT the seg-timeline panel, AND
     • the standalone `thinking-block` IS present (legacy path).
-  NC (gate neuter): force `_segTimelineEnabled` false → even with segments
-    present + flag config ON, the timeline branch does not fire → falls back
-    to legacy + standalone thinking (proves the gate condition is load-bearing).
+      This proves `msg.segments` presence is what drives the timeline — the
+      grouped renderer survives only as the automatic segment-less fallback.
 
 Skips cleanly when node / jsdom aren't installed.
 """
@@ -164,9 +163,8 @@ if (typeof renderMessage !== 'function') {
 check('fn_exposed', true);
 check('real_timeline_fn_present', typeof renderSegmentTimelineHTML === 'function');
 
-// ══ 1. FLAG ON → interleaved seg-timeline + NO duplicate standalone thinking ══
+// ══ 1. SEGMENTS PRESENT → interleaved seg-timeline + NO duplicate thinking ══
 {
-  global.config = { segmentTimeline: true };
   const html = renderMessage(mkMsg(), 0);
   check('on_emits_seg_timeline', html.indexOf('seg-timeline') !== -1);
   check('on_has_batch_narration', html.indexOf('<md>Let me search.</md>') !== -1);
@@ -177,41 +175,20 @@ check('real_timeline_fn_present', typeof renderSegmentTimelineHTML === 'function
   check('on_has_per_batch_thinking', html.indexOf("this.classList.toggle('expanded')") !== -1);
 }
 
-// ══ 2. FLAG OFF → legacy grouped path + standalone thinking present ══
+// ══ 2. SEGMENTS ABSENT (the sole remaining fallback) → legacy grouped path +
+//        standalone thinking present. Proves `msg.segments` presence is what
+//        drives the timeline; the grouped renderer survives only as the
+//        automatic segment-less fallback. ══
 {
-  global.config = { segmentTimeline: false };
-  const html = renderMessage(mkMsg(), 0);
+  const noSeg = mkMsg();
+  delete noSeg.segments;
+  const html = renderMessage(noSeg, 0);
   check('off_no_seg_timeline', html.indexOf('seg-timeline') === -1);
   // Legacy grouped tool panel still renders the tool (ptool-panel present).
   check('off_has_ptool_panel', html.indexOf('ptool-panel') !== -1);
   // The standalone msg.thinking block IS rendered on the legacy path.
   check('off_has_standalone_thinking', standaloneThinkingCount(html) === 1);
   check('off_standalone_has_text_hook', html.indexOf('stream.thinking.done') !== -1);
-}
-
-// ══ 3. NC: neuter the gate (_segTimelineEnabled → always false) — even with
-//        segments + config ON, the timeline branch must NOT fire. Proves the
-//        gate call is load-bearing inside renderMessage. ══
-{
-  const NEUT = CHAT.replace(
-    'function _segTimelineEnabled() {',
-    'function _segTimelineEnabled() { return false; /* NEUTERED */ ');
-  // (tool_rounds.js owns _segTimelineEnabled, not chat_render — neuter there)
-  const TR = fs.readFileSync(process.argv[4], 'utf8').replace(
-    'function _segTimelineEnabled() {',
-    'function _segTimelineEnabled() { return false; /* NEUTERED */ ');
-  const applied = TR.indexOf('/* NEUTERED */') !== -1;
-  check('nc_pattern_applied', applied);
-  (0, eval)(fs.readFileSync(process.argv[2], 'utf8'));
-  (0, eval)(fs.readFileSync(process.argv[3], 'utf8'));
-  (0, eval)(TR);        // neutered tool_rounds
-  (0, eval)(fs.readFileSync(process.argv[2].replace('escape_html.js', 'translation_model.js'), 'utf8'));  // core/translation_model.js (chat_render dep)
-  (0, eval)(fs.readFileSync(process.argv[2].replace('core/escape_html.js', 'ui/translation_indicator.js'), 'utf8'));  // ui/translation_indicator.js (chat_render dep)
-  (0, eval)(CHAT);      // real chat_render
-  global.config = { segmentTimeline: true };  // config ON, but gate forced false
-  const html = renderMessage(mkMsg(), 0);
-  check('nc_gate_off_no_timeline', html.indexOf('seg-timeline') === -1);
-  check('nc_gate_off_standalone_thinking_back', standaloneThinkingCount(html) === 1);
 }
 
 console.log(out.join('\n'));
@@ -243,7 +220,7 @@ def test_rendermessage_segment_gate_flips():
     assert proc.returncode == 0, f'node failed: {proc.stderr}\n{output}'
     fails = [ln for ln in output.splitlines() if ln.startswith('FAIL')]
     assert not fails, 'renderMessage segment-gate failures:\n' + output
-    assert output.count('PASS') >= 13, f'expected >=13 PASS lines, got:\n{output}'
+    assert output.count('PASS') >= 10, f'expected >=10 PASS lines, got:\n{output}'
 
 
 if __name__ == '__main__':

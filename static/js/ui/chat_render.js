@@ -935,9 +935,10 @@ function renderMessage(msg, idx) {
    * `content` for a VU user row — toolRounds/thinking remain display-only and
    * never reach the next agent); this is a render-layer change only. */
   /* ★ Interleaved segment timeline (epic pt_8b406df8fbe24ae5, step 5).
-   *   When the flag is ON and this finished message carries a `segments` list,
-   *   render tools with their PRECEDING thinking+narration inline (per-tool),
-   *   instead of the three grouped blocks.
+   *   When this finished message carries a `segments` list, render tools with
+   *   their PRECEDING thinking+narration inline (per-tool), instead of the
+   *   three grouped blocks. This is now the ONLY render path; the grouped
+   *   renderer remains only as the automatic fallback for segment-less rows.
    *   ★ Applies to the assistant path (`!isUser`) AND to autopilot VU turns
    *     (`_isVirtualUser`, role=user): the owner directive is that a VU turn
    *     renders with the IDENTICAL agent bubble — so it must take the SAME
@@ -951,7 +952,7 @@ function renderMessage(msg, idx) {
    *   msg.thinking block below is suppressed (_segTimelineRendered). */
   const _segTimelineAllowed = !isUser || msg._isVirtualUser;
   let _segTimelineRendered = false;
-  if (_segTimelineAllowed && _segTimelineEnabled()
+  if (_segTimelineAllowed
       && Array.isArray(msg.segments) && msg.segments.length > 0) {
     const _tl = renderSegmentTimelineHTML(msg.segments, msg, idx);
     if (_tl) {

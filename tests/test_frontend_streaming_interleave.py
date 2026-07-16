@@ -4,9 +4,10 @@ WHY
 ---
 The SETTLED render already interleaves each LLM round's thinking + narration
 ADJACENT to the tools it produced (``renderSegmentTimelineHTML``, reads
-``msg.segments``; flag ``_segTimelineEnabled()`` DEFAULT ON). The LIVE
-streaming path never got that (design doc §5 "step 5b", deferred), so during
-streaming:
+``msg.segments``). The interleaved timeline is now the ONLY render path — the
+former ``_segTimelineEnabled`` toggle was removed. The LIVE streaming path
+never got the interleave originally (design doc §5 "step 5b", deferred), so
+during streaming:
 
   1. On every tool round the backend emits ``delta_reset`` and the frontend
      BLINDLY zeroed ``content`` / ``thinking`` (sse_pipeline.js) — so an
@@ -44,8 +45,11 @@ The fix (this file's contract):
     latently dropped late ``compactionLayer`` / swarm / ``_hgTranslating``
     changes on long turns.
 
-Every assertion is paired with a NEUTER that disables the mechanism and proves
-the guard is load-bearing (double-neuter: break → the check flips → restore).
+Parts A and D pair their assertion with a NEUTER that disables the mechanism
+and proves the guard is load-bearing (break → the check flips → restore). Parts
+B and C lost their flag-OFF neuter when the ``_segTimelineEnabled`` toggle was
+removed (there is no OFF state left) — their positive sibling/adjacency and
+suppression checks carry the guard.
 
 Drives the REAL shipped JS under jsdom. Skips cleanly when node/jsdom absent.
 """
@@ -235,12 +239,12 @@ def test_streaming_interleave_deltareset_captures_prose():
 #  stamps). Asserts each round's prose lands in the panel body as a sibling of
 #  its .ptool-turn card, immediately BEFORE it (located by data-seg-round), and
 #  is NOT a descendant of any .ptool-turn — the owner's "don't box the three
-#  together" fix. NC: flag OFF → no per-round prose nodes (proves the render is
-#  flag-gated to the timeline path, not leaking into the legacy grouped render).
+#  together" fix. (The interleaved timeline is now the ONLY streaming render
+#  path — the former `_segTimelineEnabled` flag was removed — so there is no
+#  flag-OFF neuter left; the positive sibling/adjacency checks carry the guard.)
 # ═══════════════════════════════════════════════════════════════════════════
 _BODY_RENDER = r"""
 const { setup } = require(process.env.JSDOM_HARNESS);
-let _segFlag = true;
 const { document, check, report } = setup({
   root: process.argv[3],
   html: '<!DOCTYPE html><body>'
@@ -267,8 +271,6 @@ const { document, check, report } = setup({
     _renderTurnHead: () => '<div class="ptool-turn-head"></div>',
     _renderSoloRoundTag: (rno) => '<div class="ptool-turn-rno-solo">' + rno + '</div>',
     _turnLabelText: () => 'parallel',
-    // The flag under test — indirection so a neuter can flip it.
-    _segTimelineEnabled: () => _segFlag,
   },
 });
 
@@ -344,21 +346,11 @@ check('B_thinking_before_narration', iTh0 < iN0);
 check('B_round1_prose_after_round0_card', iN1 > iG0);
 check('B_round1_narration_above_its_card', iN1 < iG1);
 
-// ── NEUTER B: flag OFF → rebuild → NO per-round prose nodes + no seg-timeline
-//    class (proves the interleave render is gated to the timeline path). ──
-_segFlag = false;
-// Force a re-sync on a FRESH zone so the fingerprint gate doesn't short-circuit.
-const body2 = document.createElement('div'); body2.id = 'streaming-body';
-body.parentNode.replaceChild(body2, body);
-_ensureStreamZones(body2);
-const toolZone2 = body2.querySelector('[data-zone="tool"]');
-_syncToolRoundsDOM(toolZone2, rounds);
-const panel2 = toolZone2.querySelector('.ptool-panel');
-check('NCB_flag_off_no_seg_timeline_class', !!panel2 && !panel2.classList.contains('seg-timeline'));
-check('NCB_flag_off_no_per_round_thinking',
-  !toolZone2.querySelector('.seg-thinking[data-seg-round]'));
-check('NCB_flag_off_no_per_round_narration',
-  !toolZone2.querySelector('.seg-narration[data-seg-round]'));
+// (The former NEUTER B flipped the `_segTimelineEnabled` flag OFF to prove the
+//  interleave render was flag-gated. That flag was removed — the interleaved
+//  timeline is now the ONLY streaming render path (`_segEnabled` is
+//  unconditionally true in streaming_ui.js) — so there is no OFF state left to
+//  neuter. The positive B_* checks above already prove the render is correct.)
 
 report();
 """
@@ -370,7 +362,7 @@ def test_streaming_interleave_renders_prose_as_sibling_of_card():
     run_harness(
         target_js=os.path.join(JS_DIR, 'ui', 'streaming_ui.js'),
         body_js=_BODY_RENDER,
-        min_pass=18,
+        min_pass=15,
         label='streaming-interleave-render',
     )
 
@@ -394,19 +386,14 @@ def test_slim_seg_thinking_selector_scoped_to_seg_timeline():
 #           segment timeline renders (chat_render gate + translation.js gate).
 #
 #  Drives the REAL renderMessage over a finished assistant msg carrying
-#  segments + _translatePartial + _translateDone===false. With the flag ON
-#  (timeline renders), the bottom .translate-preview block must be ABSENT
-#  (translation shows inline), and the loading shell must be stamped
-#  data-seg-timeline. NC: flag OFF → the timeline doesn't render → the bottom
-#  .translate-preview reappears (the original "reappears on pause" bug),
-#  proving the suppression is load-bearing.
+#  segments + _translatePartial + _translateDone===false. The timeline renders
+#  (it is now the only render path for a segment-bearing turn), so the bottom
+#  .translate-preview block must be ABSENT (translation shows inline) and the
+#  loading shell must be stamped data-seg-timeline — proving the suppression
+#  fires whenever segments are present.
 # ═══════════════════════════════════════════════════════════════════════════
 _BODY_SUPPRESS = r"""
 const { setup } = require(process.env.JSDOM_HARNESS);
-// NOTE: tool_rounds.js is loaded as a target, so the REAL _segTimelineEnabled()
-// wins over any stub — it reads config.segmentTimeline (default ON when
-// undefined). So we drive the flag through `config`, exactly like production.
-const _cfg = {};
 const { document, check, report } = setup({
   root: process.argv[3],
   html: '<!DOCTYPE html><body><div id="chatInner"></div></body>',
@@ -434,9 +421,6 @@ const { document, check, report } = setup({
     _toolPanelHeaderLabel: () => 'tools',
     _computeToolBatches: (rs) => [{ key: 'L0', rounds: rs }],
     _renderToolSlot: (r) => '<div data-prn="' + r.roundNum + '">t</div>',
-    // The REAL _segTimelineEnabled (tool_rounds.js) reads config.segmentTimeline
-    // (undefined/true → ON; false → OFF). This is the production toggle.
-    config: _cfg,
   },
 });
 
@@ -459,9 +443,8 @@ function mkMsg() {
   };
 }
 
-// ── Flag ON (config.segmentTimeline undefined → default ON): the timeline
-//    renders → the bottom .translate-preview is absent. ──
-_cfg.segmentTimeline = true;
+// The turn carries segments → the interleaved timeline renders (the only
+// render path now) → the bottom .translate-preview is absent.
 const html = renderMessage(mkMsg(), 0);
 const wrap = document.createElement('div'); wrap.innerHTML = html;
 check('C_timeline_rendered', !!wrap.querySelector('.ptool-panel.seg-timeline'));
@@ -472,16 +455,12 @@ const loading = wrap.querySelector('.translate-loading');
 check('C_loading_shell_present', !!loading);
 check('C_loading_marked_seg_timeline', !!loading && loading.getAttribute('data-seg-timeline') === '1');
 
-// ── NEUTER C: flag OFF → the timeline does NOT render → the bottom
-//    .translate-preview REAPPEARS (the exact "reappears on pause" bug). ──
-_cfg.segmentTimeline = false;
-const html2 = renderMessage(mkMsg(), 0);
-const wrap2 = document.createElement('div'); wrap2.innerHTML = html2;
-check('NCC_flag_off_no_timeline', !wrap2.querySelector('.ptool-panel.seg-timeline'));
-check('NCC_flag_off_bottom_preview_reappears', !!wrap2.querySelector('.translate-preview'));
-const loading2 = wrap2.querySelector('.translate-loading');
-check('NCC_flag_off_loading_not_marked',
-  !loading2 || loading2.getAttribute('data-seg-timeline') !== '1');
+// (The former NEUTER C flipped `config.segmentTimeline` OFF to prove the
+//  bottom `.translate-preview` reappeared when the timeline did not render.
+//  That flag was removed — the timeline is now the ONLY render path — so the
+//  suppression is unconditional and there is no OFF state left to neuter. The
+//  positive C_* checks above prove the preview is suppressed + the loading
+//  shell is marked seg-timeline.)
 
 report();
 """
@@ -499,7 +478,7 @@ def test_streaming_interleave_suppresses_bottom_translate_preview():
             os.path.join(JS_DIR, 'ui', 'translation_indicator.js'),
             os.path.join(JS_DIR, 'ui', 'tool_rounds.js'),
         ],
-        min_pass=7,
+        min_pass=4,
         label='streaming-interleave-suppress',
     )
 

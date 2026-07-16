@@ -183,15 +183,6 @@ function openSettings() {
     kthCb.checked = config.keepToolHistory !== false; // default true
   }
 
-  // Per-tool inline timeline (segment render) toggle — defaults to true.
-  //   Owner-facing switch for the interleaved per-tool render on the
-  //   static/DB path (epic pt_8b406df8fbe24ae5). Backed by config.segmentTimeline
-  //   (persisted client config), not a raw localStorage key.
-  var segTlCb = document.getElementById('settingSegmentTimeline');
-  if (segTlCb) {
-    segTlCb.checked = config.segmentTimeline !== false; // default true
-  }
-
   // Auto-generate conversation title toggle — defaults to false (manual)
   var agtCb = document.getElementById('settingAutoGenerateTitle');
   if (agtCb) {

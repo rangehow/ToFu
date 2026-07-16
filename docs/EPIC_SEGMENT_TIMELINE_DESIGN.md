@@ -570,10 +570,57 @@ All four ratified (this turn). Recorded here so the doc stays the source of trut
 - **NOT committed (owner attribution). Server restart needed** (import-time backend
   + v-unchanged; frontend bundle reload).
 
+---
+
+### 7.6 Step 5c status — TOGGLE REMOVED, interleaved timeline is the SOLE render path (2026-07-16, epic pt_b692d7df993a4abd)
+- **Owner directive.** "Make the interleaved timeline code our only rendering
+  method, remove this switch, then clean up the old code and optimize the new."
+  The `_segTimelineEnabled()` feature flag + its owner-facing Settings toggle
+  ("按工具内联时间线" / "Per-tool inline timeline") are GONE. Steps 5a/5b proved
+  the timeline at both the static/DB and streaming paths; the flag was the last
+  scaffolding.
+- **What was removed (all now the unconditional default):**
+  - `_segTimelineEnabled()` helper (`ui/tool_rounds.js`) — deleted. The
+    `config.segmentTimeline` read + the `tofu_segment_timeline` localStorage
+    override are gone.
+  - Settings control: the toggle `<div>` in `index.html`, the openSettings sync
+    (`settings/core_panel.js`), the saveSettings persist+repaint block
+    (`settings/save_export.js`), and the `settings.segmentTimeline` /
+    `settings.segmentTimelineDesc` i18n keys (`i18n.js`).
+  - Both call sites unconditionalized: `chat_render.js renderMessage` dropped
+    the `&& _segTimelineEnabled()` guard (the gate is now simply "does this turn
+    carry `segments`?"); `streaming_ui.js` hardcodes `_segEnabled = true` /
+    `_segCls = " seg-timeline"`.
+- **The grouped renderer is NOT deleted — it survives as the automatic,
+  non-user-facing SEGMENT-LESS fallback.** `renderToolRoundsHTML` /
+  `_renderUnifiedGroup` / `_renderToolGroupsHTML` remain because they are the
+  render path for: (a) live streaming's base panel (the timeline is "streaming
+  grouped panel + per-round inline prose"), (b) pre-v36 conversation rows that
+  carry no `segments`, and (c) the paper-reader / branch-preview / upload-preview
+  surfaces, which have no segments. `renderSegmentTimelineHTML` still returns ""
+  for a segment-less / unmatchable row → the grouped fallback renders it. This
+  is the "keep it as automatic fallback, not a user choice" reading of the
+  directive.
+- **Test cleanup (the "clean up old code" half).** The two primary tests
+  (`test_frontend_segment_timeline.py::test_settings_toggle_is_wired`,
+  `test_frontend_rendermessage_segment_gate.py`) were already inverted to assert
+  the switch is ABSENT. Fixed the residual stale negative-controls in
+  `test_frontend_streaming_interleave.py`: NEUTER B (flipped `_segFlag` off) and
+  NEUTER C (flipped `config.segmentTimeline` off) tested a flag-OFF state that no
+  longer exists — removed, with `min_pass` lowered (B 18→15, C 7→4); the positive
+  sibling/adjacency + suppression checks carry the guard. Verified green:
+  segment_timeline + rendermessage_segment_gate + streaming_interleave +
+  autopilot_vu_timeline/flat_render + grouped_panel_narration + the ~9 other
+  stub-site harnesses.
+- **Remaining:** step 5b streaming per-segment freeze is landed; step 6 (retire
+  the derived channels) is still gated on pre-v36 rows aging out — the grouped
+  fallback cannot be deleted until then.
+
 *Prepared as the design-first deliverable for board epic
 `pt_cb8f98b0cb9b47fb`. Blast radius verified by direct code inventory
 (backend + frontend), not asserted. Steps 1-4 DONE (segments now DRIVE the
 server-side DB-history rebuild; narrator leak fixed at root); step 5a DONE
-(the VISIBLE interleaved render on the static/DB path, flag-gated). Remaining:
-step 5b (streaming hot-path per-segment freeze) + step 6 (retire derived
-channels once legacy rows age out).*
+(the VISIBLE interleaved render on the static/DB path); step 5c DONE (the
+flag/toggle removed — the interleaved timeline is now the SOLE render path, with
+the grouped renderer retained only as the automatic segment-less fallback).
+Remaining: step 6 (retire derived channels once legacy rows age out).*

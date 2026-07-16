@@ -57,10 +57,13 @@ TR_JS = os.path.join(ROOT, 'static', 'js', 'ui', 'tool_rounds.js')
 
 def _extract_timeline_fns() -> str:
     """Extract the contiguous timeline helper block from tool_rounds.js:
-    from `function _segTimelineEnabled(` through the end of
-    `renderSegmentTimelineHTML` (just before `function _renderUnifiedGroup(`)."""
+    from `function _roundsByToolCallId(` through the end of
+    `renderSegmentTimelineHTML` (just before `function _renderUnifiedGroup(`).
+    The interleaved timeline is now the ONLY render path — the former
+    `_segTimelineEnabled` feature-flag helper was removed, so extraction starts
+    at the first surviving timeline helper."""
     src = open(TR_JS, encoding='utf-8').read()
-    start = src.index('function _segTimelineEnabled(')
+    start = src.index('function _roundsByToolCallId(')
     end = src.index('\nfunction _renderUnifiedGroup(')
     chunk = src[start:end]
     assert 'renderSegmentTimelineHTML' in chunk, 'extraction missed the timeline fns'
@@ -186,22 +189,10 @@ check('fallback_empty_when_unmatchable', html === '');
 // Empty segments → "".
 check('empty_segments_empty', renderSegmentTimelineHTML([], msg, 0) === '');
 
-// Flag helper NEW contract: DEFAULT ON (config.segmentTimeline undefined →
-// enabled). config=false disables. localStorage is an explicit override.
-config.segmentTimeline = undefined;
-check('flag_on_by_default', _segTimelineEnabled() === true);
-config.segmentTimeline = false;
-check('flag_off_when_config_false', _segTimelineEnabled() === false);
-config.segmentTimeline = true;
-check('flag_on_when_config_true', _segTimelineEnabled() === true);
-// localStorage override beats config.
-config.segmentTimeline = true;
-localStorage.setItem('tofu_segment_timeline', '0');
-check('ls_override_forces_off', _segTimelineEnabled() === false);
-config.segmentTimeline = false;
-localStorage.setItem('tofu_segment_timeline', '1');
-check('ls_override_forces_on', _segTimelineEnabled() === true);
-localStorage.removeItem('tofu_segment_timeline');
+// (The former `_segTimelineEnabled` flag helper was removed — the interleaved
+// timeline is now the only user-facing render path, so there is no toggle
+// contract left to assert here. renderSegmentTimelineHTML still returns "" for
+// segment-less / unmatchable rows, which is the sole remaining fallback.)
 console.log(out.join('\n'));
 """
 
@@ -351,11 +342,11 @@ def test_timeline_interleaves_prose_adjacent_to_tools():
 
 
 @pytest.mark.skipif(not shutil.which('node'), reason='node not installed')
-def test_timeline_fallback_and_flag():
+def test_timeline_fallback_when_unmatchable():
     out = _run(_FALLBACK_HARNESS)
     fails = [ln for ln in out.splitlines() if ln.startswith('FAIL')]
-    assert not fails, 'fallback/flag failures:\n' + out
-    assert out.count('PASS') >= 7, f'expected >=7 PASS, got:\n{out}'
+    assert not fails, 'fallback failures:\n' + out
+    assert out.count('PASS') >= 2, f'expected >=2 PASS, got:\n{out}'
 
 
 @pytest.mark.skipif(not shutil.which('node'), reason='node not installed')
@@ -405,7 +396,9 @@ def test_NC_stripping_the_strip_leaks_the_marker():
 def test_source_has_timeline_helper():
     src = open(TR_JS, encoding='utf-8').read()
     assert 'function renderSegmentTimelineHTML(' in src
-    assert 'function _segTimelineEnabled(' in src
+    # The feature-flag helper was removed — the timeline is the only path now.
+    assert 'function _segTimelineEnabled(' not in src, \
+        '_segTimelineEnabled should be gone — the timeline is the only render path'
     # The settled narration render must apply the notranslate strip (the fix).
     assert 'stripNoTranslateTags(_segText)' in src, \
         'the settled seg-narration render must strip notranslate markers before renderMarkdown'
@@ -807,31 +800,31 @@ def test_NC_command_block_flat_bites_on_reintroduced_radius():
 
 
 def test_settings_toggle_is_wired():
-    """The owner-facing toggle must actually exist end-to-end: HTML control +
-    i18n label (zh/en) + openSettings sync + saveSettings persist + the flag
-    reader keyed on config.segmentTimeline. A hidden localStorage key is not a
-    delivered feature (the owner's requirement)."""
+    """The interleaved timeline is now the ONLY render path — the owner-facing
+    toggle was removed. This test guards that the switch is fully gone end-to-
+    end so no dead control, i18n key, sync, persist, or config gate lingers.
+    (A leftover half-wired toggle is exactly the drift this asserts against.)"""
     idx_html = open(os.path.join(ROOT, 'index.html'), encoding='utf-8').read()
-    assert 'id="settingSegmentTimeline"' in idx_html, \
-        'the Settings toggle checkbox is missing from index.html'
-    assert 'settings.segmentTimeline' in idx_html, 'toggle i18n label not referenced'
+    assert 'id="settingSegmentTimeline"' not in idx_html, \
+        'the Settings toggle checkbox should be removed from index.html'
+    assert 'settings.segmentTimeline' not in idx_html, 'toggle i18n label still referenced'
 
     i18n = open(os.path.join(ROOT, 'static', 'js', 'i18n.js'), encoding='utf-8').read()
-    assert "'settings.segmentTimeline'" in i18n and "'settings.segmentTimelineDesc'" in i18n, \
-        'segment-timeline i18n keys (zh/en) missing'
+    assert "'settings.segmentTimeline'" not in i18n and "'settings.segmentTimelineDesc'" not in i18n, \
+        'segment-timeline i18n keys should be removed'
 
     core = open(os.path.join(ROOT, 'static', 'js', 'settings', 'core_panel.js'), encoding='utf-8').read()
-    assert 'settingSegmentTimeline' in core and 'config.segmentTimeline' in core, \
-        'openSettings does not sync the segment-timeline toggle from config'
+    assert 'settingSegmentTimeline' not in core and 'config.segmentTimeline' not in core, \
+        'openSettings should no longer sync a segment-timeline toggle'
 
     save = open(os.path.join(ROOT, 'static', 'js', 'settings', 'save_export.js'), encoding='utf-8').read()
-    assert 'settingSegmentTimeline' in save and 'config.segmentTimeline = ' in save, \
-        'saveSettings does not persist the segment-timeline toggle to config'
+    assert 'settingSegmentTimeline' not in save and 'config.segmentTimeline' not in save, \
+        'saveSettings should no longer persist a segment-timeline toggle'
 
-    # The reader must key on config.segmentTimeline (default ON), not only LS.
+    # The feature-flag reader must be gone (timeline is unconditional now).
     tr = open(TR_JS, encoding='utf-8').read()
-    assert 'config.segmentTimeline' in tr, \
-        '_segTimelineEnabled must read config.segmentTimeline (the toggle store)'
+    assert 'config.segmentTimeline' not in tr, \
+        'the removed _segTimelineEnabled config gate still lingers in tool_rounds.js'
 
 
 if __name__ == '__main__':

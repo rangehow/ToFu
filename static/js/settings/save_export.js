@@ -55,20 +55,6 @@ function saveSettings() {
     config.keepToolHistory = kthCb.checked;
   }
 
-  // Per-tool inline timeline (segment render) toggle — defaults true.
-  var segTlCb = document.getElementById('settingSegmentTimeline');
-  if (segTlCb) {
-    var _segTlOld = config.segmentTimeline !== false;
-    config.segmentTimeline = segTlCb.checked;
-    // Repaint the active conversation so the change is visible immediately
-    // (no reload needed) when the setting actually flipped.
-    if (config.segmentTimeline !== _segTlOld && typeof renderChat === 'function'
-        && typeof getActiveConv === 'function') {
-      var _segConv = getActiveConv();
-      if (_segConv) renderChat(_segConv, true);
-    }
-  }
-
   // Auto-generate conversation title toggle
   var agtCb = document.getElementById('settingAutoGenerateTitle');
   if (agtCb) {

@@ -14,7 +14,18 @@ So EVERY assertion here is on the ACTUAL Anthropic-translated wire bytes
 ``cache_control`` stripped where noted), NOT on ``canonical_messages`` /
 ``diff_canonical``.
 
-Two properties are locked:
+SCOPE / HONESTY (updated after tracing the live paths): the ``_task_id``-drop
+TTL flip is a REAL HAZARD but is NOT proven to be R4/R5's live cause. Every
+mid-task rebuild in the orchestrator RE-SETS ``_task_id`` (``_run.py:1037`` per
+round; ``llm_fallback/_call.py:286`` reactive-compact; ``:471`` model fallback),
+and the ``dispatch_stream`` 429-retry loop re-copies the ORIGINAL body each
+attempt (``_adapt_stream_body_for_slot``: ``body = dict(body_or_messages)``) so
+the pop in ``prepare_request`` hits the COPY, leaving the original's ``_task_id``
+intact. So on mrne3bqe (global TTL True, never hot-reloaded that day) no TTL
+delta fired — R4/R5 remains a LIVE-ONLY miss not yet reproduced to a specific
+flipping field (the peer owns the live byte-probe hunt + the source fix).
+
+Properties locked here:
 
   1. ``test_shared_prefix_byte_identical_across_rounds`` — in a single
      append-only task (the inner tool loop), the SHARED prefix of consecutive
@@ -23,14 +34,21 @@ Two properties are locked:
      reasoning replay. This is the property the Phase-0.5 representation-
      invariance fix guarantees; the test fails if that fix regresses.
 
-  2. ``test_ttl_marker_stable_only_when_task_id_preserved`` — the REPRODUCED
-     live vector. ``add_cache_breakpoints`` picks the stable-block TTL from the
-     per-task latch ONLY when ``body['_task_id']`` is present; a body REBUILD
-     that drops ``_task_id`` falls back to the live global ``CACHE_EXTENDED_TTL``
-     and can flip the stable marker ``{"ttl":"1h"}`` ↔ ``{}`` — a different
-     gateway cache entry → full miss → rebound next stable round. The test
-     asserts the latch holds the TTL stable when ``_task_id`` is preserved, and
-     the negative control shows the flip when it is dropped.
+  2. ``test_ttl_marker_stable_only_when_task_id_preserved`` — a HAZARD guard.
+     ``add_cache_breakpoints`` picks the stable-block TTL from the per-task
+     latch ONLY when ``body['_task_id']`` is present; a body REBUILD that drops
+     ``_task_id`` falls back to the live global ``CACHE_EXTENDED_TTL`` and can
+     flip the stable marker ``{"ttl":"1h"}`` ↔ ``{}`` — a different gateway
+     cache entry → full miss. This documents the latent hazard; it is NOT the
+     proven mrne3bqe cause.
+
+  3. ``test_live_retry_preserves_task_id`` — the LIVE-PATH proof that the
+     hazard does NOT fire on the real 429-retry path: driving the actual
+     ``dispatch_stream`` loop with a slot that 429s once then succeeds, the
+     ORIGINAL body still carries ``_task_id`` on the retry attempt (the pop hit
+     a per-attempt shallow copy). This is the empirical evidence that exonerates
+     the retry path — and a guard that fails loudly if a future refactor makes
+     dispatch mutate the caller's body in place.
 
 Run:
     PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q \
@@ -283,3 +301,83 @@ def test_task_id_popped_by_add_cache_breakpoints():
     assert '_task_id' not in body, (
         '_task_id must be consumed by add_cache_breakpoints; a rebuild that '
         'reuses this body therefore loses the latch key unless it re-sets it')
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  3. LIVE-PATH proof — the 429-retry loop does NOT drop _task_id
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@pytest.mark.unit
+def test_live_retry_preserves_task_id(monkeypatch):
+    """Drive the REAL ``dispatch_stream`` retry loop: a slot that raises 429 on
+    attempt 1 then succeeds on attempt 2. Assert the caller's ORIGINAL body
+    still carries ``_task_id`` on BOTH attempts — i.e. the retry re-copies the
+    original (``body = dict(body_or_messages)``) and the ``prepare_request`` pop
+    only touched a per-attempt copy. This EXONERATES the retry path as an R4/R5
+    cause and guards against a future refactor that mutates the caller in place.
+    """
+    from lib.llm_dispatch import api as _api
+    from lib.llm_errors import RateLimitError
+
+    # Fake slot the dispatcher hands back.
+    class _Slot:
+        key_name = 'k0'
+        model = _MODEL
+        api_key = 'x'
+        base_url = None
+        extra_headers = None
+        oauth = ''
+        protocol = 'openai'
+        provider_id = 'p'
+        thinking_format = ''
+        consecutive_errors = 0
+        def record_success(self, *a, **k): pass
+        def record_error(self, *a, **k): pass
+
+    class _Dispatcher:
+        def summarize_slots(self, *a, **k): return 'slot'
+        def pick_and_reserve(self, **k): return _Slot()
+        def has_capable_slots(self, *a, **k): return True
+    monkeypatch.setattr(_api, 'get_dispatcher', lambda: _Dispatcher())
+
+    # Record what each stream_chat attempt sees + whether the ORIGINAL keeps _task_id.
+    seen = []
+    original_body = {
+        'model': _MODEL,
+        'messages': [_system(), {'role': 'user', 'content': 'hi'}],
+        '_task_id': 'taskLive',
+    }
+
+    def _fake_stream_chat(body, **kw):
+        # ``body`` here is the per-attempt object dispatch built for the slot.
+        seen.append({
+            'attempt_body_is_original': body is original_body,
+            'attempt_body_has_task_id': '_task_id' in body,
+            'original_still_has_task_id': '_task_id' in original_body,
+        })
+        if len(seen) == 1:
+            raise RateLimitError('429 simulated')
+        return ({'role': 'assistant', 'content': 'ok'}, 'stop', {'prompt_tokens': 5})
+
+    # stream_chat is imported locally inside dispatch_stream via `from lib.llm import ... stream_chat`.
+    import lib.llm as _llm
+    monkeypatch.setattr(_llm, 'stream_chat', _fake_stream_chat, raising=False)
+    # Avoid a real sleep between 429 retries.
+    monkeypatch.setattr(_api.time, 'sleep', lambda *a, **k: None)
+
+    msg, finish, usage = _api.dispatch_stream(
+        original_body, prefer_model=_MODEL, strict_model=True, max_retries=5)
+
+    assert finish == 'stop' and msg.get('content') == 'ok'
+    assert len(seen) == 2, f'expected one 429 retry then success, saw {len(seen)} attempts'
+    # The KEY assertion: the ORIGINAL body kept _task_id across the retry.
+    assert seen[0]['original_still_has_task_id'], (
+        'the 429 first attempt POPPED _task_id off the caller original — '
+        'a rebuild would then lose the latch (this is the hazard the guard covers)')
+    assert seen[1]['original_still_has_task_id'], (
+        'the retry attempt found _task_id gone from the caller original — '
+        'dispatch mutated the caller body in place; the latch would break')
+    # Each attempt worked on a per-attempt copy, not the caller original.
+    assert not seen[0]['attempt_body_is_original'], (
+        'dispatch handed stream_chat the caller original instead of a copy — '
+        'the prepare_request pop would then mutate the caller')

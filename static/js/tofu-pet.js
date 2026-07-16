@@ -101,8 +101,9 @@
   // up) and periodically turns its head to the other side, as if watching the
   // scene. No extra art (reuses the 'alert' frame + the facing flip). This is a
   // distinct stationary ACTIVITY so the pet does more than pace the bar.
-  var GAZE_TURN_MS = 900;
+  var GAZE_TURN_MS = 1300;
   var _gazeAccum = 0;
+  var _turnTimer = null;   // clears the transient 'pivot' pop after a facing flip
 
   // Transient expressions auto-return to the resolved state after their beat.
   var TRANSIENT = { happy: 1, celebrating: 1, surprised: 1, curious: 1, alert: 1 };
@@ -461,9 +462,30 @@
     if (W.x > W.max) W.x = W.max;
   }
 
-  function _face(dir) {
+  // pivot defaults to TRUE: a LOCOMOTION turn (wall bounce / chase / flee) is a
+  // whole-body about-face and gets the squash-hop. The stationary gaze
+  // head-turn passes pivot=false — you don't hop when you merely glance the
+  // other way, so it uses the instant mirror alone (no hop = no in-place jitter).
+  function _face(dir, pivot) {
+    if (pivot === undefined) pivot = true;
+    var changed = (dir !== W.dir);
     W.dir = dir;
+    // The facing layer has NO transition, so the horizontal mirror is INSTANT
+    // — it never tweens scaleX(+1)->scaleX(-1) through scaleX(0), which is what
+    // made the cat look like a sheet of paper flipping on its vertical axis.
     if (_facing) _facing.style.transform = 'scaleX(' + dir + ')';
+    // A real turn is a PIVOT, not a page-flip: overlay a brief squash-hop on the
+    // sprite (CSS keyframe gated by data-turning) so the cat reads as planting
+    // its feet and spinning to face the other way. Skipped under reduced-motion
+    // and for non-locomotion (gaze) flips.
+    if (changed && pivot && _el && !W.reduced) {
+      _el.setAttribute('data-turning', '1');
+      if (_turnTimer) clearTimeout(_turnTimer);
+      _turnTimer = setTimeout(function () {
+        _turnTimer = null;
+        if (_el) _el.removeAttribute('data-turning');
+      }, 260);
+    }
   }
   function _place() {
     if (_el) _el.style.transform = 'translateX(' + W.x.toFixed(1) + 'px)';
@@ -658,7 +680,7 @@
       _gazeAccum += dt * 1000;
       if (_gazeAccum >= GAZE_TURN_MS) {
         _gazeAccum -= GAZE_TURN_MS;
-        _face(-W.dir);
+        _face(-W.dir, false);   // glance only — instant mirror, no plant-and-hop
       }
     }
     if (W.state !== 'turn' && W.state !== 'chase' && _now() >= W.until && W.state !== 'react') {

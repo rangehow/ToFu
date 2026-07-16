@@ -918,6 +918,86 @@ def test_success_celebrates():
     assert r["expr"] == "celebrating", r
 
 
+def test_facing_layer_has_no_transition_no_paper_flip():
+    """ROOT of the 'flips like a sheet of paper on its vertical axis' bug: the
+    direction layer (.tofu-pet-facing) owns the scaleX(±1) mirror. If that layer
+    carries a `transition:transform`, flipping +1→-1 tweens THROUGH scaleX(0) —
+    the sprite collapses to a zero-width line and mirrors (the paper flip). The
+    mirror MUST be instant, so the .tofu-pet-facing rule must have no transition.
+    The natural turn motion is instead carried by the tofuPetPivot keyframe."""
+    css = (REPO / "static" / "styles.css").read_text()
+    m = re.search(r"\.tofu-pet-facing\{([^}]*)\}", css)
+    assert m, "could not isolate the .tofu-pet-facing rule"
+    body = m.group(1)
+    assert "transition" not in body, (
+        "the .tofu-pet-facing (direction) layer regained a transition — the "
+        "scaleX mirror will tween through 0 and re-create the paper-flip smear.\n"
+        "body=" + body)
+
+
+def test_turn_pivot_keyframe_exists_and_is_wired():
+    """A turn reads as a PIVOT (squash-hop), not a page-flip: tofu-pet.js stamps
+    data-turning on a facing change, and the CSS plays a tofuPetPivot keyframe.
+    Guard both the keyframe definition and its wiring, and assert the pivot has
+    NO horizontal scale (a scaleX in it would re-create the paper-flip)."""
+    css = (REPO / "static" / "styles.css").read_text()
+    js = PET_JS.read_text()
+    assert "data-turning" in js, "tofu-pet.js no longer stamps data-turning on a facing flip"
+    assert "[data-turning]" in css and "tofuPetPivot" in css, \
+        "the data-turning pivot rule / tofuPetPivot animation is missing"
+    m = re.search(r"@keyframes tofuPetPivot\{([^}]*)\}", css)
+    assert m, "tofuPetPivot keyframe not defined"
+    assert "scaleX" not in m.group(1), \
+        "tofuPetPivot must not scaleX — that would re-introduce the paper-flip"
+
+
+def test_gaze_head_turn_does_not_hop():
+    """The stationary 'gaze' state flips facing every GAZE_TURN_MS while the cat
+    SITS still looking around — it must use the instant mirror ALONE (no
+    plant-and-hop), otherwise a calmly-gazing cat jitters a squash-hop in place
+    every ~1.3s. Guard the seam: (1) the gaze call site passes pivot=false, and
+    (2) _face only stamps data-turning when the pivot flag is truthy."""
+    js = PET_JS.read_text()
+    # (1) gaze glances with the instant mirror, no hop
+    assert re.search(r"_face\(\s*-W\.dir\s*,\s*false\s*\)", js), (
+        "the gaze head-turn no longer passes pivot=false — a sitting cat will "
+        "hop every glance again (the 'odd/jittery' feel).")
+    # (2) the data-turning stamp is gated on the pivot flag (not fired blindly)
+    m = re.search(r"function _face\(dir, pivot\)\{?[\s\S]*?\n  \}", js) \
+        or re.search(r"function _face\(dir, pivot\)[\s\S]{0,900}?data-turning", js)
+    assert m, "could not isolate the _face body"
+    body = m.group(0)
+    assert "pivot" in body.split("data-turning")[0], \
+        "_face stamps data-turning without consulting the pivot flag"
+    assert re.search(r"if \(changed && pivot", body), (
+        "the data-turning stamp must be gated on `changed && pivot` so gaze "
+        "(pivot=false) flips skip the hop.")
+
+
+def test_neuter_gaze_hop_scope_is_load_bearing():
+    """NEUTER: revert the gaze call site to the pivot-default `_face(-W.dir)` in
+    a COPY → the gaze-scope guard's pivot=false check must fail, proving it
+    bites (i.e. the gaze cat would hop again)."""
+    js = PET_JS.read_text()
+    poisoned = js.replace("_face(-W.dir, false)", "_face(-W.dir)", 1)
+    assert poisoned != js, "neuter did not match the gaze call site"
+    assert not re.search(r"_face\(\s*-W\.dir\s*,\s*false\s*\)", poisoned), \
+        "neuter left a pivot=false gaze call — guard would not bite"
+
+
+def test_neuter_facing_transition_reintroduces_paper_flip_risk():
+    """NEUTER: re-add a transform transition to .tofu-pet-facing in a COPY →
+    the no-transition guard must fire, proving it's load-bearing."""
+    css = (REPO / "static" / "styles.css").read_text()
+    poisoned = css.replace(
+        ".tofu-pet-facing{display:block;width:100%;height:100%}",
+        ".tofu-pet-facing{display:block;width:100%;height:100%;transition:transform 0.15s ease}",
+        1)
+    assert poisoned != css, "neuter did not match the .tofu-pet-facing rule"
+    m = re.search(r"\.tofu-pet-facing\{([^}]*)\}", poisoned)
+    assert m and "transition" in m.group(1), "neuter did not actually add a transition"
+
+
 def test_registered_in_bundler_manifest():
     assert "'tofu-pet.js'" in BUNDLER.read_text(), \
         "tofu-pet.js missing from _BUNDLE_FILES — it would load as a silent no-op"

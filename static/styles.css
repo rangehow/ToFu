@@ -12303,7 +12303,15 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
      (no 4-colour SNES bevel, no concentric inner ring — per the aesthetic:
      "no concentric borders"). */
   border:1.5px solid rgba(140,116,80,0.34);
-  border-radius:14px;
+  /* An IRREGULAR, hand-drawn frame — each corner a different elliptical radius
+     (the classic "sketched border" trick: unequal h/v radii bend the 1.5px
+     stroke into a subtly wobbly, drawn-by-hand line instead of a machine-perfect
+     rounded rectangle). Held in a var so every scene clip-path (canvas / fg /
+     ground) follows the SAME wonky outline — the painting is cropped to the
+     frame, not to a separate neat rect. Morphs to a second irregular shape on
+     hover for a living, gallery-hung feel. */
+  --bar-frame-radius:15px 23px 16px 22px / 22px 16px 24px 15px;
+  border-radius:var(--bar-frame-radius);
   color:#6B5A40;
   /* Soft, realistic elevation — a tight contact shadow + a wide, feathered
      ambient shadow (negative spread so it stays a gentle halo under the frame),
@@ -12315,7 +12323,7 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
   position:relative;
   z-index:1;
   padding:8px 16px;
-  transition:transform 0.2s cubic-bezier(0.22,0.9,0.3,1.1), box-shadow 0.2s ease;
+  transition:transform 0.2s cubic-bezier(0.22,0.9,0.3,1.1), box-shadow 0.2s ease, border-radius 0.35s ease;
   /* overflow VISIBLE so the organic top-edge overlay (grass/waves/clouds) can
      poke ABOVE the rim; the ground scene is instead kept inside via clip-path. */
   overflow:visible
@@ -12357,7 +12365,17 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
   -webkit-tap-highlight-color:transparent;
 }
 .tofu-pet[data-state="drag"]{cursor:grabbing}
-.tofu-pet-facing{display:block;width:100%;height:100%;transition:transform 0.15s ease}
+/* DIRECTION layer — the horizontal mirror is INSTANT (no transition). Tweening
+   scaleX(+1)->scaleX(-1) interpolates THROUGH scaleX(0), collapsing the sprite
+   to a zero-width vertical line that mirrors — the "flips like a sheet of paper
+   on its central vertical axis" bug. An instant flip snaps cleanly; the natural
+   turn motion is carried by the data-turning pivot pop on the img layer below. */
+.tofu-pet-facing{display:block;width:100%;height:100%}
+/* A turn is a PIVOT, not a page-flip: tofu-pet.js stamps data-turning="1" for
+   ~260ms whenever the facing flips, and this brief squash-hop makes the cat
+   plant + spin. It composites over the breathe/walk anim (they own translate/
+   scale on the img; this owns a tiny lift + settle). */
+.tofu-pet[data-turning] .tofu-pet-img{animation:tofuPetPivot .26s ease-out 1, tofuPetBreathe 3.8s ease-in-out infinite}
 .tofu-pet .tofu-pet-img{
   display:block;
   width:100%;
@@ -12465,6 +12483,10 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
 @keyframes tofuPetWalk{0%,100%{transform:translateY(0)}50%{transform:translateY(-1.6px)}}
 @keyframes tofuPetHop{0%,100%{transform:translateY(0)}40%{transform:translateY(-3px)}}
 @keyframes tofuPetJolt{0%{transform:translateY(0) rotate(0)}25%{transform:translateY(-2px) rotate(-5deg)}60%{transform:translateY(0) rotate(4deg)}100%{transform:rotate(0)}}
+/* Pivot = a natural about-face: a quick low squash (plant the paws) → small hop
+   → settle. NO horizontal scale here (the facing layer owns the instant mirror),
+   so it can never re-create the paper-flip smear. */
+@keyframes tofuPetPivot{0%{transform:translateY(0) scaleY(1)}30%{transform:translateY(1px) scaleY(0.9)}60%{transform:translateY(-2.5px) scaleY(1.04)}100%{transform:translateY(0) scaleY(1)}}
 
 /* ── The bar as a tiny SCENE (a living diorama). A low ground strip (grass
    lawn / pool lane) tiles seamlessly across the full width along the BOTTOM;
@@ -12505,7 +12527,7 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
   z-index:0;
   pointer-events:none;
   border-radius:inherit;
-  clip-path:inset(0 round var(--radius));
+  clip-path:inset(0 round var(--bar-frame-radius, var(--radius)));
   display:block;
 }
 [data-theme="tofu"] .project-bar[data-decor="off"] .tofu-scene-canvas{display:none}
@@ -12530,7 +12552,7 @@ html:not([data-theme="tofu"]) .project-bar .tofu-scene-canvas{display:none}
   z-index:2;
   pointer-events:none;
   border-radius:inherit;
-  clip-path:inset(0 round var(--radius));
+  clip-path:inset(0 round var(--bar-frame-radius, var(--radius)));
   display:block;
 }
 [data-theme="tofu"] .project-bar[data-decor="off"] .tofu-scene-fg-canvas{display:none}
@@ -12629,8 +12651,8 @@ html:not([data-theme="tofu"]) .project-bar .tofu-scene-fg-canvas{display:none}
   /* full-body scene: painterly, resolution-independent, rasterizes once */
   background-size:120px 100%;
   /* clip to the WHOLE rounded shell (all four corners) now that it fills the
-     body, not just the bottom two. */
-  clip-path:inset(0 round var(--radius));
+     body, not just the bottom two — the same irregular frame outline. */
+  clip-path:inset(0 round var(--bar-frame-radius, var(--radius)));
 }
 /* the meadow crest reaches higher over the rim than the gentle shared poke */
 [data-theme="tofu"] .project-bar[data-decor="meadow"]::before{
@@ -12648,7 +12670,7 @@ html:not([data-theme="tofu"]) .project-bar .tofu-scene-fg-canvas{display:none}
   bottom:0;
   height:auto;
   background-size:120px 100%;
-  clip-path:inset(0 round var(--radius));
+  clip-path:inset(0 round var(--bar-frame-radius, var(--radius)));
 }
 [data-theme="tofu"] .project-bar[data-decor="pool"]::before,
 [data-theme="tofu"] .project-bar[data-decor="sky"]::before{
@@ -12670,6 +12692,9 @@ html:not([data-theme="tofu"]) .project-bar .tofu-scene-fg-canvas{display:none}
 html:not([data-theme="tofu"]) .tofu-pet{display:none}
 [data-theme="tofu"] .project-bar:hover{
   transform:translateY(-2px);
+  /* a DIFFERENT irregular radius on hover — the frame subtly "re-draws" itself,
+     reinforcing the hand-made, non-rigid character. */
+  --bar-frame-radius:22px 15px 24px 16px / 16px 24px 15px 22px;
   border-color:rgba(140,116,80,0.45);
   box-shadow:
     0 2px 4px rgba(74,58,36,0.12),

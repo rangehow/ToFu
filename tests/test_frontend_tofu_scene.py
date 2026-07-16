@@ -1113,6 +1113,55 @@ def test_NEUTER_missing_fg_canvas_css_is_caught():
         "fg-canvas rule survived the neuter — test would not bite"
 
 
+def test_bar_frame_is_irregular_hand_drawn_not_a_neat_rectangle():
+    """The tofu project bar's frame must be an IRREGULAR hand-drawn outline, not
+    a uniform rounded rectangle (owner: 'the border is too neat and rigid').
+    We assert the base .project-bar rule defines --bar-frame-radius with the
+    elliptical `h / v` form AND at least 3 distinct radius tokens (a uniform
+    `14px` or a single value would read as machine-perfect)."""
+    css = CSS.read_text()
+    m = re.search(r'\[data-theme="tofu"\]\s*\.project-bar\{([^}]*)\}', css)
+    assert m, "base tofu .project-bar rule not found"
+    body = m.group(1)
+    rm = re.search(r'--bar-frame-radius\s*:\s*([^;]+)', body)
+    assert rm, "the irregular --bar-frame-radius token is missing — frame is rigid again"
+    val = rm.group(1)
+    assert '/' in val, (
+        "--bar-frame-radius must use the elliptical `h-radii / v-radii` form "
+        "(unequal horizontal/vertical radii are what bend the stroke into a "
+        f"hand-drawn wobble).\nvalue={val}")
+    tokens = set(re.findall(r'\d+px', val))
+    assert len(tokens) >= 3, (
+        f"--bar-frame-radius has too few distinct radii ({tokens}) — a uniform "
+        "corner reads as a neat rectangle, not a sketched frame.")
+    assert 'border-radius:var(--bar-frame-radius)' in body.replace(' ', ''), \
+        "the frame must consume --bar-frame-radius as its border-radius"
+
+
+def test_scene_clips_follow_the_irregular_frame():
+    """The painting must be cropped to the SAME wonky outline as the frame (not
+    a separate neat rect): the scene/fg canvases + full-body ground clips must
+    reference --bar-frame-radius in their clip-path."""
+    css = CSS.read_text()
+    assert css.count('clip-path:inset(0 round var(--bar-frame-radius') >= 3, (
+        "scene clip-paths no longer follow --bar-frame-radius — the painting "
+        "would be cropped to a neat rectangle inside the wonky frame.")
+
+
+def test_NEUTER_uniform_frame_radius_is_caught():
+    """NEUTER: collapse --bar-frame-radius to a single uniform value on a COPY →
+    the irregular-frame guard must fire, proving it is load-bearing."""
+    css = CSS.read_text()
+    poisoned = re.sub(r'(--bar-frame-radius\s*:\s*)[^;]+', r'\g<1>14px', css, count=1)
+    assert poisoned != css, "neuter did not rewrite --bar-frame-radius"
+    m = re.search(r'\[data-theme="tofu"\]\s*\.project-bar\{([^}]*)\}', poisoned)
+    rm = re.search(r'--bar-frame-radius\s*:\s*([^;]+)', m.group(1))
+    val = rm.group(1)
+    # the guard's two irregularity checks must both fail on the uniform value
+    assert not ('/' in val and len(set(re.findall(r'\d+px', val))) >= 3), \
+        "neuter left the value still irregular — test would not bite"
+
+
 if __name__ == "__main__":
     for fn in [test_mount_paints_opaque_base_and_many_dabs,
                test_scene_exposes_critter_and_spook_for_pet_interaction,

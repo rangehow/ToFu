@@ -437,8 +437,58 @@ _IDLE_RELEASE_S = int(getenv_compat('TOFU_DB_IDLE_RELEASE_S', default='120'))
 # semaphore — not PG's hard limit — is always the binding constraint, and an
 # overload surfaces as a clean queue/timeout instead of a PG "too many
 # clients" FATAL. Tunable via env for smaller / larger deployments.
-_MAX_TOTAL_CONNS = int(getenv_compat('TOFU_DB_MAX_CONNS', default='1000'))
-_CONN_ACQUIRE_TIMEOUT_S = int(getenv_compat('TOFU_DB_ACQUIRE_TIMEOUT', default='30'))
+
+
+def _pool_knob(name, default):
+    """Read a POOL-CRITICAL env knob with the .env FILE as authoritative.
+
+    Why not plain getenv_compat: both launchers (server.py / bootstrap.py)
+    load .env with ``if key not in os.environ`` — a *fill-if-absent* policy.
+    That means a value inherited from the container / IDE launch environment
+    SHADOWS the operator's .env file. For most knobs that's fine, but for the
+    pool ceiling / acquire timeout it is a silent-revert footgun: a stale
+    exported ``TOFU_DB_MAX_CONNS=400`` keeps overriding an intended .env=800
+    on EVERY restart (self-update, crash-reboot, container respawn), so the
+    storm-hardening never actually arms. (Observed 2026-07-16.)
+
+    Policy for these specific knobs: the .env file wins. If a live shell/env
+    export DISAGREES with the file, log a loud WARNING with BOTH values so the
+    drift is never silent, then use the file value. If there is no .env entry,
+    fall back to the environment (getenv_compat) exactly as before.
+
+    Deliberately narrow: only the pool knobs opt in, so intentional exports of
+    other TOFU_* vars keep their normal fill-if-absent precedence.
+    """
+    env_val = getenv_compat(name, default=None)
+    file_val = None
+    try:
+        env_path = os.path.join(BASE_DIR, '.env')
+        if os.path.exists(env_path):
+            with open(env_path) as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith('#') or '=' not in line:
+                        continue
+                    k, _, v = line.partition('=')
+                    if k.strip() == name:
+                        file_val = v.strip()
+                        # keep last non-comment assignment (mirrors shell semantics)
+    except Exception as e:
+        logger.debug('[DB] could not read .env for %s: %s', name, e)
+
+    if file_val is not None:
+        if env_val is not None and str(env_val).strip() != file_val:
+            logger.warning(
+                '[DB] pool knob %s: shell/env export (%s) DISAGREES with .env '
+                'file (%s) — using .env value %s (file is authoritative for '
+                'pool knobs; unset the stale export at its source to silence)',
+                name, env_val, file_val, file_val)
+        return file_val
+    return env_val if env_val is not None else default
+
+
+_MAX_TOTAL_CONNS = int(_pool_knob('TOFU_DB_MAX_CONNS', default='1000'))
+_CONN_ACQUIRE_TIMEOUT_S = int(_pool_knob('TOFU_DB_ACQUIRE_TIMEOUT', default='30'))
 _conn_semaphore = threading.BoundedSemaphore(_MAX_TOTAL_CONNS)
 _conn_count = 0
 _conn_count_lock = threading.Lock()

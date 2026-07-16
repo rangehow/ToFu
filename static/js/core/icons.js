@@ -110,16 +110,18 @@
   // welcome render sites (index.html static markup, newChat(), renderChat()'s
   // empty-conv branch) so the pill set stays identical everywhere.
   var _WELCOME_PILLS = [
-    ['brain',   'Extended Thinking'],
-    ['search',  'Search'],
-    ['download', 'URL Fetch'],
-    ['image',   'Image Input'],
-    ['zap',     'Co-Pilot'],
-    ['compass', 'Browser'],
+    ['brain',    'welcome.extendedThinking'],
+    ['search',   'welcome.search'],
+    ['download', 'welcome.urlFetch'],
+    ['image',    'welcome.imageInput'],
+    ['zap',      'welcome.coPilot'],
+    ['compass',  'welcome.browser'],
   ];
   function _welcomePillsHtml() {
+    var _t = (typeof t === 'function') ? t : function (k) { return k; };
     return _WELCOME_PILLS.map(function (p) {
-      return '<span class="feature-pill">' + Icon(p[0], 13) + p[1] + '</span>';
+      return '<span class="feature-pill">' + Icon(p[0], 13) +
+        '<span data-i18n="' + p[1] + '">' + _t(p[1]) + '</span></span>';
     }).join('');
   }
 

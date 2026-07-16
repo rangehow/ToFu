@@ -45,11 +45,11 @@ function startEditMessage(idx) {
   const _previewTray = _isHumanUser
     ? `<div class="image-previews" id="editImagePreviews"></div>` : "";
   const _resendBtn = _isHumanUser
-    ? `<button class="edit-resend-btn" onclick="saveEditAndResend(${idx})">Save &amp; Resend</button>` : "";
+    ? `<button class="edit-resend-btn" onclick="saveEditAndResend(${idx})">${t('editMsg.resend')}</button>` : "";
   const _hint = _isHumanUser
-    ? `Save: keep subsequent · Save &amp; Resend: truncate and regenerate · Drop/paste files to attach`
-    : `Edit this message in place`;
-  bodyEl.innerHTML = `<div class="edit-area">${_previewTray}<textarea class="edit-textarea" id="edit-textarea-${idx}"></textarea><div class="edit-actions"><button class="edit-cancel-btn" onclick="cancelEditMessage(${idx})">Cancel</button><button class="edit-save-btn" onclick="saveEditOnly(${idx})">Save</button>${_resendBtn}</div><div class="edit-hint">${_hint}</div></div>`;
+    ? t('editMsg.hintHuman')
+    : t('editMsg.hintInPlace');
+  bodyEl.innerHTML = `<div class="edit-area">${_previewTray}<textarea class="edit-textarea" id="edit-textarea-${idx}"></textarea><div class="edit-actions"><button class="edit-cancel-btn" onclick="cancelEditMessage(${idx})">${t('editMsg.cancel')}</button><button class="edit-save-btn" onclick="saveEditOnly(${idx})">${t('editMsg.save')}</button>${_resendBtn}</div><div class="edit-hint">${_hint}</div></div>`;
   // ★ Render AFTER DOM is built so #editImagePreviews exists (human-user only).
   if (_isHumanUser) renderImagePreviews();
   const ta = document.getElementById("edit-textarea-" + idx);

@@ -2118,6 +2118,19 @@ var _i18n = {
   'msgAction.exportTitle': { zh: '导出为手机屏幕图片', en: 'Export as phone-screen images' },
   'msgAction.deleteTurnTitle': { zh: '删除此轮对话', en: 'Delete this turn' },
   'msgAction.deleteMsgTitle': { zh: '删除此消息', en: 'Delete this message' },
+  // ── Inline message editor (edit_message.js) ──
+  'editMsg.cancel': { zh: '取消', en: 'Cancel' },
+  'editMsg.save': { zh: '保存', en: 'Save' },
+  'editMsg.resend': { zh: '保存并重发', en: 'Save & Resend' },
+  'editMsg.hintHuman': { zh: '保存：保留后续消息 · 保存并重发：截断并重新生成 · 可拖拽/粘贴文件作为附件', en: 'Save: keep subsequent · Save & Resend: truncate and regenerate · Drop/paste files to attach' },
+  'editMsg.hintInPlace': { zh: '就地编辑这条消息', en: 'Edit this message in place' },
+  // ── Welcome-screen capability chips (core/icons.js _WELCOME_PILLS) ──
+  'welcome.extendedThinking': { zh: '深度思考', en: 'Extended Thinking' },
+  'welcome.search': { zh: '搜索', en: 'Search' },
+  'welcome.urlFetch': { zh: 'URL 抓取', en: 'URL Fetch' },
+  'welcome.imageInput': { zh: '图片输入', en: 'Image Input' },
+  'welcome.coPilot': { zh: '副驾驶', en: 'Co-Pilot' },
+  'welcome.browser': { zh: '浏览器', en: 'Browser' },
   'project.undoTurnConfirm': { zh: '确定要撤销本轮对话的 {count} 处代码修改吗？\n此操作将恢复这些文件到修改前的状态。', en: 'Undo the {count} code change(s) from this turn?\nThis restores those files to their pre-edit state.' },
   'project.undoAllConfirm': { zh: '确定要撤销所有代码修改吗？\n\n此操作将恢复所有被修改的文件到原始状态，包括所有对话中的修改。', en: 'Undo ALL code changes?\n\nThis restores every modified file to its original state, including changes from all conversations.' },
   // ── Chat view: conv-ref badge, image-gen batch banner, compaction marker, bilingual labels (ui/chat_render.js) ──

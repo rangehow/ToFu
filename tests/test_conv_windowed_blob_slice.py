@@ -137,6 +137,7 @@ def test_page_up_slice_is_also_trimmed():
     for m in served['messages']:
         for f in _HEAVY:
             assert f not in m, f'heavy field {f!r} leaked into a page-up message'
+        assert m.get('apiRounds') is not None, 'apiRounds must survive the trim'
         assert m.get('_trimmed') is True          # marker present for re-hydration
     assert served['trimmed'] is True
 
@@ -186,8 +187,14 @@ def test_trailing_ghost_in_tail_is_reconciled():
 #  Backend: heavy-field trim bounds the body by BYTES (not just count)
 # ═══════════════════════════════════════════════════════════════════════
 
-_HEAVY = ('toolRounds', 'segments', 'apiRounds', '_continueToolRounds',
-          '_continueApiRounds', 'toolSummary')
+# Heavy fields the windowed serve STRIPS for transport.
+_HEAVY = ('toolRounds', 'segments', '_continueToolRounds', 'toolSummary')
+# Heavy fields the windowed serve deliberately KEEPS: the cost popover's
+# per-round breakdown reads apiRounds and is never refilled by
+# hydrateFullConversation, so trimming it silently killed the table on a
+# reloaded long conversation. (Its ~226 KB/round _wire_fp bulk is already
+# stripped at persist time; the residual usage/toolCalls dicts are tiny.)
+_KEPT_HEAVY = ('apiRounds', '_continueApiRounds')
 
 
 def _heavy_msgs(n):
@@ -230,6 +237,9 @@ def test_trim_bounds_body_by_bytes():
     for m in served['messages']:
         for f in _HEAVY:
             assert f not in m, f'heavy field {f!r} leaked into a trimmed message'
+        # apiRounds is intentionally retained so the cost breakdown table
+        # survives a windowed (reloaded) open.
+        assert m.get('apiRounds') is not None, 'apiRounds must survive the trim'
         assert m.get('_trimmed') is True
         assert m['content'].startswith('answer #')      # light field kept
         assert m['thinking'] == 'hmm'                     # thinking kept

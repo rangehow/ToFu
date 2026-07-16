@@ -717,10 +717,9 @@ def _windowed_served_readonly(db, conv_id, r, window, before_seq):
 # Heavy per-message fields stripped from a WINDOWED serve so the response body
 # is bounded by BYTES, not just message count. These restate content already
 # rendered elsewhere or drive only the (lazy) tool-timeline / finish fold:
-#   • segments / toolRounds / apiRounds — the interleaved tool timeline + raw
-#     per-round transcripts (the bulk of a heavy assistant turn's bytes).
-#   • _continueToolRounds / _continueApiRounds — regen/continue-only, never
-#     first-paint.
+#   • segments / toolRounds — the interleaved tool timeline + raw per-round
+#     transcripts (the bulk of a heavy assistant turn's bytes).
+#   • _continueToolRounds — regen/continue-only, never first-paint.
 #   • toolSummary — written by the stream but READ by no renderer (dead weight).
 # The renderer degrades gracefully to a plain content/thinking render when these
 # are absent (chat_render.js guards on Array.isArray(segments)&&length, and
@@ -729,9 +728,20 @@ def _windowed_served_readonly(db, conv_id, r, window, before_seq):
 # is exercised. This trim is READ-ONLY on the serve path — the authoritative
 # blob keeps every field, and the PUT path refills any trimmed field back from
 # the stored blob by _msgId (see _save_conv_blocking's heavy-field preservation).
+#
+# ★ apiRounds / _continueApiRounds are DELIBERATELY NOT trimmed: the cost
+#   popover's per-round breakdown table renders only when apiRounds.length > 1
+#   (finish_info.js), and it is NEVER refilled by hydrateFullConversation (only
+#   the tool-timeline button triggers that) — so trimming it made a reloaded
+#   long conversation silently lose its per-round token/cost table. Their bulk
+#   (usage._wire_fp, ~226 KB/round) is already stripped at persist time by
+#   _sanitize_api_rounds_for_persist, leaving only the tiny usage/toolCalls/
+#   writeBreakdown dicts (tens of KB even for many rounds); the MB-scale weight
+#   lives in toolRounds/segments, which stay trimmed. So keeping apiRounds costs
+#   almost nothing yet keeps the cost breakdown working on the windowed path.
 _TRIMMABLE_HEAVY_FIELDS = (
-    'segments', 'toolRounds', 'apiRounds',
-    '_continueToolRounds', '_continueApiRounds', 'toolSummary',
+    'segments', 'toolRounds',
+    '_continueToolRounds', 'toolSummary',
 )
 
 

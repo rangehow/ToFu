@@ -62,108 +62,154 @@ Releasing `done` at parent-turn end (before the VU runs) has a forced cascade:
 So "emit done early" ⟺ "VU independent" ⟺ "new baton channel" — you cannot do one
 without all three. This is why it is a contract change, not a local edit.
 
-## 4. Target design
+## 4. Target design — REUSE the existing supersede index; add NO new baton
 
-Introduce an **autopilot chain descriptor** as the independent, transport-agnostic
-baton, decoupled from the parent `done` event:
+The purest mechanism removes the corner cases rather than covering them. The
+whole hand-carried baton (`autopilotNextTaskId`/`autopilotVuMessage` on `done` +
+its poll mirror + the cold-replay synthesis stamp) exists for ONE reason: the VU
+sub-task deliberately runs with `convId=''` "to stay out of the latest-task
+registry" (`autopilot.py`). Because the VU (and today the follow-up) are invisible
+to the server's conv→latest-task index, the frontend has no server-authoritative
+way to discover "what task is live for this conv," so the successor id must be
+hand-delivered on the terminal event of the turn before it.
 
-- **`task['_autopilot_chain']`** (persisted sidecar on the parent task + mirrored
-  to a conv-level field): `{vuTaskId, vuMsgId, nextTaskId?, state: 'vu_running'|'vu_done'|'spawned'|'done_no_followup'}`.
-  This is the SINGLE SOURCE OF TRUTH, obeying the charter's front/back contract
-  invariant (backend computes the lifecycle fact + STABLE IDs; frontend is a pure
-  reducer). It replaces the `autopilotNextTaskId`/`autopilotVuMessage` fields
-  riding `done`.
-- **Parent `done` fires immediately** at parent-turn end, carrying only
-  `autopilotChain: {vuTaskId, vuMsgId, state:'vu_running'}` when autopilot is
-  armed (enough for the frontend to keep the conv "live" and attach to the VU
-  task's stream). Drop `_autopilot_deciding` (no more withhold).
-- **VU is a normal child task** with its own entry in the task registry, its own
-  SSE stream (`/api/chat/stream/<vuTaskId>`) and poll endpoint. The frontend, on
-  seeing `autopilotChain.state=='vu_running'`, calls `connectToTask(convId, vuTaskId)`
-  exactly as `_attachAutopilotFollowup` already does for the successor — the VU
-  bubble streams over ITS OWN connection.
-- **VU's own `done`** carries `autopilotChain: {…, nextTaskId, state:'spawned'}`
-  (or `state:'done_no_followup'` when the VU emitted `TASK_DONE`). The frontend
-  then attaches to `nextTaskId` — same `_attachAutopilotFollowup` code path.
-- **Poll fallback + cold-replay** both read `task['_autopilot_chain']` from the
-  task dict (like `_autopilot_followup` is surfaced today at `chat.py:2193`), so
-  a client on either transport, or a fresh connection landing mid-chain, resolves
-  the exact same chain state. `_apply_autopilot_baton` becomes `_apply_autopilot_chain`.
+**But that index already exists and is already the right primitive:**
+`_record_latest_task(conv_id, task_id)` / `_latest_task_for_conv(conv_id)`
+(`lib/tasks_pkg/manager/_state.py`) is a process-wide, **cross-replica**
+(Epic C §4.3, mirrored into `runtime_state_store`) pointer to a conversation's
+newest task. `routes/conversations.py:_conv_has_live_task` already reduces exactly
+`_latest_task_for_conv(conv) is pending/running` to answer "is this conv live?".
 
-This makes an autopilot run a **plain sequence of independent agent bubbles**
-(parent → VU → follow-up), each on its own stream — literally "an agent bubble is
-just an agent bubble," which is the owner's stated north star for this cleanup.
+So the target is simply: **STOP opting out.**
+
+- Each turn of an autopilot chain (parent → VU → follow-up) is a **normal task
+  registered under the REAL `convId`** — the VU no longer runs with `convId=''`
+  and no longer forwards onto the parent stream. `_record_latest_task` fires for
+  it exactly as for any user-initiated task.
+- The frontend gets **ONE transport-agnostic reducer** (it mostly has it already
+  via `connectToTask` + the `_conv_has_live_task` GET field): after any turn's
+  `done`, if `conv.latestTaskId` (server-authoritative) names a *different*
+  pending/running task, attach to it. That single rule covers parent→VU,
+  VU→follow-up, AND VU-emitted-`TASK_DONE` (no newer task ⇒ nothing to attach,
+  chain ends) — with NO enum, NO per-transition state, NO `vu_msg` on the wire.
+- The VU message itself is already persisted to `conversations.messages`
+  (`_isVirtualUser:true`) before its task starts, so the frontend loads it from
+  the authoritative conv record on attach — it never needed to ride a baton.
+- **Parent `done` fires immediately** at parent-turn end. `_autopilot_deciding`
+  and the `_task_terminal` withhold branch are DELETED: there is nothing left to
+  wait for, because the successor is discovered from the index, not stamped onto
+  this event.
+
+Net deletions: `_VUEventForwarder`, `_autopilot_deciding` + its `_task_terminal`
+gate, `autopilotNextTaskId`/`autopilotVuMessage` on `done` + the poll mirror +
+`_apply_autopilot_baton` cold-replay synthesis, and the `convId=''` opt-out.
+Net additions: register the VU/follow-up under the real conv; one "attach to the
+conv's newer live task after done" rule on the client. This is strictly LESS
+code, and an autopilot run becomes a plain sequence of independent agent bubbles —
+"an agent bubble is just an agent bubble."
 
 ## 5. Exactly-once invariants that MUST survive (charter Pillar-#6 + poll-handoff)
 
-The migration is only acceptable if ALL of these hold; each maps to a guard:
+The migration is only acceptable if ALL of these hold. Note the mechanism change
+makes several *trivially* true rather than separately-guarded — the point of the
+simplification:
 
-1. **A spawned successor is never stranded.** (poll-handoff `test_baton_surfaced_when_followup_spawned`)
-2. **No premature/baton-less finalization during the decision window.** With the
-   withhold removed this reframes: a client attaching mid-VU must land on the VU
-   task's stream (not see the conv go idle). (reframes `test_status_gated_while_deciding`
-   + `test_sse_holds_open_while_deciding_then_delivers_baton`)
-3. **A plain non-autopilot done still closes promptly.** (poll-handoff `test_normal_done_task_unaffected` + `test_sse_normal_done_task_closes_promptly`)
-4. **A SYNTHESIZED done (cold-replay, no buffered event) still carries the chain.** (poll-handoff `test_sse_synthetic_done_carries_baton`)
+1. **A newer task is never stranded.** It is the conv's `_latest_task_for_conv`;
+   the frontend attaches by reading that index — the SAME signal on SSE, poll,
+   and cold reload, so there is no transport-specific baton to drop. (supersedes
+   `test_baton_surfaced_when_followup_spawned`)
+2. **A client attaching mid-chain lands on the live turn, never idle.** The index
+   points at the running VU/follow-up task regardless of when the client connects;
+   no decision-window withhold is needed because `done` no longer carries the
+   handoff. (supersedes `test_status_gated_while_deciding` +
+   `test_sse_holds_open_while_deciding_then_delivers_baton`)
+3. **A plain non-autopilot done closes promptly.** Unchanged — `_latest_task_for_conv`
+   equals this task, so there is no newer task to attach and the client finalizes.
+   (supersedes `test_normal_done_task_unaffected` + `test_sse_normal_done_task_closes_promptly`)
+4. **Cold-replay / late-connect is not a special case.** Reading the index +
+   loading the persisted VU message is the SAME path warm and cold — the whole
+   `_apply_autopilot_baton` synthesis branch is deleted, not re-implemented.
+   (supersedes `test_sse_synthetic_done_carries_baton`)
 
-Plus the charter front/back contract: the chain descriptor uses STABLE `_msgId`/
-task ids, never array indices or transient client state; when the backend cannot
-resolve a chain link it OMITS the field and the frontend's last-resort branch
-handles only that residual.
+Plus the charter front/back contract: the client attaches by the server-assigned
+STABLE task id from the index, never array indices or transient client state.
+
+### Exactly-once discipline this mechanism must still prove
+The one genuine hazard the baton's disappearance must not reintroduce: a turn's
+`done` and the index-advance to its successor must be observed **idempotently** —
+attaching to `latestTaskId` must be a no-op when the client is already on it
+(dedup by task id, which `_attachAutopilotFollowup` already does via `_msgId`),
+so a `done` seen on BOTH sse and a poll-fallback cannot double-attach. This is a
+client-side idempotent reducer, not a new server channel.
 
 ## 6. Migration-test plan (write these FIRST, RED before any prod edit)
 
-New suite `tests/test_autopilot_chain_handoff.py` — the SUPERSET of the current
-4 poll-handoff guards, re-expressed against `_autopilot_chain`:
+The suite asserts the ONE reducer — "attach to the conv's newer live task after
+`done`" — plus the deletions. It is deliberately small because the mechanism is
+small (there is no enum/state/baton to enumerate cases for):
 
-- `test_chain_vu_running_surfaced_on_parent_done` — parent done with an armed
-  chain carries `autopilotChain{vuTaskId,vuMsgId,state:'vu_running'}` and does
-  NOT carry a `nextTaskId` yet.
-- `test_parent_done_fires_immediately_no_withhold` — with the latch removed, a
-  parent SSE with autopilot armed emits its `done` promptly (state snapshot →
-  done, no multi-second hold), and the done carries `state:'vu_running'`.
-- `test_vu_task_own_stream_carries_chain_spawned` — the VU task's OWN done
-  carries `autopilotChain{nextTaskId,state:'spawned'}`.
-- `test_vu_task_done_no_followup_state` — VU emitted TASK_DONE → VU done carries
-  `state:'done_no_followup'`, no `nextTaskId`.
-- `test_poll_surfaces_chain_each_transport` — `/api/v1/chat/poll/<vuTaskId>` and
-  `/poll/<parentTaskId>` both surface the chain from the task dict.
-- `test_cold_replay_synthetic_done_carries_chain` — synthesized done (no buffered
-  event) still stamps `autopilotChain` from `task['_autopilot_chain']`.
-- `test_plain_done_no_chain` — non-autopilot task: no chain keys, closes promptly.
+Backend `tests/test_autopilot_chain_handoff.py`:
+- `test_vu_task_registered_under_real_conv` — after the parent turn, the VU task
+  is `_latest_task_for_conv(convId)` (NOT `convId==''`); the follow-up in turn
+  supersedes it. This is the whole handoff — index advance, not a stamped baton.
+- `test_parent_done_fires_immediately_no_withhold` — with the latch deleted, a
+  parent SSE with autopilot armed emits `done` promptly (state → done, no
+  multi-second hold) and carries NO `autopilotNextTaskId`/`autopilotVuMessage`.
+- `test_done_carries_no_baton_fields` — neither the SSE `done` nor the poll body
+  carries the retired baton keys (the fields are GONE, not merely empty).
+- `test_conv_live_task_points_at_running_vu` — `_conv_has_live_task(convId)` is
+  True while the VU/follow-up runs (the client's single attach signal), on both
+  the warm and the cold-reload path (same index read).
+- `test_plain_done_no_successor` — non-autopilot task: it is its own
+  `_latest_task_for_conv`, no newer task, client finalizes; closes promptly.
 
 Frontend jsdom `tests/test_frontend_autopilot_chain_attach.py`:
-- parent done with `state:'vu_running'` → frontend calls `connectToTask(vuTaskId)`
-  and keeps the conv live (no idle/sidebar-dot-off).
-- VU done with `state:'spawned'` → `_attachAutopilotFollowup(nextTaskId)` fires
-  once (dedup by stable id; NC = missing chain → no double-attach).
+- after `done`, when `conv.latestTaskId` names a *different* pending/running task
+  → the client attaches to it exactly once (dedup by task id; NC = same task id
+  ⇒ no re-attach, no double-bubble).
+- VU message renders from the loaded conv record (`_isVirtualUser`), NOT from a
+  baton payload.
 
 **Keep the existing `test_autopilot_poll_handoff.py` green until the cutover
-commit**, then replace it in the SAME commit that removes `_autopilot_deciding`
-(the two describe mutually-exclusive worlds; a strangler-fig dual-run is not
-possible here because the withhold either exists or it doesn't).
+commit**, then DELETE it in the SAME commit — its 4 guards describe the baton
+world that no longer exists; the two mechanisms are mutually exclusive (the
+withhold + hand-carried baton either exist or they don't), so a dual-run is not
+possible.
 
 ## 7. Build order (each step green before the next; charter §strangler-fig ethos)
 
-1. **Land this doc + the migration-test suite in RED** (tests express the target;
-   prod unchanged; suite `@pytest.mark.skip('epic pt_8dc030176bad450b not yet cut over')`
-   so the collection gate stays green). ← *safe, additive, NON-contract-touching*
-2. Backend: introduce `task['_autopilot_chain']` written ALONGSIDE the existing
-   baton (dual-write, both consumed) — byte-identical behavior, new field ignored
-   by the frontend. Prove no regression against the CURRENT 4 guards.
-3. Frontend: teach `_attachAutopilotFollowup` + the done/poll handlers to PREFER
-   `autopilotChain` when present, else fall back to the legacy fields. Still
-   behind the withhold.
-4. **CUTOVER (the contract change — HUMAN-GATED):** run the VU as an independent
-   task, remove `_VUEventForwarder`, drop `_autopilot_deciding`, emit parent done
-   early, retire the legacy baton fields. Swap the test suites in the same commit.
-5. Cleanup: delete `_autopilot_deciding` references, the `_task_terminal` gate
-   branch, the abort-mirror thread's parent-stream assumptions; JOURNAL entry.
+1. **Land this doc + the migration-test suite in RED** (tests express the target
+   reducer; prod unchanged; suite `@pytest.mark.skip('epic pt_8dc030176bad450b
+   not yet cut over')` so the collection gate stays green). ← *safe, additive,
+   NON-contract-touching* — DONE (commit ef8826d; suite rewritten to the
+   supersede-index mechanism, no `_autopilot_chain` descriptor).
+2. Frontend FIRST (harmless without the backend change): make the client attach
+   to `conv.latestTaskId` after `done` when it is a different pending/running
+   task, idempotently, PREFERRING it over the legacy baton (which still fires,
+   so behavior is unchanged until step 3 stops sending it). Ship behind nothing —
+   it is a no-op while the VU still runs with `convId=''` (no newer conv task
+   appears), so it cannot regress the current baton path.
+3. **CUTOVER (the contract change — HUMAN-GATED):** register the VU/follow-up
+   under the real `convId` (drop the `convId=''` opt-out), remove
+   `_VUEventForwarder`, delete `_autopilot_deciding` + its `_task_terminal` gate,
+   emit parent `done` early, and retire the `autopilotNextTaskId`/
+   `autopilotVuMessage` baton + its poll mirror + `_apply_autopilot_baton`. Delete
+   `test_autopilot_poll_handoff.py` and un-skip this suite in the same commit.
+4. Cleanup: the abort-mirror thread's parent-stream assumptions (the VU now aborts
+   via its own task like any task); JOURNAL entry.
+
+There is NO "dual-write both batons" step — the pure mechanism reuses an index
+that already exists, so there is nothing to write twice. That removed step is the
+clearest evidence this is the simpler design.
 
 ## 8. Why implementation is BLOCKED here (not no-op'd)
 
-Steps 1–3 are safe and additive. **Step 4 mutates the exactly-once baton delivery
-contract**, which:
+Steps 1–2 are safe and additive (doc + skipped tests landed; the client-attach
+reducer is a no-op until the backend stops opting out). **Step 3 (cutover)
+mutates the exactly-once baton delivery contract** — even though it NET-DELETES
+that contract in favor of the pre-existing supersede index, retiring a
+load-bearing delivery path is exactly the kind of change that needs sign-off —
+which:
 - the charter marks as owner-personal (CAS/VU autopilot exactly-once delivery), and
 - the owner explicitly gated earlier this conversation: *"值得做但另开 epic;若现在
   做需明确授权动 baton 契约,我会先写迁移测试再动"* (worth doing but a separate epic;

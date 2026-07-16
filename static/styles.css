@@ -2785,25 +2785,6 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .paper-qa-send-btn:activ
 [data-theme="light"] .ig-mode-edit .imagegen-card{box-shadow:0 0 0 1px rgba(34,211,238,0.10),0 4px 14px rgba(34,211,238,0.08)}
 .search-mode-toggle{display:flex;align-items:center;gap:6px;padding:5px 11px 5px 8px;min-height:32px;box-sizing:border-box;border-radius:20px;cursor:pointer;user-select:none;position:relative;z-index:0;background:var(--bg-tertiary);border:1.5px solid var(--border);transition:border-color .4s,background .4s,color .3s,box-shadow .4s;color:var(--text-tertiary);font-size:12px;font-weight:600;font-family:'Jakarta Toolbar','Plus Jakarta Sans','Jakarta Fallback',sans-serif;white-space:nowrap}.search-mode-toggle::before{content:'';position:absolute;inset:-2px;border-radius:22px;padding:2px;background:conic-gradient(from var(--search-angle),var(--search-blue),var(--search-purple),var(--search-cyan),var(--search-blue));-webkit-mask:linear-gradient(#fff 0 0) content-box,linear-gradient(#fff 0 0);-webkit-mask-composite:xor;mask-composite:exclude;opacity:0;transition:opacity .5s ease;pointer-events:none;animation:none}.search-mode-toggle:hover{border-color:var(--border-light);background:var(--bg-hover)}.search-mode-toggle[data-mode="single"]{color:#93c5fd;border-color:transparent;background:rgba(59,130,246,0.08);animation:searchGlow 2.5s ease-in-out infinite}.search-mode-toggle[data-mode="single"]::before{opacity:1;animation:searchBorderSpin 2.5s linear infinite}.search-mode-toggle[data-mode="single"]:hover{background:rgba(59,130,246,0.12)}.search-mode-toggle[data-mode="single"] .sm-icon{color:#60a5fa;animation:searchIconPulse .5s ease forwards}.search-mode-toggle[data-mode="multi"]{color:#c4b5fd;border-color:transparent;background:rgba(139,92,246,0.1);animation:searchGlowPurple 2.5s ease-in-out infinite}.search-mode-toggle[data-mode="multi"]::before{opacity:1;background:conic-gradient(from var(--search-angle),var(--search-purple),#c084fc,var(--search-cyan),var(--search-purple));animation:searchBorderSpin 2.5s linear infinite}.search-mode-toggle[data-mode="multi"]:hover{background:rgba(139,92,246,0.15)}.search-mode-toggle[data-mode="multi"] .sm-icon{color:#a78bfa;animation:searchIconPulse .5s ease forwards}.sm-icon{display:flex;align-items:center;justify-content:center;transition:transform .4s cubic-bezier(.34,1.56,.64,1),color .3s}.sm-label{letter-spacing:.02em;max-width:60px;overflow:hidden;text-overflow:ellipsis}.sm-mode-pill{font-size:9px;font-weight:800;font-family:'JetBrains Mono',monospace;padding:2px 6px;border-radius:8px;letter-spacing:.04em;line-height:1}.search-mode-toggle[data-mode="off"] .sm-mode-pill{background:var(--border);color:var(--text-tertiary)}.search-mode-toggle[data-mode="single"] .sm-mode-pill{background:rgba(59,130,246,0.25);color:#93c5fd}.search-mode-toggle[data-mode="multi"] .sm-mode-pill{background:rgba(139,92,246,0.25);color:#c4b5fd}
 
-/* ═══ Inject-mode toggle (composer): queue-next-turn vs steer-into-running ═══
-   Mirrors .search-mode-toggle's pill shape. Two icon glyphs (queue lines /
-   steer bolt) swap on data-mode; only one is shown at a time. 'steer' lights
-   up green (an active, attention-worthy mode) while 'queue' is the quiet
-   default. Icons are inline SVG per §3.4 (no emoji). */
-.inject-mode-toggle{display:flex;align-items:center;gap:6px;padding:5px 11px 5px 8px;min-height:32px;box-sizing:border-box;border-radius:20px;cursor:pointer;user-select:none;position:relative;background:var(--bg-tertiary);border:1.5px solid var(--border);transition:border-color .3s,background .3s,color .3s;color:var(--text-tertiary);font-size:12px;font-weight:600;font-family:'Jakarta Toolbar','Plus Jakarta Sans','Jakarta Fallback',sans-serif;white-space:nowrap}
-.inject-mode-toggle:hover{border-color:var(--border-light);background:var(--bg-hover)}
-.inject-mode-toggle .im-icon{display:flex;align-items:center;justify-content:center;transition:color .3s}
-.inject-mode-toggle .im-icon>svg{display:block}
-.inject-mode-toggle .im-label{letter-spacing:.02em;max-width:60px;overflow:hidden;text-overflow:ellipsis}
-/* Show exactly one glyph per mode. */
-.inject-mode-toggle .im-icon-steer{display:none}
-.inject-mode-toggle[data-mode="steer"] .im-icon-queue{display:none}
-.inject-mode-toggle[data-mode="steer"] .im-icon-steer{display:flex}
-/* 'steer' active styling — green, matching the "live interjection" affordance. */
-.inject-mode-toggle[data-mode="steer"]{color:#6ee7b7;border-color:transparent;background:rgba(16,185,129,0.1)}
-.inject-mode-toggle[data-mode="steer"]:hover{background:rgba(16,185,129,0.16)}
-.inject-mode-toggle[data-mode="steer"] .im-icon{color:#34d399}
-@media(max-width:1024px) and (pointer:fine){.inject-mode-toggle .im-label{display:none}}
 /* ═══ Human-steer inbox-injection row (mid-turn) — reuses .sw-inbox-row/.sw-card
    styling; a distinct left accent so it reads as "the operator", not a peer. */
 .sw-steer-row .sw-inbox-row-header .ptool-icon{color:#34d399}
@@ -2922,7 +2903,7 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .paper-qa-send-btn:activ
  * toolbar in the phone @media block (submenus → “···” sheet, sm-label hidden).
  * NOTE: .submenu-label is deliberately NOT hidden even on desktop — the
  * 增强/工具/模式 triggers have NO icon, so hiding it leaves a bare number badge. */
-@media(max-width:1024px) and (pointer:fine){.depth-btn{padding:3px 6px;font-size:10px}.thinking-depth-bar{gap:1px}.search-mode-toggle .sm-label{display:none}.inject-mode-toggle .im-label{display:none}.submenu-arrow{display:none}.submenu-trigger{padding:4px 8px;gap:3px}}
+@media(max-width:1024px) and (pointer:fine){.depth-btn{padding:3px 6px;font-size:10px}.thinking-depth-bar{gap:1px}.search-mode-toggle .sm-label{display:none}.submenu-arrow{display:none}.submenu-trigger{padding:4px 8px;gap:3px}}
 /* ── Mobile breakpoint — see comprehensive version at end of file ── */
 .animation-slideUp{animation:slideUp .3s ease}
 .message-finish{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:10px;padding-top:8px;border-top:1px solid var(--border);user-select:none}.finish-tag,.token-tag{font-size:10px;font-weight:600;font-family:'JetBrains Mono',monospace;padding:2px 8px;border-radius:10px;line-height:1.4;white-space:nowrap}.finish-tag{color:var(--text-tertiary);background:var(--bg-tertiary);border:1px solid var(--border)}.finish-tag.ok{color:#34d399;background:rgba(52,211,153,0.08);border-color:rgba(52,211,153,0.2)}.finish-tag.warn{color:var(--thinking-text);background:var(--thinking-bg);border-color:var(--thinking-border)}.finish-tag.err{color:var(--error-text);background:var(--error-bg);border-color:var(--error-border)}.token-tag{color:var(--text-tertiary);background:transparent;border:1px solid var(--border);font-weight:500;letter-spacing:.02em}

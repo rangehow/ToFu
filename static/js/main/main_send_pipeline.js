@@ -8,6 +8,51 @@
    scope — no imports / exports needed.
    ═══════════════════════════════════════════════════════════════════ */
 
+/**
+ * Ask the human how to deliver a message SENT WHILE a turn is generating.
+ * Shown ONLY when a task is already running for `convId` (caller-gated). The
+ * dialog auto-closes to the safe default ('queue') if that running turn ends
+ * while it's open (liveCheck), so a moot choice never lingers on screen.
+ *
+ * @param {string} convId
+ * @returns {Promise<'steer'|'queue'>}
+ */
+async function _promptInjectMode(convId) {
+  if (typeof showChoice !== 'function') return 'queue';  // dialog base not loaded
+  const _tt = (k, d) => (typeof t === 'function' ? (t(k) !== k ? t(k) : d) : d);
+  // Inline SVGs (§3.4 — no emoji). steer = pen-to-line (interject into the
+  // live reply); queue = stacked lines (a fresh turn in line).
+  const steerIcon =
+    '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>';
+  const queueIcon =
+    '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>';
+  const choice = await showChoice({
+    title: _tt('inject.promptTitle', '正在生成中 — 这条消息怎么发送？'),
+    options: [
+      {
+        value: 'steer',
+        label: _tt('inject.labelSteer', '插入当前回复'),
+        subtitle: _tt('inject.subSteer', '在下一个工具调用边界注入,让模型立刻看到'),
+        icon: steerIcon,
+        accent: true,
+      },
+      {
+        value: 'queue',
+        label: _tt('inject.labelQueue', '排到下一轮'),
+        subtitle: _tt('inject.subQueue', '当前回复结束后作为新一轮自动发送'),
+        icon: queueIcon,
+      },
+    ],
+    dismissValue: 'queue',
+    liveCheck: () => {
+      const c = conversations.find((x) => x.id === convId);
+      return !!(c && (c.activeTaskId || activeStreams.has(convId)));
+    },
+  });
+  return choice === 'steer' ? 'steer' : 'queue';
+}
+if (typeof window !== 'undefined') window._promptInjectMode = _promptInjectMode;
+
 async function startAssistantResponse(convId) {
   const conv = conversations.find((c) => c.id === convId);
   if (!conv || activeStreams.has(convId) || conv.activeTaskId) return;
@@ -443,6 +488,27 @@ async function sendMessage() {
   //   (_TRANSLATE_SEND_TIMEOUT in routes/chat.py — 45 s) so the request gets
   //   a chance to fail cleanly with a concrete reason instead of being
   //   killed locally by an opaque AbortError.
+  // ★ Inject-mode decision — the optimistic user bubble is ALREADY in the
+  //   timeline (inserted above). If a turn is CURRENTLY generating for this
+  //   conversation, ask the human HOW to deliver this message: steer it into
+  //   the running reply (injected at the next tool-call boundary) or queue it
+  //   as a fresh turn. When nothing is running this is a normal send — no
+  //   prompt, no extra UI — and injectMode stays 'queue' (a server-side no-op
+  //   with no running task). See routes/chat.py's has_running_task branch.
+  const _turnRunning = () => !!(conv.activeTaskId || activeStreams.has(convId));
+  let _injectMode = 'queue';
+  if (_turnRunning()) {
+    _injectMode = await _promptInjectMode(convId);
+    // Race: the running turn may have ENDED while the prompt was open. If so,
+    // this is now a plain send (the backend's drainable check would fall a
+    // 'steer' back to the queue anyway) — _promptInjectMode already auto-closed
+    // via liveCheck and resolved to the safe default, so nothing to fix here.
+    if (_sendGeneration !== sendGen) {
+      console.log('[sendMessage] aborted — conv switched during inject-mode prompt');
+      return;
+    }
+  }
+
   const _sendAbortCtrl = new AbortController();
   let _sendAbortReason = '';  // '' | 'timeout' | 'user-stop' | 'unmount'
   const _sendTimeout = setTimeout(() => {
@@ -470,6 +536,12 @@ async function sendMessage() {
         message: msgPayload,
         config: _sendConfig,
         settings: _sendSettings,
+        /* Composer inject lane — only meaningful server-side when a task is
+         * already running for this conversation. Decided by a post-send prompt
+         * (_promptInjectMode) shown ONLY in that case; a normal (idle) send
+         * never prompts and leaves this 'queue' (a harmless no-op server-side
+         * when nothing is running). */
+        injectMode: _injectMode,
     };
     if (conv._lastAbortedTaskId) {
       _sendBody.abortTaskId = conv._lastAbortedTaskId;
@@ -510,6 +582,37 @@ async function sendMessage() {
       renderConversationList();
     }
     conv._serverMsgCount = result.msgCount || conv.messages.length;
+
+    // ★ Backend injected this as a STEER into the currently-running turn
+    //   (composer inject-mode = steer). The steer is NOT persisted as a
+    //   standalone user message — the backend represents it as a display-only
+    //   chip on the RUNNING assistant turn (USER_STEER_INJECT → the
+    //   _userSteerInjects sidecar, rehydrated by _rehydrateInjectRows). So we
+    //   MUST splice the optimistic user bubble here, exactly like the queue
+    //   lane: leaving it would show a phantom user bubble live that vanishes
+    //   into a chip on reload (the two states must match).
+    if (result.steered) {
+      console.log(
+        `%c[Steer] ➡ Server injected message into running turn for conv=${convId.slice(0,8)}`,
+        'color:#34d399;font-weight:bold'
+      );
+      if (conv.messages[userMsgIdx] === userMsg) {
+        conv.messages.splice(userMsgIdx, 1);
+        if (activeConvId === convId) {
+          const msgEl = document.getElementById('msg-' + userMsgIdx);
+          if (msgEl) msgEl.remove();
+        }
+      }
+      saveConversations(convId);
+      if (activeConvId === convId) {
+        _removeTranslatingBubble();
+      }
+      buildTurnNav(conv);
+      renderConversationList();
+      updateSendButton();
+      debugLog(t('steer.injected'), 'info');
+      return;  // ← exit try block, falls through to finally
+    }
 
     // ★ Backend decided to queue (active task running for this conversation)
     if (result.queued) {

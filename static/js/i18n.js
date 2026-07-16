@@ -908,8 +908,6 @@ var _i18n = {
   'settings.debugModeDesc': { zh: '显示 trace_id、复制会话 ID 按钮等开发调试信息', en: 'Show trace_id, copy conv ID buttons, and other debug info' },
   'settings.optimizerModule': { zh: '每日优化器', en: 'Daily Optimizer' },
   'settings.optimizerModuleDesc': { zh: '每晚 03:30 分析当日日志并自动提出改进建议（如屏蔽垃圾搜索域名）。关闭后不再运行分析，顶栏 OPTIMIZER 徽章隐藏。已应用的改动会保留直到手动撤销。', en: 'Every night at 03:30 local, analyses the day\'s logs and auto-proposes improvements (e.g. blocking spammy search domains). When off, analysis stops and the top-bar OPTIMIZER badge is hidden. Already-applied changes persist until manually reverted.' },
-  'settings.segmentTimeline': { zh: '按工具内联时间线', en: 'Per-tool inline timeline' },
-  'settings.segmentTimelineDesc': { zh: '在已完成的多工具回复中，把每个工具调用之前的思考与说明文字就近显示在该工具旁边（交错时间线），而不是把所有工具、所有思考、所有正文分别聚成三大块。加载/刷新对话时生效；实时流式仍为分组视图，回复结束后切换为时间线。', en: 'In finished multi-tool replies, show each tool call\'s preceding thinking and narration right next to that tool (interleaved timeline), instead of grouping all tools, all thinking and all content into three separate blocks. Applies on conversation load/reload; live streaming stays grouped and switches to the timeline once the reply finishes.' },
   'settings.keepToolHistory': { zh: '保留工具调用历史', en: 'Keep Tool Call History' },
   'settings.keepToolHistoryDesc': { zh: '多轮对话时保留完整的工具调用记录（搜索内容、网页抓取结果等），模型能看到之前搜过什么，避免重复调用。关闭可节省 token 但模型会丢失工具上下文', en: 'Preserve full tool call records (search results, fetched pages, etc.) across conversation turns. Model can see what was searched before, avoiding redundant calls. Disable to save tokens but model loses tool context' },
   'settings.autoGenerateTitle': { zh: '自动生成对话标题', en: 'Auto-Generate Conversation Titles' },
@@ -2044,7 +2042,11 @@ var _i18n = {
   'finishInfo.metaSum': { zh: '（计 {v}）', en: ' (total {v})' },
   // write-breakdown term chips
   'finishInfo.wbPrevOutput': { zh: '上一轮回复 {v}', en: 'prev reply {v}' },
-  'finishInfo.wbToolResults': { zh: '工具结果 {v}', en: 'tool results {v}' },
+  'finishInfo.wbToolResults': { zh: '上一轮工具结果 {v}', en: 'last round\u2019s tool results {v}' },
+  // Batch-correspondence hint: makes the offset-by-one explicit on the main
+  // row so a reader can cross-check the cost round against the tool panel
+  // without inferring the offset. Round N's write carries batch N-1's results.
+  'finishInfo.wbBatchRef': { zh: '（工具批次{n}流入）', en: ' (from tool batch {n})' },
   'finishInfo.wbContextWrite': { zh: '首次缓存上下文 {v}', en: 'first-cache context {v}' },
   'finishInfo.wbRecacheBody': { zh: '重新缓存正文 {v}', en: 're-cache body {v}' },
   'finishInfo.wbEnvelope': { zh: '消息开销 {v}', en: 'msg overhead {v}' },
@@ -2912,6 +2914,7 @@ var _i18n = {
   'brainChip.peers': { zh: '{n} 个活跃', en: '{n} active' },
   'brainChip.openEpics': { zh: '{n} 项待认领', en: '{n} open' },
   'brainChip.events': { zh: '{n} 条动态', en: '{n} events' },
+  'brainChip.msgs': { zh: '{n} 条消息', en: '{n} messages' },
   // ── Conv-meta tool cards: localized source chips ──
   'brainSrc.board': { zh: '团队看板', en: 'Team board' },
   'brainSrc.charter': { zh: '章程', en: 'Charter' },
@@ -2930,6 +2933,18 @@ var _i18n = {
   'brainWhy.claimPath': { zh: '在共享看板上预定特定文件／路径，让其他会话在本会话工作期间暂缓编辑——这是有时效、会自动过期的建议性占用，而非硬锁。', en: 'Reserves specific files/paths on the shared board so sibling conversations hold off editing them while this conversation works — a durational, auto-expiring advisory lease, not a hard lock.' },
   'brainWhy.releasePath': { zh: '清除先前的文件／路径占用，让其他会话可以再次编辑这些路径。', en: 'Clears a previously-held file/path reservation so sibling conversations may edit those paths again.' },
   'brainWhy.commit': { zh: '只提交本对话可证明为自己所写的文件（与本会话上一次写入逐字节一致）；同时带有其他会话未提交改动的文件会被保留，绝不一并提交。', en: "Commits ONLY the files this conversation provably authored (byte-identical to its own last edit); files also carrying a sibling's uncommitted changes are held back, never swept in." },
+  'brainWhy.getConv': { zh: '打开另一个历史会话的完整记录——它的消息、工具调用与结果——以便复用早先工作中的决策或上下文。', en: 'Opens the full transcript of another past conversation — its messages, tool calls, and results — so the agent can reuse decisions or context from earlier work.' },
+  'brainWhy.listConvs': { zh: '按标题和内容搜索你的其他会话，找到可供引用的相关历史讨论。', en: 'Searches your other conversations by title and content to find a relevant past discussion to reference.' },
+  // ── Conversation digest card (get_conversation) ──
+  'convDigest.roleUser': { zh: '用户', en: 'User' },
+  'convDigest.roleAssistant': { zh: '助手', en: 'Assistant' },
+  'convDigest.roleSystem': { zh: '系统', en: 'System' },
+  'convDigest.msgCount': { zh: '{n} 条消息', en: '{n} messages' },
+  'convDigest.images': { zh: '{n} 张图片', en: '{n} image' },
+  'convDigest.pdfs': { zh: '{n} 个 PDF', en: '{n} PDF' },
+  'convDigest.noText': { zh: '（无文本）', en: '(no text)' },
+  'convDigest.empty': { zh: '该会话没有消息。', en: 'This conversation has no messages.' },
+  'convDigest.truncated': { zh: '… 已省略较早的消息——展开「模型原文」查看完整记录。', en: '… earlier messages omitted — open the model view for the full transcript.' },
   // ── Commit result card (project_commit) ──
   'commitCard.outCommitted': { zh: '已提交', en: 'committed' },
   'commitCard.outPlanned': { zh: '仅预览', en: 'plan only' },

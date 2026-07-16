@@ -158,18 +158,11 @@ const readRound = {
 const readHtml = _renderUnifiedToolLine(readRound, false);
 check('read_falls_back_to_md', readHtml.includes('MD-DUMP:NORTH STAR PROSE'));
 
-// ── board_read deferred lane renders (parked epics were previously invisible) ──
-const deferRound = {
-  status: 'done', toolName: 'project_board_read', query: 'project_board_read',
-  toolContent: 'RAW', toolRounds: [],
-  results: [{ source: 'Board', boardSnapshot: {
-    open: 0, claimed: 0, deferred: 1, done: 0, lanes: {
-      deferred: [{ id: 'pt_p', title: 'PARKED EPIC Z', owner: '', dispatched: false }],
-    } } }],
-};
-const dHtml = _renderUnifiedToolLine(deferRound, false);
-check('deferred_lane_class', dHtml.includes('ptool-board-mini-deferred'));
-check('deferred_epic_title', dHtml.includes('PARKED EPIC Z'));
+// NOTE: the board has DELIBERATELY no deferred/parked lane (the shelving
+// mechanism was removed — see lib/conversations/project_board.py:452 "there is
+// deliberately NO parked/deferred state"). The prior `deferred_lane_class` /
+// `deferred_epic_title` / `board_defer_is_conv_meta` assertions tested a
+// removed feature and were retired.
 
 // ── project_feed_read → chronological activity list ──
 const feedRound = {
@@ -190,7 +183,6 @@ check('feed_not_md_dump', !fHtml.includes('MD-DUMP:RAW FEED PROSE'));
 
 // feed is a conv-meta tool (was missing from _CONV_META_TOOLS → content hidden)
 check('feed_is_conv_meta', _isRoundConvMeta({ toolName: 'project_feed_read' }));
-check('board_defer_is_conv_meta', _isRoundConvMeta({ toolName: 'project_board_defer' }));
 
 // feed empty state
 const feedEmpty = {
@@ -341,7 +333,54 @@ const cfHtml = _renderUnifiedToolLine(commitFail, false);
 check('commit_fail_outcome', cfHtml.includes('ptool-commit-outcome-failed'));
 check('commit_fail_error', cfHtml.includes('nothing clean to commit'));
 
+// ── get_conversation → structured conversation-digest card ──
+// The ugly case: get_conversation used to have NO structured renderer, so its
+// raw ═══ / ── User Message # transcript fell through to the Markdown dump.
+const digestRound = {
+  status: 'done', toolName: 'get_conversation', query: 'get_conversation: mrne7eq0',
+  toolContent: '═'.repeat(60) + '\nReferenced Conversation: "Prefix cache bug"\nRAW TRANSCRIPT PROSE',
+  toolRounds: [],
+  results: [{ source: 'Conversations', convDigest: {
+    convId: 'mrne7eq0msc9fu', title: 'Prefix cache bug', preset: 'aws.claude-opus-4.8',
+    msgCount: 1, truncated: false, messages: [
+      { index: 1, role: 'user', text: 'Continue troubleshooting the prefix cache failure',
+        images: 1 },
+      { index: 2, role: 'assistant', text: 'Let me read cache.py',
+        tools: ['read_files', 'grep_search'] },
+    ] } }],
+};
+const dHtml = _renderUnifiedToolLine(digestRound, false);
+check('digest_class', dHtml.includes('ptool-convdigest'));
+check('digest_preset', dHtml.includes('aws.claude-opus-4.8') && dHtml.includes('ptool-convdigest-preset'));
+check('digest_user_text', dHtml.includes('Continue troubleshooting the prefix cache failure'));
+check('digest_assistant_text', dHtml.includes('Let me read cache.py'));
+check('digest_role_chip', dHtml.includes('ptool-convdigest-role') && dHtml.includes('ptool-convdigest-user'));
+check('digest_tools_hint', dHtml.includes('ptool-convdigest-tools') && dHtml.includes('read_files'));
+check('digest_image_hint', dHtml.includes('ptool-convdigest-att') && dHtml.includes('1 image'));
+// the raw ═══ transcript prose must NOT be dumped as Markdown
+check('digest_not_md_dump', !dHtml.includes('MD-DUMP:'));
+check('digest_is_conv_meta', _isRoundConvMeta({ toolName: 'get_conversation' }));
+// routine read → collapsed, with an at-a-glance message-count chip + why caption
+function _isOpenD(h) { return h.includes('ptool-convmeta-block" open'); }
+check('digest_collapsed', dHtml.includes('ptool-convmeta-block" data-rn') && !_isOpenD(dHtml));
+check('digest_count_chip', dHtml.includes('ptool-convmeta-count') && dHtml.includes('1 messages'));
+check('digest_why_caption', dHtml.includes('ptool-convmeta-why') && dHtml.includes('full transcript'));
+check('digest_head_friendly', dHtml.includes('Opened a past conversation'));
+
+// get_conversation WITHOUT structured meta (e.g. raw-mode dump) → Markdown fallback
+const digestRaw = {
+  status: 'done', toolName: 'get_conversation', query: 'get_conversation',
+  toolContent: 'RAW JSON DUMP PROSE', toolRounds: [],
+  results: [{ source: 'Conversations' }],
+};
+check('digest_raw_falls_back', _renderUnifiedToolLine(digestRaw, false).includes('MD-DUMP:RAW JSON DUMP PROSE'));
+
 console.log(out.join('\n'));
+// tool_rounds.js installs a 1Hz countdown setInterval (window._timerCountdownTicker)
+// that keeps node's event loop alive → the subprocess would hang until the
+// pytest timeout. Clear it and exit explicitly. (Documented harness trap.)
+try { if (global.window && global.window._timerCountdownTicker) clearInterval(global.window._timerCountdownTicker); } catch (_e) {}
+process.exit(0);
 """
 
 
@@ -378,10 +417,9 @@ def test_structured_brain_tool_renderers():
         'PASS peer_epic', 'PASS peer_not_md_dump', 'PASS peer_empty',
         'PASS proposal_class', 'PASS proposal_text', 'PASS proposal_pending',
         'PASS read_falls_back_to_md',
-        'PASS deferred_lane_class', 'PASS deferred_epic_title',
         'PASS feed_list_class', 'PASS feed_who', 'PASS feed_summary',
         'PASS feed_kind', 'PASS feed_not_md_dump', 'PASS feed_empty',
-        'PASS feed_is_conv_meta', 'PASS board_defer_is_conv_meta',
+        'PASS feed_is_conv_meta',
         'PASS feed_notitle_resolves_title', 'PASS feed_notitle_not_raw_id',
         'PASS peermsg_class', 'PASS peermsg_target',
         'PASS peermsg_target_id_in_tooltip', 'PASS peermsg_target_not_raw',
@@ -408,6 +446,13 @@ def test_structured_brain_tool_renderers():
         'PASS commit_icon_not_wrench', 'PASS commit_open',
         'PASS commit_plan_outcome', 'PASS commit_plan_would',
         'PASS commit_fail_outcome', 'PASS commit_fail_error',
+        'PASS digest_class', 'PASS digest_preset',
+        'PASS digest_user_text', 'PASS digest_assistant_text',
+        'PASS digest_role_chip', 'PASS digest_tools_hint',
+        'PASS digest_image_hint', 'PASS digest_not_md_dump',
+        'PASS digest_is_conv_meta', 'PASS digest_collapsed',
+        'PASS digest_count_chip', 'PASS digest_why_caption',
+        'PASS digest_head_friendly', 'PASS digest_raw_falls_back',
     ):
         assert must in output, output
 
@@ -521,6 +566,20 @@ def test_NC_commit_result_renderer_is_load_bearing():
 
 @pytest.mark.skipif(not _node_deps_available(),
                     reason='node + jsdom dev-deps not installed (run npm install)')
+def test_NC_conv_digest_renderer_is_load_bearing():
+    """Disable the convDigest branch → get_conversation falls back to the MD
+    dump → digest_class + digest_not_md_dump FAIL while board + peer renderers
+    still work. This pins the fix for the ugly raw ═══ transcript rendering."""
+    _nc(
+        anchor='  if (meta.convDigest) return _renderConvDigest(meta.convDigest);',
+        replacement='  if (false) return _renderConvDigest(meta.convDigest);',
+        must_fail=['digest_class', 'digest_not_md_dump'],
+        must_still_pass=['board_mini_class', 'peer_list_class'],
+    )
+
+
+@pytest.mark.skipif(not _node_deps_available(),
+                    reason='node + jsdom dev-deps not installed (run npm install)')
 def test_NC_commit_icon_glyph_is_load_bearing():
     """Swap the project_commit git-commit glyph paths for the generic wrench in
     _webToolSvg → the commit round now wears the wrench → commit_icon_gitcommit
@@ -567,12 +626,13 @@ def test_NC_delivery_card_title_resolution_is_load_bearing():
                     reason='node + jsdom dev-deps not installed (run npm install)')
 def test_NC_feed_read_coverage_in_conv_meta_set():
     """Remove project_feed_read from _CONV_META_TOOLS → it stops routing to the
-    structured card (feed_is_conv_meta FAILS) while board_defer stays covered."""
+    structured card (feed_is_conv_meta FAILS) while another covered tool
+    (project_commit) stays a conv-meta member."""
     _nc(
         anchor='  "project_peer_status", "project_feed_read",',
         replacement='  "project_peer_status",',
         must_fail=['feed_is_conv_meta', 'feed_list_class'],
-        must_still_pass=['board_defer_is_conv_meta', 'board_mini_class'],
+        must_still_pass=['commit_is_conv_meta', 'board_mini_class'],
     )
 
 

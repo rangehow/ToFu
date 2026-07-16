@@ -9149,6 +9149,28 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
 .ptool-commit-numstat { font-size: 10.5px; color: var(--text-tertiary); }
 .ptool-commit-reason { font-family: var(--font-sans, sans-serif); font-size: 11px; color: var(--text-secondary); flex: 1; min-width: 0; }
 .ptool-commit-empty { font-size: 12px; color: var(--text-tertiary); font-style: italic; }
+/* Conversation digest card (get_conversation) — clean human view of a
+   referenced transcript: a meta row (preset + message count) then one row per
+   message with a role chip, text preview, and tool/attachment hints. Replaces
+   the raw ═══ / ── User Message # ASCII dump. */
+.ptool-convdigest { display: flex; flex-direction: column; gap: 8px; }
+.ptool-convdigest-meta { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.ptool-convdigest-preset { display: inline-flex; align-items: center; height: 17px; padding: 0 8px; font-size: 10px; font-weight: 650; letter-spacing: 0.02em; line-height: 1; border-radius: 999px; color: var(--accent); background: color-mix(in srgb, var(--accent) 15%, transparent); white-space: nowrap; }
+.ptool-convdigest-msgcount { font-size: 11px; color: var(--text-tertiary); }
+.ptool-convdigest-msgs { display: flex; flex-direction: column; gap: 5px; }
+.ptool-convdigest-msg { display: flex; align-items: flex-start; gap: 8px; padding: 6px 9px; background: var(--bg-secondary); border: 1px solid var(--border); border-left: 2px solid var(--border); border-radius: 5px; }
+.ptool-convdigest-user { border-left-color: var(--accent); }
+.ptool-convdigest-assistant { border-left-color: var(--pb-green, #22c55e); }
+.ptool-convdigest-system { border-left-color: #a78bfa; }
+.ptool-convdigest-role { flex-shrink: 0; display: inline-flex; align-items: center; height: 16px; padding: 0 7px; font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; color: var(--text-secondary); background: var(--bg-tertiary); border-radius: 7px; white-space: nowrap; }
+.ptool-convdigest-msgbody { flex: 1; min-width: 0; }
+.ptool-convdigest-text { font-size: 12px; line-height: 1.5; color: var(--text-primary); overflow-wrap: anywhere; }
+.ptool-convdigest-notext { color: var(--text-tertiary); font-style: italic; }
+.ptool-convdigest-hints { margin-top: 4px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ptool-convdigest-tools { display: inline-flex; align-items: center; gap: 4px; font-size: 10.5px; font-family: var(--mono, monospace); color: var(--text-tertiary); }
+.ptool-convdigest-att { display: inline-flex; align-items: center; height: 15px; padding: 0 6px; font-size: 10px; font-weight: 600; color: var(--text-secondary); background: var(--bg-tertiary); border-radius: 7px; white-space: nowrap; }
+.ptool-convdigest-empty { font-size: 12px; color: var(--text-tertiary); font-style: italic; }
+.ptool-convdigest-more { font-size: 11px; color: var(--text-tertiary); font-style: italic; }
 .ptool-batch-done-summary {
   display: flex;
   /* Top-align so a multi-line description keeps the status glyph / index

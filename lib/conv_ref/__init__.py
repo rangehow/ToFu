@@ -25,6 +25,7 @@ from lib.conv_ref._query import (  # noqa: E402,F401
 # ── Single-conversation render surface (._detail) ────────────────────────────
 from lib.conv_ref._detail import (  # noqa: E402,F401
     get_conversation,
+    build_conversation_digest,
     _extract_text,
     _format_tool_rounds,
     _extract_result_text,
@@ -41,6 +42,7 @@ __all__ = [
     '_keyword_clause',
     'list_conversations',
     'get_conversation',
+    'build_conversation_digest',
     '_extract_text',
     '_format_tool_rounds',
     '_extract_result_text',

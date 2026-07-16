@@ -13,14 +13,39 @@ from lib.utils import safe_json
 
 logger = get_logger(__name__)
 
+# Cap on the total rendered output so a huge conversation can't flood the
+# model's context window. Applies to both the prose transcript and the raw dump.
+MAX_CHARS = 80000
 
-def get_conversation(conversation_id, include_tool_details=True, current_conv_id=None):
+
+def _coerce_json(value, default, label=''):
+    """Parse a JSON column value regardless of DB backend.
+
+    On SQLite the ``messages`` / ``settings`` columns come back as TEXT, and on
+    PostgreSQL the JSONB columns are stringified by the driver's
+    ``_jsonb_as_string`` type-caster (``lib/database/_core.py``) — so both
+    normally arrive as ``str`` and go through :func:`safe_json`. This helper
+    additionally tolerates a driver returning an already-decoded ``dict`` /
+    ``list`` (the fallback path), mirroring the defensive pattern in
+    ``lib/conversations/project_peer.py``.
+    """
+    if isinstance(value, (dict, list)):
+        return value
+    return safe_json(value, default=default, label=label)
+
+
+def get_conversation(conversation_id, include_tool_details=True,
+                     current_conv_id=None, raw=False):
     """Retrieve and format the full content of a conversation.
 
     Args:
         conversation_id: ID of the conversation to fetch
         include_tool_details: whether to include full tool arguments/results
         current_conv_id: the current conversation's ID (to prevent self-reference loops)
+        raw: when True, return the full DB record (all row columns + settings +
+            the complete messages array with every field preserved) as a
+            structured JSON dump for debugging, instead of the readable prose
+            transcript.
 
     Returns a formatted string with all messages, tool calls, and results.
     """
@@ -29,12 +54,16 @@ def get_conversation(conversation_id, include_tool_details=True, current_conv_id
 
     db = _get_db()
     row = db.execute(
-        'SELECT id, title, messages, created_at, updated_at, settings FROM conversations WHERE id=? AND user_id=?',
+        'SELECT id, user_id, title, messages, created_at, updated_at, '
+        'settings, msg_count, rev FROM conversations WHERE id=? AND user_id=?',
         (conversation_id, DEFAULT_USER_ID)
     ).fetchone()
 
     if not row:
         return f"Error: Conversation '{conversation_id}' not found. Use list_conversations to find valid conversation IDs."
+
+    if raw:
+        return _render_raw_conversation(row, conversation_id)
 
     # ★ Layer 2 trigger: lazily (re)generate this conversation's project
     #   summary in the background when the model first reads it. Non-blocking —
@@ -48,13 +77,13 @@ def get_conversation(conversation_id, include_tool_details=True, current_conv_id
                      conversation_id, e)
 
     title = row['title'] or '(untitled)'
-    messages = safe_json(row['messages'], default=[], label='conv-ref-messages')
+    messages = _coerce_json(row['messages'], default=[], label='conv-ref-messages')
 
     if not messages:
         return f"Conversation '{title}' [{conversation_id}] exists but has no messages."
 
     # Parse settings for model info
-    settings = safe_json(row['settings'], default={}, label='conv-ref-settings')
+    settings = _coerce_json(row['settings'], default={}, label='conv-ref-settings')
 
     # Build formatted output
     parts = []
@@ -116,10 +145,143 @@ def get_conversation(conversation_id, include_tool_details=True, current_conv_id
     result = '\n'.join(parts).rstrip()
 
     # Safety: cap total length to avoid flooding context
-    MAX_CHARS = 80000
     if len(result) > MAX_CHARS:
         result = result[:MAX_CHARS] + f"\n\n... [output truncated at {MAX_CHARS} chars — conversation has more content]"
 
+    return result
+
+
+def build_conversation_digest(conversation_id, current_conv_id=None, max_messages=40):
+    """Build a STRUCTURED digest of a conversation for the human-view card.
+
+    This is the display sibling of :func:`get_conversation` (which returns the
+    verbatim prose transcript the MODEL reads). The frontend renders this dict
+    as a clean, scannable card instead of dumping the raw ``═══`` / ``── User
+    Message #`` ASCII separators as Markdown.
+
+    Never re-parses the prose result — reads the same DB row and emits a
+    typed structure (mirrors the ``boardSnapshot`` / ``peerStatus`` pattern in
+    ``lib/tasks_pkg/handlers/misc/_brain.py``).
+
+    Args:
+        conversation_id: the conversation to summarize.
+        current_conv_id: the active conversation (self-reference is a no-op).
+        max_messages: cap on per-message rows included in the digest.
+
+    Returns:
+        A dict ``{convId, title, preset, msgCount, messages: [...], truncated}``
+        or ``None`` when the conversation can't be read (self-ref / missing /
+        empty) so the caller falls back to the prose dump.
+    """
+    if current_conv_id and conversation_id == current_conv_id:
+        return None
+    try:
+        db = _get_db()
+        row = db.execute(
+            'SELECT id, title, messages, settings FROM conversations '
+            'WHERE id=? AND user_id=?',
+            (conversation_id, DEFAULT_USER_ID)
+        ).fetchone()
+    except Exception as e:
+        logger.debug('[conv_ref] digest DB read failed for %s: %s',
+                     conversation_id, e)
+        return None
+    if not row:
+        return None
+
+    messages = _coerce_json(row['messages'], default=[], label='conv-digest-messages')
+    if not isinstance(messages, list) or not messages:
+        return None
+    settings = _coerce_json(row['settings'], default={}, label='conv-digest-settings')
+
+    def _preview(text, limit=180):
+        s = ' '.join(str(text or '').split())
+        return (s[:limit] + '…') if len(s) > limit else s
+
+    rows = []
+    for i, msg in enumerate(messages[:max_messages]):
+        if not isinstance(msg, dict):
+            continue
+        role = msg.get('role', 'unknown')
+        entry = {
+            'index': i + 1,
+            'role': role,
+            'text': _preview(_extract_text(msg.get('content', ''))),
+        }
+        imgs = msg.get('images')
+        if imgs:
+            entry['images'] = len(imgs)
+        pdfs = msg.get('pdfTexts')
+        if pdfs:
+            entry['pdfs'] = len(pdfs)
+        if role == 'assistant':
+            tools = [
+                (r.get('toolName') or r.get('tool_name') or '')
+                for r in (msg.get('toolRounds') or [])
+                if isinstance(r, dict)
+            ]
+            tools = [t for t in tools if t]
+            if tools:
+                entry['tools'] = tools
+        rows.append(entry)
+
+    return {
+        'convId': conversation_id,
+        'title': row['title'] or '(untitled)',
+        'preset': settings.get('preset', ''),
+        'msgCount': len(messages),
+        'messages': rows,
+        'truncated': len(messages) > max_messages,
+    }
+
+
+def _render_raw_conversation(row, conversation_id):
+    """Render the full DB record of a conversation as a structured JSON dump.
+
+    Used for debugging: preserves every field of every message (``_msgId``,
+    ``timestamp``, ``finishReason``, ``usage``, ``model``, ``modifiedFileList``,
+    the complete ``toolRounds``, …) plus the row-level metadata columns
+    (``created_at``, ``updated_at``, ``msg_count``, ``rev``) and the raw
+    ``settings``. Nothing is truncated per-field; the whole payload is capped
+    at :data:`MAX_CHARS` so it cannot flood the context window.
+    """
+    messages = _coerce_json(row['messages'], default=[], label='conv-ref-raw-messages')
+    settings = _coerce_json(row['settings'], default={}, label='conv-ref-raw-settings')
+
+    record = {
+        'id': row['id'],
+        'user_id': row['user_id'],
+        'title': row['title'] or '(untitled)',
+        'created_at': row['created_at'],
+        'updated_at': row['updated_at'],
+        'msg_count': row['msg_count'],
+        'rev': row['rev'],
+        'settings': settings,
+        'messages': messages,
+    }
+
+    header = (
+        f"{'═' * 60}\n"
+        f"Raw Conversation Record: \"{record['title']}\"\n"
+        f"   ID: {conversation_id}\n"
+        f"   Messages: {len(messages) if isinstance(messages, list) else '?'}"
+        f"  (msg_count column: {row['msg_count']}, rev: {row['rev']})\n"
+        f"{'═' * 60}\n"
+    )
+
+    try:
+        dump = json.dumps(record, ensure_ascii=False, indent=2, default=str)
+    except (TypeError, ValueError) as e:
+        logger.warning('[conv_ref] raw dump JSON serialization failed for %s: %s',
+                       conversation_id, e, exc_info=True)
+        dump = str(record)
+
+    result = f"{header}```json\n{dump}\n```"
+
+    if len(result) > MAX_CHARS:
+        result = result[:MAX_CHARS] + (
+            f"\n... [raw record truncated at {MAX_CHARS} chars — "
+            f"conversation has more content]")
     return result
 
 

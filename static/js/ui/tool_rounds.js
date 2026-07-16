@@ -1097,6 +1097,10 @@ function _convMetaPurpose(round, tFn) {
       "Clears a previously-held file/path reservation so sibling conversations may edit those paths again."],
     project_commit: ["brainWhy.commit",
       "Commits ONLY the files this conversation provably authored (byte-identical to its own last edit); files also carrying a sibling's uncommitted changes are held back, never swept in."],
+    get_conversation: ["brainWhy.getConv",
+      "Opens the full transcript of another past conversation — its messages, tool calls, and results — so the agent can reuse decisions or context from earlier work."],
+    list_conversations: ["brainWhy.listConvs",
+      "Searches your other conversations by title and content to find a relevant past discussion to reference."],
   };
   if (tn.startsWith("project_board_") && !P[tn]) {
     return _t("brainWhy.boardMutate",
@@ -1110,6 +1114,73 @@ function _convMetaPurpose(round, tFn) {
    boardTransition / peerStatus / charterProposal) — NOT re-parsed prose. They
    return an inner-HTML string (the body of the convmeta card), or '' to fall
    back to the generic Markdown dump. */
+
+/** Conversation digest for get_conversation: a clean, scannable transcript
+ *  card (title + preset + message count meta row, then one row per message with
+ *  a role chip, text preview, and tool/attachment hints) — the HUMAN view that
+ *  replaces the raw `═══` / `── User Message #` ASCII dump. The verbatim
+ *  transcript the model read stays available via the row's "model view" button. */
+function _renderConvDigest(cd) {
+  if (!cd) return "";
+  const _t = (typeof t === "function") ? t : (k, d) => d;
+  const roleLabel = (r) => {
+    if (r === "user") return _t("convDigest.roleUser", "User");
+    if (r === "assistant") return _t("convDigest.roleAssistant", "Assistant");
+    if (r === "system") return _t("convDigest.roleSystem", "System");
+    return escapeHtml(r || "");
+  };
+  // ── Meta row: preset + message count. ──
+  const metaBits = [];
+  if (cd.preset) {
+    metaBits.push(`<span class="ptool-convdigest-preset">${escapeHtml(cd.preset)}</span>`);
+  }
+  const nMsg = (cd.msgCount != null) ? cd.msgCount : (cd.messages || []).length;
+  metaBits.push(`<span class="ptool-convdigest-msgcount">${escapeHtml(
+    _t("convDigest.msgCount", "{n} messages").replace("{n}", nMsg))}</span>`);
+  let html = `<div class="ptool-convdigest">` +
+    `<div class="ptool-convdigest-meta">${metaBits.join("")}</div>` +
+    `<div class="ptool-convdigest-msgs">`;
+  const msgs = cd.messages || [];
+  if (!msgs.length) {
+    html += `<div class="ptool-convdigest-empty">${escapeHtml(
+      _t("convDigest.empty", "This conversation has no messages."))}</div>`;
+  }
+  for (const m of msgs) {
+    const roleCls = (m.role === "user" || m.role === "assistant" || m.role === "system")
+      ? m.role : "other";
+    const hints = [];
+    if (Array.isArray(m.tools) && m.tools.length) {
+      hints.push(`<span class="ptool-convdigest-tools">${(typeof Icon === "function") ? Icon("wrench", 10) : ""}` +
+        `<span>${escapeHtml(m.tools.slice(0, 6).join(", "))}` +
+        `${m.tools.length > 6 ? " +" + (m.tools.length - 6) : ""}</span></span>`);
+    }
+    if (m.images) {
+      hints.push(`<span class="ptool-convdigest-att">${escapeHtml(
+        _t("convDigest.images", "{n} image").replace("{n}", m.images))}</span>`);
+    }
+    if (m.pdfs) {
+      hints.push(`<span class="ptool-convdigest-att">${escapeHtml(
+        _t("convDigest.pdfs", "{n} PDF").replace("{n}", m.pdfs))}</span>`);
+    }
+    const text = (m.text || "").trim();
+    const textHtml = text
+      ? `<div class="ptool-convdigest-text">${escapeHtml(text)}</div>`
+      : (hints.length ? "" : `<div class="ptool-convdigest-text ptool-convdigest-notext">${escapeHtml(
+        _t("convDigest.noText", "(no text)"))}</div>`);
+    html += `<div class="ptool-convdigest-msg ptool-convdigest-${escapeHtml(roleCls)}">` +
+      `<span class="ptool-convdigest-role">${escapeHtml(roleLabel(m.role))}</span>` +
+      `<div class="ptool-convdigest-msgbody">${textHtml}` +
+      (hints.length ? `<div class="ptool-convdigest-hints">${hints.join("")}</div>` : "") +
+      `</div></div>`;
+  }
+  html += `</div>`;
+  if (cd.truncated) {
+    html += `<div class="ptool-convdigest-more">${escapeHtml(
+      _t("convDigest.truncated", "… earlier messages omitted — open the model view for the full transcript."))}</div>`;
+  }
+  html += `</div>`;
+  return html;
+}
 
 /** Mini-kanban for project_board_read: counts + per-lane epic titles. */
 function _renderBoardSnapshot(snap) {
@@ -1458,6 +1529,10 @@ function _convMetaSummaryChip(round, meta, tFn) {
   } else if (tn === "project_feed_read" && meta.feedActivity) {
     n = (meta.feedActivity.events || []).length;
     label = _t("brainChip.events", "{n} events").replace("{n}", n);
+  } else if (tn === "get_conversation" && meta.convDigest) {
+    n = (meta.convDigest.msgCount != null)
+      ? meta.convDigest.msgCount : (meta.convDigest.messages || []).length;
+    label = _t("brainChip.msgs", "{n} messages").replace("{n}", n);
   } else {
     return "";
   }
@@ -1474,6 +1549,7 @@ function _structuredConvMetaBody(round, meta) {
   if (meta.peerDelivery) return _renderPeerDelivery(meta.peerDelivery);
   if (meta.charterProposal) return _renderCharterProposal(meta.charterProposal);
   if (meta.commitResult) return _renderCommitResult(meta.commitResult);
+  if (meta.convDigest) return _renderConvDigest(meta.convDigest);
   return "";
 }
 
@@ -3059,30 +3135,6 @@ function _renderToolGroupsHTML(rounds, allRounds, narrByRound) {
    verbatim — NO new CSS (styles.css is under a sibling's hold; and reusing
    the proven classes keeps the flag-off/on visuals consistent).
    ═══════════════════════════════════════════════════════════════════ */
-
-/* Feature flag: interleaved per-tool timeline (epic pt_8b406df8fbe24ae5).
- * DEFAULT OFF — the three-zone / grouped renderer stays the proven fallback
- * until the timeline is validated at high tool count. Toggle via localStorage
- * `tofu_segment_timeline` = '1' (a settings switch can flip it later). Read
- * defensively so a storage-blocked context never throws. */
-function _segTimelineEnabled() {
-  /* Owner-facing switch: the Settings › General "Per-tool inline timeline"
-   * toggle, backed by config.segmentTimeline (persisted client config).
-   * DEFAULT ON — a missing/undefined flag means enabled (proven end-to-end;
-   * falls back gracefully to the grouped render for rows without segments).
-   * The localStorage key `tofu_segment_timeline` remains an explicit OVERRIDE
-   * ('0' force-off / '1' force-on) for debugging without opening Settings. */
-  try {
-    var ls = localStorage.getItem('tofu_segment_timeline');
-    if (ls === '0') return false;
-    if (ls === '1') return true;
-  } catch (_e) { /* storage blocked — fall through to config */ }
-  try {
-    return (typeof config !== 'undefined') ? (config.segmentTimeline !== false) : true;
-  } catch (_e2) {
-    return true;
-  }
-}
 
 /* Build a tool-call-id → round lookup (fallback to positional order for
  * legacy rounds that predate stable toolCallId stamping). */

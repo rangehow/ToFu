@@ -22,6 +22,13 @@
 #
 # Safe to re-run (idempotent): if nothing is on :15000 it just launches one.
 # No `set -e` on the whole script so "nothing to kill" is not fatal.
+#
+# DETACH (2026-07-16): the relaunch uses `setsid` so the server starts in its
+# own session with NO controlling terminal — a code-server terminal/session
+# reap can no longer SIGTERM it. Step [4b/5] asserts the live listener really
+# left this terminal (tty=?, no "+" in STAT, sid≠this shell). For a server that
+# must also survive OOM/crash, prefer the supervisord program instead — see
+# deploy/supervisor/tofu.conf (autostart/autorestart=true).
 
 PROJ="/mnt/dolphinfs/ssd_pool/docker/user/hadoop-aipnlp/INS/ruanjunhao04/chatui"
 PY="/mnt/dolphinfs/ssd_pool/docker/user/hadoop-aipnlp/INS/ruanjunhao04/miniforge3/envs/tofu/bin/python"
@@ -103,8 +110,18 @@ fi
 # ── [3/5] Relaunch EXACTLY as the process is really started (no --port). ──
 #   Port comes from $PORT (server.py default 15000). We export it explicitly so
 #   the bind is deterministic and never drifts via _find_free_port.
-echo "[3/5] Relaunching: PORT=${PORT} nohup ${PY} server.py > ${LOG} 2>&1 &"
-PORT="${PORT}" BIND_HOST="${BIND_HOST:-127.0.0.1}" nohup "${PY}" server.py > "${LOG}" 2>&1 &
+#
+#   DETACH (2026-07-16): launch with `setsid` — NOT bare `nohup … &`.
+#   `nohup` only masks SIGHUP; the child stays in THIS shell's session and
+#   process group, so when code-server reaps the whole terminal session (its
+#   session leader dies) the reap propagates to the server and it takes a
+#   SIGTERM — exactly the "terminal churn kills :15000" bug. `setsid` starts
+#   the server in a BRAND-NEW session with no controlling terminal, so it is
+#   no longer a member of the terminal's session/pgrp and survives the reap.
+#   (`setsid` already detaches; we keep the log redirect. nohup is redundant
+#   with setsid but harmless — we drop it to keep the launch line honest.)
+echo "[3/5] Relaunching (detached via setsid): PORT=${PORT} setsid ${PY} server.py > ${LOG} 2>&1 &"
+PORT="${PORT}" BIND_HOST="${BIND_HOST:-127.0.0.1}" setsid "${PY}" server.py > "${LOG}" 2>&1 &
 NEWPID=$!
 echo "      Launched pid ${NEWPID}; logging to ${LOG}"
 
@@ -133,6 +150,40 @@ if [ "${up_ok}" != "1" ]; then
   echo "      ERROR: server did not respond within 40s. Tail of ${LOG}:"
   tail -n 30 "${LOG}" 2>/dev/null
   exit 4
+fi
+
+# ── [4b/5] DETACH SELF-CHECK — prove the live listener really left the terminal.
+#   The whole point of the setsid launch is that the server must NOT be a
+#   foreground/background child of this VS Code terminal. Resolve the PID that
+#   is actually LISTENING on :PORT (not $NEWPID — that can be a transient
+#   launcher/re-exec parent) and assert, via `ps`:
+#     • TTY is "?"  (no controlling terminal), and
+#     • its session id (sid) is NOT this shell's sid.
+#   STAT containing "+" (foreground process group of a tty) is a hard fail.
+#   This is a WARNING, not a fatal exit: the server is already serving traffic;
+#   we surface the regression loudly so a broken detach can never pass silently.
+echo "[4b/5] Verifying the live :${PORT} listener is DETACHED from this terminal ..."
+LISTEN_PID="$(listener_pids | head -n1)"
+if [ -z "${LISTEN_PID}" ]; then
+  echo "      ⚠️  Could not resolve the :${PORT} listener PID to check detach; skipping."
+else
+  MY_SID="$(ps -o sid= -p $$ 2>/dev/null | tr -d ' ')"
+  L_TTY="$(ps -o tty= -p "${LISTEN_PID}" 2>/dev/null | tr -d ' ')"
+  L_STAT="$(ps -o stat= -p "${LISTEN_PID}" 2>/dev/null | tr -d ' ')"
+  L_SID="$(ps -o sid= -p "${LISTEN_PID}" 2>/dev/null | tr -d ' ')"
+  detach_bad=0
+  case "${L_TTY}" in ""|"?") : ;; *) detach_bad=1 ;; esac
+  case "${L_STAT}" in *"+"*) detach_bad=1 ;; esac
+  [ -n "${MY_SID}" ] && [ "${L_SID}" = "${MY_SID}" ] && detach_bad=1
+  if [ "${detach_bad}" = "0" ]; then
+    echo "      ✅ DETACHED: listener pid ${LISTEN_PID} tty=${L_TTY:-?} stat=${L_STAT} sid=${L_SID} (≠ this shell sid ${MY_SID})."
+  else
+    echo "      ❌ NOT DETACHED: listener pid ${LISTEN_PID} tty=${L_TTY} stat=${L_STAT} sid=${L_SID} (this shell sid ${MY_SID})."
+    echo "         The server is STILL bound to this terminal's session — a"
+    echo "         terminal/session reap will SIGTERM it again. The setsid launch"
+    echo "         did not take effect (wrong shell, or started manually). The"
+    echo "         durable fix is the supervisord program (deploy/supervisor/tofu.conf)."
+  fi
 fi
 
 # ── [5/5] Self-verify the EVENT-LOOP-FREEZE FIX (commit c194e18) is actually

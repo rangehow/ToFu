@@ -170,6 +170,34 @@ def test_run_command_timeout_prose_matches_backend():
     assert 'A default timeout applies' in desc
 
 
+def test_run_command_prefers_absolute_paths_no_persistent_shell():
+    # The shared run_command description must carry the mode-agnostic guidance:
+    # prefer absolute paths / avoid `cd`, and state there is no persistent shell.
+    # This wording is valid in BOTH project mode and standalone code_exec mode
+    # (which deep-copies this same description), so it must NOT claim the shell
+    # or working directory persists across calls.
+    from lib.tools.project import PROJECT_TOOL_RUN_COMMAND
+    desc = PROJECT_TOOL_RUN_COMMAND['function']['description']
+    assert 'avoid `cd`' in desc, 'must advise avoiding cd'
+    assert 'absolute path' in desc, 'must advise preferring absolute paths'
+    assert 'no persistent' in desc.lower(), (
+        'must state there is no persistent shell (fresh subprocess per call)')
+    # Accuracy trap: the SHARED description must NOT promise the working
+    # directory persists between commands — stickiness is mode-scoped and lives
+    # only in the working_dir PARAM (standalone mode has no sticky cwd).
+    assert 'directory persists between' not in desc.lower()
+
+    # Neuter: a copy with the avoid-cd sentence stripped must fail the guard.
+    neutered = desc.replace('avoid `cd`', 'do whatever')
+    assert 'avoid `cd`' not in neutered, 'neuter sanity: sentence removed from copy'
+
+    # The stickiness claim is correctly scoped to the project-mode working_dir
+    # param (and only there — code_exec overrides that param without it).
+    wd_desc = (PROJECT_TOOL_RUN_COMMAND['function']['parameters']
+               ['properties']['working_dir']['description'])
+    assert 'STICKY' in wd_desc, 'project-mode working_dir must keep the sticky note'
+
+
 def test_batch_caps_documented():
     src = _src('lib/tools/project.py')
     # grep/find batch cap = 20; apply_diffs/insert_contents = 30.

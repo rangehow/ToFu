@@ -1355,6 +1355,114 @@ class TestTailBreakpointSurvivesTranslation:
                 f'Round {rnd}: no surviving tail marker on last msg; slots={slots}'
 
 
+
+@pytest.mark.unit
+class TestCrossRoundWireByteInvariance:
+    """END-TO-END regression for the early-round cache pin (conv mrm9xhun /
+    mrmb6tfo): the *decisive* proof was never a single-round assertion — it was
+    a FULL-CHAIN, CROSS-ROUND wire-byte diff. The bug only becomes a real
+    cache-pin because the str↔block flip SURVIVES ``openai_body_to_anthropic``
+    for the ``tool`` role, so the emitted Anthropic prefix bytes genuinely
+    change between two consecutive rounds whose mid-anchor sits on different
+    messages. The server then can't extend the prior [0:bp] entry and
+    ``cache_read`` collapses back to the static system floor (the 80315 pin).
+
+    Every other cache test stops at ``add_cache_breakpoints`` (OpenAI shape) or
+    at a single translated round. This class reproduces the owner-verified
+    ``/tmp/cache_wire_diff2.py`` judgment as a self-contained synthetic:
+    build round A and round B (B = A + a few more tool pairs) so the quantized
+    mid-anchor JUMPS forward off a mid-history tool_result, run the real chain
+    ``add_cache_breakpoints`` → ``openai_body_to_anthropic`` for both, then
+    assert the shared-prefix Anthropic messages are BYTE-IDENTICAL (marker key
+    excluded — the server prefix-matches on content, not on cache_control).
+
+    The round-counts 16/20 are chosen because the mid-anchor arms at 16 rounds
+    and lands on a tool_result, then quantum-advances by 20 rounds — exactly the
+    anchor shift that flipped msg[212]/msg[230] in production.
+    """
+
+    @staticmethod
+    def _strip_cc(obj):
+        """Anthropic message with every ``cache_control`` removed — the bytes
+        the server actually prefix-matches on (the marker itself is not part of
+        the cached content)."""
+        if isinstance(obj, dict):
+            return {k: TestCrossRoundWireByteInvariance._strip_cc(v)
+                    for k, v in obj.items() if k != 'cache_control'}
+        if isinstance(obj, list):
+            return [TestCrossRoundWireByteInvariance._strip_cc(x) for x in obj]
+        return obj
+
+    def _wire_prefix_bytes(self, num_rounds, add_fn):
+        """Real chain for one round: build → add_cache_breakpoints → translate.
+        Returns per-message canonical (cache_control-stripped) JSON bytes of the
+        emitted Anthropic messages."""
+        from lib.llm.anthropic_outbound import openai_body_to_anthropic
+        body = _make_tool_conv(num_rounds, empty_assistant_content=True)
+        body['model'] = 'claude-sonnet-4-20250514'
+        add_fn(body)
+        ab = openai_body_to_anthropic(body)
+        return [json.dumps(self._strip_cc(m), ensure_ascii=False, sort_keys=True)
+                for m in ab.get('messages', [])]
+
+    def _diverging_indices(self, ra, rb, add_fn):
+        wa = self._wire_prefix_bytes(ra, add_fn)
+        wb = self._wire_prefix_bytes(rb, add_fn)
+        n = min(len(wa), len(wb))
+        return [i for i in range(n) if wa[i] != wb[i]]
+
+    def test_shared_prefix_is_byte_identical_across_anchor_shift(self):
+        """THE regression guard: across a mid-anchor jump (16→20 rounds), every
+        shared-prefix Anthropic message must be byte-identical. A str↔block flip
+        on a mid-history tool_result would surface here as a DIVERGE."""
+        for ra, rb in [(16, 20), (20, 24), (18, 22)]:
+            div = self._diverging_indices(ra, rb, add_cache_breakpoints)
+            assert div == [], (
+                f'{ra}->{rb} rounds: shared-prefix Anthropic bytes diverge at '
+                f'message indices {div} — the str<->block flip has regressed '
+                f'and cache_read will pin at the system floor')
+
+    def test_negative_control_flip_survives_translation(self):
+        """Belt-and-braces: prove the guard has TEETH by reconstructing the
+        pre-fix behaviour (Phase 0.5 normalization removed) and showing the SAME
+        synthetic then DOES diverge across the anchor shift. This anchors the
+        positive test to a demonstrated failure mode rather than a vacuous pass.
+
+        The neuter is built from the live source with the Phase 0.5 loop blanked
+        to ``pass`` — the exact code that shipped before commit 6d36e97 — so it
+        stays faithful even if the surrounding function is refactored."""
+        import inspect
+        import textwrap
+        import lib.llm.cache as cache_mod
+
+        src = inspect.getsource(cache_mod.add_cache_breakpoints).split('\n')
+        start = end = None
+        for idx, ln in enumerate(src):
+            if 'for i, msg in enumerate(messages):' in ln and start is None:
+                start = idx
+            if start is not None and ln.strip() == 'bp = 0':
+                end = idx
+                break
+        assert start is not None and end is not None, (
+            'could not locate the Phase 0.5 block to neuter — the fix may have '
+            'been restructured; update this negative control')
+        indent = len(src[start]) - len(src[start].lstrip())
+        neutered_src = textwrap.dedent(
+            '\n'.join(src[:start] + [' ' * indent + 'pass'] + src[end:]))
+        ns = dict(cache_mod.__dict__)
+        exec(compile(neutered_src, '<neutered_cache>', 'exec'), ns)
+        old_add = ns['add_cache_breakpoints']
+
+        any_diverge = False
+        for ra, rb in [(16, 20), (20, 24), (18, 22)]:
+            if self._diverging_indices(ra, rb, old_add):
+                any_diverge = True
+                break
+        assert any_diverge, (
+            'negative control did not reproduce the flip — the guard would pass '
+            'vacuously; the synthetic no longer straddles the mid-anchor jump')
+
+
 @pytest.mark.unit
 class TestMidHistoryAnchor:
     """The 20-block-lookback fix: a mid-history stepping-stone breakpoint arms

@@ -117,20 +117,38 @@ def _resolve_break_cause(
     """Build the single most-specific human cause string for a confirmed break.
 
     Precedence: explicit client changes → prefix-byte mutation (with the EXACT
-    changed ``key.field`` list when known) → TTL expiry → server-side miss.
+    changed ``key.field`` list when known) → TTL expiry → upstream eviction.
 
-    The server-side verdict is now GATED on evidence, not reached by
-    elimination. ``wire_proven_identical`` is True only when the authoritative
+    The eviction verdict is GATED on evidence, not reached by elimination.
+    ``wire_proven_identical`` is True only when the authoritative
     post-translation wire fingerprint (see ``wire_fingerprint.py``) showed the
-    actual sent bytes were byte-for-byte identical to the previous round. Only
-    then may we state the miss is server-side as a PROVEN fact. When no wire
+    actual sent bytes were byte-for-byte identical to the previous round.
+    CRUCIALLY, byte-identity proves only that the miss is NOT a client-side
+    prefix change — it does NOT prove a random SERVER fault. A byte-identical
+    prefix that is not read back was EVICTED before read, and the dominant
+    cause of that here is on our side of the fence: single-key LRU pressure
+    (all traffic on one upstream key, evicted under a concurrency spike) or a
+    soft-affinity routing flip onto a cold key. So the verdict names an
+    "upstream cache eviction", NEVER "random server failure". When no wire
     fingerprint was captured (non-Claude / capture failure) we fall back to the
-    legacy, honestly-hedged "stochastic server OR silent byte change" wording —
-    the elimination guess, explicitly marked unproven.
+    honestly-hedged "likely server/TTL OR silent byte change" wording — the
+    elimination guess, explicitly marked unproven.
     """
     _culprits = ', '.join(prefix_culprits) if prefix_culprits else ''
     if client_changes:
         return ', '.join(f'{k}={v}' for k, v in client_changes.items())
+    # ── Stable-block cache-TTL flipped between turns (the _task_id-drop bug) ──
+    # The system/tools cache_control ttl value changed (e.g. "1h" ↔ absent)
+    # while content bytes were identical. That value is part of the gateway
+    # cache key, so the flip creates a DISTINCT entry → full prefix miss. It is
+    # a CLIENT-side bug (a body rebuild dropped ``_task_id`` and fell back to the
+    # live global CACHE_EXTENDED_TTL instead of the per-task latch), NOT a server
+    # miss — name it precisely so it is never laundered into "server-side PROVEN".
+    if prefix_culprits and '<ttl-flip>' in prefix_culprits:
+        return ('cache TTL marker flipped between turns (the stable system/tools '
+                'cache_control ttl changed, e.g. "1h" ↔ default — a body rebuild '
+                'lost the per-task TTL latch and read the live global) — the '
+                'whole prefix was re-billed under a new cache key')
     # ── Breakpoint LOST in translation (the tool_result/assistant-tail bug) ──
     # A cache_control marker the client placed vanished before the wire (or the
     # system/tools marker count changed) while the CONTENT bytes were identical.
@@ -157,17 +175,37 @@ def _resolve_break_cause(
         return f'{_base} [changed: {_culprits}]' if _culprits else _base
     if elapsed > 300:
         return 'TTL expiry (>5min gap, prompt unchanged)'
-    # ── PROVEN server-side miss ──
+    # ── Upstream cache eviction — byte-identical, so NOT a client byte change ──
     # The wire fingerprint confirmed our sent bytes were IDENTICAL to last
-    # round, so the miss cannot be client-caused. This is the ONLY path allowed
-    # to assert "server-side" as fact.
+    # round, so the miss cannot be a client-side prefix mutation. But
+    # byte-identity is NOT proof of a random SERVER fault: an identical prefix
+    # that comes back with a dropped/zero cache_read is the signature of the
+    # cached entry being EVICTED before we read it — and the dominant cause of
+    # that here is on OUR side of the fence, not the gateway's dice:
+    #   * same-key LRU pressure — all traffic funnels through one upstream key
+    #     (observed: 39/39 opus rounds on a single key), so a concurrency spike
+    #     pushes this conv's big prefix out of that key's cache pool; it reads
+    #     back once load drops (the R3-hit → R4-miss → R6-rebound pattern);
+    #   * a routing flip — conv key-affinity is a SOFT preference, so a cooled
+    #     sticky key silently lands the round on a COLD key whose pool never
+    #     held this prefix → guaranteed floor miss.
+    # Both are addressed by per-key big-prefix admission control + warm-key hold
+    # (dispatcher lane), NOT by anything in the request body. So we state the
+    # eviction as fact but NAME it an upstream-cache/routing eviction, never
+    # "random server failure".
     if wire_proven_identical:
         if cache_read > _MIN_CACHE_MISS_TOKENS:
-            return ('server-side cache miss — PROVEN: the wire bytes were '
-                    'byte-identical to the previous round (only the body past '
-                    'the static prefix was not read back)')
-        return ('server-side cache miss — PROVEN: the wire bytes were '
-                'byte-identical to the previous round (whole prefix not reused)')
+            return ('upstream cache eviction — bytes were byte-identical to the '
+                    'previous round, so this is NOT a client change and NOT a '
+                    'random server failure: the cached entry was evicted before '
+                    'read (single-key LRU pressure under concurrency, or a '
+                    'cold-key routing flip). Only the body past the static '
+                    'prefix was not read back')
+        return ('upstream cache eviction — bytes were byte-identical to the '
+                'previous round, so this is NOT a client change and NOT a '
+                'random server failure: the whole cached prefix was evicted '
+                'before read (single-key LRU pressure under concurrency, or a '
+                'cold-key routing flip)')
     # ── Wire fingerprint UNAVAILABLE → legacy elimination guess (unproven) ──
     if cache_read > _MIN_CACHE_MISS_TOKENS:
         return ('likely server-side cache miss (UNPROVEN — no wire '
@@ -410,7 +448,16 @@ def detect_cache_break(
             # forward move), so folding it in names the dropped breakpoint and
             # blocks the false verdict without crying wolf every round.
             if markers_regressed(prev.wire_markers, _cur_wire_markers):
-                _wire_culprits.append('<breakpoint-lost>')
+                # Distinguish the two marker-regression sub-causes so the cost
+                # popover names the ACTIONABLE one. A stable-block ttl VALUE
+                # flip (1h ↔ absent) is the _task_id-drop latch bypass — a
+                # different, more fixable cause than a dropped breakpoint.
+                _prev_ttls = (prev.wire_markers or {}).get('stable_ttls', [])
+                _cur_ttls = (_cur_wire_markers or {}).get('stable_ttls', [])
+                if _prev_ttls != _cur_ttls:
+                    _wire_culprits.append('<ttl-flip>')
+                else:
+                    _wire_culprits.append('<breakpoint-lost>')
             _wire_prefix_changed = bool(_wire_culprits)
             if _wire_prefix_changed:
                 logger.warning(

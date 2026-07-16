@@ -2079,6 +2079,7 @@ var _i18n = {
   // Inline cache-break line
   'finishInfo.cacheBreakLabel': { zh: '缓存失效：{reason}', en: 'Cache miss: {reason}' },
   // Fault-state badge (wire-fingerprint verdict, 2026-07) + named culprit
+  'finishInfo.cbState.eviction': { zh: '上游驱逐（可调度侧修复）', en: 'Upstream eviction (fix on dispatch)' },
   'finishInfo.cbState.proven': { zh: '服务端（已实证）', en: 'Server-side (proven)' },
   'finishInfo.cbState.unproven': { zh: '疑似服务端（未证实）', en: 'Likely server (unproven)' },
   'finishInfo.cbState.culprit': { zh: '本地改动（可定位）', en: 'Our edit (traceable)' },

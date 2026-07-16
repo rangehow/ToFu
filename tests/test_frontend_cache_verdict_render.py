@@ -3,10 +3,12 @@
 Loads the REAL shipped static/js/ui/finish_info.js under node and drives the
 cache-verdict helpers directly, asserting:
 
-  • The new backend cause strings (server-side … PROVEN / … UNPROVEN) translate
-    to Chinese with NO leftover English on the zh path (the order-sensitivity
-    trap: a short alias must not eat a longer sentence).
-  • _cacheBreakState classifies proven / unproven / culprit correctly.
+  • The backend cause strings (upstream cache eviction / … UNPROVEN, and the
+    legacy server-side … PROVEN rows) translate to Chinese with NO leftover
+    English on the zh path (the order-sensitivity trap: a short alias must not
+    eat a longer sentence).
+  • _cacheBreakState classifies eviction / unproven / culprit correctly (and
+    folds the legacy PROVEN wording into 'eviction').
   • _cacheBreakCulprits extracts the "[changed: key.field]" list so the popover
     can show WHICH message broke cache.
 
@@ -95,6 +97,11 @@ check('proven_no_leftover_english', !_leftover(zhProven));
 check('unproven_no_leftover_english', !_leftover(zhUnproven));
 check('proven_is_chinese', zhProven.indexOf('已实证') !== -1);
 check('unproven_is_chinese', zhUnproven.indexOf('未证实') !== -1);
+// The CURRENT eviction wording also fully Sinicizes with no leftover English.
+const _evict = 'upstream cache eviction — bytes were byte-identical to the previous round, so this is NOT a client change and NOT a random server failure: the whole cached prefix was evicted before read (single-key LRU pressure under concurrency, or a cold-key routing flip)';
+const zhEvict = _translateCacheCause(_evict);
+check('eviction_no_leftover_english', !_leftover(zhEvict));
+check('eviction_is_chinese', zhEvict.indexOf('上游缓存被驱逐') !== -1);
 
 // English UI path: returned verbatim (no Sinicization).
 _i18nLang = 'en';
@@ -102,7 +109,13 @@ check('english_verbatim', _translateCacheCause(_proven) === _proven);
 _i18nLang = 'zh';
 
 // ── 2. State classification ──
-check('state_proven', _cacheBreakState({ server_side: _proven }) === 'proven');
+// The current backend wording: a byte-identical read drop is an upstream
+// cache eviction (our-side LRU/routing), classified 'eviction'.
+const _eviction = 'upstream cache eviction — bytes were byte-identical to the previous round, so this is NOT a client change and NOT a random server failure: the whole cached prefix was evicted before read (single-key LRU pressure under concurrency, or a cold-key routing flip)';
+check('state_eviction', _cacheBreakState({ server_side: _eviction }) === 'eviction');
+// Legacy persisted rows said "server-side … PROVEN" for the SAME phenomenon —
+// they must fold into the same 'eviction' state, never the reassuring teal.
+check('state_legacy_proven_is_eviction', _cacheBreakState({ server_side: _proven }) === 'eviction');
 check('state_unproven', _cacheBreakState({ server_side: _unproven }) === 'unproven');
 check('state_culprit_prefix_mutation',
   _cacheBreakState({ prefix_mutation: 'cached prefix bytes changed between turns [changed: user:ab.content]' }) === 'culprit');
@@ -183,6 +196,7 @@ global.t = (k, o) => {
   if (k === 'finishInfo.cbCulpritLabel') return 'CULPRIT> ' + (o.culprits || '');
   if (k === 'finishInfo.cacheBreakLabel') return 'MISS: ' + (o.reason || '');
   if (k === 'finishInfo.cbState.culprit') return 'OUR-EDIT-BADGE';
+  if (k === 'finishInfo.cbState.eviction') return 'EVICTION-BADGE';
   if (k === 'finishInfo.cbState.proven') return 'PROVEN-BADGE';
   if (k === 'finishInfo.cbState.unproven') return 'UNPROVEN-BADGE';
   if (k && k.indexOf('{') === -1 && o && Object.keys(o).length) {
@@ -228,12 +242,15 @@ check('render_shows_culprit_text',
 check('render_has_culprit_state_class', html.indexOf('cp-break-culprit') !== -1);
 check('render_has_our_edit_badge', html.indexOf('OUR-EDIT-BADGE') !== -1);
 
-// A PROVEN server-side round: badge present, but NO culprit line (not our fault).
+// An upstream-eviction round (byte-identical, read not reused): badge present,
+// but NO culprit line (not a client byte change) — and it must NOT render the
+// reassuring teal 'proven' class that implied "nothing to fix".
 const html2 = _buildCostPopover(_ctx({ server_side:
-  'server-side cache miss — PROVEN: the wire bytes were byte-identical to the previous round (whole prefix not reused)' }));
-check('proven_has_badge', html2.indexOf('PROVEN-BADGE') !== -1);
-check('proven_no_culprit_line', html2.indexOf('cp-break-culprit') === -1);
-check('proven_state_class', html2.indexOf('cp-break-proven') !== -1);
+  'upstream cache eviction — bytes were byte-identical to the previous round, so this is NOT a client change and NOT a random server failure: the whole cached prefix was evicted before read (single-key LRU pressure under concurrency, or a cold-key routing flip)' }));
+check('eviction_has_badge', html2.indexOf('EVICTION-BADGE') !== -1);
+check('eviction_no_culprit_line', html2.indexOf('cp-break-culprit') === -1);
+check('eviction_state_class', html2.indexOf('cp-break-eviction') !== -1);
+check('eviction_not_proven_teal', html2.indexOf('cp-break-proven') === -1);
 
 console.log(out.join('\n'));
 """

@@ -2985,6 +2985,7 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .paper-qa-send-btn:activ
    teal (not our fault), unproven = amber (unknown), culprit = red (our fault,
    actionable). Overrides the default amber .cp-round-break colour. */
 .cost-popover .cp-round-break.cp-break-proven{color:#34d399}
+.cost-popover .cp-round-break.cp-break-eviction{color:#e8a55d}
 .cost-popover .cp-round-break.cp-break-unproven{color:#e8a55d}
 .cost-popover .cp-round-break.cp-break-culprit{color:#f87171}
 .cost-popover .cp-break-badge{
@@ -2992,6 +2993,7 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .paper-qa-send-btn:activ
   line-height:1.5;border:1px solid currentColor;opacity:.95
 }
 .cost-popover .cp-break-badge-proven{color:#34d399}
+.cost-popover .cp-break-badge-eviction{color:#e8a55d}
 .cost-popover .cp-break-badge-unproven{color:#e8a55d}
 .cost-popover .cp-break-badge-culprit{color:#f87171}
 /* The named culprit — WHICH message broke cache. Monospace so the msg.field

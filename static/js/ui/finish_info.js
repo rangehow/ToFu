@@ -35,17 +35,34 @@ const _CACHE_CAUSE_PHRASES = [
   // leaves the remainder untranslated (e.g. the bare 'stochastic server-side
   // cache miss' alias would eat the prefix of the full sentence). Each block
   // below is sorted full-sentence → clause → short alias.
-  // ── Wire-fingerprint verdicts (2026-07: PROVEN vs UNPROVEN — see
-  //    lib/tasks_pkg/wire_fingerprint.py + _resolve_break_cause). The miss is
-  //    only called server-side as FACT when the post-translation wire bytes
-  //    were confirmed byte-identical to the previous round; otherwise it is
-  //    honestly hedged UNPROVEN. FULL sentences precede their clauses. ──
+  // ── Upstream-eviction verdict (2026-07: byte-identical prefix NOT read back
+  //    — see lib/tasks_pkg/cache_tracking/_detect.py + wire_fingerprint.py).
+  //    Byte-identity proves the miss is NOT a client change, but is NOT proof
+  //    of a random server fault: an identical prefix that isn't read back was
+  //    EVICTED before read — single-key LRU pressure under concurrency, or a
+  //    soft-affinity routing flip onto a cold key. OUR side of the fence,
+  //    fixable via dispatcher admission control. FULL sentences precede
+  //    clauses. ──
+  ['upstream cache eviction — bytes were byte-identical to the previous round, so this is NOT a client change and NOT a random server failure: the cached entry was evicted before read (single-key LRU pressure under concurrency, or a cold-key routing flip). Only the body past the static prefix was not read back',
+   '上游缓存被驱逐——本轮字节与上一轮逐字节相同，因此这既不是客户端改动、也不是服务端随机失败：缓存项在被读回前就被驱逐了（单 key 在并发下的 LRU 挤出，或软亲和路由翻到了冷 key）。仅静态前缀之后的正文未被读回'],
+  ['upstream cache eviction — bytes were byte-identical to the previous round, so this is NOT a client change and NOT a random server failure: the whole cached prefix was evicted before read (single-key LRU pressure under concurrency, or a cold-key routing flip)',
+   '上游缓存被驱逐——本轮字节与上一轮逐字节相同，因此这既不是客户端改动、也不是服务端随机失败：整段缓存前缀在被读回前就被驱逐了（单 key 在并发下的 LRU 挤出，或软亲和路由翻到了冷 key）'],
+  ['upstream cache eviction — bytes were byte-identical to the previous round', '上游缓存被驱逐——本轮字节与上一轮逐字节相同'],
+  ['single-key LRU pressure under concurrency, or a cold-key routing flip', '单 key 在并发下的 LRU 挤出，或软亲和路由翻到了冷 key'],
+  // ── Legacy wire-fingerprint verdicts (older persisted rounds said
+  //    "server-side — PROVEN"; kept so historical messages still translate). ──
   ['server-side cache miss — PROVEN: the wire bytes were byte-identical to the previous round (only the body past the static prefix was not read back)',
    '服务端缓存未命中——已实证：本轮发出的字节与上一轮逐字节相同（仅静态前缀之后的正文未被读回）'],
   ['server-side cache miss — PROVEN: the wire bytes were byte-identical to the previous round (whole prefix not reused)',
    '服务端缓存未命中——已实证：本轮发出的字节与上一轮逐字节相同（整段前缀未被复用）'],
   ['likely server-side cache miss (UNPROVEN — no wire fingerprint; body re-billed, static prefix still cached)',
    '疑似服务端缓存未命中（未证实——无线上指纹；正文重新计费，静态前缀仍命中）'],
+  // ── TTL-latch-bypass verdict (2026-07): the stable system/tools
+  //    cache_control ttl flipped ("1h" ↔ default) between rounds — a
+  //    body rebuild lost the per-task TTL latch → different cache key →
+  //    full prefix miss. CLIENT-caused, not server-side. ──
+  ['cache TTL marker flipped between turns (the stable system/tools cache_control ttl changed, e.g. "1h" ↔ default — a body rebuild lost the per-task TTL latch and read the live global) — the whole prefix was re-billed under a new cache key',
+   '缓存 TTL 标记在轮次间翻转（稳定的 system/tools 段 cache_control 的 ttl 发生变化，如 "1h" ↔ 默认——某次请求体重建丢失了 per-task 的 TTL 锁存、改读了实时全局值）——整段前缀在新的缓存键下被重新计费'],
   ['prefix not reused — likely server-side miss or TTL expiry (UNPROVEN — no wire fingerprint)',
    '前缀未被复用——疑似服务端未命中或 TTL 过期（未证实——无线上指纹）'],
   ['prefix not reused — likely server-side miss, TTL expiry, or a silent prefix byte change (UNPROVEN — no wire fingerprint)',
@@ -167,8 +184,11 @@ function _cacheBreakReason(cb) {
  *   'culprit' — WE mutated the cached prefix; the cause names the exact
  *               msg.field. Actionable, our fault. (prefix_mutation key, OR any
  *               client-side change: system_prompt/tools/model/message_count.)
- *   'proven'  — the wire bytes were PROVEN byte-identical → genuinely
- *               server-side, NOT our fault, nothing to fix.
+ *   'eviction'— the wire bytes were byte-identical (NOT a client change) yet
+ *               the prefix was not read back → the cached entry was EVICTED
+ *               before read. NOT a random server fault: single-key LRU
+ *               pressure / cold-key routing flip — actionable on OUR
+ *               dispatcher side. (Also matches legacy 'PROVEN' rows.)
  *   'unproven'— server-side is only a guess (no wire fingerprint captured).
  *   ''        — no break.
  * Keyed off the backend cause text so it can never drift from what
@@ -183,7 +203,11 @@ function _cacheBreakState(cb) {
                   || k === 'model' || k === 'message_count')) return 'culprit';
   // Otherwise inspect the server_side / no_cache_reuse cause text.
   const txt = String(cb.server_side || cb.no_cache_reuse || '');
-  if (txt.includes('PROVEN') && !txt.includes('UNPROVEN')) return 'proven';
+  // Byte-identical prefix that wasn't read back → an upstream cache eviction
+  // (our-side LRU/routing, actionable). The legacy 'PROVEN' rows are the same
+  // phenomenon under the old (misleading "server-side") wording — fold them in.
+  if (txt.includes('upstream cache eviction')
+      || (txt.includes('PROVEN') && !txt.includes('UNPROVEN'))) return 'eviction';
   if (txt.includes('UNPROVEN')) return 'unproven';
   // A cause we can't classify (legacy string) → treat as unproven guess.
   return txt ? 'unproven' : '';

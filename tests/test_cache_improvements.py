@@ -258,12 +258,13 @@ class TestApiBreakCauseDisambiguation:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class TestWireFingerprintVerdict:
-    """The core upgrade: detect_cache_break no longer reaches 'server-side' by
-    ELIMINATION. When usage carries the authoritative post-translation wire
-    fingerprint (`_wire_fp`), the verdict is PROVEN:
-      * fingerprint identical to last round + read drop → 'server-side … PROVEN'
-      * fingerprint differs → names the exact client-caused culprit, never
-        'server-side'.
+    """The core upgrade: detect_cache_break no longer reaches its miss verdict
+    by ELIMINATION. When usage carries the authoritative post-translation wire
+    fingerprint (`_wire_fp`):
+      * fingerprint identical to last round + read drop → the miss is NOT a
+        client change; it is named an 'upstream cache eviction' (single-key LRU
+        pressure / cold-key routing flip), explicitly NOT a random server fault.
+      * fingerprint differs → names the exact client-caused culprit.
     """
 
     def _fp(self, msgs):
@@ -281,14 +282,20 @@ class TestWireFingerprintVerdict:
         detect_cache_break('wire-1', msgs, None, 'claude-opus-4',
                            usage={'cache_read_tokens': 90000,
                                   '_wire_fp': fp, '_wire_static': st})
-        # Round 2: read DROPS but the wire bytes are IDENTICAL → proven server.
+        # Round 2: read DROPS but the wire bytes are IDENTICAL → not a client
+        # change, but NOT a random server fault either — an upstream cache
+        # eviction (single-key LRU / cold-key routing flip), named as such.
         r2 = detect_cache_break('wire-1', msgs, None, 'claude-opus-4',
                                 usage={'cache_read_tokens': 40000,
                                        '_wire_fp': fp, '_wire_static': st})
         assert r2 is not None
         cause = r2['server_side']
-        assert 'PROVEN' in cause
-        assert 'server-side' in cause
+        assert 'upstream cache eviction' in cause
+        assert 'byte-identical' in cause
+        # The verdict must NOT imply a random server failure (the whole point).
+        assert 'random server failure' in cause  # names it only to negate it
+        assert 'NOT a random server failure' in cause
+        assert 'PROVEN' not in cause
         assert 'UNPROVEN' not in cause
 
     def test_changed_wire_names_culprit_not_server_side(self):
@@ -321,10 +328,12 @@ class TestWireFingerprintVerdict:
 
     def test_benign_wrapping_flip_not_flagged(self):
         """NC-adjacent: a message whose content flips str ↔ [{type:text}]
-        between rounds (moving cache marker) must NOT be flagged — the server
-        prefix-matches tokenized content, and the canonicaliser erases the
-        wrapping. This is the exact false-positive the reconstruction hash and
-        the old len-2 probe were blind to."""
+        between rounds (moving cache marker) must NOT be flagged as a client
+        prefix mutation — the server prefix-matches tokenized content, and the
+        canonicaliser erases the wrapping. The resulting byte-identical read
+        drop is then named an upstream eviction, not a client culprit. This is
+        the exact false-positive the reconstruction hash and the old len-2
+        probe were blind to."""
         from lib.tasks_pkg.cache_tracking import detect_cache_break
         msgs = [{'role': 'system', 'content': 'sys'}]
         # Round 1: tail tool result WRAPPED (marker landed on it).
@@ -349,10 +358,13 @@ class TestWireFingerprintVerdict:
                                        'cache_creation_input_tokens': 50000,
                                        '_wire_fp': fp2, '_wire_static': st2})
         assert r2 is not None
-        # The wrapping flip is erased → NOT a prefix mutation → proven server.
+        # The wrapping flip is erased → NOT a prefix mutation → the byte-
+        # identical read drop is named an upstream cache eviction (our-side
+        # LRU/routing), never a random server failure.
         assert 'prefix_mutation' not in r2
         assert 'server_side' in r2
-        assert 'PROVEN' in r2['server_side']
+        assert 'upstream cache eviction' in r2['server_side']
+        assert 'NOT a random server failure' in r2['server_side']
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

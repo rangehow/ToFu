@@ -257,7 +257,71 @@ def test_NEUTER_residency_using_stream_budget_stalls_long(monkeypatch):
         f'the saturated 3rd conv stall ~the full budget (waited {waited:.2f}s)')
 
 
-# ── 9. concurrency safety: parallel distinct convs don't corrupt the map ──
+# ── 10. REGRESSION: degraded pass-throughs must NOT inflate the table past cap ──
+
+def _resident_count(key='k0'):
+    import lib.llm_dispatch.big_prefix_gate as g
+    return len(g._residency.get(key, {}))
+
+
+def test_degraded_passthroughs_keep_table_bounded_by_cap():
+    """The unbounded-growth guard. Drive 5 DISTINCT big convs through a cap=2
+    pool under saturation: C/D/E each degrade through (working set full). The
+    resident table must NEVER exceed cap — a degraded pass-through models a
+    write into the finite LRU pool (evicts the LRU resident), it does not
+    append a fresh 5-min entry that poisons the next admission."""
+    import lib.llm_dispatch.big_prefix_gate as g
+    # Long TTL so residents do NOT expire during the sequence — this models the
+    # production case (TTL 5min >> round time) where growth actually accrues;
+    # a short TTL would let pruning mask it.
+    import pytest as _pt
+    with _pt.MonkeyPatch.context() as _mp:
+        _mp.setenv('TOFU_BIG_PREFIX_RESIDENCY_TTL_MS', '60000')
+        g._reset_residency_for_tests()
+        _run_bounded_growth(g)
+
+
+def _run_bounded_growth(g):
+    # A and B fill the working set (cap=2); keep them resident (no exit) while
+    # C, D, E arrive and degrade through.
+    with g.big_prefix_slot('k0', _BIG, conv_id='A'):
+        with g.big_prefix_slot('k0', _BIG, conv_id='B'):
+            assert _resident_count() == 2
+            for cid in ('C', 'D', 'E'):
+                with g.big_prefix_slot('k0', _BIG, conv_id=cid):
+                    # At no point may the table exceed cap.
+                    assert _resident_count() <= 2, (
+                        f'residency table grew past cap while {cid} was '
+                        f'degrading through: {_resident_count()} entries')
+            # After all three degraded through, still bounded.
+            assert _resident_count() <= 2, (
+                f'residency table left over-full after degraded pass-throughs: '
+                f'{_resident_count()} entries (cap=2)')
+
+
+def test_NEUTER_without_lru_bound_table_grows_past_cap(monkeypatch):
+    """NEUTER: disable the LRU bound → the pre-fix unbounded-growth bug returns.
+    The same 5-distinct-conv saturation inflates the table well past cap,
+    proving the LRU bound is load-bearing."""
+    import lib.llm_dispatch.big_prefix_gate as g
+    monkeypatch.setenv('TOFU_BIG_PREFIX_RESIDENCY_LRU_BOUND', '0')  # NEUTER
+    # Long TTL (see bounded-growth test) so pruning can't mask the growth.
+    monkeypatch.setenv('TOFU_BIG_PREFIX_RESIDENCY_TTL_MS', '60000')
+    g._reset_residency_for_tests()
+
+    with g.big_prefix_slot('k0', _BIG, conv_id='A'):
+        with g.big_prefix_slot('k0', _BIG, conv_id='B'):
+            for cid in ('C', 'D', 'E'):
+                with g.big_prefix_slot('k0', _BIG, conv_id=cid):
+                    pass
+            # Without the bound every degraded pass-through appended an entry:
+            # A, B (held) + C, D, E (degraded) = 5 > cap 2.
+            assert _resident_count() > 2, (
+                f'NEUTER expectation: without the LRU bound the table grows '
+                f'past cap (got {_resident_count()} entries)')
+
+
+# ── 11. concurrency safety: parallel distinct convs don't corrupt the map ──
 
 def test_concurrent_admissions_thread_safe():
     import lib.llm_dispatch.big_prefix_gate as g

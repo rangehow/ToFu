@@ -68,6 +68,15 @@ Residency env knobs
                                      (default = max_per_key).
 ``TOFU_BIG_PREFIX_RESIDENCY_TTL_MS``— how long a prefix counts as resident after
                                      its last use (default 300000 = 5min).
+``TOFU_BIG_PREFIX_RESIDENCY_WAIT_MS``— SHORT wait (ms) a new distinct prefix
+                                     gives a saturated set before degrading
+                                     (default 1500; distinct from the 45s
+                                     stream budget — see residency_wait_budget_ms).
+``TOFU_BIG_PREFIX_RESIDENCY_LRU_BOUND``— keep the resident table ≤ cap by LRU
+                                     eviction (default on); models the gateway
+                                     pool's finite LRU so a DEGRADED pass-through
+                                     evicts the LRU resident instead of inflating
+                                     the working set past cap.
 """
 
 from __future__ import annotations
@@ -90,6 +99,7 @@ __all__ = [
     'residency_max',
     'residency_ttl_ms',
     'residency_wait_budget_ms',
+    '_residency_lru_bound_enabled',
     'estimate_prefix_tokens',
     'big_prefix_slot',
     '_reset_residency_for_tests',
@@ -293,6 +303,43 @@ def _prune_expired_locked(table: dict[str, float], now: float) -> None:
         del table[cid]
 
 
+def _residency_lru_bound_enabled() -> bool:
+    """Whether the residency table is LRU-bounded to ``cap`` (default on).
+
+    OFF (``TOFU_BIG_PREFIX_RESIDENCY_LRU_BOUND=0``) reproduces the pre-fix
+    unbounded-growth bug where degraded pass-throughs inflate the table past
+    cap — used by the NEUTER to prove the bound is load-bearing."""
+    val = os.environ.get('TOFU_BIG_PREFIX_RESIDENCY_LRU_BOUND', '1')
+    return val.strip().lower() not in ('0', 'false', 'no', 'off', '')
+
+
+def _reserve_locked(table: dict[str, float], conv_id: str, until: float,
+                    cap: int) -> None:
+    """Set/refresh ``conv_id``'s residency to ``until``, then LRU-BOUND the
+    table to ``cap`` entries. Caller holds the key's cv.
+
+    ★ THE unbounded-growth fix. A request that proceeds DEGRADED (forced
+    through a saturated working set) STILL wrote its prefix to the key's pool,
+    so it IS physically resident — but the pool is a finite LRU cache: writing
+    a new prefix EVICTS the least-recently-used one. Modelling that here (evict
+    the smallest ``resident_until`` = the LRU resident) keeps the table bounded
+    to exactly ``cap`` no matter how many convs degrade through. Without it,
+    every degraded pass-through appended a fresh 5-min entry and the table grew
+    unbounded — the count that gates the NEXT conv stopped meaning "concurrent
+    cache residents" and admission was permanently poisoned. We never evict the
+    conv we just reserved (it is the most-recently-used by construction)."""
+    table[conv_id] = until
+    if not _residency_lru_bound_enabled():
+        return
+    if len(table) > cap:
+        # Evict least-recently-used (smallest resident_until) down to cap,
+        # never the just-reserved conv (it has the freshest timestamp anyway).
+        victims = sorted((c for c in table if c != conv_id),
+                         key=lambda c: table[c])
+        for c in victims[:len(table) - cap]:
+            del table[c]
+
+
 def _reset_residency_for_tests() -> None:
     """Test hook: clear all residency state + semaphores."""
     with _residency_lock:
@@ -406,8 +453,10 @@ def big_prefix_slot(key_name: str, est_tokens: int, *, conv_id: str = '',
                 break
             cv.wait(timeout=remaining)
             waited_total = budget_s - max(0.0, deadline - time.time())
-        # Reserve/refresh our residency slot with a fresh TTL.
-        table[conv_id] = time.time() + ttl_s
+        # Reserve/refresh our residency slot with a fresh TTL, LRU-bounding the
+        # table to cap so a DEGRADED pass-through cannot inflate the working set
+        # past cap (the unbounded-growth fix — see _reserve_locked).
+        _reserve_locked(table, conv_id, time.time() + ttl_s, cap)
         if waited_total > 0.05:
             logger.info('%s [BigPrefixGate] admitted big prefix (~%dk tok) '
                         'conv=%s on key=%s after waiting %.1fs (working set '
@@ -422,5 +471,6 @@ def big_prefix_slot(key_name: str, est_tokens: int, *, conv_id: str = '',
         # it — it expires by TTL. Wake any waiter so it can re-evaluate (a
         # refresh doesn't free a slot, but a concurrent expiry might have).
         with cv:
-            _residency[key_name][conv_id] = time.time() + ttl_s
+            _reserve_locked(_residency[key_name], conv_id,
+                            time.time() + ttl_s, cap)
             cv.notify_all()

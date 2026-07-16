@@ -8,6 +8,7 @@ Usage:
     from lib.llm_dispatch import dispatch_chat, dispatch_stream, smart_chat
 """
 
+import copy
 import os
 import threading
 import time
@@ -698,6 +699,20 @@ def _adapt_stream_body_for_slot(slot, body_or_messages, is_body, *,
     if is_body:
         body = dict(body_or_messages)
         body['model'] = slot.model
+        # ★ dict() is a SHALLOW copy — body['messages'] would alias the caller's
+        #   task-shared list, so the model-specific IN-PLACE rewrites below
+        #   (_strip_trailing_assistant_for_claude / _downscale_oversized_images /
+        #   _inject_gemini_thought_signatures) would MUTATE that shared list.
+        #   On a 503/429 slot-swap retry the loop re-adapts the SAME shared body
+        #   for a different slot: a Gemini attempt bakes extra_content.google.
+        #   thought_signature into a prefix tool_call, then the recovered Claude
+        #   attempt re-serializes the now-polluted prefix → different wire bytes
+        #   → prompt-cache key shift → full prefix miss (conv mrne3bqe R4/R5,
+        #   which recovered — "rebound" — once a clean round re-formed the prefix).
+        #   Deep-copy the messages so each per-slot adaptation is idempotent and
+        #   never leaks a model-specific rewrite back onto the caller / next slot.
+        if isinstance(body.get('messages'), list):
+            body['messages'] = copy.deepcopy(body['messages'])
         if tools is not None:
             body['tools'] = tools
         if 'max_tokens' in body:

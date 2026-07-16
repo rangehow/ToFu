@@ -89,7 +89,11 @@ function previewToolContent(roundNum, toolCallId) {
       const isMcp = (round.toolName || '').startsWith('mcp__');
       const title = isMcp ? (q || td.label) : `${td.label}: ${q}`;
       const chars = round.toolContent.length;
-      const meta = chars >= 1024 ? `${(chars / 1024).toFixed(1)}KB` : `${chars} chars`;
+      const sizeStr = chars >= 1024 ? `${(chars / 1024).toFixed(1)}KB` : `${chars} chars`;
+      // ★ Prefix a "model view · verbatim" tag so the modal unambiguously reads
+      //   as "this is exactly what the LLM saw", not a human-friendly summary.
+      const _t = (typeof t === 'function') ? t : (k, d) => d;
+      const meta = `${_t('tool.modelViewChip', "The model's view · verbatim")} · ${sizeStr}`;
       openTextPreview(title, meta, round.toolContent);
       return;
     }
@@ -105,6 +109,27 @@ document.addEventListener('click', function(e) {
   const rn = parseInt(btn.dataset.tcRn, 10);
   const tcid = btn.dataset.tcTcid || null;
   previewToolContent(rn, tcid);
+});
+
+// ★ Event delegation for the fallback model-view buttons (convmeta / brain
+//   rows whose verbatim source is NOT round.toolContent — see
+//   _tcModelViewBtnForText / _tcModelTextRegistry in tool_rounds.js). Ensures
+//   EVERY such row has a working "模型原文" entry even when toolContent is empty.
+document.addEventListener('click', function(e) {
+  const btn = e.target.closest('[data-tc-preview-text]');
+  if (!btn) return;
+  e.stopPropagation();
+  e.preventDefault();
+  const id = btn.dataset.tcPreviewText;
+  const reg = (typeof window !== 'undefined' && window._tcModelTextRegistry) || null;
+  const entry = reg ? reg.get(id) : null;
+  if (!entry) return;
+  const text = entry.text || '';
+  const chars = text.length;
+  const sizeStr = chars >= 1024 ? `${(chars / 1024).toFixed(1)}KB` : `${chars} chars`;
+  const _t = (typeof t === 'function') ? t : (k, d) => d;
+  const meta = `${_t('tool.modelViewChip', "The model's view · verbatim")} · ${sizeStr}`;
+  openTextPreview(entry.title || _t('tool.modelView', 'Model view'), meta, text);
 });
 
 // Event delegation for ptool-truncated "show all" bars (static render path)

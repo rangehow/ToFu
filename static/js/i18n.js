@@ -283,6 +283,20 @@ var _i18n = {
   'autopilot.runFold': { zh: '自动驾驶运行', en: 'Autopilot run' },
   'autopilot.runFoldHint': { zh: '轮交互 · 点击展开', en: 'turns — click to expand' },
   'tool.noContent': { zh: '无返回内容。', en: 'No content returned.' },
+  // ── Model-view affordance: the exact, verbatim text a tool returned to the
+  //    LLM (nothing omitted). Replaces the old ambiguous "Preview" wording,
+  //    which users read as a human summary rather than "what the model saw".
+  'tool.modelView': { zh: '模型原文', en: 'Model view' },
+  'tool.modelViewTip': { zh: '查看该工具返回给模型的原始文本 —— 逐字、不省略。', en: 'Show the exact text this tool returned to the model — verbatim, nothing omitted.' },
+  'tool.modelViewChip': { zh: '模型原文 · 逐字', en: "The model's view · verbatim" },
+  // ── Sub-agent (swarm) update card ──
+  'swarmCard.received': { zh: '收到', en: 'Received' },
+  'swarmCard.updateOne': { zh: '条子智能体更新', en: 'sub-agent update' },
+  'swarmCard.updateMany': { zh: '条子智能体更新', en: 'sub-agent updates' },
+  'swarmCard.remaining': { zh: '{r} 运行中 · {p} 等待中', en: '{r} running · {p} pending' },
+  'swarmCard.noPayload': { zh: '无可用内容。', en: 'No payload available.' },
+  // ── Peer-message injection card ──
+  'peerCard.noPayload': { zh: '无可用消息。', en: 'No message available.' },
   'tool.hallucinated': { zh: '非真实工具', en: 'not a real tool' },
   'tool.hallucinatedTip': { zh: '模型调用了本轮不存在的工具，已被拒绝、未执行。', en: "The model called a tool that doesn't exist this turn — it was rejected and never run." },
   'tool.didYouMean': { zh: '是否想用', en: 'did you mean' },

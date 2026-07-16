@@ -575,30 +575,127 @@ function _renderLineDiff(oldText, newText) {
  * Collapsible: the header shows "📨 Received N sub-agent update(s)" and
  * the expanded body shows each agent id + the raw <swarm-update> payload
  * the model actually saw — so the human sees exactly what the model got. */
+/* Parse a raw <swarm-update> / <task-notification> XML payload into a flat
+ * field map so the human view can render clean fields + a Markdown preview
+ * instead of dumping angle-bracket soup. Returns null when the text isn't a
+ * recognizable payload (then we fall back to showing it verbatim). Values are
+ * un-escaped from the backend's minimal XML escaping (&amp; &lt; &gt;). */
+function _parseSwarmUpdateXml(text) {
+  const raw = String(text == null ? "" : text);
+  if (!/<swarm-update>|<task-notification>/.test(raw)) return null;
+  const unesc = (s) => String(s == null ? "" : s)
+    .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+  const pick = (tag) => {
+    const m = raw.match(new RegExp("<" + tag + ">([\\s\\S]*?)</" + tag + ">"));
+    return m ? unesc(m[1]).trim() : "";
+  };
+  const rem = raw.match(/<remaining\s+running="(\d+)"\s+pending="(\d+)"\s*\/>/);
+  return {
+    agentId: pick("agent-id"),
+    role: pick("role"),
+    status: pick("status"),
+    elapsed: pick("elapsed-seconds"),
+    tokens: pick("tokens"),
+    outputFile: pick("output-file"),
+    error: pick("error"),
+    preview: pick("preview"),
+    running: rem ? +rem[1] : null,
+    pending: rem ? +rem[2] : null,
+  };
+}
+
+/* Status → chip class. "completed"/"done" → ok, "failed"/"error" → err,
+ * everything else neutral. */
+function _swarmStatusClass(status) {
+  const s = String(status || "").toLowerCase();
+  if (s === "completed" || s === "done" || s === "success") return "ptool-badge-ok";
+  if (s === "failed" || s === "error") return "ptool-badge-err";
+  return "ptool-badge-info";
+}
+
+/* Render one beautified sub-agent update card from a parsed field map `f`,
+ * carrying the raw payload `rawText` behind an inline "model view · verbatim"
+ * toggle. Human view = agent/role header + status badge + elapsed/tokens meta
+ * + the preview rendered as Markdown; nothing angle-bracketed on screen. */
+function _renderSwarmUpdateCard(f, rawText) {
+  const _t = (typeof t === "function") ? t : (k, d) => d;
+  const aid = escapeHtml(f.agentId || "");
+  const role = f.role ? `<span class="sw-card-role">${escapeHtml(f.role)}</span>` : "";
+  const stCls = _swarmStatusClass(f.status);
+  const stChip = f.status
+    ? `<span class="ptool-badge ${stCls} sw-card-status">${escapeHtml(f.status)}</span>` : "";
+  const metaBits = [];
+  if (f.elapsed) metaBits.push(escapeHtml(f.elapsed) + "s");
+  if (f.tokens) metaBits.push(escapeHtml(f.tokens) + " tok");
+  if (f.running != null && (f.running || f.pending))
+    metaBits.push(_t("swarmCard.remaining", "{r} running · {p} pending")
+      .replace("{r}", f.running).replace("{p}", f.pending));
+  const metaHtml = metaBits.length
+    ? `<span class="sw-card-meta">${metaBits.join(" · ")}</span>` : "";
+  const errHtml = f.error
+    ? `<div class="sw-card-error">${escapeHtml(f.error)}</div>` : "";
+  const previewHtml = f.preview
+    ? `<div class="sw-card-preview md-content">${(typeof renderMarkdown === "function") ? renderMarkdown(f.preview) : escapeHtml(f.preview)}</div>`
+    : "";
+  const fileHtml = f.outputFile
+    ? `<div class="sw-card-file" title="${escapeHtml(f.outputFile)}">${Icon("file", 11)}<span>${escapeHtml(f.outputFile)}</span></div>`
+    : "";
+  const modelTag = _t("tool.modelViewChip", "The model's view · verbatim");
+  const modelLbl = _t("tool.modelView", "Model view");
+  return `<div class="sw-card">
+       <div class="sw-card-head">
+         ${aid ? `<span class="sw-card-agent">${aid}</span>` : ""}
+         ${role}
+         ${stChip}
+         ${metaHtml}
+       </div>
+       ${errHtml}
+       ${previewHtml}
+       ${fileHtml}
+       <details class="sw-card-raw">
+         <summary class="sw-card-raw-toggle">${Icon("eye", 11)}<span>${escapeHtml(modelLbl)}</span></summary>
+         <div class="sw-card-raw-meta">${escapeHtml(modelTag)}</div>
+         <pre class="sw-card-raw-pre">${escapeHtml(String(rawText == null ? "" : rawText))}</pre>
+       </details>
+     </div>`;
+}
+
 function _renderInboxInjectRow(round) {
+  const _t = (typeof t === "function") ? t : (k, d) => d;
   const count = round.inboxCount || (round.inboxPreviews || []).length || 0;
   const ids = (round.inboxAgentIds || []).filter(Boolean);
   const previews = Array.isArray(round.inboxPreviews) ? round.inboxPreviews : [];
   const idsLabel = ids.length
     ? `<span class="sw-inbox-row-ids">[${ids.slice(0, 4).map(escapeHtml).join(", ")}${ids.length > 4 ? ` +${ids.length - 4}` : ""}]</span>`
     : "";
-  const word = count === 1 ? "update" : "updates";
+  const word = count === 1
+    ? _t("swarmCard.updateOne", "sub-agent update")
+    : _t("swarmCard.updateMany", "sub-agent updates");
   const bodyHtml = previews.length
     ? previews.map(p => {
+        const parsed = _parseSwarmUpdateXml(p.text || "");
+        if (parsed) {
+          // Backend may not have carried <agent-id> inside the payload — fall
+          // back to the sibling `p.agentId` field so the card is never faceless.
+          if (!parsed.agentId && p.agentId) parsed.agentId = p.agentId;
+          return _renderSwarmUpdateCard(parsed, p.text || "");
+        }
+        // Unrecognized payload — show it verbatim (still the model's view).
         const aid = escapeHtml(p.agentId || "");
-        const text = escapeHtml(p.text || "");
-        return `<div class="sw-inbox-row-item">` +
-          (aid ? `<div class="sw-inbox-row-agent">${aid}</div>` : "") +
-          `<pre class="sw-inbox-row-payload">${text}</pre>` +
+        return `<div class="sw-card sw-card-rawonly">` +
+          (aid ? `<div class="sw-card-head"><span class="sw-card-agent">${aid}</span></div>` : "") +
+          `<pre class="sw-card-raw-pre">${escapeHtml(p.text || "")}</pre>` +
         `</div>`;
       }).join("")
-    : `<div class="sw-inbox-row-empty">No payload preview available.</div>`;
+    : `<div class="sw-inbox-row-empty">${escapeHtml(_t("swarmCard.noPayload", "No payload available."))}</div>`;
+  const badge = _t("peer.injectRowBadge", "injected → context");
+  const label = _t("swarmCard.received", "Received");
   return `<details class="sw-inbox-row" data-rn="${round.roundNum}">
        <summary class="ptool-line sw-inbox-row-header">
          <span class="ptool-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:1em;height:1em"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg></span>
-         <span class="ptool-text">Received <b>${count}</b> async sub-agent ${word}</span>
+         <span class="ptool-text">${escapeHtml(label)} <b>${count}</b> ${escapeHtml(word)}</span>
          ${idsLabel}
-         <span class="ptool-badge ptool-badge-info">injected → context</span>
+         <span class="ptool-badge ptool-badge-info">${escapeHtml(badge)}</span>
          <span class="sw-inbox-row-chev">▾</span>
        </summary>
        <div class="sw-inbox-row-body">${bodyHtml}</div>
@@ -626,21 +723,80 @@ function _renderPeerInjectRow(round) {
     : (typeof t === "function" ? t("peer.injectRowMany") : "peer messages");
   const label = typeof t === "function" ? t("peer.injectRowLabel") : "Received";
   const badge = typeof t === "function" ? t("peer.injectRowBadge") : "injected → context";
+  const _t = (typeof t === "function") ? t : (k, d) => d;
+  const modelTag = _t("tool.modelViewChip", "The model's view · verbatim");
+  const modelLbl = _t("tool.modelView", "Model view");
   const bodyHtml = previews.length
     ? previews.map(p => {
         const fc = escapeHtml((p.fromConv || "").slice(0, 8));
-        const text = escapeHtml(p.text || "");
-        return `<div class="sw-inbox-row-item">` +
-          (fc ? `<div class="sw-inbox-row-agent">${fc}</div>` : "") +
-          `<pre class="sw-inbox-row-payload">${text}</pre>` +
+        const text = String(p.text == null ? "" : p.text);
+        // Peer messages are plain prose — render as Markdown for the human
+        // view, with the raw text behind a verbatim "model view" toggle.
+        const bodyMd = text.trim()
+          ? `<div class="sw-card-preview md-content">${(typeof renderMarkdown === "function") ? renderMarkdown(text) : escapeHtml(text)}</div>`
+          : "";
+        return `<div class="sw-card sw-peer-card-item">` +
+          (fc ? `<div class="sw-card-head"><span class="sw-card-agent">${fc}</span></div>` : "") +
+          bodyMd +
+          `<details class="sw-card-raw">` +
+            `<summary class="sw-card-raw-toggle">${Icon("eye", 11)}<span>${escapeHtml(modelLbl)}</span></summary>` +
+            `<div class="sw-card-raw-meta">${escapeHtml(modelTag)}</div>` +
+            `<pre class="sw-card-raw-pre">${escapeHtml(text)}</pre>` +
+          `</details>` +
         `</div>`;
       }).join("")
-    : `<div class="sw-inbox-row-empty">No message preview available.</div>`;
+    : `<div class="sw-inbox-row-empty">${escapeHtml(_t("peerCard.noPayload", "No message available."))}</div>`;
   return `<details class="sw-inbox-row sw-peer-row" data-rn="${round.roundNum}">
        <summary class="ptool-line sw-inbox-row-header">
          <span class="ptool-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:1em;height:1em"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span>
          <span class="ptool-text">${escapeHtml(label)} <b>${count}</b> ${escapeHtml(word)}</span>
          ${fromLabel}
+         <span class="ptool-badge ptool-badge-info">${escapeHtml(badge)}</span>
+         <span class="sw-inbox-row-chev">▾</span>
+       </summary>
+       <div class="sw-inbox-row-body">${bodyHtml}</div>
+     </details>`;
+}
+
+/* ── Human-steer inbox-injection row (mid-turn operator interjection) ──
+ * Renders a synthetic toolRound (flagged `_userSteerInject`) marking the moment
+ * the orchestrator drained a HUMAN "steer" message the operator sent while this
+ * turn was still generating (composer inject-mode = steer) and injected it as a
+ * user message before the next LLM round. Distinct from a sibling peer message
+ * (_peerInject) and a sub-agent result (_inboxInject): this is the operator
+ * talking to their own running turn. Collapsible: header shows "You steered N
+ * time(s)"; body shows each steer message the model actually saw. */
+function _renderUserSteerInjectRow(round) {
+  const _t = (typeof t === "function") ? t : (k, d) => d;
+  const previews = Array.isArray(round.steerPreviews) ? round.steerPreviews : [];
+  const count = round.steerCount || previews.length || 0;
+  const word = count === 1
+    ? _t("steer.injectRowOne", "steer message")
+    : _t("steer.injectRowMany", "steer messages");
+  const label = _t("steer.injectRowLabel", "You steered mid-turn");
+  const badge = _t("peer.injectRowBadge", "injected → context");
+  const modelTag = _t("tool.modelViewChip", "The model's view · verbatim");
+  const modelLbl = _t("tool.modelView", "Model view");
+  const bodyHtml = previews.length
+    ? previews.map(p => {
+        const text = String(p.text == null ? "" : p.text);
+        const bodyMd = text.trim()
+          ? `<div class="sw-card-preview md-content">${(typeof renderMarkdown === "function") ? renderMarkdown(text) : escapeHtml(text)}</div>`
+          : "";
+        return `<div class="sw-card sw-steer-card-item">` +
+          bodyMd +
+          `<details class="sw-card-raw">` +
+            `<summary class="sw-card-raw-toggle">${Icon("eye", 11)}<span>${escapeHtml(modelLbl)}</span></summary>` +
+            `<div class="sw-card-raw-meta">${escapeHtml(modelTag)}</div>` +
+            `<pre class="sw-card-raw-pre">${escapeHtml(text)}</pre>` +
+          `</details>` +
+        `</div>`;
+      }).join("")
+    : `<div class="sw-inbox-row-empty">${escapeHtml(_t("steer.noPayload", "No message available."))}</div>`;
+  return `<details class="sw-inbox-row sw-steer-row" data-rn="${round.roundNum}">
+       <summary class="ptool-line sw-inbox-row-header">
+         <span class="ptool-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:1em;height:1em"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/></svg></span>
+         <span class="ptool-text">${escapeHtml(label)} <b>${count}</b> ${escapeHtml(word)}</span>
          <span class="ptool-badge ptool-badge-info">${escapeHtml(badge)}</span>
          <span class="sw-inbox-row-chev">▾</span>
        </summary>
@@ -756,6 +912,7 @@ function _renderMemoryBlock(round, svg, q, compactionLabelHtml, rootPill, badgeH
          ${rootPill}
          <span class="ptool-text">${q}</span>
          ${badgeHtml}
+         ${_rowModelViewBtn(round)}
        </summary>
        <div class="ptool-memory-body">${inner}</div>
      </details>`;
@@ -826,6 +983,7 @@ function _renderTodoBlock(round, svg, q, badgeHtml) {
          <span class="ptool-text">${escapeHtml(headLabel)}</span>
          ${barHtml}
          ${countChip}
+         ${_rowModelViewBtn(round)}
        </summary>
        <div class="ptool-todo-body"><div class="ptool-todo-list">${rows}</div></div>
      </details>`;
@@ -942,18 +1100,32 @@ function _renderBoardSnapshot(snap) {
   return html;
 }
 
-/** Explicit transition line for a board mutation (verb + epic + new status). */
+/* Un-escape the backend's minimal XML/HTML escaping (&amp; &lt; &gt;) so a
+ * title stored as `rebuttal:&lt;venue&gt;` renders as `rebuttal:<venue>`
+ * instead of showing the literal entities. Safe to pipe into _tpInlineMd,
+ * which re-escapes for XSS before applying inline emphasis. */
+function _unescapeEntities(s) {
+  return String(s == null ? "" : s)
+    .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+}
+
+/** Explicit transition line for a board mutation (verb + epic + new status).
+ *  The epic title is rendered as light inline Markdown (bold/italic/code) with
+ *  entities un-escaped, so `**x**` and `<venue>` display correctly. */
 function _renderBoardTransition(tr) {
   if (!tr || !tr.verb) return "";
   const _t = (typeof t === "function") ? t : (k, d) => d;
   const verbLabel = _t("projectBrain.boardVerb." + tr.verb, tr.verb);
   const title = tr.title || tr.taskId || "";
+  const titleHtml = (typeof _tpInlineMd === "function")
+    ? _tpInlineMd(_unescapeEntities(title))
+    : escapeHtml(title);
   const statusLabel = tr.status
     ? `<span class="ptool-board-tr-status ptool-board-mini-${escapeHtml(tr.status)}">${escapeHtml(_t("projectBrain.lane" + tr.status.charAt(0).toUpperCase() + tr.status.slice(1), tr.status))}</span>`
     : "";
   return `<div class="ptool-board-transition">` +
     `<span class="ptool-board-tr-verb">${escapeHtml(verbLabel)}</span>` +
-    `<span class="ptool-board-tr-title">${escapeHtml(title)}</span>` +
+    `<span class="ptool-board-tr-title">${titleHtml}</span>` +
     (tr.status ? `<span class="ptool-board-tr-arrow">${(typeof Icon === "function") ? Icon("chevronDown", 12) : "→"}</span>${statusLabel}` : "") +
     `</div>`;
 }
@@ -1328,6 +1500,7 @@ function _renderConvMetaBlock(round, svg, q, badgeHtml) {
          ${countChip}
          ${sourceChip}
          ${badgeHtml}
+         ${_convMetaModelViewBtn(round)}
        </summary>
        <div class="ptool-convmeta-body">${purposeHtml}${bodyHtml}</div>
      </details>`;
@@ -1395,6 +1568,10 @@ function _renderUnifiedToolLine(round, isSearching) {
 
   if (round._peerInject) {
     return _renderPeerInjectRow(round);
+  }
+
+  if (round._userSteerInject) {
+    return _renderUserSteerInjectRow(round);
   }
 
   // ★ Hallucinated / rejected tool — the model invented a tool that does not
@@ -1543,8 +1720,8 @@ function _renderUnifiedToolLine(round, isSearching) {
     }
     return `<div class="ptool-line ptool-active">
          <span class="ptool-icon">${Icon('timer')}</span>
-         <span class="ptool-text">${q || "Timer Watcher"}</span>
-         <span class="ptool-badge ptool-badge-warn">waiting for first poll…</span>
+         <span class="ptool-text">${q || escapeHtml(t('timerBlock.watcherTitle'))}</span>
+         <span class="ptool-badge ptool-badge-warn">${escapeHtml(t('timerBlock.waitingFirstPoll'))}</span>
          <span class="ptool-spinner"></span>
        </div>`;
   }
@@ -1700,6 +1877,7 @@ function _renderUnifiedToolLine(round, isSearching) {
            ${cmdRootPill}
            ${descInlineHtml}
            <span class="ptool-cmd-status">${statusLabel}</span>
+           ${_rowModelViewBtn(round)}
          </div>
          <pre class="ptool-cmd-code"><code>$ ${cmd}</code></pre>
          ${outputHtml}
@@ -1741,6 +1919,7 @@ function _renderUnifiedToolLine(round, isSearching) {
            ${rootPill}
            <span class="ptool-cmd-label">${escapeHtml(round.query || "Execute JS")}</span>
            <span class="ptool-cmd-status">${statusLabel}</span>
+           ${_rowModelViewBtn(round)}
          </div>
          ${descHtml}
          ${codeHtml}
@@ -1779,7 +1958,7 @@ function _renderUnifiedToolLine(round, isSearching) {
          <span class="ptool-icon">${svg}</span>
          <span class="ptool-text">${q}</span>
          <span class="ptool-badge ${badgeCls}">${badgeText}</span>
-         ${_tcPreviewBtn(round)}
+         ${_rowModelViewBtn(round)}
          ${detailHtml}
        </div>`;
   }
@@ -1894,12 +2073,12 @@ function _renderUnifiedToolLine(round, isSearching) {
       }
     }
     return `<div class="ptool-results-block" data-rn="${round.roundNum}">
-         <div class="ptool-line ptool-results-header" onclick="if(event.target.closest('[data-tc-preview]'))return;event.stopPropagation();this.parentElement.classList.toggle('expanded')">
+         <div class="ptool-line ptool-results-header" onclick="if(event.target.closest('[data-tc-preview],[data-tc-preview-text]'))return;event.stopPropagation();this.parentElement.classList.toggle('expanded')">
            <span class="ptool-icon">${svg}</span>
            <span class="ptool-text">${q}</span>
            ${verts.length ? (()=>{const doms=[...new Set(verts.map(v=>v.domain||'').filter(Boolean))];return `<span class="ptool-badge vertical-badge" title="Vertical domain data">vertical: ${escapeHtml(doms.join(' · ') || 'auto')}</span>`;})() : ''}
            <span class="ptool-badge ptool-badge-info">${results.length} result${results.length !== 1 ? "s" : ""}</span>
-           ${_tcPreviewBtn(round)}
+           ${_rowModelViewBtn(round)}
            <span class="ptool-results-toggle">▼</span>
          </div>
          <div class="ptool-results-content">${verticalHtml}${items}${engineBkdnHtml}</div>
@@ -1939,7 +2118,7 @@ function _renderUnifiedToolLine(round, isSearching) {
              <span class="ptool-text">${q}</span>
              ${opsChip}
              ${countBadge}
-             ${_tcPreviewBtn(round)}
+             ${_rowModelViewBtn(round)}
            </div>
            <div class="rf-img-grid${multi ? " rf-img-grid-multi" : ""}${isInspect ? " rf-img-grid-inspect" : ""}">${tiles}</div>
          </div>`;
@@ -2009,7 +2188,7 @@ function _renderUnifiedToolLine(round, isSearching) {
              ${paramsBadges}
              ${svgBadge}
              <span class="ptool-badge ptool-badge-ok">${escapeHtml(meta.badge || "✓ done")}</span>
-             ${_tcPreviewBtn(round)}
+             ${_rowModelViewBtn(round)}
            </div>
            <div class="imagegen-card">
              ${imageArea}
@@ -2031,7 +2210,7 @@ function _renderUnifiedToolLine(round, isSearching) {
              <span class="ptool-text">${q}</span>
              ${modeChip}
              <span class="ptool-badge ptool-badge-err">failed</span>
-             ${_tcPreviewBtn(round)}
+             ${_rowModelViewBtn(round)}
            </div>
            <div class="imagegen-error">
              <div class="ig-error-title">${isEdit ? "Image editing failed" : "Image generation failed"}</div>
@@ -2306,7 +2485,7 @@ function _renderUnifiedToolLine(round, isSearching) {
        <span class="ptool-text">${q}</span>
        ${repairedBadge}
        ${badgeHtml}
-       ${_tcPreviewBtn(round)}
+       ${_rowModelViewBtn(round)}
      </div>`;
 }
 
@@ -2380,6 +2559,16 @@ async function _recoverTimerPolls(round) {
    Renders the timer_create tool call as a collapsible panel showing
    each poll check (wait/ready/error) with timestamps and reasons.
    While polling, shows a live "watching…" header; after trigger, shows "✓ triggered". */
+/* Countdown text for the "Next check in Ns" hint. Kept in one place so the
+ * initial render and the 1 Hz ticker below produce identical strings. */
+function _timerNextPollText(nextTs) {
+  const _tf = (typeof t === "function") ? t : (k, d) => d;
+  const secs = Math.max(0, Math.round((nextTs - Date.now()) / 1000));
+  return secs > 0
+    ? _tf("timerBlock.nextCheckIn", "Next check in ~{n}s…").replace("{n}", secs)
+    : _tf("timerBlock.nextCheckNow", "Next check due now…");
+}
+
 function _renderTimerWatcherBlock(round, svg) {
   const polls = round._timerPolls || [];
   const isActive = round.status === "searching";
@@ -2392,29 +2581,51 @@ function _renderTimerWatcherBlock(round, svg) {
   const realPolls = polls.filter(p => p.decision !== "started");
   const lastPoll = realPolls.length ? realPolls[realPolls.length - 1] : null;
   const lastWasError = lastPoll && (lastPoll.decision === "error" || lastPoll.decision === "parse_error" || lastPoll.parseError);
-  // The model the poll LLM resolved to (cheap-capability alias → concrete
-  // model). Prefer the round-level stash, fall back to the newest poll.
-  const pollModel = round._timerModel || (lastPoll && lastPoll.model) || "";
+  // Condition tier (backend `condition_kind`): a pure-code timer decides by a
+  // shell predicate and NEVER calls an LLM — so it gets a distinct identity and
+  // no "Verifier model" row. LLM/hybrid timers resolve a cheap model AT EACH
+  // POLL, and that model can differ per poll (it shows on each poll line), so
+  // we deliberately don't pin a single model in the header/meta.
+  const _t = (typeof t === "function") ? t : (k, d) => d;
+  const condKind = round._timerConditionKind
+    || (round._timerCheckInstruction ? "llm"
+        : (round._timerConditionCommand ? "code" : "llm"));
+  const isCodeTimer = condKind === "code";
 
   // Header
   let headerLabel, headerCls;
   const _tIco = Icon('timer', 13) + ' ';
+  const _idTxt = escapeHtml(timerIdShort);
+  const _s = (n) => (n !== 1 ? "s" : "");
   if (triggered) {
-    headerLabel = `${_tIco}Timer ${timerIdShort} — triggered after ${totalPolls} poll${totalPolls !== 1 ? "s" : ""}`;
+    headerLabel = _tIco + _t("timerBlock.headTriggered", "Timer {id} — triggered after {n} poll{s}")
+      .replace("{id}", _idTxt).replace("{n}", totalPolls).replace("{s}", _s(totalPolls));
     headerCls = "timer-watcher-triggered";
   } else if (round._timerOrphaned) {
-    headerLabel = `${_tIco}Timer ${timerIdShort} — task interrupted (${totalPolls} poll${totalPolls !== 1 ? "s" : ""}, timer still active in background)`;
+    headerLabel = _tIco + _t("timerBlock.headOrphaned", "Timer {id} — task interrupted ({n} poll{s}, timer still active in background)")
+      .replace("{id}", _idTxt).replace("{n}", totalPolls).replace("{s}", _s(totalPolls));
     headerCls = "timer-watcher-orphaned";
   } else if (isActive) {
     const skipN = round._timerSkipCount || 0;
-    const skipSuffix = skipN > 0 ? `, ${skipN} skipped` : "";
-    const errSuffix = lastWasError ? ", last check errored" : "";
-    headerLabel = `${_tIco}Timer ${timerIdShort} — watching… (${totalPolls} poll${totalPolls !== 1 ? "s" : ""}${skipSuffix}${errSuffix})`;
+    const skipSuffix = skipN > 0 ? _t("timerBlock.headSkipSuffix", ", {n} skipped").replace("{n}", skipN) : "";
+    const errSuffix = lastWasError ? _t("timerBlock.headErrSuffix", ", last check errored") : "";
+    headerLabel = _tIco + _t("timerBlock.headWatching", "Timer {id} — watching… ({n} poll{s}{skip}{err})")
+      .replace("{id}", _idTxt).replace("{n}", totalPolls).replace("{s}", _s(totalPolls))
+      .replace("{skip}", skipSuffix).replace("{err}", errSuffix);
     headerCls = lastWasError ? "timer-watcher-active timer-watcher-warn" : "timer-watcher-active";
   } else {
-    headerLabel = `${_tIco}Timer ${timerIdShort} — ${round.status || "done"} (${totalPolls} polls)`;
+    headerLabel = _tIco + _t("timerBlock.headDone", "Timer {id} — {status} ({n} poll{s})")
+      .replace("{id}", _idTxt)
+      .replace("{status}", escapeHtml(round.status || "done"))
+      .replace("{n}", totalPolls).replace("{s}", _s(totalPolls));
     headerCls = "";
   }
+  // Distinct identity chip: a pure command-based (zero-LLM) timer vs a hybrid.
+  const kindBadge = isCodeTimer
+    ? `<span class="timer-kind-badge timer-kind-code" title="${escapeHtml(_t("timerBlock.kindCodeTip", "Decided by a shell command — no model is called"))}">${escapeHtml(_t("timerBlock.kindCode", "command-based"))}</span>`
+    : (condKind === "hybrid"
+        ? `<span class="timer-kind-badge timer-kind-hybrid" title="${escapeHtml(_t("timerBlock.kindHybridTip", "Model decides; a shell command runs alongside and takes over once it consistently agrees"))}">${escapeHtml(_t("timerBlock.kindHybrid", "hybrid"))}</span>`
+        : "");
 
   // ── What is being verified — show the check instruction + command so the
   //    user understands the timer's job, who runs it, and how often. ──
@@ -2422,49 +2633,69 @@ function _renderTimerWatcherBlock(round, svg) {
   //    mid-sentence (the old slice(0,400) cut "report st…").
   let metaHtml = "";
   const instr = round._timerCheckInstruction || "";
-  const cmd = round._timerCheckCommand || "";
+  const cmd = round._timerCheckCommand || round._timerConditionCommand || "";
   const interval = round._timerPollInterval || 0;
   const maxPolls = round._timerMaxPolls || 0;
   if (instr || cmd || interval) {
     const cadence = interval
-      ? `Checks every ${interval}s${maxPolls ? ` · up to ${maxPolls} times` : ""}`
+      ? (maxPolls
+          ? _t("timerBlock.cadenceMax", "Checks every {n}s · up to {m} times").replace("{n}", interval).replace("{m}", maxPolls)
+          : _t("timerBlock.cadence", "Checks every {n}s").replace("{n}", interval))
       : "";
 
-    // Expandable instruction: a clamped preview + full text revealed on click.
+    // Expandable instruction, rendered as Markdown (the model writes it in
+    // Markdown). A collapsed max-height clamp reveals the full text on click —
+    // the backend now ships the whole instruction, so "show more" shows all.
     let instrHtml = "";
     if (instr) {
       const LONG = instr.length > 160;
       const valId = "tw-instr-" + round.roundNum;
+      const bodyHtml = (typeof renderMarkdown === "function")
+        ? renderMarkdown(instr)
+        : escapeHtml(instr);
+      const moreTxt = _t("timerBlock.showMore", "show more");
+      const lessTxt = _t("timerBlock.showLess", "show less");
       const toggle = LONG
-        ? ` onclick="event.stopPropagation();var v=document.getElementById('${valId}');v.classList.toggle('expanded');this.querySelector('.timer-meta-more').textContent=v.classList.contains('expanded')?'show less':'show more';"`
+        ? ` onclick="event.stopPropagation();var v=document.getElementById('${valId}');v.classList.toggle('expanded');this.querySelector('.timer-meta-more').textContent=v.classList.contains('expanded')?this.querySelector('.timer-meta-more').getAttribute('data-less'):this.querySelector('.timer-meta-more').getAttribute('data-more');"`
         : "";
       const moreLink = LONG
-        ? `<span class="timer-meta-more">show more</span>` : "";
+        ? `<span class="timer-meta-more" data-more="${escapeHtml(moreTxt)}" data-less="${escapeHtml(lessTxt)}">${escapeHtml(moreTxt)}</span>` : "";
       instrHtml = `<div class="timer-meta-row timer-meta-row-instr"${toggle}>
-        <span class="timer-meta-label">Verifying</span>
-        <span class="timer-meta-val timer-meta-clamp" id="${valId}">${escapeHtml(instr)}</span>
+        <span class="timer-meta-label">${escapeHtml(_t("timerBlock.verifying", "Verifying"))}</span>
+        <span class="timer-meta-val timer-meta-md md-content${LONG ? " timer-meta-clamp" : ""}" id="${valId}">${bodyHtml}</span>
         ${moreLink}
       </div>`;
     }
 
-    // Who runs the check — the cheap-capability LLM, with the concrete model.
-    const verifierVal = pollModel
-      ? `Cheap LLM · <span class="timer-meta-model">${escapeHtml(pollModel)}</span>`
-      : `Cheap LLM (model resolved at poll time)`;
+    // Who decides the trigger. For a pure command-based (code) timer there is
+    // NO model — the shell predicate decides. For LLM/hybrid the deciding model
+    // is resolved AT EACH POLL and can differ between polls, so we describe the
+    // tier here and let each poll line carry its own model chip (no misleading
+    // single pinned model in the header).
+    const deciderRow = isCodeTimer
+      ? `<div class="timer-meta-row"><span class="timer-meta-label">${escapeHtml(_t("timerBlock.decidedBy", "Decided by"))}</span><span class="timer-meta-val">${escapeHtml(_t("timerBlock.deciderCode", "Shell command exit code — no model"))}</span></div>`
+      : `<div class="timer-meta-row"><span class="timer-meta-label">${escapeHtml(_t("timerBlock.verifier", "Verifier"))}</span><span class="timer-meta-val">${escapeHtml(_t("timerBlock.verifierLLM", "Cheap LLM · resolved per poll (see each check below)"))}</span></div>`;
+
+    const cmdLabel = isCodeTimer
+      ? _t("timerBlock.predicate", "Predicate")
+      : _t("timerBlock.command", "Command");
 
     metaHtml = `<div class="timer-watcher-meta">
       ${instrHtml}
-      ${cmd ? `<div class="timer-meta-row"><span class="timer-meta-label">Command</span><code class="timer-meta-cmd">${escapeHtml(cmd.slice(0, 300))}</code></div>` : ""}
-      <div class="timer-meta-row"><span class="timer-meta-label">Verifier</span><span class="timer-meta-val">${verifierVal}</span></div>
-      ${cadence ? `<div class="timer-meta-row"><span class="timer-meta-label">Cadence</span><span class="timer-meta-val">${cadence}</span></div>` : ""}
+      ${cmd ? `<div class="timer-meta-row"><span class="timer-meta-label">${escapeHtml(cmdLabel)}</span><code class="timer-meta-cmd">${escapeHtml(cmd.slice(0, 300))}</code></div>` : ""}
+      ${deciderRow}
+      ${cadence ? `<div class="timer-meta-row"><span class="timer-meta-label">${escapeHtml(_t("timerBlock.cadenceLabel", "Cadence"))}</span><span class="timer-meta-val">${escapeHtml(cadence)}</span></div>` : ""}
     </div>`;
   }
 
   // ── "Next check in Ns" hint while active ──
+  // The countdown text is refreshed in place every second by the 1 Hz
+  // ticker at the bottom of this module (keyed on [data-timer-next]), so it
+  // stays live without churning the fingerprint gate — mirrors the swarm
+  // panel's [data-sw-start] approach.
   let nextPollHtml = "";
   if (isActive && round._timerNextPollTs) {
-    const secs = Math.max(0, Math.round((round._timerNextPollTs - Date.now()) / 1000));
-    nextPollHtml = `<div class="timer-next-poll">${Icon('hourglass', 12)} Next check ${secs > 0 ? `in ~${secs}s` : "due now"}…</div>`;
+    nextPollHtml = `<div class="timer-next-poll" data-timer-next="${round._timerNextPollTs}">${Icon('hourglass', 12)} <span class="timer-next-poll-txt">${_timerNextPollText(round._timerNextPollTs)}</span></div>`;
   }
 
   // Build poll lines (most recent first for readability)
@@ -2498,11 +2729,11 @@ function _renderTimerWatcherBlock(round, svg) {
     const rawContent = (isParseErr && p.rawContent) ? String(p.rawContent) : "";
     // Per-poll model chip — which LLM made this decision.
     const modelChip = p.model
-      ? `<span class="timer-poll-model" title="Verified by ${escapeHtml(p.model)}">${escapeHtml(p.model)}</span>` : "";
+      ? `<span class="timer-poll-model" title="${escapeHtml(_t("timerBlock.verifiedByTitle", "Verified by {model}").replace("{model}", p.model))}">${escapeHtml(p.model)}</span>` : "";
     // Stable per-poll id (e.g. tmr_84bd4fb3.p36) — lets the user correlate this
     // exact check with the app.log line and the DB poll_log row.
     const pollIdChip = p.pollId
-      ? `<span class="timer-poll-id" title="Poll id — search app.log for this">${escapeHtml(p.pollId)}</span>` : "";
+      ? `<span class="timer-poll-id" title="${escapeHtml(_t("timerBlock.pollIdTitle", "Poll id — search app.log for this"))}">${escapeHtml(p.pollId)}</span>` : "";
     // Per-poll tool-call timeline — reuse the swarm panel's .sw-tl-* look so
     // the timer's tool activity reads identically to a sub-agent's.
     const trace = Array.isArray(p.toolTrace) ? p.toolTrace : [];
@@ -2516,7 +2747,7 @@ function _renderTimerWatcherBlock(round, svg) {
       // Raw LLM output — what the model actually returned when its decision
       // could not be parsed as JSON. Shown verbatim so the failure is diagnosable.
       const rawHtml = rawContent.length > 0
-        ? `<div class="timer-poll-detail-label">Raw LLM output (unparseable decision):</div>` +
+        ? `<div class="timer-poll-detail-label">${escapeHtml(_t("timerBlock.rawOutput", "Raw LLM output (unparseable decision):"))}</div>` +
           `<pre class="timer-poll-detail-output timer-poll-raw"><code>${escapeHtml(rawContent)}</code></pre>`
         : "";
       let traceHtml = "";
@@ -2535,11 +2766,11 @@ function _renderTimerWatcherBlock(round, svg) {
             (el ? `<span class="sw-tl-elapsed">${el}</span>` : "") +
           `</div></div>`;
         }).join("");
-        traceHtml = `<div class="timer-poll-detail-label">Tools called this poll:</div>` +
+        traceHtml = `<div class="timer-poll-detail-label">${escapeHtml(_t("timerBlock.toolsCalled", "Tools called this poll:"))}</div>` +
           `<div class="sw-a-timeline timer-poll-trace">${rows}</div>`;
       }
       const cmdOutHtml = (p.cmdOutput && p.cmdOutput.length > 0)
-        ? `<div class="timer-poll-detail-label">Check output (evidence):</div><pre class="timer-poll-detail-output"><code>${escapeHtml(p.cmdOutput)}</code></pre>`
+        ? `<div class="timer-poll-detail-label">${escapeHtml(_t("timerBlock.checkOutput", "Check output (evidence):"))}</div><pre class="timer-poll-detail-output"><code>${escapeHtml(p.cmdOutput)}</code></pre>`
         : "";
       detailHtml = `<div class="timer-poll-detail">${fullReasonHtml}${rawHtml}${traceHtml}${cmdOutHtml}</div>`;
     }
@@ -2548,7 +2779,7 @@ function _renderTimerWatcherBlock(round, svg) {
       : "";
     const caret = hasDetail ? `<span class="timer-poll-caret">▸</span>` : `<span class="timer-poll-caret-spacer"></span>`;
     const toolBadge = trace.length > 0
-      ? `<span class="timer-poll-toolcount" title="${trace.length} tool call(s) this poll">${Icon('wrench', 11)} ${trace.length}</span>` : "";
+      ? `<span class="timer-poll-toolcount" title="${escapeHtml(_t("timerBlock.toolCallsTitle", "{n} tool call(s) this poll").replace("{n}", trace.length))}">${Icon('wrench', 11)} ${trace.length}</span>` : "";
     pollLines += `<div class="timer-poll-line ${cls}${hasDetail ? " timer-poll-has-detail" : ""}"${toggleAttr}>
       ${caret}
       <span class="timer-poll-icon">${icon}</span>
@@ -2561,7 +2792,7 @@ function _renderTimerWatcherBlock(round, svg) {
 
   let hiddenHtml = "";
   if (hidden > 0) {
-    hiddenHtml = `<div class="timer-poll-hidden">${hidden} earlier check${hidden !== 1 ? "s" : ""} hidden</div>`;
+    hiddenHtml = `<div class="timer-poll-hidden">${escapeHtml(_t("timerBlock.hiddenChecks", "{n} earlier check{s} hidden").replace("{n}", hidden).replace("{s}", hidden !== 1 ? "s" : ""))}</div>`;
   }
 
   // ★ Skip heartbeat trailer — shows "N polls skipped (output unchanged)"
@@ -2577,7 +2808,7 @@ function _renderTimerWatcherBlock(round, svg) {
     skipTrailer = `<div class="timer-poll-line timer-poll-skipped">
       <span class="timer-poll-icon">${Icon('clock', 13)}</span>
       <span class="timer-poll-num">${lastPollNum ? `#${lastPollNum}` : ""}</span>
-      <span class="timer-poll-reason">${round._timerSkipCount} poll${round._timerSkipCount !== 1 ? "s" : ""} skipped — check_command output unchanged</span>
+      <span class="timer-poll-reason">${escapeHtml(_t("timerBlock.skipped", "{n} poll{s} skipped — check_command output unchanged").replace("{n}", round._timerSkipCount).replace("{s}", round._timerSkipCount !== 1 ? "s" : ""))}</span>
       <span class="timer-poll-meta">${skipTs}</span>
     </div>`;
   }
@@ -2587,7 +2818,9 @@ function _renderTimerWatcherBlock(round, svg) {
   return `<div class="timer-watcher-block ${headerCls}" data-rn="${round.roundNum}">
        <div class="timer-watcher-header" onclick="event.stopPropagation();var w=document.getElementById('${uid}-wrap');w.classList.toggle('expanded');var t=this.querySelector('.timer-toggle');if(t)t.textContent=w.classList.contains('expanded')?'▾':'▸';">
          <span class="timer-watcher-label">${headerLabel}</span>
+         ${kindBadge}
          ${isActive ? '<span class="ptool-spinner"></span>' : ''}
+         ${_rowModelViewBtn(round)}
          <span class="timer-toggle">${expandedByDefault ? '▾' : '▸'}</span>
        </div>
        <div class="timer-watcher-body${expandedByDefault ? ' expanded' : ''}" id="${uid}-wrap">
@@ -2977,8 +3210,91 @@ const _renderBrowserGroup = _renderUnifiedGroup;
 // ── Tool content preview button ──
 function _tcPreviewBtn(round) {
   if (!round || !round.toolContent) return "";
-  return `<button class="tc-preview-btn" data-tc-preview data-tc-rn="${round.roundNum}" data-tc-tcid="${escapeHtml(round.toolCallId || '')}" title="Preview tool content">Preview</button>`;
+  /* ★ "Model view" — the exact bytes this tool returned to the LLM, verbatim.
+   *   Renamed from the old ambiguous "Preview" (users read that as a human
+   *   summary, not "what the model actually saw"). An eye icon + label makes
+   *   the human-view / model-view distinction explicit. The class/data-attrs
+   *   stay identical so the click-delegation + streaming-inject paths that key
+   *   off `.tc-preview-btn` / `[data-tc-preview]` are unaffected. */
+  const _t = (typeof t === "function") ? t : (k, d) => d;
+  const label = _t("tool.modelView", "Model view");
+  const tip = _t("tool.modelViewTip", "Show the exact text this tool returned to the model — verbatim, nothing omitted.");
+  const eye = (typeof Icon === "function") ? Icon("eye", 12) : "";
+  return `<button class="tc-preview-btn" data-tc-preview data-tc-rn="${round.roundNum}" data-tc-tcid="${escapeHtml(round.toolCallId || '')}" title="${escapeHtml(tip)}"><span class="tc-preview-ico">${eye}</span><span class="tc-preview-lbl">${escapeHtml(label)}</span></button>`;
 }
+
+/* ★ Fallback verbatim-text registry for rows whose model view is NOT the raw
+ *   `round.toolContent`. Some rows (board post/claim, charter, peer status,
+ *   feed) render a STRUCTURED human card and, after a reload/poll projection,
+ *   may arrive with an EMPTY `toolContent` — so `_tcPreviewBtn` would return ""
+ *   and the row would have NO model-view entry (the exact gap the owner
+ *   flagged: "每个工具行都要有模型原文"). For those we synthesize the best
+ *   available verbatim source (see `_roundModelText`) and stash it here keyed by
+ *   a synthetic id, so the click handler can open arbitrarily large text
+ *   without bloating a DOM attribute. */
+const _tcModelTextRegistry = new Map();
+let _tcModelTextSeq = 0;
+if (typeof window !== "undefined") window._tcModelTextRegistry = _tcModelTextRegistry;
+
+/* Resolve the verbatim "what the model saw" text for a round, in priority
+ * order: the real toolContent → the structured backend meta rendered as pretty
+ * JSON (that IS what the tool returned, just already parsed) → the meta snippet
+ * → a localized "no content" note. Never returns null so the affordance is
+ * unconditional. */
+function _roundModelText(round) {
+  if (round && typeof round.toolContent === "string" && round.toolContent.trim()) {
+    return round.toolContent;
+  }
+  const meta = (round && round.results && round.results[0]) || null;
+  if (meta && typeof meta === "object") {
+    // Drop display-only chrome keys; keep the substantive tool payload so the
+    // verbatim view reflects the tool's actual structured return.
+    const OMIT = new Set(["icon", "badge", "title", "fetched", "fetchedChars", "source"]);
+    const keep = {};
+    for (const k of Object.keys(meta)) {
+      if (!OMIT.has(k) && meta[k] != null && meta[k] !== "") keep[k] = meta[k];
+    }
+    if (Object.keys(keep).length) {
+      try { return JSON.stringify(keep, null, 2); }
+      catch (_e) { /* fall through to snippet */ }
+    }
+    if (typeof meta.snippet === "string" && meta.snippet.trim()) return meta.snippet;
+  }
+  const _t = (typeof t === "function") ? t : (k, d) => d;
+  return _t("tool.noContent", "No content returned.");
+}
+
+/* Model-view button for a row that supplies an EXPLICIT verbatim text (not the
+ * raw toolContent lookup). Used by convmeta / brain-mutation rows so every one
+ * of them carries a "模型原文" entry even when toolContent is empty. The text is
+ * parked in `_tcModelTextRegistry`; the delegated click handler opens it. */
+function _tcModelViewBtnForText(round, text, titleHint) {
+  const _t = (typeof t === "function") ? t : (k, d) => d;
+  const label = _t("tool.modelView", "Model view");
+  const tip = _t("tool.modelViewTip", "Show the exact text this tool returned to the model — verbatim, nothing omitted.");
+  const eye = (typeof Icon === "function") ? Icon("eye", 12) : "";
+  const id = "tcmt_" + (++_tcModelTextSeq);
+  _tcModelTextRegistry.set(id, {
+    text: String(text == null ? "" : text),
+    title: titleHint || label,
+  });
+  return `<button class="tc-preview-btn" data-tc-preview-text="${id}" title="${escapeHtml(tip)}"><span class="tc-preview-ico">${eye}</span><span class="tc-preview-lbl">${escapeHtml(label)}</span></button>`;
+}
+
+/* Unconditional model-view entry for ANY tool row: prefer the normal
+ * toolContent-backed button; when toolContent is empty, fall back to the
+ * synthesized verbatim source (structured meta → snippet → "no content") so
+ * the entry is NEVER missing. This is the row-agnostic guarantee behind the
+ * objective "every tool row must carry a 模型原文 view" — used by convmeta /
+ * brain rows, the timer watcher, memory, todo, and the generic command line. */
+function _rowModelViewBtn(round) {
+  if (round && typeof round.toolContent === "string" && round.toolContent.trim()) {
+    return _tcPreviewBtn(round);
+  }
+  return _tcModelViewBtnForText(round, _roundModelText(round));
+}
+// Alias kept for the convmeta call site (semantics identical).
+const _convMetaModelViewBtn = _rowModelViewBtn;
 
 // ── Memory Prefetch indicator (chip above tool panel) ──
 // Rendered in the streaming bubble AND in the finished assistant message.
@@ -3385,6 +3701,34 @@ function renderToolRoundsHTML(rounds, isStreaming, segments) {
    *   NOT clump its narration into one tail block when the segment-timeline
    *   toggle is OFF (or the timeline path fell back to grouped). */
   return _renderUnifiedGroup(rounds, segments);
+}
+
+/* ── 1 Hz wall-clock ticker for the timer "Next check in Ns" countdown ──
+ * Like the swarm panel's elapsed timers, the countdown text changes every
+ * second even when no SSE event landed. The fingerprint gate in
+ * _syncToolRoundsDOM (correctly) skips re-renders when nothing changed, so
+ * without this the hint froze at whatever value it was first painted with.
+ * We update [data-timer-next] elements in place: zero re-render, single
+ * timer, O(N active timers) per tick — mirrors _tickSwarmTimers. */
+function _tickTimerCountdowns() {
+  const els = document.querySelectorAll('.timer-next-poll[data-timer-next]');
+  if (!els.length) return;
+  for (const el of els) {
+    const nextTs = +el.getAttribute('data-timer-next');
+    if (!nextTs) continue;
+    const span = el.querySelector('.timer-next-poll-txt');
+    if (!span) continue;
+    const txt = _timerNextPollText(nextTs);
+    if (span.textContent !== txt) span.textContent = txt;
+  }
+}
+if (typeof window !== 'undefined' && !window._timerCountdownTicker) {
+  window._timerCountdownTicker = setInterval(() => {
+    try {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      _tickTimerCountdowns();
+    } catch (e) { /* swallowed — countdown ticker is best-effort */ }
+  }, 1000);
 }
 
 /* ── Lazy thinking expand ────────────────────────────────

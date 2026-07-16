@@ -675,6 +675,26 @@ function _injectVerbatimText(previews, withFrom) {
   }).join("\n\n———\n\n");
 }
 
+/* Header attribution for a peer-inject row: one title bubble per DISTINCT
+ * sender conversation (never a bare id list). Shows up to `max` bubbles, then a
+ * `+K` overflow chip — so multi-sibling injections (this project's normal case)
+ * still read as titles, not `[sib1, sib2 …]`. */
+function _peerFromBubbleGroup(previews, max) {
+  const seen = new Set();
+  const ids = [];
+  (Array.isArray(previews) ? previews : []).forEach((p) => {
+    const id = p && p.fromConv ? String(p.fromConv) : "";
+    if (id && !seen.has(id)) { seen.add(id); ids.push(id); }
+  });
+  if (!ids.length) return "";
+  const cap = max || 3;
+  const shown = ids.slice(0, cap).map(_peerFromBubble).join("");
+  const overflow = ids.length > cap
+    ? `<span class="sw-peer-from-more">+${ids.length - cap}</span>`
+    : "";
+  return `<span class="sw-peer-from-group">${shown}${overflow}</span>`;
+}
+
 /* A small "who sent this" bubble: resolves a sibling conversation id to its
  * human-readable TITLE via the shared `convTitleById` seam (never a bare id —
  * falls back to a localized label), with the raw id in the tooltip. Used in the
@@ -745,10 +765,6 @@ function _renderInboxInjectRow(round) {
 function _renderPeerInjectRow(round) {
   const previews = Array.isArray(round.peerPreviews) ? round.peerPreviews : [];
   const count = round.peerCount || previews.length || 0;
-  const froms = previews.map(p => (p.fromConv || "").slice(0, 8)).filter(Boolean);
-  const fromLabel = froms.length
-    ? `<span class="sw-inbox-row-ids">[${froms.slice(0, 4).map(escapeHtml).join(", ")}${froms.length > 4 ? ` +${froms.length - 4}` : ""}]</span>`
-    : "";
   const word = count === 1
     ? (typeof t === "function" ? t("peer.injectRowOne") : "peer message")
     : (typeof t === "function" ? t("peer.injectRowMany") : "peer messages");
@@ -772,12 +788,10 @@ function _renderPeerInjectRow(round) {
         `</div>`;
       }).join("")
     : `<div class="sw-inbox-row-empty">${escapeHtml(_t("peerCard.noPayload", "No message available."))}</div>`;
-  // Header "sender" bubble: the first (or sole) peer conversation, resolved to
-  // its title. Multi-sender injections keep the raw short-id list as a subtle
-  // secondary count instead of a title (a title-per-sender would crowd the row).
-  const headBubble = (froms.length === 1 && previews[0] && previews[0].fromConv)
-    ? _peerFromBubble(previews[0].fromConv)
-    : fromLabel;
+  // Header "sender" attribution: one TITLE bubble per distinct sender (up to 3,
+  // then a +K overflow chip). NEVER a raw id list — users care who sent it, and
+  // multi-sibling injection is this project's normal case.
+  const headBubble = _peerFromBubbleGroup(previews, 3);
   const modelBtn = _tcModelViewBtnForText(round, _injectVerbatimText(previews, true));
   return `<details class="sw-inbox-row sw-peer-row" data-rn="${round.roundNum}">
        <summary class="ptool-line sw-inbox-row-header">

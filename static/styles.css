@@ -6876,9 +6876,11 @@ input.settings-mono {
 .sw-inbox-row[open]>.sw-inbox-row-header .ptool-text::after{content:" ▾"}
 /* "Who sent this" bubble — a conversation TITLE (via convTitleById), not a raw
    id. Reads like the peer-msg provenance banner so the sender is legible. */
-.sw-peer-from-bubble{display:inline-flex;align-items:center;gap:5px;flex-shrink:0;max-width:220px;padding:1px 9px;border:1px solid rgba(130,170,255,.35);background:rgba(130,170,255,.09);border-radius:9px;font-size:11px;line-height:1.4;color:#82aaff;font-weight:600}
+.sw-peer-from-group{display:inline-flex;align-items:center;gap:4px;flex-wrap:wrap;min-width:0}
+.sw-peer-from-bubble{display:inline-flex;align-items:center;gap:5px;flex-shrink:1;max-width:220px;padding:1px 9px;border:1px solid rgba(130,170,255,.35);background:rgba(130,170,255,.09);border-radius:9px;font-size:11px;line-height:1.4;color:#82aaff;font-weight:600}
 .sw-peer-from-bubble svg{display:block;flex-shrink:0}
 .sw-peer-from-bubble>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sw-peer-from-more{flex-shrink:0;padding:1px 7px;border-radius:9px;font-size:10px;font-weight:700;color:var(--text-tertiary);background:rgba(130,170,255,.12)}
 .sw-inbox-row>.sw-inbox-row-header .tc-preview-btn{margin-left:auto}
 .sw-inbox-row .sw-inbox-row-body{padding:6px 10px 8px 30px;display:flex;flex-direction:column;gap:8px}
 .sw-inbox-row-item{border-left:2px solid rgba(251,191,36,0.35);padding-left:10px}

@@ -68,9 +68,10 @@ global.escapeHtml = s => String(s==null?'':s).replace(/[&<>"]/g,
 global.Icon = () => '<svg></svg>';
 global.renderMarkdown = s => '<p>' + global.escapeHtml(s) + '</p>';
 global.t = (k, d) => (d !== undefined ? d : k);
+const _TITLES = { mrnaj25i: '修复显示层 Bug', sibaaaa1: '队列注入', sibbbbb2: 'inbox 重建', sibccccc3: '前缀缓存', sibddddd4: '桌面发布' };
 global.convTitleById = NEUTER
   ? (cid => 'Untitled chat')                       // NC: lookup always falls back
-  : (cid => cid === 'mrnaj25i' ? '修复显示层 Bug' : '');
+  : (cid => _TITLES[cid] || '');
 global.window = {};
 const _tcModelTextRegistry = new Map();
 let _tcModelTextSeq = 0;
@@ -80,8 +81,16 @@ function pull(name){const i=src.indexOf('function '+name+'(');let d=0,j=src.inde
   for(let k=j;k<src.length;k++){if(src[k]==='{')d++;else if(src[k]==='}'){d--;if(d===0)return src.slice(i,k+1);}}}
 eval(pull('_injectVerbatimText'));
 eval(pull('_peerFromBubble'));
+eval(pull('_peerFromBubbleGroup'));
 eval(pull('_tcModelViewBtnForText'));
 eval(pull('_renderPeerInjectRow'));
+
+// Count occurrences of a substring.
+function nOcc(hay, needle){ return hay.split(needle).length - 1; }
+// Header = the <summary> only (attribution lives there, body cards excluded).
+function headerOf(html){ const i=html.indexOf('<summary'); const j=html.indexOf('</summary>'); return html.slice(i, j); }
+// Raw-id-as-visible-label detector: `>sibX<` or `>mrnaj25i<` between tags.
+function hasRawIdLabel(html){ return /(>|\[)(sib[a-z0-9]+|mrnaj25i)(<|,|\s|\])/.test(html.replace(/title="[^"]*"/g,'')); }
 
 const out = [];
 function check(name, cond){ out.push((cond?'PASS ':'FAIL ')+name); }
@@ -109,11 +118,43 @@ if (!NEUTER) {
   check('no_chevron_span', !html.includes('sw-inbox-row-chev'));
   // No per-card raw toggle inside the body anymore.
   check('no_percard_raw_toggle', !html.includes('sw-card-raw'));
+
+  // ── MULTI-SENDER: header must show a title bubble PER distinct sender,
+  //    never a raw id list. 5 senders → cap 3 bubbles + a "+2" overflow. ──
+  const multi = _renderPeerInjectRow({
+    roundNum: 9000003, peerCount: 5,
+    peerPreviews: [
+      { fromConv: 'sibaaaa1', text: 'a' }, { fromConv: 'sibbbbb2', text: 'b' },
+      { fromConv: 'sibccccc3', text: 'c' }, { fromConv: 'sibddddd4', text: 'd' },
+      { fromConv: 'mrnaj25i', text: 'e' },
+    ],
+  });
+  const mhead = headerOf(multi);
+  check('multi_header_has_2plus_bubbles', nOcc(mhead, 'sw-peer-from-bubble') >= 2);
+  check('multi_header_has_group', mhead.includes('sw-peer-from-group'));
+  check('multi_header_overflow_chip',
+    mhead.includes('sw-peer-from-more') && mhead.includes('+2'));
+  // NO bare conv id as a visible label anywhere in the header.
+  check('multi_no_raw_id_label', !hasRawIdLabel(mhead));
+  // The old raw-id fallback markup is fully gone.
+  check('multi_no_sw_inbox_row_ids', !multi.includes('sw-inbox-row-ids'));
+  // The first 3 senders render as real titles (mrnaj25i is 5th → in +2 overflow).
+  check('multi_titles_shown',
+    mhead.includes('队列注入') && mhead.includes('inbox 重建') && mhead.includes('前缀缓存'));
 } else {
   // NEUTER: convTitleById always falls back → the specific title is gone,
   // proving the title lookup (not a hardcoded string) produced the bubble.
   check('nc_title_falls_back',
     !html.includes('修复显示层 Bug') && html.includes('Untitled chat'));
+  // Even with titles neutered the MULTI-sender header still uses bubbles
+  // (never a raw id list) — the fallback is a localized label, not the id.
+  const multi = _renderPeerInjectRow({
+    roundNum: 9000003, peerCount: 2,
+    peerPreviews: [{ fromConv: 'sibaaaa1', text: 'a' }, { fromConv: 'sibbbbb2', text: 'b' }],
+  });
+  const mhead = headerOf(multi);
+  check('nc_multi_still_bubbles',
+    nOcc(mhead, 'sw-peer-from-bubble') >= 2 && !hasRawIdLabel(mhead));
 }
 
 console.log(out.join('\n'));
@@ -133,7 +174,19 @@ def test_peer_inject_row_title_bubble_and_far_right_modelview():
     out = _run(neuter=False)
     fails = [ln for ln in out.splitlines() if ln.startswith('FAIL')]
     assert not fails, 'peer-inject row layout failures:\n' + out
-    assert out.count('PASS') >= 9, f'expected >=9 PASS, got:\n{out}'
+    assert out.count('PASS') >= 15, f'expected >=15 PASS, got:\n{out}'
+
+
+@pytest.mark.skipif(not shutil.which('node'), reason='node not installed')
+def test_multi_sender_header_uses_title_bubbles_not_raw_ids():
+    """The multi-sender header (this project's normal concurrent-sibling case)
+    must render one title bubble per distinct sender + a +K overflow chip, and
+    NEVER a bare `[sib1, sib2 …]` id list."""
+    out = _run(neuter=False)
+    for key in ('multi_header_has_2plus_bubbles', 'multi_header_has_group',
+                'multi_header_overflow_chip', 'multi_no_raw_id_label',
+                'multi_no_sw_inbox_row_ids', 'multi_titles_shown'):
+        assert f'PASS {key}' in out, f'multi-sender check failed ({key}):\n' + out
 
 
 @pytest.mark.skipif(not shutil.which('node'), reason='node not installed')
@@ -141,6 +194,8 @@ def test_NC_neutered_convtitle_loses_the_title_bubble():
     out = _run(neuter=True)
     assert 'PASS nc_title_falls_back' in out, (
         'NC control failed — the title bubble is not sourced from convTitleById:\n' + out)
+    assert 'PASS nc_multi_still_bubbles' in out, (
+        'NC control failed — multi-sender header fell back to raw ids:\n' + out)
 
 
 def test_source_uses_title_bubble_and_header_modelview():
@@ -148,9 +203,10 @@ def test_source_uses_title_bubble_and_header_modelview():
     bubble + a header model-view button, and no longer emits a chevron span."""
     src = open(TR_JS, encoding='utf-8').read()
     peer = _pull_fn(src, '_renderPeerInjectRow')
-    assert '_peerFromBubble' in peer, 'peer row no longer builds a sender title bubble'
+    assert '_peerFromBubbleGroup' in peer, 'peer row header no longer uses the title-bubble group'
     assert '_tcModelViewBtnForText' in peer, 'peer row no longer emits a header model-view button'
     assert 'sw-inbox-row-chev' not in peer, 'the dead chevron span was re-introduced'
+    assert 'sw-inbox-row-ids' not in peer, 'the raw-id fallback list was re-introduced in the peer row'
 
 
 if __name__ == '__main__':

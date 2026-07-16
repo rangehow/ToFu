@@ -9,10 +9,11 @@ calls back into (lazily) when it flushes an unpaired ROI on eviction.
 
 from __future__ import annotations
 
+import sys as _sys
 import time
 from typing import Any
 
-from lib.log import audit_log, get_logger
+from lib.log import audit_log as _audit_log_direct, get_logger
 from lib.tasks_pkg.cache_tracking._state import (
     _cache_lock,
     _cache_states,
@@ -20,6 +21,22 @@ from lib.tasks_pkg.cache_tracking._state import (
 )
 
 logger = get_logger(__name__)
+
+
+def _audit_log(event, **details):
+    """Emit an audit metric, resolving ``audit_log`` through the package facade
+    at CALL time.
+
+    The old flat ``cache_tracking.py`` exposed ``audit_log`` as a module global,
+    so tests (and any hot-reload path) spy it on the package namespace
+    ``lib.tasks_pkg.cache_tracking.audit_log``. After the package split the emit
+    moved here with its own import-time binding, which a facade patch could not
+    reach. Resolving through the facade at call time restores that contract
+    exactly (falls back to the direct binding if the facade isn't importable).
+    """
+    fac = _sys.modules.get('lib.tasks_pkg.cache_tracking')
+    fn = getattr(fac, 'audit_log', _audit_log_direct) if fac else _audit_log_direct
+    return fn(event, **details)
 
 
 def get_session_cache_stats(conv_id: str) -> dict[str, Any] | None:
@@ -116,7 +133,7 @@ def _emit_l2_roi(conv_id: str, roi: dict, *,
         _read_lost = int(roi.get('cache_read_at_event', 0))
         _observed = cache_write_rebilled is not None
         _net = (_dropped - int(cache_write_rebilled)) if _observed else None
-        audit_log(
+        _audit_log(
             'l2_cache_roi',
             conv_id=conv_id[:12],
             outcome='paired' if _observed else 'no_following_round',
@@ -226,11 +243,24 @@ def log_round_cache_stats(
     total_input = prompt_tokens + cache_write + cache_read
     hit_pct = round(cache_read / max(total_input, 1) * 100)
 
+    # Surface the SERVING KEY + retry count so a clean-round full-floor miss
+    # (cache_r=0 with no compaction) can be attributed to per-round dispatch
+    # ROUTING — a conv whose soft key-affinity broke and landed on a DIFFERENT
+    # gateway key hits a different backend cache pool → guaranteed floor miss,
+    # then rebounds when routed back to the warm key (the mrne3bqe R4 pattern:
+    # R3 hit 96% on one key, R4 floor-missed, R6 read back the full floor).
+    # Without the key on this line that hypothesis can't be confirmed
+    # retrospectively. _dispatch is injected by dispatch_stream (see
+    # lib/llm_dispatch/api.py); absent on non-dispatched paths.
+    _disp = usage.get('_dispatch') if isinstance(usage, dict) else None
+    _key = (_disp or {}).get('key', '?')
+    _retries = (_disp or {}).get('429_retries', 0)
+
     logger.info(
         '[CacheStats] %s conv=%s R%d model=%s '
-        'input=%d cache_w=%d cache_r=%d hit=%d%%',
+        'input=%d cache_w=%d cache_r=%d hit=%d%% key=%s retries=%d',
         tid[:8] if tid else '???',
         conv_id[:8] if conv_id else '???',
         round_num + 1, model,
-        prompt_tokens, cache_write, cache_read, hit_pct,
+        prompt_tokens, cache_write, cache_read, hit_pct, _key, _retries,
     )

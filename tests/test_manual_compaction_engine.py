@@ -457,3 +457,107 @@ def test_neuter_apiform_boundary_would_split():
     bad_starts_on_user = bool(bad_reserve) and bad_reserve[0].get('role') == 'user'
     assert (not bad_starts_on_user) or (len(bad_reserve) != len(correct_reserve)), (
         'the api-space boundary must mis-slice the raw list')
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  档B — intra-turn folding of a SINGLE giant turn (the 422 nothing_to_compact
+#        bug: one user request answered with dozens of tool rounds fills the
+#        window, but the turn-based boundary always preserves the current turn
+#        WHOLE, so the old plan_manual_compaction refused it → HTTP 422).
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _giant_turn_conv(n_rounds=40, chars=4000):
+    """A conversation that is ONE user turn answered by ONE assistant carrying
+    many ``toolRounds``.  There is no old region (boundary preserves the sole
+    turn whole), so ONLY 档B intra-turn folding can compact it."""
+    return [
+        _u('修复登录 bug，尽可能彻底', 1000),
+        _a_tools('已完成，详见上面各步', n_rounds=n_rounds, ts=1001, chars=chars),
+    ]
+
+
+@pytest.mark.unit
+def test_intra_turn_folds_single_giant_turn(monkeypatch):
+    """POSITIVE guard for 档B: a single giant tool turn is compactable via
+    intra-turn folding (mode='intra_turn'), cold rounds are folded out, the
+    rebuilt api-form has NO orphan tool, and tokens drop significantly."""
+    from lib.tasks_pkg.compaction import _manual as man
+    from lib.tasks_pkg.compaction._constants import (
+        _MANUAL_INTRA_TURN_HOT_ROUNDS, _MANUAL_COMPACT_MIN_TOKENS)
+    from lib.tasks_pkg.conv_message_builder import _transform_messages
+
+    raw = _giant_turn_conv(n_rounds=40)
+
+    # Sanity: this fixture is above the floor (so the ONLY reason to refuse
+    # would be the removed turn-based short-circuit, not the size floor).
+    total = man._raw_estimate_tokens(raw, config={})
+    assert total >= _MANUAL_COMPACT_MIN_TOKENS, (
+        f'fixture {total} tok must exceed the floor {_MANUAL_COMPACT_MIN_TOKENS}')
+
+    # (a) plan is intra_turn (NOT None → NOT the 422 nothing_to_compact bug).
+    plan = man.plan_manual_compaction(raw, config={}, task={'convId': 'c'})
+    assert plan is not None, 'giant single turn must be compactable (档B)'
+    assert plan['mode'] == 'intra_turn'
+    assert plan['old_raw'] == [], 'no old region for a single turn'
+
+    # (b) _collect_reserve_folds actually folds the giant turn: it keeps the
+    #     hot tail verbatim and marks the older rounds as cold.
+    folds = plan['intra_folds']
+    assert len(folds) == 1, 'the one giant assistant must be folded'
+    fold = folds[0]
+    assert len(fold['hot_rounds']) == _MANUAL_INTRA_TURN_HOT_ROUNDS
+    assert len(fold['cold_rounds']) == 40 - _MANUAL_INTRA_TURN_HOT_ROUNDS
+    # cold + hot together == the original rounds, in order (nothing lost/added)
+    assert fold['cold_rounds'] + fold['hot_rounds'] == raw[1]['toolRounds']
+
+    # (c) full engine run: tokens drop significantly + NO orphan tool.
+    store = _FakeStore(raw)
+    man2 = _install(monkeypatch, store)
+    res = man2.compact_conversation_now('c', config={}, task={'convId': 'c'})
+    assert res['ok'] is True, res
+    assert res['tokensAfter'] < res['tokensBefore'] * 0.5, (
+        f"intra-turn fold must cut tokens hard: "
+        f"{res['tokensBefore']} → {res['tokensAfter']}")
+    # the preserved giant assistant now carries only the hot tail
+    heavy = [m for m in store.messages
+             if m.get('role') == 'assistant' and m.get('toolRounds')]
+    assert len(heavy) == 1
+    assert len(heavy[0]['toolRounds']) == _MANUAL_INTRA_TURN_HOT_ROUNDS
+    assert heavy[0].get('_intraTurnFolded') == 40 - _MANUAL_INTRA_TURN_HOT_ROUNDS
+    # rebuild to api-form: dropping WHOLE cold rounds must not orphan a tool
+    api = _transform_messages(store.messages, {})
+    ok, why = _api_ok(api)
+    assert ok, f'intra-turn fold split a tool round: {why}'
+
+
+@pytest.mark.unit
+def test_neuter_old_shortcircuit_would_refuse_giant_turn():
+    """NEUTER negative control for 档B, faithful to the exact pre-fix code.
+
+    The old ``plan_manual_compaction`` short-circuited with
+    ``if boundary <= system_end: return None`` — for a single giant turn the
+    boundary IS ``system_end`` (nothing before the sole user row), so the old
+    path returned None → the route mapped it to 422 nothing_to_compact.
+
+    Re-run that removed decision on the same giant-turn fixture and assert it
+    would have refused.  If 档B is reverted, the positive test above regresses
+    to exactly this behaviour — so this pins the fix as load-bearing."""
+    from lib.tasks_pkg.compaction import _manual as man
+
+    raw = _giant_turn_conv(n_rounds=40)
+
+    system_end = man._system_end(raw)
+    boundary = man._raw_turn_boundary(raw, config={}, task={'convId': 'c'})
+
+    # The removed short-circuit: a single preserved turn → boundary==system_end.
+    assert boundary <= system_end, (
+        'single giant turn: boundary must collapse onto system_end (this is '
+        'exactly why the old code refused it)')
+    old_plan_would_be = None if boundary <= system_end else 'turns'
+    assert old_plan_would_be is None, (
+        'the OLD turn-based short-circuit refuses the giant turn (the 422 bug)')
+
+    # And the CURRENT code does the opposite on the identical input — proving
+    # the guard has teeth (revert 档B ⇒ this diverges back to None).
+    new_plan = man.plan_manual_compaction(raw, config={}, task={'convId': 'c'})
+    assert new_plan is not None and new_plan['mode'] == 'intra_turn'

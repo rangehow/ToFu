@@ -52,6 +52,8 @@ from lib.log import audit_log, get_logger
 from lib.agent_core.store import get_conversation_store
 from lib.tasks_pkg.compaction._archive import _archive_transcript
 from lib.tasks_pkg.compaction._constants import (
+    _MANUAL_COMPACT_MIN_TOKENS,
+    _MANUAL_INTRA_TURN_HOT_ROUNDS,
     _MAX_PRESERVE_TURNS,
     _PRESERVE_BUDGET_RATIO,
 )
@@ -71,6 +73,25 @@ logger = get_logger(__name__)
 
 _SUMMARY_HEADER = '## 上下文已压缩（主动 /compact）'
 """Marker heading prepended to the persisted summary message body."""
+
+# §10.1: 档B introduces two hyperparameters (intra-turn hot-round count +
+# manual-compact floor). Owner sign-off recorded in JOURNAL 2026-07-16. Emit a
+# one-time config_change audit entry documenting the sanctioned values.
+_CONFIG_CHANGE_LOGGED = False
+
+
+def _audit_config_once() -> None:
+    global _CONFIG_CHANGE_LOGGED
+    if _CONFIG_CHANGE_LOGGED:
+        return
+    _CONFIG_CHANGE_LOGGED = True
+    try:
+        audit_log('config_change', change='manual_compaction_intra_turn',
+                  intra_turn_hot_rounds=_MANUAL_INTRA_TURN_HOT_ROUNDS,
+                  manual_compact_min_tokens=_MANUAL_COMPACT_MIN_TOKENS,
+                  approved_by='user')
+    except Exception as e:
+        logger.debug('[ManualCompact] config_change audit skipped: %s', e)
 
 
 def _project(raw_slice: list, config: dict | None = None) -> list:
@@ -172,6 +193,45 @@ def _raw_turn_boundary(
     return boundary
 
 
+def _collect_reserve_folds(reserve_raw: list) -> list:
+    """档B — intra-turn fold plan for the RESERVE region.
+
+    Scans EVERY assistant in the preserved (reserve) region and, for each whose
+    ``toolRounds`` count exceeds the hot-tail threshold, splits its rounds into
+    COLD (to summarize + drop) + HOT (keep verbatim).  Returns a list of fold
+    dicts (possibly empty), one per foldable assistant, in reserve order:
+
+      ``asst_idx``     — index (within ``reserve_raw``) of the heavy assistant
+      ``cold_rounds``  — the older ``toolRounds`` to summarize + drop
+      ``hot_rounds``   — the most-recent ``toolRounds`` kept verbatim
+
+    TRADEOFF (multiple heavy turns): we fold ALL foldable reserve assistants,
+    not just the heaviest.  A single giant turn can fill the window on its own,
+    so folding only one would leave the "one click → total must drop
+    significantly" contract broken whenever ≥2 reserve turns are heavy.  Folding
+    every giant turn makes that user-visible contract robust for any shape.
+
+    HARD CONSTRAINT: each round is self-contained (its own ``toolCallId`` +
+    ``toolContent``), so dropping WHOLE cold rounds from one assistant's
+    ``toolRounds`` array never orphans a ``tool`` message nor splits a
+    tool_call/result pair.  We edit ONLY that message's ``toolRounds`` list —
+    never slice across messages (design §4.1).
+    """
+    folds = []
+    for i, m in enumerate(reserve_raw):
+        if not isinstance(m, dict) or m.get('role') != 'assistant':
+            continue
+        rounds = m.get('toolRounds') or []
+        if len(rounds) <= _MANUAL_INTRA_TURN_HOT_ROUNDS:
+            continue
+        hot = rounds[-_MANUAL_INTRA_TURN_HOT_ROUNDS:]
+        cold = rounds[:-_MANUAL_INTRA_TURN_HOT_ROUNDS]
+        if not cold:
+            continue
+        folds.append({'asst_idx': i, 'cold_rounds': cold, 'hot_rounds': hot})
+    return folds
+
+
 def plan_manual_compaction(
     raw_messages: list,
     *,
@@ -181,50 +241,90 @@ def plan_manual_compaction(
 ) -> dict | None:
     """Compute the manual-compaction plan in RAW index space (pure, no DB/LLM).
 
-    Returns a plan dict, or ``None`` when there is nothing to compact (history
-    too short — the boundary would preserve everything after the system block).
+    Returns a plan dict, or ``None`` ONLY when the whole conversation is below
+    the manual-compact floor (``_MANUAL_COMPACT_MIN_TOKENS``) — a genuinely
+    tiny conversation where compaction would save nothing.
+
+    Two (composable) folding sources — BOTH may apply in one pass:
+      • OLD region (``mode='turns'``) — when there is history before the turn
+        boundary, summarize it and preserve the recent turns verbatim.
+      • RESERVE intra-turn folds (档B, ``intra_folds``) — any assistant in the
+        PRESERVED region whose ``toolRounds`` fill the window has its cold
+        rounds folded in place.  This is what fixes both the single-giant-turn
+        title bug AND the "heavy old turn(s) + giant current turn" case where
+        turns-mode alone left the current turn whole (~85% residual).
+
+    ``mode`` is ``'turns'`` when an OLD region exists (even if reserve folds
+    also apply), else ``'intra_turn'`` (folds only).  ``None`` is returned ONLY
+    when the whole conversation is below the floor OR there is nothing to fold
+    in either source.
 
     Plan keys:
-      ``system_raw``  — leading system block (verbatim, kept at front)
-      ``anchor_msg``  — first real user message IF it fell in the old region
-                        (pulled out to survive verbatim), else ``None``
-      ``old_raw``     — raw messages to be summarized (anchor excluded)
-      ``reserve_raw`` — raw messages preserved verbatim (starts on a user row)
-      ``boundary``    — raw index of the preservation boundary
+      ``system_raw`` / ``anchor_msg`` / ``reserve_raw`` / ``boundary`` /
+      ``old_raw`` (turns mode; ``[]`` in intra_turn) / ``intra_folds`` (list;
+      possibly empty in turns mode) / ``mode``.
     """
     config = config or {}
     resolved_max = _MAX_PRESERVE_TURNS if max_turns is None else max(1, int(max_turns))
 
     system_end = _system_end(raw_messages)
+
+    # FLOOR: the ONLY size-based decline. A conversation whose entire projected
+    # size is below the floor genuinely has nothing worth compacting — so a full
+    # 1M single-giant-turn conversation is never wrongly refused.
+    total_tokens = _raw_estimate_tokens(raw_messages, config)
+    if total_tokens < _MANUAL_COMPACT_MIN_TOKENS:
+        return None
+
     boundary = _raw_turn_boundary(
         raw_messages, config=config, task=task, max_turns=resolved_max)
 
-    # Nothing to compact: the boundary preserves everything past the system
-    # block (single live turn, or an empty conversation).
-    if boundary <= system_end:
-        return None
-
     anchor_idx = _objective_anchor_index(raw_messages)
     anchor_msg = None
-    old_raw = list(raw_messages[system_end:boundary])
     if anchor_idx is not None and system_end <= anchor_idx < boundary:
         anchor_msg = raw_messages[anchor_idx]
+
+    old_raw = list(raw_messages[system_end:boundary])
+    if anchor_msg is not None:
         old_raw = [m for k, m in enumerate(raw_messages[system_end:boundary],
                                            start=system_end)
                    if k != anchor_idx]
 
-    if not old_raw:
-        # Only the anchor was in the old region — summarizing nothing is a
-        # no-op; treat as nothing-to-compact so we don't archive/rewrite.
+    reserve_raw = list(raw_messages[boundary:])
+    # 档B: fold every giant turn PRESERVED in the reserve (composable with the
+    # old-region summary below). This is what stops a giant CURRENT turn from
+    # surviving turns-mode whole.
+    intra_folds = _collect_reserve_folds(reserve_raw)
+
+    # ── turns mode: a genuine OLD region exists (reserve folds may also apply) ──
+    if old_raw:
+        return {
+            'mode': 'turns',
+            'system_end': system_end,
+            'boundary': boundary,
+            'anchor_msg': anchor_msg,
+            'old_raw': old_raw,
+            'reserve_raw': reserve_raw,
+            'system_raw': list(raw_messages[:system_end]),
+            'intra_folds': intra_folds,
+        }
+
+    # ── 档B intra-turn only: no old region, but reserve turns fill the window ──
+    if not intra_folds:
+        # Above the floor but nothing foldable in either source (e.g. one huge
+        # single tool result, or a big plain-text turn with <= hot-tail rounds).
+        # Decline gracefully rather than risk a cross-message structural break.
         return None
 
     return {
+        'mode': 'intra_turn',
         'system_end': system_end,
         'boundary': boundary,
-        'anchor_msg': anchor_msg,
-        'old_raw': old_raw,
-        'reserve_raw': list(raw_messages[boundary:]),
+        'anchor_msg': None,
+        'old_raw': [],
+        'reserve_raw': reserve_raw,
         'system_raw': list(raw_messages[:system_end]),
+        'intra_folds': intra_folds,
     }
 
 
@@ -262,19 +362,36 @@ def apply_manual_compaction(
 ) -> list:
     """Rebuild the RAW message list from a plan + summary (pure).
 
-    Sequence: ``[system...] + [anchor user?] + [summary assistant] +
-    [reserve...]``.  Because the boundary lands on a user index, ``reserve``
-    starts with a ``user`` row, so the summary assistant is always followed by
-    a user row → no assistant-assistant adjacency for
-    ``_merge_consecutive_same_role`` to collapse (design test 7b).
+    Unified rebuild (both modes): ``[system...] + [anchor user?] +
+    [summary assistant] + [reserve...]`` where every reserve assistant named in
+    ``intra_folds`` has its ``toolRounds`` trimmed to the hot tail in place.
+
+    • turns mode has an anchor (when the objective anchor fell in the OLD
+      region) and a non-empty ``old_raw`` folded into the summary; reserve folds
+      may ALSO apply (a giant current turn preserved in the reserve).
+    • intra_turn mode has no anchor / no ``old_raw`` — the summary is built from
+      the reserve folds' cold rounds only.
+
+    Because the boundary lands on a user index, the reserve starts with a
+    ``user`` row, so the summary (assistant) is always followed by a user row →
+    no assistant-assistant adjacency for ``_merge_consecutive_same_role`` to
+    collapse (design test 7b).  Each round is self-contained, so trimming a
+    reserve assistant's ``toolRounds`` never orphans a tool.
     """
-    anchor_block = [plan['anchor_msg']] if plan.get('anchor_msg') is not None else []
     summary_msg = _build_summary_message(
         summary_text, archive_id=archive_id, tokens_after=tokens_after)
+
+    reserve = [dict(m) for m in plan['reserve_raw']]
+    for fold in plan.get('intra_folds', []):
+        heavy = reserve[fold['asst_idx']]
+        heavy['toolRounds'] = list(fold['hot_rounds'])
+        heavy['_intraTurnFolded'] = len(fold['cold_rounds'])
+
+    anchor_block = [plan['anchor_msg']] if plan.get('anchor_msg') is not None else []
     return (list(plan['system_raw'])
             + anchor_block
             + [summary_msg]
-            + list(plan['reserve_raw']))
+            + reserve)
 
 
 def compact_conversation_now(
@@ -296,6 +413,7 @@ def compact_conversation_now(
     """
     config = config or {}
     log_id = conv_id[:8] if conv_id else '?'
+    _audit_config_once()
     store = get_conversation_store()
 
     loaded = store.load_conversation_messages(conv_id)
@@ -322,8 +440,20 @@ def compact_conversation_now(
         tokens_before=int(tokens_before), msgs_before=int(msgs_before),
         reason='manual /compact', emit_event=False)
 
-    # ── SUMMARIZE the old region (reuse the L2 engine) ──
-    old_api = _project(plan['old_raw'], config)
+    # ── SUMMARIZE everything being folded (reuse the L2 engine) ──
+    # The summary input is the OLD region (turns mode) PLUS the COLD tool rounds
+    # from every folded reserve assistant (档B). Each folded assistant's cold
+    # rounds are wrapped in a synthetic single-assistant row so _project expands
+    # them exactly as the live request would (self-contained rounds → no orphan
+    # tool). Both sources are composable — a giant CURRENT turn preserved in the
+    # reserve is folded here even when there is also an old region to summarize.
+    fold_input = list(plan.get('old_raw') or [])
+    for fold in plan.get('intra_folds', []):
+        heavy_src = plan['reserve_raw'][fold['asst_idx']]
+        fold_input.append({'role': 'assistant',
+                           'content': heavy_src.get('content') or '',
+                           'toolRounds': list(fold['cold_rounds'])})
+    old_api = _project(fold_input, config)
     current_query = _extract_current_query(_project(plan['reserve_raw'], config))
     summary_text = _generate_query_aware_summary(
         old_api, current_query, '[ManualCompact]', conv_id=conv_id, task=task)
@@ -349,15 +479,22 @@ def compact_conversation_now(
     # Stamp the full stats onto the summary message + its compaction marker so
     # the frontend card is a PURE render of a backend-downloaded fact (never a
     # client-side inference). See docs/MANUAL_COMPACTION_DESIGN.md §5.3.
+    _folded_rounds = sum(len(f['cold_rounds'])
+                         for f in plan.get('intra_folds', []))
     for m in new_messages:
         if isinstance(m, dict) and m.get('_isCompactionSummary'):
             m['_estimatedPromptTokens'] = int(tokens_after)
+            if _folded_rounds:
+                # 档B: the card describes "folded N tool rounds", not "N msgs".
+                m['_foldedToolRounds'] = _folded_rounds
             for mk in m.get('_compactions', []):
                 mk.update({'tokensBefore': int(tokens_before),
                            'tokensAfter': int(tokens_after),
                            'msgsBefore': int(msgs_before),
                            'msgsAfter': int(msgs_after),
                            'reductionPct': reduction_pct})
+                if _folded_rounds:
+                    mk['foldedToolRounds'] = _folded_rounds
 
     # ── PERSIST (CAS on updated_at — a concurrent writer aborts us) ──
     # Manual compaction REMOVES whole messages, so we must refresh msg_count +

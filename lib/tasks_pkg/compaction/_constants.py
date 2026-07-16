@@ -188,6 +188,37 @@ if budget allows more.  Defends against pathological short-turn streams
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+#  Manual /compact — intra-turn compaction (档B, 2026-07-16)
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# The turn-based boundary always preserves the CURRENT turn whole. A single
+# agentic turn (one user request answered with dozens of tool rounds) can
+# fill the whole window on its own, so the manual /compact used to refuse it
+# ("nothing_to_compact") — the 1M single-giant-turn bug. 档B folds the COLD
+# tool rounds INSIDE that one preserved assistant's ``toolRounds`` array (never
+# slicing across messages, so no tool round is ever split) when the preserved
+# turn itself exceeds ``usable * _PRESERVE_BUDGET_RATIO``.
+#
+# §10.1: these are hyperparameters — sign-off recorded in JOURNAL 2026-07-16 +
+# audit_log('config_change', approved_by='user') at the read site.
+
+_MANUAL_INTRA_TURN_HOT_ROUNDS = 8
+"""Most-recent tool rounds kept VERBATIM inside a giant preserved turn when
+档B folds it. Everything older than this hot tail is summarized + dropped.
+8 covers the immediate working state (the rounds the model is actively
+reasoning about) while collapsing the long cold body that fills the window.
+Owner-signed 2026-07-16 (§10.1)."""
+
+_MANUAL_COMPACT_MIN_TOKENS = 4000
+"""Manual /compact floor. The ONLY case that declines with
+``nothing_to_compact`` is a conversation whose projected total is below this —
+a genuinely tiny conversation where compaction would save nothing. Anything
+at/above the floor is compactable (turn-based OR intra-turn 档B), so a full
+1M single-giant-turn conversation is never wrongly refused. Owner-signed
+2026-07-16 (§10.1)."""
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 #  Vision-API image token estimates
 # ═══════════════════════════════════════════════════════════════════════════════
 #

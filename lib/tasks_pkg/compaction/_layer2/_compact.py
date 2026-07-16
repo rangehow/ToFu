@@ -58,6 +58,19 @@ def _generate_query_aware_summary_dyn(*args, **kwargs):
     return fn(*args, **kwargs)
 
 
+def _objective_anchor_index_dyn(*args, **kwargs):
+    # Same facade-resolution as above: the flat ``_layer2.py`` exposed
+    # ``_objective_anchor_index`` as a module global, and both tests and any
+    # hot-reload path monkeypatch it on the package namespace
+    # ``lib.tasks_pkg.compaction._layer2``. Resolve through the facade at CALL
+    # time so those patches take effect (an import-time-bound local reference
+    # would ignore them — the exact facade-split drift this restores).
+    fac = _facade()
+    fn = (getattr(fac, '_objective_anchor_index', _objective_anchor_index)
+          if fac else _objective_anchor_index)
+    return fn(*args, **kwargs)
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Core: execute_compact_tool — pure LLM summary with selective turn compression
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -168,7 +181,7 @@ def execute_compact_tool(messages: list, task: dict | None = None, **kwargs) -> 
     #   message (not a synthesized prepend), a subsequent compaction finds the
     #   SAME message already at the front of ``recent_messages`` and never
     #   duplicates it — idempotent, byte-identical, cache-prefix-stable.
-    anchor_idx = _objective_anchor_index(messages)
+    anchor_idx = _objective_anchor_index_dyn(messages)
     anchor_msg = None
     if anchor_idx is not None and anchor_idx < boundary:
         anchor_msg = messages[anchor_idx]

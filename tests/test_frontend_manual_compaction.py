@@ -319,3 +319,186 @@ def test_compaction_summary_card_neuter(tmp_path):
     assert 'FAIL card_shows_token_stat' in output and 'FAIL card_body_has_summary' in output, (
         'NEUTER did not bite — the card still showed backend stats / summary body '
         'after the marker read was removed:\n' + output)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  SINGLE-TOAST CONTRACT (the screenshot bug: "正在压缩" + "无需压缩" stacked)
+#
+#  _runManualCompaction must fire AT MOST ONE toast per invocation, always a
+#  TERMINAL one. There must be NO optimistic "starting/running" toast that can
+#  co-exist with the terminal "nothing"/"done"/"failed" toast. Progress is on
+#  the chip spinner (data-compacting), not a toast.
+# ══════════════════════════════════════════════════════════════════════════
+_TOAST_HARNESS = r"""
+const fs = require('fs');
+global.window = global;
+function _mkEl() {
+  const el = { _children: [], classList: { add(){}, remove(){}, toggle(){} },
+    dataset: {}, style: { setProperty(){} }, attributes: {},
+    setAttribute(k,v){ this.attributes[k]=v; }, getAttribute(k){ return this.attributes[k]; },
+    appendChild(c){ this._children.push(c); return c; }, removeChild(){},
+    querySelector(){ return _mkEl(); }, querySelectorAll(){ return []; },
+    addEventListener(){}, removeEventListener(){}, remove(){},
+    getBoundingClientRect(){ return { left:0, right:0, top:0, bottom:0 }; },
+    get isConnected(){ return true; }, set innerHTML(v){}, get innerHTML(){ return ''; },
+    set textContent(v){}, get textContent(){ return ''; } };
+  return el;
+}
+global.document = { getElementById(){ return null; }, querySelector(){ return null; },
+  createElement(){ return _mkEl(); }, body: _mkEl(),
+  addEventListener(){}, removeEventListener(){}, readyState: 'complete' };
+global.requestAnimationFrame = (fn) => { fn(); return 0; };
+global.setTimeout = (fn) => { return 0; };
+global.clearTimeout = () => {};
+let CONV = null;
+global.activeConvId = 'c1';
+global.getConvById = (id) => (CONV && CONV.id === id) ? CONV : null;
+global.config = { model: 'm' }; global.serverModel = 'm';
+global.activeStreams = new Map();
+global._contextPolicy = { default_limit: 200000, output_reserve: 8000,
+  compaction_reserve: 4000, summary_trigger_ratio: 0.9, min_usable_ratio: 0.5, per_model: {} };
+global.t = (k, vars) => k;   // identity i18n → toast msg === the i18n KEY
+
+// ── Toast spy: RECORD every call (msg, level) ──
+let TOASTS = [];
+global.showToast = (msg, level) => { TOASTS.push({ msg, level }); };
+global.ConvCache = { remove: async () => {} };
+global.loadConversationMessages = async () => {};
+global.renderChat = () => {};
+
+// compactNow behavior is swapped per-case via global.__mode.
+global.__mode = 'nothing';
+global.Api = { compactions: { compactNow: async (cid) => {
+  if (global.__mode === 'nothing') { const e = new Error('nothing'); e.code = 'nothing_to_compact'; throw e; }
+  if (global.__mode === 'nothing_softfail') { return { ok: false, code: 'nothing_to_compact' }; }
+  if (global.__mode === 'ok') { return { ok: true, archiveId: 7, tokensBefore: 50000, tokensAfter: 8000, reductionPct: 84 }; }
+  const e = new Error('boom'); throw e;
+}}};
+
+eval(fs.readFileSync(process.argv[2], 'utf8'));   // context-bar.js
+
+const out = [];
+function check(n, c) { out.push((c ? 'PASS ' : 'FAIL ') + n); }
+
+(async () => {
+  CONV = { id: 'c1', model: 'm', activeTaskId: null, messages: [] };
+
+  // Case 1: nothing_to_compact (thrown) → EXACTLY ONE toast, level=info,
+  //         and the "running" key must NEVER be present.
+  TOASTS = []; global.__mode = 'nothing';
+  await window.runManualCompaction('c1');
+  check('nothing_single_toast', TOASTS.length === 1);
+  check('nothing_is_info_not_warning', TOASTS.length === 1 && TOASTS[0].level === 'info');
+  check('no_running_toast_ever', !TOASTS.some(t => t.msg === 'compactNow.running'));
+  check('nothing_and_running_never_coexist',
+        !(TOASTS.some(t => t.msg === 'compactNow.running')
+          && TOASTS.some(t => t.msg === 'compactNow.nothing')));
+
+  // Case 2: nothing_to_compact (non-throwing {ok:false,code}) → same contract.
+  TOASTS = []; global.__mode = 'nothing_softfail';
+  await window.runManualCompaction('c1');
+  check('softfail_single_toast', TOASTS.length === 1);
+  check('softfail_is_info', TOASTS.length === 1 && TOASTS[0].level === 'info');
+
+  // Case 3: success → EXACTLY ONE terminal toast, level=success, no running.
+  TOASTS = []; global.__mode = 'ok';
+  await window.runManualCompaction('c1');
+  check('ok_single_toast', TOASTS.length === 1);
+  check('ok_is_success', TOASTS.length === 1 && TOASTS[0].level === 'success');
+  check('ok_no_running', !TOASTS.some(t => t.msg === 'compactNow.running'));
+
+  console.log(out.join('\n'));
+})();
+"""
+
+
+# ── 档B card variant: "folded N tool rounds" instead of "N → M msgs" ──
+_CARD_INTRA_HARNESS = r"""
+const fs = require('fs');
+global.window = global;
+global.t = (k, vars) => {
+  if (k === 'compactCard.rounds' && vars) return 'folded ' + vars.n + ' tool rounds';
+  if (k === 'compactCard.msgs' && vars) return vars.before + ' -> ' + vars.after + ' msgs';
+  return k;
+};
+global.activeConvId = 'c1';
+global.escapeHtml = (s) => String(s == null ? '' : s);
+global.renderMarkdown = (s) => '<p>' + String(s || '') + '</p>';
+eval(fs.readFileSync(process.argv[2], 'utf8'));   // ui/chat_render.js
+const out = [];
+function check(n, c) { out.push((c ? 'PASS ' : 'FAIL ') + n); }
+// intra-turn (档B) message: folded rounds, msgsBefore==msgsAfter (no whole msgs removed)
+const intraMsg = {
+  role: 'assistant', _isCompactionSummary: true, _compactionArchiveId: 9,
+  _foldedToolRounds: 52,
+  content: '## 上下文已压缩（主动 /compact）\n\nfolded summary body.',
+  _compactions: [{ archiveId: 9, trigger: 'manual', convId: 'c1',
+                   tokensBefore: 900000, tokensAfter: 120000, reductionPct: 87,
+                   foldedToolRounds: 52 }],
+};
+let html = String(buildCompactionCardHtml(intraMsg));
+check('shows_folded_rounds', html.indexOf('folded 52 tool rounds') >= 0);
+check('does_not_show_msgs_variant', html.indexOf(' msgs') < 0);
+check('still_shows_token_stat', html.indexOf('900k') >= 0 && html.indexOf('120k') >= 0);
+console.log(out.join('\n'));
+"""
+
+
+@pytest.mark.skipif(not _node_available(), reason='node not installed')
+def test_compaction_card_intra_turn_variant():
+    """档B card: a single-giant-turn compaction folds tool rounds inside one
+    message, so the card must read 'folded N tool rounds', NOT 'N → M msgs'."""
+    proc = _run(_CARD_INTRA_HARNESS, os.path.join(JS_DIR, 'ui', 'chat_render.js'),
+                '_card_intra_harness.js')
+    output = proc.stdout.strip()
+    assert proc.returncode == 0, f'node failed: {proc.stderr}\n{output}'
+    fails = [ln for ln in output.splitlines() if ln.startswith('FAIL')]
+    assert not fails, '档B card variant regression:\n' + output
+
+
+@pytest.mark.skipif(not _node_available(), reason='node not installed')
+def test_manual_compaction_single_terminal_toast():
+    """The screenshot bug guard: nothing_to_compact must produce exactly ONE
+    toast (info level), and the optimistic 'running' toast must never fire —
+    so '正在压缩' and '无需压缩' can never appear together."""
+    proc = _run(_TOAST_HARNESS, os.path.join(JS_DIR, 'context-bar.js'),
+                '_toast_harness.js')
+    output = proc.stdout.strip()
+    assert proc.returncode == 0, f'node failed: {proc.stderr}\n{output}'
+    fails = [ln for ln in output.splitlines() if ln.startswith('FAIL')]
+    assert not fails, 'single-toast contract regression:\n' + output
+    for want in ('PASS nothing_single_toast', 'PASS nothing_is_info_not_warning',
+                 'PASS no_running_toast_ever', 'PASS nothing_and_running_never_coexist',
+                 'PASS softfail_single_toast', 'PASS ok_single_toast',
+                 'PASS ok_is_success'):
+        assert want in output, f'missing {want}\n{output}'
+
+
+@pytest.mark.skipif(not _node_available(), reason='node not installed')
+def test_manual_compaction_single_toast_neuter(tmp_path):
+    """NEUTER: re-introduce the optimistic 'running' info toast at the top of
+    _runManualCompaction → the nothing_to_compact path now emits TWO toasts
+    ('running' + 'nothing'), exactly the contradictory-stack bug. Proves the
+    single-toast contract is load-bearing."""
+    src = open(os.path.join(JS_DIR, 'context-bar.js'), encoding='utf-8').read()
+    # Inject a running toast right after the idle-guard early return, mimicking
+    # the old bug. Anchor on the _setCompacting(true) line the fix introduced.
+    anchor = "    let outcome = null;\n    _setCompacting(true);"
+    assert anchor in src, 'single-toast fix anchor not found (fix regressed?)'
+    neutered = src.replace(
+        anchor,
+        "    let outcome = null;\n"
+        "    if (typeof showToast === 'function') showToast(_tt('compactNow.running','running'), 'info');  // NEUTER\n"
+        "    _setCompacting(true);", 1)
+    assert neutered != src
+    nfile = tmp_path / 'context-bar-toast-neutered.js'
+    nfile.write_text(neutered, encoding='utf-8')
+    proc = _run(_TOAST_HARNESS, str(nfile), '_toast_neuter_harness.js')
+    output = proc.stdout.strip()
+    assert proc.returncode == 0, f'node failed: {proc.stderr}\n{output}'
+    # With the optimistic toast back, the nothing path emits 2 toasts and the
+    # coexistence check FAILS.
+    assert ('FAIL nothing_single_toast' in output
+            or 'FAIL nothing_and_running_never_coexist' in output), (
+        'NEUTER did not bite — re-adding the running toast did not break the '
+        'single-toast contract:\n' + output)

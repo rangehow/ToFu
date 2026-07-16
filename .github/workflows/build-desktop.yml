@@ -367,6 +367,42 @@ jobs:
       - name: List artifacts
         run: find release-assets -type f | head -20
 
+      - name: Assert all platform assets present
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Completeness gate: refuse to publish a partial release. Because the
+          # macOS matrix is fail-fast:false and DMG upload is
+          # if-no-files-found:warn (and create-dmg falls back to a .zip on
+          # failure), a broken Intel leg could otherwise let a release ship with
+          # ONLY the arm64 DMG — and make_latest would pin that half-built set as
+          # Latest, silently reintroducing the "Intel Macs can't install" bug.
+          # So we assert every required per-platform / per-arch asset exists;
+          # missing any one fails the whole release ("all four platforms, or a
+          # loud failure — never a silent partial Latest").
+          cd release-assets
+          shopt -s nullglob
+          missing=0
+          require() {
+            local label="$1"; shift
+            local hits=( $@ )
+            if [ ${#hits[@]} -eq 0 ]; then
+              echo "::error::Missing required release asset: ${label}"
+              missing=1
+            else
+              echo "OK  ${label} -> ${hits[*]}"
+            fi
+          }
+          require "macOS arm64 DMG (Tofu-*-macos-arm64.dmg)" Tofu-*-macos-arm64.dmg
+          require "macOS x86_64 DMG (Tofu-*-macos-x86_64.dmg)" Tofu-*-macos-x86_64.dmg
+          require "Windows installer (Tofu-Setup-*-win64.exe)" Tofu-Setup-*-win64.exe
+          require "Linux archive (Tofu-*-linux*.tar.gz)" Tofu-*-linux*.tar.gz
+          if [ "$missing" -ne 0 ]; then
+            echo "::error::Refusing to publish an incomplete release. See missing assets above."
+            exit 1
+          fi
+          echo "All required platform/arch assets present."
+
       - name: Generate SHA256SUMS
         shell: bash
         run: |

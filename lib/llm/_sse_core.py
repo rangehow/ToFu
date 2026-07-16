@@ -88,7 +88,41 @@ _MAX_CONSECUTIVE_PARSE_ERRORS = 10
 _CACHE_PROBE_ROUND: dict = {}
 
 
-def _maybe_dump_cache_probe(body, task_id, log_prefix=''):
+def _cache_probe_stable_ttls(body):
+    """Collect every ``cache_control`` marker's ttl + a coarse location, so the
+    analyzer can tell a stable-block ttl flip (1h↔absent) from a body change.
+
+    Returns a list of ``{loc, ttl}`` in wire order. ``ttl`` is ``''`` for a
+    bare ``{'type':'ephemeral'}`` marker (5-minute default). Best-effort.
+    """
+    out = []
+
+    def _scan(container, loc):
+        if isinstance(container, dict):
+            cc = container.get('cache_control')
+            if isinstance(cc, dict):
+                out.append({'loc': loc, 'ttl': cc.get('ttl', '')})
+            content = container.get('content')
+            if isinstance(content, list):
+                for j, blk in enumerate(content):
+                    _scan(blk, f'{loc}.content[{j}]')
+        # else: str content carries no marker
+
+    # Anthropic path: system + tools live at the top level; messages below.
+    sysblk = body.get('system')
+    if isinstance(sysblk, list):
+        for i, blk in enumerate(sysblk):
+            _scan(blk, f'system[{i}]')
+    tools = body.get('tools')
+    if isinstance(tools, list):
+        for i, t in enumerate(tools):
+            _scan(t, f'tools[{i}]')
+    for i, m in enumerate(body.get('messages') or []):
+        _scan(m, f'messages[{i}]')
+    return out
+
+
+def _maybe_dump_cache_probe(body, task_id, log_prefix='', routing=None):
     """Dump the final post-translation body for a targeted conv (diagnostic).
 
     Gated on ``TOFU_CACHE_BYTE_PROBE`` (a conv-id prefix). Resolves the conv id
@@ -96,6 +130,13 @@ def _maybe_dump_cache_probe(body, task_id, log_prefix=''):
     target. Best-effort: any failure is logged at debug and never blocks a
     request. This does NOT canonicalize — it writes the literal body dict so
     the analyzer sees the exact wire bytes.
+
+    ``routing`` (optional) carries the per-request routing fingerprint — key
+    discriminator, endpoint, final ``anthropic-beta`` header — so a raw-byte
+    round-over-round diff can distinguish a BODY-byte flip from a cache-NAMESPACE
+    change (same bytes routed to a different key/endpoint → different gateway
+    cache pool → floor miss on an otherwise byte-identical prefix). This is the
+    dimension the mrne3bqe R4 clean-round miss (byte-identical, no retry) needs.
     """
     import os
     target = os.environ.get('TOFU_CACHE_BYTE_PROBE', '').strip()
@@ -133,6 +174,17 @@ def _maybe_dump_cache_probe(body, task_id, log_prefix=''):
             'conv_id': conv_id,
             'task_id': task_id,
             'model': body.get('model', ''),
+            # ── Routing fingerprint (cache-NAMESPACE dimension) ──
+            # Same body bytes routed to a different key/endpoint land in a
+            # different gateway cache pool → floor miss on a byte-identical
+            # prefix (the mrne3bqe R4 clean-round hypothesis). The API key is
+            # NEVER dumped raw — only a short salted hash as a stable "which
+            # key" discriminator (CLAUDE.md §2.6: never log secrets).
+            'routing': routing or {},
+            # Stable-block cache_control ttl values, in wire order. A 1h↔absent
+            # flip here shifts the Anthropic cache key even when body bytes and
+            # marker COUNT are unchanged (the detector's historical blind spot).
+            'stable_ttls': _cache_probe_stable_ttls(body),
             'system': body.get('system'),
             'tools': body.get('tools'),
             'messages': body.get('messages') or [],
@@ -303,7 +355,30 @@ def prepare_request(body, *, attempt=0, log_prefix='', api_key=None,
     # Diagnostic byte-probe (default OFF): dump the exact post-translation body
     # for a targeted conv so a raw-byte round-over-round diff can settle whether
     # a "server-side PROVEN" miss is actually a client-caused prefix mutation.
-    _maybe_dump_cache_probe(body, _task_id_for_latch, log_prefix)
+    # Also capture the ROUTING fingerprint — key discriminator / endpoint /
+    # final anthropic-beta — so the diff can tell a body-byte flip from a
+    # cache-namespace (key/endpoint) change on a byte-identical prefix.
+    _routing = None
+    try:
+        import hashlib as _hashlib
+        _key_hash = ''
+        if api_key:
+            _key_hash = _hashlib.sha256(
+                ('tofu-cache-probe:' + str(api_key)).encode('utf-8')
+            ).hexdigest()[:12]
+        _routing = {
+            'url': url,
+            'base_url': base_url or '',
+            'key_hash': _key_hash,           # salted, truncated — NOT the secret
+            'anthropic_beta': (hdrs.get('anthropic-beta', '')
+                               if isinstance(hdrs, dict) else ''),
+            'trace_id': trace_id,
+            'attempt': attempt,
+            'api_protocol': api_protocol,
+        }
+    except Exception as _rfe:
+        logger.debug('%s cache-probe routing capture failed: %s', log_prefix, _rfe)
+    _maybe_dump_cache_probe(body, _task_id_for_latch, log_prefix, routing=_routing)
 
     return RequestPlan(url=url, hdrs=hdrs, body=body, trace_id=trace_id,
                        raw_dumper=raw_dumper, codex_translator=codex_translator,

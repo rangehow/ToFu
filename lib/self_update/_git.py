@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import threading
 from typing import Optional
 
 from lib.self_update._config import _ROOT
@@ -71,6 +72,84 @@ def _run_git(args: list[str], timeout: int = 30) -> subprocess.CompletedProcess:
         text=True,
         timeout=timeout,
     )
+
+
+import re as _re
+
+# git --progress writes phase lines to stderr, updating in place with '\r':
+#   "Receiving objects:  73% (1234/1690), 5.23 MiB | 1.20 MiB/s"
+#   "Resolving deltas:  40% (100/250)"
+# We surface the phase name + percent so the UI can show a determinate bar
+# instead of an opaque spinner during a long fetch on a slow network.
+_GIT_PROGRESS_RE = _re.compile(r'^(?P<phase>[A-Za-z][A-Za-z ]+?):\s+(?P<pct>\d+)%')
+
+
+def _run_git_streaming(args: list[str], timeout: int = 30,
+                       on_progress=None) -> subprocess.CompletedProcess:
+    """Run a git command with ``--progress``, forwarding live progress.
+
+    Git emits progress on stderr, redrawing the current line with ``\\r``.
+    We read stderr incrementally, parse ``<phase>: <pct>%`` frames, and
+    invoke ``on_progress(phase, pct, detail)`` so the caller can render a
+    determinate bar. stdout is captured whole (git prints the pull summary
+    there). Returns a ``CompletedProcess`` mirroring ``_run_git`` so callers
+    are interchangeable. Never lets a progress-callback exception surface.
+
+    Args:
+        args: git arguments (``--progress`` is injected if absent).
+        timeout: overall wall-clock ceiling in seconds.
+        on_progress: optional ``fn(phase: str, pct: int, detail: str)``.
+    """
+    argv = [_git_exe(), *args]
+    if '--progress' not in argv:
+        argv.append('--progress')
+    proc = subprocess.Popen(
+        argv, cwd=_ROOT,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+
+    stderr_lines: list[str] = []
+
+    def _pump_stderr():
+        buf = ''
+        stream = proc.stderr
+        if stream is None:
+            return
+        while True:
+            ch = stream.read(1)
+            if not ch:
+                break
+            if ch in ('\r', '\n'):
+                line = buf.strip()
+                buf = ''
+                if not line:
+                    continue
+                stderr_lines.append(line)
+                if on_progress:
+                    m = _GIT_PROGRESS_RE.match(line)
+                    if m:
+                        try:
+                            on_progress(m.group('phase').strip(),
+                                        int(m.group('pct')), line)
+                        except Exception as e:
+                            logger.debug('[Update] git progress cb failed: %s', e)
+            else:
+                buf += ch
+        if buf.strip():
+            stderr_lines.append(buf.strip())
+
+    t = threading.Thread(target=_pump_stderr, daemon=True)
+    t.start()
+    try:
+        stdout, _ = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.communicate()
+        raise
+    t.join(timeout=2)
+    return subprocess.CompletedProcess(
+        argv, proc.returncode, stdout=stdout or '',
+        stderr='\n'.join(stderr_lines))
 
 
 def git_available() -> bool:

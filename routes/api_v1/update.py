@@ -101,11 +101,20 @@ def update_apply():
     """
     task_id = uuid.uuid4().hex
 
-    def _progress(stage: str, status: str, detail: str = ''):
-        push_event(UPDATE_CHANNEL, task_id, {
+    def _progress(stage: str, status: str, detail: str = '', meta=None):
+        frame = {
             'type': 'stage', 'stage': stage, 'status': status,
             'detail': (detail or '')[:300],
-        })
+        }
+        # Structured download / transfer telemetry (percent, bytes, speed)
+        # so the frontend can render a determinate bar + speed readout
+        # instead of an opaque spinner. Only present on the fetch/deps
+        # stages that report it; the schema tolerates it being absent.
+        if isinstance(meta, dict):
+            for k in ('pct', 'loaded', 'total', 'speed', 'phase'):
+                if meta.get(k) is not None:
+                    frame[k] = meta[k]
+        push_event(UPDATE_CHANNEL, task_id, frame)
 
     def _worker():
         from lib.self_update import apply_update

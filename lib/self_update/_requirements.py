@@ -9,6 +9,8 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import threading
+import time
 from typing import Optional
 
 from lib.log import log_context
@@ -48,12 +50,19 @@ def _requirements_changed(before_sha: Optional[str],
     return _REQUIREMENTS in changed
 
 
-def _install_requirements() -> dict:
+def _install_requirements(on_line=None) -> dict:
     """Run ``pip install -r requirements.txt`` with the current interpreter.
 
     Returns ``{'ok': bool, 'detail': str}``. Uses ``sys.executable -m pip``
     so the install targets the SAME interpreter the server runs under
     (critical inside a conda env). Never raises — failures are captured.
+
+    Args:
+        on_line: Optional ``fn(line: str)`` invoked for each pip output line
+            (e.g. ``Collecting httpx`` / ``Installing collected packages``)
+            so a UI can show live activity instead of a spinner that looks
+            frozen for minutes. ``--progress-bar off`` keeps pip's own
+            carriage-return bars out of the stream (they're line-based here).
     """
     req_path = os.path.join(_ROOT, _REQUIREMENTS)
     if not os.path.isfile(req_path):
@@ -61,23 +70,67 @@ def _install_requirements() -> dict:
                     _REQUIREMENTS)
         return {'ok': True, 'detail': 'no requirements.txt'}
 
-    cmd = [sys.executable, '-m', 'pip', 'install', '-r', req_path]
+    cmd = [sys.executable, '-m', 'pip', 'install', '--progress-bar', 'off',
+           '-r', req_path]
     logger.info('[Update] Installing dependencies: %s', ' '.join(cmd))
     with log_context('self_update.pip_install', logger=logger):
-        try:
-            cp = subprocess.run(cmd, cwd=_ROOT, capture_output=True,
-                                text=True, timeout=_PIP_TIMEOUT)
-        except (FileNotFoundError, subprocess.TimeoutExpired,
-                subprocess.SubprocessError) as e:
-            logger.error('[Update] pip install errored: %s', e, exc_info=True)
-            return {'ok': False, 'detail': str(e)[:500]}
+        if on_line is None:
+            # Simple path: capture whole output, no live streaming.
+            try:
+                cp = subprocess.run(cmd, cwd=_ROOT, capture_output=True,
+                                    text=True, timeout=_PIP_TIMEOUT)
+            except (FileNotFoundError, subprocess.TimeoutExpired,
+                    subprocess.SubprocessError) as e:
+                logger.error('[Update] pip install errored: %s', e, exc_info=True)
+                return {'ok': False, 'detail': str(e)[:500]}
+            out, rc = (cp.stdout or ''), cp.returncode
+            err = cp.stderr or ''
+        else:
+            # Streaming path: read pip's merged output line-by-line, forward
+            # each meaningful line to ``on_line`` for live UI feedback.
+            out_lines: list[str] = []
+            try:
+                proc = subprocess.Popen(
+                    cmd, cwd=_ROOT, stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT, text=True, bufsize=1)
+            except (FileNotFoundError, OSError) as e:
+                logger.error('[Update] pip install errored: %s', e, exc_info=True)
+                return {'ok': False, 'detail': str(e)[:500]}
 
-    if cp.returncode != 0:
-        tail = (cp.stderr or cp.stdout or '')[-500:]
-        logger.error('[Update] pip install failed (exit %d): %s',
-                     cp.returncode, tail)
+            def _pump():
+                stream = proc.stdout
+                if stream is None:
+                    return
+                for line in stream:
+                    line = line.rstrip('\n')
+                    if not line.strip():
+                        continue
+                    out_lines.append(line)
+                    try:
+                        on_line(line)
+                    except Exception as e:
+                        logger.debug('[Update] pip line cb failed: %s', e)
+
+            pump = threading.Thread(target=_pump, daemon=True)
+            pump.start()
+            deadline = time.monotonic() + _PIP_TIMEOUT
+            while proc.poll() is None:
+                if time.monotonic() > deadline:
+                    proc.kill()
+                    proc.wait()
+                    logger.error('[Update] pip install timed out after %ds',
+                                 _PIP_TIMEOUT)
+                    return {'ok': False,
+                            'detail': f'pip install timed out after {_PIP_TIMEOUT}s'}
+                time.sleep(0.2)
+            pump.join(timeout=3)
+            out, rc, err = '\n'.join(out_lines), proc.returncode, ''
+
+    if rc != 0:
+        tail = (err or out or '')[-500:]
+        logger.error('[Update] pip install failed (exit %d): %s', rc, tail)
         return {'ok': False, 'detail': tail}
 
     logger.info('[Update] Dependencies installed successfully')
-    return {'ok': True, 'detail': (cp.stdout or '')[-300:]}
+    return {'ok': True, 'detail': (out or '')[-300:]}
 

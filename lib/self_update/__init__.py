@@ -94,6 +94,7 @@ from lib.self_update._git import (
     _git_exe,
     _head_sha,
     _run_git,
+    _run_git_streaming,
     git_available,
 )
 
@@ -147,7 +148,7 @@ __all__ = [
     # Additional symbols kept importable for consumers / tests.
     '_overlay_skip',
     # Sub-module internals also re-exported for completeness.
-    '_git_exe', '_run_git', '_head_sha', '_parse_semver', '_is_runtime_state',
+    '_git_exe', '_run_git', '_run_git_streaming', '_head_sha', '_parse_semver', '_is_runtime_state',
     '_requirements_changed', '_install_requirements',
     '_apply_via_git', '_apply_via_tarball',
     # Config constants.

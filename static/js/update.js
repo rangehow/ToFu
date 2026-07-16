@@ -242,7 +242,12 @@ function _renderUpdateStepper() {
   });
 }
 
-/** Apply a {stage,status,detail} frame to the stepper. */
+/** Apply a {stage,status,detail,pct,loaded,total,speed} frame to the stepper.
+ *  A stage may report determinate progress (fetch download with a
+ *  Content-Length → pct 0-100) or indeterminate activity (pip install lines,
+ *  git object counting with no total). We render a thin per-step bar so a
+ *  long-running stage NEVER looks frozen: determinate fills to pct, otherwise
+ *  it shows an animated indeterminate sweep. */
 function _applyStageFrame(frame) {
   if (!_updateStageEls) return;
   const el = _updateStageEls[frame.stage];
@@ -252,15 +257,54 @@ function _applyStageFrame(frame) {
     el.classList.add('is-active');
   } else if (frame.status === 'done') {
     el.classList.add('is-done');
+    _setStepBar(el, null, false);  // clear the bar on completion
   } else if (frame.status === 'skip') {
     el.classList.add('is-done');
+    _setStepBar(el, null, false);
     const lbl = el.querySelector('.upd-step-label');
     if (lbl) lbl.textContent = t('update.step.depsSkip');
   } else if (frame.status === 'error') {
     el.classList.add('is-error');
+    _setStepBar(el, null, false);
   }
   const det = el.querySelector('.upd-step-detail');
   if (det && frame.detail && frame.status !== 'error') det.textContent = frame.detail;
+
+  // Live progress bar while a stage is active.
+  if (frame.status === 'active') {
+    if (typeof frame.pct === 'number' && frame.pct >= 0) {
+      _setStepBar(el, Math.max(0, Math.min(100, frame.pct)), false);
+    } else {
+      // No total → indeterminate sweep (still visibly "working").
+      _setStepBar(el, null, true);
+    }
+  }
+}
+
+/** Ensure a stage row carries a <div class="upd-step-bar"> and drive it.
+ *  pct=number → determinate width; indeterminate=true → animated sweep;
+ *  pct=null & indeterminate=false → remove the bar entirely. */
+function _setStepBar(el, pct, indeterminate) {
+  let wrap = el.querySelector('.upd-step-bar');
+  if (pct === null && !indeterminate) {
+    if (wrap) wrap.remove();
+    return;
+  }
+  if (!wrap) {
+    wrap = document.createElement('div');
+    wrap.className = 'upd-step-bar';
+    wrap.innerHTML = '<div class="upd-step-bar-fill"></div>';
+    el.appendChild(wrap);
+  }
+  const fill = wrap.querySelector('.upd-step-bar-fill');
+  if (!fill) return;
+  if (indeterminate) {
+    wrap.classList.add('is-indeterminate');
+    fill.style.width = '';
+  } else {
+    wrap.classList.remove('is-indeterminate');
+    fill.style.width = pct.toFixed(1) + '%';
+  }
 }
 
 /** Kick off the update. The backend runs it in a background thread and

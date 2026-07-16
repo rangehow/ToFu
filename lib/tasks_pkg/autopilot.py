@@ -1597,11 +1597,28 @@ def maybe_run_autopilot(task: dict) -> dict | None:
     # BOTH the VU turn (below) and the summary report (TASK_DONE branch).
     run_id = _get_or_persist_run_id(conv_id)
 
+    # ★ Carry the parent worker's SETTLED finish metadata on vu_start so the
+    #   frontend can complete the parent bubble's finish bar (model / usage /
+    #   cost / finishReason) at the MOMENT the VU takes over the streaming
+    #   substrate — not tens of seconds later when the parent `done` event
+    #   finally fires (that event is deliberately withheld until the whole VU
+    #   stream completes, so the follow-up baton can ride on it). Without this
+    #   the early-finalized worker bubble shows a bar with ONLY the model tag
+    #   (no tokens / no cost / no ✓) for the entire VU turn. `_committedMsg`
+    #   was stamped by the pre-emit `_sync_result_to_conversation` in the
+    #   orchestrator finalize (the EXACT dict written to conversations.messages,
+    #   carrying finishReason/usage/cost/apiRounds). It is display-only here —
+    #   the authoritative record is still shipped verbatim on the parent `done`
+    #   event's `committedMessage`; this is the identical dict, just delivered
+    #   early so the parent bar never renders incomplete. Absent on skip paths
+    #   (freshness/CAS-miss/inline) → the field is simply omitted and the
+    #   frontend keeps its transient buffer, exactly as for `done`.
+    _parent_msg = task.get('_committedMsg')
+    _start_evt = build_event(EventType.AUTOPILOT_VU_START, vuMsgId=vu_msg_id)
+    if _parent_msg:
+        _start_evt['parentMessage'] = _parent_msg
     try:
-        append_event(task, build_event(
-            EventType.AUTOPILOT_VU_START,
-            vuMsgId=vu_msg_id,
-        ))
+        append_event(task, _start_evt)
     except Exception as e:
         logger.debug('[Autopilot %s] vu_start emit failed: %s', tid, e)
 

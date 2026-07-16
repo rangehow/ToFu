@@ -118,9 +118,17 @@ function _surgicalRerenderMsg(convId, idx) {
  * first (its finish bar is refreshed later when the parent `done` event
  * lands — see the done handler's autopilot branch in sse_pipeline.js).
  *
+ * @param {Object} [parentMessage] — the SETTLED parent worker assistant dict
+ *   (== the parent `done` event's `committedMessage`), delivered early on
+ *   `autopilot_vu_start`. When present, projected onto the parent assistant
+ *   BEFORE it is finalized so its finish bar (model / usage / cost /
+ *   finishReason) is complete at handoff — not incomplete until the parent
+ *   `done` event fires tens of seconds later (that event is withheld until the
+ *   whole VU stream completes). Absent on backend skip paths → the parent keeps
+ *   its transient buffer, and the later `done` re-render still fills the bar.
  * @returns {{msg:Object, idx:number}} the VU message entry.
  */
-function _beginVuStreaming(convId, conv, vuMsgId) {
+function _beginVuStreaming(convId, conv, vuMsgId, parentMessage) {
   const vuMsg = {
     role: "user",
     content: "",
@@ -144,9 +152,37 @@ function _beginVuStreaming(convId, conv, vuMsgId) {
         if (m && m.role === "assistant" && !m._isVirtualUser) { parentAssistant = m; break; }
       }
       if (parentAssistant && window.ConvView) {
-        /* Mark the parent so the worker turn's `done` handler knows to
-         * re-render its finish bar (usage / cost / finishReason arrive on
-         * `done`, AFTER this early finalize).  See sse_pipeline.js. */
+        /* ★ Project the parent worker's SETTLED finish metadata NOW (delivered
+         * on vu_start as `parentMessage`) so its finish bar renders COMPLETE at
+         * handoff — model + tokens + cost + finishReason ✓. Without this the
+         * early finalize below stamps a bar carrying ONLY the model tag (the
+         * reported "incomplete finish bar") for the whole VU turn, because the
+         * usage/cost/finishReason-bearing parent `done` event is withheld until
+         * the VU stream ends. This mirrors the `done` handler's committedMessage
+         * projection — same authoritative dict, delivered early. VERBATIM
+         * projection: copy the settled fields onto the existing object (not
+         * replace it) so frontend-local fields (_translate*, _msgId, branches)
+         * survive. */
+        if (parentMessage && typeof parentMessage === 'object') {
+          const _pm = parentMessage;
+          if (_pm.content != null) parentAssistant.content = _pm.content;
+          if (_pm.thinking != null) parentAssistant.thinking = _pm.thinking;
+          if (Array.isArray(_pm.toolRounds)) parentAssistant.toolRounds = _pm.toolRounds;
+          if (Array.isArray(_pm.segments)) parentAssistant.segments = _pm.segments;
+          for (const _k of ['finishReason', 'usage', 'preset', 'toolSummary',
+                            'model', 'provider_id', 'apiRounds', 'modifiedFiles',
+                            'modifiedFileList', 'cost', '_taskId',
+                            'fallbackModel', 'fallbackFrom', 'fallbackReason',
+                            'fallbackKind', 'error', 'thinkingDepth', '_gitSha']) {
+            if (_pm[_k] != null) parentAssistant[_k] = _pm[_k];
+          }
+        }
+        /* Mark the parent so the worker turn's `done` handler still re-renders
+         * its finish bar. `done` remains AUTHORITATIVE (it ships the same
+         * committedMessage verbatim); this early projection just prevents the
+         * incomplete-bar window on the skip-free path, and is a harmless no-op
+         * repaint on `done`. When vu_start carried NO parentMessage (backend
+         * skip path), the `done` re-render is the sole fill — preserved. */
         parentAssistant._vuTookOverBubble = true;
         window.ConvView.finalizeStreaming(convId, parentAssistant);
       } else {
@@ -241,7 +277,7 @@ function _handleAutopilotVuEvent(convId, ev) {
      * In-memory ONLY: nothing is persisted until autopilot_vu_done.  If
      * the bubble already exists (reconnect / duplicate start) reuse it. */
     if (_findVuMsgById(conv, vuMsgId)) return;
-    const entry = _beginVuStreaming(convId, conv, vuMsgId);
+    const entry = _beginVuStreaming(convId, conv, vuMsgId, ev.parentMessage);
     console.info(
       `[Autopilot VU] ▶ began VU streaming bubble vuMsgId=${vuMsgId.slice(0,12)} ` +
       `at idx=${entry.idx} for conv=${convId.slice(0,8)}`

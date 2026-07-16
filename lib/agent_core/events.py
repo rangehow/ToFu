@@ -391,7 +391,18 @@ _SPECS: tuple[EventSpec, ...] = (
     EventSpec(EventType.AUTOPILOT_VU_START, _C.AUTOPILOT,
               'Autopilot kicked in — create the simulated-user bubble eagerly '
               '(in-memory only; not persisted until autopilot_vu_done).',
-              fields={'vuMsgId': 'stable id for the VU message bubble'}),
+              fields={'vuMsgId': 'stable id for the VU message bubble',
+                      'parentMessage': '(optional) the SETTLED parent worker '
+                                       'assistant dict (== the parent `done` '
+                                       "event's `committedMessage`), delivered "
+                                       'early so the frontend can complete the '
+                                       'parent bubble\'s finish bar (model / '
+                                       'usage / cost / finishReason) at handoff '
+                                       'instead of waiting for the parent `done` '
+                                       '(withheld until the VU stream ends). '
+                                       'Absent on skip paths → keep transient '
+                                       'buffer. Display-only; `done` still ships '
+                                       'the authoritative copy.'}),
     EventSpec(EventType.AUTOPILOT_VU_EVENT, _C.AUTOPILOT,
               'Autopilot value-unit progress event.',
               fields={'detail': 'vu detail'}),

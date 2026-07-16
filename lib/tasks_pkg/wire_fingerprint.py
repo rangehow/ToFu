@@ -347,6 +347,27 @@ def diff_canonical(old: list, new: list, max_report: int = 8) -> list[str]:
     return changes
 
 
+def first_changed_index(old: list, new: list) -> int:
+    """Return the FIRST position where two canonical fingerprint lists differ.
+
+    Position-aware companion to ``diff_canonical`` (which reports stable keys,
+    not indices). Used by ``detect_cache_break`` to log WHERE in the wire
+    message list a prefix mutation lands, so a break can be classified by
+    whether the earliest changed index falls inside the PRIOR round's cached
+    prefix (an already-cached message rewritten in place) vs only in the fresh
+    tail. Compares the overlapping prefix by position; ``-1`` if no shared
+    position differs. A pure length change (no shared-position diff) also
+    returns ``-1`` — the caller inspects the length separately.
+    """
+    n = min(len(old), len(new))
+    for i in range(n):
+        o = old[i] or {}
+        nw = new[i] or {}
+        if (o.get('fields') or {}) != (nw.get('fields') or {}):
+            return i
+    return -1
+
+
 def system_fingerprint(system: Any, tools: Any) -> dict[str, str]:
     """Fingerprint the top-level ``system`` field + tool schemas.
 

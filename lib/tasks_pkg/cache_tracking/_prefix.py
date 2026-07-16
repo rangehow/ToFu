@@ -115,21 +115,49 @@ def get_cache_prefix_count(conv_id: str) -> int:
     Returns the message count from the previous call if cache was active.
     For Anthropic (explicit breakpoints), this is less critical since
     add_cache_breakpoints places markers at the conversation tail.
+
+    ★ CROSS-THREAD (per-conversation) boundary — the turn-boundary cache-kill
+    fix. ``_state_key`` scopes CacheState per ``(conv_id, thread_id)`` so
+    concurrent agents under one conv don't clobber each other's baseline. But
+    a plain SEQUENTIAL new user turn runs on a NEW ``run_task`` worker thread,
+    so the current thread has NO state on that turn's first round → this used
+    to return 0 → micro_compact's prefix guard went OFF → it compacted cold
+    history the gateway STILL had cached from the previous turn (within TTL) →
+    the whole prefix was rewritten → guaranteed miss re-billing ~all of it.
+    (Proven: fresh-thread round-1 rewrote 24 prefix msgs / ~72k tokens on a
+    real conv; same-thread rounds were byte-stable.) The cached prefix is a
+    CONVERSATION fact that outlives any one thread, so when the current
+    thread's entry is missing/cold we fall back to the MAX boundary any warm
+    sibling-thread entry for the SAME conv holds. Raising the floor is
+    cache-SAFE by construction: it only ever PROTECTS more messages from
+    compaction (never fewer), so it can never itself cause a miss — it just
+    stops the turn-boundary rewrite. Messages are append-only within a conv,
+    so the prior turn's boundary is a valid prefix of the current turn.
     """
-    with _cache_lock:
-        state = _cache_states.get(_state_key(conv_id))
-        # ★ Gate on WRITE as well as READ. The previous round may have only
-        #   WRITTEN the prefix (cache_read=0, large cache_write) — e.g. round 1
-        #   of a fresh conversation. That prefix is fully cached and reusable
-        #   next round, so it must be protected from micro-compact mutation.
-        #   Gating on read alone left round-2 unprotected after a round-1
-        #   write, letting L1 mutate the just-written prefix → guaranteed miss.
-        if state and (state.last_cache_read_tokens > 1000
-                      or state.last_cache_write_tokens > 1000):
+    def _boundary(st) -> int:
+        if st and (st.last_cache_read_tokens > 1000
+                   or st.last_cache_write_tokens > 1000):
             # Cache was active — protect the prefix. Keep the last
             # EDITABLE_TAIL_COUNT messages editable (single-sourced bound).
-            return max(0, state.message_count - EDITABLE_TAIL_COUNT)
-    return 0
+            return max(0, st.message_count - EDITABLE_TAIL_COUNT)
+        return 0
+
+    with _cache_lock:
+        own = _boundary(_cache_states.get(_state_key(conv_id)))
+        if own > 0:
+            return own
+        # Current thread has no warm state (typically a new user turn on a
+        # fresh run_task thread). Fall back to the max boundary any OTHER
+        # thread's state for THIS conv still holds — the previous turn's
+        # thread whose prefix the gateway is still caching.
+        best = 0
+        for _key, _st in _cache_states.items():
+            if _key[0] != conv_id:
+                continue
+            b = _boundary(_st)
+            if b > best:
+                best = b
+        return best
 
 
 def get_cache_diagnostics() -> dict[str, Any]:

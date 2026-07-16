@@ -569,12 +569,38 @@ def detect_cache_break(
                         ', '.join(_region_culprits) or '?')
             _wire_prefix_changed = bool(_wire_culprits)
             if _wire_prefix_changed:
+                # ── Position evidence (the "which part & was it already
+                #    cached" ground truth) ──
+                # Report the FIRST changed message index and whether it falls
+                # inside the PRIOR round's cached-prefix boundary
+                # (prev.message_count - EDITABLE_TAIL_COUNT). A changed index
+                # BELOW that boundary means an ALREADY-CACHED message was
+                # rewritten in place this round (the monotonic-growth break);
+                # a changed index only in the editable tail / fresh region is a
+                # different, benign class. This is what distinguishes an
+                # EDITABLE_TAIL leak, a lost-state (thread-key) full-prefix
+                # rewrite, and a cold-compaction-of-cached-message from each
+                # other in the live log, without a rerun.
+                try:
+                    from lib.tasks_pkg.wire_fingerprint import first_changed_index
+                    _fci = first_changed_index(prev.wire_fp[:_shared],
+                                               (_cur_wire_fp or [])[:_shared])
+                except Exception as _fe:
+                    logger.debug('[CacheTrack] first_changed_index failed: %s', _fe)
+                    _fci = -2
+                _prior_prefix_boundary = max(0, prev.message_count
+                                             - EDITABLE_TAIL_COUNT)
+                _inside_prior_prefix = (0 <= _fci < _prior_prefix_boundary)
                 logger.warning(
                     '[CacheTrack] conv=%s call=%d ⚠ WIRE PREFIX CHANGED: the '
                     'ACTUAL sent bytes differ from last round — client-caused '
-                    'miss. changed=[%s]',
+                    'miss. changed=[%s] first_changed_idx=%d '
+                    'prior_prefix_boundary=%d prev_msg_count=%d cur_msg_count=%d '
+                    'inside_prior_cached_prefix=%s',
                     conv_id[:8], prev.call_count + 1,
-                    ', '.join(_wire_culprits[:8]) or '?')
+                    ', '.join(_wire_culprits[:8]) or '?',
+                    _fci, _prior_prefix_boundary, prev.message_count, msg_count,
+                    _inside_prior_prefix)
 
         # ── Phase-2 break classification (pure; see _classify_break) ──
         #   api_break        — cache_read dropped from a prior high read.

@@ -51,6 +51,10 @@ Pick the row that matches your OS. Each one ends with a running server on **http
 | **Linux / macOS** | `curl -fsSL https://raw.githubusercontent.com/rangehow/ToFu/main/install.sh \| bash` |
 | **Docker** | `git clone https://github.com/rangehow/ToFu.git && cd ToFu && docker compose up -d` |
 
+> **macOS — prefer a click-to-run app?** Instead of the `install.sh` line above, download the `.dmg` from the
+> [latest release](https://github.com/rangehow/ToFu/releases/latest) and pick the build for your chip:
+> **`Tofu-*-macos-arm64.dmg`** for Apple Silicon (M1/M2/M3…) or **`Tofu-*-macos-x86_64.dmg`** for Intel Macs.
+
 That's it. Each path handles conda/runtime, dependencies, the database,
 the browser engine, and starts the server — no flags, no follow-up
 steps.

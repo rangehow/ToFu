@@ -35,6 +35,39 @@ Env knobs
                                      (default 2).
 ``TOFU_BIG_PREFIX_WAIT_MS``        — max time to wait for a slot before
                                      proceeding degraded (default 45000).
+
+Residency-aware admission (2026-07-16)
+======================================
+The original semaphore held ONLY for the in-flight ``stream_chat`` duration
+(seconds). But Anthropic prompt-cache eviction is a *cache-RESIDENCY*
+phenomenon: a cached prefix stays in the key's pool for the cache TTL (~5m/1h),
+long after the stream returns. Two big prefixes whose STREAMS never overlap
+(they run back-to-back) still coexist in the pool for minutes and LRU-evict
+each other — a competition the stream-only semaphore is structurally blind to.
+Live evidence: 94.8% of opus floor-misses had a prefix ≥150k (the gated size)
+yet the stream gate fired only 6× / hit capacity once; the misses were
+time-ISOLATED (median 1/minute), NOT concurrent streams.
+
+So admission now counts the DISTINCT big prefixes RESIDENT on a key within a
+residency-TTL window (``TOFU_BIG_PREFIX_RESIDENCY_TTL_MS``, default = the
+gateway cache TTL, 5min). A request whose conv is ALREADY resident (warm) is
+admitted free — re-using a warm prefix is exactly the goal, not a new
+competitor. A NEW distinct big prefix waits up to the budget when the resident
+working set is full (``TOFU_BIG_PREFIX_RESIDENCY_MAX``, default = max_per_key),
+then proceeds degraded.
+
+HONEST LIMIT: on a SINGLE key pool this can only SERIALIZE the active working
+set — it cannot spread load. Sustained >capacity distinct-big-conv load still
+evicts (that needs route (i): a second key = a second cache namespace). This is
+a working-set bound, not a capacity fix.
+
+Residency env knobs
+-------------------
+``TOFU_BIG_PREFIX_RESIDENCY``       — residency-aware admission on (default on).
+``TOFU_BIG_PREFIX_RESIDENCY_MAX``   — max distinct big prefixes resident per key
+                                     (default = max_per_key).
+``TOFU_BIG_PREFIX_RESIDENCY_TTL_MS``— how long a prefix counts as resident after
+                                     its last use (default 300000 = 5min).
 """
 
 from __future__ import annotations
@@ -53,8 +86,12 @@ __all__ = [
     'threshold_tokens',
     'max_per_key',
     'wait_budget_ms',
+    'residency_enabled',
+    'residency_max',
+    'residency_ttl_ms',
     'estimate_prefix_tokens',
     'big_prefix_slot',
+    '_reset_residency_for_tests',
 ]
 
 
@@ -92,6 +129,43 @@ def wait_budget_ms() -> float:
     except (ValueError, TypeError) as e:
         logger.debug('[BigPrefixGate] TOFU_BIG_PREFIX_WAIT_MS parse failed, default: %s', e)
         return 45000.0
+
+
+def residency_enabled() -> bool:
+    """Whether residency-aware admission is active (env-gated, default on).
+
+    When OFF the gate reverts to the legacy stream-only semaphore (concurrency
+    of in-flight streams), which is blind to the flow-non-overlap-but-residency-
+    overlap eviction case — see the module docstring."""
+    val = os.environ.get('TOFU_BIG_PREFIX_RESIDENCY', '1')
+    return val.strip().lower() not in ('0', 'false', 'no', 'off', '')
+
+
+def residency_max() -> int:
+    """Max DISTINCT big prefixes counted resident per key. Default = max_per_key."""
+    raw = os.environ.get('TOFU_BIG_PREFIX_RESIDENCY_MAX')
+    if raw is None:
+        return max_per_key()
+    try:
+        v = int(raw)
+        return v if v >= 1 else max_per_key()
+    except (ValueError, TypeError) as e:
+        logger.debug('[BigPrefixGate] TOFU_BIG_PREFIX_RESIDENCY_MAX parse failed, default: %s', e)
+        return max_per_key()
+
+
+def residency_ttl_ms() -> float:
+    """How long (ms) a prefix counts as resident after its last use.
+
+    Default 300000 (5min) = the Anthropic default cache TTL: a prefix cached now
+    occupies the key's pool for ~this long, so it competes for that window even
+    after its stream ends. Tune with ``TOFU_BIG_PREFIX_RESIDENCY_TTL_MS``."""
+    try:
+        v = float(os.environ.get('TOFU_BIG_PREFIX_RESIDENCY_TTL_MS', '300000'))
+        return v if v > 0 else 300000.0
+    except (ValueError, TypeError) as e:
+        logger.debug('[BigPrefixGate] TOFU_BIG_PREFIX_RESIDENCY_TTL_MS parse failed, default: %s', e)
+        return 300000.0
 
 
 def estimate_prefix_tokens(body_or_messages) -> int:
@@ -168,51 +242,153 @@ def _semaphore_for(key_name: str, capacity: int) -> threading.BoundedSemaphore:
         return _gates[key_name]
 
 
+# ── Residency table: key_name → {conv_id → resident_until_ts} ──
+# A prefix is "resident" on a key from admission until resident_until (last-use
+# + residency TTL). Distinct resident convs = the key's active cache working
+# set. One condition variable per key serializes the admit/expire decision and
+# lets a waiter wake the instant a resident expires or a distinct conv leaves.
+_residency: dict[str, dict[str, float]] = {}
+_residency_cv: dict[str, threading.Condition] = {}
+_residency_lock = threading.Lock()
+
+
+def _cv_for(key_name: str) -> threading.Condition:
+    with _residency_lock:
+        cv = _residency_cv.get(key_name)
+        if cv is None:
+            cv = threading.Condition()
+            _residency_cv[key_name] = cv
+            _residency.setdefault(key_name, {})
+        return cv
+
+
+def _prune_expired_locked(table: dict[str, float], now: float) -> None:
+    """Drop residents whose TTL has lapsed. Caller holds the key's cv."""
+    for cid in [c for c, until in table.items() if until <= now]:
+        del table[cid]
+
+
+def _reset_residency_for_tests() -> None:
+    """Test hook: clear all residency state + semaphores."""
+    with _residency_lock:
+        _residency.clear()
+        _residency_cv.clear()
+    with _gates_lock:
+        _gates.clear()
+        _gates_cap.clear()
+
+
 @contextlib.contextmanager
-def big_prefix_slot(key_name: str, est_tokens: int, *, log_prefix: str = ''):
-    """Admit at most :func:`max_per_key` big-prefix requests per key concurrently.
+def big_prefix_slot(key_name: str, est_tokens: int, *, conv_id: str = '',
+                    log_prefix: str = ''):
+    """Admit a big-prefix request, bounding the key's cache WORKING SET.
 
     Context manager. A no-op (immediate yield) when the gate is disabled, the
-    request is below :func:`threshold_tokens`, or ``key_name`` is empty. For a
-    BIG request it acquires the per-key slot, waiting up to
-    :func:`wait_budget_ms`; if it can't acquire in time it proceeds anyway
-    (degraded, logged at INFO) rather than blocking the task. Always releases on
-    exit — success, exception, or degraded-proceed.
+    request is below :func:`threshold_tokens`, or ``key_name`` is empty.
+
+    Residency-aware mode (default, :func:`residency_enabled`): admission counts
+    the DISTINCT big prefixes RESIDENT on ``key_name`` within the residency-TTL
+    window (:func:`residency_ttl_ms`), NOT just concurrent streams. The calling
+    conv's prefix is marked resident on entry and its residency is REFRESHED on
+    exit (the cached prefix outlives the stream — see module docstring), so a
+    warm same-conv re-run is admitted free while a NEW distinct conv waits up to
+    :func:`wait_budget_ms` when the working set (:func:`residency_max`) is full,
+    then proceeds degraded. ``conv_id`` empty falls back to the legacy
+    stream-only semaphore (no identity to track residency by).
+
+    Legacy mode (``TOFU_BIG_PREFIX_RESIDENCY=0``): the original per-key
+    :func:`max_per_key` :class:`~threading.BoundedSemaphore` over the stream
+    duration only.
+
+    Soft guard either way: bounded wait, then proceed degraded — never block a
+    task forever. Fully env-gated and reversible.
 
     Args:
         key_name: the API key this request will run on (from the picked slot).
         est_tokens: estimated prompt size (see :func:`estimate_prefix_tokens`).
+        conv_id: conversation id — the residency identity. Empty → legacy mode.
         log_prefix: optional tag for correlating log lines.
     """
     if not gate_enabled() or not key_name or est_tokens < threshold_tokens():
         yield
         return
 
-    sem = _semaphore_for(key_name, max_per_key())
+    # ── Legacy stream-only mode (residency off, or no conv identity) ──
+    if not residency_enabled() or not conv_id:
+        sem = _semaphore_for(key_name, max_per_key())
+        budget_s = wait_budget_ms() / 1000.0
+        t0 = time.time()
+        acquired = sem.acquire(timeout=budget_s)
+        waited = time.time() - t0
+        if acquired:
+            if waited > 0.05:
+                logger.info('%s [BigPrefixGate] admitted big prefix (~%dk tok) '
+                            'on key=%s after waiting %.1fs (cap=%d, stream-only)',
+                            log_prefix, est_tokens // 1000, key_name, waited,
+                            max_per_key())
+        else:
+            logger.info('%s [BigPrefixGate] proceeding DEGRADED for big prefix '
+                        '(~%dk tok) on key=%s — %d already inflight, waited '
+                        '%.1fs (budget %.0fs, stream-only)', log_prefix,
+                        est_tokens // 1000, key_name, max_per_key(), waited,
+                        budget_s)
+        try:
+            yield
+        finally:
+            if acquired:
+                try:
+                    sem.release()
+                except ValueError as e:
+                    logger.warning('%s [BigPrefixGate] semaphore release on '
+                                   'key=%s raised: %s', log_prefix, key_name, e)
+        return
+
+    # ── Residency-aware mode ──
+    cap = residency_max()
+    ttl_s = residency_ttl_ms() / 1000.0
     budget_s = wait_budget_ms() / 1000.0
-    t0 = time.time()
-    acquired = sem.acquire(timeout=budget_s)
-    waited = time.time() - t0
-    if acquired:
-        if waited > 0.05:
-            logger.info('%s [BigPrefixGate] admitted big prefix (~%dk tok) on '
-                        'key=%s after waiting %.1fs (cap=%d)',
-                        log_prefix, est_tokens // 1000, key_name, waited, max_per_key())
-    else:
-        # Degraded: proceed without a permit rather than stall the task. This
-        # keeps the gate a soft guard — worst case is the pre-fix behavior.
-        logger.info('%s [BigPrefixGate] proceeding DEGRADED for big prefix '
-                    '(~%dk tok) on key=%s — %d already inflight, waited %.1fs '
-                    '(budget %.0fs)', log_prefix, est_tokens // 1000, key_name,
-                    max_per_key(), waited, budget_s)
+    cv = _cv_for(key_name)
+    deadline = time.time() + budget_s
+    waited_total = 0.0
+    with cv:
+        table = _residency[key_name]
+        while True:
+            now = time.time()
+            _prune_expired_locked(table, now)
+            # Warm reuse: our conv is already resident → admit free (refresh).
+            if conv_id in table:
+                break
+            # New distinct prefix: admit if the working set has room.
+            if len(table) < cap:
+                break
+            # Working set full and we are a NEW competitor → wait for a resident
+            # to expire / leave, up to the budget, then degrade through.
+            remaining = deadline - now
+            if remaining <= 0:
+                logger.info('%s [BigPrefixGate] proceeding DEGRADED for big '
+                            'prefix (~%dk tok) conv=%s on key=%s — %d distinct '
+                            'prefixes resident (cap=%d), waited %.1fs (budget '
+                            '%.0fs)', log_prefix, est_tokens // 1000,
+                            conv_id[:8], key_name, len(table), cap,
+                            waited_total, budget_s)
+                break
+            cv.wait(timeout=remaining)
+            waited_total = budget_s - max(0.0, deadline - time.time())
+        # Reserve/refresh our residency slot with a fresh TTL.
+        table[conv_id] = time.time() + ttl_s
+        if waited_total > 0.05:
+            logger.info('%s [BigPrefixGate] admitted big prefix (~%dk tok) '
+                        'conv=%s on key=%s after waiting %.1fs (working set '
+                        '%d/%d resident)', log_prefix, est_tokens // 1000,
+                        conv_id[:8], key_name, waited_total, len(table), cap)
     try:
         yield
     finally:
-        if acquired:
-            try:
-                sem.release()
-            except ValueError as e:
-                # BoundedSemaphore raises if released too many times — never
-                # expected here (one acquire ↔ one release), log and swallow.
-                logger.warning('%s [BigPrefixGate] semaphore release on key=%s '
-                               'raised: %s', log_prefix, key_name, e)
+        # Refresh residency to last-use + TTL: the prefix the stream just wrote
+        # stays cached in the key's pool for the TTL, so it KEEPS occupying the
+        # working set after the stream ends (the whole point). We do NOT delete
+        # it — it expires by TTL. Wake any waiter so it can re-evaluate (a
+        # refresh doesn't free a slot, but a concurrent expiry might have).
+        with cv:
+            _residency[key_name][conv_id] = time.time() + ttl_s
+            cv.notify_all()

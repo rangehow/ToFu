@@ -1166,18 +1166,25 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
                 on_content(text)
 
         # ── Per-key big-prefix admission control ──
-        # Bound concurrent LARGE-prefix requests on one API key so several big
-        # conversations don't LRU-evict each other's prompt cache in the key's
-        # shared cache namespace (the mutual-eviction / rebound miss). Small
-        # requests pass through instantly; big ones wait briefly for a per-key
-        # slot. Soft + env-gated (see lib/llm_dispatch/big_prefix_gate.py).
+        # Bound the key's cache WORKING SET so several big conversations don't
+        # LRU-evict each other's prompt cache in the key's shared namespace (the
+        # mutual-eviction / rebound miss). Residency-aware: admission counts the
+        # distinct big prefixes RESIDENT on the key within the cache-TTL window
+        # (not just concurrent streams), so a warm same-conv re-run passes free
+        # while a NEW distinct big prefix waits when the working set is full.
+        # Passing conv_id (the residency identity) is what makes it catch the
+        # flow-non-overlap-but-residency-overlap case the old stream-only gate
+        # was blind to. Soft + env-gated (see big_prefix_gate.py).
         import contextlib as _contextlib
         try:
             from lib.llm_dispatch.big_prefix_gate import (
                 big_prefix_slot, estimate_prefix_tokens,
             )
+            from lib.llm_dispatch.conv_affinity import get_conv_affinity
             _est_tok = estimate_prefix_tokens(body)
-            _big_gate = big_prefix_slot(slot.key_name, _est_tok, log_prefix=tag)
+            _big_gate = big_prefix_slot(
+                slot.key_name, _est_tok, conv_id=get_conv_affinity() or '',
+                log_prefix=tag)
         except ImportError as _bpg_err:
             logger.debug('%s big-prefix gate unavailable: %s', tag, _bpg_err)
             _big_gate = _contextlib.nullcontext()

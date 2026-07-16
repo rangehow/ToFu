@@ -55,7 +55,14 @@ function _renderStreamingBubble(conv, sendConfig, msgId) {
   const role = _streamingBubbleRole(conv, sendConfig);
   // Stamp the assistant message id (data-msg-id) on the bubble so live
   // per-round translation partials can be routed to it while it streams.
-  inner.insertAdjacentHTML('beforeend', _streamingBubbleHTML(role, null, null, msgId || null));
+  /* ★ Dedup at the insert boundary via ConvView.startStreaming (_evictByMsgId)
+   *   so a residual #streaming-msg / drifted static twin can't leave a second
+   *   empty bubble. Fallback keeps dev-mode parity. */
+  if (window.ConvView && typeof window.ConvView.startStreaming === 'function') {
+    window.ConvView.startStreaming(conv.id, { role, msgId: msgId || null });
+  } else {
+    inner.insertAdjacentHTML('beforeend', _streamingBubbleHTML(role, null, null, msgId || null));
+  }
   const el = document.getElementById('streaming-msg');
   if (el) {
     el.classList.add('message-new');

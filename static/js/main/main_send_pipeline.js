@@ -54,7 +54,16 @@ async function startAssistantResponse(convId) {
       const _isEndpoint = (convId === activeConvId) ? endpointEnabled : (!!conv.endpointEnabled);
       if (_isEndpoint) assistantMsg._isEndpointPlanner = true;
       const role = _isEndpoint ? 'planner' : 'worker';
-      inner.insertAdjacentHTML('beforeend', _streamingBubbleHTML(role, null, null, _saMsgId));
+      /* ★ Route through ConvView.startStreaming so the insert is deduped at the
+       *   boundary (_evictByMsgId removes any node already bound to this _msgId
+       *   + any stale #streaming-msg). A raw insertAdjacentHTML here could
+       *   coexist with a drifted static bubble / leftover streaming-msg →
+       *   multiple empty "Agent" bubbles. Fallback keeps dev-mode parity. */
+      if (window.ConvView && typeof window.ConvView.startStreaming === 'function') {
+        window.ConvView.startStreaming(convId, { role, msgId: _saMsgId });
+      } else {
+        inner.insertAdjacentHTML('beforeend', _streamingBubbleHTML(role, null, null, _saMsgId));
+      }
       const el = document.getElementById('streaming-msg');
       if (el) {
         el.classList.add('message-new');

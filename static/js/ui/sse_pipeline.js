@@ -869,7 +869,12 @@ function dispatchSSEEvent(line, ctx) {
               : (ev.endpointPhase === 'planning' ? 'planner' : 'worker');
             const _reconStatus = _epCriticPhase ? 'Reviewing…'
               : (ev.endpointPhase === 'planning' ? 'Planning…' : 'Thinking…');
-            if (inner) inner.insertAdjacentHTML("beforeend", _streamingBubbleHTML(_reconRole, _reconStatus, undefined, assistantMsg._msgId || null));
+            /* ★ Dedup at the boundary (ConvView.startStreaming → _evictByMsgId). */
+            if (window.ConvView && typeof window.ConvView.startStreaming === 'function') {
+              window.ConvView.startStreaming(convId, { role: _reconRole, status: _reconStatus, msgId: assistantMsg._msgId || null });
+            } else if (inner) {
+              inner.insertAdjacentHTML("beforeend", _streamingBubbleHTML(_reconRole, _reconStatus, undefined, assistantMsg._msgId || null));
+            }
             buildTurnNav(conv);
           }
         }
@@ -1242,7 +1247,12 @@ function dispatchSSEEvent(line, ctx) {
           // 3. Create a streaming element for the critic (DOM — only if active)
           if (_isActiveConv) {
             const inner = document.getElementById("chatInner");
-            if (inner) inner.insertAdjacentHTML("beforeend", _streamingBubbleHTML('critic', undefined, undefined, _epCriticMsg._msgId || null));
+            /* ★ Dedup at the boundary (ConvView.startStreaming → _evictByMsgId). */
+            if (window.ConvView && typeof window.ConvView.startStreaming === 'function') {
+              window.ConvView.startStreaming(convId, { role: 'critic', msgId: _epCriticMsg._msgId || null });
+            } else if (inner) {
+              inner.insertAdjacentHTML("beforeend", _streamingBubbleHTML('critic', undefined, undefined, _epCriticMsg._msgId || null));
+            }
           }
 
           // 4. Create a separate stream buffer for the critic
@@ -1320,7 +1330,12 @@ function dispatchSSEEvent(line, ctx) {
             // Create streaming element — only if this conv is active
             if (_isActiveConv) {
               const inner = document.getElementById("chatInner");
-              if (inner) inner.insertAdjacentHTML("beforeend", _streamingBubbleHTML('worker', 'Thinking…', undefined, assistantMsg._msgId || null));
+              /* ★ Dedup at the boundary (ConvView.startStreaming → _evictByMsgId). */
+              if (window.ConvView && typeof window.ConvView.startStreaming === 'function') {
+                window.ConvView.startStreaming(convId, { role: 'worker', status: 'Thinking…', msgId: assistantMsg._msgId || null });
+              } else if (inner) {
+                inner.insertAdjacentHTML("beforeend", _streamingBubbleHTML('worker', 'Thinking…', undefined, assistantMsg._msgId || null));
+              }
               buildTurnNav(conv);
               _forceScrollToBottom();
             }
@@ -1460,7 +1475,12 @@ function dispatchSSEEvent(line, ctx) {
 
           if (activeConvId === convId) {
             const inner = document.getElementById("chatInner");
-            if (inner) inner.insertAdjacentHTML("beforeend", _streamingBubbleHTML('planner', 'Replanning…', undefined, assistantMsg._msgId || null));
+            /* ★ Dedup at the boundary (ConvView.startStreaming → _evictByMsgId). */
+            if (window.ConvView && typeof window.ConvView.startStreaming === 'function') {
+              window.ConvView.startStreaming(convId, { role: 'planner', status: 'Replanning…', msgId: assistantMsg._msgId || null });
+            } else if (inner) {
+              inner.insertAdjacentHTML("beforeend", _streamingBubbleHTML('planner', 'Replanning…', undefined, assistantMsg._msgId || null));
+            }
             const banner = document.getElementById("ep-iter-banner");
             if (banner) banner.textContent = `Replanning…`;
           }
@@ -1513,7 +1533,12 @@ function dispatchSSEEvent(line, ctx) {
         // DOM operations — only if this conv is currently viewed
         if (activeConvId === convId) {
           const inner = document.getElementById("chatInner");
-          if (inner) inner.insertAdjacentHTML("beforeend", _streamingBubbleHTML('worker', 'Thinking…', undefined, assistantMsg._msgId || null));
+          /* ★ Dedup at the boundary (ConvView.startStreaming → _evictByMsgId). */
+          if (window.ConvView && typeof window.ConvView.startStreaming === 'function') {
+            window.ConvView.startStreaming(convId, { role: 'worker', status: 'Thinking…', msgId: assistantMsg._msgId || null });
+          } else if (inner) {
+            inner.insertAdjacentHTML("beforeend", _streamingBubbleHTML('worker', 'Thinking…', undefined, assistantMsg._msgId || null));
+          }
 
           // Update banner & turn-nav
           const banner = document.getElementById("ep-iter-banner");

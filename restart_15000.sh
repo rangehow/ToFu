@@ -30,6 +30,12 @@
 # terminal (tty=?, no "+" in STAT, sid≠this shell). For a server that must also
 # survive OOM/crash, prefer the supervisord program instead — see
 # deploy/supervisor/tofu.conf (autostart/autorestart=true).
+#
+# MUTEX (2026-07-16): this script and the supervisord program are TWO owners of
+# :15000 and must never both drive it. Step [pre/5] detects when supervisord
+# already manages tofu and REFUSES to kill/relaunch (pointing you at
+# `supervisorctl restart tofu`), so the two mechanisms can never fight. Once the
+# supervisord program is installed, use supervisorctl — not this script.
 
 PROJ="/mnt/dolphinfs/ssd_pool/docker/user/hadoop-aipnlp/INS/ruanjunhao04/chatui"
 PY="/mnt/dolphinfs/ssd_pool/docker/user/hadoop-aipnlp/INS/ruanjunhao04/miniforge3/envs/tofu/bin/python"
@@ -49,6 +55,97 @@ listener_pids() {
     | awk -v pat=":${PORT}\$" '$4 ~ pat {print}' \
     | grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -u
 }
+
+# ── [pre/5] MUTEX GUARD — refuse to run if supervisord already OWNS tofu. ──
+# The durable fix (deploy/supervisor/tofu.conf) hands :PORT to the host
+# supervisord with autorestart=true. If BOTH mechanisms are live they FIGHT:
+# this script's [1/5] kill → supervisord instantly relaunches (grabbing the
+# port) → this script's [3/5] relaunch then aborts on the single-instance lock
+# (or races a second instance). So once supervisord owns tofu, the ONLY correct
+# restart entrypoint is `supervisorctl restart tofu`; this script must stand
+# down. Detection is layered so a partial install can't slip through:
+#   (1) the program is defined AND not STOPPED/absent (RUNNING/STARTING/BACKOFF
+#       — i.e. supervisord is actively managing/relaunching it), via whichever
+#       supervisorctl invocation works (plain, or sudo -n if the socket is
+#       root-only). A definitive RUNNING/STARTING/BACKOFF is authoritative.
+#   (2) fallback when supervisorctl is unreachable (no sudo, socket perms): the
+#       conf is installed under /etc/supervisor/conf.d AND a :PORT listener's
+#       process tree traces back to the supervisord daemon (ppid chain hits a
+#       `supervisord`) — that proves supervisord, not a terminal, spawned it.
+# A clean STOPPED/absent program, or conf present but the listener is NOT a
+# supervisord child, means the script may proceed (manual mode).
+SUPERVISOR_CONF="/etc/supervisor/conf.d/tofu.conf"
+SUPERVISOR_PROG="tofu"
+
+_supervisorctl() {
+  # Emit the program's status line ONLY on a genuine query success. Try an
+  # unprivileged call first, then non-interactive sudo (never prompts). Critical
+  # subtlety: `supervisorctl status` prints a socket "Permission denied" error
+  # to STDOUT and exits non-zero when the sock is root-only. We must NOT surface
+  # that error text as a status — otherwise the caller's `[ -n SV_STATUS ]`
+  # branch wins on garbage and the conf-installed fallback never runs. So we
+  # gate on exit code AND require the output to actually name the program.
+  command -v supervisorctl >/dev/null 2>&1 || return 1
+  local out
+  out="$(supervisorctl status "${SUPERVISOR_PROG}" 2>/dev/null)"
+  if [ $? -eq 0 ] && printf '%s' "${out}" | grep -q "^${SUPERVISOR_PROG}[[:space:]]"; then
+    printf '%s' "${out}"; return 0
+  fi
+  out="$(sudo -n supervisorctl status "${SUPERVISOR_PROG}" 2>/dev/null)"
+  if [ $? -eq 0 ] && printf '%s' "${out}" | grep -q "^${SUPERVISOR_PROG}[[:space:]]"; then
+    printf '%s' "${out}"; return 0
+  fi
+  return 1
+}
+
+_listener_is_supervisord_child() {
+  # Walk the ppid chain of each :PORT listener; return 0 if any ancestor's comm
+  # is 'supervisord'. Bounded to 12 hops (pid 1 terminates it anyway).
+  local pids p comm hops
+  pids="$(listener_pids)"
+  [ -z "${pids}" ] && return 1
+  for p in ${pids}; do
+    hops=0
+    while [ -n "${p}" ] && [ "${p}" != "1" ] && [ "${hops}" -lt 12 ]; do
+      comm="$(ps -o comm= -p "${p}" 2>/dev/null | tr -d ' ')"
+      case "${comm}" in *supervisord*) return 0 ;; esac
+      p="$(ps -o ppid= -p "${p}" 2>/dev/null | tr -d ' ')"
+      hops=$((hops + 1))
+    done
+  done
+  return 1
+}
+
+supervisord_owns=0
+SV_STATUS="$(_supervisorctl)"
+if [ -n "${SV_STATUS}" ]; then
+  # supervisorctl answered authoritatively. RUNNING/STARTING/BACKOFF = owned.
+  case "${SV_STATUS}" in
+    *RUNNING*|*STARTING*|*BACKOFF*) supervisord_owns=1 ;;
+  esac
+elif [ -f "${SUPERVISOR_CONF}" ] && _listener_is_supervisord_child; then
+  # supervisorctl unreachable, but the conf is installed and the live listener
+  # is genuinely a supervisord child — treat as owned.
+  supervisord_owns=1
+fi
+
+if [ "${supervisord_owns}" = "1" ]; then
+  echo "════════════════════════════════════════════════════════════════"
+  echo "[pre/5] REFUSING to run: tofu on :${PORT} is MANAGED BY supervisord."
+  echo "        This script kills + relaunches the port process; with"
+  echo "        autorestart=true that FIGHTS supervisord (double instance /"
+  echo "        instance-lock abort). The correct restart entrypoint is:"
+  echo ""
+  echo "            sudo supervisorctl restart ${SUPERVISOR_PROG}"
+  echo ""
+  echo "        (status:  sudo supervisorctl status ${SUPERVISOR_PROG}"
+  echo "         logs:    tail -f ${PROJ}/logs/supervisor_tofu.log )"
+  [ -n "${SV_STATUS}" ] && echo "        current: ${SV_STATUS}"
+  echo "        To hand control BACK to this script, first uninstall the"
+  echo "        program:  sudo rm ${SUPERVISOR_CONF} && sudo supervisorctl update"
+  echo "════════════════════════════════════════════════════════════════"
+  exit 0
+fi
 
 # ── Guard: refuse to run if THIS shell is a descendant of a :PORT listener. ──
 # Killing that PID would terminate this very shell (self-plug-pull).

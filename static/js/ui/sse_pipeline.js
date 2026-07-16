@@ -1862,6 +1862,58 @@ function dispatchSSEEvent(line, ctx) {
       delete assistantMsg._continueUsage;
       delete assistantMsg._continueModifiedFiles;
       delete assistantMsg._continueModifiedFileList;
+      /* ★ Empty-bubble root fix ②: a GENUINELY-EMPTY settled turn (the model
+       *   returned nothing — the "empty_stop" anomaly) must NOT survive as a
+       *   finishReason-stamped shell. The backend already dropped it at the
+       *   SOURCE: _sync_result_to_conversation early-returns on
+       *   (no content/thinking/error) and _reconcile_orphan_placeholder_on_settle
+       *   DELETES the placeholder from the DB — so `committedMessage` is ABSENT
+       *   on the done event (the exact signal the backend persisted NOTHING).
+       *   But the done event still ships finishReason:'stop' (metadata), which
+       *   we stamped on assistantMsg above → it escapes _isOrphanEmptyAssistant
+       *   (that belt keeps any finishReason-bearing msg) and renders as a blank
+       *   "Agent" bubble until a reload re-reads the clean DB. Splice it here so
+       *   the in-memory copy matches the DB (deleted) — mirrors the
+       *   endpoint_complete `!assistantMsg.content → splice`. Guards:
+       *     • only when the backend did NOT persist it (_committedProjection
+       *       unset) — a real reply always carries committedMessage;
+       *     • only a bare empty husk (no content/thinking/error + no REAL tool
+       *       round) — a tool-only or thinking-only turn is legitimate output;
+       *     • never a special turn (endpoint/VU) — those render even when empty;
+       *     • never when an autopilot follow-up rode this event (the assistant
+       *       may be a detached kick carrier the follow-up path owns). */
+      if (!assistantMsg._committedProjection
+          && !ev.autopilotNextTaskId
+          && !assistantMsg._isEndpointReview && !assistantMsg._isEndpointPlanner
+          && !assistantMsg._isVirtualUser
+          && !(assistantMsg.content && String(assistantMsg.content).trim())
+          && !(assistantMsg.thinking && String(assistantMsg.thinking).trim())
+          && !assistantMsg.error
+          && !(typeof _hasRealToolRound === 'function'
+                ? _hasRealToolRound(assistantMsg)
+                : (Array.isArray(assistantMsg.toolRounds) && assistantMsg.toolRounds.length))) {
+        const _ec = conversations.find(c => c.id === convId);
+        const _eIdx = _ec ? _ec.messages.indexOf(assistantMsg) : -1;
+        if (_eIdx >= 0) {
+          _ec.messages.splice(_eIdx, 1);
+          if (activeConvId === convId && window.ConvView
+              && typeof window.ConvView.removeMessage === 'function') {
+            window.ConvView.removeMessage(convId, assistantMsg._msgId || _eIdx);
+          }
+          /* Drop the live streaming bubble too — finishStream would otherwise
+           * finalize a now-detached message into a static empty node. */
+          if (activeConvId === convId) {
+            const _sm = document.getElementById('streaming-msg');
+            if (_sm) { try { _sm.remove(); } catch (e) { /* detached */ } }
+          }
+          console.info(
+            `[connectToTask] 🧹 Empty-turn splice — task=${taskId.slice(0,8)} ` +
+            `conv=${convId.slice(0,8)} produced no content/thinking/tools ` +
+            `(finishReason=${ev.finishReason || 'none'}, committed=false) — ` +
+            `removed placeholder so it matches the backend-deleted DB row.`
+          );
+        }
+      }
       return true;
     }
     return false;

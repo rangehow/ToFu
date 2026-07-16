@@ -87,7 +87,8 @@ win.renderMarkdown = global.renderMarkdown = (s) => s;
 // call t('stream.roundMessages', {round,n}) — without this stub the whole
 // node process throws ReferenceError before later cases run.
 win.t = global.t = (key, params) => key;
-win.ConvView = global.ConvView = { finalizeStreaming: spy('finalizeStreaming') };
+win.ConvView = global.ConvView = { finalizeStreaming: spy('finalizeStreaming'),
+  removeMessage: spy('removeMessage') };
 win.Artifacts = global.Artifacts = { attachToMessage: spy('attachToMessage') };
 win.flashGaugeForArchive = global.flashGaugeForArchive = spy('flashGaugeForArchive');
 win.Api = global.Api = { project: { status: () => Promise.resolve(null) } };
@@ -111,6 +112,20 @@ let _idc = 0;
 win._ensureMsgId = global._ensureMsgId = (m) => { if (m && !m._msgId) m._msgId = 'mid-' + (++_idc); return m; };
 win._resolveAssistantById = global._resolveAssistantById = (conv, id) =>
   (conv && conv.messages.find(m => m._msgId === id)) || null;
+// _hasRealToolRound lives in chat_render.js (loaded BEFORE sse_pipeline.js in
+// the real bundle). This harness doesn't load chat_render, so provide the SAME
+// predicate (port of reconcile._has_real_round) — the empty-turn splice (fix ②)
+// reads it. ConvView.removeMessage stub so the splice's DOM eviction is a no-op.
+win._hasRealToolRound = global._hasRealToolRound = (m) => {
+  const rounds = m && m.toolRounds;
+  if (!Array.isArray(rounds)) return false;
+  for (const r of rounds) {
+    if (!r || typeof r !== 'object') continue;
+    if (r.status === 'done' || r.toolContent) return true;
+    if (Array.isArray(r.results) && r.results.length) return true;
+  }
+  return false;
+};
 
 // Load the extracted property-only handlers FIRST (in production they're
 // concatenated into the bundle before sse_pipeline.js and share window scope).
@@ -663,6 +678,52 @@ function line(obj) { return 'data: ' + JSON.stringify(obj); }
   check('no_committed_no_projection_flag', am._committedProjection === undefined);
 }
 
+// ── 32. EMPTY-BUBBLE ROOT FIX ②: a `done` for a GENUINELY-EMPTY turn (no
+//        content/thinking/toolRounds/error) with NO committedMessage (the
+//        backend deleted the placeholder at the source, so it ships none) must
+//        SPLICE the empty placeholder out of conv.messages — NOT leave a
+//        finishReason-stamped shell that renders as a blank "Agent" bubble
+//        until reload. Mirrors the endpoint_complete `!content → splice`. ──
+{
+  const { conv, am, ctx } = setup();
+  const _before = conv.messages.length;
+  const _idxBefore = conv.messages.indexOf(am);
+  check('empty_splice_setup_has_placeholder', _idxBefore >= 0 && am.content === '');
+  const ret = T.dispatchSSEEvent(line({ type: 'done', finishReason: 'stop' }), ctx);
+  check('empty_done_returns_true', ret === true);
+  check('empty_placeholder_spliced', conv.messages.indexOf(am) === -1 &&
+    conv.messages.length === _before - 1);
+  check('empty_splice_calls_removeMessage', calls.removeMessage >= 1);
+}
+
+// ── 33. FIX ② GUARD: an empty turn that produced a REAL tool round is
+//        legitimate output (e.g. the model only ran a tool and stopped) — it
+//        must NOT be spliced even though content/thinking are empty. ──
+{
+  const { conv, am, ctx } = setup();
+  am.toolRounds = [{ roundNum: 1, toolCallId: 'z', status: 'done', results: [] }];
+  const _before = conv.messages.length;
+  const ret = T.dispatchSSEEvent(line({ type: 'done', finishReason: 'stop' }), ctx);
+  check('tool_only_done_returns_true', ret === true);
+  check('tool_only_not_spliced', conv.messages.indexOf(am) >= 0 &&
+    conv.messages.length === _before);
+}
+
+// ── 34. FIX ② GUARD: an empty `done` that carries committedMessage (backend
+//        DID persist a real reply, e.g. a whitespace-trim edge or a legit empty
+//        record) must NOT be spliced — committedMessage is the authoritative
+//        "backend persisted this" signal. ──
+{
+  const { conv, am, ctx } = setup();
+  const _before = conv.messages.length;
+  const ret = T.dispatchSSEEvent(line({ type: 'done', finishReason: 'stop',
+    committedMessage: { role: 'assistant', content: '', finishReason: 'stop' } }), ctx);
+  check('committed_empty_done_returns_true', ret === true);
+  check('committed_empty_not_spliced', conv.messages.indexOf(am) >= 0 &&
+    conv.messages.length === _before);
+  check('committed_empty_projection_flag', am._committedProjection === true);
+}
+
 // ── 31. RECONNECT FIDELITY (item 4): a `state` snapshot delivered on
 //        reconnect that carries an IN-FLIGHT tool round (status:'searching',
 //        no results yet) must seed it onto the assistant msg + buf, so the
@@ -786,16 +847,16 @@ asyncTests()
 """
 
 
-@pytest.mark.skipif(not _node_deps_available(),
-                    reason='node + jsdom dev-deps not installed (run npm install)')
-def test_sse_dispatch_characterization():
+def _run_harness(sse_src_path: str) -> str:
+    """Run the jsdom harness against a given sse_pipeline.js source path.
+    Returns the harness stdout (PASS/FAIL lines)."""
     harness = os.path.join(HERE, '_sse_dispatch_harness.js')
     with open(harness, 'w') as f:
         f.write(_HARNESS)
     try:
         proc = subprocess.run(
             ['node', harness,
-             os.path.join(JS_DIR, 'ui', 'sse_pipeline.js'),   # argv[2]
+             sse_src_path,                                    # argv[2]
              ROOT,                                            # argv[3]
              os.path.join(JS_DIR, 'ui', 'sse_handlers_tool.js'),   # argv[4]
              os.path.join(JS_DIR, 'ui', 'sse_handlers_swarm.js'),  # argv[5]
@@ -810,9 +871,38 @@ def test_sse_dispatch_characterization():
             os.remove(harness)
         except OSError:
             pass
-    output = proc.stdout.strip()
-    assert proc.returncode == 0, f'node failed: {proc.stderr}\n{output}'
+    assert proc.returncode == 0, f'node failed: {proc.stderr}\n{proc.stdout}'
+    return proc.stdout.strip()
+
+
+@pytest.mark.skipif(not _node_deps_available(),
+                    reason='node + jsdom dev-deps not installed (run npm install)')
+def test_sse_dispatch_characterization():
+    output = _run_harness(os.path.join(JS_DIR, 'ui', 'sse_pipeline.js'))
     fails = [ln for ln in output.splitlines() if ln.startswith('FAIL')]
     assert not fails, 'SSE dispatch characterization failures:\n' + output
-    # 31 scenario groups, ~85 individual checks.
-    assert output.count('PASS') >= 83, f'expected >=83 PASS lines, got:\n{output}'
+    # 34 scenario groups, ~92 individual checks (incl. empty-bubble fix ② splice).
+    assert output.count('PASS') >= 90, f'expected >=90 PASS lines, got:\n{output}'
+
+
+@pytest.mark.skipif(not _node_deps_available(),
+                    reason='node + jsdom dev-deps not installed (run npm install)')
+def test_nc_empty_splice_is_load_bearing(tmp_path):
+    """NEUTER for empty-bubble fix ②: force the empty-turn splice condition to
+    NEVER fire (patch the guard to `if (false && …)`). Scenario 32's
+    `empty_placeholder_spliced` MUST then FAIL — proving the splice is the thing
+    that removes the blank shell, not some incidental cleanup."""
+    src_path = os.path.join(JS_DIR, 'ui', 'sse_pipeline.js')
+    with open(src_path, encoding='utf-8') as f:
+        src = f.read()
+    marker = 'if (!assistantMsg._committedProjection\n          && !ev.autopilotNextTaskId'
+    assert marker in src, 'empty-splice guard anchor not found — did fix ② move?'
+    neutered = src.replace(marker,
+                           'if (false && !assistantMsg._committedProjection\n          && !ev.autopilotNextTaskId')
+    assert neutered != src, 'NC patch did not apply'
+    nc_file = tmp_path / 'sse_pipeline_nc.js'
+    nc_file.write_text(neutered, encoding='utf-8')
+    output = _run_harness(str(nc_file))
+    assert 'FAIL empty_placeholder_spliced' in output, (
+        'Neutering the empty-turn splice did NOT fail the splice assertion — '
+        'the splice is not load-bearing:\n' + output)

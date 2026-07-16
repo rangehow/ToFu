@@ -208,6 +208,43 @@ function finishStream(convId) {
         messageCount: conv.messages.length,
       });
     }
+    /* ★ Empty-bubble root fix ③: IN-SESSION ghost-tail self-heal. Apply the
+     *   SAME verdict the backend GET/startup reconcile applies
+     *   (lib/conversations/reconcile.py::classify_ghost_tail) to the trailing
+     *   assistant at turn end, so an empty/thinking-only husk is settled NOW —
+     *   not left for the next warm reopen. This closes the residual window
+     *   where a bare empty tail escaped fix ② (e.g. a swallowed done → poll
+     *   fallback → finishStream with no `done` event to splice on). The verdict
+     *   is byte-equivalent to the backend (pinned by the equivalence test):
+     *     • 'delete'    → a bare empty husk (no content/thinking/finishReason/
+     *                     usage/error/real-tool-round, not a special turn) →
+     *                     splice it out so the in-memory list matches the
+     *                     backend-reconciled DB (which drops it too);
+     *     • 'interrupt' → a thinking-only husk → stamp finishReason='interrupted'
+     *                     in place (preserve the reasoning), NOT delete;
+     *     • null        → settled / special / keep — untouched. */
+    if (lastMsg && lastMsg.role === 'assistant'
+        && typeof _classifyGhostTailJS === 'function'
+        && !_streamBoundToMsg(lastMsg)) {
+      const _verdict = _classifyGhostTailJS(lastMsg);
+      if (_verdict === 'delete') {
+        conv.messages.pop();
+        if (activeConvId === convId && window.ConvView
+            && typeof window.ConvView.removeMessage === 'function') {
+          window.ConvView.removeMessage(convId, lastMsg._msgId || conv.messages.length);
+        }
+        if (activeConvId === convId) {
+          const _sm = document.getElementById('streaming-msg');
+          if (_sm) { try { _sm.remove(); } catch (e) { /* detached */ } }
+        }
+        console.info(`[finishStream] 🧹 Ghost-tail self-heal (delete) — conv=${convId.slice(0,8)} ` +
+          `removed bare empty trailing assistant (matches backend reconcile).`);
+      } else if (_verdict === 'interrupt') {
+        lastMsg.finishReason = 'interrupted';
+        console.info(`[finishStream] 🩹 Ghost-tail self-heal (interrupt) — conv=${convId.slice(0,8)} ` +
+          `stamped finishReason=interrupted on thinking-only trailing assistant.`);
+      }
+    }
     /* ★ FIX: Clean up any lingering awaiting_human / submitted rounds.
      *   When the task finishes (normally or via abort/timeout), any HG round
      *   that was never answered is now orphaned — the backend won't accept a

@@ -664,6 +664,53 @@ function _isOrphanEmptyAssistant(msg) {
   return true;
 }
 
+/* ── Backend-faithful ghost-tail predicates (empty-bubble root fix ②/③) ──
+ * These are exact JS ports of lib/conversations/reconcile.py so the frontend
+ * can settle an empty turn IN-SESSION (done handler + finishStream) with the
+ * SAME verdict the backend GET/startup reconcile applies — instead of leaving
+ * a finishReason-stamped empty shell that only heals on the next warm reopen.
+ * Byte-equivalence with the Python is pinned by
+ * tests/test_reconcile_js_backend_equivalence.py.
+ *
+ * `_hasRealToolRound` ≡ reconcile._has_real_round: at least one settled /
+ * result-bearing tool round (status==='done', a toolContent blob, or a
+ * non-empty results array). */
+function _hasRealToolRound(msg) {
+  const rounds = msg && msg.toolRounds;
+  if (!Array.isArray(rounds)) return false;
+  for (const r of rounds) {
+    if (!r || typeof r !== "object") continue;
+    if (r.status === "done" || r.toolContent) return true;
+    if (Array.isArray(r.results) && r.results.length) return true;
+  }
+  return false;
+}
+
+/* `_classifyGhostTailJS` ≡ reconcile.classify_ghost_tail (a FAITHFUL 1:1 port —
+ * byte-equivalence pinned by tests/test_frontend_ghost_tail_js_backend_
+ * equivalence.py): verdict for a TRAILING assistant. Returns 'delete' (bare
+ * empty husk), 'interrupt' (thinking-only husk — preserve reasoning) or null
+ * (settled / keep). A ghost tail is an assistant with no settled output: empty
+ * content, no finishReason/usage/error, no real tool round.
+ *
+ * NOTE: like the backend, this does NOT special-case endpoint/VU turns — the
+ * `role !== 'assistant'` gate already excludes VU (role='user') and critic
+ * (role='user'/'optimizer'); an empty endpoint-planner ASSISTANT tail is a
+ * genuine ghost the backend deletes too. Any special-turn protection a CALLER
+ * needs (e.g. the live done-handler's detached-carrier / VU-takeover cases)
+ * lives at that call site, not in this authority-matching predicate. */
+function _classifyGhostTailJS(msg) {
+  if (!msg || msg.role !== "assistant") return null;
+  if ((msg.content && String(msg.content).trim())
+      || msg.finishReason || msg.usage || msg.error) return null;
+  if (_hasRealToolRound(msg)) return null;
+  return (msg.thinking && String(msg.thinking).trim()) ? "interrupt" : "delete";
+}
+if (typeof window !== "undefined") {
+  window._hasRealToolRound = _hasRealToolRound;
+  window._classifyGhostTailJS = _classifyGhostTailJS;
+}
+
 /* Build the manual /compact boundary card (docs/MANUAL_COMPACTION_DESIGN.md
  * §5.3). A PURE render of the backend-stamped compaction marker fact — no
  * client-side lifecycle inference. Default COLLAPSED; the head toggles the

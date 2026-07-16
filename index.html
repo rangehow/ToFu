@@ -458,6 +458,38 @@
               </button>
             </div>
           </div>
+          <!-- Rebuttal follow-up — author response → reviewer reply + score
+               decision. Reuses the report engine under the sibling composite
+               key rebuttal:<venue>:<uilang>; collapsed until the reviewer opens it. -->
+          <details class="paper-rebuttal-section" id="paperRebuttalSection">
+            <summary class="paper-rebuttal-summary">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+              <span data-i18n="paper.rebuttalSectionTitle">Author rebuttal → follow-up reply</span>
+            </summary>
+            <div class="paper-rebuttal-body">
+              <p class="paper-report-hint" data-i18n="paper.rebuttalHint">Paste the authors' rebuttal below. The reviewer replies point by point and decides whether the OA / Confidence score should change (most rebuttals should not).</p>
+              <textarea id="paperRebuttalInput" class="paper-rebuttal-input" rows="6" data-i18n-placeholder="paper.rebuttalPlaceholder" placeholder="Paste the author rebuttal here…" oninput="_onRebuttalInputChange(this.value)"></textarea>
+              <div class="paper-rebuttal-actions">
+                <button class="paper-report-generate-btn" id="paperRebuttalGenBtn" onclick="_generatePaperRebuttal()">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3l14 9-14 9V3z"/></svg>
+                  <span data-i18n="paper.rebuttalGenerate">Generate follow-up</span>
+                </button>
+                <button class="paper-report-btn paper-report-stop-btn" id="paperRebuttalStopBtn" onclick="_stopPaperRebuttal()" data-i18n-title="paper.reportStop" title="Stop generation" style="display:none">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" stroke="none"><rect x="6" y="6" width="12" height="12" rx="2.5"/></svg>
+                  <span data-i18n="paper.reportStop">Stop</span>
+                </button>
+                <button class="paper-report-btn" id="paperRebuttalRegenBtn" onclick="_regeneratePaperRebuttal()" data-i18n-title="paper.reportRegenerate" title="Regenerate" style="display:none">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+                  <span data-i18n="paper.reportRegenerate">Regenerate</span>
+                </button>
+                <button class="paper-report-btn" id="paperRebuttalCopyBtn" onclick="_copyPaperRebuttal()" data-i18n-title="paper.reportCopy" title="Copy" style="display:none">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                  <span id="paperRebuttalCopyLabel" data-i18n="paper.reportCopy">Copy</span>
+                </button>
+              </div>
+              <div class="paper-report-content" id="paperRebuttalContent"></div>
+            </div>
+          </details>
         </div>
         <!-- Babel PDF Panel -->
         <div class="paper-tab-panel" data-tab="translate" style="display:none">

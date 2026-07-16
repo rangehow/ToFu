@@ -80,6 +80,18 @@ var _paperReviewModel = '';      // user-selected model for review generation
 var _paperReviewVenue = '';      // selected venue key (e.g. 'neurips'); '' until resolved per-paper
 var _paperReviewVenues = [];     // [{key, name}] fetched from /api/paper/review/venues
 var _REVIEW_REGEN_INTENT_KEY = 'paper_review_regen_intent';
+// Rebuttal follow-up is a THIRD consumer of the same report engine: given the
+// existing review + the author's pasted rebuttal, it produces a reviewer
+// follow-up reply + a structured score-adjustment decision. It shares the
+// venue (a rebuttal is always against the same venue's review) and is cached
+// under the sibling composite key ``rebuttal:<venue>:<uilang>``. Its four
+// state slots mirror the report/review ones so the shared poll loop drives it.
+var _paperRebuttalCache = '';
+var _paperRebuttalMeta = null;
+var _paperRebuttalStream = null;
+var _paperRebuttalModel = '';
+var _paperRebuttalInputText = '';  // author rebuttal text the user pasted (per paper)
+var _REBUTTAL_REGEN_INTENT_KEY = 'paper_rebuttal_regen_intent';
 // Per-paper venue preference — persisted so the SAME paper re-opens on the
 // venue the user last picked (survives tab switches AND hard refresh), like
 // the model selection survives. Keyed by paper id in one localStorage map.
@@ -116,7 +128,55 @@ var _PAPER_READ_POS_KEY = 'paper_read_pos_by_key';
 // DOM ids, the regenerate-intent localStorage key, the cache-key resolver,
 // and get/set accessors onto that view's four state globals (so there is
 // exactly ONE storage location per view — no mirrored copies that can drift).
+/** Rehydrate the rebuttal sub-panel on Review-tab entry: fill the paste box
+ *  from the per-paper persisted text, then resume-poll or repaint any existing
+ *  rebuttal stream / in-memory cache so a tab switch or reload keeps the
+ *  follow-up reply + decision on screen. Cheap + idempotent. */
+function _restoreRebuttalPanel() {
+  try {
+    var ta = document.getElementById('paperRebuttalInput');
+    var stored = '';
+    try {
+      var raw = localStorage.getItem('paper_rebuttal_text_by_id');
+      var map = raw ? JSON.parse(raw) : {};
+      stored = (_activePaperId && map[_activePaperId]) || '';
+    } catch (e) { stored = ''; }
+    _paperRebuttalInputText = stored;
+    if (ta) ta.value = stored;
+    var rv = _reportView('rebuttal');
+    if (rv.stream && rv.stream.status === 'running') {
+      if (typeof _pollReportTask === 'function') _pollReportTask(rv);
+    } else if (rv.cache || (rv.stream && rv.stream.fullText)) {
+      if (typeof _paintReportFromState === 'function' && rv.stream) _paintReportFromState(rv);
+      else if (typeof _renderFinalReport === 'function' && rv.cache) {
+        var c = document.getElementById(rv.containerId);
+        if (c) _renderFinalReport(c, rv.cache, undefined, rv);
+      }
+    }
+  } catch (e) { console.warn('[Paper:Rebuttal] restore panel failed:', e); }
+}
+
 function _reportView(kind) {
+  if (kind === 'rebuttal') {
+    return {
+      kind: 'rebuttal', idPrefix: 'rebuttal', containerId: 'paperRebuttalContent',
+      stopBtnId: 'paperRebuttalStopBtn', regenBtnId: 'paperRebuttalRegenBtn',
+      copyLabelId: 'paperRebuttalCopyLabel',
+      exportMenuId: 'paperRebuttalExportMenu', exportDropdownId: 'paperRebuttalExportDropdown',
+      modelDropdownId: 'paperRebuttalModelDropdown', modelLabelId: 'paperRebuttalModelLabel',
+      regenIntentKey: _REBUTTAL_REGEN_INTENT_KEY,
+      // A rebuttal reply, like the review, is generated in English (the venue
+      // discussion language); a Chinese UI reads a translated view on demand.
+      uiLang: function() { return 'en'; },
+      // Sibling composite key ``rebuttal:<venue>:<uilang>`` — same venue as the
+      // review, never collides with the ``review:…`` row.
+      langKey: function() { return 'rebuttal:' + (_paperReviewVenue || 'generic') + ':' + this.uiLang(); },
+      get cache() { return _paperRebuttalCache; }, set cache(v) { _paperRebuttalCache = v; },
+      get meta() { return _paperRebuttalMeta; }, set meta(v) { _paperRebuttalMeta = v; },
+      get stream() { return _paperRebuttalStream; }, set stream(v) { _paperRebuttalStream = v; },
+      get model() { return _paperRebuttalModel; }, set model(v) { _paperRebuttalModel = v; },
+    };
+  }
   if (kind === 'review') {
     return {
       kind: 'review', idPrefix: 'review', containerId: 'paperReviewContent',
@@ -824,6 +884,10 @@ function _switchPaperTab(tab) {
             console.warn('[Paper:Review] venue resolve failed, loading with fallback:', e);
             _loadOrGenerateReport(_view);
           });
+        // Rehydrate the author-rebuttal paste for this paper and resume/paint
+        // any existing rebuttal stream or cache (the rebuttal sub-panel lives
+        // inside the Review tab, so it shares this entry point).
+        _restoreRebuttalPanel();
       } else {
         _loadOrGenerateReport(_view);
       }

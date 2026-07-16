@@ -1696,6 +1696,18 @@ var _i18n = {
   'paper.loadingReport': { zh: '正在加载报告…', en: 'Loading report…' },
   'paper.reviewGenerate': { zh: '生成审稿', en: 'Generate review' },
   // Review tab (peer-review mode)
+  // Rebuttal follow-up (author response → reviewer reply + score decision)
+  'paper.rebuttalSectionTitle': { zh: '作者 Rebuttal → 后续回复', en: 'Author rebuttal → follow-up reply' },
+  'paper.rebuttalHint': { zh: '把作者的 rebuttal 粘贴到下方。审稿人会逐点回复，并判断 OA / Confidence 是否应调整（多数 rebuttal 不应改分）。', en: "Paste the authors' rebuttal below. The reviewer replies point by point and decides whether the OA / Confidence score should change (most rebuttals should not)." },
+  'paper.rebuttalPlaceholder': { zh: '在此粘贴作者的 rebuttal…', en: 'Paste the author rebuttal here…' },
+  'paper.rebuttalGenerate': { zh: '生成后续回复', en: 'Generate follow-up' },
+  'paper.rebuttalNeedText': { zh: '请先粘贴作者的 rebuttal', en: 'Paste the author rebuttal first' },
+  'paper.rebuttalNeedReview': { zh: '请先生成审稿意见', en: 'Generate the review first' },
+  'paper.rebuttalScoreChanged': { zh: '评分已调整', en: 'Score adjusted' },
+  'paper.rebuttalScoreUnchanged': { zh: '评分不变', en: 'Score unchanged' },
+  'paper.rebuttalOverall': { zh: '总评分 (OA)', en: 'Overall (OA)' },
+  'paper.rebuttalConfidence': { zh: '置信度', en: 'Confidence' },
+  // Review tab (peer-review mode)
   'paper.reviewSelectVenue': { zh: '选择会议', en: 'Select venue' },
   'paper.reviewSelectVenueTitle': { zh: '选择目标会议（评审表单与评分量表）', en: 'Select target conference (review form & rating scale)' },
   'paper.reviewEmptyTitle': { zh: '先在上方选择目标会议，再点击下方按钮生成审稿意见', en: 'Pick a target conference above, then click below to generate a peer review' },

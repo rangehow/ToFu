@@ -13,6 +13,12 @@ logger = get_logger(__name__)
 
 
 REVIEW_LANG_PREFIX = 'review'
+# Author-rebuttal follow-up. A rebuttal reuses the review venue registry and the
+# SAME paper_reports table under a sibling composite key ``rebuttal:<venue>:<uilang>``
+# (never collides with the review's ``review:<venue>:<uilang>`` row), so the
+# follow-up reply + score-adjustment decision are independently cacheable and
+# exportable. See ``build_rebuttal_prompt`` / ``parse_rebuttal_decision``.
+REBUTTAL_LANG_PREFIX = 'rebuttal'
 DEFAULT_VENUE = 'generic'
 
 
@@ -211,22 +217,14 @@ Each score MUST cite the specific evidence above that forces it.""",
         'label_en': 'NLPCC (CCF International Conference on Natural Language Processing and Chinese Computing, Springer LNAI, double-blind)',
         'label_zh': 'NLPCC（CCF 国际自然语言处理与中文计算会议，Springer LNAI，双盲评审）',
         'scorecard_en': """\
-## Quantitative Scores (use NLPCC's review-form scales — give a number AND a one-line justification grounded in your analysis above)
-- **Soundness / Substance**: 1–5 (1 = claims unsupported / methodology flawed; 3 = acceptable, main claims supported; 5 = thorough, all claims well supported).
-- **Novelty / Originality**: 1–5 (1 = little new over prior NLP/CC work; 3 = a solid incremental contribution; 5 = clearly novel, opens a direction).
-- **Clarity**: 1–5 (1 = hard to follow; 3 = readable with effort; 5 = well written and well organized).
-- **Meaningful Comparison / Related Work**: 1–5 (1 = misses key baselines/prior work; 3 = adequate; 5 = thoroughly situated and fairly compared).
-- **Overall Rating**: 1–6 (1 = clear reject; 2 = reject; 3 = weak reject / borderline; 4 = weak accept / borderline; 5 = accept, good paper; 6 = strong accept, award-quality).
+## Quantitative Scores (NLPCC's OpenReview form has only TWO scored fields — the Title and the Review text are the prose above; transcribe ONLY these two numbers into the form)
+- **Overall Assessment (OA)**: 1–6 (1 = clear reject; 2 = reject; 3 = weak reject / borderline; 4 = weak accept / borderline; 5 = accept, good paper; 6 = strong accept, award-quality). Your judgement of soundness, novelty, clarity, and comparison to prior NLP/CC work all fold into this single number — argue them in the Review text above, not as separate scores.
 - **Confidence**: 1–5 (5 = you know the area well and checked the details; 3 = fairly confident; 1 = educated guess / outside your expertise).
 
 Each score MUST cite the specific evidence above that forces it — a number with no justification is unacceptable.""",
         'scorecard_zh': """\
-## 量化评分（使用 NLPCC 评审表的量表——每项都给出分数 **并** 一句话理由，理由必须挂钩上文你的分析）
-- **Soundness / Substance（可靠性/实质性）**：1–5（1=主张缺乏支撑/方法有缺陷；3=可接受，主要主张有支撑；5=充分，所有主张都得到很好支撑）。
-- **Novelty / Originality（新颖性/原创性）**：1–5（1=相较已有 NLP/CC 工作创新甚少；3=扎实的增量贡献；5=明显新颖，开辟一个方向）。
-- **Clarity（清晰度）**：1–5（1=难以读懂；3=花力气可读；5=行文与结构俱佳）。
-- **Meaningful Comparison / Related Work（有意义的对比/相关工作）**：1–5（1=遗漏关键基线/在先工作；3=尚可；5=定位充分、对比公允）。
-- **Overall Rating（总评分）**：1–6（1=明确拒稿；2=拒稿；3=弱拒/边缘；4=弱接收/边缘；5=接收，好论文；6=强接收，最佳论文级）。
+## 量化评分（NLPCC 的 OpenReview 评审表只有两个打分字段——上方的标题与评审正文即散文本体；只把下面这两个数字填进表单）
+- **Overall Assessment（OA，总体评价）**：1–6（1=明确拒稿；2=拒稿；3=弱拒/边缘；4=弱接收/边缘；5=接收，好论文；6=强接收，最佳论文级）。可靠性、新颖性、清晰度、与在先 NLP/CC 工作的对比，全部折进这一个数字——在上方评审正文里论证它们，而不是作为独立分数。
 - **Confidence（置信度）**：1–5（5=熟悉该领域并核对了细节；3=较有把握；1=有依据的猜测/超出我的专长）。
 
 每个分数都**必须**引用上文的具体证据来支撑——只有数字没有理由不可接受。""",
@@ -259,6 +257,23 @@ def is_review_lang(lang_key: str) -> bool:
     return bool(lang_key) and lang_key.split(':', 1)[0] == REVIEW_LANG_PREFIX
 
 
+def is_rebuttal_lang(lang_key: str) -> bool:
+    """True when ``lang_key`` is an author-rebuttal composite key (``rebuttal:…``)."""
+    return bool(lang_key) and lang_key.split(':', 1)[0] == REBUTTAL_LANG_PREFIX
+
+
+def is_review_family(lang_key: str) -> bool:
+    """True for both Review Mode and its rebuttal follow-up.
+
+    These share the text-only, figure-free treatment (a peer review and a
+    reviewer's rebuttal reply are decision documents, not illustrated
+    explainers): no image manifest, no appendix, no insight/terminology second
+    pass. Callers gate that behaviour on this predicate rather than repeating
+    ``is_review_lang(x) or is_rebuttal_lang(x)`` everywhere.
+    """
+    return is_review_lang(lang_key) or is_rebuttal_lang(lang_key)
+
+
 def parse_report_lang(lang_key: str) -> dict:
     """Decode a report ``lang`` cache key into its components.
 
@@ -266,9 +281,11 @@ def parse_report_lang(lang_key: str) -> dict:
     ``review:``) returns ``{'kind': 'report', 'venue': None, 'ui_lang': <key>}``.
 
     A Review-Mode key ``review:<venue>:<uilang>`` returns
-    ``{'kind': 'review', 'venue': <resolved venue key>, 'ui_lang': 'en'|'zh'}``.
+    ``{'kind': 'review', 'venue': <resolved venue key>, 'ui_lang': 'en'|'zh'}``;
+    a rebuttal key ``rebuttal:<venue>:<uilang>`` returns the same shape with
+    ``kind == 'rebuttal'``.
     An unknown venue falls back to ``DEFAULT_VENUE`` (never raises) so a stale /
-    typo'd key still produces a usable review rather than a 500.
+    typo'd key still produces a usable result rather than a 500.
 
     Args:
         lang_key: The ``lang`` value as stored in ``paper_reports`` / sent by
@@ -279,11 +296,12 @@ def parse_report_lang(lang_key: str) -> dict:
         ``ui_lang`` ('en'|'zh' for reviews; the raw key for plain reports).
     """
     key = (lang_key or 'en').strip()
-    if not is_review_lang(key):
+    if not is_review_family(key):
         return {'kind': 'report', 'venue': None, 'ui_lang': key or 'en'}
 
     parts = key.split(':')
-    # review:<venue>:<uilang> — be tolerant of a missing ui_lang segment.
+    # <review|rebuttal>:<venue>:<uilang> — tolerant of a missing ui_lang segment.
+    kind = 'rebuttal' if parts[0] == REBUTTAL_LANG_PREFIX else 'review'
     venue = parts[1].lower() if len(parts) > 1 and parts[1] else DEFAULT_VENUE
     ui_lang = parts[2].lower() if len(parts) > 2 and parts[2] else 'en'
     if venue not in REVIEW_VENUES:
@@ -292,7 +310,7 @@ def parse_report_lang(lang_key: str) -> dict:
         venue = DEFAULT_VENUE
     if ui_lang not in ('en', 'zh'):
         ui_lang = 'en'
-    return {'kind': 'review', 'venue': venue, 'ui_lang': ui_lang}
+    return {'kind': kind, 'venue': venue, 'ui_lang': ui_lang}
 
 
 def make_review_lang(venue: str, ui_lang: str) -> str:
@@ -302,6 +320,15 @@ def make_review_lang(venue: str, ui_lang: str) -> str:
         v = DEFAULT_VENUE
     ul = ui_lang if ui_lang in ('en', 'zh') else 'en'
     return f'{REVIEW_LANG_PREFIX}:{v}:{ul}'
+
+
+def make_rebuttal_lang(venue: str, ui_lang: str) -> str:
+    """Build the sibling composite cache key for a (venue, ui_lang) rebuttal."""
+    v = (venue or DEFAULT_VENUE).lower()
+    if v not in REVIEW_VENUES:
+        v = DEFAULT_VENUE
+    ul = ui_lang if ui_lang in ('en', 'zh') else 'en'
+    return f'{REBUTTAL_LANG_PREFIX}:{v}:{ul}'
 
 
 def list_venues() -> list[dict]:

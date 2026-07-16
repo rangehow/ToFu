@@ -42,11 +42,11 @@ def _maybe_run_insight(task, phash, ui_lang, report_md, *, truncated_paper, mode
     analysis never gets the operator's library/memories.
     """
     from ..insight_engine import insight_enabled, run_report_insight
-    from ..review import is_review_lang
+    from ..review import is_review_family
 
     if not insight_enabled():
         return
-    if is_review_lang(task.get('lang') or ''):
+    if is_review_family(task.get('lang') or ''):
         return
     if not (report_md or '').strip():
         return
@@ -114,7 +114,7 @@ def _maybe_run_termfill(task, phash, ui_lang, report_md, report_meta, *, model):
     """
     from lib.agent_core.personal_scope import resolve_paper_termfill_enabled
 
-    from ..review import is_review_lang
+    from ..review import is_review_family
     from ..terminology_backfill import run_report_termfill, termfill_globally_disabled
 
     # Fleet-wide kill switch first, then the per-request gate (interactive ON,
@@ -124,7 +124,7 @@ def _maybe_run_termfill(task, phash, ui_lang, report_md, report_meta, *, model):
         return
     if not resolve_paper_termfill_enabled(task.get('config')):
         return
-    if is_review_lang(task.get('lang') or ''):
+    if is_review_family(task.get('lang') or ''):
         return
     audit = (report_meta or {}).get('terminologyAudit')
     if not audit:

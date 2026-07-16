@@ -385,3 +385,178 @@ def finalize_review_body(text: str, ui_lang: str) -> str:
                        e, exc_info=True)
         return text
 
+
+
+# ── Rebuttal follow-up: reply-body + structured score-decision split ────
+# A rebuttal pass emits a reviewer reply (prose the reviewer posts to the
+# authors) followed by a machine-parseable decision block after the
+# ``<<<SCORE DECISION>>>`` sentinel. Backend is the source of truth: we split
+# the reply from the decision here and parse the decision into a structured
+# dict the UI highlights (e.g. "OA 4 → 5 ⬆"), regardless of stray formatting the
+# model wraps around the fields.
+
+_REBUTTAL_DECISION_MARKER = '<<<SCORE DECISION>>>'
+
+# ``KEY: value`` lines inside the decision block. Tolerant of leading markdown
+# bullet/bold/space and a trailing ``**``; matched case-insensitively so
+# ``Changed:`` / ``CHANGED:`` both work. Value is the rest of the line.
+_DECISION_FIELD_RE = _re.compile(
+    r'^[ \t>*_-]*\**[ \t]*'
+    r'(ORIGINAL_OVERALL|NEW_OVERALL|ORIGINAL_CONFIDENCE|NEW_CONFIDENCE|CHANGED|REASON)'
+    r'\**[ \t]*[:：][ \t]*(.*?)[ \t]*\**[ \t]*$',
+    _re.IGNORECASE | _re.MULTILINE)
+
+_TRUE_TOKENS = {'yes', 'true', 'y', '1', 'changed', '是', '改', '变', '有'}
+_FALSE_TOKENS = {'no', 'false', 'n', '0', 'unchanged', '否', '不变', '无'}
+
+
+def rebuttal_decision_marker() -> str:
+    """The literal sentinel that precedes the structured score decision."""
+    return _REBUTTAL_DECISION_MARKER
+
+
+def _clean_decision_value(v: str) -> str:
+    """Strip surrounding brackets/quotes/backticks a model may wrap a field in."""
+    v = (v or '').strip()
+    # Drop a leading/trailing angle-bracket placeholder the model copied
+    # verbatim (``<your overall score>``) — treated as empty.
+    v = v.strip('`').strip()
+    if v.startswith('<') and v.endswith('>'):
+        return ''
+    return v.strip('"\u201c\u201d\u2018\u2019 ').strip()
+
+
+def parse_rebuttal_decision(text: str) -> dict:
+    """Parse the structured score decision from a finished rebuttal body.
+
+    Reads the ``KEY: value`` lines below the ``<<<SCORE DECISION>>>`` sentinel
+    into a structured verdict the frontend renders. Never raises — a body with
+    no decision block (or an unparseable one) returns ``{'present': False}``.
+
+    The ``changed`` boolean is derived DEFENSIVELY: it trusts an explicit
+    ``CHANGED:`` yes/no when present, but a model that writes ``CHANGED: no``
+    while giving a different NEW value (or vice-versa) is reconciled toward the
+    actual values — the scores are the ground truth, the self-reported flag is a
+    hint. When the values differ, ``changed`` is forced True regardless of the
+    self-report; when they are identical, ``changed`` is forced False.
+
+    Args:
+        text: The full rebuttal Markdown (reply + decision block).
+
+    Returns:
+        dict: ``{'present': bool, 'origOverall', 'newOverall', 'origConfidence',
+        'newConfidence', 'changed': bool, 'reason'}`` — string fields '' when
+        absent. ``present`` is False when no decision block was found.
+    """
+    if not text:
+        return {'present': False}
+    idx = text.find(_REBUTTAL_DECISION_MARKER)
+    block = text[idx + len(_REBUTTAL_DECISION_MARKER):] if idx >= 0 else text
+    fields: dict[str, str] = {}
+    for m in _DECISION_FIELD_RE.finditer(block):
+        fields[m.group(1).upper()] = _clean_decision_value(m.group(2))
+    if not fields:
+        return {'present': False}
+
+    orig_oa = fields.get('ORIGINAL_OVERALL', '')
+    new_oa = fields.get('NEW_OVERALL', '')
+    orig_conf = fields.get('ORIGINAL_CONFIDENCE', '')
+    new_conf = fields.get('NEW_CONFIDENCE', '')
+    reason = fields.get('REASON', '')
+
+    # Self-reported flag (a hint) — reconcile against the actual values below.
+    raw_changed = fields.get('CHANGED', '').strip().lower()
+    self_changed = None
+    if raw_changed in _TRUE_TOKENS:
+        self_changed = True
+    elif raw_changed in _FALSE_TOKENS:
+        self_changed = False
+
+    def _norm(v: str) -> str:
+        return _re.sub(r'\s+', ' ', (v or '')).strip().lower()
+
+    # Values are ground truth in BOTH directions: a difference in EITHER
+    # dimension forces changed=True; two present-and-identical dimensions force
+    # changed=False regardless of a mis-reported CHANGED flag. Only when a new
+    # value is MISSING (can't compare) do we fall back to the self-reported flag.
+    oa_diff = bool(new_oa) and _norm(orig_oa) != _norm(new_oa)
+    conf_diff = bool(new_conf) and _norm(orig_conf) != _norm(new_conf)
+    values_differ = oa_diff or conf_diff
+    values_comparable = bool(new_oa) or bool(new_conf)
+    if values_differ:
+        changed = True
+    elif values_comparable:
+        # Every present dimension equals its original → no change (ground truth
+        # overrides a stray CHANGED: yes).
+        changed = False
+    elif self_changed is not None:
+        changed = self_changed
+    else:
+        changed = False
+
+    return {
+        'present': True,
+        'origOverall': orig_oa,
+        'newOverall': new_oa or orig_oa,
+        'origConfidence': orig_conf,
+        'newConfidence': new_conf or orig_conf,
+        'overallChanged': oa_diff,
+        'confidenceChanged': conf_diff,
+        'changed': changed,
+        'reason': reason,
+    }
+
+
+def finalize_rebuttal_body(text: str, ui_lang: str) -> str:
+    """Make a rebuttal reply pasteable + relocate the score decision block.
+
+    Mirrors :func:`finalize_review_body` for the rebuttal pass: the reply text
+    (everything above the ``<<<SCORE DECISION>>>`` sentinel) is de-slopped and
+    table-stripped so it is directly pasteable into the discussion box, and the
+    decision block is kept verbatim below the sentinel (it is parsed separately
+    by :func:`parse_rebuttal_decision`, not pasted). Idempotent; never raises.
+
+    Args:
+        text: The final rebuttal Markdown (reply + decision block).
+        ui_lang: 'zh' or anything else (unused today; kept parallel to
+            ``finalize_review_body`` for a symmetric call site).
+
+    Returns:
+        The finalized rebuttal Markdown, or the input unchanged on any failure.
+    """
+    if not text:
+        return text or ''
+    try:
+        reply, sep, decision = text.partition(_REBUTTAL_DECISION_MARKER)
+        # Clean ONLY the reply prose; the decision block is machine-read, so it
+        # must survive byte-for-byte (a comma-rewrite there would corrupt a
+        # score value). Mask protected spans exactly as the review path does.
+        protected: list[str] = []
+
+        def _mask(m):
+            protected.append(m.group(0))
+            return f'\x00{len(protected) - 1}\x00'
+
+        masked = _PROTECT_RE.sub(_mask, reply)
+        try:
+            import lib.paper.review as _facade
+            _strip = getattr(_facade, '_strip_md_tables', _strip_md_tables)
+            _collapse = getattr(_facade, '_collapse_dangling_emphasis',
+                                _collapse_dangling_emphasis)
+        except Exception as e:
+            logger.debug('[Paper:Review] facade resolve failed, using local defs: %s', e)
+            _strip, _collapse = _strip_md_tables, _collapse_dangling_emphasis
+        cleaned = _collapse(_strip(masked))
+
+        def _unmask(s):
+            return _re.sub(r'\x00(\d+)\x00', lambda m: protected[int(m.group(1))], s)
+        cleaned = _unmask(cleaned).rstrip()
+
+        if sep:
+            return f'{cleaned}\n\n{_REBUTTAL_DECISION_MARKER}{decision.rstrip()}\n'
+        return f'{cleaned}\n' if cleaned != reply.rstrip() else text
+    except Exception as e:
+        logger.warning('[Paper:Review] finalize_rebuttal_body failed (returning original): %s',
+                       e, exc_info=True)
+        return text
+

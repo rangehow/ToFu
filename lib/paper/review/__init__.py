@@ -35,10 +35,14 @@ logger = get_logger(__name__)
 # ── Venue registry + composite-key language helpers ─────────────────────
 from lib.paper.review._lang import (  # noqa: E402,F401
     DEFAULT_VENUE,
+    REBUTTAL_LANG_PREFIX,
     REVIEW_LANG_PREFIX,
     REVIEW_VENUES,
+    is_rebuttal_lang,
+    is_review_family,
     is_review_lang,
     list_venues,
+    make_rebuttal_lang,
     make_review_lang,
     parse_report_lang,
 )
@@ -50,7 +54,10 @@ from lib.paper.review._textproc import (  # noqa: E402,F401
     _educate_segment,
     _split_scorecard,
     _strip_md_tables,
+    finalize_rebuttal_body,
     finalize_review_body,
+    parse_rebuttal_decision,
+    rebuttal_decision_marker,
     scorecard_separator,
     smarten_quotes,
     strip_slop_dashes,
@@ -58,6 +65,9 @@ from lib.paper.review._textproc import (  # noqa: E402,F401
 
 # ── Venue-aware prompt builders + their large string constants ──────────
 from lib.paper.review._prompts import (  # noqa: E402,F401
+    REBUTTAL_DECISION_MARKER,
+    build_rebuttal_prompt,
+    build_rebuttal_tool_instruction,
     build_review_prompt,
     build_review_tool_instruction,
 )
@@ -68,15 +78,25 @@ __all__ = [
     'DEFAULT_VENUE',
     'REVIEW_VENUES',
     'is_review_lang',
+    'is_rebuttal_lang',
+    'is_review_family',
+    'REBUTTAL_LANG_PREFIX',
     'parse_report_lang',
     'make_review_lang',
+    'make_rebuttal_lang',
     'list_venues',
     # text-cleaning pipeline
     'smarten_quotes',
     'strip_slop_dashes',
     'scorecard_separator',
     'finalize_review_body',
+    'finalize_rebuttal_body',
+    'parse_rebuttal_decision',
+    'rebuttal_decision_marker',
     # prompt builders
     'build_review_prompt',
     'build_review_tool_instruction',
+    'build_rebuttal_prompt',
+    'build_rebuttal_tool_instruction',
+    'REBUTTAL_DECISION_MARKER',
 ]

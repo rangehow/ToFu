@@ -105,6 +105,10 @@ function _resetAllReportViews() {
   _resetReportSnapshots();  // session snapshots are per-paper; drop on switch
   _resetReportLocalState(_reportView('report'));
   _resetReportLocalState(_reportView('review'));
+  _resetReportLocalState(_reportView('rebuttal'));
+  // The rebuttal paste is per-paper (persisted by id); drop the in-memory copy
+  // so paper B never inherits paper A's pasted rebuttal before rehydration.
+  _paperRebuttalInputText = '';
 }
 
 function _makeReportStreamState(paperId, lang, taskId, kind) {
@@ -119,6 +123,11 @@ function _makeReportStreamState(paperId, lang, taskId, kind) {
     // a task_id (start can take 10–40s). Honoured the moment the task_id lands
     // so a Stop in that window is not silently dropped.
     pendingStop: false,
+    // Set the instant Stop is pressed (with or without a task_id). Keeps the
+    // Stop button disabled + "Stopping…" across poll repaints while the task is
+    // still `running`, so it can't be clicked again before the server's
+    // authoritative `aborted` event lands.
+    stopRequested: false,
     fullText: '',
     thinkingText: '',
     toolRounds: [],      // chat-compatible: [{roundNum, toolName, query, toolCallId, toolArgs, status, toolContent, _elapsed}]
@@ -704,6 +713,49 @@ function _wireReportScrollSpy(scrollEl, article, toc) {
   scrollEl._reportSpyObs = obs;
 }
 
+/** Build the rebuttal score-decision card. Rendered at the top of a rebuttal
+ *  reply from the server-parsed decision the model emitted below its sentinel.
+ *  Highlights the OA/Confidence transition (e.g. "OA 4 → 5") and, crucially,
+ *  makes an UNCHANGED decision visually first-class (most rebuttals should not
+ *  move a score). `d` = {origOverall,newOverall,origConfidence,newConfidence,
+ *  overallChanged,confidenceChanged,changed,reason}. Returns '' when absent. */
+function _renderRebuttalDecisionCard(d) {
+  if (!d || !d.present) return '';
+  function esc(v) { return escapeHtml(String(v == null ? '' : v)); }
+  function arrow(changed) {
+    // ▲ up / ▼ down / — same, decided per-dimension by numeric comparison
+    // where possible (scales may be non-numeric like "Weak Accept").
+    return changed ? '\u2192' : '';
+  }
+  function pair(label, from, to, changed) {
+    var fromS = esc(from), toS = esc(to);
+    if (!fromS && !toS) return '';
+    var body = changed
+      ? '<span class="rd-from">' + fromS + '</span> <span class="rd-arrow">\u2192</span> <span class="rd-to">' + toS + '</span>'
+      : '<span class="rd-same">' + (toS || fromS) + '</span>';
+    return '<div class="rd-metric' + (changed ? ' rd-changed' : '') + '">' +
+      '<span class="rd-label">' + esc(label) + '</span>' + body + '</div>';
+  }
+  var changed = !!d.changed;
+  var oaLabel = (typeof t === 'function') ? t('paper.rebuttalOverall') : 'Overall';
+  var confLabel = (typeof t === 'function') ? t('paper.rebuttalConfidence') : 'Confidence';
+  var verdict = changed
+    ? ((typeof t === 'function') ? t('paper.rebuttalScoreChanged') : 'Score adjusted')
+    : ((typeof t === 'function') ? t('paper.rebuttalScoreUnchanged') : 'Score unchanged');
+  var reasonHtml = d.reason
+    ? '<div class="rd-reason">' + esc(d.reason) + '</div>' : '';
+  return '<div class="paper-rebuttal-decision ' + (changed ? 'rd-yes' : 'rd-no') + '">' +
+    '<div class="rd-head">' +
+      '<span class="rd-badge">' + esc(verdict) + '</span>' +
+    '</div>' +
+    '<div class="rd-metrics">' +
+      pair(oaLabel, d.origOverall, d.newOverall, !!d.overallChanged) +
+      pair(confLabel, d.origConfidence, d.newConfidence, !!d.confidenceChanged) +
+    '</div>' +
+    reasonHtml +
+  '</div>';
+}
+
 /** Build the citation-integrity card. Rendered ONLY when the server attached a
  *  `citationAudit` to the report meta — which it does ONLY when at least one
  *  cited identifier is suspicious. `unverifiable` entries are never surfaced
@@ -1152,6 +1204,13 @@ function _renderFinalReport(container, text, meta, view) {
     var auditHtml = _renderCitationAuditCard(meta.citationAudit);
     if (auditHtml) article.insertAdjacentHTML('afterbegin', auditHtml);
   }
+  // Rebuttal score-decision card — only present on a rebuttal report (meta
+  // carries the parsed {origOverall,newOverall,...} verdict). Prepended so the
+  // OA/Confidence change sits at the very top of the reviewer's reply.
+  if (meta && meta.rebuttalDecision && meta.rebuttalDecision.present) {
+    var decHtml = _renderRebuttalDecisionCard(meta.rebuttalDecision);
+    if (decHtml) article.insertAdjacentHTML('afterbegin', decHtml);
+  }
   _decorateCallouts(article);
   _frameFigures(article);
   _decorateZoomableImages(article);
@@ -1572,14 +1631,18 @@ async function _generatePaperReport(force, view) {
     // the client doesn't forward them. filename is a fallback path the
     // server can use if no manifest exists yet (rare). `lang` carries the
     // composite key for reviews (``review:<venue>:<uilang>``), opaquely.
-    var data = await Api.paper.reportStart({
+    var _startBody = {
       paper_text: _paperParsedText,
       lang: langKey,
       model: reportModel,
       force: !!force,
       title: clientTitle || '',
       filename: _paperPdfFilename || '',
-    });
+    };
+    // Rebuttal view: ship the author's pasted rebuttal text. The server pairs
+    // it with the stored review row (review:<venue>:<uilang>) for this paper.
+    if (view.kind === 'rebuttal') _startBody.author_rebuttal = _paperRebuttalInputText || '';
+    var data = await Api.paper.reportStart(_startBody);
     if (_activePaperId !== startPaperId) return;
     if (!data || !data.ok) throw new Error((data && data.error) || 'Start failed');
 
@@ -1638,6 +1701,33 @@ async function _generatePaperReport(force, view) {
 async function _generatePaperReview(force) {
   return _generatePaperReport(force, _reportView('review'));
 }
+
+/** Rebuttal entry: generate a follow-up reply + score decision from the
+ *  author's pasted rebuttal. Requires (a) a non-empty rebuttal text and (b) an
+ *  already-generated review for this venue (the server pairs them). The paste
+ *  box + guards live in _renderRebuttalPanel; this just kicks the shared pipe. */
+async function _generatePaperRebuttal(force) {
+  var text = (_paperRebuttalInputText || '').trim();
+  if (!text) {
+    if (typeof showToast === 'function') {
+      showToast((typeof t === 'function') ? t('paper.rebuttalNeedText') : 'Paste the author rebuttal first');
+    }
+    return;
+  }
+  // A rebuttal needs the original review to exist. The in-memory review cache
+  // OR a live/finished review stream both count; otherwise nudge the user.
+  var rv = _reportView('review');
+  if (!rv.cache && !(rv.stream && rv.stream.fullText)) {
+    if (typeof showToast === 'function') {
+      showToast((typeof t === 'function') ? t('paper.rebuttalNeedReview') : 'Generate the review first');
+    }
+    return;
+  }
+  return _generatePaperReport(force, _reportView('rebuttal'));
+}
+
+function _stopPaperRebuttal() { return _stopPaperReport(_reportView('rebuttal')); }
+async function _regeneratePaperRebuttal() { return _regeneratePaperReport(_reportView('rebuttal')); }
 
 
 /** The review reading language for the ACTIVE paper: persisted per-paper if
@@ -2243,14 +2333,31 @@ function _syncReportToolbar(running, view) {
   if (stopBtn) {
     stopBtn.style.display = running ? '' : 'none';
     if (running) {
-      // Restore the resting label/enabled state for a fresh run (a prior
-      // run may have left it disabled + "Stopping…").
-      stopBtn.disabled = false;
+      // A stop was already requested but the task is still `running` (the
+      // server's authoritative `aborted` event hasn't landed via poll yet):
+      // keep the button disabled + "Stopping…" so this repaint doesn't
+      // re-enable it (which let the user click Stop again). Otherwise restore
+      // the resting label/enabled state for a fresh run.
+      var stopping = !!(view.stream && (view.stream.stopRequested || view.stream.pendingStop));
+      stopBtn.disabled = stopping;
       var lbl = stopBtn.querySelector('span');
-      if (lbl) lbl.textContent = (typeof t === 'function') ? t('paper.reportStop') : 'Stop';
+      if (lbl) lbl.textContent = (typeof t === 'function')
+        ? t(stopping ? 'paper.reportStopping' : 'paper.reportStop')
+        : (stopping ? 'Stopping…' : 'Stop');
     }
   }
   if (regenBtn) regenBtn.style.display = running ? 'none' : '';
+  // Rebuttal view: the initial Generate button and Copy live in the sub-panel
+  // (not the report/review toolbar). Show Generate only before a first run,
+  // Regenerate + Copy only once there's output; hide Generate while running.
+  if (view.kind === 'rebuttal') {
+    var genBtn = document.getElementById('paperRebuttalGenBtn');
+    var copyBtn = document.getElementById('paperRebuttalCopyBtn');
+    var hasOutput = !!(view.cache || (view.stream && view.stream.fullText));
+    if (genBtn) genBtn.style.display = (running || hasOutput) ? 'none' : '';
+    if (regenBtn) regenBtn.style.display = (!running && hasOutput) ? '' : 'none';
+    if (copyBtn) copyBtn.style.display = (!running && hasOutput) ? '' : 'none';
+  }
   // Keep the EN/中 segmented control in sync on every paint (both views).
   if (typeof _syncReportLangToggle === 'function') _syncReportLangToggle(view);
   // Review-only: a fresh run invalidates any cached translation reading view;
@@ -2272,6 +2379,10 @@ function _stopPaperReport(view) {
   view = view || _reportView('report');
   var s = view.stream;
   if (!s || s.status !== 'running') return;
+  // Record the stop intent so a poll-driven repaint (which sees the task still
+  // `running` until the server's `aborted` event lands) does NOT re-enable the
+  // button and let the user click Stop a second time.
+  s.stopRequested = true;
   var stopBtn = document.getElementById(view.stopBtnId);
   if (stopBtn) {
     stopBtn.disabled = true;
@@ -2322,6 +2433,24 @@ function _copyPaperReport(view) {
 }
 
 function _copyPaperReview() { return _copyPaperReport(_reportView('review')); }
+
+function _copyPaperRebuttal() { return _copyPaperReport(_reportView('rebuttal')); }
+
+/** Persist the author-rebuttal paste per paper so it survives tab switches and
+ *  reloads (keyed by paper id, like the venue/lang maps). Lives in
+ *  report.js next to the other paper-scoped state writers. */
+function _onRebuttalInputChange(val) {
+  _paperRebuttalInputText = val || '';
+  try {
+    if (typeof _activePaperId !== 'undefined' && _activePaperId) {
+      var raw = localStorage.getItem('paper_rebuttal_text_by_id');
+      var map = raw ? JSON.parse(raw) : {};
+      if (_paperRebuttalInputText) map[_activePaperId] = _paperRebuttalInputText;
+      else delete map[_activePaperId];
+      localStorage.setItem('paper_rebuttal_text_by_id', JSON.stringify(map));
+    }
+  } catch (e) { console.warn('[Paper:Rebuttal] persist input failed:', e); }
+}
 
 function _togglePaperReportExportMenu(ev, view) {
   if (ev) { ev.preventDefault(); ev.stopPropagation(); }

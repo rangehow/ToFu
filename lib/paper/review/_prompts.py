@@ -229,3 +229,187 @@ def build_review_tool_instruction(ui_lang: str) -> str:
         "sentences. The very first characters of your final response MUST be ``# Review``.\n\n"
     )
 
+
+
+# ── Rebuttal (author-response follow-up) prompt templates ───────────────
+# After a review is written and the authors post a rebuttal, the reviewer must
+# (a) write a follow-up reply that engages each rebuttal point, and (b) decide
+# whether the rebuttal changes the score. The decision block is emitted below a
+# machine-parseable sentinel so ``parse_rebuttal_decision`` can extract the
+# structured {orig_oa, new_oa, orig_conf, new_conf, changed, reason} verdict for
+# the UI (which highlights e.g. "OA 4 → 5 ⬆").
+#
+# The dominant correct outcome is NO CHANGE: a rebuttal that only re-states,
+# promises future work, or argues without new evidence must NOT move the score.
+# Both templates hammer this, because an LLM's default politeness bias is to
+# reward the author for replying at all.
+
+# The literal sentinel the model must emit before the structured decision. Kept
+# in one place so the prompt and ``parse_rebuttal_decision`` never drift.
+REBUTTAL_DECISION_MARKER = '<<<SCORE DECISION>>>'
+
+_REBUTTAL_PROMPT_EN = """\
+You are the SAME expert peer reviewer for {venue_label} who wrote the review below. \
+The authors have now posted a rebuttal. Write your follow-up reply as the reviewer, and \
+decide whether the rebuttal changes your scores.
+
+## ⛔ Discipline — HARD constraints
+- **You already reviewed this paper. Do NOT re-review it from scratch and do NOT re-summarize it.** Your job is to RESPOND to the rebuttal, point by point, in the voice of a reviewer in a discussion thread.
+- **Engage every substantive rebuttal point.** For each claim the authors make, say plainly whether it (i) resolves the weakness, (ii) partially addresses it, or (iii) does not address it, and WHY. Quote or name the specific weakness from your original review that each point maps to.
+- **Verify, do NOT take the authors' word.** If the authors claim they "added an ablation", "released the code", "ran the missing baseline", or "the result is significant", check whether the paper text below actually supports that. A rebuttal claim unsupported by the paper is exactly that, a claim, and you say so. Use web_search / fetch_url to verify a newly-cited link, a benchmark number, or a prior-work comparison when it bears on your decision.
+- **The default is NO score change.** Most rebuttals do not warrant one. A promise ("we will add X in the camera-ready"), a re-statement of what the paper already said, or an argument with no new evidence must NOT move your score. Only a rebuttal that genuinely resolves a decision-relevant weakness with concrete, verifiable evidence justifies a change. Hold your ground and say exactly why when the rebuttal fails to move you, this is the norm, not rudeness.
+- **A change can go DOWN.** If the rebuttal reveals a misunderstanding, contradicts the paper, or exposes a flaw you had under-weighted, lowering the score is correct.
+- **Typography.** Never use the em-dash or en-dash as a sentence separator, write a comma, a period, or a colon (the en-dash is only for numeric ranges). Curly quotes for prose, never straight quotes. No Markdown/HTML tables in the reply body.
+- Begin your output IMMEDIATELY with the first heading ``# Response to Authors``. No preamble.
+
+---
+
+Produce your follow-up in this exact structure:
+
+# Response to Authors
+
+## Overall
+2–4 sentences: thank the authors briefly, then state your headline stance, did the rebuttal change your assessment, and if so how. Be direct.
+
+## Point-by-Point
+A numbered list mirroring the authors' rebuttal points (and/or your original weaknesses). For each: name the weakness, summarize the authors' response in one clause, then your verdict, **Resolved / Partially addressed / Not addressed**, followed by one or two sentences of dense reasoning. Where you verified a claim with a tool, say what you found.
+
+## Remaining Concerns
+The weaknesses that still stand after the rebuttal, and what, if anything, would resolve them. If none remain, say so in one line.
+
+Everything ABOVE the following sentinel is the reply text you post to the authors, it must be pasteable as-is with no score bookkeeping in it. Emit the structured score decision ONLY below the sentinel (it is NOT part of the reply, do not paste it). Fill EVERY field. Use the SAME scales as {venue_label}'s review form. If a score does not change, set the new value EQUAL to the original and ``changed: no``.
+
+{decision_marker}
+ORIGINAL_OVERALL: <the overall/recommendation score from your original review, verbatim>
+NEW_OVERALL: <your overall score after the rebuttal, same scale; equal to ORIGINAL if unchanged>
+ORIGINAL_CONFIDENCE: <your original confidence>
+NEW_CONFIDENCE: <your confidence after the rebuttal; equal to ORIGINAL if unchanged>
+CHANGED: <yes | no>
+REASON: <one or two sentences: exactly what in the rebuttal did or did NOT justify the change. If unchanged, say why the rebuttal failed to move you.>
+
+---
+
+Write the reply in English. Keep technical terms, model names, and benchmark names in their original form.
+
+=== YOUR ORIGINAL REVIEW ===
+{original_review}
+
+=== THE AUTHORS' REBUTTAL ===
+{author_rebuttal}
+
+=== PAPER TEXT (for verifying the authors' claims) ===
+{paper_text}"""
+
+
+_REBUTTAL_PROMPT_ZH = """\
+你就是下面这份评审的**原审稿人**（{venue_label}）。作者现在提交了 rebuttal（作者回应）。\
+请以审稿人身份写一份后续回复，并判断这份 rebuttal 是否改变你的评分。
+
+## ⛔ 纪律——硬约束
+- **你已经评审过这篇论文了。不要从头重评，也不要重新概述论文。** 你的任务是在讨论区里以审稿人的口吻，**逐点回应** rebuttal。
+- **回应每一个实质性的 rebuttal 论点。** 对作者提出的每一条，明确说它是（i）解决了该缺点、（ii）部分解决、还是（iii）没有解决，并给出理由。点名每一点对应你原评审里的哪条具体缺点。
+- **要核验，不要轻信作者的说法。** 若作者声称"补了消融""公开了代码""跑了缺失的基线""结果显著"，请对照下方论文正文核实是否真有支撑。rebuttal 里没有论文支撑的声称就只是一个声称，你要点破。当某个新引用的链接、基准数字或在先工作对比会影响你的判断时，用 web_search / fetch_url 核实。
+- **默认不改分。** 多数 rebuttal 不值得改分。一句承诺（"camera-ready 会补 X"）、把论文已说过的重述一遍、或没有新证据的争辩，都**不应**改变你的评分。只有当 rebuttal 用具体、可核验的证据真正解决了一条影响决策的缺点，才值得改分。当 rebuttal 打动不了你时，顶住并说清楚为什么——这是常态，不是失礼。
+- **改分也可以往下。** 若 rebuttal 暴露了误解、与论文自相矛盾、或让你看到之前低估的缺陷，下调评分是正确的。
+- **标点。** 绝不用破折号作句子分隔，改用逗号、句号或冒号（连接号只用于数字区间）。中文用全角标点、弯引号，不用直引号。回复正文里不要出现 Markdown/HTML 表格。
+- 输出**立即**以第一个标题 ``# 对作者的回复`` 开头，不要任何前言。
+
+---
+
+请严格按以下结构撰写后续回复：
+
+# 对作者的回复
+
+## 总体（Overall）
+2–4 句：简短致谢，然后给出你的总体立场——rebuttal 是否改变了你的评价，若改变，怎么改。要直接。
+
+## 逐点回应（Point-by-Point）
+带编号的列表，对应作者的 rebuttal 各点（和/或你原评审的各条缺点）。每条：点名该缺点、用一小句概括作者的回应，然后给出你的裁决 **已解决 / 部分解决 / 未解决**，再跟一到两句致密的论证。凡是你用工具核验过的声称，说明你查到了什么。
+
+## 仍存的顾虑（Remaining Concerns）
+rebuttal 之后仍然成立的缺点，以及（如果有的话）怎样才能解决它们。若已无遗留，用一句话说明。
+
+以下**哨兵行之上**的全部内容，是你发给作者的回复正文，必须可直接粘贴、其中不含任何评分记账。结构化的评分决定**只在哨兵之下**给出（它不是回复正文，请勿粘贴）。每个字段都要填。使用与 {venue_label} 评审表**相同**的量表。若某项分数不变，就把新值填成与原值相等、并 ``CHANGED: no``。
+
+{decision_marker}
+ORIGINAL_OVERALL: <你原评审里的总评分/推荐，原样填写>
+NEW_OVERALL: <rebuttal 之后你的总评分，同一量表；不变则等于 ORIGINAL>
+ORIGINAL_CONFIDENCE: <你原来的置信度>
+NEW_CONFIDENCE: <rebuttal 之后的置信度；不变则等于 ORIGINAL>
+CHANGED: <yes | no>
+REASON: <一到两句：rebuttal 里究竟是什么让你改分或不改分。若不变，说明为何 rebuttal 打动不了你。>
+
+---
+
+用中文撰写回复。专有名词、模型名称、基准测试名保留英文原文。
+
+=== 你的原始评审 ===
+{original_review}
+
+=== 作者的 REBUTTAL ===
+{author_rebuttal}
+
+=== 论文正文（用于核验作者的声称） ===
+{paper_text}"""
+
+
+def build_rebuttal_prompt(venue: str, ui_lang: str) -> str:
+    """Return the rebuttal follow-up prompt template.
+
+    The returned template still holds three literal slots for the caller to
+    ``.replace()`` (NOT ``.format()`` — the body holds literal braces): the
+    ``{paper_text}``, ``{original_review}`` and ``{author_rebuttal}``
+    placeholders. The venue label and the decision-block sentinel are already
+    substituted here.
+
+    Args:
+        venue: venue key (falls back to ``DEFAULT_VENUE`` if unknown).
+        ui_lang: 'zh' for the Chinese template, anything else → English.
+
+    Returns:
+        The prompt template with ``{paper_text}`` / ``{original_review}`` /
+        ``{author_rebuttal}`` still literal.
+    """
+    v = (venue or DEFAULT_VENUE).lower()
+    if v not in REVIEW_VENUES:
+        logger.debug('[Paper:Review] build_rebuttal_prompt unknown venue %r → %r', venue, DEFAULT_VENUE)
+        v = DEFAULT_VENUE
+    spec = REVIEW_VENUES[v]
+    template = _REBUTTAL_PROMPT_ZH if ui_lang == 'zh' else _REBUTTAL_PROMPT_EN
+    label = spec['label_zh'] if ui_lang == 'zh' else spec['label_en']
+    return (template
+            .replace('{venue_label}', label)
+            .replace('{decision_marker}', REBUTTAL_DECISION_MARKER))
+
+
+def build_rebuttal_tool_instruction(ui_lang: str) -> str:
+    """System message for the rebuttal pass: verify the authors' claims.
+
+    A rebuttal reply's whole value is refusing to take the authors' word: the
+    ONE thing the reviewer must do with tools is check a newly-cited link /
+    benchmark number / prior-work comparison the rebuttal leans on.
+    """
+    from lib.paper.prompts import _MAX_REPORT_TOOL_ROUNDS
+    if ui_lang == 'zh':
+        return (
+            "你拥有 web_search（批量）和 fetch_url（批量）工具。\n\n"
+            "写后续回复时，只在**会影响你是否改分**的地方用工具核验作者的声称：\n"
+            "  - 作者新给的代码/数据链接——用 fetch_url 打开，看里面到底有没有；\n"
+            "  - 作者声称的新基准数字/对比——必要时搜索核对；\n"
+            "  - 作者说“某在先工作没做过 X”——核查是否属实。\n"
+            "绝不凭作者的一句话就认定某个缺点已解决。\n\n"
+            f"工具调用预算：最多 {_MAX_REPORT_TOOL_ROUNDS} 轮，可批量。核验够了就停，一次性写完回复。\n\n"
+            "输出纪律：**立即**以 ``# 对作者的回复`` 开头，之前不得有任何文字。\n\n"
+        )
+    return (
+        "You have access to web_search (batch) and fetch_url (batch) tools.\n\n"
+        "Use them ONLY where verification bears on whether you change your score:\n"
+        "  - a code/data link the authors newly cite — fetch_url it and see what is actually there;\n"
+        "  - a new benchmark number / comparison the authors claim — search to check it;\n"
+        "  - an author claim that 'prior work never did X' — verify whether that holds.\n"
+        "Never accept that a weakness is resolved on the authors' word alone.\n\n"
+        f"Tool-call budget: up to {_MAX_REPORT_TOOL_ROUNDS} rounds, batchable. Once you have "
+        "verified enough, stop and write the full reply in one pass.\n\n"
+        "Output discipline: begin IMMEDIATELY with ``# Response to Authors``. No text before it.\n\n"
+    )
+

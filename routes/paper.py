@@ -80,12 +80,17 @@ from lib.paper import (  # noqa: F401  — back-compat re-exports
     _REPORT_PROMPT_ZH,
     _REPORT_TASK_TTL,
     _REPORT_TOOLS,
+    build_rebuttal_prompt,
+    build_rebuttal_tool_instruction,
     build_review_prompt,
     build_review_tool_instruction,
     date_anchor_clause,
     injection_notice,
+    is_rebuttal_lang,
+    is_review_family,
     is_review_lang,
     list_venues,
+    make_review_lang,
     parse_report_lang,
     sanitize_paper_text,
     wrap_untrusted,
@@ -424,8 +429,8 @@ async def start_report_task():
                             phash, lang, len(row['report']))
                 enriched = _inject_images_into_report(
                     row['report'], images, lang=parse_report_lang(lang)['ui_lang'],
-                    appendix=not is_review_lang(lang),
-                    allow_images=not is_review_lang(lang))
+                    appendix=not is_review_family(lang),
+                    allow_images=not is_review_family(lang))
                 enriched = _ensure_title_heading(enriched, phash)
                 # Merge the sibling persisted insight section so a reopened
                 # paper shows it (read-only; never regenerates).
@@ -481,6 +486,9 @@ async def start_report_task():
     parsed = parse_report_lang(lang)
     ui_lang = parsed['ui_lang']
     is_review = parsed['kind'] == 'review'
+    is_rebuttal = parsed['kind'] == 'rebuttal'
+    # Both a review and its rebuttal follow-up are text-only decision documents.
+    is_review_kin = is_review or is_rebuttal
 
     # ── Resolve the insight second-pass personal-context scope ──
     # The insight pass injects the operator's paper library + memory store as
@@ -518,12 +526,72 @@ async def start_report_task():
         from lib.log import audit_log
         audit_log('paper_injection_detected', hash=phash, is_review=is_review,
                   findings=_inj_findings)
-    # Review Mode is text-only — a peer review carries no figures, so the image
-    # manifest is NOT offered to the reviewer (nothing to embed).
-    manifest = '' if is_review else _build_image_manifest(images, lang=ui_lang)
+    # Review Mode + rebuttal are text-only — a peer review / author-response
+    # reply carries no figures, so the image manifest is NOT offered (nothing
+    # to embed).
+    manifest = '' if is_review_kin else _build_image_manifest(images, lang=ui_lang)
     if manifest:
         truncated_text = truncated_text + '\n\n---\n\n' + manifest
         logger.info('[Paper:Report] Injected image manifest — %d images, hash=%s', len(images), phash)
+
+    if is_rebuttal:
+        # Rebuttal follow-up: fetch the reviewer's ORIGINAL review for this
+        # paper+venue (the sibling ``review:<venue>:<uilang>`` row) and the
+        # author's rebuttal text (posted by the user), then run the SAME engine
+        # to produce a follow-up reply + structured score-adjustment decision.
+        author_rebuttal = (data.get('author_rebuttal') or data.get('rebuttal') or '').strip()
+        if not author_rebuttal:
+            logger.warning('[Paper:Rebuttal] Start with no author_rebuttal — hash=%s', phash)
+            return api_bad_request('No author_rebuttal provided')
+        review_key = make_review_lang(parsed['venue'], ui_lang)
+        original_review = ''
+        try:
+            rrow = await async_fetchone(
+                "SELECT report FROM paper_reports WHERE paper_hash = ? AND lang = ?",
+                (phash, review_key), domain=DOMAIN_CHAT,
+            )
+            if rrow and rrow['report']:
+                original_review = rrow['report']
+        except Exception as e:
+            logger.warning('[Paper:Rebuttal] Original-review lookup failed hash=%s: %s', phash, e)
+        if not original_review.strip():
+            logger.warning('[Paper:Rebuttal] No original review for hash=%s venue=%s ui=%s',
+                           phash, parsed['venue'], ui_lang)
+            return api_bad_request('No original review found — generate the review first')
+        # The author rebuttal is UNTRUSTED (in the OpenReview flow it is written
+        # by the paper authors), so sanitize + fence it exactly like the paper
+        # text before splicing. The original review is OUR content (trusted).
+        safe_rebuttal, _reb_inj = sanitize_paper_text(author_rebuttal[:40000])
+        safe_rebuttal = wrap_untrusted(safe_rebuttal)
+        if _reb_inj:
+            from lib.log import audit_log
+            audit_log('paper_injection_detected', hash=phash, is_rebuttal=True,
+                      findings=_reb_inj)
+        # Fill slots. paper_text (already truncated+fenced above) goes LAST so a
+        # brace inside the review/rebuttal is never mistaken for a later slot.
+        prompt = (build_rebuttal_prompt(parsed['venue'], ui_lang)
+                  .replace('{original_review}', original_review)
+                  .replace('{author_rebuttal}', safe_rebuttal)
+                  .replace('{paper_text}', truncated_text))
+        tool_instruction = (date_anchor_clause(ui_lang)
+                            + injection_notice(ui_lang, _inj_findings or _reb_inj)
+                            + build_rebuttal_tool_instruction(ui_lang))
+        messages = [
+            {'role': 'system', 'content': tool_instruction},
+            {'role': 'user', 'content': prompt},
+        ]
+        task_id = f'reb_{int(time.time() * 1000)}_{phash[:8]}_{parsed["venue"]}_{ui_lang}'
+        task = _new_report_task(task_id, phash, lang, model,
+                                client_title=client_title, ui_lang=ui_lang,
+                                config=_report_cfg)
+        logger.info('[Paper:Rebuttal] Starting task %s — venue=%s model=%s ui_lang=%s '
+                    'rebuttal_len=%d hash=%s', task_id, parsed['venue'], model, ui_lang,
+                    len(author_rebuttal), phash)
+        _report_runtime.spawn(task_id, _run_report_task, task, messages, images)
+        return jsonify({
+            'ok': True, 'task_id': task_id, 'paper_hash': phash,
+            'running': True, 'existed': False,
+        })
 
     if is_review:
         # Review Mode: venue-aware peer-review prompt (different output
@@ -777,8 +845,8 @@ async def export_report():
     # headings need the REAL UI language, not the raw cache key.
     _inj_lang = parse_report_lang(lang)['ui_lang']
     body_md = _inject_images_into_report(row['report'], images, lang=_inj_lang,
-                                         appendix=not is_review_lang(lang),
-                                         allow_images=not is_review_lang(lang))
+                                         appendix=not is_review_family(lang),
+                                         allow_images=not is_review_family(lang))
     body_md = _ensure_title_heading(body_md, phash)
 
     # Get the paper title for the export filename / page title
@@ -1006,8 +1074,8 @@ async def get_report_cache():
             images = _load_image_manifest(phash)
             _inj_lang = parse_report_lang(lang)['ui_lang']
             enriched = _inject_images_into_report(row['report'], images, lang=_inj_lang,
-                                                  appendix=not is_review_lang(lang),
-                                                  allow_images=not is_review_lang(lang))
+                                                  appendix=not is_review_family(lang),
+                                                  allow_images=not is_review_family(lang))
             enriched = _ensure_title_heading(enriched, phash)
             enriched = await _append_cached_insight(enriched, phash, lang)
             _cache_meta = _parse_report_meta(row)

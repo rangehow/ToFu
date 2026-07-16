@@ -91,10 +91,13 @@ def _run_report_task(task, messages, images):
     # Review Mode (composite lang key ``review:<venue>:<uilang>``) is TEXT-ONLY:
     # a peer review is a decision document, not an illustrated explainer, so no
     # figures are injected AND any image the model emitted itself is stripped.
-    from lib.paper.review import is_review_lang
+    from lib.paper.review import is_rebuttal_lang, is_review_family, is_review_lang
     _is_review = is_review_lang(lang)
-    inj_appendix = not _is_review
-    inj_allow_images = not _is_review
+    _is_rebuttal = is_rebuttal_lang(lang)
+    # Both a review and a rebuttal reply are text-only decision documents.
+    _is_review_family = is_review_family(lang)
+    inj_appendix = not _is_review_family
+    inj_allow_images = not _is_review_family
     model = task['model']
     abort_event = task['abort_event']
 
@@ -408,7 +411,7 @@ def _run_report_task(task, messages, images):
         # regardless of what the model emitted. Done here (before injection /
         # persistence) so the enriched body, DB row, and `done` event all carry
         # smart quotes. Math ($...$ primes), code, and URLs are preserved.
-        if is_review_lang(lang):
+        if _is_review:
             from lib.paper.review import finalize_review_body, smarten_quotes, strip_slop_dashes
             _pre = full_content
             # Educate quotes + de-slop dashes, THEN make the body submittable:
@@ -423,6 +426,32 @@ def _run_report_task(task, messages, images):
                 task['full_text'] = full_content
                 logger.info('[Paper:Review] Task %s — educated quotes, removed slop '
                             'dashes, and finalized submittable body', task['task_id'])
+        elif _is_rebuttal:
+            # Rebuttal follow-up: same typography discipline; relocate the
+            # machine-parseable score decision below its sentinel (kept verbatim
+            # so a score value is never corrupted by the comma-rewrite). The
+            # structured decision is parsed and stamped on the report meta so the
+            # UI can highlight the OA/Confidence change without re-parsing the body.
+            from lib.paper.review import (
+                finalize_rebuttal_body, parse_rebuttal_decision,
+                smarten_quotes, strip_slop_dashes)
+            _pre = full_content
+            full_content = finalize_rebuttal_body(
+                strip_slop_dashes(smarten_quotes(full_content)), inj_lang)
+            if full_content != _pre:
+                task['full_text'] = full_content
+                logger.info('[Paper:Rebuttal] Task %s — educated quotes, removed slop '
+                            'dashes, and relocated score decision', task['task_id'])
+            try:
+                _decision = parse_rebuttal_decision(full_content)
+                task['rebuttal_decision'] = _decision
+                logger.info('[Paper:Rebuttal] Task %s — decision present=%s changed=%s '
+                            'OA %s→%s conf %s→%s', task['task_id'],
+                            _decision.get('present'), _decision.get('changed'),
+                            _decision.get('origOverall'), _decision.get('newOverall'),
+                            _decision.get('origConfidence'), _decision.get('newConfidence'))
+            except Exception as e:
+                logger.warning('[Paper:Rebuttal] decision parse failed (non-fatal): %s', e)
 
         # Inject figures/tables into the report (text-only for reviews)
         enriched = _inject_images_into_report(full_content, images, lang=inj_lang,
@@ -463,7 +492,7 @@ def _run_report_task(task, messages, images):
         # glossaried explainer). Wrapped: a failure must never break the report,
         # and — like the citation audit — it only touches meta, never the body,
         # so the double-render / terminal-round logic above is untouched.
-        if not _is_review:
+        if not _is_review_family:
             try:
                 from lib.paper.terminology_audit import build_terminology_audit
                 _term_audit = build_terminology_audit(enriched or full_content)
@@ -471,6 +500,11 @@ def _run_report_task(task, messages, images):
                     report_meta['terminologyAudit'] = _term_audit
             except Exception as e:
                 logger.warning('[Paper:Report] Terminology audit failed (non-fatal): %s', e)
+
+        # Carry the structured rebuttal score-decision in meta so the reopened
+        # cached row (and the `done` event) surface the OA/Confidence change.
+        if _is_rebuttal and task.get('rebuttal_decision'):
+            report_meta['rebuttalDecision'] = task['rebuttal_decision']
 
         task['report_meta'] = report_meta
         meta_json = json.dumps(report_meta, ensure_ascii=False)

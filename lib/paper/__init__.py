@@ -27,13 +27,22 @@ from .prompts import (
 # Review Mode — venue registry + compound-key parser + review prompts
 from .review import (
     DEFAULT_VENUE,
+    REBUTTAL_DECISION_MARKER,
     REVIEW_VENUES,
+    build_rebuttal_prompt,
+    build_rebuttal_tool_instruction,
     build_review_prompt,
     build_review_tool_instruction,
+    is_rebuttal_lang,
+    is_review_family,
     is_review_lang,
     list_venues,
+    make_rebuttal_lang,
     make_review_lang,
     parse_report_lang,
+    parse_rebuttal_decision,
+    rebuttal_decision_marker,
+    finalize_rebuttal_body,
     finalize_review_body,
     scorecard_separator,
     smarten_quotes,
@@ -150,6 +159,11 @@ __all__ = [
     'make_review_lang', 'list_venues', 'build_review_prompt',
     'build_review_tool_instruction', 'smarten_quotes', 'strip_slop_dashes',
     'finalize_review_body', 'scorecard_separator',
+    # rebuttal (author-response follow-up)
+    'is_rebuttal_lang', 'is_review_family', 'make_rebuttal_lang',
+    'build_rebuttal_prompt', 'build_rebuttal_tool_instruction',
+    'parse_rebuttal_decision', 'rebuttal_decision_marker',
+    'finalize_rebuttal_body', 'REBUTTAL_DECISION_MARKER',
     # injection guard
     'sanitize_paper_text', 'wrap_untrusted', 'injection_notice',
     # llm + tools

@@ -1293,6 +1293,34 @@ textarea::placeholder{color:var(--text-tertiary)}
 .paper-report-generate-btn:hover{filter:brightness(1.06);box-shadow:0 4px 16px rgba(110,86,207,.4);transform:translateY(-1px)}
 .paper-report-generate-btn:active{transform:translateY(0)}
 .paper-report-generate-btn svg{flex-shrink:0}
+/* ── Rebuttal follow-up sub-panel (inside the Review tab) ── */
+.paper-rebuttal-section{border-top:1px solid var(--border);margin-top:6px}
+.paper-rebuttal-summary{display:flex;align-items:center;gap:8px;padding:12px 16px;cursor:pointer;font-size:13px;font-weight:600;color:var(--text-secondary);list-style:none;user-select:none}
+.paper-rebuttal-summary::-webkit-details-marker{display:none}
+.paper-rebuttal-summary:hover{color:var(--text-primary)}
+.paper-rebuttal-summary svg{flex-shrink:0;opacity:.7}
+.paper-rebuttal-body{padding:0 16px 16px}
+.paper-rebuttal-input{width:100%;box-sizing:border-box;margin-top:8px;padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:var(--bg-secondary);color:var(--text-primary);font-family:inherit;font-size:13px;line-height:1.5;resize:vertical}
+.paper-rebuttal-input:focus{outline:none;border-color:var(--accent)}
+.paper-rebuttal-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:10px}
+.paper-rebuttal-actions .paper-report-generate-btn{margin-top:0;padding:8px 16px}
+/* Score-decision card — prepended to the reviewer's follow-up reply. */
+.paper-rebuttal-decision{border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin:0 0 16px;background:var(--bg-secondary)}
+.paper-rebuttal-decision.rd-yes{border-left:3px solid var(--accent)}
+.paper-rebuttal-decision.rd-no{border-left:3px solid var(--text-quaternary)}
+.paper-rebuttal-decision .rd-head{display:flex;align-items:center;margin-bottom:8px}
+.paper-rebuttal-decision .rd-badge{font-size:12px;font-weight:700;letter-spacing:.02em;padding:3px 10px;border-radius:20px;color:#fff}
+.paper-rebuttal-decision.rd-yes .rd-badge{background:var(--accent)}
+.paper-rebuttal-decision.rd-no .rd-badge{background:var(--text-tertiary)}
+.paper-rebuttal-decision .rd-metrics{display:flex;flex-wrap:wrap;gap:18px}
+.paper-rebuttal-decision .rd-metric{display:flex;align-items:center;gap:8px;font-size:14px}
+.paper-rebuttal-decision .rd-label{font-size:11px;font-weight:600;color:var(--text-tertiary);text-transform:uppercase;letter-spacing:.03em}
+.paper-rebuttal-decision .rd-from{color:var(--text-tertiary);text-decoration:line-through}
+.paper-rebuttal-decision .rd-arrow{color:var(--accent);font-weight:700}
+.paper-rebuttal-decision .rd-to{color:var(--accent);font-weight:700}
+.paper-rebuttal-decision .rd-metric.rd-changed .rd-to{font-size:16px}
+.paper-rebuttal-decision .rd-same{color:var(--text-secondary);font-weight:600}
+.paper-rebuttal-decision .rd-reason{margin-top:10px;font-size:12.5px;line-height:1.55;color:var(--text-secondary)}
 
 /* ── Report section progress chips ── */
 .paper-report-progress{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;gap:16px;padding:20px}

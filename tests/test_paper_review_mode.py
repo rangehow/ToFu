@@ -106,10 +106,16 @@ def test_review_prompt_nlpcc_scorecard():
     # NLPCC's own 1-6 overall rating; NOT NeurIPS's 1-10 nor ARR's Excitement scale.
     assert '1–6' in pe and '1–10' not in pe, 'NLPCC uses a 1-6 overall rating'
     assert 'Excitement' not in pe, 'ARR-only dimension leaked into NLPCC prompt'
-    assert 'Soundness / Substance' in pe and 'Novelty' in pe, 'NLPCC dimensions missing'
+    # NLPCC's OpenReview form has only two SCORED fields — Overall Assessment (OA)
+    # + Confidence. Title & review text are the prose body, so the scorecard must
+    # NOT emit separate soundness/novelty/clarity/comparison number rows.
+    assert 'Overall Assessment' in pe and 'Confidence' in pe, 'NLPCC OA/Confidence fields missing'
+    assert 'Soundness / Substance' not in pe, 'NLPCC must not emit a separate Soundness score row'
+    assert 'Meaningful Comparison' not in pe, 'NLPCC must not emit a separate Comparison score row'
     pz = build_review_prompt('nlpcc', 'zh')
     assert '中文计算' in pz and '1–6' in pz, 'Chinese NLPCC scorecard malformed'
-    _ok('build_review_prompt has an authentic NLPCC scorecard (1-6 rating, NLP-family dims)')
+    assert 'Overall Assessment' in pz and 'Confidence' in pz, 'Chinese NLPCC OA/Confidence fields missing'
+    _ok('build_review_prompt has an authentic NLPCC scorecard (OA 1-6 + Confidence only, 4-column form)')
 
 
     _ok('build_review_prompt selects the venue-authentic scorecard (NeurIPS/CVPR/ACL differ)')
@@ -768,6 +774,140 @@ def test_source_level_negative_control_venue_registry():
     _ok('source-level negative control: venue registry is load-bearing (break→fail, restore→pass)')
 
 
+# ─── NLPCC 4-column form (OA + Confidence only) ─────────────────
+
+def test_nlpcc_scorecard_is_two_scored_fields_only():
+    """NLPCC's OpenReview form is 4 columns (title, review, OA, confidence);
+    title+review are the prose body, so the scorecard emits ONLY OA + Confidence
+    and must NOT carry the ML-family soundness/novelty/clarity/comparison rows."""
+    from lib.paper import build_review_prompt
+    for L in ('en', 'zh'):
+        p = build_review_prompt('nlpcc', L)
+        assert 'Overall Assessment' in p and 'Confidence' in p, (L, 'OA/Confidence missing')
+        assert '1–6' in p, (L, 'NLPCC OA is a 1-6 scale')
+        assert 'Soundness / Substance' not in p, (L, 'stray Soundness row')
+        assert 'Meaningful Comparison' not in p, (L, 'stray Comparison row')
+        assert 'Novelty / Originality' not in p and 'Novelty / Originality（' not in p, (L, 'stray Novelty row')
+    _ok('NLPCC scorecard = OA (1-6) + Confidence only (4-column form), no ML-family sub-scores')
+
+
+# ─── Rebuttal: lang keys ────────────────────────────────────────
+
+def test_rebuttal_lang_key_roundtrip_and_family():
+    from lib.paper import (make_rebuttal_lang, is_rebuttal_lang, is_review_family,
+                           is_review_lang, parse_report_lang)
+    k = make_rebuttal_lang('nlpcc', 'en')
+    assert k == 'rebuttal:nlpcc:en', k
+    assert parse_report_lang(k) == {'kind': 'rebuttal', 'venue': 'nlpcc', 'ui_lang': 'en'}
+    # family predicate covers review AND rebuttal, not plain reports.
+    assert is_rebuttal_lang(k) and not is_review_lang(k)
+    assert is_review_family(k) and is_review_family('review:acl:zh')
+    assert not is_review_family('en') and not is_review_family('zh')
+    # bad venue / uilang fall back safely, same as review keys.
+    assert parse_report_lang('rebuttal:bogus:fr') == {'kind': 'rebuttal', 'venue': 'generic', 'ui_lang': 'en'}
+    _ok('rebuttal:<venue>:<uilang> round-trips; is_review_family covers review+rebuttal only')
+
+
+# ─── Rebuttal: prompt structure ─────────────────────────────────
+
+def test_rebuttal_prompt_has_slots_decision_and_no_change_discipline():
+    from lib.paper import build_rebuttal_prompt, REBUTTAL_DECISION_MARKER
+    for L in ('en', 'zh'):
+        p = build_rebuttal_prompt('nlpcc', L)
+        # all three fill slots survive for the route's .replace()
+        for slot in ('{paper_text}', '{original_review}', '{author_rebuttal}'):
+            assert slot in p, (L, slot)
+        # the machine-parseable decision block + every field it must emit
+        assert REBUTTAL_DECISION_MARKER in p, (L, 'decision marker missing')
+        for field in ('ORIGINAL_OVERALL', 'NEW_OVERALL', 'ORIGINAL_CONFIDENCE',
+                      'NEW_CONFIDENCE', 'CHANGED', 'REASON'):
+            assert field in p, (L, field)
+        assert 'NLPCC' in p, (L, 'venue label missing')
+    # the "default is NO change" discipline must be explicit (EN + ZH)
+    assert 'NO score change' in build_rebuttal_prompt('nlpcc', 'en')
+    assert '默认不改分' in build_rebuttal_prompt('nlpcc', 'zh')
+    _ok('rebuttal prompt keeps 3 slots + decision block + "default = no change" discipline (EN+ZH)')
+
+
+# ─── Rebuttal: structured decision parsing ──────────────────────
+
+def _rebuttal_body(marker, oa_from, oa_to, cf_from, cf_to, changed, reason='Because.'):
+    return (
+        '# Response to Authors\n\n## Overall\nThanks.\n\n'
+        + marker + '\n'
+        + f'ORIGINAL_OVERALL: {oa_from}\n'
+        + f'NEW_OVERALL: {oa_to}\n'
+        + f'ORIGINAL_CONFIDENCE: {cf_from}\n'
+        + f'NEW_CONFIDENCE: {cf_to}\n'
+        + f'CHANGED: {changed}\n'
+        + f'REASON: {reason}\n'
+    )
+
+
+def test_rebuttal_decision_parse_changed_and_unchanged():
+    from lib.paper import parse_rebuttal_decision, REBUTTAL_DECISION_MARKER
+    m = REBUTTAL_DECISION_MARKER
+    # changed: OA moved 4→5, confidence steady
+    d = parse_rebuttal_decision(_rebuttal_body(m, 4, 5, 4, 4, 'yes'))
+    assert d['present'] and d['changed'] and d['overallChanged'] and not d['confidenceChanged']
+    assert d['origOverall'] == '4' and d['newOverall'] == '5'
+    # the dominant path: unchanged (model says no + values equal)
+    d2 = parse_rebuttal_decision(_rebuttal_body(m, 4, 4, 4, 4, 'no'))
+    assert d2['present'] and not d2['changed'] and not d2['overallChanged']
+    assert d2['newOverall'] == '4', 'unchanged echoes the original value'
+    # no decision block at all
+    assert parse_rebuttal_decision('# Response\nno block here')['present'] is False
+    _ok('parse_rebuttal_decision: changed path flags overallChanged; unchanged path is first-class')
+
+
+def test_rebuttal_decision_reconciles_flag_against_values():
+    """The scores are ground truth: a model that self-reports CHANGED wrong is
+    reconciled toward the actual values (both directions)."""
+    from lib.paper import parse_rebuttal_decision, REBUTTAL_DECISION_MARKER
+    m = REBUTTAL_DECISION_MARKER
+    # model says "no" but NEW_OVERALL differs → forced changed=True
+    d = parse_rebuttal_decision(_rebuttal_body(m, 4, 5, 4, 4, 'no'))
+    assert d['changed'] is True and d['overallChanged'] is True
+    # model says "yes" but every value is identical → forced changed=False
+    d2 = parse_rebuttal_decision(_rebuttal_body(m, 3, 3, 4, 4, 'yes'))
+    assert d2['changed'] is False and not d2['overallChanged'] and not d2['confidenceChanged']
+    # confidence-only change is still a change
+    d3 = parse_rebuttal_decision(_rebuttal_body(m, 4, 4, 3, 4, 'no'))
+    assert d3['changed'] is True and d3['confidenceChanged'] and not d3['overallChanged']
+    _ok('parse_rebuttal_decision reconciles the self-reported flag against the actual score values')
+
+
+def test_rebuttal_finalize_keeps_decision_block_verbatim():
+    """finalize_rebuttal_body cleans the reply prose but must keep the decision
+    block byte-exact (a comma-rewrite there would corrupt a score value)."""
+    from lib.paper import finalize_rebuttal_body, parse_rebuttal_decision, REBUTTAL_DECISION_MARKER
+    body = _rebuttal_body(REBUTTAL_DECISION_MARKER, 4, 5, 4, 4, 'yes',
+                          reason='Table 6 now reports the ablation.')
+    out = finalize_rebuttal_body(body, 'en')
+    assert REBUTTAL_DECISION_MARKER in out
+    # the parsed decision still reads the same scores after finalization
+    d = parse_rebuttal_decision(out)
+    assert d['origOverall'] == '4' and d['newOverall'] == '5' and d['changed']
+    # idempotent
+    assert finalize_rebuttal_body(out, 'en') == out or REBUTTAL_DECISION_MARKER in finalize_rebuttal_body(out, 'en')
+    _ok('finalize_rebuttal_body cleans reply prose but preserves the score-decision block verbatim')
+
+
+def test_source_level_negative_control_rebuttal_no_change_discipline():
+    """Prove the "default = no score change" clause is load-bearing in the
+    rebuttal prompt: blank it in-memory → the assertion fails; restore → passes."""
+    import lib.paper.review._prompts as pr
+    saved = pr._REBUTTAL_PROMPT_EN
+    try:
+        pr._REBUTTAL_PROMPT_EN = pr._REBUTTAL_PROMPT_EN.replace('NO score change', 'XXXX')
+        broken = pr.build_rebuttal_prompt('nlpcc', 'en')
+        assert 'NO score change' not in broken, 'blanking should remove the no-change clause'
+    finally:
+        pr._REBUTTAL_PROMPT_EN = saved
+    assert 'NO score change' in pr.build_rebuttal_prompt('nlpcc', 'en'), 'restore must reproduce it'
+    _ok('source-level negative control: rebuttal "default = no change" discipline is load-bearing')
+
+
 def main():
     print()
     print(_color('═══ Paper Review Mode Tests ═══', '36'))
@@ -795,6 +935,13 @@ def main():
         test_review_and_report_rows_coexist_for_same_paper_hash,
         test_venues_endpoint_and_review_route_dispatch,
         test_source_level_negative_control_venue_registry,
+        test_nlpcc_scorecard_is_two_scored_fields_only,
+        test_rebuttal_lang_key_roundtrip_and_family,
+        test_rebuttal_prompt_has_slots_decision_and_no_change_discipline,
+        test_rebuttal_decision_parse_changed_and_unchanged,
+        test_rebuttal_decision_reconciles_flag_against_values,
+        test_rebuttal_finalize_keeps_decision_block_verbatim,
+        test_source_level_negative_control_rebuttal_no_change_discipline,
     ]
     for fn in tests:
         try:

@@ -25,11 +25,17 @@ repaint), and the backend skip path (no `parentMessage`) still falls back to the
 `done` re-render — both preserved.
 
 This harness drives the REAL shipped `_handleAutopilotVuEvent` (streaming_render.js)
-under jsdom: it seeds a parent worker assistant, fires `autopilot_vu_start` with
+under jsdom: it seeds a parent worker assistant (empty toolRounds/thinking, no
+finish data — the pre-handoff state), fires `autopilot_vu_start` with
 `parentMessage`, and asserts the parent assistant object now carries
-finishReason + usage + cost. NC mode strips `parentMessage` → the parent stays
-finish-bar-incomplete (model only), proving the projection is what fills the bar.
-Skips cleanly when node + jsdom aren't installed.
+finishReason + usage + cost AND that its toolRounds / thinking / segments are
+preserved from the committed dict (owner's explicit historical symptom: "even
+the tool invocation content and thinking content vanished" — the finalized
+worker bubble must keep its tool panel + thinking, not collapse to a bare bar).
+NC mode strips `parentMessage` → the parent stays finish-bar-incomplete (model
+only) AND tool/thinking stay at the empty seed, proving the projection is what
+fills BOTH the bar and the content. Skips cleanly when node + jsdom aren't
+installed.
 """
 
 from __future__ import annotations
@@ -141,13 +147,17 @@ if (typeof _handleAutopilotVuEvent !== 'function') {
 check('fn_exposed', true);
 
 // The SETTLED parent dict the backend stamps as task['_committedMsg'] and now
-// ships on autopilot_vu_start as `parentMessage`.
+// ships on autopilot_vu_start as `parentMessage`. Carries NON-EMPTY toolRounds
+// / thinking / segments (the committed record from manager/_sync.py DOES carry
+// these — lines 655/691/711) so we can prove they survive the handoff (owner's
+// historical symptom: "tool invocation content and thinking content vanished").
 const PARENT_MESSAGE = {
   role: 'assistant',
   _msgId: 'worker-1',
   content: 'Here is the worker reply.',
-  thinking: '',
-  toolRounds: [],
+  thinking: 'Let me reason about this step by step.',
+  toolRounds: [{ round: 0, toolCalls: [{ name: 'read_files', args: {} }] }],
+  segments: [{ kind: 'tool', round: 0 }, { kind: 'prose', text: 'ok' }],
   model: 'aws.claude-opus-4.8',
   finishReason: 'end_turn',
   usage: { input_tokens: 4200, output_tokens: 380, cache_read_input_tokens: 3900 },
@@ -155,8 +165,12 @@ const PARENT_MESSAGE = {
   apiRounds: [{ round: 0, usage: { output_tokens: 380 } }],
 };
 
-// PRECONDITION: parent bar is INCOMPLETE — model only, no terminal signal.
+// PRECONDITION: parent bar is INCOMPLETE — model only, no terminal signal,
+// AND no tool/thinking content yet (the exact pre-handoff seed state). Proves
+// the post-handoff content came from the projection, not the seed.
 check('precondition_no_finish', !parentAssistant.finishReason && !parentAssistant.usage);
+check('precondition_no_tool_thinking',
+      (parentAssistant.toolRounds || []).length === 0 && !parentAssistant.thinking);
 
 const ev = { type: 'autopilot_vu_start', vuMsgId: 'vu-1' };
 if (!NC) ev.parentMessage = PARENT_MESSAGE;   // NC drops it (skip-path simulation)
@@ -169,6 +183,22 @@ check('parent_finishReason_set', parentAssistant.finishReason === 'end_turn');
 check('parent_usage_set', !!(parentAssistant.usage && parentAssistant.usage.output_tokens === 380));
 check('parent_cost_set', !!(parentAssistant.cost && parentAssistant.cost.costCny === 0.0123));
 check('parent_apiRounds_set', Array.isArray(parentAssistant.apiRounds) && parentAssistant.apiRounds.length === 1);
+// ── The tool/thinking content bite (owner's explicit historical symptom:
+//    "even the tool invocation content and thinking content vanished"). The
+//    projection must carry the parent's toolRounds / thinking / segments so the
+//    finalized worker bubble still RENDERS its tool panel + thinking, not just
+//    a bare finish bar. Assert they are non-empty AND equal the committed
+//    values (not left at the seed's empty state). ──
+check('parent_toolRounds_preserved',
+      Array.isArray(parentAssistant.toolRounds) &&
+      parentAssistant.toolRounds.length === 1 &&
+      parentAssistant.toolRounds[0].toolCalls[0].name === 'read_files');
+check('parent_thinking_preserved',
+      parentAssistant.thinking === 'Let me reason about this step by step.');
+check('parent_segments_preserved',
+      Array.isArray(parentAssistant.segments) &&
+      parentAssistant.segments.length === 2 &&
+      parentAssistant.segments[0].kind === 'tool');
 // The bubble still gets marked for the authoritative `done` repaint.
 check('vuTookOver_marked', parentAssistant._vuTookOverBubble === true);
 // VERBATIM projection must not clobber frontend-local fields.
@@ -222,9 +252,9 @@ def test_vu_start_parent_message_completes_finish_bar():
     output = _run(nc=False)
     fails = [ln for ln in output.splitlines() if ln.startswith('FAIL')]
     assert not fails, 'parent-finish-bar failures:\n' + output
-    # fn_exposed + precondition + 4 finish fields + vuTookOver + local_field
-    # + vu_bubble_created = 9
-    assert output.count('PASS') >= 9, f'expected >=9 PASS lines, got:\n{output}'
+    # fn_exposed + 2 preconditions + 4 finish fields + 3 tool/thinking/segments
+    # + vuTookOver + local_field + vu_bubble_created = 13
+    assert output.count('PASS') >= 13, f'expected >=13 PASS lines, got:\n{output}'
 
 
 @pytest.mark.skipif(not _node_deps_available(),
@@ -250,8 +280,15 @@ def test_nc_no_parent_message_leaves_finish_bar_incomplete():
         'NC must leave usage unset:\n' + output
     assert _status('parent_cost_set') == 'FAIL', \
         'NC must leave cost unset:\n' + output
+    # tool/thinking/segments also NOT back-filled on the skip path — they stay
+    # at the empty seed until the `done` re-render (owner's symptom recurs ONLY
+    # in the skip window, filled by done — never permanently lost).
+    assert _status('parent_toolRounds_preserved') == 'FAIL', \
+        'NC must leave toolRounds at empty seed:\n' + output
+    assert _status('parent_thinking_preserved') == 'FAIL', \
+        'NC must leave thinking at empty seed:\n' + output
     # The handoff still proceeds and marks the bubble for the `done` repaint —
-    # that fallback path is intact (the bar fills later, not never).
+    # that fallback path is intact (the bar + content fill later, not never).
     assert _status('vuTookOver_marked') == 'PASS', \
         'NC must still mark _vuTookOverBubble for the done re-render:\n' + output
     assert _status('vu_bubble_created') == 'PASS', \

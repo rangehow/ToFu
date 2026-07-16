@@ -275,7 +275,8 @@ function _updateBranchStreamingUI(msgIdx, branchIdx, assistantMsg) {
   // Thinking zone
   const thinkZone = body.querySelector('[data-zone="thinking"]');
   if (thinkZone && assistantMsg.thinking) {
-    thinkZone.innerHTML = `<details class="branch-thinking" open><summary>Thinking Process</summary><div>${escapeHtml(assistantMsg.thinking)}</div></details>`;
+    const _bThinkLbl = (typeof t === 'function') ? t('stream.thinking.done') : 'Thinking Process';
+    thinkZone.innerHTML = `<details class="branch-thinking" open><summary>${escapeHtml(_bThinkLbl)}</summary><div>${escapeHtml(assistantMsg.thinking)}</div></details>`;
   }
 
   // Content zone

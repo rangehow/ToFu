@@ -443,8 +443,9 @@ async function connectToTask(convId, taskId, retries = 0, opts = {}) {
             if (_body) {
               let _html = '';
               if (assistantMsg.thinking && assistantMsg.thinking.length) {
+                const _resumeThinkLbl = (typeof t === 'function') ? t('stream.thinking.done') : 'Thinking Process';
                 _html += `<details class="thinking-block" open>` +
-                  `<summary>Thinking</summary>` +
+                  `<summary>${escapeHtml(_resumeThinkLbl)}</summary>` +
                   `<div class="thinking-body">${renderMarkdown(assistantMsg.thinking)}</div>` +
                   `</details>`;
               }

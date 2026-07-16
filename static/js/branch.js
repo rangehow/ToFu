@@ -250,7 +250,8 @@ function _renderBranchMsg(m, msgIdx, bi, i) {
     if (m.thinking) {
       const bThinkLen = m.thinking.length;
       const bThinkMeta = bThinkLen >= 1024 ? ` (${Math.round(bThinkLen / 1024)}k chars)` : ` (${bThinkLen} chars)`;
-      content += `<details class="branch-thinking" data-branch-think-msgidx="${msgIdx}" data-branch-think-bidx="${bi}" data-branch-think-midx="${i}"><summary>Thinking Process${bThinkMeta}</summary><div class="branch-think-lazy"></div></details>`;
+      const _bThinkLbl = (typeof t === 'function') ? t('stream.thinking.done') : 'Thinking Process';
+      content += `<details class="branch-thinking" data-branch-think-msgidx="${msgIdx}" data-branch-think-bidx="${bi}" data-branch-think-midx="${i}"><summary>${escapeHtml(_bThinkLbl)}${bThinkMeta}</summary><div class="branch-think-lazy"></div></details>`;
     }
     // Content
     try { content += renderMarkdown(m.content || ""); } catch { content += escapeHtml(m.content || ""); }
@@ -294,11 +295,12 @@ function _renderBranchPanel(msg, msgIdx, bi) {
     const lastMsg = msgs[msgs.length - 1];
     const existingContent = lastMsg?.content || "";
     const existingThinking = lastMsg?.thinking || "";
+    const _bStreamThinkLbl = (typeof t === 'function') ? t('stream.thinking.done') : 'Thinking Process';
     streamingHtml = `<div class="branch-msg assistant branch-streaming-msg" id="branch-streaming-${msgIdx}-${bi}">
       <div class="branch-msg-header"><span class="branch-msg-role">✦ Claude</span></div>
       <div class="branch-msg-body" id="branch-streaming-body-${msgIdx}-${bi}">
         <div data-zone="tool"></div>
-        <div data-zone="thinking">${existingThinking ? `<details class="branch-thinking" open><summary>Thinking</summary><div>${escapeHtml(existingThinking)}</div></details>` : ""}</div>
+        <div data-zone="thinking">${existingThinking ? `<details class="branch-thinking" open><summary>${escapeHtml(_bStreamThinkLbl)}</summary><div>${escapeHtml(existingThinking)}</div></details>` : ""}</div>
         <div data-zone="content">${existingContent ? (() => { try { return renderMarkdown(existingContent); } catch { return escapeHtml(existingContent); } })() : ""}</div>
         <div data-zone="status"><div class="stream-status"><div class="pulse"></div> Generating…</div></div>
       </div></div>`;

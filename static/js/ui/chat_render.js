@@ -975,12 +975,14 @@ function renderMessage(msg, idx) {
     const _cid = (typeof activeConvId !== 'undefined') ? activeConvId : '';
     const _label = (typeof t === 'function')
       ? t('convWindow.loadToolActivity', { n: _n }) : `Load tool activity (${_n})`;
-    body += `<div class="trimmed-tool-activity" onclick="hydrateFullConversation('${escapeHtml(_cid)}')" title="${escapeHtml(_label)}">${escapeHtml(_label)}</div>`;
+    const _tlIcon = (typeof Icon === 'function') ? Icon('wrench', 13) : '';
+    body += `<div class="trimmed-tool-activity" onclick="hydrateFullConversation('${escapeHtml(_cid)}')" title="${escapeHtml(_label)}">${_tlIcon}<span>${escapeHtml(_label)}</span></div>`;
   }
   if (msg.thinking && !_segTimelineRendered) {
     const thinkLen = msg.thinking.length;
     const thinkMeta = thinkLen >= 1024 ? ` (${Math.round(thinkLen / 1024)}k chars)` : ` (${thinkLen} chars)`;
-    body += `<div class="thinking-block" onclick="_toggleThinking(this,${idx})"><div class="thinking-header"><span class="thinking-label">Thinking Process${thinkMeta}</span><span class="thinking-toggle">▼</span></div><div class="thinking-content"><div class="thinking-text"></div></div></div>`;
+    const _thinkLbl = (typeof t === 'function') ? t('stream.thinking.done') : 'Thinking Process';
+    body += `<div class="thinking-block" onclick="_toggleThinking(this,${idx})"><div class="thinking-header"><span class="thinking-label">${escapeHtml(_thinkLbl)}${thinkMeta}</span><span class="thinking-toggle">▼</span></div><div class="thinking-content"><div class="thinking-text"></div></div></div>`;
   }
   // ── Prior thinking (display-only) ──
   // Trailing reasoning that was emitted after the last completed tool batch

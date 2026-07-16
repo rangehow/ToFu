@@ -186,7 +186,7 @@ check('real_timeline_fn_present', typeof renderSegmentTimelineHTML === 'function
   check('off_has_ptool_panel', html.indexOf('ptool-panel') !== -1);
   // The standalone msg.thinking block IS rendered on the legacy path.
   check('off_has_standalone_thinking', standaloneThinkingCount(html) === 1);
-  check('off_standalone_has_text_hook', html.indexOf('Thinking Process') !== -1);
+  check('off_standalone_has_text_hook', html.indexOf('stream.thinking.done') !== -1);
 }
 
 // ══ 3. NC: neuter the gate (_segTimelineEnabled → always false) — even with

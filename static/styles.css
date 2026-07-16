@@ -360,8 +360,10 @@ html[data-rail] .folder-quickadd{display:none}
 
 /* Windowed/trimmed open: click-to-load affordance for a message whose heavy
    tool timeline was stripped for transport (hydrateFullConversation). */
-.trimmed-tool-activity{margin-bottom:12px;padding:6px 12px;border:1px dashed var(--thinking-border);border-radius:var(--radius-sm);background:var(--thinking-bg);color:var(--text-secondary,#9aa);font-size:.85em;cursor:pointer;user-select:none;display:inline-block}
-.trimmed-tool-activity:hover{opacity:.85}
+.trimmed-tool-activity{margin-bottom:12px;padding:5px 12px 5px 10px;border:1px solid var(--border);border-radius:999px;background:var(--bg-tertiary);color:var(--text-secondary);font-size:12px;font-weight:500;cursor:pointer;user-select:none;display:inline-flex;align-items:center;gap:6px;transition:background var(--transition),border-color var(--transition),color var(--transition)}
+.trimmed-tool-activity>svg{display:block;opacity:.7}
+.trimmed-tool-activity:hover{background:var(--accent-subtle);border-color:var(--accent);color:var(--accent)}
+.trimmed-tool-activity:hover>svg{opacity:1}
 
 /* Display-only "Earlier Thinking" block surfaced on Continue rollback —
    the trailing reasoning that was discarded because no provider can

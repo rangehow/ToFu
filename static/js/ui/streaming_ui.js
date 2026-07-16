@@ -579,13 +579,14 @@ function _syncToolRoundsDOM(container, rounds) {
    *   they just live inside a [data-prn] slot now. */
   const toolRounds = rounds.slice();
 
-  /* ★ Segment-timeline streaming interleave (step 5b): when the flag is ON,
-   *   the live panel carries the `seg-timeline` class so the SETTLED
-   *   `.seg-timeline .seg-thinking` / `.seg-timeline .seg-narration` rules
-   *   apply VERBATIM to the per-round prose we render inside each group —
-   *   byte-identical look to the finished render, zero CSS fork. */
-  const _segEnabled = (typeof _segTimelineEnabled === 'function') && _segTimelineEnabled();
-  const _segCls = _segEnabled ? " seg-timeline" : "";
+  /* ★ Segment-timeline streaming interleave: the live panel always carries the
+   *   `seg-timeline` class so the SETTLED `.seg-timeline .seg-thinking` /
+   *   `.seg-timeline .seg-narration` rules apply VERBATIM to the per-round
+   *   prose we render inside each group — byte-identical look to the finished
+   *   render, zero CSS fork. (This is now the only render path; the former
+   *   `_segTimelineEnabled` toggle was removed.) */
+  const _segEnabled = true;
+  const _segCls = " seg-timeline";
 
   // ── Unified tool panel: all tools in chronological order ──
   const unifiedPanel = container.querySelector(".ptool-panel");

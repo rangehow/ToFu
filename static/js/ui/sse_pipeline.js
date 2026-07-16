@@ -1170,6 +1170,8 @@ function dispatchSSEEvent(line, ctx) {
       _handleSwarmInboxInject(ev, _hctx());
     } else if (ev.type === "peer_inbox_inject") {
       _handlePeerInboxInject(ev, _hctx());
+    } else if (ev.type === "user_steer_inject") {
+      _handleUserSteerInject(ev, _hctx());
     } else if (ev.type === "messages_snapshot") {
       _handleMessagesSnapshot(ev, _hctx());
     } else if (ev.type === "endpoint_iteration") {

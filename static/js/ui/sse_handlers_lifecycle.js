@@ -147,6 +147,51 @@ function _handlePeerInboxInject(ev, c) {
       twUpdate(convId);
 }
 
+function _handleUserSteerInject(ev, c) {
+  const convId = c.convId;
+  const assistantMsg = c.assistantMsg, buf = c.buf;
+      /* ── Mid-turn human steer: the operator sent a message WHILE this turn
+       *    was generating (composer inject-mode = steer). The orchestrator
+       *    drained it from the model-facing inbox and injected it as a user
+       *    message before this round. Mirrors _handleSwarmInboxInject /
+       *    _handlePeerInboxInject: write the DISPLAY-ONLY underscore sidecar
+       *    array (assistantMsg._userSteerInjects) that the sync layer persists
+       *    and core.js::_rehydrateInjectRows rebuilds from on reload, AND push
+       *    a live synthetic toolRound (`_userSteerInject`, rendered by
+       *    _renderUserSteerInjectRow) so the chip appears in-order this turn.
+       *    The synthetic row is NEVER persisted into DB toolRounds (the
+       *    wire-replay source) — the wire-purity guard (segments/_types
+       *    is_synthetic_inbox_round) + _rehydrateInjectRows-on-a-copy keep it
+       *    display-only. Dedup by round / _steerKey so SSE replay / poll
+       *    fallback / rehydrate don't double it. */
+      if (!assistantMsg._userSteerInjects) assistantMsg._userSteerInjects = [];
+      const _steerRound = ev.round || 0;
+      if (!assistantMsg._userSteerInjects.some(s => s.round === _steerRound)) {
+        assistantMsg._userSteerInjects.push({
+          round:    _steerRound,
+          count:    ev.count || 0,
+          previews: Array.isArray(ev.previews) ? ev.previews : [],
+          ts:       Date.now(),
+        });
+        if (buf) buf._userSteerInjects = assistantMsg._userSteerInjects;
+      }
+      if (!assistantMsg.toolRounds) assistantMsg.toolRounds = [];
+      const _sKey = "steer:" + _steerRound;
+      if (!assistantMsg.toolRounds.some(r => r._userSteerInject && r._steerKey === _sKey)) {
+        assistantMsg.toolRounds.push({
+          roundNum:      9000000 + assistantMsg.toolRounds.length,
+          status:        "done",
+          _userSteerInject: true,
+          _steerKey:     _sKey,
+          steerRound:    _steerRound,
+          steerCount:    ev.count || 0,
+          steerPreviews: Array.isArray(ev.previews) ? ev.previews : [],
+        });
+        if (buf) buf.toolRounds = assistantMsg.toolRounds;
+      }
+      twUpdate(convId);
+}
+
 function _handleMessagesSnapshot(ev, c) {
   const convId = c.convId, taskId = c.taskId;
   const assistantMsg = c.assistantMsg, buf = c.buf;

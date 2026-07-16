@@ -51,6 +51,9 @@ Tofu 是一个**完全自托管的 AI 助手**，一条命令即可启动。它�
 | **Linux / macOS** | `curl -fsSL https://raw.githubusercontent.com/rangehow/ToFu/main/install.sh \| bash` |
 | **Docker** | `git clone https://github.com/rangehow/ToFu.git && cd ToFu && docker compose up -d` |
 
+> **macOS —— 想要点开即用的桌面应用？** 不走上面的 `install.sh`，可到[最新 Release](https://github.com/rangehow/ToFu/releases/latest)下载 `.dmg`，并按你的芯片选择：
+> Apple 芯片（M1/M2/M3…）选 **`Tofu-*-macos-arm64.dmg`**，Intel Mac 选 **`Tofu-*-macos-x86_64.dmg`**。
+
 就这一步。每个方式都会自动处理运行时、依赖、数据库、浏览器引擎，并启动服务器 —— 无需任何参数，无需后续操作。
 
 > 想预设 API 密钥、改端口、或安装失败需要恢复？所有可选参数和故障排查方案都在 **[docs/INSTALL.md](docs/INSTALL.md)**。

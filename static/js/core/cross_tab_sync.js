@@ -226,8 +226,30 @@ async function _verifyActiveConvFromServer(convId) {
     saveConversations(convId);
     try { ConvCache.put(conv); } catch (e) { debugLog(`[conv-notify] cache put skipped: ${e && e.message}`, "warn"); }
     if (activeConvId === convId) {
-      renderChat(conv, false);
-      if (typeof _restoreConvToolState === "function") _restoreConvToolState(conv);
+      /* ★ Cross-device LIVE-TURN attach — the adopted settings may have just
+       *   restored ``activeTaskId`` for a turn STILL generating on the origin
+       *   device / server. Without reconnecting, this viewing tab holds no
+       *   ``activeStreams`` entry and no pinned live task, so ``convIsBusy``
+       *   reports idle: the composer reverts to the Send arrow (looks
+       *   clickable) with no live phase text even though generation is
+       *   ongoing — the reported symptom. Reuse the SAME server-authoritative
+       *   reconnect the click-open path uses (_reconnectServerTaskIfIdle →
+       *   connectToTask): it re-attaches the SSE (restoring phase text +
+       *   streaming UI) or self-heals to finishStream if the task already
+       *   ended. Idempotent — no-ops once a stream is live in this tab (and
+       *   _onConvNotifyPush then suppresses further frames while it streams).
+       *   When it reconnects it repaints via showStreamingUIForConv, so skip
+       *   the static renderChat to avoid a double paint (mirrors
+       *   loadConversation). */
+      const _reconnected = (typeof _reconnectServerTaskIfIdle === "function")
+        && _reconnectServerTaskIfIdle(convId);
+      if (!_reconnected) {
+        renderChat(conv, false);
+        if (typeof _restoreConvToolState === "function") _restoreConvToolState(conv);
+      }
+      /* Refresh the composer Send/Stop button so a still-running server task
+       *   shows Stop (■) on this device, not the misleading Send arrow. */
+      if (typeof updateSendButton === "function") updateSendButton();
     }
   }
 }

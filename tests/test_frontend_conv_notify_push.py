@@ -79,6 +79,9 @@ let saveCalls = [];          // saveConversations(convId)
 let listRefreshCalls = 0;    // loadConversationsFromServer()
 let bodyRefetchCalls = [];   // loadConversationMessages — must NEVER run for active
 let serverResponse = null;   // what Api.conversations.get resolves to
+let reconnectCalls = [];     // _reconnectServerTaskIfIdle(convId)
+let sendBtnCalls = 0;        // updateSendButton()
+let reconnectReturns = false;// what _reconnectServerTaskIfIdle returns
 
 // ── Window-scope globals cross_tab_sync.js touches at load + runtime ──
 global._syncChannel = null;
@@ -103,8 +106,10 @@ global.newChat = () => {};
 global.renderConversationList = () => {};
 global.renderChat = (conv) => { renderChatCalls.push(conv && conv.id); };
 global.saveConversations = (id) => { saveCalls.push(id); };
-global._applySettingsToConv = () => {};
+global._applySettingsToConv = (conv, settings) => { if (settings && settings.activeTaskId && conv && !conv.activeTaskId && !conv._activeTaskClearedAt) conv.activeTaskId = settings.activeTaskId; };
 global._restoreConvToolState = () => {};
+global._reconnectServerTaskIfIdle = (id) => { reconnectCalls.push(id); return reconnectReturns; };
+global.updateSendButton = () => { sendBtnCalls++; };
 global.loadConversationsFromServer = async () => { listRefreshCalls++; };
 global.loadConversationMessages = async (id) => { bodyRefetchCalls.push(id); };
 global.pushIsConnected = () => true;
@@ -117,6 +122,7 @@ function loadModule(src) { (0, eval)(src); }
 function reset() {
   getCalls = []; renderChatCalls = []; saveCalls = [];
   listRefreshCalls = 0; bodyRefetchCalls = []; serverResponse = null;
+  reconnectCalls = []; sendBtnCalls = 0; reconnectReturns = false;
   _timers = [];
   global.conversations = [];
   global.activeStreams = new Map();
@@ -212,6 +218,46 @@ const settle = async () => { for (let i = 0; i < 5; i++) await flush(); };
     await flush(); fireTimers(); await settle();
     check('keeplonger_not_shrunk', conversations[0].messages[1].content === 'a much longer local answer already streamed');
     check('keeplonger_not_rendered', renderChatCalls.length === 0);
+  }
+
+  // ══ 2d. CROSS-DEVICE LIVE TURN: adopted turn is still generating server-side
+  //         → reconnect the live task + refresh the composer button (Stop). ══
+  {
+    reset();
+    conversations = [{ id: 'c1', _serverRev: 5, messages: [
+      { role: 'user', content: 'q' },
+    ] }];
+    activeConvId = 'c1';
+    reconnectReturns = true;   // server task still running → connectToTask attaches
+    serverResponse = { rev: 6, settings: { activeTaskId: 'task-live' }, messages: [
+      { role: 'user', content: 'q' },
+      { role: 'assistant', content: 'partial so far' },
+    ] };
+    _onConvNotifyPush({ type: 'conv_changed', convId: 'c1', rev: 6, userId: 1 });
+    await flush(); fireTimers(); await settle();
+    check('liveturn_activeTaskId_restored', conversations[0].activeTaskId === 'task-live');
+    check('liveturn_reconnect_attempted', reconnectCalls.length === 1 && reconnectCalls[0] === 'c1');
+    check('liveturn_sendbtn_refreshed', sendBtnCalls === 1);
+    // Reconnect repaints via showStreamingUIForConv → skip the static renderChat.
+    check('liveturn_no_double_paint', renderChatCalls.length === 0);
+  }
+
+  // ══ 2e. NOT live server-side (reconnect returns false) → static render + btn ══
+  {
+    reset();
+    conversations = [{ id: 'c1', _serverRev: 5, messages: [
+      { role: 'user', content: 'q' },
+    ] }];
+    activeConvId = 'c1';
+    reconnectReturns = false;  // task already finished server-side
+    serverResponse = { rev: 6, messages: [
+      { role: 'user', content: 'q' },
+      { role: 'assistant', content: 'the settled answer' },
+    ] };
+    _onConvNotifyPush({ type: 'conv_changed', convId: 'c1', rev: 6, userId: 1 });
+    await flush(); fireTimers(); await settle();
+    check('settled_static_rendered', renderChatCalls.length === 1);
+    check('settled_sendbtn_refreshed', sendBtnCalls === 1);
   }
 
   // ══ 3. rev-GATE: equal / older rev → NO-OP, no GET ══
@@ -370,6 +416,29 @@ const settle = async () => { for (let i = 0; i < 5; i++) await flush(); };
     loadModule(SRC);
   }
 
+  // ══ 13. NEUTER C: strip the cross-device live-turn reconnect → an adopted
+  //          still-generating turn leaves this tab with NO live stream (the
+  //          reported bug: composer reverts to Send, no phase text). ══
+  {
+    const RECON = 'const _reconnected = (typeof _reconnectServerTaskIfIdle === "function")\n        && _reconnectServerTaskIfIdle(convId);';
+    const neutered = SRC.split(RECON).join('const _reconnected = false;');
+    check('neuterC_patch_applied', neutered !== SRC && !neutered.includes(RECON));
+    loadModule(neutered);
+    reset();
+    conversations = [{ id: 'c1', _serverRev: 5, messages: [{ role: 'user', content: 'q' }] }];
+    activeConvId = 'c1';
+    reconnectReturns = true;   // task IS live server-side, but the call is neutered out
+    serverResponse = { rev: 6, settings: { activeTaskId: 'task-live' }, messages: [
+      { role: 'user', content: 'q' },
+      { role: 'assistant', content: 'partial' },
+    ] };
+    _onConvNotifyPush({ type: 'conv_changed', convId: 'c1', rev: 6, userId: 1 });
+    await flush(); fireTimers(); await settle();
+    // Reconnect never attempted → the live turn is NOT re-attached in this tab.
+    check('neuterC_no_reconnect', reconnectCalls.length === 0);
+    loadModule(SRC);
+  }
+
   console.log(out.join('\n'));
   process.exit(0);
 })();
@@ -395,4 +464,4 @@ def test_conv_notify_push_handler():
     assert proc.returncode == 0, f'node failed: {proc.stderr}\n{output}'
     fails = [ln for ln in output.splitlines() if ln.startswith('FAIL')]
     assert not fails, 'conv-notify-push handler failures:\n' + output
-    assert output.count('PASS') >= 32, f'expected >=32 PASS lines, got:\n{output}'
+    assert output.count('PASS') >= 39, f'expected >=39 PASS lines, got:\n{output}'

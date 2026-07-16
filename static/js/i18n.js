@@ -2197,6 +2197,22 @@ var _i18n = {
   'peer.injectRowMany': { zh: '条对话消息', en: 'peer messages' },
   'peer.injectRowBadge': { zh: '已注入上下文', en: 'injected → context' },
 
+  // Post-send inject-mode chooser (main_send_pipeline.js _promptInjectMode) —
+  // shown ONLY when a turn is already generating for this conversation. Two
+  // lanes: steer into the running reply vs queue as a fresh turn.
+  'inject.promptTitle': { zh: '正在生成中 — 这条消息怎么发送？', en: 'A reply is generating — how should this message be sent?' },
+  'inject.labelSteer': { zh: '插入当前回复', en: 'Steer into this reply' },
+  'inject.subSteer': { zh: '在下一个工具调用边界注入,让模型立刻看到', en: 'Injected at the next tool-call boundary so the model sees it right away' },
+  'inject.labelQueue': { zh: '排到下一轮', en: 'Queue as the next turn' },
+  'inject.subQueue': { zh: '当前回复结束后作为新一轮自动发送', en: 'Sent automatically as a fresh turn after this reply ends' },
+  'steer.injected': { zh: '已插入当前回复,将在下一个工具调用边界注入', en: 'Steered into the reply — injected at the next tool-call boundary' },
+  // In-timeline chip (tool_rounds.js _renderUserSteerInjectRow) marking a human
+  // steer message injected mid-turn.
+  'steer.injectRowLabel': { zh: '你中途插入了', en: 'You steered mid-turn' },
+  'steer.injectRowOne': { zh: '条消息', en: 'steer message' },
+  'steer.injectRowMany': { zh: '条消息', en: 'steer messages' },
+  'steer.noPayload': { zh: '无消息内容', en: 'No message available.' },
+
   // Swarm agent phase pills (streaming_swarm_panel.js)
   'swarm.phase.thinking': { zh: '思考中…', en: 'Thinking…' },
   'swarm.phase.tool_use': { zh: '调用工具中', en: 'Using tools' },

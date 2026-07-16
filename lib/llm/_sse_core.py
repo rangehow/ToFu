@@ -366,6 +366,12 @@ def prepare_request(body, *, attempt=0, log_prefix='', api_key=None,
             _key_hash = _hashlib.sha256(
                 ('tofu-cache-probe:' + str(api_key)).encode('utf-8')
             ).hexdigest()[:12]
+        _sticky = {}
+        try:
+            from lib.llm_dispatch.conv_affinity import get_pick_decision
+            _sticky = get_pick_decision() or {}
+        except Exception as _se:
+            logger.debug('%s cache-probe sticky capture failed: %s', log_prefix, _se)
         _routing = {
             'url': url,
             'base_url': base_url or '',
@@ -375,6 +381,11 @@ def prepare_request(body, *, attempt=0, log_prefix='', api_key=None,
             'trace_id': trace_id,
             'attempt': attempt,
             'api_protocol': api_protocol,
+            # Sticky-routing decision (WHY the key is what it is): distinguishes
+            # a soft-fallback-under-cooldown flip (affinity_fell_back=True) from
+            # affinity never engaging. {preferred_key_hash, chosen_key_hash,
+            # affinity_fell_back, cooldown_remaining_s}.
+            'sticky': _sticky,
         }
     except Exception as _rfe:
         logger.debug('%s cache-probe routing capture failed: %s', log_prefix, _rfe)

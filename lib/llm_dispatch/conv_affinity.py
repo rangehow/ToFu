@@ -63,6 +63,8 @@ __all__ = [
     'conv_affinity',
     'get_preferred_key',
     'record_conv_key',
+    'record_pick_decision',
+    'get_pick_decision',
 ]
 
 
@@ -144,6 +146,38 @@ def clear_conv_affinity() -> None:
     would bleed into the NEXT unrelated task that lands on this thread.
     """
     _state.conv_id = None
+
+
+def record_pick_decision(*, preferred_key, chosen_key, fell_back, cooldown_remaining_s=None):
+    """Record the LAST sticky-routing pick decision on this thread (diagnostic).
+
+    Read back by the cache byte-probe so a routing-flip capture can say WHY the
+    key differed — soft-fallback under cooldown/contention vs affinity never
+    engaging. Thread-local so a concurrent sibling's pick can't clobber it, and
+    cheap enough to always record (a plain dict assignment). Never affects
+    routing behaviour.
+    """
+    _state.pick_decision = {
+        'preferred_key_hash': _hash_key(preferred_key),
+        'chosen_key_hash': _hash_key(chosen_key),
+        'affinity_fell_back': bool(fell_back),
+        'cooldown_remaining_s': cooldown_remaining_s,
+    }
+
+
+def get_pick_decision() -> dict | None:
+    """Return the last sticky pick decision recorded on this thread, or None."""
+    return getattr(_state, 'pick_decision', None)
+
+
+def _hash_key(key_name):
+    """Salted, truncated hash of a key NAME for the probe (key names are not
+    secrets, but hashing keeps the dump uniform with the api-key hash and avoids
+    leaking internal key labels into an artifact). Empty/None → ''."""
+    if not key_name:
+        return ''
+    import hashlib
+    return hashlib.sha256(('tofu-cache-probe:' + str(key_name)).encode('utf-8')).hexdigest()[:12]
 
 
 @contextlib.contextmanager

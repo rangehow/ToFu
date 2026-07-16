@@ -939,12 +939,23 @@ class LLMDispatcher:
                 # INFO (not DEBUG) because this is the exact event that re-bills
                 # the prompt cache — production app.log is INFO+, so a DEBUG line
                 # left us blind to the most expensive routing decision.
-                if _sticky_key and chosen.key_name != _sticky_key:
+                _fell_back = bool(_sticky_key and chosen.key_name != _sticky_key)
+                if _fell_back:
                     logger.info('[Dispatch] conv=%s sticky key %s unavailable '
                                 '— rebinding to %s (model=%s); prompt cache will '
                                 'be re-written on the new key',
                                 _sticky[:8], _sticky_key, chosen.key_name,
                                 chosen.model)
+                # Diagnostic: record WHY the key differed (soft-fallback vs
+                # no-affinity) so the cache byte-probe can classify a routing
+                # flip. Best-effort, never affects routing.
+                try:
+                    from lib.llm_dispatch.conv_affinity import record_pick_decision
+                    record_pick_decision(
+                        preferred_key=_sticky_key, chosen_key=chosen.key_name,
+                        fell_back=_fell_back)
+                except Exception as _pd_err:
+                    logger.debug('[Dispatch] pick-decision record failed: %s', _pd_err)
                 record_conv_key(_sticky, chosen.key_name)
 
             # ── Isolation observability ──

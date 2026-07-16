@@ -660,6 +660,35 @@ function _renderSwarmUpdateCard(f, rawText) {
      </div>`;
 }
 
+/* Build the verbatim "what the model actually saw" text for an inbox / peer /
+ * steer synthetic row out of its previews. These rows have NO toolContent (they
+ * mark an injected user message, not a tool return), so the far-right "模型原文"
+ * entry sources its verbatim text from here — the exact payload joined per
+ * preview, with an optional `[from <conv>]` attribution for multi-sender peer
+ * injections. */
+function _injectVerbatimText(previews, withFrom) {
+  if (!Array.isArray(previews) || !previews.length) return "";
+  return previews.map((p) => {
+    const text = String((p && p.text) == null ? "" : p.text);
+    if (withFrom && p && p.fromConv) return `[from ${String(p.fromConv)}]\n${text}`;
+    return text;
+  }).join("\n\n———\n\n");
+}
+
+/* A small "who sent this" bubble: resolves a sibling conversation id to its
+ * human-readable TITLE via the shared `convTitleById` seam (never a bare id —
+ * falls back to a localized label), with the raw id in the tooltip. Used in the
+ * peer-inject row header so the user sees a conversation title, not `mrnaj25i`. */
+function _peerFromBubble(cid) {
+  const id = String(cid || "");
+  if (!id) return "";
+  const title = (typeof convTitleById === "function")
+    ? (convTitleById(id) || id)
+    : id;
+  const icon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:1em;height:1em"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>';
+  return `<span class="sw-peer-from-bubble" title="conv ${escapeHtml(id)}">${icon}<span>${escapeHtml(title)}</span></span>`;
+}
+
 function _renderInboxInjectRow(round) {
   const _t = (typeof t === "function") ? t : (k, d) => d;
   const count = round.inboxCount || (round.inboxPreviews || []).length || 0;
@@ -690,13 +719,15 @@ function _renderInboxInjectRow(round) {
     : `<div class="sw-inbox-row-empty">${escapeHtml(_t("swarmCard.noPayload", "No payload available."))}</div>`;
   const badge = _t("peer.injectRowBadge", "injected → context");
   const label = _t("swarmCard.received", "Received");
+  const modelBtn = _tcModelViewBtnForText(
+    round, _injectVerbatimText(previews, false));
   return `<details class="sw-inbox-row" data-rn="${round.roundNum}">
        <summary class="ptool-line sw-inbox-row-header">
          <span class="ptool-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:1em;height:1em"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg></span>
          <span class="ptool-text">${escapeHtml(label)} <b>${count}</b> ${escapeHtml(word)}</span>
          ${idsLabel}
          <span class="ptool-badge ptool-badge-info">${escapeHtml(badge)}</span>
-         <span class="sw-inbox-row-chev">▾</span>
+         ${modelBtn}
        </summary>
        <div class="sw-inbox-row-body">${bodyHtml}</div>
      </details>`;
@@ -724,35 +755,37 @@ function _renderPeerInjectRow(round) {
   const label = typeof t === "function" ? t("peer.injectRowLabel") : "Received";
   const badge = typeof t === "function" ? t("peer.injectRowBadge") : "injected → context";
   const _t = (typeof t === "function") ? t : (k, d) => d;
-  const modelTag = _t("tool.modelViewChip", "The model's view · verbatim");
-  const modelLbl = _t("tool.modelView", "Model view");
   const bodyHtml = previews.length
     ? previews.map(p => {
-        const fc = escapeHtml((p.fromConv || "").slice(0, 8));
         const text = String(p.text == null ? "" : p.text);
-        // Peer messages are plain prose — render as Markdown for the human
-        // view, with the raw text behind a verbatim "model view" toggle.
+        // Attribution reads as a conversation-title bubble (via convTitleById),
+        // NOT a raw id — users care who sent it. Peer messages are plain prose,
+        // rendered as Markdown for the human view; the far-right "模型原文" header
+        // entry carries the verbatim text the model saw.
+        const fromBubble = p.fromConv ? _peerFromBubble(p.fromConv) : "";
         const bodyMd = text.trim()
           ? `<div class="sw-card-preview md-content">${(typeof renderMarkdown === "function") ? renderMarkdown(text) : escapeHtml(text)}</div>`
           : "";
         return `<div class="sw-card sw-peer-card-item">` +
-          (fc ? `<div class="sw-card-head"><span class="sw-card-agent">${fc}</span></div>` : "") +
+          (fromBubble ? `<div class="sw-card-head">${fromBubble}</div>` : "") +
           bodyMd +
-          `<details class="sw-card-raw">` +
-            `<summary class="sw-card-raw-toggle">${Icon("eye", 11)}<span>${escapeHtml(modelLbl)}</span></summary>` +
-            `<div class="sw-card-raw-meta">${escapeHtml(modelTag)}</div>` +
-            `<pre class="sw-card-raw-pre">${escapeHtml(text)}</pre>` +
-          `</details>` +
         `</div>`;
       }).join("")
     : `<div class="sw-inbox-row-empty">${escapeHtml(_t("peerCard.noPayload", "No message available."))}</div>`;
+  // Header "sender" bubble: the first (or sole) peer conversation, resolved to
+  // its title. Multi-sender injections keep the raw short-id list as a subtle
+  // secondary count instead of a title (a title-per-sender would crowd the row).
+  const headBubble = (froms.length === 1 && previews[0] && previews[0].fromConv)
+    ? _peerFromBubble(previews[0].fromConv)
+    : fromLabel;
+  const modelBtn = _tcModelViewBtnForText(round, _injectVerbatimText(previews, true));
   return `<details class="sw-inbox-row sw-peer-row" data-rn="${round.roundNum}">
        <summary class="ptool-line sw-inbox-row-header">
          <span class="ptool-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:1em;height:1em"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span>
          <span class="ptool-text">${escapeHtml(label)} <b>${count}</b> ${escapeHtml(word)}</span>
-         ${fromLabel}
+         ${headBubble}
          <span class="ptool-badge ptool-badge-info">${escapeHtml(badge)}</span>
-         <span class="sw-inbox-row-chev">▾</span>
+         ${modelBtn}
        </summary>
        <div class="sw-inbox-row-body">${bodyHtml}</div>
      </details>`;
@@ -775,30 +808,22 @@ function _renderUserSteerInjectRow(round) {
     : _t("steer.injectRowMany", "steer messages");
   const label = _t("steer.injectRowLabel", "You steered mid-turn");
   const badge = _t("peer.injectRowBadge", "injected → context");
-  const modelTag = _t("tool.modelViewChip", "The model's view · verbatim");
-  const modelLbl = _t("tool.modelView", "Model view");
   const bodyHtml = previews.length
     ? previews.map(p => {
         const text = String(p.text == null ? "" : p.text);
         const bodyMd = text.trim()
           ? `<div class="sw-card-preview md-content">${(typeof renderMarkdown === "function") ? renderMarkdown(text) : escapeHtml(text)}</div>`
           : "";
-        return `<div class="sw-card sw-steer-card-item">` +
-          bodyMd +
-          `<details class="sw-card-raw">` +
-            `<summary class="sw-card-raw-toggle">${Icon("eye", 11)}<span>${escapeHtml(modelLbl)}</span></summary>` +
-            `<div class="sw-card-raw-meta">${escapeHtml(modelTag)}</div>` +
-            `<pre class="sw-card-raw-pre">${escapeHtml(text)}</pre>` +
-          `</details>` +
-        `</div>`;
+        return `<div class="sw-card sw-steer-card-item">` + bodyMd + `</div>`;
       }).join("")
     : `<div class="sw-inbox-row-empty">${escapeHtml(_t("steer.noPayload", "No message available."))}</div>`;
+  const modelBtn = _tcModelViewBtnForText(round, _injectVerbatimText(previews, false));
   return `<details class="sw-inbox-row sw-steer-row" data-rn="${round.roundNum}">
        <summary class="ptool-line sw-inbox-row-header">
          <span class="ptool-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:1em;height:1em"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/></svg></span>
          <span class="ptool-text">${escapeHtml(label)} <b>${count}</b> ${escapeHtml(word)}</span>
          <span class="ptool-badge ptool-badge-info">${escapeHtml(badge)}</span>
-         <span class="sw-inbox-row-chev">▾</span>
+         ${modelBtn}
        </summary>
        <div class="sw-inbox-row-body">${bodyHtml}</div>
      </details>`;

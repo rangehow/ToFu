@@ -6869,8 +6869,17 @@ input.settings-mono {
 .sw-inbox-row>.sw-inbox-row-header{cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px}
 .sw-inbox-row>.sw-inbox-row-header::-webkit-details-marker{display:none}
 .sw-inbox-row .sw-inbox-row-ids{color:var(--text-tertiary);font-family:'JetBrains Mono',monospace;font-size:10px;opacity:0.85}
-.sw-inbox-row .sw-inbox-row-chev{margin-left:auto;color:var(--text-tertiary);font-size:11px;transition:transform .15s ease}
-.sw-inbox-row[open] .sw-inbox-row-chev{transform:rotate(180deg)}
+/* Collapse affordance: a caret appended after the row label (same convention as
+   the convmeta / memory / todo blocks). The explicit .sw-inbox-row-chev span was
+   removed so the far-right slot belongs unambiguously to the "模型原文" button. */
+.sw-inbox-row>.sw-inbox-row-header .ptool-text::after{content:" ▸";font-size:10px;opacity:0.5}
+.sw-inbox-row[open]>.sw-inbox-row-header .ptool-text::after{content:" ▾"}
+/* "Who sent this" bubble — a conversation TITLE (via convTitleById), not a raw
+   id. Reads like the peer-msg provenance banner so the sender is legible. */
+.sw-peer-from-bubble{display:inline-flex;align-items:center;gap:5px;flex-shrink:0;max-width:220px;padding:1px 9px;border:1px solid rgba(130,170,255,.35);background:rgba(130,170,255,.09);border-radius:9px;font-size:11px;line-height:1.4;color:#82aaff;font-weight:600}
+.sw-peer-from-bubble svg{display:block;flex-shrink:0}
+.sw-peer-from-bubble>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sw-inbox-row>.sw-inbox-row-header .tc-preview-btn{margin-left:auto}
 .sw-inbox-row .sw-inbox-row-body{padding:6px 10px 8px 30px;display:flex;flex-direction:column;gap:8px}
 .sw-inbox-row-item{border-left:2px solid rgba(251,191,36,0.35);padding-left:10px}
 .sw-inbox-row-agent{font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:600;color:#fbbf24;margin-bottom:2px}

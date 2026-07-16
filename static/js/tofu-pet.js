@@ -495,6 +495,49 @@
     if (_bar) _bar.style.setProperty('--bar-scene-x', (-(W.x) * 0.12).toFixed(1) + 'px');
   }
 
+  // ── LIGHTING: read the scene's live sun (TofuScene.lightInfo) and shade the
+  // sprite + point its cast shadow with the SAME source, so the pet is lit by
+  // the one sun that drifts over the diorama instead of reading as pasted on.
+  // Fully guarded: no scene / no light → reset to the neutral defaults (flat
+  // baked shading, centred shadow), so a scene-less or non-tofu pet is
+  // unchanged. Cheap: a few CSS var writes per frame, no layout.
+  var _lastLightK = '';
+  function _applyLight() {
+    if (!_el) return;
+    var info = null;
+    try {
+      if (window.TofuScene && typeof window.TofuScene.lightInfo === 'function') {
+        info = window.TofuScene.lightInfo();
+      }
+    } catch (e) { /* scene absent — flat shading, harmless */ }
+    var dx = 0, scale = 1, shade = 0, warm = 0;
+    if (info && typeof info.nx === 'number') {
+      // Pet foot-centre as a 0..1 position along the bar, so "which side is the
+      // sun on" is measured relative to the CAT, not the bar centre.
+      var span = Math.max(1, (W.max - W.min));
+      var petN = Math.max(0, Math.min(1, (W.x - W.min) / span));
+      // signed sun offset: >0 sun to the pet's RIGHT, <0 to its LEFT.
+      var rel = Math.max(-1, Math.min(1, info.nx - petN));
+      // cast shadow points AWAY from the sun (opposite sign), grows as the sun
+      // moves to a side (a low/side sun casts a longer shadow).
+      dx = -rel * 7;                                  // px, capped by rel range
+      scale = 1 + Math.abs(rel) * 0.5;                // up to 1.5x length
+      // form shade sits on the anti-sun side of the body (same sign as shadow).
+      shade = -rel * 0.7;                             // px drop-shadow x-offset
+      warm = Math.max(0, Math.min(1, info.warm || 0)) * (1 - Math.abs(rel) * 0.4);
+    }
+    // only touch the DOM when a rounded value actually changed (avoid per-frame
+    // style churn when the cat + sun are momentarily static).
+    var k = dx.toFixed(1) + '|' + scale.toFixed(2) + '|' + shade.toFixed(2) + '|' + warm.toFixed(2);
+    if (k === _lastLightK) return;
+    _lastLightK = k;
+    var st = _el.style;
+    st.setProperty('--pet-shadow-dx', dx.toFixed(1) + 'px');
+    st.setProperty('--pet-shadow-scale', scale.toFixed(2));
+    st.setProperty('--pet-shade-dx', shade.toFixed(2) + 'px');
+    st.setProperty('--pet-light-warm', warm.toFixed(2));
+  }
+
   // Is there a scene critter close enough to chase? Reads TofuScene.critterX()
   // (CSS px along the bar), guarded so the pet works with no scene present.
   function _critterX() {
@@ -634,6 +677,7 @@
 
   function _step(ts) {
     W.raf = requestAnimationFrame(_step);
+    _applyLight();   // shade the sprite + point its shadow from the live scene sun (also while dragged)
     if (W.paused || W.state === 'drag') { W.last = ts; return; }   // finger owns position while dragging
     var dt = W.last ? (ts - W.last) / 1000 : 0;
     W.last = ts;

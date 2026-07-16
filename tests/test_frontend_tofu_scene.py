@@ -1162,8 +1162,83 @@ def test_NEUTER_uniform_frame_radius_is_caught():
         "neuter left the value still irregular — test would not bite"
 
 
+_LIGHT_HARNESS = r"""
+'use strict';
+const THEME="__THEME__", DECOR="__DECOR__";
+let _rafCbs=[];
+global.requestAnimationFrame=function(cb){_rafCbs.push(cb);return _rafCbs.length;};
+global.cancelAnimationFrame=function(){};
+global.devicePixelRatio=1;
+function mkCtx(){return{canvas:{width:400,height:48},setTransform(){},clearRect(){},save(){},restore(){},translate(){},rotate(){},beginPath(){},fill(){},fillRect(){},ellipse(){},drawImage(){},createLinearGradient(){return{addColorStop(){}};},createRadialGradient(){return{addColorStop(){}};},set fillStyle(v){},get fillStyle(){return'';},set globalAlpha(v){},get globalAlpha(){return 1;},set globalCompositeOperation(v){},get globalCompositeOperation(){return'';}};}
+global.window={matchMedia(){return{matches:false,addEventListener(){},addListener(){}};},addEventListener(){},ResizeObserver:function(){return{observe(){},disconnect(){}};},MutationObserver:function(){return{observe(){},disconnect(){}};},devicePixelRatio:1};
+global.ResizeObserver=global.window.ResizeObserver;global.MutationObserver=global.window.MutationObserver;
+function mkEl(){return{_attrs:{},className:'',style:{},width:0,height:0,setAttribute(k,v){this._attrs[k]=v;},getAttribute(k){return this._attrs[k];},appendChild(){},insertBefore(){},querySelector(){return null;},firstChild:null,getBoundingClientRect(){return{left:0,right:400,top:0,bottom:48,width:400,height:48};}};}
+const _bar=mkEl();_bar._attrs['data-decor']=DECOR;
+global.document={readyState:'complete',hidden:false,documentElement:{getAttribute(k){return k==='data-theme'?THEME:null;}},addEventListener(){},getElementById(id){return id==='projectBar'?_bar:null;},createElement(t){const e=mkEl();if(t==='canvas')e.getContext=function(){return mkCtx();};return e;}};
+__SRC__
+const TS=window.TofuScene;
+// pump two frames FAR apart in time so the slow sun sweep produces a different x
+let f1=null,f2=null;
+if(_rafCbs.length){const cb=_rafCbs[0];cb(1);f1=TS.lightInfo();}         // ts=1 (0 is falsy → _t0 reset)
+if(_rafCbs.length){const cb=_rafCbs[0];cb(120001);f2=TS.lightInfo();}     // +120s → sun swept
+console.log(JSON.stringify({f1:f1,f2:f2}));
+process.exit(0);
+"""
+
+
+def _run_light(theme="tofu", decor="meadow", src=None):
+    import json
+    src = src if src is not None else SCENE_JS.read_text()
+    script = (_LIGHT_HARNESS.replace("__SRC__", src)
+              .replace("__THEME__", theme).replace("__DECOR__", decor))
+    out = subprocess.run(["node", "-e", script], capture_output=True, text=True,
+                         cwd=str(REPO), timeout=20)
+    assert out.returncode == 0, f"node failed: {out.stderr}\n{out.stdout}"
+    line = [ln for ln in out.stdout.strip().splitlines() if ln.strip().startswith("{")][-1]
+    return json.loads(line)
+
+
+def test_scene_exposes_lightinfo_with_a_moving_sun():
+    """The pet's lighting system needs a shared light source: the scene must
+    expose TofuScene.lightInfo() with a normalized sun x (0..1) that MOVES as
+    the sun sweeps, plus a warmth. Without a live, moving light the pet can't be
+    shaded by 'the same sun' — it stays pasted-on."""
+    r = _run_light()
+    f1, f2 = r["f1"], r["f2"]
+    assert f1 and f2, f"lightInfo() returned null on an active tofu scene: {r}"
+    for f in (f1, f2):
+        assert 0.0 <= f["nx"] <= 1.0, f"sun nx out of range: {f}"
+        assert 0.0 <= f["warm"] <= 1.0, f"warm out of range: {f}"
+    assert abs(f1["nx"] - f2["nx"]) > 1e-3, \
+        f"sun x did not move across a 120s span — light is static: {f1['nx']} vs {f2['nx']}"
+
+
+def test_lightinfo_null_when_scene_off_or_non_tofu():
+    """No lit scene → no light direction, so the pet falls back to flat baked
+    shading rather than a stale/garbage sun. lightInfo() must be null for
+    scene='off' and for a non-tofu theme."""
+    assert _run_light(decor="off")["f1"] is None, "lightInfo must be null when scene is off"
+    assert _run_light(theme="dark")["f1"] is None, "lightInfo must be null on a non-tofu theme"
+
+
+def test_NEUTER_frozen_sun_is_caught():
+    """NEUTER: pin the sun sweep to a constant (drop the sin term) in a COPY →
+    the moving-sun assertion must fail, proving it bites."""
+    src = SCENE_JS.read_text()
+    poisoned = src.replace(
+        "return (0.5 + SUN_SWEEP * Math.sin(ms * 0.00006)) * w;",
+        "return 0.5 * w;", 1)
+    assert poisoned != src, "neuter did not match the _sunX body"
+    r = _run_light(src=poisoned)
+    assert r["f1"] and abs(r["f1"]["nx"] - r["f2"]["nx"]) <= 1e-3, \
+        "neuter left the sun moving — test would not bite"
+
+
 if __name__ == "__main__":
-    for fn in [test_mount_paints_opaque_base_and_many_dabs,
+    for fn in [test_scene_exposes_lightinfo_with_a_moving_sun,
+               test_lightinfo_null_when_scene_off_or_non_tofu,
+               test_NEUTER_frozen_sun_is_caught,
+               test_mount_paints_opaque_base_and_many_dabs,
                test_scene_exposes_critter_and_spook_for_pet_interaction,
                test_animation_loop_runs_when_active,
                test_reduced_motion_is_static_no_loop,

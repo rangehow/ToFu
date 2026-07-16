@@ -249,6 +249,23 @@
   var SUN_GLOW_MID = 0.06;            // was 0.12 (mid stop)
   var SUN_SWEEP = 0.34;               // was 0.42 (horizontal travel amplitude)
 
+  // ── SHARED LIGHT FIELD (owner: "the pet lacks a lighting system"). The scene
+  // already drives a slow warm sun radial across the bar; the pet was lit only
+  // by its baked PNG shading, so it read as pasted on. We cache the sun's live
+  // position each painted frame as a NORMALIZED light descriptor and expose it
+  // via TofuScene.lightInfo(), so tofu-pet.js can shade the sprite + point its
+  // cast shadow with the SAME light source — one sun lighting the whole diorama.
+  //   nx : sun x, 0..1 across the bar (0 = left edge, 1 = right edge)
+  //   ny : sun y, 0..1 (it rides high in the sky band, ~0.14)
+  //   warm: the scene's warmth 0..1 (meadow/sky warm, pool cooler)
+  // Held even while the loop is parked (reduced-motion paints one frame), so a
+  // static scene still yields a stable light direction.
+  var _light = { nx: 0.5, ny: 0.14, warm: 0.7 };
+  var SCENE_WARMTH = { meadow: 0.82, pool: 0.34, sky: 0.9 };
+  // Sun x at time `ms` (CSS px). Single source of truth for the paint + the
+  // exposed light descriptor, so they can never drift apart.
+  function _sunX(ms, w) { return (0.5 + SUN_SWEEP * Math.sin(ms * 0.00006)) * w; }
+
   function _isTofu() {
     try {
       return document.documentElement.getAttribute('data-theme') === 'tofu';
@@ -504,8 +521,12 @@
     // drifting sun glow — a soft warm radial that sweeps horizontally (DIMMED:
     // owner found the moving light too glaring; peak/mid/sweep are tuned-down
     // named constants).
-    var sx = (0.5 + SUN_SWEEP * Math.sin(ms * 0.00006)) * w;
+    var sx = _sunX(ms, w);
     var sy = h * 0.14;
+    // publish the live light direction for the pet (normalized, scene-warmth)
+    _light.nx = w > 0 ? sx / w : 0.5;
+    _light.ny = 0.14;
+    _light.warm = SCENE_WARMTH[_scene] != null ? SCENE_WARMTH[_scene] : 0.7;
     var rg = c.createRadialGradient(sx, sy, 0, sx, sy, h * 1.6);
     rg.addColorStop(0, pal.glow + SUN_GLOW_PEAK + ')');
     rg.addColorStop(0.4, pal.glow + SUN_GLOW_MID + ')');
@@ -1033,6 +1054,13 @@
     if (!_critter) return null;
     return { x: _critter.x, y: _critter.base, kind: _critter.kind, dir: _critter.dir };
   }
+  // The live scene light (see _light). Returns a COPY so callers can't mutate
+  // the field. Null when there's no lit scene (off / non-tofu) so the pet falls
+  // back to flat baked shading rather than a stale direction.
+  function lightInfo() {
+    if (_scene === 'off' || !_isTofu()) return null;
+    return { nx: _light.nx, ny: _light.ny, warm: _light.warm };
+  }
   function spook() {
     if (!_critter) return;
     // dart AWAY from the pet if we can tell where it is, else just bolt.
@@ -1133,6 +1161,7 @@
     SCENES: SCENES,
     critterX: critterX,
     critterInfo: critterInfo,
+    lightInfo: lightInfo,
     spook: spook
   };
 

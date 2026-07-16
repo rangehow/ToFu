@@ -998,6 +998,64 @@ def test_neuter_facing_transition_reintroduces_paper_flip_risk():
     assert m and "transition" in m.group(1), "neuter did not actually add a transition"
 
 
+def test_pet_reads_scene_light_and_drives_lighting_props():
+    """The pet's lighting system: tofu-pet.js must read TofuScene.lightInfo()
+    each frame (in _step) and drive the CSS light custom properties so the
+    sprite is shaded + its shadow points from the SAME sun the scene moves. We
+    guard the seam at the source level (the node harness can't load the real
+    scene alongside the pet): _applyLight is defined, called from _step, reads
+    lightInfo, and writes the shadow/shade/warm props."""
+    js = PET_JS.read_text()
+    assert "function _applyLight(" in js, "the _applyLight lighting hook is gone"
+    assert re.search(r"function _step\([^)]*\)\s*\{[\s\S]{0,120}?_applyLight\(\)", js), \
+        "_step no longer calls _applyLight every frame — the sprite won't relight"
+    assert "TofuScene.lightInfo" in js, "_applyLight no longer reads the scene's live sun"
+    for prop in ("--pet-shadow-dx", "--pet-shadow-scale", "--pet-shade-dx", "--pet-light-warm"):
+        assert prop in js, f"_applyLight no longer sets {prop}"
+
+
+def test_css_wires_light_props_into_sprite_and_shadow():
+    """The lighting props must actually change pixels: the sprite filter must
+    consume the warm/shade props, and the contact shadow's transform must
+    consume the directional offset + length. Guard the CSS consumption so the
+    JS writes aren't dead."""
+    css = (REPO / "static" / "styles.css").read_text()
+    m = re.search(r"\.tofu-pet \.tofu-pet-img\{([^}]*)\}", css)
+    assert m, "could not isolate the .tofu-pet-img rule"
+    body = m.group(1)
+    assert "filter:" in body and "--pet-shade-dx" in body and "--pet-light-warm" in body, \
+        "the sprite filter no longer consumes the directional light/shade props"
+    ma = re.search(r"\.tofu-pet::after\{([^}]*)\}", css)
+    assert ma, "could not isolate the .tofu-pet::after shadow rule"
+    sbody = ma.group(1)
+    assert "--pet-shadow-dx" in sbody and "--pet-shadow-scale" in sbody, \
+        "the cast shadow no longer follows the sun (missing directional props)"
+
+
+def test_css_dragged_pet_rises_above_foreground_plane():
+    """Overlap fix: a resting pet (z1) is occluded by the near fg plane (z2) so
+    grass hides its paws — correct. But a PICKED-UP cat is airborne and must
+    rise ABOVE that plane, not stay trapped behind grass. Guard that the drag
+    state lifts the pet above the fg canvas z-index (2)."""
+    css = (REPO / "static" / "styles.css").read_text()
+    m = re.search(r'\.tofu-pet\[data-state="drag"\]\{[^}]*z-index:\s*(\d+)', css)
+    assert m, "no z-index lift on the dragged pet — it stays behind the fg plane"
+    assert int(m.group(1)) > 2, \
+        f"dragged pet z-index ({m.group(1)}) must exceed the fg canvas z-index (2)"
+
+
+def test_NEUTER_pet_ignores_light_is_caught():
+    """NEUTER: remove the _applyLight() call from _step in a COPY → the
+    'reads light every frame' guard must fail, proving it bites."""
+    js = PET_JS.read_text()
+    poisoned = js.replace(
+        "_applyLight();   // shade the sprite + point its shadow from the live scene sun (also while dragged)",
+        "", 1)
+    assert poisoned != js, "neuter did not match the _step _applyLight call"
+    assert not re.search(r"function _step\([^)]*\)\s*\{[\s\S]{0,120}?_applyLight\(\)", poisoned), \
+        "neuter left _applyLight wired into _step — test would not bite"
+
+
 def test_registered_in_bundler_manifest():
     assert "'tofu-pet.js'" in BUNDLER.read_text(), \
         "tofu-pet.js missing from _BUNDLE_FILES — it would load as a silent no-op"

@@ -10407,6 +10407,20 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
   display: flex;
   flex-wrap: wrap;
   gap: 5px;
+  /* Bound the chip area so a large diff (e.g. an MCP server contributing
+     dozens of tools) can never overflow the composer — scroll instead. */
+  max-height: 84px;
+  overflow-y: auto;
+}
+.toolset-diff-count {
+  margin-left: 4px;
+  opacity: 0.85;
+  font-variant-numeric: tabular-nums;
+}
+.toolset-diff-chip.more {
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+  border-color: var(--border-light);
 }
 .toolset-diff-chip {
   display: inline-flex;
@@ -12363,8 +12377,26 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
   touch-action:none;        /* let a touch-drag move the cat, not scroll the page */
   will-change:transform;
   -webkit-tap-highlight-color:transparent;
+  /* LIVE SCENE LIGHTING (set per-frame by tofu-pet.js from TofuScene.lightInfo).
+     Defaults = neutral overhead, so a scene-less / non-tofu pet is unchanged.
+     --pet-shadow-dx : cast-shadow horizontal offset, AWAY from the sun
+     --pet-shadow-scale : cast-shadow length (grows as the sun drops to a side)
+     --pet-shade-dx  : form-shadow offset onto the shaded (anti-sun) side
+     --pet-light-warm: 0..1 warm over-light on the sunlit sprite
+     --pet-bright    : hover brightness hook (folded into the one filter) */
+  --pet-shadow-dx:0px;
+  --pet-shadow-scale:1;
+  --pet-shade-dx:0px;
+  --pet-light-warm:0;
+  --pet-bright:1;
 }
 .tofu-pet[data-state="drag"]{cursor:grabbing}
+/* OVERLAP FIX (owner: "the way it overlaps the foreground seems strange"): the
+   near occluder plane sits at z2, IN FRONT of the resting pet (z1) so grass
+   hides its paws — correct while it stands IN the scene. But a PICKED-UP cat is
+   airborne: it must rise ABOVE that near plane, not stay trapped behind the
+   grass. Lift the held sprite above the fg canvas (z2) while dragging. */
+.tofu-pet[data-state="drag"]{z-index:5}
 /* DIRECTION layer — the horizontal mirror is INSTANT (no transition). Tweening
    scaleX(+1)->scaleX(-1) interpolates THROUGH scaleX(0), collapsing the sprite
    to a zero-width vertical line that mirrors — the "flips like a sheet of paper
@@ -12391,6 +12423,16 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
   image-rendering:auto;
   transform-origin:50% 92%;
   animation:tofuPetBreathe 3.8s ease-in-out infinite;
+  /* FORM LIGHT (the pet's own lighting system). A directional drop-shadow lays
+     a thin dark rim on the side AWAY from the sun (--pet-shade-dx), reading as
+     the shaded side of a rounded body; a mild warmth/brightness lift over-lights
+     the sunlit sprite. All driven by the live light props above, so the baked
+     PNG now responds to the SAME sun that moves across the scene. Neutral at the
+     defaults, so a scene-less pet looks exactly as before. */
+  filter:
+    drop-shadow(var(--pet-shade-dx,0px) 0.5px 0.4px rgba(44,32,18,0.30))
+    brightness(calc(var(--pet-bright,1) + var(--pet-light-warm,0) * 0.05))
+    saturate(calc(1 + var(--pet-light-warm,0) * 0.14));
 }
 /* Walking → a gentle vertical BOUNCE synced to the ~600ms 4-frame stride. The
    FRAMES carry the squash/stretch + limb motion; CSS only adds the up/down
@@ -12401,7 +12443,7 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
 .tofu-pet[data-expr="celebrating"] .tofu-pet-img{animation:tofuPetHop .5s cubic-bezier(0.34,1.56,0.64,1) 3, tofuPetBreathe 3.8s ease-in-out infinite}
 .tofu-pet[data-expr="surprised"] .tofu-pet-img{animation:tofuPetJolt .42s ease-out 1, tofuPetBreathe 3.8s ease-in-out infinite}
 .tofu-pet[data-expr="sleeping"] .tofu-pet-img{animation:tofuPetSnooze 5.2s ease-in-out infinite}
-.tofu-pet:hover .tofu-pet-img{filter:brightness(1.08)}
+.tofu-pet:hover .tofu-pet-img{--pet-bright:1.08}
 .tofu-pet:active .tofu-pet-img{transform:scale(0.9)}
 /* ── Contact SHADOW — the soft dark ellipse the kitten casts on the ground, so
    it reads as PLANTED in the scene, not a sprite floating on top (owner ask).
@@ -12418,12 +12460,16 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
   bottom:-1px;
   width:22px;
   height:5px;
-  transform:translateX(-50%);
+  /* DIRECTIONAL cast shadow: offset AWAY from the sun (--pet-shadow-dx) and
+     stretched longer as the sun drops toward a side (--pet-shadow-scale), so
+     the shadow swings + lengthens as the scene's sun drifts overhead — the
+     ground-truth cue that the cat and the scene share one light. */
+  transform:translateX(calc(-50% + var(--pet-shadow-dx,0px))) scaleX(var(--pet-shadow-scale,1));
   border-radius:50%;
   background:radial-gradient(ellipse at center, rgba(64,52,34,0.34) 0%, rgba(64,52,34,0.18) 45%, rgba(64,52,34,0) 72%);
   pointer-events:none;
   z-index:-1;                /* behind the sprite, on the ground */
-  transition:width .18s ease, height .18s ease, opacity .18s ease, transform .18s ease;
+  transition:width .18s ease, height .18s ease, opacity .18s ease;
 }
 /* Lifted: the shadow pulls in tight + faint under the raised cat. */
 .tofu-pet[data-state="drag"]::after{

@@ -14463,6 +14463,38 @@ html:not([data-theme="tofu"]) .tofu-pet{display:none}
   display:none
 }
 
+
+/* ── Queued (pending, not-yet-dispatched) user message ──
+   A message sent from another device (or queued behind a running turn) has
+   landed in the transcript but its turn runs AFTER the current reply. Mute the
+   bubble and show a small "queued" clock chip so its state is legible, not an
+   indistinguishable sent bubble. When dispatch_next_queued reconciles the row
+   (clears _pendingQueued) the fingerprint fold re-renders it into the normal
+   bubble — the muted style simply drops. */
+.message.user-msg.pending-queued .message-content{
+  opacity:0.72;
+}
+.message.user-msg.pending-queued .message-content{
+  border-style:dashed !important;
+}
+.queued-indicator{
+  display:inline-flex;
+  align-items:center;
+  gap:4px;
+  margin-left:8px;
+  padding:1px 7px;
+  border-radius:10px;
+  font-size:11px;
+  font-weight:600;
+  line-height:1.4;
+  color:#8A7A55;
+  background:rgba(196,179,150,0.18);
+  border:1px solid rgba(196,179,150,0.4);
+  vertical-align:middle;
+}
+.queued-indicator > svg{display:block;flex-shrink:0}
+.queued-indicator-text{white-space:nowrap}
+
 /* ═══════════════════════════════════════════════════════════
    ★ Kinako Stamp — Tofu tool blocks, badges & status indicators
    Warm wagashi palette replaces jarring neon yellow→green

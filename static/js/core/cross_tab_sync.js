@@ -116,8 +116,19 @@ if (typeof window !== "undefined") {
 const _CONV_SELF_ECHO_MS = 6000;
 /* Active-conv verify debounce: wait this long before a NON-DESTRUCTIVE server
  *   verify of the OPEN conv, so our own finishStream PUT lands first and the
- *   frame collapses to a rev-gate no-op instead of a spurious repaint. */
+ *   frame collapses to a rev-gate no-op instead of a spurious repaint.
+ *
+ *   TWO regimes by SOURCE, because the debounce is purely LOCAL self-write
+ *   protection and must not tax a genuinely-remote change:
+ *   • LOCAL self-write in flight (conv._localWriteAt fresh) → the full delay:
+ *     our own PUT is about to land and we want the frame to collapse to a
+ *     rev-gate no-op instead of a spurious repaint.
+ *   • CROSS-DEVICE change (no recent local write) → there is NO local PUT to
+ *     protect, so waiting a full second just makes "instant" feel like "1s
+ *     later". Verify near-immediately. This is the last mile of cross-device
+ *     visibility: a message sent from another device shows up here at once. */
 const _CONV_ACTIVE_VERIFY_DELAY_MS = 1000;
+const _CONV_ACTIVE_VERIFY_DELAY_XDEV_MS = 60;
 let _convActiveVerifyTimer = 0;
 let _convNotifyListRefreshTimer = 0;
 function _scheduleConvListRefresh() {
@@ -288,6 +299,15 @@ function _onConvNotifyPush(frame) {
        *   when something actually changed. */
       clearTimeout(_convActiveVerifyTimer);
       const _pendingRev = frameRev;
+      /* No local PUT in flight → this is a cross-device change; verify almost
+       *   immediately instead of taxing it with the self-write debounce. The
+       *   outer _localWriteAt self-echo skip already returned for our own echo,
+       *   so reaching here with a fresh _localWriteAt means an overlapping
+       *   local edit — keep the full debounce to let our PUT win. */
+      const _localWriteFresh = !!(conv._localWriteAt
+        && (Date.now() - conv._localWriteAt) < _CONV_SELF_ECHO_MS);
+      const _verifyDelay = _localWriteFresh
+        ? _CONV_ACTIVE_VERIFY_DELAY_MS : _CONV_ACTIVE_VERIFY_DELAY_XDEV_MS;
       _convActiveVerifyTimer = setTimeout(() => {
         const c = conversations.find((x) => x.id === convId);
         if (!c || activeConvId !== convId) return;
@@ -298,7 +318,7 @@ function _onConvNotifyPush(frame) {
         if (c._localWriteAt && (Date.now() - c._localWriteAt) < _CONV_SELF_ECHO_MS) return;
         _verifyActiveConvFromServer(convId).catch((e) =>
           debugLog(`[conv-notify] active verify failed: ${e && e.message}`, "warn"));
-      }, _CONV_ACTIVE_VERIFY_DELAY_MS);
+      }, _verifyDelay);
     } else {
       /* Background conv: mark stale so its NEXT open re-fetches from server
        *   (loadConversationMessages early-returns unless _needsLoad), and nudge

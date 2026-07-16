@@ -182,6 +182,12 @@ function _msgFingerprint(msg) {
     (msg.pdfTexts ? msg.pdfTexts.length : 0) + ":" +
     (msg._autopilotRunId || "") + ":" +
     (msg._isAutopilotSummary ? "S" : "") + ":" +
+    /* Queued-pending token: a cross-device queued user message lands in the
+     * body with _pendingQueued=true, then dispatch_next_queued reconciles it
+     * in place (clearing the flag). Fold it so the flag flip re-renders THIS
+     * row surgically — the "queued" chip transitions to a normal sent bubble
+     * with no flicker and no whole-conversation repaint. */
+    (msg._pendingQueued ? "PQ" : "") + ":" +
     "c" + compactedCount + "ts" + compactedToSum +
     (swarmFp ? ":sw" + swarmFp : "") +
     (_segTrFp ? ":st" + _segTrFp : "") +
@@ -1492,10 +1498,24 @@ function renderMessage(msg, idx) {
    *   quiet hover-reveal. */
   const _turnFailed = !isUser && (!!msg.error || msg.finishReason === 'interrupted');
   const _failedCls = _turnFailed ? ' turn-failed' : '';
+  /* Queued-pending: a cross-device queued user message that has landed in the
+   *   body but is NOT yet dispatched (its turn runs after the current one
+   *   finishes). Give it a distinct, muted "queued" affordance so the other
+   *   device sees the message AND its real state — not an indistinguishable
+   *   sent bubble. The flag is cleared server-side by dispatch_next_queued's
+   *   idempotent reconcile, and the _msgFingerprint fold above re-renders this
+   *   row into a normal bubble at that point. Scoped to user-lane rows. */
+  const _pendingQueued = isUser && !!msg._pendingQueued;
+  const _pendingQueuedCls = _pendingQueued ? ' pending-queued' : '';
+  /* Small inline "queued" indicator (clock SVG, never emoji — CLAUDE.md §3.4)
+   *   shown in the header beside the label. */
+  const _queuedIndicator = _pendingQueued
+    ? raw(`<span class="queued-indicator icon-box" title="${_tOr('sidebar.queued', 'Queued — sends after the current reply')}" aria-label="${_tOr('sidebar.queued', 'Queued — sends after the current reply')}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span class="queued-indicator-text">${_tOr('sidebar.queued', 'Queued')}</span></span>`)
+    : raw('');
   /* Final assembly via safeHtml. roleName / userLabel / time are
    * escaped by default. Everything pre-built above (avatars = trusted
    * SVG, badgeHtml, body, branchHtml, actionBtns, the class/attr
    * fragments) is already-trusted HTML, marked raw(). */
-  const _classAttr = `${isUser ? ' user-msg' : ''}${msg._isEndpointReview ? ' ep-critic-msg' : ''}${epPlannerCls}${epWorkerCls}${vuCls}${_failedCls}`;
-  return String(safeHtml`<div class="message${raw(_classAttr)}"${raw(idAttr)}${raw(msgIdAttr)}${raw(apRunAttr)}${raw(apSummaryAttr)}${raw(mfpAttr)}><div class="message-avatar">${raw(isUser ? userAvatar : avatarContent)}</div><div class="message-content"><div class="message-header"><span class="message-role">${isUser ? userLabel : roleName}</span>${raw(badgeHtml)}${raw(messageTimeHtml)}</div><div class="message-body">${raw(body)}</div>${raw(branchHtml)}${raw(actionBtns)}</div>${raw(turnCtxHtml)}</div>`);
+  const _classAttr = `${isUser ? ' user-msg' : ''}${_pendingQueuedCls}${msg._isEndpointReview ? ' ep-critic-msg' : ''}${epPlannerCls}${epWorkerCls}${vuCls}${_failedCls}`;
+  return String(safeHtml`<div class="message${raw(_classAttr)}"${raw(idAttr)}${raw(msgIdAttr)}${raw(apRunAttr)}${raw(apSummaryAttr)}${raw(mfpAttr)}><div class="message-avatar">${raw(isUser ? userAvatar : avatarContent)}</div><div class="message-content"><div class="message-header"><span class="message-role">${isUser ? userLabel : roleName}</span>${raw(badgeHtml)}${_queuedIndicator}${raw(messageTimeHtml)}</div><div class="message-body">${raw(body)}</div>${raw(branchHtml)}${raw(actionBtns)}</div>${raw(turnCtxHtml)}</div>`);
 }

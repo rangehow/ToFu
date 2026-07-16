@@ -472,6 +472,14 @@ def detect_cache_break(
         _wire_available = _cur_wire_fp is not None
         _wire_prefix_changed = False
         _wire_culprits: list = []
+        # Position of the first byte-diverged prefix message, and whether it
+        # falls INSIDE the prior round's cached-prefix boundary. Hoisted here
+        # (default: no position known) so the break classifier below can use
+        # it to tell a genuine already-cached-message rewrite (a real
+        # whole-prefix break) from a benign change confined to the fresh /
+        # editable tail (read still hits ~fully). Set in the wire block.
+        _first_changed_idx = -1
+        _mutation_inside_prior_prefix = False
         if (_wire_available and prev.call_count > 0
                 and prev.wire_fp is not None and not _was_compaction):
             # Compare only the region that existed last round (its full length);
@@ -604,6 +612,9 @@ def detect_cache_break(
                 _prior_prefix_boundary = max(0, prev.message_count
                                              - EDITABLE_TAIL_COUNT)
                 _inside_prior_prefix = (0 <= _fci < _prior_prefix_boundary)
+                # Publish to the break classifier (see prefix_mutation_break).
+                _first_changed_idx = _fci
+                _mutation_inside_prior_prefix = _inside_prior_prefix
                 logger.warning(
                     '[CacheTrack] conv=%s call=%d ⚠ WIRE PREFIX CHANGED: the '
                     'ACTUAL sent bytes differ from last round — client-caused '
@@ -696,10 +707,35 @@ def detect_cache_break(
         #   On its own the hash change is a leading indicator; pairing it with
         #   a non-trivial write avoids crying wolf on rounds where the mutated
         #   prefix happened to still read back.
+        #
+        # ★ POSITION GATE (the (A)-vs-benign-tail discriminator). A byte change
+        #   is a genuine WHOLE-PREFIX break (an already-cached message rewritten
+        #   in place → the illegal freeze-guard leak) ONLY when it lands INSIDE
+        #   the prior cached prefix, OR the read actually COLLAPSED this round
+        #   (cache_read fell materially below the prior read — the floor-miss
+        #   signature). A <bytes> change confined to the fresh / editable tail
+        #   while cache_read still reads back ~fully (observed on mrnnfvs6:
+        #   cache_w≈15–31k but cache_r stayed 206–273k / 88–99% hit) is a benign
+        #   tail re-bill, NOT a whole-body PREFIX MUTATION BREAK — flagging it as
+        #   one over-reports a miss that did not happen. When the wire fingerprint
+        #   is UNAVAILABLE (_first_changed_idx stays -1, e.g. non-Claude / capture
+        #   failure) we cannot place the mutation, so we keep the legacy
+        #   write-threshold behaviour rather than silently under-reporting.
+        _read_collapsed = (
+            prev_cache_read > _MIN_CACHE_MISS_TOKENS
+            and cache_read < prev_cache_read * 0.95
+            and (prev_cache_read - cache_read) >= _MIN_CACHE_MISS_TOKENS
+        )
+        _position_known = _first_changed_idx >= 0
+        _mutation_is_whole_prefix = (
+            _mutation_inside_prior_prefix or _read_collapsed
+            or not _position_known
+        )
         prefix_mutation_break = (
             _prefix_mutated
             and not _was_compaction
             and cache_write >= _MIN_CACHE_MISS_TOKENS
+            and _mutation_is_whole_prefix
         )
 
         if api_break or no_reuse or partial_no_reuse or prefix_mutation_break:

@@ -77,6 +77,26 @@ def _truncate_old_tool_results(
     #   MUST stay byte-identical. Truncating inside this window is the bug
     #   above. 0 when cache wasn't active (fresh conv / non-cached provider) —
     #   then only the turn boundary gates, preserving prior behaviour.
+    #
+    # ★ COLD-THREAD RELIANCE — this runs at TURN-START on a FRESH run_task
+    #   thread, BEFORE detect_cache_break has populated this thread's in-memory
+    #   CacheState. So ``prefix_n`` here depends on get_cache_prefix_count's
+    #   warm-sibling / DURABLE-HWM fallback (settings.cachePrefixHWM). If that
+    #   floor is missing (the pre-HWM-persist regime), prefix_n collapses to 0
+    #   and this loop truncates already-cached tool results → whole-prefix
+    #   re-bill (observed on conv mrni76b8 call=34: 7 old results truncated at
+    #   turn-start, then cache_r fell to the static floor, 298k re-billed). The
+    #   durable HWM (lib/tasks_pkg/cache_tracking/_persist.py) is what keeps the
+    #   floor alive across the new-thread turn boundary.
+    #
+    # ★ DELIBERATELY NO current_msg_count. get_cache_prefix_count's clamp only
+    #   ever LOWERS the boundary (for micro_compact, a lower boundary = safe, it
+    #   compacts MORE cold tail). Here the danger is the OPPOSITE: a boundary
+    #   that is too SMALL truncates cached prefix bytes. A larger prefix_n only
+    #   OVER-protects (defers truncation to a later round once the result has
+    #   scrolled out of the prefix — costless then). So we pass NO clamp: the
+    #   monotonic HWM floor is exactly the protection we want, and clamping it
+    #   down would re-open the leak. Do NOT "add current_msg_count for symmetry".
     prefix_n = 0
     if conv_id:
         try:

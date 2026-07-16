@@ -169,6 +169,80 @@ def test_detector_byte_divergence_not_laundered_into_eviction():
     assert '<bytes>' in blob
 
 
+def test_tail_only_byte_change_with_high_read_not_flagged_whole_prefix_break():
+    """POSITION GATE. A <bytes> change confined to the FRESH / editable tail
+    while cache_read still reads back ~fully (the observed mrnnfvs6 signature:
+    cache_w≈15–31k but cache_r stayed 88–99%) must NOT be surfaced as a
+    whole-body PREFIX MUTATION BREAK — the prior cached prefix DID read back,
+    only the tail was (cheaply) re-billed.
+
+    Here round 2 keeps every prior-prefix message byte-identical and only the
+    NEW tail assistant turn carries a reasoning_details rebuild; cache_read
+    stays high (no collapse). The detector must not raise a prefix_mutation
+    whole-prefix break for it."""
+    from lib.tasks_pkg.cache_tracking import detect_cache_break
+    from lib.tasks_pkg.cache_tracking._state import _cache_states
+
+    conv = 'pos-gate-tail'
+    r1 = [{'role': 'system', 'content': 'S' * 200},
+          {'role': 'user', 'content': 'u1'},
+          {'role': 'assistant', 'content': 'a1'}]
+    detect_cache_break(conv, r1, None, 'claude-opus-4',
+                       usage=_usage_with_wire(r1, cache_read=200000,
+                                              cache_write=5000))
+    # Round 2: prior prefix (idx 0-2) UNCHANGED byte-for-byte; append a NEW
+    # assistant tail whose reasoning_details differ (byte-only, canonical
+    # blind). cache_read stays HIGH (prefix read back) with a modest tail write.
+    r2 = [{'role': 'system', 'content': 'S' * 200},
+          {'role': 'user', 'content': 'u1'},
+          {'role': 'assistant', 'content': 'a1'},
+          {'role': 'user', 'content': 'u2'},
+          _asst_with_reasoning([{'type': 'reasoning', 'id': 'tail-REBUILT'}])]
+    out = detect_cache_break(conv, r2, None, 'claude-opus-4',
+                             usage=_usage_with_wire(r2, cache_read=198000,
+                                                    cache_write=20000))
+    _cache_states.clear()
+    # The prior prefix read back (~99%); a tail-confined byte change is NOT a
+    # whole-prefix mutation break.
+    assert not (out and 'prefix_mutation' in out), (
+        'a tail-only byte change with the prefix still reading back must NOT '
+        f'be flagged as a whole-prefix PREFIX MUTATION BREAK — got: {out}')
+
+
+def test_in_prefix_byte_change_still_flagged_whole_prefix_break():
+    """Control (the (A) case the gate MUST still catch): a byte change INSIDE
+    the prior cached prefix — an already-cached message rewritten in place —
+    IS a whole-prefix break even if cache_read happens to read partially back.
+    """
+    from lib.tasks_pkg.cache_tracking import detect_cache_break
+    from lib.tasks_pkg.cache_tracking._state import _cache_states
+
+    conv = 'pos-gate-inprefix'
+    r1 = [{'role': 'system', 'content': 'S' * 200},
+          {'role': 'user', 'content': 'u1'},
+          _asst_with_reasoning([{'type': 'reasoning', 'id': 'r1'}]),
+          {'role': 'user', 'content': 'u2'},
+          {'role': 'assistant', 'content': 'a2'}]
+    detect_cache_break(conv, r1, None, 'claude-opus-4',
+                       usage=_usage_with_wire(r1, cache_read=200000,
+                                              cache_write=5000))
+    # Round 2: rewrite the reasoning_details of the EARLY assistant (idx 2,
+    # well inside the prior prefix boundary) + big write → in-prefix rewrite.
+    r2 = [{'role': 'system', 'content': 'S' * 200},
+          {'role': 'user', 'content': 'u1'},
+          _asst_with_reasoning([{'type': 'reasoning', 'id': 'r1-REWRITTEN'}]),
+          {'role': 'user', 'content': 'u2'},
+          {'role': 'assistant', 'content': 'a2'},
+          {'role': 'user', 'content': 'u3'}]
+    out = detect_cache_break(conv, r2, None, 'claude-opus-4',
+                             usage=_usage_with_wire(r2, cache_read=120000,
+                                                    cache_write=60000))
+    _cache_states.clear()
+    assert out is not None and 'prefix_mutation' in out, (
+        'an in-prefix already-cached-message rewrite MUST still be flagged as '
+        f'a whole-prefix break — got: {out}')
+
+
 def test_detector_NEUTER_without_byte_gate_launders_to_eviction():
     """NEUTER: strip the _wire_bytes signal (pre-gate behaviour) and the SAME
     reasoning_details-rebuild round IS laundered into the eviction verdict,

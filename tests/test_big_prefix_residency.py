@@ -52,7 +52,11 @@ def _reset_residency(monkeypatch):
     # degrades (residents don't expire mid-wait); the explicit-expiry test
     # sleeps past the TTL to observe a slot freeing.
     monkeypatch.setenv('TOFU_BIG_PREFIX_RESIDENCY_TTL_MS', '400')  # 0.4s
-    monkeypatch.setenv('TOFU_BIG_PREFIX_WAIT_MS', '200')           # 0.2s budget
+    # The residency wait budget (short) is what a saturated waiter uses — set it
+    # small for fast tests. The STREAM budget stays LARGE on purpose so a test
+    # can prove the residency waiter does NOT accidentally use it.
+    monkeypatch.setenv('TOFU_BIG_PREFIX_RESIDENCY_WAIT_MS', '200')  # 0.2s
+    monkeypatch.setenv('TOFU_BIG_PREFIX_WAIT_MS', '5000')          # 5s stream budget
     g._reset_residency_for_tests()
     yield
     g._reset_residency_for_tests()
@@ -202,7 +206,58 @@ def test_residency_cannot_beat_single_pool_overload():
         'degrades through, it does not block forever')
 
 
-# ── 8. concurrency safety: parallel distinct convs don't corrupt the map ──
+# ── 8. REGRESSION: saturated waiter uses the SHORT residency budget, not 45s ──
+
+def test_saturated_waiter_degrades_in_short_budget_not_stream_budget():
+    """The 45s-stall regression guard. STREAM budget is 5s here, residency
+    budget 0.2s. A 3rd distinct conv on a saturated (non-expiring) set must
+    degrade in ~the SHORT residency budget, NOT the stream budget — because
+    waiting cannot manufacture single-pool capacity, so a long stall is pure
+    loss (a fast miss beats a 45s-then-same-miss)."""
+    import lib.llm_dispatch.big_prefix_gate as g
+    # Confirm the two budgets are genuinely different so the test is meaningful.
+    assert g.residency_wait_budget_ms() < g.wait_budget_ms(), (
+        'precondition: residency budget must be shorter than the stream budget')
+
+    with g.big_prefix_slot('k0', _BIG, conv_id='A'):
+        with g.big_prefix_slot('k0', _BIG, conv_id='B'):
+            t0 = time.time()
+            with g.big_prefix_slot('k0', _BIG, conv_id='C'):
+                waited = time.time() - t0
+    # Bounded to the short residency budget (0.2s) with generous slack, and
+    # FAR below the 5s stream budget.
+    assert waited < 1.0, (
+        f'saturated 3rd conv must degrade in ~the short residency budget, '
+        f'waited {waited:.2f}s (stream budget is {g.wait_budget_ms()/1000:.0f}s '
+        f'— a regression would approach that)')
+
+
+def test_NEUTER_residency_using_stream_budget_stalls_long(monkeypatch):
+    """NEUTER: point the residency waiter back at the LONG stream budget (the
+    pre-fix behaviour) and the saturated 3rd conv stalls ~that long — proving
+    the SHORT residency budget is load-bearing. We keep the stream budget
+    modest (1.0s) so the test stays fast while still an order of magnitude
+    above the 0.2s short budget."""
+    import lib.llm_dispatch.big_prefix_gate as g
+    # NEUTER: make the residency budget equal the (now 1.0s) stream budget —
+    # i.e. revert the separation the fix introduced.
+    monkeypatch.setenv('TOFU_BIG_PREFIX_WAIT_MS', '1000')
+    monkeypatch.setenv('TOFU_BIG_PREFIX_RESIDENCY_WAIT_MS', '1000')
+    g._reset_residency_for_tests()
+
+    with g.big_prefix_slot('k0', _BIG, conv_id='A'):
+        with g.big_prefix_slot('k0', _BIG, conv_id='B'):
+            t0 = time.time()
+            with g.big_prefix_slot('k0', _BIG, conv_id='C'):
+                waited = time.time() - t0
+    # With the budgets re-coupled, the saturated waiter burns ~the full 1.0s —
+    # demonstrating the regression the short budget prevents.
+    assert waited >= 0.8, (
+        f'NEUTER expectation: re-coupling residency to the stream budget makes '
+        f'the saturated 3rd conv stall ~the full budget (waited {waited:.2f}s)')
+
+
+# ── 9. concurrency safety: parallel distinct convs don't corrupt the map ──
 
 def test_concurrent_admissions_thread_safe():
     import lib.llm_dispatch.big_prefix_gate as g

@@ -89,6 +89,7 @@ __all__ = [
     'residency_enabled',
     'residency_max',
     'residency_ttl_ms',
+    'residency_wait_budget_ms',
     'estimate_prefix_tokens',
     'big_prefix_slot',
     '_reset_residency_for_tests',
@@ -166,6 +167,30 @@ def residency_ttl_ms() -> float:
     except (ValueError, TypeError) as e:
         logger.debug('[BigPrefixGate] TOFU_BIG_PREFIX_RESIDENCY_TTL_MS parse failed, default: %s', e)
         return 300000.0
+
+
+def residency_wait_budget_ms() -> float:
+    """Max time (ms) a NEW distinct big prefix waits for a resident slot to free
+    before proceeding degraded, in residency mode. Default 1500 (1.5s).
+
+    ★ CRITICAL — this is DELIBERATELY SEPARATE from :func:`wait_budget_ms` (the
+    stream-concurrency budget, default 45000). Residency lives on the cache-TTL
+    timescale (minutes): a resident REFRESHES its TTL to now+TTL every round, so
+    on a SATURATED SINGLE POOL the working set never drains and a 3rd distinct
+    conv would wait the FULL stream budget (45s) EVERY round — pure loss,
+    because waiting cannot manufacture pool capacity; the prefix will miss
+    whether we wait 1.5s or 45s. So the residency waiter waits only a SHORT
+    bounded window: long enough to let a resident that is genuinely about to
+    EXPIRE (idle conv) free its slot and be picked up (the CV wakes promptly on
+    expiry/exit), but short enough that a saturated-and-not-expiring set
+    degrades to a fast miss instead of a 45s stall. Tune with
+    ``TOFU_BIG_PREFIX_RESIDENCY_WAIT_MS``."""
+    try:
+        v = float(os.environ.get('TOFU_BIG_PREFIX_RESIDENCY_WAIT_MS', '1500'))
+        return v if v > 0 else 1500.0
+    except (ValueError, TypeError) as e:
+        logger.debug('[BigPrefixGate] TOFU_BIG_PREFIX_RESIDENCY_WAIT_MS parse failed, default: %s', e)
+        return 1500.0
 
 
 def estimate_prefix_tokens(body_or_messages) -> int:
@@ -344,9 +369,16 @@ def big_prefix_slot(key_name: str, est_tokens: int, *, conv_id: str = '',
         return
 
     # ── Residency-aware mode ──
+    # Wait budget is the SHORT residency budget (default 1.5s), NOT the 45s
+    # stream budget: on a saturated single pool a resident refreshes its TTL
+    # every round so the set never drains — waiting the full stream budget
+    # would stall a new distinct conv 45s EVERY round for a prefix that will
+    # miss regardless. The short window still lets a genuinely-EXPIRING resident
+    # free its slot (the CV wakes on expiry/exit) before degrading to a fast
+    # miss. See residency_wait_budget_ms's docstring.
     cap = residency_max()
     ttl_s = residency_ttl_ms() / 1000.0
-    budget_s = wait_budget_ms() / 1000.0
+    budget_s = residency_wait_budget_ms() / 1000.0
     cv = _cv_for(key_name)
     deadline = time.time() + budget_s
     waited_total = 0.0

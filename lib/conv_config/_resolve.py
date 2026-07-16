@@ -200,14 +200,6 @@ def resolve_conv_config(
     out['activeFlow'] = active_flow if isinstance(active_flow, str) else ''
     out['flowBuiltin'] = flow_builtin
     out['flowId'] = flow_id
-    # ── Composer inject lane (queue|steer) ──
-    # How a message sent WHILE a task is running is delivered. Only 'steer'
-    # and 'queue' are valid; anything else (incl. absent) falls back to the
-    # durable-queue default. Active conv reads the live toolbar token; an
-    # inactive one reads the stored per-conv value.
-    _inject_mode = _pick(ov.get('injectMode'), conv.get('injectMode'),
-                         is_active=is_active)
-    out['injectMode'] = 'steer' if _inject_mode == 'steer' else 'queue'
     # browserClientId is gated on the resolved browserEnabled flag.
     if out['browserEnabled']:
         out['browserClientId'] = ov.get('browserClientId') or None
@@ -255,8 +247,6 @@ def resolve_conv_settings(
         'humanGuidanceEnabled': _coerce_bool(conv.get('humanGuidanceEnabled')),
         'activeFlow': (conv.get('activeFlow') if isinstance(conv.get('activeFlow'), str)
                        else (ov.get('activeFlow') if isinstance(ov.get('activeFlow'), str) else '')),
-        'injectMode': ('steer' if (conv.get('injectMode') or ov.get('injectMode')) == 'steer'
-                       else 'queue'),
         'projectPath': conv.get('projectPath') or '',
         'projectPaths': list(conv.get('projectPaths') or []),
         'readOnlyPaths': list(conv.get('readOnlyPaths') or []),

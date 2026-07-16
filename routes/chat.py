@@ -668,7 +668,12 @@ def chat_send():
         #   run no further round-boundary drain), we DO NOT enqueue into the
         #   inbox (it would be silently dropped) — we fall back to the durable
         #   message_queue so the steer becomes the next turn instead. Never zero.
-        _inject_mode = (config.get('injectMode') or data.get('injectMode') or '').strip()
+        # injectMode is a PER-SEND decision from the post-send dialog
+        # (_promptInjectMode), carried at the top level of the request body — it
+        # is NOT a persisted conversation setting. Read `data` FIRST: reading
+        # `config` first would be shadowed by resolve_conv_config's 'queue'
+        # default (truthy), so a 'steer' choice could never win.
+        _inject_mode = (data.get('injectMode') or '').strip().lower()
         if has_running_task and _inject_mode == 'steer':
             from lib.agent_inbox import has_pending as _inbox_has_pending  # noqa: F401
             from lib.agent_inbox import _tombstones as _inbox_tombstones

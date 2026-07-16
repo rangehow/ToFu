@@ -185,7 +185,7 @@ class ResolveConvConfigTest(unittest.TestCase):
             'endpointMode', 'autopilot',
             'autoTranslate', 'langCorrectionEnabled', 'uiLang',
             'browserClientId', 'keepToolHistory',
-            'activeFlow', 'flowBuiltin', 'flowId', 'injectMode',
+            'activeFlow', 'flowBuiltin', 'flowId',
         }
         self.assertEqual(set(out.keys()), expected)
 
@@ -295,7 +295,7 @@ class ResolveConvSettingsTest(unittest.TestCase):
             'swarmEnabled', 'endpointEnabled', 'autopilotEnabled',
             'imageGenEnabled', 'humanGuidanceEnabled', 'projectPath',
             'projectPaths', 'readOnlyPaths', 'autoTranslate', 'folderId',
-            'activeFlow', 'uiLang', 'injectMode',
+            'activeFlow', 'uiLang',
         }
         self.assertEqual(set(out.keys()), expected)
 

@@ -731,9 +731,17 @@ function buildCompactionCardHtml(msg) {
   const _fmtK = (n) => n >= 1000 ? (n / 1000).toFixed(n >= 10000 ? 0 : 1) + 'k' : String(n);
   const _tokStat = (_tb > 0 && _ta > 0)
     ? `${_fmtK(_tb)} → ${_fmtK(_ta)} tokens · -${_rp}%` : '';
-  const _msgStat = (_mb > 0 && _ma > 0)
-    ? (typeof t === 'function' ? t('compactCard.msgs', { before: _mb, after: _ma })
-                               : `${_mb} → ${_ma} msgs`) : '';
+  // 档B (intra-turn fold): the card describes "folded N tool rounds" rather
+  // than "N → M msgs" (a single-giant-turn compaction removes tool rounds
+  // inside one message, not whole messages). Backend stamps the count on the
+  // marker (`foldedToolRounds`) / message (`_foldedToolRounds`).
+  const _folded = (_cm.foldedToolRounds || msg._foldedToolRounds || 0);
+  const _msgStat = _folded > 0
+    ? (typeof t === 'function' ? t('compactCard.rounds', { n: _folded })
+                               : `folded ${_folded} tool rounds`)
+    : ((_mb > 0 && _ma > 0)
+        ? (typeof t === 'function' ? t('compactCard.msgs', { before: _mb, after: _ma })
+                                   : `${_mb} → ${_ma} msgs`) : '');
   // Strip the leading header line ("## 上下文已压缩…") — the card has its own title.
   const _rawSummary = String(msg.content || '').replace(/^##[^\n]*\n+/, '');
   const _summaryHtml = renderMarkdown(_rawSummary);
@@ -1329,12 +1337,24 @@ function renderMessage(msg, idx) {
       ? `<button class="msg-action-btn msg-regen-btn" onclick="event.stopPropagation();regenerateFromUser(${idx})" title="${escapeHtml(_mt('msgAction.regenTitle', 'Regenerate response from this message'))}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg> ${escapeHtml(_mt('msgAction.regen', 'Regen'))}</button>`
       : "";
     const conv_ = getActiveConv();
+    /* ★ Continue is a RESUME affordance for an INTERRUPTED/TRUNCATED turn —
+     *   it POSTs to /api/chat/continue to pick up from the last tool-call
+     *   checkpoint. On a CLEAN finish (end_turn/stop/stop_sequence — the same
+     *   reasons that earn the green ✓ in finish_info.js) there is nothing to
+     *   resume, so showing it is meaningless and misleading. Gate it as the
+     *   exact complement of that ✓: only offer Continue when the last
+     *   assistant turn did NOT finish normally (length / max_tokens /
+     *   tool_rounds_exhausted / premature_close / aborted / interrupted / …).
+     *   A missing finishReason (legacy / unknown) still shows it, so we never
+     *   silently drop the recovery path for a genuinely-truncated old turn. */
+    const _FINISH_CLEAN = ["stop", "end_turn", "stop_sequence"];
     const isLastAssistant =
       !isUser &&
       conv_ &&
       idx === conv_.messages.length - 1 &&
       !activeStreams.has(conv_.id);
-    const continueH = isLastAssistant
+    const _turnFinishedClean = _FINISH_CLEAN.includes(msg.finishReason);
+    const continueH = (isLastAssistant && !_turnFinishedClean)
       ? `<button class="msg-action-btn msg-continue-btn" onclick="event.stopPropagation();continueAssistant()" title="${escapeHtml(_mt('msgAction.continueTitle', 'Continue generating from where it left off'))}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg> ${escapeHtml(_mt('msgAction.continue', 'Continue'))}</button>`
       : "";
     const isShowingTrans = _tr.showing;

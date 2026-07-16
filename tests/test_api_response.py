@@ -376,6 +376,54 @@ def test_api_method_not_allowed():
     _ok('api_method_not_allowed → 405')
 
 
+def test_api_service_unavailable_default():
+    """api_service_unavailable() → 503 with a Retry-After header."""
+    from lib.api_response import api_service_unavailable
+    app = _make_app_ctx()
+
+    async def _t():
+        async with app.test_request_context('/test'):
+            resp = api_service_unavailable()
+            status, body = await _resolve(resp)
+            assert status == 503
+            assert body['ok'] is False
+            response = resp[0]
+            assert response.headers.get('Retry-After') == '2'
+
+    import asyncio
+    asyncio.run(_t())
+    _ok('api_service_unavailable() → 503 + Retry-After: 2')
+
+
+def test_api_service_unavailable_custom_retry():
+    """Retry-After honors the retry_after argument; extras flow through."""
+    from lib.api_response import api_service_unavailable
+    app = _make_app_ctx()
+
+    async def _t():
+        async with app.test_request_context('/test'):
+            resp = api_service_unavailable('busy', retry_after=5, kind='overloaded')
+            status, body = await _resolve(resp)
+            assert status == 503
+            assert body['error'] == 'busy'
+            assert resp[0].headers.get('Retry-After') == '5'
+
+    import asyncio
+    asyncio.run(_t())
+    _ok('api_service_unavailable(retry_after=5) → Retry-After: 5')
+
+
+def test_pool_exhausted_error_is_typed():
+    """PoolExhaustedError is a distinct type carrying the pool snapshot so the
+    server errorhandler can map it to 503 (not a generic 500)."""
+    from lib.database import PoolExhaustedError
+    e = PoolExhaustedError('pool full', active=800, max_conns=800,
+                           pooled=0, tracked=136)
+    assert isinstance(e, RuntimeError)
+    assert e.active == 800 and e.max_conns == 800 and e.tracked == 136
+    _ok('PoolExhaustedError is a typed RuntimeError with pool snapshot')
+
+
 def test_api_internal_error_with_exception():
     """api_internal_error(exc) auto-logs and returns envelope."""
     from lib.api_response import api_internal_error
@@ -654,6 +702,9 @@ def main():
         test_api_conflict,
         test_api_payload_too_large,
         test_api_method_not_allowed,
+        test_api_service_unavailable_default,
+        test_api_service_unavailable_custom_retry,
+        test_pool_exhausted_error_is_typed,
         test_api_internal_error_with_exception,
         test_api_internal_error_default,
         test_safe_route_decorator,

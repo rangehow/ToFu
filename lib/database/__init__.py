@@ -71,6 +71,8 @@ from lib.database._core import (  # noqa: F401
     heal_toast_corruption,
     # Graceful shutdown
     shutdown_pool,
+    # Load-shedding: typed pool-exhaustion error → mapped to HTTP 503
+    PoolExhaustedError,
 )
 from lib.database._bootstrap import (  # noqa: F401
     # Scheduled logical backup (pg_dumpall) — PG-only, no-op on SQLite
@@ -108,6 +110,7 @@ __all__ = [
     'mark_pg_stopping', 'pg_is_stopping',
     '_tune_connection',
     'shutdown_pool',
+    'PoolExhaustedError',
     'backup_pg_database',
     # Async facade
     'async_execute', 'async_fetchone', 'async_fetchall',

@@ -281,6 +281,23 @@ def api_method_not_allowed(error: Any = 'Method not allowed', **extras):
     return api_error(error, status=405, **extras)
 
 
+def api_service_unavailable(error: Any = 'Service temporarily unavailable', *,
+                            retry_after: int = 2, **extras):
+    """Return 503 Service Unavailable with a ``Retry-After`` header.
+
+    The transient-overload signal (e.g. DB connection pool saturated during a
+    reconnection burst). Distinct from 500: it tells a polling client to back
+    off and retry rather than treat the response as a hard failure and retry
+    harder — which would amplify the overload into a thundering-herd storm.
+    """
+    resp, status = api_error(error, status=503, **extras)
+    try:
+        resp.headers['Retry-After'] = str(max(1, int(retry_after)))
+    except Exception as e:
+        logger.debug('[api_response] could not set Retry-After: %s', e)
+    return resp, status
+
+
 def api_internal_error(exc: BaseException | str | None = None, *,
                        context: str = '', source: str = '',
                        log_traceback: bool = True, **extras):
@@ -355,6 +372,6 @@ __all__ = [
     'api_ok', 'api_created', 'api_no_content',
     'api_error', 'api_bad_request', 'api_unauthorized', 'api_forbidden',
     'api_not_found', 'api_conflict', 'api_payload_too_large',
-    'api_method_not_allowed', 'api_internal_error',
+    'api_method_not_allowed', 'api_internal_error', 'api_service_unavailable',
     'safe_route', 'sse_response',
 ]

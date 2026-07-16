@@ -1647,6 +1647,7 @@ from lib.api_response import (
     api_method_not_allowed,
     api_not_found,
     api_payload_too_large,
+    api_service_unavailable,
 )
 
 
@@ -1730,6 +1731,24 @@ async def _handle_uncaught(exc):
         return exc
     rid = _get_req_id() or '-'
     method, path = _ws_safe_method_path()
+    # ── Transient DB-pool overload → 503, not 500 ──────────────────────
+    # A saturated connection pool (reconnection burst after a restart) is a
+    # transient overload, not a server bug. Shed load with 503 + Retry-After
+    # so polling clients back off instead of retrying harder and amplifying
+    # the storm. Logged at WARNING (not ERROR-with-traceback) — the pool
+    # snapshot is the diagnostic, a stack trace here is just noise ×N.
+    from lib.database import PoolExhaustedError
+    if isinstance(exc, PoolExhaustedError):
+        _lifecycle_log.warning('[%s] 503 pool-exhausted: %s %s (active=%d/%d '
+                               'pooled=%d tracked=%d)', rid, method, path,
+                               exc.active, exc.max_conns, exc.pooled, exc.tracked)
+        if path.startswith('/api/'):
+            return api_service_unavailable(
+                'Server busy (database pool saturated) — retry shortly',
+                retry_after=2, kind='overloaded')
+        return await _orig_make_response_async(
+            f'<h2>503</h2><p>Server busy — retry shortly. '
+            f'Request ID: <code>{rid}</code></p>', 503)
     _lifecycle_log.error('[%s] Uncaught: %s %s: %s', rid, method, path, exc, exc_info=True)
     if path.startswith('/api/'):
         return api_internal_error(exc, log_traceback=False)

@@ -58,6 +58,22 @@ async function _pollFallback(convId, taskId, stream, assistantMsg) {
     try {
       const resp = await Api.chat.poll(taskId);
       if (!resp || !resp.ok) {
+        /* ★ 503 Service Unavailable = transient server overload (DB pool
+         *   saturated during a reconnection burst). This is NOT a network
+         *   failure and NOT a dead task — the server is up and the task is
+         *   still running. Feeding it to the circuit breaker would trip the
+         *   "server offline" recovery path and make every tab retry harder,
+         *   amplifying the very storm that caused the 503. Instead: honor the
+         *   Retry-After header (default 2s), do NOT increment the error
+         *   counter, and keep polling. */
+        if (resp && resp.status === 503) {
+          const _ra = parseInt(resp.headers && resp.headers.get('Retry-After'), 10);
+          const _wait = (Number.isFinite(_ra) && _ra > 0 ? _ra : 2) * 1000;
+          console.warn(`[_pollFallback] 503 server busy (pool saturated) — backing off ${_wait}ms, task still running — conv=${convId.slice(0,8)}`);
+          _consecutiveErrors = 0;
+          await new Promise((r) => setTimeout(r, _wait));
+          continue;
+        }
         if (resp && resp.status === 404) {
           console.error(`[_pollFallback] 404 NOT FOUND — taskId=${taskId.slice(0,8)} conv=${convId.slice(0,8)} ` +
             `existingContent=${assistantMsg.content?.length||0}chars existingThinking=${assistantMsg.thinking?.length||0}chars — ` +

@@ -443,6 +443,28 @@ _conn_semaphore = threading.BoundedSemaphore(_MAX_TOTAL_CONNS)
 _conn_count = 0
 _conn_count_lock = threading.Lock()
 
+
+class PoolExhaustedError(RuntimeError):
+    """Raised when the connection semaphore times out (pool saturated).
+
+    A DISTINCT type (not a bare RuntimeError) so request handlers can catch
+    it specifically and shed load with an HTTP 503 + Retry-After — a
+    *transient overload* signal — instead of letting it surface as a generic
+    uncaught 500. A 500 makes the frontend poll loop treat the response as a
+    hard failure and retry harder, turning a momentary reconnection burst
+    (e.g. after a restart, when hundreds of tabs re-poll at once) into a
+    self-amplifying thundering-herd storm. 503 tells the client to back off.
+
+    Carries the pool snapshot at failure time for diagnosability.
+    """
+
+    def __init__(self, message, *, active=0, max_conns=0, pooled=0, tracked=0):
+        super().__init__(message)
+        self.active = active
+        self.max_conns = max_conns
+        self.pooled = pooled
+        self.tracked = tracked
+
 # ── PG self-heal / auto-rebootstrap state ──
 # When the locally-owned PG crashes silently (symptoms below), try to
 # re-run ``_ensure_pg_running`` ONCE and retry the connect. Multiple
@@ -1027,11 +1049,12 @@ def _new_pg_connection(admin=False):
                      'Tune via TOFU_DB_MAX_CONNS env var (current=%d).',
                      _CONN_ACQUIRE_TIMEOUT_S, current, _MAX_TOTAL_CONNS,
                      pooled, tracked, _MAX_TOTAL_CONNS)
-        raise RuntimeError(
+        raise PoolExhaustedError(
             f'Database connection pool exhausted ({current}/{_MAX_TOTAL_CONNS} '
             f'connections in use, {pooled} pooled, {tracked} thread-tracked). '
             f'Increase TOFU_DB_MAX_CONNS (current={_MAX_TOTAL_CONNS}) or '
-            f'check for unclosed thread-local connections.'
+            f'check for unclosed thread-local connections.',
+            active=current, max_conns=_MAX_TOTAL_CONNS, pooled=pooled, tracked=tracked,
         )
 
     import psycopg2

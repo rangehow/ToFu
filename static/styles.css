@@ -7918,6 +7918,38 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
   -webkit-mask-image: none; mask-image: none;
 }
 
+/* ★ Timer header leading icon — replaces the old inline "⏱ " glyph baked into
+   the label text, so the icon sits on the flex baseline correctly. */
+.timer-watcher-icon { flex-shrink: 0; color: rgba(234,179,8,0.75); }
+.timer-watcher-icon > svg { width: 13px; height: 13px; }
+
+/* ★ Copyable timer-id chip — the full timer id extracted out of the label into
+   one prominent, one-click-to-copy token. */
+.timer-id-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  flex-shrink: 0; cursor: pointer;
+  font-family: var(--mono-font, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 10.5px; font-weight: 600; letter-spacing: 0.01em;
+  padding: 1px 7px; border-radius: 6px;
+  color: rgba(234,179,8,0.95);
+  background: rgba(234,179,8,0.1);
+  border: 1px solid rgba(234,179,8,0.28);
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.timer-id-chip:hover { background: rgba(234,179,8,0.18); border-color: rgba(234,179,8,0.45); }
+.timer-id-chip > svg { width: 10px; height: 10px; opacity: 0.7; }
+.timer-id-chip.copied {
+  color: #22c55e; background: rgba(34,197,94,0.12); border-color: rgba(34,197,94,0.35);
+}
+[data-theme="light"] .timer-watcher-icon,
+[data-theme="tofu"]  .timer-watcher-icon { color: #a07d2a; }
+[data-theme="light"] .timer-id-chip,
+[data-theme="tofu"]  .timer-id-chip {
+  color: #8a6516; background: rgba(168,130,30,0.1); border-color: rgba(168,130,30,0.28);
+}
+[data-theme="light"] .timer-id-chip:hover,
+[data-theme="tofu"]  .timer-id-chip:hover { background: rgba(168,130,30,0.18); border-color: rgba(168,130,30,0.45); }
+
 /* ★ Timer identity chip — distinguishes a pure command-based (zero-LLM) timer
    from a hybrid one, right in the header. */
 .timer-kind-badge {

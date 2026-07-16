@@ -200,7 +200,7 @@ assertLang('zh');
 // not just echoing the English via the zh||key fallback path).
 setLang('en'); const hdEn = headDone('completed', 40);
 setLang('zh'); const hdZh = headDone('completed', 40);
-check('zh_differs_from_en', hdEn !== hdZh && hdZh.indexOf('定时器') >= 0);
+check('zh_differs_from_en', hdEn !== hdZh && hdZh.indexOf('次检查') >= 0);
 
 console.log(out.join('\n'));
 process.exit(0);

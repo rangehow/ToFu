@@ -2631,34 +2631,39 @@ function _renderTimerWatcherBlock(round, svg) {
         : (round._timerConditionCommand ? "code" : "llm"));
   const isCodeTimer = condKind === "code";
 
-  // Header
+  // Header — the timer id is surfaced as a dedicated copyable chip (rendered
+  // separately below), so the label text no longer embeds the raw id.
   let headerLabel, headerCls;
-  const _tIco = Icon('timer', 13) + ' ';
   const _idTxt = escapeHtml(timerIdShort);
   const _s = (n) => (n !== 1 ? "s" : "");
   if (triggered) {
-    headerLabel = _tIco + _t("timerBlock.headTriggered", "Timer {id} — triggered after {n} poll{s}")
-      .replace("{id}", _idTxt).replace("{n}", totalPolls).replace("{s}", _s(totalPolls));
+    headerLabel = _t("timerBlock.headTriggered", "Timer — triggered after {n} poll{s}")
+      .replace("{n}", totalPolls).replace("{s}", _s(totalPolls));
     headerCls = "timer-watcher-triggered";
   } else if (round._timerOrphaned) {
-    headerLabel = _tIco + _t("timerBlock.headOrphaned", "Timer {id} — task interrupted ({n} poll{s}, timer still active in background)")
-      .replace("{id}", _idTxt).replace("{n}", totalPolls).replace("{s}", _s(totalPolls));
+    headerLabel = _t("timerBlock.headOrphaned", "Timer — task interrupted ({n} poll{s}, timer still active in background)")
+      .replace("{n}", totalPolls).replace("{s}", _s(totalPolls));
     headerCls = "timer-watcher-orphaned";
   } else if (isActive) {
     const skipN = round._timerSkipCount || 0;
     const skipSuffix = skipN > 0 ? _t("timerBlock.headSkipSuffix", ", {n} skipped").replace("{n}", skipN) : "";
     const errSuffix = lastWasError ? _t("timerBlock.headErrSuffix", ", last check errored") : "";
-    headerLabel = _tIco + _t("timerBlock.headWatching", "Timer {id} — watching… ({n} poll{s}{skip}{err})")
-      .replace("{id}", _idTxt).replace("{n}", totalPolls).replace("{s}", _s(totalPolls))
+    headerLabel = _t("timerBlock.headWatching", "Timer — watching… ({n} poll{s}{skip}{err})")
+      .replace("{n}", totalPolls).replace("{s}", _s(totalPolls))
       .replace("{skip}", skipSuffix).replace("{err}", errSuffix);
     headerCls = lastWasError ? "timer-watcher-active timer-watcher-warn" : "timer-watcher-active";
   } else {
-    headerLabel = _tIco + _t("timerBlock.headDone", "Timer {id} — {status} ({n} poll{s})")
-      .replace("{id}", _idTxt)
+    headerLabel = _t("timerBlock.headDone", "Timer — {status} ({n} poll{s})")
       .replace("{status}", escapeHtml(round.status || "done"))
       .replace("{n}", totalPolls).replace("{s}", _s(totalPolls));
     headerCls = "";
   }
+  // Dedicated copyable id chip — clicking it copies the FULL timer id to the
+  // clipboard (handled by document delegation on `.timer-id-chip`), so the
+  // long identifier is extracted out of the label into one prominent token.
+  const idChip = timerId
+    ? `<button class="timer-id-chip" data-timer-id="${escapeHtml(timerId)}" title="${escapeHtml(_t("timerBlock.idChipTitle", "Timer id — click to copy"))}"><span class="timer-id-txt">${_idTxt}</span>${Icon("clipboard", 10)}</button>`
+    : "";
   // Distinct identity chip: a pure command-based (zero-LLM) timer vs a hybrid.
   const kindBadge = isCodeTimer
     ? `<span class="timer-kind-badge timer-kind-code" title="${escapeHtml(_t("timerBlock.kindCodeTip", "Decided by a shell command — no model is called"))}">${escapeHtml(_t("timerBlock.kindCode", "command-based"))}</span>`
@@ -2855,7 +2860,9 @@ function _renderTimerWatcherBlock(round, svg) {
   const uid = "tmr-r" + round.roundNum;
   const expandedByDefault = isActive;  // auto-expand while active
   return `<div class="timer-watcher-block ${headerCls}" data-rn="${round.roundNum}">
-       <div class="timer-watcher-header" onclick="event.stopPropagation();var w=document.getElementById('${uid}-wrap');w.classList.toggle('expanded');var t=this.querySelector('.timer-toggle');if(t)t.textContent=w.classList.contains('expanded')?'▾':'▸';">
+       <div class="timer-watcher-header" onclick="if(event.target.closest('.timer-id-chip,[data-tc-preview],[data-tc-preview-text]'))return;event.stopPropagation();var w=document.getElementById('${uid}-wrap');w.classList.toggle('expanded');var t=this.querySelector('.timer-toggle');if(t)t.textContent=w.classList.contains('expanded')?'▾':'▸';">
+         <span class="timer-watcher-icon icon-box">${Icon('timer', 13)}</span>
+         ${idChip}
          <span class="timer-watcher-label">${headerLabel}</span>
          ${kindBadge}
          ${isActive ? '<span class="ptool-spinner"></span>' : ''}
@@ -3240,6 +3247,34 @@ document.addEventListener("click", function (e) {
   const collapsed = turn.classList.toggle("collapsed");
   const chev = head.querySelector(".ptool-turn-chev");
   if (chev) chev.textContent = collapsed ? "▸" : "▾";
+});
+
+// ★ Timer-id chip → copy the full timer id to the clipboard. Delegated at the
+//   document level so it survives re-renders; the header's toggle handler
+//   explicitly ignores clicks on `.timer-id-chip` so this fires cleanly.
+document.addEventListener("click", function (e) {
+  const chip = e.target.closest(".timer-id-chip");
+  if (!chip) return;
+  e.stopPropagation();
+  e.preventDefault();
+  const id = chip.dataset.timerId || "";
+  if (!id) return;
+  const done = () => {
+    chip.classList.add("copied");
+    const txt = chip.querySelector(".timer-id-txt");
+    const _t = (typeof t === "function") ? t : (k, d) => d;
+    const orig = txt ? txt.textContent : "";
+    if (txt) txt.textContent = _t("timerBlock.idCopied", "Copied!");
+    setTimeout(() => {
+      chip.classList.remove("copied");
+      if (txt) txt.textContent = orig;
+    }, 1200);
+  };
+  if (typeof _safeClipboardWrite === "function") {
+    _safeClipboardWrite(id).then(done).catch(() => {});
+  } else if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(id).then(done).catch(() => {});
+  }
 });
 
 // ★ Backwards compat aliases

@@ -274,6 +274,30 @@ function _trimMsgForPersist(m) {
       return rd;
     }) };
   }
+  /* ★ Inbox-inject wire-purity belt (epic pt_d022c86a00fc4580): the live SSE
+   *   handlers (_handleSwarmInboxInject / _handlePeerInboxInject) push SYNTHETIC
+   *   display-only rows (flagged `_inboxInject` / `_peerInject`, roundNum 9e6+,
+   *   no toolCallId/toolContent) into the LIVE conv.messages[].toolRounds so the
+   *   in-timeline chip shows the instant results land. Those rows are DISPLAY-
+   *   ONLY: their durable home is the underscore sidecar (_inboxInjects /
+   *   _peerInjects / _userSteerInjects), and getToolRoundsFromMsg rebuilds them
+   *   at render time. They must NEVER reach the DB `toolRounds`, because that
+   *   array is ALSO the wire-replay / prefix-cache source — a row lacking
+   *   toolCallId/toolContent collapses the whole assistant turn to a lossy
+   *   summary (breaking tool-turn continuation) AND shifts the wire prefix
+   *   (cache miss). A full-conv PUT fired mid-stream (before the terminal
+   *   committedMessage overwrites toolRounds with the clean backend list) would
+   *   otherwise persist them. The server-side reconstructor guard
+   *   (is_synthetic_inbox_round) already filters them from the wire; this belt
+   *   keeps the DB blob itself clean so the two never diverge. Clone-and-strip,
+   *   never mutating the live array (the live chip stays visible this session).
+   *   Keeps the marker key list in lock-step with
+   *   lib/tasks_pkg/segments/_types.py::SYNTHETIC_INBOX_MARKERS. */
+  if (Array.isArray(r.toolRounds)
+      && r.toolRounds.some((rd) => rd && (rd._inboxInject || rd._peerInject || rd._userSteerInject))) {
+    r = { ...r, toolRounds: r.toolRounds.filter(
+      (rd) => !(rd && (rd._inboxInject || rd._peerInject || rd._userSteerInject))) };
+  }
   if (Array.isArray(m.apiRounds) && m.apiRounds.some((rd) => rd && rd.usage && _USAGE_TRANSIENT_KEYS.some((k) => k in rd.usage))) {
     r = { ...r, apiRounds: m.apiRounds.map((rd) => (
       rd && rd.usage ? { ...rd, usage: _stripUsageTransient(rd.usage) } : rd

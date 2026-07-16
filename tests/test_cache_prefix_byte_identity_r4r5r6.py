@@ -14,16 +14,20 @@ So EVERY assertion here is on the ACTUAL Anthropic-translated wire bytes
 ``cache_control`` stripped where noted), NOT on ``canonical_messages`` /
 ``diff_canonical``.
 
-SCOPE / HONESTY (updated after tracing the live paths): the ``_task_id``-drop
-TTL flip is a REAL HAZARD but is NOT proven to be R4/R5's live cause. Every
-mid-task rebuild in the orchestrator RE-SETS ``_task_id`` (``_run.py:1037`` per
-round; ``llm_fallback/_call.py:286`` reactive-compact; ``:471`` model fallback),
-and the ``dispatch_stream`` 429-retry loop re-copies the ORIGINAL body each
-attempt (``_adapt_stream_body_for_slot``: ``body = dict(body_or_messages)``) so
-the pop in ``prepare_request`` hits the COPY, leaving the original's ``_task_id``
-intact. So on mrne3bqe (global TTL True, never hot-reloaded that day) no TTL
-delta fired — R4/R5 remains a LIVE-ONLY miss not yet reproduced to a specific
-flipping field (the peer owns the live byte-probe hunt + the source fix).
+SCOPE / HONESTY (updated after tracing the live paths + cache.py fix 10cd77c):
+the ``_task_id``-drop TTL flip is a REAL HAZARD but is NOT proven to be R4/R5's
+live cause. Three layers now make it not fire in the tool loop:
+  (1) ``add_cache_breakpoints`` reads ``_task_id`` NON-destructively (10cd77c) —
+      the pop moved to the wire boundary (``prepare_request``), so re-feeding the
+      SAME body on a 429/503 retry keeps the latch stable on attempt 2+;
+  (2) every orchestrator rebuild RE-SETS it (``_run.py:1037`` per round;
+      ``llm_fallback/_call.py:286`` reactive-compact; ``:471`` model fallback);
+  (3) the ``dispatch_stream`` 429-retry re-copies the ORIGINAL each attempt
+      (``_adapt_stream_body_for_slot``: ``body = dict(body_or_messages)``).
+So on mrne3bqe (global TTL True, never hot-reloaded that day) no TTL delta fired
+— R4/R5 remains a LIVE-ONLY miss not yet reproduced to a specific flipping field
+(the peer owns the live byte-probe hunt, the ttl-aware marker_signature detector
+fix, and the ``_task_id`` hardening).
 
 Properties locked here:
 
@@ -287,20 +291,44 @@ def test_ttl_marker_stable_only_when_task_id_preserved():
 
 
 @pytest.mark.unit
-def test_task_id_popped_by_add_cache_breakpoints():
-    """add_cache_breakpoints CONSUMES _task_id (pops it), so a downstream body
-    reuse cannot re-derive the latch — the reason a rebuild path must RE-SET
-    _task_id explicitly. Documents the mechanism behind the vector."""
+def test_add_cache_breakpoints_preserves_task_id():
+    """add_cache_breakpoints reads ``_task_id`` NON-destructively (cache.py fix
+    10cd77c): it must LEAVE ``_task_id`` on the body so an in-task 429/503 retry
+    that re-feeds the SAME body dict keeps the latch decision stable on attempt
+    2+. If it popped here, attempt 2 would fall back to the live global TTL and
+    flip the marker → the mrne3bqe hazard. The key is stripped only at the wire
+    boundary (prepare_request), guarded by test_prepare_request_pops_task_id."""
     snap = list(_sequence(n_rounds=8, empty_round=4))[5][1]
     _lib.CACHE_EXTENDED_TTL = True
     body = build_body(_MODEL, copy.deepcopy(snap), max_tokens=2048,
                       thinking_enabled=True, thinking_depth='medium',
                       tools=_tools(), stream=True)
-    body['_task_id'] = 'taskPop'
+    body['_task_id'] = 'taskKeep'
     add_cache_breakpoints(body)
+    assert body.get('_task_id') == 'taskKeep', (
+        'add_cache_breakpoints must PRESERVE _task_id (non-destructive read) so '
+        'an in-task retry re-feeding this body keeps the TTL/beta latch stable; '
+        'popping it here is the regression that reintroduces the mrne3bqe flip')
+
+
+@pytest.mark.unit
+def test_prepare_request_pops_task_id_at_wire_boundary():
+    """The wire-serialization boundary (prepare_request) is where ``_task_id`` is
+    consumed, so the internal marker never leaks onto the OpenAI wire. It reads
+    the latch off the body FIRST, then pops. Confirms the pop moved OUT of
+    add_cache_breakpoints (10cd77c) to exactly one place."""
+    from lib.llm._sse_core import prepare_request
+
+    snap = list(_sequence(n_rounds=8, empty_round=4))[5][1]
+    _lib.CACHE_EXTENDED_TTL = True
+    body = build_body(_MODEL, copy.deepcopy(snap), max_tokens=2048,
+                      thinking_enabled=True, thinking_depth='medium',
+                      tools=_tools(), stream=True)
+    body['_task_id'] = 'taskWire'
+    prepare_request(body, log_prefix='[test]')
     assert '_task_id' not in body, (
-        '_task_id must be consumed by add_cache_breakpoints; a rebuild that '
-        'reuses this body therefore loses the latch key unless it re-sets it')
+        'prepare_request must strip _task_id at the wire boundary so it never '
+        'reaches the OpenAI serialization / gateway')
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

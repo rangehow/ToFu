@@ -1022,6 +1022,7 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
                     get_conv_affinity,
                     sticky_hold_budget_ms,
                     sticky_hold_enabled,
+                    sticky_hold_max_ms,
                     sticky_routing_enabled,
                 )
                 if sticky_routing_enabled() and sticky_hold_enabled():
@@ -1033,19 +1034,44 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
                             exclude_pairs=state.eff_exclude_pairs() or set())
                         if _hold is not None:
                             _remaining_s, _warm_key = _hold
+                            # Escalating ceiling: the flat budget (default 1.5s)
+                            # only covers a transient sub-second 429 nudge. A
+                            # concurrent sibling can cool the conv's SOLE warm
+                            # key for longer; wait that contention window out
+                            # (up to sticky_hold_max_ms, default 8s) rather than
+                            # cold-rebind and destroy the prefix. A genuinely
+                            # long error/quota backoff (remaining > ceiling, e.g.
+                            # 300s) still falls through to the cold rebind — and
+                            # sticky_cooldown_remaining_s already returns None
+                            # for an excluded/disabled key, so failover is intact
+                            # (this is NOT a hard pin). One hold per dispatch
+                            # call (_warm_held), and we wait the FULL remaining
+                            # so the next pick actually finds the warm key
+                            # eligible.
                             _budget_s = sticky_hold_budget_ms() / 1000.0
-                            if 0 < _remaining_s <= _budget_s:
-                                _wait = min(_remaining_s + 0.05, _budget_s)
+                            _ceiling_s = sticky_hold_max_ms() / 1000.0
+                            if 0 < _remaining_s <= _ceiling_s:
+                                _wait = min(_remaining_s + 0.05, _ceiling_s)
+                                _kind = ('short 429 cooldown'
+                                         if _remaining_s <= _budget_s
+                                         else 'contention on sole warm key '
+                                              '(escalated hold)')
                                 logger.info(
                                     '%s dispatch_stream: holding %.2fs for '
-                                    'conv=%s warm key %s (short 429 cooldown) '
-                                    'to keep prompt cache warm',
-                                    log_prefix, _wait, _conv[:8], _warm_key)
+                                    'conv=%s warm key %s (%s) to keep prompt '
+                                    'cache warm',
+                                    log_prefix, _wait, _conv[:8], _warm_key, _kind)
                                 if abort_check and abort_check():
                                     from lib.llm import AbortedError as _AE
                                     raise _AE('Aborted during warm-key hold')
                                 time.sleep(_wait)
                                 state._warm_held = True
+                            else:
+                                logger.debug(
+                                    '%s dispatch_stream: warm key %s cooldown '
+                                    '%.1fs exceeds hold ceiling %.1fs — genuine '
+                                    'backoff, rebinding cold', log_prefix,
+                                    _warm_key, _remaining_s, _ceiling_s)
             except ImportError as _imp_err:
                 logger.debug('%s warm-key hold unavailable: %s',
                              log_prefix, _imp_err)

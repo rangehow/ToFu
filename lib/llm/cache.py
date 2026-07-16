@@ -95,7 +95,18 @@ def add_cache_breakpoints(body, log_prefix=''):
     if not _gateway_honors_cache_markers(model):
         return
 
-    _task_id = body.pop('_task_id', '')
+    # Read the task-id NON-destructively: the streaming retry loop
+    # (lib/llm/stream.py / astream.py) re-feeds the SAME body dict to
+    # prepare_request → add_cache_breakpoints on every 429/503 attempt. If we
+    # POPPED _task_id here, attempt 2+ would find it gone and fall back to the
+    # live global CACHE_EXTENDED_TTL — flipping the ttl='1h'↔bare marker (and
+    # the extended-cache-ttl beta header) mid-task → a DIFFERENT Anthropic
+    # cache key → full prefix miss (the mrne3bqe "R4/R5 read=0, R6 rebounds"
+    # bug). Leaving _task_id on the body keeps the latch decision stable across
+    # every attempt. The key is stripped only at the OpenAI serialization
+    # boundary (prepare_request); the Anthropic path rebuilds the body from an
+    # allowlist so it never leaks there.
+    _task_id = body.get('_task_id', '')
     if _task_id:
         from lib.tasks_pkg.cache_tracking import latch_extended_ttl
         use_extended_ttl = latch_extended_ttl(_task_id)

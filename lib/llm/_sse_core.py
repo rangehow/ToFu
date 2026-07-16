@@ -167,9 +167,17 @@ def prepare_request(body, *, attempt=0, log_prefix='', api_key=None,
     Mutates ``body`` in place (cache breakpoints, ``_task_id`` pop, Codex
     translation) exactly as the inline code did, then returns the plan.
     """
+    # Read the latch key NON-destructively and keep it on the body for the
+    # WHOLE task life. The streaming retry loop re-feeds the SAME body dict to
+    # this function on every 429/503 attempt (see lib/llm/stream.py:62); popping
+    # _task_id on attempt 1 made attempt 2+ fall back to the live global
+    # CACHE_EXTENDED_TTL, flipping the cache_control ttl AND the beta header
+    # below → a different Anthropic cache key → full prefix miss. _task_id must
+    # NOT reach the gateway on the OpenAI path (raw body is serialized), so it
+    # is stripped at that serialization boundary instead (see below). The
+    # Anthropic path rebuilds the body from an allowlist, so it never leaks.
     _task_id_for_latch = body.get('_task_id', '')
     add_cache_breakpoints(body, log_prefix)
-    body.pop('_task_id', None)
 
     # Auto-inject extended cache TTL beta header for Claude
     if is_claude(body.get('model', '')):
@@ -219,6 +227,12 @@ def prepare_request(body, *, attempt=0, log_prefix='', api_key=None,
             url = claude_oauth_url(url)
         logger.debug('%s [Anthropic] Translated request for Messages API', log_prefix)
     else:
+        # OpenAI path serialises `body` verbatim (session.post(json=body)), so
+        # the internal latch key must be removed HERE — the single serialization
+        # boundary — rather than popped early (which broke the retry-stable
+        # latch, see above). The Anthropic/Codex branches rebuilt `body` from an
+        # allowlist that never included _task_id, so this only matters here.
+        body.pop('_task_id', None)
         url = f'{base_url.rstrip("/")}/chat/completions' if base_url else chat_url()
 
     attempt_tag = f' (attempt {attempt+1})' if attempt > 0 else ''

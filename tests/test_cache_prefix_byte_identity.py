@@ -338,24 +338,26 @@ def _ttl_env():
     _ttlmod._ttl_latch.update(_orig_latch)
 
 
-@pytest.mark.xfail(strict=True, reason='KNOWN DEFECT (mrne3bqe root cause): an '
-                   'in-task retry loses body["_task_id"] (popped by attempt 1 in '
-                   'prepare_request), so add_cache_breakpoints falls back to the '
-                   'live global CACHE_EXTENDED_TTL instead of the task latch → '
-                   'cache_control TTL (and the anthropic-beta header) flip → '
-                   'different cache key → full miss. Flips to PASS when the fix '
-                   '(re-set _task_id per attempt, or latch via a non-popped field) '
-                   'lands. Owned by the source-fix lane.')
 def test_cache_ttl_stable_across_in_task_retry(_ttl_env):
     """A retried attempt within the SAME task must stamp the SAME cache_control
     TTL as the first attempt — the task's LATCHED decision — regardless of the
-    live global flag. Today attempt 2 loses ``_task_id`` (popped by attempt 1)
-    and reads the global, so a mid-task global drift flips the TTL and evicts.
+    live global flag.
 
-    Guarded strict-xfail: flips to a hard PASS when the source fix (re-set
-    body['_task_id'] before every dispatch attempt, OR latch via a stable
-    non-popped field) lands. The neuter below proves this assertion bites.
+    ROOT-CAUSE REGRESSION (mrne3bqe): the streaming retry loop
+    (lib/llm/stream.py:62) re-feeds the SAME body dict to prepare_request →
+    add_cache_breakpoints on every 429/503 attempt. The fix reads
+    ``body['_task_id']`` NON-destructively (no pop) and strips it only at the
+    OpenAI serialization boundary, so every attempt sees the same latch key and
+    the TTL/beta marker can no longer flip mid-task. We drive the REAL live path
+    here: build the body ONCE (as the orchestrator does), then run
+    prepare_request TWICE against that same object (attempt 0, then a retry
+    attempt) with the global flag drifted between them; the tail cache_control
+    TTL must be identical across both attempts.
     """
+    import lib as _liba
+    from lib.llm import build_body
+    from lib.llm._sse_core import prepare_request
+
     _lib, _ttlmod = _ttl_env
     tools = _tools()
     mlist = copy.deepcopy(_HEAD) + [
@@ -367,28 +369,41 @@ def test_cache_ttl_stable_across_in_task_retry(_ttl_env):
     ]
     task_id = 'task_ttl_latch'
 
-    # Task starts while the global is ON → latch True.
-    _lib.CACHE_EXTENDED_TTL = True
+    # Task starts while the global is ON → latch True for the task's life.
+    _liba.CACHE_EXTENDED_TTL = True
     _ttlmod._ttl_latch.clear()
     from lib.tasks_pkg.cache_tracking import latch_extended_ttl
-    latch_extended_ttl(task_id)  # freeze True for the task's life
+    latch_extended_ttl(task_id)
 
-    # Attempt 1 carries _task_id → uses the latch (1h).
-    w1 = _build_translated_with_task(mlist, tools, task_id)
-    ttl1 = _system_ttl(w1)
+    # The orchestrator builds the body ONCE per round with _task_id set.
+    body = build_body(MODEL, copy.deepcopy(mlist), max_tokens=2048,
+                      thinking_enabled=True, thinking_depth='high',
+                      tools=copy.deepcopy(tools), stream=True)
+    body['_task_id'] = task_id
 
-    # Attempt 2 is an in-task RETRY: production reuses the SAME body whose
-    # _task_id was already popped → the latch is bypassed. Model that by
-    # passing task_id=None. Meanwhile the global drifted OFF mid-task.
-    _lib.CACHE_EXTENDED_TTL = False
-    w2 = _build_translated_with_task(mlist, tools, task_id=None)
-    ttl2 = _system_ttl(w2)
+    # Attempt 0 (anthropic path): prepare_request annotates + translates.
+    plan1 = prepare_request(body, attempt=0, log_prefix='[t0]',
+                            base_url='https://x', api_protocol='anthropic')
+    ttl1 = _system_ttl(plan1.body)
+
+    # The global drifts OFF mid-task (settings toggle / default drift).
+    _liba.CACHE_EXTENDED_TTL = False
+
+    # Attempt 1 = the in-task RETRY: SAME body object re-fed to prepare_request.
+    # With the fix, _task_id still rides `body`, so the latch (True) is honored
+    # again and the TTL does NOT flip.
+    plan2 = prepare_request(body, attempt=1, log_prefix='[t1]',
+                            base_url='https://x', api_protocol='anthropic')
+    ttl2 = _system_ttl(plan2.body)
 
     assert ttl1 == ttl2, (
         f'cache_control TTL flipped across an in-task retry: {ttl1} → {ttl2}. '
         'The retried attempt lost the task latch and read the live global flag '
         '→ different Anthropic cache key → full prefix miss that '
         'canonical_messages (strips cache_control) mislabels "server-side".')
+    # And it must be the LATCHED (1h) decision, not the drifted global.
+    assert ttl1 == {'type': 'ephemeral', 'ttl': '1h'}, (
+        f'expected the latched 1h TTL on both attempts, got {ttl1}')
 
 
 def test_ttl_flip_neuter_is_detected(_ttl_env):

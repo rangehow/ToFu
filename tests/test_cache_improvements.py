@@ -1269,7 +1269,7 @@ class TestTaskIdPassthrough:
     """_task_id is passed through body and cleaned up properly."""
 
     def test_task_id_stripped_for_non_claude(self):
-        """_task_id should be removed from body for non-Claude models."""
+        """_task_id should not crash the non-Claude early-return path."""
         from lib.llm import add_cache_breakpoints
 
         body = {
@@ -1278,12 +1278,22 @@ class TestTaskIdPassthrough:
             'messages': [{'role': 'user', 'content': 'hi'}],
         }
         add_cache_breakpoints(body)
-        # For non-Claude, add_cache_breakpoints returns early.
-        # _task_id should still be in body (cleaned by _stream_chat_once).
-        # But the key thing is it doesn't crash.
+        # For non-Claude, add_cache_breakpoints returns early — the key thing is
+        # it doesn't crash. _task_id is stripped later at the OpenAI
+        # serialization boundary in prepare_request.
 
-    def test_task_id_popped_for_claude(self):
-        """_task_id is consumed (popped) by add_cache_breakpoints for Claude."""
+    def test_task_id_survives_add_cache_breakpoints_for_claude(self):
+        """_task_id must SURVIVE add_cache_breakpoints (read non-destructively).
+
+        Regression guard for the mrne3bqe cache miss: the streaming retry loop
+        re-feeds the SAME body to add_cache_breakpoints on every 429/503
+        attempt. If _task_id were popped on attempt 1, attempt 2+ would fall
+        back to the live global CACHE_EXTENDED_TTL and flip the cache_control
+        TTL / beta header mid-task → different cache key → full prefix miss.
+        Keeping _task_id on the body is what makes the latch decision stable
+        across retries. It is stripped only at the serialization boundary
+        (prepare_request), covered by test_task_id_stripped_at_openai_boundary.
+        """
         from lib.llm import add_cache_breakpoints
 
         body = {
@@ -1295,7 +1305,29 @@ class TestTaskIdPassthrough:
             ],
         }
         add_cache_breakpoints(body)
-        assert '_task_id' not in body  # consumed by pop
+        assert body.get('_task_id') == 'task-456', (
+            'add_cache_breakpoints must NOT pop _task_id — a retry reusing the '
+            'same body would then lose the TTL latch and evict the prefix cache')
+
+    def test_task_id_stripped_at_openai_boundary(self):
+        """prepare_request removes _task_id on the OpenAI path (raw body is
+        serialized to the gateway) — but NOT before add_cache_breakpoints has
+        read it, and the read stays non-destructive across attempts."""
+        from lib.llm._sse_core import prepare_request
+
+        body = {
+            'model': 'gpt-4o',
+            '_task_id': 'task-789',
+            'messages': [
+                {'role': 'system', 'content': 'sys'},
+                {'role': 'user', 'content': 'hi'},
+            ],
+        }
+        plan = prepare_request(body, attempt=0, log_prefix='[t]',
+                               base_url='https://gw.example/v1',
+                               api_protocol='openai')
+        assert '_task_id' not in plan.body, (
+            '_task_id must be stripped before the OpenAI body is serialized')
 
 
 

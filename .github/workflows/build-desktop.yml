@@ -205,8 +205,17 @@ jobs:
 
   # ── macOS ────────────────────────────────────────────────────
   # Build a NATIVE single-arch DMG per macOS architecture via a runner matrix:
-  #   - macos-14  → Apple Silicon (arm64)
-  #   - macos-13  → Intel (x86_64)
+  #   - macos-14        → Apple Silicon (arm64)
+  #   - macos-15-intel  → Intel (x86_64)
+  # NOTE on the Intel label: the old `macos-13` Intel image was RETIRED by
+  # GitHub on 2025-12-04 (actions/runner-images#13046). A retired label is
+  # never assigned a runner — a `macos-13` job just sits queued until the run
+  # is cancelled at the timeout (we hit exactly this: v0.14.1's x86_64 leg
+  # queued 1h45m with no runner, then cancelled, which — via the completeness
+  # gate below — blocked the whole release). GitHub's designated OSS Intel
+  # replacement is the STANDARD (free-tier, non-"-large") label `macos-15-intel`,
+  # available until ~Aug 2027 (actions/runner-images#13045). This is the last
+  # hosted x86_64 macOS image; when it goes, drop the Intel leg.
   # We deliberately do NOT use PyInstaller target_arch='universal2': the
   # setup-python interpreter on the runners is single-arch, and several C
   # extensions we bundle (psycopg2-binary, pymupdf, lxml, cryptography) do not
@@ -226,7 +235,7 @@ jobs:
         include:
           - runner: macos-14
             arch: arm64
-          - runner: macos-13
+          - runner: macos-15-intel
             arch: x86_64
     steps:
       - uses: actions/checkout@v4

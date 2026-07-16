@@ -9,6 +9,16 @@
 
 function debugLog(msg, type = "") {
   console.log(`[${type || "info"}]`, msg);
+  /* Bounded in-memory ring of recent log lines so the one-click diagnostics
+   * collector (diag_collect.js → window.__tofuCollectDiagnostics) can attach
+   * the last N events even when the SPA is otherwise wedged. Kept here (not in
+   * diag_collect) because debugLog is the single choke point every log passes
+   * through. Never throws. */
+  try {
+    const ring = (window.__tofuDiagRing = window.__tofuDiagRing || []);
+    ring.push(Date.now() + " [" + (type || "info") + "] " + String(msg).slice(0, 300));
+    if (ring.length > 80) ring.splice(0, ring.length - 80);
+  } catch (_) { /* ring is best-effort */ }
   /* Auto-report error/warn level messages to server logs */
   if (type === "error" || type === "warn") {
     _reportClientError(`[debugLog][${type}] ${msg}`);

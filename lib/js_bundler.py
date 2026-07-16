@@ -600,6 +600,13 @@ _BUNDLE_FILES = [
     # renderChat/Api/document are referenced only inside function bodies
     # (runtime, after boot). Inert unless the server returns windowed:true.
     'conv_window.js',
+    # One-click diagnostics collector (window.__tofuCollectDiagnostics). Only
+    # defines a window.* global inside an IIFE at load; reads app state
+    # (conversations/activeConvId/convWindowParam/BASE_PATH) lazily inside the
+    # collector body at RUNTIME, so it can load anytime before main.js. The
+    # tofu-android WebScreen.kt "Copy diagnostics" FAB invokes it via
+    # evaluateJavascript() and writes the JSON to the native clipboard.
+    'diag_collect.js',
     # Orchestrator (MUST be last) — boot IIFE that wires the app
     'main.js',
     # Post-orchestrator UI widgets (depend on conversations/activeConvId/config

@@ -207,7 +207,18 @@ async function _pollFallback(convId, taskId, stream, assistantMsg) {
         if (data.content != null) {
           const oldLen = assistantMsg.content?.length || 0;
           const newLen = data.content.length;
-          if (newLen >= oldLen) {
+          /* ★ P1b flicker guard: once the tail is SETTLED (has finishReason —
+           *   e.g. interrupted by a crash), suppress any poll snapshot that
+           *   doesn't strictly grow the content, or that belongs to a different
+           *   task. Otherwise the competing SSE-cold vs poll folds (similar
+           *   length) swap the displayed text back and forth. A live tail
+           *   (no finishReason) is untouched — normal streaming flows through. */
+          if (typeof pollWriteWouldClobberSettledTail === 'function'
+              && pollWriteWouldClobberSettledTail(assistantMsg, taskId, data)) {
+            console.info(`[_pollFallback] settled-tail write suppressed (flicker guard) — ` +
+              `conv=${convId.slice(0,8)} finishReason=${assistantMsg.finishReason} ` +
+              `oldLen=${oldLen} newLen=${newLen} msgTask=${assistantMsg._taskId?.slice(0,8)||'none'} polled=${taskId.slice(0,8)}`);
+          } else if (newLen >= oldLen) {
             assistantMsg.content = data.content;
             if (buf) buf.content = assistantMsg.content;
           } else if (oldLen > 0 && newLen < oldLen * 0.5) {

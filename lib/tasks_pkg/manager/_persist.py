@@ -113,6 +113,47 @@ def load_endpoint_turns_from_conversation(conv_id):
         return []
 
 
+def terminal_state_log_summary(task, *, persisted: bool):
+    """Return a compact one-line summary of a task's IN-MEMORY terminal state.
+
+    The finish-bar fields (finishReason / usage / apiRounds / cost) are computed
+    in memory during finalization but only reach the DB if the checkpoint /
+    persist write succeeds. When that write throws — the classic case is
+    ``task_results`` never being written because the connection pool is
+    exhausted (400/400) — the row is absent and every recovery path renders an
+    empty finish-bar with no way to tell WHY from the logs alone. This summary
+    is emitted UNCONDITIONALLY on the failure branches (see ``persist_task_result``
+    and ``checkpoint_task_partial``) so the terminal metadata that failed to
+    persist is still recoverable from ``error.log``, and ``persisted=False``
+    records the fact that it did not reach the DB.
+
+    Best-effort and allocation-cheap: numbers/sizes only, never the multi-KB
+    content/thinking blobs.
+    """
+    try:
+        usage = task.get('usage') or {}
+        cost = task.get('cost') or {}
+        api_rounds = task.get('apiRounds') or []
+        return (
+            'finishReason=%s model=%s provider=%s content=%dchars thinking=%dchars '
+            'usage=%s(in=%s,out=%s) apiRounds=%d cost=%s persisted=%s' % (
+                task.get('finishReason') or 'none',
+                task.get('model') or '?',
+                task.get('provider_id') or '?',
+                len(task.get('content') or ''),
+                len(task.get('thinking') or ''),
+                bool(usage),
+                usage.get('inputTokens', usage.get('input_tokens', '?')),
+                usage.get('outputTokens', usage.get('output_tokens', '?')),
+                len(api_rounds) if isinstance(api_rounds, list) else 0,
+                cost.get('costCny', 'none') if isinstance(cost, dict) else 'none',
+                persisted,
+            )
+        )
+    except Exception as _e:
+        return 'terminal-summary-unavailable(%s)' % (_e,)
+
+
 def build_result_meta(task):
     """Build the persisted-result metadata dict from a finished task.
 
@@ -473,6 +514,16 @@ def persist_task_result(task):
         else:
             logger.error('[Task %s] conv=%s ❌ Persist FAILED — content (%d chars) and thinking (%d chars) may be lost!',
                          task_id_short, conv_id_short, content_len, thinking_len, exc_info=True)
+            # ★ P0 observability: the task_results row did NOT reach the DB
+            #   (classic cause: connection pool exhausted). Emit the in-memory
+            #   terminal metadata unconditionally so the finish-bar fields
+            #   (finishReason/usage/apiRounds/cost) are recoverable from
+            #   error.log even though the row is absent — and record that they
+            #   were NOT persisted. Without this, an empty finish-bar can only
+            #   be explained by querying the DB after the fact.
+            logger.error('[Task %s] conv=%s ⚠️ TERMINAL METADATA NOT PERSISTED — %s',
+                         task_id_short, conv_id_short,
+                         terminal_state_log_summary(task, persisted=False))
 
     # ★ Write result back to conversation — ensures data survives even if
     #   no frontend client is connected (SSE closed, user closed tab, etc.)

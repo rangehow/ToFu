@@ -93,6 +93,57 @@ def _running_checkpoint_verdict(sharded: bool):
     return ('interrupted', False)
 
 
+def _log_poll_task_id_mismatch(db, conv_id, polled_task_id, db_meta):
+    """P0 observability: log the activeTaskId ↔ message _taskId inconsistency
+    behind an empty-metadata interrupted poll.
+
+    When a poll serves an ``interrupted`` result whose metadata is EMPTY (no
+    finishReason/usage/apiRounds — the finish-bar shows only the model name),
+    the underlying cause is almost always an ID desync: the conversation's
+    ``settings.activeTaskId`` no longer matches the task the client polled OR
+    the trailing assistant message's ``_taskId``. Surfacing that mismatch here
+    means the empty finish-bar is diagnosable from ``app.log`` alone, without a
+    post-hoc DB query. Best-effort — never raises into the poll response.
+    """
+    try:
+        has_meta = any(db_meta.get(k) for k in ('finishReason', 'usage', 'apiRounds'))
+        if has_meta or not conv_id:
+            return
+        row = db.execute(
+            'SELECT settings, messages FROM conversations WHERE id=? AND user_id=1',
+            (conv_id,)
+        ).fetchone()
+        if not row:
+            return
+        try:
+            settings = json.loads(row['settings'] or '{}') or {}
+        except (json.JSONDecodeError, TypeError):
+            settings = {}
+        active_task_id = settings.get('activeTaskId')
+        reconciled_at = settings.get('_reconciledAt')
+        msg_task_id = None
+        try:
+            messages = json.loads(row['messages'] or '[]')
+            for m in reversed(messages):
+                if m.get('role') == 'assistant':
+                    msg_task_id = m.get('_taskId')
+                    break
+        except (json.JSONDecodeError, TypeError):
+            pass
+        logger.warning(
+            '[Chat] Poll %s — EMPTY-metadata interrupted result; ID inconsistency: '
+            'polled=%s activeTaskId=%s msg_taskId=%s _reconciledAt=%s. '
+            'Finish-bar will show only the model name (finishReason/usage/apiRounds never persisted). '
+            'This is the interrupted-turn ID desync (empty finish-bar + flicker) class.',
+            polled_task_id[:8], polled_task_id[:8],
+            (active_task_id[:8] if active_task_id else 'none'),
+            (msg_task_id[:8] if msg_task_id else 'none'),
+            reconciled_at or 'none')
+    except Exception as _e:
+        logger.debug('[Chat] poll ID-mismatch probe failed conv=%s: %s',
+                     conv_id[:8] if conv_id else '?', _e)
+
+
 def _loads_yielding(raw):
     """Parse a (potentially multi-MB) JSON snapshot with minimal GIL-hold.
 
@@ -2266,6 +2317,9 @@ def chat_poll(task_id):
                     db.commit()
                 except Exception as e:
                     logger.warning('[Chat] Failed to update stale task %s to interrupted: %s', task_id[:8], e)
+                # ★ P0 observability: surface the activeTaskId ↔ msg _taskId
+                #   desync behind an empty finish-bar (no persisted metadata).
+                _log_poll_task_id_mismatch(db, row['conv_id'], task_id, _db_meta)
         else:
             logger.debug('[Chat] Poll %s from DB — status=%s content=%dchars thinking=%dchars '
                          'finishReason=%s model=%s error=%s',

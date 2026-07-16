@@ -302,8 +302,20 @@ async function initActiveTasks() {
                  un-acked stream content the checkpoint never captured. */
               if (am && am.role === "assistant") {
                 const _serverSettled = td.status === 'done';
+                /* ★ P1b flicker guard: if the tail is ALREADY settled (carries a
+                 *   finishReason from a prior recovery pass or a different task),
+                 *   a Case-B poll snapshot may only be adopted when it strictly
+                 *   grows the content — otherwise the competing SSE-cold vs poll
+                 *   folds swap the displayed text back and forth on every reload.
+                 *   Also blocks a snapshot from a foreign task rewriting a
+                 *   settled tail. A live tail (no finishReason) is untouched. */
+                const _clobberSettled = (typeof pollWriteWouldClobberSettledTail === 'function')
+                  && pollWriteWouldClobberSettledTail(am, conv.activeTaskId, td);
                 if (td.content) {
-                  if (!_serverSettled && localContentLen > serverContentLen) {
+                  if (_clobberSettled) {
+                    console.info(`[initActiveTasks CaseB] settled-tail write suppressed (flicker guard) — ` +
+                      `conv=${conv.id.slice(0,8)} finishReason=${am.finishReason} localLen=${localContentLen} serverLen=${serverContentLen}`);
+                  } else if (!_serverSettled && localContentLen > serverContentLen) {
                     console.warn(`[initActiveTasks CaseB] ⚠️ KEEPING LOCAL content (${localContentLen} > server ${serverContentLen}, status=${td.status||'?'}) — task not cleanly settled, local SSE buffer may hold un-acked content`);
                   } else {
                     am.content = td.content;

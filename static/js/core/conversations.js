@@ -68,6 +68,50 @@ function assistantTailIsPriorTurn(msg, activeTaskId) {
 if (typeof window !== 'undefined') window.assistantTailIsPriorTurn = assistantTailIsPriorTurn;
 
 /* ═══════════════════════════════════════════════════════════════════
+   pollWriteWouldClobberSettledTail(msg, polledTaskId, data) — P1b flicker
+   guard. Single source of truth for "may this poll / Case-B recovery snapshot
+   OVERWRITE the trailing assistant message's content?".
+
+   The flicker (conv mrnee15nzqnoej): a turn interrupted by a server crash has
+   NO persisted terminal metadata, so several recovery writers — the SSE
+   cold-replay `state`, the `_pollFallback` loop, and startup Case-B — each
+   recompute the tail content from a DIFFERENT fold source (event-log fold vs
+   the 5 s checkpoint) and repaint. When the two folds are similar length,
+   neither wins decisively and the bubble visibly swaps back and forth.
+
+   The fix is a monotonic, single-writer-wins rule for a SETTLED tail:
+   once the tail carries a terminal `finishReason` (the turn is settled —
+   interrupted / stop / …), a later poll snapshot may only be adopted when it
+   STRICTLY GROWS the content; an equal-or-shorter variant (the competing fold)
+   is rejected so it can never swap the displayed text. A snapshot from a
+   DIFFERENT task than the one that owns the tail is likewise rejected — a
+   stale/superseded task must not rewrite a settled turn.
+
+   Returns true when the write must be SUPPRESSED (would clobber). A live,
+   not-yet-settled tail (no finishReason) is never suppressed — normal
+   streaming/growth flows through untouched.
+
+   @param {object} msg - trailing assistant message (may be undefined).
+   @param {string} polledTaskId - the task id this poll snapshot is FOR.
+   @param {object} data - the poll/recovery payload ({content, status, ...}).
+   @returns {boolean} true iff adopting `data.content` would clobber a settled tail.
+   ═══════════════════════════════════════════════════════════════════ */
+function pollWriteWouldClobberSettledTail(msg, polledTaskId, data) {
+  if (!msg || msg.role !== 'assistant') return false;
+  const settled = !!msg.finishReason;
+  if (!settled) return false;                 // live turn — allow normal writes
+  // A snapshot for a different task than the settled tail owns must not rewrite it.
+  if (msg._taskId && polledTaskId && msg._taskId !== polledTaskId) return true;
+  const newContent = (data && typeof data.content === 'string') ? data.content : null;
+  if (newContent == null) return false;       // no content in payload — nothing to clobber
+  const oldLen = (msg.content || '').length;
+  // Adopt ONLY a strict growth; equal/shorter competing fold is suppressed so
+  // the displayed content cannot oscillate between two variants.
+  return newContent.length <= oldLen;
+}
+if (typeof window !== 'undefined') window.pollWriteWouldClobberSettledTail = pollWriteWouldClobberSettledTail;
+
+/* ═══════════════════════════════════════════════════════════════════
    convTitleById(cid) — resolve a conversation id to its human-readable TITLE.
 
    Peer/operator surfaces (the queued-message bar, the project_message /

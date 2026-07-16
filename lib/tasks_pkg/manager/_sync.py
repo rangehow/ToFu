@@ -32,6 +32,7 @@ from lib.tasks_pkg.manager._persist import (
     _merge_tool_rounds,
     _tool_rounds_have_dedicated_home,
     _upsert_task_row,
+    terminal_state_log_summary,
 )
 
 logger = get_logger(__name__)
@@ -994,6 +995,15 @@ def checkpoint_task_partial(task):
         from lib.database import log_db_finalize_error
         log_db_finalize_error(logger, 'warning', e,
                               f'[Checkpoint {task_id_short}] conv={conv_id} Failed to checkpoint')
+        # ★ P0 observability: when the checkpoint row can't be written (classic
+        #   cause: connection pool exhausted), the in-flight terminal metadata
+        #   would otherwise be invisible in the logs. If this task already has
+        #   a finish verdict computed in memory, surface it so a failed-to-
+        #   persist turn is diagnosable from error.log alone.
+        if task.get('finishReason'):
+            logger.warning('[Checkpoint %s] conv=%s ⚠️ CHECKPOINT NOT PERSISTED — %s',
+                           task_id_short, conv_id,
+                           terminal_state_log_summary(task, persisted=False))
 
     # Also sync partial content into the conversation's messages in DB
     # For endpoint mode, skip — endpoint.py handles multi-turn sync
@@ -1023,8 +1033,12 @@ def _sync_partial_to_conversation(task):
     saw before the disconnect — without depending on the in-memory task
     object, the activeTaskId stash, or poll fallback.
 
-    Skips terminal-only fields (finishReason, usage, toolSummary) since they
-    aren't final until the task completes.
+    Terminal-only fields (finishReason, usage, toolSummary, cost) are withheld
+    while the turn is mid-stream, but ARE carried once the orchestrator has
+    computed the finish verdict (``task['finishReason']`` present) — so a
+    checkpoint that outlives a failed terminal persist (e.g. task_results write
+    threw under pool exhaustion) still leaves the message with a populated
+    finish-bar instead of the empty "model name only" bar. See the P1a block.
     """
     conv_id = task.get('convId', '')
     content = task.get('content') or ''
@@ -1172,6 +1186,47 @@ def _sync_partial_to_conversation(task):
             if git_sha and not last_msg.get('_gitSha'):
                 last_msg['_gitSha'] = git_sha
                 mutated = True
+
+            # ── P1a: carry the terminal finish verdict when it EXISTS ──
+            # This sync normally withholds finishReason/usage/toolSummary
+            # because they aren't final until the turn completes. But once the
+            # orchestrator HAS computed the verdict (task['finishReason'] is
+            # set), a checkpoint that fires before — or INSTEAD of — the
+            # terminal persist (e.g. the terminal persist's task_results write
+            # threw under pool exhaustion) is the only durable trace of it.
+            # Carrying it here means a crash-recovered partial already renders a
+            # populated finish-bar (finishReason + usage + cost) instead of the
+            # empty "model name only" bar. Guarded on presence, so a mid-stream
+            # checkpoint (no verdict yet) is byte-identical to before.
+            if task.get('finishReason'):
+                if last_msg.get('finishReason') != task['finishReason']:
+                    last_msg['finishReason'] = task['finishReason']
+                    mutated = True
+                _tu = task.get('usage')
+                if _tu and not last_msg.get('usage'):
+                    last_msg['usage'] = _tu
+                    mutated = True
+                _tts = task.get('toolSummary')
+                if _tts and not last_msg.get('toolSummary'):
+                    last_msg['toolSummary'] = _tts
+                    mutated = True
+                # Stamp the cost snapshot so the finish-bar's cost tag survives
+                # even when the terminal persist never ran. Mirrors the terminal
+                # sync's compute (usage + model + provider + pricing-at-now).
+                if last_msg.get('usage') and not last_msg.get('cost'):
+                    try:
+                        from lib.cost import compute_cost as _compute_cost
+                        _c = _compute_cost(
+                            last_msg['usage'],
+                            model_id=(last_msg.get('model') or task.get('model') or ''),
+                            provider_id=(last_msg.get('provider_id')
+                                         or task.get('provider_id') or None))
+                        if _c:
+                            last_msg['cost'] = _c
+                            mutated = True
+                    except Exception as _pce:
+                        logger.debug('[Checkpoint] conv=%s partial cost stamp failed: %s',
+                                     conv_id[:8] if conv_id else '?', _pce)
 
             # ★ Segment-timeline SoT (epic pt_cb8f98b0cb9b47fb): mirror the THIN
             #   segments onto the message dict so a page-reload / Continue after

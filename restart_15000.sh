@@ -23,11 +23,12 @@
 # Safe to re-run (idempotent): if nothing is on :15000 it just launches one.
 # No `set -e` on the whole script so "nothing to kill" is not fatal.
 #
-# DETACH (2026-07-16): the relaunch uses `setsid` so the server starts in its
-# own session with NO controlling terminal — a code-server terminal/session
-# reap can no longer SIGTERM it. Step [4b/5] asserts the live listener really
-# left this terminal (tty=?, no "+" in STAT, sid≠this shell). For a server that
-# must also survive OOM/crash, prefer the supervisord program instead — see
+# DETACH (2026-07-16): the relaunch uses `setsid nohup` so the server starts in
+# its own session with NO controlling terminal — a code-server terminal/session
+# reap can no longer SIGTERM it. Output still goes to ${LOG} (the shell does the
+# redirect, not nohup). Step [4b/5] asserts the live listener really left this
+# terminal (tty=?, no "+" in STAT, sid≠this shell). For a server that must also
+# survive OOM/crash, prefer the supervisord program instead — see
 # deploy/supervisor/tofu.conf (autostart/autorestart=true).
 
 PROJ="/mnt/dolphinfs/ssd_pool/docker/user/hadoop-aipnlp/INS/ruanjunhao04/chatui"
@@ -111,17 +112,25 @@ fi
 #   Port comes from $PORT (server.py default 15000). We export it explicitly so
 #   the bind is deterministic and never drifts via _find_free_port.
 #
-#   DETACH (2026-07-16): launch with `setsid` — NOT bare `nohup … &`.
-#   `nohup` only masks SIGHUP; the child stays in THIS shell's session and
-#   process group, so when code-server reaps the whole terminal session (its
-#   session leader dies) the reap propagates to the server and it takes a
-#   SIGTERM — exactly the "terminal churn kills :15000" bug. `setsid` starts
-#   the server in a BRAND-NEW session with no controlling terminal, so it is
-#   no longer a member of the terminal's session/pgrp and survives the reap.
-#   (`setsid` already detaches; we keep the log redirect. nohup is redundant
-#   with setsid but harmless — we drop it to keep the launch line honest.)
-echo "[3/5] Relaunching (detached via setsid): PORT=${PORT} setsid ${PY} server.py > ${LOG} 2>&1 &"
-PORT="${PORT}" BIND_HOST="${BIND_HOST:-127.0.0.1}" setsid "${PY}" server.py > "${LOG}" 2>&1 &
+#   DETACH (2026-07-16): launch with `setsid nohup` — NOT bare `nohup … &`.
+#   The bug was `nohup` ALONE: it only masks SIGHUP; the child stays in THIS
+#   shell's session and process group, so when code-server reaps the whole
+#   terminal session (its leader dies) the reap propagates to the server and it
+#   takes a SIGTERM — the "terminal churn kills :15000" bug. `setsid` fixes the
+#   root cause: it starts the server as the leader of a BRAND-NEW session with
+#   no controlling terminal, so it is no longer a member of the terminal's
+#   session/pgrp. We ALSO wrap in `nohup` as belt-and-suspenders (masks a stray
+#   SIGHUP some reap paths broadcast first); the order `setsid nohup` matters —
+#   setsid must be outermost so the new session is created regardless.
+#
+#   OUTPUT REDIRECTION (important): `> ${LOG} 2>&1` is done by THIS SHELL, not
+#   by nohup — bash points fd1/fd2 at the log file BEFORE exec'ing setsid, and
+#   setsid→nohup→python inherit those already-file fds. So ALL server output
+#   goes to ${LOG}, NEVER to this VS Code terminal, with or without nohup. And
+#   because stdout is already a file (not a tty), nohup never creates a stray
+#   `nohup.out`. (Both facts verified empirically 2026-07-16.)
+echo "[3/5] Relaunching (detached via setsid nohup): PORT=${PORT} setsid nohup ${PY} server.py > ${LOG} 2>&1 &"
+PORT="${PORT}" BIND_HOST="${BIND_HOST:-127.0.0.1}" setsid nohup "${PY}" server.py > "${LOG}" 2>&1 &
 NEWPID=$!
 echo "      Launched pid ${NEWPID}; logging to ${LOG}"
 

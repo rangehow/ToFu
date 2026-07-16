@@ -1307,7 +1307,10 @@ function renderMessage(msg, idx) {
   const apSummaryAttr = (msg && msg._isAutopilotSummary) ? ` data-ap-summary="1"` : "";
   let actionBtns = "";
   if (typeof idx === "number") {
-    const copyH = `<button class="msg-action-btn copy-msg-btn" onclick="event.stopPropagation();copyMessage(${idx})" title="Copy"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg> Copy</button>`;
+    /* i18n: label/tooltip resolver — defensive against isolated harnesses
+     * where `t` may be undefined (falls back to the English string). */
+    const _mt = (k, fallback) => (typeof t === 'function' && t(k) !== k) ? t(k) : fallback;
+    const copyH = `<button class="msg-action-btn copy-msg-btn" onclick="event.stopPropagation();copyMessage(${idx})" title="${escapeHtml(_mt('msgAction.copyTitle', 'Copy'))}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg> ${escapeHtml(_mt('msgAction.copy', 'Copy'))}</button>`;
     /* ★ Edit / Regen are USER-LANE actions, but an autopilot VU turn is
      *   role=user + MACHINE-authored (`_isVirtualUser`). Editing a synthetic
      *   "keep going" driver turn and regenerating from it is nonsensical AND
@@ -1321,9 +1324,9 @@ function renderMessage(msg, idx) {
      * (Save / Save & Resend); for every other lane it is EDIT-IN-PLACE only
      * (Save) — startEditMessage / saveEditOnly branch on the role. Regen
      * stays human-only (see _humanAuthored below). */
-    const editH = `<button class="msg-action-btn" onclick="event.stopPropagation();startEditMessage(${idx})" title="Edit"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg> Edit</button>`;
+    const editH = `<button class="msg-action-btn" onclick="event.stopPropagation();startEditMessage(${idx})" title="${escapeHtml(_mt('msgAction.editTitle', 'Edit'))}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg> ${escapeHtml(_mt('msgAction.edit', 'Edit'))}</button>`;
     const regenH = _humanAuthored
-      ? `<button class="msg-action-btn msg-regen-btn" onclick="event.stopPropagation();regenerateFromUser(${idx})" title="Regenerate response from this message"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg> Regen</button>`
+      ? `<button class="msg-action-btn msg-regen-btn" onclick="event.stopPropagation();regenerateFromUser(${idx})" title="${escapeHtml(_mt('msgAction.regenTitle', 'Regenerate response from this message'))}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg> ${escapeHtml(_mt('msgAction.regen', 'Regen'))}</button>`
       : "";
     const conv_ = getActiveConv();
     const isLastAssistant =
@@ -1332,7 +1335,7 @@ function renderMessage(msg, idx) {
       idx === conv_.messages.length - 1 &&
       !activeStreams.has(conv_.id);
     const continueH = isLastAssistant
-      ? `<button class="msg-action-btn msg-continue-btn" onclick="event.stopPropagation();continueAssistant()" title="Continue generating from where it left off"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg> Continue</button>`
+      ? `<button class="msg-action-btn msg-continue-btn" onclick="event.stopPropagation();continueAssistant()" title="${escapeHtml(_mt('msgAction.continueTitle', 'Continue generating from where it left off'))}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg> ${escapeHtml(_mt('msgAction.continue', 'Continue'))}</button>`
       : "";
     const isShowingTrans = _tr.showing;
     // Show the Translate button on: (a) assistant messages, (b) endpoint
@@ -1340,19 +1343,19 @@ function renderMessage(msg, idx) {
     // receive auto-translate too.
     const _translateBtnAllowed = !isUser || (isUser && (msg._isEndpointReview || msg._isVirtualUser));
     const translateH = _translateBtnAllowed
-      ? `<button class="msg-action-btn msg-translate-btn${isShowingTrans ? " translated" : ""}" onclick="event.stopPropagation();translateMessage(${idx})" title="${isShowingTrans ? "Show Original" : "Translate"}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12.87 15.07l-2.54-2.51.03-.03A17.52 17.52 0 0014.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7l1.62-4.33L19.12 17h-3.24z"/></svg> ${isShowingTrans ? "Original" : "Translate"}</button>`
+      ? `<button class="msg-action-btn msg-translate-btn${isShowingTrans ? " translated" : ""}" onclick="event.stopPropagation();translateMessage(${idx})" title="${escapeHtml(isShowingTrans ? _mt('msgAction.showOriginalTitle', 'Show Original') : _mt('msgAction.translateTitle', 'Translate'))}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12.87 15.07l-2.54-2.51.03-.03A17.52 17.52 0 0014.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7l1.62-4.33L19.12 17h-3.24z"/></svg> ${escapeHtml(isShowingTrans ? _mt('msgAction.original', 'Original') : _mt('msgAction.translate', 'Translate'))}</button>`
       : "";
     const exportImgH = !isUser
-      ? `<button class="msg-action-btn msg-export-img-btn" onclick="event.stopPropagation();ExportImages.exportMessageWithPreview(${idx})" title="Export as phone-screen images"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg> Export</button>`
+      ? `<button class="msg-action-btn msg-export-img-btn" onclick="event.stopPropagation();ExportImages.exportMessageWithPreview(${idx})" title="${escapeHtml(_mt('msgAction.exportTitle', 'Export as phone-screen images'))}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg> ${escapeHtml(_mt('msgAction.export', 'Export'))}</button>`
       : "";
     const canDelete = conv_ && !activeStreams.has(conv_.id) && !conv_.activeTaskId;
     const deleteH = canDelete
-      ? `<button class="msg-action-btn msg-delete-btn" onclick="event.stopPropagation();deleteTurn(${idx})" title="${isUser ? 'Delete this turn' : 'Delete this message'}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>`
+      ? `<button class="msg-action-btn msg-delete-btn" onclick="event.stopPropagation();deleteTurn(${idx})" title="${escapeHtml(isUser ? _mt('msgAction.deleteTurnTitle', 'Delete this turn') : _mt('msgAction.deleteMsgTitle', 'Delete this message'))}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>`
       : "";
     /* ★ Branch ("分支") is an assistant-lane action — moved out of the separate
      *   dashed `.branch-zone` pill into the unified bottom action bar so it
      *   shares the `.msg-action-btn` styling/hover-reveal with Copy/Edit/…. */
-    const _branchLabel = (typeof t === 'function') ? t('branch.add') : 'Branch';
+    const _branchLabel = _mt('branch.add', 'Branch');
     const branchBtnH = !isUser
       ? `<button class="msg-action-btn msg-branch-btn" onclick="event.stopPropagation();promptNewBranch(${idx})" title="${escapeHtml(_branchLabel)}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg> ${escapeHtml(_branchLabel)}</button>`
       : "";

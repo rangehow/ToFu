@@ -14,9 +14,14 @@ CHECKS
   B. A user message → NO `.msg-branch-btn` (branch is an assistant-lane action).
   C. `renderBranchZone` NEVER emits the old `branch-add-btn` class (dead).
   D. styles.css no longer defines a `.branch-add-btn` rule.
+  E. The action-bar labels + tooltips are i18n-DRIVEN: with a `t()` that
+     returns localized (zh) strings, the Copy button renders the localized
+     label/title, NOT the hardcoded English "Copy".
+  F. (static) i18n.js defines the `msgAction.*` keys with BOTH zh + en.
 
 NEUTER
   • nc_keep_zone_addbtn: restore the add button in renderBranchZone → C FAILS.
+  • nc_hardcode_copy: hardcode the Copy label back to English → E FAILS.
 """
 
 from __future__ import annotations
@@ -69,7 +74,15 @@ win.conversations = global.conversations = [_conv];
 win.activeConvId = global.activeConvId = 'c-br';
 win.getActiveConv = global.getActiveConv = () => _conv;
 
-win.t = global.t = (k) => (k === 'branch.add' ? '分支' : k);
+// Localized (zh) stub for the keys under test — lets check E prove the
+// labels are i18n-driven (a hardcoded English label would NOT match these).
+const _I18N = {
+  'branch.add': '分支',
+  'msgAction.copy': '复制', 'msgAction.copyTitle': '复制',
+  'msgAction.edit': '编辑', 'msgAction.editTitle': '编辑',
+  'msgAction.export': '导出', 'msgAction.exportTitle': '导出为手机屏幕图片',
+};
+win.t = global.t = (k) => (k in _I18N ? _I18N[k] : k);
 win._fmtAbsoluteDateTime = global._fmtAbsoluteDateTime = () => '';
 win.stripNoTranslateTags = global.stripNoTranslateTags = (s) => (s == null ? '' : String(s));
 win.renderMarkdown = global.renderMarkdown = (s) => '<md>' + String(s == null ? '' : s) + '</md>';
@@ -108,11 +121,19 @@ if (NC === 'nc_keep_zone_addbtn') {
     'if (!pills.length && !panelHtml) {\n    return "";\n  }',
     'if (!pills.length && !panelHtml) {\n    return `<div class="branch-zone"><button class="branch-add-btn" onclick="promptNewBranch(${msgIdx})">${escapeHtml(t("branch.add"))}</button></div>`;\n  }');
 }
-const _applied = (NC === '') || (branchSrc !== fs.readFileSync(process.argv[5], 'utf8'));
-check('nc_pattern_applied', _applied);
+const _branchApplied = (NC !== 'nc_keep_zone_addbtn') || (branchSrc !== fs.readFileSync(process.argv[5], 'utf8'));
 (0, eval)(branchSrc);
 
-(0, eval)(fs.readFileSync(process.argv[2], 'utf8'));  // chat_render.js
+// ── chat_render.js (real / neutered) ──
+let chatSrc = fs.readFileSync(process.argv[2], 'utf8');
+if (NC === 'nc_hardcode_copy') {
+  chatSrc = chatSrc.replace(
+    "${escapeHtml(_mt('msgAction.copy', 'Copy'))}</button>`;",
+    "Copy</button>`;");
+}
+const _chatApplied = (NC !== 'nc_hardcode_copy') || (chatSrc !== fs.readFileSync(process.argv[2], 'utf8'));
+check('nc_pattern_applied', _branchApplied && _chatApplied);
+(0, eval)(chatSrc);
 
 if (typeof renderMessage !== 'function' || typeof renderBranchZone !== 'function') {
   console.log('FAIL fn_exposed renderMessage/renderBranchZone missing'); process.exit(0);
@@ -146,6 +167,17 @@ function parse(html) {
   check('C_zone_no_addbtn', String(emptyZone).indexOf('branch-add-btn') < 0);
 }
 
+// ══ E. action-bar Copy label + title are i18n-driven (localized, not hardcoded) ══
+{
+  const el = parse(renderMessage({ role: 'assistant', content: 'hi' }, 0));
+  const copyBtn = el.querySelector('.copy-msg-btn');
+  const label = copyBtn ? (copyBtn.textContent || '').trim() : '';
+  const title = copyBtn ? (copyBtn.getAttribute('title') || '') : '';
+  // With the zh stub, a properly-i18n'd button shows '复制' and NEVER 'Copy'.
+  check('E_copy_label_localized', !!copyBtn && label === '复制' && label.indexOf('Copy') < 0);
+  check('E_copy_title_localized', title === '复制');
+}
+
 console.log(out.join('\n'));
 process.exit(0);
 """
@@ -177,7 +209,8 @@ def test_branch_btn_lives_in_message_actions():
     fails = [ln for ln in output.splitlines() if ln.startswith('FAIL')]
     assert not fails, 'branch-button unification failures:\n' + output
     for want in ('PASS A_branch_btn_in_actions', 'PASS B_user_has_no_branch_btn',
-                 'PASS C_zone_no_addbtn'):
+                 'PASS C_zone_no_addbtn', 'PASS E_copy_label_localized',
+                 'PASS E_copy_title_localized'):
         assert want in output, output
 
 
@@ -188,6 +221,35 @@ def test_nc_keep_zone_addbtn_regression_is_caught():
     assert 'PASS nc_pattern_applied' in output, f'NC did not apply:\n{output}'
     assert 'FAIL C_zone_no_addbtn' in output, (
         'Restoring the branch-zone add button did NOT fail C:\n' + output)
+
+
+@pytest.mark.skipif(not _node_deps_available(),
+                    reason='node + jsdom dev-deps not installed (run npm install)')
+def test_nc_hardcode_copy_regression_is_caught():
+    output = _run('nc_hardcode_copy')
+    assert 'PASS nc_pattern_applied' in output, f'NC did not apply:\n{output}'
+    assert 'FAIL E_copy_label_localized' in output, (
+        'Hardcoding the Copy label back to English did NOT fail E:\n' + output)
+
+
+def test_msgaction_i18n_keys_have_zh_and_en():
+    """Static guard: every msgAction.* key referenced by chat_render.js is
+    defined in i18n.js with BOTH a zh and an en value."""
+    i18n_path = os.path.join(JS_DIR, 'i18n.js')
+    with open(i18n_path, encoding='utf-8') as f:
+        i18n_src = f.read()
+    with open(CHAT_RENDER, encoding='utf-8') as f:
+        chat_src = f.read()
+    keys = set(re.findall(r"_mt\('(msgAction\.[a-zA-Z]+)'", chat_src))
+    assert keys, 'no msgAction.* keys found in chat_render.js — did the wiring change?'
+    for key in sorted(keys):
+        # Match a line like:  'msgAction.copy': { zh: '复制', en: 'Copy' },
+        m = re.search(
+            r"'" + re.escape(key) + r"'\s*:\s*\{([^}]*)\}", i18n_src)
+        assert m, f'i18n.js is missing a definition for {key!r}'
+        body = m.group(1)
+        assert 'zh:' in body, f'{key!r} has no zh translation'
+        assert 'en:' in body, f'{key!r} has no en translation'
 
 
 def test_styles_no_longer_defines_branch_add_btn():
@@ -204,5 +266,7 @@ if __name__ == '__main__':
     else:
         test_branch_btn_lives_in_message_actions()
         test_nc_keep_zone_addbtn_regression_is_caught()
+        test_nc_hardcode_copy_regression_is_caught()
+    test_msgaction_i18n_keys_have_zh_and_en()
     test_styles_no_longer_defines_branch_add_btn()
     print('PASS test_frontend_branch_btn_in_actions')

@@ -287,14 +287,198 @@ def test_NC_without_rehydrate_rows_stay_gone():
         'did not match:\n' + out)
 
 
+# ═══════════════════ LIVE-SESSION adoption legs (5 + 6) ═════════════════════
+# The DB-GET reload legs above prove the rows reappear after a fresh GET. But
+# within a LIVE session the `done` event's committedMessage projection
+# OVERWRITES assistantMsg.toolRounds with the backend's clean list, and a
+# reconnect-state snapshot / poll-fallback likewise rebuilds the in-memory
+# message. Unless those three seams ADOPT the sidecar onto assistantMsg, the
+# chip vanishes until a manual refresh — the exact symptom, still visible
+# in-session. These legs pin the three adoption seams in the SHIPPED files.
+
+PIPE_JS = os.path.join(ROOT, 'static', 'js', 'ui', 'sse_pipeline.js')
+POLL_JS = os.path.join(ROOT, 'static', 'js', 'ui', 'sse_poll_fallback.js')
+
+_LANES = ('_inboxInjects', '_peerInjects', '_userSteerInjects')
+
+
+def test_committedMessage_whitelist_carries_the_three_lanes():
+    """Live `done` seam: the committedMessage projection loop in sse_pipeline.js
+    must list all three sidecar keys, else the done event drops them off the
+    in-memory message (chip vanishes mid-session until refresh)."""
+    src = open(PIPE_JS, encoding='utf-8').read()
+    # Isolate the projection whitelist array (from the for-loop to its close).
+    i = src.index("for (const _k of ['finishReason'")
+    j = src.index('if (_cm[_k] != null)', i)
+    whitelist = src[i:j]
+    for lane in _LANES:
+        assert f"'{lane}'" in whitelist, (
+            f'{lane} missing from the committedMessage whitelist — the done '
+            f'projection would drop it and the chip vanishes in-session')
+
+
+def test_reconnect_state_snapshot_adopts_the_three_lanes():
+    """Live reconnect seam: the STATE snapshot handler in sse_pipeline.js must
+    copy ev.inboxInjects/peerInjects/userSteerInjects onto assistantMsg."""
+    src = open(PIPE_JS, encoding='utf-8').read()
+    for camel, under in (('inboxInjects', '_inboxInjects'),
+                         ('peerInjects', '_peerInjects'),
+                         ('userSteerInjects', '_userSteerInjects')):
+        assert f'ev.{camel}' in src and f'assistantMsg.{under} = ev.{camel}' in src, (
+            f'reconnect-state snapshot does not adopt {camel} onto assistantMsg')
+
+
+def test_poll_fallback_forwards_the_three_lanes():
+    """Live poll seam: the poll-fallback in sse_poll_fallback.js must forward
+    data.inboxInjects/peerInjects/userSteerInjects onto assistantMsg."""
+    src = open(POLL_JS, encoding='utf-8').read()
+    for camel, under in (('inboxInjects', '_inboxInjects'),
+                         ('peerInjects', '_peerInjects'),
+                         ('userSteerInjects', '_userSteerInjects')):
+        assert f'data.{camel}' in src and f'assistantMsg.{under} = data.{camel}' in src, (
+            f'poll-fallback does not forward {camel} onto assistantMsg')
+
+
+_LIVE_HARNESS = r"""
+const fnSrc = process.env.FN_SRC;
+eval(fnSrc);
+const whitelist = JSON.parse(process.env.WHITELIST);
+
+const out = [];
+function check(name, cond) { out.push((cond ? 'PASS ' : 'FAIL ') + name); }
+
+// Simulate the LIVE `done` event: assistantMsg accumulated a synthetic inbox
+// row IN MEMORY during streaming (live push), then the done event delivers the
+// backend's committedMessage whose toolRounds is the CLEAN list (no synthetic
+// rows) plus the sidecar underscore fields. The projection loop below is the
+// REAL whitelist extracted from the shipped sse_pipeline.js.
+const assistantMsg = {
+  role: 'assistant', content: 'partial',
+  toolRounds: [  // live in-memory: a synthetic row was pushed during streaming
+    { roundNum: 1, toolCallId: 'tc_1', toolName: 'web_search', toolArgs: '{}',
+      toolContent: 'r', status: 'done' },
+    { roundNum: 9000001, status: 'done', _inboxInject: true, _inboxKey: 'inbox:0',
+      inboxRound: 0, inboxCount: 1, inboxAgentIds: ['a1'], inboxPreviews: [{ text: 'live' }] },
+  ],
+};
+// The backend's committedMessage: CLEAN toolRounds (no synthetic row) + sidecars.
+const _cm = {
+  finishReason: 'stop',
+  toolRounds: [
+    { roundNum: 1, toolCallId: 'tc_1', toolName: 'web_search', toolArgs: '{}',
+      toolContent: 'r', status: 'done' },
+  ],
+  _inboxInjects: [{ round: 0, count: 1, agentIds: ['a1'], previews: [{ text: 'live' }] }],
+  _peerInjects: [{ round: 0, count: 1, previews: [{ fromConv: 's', text: 'p' }] }],
+  _userSteerInjects: [{ round: 0, count: 1, previews: [{ text: 'st' }] }],
+};
+
+// Replay the REAL done projection: overwrite toolRounds, then apply the whitelist.
+if (Array.isArray(_cm.toolRounds)) assistantMsg.toolRounds = _cm.toolRounds;
+for (const _k of whitelist) { if (_cm[_k] != null) assistantMsg[_k] = _cm[_k]; }
+
+// After the done projection, the synthetic row is GONE from toolRounds (backend
+// clean list won) — but the sidecar was adopted, so getToolRoundsFromMsg
+// rebuilds it. This is the in-session survival the objective demands.
+check('done_overwrote_toolRounds_clean',
+  assistantMsg.toolRounds.length === 1 && !assistantMsg.toolRounds.some(r => r._inboxInject));
+check('done_adopted_inbox_sidecar', Array.isArray(assistantMsg._inboxInjects));
+check('done_adopted_peer_sidecar', Array.isArray(assistantMsg._peerInjects));
+check('done_adopted_steer_sidecar', Array.isArray(assistantMsg._userSteerInjects));
+
+const rows = getToolRoundsFromMsg(assistantMsg);
+check('chip_survives_in_session_inbox', rows.filter(r => r._inboxInject).length === 1);
+check('chip_survives_in_session_peer', rows.filter(r => r._peerInject).length === 1);
+check('chip_survives_in_session_steer', rows.filter(r => r._userSteerInject).length === 1);
+check('live_preview_text_survives',
+  rows.find(r => r._inboxInject).inboxPreviews[0].text === 'live');
+
+console.log(out.join('\n'));
+"""
+
+_LIVE_NC_HARNESS = r"""
+// NEUTER: drop the three lanes from the whitelist (pre-fix behaviour). The done
+// projection then does NOT adopt the sidecar → after toolRounds is overwritten
+// with the clean list, getToolRoundsFromMsg has nothing to rebuild from → the
+// chip is GONE in-session. Proves the whitelist entries are load-bearing.
+const fnSrc = process.env.FN_SRC;
+eval(fnSrc);
+const whitelist = JSON.parse(process.env.WHITELIST)
+  .filter(k => k !== '_inboxInjects' && k !== '_peerInjects' && k !== '_userSteerInjects');
+
+const out = [];
+function check(name, cond) { out.push((cond ? 'PASS ' : 'FAIL ') + name); }
+const assistantMsg = { role: 'assistant', content: 'p', toolRounds: [] };
+const _cm = {
+  finishReason: 'stop',
+  toolRounds: [{ roundNum: 1, toolCallId: 'tc_1', toolName: 'x', toolArgs: '{}', toolContent: 'r', status: 'done' }],
+  _inboxInjects: [{ round: 0, count: 1, agentIds: ['a1'], previews: [{ text: 'live' }] }],
+};
+if (Array.isArray(_cm.toolRounds)) assistantMsg.toolRounds = _cm.toolRounds;
+for (const _k of whitelist) { if (_cm[_k] != null) assistantMsg[_k] = _cm[_k]; }
+const rows = getToolRoundsFromMsg(assistantMsg);
+check('nc_chip_gone_without_whitelist_entry',
+  rows.filter(r => r._inboxInject).length === 0 && !assistantMsg._inboxInjects);
+console.log(out.join('\n'));
+"""
+
+
+def _extract_whitelist_array() -> str:
+    """Extract the committedMessage whitelist keys from the shipped
+    sse_pipeline.js as a JSON array, so the live harness replays the REAL loop."""
+    src = open(PIPE_JS, encoding='utf-8').read()
+    i = src.index("for (const _k of ['finishReason'")
+    j = src.index(']) {', i)
+    arr_src = src[i + src[i:].index('['): j + 1]
+    import re as _re
+    keys = _re.findall(r"'([^']+)'", arr_src)
+    import json as _json
+    return _json.dumps(keys)
+
+
+@pytest.mark.skipif(not shutil.which('node'), reason='node not installed')
+def test_chip_survives_live_done_projection():
+    """Leg 5 (in-session): replay the REAL done committedMessage projection with
+    the REAL whitelist + REAL getToolRoundsFromMsg → the chip survives without a
+    refresh."""
+    fn_src = _extract_rehydrate_fn()
+    env = dict(os.environ, FN_SRC=fn_src, WHITELIST=_extract_whitelist_array())
+    proc = subprocess.run(['node', '-e', _LIVE_HARNESS], capture_output=True,
+                          text=True, timeout=30, env=env)
+    assert proc.returncode == 0, f'node failed: {proc.stderr}'
+    out = proc.stdout.strip()
+    fails = [ln for ln in out.splitlines() if ln.startswith('FAIL')]
+    assert not fails, 'live done-projection failures:\n' + out
+    assert out.count('PASS') >= 8, f'expected >=8 PASS, got:\n{out}'
+
+
+@pytest.mark.skipif(not shutil.which('node'), reason='node not installed')
+def test_NC_live_done_without_whitelist_entry_loses_chip():
+    """Leg 6 (NEUTER): drop the lanes from the whitelist → the chip is lost
+    in-session, proving the whitelist entries are load-bearing."""
+    fn_src = _extract_rehydrate_fn()
+    env = dict(os.environ, FN_SRC=fn_src, WHITELIST=_extract_whitelist_array())
+    proc = subprocess.run(['node', '-e', _LIVE_NC_HARNESS], capture_output=True,
+                          text=True, timeout=30, env=env)
+    assert proc.returncode == 0, f'node failed: {proc.stderr}'
+    assert 'PASS nc_chip_gone_without_whitelist_entry' in proc.stdout, (
+        'NC control failed — the whitelist entries are not load-bearing:\n' + proc.stdout)
+
+
 if __name__ == '__main__':
     test_sidecars_persist_and_survive_db_roundtrip()
     test_reloaded_wire_is_byte_identical_to_no_inbox_baseline()
     test_leaked_synthetic_row_still_wire_neutral()
-    print('PASS backend legs')
+    test_committedMessage_whitelist_carries_the_three_lanes()
+    test_reconnect_state_snapshot_adopts_the_three_lanes()
+    test_poll_fallback_forwards_the_three_lanes()
+    print('PASS backend + source legs')
     if shutil.which('node'):
         _src = _extract_rehydrate_fn()
         print(_run_node(_HARNESS, _src))
         print(_run_node(_NC_HARNESS, _src))
+        test_chip_survives_live_done_projection()
+        test_NC_live_done_without_whitelist_entry_loses_chip()
+        print('PASS live-adoption legs')
     else:
         print('SKIP frontend leg — node not available')

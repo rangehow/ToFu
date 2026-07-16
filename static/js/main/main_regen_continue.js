@@ -102,6 +102,11 @@ async function regenerateFromUser(idx) {
     updateSendButton();
     renderConversationList();
     if (activeConvId === convId) _renderTranslatingBubble();
+  } else if (activeConvId === convId) {
+    /* ★ Fix ①: no translation → deterministic '连接中…' placeholder so the
+     *   assistant side is not blank during the synchronous /api/chat/regenerate
+     *   POST. Upgraded in place to the streaming bubble on taskId. */
+    _renderTranslatingBubble(t('sidebar.connecting'));
   }
 
   try {
@@ -217,8 +222,11 @@ async function regenerateFromUser(idx) {
     }
   } finally {
     clearTimeout(_regenTimeout);
+    // ★ Fix ①: teardown the pre-POST placeholder unconditionally (it is now
+    //   rendered whether or not we translated). Idempotent once the success
+    //   path swapped it for the streaming bubble.
+    _removeTranslatingBubble();
     if (_regenWillTranslate) {
-      _removeTranslatingBubble();
       conv._translating = false;
       conv._translateAborted = false;
       conv._translateAbortCtrl = null;

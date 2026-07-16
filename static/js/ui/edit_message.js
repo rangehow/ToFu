@@ -440,6 +440,13 @@ async function saveEditAndResend(idx) {
     updateSendButton();
     renderConversationList();
     if (activeConvId === convId) _renderTranslatingBubble();
+  } else if (activeConvId === convId) {
+    /* ★ Fix ①: no translation → deterministic '连接中…' placeholder so the
+     *   assistant side is not blank during the synchronous /api/chat/regenerate
+     *   POST. Upgraded in place to the streaming bubble on taskId.
+     *   NOTE: `t` is shadowed here by the edited text (const t = ta.value.trim);
+     *   use the global i18n helper via window.t. */
+    _renderTranslatingBubble(window.t('sidebar.connecting'));
   }
 
   try {
@@ -550,8 +557,11 @@ async function saveEditAndResend(idx) {
     }
   } finally {
     clearTimeout(_editTimeout);
+    // ★ Fix ①: teardown the pre-POST placeholder unconditionally (rendered
+    //   whether or not we translated). Idempotent once the success path
+    //   swapped it for the streaming bubble.
+    _removeTranslatingBubble();
     if (_editWillTranslate) {
-      _removeTranslatingBubble();
       conv._translating = false;
       conv._translateAborted = false;
       conv._translateAbortCtrl = null;

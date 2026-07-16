@@ -142,6 +142,7 @@ var _i18n = {
   'sidebar.summaryTitle': { zh: '对话摘要', en: 'Conversation summary' },
   'sidebar.awaitingInput': { zh: '等待你的输入', en: 'Awaiting your input' },
   'sidebar.translating': { zh: '翻译中…', en: 'Translating…' },
+  'sidebar.connecting': { zh: '连接中…', en: 'Connecting…' },
   'sidebar.translatingTag': { zh: '翻译中', en: 'Translating' },
   'sidebar.memoryPrefetch': { zh: '筛选记忆中…', en: 'Filtering memories…' },
   'sidebar.memoryPrefetchTag': { zh: '筛选记忆', en: 'Filtering' },

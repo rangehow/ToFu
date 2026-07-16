@@ -10,11 +10,20 @@
 
 
 /**
- * Render a translating indicator bubble in the chat DOM.
- * Shown while the server translates the user's message before starting the agent.
- * Removed when the real streaming bubble appears.
+ * Render a pre-stream assistant placeholder bubble in the chat DOM.
+ *
+ * Serves TWO phases on the SAME DOM node (#translating-msg) so every send /
+ * regenerate / edit exit path's existing `_removeTranslatingBubble()` tears it
+ * down uniformly:
+ *   • auto-translate on  → default label '翻译中…' (server pre-translates the
+ *     user message before starting the agent);
+ *   • auto-translate off → caller passes '连接中…' so the assistant side is NOT
+ *     blank during the synchronous /api/chat/send POST (load → task-start).
+ * Upgraded in place to the real streaming bubble once the POST returns a taskId.
+ *
+ * @param {string} [label] Status text. Defaults to the translating label.
  */
-function _renderTranslatingBubble() {
+function _renderTranslatingBubble(label) {
   const inner = document.getElementById("chatInner");
   if (!inner) return;
   // Remove any previous translating bubble
@@ -24,6 +33,7 @@ function _renderTranslatingBubble() {
   el.addEventListener('animationend', () => el.classList.remove('message-new'), { once: true });
   el.id = "translating-msg";
   const avatar = (typeof _TOFU_WORKER_SVG !== 'undefined') ? _TOFU_WORKER_SVG : '✦';
+  const _label = label || t('sidebar.translating');
   el.innerHTML = `<div class="message-avatar">${avatar}</div>
     <div class="message-content">
       <div class="message-header">
@@ -31,7 +41,7 @@ function _renderTranslatingBubble() {
         <span class="message-time">${formatClockTime()}</span>
       </div>
       <div class="message-body">
-        <div class="stream-status"><div class="pulse"></div> ${t('sidebar.translating')}</div>
+        <div class="stream-status"><div class="pulse"></div> ${_label}</div>
       </div>
     </div>`;
   inner.appendChild(el);

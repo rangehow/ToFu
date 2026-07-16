@@ -523,6 +523,14 @@ async function sendMessage() {
     updateSendButton();
     renderConversationList();
     if (activeConvId === convId) _renderTranslatingBubble();
+  } else if (activeConvId === convId) {
+    /* ★ No translation → the assistant side would otherwise be BLANK for the
+     *   whole synchronous /api/chat/send POST (load → task-start). Render a
+     *   deterministic '连接中…' placeholder on the SAME #translating-msg node so
+     *   every exit path's existing _removeTranslatingBubble() tears it down,
+     *   then upgrade it in place to the streaming bubble once the POST returns
+     *   the taskId. This closes the send-side "dead-zone" (fix ①). */
+    _renderTranslatingBubble(t('sidebar.connecting'));
   }
 
   try {
@@ -767,9 +775,15 @@ async function sendMessage() {
     //   bubble locally (catch path, error fallback already syncs).  Either
     //   way the rescue PUT path is now safe to run again.
     conv._sendInFlight = false;
+    // ★ Unconditional teardown: the pre-POST placeholder (#translating-msg)
+    //   is now rendered whether or not we translated (fix ①), so the '连接中…'
+    //   variant must be removed here too — otherwise a generic-error exit
+    //   (which does not remove it inline) leaves an orphaned placeholder.
+    //   Idempotent no-op once the success path already swapped it for the
+    //   streaming bubble.
+    _removeTranslatingBubble();
     // ★ Always clean up translating state
     if (_willTranslate) {
-      _removeTranslatingBubble();
       conv._translating = false;
       conv._translateAborted = false;
       conv._translateAbortCtrl = null;

@@ -4,6 +4,8 @@ Defines the OpenAI-compatible message field allow-list and the helpers that
 strip frontend metadata / tool_calls before a request is sent.
 """
 
+import copy
+
 from lib.log import get_logger
 
 logger = get_logger(__name__)
@@ -39,7 +41,17 @@ def _strip_non_api_fields(messages: list) -> list:
     apiRounds, toolSummary, usage, timestamp, images, originalContent, …)
     that inflate the JSON body sent to the LLM gateway.
 
-    Does NOT mutate the original messages — returns shallow copies.
+    Does NOT mutate the original messages — nested mutable values (``content``
+    block lists, ``tool_calls``, …) are DEEP-copied, not shared by reference.
+    This isolation matters because downstream build_body steps mutate the
+    cleaned messages in place — ``_validate_image_blocks`` /
+    ``_downscale_oversized_images`` rewrite ``block['image_url']['url']`` and
+    ``_inject_gemini_thought_signatures`` writes into ``tool_calls[0]``. With a
+    shallow copy those writes would leak back into the caller's persistent
+    messages, changing the prefix bytes on the next round (a prompt-cache miss
+    for image conversations). Immutable scalars (role/name strings, and the big
+    base64 payloads inside content — deepcopy returns immutables as-is) are not
+    duplicated, so the copy stays cheap on the hot path.
     """
     cleaned = []
     stripped_keys = set()
@@ -47,7 +59,7 @@ def _strip_non_api_fields(messages: list) -> list:
         clean = {}
         for k, v in msg.items():
             if k in _API_MESSAGE_FIELDS:
-                clean[k] = v
+                clean[k] = copy.deepcopy(v) if isinstance(v, (list, dict)) else v
             else:
                 stripped_keys.add(k)
         cleaned.append(clean)

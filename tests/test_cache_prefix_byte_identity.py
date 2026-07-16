@@ -21,17 +21,19 @@ marker; its POSITION is guarded separately by marker_signature):
      the reachable pipeline is a byte fixpoint for this conv's shape.)
 
   B. NO CALLER-LIST MUTATION. ``build_body`` must not mutate the caller's
-     persistent ``messages`` list. It currently DOES for image turns:
-     ``_strip_non_api_fields`` copies only the top-level message dict but SHARES
+     persistent ``messages`` list. It USED to for image turns:
+     ``_strip_non_api_fields`` copied only the top-level message dict but SHARED
      the nested ``content`` list by reference, and the in-place
-     ``_downscale_oversized_images`` then re-encodes the image THROUGH that
-     shared ref — so the orchestrator's persistent prefix message changes bytes
-     the first time an oversized image is built, and the NEXT round sends a
-     different prefix for an already-cached message → full re-bill. This is a
-     proven client-side prefix-mutation vector (distinct from mrne3bqe, which is
-     image-free, but the same bug class). Guarded as a strict xfail so it flips
-     to a hard PASS the moment the source fix lands, and the neuter proves the
-     guard bites.
+     ``_downscale_oversized_images`` then re-encoded the image THROUGH that
+     shared ref — so the orchestrator's persistent prefix message changed bytes
+     the first time an oversized image was built, and the NEXT round sent a
+     different prefix for an already-cached message → full re-bill. Same class
+     for ``_inject_gemini_thought_signatures``, which writes into
+     ``tool_calls[0]['extra_content']`` in place. FIXED: ``_strip_non_api_fields``
+     now deep-copies nested mutable values, isolating the cleaned messages from
+     the caller's list. Guarded here as hard PASS tests (image + tool_calls),
+     with the deep-copy mechanism pinned in
+     ``test_strip_non_api_fields_deepcopies_nested_content``.
 
 Run: PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest tests/test_cache_prefix_byte_identity.py -p no:cacheprovider
 """
@@ -213,29 +215,29 @@ def _image_url_in(msg):
     return None
 
 
-def test_strip_non_api_fields_shares_nested_content_ref():
-    """Pin the MECHANISM: _strip_non_api_fields copies the top-level message
-    dict but SHARES the nested ``content`` list by reference — the seam that
-    lets an in-place downscale write through into the caller's list.
-
-    This is the neuter anchor: if a fix deep-copies content, this assertion
-    flips and the write-through can no longer happen.
+def test_strip_non_api_fields_deepcopies_nested_content():
+    """Pin the FIX: _strip_non_api_fields deep-copies nested mutable values
+    (``content`` block lists, ``tool_calls``) instead of sharing them by
+    reference. This is the seam that closes the write-through — an in-place
+    downscale / signature-injection on the cleaned message can no longer reach
+    the caller's persistent list.
     """
     from lib.llm_sanitize import _strip_non_api_fields
     src = [{'role': 'user', 'content': [{'type': 'text', 'text': 'hi'}]}]
     cleaned = _strip_non_api_fields(src)
-    # Documents CURRENT behaviour (shared ref). A fix would make this `is not`.
-    assert cleaned[0]['content'] is src[0]['content'], (
-        'content list no longer shared — if this failed because a fix now '
-        'deep-copies, update invariant B: build_body should also stop mutating '
-        'the caller list (see test_build_body_does_not_mutate_caller_images).')
+    # The nested content list must be an independent copy, not the caller's.
+    assert cleaned[0]['content'] is not src[0]['content'], (
+        'content list is still shared by reference — the deep-copy fix in '
+        '_strip_non_api_fields regressed; in-place build_body mutations will '
+        'leak back into the caller (see test_build_body_does_not_mutate_caller_images).')
+    # …but its VALUE is equal (a faithful copy, nothing dropped).
+    assert cleaned[0]['content'] == src[0]['content']
+    # Mutating the copy must NOT touch the source.
+    cleaned[0]['content'][0]['text'] = 'MUTATED'
+    assert src[0]['content'][0]['text'] == 'hi', (
+        'mutating the cleaned copy wrote through to the caller\'s list')
 
 
-@pytest.mark.xfail(strict=True, reason='KNOWN DEFECT: build_body downscales an '
-                   'oversized image IN PLACE through the shared nested content '
-                   'ref, mutating the caller\'s persistent prefix message. Flips '
-                   'to PASS when the source fix (deep-copy nested content before '
-                   'in-place image mutation) lands. Owned by the source-fix lane.')
 def test_build_body_does_not_mutate_caller_images():
     """build_body must treat the caller's ``messages`` as read-only. Today it
     re-encodes an oversized image in place, changing the persistent prefix
@@ -259,6 +261,40 @@ def test_build_body_does_not_mutate_caller_images():
         'build_body mutated the caller\'s persistent image bytes '
         f'({len(before)} → {len(after)} chars) — this shifts the prompt-cache '
         'prefix on the next round for an already-cached message.')
+
+
+def test_build_body_does_not_mutate_caller_tool_calls():
+    """The other write-through mutator: on a Gemini fallback,
+    ``_inject_gemini_thought_signatures`` writes ``extra_content.google.
+    thought_signature`` into ``tool_calls[0]`` in place. With the deep-copy fix
+    that write lands on the cleaned copy only — the caller's persistent
+    assistant turn (produced by a non-Gemini model) keeps its original
+    tool_calls, so its prefix bytes don't shift on the next round."""
+    from lib.llm import build_body
+    from lib.model_info import is_gemini
+
+    gemini_model = 'gemini-3-pro'
+    if not is_gemini(gemini_model):
+        pytest.skip('gemini-3-pro not classified as Gemini in this build')
+
+    persistent = [
+        {'role': 'system', 'content': 'Sys ' + ('g ' * 40)},
+        {'role': 'user', 'content': 'go'},
+        {'role': 'assistant', 'content': 'calling',
+         'tool_calls': [{'id': 'c1', 'type': 'function',
+                         'function': {'name': 'grep_search', 'arguments': '{}'}}]},
+        {'role': 'tool', 'tool_call_id': 'c1', 'content': 'res'},
+    ]
+    tc_before = copy.deepcopy(persistent[2]['tool_calls'])
+    build_body(gemini_model, persistent, max_tokens=2048, stream=True,
+               tools=_tools())
+    assert persistent[2]['tool_calls'] == tc_before, (
+        'build_body injected a thought_signature into the caller\'s persistent '
+        'tool_calls — this shifts the prompt-cache prefix for an already-cached '
+        'assistant turn on the next round.')
+    # No extra_content leaked into the caller's tool_call.
+    assert 'extra_content' not in persistent[2]['tool_calls'][0], (
+        'extra_content.google.thought_signature wrote through to the caller')
 
 
 def test_image_downscale_is_a_byte_fixpoint_once_capped():

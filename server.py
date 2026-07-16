@@ -2120,6 +2120,32 @@ def _ensure_tls_certs(certfile='', keyfile=''):
         return None, None
 
 
+def graceful_shutdown_signals():
+    """Signals that must funnel into the graceful-drain path, not kill us.
+
+    SIGTERM/SIGINT are the deliberate stop signals. SIGHUP is included on
+    purpose: when the server is (wrongly) launched attached to a terminal —
+    e.g. ``python server.py`` in a code-server terminal — closing that
+    terminal makes the kernel deliver SIGHUP to the foreground process group,
+    whose default disposition is *terminate*. That single hangup would take
+    the server down along with the terminal session. Routing SIGHUP through
+    the same graceful-drain handler makes "close the terminal" a clean,
+    connection-draining shutdown instead of an abrupt death — defence in depth
+    for the case the supervisor launch path is bypassed. Only signals that
+    actually exist on this platform are returned (Windows has no SIGHUP).
+
+    Returns:
+        A list of signal numbers to register the graceful handler on.
+    """
+    names = ('SIGTERM', 'SIGINT', 'SIGHUP')
+    out = []
+    for name in names:
+        sig = getattr(signal, name, None)
+        if sig is not None:
+            out.append(sig)
+    return out
+
+
 if __name__ == '__main__':
     try:
         from hypercorn.config import Config as HypercornConfig
@@ -2191,10 +2217,12 @@ if __name__ == '__main__':
             _server_log.warning('[Server] mark_clean(signal) failed: %s', _sm_e)
         _shutdown_requested.set()
     # Passing a custom shutdown_trigger to hypercorn_serve suppresses
-    # Hypercorn's own signal handlers, so we own BOTH signals here and
-    # funnel them into the same graceful-drain flag.
-    safe_signal(signal.SIGTERM, _signal_shutdown)
-    safe_signal(signal.SIGINT, _signal_shutdown)
+    # Hypercorn's own signal handlers, so we own these signals here and
+    # funnel them into the same graceful-drain flag. SIGHUP is included so
+    # closing a terminal the server was (wrongly) attached to drains cleanly
+    # instead of killing it — see graceful_shutdown_signals().
+    for _sig in graceful_shutdown_signals():
+        safe_signal(_sig, _signal_shutdown)
 
     # ── PG shutdown hook ──
     try:

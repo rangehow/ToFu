@@ -37,7 +37,7 @@ from lib.chat import (  # noqa: F401
     scan_continue_checkpoint as _scan_continue_checkpoint,
 )
 from lib.idempotency import idempotent_post
-from routes.common import DEFAULT_USER_ID, _invalidate_meta_cache, _notify_conv_changed
+from routes.common import DEFAULT_USER_ID, _notify_conv_changed
 
 logger = get_logger(__name__)
 
@@ -655,6 +655,57 @@ def chat_send():
                                'failed (non-fatal): %s', conv_id[:8], e)
             has_running_task = False
 
+        # ★ Inject-mode: the composer's per-conversation toggle. Two lanes when
+        #   a task is already running for this conversation:
+        #     • 'queue' (default) — enqueue for dispatch as a FRESH turn after
+        #       the current reply ends (persistent, survives reload).
+        #     • 'steer' — inject into the CURRENTLY-RUNNING turn at its next
+        #       clean round boundary (after any open tool_result closes), so the
+        #       human can course-correct mid-generation. Delivered via the
+        #       model-facing agent_inbox under mode='user-steer'.
+        #   Steer has an exactly-once fallback: if the running task is NOT
+        #   drainable (its inbox slot is tombstoned — it is finalizing and will
+        #   run no further round-boundary drain), we DO NOT enqueue into the
+        #   inbox (it would be silently dropped) — we fall back to the durable
+        #   message_queue so the steer becomes the next turn instead. Never zero.
+        _inject_mode = (config.get('injectMode') or data.get('injectMode') or '').strip()
+        if has_running_task and _inject_mode == 'steer':
+            from lib.agent_inbox import has_pending as _inbox_has_pending  # noqa: F401
+            from lib.agent_inbox import _tombstones as _inbox_tombstones
+            from lib.agent_inbox import _lock as _inbox_lock
+            from lib.agent_inbox import enqueue as _inbox_enqueue
+            # The inbox key is conversation-scoped (swarm_key_for → convId).
+            _steer_key = conv_id
+            with _inbox_lock:
+                _drainable = _steer_key not in _inbox_tombstones
+            if _drainable:
+                # value = the wire text the model sees; _user_msg carries the
+                # pre-built/translated dict so the finalize salvage can re-queue
+                # it verbatim on an abort (exactly-once, never re-translated).
+                _steer_text = user_msg.get('content', '') or text
+                _inbox_enqueue(
+                    _steer_key, _steer_text,
+                    priority='next', mode='user-steer',
+                    extra={'_user_msg': user_msg, 'config': config})
+                logger.info('[Send] conv=%s ➡ STEER (injected into running turn) '
+                            'text=%d chars', conv_id[:8], len(_steer_text))
+                if is_new:
+                    _persist_conv_messages(db, conv_id, messages, title, settings_patch)
+                _notify_conv_changed(conv_id, rev=None)
+                return jsonify({
+                    'steered': True,
+                    'convId': conv_id,
+                    'title': title,
+                    'userMessage': user_msg,
+                    'isNew': is_new,
+                    'msgCount': len(messages),  # excludes the steer msg
+                })
+            # Not drainable → fall through to the durable-queue path below so
+            # the steer is delivered as a fresh turn instead of being dropped.
+            logger.info('[Send] conv=%s steer requested but inbox slot not '
+                        'drainable (task finalizing) — falling back to queue',
+                        conv_id[:8])
+
         if has_running_task:
             from lib.message_queue import enqueue_message
             # ★ Enqueue for later dispatch.  The user message is NOT
@@ -712,7 +763,11 @@ def chat_send():
         #    serialized merge of just this key and never touches messages.
         try:
             from lib.conversations import set_conversation_settings
-            set_conversation_settings(conv_id, {'activeTaskId': task_id}, db=db)
+            # notify=False: each of these paths emits its own
+            # _notify_conv_changed below, so the gate must invalidate the local
+            # cache (structural guarantee) WITHOUT a second cross-device push.
+            set_conversation_settings(conv_id, {'activeTaskId': task_id},
+                                      db=db, notify=False)
         except Exception as e:
             logger.warning('[Send] Failed to update activeTaskId: %s', e)
 
@@ -1022,7 +1077,11 @@ def chat_regenerate():
         #    a full-row rewrite here would clobber a task-thread checkpoint).
         try:
             from lib.conversations import set_conversation_settings
-            set_conversation_settings(conv_id, {'activeTaskId': task_id}, db=db)
+            # notify=False: each of these paths emits its own
+            # _notify_conv_changed below, so the gate must invalidate the local
+            # cache (structural guarantee) WITHOUT a second cross-device push.
+            set_conversation_settings(conv_id, {'activeTaskId': task_id},
+                                      db=db, notify=False)
         except Exception as e:
             logger.warning('[Regen] Failed to update activeTaskId: %s', e)
 
@@ -1100,7 +1159,9 @@ def _continue_via_prefill_only(db, conv_id, messages, assistant_msg, title,
 
     try:
         from lib.conversations import set_conversation_settings
-        set_conversation_settings(conv_id, {'activeTaskId': task_id}, db=db)
+        # notify=False: _notify_conv_changed is emitted below (no double push).
+        set_conversation_settings(conv_id, {'activeTaskId': task_id},
+                                  db=db, notify=False)
     except Exception as e:
         logger.warning('[Continue] Failed to update activeTaskId (prefill-only): %s', e)
 
@@ -1323,7 +1384,11 @@ def chat_continue():
         #    a full-row rewrite would clobber a task-thread checkpoint).
         try:
             from lib.conversations import set_conversation_settings
-            set_conversation_settings(conv_id, {'activeTaskId': task_id}, db=db)
+            # notify=False: each of these paths emits its own
+            # _notify_conv_changed below, so the gate must invalidate the local
+            # cache (structural guarantee) WITHOUT a second cross-device push.
+            set_conversation_settings(conv_id, {'activeTaskId': task_id},
+                                      db=db, notify=False)
         except Exception as e:
             logger.warning('[Continue] Failed to update activeTaskId: %s', e)
 
@@ -1756,6 +1821,14 @@ async def chat_stream(task_id):
                     state['relatedConversations'] = task['_relatedConversations']
                 if task.get('_preferencesLearned'):
                     state['preferencesLearned'] = task['_preferencesLearned']
+                # inbox-inject sidecars (swarm/peer/user-steer) — survive an
+                # SSE-broken resume so the in-timeline inject chips repaint.
+                if task.get('_inboxInjects'):
+                    state['inboxInjects'] = task['_inboxInjects']
+                if task.get('_peerInjects'):
+                    state['peerInjects'] = task['_peerInjects']
+                if task.get('_userSteerInjects'):
+                    state['userSteerInjects'] = task['_userSteerInjects']
                 # ★ Endpoint mode: include phase and completed turns for reconnection
                 if task.get('endpoint_mode'):
                     state['endpointMode'] = True
@@ -2101,6 +2174,14 @@ def chat_poll(task_id):
         # ★ Preferences-learned moment(s) (persist through poll + reload)
         if task.get('_preferencesLearned'):
             r['preferencesLearned'] = task['_preferencesLearned']
+        # ★ Inbox-inject sidecars (swarm/peer/user-steer) — persist through poll
+        #   fallback + reload so the in-timeline inject chips repaint.
+        if task.get('_inboxInjects'):
+            r['inboxInjects'] = task['_inboxInjects']
+        if task.get('_peerInjects'):
+            r['peerInjects'] = task['_peerInjects']
+        if task.get('_userSteerInjects'):
+            r['userSteerInjects'] = task['_userSteerInjects']
         # ★ Autopilot follow-up baton — mirror the SSE done event so a client
         #   on the poll fallback path attaches to the spawned follow-up task
         #   instead of stranding it (see lib/tasks_pkg/orchestrator.py).

@@ -18,68 +18,36 @@ module too, and the finalize->retry->run_task cycle stays import-safe.
 from __future__ import annotations
 
 import re
-import threading
 import time
 from typing import Any
 
-from lib.log import get_logger, set_req_id
-from lib.protocols import BodyBuilder
+from lib.log import get_logger
 
 logger = get_logger(__name__)
 
-from lib.llm import build_body as _build_body_impl
 
-from lib.llm import AbortedError
-from lib.tasks_pkg.attachments import compute_turn_attachments, inject_attachments
 from lib.tasks_pkg.cache_tracking import (
     cleanup_stale_cache_states,
-    detect_cache_break,
     get_session_cache_stats,
-    log_round_cache_stats,
     release_ttl_latch,
-    sort_tool_results,
 )
 from lib.agent_core.events import EventType, build_event
-from lib.tasks_pkg.compaction import run_compaction_pipeline
 from lib.tasks_pkg.executor import (
     _finalize_tool_round,
     _generate_tool_summary,
 )
-from lib.tasks_pkg.llm_fallback import _llm_call_with_fallback
 from lib.tasks_pkg.manager import (
     _strip_base64_for_snapshot,
     append_event,
-    checkpoint_task_partial,
     persist_task_result,
     stream_llm_response,
 )
 from lib.tasks_pkg.commit_round import (  # noqa: E402
     _run_commit_round_async,  # noqa: F401  (re-export for back-comp)
     _spawn_async_commit_round,
-    _spawn_async_profile_consolidation,
     derive_round_modified_files,
 )
-from lib.tasks_pkg.message_builder import inject_tool_history
-from lib.tasks_pkg.model_config import (
-    _assemble_tool_list,
-    _resolve_model_config,
-)
-from lib.tasks_pkg.stream_handler import analyse_stream_result
-from lib.tasks_pkg.system_context import (
-    _inject_system_contexts,
-    _disabled_prompt_blocks,
-    inject_search_addendum_to_user,
-)
-from lib.tasks_pkg.wire_messages import apply_wire_sanitize
-from lib.tasks_pkg.server_message_store import (
-    rebuild_messages_with_history as _rebuild_messages_with_history,
-    save_messages as _save_messages_to_store,
-    estimate_token_overhead as _estimate_token_overhead,
-)
 from lib.tasks_pkg.tool_dispatch import (
-    emit_tool_exec_phase,
-    execute_tool_pipeline,
-    parse_tool_calls,
     tool_label,
 )
 
@@ -470,6 +438,62 @@ def _maybe_append_sources_footer(task: dict[str, Any], all_search_results_text: 
                 'pages it opened this turn', task['id'][:8], len(footer_urls))
 
 
+def _salvage_undelivered_steer(task: dict[str, Any]) -> int:
+    """Re-route any UNDELIVERED human-steer message to the durable queue.
+
+    A steer message the user sent WHILE this turn was running lives in the
+    conversation-keyed ``agent_inbox`` under ``mode='user-steer'`` until a round
+    boundary drains it. Two ways it can be undelivered when the task ends:
+
+      1. Still queued in the inbox — the task finished (or aborted) before the
+         next round-boundary drain reached it.
+      2. Drained into ``messages`` but the task aborted/crashed BEFORE the LLM
+         call confirmed consumption — it sits in ``task['_steer_inject_pending']``,
+         the deferred-confirm chip/record never fired, and the in-memory
+         message dies with the task.
+
+    In BOTH cases we re-enqueue the steer into ``message_queue`` as a fresh next
+    turn, so the message is delivered EXACTLY ONCE (never zero). MUST run BEFORE
+    the swarm teardown clears()+tombstones the inbox slot — after that a drain
+    returns nothing.
+
+    Returns the number of steer messages salvaged (0 when there was nothing
+    undelivered). Best-effort: an enqueue failure is logged, never raised.
+    """
+    salvaged = 0
+    try:
+        from lib.agent_inbox import drain as _drain_inbox
+        from lib.swarm.integration import swarm_key_for as _swarm_key_for
+        steer_key = _swarm_key_for(task)
+        undelivered = list(task.pop('_steer_inject_pending', None) or [])
+        if steer_key:
+            undelivered.extend(_drain_inbox(steer_key, modes=['user-steer']))
+        conv_id = task.get('convId') or ''
+        if undelivered and conv_id:
+            from lib.message_queue import enqueue_message
+            for sit in undelivered:
+                umsg = sit.get('_user_msg')
+                scfg = sit.get('config') or {}
+                if umsg:
+                    payload = {'text': umsg.get('content', ''), '_user_msg': umsg}
+                else:
+                    payload = {'text': sit.get('value', '')}
+                try:
+                    enqueue_message(conv_id, payload, scfg)
+                    salvaged += 1
+                except Exception as _sqe:
+                    logger.error('[Orchestrator] steer salvage enqueue failed '
+                                 'conv=%s: %s', conv_id[:8], _sqe, exc_info=True)
+            if salvaged:
+                logger.info('[Orchestrator] salvaged %d undelivered steer msg(s) '
+                            'to message_queue on task end (conv=%s)',
+                            salvaged, conv_id[:8])
+    except Exception as _e:
+        logger.warning('[Orchestrator] steer salvage on task end failed: %s',
+                       _e, exc_info=True)
+    return salvaged
+
+
 def _finalize_and_emit_done(task: dict[str, Any], *, model: str, preset: str, thinking_depth: str | None, cfg: dict[str, Any],
                             last_finish_reason, last_usage, accumulated_usage, api_rounds,
                             tool_call_happened, messages, original_messages,
@@ -687,6 +711,9 @@ def _finalize_and_emit_done(task: dict[str, Any], *, model: str, preset: str, th
 
     # ── Release session-stable TTL latch (prevent memory leak) ──
     release_ttl_latch(task.get('id', ''))
+
+    # ── Human-steer exactly-once salvage (never-zero fix) ──
+    _salvage_undelivered_steer(task)
 
     # ── Swarm session teardown (Option A — conversation-scoped) ──
     #

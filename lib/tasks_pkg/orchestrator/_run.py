@@ -13,47 +13,37 @@ time so a reassignment of ``orchestrator.build_body`` steers the loop.
 
 from __future__ import annotations
 
-import re
 import threading
 import time
 from typing import Any
 
 from lib.log import get_logger, set_req_id
-from lib.protocols import BodyBuilder
 
 logger = get_logger(__name__)
 
-from lib.llm import build_body as _build_body_impl
 
 from lib.llm import AbortedError
 from lib.tasks_pkg.attachments import compute_turn_attachments, inject_attachments
 from lib.tasks_pkg.cache_tracking import (
-    cleanup_stale_cache_states,
     detect_cache_break,
-    get_session_cache_stats,
     log_round_cache_stats,
-    release_ttl_latch,
     sort_tool_results,
 )
 from lib.agent_core.events import EventType, build_event
 from lib.tasks_pkg.compaction import run_compaction_pipeline
-from lib.tasks_pkg.executor import (
-    _finalize_tool_round,
-    _generate_tool_summary,
-)
 from lib.tasks_pkg.llm_fallback import _llm_call_with_fallback
 from lib.tasks_pkg.manager import (
     _strip_base64_for_snapshot,
     append_event,
     checkpoint_task_partial,
     persist_task_result,
-    stream_llm_response,
+    stream_llm_response,  # noqa: F401  (re-exported by the package facade)
 )
 from lib.tasks_pkg.commit_round import (  # noqa: E402
     _run_commit_round_async,  # noqa: F401  (re-export for back-comp)
-    _spawn_async_commit_round,
-    _spawn_async_profile_consolidation,
-    derive_round_modified_files,
+    _spawn_async_commit_round,  # noqa: F401  (re-exported by the package facade)
+    _spawn_async_profile_consolidation,  # noqa: F401  (re-exported by the facade)
+    derive_round_modified_files,  # noqa: F401  (re-exported by the facade)
 )
 from lib.tasks_pkg.message_builder import inject_tool_history
 from lib.tasks_pkg.model_config import (
@@ -76,7 +66,7 @@ from lib.tasks_pkg.tool_dispatch import (
     emit_tool_exec_phase,
     execute_tool_pipeline,
     parse_tool_calls,
-    tool_label,
+    tool_label,  # noqa: F401  (re-exported by the package facade)
 )
 
 
@@ -857,12 +847,22 @@ def run_task(task: dict[str, Any]) -> None:
                     #   here (only swarm), or the two paths would double-drain.
                     _peer_owned = bool(task.get('_peer_driver_owned'))
                     _peer_key = task.get('_peer_drain_key') or _swarm_key
-                    # Swarm items (peer-msg excluded — peer is drained separately,
-                    # possibly under a different key / by a driver loop).
-                    _swarm_items = _drain_inbox(_swarm_key, exclude_modes=['peer-msg'])
+                    # Swarm items (peer-msg AND user-steer excluded — both are
+                    # drained separately below with their own de-dup / chip
+                    # semantics; folding them into _swarm_items would render a
+                    # human steer as a <swarm-update> chip and mark it delivered
+                    # via the swarm path, which is the wrong lane).
+                    _swarm_items = _drain_inbox(
+                        _swarm_key, exclude_modes=['peer-msg', 'user-steer'])
                     _peer_items = ([] if _peer_owned
                                    else _drain_inbox(_peer_key, modes=['peer-msg']))
-                    _inbox_items = list(_swarm_items) + list(_peer_items)
+                    # Human steer messages (the operator interjecting into their
+                    # own running turn). Keyed on the same conversation swarm key
+                    # the send route enqueues under. Delivered exactly once via
+                    # the deferred-confirm flush after the LLM call (mirrors peer).
+                    _steer_items = _drain_inbox(_swarm_key, modes=['user-steer'])
+                    _inbox_items = (list(_swarm_items) + list(_peer_items)
+                                    + list(_steer_items))
                     if _inbox_items:
                         # Coalesce ALL drained items into a single user
                         # message — one message with N <swarm-update>
@@ -888,6 +888,7 @@ def run_task(task: dict[str, Any]) -> None:
                             # + observability handling differ.
                             _swarm_items = [it for it in _swarm_items if it.get('value')]
                             _peer_items = [it for it in _peer_items if it.get('value')]
+                            _steer_items = [it for it in _steer_items if it.get('value')]
 
                             # Swarm: persist the delivered flag so a restart
                             # mid-turn doesn't re-inject these <swarm-update>s.
@@ -901,6 +902,10 @@ def run_task(task: dict[str, Any]) -> None:
                                 except Exception as _mde:
                                     logger.debug('[Task %s] swarm mark_delivered failed: %s',
                                                  tid, _mde)
+                                _swarm_previews = [{
+                                    'agentId': it.get('agent_id', ''),
+                                    'text': (it.get('value') or '')[:1200],
+                                } for it in _swarm_items]
                                 append_event(task, build_event(
                                     EventType.SWARM_INBOX_INJECT,
                                     round=round_num + 1,
@@ -911,11 +916,23 @@ def run_task(task: dict[str, Any]) -> None:
                                     #   (truncated) so the frontend can render an
                                     #   in-timeline ptool-panel row showing exactly
                                     #   what the model received — not just a count.
-                                    previews=[{
-                                        'agentId': it.get('agent_id', ''),
-                                        'text': (it.get('value') or '')[:1200],
-                                    } for it in _swarm_items],
+                                    previews=_swarm_previews,
                                 ))
+                                # Display-only sidecar accumulation (shape mirrors
+                                # the peer/steer inject records). Persisted by the
+                                # sync layer as the underscore field
+                                # ``msg['_inboxInjects']`` — NEVER into toolRounds
+                                # (that is the wire-replay / prefix-cache source; a
+                                # synthetic row there breaks tool-turn continuation
+                                # and shifts wire bytes). Frontend rebuilds the
+                                # in-timeline chip from this on reload.
+                                task.setdefault('_inboxInjects', []).append({
+                                    'round': round_num + 1,
+                                    'count': len(_swarm_items),
+                                    'agentIds': [it.get('agent_id', '')
+                                                 for it in _swarm_items],
+                                    'previews': _swarm_previews,
+                                })
 
                             # Peer: the message is now in the in-memory
                             # `messages` list but NOT yet consumed by the model.
@@ -949,11 +966,25 @@ def run_task(task: dict[str, Any]) -> None:
                                 task.setdefault(
                                     '_peer_inject_pending', []).extend(_peer_items)
 
+                            # Steer: same deferred-confirm discipline as peer.
+                            # The human steer is now in the in-memory `messages`
+                            # list but the model has not consumed it yet. Do NOT
+                            # emit the USER_STEER_INJECT chip here — stash it and
+                            # emit AFTER the LLM call confirms consumption. On an
+                            # abort before the call the steer is re-routed to the
+                            # durable message_queue as a fresh next turn (see the
+                            # flush + the finalize salvage), so it is delivered
+                            # exactly once — never zero, never double.
+                            if _steer_items:
+                                task.setdefault(
+                                    '_steer_inject_pending', []).extend(_steer_items)
+
                             logger.info(
                                 '[Task %s] injected %d inbox item(s) '
-                                '(%d swarm, %d peer) as 1 user message at round %d',
+                                '(%d swarm, %d peer, %d steer) as 1 user message '
+                                'at round %d',
                                 tid, len(_payloads), len(_swarm_items),
-                                len(_peer_items), round_num + 1)
+                                len(_peer_items), len(_steer_items), round_num + 1)
             except Exception as _e:
                 logger.error(
                     '[Task %s] swarm inbox drain/inject failed at round %d: %s '
@@ -1048,20 +1079,30 @@ def run_task(task: dict[str, Any]) -> None:
                 #   still applies), never a loss.
                 _peer_inject = task.pop('_peer_inject_pending', None)
                 if _peer_inject:
+                    _peer_previews = [{
+                        'fromConv': _pit.get('fromConv', ''),
+                        'text': (_pit.get('peerText')
+                                 or _pit.get('value') or '')[:1200],
+                    } for _pit in _peer_inject]
                     try:
                         append_event(task, build_event(
                             EventType.PEER_INBOX_INJECT,
                             round=round_num + 1,
                             count=len(_peer_inject),
-                            previews=[{
-                                'fromConv': _pit.get('fromConv', ''),
-                                'text': (_pit.get('peerText')
-                                         or _pit.get('value') or '')[:1200],
-                            } for _pit in _peer_inject],
+                            previews=_peer_previews,
                         ))
                     except Exception as _pce:
                         logger.warning('[Task %s] peer inject chip emit failed: %s',
                                        tid, _pce)
+                    # Display-only sidecar accumulation — persisted by the sync
+                    # layer as ``msg['_peerInjects']`` (underscore field, NEVER
+                    # into toolRounds). Delivery is confirmed here, so it is safe
+                    # to record for the committed-message projection + reload.
+                    task.setdefault('_peerInjects', []).append({
+                        'round': round_num + 1,
+                        'count': len(_peer_inject),
+                        'previews': _peer_previews,
+                    })
                     # Resolve the peer conv key: a VU sub-task runs with
                     # convId='' and carries the parent conv in _peer_drain_key,
                     # so dedup the durable rows under that key (the same key the
@@ -1078,6 +1119,46 @@ def run_task(task: dict[str, Any]) -> None:
                             logger.warning(
                                 '[Task %s] deferred peer de-dup failed (durable '
                                 'row may re-deliver once): %s', tid, _dde)
+
+                # ── Flush DEFERRED human-steer delivery (never-zero fix) ──
+                #   Same discipline as the peer flush above: the LLM call
+                #   succeeded, so the human steer injected into `messages` this
+                #   round WAS consumed by the model. Emit the USER_STEER_INJECT
+                #   chip now (delivery confirmed) and accumulate a DISPLAY-ONLY
+                #   sidecar record on the task (task['_userSteerInjects']) so the
+                #   sync layer can persist it onto the assistant message as an
+                #   underscore field — NEVER into toolRounds (that is the
+                #   wire-replay / prefix-cache source; a synthetic row there
+                #   breaks tool-turn continuation and shifts wire bytes). On an
+                #   abort BEFORE this point the chip is never emitted and the
+                #   undelivered steer is salvaged back to the durable
+                #   message_queue by finalize (see _finalize.py) → re-dispatched
+                #   as a fresh turn, delivered exactly once.
+                _steer_inject = task.pop('_steer_inject_pending', None)
+                if _steer_inject:
+                    _steer_previews = [{
+                        'text': (_sit.get('value') or '')[:1200],
+                    } for _sit in _steer_inject]
+                    try:
+                        append_event(task, build_event(
+                            EventType.USER_STEER_INJECT,
+                            round=round_num + 1,
+                            count=len(_steer_inject),
+                            previews=_steer_previews,
+                        ))
+                    except Exception as _sce:
+                        logger.warning('[Task %s] steer inject chip emit failed: %s',
+                                       tid, _sce)
+                    # Display-only sidecar accumulation (shape mirrors the swarm/
+                    # peer inject records the sync layer persists as underscore
+                    # fields). Delivery is confirmed here, so it is safe to
+                    # record for the committed message projection.
+                    task.setdefault('_userSteerInjects', []).append({
+                        'round': round_num + 1,
+                        'count': len(_steer_inject),
+                        'previews': _steer_previews,
+                    })
+
                 # Surface the resolved model on the task AS SOON as it's known
                 # (was only set at task finalization), so per-round telemetry
                 # emitted during tool dispatch — e.g. report_hallucinated's

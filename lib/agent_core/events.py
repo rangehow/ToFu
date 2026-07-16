@@ -169,6 +169,8 @@ class EventType:
     # ── presence (cross-conversation live coordination) ──
     PRESENCE = 'presence'
     PEER_INBOX_INJECT = 'peer_inbox_inject'
+    # ── human steering (mid-turn human interjection) ──
+    USER_STEER_INJECT = 'user_steer_inject'
     # ── artifact / scheduler / transport ──
     ARTIFACT = 'artifact'
     TIMER_POLL_CHECK = 'timer_poll_check'
@@ -462,6 +464,24 @@ _SPECS: tuple[EventSpec, ...] = (
                       'count': 'number of peer messages injected this round',
                       'previews': 'list of {fromConv, text} — sender short-id + '
                                   'the original (unframed) message text'}),
+    EventSpec(EventType.USER_STEER_INJECT, _C.LIFECYCLE,
+              'A human "steer" message the user sent WHILE this turn was still '
+              'generating (composer inject-mode = steer) was drained from the '
+              'model-facing inbox and injected as a user-role message right '
+              'before the next LLM round — never mid-stream, never splitting a '
+              'tool_call/tool_result pair (postponed to the next CLEAN round '
+              'boundary after any open tool_result closes). Distinct from a '
+              'sibling peer message (peer_inbox_inject) and from a completed '
+              'sub-agent result (swarm_inbox_inject): it is the OPERATOR '
+              'talking to their own running turn. Delivered exactly once — the '
+              'chip is emitted only AFTER the LLM call confirms consumption '
+              '(deferred-confirm), and an abort before that re-routes the '
+              'undelivered steer to the durable message_queue as a fresh next '
+              'turn (never zero, never double). Drives an in-timeline chip '
+              'mirroring peer_inbox_inject.',
+              fields={'round': 'round number the steer was injected before',
+                      'count': 'number of steer messages injected this round',
+                      'previews': 'list of {text} — the steer message text'}),
     # ───────────────── artifact / scheduler / transport ─────────────────
     EventSpec(EventType.ARTIFACT, _C.ARTIFACT,
               'An artifact (document/canvas) was created or updated.',

@@ -181,6 +181,14 @@ def resolve_conv_config(
             ov.get('langCorrectionEnabled'),
             (_coerce_bool(conv.get('langCorrectionEnabled'), True)
              if conv.get('langCorrectionEnabled') is not None else True)),
+        # OUTPUT-side translate target language (model reply → human). The
+        # frontend ships _i18nLang here so the server-side safety net + the
+        # incremental translator render into the UI language instead of the
+        # old Chinese hard-pin. Absent/None (headless / old frontend) →
+        # resolve_translate_target falls back to Chinese. Global toolbar value
+        # wins for the active conv; stored per-conv value for an inactive one.
+        'uiLang': _pick(ov.get('uiLang'), conv.get('uiLang'),
+                        is_active=is_active) or None,
         'browserClientId': None,  # populated below
         'keepToolHistory': ov.get('keepToolHistory') is not False,
     }
@@ -192,6 +200,14 @@ def resolve_conv_config(
     out['activeFlow'] = active_flow if isinstance(active_flow, str) else ''
     out['flowBuiltin'] = flow_builtin
     out['flowId'] = flow_id
+    # ── Composer inject lane (queue|steer) ──
+    # How a message sent WHILE a task is running is delivered. Only 'steer'
+    # and 'queue' are valid; anything else (incl. absent) falls back to the
+    # durable-queue default. Active conv reads the live toolbar token; an
+    # inactive one reads the stored per-conv value.
+    _inject_mode = _pick(ov.get('injectMode'), conv.get('injectMode'),
+                         is_active=is_active)
+    out['injectMode'] = 'steer' if _inject_mode == 'steer' else 'queue'
     # browserClientId is gated on the resolved browserEnabled flag.
     if out['browserEnabled']:
         out['browserClientId'] = ov.get('browserClientId') or None
@@ -239,6 +255,8 @@ def resolve_conv_settings(
         'humanGuidanceEnabled': _coerce_bool(conv.get('humanGuidanceEnabled')),
         'activeFlow': (conv.get('activeFlow') if isinstance(conv.get('activeFlow'), str)
                        else (ov.get('activeFlow') if isinstance(ov.get('activeFlow'), str) else '')),
+        'injectMode': ('steer' if (conv.get('injectMode') or ov.get('injectMode')) == 'steer'
+                       else 'queue'),
         'projectPath': conv.get('projectPath') or '',
         'projectPaths': list(conv.get('projectPaths') or []),
         'readOnlyPaths': list(conv.get('readOnlyPaths') or []),
@@ -249,5 +267,8 @@ def resolve_conv_settings(
             else _coerce_bool(ov.get('autoTranslate'), False)
         ),
         'folderId': conv.get('folderId') or None,
+        # OUTPUT-side translate target language (see resolve_conv_config). This
+        # is what _maybe_auto_translate_assistant reads off settings.uiLang.
+        'uiLang': conv.get('uiLang') or ov.get('uiLang') or None,
     }
     return out

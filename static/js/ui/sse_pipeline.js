@@ -938,6 +938,21 @@ function dispatchSSEEvent(line, ctx) {
         assistantMsg._preferencesLearned = ev.preferencesLearned;
         if (buf) buf._preferencesLearned = ev.preferencesLearned;
       }
+      /* Inbox-inject sidecars (swarm/peer/user-steer) — restore from the
+       * reconnect snapshot so the in-timeline inject chips repaint. Display
+       * only; getToolRoundsFromMsg rebuilds the synthetic rows from these. */
+      if (ev.inboxInjects) {
+        assistantMsg._inboxInjects = ev.inboxInjects;
+        if (buf) buf._inboxInjects = ev.inboxInjects;
+      }
+      if (ev.peerInjects) {
+        assistantMsg._peerInjects = ev.peerInjects;
+        if (buf) buf._peerInjects = ev.peerInjects;
+      }
+      if (ev.userSteerInjects) {
+        assistantMsg._userSteerInjects = ev.userSteerInjects;
+        if (buf) buf._userSteerInjects = ev.userSteerInjects;
+      }
       twUpdate(convId);
       // ★ Re-trigger HG translations on state snapshot (handles page refresh / SSE reconnect)
       if (ev.toolRounds) _retriggerHgTranslations(convId);
@@ -1775,7 +1790,8 @@ function dispatchSSEEvent(line, ctx) {
                           'fallbackModel', 'fallbackFrom', 'fallbackReason',
                           'fallbackKind', 'error', 'thinkingDepth', '_gitSha',
                           '_memoryPrefetch', '_preferencesApplied',
-                          '_relatedConversations', '_preferencesLearned']) {
+                          '_relatedConversations', '_preferencesLearned',
+                          '_inboxInjects', '_peerInjects', '_userSteerInjects']) {
           if (_cm[_k] != null) assistantMsg[_k] = _cm[_k];
         }
         assistantMsg._committedProjection = true;

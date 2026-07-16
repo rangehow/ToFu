@@ -261,6 +261,12 @@ async function _pollFallback(convId, taskId, stream, assistantMsg) {
       if (data.preferencesApplied) assistantMsg._preferencesApplied = data.preferencesApplied;
       /* ★ preferences-learned: recover "Noted: you prefer X" moment(s) */
       if (data.preferencesLearned) assistantMsg._preferencesLearned = data.preferencesLearned;
+      /* ★ inbox-inject sidecars (swarm/peer/user-steer): recover so the
+       *   in-timeline inject chips survive the poll-fallback path. Display
+       *   only — getToolRoundsFromMsg rebuilds the synthetic rows. */
+      if (data.inboxInjects) assistantMsg._inboxInjects = data.inboxInjects;
+      if (data.peerInjects) assistantMsg._peerInjects = data.peerInjects;
+      if (data.userSteerInjects) assistantMsg._userSteerInjects = data.userSteerInjects;
       /* ★ git-shim: round commit sha for redo/diff references */
       if (data.gitSha) assistantMsg._gitSha = data.gitSha;
       /* ★ Persisted cost snapshot (server-side stamp). */

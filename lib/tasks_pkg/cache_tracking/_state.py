@@ -56,7 +56,7 @@ class CacheState:
         'prefix_content_count',
         'prefix_field_hashes',
         # Authoritative post-translation wire fingerprint (see wire_fingerprint.py)
-        'wire_fp', 'wire_static', 'wire_system', 'wire_markers',
+        'wire_fp', 'wire_static', 'wire_system', 'wire_markers', 'wire_bytes',
         'total_cache_read', 'total_cache_write',
         'total_breaks', 'total_input_tokens',
         'first_call_time',
@@ -109,6 +109,16 @@ class CacheState:
         # wire_fingerprint.markers_regressed. Folded into detect_cache_break so
         # a dropped breakpoint can never be laundered into "server-side PROVEN".
         self.wire_markers: dict | None = None
+        # TRUE-byte per-message prefix hashes from the PREVIOUS round
+        # ([{'key','h'}]). canonical_messages (wire_fp) is LOSSY — it strips
+        # cache_control, collapses str↔block, and skips reasoning_details — so
+        # "wire_fp identical" does NOT prove the SERIALIZED BYTES were identical.
+        # This hashes json.dumps(msg) (only cache_control stripped) so the
+        # eviction verdict can be GATED on the real bytes matching, refusing to
+        # claim "byte-identical" when a canonical-invisible mutation
+        # (reasoning_details rebuild / same-role merge / protocol switch)
+        # actually changed the wire. See wire_fingerprint.wire_byte_prefix.
+        self.wire_bytes: list | None = None
         self.total_cache_read: int = 0
         self.total_cache_write: int = 0
         self.total_breaks: int = 0

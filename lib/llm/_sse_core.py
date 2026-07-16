@@ -329,13 +329,22 @@ def prepare_request(body, *, attempt=0, log_prefix='', api_key=None,
     raw_dumper.wire_static = ''
     raw_dumper.wire_system = None
     raw_dumper.wire_markers = None
+    raw_dumper.wire_bytes = None
     try:
         from lib.tasks_pkg.wire_fingerprint import (
             canonical_messages, marker_signature, static_prefix_hash,
-            system_fingerprint,
+            system_fingerprint, wire_byte_prefix,
         )
         raw_dumper.wire_fp = canonical_messages(body.get('messages') or [])
         raw_dumper.wire_static = static_prefix_hash(body.get('messages') or [])
+        # TRUE-byte prefix: hash the ACTUAL serialized bytes per message (only
+        # cache_control stripped). canonical_messages is lossy (drops
+        # reasoning_details, collapses str↔block, canonicalises arg order), so
+        # "canonical identical" does NOT prove "wire bytes identical". This lets
+        # detect_cache_break REFUSE a false "byte-identical eviction" claim when
+        # the real bytes diverged (reasoning_details rebuild / same-role merge /
+        # protocol switch) — see wire_byte_prefix's docstring.
+        raw_dumper.wire_bytes = wire_byte_prefix(body.get('messages') or [])
         # Capture WHERE the cache_control breakpoints sit — canonical_messages
         # deliberately strips them, so a miss caused purely by a breakpoint
         # being LOST in translation (byte-identical content) would otherwise be
@@ -973,6 +982,9 @@ class SSEAccumulator:
             _wmk = getattr(self.raw_dumper, 'wire_markers', None)
             if _wmk is not None:
                 usage['_wire_markers'] = _wmk
+            _wbytes = getattr(self.raw_dumper, 'wire_bytes', None)
+            if _wbytes is not None:
+                usage['_wire_bytes'] = _wbytes
 
         # Stream anomaly flags
         _has_anomaly = False

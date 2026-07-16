@@ -493,6 +493,102 @@ def markers_regressed(prev: dict | None, cur: dict | None) -> bool:
     return False
 
 
+def _strip_cache_control(obj: Any) -> Any:
+    """Recursively drop ``cache_control`` keys for raw-byte hashing.
+
+    ``cache_control`` is the ONE legitimately-mobile element in the wire body
+    (the rolling tail marker moves every round, tracked separately by
+    ``marker_signature``). Stripping it keeps ``wire_byte_prefix`` from crying
+    wolf on the normal marker advance while still hashing EVERYTHING else byte
+    for byte.
+    """
+    if isinstance(obj, dict):
+        return {k: _strip_cache_control(v) for k, v in obj.items()
+                if k != 'cache_control'}
+    if isinstance(obj, list):
+        return [_strip_cache_control(v) for v in obj]
+    return obj
+
+
+def wire_byte_prefix(messages: list) -> list[dict]:
+    """Per-message hash of the ACTUAL serialized wire bytes — the TRUE-byte
+    instrument that closes the "canonical says identical but the bytes weren't"
+    laundering path.
+
+    ``canonical_messages`` is deliberately LOSSY: it strips ``cache_control``,
+    collapses ``str`` ↔ ``[{type:text}]``, canonicalises tool-arg key order,
+    and DOES NOT hash ``reasoning_details`` (``build_body`` synthesises that
+    field from ``reasoning_content`` + ``thinking_signature``, so canonical
+    uses those instead). Therefore "canonical identical" does NOT imply "the
+    bytes on the wire were identical". A round can rebuild ``reasoning_details``,
+    merge consecutive same-role turns, or reorder fields while canonical reports
+    "identical" — and a verdict that then asserts *"bytes were byte-identical"*
+    would be literally false, laundering a real content/serialization change
+    into an "upstream eviction".
+
+    This hashes ``json.dumps(msg)`` of each message EXACTLY as the transport
+    serialises it (insertion order preserved via ``sort_keys=False``), stripping
+    ONLY ``cache_control``. Every other byte — ``reasoning_details``,
+    ``extra_content``, field order, the full base64 of an image — is included,
+    so any canonical-invisible mutation shows up. Aligned by the SAME
+    ``canonical_key`` as ``diff_canonical`` so a benign reindex does not
+    explode.
+
+    IMPORTANT — this fingerprint is ENVELOPE-SENSITIVE (unlike
+    ``canonical_messages``). A cross-round protocol/endpoint switch (OpenAI ↔
+    Anthropic body shape) legitimately changes these bytes without changing the
+    conversation. So a byte divergence with an IDENTICAL canonical fingerprint
+    means "the real bytes differ" — which could be a content mutation OR a
+    routing/protocol switch. The detector must therefore only use this to
+    REFUSE the false "byte-identical eviction" claim and name the honest set of
+    causes, never to fabricate a specific client-side history edit.
+
+    Returns ``[{'key', 'h'}]`` per message.
+    """
+    out: list[dict] = []
+    for msg in messages or ():
+        if not isinstance(msg, dict):
+            continue
+        entry = {'role': msg.get('role', ''),
+                 'fields': _fields_of(msg), 'brief': _brief(msg)}
+        key = canonical_key(entry)
+        try:
+            raw = json.dumps(_strip_cache_control(msg),
+                             ensure_ascii=False, sort_keys=False)
+        except (TypeError, ValueError) as e:
+            logger.debug('[WireFP] wire_byte_prefix dump failed (%s) — '
+                         'using str() form', e)
+            raw = str(msg)
+        out.append({'key': key, 'h': _md5(raw)})
+    return out
+
+
+def diff_byte_prefix(old: list, new: list, max_report: int = 8) -> list[str]:
+    """Name the messages whose RAW serialized bytes differ, stable-key aligned.
+
+    The true-byte counterpart of ``diff_canonical``. Compares the overlapping
+    prefix by position (this round appends new tail messages we do not diff),
+    reporting the stable ``key`` of each byte-divergent message prefixed with
+    ``<bytes>`` so a downstream verdict can tell it apart from a canonical
+    (semantic) culprit. A message present in one list but not the other is a
+    length change. Capped at ``max_report`` (``…`` marks truncation).
+    """
+    changes: list[str] = []
+    n = min(len(old), len(new))
+    for i in range(n):
+        o = old[i] or {}
+        nw = new[i] or {}
+        if o.get('h') != nw.get('h'):
+            changes.append('<bytes>' + (nw.get('key') or o.get('key')
+                                        or f'[{i}]'))
+            if len(changes) >= max_report:
+                changes.append('…')
+                return changes
+    if len(old) != len(new):
+        changes.append(f'byte-len {len(old)}\u2192{len(new)}')
+    return changes
+
+
 def static_prefix_hash(messages: list) -> str:
     """Hash the leading static floor (system message(s) + first user turn).
 

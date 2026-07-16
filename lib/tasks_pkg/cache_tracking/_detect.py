@@ -129,10 +129,20 @@ def _resolve_break_cause(
     cause of that here is on our side of the fence: single-key LRU pressure
     (all traffic on one upstream key, evicted under a concurrency spike) or a
     soft-affinity routing flip onto a cold key. So the verdict names an
-    "upstream cache eviction", NEVER "random server failure". When no wire
-    fingerprint was captured (non-Claude / capture failure) we fall back to the
-    honestly-hedged "likely server/TTL OR silent byte change" wording — the
-    elimination guess, explicitly marked unproven.
+    "upstream cache eviction", NEVER "random server failure".
+
+    ⚠ The eviction verdict is DOUBLE-gated. ``wire_proven_identical`` requires
+    BOTH the lossy canonical fingerprint AND the TRUE per-message serialized
+    bytes (``wire_byte_prefix``) to match. The canonical fingerprint alone is
+    NOT enough: it drops ``cache_control``, collapses ``str`` ↔ block, and
+    skips ``reasoning_details`` — so a round can rebuild ``reasoning_details``,
+    merge same-role turns, or switch protocol while canonical says "identical".
+    When the raw bytes diverged, the caller has already appended a ``<bytes>``
+    culprit (so this function takes the byte-divergence branch above), meaning
+    we NEVER reach the eviction branch claiming "byte-identical" when the bytes
+    were not. When no wire fingerprint was captured (non-Claude / capture
+    failure) we fall back to the honestly-hedged "likely server/TTL OR silent
+    byte change" wording — the elimination guess, explicitly marked unproven.
     """
     _culprits = ', '.join(prefix_culprits) if prefix_culprits else ''
     if client_changes:
@@ -159,6 +169,29 @@ def _resolve_break_cause(
                 'the client placed did not survive to the wire — e.g. dropped '
                 'in the tool_result translation) — the body past the last '
                 'surviving marker was re-billed uncached')
+    # ── TRUE-byte divergence with an IDENTICAL lossy-canonical fingerprint ──
+    # canonical_messages matched (same tokenized content) yet the RAW serialized
+    # bytes of a prefix message changed. The lossy canonicaliser is blind to
+    # this class: reasoning_details rebuilt by build_body, consecutive same-role
+    # turns merged, JSON field order changed, or an OpenAI↔Anthropic envelope /
+    # endpoint switch. Any of these changes the exact bytes the gateway keys its
+    # cache on → a full/partial miss. This is NOT proof of a client HISTORY
+    # edit (the envelope-switch case is routing, not content), so name the
+    # honest SET of causes rather than asserting a specific one — and never let
+    # it be called "byte-identical eviction", because the bytes were NOT
+    # identical.
+    if prefix_culprits and any(str(c).startswith('<bytes>') or
+                               str(c).startswith('byte-len')
+                               for c in prefix_culprits):
+        _named = ', '.join(c for c in prefix_culprits
+                           if str(c).startswith('<bytes>'))
+        _suffix = f' [changed: {_named}]' if _named else ''
+        return ('wire bytes changed between turns while the lossy content '
+                'fingerprint matched — a canonical-invisible change '
+                '(reasoning_details rebuild, consecutive same-role merge, JSON '
+                'field reorder, or an OpenAI↔Anthropic envelope/endpoint '
+                'switch) altered the exact bytes the gateway caches on → the '
+                f'affected prefix was re-billed uncached{_suffix}')
     if prefix_mutation_break:
         _base = ('cached prefix bytes changed between turns '
                  '(non-idempotent history edit) — the whole body '
@@ -412,11 +445,13 @@ def detect_cache_break(
         _wire_static = ''
         _cur_wire_system = None
         _cur_wire_markers = None
+        _cur_wire_bytes = None
         if usage:
             _cur_wire_fp = usage.get('_wire_fp')
             _wire_static = usage.get('_wire_static') or ''
             _cur_wire_system = usage.get('_wire_system')
             _cur_wire_markers = usage.get('_wire_markers')
+            _cur_wire_bytes = usage.get('_wire_bytes')
         _wire_available = _cur_wire_fp is not None
         _wire_prefix_changed = False
         _wire_culprits: list = []
@@ -458,6 +493,37 @@ def detect_cache_break(
                     _wire_culprits.append('<ttl-flip>')
                 else:
                     _wire_culprits.append('<breakpoint-lost>')
+            # ── TRUE-byte divergence (the lossy-canonical blind spot) ──
+            # canonical_messages is deliberately lossy: it drops cache_control,
+            # collapses str↔block, canonicalises tool-arg key order, and DOES
+            # NOT hash reasoning_details. So "canonical identical" does NOT
+            # prove the SERIALIZED bytes were identical. If canonical + system +
+            # markers all say "unchanged" but the raw per-message bytes DID
+            # diverge (reasoning_details rebuild, consecutive same-role merge,
+            # field reorder, or an envelope/endpoint switch), the round is NOT
+            # eligible for the "bytes were byte-identical" eviction verdict.
+            # Fold a <bytes> culprit in so the verdict names the byte divergence
+            # instead of laundering a real content/serialization change into an
+            # upstream eviction. Only meaningful when canonical found NOTHING
+            # (if canonical already named a culprit, that's the more specific
+            # cause and we don't pile on).
+            if (not _wire_culprits and _cur_wire_bytes is not None
+                    and prev.wire_bytes is not None):
+                from lib.tasks_pkg.wire_fingerprint import diff_byte_prefix
+                _byte_shared = len(prev.wire_bytes)
+                _byte_culprits = diff_byte_prefix(
+                    prev.wire_bytes[:_byte_shared],
+                    (_cur_wire_bytes or [])[:_byte_shared])
+                if _byte_culprits:
+                    _wire_culprits.extend(_byte_culprits)
+                    logger.warning(
+                        '[CacheTrack] conv=%s call=%d ⚠ WIRE BYTES DIVERGED '
+                        'while canonical fingerprint matched — a '
+                        'canonical-invisible change (reasoning_details rebuild '
+                        '/ same-role merge / field reorder / protocol switch) '
+                        'altered the real sent bytes. changed=[%s]',
+                        conv_id[:8], prev.call_count + 1,
+                        ', '.join(_byte_culprits[:8]) or '?')
             _wire_prefix_changed = bool(_wire_culprits)
             if _wire_prefix_changed:
                 logger.warning(
@@ -494,6 +560,7 @@ def detect_cache_break(
             prev.wire_static = _wire_static
             prev.wire_system = _cur_wire_system
             prev.wire_markers = _cur_wire_markers
+            prev.wire_bytes = _cur_wire_bytes
         prev.model = model
         prev.message_count = msg_count
         prev.last_cache_read_tokens = cache_read

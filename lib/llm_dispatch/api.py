@@ -1139,7 +1139,25 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
             if on_content:
                 on_content(text)
 
+        # ── Per-key big-prefix admission control ──
+        # Bound concurrent LARGE-prefix requests on one API key so several big
+        # conversations don't LRU-evict each other's prompt cache in the key's
+        # shared cache namespace (the mutual-eviction / rebound miss). Small
+        # requests pass through instantly; big ones wait briefly for a per-key
+        # slot. Soft + env-gated (see lib/llm_dispatch/big_prefix_gate.py).
+        import contextlib as _contextlib
         try:
+            from lib.llm_dispatch.big_prefix_gate import (
+                big_prefix_slot, estimate_prefix_tokens,
+            )
+            _est_tok = estimate_prefix_tokens(body)
+            _big_gate = big_prefix_slot(slot.key_name, _est_tok, log_prefix=tag)
+        except ImportError as _bpg_err:
+            logger.debug('%s big-prefix gate unavailable: %s', tag, _bpg_err)
+            _big_gate = _contextlib.nullcontext()
+
+        try:
+          with _big_gate:
             msg, finish, usage = stream_chat(
                 body, api_key=slot.api_key,
                 base_url=slot.base_url or None,

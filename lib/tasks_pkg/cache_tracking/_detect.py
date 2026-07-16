@@ -582,9 +582,22 @@ def detect_cache_break(
                 # rewrite, and a cold-compaction-of-cached-message from each
                 # other in the live log, without a rerun.
                 try:
-                    from lib.tasks_pkg.wire_fingerprint import first_changed_index
+                    from lib.tasks_pkg.wire_fingerprint import (
+                        first_changed_byte_index, first_changed_index)
                     _fci = first_changed_index(prev.wire_fp[:_shared],
                                                (_cur_wire_fp or [])[:_shared])
+                    # The canonical index is BLIND to a <bytes>-only culprit
+                    # (canonical says "identical", raw bytes differ), returning
+                    # -1 → a meaningless inside_prior_cached_prefix=False for
+                    # exactly the class where position matters most. Fall back
+                    # to the true-byte index so a byte-only divergence gets an
+                    # honest position.
+                    if _fci < 0 and prev.wire_bytes is not None \
+                            and _cur_wire_bytes is not None:
+                        _byte_shared = len(prev.wire_bytes)
+                        _fci = first_changed_byte_index(
+                            prev.wire_bytes[:_byte_shared],
+                            (_cur_wire_bytes or [])[:_byte_shared])
                 except Exception as _fe:
                     logger.debug('[CacheTrack] first_changed_index failed: %s', _fe)
                     _fci = -2

@@ -368,6 +368,32 @@ def first_changed_index(old: list, new: list) -> int:
     return -1
 
 
+def first_changed_byte_index(old: list, new: list) -> int:
+    """FIRST position where two ``wire_byte_prefix`` lists differ by RAW bytes.
+
+    The TRUE-byte counterpart of ``first_changed_index`` (which walks the LOSSY
+    ``canonical_messages`` fingerprints). ``detect_cache_break`` needs the
+    changed POSITION to log whether a mutation landed inside the prior round's
+    cached-prefix boundary (an already-cached message rewritten in place → real
+    miss) or only in the freshly-appended tail (benign). But when the only
+    culprit is a ``<bytes>`` divergence (``canonical`` says "identical", raw
+    bytes differ — a ``reasoning_details`` rebuild, same-role merge, or
+    protocol switch), ``first_changed_index`` returns ``-1`` and the position
+    evidence collapses to a meaningless ``inside_prior_cached_prefix=False`` —
+    exactly the class where the position matters most. This walks the
+    ``[{'key','h'}]`` byte-hash lists so the byte-only case gets an honest
+    index. Compares the overlapping prefix by position; ``-1`` if no shared
+    position differs (a pure length change is inspected separately).
+    """
+    n = min(len(old), len(new))
+    for i in range(n):
+        o = old[i] or {}
+        nw = new[i] or {}
+        if o.get('h') != nw.get('h'):
+            return i
+    return -1
+
+
 def system_fingerprint(system: Any, tools: Any) -> dict[str, str]:
     """Fingerprint the top-level ``system`` field + tool schemas.
 

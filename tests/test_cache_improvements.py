@@ -1296,3 +1296,152 @@ class TestTaskIdPassthrough:
         }
         add_cache_breakpoints(body)
         assert '_task_id' not in body  # consumed by pop
+
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Representation invariance — a marker moving off a message must NOT change the
+#  message's content BYTES (str↔block flip root cause of early-round pin).
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestMarkerRepresentationInvariance:
+    """Root cause of "wrote-but-can't-read-back" early-round cache pin: when the
+    mid-anchor quantum-advances, the previously-anchored tool_result was rebuilt
+    from a bare ``str`` (marker wrap removed) → its wire bytes flipped
+    str↔[{type:text}]. For a ``tool`` role that flip survives
+    openai_body_to_anthropic, so the cached prefix no longer byte-matches and
+    the server can't extend the prior entry. Phase 0.5 normalizes every markable
+    str content to the single-block form UP FRONT, so anchoring only adds/removes
+    the ``cache_control`` key — content bytes are invariant."""
+
+    @staticmethod
+    def _strip_cc(content):
+        """Content with cache_control removed from every block (what the server
+        prefix-matches on and what _msg_bytes compares)."""
+        if isinstance(content, list):
+            return [{k: v for k, v in b.items() if k != 'cache_control'}
+                    if isinstance(b, dict) else b for b in content]
+        return content
+
+    def _mk_body(self, n_tool_msgs):
+        """A long tool loop: system + user + N (assistant,tool) pairs, big enough
+        that the mid-anchor arms and lands on a tool_result."""
+        msgs = [{'role': 'system', 'content': 'system prompt ' * 20},
+                {'role': 'user', 'content': 'kick off'}]
+        for i in range(n_tool_msgs):
+            msgs.append({'role': 'assistant', 'content': '',
+                         'tool_calls': [{'id': f'c{i}', 'type': 'function',
+                                         'function': {'name': 'read_files',
+                                                      'arguments': '{}'}}]})
+            msgs.append({'role': 'tool', 'tool_call_id': f'c{i}',
+                         'content': f'tool result payload {i} ' + ('x ' * 50)})
+        return {'model': 'claude-opus-4-20250514', 'messages': msgs}
+
+    def test_unanchored_tool_result_bytes_are_invariant(self):
+        """The message the mid-anchor SITS on in round A but MOVES OFF in round B
+        must have byte-identical (cache_control-stripped) content in both."""
+        from lib.llm import add_cache_breakpoints
+
+        # Round A: 40 tool pairs → mid-anchor lands somewhere mid-history.
+        bodyA = self._mk_body(40)
+        add_cache_breakpoints(bodyA)
+        # Find a mid-history tool_result that carries a marker in round A.
+        anchored_idx = None
+        for i, m in enumerate(bodyA['messages']):
+            if m.get('role') != 'tool':
+                continue
+            c = m.get('content')
+            if isinstance(c, list) and any(
+                    isinstance(b, dict) and 'cache_control' in b for b in c):
+                anchored_idx = i
+                break
+        assert anchored_idx is not None, 'no anchored tool_result in round A'
+        bytesA = self._strip_cc(bodyA['messages'][anchored_idx]['content'])
+
+        # Round B: 8 more pairs appended → the quantized mid-anchor jumps forward,
+        # moving OFF anchored_idx. Rebuild from scratch (as build_body does each
+        # round from the persistent list) so the content starts as bare str again.
+        bodyB = self._mk_body(48)
+        add_cache_breakpoints(bodyB)
+        mB = bodyB['messages'][anchored_idx]
+        assert mB.get('role') == 'tool'
+        # It must NOT carry a marker now (anchor moved) ...
+        cB = mB['content']
+        has_marker = isinstance(cB, list) and any(
+            isinstance(b, dict) and 'cache_control' in b for b in cB)
+        assert not has_marker, 'anchor did not move off — test setup invalid'
+        # ... yet its content bytes (sans cache_control) are IDENTICAL to round A.
+        assert self._strip_cc(cB) == bytesA, (
+            'un-anchored tool_result bytes changed between rounds (str↔block '
+            'flip regression)')
+
+    def test_plain_assistant_midhistory_content_is_normalized(self):
+        """A plain-text assistant turn (model prose, no tool_calls) sitting in
+        MID-HISTORY — NOT the tail, NOT where any anchor lands — must still be
+        normalized to block form by Phase 0.5. This isolates Phase 0.5 from the
+        tail/mid placement branches, which independently wrap str→list when they
+        stamp a marker (that wrapping is itself the flip source). Only Phase 0.5
+        can turn THIS un-marked assistant message into block form."""
+        from lib.llm import add_cache_breakpoints
+
+        msgs = [{'role': 'system', 'content': 'system prompt ' * 20},
+                {'role': 'user', 'content': 'kick off'}]
+        # An early plain-text assistant turn (index 2) — deep in the prefix,
+        # far from the tail and from the quantized mid-anchor's trail zone.
+        msgs.append({'role': 'assistant', 'content': 'early prose answer'})
+        target_idx = len(msgs) - 1
+        for i in range(30):
+            msgs.append({'role': 'assistant', 'content': '',
+                         'tool_calls': [{'id': f'c{i}', 'type': 'function',
+                                         'function': {'name': 'read_files',
+                                                      'arguments': '{}'}}]})
+            msgs.append({'role': 'tool', 'tool_call_id': f'c{i}',
+                         'content': f'result {i} ' + ('x ' * 40)})
+        body = {'model': 'claude-opus-4-20250514', 'messages': msgs}
+        add_cache_breakpoints(body)
+        target = body['messages'][target_idx]
+        assert target.get('role') == 'assistant'
+        # It carries NO marker (not tail/mid/system) — so only Phase 0.5 could
+        # have turned it into block form.
+        c = target['content']
+        has_marker = isinstance(c, list) and any(
+            isinstance(b, dict) and 'cache_control' in b for b in c)
+        assert not has_marker, 'target unexpectedly anchored — test setup invalid'
+        assert isinstance(c, list), (
+            'mid-history plain assistant content not normalized (Phase 0.5 gap)')
+
+    def test_assistant_with_tool_calls_not_wrapped(self):
+        """An assistant message carrying tool_calls must be left alone — its
+        content is not wrapped (tool_use blocks drive the marker logic)."""
+        from lib.llm import add_cache_breakpoints
+
+        msgs = [{'role': 'system', 'content': 'sys ' * 20},
+                {'role': 'user', 'content': 'go'},
+                {'role': 'assistant', 'content': 'thinking out loud',
+                 'tool_calls': [{'id': 'c0', 'type': 'function',
+                                 'function': {'name': 'read_files',
+                                              'arguments': '{}'}}]},
+                {'role': 'tool', 'tool_call_id': 'c0', 'content': 'r'}]
+        body = {'model': 'claude-opus-4-20250514', 'messages': msgs}
+        add_cache_breakpoints(body)
+        am = body['messages'][2]
+        assert am.get('tool_calls')
+        # content stays a str — tool_calls path handles it; wrapping would
+        # disturb _assistant_blocks' last-block marker placement.
+        assert isinstance(am['content'], str), (
+            'assistant-with-tool_calls content should not be wrapped'
+        )
+
+    def test_markable_tool_content_is_always_block_form(self):
+        """After add_cache_breakpoints every non-empty tool/user message is in
+        single-block list form regardless of whether it got a marker — so the
+        Anthropic translation is stable and _msg_bytes never flips."""
+        from lib.llm import add_cache_breakpoints
+
+        body = self._mk_body(30)
+        add_cache_breakpoints(body)
+        for m in body['messages']:
+            if m.get('role') in ('tool', 'user') and m.get('content'):
+                assert isinstance(m['content'], list), (
+                    f'{m.get("role")} content not normalized to block form: '
+                    f'{type(m["content"])}')

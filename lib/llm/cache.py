@@ -130,6 +130,47 @@ def add_cache_breakpoints(body, log_prefix=''):
                 tools[t_idx] = {**tool,
                                 'function': {k: v for k, v in fn.items() if k != 'cache_control'}}
 
+    # Phase 0.5: Representation invariance — decouple a message's byte
+    # representation from WHETHER it is anchored this round.
+    #
+    # Root cause of the "wrote-but-can't-read-back" pin: a marker is placed by
+    # wrapping ``str`` content into ``[{'type':'text',...}]``. When the anchor
+    # quantum-advances the following round, the previously-anchored message is
+    # rebuilt from the persistent list as a bare ``str`` again — a str↔list
+    # FLIP. For ``tool`` messages that flip SURVIVES ``openai_body_to_anthropic``
+    # (tool str→str, list→blocks), so the message's wire bytes genuinely change
+    # between rounds. Anthropic then looks back from the moving anchor, finds the
+    # prior [0:bp] cache entry but the prefix bytes no longer match at the
+    # flipped message → cannot extend → falls all the way back to the static
+    # floor → cache_read pins.
+    #
+    # Fix: normalize EVERY markable non-empty ``str`` content to the single-block
+    # form up front, regardless of whether it gets a marker this round. Now
+    # anchoring only ADDS/REMOVES the ``cache_control`` key on an
+    # already-list block; ``_msg_bytes`` (which strips cache_control) is
+    # byte-identical in the anchored and un-anchored states, and so is the
+    # Anthropic translation. Assistant messages are left alone (their tool_calls
+    # take a dedicated block path); system content is handled by its own phase.
+    for i, msg in enumerate(messages):
+        role = msg.get('role')
+        if role in ('tool', 'user'):
+            content = msg.get('content')
+            if isinstance(content, str) and content:
+                messages[i] = {**msg, 'content': [{'type': 'text', 'text': content}]}
+        elif role == 'assistant':
+            # An assistant turn is frequently the conversation TAIL (the model's
+            # prose before its tool_calls, or a prefill-resume round), so the
+            # rolling tail marker wraps→unwraps its str content the same way —
+            # the flip is asymmetric if we only normalize tool/user. Normalize
+            # it too, but ONLY when it is a plain text turn: skip messages that
+            # carry ``tool_calls`` (their content is usually empty and the
+            # tool_use blocks drive _assistant_blocks' last-block marker logic,
+            # which a wrap would disturb) and skip empty content.
+            content = msg.get('content')
+            if (isinstance(content, str) and content
+                    and not msg.get('tool_calls')):
+                messages[i] = {**msg, 'content': [{'type': 'text', 'text': content}]}
+
     bp = 0
 
     # Reserve markers for the tool + tail (+ mid-anchor) phases up front, then

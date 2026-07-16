@@ -514,6 +514,42 @@ function finishStream(convId) {
  */
 function _runTerminalContinuation(convId) {
   const conv = conversations.find((c) => c.id === convId);
+  // ── ★ Supersede-index reducer (epic pt_8dc030176bad450b, build-order step 2)
+  //    THE FUTURE PRIMARY PATH — a no-op TODAY (guarded so it cannot regress).
+  //
+  //    Target mechanism (design §4): an autopilot chain is a plain sequence of
+  //    independent tasks (parent → VU → follow-up), each registered under the
+  //    REAL convId. After ANY turn's done, if the conv's server-authoritative
+  //    latest live task is a DIFFERENT pending/running task, attach to it — the
+  //    SAME signal on SSE, poll, and cold reload, so no hand-carried baton is
+  //    needed. This single rule (attach-to-newer-live-task) replaces the whole
+  //    baton on cutover.
+  //
+  //    WHY IT IS A NO-OP TODAY: the field `conv._latestLiveTaskId` is only
+  //    populated by the cutover backend (which stops the VU's `convId=''`
+  //    opt-out and advances `_record_latest_task` to the VU BEFORE emitting the
+  //    parent done — the HB-1 happens-before, design §4.1). Until then the VU
+  //    is invisible to the conv→latest-task index, this field is absent, and
+  //    the block short-circuits, leaving the existing baton fast-path below
+  //    fully in charge. Shipping it now is safe and lets the cutover be a pure
+  //    backend change.
+  //
+  //    IDEMPOTENT: we only attach when the target differs from the task we are
+  //    already on (activeTaskId / an active stream), so a done observed on BOTH
+  //    sse and a poll-fallback cannot double-attach (design §5, hazard 2).
+  const _liveTaskId = conv && conv._latestLiveTaskId;
+  if (_liveTaskId && conv
+      && _liveTaskId !== conv.activeTaskId
+      && !activeStreams.has(convId)
+      && typeof connectToTask === 'function') {
+    console.info(
+      `%c[Autopilot] ▶ Supersede-index attach: conv=${convId.slice(0,8)} ` +
+      `latestLiveTask=${_liveTaskId.slice(0,8)} (index-driven, no baton)`,
+      'color:#a78bfa;font-weight:bold'
+    );
+    connectToTask(convId, _liveTaskId);
+    return;
+  }
   // ── ★ Autopilot in-band follow-up (FAST PATH): when the done/poll event
   //    carried autopilotNextTaskId + autopilotVuMessage, the backend already
   //    appended the synthetic user message to conv DB and spawned the next

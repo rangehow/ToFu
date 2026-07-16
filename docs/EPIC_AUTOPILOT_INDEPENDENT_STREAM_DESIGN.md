@@ -108,6 +108,53 @@ conv's newer live task after done" rule on the client. This is strictly LESS
 code, and an autopilot run becomes a plain sequence of independent agent bubbles —
 "an agent bubble is just an agent bubble."
 
+### 4.1 The load-bearing HAPPENS-BEFORE invariant (this replaces the withhold)
+
+Removing the withhold reintroduces the exact race it was defending against unless
+one ordering is guaranteed. The old mechanism used "hold `done` until the baton
+exists" to ensure the successor was already spawned before the client could see
+the turn end. The new mechanism keeps the SAME safety with an ordering guarantee
+instead of a hold:
+
+> **INVARIANT (HB-1):** the backend MUST advance the supersede index to the
+> successor — `_record_latest_task(convId, vuTaskId)` (and the VU task must be
+> registered `pending/running` in the task registry) — **strictly before** the
+> parent turn's `done` event is appended/emitted. i.e.
+> `_record_latest_task(convId, vuTaskId)` **happens-before** `append_event(parent_done)`.
+
+Why this is exactly-once WITHOUT a withhold or a re-poll: at the instant the
+client observes the parent `done` (on SSE *or* poll *or* cold reload), a read of
+`_latest_task_for_conv(convId)` is guaranteed to already return `vuTaskId`
+(≠ the parent task id) because the write preceded the event the client is
+reacting to. So the client's single reducer — "on done, if the conv's latest task
+is a different pending/running task, attach to it" — can NEVER observe the empty
+window `[parent done emitted] → [client reads index, sees only parent, declares
+idle] → [VU registered]`. That window is precisely the "autopilot bubble suddenly
+disappears" symptom; HB-1 closes it by construction.
+
+The dangerous ordering that MUST NOT ship (the mirror of the visible bug):
+```
+  append_event(parent_done)          # client sees end-of-turn
+  ...client reads index → only parent → finalizes, will NOT re-query...
+  _record_latest_task(conv, vuTask)  # TOO LATE — VU bubble stranded
+```
+The correct ordering (HB-1):
+```
+  create VU task under REAL convId (status=pending)  # registry has it
+  _record_latest_task(conv, vuTask)                  # index points at successor
+  append_event(parent_done)                          # only NOW end the turn
+```
+
+Consequence for the cutover: the VU task must be **created + index-advanced
+synchronously in the parent's finalize, before `append_event(done)`** — the VU's
+LLM turn then runs on the VU task's own thread/stream, but its *registration* is
+ordered before the parent done. This preserves the one useful thing the
+synchronous-inline design gave us (successor exists before turn-end is visible)
+while dropping everything else (event forwarding, the deciding latch, the hand-
+carried baton). It is a strictly weaker, cheaper guarantee than the full withhold:
+we no longer block `done` for the VU's 12–52s LLM call — only for the O(1) task
+registration + index write.
+
 ## 5. Exactly-once invariants that MUST survive (charter Pillar-#6 + poll-handoff)
 
 The migration is only acceptable if ALL of these hold. Note the mechanism change
@@ -135,12 +182,17 @@ Plus the charter front/back contract: the client attaches by the server-assigned
 STABLE task id from the index, never array indices or transient client state.
 
 ### Exactly-once discipline this mechanism must still prove
-The one genuine hazard the baton's disappearance must not reintroduce: a turn's
-`done` and the index-advance to its successor must be observed **idempotently** —
-attaching to `latestTaskId` must be a no-op when the client is already on it
-(dedup by task id, which `_attachAutopilotFollowup` already does via `_msgId`),
-so a `done` seen on BOTH sse and a poll-fallback cannot double-attach. This is a
-client-side idempotent reducer, not a new server channel.
+Two hazards the baton's disappearance must not reintroduce:
+1. **Ordering (HB-1, §4.1):** the index must advance to the successor BEFORE the
+   parent `done` is emitted — else the client can observe end-of-turn with the
+   index still on the parent, declare the conv idle, and strand the VU bubble
+   (the mirror of the visible bug). This is a server-side happens-before, guarded
+   below.
+2. **Idempotency:** a turn's `done` may be observed on BOTH SSE and a poll
+   fallback; attaching to `latestTaskId` must be a no-op when the client is
+   already on it (dedup by task id, which `_attachAutopilotFollowup` already does
+   via `_msgId`), so it cannot double-attach. This is a client-side idempotent
+   reducer, not a new server channel.
 
 ## 6. Migration-test plan (write these FIRST, RED before any prod edit)
 
@@ -152,6 +204,11 @@ Backend `tests/test_autopilot_chain_handoff.py`:
 - `test_vu_task_registered_under_real_conv` — after the parent turn, the VU task
   is `_latest_task_for_conv(convId)` (NOT `convId==''`); the follow-up in turn
   supersedes it. This is the whole handoff — index advance, not a stamped baton.
+- `test_index_advances_before_parent_done` — **the HB-1 guard.** At the moment
+  the parent `done` event is observed, `_latest_task_for_conv(convId)` already ==
+  `vuTaskId` (≠ parent id). Asserted by capturing the index value at the
+  `append_event(done)` seam (spy on the done emit; read the index inside the spy)
+  so the ordering is proven, not assumed. RED against the dangerous ordering.
 - `test_parent_done_fires_immediately_no_withhold` — with the latch deleted, a
   parent SSE with autopilot armed emits `done` promptly (state → done, no
   multi-second hold) and carries NO `autopilotNextTaskId`/`autopilotVuMessage`.

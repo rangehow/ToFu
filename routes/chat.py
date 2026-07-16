@@ -27,6 +27,7 @@ from lib.chat import (  # noqa: F401
     append_user_msg_idempotent as _append_user_msg_idempotent,
     auto_translate_user as _auto_translate_user,
     build_tool_history_round as _build_tool_history_round,
+    append_pending_user_msg as _append_pending_user_msg,
     build_user_msg_from_payload as _build_user_msg_from_payload,
     extract_db_meta as _extract_db_meta,
     extract_task_meta as _extract_task_meta,
@@ -763,13 +764,10 @@ def chat_send():
                         conv_id[:8])
 
         if has_running_task:
-            from lib.message_queue import enqueue_message
-            # ★ Enqueue for later dispatch.  The user message is NOT
-            # persisted to the conversation DB — it only lives in the
-            # queue.  This prevents it from appearing in chatInner
-            # during streaming or disappearing on refresh.
-            # Store the pre-built user_msg so dispatch_next_queued
-            # can append it without re-translating.
+            from lib.message_queue import enqueue_message, get_queue_depth
+            # ★ Enqueue for later dispatch. The durable queue is the source of
+            #   truth for WHEN this turn runs. Store the pre-built user_msg so
+            #   dispatch_next_queued can append it without re-translating.
             queue_payload = dict(payload)
             queue_payload['_user_msg'] = user_msg
             queue_result = enqueue_message(conv_id, queue_payload, config)
@@ -780,7 +778,35 @@ def chat_send():
             if is_new:
                 _persist_conv_messages(db, conv_id, messages, title, settings_patch)
 
-            _notify_conv_changed(conv_id, rev=None)
+            # ★ Cross-device visibility (Fix 2a): land the queued user message
+            #   in the conversation body NOW as a display-only _pendingQueued
+            #   row + push the REAL rev, so another device sees it immediately
+            #   instead of only after the current turn replies. Two guards keep
+            #   this safe: (1) ONLY the FIRST queued turn (depth==1 after this
+            #   enqueue) may pre-persist — a 2nd pending row would misorder
+            #   against the eventual replies; (2) the helper itself declines
+            #   unless the DB tail is the running turn's assistant slot (so the
+            #   row lands correctly ordered). On decline we fall back to the
+            #   original queue-only behaviour (rev=None sidebar nudge). The
+            #   later dispatch_next_queued reconciles this row in place by
+            #   timestamp (never a duplicate).
+            _pending_rev = None
+            try:
+                _running_amids = {t.get('_assistantMsgId') for t in running_tasks
+                                  if t.get('_assistantMsgId')}
+                if get_queue_depth(conv_id) == 1:
+                    _appended, _pending_rev = _append_pending_user_msg(
+                        db, conv_id, user_msg, valid_assistant_ids=_running_amids)
+                    if _appended:
+                        logger.info('[Send] conv=%s queued user msg mirrored as '
+                                    'pending row (rev=%s) — cross-device visible',
+                                    conv_id[:8], _pending_rev)
+            except Exception as e:
+                logger.warning('[Send] conv=%s pending-row mirror failed (non-fatal, '
+                               'queue-only fallback): %s', conv_id[:8], e)
+                _pending_rev = None
+
+            _notify_conv_changed(conv_id, rev=_pending_rev)
 
             return jsonify({
                 'queued': True,
@@ -799,7 +825,7 @@ def chat_send():
         #    appending a duplicate. This is the root-cause guard — the
         #    frontend _sendInFlight flag merely avoids triggering the race.
         _append_user_msg_idempotent(messages, user_msg)
-        _persist_conv_messages(db, conv_id, messages, title, settings_patch)
+        _send_rev = _persist_conv_messages(db, conv_id, messages, title, settings_patch)
 
         # 5. Start task (no active task — send immediately)
         task_id, err_resp = _start_task_for_conv(conv_id, config, data)
@@ -827,7 +853,13 @@ def chat_send():
         except Exception as e:
             logger.warning('[Send] Failed to update activeTaskId: %s', e)
 
-        _notify_conv_changed(conv_id, rev=None)
+        # ★ Carry the REAL post-write rev (not None): the user message was just
+        #   persisted (step 4) and the rev trigger bumped it. A rev-bearing
+        #   frame makes a sibling device's rev-gate refetch the body — so the
+        #   just-sent user message appears on the other device immediately,
+        #   instead of a rev=None frame that only nudges the sidebar and leaves
+        #   the message invisible until the assistant reply lands.
+        _notify_conv_changed(conv_id, rev=_send_rev)
 
         return jsonify({
             'taskId': task_id,

@@ -486,8 +486,26 @@ def _sync_result_to_conversation(task, meta):
                     len(extra_msgs), extra_summary
                 )
 
-        # Find the last assistant message to fill in
-        last_msg = messages[-1]
+        # Find this task's assistant message to fill in.
+        # ── ID-FIRST location (never a blind positional guess) ──
+        # Normally the assistant slot IS the tail (messages[-1]). But when a
+        # NEXT turn was enqueued while this one streamed, the queued user
+        # message may already sit as a trailing pending row (role='user') below
+        # our assistant slot — so a blind `messages[-1]` would see 'user', fail
+        # the role check, and append a SECOND assistant, orphaning the live one
+        # (the two-writer truncation the queued-pending-row design must avoid).
+        # Locate our own slot by its stable `_assistantMsgId` first; only fall
+        # back to the tail when the id is absent (legacy / external callers) or
+        # unmatched (slot not materialized yet — the tail branch then appends).
+        _amid = task.get('_assistantMsgId')
+        last_msg = None
+        if _amid:
+            from lib.tasks_pkg.manager._events import find_message_by_id
+            _idx, _by_id = find_message_by_id(messages, _amid)
+            if _by_id is not None and _by_id.get('role') == 'assistant':
+                last_msg = _by_id
+        if last_msg is None:
+            last_msg = messages[-1]
 
         if last_msg.get('role') != 'assistant':
             # ── Guard: an aborted/superseded task must NOT append a new
@@ -1083,7 +1101,20 @@ def _sync_partial_to_conversation(task):
 
             cur_updated_at = row[1]
 
-            last_msg = messages[-1]
+            # ── ID-FIRST location (mirrors the terminal sync) ──
+            # A queued next-turn user message may sit as a trailing pending row
+            # below this task's assistant slot; locate our slot by its stable
+            # `_assistantMsgId` so a blind tail read doesn't spawn a second
+            # assistant. Fall back to the tail when the id is absent/unmatched.
+            _amid = task.get('_assistantMsgId')
+            last_msg = None
+            if _amid:
+                from lib.tasks_pkg.manager._events import find_message_by_id
+                _idx, _by_id = find_message_by_id(messages, _amid)
+                if _by_id is not None and _by_id.get('role') == 'assistant':
+                    last_msg = _by_id
+            if last_msg is None:
+                last_msg = messages[-1]
             if last_msg.get('role') != 'assistant':
                 # Do NOT materialize a brand-new trailing assistant row from a
                 # thinking-only first checkpoint.  A turn that streams a stray

@@ -2094,11 +2094,19 @@ def stop_local_pg_if_owned():
     ``lib.database`` (e.g. agent-invoked ``python3 -c ...`` commands) never
     accidentally stop the PG server used by the long-running Flask app.
 
-    Controlled by env var ``TOFU_STOP_PG_ON_EXIT`` (legacy:
-    ``TOFU_STOP_PG_ON_EXIT``; default ``1``):
-      - ``1`` / unset: stop local PG when server.py exits
-      - ``0``: leave PG running (faster dev-restart cycles, but requires
-        manual ``pg_ctl stop`` before switching hosts on shared FUSE pgdata)
+    Controlled by env var ``TOFU_STOP_PG_ON_EXIT`` (default ``0``):
+      - ``0`` / unset: leave local PG running across a server.py restart. This
+        is the default because PG is a SHARED resource: on a box with multiple
+        sibling sessions (and mid-flight/quiesced tasks) all bound to the same
+        local PG, stopping it on every code-reload restart tears every sibling's
+        DB connections out — a blast radius far larger than the one stateless
+        web process being reloaded. Leaving it up also makes restarts FASTER:
+        the next boot's ``_ensure_pg_running`` sees ``pg_isready`` OK and
+        ATTACHES instead of cold-starting a fresh postmaster. The heartbeat is
+        still cleared on exit (below) so cross-host takeover on shared FUSE
+        pgdata remains safe.
+      - ``1``: stop local PG when server.py exits (e.g. a true host shutdown, or
+        before switching hosts on shared FUSE pgdata).
 
     Never stops a REMOTE PG — that belongs to another machine.
     """
@@ -2109,8 +2117,8 @@ def stop_local_pg_if_owned():
     # (single INFO line) rather than a full ERROR traceback.
     mark_pg_stopping()
     _stop_on_exit = getenv_compat('TOFU_STOP_PG_ON_EXIT',
-                                  default='1').lower() \
-        not in ('0', 'false', 'no', 'off')
+                                  default='0').lower() \
+        in ('1', 'true', 'yes', 'on')
     try:
         from lib.database._bootstrap import (
             _stop_pg as _boot_stop_pg,
@@ -2135,8 +2143,8 @@ def stop_local_pg_if_owned():
     try:
         if is_pg_owned_locally():
             logger.info('[DB] Stopping local PostgreSQL (we own it) — '
-                        'set TOFU_STOP_PG_ON_EXIT=0 to keep it running '
-                        'across server.py restarts')
+                        'TOFU_STOP_PG_ON_EXIT=1 was set (default is 0 = keep '
+                        'PG running across server.py restarts)')
             _boot_stop_pg(_PGDATA)
         else:
             logger.debug('[DB] Not stopping PG on exit (remote or attached, not owned by us)')

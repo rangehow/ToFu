@@ -17,12 +17,22 @@ THE FIX (this suite locks it in): `maybe_run_autopilot` attaches
 `task['_committedMsg']` — the EXACT committed dict — onto the
 `autopilot_vu_start` event as `parentMessage`, so the frontend can complete the
 parent's finish bar AT HANDOFF. The authoritative copy still rides `done`
-verbatim (harmless no-op repaint); the skip path (no `_committedMsg`) omits the
-field and the frontend falls back to the `done` re-render — both preserved.
+verbatim (harmless no-op repaint).
 
-NC (bites): drop `task['_committedMsg']` (the backend skip path) and assert the
-vu_start event carries NO `parentMessage` — proving the field is sourced from
-the committed dict, not fabricated.
+SKIP-PATH FALLBACK ("under no circumstances incomplete"): when `_committedMsg`
+is unset (freshness guard / CAS-exhaustion / inline), the hook builds a MINIMAL
+`parentMessage` from the task's OWN settled fields — `finishReason` / `usage` /
+`model` / `provider_id` / `apiRounds` — which the orchestrator finalize stamps
+on the task BEFORE this hook runs. So vu_start ALWAYS carries enough to complete
+the bar whenever the task actually has finish data. The ONLY circumstance that
+still omits `parentMessage` is a task with genuinely NOTHING to show (no
+finishReason AND no usage — e.g. an errored turn with no metering); there the
+bar legitimately waits for the `done` re-render.
+
+Guards: (1) committed dict → parentMessage IS that dict; (2) skip path WITH
+settled task fields → parentMessage built from them (finishReason+usage
+present); (3) NC — genuinely-empty task (no finishReason, no usage) → NO
+parentMessage, proving the payload is sourced from real data, never fabricated.
 """
 
 from __future__ import annotations
@@ -59,7 +69,7 @@ def _wire(monkeypatch):
     return captured
 
 
-def _make_task(committed=None):
+def _make_task(committed=None, settled=None):
     task = {
         'id': 'parent-abc123',
         'convId': 'conv1',
@@ -72,6 +82,12 @@ def _make_task(committed=None):
     }
     if committed is not None:
         task['_committedMsg'] = committed
+    # Task-level settled fields the orchestrator finalize stamps BEFORE the
+    # autopilot hook (finishReason/usage/model/provider_id/apiRounds). The
+    # skip-path fallback sources parentMessage from these when _committedMsg
+    # is absent.
+    if settled:
+        task.update(settled)
     return task
 
 
@@ -109,15 +125,48 @@ def test_vu_start_carries_committed_parent_message(monkeypatch):
     assert pm is _COMMITTED, 'parentMessage should be the committed dict itself'
 
 
-def test_nc_skip_path_omits_parent_message(monkeypatch):
-    """NC: on the backend skip path (no `_committedMsg` — freshness/CAS-miss/
-    inline), vu_start carries NO `parentMessage`. Proves the field is sourced
-    from the committed dict, and the frontend correctly falls back to the
-    `done` re-render in that window."""
+def test_skip_path_falls_back_to_task_settled_fields(monkeypatch):
+    """Skip path (no `_committedMsg`) but the task HAS settled finish fields →
+    vu_start carries a MINIMAL parentMessage built from them, so the parent bar
+    is STILL complete at handoff. This closes the last "sometimes incomplete"
+    circumstance — vu_start never omits the finish payload when the task has
+    one."""
     captured = _wire(monkeypatch)
-    ap.maybe_run_autopilot(_make_task(committed=None))
+    ap.maybe_run_autopilot(_make_task(
+        committed=None,
+        settled={
+            'finishReason': 'end_turn',
+            'usage': {'input_tokens': 4200, 'output_tokens': 380},
+            'model': 'aws.claude-opus-4.8',
+            'provider_id': 'aws',
+            'apiRounds': [{'round': 0, 'usage': {'output_tokens': 380}}],
+        }))
+
+    ev = _vu_start(captured)
+    assert ev is not None, f'no autopilot_vu_start emitted; got {captured}'
+    assert 'parentMessage' in ev, \
+        f'skip path with settled fields must still carry parentMessage; got {ev}'
+    pm = ev['parentMessage']
+    # The bar-drawing trio (✓ + token-tag + cost-tag via calcCostCny) is present.
+    assert pm['finishReason'] == 'end_turn'
+    assert pm['usage']['output_tokens'] == 380
+    assert pm['model'] == 'aws.claude-opus-4.8'
+    assert pm['provider_id'] == 'aws', \
+        'provider_id must ride so the frontend can compute the cost-tag'
+    assert pm is not None and 'role' in pm
+    # It is a FRESHLY built dict, NOT the (absent) committed one.
+    assert pm.get('_committedMsg') is None
+
+
+def test_genuinely_empty_task_omits_parent_message(monkeypatch):
+    """The ONLY legitimate omit: no `_committedMsg` AND no settled finish data
+    (no finishReason, no usage — e.g. an errored turn with no metering). vu_start
+    carries NO `parentMessage`; the bar legitimately waits for the `done`
+    re-render. Proves the payload is sourced from REAL data, never fabricated."""
+    captured = _wire(monkeypatch)
+    ap.maybe_run_autopilot(_make_task(committed=None, settled=None))
 
     ev = _vu_start(captured)
     assert ev is not None, f'no autopilot_vu_start emitted; got {captured}'
     assert 'parentMessage' not in ev, \
-        f'skip path must omit parentMessage; got {ev}'
+        f'genuinely-empty task must omit parentMessage; got {ev}'

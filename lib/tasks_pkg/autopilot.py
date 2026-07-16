@@ -1610,10 +1610,40 @@ def maybe_run_autopilot(task: dict) -> dict | None:
     #   carrying finishReason/usage/cost/apiRounds). It is display-only here —
     #   the authoritative record is still shipped verbatim on the parent `done`
     #   event's `committedMessage`; this is the identical dict, just delivered
-    #   early so the parent bar never renders incomplete. Absent on skip paths
-    #   (freshness/CAS-miss/inline) → the field is simply omitted and the
-    #   frontend keeps its transient buffer, exactly as for `done`.
+    #   early so the parent bar never renders incomplete.
+    #
+    #   SKIP-PATH FALLBACK: `_committedMsg` is unset when the pre-emit conv
+    #   sync was skipped (freshness guard / CAS-exhaustion / inline). Emitting
+    #   vu_start with NO finish payload there would leave the parent bar
+    #   incomplete for the WHOLE VU turn (filled only by the late `done`) —
+    #   the exact "sometimes incomplete" state the objective forbids. But the
+    #   fields that DRAW the bar are already settled on the task itself by the
+    #   orchestrator finalize BEFORE this hook runs: `finishReason` (_finalize
+    #   ~L621), `usage` (~L622/917), `model` (~L847), `apiRounds` (~L925), and
+    #   `provider_id` (lets the frontend `calcCostCny` compute the cost-tag
+    #   even without a committed `cost`). So when there is no committed dict we
+    #   build a MINIMAL parentMessage from those task fields. We only omit
+    #   `parentMessage` entirely when the task genuinely has NOTHING to show
+    #   (no finishReason AND no usage — e.g. an errored turn with no metering),
+    #   the sole circumstance where the bar legitimately waits for `done`.
     _parent_msg = task.get('_committedMsg')
+    if not _parent_msg:
+        _fr = task.get('finishReason')
+        _usg = task.get('usage')
+        if _fr or _usg:
+            _parent_msg = {'role': 'assistant'}
+            if _fr:
+                _parent_msg['finishReason'] = _fr
+            if _usg:
+                _parent_msg['usage'] = _usg
+            for _k in ('model', 'provider_id', 'apiRounds', 'preset',
+                       'toolSummary', 'thinkingDepth'):
+                _v = task.get(_k)
+                if _v is not None:
+                    _parent_msg[_k] = _v
+            logger.debug('[Autopilot %s] vu_start using task-field fallback '
+                         'parentMessage (no _committedMsg; finishReason=%s)',
+                         tid, _fr)
     _start_evt = build_event(EventType.AUTOPILOT_VU_START, vuMsgId=vu_msg_id)
     if _parent_msg:
         _start_evt['parentMessage'] = _parent_msg

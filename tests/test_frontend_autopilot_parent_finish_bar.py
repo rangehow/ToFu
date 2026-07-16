@@ -34,8 +34,13 @@ the tool invocation content and thinking content vanished" — the finalized
 worker bubble must keep its tool panel + thinking, not collapse to a bare bar).
 NC mode strips `parentMessage` → the parent stays finish-bar-incomplete (model
 only) AND tool/thinking stay at the empty seed, proving the projection is what
-fills BOTH the bar and the content. Skips cleanly when node + jsdom aren't
-installed.
+fills BOTH the bar and the content. Backend-wise this NC now corresponds to the
+ONE legitimate omit: a task with genuinely NO finish data (no finishReason AND
+no usage — e.g. an errored turn with no metering), where the bar legitimately
+waits for the `done` re-render. Every other case — committed dict OR a skip
+path with settled task fields — DOES ship a parentMessage (see
+test_autopilot_vu_start_parent_message.py), so the bar is complete at handoff.
+Skips cleanly when node + jsdom aren't installed.
 """
 
 from __future__ import annotations
@@ -173,7 +178,10 @@ check('precondition_no_tool_thinking',
       (parentAssistant.toolRounds || []).length === 0 && !parentAssistant.thinking);
 
 const ev = { type: 'autopilot_vu_start', vuMsgId: 'vu-1' };
-if (!NC) ev.parentMessage = PARENT_MESSAGE;   // NC drops it (skip-path simulation)
+// NC drops parentMessage entirely — the backend's ONE legitimate omit
+// (genuinely-empty task: no finishReason, no usage). Every other case ships a
+// parentMessage (committed dict OR settled-task-field fallback).
+if (!NC) ev.parentMessage = PARENT_MESSAGE;
 _handleAutopilotVuEvent('C1', ev);
 
 // ── The bite: after handoff the parent assistant carries the SETTLED finish
@@ -261,10 +269,13 @@ def test_vu_start_parent_message_completes_finish_bar():
                     reason='node + jsdom dev-deps not installed (run npm install)')
 def test_nc_no_parent_message_leaves_finish_bar_incomplete():
     """Negative control: when autopilot_vu_start carries NO `parentMessage`
-    (the backend skip path — freshness/CAS-miss/inline), the parent assistant
-    is NOT back-filled at handoff → its finish bar stays incomplete (model
-    only) until the later `done` re-render. Proves the projection is what fills
-    the bar, not the harness."""
+    (the backend's ONE legitimate omit — a genuinely-empty task with no
+    finishReason and no usage, e.g. an errored turn with no metering), the
+    parent assistant is NOT back-filled at handoff → its finish bar stays
+    incomplete (model only) until the later `done` re-render. Proves the
+    projection is what fills the bar, not the harness. (Skip paths that DO have
+    settled task fields no longer reach this state — the backend fallback ships
+    a parentMessage; see test_autopilot_vu_start_parent_message.py.)"""
     output = _run(nc=True)
     lines = output.splitlines()
 

@@ -166,17 +166,24 @@ function _swarmResultsByAgent(allRounds) {
         });
       }
     }
-    if (payload.agent_id && (payload.final_answer || payload.found)) {
-      // get_agent_result: `status:'ok'` is the wrapper status, not the agent
-      // status — derive the agent status from error/final_answer presence.
-      const agentStatus = payload.error
+    // get_agent_result: single mode carries the agent fields at top level;
+    // batch mode (agent_ids[]) carries a `results` array of the same shape.
+    // Normalise both to a flat list of per-agent entries.
+    const gaEntries = Array.isArray(payload.results)
+      ? payload.results
+      : (payload.agent_id ? [payload] : []);
+    for (const ent of gaEntries) {
+      if (!ent || !ent.agent_id || !(ent.final_answer || ent.found)) continue;
+      // `status:'ok'` is the wrapper status, not the agent status — derive the
+      // agent status from error/final_answer presence.
+      const agentStatus = ent.error
         ? "failed"
-        : (payload.final_answer ? "completed" : payload.status);
-      _merge(payload.agent_id, {
-        role: payload.role, objective: payload.objective, status: agentStatus,
-        elapsed: payload.elapsed, tokens: payload.tokens,
-        preview: payload.final_answer || "", error: payload.error,
-        toolCallCount: payload.tool_calls,
+        : (ent.final_answer ? "completed" : ent.status);
+      _merge(ent.agent_id, {
+        role: ent.role, objective: ent.objective, status: agentStatus,
+        elapsed: ent.elapsed, tokens: ent.tokens,
+        preview: ent.final_answer || "", error: ent.error,
+        toolCallCount: ent.tool_calls,
       });
     }
   }

@@ -489,13 +489,47 @@ def _await_from_disk(task_id: str, fn_args: dict) -> str | None:
 
 def _handle_get_agent_result(fn_args: dict, *, task_id: str,
                              task: dict | None = None) -> str:
+    # Batch mode: an ``agent_ids`` array fetches several agents' full bodies
+    # in one call (mirrors read_files/web_search/fetch_url batching). Each id
+    # is resolved independently — a running/unknown agent produces its own
+    # per-entry notice and never aborts the rest of the batch.
+    ids_in = fn_args.get('agent_ids')
+    if isinstance(ids_in, list) and ids_in:
+        results = []
+        for raw_id in ids_in:
+            sid = str(raw_id or '').strip()
+            if not sid:
+                continue
+            results.append(_resolve_one_agent_result(sid, task_id=task_id, task=task))
+        if not results:
+            return json.dumps({
+                'status': 'error',
+                'error':  'agent_ids contained no usable ids',
+            })
+        return json.dumps({
+            'status':  'ok',
+            'results': results,
+        }, ensure_ascii=False)
+
     agent_id = (fn_args.get('agent_id') or '').strip()
     if not agent_id:
         return json.dumps({
             'status': 'error',
-            'error':  'agent_id is required',
+            'error':  'agent_id (or agent_ids) is required',
         })
+    return json.dumps(
+        _resolve_one_agent_result(agent_id, task_id=task_id, task=task),
+        ensure_ascii=False)
 
+
+def _resolve_one_agent_result(agent_id: str, *, task_id: str,
+                              task: dict | None = None) -> dict:
+    """Resolve one agent's full result payload (live session → on-disk log).
+
+    Returns the payload dict (with its own ``status`` field) — the caller
+    JSON-encodes it, either standalone (single mode) or inside ``results``
+    (batch mode).
+    """
     swarm_key = swarm_key_for(task) if task is not None else task_id
     session = _get_session(swarm_key) or _get_session(task_id)
     if session is not None:
@@ -504,7 +538,7 @@ def _handle_get_agent_result(fn_args: dict, *, task_id: str,
         payload = session.get_agent_result(agent_id)
         if payload.get('found'):
             payload['status'] = 'ok'
-            return json.dumps(payload, ensure_ascii=False)
+            return payload
         # Session is live but doesn't know this agent_id (e.g. recycled
         # session). Fall through to the on-disk fallback before giving up.
 
@@ -520,7 +554,7 @@ def _handle_get_agent_result(fn_args: dict, *, task_id: str,
                     '(session %s, %s)', task_id, agent_id,
                     'gone' if session is None else 'lacked result',
                     'cross-task' if cross_task else 'same-task')
-        return json.dumps({
+        return {
             'status':       'ok',
             'found':        True,
             'agent_id':     agent_id,
@@ -530,20 +564,20 @@ def _handle_get_agent_result(fn_args: dict, *, task_id: str,
                      'session for this result is no longer in memory, so '
                      'metadata (tokens/elapsed/role) is unavailable. The '
                      'full streamed output is the final_answer field.'),
-        }, ensure_ascii=False)
+        }
 
     if session is None:
-        return json.dumps({
+        return {
             'status': 'error',
             'error':  'no active swarm session',
             'message': ('No active swarm and no on-disk transcript for '
                         f'agent {agent_id!r} — perhaps it ended. Use '
                         'spawn_agents to start a new one.'),
-        })
+        }
     # Session live but agent genuinely unknown and no log on disk.
     payload = session.get_agent_result(agent_id)
     payload['status'] = 'ok' if payload.get('found') else 'error'
-    return json.dumps(payload, ensure_ascii=False)
+    return payload
 
 
 # ═══════════════════════════════════════════════════════════

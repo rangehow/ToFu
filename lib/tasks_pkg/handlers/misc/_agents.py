@@ -99,7 +99,13 @@ def _handle_swarm_tool(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg, 
         ids = fn_args.get('ids') or []
         badge = f'await {len(ids) or "all"}'
     elif fn_name == 'get_agent_result':
-        badge = f'{(fn_args.get("agent_id") or "?")[:8]}'
+        agent_ids = fn_args.get('agent_ids')
+        if isinstance(agent_ids, list) and len(agent_ids) > 1:
+            badge = f'{len(agent_ids)} results'
+        elif isinstance(agent_ids, list) and agent_ids:
+            badge = f'{str(agent_ids[0])[:8]}'
+        else:
+            badge = f'{(fn_args.get("agent_id") or "?")[:8]}'
 
     post_build = _build_await_post_build() if fn_name == 'await_agents' else None
 

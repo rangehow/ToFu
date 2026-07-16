@@ -365,8 +365,15 @@ def _tool_display_swarm(fn_name, fn_args, tc_id, tc_args_str):
         return label, {'toolName': 'await_agents'}
 
     if fn_name == 'get_agent_result':
-        agent_id = (fn_args.get('agent_id', '') if isinstance(fn_args, dict) else '')
-        label = f'Fetching result for {agent_id[:12]}' if agent_id else 'Fetching agent result'
+        agent_ids = fn_args.get('agent_ids') if isinstance(fn_args, dict) else None
+        if isinstance(agent_ids, list) and len(agent_ids) > 1:
+            label = f'Fetching {len(agent_ids)} agent results'
+            return label, {'toolName': 'get_agent_result'}
+        if isinstance(agent_ids, list) and len(agent_ids) == 1:
+            single = str(agent_ids[0] or '')
+        else:
+            single = (fn_args.get('agent_id', '') if isinstance(fn_args, dict) else '')
+        label = f'Fetching result for {single[:12]}' if single else 'Fetching agent result'
         return label, {'toolName': 'get_agent_result'}
 
     # Artifact tools fall through to the generic renderer in the dispatch

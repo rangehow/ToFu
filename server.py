@@ -2291,6 +2291,32 @@ if __name__ == '__main__':
                         result = bridge.connect_all()
                         total = sum(len(v) for v in result.values())
                         _server_log.info('[MCP] Auto-connect: %d servers, %d tools', len(result), total)
+                        # MCP auto-connect runs on THIS background thread and
+                        # finishes seconds after boot — after a user may have
+                        # already opened a conversation and latched its tool
+                        # schema WITHOUT the (not-yet-connected) MCP tools. That
+                        # incomplete latch would then diverge on the next round,
+                        # surfacing a spurious "tools changed" banner. Clearing
+                        # every latch here mirrors the deliberate MCP-mutation
+                        # path in routes/api_v1/mcp.py: the next round of each
+                        # conversation re-latches from the now-complete tool
+                        # surface. Cost is self-limiting — a conversation whose
+                        # effective tool set is unchanged re-latches
+                        # byte-identically (no cache rebuild); only ones that
+                        # genuinely gained MCP tools pay a one-time rebuild.
+                        if total > 0:
+                            try:
+                                from lib.tools import clear_all_tool_list_latches
+                                n = clear_all_tool_list_latches()
+                                if n:
+                                    _server_log.info(
+                                        '[MCP] Auto-connect cleared %d '
+                                        'tool-schema latch(es) — MCP tools '
+                                        'now included next round', n)
+                            except Exception as e:
+                                _server_log.warning(
+                                    '[MCP] tool-latch invalidation after '
+                                    'auto-connect failed: %s', e)
                     except Exception as e:
                         _server_log.error('[MCP] Auto-connect failed: %s', e, exc_info=True)
 

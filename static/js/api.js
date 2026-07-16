@@ -1041,6 +1041,13 @@
     // Only the venue list needs its own (read-only) endpoint.
     reviewVenues:   ()                    =>
       request('/api/v1/paper/review/venues', { method: 'GET', onError: 'null' }),
+    // OpenReview auto-fill (killer feature): server drives the browser bridge
+    // to fill the review form on the active OpenReview tab, then STOPS before
+    // Submit. Never client-side timed out — the bridge round-trips can be slow;
+    // the server bounds each command. Returns the fill report (or a 409 with an
+    // actionable message when not connected / not an OpenReview page / no form).
+    openreviewAutofill: (body)            =>
+      post('/api/v1/paper/openreview/autofill', body, { timeout: 0, onError: 'throw' }),
     // Agentic Q&A — server-owned TaskRuntime task (web_search/fetch_url, full
     // report + section-aware paper context). Polls like the report task.
     qaStart:        (body)                => post('/api/v1/paper/qa/start', body),

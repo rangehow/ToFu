@@ -1707,6 +1707,13 @@ var _i18n = {
   'paper.rebuttalScoreUnchanged': { zh: '评分不变', en: 'Score unchanged' },
   'paper.rebuttalOverall': { zh: '总评分 (OA)', en: 'Overall (OA)' },
   'paper.rebuttalConfidence': { zh: '置信度', en: 'Confidence' },
+  // OpenReview auto-fill (killer feature)
+  'paper.autofillBtn': { zh: '自动填 OpenReview', en: 'Auto-fill OpenReview' },
+  'paper.autofillTitle': { zh: '在当前打开的 OpenReview 页自动填入审稿（绝不自动提交，填好后请你自己点提交）', en: 'Auto-fill the review on the open OpenReview tab (never submits — you click Submit yourself)' },
+  'paper.autofillNoPaper': { zh: '请先打开一篇论文', en: 'Open a paper first' },
+  'paper.autofillWorking': { zh: '正在填写 OpenReview 表单…', en: 'Filling the OpenReview form…' },
+  'paper.autofillDone': { zh: '已填入 {n} 个字段。未提交——请核对表单后自行点击 Submit。', en: 'Filled {n} field(s). NOT submitted — review the form and click Submit yourself.' },
+  'paper.autofillFailed': { zh: '自动填写未能完成', en: 'Auto-fill could not complete' },
   // Review tab (peer-review mode)
   'paper.reviewSelectVenue': { zh: '选择会议', en: 'Select venue' },
   'paper.reviewSelectVenueTitle': { zh: '选择目标会议（评审表单与评分量表）', en: 'Select target conference (review form & rating scale)' },

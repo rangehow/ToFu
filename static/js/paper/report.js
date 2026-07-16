@@ -2436,6 +2436,52 @@ function _copyPaperReview() { return _copyPaperReport(_reportView('review')); }
 
 function _copyPaperRebuttal() { return _copyPaperReport(_reportView('rebuttal')); }
 
+/** Killer feature: auto-fill the review form on the reviewer's OPEN OpenReview
+ *  tab from the generated review, then STOP (server never clicks Submit). The
+ *  human reviews the filled form and submits it themselves. Requires (a) the
+ *  browser bridge extension connected, (b) an existing review for this venue,
+ *  and (c) the active tab being an OpenReview page — each failure returns a
+ *  clear, actionable toast rather than a silent no-op. */
+async function _autofillOpenReview() {
+  if (!_activePaperId || !_paperHash) {
+    if (typeof showToast === 'function') showToast((typeof t === 'function') ? t('paper.autofillNoPaper') : 'Open a paper first');
+    return;
+  }
+  var rv = _reportView('review');
+  if (!rv.cache && !(rv.stream && rv.stream.fullText)) {
+    if (typeof showToast === 'function') showToast((typeof t === 'function') ? t('paper.rebuttalNeedReview') : 'Generate the review first');
+    return;
+  }
+  var btn = document.getElementById('paperReviewAutofillBtn');
+  if (btn) btn.disabled = true;
+  try {
+    if (typeof showToast === 'function') showToast((typeof t === 'function') ? t('paper.autofillWorking') : 'Filling the OpenReview form…');
+    var report = await Api.paper.openreviewAutofill({
+      paper_hash: _paperHash,
+      venue: _paperReviewVenue || 'generic',
+      ui_lang: 'en',
+    });
+    if (report && report.ok) {
+      var n = (report.filled || []).filter(function(f) { return f.ok; }).length;
+      var msg = (typeof t === 'function')
+        ? t('paper.autofillDone', { n: n })
+        : ('Filled ' + n + ' field(s). NOT submitted — review the form and click Submit yourself.');
+      if (typeof showToast === 'function') showToast(msg, 'success');
+    } else {
+      // Server returned ok:false with an actionable message (not connected /
+      // not an OpenReview page / no form). Surface it verbatim.
+      var emsg = (report && report.message) || ((typeof t === 'function') ? t('paper.autofillFailed') : 'Auto-fill could not complete');
+      if (typeof showToast === 'function') showToast(emsg, 'error');
+    }
+  } catch (e) {
+    console.warn('[Paper:OpenReview] autofill failed:', e);
+    var fmsg = (e && e.message) ? e.message : ((typeof t === 'function') ? t('paper.autofillFailed') : 'Auto-fill could not complete');
+    if (typeof showToast === 'function') showToast(fmsg, 'error');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 /** Persist the author-rebuttal paste per paper so it survives tab switches and
  *  reloads (keyed by paper id, like the venue/lang maps). Lives in
  *  report.js next to the other paper-scoped state writers. */

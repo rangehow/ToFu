@@ -298,6 +298,97 @@ async def paper_chat():
                     headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
 
 
+
+@api_v1_paper_bp.route('/api/v1/paper/openreview/autofill', methods=['POST'])
+async def openreview_autofill():
+    """Auto-fill the review form on the reviewer's active OpenReview tab.
+
+    The killer feature: one Tofu button → the browser bridge reads the review
+    form on the CURRENT OpenReview page, and the reviewer's already-generated
+    Review-Mode output (review prose + OA + confidence) is typed into the
+    matching fields. It STOPS there — it NEVER clicks any Submit/Post/Confirm
+    control; the human reviews the filled form and submits it themselves.
+
+    Body JSON:
+        paper_hash: str — the paper whose review to fill from.
+        venue: str (optional) — review venue key (default resolved to generic).
+        ui_lang: 'en'|'zh' (optional, default 'en') — which stored review row.
+        client_id: str (optional) — target extension client.
+
+    Returns:
+        JSON report: which fields were filled/skipped, how many submit controls
+        were detected-and-avoided, and an actionable message. 4xx (never a
+        silent success) when the bridge is not connected, the tab is not an
+        OpenReview page, or no review exists yet.
+    """
+    from lib.browser import is_extension_connected, send_browser_command as _send_cmd
+    from lib.browser.queue import _get_active_client
+    from lib.paper import (autofill_openreview_review, extract_review_values,
+                           make_review_lang)
+
+    data = await async_parse_body()
+    phash = (data.get('paper_hash') or '').strip()
+    venue = (data.get('venue') or 'generic').strip().lower()
+    ui_lang = (data.get('ui_lang') or 'en').strip().lower()
+    client_id = (data.get('client_id') or '').strip() or None
+    if not phash:
+        return api_bad_request('No paper_hash provided')
+
+    # Require a connected extension up front — a clear failure, not a hang.
+    if not is_extension_connected(client_id or _get_active_client()):
+        logger.info('[OpenReview] Autofill requested but no extension connected (hash=%s)', phash)
+        return api_error('Browser extension is not connected. Install/enable the Tofu '
+                         'Browser Bridge extension, open the OpenReview page, and retry.',
+                         status=409)
+
+    # Fetch the finished review for this paper+venue+lang.
+    review_key = make_review_lang(venue, ui_lang)
+    review_body = ''
+    try:
+        row = await async_fetchone(
+            "SELECT report FROM paper_reports WHERE paper_hash = ? AND lang = ?",
+            (phash, review_key), domain=DOMAIN_CHAT,
+        )
+        if row and row['report']:
+            review_body = row['report']
+    except Exception as e:
+        logger.warning('[OpenReview] Review lookup failed hash=%s: %s', phash, e)
+    if not review_body.strip():
+        return api_error('No review found for this paper yet. Generate the review first, '
+                         'then auto-fill.', status=409)
+
+    # Try to carry the paper title into the review-title field.
+    title = ''
+    try:
+        title = _lookup_paper_title(phash) or ''
+    except Exception as e:
+        logger.debug('[OpenReview] title lookup failed (non-fatal): %s', e)
+    values = extract_review_values(review_body, title=title)
+
+    logger.info('[OpenReview] Autofill start hash=%s venue=%s ui=%s oa=%s conf=%s client=%s',
+                phash, venue, ui_lang, values.get('overall'), values.get('confidence'),
+                (client_id or 'active')[:12])
+
+    # send_browser_command is synchronous (blocks on the extension round-trip);
+    # run the whole orchestration off the event loop so Hypercorn isn't blocked.
+    import lib.browser as _bridge
+
+    def _run():
+        return autofill_openreview_review(_bridge, values, client_id=client_id, timeout=20)
+
+    try:
+        report = await asyncio.to_thread(_run)
+    except Exception as e:
+        logger.error('[OpenReview] Autofill orchestration failed hash=%s: %s', phash, e, exc_info=True)
+        return api_internal_error('Auto-fill failed unexpectedly — the form was not submitted.')
+
+    logger.info('[OpenReview] Autofill done hash=%s ok=%s stage=%s filled=%d avoided_submit=%d',
+                phash, report.get('ok'), report.get('stage'),
+                len(report.get('filled', [])), report.get('submit_controls_detected', 0))
+    status = 200 if report.get('ok') else 409
+    return jsonify(report), status
+
+
 @api_v1_paper_bp.route('/api/v1/paper/extract-images', methods=['POST'])
 async def extract_images():
     """Extract figure/table images from a previously uploaded PDF.

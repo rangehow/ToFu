@@ -24,6 +24,20 @@ from .prompts import (
     date_anchor_clause,
 )
 
+# OpenReview single-page auto-fill (killer feature) — pure classifier +
+# submit-free fill-plan + orchestration entry.
+from .openreview_autofill import (
+    autofill_openreview_review,
+    build_fill_plan,
+    classify_review_form,
+    extract_forum_id,
+    extract_pdf_url,
+    extract_review_values,
+    is_openreview_url,
+    is_submit_control,
+    plan_has_submit_action,
+)
+
 # Review Mode — venue registry + compound-key parser + review prompts
 from .review import (
     DEFAULT_VENUE,
@@ -164,6 +178,10 @@ __all__ = [
     'build_rebuttal_prompt', 'build_rebuttal_tool_instruction',
     'parse_rebuttal_decision', 'rebuttal_decision_marker',
     'finalize_rebuttal_body', 'REBUTTAL_DECISION_MARKER',
+    # openreview auto-fill (killer feature)
+    'autofill_openreview_review', 'build_fill_plan', 'classify_review_form',
+    'extract_forum_id', 'extract_pdf_url', 'extract_review_values',
+    'is_openreview_url', 'is_submit_control', 'plan_has_submit_action',
     # injection guard
     'sanitize_paper_text', 'wrap_untrusted', 'injection_notice',
     # llm + tools

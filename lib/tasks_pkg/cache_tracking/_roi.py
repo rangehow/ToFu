@@ -255,12 +255,19 @@ def log_round_cache_stats(
     _disp = usage.get('_dispatch') if isinstance(usage, dict) else None
     _key = (_disp or {}).get('key', '?')
     _retries = (_disp or {}).get('429_retries', 0)
+    # trace_id joins this ground-truth cache_r/key line to the TOFU_CACHE_BYTE_PROBE
+    # dump (routing.trace_id) so the analyzer can identify which dumped round was
+    # the actual miss (cache_r=0) and read its key_hash + affinity_fell_back —
+    # binary-adjudicating affinity namespace-flip (key differs) vs same-key LRU
+    # eviction (key same). Set in SSEAccumulator.finalize (usage['trace_id']).
+    _trace = usage.get('trace_id', '') if isinstance(usage, dict) else ''
 
     logger.info(
         '[CacheStats] %s conv=%s R%d model=%s '
-        'input=%d cache_w=%d cache_r=%d hit=%d%% key=%s retries=%d',
+        'input=%d cache_w=%d cache_r=%d hit=%d%% key=%s retries=%d trace=%s',
         tid[:8] if tid else '???',
         conv_id[:8] if conv_id else '???',
         round_num + 1, model,
         prompt_tokens, cache_write, cache_read, hit_pct, _key, _retries,
+        _trace or '-',
     )

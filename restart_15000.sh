@@ -36,6 +36,13 @@
 # already manages tofu and REFUSES to kill/relaunch (pointing you at
 # `supervisorctl restart tofu`), so the two mechanisms can never fight. Once the
 # supervisord program is installed, use supervisorctl — not this script.
+#
+# SERIALIZE (2026-07-16): step [pre/5b] takes an flock on data/.restart.lock so
+# concurrent sibling restarts on a shared-HEAD box queue instead of both killing
+# the listener at once (the paired-SIGTERM signature). After acquiring the lock
+# it skips a redundant restart iff a sibling ALREADY brought up a healthy
+# instance that STARTED AFTER this restart began (start-time proof, not just
+# "port is occupied"), so a stale pre-existing process is still reloaded.
 
 PROJ="/mnt/dolphinfs/ssd_pool/docker/user/hadoop-aipnlp/INS/ruanjunhao04/chatui"
 PY="/mnt/dolphinfs/ssd_pool/docker/user/hadoop-aipnlp/INS/ruanjunhao04/miniforge3/envs/tofu/bin/python"
@@ -164,6 +171,59 @@ if [ -n "${LPIDS_INIT}" ]; then
     done
     up="$(ps -o ppid= -p "${up}" 2>/dev/null | tr -d ' ')"
   done
+fi
+
+# ── [pre/5b] RESTART SERIALIZATION LOCK — one restart at a time on this box. ──
+# On a shared-HEAD box, multiple sibling agents may each run this script to load
+# a commit, unaware of each other. Without a lock they BOTH reach [1/5] and kill
+# the same listener at the same second (the observed paired SIGTERMs), then race
+# two relaunches — one aborts on the single-instance lock. This flock serializes
+# restarts: the 2nd caller BLOCKS on fd 9 until the 1st fully finishes (the lock
+# is held for the whole kill→relaunch→verify span because fd 9 stays open until
+# this script exits). Placed AFTER the [pre/5] supervisord guard and BEFORE the
+# [1/5] kill, so the kill phase itself is always inside the lock.
+#
+# SECOND-PROBE (skip-if-already-done): after we finally GET the lock, a sibling
+# that held it first may have JUST relaunched a healthy new instance loading the
+# same HEAD — killing it and relaunching again is pure waste. So we skip ONLY
+# when BOTH hold: (i) the health endpoint answers, AND (ii) the live listener
+# was STARTED AFTER this restart began (a fresh instance a sibling spawned while
+# we waited), proven by process start-time — NOT merely "something is on the
+# port". A stale pre-existing process (started before this restart) fails (ii),
+# so we still kill+relaunch it and never falsely report success without loading
+# new code.
+RESTART_LOCK="${PROJ}/data/.restart.lock"
+RESTART_EPOCH="$(date +%s)"
+if command -v flock >/dev/null 2>&1 \
+   && mkdir -p "${PROJ}/data" 2>/dev/null \
+   && exec 9>"${RESTART_LOCK}" 2>/dev/null; then
+  echo "[pre/5b] Acquiring restart lock (${RESTART_LOCK}) — serialize concurrent restarts ..."
+  if flock -w 60 9; then
+    echo "      Restart lock acquired (held until this script exits)."
+    RL_PID="$(listener_pids | head -n1)"
+    if [ -n "${RL_PID}" ] \
+       && curl -s --max-time 2 "http://127.0.0.1:${PORT}/api/health" >/dev/null 2>&1; then
+      RL_AGE="$(ps -o etimes= -p "${RL_PID}" 2>/dev/null | tr -d ' ')"
+      if [ -n "${RL_AGE}" ]; then
+        RL_STARTED_AT=$(( $(date +%s) - RL_AGE ))
+        if [ "${RL_STARTED_AT}" -ge "${RESTART_EPOCH}" ]; then
+          echo "[pre/5b] A concurrent restart already brought up a HEALTHY new"
+          echo "        instance (pid ${RL_PID}, started ${RL_AGE}s ago — AFTER this"
+          echo "        restart began) — skipping redundant kill+relaunch. Done."
+          exit 0
+        fi
+        echo "      Live listener pid ${RL_PID} is healthy but PREDATES this restart"
+        echo "      (age ${RL_AGE}s) — it is the stale instance; proceeding to reload."
+      fi
+    fi
+  else
+    echo "[pre/5b] Another restart has held the lock for >60s — aborting to avoid a"
+    echo "        double kill+relaunch. Re-run once it settles."
+    exit 0
+  fi
+else
+  echo "[pre/5b] flock unavailable / ${PROJ}/data not writable — proceeding WITHOUT"
+  echo "        restart serialization (concurrent restarts on this box may collide)."
 fi
 
 # ── [1/5] Stop whatever is listening on :PORT (by exact PID). ──

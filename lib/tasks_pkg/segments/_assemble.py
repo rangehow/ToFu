@@ -26,6 +26,7 @@ from lib.log import get_logger
 
 from lib.tasks_pkg.segments._types import (
     SEG_THINKING, SEG_TEXT, SEG_TOOL_USE, RESUMABLE_FINISH_REASONS,
+    is_synthetic_inbox_round,
 )
 
 logger = get_logger(__name__)
@@ -71,6 +72,13 @@ def assemble_segments(task: dict[str, Any],
 
     for idx, r in enumerate(rounds):
         if not isinstance(r, dict):
+            continue
+        # Wire-purity guard: frontend display-only inbox-inject rows (async
+        # <swarm-update> / peer / user-steer chips) carry no tool_call data and
+        # must NOT become tool_use segments — that would mint a phantom wire
+        # tool and shift the prefix cache. They live in a separate display-only
+        # sidecar. See _types.is_synthetic_inbox_round.
+        if is_synthetic_inbox_round(r):
             continue
         lr = r.get('llmRound')
         # Batch key: real tool-call rounds carry an integer llmRound

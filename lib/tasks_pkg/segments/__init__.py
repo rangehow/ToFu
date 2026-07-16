@@ -47,6 +47,8 @@ from lib.tasks_pkg.segments._types import (  # noqa: E402,F401
     SEG_TOOL_USE,
     SEG_TOOL_RESULT,
     RESUMABLE_FINISH_REASONS,
+    SYNTHETIC_INBOX_MARKERS,
+    is_synthetic_inbox_round,
 )
 
 from lib.tasks_pkg.segments._assemble import (  # noqa: E402,F401
@@ -94,4 +96,6 @@ __all__ = [
     'SEG_THINKING',
     'SEG_TEXT',
     'SEG_TOOL_USE',
+    'SYNTHETIC_INBOX_MARKERS',
+    'is_synthetic_inbox_round',
 ]

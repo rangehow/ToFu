@@ -34,6 +34,19 @@ def _reconstruct_tool_call_messages(rounds: list[dict]) -> list[dict] | None:
     a batch becomes the batch's assistant ``content`` (text written
     alongside the tool_calls, à la Claude).
     """
+    # ── Wire-purity guard ──
+    # Drop frontend display-only inbox-inject rows (async <swarm-update> / peer
+    # / user-steer chips). They carry a lane marker and no tool_call data, so
+    # letting them through would fail the required-fields validation below and
+    # collapse the WHOLE turn into a lossy summary — breaking tool-turn
+    # continuation and shifting prefix-cache bytes. They persist as a separate
+    # display-only underscore sidecar, never on the wire. See
+    # lib/tasks_pkg/segments/_types.is_synthetic_inbox_round.
+    from lib.tasks_pkg.segments._types import is_synthetic_inbox_round
+    rounds = [r for r in rounds if not is_synthetic_inbox_round(r)]
+    if not rounds:
+        return None
+
     # First pass: validate every round has the required data.
     for r in rounds:
         if not r.get('toolCallId'):

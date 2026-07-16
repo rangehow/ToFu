@@ -589,6 +589,70 @@ def diff_byte_prefix(old: list, new: list, max_report: int = 8) -> list[str]:
     return changes
 
 
+def wire_byte_region(system: Any, tools: Any) -> dict[str, str]:
+    """TRUE-byte hash of the HOISTED ``system`` + ``tools`` cached-prefix region.
+
+    The true-byte counterpart of ``system_fingerprint`` — and the reason it is
+    needed: ``system_fingerprint`` is ITSELF LOSSY. It runs ``_text_of`` over
+    the system block list (collapsing ``str`` ↔ ``[{type:text}]`` and folding
+    block ordering into a text stream) and canonicalises each tool's
+    ``parameters`` with ``sort_keys=True``. So a canonical-invisible byte change
+    in the hoisted region — a system BLOCK REORDERING, a whitespace/wrapping
+    flip, a per-turn re-serialization, or a tool-param KEY REORDER — leaves
+    ``system_fingerprint`` reporting "unchanged" even though the exact bytes the
+    gateway caches on DID change.
+
+    On the Anthropic path this is the HIGHEST-probability suspect region: the
+    hoisted system prompt is where the per-turn context is injected fresh every
+    round (charter, board, peer-status, activity-feed, ``relevant_memories``).
+    A byte change there that ``system_fingerprint`` cannot see would let a real
+    context-mechanism corruption be laundered into "upstream eviction".
+
+    So this hashes the ACTUAL serialized bytes: ``json.dumps`` with insertion
+    order preserved (``sort_keys=False``), stripping ONLY ``cache_control``. NO
+    ``_text_of`` collapsing, NO param key sorting — a block reorder or a key
+    reorder DOES change the hash here, which is the whole point.
+
+    Returns ``{'system': md5, 'tools': md5}``.
+    """
+    def _dump(obj: Any) -> str:
+        try:
+            return json.dumps(_strip_cache_control(obj),
+                              ensure_ascii=False, sort_keys=False)
+        except (TypeError, ValueError) as e:
+            logger.debug('[WireFP] wire_byte_region dump failed (%s) — '
+                         'using str() form', e)
+            return str(obj)
+
+    if system is None:
+        _sys_raw = ''
+    elif isinstance(system, str):
+        _sys_raw = system            # a bare string IS its own wire bytes
+    else:
+        _sys_raw = _dump(system)     # block list — order-sensitive by design
+    _tools_raw = _dump(tools or [])
+    return {'system': _md5(_sys_raw), 'tools': _md5(_tools_raw)}
+
+
+def diff_byte_region(old: dict | None, new: dict | None) -> list[str]:
+    """Name which hoisted region(s) diverged at the RAW-byte level.
+
+    Compares ``wire_byte_region`` outputs. Returns ``<bytes>system`` /
+    ``<bytes>tools`` for each field whose true bytes changed, so a downstream
+    verdict tells a hoisted-region byte divergence apart from a lossy
+    ``system_fingerprint`` ``<hoisted>`` culprit and from a per-message
+    ``<bytes>`` culprit. ``.get(...)`` defaults keep pre-change (missing) state
+    inert — a mid-deploy round with no stored region never cries wolf.
+    """
+    if not old or not new:
+        return []
+    changes: list[str] = []
+    for fld in ('system', 'tools'):
+        if old.get(fld) != new.get(fld):
+            changes.append('<bytes>' + fld)
+    return changes
+
+
 def static_prefix_hash(messages: list) -> str:
     """Hash the leading static floor (system message(s) + first user turn).
 

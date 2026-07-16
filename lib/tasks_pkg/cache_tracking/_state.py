@@ -57,6 +57,7 @@ class CacheState:
         'prefix_field_hashes',
         # Authoritative post-translation wire fingerprint (see wire_fingerprint.py)
         'wire_fp', 'wire_static', 'wire_system', 'wire_markers', 'wire_bytes',
+        'wire_region',
         'total_cache_read', 'total_cache_write',
         'total_breaks', 'total_input_tokens',
         'first_call_time',
@@ -119,6 +120,15 @@ class CacheState:
         # (reasoning_details rebuild / same-role merge / protocol switch)
         # actually changed the wire. See wire_fingerprint.wire_byte_prefix.
         self.wire_bytes: list | None = None
+        # TRUE-byte hash of the hoisted system + tools region from the PREVIOUS
+        # round ({'system':md5,'tools':md5}). system_fingerprint (wire_system)
+        # is LOSSY — it runs _text_of over the system blocks and sort_keys over
+        # tool params — so a system BLOCK REORDER / wrapping flip / per-turn
+        # re-serialization (the fresh-injected charter/board/peer/memories) is
+        # invisible to it. This hashes the real serialized bytes so the eviction
+        # verdict can be gated on the hoisted region too, not just messages.
+        # See wire_fingerprint.wire_byte_region.
+        self.wire_region: dict | None = None
         self.total_cache_read: int = 0
         self.total_cache_write: int = 0
         self.total_breaks: int = 0

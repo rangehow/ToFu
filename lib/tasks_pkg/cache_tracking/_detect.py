@@ -186,6 +186,21 @@ def _resolve_break_cause(
         _named = ', '.join(c for c in prefix_culprits
                            if str(c).startswith('<bytes>'))
         _suffix = f' [changed: {_named}]' if _named else ''
+        # If the HOISTED system/tools region is among the byte-diverged parts,
+        # name it as the prime suspect — on the Anthropic path that region is
+        # where the per-turn context (charter / board / peer-status /
+        # relevant_memories) is injected fresh, and it rides on a LOSSY system
+        # fingerprint, so it is the most likely place a real context-mechanism
+        # corruption hides.
+        _region_hit = any(c in ('<bytes>system', '<bytes>tools')
+                          for c in prefix_culprits)
+        if _region_hit:
+            return ('hoisted system/tools bytes changed between turns while the '
+                    'lossy system fingerprint matched — a canonical-invisible '
+                    'change in the per-turn-injected system prefix (block '
+                    'reorder, wrapping flip, re-serialization, or tool-param '
+                    'key reorder) altered the exact bytes the gateway caches '
+                    f'on → the cached prefix was re-billed uncached{_suffix}')
         return ('wire bytes changed between turns while the lossy content '
                 'fingerprint matched — a canonical-invisible change '
                 '(reasoning_details rebuild, consecutive same-role merge, JSON '
@@ -446,12 +461,14 @@ def detect_cache_break(
         _cur_wire_system = None
         _cur_wire_markers = None
         _cur_wire_bytes = None
+        _cur_wire_region = None
         if usage:
             _cur_wire_fp = usage.get('_wire_fp')
             _wire_static = usage.get('_wire_static') or ''
             _cur_wire_system = usage.get('_wire_system')
             _cur_wire_markers = usage.get('_wire_markers')
             _cur_wire_bytes = usage.get('_wire_bytes')
+            _cur_wire_region = usage.get('_wire_region')
         _wire_available = _cur_wire_fp is not None
         _wire_prefix_changed = False
         _wire_culprits: list = []
@@ -524,6 +541,32 @@ def detect_cache_break(
                         'altered the real sent bytes. changed=[%s]',
                         conv_id[:8], prev.call_count + 1,
                         ', '.join(_byte_culprits[:8]) or '?')
+            # ── TRUE-byte divergence in the HOISTED system/tools region ──
+            # system_fingerprint (wire_system) is itself LOSSY (_text_of over
+            # system blocks + sort_keys over tool params), so a system BLOCK
+            # REORDER / wrapping flip / per-turn re-serialization / tool-param
+            # KEY REORDER — the highest-probability suspect on the Anthropic
+            # path, where charter/board/peer/relevant_memories are injected
+            # fresh each turn — leaves the <hoisted> diff empty and would be
+            # laundered into "eviction". wire_byte_region hashes the REAL bytes
+            # of that region so the divergence is named and the eviction verdict
+            # is refused. Checked even if messages already flagged, so a system
+            # byte flip is always surfaced.
+            if (_cur_wire_region is not None and prev.wire_region is not None):
+                from lib.tasks_pkg.wire_fingerprint import diff_byte_region
+                _region_culprits = diff_byte_region(
+                    prev.wire_region, _cur_wire_region)
+                if _region_culprits:
+                    _wire_culprits.extend(_region_culprits)
+                    logger.warning(
+                        '[CacheTrack] conv=%s call=%d ⚠ HOISTED REGION BYTES '
+                        'DIVERGED while the lossy system fingerprint matched — '
+                        'a canonical-invisible change (system block reorder / '
+                        'wrapping flip / per-turn re-serialization / tool-param '
+                        'key reorder) altered the real cached-prefix bytes. '
+                        'changed=[%s]',
+                        conv_id[:8], prev.call_count + 1,
+                        ', '.join(_region_culprits) or '?')
             _wire_prefix_changed = bool(_wire_culprits)
             if _wire_prefix_changed:
                 logger.warning(
@@ -561,6 +604,7 @@ def detect_cache_break(
             prev.wire_system = _cur_wire_system
             prev.wire_markers = _cur_wire_markers
             prev.wire_bytes = _cur_wire_bytes
+            prev.wire_region = _cur_wire_region
         prev.model = model
         prev.message_count = msg_count
         prev.last_cache_read_tokens = cache_read

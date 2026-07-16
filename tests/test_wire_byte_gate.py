@@ -42,8 +42,11 @@ import pytest
 from lib.tasks_pkg.wire_fingerprint import (
     canonical_messages,
     diff_byte_prefix,
+    diff_byte_region,
     diff_canonical,
+    system_fingerprint,
     wire_byte_prefix,
+    wire_byte_region,
 )
 
 pytestmark = pytest.mark.unit
@@ -198,3 +201,124 @@ def test_detector_NEUTER_without_byte_gate_launders_to_eviction():
     assert 'upstream cache eviction' in str(out), (
         'NEUTER expectation: without _wire_bytes the reasoning_details rebuild '
         f'is invisible → laundered into eviction — got: {out}')
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# HOISTED system/tools region — the same lossy blind spot, on the Anthropic
+# path's highest-probability suspect (the per-turn-injected system prefix).
+# system_fingerprint is ITSELF lossy (runs _text_of over system blocks +
+# sort_keys over tool params), so a wrapping flip / block reorder / param key
+# reorder is invisible to it. wire_byte_region hashes the REAL bytes.
+# ═══════════════════════════════════════════════════════════════════════════
+
+def test_system_wrapping_flip_invisible_to_fingerprint_visible_to_bytes():
+    """A system prompt flipping bare-str ↔ single text block collapses to the
+    SAME _text_of stream (system_fingerprint blind) but the serialized wire
+    bytes differ — wire_byte_region catches it."""
+    sys_str = 'SYSTEM PROMPT ' + 'x' * 100
+    sys_block = [{'type': 'text', 'text': sys_str}]
+    # system_fingerprint uses _text_of → collapses str ↔ single-text-block.
+    assert (system_fingerprint(sys_str, [])['system']
+            == system_fingerprint(sys_block, [])['system']), (
+        'precondition: system_fingerprint must be blind to the wrapping flip')
+    # wire_byte_region hashes the real bytes → DIVERGES.
+    region_diff = diff_byte_region(wire_byte_region(sys_str, []),
+                                   wire_byte_region(sys_block, []))
+    assert region_diff == ['<bytes>system'], region_diff
+
+
+def test_tool_param_key_reorder_invisible_to_fingerprint_visible_to_bytes():
+    """system_fingerprint canonicalises tool params with sort_keys=True, so a
+    param KEY REORDER is invisible to it; wire_byte_region preserves insertion
+    order and catches the real byte change."""
+    tools_a = [{'type': 'function', 'function': {
+        'name': 'f', 'description': 'd',
+        'parameters': {'a': 1, 'b': 2}}}]
+    tools_b = [{'type': 'function', 'function': {
+        'name': 'f', 'description': 'd',
+        'parameters': {'b': 2, 'a': 1}}}]  # same keys, reordered
+    assert (system_fingerprint(None, tools_a)['tools']
+            == system_fingerprint(None, tools_b)['tools']), (
+        'precondition: system_fingerprint sorts params → blind to key reorder')
+    region_diff = diff_byte_region(wire_byte_region(None, tools_a),
+                                   wire_byte_region(None, tools_b))
+    assert region_diff == ['<bytes>tools'], region_diff
+
+
+def test_moved_cache_control_in_system_is_not_a_region_divergence():
+    """cache_control is stripped before region hashing — a marker landing on a
+    system block must NOT count as a byte change."""
+    sys_plain = [{'type': 'text', 'text': 'sys'}]
+    sys_marked = [{'type': 'text', 'text': 'sys',
+                   'cache_control': {'type': 'ephemeral', 'ttl': '1h'}}]
+    assert diff_byte_region(wire_byte_region(sys_plain, []),
+                            wire_byte_region(sys_marked, [])) == []
+
+
+def _usage_with_region(msgs, system, tools, *, cache_read):
+    u = _usage_with_wire(msgs, cache_read=cache_read, cache_write=0)
+    u['_wire_region'] = wire_byte_region(system, tools)
+    return u
+
+
+def test_detector_system_byte_flip_not_laundered_into_eviction():
+    """End-to-end: a system-prefix wrapping flip (system_fingerprint blind,
+    canonical/messages identical) must NOT be called an eviction — the verdict
+    names the hoisted-region byte change."""
+    from lib.tasks_pkg.cache_tracking import detect_cache_break
+    from lib.tasks_pkg.cache_tracking._state import _cache_states
+
+    conv = 'region-gate-1'
+    msgs = [{'role': 'user', 'content': 'u1'}]
+    sys_str = 'SYS ' + 'x' * 200
+    sys_block = [{'type': 'text', 'text': sys_str}]
+    # Round 1: warm prefix, system as a bare string.
+    detect_cache_break(conv, msgs, None, 'claude-opus-4',
+                       usage=_usage_with_region(msgs, sys_str, [],
+                                                cache_read=90000))
+    # Round 2: SAME everything but system flipped to a single text block +
+    # a big read drop. Messages canonical identical, system_fingerprint
+    # identical — only the raw hoisted bytes differ.
+    msgs2 = [{'role': 'user', 'content': 'u1'},
+             {'role': 'assistant', 'content': 'a1'}]
+    out = detect_cache_break(conv, msgs2, None, 'claude-opus-4',
+                             usage=_usage_with_region(msgs2, sys_block, [],
+                                                      cache_read=40000))
+    _cache_states.clear()
+    assert out is not None
+    blob = str(out)
+    assert 'upstream cache eviction' not in blob, (
+        f'a system-prefix byte flip must NOT be called an eviction — got: {out}')
+    assert 'hoisted system/tools bytes changed' in blob
+    assert '<bytes>system' in blob
+
+
+def test_detector_NEUTER_without_region_gate_launders_system_flip():
+    """NEUTER: drop the _wire_region signal and the SAME system wrapping flip
+    IS laundered into eviction (system_fingerprint is blind to it). Proves the
+    region byte gate is load-bearing."""
+    from lib.tasks_pkg.cache_tracking import detect_cache_break
+    from lib.tasks_pkg.cache_tracking._state import _cache_states
+
+    conv = 'region-gate-neuter'
+    msgs = [{'role': 'user', 'content': 'u1'}]
+    sys_str = 'SYS ' + 'x' * 200
+    sys_block = [{'type': 'text', 'text': sys_str}]
+
+    def _no_region(u):
+        u.pop('_wire_region', None)
+        return u
+
+    detect_cache_break(conv, msgs, None, 'claude-opus-4',
+                       usage=_no_region(_usage_with_region(
+                           msgs, sys_str, [], cache_read=90000)))
+    msgs2 = [{'role': 'user', 'content': 'u1'},
+             {'role': 'assistant', 'content': 'a1'}]
+    out = detect_cache_break(conv, msgs2, None, 'claude-opus-4',
+                             usage=_no_region(_usage_with_region(
+                                 msgs2, sys_block, [], cache_read=40000)))
+    _cache_states.clear()
+    assert out is not None
+    assert 'upstream cache eviction' in str(out), (
+        'NEUTER expectation: without _wire_region the system wrapping flip is '
+        f'invisible → laundered into eviction — got: {out}')

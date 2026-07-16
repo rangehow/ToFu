@@ -381,7 +381,76 @@ function getToolRoundsFromMsg(msg) {
         status: "done",
       },
     ];
-  return [];
+  else base = [];
+  return _rehydrateInjectRows(msg, base);
+}
+
+/* ── Inbox-inject render-time rehydration ────────────────────────────────
+ * The swarm / peer / user-steer inject lanes each render as a synthetic
+ * in-timeline toolRound (flagged `_inboxInject` / `_peerInject` /
+ * `_userSteerInject`). Those synthetic rows are DISPLAY-ONLY and are NEVER
+ * persisted into the DB `toolRounds` (that array is the wire-replay /
+ * prefix-cache source — a synthetic row lacking toolCallId/toolContent would
+ * collapse the whole assistant turn to a lossy summary AND shift the wire
+ * prefix). Instead the backend persists a DISPLAY-ONLY underscore sidecar on
+ * the message: `_inboxInjects` / `_peerInjects` / `_userSteerInjects`. After a
+ * reload / poll fallback / committedMessage projection, `msg.toolRounds` holds
+ * ONLY real tool rounds, so we rebuild the synthetic rows here — on a COPY,
+ * never mutating `msg.toolRounds` (so a later full-conv PUT can never leak them
+ * back into the DB). Idempotent: if a live synthetic row already exists for a
+ * round (dedup key) we don't add a duplicate. */
+function _rehydrateInjectRows(msg, base) {
+  if (!msg) return base;
+  const swarm = Array.isArray(msg._inboxInjects) ? msg._inboxInjects : [];
+  const peer = Array.isArray(msg._peerInjects) ? msg._peerInjects : [];
+  const steer = Array.isArray(msg._userSteerInjects) ? msg._userSteerInjects : [];
+  if (!swarm.length && !peer.length && !steer.length) return base;
+  const out = base.slice();
+  const _has = (pred) => out.some(pred);
+  for (const s of swarm) {
+    const rnd = s.round || 0;
+    if (_has(r => r._inboxInject && r._inboxKey === "inbox:" + rnd)) continue;
+    out.push({
+      roundNum: 9000000 + out.length,
+      status: "done",
+      _inboxInject: true,
+      _inboxKey: "inbox:" + rnd,
+      inboxRound: rnd,
+      inboxCount: s.count || 0,
+      inboxAgentIds: Array.isArray(s.agentIds) ? s.agentIds.filter(Boolean) : [],
+      inboxPreviews: Array.isArray(s.previews) ? s.previews : [],
+    });
+  }
+  for (const p of peer) {
+    const rnd = p.round || 0;
+    if (_has(r => r._peerInject && r._peerKey === "peer:" + rnd)) continue;
+    out.push({
+      roundNum: 9000000 + out.length,
+      status: "done",
+      _peerInject: true,
+      _peerKey: "peer:" + rnd,
+      peerRound: rnd,
+      peerCount: p.count || 0,
+      peerPreviews: Array.isArray(p.previews) ? p.previews : [],
+    });
+  }
+  for (const s of steer) {
+    const rnd = s.round || 0;
+    if (_has(r => r._userSteerInject && r._steerKey === "steer:" + rnd)) continue;
+    out.push({
+      roundNum: 9000000 + out.length,
+      status: "done",
+      _userSteerInject: true,
+      _steerKey: "steer:" + rnd,
+      steerRound: rnd,
+      steerCount: s.count || 0,
+      steerPreviews: Array.isArray(s.previews) ? s.previews : [],
+    });
+  }
+  return out;
+}
+if (typeof window !== "undefined") {
+  window._rehydrateInjectRows = _rehydrateInjectRows;
 }
 
 

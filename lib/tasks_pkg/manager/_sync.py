@@ -37,6 +37,39 @@ from lib.tasks_pkg.manager._persist import (
 logger = get_logger(__name__)
 
 
+# ── Inbox-inject sidecar lanes (swarm / peer / user-steer) ───────────────────
+# The three async-inject lanes each stash a DISPLAY-ONLY record on the task under
+# its own underscore key. These are persisted VERBATIM onto the settled assistant
+# message under the SAME key (an underscore field, exactly like
+# ``_relatedConversations`` / ``_memoryPrefetch``). CRITICAL INVARIANT: they must
+# NEVER be folded into ``toolRounds`` / ``segments`` — those are the wire-replay /
+# prefix-cache source (``_reconstruct_tool_call_messages`` collapses the whole
+# assistant turn to a lossy summary if any round lacks toolCallId/toolContent,
+# which both breaks tool-turn continuation AND shifts the wire prefix). The wire
+# builders (``_build_assistant_messages`` / ``assemble_segments``) read only
+# ``role`` / ``content`` / ``toolRounds`` / ``segments`` — never underscore
+# fields — so persisting these is provably wire-neutral. The frontend rebuilds
+# the in-timeline inject chip from these at render time; the synthetic row is
+# NEVER written back into the DB ``toolRounds``.
+INBOX_INJECT_SIDECAR_FIELDS = ('_inboxInjects', '_peerInjects', '_userSteerInjects')
+
+
+def _persist_inject_sidecars(task, last_msg):
+    """Copy any accumulated inbox-inject sidecar lanes from the task onto the
+    settled assistant message dict (in place).
+
+    Returns True if any field was written (so a content-guard skip branch can
+    still fall through to the DB write instead of dropping the sidecar).
+    """
+    wrote = False
+    for _f in INBOX_INJECT_SIDECAR_FIELDS:
+        _v = task.get(_f)
+        if _v:
+            last_msg[_f] = _v
+            wrote = True
+    return wrote
+
+
 def _maybe_refresh_project_summary(task):
     """Post-reply trigger for the lazy project-summary generator (Layer 2).
 
@@ -530,12 +563,19 @@ def _sync_result_to_conversation(task, meta):
                 last_msg['model'] = meta['model']
             if meta.get('provider_id') and not last_msg.get('provider_id'):
                 last_msg['provider_id'] = meta['provider_id']
-            if _tr_updated or meta.get('finishReason'):
+            # ★ Inbox-inject sidecars: persist EVEN on the content-guard path.
+            #   The frontend PUT'd fuller content before we settled, but it can
+            #   never carry these (they are backend-observed at inject time), so
+            #   dropping them here = "disappears on refresh". Writing them makes
+            #   this branch fall through to the DB write below instead of the
+            #   bare skip `return`.
+            _sidecar_wrote = _persist_inject_sidecars(task, last_msg)
+            if _tr_updated or meta.get('finishReason') or _sidecar_wrote:
                 logger.info('%s conv=%s Content guard: existing=%d+%d > new=%d+%d, '
-                           'but still updating toolRounds=%s metadata=%s',
+                           'but still updating toolRounds=%s metadata=%s sidecar=%s',
                            pfx, conv_id, existing_content_len, existing_thinking_len,
                            new_content_len, new_thinking_len,
-                           _tr_updated, bool(meta.get('finishReason')))
+                           _tr_updated, bool(meta.get('finishReason')), _sidecar_wrote)
             else:
                 logger.info('%s conv=%s Server already has MORE content (existing=%d+%d > new=%d+%d) — '
                            'frontend likely already synced. Skipping.',
@@ -658,6 +698,13 @@ def _sync_result_to_conversation(task, meta):
         # related-conversations chip: persist so the chip survives reload
         if task.get('_relatedConversations'):
             last_msg['_relatedConversations'] = task['_relatedConversations']
+
+        # inbox-inject sidecars (swarm / peer / user-steer): persist so the
+        # in-timeline inject chips survive reload. Underscore fields only — the
+        # wire builders never read them (see _persist_inject_sidecars). Called
+        # here for the normal path; the content-guard branch above already wrote
+        # them (idempotent) so it could fall through to this DB write.
+        _persist_inject_sidecars(task, last_msg)
 
         # preferences-learned: persist the "Noted: you prefer X" moment(s)
         if task.get('_preferencesLearned'):
@@ -1111,6 +1158,11 @@ def _sync_partial_to_conversation(task):
                 ('_preferencesApplied', '_preferencesApplied'),
                 ('_relatedConversations', '_relatedConversations'),
                 ('_preferencesLearned', '_preferencesLearned'),
+                # inbox-inject sidecars — persist mid-stream too so a reload
+                # BEFORE the terminal sync still shows the inject chips.
+                ('_inboxInjects', '_inboxInjects'),
+                ('_peerInjects', '_peerInjects'),
+                ('_userSteerInjects', '_userSteerInjects'),
             ):
                 v = task.get(src_key)
                 if v and not last_msg.get(dst_key):

@@ -9453,7 +9453,9 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
    ═══════════════════════════════════════════ */
 .project-modal.pm-workbench {
   max-width: 920px; width: 920px;
-  height: 82vh; max-height: 720px;
+  height: 82vh;
+  height: min(720px, calc(var(--vh100, 100vh) * 0.82));
+  max-height: 720px;
   padding: 0; overflow: hidden;
   display: flex; flex-direction: column;
 }

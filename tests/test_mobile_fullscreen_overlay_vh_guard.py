@@ -117,6 +117,65 @@ def test_fullscreen_overlays_use_vh100_guard_not_bare_dvh():
         f'have stopped pinning height, making this guard vacuous.')
 
 
+def _base_rule_body(css: str, selector: str) -> str:
+    """Return the declaration body of the BASE (non-media-query) rule for
+    `selector`. Scans top-level rules only — skips anything inside an @media."""
+    esc = re.escape(selector)
+    pat = re.compile(r'(?<![\w.\-])' + esc + r'(?=[{:,. ])\s*\{([^{}]*)\}')
+    for m in pat.finditer(css):
+        # Determine media-nesting depth at this match by counting unbalanced
+        # `@media …{` openers before it.
+        prefix = css[:m.start()]
+        media_open = len(re.findall(r'@media[^{]*\{', prefix))
+        # Count closes that belong to @media by brace-matching from each opener
+        # is expensive; approximate: a base rule has equal { and } from all
+        # @media blocks already closed before it. Use net brace depth instead.
+        depth = 0
+        for ch in prefix:
+            if ch == '{':
+                depth += 1
+            elif ch == '}':
+                depth -= 1
+        if depth == 0:  # top-level, not inside any @media
+            return m.group(1)
+    raise AssertionError(f'base (top-level) rule for {selector!r} not found')
+
+
+def test_base_pm_workbench_height_uses_vh100_guard():
+    """The 1280px landscape tablet (pointer:coarse, width>1024) matches NEITHER
+    the phone block NOR any coarse/tablet media query — only the BASE
+    `.project-modal.pm-workbench` rule governs it. That base rule pinned
+    `height:82vh` (bare vh), which the Android WebView measures as 0 → the panel
+    collapsed to a black line even AFTER the phone-block fix. Regression
+    2026-07-16 (diagnostics: innerWidth 1280, vh100 published 513px, panel still
+    black). The base full-viewport height MUST route through var(--vh100, …)."""
+    css = open(_CSS_PATH, encoding='utf-8').read()
+    body = _base_rule_body(css, '.project-modal.pm-workbench')
+    height_vals = [v for p, v in _HEIGHT_DECL_RE.findall(body) if p == 'height']
+    assert height_vals, ('.project-modal.pm-workbench base rule no longer sets '
+                         'height — positive test stale.')
+    # SOME height declaration must be guarded by --vh100 (the WebView-safe one).
+    # A bare `82vh`/`100vh` fallback line is allowed to co-exist BEFORE it.
+    assert any('--vh100' in v for v in height_vals), (
+        f'.project-modal.pm-workbench base rule sets height={height_vals!r} '
+        f'with NO var(--vh100, …) guard — bare vh collapses to 0 in the Android '
+        f'WebView on the 1280px tablet. Add a guarded override like '
+        f'height:min(720px, calc(var(--vh100,100vh)*0.82)).')
+
+
+def test_NC_neuter_base_bare_vh_trips_the_guard():
+    """NEUTER: strip the base rule's --vh100 guard line → the base-rule
+    assertion's core predicate must flag it."""
+    css = open(_CSS_PATH, encoding='utf-8').read()
+    body = _base_rule_body(css, '.project-modal.pm-workbench')
+    # Emulate the pre-fix state: drop any height line that references --vh100.
+    neutered = re.sub(r'height:\s*[^;]*--vh100[^;]*;', '', body)
+    height_vals = [v for p, v in _HEIGHT_DECL_RE.findall(neutered) if p == 'height']
+    assert height_vals, 'neuter removed all height — unexpected'
+    assert not any('--vh100' in v for v in height_vals), (
+        'neuter no-op — base rule not in the expected guarded form')
+
+
 def test_NC_neuter_bare_dvh_trips_the_guard():
     """NEUTER: rewrite a guarded value back to bare 100dvh → the guard's core
     predicate must flag it."""

@@ -23,18 +23,21 @@ and asserts:
      it → clean transition to a normal sent bubble (no whole-conv rebuild, and
      the queued chip is gone). Also: a normal user row has neither the class nor
      the chip (no false positive).
-  C. cross_tab_sync: a cross-device conv_changed frame (no fresh local write)
-     schedules the active verify at the SHORT xdev delay, while a frame arriving
-     with a fresh `_localWriteAt` (overlapping local edit) keeps the full 1s
-     debounce. Proven by capturing setTimeout's delay argument.
+  C. cross_tab_sync: a cross-device conv_changed frame schedules the active
+     verify at the SHORT delay (~60ms), NOT a full second. Local self-writes
+     never reach this path — the self-echo guard (fresh `_localWriteAt` →
+     return) is their authoritative protection and returns earlier — so there
+     is exactly ONE verify-delay regime and it must be fast. Proven by capturing
+     setTimeout's delay argument, plus asserting a fresh local write is skipped
+     by the outer guard (no verify scheduled at all).
 
 NEUTER controls (on a MUTATED source copy; shipped files never modified):
   • strip the `_pendingQueued ? ... : ''` class/indicator wiring → the queued
     row renders identical to a normal sent bubble (proves A is load-bearing).
   • strip the `_pendingQueued ? "PQ"` fingerprint fold → the flag-flip produces
     the SAME fingerprint → the reconcile would NOT repaint (proves B).
-  • force the xdev delay constant equal to the full delay → the cross-device
-    frame no longer verifies fast (proves C's split is load-bearing).
+  • bump the active-verify delay constant to 1000 → the cross-device frame no
+    longer verifies fast (proves the fast delay is load-bearing for C).
 
 Skips cleanly when node isn't installed.
 """
@@ -227,7 +230,7 @@ check('fn_exposed', typeof _onConvNotifyPush === 'function');
 // an active-conv newer-rev frame (list-refresh uses its own timer path).
 function lastVerifyDelay() { return scheduledDelays[scheduledDelays.length - 1]; }
 
-// ══ C1. CROSS-DEVICE frame (no local write) → SHORT xdev delay ══
+// ══ C1. CROSS-DEVICE frame (no local write) → SHORT delay, near-immediate ══
 {
   reset();
   conversations = [{ id: 'c1', _serverRev: 5, messages: [{ role: 'user', content: 'q' }] }];
@@ -235,37 +238,38 @@ function lastVerifyDelay() { return scheduledDelays[scheduledDelays.length - 1];
   _onConvNotifyPush({ type: 'conv_changed', convId: 'c1', rev: 6, userId: 1 });
   const d = lastVerifyDelay();
   check('C1_scheduled', typeof d === 'number');
-  check('C1_xdev_is_fast', d <= 200);   // near-immediate, not the 1s debounce
+  check('C1_verify_is_fast', d <= 200);   // near-immediate, not a 1s debounce
 }
 
-// ══ C2. LOCAL self-write in flight → full 1s debounce retained ══
+// ══ C2. FRESH local self-write → skipped ENTIRELY by the outer self-echo
+//        guard (no verify scheduled). This is why there is exactly ONE
+//        verify-delay regime: the local-write case never reaches the delay. ══
 {
   reset();
   conversations = [{ id: 'c1', _serverRev: 5, messages: [{ role: 'user', content: 'q' }],
-                     _localWriteAt: Date.now() - 100 }];  // fresh, but < self-echo window
+                     _localWriteAt: Date.now() - 100 }];  // fresh, within self-echo window
   activeConvId = 'c1';
-  // NOTE: a fresh _localWriteAt within _CONV_SELF_ECHO_MS is skipped by the
-  // OUTER self-echo guard entirely (no verify scheduled) — that's correct and
-  // even safer. To exercise the DELAY split itself we use a _localWriteAt that
-  // is OLDER than the self-echo window but we still want the full debounce only
-  // when it's fresh; so assert the outer guard skipped (no schedule) here.
   _onConvNotifyPush({ type: 'conv_changed', convId: 'c1', rev: 6, userId: 1 });
   check('C2_fresh_localwrite_skipped_by_outer_guard', scheduledDelays.length === 0);
 }
 
-// ══ C3. The two delay constants exist and differ (xdev strictly faster) ══
+// ══ C3. Single active-verify delay constant exists and is fast (<= 200ms).
+//        No second "full-debounce" constant should linger — a dead 1000ms
+//        branch was removed (the self-echo guard already covers local writes). ══
 {
-  const mFull = SRC.match(/_CONV_ACTIVE_VERIFY_DELAY_MS\s*=\s*(\d+)/);
-  const mXdev = SRC.match(/_CONV_ACTIVE_VERIFY_DELAY_XDEV_MS\s*=\s*(\d+)/);
-  check('C3_full_const_present', !!mFull);
-  check('C3_xdev_const_present', !!mXdev);
-  check('C3_xdev_strictly_faster', mFull && mXdev && Number(mXdev[1]) < Number(mFull[1]));
+  const m = SRC.match(/_CONV_ACTIVE_VERIFY_DELAY_MS\s*=\s*(\d+)/);
+  check('C3_delay_const_present', !!m);
+  check('C3_delay_is_fast', m && Number(m[1]) <= 200);
+  check('C3_no_dead_xdev_const', SRC.indexOf('_CONV_ACTIVE_VERIFY_DELAY_XDEV_MS') === -1);
+  // The unreachable _localWriteFresh ternary must be gone (dead-branch removal).
+  check('C3_no_dead_localWriteFresh_branch', SRC.indexOf('_localWriteFresh') === -1);
 }
 
-// ══ NEUTER 3: force xdev delay == full delay → cross-device no longer fast ══
+// ══ NEUTER 3: bump the active-verify delay to 1000 → cross-device no longer
+//        fast (proves the fast delay itself is load-bearing for C1). ══
 {
-  const neutered = SRC.replace(/_CONV_ACTIVE_VERIFY_DELAY_XDEV_MS\s*=\s*\d+/,
-                               '_CONV_ACTIVE_VERIFY_DELAY_XDEV_MS = 1000');
+  const neutered = SRC.replace(/_CONV_ACTIVE_VERIFY_DELAY_MS\s*=\s*\d+/,
+                               '_CONV_ACTIVE_VERIFY_DELAY_MS = 1000');
   check('N3_patch_applied', neutered !== SRC);
   loadModule(neutered);
   reset();
@@ -273,7 +277,7 @@ function lastVerifyDelay() { return scheduledDelays[scheduledDelays.length - 1];
   activeConvId = 'c1';
   _onConvNotifyPush({ type: 'conv_changed', convId: 'c1', rev: 6, userId: 1 });
   const d = lastVerifyDelay();
-  check('N3_xdev_no_longer_fast', d === 1000);
+  check('N3_verify_no_longer_fast', d === 1000);
   loadModule(SRC);
 }
 
@@ -317,9 +321,11 @@ def test_pending_queued_render():
 @pytest.mark.skipif(not _node_available(), reason='node not installed')
 def test_cross_device_verify_delay_split():
     xtab_src = open(XTAB, encoding='utf-8').read()
-    assert '_CONV_ACTIVE_VERIFY_DELAY_XDEV_MS' in xtab_src, \
-        'xdev delay constant missing from cross_tab_sync.js — test stale'
-    _run(_XTAB_HARNESS, [XTAB], 'pending_queued_xtab_harness', 8)
+    assert '_CONV_ACTIVE_VERIFY_DELAY_MS' in xtab_src, \
+        'active-verify delay constant missing from cross_tab_sync.js — test stale'
+    assert '_CONV_ACTIVE_VERIFY_DELAY_XDEV_MS' not in xtab_src, \
+        'dead _XDEV constant still present — dead-branch removal incomplete'
+    _run(_XTAB_HARNESS, [XTAB], 'pending_queued_xtab_harness', 7)
 
 
 if __name__ == '__main__':

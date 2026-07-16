@@ -158,7 +158,6 @@ win.stripNoTranslateTags = global.stripNoTranslateTags = (s) => (s == null ? '' 
 win.renderMarkdown = global.renderMarkdown = (s) => '<md>' + String(s == null ? '' : s) + '</md>';
 win.getToolRoundsFromMsg = global.getToolRoundsFromMsg = () => [];
 win.renderToolRoundsHTML = global.renderToolRoundsHTML = () => '';
-win._segTimelineEnabled = global._segTimelineEnabled = () => false;
 win.renderSegmentTimelineHTML = global.renderSegmentTimelineHTML = () => '';
 const _noop = () => '';
 for (const name of [

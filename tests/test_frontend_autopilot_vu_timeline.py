@@ -91,7 +91,6 @@ win.getToolRoundsFromMsg = global.getToolRoundsFromMsg = (m) => (m && m.toolRoun
 //   • grouped legacy panel → GROUPED-PANEL
 //   • inline segment timeline → SEG-TIMELINE
 win.renderToolRoundsHTML = global.renderToolRoundsHTML = () => '<div class="ptool-panel">GROUPED-PANEL</div>';
-win._segTimelineEnabled = global._segTimelineEnabled = () => true;
 win.renderSegmentTimelineHTML = global.renderSegmentTimelineHTML =
   (segs) => (Array.isArray(segs) && segs.length ? '<div class="ptool-panel seg-timeline">SEG-TIMELINE</div>' : '');
 

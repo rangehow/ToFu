@@ -86,7 +86,6 @@ win._renderTurnHead = global._renderTurnHead = () => '';
 win._renderSoloRoundTag = global._renderSoloRoundTag = () => '';
 win._turnLabelText = global._turnLabelText = () => '';
 win._buildSwarmInboxChipsHTML = global._buildSwarmInboxChipsHTML = () => '';
-win._segTimelineEnabled = global._segTimelineEnabled = () => false;
 win.autoTranslate = global.autoTranslate = false;
 win.CSS = global.CSS = undefined;
 

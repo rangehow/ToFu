@@ -96,6 +96,11 @@ win.t = global.t = (k, o) => k + (o && o.n != null ? (':' + o.n) : '');
 win.Icon = global.Icon = () => '';
 win.CSS = global.CSS = { escape: (s) => s };
 win.formatClockTime = global.formatClockTime = () => '12:00';
+// NOTE: `_segTimelineEnabled` was removed — the interleaved timeline is now the
+// only streaming render path, so this stub is INERT (streaming_ui.js no longer
+// reads it). The scenarios below still toggle `_segFlag` (seg OFF / seg ON),
+// which now exercise the SAME (timeline) path; the content-zone fidelity
+// invariant holds regardless. Kept to preserve the scenario matrix.
 let _segFlag = false;
 win._segTimelineEnabled = global._segTimelineEnabled = () => _segFlag;
 for (const n of ['_stampFreshness','_buildSwarmInboxChipsHTML','renderTurnProvenanceHtml',

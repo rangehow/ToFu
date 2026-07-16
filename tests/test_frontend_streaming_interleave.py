@@ -526,7 +526,6 @@ const { document, check, report } = setup({
     _renderTurnHead: () => '<div class="ptool-turn-head"></div>',
     _renderSoloRoundTag: (rno) => '<div class="ptool-turn-rno-solo">' + rno + '</div>',
     _turnLabelText: () => 'parallel',
-    _segTimelineEnabled: () => true,
   },
 });
 

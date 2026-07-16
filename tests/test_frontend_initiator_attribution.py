@@ -91,9 +91,8 @@ global.renderTurnCtxNote = () => '';
 global.getActiveConv = () => null;
 global.activeStreams = new Set();
 global.getToolRoundsFromMsg = () => [];
-// Segment-timeline path: force the grouped (non-segment) branch so the render
-// stays on the simple path — we only assert header identity, not the body.
-global._segTimelineEnabled = () => false;
+// No `segments` on the test messages → the interleaved timeline no-ops and the
+// render stays on the simple grouped path (we only assert header identity).
 global._renderSegmentedTimeline = () => '';
 global.renderToolRoundsGrouped = () => '';
 global.renderThinkingBlock = () => '';

@@ -580,13 +580,12 @@ function _syncToolRoundsDOM(container, rounds) {
   const toolRounds = rounds.slice();
 
   /* ★ Segment-timeline streaming interleave: the live panel always carries the
-   *   `seg-timeline` class so the SETTLED `.seg-timeline .seg-thinking` /
-   *   `.seg-timeline .seg-narration` rules apply VERBATIM to the per-round
-   *   prose we render inside each group — byte-identical look to the finished
-   *   render, zero CSS fork. (This is now the only render path; the former
-   *   `_segTimelineEnabled` toggle was removed.) */
-  const _segEnabled = true;
-  const _segCls = " seg-timeline";
+   *   `seg-timeline` class (hardcoded into the className strings below) so the
+   *   SETTLED `.seg-timeline .seg-thinking` / `.seg-timeline .seg-narration`
+   *   rules apply VERBATIM to the per-round prose rendered inside each group —
+   *   byte-identical look to the finished render, zero CSS fork. This is now
+   *   the only render path; the former `_segTimelineEnabled` toggle was
+   *   removed. */
 
   // ── Unified tool panel: all tools in chronological order ──
   const unifiedPanel = container.querySelector(".ptool-panel");
@@ -600,14 +599,14 @@ function _syncToolRoundsDOM(container, rounds) {
     if (!unifiedPanel) {
       const el = document.createElement("div");
       el.className =
-        "ptool-panel animation-slideUp" + _segCls +
+        "ptool-panel animation-slideUp seg-timeline" +
         (anyActive ? " ptool-panel-active" : "");
       el.innerHTML = `<div class="ptool-panel-header"><span class="ptool-panel-label">${headerLabel}</span></div><div class="ptool-panel-body"></div>`;
       container.appendChild(el);
       body = el.querySelector(".ptool-panel-body");
     } else {
       unifiedPanel.className =
-        "ptool-panel" + _segCls + (anyActive ? " ptool-panel-active" : "");
+        "ptool-panel seg-timeline" + (anyActive ? " ptool-panel-active" : "");
       const lbl = unifiedPanel.querySelector(".ptool-panel-label");
       if (lbl) lbl.textContent = headerLabel;
       body = unifiedPanel.querySelector(".ptool-panel-body");
@@ -669,7 +668,7 @@ function _syncToolRoundsDOM(container, rounds) {
          *   tool DOM. The English narration is HIDDEN when auto-translate is
          *   live (`data-xlate`): the translator paints the Chinese equivalent
          *   into `.stream-seg-narration` in the same slot. */
-        if (_segEnabled) _renderStreamRoundProse(groupEl, round);
+        _renderStreamRoundProse(groupEl, round);
         let slot = body.querySelector(`[data-prn="${rn}"]`);
         /* ★ Determine if this round needs an interactive card (HG, stdin, approval).
          *   Interactive cards are tall (200-300px) and must NOT be collapsed by

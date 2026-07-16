@@ -93,7 +93,6 @@ win.stripNoTranslateTags = global.stripNoTranslateTags = (s) => (s == null ? '' 
 win.renderMarkdown = global.renderMarkdown = (s) => '<md>' + String(s == null ? '' : s) + '</md>';
 win.getToolRoundsFromMsg = global.getToolRoundsFromMsg = (m) => (m && m.toolRounds) || [];
 win.renderToolRoundsHTML = global.renderToolRoundsHTML = () => '<div class="ptool-panel">TOOLS</div>';
-win._segTimelineEnabled = global._segTimelineEnabled = () => false;
 win.renderSegmentTimelineHTML = global.renderSegmentTimelineHTML = () => '';
 
 const _noop = () => '';

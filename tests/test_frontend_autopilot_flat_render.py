@@ -103,8 +103,9 @@ win.getToolRoundsFromMsg = global.getToolRoundsFromMsg = (m) => (m && m.toolRoun
 // stub it to emit the ptool-panel marker so we can assert the body carries the
 // NORMAL agent tool panel (this is the render path VU now takes — no header).
 win.renderToolRoundsHTML = global.renderToolRoundsHTML = () => '<div class="ptool-panel">TOOLS</div>';
-// Segment timeline gate: OFF for a VU (role=user) message anyway; stub false.
-win._segTimelineEnabled = global._segTimelineEnabled = () => false;
+// Segment timeline: the VU message carries no `segments`, so the real
+// renderSegmentTimelineHTML would no-op; stub it to '' to force the grouped
+// (segment-less) fallback deterministically.
 win.renderSegmentTimelineHTML = global.renderSegmentTimelineHTML = () => '';
 
 const _noop = () => '';

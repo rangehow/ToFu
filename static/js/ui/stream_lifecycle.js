@@ -57,7 +57,17 @@ function showStreamingUIForConv(convId) {
   const _lastIsStreamingBubble =
     !!_last && (
       (_last.role === "assistant" && !_last.done) ||
-      (_last._isEndpointReview && !_last.done)
+      (_last._isEndpointReview && !_last.done) ||
+      /* ★ Autopilot VU tail: the streaming bubble is owned by a role=user
+       *   VU placeholder (`_isVirtualUser` + `_streamingVu`), NOT an assistant.
+       *   Without this arm a mid-stream renderChat (funneled here by Guard 1c
+       *   once `#streaming-msg` exists) rebuilds the list STATICALLY, painting
+       *   the frozen `vu-composing` "Autopilot starting…" pulse and never
+       *   recreating the live `#streaming-msg` — so every later
+       *   `autopilot_vu_event` frame hits `_twFlush` with no `#streaming-body`
+       *   and is dropped. The bubble then sits frozen on the warm-up label
+       *   while the elapsed timer keeps ticking. */
+      (_last._isVirtualUser && _last._streamingVu)
     );
   const renderMsgs = _lastIsStreamingBubble
     ? conv.messages.slice(0, -1)
@@ -93,6 +103,12 @@ function showStreamingUIForConv(convId) {
       html += _streamingBubbleHTML('swarm', 'Continuing…', _smTime, _smMsgId);
     } else if (lastMsg.role === "assistant") {
       html += _streamingBubbleHTML('worker', 'Streaming…', _smTime, _smMsgId);
+    } else if (lastMsg._isVirtualUser) {
+      /* Autopilot VU (role=user, machine-authored) — stream in the USER lane
+       * through the SAME substrate as the worker so its reply + tool rounds
+       * render identically. `null` status → the `autopilot.warming` default,
+       * which the first forwarded phase / delta immediately replaces. */
+      html += _streamingBubbleHTML('autopilot', null, _smTime, _smMsgId);
     } else if (lastMsg._isEndpointReview) {
       html += _streamingBubbleHTML('critic', 'Reviewing…', _smTime, _smMsgId);
     }

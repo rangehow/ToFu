@@ -1447,10 +1447,22 @@ function renderMessage(msg, idx) {
     catch (e) { console.debug("[turnCtx] renderTurnCtxNote failed:", e); }
   }
   const badgeHtml = plannerBadge || criticBadge || _initBadge;
+  /* ★ Failed / interrupted turn → REVEAL the bottom action bar without hover.
+   *   The base `.message-actions` is an opacity:0 hover-reveal, so on a
+   *   conversation that errored or was interrupted the user has to scroll to
+   *   the bottom AND hover (impossible on touch) to discover Continue / Retry.
+   *   That's the exact reported pain point. Stamping `turn-failed` here lets
+   *   CSS pin the bar visible (opacity:1) for a non-user turn carrying an
+   *   error envelope or a finishReason=interrupted, so the bottom-anchored
+   *   Continue is always discoverable on precisely the turn that needs it.
+   *   Scoped to assistant-lane turns; a settled/successful turn keeps the
+   *   quiet hover-reveal. */
+  const _turnFailed = !isUser && (!!msg.error || msg.finishReason === 'interrupted');
+  const _failedCls = _turnFailed ? ' turn-failed' : '';
   /* Final assembly via safeHtml. roleName / userLabel / time are
    * escaped by default. Everything pre-built above (avatars = trusted
    * SVG, badgeHtml, body, branchHtml, actionBtns, the class/attr
    * fragments) is already-trusted HTML, marked raw(). */
-  const _classAttr = `${isUser ? ' user-msg' : ''}${msg._isEndpointReview ? ' ep-critic-msg' : ''}${epPlannerCls}${epWorkerCls}${vuCls}`;
+  const _classAttr = `${isUser ? ' user-msg' : ''}${msg._isEndpointReview ? ' ep-critic-msg' : ''}${epPlannerCls}${epWorkerCls}${vuCls}${_failedCls}`;
   return String(safeHtml`<div class="message${raw(_classAttr)}"${raw(idAttr)}${raw(msgIdAttr)}${raw(apRunAttr)}${raw(apSummaryAttr)}${raw(mfpAttr)}><div class="message-avatar">${raw(isUser ? userAvatar : avatarContent)}</div><div class="message-content"><div class="message-header"><span class="message-role">${isUser ? userLabel : roleName}</span>${raw(badgeHtml)}${raw(messageTimeHtml)}</div><div class="message-body">${raw(body)}</div>${raw(branchHtml)}${raw(actionBtns)}</div>${raw(turnCtxHtml)}</div>`);
 }

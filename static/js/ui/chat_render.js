@@ -1349,7 +1349,14 @@ function renderMessage(msg, idx) {
     const deleteH = canDelete
       ? `<button class="msg-action-btn msg-delete-btn" onclick="event.stopPropagation();deleteTurn(${idx})" title="${isUser ? 'Delete this turn' : 'Delete this message'}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>`
       : "";
-    actionBtns = `<div class="message-actions">${copyH}${editH}${regenH}${continueH}${translateH}${exportImgH}${deleteH}</div>`;
+    /* ★ Branch ("分支") is an assistant-lane action — moved out of the separate
+     *   dashed `.branch-zone` pill into the unified bottom action bar so it
+     *   shares the `.msg-action-btn` styling/hover-reveal with Copy/Edit/…. */
+    const _branchLabel = (typeof t === 'function') ? t('branch.add') : 'Branch';
+    const branchBtnH = !isUser
+      ? `<button class="msg-action-btn msg-branch-btn" onclick="event.stopPropagation();promptNewBranch(${idx})" title="${escapeHtml(_branchLabel)}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg> ${escapeHtml(_branchLabel)}</button>`
+      : "";
+    actionBtns = `<div class="message-actions">${copyH}${editH}${regenH}${continueH}${translateH}${exportImgH}${branchBtnH}${deleteH}</div>`;
   }
   // ★ Tofu mascot avatars: Worker gets worker tofu, Planner gets planner tofu
   let avatarContent = (typeof _TOFU_WORKER_SVG !== 'undefined') ? _TOFU_WORKER_SVG : "✦",

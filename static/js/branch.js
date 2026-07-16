@@ -205,12 +205,14 @@ function renderBranchZone(msg, msgIdx, inlinedSet) {
     }
   }
 
-  const addBtn = `<button class="branch-add-btn" onclick="promptNewBranch(${msgIdx})" title="Add branch">分支</button>`;
-
+  // ★ The "Add branch" (分支) affordance now lives in the unified bottom
+  //   `.message-actions` bar (see chat_render.js) — the branch-zone only
+  //   renders existing branch pills + the expanded panel. When there are
+  //   none, it collapses to nothing.
   if (!pills.length && !panelHtml) {
-    return `<div class="branch-zone">${addBtn}</div>`;
+    return "";
   }
-  return `<div class="branch-zone"><div class="branch-nodes">${pills.join("")}${addBtn}</div>${panelHtml}</div>`;
+  return `<div class="branch-zone"><div class="branch-nodes">${pills.join("")}</div>${panelHtml}</div>`;
 }
 
 // ══════════════════════════════════════════

@@ -191,3 +191,114 @@ def test_e2e_prefix_frozen_across_fresh_thread_turn():
         f'NEUTER: with boundary=0 the guard must rewrite an already-cached '
         f'prefix msg (saved={saved}, first_changed={fci_neuter}, '
         f'boundary={prior_boundary})')
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# DURABLE boundary — survives restart / replica switch (the in-memory fallback
+# is NOT "forever"; _cache_states is process memory). settings.cachePrefixHWM.
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _patch_persist_with_fake_settings(monkeypatch):
+    """Back _persist's read/write with an in-memory settings dict (no DB), so
+    we can drive the durable path deterministically. Returns the store dict."""
+    from lib.tasks_pkg.cache_tracking import _persist
+    store: dict[str, dict] = {}
+
+    def _fake_read(conv_id):
+        v = store.get(conv_id, {}).get('cachePrefixHWM')
+        return v if isinstance(v, int) and v > 0 else 0
+
+    def _fake_advance(conv_id, boundary):
+        if not conv_id or boundary <= 0:
+            return
+        cur = store.setdefault(conv_id, {}).get('cachePrefixHWM', 0)
+        if boundary > cur:
+            store[conv_id]['cachePrefixHWM'] = boundary  # monotonic
+
+    monkeypatch.setattr(_persist, 'read_persisted_boundary', _fake_read)
+    monkeypatch.setattr(_persist, 'advance_persisted_boundary', _fake_advance)
+    # _prefix imports read_persisted_boundary lazily from the module, so the
+    # monkeypatch on the module attribute is picked up on next call.
+    return store
+
+
+def test_persist_monotonic_advance():
+    """advance_persisted_boundary only ever RAISES (monotonic high-water)."""
+    from lib.tasks_pkg.cache_tracking import _persist
+    _persist._reset_read_cache_for_tests()
+    import pytest as _pt
+    mp = _pt.MonkeyPatch()
+    store = _patch_persist_with_fake_settings(mp)
+    try:
+        _persist.advance_persisted_boundary('c1', 100)
+        assert store['c1']['cachePrefixHWM'] == 100
+        _persist.advance_persisted_boundary('c1', 250)   # grows
+        assert store['c1']['cachePrefixHWM'] == 250
+        _persist.advance_persisted_boundary('c1', 40)    # smaller — ignored
+        assert store['c1']['cachePrefixHWM'] == 250
+    finally:
+        mp.undo()
+
+
+def test_get_prefix_count_restores_from_persisted_after_restart():
+    """RESTART SIMULATION (the load-bearing case): after _cache_states is
+    CLEARED (= process restart / new replica), a fresh-thread round finds NO
+    in-memory sibling, but get_cache_prefix_count must RESTORE the boundary
+    from the durable persisted high-water mark. NEUTER: short-circuit the
+    persisted read → the boundary collapses to 0 (bug reproduced)."""
+    st = _fresh_state_module()
+    from lib.tasks_pkg.cache_tracking._prefix import get_cache_prefix_count
+    from lib.tasks_pkg.cache_tracking import _persist
+    conv = 'conv-restart-1'
+    _persist._reset_read_cache_for_tests()
+    import pytest as _pt
+    mp = _pt.MonkeyPatch()
+    store = _patch_persist_with_fake_settings(mp)
+    try:
+        # Turn A (some earlier process) persisted the boundary as a durable HWM.
+        _persist.advance_persisted_boundary(conv, 300)
+        # RESTART: memory is wiped — no CacheState entry for this conv at all.
+        with st._cache_lock:
+            st._cache_states.clear()
+        # Fresh-thread round after restart: in-memory best=0, but the durable
+        # floor restores 300 → guard stays up.
+        got = get_cache_prefix_count(conv)
+        assert got == 300, f'durable restore expected 300, got {got}'
+
+        # NEUTER: hide the persisted signal (as if only the in-memory path
+        # existed) → boundary collapses to 0, the restart-window bug.
+        mp.setattr(_persist, 'read_persisted_boundary', lambda _c: 0)
+        got_neuter = get_cache_prefix_count(conv)
+        assert got_neuter == 0, (
+            f'NEUTER: without the durable read the post-restart boundary must '
+            f'collapse to 0 (bug), got {got_neuter}')
+    finally:
+        mp.undo()
+        with st._cache_lock:
+            st._cache_states.clear()
+
+
+def test_persisted_floor_maxed_with_memory_sibling():
+    """The durable read is a FLOOR combined via max() with the in-memory
+    sibling — a live larger in-memory boundary is not lowered by a stale
+    smaller persisted one, and vice-versa."""
+    st = _fresh_state_module()
+    from lib.tasks_pkg.cache_tracking._prefix import get_cache_prefix_count
+    from lib.tasks_pkg.cache_tracking import _persist
+    conv = 'conv-restart-2'
+    _persist._reset_read_cache_for_tests()
+    import pytest as _pt
+    mp = _pt.MonkeyPatch()
+    _patch_persist_with_fake_settings(mp)
+    try:
+        _persist.advance_persisted_boundary(conv, 100)  # stale-ish durable
+        with st._cache_lock:
+            st._cache_states.clear()
+            # a LIVE warm sibling with a LARGER boundary (298)
+            st._cache_states[(conv, 424242)] = _make_state(300, read=70000)
+        got = get_cache_prefix_count(conv)
+        assert got == 298, f'max(mem 298, persisted 100) == 298, got {got}'
+    finally:
+        mp.undo()
+        with st._cache_lock:
+            st._cache_states.clear()

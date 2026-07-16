@@ -637,6 +637,24 @@ def detect_cache_break(
         prev.last_cache_write_tokens = cache_write
         prev.last_update_time = now
         prev.call_count += 1
+        # ── Advance the DURABLE prefix boundary (survives restart / replica
+        #    switch). When THIS round confirms a warm cached prefix (read or
+        #    write > 1000, mirroring get_cache_prefix_count's _boundary gate),
+        #    the prefix [0, msg_count - EDITABLE_TAIL_COUNT) is a cached
+        #    conversation fact. Persist it as a monotonic high-water mark so a
+        #    future turn on a fresh thread/process/replica restores the guard
+        #    floor instead of collapsing to 0 and rewriting the still-cached
+        #    prefix. Best-effort, monotonic, DB-write only on genuine growth.
+        if cache_read > 1000 or cache_write > 1000:
+            _durable_boundary = max(0, msg_count - EDITABLE_TAIL_COUNT)
+            if _durable_boundary > 0:
+                try:
+                    from lib.tasks_pkg.cache_tracking._persist import (
+                        advance_persisted_boundary)
+                    advance_persisted_boundary(conv_id, _durable_boundary)
+                except Exception as _pe:
+                    logger.debug('[CacheTrack] advance_persisted_boundary '
+                                 'failed conv=%s: %s', conv_id[:8], _pe)
         if not prev.first_call_time:
             prev.first_call_time = now
         # Accumulate session-level stats

@@ -157,7 +157,21 @@ def get_cache_prefix_count(conv_id: str) -> int:
             b = _boundary(_st)
             if b > best:
                 best = b
-        return best
+    # DURABLE floor. In-memory sibling state does NOT survive a restart or a
+    # replica switch, so a new turn after either finds best==0 and the guard
+    # would collapse again. The persisted high-water boundary (settings JSON,
+    # cross-restart + cross-replica) is the authoritative fallback. Take the
+    # MAX: raising the compaction floor only ever PROTECTS more messages, never
+    # fewer, so a (possibly slightly stale) larger durable value can never
+    # itself cause a miss. Read OUTSIDE the _cache_lock (own DB/TTL lock).
+    try:
+        from lib.tasks_pkg.cache_tracking._persist import read_persisted_boundary
+        persisted = read_persisted_boundary(conv_id)
+        if persisted > best:
+            return persisted
+    except Exception as e:
+        logger.debug('[CacheTrack] persisted boundary lookup failed: %s', e)
+    return best
 
 
 def get_cache_diagnostics() -> dict[str, Any]:

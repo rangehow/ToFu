@@ -105,7 +105,7 @@ def sort_tool_results(messages: list, conv_id: str = '') -> None:
             i += 1
 
 
-def get_cache_prefix_count(conv_id: str) -> int:
+def get_cache_prefix_count(conv_id: str, current_msg_count: int | None = None) -> int:
     """Get the number of messages in the cache prefix for this conversation.
 
     Microcompact should skip editing messages[0:N] where N is this count,
@@ -115,6 +115,23 @@ def get_cache_prefix_count(conv_id: str) -> int:
     Returns the message count from the previous call if cache was active.
     For Anthropic (explicit breakpoints), this is less critical since
     add_cache_breakpoints places markers at the conversation tail.
+
+    ★ CLAMP TO THE CURRENT PREFIX (the history-shrink guard). The boundary
+    sources below (in-memory sibling / durable HWM) are MONOTONIC high-water
+    marks — they only ever rise. But the conversation history can legitimately
+    SHRINK within the same conv_id: an L2/L3 macro-compaction rewrites/truncates
+    it, or an edit-and-resend rewinds to an earlier turn. A stale large boundary
+    (say 400) against a now-50-message conversation would make
+    ``is_in_cache_prefix(idx)=idx<400`` True for EVERY real index → micro_compact
+    would be permanently disabled for that conv → unbounded context growth (an
+    OOM-context regression, worse than the miss this whole fix targets). So when
+    the caller passes ``current_msg_count`` (the live wire message count) the
+    returned boundary is CLAMPED to ``current_msg_count - EDITABLE_TAIL_COUNT``:
+    the monotonic value acts only as a FLOOR that can never exceed the messages
+    that actually exist this round. Freeze holds for the prefix that still
+    exists; a legit shrink lets the boundary fall so compaction keeps working.
+    When ``current_msg_count`` is None (e.g. sort_tool_results, diagnostics) the
+    raw boundary is returned unchanged (back-compat).
 
     ★ CROSS-THREAD (per-conversation) boundary — the turn-boundary cache-kill
     fix. ``_state_key`` scopes CacheState per ``(conv_id, thread_id)`` so
@@ -142,10 +159,18 @@ def get_cache_prefix_count(conv_id: str) -> int:
             return max(0, st.message_count - EDITABLE_TAIL_COUNT)
         return 0
 
+    def _clamp(boundary: int) -> int:
+        # History-shrink guard: a monotonic boundary must never exceed the
+        # messages that actually exist this round (see docstring). None ⇒
+        # no live count available ⇒ return raw (back-compat).
+        if current_msg_count is None:
+            return boundary
+        return min(boundary, max(0, current_msg_count - EDITABLE_TAIL_COUNT))
+
     with _cache_lock:
         own = _boundary(_cache_states.get(_state_key(conv_id)))
         if own > 0:
-            return own
+            return _clamp(own)
         # Current thread has no warm state (typically a new user turn on a
         # fresh run_task thread). Fall back to the max boundary any OTHER
         # thread's state for THIS conv still holds — the previous turn's
@@ -168,10 +193,10 @@ def get_cache_prefix_count(conv_id: str) -> int:
         from lib.tasks_pkg.cache_tracking._persist import read_persisted_boundary
         persisted = read_persisted_boundary(conv_id)
         if persisted > best:
-            return persisted
+            best = persisted
     except Exception as e:
         logger.debug('[CacheTrack] persisted boundary lookup failed: %s', e)
-    return best
+    return _clamp(best)
 
 
 def get_cache_diagnostics() -> dict[str, Any]:

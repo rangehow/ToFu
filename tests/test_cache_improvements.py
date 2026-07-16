@@ -1248,7 +1248,8 @@ class TestSortToolResultsPrefixGate:
         import lib.tasks_pkg.cache_tracking as ct
 
         # Pretend the first 4 messages are inside the cache prefix.
-        monkeypatch.setattr(ct, 'get_cache_prefix_count', lambda cid: 4)
+        monkeypatch.setattr(ct, 'get_cache_prefix_count',
+                            lambda cid, current_msg_count=None: 4)
         messages = [
             {'role': 'system', 'content': 'sys'},
             {'role': 'assistant', 'tool_calls': [{'id': 'b'}]},
@@ -1266,7 +1267,8 @@ class TestSortToolResultsPrefixGate:
         import lib.tasks_pkg.cache_tracking as ct
 
         # No prefix tracked → sort everywhere (legacy behaviour).
-        monkeypatch.setattr(ct, 'get_cache_prefix_count', lambda cid: 0)
+        monkeypatch.setattr(ct, 'get_cache_prefix_count',
+                            lambda cid, current_msg_count=None: 0)
         messages = [
             {'role': 'assistant', 'tool_calls': [{'id': 'z'}]},
             {'role': 'tool', 'tool_call_id': 'z', 'content': 'Z'},

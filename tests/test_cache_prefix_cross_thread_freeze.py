@@ -302,3 +302,47 @@ def test_persisted_floor_maxed_with_memory_sibling():
         mp.undo()
         with st._cache_lock:
             st._cache_states.clear()
+
+
+def test_boundary_clamped_when_history_shrinks():
+    """HISTORY-SHRINK GUARD: a monotonic HWM/sibling boundary must NEVER
+    exceed the messages that exist this round. After an L2/L3 macro-compaction
+    or edit-and-resend the conv can drop from ~400 to ~50 messages; without the
+    clamp get_cache_prefix_count returns the stale 400 → is_in_cache_prefix is
+    True for every real index → micro_compact permanently disabled → context
+    explosion. NEUTER: drop current_msg_count (clamp off) → boundary=stale
+    (bug); compaction would be fully suppressed."""
+    st = _fresh_state_module()
+    from lib.tasks_pkg.cache_tracking._prefix import get_cache_prefix_count
+    from lib.tasks_pkg.cache_tracking._detect import EDITABLE_TAIL_COUNT
+    from lib.tasks_pkg.cache_tracking import _persist
+    conv = 'conv-shrink-1'
+    _persist._reset_read_cache_for_tests()
+    import pytest as _pt
+    mp = _pt.MonkeyPatch()
+    _patch_persist_with_fake_settings(mp)
+    try:
+        # An old, LARGE warm sibling boundary (simulating the pre-shrink turn).
+        with st._cache_lock:
+            st._cache_states.clear()
+            st._cache_states[(conv, 505050)] = _make_state(400, read=80000)
+        _persist.advance_persisted_boundary(conv, 398)  # durable HWM also large
+
+        # History has since SHRUNK to 50 messages (post macro-compaction).
+        clamped = get_cache_prefix_count(conv, current_msg_count=50)
+        assert clamped == 50 - EDITABLE_TAIL_COUNT == 48, (
+            f'clamp: boundary must fall to current 48, got {clamped}')
+        # It must be < current_msg_count so is_in_cache_prefix leaves the tail
+        # editable → micro_compact still runs.
+        assert clamped < 50
+
+        # NEUTER: no current_msg_count → clamp off → the stale monotonic value
+        # (the bug: boundary >= real message count → compaction fully disabled).
+        raw = get_cache_prefix_count(conv)  # current_msg_count=None
+        assert raw >= 398 and raw >= 50, (
+            f'NEUTER: without the clamp the stale boundary ({raw}) exceeds the '
+            f'shrunk history (50) → micro_compact would be permanently disabled')
+    finally:
+        mp.undo()
+        with st._cache_lock:
+            st._cache_states.clear()

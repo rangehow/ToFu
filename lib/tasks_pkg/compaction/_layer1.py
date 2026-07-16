@@ -243,7 +243,13 @@ def micro_compact(messages: list, conv_id: str = '', task: dict | None = None,
     if conv_id:
         try:
             from lib.tasks_pkg.cache_tracking import get_cache_prefix_count
-            _cache_prefix_count = get_cache_prefix_count(conv_id)
+            # Pass the LIVE message count so the (monotonic) boundary is
+            # clamped to the messages that actually exist this round — a
+            # history shrink (L2/L3 macro-compact, edit-and-resend) must let
+            # the boundary fall, or micro_compact would be permanently
+            # disabled for this conv → unbounded context growth.
+            _cache_prefix_count = get_cache_prefix_count(
+                conv_id, current_msg_count=len(messages))
         except Exception as e:
             logger.debug('[Compaction] cache_tracking not available: %s', e)
 

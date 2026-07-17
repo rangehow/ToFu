@@ -1346,29 +1346,25 @@ def run_task(task: dict[str, Any]) -> None:
                 break
 
             tool_call_happened = True
-            clean_msg = {'role': 'assistant'}
-            clean_msg['tool_calls'] = assistant_msg['tool_calls']
-            # ★ Freeze content to the STRIPPED form so the live tail and every
-            #   replay path emit byte-identical content for this turn. The
-            #   pre-tool prose snapshot (parse_tool_calls: assistantContent =
-            #   content.strip()) is what the _reconstruct_tool_call_messages
-            #   replay path sends when the 2h/200-entry server-store cache
-            #   expires; the live tail (and the store rebuild, which replays
-            #   this verbatim) previously sent the RAW content. That raw↔stripped
-            #   divergence on an already-cached assistant/tool_call turn is a
-            #   canonical-VISIBLE WIRE PREFIX CHANGED prefix-cache miss. Stripping
-            #   here converges both paths on the single stored-canonical form
-            #   (assistantContent is already persisted stripped everywhere). The
-            #   content here is inter-round narration — leading/trailing
-            #   whitespace is not semantically meaningful.
-            _tail_content = (assistant_msg.get('content') or '').strip()
-            if _tail_content: clean_msg['content'] = _tail_content
-            if assistant_msg.get('reasoning_content'): clean_msg['reasoning_content'] = assistant_msg['reasoning_content']
-            # ★ Carry the Claude thinking-block signature so the NEXT tool-loop
-            #   turn replays a signed thinking block (build_body rebuilds
-            #   reasoning_details from it). Without this, every in-loop turn
-            #   after the first is a lossy continuation against Claude.
-            if assistant_msg.get('thinking_signature'): clean_msg['thinking_signature'] = assistant_msg['thinking_signature']
+            # ★ SINGLE SOURCE: assemble the live-tail assistant/tool_call
+            #   message through build_assistant_tool_call_message — the SAME
+            #   function the replay path (_reconstruct_tool_call_messages) uses.
+            #   This makes the live tail and every replay path emit byte-
+            #   identical fields for the turn, structurally: content is STRIPPED
+            #   (the pre-tool prose snapshot assistantContent is persisted
+            #   stripped; a raw↔stripped flip was a WIRE PREFIX CHANGED miss),
+            #   reasoning_content is carried whenever thinking is present, and
+            #   the thinking-block signature only when present (so the NEXT
+            #   tool-loop turn replays a signed thinking block). All those gates
+            #   now live in ONE place, so a future field can never re-diverge
+            #   between the two paths. See build_assistant_tool_call_message.
+            from lib.tasks_pkg.conv_message_builder import (
+                build_assistant_tool_call_message)
+            clean_msg = build_assistant_tool_call_message(
+                tool_calls=assistant_msg['tool_calls'],
+                content=assistant_msg.get('content'),
+                reasoning_content=assistant_msg.get('reasoning_content'),
+                thinking_signature=assistant_msg.get('thinking_signature'))
             messages.append(clean_msg)
 
             # ★ Discard the inter-round narration this round streamed before

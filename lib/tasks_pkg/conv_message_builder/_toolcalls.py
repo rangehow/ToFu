@@ -16,6 +16,66 @@ from lib.log import get_logger
 logger = get_logger(__name__)
 
 
+def build_assistant_tool_call_message(
+    *, tool_calls: list, content=None, reasoning_content=None,
+    thinking_signature=None) -> dict:
+    """THE single source for assembling a normalized assistant/tool_call message.
+
+    Both the LIVE tail (orchestrator ``_run.py`` clean_msg, the in-loop tool
+    round) and the REPLAY path (``_reconstruct_tool_call_messages``, the
+    server-store-expiry rebuild) call this for the FINAL field assembly, so the
+    two paths can NEVER re-diverge on a field — the root cause of the whole
+    prefix-cache-drift saga (``.strip()`` raw↔stripped, str↔block ``{content}``,
+    thinking-no-signature ``{reasoning_content}`` were all live↔replay
+    divergences between two hand-written assemblers).
+
+    Field rules (the canonical, byte-stable form — every historical fix folded
+    in here ONCE):
+      * ``content`` — STRIPPED; dropped entirely if empty/whitespace-only
+        (inter-round narration; leading/trailing whitespace is not semantic and
+        the stored ``assistantContent`` snapshot is already stripped).
+      * ``reasoning_content`` — carried whenever thinking text is present
+        (INDEPENDENT of signature), mirroring the live tail. An UNSIGNED
+        thinking block is dropped identically downstream by ``_assistant_blocks``
+        / ``_inject_claude_reasoning_details``, so no HTTP 400; DeepSeek's
+        ``model_requires_reasoning_content_replay`` is preserved.
+      * ``thinking_signature`` — carried only when present AND thinking present
+        (a signature without reasoning text is meaningless).
+      * key order is FIXED (role, content, reasoning_content, thinking_signature,
+        tool_calls) so the serialized wire bytes are deterministic regardless of
+        which caller populated the fields.
+
+    Scope: this is the FIELD-ASSEMBLY seam only. Batch grouping, tool_calls
+    reconstruction, and tool_result generation stay in each caller (they are
+    genuinely different: live has an in-memory OpenAI-shape tool_calls list and
+    one current round; replay rebuilds from stored toolRounds and groups by
+    llmRound). ``inject_tool_history`` (Continue-only, model-gated,
+    intentionally-lossy) DELIBERATELY does NOT use this — its Claude-only gating
+    is a different contract.
+
+    Args:
+        tool_calls: OpenAI-shape ``[{id,type,function:{name,arguments}}, ...]``.
+        content: The assistant's inter-round prose (raw; stripped here).
+        reasoning_content: Thinking text (or None/empty).
+        thinking_signature: Opaque Claude thinking-block signature (or None).
+
+    Returns:
+        A normalized assistant message dict in canonical key order.
+    """
+    _content = (content or '').strip()
+    _reasoning = reasoning_content or ''
+    _sig = thinking_signature or ''
+    msg: dict = {'role': 'assistant'}
+    if _content:
+        msg['content'] = _content
+    if _reasoning:
+        msg['reasoning_content'] = _reasoning
+        if _sig:
+            msg['thinking_signature'] = _sig
+    msg['tool_calls'] = tool_calls
+    return msg
+
+
 def _reconstruct_tool_call_messages(rounds: list[dict]) -> list[dict] | None:
     """Expand ``toolRounds`` into structured assistant/tool message pairs.
 
@@ -141,27 +201,15 @@ def _reconstruct_tool_call_messages(rounds: list[dict]) -> list[dict] | None:
             if not assistant_thinking_sig and r.get('thinkingSignature'):
                 assistant_thinking_sig = r['thinkingSignature']
 
-        asst_msg: dict = {'role': 'assistant', 'tool_calls': tool_calls}
-        if assistant_text:
-            asst_msg['content'] = assistant_text
-        # ★ Mirror the LIVE tail's INDEPENDENT gating (orchestrator _run.py
-        #   clean_msg): carry ``reasoning_content`` whenever thinking is present,
-        #   and ``thinking_signature`` only when present. The old code gated
-        #   reasoning_content on BOTH fields, so an unsigned-thinking round
-        #   (28 real rounds across 7 convs) emitted reasoning_content on the
-        #   LIVE tail but DROPPED it on replay → the SAME already-cached
-        #   assistant/tool_call turn flipped its ``{reasoning_content}`` bytes
-        #   (canonical-VISIBLE as ``.thinking``) → prefix-cache miss (the
-        #   historical .thinking culprit class). Keeping it on both paths is
-        #   model-safe: an UNSIGNED thinking block is dropped identically
-        #   downstream by _assistant_blocks (Anthropic) and
-        #   _inject_claude_reasoning_details (both require a signature), so no
-        #   HTTP 400 — and DeepSeek's model_requires_reasoning_content_replay
-        #   (unsigned reasoning_content MUST be replayed) is preserved.
-        if assistant_thinking:
-            asst_msg['reasoning_content'] = assistant_thinking
-        if assistant_thinking and assistant_thinking_sig:
-            asst_msg['thinking_signature'] = assistant_thinking_sig
+        # ★ SINGLE SOURCE: field assembly goes through
+        #   build_assistant_tool_call_message so this replay path and the live
+        #   tail (_run.py clean_msg) can never re-diverge on a field. All the
+        #   historical gates (.strip() content, reasoning_content-when-thinking,
+        #   signature-when-present, canonical key order) live there ONCE.
+        asst_msg = build_assistant_tool_call_message(
+            tool_calls=tool_calls, content=assistant_text or None,
+            reasoning_content=assistant_thinking or None,
+            thinking_signature=assistant_thinking_sig or None)
         out.append(asst_msg)
         out.extend(tool_results)
 

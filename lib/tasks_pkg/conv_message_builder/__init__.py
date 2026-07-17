@@ -66,6 +66,7 @@ from lib.tasks_pkg.conv_message_builder._transform import (  # noqa: E402,F401
 
 from lib.tasks_pkg.conv_message_builder._toolcalls import (  # noqa: E402,F401
     _reconstruct_tool_call_messages,
+    build_assistant_tool_call_message,
 )
 
 
@@ -88,6 +89,7 @@ __all__ = [
     '_build_user_message',
     '_build_assistant_messages',
     '_reconstruct_tool_call_messages',
+    'build_assistant_tool_call_message',
     '_dedup_duplicate_user_messages',
     '_collapse_historical_endpoint_sessions',
     '_merge_consecutive_same_role',

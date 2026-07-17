@@ -35,9 +35,9 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import time
 
+from lib.llm_json import extract_json
 from lib.log import get_logger
 
 from .terminology_audit import (
@@ -146,24 +146,8 @@ def _backfill_prompt(report_text: str, gap_terms: list[str], ui_lang: str) -> li
 
 def _parse_json_obj(text: str) -> dict:
     """Best-effort strict-JSON object extraction (tolerates code fences / prose)."""
-    if not text:
-        return {}
-    s = text.strip()
-    s = re.sub(r'^```(?:json)?\s*', '', s)
-    s = re.sub(r'\s*```$', '', s)
-    try:
-        obj = json.loads(s)
-        return obj if isinstance(obj, dict) else {}
-    except Exception as e:
-        logger.debug('[Paper:TermFill] direct JSON parse failed, trying salvage: %s', e)
-    m = re.search(r'\{.*\}', s, re.DOTALL)
-    if m:
-        try:
-            obj = json.loads(m.group(0))
-            return obj if isinstance(obj, dict) else {}
-        except Exception as e:
-            logger.debug('[Paper:TermFill] JSON salvage failed: %s', e)
-    return {}
+    obj = extract_json(text)
+    return obj if isinstance(obj, dict) else {}
 
 
 def _generate_definitions(report_text, gap_terms, ui_lang, model, dispatch) -> dict:

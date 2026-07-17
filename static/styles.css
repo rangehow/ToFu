@@ -2919,6 +2919,7 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .paper-qa-send-btn:activ
   z-index:10000;
   width:max-content;max-width:min(360px,calc(100vw - 16px));
   max-height:calc(100vh - 16px);
+  max-height:calc(var(--vh100,100vh) - 16px);
   overflow-y:auto;overflow-x:hidden;
   overscroll-behavior:contain;
   background:var(--bg-secondary);

@@ -170,8 +170,14 @@ def test_base_pm_workbench_height_uses_vh100_guard():
 # the Android WebView. Regression 2026-07-17 (model-view button → thin line;
 # diagnostics innerWidth 837, vh100 1242px). Unlike the fullscreen overlays
 # these use partial-viewport values (85vh/90vh), so match ANY *vh, not 100vh.
+#
+# `.cost-popover` (2026-07-17) is the same class: the finish-turn cost breakdown
+# popover pinned `max-height:calc(100vh - 16px)` in its BASE rule (styles.css
+# ~2931). JS positions it via window.innerHeight (fine), but the common case
+# (content fits, no inline max-height set) is governed by that CSS 100vh, which
+# the WebView measures as 0 → the popover collapsed to a narrow sliver.
 _PREVIEW_SELECTORS = ('.preview-text-panel', '.preview-text-body',
-                      '.preview-body', '.preview-image')
+                      '.preview-body', '.preview-image', '.cost-popover')
 _ANY_VH_RE = re.compile(r'\d+d?vh')
 
 

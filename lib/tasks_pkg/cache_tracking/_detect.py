@@ -230,30 +230,37 @@ def _resolve_break_cause(
     # that comes back with a dropped/zero cache_read is the signature of the
     # cached entry being EVICTED before we read it — and the dominant cause of
     # that here is on OUR side of the fence, not the gateway's dice:
-    #   * same-key LRU pressure — all traffic funnels through one upstream key
-    #     (observed: 39/39 opus rounds on a single key), so a concurrency spike
-    #     pushes this conv's big prefix out of that key's cache pool; it reads
-    #     back once load drops (the R3-hit → R4-miss → R6-rebound pattern);
-    #   * a routing flip — conv key-affinity is a SOFT preference, so a cooled
-    #     sticky key silently lands the round on a COLD key whose pool never
-    #     held this prefix → guaranteed floor miss.
-    # Both are addressed by per-key big-prefix admission control + warm-key hold
-    # (dispatcher lane), NOT by anything in the request body. So we state the
-    # eviction as fact but NAME it an upstream-cache/routing eviction, never
-    # "random server failure".
+    #   * shared-pool LRU pressure — every conversation on one upstream key
+    #     shares ONE finite server-side cache pool (observed: opus rounds all
+    #     on a single key), so several concurrent big prefixes LRU-evict one
+    #     another's entry; it reads back once the competitors drain (the
+    #     R3-hit → R4-miss → R6-rebound pattern).
+    # The admission gate holds the WORKING SET of big prefixes resident, but it
+    # only engages ABOVE its size threshold — a prefix below that threshold
+    # (observed dominant class: ~120-140k-token turns under a 150k gate) is not
+    # held resident and evicts freely under contention. Addressed on OUR side
+    # (dispatcher admission control: threshold + residency + warm-key hold),
+    # NOT by anything in the request body. So we state the eviction as fact but
+    # NAME it an upstream-cache eviction, never "random server failure".
+    # (A genuine cross-KEY move is NOT claimed here: on a single-key deployment
+    # there is no cold key to flip onto; multi-key affinity is handled by the
+    # sticky-key hold, whose rebinds — if any — are logged separately.)
     if wire_proven_identical:
         if cache_read > _MIN_CACHE_MISS_TOKENS:
             return ('upstream cache eviction — bytes were byte-identical to the '
                     'previous round, so this is NOT a client change and NOT a '
-                    'random server failure: the cached entry was evicted before '
-                    'read (single-key LRU pressure under concurrency, or a '
-                    'cold-key routing flip). Only the body past the static '
-                    'prefix was not read back')
+                    'random server failure: the cached prefix was evicted from '
+                    'the shared cache pool on this key before read (concurrent '
+                    'large prefixes on the same key LRU-evict one another; a '
+                    'prefix below the admission-gate threshold is not held '
+                    'resident). Only the body past the static prefix was not '
+                    'read back')
         return ('upstream cache eviction — bytes were byte-identical to the '
                 'previous round, so this is NOT a client change and NOT a '
                 'random server failure: the whole cached prefix was evicted '
-                'before read (single-key LRU pressure under concurrency, or a '
-                'cold-key routing flip)')
+                'from the shared cache pool on this key before read (concurrent '
+                'large prefixes on the same key LRU-evict one another; a prefix '
+                'below the admission-gate threshold is not held resident)')
     # ── Wire fingerprint UNAVAILABLE → legacy elimination guess (unproven) ──
     if cache_read > _MIN_CACHE_MISS_TOKENS:
         return ('likely server-side cache miss (UNPROVEN — no wire '

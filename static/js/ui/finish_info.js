@@ -43,12 +43,13 @@ const _CACHE_CAUSE_PHRASES = [
   //    soft-affinity routing flip onto a cold key. OUR side of the fence,
   //    fixable via dispatcher admission control. FULL sentences precede
   //    clauses. ──
-  ['upstream cache eviction — bytes were byte-identical to the previous round, so this is NOT a client change and NOT a random server failure: the cached entry was evicted before read (single-key LRU pressure under concurrency, or a cold-key routing flip). Only the body past the static prefix was not read back',
-   '上游缓存被驱逐——本轮字节与上一轮逐字节相同，因此这既不是客户端改动、也不是服务端随机失败：缓存项在被读回前就被驱逐了（单 key 在并发下的 LRU 挤出，或软亲和路由翻到了冷 key）。仅静态前缀之后的正文未被读回'],
-  ['upstream cache eviction — bytes were byte-identical to the previous round, so this is NOT a client change and NOT a random server failure: the whole cached prefix was evicted before read (single-key LRU pressure under concurrency, or a cold-key routing flip)',
-   '上游缓存被驱逐——本轮字节与上一轮逐字节相同，因此这既不是客户端改动、也不是服务端随机失败：整段缓存前缀在被读回前就被驱逐了（单 key 在并发下的 LRU 挤出，或软亲和路由翻到了冷 key）'],
+  ['upstream cache eviction — bytes were byte-identical to the previous round, so this is NOT a client change and NOT a random server failure: the cached prefix was evicted from the shared cache pool on this key before read (concurrent large prefixes on the same key LRU-evict one another; a prefix below the admission-gate threshold is not held resident). Only the body past the static prefix was not read back',
+   '上游缓存被驱逐——本轮字节与上一轮逐字节相同，因此这既不是客户端改动、也不是服务端随机失败：缓存前缀在被读回前，就被同一 key 上的共享缓存池挤出了（同一 key 上多个大前缀并发时会互相 LRU 驱逐；低于准入门槛的前缀不会被驻留保护）。仅静态前缀之后的正文未被读回'],
+  ['upstream cache eviction — bytes were byte-identical to the previous round, so this is NOT a client change and NOT a random server failure: the whole cached prefix was evicted from the shared cache pool on this key before read (concurrent large prefixes on the same key LRU-evict one another; a prefix below the admission-gate threshold is not held resident)',
+   '上游缓存被驱逐——本轮字节与上一轮逐字节相同，因此这既不是客户端改动、也不是服务端随机失败：整段缓存前缀在被读回前，就被同一 key 上的共享缓存池挤出了（同一 key 上多个大前缀并发时会互相 LRU 驱逐；低于准入门槛的前缀不会被驻留保护）'],
   ['upstream cache eviction — bytes were byte-identical to the previous round', '上游缓存被驱逐——本轮字节与上一轮逐字节相同'],
-  ['single-key LRU pressure under concurrency, or a cold-key routing flip', '单 key 在并发下的 LRU 挤出，或软亲和路由翻到了冷 key'],
+  ['concurrent large prefixes on the same key LRU-evict one another; a prefix below the admission-gate threshold is not held resident', '同一 key 上多个大前缀并发时会互相 LRU 驱逐；低于准入门槛的前缀不会被驻留保护'],
+  ['the cached prefix was evicted from the shared cache pool on this key before read', '缓存前缀在被读回前，就被同一 key 上的共享缓存池挤出了'],
   // ── Legacy wire-fingerprint verdicts (older persisted rounds said
   //    "server-side — PROVEN"; kept so historical messages still translate). ──
   ['server-side cache miss — PROVEN: the wire bytes were byte-identical to the previous round (only the body past the static prefix was not read back)',
@@ -361,7 +362,18 @@ function _buildCostPopover(ctx) {
       if (_wb && _wb.write > 0) {
         const _terms = [];
         if (_wb.prevOutput > 0)   _terms.push(t('finishInfo.wbPrevOutput', { v: fmt(_wb.prevOutput) }));
-        if (_wb.toolResults > 0)  _terms.push(t('finishInfo.wbToolResults', { v: fmt(_wb.toolResults) }));
+        if (_wb.toolResults > 0) {
+          // Make the offset-by-one explicit ON THE ROW (not buried in the
+          // tooltip): the tool RESULTS in round (i+1)'s write came from the
+          // PREVIOUS round's tool batch, which the tool panel labels 第i轮.
+          // Round display index i maps to llmRound i; its inflow is llmRound
+          // i-1 = tool batch label i. Annotating the batch number lets a
+          // reader cross-check the two panels directly instead of inferring
+          // the offset (the "第3轮 vs 批次3 never matches" confusion).
+          let _tr = t('finishInfo.wbToolResults', { v: fmt(_wb.toolResults) });
+          if (i > 0) _tr += t('finishInfo.wbBatchRef', { n: i });
+          _terms.push(_tr);
+        }
         if (_wb.contextWrite > 0) _terms.push(t('finishInfo.wbContextWrite', { v: fmt(_wb.contextWrite) }));
         if (_wb.recacheBody > 0)  _terms.push(t('finishInfo.wbRecacheBody', { v: fmt(_wb.recacheBody) }));
         if (_wb.envelope > 0)     _terms.push(t('finishInfo.wbEnvelope', { v: fmt(_wb.envelope) }));
@@ -682,7 +694,22 @@ function renderFinishInfo(msg, isLiveTail) {
     } else if (msg.finishReason === "aborted") {
       parts.push(`<span class="finish-tag warn">${escapeHtml(t('finishInfo.reasonStopped'))}</span>`);
     } else if (msg.finishReason === "interrupted") {
-      parts.push(`<span class="finish-tag warn"><span title="${escapeHtml(t('finishInfo.reasonInterruptedTip'))}">${escapeHtml(t('finishInfo.reasonInterrupted'))}</span></span>`);
+      // The backend stamps WHY a turn was interrupted (recover_stale_tasks_on_startup):
+      //   interruptedReason='killed' → previous exit was UNCLEAN (OS SIGKILL/OOM/crash)
+      //   interruptedReason='manual' → previous exit was CLEAN (controlled restart)
+      //   absent                    → old data / first_boot / unknown verdict
+      // Map each to its own honest label instead of always claiming a crash.
+      const _ir = msg.interruptedReason;
+      let _lblKey = 'finishInfo.reasonInterruptedUnknown';
+      let _tipKey = 'finishInfo.reasonInterruptedUnknownTip';
+      if (_ir === 'killed') {
+        _lblKey = 'finishInfo.reasonInterruptedKilled';
+        _tipKey = 'finishInfo.reasonInterruptedKilledTip';
+      } else if (_ir === 'manual') {
+        _lblKey = 'finishInfo.reasonInterruptedRestart';
+        _tipKey = 'finishInfo.reasonInterruptedRestartTip';
+      }
+      parts.push(`<span class="finish-tag warn"><span title="${escapeHtml(t(_tipKey))}">${escapeHtml(t(_lblKey))}</span></span>`);
     } else if (msg.finishReason === "incomplete") {
       // An autonomous loop (endpoint / autopilot) was cut off by a safety cap
       // (max iterations / replans / stuck / budget) — the objective is

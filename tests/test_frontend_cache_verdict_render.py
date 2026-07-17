@@ -98,7 +98,7 @@ check('unproven_no_leftover_english', !_leftover(zhUnproven));
 check('proven_is_chinese', zhProven.indexOf('已实证') !== -1);
 check('unproven_is_chinese', zhUnproven.indexOf('未证实') !== -1);
 // The CURRENT eviction wording also fully Sinicizes with no leftover English.
-const _evict = 'upstream cache eviction — bytes were byte-identical to the previous round, so this is NOT a client change and NOT a random server failure: the whole cached prefix was evicted before read (single-key LRU pressure under concurrency, or a cold-key routing flip)';
+const _evict = 'upstream cache eviction — bytes were byte-identical to the previous round, so this is NOT a client change and NOT a random server failure: the whole cached prefix was evicted from the shared cache pool on this key before read (concurrent large prefixes on the same key LRU-evict one another; a prefix below the admission-gate threshold is not held resident)';
 const zhEvict = _translateCacheCause(_evict);
 check('eviction_no_leftover_english', !_leftover(zhEvict));
 check('eviction_is_chinese', zhEvict.indexOf('上游缓存被驱逐') !== -1);
@@ -111,7 +111,7 @@ _i18nLang = 'zh';
 // ── 2. State classification ──
 // The current backend wording: a byte-identical read drop is an upstream
 // cache eviction (our-side LRU/routing), classified 'eviction'.
-const _eviction = 'upstream cache eviction — bytes were byte-identical to the previous round, so this is NOT a client change and NOT a random server failure: the whole cached prefix was evicted before read (single-key LRU pressure under concurrency, or a cold-key routing flip)';
+const _eviction = 'upstream cache eviction — bytes were byte-identical to the previous round, so this is NOT a client change and NOT a random server failure: the whole cached prefix was evicted from the shared cache pool on this key before read (concurrent large prefixes on the same key LRU-evict one another; a prefix below the admission-gate threshold is not held resident)';
 check('state_eviction', _cacheBreakState({ server_side: _eviction }) === 'eviction');
 // Legacy persisted rows said "server-side … PROVEN" for the SAME phenomenon —
 // they must fold into the same 'eviction' state, never the reassuring teal.
@@ -246,7 +246,7 @@ check('render_has_our_edit_badge', html.indexOf('OUR-EDIT-BADGE') !== -1);
 // but NO culprit line (not a client byte change) — and it must NOT render the
 // reassuring teal 'proven' class that implied "nothing to fix".
 const html2 = _buildCostPopover(_ctx({ server_side:
-  'upstream cache eviction — bytes were byte-identical to the previous round, so this is NOT a client change and NOT a random server failure: the whole cached prefix was evicted before read (single-key LRU pressure under concurrency, or a cold-key routing flip)' }));
+  'upstream cache eviction — bytes were byte-identical to the previous round, so this is NOT a client change and NOT a random server failure: the whole cached prefix was evicted from the shared cache pool on this key before read (concurrent large prefixes on the same key LRU-evict one another; a prefix below the admission-gate threshold is not held resident)' }));
 check('eviction_has_badge', html2.indexOf('EVICTION-BADGE') !== -1);
 check('eviction_no_culprit_line', html2.indexOf('cp-break-culprit') === -1);
 check('eviction_state_class', html2.indexOf('cp-break-eviction') !== -1);

@@ -262,8 +262,8 @@ class TestWireFingerprintVerdict:
     by ELIMINATION. When usage carries the authoritative post-translation wire
     fingerprint (`_wire_fp`):
       * fingerprint identical to last round + read drop → the miss is NOT a
-        client change; it is named an 'upstream cache eviction' (single-key LRU
-        pressure / cold-key routing flip), explicitly NOT a random server fault.
+        client change; it is named an 'upstream cache eviction' (shared-pool
+        LRU on one key), explicitly NOT a random server fault.
       * fingerprint differs → names the exact client-caused culprit.
     """
 
@@ -284,7 +284,7 @@ class TestWireFingerprintVerdict:
                                   '_wire_fp': fp, '_wire_static': st})
         # Round 2: read DROPS but the wire bytes are IDENTICAL → not a client
         # change, but NOT a random server fault either — an upstream cache
-        # eviction (single-key LRU / cold-key routing flip), named as such.
+        # eviction (shared-pool LRU on one key), named as such.
         r2 = detect_cache_break('wire-1', msgs, None, 'claude-opus-4',
                                 usage={'cache_read_tokens': 40000,
                                        '_wire_fp': fp, '_wire_static': st})

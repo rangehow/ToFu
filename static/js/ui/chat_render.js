@@ -1391,21 +1391,21 @@ function renderMessage(msg, idx) {
      * where `t` may be undefined (falls back to the English string). */
     const _mt = (k, fallback) => (typeof t === 'function' && t(k) !== k) ? t(k) : fallback;
     const copyH = `<button class="msg-action-btn copy-msg-btn" onclick="event.stopPropagation();copyMessage(${idx})" title="${escapeHtml(_mt('msgAction.copyTitle', 'Copy'))}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg> ${escapeHtml(_mt('msgAction.copy', 'Copy'))}</button>`;
-    /* ★ Edit / Regen are USER-LANE actions, but an autopilot VU turn is
-     *   role=user + MACHINE-authored (`_isVirtualUser`). Editing a synthetic
-     *   "keep going" driver turn and regenerating from it is nonsensical AND
-     *   lets a user inject a hand-edited driver message mid-autopilot — so the
-     *   VU row gets the SHARED actions (Copy / Translate / Delete) but NOT
-     *   Edit / Regen. `_isVirtualUser` is its own carve-out here; a real human
-     *   user turn (incl. a role=user peer-message turn) still shows both. */
-    const _humanAuthored = isUser && !msg._isVirtualUser;
+    /* ★ Regen is a USER-LANE action: it truncates after this turn and re-runs
+     *   the agent's response from here. That is meaningful on EVERY user-lane
+     *   bubble — a real human turn, a role=user peer-message turn, AND an
+     *   autopilot VU driver turn (owner directive 2026-07-17: re-running the
+     *   agent's reply to an autopilot step is exactly what you want when that
+     *   reply was bad; on an in-flight run regenerateFromUser hard-cancels the
+     *   racing stream first). So Regen shows on any user-lane turn. */
+    const _showRegen = isUser;
     /* Edit is available on EVERY bubble now (user, agent, autopilot VU,
      * critic, planner). For a real human user turn it opens the full editor
      * (Save / Save & Resend); for every other lane it is EDIT-IN-PLACE only
      * (Save) — startEditMessage / saveEditOnly branch on the role. Regen
-     * stays human-only (see _humanAuthored below). */
+     * shows on any user-lane turn (see _showRegen below). */
     const editH = `<button class="msg-action-btn" onclick="event.stopPropagation();startEditMessage(${idx})" title="${escapeHtml(_mt('msgAction.editTitle', 'Edit'))}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg> ${escapeHtml(_mt('msgAction.edit', 'Edit'))}</button>`;
-    const regenH = _humanAuthored
+    const regenH = _showRegen
       ? `<button class="msg-action-btn msg-regen-btn" onclick="event.stopPropagation();regenerateFromUser(${idx})" title="${escapeHtml(_mt('msgAction.regenTitle', 'Regenerate response from this message'))}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg> ${escapeHtml(_mt('msgAction.regen', 'Regen'))}</button>`
       : "";
     const conv_ = getActiveConv();

@@ -139,13 +139,13 @@ if (NC === 'nc_private') {
     'body += `<div class="md-content${isUser ? " user-content" : ""}">${mdHtml}</div>`;'
       + ' if (msg._isVirtualUser) body += `<details class="vu-private-zone"><summary>NC</summary></details>`;');
 } else if (NC === 'nc_actions') {
-  // NC-3: revert the Regen carve-out so a VU (role=user) row sprouts the
-  // human-lane Regen affordance again (the pre-fix behaviour). Proves the
-  // `!msg._isVirtualUser` carve-out on Regen is load-bearing. (Edit is now
-  // unconditional edit-in-place, so it is NOT gated by this line.)
+  // NC-3: re-introduce the old VU carve-out so a VU (role=user) row LOSES its
+  // Regen affordance again (the pre-2026-07-17 behaviour). Proves the
+  // `_showRegen = isUser` gate (which now shows Regen on VU turns too) is
+  // load-bearing. (Edit is unconditional edit-in-place, not gated by this.)
   chatSrc = CHAT.replace(
-    'const _humanAuthored = isUser && !msg._isVirtualUser;',
-    'const _humanAuthored = isUser;');
+    'const _showRegen = isUser;',
+    'const _showRegen = isUser && !msg._isVirtualUser;');
 } else if (NC === 'nc_fold') {
   // NC-2: make _applyAutopilotRunFolds actually FOLD again (regression) — wrap
   // every stamped VU turn's parent range into a <details.autopilot-run-fold>.
@@ -234,16 +234,16 @@ function mkVu() {
         delBtn && !delBtn.closest('details'));
 
   // ── (a3) ACTION-SET: a VU row gets the SHARED actions (Copy / Translate /
-  //    Delete) AND Edit (edit-in-place — Save only, no Save & Resend), but
-  //    NOT the human-lane Regen (regenerating from a synthetic driver turn is
-  //    nonsensical). ──
+  //    Delete), Edit (edit-in-place — Save only, no Save & Resend), AND Regen
+  //    (owner directive 2026-07-17: re-running the agent's reply to an
+  //    autopilot step is a valid recovery affordance). ──
   check('a3_vu_has_copy', !!frag.querySelector('.copy-msg-btn'));
   check('a3_vu_has_translate', !!frag.querySelector('.msg-translate-btn'));
   check('a3_vu_has_delete', !!frag.querySelector('.msg-delete-btn'));
   // Edit has no dedicated class; detect by its onclick handler. Edit is now
   // available on every lane (edit-in-place), so the VU row DOES carry it.
   check('a3_vu_has_edit', html.indexOf('startEditMessage(3)') !== -1);
-  check('a3_vu_no_regen', !frag.querySelector('.msg-regen-btn'));
+  check('a3_vu_has_regen', !!frag.querySelector('.msg-regen-btn'));
   // A VU is never the last assistant → no Continue; and Export is assistant-only.
   check('a3_vu_no_continue', !frag.querySelector('.msg-continue-btn'));
   check('a3_vu_no_export', !frag.querySelector('.msg-export-img-btn'));
@@ -368,9 +368,10 @@ def test_autopilot_flat_render_and_delete():
     assert 'vu-investigation-header' not in chat_src, \
         'vu-investigation-header still present — flatten incomplete'
 
-    # The shipped source must carry the Edit/Regen VU carve-out.
-    assert 'const _humanAuthored = isUser && !msg._isVirtualUser;' in chat_src, \
-        'Edit/Regen carve-out (isUser && !_isVirtualUser) missing from chat_render.js'
+    # The shipped source must carry the broadened Regen gate (Regen on every
+    # user-lane turn, incl. autopilot VU).
+    assert 'const _showRegen = isUser;' in chat_src, \
+        'Broadened Regen gate (_showRegen = isUser) missing from chat_render.js'
 
     output = _run('')
     fails = [ln for ln in output.splitlines() if ln.startswith('FAIL')]
@@ -403,13 +404,13 @@ def test_nc_fold_regression_is_caught():
 @pytest.mark.skipif(not _node_deps_available(),
                     reason='node + jsdom dev-deps not installed (run npm install)')
 def test_nc_action_gate_regression_is_caught():
-    """NC-3: reverting the Regen carve-out must make the VU sprout a Regen
-    button, failing the 'VU has no Regen' assertion."""
+    """NC-3: re-introducing the old VU carve-out must strip the VU's Regen
+    button, failing the 'VU has Regen' assertion."""
     output = _run('nc_actions')
     assert 'PASS nc_pattern_applied' in output, f'NC mutation did not apply:\n{output}'
-    assert 'FAIL a3_vu_no_regen' in output, (
-        'Reverting the carve-out did NOT fail the VU Regen assertion — '
-        f'the carve-out is not load-bearing:\n{output}')
+    assert 'FAIL a3_vu_has_regen' in output, (
+        'Re-introducing the VU carve-out did NOT fail the VU Regen assertion — '
+        f'the broadened gate is not load-bearing:\n{output}')
 
 
 if __name__ == '__main__':

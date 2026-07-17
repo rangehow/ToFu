@@ -245,6 +245,135 @@ def test_NC_neuter_bare_dvh_trips_the_guard():
     assert not guarded, 'the vh-guard invariant must FAIL on bare 100dvh'
 
 
+# ══════════════════════════════════════════════════════════════════════
+# FULL-SWEEP LOCK (2026-07-17): every overlay/popover/drawer/dropdown/sheet
+# whose height sizes off the viewport MUST route through var(--vh100, …). A
+# full styles.css scan found these still on bare vh/dvh and they were fixed in
+# one pass. Locking them as a selector list so ANY regression to bare vh trips.
+#
+# Split by governing context on the 837px coarse-pointer tablet:
+#   BASE  — the rule that governs when no media query matches (A + B list).
+#   PHONE — inside @media(max-width:768px)/(max-width:680px) (the ≤768 sweep).
+# EXCLUDED (deliberately, decorative / JS-guarded / never-governs — see JOURNAL
+# 2026-07-17): `body` (JS pins px height inline !important), `.paper-report-toc`
+# (sticky doc sidebar, not an overlay), `.preset-dropdown` BASE 50vh (overridden
+# by guarded bottom-sheets in BOTH touch blocks, so its base never governs).
+
+# (selector, expected-unit-substring) — the unit tells us dvh vs vh so the
+# positive test can't go vacuous if a rule stops pinning a viewport height.
+_SWEEP_BASE_SELECTORS = (
+    '.debug-panel', '.settings-panel', '.stg-modal', '.mcp-install-modal',
+    '.timer-log-card', '.memory-modal', '.skills-files-modal',
+    '.skills-files-list', '.myday-modal', '.imagegen-fullscreen img',
+    '.orch-shell', '.project-brain-influence',
+)
+_SWEEP_PHONE_SELECTORS = (
+    '.delete-turn-popup', '.submenu-dropdown', '.memory-list', '.debug-panel',
+    '.preview-text-panel', '.orch-shell', '.orch-tpl-menu', '.myday-modal',
+)
+
+
+def _iter_rules(css):
+    """Brace-walk the (comment-stripped) stylesheet, yielding
+    (media_ctx_list, selector_prelude, body). Robust exact-prelude parsing."""
+    # strip comments preserving newlines
+    out = []; i = 0; n = len(css)
+    while i < n:
+        if css[i] == '/' and i + 1 < n and css[i + 1] == '*':
+            j = css.find('*/', i + 2); j = n if j < 0 else j + 2
+            out.append('\n' * css.count('\n', i, j)); i = j
+        else:
+            out.append(css[i]); i += 1
+    s = ''.join(out)
+    i = 0; n = len(s); stack = []; buf = ''
+    while i < n:
+        c = s[i]
+        if c == '{':
+            prelude = buf.strip(); buf = ''
+            if prelude.startswith('@'):
+                stack.append(prelude); i += 1; continue
+            depth = 1; j = i + 1
+            while j < n and depth > 0:
+                if s[j] == '{': depth += 1
+                elif s[j] == '}': depth -= 1
+                j += 1
+            yield (list(stack), prelude, s[i + 1:j - 1]); buf = ''; i = j; continue
+        elif c == '}':
+            if stack: stack.pop()
+            buf = ''; i += 1; continue
+        else:
+            buf += c; i += 1
+
+
+def _prelude_has(prelude, selector):
+    """True if `selector` is one of the comma-separated selectors in prelude
+    (exact token, trimmed)."""
+    return any(part.strip() == selector for part in prelude.split(','))
+
+
+def _bodies_for(css, selector, *, phone):
+    """All rule bodies for `selector`. phone=False → base (no @media); phone=True
+    → inside a max-width:768px/680px @media."""
+    hits = []
+    for media, prelude, body in _iter_rules(css):
+        if not _prelude_has(prelude, selector):
+            continue
+        joined = ' '.join(media).replace(' ', '')
+        in_phone = ('max-width:768px' in joined) or ('max-width:680px' in joined)
+        if phone and in_phone:
+            hits.append(body)
+        elif (not phone) and (not media):
+            hits.append(body)
+    return hits
+
+
+def test_sweep_base_overlays_use_vh100_guard():
+    """Every A/B-list overlay's BASE rule that pins a viewport height must be
+    guarded by var(--vh100, …). Governs the 837px coarse tablet."""
+    css = open(_CSS_PATH, encoding='utf-8').read()
+    for sel in _SWEEP_BASE_SELECTORS:
+        bodies = _bodies_for(css, sel, phone=False)
+        assert bodies, f'{sel!r} base rule not found — positive test stale.'
+        vh_bodies = [b for b in bodies
+                     if any(_ANY_VH_RE.search(v) for _, v in _HEIGHT_DECL_RE.findall(b))]
+        assert vh_bodies, (f'{sel!r} base rule no longer pins a viewport height '
+                           f'— positive test stale (rule moved/renamed).')
+        for b in vh_bodies:
+            vals = [v for _, v in _HEIGHT_DECL_RE.findall(b) if _ANY_VH_RE.search(v)]
+            assert any('--vh100' in v for v in vals), (
+                f'{sel!r} base rule sets a bare viewport height {vals!r} with '
+                f'NO var(--vh100, …) guard — collapses to 0 in the Android '
+                f'WebView. Add a guarded dual declaration.')
+
+
+def test_sweep_phone_overlays_use_vh100_guard():
+    """Every ≤768/≤680 overlay/drawer/dropdown/sheet that pins a viewport
+    height must be guarded (the phone-block dvh sweep)."""
+    css = open(_CSS_PATH, encoding='utf-8').read()
+    for sel in _SWEEP_PHONE_SELECTORS:
+        bodies = _bodies_for(css, sel, phone=True)
+        assert bodies, f'{sel!r} phone-block rule not found — positive test stale.'
+        for b in bodies:
+            vals = [v for _, v in _HEIGHT_DECL_RE.findall(b) if _ANY_VH_RE.search(v)]
+            if not vals:
+                continue
+            assert any('--vh100' in v for v in vals), (
+                f'{sel!r} phone-block rule sets a bare viewport height {vals!r} '
+                f'with NO var(--vh100, …) guard — collapses to 0 in the Android '
+                f'WebView. Add a guarded dual declaration.')
+
+
+def test_NC_neuter_sweep_bare_vh_trips_the_guard():
+    """NEUTER: strip the guard from a swept base rule (.stg-modal) → flag it."""
+    css = open(_CSS_PATH, encoding='utf-8').read()
+    body = _bodies_for(css, '.stg-modal', phone=False)[0]
+    neutered = re.sub(r'max-height:\s*calc\(var\(--vh100[^;]*;', '', body)
+    vals = [v for _, v in _HEIGHT_DECL_RE.findall(neutered) if _ANY_VH_RE.search(v)]
+    assert vals, 'neuter removed all viewport heights — unexpected'
+    assert not any('--vh100' in v for v in vals), (
+        'neuter no-op — .stg-modal not in the expected guarded form')
+
+
 if __name__ == '__main__':
     test_fullscreen_overlays_use_vh100_guard_not_bare_dvh()
     test_NC_neuter_bare_dvh_trips_the_guard()

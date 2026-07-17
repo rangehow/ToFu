@@ -705,17 +705,156 @@ def test_creator_path_exempt_from_rev_cas():
         'false 409 (CAS-exempt, C1)')
 
 
+# ──────────────────────────────────────────────────────────────────────────
+# TEST W2-guard (static) — rev-not-in-SET across ALL messages writers (W2–W5)
+# ──────────────────────────────────────────────────────────────────────────
+# Extends the W1+W6 rev-not-in-SET guard to the remaining CAS messages writers
+# that Batch 1a will switch. Runs NOW (pre-switch) so it can't regress: it only
+# asserts NO writer writes rev in SET. On HEAD these files carry no rev at all
+# (vacuously pass); after Batch 1a they carry rev ONLY in WHERE — still pass.
+# The moment a switch accidentally puts rev in a SET clause, this goes RED.
+
+def test_no_writer_stamps_rev_in_set_clause_w2_w5():
+    """No W2–W5 messages writer may write ``rev`` in a SET clause — the trigger
+    is the sole bumper. Guards the Batch-1a token switch the same way the W1+W6
+    guard does. Reuses _conversations_update_statements from the W1+W6 guard."""
+    import importlib
+    targets = [
+        'lib.chat.persistence',
+        'lib.message_queue',
+        'lib.tasks_pkg.auto_translate._assistant',
+        'lib.swarm.snapshot',
+        'lib.tasks_pkg.persistence_store',
+    ]
+    scanned = 0
+    for modname in targets:
+        mod = importlib.import_module(modname)
+        stmts = _conversations_update_statements(mod.__file__)
+        for s in stmts:
+            _up = s.upper()
+            _set_i = _up.find('SET ')
+            if _set_i < 0:
+                continue
+            _where_i = _up.find('WHERE', _set_i)
+            set_clause = (s[_set_i:_where_i] if _where_i > _set_i else s[_set_i:])
+            assert 'rev=' not in set_clause.replace(' ', '').lower(), (
+                f'{modname}: a messages UPDATE writes rev in its SET clause — the '
+                f'trigger must be the sole bumper. Offending SQL:\n{s}')
+            scanned += 1
+    assert scanned > 0, 'scanner found no messages UPDATEs across W2–W5 files — broken'
+    _ok(f'W2–W5 files: no messages writer stamps rev in SET ({scanned} UPDATEs scanned)')
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# T-queue (step-3, tests-first) — queued-mirror same-ms must not clobber terminal
+# ──────────────────────────────────────────────────────────────────────────
+
+def test_queue_mirror_same_ms_no_clobber():
+    """The residual same-ms window the owner named: a terminal write lands the
+    final answer, then the queued-user mirror (append_pending_user_msg) fires in
+    the SAME millisecond. Under updated_at CAS the mirror's baseline still equals
+    the row's stamp (frozen clock), so its UPDATE PASSES and clobbers the terminal
+    answer with the mirror's pre-terminal messages array. Under rev CAS the
+    terminal write bumped rev via the trigger, so the mirror MISSES → re-reads →
+    appends onto the fresh tail → BOTH the answer AND the pending user row survive.
+
+    Drives the REAL append_pending_user_msg (W2). Tests-first: RED on HEAD
+    (updated_at), GREEN after Batch 1a switches W2 to rev.
+
+    Reproduction: append_pending_user_msg captures its baseline at loop top; we
+    intercept ITS messages-UPDATE and, just before it lands, fire a terminal-style
+    write (content='FINAL', stamps updated_at & bumps rev). Frozen clock forces
+    the terminal write's updated_at to equal the mirror's baseline ms."""
+    import time as _time
+    from lib.database import DOMAIN_CHAT, get_thread_db, json_dumps_pg
+    from lib.chat.persistence import append_pending_user_msg
+
+    conv_id = 'cv-revcas-queuemirror'
+    db = get_thread_db(DOMAIN_CHAT)
+    # Tail is the running turn's assistant slot (empty), id 'ma' — the gate
+    # append_pending_user_msg requires (tail assistant + _msgId in valid ids).
+    _seed_conv(db, conv_id, [
+        {'role': 'user', 'content': 'U1', 'timestamp': 1, '_msgId': 'mu'},
+        {'role': 'assistant', 'content': '', 'timestamp': 2, '_msgId': 'ma'},
+    ])
+    _msgs0, ua0, _rev0 = _row(db, conv_id)
+    _frozen = ua0 / 1000.0
+    real_execute = db.execute
+    real_time = _time.time
+    state = {'fired': False}
+
+    def _intercept(sql, params=()):
+        # On the mirror's messages-UPDATE, first land a terminal-style write that
+        # sets the answer + bumps rev, THEN let the mirror's UPDATE proceed. Under
+        # the frozen clock the terminal write stamps updated_at==ua0==the mirror's
+        # baseline, so on updated_at the mirror still matches and clobbers.
+        if (not state['fired'] and isinstance(sql, str)
+                and 'UPDATE conversations' in sql and 'SET messages' in sql):
+            state['fired'] = True
+            db.execute = real_execute
+            try:
+                _cur = real_execute(
+                    'SELECT messages FROM conversations WHERE id=? AND user_id=1',
+                    (conv_id,)).fetchone()
+                _m = _json.loads(_cur[0]) if isinstance(_cur[0], str) else _cur[0]
+                _m[-1]['content'] = 'FINAL'
+                _m[-1]['finishReason'] = 'stop'
+                real_execute(
+                    'UPDATE conversations SET messages=?, updated_at=? WHERE id=? AND user_id=1',
+                    (json_dumps_pg(_m), int(_time.time() * 1000), conv_id))
+                db.commit()
+            finally:
+                db.execute = _intercept
+        return real_execute(sql, params)
+
+    try:
+        _time.time = lambda: _frozen
+        db.execute = _intercept
+        try:
+            # valid_assistant_ids must contain the running assistant slot id.
+            append_pending_user_msg(
+                db, conv_id,
+                {'role': 'user', 'content': 'QUEUED', 'timestamp': 3},
+                valid_assistant_ids={'ma'})
+        finally:
+            db.execute = real_execute
+            _time.time = real_time
+
+        assert state['fired'], 'interceptor never fired — no same-ms terminal write injected'
+        msgs = _read_tail(db, conv_id)
+        _assistant = next((m for m in msgs if m.get('_msgId') == 'ma'), None)
+        assert _assistant is not None, 'assistant slot ma vanished'
+        assert _assistant.get('content') == 'FINAL', (
+            'QUEUE-MIRROR CLOBBER: the queued-user mirror overwrote the terminal '
+            f'answer under a same-ms CAS. assistant.content={_assistant.get("content")!r}. '
+            'W2 switching append_pending_user_msg to rev CAS must make the mirror '
+            'MISS-and-reread so the terminal answer survives.')
+        # The pending queued user row should also be present (mirror still lands
+        # its row after the re-read).
+        assert any(m.get('content') == 'QUEUED' for m in msgs), (
+            'the queued user row was lost — mirror should re-read and append it')
+    finally:
+        db.execute = real_execute
+        _time.time = real_time
+        _cleanup(db, conv_id)
+    _ok('queued-mirror same-ms: terminal answer survives + queued row kept (no clobber)')
+
+
 _POSITIVE = [test_rev_distinguishes_same_ms_writers,
              test_terminal_regraft_preserves_concurrent_translation,
              test_neuter_wholedict_regraft_redrops_translation,
              test_terminal_owned_fields_cover_all_writes,
              test_neuter_drift_guard_catches_unregistered_field,
              test_no_writer_stamps_rev_in_set_clause,
+             test_no_writer_stamps_rev_in_set_clause_w2_w5,
              test_creator_path_exempt_from_rev_cas]
 
-# Step-2 contention test kept SEPARATE from _POSITIVE: it is tests-first RED on
-# HEAD (updated_at token) and only turns GREEN after W1+W6 switch to rev CAS.
+# Step-2/3 contention tests kept SEPARATE from _POSITIVE: tests-first RED on HEAD
+# and only GREEN after the corresponding writers switch to rev CAS.
+#   - high_freq…  : GREEN now (W1+W6 already switched, commit 2bd6702)
+#   - queue_mirror: RED now, GREEN after Batch 1a switches W2
 _STEP2_PENDING = [test_high_freq_terminal_translate_contention_loses_nothing]
+_STEP3_PENDING = [test_queue_mirror_same_ms_no_clobber]
 
 
 def _run(fn):
@@ -742,15 +881,21 @@ def main():
     print(_color('Phase-4 §2.2 + step-2 static guards (known-green):', '36'))
     _pos_ok = all(_run(fn) for fn in _POSITIVE)
     print()
-    print(_color('Step-2 contention (tests-first — RED on HEAD, GREEN after W1+W6→rev):', '33'))
+    print(_color('Step-2 contention (W1+W6 switched — GREEN):', '33'))
     _step2 = {fn.__name__: _run(fn) for fn in _STEP2_PENDING}
     for _n, _r in _step2.items():
+        print('   ', _color('GREEN' if _r else 'RED (unexpected!)', '32' if _r else '31'), _n)
+    print()
+    print(_color('Step-3 W2 queued-mirror (tests-first — RED on HEAD, GREEN after Batch 1a):', '33'))
+    _step3 = {fn.__name__: _run(fn) for fn in _STEP3_PENDING}
+    for _n, _r in _step3.items():
         print('   ', _color('GREEN' if _r else 'RED (expected pre-switch)', '32' if _r else '33'), _n)
     print()
     if not _pos_ok:
         _fail('a known-green Phase-4 test failed')
     print(_color(f'═══ {len(_POSITIVE)} known-green PASSED; '
-                 f'{sum(_step2.values())}/{len(_step2)} step-2 contention GREEN ═══', '36'))
+                 f'step-2 {sum(_step2.values())}/{len(_step2)} GREEN; '
+                 f'step-3 {sum(_step3.values())}/{len(_step3)} GREEN (RED expected pre-Batch-1a) ═══', '36'))
     print()
 
 

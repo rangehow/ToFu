@@ -306,19 +306,29 @@ async function deleteConversation(id, e) {
   let conv = conversations.find((c) => c.id === id);
   if (!conv) return;
 
-  /* ★ CRITICAL: a conversation loaded this session as a sidebar shell has
-   *   _needsLoad=true / messages:[] in memory — its history lives only on the
-   *   server.  Snapshotting it as-is would capture ZERO messages, and undo
-   *   would then skip the re-create (syncConversationToServer requires
-   *   messages.length > 0) → the conversation is permanently lost despite the
-   *   "restored" toast.  So for an unloaded conv we MUST fetch the full body
-   *   from the server BEFORE deleting, exactly like duplicateConversation. */
-  const _needsHydrate = !!conv._needsLoad ||
-    (conv.messages.length === 0 && (conv._serverMsgCount || 0) > 0);
-  /* When true, we could NOT capture a full local snapshot (hydration failed on
-   *   a flaky link), so the undo affordance can't restore history — the delete
-   *   still proceeds (the server row is authoritative), but WITHOUT an undo
-   *   toast, after explicit user consent below. */
+  /* ★ CRITICAL: undo re-creates the server row from a client-side snapshot, so
+   *   that snapshot MUST hold the conversation's COMPLETE message history. Two
+   *   ways it can be incomplete in memory:
+   *     • a sidebar SHELL (`_needsLoad:true` / `messages:[]`) — history lives
+   *       only on the server;
+   *     • a WINDOWED open (`recordWindowState` loaded only the tail N and set
+   *       `_serverMsgCount = totalCount`), so `messages.length < _serverMsgCount`
+   *       — the oldest messages are absent locally.
+   *   In BOTH cases snapshotting as-is and later restoring would re-create a
+   *   conv missing its head — silent data loss. The single yardstick is
+   *   "do we hold every message the server has?": `messages.length >=
+   *   _serverMsgCount`. When we don't, materialise the full body BEFORE
+   *   snapshotting, exactly like duplicateConversation. */
+  const _serverTotal = () => (conv._serverMsgCount || 0);
+  /* Local snapshot is missing history iff the server has messages we don't
+   *   hold locally (covers both the empty-shell and windowed-tail cases). */
+  const _snapshotIncomplete = () => _serverTotal() > 0 && conv.messages.length < _serverTotal();
+  const _needsHydrate = !!conv._needsLoad || _snapshotIncomplete();
+  /* When true, we could NOT capture a COMPLETE local snapshot (hydration failed
+   *   on a flaky link, or a windowed body couldn't be completed), so the undo
+   *   affordance can't faithfully restore history — the delete still proceeds
+   *   (the server row is authoritative), but WITHOUT an undo toast, after
+   *   explicit user consent below. */
   let _undoUnavailable = false;
   if (_needsHydrate) {
     try {
@@ -329,18 +339,49 @@ async function deleteConversation(id, e) {
     /* Re-read: the conv may have been removed/replaced during the await. */
     conv = conversations.find((c) => c.id === id);
     if (!conv) return;
-    /* ★ HYDRATION FAILED (server unreachable / load timed out → messages stayed
-     *   empty while the server has history). The DELETE itself is always safe —
-     *   the server row is authoritative and needs no local body. What we lose is
-     *   only the UNDO snapshot (it would be hollow). Historically we hard-refused
-     *   the delete here, but that PERMANENTLY BLOCKS deleting a sidebar-shell
-     *   conv whenever the tunnel is slow (the reported "delete always fails" bug:
-     *   with windowed reads on + hundreds of shell convs, hydration frequently
-     *   times out). Instead, ask for explicit consent, then delete WITHOUT the
-     *   undo toast — fail-open-with-consent, not fail-closed. */
-    if (conv.messages.length === 0 && (conv._serverMsgCount || 0) > 0) {
-      debugLog(`[deleteConv] hydrate failed for conv ${id.slice(0,8)} ` +
-        `(${conv._serverMsgCount} server msgs, 0 local); confirming delete-without-undo`, 'warn');
+    /* ★ WINDOWED-TAIL COMPLETION: loadConversationMessages honours the default
+     *   window (60), so on a long conv it leaves only the tail — `messages.length
+     *   < _serverMsgCount`. Snapshotting that would let undo re-create a conv
+     *   missing its oldest messages. Force a FULL (window=0) fetch to complete
+     *   the body before we snapshot. (No-op when the standard load already
+     *   returned everything, e.g. a short conv or a genuine empty-shell where
+     *   the windowed fetch also came back empty.) */
+    if (conv.messages.length > 0 && _snapshotIncomplete()) {
+      try {
+        const _full = await Api.conversations.get(id, { query: { window: '0' } });
+        conv = conversations.find((c) => c.id === id);
+        if (!conv) return;
+        if (_full && Array.isArray(_full.messages) &&
+            _full.messages.length >= conv.messages.length) {
+          conv.messages = _full.messages;
+          conv._serverMsgCount = _full.messages.length;
+          /* The full array supersedes the windowed view — clear pagination
+           *   state so the snapshot (and any subsequent render) treats it as
+           *   the complete history, not a tail with more-above. */
+          conv._windowed = false;
+          conv._hasMoreEarlier = false;
+          conv._trimmed = false;
+          debugLog(`[deleteConv] completed windowed body for conv ${id.slice(0,8)} ` +
+            `→ ${conv.messages.length} msgs before snapshot`, 'info');
+        }
+      } catch (err) {
+        debugLog(`[deleteConv] full-body fetch before snapshot failed: ${err && err.message}`, 'warn');
+      }
+    }
+    /* ★ SNAPSHOT STILL INCOMPLETE (server unreachable / load timed out → 0 msgs,
+     *   OR a windowed tail we couldn't complete → messages.length < total). The
+     *   DELETE itself is always safe — the server row is authoritative and needs
+     *   no local body. What we'd lose is only a FAITHFUL undo snapshot.
+     *   Historically we hard-refused the delete here, but that PERMANENTLY
+     *   BLOCKS deleting a shell/long conv whenever the tunnel is slow (the
+     *   reported "delete always fails" bug: windowed reads on + hundreds of
+     *   shell convs → hydration frequently times out). Instead, ask for explicit
+     *   consent, then delete WITHOUT the undo toast — fail-open-with-consent,
+     *   not fail-closed. */
+    if (_snapshotIncomplete()) {
+      debugLog(`[deleteConv] incomplete snapshot for conv ${id.slice(0,8)} ` +
+        `(${conv._serverMsgCount} server msgs, ${conv.messages.length} local); ` +
+        `confirming delete-without-undo`, 'warn');
       const _confirmed = (typeof showConfirm === 'function')
         ? await showConfirm(t('sidebar.deleteNoUndoBody'), {
             title: t('sidebar.deleteNoUndoTitle'),

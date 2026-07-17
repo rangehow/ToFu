@@ -271,10 +271,14 @@ def test_detector_NEUTER_without_byte_gate_launders_to_eviction():
                              usage=_usage_no_bytes(r2, cache_read=40000))
     _cache_states.clear()
     assert out is not None
-    # Without the byte gate the lossy canonical says "identical" → eviction.
-    assert 'upstream cache eviction' in str(out), (
+    # Without the byte gate the lossy canonical says "identical" → the miss is
+    # laundered into the generic byte-identical non-culprit verdict (the
+    # current honest wording names an "upstream cache miss" possibility rather
+    # than a confident eviction), and the <bytes> culprit is never named.
+    assert 'upstream cache miss' in str(out), (
         'NEUTER expectation: without _wire_bytes the reasoning_details rebuild '
-        f'is invisible → laundered into eviction — got: {out}')
+        f'is invisible → laundered into the byte-identical verdict — got: {out}')
+    assert '<bytes>' not in str(out)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -393,6 +397,7 @@ def test_detector_NEUTER_without_region_gate_launders_system_flip():
                                  msgs2, sys_block, [], cache_read=40000)))
     _cache_states.clear()
     assert out is not None
-    assert 'upstream cache eviction' in str(out), (
+    assert 'upstream cache miss' in str(out), (
         'NEUTER expectation: without _wire_region the system wrapping flip is '
-        f'invisible → laundered into eviction — got: {out}')
+        f'invisible → laundered into the byte-identical verdict — got: {out}')
+    assert '<bytes>system' not in str(out)

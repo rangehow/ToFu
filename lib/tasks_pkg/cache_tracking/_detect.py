@@ -124,12 +124,16 @@ def _resolve_break_cause(
     post-translation wire fingerprint (see ``wire_fingerprint.py``) showed the
     actual sent bytes were byte-for-byte identical to the previous round.
     CRUCIALLY, byte-identity proves only that the miss is NOT a client-side
-    prefix change — it does NOT prove a random SERVER fault. A byte-identical
-    prefix that is not read back was EVICTED before read, and the dominant
-    cause of that here is on our side of the fence: single-key LRU pressure
-    (all traffic on one upstream key, evicted under a concurrency spike) or a
-    soft-affinity routing flip onto a cold key. So the verdict names an
-    "upstream cache eviction", NEVER "random server failure".
+    prefix change THIS ROUND — it says nothing about the cause. A byte-identical
+    prefix that is not read back was not reused upstream; that can be an
+    ordinary upstream miss (a per-request gateway miss, a TTL boundary) or
+    contention in this key's shared cache pool when several large prefixes are
+    active at once. So the verdict names an "upstream cache miss" WITHOUT
+    asserting a single confident cause. NOTE the systemic picture: most cache
+    misses in this system are CLIENT-side (already-cached bytes re-serialized
+    differently across turns) — those take the ``<bytes>`` / ``prefix_mutation``
+    branches above and are named there. This byte-identical branch is the
+    comparatively RARE residual, so it must not over-claim.
 
     ⚠ The eviction verdict is DOUBLE-gated. ``wire_proven_identical`` requires
     BOTH the lossy canonical fingerprint AND the TRUE per-message serialized
@@ -223,44 +227,43 @@ def _resolve_break_cause(
         return f'{_base} [changed: {_culprits}]' if _culprits else _base
     if elapsed > 300:
         return 'TTL expiry (>5min gap, prompt unchanged)'
-    # ── Upstream cache eviction — byte-identical, so NOT a client byte change ──
+    # ── Upstream cache miss — byte-identical, so NOT a client byte change THIS
+    #    round ──
     # The wire fingerprint confirmed our sent bytes were IDENTICAL to last
-    # round, so the miss cannot be a client-side prefix mutation. But
-    # byte-identity is NOT proof of a random SERVER fault: an identical prefix
-    # that comes back with a dropped/zero cache_read is the signature of the
-    # cached entry being EVICTED before we read it — and the dominant cause of
-    # that here is on OUR side of the fence, not the gateway's dice:
-    #   * shared-pool LRU pressure — every conversation on one upstream key
-    #     shares ONE finite server-side cache pool (observed: opus rounds all
-    #     on a single key), so several concurrent big prefixes LRU-evict one
-    #     another's entry; it reads back once the competitors drain (the
-    #     R3-hit → R4-miss → R6-rebound pattern).
-    # The admission gate holds the WORKING SET of big prefixes resident, but it
-    # only engages ABOVE its size threshold — a prefix below that threshold
-    # (observed dominant class: ~120-140k-token turns under a 150k gate) is not
-    # held resident and evicts freely under contention. Addressed on OUR side
-    # (dispatcher admission control: threshold + residency + warm-key hold),
-    # NOT by anything in the request body. So we state the eviction as fact but
-    # NAME it an upstream-cache eviction, never "random server failure".
-    # (A genuine cross-KEY move is NOT claimed here: on a single-key deployment
-    # there is no cold key to flip onto; multi-key affinity is handled by the
-    # sticky-key hold, whose rebinds — if any — are logged separately.)
+    # round, so THIS round's miss is not a client-side prefix mutation. But
+    # byte-identity does not tell us the cause: an identical prefix that comes
+    # back with a dropped cache_read simply was not reused upstream. That can be
+    # an ordinary upstream miss (a per-request gateway miss, a TTL boundary) or
+    # contention in this key's shared cache pool when several large prefixes are
+    # active at once — we do NOT claim which, and we do NOT assert it is or is
+    # not a server fault. IMPORTANT systemic note: the DOMINANT cache-miss cause
+    # in this system is CLIENT-side (already-cached bytes re-serialized
+    # differently across turns), and those are caught+named on the <bytes> /
+    # prefix_mutation branches ABOVE — a stable client (byte-identical prefixes
+    # every round) has been observed to drive misses to ~zero. This
+    # byte-identical branch is therefore the comparatively RARE residual; word
+    # it as a possibility, not a confident verdict, and never over-claim a
+    # single mechanism.
     if wire_proven_identical:
         if cache_read > _MIN_CACHE_MISS_TOKENS:
-            return ('upstream cache eviction — bytes were byte-identical to the '
-                    'previous round, so this is NOT a client change and NOT a '
-                    'random server failure: the cached prefix was evicted from '
-                    'the shared cache pool on this key before read (concurrent '
-                    'large prefixes on the same key LRU-evict one another; a '
-                    'prefix below the admission-gate threshold is not held '
-                    'resident). Only the body past the static prefix was not '
-                    'read back')
-        return ('upstream cache eviction — bytes were byte-identical to the '
-                'previous round, so this is NOT a client change and NOT a '
-                'random server failure: the whole cached prefix was evicted '
-                'from the shared cache pool on this key before read (concurrent '
-                'large prefixes on the same key LRU-evict one another; a prefix '
-                'below the admission-gate threshold is not held resident)')
+            return ('prefix not read back though the wire bytes were '
+                    'byte-identical to the previous round — so this round is '
+                    'NOT a client-side prefix change. The cached prefix was not '
+                    'reused upstream: most likely an upstream cache miss (a '
+                    'per-request gateway miss, a TTL boundary, or contention in '
+                    'this key\'s shared cache pool when several large prefixes '
+                    'are active at once). Only the body past the static prefix '
+                    'was not read back. (Most misses in this system are instead '
+                    'client-side and are named per-field above; this is not '
+                    'that class.)')
+        return ('prefix not read back though the wire bytes were byte-identical '
+                'to the previous round — so this round is NOT a client-side '
+                'prefix change. The whole cached prefix was not reused '
+                'upstream: most likely an upstream cache miss (a per-request '
+                'gateway miss, a TTL boundary, or contention in this key\'s '
+                'shared cache pool when several large prefixes are active at '
+                'once). (Most misses in this system are instead client-side and '
+                'are named per-field above; this is not that class.)')
     # ── Wire fingerprint UNAVAILABLE → legacy elimination guess (unproven) ──
     if cache_read > _MIN_CACHE_MISS_TOKENS:
         return ('likely server-side cache miss (UNPROVEN — no wire '

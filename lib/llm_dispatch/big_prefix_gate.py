@@ -5,21 +5,27 @@ Why this exists
 Anthropic's prompt cache is keyed **per API key**: each upstream key has one
 shared server-side cache namespace with a finite working set.  When several
 conversations with LARGE prompt prefixes (25万–43万 token opus turns) are
-in-flight on the *same* key at once, they LRU-evict each other's cached
-prefix — every eviction costs a full ``cache_creation`` re-write + 0% read on
+in-flight on the *same* key at once, they can LRU-evict each other's cached
+prefix — an eviction costs a full ``cache_creation`` re-write + 0% read on
 the next round, then the prefix "rebounds" to a hit once it re-writes and the
 competitor gets evicted instead.  Live evidence (2026-07-16, key ``key_0``):
 in a dense 20:42–20:47 window 5 concurrent opus convs oscillated between
 ``cache_r=0`` (whole prefix evicted), ``cache_r≈79k`` (only the shared
-system/tools floor survived) and full read-back — the classic mutual-eviction
-signature.  Because opus was configured on a *single* key, all that load piled
-into one cache namespace.
+system/tools floor survived) and full read-back — the mutual-eviction signature.
 
-This gate is the client-side root guard that holds regardless of how many keys
-exist: cap the number of concurrently-inflight BIG-prefix requests on any one
-key.  A request over :func:`threshold_tokens` acquires a per-key slot before
+⚠ SCOPE / HONESTY: this concurrency eviction is a REAL but SUB-DOMINANT cause.
+The dominant cache-miss cause in this system is CLIENT-side — already-cached
+prefix bytes re-serialized differently across turns (see the ``<bytes>`` /
+prefix-mutation detection in ``lib/tasks_pkg/cache_tracking``); when the client
+wire bytes are stable, misses have been observed to drop to ~zero regardless of
+key count. Do NOT read this gate as "the" fix for prefix-cache misses — it only
+bounds the concurrency residual, and on a single key it can only SERIALIZE the
+working set, not add capacity.
+
+This gate caps the number of concurrently-resident BIG-prefix requests on any
+one key.  A request over :func:`threshold_tokens` acquires a per-key slot before
 its stream and releases it after; when the key is at capacity a new big request
-briefly WAITS instead of piling on and blowing the cache.  Small requests
+briefly WAITS instead of piling on and evicting a warm prefix.  Small requests
 (translate, cheap models, short turns) never gate.
 
 It is a *soft* guard: bounded wait, then proceed degraded — better to serve a

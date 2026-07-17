@@ -35,14 +35,23 @@ const _CACHE_CAUSE_PHRASES = [
   // leaves the remainder untranslated (e.g. the bare 'stochastic server-side
   // cache miss' alias would eat the prefix of the full sentence). Each block
   // below is sorted full-sentence → clause → short alias.
-  // ── Upstream-eviction verdict (2026-07: byte-identical prefix NOT read back
-  //    — see lib/tasks_pkg/cache_tracking/_detect.py + wire_fingerprint.py).
-  //    Byte-identity proves the miss is NOT a client change, but is NOT proof
-  //    of a random server fault: an identical prefix that isn't read back was
-  //    EVICTED before read — single-key LRU pressure under concurrency, or a
-  //    soft-affinity routing flip onto a cold key. OUR side of the fence,
-  //    fixable via dispatcher admission control. FULL sentences precede
-  //    clauses. ──
+  // ── Byte-identical upstream-miss verdict (2026-07: byte-identical prefix NOT
+  //    read back — see lib/tasks_pkg/cache_tracking/_detect.py). Byte-identity
+  //    proves the miss is NOT a client prefix change THIS round; it does NOT
+  //    assert a confident cause (an ordinary gateway miss, a TTL boundary, or
+  //    shared-pool contention are all possible). Most misses in this system
+  //    are instead CLIENT-side (bytes re-serialized across turns) and are
+  //    named per-field elsewhere. FULL sentences precede clauses. ──
+  ['prefix not read back though the wire bytes were byte-identical to the previous round — so this round is NOT a client-side prefix change. The cached prefix was not reused upstream: most likely an upstream cache miss (a per-request gateway miss, a TTL boundary, or contention in this key\'s shared cache pool when several large prefixes are active at once). Only the body past the static prefix was not read back. (Most misses in this system are instead client-side and are named per-field above; this is not that class.)',
+   '前缀未被读回，尽管本轮发出的字节与上一轮逐字节相同——因此本轮不是客户端的前缀改动。缓存前缀未在上游被复用：很可能是一次上游缓存未命中（网关偶发的单次未命中、TTL 边界，或该 key 的共享缓存池在多个大前缀同时活跃时的争抢）。仅静态前缀之后的正文未被读回。（本系统里大多数未命中其实是客户端引起的，并已在上方逐字段点名；本条不属于那一类。）'],
+  ['prefix not read back though the wire bytes were byte-identical to the previous round — so this round is NOT a client-side prefix change. The whole cached prefix was not reused upstream: most likely an upstream cache miss (a per-request gateway miss, a TTL boundary, or contention in this key\'s shared cache pool when several large prefixes are active at once). (Most misses in this system are instead client-side and are named per-field above; this is not that class.)',
+   '前缀未被读回，尽管本轮发出的字节与上一轮逐字节相同——因此本轮不是客户端的前缀改动。整段缓存前缀未在上游被复用：很可能是一次上游缓存未命中（网关偶发的单次未命中、TTL 边界，或该 key 的共享缓存池在多个大前缀同时活跃时的争抢）。（本系统里大多数未命中其实是客户端引起的，并已在上方逐字段点名；本条不属于那一类。）'],
+  ['prefix not read back though the wire bytes were byte-identical to the previous round', '前缀未被读回，尽管本轮发出的字节与上一轮逐字节相同'],
+  ['most likely an upstream cache miss (a per-request gateway miss, a TTL boundary, or contention in this key\'s shared cache pool when several large prefixes are active at once)', '很可能是一次上游缓存未命中（网关偶发的单次未命中、TTL 边界，或该 key 的共享缓存池在多个大前缀同时活跃时的争抢）'],
+  ['Most misses in this system are instead client-side and are named per-field above; this is not that class.', '本系统里大多数未命中其实是客户端引起的，并已在上方逐字段点名；本条不属于那一类。'],
+  ['so this round is NOT a client-side prefix change', '因此本轮不是客户端的前缀改动'],
+  // ── Legacy byte-identical eviction verdicts (older persisted rounds said
+  //    "upstream cache eviction …"; kept so historical messages still translate). ──
   ['upstream cache eviction — bytes were byte-identical to the previous round, so this is NOT a client change and NOT a random server failure: the cached prefix was evicted from the shared cache pool on this key before read (concurrent large prefixes on the same key LRU-evict one another; a prefix below the admission-gate threshold is not held resident). Only the body past the static prefix was not read back',
    '上游缓存被驱逐——本轮字节与上一轮逐字节相同，因此这既不是客户端改动、也不是服务端随机失败：缓存前缀在被读回前，就被同一 key 上的共享缓存池挤出了（同一 key 上多个大前缀并发时会互相 LRU 驱逐；低于准入门槛的前缀不会被驻留保护）。仅静态前缀之后的正文未被读回'],
   ['upstream cache eviction — bytes were byte-identical to the previous round, so this is NOT a client change and NOT a random server failure: the whole cached prefix was evicted from the shared cache pool on this key before read (concurrent large prefixes on the same key LRU-evict one another; a prefix below the admission-gate threshold is not held resident)',
@@ -185,12 +194,12 @@ function _cacheBreakReason(cb) {
  *   'culprit' — WE mutated the cached prefix; the cause names the exact
  *               msg.field. Actionable, our fault. (prefix_mutation key, OR any
  *               client-side change: system_prompt/tools/model/message_count.)
- *   'eviction'— the wire bytes were byte-identical (NOT a client change) yet
- *               the prefix was not read back → the cached entry was EVICTED
- *               before read. NOT a random server fault: single-key LRU
- *               pressure / cold-key routing flip — actionable on OUR
- *               dispatcher side. (Also matches legacy 'PROVEN' rows.)
- *   'unproven'— server-side is only a guess (no wire fingerprint captured).
+ *   'eviction'— LEGACY persisted rows only: an older byte-identical verdict
+ *               that asserted an upstream eviction. Current byte-identical
+ *               rows no longer over-claim a cause — they read as 'unproven'.
+ *               (Also matches legacy 'PROVEN' rows.)
+ *   'unproven'— server-side is only a possibility, not a confident cause
+ *               (a byte-identical upstream miss, or no wire fingerprint).
  *   ''        — no break.
  * Keyed off the backend cause text so it can never drift from what
  * _cacheBreakReason renders. */

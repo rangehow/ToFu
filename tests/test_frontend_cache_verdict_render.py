@@ -97,11 +97,11 @@ check('proven_no_leftover_english', !_leftover(zhProven));
 check('unproven_no_leftover_english', !_leftover(zhUnproven));
 check('proven_is_chinese', zhProven.indexOf('已实证') !== -1);
 check('unproven_is_chinese', zhUnproven.indexOf('未证实') !== -1);
-// The CURRENT eviction wording also fully Sinicizes with no leftover English.
-const _evict = 'upstream cache eviction — bytes were byte-identical to the previous round, so this is NOT a client change and NOT a random server failure: the whole cached prefix was evicted from the shared cache pool on this key before read (concurrent large prefixes on the same key LRU-evict one another; a prefix below the admission-gate threshold is not held resident)';
+// The CURRENT byte-identical wording (no over-claim) fully Sinicizes too.
+const _evict = 'prefix not read back though the wire bytes were byte-identical to the previous round — so this round is NOT a client-side prefix change. The whole cached prefix was not reused upstream: most likely an upstream cache miss (a per-request gateway miss, a TTL boundary, or contention in this key\'s shared cache pool when several large prefixes are active at once). (Most misses in this system are instead client-side and are named per-field above; this is not that class.)';
 const zhEvict = _translateCacheCause(_evict);
-check('eviction_no_leftover_english', !_leftover(zhEvict));
-check('eviction_is_chinese', zhEvict.indexOf('上游缓存被驱逐') !== -1);
+check('byteident_no_leftover_english', !_leftover(zhEvict));
+check('byteident_is_chinese', zhEvict.indexOf('前缀未被读回') !== -1);
 
 // English UI path: returned verbatim (no Sinicization).
 _i18nLang = 'en';
@@ -109,12 +109,15 @@ check('english_verbatim', _translateCacheCause(_proven) === _proven);
 _i18nLang = 'zh';
 
 // ── 2. State classification ──
-// The current backend wording: a byte-identical read drop is an upstream
-// cache eviction (our-side LRU/routing), classified 'eviction'.
-const _eviction = 'upstream cache eviction — bytes were byte-identical to the previous round, so this is NOT a client change and NOT a random server failure: the whole cached prefix was evicted from the shared cache pool on this key before read (concurrent large prefixes on the same key LRU-evict one another; a prefix below the admission-gate threshold is not held resident)';
-check('state_eviction', _cacheBreakState({ server_side: _eviction }) === 'eviction');
-// Legacy persisted rows said "server-side … PROVEN" for the SAME phenomenon —
-// they must fold into the same 'eviction' state, never the reassuring teal.
+// The CURRENT backend wording no longer over-claims: a byte-identical read
+// drop is named an upstream cache MISS possibility → classified 'unproven'.
+const _byteIdent = 'prefix not read back though the wire bytes were byte-identical to the previous round — so this round is NOT a client-side prefix change. The whole cached prefix was not reused upstream: most likely an upstream cache miss (a per-request gateway miss, a TTL boundary, or contention in this key\'s shared cache pool when several large prefixes are active at once). (Most misses in this system are instead client-side and are named per-field above; this is not that class.)';
+check('state_byteident_is_unproven', _cacheBreakState({ server_side: _byteIdent }) === 'unproven');
+// LEGACY persisted rows: the old 'upstream cache eviction' verdict + the older
+// 'server-side … PROVEN' wording must still fold into 'eviction' so history
+// renders consistently (never the reassuring teal).
+const _legacyEvict = 'upstream cache eviction — bytes were byte-identical to the previous round, so this is NOT a client change and NOT a random server failure: the whole cached prefix was evicted from the shared cache pool on this key before read';
+check('state_legacy_eviction', _cacheBreakState({ server_side: _legacyEvict }) === 'eviction');
 check('state_legacy_proven_is_eviction', _cacheBreakState({ server_side: _proven }) === 'eviction');
 check('state_unproven', _cacheBreakState({ server_side: _unproven }) === 'unproven');
 check('state_culprit_prefix_mutation',
@@ -242,15 +245,15 @@ check('render_shows_culprit_text',
 check('render_has_culprit_state_class', html.indexOf('cp-break-culprit') !== -1);
 check('render_has_our_edit_badge', html.indexOf('OUR-EDIT-BADGE') !== -1);
 
-// An upstream-eviction round (byte-identical, read not reused): badge present,
-// but NO culprit line (not a client byte change) — and it must NOT render the
-// reassuring teal 'proven' class that implied "nothing to fix".
+// A byte-identical round (read not reused): badge present, but NO culprit line
+// (not a client byte change) — and it must NOT render the reassuring teal
+// 'proven' class. Current wording classifies 'unproven'.
 const html2 = _buildCostPopover(_ctx({ server_side:
-  'upstream cache eviction — bytes were byte-identical to the previous round, so this is NOT a client change and NOT a random server failure: the whole cached prefix was evicted from the shared cache pool on this key before read (concurrent large prefixes on the same key LRU-evict one another; a prefix below the admission-gate threshold is not held resident)' }));
-check('eviction_has_badge', html2.indexOf('EVICTION-BADGE') !== -1);
-check('eviction_no_culprit_line', html2.indexOf('cp-break-culprit') === -1);
-check('eviction_state_class', html2.indexOf('cp-break-eviction') !== -1);
-check('eviction_not_proven_teal', html2.indexOf('cp-break-proven') === -1);
+  'prefix not read back though the wire bytes were byte-identical to the previous round — so this round is NOT a client-side prefix change. The whole cached prefix was not reused upstream: most likely an upstream cache miss (a per-request gateway miss, a TTL boundary, or contention in this key\'s shared cache pool when several large prefixes are active at once). (Most misses in this system are instead client-side and are named per-field above; this is not that class.)' }));
+check('byteident_has_badge', html2.indexOf('UNPROVEN-BADGE') !== -1);
+check('byteident_no_culprit_line', html2.indexOf('cp-break-culprit') === -1);
+check('byteident_state_class', html2.indexOf('cp-break-unproven') !== -1);
+check('byteident_not_proven_teal', html2.indexOf('cp-break-proven') === -1);
 
 console.log(out.join('\n'));
 """

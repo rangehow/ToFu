@@ -1168,7 +1168,10 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
         # ── Per-key big-prefix admission control ──
         # Bound the key's cache WORKING SET so several big conversations don't
         # LRU-evict each other's prompt cache in the key's shared namespace (the
-        # mutual-eviction / rebound miss). Residency-aware: admission counts the
+        # mutual-eviction / rebound miss). This is a SUB-DOMINANT residual — the
+        # dominant miss cause is client-side prefix re-serialization, caught in
+        # cache_tracking; this gate only bounds the concurrency residual.
+        # Residency-aware: admission counts the
         # distinct big prefixes RESIDENT on the key within the cache-TTL window
         # (not just concurrent streams), so a warm same-conv re-run passes free
         # while a NEW distinct big prefix waits when the working set is full.
@@ -1176,18 +1179,37 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
         # flow-non-overlap-but-residency-overlap case the old stream-only gate
         # was blind to. Soft + env-gated (see big_prefix_gate.py).
         import contextlib as _contextlib
+        _cache_conv_id = ''
+        _est_tok = 0
         try:
             from lib.llm_dispatch.big_prefix_gate import (
                 big_prefix_slot, estimate_prefix_tokens,
             )
             from lib.llm_dispatch.conv_affinity import get_conv_affinity
+            _cache_conv_id = get_conv_affinity() or ''
             _est_tok = estimate_prefix_tokens(body)
             _big_gate = big_prefix_slot(
-                slot.key_name, _est_tok, conv_id=get_conv_affinity() or '',
+                slot.key_name, _est_tok, conv_id=_cache_conv_id,
                 log_prefix=tag)
         except ImportError as _bpg_err:
             logger.debug('%s big-prefix gate unavailable: %s', tag, _bpg_err)
             _big_gate = _contextlib.nullcontext()
+
+        # ── Cache write-visibility settle gate (Anthropic SDK #1451 race) ──
+        # If THIS conversation's prior big round's stream ended less than the
+        # settle window ago, briefly wait so its cache WRITE is visible upstream
+        # before this round tries to read the prefix back — otherwise the read
+        # misses and the whole prefix is re-billed (the dominant floor-miss in
+        # fast tool-loop / autopilot conversations). The wait sits inside the
+        # agent's own tool loop (never delays a turn's FIRST request), is
+        # adaptive (only the remainder of the window), abort-aware, and
+        # env-gated. See cache_settle.py.
+        try:
+            from lib.llm_dispatch.cache_settle import settle_before_send
+            settle_before_send(_cache_conv_id, _est_tok,
+                               abort_check=abort_check, log_prefix=tag)
+        except ImportError as _cs_err:
+            logger.debug('%s cache-settle gate unavailable: %s', tag, _cs_err)
 
         try:
           with _big_gate:
@@ -1238,6 +1260,17 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
                             log_prefix, finish, slot.model,
                             slot.provider_id, latency, state.hard_attempts + 1,
                             max_retries)
+            # ── Cache write-visibility settle: mark this conv's stream END ──
+            # The NEXT big request on this conversation measures its gap from
+            # here and settles if it arrives before the prior write is visible
+            # (see cache_settle.py / settle_before_send above).
+            if _cache_conv_id:
+                try:
+                    from lib.llm_dispatch.cache_settle import record_stream_end
+                    record_stream_end(_cache_conv_id)
+                except ImportError as _cs_err:
+                    logger.debug('%s cache-settle record unavailable: %s',
+                                 tag, _cs_err)
             return msg, finish, usage
 
         except RateLimitError as e:

@@ -282,19 +282,23 @@ class TestWireFingerprintVerdict:
         detect_cache_break('wire-1', msgs, None, 'claude-opus-4',
                            usage={'cache_read_tokens': 90000,
                                   '_wire_fp': fp, '_wire_static': st})
-        # Round 2: read DROPS but the wire bytes are IDENTICAL → not a client
-        # change, but NOT a random server fault either — an upstream cache
-        # eviction (shared-pool LRU on one key), named as such.
+        # Round 2: read DROPS but the wire bytes are IDENTICAL → THIS round is
+        # not a client-side prefix change. The verdict names an upstream cache
+        # MISS as a possibility WITHOUT over-claiming a single confident cause
+        # (no 'eviction PROVEN', no 'NOT a random server failure' assertion),
+        # and points to the client-side branches as the systemic dominant class.
         r2 = detect_cache_break('wire-1', msgs, None, 'claude-opus-4',
                                 usage={'cache_read_tokens': 40000,
                                        '_wire_fp': fp, '_wire_static': st})
         assert r2 is not None
         cause = r2['server_side']
-        assert 'upstream cache eviction' in cause
         assert 'byte-identical' in cause
-        # The verdict must NOT imply a random server failure (the whole point).
-        assert 'random server failure' in cause  # names it only to negate it
-        assert 'NOT a random server failure' in cause
+        assert 'NOT a client-side prefix change' in cause
+        assert 'upstream cache miss' in cause
+        # Must NOT over-claim: no confident eviction verdict, no 'not a random
+        # server failure' assertion, no PROVEN/UNPROVEN label.
+        assert 'upstream cache eviction' not in cause
+        assert 'NOT a random server failure' not in cause
         assert 'PROVEN' not in cause
         assert 'UNPROVEN' not in cause
 
@@ -359,12 +363,13 @@ class TestWireFingerprintVerdict:
                                        '_wire_fp': fp2, '_wire_static': st2})
         assert r2 is not None
         # The wrapping flip is erased → NOT a prefix mutation → the byte-
-        # identical read drop is named an upstream cache eviction (our-side
-        # LRU/routing), never a random server failure.
+        # identical read drop is named an upstream cache MISS possibility, not a
+        # client culprit and not an over-claimed eviction verdict.
         assert 'prefix_mutation' not in r2
         assert 'server_side' in r2
-        assert 'upstream cache eviction' in r2['server_side']
-        assert 'NOT a random server failure' in r2['server_side']
+        assert 'NOT a client-side prefix change' in r2['server_side']
+        assert 'upstream cache miss' in r2['server_side']
+        assert 'upstream cache eviction' not in r2['server_side']
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

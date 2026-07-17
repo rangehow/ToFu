@@ -163,6 +163,50 @@ def test_base_pm_workbench_height_uses_vh100_guard():
         f'height:min(720px, calc(var(--vh100,100vh)*0.82)).')
 
 
+# Preview-modal (model-view / image / PDF popup) base-rule selectors. These
+# live in a BASE rule (styles.css ~7013) and are governed by that base rule on
+# the 769–1024px coarse-pointer tablet (the phone block's preview fix does not
+# reach it). Bare `85vh`/`90vh` there collapses the flex popup to a thin line in
+# the Android WebView. Regression 2026-07-17 (model-view button → thin line;
+# diagnostics innerWidth 837, vh100 1242px). Unlike the fullscreen overlays
+# these use partial-viewport values (85vh/90vh), so match ANY *vh, not 100vh.
+_PREVIEW_SELECTORS = ('.preview-text-panel', '.preview-text-body',
+                      '.preview-body', '.preview-image')
+_ANY_VH_RE = re.compile(r'\d+d?vh')
+
+
+def test_preview_modal_base_heights_use_vh100_guard():
+    css = open(_CSS_PATH, encoding='utf-8').read()
+    checked = 0
+    for selector in _PREVIEW_SELECTORS:
+        body = _base_rule_body(css, selector)
+        vals = [v for _, v in _HEIGHT_DECL_RE.findall(body)
+                if _ANY_VH_RE.search(v)]
+        assert vals, (
+            f'{selector!r} base rule no longer pins a viewport height — '
+            f'positive test stale (rule renamed/moved).')
+        assert any('--vh100' in v for v in vals), (
+            f'{selector!r} base rule sets a bare vh height {vals!r} with NO '
+            f'var(--vh100, …) guard — this collapses to 0 in the Android '
+            f'WebView on the 769–1024px tablet, rendering the model-view popup '
+            f'as a thin line. Add a guarded override like '
+            f'max-height:calc(var(--vh100,100vh)*0.85).')
+        checked += 1
+    assert checked == len(_PREVIEW_SELECTORS)
+
+
+def test_NC_neuter_preview_bare_vh_trips_the_guard():
+    """NEUTER: strip the --vh100 guard from a preview rule → the predicate flags it."""
+    css = open(_CSS_PATH, encoding='utf-8').read()
+    body = _base_rule_body(css, '.preview-text-panel')
+    neutered = re.sub(r'max-height:\s*calc\(var\(--vh100[^;]*;', '', body)
+    vals = [v for _, v in _HEIGHT_DECL_RE.findall(neutered)
+            if _ANY_VH_RE.search(v)]
+    assert vals, 'neuter removed all viewport heights — unexpected'
+    assert not any('--vh100' in v for v in vals), (
+        'neuter no-op — .preview-text-panel not in the expected guarded form')
+
+
 def test_NC_neuter_base_bare_vh_trips_the_guard():
     """NEUTER: strip the base rule's --vh100 guard line → the base-rule
     assertion's core predicate must flag it."""

@@ -107,6 +107,31 @@ def test_NC_reintroduced_round_field_is_flagged():
     assert ok == [], 'the canonical roundNum form must not be flagged'
 
 
+def test_round_boundary_specs_exist_and_use_roundNum():
+    """RENDER_CONTRACT Phase 3 (last criterion): the orchestrator must emit
+    EXPLICIT round boundaries — ROUND_START / ROUND_END — so the client keys
+    round attribution off real boundaries instead of inferring from the first
+    tool_start / llmRound grouping. Both must be registered EventSpecs whose
+    `fields` declare the canonical `roundNum` (consistent with the §5 wire
+    unification). TESTS-FIRST: RED until the specs land.
+    """
+    from lib.agent_core.events import EventType, get_event_spec
+    for const in ('ROUND_START', 'ROUND_END'):
+        assert hasattr(EventType, const), (
+            f'EventType.{const} is missing — the round-boundary events are the '
+            'last Phase 3 criterion (explicit round_start/round_end so the '
+            'reducer stops inferring boundaries from the first tool_start).')
+        wire = getattr(EventType, const)
+        spec = get_event_spec(wire)
+        assert spec is not None, f'{wire} has no registered EventSpec'
+        assert 'roundNum' in spec.fields, (
+            f'{wire} EventSpec must declare the canonical `roundNum` field '
+            f'(got fields={sorted(spec.fields)})')
+        # Must NOT reintroduce the retired bare `round` alias.
+        assert 'round' not in spec.fields, (
+            f'{wire} must use `roundNum`, not the retired bare `round` alias')
+
+
 def _run(fn):
     try:
         fn(); print('  \033[32m✓\033[0m', fn.__name__); return True

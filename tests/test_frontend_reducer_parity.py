@@ -140,6 +140,36 @@ const F3_COLD_SHORT = {
       status: 'done', toolContent: 'a.py' },
   ],
 };
+
+// ── F4: EXPLICIT ROUND BOUNDARIES (RENDER_CONTRACT Phase 3, last criterion) ──
+// A round_start opens the round, deltas + a tool round run inside it, round_end
+// closes it, then a prose-only terminal round (round_start → deltas → round_end,
+// NO tool call). The boundary events are TRANSIENT — they carry no persisted
+// round field — so the reducer must project the LIVE fold to the SAME committed
+// {content,thinking,toolRounds} shape as the settled COLD snapshot (which never
+// stores round_start/end). Also proves tool_start with NO llmRound inherits the
+// open round from round_start (batch grouping keys off the explicit boundary).
+const F4_LIVE = [
+  { type: 'round_start', roundNum: 0 },
+  { type: 'delta', content: 'First I list files.' },
+  { type: 'tool_start', roundNum: 1, toolName: 'run_command', toolCallId: 'tc1', query: 'ls' },  // NO llmRound → inherits _currentRound=0
+  { type: 'delta_reset', roundNum: 0 },
+  { type: 'tool_result', roundNum: 1, toolCallId: 'tc1', results: [{toolName:'run_command',title:'ok',snippet:'a.py'}] },
+  { type: 'tool_done', roundNum: 1, toolCallId: 'tc1', content: 'a.py' },
+  { type: 'round_end', roundNum: 0, reason: 'tools' },
+  { type: 'round_start', roundNum: 1 },
+  { type: 'delta', content: 'Done — found it.' },
+  { type: 'round_end', roundNum: 1, reason: 'final' },
+];
+const F4_COLD = {
+  content: 'Done — found it.',
+  thinking: '',
+  toolRounds: [
+    { roundNum: 1, llmRound: 0, toolName: 'run_command', toolCallId: 'tc1', query: 'ls',
+      status: 'done', results: [{toolName:'run_command',title:'ok',snippet:'a.py'}],
+      toolContent: 'a.py', assistantContent: 'First I list files.' },
+  ],
+};
 '''
 
 
@@ -242,6 +272,49 @@ def test_F3_midround_cold_reconnect_keeplonger_parity():
         'F3 MID-ROUND reconnect divergence — after the keep-longer merge the '
         'cold projection must equal the live projection (this is what makes '
         f'retiring _snapshotLongerRounds safe):\n  live={r["live"]}\n  cold={r["cold"]}')
+
+
+def test_F4_round_boundaries_project_identically():
+    """F4: explicit round_start/round_end boundaries are TRANSIENT — the LIVE
+    fold (which sees them) must project to the SAME committed shape as the COLD
+    snapshot (which never stores them). Also: the tool_start carries NO llmRound
+    and must inherit the open round (0) from round_start, so its canonicalized
+    llmRound matches the settled snapshot's."""
+    r = _parity('F4', 'F4_LIVE', 'F4_COLD')
+    assert r['equal'], (
+        'F4 ROUND-BOUNDARY divergence — the live fold with explicit '
+        'round_start/round_end did not project to the settled snapshot shape '
+        '(boundaries must be transient + tool_start must inherit the open '
+        f'round):\n  live={r["live"]}\n  cold={r["cold"]}')
+
+
+def test_NC_dropped_round_start_breaks_batch_attribution():
+    """NEUTER for the round-boundary routing: if round_start is DROPPED (the
+    reducer never sees the explicit boundary), a tool_start carrying no llmRound
+    can no longer inherit the open round — its llmRound stays null and the
+    projection DIVERGES from the settled snapshot. Proves the reducer genuinely
+    keys batch attribution off the explicit boundary, not incidental state."""
+    body = _harness('''
+  // F4_LIVE with the round_start events STRIPPED (simulate a dropped boundary).
+  const dropped = F4_LIVE.filter(e => e.type !== 'round_start');
+  const C = R.canonicalizeProjectionForCompare;
+  const live = C(R.projectStreamEvents(dropped));
+  const cold = C(R.projectColdSnapshot(F4_COLD));
+  const liveJson = JSON.stringify(live);
+  const coldJson = JSON.stringify(cold);
+  // The tool round's llmRound should now be MISSING (null → omitted), so the
+  // two projections must DIFFER.
+  console.log(JSON.stringify({ ok:true, equal: liveJson === coldJson,
+    live: liveJson, cold: coldJson }));
+''')
+    r = _run_node(body)
+    if not r.get('ok'):
+        pytest.fail(f'reducer/node error: {r.get("reason")} {r.get("stderr","")}')
+    assert not r['equal'], (
+        'NEUTER FAILED: dropping round_start still produced an identical '
+        'projection — the reducer is NOT keying batch attribution off the '
+        'explicit round_start boundary (tool_start must inherit the open round '
+        'from round_start, so removing it must diverge).')
 
 
 def test_cold_projection_is_lossless_preserves_all_round_fields():

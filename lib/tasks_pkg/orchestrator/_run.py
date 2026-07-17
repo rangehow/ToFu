@@ -774,7 +774,19 @@ def run_task(task: dict[str, Any]) -> None:
                 logger.debug('[%s] Task aborted at START of round %d model=%s '
                              '(abort signal arrived %s, content so far: %dchars)',
                              tid, round_num, model, _delay, len(task.get('content') or ''))
+                # ★ RENDER_CONTRACT Phase 3: explicit round-end boundary even on
+                #   the abort-at-start path (the round never opened, so no
+                #   round_start was emitted for it — close nothing here; the
+                #   PREVIOUS round's end was already emitted at its own exit).
                 break
+
+            # ★ RENDER_CONTRACT Phase 3: explicit ROUND boundary. Emitted at the
+            #   TOP of every round the model actually runs — INCLUDING a
+            #   prose-only round (no tool calls) which previously had NO signal
+            #   the client could key round attribution off. The reducer opens
+            #   the round here off the canonical roundNum instead of inferring
+            #   it from the first tool_start / llmRound grouping.
+            append_event(task, build_event(EventType.ROUND_START, roundNum=round_num))
 
             # ★ Emit phase event so the frontend knows what's happening
             _emit_tool_round_phase(task, assistant_msg if round_num > 0 else {}, round_num)
@@ -1326,6 +1338,8 @@ def run_task(task: dict[str, Any]) -> None:
                         raw=f'cost_usd={_cost:.6f} max={_max_budget:.6f}',
                     )
                     _loop_exit_reason = f'budget_exceeded_round_{round_num}_${_cost:.4f}'
+                    append_event(task, build_event(EventType.ROUND_END,
+                                                   roundNum=round_num, reason='budget'))
                     break
 
             # ── Tool round budget check ──
@@ -1343,6 +1357,8 @@ def run_task(task: dict[str, Any]) -> None:
                 )
                 logger.warning('[Task %s] conv=%s ⚠️ Tool rounds exhausted at round %d/%d', task['id'][:8], task.get('convId', ''), round_num+1, max_tool_rounds)
                 _loop_exit_reason = f'tool_rounds_exhausted_{round_num}'
+                append_event(task, build_event(EventType.ROUND_END,
+                                               roundNum=round_num, reason='budget'))
                 break
 
             tool_call_happened = True
@@ -1408,6 +1424,8 @@ def run_task(task: dict[str, Any]) -> None:
                         messages.append({'role': 'assistant', 'content': _popped['content']})
                         logger.debug('[%s] Re-added assistant content without tool_calls', tid)
                 logger.info('[%s] Task aborted before tool execution at round %d — skipping all tools', tid, round_num)
+                append_event(task, build_event(EventType.ROUND_END,
+                                               roundNum=round_num, reason='aborted'))
                 break
 
             # ── Phase 1: Parse all tool_calls ──
@@ -1517,6 +1535,14 @@ def run_task(task: dict[str, Any]) -> None:
                 except Exception as e:
                     logger.warning('[%s] Checkpoint after round %d failed (non-fatal): %s', tid, round_num + 1, e, exc_info=True)
 
+            # ★ RENDER_CONTRACT Phase 3: explicit round-end boundary for a round
+            #   that issued tool calls and is about to loop into the next round.
+            #   Reached only at the natural end of a tools-executed iteration
+            #   (an early `continue` for a premature-close retry does NOT reach
+            #   here, so it never emits a spurious end for a round being re-run).
+            append_event(task, build_event(EventType.ROUND_END,
+                                           roundNum=round_num, reason='tools'))
+
 
 
         # ── Append final assistant reply to messages if it wasn't already ──
@@ -1527,6 +1553,14 @@ def run_task(task: dict[str, Any]) -> None:
         # assistant's reply, and endpoint mode's critic never sees the
         # worker's output.
         if assistant_msg and not assistant_msg.get('tool_calls'):
+            # ★ RENDER_CONTRACT Phase 3: explicit round-end for the TERMINAL
+            #   round — the model finished with prose and no tool calls (this is
+            #   the prose-only / final-answer round that never issued a
+            #   round_end via the tools path). round_num is the final round
+            #   index; a `done` still follows. Emitted before the message-append
+            #   bookkeeping so the boundary lands even when the reply is empty.
+            append_event(task, build_event(EventType.ROUND_END,
+                                           roundNum=round_num, reason='final'))
             _final_content = assistant_msg.get('content') or ''
             _final_reasoning = assistant_msg.get('reasoning_content') or ''
             if _final_content or _final_reasoning:

@@ -113,6 +113,23 @@ function reduceStreamState(state, ev) {
         ? state._continueToolRounds.slice() : [];
       return state;
     }
+    case 'round_start': {
+      // Explicit round boundary (RENDER_CONTRACT Phase 3). Record the open
+      // round's canonical index so subsequent deltas/tool rounds attach to a
+      // REAL boundary instead of the client inferring it from the first
+      // tool_start (a prose-only round has no tool_start at all). Projection
+      // scaffolding only — _currentRound is dropped by the finalizer, so it
+      // never changes the committed {content,thinking,toolRounds} shape.
+      if (ev.roundNum != null) state._currentRound = ev.roundNum;
+      return state;
+    }
+    case 'round_end': {
+      // Close the open round. The boundary is explicit now, so batch grouping
+      // and end-of-round no longer have to be inferred from the next
+      // round_start / a tool_start / a `done`.
+      state._currentRound = null;
+      return state;
+    }
     case 'delta_reset':
       return _stampDeltaReset(state, ev);
     case 'tool_start': {
@@ -124,7 +141,12 @@ function reduceStreamState(state, ev) {
         toolName: ev.toolName || null,
         toolCallId: ev.toolCallId || null,
         toolArgs: ev.toolArgs || null,
-        llmRound: (ev.llmRound != null) ? ev.llmRound : null,
+        // Batch grouping now keys off the EXPLICIT round boundary: prefer the
+        // event's own llmRound, else the open round from round_start. This is
+        // what lets the reducer stop inferring batches from the first
+        // tool_start when an explicit boundary is present.
+        llmRound: (ev.llmRound != null) ? ev.llmRound
+                : (state._currentRound != null) ? state._currentRound : null,
         _swarm: ev._swarm || false,
       };
       if (ev.assistantContent) r.assistantContent = ev.assistantContent;
@@ -218,6 +240,8 @@ function projectColdSnapshot(snap) {
  *    (canonicalizeProjectionForCompare) so production loses nothing. ── */
 function _finalizeProjection(state) {
   const rounds = Array.isArray(state.toolRounds) ? state.toolRounds : [];
+  // _currentRound is round_start scaffolding — NEVER part of the committed
+  // {content,thinking,toolRounds} shape; the finalizer drops it.
   return {
     content: state.content || '',
     thinking: state.thinking || '',

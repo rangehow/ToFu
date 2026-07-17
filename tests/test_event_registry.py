@@ -39,7 +39,16 @@ REPO = os.path.normpath(os.path.join(HERE, '..'))
 # ── Backend emission scan ──
 # Files that emit SSE events via append_event / emit_event with {'type': ...}.
 _BACKEND_FILES = [
+    # The orchestrator + tool_dispatch are PACKAGES now (split 2026-06); the
+    # old monolith paths silently skipped the scan (os.path.isfile → False),
+    # so events emitted ONLY from the split modules (e.g. round_start/round_end
+    # in orchestrator/_run.py) went unverified in direction A. Scan the real
+    # emit modules.
+    'lib/tasks_pkg/orchestrator/_run.py',
+    'lib/tasks_pkg/orchestrator/_finalize.py',
     'lib/tasks_pkg/orchestrator.py',
+    'lib/tasks_pkg/tool_dispatch/_pipeline.py',
+    'lib/tasks_pkg/tool_dispatch/_labels.py',
     'lib/tasks_pkg/tool_dispatch.py',
     'lib/tasks_pkg/executor.py',
     'lib/tasks_pkg/executor_image.py',

@@ -1147,6 +1147,18 @@ function dispatchSSEEvent(line, ctx) {
         }
       }
       twUpdate(convId);
+    } else if (ev.type === "round_start" || ev.type === "round_end") {
+      /* ★ RENDER_CONTRACT Phase 3: explicit round boundaries. Route through the
+       *   ONE pure reducer so the open-round index is tracked off a REAL
+       *   boundary (round_start.roundNum) instead of inferred from the first
+       *   tool_start — a prose-only round now has a signal too. The reducer
+       *   records/clears state._currentRound (dropped by the finalizer, never
+       *   part of the committed shape); the critic bubble uses the same target.
+       *   Display-only bookkeeping — no content mutation — so a light twUpdate
+       *   suffices. Backend `done`/`committedMessage` stays authoritative. */
+      const _rbTarget = (_epCriticPhase && _epCriticMsg) ? _epCriticMsg : assistantMsg;
+      if (_rbTarget) reduceStreamState(_rbTarget, ev);
+      twUpdate(convId);
     } else if (ev.type === "phase") {
       _roundThinkingLen = 0; // reset thinking counter on new phase
       /* Each new LLM round starts with a 'phase' event whose phase is

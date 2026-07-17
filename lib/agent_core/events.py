@@ -116,6 +116,8 @@ class EventType:
     # ── lifecycle ──
     STATE = 'state'
     PHASE = 'phase'
+    ROUND_START = 'round_start'
+    ROUND_END = 'round_end'
     DONE = 'done'
     ERROR = 'error'
     RETRY_RESET = 'retry_reset'
@@ -198,6 +200,26 @@ _SPECS: tuple[EventSpec, ...] = (
               'Progress / status hint for the current turn.',
               fields={'phase': "phase key (llm_thinking|tool_exec|retrying|working|…)",
                       'detail': 'human-readable detail', 'roundNum': 'round number'}),
+    EventSpec(EventType.ROUND_START, _C.LIFECYCLE,
+              'Explicit start boundary of an LLM round (the orchestrator loop '
+              'index). Emitted at the TOP of every round the model actually '
+              'runs — INCLUDING a prose-only round (streams text, no tool calls) '
+              'and BEFORE the phase hint — so the client keys round attribution '
+              'off a real boundary instead of inferring it from the first '
+              '`tool_start` (a round with no tools had NO signal before). '
+              'Non-terminal.',
+              fields={'roundNum': 'the round index this boundary opens'}),
+    EventSpec(EventType.ROUND_END, _C.LIFECYCLE,
+              'Explicit end boundary of an LLM round — the complement of '
+              '`round_start`. Emitted when a round concludes on EVERY exit path: '
+              'it issued tool calls (loop continues), it finished with prose and '
+              'no tools (terminal), or it was aborted/budget-capped. `reason` '
+              'distinguishes them so the client can close the round without '
+              'inferring end-of-round from the next `round_start` or a `done`. '
+              'Non-terminal (a `done` still follows on the terminal path).',
+              fields={'roundNum': 'the round index this boundary closes',
+                      'reason': 'tools|final|aborted|budget|error — why the '
+                                'round ended'}),
     EventSpec(EventType.DONE, _C.LIFECYCLE,
               'Terminal event — the turn finished (success or, with `error`, failure).',
               terminal=True,

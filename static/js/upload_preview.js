@@ -55,8 +55,17 @@ function openImagePreview(src) {
   document.getElementById("previewModal").classList.add("open");
 }
 function openTextPreview(title, meta, text) {
+  // ★ Last-line-of-defence: an empty / whitespace-only body would render an
+  //   empty <pre>, collapsing the flex panel to just its header — the "single
+  //   bar" popup bug. ANY caller passing empty text (e.g. an inject row whose
+  //   previews resolved to "") must still show a visible, localized note so the
+  //   modal never degenerates. Row-agnostic on purpose.
+  const _t = (typeof t === "function") ? t : (k, d) => d;
+  const body = (text != null && String(text).trim())
+    ? escapeHtml(text)
+    : `<span class="preview-text-empty">${escapeHtml(_t("tool.noContent", "No content returned."))}</span>`;
   document.getElementById("previewBody").innerHTML =
-    `<button class="preview-close-btn" onclick="closePreview()" aria-label="Close">✕</button><div class="preview-text-panel"><div class="preview-text-header"><span class="preview-text-title">${escapeHtml(title)}</span><span class="preview-text-meta">${escapeHtml(meta)}</span></div><pre class="preview-text-body">${escapeHtml(text)}</pre></div>`;
+    `<button class="preview-close-btn" onclick="closePreview()" aria-label="Close">✕</button><div class="preview-text-panel"><div class="preview-text-header"><span class="preview-text-title">${escapeHtml(title)}</span><span class="preview-text-meta">${escapeHtml(meta)}</span></div><pre class="preview-text-body">${body}</pre></div>`;
   document.getElementById("previewModal").classList.add("open");
 }
 function closePreview() {

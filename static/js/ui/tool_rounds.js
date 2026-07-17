@@ -3400,8 +3400,14 @@ function _tcModelViewBtnForText(round, text, titleHint) {
   const tip = _t("tool.modelViewTip", "Show the exact text this tool returned to the model — verbatim, nothing omitted.");
   const eye = (typeof Icon === "function") ? Icon("eye", 12) : "";
   const id = "tcmt_" + (++_tcModelTextSeq);
+  // ★ Source-layer guard: never park an empty entry. An inject row whose
+  //   previews resolved to "" (a common case — autopilot/sub-agent/peer/steer
+  //   rows carry no toolContent) would otherwise register "" and open a body-
+  //   less "single bar" popup. Fall back to the same localized sentinel the
+  //   normal-row path (_roundModelText) uses, so the registry has no empty rows.
+  const resolved = String(text == null ? "" : text);
   _tcModelTextRegistry.set(id, {
-    text: String(text == null ? "" : text),
+    text: resolved.trim() ? resolved : _t("tool.noContent", "No content returned."),
     title: titleHint || label,
   });
   return `<button class="tc-preview-btn" data-tc-preview-text="${id}" title="${escapeHtml(tip)}"><span class="tc-preview-ico">${eye}</span><span class="tc-preview-lbl">${escapeHtml(label)}</span></button>`;

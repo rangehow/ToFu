@@ -64,8 +64,12 @@ function _handleToolStart(ev, c) {
             if (buf) buf._mcpLoginHint = assistantMsg._mcpLoginHint;
           }
         } catch (_e) { /* best-effort */ }
-        /* Track swarm round number so swarm_phase events can find it */
-        if (r._swarm) assistantMsg._swarmRoundNum = r.roundNum;
+        /* Track swarm round number so swarm_phase events can find it. Guard on
+         * `r` defensively: the reducer contract is that a tool_start always
+         * pushes a round, but reading the tail defensively costs nothing and
+         * keeps the handler crash-safe (the routing NEUTER guard relies on
+         * this to report a clean failure rather than a TypeError). */
+        if (r && r._swarm) assistantMsg._swarmRoundNum = r.roundNum;
         if (buf)
           buf.toolRounds = assistantMsg.toolRounds;
         twUpdate(convId);
@@ -245,9 +249,15 @@ function _handleToolComplete(ev, c) {
         if (_epCriticBuf)
           _epCriticBuf.toolRounds = _epCriticMsg.toolRounds || [];
       } else if (assistantMsg.toolRounds) {
-        _applyToolComplete(assistantMsg.toolRounds.find(
-          (r) => r.roundNum === ev.roundNum && r.toolCallId === ev.toolCallId,
-        ));
+        /* ★ RENDER_CONTRACT Phase 3: settle tool content/tokens/compaction on
+         *   the in-flight round through the ONE pure reducer (tool_complete
+         *   case) instead of the inline _applyToolComplete, so the LIVE settle
+         *   is byte-identical to the cold/poll projection (golden F1–F3 exercise
+         *   the tool_done/tool_complete case). locateRound is the ONE index
+         *   normalizer (toolCallId-first). The critic branch keeps
+         *   _applyToolComplete inline — it targets _epCriticMsg, not the
+         *   projection state. */
+        reduceStreamState(assistantMsg, ev);
       }
       // ★ Sync to buf and let the reactive pipeline (twUpdate → _syncToolRoundsDOM)
       //   handle preview button rendering — no fragile direct DOM injection needed.

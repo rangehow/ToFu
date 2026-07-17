@@ -879,9 +879,10 @@ asyncTests()
 """
 
 
-def _run_harness(sse_src_path: str) -> str:
+def _run_harness(sse_src_path: str, reducer_src_path: str | None = None) -> str:
     """Run the jsdom harness against a given sse_pipeline.js source path.
-    Returns the harness stdout (PASS/FAIL lines)."""
+    ``reducer_src_path`` overrides ui/stream_reducer.js (argv[9]) so a NEUTER
+    test can inject a no-op reducer. Returns the harness stdout (PASS/FAIL)."""
     harness = os.path.join(HERE, '_sse_dispatch_harness.js')
     with open(harness, 'w') as f:
         f.write(_HARNESS)
@@ -895,7 +896,7 @@ def _run_harness(sse_src_path: str) -> str:
              os.path.join(JS_DIR, 'ui', 'sse_handlers_io.js'),     # argv[6]
              os.path.join(JS_DIR, 'ui', 'sse_handlers_misc.js'),   # argv[7]
              os.path.join(JS_DIR, 'ui', 'sse_handlers_lifecycle.js'),  # argv[8]
-             os.path.join(JS_DIR, 'ui', 'stream_reducer.js'),      # argv[9]
+             reducer_src_path or os.path.join(JS_DIR, 'ui', 'stream_reducer.js'),  # argv[9]
              ],
             capture_output=True, text=True, timeout=60,
         )
@@ -939,3 +940,72 @@ def test_nc_empty_splice_is_load_bearing(tmp_path):
     assert 'FAIL empty_placeholder_spliced' in output, (
         'Neutering the empty-turn splice did NOT fail the splice assertion — '
         'the splice is not load-bearing:\n' + output)
+
+
+@pytest.mark.skipif(not _node_deps_available(),
+                    reason='node + jsdom dev-deps not installed (run npm install)')
+def test_nc_tool_handlers_route_through_reducer(tmp_path):
+    """NEUTER for RENDER_CONTRACT Phase 3 tool-handler routing (①): prove the
+    tool_start / tool_result / tool_complete handlers ACTUALLY fold through the
+    pure reducer rather than having quietly regressed to inline mutation.
+
+    We neuter ``reduceStreamState`` to a no-op (return state unchanged) in a copy
+    of stream_reducer.js and re-run the dispatch harness. If the handlers route
+    through it, the tool scenarios MUST break: tool_start no longer pushes a
+    round, tool_result no longer settles it, tool_complete no longer stamps
+    content. So scenarios 2 + 8's assertions must FAIL. If a future edit moves
+    the round-shape mutation back inline, the reducer becomes non-load-bearing
+    and this NEUTER goes green — flagging the regression (errors can't hide)."""
+    src_path = os.path.join(JS_DIR, 'ui', 'stream_reducer.js')
+    with open(src_path, encoding='utf-8') as f:
+        src = f.read()
+    marker = 'function reduceStreamState(state, ev) {'
+    assert marker in src, 'reduceStreamState anchor not found — did the reducer move?'
+    # Force an immediate no-op return before any event action runs.
+    neutered = src.replace(
+        marker,
+        marker + '\n  if (state !== undefined) return state;  /* NEUTER: no-op */',
+        1)
+    assert neutered != src, 'NC patch did not apply'
+    nc_file = tmp_path / 'stream_reducer_nc.js'
+    nc_file.write_text(neutered, encoding='utf-8')
+    # Run the harness WITHOUT asserting returncode==0: a neutered reducer means
+    # tool_start never pushes a round, so scenario 2's `toolRounds[0].status`
+    # read dereferences undefined and crashes the (un-try-guarded) harness. That
+    # crash is itself proof the routing is load-bearing — the flow cannot even
+    # complete once the reducer is a no-op. So we accept EITHER a hard crash OR
+    # (if the flow survived) the ABSENCE of the tool PASS lines.
+    harness = os.path.join(HERE, '_sse_dispatch_harness_nc.js')
+    with open(harness, 'w') as f:
+        f.write(_HARNESS)
+    try:
+        proc = subprocess.run(
+            ['node', harness,
+             os.path.join(JS_DIR, 'ui', 'sse_pipeline.js'), ROOT,
+             os.path.join(JS_DIR, 'ui', 'sse_handlers_tool.js'),
+             os.path.join(JS_DIR, 'ui', 'sse_handlers_swarm.js'),
+             os.path.join(JS_DIR, 'ui', 'sse_handlers_io.js'),
+             os.path.join(JS_DIR, 'ui', 'sse_handlers_misc.js'),
+             os.path.join(JS_DIR, 'ui', 'sse_handlers_lifecycle.js'),
+             str(nc_file)],
+            capture_output=True, text=True, timeout=60)
+    finally:
+        try:
+            os.remove(harness)
+        except OSError:
+            pass
+    output = (proc.stdout or '') + (proc.stderr or '')
+    crashed = proc.returncode != 0
+    # The tool PASS lines that MUST be gone when the reducer is neutered.
+    tool_pass_lines = [
+        'PASS tool_start_pushes_round',
+        'PASS tool_result_marks_done',
+        'PASS tool_complete_sets_content',
+        'PASS tool_complete_sets_tokens',
+    ]
+    surviving = [ln for ln in tool_pass_lines if ln in output]
+    assert crashed or not surviving, (
+        'Neutering reduceStreamState left the tool scenarios PASSING '
+        f'({surviving}) and did not crash — the tool handlers are NOT routing '
+        'through the pure reducer (they must have regressed to inline '
+        'mutation). Routing is not load-bearing:\n' + output[-1500:])

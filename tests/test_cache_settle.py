@@ -34,12 +34,14 @@ from lib.llm_dispatch import cache_settle as cs
 
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch):
-    """Force a known env: gate ON, window 1500ms, cap 4000ms, threshold 150k.
-    Reset the recency map before AND after each test."""
+    """Force a known env: gate ON, window 1500ms, cap 4000ms. Threshold is left
+    UNSET so tests exercise the real default (30k) — the whole point of the
+    fix is that the default fires on the observed ~120k miss class, which the
+    old 150k-inherited bar skipped. Reset the recency map before AND after."""
     monkeypatch.setenv('TOFU_CACHE_SETTLE', '1')
     monkeypatch.setenv('TOFU_CACHE_SETTLE_MS', '1500')
     monkeypatch.setenv('TOFU_CACHE_SETTLE_MAX_MS', '4000')
-    monkeypatch.setenv('TOFU_CACHE_SETTLE_THRESHOLD_TOKENS', '150000')
+    monkeypatch.delenv('TOFU_CACHE_SETTLE_THRESHOLD_TOKENS', raising=False)
     cs._reset_settle_for_tests()
     yield
     cs._reset_settle_for_tests()
@@ -66,8 +68,11 @@ class _FakeAborted(Exception):
     pass
 
 
-BIG = 200_000     # > 150k threshold
-SMALL = 5_000     # < threshold
+BIG = 200_000        # comfortably > default 30k threshold
+SMALL = 5_000        # < 30k threshold → a trivial turn, never gated
+OBSERVED_MISS = 120_000  # the real floor-miss size from production logs
+                         # (cache 79.2k + write 40.9k) — MUST be gated now,
+                         # yet sat BELOW the old 150k-inherited bar.
 
 
 def test_rapid_second_request_waits_remainder(spy_sleep):
@@ -229,3 +234,33 @@ def test_async_first_request_never_waits(monkeypatch):
     waited = asyncio.run(cs.async_settle_before_send('convFRESH', BIG, now=1000.0))
     assert waited == 0.0
     assert calls == []
+
+
+def test_default_threshold_is_far_below_admission_gate():
+    """Regression: the settle threshold default MUST be low (decoupled from the
+    150k admission gate). The bug was inheriting 150k → the gate logged 0 hits
+    because every real miss was ~120-140k, below the bar."""
+    assert cs.settle_threshold_tokens() == 30_000
+    assert cs.settle_threshold_tokens() < 150_000
+
+
+def test_observed_miss_size_is_gated_under_default(spy_sleep):
+    """THE bug this revision fixes: a 120k-token prefix (the real production
+    floor-miss size) fires the settle wait under the DEFAULT threshold. With
+    the old 150k-inherited bar this returned 0 (gate skipped it entirely)."""
+    cs.record_stream_end('convA', now=1000.0)
+    waited = cs.settle_before_send('convA', OBSERVED_MISS, now=1000.3)
+    assert 1.19 <= waited <= 1.21, (
+        f'120k prefix must be gated under the 30k default, got {waited}')
+    assert len(spy_sleep) == 1
+
+
+def test_env_override_threshold_still_respected(spy_sleep, monkeypatch):
+    """The override still works: bump the threshold above 120k → the same 120k
+    prefix is no longer gated (proves the knob, and that the 120k firing above
+    is threshold-driven not accidental)."""
+    monkeypatch.setenv('TOFU_CACHE_SETTLE_THRESHOLD_TOKENS', '150000')
+    cs.record_stream_end('convA', now=1000.0)
+    waited = cs.settle_before_send('convA', OBSERVED_MISS, now=1000.3)
+    assert waited == 0.0
+    assert spy_sleep == []

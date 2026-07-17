@@ -30,9 +30,11 @@ cache write is visible before this round tries to read it back.
 Design invariants (each one matters — see the tests):
   * Same-conversation only. Different conversations have different prefixes and
     cannot read each other's cache, so cross-conv timing is irrelevant here.
-  * Big prefixes only. A miss on a sub-threshold prefix costs almost nothing,
-    and small/cheap turns must never eat added latency. Reuses the big-prefix
-    size threshold so the two gates classify "big" identically.
+  * Cacheable prefixes only. A miss on a trivial few-k prefix costs almost
+    nothing, and tiny turns must never eat added latency. Gated on a LOW
+    threshold (default 30k) DECOUPLED from the 150k admission gate — settle is
+    cheap where admission queuing is not, so it fires far lower (the observed
+    ~120-140k floor-miss class sat BELOW the old inherited 150k bar → 0 hits).
   * Tool-loop-internal latency only. The wait sits between the PRIOR round's
     stream end and THIS round's send — inside the agent's own tool loop, where
     the user is already waiting on tool execution. It never delays the FIRST
@@ -59,9 +61,12 @@ Env knobs
                                    or a bogus timestamp can never stall a
                                    request longer than this. Default 4000.
 ``TOFU_CACHE_SETTLE_THRESHOLD_TOKENS`` — prefix size above which settle applies.
-                                   Default: the big-prefix gate threshold, so a
-                                   turn that is "big" for admission is "big"
-                                   here too.
+                                   Default 30000 — DECOUPLED from (and far
+                                   below) the 150k admission gate, because a
+                                   settle wait is cheap/tool-loop-internal while
+                                   admission queuing is not. The observed
+                                   floor-miss class (~120-140k) sailed past the
+                                   old 150k-inherited bar.
 """
 
 from __future__ import annotations
@@ -119,13 +124,29 @@ def settle_max_wait_ms() -> float:
         return 4000.0
 
 
-def settle_threshold_tokens() -> int:
-    """Prefix-size (est. tokens) above which settle applies.
+_DEFAULT_SETTLE_THRESHOLD_TOKENS = 30_000
 
-    Defaults to the big-prefix admission threshold so a turn classified "big"
-    for admission is "big" here too. A dedicated override
-    (``TOFU_CACHE_SETTLE_THRESHOLD_TOKENS``) lets settle be tuned independently
-    of admission when needed."""
+
+def settle_threshold_tokens() -> int:
+    """Prefix-size (est. tokens) above which settle applies. Default 30000.
+
+    ★ This is DELIBERATELY DECOUPLED from — and far lower than — the big-prefix
+    ADMISSION threshold (150k). Those two gates trade off differently:
+
+      * Admission QUEUES a request behind others on the same key. Queuing is
+        expensive (it can delay a send by the wait budget), so it only pays off
+        for genuinely huge prefixes → high 150k bar.
+      * Settle only waits the REMAINDER of a short window since THIS conv's own
+        prior stream end, INSIDE the tool loop, with zero user-facing first-
+        token delay. It's cheap, and the payoff is avoiding a full-body cache
+        re-write (1.25x) on a byte-identical prefix. So it should fire on any
+        prefix big enough that a re-write actually costs something.
+
+    The observed floor-miss class is ~120-140k-token turns — which sailed
+    straight past the old 150k-inherited bar (the reason the gate logged 0
+    hits). 30k gives generous headroom below that while still excluding trivial
+    few-k turns where a miss is nearly free. Tune with
+    ``TOFU_CACHE_SETTLE_THRESHOLD_TOKENS``."""
     raw = os.environ.get('TOFU_CACHE_SETTLE_THRESHOLD_TOKENS')
     if raw is not None:
         try:
@@ -134,14 +155,9 @@ def settle_threshold_tokens() -> int:
                 return v
         except (ValueError, TypeError) as e:
             logger.debug('[CacheSettle] TOFU_CACHE_SETTLE_THRESHOLD_TOKENS parse '
-                         'failed, falling back to big-prefix threshold: %s', e)
-    try:
-        from lib.llm_dispatch.big_prefix_gate import threshold_tokens
-        return threshold_tokens()
-    except ImportError as e:
-        logger.debug('[CacheSettle] big_prefix_gate threshold unavailable, '
-                     'default 150000: %s', e)
-        return 150000
+                         'failed, using default %d: %s',
+                         _DEFAULT_SETTLE_THRESHOLD_TOKENS, e)
+    return _DEFAULT_SETTLE_THRESHOLD_TOKENS
 
 
 # ── Process-global recency map: conv_id → last stream-END timestamp ──

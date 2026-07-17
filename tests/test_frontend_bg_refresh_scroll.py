@@ -2,30 +2,36 @@
 
 WHY
 ---
-Cost + file-change batch prefetches land data that `_msgFingerprint` does NOT
-track, so `renderChat`'s surgical diff would skip the repaint. The old
-workaround `renderChat(conv, true)` force-scrolled to the bottom. The first fix
-(`_bgRefreshChat`) repainted assistant bubbles in place and restored the RAW
-`scrollTop` — but that only holds when heights ABOVE the fold are static. In the
-actual bug scenario they are NOT: on first open the cost/finish bars aren't
-fetched yet, so above-fold assistant bubbles render SHORT and GROW ~1s later
-when the batch lands, and a raw-pixel restore then drifts the reader downward.
+Cost + file-change batch prefetches land data that used to be invisible to the
+per-message content version, so `renderChat`'s surgical diff would skip the
+repaint. The old workaround was a SEPARATE second DOM-owner, `_bgRefreshChat`,
+that re-rendered assistant bubbles by comparing rendered OUTPUT (`__bgHtml`).
 
-`_bgRefreshChat` (static/js/ui/chat_render.js) now upholds two invariants:
+RENDER_CONTRACT Phase 2b RETIRED that parallel path: the content version now
+folds cost/modifiedFileList/_fcResolvedFp/_artifacts/_compactions, so the ONE
+surgical `renderChat(conv,false)` path repaints them, and `_bgRefreshChat` is
+now a thin SHIM that (a) clears the Guard-2 fingerprint (which samples only the
+last message) so a mid-history data land isn't skipped, and (b) sets
+`conv._bgRepaint` so the surgical path runs even during `_initialSwitchLoad`
+AND wraps its swaps in the scroll anchor as a FIXED STEP.
+
+So this suite now drives the REAL shipped `renderChat` (not a stub) through the
+`_bgRefreshChat` shim and pins the two invariants ON the unified path:
 
   (1) ANCHOR-RELATIVE RESTORE — pin the topmost message intersecting the
       viewport at its pre-repaint offset, so the reader's viewport is preserved
-      even when above-fold bubbles change height.
-  (2) COMPARE-BEFORE-SWAP — only `outerHTML`-replace a bubble whose rendered
-      HTML actually changed; unchanged bubbles keep their DOM node (and any
-      manually-expanded tool-round `<details>` state).
+      even when above-fold bubbles change height (the surgical path's fixed
+      anchor step).
+  (2) ID-KEYED REUSE — the surgical diff repaints a row whose content version
+      (data-mfp) changed and REUSES the DOM node of an unchanged row (Phase 1),
+      preserving any manually-expanded tool-round `<details>` state.
 
 jsdom does no layout, so this harness installs a DETERMINISTIC layout model
 (a `getBoundingClientRect` override + a backed `scrollTop`) in which assistant
-bubbles grow from `short`→`tall` the moment they are repainted (detected via the
-`data-repainted` marker the stub `renderMessage` stamps). It then asserts the
-anchored element's viewport offset survives an above-fold growth, and that an
-unchanged bubble's DOM node is reused across a second refresh.
+bubbles grow from `short`→`tall` the moment their data-mfp changes (the stub
+renderMessage stamps a per-content mfp + data-repainted). It asserts the
+anchored element's viewport offset survives an above-fold growth, and that a
+row whose mfp is unchanged keeps its exact DOM node across a second refresh.
 
 DOUBLE-NEUTER: one neuter per invariant, each flipping ONLY its own checks.
 Skips cleanly when node + jsdom aren't installed.
@@ -114,51 +120,79 @@ Object.defineProperty(container, 'scrollHeight', {
 });
 
 win._applyAutopilotRunFolds = global._applyAutopilotRunFolds = () => {};
-win._convRenderFingerprint = global._convRenderFingerprint = () => 'fp';
 const _noop = () => '';
 for (const name of [
   'renderMarkdown','safeHtml','raw','renderToolRoundsHTML','getToolRoundsFromMsg',
   'renderFinishInfo','renderMcpLoginHintHtml','renderTurnProvenanceHtml',
   'renderPreferenceLearnedHtml','_buildSwarmInboxChipsHTML','renderTurnCtxNote',
   '_injectAnchoredBranches','stripNoTranslateTags','buildTurnNav','_forceScrollToBottom',
-  '_prefetchConvCosts','_prefetchConvFileChanges','_stampFreshness','scrollToBottom',
+  '_stampFreshness','scrollToBottom',
   'isNearBottom','showStreamingUIForConv','_ensureLazyObserver','_destroyLazyObserver',
-  'ConvCache','saveConversations','_buildConvConfig','renderChat',
+  'ConvCache','saveConversations','_buildConvConfig',
 ]) {
   if (typeof win[name] === 'undefined') { win[name] = global[name] = _noop; }
 }
+// renderChat awaits these two via .then() — return an inert thenable so the
+// callback never fires (we drive the repaint directly through _bgRefreshChat).
+win._prefetchConvCosts = global._prefetchConvCosts = () => ({ then: () => {} });
+win._prefetchConvFileChanges = global._prefetchConvFileChanges = () => ({ then: () => {} });
 win.BASE_PATH = global.BASE_PATH = '';
 win._INITIAL_RENDER = global._INITIAL_RENDER = 20;
+win.CSS = global.CSS = { escape: (s) => String(s).replace(/[^a-zA-Z0-9_-]/g, '\\$&') };
+// _msgFingerprint calls translationFingerprint (defined in translation_model.js,
+// not loaded standalone here). Stub it so the REAL _msgFingerprint runs — the
+// stub renderMessage below stamps data-mfp FROM the real _msgFingerprint so the
+// surgical diff's oldFp/newFp comparison is self-consistent.
+win.translationFingerprint = global.translationFingerprint = () => '0:F:';
+// Free vars renderChat reads at call time (declared with let in core.js; here
+// they resolve to the global scope).
+win._editingMsgIdx = global._editingMsgIdx = null;
+win._activeBranch = global._activeBranch = null;
+win._lazyRenderedFrom = global._lazyRenderedFrom = 0;
+win._lazyRenderedTo = global._lazyRenderedTo = Infinity;
+win._lazyConvId = global._lazyConvId = 'bg-conv';   // same conv already in DOM
+win._openScrollConvId = global._openScrollConvId = null;
+win._lastRenderedFingerprint = global._lastRenderedFingerprint = '';
+// The REAL _convRenderFingerprint is in core.js; the shim clears the cached
+// value so Guard 2 never short-circuits — give a stable value so the ONLY thing
+// deciding a repaint is the per-message data-mfp diff.
+win._convRenderFingerprint = global._convRenderFingerprint = () => 'CONVFP';
 
 let src = fs.readFileSync(process.argv[2], 'utf8');  // ui/chat_render.js
 
 // ── NEUTER injection (per-invariant double-neuter) ─────────────────────────
 if (NEUTER === 'anchor') {
   // Break the anchor compensation → behaves like a raw scrollTop restore.
-  // The re-pin arithmetic now lives in the extracted `_restoreScrollAnchor`
-  // helper (shared by _bgRefreshChat + the full-render path).
+  // The re-pin arithmetic lives in `_restoreScrollAnchor`, now a FIXED STEP of
+  // the surgical path (gated on _bgRepaint).
   src = src.replace('container.scrollTop += (newOffset - anchor.offset);  // re-pin the anchor',
                     'container.scrollTop += (0);  // NEUTERED-anchor');
   if (src.indexOf('// NEUTERED-anchor') < 0) { console.log('FAIL neuter_anchor_not_applied'); process.exit(0); }
 }
-if (NEUTER === 'compare') {
-  // Break compare-before-swap → every assistant bubble always re-created.
-  src = src.replace('if (el.__bgHtml === fresh) return;  // unchanged → keep DOM (expand state intact)',
-                    'if (false) return;  // NEUTERED-compare');
-  if (src.indexOf('// NEUTERED-compare') < 0) { console.log('FAIL neuter_compare_not_applied'); process.exit(0); }
+if (NEUTER === 'reuse') {
+  // Break id-keyed node reuse → force a destroy+rebuild of every drifted node
+  // by repainting unconditionally (never take the "unchanged → reuse" branch).
+  src = src.replace('if (oldFp !== newFp) {', 'if (true) {  // NEUTERED-reuse');
+  if (src.indexOf('// NEUTERED-reuse') < 0) { console.log('FAIL neuter_reuse_not_applied'); process.exit(0); }
 }
 
 eval(src);
 
-// Override the real renderMessage (hoisted decl shadows a pre-eval stub) with a
-// marker version: assistant bubbles carry data-repainted="1" (→ grow to tall).
+// Override renderMessage with a marker version that stamps BOTH a stable
+// data-msg-id (for id-keyed reconcile) AND a CONTENT-DERIVED data-mfp so the
+// surgical diff sees a change when content changes. Assistant bubbles carry
+// data-repainted="1" → grow short→tall in the layout model.
 let _renderCalls = [];
 renderMessage = win.renderMessage = global.renderMessage = (msg, idx) => {
   _renderCalls.push(idx);
   const role = (msg && msg.role) || 'assistant';
+  const mid = (msg && msg._msgId) || ('m' + idx);
+  // Stamp data-mfp from the REAL _msgFingerprint so the surgical diff's
+  // oldFp/newFp comparison is self-consistent with what the shipped code computes.
+  const mfp = _msgFingerprint(msg);
   return '<div class="message' + (role === 'assistant' ? '' : ' user-msg') +
-    '" id="msg-' + idx + '" data-mfp="v2" data-repainted="1">' +
-    ((msg && msg.content) || '') + '</div>';
+    '" id="msg-' + idx + '" data-msg-id="' + mid + '" data-mfp="' + escapeHtml(mfp) +
+    '" data-repainted="1">' + ((msg && msg.content) || '') + '</div>';
 };
 
 const out = [];
@@ -170,20 +204,29 @@ check('fn_exposed', true);
 const conv = {
   id: 'bg-conv', activeTaskId: null,
   messages: [
-    { role: 'user', content: 'q1' },
-    { role: 'assistant', content: 'a1' },
-    { role: 'user', content: 'q2' },
-    { role: 'assistant', content: 'a2' },
+    { role: 'user', _msgId: 'm0', content: 'q1' },
+    { role: 'assistant', _msgId: 'm1', content: 'a1' },
+    { role: 'user', _msgId: 'm2', content: 'q2' },
+    { role: 'assistant', _msgId: 'm3', content: 'a2' },
   ],
 };
 win.getActiveConv = global.getActiveConv = () => conv;
 
+// Seed the DOM with a STALE data-mfp for the assistant bubbles (v1) so the
+// first _bgRefreshChat's surgical diff sees a change and repaints them (→ grow
+// short→tall). User bubbles are seeded with their CURRENT mfp so they are
+// unchanged → reused (never re-rendered). data-repainted starts absent (short).
 function seedDom() {
+  // User bubbles seeded with their CURRENT (real) fingerprint → unchanged →
+  // reused, never re-rendered. Assistant bubbles seeded with a STALE mfp →
+  // the surgical diff sees a change → repaints them (→ grow short→tall).
+  const u0 = escapeHtml(_msgFingerprint(conv.messages[0]));
+  const u2 = escapeHtml(_msgFingerprint(conv.messages[2]));
   inner.innerHTML =
-    '<div class="message user-msg" id="msg-0" data-mfp="v1" data-orig="U0">q1</div>' +
-    '<div class="message" id="msg-1" data-mfp="v1">a1</div>' +
-    '<div class="message user-msg" id="msg-2" data-mfp="v1" data-orig="U2">q2</div>' +
-    '<div class="message" id="msg-3" data-mfp="v1">a2</div>';
+    '<div class="message user-msg" id="msg-0" data-msg-id="m0" data-mfp="' + u0 + '" data-orig="U0">q1</div>' +
+    '<div class="message" id="msg-1" data-msg-id="m1" data-mfp="STALE1">a1</div>' +
+    '<div class="message user-msg" id="msg-2" data-msg-id="m2" data-mfp="' + u2 + '" data-orig="U2">q2</div>' +
+    '<div class="message" id="msg-3" data-msg-id="m3" data-mfp="STALE3">a2</div>';
 }
 seedDom();
 
@@ -191,7 +234,6 @@ seedDom();
 // an above-fold assistant bubble (msg-1) that WILL grow when the bars land.
 _scrollTop = 510;
 
-// Record the anchor + its viewport offset the same way the code does.
 function findAnchor() {
   const cTop = container.getBoundingClientRect().top;
   const els = inner.querySelectorAll('[id^="msg-"]');
@@ -205,9 +247,10 @@ const preAnchor = findAnchor();
 const preScroll = _scrollTop;
 
 _renderCalls = [];
-_bgRefreshChat(conv);   // FIRST refresh: all assistant bubbles grow short→tall
+_bgRefreshChat(conv);   // FIRST refresh: stale-mfp assistant bubbles repaint → grow
 
-// (2)-repaint scope: assistant bubbles repainted; user bubbles never rendered.
+// Repaint scope: assistant bubbles (stale mfp) repainted; user bubbles
+// (current mfp) reused, never re-rendered.
 const repainted = new Set(_renderCalls);
 check('assistant1_repainted', repainted.has(1));
 check('assistant3_repainted', repainted.has(3));
@@ -222,12 +265,11 @@ check('user2_dom_intact', (document.getElementById('msg-2') || {}).getAttribute
 // preserved despite the above-fold growth (raw restore would drift it down).
 const postTop = document.getElementById(preAnchor.id).getBoundingClientRect().top;
 check('anchor_offset_preserved', Math.abs(postTop - preAnchor.off) <= 1);
-// And scrollTop was ACTIVELY adjusted to compensate (raw restore would not move).
 check('scroll_actively_adjusted', _scrollTop !== preScroll);
 
-// (2) COMPARE-BEFORE-SWAP: a bubble whose HTML is unchanged on a SECOND refresh
-// keeps its exact DOM node (→ expanded state survives). Tag msg-1's node and a
-// simulated expanded <details>, then refresh again with identical content.
+// (2) ID-KEYED REUSE: a row whose mfp is unchanged on a SECOND refresh keeps
+// its exact DOM node (→ expanded state survives). After the first refresh msg-1
+// now carries its CURRENT mfp; tag it, refresh again → it must be reused.
 const ref1 = document.getElementById('msg-1');
 ref1.__keepMarker = 'EXPANDED';
 _renderCalls = [];
@@ -236,7 +278,6 @@ const ref2 = document.getElementById('msg-1');
 check('node_identity_retained', ref1 === ref2 && ref2.__keepMarker === 'EXPANDED');
 
 // No-op safety: empty inner (welcome/skeleton) → no throw, no scroll write.
-seedDom();
 inner.innerHTML = '';
 _scrollTop = 333;
 _bgRefreshChat(conv);
@@ -286,7 +327,7 @@ def test_bg_refresh_anchor_and_compare():
                     reason='node + jsdom dev-deps not installed (run npm install)')
 def test_NC_anchor_restore_is_load_bearing():
     """Neuter the anchor compensation (→ raw scrollTop) → the anchor-offset
-    checks MUST fail while compare-before-swap still passes (specificity)."""
+    checks MUST fail while id-keyed reuse still passes (specificity)."""
     lines = _lines(_run('anchor'))
     assert lines.get('anchor_offset_preserved') == 'FAIL', lines
     assert lines.get('scroll_actively_adjusted') == 'FAIL', lines
@@ -296,10 +337,11 @@ def test_NC_anchor_restore_is_load_bearing():
 
 @pytest.mark.skipif(not _node_deps_available(),
                     reason='node + jsdom dev-deps not installed (run npm install)')
-def test_NC_compare_before_swap_is_load_bearing():
-    """Neuter compare-before-swap (→ always re-create) → node-identity check
-    MUST fail while the anchor-offset checks still pass (specificity)."""
-    lines = _lines(_run('compare'))
+def test_NC_id_keyed_reuse_is_load_bearing():
+    """Neuter the surgical diff's "unchanged → reuse" branch (force a rebuild of
+    every drifted node) → the node-identity check MUST fail while the anchor
+    checks still pass (specificity)."""
+    lines = _lines(_run('reuse'))
     assert lines.get('node_identity_retained') == 'FAIL', lines
     assert lines.get('anchor_offset_preserved') == 'PASS', lines
     assert lines.get('scroll_actively_adjusted') == 'PASS', lines

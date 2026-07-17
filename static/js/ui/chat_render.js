@@ -212,6 +212,23 @@ function _msgFingerprint(msg) {
     _artFp = msg._artifacts.length + '@' + _hashStr(
       msg._artifacts.map(a => (a && (a.id || a.name || '')) || '').join(','));
   }
+  /* Compaction markers land async (attachCompactionMarkersToConversation on
+   * conv open, + the compaction/compaction_done SSE). renderMessage draws an
+   * inline card from `msg._compactions[]` (buildCompactionCardHtml) — a field
+   * NO other token here covers (the toolRounds compaction fold above tracks a
+   * DIFFERENT thing: per-round L1 tool-output shrink). Fold count + each
+   * marker's archiveId/status/tokensAfter so a marker arriving or a marker
+   * flipping in_progress→done moves the version and the card repaints through
+   * the one surgical trigger — the last field `_bgRefreshChat` covered by
+   * output-diff that the version did not (RENDER_CONTRACT L2). */
+  let _cmFp = '';
+  if (Array.isArray(msg._compactions) && msg._compactions.length) {
+    _cmFp = msg._compactions.length + '@';
+    for (const c of msg._compactions) {
+      _cmFp += (c.archiveId || '') + ',' + (c.status || '') + ','
+             + (c.tokensAfter || 0) + ';';
+    }
+  }
   return (msg.role || "") + ":" +
     _hashStr(msg.content || "") + ":" +
     _hashStr(msg.thinking || "") + ":" +
@@ -226,6 +243,7 @@ function _msgFingerprint(msg) {
     (_costFp ? "$" + _costFp : "") + ":" +
     (_fcFp ? "fc" + _fcFp : "") + ":" +
     (_artFp ? "art" + _artFp : "") + ":" +
+    (_cmFp ? "cm" + _cmFp : "") + ":" +
     (msg.images ? msg.images.length : 0) + ":" +
     (msg.pdfTexts ? msg.pdfTexts.length : 0) + ":" +
     (msg._autopilotRunId || "") + ":" +
@@ -263,58 +281,16 @@ if (typeof window !== "undefined") {
  * user actually needs to see — compaction state — is now a SOLID, opaque
  * label per row (see compactionLabel logic in _renderUnifiedToolLine). */
 
-/* ── Background data-refresh repaint (scroll-preserving) ──────────────────
- * Cost + file-change batch prefetches (and their per-message async fallback)
- * land data that `_msgFingerprint` deliberately does NOT track, so the
- * surgical diff in renderChat would treat every message as "unchanged" and
- * skip the repaint. Historically these callbacks worked around that by
- * calling `renderChat(conv, true)` — the FULL re-render path, which (a) resets
- * the lazy window back to the last _INITIAL_RENDER messages (dropping any
- * older messages a scrolled-up reader force-loaded), (b) flashes the whole
- * list via the `cv-off` height recompute, and (c) ends in
- * `_forceScrollToBottom()`, yanking the reader to the bottom. Firing ~1s after
- * a conversation opens (when the batch responses arrive) — precisely while the
- * user is scrolling up to read history — that is the reported "flicker back
- * and forth then jump to the bottom" bug.
- *
- * This repaints the CURRENTLY-RENDERED assistant messages in place. Only
- * `role==='assistant'` bubbles carry the cost / file-changes / finish bars, so
- * user bubbles (and their quote/ref badges) are left untouched. It upholds two
- * invariants so a data-only refresh is invisible to the reader:
- *
- *   (1) COMPARE-BEFORE-SWAP. Each assistant bubble is `outerHTML`-replaced ONLY
- *       when its freshly-rendered HTML differs from what we last rendered for
- *       it (stamped as `__bgHtml` on the node). Unchanged bubbles keep their
- *       exact DOM node — preserving any manually-expanded tool-round `<details>`
- *       state and skipping needless layout. Same principle as the `data-mfp`
- *       surgical diff, extended to the async cost/file-change data that
- *       `_msgFingerprint` deliberately omits. If NOTHING changed we return
- *       before touching the DOM or scroll at all.
- *
- *   (2) ANCHOR-RELATIVE SCROLL RESTORE. A raw `scrollTop = saved` restore is
- *       only correct when heights ABOVE the fold don't change — but that is
- *       exactly what changes here: on first open the bars aren't fetched yet,
- *       so above-fold assistant bubbles render short and GROW when the batch
- *       lands. Restoring the raw pixel then drifts the reader downward by the
- *       total added height above the fold. Instead we pin the topmost message
- *       element intersecting the viewport: record its offset from the container
- *       top BEFORE the swaps, then after the swaps adjust `scrollTop` so that
- *       same element sits at the same visual offset. The reader's viewport is
- *       preserved even when above-fold bubbles change height.
- *
- * Both measurements happen under the same `cv-off` guard `_renderMsgInPlace`
- * uses, so the swap can't collapse `content-visibility:auto` intrinsic-size
- * caches and mis-resolve the geometry. No-op during streaming (the live bubble
- * is owned by the streaming UI) or before any message is laid out. */
 /* ── Shared anchor-relative scroll preservation ──────────────────────────
  * Capture the topmost message element still intersecting the viewport and its
  * offset from the container top; after a DOM mutation that may change heights
  * (including ABOVE the fold), re-pin that element to the same visual offset.
- * This is the same technique proven in `_bgRefreshChat`, extracted so the
- * full-render path (which used to reset scrollTop→0 via innerHTML wipe) can
- * reuse it verbatim instead of relying on `_forceScrollToBottom`. Callers wrap
- * the swap in the `cv-off` guard so `content-visibility:auto` intrinsic-size
- * caches can't collapse and mis-resolve the geometry. */
+ * Used as a FIXED STEP of both the surgical background repaint (gated on
+ * `conv._bgRepaint` — async cost/file-change/compaction data grows bubbles
+ * above the fold) and the full-render path (which used to reset scrollTop→0 via
+ * innerHTML wipe). Callers wrap the swap in the `cv-off` guard so
+ * `content-visibility:auto` intrinsic-size caches can't collapse and
+ * mis-resolve the geometry. */
 function _captureScrollAnchor(container, inner) {
   if (!container || !inner) return null;
   const cTop = container.getBoundingClientRect().top;
@@ -336,51 +312,33 @@ function _restoreScrollAnchor(container, anchor) {
   return true;
 }
 
+/* ── RENDER_CONTRACT Invariant 3: unified background repaint ──────────────
+ * `_bgRefreshChat` USED to be a SECOND, parallel DOM-owner: it re-rendered
+ * assistant bubbles by comparing rendered OUTPUT (`__bgHtml`), because the
+ * async cost/file-change/compaction data landed in side caches the per-message
+ * version could not see. Now that the version HASHES content and folds those
+ * fields (cost/modifiedFileList/_fcResolvedFp/_artifacts/_compactions — see
+ * _msgFingerprint), the ONE surgical `renderChat(conv,false)` path repaints
+ * them, and the anchor-relative scroll preservation `_bgRefreshChat` did is now
+ * a fixed step of that path (gated on `conv._bgRepaint`). So this is a thin
+ * SHIM onto the single path — there is no longer a separate repaint owner:
+ *   • clear the Guard-2 fingerprint (which samples only the LAST message, L6)
+ *     so a mid-history data land is not skipped;
+ *   • set `_bgRepaint` so the surgical path runs even during _initialSwitchLoad
+ *     (the on-open callbacks) AND wraps its swaps in the scroll anchor;
+ *   • delegate to renderChat(conv,false).
+ * Kept as a named function so its ~7 callers need no edit and the "repaint
+ * after async data lands" intent stays greppable. */
 function _bgRefreshChat(conv) {
   if (!conv || conv.id !== activeConvId) return;
   if (activeStreams.has(conv.id) && document.getElementById('streaming-msg')) return;
-  const inner = document.getElementById('chatInner');
-  const container = document.getElementById('chatContainer');
-  if (!inner || !container) return;
-  const els = inner.querySelectorAll('[id^="msg-"]');
-  if (!els.length) return;  // welcome / loading skeleton — nothing to repaint
-
-  const total = conv.messages.length;
-
-  /* ── (1) Compare-before-swap: build the swap list, skipping bubbles whose
-   *        rendered output is byte-identical to what we last painted. ── */
-  const updates = [];
-  els.forEach((el) => {
-    const m = el.id.match(/^msg-(\d+)$/);
-    if (!m) return;
-    const idx = parseInt(m[1], 10);
-    if (idx >= total) return;
-    const msg = conv.messages[idx];
-    if (!msg || msg.role !== 'assistant') return;
-    const fresh = renderMessage(msg, idx);
-    if (el.__bgHtml === fresh) return;  // unchanged → keep DOM (expand state intact)
-    updates.push({ idx, el, html: fresh });
-  });
-  if (!updates.length) return;  // nothing changed → reader untouched
-
-  /* ── (2) Anchor-relative scroll preservation across the swaps. ── */
-  inner.classList.add('cv-off');
-  void inner.scrollHeight;  // force real heights before measuring
-  const anchor = _captureScrollAnchor(container, inner);
-
-  for (const u of updates) {
-    u.el.outerHTML = u.html;
-    const n = document.getElementById('msg-' + u.idx);
-    if (n) n.__bgHtml = u.html;  // stamp so a later no-change refresh skips it
+  if (typeof _lastRenderedFingerprint !== 'undefined') _lastRenderedFingerprint = '';
+  conv._bgRepaint = true;
+  try {
+    renderChat(conv, false);
+  } finally {
+    delete conv._bgRepaint;
   }
-
-  void inner.scrollHeight;  // re-layout after swaps
-  _restoreScrollAnchor(container, anchor);
-  inner.classList.remove('cv-off');
-  if (!activeStreams.has(conv.id)) {
-    _applyAutopilotRunFolds(inner, conv);
-  }
-  _lastRenderedFingerprint = _convRenderFingerprint(conv);
 }
 
 /* ── RENDER_CONTRACT Invariant 2: id-keyed surgical reconcile ─────────────
@@ -394,7 +352,7 @@ function _bgRefreshChat(conv) {
  * offset). Position-only matching then can't find the real node for a shifted
  * message and destroys+rebuilds it — discarding that node's live DOM state
  * (an expanded tool `<details>`, the translation-preview zone keyed on
- * `data-msg-id`, the `__bgHtml` stamp) on every unrelated edit — and, at the
+ * `data-msg-id`) on every unrelated edit — and, at the
  * streaming boundary, is the documented root of twin bubbles. Keying on the
  * stable id lets the reconcile REUSE the drifted node (re-stamping its
  * positional `id`/index in place) instead of tearing it down. */
@@ -544,7 +502,15 @@ function renderChat(conv, forceScroll) {
    * causing scrollHeight to collapse → visible scroll-jump-to-top before the
    * .then() callback scrolls back down.  Skip surgical mode for initial loads
    * so the full-render path runs with _forceScrollToBottom — no flash. */
-  if (forceScroll === false && conv.id === activeConvId && conv.messages.length > 0 && _hasMsgDom && !conv._initialSwitchLoad) {
+  /* ★ A BACKGROUND REPAINT (`conv._bgRepaint`, set by the _bgRefreshChat shim)
+   *   takes the surgical path EVEN during `_initialSwitchLoad`: the on-open
+   *   compaction/artifact/cost/file-change callbacks land async data while the
+   *   initial switch is still in flight, and they must repaint in place
+   *   (scroll-preserved, see the anchor wrap below), NOT force-scroll. The
+   *   `_initialSwitchLoad` bail below still applies to a NON-background render
+   *   during the open (the first paint), which correctly uses full-render. */
+  const _bgRepaint = !!conv._bgRepaint;
+  if (forceScroll === false && conv.id === activeConvId && conv.messages.length > 0 && _hasMsgDom && (!conv._initialSwitchLoad || _bgRepaint)) {
     const total = conv.messages.length;
     /* ★ FIX: Respect _lazyRenderedFrom so force-loaded messages (from scrollToTurn
      * or manual scroll-up) survive surgical updates.  Previously this always used
@@ -555,6 +521,20 @@ function renderChat(conv, forceScroll) {
       ? _lazyRenderedFrom
       : defaultStart;
     let anyChange = false;
+    /* ★ RENDER_CONTRACT Invariant 3: anchor-relative scroll preservation is now
+     *   a FIXED STEP of the surgical path (owner directive), absorbed from the
+     *   retired `_bgRefreshChat`. Async data (cost/file-change/compaction) lands
+     *   above the fold and GROWS bubbles; without re-pinning, a scrolled-up
+     *   reader drifts. Capture the top in-view anchor before the swaps under the
+     *   `cv-off` guard (so content-visibility:auto caches can't collapse and
+     *   mis-resolve geometry) and re-pin after. */
+    const _bgContainer = document.getElementById('chatContainer');
+    let _bgAnchor = null;
+    if (_bgRepaint && _bgContainer && inner) {
+      inner.classList.add('cv-off');
+      void inner.scrollHeight;
+      _bgAnchor = _captureScrollAnchor(_bgContainer, inner);
+    }
 
     /* 1) Update or add messages
      * ★ Perf: collect all outerHTML replacements first, then apply in one pass.
@@ -581,7 +561,7 @@ function renderChat(conv, forceScroll) {
      * node is MOVED into array order instead of left stranded. `_reconcileFindEl`
      * matches by stable `_msgId` first (positional `id` only as a legacy
      * fallback), so a shifted-unchanged node is REUSED — its live DOM state
-     * (expanded tool <details>, translation preview, __bgHtml) survives — and
+     * (expanded tool <details>, translation preview) survives — and
      * only its positional `id`/index handle is re-stamped. */
     let _cursor = _skipIdx >= 0 ? document.getElementById('msg-' + _skipIdx) : null;
     /* Anchor for insertion: the node the reconciled sequence must sit BEFORE.
@@ -665,6 +645,14 @@ function renderChat(conv, forceScroll) {
     }
     if (!activeStreams.has(conv.id)) {
       _applyAutopilotRunFolds(inner, conv);
+    }
+    /* ★ Re-pin the anchor captured above (background repaint only) so an
+     *   above-fold height change from the freshly-landed data doesn't drift a
+     *   scrolled-up reader, then drop the cv-off guard. */
+    if (_bgRepaint && _bgContainer) {
+      void inner.scrollHeight;
+      if (_bgAnchor) _restoreScrollAnchor(_bgContainer, _bgAnchor);
+      inner.classList.remove('cv-off');
     }
     _lastRenderedFingerprint = fp;
     _lazyConvId = conv.id;

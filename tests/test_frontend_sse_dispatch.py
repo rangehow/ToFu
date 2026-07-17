@@ -126,6 +126,23 @@ win._hasRealToolRound = global._hasRealToolRound = (m) => {
   }
   return false;
 };
+// _spliceInjectRow lives in core.js (loaded before sse_pipeline.js in the real
+// bundle). This harness doesn't load core.js, so provide the SAME impl — the
+// inject-inject handlers (swarm/peer/steer) call it to anchor the synthetic row
+// before its consuming round (llmRound === injectRound-1). Port of core.js.
+win._spliceInjectRow = global._spliceInjectRow = (arr, row, anchorLlmRound) => {
+  if (!Array.isArray(arr)) return arr;
+  let at = -1;
+  if (anchorLlmRound != null) {
+    for (let i = 0; i < arr.length; i++) {
+      const r = arr[i];
+      if (r && !r._userSteerInject && !r._peerInject && !r._inboxInject
+          && r.llmRound === anchorLlmRound) { at = i; break; }
+    }
+  }
+  if (at >= 0) arr.splice(at, 0, row); else arr.push(row);
+  return arr;
+};
 
 // RENDER_CONTRACT Phase 3: the pure stream reducer loads BEFORE the handlers +
 // pipeline in the bundle (js_bundler _BUNDLE_FILES), and dispatchSSEEvent's

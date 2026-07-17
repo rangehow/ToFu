@@ -3236,7 +3236,31 @@ function _renderTimelineBatch(batch, rounds, allRounds, idx) {
 function renderSegmentTimelineHTML(segments, msg, idx) {
   if (!Array.isArray(segments) || segments.length === 0) return "";
   const allRounds = getToolRoundsFromMsg(msg) || [];
-  const { byId, noId } = _roundsByToolCallId(allRounds);
+  /* ── Extract synthetic inject rows (steer / peer / async swarm) ───────────
+   * These display-only chips are DELIBERATELY absent from `segments` (backend
+   * assemble_segments skips is_synthetic_inbox_round), so the batch walk below
+   * — which is driven purely by segments — would DROP them entirely (the
+   * "settled loses the chip" bug). Pull them out of `allRounds` here, key each
+   * by its ANCHOR llmRound (injectRound-1, the round that consumed it, same
+   * rule as _spliceInjectRow), and prepend its rendered chip before that
+   * round's batch. Real-round resolution + the header count below use
+   * `realRounds` ONLY, so a synthetic row (no toolCallId) can never be picked
+   * up as a positional tool body nor inflate the "N tools" header. */
+  const _injByAnchor = new Map();
+  const realRounds = [];
+  for (const r of allRounds) {
+    if (r && (r._userSteerInject || r._peerInject || r._inboxInject)) {
+      const injRound = r._userSteerInject ? r.steerRound
+        : (r._peerInject ? r.peerRound : r.inboxRound);
+      const anchor = (injRound || 0) - 1;
+      if (!_injByAnchor.has(anchor)) _injByAnchor.set(anchor, []);
+      _injByAnchor.get(anchor).push(r);
+    } else {
+      realRounds.push(r);
+    }
+  }
+  /* END_INJECT_EXTRACTION */
+  const { byId, noId } = _roundsByToolCallId(realRounds);
   let noIdCursor = 0;
 
   // Walk segments, accumulating consecutive segments of the same llmRound
@@ -3254,7 +3278,7 @@ function renderSegmentTimelineHTML(segments, msg, idx) {
     if (s.type === "text" && s.deliverable) continue;  // safety: never in timeline
     const key = (s.llmRound != null) ? ("L" + s.llmRound) : "S";
     if (key !== curKey || cur === null) {
-      cur = { key, segs: [], rounds: [] };
+      cur = { key, llmRound: (s.llmRound != null ? s.llmRound : null), segs: [], rounds: [] };
       batches.push(cur);
       curKey = key;
     }
@@ -3272,20 +3296,41 @@ function renderSegmentTimelineHTML(segments, msg, idx) {
   // absent/unmatchable), the timeline would show prose with no tools —
   // fall back to the legacy path rather than render a lopsided view.
   const anyTool = batches.some((b) => b.rounds.length > 0);
-  if (!anyTool && allRounds.length > 0) return "";
+  if (!anyTool && realRounds.length > 0) return "";
 
-  const inner = batches
-    .map((b) => _renderTimelineBatch(b.segs, b.rounds, allRounds, idx))
-    .join("");
+  /* Render each inject chip via its real renderer (_renderUnifiedToolLine →
+   * _renderUserSteerInjectRow / peer / inbox) so the settled chip is
+   * byte-identical to the live/grouped chip. */
+  const _renderInjectChips = (rows) => (rows || [])
+    .map((r) => _renderToolSlot(r, allRounds)).join("");
+
+  const _emittedAnchors = new Set();
+  let inner = "";
+  for (const b of batches) {
+    // Prepend any inject chips anchored to THIS batch's round, at the top
+    // (before the batch's own thinking/narration/tools) — "user speaks first".
+    if (b.llmRound != null && _injByAnchor.has(b.llmRound)) {
+      inner += _renderInjectChips(_injByAnchor.get(b.llmRound));
+      _emittedAnchors.add(b.llmRound);
+    }
+    inner += _renderTimelineBatch(b.segs, b.rounds, allRounds, idx);
+  }
+  // Any inject rows whose anchor round has no matching batch (e.g. a steer
+  // consumed in a round that produced no tools/prose) — emit at the end so
+  // the chip is never silently lost.
+  for (const [anchor, rows] of _injByAnchor) {
+    if (!_emittedAnchors.has(anchor)) inner += _renderInjectChips(rows);
+  }
   if (!inner) return "";
 
   /* Wrap in the same .ptool-panel chrome so the header ("N tools used")
-   * and the collapse behaviour match the legacy render exactly. */
-  const anyActive = allRounds.some((r) => r.status === "searching" || r._swarmActive);
-  const headerLabel = _toolPanelHeaderLabel(allRounds, anyActive);
+   * and the collapse behaviour match the legacy render exactly. The header
+   * counts REAL rounds only — synthetic inject rows are not tools. */
+  const anyActive = realRounds.some((r) => r.status === "searching" || r._swarmActive);
+  const headerLabel = _toolPanelHeaderLabel(realRounds, anyActive);
   return `<div class="ptool-panel seg-timeline${anyActive ? " ptool-panel-active" : ""}">` +
     `<div class="ptool-panel-header"><span class="ptool-panel-label">${headerLabel}</span></div>` +
-    `<div class="ptool-panel-body" data-full-count="${allRounds.length}">${inner}</div>` +
+    `<div class="ptool-panel-body" data-full-count="${realRounds.length}">${inner}</div>` +
     `</div>`;
 }
 

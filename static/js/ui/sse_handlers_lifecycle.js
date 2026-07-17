@@ -30,20 +30,25 @@ function _handleSwarmInboxInject(ev, c) {
        *   `_inboxInject`; _renderUnifiedToolLine renders it specially.
        *   Dedup by round so SSE replay / poll fallback doesn't double it. */
       if (!assistantMsg.toolRounds) assistantMsg.toolRounds = [];
-      const _injKey = "inbox:" + (ev.round || 0);
+      const _injRound = ev.round || 0;
+      const _injKey = "inbox:" + _injRound;
       if (!assistantMsg.toolRounds.some(r => r._inboxInject && r._inboxKey === _injKey)) {
-        assistantMsg.toolRounds.push({
+        /* Anchor the synthetic row ABOVE the round that consumed the inject
+           (llmRound === injectRound-1), not at the tail. See core.js
+           _spliceInjectRow. Live-append DOM placement is corrected by
+           _repositionInjectGroups after the tool-sync loop. */
+        _spliceInjectRow(assistantMsg.toolRounds, {
           /* Collision-proof synthetic roundNum for the data-prn slot —
              real tool rounds use small sequential numbers; 9e6+ never clashes. */
           roundNum:   9000000 + assistantMsg.toolRounds.length,
           status:     "done",
           _inboxInject:  true,
           _inboxKey:     _injKey,
-          inboxRound:    ev.round || 0,
+          inboxRound:    _injRound,
           inboxCount:    ev.count || 0,
           inboxAgentIds: Array.isArray(ev.agentIds) ? ev.agentIds.filter(Boolean) : [],
           inboxPreviews: Array.isArray(ev.previews) ? ev.previews : [],
-        });
+        }, _injRound - 1);
         if (buf) buf.toolRounds = assistantMsg.toolRounds;
       }
       /* Reconcile the most recent swarm panel's async-running badge.
@@ -131,17 +136,18 @@ function _handlePeerInboxInject(ev, c) {
        *    rendered by _renderPeerInjectRow. Dedup by round so SSE replay /
        *    poll fallback doesn't double it. */
       if (!assistantMsg.toolRounds) assistantMsg.toolRounds = [];
-      const _pKey = "peer:" + (ev.round || 0);
+      const _pRound = ev.round || 0;
+      const _pKey = "peer:" + _pRound;
       if (!assistantMsg.toolRounds.some(r => r._peerInject && r._peerKey === _pKey)) {
-        assistantMsg.toolRounds.push({
+        _spliceInjectRow(assistantMsg.toolRounds, {
           roundNum:      9000000 + assistantMsg.toolRounds.length,
           status:        "done",
           _peerInject:   true,
           _peerKey:      _pKey,
-          peerRound:     ev.round || 0,
+          peerRound:     _pRound,
           peerCount:     ev.count || 0,
           peerPreviews:  Array.isArray(ev.previews) ? ev.previews : [],
-        });
+        }, _pRound - 1);
         if (buf) buf.toolRounds = assistantMsg.toolRounds;
       }
       twUpdate(convId);
@@ -178,7 +184,7 @@ function _handleUserSteerInject(ev, c) {
       if (!assistantMsg.toolRounds) assistantMsg.toolRounds = [];
       const _sKey = "steer:" + _steerRound;
       if (!assistantMsg.toolRounds.some(r => r._userSteerInject && r._steerKey === _sKey)) {
-        assistantMsg.toolRounds.push({
+        _spliceInjectRow(assistantMsg.toolRounds, {
           roundNum:      9000000 + assistantMsg.toolRounds.length,
           status:        "done",
           _userSteerInject: true,
@@ -186,7 +192,7 @@ function _handleUserSteerInject(ev, c) {
           steerRound:    _steerRound,
           steerCount:    ev.count || 0,
           steerPreviews: Array.isArray(ev.previews) ? ev.previews : [],
-        });
+        }, _steerRound - 1);
         if (buf) buf.toolRounds = assistantMsg.toolRounds;
       }
       twUpdate(convId);

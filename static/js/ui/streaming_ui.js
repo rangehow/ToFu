@@ -509,6 +509,47 @@ function _renderStreamRoundProse(groupEl, round) {
   }
 }
 
+/* ── Live DOM reposition of synthetic inject-row groups ─────────────────
+ * The main _syncToolRoundsDOM loop appends a NEW group with `body.appendChild`
+ * and never relocates an existing one. A mid-turn inject chip (steer / peer /
+ * async swarm) always arrives AFTER its anchor round's tool_start events (the
+ * chip event is deferred until the round's LLM call confirms consumption), so
+ * its solo `S{roundNum}` group is created at the TAIL — the sink-to-bottom bug.
+ * The array-level `_spliceInjectRow` fixes the settled/rehydrate rebuild paths
+ * (which re-derive the DOM from scratch, honoring array order), but the live
+ * incremental DOM needs this corrective pass: after the group loop, move each
+ * synthetic group ABOVE its anchor round (llmRound === injectRound-1), landing
+ * it before that round's earliest prose sibling / tool group — the top of the
+ * round that consumed the inject. Additive + idempotent: a no-op once the chip
+ * already sits above its anchor. */
+function _repositionInjectGroups(body, rounds) {
+  if (!body || !Array.isArray(rounds)) return;
+  const _esc = (typeof CSS !== "undefined" && CSS.escape) ? CSS.escape : (s) => s;
+  for (const r of rounds) {
+    if (!r || !(r._userSteerInject || r._peerInject || r._inboxInject)) continue;
+    const injRound = r._userSteerInject ? r.steerRound
+      : (r._peerInject ? r.peerRound : r.inboxRound);
+    const anchor = (injRound || 0) - 1;
+    if (anchor < 0) continue;
+    const sGroup = body.querySelector(
+      `.ptool-turn[data-llm-round="${_esc("S" + r.roundNum)}"]`);
+    if (!sGroup) continue;
+    // The anchor round's earliest DOM node: its prose siblings (data-seg-round)
+    // sit as `body` children BEFORE its `.ptool-turn`, so scan all children in
+    // order and take the FIRST that belongs to the anchor round.
+    const lkey = "L" + anchor;
+    let target = null;
+    for (const child of body.children) {
+      if (child === sGroup) continue;
+      if (child.getAttribute("data-seg-round") === lkey
+          || child.getAttribute("data-llm-round") === lkey) { target = child; break; }
+    }
+    if (target && sGroup.nextSibling !== target && sGroup !== target) {
+      body.insertBefore(sGroup, target);
+    }
+  }
+}
+
 function _syncToolRoundsDOM(container, rounds) {
   // ★ Fast-path: skip if rounds haven't changed since last sync
   let _fp = rounds.length;
@@ -853,6 +894,13 @@ function _syncToolRoundsDOM(container, rounds) {
           }
         }
       }
+
+      /* ★ Corrective pass: relocate any synthetic inject-row group (steer /
+       *   peer / async swarm) ABOVE the round that consumed it. The main loop
+       *   above only ever appends a new group to the tail, so a late-arriving
+       *   chip sinks to the bottom — this moves it to the top of its anchor
+       *   round. Idempotent; runs after all groups + headers exist. */
+      _repositionInjectGroups(body, toolRounds);
     }
   }
 

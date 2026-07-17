@@ -399,6 +399,35 @@ function getToolRoundsFromMsg(msg) {
  * never mutating `msg.toolRounds` (so a later full-conv PUT can never leak them
  * back into the DB). Idempotent: if a live synthetic row already exists for a
  * round (dedup key) we don't add a duplicate. */
+/* ── Anchor-position a synthetic inject row inside a toolRounds array ──────
+ * A mid-turn inject (steer / peer / async swarm) is CONSUMED at the model's
+ * loop round `round_num`; the backend emits its chip event with
+ * `round = round_num + 1` (1-based), while the REAL tool rounds of that same
+ * loop iteration carry `llmRound = round_num` (0-based). So the row belongs
+ * immediately ABOVE the first real round whose `llmRound === injectRound - 1`
+ * (the top of the round that consumed it — "user speaks first, model responds
+ * below"). `_spliceInjectRow` inserts it there; when no anchor round exists yet
+ * (e.g. the inject landed before any tool ran this round) it falls back to the
+ * tail. The row keeps `llmRound` UNSET so it never folds into the real round's
+ * parallel-batch group (which would inflate the "N parallel calls" count) — it
+ * renders as its own solo group that simply sorts above the anchor.
+ * Mutates `arr` in place and returns it. */
+function _spliceInjectRow(arr, row, anchorLlmRound) {
+  if (!Array.isArray(arr)) return arr;
+  let at = -1;
+  if (anchorLlmRound != null) {
+    for (let i = 0; i < arr.length; i++) {
+      const r = arr[i];
+      if (r && !r._userSteerInject && !r._peerInject && !r._inboxInject
+          && r.llmRound === anchorLlmRound) { at = i; break; }
+    }
+  }
+  if (at >= 0) arr.splice(at, 0, row);
+  else arr.push(row);
+  return arr;
+}
+if (typeof window !== "undefined") window._spliceInjectRow = _spliceInjectRow;
+
 function _rehydrateInjectRows(msg, base) {
   if (!msg) return base;
   const swarm = Array.isArray(msg._inboxInjects) ? msg._inboxInjects : [];
@@ -410,7 +439,7 @@ function _rehydrateInjectRows(msg, base) {
   for (const s of swarm) {
     const rnd = s.round || 0;
     if (_has(r => r._inboxInject && r._inboxKey === "inbox:" + rnd)) continue;
-    out.push({
+    _spliceInjectRow(out, {
       roundNum: 9000000 + out.length,
       status: "done",
       _inboxInject: true,
@@ -419,12 +448,12 @@ function _rehydrateInjectRows(msg, base) {
       inboxCount: s.count || 0,
       inboxAgentIds: Array.isArray(s.agentIds) ? s.agentIds.filter(Boolean) : [],
       inboxPreviews: Array.isArray(s.previews) ? s.previews : [],
-    });
+    }, rnd - 1);
   }
   for (const p of peer) {
     const rnd = p.round || 0;
     if (_has(r => r._peerInject && r._peerKey === "peer:" + rnd)) continue;
-    out.push({
+    _spliceInjectRow(out, {
       roundNum: 9000000 + out.length,
       status: "done",
       _peerInject: true,
@@ -432,12 +461,12 @@ function _rehydrateInjectRows(msg, base) {
       peerRound: rnd,
       peerCount: p.count || 0,
       peerPreviews: Array.isArray(p.previews) ? p.previews : [],
-    });
+    }, rnd - 1);
   }
   for (const s of steer) {
     const rnd = s.round || 0;
     if (_has(r => r._userSteerInject && r._steerKey === "steer:" + rnd)) continue;
-    out.push({
+    _spliceInjectRow(out, {
       roundNum: 9000000 + out.length,
       status: "done",
       _userSteerInject: true,
@@ -445,7 +474,7 @@ function _rehydrateInjectRows(msg, base) {
       steerRound: rnd,
       steerCount: s.count || 0,
       steerPreviews: Array.isArray(s.previews) ? s.previews : [],
-    });
+    }, rnd - 1);
   }
   return out;
 }

@@ -1051,11 +1051,95 @@ _console_handler.setFormatter(_formatter)
 _console_handler.setLevel(logging.WARNING)
 _console_handler.addFilter(_BizAndServerOnly())
 
-logging.basicConfig(
-    level=logging.INFO,
-    handlers=[_app_handler, _access_handler, _error_handler,
-              _vendor_handler, _console_handler],
-)
+# ── Non-blocking logging: QueueHandler + QueueListener ──
+# The four file handlers + the stderr StreamHandler all do SYNCHRONOUS I/O
+# under a per-handler lock. error.log lives on a FUSE/NFS mount (see
+# _tofu_logs_root), so a WARNING/ERROR *storm* (e.g. a total upstream 502
+# outage emitting thousands of lines) would serialize every logging thread
+# behind slow network writes — INCLUDING the sync threads serving GET / and
+# the health/conversation endpoints. That converts ANY log storm into a dead
+# frontend ("backend alive, frontend can't be served"), independent of what
+# caused the storm.
+#
+# Fix (structural, not a time-bound): the root logger gets a SINGLE
+# QueueHandler whose emit() is just a non-blocking queue.put() — it never
+# touches the disk or the handler locks. A dedicated background thread
+# (QueueListener) drains the queue and performs the actual file/stderr I/O.
+# So a request/serving thread that logs during a storm returns immediately;
+# only the listener thread ever blocks on the slow mount. The queue is
+# unbounded (put_nowait never blocks/drops), so no log line is lost — a burst
+# just grows the in-memory queue and the listener catches up.
+import queue as _queue_mod
+from logging.handlers import QueueHandler, QueueListener
+
+_real_log_handlers = [_app_handler, _access_handler, _error_handler,
+                      _vendor_handler, _console_handler]
+
+# Under pytest, keep logging SYNCHRONOUS: caplog and the tests that assert a
+# log line landed in a file handler (e.g. test_log_pytest_sink_isolation) read
+# handler output immediately after logger.error(), which an async listener
+# thread would race. The queue's whole point is production request-thread
+# latency; the test process is single-purpose, so direct handlers are correct
+# there. Detect pytest via the env var it always sets for a collected session.
+_LOG_UNDER_PYTEST = bool(os.environ.get('PYTEST_CURRENT_TEST')) or (
+    'pytest' in sys.modules)
+
+_LOG_QUEUE = None
+_log_listener = None
+
+if _LOG_UNDER_PYTEST:
+    logging.basicConfig(
+        level=logging.INFO,
+        handlers=list(_real_log_handlers),
+    )
+else:
+    # SINGLE QueueHandler on the root logger. Its emit() is just a
+    # non-blocking SimpleQueue.put() — it never touches the disk or the
+    # per-handler locks. A dedicated background thread (QueueListener) drains
+    # the queue and performs the actual file/stderr I/O, so a request/serving
+    # thread that logs during a storm returns immediately; only the listener
+    # thread ever blocks on the slow FUSE mount. SimpleQueue is unbounded
+    # (put never blocks/drops), so no line is lost — a burst just grows the
+    # in-memory queue and the listener catches up.
+    _LOG_QUEUE = _queue_mod.SimpleQueue()
+    _queue_handler = QueueHandler(_LOG_QUEUE)
+    # CRITICAL: give the QueueHandler an explicit ``%(message)s`` formatter so
+    # basicConfig() does NOT attach its default BASIC_FORMAT
+    # (``LEVEL:name:message``) to it. QueueHandler.prepare() renders its
+    # formatter into record.msg before enqueueing; if that were BASIC_FORMAT,
+    # each real file handler would then format the ALREADY-formatted string a
+    # SECOND time → doubled ``[ERROR] name: ERROR:name:msg`` lines. With
+    # ``%(message)s`` the enqueued text is just the rendered message (+ any
+    # exc traceback, which Formatter appends and prepare() then clears from
+    # exc_info so it isn't duplicated), and the real handlers apply the full
+    # timestamp/level/name/thread layout exactly once — byte-identical to the
+    # old synchronous output. levelname/name/threadName/created stay on the
+    # record (prepare only rewrites msg/args/exc_info), so the real formatter
+    # still has every field.
+    _queue_handler.setFormatter(logging.Formatter('%(message)s'))
+    logging.basicConfig(
+        level=logging.INFO,
+        handlers=[_queue_handler],
+    )
+    # respect_handler_level=True so each real handler still applies its own
+    # setLevel()/filters on the listener thread exactly as before.
+    _log_listener = QueueListener(
+        _LOG_QUEUE, *_real_log_handlers, respect_handler_level=True)
+    _log_listener.start()
+
+    # Drain + flush the queue on interpreter exit so the tail of the log isn't
+    # lost if the process stops while lines are still queued.
+    # QueueListener.stop() enqueues a sentinel and joins the drain thread.
+    import atexit as _atexit_mod
+
+    def _stop_log_listener():
+        try:
+            if _log_listener is not None:
+                _log_listener.stop()
+        except Exception:
+            pass  # shutdown best-effort — never raise from an atexit hook
+
+    _atexit_mod.register(_stop_log_listener)
 
 _NOISY_LIBS = (
     'courlan', 'htmldate', 'justext',

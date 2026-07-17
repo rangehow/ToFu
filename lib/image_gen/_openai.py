@@ -86,6 +86,8 @@ def _generate_openai(
             'text': revised,
         }
 
+    return {'ok': False, 'error': 'No image data in OpenAI response'}
+
 
 def _edit_openai(
     prompt: str,
@@ -181,5 +183,3 @@ def _edit_openai(
         }
 
     return {'ok': False, 'error': 'No image data in OpenAI edit response'}
-
-    return {'ok': False, 'error': 'No image data in OpenAI response'}

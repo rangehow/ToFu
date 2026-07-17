@@ -17,10 +17,16 @@ verdict line so a timer/agent can decide READY vs WAIT without guessing:
               bytes_diverged=<n> reason=<...>
 
 Gate (ALL must hold for READY):
-  1. The latest ``server.boot … starting up`` banner is AFTER FIX_COMMIT_TS
-     (the deploy actually happened). Env FIX_COMMIT_TS overrides the default.
+  1. The PROCESS ACTUALLY SERVING 15000 started AFTER FIX_COMMIT_TS. This is
+     the TRUE deploy signal — NOT a log ``server.boot`` banner. Learned the
+     hard way (2026-07-17): the main server PID 1952548 had been up since
+     18:55 (pre-fix) while dozens of ephemeral sibling/probe instances on other
+     ports emitted their OWN 20:xx boot banners into the shared app.log. Keying
+     on the latest banner falsely reported "deployed" and produced a bogus FAIL
+     even though the live server ran pre-fix code. So we read the real serving
+     process's start time from ``ps`` and use its boot banner as the log cursor.
   2. At least MIN_SAMPLES cache-bearing requests (``CacheStats`` lines) exist
-     AFTER that boot (enough traffic to be meaningful).
+     AFTER that process started (enough traffic to be meaningful).
   3. Both miss-class counts on already-cached turns are <= TOLERANCE.
 
 Exit code 0 + ``ACCEPTANCE: READY`` when the caching is verified flawless;
@@ -59,6 +65,41 @@ def _ts_of(line: str) -> str | None:
     return m.group(1) if m else None
 
 
+def _serving_pid_start() -> str | None:
+    """Return the START time (``YYYY-MM-DD HH:MM:SS``) of the process actually
+    serving via ``server.py``, or None if it can't be determined.
+
+    This is the TRUE deploy signal — a log boot banner can come from an
+    ephemeral sibling/probe instance on another port and does NOT mean the live
+    15000 server reloaded. We read the real long-lived ``python server.py``
+    process's lstart from ``ps``.
+    """
+    import subprocess
+    import time as _t
+    try:
+        out = subprocess.run(
+            ['ps', '-eo', 'lstart,cmd'], capture_output=True, text=True,
+            timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    newest = None
+    for ln in out.splitlines():
+        if 'server.py' not in ln or 'grep' in ln:
+            continue
+        # lstart is the first 5 whitespace fields: 'Fri Jul 17 18:55:53 2026'
+        parts = ln.split()
+        if len(parts) < 5:
+            continue
+        try:
+            st = _t.strptime(' '.join(parts[:5]), '%a %b %d %H:%M:%S %Y')
+            ts = _t.strftime('%Y-%m-%d %H:%M:%S', st)
+        except ValueError:
+            continue
+        if newest is None or ts > newest:
+            newest = ts
+    return newest
+
+
 def analyze(log_path: str, min_samples: int) -> dict:
     try:
         with open(log_path, 'r', encoding='utf-8', errors='replace') as fh:
@@ -68,28 +109,38 @@ def analyze(log_path: str, min_samples: int) -> dict:
                 'boot': '', 'samples': 0, 'prefix_changed': 0,
                 'bytes_diverged': 0}
 
-    # Find the LAST boot banner and its line index + timestamp.
-    boot_idx = -1
-    boot_ts = ''
-    for i, ln in enumerate(lines):
-        if _BOOT_RE.search(ln):
-            boot_idx = i
-            boot_ts = _ts_of(ln) or boot_ts
-    if boot_idx < 0:
-        return {'verdict': 'WAIT', 'reason': 'no boot banner found',
-                'boot': '', 'samples': 0, 'prefix_changed': 0,
-                'bytes_diverged': 0}
+    # Gate 1 (TRUE deploy signal): the process ACTUALLY serving must have
+    # started after the fix commit. A log boot banner is NOT sufficient — it
+    # can come from an ephemeral sibling/probe instance on another port.
+    boot_ts = _serving_pid_start()
+    if boot_ts is None:
+        # Fallback: no ps access — degrade to the latest banner but SAY SO.
+        for i, ln in enumerate(lines):
+            if _BOOT_RE.search(ln):
+                boot_ts = _ts_of(ln) or boot_ts
+        if not boot_ts:
+            return {'verdict': 'WAIT', 'reason': 'no serving PID and no boot '
+                    'banner found', 'boot': '', 'samples': 0,
+                    'prefix_changed': 0, 'bytes_diverged': 0}
 
-    # Gate 1: boot must postdate the fix commit.
-    if boot_ts and boot_ts <= FIX_COMMIT_TS:
+    if boot_ts <= FIX_COMMIT_TS:
         return {'verdict': 'WAIT',
-                'reason': f'latest boot {boot_ts} predates fix commit '
-                          f'{FIX_COMMIT_TS} — not deployed yet',
+                'reason': f'serving process started {boot_ts}, predates fix '
+                          f'commit {FIX_COMMIT_TS} — live server still runs '
+                          'pre-fix code; a real 15000 restart is required',
                 'boot': boot_ts, 'samples': 0, 'prefix_changed': 0,
                 'bytes_diverged': 0}
 
-    # Count post-boot signals.
-    post = lines[boot_idx + 1:]
+    # Cursor: count only log lines AT/AFTER the serving process's start time.
+    boot_idx = 0
+    for i, ln in enumerate(lines):
+        ts = _ts_of(ln)
+        if ts and ts >= boot_ts:
+            boot_idx = i
+            break
+
+    # Count post-deploy signals.
+    post = lines[boot_idx:]
     samples = sum(1 for ln in post if _CACHESTATS_RE.search(ln))
     prefix_changed = sum(1 for ln in post
                          if _PREFIX_CHANGED_RE.search(ln)

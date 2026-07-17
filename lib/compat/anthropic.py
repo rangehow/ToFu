@@ -17,9 +17,13 @@ from __future__ import annotations
 
 import asyncio
 import json
-import uuid
 from typing import AsyncGenerator
 
+from lib.compat._common import (
+    apply_common_cfg,
+    apply_tools_and_personal_defaults,
+    short_id,
+)
 from lib.log import get_logger
 
 logger = get_logger(__name__)
@@ -66,21 +70,10 @@ def translate_anthropic_request(body: dict) -> tuple[list[dict], dict, dict]:
         messages.append({'role': role, 'content': content})
 
     cfg: dict = {}
-    if body.get('model'):
-        cfg['model'] = body['model']
-        cfg['preset'] = body['model']
-    if 'temperature' in body:
-        cfg['temperature'] = body['temperature']
-    if 'max_tokens' in body:
-        cfg['maxTokens'] = body['max_tokens']
-    if 'top_p' in body:
-        cfg['topP'] = body['top_p']
+    apply_common_cfg(cfg, body)
+    # Anthropic-specific cfg fields.
     if 'stop_sequences' in body:
         cfg['stop'] = body['stop_sequences']
-    if 'tools' in body:
-        cfg['tools'] = body['tools']
-    if 'tool_choice' in body:
-        cfg['toolChoice'] = body['tool_choice']
     if 'metadata' in body and isinstance(body['metadata'], dict):
         if body['metadata'].get('user_id'):
             cfg['user'] = body['metadata']['user_id']
@@ -96,18 +89,7 @@ def translate_anthropic_request(body: dict) -> tuple[list[dict], dict, dict]:
                     'high' if budget <= 16384 else
                     'xhigh' if budget <= 32768 else 'max')
 
-    if 'tools' in body:
-        cfg.setdefault('searchMode', 'off')
-        cfg.setdefault('fetchEnabled', False)
-        cfg.setdefault('mcpEnabled', False)
-
-    # App-personal capabilities (memory store + preference profile) fail
-    # closed on this headless compat surface regardless of whether tools were
-    # supplied — the operator's personal state must never ride an
-    # Anthropic-compat call. setdefault = an explicit caller cfg still wins.
-    # Single source of truth: lib/agent_core/personal_scope.
-    from lib.agent_core.personal_scope import apply_headless_personal_defaults
-    apply_headless_personal_defaults(cfg)
+    apply_tools_and_personal_defaults(cfg, body)
 
     options = {
         'stream': bool(body.get('stream')),
@@ -140,7 +122,7 @@ def _content_blocks_from_task(task: dict) -> list[dict]:
                     args = {}
                 blocks.append({
                     'type': 'tool_use',
-                    'id': tc.get('id') or 'toolu_' + uuid.uuid4().hex[:16],
+                    'id': tc.get('id') or short_id('toolu_', 16),
                     'name': fn.get('name', ''),
                     'input': args,
                 })
@@ -160,7 +142,7 @@ def build_anthropic_response(task: dict, model: str) -> dict:
         stop_reason = finish_map.get(finish, 'end_turn')
     usage = task.get('usage') or {}
     return {
-        'id': 'msg_' + (task.get('id') or uuid.uuid4().hex[:16]),
+        'id': 'msg_' + (task.get('id') or short_id(n=16)),
         'type': 'message',
         'role': 'assistant',
         'model': model,
@@ -188,7 +170,7 @@ async def stream_anthropic_chunks(task, model: str
     """
     from lib.agent_core.admission import unregister_waiter, wait_for_event
 
-    msg_id = 'msg_' + uuid.uuid4().hex[:16]
+    msg_id = short_id('msg_', 16)
     cursor = 0
     started = False
     text_block_open = False

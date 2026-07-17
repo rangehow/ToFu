@@ -16,9 +16,13 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-import uuid
 from typing import AsyncGenerator
 
+from lib.compat._common import (
+    apply_common_cfg,
+    apply_tools_and_personal_defaults,
+    short_id,
+)
 from lib.log import get_logger
 
 logger = get_logger(__name__)
@@ -40,42 +44,18 @@ def translate_openai_request(body: dict) -> tuple[list[dict], dict, dict]:
         raise ValueError('messages must be an array')
 
     cfg: dict = {}
-    if body.get('model'):
-        cfg['model'] = body['model']
-        cfg['preset'] = body['model']
-    if 'temperature' in body:
-        cfg['temperature'] = body['temperature']
-    if 'max_tokens' in body:
-        cfg['maxTokens'] = body['max_tokens']
-    if 'top_p' in body:
-        cfg['topP'] = body['top_p']
+    apply_common_cfg(cfg, body)
+    # OpenAI-specific cfg fields.
     if 'stop' in body:
         cfg['stop'] = body['stop']
     if 'seed' in body:
         cfg['seed'] = body['seed']
     if 'response_format' in body:
         cfg['responseFormat'] = body['response_format']
-    if 'tools' in body:
-        cfg['tools'] = body['tools']
-    if 'tool_choice' in body:
-        cfg['toolChoice'] = body['tool_choice']
     if 'user' in body:
         cfg['user'] = body['user']
-    # Tools: when the caller supplies an explicit tool list, treat that
-    # as the canonical surface — disable Tofu's auto-injected tools so
-    # we don't surprise the model with extra capabilities.
-    if 'tools' in body:
-        cfg.setdefault('searchMode', 'off')
-        cfg.setdefault('fetchEnabled', False)
-        cfg.setdefault('mcpEnabled', False)
 
-    # App-personal capabilities (memory store + preference profile) fail
-    # closed on this headless compat surface regardless of whether tools were
-    # supplied — the operator's personal state must never ride an OpenAI-compat
-    # call. setdefault = an explicit caller cfg still wins. Single source of
-    # truth: lib/agent_core/personal_scope.
-    from lib.agent_core.personal_scope import apply_headless_personal_defaults
-    apply_headless_personal_defaults(cfg)
+    apply_tools_and_personal_defaults(cfg, body)
 
     # Reasoning / thinking — OpenAI's `reasoning_effort` (o-series) maps
     # to our `thinkingDepth`.
@@ -120,7 +100,7 @@ def build_openai_response(task: dict, model: str,
         finish = 'length'  # OpenAI doesn't have an 'aborted' code
     usage = task.get('usage') or {}
     return {
-        'id': requested_id or f'chatcmpl-{uuid.uuid4().hex[:24]}',
+        'id': requested_id or short_id('chatcmpl-'),
         'object': 'chat.completion',
         'created': int(time.time()),
         'model': model,
@@ -155,7 +135,7 @@ async def stream_openai_chunks(task, model: str, requested_id: str = '',
     """
     from lib.agent_core.admission import unregister_waiter, wait_for_event
 
-    completion_id = requested_id or f'chatcmpl-{uuid.uuid4().hex[:24]}'
+    completion_id = requested_id or short_id('chatcmpl-')
     emitted_role = False
     cursor = 0
     task_id = task.get('id') or ''

@@ -1535,6 +1535,22 @@ async def async_dispatch_stream(body_or_messages, *, on_thinking=None,
             if on_content:
                 on_content(text)
 
+        # ── Cache write-visibility settle gate (async path) — see the sync
+        #    dispatch_stream branch + cache_settle.py for the rationale. Waits
+        #    (event-loop-friendly) so this conv's prior big round's cache write
+        #    is visible before this round reads the prefix back.
+        _cache_conv_id = ''
+        try:
+            from lib.llm_dispatch.conv_affinity import get_conv_affinity
+            from lib.llm_dispatch.big_prefix_gate import estimate_prefix_tokens
+            from lib.llm_dispatch.cache_settle import async_settle_before_send
+            _cache_conv_id = get_conv_affinity() or ''
+            await async_settle_before_send(
+                _cache_conv_id, estimate_prefix_tokens(body),
+                abort_check=abort_check, log_prefix=tag)
+        except ImportError as _cs_err:
+            logger.debug('%s cache-settle (async) unavailable: %s', tag, _cs_err)
+
         try:
             msg, finish, usage = await async_stream_chat(
                 body, api_key=slot.api_key,
@@ -1572,6 +1588,13 @@ async def async_dispatch_stream(body_or_messages, *, on_thinking=None,
             _cool_slot_on_premature_close(slot, usage, _prev_ce)
             logger.debug('%s async_dispatch_stream OK: finish=%s model=%s '
                          'latency=%.0fms', log_prefix, finish, slot.model, latency)
+            if _cache_conv_id:
+                try:
+                    from lib.llm_dispatch.cache_settle import record_stream_end
+                    record_stream_end(_cache_conv_id)
+                except ImportError as _cs_err:
+                    logger.debug('%s cache-settle record (async) unavailable: %s',
+                                 tag, _cs_err)
             return msg, finish, usage
 
         except RateLimitError as e:

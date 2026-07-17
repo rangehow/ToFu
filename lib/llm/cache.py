@@ -173,13 +173,31 @@ def add_cache_breakpoints(body, log_prefix=''):
             # prose before its tool_calls, or a prefill-resume round), so the
             # rolling tail marker wraps→unwraps its str content the same way —
             # the flip is asymmetric if we only normalize tool/user. Normalize
-            # it too, but ONLY when it is a plain text turn: skip messages that
-            # carry ``tool_calls`` (their content is usually empty and the
-            # tool_use blocks drive _assistant_blocks' last-block marker logic,
-            # which a wrap would disturb) and skip empty content.
+            # it too whenever it carries NON-EMPTY ``str`` content — INCLUDING
+            # an assistant turn that also carries ``tool_calls`` (the
+            # prose-before-run_command shape).
+            #
+            # ★ THE {content} FLOOR-MISS FIX. An ``assistant/tool_call`` turn
+            #   with prose was PREVIOUSLY carved out (``and not tool_calls``).
+            #   That left its ``str`` content un-normalized, so the tail phase
+            #   wrapped it into a block the round it was the tail, and it
+            #   reverted to a bare ``str`` the round it became buried prefix —
+            #   a canonical-INVISIBLE ``str``↔block flip on ``content`` that
+            #   re-billed the cached prefix EVERY round (the dominant residual
+            #   miss the field-level tracer proved as ``…(run_command){content}``).
+            #   Normalizing non-empty content up front makes anchoring only
+            #   toggle a ``cache_control`` key on an already-list block, so the
+            #   turn's ``content`` bytes are identical whether or not it is the
+            #   tail. The tool_use blocks still drive ``_assistant_blocks``'
+            #   last-block marker hoist (it moves a content-level marker onto the
+            #   last emitted block regardless), so the marker logic is undisturbed.
+            #
+            #   EMPTY content is still left alone: a fabricated ``[{text:''}]``
+            #   block would be a new empty text block the model never wrote (and
+            #   the old carve-out's real concern), so the guard stays
+            #   ``isinstance(content, str) and content``.
             content = msg.get('content')
-            if (isinstance(content, str) and content
-                    and not msg.get('tool_calls')):
+            if isinstance(content, str) and content:
                 messages[i] = {**msg, 'content': [{'type': 'text', 'text': content}]}
 
     bp = 0

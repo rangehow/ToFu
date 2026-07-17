@@ -388,6 +388,52 @@ function _serverHasSegmentsLocalLacks(serverMsgs, localMsgs) {
 }
 if (typeof window !== 'undefined') window._serverHasSegmentsLocalLacks = _serverHasSegmentsLocalLacks;
 
+/* ★ Translation-recovery freshness signal (symmetric to
+ * _serverHasSegmentsLocalLacks).
+ *
+ * Server-side auto-translate commits AFTER a turn settles: it stamps
+ * `translatedContent` on the deliverable AND `segments[].translatedText` on
+ * each per-round narration segment (lib/translate/commit.py), bumping
+ * `updated_at`. But the IDB cache may already hold a copy whose `updatedAt`
+ * equals-or-exceeds that value (a later client PUT of a still-English in-memory
+ * copy can re-stamp cachedAt/updatedAt), so the `serverUpdatedAt > cached`
+ * disjunct in cacheIsStale silently misses it — and the message count is
+ * unchanged and segments are present, so the other two disjuncts miss it too.
+ * Result: the stale English cache is judged FRESH and kept, and the reopened
+ * conversation renders English narration even though the server has Chinese.
+ *
+ * This predicate makes "server carries a translation (deliverable OR per-round
+ * narration) the aligned local copy lacks" an explicit staleness signal, the
+ * exact mirror of the segments-missing backstop. Positional compare within
+ * equal-length arrays (the length-mismatch case is handled by the caller's
+ * count check); cheap early-out on the first gap. */
+function _serverHasTranslationLocalLacks(serverMsgs, localMsgs) {
+  if (!Array.isArray(serverMsgs) || !Array.isArray(localMsgs)) return false;
+  const n = Math.min(serverMsgs.length, localMsgs.length);
+  for (let i = 0; i < n; i++) {
+    const sm = serverMsgs[i], lm = localMsgs[i];
+    if (!sm || !lm || sm.role !== 'assistant') continue;
+    // Identity guard: only compare translations of the SAME turn.
+    if ((sm.content || '') !== (lm.content || '')) continue;
+    // Deliverable-level gap.
+    if (sm.translatedContent && !lm.translatedContent) return true;
+    // Per-round narration gap (segments[].translatedText).
+    if (Array.isArray(sm.segments) && Array.isArray(lm.segments)) {
+      const k = Math.min(sm.segments.length, lm.segments.length);
+      for (let j = 0; j < k; j++) {
+        const ss = sm.segments[j], ls = lm.segments[j];
+        if (!ss || !ls) continue;
+        if (ss.type !== 'text' || ss.deliverable) continue;
+        if (ss.type !== ls.type || ss.llmRound !== ls.llmRound) continue;
+        const zh = ss.translatedText;
+        if (zh && zh.trim() && !(ls.translatedText && ls.translatedText.trim())) return true;
+      }
+    }
+  }
+  return false;
+}
+if (typeof window !== 'undefined') window._serverHasTranslationLocalLacks = _serverHasTranslationLocalLacks;
+
 /* ═══════════════════════════════════════════════════════════════════
    rev-based CAS rebase (append-missing-tail, keyed on _msgId)
    ───────────────────────────────────────────────────────────────────
@@ -1705,9 +1751,8 @@ async function loadConversationMessages(convId) {
       for (let i = 0; i < overlap; i++) {
         const sm = sourceMsgs[i], lm = destMsgs[i];
         if (!sm || !lm) continue;
-        if (!sm.translatedContent) continue;
-        if (lm.translatedContent) continue;  // already have — don't overwrite
-        // Identity check
+        // Identity check (shared by BOTH the deliverable and the per-round
+        // narration merge below — a mismatched turn must not receive either).
         if (sm.role !== lm.role) continue;
         if (!!sm._isEndpointPlanner !== !!lm._isEndpointPlanner) continue;
         if (!!sm._isEndpointReview !== !!lm._isEndpointReview) continue;
@@ -1715,12 +1760,51 @@ async function loadConversationMessages(convId) {
         // Content must match byte-for-byte — stale content would make the
         // preserved translation incorrect for the (edited) new content.
         if ((sm.content || '') !== (lm.content || '')) continue;
-        lm.translatedContent = sm.translatedContent;
-        lm._showingTranslation = sm._showingTranslation !== false;
-        lm._translateDone = true;
-        if (sm._translateModel && !lm._translateModel) lm._translateModel = sm._translateModel;
-        if (sm.originalContent && !lm.originalContent) lm.originalContent = sm.originalContent;
-        merged++;
+
+        // ── Deliverable translation (translatedContent) ──
+        if (sm.translatedContent && !lm.translatedContent) {
+          lm.translatedContent = sm.translatedContent;
+          lm._showingTranslation = sm._showingTranslation !== false;
+          lm._translateDone = true;
+          if (sm._translateModel && !lm._translateModel) lm._translateModel = sm._translateModel;
+          if (sm.originalContent && !lm.originalContent) lm.originalContent = sm.originalContent;
+          merged++;
+        }
+
+        /* ── Per-round narration translation (segments[].translatedText) ──
+         *   Server-side auto-translate stamps translatedText onto each
+         *   non-deliverable text segment (lib/translate/commit.py
+         *   _stamp_segment_translations), keyed by llmRound. This is a SEPARATE
+         *   field from translatedContent (the deliverable): a turn with tool
+         *   rounds carries interleaved narration whose Chinese lives ONLY here.
+         *   The IDB cache can be written from an in-memory copy captured BEFORE
+         *   the translate commit ran (or from a live-stream copy that never
+         *   stamped it), so the cached segments hold English narration while
+         *   the server has the Chinese. Without this merge the reopened
+         *   conversation shows English narration above every tool batch even
+         *   though the deliverable is Chinese — the reported "translations lost
+         *   on reopen" bug. Align segments POSITIONALLY within the (identity-
+         *   matched) message and copy translatedText the local copy lacks. */
+        if (Array.isArray(sm.segments) && Array.isArray(lm.segments)) {
+          const _segN = Math.min(sm.segments.length, lm.segments.length);
+          for (let _si = 0; _si < _segN; _si++) {
+            const _ss = sm.segments[_si], _ls = lm.segments[_si];
+            if (!_ss || !_ls) continue;
+            if (_ss.type !== 'text' || _ss.deliverable) continue;
+            if (_ss.type !== _ls.type || _ss.llmRound !== _ls.llmRound) continue;
+            const _zh = _ss.translatedText;
+            if (_zh && _zh.trim() && !(_ls.translatedText && _ls.translatedText.trim())) {
+              _ls.translatedText = _zh;
+              merged++;
+            }
+          }
+        }
+        /* Carry the per-round map sidecar too so a later whole-bubble repaint
+         * (_applyPartialByRoundToSettled) still has its source when segments
+         * are absent on the local copy for any reason. Additive only. */
+        if (sm._translatePartialByRound && !lm._translatePartialByRound) {
+          lm._translatePartialByRound = sm._translatePartialByRound;
+        }
       }
       return merged;
     };
@@ -1891,7 +1975,17 @@ async function loadConversationMessages(convId) {
          *   the server's rehydrated tool/thinking timeline discarded. Treat
          *   "server carries segments the local copy lacks" as stale so the
          *   backstop always surfaces on historical turns. */
-        _serverHasSegmentsLocalLacks(serverMsgs, conv.messages);
+        _serverHasSegmentsLocalLacks(serverMsgs, conv.messages) ||
+        /* ★ Symmetric to the segments backstop: server-side auto-translate
+         *   commits translatedContent / segments[].translatedText AFTER the
+         *   turn settled, and a client PUT of a still-English copy can leave
+         *   the cache's updatedAt >= server's, hiding the change from the
+         *   timestamp disjunct. Treat "server has a translation the local copy
+         *   lacks" as stale so the reopened conv adopts the Chinese instead of
+         *   rendering stale English narration. (The cache-fresh else-branch
+         *   ALSO merges translations in-place; this disjunct covers the case
+         *   where a full server adopt is cleaner.) */
+        _serverHasTranslationLocalLacks(serverMsgs, conv.messages);
 
       if (cacheIsStale) {
         /* ★ Diagnostic: if we're about to wipe a non-empty local that

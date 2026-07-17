@@ -54,10 +54,20 @@ class _ContentWithDisplayResults(str):
         display_results: List of result dicts for frontend rendering.
         search_diag: Optional diagnostic dict when search returns 0 results.
         engine_breakdown: Optional dict mapping engine tag → list of raw URLs.
+
+    ``display_results`` MUST be optional: ``str`` subclasses are reconstructed
+    by copy/deepcopy/pickle via ``cls.__new__(cls, <str value>)`` — a single
+    positional arg (``str.__getnewargs__`` returns a 1-tuple). If it were
+    required, ``copy.deepcopy(body['messages'])`` in the dispatch path
+    (lib/llm_dispatch/api.py) would raise ``__new__() missing 1 required
+    positional argument: 'display_results'`` the moment a web_search/fetch_url
+    result reaches the model call, killing the whole turn. deepcopy/pickle
+    restore the instance ``__dict__`` after ``__new__``, so the real metadata
+    is preserved regardless of this default.
     """
-    def __new__(cls, content: str, display_results: list):
+    def __new__(cls, content: str, display_results: list | None = None):
         instance = super().__new__(cls, content)
-        instance.display_results = display_results
+        instance.display_results = display_results if display_results is not None else []
         instance.search_diag = None
         instance.engine_breakdown = None
         instance.vertical = None

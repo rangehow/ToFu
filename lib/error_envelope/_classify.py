@@ -77,4 +77,19 @@ def _classify_exception(exc: BaseException) -> str:
         return 'quota'
     if 'connectionerror' in tn or 'connection reset' in msg or 'connection aborted' in msg:
         return 'network'
+
+    # Python programming-error builtins are OUR OWN code bugs (e.g. a
+    # ``TypeError: __new__() missing 1 required positional argument`` from a
+    # str-subclass deepcopy, conv mrova3t92jffm7) — never a quota / rate-limit
+    # / key problem. Route them to 'internal' so the user-facing hint says
+    # "check the server logs" instead of the misleading generic
+    # Settings→Keys / 429 quota advice. Note: ``RuntimeError`` / bare
+    # ``Exception`` are deliberately EXCLUDED — the dispatch layer raises
+    # those as string-shaped errors that the substring heuristics above are
+    # meant to classify; only leaf builtin defects fall here.
+    if isinstance(exc, (TypeError, AttributeError, KeyError, IndexError,
+                        NameError, UnboundLocalError, ValueError,
+                        AssertionError, ZeroDivisionError)):
+        return 'internal'
+
     return 'generic'

@@ -482,7 +482,7 @@ def _sync_result_to_conversation(task, meta):
     try:
         db = get_thread_db(DOMAIN_CHAT)
         row = db.execute(
-            'SELECT messages, updated_at FROM conversations WHERE id=? AND user_id=1',
+            'SELECT messages, updated_at, rev FROM conversations WHERE id=? AND user_id=1',
             (conv_id,)
         ).fetchone()
 
@@ -490,10 +490,16 @@ def _sync_result_to_conversation(task, meta):
             logger.warning('%s conv=%s Conversation not found in DB — cannot sync result back', pfx, conv_id)
             return
 
-        # Capture updated_at for optimistic locking (CAS guard).
-        # ``row`` is a sqlite3.Row / psycopg DictRow — named access works
-        # for both backends, no need for the hasattr() shim.
+        # Capture the CAS token for optimistic locking (RENDER_CONTRACT Phase 4:
+        # W1 → rev). ``rev`` is the server-issued monotonic message-version the
+        # conversations_rev_bump_trg trigger advances on EVERY genuine messages
+        # change, so two writers that read the same row at the same millisecond
+        # no longer both pass the guard (the updated_at same-ms clobber). We
+        # still stamp ``updated_at`` in the SET clause (freshness/ordering) but
+        # it is NO LONGER the CAS token. ``row`` is a sqlite3.Row / psycopg
+        # DictRow — named access works for both backends.
         _row_updated_at = row['updated_at']
+        _row_rev = row['rev']
         try:
             messages = json.loads(row[0] or '[]')
         except (json.JSONDecodeError, TypeError):
@@ -906,19 +912,23 @@ def _sync_result_to_conversation(task, meta):
             messages_json = json_dumps_pg(messages)
             search_text = build_search_text(messages)
             now_ms = int(time.time() * 1000)
+            # CAS on rev (NOT updated_at): the trigger bumps rev, so a concurrent
+            # translate/checkpoint write between our SELECT and this UPDATE
+            # advances rev and we MISS here (re-read below) instead of silently
+            # clobbering it. ``rev`` NEVER appears in SET — the trigger owns it.
             if settings_json:
                 cur = db.execute(
                     '''UPDATE conversations
                        SET messages=?, updated_at=?, msg_count=?, settings=?, search_text=?
-                       WHERE id=? AND user_id=1 AND updated_at=?''',
-                    (messages_json, now_ms, len(messages), settings_json, search_text, conv_id, _row_updated_at)
+                       WHERE id=? AND user_id=1 AND rev=?''',
+                    (messages_json, now_ms, len(messages), settings_json, search_text, conv_id, _row_rev)
                 )
             else:
                 cur = db.execute(
                     '''UPDATE conversations
                        SET messages=?, updated_at=?, msg_count=?, search_text=?
-                       WHERE id=? AND user_id=1 AND updated_at=?''',
-                    (messages_json, now_ms, len(messages), search_text, conv_id, _row_updated_at)
+                       WHERE id=? AND user_id=1 AND rev=?''',
+                    (messages_json, now_ms, len(messages), search_text, conv_id, _row_rev)
                 )
             db.commit()
             _cas_succeeded = (getattr(cur, 'rowcount', 0) or 0) > 0
@@ -926,11 +936,12 @@ def _sync_result_to_conversation(task, meta):
                 break
             # CAS miss — re-read the fresh row to decide retry vs frontend-won.
             _fresh = db.execute(
-                'SELECT messages, updated_at FROM conversations WHERE id=? AND user_id=1',
+                'SELECT messages, updated_at, rev FROM conversations WHERE id=? AND user_id=1',
                 (conv_id,)).fetchone()
             if not _fresh:
                 break
             _fresh_updated_at = _fresh['updated_at']
+            _fresh_rev = _fresh['rev']
             try:
                 _fresh_messages = json.loads(_fresh[0] or '[]')
             except (json.JSONDecodeError, TypeError):
@@ -962,6 +973,7 @@ def _sync_result_to_conversation(task, meta):
                 _fresh_messages.append(last_msg)
             messages = _fresh_messages
             _row_updated_at = _fresh_updated_at
+            _row_rev = _fresh_rev
             logger.info('%s conv=%s terminal CAS miss %d/%d — re-read fresh row '
                         'and re-applying the final answer',
                         pfx, conv_id, _cas_attempt + 1, MAX_TERMINAL_CAS)

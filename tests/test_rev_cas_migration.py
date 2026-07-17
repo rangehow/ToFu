@@ -486,11 +486,236 @@ def test_neuter_drift_guard_catches_unregistered_field():
         '(coverage check is load-bearing)')
 
 
+# ──────────────────────────────────────────────────────────────────────────
+# TEST 5 (step-2, static) — no message writer stamps rev in its SET clause
+# ──────────────────────────────────────────────────────────────────────────
+# The trigger (conversations_rev_bump_trg) OWNS rev — it advances it in the SAME
+# statement as any messages write. A writer that ALSO wrote ``SET rev=?`` would
+# fight the trigger (double-bump on PG BEFORE; on SQLite the AFTER trigger's
+# nested UPDATE would re-fire on a rev-only write only if it touched messages —
+# it doesn't, but a manual rev in the messages UPDATE still corrupts the
+# monotonic sequence). This static guard asserts NO conversations-messages
+# UPDATE in the two CAS writers sets ``rev`` — the token may only appear in the
+# WHERE clause. It's the invariant behind "trigger is the sole bumper".
+
+def _conversations_update_statements(path):
+    """Return the list of string-literal SQL fragments in ``path`` that UPDATE
+    the conversations table's messages column (crude but sufficient: any string
+    containing both 'UPDATE conversations' and 'SET messages')."""
+    import ast
+    src = open(path, encoding='utf-8').read()
+    tree = ast.parse(src)
+    out = []
+
+    def _walk_str(node):
+        # Join implicitly-concatenated / f-string constant parts into one text.
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return node.value
+        if isinstance(node, ast.JoinedStr):
+            return ''.join(_walk_str(v) or '' for v in node.values)
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+            return (_walk_str(node.left) or '') + (_walk_str(node.right) or '')
+        return ''
+
+    for node in ast.walk(tree):
+        s = _walk_str(node)
+        if s and 'UPDATE conversations' in s and 'SET messages' in s:
+            out.append(s)
+    return out
+
+
+def test_no_writer_stamps_rev_in_set_clause():
+    """Neither the terminal sync nor the translate commit may write ``rev`` in a
+    messages UPDATE's SET clause — the trigger is the sole bumper. Guards the
+    step-2 token switch from accidentally introducing a manual rev stamp."""
+    import lib.tasks_pkg.manager._sync as _syncmod
+    import lib.translate.commit as _commitmod
+
+    for label, path in (('_sync.py', _syncmod.__file__),
+                        ('commit.py', _commitmod.__file__)):
+        stmts = _conversations_update_statements(path)
+        assert stmts, f'{label}: found NO conversations messages UPDATE — scanner broken'
+        for s in stmts:
+            # Extract the SET…WHERE span and assert 'rev' is not an assigned col.
+            _up = s.upper()
+            _set_i = _up.find('SET ')
+            _where_i = _up.find('WHERE', _set_i)
+            set_clause = s[_set_i:_where_i] if _where_i > _set_i else s[_set_i:]
+            assert 'rev=' not in set_clause.replace(' ', '') and 'REV=' not in set_clause.upper().replace(' ', ''), (
+                f'{label}: a messages UPDATE writes rev in its SET clause — the '
+                f'trigger must be the sole bumper. Offending SQL:\n{s}')
+    _ok('no message writer stamps rev in SET (trigger is sole bumper)')
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# TEST 3 (step-2) — high-frequency terminal×translate contention: nothing lost
+# ──────────────────────────────────────────────────────────────────────────
+
+def test_high_freq_terminal_translate_contention_loses_nothing():
+    """Drive the REAL terminal sync while a REAL translate commit lands in its
+    read→write window under a FROZEN CLOCK, forcing the SAME-MILLISECOND
+    collision — the exact shape only ``rev`` can survive.
+
+    Why the frozen clock (this is the crux — an earlier version was falsely
+    GREEN without it): if the concurrent translate writer stamps a DIFFERENT
+    ``updated_at`` than the terminal sync's baseline, the terminal CAS simply
+    MISSES and the §2.2 regraft-merge (already in HEAD) preserves everything —
+    so the test would pass even on the updated_at token and prove nothing about
+    the switch. The production bug the owner fears is the SAME-MS case: both
+    writers compute ``now_ms == baseline``, so the terminal CAS ``WHERE
+    updated_at=baseline`` does NOT miss — it PASSES and CLOBBERS the translation
+    the other writer just committed. We reproduce that deterministically by
+    freezing ``time.time()`` to the seeded row's timestamp for the whole round,
+    so every ``int(time.time()*1000)`` equals the baseline.
+
+    Under updated_at (HEAD): terminal CAS passes → translation clobbered → RED.
+    Under rev (post W1+W6): translate bumps rev via the trigger → terminal CAS
+    ``WHERE rev=baseline_rev`` MISSES → regraft-merge → BOTH survive → GREEN.
+
+    Tests-first: expected RED on HEAD, GREEN once W1+W6 switch to rev CAS."""
+    import time as _time
+    from lib.database import DOMAIN_CHAT, get_thread_db
+    from lib.tasks_pkg.manager import (create_task, _sync_result_to_conversation,
+                                        _conv_latest_task, _conv_latest_task_lock)
+    from lib.translate.commit import _commit_translation_to_db
+
+    N = 5
+    losses = []
+    for r in range(N):
+        conv_id = f'cv-revcas-contend-{r}'
+        db = get_thread_db(DOMAIN_CHAT)
+        _seed_conv(db, conv_id, [
+            {'role': 'user', 'content': f'U{r}', 'timestamp': 1, '_msgId': 'mu'},
+            {'role': 'assistant', 'content': '', 'timestamp': 2, '_msgId': 'ma'},
+        ])
+        # Freeze the clock at the seeded row's exact updated_at so BOTH writers
+        # compute now_ms == baseline → the same-ms collision.
+        _msgs0, ua0, _rev0 = _row(db, conv_id)
+        _frozen = ua0 / 1000.0
+        real_execute = db.execute
+        real_time = _time.time
+        TRANS = f'译文-{r}'
+        state = {'fired': False}
+
+        def _intercept(sql, params=()):
+            # On the terminal sync's FIRST messages-UPDATE, fire a REAL translate
+            # commit against the SAME row (its own CAS loop). Under the frozen
+            # clock it stamps updated_at==baseline, so on HEAD the terminal CAS
+            # that follows still matches baseline and clobbers.
+            if (not state['fired'] and isinstance(sql, str)
+                    and 'UPDATE conversations' in sql and 'SET messages' in sql):
+                state['fired'] = True
+                db.execute = real_execute
+                try:
+                    _commit_translation_to_db(conv_id, 1, 'translatedContent', TRANS,
+                                               msg_id='ma', model='test')
+                finally:
+                    db.execute = _intercept
+            return real_execute(sql, params)
+
+        try:
+            task = create_task(conv_id, [{'role': 'user', 'content': f'U{r}'}], {})
+            task['content'] = f'ANSWER-{r}'
+            task['_assistantMsgId'] = 'ma'
+            with _conv_latest_task_lock:
+                _conv_latest_task[conv_id] = task['id']
+            _time.time = lambda: _frozen
+            db.execute = _intercept
+            try:
+                _sync_result_to_conversation(task, {'finishReason': 'stop'})
+            finally:
+                db.execute = real_execute
+                _time.time = real_time
+            tail = _read_tail(db, conv_id)[-1]
+            ok_answer = tail.get('content') == f'ANSWER-{r}'
+            ok_trans = tail.get('translatedContent') == TRANS
+            if not (ok_answer and ok_trans):
+                losses.append((r, tail.get('content'), tail.get('translatedContent')))
+        finally:
+            with _conv_latest_task_lock:
+                _conv_latest_task.pop(conv_id, None)
+            db.execute = real_execute
+            _time.time = real_time
+            _cleanup(db, conv_id)
+
+    assert not losses, (
+        f'CONTENTION LOSS in {len(losses)}/{N} rounds — the terminal answer and/or '
+        f'the concurrent translation was dropped: {losses}. This is the same-ms '
+        f'clobber under updated_at CAS (frozen clock forces both writers onto the '
+        f'baseline ms); W1+W6 switching to rev CAS must make the terminal write '
+        f'MISS-and-regraft so BOTH survive every round.')
+    _ok(f'high-freq terminal×translate contention (frozen-clock same-ms): {N}/{N} '
+        f'rounds kept BOTH answer and translation (nothing lost)')
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# TEST 5b (step-2) — creator path (persist_conv_messages) is CAS-free: a rev>0
+#                    row is appended to without a false 409
+# ──────────────────────────────────────────────────────────────────────────
+
+def test_creator_path_exempt_from_rev_cas():
+    """The CREATE/append path ``persist_conv_messages`` uses ``upsert()`` with NO
+    CAS — it is the turn's creator, not a concurrent writer, so it must stay in
+    the CAS-exempt domain (C1). Construct the REAL shape the owner asked for:
+    seed rev=0 → a translate commit bumps it to rev>0 → persist_conv_messages
+    appends a new turn → it must land (no false 409) and rev keeps advancing."""
+    from lib.database import DOMAIN_CHAT, get_thread_db
+    from lib.chat.persistence import persist_conv_messages
+    from lib.translate.commit import _commit_translation_to_db
+
+    conv_id = 'cv-revcas-creator'
+    db = get_thread_db(DOMAIN_CHAT)
+    _seed_conv(db, conv_id, [
+        {'role': 'user', 'content': 'U1', 'timestamp': 1, '_msgId': 'mu'},
+        {'role': 'assistant', 'content': 'A1', 'timestamp': 2, '_msgId': 'ma'},
+    ])
+    try:
+        _msgs, _ua0, rev0 = _row(db, conv_id)
+        assert rev0 == 0, f'fresh row should start at rev=0, got {rev0}'
+
+        # A translate commit bumps rev to >0 (the row is now "versioned").
+        _commit_translation_to_db(conv_id, 1, 'translatedContent', '译文', msg_id='ma')
+        _msgs1, _ua1, rev1 = _row(db, conv_id)
+        assert rev1 > rev0, f'translate commit should bump rev ({rev0}→?), got {rev1}'
+
+        # Now the creator path appends a NEW turn onto the rev>0 row. It reads no
+        # baseline token and does not CAS, so it must simply land.
+        _msgs1.append({'role': 'user', 'content': 'U2', 'timestamp': 3})
+        _msgs1.append({'role': 'assistant', 'content': 'A2', 'timestamp': 4})
+        _new_rev = persist_conv_messages(db, conv_id, _msgs1, 'creator-test')
+
+        _msgs2, _ua2, rev2 = _row(db, conv_id)
+        assert len(_msgs2) == 4, (
+            f'creator append should have landed all 4 messages, got {len(_msgs2)}: '
+            f'{[m.get("content") for m in _msgs2]}')
+        assert _msgs2[-1].get('content') == 'A2', 'creator append tail mismatch'
+        assert rev2 > rev1, (
+            f'creator append changed messages so the trigger must bump rev '
+            f'({rev1}→?), got {rev2} — no false 409 / no skipped write')
+        # The translation from the earlier bump must still be present (the
+        # creator append carried the whole array forward).
+        assert _msgs2[1].get('translatedContent') == '译文', (
+            'creator append dropped the earlier translation')
+        if _new_rev is not None:
+            assert _new_rev == rev2, (
+                f'persist_conv_messages returned rev {_new_rev} but row is at {rev2}')
+    finally:
+        _cleanup(db, conv_id)
+    _ok('creator path (persist_conv_messages) appends to a rev>0 row with no '
+        'false 409 (CAS-exempt, C1)')
+
+
 _POSITIVE = [test_rev_distinguishes_same_ms_writers,
              test_terminal_regraft_preserves_concurrent_translation,
              test_neuter_wholedict_regraft_redrops_translation,
              test_terminal_owned_fields_cover_all_writes,
-             test_neuter_drift_guard_catches_unregistered_field]
+             test_neuter_drift_guard_catches_unregistered_field,
+             test_no_writer_stamps_rev_in_set_clause,
+             test_creator_path_exempt_from_rev_cas]
+
+# Step-2 contention test kept SEPARATE from _POSITIVE: it is tests-first RED on
+# HEAD (updated_at token) and only turns GREEN after W1+W6 switch to rev CAS.
+_STEP2_PENDING = [test_high_freq_terminal_translate_contention_loses_nothing]
 
 
 def _run(fn):
@@ -514,11 +739,18 @@ def main():
     from tests._standalone_guard import guard_standalone_db
     guard_standalone_db('test_rev_cas_migration.__main__')
 
-    print(_color('Phase-4 §2.2 landed — token proof + regraft merge + NEUTER:', '36'))
-    if not all(_run(fn) for fn in _POSITIVE):
-        _fail('a Phase-4 §2.2 test failed')
+    print(_color('Phase-4 §2.2 + step-2 static guards (known-green):', '36'))
+    _pos_ok = all(_run(fn) for fn in _POSITIVE)
     print()
-    print(_color(f'═══ ALL {len(_POSITIVE)} PHASE-4 §2.2 TESTS PASSED (incl. NEUTER) ═══', '32'))
+    print(_color('Step-2 contention (tests-first — RED on HEAD, GREEN after W1+W6→rev):', '33'))
+    _step2 = {fn.__name__: _run(fn) for fn in _STEP2_PENDING}
+    for _n, _r in _step2.items():
+        print('   ', _color('GREEN' if _r else 'RED (expected pre-switch)', '32' if _r else '33'), _n)
+    print()
+    if not _pos_ok:
+        _fail('a known-green Phase-4 test failed')
+    print(_color(f'═══ {len(_POSITIVE)} known-green PASSED; '
+                 f'{sum(_step2.values())}/{len(_step2)} step-2 contention GREEN ═══', '36'))
     print()
 
 

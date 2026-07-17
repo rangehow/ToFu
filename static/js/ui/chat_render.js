@@ -96,6 +96,22 @@ function _applyAutopilotRunFolds(inner, conv) {
   }
 }
 
+/* ── RENDER_CONTRACT Invariant 3: content HASH, not length ────────────────
+ * A tiny non-cryptographic string hash (FNV-1a, 32-bit, base-36 encoded).
+ * The per-message content version below hashes `content`/`thinking` through
+ * this so an EQUAL-LENGTH edit (same length, different bytes) moves the
+ * version and repaints — the L1 bug the old `String(field).length` compare
+ * silently dropped. Cheap: one pass per string, called ~once per rendered row. */
+function _hashStr(s) {
+  s = s == null ? '' : String(s);
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
+  }
+  return h.toString(36);
+}
+
 function _msgFingerprint(msg) {
   const sr = msg.toolRounds || msg.searchResults;
   /* Count compacted rounds so a tool_compacted SSE landing on an
@@ -167,9 +183,30 @@ function _msgFingerprint(msg) {
       _errFp = String(String(msg.error).length);
     }
   }
+  /* ── Async-provenance fold (RENDER_CONTRACT Invariant 3, L2) ────────────
+   * cost + the server-derived modifiedFileList land AFTER a message is
+   * committed (the batch prefetches in renderChat / the per-message fallback
+   * in finish_info.js). The old fingerprint tracked only `modifiedFiles`
+   * (a bare COUNT) and NOTHING for cost, so those data were invisible to the
+   * surgical trigger — the reason the separate `_bgRefreshChat` output-diff
+   * path exists. Fold them here (cost values + the file-list PATHS, not just
+   * their count) so the one surgical trigger repaints when they arrive. */
+  let _costFp = '';
+  if (msg.cost && typeof msg.cost === 'object') {
+    _costFp = (msg.cost.costCny || 0) + '/' + (msg.cost.costUsd || 0);
+  }
+  let _fcFp = '';
+  if (Array.isArray(msg.modifiedFileList) && msg.modifiedFileList.length) {
+    _fcFp = _hashStr(msg.modifiedFileList.join('\n'));
+  }
+  let _artFp = '';
+  if (Array.isArray(msg._artifacts) && msg._artifacts.length) {
+    _artFp = msg._artifacts.length + '@' + _hashStr(
+      msg._artifacts.map(a => (a && (a.id || a.name || '')) || '').join(','));
+  }
   return (msg.role || "") + ":" +
-    (msg.content || "").length + ":" +
-    (msg.thinking || "").length + ":" +
+    _hashStr(msg.content || "") + ":" +
+    _hashStr(msg.thinking || "") + ":" +
     _errFp + ":" +
     (msg.finishReason || "") + ":" +
     translationFingerprint(msg) + ":" +
@@ -178,6 +215,9 @@ function _msgFingerprint(msg) {
     (msg._igResults ? msg._igResults.length : 0) + ":" +
     (msg._igError ? "IGE" : "") + ":" +
     (msg.modifiedFiles || 0) + ":" +
+    (_costFp ? "$" + _costFp : "") + ":" +
+    (_fcFp ? "fc" + _fcFp : "") + ":" +
+    (_artFp ? "art" + _artFp : "") + ":" +
     (msg.images ? msg.images.length : 0) + ":" +
     (msg.pdfTexts ? msg.pdfTexts.length : 0) + ":" +
     (msg._autopilotRunId || "") + ":" +
@@ -192,6 +232,19 @@ function _msgFingerprint(msg) {
     (swarmFp ? ":sw" + swarmFp : "") +
     (_segTrFp ? ":st" + _segTrFp : "") +
     (xlFp ? ":xl" + xlFp : "");
+}
+
+/* RENDER_CONTRACT Invariant 3 contract name. `_msgContentVersion(msg)` is the
+ * canonical alias for the per-message content version — a pure token that
+ * changes iff the rendered state of THIS message would differ. It is exactly
+ * `_msgFingerprint` today (during the Phase-2 strangler-fig the two are the
+ * same function); callers/tests should reference the contract name so a later
+ * increment can retire `_msgFingerprint` without touching them. */
+const _msgContentVersion = _msgFingerprint;
+if (typeof window !== "undefined") {
+  window._msgContentVersion = _msgContentVersion;
+  window._msgFingerprint = _msgFingerprint;
+  window._hashStr = _hashStr;
 }
 
 /* ── Tool-round freshness gradient ──

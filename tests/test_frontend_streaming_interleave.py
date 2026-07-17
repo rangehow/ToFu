@@ -231,6 +231,73 @@ def test_streaming_interleave_deltareset_captures_prose():
     assert output.count('PASS') >= 7, f'expected >=7 PASS, got:\n{output}'
 
 
+def test_deltareset_capture_routes_through_reducer_neuter():
+    """NEUTER (RENDER_CONTRACT Phase 3, delta_reset fold): prove the LIVE
+    delta_reset branch in sse_pipeline.js ACTUALLY folds through the pure
+    reducer's delta_reset case (_stampDeltaReset) rather than the old inline
+    prose-capture.
+
+    We neuter reduceStreamState to a no-op in a copy of stream_reducer.js and
+    re-run the SAME Part A capture harness. If the branch routes through the
+    reducer, the no-op means the round's prose is NEVER stamped and the
+    accumulators are NEVER cleared — so Part A's capture assertions MUST FAIL
+    (A_round0_narration_captured, A_round0_thinking_captured,
+    A_accumulators_cleared_after_reset). If a future edit reverts the fold to
+    inline mutation, this NEUTER goes green — flagging the regression."""
+    import shutil
+    import subprocess
+    import tempfile
+    HERE = os.path.dirname(os.path.abspath(__file__))
+    ROOT = os.path.normpath(os.path.join(HERE, '..'))
+    if not (shutil.which('node') and os.path.isdir(os.path.join(ROOT, 'node_modules', 'jsdom'))):
+        pytest.skip('node + jsdom dev-deps not installed')
+    reducer_path = os.path.join(JS_DIR, 'ui', 'stream_reducer.js')
+    src = open(reducer_path, encoding='utf-8').read()
+    marker = 'function reduceStreamState(state, ev) {'
+    assert marker in src, 'reduceStreamState anchor not found — did the reducer move?'
+    neutered = src.replace(
+        marker, marker + '\n  if (state !== undefined) return state;  /* NEUTER: no-op */', 1)
+    assert neutered != src, 'NC patch did not apply'
+    tmp_reducer = tempfile.NamedTemporaryFile('w', suffix='.js', delete=False)
+    tmp_reducer.write(neutered)
+    tmp_reducer.close()
+    harness = os.path.join(HERE, '_streaming_interleave_A_nc_harness.js')
+    with open(harness, 'w') as f:
+        f.write(_BODY_CAPTURE)
+    try:
+        proc = subprocess.run(
+            ['node', harness,
+             os.path.join(JS_DIR, 'ui', 'sse_pipeline.js'), ROOT,
+             os.path.join(JS_DIR, 'ui', 'sse_handlers_tool.js'),
+             os.path.join(JS_DIR, 'ui', 'sse_handlers_swarm.js'),
+             os.path.join(JS_DIR, 'ui', 'sse_handlers_io.js'),
+             os.path.join(JS_DIR, 'ui', 'sse_handlers_misc.js'),
+             os.path.join(JS_DIR, 'ui', 'sse_handlers_lifecycle.js'),
+             tmp_reducer.name],   # argv[9]: NEUTERED reducer
+            capture_output=True, text=True, timeout=60)
+    finally:
+        for p in (harness, tmp_reducer.name):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+    output = (proc.stdout or '') + (proc.stderr or '')
+    crashed = proc.returncode != 0
+    required_fails = [
+        'FAIL A_round0_narration_captured',
+        'FAIL A_round0_thinking_captured',
+        'FAIL A_accumulators_cleared_after_reset',
+    ]
+    # A neutered reducer must break the capture — either the assertions FAIL, or
+    # (if the flow crashed) that is equally proof the branch depends on it.
+    got_fails = [f for f in required_fails if f in output]
+    assert crashed or got_fails, (
+        'Neutering reduceStreamState did NOT break the delta_reset capture — the '
+        'LIVE delta_reset branch is NOT routing through the pure reducer (it must '
+        'have reverted to inline prose-capture). The fold is not load-bearing:\n'
+        + output[-1500:])
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 #  Part B — _syncToolRoundsDOM renders per-round prose as SIBLINGS of the tool
 #           card (in .ptool-panel-body, BEFORE the card — NOT nested inside it)

@@ -1090,43 +1090,61 @@ function dispatchSSEEvent(line, ctx) {
       const _drTarget = (_epCriticPhase && _epCriticMsg) ? _epCriticMsg : assistantMsg;
       const _drBuf = (_epCriticPhase && _epCriticBuf) ? _epCriticBuf : buf;
       if (_drTarget) {
-        /* ★ Interleave capture (segment-timeline step 5b): the narration +
-         * thinking this round streamed BEFORE issuing tool calls is about to be
-         * cleared from the live accumulators — but it is genuine per-round
-         * prose that must stay ADJACENT to the tools it introduced (today it
-         * was simply LOST live until finalize re-derived it from segments).
-         * Stamp it onto the FIRST tool round of this llmRound batch — exactly
-         * where the backend `assemble_segments` puts it (prose on the first
-         * entry of the batch) — so the live view matches the settled render and
-         * finalize is a visual no-op. ev.round === the round's llmRound
-         * (both are the orchestrator loop index). Backend stays the source of
-         * truth: the terminal `committedMessage` overwrites these fields with
-         * the authoritative copy, so a live-vs-settled drift is impossible. */
-        const _trs = Array.isArray(_drTarget.toolRounds) ? _drTarget.toolRounds : null;
-        if (_trs && _trs.length) {
-          let _lr = ev.round;
-          if (_lr == null) _lr = _trs[_trs.length - 1].llmRound;
-          const _batch = (_lr != null)
-            ? _trs.filter(r => r.llmRound === _lr)
-            : [_trs[_trs.length - 1]];
-          const _first = _batch[0];
-          if (_first) {
-            if (_drTarget.content && !_first.assistantContent) _first.assistantContent = _drTarget.content;
-            if (_drTarget.thinking && !_first.thinking) _first.thinking = _drTarget.thinking;
+        /* ★ RENDER_CONTRACT Phase 3: the prose-capture + freeze-guarded clear is
+         * now owned by the ONE pure reducer's delta_reset case
+         * (_stampDeltaReset) — it stamps this round's pre-tool narration onto
+         * the FIRST tool round of the llmRound batch (exactly where the backend
+         * assemble_segments puts it) with the same append/non-containment guard,
+         * and clears content/thinking ONLY once the prose is GUARANTEED
+         * preserved on a round (the "frozen at a half word" freeze guard: if the
+         * batch's tool_start hasn't applied yet, the reducer KEEPS the prose and
+         * a later frame carries it). _drTarget's {content,thinking,toolRounds}
+         * ARE the reducer state, so it mutates in place. This is the last LIVE
+         * projection write folded onto the reducer, closing the LIVE side of the
+         * four-path convergence. */
+        const _hadProse = !!(_drTarget.content || _drTarget.thinking);
+        reduceStreamState(_drTarget, ev);
+        /* _stamped = the reducer actually captured+cleared this round's prose.
+         * Derived from the accumulators being cleared, so the buf mirror + the
+         * atomic clear-and-repaint below (DOM concerns the pure reducer must NOT
+         * own) fire exactly when a stamp happened. When there was no prose to
+         * begin with, there is nothing to wipe — the atomic repaint's whole job
+         * is to wipe the content zone AS the prose moves into the panel — so
+         * skipping it is correct; the trailing twUpdate still refreshes. */
+        const _stamped = _hadProse && !_drTarget.content && !_drTarget.thinking;
+        if (_stamped) {
+          if (_drBuf) {
+            _drBuf.content = "";
+            _drBuf.thinking = "";
+            /* Keep the buffer's toolRounds pointed at the (now prose-stamped)
+             * live list so the reactive render picks up the captured prose. The
+             * per-round prose (assistantContent/thinking length) is in the
+             * _syncToolRoundsDOM fingerprint, so the render below re-renders the
+             * group and _renderStreamRoundProse paints the captured narration. */
+            if (_drTarget && Array.isArray(_drTarget.toolRounds)) _drBuf.toolRounds = _drTarget.toolRounds;
+          }
+          /* ★ ATOMIC CLEAR + REPAINT (root cause of the mid-stream content
+           * freeze). twUpdate is COALESCED — the empty-content frame this reset
+           * produces is routinely dropped when a long-running tool (or the next
+           * content delta) beats the rAF, so the pre-tool prose that was just
+           * moved into the tool panel stays FROZEN in the content zone for the
+           * rest of the turn (the "Compile gate green. T…" the model would
+           * never emit as a final answer). The narration is now safely stamped
+           * on its tool round, so force a SYNCHRONOUS render in the SAME step:
+           * it wipes the content zone as the prose moves into the panel
+           * (atomic), so the deliverable text can never linger mid-stream.
+           * Guarded to the visible conv (updateStreamingUI drives the singleton
+           * #streaming-body); background convs still coalesce via twUpdate. */
+          if (typeof activeConvId !== 'undefined' && activeConvId === convId
+              && typeof updateStreamingUI === 'function') {
+            updateStreamingUI({
+              content: '', thinking: '',
+              toolRounds: (_drTarget && _drTarget.toolRounds) || [],
+              phase: (_drBuf && _drBuf.phase) || null,
+              _memoryPrefetch: (_drTarget && _drTarget._memoryPrefetch),
+            });
           }
         }
-        _drTarget.content = "";
-        _drTarget.thinking = "";
-      }
-      if (_drBuf) {
-        _drBuf.content = "";
-        _drBuf.thinking = "";
-        /* Keep the buffer's toolRounds pointed at the (now prose-stamped)
-         * live list so the reactive render picks up the captured prose. The
-         * per-round prose (assistantContent/thinking length) is in the
-         * _syncToolRoundsDOM fingerprint, so the twUpdate below re-renders the
-         * group and _renderStreamRoundProse paints the captured narration. */
-        if (_drTarget && Array.isArray(_drTarget.toolRounds)) _drBuf.toolRounds = _drTarget.toolRounds;
       }
       twUpdate(convId);
     } else if (ev.type === "phase") {

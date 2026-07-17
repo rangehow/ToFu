@@ -330,11 +330,13 @@ def prepare_request(body, *, attempt=0, log_prefix='', api_key=None,
     raw_dumper.wire_system = None
     raw_dumper.wire_markers = None
     raw_dumper.wire_bytes = None
+    raw_dumper.wire_field_bytes = None
     raw_dumper.wire_region = None
     try:
         from lib.tasks_pkg.wire_fingerprint import (
             canonical_messages, marker_signature, static_prefix_hash,
-            system_fingerprint, wire_byte_prefix, wire_byte_region,
+            system_fingerprint, wire_byte_field_prefix, wire_byte_prefix,
+            wire_byte_region,
         )
         raw_dumper.wire_fp = canonical_messages(body.get('messages') or [])
         raw_dumper.wire_static = static_prefix_hash(body.get('messages') or [])
@@ -346,6 +348,13 @@ def prepare_request(body, *, attempt=0, log_prefix='', api_key=None,
         # the real bytes diverged (reasoning_details rebuild / same-role merge /
         # protocol switch) — see wire_byte_prefix's docstring.
         raw_dumper.wire_bytes = wire_byte_prefix(body.get('messages') or [])
+        # FIELD-GRANULAR true bytes: names the EXACT top-level field that
+        # flipped on a canonical-invisible <bytes> divergence (reasoning_details
+        # rebuild / tool_calls arg re-serialization / content / field-order),
+        # so detect_cache_break can log the proven field instead of only the
+        # message. See wire_byte_field_prefix.
+        raw_dumper.wire_field_bytes = wire_byte_field_prefix(
+            body.get('messages') or [])
         # TRUE-byte hash of the HOISTED system + tools region. system_fingerprint
         # is ITSELF lossy (runs _text_of + sort_keys on params), so a system
         # BLOCK REORDER / wrapping flip / per-turn re-serialization — the
@@ -995,6 +1004,9 @@ class SSEAccumulator:
             _wbytes = getattr(self.raw_dumper, 'wire_bytes', None)
             if _wbytes is not None:
                 usage['_wire_bytes'] = _wbytes
+            _wfbytes = getattr(self.raw_dumper, 'wire_field_bytes', None)
+            if _wfbytes is not None:
+                usage['_wire_field_bytes'] = _wfbytes
             _wregion = getattr(self.raw_dumper, 'wire_region', None)
             if _wregion is not None:
                 usage['_wire_region'] = _wregion

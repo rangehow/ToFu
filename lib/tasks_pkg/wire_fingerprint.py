@@ -636,6 +636,88 @@ def diff_byte_prefix(old: list, new: list, max_report: int = 8) -> list[str]:
     return changes
 
 
+def wire_byte_field_prefix(messages: list) -> list[dict]:
+    """Per-message, PER-TOP-LEVEL-FIELD hash of the actual serialized wire
+    bytes — the field-granular companion to ``wire_byte_prefix``.
+
+    ``wire_byte_prefix`` proves THAT an already-cached message's raw bytes
+    changed round-over-round, but its diff (``diff_byte_prefix``) names only
+    the MESSAGE (``<bytes>assistant/tool_call(read_files)``). For the dominant
+    remaining prefix-cache miss — a canonical-INVISIBLE ``<bytes>`` flip on a
+    replayed ``assistant/tool_call`` turn — that leaves the culprit a CATEGORY
+    ("reasoning_details rebuild / same-role merge / field reorder / protocol
+    switch"), never a proven field.
+
+    This hashes EACH top-level key of the message separately (``json.dumps``,
+    insertion order preserved, ONLY ``cache_control`` stripped) so
+    ``diff_byte_field_prefix`` can name the EXACT ``key.field`` that flipped:
+    ``{reasoning_details}`` (the build_body rebuild), ``{tool_calls}`` (arg
+    re-serialization), ``{content}``, etc. A separate ``__order__`` pseudo-
+    field captures the field INSERTION ORDER (a pure reorder changes the wire
+    bytes but no single field's value), so an order-only flip is named rather
+    than laundered into "eviction".
+
+    Aligned by the SAME ``canonical_key`` as ``diff_canonical`` /
+    ``wire_byte_prefix`` so a benign reindex does not explode. Returns
+    ``[{'key', 'fields': {field: md5}}]`` per message.
+    """
+    out: list[dict] = []
+    for msg in messages or ():
+        if not isinstance(msg, dict):
+            continue
+        entry = {'role': msg.get('role', ''),
+                 'fields': _fields_of(msg), 'brief': _brief(msg)}
+        key = canonical_key(entry)
+        clean = _strip_cache_control(msg)
+        field_hashes: dict[str, str] = {}
+        for fld, val in clean.items():
+            try:
+                raw = json.dumps(val, ensure_ascii=False, sort_keys=False)
+            except (TypeError, ValueError) as e:
+                logger.debug('[WireFP] wire_byte_field_prefix dump failed for '
+                             'field=%s (%s) — using str() form', fld, e)
+                raw = str(val)
+            field_hashes[fld] = _md5(raw)
+        # __order__ pseudo-field: the field INSERTION ORDER. A pure reorder
+        # (same keys+values, different order) changes the serialized bytes
+        # without changing any single field's value — it must still be named.
+        field_hashes['__order__'] = _md5('\x01'.join(clean.keys()))
+        out.append({'key': key, 'fields': field_hashes})
+    return out
+
+
+def diff_byte_field_prefix(old: list, new: list, max_report: int = 8) -> list[str]:
+    """Name the exact ``<bytes>key{field}`` entries that byte-diverged.
+
+    The field-granular counterpart of ``diff_byte_prefix``. Compares the
+    overlapping prefix by position; for each message whose per-field hash map
+    differs, reports one ``<bytes>{stable-key}{field}`` token per changed
+    field (so a downstream verdict can name the ACTIONABLE field —
+    ``reasoning_details`` / ``tool_calls`` / ``content`` / ``__order__``).
+    Capped at ``max_report`` culprits (``…`` marks truncation). A length change
+    of the compared prefix is reported as ``byte-field-len A→B``.
+    """
+    changes: list[str] = []
+    n = min(len(old), len(new))
+    for i in range(n):
+        o = old[i] or {}
+        nw = new[i] or {}
+        of = o.get('fields') or {}
+        nf = nw.get('fields') or {}
+        if of == nf:
+            continue
+        key = nw.get('key') or o.get('key') or f'[{i}]'
+        for field in sorted(set(of) | set(nf)):
+            if of.get(field) != nf.get(field):
+                changes.append(f'<bytes>{key}{{{field}}}')
+                if len(changes) >= max_report:
+                    changes.append('…')
+                    return changes
+    if len(old) != len(new):
+        changes.append(f'byte-field-len {len(old)}\u2192{len(new)}')
+    return changes
+
+
 def wire_byte_region(system: Any, tools: Any) -> dict[str, str]:
     """TRUE-byte hash of the HOISTED ``system`` + ``tools`` cached-prefix region.
 

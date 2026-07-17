@@ -471,6 +471,7 @@ def detect_cache_break(
         _cur_wire_system = None
         _cur_wire_markers = None
         _cur_wire_bytes = None
+        _cur_wire_field_bytes = None
         _cur_wire_region = None
         if usage:
             _cur_wire_fp = usage.get('_wire_fp')
@@ -478,6 +479,7 @@ def detect_cache_break(
             _cur_wire_system = usage.get('_wire_system')
             _cur_wire_markers = usage.get('_wire_markers')
             _cur_wire_bytes = usage.get('_wire_bytes')
+            _cur_wire_field_bytes = usage.get('_wire_field_bytes')
             _cur_wire_region = usage.get('_wire_region')
         _wire_available = _cur_wire_fp is not None
         _wire_prefix_changed = False
@@ -551,14 +553,35 @@ def detect_cache_break(
                     (_cur_wire_bytes or [])[:_byte_shared])
                 if _byte_culprits:
                     _wire_culprits.extend(_byte_culprits)
+                    # FIELD-GRANULAR attribution: name the EXACT top-level
+                    # field that flipped (reasoning_details / tool_calls /
+                    # content / __order__) instead of only the message, so the
+                    # dominant canonical-invisible miss is logged as a PROVEN
+                    # field, not a guessed category. Best-effort: falls back to
+                    # the message-level culprits if the field capture is absent
+                    # (non-Claude / pre-restart state / capture failure).
+                    _field_culprits: list = []
+                    if (_cur_wire_field_bytes is not None
+                            and prev.wire_field_bytes is not None):
+                        try:
+                            from lib.tasks_pkg.wire_fingerprint import (
+                                diff_byte_field_prefix)
+                            _ff_shared = len(prev.wire_field_bytes)
+                            _field_culprits = diff_byte_field_prefix(
+                                prev.wire_field_bytes[:_ff_shared],
+                                (_cur_wire_field_bytes or [])[:_ff_shared])
+                        except Exception as _ffe:
+                            logger.debug('[CacheTrack] field-byte diff failed: '
+                                         '%s', _ffe)
                     logger.warning(
                         '[CacheTrack] conv=%s call=%d ⚠ WIRE BYTES DIVERGED '
                         'while canonical fingerprint matched — a '
                         'canonical-invisible change (reasoning_details rebuild '
                         '/ same-role merge / field reorder / protocol switch) '
-                        'altered the real sent bytes. changed=[%s]',
+                        'altered the real sent bytes. changed=[%s] field=[%s]',
                         conv_id[:8], prev.call_count + 1,
-                        ', '.join(_byte_culprits[:8]) or '?')
+                        ', '.join(_byte_culprits[:8]) or '?',
+                        ', '.join(_field_culprits[:8]) or '?')
             # ── TRUE-byte divergence in the HOISTED system/tools region ──
             # system_fingerprint (wire_system) is itself LOSSY (_text_of over
             # system blocks + sort_keys over tool params), so a system BLOCK
@@ -664,6 +687,7 @@ def detect_cache_break(
             prev.wire_system = _cur_wire_system
             prev.wire_markers = _cur_wire_markers
             prev.wire_bytes = _cur_wire_bytes
+            prev.wire_field_bytes = _cur_wire_field_bytes
             prev.wire_region = _cur_wire_region
         prev.model = model
         prev.message_count = msg_count

@@ -56,6 +56,7 @@ class CacheState:
         'prefix_field_hashes',
         # Authoritative post-translation wire fingerprint (see wire_fingerprint.py)
         'wire_fp', 'wire_static', 'wire_system', 'wire_markers', 'wire_bytes',
+        'wire_field_bytes',
         'wire_region',
         'total_cache_read', 'total_cache_write',
         'total_breaks', 'total_input_tokens',
@@ -119,6 +120,13 @@ class CacheState:
         # (reasoning_details rebuild / same-role merge / protocol switch)
         # actually changed the wire. See wire_fingerprint.wire_byte_prefix.
         self.wire_bytes: list | None = None
+        # FIELD-GRANULAR true-byte hashes ([{'key','fields':{field:md5}}]) from
+        # the PREVIOUS round. wire_bytes names only THAT a message's bytes
+        # changed; this names the EXACT top-level field (reasoning_details /
+        # tool_calls / content / __order__) so a canonical-invisible <bytes>
+        # divergence is logged with a proven field, not a guessed category.
+        # See wire_fingerprint.wire_byte_field_prefix / diff_byte_field_prefix.
+        self.wire_field_bytes: list | None = None
         # TRUE-byte hash of the hoisted system + tools region from the PREVIOUS
         # round ({'system':md5,'tools':md5}). system_fingerprint (wire_system)
         # is LOSSY — it runs _text_of over the system blocks and sort_keys over

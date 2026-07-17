@@ -58,6 +58,9 @@ _PREFIX_CHANGED_RE = re.compile(r'WIRE PREFIX CHANGED')
 _INSIDE_TRUE_RE = re.compile(r'inside_prior_cached_prefix=True')
 _BYTES_DIVERGED_RE = re.compile(r'WIRE BYTES DIVERGED')
 _CACHESTATS_RE = re.compile(r'CacheStats')
+# Pairs the adjacent per-round cache-track lines (BYTES DIVERGED / PREFIX
+# CHANGED / MUTATION BREAK all share one ``conv=<8> call=<n>`` token).
+_CALL_TOKEN_RE = re.compile(r'conv=(\w+ call=\d+)')
 
 
 def _ts_of(line: str) -> str | None:
@@ -65,30 +68,93 @@ def _ts_of(line: str) -> str | None:
     return m.group(1) if m else None
 
 
-def _serving_pid_start() -> str | None:
-    """Return the START time (``YYYY-MM-DD HH:MM:SS``) of the process actually
-    serving via ``server.py``, or None if it can't be determined.
-
-    This is the TRUE deploy signal — a log boot banner can come from an
-    ephemeral sibling/probe instance on another port and does NOT mean the live
-    15000 server reloaded. We read the real long-lived ``python server.py``
-    process's lstart from ``ps``.
-    """
+def _lstart_of_pid(pid: str) -> str | None:
+    """``YYYY-MM-DD HH:MM:SS`` start time of ONE pid via ``ps -o lstart``."""
     import subprocess
     import time as _t
     try:
-        out = subprocess.run(
-            ['ps', '-eo', 'lstart,cmd'], capture_output=True, text=True,
-            timeout=10).stdout
+        out = subprocess.run(['ps', '-o', 'lstart=', '-p', str(pid)],
+                             capture_output=True, text=True, timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    ln = out.strip()
+    if not ln:
+        return None
+    try:
+        st = _t.strptime(ln, '%a %b %d %H:%M:%S %Y')
+        return _t.strftime('%Y-%m-%d %H:%M:%S', st)
+    except ValueError:
+        return None
+
+
+def _serving_pid_start(port: str = '15000') -> str | None:
+    """Return the START time (``YYYY-MM-DD HH:MM:SS``) of the process actually
+    LISTENING on ``port``, or None if it can't be determined.
+
+    ACCURACY (2026-07-17, learned the hard way TWICE):
+      1. A log ``server.boot`` banner can come from an ephemeral sibling/probe
+         instance on ANOTHER port → keying on the banner falsely reports
+         "deployed".
+      2. A ``ps -eo cmd | grep server.py`` cmdline-substring scan matches
+         UNRELATED transient commands whose args merely CONTAIN the path
+         ``server.py`` — e.g. a swebench eval running
+         ``wc -l .../django/.../server.py`` — whose lstart is "now", producing a
+         BOGUS post-fix boot while the real 15000 server is still the old
+         process. (Observed this session: reported 01:44 while ``ss`` proved the
+         listener was still the 18:55 PID.)
+
+    The ONLY authoritative signal is the PID actually bound to the serving
+    port. Resolve it from ``ss -ltnp`` (fall back to ``lsof``), then read THAT
+    pid's lstart. If the port PID can't be resolved, degrade to the old
+    cmdline scan but restrict to a real ``python … server.py`` invocation
+    (interpreter token present, no ``grep``/``wc``/``cat`` wrappers).
+    """
+    import re as _re
+    import subprocess
+
+    pid = None
+    # Authoritative: who is bound to the port right now.
+    try:
+        out = subprocess.run(['ss', '-ltnp'], capture_output=True, text=True,
+                             timeout=10).stdout
+        for ln in out.splitlines():
+            if f':{port}' not in ln:
+                continue
+            m = _re.search(r'pid=(\d+)', ln)
+            if m:
+                pid = m.group(1)
+                break
+    except (OSError, subprocess.SubprocessError):
+        pass
+    if pid is None:
+        try:
+            out = subprocess.run(['lsof', '-tiTCP:' + port, '-sTCP:LISTEN'],
+                                 capture_output=True, text=True, timeout=10).stdout
+            pid = (out.split() or [None])[0]
+        except (OSError, subprocess.SubprocessError):
+            pid = None
+    if pid:
+        return _lstart_of_pid(pid)
+
+    # Fallback: cmdline scan, but ONLY a genuine interpreter invocation of
+    # server.py (guards against 'wc -l …/server.py' style false matches).
+    import time as _t
+    try:
+        out = subprocess.run(['ps', '-eo', 'lstart,cmd'], capture_output=True,
+                             text=True, timeout=10).stdout
     except (OSError, subprocess.SubprocessError):
         return None
     newest = None
     for ln in out.splitlines():
         if 'server.py' not in ln or 'grep' in ln:
             continue
-        # lstart is the first 5 whitespace fields: 'Fri Jul 17 18:55:53 2026'
         parts = ln.split()
-        if len(parts) < 5:
+        if len(parts) < 6:
+            continue
+        cmd = ' '.join(parts[5:])
+        # Require a python interpreter token immediately before server.py, and
+        # reject shell text-tools that merely reference the path.
+        if not _re.search(r'(^|/)(python[0-9.]*)\s+\S*server\.py', cmd):
             continue
         try:
             st = _t.strptime(' '.join(parts[:5]), '%a %b %d %H:%M:%S %Y')
@@ -140,12 +206,42 @@ def analyze(log_path: str, min_samples: int) -> dict:
             break
 
     # Count post-deploy signals.
+    #
+    # ACCURACY (not guesswork): the detector emits, per round, up to THREE
+    # adjacent lines for the SAME (conv, call): a ``WIRE BYTES DIVERGED``
+    # sub-detail (canonical-invisible byte flip), then the authoritative
+    # ``WIRE PREFIX CHANGED … inside_prior_cached_prefix=<bool>`` verdict, then
+    # (on a genuine break) ``PREFIX MUTATION BREAK``. Only the second line
+    # states whether the mutation landed INSIDE the prior round's cached prefix
+    # (a real re-bill) vs only in the editable tail (benign). A raw
+    # ``WIRE BYTES DIVERGED`` count therefore OVER-counts: a benign tail-region
+    # byte flip (inside_prior_cached_prefix=False) would wrongly force a FAIL.
+    # So we gate BOTH miss classes on inside_prior_cached_prefix=True — the one
+    # authoritative already-cached-break signal — pairing each BYTES DIVERGED
+    # with the inside-prefix verdict on the SAME round (same conv+call token).
     post = lines[boot_idx:]
     samples = sum(1 for ln in post if _CACHESTATS_RE.search(ln))
     prefix_changed = sum(1 for ln in post
                          if _PREFIX_CHANGED_RE.search(ln)
                          and _INSIDE_TRUE_RE.search(ln))
-    bytes_diverged = sum(1 for ln in post if _BYTES_DIVERGED_RE.search(ln))
+    # already-cached-prefix (conv,call) tokens — a round is a genuine break iff
+    # its WIRE PREFIX CHANGED verdict says inside_prior_cached_prefix=True.
+    _inside_calls = set()
+    for ln in post:
+        if _PREFIX_CHANGED_RE.search(ln) and _INSIDE_TRUE_RE.search(ln):
+            m = _CALL_TOKEN_RE.search(ln)
+            if m:
+                _inside_calls.add(m.group(1))
+    bytes_diverged = 0
+    for ln in post:
+        if not _BYTES_DIVERGED_RE.search(ln):
+            continue
+        m = _CALL_TOKEN_RE.search(ln)
+        # Count a byte divergence only when its round is an already-cached
+        # break (its paired PREFIX CHANGED verdict said inside=True). A byte
+        # divergence with no inside-prefix pair is a benign tail flip.
+        if m and m.group(1) in _inside_calls:
+            bytes_diverged += 1
 
     # Gate 2: enough traffic?
     if samples < min_samples:

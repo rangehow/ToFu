@@ -181,6 +181,93 @@ def test_different_keys_do_not_block_each_other(gate, monkeypatch):
     t.join(2)
 
 
+# ── single-key no-op (route B) ──
+
+def test_single_key_model_is_noop(gate, monkeypatch):
+    """key_count<=1 → gate skips entirely: two big requests on the SAME key do
+    NOT serialize, because gating one shared pool only adds latency."""
+    monkeypatch.setenv('TOFU_BIG_PREFIX_MAX_PER_KEY', '1')
+    monkeypatch.setenv('TOFU_BIG_PREFIX_THRESHOLD_TOKENS', '100')
+    monkeypatch.setenv('TOFU_BIG_PREFIX_WAIT_MS', '5000')
+
+    in0 = threading.Event()
+    rel = threading.Event()
+
+    def _hold():
+        with gate.big_prefix_slot('key_0', 200000, conv_id='cA', key_count=1):
+            in0.set()
+            rel.wait(3)
+
+    t = threading.Thread(target=_hold, daemon=True)
+    t.start()
+    assert in0.wait(1)
+    # Second big request on the same single key must pass instantly (no gating).
+    t0 = time.time()
+    with gate.big_prefix_slot('key_0', 200000, conv_id='cB', key_count=1):
+        pass
+    assert time.time() - t0 < 0.3, 'single-key model must not serialize'
+    rel.set()
+    t.join(3)
+
+
+def test_NEUTER_single_key_without_hint_still_serializes(gate, monkeypatch):
+    """NEUTER / control: the SAME two big requests, but WITHOUT the key_count
+    hint (key_count=None, the legacy default) DO serialize — proving the no-op
+    is driven by the key_count signal, not by something else. This is exactly
+    the wasteful behavior route B removes on single-key models."""
+    monkeypatch.setenv('TOFU_BIG_PREFIX_MAX_PER_KEY', '1')
+    monkeypatch.setenv('TOFU_BIG_PREFIX_RESIDENCY_MAX', '1')
+    monkeypatch.setenv('TOFU_BIG_PREFIX_THRESHOLD_TOKENS', '100')
+    monkeypatch.setenv('TOFU_BIG_PREFIX_RESIDENCY_WAIT_MS', '400')
+
+    in0 = threading.Event()
+    rel = threading.Event()
+
+    def _hold():
+        with gate.big_prefix_slot('key_0', 200000, conv_id='cA'):  # no key_count
+            in0.set()
+            rel.wait(3)
+
+    t = threading.Thread(target=_hold, daemon=True)
+    t.start()
+    assert in0.wait(1)
+    # A DISTINCT conv (new competitor) on the saturated single-key working set
+    # must wait the (short) residency budget before degrading through.
+    t0 = time.time()
+    with gate.big_prefix_slot('key_0', 200000, conv_id='cB'):  # no key_count
+        elapsed = time.time() - t0
+    assert elapsed >= 0.35, 'without the key_count hint the gate still gates'
+    rel.set()
+    t.join(3)
+
+
+def test_multi_key_model_still_gates(gate, monkeypatch):
+    """key_count>=2 → gate still active: a distinct big conv on a saturated
+    single-key working set waits (route B only disables the SINGLE-key case)."""
+    monkeypatch.setenv('TOFU_BIG_PREFIX_MAX_PER_KEY', '1')
+    monkeypatch.setenv('TOFU_BIG_PREFIX_RESIDENCY_MAX', '1')
+    monkeypatch.setenv('TOFU_BIG_PREFIX_THRESHOLD_TOKENS', '100')
+    monkeypatch.setenv('TOFU_BIG_PREFIX_RESIDENCY_WAIT_MS', '400')
+
+    in0 = threading.Event()
+    rel = threading.Event()
+
+    def _hold():
+        with gate.big_prefix_slot('key_0', 200000, conv_id='cA', key_count=2):
+            in0.set()
+            rel.wait(3)
+
+    t = threading.Thread(target=_hold, daemon=True)
+    t.start()
+    assert in0.wait(1)
+    t0 = time.time()
+    with gate.big_prefix_slot('key_0', 200000, conv_id='cB', key_count=2):
+        elapsed = time.time() - t0
+    assert elapsed >= 0.35, 'multi-key model must still gate a distinct conv'
+    rel.set()
+    t.join(3)
+
+
 # ── degraded-proceed when wait budget exceeded ──
 
 def test_degraded_proceed_after_budget(gate, monkeypatch, caplog):

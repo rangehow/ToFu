@@ -1188,9 +1188,15 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
             from lib.llm_dispatch.conv_affinity import get_conv_affinity
             _cache_conv_id = get_conv_affinity() or ''
             _est_tok = estimate_prefix_tokens(body)
+            # Distinct keys serving THIS model. Gating only helps with ≥2 keys
+            # (a held big prefix can route to another key's cache namespace);
+            # on a single-key model the gate would only serialize one pool and
+            # add latency, so big_prefix_slot no-ops when key_count <= 1.
+            _model_key_count = len({s.key_name for s in dispatcher.slots
+                                    if s.model == slot.model})
             _big_gate = big_prefix_slot(
                 slot.key_name, _est_tok, conv_id=_cache_conv_id,
-                log_prefix=tag)
+                log_prefix=tag, key_count=_model_key_count)
         except ImportError as _bpg_err:
             logger.debug('%s big-prefix gate unavailable: %s', tag, _bpg_err)
             _big_gate = _contextlib.nullcontext()

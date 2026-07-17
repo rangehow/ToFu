@@ -358,11 +358,23 @@ def _reset_residency_for_tests() -> None:
 
 @contextlib.contextmanager
 def big_prefix_slot(key_name: str, est_tokens: int, *, conv_id: str = '',
-                    log_prefix: str = ''):
+                    log_prefix: str = '', key_count: int | None = None):
     """Admit a big-prefix request, bounding the key's cache WORKING SET.
 
     Context manager. A no-op (immediate yield) when the gate is disabled, the
-    request is below :func:`threshold_tokens`, or ``key_name`` is empty.
+    request is below :func:`threshold_tokens`, ``key_name`` is empty, OR the
+    model this request runs on is served by a SINGLE key (``key_count <= 1``).
+
+    ★ SINGLE-KEY NO-OP (2026-07-17): admission gating only pays off with ≥2
+    keys, where holding a big prefix back lets it route to a DIFFERENT key's
+    cache namespace. On a single-key model the gate cannot add capacity — it can
+    only SERIALIZE the one shared pool, which just adds latency without
+    improving the hit rate (live evidence: a gated round waited 1.5s and STILL
+    hit 99%, i.e. the wait was pure loss). So when the caller tells us the model
+    has ≤1 key we skip the gate entirely. ``key_count=None`` (the default, and
+    what existing callers/tests pass) preserves the original always-gate
+    behavior — the no-op only triggers when a caller explicitly reports a
+    single-key model.
 
     Residency-aware mode (default, :func:`residency_enabled`): admission counts
     the DISTINCT big prefixes RESIDENT on ``key_name`` within the residency-TTL
@@ -388,6 +400,17 @@ def big_prefix_slot(key_name: str, est_tokens: int, *, conv_id: str = '',
         log_prefix: optional tag for correlating log lines.
     """
     if not gate_enabled() or not key_name or est_tokens < threshold_tokens():
+        yield
+        return
+
+    # ── Single-key no-op ──
+    # Gating a model served by one key only serializes its single shared cache
+    # pool (added latency, no capacity gain — see the docstring). Skip entirely.
+    if key_count is not None and key_count <= 1:
+        logger.debug('%s [BigPrefixGate] single-key model (key_count=%s) — '
+                     'skipping gate for big prefix (~%dk tok) conv=%s: gating '
+                     'one key cannot add capacity, only latency', log_prefix,
+                     key_count, est_tokens // 1000, (conv_id or '')[:8])
         yield
         return
 

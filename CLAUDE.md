@@ -39,7 +39,7 @@ lib/                   — Core business logic
                          async_http_get / async_http_post / async_http_stream
   json_store.py        — Atomic JSON file I/O with per-path locking and JSONC tolerance:
                          read_json / write_json_atomic / update_json_atomic / write_text_atomic
-  agent_verdict.py     — Single source of truth for agent-loop decision logic:
+  agent_verdict/       — Single source of truth for agent-loop decision logic:
                          classify_verdict (STOP/CONTINUE_WORKER/CONTINUE_PLANNER
                          gating + anti-analysis-spiral overrides), detect_stuck,
                          count_state_changing_rounds, STATE_CHANGING_TOOLS,
@@ -78,7 +78,7 @@ lib/                   — Core business logic
     diagnostics.py     — RawSSEDumper (anomaly ring buffer + opt-in transcript)
     _transport.py      — Retry config, headers(), chat_url(), abortable_sleep()
   llm_errors.py        — Exception classes + HTTP error classifier
-  llm_sanitize.py      — Message sanitization (gateway terms, orphan tool calls, role merging)
+  llm_sanitize/        — Message sanitization (gateway terms, orphan tool calls, role merging)
   llm_dispatch/        — Dynamic model routing / load balancing (package)
     api.py             — High-level dispatch_chat / dispatch_stream entry points
     config.py          — Model alias + routing tables
@@ -86,7 +86,7 @@ lib/                   — Core business logic
     dispatcher.py      — Core dispatch loop, fallback chains
     factory.py         — Client/provider factory
     slot.py            — Slot / key-pool state management
-  model_info.py        — Per-model capabilities + _clamp_max_tokens (see §12)
+  model_info/          — Per-model capabilities + _clamp_max_tokens (see §12)
   tools/               — Tool definitions (package)
     project.py         — list_dir, read_files, grep_search, find_files, write_file, apply_diff, …
     search.py          — web_search
@@ -112,7 +112,7 @@ lib/                   — Core business logic
     tool_display.py, tool_hooks.py — Tool UX + before/after hooks
     endpoint.py        — Endpoint mode (Planner→Worker→Critic loop)
     endpoint_prompts.py, endpoint_review.py — Prompts + critic/planner turns
-                         (verdict parsing delegates to lib/agent_verdict.py)
+                         (verdict parsing delegates to lib/agent_verdict/)
     compaction.py      — Context-window compaction (3-layer)
     cache_tracking.py, llm_fallback.py, stream_handler.py — Prompt-cache
                          tracking, model-swap fallback, stream classifier
@@ -137,8 +137,10 @@ lib/                   — Core business logic
                          revert. See routes/api_v1/optimizer.py (REST surface)
                          and lib/optimizer/actions/ for the action registry.
   browser/             — Browser automation (advanced, playwright pool, queue, handlers)
-  fetch/               — Web fetch pipeline (HTTP, HTML/PDF extraction, playwright pool, content filter)
-  search/              — Search orchestration + rerank + dedup (engines/ sub-package)
+  # NOTE: web search + fetch were EXTRACTED to the standalone `tofu_search`
+  # package (orchestrator, engines, rerank, dedup, HTTP/HTML/PDF extraction,
+  # content filter). They are NO LONGER in-tree; chatui seams via
+  # lib/search_bridge.py + lib/tools/search.py / lib/tools/browser.py. See §11.
   mcp/                 — Model Context Protocol client, registry, config
   memory/              — Memory / stored-notes layer (storage, relevance, injection, tools)
   conversations/       — Conversation persistence + the Project Brain (cross-conversation
@@ -153,7 +155,7 @@ lib/                   — Core business logic
   feishu/              — Feishu/Lark bot pipeline, events, messaging
   scheduler/           — Cron + timer + proactive agent scheduler
   pdf_parser/          — PDF parsing (text, images, math, VLM, postprocess)
-  cross_dc.py          — Cross-DC FUSE latency detection (env-var driven, auto-benchmarks)
+  cross_dc/            — Cross-DC FUSE latency detection (env-var driven, auto-benchmarks)
   compat/              — Cross-platform shim (_platform.py: Linux/macOS/Windows) +
                          OpenAI/Anthropic API-compat adapters (openai.py, anthropic.py)
   fs_keepalive.py      — Linux-only FUSE/NFS mount keepalive
@@ -526,7 +528,7 @@ deletes), `.tofu_sandbox/` (restricted-run shims), `.tofu_env.json` (env
 marker). Many independent mechanisms must recognise these as "agent junk, not
 source": `.gitignore` generation (`lib/project_mod/indexer.py`), the export
 sanitizer (`export.py`), the self-update preserve/skip lists
-(`lib/self_update.py`), and the MCP vendor-copy excludes (`lib/mcp/client.py`).
+(`lib/self_update/`), and the MCP vendor-copy excludes (`lib/mcp/client/`).
 
 Historically each kept its OWN hardcoded list, so a new artifact had to be
 added in ~5 places — and forgetting one silently leaked it (committed to git,
@@ -560,7 +562,7 @@ single-source-of-truth registry **`lib/agent_artifacts.py`**:
 > headless surface.**
 
 **Why.** Defaults are sticky and invisible. `memoryEnabled` defaults to `True`
-for the UI (`lib/conv_config.py`), and historically every headless cfg-builder
+for the UI (`lib/conv_config/`), and historically every headless cfg-builder
 inherited that default unless it remembered to override it — so a shared/
 multi-tenant deployment would splice the operator's memories (and the global
 `.tofu_user_profile.md` preference file) into an unrelated API caller's prompt.
@@ -867,7 +869,7 @@ Before submitting any code change, verify:
 | Run a multi-round tool-calling loop with Stop support | `lib/agent_loop.py` — `run_agent_loop(...)` + `AbortSignal` (wraps Event / task-flag / callback) (§4.6) |
 | Push a real-time event to the frontend | `lib/push.py::push_event(channel, task_id, event)` — auto-fired by `TaskRuntime.append_event` (§4.7) |
 | Change LLM behavior | `lib/llm/` (package), `lib/llm_dispatch/` (package) |
-| Adjust per-model token caps | `lib/model_info.py` (`_clamp_max_tokens`) |
+| Adjust per-model token caps | `lib/model_info/` (`_clamp_max_tokens`) |
 | Add a new tool | Define in `lib/tools/` (pick the right submodule or add one) → register routing in `lib/tasks_pkg/tool_dispatch.py` → add handler in `lib/tasks_pkg/handlers/` |
 | Add a new API endpoint | Land it on `/api/v1/*` first: `routes/api_v1/` (Blueprint) → `routes/api_v1/__init__.py` (`ALL_V1_BLUEPRINTS`); use `api_ok` / `api_error` (§4.6) + `@require_scope` + `@api_meta` (§15) |
 | Mount an optional feature bundle (e.g. trading) | `routes/plugin_registry.py` — `tofu.blueprints` / `tofu.startup` / `tofu.task_runtimes` entry-point groups |
@@ -875,15 +877,15 @@ Before submitting any code change, verify:
 | Debug task flow | `lib/tasks_pkg/orchestrator.py`, `lib/tasks_pkg/manager.py` |
 | Debug endpoint (Planner/Worker/Critic) | `lib/tasks_pkg/endpoint.py`, `endpoint_prompts.py`, `endpoint_review.py` |
 | Change project file tools | `lib/project_mod/tools.py`, `lib/project_mod/read_tools.py`, `lib/project_mod/write_tools.py` |
-| Read local files (images/PDF/Office) | `lib/file_reader.py` (core) → `lib/project_mod/read_tools.py` (`_read_absolute_file`) |
+| Read local files (images/PDF/Office) | `lib/file_reader/` (core) → `lib/project_mod/read_tools.py` (`_read_absolute_file`) |
 | Manage memory / stored notes (legacy "skills") | `lib/memory/storage.py`, `lib/memory/tools.py`, `routes/memory.py`, on-disk `<project>/.tofu/skills/` (project scope); global memories moved to the server store `<data>/memories/global/` (2026-06) |
 | Install Anthropic / OpenClaw / AgentSkills `.zip` packages (drag-and-drop) | `lib/memory/installer.py` → `POST /api/v1/memory/install` (multipart). Packages live as `<.tofu/skills>/<name>/SKILL.md` + references/ + scripts/. Treated identically to flat `.md` memories by BM25 / search_memories — frontend marks them with a `SKILL` badge. `install.sh` is **never auto-executed**; surfaced as `install_hints`. |
 | Skills store / curated catalog / file browser | `lib/memory/catalog.py` (curated `SkillCatalogEntry` list), `routes/api_v1/memory.py` (`/api/v1/memory/catalog`, `/api/v1/memory/catalog/install`, `/api/v1/memory/<id>/files`), `static/js/skills.js`, Settings → **Skills** tab. App-Store layout mirrors the MCP tab: search + scope tabs (Catalog / Installed) + category pills + grid + drag-drop zone. Catalog one-click installs download a `.zip` over HTTPS (capped at 50 MB) and feed it to `install_skill_package`. |
 | Modify trading features | External `tofu-trading` package (extracted 2026-06) — mounts via `tofu.blueprints` entry point; not in this repo |
 | Reusable agent base (run loop, dispatch, TaskRuntime, push, profiles) | `lib/agent_core/` (facade `__init__.py`; `task_runtime.py`, `push.py`, `events.py`, `profiles.py`) |
 | Per-user billing / wallet / cost ledger | `lib/billing/` (wallet, ledger, pricing, users, payments/), `routes/api_v1/billing.py` |
-| Declarative multi-agent orchestration (Studio) | `lib/orchestration.py` (schema + validator), `lib/orchestration_engine.py`, `routes/api_v1/orchestrations.py`, `static/js/orchestration.js` |
-| Orchestration typed node I/O (Dify-style dataflow) | OPTIONAL `params.io = {inputs:[{name,type,from}], outputs:[{name,type}]}` on role/subflow nodes. Types: `VALID_IO_TYPES` (text/json/artifact/file/number/bool/any). `from` ref = `'<id>'`/`'<id>.<out>'`/`'start'`. Helpers `node_output_names` + `parse_io_ref`; `_validate_node_io` in `lib/orchestration.py`. Engine (`lib/orchestration_engine.py`) `_compose_typed_inputs` (a node with declared inputs reads ONLY wired upstream outputs, not the scratchpad) + `_publish_outputs`/`_build_change_manifest` (an `artifact`-typed output is filled with the worker's state-changing tool manifest — how a tool-heavy worker exposes its many ops as ONE typed output vs a pure-NL node's single `text` output). FULLY back-compat: no `io` block ⇒ legacy accumulating scratchpad. Studio: edges are click-to-SELECT (not click-to-delete) + Delete/Backspace key + edge inspector (reverse/bind); I/O editor (`_orchRenderIoEditor`) authors ports. Tests: `tests/test_orchestration_io.py` + Scenario 5 in `tests/orch_nested_roundtrip_harness.js`. |
+| Declarative multi-agent orchestration (Studio) | `lib/orchestration/` (schema + validator), `lib/orchestration_engine.py`, `routes/api_v1/orchestrations.py`, `static/js/orchestration.js` |
+| Orchestration typed node I/O (Dify-style dataflow) | OPTIONAL `params.io = {inputs:[{name,type,from}], outputs:[{name,type}]}` on role/subflow nodes. Types: `VALID_IO_TYPES` (text/json/artifact/file/number/bool/any). `from` ref = `'<id>'`/`'<id>.<out>'`/`'start'`. Helpers `node_output_names` + `parse_io_ref`; `_validate_node_io` in `lib/orchestration/`. Engine (`lib/orchestration_engine.py`) `_compose_typed_inputs` (a node with declared inputs reads ONLY wired upstream outputs, not the scratchpad) + `_publish_outputs`/`_build_change_manifest` (an `artifact`-typed output is filled with the worker's state-changing tool manifest — how a tool-heavy worker exposes its many ops as ONE typed output vs a pure-NL node's single `text` output). FULLY back-compat: no `io` block ⇒ legacy accumulating scratchpad. Studio: edges are click-to-SELECT (not click-to-delete) + Delete/Backspace key + edge inspector (reverse/bind); I/O editor (`_orchRenderIoEditor`) authors ports. Tests: `tests/test_orchestration_io.py` + Scenario 5 in `tests/orch_nested_roundtrip_harness.js`. |
 | Paper / Reading Mode (reports, Q&A, translate) | `lib/paper/` (report_engine, translate_engine, prompts), `routes/paper.py`, `static/js/paper-reader.js` |
 | Daily report subsystem | `routes/daily_report.py`, `lib/scheduler/` |
 | Scheduled / proactive agents, cron, timers | `lib/scheduler/` (manager, executor, cron, timer, proactive), `routes/scheduler.py` |
@@ -900,7 +902,7 @@ Before submitting any code change, verify:
 | Check recent errors | `tail -f logs/error.log` or `grep_search` the `logs/` directory |
 | Export / sanitize project | `export.py` (three modes: `--mode personal` / `--mode internal` / `--mode opensource`) — see §10 |
 | Cross-platform compat | `lib/compat/_platform.py` (core, re-exported from `lib/compat/__init__.py`) → `debug/test_cross_platform.py` (smoke test) |
-| Cross-DC FUSE latency | `lib/cross_dc.py` (detection) → `data/config/cross_dc.json` (config) |
+| Cross-DC FUSE latency | `lib/cross_dc/` (detection) → `data/config/cross_dc.json` (config) |
 
 ### 8.1 Conversation IDs & tracing a conversation
 
@@ -1166,7 +1168,7 @@ Unless explicitly requested, do not kill server.py on your own.
 - **Pass a very large ceiling** (use `128000` as the convention) to
   `dispatch_stream(...)` / `dispatch_chat(...)` / `_stream_llm_sse(...)` for
   any long-form task.
-- `_clamp_max_tokens()` in `lib/model_info.py` automatically reduces this to
+- `_clamp_max_tokens()` in `lib/model_info/` automatically reduces this to
   each model's actual API limit (GPT=32k, Claude=128k, Qwen per-model
   16–64k, Doubao=16k, etc.). This is the correct way to say
   **"use as much as the model allows, no artificial cap"**.
@@ -1370,7 +1372,7 @@ ecosystem shapes onto the same backend.
 ### 15.2 Single auth model — Bearer everywhere (UI included)
 
 Tofu has **one** authentication system: API keys minted by
-`lib/api_keys.py`. The UI, the SDK, the OpenAI / Anthropic compat
+`lib/api_keys/`. The UI, the SDK, the OpenAI / Anthropic compat
 adapters, and `/metrics` all consult the same `g.auth_ctx` resolved
 once per request by `routes/api_v1/auth.py:auth_before_request`. There
 is no second auth scheme.

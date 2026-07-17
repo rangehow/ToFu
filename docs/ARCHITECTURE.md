@@ -4,7 +4,7 @@
 > `docs/architecture.html` (visual diagram) and whenever an AI assistant
 > needs a birds-eye view.
 >
-> **Last re-scanned:** 2026-07-06 against `lib/`, `routes/`, `static/js/`,
+> **Last re-scanned:** 2026-07-17 against `lib/`, `routes/`, `static/js/`,
 > `server.py`, `routes/__init__.py`.
 > **VERSION:** 0.13.0
 
@@ -157,7 +157,7 @@ flowchart TB
     subgraph TFAM["tool families"]
       direction LR
       t1[project_mod/<br/>list/read/grep/write/<br/>apply_diff/run_command]
-      t2[search/ + fetch/<br/>multi-engine + filter]
+      t2[tofu_search external pkg<br/>search + fetch · multi-engine + filter]
       t3[browser/<br/>extension-bridge<br/>+ playwright pool]
       t4[image_gen.py<br/>multi-model dispatch]
       t5[mcp/<br/>client · registry · config]
@@ -268,7 +268,7 @@ in the 28.
 | `tools/` | **Definitions**: project · search · browser · meta · human_guidance · image_gen · code_exec · conversation |
 | `translate/` | Translation engine + cache + provider plumbing |
 
-#### 3.2.1 `lib/tasks_pkg/` — execution package (35 modules + 2 sub-packages)
+#### 3.2.1 `lib/tasks_pkg/` — execution package (38 modules + 3 sub-packages)
 
 `orchestrator` · `manager` · `endpoint` · `endpoint_prompts` · `endpoint_review` ·
 `autopilot` · `entry` · `executor` · `executor_image` · `streaming_tool_executor` ·
@@ -277,10 +277,11 @@ in the 28.
 `persist_registry` · `persistence_store` · `system_context` · `system_prompt_cc` ·
 `model_config` · `attachments` · `approval` · `human_guidance` · `stdin_handler` ·
 `auto_translate` · `commit_round` · `event_log` (durable SSE replay) ·
+`event_fold` · `activity_sink` · `killed_recovery` (killed-task recovery) ·
 `turn_retry` · `wire_fingerprint` · `wire_messages` · `write_breakdown`
 
 Sub-packages: **`compaction/`** (3-layer context compaction, now a package) ·
-**`handlers/`** (per-tool execution handlers).
+**`segments/`** (segment-timeline model) · **`handlers/`** (per-tool execution handlers).
 
 #### 3.2.2 `lib/` top-level modules
 

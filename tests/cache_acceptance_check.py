@@ -53,6 +53,11 @@ FIX_COMMIT_TS = os.environ.get('FIX_COMMIT_TS', '2026-07-18 02:11:04')
 DEFAULT_LOG = os.environ.get('TOFU_APP_LOG', 'logs/app.log')
 MIN_SAMPLES = int(os.environ.get('CACHE_ACCEPT_MIN_SAMPLES', '150'))
 TOLERANCE = int(os.environ.get('CACHE_ACCEPT_TOLERANCE', '0'))
+# The minimum in-memory CACHE_FIX_GEN a served process must SELF-REPORT at boot
+# to be considered fully deployed. gen 5 = the whole 2026-07-17/18 fix chain
+# (ab161bf + 1274cee + 0a9f6af + 8ecbbcf + 1920827). Kept in sync with
+# lib/llm/cache.CACHE_FIX_GEN. Override via env for a later baseline.
+CACHE_FIX_GEN_BASELINE = int(os.environ.get('CACHE_FIX_GEN_BASELINE', '5'))
 
 _TS_RE = re.compile(r'^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})')
 _BOOT_RE = re.compile(r'server\.boot .*starting up')
@@ -63,6 +68,9 @@ _CACHESTATS_RE = re.compile(r'CacheStats')
 # Pairs the adjacent per-round cache-track lines (BYTES DIVERGED / PREFIX
 # CHANGED / MUTATION BREAK all share one ``conv=<8> call=<n>`` token).
 _CALL_TOKEN_RE = re.compile(r'conv=(\w+ call=\d+)')
+# The server's in-memory cache-fix self-report, printed at boot from the
+# IMPORTED lib.llm.cache module: "[CacheFixGen] CACHE_FIX_GEN=<n> (in-memory)".
+_GEN_RE = re.compile(r'CACHE_FIX_GEN=(\d+)')
 
 
 def _ts_of(line: str) -> str | None:
@@ -202,6 +210,34 @@ def _served_code_state(pid: str) -> tuple[str, str]:
                      'files in their fixed form')
 
 
+def _self_reported_gen(lines: list, boot_ts: str) -> int | None:
+    """Parse the IN-MEMORY ``CACHE_FIX_GEN`` the serving process printed at boot.
+
+    Disk source freshness (``_served_code_state``) proves the FILES are new, but
+    a Python process compiles ``.py`` to bytecode at import and never re-reads
+    it — so the RUNNING code can still be the version loaded at boot even when
+    disk is fresh. The ONLY proof of the loaded version is what the process
+    itself printed from the imported module. This scans log lines AT/AFTER the
+    serving process's boot timestamp for the newest ``CACHE_FIX_GEN=<n>`` self-
+    report and returns ``<n>`` (or None if the current boot window printed none
+    — an old build predating the self-report, or the line rotated out). Only the
+    current boot window counts: a gen printed by the PREVIOUS process must never
+    be credited to the new one.
+    """
+    gen = None
+    for ln in lines:
+        ts = _ts_of(ln)
+        if ts and ts < boot_ts:
+            continue  # a PRE-boot (previous process) line — never counts
+        m = _GEN_RE.search(ln)
+        if m:
+            try:
+                gen = int(m.group(1))  # keep the LAST (newest) in-window value
+            except (ValueError, TypeError):
+                continue
+    return gen
+
+
 def _serving_pid_start(port: str = '15000') -> str | None:
     """Return the START time (``YYYY-MM-DD HH:MM:SS``) of the process actually
     LISTENING on ``port``, or None if it can't be determined.
@@ -321,6 +357,37 @@ def analyze(log_path: str, min_samples: int) -> dict:
                 'boot': boot_ts, 'samples': 0, 'prefix_changed': 0,
                 'bytes_diverged': 0, 'served': served}
 
+    # Gate 1c (IN-MEMORY VERSION — the disk-fresh-but-stale-bytecode guard):
+    # disk source freshness (Gate 1b) proves the FILES are new, but a Python
+    # process compiles .py at import and never re-reads it — the RUNNING code
+    # can still be the version loaded at (post-floor) boot even when disk is
+    # fresh. So require the process's OWN self-report: the CACHE_FIX_GEN it
+    # printed at boot from the imported module must be >= the baseline. Below
+    # baseline → stale bytecode (WAIT); no self-report in the boot window → an
+    # old build predating the self-report OR a rotated line → honest WAIT. NEVER
+    # green on disk-freshness alone.
+    gen = _self_reported_gen(lines, boot_ts)
+    if gen is None:
+        return {'verdict': 'WAIT',
+                'reason': f'serving PID started {boot_ts} (>fix floor) and disk '
+                          f'is {served}, but the process printed NO in-memory '
+                          'CACHE_FIX_GEN self-report in its boot window — cannot '
+                          'prove the LOADED bytecode carries the fix (disk-fresh '
+                          '!= loaded). Restart from a build that self-reports the '
+                          'gen, or verify the gen boot line.',
+                'boot': boot_ts, 'samples': 0, 'prefix_changed': 0,
+                'bytes_diverged': 0, 'served': served, 'gen': None}
+    if gen < CACHE_FIX_GEN_BASELINE:
+        return {'verdict': 'WAIT',
+                'reason': f'serving PID started {boot_ts} (>fix floor), disk is '
+                          f'{served}, but the process SELF-REPORTS in-memory '
+                          f'CACHE_FIX_GEN={gen} < baseline {CACHE_FIX_GEN_BASELINE}'
+                          ' — the RUNNING bytecode is an OLD version (loaded '
+                          'before the current source; disk-fresh != loaded). A '
+                          'real restart from the current tree is required.',
+                'boot': boot_ts, 'samples': 0, 'prefix_changed': 0,
+                'bytes_diverged': 0, 'served': served, 'gen': gen}
+
     # Cursor: count only log lines AT/AFTER the serving process's start time.
     boot_idx = 0
     for i, ln in enumerate(lines):
@@ -386,7 +453,7 @@ def analyze(log_path: str, min_samples: int) -> dict:
 
     return {'verdict': verdict, 'reason': reason, 'boot': boot_ts,
             'samples': samples, 'prefix_changed': prefix_changed,
-            'bytes_diverged': bytes_diverged, 'served': served}
+            'bytes_diverged': bytes_diverged, 'served': served, 'gen': gen}
 
 
 def main() -> int:
@@ -402,13 +469,20 @@ def main() -> int:
     if args.verbose:
         # Self-explaining breakdown — no human interpretation needed.
         _served = r.get('served', 'unknown')
-        # deployed=YES requires BOTH a post-floor boot AND a FRESH served tree
-        # (the false-green guard): a new PID running stale code is NOT deployed.
-        deployed = bool(r['boot']) and r['boot'] > FIX_COMMIT_TS and _served == 'fresh'
+        _gen = r.get('gen')
+        _boot_ok = bool(r['boot']) and r['boot'] > FIX_COMMIT_TS
+        _gen_ok = isinstance(_gen, int) and _gen >= CACHE_FIX_GEN_BASELINE
+        # deployed=YES requires ALL THREE: a post-floor boot, a FRESH served
+        # tree (disk), AND an in-memory self-reported gen >= baseline (the
+        # loaded-bytecode proof). disk-fresh alone is NOT enough.
+        deployed = _boot_ok and _served == 'fresh' and _gen_ok
         print(f"(a) serving-PID boot   : {r['boot'] or '(unknown)'}  "
               f"fix_floor={FIX_COMMIT_TS}  boot_after_floor="
-              f"{'YES' if (r['boot'] and r['boot'] > FIX_COMMIT_TS) else 'NO'}  "
-              f"served_code={_served}  deployed={'YES' if deployed else 'NO'}")
+              f"{'YES' if _boot_ok else 'NO'}  "
+              f"served_code={_served}  "
+              f"in_memory_gen={_gen if _gen is not None else '(none)'}"
+              f">=base({CACHE_FIX_GEN_BASELINE})={'YES' if _gen_ok else 'NO'}  "
+              f"deployed={'YES' if deployed else 'NO'}")
         print(f"(b) post-boot samples  : {r['samples']}  "
               f"need>={MIN_SAMPLES}  enough={'YES' if r['samples'] >= MIN_SAMPLES else 'NO'}")
         print(f"(c) already-cached miss: prefix_changed(inside=True)="

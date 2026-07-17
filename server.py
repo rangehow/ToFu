@@ -2559,6 +2559,18 @@ if __name__ == '__main__':
     _banner_lines.append('=' * 56)
     _banner = '\n'.join(_banner_lines)
     _server_log.info('Server starting\n%s', _banner)
+    # ── Cache-fix generation self-report (deploy-acceptance ground truth) ──
+    # Print the IMPORTED module's CACHE_FIX_GEN — the bytecode ACTUALLY loaded
+    # into this process, not the on-disk source. The prefix-cache deploy verdict
+    # (tests/cache_acceptance_check.py) parses this from the boot window to prove
+    # the running code carries the whole cache-fix chain. Disk-freshness alone
+    # can't prove this (Python compiles .py at import and never re-reads it).
+    try:
+        from lib.llm.cache import CACHE_FIX_GEN as _cfg
+        _boot('[CacheFixGen] CACHE_FIX_GEN=%d (in-memory)' % _cfg)
+    except Exception as _cfg_e:  # never let a diagnostic line block boot
+        _boot_logger.warning('[CacheFixGen] self-report failed: %s', _cfg_e)
+
     _boot('Ready — handing off to Hypercorn.')
     try:
         sys.stderr.write('\n' + _banner + '\n\n')

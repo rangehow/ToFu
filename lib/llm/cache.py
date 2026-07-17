@@ -11,6 +11,18 @@ from lib.model_info import is_claude
 
 logger = get_logger(__name__)
 
+# ── In-memory cache-fix generation stamp (deploy self-report) ──
+# A MONOTONIC integer bumped whenever a prefix-cache live↔replay fix lands. The
+# server prints THIS value (from the IMPORTED module, i.e. the bytecode actually
+# loaded into the running process) in its boot banner, so the deploy-acceptance
+# harness can verify the RUNNING code version — not merely the on-disk source.
+# A Python process compiles .py at import and never re-reads it, so a disk-fresh
+# source proves nothing about the loaded bytecode; only this self-report does.
+# Bump this by 1 for each new cache-fix that must be confirmed deployed.
+#   gen 5 = ab161bf str↔block + 1274cee raw↔stripped + 0a9f6af prefill-skip
+#           + 8ecbbcf reasoning_content parity + 1920827 single-source builder.
+CACHE_FIX_GEN = 5
+
 # ── Cache-marker capability matrix ──
 # Empirically probed on the sankuai gateway (2026-05-03).
 #   1. Needs markers       → claude, glm-5, qwen, deepseek

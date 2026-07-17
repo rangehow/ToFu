@@ -226,10 +226,22 @@ def claims_by_conv(board_tasks: list) -> dict:
 def read_board(project_path: str) -> dict:
     """Return the board for ``project_path`` with leases evaluated at read time.
 
-    ``{'tasks': [...], 'open': N, 'claimed': N, 'done': N}`` where each task's
-    ``status`` is its EFFECTIVE status (an expired claim → open). Never raises.
+    ``{'tasks': [...], 'open': N, 'claimed': N, 'done': N, 'blocked': N}`` where
+    each task's ``status`` is its EFFECTIVE status (an expired claim → open).
+    Never raises.
+
+    The counts use the SAME partition as ``render_board_block`` (and the
+    frontend ``renderBoard`` lanes / ``select_dispatchable``) so the collab-bar
+    number, the status pillar, and the panel lanes can never drift:
+      • a ``kind='lease'`` row is a path RESERVATION, not an epic — it is NEVER
+        counted in open/claimed/done (it has its own Held lane);
+      • an epic whose block cooldown is still LIVE (effective status ``open``
+        but ``blocked_until`` in the future) is counted as ``blocked``, NOT
+        ``open`` — it reads as "waiting on a gate", not "claim me".
+    ``out['tasks']`` is unchanged: it still carries EVERY row (leases included)
+    so readers that partition the task list themselves are unaffected.
     """
-    out = {'tasks': [], 'open': 0, 'claimed': 0, 'done': 0}
+    out = {'tasks': [], 'open': 0, 'claimed': 0, 'done': 0, 'blocked': 0}
     if not project_path:
         return out
     from lib.conversations.project_feed import normalize_project_path
@@ -250,6 +262,16 @@ def read_board(project_path: str) -> dict:
     for r in rows:
         t = _row_to_task(r, now)
         out['tasks'].append(t)
+        # Leases are reservations, not epics — never in the epic counts (the
+        # panel renders them in a separate Held lane).
+        if t.get('kind') == 'lease':
+            continue
+        # A live block cooldown is counted as 'blocked', not 'open' — mirrors
+        # render_board_block / renderBoard / select_dispatchable so the collab
+        # bar and status pillar agree with the panel lanes.
+        if t['status'] == 'open' and int(t.get('blocked_until') or 0) > now:
+            out['blocked'] = out.get('blocked', 0) + 1
+            continue
         out[t['status']] = out.get(t['status'], 0) + 1
     return out
 

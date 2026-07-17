@@ -716,3 +716,121 @@ def test_NC5_board_post_audit_noop_breaks(flask_app):
         "    return {'ok': True, 'id': task_id}  # NC-5 (audit disabled)",
         run,
     )
+
+
+# ════════════════════════════════════════════════════════════════════
+#  read_board COUNT PARTITION — the collab-bar / status-pillar counts MUST
+#  use the SAME partition as render_board_block / the panel lanes /
+#  select_dispatchable, so the top-bar "N open" number can never drift from
+#  the panel's "待认领" lane. The bug this pins: a block-cooldown'd epic is
+#  stored status='open' (block never changes status) so the naive
+#  `out[status] += 1` counted it as OPEN — the top bar said "1 open" while the
+#  panel (which partitions it into its Blocked lane) showed 0 to claim. And a
+#  LIVE kind='lease' row was counted as 'claimed' though it is a path
+#  reservation, not an epic being advanced.
+# ════════════════════════════════════════════════════════════════════
+
+def _insert_live_lease(flask_app, project_path, task_id, path_title):
+    """Insert a LIVE path lease (kind='lease', status='claimed', unexpired)
+    directly — leases are minted by the path-lease subsystem, not post_task."""
+    from lib.database import DOMAIN_CHAT, get_thread_db
+    from lib.timeutil import now_ms
+    with flask_app.app_context():
+        db = get_thread_db(DOMAIN_CHAT)
+        ts = now_ms()
+        db.execute(
+            'INSERT INTO project_tasks '
+            '(id, project_path, title, status, owner_conv_id, lease_expires_at, '
+            ' created_by_conv, depends_on, kind, created_at, updated_at) '
+            "VALUES (?, ?, ?, 'claimed', 'cHOLDER', ?, 'cHOLDER', '[]', "
+            "'lease', ?, ?)",
+            (task_id, project_path, path_title, ts + 30 * 60 * 1000, ts, ts))
+        db.commit()
+
+
+def test_read_board_blocked_epic_not_counted_open(flask_app):
+    """An epic on a LIVE block cooldown (stored status='open' + blocked_until in
+    the future) must be counted as 'blocked', NOT 'open' — matching the panel's
+    Blocked lane and render_board_block. This is the top-bar-vs-panel drift."""
+    from lib.conversations.project_board import (
+        block_task, post_task, read_board,
+    )
+    with flask_app.app_context():
+        open_id = post_task('/b/cnt1', 'cA', 'genuinely open epic')['id']
+        blk_id = post_task('/b/cnt1', 'cA', 'gated epic')['id']
+        # Block it — human reason → a live (1h) cooldown, status stays 'open'.
+        res = block_task('/b/cnt1', 'cA', blk_id, '[human-gated] waiting on sign-off')
+        assert res['ok'] and res['blocked_until'] > 0
+        board = read_board('/b/cnt1')
+    # The gated epic drops OUT of 'open' and into 'blocked'.
+    assert board['open'] == 1, 'only the genuinely-open epic counts as open'
+    assert board['blocked'] == 1, 'the cooldown epic counts as blocked, not open'
+    assert board['claimed'] == 0 and board['done'] == 0
+    # Its stored status is still 'open' (block never changes status) — proving
+    # the count partition, not a status change, is what fixed the drift.
+    blk = [t for t in board['tasks'] if t['id'] == blk_id][0]
+    assert blk['status'] == 'open' and int(blk['blocked_until']) > 0
+
+
+def test_read_board_live_lease_not_counted_claimed(flask_app):
+    """A LIVE path lease (kind='lease', effective status 'claimed') is a
+    reservation, not an epic — it must NOT inflate the 'claimed' count (the
+    panel renders it in its own Held lane)."""
+    from lib.conversations.project_board import (
+        claim_task, post_task, read_board,
+    )
+    with flask_app.app_context():
+        ep_id = post_task('/b/cnt2', 'cA', 'a real epic')['id']
+        claim_task('/b/cnt2', 'cOWNER', ep_id)   # one genuinely-claimed epic
+    _insert_live_lease(flask_app, '/b/cnt2', 'pt_lease_x', 'static/styles.css')
+    with flask_app.app_context():
+        board = read_board('/b/cnt2')
+    assert board['claimed'] == 1, 'only the real claimed epic counts (not the lease)'
+    assert board['open'] == 0 and board['done'] == 0 and board['blocked'] == 0
+    # The lease row is still present in tasks (readers that partition the list
+    # themselves — e.g. the Held lane — must still see it).
+    assert any(t['id'] == 'pt_lease_x' and t.get('kind') == 'lease'
+               for t in board['tasks']), 'lease row still present in tasks list'
+
+
+def test_NC6_naive_count_recounts_blocked_and_lease(flask_app):
+    """NEUTER: revert read_board's count loop to the naive `out[status] += 1`
+    (no lease/blocked partition) → the blocked epic is recounted as OPEN and the
+    live lease as CLAIMED → the drift returns. Proves the partition is
+    load-bearing. Byte-identical restore."""
+    def run():
+        import lib.conversations.project_board as pb
+        with flask_app.app_context():
+            from lib.database import DOMAIN_CHAT, get_thread_db
+            get_thread_db(DOMAIN_CHAT).execute(
+                "DELETE FROM project_tasks WHERE project_path='/nc6'")
+            get_thread_db(DOMAIN_CHAT).commit()
+            open_id = pb.post_task('/nc6', 'cA', 'open epic')['id']
+            blk_id = pb.post_task('/nc6', 'cA', 'gated epic')['id']
+            pb.block_task('/nc6', 'cA', blk_id, '[human-gated] gate')
+        _insert_live_lease(flask_app, '/nc6', 'pt_nc6_lease', 'some/path.py')
+        with flask_app.app_context():
+            board = pb.read_board('/nc6')
+        # With the naive count restored: blocked epic recounted as open (2) and
+        # the lease recounted as claimed (1) — the exact drift the fix removed.
+        assert board['open'] == 2, \
+            'NC-6: naive count recounts the blocked epic as open (drift)'
+        assert board['claimed'] == 1, \
+            'NC-6: naive count recounts the live lease as claimed (drift)'
+
+    _patch_restore(
+        _BOARD_SRC,
+        "        # Leases are reservations, not epics — never in the epic counts (the\n"
+        "        # panel renders them in a separate Held lane).\n"
+        "        if t.get('kind') == 'lease':\n"
+        "            continue\n"
+        "        # A live block cooldown is counted as 'blocked', not 'open' — mirrors\n"
+        "        # render_board_block / renderBoard / select_dispatchable so the collab\n"
+        "        # bar and status pillar agree with the panel lanes.\n"
+        "        if t['status'] == 'open' and int(t.get('blocked_until') or 0) > now:\n"
+        "            out['blocked'] = out.get('blocked', 0) + 1\n"
+        "            continue\n"
+        "        out[t['status']] = out.get(t['status'], 0) + 1",
+        "        out[t['status']] = out.get(t['status'], 0) + 1  # NC-6 (naive count)",
+        run,
+    )

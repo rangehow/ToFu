@@ -667,7 +667,7 @@ class SSEAccumulator:
                                'dispatch layer: %s', self.log_prefix, _sse_status,
                                err_text[:300])
                 raise RateLimitError(
-                    f'SSE error: {err_text}',
+                    f'SSE error: {err_text}', is_gateway=True,
                     reason=f'HTTP {_sse_status}: {err_text[:180]}')
             logger.warning('%s SSE server error (retryable): %s',
                            self.log_prefix, err_text[:300])

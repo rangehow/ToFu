@@ -32,6 +32,26 @@ except (ValueError, TypeError) as e:
     logger.debug('[Dispatch] TOFU_UNREACHABLE_COOLDOWN parse failed, using default: %s', e)
     _UNREACHABLE_COOLDOWN = 30.0
 
+# Wall-clock ceiling (seconds) on a GATEWAY-OUTAGE streak in the streaming
+# dispatch loops. A real per-key 429 reflects contention — a sibling key will
+# free up, so those rotate FOREVER (unchanged). But a gateway 5xx
+# (502/503/504) storm on EVERY slot means the whole upstream is down; rotating
+# forever there just pins the worker thread and floods the log — the process
+# stays alive while the frontend can't be served ("backend alive, frontend
+# dead"). When nothing but gateway 5xx has come back for longer than this
+# budget, the loop gives up cleanly and frees the thread. A real 429 or a
+# success clears the streak, so genuine contention is never capped.
+# Set TOFU_GATEWAY_OUTAGE_BUDGET_S=0 to disable (legacy spin-forever behaviour).
+try:
+    _GATEWAY_OUTAGE_BUDGET_S = float(
+        os.environ.get('TOFU_GATEWAY_OUTAGE_BUDGET_S', '') or '120')
+    if _GATEWAY_OUTAGE_BUDGET_S < 0:
+        _GATEWAY_OUTAGE_BUDGET_S = 120.0
+except (ValueError, TypeError) as e:
+    logger.debug('[Dispatch] TOFU_GATEWAY_OUTAGE_BUDGET_S parse failed, '
+                 'using default: %s', e)
+    _GATEWAY_OUTAGE_BUDGET_S = 120.0
+
 
 def _raise_dispatch_exhausted(last_err, *, max_retries, capability,
                               prefer_model=None, what='dispatch'):
@@ -796,10 +816,25 @@ class _StreamRetryState:
         self.hard_attempts = 0
         self._429_count = 0
         self._last_exclusion_reset = time.monotonic()
+        # Monotonic timestamp when the current UNBROKEN gateway-5xx streak
+        # began (None = no active streak). Set on the first gateway 502/503/504,
+        # cleared by any real per-key 429 or a success. Used to bound a
+        # whole-upstream outage without capping genuine per-key contention.
+        self._gateway_streak_start = None
 
     @property
     def total_attempts(self):
         return self.hard_attempts + self._429_count
+
+    def gateway_outage_exceeded(self, budget_s):
+        """True when nothing but gateway 5xx has come back for > ``budget_s``.
+
+        ``budget_s <= 0`` disables the cap (legacy infinite-rotation behaviour).
+        The streak must be active (a gateway 5xx was seen and no real 429 /
+        success has cleared it since)."""
+        if budget_s <= 0 or self._gateway_streak_start is None:
+            return False
+        return (time.monotonic() - self._gateway_streak_start) > budget_s
 
     def maybe_reset_exclusions(self, log_prefix, label):
         """Periodically clear hard-error exclusions during 429 cycling.
@@ -856,9 +891,24 @@ class _StreamRetryState:
             return True
         return False
 
-    def note_free_429(self):
-        """A routine (non-quota) 429 — free retry, does not count toward the cap."""
+    def note_free_429(self, *, is_gateway=False):
+        """A routine (non-quota) 429 — free retry, does not count toward the cap.
+
+        ``is_gateway`` distinguishes a genuine per-key 429 (contention — rotate
+        forever) from a gateway 5xx mapped onto this path (whole-upstream
+        outage — bounded by ``gateway_outage_exceeded``). A gateway 5xx opens /
+        extends the outage streak; a REAL 429 (or a success) clears it, because
+        it proves the upstream is answering and only this key is throttled."""
         self._429_count += 1
+        if is_gateway:
+            if self._gateway_streak_start is None:
+                self._gateway_streak_start = time.monotonic()
+        else:
+            self._gateway_streak_start = None
+
+    def note_success(self):
+        """A slot answered — clear any active gateway-outage streak."""
+        self._gateway_streak_start = None
 
     def note_cooldown_cycle(self):
         """All slots in transient cooldown (slot is None, 429-equivalent)."""
@@ -995,6 +1045,22 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
                 log_prefix, _MAX_429_CYCLES, str(state.last_err)[:200])
             raise state.last_err or RuntimeError(
                 'Rate-limited %d times without success' % state._429_count)
+
+        # ★ Gateway-outage cap — when the WHOLE upstream is down (only
+        #   502/503/504 coming back from every slot for > the outage budget),
+        #   stop spinning and free the worker thread. A real per-key 429 or a
+        #   success clears the streak, so genuine contention is never capped.
+        #   This prevents the "backend alive but frontend can't be served"
+        #   thread-pool starvation during a total gateway outage.
+        if state.gateway_outage_exceeded(_GATEWAY_OUTAGE_BUDGET_S):
+            logger.error(
+                '%s dispatch_stream: gateway 5xx outage exceeded %.0fs budget '
+                '(only gateway errors from every slot) — giving up so the '
+                'worker thread is freed. Last error: %s',
+                log_prefix, _GATEWAY_OUTAGE_BUDGET_S, str(state.last_err)[:200])
+            raise state.last_err or RuntimeError(
+                'Gateway outage: no slot reachable for %.0fs'
+                % _GATEWAY_OUTAGE_BUDGET_S)
 
         # Log available slots at start of each attempt for debugging
         logger.debug(
@@ -1299,7 +1365,7 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
                     on_retry(attempt=state.hard_attempts,
                              reason='Key balance exhausted', status_code=429)
                 continue
-            state.note_free_429()
+            state.note_free_429(is_gateway=bool(getattr(e, 'is_gateway', False)))
             # ★ Don't exclude anything — slot.record_error() sets a 0.5s
             #   cooldown which naturally steers pick_and_reserve to another
             #   slot.  After cooldown expires the slot is eligible again,
@@ -1501,6 +1567,17 @@ async def async_dispatch_stream(body_or_messages, *, on_thinking=None,
         if abort_check and abort_check():
             raise AbortedError('Aborted during dispatch retry')
 
+        # ★ Gateway-outage cap (see sync dispatch_stream) — bound a total
+        #   upstream 5xx storm so the event loop / worker isn't pinned forever.
+        if state.gateway_outage_exceeded(_GATEWAY_OUTAGE_BUDGET_S):
+            logger.error(
+                '%s async_dispatch_stream: gateway 5xx outage exceeded %.0fs '
+                'budget — giving up. Last error: %s',
+                log_prefix, _GATEWAY_OUTAGE_BUDGET_S, str(state.last_err)[:200])
+            raise state.last_err or RuntimeError(
+                'Gateway outage: no slot reachable for %.0fs'
+                % _GATEWAY_OUTAGE_BUDGET_S)
+
         state.maybe_reset_exclusions(log_prefix, 'async_dispatch_stream')
 
         slot = dispatcher.pick_and_reserve(
@@ -1614,7 +1691,7 @@ async def async_dispatch_stream(body_or_messages, *, on_thinking=None,
                     on_retry(attempt=state.hard_attempts, reason='Key balance exhausted',
                              status_code=429)
                 continue
-            state.note_free_429()
+            state.note_free_429(is_gateway=bool(getattr(e, 'is_gateway', False)))
             if on_retry:
                 on_retry(attempt=state._429_count, reason='Rate limited (429)', status_code=429)
             await async_abortable_sleep(0.3, abort_check)

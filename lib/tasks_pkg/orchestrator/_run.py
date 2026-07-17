@@ -1348,7 +1348,21 @@ def run_task(task: dict[str, Any]) -> None:
             tool_call_happened = True
             clean_msg = {'role': 'assistant'}
             clean_msg['tool_calls'] = assistant_msg['tool_calls']
-            if assistant_msg.get('content'): clean_msg['content'] = assistant_msg['content']
+            # ★ Freeze content to the STRIPPED form so the live tail and every
+            #   replay path emit byte-identical content for this turn. The
+            #   pre-tool prose snapshot (parse_tool_calls: assistantContent =
+            #   content.strip()) is what the _reconstruct_tool_call_messages
+            #   replay path sends when the 2h/200-entry server-store cache
+            #   expires; the live tail (and the store rebuild, which replays
+            #   this verbatim) previously sent the RAW content. That raw↔stripped
+            #   divergence on an already-cached assistant/tool_call turn is a
+            #   canonical-VISIBLE WIRE PREFIX CHANGED prefix-cache miss. Stripping
+            #   here converges both paths on the single stored-canonical form
+            #   (assistantContent is already persisted stripped everywhere). The
+            #   content here is inter-round narration — leading/trailing
+            #   whitespace is not semantically meaningful.
+            _tail_content = (assistant_msg.get('content') or '').strip()
+            if _tail_content: clean_msg['content'] = _tail_content
             if assistant_msg.get('reasoning_content'): clean_msg['reasoning_content'] = assistant_msg['reasoning_content']
             # ★ Carry the Claude thinking-block signature so the NEXT tool-loop
             #   turn replays a signed thinking block (build_body rebuilds

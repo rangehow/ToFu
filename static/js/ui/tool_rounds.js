@@ -2684,6 +2684,31 @@ function _timerNextPollText(nextTs) {
     : _tf("timerBlock.nextCheckNow", "Next check due now…");
 }
 
+/* Turn a raw backend poll `reason` into a plain, translated verdict for the
+ * poll line. The code/hybrid reconcile primitive (lib/scheduler/_shared.py)
+ * emits developer-English notes like "predicate no match (exit=1)" /
+ * "predicate matched (exit=0)" that leaked verbatim into the (otherwise
+ * localized) timer card. Recognize those shapes and render a human, i18n'd
+ * verdict; leave a genuine LLM/free-form reason untouched. Returns the string
+ * to display (already NOT html-escaped — caller escapes). */
+function _timerPollReasonText(p, _t) {
+  const raw = p && p.reason ? String(p.reason) : "";
+  // "predicate no match (exit=1)" / "predicate matched (exit=0)" — the pure
+  // code/predicate verdict. Map to a plain ready/not-ready line + exit code.
+  const m = raw.match(/^predicate (matched|no match) \(exit=(-?\d+)\)$/);
+  if (m) {
+    const isMatch = m[1] === "matched";
+    const code = m[2];
+    return isMatch
+      ? _t("timerBlock.predicateReady", "Condition met (command exit {code})").replace("{code}", code)
+      : _t("timerBlock.predicateWait", "Not met yet (command exit {code})").replace("{code}", code);
+  }
+  if (/^predicate ambiguous/.test(raw)) {
+    return _t("timerBlock.predicateAmbiguous", "Command result inconclusive — still waiting");
+  }
+  return raw;
+}
+
 function _renderTimerWatcherBlock(round, svg) {
   const polls = round._timerPolls || [];
   const isActive = round.status === "searching";
@@ -2840,7 +2865,10 @@ function _renderTimerWatcherBlock(round, svg) {
       icon = Icon('hourglass', 13); cls = "timer-poll-wait"; label = `#${p.pollNum}`;
     }
     const ts = p.ts ? new Date(p.ts).toLocaleTimeString() : "";
-    const fullReason = p.reason || "";
+    // Plain, translated verdict for the visible line — a raw predicate note
+    // ("predicate no match (exit=1)") becomes "Not met yet (command exit 1)".
+    // A genuine LLM reason passes through unchanged.
+    const fullReason = _timerPollReasonText(p, _t);
     const reason = escapeHtml(fullReason.slice(0, 120));
     const tokens = p.tokensUsed ? ` · ${p.tokensUsed} tok` : "";
     // The raw LLM output — only meaningful (and only sent/persisted) when the

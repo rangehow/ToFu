@@ -62,6 +62,32 @@ _MID_STEP = 8
 _MID_TRAIL = 12
 
 
+def _is_prefill_converted(msg) -> bool:
+    """True if ``msg`` is a trailing assistant turn that was converted to a
+    user turn by ``_strip_trailing_assistant_for_claude`` (Claude prefill guard).
+
+    Such a turn is a VOLATILE synthetic representation: it exists as
+    ``user('[Your previous response for context]:\\n'+X)`` ONLY while it is the
+    trailing message; the moment the user's next turn arrives it becomes buried
+    prefix and is sent as a bare ``assistant(X)`` again — a role+content flip.
+    So a cache breakpoint anchored on it writes an entry the NEXT round's bytes
+    can never read back → a (rare, regenerate/resume/interrupted-only) prefix
+    break. add_cache_breakpoints refuses to mark it. Keyed on the sentinel that
+    _model_tweaks stamps (CLAUDE_PREFILL_SENTINEL — kept in sync there).
+    """
+    if not isinstance(msg, dict) or msg.get('role') != 'user':
+        return False
+    content = msg.get('content')
+    if isinstance(content, str):
+        text = content
+    elif isinstance(content, list) and content and isinstance(content[0], dict):
+        text = content[0].get('text', '') or ''
+    else:
+        return False
+    from lib.llm.body._model_tweaks import CLAUDE_PREFILL_SENTINEL
+    return text.startswith(CLAUDE_PREFILL_SENTINEL)
+
+
 def _gateway_honors_cache_markers(model: str) -> bool:
     """Return True if attaching cache_control markers helps this model."""
     if is_claude(model):
@@ -282,6 +308,8 @@ def add_cache_breakpoints(body, log_prefix=''):
             msg = messages[i]
             if msg.get('role') == 'system':
                 continue
+            if _is_prefill_converted(msg):
+                continue  # volatile — its bytes flip to bare assistant next round
             content = msg.get('content', '')
             if isinstance(content, str) and content:
                 messages[i] = {**msg, 'content': [
@@ -310,6 +338,12 @@ def add_cache_breakpoints(body, log_prefix=''):
             msg = messages[idx]
             if msg.get('role') == 'system':
                 break
+            if _is_prefill_converted(msg):
+                # The trailing prefill-converted turn is volatile (user+sentinel
+                # now, bare assistant once buried). Marking it writes a cache
+                # entry the next round cannot read back — walk PAST it to the
+                # previous stable turn so the tail breakpoint still lands.
+                continue
             content = msg.get('content', '')
             if isinstance(content, str) and content:
                 messages[idx] = {**msg, 'content': [

@@ -13,6 +13,15 @@ from lib.model_info import is_claude, is_gemini
 
 logger = get_logger(__name__)
 
+# Sentinel prefix stamped on a trailing assistant turn that Claude cannot accept
+# as a prefill, when it is converted to a user turn (see
+# _strip_trailing_assistant_for_claude). SINGLE source of truth: cache.py keys
+# on it to refuse a cache breakpoint on the converted turn (its wire bytes flip
+# to a bare assistant the round it stops being the tail — caching it writes an
+# entry the next round cannot read back). Changing the wording MUST stay in sync
+# with lib/llm/cache.py's _is_prefill_converted().
+CLAUDE_PREFILL_SENTINEL = '[Your previous response for context]:'
+
 
 def _strip_trailing_assistant_for_claude(messages: list, model: str = ''):
     """Remove trailing assistant messages that trigger Claude's prefill error.
@@ -46,7 +55,7 @@ def _strip_trailing_assistant_for_claude(messages: list, model: str = ''):
                        '(content=%dchars). model=%s', len(content), model)
         messages[-1] = {
             'role': 'user',
-            'content': f'[Your previous response for context]:\n{content}',
+            'content': f'{CLAUDE_PREFILL_SENTINEL}\n{content}',
         }
         stripped += 1
         break

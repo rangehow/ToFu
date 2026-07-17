@@ -967,6 +967,11 @@ async function _extractFileChangesFromRoundsAsync(toolRounds, msg) {
     // cross-conversation aliasing is possible.
     if (msg && _fcFingerprint(msg.toolRounds) === fp) {
       _fcResultByMsg.set(msg, { fp, files });
+      /* RENDER_CONTRACT L2: move the per-message content version so renderChat's
+       * surgical trigger repaints THIS row when the lazy extraction lands
+       * (the WeakMap is invisible to _msgFingerprint). Display-only stamp;
+       * modifiedFileList stays the authoritative git-backed field. */
+      msg._fcResolvedFp = fp;
     }
     return files;
   };
@@ -1043,6 +1048,7 @@ async function _prefetchConvFileChanges(conv) {
       for (const m of owners[i]) {
         if (_fcFingerprint(m.toolRounds) === fp) {
           _fcResultByMsg.set(m, { fp, files });
+          m._fcResolvedFp = fp;  // RENDER_CONTRACT L2: version signal (see async store)
         }
       }
     }

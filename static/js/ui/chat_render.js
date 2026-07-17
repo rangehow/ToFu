@@ -198,6 +198,14 @@ function _msgFingerprint(msg) {
   let _fcFp = '';
   if (Array.isArray(msg.modifiedFileList) && msg.modifiedFileList.length) {
     _fcFp = _hashStr(msg.modifiedFileList.join('\n'));
+  } else if (msg._fcResolvedFp) {
+    /* Lazy file-change path (RENDER_CONTRACT L2): the extracted fallback list
+     * lives in the `_fcResultByMsg` WeakMap (a DIFFERENT shape than the
+     * git-backed modifiedFileList, so it must NOT overwrite that authoritative
+     * field). finish_info stamps `_fcResolvedFp` = the toolRounds fingerprint
+     * it resolved for, so the version MOVES when the extraction lands — the row
+     * repaints through the one surgical trigger instead of `_bgRefreshChat`. */
+    _fcFp = 'r' + msg._fcResolvedFp;
   }
   let _artFp = '';
   if (Array.isArray(msg._artifacts) && msg._artifacts.length) {

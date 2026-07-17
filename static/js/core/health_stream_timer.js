@@ -777,14 +777,30 @@ let _twLastFlush = 0;    // timestamp of last actual render (perf clock)
 const _TW_MIN_INTERVAL = 33; // ~30fps cap — re-rendering markdown 120x/s on a
                              // high-Hz display is pure waste; 30fps is visually
                              // identical for streaming text and ~4x less work.
+/* ★ When the composer textarea is FOCUSED (the user is typing — e.g. drafting
+ * a mid-turn steer/queue message while a reply streams), a 30fps full-tail
+ * markdown re-render competes with keystroke handling on the single main
+ * thread and shows up as visible input lag ("每敲一个字都卡"). Back the render
+ * cadence WAY off (~5fps) while typing — streaming text at 5fps is still
+ * perfectly readable, and the freed main-thread budget makes the input box
+ * responsive again. Reverts to 30fps the instant the composer loses focus. */
+const _TW_TYPING_INTERVAL = 200; // ~5fps while the composer is focused
+function _twMinInterval() {
+  try {
+    const ta = document.getElementById('userInput');
+    if (ta && document.activeElement === ta) return _TW_TYPING_INTERVAL;
+  } catch (_) { /* jsdom / no document — fall through */ }
+  return _TW_MIN_INTERVAL;
+}
 
 function _twFlush() {
   _twRafId = null;
   /* ★ Perf: rate-cap. rAF fires at the display refresh (up to 120Hz); a full
    * tail markdown re-render per frame is the bulk of the streaming GC/paint
-   * load. If the last render was <33ms ago, reschedule instead of rendering. */
+   * load. If the last render was under the current min interval ago, reschedule
+   * instead of rendering (interval widens while the composer is focused). */
   const _now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
-  if (_twDirty && (_now - _twLastFlush) < _TW_MIN_INTERVAL) {
+  if (_twDirty && (_now - _twLastFlush) < _twMinInterval()) {
     _twRafId = requestAnimationFrame(_twFlush);
     return;
   }

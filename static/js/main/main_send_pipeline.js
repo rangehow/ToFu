@@ -619,6 +619,7 @@ async function sendMessage() {
       renderConversationList();
       updateSendButton();
       debugLog(t('steer.injected'), 'info');
+      if (typeof showToast === 'function') showToast(t('steer.injected'), 'success');
       return;  // ← exit try block, falls through to finally
     }
 
@@ -648,6 +649,8 @@ async function sendMessage() {
       renderConversationList();
       updateSendButton();
       debugLog(`消息已排队 (#${result.position})，将在当前回复结束后自动发送`, 'info');
+      if (typeof showToast === 'function')
+        showToast(t('queue.queuedToast', { n: result.position }), 'info');
       return;  // ← exit try block, falls through to finally
     }
 

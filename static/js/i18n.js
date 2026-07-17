@@ -2267,6 +2267,9 @@ var _i18n = {
   'steer.injectRowOne': { zh: '条消息', en: 'steer message' },
   'steer.injectRowMany': { zh: '条消息', en: 'steer messages' },
   'steer.noPayload': { zh: '无消息内容', en: 'No message available.' },
+  // Visible send-feedback toast when a message is queued behind a running turn
+  // (main_send_pipeline.js). Steer reuses steer.injected.
+  'queue.queuedToast': { zh: '已排队 (#{n})，将在当前回复结束后自动发送', en: 'Queued (#{n}) — sent automatically after this reply ends' },
 
   // Swarm agent phase pills (streaming_swarm_panel.js)
   'swarm.phase.thinking': { zh: '思考中…', en: 'Thinking…' },

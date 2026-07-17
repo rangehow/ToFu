@@ -144,12 +144,23 @@ def _reconstruct_tool_call_messages(rounds: list[dict]) -> list[dict] | None:
         asst_msg: dict = {'role': 'assistant', 'tool_calls': tool_calls}
         if assistant_text:
             asst_msg['content'] = assistant_text
-        # Only attach thinking block when we have BOTH text and signature —
-        # Anthropic rejects a thinking block with no signature; other
-        # providers just ignore both fields.  This matches the gating in
-        # lib/tasks_pkg/message_builder.inject_tool_history.
-        if assistant_thinking and assistant_thinking_sig:
+        # ★ Mirror the LIVE tail's INDEPENDENT gating (orchestrator _run.py
+        #   clean_msg): carry ``reasoning_content`` whenever thinking is present,
+        #   and ``thinking_signature`` only when present. The old code gated
+        #   reasoning_content on BOTH fields, so an unsigned-thinking round
+        #   (28 real rounds across 7 convs) emitted reasoning_content on the
+        #   LIVE tail but DROPPED it on replay → the SAME already-cached
+        #   assistant/tool_call turn flipped its ``{reasoning_content}`` bytes
+        #   (canonical-VISIBLE as ``.thinking``) → prefix-cache miss (the
+        #   historical .thinking culprit class). Keeping it on both paths is
+        #   model-safe: an UNSIGNED thinking block is dropped identically
+        #   downstream by _assistant_blocks (Anthropic) and
+        #   _inject_claude_reasoning_details (both require a signature), so no
+        #   HTTP 400 — and DeepSeek's model_requires_reasoning_content_replay
+        #   (unsigned reasoning_content MUST be replayed) is preserved.
+        if assistant_thinking:
             asst_msg['reasoning_content'] = assistant_thinking
+        if assistant_thinking and assistant_thinking_sig:
             asst_msg['thinking_signature'] = assistant_thinking_sig
         out.append(asst_msg)
         out.extend(tool_results)

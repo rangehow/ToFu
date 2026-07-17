@@ -40,6 +40,9 @@ const _push = (() => {
   const PING_INTERVAL_MS = 4000;   // how often to probe while connected
   const PING_TIMEOUT_MS = 8000;    // no pong within this ⇒ treat as timed out
   let _pingTimer = null;
+  let _pingTimeoutTimer = null;    // per-ping watchdog: fires PING_TIMEOUT_MS after a probe so the
+                                   // timeout state is EMITTED promptly (~timeout window), not only on
+                                   // the next 4s interval tick (which delayed the badge ~12s).
   let _lastPingSentAt = 0;         // client timestamp of the outstanding ping
   let _latencyMs = null;           // last measured RTT; null = unknown
   let _latencyState = 'unknown';   // unknown | good | ok | poor | timeout | offline
@@ -90,6 +93,28 @@ const _push = (() => {
     _lastPingSentAt = Date.now();
     try { _ws.send(JSON.stringify({ action: 'ping', t: _lastPingSentAt })); }
     catch (e) { console.debug('[Push] ping send failed:', e); }
+    // Arm a dedicated watchdog so the timeout is surfaced right at the window
+    // edge instead of waiting for a later interval tick to notice the age.
+    if (_pingTimeoutTimer) clearTimeout(_pingTimeoutTimer);
+    _pingTimeoutTimer = setTimeout(_firePingTimeout, PING_TIMEOUT_MS);
+  }
+
+  // Fired by the per-ping watchdog when a pong has not returned within
+  // PING_TIMEOUT_MS. Emits the timeout state IMMEDIATELY (so the signal badge
+  // stops showing a stale green reading) and force-closes the half-open socket
+  // so onclose → _scheduleReconnect re-establishes it. Mirrors the interval
+  // backstop branch in _sendPing but fires seconds sooner.
+  function _firePingTimeout() {
+    _pingTimeoutTimer = null;
+    if (!_lastPingSentAt) return;   // a pong already cleared the outstanding ping
+    _latencyMs = null;
+    _latencyState = 'timeout';
+    _emitLatency();
+    console.warn('[Push] ping timeout (watchdog) — closing half-open socket to force reconnect');
+    if (_ws) {
+      try { _ws.close(); }
+      catch (e) { console.debug('[Push] force-close after ping-timeout watchdog failed:', e); }
+    }
   }
 
   function _startPinging() {
@@ -100,6 +125,7 @@ const _push = (() => {
 
   function _stopPinging() {
     if (_pingTimer) { clearInterval(_pingTimer); _pingTimer = null; }
+    if (_pingTimeoutTimer) { clearTimeout(_pingTimeoutTimer); _pingTimeoutTimer = null; }
     _lastPingSentAt = 0;
   }
 
@@ -108,6 +134,7 @@ const _push = (() => {
     _latencyMs = Date.now() - t;
     _latencyState = _classify(_latencyMs);
     _lastPingSentAt = 0;
+    if (_pingTimeoutTimer) { clearTimeout(_pingTimeoutTimer); _pingTimeoutTimer = null; }
     _emitLatency();
   }
 

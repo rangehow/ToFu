@@ -37,6 +37,49 @@ function _connT(key, params) {
   return (typeof t === 'function') ? t(key, params) : key;
 }
 
+/* Stream-health broadcast seam (feeds the topbar signal badge). The per-conv
+ * stream timer knows the TRUTH about the chat SSE connection: whether a turn is
+ * in the transient reconnecting state or has gone silent past threshold. That
+ * truth used to live only in the in-bubble banner + sidebar. The topbar
+ * netLatencyBadge measured ONLY the push-socket RTT, so a degraded/reconnecting
+ * CHAT stream never showed up there. We expose the set of degraded convs as a
+ * tiny subscribable source; net-latency.js merges it with the push RTT and
+ * shows the WORSE of the two. */
+const _degradedStreams = new Set();   // convIds currently reconnecting / stalled
+const _streamHealthListeners = new Set();
+
+function _emitStreamHealth() {
+  const degraded = _degradedStreams.size > 0;
+  for (const fn of _streamHealthListeners) {
+    try { fn({ degraded, count: _degradedStreams.size, at: Date.now() }); }
+    catch (e) { console.error('[StreamTimer] stream-health listener error:', e); }
+  }
+}
+
+function _setStreamDegraded(convId, isDegraded) {
+  const had = _degradedStreams.has(convId);
+  if (isDegraded) _degradedStreams.add(convId);
+  else _degradedStreams.delete(convId);
+  if (had !== _degradedStreams.has(convId)) _emitStreamHealth();
+}
+
+/* Public: subscribe to chat-stream health. Fires immediately with the current
+ * state so a late subscriber (the badge boots after this file) is not blank. */
+function streamHealthSubscribe(fn) {
+  if (typeof fn !== 'function') return () => {};
+  _streamHealthListeners.add(fn);
+  try { fn({ degraded: _degradedStreams.size > 0, count: _degradedStreams.size, at: Date.now() }); }
+  catch (e) { console.error('[StreamTimer] stream-health listener error:', e); }
+  return () => _streamHealthListeners.delete(fn);
+}
+function streamHealthGet() {
+  return { degraded: _degradedStreams.size > 0, count: _degradedStreams.size, at: Date.now() };
+}
+if (typeof window !== 'undefined') {
+  window.streamHealthSubscribe = streamHealthSubscribe;
+  window.streamHealthGet = streamHealthGet;
+}
+
 function _fmtElapsed(ms) {
   const s = Math.floor(ms / 1000);
   if (s < 60) return `${s}s`;
@@ -592,6 +635,10 @@ async function _updateStreamTimerUI(convId) {
    *   `stream-elapsed-timer` element only exists in the active bubble). */
   if (silentSec >= _SILENCE_THRESHOLD) {
     _probeStuckStream(convId, { silentSec });
+    // ① Silence past threshold (even keepalives stopped) → this chat stream is
+    //    degraded/reconnecting; broadcast so the topbar signal badge warns. It
+    //    is cleared by _streamTimerTouch (fresh bytes) or twStop (turn ended).
+    _setStreamDegraded(convId, true);
   }
 
   // ── Visible timer paint — active conv only (the timer element lives in it) ──
@@ -708,6 +755,7 @@ function _streamTimerTouch(convId) {
     _serverAlive = true;
     _consecutiveHealthFails = 0;
   }
+  _setStreamDegraded(convId, false);   // fresh bytes → this stream is healthy again
 }
 
 function twStart(convId) {
@@ -903,5 +951,6 @@ function twStop(convId) {
     if (timerInfo.intervalId) clearInterval(timerInfo.intervalId);
     _streamTimers.delete(convId);
   }
+  _setStreamDegraded(convId, false);   // turn ended → no longer a degraded stream
 }
 

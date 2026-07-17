@@ -47,6 +47,8 @@ var _i18n = {
   'net.state.good': { zh: '良好', en: 'good' },
   'net.state.ok': { zh: '一般', en: 'ok' },
   'net.state.poor': { zh: '较差', en: 'poor' },
+  'net.reconnecting': { zh: '重连中', en: 'Reconnecting' },
+  'net.reconnectingDesc': { zh: '聊天连接正在重连，回复可能暂停', en: 'Chat stream is reconnecting — replies may pause' },
   // ── Web search toggle (search-mode-toggle / main_toolbar_ui.js) ──
   'search.toggleTooltip': { zh: '联网搜索 · 点击开关', en: 'Web search — click to toggle on/off' },
   // ── Voice input (speech-to-text / voice.js) ──

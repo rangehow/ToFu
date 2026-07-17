@@ -71,6 +71,94 @@ def _persist_inject_sidecars(task, last_msg):
     return wrote
 
 
+# ── Terminal-sync ownership boundary (RENDER_CONTRACT Phase 4 §2.2) ──────────
+# The set of fields the TERMINAL sync authoritatively PRODUCES. On a CAS-miss
+# regraft, ONLY these are grafted from our assembled assistant onto the fresh DB
+# tail — every field NOT listed survives untouched, so a translation (or any
+# FUTURE translate-owned field) committed by another writer in our read→write
+# window is preserved. This is an OWNED WHITELIST, deliberately not a translate
+# blacklist: a new translate field added later is safe-by-default (preserved)
+# without editing this list. ``segments`` is intentionally ABSENT here — its
+# structure is backend-owned but its per-segment ``translatedText`` is not, so
+# it gets a nested merge (``_merge_segments_preserving_translations``) instead
+# of a whole-value overwrite.
+_TERMINAL_OWNED_FIELDS = (
+    'content', 'thinking', 'error',
+    'toolRounds',
+    'finishReason', 'usage', 'preset', 'toolSummary',
+    'model', 'provider_id', '_taskId',
+    'fallbackModel', 'fallbackFrom', 'fallbackReason', 'fallbackKind',
+    'apiRounds', 'modifiedFiles', 'modifiedFileList', 'cost',
+    '_memoryPrefetch', '_preferencesApplied', '_relatedConversations',
+    '_preferencesLearned', '_gitSha',
+    '_inboxInjects', '_peerInjects', '_userSteerInjects',
+)
+
+# Terminal-path fields that the terminal sync writes but which are DELIBERATELY
+# NOT grafted by a whole-value overwrite — they get a bespoke nested merge
+# instead (structure backend-owned, but sub-fields translate-owned). This is
+# the second half of the ownership boundary: a key written on the terminal path
+# must be registered in EXACTLY ONE of _TERMINAL_OWNED_FIELDS (overwrite) or
+# _TERMINAL_MERGE_EXCLUDED (nested merge). The drift-guard test
+# (test_terminal_owned_fields_cover_all_writes) fails if a new terminal write
+# lands in neither set — so a future backend field can't be silently dropped by
+# a stale fresh-tail value on regraft.
+_TERMINAL_MERGE_EXCLUDED = ('segments',)
+
+
+def _merge_segments_preserving_translations(fresh_segs, backend_segs):
+    """Take the backend segments (authoritative structure + order) but backfill
+    each segment's ``translatedText`` from the matching fresh segment when the
+    backend one lacks it.
+
+    Match key is ``(llmRound, type, deliverable)`` — the same tuple the
+    translate commit keys its stamp on. A pure projection: it never invents or
+    drops a segment, and never overwrites a translatedText the backend already
+    carries. Returns the backend list (mutated in place). Falls back to the
+    backend list unchanged when either side is empty / not a list.
+    """
+    if not isinstance(backend_segs, list):
+        return backend_segs
+    if not (isinstance(fresh_segs, list) and fresh_segs):
+        return backend_segs
+    _fresh_tr = {}
+    for s in fresh_segs:
+        if isinstance(s, dict) and s.get('translatedText'):
+            _fresh_tr[(s.get('llmRound'), s.get('type'), bool(s.get('deliverable')))] = \
+                s['translatedText']
+    if not _fresh_tr:
+        return backend_segs
+    for s in backend_segs:
+        if not isinstance(s, dict) or s.get('translatedText'):
+            continue
+        _k = (s.get('llmRound'), s.get('type'), bool(s.get('deliverable')))
+        if _k in _fresh_tr:
+            s['translatedText'] = _fresh_tr[_k]
+    return backend_segs
+
+
+def _merge_terminal_fields(fresh_tail, terminal_msg):
+    """Graft the backend-OWNED terminal fields from ``terminal_msg`` onto the
+    fresh DB tail IN PLACE (RENDER_CONTRACT Phase 4 §2.2).
+
+    Replaces the historical whole-dict ``_fresh_messages[-1] = terminal_msg``
+    regraft, which overwrote the fresh tail wholesale and thereby DROPPED every
+    field the terminal path does not itself write — most importantly a
+    ``translatedContent`` (and ``segments[].translatedText``) committed by the
+    auto-translate writer in the terminal sync's read→write window. Here we copy
+    only the owned whitelist; all other fields on ``fresh_tail`` survive, and
+    ``segments`` is merged nested so backend structure wins while per-segment
+    translations are preserved. Returns ``fresh_tail``.
+    """
+    for _f in _TERMINAL_OWNED_FIELDS:
+        if _f in terminal_msg:
+            fresh_tail[_f] = terminal_msg[_f]
+    if 'segments' in _TERMINAL_MERGE_EXCLUDED and 'segments' in terminal_msg:
+        fresh_tail['segments'] = _merge_segments_preserving_translations(
+            fresh_tail.get('segments'), terminal_msg.get('segments'))
+    return fresh_tail
+
+
 def _maybe_refresh_project_summary(task):
     """Post-reply trigger for the lazy project-summary generator (Layer 2).
 
@@ -864,8 +952,12 @@ def _sync_result_to_conversation(task, meta):
                 break
             # Flaky-network case: updated_at moved but content did NOT win —
             # graft our assembled assistant onto the fresh tail and retry.
+            # MERGE (not whole-dict replace): copy only the backend-OWNED
+            # terminal fields so a translation (translatedContent /
+            # segments[].translatedText) committed onto the fresh tail in our
+            # read→write window survives (RENDER_CONTRACT Phase 4 §2.2).
             if _fresh_tail.get('role') == 'assistant':
-                _fresh_messages[-1] = last_msg
+                _merge_terminal_fields(_fresh_tail, last_msg)
             else:
                 _fresh_messages.append(last_msg)
             messages = _fresh_messages

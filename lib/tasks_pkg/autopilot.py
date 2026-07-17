@@ -1253,10 +1253,24 @@ def _start_followup_task(task: dict, conv_id: str) -> str | None:
 
     cfg = dict(task.get('config') or {})
     # Strip checkpoint / continue flags so the follow-up runs fresh.
+    #
+    # ★ assistantMsgId MUST be stripped: it is the CLIENT-minted stable id of
+    #   the ORIGINAL turn's assistant bubble (shipped once in the send POST).
+    #   If it survives the cfg copy, create_task stamps it as this follow-up's
+    #   `_assistantMsgId`, and _new_assistant_slot then reuses it as the
+    #   committed row's `_msgId` — so EVERY follow-up in the run commits with
+    #   the SAME `_msgId`. The frontend keys/dedups DOM nodes by `_msgId`, so N
+    #   colliding assistant rows collapse into ONE bubble and the Agent replies
+    #   between VU turns become invisible (observed: 16 assistant rows sharing
+    #   one id → transcript degenerates to a wall of VU/user turns). The
+    #   follow-up has NO live client bubble carrying this id (the frontend mints
+    #   a fresh one in _attachAutopilotFollowup), so dropping it lets
+    #   _assign_message_ids mint a UNIQUE server UUID per follow-up.
     for stale_key in (
         'excludeLast', 'toolHistory', 'contentPrefix',
         'checkpointToolRounds', 'checkpointUsage', 'checkpointApiRounds',
         'checkpointModifiedFiles', 'checkpointModifiedFileList',
+        'assistantMsgId', 'msgId',
     ):
         cfg.pop(stale_key, None)
 
@@ -1914,10 +1928,15 @@ def kick_autopilot(conv_id: str, config: dict | None = None) -> dict:
     cfg = dict(config or {})
     cfg['autopilot'] = True
     cfg['endpointMode'] = False
+    # Strip assistantMsgId here too: this kick config is the template every
+    # follow-up copies (via task['config'] → _start_followup_task), so a stray
+    # client-minted id must not seed the run. See the _start_followup_task
+    # comment for the collision this prevents.
     for stale_key in (
         'excludeLast', 'toolHistory', 'contentPrefix',
         'checkpointToolRounds', 'checkpointUsage', 'checkpointApiRounds',
         'checkpointModifiedFiles', 'checkpointModifiedFileList',
+        'assistantMsgId', 'msgId',
     ):
         cfg.pop(stale_key, None)
 

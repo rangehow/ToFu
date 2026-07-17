@@ -1158,7 +1158,7 @@ function _renderFileChangesHtml(files, isStreaming, msgIdx) {
 
   // ★ Undo button — only for finalized (non-streaming) messages with a valid msgIdx
   const undoBtn = (!isStreaming && typeof msgIdx === 'number')
-    ? `<button class="fc-undo-btn" onclick="event.stopPropagation();undoConvModifications(${msgIdx})" title="${escapeHtml(t('fileChanges.undoTip'))}">` +
+    ? `<button class="fc-undo-btn" onclick="event.stopPropagation();undoConvModifications(_msgElIndex(this))" title="${escapeHtml(t('fileChanges.undoTip'))}">` +
       `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-15-6.7L3 13"/></svg>` +
       `<span>${escapeHtml(t('fileChanges.undo'))}</span></button>`
     : '';

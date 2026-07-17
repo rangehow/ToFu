@@ -406,6 +406,42 @@ function _reconcileFindEl(inner, msg, i) {
   return document.getElementById('msg-' + i);
 }
 
+/* ── RENDER_CONTRACT Invariant 3 / L10: resolve a message's LIVE index ────
+ * The per-message action buttons (Delete/Edit/Regen/Translate/Copy/Branch/…)
+ * and the thinking/pdf/ig affordances used to bake the array index straight
+ * into their `onclick` (`deleteTurn(3)`). But the id-keyed reconcile REUSES a
+ * drifted-but-unchanged node without rebuilding its HTML, so after a
+ * mid-history insert/splice a bubble that moved 3→4 still ran `deleteTurn(3)`
+ * — the action hit the WRONG turn. It also made `renderMessage` output
+ * index-DEPENDENT, which blocks a rendered-output content-version.
+ *
+ * `_msgElIndex(el)` resolves the CURRENT array index at CLICK time from the
+ * nearest `.message` node's stable `data-msg-id` against the active
+ * conversation (positional `id="msg-N"` legacy fallback for an id-less node).
+ * Every action onclick calls `fn(_msgElIndex(this))`, so the rendered string
+ * no longer encodes a position and stays correct across drift. Unknown → -1,
+ * which every handler already treats as a no-op (`conv.messages[-1]` is
+ * undefined → the `if (!msg) return` guard). */
+function _msgElIndex(el) {
+  if (!el || typeof el.closest !== 'function') return -1;
+  const node = el.closest('.message');
+  if (!node) return -1;
+  const conv = (typeof getActiveConv === 'function') ? getActiveConv() : null;
+  const mid = node.getAttribute && node.getAttribute('data-msg-id');
+  if (mid && conv && Array.isArray(conv.messages)) {
+    for (let i = 0; i < conv.messages.length; i++) {
+      if (conv.messages[i] && conv.messages[i]._msgId === mid) return i;
+    }
+    return -1;  // stable id present but no longer in the list → no-op
+  }
+  /* Legacy id-less node: fall back to the positional `id="msg-N"` handle. */
+  const m = node.id && node.id.match(/^msg-(\d+)$/);
+  return m ? parseInt(m[1], 10) : -1;
+}
+if (typeof window !== "undefined") {
+  window._msgElIndex = _msgElIndex;
+}
+
 function renderChat(conv, forceScroll) {
   /* ── Guard 1: skip if user is editing a message in this conversation ── */
   if (_editingMsgIdx !== null && conv.id === activeConvId) return;
@@ -954,7 +990,7 @@ function renderMessage(msg, idx) {
                            '.csv':_DOC_SHEET, '.json':_DOC_CODE, '.xml':_DOC_CODE, '.py':_DOC_CODE, '.js':_DOC_CODE,
                            '.html':_DOC_CODE, '.yaml':_DOC_CODE, '.yml':_DOC_CODE};
       const docIcon = _dsvg(_docIconMap[_ext] || _DOC_FILE);
-      body += `<div class="pdf-attach-badge" title="${escapeHtml(pdf.name)}" onclick="previewMsgPdfText(${idx},${pdfI})" style="cursor:pointer"><span class="pdf-attach-icon">${docIcon}</span><span class="pdf-attach-info"><span class="pdf-attach-name">${escapeHtml(pdf.name.length > 25 ? pdf.name.slice(0, 23) + "…" : pdf.name)}</span><span class="pdf-attach-meta">${pdf.pages} pages · ${sizeStr}${imgStr}${scanBadge}${methodBadge}</span></span></div>`;
+      body += `<div class="pdf-attach-badge" title="${escapeHtml(pdf.name)}" onclick="previewMsgPdfText(_msgElIndex(this),${pdfI})" style="cursor:pointer"><span class="pdf-attach-icon">${docIcon}</span><span class="pdf-attach-info"><span class="pdf-attach-name">${escapeHtml(pdf.name.length > 25 ? pdf.name.slice(0, 23) + "…" : pdf.name)}</span><span class="pdf-attach-meta">${pdf.pages} pages · ${sizeStr}${imgStr}${scanBadge}${methodBadge}</span></span></div>`;
     });
     body += "</div>";
   }
@@ -1115,7 +1151,7 @@ function renderMessage(msg, idx) {
     const thinkLen = msg.thinking.length;
     const thinkMeta = thinkLen >= 1024 ? ` (${Math.round(thinkLen / 1024)}k chars)` : ` (${thinkLen} chars)`;
     const _thinkLbl = (typeof t === 'function') ? t('stream.thinking.done') : 'Thinking Process';
-    body += `<div class="thinking-block" onclick="_toggleThinking(this,${idx})"><div class="thinking-header"><span class="thinking-label">${escapeHtml(_thinkLbl)}${thinkMeta}</span><span class="thinking-toggle">▼</span></div><div class="thinking-content"><div class="thinking-text"></div></div></div>`;
+    body += `<div class="thinking-block" onclick="_toggleThinking(this,_msgElIndex(this))"><div class="thinking-header"><span class="thinking-label">${escapeHtml(_thinkLbl)}${thinkMeta}</span><span class="thinking-toggle">▼</span></div><div class="thinking-content"><div class="thinking-text"></div></div></div>`;
   }
   // ── Prior thinking (display-only) ──
   // Trailing reasoning that was emitted after the last completed tool batch
@@ -1127,7 +1163,7 @@ function renderMessage(msg, idx) {
   if (!isUser && msg.priorThinking) {
     const priorLen = msg.priorThinking.length;
     const priorMeta = priorLen >= 1024 ? ` (${Math.round(priorLen / 1024)}k chars)` : ` (${priorLen} chars)`;
-    body += `<div class="thinking-block thinking-prior" onclick="_togglePriorThinking(this,${idx})"><div class="thinking-header"><span class="thinking-label">Earlier Thinking${priorMeta}</span><span class="thinking-toggle">▼</span></div><div class="thinking-content"><div class="thinking-text"></div></div></div>`;
+    body += `<div class="thinking-block thinking-prior" onclick="_togglePriorThinking(this,_msgElIndex(this))"><div class="thinking-header"><span class="thinking-label">Earlier Thinking${priorMeta}</span><span class="thinking-toggle">▼</span></div><div class="thinking-content"><div class="thinking-text"></div></div></div>`;
   }
   // ── Prior response (display-only) ──
   // The free-form prose the model wrote after the last completed tool batch,
@@ -1139,7 +1175,7 @@ function renderMessage(msg, idx) {
   if (!isUser && msg.priorContent) {
     const priorCLen = msg.priorContent.length;
     const priorCMeta = priorCLen >= 1024 ? ` (${Math.round(priorCLen / 1024)}k chars)` : ` (${priorCLen} chars)`;
-    body += `<div class="thinking-block thinking-prior content-prior" onclick="_togglePriorContent(this,${idx})"><div class="thinking-header"><span class="thinking-label">Earlier Response${priorCMeta} · rolled back</span><span class="thinking-toggle">▼</span></div><div class="thinking-content"><div class="thinking-text"></div></div></div>`;
+    body += `<div class="thinking-block thinking-prior content-prior" onclick="_togglePriorContent(this,_msgElIndex(this))"><div class="thinking-header"><span class="thinking-label">Earlier Response${priorCMeta} · rolled back</span><span class="thinking-toggle">▼</span></div><div class="thinking-content"><div class="thinking-text"></div></div></div>`;
   }
   // Track which branches have been inlined (rendered right after their anchor text)
   let _inlinedBranches = new Set();
@@ -1272,7 +1308,7 @@ function renderMessage(msg, idx) {
             <div class="ig-error-icon">${errIcon}</div>
             <div class="ig-error-title">${escapeHtml(errModel)}</div>
             <div class="ig-error-text">${escapeHtml((r.error || 'Failed').slice(0,200))}</div>
-            <button class="ig-slot-retry-btn" onclick="_igRetryBatchSlot(${idx},${ri},${promptEsc},${modelEsc})" title="Retry this slot">↻ Retry</button>
+            <button class="ig-slot-retry-btn" onclick="_igRetryBatchSlot(_msgElIndex(this),${ri},${promptEsc},${modelEsc})" title="Retry this slot">↻ Retry</button>
           </div></div>`;
         }
       }
@@ -1354,7 +1390,7 @@ function renderMessage(msg, idx) {
     const _tmUser = _tr.model ? `<span class="bilingual-model" title="${escapeHtml(_tr.model)}">${escapeHtml(_tr.model)}</span>` : '';
     // Strip any leaked <notranslate>/<nt> tags from the translation display.
     const _userTrans = stripNoTranslateTags(msg.content || '');
-    body += `<div class="bilingual-block bilingual-translated"><div class="bilingual-header" onclick="if(event.target.closest('.bilingual-copy-btn'))return;this.parentElement.classList.toggle('expanded')"><span class="bilingual-label"><span class="bilingual-type">${escapeHtml(t('chat.bilingualOriginal'))}</span><span class="bilingual-sep">/</span><span class="bilingual-type active">${escapeHtml(t('chat.bilingualTranslated'))}</span>${_tmUser}</span><button class="bilingual-copy-btn" onclick="event.stopPropagation();copyBilingualOriginal(this,'user',${idx})" title="Copy translation"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button><span class="bilingual-toggle">▼</span></div><div class="bilingual-body"><div class="md-content user-content">${escapeHtml(_userTrans)}</div></div></div>`;
+    body += `<div class="bilingual-block bilingual-translated"><div class="bilingual-header" onclick="if(event.target.closest('.bilingual-copy-btn'))return;this.parentElement.classList.toggle('expanded')"><span class="bilingual-label"><span class="bilingual-type">${escapeHtml(t('chat.bilingualOriginal'))}</span><span class="bilingual-sep">/</span><span class="bilingual-type active">${escapeHtml(t('chat.bilingualTranslated'))}</span>${_tmUser}</span><button class="bilingual-copy-btn" onclick="event.stopPropagation();copyBilingualOriginal(this,'user',_msgElIndex(this))" title="Copy translation"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button><span class="bilingual-toggle">▼</span></div><div class="bilingual-body"><div class="md-content user-content">${escapeHtml(_userTrans)}</div></div></div>`;
   }
   // ── Auto-translate failed notice (user messages) ──
   // The send-path auto-translate was attempted but failed / timed out, so the
@@ -1374,7 +1410,7 @@ function renderMessage(msg, idx) {
     // Retry = re-run the turn: regenerateFromUser re-translates the original
     // text AND regenerates the response (translateMessage rejects plain user
     // messages and wouldn't change what the model already received).
-    body += `<div class="translate-failed-notice" onclick="event.stopPropagation();regenerateFromUser(${idx})" title="${escapeHtml(_failMsg)}">`
+    body += `<div class="translate-failed-notice" onclick="event.stopPropagation();regenerateFromUser(_msgElIndex(this))" title="${escapeHtml(_failMsg)}">`
       + `<svg class="tfn-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>`
       + `<span class="tfn-text">${escapeHtml(_failMsg)}</span>`
       + `<span class="tfn-retry">${escapeHtml(_retryTip)}</span>`
@@ -1384,7 +1420,7 @@ function renderMessage(msg, idx) {
     const _tmAsst = _tr.model ? `<span class="bilingual-model" title="${escapeHtml(_tr.model)}">${escapeHtml(_tr.model)}</span>` : '';
     // Defense in depth — strip any leaked <notranslate>/<nt> tags.
     const _asstOrig = stripNoTranslateTags(msg.content || '');
-    body += `<div class="bilingual-block bilingual-original"><div class="bilingual-header" onclick="if(event.target.closest('.bilingual-copy-btn'))return;this.parentElement.classList.toggle('expanded')"><span class="bilingual-label"><span class="bilingual-type active">${escapeHtml(t('chat.bilingualOriginal'))}</span><span class="bilingual-sep">/</span><span class="bilingual-type">${escapeHtml(t('chat.bilingualTranslated'))}</span>${_tmAsst}</span><button class="bilingual-copy-btn" onclick="event.stopPropagation();copyBilingualOriginal(this,'assistant',${idx})" title="Copy original text"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button><span class="bilingual-toggle">▼</span></div><div class="bilingual-body"><div class="md-content">${renderMarkdown(_asstOrig)}</div></div></div>`;
+    body += `<div class="bilingual-block bilingual-original"><div class="bilingual-header" onclick="if(event.target.closest('.bilingual-copy-btn'))return;this.parentElement.classList.toggle('expanded')"><span class="bilingual-label"><span class="bilingual-type active">${escapeHtml(t('chat.bilingualOriginal'))}</span><span class="bilingual-sep">/</span><span class="bilingual-type">${escapeHtml(t('chat.bilingualTranslated'))}</span>${_tmAsst}</span><button class="bilingual-copy-btn" onclick="event.stopPropagation();copyBilingualOriginal(this,'assistant',_msgElIndex(this))" title="Copy original text"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button><span class="bilingual-toggle">▼</span></div><div class="bilingual-body"><div class="md-content">${renderMarkdown(_asstOrig)}</div></div></div>`;
   }
   // ── Critic (endpoint review) / Autopilot VU bilingual block — symmetric with assistant ──
   // (isUser && _showTrans) is true ONLY for critic/VU users — a normal user has
@@ -1393,7 +1429,7 @@ function renderMessage(msg, idx) {
   if (isUser && _showTrans) {
     const _tmCritic = _tr.model ? `<span class="bilingual-model" title="${escapeHtml(_tr.model)}">${escapeHtml(_tr.model)}</span>` : '';
     const _critOrig = stripNoTranslateTags(msg.content || '');
-    body += `<div class="bilingual-block bilingual-original"><div class="bilingual-header" onclick="if(event.target.closest('.bilingual-copy-btn'))return;this.parentElement.classList.toggle('expanded')"><span class="bilingual-label"><span class="bilingual-type active">${escapeHtml(t('chat.bilingualOriginal'))}</span><span class="bilingual-sep">/</span><span class="bilingual-type">${escapeHtml(t('chat.bilingualTranslated'))}</span>${_tmCritic}</span><button class="bilingual-copy-btn" onclick="event.stopPropagation();copyBilingualOriginal(this,'critic',${idx})" title="Copy original text"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button><span class="bilingual-toggle">▼</span></div><div class="bilingual-body"><div class="md-content">${renderMarkdown(_critOrig)}</div></div></div>`;
+    body += `<div class="bilingual-block bilingual-original"><div class="bilingual-header" onclick="if(event.target.closest('.bilingual-copy-btn'))return;this.parentElement.classList.toggle('expanded')"><span class="bilingual-label"><span class="bilingual-type active">${escapeHtml(t('chat.bilingualOriginal'))}</span><span class="bilingual-sep">/</span><span class="bilingual-type">${escapeHtml(t('chat.bilingualTranslated'))}</span>${_tmCritic}</span><button class="bilingual-copy-btn" onclick="event.stopPropagation();copyBilingualOriginal(this,'critic',_msgElIndex(this))" title="Copy original text"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button><span class="bilingual-toggle">▼</span></div><div class="bilingual-body"><div class="md-content">${renderMarkdown(_critOrig)}</div></div></div>`;
   }
   // ── Persistent "translating..." indicator (survives re-render / tab switch) ──
   // Owned by ui/translation_indicator.js, which reads translation state via the
@@ -1443,7 +1479,7 @@ function renderMessage(msg, idx) {
     /* i18n: label/tooltip resolver — defensive against isolated harnesses
      * where `t` may be undefined (falls back to the English string). */
     const _mt = (k, fallback) => (typeof t === 'function' && t(k) !== k) ? t(k) : fallback;
-    const copyH = `<button class="msg-action-btn copy-msg-btn" onclick="event.stopPropagation();copyMessage(${idx})" title="${escapeHtml(_mt('msgAction.copyTitle', 'Copy'))}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg> ${escapeHtml(_mt('msgAction.copy', 'Copy'))}</button>`;
+    const copyH = `<button class="msg-action-btn copy-msg-btn" onclick="event.stopPropagation();copyMessage(_msgElIndex(this))" title="${escapeHtml(_mt('msgAction.copyTitle', 'Copy'))}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg> ${escapeHtml(_mt('msgAction.copy', 'Copy'))}</button>`;
     /* ★ Regen is a USER-LANE action: it truncates after this turn and re-runs
      *   the agent's response from here. That is meaningful on EVERY user-lane
      *   bubble — a real human turn, a role=user peer-message turn, AND an
@@ -1457,9 +1493,9 @@ function renderMessage(msg, idx) {
      * (Save / Save & Resend); for every other lane it is EDIT-IN-PLACE only
      * (Save) — startEditMessage / saveEditOnly branch on the role. Regen
      * shows on any user-lane turn (see _showRegen below). */
-    const editH = `<button class="msg-action-btn" onclick="event.stopPropagation();startEditMessage(${idx})" title="${escapeHtml(_mt('msgAction.editTitle', 'Edit'))}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg> ${escapeHtml(_mt('msgAction.edit', 'Edit'))}</button>`;
+    const editH = `<button class="msg-action-btn" onclick="event.stopPropagation();startEditMessage(_msgElIndex(this))" title="${escapeHtml(_mt('msgAction.editTitle', 'Edit'))}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg> ${escapeHtml(_mt('msgAction.edit', 'Edit'))}</button>`;
     const regenH = _showRegen
-      ? `<button class="msg-action-btn msg-regen-btn" onclick="event.stopPropagation();regenerateFromUser(${idx})" title="${escapeHtml(_mt('msgAction.regenTitle', 'Regenerate response from this message'))}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg> ${escapeHtml(_mt('msgAction.regen', 'Regen'))}</button>`
+      ? `<button class="msg-action-btn msg-regen-btn" onclick="event.stopPropagation();regenerateFromUser(_msgElIndex(this))" title="${escapeHtml(_mt('msgAction.regenTitle', 'Regenerate response from this message'))}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg> ${escapeHtml(_mt('msgAction.regen', 'Regen'))}</button>`
       : "";
     const conv_ = getActiveConv();
     /* ★ Continue is a RESUME affordance for an INTERRUPTED/TRUNCATED turn —
@@ -1488,21 +1524,21 @@ function renderMessage(msg, idx) {
     // receive auto-translate too.
     const _translateBtnAllowed = !isUser || (isUser && (msg._isEndpointReview || msg._isVirtualUser));
     const translateH = _translateBtnAllowed
-      ? `<button class="msg-action-btn msg-translate-btn${isShowingTrans ? " translated" : ""}" onclick="event.stopPropagation();translateMessage(${idx})" title="${escapeHtml(isShowingTrans ? _mt('msgAction.showOriginalTitle', 'Show Original') : _mt('msgAction.translateTitle', 'Translate'))}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12.87 15.07l-2.54-2.51.03-.03A17.52 17.52 0 0014.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7l1.62-4.33L19.12 17h-3.24z"/></svg> ${escapeHtml(isShowingTrans ? _mt('msgAction.original', 'Original') : _mt('msgAction.translate', 'Translate'))}</button>`
+      ? `<button class="msg-action-btn msg-translate-btn${isShowingTrans ? " translated" : ""}" onclick="event.stopPropagation();translateMessage(_msgElIndex(this))" title="${escapeHtml(isShowingTrans ? _mt('msgAction.showOriginalTitle', 'Show Original') : _mt('msgAction.translateTitle', 'Translate'))}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12.87 15.07l-2.54-2.51.03-.03A17.52 17.52 0 0014.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7l1.62-4.33L19.12 17h-3.24z"/></svg> ${escapeHtml(isShowingTrans ? _mt('msgAction.original', 'Original') : _mt('msgAction.translate', 'Translate'))}</button>`
       : "";
     const exportImgH = !isUser
-      ? `<button class="msg-action-btn msg-export-img-btn" onclick="event.stopPropagation();ExportImages.exportMessageWithPreview(${idx})" title="${escapeHtml(_mt('msgAction.exportTitle', 'Export as phone-screen images'))}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg> ${escapeHtml(_mt('msgAction.export', 'Export'))}</button>`
+      ? `<button class="msg-action-btn msg-export-img-btn" onclick="event.stopPropagation();ExportImages.exportMessageWithPreview(_msgElIndex(this))" title="${escapeHtml(_mt('msgAction.exportTitle', 'Export as phone-screen images'))}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg> ${escapeHtml(_mt('msgAction.export', 'Export'))}</button>`
       : "";
     const canDelete = conv_ && !activeStreams.has(conv_.id) && !conv_.activeTaskId;
     const deleteH = canDelete
-      ? `<button class="msg-action-btn msg-delete-btn" onclick="event.stopPropagation();deleteTurn(${idx})" title="${escapeHtml(isUser ? _mt('msgAction.deleteTurnTitle', 'Delete this turn') : _mt('msgAction.deleteMsgTitle', 'Delete this message'))}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>`
+      ? `<button class="msg-action-btn msg-delete-btn" onclick="event.stopPropagation();deleteTurn(_msgElIndex(this))" title="${escapeHtml(isUser ? _mt('msgAction.deleteTurnTitle', 'Delete this turn') : _mt('msgAction.deleteMsgTitle', 'Delete this message'))}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>`
       : "";
     /* ★ Branch ("分支") is an assistant-lane action — moved out of the separate
      *   dashed `.branch-zone` pill into the unified bottom action bar so it
      *   shares the `.msg-action-btn` styling/hover-reveal with Copy/Edit/…. */
     const _branchLabel = _mt('branch.add', 'Branch');
     const branchBtnH = !isUser
-      ? `<button class="msg-action-btn msg-branch-btn" onclick="event.stopPropagation();promptNewBranch(${idx})" title="${escapeHtml(_branchLabel)}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg> ${escapeHtml(_branchLabel)}</button>`
+      ? `<button class="msg-action-btn msg-branch-btn" onclick="event.stopPropagation();promptNewBranch(_msgElIndex(this))" title="${escapeHtml(_branchLabel)}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg> ${escapeHtml(_branchLabel)}</button>`
       : "";
     actionBtns = `<div class="message-actions">${copyH}${editH}${regenH}${continueH}${translateH}${exportImgH}${branchBtnH}${deleteH}</div>`;
   }

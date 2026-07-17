@@ -909,7 +909,7 @@ def run_task(task: dict[str, Any]) -> None:
                                 } for it in _swarm_items]
                                 append_event(task, build_event(
                                     EventType.SWARM_INBOX_INJECT,
-                                    round=round_num + 1,
+                                    roundNum=round_num + 1,
                                     count=len(_swarm_items),
                                     agentIds=[it.get('agent_id', '')
                                               for it in _swarm_items],
@@ -1012,7 +1012,7 @@ def run_task(task: dict[str, Any]) -> None:
                 snapshot = _strip_base64_for_snapshot(_wire)
                 snap_evt = build_event(
                     EventType.MESSAGES_SNAPSHOT,
-                    round=round_num + 1,
+                    roundNum=round_num + 1,
                     label=f'Round {round_num + 1} 请求前 · {len(snapshot)}条',
                     messages=snapshot,
                 )
@@ -1111,7 +1111,7 @@ def run_task(task: dict[str, Any]) -> None:
                     try:
                         append_event(task, build_event(
                             EventType.PEER_INBOX_INJECT,
-                            round=round_num + 1,
+                            roundNum=round_num + 1,
                             count=len(_peer_inject),
                             previews=_peer_previews,
                         ))
@@ -1166,7 +1166,7 @@ def run_task(task: dict[str, Any]) -> None:
                     try:
                         append_event(task, build_event(
                             EventType.USER_STEER_INJECT,
-                            round=round_num + 1,
+                            roundNum=round_num + 1,
                             count=len(_steer_inject),
                             previews=_steer_previews,
                         ))
@@ -1558,7 +1558,7 @@ def run_task(task: dict[str, Any]) -> None:
                     snap = _strip_base64_for_snapshot(_wire)
                     snap_evt = build_event(
                         EventType.MESSAGES_SNAPSHOT,
-                        round='final',
+                        roundNum='final',
                         label=f'最终回复后 · {len(snap)}条',
                         messages=snap)
                     # Carry the tool schema so the panel's tools section

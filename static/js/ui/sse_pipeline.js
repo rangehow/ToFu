@@ -1163,14 +1163,14 @@ function dispatchSSEEvent(line, ctx) {
         /* Phase events during critic review — update critic buf instead */
         if (_epCriticBuf)
           _epCriticBuf.phase = { phase: ev.phase, detail: ev.detail || "",
-            tools: ev.tools || [], toolContext: ev.toolContext || "", round: ev.round || 0 };
+            tools: ev.tools || [], toolContext: ev.toolContext || "", round: ev.roundNum || 0 };
       } else if (buf) {
         buf.phase = {
           phase: ev.phase,
           detail: ev.detail || "",
           tools: ev.tools || [],
           toolContext: ev.toolContext || "",
-          round: ev.round || 0,
+          round: ev.roundNum || 0,
         };
       }
       twUpdate(convId);

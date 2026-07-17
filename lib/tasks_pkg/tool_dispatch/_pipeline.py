@@ -305,10 +305,57 @@ def execute_tool_pipeline(
         if _hook_result and _hook_result.action == 'block':
             logger.info('[Task %s] Pre-hook BLOCKED tool %s: %s',
                         tid, fn_name, _hook_result.message)
-            tool_results[tc_id] = (
-                f'Tool blocked by pre-execution hook: {_hook_result.message}',
-                False,
-            )
+            _blocked_content = f'Tool blocked by pre-execution hook: {_hook_result.message}'
+            # Surface the hook's recovery guidance to the model so a block is
+            # an ACTIONABLE redirect (what was refused + how to proceed safely)
+            # rather than a dead-end the loop can't recover from.
+            _recovery = getattr(_hook_result, 'additional_context', '') or ''
+            if _recovery:
+                _blocked_content = f'{_blocked_content}\n\n{_recovery}'
+            tool_results[tc_id] = (_blocked_content, False)
+            # ★ Settle the round NOW. Without this the round stays in its
+            #   'searching' start-state forever (no result, no terminal
+            #   status): the live UI shows a permanent "Running…" spinner and
+            #   the persisted round only gets swept to 'aborted' by the
+            #   task-end dangling sweep — so an EARLY blocked tool renders as
+            #   still-running even after the loop has advanced dozens of rounds
+            #   past it. Emit a terminal 'rejected' result exactly like the
+            #   parse-error / hallucinated-tool branch above.
+            if round_entry is not None:
+                _block_meta = {
+                    'type': 'error',
+                    'content': _blocked_content,
+                    'toolName': fn_name,
+                    'source': 'Blocked',
+                    'snippet': _hook_result.message,
+                    'badge': 'blocked',
+                }
+                # For run_command / code_exec, shape the meta so the frontend's
+                # purpose-built "not run" terminal card renders it (⊘ blocked +
+                # inline reason) — that renderer keys on meta.command / notRun.
+                # A generic error meta would fall through to a plain error line.
+                if fn_name in ('run_command', 'code_exec'):
+                    _block_meta['command'] = fn_args.get('command') or round_entry.get('query') or ''
+                    _block_meta['notRun'] = True
+                    _block_meta['exitCode'] = 'not-run'
+                    _block_meta['reason'] = _blocked_content
+                round_entry['results'] = [_block_meta]
+                round_entry['status'] = 'rejected'
+                round_entry['toolContent'] = _blocked_content
+                try:
+                    append_event(task, build_event(
+                        EventType.TOOL_RESULT,
+                        roundNum=rn,
+                        toolCallId=round_entry.get('toolCallId', ''),
+                        query=round_entry.get('query', fn_name),
+                        results=[_block_meta],
+                        status='rejected',
+                    ))
+                except Exception as _blk_ev:
+                    logger.warning(
+                        '[Task %s] tool_result (pre-hook block) emit failed for '
+                        'tool=%s round=%s (non-fatal): %s',
+                        tid, fn_name, rn, _blk_ev, exc_info=True)
             continue
 
         parallel_items.append(item)
@@ -783,7 +830,7 @@ def execute_tool_pipeline(
         snapshot = _strip_base64_for_snapshot(_wire)
         snap_evt = build_event(
             EventType.MESSAGES_SNAPSHOT,
-            round=round_num + 1,
+            roundNum=round_num + 1,
             label=f'Round {round_num + 1} 工具结果后 · {len(snapshot)}条',
             messages=snapshot,
         )

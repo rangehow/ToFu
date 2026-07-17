@@ -429,7 +429,7 @@ function line(obj) { return 'data: ' + JSON.stringify(obj); }
 // ── 16. round_usage stashes _liveLastRoundUsage; returns falsy ──
 {
   const { ctx } = setup();
-  const ret = T.dispatchSSEEvent(line({ type: 'round_usage', round: 2, model: 'm',
+  const ret = T.dispatchSSEEvent(line({ type: 'round_usage', roundNum: 2, model: 'm',
     tokensIn: 100, tokensOut: 20, usage: { total_tokens: 120 } }), ctx);
   check('round_usage_returns_falsy', !ret);
   const u = ctx.assistantMsg._liveLastRoundUsage;
@@ -490,7 +490,7 @@ function line(obj) { return 'data: ' + JSON.stringify(obj); }
 // ── 21. swarm_inbox_inject pushes a chip + a synthetic _inboxInject round (deduped) ──
 {
   const { ctx } = setup();
-  T.dispatchSSEEvent(line({ type: 'swarm_inbox_inject', round: 3, count: 2,
+  T.dispatchSSEEvent(line({ type: 'swarm_inbox_inject', roundNum: 3, count: 2,
     agentIds: ['a1', 'a2'], previews: ['p1', 'p2'] }), ctx);
   check('inbox_chip_pushed', (ctx.assistantMsg._inboxInjects || []).length === 1 &&
     ctx.assistantMsg._inboxInjects[0].count === 2);
@@ -498,7 +498,7 @@ function line(obj) { return 'data: ' + JSON.stringify(obj); }
   check('inbox_synthetic_round', synth.length === 1 && synth[0]._inboxKey === 'inbox:3' &&
     synth[0].status === 'done');
   // Replay the SAME round → must dedup (no second synthetic round).
-  T.dispatchSSEEvent(line({ type: 'swarm_inbox_inject', round: 3, count: 2,
+  T.dispatchSSEEvent(line({ type: 'swarm_inbox_inject', roundNum: 3, count: 2,
     agentIds: ['a1', 'a2'] }), ctx);
   check('inbox_dedup', (ctx.assistantMsg.toolRounds || []).filter(r => r._inboxInject).length === 1);
 }
@@ -507,7 +507,7 @@ function line(obj) { return 'data: ' + JSON.stringify(obj); }
 //         _peerInject round carrying sender + text previews (deduped by round). ──
 {
   const { ctx } = setup();
-  T.dispatchSSEEvent(line({ type: 'peer_inbox_inject', round: 2, count: 1,
+  T.dispatchSSEEvent(line({ type: 'peer_inbox_inject', roundNum: 2, count: 1,
     previews: [{ fromConv: 'senderco', text: 'watch the parser epic' }] }), ctx);
   const synth = (ctx.assistantMsg.toolRounds || []).filter(r => r._peerInject);
   check('peer_inject_synthetic_round', synth.length === 1 &&
@@ -515,7 +515,7 @@ function line(obj) { return 'data: ' + JSON.stringify(obj); }
     synth[0].peerCount === 1 &&
     (synth[0].peerPreviews || [])[0].fromConv === 'senderco');
   // Replay the SAME round → must dedup (no second synthetic peer round).
-  T.dispatchSSEEvent(line({ type: 'peer_inbox_inject', round: 2, count: 1,
+  T.dispatchSSEEvent(line({ type: 'peer_inbox_inject', roundNum: 2, count: 1,
     previews: [{ fromConv: 'senderco', text: 'watch the parser epic' }] }), ctx);
   check('peer_inject_dedup',
     (ctx.assistantMsg.toolRounds || []).filter(r => r._peerInject).length === 1);
@@ -525,7 +525,7 @@ function line(obj) { return 'data: ' + JSON.stringify(obj); }
 {
   const { ctx } = setup();
   const before = JSON.stringify(ctx.assistantMsg);
-  T.dispatchSSEEvent(line({ type: 'messages_snapshot', round: 1, messageCount: 3,
+  T.dispatchSSEEvent(line({ type: 'messages_snapshot', roundNum: 1, messageCount: 3,
     messages: [{ role: 'user', content: 'x' }] }), ctx);
   check('snapshot_calls_debug', calls.showMessagesInDebug >= 1);
   check('snapshot_no_msg_mutation', JSON.stringify(ctx.assistantMsg) === before);

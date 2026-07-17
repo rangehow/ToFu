@@ -53,7 +53,7 @@ def _emit_round_usage(task, round_num, model, usage, *, tag=''):
         out = usage.get('completion_tokens') or usage.get('output_tokens') or 0
         append_event(task, {
             'type': 'round_usage',
-            'round': round_num,
+            'roundNum': round_num,
             'model': model,
             'tag': tag,
             'tokensIn': int(tokens_in or 0),

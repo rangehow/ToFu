@@ -27,7 +27,7 @@ function _handleRoundUsage(ev, c) {
        * falls back to `msg.usage / n` for older conversations. */
       if (assistantMsg) {
         assistantMsg._liveLastRoundUsage = {
-          round: ev.round,
+          round: ev.roundNum,
           model: ev.model,
           tag: ev.tag,
           tokensIn: ev.tokensIn,

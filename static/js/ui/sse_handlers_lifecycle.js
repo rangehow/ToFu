@@ -16,7 +16,7 @@ function _handleSwarmInboxInject(ev, c) {
        *    this round" — same instant as the model itself sees them.    */
       if (!assistantMsg._inboxInjects) assistantMsg._inboxInjects = [];
       assistantMsg._inboxInjects.push({
-        round:    ev.round,
+        round:    ev.roundNum,
         count:    ev.count || 0,
         agentIds: Array.isArray(ev.agentIds) ? ev.agentIds.filter(Boolean) : [],
         ts:       Date.now(),
@@ -30,7 +30,7 @@ function _handleSwarmInboxInject(ev, c) {
        *   `_inboxInject`; _renderUnifiedToolLine renders it specially.
        *   Dedup by round so SSE replay / poll fallback doesn't double it. */
       if (!assistantMsg.toolRounds) assistantMsg.toolRounds = [];
-      const _injRound = ev.round || 0;
+      const _injRound = ev.roundNum || 0;
       const _injKey = "inbox:" + _injRound;
       if (!assistantMsg.toolRounds.some(r => r._inboxInject && r._inboxKey === _injKey)) {
         /* Anchor the synthetic row ABOVE the round that consumed the inject
@@ -136,7 +136,7 @@ function _handlePeerInboxInject(ev, c) {
        *    rendered by _renderPeerInjectRow. Dedup by round so SSE replay /
        *    poll fallback doesn't double it. */
       if (!assistantMsg.toolRounds) assistantMsg.toolRounds = [];
-      const _pRound = ev.round || 0;
+      const _pRound = ev.roundNum || 0;
       const _pKey = "peer:" + _pRound;
       if (!assistantMsg.toolRounds.some(r => r._peerInject && r._peerKey === _pKey)) {
         _spliceInjectRow(assistantMsg.toolRounds, {
@@ -171,7 +171,7 @@ function _handleUserSteerInject(ev, c) {
        *    display-only. Dedup by round / _steerKey so SSE replay / poll
        *    fallback / rehydrate don't double it. */
       if (!assistantMsg._userSteerInjects) assistantMsg._userSteerInjects = [];
-      const _steerRound = ev.round || 0;
+      const _steerRound = ev.roundNum || 0;
       if (!assistantMsg._userSteerInjects.some(s => s.round === _steerRound)) {
         assistantMsg._userSteerInjects.push({
           round:    _steerRound,
@@ -205,7 +205,7 @@ function _handleMessagesSnapshot(ev, c) {
       if (typeof showMessagesInDebug === "function")
         showMessagesInDebug(
           ev.messages,
-          ev.label || t('stream.roundMessages', { round: ev.round, n: ev.messageCount }),
+          ev.label || t('stream.roundMessages', { round: ev.roundNum, n: ev.messageCount }),
           true,
           convId,
           ev.tools || undefined,

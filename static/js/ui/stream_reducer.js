@@ -23,12 +23,17 @@
  *    (conversation-unique), else by its canonical roundNum. Callers pass
  *    the raw event; we read whichever index field it carries. ── */
 function _evRoundNum(ev) {
-  // Canonical order: roundNum (tool/timer wire field) → round (phase/
-  // lifecycle wire field) → llmRound (batch grouping). One read site.
+  // The wire now emits ONE canonical round-index key: `roundNum` (Phase 3 §5
+  // unified events.py — PHASE/DELTA_RESET/ROUND_USAGE/…/inject all carry
+  // roundNum). This reads ONLY that canonical key: the retired `round` wire
+  // alias AND a bare `llmRound` event field are intentionally NOT read here —
+  // an event carrying only one of those must NOT silently locate a round (that
+  // would re-hide the drift this unification removed). `llmRound` remains valid
+  // ONLY as the batch-grouping key on ROUND OBJECTS (read directly off the
+  // round in _stampDeltaReset, never off the event here). Guarded by
+  // tests/test_events_round_key_unified.py + test_frontend_reducer_locate_canonical.py.
   if (ev == null) return null;
   if (ev.roundNum != null) return ev.roundNum;
-  if (ev.round != null) return ev.round;
-  if (ev.llmRound != null) return ev.llmRound;
   return null;
 }
 
@@ -60,8 +65,9 @@ function _stampDeltaReset(state, ev) {
   const trs = Array.isArray(state.toolRounds) ? state.toolRounds : null;
   let stamped = false;
   if (trs && trs.length) {
-    let lr = (ev && ev.round != null) ? ev.round
-           : (ev && ev.roundNum != null) ? ev.roundNum : null;
+    // delta_reset now carries the canonical `roundNum` (== the llmRound loop
+    // index); the retired `round` wire alias is no longer read.
+    let lr = (ev && ev.roundNum != null) ? ev.roundNum : null;
     if (lr == null) lr = trs[trs.length - 1].llmRound;
     const batch = (lr != null) ? trs.filter(r => r.llmRound === lr)
                                : [trs[trs.length - 1]];

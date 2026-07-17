@@ -90,7 +90,7 @@ def _discard_pretool_prose(task: dict[str, Any], round_num: int) -> None:
     with task['content_lock']:
         task['content'] = ''
         task['thinking'] = ''
-    append_event(task, build_event(EventType.DELTA_RESET, round=round_num))
+    append_event(task, build_event(EventType.DELTA_RESET, roundNum=round_num))
 
 
 # ── Suspicious-completion detection ────────────────────────────────────────
@@ -151,7 +151,7 @@ from lib.utils import repair_json as _repair_json  # noqa: F401
 def _emit_tool_round_phase(task, assistant_msg, round_num):
     """Emit a 'phase' event describing the current tool round for the frontend."""
     if round_num == 0:
-        append_event(task, build_event(EventType.PHASE, phase='llm_thinking', detail='Generating response…', round=1))
+        append_event(task, build_event(EventType.PHASE, phase='llm_thinking', detail='Generating response…', roundNum=1))
     else:
         tool_names = [tc['function']['name'] for tc in assistant_msg.get('tool_calls', [])]
         unique_names = list(dict.fromkeys(tool_names))
@@ -161,7 +161,7 @@ def _emit_tool_round_phase(task, assistant_msg, round_num):
             EventType.PHASE, phase='llm_thinking',
             detail=f'Analyzing results and planning next step… (round {round_num+1})',
             toolContext=summary,
-            round=round_num + 1,
+            roundNum=round_num + 1,
         ))
 
 
@@ -532,7 +532,7 @@ def _finalize_and_emit_done(task: dict[str, Any], *, model: str, preset: str, th
         fb.append({'role':'user','content':f'Here are fetched contents:\n\n{combined}\n\nProvide a comprehensive answer. Cite sources.'})
         try:
             snapshot = _strip_base64_for_snapshot(fb)
-            append_event(task, build_event(EventType.MESSAGES_SNAPSHOT, round='fallback', label=f'Fallback · {len(fb)}条', messages=snapshot))
+            append_event(task, build_event(EventType.MESSAGES_SNAPSHOT, roundNum='fallback', label=f'Fallback · {len(fb)}条', messages=snapshot))
         except Exception as e:
             logger.warning('[Task %s] messages_snapshot fallback failed, model=%s: %s', tid, model, e, exc_info=True)
         body = _o.build_body(

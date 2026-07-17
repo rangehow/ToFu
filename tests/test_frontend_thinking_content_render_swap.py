@@ -134,6 +134,7 @@ eval(fs.readFileSync(process.argv[6], 'utf8'));  // sse_handlers_swarm.js
 eval(fs.readFileSync(process.argv[7], 'utf8'));  // sse_handlers_io.js
 eval(fs.readFileSync(process.argv[8], 'utf8'));  // sse_handlers_misc.js
 eval(fs.readFileSync(process.argv[9], 'utf8'));  // sse_handlers_lifecycle.js
+eval(fs.readFileSync(process.argv[12], 'utf8')); // ui/stream_reducer.js (delta_reset folds through reduceStreamState)
 eval(fs.readFileSync(process.argv[2], 'utf8'));  // sse_pipeline.js
 eval(fs.readFileSync(process.argv[4], 'utf8'));  // streaming_ui.js
 eval(fs.readFileSync(process.argv[10], 'utf8')); // translation.js (engine)
@@ -265,7 +266,7 @@ function _chunks(s, n) {
   // delta_reset closes round 0 → zeroes buf.content. COALESCE: do NOT render
   // this frame (mirrors the rAF that never observed content==="" because the
   // next content delta beats the next animation frame).
-  T.dispatchSSEEvent(line({ type: 'delta_reset', round: 0 }), ctx);
+  T.dispatchSSEEvent(line({ type: 'delta_reset', roundNum: 0 }), ctx);
   // (no updateStreamingUI here — the empty-content frame is coalesced away)
 
   // Terminal round: stream the real content. The FIRST render here sees the
@@ -307,7 +308,7 @@ function _chunks(s, n) {
   T.dispatchSSEEvent(line({ type: 'tool_start', roundNum: 1, toolCallId: 'tc0',
     toolName: 'read_files', llmRound: 0 }), ctx);
   updateStreamingUI(_frame(buf));
-  T.dispatchSSEEvent(line({ type: 'delta_reset', round: 0 }), ctx);
+  T.dispatchSSEEvent(line({ type: 'delta_reset', roundNum: 0 }), ctx);
   for (const d of _chunks(TERMINAL_CONTENT, 20)) {
     T.dispatchSSEEvent(line({ type: 'delta', content: d }), ctx);
     updateStreamingUI(_frame(buf));
@@ -387,7 +388,7 @@ function _translatedPrimaryText() {
 
   // Coalesced delta_reset (empty content+thinking frame NOT rendered). This
   // zeroes buf.thinking too (round-0 reasoning was stamped onto its round).
-  T.dispatchSSEEvent(line({ type: 'delta_reset', round: 0 }), ctx);
+  T.dispatchSSEEvent(line({ type: 'delta_reset', roundNum: 0 }), ctx);
 
   // Terminal round (matches the screenshot: reasoning IS present next to the
   // content in the final turn): stream the terminal reasoning FIRST — the main
@@ -448,7 +449,8 @@ def _run_repro():
              os.path.join(JS_DIR, 'ui', 'sse_handlers_misc.js'),
              os.path.join(JS_DIR, 'ui', 'sse_handlers_lifecycle.js'),
              os.path.join(JS_DIR, 'translation.js'),
-             os.path.join(JS_DIR, 'ui', 'translation_render.js')],
+             os.path.join(JS_DIR, 'ui', 'translation_render.js'),
+             os.path.join(JS_DIR, 'ui', 'stream_reducer.js')],
             capture_output=True, text=True, timeout=60,
         )
     finally:

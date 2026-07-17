@@ -145,8 +145,8 @@ function line(obj) { return 'data: ' + JSON.stringify(obj); }
   T.dispatchSSEEvent(line({ type: 'delta', content: 'Let me read the files.' }), ctx);
   T.dispatchSSEEvent(line({ type: 'tool_start', roundNum: 1, toolCallId: 'tc0',
     toolName: 'read_files', llmRound: 0 }), ctx);
-  // delta_reset closes round 0 (it issued tool calls). ev.round === llmRound.
-  T.dispatchSSEEvent(line({ type: 'delta_reset', round: 0 }), ctx);
+  // delta_reset closes round 0 (it issued tool calls). roundNum === llmRound.
+  T.dispatchSSEEvent(line({ type: 'delta_reset', roundNum: 0 }), ctx);
 
   const r0 = am.toolRounds.find(r => r.toolCallId === 'tc0');
   check('A_round0_narration_captured', !!r0 && r0.assistantContent === 'Let me read the files.');
@@ -159,7 +159,7 @@ function line(obj) { return 'data: ' + JSON.stringify(obj); }
   T.dispatchSSEEvent(line({ type: 'delta', content: 'Now the second step.' }), ctx);
   T.dispatchSSEEvent(line({ type: 'tool_start', roundNum: 2, toolCallId: 'tc1',
     toolName: 'grep_search', llmRound: 1 }), ctx);
-  T.dispatchSSEEvent(line({ type: 'delta_reset', round: 1 }), ctx);
+  T.dispatchSSEEvent(line({ type: 'delta_reset', roundNum: 1 }), ctx);
 
   const r0b = am.toolRounds.find(r => r.toolCallId === 'tc0');
   const r1 = am.toolRounds.find(r => r.toolCallId === 'tc1');
@@ -181,7 +181,7 @@ function line(obj) { return 'data: ' + JSON.stringify(obj); }
   T.dispatchSSEEvent(line({ type: 'delta', content: 'r0 narration' }), ctx);
   T.dispatchSSEEvent(line({ type: 'tool_start', roundNum: 1, toolCallId: 'n0',
     toolName: 'read_files', llmRound: 0 }), ctx);
-  T.dispatchSSEEvent(line({ type: 'delta_reset', round: 0 }), ctx);
+  T.dispatchSSEEvent(line({ type: 'delta_reset', roundNum: 0 }), ctx);
   const r0 = am.toolRounds.find(r => r.toolCallId === 'n0');
   // Prove the mechanism worked, THEN neuter it (wipe what it captured) and
   // prove the round is left bare — i.e. WITHOUT the capture the prose is gone.

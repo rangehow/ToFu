@@ -40,6 +40,30 @@ def _assign_message_ids(messages):
     return changed
 
 
+def _new_assistant_slot(task):
+    """Build a fresh trailing assistant message slot for a task's DB commit.
+
+    Adopts the CLIENT-shipped stable id (``task['_assistantMsgId']``, minted in
+    the browser before the send POST and shipped as ``config.assistantMsgId``)
+    as the slot's ``_msgId`` — instead of letting ``_assign_message_ids`` mint a
+    DIFFERENT server UUID. This is the assistant-side analogue of the user-side
+    fix in ``build_user_msg_from_payload`` (turn_builder.py): if the ids diverge,
+    the live frontend bubble (which carries the ``tmp_`` client id) is never
+    recognised as the SAME message as the committed row on a reconnect / rescue
+    PUT, so the frontend appends it a SECOND time → duplicate assistant bubbles.
+    Preserving the id makes server and client agree on one identity for the turn.
+
+    Empty ``_assistantMsgId`` (headless / external / legacy callers that never
+    shipped one) falls through with NO ``_msgId``; ``_assign_message_ids`` then
+    mints a UUID as before — no regression for those paths.
+    """
+    slot = {'role': 'assistant', 'content': '', 'thinking': ''}
+    _amid = (task or {}).get('_assistantMsgId')
+    if _amid:
+        slot['_msgId'] = _amid
+    return slot
+
+
 def find_message_by_id(messages, msg_id):
     """Locate a message by ``_msgId``. Returns (idx, msg) or (None, None)."""
     if not msg_id or not isinstance(messages, list):
@@ -160,7 +184,10 @@ def append_event(task, event):
         p = {'phase': event['phase'], 'detail': event.get('detail', '')}
         if event.get('toolContext'): p['toolContext'] = event['toolContext']
         if event.get('tools'): p['tools'] = event['tools']
-        if event.get('round'): p['round'] = event['round']
+        # The PHASE wire event now carries the unified canonical `roundNum`
+        # (Phase 3 §5); the poll-fallback phase dict keeps its local `round`
+        # key (what the frontend phase render reads as buf.phase.round).
+        if event.get('roundNum'): p['round'] = event['roundNum']
         task['phase'] = p
     elif event.get('type') == 'delta':
         task['phase'] = None  # Clear phase when LLM starts producing tokens

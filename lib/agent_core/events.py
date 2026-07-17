@@ -197,7 +197,7 @@ _SPECS: tuple[EventSpec, ...] = (
     EventSpec(EventType.PHASE, _C.LIFECYCLE,
               'Progress / status hint for the current turn.',
               fields={'phase': "phase key (llm_thinking|tool_exec|retrying|working|…)",
-                      'detail': 'human-readable detail', 'round': 'round number'}),
+                      'detail': 'human-readable detail', 'roundNum': 'round number'}),
     EventSpec(EventType.DONE, _C.LIFECYCLE,
               'Terminal event — the turn finished (success or, with `error`, failure).',
               terminal=True,
@@ -239,7 +239,7 @@ _SPECS: tuple[EventSpec, ...] = (
               'in front of the terminal round\'s real answer. Unlike '
               '`retry_reset`, it MUST NOT touch tool rounds — the tool calls '
               'from this turn are legitimate and keep rendering. Non-terminal.',
-              fields={'round': 'the tool-call round number whose prose is dropped'}),
+              fields={'roundNum': 'the tool-call round number whose prose is dropped'}),
     # ───────────────────────── tool ─────────────────────────
     EventSpec(EventType.TOOL_START, _C.TOOL,
               'A tool call began executing.',
@@ -273,14 +273,14 @@ _SPECS: tuple[EventSpec, ...] = (
     # ───────────────────────── context ─────────────────────────
     EventSpec(EventType.ROUND_USAGE, _C.CONTEXT,
               'Token-usage accounting for a completed round.',
-              fields={'usage': 'usage dict', 'round': 'round number',
+              fields={'usage': 'usage dict', 'roundNum': 'round number',
                       'model': 'model id'}),
     EventSpec(EventType.ROUND_COMMITTED, _C.CONTEXT,
               'A round was persisted server-side (durable checkpoint).',
-              fields={'round': 'round number'}),
+              fields={'roundNum': 'round number'}),
     EventSpec(EventType.MESSAGES_SNAPSHOT, _C.CONTEXT,
               'A point-in-time copy of the message list (fallback/branch sync).',
-              fields={'messages': 'message list', 'round': 'round id/label',
+              fields={'messages': 'message list', 'roundNum': 'round id/label (may be a string label like final/fallback)',
                       'label': 'human label'}),
     EventSpec(EventType.COMPACTION, _C.CONTEXT,
               'Context-window compaction started.',
@@ -471,7 +471,7 @@ _SPECS: tuple[EventSpec, ...] = (
               'Drives an in-timeline chip mirroring swarm_inbox_inject; the '
               'idle-target queue-lane case renders the persisted .peer-msg-banner '
               'instead.',
-              fields={'round': 'round number the peer message was injected before',
+              fields={'roundNum': 'round number the peer message was injected before',
                       'count': 'number of peer messages injected this round',
                       'previews': 'list of {fromConv, text} — sender short-id + '
                                   'the original (unframed) message text'}),
@@ -490,7 +490,7 @@ _SPECS: tuple[EventSpec, ...] = (
               'undelivered steer to the durable message_queue as a fresh next '
               'turn (never zero, never double). Drives an in-timeline chip '
               'mirroring peer_inbox_inject.',
-              fields={'round': 'round number the steer was injected before',
+              fields={'roundNum': 'round number the steer was injected before',
                       'count': 'number of steer messages injected this round',
                       'previews': 'list of {text} — the steer message text'}),
     # ───────────────── artifact / scheduler / transport ─────────────────

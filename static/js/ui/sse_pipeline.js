@@ -889,16 +889,28 @@ function dispatchSSEEvent(line, ctx) {
           _epCriticBuf.thinking = _epCriticMsg.thinking;
         }
       } else {
-        assistantMsg.content = ev.content || "";  // verbatim (server fold authoritative for text)
-        assistantMsg.thinking = ev.thinking || "";
+        /* ★ RENDER_CONTRACT Phase 3: route the COLD state snapshot through the
+         *   ONE pure reducer (projectColdSnapshot). Only the reducer-OWNED
+         *   projection {content,thinking,toolRounds} is applied; every other
+         *   field on assistantMsg — crucially the translation projection
+         *   (translatedContent / _showingTranslation / segments[].translatedText
+         *   / originalContent) — is left untouched, so a cold reconnect never
+         *   drops the translated bubble. The keep-longer merge still feeds the
+         *   snapshot (a cold checkpoint may lag SHORTER than the live panel), so
+         *   the reducer sees the widened round set — proven byte-identical to
+         *   the live fold by tests/test_frontend_reducer_parity.py F3. */
+        const _existing = assistantMsg._continueToolRounds || [];
+        const _mergedRounds = ev.toolRounds
+          ? _snapshotLongerRounds(assistantMsg.toolRounds, _existing.concat(ev.toolRounds || []))
+          : assistantMsg.toolRounds;
+        const _proj = projectColdSnapshot({
+          content: ev.content, thinking: ev.thinking, toolRounds: _mergedRounds,
+        });
+        assistantMsg.content = _proj.content;
+        assistantMsg.thinking = _proj.thinking;
         if (ev.error) assistantMsg.error = ev.error;
         if (ev.toolRounds) {
-          /* Merge: keep checkpoint rounds + new ones from state snapshot.
-           * Keep-longer guards a cold/empty reconnect snapshot from SHRINKING
-           * the tool-round panel the user already watched accumulate. */
-          const existing = assistantMsg._continueToolRounds || [];
-          const merged = existing.concat(ev.toolRounds || []);
-          assistantMsg.toolRounds = _snapshotLongerRounds(assistantMsg.toolRounds, merged);
+          assistantMsg.toolRounds = _proj.toolRounds;
           if (buf)
             buf.toolRounds = assistantMsg.toolRounds;
         }

@@ -308,8 +308,18 @@ async function _pollFallback(convId, taskId, stream, assistantMsg) {
         delete assistantMsg._continueApiRounds;
       }
       if (data.toolRounds) {
+        /* ★ RENDER_CONTRACT Phase 3: route the POLL toolRounds assembly through
+         *   the ONE pure reducer (projectColdSnapshot) — same projection the
+         *   live fold + cold state block use, so a poll-fallback turn's rounds
+         *   render identically to the SSE path (no jitter). Content/thinking
+         *   keep their existing keep-longer + settled-tail flicker guard above
+         *   (a routing concern, not reducer-owned). */
         const existingRounds = assistantMsg._continueToolRounds || [];
-        assistantMsg.toolRounds = existingRounds.concat(data.toolRounds);
+        const _pproj = projectColdSnapshot({
+          content: assistantMsg.content, thinking: assistantMsg.thinking,
+          toolRounds: existingRounds.concat(data.toolRounds),
+        });
+        assistantMsg.toolRounds = _pproj.toolRounds;
         if (buf) buf.toolRounds = assistantMsg.toolRounds;
       }
       if (buf) buf.phase = data.phase || null;

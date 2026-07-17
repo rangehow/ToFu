@@ -127,6 +127,11 @@ win._hasRealToolRound = global._hasRealToolRound = (m) => {
   return false;
 };
 
+// RENDER_CONTRACT Phase 3: the pure stream reducer loads BEFORE the handlers +
+// pipeline in the bundle (js_bundler _BUNDLE_FILES), and dispatchSSEEvent's
+// COLD/POLL routing calls projectColdSnapshot — so the harness must eval it
+// first too, or dispatch throws ReferenceError: projectColdSnapshot.
+eval(fs.readFileSync(process.argv[9], 'utf8'));  // ui/stream_reducer.js
 // Load the extracted property-only handlers FIRST (in production they're
 // concatenated into the bundle before sse_pipeline.js and share window scope).
 eval(fs.readFileSync(process.argv[4], 'utf8'));  // ui/sse_handlers_tool.js
@@ -863,6 +868,7 @@ def _run_harness(sse_src_path: str) -> str:
              os.path.join(JS_DIR, 'ui', 'sse_handlers_io.js'),     # argv[6]
              os.path.join(JS_DIR, 'ui', 'sse_handlers_misc.js'),   # argv[7]
              os.path.join(JS_DIR, 'ui', 'sse_handlers_lifecycle.js'),  # argv[8]
+             os.path.join(JS_DIR, 'ui', 'stream_reducer.js'),      # argv[9]
              ],
             capture_output=True, text=True, timeout=60,
         )

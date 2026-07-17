@@ -1807,6 +1807,29 @@ def maybe_run_autopilot(task: dict) -> dict | None:
         _clear_run_id(conv_id)
         return None
 
+    # ★ FINAL supersede recheck — the last gate before we spawn a follow-up.
+    #   Everything between the post-VU abort check above and here does real
+    #   work that takes wall-clock time (parent pre-sync, VU-message DB commit,
+    #   the _maybe_auto_translate_vu LLM call, the budget bookkeeping). A user
+    #   action that supersedes this run — a concurrent regenerate / edit / send
+    #   — lands in exactly that window: it calls abort_running_tasks_for_conv
+    #   (stamping this parent task['aborted']=True) and create_task (registering
+    #   its OWN task as _conv_latest_task). Without this recheck we would still
+    #   call _start_followup_task, whose create_task supersede invariant would
+    #   then ABORT the user's just-started task — "autopilot snipes the user's
+    #   regen". Re-read BOTH signals (aborted flag + latest-task registry) at
+    #   the last possible moment and stand down if either says we were
+    #   superseded. The already-persisted VU turn stays in history (harmless);
+    #   we simply don't chain another turn on top of the user's action.
+    if task.get('aborted'):
+        logger.info('[Autopilot %s] Superseded (task aborted) just before '
+                    'follow-up spawn — standing down', tid)
+        return None
+    if _successor_already_running(task, conv_id):
+        logger.info('[Autopilot %s] Superseded (a newer task owns conv=%s) just '
+                    'before follow-up spawn — standing down', tid, conv_id[:8])
+        return None
+
     next_task_id = _start_followup_task(task, conv_id)
     if next_task_id is None:
         return None

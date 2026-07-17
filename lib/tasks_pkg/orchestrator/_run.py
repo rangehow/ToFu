@@ -26,6 +26,7 @@ from lib.llm import AbortedError
 from lib.tasks_pkg.attachments import compute_turn_attachments, inject_attachments
 from lib.tasks_pkg.cache_tracking import (
     detect_cache_break,
+    get_prev_turn_cache_read,
     log_round_cache_stats,
     sort_tool_results,
 )
@@ -1219,7 +1220,20 @@ def run_task(task: dict[str, Any]) -> None:
                     #   exactly `write` — instead of doing the arithmetic (and
                     #   only proxying it) client-side.
                     try:
-                        _wb = _compute_write_breakdown(task, api_rounds, round_num)
+                        # On a turn's round-1 there is no within-turn predecessor
+                        # (api_rounds has one entry), so the breakdown has no read
+                        # baseline and would default the whole write to benign
+                        # contextWrite — even when the PREVIOUS turn's cached
+                        # prefix was partly evicted and re-billed this round. Feed
+                        # the cross-turn baseline (prior turn's final cached-prefix
+                        # read, recovered across the run_task thread boundary) so
+                        # round-1 classifies an evicted-tail re-bill as recacheBody.
+                        _prev_turn_read = (
+                            get_prev_turn_cache_read(task['convId'])
+                            if len(api_rounds) < 2 else 0)
+                        _wb = _compute_write_breakdown(
+                            task, api_rounds, round_num,
+                            prev_turn_cache_read=_prev_turn_read)
                         if _wb:
                             api_rounds[-1]['writeBreakdown'] = _wb
                     except Exception as _we:

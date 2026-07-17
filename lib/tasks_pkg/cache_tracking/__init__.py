@@ -61,9 +61,16 @@ Submodules:
 
 from __future__ import annotations
 
-from lib.log import get_logger
+from lib.log import audit_log, get_logger  # noqa: F401
 
 logger = get_logger(__name__)
+
+# ``audit_log`` is re-exported here (not just used internally) because the old
+# flat ``cache_tracking.py`` exposed it as a MODULE GLOBAL, and both tests and
+# any hot-reload path spy it on the package namespace
+# (``lib.tasks_pkg.cache_tracking.audit_log``). ``_roi._emit_l2_roi`` resolves
+# it through THIS facade at call time (see there), so patching it here takes
+# effect exactly as it did against the flat module.
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -78,6 +85,7 @@ from lib.tasks_pkg.cache_tracking._state import (  # noqa: E402,F401
     _release_multiroot_sticky,
     cleanup_cache_state,
     cleanup_stale_cache_states,
+    get_prev_turn_cache_read,
 )
 
 
@@ -150,10 +158,12 @@ from lib.tasks_pkg.cache_tracking._prefix import (  # noqa: E402,F401
 
 
 __all__ = [
+    # audit re-export (facade-spied by tests / hot-reload)
+    'audit_log',
     # state singleton
     'CacheState', '_cache_states', '_cache_lock', '_state_key',
     '_release_multiroot_sticky', 'cleanup_cache_state',
-    'cleanup_stale_cache_states',
+    'cleanup_stale_cache_states', 'get_prev_turn_cache_read',
     # hashing
     '_md5', '_hash_system_prompt', '_hash_tools', '_hash_tools_per_tool',
     '_diff_tool_hashes', '_hash_prefix_content', '_hash_prefix_fields',

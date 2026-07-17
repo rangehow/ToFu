@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import Any
 
 from lib.log import get_logger
 
@@ -158,6 +157,51 @@ def _state_key(conv_id: str) -> tuple:
     ``get_cache_prefix_count`` in the pipeline) resolve to the same entry.
     """
     return (conv_id, threading.get_ident())
+
+
+def get_prev_turn_cache_read(conv_id: str) -> int:
+    """Best CROSS-THREAD ``cache_read`` baseline for a turn's round-1 (0 if none).
+
+    ``_cache_states`` is keyed per ``(conv_id, thread)``. A new user turn runs
+    on a fresh ``run_task`` thread → a fresh ``CacheState`` with
+    ``call_count == 0``, so the within-thread read baseline
+    (``prev.last_cache_read_tokens``) is 0 on that turn's round-1. The break
+    classifier tolerates that (it gates on ``call_count > 0``), but the
+    write-breakdown then had NO read baseline for round-1 and defaulted the
+    whole ``cache_write`` to the benign ``contextWrite`` — even when the
+    PREVIOUS turn's cached prefix was partly evicted and re-billed this round.
+    That is the round-1 mislabel: an evicted-tail re-bill wearing the
+    "first-cache warm-up" hat.
+
+    This returns the most-recently-updated SIBLING state's
+    ``last_cache_read_tokens`` for the same conversation — the previous turn's
+    final cached-prefix read, carried across the thread boundary — so the
+    write-breakdown can classify a round-1 read drop honestly.
+
+    CRUCIAL: the CURRENT thread's own entry is EXCLUDED. ``detect_cache_break``
+    runs before the write-breakdown each round and has already advanced this
+    thread's entry (``call_count`` bumped, ``last_cache_read_tokens`` set to
+    THIS round's read). Including it would return this round's own read →
+    ``read_drop`` collapses to 0 and the fix is a no-op. So we skip the entry
+    whose thread id is the caller's; the remaining ``call_count > 0`` entries
+    are prior turns (or, under swarm fan-out, concurrent agents — acceptable
+    for a display-only baseline that only feeds a turn's round-1).
+
+    Best-effort: returns 0 on any miss. Reuses the existing state + lock, so no
+    new lifecycle to prune (siblings are already evicted by
+    ``cleanup_stale_cache_states``).
+    """
+    if not conv_id:
+        return 0
+    _self_tid = threading.get_ident()
+    best = None
+    with _cache_lock:
+        for (cid, _tid), st in _cache_states.items():
+            if cid != conv_id or _tid == _self_tid or st.call_count <= 0:
+                continue
+            if best is None or st.last_update_time > best.last_update_time:
+                best = st
+    return best.last_cache_read_tokens if best is not None else 0
 
 
 def _release_multiroot_sticky(conv_id: str) -> None:

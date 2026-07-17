@@ -33,35 +33,79 @@ import tests.cache_acceptance_check as h
 _CARVE_OUT = "and not msg.get('tool_calls')"
 
 
-def _make_served_tree(with_carveout: bool) -> str:
-    """Fabricate a fake served checkout with a cache.py that either HAS the
-    pre-fix carve-out (stale) or lacks it (fresh)."""
+def _make_served_tree(*, cache_fresh=True, toolcalls_fresh=True,
+                      run_fresh=True, tweaks_fresh=True) -> str:
+    """Fabricate a fake served checkout with the FIVE cache-fix source files,
+    each independently fresh or stale, to exercise partial-deployment detection.
+
+    Each file carries the POSITIVE marker the harness looks for when fresh, and
+    omits it (or keeps the pre-fix shape) when stale.
+    """
     d = tempfile.mkdtemp()
-    cache_dir = os.path.join(d, 'lib', 'llm')
-    os.makedirs(cache_dir)
-    body = "def add_cache_breakpoints(body, log_prefix=''):\n"
-    if with_carveout:
-        body += "    if isinstance(content, str) and content " + _CARVE_OUT + ":\n        pass\n"
-    else:
-        body += "    if isinstance(content, str) and content:\n        pass\n"
-    with open(os.path.join(cache_dir, 'cache.py'), 'w') as fh:
-        fh.write(body)
+    llm = os.path.join(d, 'lib', 'llm'); os.makedirs(llm)
+    body = os.path.join(d, 'lib', 'llm', 'body'); os.makedirs(body, exist_ok=True)
+    cmb = os.path.join(d, 'lib', 'tasks_pkg', 'conv_message_builder'); os.makedirs(cmb)
+    orch = os.path.join(d, 'lib', 'tasks_pkg', 'orchestrator'); os.makedirs(orch)
+
+    # cache.py — fresh = NO carve-out (ab161bf); stale = still has it.
+    with open(os.path.join(llm, 'cache.py'), 'w') as f:
+        f.write("def add_cache_breakpoints(body):\n    "
+                + ("if content " + _CARVE_OUT + ": pass\n" if not cache_fresh
+                   else "if content: pass\n"))
+    # _toolcalls.py — fresh = defines build_assistant_tool_call_message (1920827).
+    with open(os.path.join(cmb, '_toolcalls.py'), 'w') as f:
+        f.write("def build_assistant_tool_call_message(**k): ...\n"
+                if toolcalls_fresh else "def _reconstruct_only(): ...\n")
+    # _run.py — fresh = clean_msg goes through the shared builder (1920827).
+    with open(os.path.join(orch, '_run.py'), 'w') as f:
+        f.write("clean_msg = build_assistant_tool_call_message(\n"
+                if run_fresh else "clean_msg = {'role': 'assistant'}\n")
+    # _model_tweaks.py — fresh = the prefill sentinel constant (0a9f6af).
+    with open(os.path.join(body, '_model_tweaks.py'), 'w') as f:
+        f.write("CLAUDE_PREFILL_SENTINEL = '[Your previous response for context]:'\n"
+                if tweaks_fresh else "# no sentinel\n")
     return d
 
 
-def test_served_code_state_fresh():
-    tree = _make_served_tree(with_carveout=False)
+def test_served_code_state_all_fresh():
+    tree = _make_served_tree()
     h._proc_cwd = lambda pid: tree
     state, _ = h._served_code_state('999')
     assert state == 'fresh'
 
 
-def test_served_code_state_stale():
-    tree = _make_served_tree(with_carveout=True)
+def test_served_code_state_stale_cache_carveout():
+    tree = _make_served_tree(cache_fresh=False)
     h._proc_cwd = lambda pid: tree
     state, detail = h._served_code_state('999')
     assert state == 'stale'
-    assert 'carve-out' in detail.lower() or 'stale' in detail.lower()
+    assert 'cache.py' in detail
+
+
+def test_served_code_state_partial_toolcalls_stale():
+    """The exact false-green the owner flagged: cache.py fresh but _toolcalls.py
+    is an OLD copy (missing the single-source builder) → STALE, naming it."""
+    tree = _make_served_tree(cache_fresh=True, toolcalls_fresh=False)
+    h._proc_cwd = lambda pid: tree
+    state, detail = h._served_code_state('999')
+    assert state == 'stale', detail
+    assert '_toolcalls.py' in detail
+
+
+def test_served_code_state_partial_run_stale():
+    tree = _make_served_tree(run_fresh=False)
+    h._proc_cwd = lambda pid: tree
+    state, detail = h._served_code_state('999')
+    assert state == 'stale', detail
+    assert '_run.py' in detail
+
+
+def test_served_code_state_partial_tweaks_stale():
+    tree = _make_served_tree(tweaks_fresh=False)
+    h._proc_cwd = lambda pid: tree
+    state, detail = h._served_code_state('999')
+    assert state == 'stale', detail
+    assert '_model_tweaks.py' in detail
 
 
 def test_served_code_state_unknown_when_cwd_unprobeable():
@@ -71,7 +115,7 @@ def test_served_code_state_unknown_when_cwd_unprobeable():
 
 
 def test_served_code_state_unknown_when_layout_unexpected():
-    empty = tempfile.mkdtemp()       # no lib/llm/cache.py under it
+    empty = tempfile.mkdtemp()       # no lib/... under it
     h._proc_cwd = lambda pid: empty
     state, _ = h._served_code_state('999')
     assert state == 'unknown'

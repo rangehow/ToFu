@@ -126,37 +126,80 @@ def _proc_cwd(pid: str) -> str | None:
         return None
 
 
+# ── The five cache-fix source fingerprints (multi-fix freshness map) ──
+# The 2026-07-17/18 cache-fix chain spans MULTIPLE files. A partial deployment
+# (rsync'd cache.py but stale _toolcalls.py, batch sync, unmerged conflict) can
+# leave cache.py fresh while another fix is OLD → the thinking-no-signature or
+# single-source drift still fires. So freshness is a MULTI-FILE map, not one
+# tripwire: EVERY entry's fix must be provably present for `fresh`.
+#
+# Each entry: relpath → (fix_label, kind, marker). kind='present' → marker MUST
+# appear (positive fix marker); kind='absent' → marker must NOT appear (pre-fix
+# carve-out removed).
+_FIX_FINGERPRINTS = [
+    ('lib/llm/cache.py', 'ab161bf str↔block {content} freeze',
+     'absent', "and not msg.get('tool_calls')"),
+    ('lib/tasks_pkg/conv_message_builder/_toolcalls.py',
+     '1920827 single-source builder',
+     'present', 'def build_assistant_tool_call_message'),
+    ('lib/tasks_pkg/orchestrator/_run.py',
+     '1920827 live-tail routes through builder',
+     'present', 'build_assistant_tool_call_message('),
+    ('lib/llm/body/_model_tweaks.py', '0a9f6af prefill sentinel',
+     'present', 'CLAUDE_PREFILL_SENTINEL'),
+]
+# NOTE: the .strip() freeze (1274cee) and the reasoning_content parity (8ecbbcf)
+# both live INSIDE build_assistant_tool_call_message now (the single source), so
+# the _toolcalls.py 'build_assistant_tool_call_message' marker + the _run.py
+# builder-call marker together prove BOTH are deployed — no separate string
+# needed. These four markers cover all five commits of the cache-fix chain.
+
+
 def _served_code_state(pid: str) -> tuple[str, str]:
-    """Is the code the serving process is ACTUALLY running the fixed source?
+    """Is the code the serving process ACTUALLY running the WHOLE fix chain?
 
-    Returns ``(state, detail)`` where state is:
-      * ``'fresh'``   — the ``lib/llm/cache.py`` under the process's cwd LACKS
-                        the pre-fix carve-out ``and not msg.get('tool_calls')``
-                        (the fix source is present in the served tree);
-      * ``'stale'``   — that file STILL contains the carve-out (a new PID but an
-                        OLD code copy — the false-green the owner flagged);
-      * ``'unknown'`` — cwd not probeable / file missing / unreadable. NEVER
-                        promoted to a green; the caller degrades to honest WAIT.
+    MULTI-FIX fingerprint (not a single tripwire): checks every source file the
+    cache-fix chain touched. Returns ``(state, detail)``:
+      * ``'fresh'``   — ALL fix markers present in the served tree
+                        (/proc/<pid>/cwd) → the whole chain is deployed;
+      * ``'stale'``   — at least one marker missing → a PARTIAL/old copy; detail
+                        NAMES the file + which fix is not in place (the exact
+                        false-green the owner flagged: cache.py fresh but
+                        _toolcalls.py/_run.py old);
+      * ``'unknown'`` — cwd not probeable / a fix file missing or unreadable.
+                        NEVER promoted to green; caller degrades to honest WAIT.
 
-    This turns ``deployed=YES`` from "a newer process exists" into "the fix is
-    provably in the served tree". Keyed on the SAME carve-out string the
-    ab161bf fix removed (kept as the deploy tripwire).
+    This turns ``deployed=YES`` from "a newer process exists" into "EVERY fix in
+    the chain is provably present in the served tree".
     """
     cwd = _proc_cwd(pid)
     if not cwd:
         return 'unknown', f'cannot read /proc/{pid}/cwd (non-Linux/permission/dead pid)'
-    cache_path = os.path.join(cwd, 'lib', 'llm', 'cache.py')
-    try:
-        with open(cache_path, 'r', encoding='utf-8', errors='replace') as fh:
-            src = fh.read()
-    except OSError as e:
-        return 'unknown', f'served cache.py unreadable at {cache_path}: {e}'
-    _CARVE = "and not msg.get('tool_calls')"
-    if _CARVE in src:
-        return 'stale', (f'served tree {cwd} still has the pre-fix carve-out '
-                         f'{_CARVE!r} in lib/llm/cache.py — new PID but STALE '
-                         'code copy')
-    return 'fresh', f'served tree {cwd} has the fixed lib/llm/cache.py'
+    # Dedup by (path) — read each file once, then evaluate all its markers.
+    checks: dict[str, list] = {}
+    for relpath, label, kind, marker in _FIX_FINGERPRINTS:
+        checks.setdefault(relpath, []).append((label, kind, marker))
+    missing: list[str] = []
+    for relpath, markers in checks.items():
+        fpath = os.path.join(cwd, relpath)
+        try:
+            with open(fpath, 'r', encoding='utf-8', errors='replace') as fh:
+                src = fh.read()
+        except OSError as e:
+            return 'unknown', (f'served {relpath} unreadable at {fpath}: {e} — '
+                               'cannot verify the fix chain')
+        for label, kind, marker in markers:
+            present = marker in src
+            if kind == 'present' and not present:
+                missing.append(f'{relpath} missing [{label}] (marker {marker!r})')
+            elif kind == 'absent' and present:
+                missing.append(f'{relpath} still has pre-fix code [{label}] '
+                               f'(carve-out {marker!r})')
+    if missing:
+        return 'stale', (f'served tree {cwd} is a PARTIAL/old copy — '
+                         + '; '.join(missing))
+    return 'fresh', (f'served tree {cwd} has ALL {len(checks)} cache-fix source '
+                     'files in their fixed form')
 
 
 def _serving_pid_start(port: str = '15000') -> str | None:

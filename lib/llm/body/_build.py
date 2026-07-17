@@ -36,6 +36,7 @@ from lib.llm.body._images import (
     _downscale_oversized_images,
     _validate_image_blocks,
 )
+from lib.llm.body._canonical_wire import canonicalize_messages_inplace
 from lib.llm.body._model_tweaks import (
     _inject_claude_reasoning_details,
     _inject_gemini_thought_signatures,
@@ -264,6 +265,17 @@ def build_body(model, messages, *, max_tokens=128000, temperature=1.0,
     if is_claude_opus_47(model):
         for _k in ('temperature', 'top_p', 'top_k'):
             body.pop(_k, None)
+
+    # ── Canonical wire-order normalization (class-③ prefix-cache root fix) ──
+    # LAST message transform: rewrite every message dict with keys in ONE
+    # canonical order so the live-stream and history-replay build paths emit
+    # byte-identical wire bytes for the same semantic turn. Without this, an
+    # already-cached assistant/tool_call turn re-serializes with a different
+    # key order each round → WIRE PREFIX CHANGED → the whole prefix is re-billed.
+    # Order-only (values untouched), so it can't change what the model sees —
+    # only the byte layout the gateway prompt-cache matches on. See
+    # _canonical_wire.py.
+    canonicalize_messages_inplace(body['messages'])
 
     # One-line observability for the dialect choice. Debug level so
     # production logs stay clean; flip a logger to DEBUG when triaging

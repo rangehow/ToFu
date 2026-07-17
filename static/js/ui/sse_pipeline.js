@@ -1020,13 +1020,20 @@ function dispatchSSEEvent(line, ctx) {
         }
         twUpdate(convId);
       } else {
+        /* ★ RENDER_CONTRACT Phase 3: route the LIVE content/thinking append
+         *   through the ONE pure reducer (reduceStreamState 'delta' action)
+         *   instead of an inline `+=`, so the live fold uses the identical
+         *   append discipline the cold/poll snapshot projection is proven
+         *   byte-equal to (golden F1/F2/F3). The reducer mutates+returns the
+         *   SAME assistantMsg (its {content,thinking,toolRounds} are the state),
+         *   so buf mirror + _roundThinkingLen + phase management below are
+         *   unchanged render-buffer concerns. */
+        reduceStreamState(assistantMsg, { type: 'delta', content: ev.content, thinking: ev.thinking });
         if (ev.thinking) {
-          assistantMsg.thinking = (assistantMsg.thinking || "") + ev.thinking;
           if (buf) buf.thinking = assistantMsg.thinking;
           _roundThinkingLen += ev.thinking.length;
         }
         if (ev.content) {
-          assistantMsg.content = (assistantMsg.content || "") + ev.content;
           if (buf) buf.content = assistantMsg.content;
         }
         /* ★ Phase management during deltas:

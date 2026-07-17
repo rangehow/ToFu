@@ -112,6 +112,7 @@ win._resolveAssistantById = global._resolveAssistantById = (conv, id) =>
   (conv && conv.messages.find(m => m._msgId === id)) || null;
 win.renderConversationList = global.renderConversationList = spy('renderConversationList');
 
+eval(fs.readFileSync(process.argv[9], 'utf8'));  // ui/stream_reducer.js (Phase 3: dispatch's delta branch calls reduceStreamState)
 eval(fs.readFileSync(process.argv[4], 'utf8'));  // sse_handlers_tool.js
 eval(fs.readFileSync(process.argv[5], 'utf8'));  // sse_handlers_swarm.js
 eval(fs.readFileSync(process.argv[6], 'utf8'));  // sse_handlers_io.js
@@ -214,7 +215,8 @@ def test_streaming_interleave_deltareset_captures_prose():
              os.path.join(JS_DIR, 'ui', 'sse_handlers_swarm.js'),
              os.path.join(JS_DIR, 'ui', 'sse_handlers_io.js'),
              os.path.join(JS_DIR, 'ui', 'sse_handlers_misc.js'),
-             os.path.join(JS_DIR, 'ui', 'sse_handlers_lifecycle.js')],
+             os.path.join(JS_DIR, 'ui', 'sse_handlers_lifecycle.js'),
+             os.path.join(JS_DIR, 'ui', 'stream_reducer.js')],   # argv[9]
             capture_output=True, text=True, timeout=60,
         )
     finally:

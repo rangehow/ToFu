@@ -1,0 +1,240 @@
+/* ═══════════════════════════════════════════════════════════════════
+   stream_reducer.js — RENDER_CONTRACT Phase 3 (2026-07)
+
+   THE single pure projection for a turn's streamed state. Before this,
+   FIVE assemblers (live delta, tool handlers, cold `state` block, poll
+   loop, VU render) hand-mutated {content, thinking, toolRounds} with
+   DIFFERENT write disciplines, so the same logical turn projected
+   differently per path → tool-round jitter + cold-reopen twinning.
+
+   This module is a PURE reducer: no DOM, no globals, no twUpdate /
+   console / Api / fetch / setTimeout. It takes (state, event) and
+   returns the next state. Every apply path folds through it and reaches
+   the SAME fixed point — the `committedMessage` verbatim shape. Enforced
+   byte-identically by tests/test_frontend_reducer_parity.py and kept
+   side-effect-free by tests/test_frontend_reducer_purity.py.
+
+   Concatenated by lib/js_bundler.py BEFORE ui/sse_pipeline.js — shares
+   window scope, no imports/exports.
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* ── locateRound: the ONE index normalizer (kills the roundNum/round/
+ *    llmRound drift). A round is addressed by toolCallId when present
+ *    (conversation-unique), else by its canonical roundNum. Callers pass
+ *    the raw event; we read whichever index field it carries. ── */
+function _evRoundNum(ev) {
+  // Canonical order: roundNum (tool/timer wire field) → round (phase/
+  // lifecycle wire field) → llmRound (batch grouping). One read site.
+  if (ev == null) return null;
+  if (ev.roundNum != null) return ev.roundNum;
+  if (ev.round != null) return ev.round;
+  if (ev.llmRound != null) return ev.llmRound;
+  return null;
+}
+
+function locateRound(rounds, ev) {
+  if (!Array.isArray(rounds) || !rounds.length) return null;
+  if (ev && ev.toolCallId) {
+    const byId = rounds.find(r => r && r.toolCallId === ev.toolCallId);
+    if (byId) return byId;
+  }
+  const rn = _evRoundNum(ev);
+  if (rn == null) return null;
+  return rounds.find(r => r && r.roundNum === rn) || null;
+}
+
+/* Fresh empty projection state. */
+function emptyStreamState() {
+  return { content: '', thinking: '', toolRounds: [] };
+}
+
+/* ── _stampDeltaReset: the delta_reset prose-capture, extracted verbatim
+ *    from sse_pipeline.js so live and cold agree. The just-ended LLM round
+ *    issued tool calls, so its pre-call prose is inter-round narration:
+ *    stamp it onto the FIRST tool round of this llmRound batch (where the
+ *    backend's assemble_segments puts it), then clear the live accumulators.
+ *    Append-guarded so a replayed delta_reset never double-stamps. Only
+ *    clears once the prose is GUARANTEED preserved on a round (else keep it
+ *    — the "frozen at a half word" freeze guard). ── */
+function _stampDeltaReset(state, ev) {
+  const trs = Array.isArray(state.toolRounds) ? state.toolRounds : null;
+  let stamped = false;
+  if (trs && trs.length) {
+    let lr = (ev && ev.round != null) ? ev.round
+           : (ev && ev.roundNum != null) ? ev.roundNum : null;
+    if (lr == null) lr = trs[trs.length - 1].llmRound;
+    const batch = (lr != null) ? trs.filter(r => r.llmRound === lr)
+                               : [trs[trs.length - 1]];
+    const first = batch[0];
+    if (first) {
+      if (state.content) {
+        if (!first.assistantContent) first.assistantContent = state.content;
+        else if (first.assistantContent.indexOf(state.content) < 0) first.assistantContent += state.content;
+      }
+      if (state.thinking) {
+        if (!first.thinking) first.thinking = state.thinking;
+        else if (first.thinking.indexOf(state.thinking) < 0) first.thinking += state.thinking;
+      }
+      stamped = true;
+    }
+  }
+  if (stamped) { state.content = ''; state.thinking = ''; }
+  return state;
+}
+
+/* ── reduceStreamState(state, event) → newState (PURE) ──
+ *    The four write disciplines encoded as event-type actions, NOT inline
+ *    mutations scattered across handlers. Mutates & returns `state` (the
+ *    caller owns a per-turn state object; folding is in-place for perf but
+ *    the function has no external side effects). ── */
+function reduceStreamState(state, ev) {
+  if (!state) state = emptyStreamState();
+  if (!ev || !ev.type) return state;
+  if (!Array.isArray(state.toolRounds)) state.toolRounds = [];
+
+  switch (ev.type) {
+    case 'delta': {
+      if (ev.thinking) state.thinking = (state.thinking || '') + ev.thinking;
+      if (ev.content)  state.content  = (state.content  || '') + ev.content;
+      return state;
+    }
+    case 'retry_reset': {
+      // Whole-turn re-run: drop this attempt's prose + rounds; keep any
+      // pre-turn Continue checkpoint rounds.
+      state.content = '';
+      state.thinking = '';
+      state.toolRounds = Array.isArray(state._continueToolRounds)
+        ? state._continueToolRounds.slice() : [];
+      return state;
+    }
+    case 'delta_reset':
+      return _stampDeltaReset(state, ev);
+    case 'tool_start': {
+      const r = {
+        roundNum: ev.roundNum,
+        query: ev.query,
+        results: null,
+        status: (ev.status === 'rejected') ? 'rejected' : 'searching',
+        toolName: ev.toolName || null,
+        toolCallId: ev.toolCallId || null,
+        toolArgs: ev.toolArgs || null,
+        llmRound: (ev.llmRound != null) ? ev.llmRound : null,
+        _swarm: ev._swarm || false,
+      };
+      if (ev.assistantContent) r.assistantContent = ev.assistantContent;
+      if (ev._repaired) r._repaired = ev._repaired;
+      if (ev._rejected) r._rejected = ev._rejected;
+      state.toolRounds.push(r);
+      return state;
+    }
+    case 'tool_result': {
+      const r = locateRound(state.toolRounds, ev);
+      if (r) {
+        r.results = ev.results;
+        if (ev.status === 'rejected' || ev._rejected) {
+          r.status = 'rejected';
+          if (ev._rejected) r._rejected = ev._rejected;
+        } else {
+          r.status = 'done';
+        }
+        if (ev.searchDiag) r.searchDiag = ev.searchDiag;
+        if (ev.engineBreakdown) r.engineBreakdown = ev.engineBreakdown;
+        if (ev.vertical) r.vertical = ev.vertical;
+        if (ev.verticals) r.verticals = ev.verticals;
+        if (ev._repaired) { r._repaired = ev._repaired; if (ev.query) r.query = ev.query; }
+      }
+      return state;
+    }
+    case 'tool_done':
+    case 'tool_complete': {
+      const r = locateRound(state.toolRounds, ev);
+      if (r) {
+        r.toolContent = ev.toolContent != null ? ev.toolContent
+                       : (ev.content != null ? ev.content : r.toolContent || null);
+        if (ev.toolTokens != null) r.toolTokens = ev.toolTokens;
+        if (ev.compactionLayer) {
+          r.compactionLayer = ev.compactionLayer;
+          r.compactedFromChars = ev.compactedFromChars;
+          r.compactedToChars = ev.compactedToChars;
+        }
+        if (r.status !== 'rejected') r.status = 'done';
+      }
+      return state;
+    }
+    default:
+      // Unknown / non-projection events (phase, usage, snapshot label, …)
+      // do not mutate the {content,thinking,toolRounds} projection.
+      return state;
+  }
+}
+
+/* ── projectStreamEvents(events, seed?) → state ──
+ *    LIVE/WARM fold: replay an ordered event list from empty (or a seed
+ *    holding _continueToolRounds for Continue). ── */
+function projectStreamEvents(events, seed) {
+  let state = seed ? Object.assign(emptyStreamState(), seed) : emptyStreamState();
+  if (!Array.isArray(state.toolRounds)) state.toolRounds = [];
+  if (!Array.isArray(events)) return state;
+  for (const ev of events) state = reduceStreamState(state, ev);
+  return _normalizeProjection(state);
+}
+
+/* ── projectColdSnapshot(snapshot) → state ──
+ *    COLD/POLL: a settled server snapshot is a `verbatim` action — the
+ *    authoritative {content,thinking,toolRounds} shape. Normalized through
+ *    the SAME output canonicalizer as the fold so the two are byte-identical.
+ *    ── */
+function projectColdSnapshot(snap) {
+  const s = emptyStreamState();
+  if (snap) {
+    s.content = snap.content || '';
+    s.thinking = snap.thinking || '';
+    s.toolRounds = Array.isArray(snap.toolRounds) ? snap.toolRounds.map(r => Object.assign({}, r)) : [];
+  }
+  return _normalizeProjection(s);
+}
+
+/* ── _normalizeProjection: the single canonical OUTPUT shape both paths
+ *    emit, so JSON.stringify(live) === JSON.stringify(cold). Drops the
+ *    internal-only _continueToolRounds scratch field and rebuilds each
+ *    round with a FIXED key order + omits keys that are null/absent so a
+ *    fold (which may set results:null) and a snapshot (which omits results)
+ *    converge. ── */
+const _ROUND_KEY_ORDER = [
+  'roundNum', 'llmRound', 'toolName', 'toolCallId', 'query', 'status',
+  'results', 'toolContent', 'toolArgs', 'assistantContent', 'thinking',
+  'toolTokens', 'compactionLayer', 'compactedFromChars', 'compactedToChars',
+  '_swarm', '_repaired', '_rejected',
+];
+
+function _canonRound(r) {
+  const out = {};
+  for (const k of _ROUND_KEY_ORDER) {
+    const v = r[k];
+    // Omit null/undefined AND the falsy scaffolding defaults (_swarm:false,
+    // results:null, toolArgs:null) so a live fold and a cold snapshot of the
+    // SAME settled round serialize identically regardless of which scaffolding
+    // the fold left behind.
+    if (v == null) continue;
+    if (k === '_swarm' && v === false) continue;
+    out[k] = v;
+  }
+  return out;
+}
+
+function _normalizeProjection(state) {
+  const rounds = Array.isArray(state.toolRounds) ? state.toolRounds : [];
+  return {
+    content: state.content || '',
+    thinking: state.thinking || '',
+    toolRounds: rounds.map(_canonRound),
+  };
+}
+
+/* Node-eval / test harness hook (no-op in browser where these are globals). */
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = {
+    reduceStreamState, projectStreamEvents, projectColdSnapshot,
+    locateRound, emptyStreamState,
+  };
+}

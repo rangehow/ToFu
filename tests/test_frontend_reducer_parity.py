@@ -62,25 +62,82 @@ def _run_node(body: str) -> dict:
         os.unlink(tmp)
 
 
-# One logical turn: prose delta, a tool round (start→result→done), more prose.
-# The COLD snapshot is the settled shape the server emits for the SAME turn.
+# Enriched golden fixtures (owner condition 5). Each is a logical turn expressed
+# as (a) the ordered LIVE event stream and (b) the COLD `state` snapshot the
+# server emits for that SAME settled turn. The reducer must project both to a
+# byte-identical {content,thinking,toolRounds}.
 _FIXTURE = r'''
-const LIVE_EVENTS = [
+// ── F1: single tool round (start→result→done) with prose on both sides ──
+const F1_LIVE = [
   { type: 'delta', content: 'Let me check' },
   { type: 'delta', thinking: 'thinking a bit' },
   { type: 'tool_start', roundNum: 1, toolName: 'run_command', toolCallId: 'tc1', query: 'ls' },
   { type: 'tool_result', roundNum: 1, toolCallId: 'tc1', results: [{toolName:'run_command',title:'ok',snippet:'a.py'}] },
-  { type: 'tool_done', roundNum: 1, toolCallId: 'tc1', content: 'a.py\nb.py', isError: false },
+  { type: 'tool_done', roundNum: 1, toolCallId: 'tc1', content: 'a.py\nb.py' },
   { type: 'delta', content: ' the logs.' },
 ];
-// COLD state snapshot: the server's settled record of that same turn.
-const COLD_SNAPSHOT = {
+const F1_COLD = {
   content: 'Let me check the logs.',
   thinking: 'thinking a bit',
   toolRounds: [
     { roundNum: 1, toolName: 'run_command', toolCallId: 'tc1', query: 'ls',
       status: 'done', results: [{toolName:'run_command',title:'ok',snippet:'a.py'}],
       toolContent: 'a.py\nb.py' },
+  ],
+};
+
+// ── F2: MULTI-ROUND turn (2 tool rounds) + a delta_reset in between ──
+// Round 1 streams narration prose, then issues a tool call → delta_reset drops
+// the live prose and stamps it as assistantContent on the round's first entry.
+// Round 2 does the same. Final prose is the real answer.
+const F2_LIVE = [
+  { type: 'delta', content: 'First I list files.' },
+  { type: 'tool_start', roundNum: 1, llmRound: 0, toolName: 'run_command', toolCallId: 'tc1', query: 'ls' },
+  { type: 'delta_reset', round: 0 },
+  { type: 'tool_result', roundNum: 1, toolCallId: 'tc1', results: [{toolName:'run_command',title:'ok',snippet:'a.py'}] },
+  { type: 'tool_done', roundNum: 1, toolCallId: 'tc1', content: 'a.py' },
+  { type: 'delta', content: 'Now I grep.' },
+  { type: 'tool_start', roundNum: 2, llmRound: 1, toolName: 'grep', toolCallId: 'tc2', query: 'foo' },
+  { type: 'delta_reset', round: 1 },
+  { type: 'tool_result', roundNum: 2, toolCallId: 'tc2', results: [{toolName:'grep',title:'hit',snippet:'foo:3'}] },
+  { type: 'tool_done', roundNum: 2, toolCallId: 'tc2', content: 'foo:3' },
+  { type: 'delta', content: 'Done — found it.' },
+];
+const F2_COLD = {
+  content: 'Done — found it.',
+  thinking: '',
+  toolRounds: [
+    { roundNum: 1, llmRound: 0, toolName: 'run_command', toolCallId: 'tc1', query: 'ls',
+      status: 'done', results: [{toolName:'run_command',title:'ok',snippet:'a.py'}],
+      toolContent: 'a.py', assistantContent: 'First I list files.' },
+    { roundNum: 2, llmRound: 1, toolName: 'grep', toolCallId: 'tc2', query: 'foo',
+      status: 'done', results: [{toolName:'grep',title:'hit',snippet:'foo:3'}],
+      toolContent: 'foo:3', assistantContent: 'Now I grep.' },
+  ],
+};
+
+// ── F3: MID-ROUND COLD reconnect — the _snapshotLongerRounds case ──
+// LIVE already showed 2 rounds. A cold `state` snapshot arrives sourced from the
+// 5s checkpoint that only captured 1 round (SHORTER). The keep-longer routing
+// (owned by the pipeline, NOT the reducer) must feed the reducer the merged
+// (longer) set; here we assert the reducer, given the SAME complete round set on
+// both sides, projects identically — and separately (F3_SHORT) that a shorter
+// cold snapshot, once merged to the longer set, equals the live projection.
+const F3_LIVE = [
+  { type: 'tool_start', roundNum: 1, llmRound: 0, toolName: 'run_command', toolCallId: 'tc1', query: 'ls' },
+  { type: 'tool_done', roundNum: 1, toolCallId: 'tc1', content: 'a.py' },
+  { type: 'tool_start', roundNum: 2, llmRound: 1, toolName: 'grep', toolCallId: 'tc2', query: 'foo' },
+  { type: 'tool_done', roundNum: 2, toolCallId: 'tc2', content: 'foo:3' },
+  { type: 'delta', content: 'ok' },
+];
+// The SHORT cold snapshot (checkpoint lagged, only round 1). This is what the
+// pipeline receives; the keep-longer merge must widen it back to the live set
+// BEFORE it reaches persistence — modeled here by mergeColdRounds().
+const F3_COLD_SHORT = {
+  content: 'ok', thinking: '',
+  toolRounds: [
+    { roundNum: 1, llmRound: 0, toolName: 'run_command', toolCallId: 'tc1', query: 'ls',
+      status: 'done', toolContent: 'a.py' },
   ],
 };
 '''
@@ -116,53 +173,90 @@ if (!R || !R.projectStreamEvents || !R.projectColdSnapshot) {{
 '''
 
 
-def test_cold_projection_equals_live_projection_byte_identical():
-    """The golden anchor: LIVE-fold and COLD-snapshot projections of the SAME
-    turn must be byte-identical. RED now (reducer_missing); GREEN when the four
-    paths fold through the one reducer."""
-    body = _harness('''
-  const live = R.projectStreamEvents(LIVE_EVENTS);
-  const cold = R.projectColdSnapshot(COLD_SNAPSHOT);
+def _parity(name: str, live_expr: str, cold_expr: str) -> dict:
+    body = _harness(f'''
+  const live = R.projectStreamEvents({live_expr});
+  const cold = R.projectColdSnapshot({cold_expr});
   const liveJson = JSON.stringify(live);
   const coldJson = JSON.stringify(cold);
-  console.log(JSON.stringify({
-    ok: true,
-    equal: liveJson === coldJson,
-    live: liveJson,
-    cold: coldJson,
-  }));
+  console.log(JSON.stringify({{ ok:true, equal: liveJson === coldJson, live: liveJson, cold: coldJson }}));
 ''')
     r = _run_node(body)
     if not r.get('ok'):
         pytest.fail(
-            'Phase-3 reducer not present yet (tests-first RED): '
-            f"{r.get('reason')} — {r.get('detail') or r.get('stderr','')}. "
-            'Land static/js/ui/stream_reducer.js (plan §4) and route LIVE+COLD '
-            'through it so this golden parity turns GREEN.')
+            f'[{name}] Phase-3 reducer not present / node error (tests-first RED): '
+            f"{r.get('reason')} — {r.get('detail') or r.get('stderr','')}.")
+    return r
+
+
+def test_F1_single_round_parity():
+    """F1: single tool round + prose both sides — live fold == cold snapshot."""
+    r = _parity('F1', 'F1_LIVE', 'F1_COLD')
+    assert r['equal'], f'F1 divergence:\n  live={r["live"]}\n  cold={r["cold"]}'
+
+
+def test_F2_multiround_delta_reset_parity():
+    """F2: TWO tool rounds with a delta_reset per round — the per-round narration
+    must be stamped as assistantContent on each round's first entry, exactly as
+    the settled cold snapshot carries it. This is the tool-round-jitter case."""
+    r = _parity('F2', 'F2_LIVE', 'F2_COLD')
     assert r['equal'], (
-        'PROJECTION DIVERGENCE: cold-replay projection != live-fold projection '
-        'for the same logical turn — the exact tool-round jitter / cold-reopen '
-        f'twinning Phase 3 must kill.\n  live={r["live"]}\n  cold={r["cold"]}')
+        'F2 MULTI-ROUND / delta_reset divergence — live fold did not stamp '
+        'per-round narration the way the settled snapshot carries it:\n'
+        f'  live={r["live"]}\n  cold={r["cold"]}')
+
+
+def test_F3_midround_cold_reconnect_keeplonger_parity():
+    """F3: the _snapshotLongerRounds case. LIVE showed 2 rounds; a cold snapshot
+    lagged to 1 round. The keep-longer MERGE (routing concern) must widen the
+    short cold snapshot back to the live round set BEFORE projection; then the
+    merged cold projection equals the live projection. We model the merge here
+    (mergeColdRounds = keep the longer toolRounds) and assert parity — proving
+    the reducer + a keep-longer merge subsumes _snapshotLongerRounds."""
+    body = _harness('''
+  const live = R.projectStreamEvents(F3_LIVE);
+  // Emulate the pipeline's keep-longer merge feeding the reducer: the cold
+  // snapshot's rounds are widened to the live-length set before projecting.
+  const liveRounds = live.toolRounds;
+  const merged = Object.assign({}, F3_COLD_SHORT, {
+    toolRounds: (F3_COLD_SHORT.toolRounds.length >= liveRounds.length)
+      ? F3_COLD_SHORT.toolRounds : liveRounds,
+  });
+  const cold = R.projectColdSnapshot(merged);
+  const liveJson = JSON.stringify(live);
+  const coldJson = JSON.stringify(cold);
+  console.log(JSON.stringify({ ok:true, equal: liveJson === coldJson,
+    live: liveJson, cold: coldJson,
+    shortWouldShrink: F3_COLD_SHORT.toolRounds.length < liveRounds.length }));
+''')
+    r = _run_node(body)
+    if not r.get('ok'):
+        pytest.fail(f'[F3] reducer/node error: {r.get("reason")} {r.get("stderr","")}')
+    assert r['shortWouldShrink'] is True, (
+        'F3 premise broken: the cold snapshot should be SHORTER than live '
+        '(the mid-round reconnect case)')
+    assert r['equal'], (
+        'F3 MID-ROUND reconnect divergence — after the keep-longer merge the '
+        'cold projection must equal the live projection (this is what makes '
+        f'retiring _snapshotLongerRounds safe):\n  live={r["live"]}\n  cold={r["cold"]}')
 
 
 def test_reducer_module_exists_and_is_pure():
-    """A smaller RED signal that stands alone: the reducer module must exist and
-    expose the pure projection API. RED now; documents the deliverable."""
+    """The reducer module must exist and expose the pure projection API."""
     body = _harness('''
   console.log(JSON.stringify({ ok:true, hasReduce: typeof R.reduceStreamState === 'function' }));
 ''')
     r = _run_node(body)
     if not r.get('ok'):
-        pytest.fail(
-            'tests-first RED: static/js/ui/stream_reducer.js absent — '
-            'this is the Phase-3 deliverable (plan §4). '
-            f"reason={r.get('reason')}")
+        pytest.fail(f"tests-first RED: stream_reducer.js absent — reason={r.get('reason')}")
     assert r['hasReduce'], 'stream_reducer.js must expose reduceStreamState(state, event)'
 
 
 if __name__ == '__main__':
     for fn in (test_reducer_module_exists_and_is_pure,
-               test_cold_projection_equals_live_projection_byte_identical):
+               test_F1_single_round_parity,
+               test_F2_multiround_delta_reset_parity,
+               test_F3_midround_cold_reconnect_keeplonger_parity):
         try:
             fn(); print('  PASS', fn.__name__)
         except Exception as e:  # noqa: BLE001

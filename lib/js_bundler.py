@@ -459,6 +459,10 @@ _BUNDLE_FILES = [
     # window scope. Load BEFORE streaming_ui.js for clear intent.
     'ui/streaming_swarm_panel.js',
     'ui/streaming_ui.js',
+    # RENDER_CONTRACT Phase 3 pure stream reducer — the single {content,
+    # thinking,toolRounds} projection all four apply paths fold through. Pure
+    # (no DOM/globals); load BEFORE the handlers + pipeline that consume it.
+    'ui/stream_reducer.js',
     # Property-only SSE handlers extracted from dispatchSSEEvent (2026-06).
     # Plain hoisted functions taking (ev, ctx-snapshot); the dispatcher in
     # sse_pipeline.js calls them. Load BEFORE sse_pipeline.js for clear intent.

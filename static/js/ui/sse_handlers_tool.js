@@ -23,30 +23,17 @@ function _handleToolStart(ev, c) {
         }
         twUpdate(convId);
       } else {
-        const r = {
-          roundNum: ev.roundNum,
-          query: ev.query,
-          results: null,
-          status: "searching",
-          toolName: ev.toolName || null,
-          toolCallId: ev.toolCallId || null,
-          toolArgs: ev.toolArgs || null,
-          llmRound: ev.llmRound ?? null,
-          _swarm: ev._swarm || false,
-        };
-        // ★ Preserve per-round assistantContent for Continue replay
-        if (ev.assistantContent) r.assistantContent = ev.assistantContent;
-        // ★ Harness self-repair descriptor — the backend auto-corrected this
-        //   call's malformed arguments; surfaced as an "auto-fixed" badge.
-        if (ev._repaired) r._repaired = ev._repaired;
-        // ★ Hallucinated-tool rejection — the backend classified this name as
-        //   a non-existent tool and rejected it (never executed). Carry the
-        //   distinct status + descriptor so the round renders as rejected
-        //   from the very first event.
-        if (ev.status === "rejected") r.status = "rejected";
-        if (ev._rejected) r._rejected = ev._rejected;
-        if (!assistantMsg.toolRounds) assistantMsg.toolRounds = [];
-        assistantMsg.toolRounds.push(r);
+        /* ★ RENDER_CONTRACT Phase 3: build + push the tool round through the ONE
+         *   pure reducer (reduceStreamState 'tool_start' action) instead of an
+         *   inline object literal, so the LIVE round shape is byte-identical to
+         *   the cold/poll snapshot projection (golden parity F1–F3). The reducer
+         *   pushes onto assistantMsg.toolRounds — which IS the projection state —
+         *   and we read the pushed round back for the render-side concerns below
+         *   (login-hint banner, swarm round tracking, buf mirror, twUpdate).
+         *   Those stay inline because they are DOM / side-effect concerns the
+         *   pure reducer must never own (purity guard). */
+        reduceStreamState(assistantMsg, ev);
+        const r = assistantMsg.toolRounds[assistantMsg.toolRounds.length - 1];
         /* ★ MCP login-hint: surface a prominent "Check your phone for the
          *   approval push" banner whenever a login-style MCP call starts.
          *   Meituan's `hope login` blocks the subprocess for up to ~5 min
@@ -101,38 +88,15 @@ function _handleToolResult(ev, c) {
         if (_epCriticBuf) _epCriticBuf.toolRounds = _epCriticMsg.toolRounds || [];
         twUpdate(convId);
       } else if (assistantMsg.toolRounds) {
-        const r = (ev.toolCallId
-          ? assistantMsg.toolRounds.find(r => r.toolCallId === ev.toolCallId)
-          : null
-        ) || assistantMsg.toolRounds.find(
-          (r) => r.roundNum === ev.roundNum,
-        );
-        if (r) {
-          r.results = ev.results;
-          // A rejected hallucinated tool stays 'rejected' (it never ran) —
-          // don't flip it to 'done'. Everything else completes normally.
-          if (ev.status === "rejected" || ev._rejected) {
-            r.status = "rejected";
-            if (ev._rejected) r._rejected = ev._rejected;
-          } else {
-            r.status = "done";
-          }
-          r.approvalId = null;
-          r.approvalMeta = null;
-          r.guidanceId = null;
-          if (ev.searchDiag) r.searchDiag = ev.searchDiag;
-          if (ev.engineBreakdown) r.engineBreakdown = ev.engineBreakdown;
-          if (ev.vertical) r.vertical = ev.vertical;
-          if (ev.verticals) r.verticals = ev.verticals;
-          /* ★ Harness self-repair: when the backend auto-corrected this
-           *   call's args AFTER the (garbled) tool_start was already shown,
-           *   the tool_result carries the corrected display + descriptor.
-           *   Apply them so the live view stops showing the garbled line. */
-          if (ev._repaired) {
-            r._repaired = ev._repaired;
-            if (ev.query) r.query = ev.query;
-          }
-        }
+        /* ★ RENDER_CONTRACT Phase 3: settle the round through the ONE pure
+         *   reducer (reduceStreamState 'tool_result' action) — it locates the
+         *   round (toolCallId first, roundNum fallback via locateRound, the ONE
+         *   index normalizer) and applies results/status/approval-clear/diag/
+         *   repair exactly as this handler did inline, so the settled LIVE
+         *   shape is byte-identical to the cold/poll projection (golden F1–F3).
+         *   The MCP login-hint banner below is a DOM/side-effect concern keyed
+         *   off assistantMsg._mcpLoginHint (not the round), so it stays inline. */
+        reduceStreamState(assistantMsg, ev);
         /* ★ Clear the MCP login-hint banner once the login call returns.
          *   Classification priority (each test uses STRUCTURED fields
          *   first, text matching second, and always with word-boundaries

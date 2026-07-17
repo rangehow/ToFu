@@ -395,6 +395,16 @@ function line(obj) { return 'data: ' + JSON.stringify(obj); }
   const r = ctx.assistantMsg.toolRounds.find(x => x.toolCallId === 'wa1');
   check('write_approval_pending', r && r.status === 'pending_approval' &&
     r.approvalId === 'ap1' && r.approvalMeta && r.approvalMeta.path === 'x.txt');
+  // ★ RENDER_CONTRACT Phase 3 convergence: settling the round via tool_result
+  //   is now routed through the pure reducer, which owns the approval-clear
+  //   discipline (a settled round no longer awaits approval). The pending
+  //   approvalId/approvalMeta/guidanceId must be cleared exactly as the old
+  //   inline handler did — proving the reducer routing is behaviour-identical.
+  T.dispatchSSEEvent(line({ type: 'tool_result', roundNum: 1, toolCallId: 'wa1',
+    results: [{ title: 'written' }] }), ctx);
+  const r2 = ctx.assistantMsg.toolRounds.find(x => x.toolCallId === 'wa1');
+  check('approval_cleared_on_settle', r2 && r2.status === 'done' &&
+    r2.approvalId === null && r2.approvalMeta === null && r2.guidanceId === null);
 }
 
 // ── 15b. write_approval_request for run_command carries command/description ──

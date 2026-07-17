@@ -137,6 +137,13 @@ function reduceStreamState(state, ev) {
         } else {
           r.status = 'done';
         }
+        // A result settles the round: any pending approval / human-guidance
+        // gate is resolved, so clear those markers (the round no longer awaits
+        // input). Matches the live _handleToolResult discipline; null-safe on a
+        // cold snapshot (fields were absent → stay absent under canonicalize).
+        r.approvalId = null;
+        r.approvalMeta = null;
+        r.guidanceId = null;
         if (ev.searchDiag) r.searchDiag = ev.searchDiag;
         if (ev.engineBreakdown) r.engineBreakdown = ev.engineBreakdown;
         if (ev.vertical) r.vertical = ev.vertical;

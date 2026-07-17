@@ -2080,6 +2080,13 @@ var _i18n = {
   'finishInfo.writeNoteTipTools': { zh: '本轮 write {v} ≈ 上一轮输出 + {n} 个工具的返回结果（首次写入缓存），并非本轮模型新生成', en: 'This round\u2019s write {v} \u2248 last round\u2019s output + results from {n} tools (written to cache for the first time), not newly generated this round' },
   'finishInfo.writeNoteTipPlain': { zh: '本轮 write {v} 主要是上一轮输出 + 返回内容首次写入缓存，并非本轮模型新生成', en: 'This round\u2019s write {v} is mostly last round\u2019s output + returned content written to cache for the first time, not newly generated this round' },
   'finishInfo.writeNoteLabel': { zh: 'ⓘ write 来源：上一轮产出 + 工具结果', en: '\u24d8 write source: last round\u2019s output + tool results' },
+  // Re-cache WASTE line — shown when writeBreakdown.recacheBody > 0 but the
+  // banner-level detector stayed silent (sub-threshold / cross-turn round-1
+  // read drop). Explains the money-losing "重新缓存正文" term that would
+  // otherwise sit bare in the equation with no reason. Distinct from the
+  // banner cacheBreak line (which has its own fault-state verdict).
+  'finishInfo.wbWasteLabel': { zh: 'ⓘ 其中 {v} 是已缓存正文被重新计费（本轮 cache 读取较上一轮/上一回合下降 {drop}，非本轮新增）', en: '\u24d8 {v} of this is already-cached body re-billed (cache read dropped {drop} vs the previous round/turn, not new this round)' },
+  'finishInfo.wbWasteTip': { zh: '本轮 write 里有 {v} tok 属于「重新缓存正文」——之前已经付费缓存过的会话正文这一轮没有被读回，被重新计费（真实浪费）。cache 读取较上次下降了 {drop} tok。常见于上一回合缓存前缀被上游驱逐（单 key 并发挤兑）。', en: 'This round\u2019s write contains {v} tok of "re-cache body" \u2014 conversation body we already paid to cache was not read back and got re-billed (real waste). Cache read dropped {drop} tok vs last time. Typically the previous turn\u2019s cached prefix was evicted upstream (single-key concurrent pressure).' },
   // Inline cache-break line
   'finishInfo.cacheBreakLabel': { zh: '缓存失效：{reason}', en: 'Cache miss: {reason}' },
   // Fault-state badge (wire-fingerprint verdict, 2026-07) + named culprit

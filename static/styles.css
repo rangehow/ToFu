@@ -3019,6 +3019,14 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .paper-qa-send-btn:activ
   margin-top:3px;color:var(--text-tertiary);font-size:10px;
   line-height:1.4;cursor:help;opacity:.85
 }
+/* Re-cache WASTE line: part of this round's write was already-cached body
+   re-billed (recacheBody), surfaced even when the banner detector was silent.
+   Amber like the miss verdict — it IS lost money — but lighter than a full
+   cp-round-break banner since no fault-state verdict accompanies it. */
+.cost-popover .cp-round-waste{
+  margin-top:3px;color:#e8a55d;font-size:10px;
+  line-height:1.4;cursor:help;opacity:.9
+}
 /* Legend at the bottom of the per-round table. */
 .cost-popover .cp-legend{
   margin-top:7px;padding-top:7px;border-top:1px dashed var(--border);

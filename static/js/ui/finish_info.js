@@ -401,6 +401,20 @@ function _buildCostPopover(ctx) {
           html += `<div class="cp-round-act cp-round-inflow" title="${escapeHtml(_tip)}">${_sumLabel}</div>`;
           _wbShown = true;
         }
+        // ★ Re-cache WASTE line. When the backend attributed part of this
+        //   round's write to `recacheBody` (already-cached body re-billed) but
+        //   the banner-level detector stayed SILENT (no rd.cacheBreak — the
+        //   sub-threshold / cross-turn round-1 read drop the Stage-1 fix now
+        //   catches), the "重新缓存正文" term would otherwise sit bare in the
+        //   equation with no explanation. Surface it from the breakdown's own
+        //   data (recacheBody + readDrop) so the user SEES why the round cost
+        //   money. Suppressed when a banner cbReason IS present — the
+        //   cp-round-break line below explains it and two lines would duplicate.
+        if (_wb.recacheBody > 0 && !cbReason) {
+          const _wasteTip = t('finishInfo.wbWasteTip', {
+            v: fmt(_wb.recacheBody), drop: fmt(_wb.readDrop || 0) });
+          html += `<div class="cp-round-waste" title="${escapeHtml(_wasteTip)}">${escapeHtml(t('finishInfo.wbWasteLabel', { v: fmt(_wb.recacheBody), drop: fmt(_wb.readDrop || 0) }))}</div>`;
+        }
       }
       if (!_wbShown && _inflowMeta.length) {
         // Legacy fallback (rounds persisted before writeBreakdown shipped):
@@ -432,9 +446,14 @@ function _buildCostPopover(ctx) {
       const _prev = i > 0 ? rounds[i - 1] : null;
       const _prevTcs = i > 0 ? (_roundToolNames[i - 1] || []).length : 0;
       // Suppress the "healthy warming write" note when this round is flagged
-      // as a real cache miss — the cbReason line below explains it instead,
-      // and showing both would be contradictory.
-      if (!cbReason && !_inflowMeta.length && rcw > 2000 && rcw > ro * 2 && (_prev || _prevTcs)) {
+      // as a real cache miss (cbReason) OR the authoritative writeBreakdown
+      // equation was already shown (_wbShown). The legacy heuristic note used
+      // to fire redundantly ON TOP of the exact breakdown — worse, on a turn's
+      // round-1 it claimed "上一轮产出 + 工具结果" for a round that has no
+      // previous output, directly contradicting the equation above it. The
+      // breakdown row is authoritative; only fall back to the heuristic note
+      // when NO breakdown was rendered (legacy rounds persisted before it).
+      if (!cbReason && !_wbShown && !_inflowMeta.length && rcw > 2000 && rcw > ro * 2 && (_prev || _prevTcs)) {
         const _why = _prevTcs
           ? t('finishInfo.writeNoteTipTools', { v: fmt(rcw), n: _prevTcs })
           : t('finishInfo.writeNoteTipPlain', { v: fmt(rcw) });

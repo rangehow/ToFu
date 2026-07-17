@@ -1,11 +1,10 @@
 # RENDER_CONTRACT.md — the unified frontend-render specification
 
-> **Status: Phase 0 — specification only (no code change).** This document is
-> the alignment baseline for making chat rendering, backend sync, tool-round
-> display, and auto-translation *traceable, concise, and robust*. It names the
-> invariants that a stable frontend must obey and the phased migration that gets
-> us there. Nothing here is implemented by adding this file — it is the contract
-> the subsequent phases are measured against.
+> **Status: Phase 1 landed (id-keyed reconcile); Phases 2–4 pending.** This
+> document is the alignment baseline for making chat rendering, backend sync,
+> tool-round display, and auto-translation *traceable, concise, and robust*. It
+> names the invariants that a stable frontend must obey and the phased migration
+> that gets us there. See §5 for per-phase status.
 >
 > **Audience:** anyone touching `static/js/ui/*`, `lib/tasks_pkg/manager/_sync.py`,
 > `lib/chat/persistence.py`, `lib/agent_core/events.py`, or the translate path.
@@ -274,7 +273,7 @@ tests first** (per project convention).
 | Phase | Scope | Change | First test + NEUTER | Risk |
 |---|---|---|---|---|
 | **0** | doc | This file. | — | none |
-| **1** | frontend | id-keyed reconcile; delete all `msg-${idx}` positional addressing (Invariant 2). | JSDOM: insert/splice/lazy-window does not twin or collapse a bubble; NEUTER = restore index addressing → twin reproduces. | med |
+| **1 ✅ DONE** | frontend | Surgical-diff reconcile in `renderChat` now matches by stable `_msgId` (`_reconcileFindEl`), reusing a drifted node (re-stamping its positional `id`/index + reordering) instead of destroying+rebuilding it; `id="msg-N"` handle preserved for index-addressing consumers. | `test_frontend_id_keyed_reconcile.py`: a mid-history insert REUSES the shifted nodes (same node object + preserved per-node DOM state), no twin/collapse, order correct; NEUTER = force positional `getElementById('msg-'+i)` → reused-node/state-preservation checks FAIL. | med |
 | **2** | frontend | per-message `_v`; retire `_msgFingerprint` + `_bgRefreshChat` (Invariant 3). | JSDOM: equal-length edit repaints; async cost/translation lands → row repaints with no background path; NEUTER = length-compare → no repaint. | med |
 | **3** | wire | one `apply()` reducer for live/warm/cold/poll; unify `roundNum`; add `round_start/round_end` (Invariants 1, 5 + §3.3). | byte-identical cold vs live projection; `test_event_registry` round-key; NEUTER = divergent fold path → mismatch. | **high — owner sign-off** |
 | **4** | DB | all writers CAS on `rev`; auto-translate versioned; `_assistantMsgId→_msgId` uniqueness a schema invariant (Invariant 4). | migration test: two same-`updated_at` writers → exactly one wins on `rev`; follow-up id-collision structurally impossible; NEUTER = CAS on `updated_at` → both pass. | **high — owner sign-off** |
@@ -301,6 +300,7 @@ own board epic and its own tests. **None is fixed by this document.**
 | L6 | `_convRenderFingerprint` samples only the LAST message → a mid-history mutation at unchanged tail can be skipped | `chat_render.js` Guard 2 | Subsumed by Invariants 1–3; standalone until then. |
 | L7 | Round-key drift (`roundNum` vs `round`) across event families | `events.py` specs | Phase 3 §3.3.1. |
 | L8 | No `round_start`/`round_end`; round boundaries inferred | `events.py` + reducer | Phase 3 §3.3.2; root of tool-round flicker on cold reconnect. |
+| L9 | `test_frontend_autopilot_fold.py` FAILS on HEAD — asserts `_applyAutopilotRunFolds` *creates* folds, but the 2026-07-07 flatten directive made it *unwrap* them (see `test_frontend_autopilot_flat_render.py`) | stale test vs shipped behavior | Pre-existing (verified against committed HEAD), unrelated to Phase 1. Delete/rewrite the stale test to the flatten contract. |
 
 ---
 

@@ -322,6 +322,37 @@ function _bgRefreshChat(conv) {
   _lastRenderedFingerprint = _convRenderFingerprint(conv);
 }
 
+/* ── RENDER_CONTRACT Invariant 2: id-keyed surgical reconcile ─────────────
+ * Locate the existing DOM node for a message by its STABLE `_msgId` (mirrored
+ * to `data-msg-id` by renderMessage), falling back to the positional
+ * `id="msg-${i}"` only for a legacy message that has no `_msgId` yet.
+ *
+ * WHY id-first: the surgical diff addresses a message by ARRAY POSITION, but a
+ * message's position DRIFTS whenever one is inserted/removed mid-history (an
+ * autopilot VU turn, a queued-user row, an edit/branch splice, a lazy-window
+ * offset). Position-only matching then can't find the real node for a shifted
+ * message and destroys+rebuilds it — discarding that node's live DOM state
+ * (an expanded tool `<details>`, the translation-preview zone keyed on
+ * `data-msg-id`, the `__bgHtml` stamp) on every unrelated edit — and, at the
+ * streaming boundary, is the documented root of twin bubbles. Keying on the
+ * stable id lets the reconcile REUSE the drifted node (re-stamping its
+ * positional `id`/index in place) instead of tearing it down. */
+function _reconcileFindEl(inner, msg, i) {
+  if (msg && msg._msgId && inner) {
+    /* Has a stable id → match by it ONLY. A miss means this message is NEW to
+     * the DOM (or its node lives elsewhere); we must NOT fall back to the
+     * positional `msg-${i}` handle, because after an index shift that slot
+     * belongs to a DIFFERENT message — grabbing it would reuse the wrong node
+     * (and strand the real one). The caller treats null as "insert". */
+    if (typeof CSS !== 'undefined' && CSS.escape) {
+      return inner.querySelector('[data-msg-id="' + CSS.escape(msg._msgId) + '"]');
+    }
+    return inner.querySelector('[data-msg-id="' + msg._msgId + '"]');
+  }
+  /* Legacy id-less message: the positional handle is the only key available. */
+  return document.getElementById('msg-' + i);
+}
+
 function renderChat(conv, forceScroll) {
   /* ── Guard 1: skip if user is editing a message in this conversation ── */
   if (_editingMsgIdx !== null && conv.id === activeConvId) return;
@@ -448,30 +479,64 @@ function renderChat(conv, forceScroll) {
      * this equals `total`, byte-identical to before. */
     const _surgTo = (_lazyConvId === conv.id && Number.isFinite(_lazyRenderedTo))
       ? Math.min(total, _lazyRenderedTo) : total;
+    /* ★ Id-keyed reconcile (RENDER_CONTRACT Invariant 2). `_cursor` tracks the
+     * DOM position the NEXT reconciled node must occupy, so a reused-but-drifted
+     * node is MOVED into array order instead of left stranded. `_reconcileFindEl`
+     * matches by stable `_msgId` first (positional `id` only as a legacy
+     * fallback), so a shifted-unchanged node is REUSED — its live DOM state
+     * (expanded tool <details>, translation preview, __bgHtml) survives — and
+     * only its positional `id`/index handle is re-stamped. */
+    let _cursor = _skipIdx >= 0 ? document.getElementById('msg-' + _skipIdx) : null;
+    /* Anchor for insertion: the node the reconciled sequence must sit BEFORE.
+     * We walk forward, placing each node right after the previous one. */
+    let _prevEl = null;
     for (let i = startIdx; i < _surgTo; i++) {
       if (i === _skipIdx) continue;  // streaming message — leave #streaming-msg alone
       const msg = conv.messages[i];
-      const el = document.getElementById("msg-" + i);
+      const el = _reconcileFindEl(inner, msg, i);
       if (el) {
-        /* Element exists — check if content changed */
+        /* Element exists (matched by _msgId or legacy index) — check if content
+         * changed. A drifted node keeps its live DOM state; we only re-stamp its
+         * positional id and re-order it. */
         const oldFp = el.getAttribute("data-mfp") || "";
         const newFp = _msgFingerprint(msg);
         if (oldFp !== newFp) {
           _pendingUpdates.push({ el, html: renderMessage(msg, i) });
           anyChange = true;
+        } else if (el.id !== ("msg-" + i)) {
+          /* Reused drifted node whose content is unchanged: re-stamp only the
+           * positional handle so index-addressing consumers (edit_message.js,
+           * streaming_render.js) stay correct without a destroy+rebuild. */
+          el.id = "msg-" + i;
+          anyChange = true;
         }
+        /* Re-position into array order if it drifted out of place. */
+        const _want = _prevEl ? _prevEl.nextSibling : (_cursor ? _cursor.nextSibling : inner.firstChild);
+        if (el !== _want && el.parentNode === inner) {
+          inner.insertBefore(el, _want);
+          anyChange = true;
+        } else if (el.parentNode !== inner) {
+          inner.insertBefore(el, _prevEl ? _prevEl.nextSibling : null);
+          anyChange = true;
+        }
+        _prevEl = el;
       } else {
-        /* New message — append */
+        /* New message — insert at the cursor position (array order), not blind append. */
         const wrapper = document.createElement("div");
         wrapper.innerHTML = renderMessage(msg, i);
         const newEl = wrapper.firstElementChild;
-        if (newEl) inner.appendChild(newEl);
+        if (newEl) {
+          inner.insertBefore(newEl, _prevEl ? _prevEl.nextSibling : (_cursor ? _cursor.nextSibling : null));
+          _prevEl = newEl;
+        }
         anyChange = true;
       }
     }
-    /* Apply all outerHTML replacements in a single write batch */
+    /* Apply all outerHTML replacements in a single write batch. Re-resolve each
+     * node's live reference AFTER the reorder pass (outerHTML needs the current
+     * DOM node), matching by the stamped id we just set. */
     for (const upd of _pendingUpdates) {
-      upd.el.outerHTML = upd.html;
+      if (upd.el && upd.el.parentNode) upd.el.outerHTML = upd.html;
     }
 
     /* 2) Remove stale messages beyond the current count

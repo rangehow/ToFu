@@ -49,8 +49,16 @@ from lib.log import get_logger
 logger = get_logger(__name__)
 
 
-def _has_real_round(msg: dict[str, Any]) -> bool:
-    """True if the message has at least one settled/result-bearing tool round."""
+def has_real_round(msg: dict[str, Any]) -> bool:
+    """True if the message has at least one settled/result-bearing tool round.
+
+    PUBLIC: the single project-wide definition of "does this turn carry a real
+    tool round?". Imported by the terminal write path
+    (``manager._sync_result_to_conversation``) so its empty-content skip guard
+    shares this exact predicate rather than re-deriving a parallel one — the
+    "multiple copies drift" trap this codebase keeps hitting. ``_has_real_round``
+    remains as a private alias for existing in-tree importers.
+    """
     rounds = msg.get('toolRounds')
     if not isinstance(rounds, list):
         return False
@@ -102,7 +110,7 @@ def is_buried_empty_ghost(msg: dict[str, Any]) -> bool:
         return False
     if msg.get('error'):
         return False
-    if _has_real_round(msg):
+    if has_real_round(msg):
         return False
     return True
 
@@ -120,7 +128,7 @@ def classify_ghost_tail(msg: dict[str, Any]) -> str | None:
         return None
     if msg.get('content') or msg.get('finishReason') or msg.get('usage') or msg.get('error'):
         return None
-    if _has_real_round(msg):
+    if has_real_round(msg):
         return None
     return 'interrupt' if (msg.get('thinking') or '').strip() else 'delete'
 
@@ -138,7 +146,7 @@ def _is_settled_assistant(msg: dict[str, Any]) -> bool:
         (msg.get('content') or '').strip()
         or msg.get('finishReason')
         or msg.get('usage')
-        or _has_real_round(msg)
+        or has_real_round(msg)
     )
 
 
@@ -166,7 +174,7 @@ def is_error_husk(msg: dict[str, Any]) -> bool:
         return False
     if (msg.get('thinking') or '').strip():
         return False
-    if _has_real_round(msg):
+    if has_real_round(msg):
         return False
     return True
 
@@ -476,7 +484,14 @@ def reconcile_conversation_messages(
     return out, changed
 
 
+# Backward-compat private alias for existing in-tree importers
+# (tests/test_reconcile_js_backend_equivalence.py, etc.). The public name
+# `has_real_round` is the one new code should import.
+_has_real_round = has_real_round
+
+
 __all__ = [
+    'has_real_round',
     'is_buried_empty_ghost',
     'classify_ghost_tail',
     'is_error_husk',

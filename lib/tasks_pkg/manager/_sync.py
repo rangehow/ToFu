@@ -313,8 +313,20 @@ def _sync_result_to_conversation(task, meta):
     # empty assistant placeholder as the stream target, so before returning we
     # sweep that orphan at the SOURCE (settle-time reconcile keyed by taskId)
     # rather than leaving it for a future warm reopen to heal.
-    if not content and not thinking and not error:
-        logger.debug('%s conv=%s Skipping conv sync — no content/thinking/error to write', pfx, conv_id)
+    #
+    # ★ EXCEPTION: a turn that RAN TOOLS but was Stopped before the model
+    #   emitted any closing prose/thinking (content=='' and thinking=='') is
+    #   NOT an empty orphan — its completed tool rounds are real user-visible
+    #   work. The guard must consult the SAME "is this a real tool round?"
+    #   predicate reconcile uses (reconcile.has_real_round), so the two verdicts
+    #   can never drift. Without this, the rounds were written only to the
+    #   task_results aborted-floor and dropped from conversations.messages,
+    #   vanishing on reload/restart (the reported "all my tools disappeared").
+    from lib.conversations.reconcile import has_real_round
+    _merged_for_guard = _merge_tool_rounds(task)
+    _has_real_tool_round = has_real_round({'toolRounds': _merged_for_guard})
+    if not content and not thinking and not error and not _has_real_tool_round:
+        logger.debug('%s conv=%s Skipping conv sync — no content/thinking/error/toolRounds to write', pfx, conv_id)
         try:
             _reconcile_orphan_placeholder_on_settle(task)
         except Exception as e:

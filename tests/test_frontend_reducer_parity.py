@@ -158,7 +158,8 @@ try {{
     const fn = new Function('exports', src + '\\n;' +
       'exports.projectStreamEvents = (typeof projectStreamEvents!=="undefined")?projectStreamEvents:null;' +
       'exports.projectColdSnapshot = (typeof projectColdSnapshot!=="undefined")?projectColdSnapshot:null;' +
-      'exports.reduceStreamState = (typeof reduceStreamState!=="undefined")?reduceStreamState:null;');
+      'exports.reduceStreamState = (typeof reduceStreamState!=="undefined")?reduceStreamState:null;' +
+      'exports.canonicalizeProjectionForCompare = (typeof canonicalizeProjectionForCompare!=="undefined")?canonicalizeProjectionForCompare:null;');
     fn(sandbox);
     R = sandbox;
   }}
@@ -175,8 +176,9 @@ if (!R || !R.projectStreamEvents || !R.projectColdSnapshot) {{
 
 def _parity(name: str, live_expr: str, cold_expr: str) -> dict:
     body = _harness(f'''
-  const live = R.projectStreamEvents({live_expr});
-  const cold = R.projectColdSnapshot({cold_expr});
+  const C = R.canonicalizeProjectionForCompare;
+  const live = C(R.projectStreamEvents({live_expr}));
+  const cold = C(R.projectColdSnapshot({cold_expr}));
   const liveJson = JSON.stringify(live);
   const coldJson = JSON.stringify(cold);
   console.log(JSON.stringify({{ ok:true, equal: liveJson === coldJson, live: liveJson, cold: coldJson }}));
@@ -217,14 +219,15 @@ def test_F3_midround_cold_reconnect_keeplonger_parity():
   const live = R.projectStreamEvents(F3_LIVE);
   // Emulate the pipeline's keep-longer merge feeding the reducer: the cold
   // snapshot's rounds are widened to the live-length set before projecting.
-  const liveRounds = live.toolRounds;
+  const liveRounds = live.toolRounds;  // loss-less production projection
   const merged = Object.assign({}, F3_COLD_SHORT, {
     toolRounds: (F3_COLD_SHORT.toolRounds.length >= liveRounds.length)
       ? F3_COLD_SHORT.toolRounds : liveRounds,
   });
+  const C = R.canonicalizeProjectionForCompare;
   const cold = R.projectColdSnapshot(merged);
-  const liveJson = JSON.stringify(live);
-  const coldJson = JSON.stringify(cold);
+  const liveJson = JSON.stringify(C(live));
+  const coldJson = JSON.stringify(C(cold));
   console.log(JSON.stringify({ ok:true, equal: liveJson === coldJson,
     live: liveJson, cold: coldJson,
     shortWouldShrink: F3_COLD_SHORT.toolRounds.length < liveRounds.length }));
@@ -239,6 +242,41 @@ def test_F3_midround_cold_reconnect_keeplonger_parity():
         'F3 MID-ROUND reconnect divergence — after the keep-longer merge the '
         'cold projection must equal the live projection (this is what makes '
         f'retiring _snapshotLongerRounds safe):\n  live={r["live"]}\n  cold={r["cold"]}')
+
+
+def test_cold_projection_is_lossless_preserves_all_round_fields():
+    """PRODUCTION-safety: projectColdSnapshot must NOT drop round fields the
+    render needs. A cold snapshot's rounds carry approvalId / searchDiag /
+    engineBreakdown / vertical / path / _mcpLoginHint etc. — the projection is
+    loss-less (only the internal _continueToolRounds scratch may be dropped).
+    Guards against the canonicalizer (test-only) being wired into production."""
+    body = _harness('''
+  const snap = { content:'x', thinking:'', toolRounds:[
+    { roundNum:1, toolName:'run_command', toolCallId:'tc1', status:'done',
+      approvalId:'ap1', searchDiag:{q:1}, engineBreakdown:{e:2}, vertical:'code',
+      path:'/tmp/x', guidanceId:'g1', results:[{toolName:'run_command'}] },
+  ]};
+  const proj = R.projectColdSnapshot(snap);
+  const r = proj.toolRounds[0] || {};
+  console.log(JSON.stringify({ ok:true,
+    keptApproval: r.approvalId === 'ap1',
+    keptSearchDiag: !!r.searchDiag,
+    keptEngine: !!r.engineBreakdown,
+    keptVertical: r.vertical === 'code',
+    keptPath: r.path === '/tmp/x',
+    keptGuidance: r.guidanceId === 'g1',
+  }));
+''')
+    r = _run_node(body)
+    if not r.get('ok'):
+        pytest.fail(f"reducer/node error: {r.get('reason')} {r.get('stderr','')}")
+    missing = [k for k in ('keptApproval', 'keptSearchDiag', 'keptEngine',
+                           'keptVertical', 'keptPath', 'keptGuidance') if not r.get(k)]
+    assert not missing, (
+        'LOSSY PROJECTION: projectColdSnapshot dropped production round fields '
+        f'{missing} — a cold reconnect would lose approval/diag/vertical/path '
+        'state the render depends on. The canonicalizer is test-only; production '
+        'projection must preserve every field.')
 
 
 def test_reducer_module_exists_and_is_pure():

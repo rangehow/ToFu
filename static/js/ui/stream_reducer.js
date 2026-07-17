@@ -176,14 +176,16 @@ function projectStreamEvents(events, seed) {
   if (!Array.isArray(state.toolRounds)) state.toolRounds = [];
   if (!Array.isArray(events)) return state;
   for (const ev of events) state = reduceStreamState(state, ev);
-  return _normalizeProjection(state);
+  return _finalizeProjection(state);
 }
 
 /* ── projectColdSnapshot(snapshot) → state ──
  *    COLD/POLL: a settled server snapshot is a `verbatim` action — the
- *    authoritative {content,thinking,toolRounds} shape. Normalized through
- *    the SAME output canonicalizer as the fold so the two are byte-identical.
- *    ── */
+ *    authoritative {content,thinking,toolRounds} shape. Passed through the
+ *    SAME finalizer as the fold so both paths emit an identical PRODUCTION
+ *    shape. LOSS-LESS: every round field the server carries (approvalId,
+ *    searchDiag, engineBreakdown, vertical, _mcpLoginHint, …) is preserved —
+ *    the finalizer only drops the internal _continueToolRounds scratch. ── */
 function projectColdSnapshot(snap) {
   const s = emptyStreamState();
   if (snap) {
@@ -191,42 +193,64 @@ function projectColdSnapshot(snap) {
     s.thinking = snap.thinking || '';
     s.toolRounds = Array.isArray(snap.toolRounds) ? snap.toolRounds.map(r => Object.assign({}, r)) : [];
   }
-  return _normalizeProjection(s);
+  return _finalizeProjection(s);
 }
 
-/* ── _normalizeProjection: the single canonical OUTPUT shape both paths
- *    emit, so JSON.stringify(live) === JSON.stringify(cold). Drops the
- *    internal-only _continueToolRounds scratch field and rebuilds each
- *    round with a FIXED key order + omits keys that are null/absent so a
- *    fold (which may set results:null) and a snapshot (which omits results)
- *    converge. ── */
+/* ── _finalizeProjection: the PRODUCTION output shape. LOSS-LESS by design —
+ *    it must NOT drop real round fields (a cold snapshot carries approvalId /
+ *    searchDiag / engineBreakdown / vertical / path that the render needs).
+ *    It only normalizes the top-level {content,thinking} to '' and shallow-
+ *    copies rounds so the caller can't mutate reducer internals. Byte-level
+ *    canonicalization for the golden PARITY test is a SEPARATE concern
+ *    (canonicalizeProjectionForCompare) so production loses nothing. ── */
+function _finalizeProjection(state) {
+  const rounds = Array.isArray(state.toolRounds) ? state.toolRounds : [];
+  return {
+    content: state.content || '',
+    thinking: state.thinking || '',
+    toolRounds: rounds.map(r => Object.assign({}, r)),
+  };
+}
+
+/* ── canonicalizeProjectionForCompare(proj) → comparable projection ──
+ *    TEST-ONLY equivalence normalizer: rebuilds each round with a FIXED key
+ *    order and omits null/scaffolding-default keys, so a LIVE fold (which may
+ *    leave results:null / _swarm:false scaffolding) and a COLD snapshot (which
+ *    omits those) of the SAME settled turn serialize byte-identically. This is
+ *    NOT applied in production — the parity test calls it on both sides before
+ *    JSON.stringify. Kept in the module so the canonical key order lives in one
+ *    place beside the reducer it describes. ── */
 const _ROUND_KEY_ORDER = [
   'roundNum', 'llmRound', 'toolName', 'toolCallId', 'query', 'status',
   'results', 'toolContent', 'toolArgs', 'assistantContent', 'thinking',
   'toolTokens', 'compactionLayer', 'compactedFromChars', 'compactedToChars',
+  'searchDiag', 'engineBreakdown', 'vertical', 'verticals', 'path',
+  'approvalId', 'approvalMeta', 'guidanceId',
   '_swarm', '_repaired', '_rejected',
 ];
 
 function _canonRound(r) {
   const out = {};
+  const seen = {};
   for (const k of _ROUND_KEY_ORDER) {
     const v = r[k];
-    // Omit null/undefined AND the falsy scaffolding defaults (_swarm:false,
-    // results:null, toolArgs:null) so a live fold and a cold snapshot of the
-    // SAME settled round serialize identically regardless of which scaffolding
-    // the fold left behind.
+    seen[k] = true;
     if (v == null) continue;
     if (k === '_swarm' && v === false) continue;
     out[k] = v;
   }
+  // Preserve any field not in the known order (deterministic: sorted) so the
+  // canonicalizer never silently hides a new field from the compare.
+  const extra = Object.keys(r).filter(k => !seen[k] && k !== '_continueToolRounds').sort();
+  for (const k of extra) { if (r[k] != null) out[k] = r[k]; }
   return out;
 }
 
-function _normalizeProjection(state) {
-  const rounds = Array.isArray(state.toolRounds) ? state.toolRounds : [];
+function canonicalizeProjectionForCompare(proj) {
+  const rounds = (proj && Array.isArray(proj.toolRounds)) ? proj.toolRounds : [];
   return {
-    content: state.content || '',
-    thinking: state.thinking || '',
+    content: (proj && proj.content) || '',
+    thinking: (proj && proj.thinking) || '',
     toolRounds: rounds.map(_canonRound),
   };
 }
@@ -235,6 +259,6 @@ function _normalizeProjection(state) {
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     reduceStreamState, projectStreamEvents, projectColdSnapshot,
-    locateRound, emptyStreamState,
+    locateRound, emptyStreamState, canonicalizeProjectionForCompare,
   };
 }

@@ -89,6 +89,76 @@ def _lstart_of_pid(pid: str) -> str | None:
         return None
 
 
+def _serving_pid(port: str = '15000') -> str | None:
+    """Return the PID actually LISTENING on ``port`` (from ``ss``/``lsof``), or
+    None. The authoritative deploy identity — NOT a log banner, NOT a cmdline
+    substring scan (see _serving_pid_start's docstring for the two false-signal
+    traps this avoids)."""
+    import re as _re
+    import subprocess
+    try:
+        out = subprocess.run(['ss', '-ltnp'], capture_output=True, text=True,
+                             timeout=10).stdout
+        for ln in out.splitlines():
+            if f':{port}' not in ln:
+                continue
+            m = _re.search(r'pid=(\d+)', ln)
+            if m:
+                return m.group(1)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    try:
+        out = subprocess.run(['lsof', '-tiTCP:' + port, '-sTCP:LISTEN'],
+                             capture_output=True, text=True, timeout=10).stdout
+        return (out.split() or [None])[0]
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def _proc_cwd(pid: str) -> str | None:
+    """Resolve ``/proc/<pid>/cwd`` to the process's working directory, or None
+    when unprobeable (non-Linux, permission, dead pid). READ-ONLY."""
+    if not pid:
+        return None
+    try:
+        return os.readlink(f'/proc/{pid}/cwd')
+    except (OSError, ValueError):
+        return None
+
+
+def _served_code_state(pid: str) -> tuple[str, str]:
+    """Is the code the serving process is ACTUALLY running the fixed source?
+
+    Returns ``(state, detail)`` where state is:
+      * ``'fresh'``   — the ``lib/llm/cache.py`` under the process's cwd LACKS
+                        the pre-fix carve-out ``and not msg.get('tool_calls')``
+                        (the fix source is present in the served tree);
+      * ``'stale'``   — that file STILL contains the carve-out (a new PID but an
+                        OLD code copy — the false-green the owner flagged);
+      * ``'unknown'`` — cwd not probeable / file missing / unreadable. NEVER
+                        promoted to a green; the caller degrades to honest WAIT.
+
+    This turns ``deployed=YES`` from "a newer process exists" into "the fix is
+    provably in the served tree". Keyed on the SAME carve-out string the
+    ab161bf fix removed (kept as the deploy tripwire).
+    """
+    cwd = _proc_cwd(pid)
+    if not cwd:
+        return 'unknown', f'cannot read /proc/{pid}/cwd (non-Linux/permission/dead pid)'
+    cache_path = os.path.join(cwd, 'lib', 'llm', 'cache.py')
+    try:
+        with open(cache_path, 'r', encoding='utf-8', errors='replace') as fh:
+            src = fh.read()
+    except OSError as e:
+        return 'unknown', f'served cache.py unreadable at {cache_path}: {e}'
+    _CARVE = "and not msg.get('tool_calls')"
+    if _CARVE in src:
+        return 'stale', (f'served tree {cwd} still has the pre-fix carve-out '
+                         f'{_CARVE!r} in lib/llm/cache.py — new PID but STALE '
+                         'code copy')
+    return 'fresh', f'served tree {cwd} has the fixed lib/llm/cache.py'
+
+
 def _serving_pid_start(port: str = '15000') -> str | None:
     """Return the START time (``YYYY-MM-DD HH:MM:SS``) of the process actually
     LISTENING on ``port``, or None if it can't be determined.
@@ -114,27 +184,7 @@ def _serving_pid_start(port: str = '15000') -> str | None:
     import re as _re
     import subprocess
 
-    pid = None
-    # Authoritative: who is bound to the port right now.
-    try:
-        out = subprocess.run(['ss', '-ltnp'], capture_output=True, text=True,
-                             timeout=10).stdout
-        for ln in out.splitlines():
-            if f':{port}' not in ln:
-                continue
-            m = _re.search(r'pid=(\d+)', ln)
-            if m:
-                pid = m.group(1)
-                break
-    except (OSError, subprocess.SubprocessError):
-        pass
-    if pid is None:
-        try:
-            out = subprocess.run(['lsof', '-tiTCP:' + port, '-sTCP:LISTEN'],
-                                 capture_output=True, text=True, timeout=10).stdout
-            pid = (out.split() or [None])[0]
-        except (OSError, subprocess.SubprocessError):
-            pid = None
+    pid = _serving_pid(port)
     if pid:
         return _lstart_of_pid(pid)
 
@@ -197,7 +247,36 @@ def analyze(log_path: str, min_samples: int) -> dict:
                           f'commit {FIX_COMMIT_TS} — live server still runs '
                           'pre-fix code; a real 15000 restart is required',
                 'boot': boot_ts, 'samples': 0, 'prefix_changed': 0,
-                'bytes_diverged': 0}
+                'bytes_diverged': 0, 'served': 'predates'}
+
+    # Gate 1b (SERVED-CODE FRESHNESS — the false-green guard): a NEW PID whose
+    # lstart postdates the fix floor is NOT proof the fix is loaded — a
+    # supervisor may have pulled a STALE code copy (old deployment dir/image).
+    # Confirm the fix source is present in the tree the process is ACTUALLY
+    # serving (/proc/<pid>/cwd → lib/llm/cache.py lacks the carve-out). A stale
+    # copy → WAIT (not deployed). Unprobeable → honest WAIT that says so — never
+    # a false green.
+    _pid = _serving_pid()
+    served, served_detail = _served_code_state(_pid) if _pid else (
+        'unknown', 'serving PID not resolvable')
+    if served == 'stale':
+        return {'verdict': 'WAIT',
+                'reason': f'serving PID started {boot_ts} (>fix floor) but the '
+                          f'served code is STALE: {served_detail} — a new '
+                          'process is running an OLD code copy; the fix is NOT '
+                          'actually loaded. Restart from the current HEAD tree.',
+                'boot': boot_ts, 'samples': 0, 'prefix_changed': 0,
+                'bytes_diverged': 0, 'served': served}
+    if served == 'unknown':
+        return {'verdict': 'WAIT',
+                'reason': f'serving PID started {boot_ts} (>fix floor) but '
+                          f'served-code freshness could NOT be verified '
+                          f'({served_detail}) — refusing to report deployed '
+                          'without proof the fix source is in the served tree. '
+                          'Verify manually: ls -l /proc/<pid>/cwd and grep the '
+                          "carve-out in its lib/llm/cache.py.",
+                'boot': boot_ts, 'samples': 0, 'prefix_changed': 0,
+                'bytes_diverged': 0, 'served': served}
 
     # Cursor: count only log lines AT/AFTER the serving process's start time.
     boot_idx = 0
@@ -264,7 +343,7 @@ def analyze(log_path: str, min_samples: int) -> dict:
 
     return {'verdict': verdict, 'reason': reason, 'boot': boot_ts,
             'samples': samples, 'prefix_changed': prefix_changed,
-            'bytes_diverged': bytes_diverged}
+            'bytes_diverged': bytes_diverged, 'served': served}
 
 
 def main() -> int:
@@ -279,9 +358,14 @@ def main() -> int:
     r = analyze(args.log, args.min_samples)
     if args.verbose:
         # Self-explaining breakdown — no human interpretation needed.
-        deployed = bool(r['boot']) and r['boot'] > FIX_COMMIT_TS
+        _served = r.get('served', 'unknown')
+        # deployed=YES requires BOTH a post-floor boot AND a FRESH served tree
+        # (the false-green guard): a new PID running stale code is NOT deployed.
+        deployed = bool(r['boot']) and r['boot'] > FIX_COMMIT_TS and _served == 'fresh'
         print(f"(a) serving-PID boot   : {r['boot'] or '(unknown)'}  "
-              f"fix_floor={FIX_COMMIT_TS}  deployed={'YES' if deployed else 'NO'}")
+              f"fix_floor={FIX_COMMIT_TS}  boot_after_floor="
+              f"{'YES' if (r['boot'] and r['boot'] > FIX_COMMIT_TS) else 'NO'}  "
+              f"served_code={_served}  deployed={'YES' if deployed else 'NO'}")
         print(f"(b) post-boot samples  : {r['samples']}  "
               f"need>={MIN_SAMPLES}  enough={'YES' if r['samples'] >= MIN_SAMPLES else 'NO'}")
         print(f"(c) already-cached miss: prefix_changed(inside=True)="

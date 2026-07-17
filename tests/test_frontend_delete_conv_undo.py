@@ -17,6 +17,15 @@ The fix makes ``deleteConversation`` async: it hydrates a shell conv via
 the full body and undo re-creates the row with messages intact. Restore must
 also preserve the original ``updatedAt`` (no sidebar re-stamp to load-time).
 
+FOLLOW-UP (root fix for "delete always fails now")
+--------------------------------------------------
+Hydration failing on a slow tunnel used to HARD-REFUSE the delete, which — with
+windowed reads on + hundreds of sidebar-shell convs — permanently blocked
+deleting those convs (0 DELETE requests ever reached the server). The delete
+itself is always safe (server row authoritative; no local body needed); only
+the UNDO snapshot is lost. The contract is now fail-OPEN-with-consent: on
+hydration failure, ask the user, then delete WITHOUT a (hollow) undo toast.
+
 This drives the REAL shipped ``deleteConversation`` /
 ``_restoreDeletedConversation`` under node, stubbing the network seam
 (``Api.conversations.put/remove``) + ``loadConversationMessages`` (which
@@ -225,13 +234,28 @@ def test_delete_conv_undo_restores_unloaded_shell():
     assert output.count('PASS') >= 12, f'expected >=12 PASS lines, got:\n{output}'
 
 
-# ── Abort-on-hydration-failure: when the server can't be reached at delete
-#    time, loadConversationMessages leaves messages:[] (the shell could not be
-#    materialised). Deleting now would leave the undo snapshot hollow → permanent
-#    loss precisely when the network is flaky. The delete MUST be refused. ──
+# ── Hydration-failure = fail-OPEN-with-consent (root fix for "delete always
+#    fails now"). When the server can't be reached at delete time,
+#    loadConversationMessages leaves messages:[] (the shell could not be
+#    materialised). Historically the delete was HARD-REFUSED here — but with
+#    windowed reads on + hundreds of sidebar-shell convs, hydration frequently
+#    times out over a slow tunnel, so that permanently BLOCKED deleting those
+#    convs (0 DELETE requests ever reached the server). The DELETE itself is
+#    always safe (the server row is authoritative and needs no local body); only
+#    the UNDO snapshot is lost. New contract: ask the user for explicit consent,
+#    then delete WITHOUT offering a (hollow) undo. Parameterised over the user's
+#    confirm choice + a NEUTER that strips the consent gate. ──
 _HARNESS_ABORT = r"""
 const fs = require('fs');
 global.window = global;
+
+// argv[3]: 'confirm' (user says delete anyway) | 'cancel' (user backs out)
+// argv[4]: 'neuter' → force showConfirm undefined AND simulate the OLD hard
+//          refuse by... no — the neuter proves the CONSENT GATE is load-bearing:
+//          when confirm is forced to CANCEL, NO delete must happen; if the gate
+//          were removed the delete would fire regardless. We express that as the
+//          'cancel' scenario asserting no-delete, and 'confirm' asserting delete.
+const scenario = process.argv[3] || 'confirm';
 
 let shell = {
   id: 'conv-shell-1',
@@ -246,7 +270,7 @@ let otherConv = { id: 'conv-other', title: 'Other', messages: [{role:'user',cont
 global.conversations = [shell, otherConv];
 global.activeConvId = 'conv-other';
 
-const calls = { loadMsgs: [], put: [], remove: [], abortTask: [] };
+const calls = { loadMsgs: [], put: [], remove: [], abortTask: [], confirm: 0 };
 
 // loadConversationMessages FAILS to materialise the body — simulates the
 // server being unreachable: messages STAYS empty, _needsLoad stays true.
@@ -274,8 +298,14 @@ global.escapeHtml = (s) => String(s == null ? '' : s);
 global.t = (k) => k;
 const toasts = [];
 global.showToast = (...a) => toasts.push(a);
+// Themed confirm dialog — records the ask and resolves per scenario.
+global.showConfirm = async function(msg, opts) {
+  calls.confirm++;
+  return scenario === 'confirm';   // 'cancel' → false (user backs out)
+};
 
-// DOM stub: capture whether an undo button was registered (it must NOT be).
+// DOM stub: capture whether an undo button was registered (it must NOT be
+// for the delete-without-undo path).
 let _undoHandler = null;
 const _container = { appendChild() {} };
 global.document = {
@@ -306,34 +336,43 @@ function check(name, cond) { out.push((cond ? 'PASS ' : 'FAIL ') + name); }
 
   await deleteConversation('conv-shell-1');
 
-  // It attempted to hydrate…
+  // It attempted to hydrate, failed, then ASKED the user for consent.
   check('hydrate_attempted', calls.loadMsgs.length === 1);
-  // (a) …but the server DELETE was NOT issued.
-  check('no_server_delete', calls.remove.length === 0);
-  // (b) …the conv is STILL in the list.
-  check('conv_still_present', conversations.some(c => c.id === 'conv-shell-1'));
-  // (c) …no undo toast/handler was registered.
-  check('no_undo_handler', _undoHandler === null);
-  // It did NOT broadcast a deletion, nor evict the cache.
-  check('no_deleted_broadcast', calls._broadcast !== 'conv_deleted');
-  check('cache_not_evicted', !calls._cacheRemoved);
-  // It surfaced an error toast telling the user.
-  check('error_toast_shown', toasts.some(a => a[0] === 'sidebar.deleteFailed'));
+  check('consent_requested', calls.confirm === 1);
+
+  if (scenario === 'confirm') {
+    // ── User confirmed delete-without-undo → the DELETE proceeds. ──
+    check('server_delete_fired', calls.remove.length === 1 && calls.remove[0] === 'conv-shell-1');
+    check('conv_removed', !conversations.some(c => c.id === 'conv-shell-1'));
+    check('cache_evicted', !!calls._cacheRemoved);
+    check('deleted_broadcast', calls._broadcast === 'conv_deleted');
+    // No FALSE undo: the snapshot is hollow, so NO undo button is registered…
+    check('no_undo_handler', _undoHandler === null);
+    // …and the user sees a plain "deleted" toast (not a restorable one).
+    check('plain_deleted_toast', toasts.some(a => a[0] === 'sidebar.convDeleted'));
+  } else {
+    // ── User cancelled → nothing destructive happened (consent gate holds). ──
+    check('no_server_delete', calls.remove.length === 0);
+    check('conv_still_present', conversations.some(c => c.id === 'conv-shell-1'));
+    check('no_undo_handler', _undoHandler === null);
+    check('no_deleted_broadcast', calls._broadcast !== 'conv_deleted');
+    check('cache_not_evicted', !calls._cacheRemoved);
+  }
 
   console.log(out.join('\n'));
 })();
 """
 
 
-@pytest.mark.skipif(not _node_available(), reason='node not installed')
-def test_delete_conv_aborts_when_hydration_fails():
-    harness = os.path.join(HERE, '_delete_conv_abort_harness.js')
+def _run_abort_harness(scenario: str) -> str:
+    harness = os.path.join(HERE, f'_delete_conv_abort_harness_{scenario}.js')
     with open(harness, 'w') as f:
         f.write(_HARNESS_ABORT)
     try:
         proc = subprocess.run(
             ['node', harness,
              os.path.join(JS_DIR, 'main', 'main_conv_lifecycle.js'),  # argv[2]
+             scenario,                                                 # argv[3]
              ],
             capture_output=True, text=True, timeout=60,
         )
@@ -345,5 +384,21 @@ def test_delete_conv_aborts_when_hydration_fails():
     output = proc.stdout.strip()
     assert proc.returncode == 0, f'node failed: {proc.stderr}\n{output}'
     fails = [ln for ln in output.splitlines() if ln.startswith('FAIL')]
-    assert not fails, 'abort-on-hydration-failure failures:\n' + output
+    assert not fails, f'delete hydration-fail ({scenario}) failures:\n' + output
+    return output
+
+
+@pytest.mark.skipif(not _node_available(), reason='node not installed')
+def test_delete_conv_hydration_fail_confirm_deletes_without_undo():
+    """User confirms → delete proceeds (the "delete always fails" root fix),
+    but WITHOUT a false undo toast (the snapshot is hollow)."""
+    output = _run_abort_harness('confirm')
+    assert output.count('PASS') >= 8, f'expected >=8 PASS lines, got:\n{output}'
+
+
+@pytest.mark.skipif(not _node_available(), reason='node not installed')
+def test_delete_conv_hydration_fail_cancel_keeps_conv():
+    """User cancels the delete-without-undo prompt → the consent gate holds:
+    no server DELETE, conv stays, nothing evicted (NEUTER of the confirm path)."""
+    output = _run_abort_harness('cancel')
     assert output.count('PASS') >= 7, f'expected >=7 PASS lines, got:\n{output}'

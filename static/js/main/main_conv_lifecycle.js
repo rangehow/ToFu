@@ -179,9 +179,12 @@ function loadConversation(id) {
   }
   activeConvId = id;
   sessionStorage.setItem('tofu_activeConvId', id);
-  /* ★ Reset the open-scroll latch so THIS open positions the view exactly once
-   *   (the first full render force-scrolls to the bottom + re-latches; later
-   *   same-open renders preserve the viewport — see renderChat). */
+  /* ★ Reset the open-scroll latch for THIS open. Opening a conversation does
+   *   NOT auto-scroll (owner directive): the first full render leaves the view
+   *   at its natural post-render position and latches _openScrollConvId; later
+   *   same-open renders (Phase-2 reconcile, the .then fallback) then take the
+   *   anchor-preserve branch and HOLD that position instead of re-snapping —
+   *   see renderChat. */
   if (typeof _openScrollConvId !== 'undefined') _openScrollConvId = null;
   /* ★ If loading a conv that doesn't belong to the active folder view, exit it */
   if (typeof getActiveFolderId === 'function' && getActiveFolderId()) {
@@ -207,14 +210,15 @@ function loadConversation(id) {
     c._initialSwitchLoad = true;   // ★ flag for renderChat: use full-render, not surgical
     /* ★ FIX: Don't render the loading skeleton immediately — it shows a small
      * centered div at the top of the viewport, and when messages arrive
-     * milliseconds later, _forceScrollToBottom jumps to the bottom → visible
-     * top→bottom flash.
+     * milliseconds later the full render would swap content under the reader →
+     * visible flash.
      *
      * Instead, keep the previous conversation's content visible during the
      * async IndexedDB/server fetch (typically <50ms for cache hits).  When
-     * messages arrive, renderChat does a full render + _forceScrollToBottom
-     * atomically, so the user sees a direct transition to the new conversation
-     * already scrolled to the bottom — no intermediate state.
+     * messages arrive, renderChat does one full render that LEAVES the view at
+     * its natural post-render position (opening a conversation does not
+     * auto-scroll — owner directive), so the user sees a direct transition to
+     * the new conversation with no intermediate skeleton state and no jump.
      *
      * For the rare case where both cache AND server are slow (>400ms), show
      * the skeleton as a fallback so the user knows something is loading. */
@@ -236,14 +240,13 @@ function loadConversation(id) {
         } else if (c._needsLoad || c.messages.length === 0) {
           renderChat(c);
           if (typeof _restoreConvToolState === "function") _restoreConvToolState(c);
-        } else if (typeof _openScrollConvId === 'undefined' || _openScrollConvId !== id) {
-          /* ★ Only force-scroll if the Phase-1/Phase-2 renders inside
-           *   loadConversationMessages didn't already position this open.
-           *   Without this guard, a cached conversation gets an extra
-           *   redundant snap-to-bottom here after already landing at the
-           *   bottom — one of the "several jumps" on open. */
-          _forceScrollToBottom(null, true);
         }
+        /* ★ No-auto-scroll-on-OPEN (owner directive): the former trailing
+         *   `_forceScrollToBottom` fallback here (for an already-loaded cached
+         *   conv) is removed. The Phase-1/Phase-2 renders inside
+         *   loadConversationMessages already painted the conversation; per the
+         *   directive we leave the view at its natural position instead of
+         *   snapping it to the bottom on open. */
       }
       delete c._initialSwitchLoad;   // ★ clear flag after initial load completes
       if (!activeStreams.has(id)) _resumePendingTranslations(id);
@@ -312,6 +315,11 @@ async function deleteConversation(id, e) {
    *   from the server BEFORE deleting, exactly like duplicateConversation. */
   const _needsHydrate = !!conv._needsLoad ||
     (conv.messages.length === 0 && (conv._serverMsgCount || 0) > 0);
+  /* When true, we could NOT capture a full local snapshot (hydration failed on
+   *   a flaky link), so the undo affordance can't restore history — the delete
+   *   still proceeds (the server row is authoritative), but WITHOUT an undo
+   *   toast, after explicit user consent below. */
+  let _undoUnavailable = false;
   if (_needsHydrate) {
     try {
       await loadConversationMessages(id);
@@ -321,20 +329,32 @@ async function deleteConversation(id, e) {
     /* Re-read: the conv may have been removed/replaced during the await. */
     conv = conversations.find((c) => c.id === id);
     if (!conv) return;
-    /* ★ ABORT-ON-HYDRATION-FAILURE: if we STILL can't obtain the full body
-     *   (server unreachable / load failed → messages stayed empty while the
-     *   server has history), REFUSE to delete.  Deleting now would leave the
-     *   undo snapshot hollow and lose the conversation permanently — the worst
-     *   outcome precisely when the network is flaky.  Leave the conv intact and
-     *   tell the user to retry once reconnected.  Refuse to delete what we
-     *   cannot safely snapshot. */
+    /* ★ HYDRATION FAILED (server unreachable / load timed out → messages stayed
+     *   empty while the server has history). The DELETE itself is always safe —
+     *   the server row is authoritative and needs no local body. What we lose is
+     *   only the UNDO snapshot (it would be hollow). Historically we hard-refused
+     *   the delete here, but that PERMANENTLY BLOCKS deleting a sidebar-shell
+     *   conv whenever the tunnel is slow (the reported "delete always fails" bug:
+     *   with windowed reads on + hundreds of shell convs, hydration frequently
+     *   times out). Instead, ask for explicit consent, then delete WITHOUT the
+     *   undo toast — fail-open-with-consent, not fail-closed. */
     if (conv.messages.length === 0 && (conv._serverMsgCount || 0) > 0) {
-      debugLog(`[deleteConv] ABORT — could not hydrate conv ${id.slice(0,8)} ` +
-        `(${conv._serverMsgCount} server msgs, 0 local); delete refused to avoid data loss`, 'warn');
-      if (typeof showToast === "function") {
-        showToast(t('sidebar.deleteFailed'), 'error');
-      }
-      return;
+      debugLog(`[deleteConv] hydrate failed for conv ${id.slice(0,8)} ` +
+        `(${conv._serverMsgCount} server msgs, 0 local); confirming delete-without-undo`, 'warn');
+      const _confirmed = (typeof showConfirm === 'function')
+        ? await showConfirm(t('sidebar.deleteNoUndoBody'), {
+            title: t('sidebar.deleteNoUndoTitle'),
+            okText: t('sidebar.deleteAnyway'),
+            cancelText: t('folder.cancel'),
+            danger: true,
+          })
+        : true;  /* no dialog available (headless/legacy) → proceed */
+      if (!_confirmed) return;
+      /* Re-read again: the user may have deliberated for a while and the conv
+       *   could have been removed/replaced during the confirm await. */
+      conv = conversations.find((c) => c.id === id);
+      if (!conv) return;
+      _undoUnavailable = true;
     }
   }
 
@@ -366,7 +386,15 @@ async function deleteConversation(id, e) {
     else newChat();
   } else renderConversationList();
 
-  _showUndoDeleteToast(snapshot, origIndex, wasActive);
+  /* Only offer undo when we captured a restorable snapshot. When hydration
+   *   failed (shell conv on a flaky link, user consented to delete-without-undo
+   *   above), the snapshot is hollow — restoring it would re-create an EMPTY
+   *   server row, so surface a plain "deleted" toast instead of a false undo. */
+  if (_undoUnavailable) {
+    if (typeof showToast === "function") showToast(t('sidebar.convDeleted'), 'success');
+  } else {
+    _showUndoDeleteToast(snapshot, origIndex, wasActive);
+  }
 }
 
 /* ★ Restore a conversation deleted via deleteConversation. Re-inserts the
@@ -708,6 +736,10 @@ function _buildToolbarOverrides() {
     autopilot: autopilotEnabled,
     activeFlow: activeFlow || '',
     autoTranslate: !!autoTranslate,
+    // OUTPUT-side translate target: the UI language the reply is rendered into
+    // (model → human). The backend maps this code to a language name and
+    // translates the assistant reply to it instead of the old Chinese hard-pin.
+    uiLang: (typeof _i18nLang !== 'undefined' ? _i18nLang : 'zh'),
     autoApply: autoApplyWrites,
     browserClientId: window._browserClientId || null,
     keepToolHistory: config.keepToolHistory,
@@ -741,6 +773,7 @@ function _buildConvSnapshot(conv, isActive) {
     projectPaths: conv.projectPaths || [],
     readOnlyPaths: conv.readOnlyPaths || [],
     autoTranslate: conv.autoTranslate,
+    uiLang: conv.uiLang || (typeof _i18nLang !== 'undefined' ? _i18nLang : undefined),
     folderId: conv.folderId,
   };
 }
@@ -756,37 +789,19 @@ function _stripEnvelope(body) {
 
 async function _buildConvConfig(conv) {
   const isActive = (conv.id === activeConvId);
-  const url = (typeof apiUrl === 'function')
-    ? apiUrl('/api/v1/conversations/config/resolve')
-    : '/api/v1/conversations/config/resolve';
-  const r = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      conv_settings: _buildConvSnapshot(conv, isActive),
-      overrides: _buildToolbarOverrides(),
-      server_defaults: { serverModel },
-      is_active: isActive,
-    }),
-    credentials: 'same-origin',
+  const body = await Api.conversations.resolveConfig({
+    conv_settings: _buildConvSnapshot(conv, isActive),
+    overrides: _buildToolbarOverrides(),
+    server_defaults: { serverModel },
+    is_active: isActive,
   });
-  if (!r.ok) throw new Error(`config/resolve failed: HTTP ${r.status}`);
-  return _stripEnvelope(await r.json());
+  return _stripEnvelope(body);
 }
 
 async function _buildConvSettings(conv) {
-  const url = (typeof apiUrl === 'function')
-    ? apiUrl('/api/v1/conversations/settings/resolve')
-    : '/api/v1/conversations/settings/resolve';
-  const r = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      conv_settings: _buildConvSnapshot(conv, false),
-      overrides: _buildToolbarOverrides(),
-    }),
-    credentials: 'same-origin',
+  const body = await Api.conversations.resolveSettings({
+    conv_settings: _buildConvSnapshot(conv, false),
+    overrides: _buildToolbarOverrides(),
   });
-  if (!r.ok) throw new Error(`settings/resolve failed: HTTP ${r.status}`);
-  return _stripEnvelope(await r.json());
+  return _stripEnvelope(body);
 }

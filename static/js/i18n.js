@@ -241,6 +241,9 @@ var _i18n = {
   'sidebar.undoDelete': { zh: '撤销', en: 'Undo' },
   'sidebar.convRestored': { zh: '对话已恢复', en: 'Conversation restored' },
   'sidebar.deleteFailed': { zh: '无法删除：未能加载对话内容，请重新连接后重试', en: 'Couldn\u2019t delete \u2014 failed to load the conversation; reconnect and try again' },
+  'sidebar.deleteNoUndoTitle': { zh: '永久删除对话？', en: 'Delete conversation permanently?' },
+  'sidebar.deleteNoUndoBody': { zh: '未能加载该对话的完整内容（可能网络较慢），删除后将无法撤销恢复。确定要永久删除吗？', en: 'Couldn\u2019t load this conversation\u2019s full content (the connection may be slow), so deletion cannot be undone. Delete it permanently anyway?' },
+  'sidebar.deleteAnyway': { zh: '仍然删除', en: 'Delete anyway' },
 
   // ══════════════════════════════════════
   //  Toolbar & Input

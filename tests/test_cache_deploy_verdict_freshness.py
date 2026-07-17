@@ -236,6 +236,57 @@ def test_self_reported_gen_ignores_pre_boot_lines():
     assert fn(lines, boot) == 5
 
 
+# ── server.py's EXACT log format + boot payload (kept in sync deliberately) ──
+# server.py:977  _LOG_FMT   = '%(asctime)s [%(levelname)s] %(name)s [%(threadName)s]: %(message)s'
+# server.py:978  _LOG_DATEFMT = '%Y-%m-%d %H:%M:%S'
+# server.py      _boot(...) → logging.getLogger('server.boot').info('[boot +%.1fs] %s', elapsed, line)
+# server.py      the gen line payload: '[CacheFixGen] CACHE_FIX_GEN=%d (in-memory)' % _cfg
+_SERVER_LOG_FMT = '%(asctime)s [%(levelname)s] %(name)s [%(threadName)s]: %(message)s'
+_SERVER_LOG_DATEFMT = '%Y-%m-%d %H:%M:%S'
+
+
+def _emit_gen_line_like_server(path, gen):
+    """Emit the CACHE_FIX_GEN boot line into ``path`` through a real
+    logging.Logger configured with server.py's EXACT formatter + the exact
+    ``_boot`` payload — so the file bytes match what the live server writes to
+    logs/app.log. Returns the boot timestamp string that was written."""
+    import logging
+    lg = logging.getLogger('server.boot.closedloop_test')
+    lg.setLevel(logging.INFO)
+    lg.propagate = False
+    fh = logging.FileHandler(path, encoding='utf-8')
+    fh.setFormatter(logging.Formatter(_SERVER_LOG_FMT, datefmt=_SERVER_LOG_DATEFMT))
+    lg.handlers = [fh]
+    # EXACT server.py boot payload (server.py:_boot → '[boot +%.1fs] %s').
+    lg.info('[boot +%.1fs] %s', 10.3,
+            '[CacheFixGen] CACHE_FIX_GEN=%d (in-memory)' % gen)
+    fh.flush(); fh.close()
+
+
+def test_closed_loop_server_emit_is_read_by_verdict(tmp_path):
+    """THE closed loop: a gen line written by a real logging.Logger using
+    server.py's EXACT formatter + boot payload is discoverable by the SAME
+    _self_reported_gen the verdict uses, reading the SAME file. This proves the
+    'server prints it' and 'verdict reads it' ends share a file+format — not
+    just a hand-matched string. Without this, the gen-gate could stay
+    permanently WAIT after a correct restart (self-report the verdict can't
+    read)."""
+    fn = _parse_gen_helper()
+    logf = str(tmp_path / 'app.log')
+    _emit_gen_line_like_server(logf, 5)
+    # Read the file exactly as the harness does, then parse with the boot cursor.
+    with open(logf, 'r', encoding='utf-8') as f:
+        file_lines = f.readlines()
+    assert file_lines, 'no line was written'
+    boot_ts = h._ts_of(file_lines[0])
+    assert boot_ts is not None, ('the server-formatted line is not timestamp-'
+                                 'parseable by the harness _ts_of — format drift')
+    gen = fn(file_lines, boot_ts)
+    assert gen == 5, (f'closed loop broken: server-emitted line {file_lines[0]!r} '
+                      f'not read back as gen=5 (got {gen}) — the self-report and '
+                      'the verdict do not share a readable format')
+
+
 def test_disk_fresh_but_reported_gen_old_is_not_green():
     """THE hole: disk multi-fix says fresh, PID postdates floor, but the process
     SELF-REPORTS an OLD gen (loaded stale bytecode at boot) → NOT deployed."""
@@ -279,6 +330,35 @@ def test_newer_gen_than_baseline_is_ready():
     _wire(boot, '4242', 'fresh', reported_gen=h.CACHE_FIX_GEN_BASELINE + 3)
     r = h.analyze(p, 150)
     os.unlink(p)
+    assert r['verdict'] == 'READY', r
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  Point-3: analyze fingerprints the SAME pid whose lstart it checked
+# ═══════════════════════════════════════════════════════════════════════════
+
+def test_analyze_uses_single_pid_for_lstart_and_cwd():
+    """A supervisor double-fork (or a restart between two ss calls) could make
+    the lstart pid and the fingerprinted-cwd pid differ. analyze must resolve
+    the port-listener pid ONCE and derive BOTH lstart and served-code from it —
+    so the cwd it fingerprints provably belongs to the pid it timed."""
+    p, boot = _post_fix_log(prefix_changed=0)
+    seen = {'pids': []}
+    h._serving_pid = lambda port='15000': '7777'
+    h._lstart_of_pid = lambda pid: (seen['pids'].append(('lstart', pid)) or boot)
+
+    def _fake_served(pid):
+        seen['pids'].append(('served', pid))
+        return 'fresh', 'stub'
+    h._served_code_state = _fake_served
+    h._self_reported_gen = lambda lines, boot_ts: h.CACHE_FIX_GEN_BASELINE
+    r = h.analyze(p, 150)
+    os.unlink(p)
+    # Every pid consumed (for lstart AND for served-code) must be the ONE pid.
+    used = {pid for _, pid in seen['pids']}
+    assert used == {'7777'}, (f'analyze used more than one pid: {seen["pids"]} — '
+                              'lstart and cwd fingerprint must share ONE pid')
+    assert ('lstart', '7777') in seen['pids'] and ('served', '7777') in seen['pids']
     assert r['verdict'] == 'READY', r
 
 

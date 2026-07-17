@@ -309,7 +309,21 @@ def analyze(log_path: str, min_samples: int) -> dict:
     # Gate 1 (TRUE deploy signal): the process ACTUALLY serving must have
     # started after the fix commit. A log boot banner is NOT sufficient — it
     # can come from an ephemeral sibling/probe instance on another port.
-    boot_ts = _serving_pid_start()
+    #
+    # ★ SINGLE PID RESOLUTION (point-3 consistency): resolve the port-listener
+    #   PID ONCE and derive BOTH its lstart AND the cwd we fingerprint from that
+    #   SAME pid. Otherwise a double-resolve leaves a window where the lstart pid
+    #   and the fingerprinted-cwd pid differ (supervisor double-fork / a restart
+    #   between the two ss calls). ``ss`` reports the pid actually BOUND to the
+    #   socket — that IS the server process (not a wrapper), so its /proc/<pid>/
+    #   cwd is the served tree. When no port pid resolves (no ss/lsof), fall back
+    #   to the cmdline-scan lstart with NO cwd/gen pid (served/gen degrade to the
+    #   honest unknown path below).
+    _pid = _serving_pid()
+    if _pid:
+        boot_ts = _lstart_of_pid(_pid)
+    else:
+        boot_ts = _serving_pid_start()
     if boot_ts is None:
         # Fallback: no ps access — degrade to the latest banner but SAY SO.
         for i, ln in enumerate(lines):
@@ -335,9 +349,10 @@ def analyze(log_path: str, min_samples: int) -> dict:
     # serving (/proc/<pid>/cwd → lib/llm/cache.py lacks the carve-out). A stale
     # copy → WAIT (not deployed). Unprobeable → honest WAIT that says so — never
     # a false green.
-    _pid = _serving_pid()
+    # Reuse the SAME _pid resolved above (single source) — the cwd we fingerprint
+    # provably belongs to the pid whose lstart gated boot_after_floor.
     served, served_detail = _served_code_state(_pid) if _pid else (
-        'unknown', 'serving PID not resolvable')
+        'unknown', 'serving PID not resolvable (no ss/lsof port owner)')
     if served == 'stale':
         return {'verdict': 'WAIT',
                 'reason': f'serving PID started {boot_ts} (>fix floor) but the '

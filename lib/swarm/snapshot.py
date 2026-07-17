@@ -197,12 +197,13 @@ def persist_snapshot_to_conversation(conv_id: str, agent_ids,
         try:
             db = get_thread_db(DOMAIN_CHAT)
             row = db.execute(
-                'SELECT messages, updated_at FROM conversations WHERE id=? AND user_id=1',
+                'SELECT messages, updated_at, rev FROM conversations WHERE id=? AND user_id=1',
                 (conv_id,),
             ).fetchone()
             if not row or not row[0]:
                 return False
             cur_updated_at = row[1]
+            cur_rev = row[2]  # Phase 4 W5: CAS on rev (loop re-reads each attempt)
             try:
                 messages = json.loads(row[0] or '[]')
             except (json.JSONDecodeError, TypeError):
@@ -247,8 +248,8 @@ def persist_snapshot_to_conversation(conv_id: str, agent_ids,
             now_ms = int(_time.time() * 1000)
             cur = db.execute(
                 'UPDATE conversations SET messages=?, updated_at=? '
-                'WHERE id=? AND user_id=1 AND updated_at=?',
-                (messages_json, now_ms, conv_id, cur_updated_at),
+                'WHERE id=? AND user_id=1 AND rev=?',
+                (messages_json, now_ms, conv_id, cur_rev),
             )
             db.commit()
             if (getattr(cur, 'rowcount', 0) or 0) > 0:

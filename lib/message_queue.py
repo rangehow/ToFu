@@ -693,7 +693,7 @@ def _append_user_msg_with_cas(db, conv_id: str, user_msg: dict) -> bool:
     _MAX_CAS = 4
     for attempt in range(_MAX_CAS):
         row = db.execute(
-            'SELECT messages, updated_at FROM conversations WHERE id=? AND user_id=1',
+            'SELECT messages, updated_at, rev FROM conversations WHERE id=? AND user_id=1',
             (conv_id,)
         ).fetchone()
         if not row:
@@ -705,6 +705,7 @@ def _append_user_msg_with_cas(db, conv_id: str, user_msg: dict) -> bool:
             logger.warning('[Queue] Failed to parse messages for conv=%s: %s', conv_id[:8], e)
             messages = []
         cur_updated_at = row['updated_at']
+        cur_rev = row['rev']  # Phase 4 W3: CAS on rev (loop re-reads each attempt)
 
         # Idempotent append (dedupes if a prior attempt already wrote it).
         append_user_msg_idempotent(messages, user_msg)
@@ -712,8 +713,8 @@ def _append_user_msg_with_cas(db, conv_id: str, user_msg: dict) -> bool:
         now_ms = int(time.time() * 1000)
         cur = db.execute(
             'UPDATE conversations SET messages=?, updated_at=?, msg_count=? '
-            'WHERE id=? AND user_id=1 AND updated_at=?',
-            (json_dumps_pg(messages), now_ms, len(messages), conv_id, cur_updated_at)
+            'WHERE id=? AND user_id=1 AND rev=?',
+            (json_dumps_pg(messages), now_ms, len(messages), conv_id, cur_rev)
         )
         db.commit()
         if getattr(cur, 'rowcount', None) != 0:

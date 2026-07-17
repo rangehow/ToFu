@@ -300,11 +300,12 @@ def _reconcile_orphan_placeholder_on_settle(task):
     try:
         db = get_thread_db(DOMAIN_CHAT)
         row = db.execute(
-            'SELECT messages, updated_at, settings FROM conversations '
+            'SELECT messages, updated_at, settings, rev FROM conversations '
             'WHERE id=? AND user_id=1', (conv_id,)).fetchone()
         if not row:
             return
         _row_updated_at = row['updated_at']
+        _row_rev = row['rev']  # Phase 4 W-settle: CAS on rev (single-shot)
         try:
             messages = json.loads(row[0] or '[]')
         except (json.JSONDecodeError, TypeError):
@@ -343,16 +344,16 @@ def _reconcile_orphan_placeholder_on_settle(task):
             cur = db.execute(
                 '''UPDATE conversations
                    SET messages=?, msg_count=?, settings=?, search_text=?, updated_at=?
-                   WHERE id=? AND user_id=1 AND updated_at=?''',
+                   WHERE id=? AND user_id=1 AND rev=?''',
                 (messages_json, len(cleaned), settings_json, search_text, now_ms,
-                 conv_id, _row_updated_at))
+                 conv_id, _row_rev))
         else:
             cur = db.execute(
                 '''UPDATE conversations
                    SET messages=?, msg_count=?, search_text=?, updated_at=?
-                   WHERE id=? AND user_id=1 AND updated_at=?''',
+                   WHERE id=? AND user_id=1 AND rev=?''',
                 (messages_json, len(cleaned), search_text, now_ms,
-                 conv_id, _row_updated_at))
+                 conv_id, _row_rev))
         db.commit()
         if (getattr(cur, 'rowcount', 0) or 0) <= 0:
             logger.debug('[SettleReconcile] conv=%s CAS miss — concurrent write won (safe)',
@@ -1200,7 +1201,7 @@ def _sync_partial_to_conversation(task):
         try:
             db = get_thread_db(DOMAIN_CHAT)
             row = db.execute(
-                'SELECT messages, updated_at FROM conversations WHERE id=? AND user_id=1',
+                'SELECT messages, updated_at, rev FROM conversations WHERE id=? AND user_id=1',
                 (conv_id,)
             ).fetchone()
             if not row:
@@ -1216,6 +1217,7 @@ def _sync_partial_to_conversation(task):
                 return
 
             cur_updated_at = row[1]
+            cur_rev = row[2]  # Phase 4 W-partial: CAS on rev (loop re-reads each attempt)
 
             # ── ID-FIRST location (mirrors the terminal sync) ──
             # A queued next-turn user message may sit as a trailing pending row
@@ -1420,8 +1422,8 @@ def _sync_partial_to_conversation(task):
             # Indexing is owned SOLELY by the terminal sync.
             cur = db.execute(
                 'UPDATE conversations SET messages=?, updated_at=?, msg_count=? '
-                'WHERE id=? AND user_id=1 AND updated_at=?',
-                (messages_json, now_ms, len(messages), conv_id, cur_updated_at)
+                'WHERE id=? AND user_id=1 AND rev=?',
+                (messages_json, now_ms, len(messages), conv_id, cur_rev)
             )
             db.commit()
             rowcount = getattr(cur, 'rowcount', None)

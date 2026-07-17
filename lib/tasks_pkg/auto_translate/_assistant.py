@@ -136,14 +136,16 @@ def _maybe_auto_translate_assistant(conv_id, content, msg_idx, db=None, task=Non
                     # concurrent frontend writes)
                     try:
                         _ua_row = db.execute(
-                            'SELECT updated_at FROM conversations WHERE id=? AND user_id=1',
+                            'SELECT rev FROM conversations WHERE id=? AND user_id=1',
                             (conv_id,)
                         ).fetchone()
                         if _ua_row:
                             _now_ms = int(time.time() * 1000)
+                            # Phase 4 W4: CAS on rev (best-effort single-shot; a
+                            # miss just skips the stale-clear, as before).
                             db_execute_with_retry(
                                 db,
-                                'UPDATE conversations SET messages=?, updated_at=? WHERE id=? AND user_id=1 AND updated_at=?',
+                                'UPDATE conversations SET messages=?, updated_at=? WHERE id=? AND user_id=1 AND rev=?',
                                 (json_dumps_pg(messages), _now_ms, conv_id, _ua_row[0])
                             )
                     except Exception as ce:

@@ -263,7 +263,7 @@ def append_pending_user_msg(db, conv_id, user_msg, valid_assistant_ids=None):
     _MAX_CAS = 4
     for attempt in range(_MAX_CAS):
         row = db.execute(
-            'SELECT messages, updated_at FROM conversations WHERE id=? AND user_id=?',
+            'SELECT messages, updated_at, rev FROM conversations WHERE id=? AND user_id=?',
             (conv_id, DEFAULT_USER_ID)).fetchone()
         if not row:
             logger.warning('[Send] pending-user append: conv=%s not found', conv_id[:8])
@@ -275,6 +275,9 @@ def append_pending_user_msg(db, conv_id, user_msg, valid_assistant_ids=None):
                            conv_id[:8], e)
             return False, None
         cur_updated_at = row['updated_at']
+        cur_rev = row['rev']  # Phase 4 W2: CAS token is rev (trigger-bumped); the
+        # loop re-reads the row at the top of every attempt, so cur_rev is
+        # refreshed each retry. updated_at is still stamped in SET, not the token.
 
         _tail = messages[-1] if messages else None
         if not _tail or _tail.get('role') != 'assistant':
@@ -307,9 +310,9 @@ def append_pending_user_msg(db, conv_id, user_msg, valid_assistant_ids=None):
         now_ms = int(time.time() * 1000)
         cur = db.execute(
             'UPDATE conversations SET messages=?, updated_at=?, msg_count=? '
-            'WHERE id=? AND user_id=? AND updated_at=?',
+            'WHERE id=? AND user_id=? AND rev=?',
             (json_dumps_pg(messages), now_ms, len(messages), conv_id,
-             DEFAULT_USER_ID, cur_updated_at))
+             DEFAULT_USER_ID, cur_rev))
         db.commit()
         if getattr(cur, 'rowcount', None) != 0:
             try:

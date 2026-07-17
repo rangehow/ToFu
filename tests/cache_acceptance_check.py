@@ -45,9 +45,11 @@ import os
 import re
 import sys
 
-# Latest content-freeze commit timestamp (0a9f6af, 2026-07-17 19:42:09 +0800).
-# A boot must postdate this for the fixes to be live. Override via env.
-FIX_COMMIT_TS = os.environ.get('FIX_COMMIT_TS', '2026-07-17 19:42:09')
+# Latest cache-fix commit timestamp (8ecbbcf reasoning_content parity,
+# 2026-07-18 02:11:04 +0800). A boot must postdate the NEWEST fix for the whole
+# chain (ab161bf str↔block / 1274cee raw↔stripped / 0a9f6af prefill-skip /
+# 8ecbbcf reasoning_content parity) to be live. Override via env FIX_COMMIT_TS.
+FIX_COMMIT_TS = os.environ.get('FIX_COMMIT_TS', '2026-07-18 02:11:04')
 DEFAULT_LOG = os.environ.get('TOFU_APP_LOG', 'logs/app.log')
 MIN_SAMPLES = int(os.environ.get('CACHE_ACCEPT_MIN_SAMPLES', '150'))
 TOLERANCE = int(os.environ.get('CACHE_ACCEPT_TOLERANCE', '0'))
@@ -269,9 +271,22 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument('--log', default=DEFAULT_LOG)
     ap.add_argument('--min-samples', type=int, default=MIN_SAMPLES)
+    ap.add_argument('--verbose', action='store_true',
+                    help='Print the three deploy-gate facts (a/b/c) as '
+                         'self-explaining labeled lines, no interpretation.')
     args = ap.parse_args()
 
     r = analyze(args.log, args.min_samples)
+    if args.verbose:
+        # Self-explaining breakdown — no human interpretation needed.
+        deployed = bool(r['boot']) and r['boot'] > FIX_COMMIT_TS
+        print(f"(a) serving-PID boot   : {r['boot'] or '(unknown)'}  "
+              f"fix_floor={FIX_COMMIT_TS}  deployed={'YES' if deployed else 'NO'}")
+        print(f"(b) post-boot samples  : {r['samples']}  "
+              f"need>={MIN_SAMPLES}  enough={'YES' if r['samples'] >= MIN_SAMPLES else 'NO'}")
+        print(f"(c) already-cached miss: prefix_changed(inside=True)="
+              f"{r['prefix_changed']}  bytes_diverged(inside=True)="
+              f"{r['bytes_diverged']}  tolerance={TOLERANCE}")
     print(f"ACCEPTANCE: {r['verdict']} boot={r['boot']!r} "
           f"samples={r['samples']} prefix_changed={r['prefix_changed']} "
           f"bytes_diverged={r['bytes_diverged']} reason={r['reason']}")

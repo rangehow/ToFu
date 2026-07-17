@@ -1049,6 +1049,29 @@ def run_task(task: dict[str, Any]) -> None:
                 project_enabled=project_enabled,
             )
 
+            # ★ Per-round DB-connection checkpoint release.
+            #   run_task runs on a long-lived pooled worker thread whose
+            #   thread-local PG connection holds a _conn_semaphore slot from
+            #   its first DB op until close_thread_db() runs. That release
+            #   otherwise lives ONLY in the terminal finally, so if the LLM
+            #   call below spins (e.g. a total gateway-5xx outage rotating
+            #   slots), the stuck task pins a connection slot for the WHOLE
+            #   outage — and that semaphore is shared with the frontend's data
+            #   endpoints (/api/v1/conversations, /api/health SELECT 1), which
+            #   then can't acquire and hang ("backend alive, frontend dead").
+            #   The connection is provably DB-idle at this point: all per-round
+            #   writes above committed (db_execute_with_retry commit=True), and
+            #   the streaming-tool pool runs NO DB, so nothing spans the stream.
+            #   Releasing here caps connection-hold at one round; the next DB op
+            #   transparently re-acquires via get_thread_db. Best-effort — a
+            #   release failure must never break an otherwise-healthy task.
+            try:
+                from lib.agent_core.store import get_conversation_store
+                get_conversation_store().release_connection()
+            except Exception as _rel_err:
+                logger.debug('[Task:%s] per-round release_connection failed at '
+                             'round %d: %s', tid, round_num, _rel_err)
+
             # ★ LLM call with automatic fallback to Opus on failure
             try:
                 llm_result = _llm_call_with_fallback(

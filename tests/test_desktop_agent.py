@@ -233,3 +233,126 @@ def test_system_info_handler_hint_when_psutil_missing():
     with mock.patch.object(_gui, 'psutil', None):
         r = _gui.cmd_system_info({'type': 'overview'})
     assert 'psutil' in r['error']
+
+
+
+# ══════════════════════════════════════════════════════════
+#  5. INTEGRATION: screenshot↔click coordinate loop via real dispatch
+# ══════════════════════════════════════════════════════════
+
+class _FakePyAutoGUI:
+    """Minimal pyautogui stand-in driving the two halves through their OWN
+    independent scale derivations: screenshot() returns a real 1920x1080 PIL
+    image (so cmd_screenshot_desktop derives scale from image dims), and
+    size() reports the same physical screen (so cmd_gui_action derives scale
+    from pyautogui.size()). It records the coords click() actually receives."""
+
+    def __init__(self, screen_w=1920, screen_h=1080):
+        self._w, self._h = screen_w, screen_h
+        self.FAILSAFE = True
+        self.PAUSE = 0.0
+        self.clicks = []
+
+    def screenshot(self, region=None):
+        from PIL import Image
+        if region:
+            _, _, w, h = region
+            return Image.new('RGB', (w, h), (10, 20, 30))
+        return Image.new('RGB', (self._w, self._h), (10, 20, 30))
+
+    def size(self):
+        return (self._w, self._h)
+
+    def click(self, x=0, y=0, button='left', clicks=1):
+        self.clicks.append((x, y, button, clicks))
+
+
+def test_screenshot_click_coordinate_loop_end_to_end():
+    """The end-to-end grounding contract, exercised via dispatch_command (NOT
+    by calling _scaling directly): the screenshot half downscales a 1920x1080
+    screen and REPORTS a scale; the model picks the centre of that downscaled
+    image (512,288); the click half — deriving scale INDEPENDENTLY from
+    pyautogui.size() — must land on the true screen centre (960,540). Only a
+    test that runs both halves through their own scale derivation can catch a
+    divergence between them; the pure _scaling tests share one call and cannot."""
+    from lib.desktop_agent import _gui
+    from lib.desktop_agent._dispatch import dispatch_command
+
+    fake = _FakePyAutoGUI(1920, 1080)
+    perms = {'allow_write': False, 'allow_exec': False, 'allow_gui': True}
+
+    with mock.patch.object(_gui, 'pyautogui', fake):
+        # 1) Screenshot half — reports the scale + downscaled dims it produced.
+        shot = dispatch_command('desktop_screenshot', {}, perms)
+        assert 'error' not in shot, shot
+        assert (shot['real_width'], shot['real_height']) == (1920, 1080)
+        assert (shot['width'], shot['height']) == (1024, 576)  # XGA-fit
+        scale = shot['scale']
+
+        # 2) Model clicks the CENTRE of the image it was shown (1024x576).
+        model_x, model_y = shot['width'] // 2, shot['height'] // 2  # (512, 288)
+        # It may echo the scale it saw; the click half must still work whether
+        # or not it does — here we send the model-space coords with no override
+        # so cmd_gui_action re-derives the scale from pyautogui.size().
+        act = dispatch_command(
+            'desktop_gui_action',
+            {'action': 'click', 'x': model_x, 'y': model_y},
+            perms,
+        )
+        assert act.get('success') is True, act
+
+    # 3) The REAL pixel pyautogui was told to click must be the screen centre.
+    assert fake.clicks, 'click() was never called'
+    real_x, real_y, _, _ = fake.clicks[-1]
+    assert (real_x, real_y) == (960, 540), (
+        f'click landed at {(real_x, real_y)}, expected screen centre (960, 540) '
+        f'— screenshot reported scale={scale}'
+    )
+
+
+# ══════════════════════════════════════════════════════════
+#  6. INTEGRATION: run_agent stop_event terminates the poll loop
+# ══════════════════════════════════════════════════════════
+
+def test_run_agent_stop_event_terminates_loop():
+    """The tray "off" contract: setting stop_event must make run_agent's poll
+    loop exit within a bounded number of iterations, not hang. Goes RED if the
+    stop_event check is removed or moved after a blocking wait."""
+    import threading
+    from lib.desktop_agent import _run
+
+    stop_event = threading.Event()
+    calls = {'n': 0}
+
+    class _Resp:
+        status_code = 200
+        def json(self):
+            return {'commands': []}
+
+    def _fake_post(url, **kwargs):
+        calls['n'] += 1
+        # Signal stop after the first successful poll; the loop must then exit
+        # at its next top-of-loop check.
+        stop_event.set()
+        # Safety valve: if the loop ignores stop_event and keeps polling, abort
+        # loudly rather than spinning forever.
+        if calls['n'] > 50:
+            raise AssertionError('run_agent ignored stop_event (>50 polls)')
+        return _Resp()
+
+    with mock.patch.object(_run.requests, 'post', _fake_post), \
+         mock.patch.object(_run.time, 'sleep', lambda *_a, **_k: None):
+        t = threading.Thread(
+            target=_run.run_agent,
+            args=('http://127.0.0.1:15000', {'allow_write': False,
+                                             'allow_exec': False,
+                                             'allow_gui': False}),
+            kwargs={'poll_interval': 0.001, 'stop_event': stop_event},
+            daemon=True,
+        )
+        t.start()
+        t.join(timeout=3.0)
+
+    assert not t.is_alive(), 'run_agent did not terminate after stop_event was set'
+    assert calls['n'] >= 1, 'poll loop never ran'
+    assert calls['n'] <= 3, f'loop kept polling after stop_event ({calls["n"]} times)'

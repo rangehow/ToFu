@@ -475,6 +475,57 @@ function _handleCrossTabMsg(msg) {
     }
   }
 }
+/* ★ "回来即新" resume-revalidation (2026-07-17). The single seam every
+ *   RESUME moment (tab re-visible / browser online / push-socket RECONNECT)
+ *   routes through so a device that drifted while its `notify` WebSocket was
+ *   down catches up IMMEDIATELY instead of waiting for the slow fallback poll
+ *   (the "等半天才同步" symptom). Two catch-ups, in order:
+ *     1. `loadConversationsFromServer()` — the sidebar list (id-keyed merge;
+ *        its 304 / count-drop / allowTruncate + _serverRev guards make it
+ *        ADD/UPDATE-only, so a stale device can never truncate fresher state
+ *        and a deleted conv is NOT resurrected — same anti-resurrect sweep as
+ *        the poll path).
+ *     2. `_verifyActiveConvFromServer(activeConvId)` — the OPEN conversation's
+ *        body (non-destructive: keep-longer, advances _serverRev, re-renders
+ *        only on a real change). Skipped while the active conv is streaming or
+ *        being edited so it never fights a live turn.
+ *
+ *   IDEMPOTENT / NO-STORM: acquires the SAME window-scoped `_bootLoadInFlight`
+ *   lease the 60s reconcile + boot-reconnect share, so when all three resume
+ *   events fire within milliseconds of a tunnel recovering, only the FIRST
+ *   issues a load — the rest short-circuit. The lease self-heals (stale after
+ *   _BOOT_LOAD_LEASE_MS) so a wedged load can't disable resume-revalidation
+ *   forever. */
+function _revalidateOnResume(trigger) {
+  /* Never reconcile the list under an in-progress edit (would rebuild the
+   *   sidebar / churn state mid-edit). A live stream is fine for the list load
+   *   itself (the merge guards streaming convs), but the active-conv body
+   *   verify below is gated on settled state. */
+  if (_editingMsgIdx !== null) return false;
+  if (!_acquireBootLoad()) {
+    debugLog(`[resume-revalidate] ${trigger}: a list load is already in flight — skipping (idempotent)`, 'info');
+    return false;
+  }
+  debugLog(`[resume-revalidate] ${trigger}: immediate list + active-conv catch-up`, 'info');
+  Promise.resolve(loadConversationsFromServer())
+    .catch((e) => debugLog(`[resume-revalidate] ${trigger} list load: ${e && e.message}`, 'warn'))
+    .finally(() => {
+      _releaseBootLoad();
+      /* Active-conv body catch-up — only when settled (not streaming, not
+       *   editing). Non-destructive + idempotent, so even if the list load
+       *   above already re-pulled this conv (via _contentGrewNeedsVerify) the
+       *   redundant verify is a cheap no-op. */
+      const cid = activeConvId;
+      if (cid && !activeStreams.has(cid) && _editingMsgIdx === null
+          && typeof _verifyActiveConvFromServer === 'function') {
+        _verifyActiveConvFromServer(cid).catch((e) =>
+          debugLog(`[resume-revalidate] ${trigger} active verify: ${e && e.message}`, 'warn'));
+      }
+    });
+  return true;
+}
+if (typeof window !== "undefined") window._revalidateOnResume = _revalidateOnResume;
+
 /* ★ No longer listening to localStorage 'storage' events for conversations.
  *   Cross-tab sync now uses BroadcastChannel → server refresh only. */
 document.addEventListener("visibilitychange", () => {
@@ -497,7 +548,10 @@ document.addEventListener("visibilitychange", () => {
         scrollToBottom();
       }
     } else if (activeStreams.size === 0 && _editingMsgIdx === null) {
-      loadConversationsFromServer();
+      /* ★ Route through the shared resume-revalidation seam: list catch-up +
+       *   active-conv body verify, guarded by the in-flight lease so it can't
+       *   storm with the online / push-reconnect resume events. */
+      _revalidateOnResume('visibilitychange');
     }
     /* ★ Network recovery: when the tab becomes visible (e.g. after VSCode
      *   reconnects and user switches to the browser), recover any conversations
@@ -517,6 +571,9 @@ document.addEventListener("visibilitychange", () => {
 window.addEventListener('online', () => {
   console.info('[NetworkRecovery] 🌐 Browser "online" event fired — checking for offline conversations to recover');
   _recoverOfflineConversations('online_event');
+  /* ★ "回来即新": connectivity restored → immediate list + active-conv
+   *   catch-up (shared lease makes it a no-op if a load is already running). */
+  _revalidateOnResume('online_event');
   /* ★ Also re-attempt any message whose send failed on a poor network and
    *   whose rescue PUT never landed (durable _pendingSync markers). */
   if (typeof _flushPendingSyncs === 'function') _flushPendingSyncs('online_event');
@@ -957,6 +1014,15 @@ function _wireConvSyncPush() {
     else if (frame && frame.type === "folders_changed")
       _onFoldersChangedPush(frame);
   });
+  /* ★ Third "回来即新" resume trigger: when the push socket RECONNECTS after a
+   *   drop, we may have missed `notify` frames while it was down — reconcile
+   *   the list + active conv immediately (shared in-flight lease dedupes it
+   *   against a concurrent visibilitychange / online resume). */
+  if (typeof pushOnReconnect === "function") {
+    pushOnReconnect(() => {
+      if (typeof _revalidateOnResume === "function") _revalidateOnResume('push_reconnect');
+    });
+  }
   debugLog("[conv-notify] ✓ cross-device sync push subscription wired", "info");
 }
 if (typeof window !== "undefined") window._wireConvSyncPush = _wireConvSyncPush;

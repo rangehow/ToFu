@@ -28,6 +28,8 @@ const _push = (() => {
   let _connected = false;
   let _connectedAt = 0;            // set on onopen, cleared on onclose; gate for attempt-counter reset
   let _reconnectAttempt = 0;
+  let _everConnected = false;      // true once the FIRST onopen fired — distinguishes a genuine RECONNECT from the initial connect
+  let _reconnectListeners = new Set();  // fn() called after a genuine reconnect (not the first connect)
   let _pendingSubscriptions = [];  // queued before connection established
   // Connection must hold this long before we trust it as "healthy" and
   // reset the reconnect attempt counter. See onclose.
@@ -184,6 +186,19 @@ const _push = (() => {
       }
 
       _startPinging();
+
+      /* ★ Reconnect catch-up: fire reconnect listeners ONLY on a genuine
+       *   re-open (a prior connection existed), never on the first connect —
+       *   boot already loads the list, so firing here would double-load. While
+       *   the socket was DOWN we may have MISSED `notify` frames (a sibling
+       *   device's change), so a reconnect must trigger an immediate
+       *   reconciliation — this is the third "回来即新" resume trigger. */
+      if (_everConnected) {
+        for (const fn of _reconnectListeners) {
+          try { fn(); } catch (e) { console.error('[Push] reconnect listener error:', e); }
+        }
+      }
+      _everConnected = true;
     };
 
     _ws.onmessage = (event) => {
@@ -315,7 +330,16 @@ const _push = (() => {
     return () => _latencyListeners.delete(fn);
   }
 
-  return { connect, subscribe, unsubscribe, send, isConnected, getLatency, onLatency };
+  /* Register a callback fired AFTER a genuine socket RECONNECT (not the first
+   *   connect). Used by cross-device sync to reconcile missed `notify` frames
+   *   the instant the push channel recovers. Returns an unsubscribe fn. */
+  function onReconnect(fn) {
+    if (typeof fn !== 'function') return () => {};
+    _reconnectListeners.add(fn);
+    return () => _reconnectListeners.delete(fn);
+  }
+
+  return { connect, subscribe, unsubscribe, send, isConnected, getLatency, onLatency, onReconnect };
 })();
 
 // Public API
@@ -326,3 +350,4 @@ function pushConnect() { _push.connect(); }
 function pushIsConnected() { return _push.isConnected(); }
 function pushGetLatency() { return _push.getLatency(); }
 function pushOnLatency(fn) { return _push.onLatency(fn); }
+function pushOnReconnect(fn) { return _push.onReconnect(fn); }

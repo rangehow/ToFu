@@ -777,6 +777,12 @@
                     <span class="submenu-item-text"><span class="submenu-item-name" data-i18n="toolbar.autoTranslate">自动翻译</span><span class="submenu-item-desc" data-i18n="toolbar.autoTranslateDesc">中英互译 · ⌘⇧K 跳过选中</span></span>
                     <span class="submenu-item-check">✓</span>
                   </div>
+                  <div class="submenu-item" id="swarmToggle" onclick="toggleSwarm();updateSubmenuCounts()" title="Agent Swarm">
+                    <span class="submenu-item-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="7" r="3"/><circle cx="5" cy="17" r="3"/><circle cx="19" cy="17" r="3"/><line x1="12" y1="10" x2="5" y2="14"/><line x1="12" y1="10" x2="19" y2="14"/></svg></span>
+                    <span class="submenu-item-text"><span class="submenu-item-name" data-i18n="toolbar.swarmAgents">蜂群代理</span><span class="submenu-item-desc" data-i18n="toolbar.swarmAgentsDesc">并行子代理分解任务</span></span>
+                    <span class="submenu-item-check">✓</span>
+                    <span class="tool-badge" id="swarmBadge" style="display:none"></span>
+                  </div>
                   <!-- Hidden badges for JS compatibility -->
                   <span class="tool-badge" id="translateBadge" style="display:none">译</span>
                 </div>
@@ -836,12 +842,6 @@
                   <span class="submenu-arrow"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></span>
                 </button>
                 <div class="submenu-dropdown">
-                  <div class="submenu-item" id="swarmToggle" onclick="toggleSwarm();updateSubmenuCounts()" title="Agent Swarm">
-                    <span class="submenu-item-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="7" r="3"/><circle cx="5" cy="17" r="3"/><circle cx="19" cy="17" r="3"/><line x1="12" y1="10" x2="5" y2="14"/><line x1="12" y1="10" x2="19" y2="14"/></svg></span>
-                    <span class="submenu-item-text"><span class="submenu-item-name" data-i18n="toolbar.swarmAgents">蜂群代理</span><span class="submenu-item-desc" data-i18n="toolbar.swarmAgentsDesc">并行子代理分解任务</span></span>
-                    <span class="submenu-item-check">✓</span>
-                    <span class="tool-badge" id="swarmBadge" style="display:none"></span>
-                  </div>
                   <div class="submenu-item" id="endpointToggle" onclick="toggleEndpoint();updateSubmenuCounts()" title="Endpoint Mode">
                     <span class="submenu-item-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v4"/><path d="M12 18v4"/><path d="M4.93 4.93l2.83 2.83"/><path d="M16.24 16.24l2.83 2.83"/><path d="M2 12h4"/><path d="M18 12h4"/><path d="M4.93 19.07l2.83-2.83"/><path d="M16.24 7.76l2.83-2.83"/><circle cx="12" cy="12" r="4"/></svg></span>
                     <span class="submenu-item-text"><span class="submenu-item-name" data-i18n="toolbar.autonomousMode">自主模式</span><span class="submenu-item-desc" data-i18n="toolbar.autonomousModeDesc">自主执行+自我审查循环</span></span>
@@ -854,19 +854,23 @@
                     <span class="submenu-item-check">✓</span>
                     <span class="tool-badge" id="autopilotBadge" style="display:none"></span>
                   </div>
-                  <!-- ★ Orchestration Flow selector — runs the whole conversation on
-                       a Studio-authored flow (or a built-in). Mutually exclusive with
-                       the toggles above (the flow IS the execution mode). -->
-                  <div class="submenu-flow-row" id="flowMenuWrapper">
-                    <div class="submenu-item" id="flowToggle" onclick="toggleFlowMenu(event)" title="Orchestration Flow">
-                      <span class="submenu-item-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><path d="M10 6.5h4a2 2 0 0 1 2 2V14"/></svg></span>
-                      <span class="submenu-item-text"><span class="submenu-item-name" data-i18n="toolbar.flow">编排流程</span><span class="submenu-item-desc" id="flowActiveLabel" data-i18n="toolbar.flowNone">不使用</span></span>
-                      <span class="submenu-arrow"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></span>
-                      <span class="tool-badge" id="flowBadge" style="display:none"></span>
-                    </div>
-                    <div class="flow-menu" id="flowMenu">
-                      <div class="flow-menu-list" id="flowMenuList"></div>
-                    </div>
+                </div>
+              </div>
+              <!-- ★ Orchestration Flow — its own box.  Runs the whole
+                   conversation on a Studio-authored flow (or a built-in);
+                   mutually exclusive with the Mode toggles (the flow IS the
+                   execution mode).  Uses toggleFlowMenu() (its own popup),
+                   NOT toggleSubmenu(). -->
+              <div class="toolbar-submenu" id="submenuFlow">
+                <div class="submenu-flow-row" id="flowMenuWrapper">
+                  <button class="submenu-trigger" id="flowToggle" onclick="toggleFlowMenu(event)" title="Orchestration Flow">
+                    <span class="submenu-label" data-i18n="toolbar.flow">编排流程</span>
+                    <span class="flow-active-pill" id="flowActiveLabel"></span>
+                    <span class="submenu-arrow"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></span>
+                    <span class="tool-badge" id="flowBadge" style="display:none"></span>
+                  </button>
+                  <div class="flow-menu" id="flowMenu">
+                    <div class="flow-menu-list" id="flowMenuList"></div>
                   </div>
                 </div>
               </div>
@@ -2516,6 +2520,14 @@
       </span>
       <span class="mobile-sheet-item-check">✓</span>
     </div>
+    <div class="mobile-sheet-item" id="mobileSwarm" onclick="toggleSwarm();updateMobileSheet()">
+      <span class="mobile-sheet-item-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="7" r="3"/><circle cx="5" cy="17" r="3"/><circle cx="19" cy="17" r="3"/><line x1="12" y1="10" x2="5" y2="14"/><line x1="12" y1="10" x2="19" y2="14"/></svg></span>
+      <span class="mobile-sheet-item-text">
+        <span class="mobile-sheet-item-name" data-i18n="toolbar.swarmAgents">蜂群代理</span>
+        <span class="mobile-sheet-item-desc" data-i18n="mobile.parallelAgents">并行子代理</span>
+      </span>
+      <span class="mobile-sheet-item-check">✓</span>
+    </div>
   </div>
   <!-- Tools section -->
   <div class="mobile-sheet-section">
@@ -2570,14 +2582,6 @@
   <!-- Mode section -->
   <div class="mobile-sheet-section">
     <div class="mobile-sheet-section-title" data-i18n="mobile.modes">模式</div>
-    <div class="mobile-sheet-item" id="mobileSwarm" onclick="toggleSwarm();updateMobileSheet()">
-      <span class="mobile-sheet-item-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="7" r="3"/><circle cx="5" cy="17" r="3"/><circle cx="19" cy="17" r="3"/><line x1="12" y1="10" x2="5" y2="14"/><line x1="12" y1="10" x2="19" y2="14"/></svg></span>
-      <span class="mobile-sheet-item-text">
-        <span class="mobile-sheet-item-name" data-i18n="toolbar.swarmAgents">蜂群代理</span>
-        <span class="mobile-sheet-item-desc" data-i18n="mobile.parallelAgents">并行子代理</span>
-      </span>
-      <span class="mobile-sheet-item-check">✓</span>
-    </div>
     <div class="mobile-sheet-item" id="mobileEndpoint" onclick="toggleEndpoint();updateMobileSheet()">
       <span class="mobile-sheet-item-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v4"/><path d="M12 18v4"/><path d="M4.93 4.93l2.83 2.83"/><path d="M16.24 16.24l2.83 2.83"/></svg></span>
       <span class="mobile-sheet-item-text">
@@ -2594,14 +2598,6 @@
       </span>
       <span class="mobile-sheet-item-check">✓</span>
     </div>
-    <div class="mobile-sheet-item" id="mobileFlow" onclick="openMobileFlowPicker()">
-      <span class="mobile-sheet-item-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><path d="M10 6.5h4a2 2 0 0 1 2 2V14"/></svg></span>
-      <span class="mobile-sheet-item-text">
-        <span class="mobile-sheet-item-name" data-i18n="toolbar.flow">编排流程</span>
-        <span class="mobile-sheet-item-desc" id="mobileFlowLabel" data-i18n="mobile.flowDesc">选择编排流程</span>
-      </span>
-      <span class="mobile-sheet-item-check">✓</span>
-    </div>
     <div class="mobile-sheet-item" id="mobilePaperMode" onclick="closeMobileSheet();togglePaperMode()">
       <span class="mobile-sheet-item-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg></span>
       <span class="mobile-sheet-item-text">
@@ -2609,6 +2605,19 @@
         <span class="mobile-sheet-item-desc" data-i18n="mobile.paperReaderDesc">PDF阅读 + 问答 + 报告</span>
       </span>
       <span class="mobile-sheet-item-check" style="opacity:0">✓</span>
+    </div>
+  </div>
+  <!-- Orchestration Flow — its own section, mirroring the standalone
+       #submenuFlow box on desktop (distinct from the Mode toggles). -->
+  <div class="mobile-sheet-section">
+    <div class="mobile-sheet-section-title" data-i18n="toolbar.flow">编排流程</div>
+    <div class="mobile-sheet-item" id="mobileFlow" onclick="openMobileFlowPicker()">
+      <span class="mobile-sheet-item-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><path d="M10 6.5h4a2 2 0 0 1 2 2V14"/></svg></span>
+      <span class="mobile-sheet-item-text">
+        <span class="mobile-sheet-item-name" data-i18n="toolbar.flow">编排流程</span>
+        <span class="mobile-sheet-item-desc" id="mobileFlowLabel" data-i18n="mobile.flowDesc">选择编排流程</span>
+      </span>
+      <span class="mobile-sheet-item-check">✓</span>
     </div>
   </div>
   <!-- Monitoring section: panels that live in hidden topbar badges on mobile,

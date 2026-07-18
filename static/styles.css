@@ -786,12 +786,14 @@ textarea::placeholder{color:var(--text-tertiary)}
 .submenu-item-check{font-size:14px;font-weight:700;color:var(--accent);opacity:0;transition:opacity .15s ease;flex-shrink:0;width:18px;text-align:center}
 .submenu-item.active .submenu-item-check{opacity:1}
 
-/* ── Orchestration Flow selector (nested inside the Mode dropdown) ── */
-.submenu-flow-row{position:relative;border-top:1px solid var(--border);margin-top:4px;padding-top:4px}
+/* ── Orchestration Flow selector (its own standalone toolbar box) ── */
+.submenu-flow-row{position:relative}
 .submenu-item .submenu-arrow{margin-left:auto;display:flex;align-items:center;color:var(--text-tertiary);transition:transform .15s ease}
-.submenu-flow-row .flow-menu.open ~ #flowToggle .submenu-arrow,
-#flowMenuWrapper .flow-menu.open + #flowToggle .submenu-arrow{transform:rotate(180deg)}
-.flow-menu{position:absolute;bottom:calc(100% + 6px);left:0;right:0;background:var(--bg-secondary);border:1px solid var(--border);border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,0.3),0 2px 8px rgba(0,0,0,0.15);padding:4px;z-index:110;opacity:0;visibility:hidden;transform:translateY(6px);transition:opacity .15s ease,transform .15s ease,visibility .15s;max-height:300px;overflow-y:auto}
+#flowMenuWrapper:has(.flow-menu.open) #flowToggle .submenu-arrow{transform:rotate(180deg)}
+/* Active-flow name pill shown next to the "编排流程" label on the trigger */
+.flow-active-pill{font-size:10px;font-weight:700;font-family:'JetBrains Mono',monospace;line-height:1;padding:2px 6px;border-radius:7px;background:var(--accent);color:#fff;max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:none}
+.flow-active-pill.visible{display:inline-flex;align-items:center}
+.flow-menu{position:absolute;bottom:calc(100% + 6px);left:0;min-width:240px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,0.3),0 2px 8px rgba(0,0,0,0.15);padding:4px;z-index:110;opacity:0;visibility:hidden;transform:translateY(6px);transition:opacity .15s ease,transform .15s ease,visibility .15s;max-height:300px;overflow-y:auto}
 .flow-menu.open{opacity:1;visibility:visible;transform:translateY(0)}
 .flow-menu-item{display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:8px;cursor:pointer;transition:background .12s ease;user-select:none}
 .flow-menu-item:hover{background:var(--bg-hover)}

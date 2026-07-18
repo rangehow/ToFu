@@ -358,8 +358,8 @@ function updateSubmenuCounts() {
     el.classList.toggle("visible", want);
   };
 
-  // AI enhance: codeExec, memory, translate
-  const aiCount = (codeExecEnabled ? 1 : 0) + (memoryEnabled ? 1 : 0) + (autoTranslate ? 1 : 0);
+  // AI enhance: codeExec, memory, translate, swarm
+  const aiCount = (codeExecEnabled ? 1 : 0) + (memoryEnabled ? 1 : 0) + (autoTranslate ? 1 : 0) + (swarmEnabled ? 1 : 0);
   _setCount(document.getElementById("submenuAICount"), aiCount);
   const aiTrigger = document.querySelector("#submenuAI .submenu-trigger");
   if (aiTrigger) aiTrigger.classList.toggle("has-active", aiCount > 0);
@@ -370,11 +370,15 @@ function updateSubmenuCounts() {
   const toolTrigger = document.querySelector("#submenuTools .submenu-trigger");
   if (toolTrigger) toolTrigger.classList.toggle("has-active", toolCount > 0);
 
-  // Mode: swarm, endpoint, autopilot, flow
-  const modeCount = (swarmEnabled ? 1 : 0) + (endpointEnabled ? 1 : 0) + (autopilotEnabled ? 1 : 0) + (activeFlow ? 1 : 0);
+  // Mode: endpoint, autopilot (swarm moved to Enhance, flow is its own box)
+  const modeCount = (endpointEnabled ? 1 : 0) + (autopilotEnabled ? 1 : 0);
   _setCount(document.getElementById("submenuModeCount"), modeCount);
   const modeTrigger = document.querySelector("#submenuMode .submenu-trigger");
   if (modeTrigger) modeTrigger.classList.toggle("has-active", modeCount > 0);
+
+  // Flow: standalone box — no count pill, just reflect active-state on the trigger.
+  const flowTrigger = document.getElementById("flowToggle");
+  if (flowTrigger) flowTrigger.classList.toggle("has-active", !!activeFlow);
 
   /* A pill appeared/disappeared → toolbar's intrinsic width shifted by the
    * pill's box.  Re-measure so .ps-label gets its space back. */
@@ -750,7 +754,15 @@ function _applyFlowUI(flowVal) {
   const badge = document.getElementById("flowBadge");
   if (badge) badge.style.display = activeFlow ? "" : "none";
   const label = document.getElementById("flowActiveLabel");
-  if (label) label.textContent = _flowDisplayName(activeFlow);
+  if (label) {
+    if (activeFlow) {
+      label.textContent = _flowDisplayName(activeFlow);
+      label.classList.add("visible");
+    } else {
+      label.textContent = "";
+      label.classList.remove("visible");
+    }
+  }
   // Reflect the radio-style selection in the dropdown list.
   document.querySelectorAll('#flowMenuList .flow-menu-item').forEach(el => {
     el.classList.toggle('selected', (el.dataset.flow || '') === activeFlow);

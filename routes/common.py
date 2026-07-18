@@ -611,6 +611,22 @@ def health_check():
     from lib.version import __version__
     result = {'ok': True, 'ts': int(time.time() * 1000), 'db_ok': db_available, 'version': __version__}
 
+    # ── Per-process boot identity (robust restart verification) ──
+    # The restart button re-execs in place (os.execv keeps the same PID +
+    # start-time), so "health answered ok" cannot prove a NEW process replied.
+    # bootId is a fresh uuid minted at module import — a re-exec re-imports and
+    # gets a new one, while a lingering old process keeps its old one. The
+    # restart client captures the pre-restart bootId and only succeeds when this
+    # differs. cacheFixGen surfaces the loaded (in-memory) cache-fix version so
+    # a stale-code restart is visible, not silently green. Best-effort.
+    try:
+        from lib import boot_identity as _bi
+        result['pid'] = _bi.PID
+        result['bootId'] = _bi.BOOT_ID
+        result['cacheFixGen'] = _bi.cache_fix_gen()
+    except Exception as _bi_e:
+        logger.debug('[Health] boot identity unavailable: %s', _bi_e)
+
     # Native mobile-client download URL, surfaced in the Settings footer.
     # Defaults to a DIRECT APK deep link (see DEFAULT_MOBILE_CLIENT_URL) so a
     # phone tap downloads the app rather than landing on a wrong-platform

@@ -477,6 +477,12 @@ var _restartT0 = 0;
 var _restartRaf = null;
 var _restartPoll = null;
 var _restartDone = false;
+// The server's bootId captured BEFORE we trigger the restart. The re-exec
+// mints a fresh bootId (os.execv keeps the PID + start-time, so bootId is the
+// only reliable 'a NEW process answered' signal). _restartCheckHealth only
+// declares success when health returns a DIFFERENT bootId — so the OLD process
+// still answering during the drain window is never mistaken for a done restart.
+var _restartPreBootId = null;
 // True from the moment a restart is kicked off until it succeeds or times
 // out. Single source of truth that the dialog-render paths consult so they
 // never clobber the live restart progress card (e.g. re-opening the dialog
@@ -597,6 +603,17 @@ async function restartServer(opts) {
     || document.getElementById('updateRestartNowBtn');
   if (btn) { btn.disabled = true; btn.textContent = t('update.restarting'); }
 
+  // Capture the CURRENT process's bootId first, so we can require the
+  // post-restart health to report a DIFFERENT one (proof a new process
+  // answered). Best-effort: if this probe fails we fall back to null, and the
+  // success rule then accepts any bootId-bearing health (still better than the
+  // old 'any ok' rule) — see _restartCheckHealth.
+  _restartPreBootId = null;
+  try {
+    const pre = await Api.health.info();
+    if (pre && pre.bootId) _restartPreBootId = pre.bootId;
+  } catch (e) { _restartPreBootId = null; }
+
   _renderRestartProgress();
   try {
     // force:true — a human clicking Restart is a deliberate action (the
@@ -640,15 +657,32 @@ async function shutdownServer() {
   showToast('◐', t('update.shuttingDown'), t('update.shutdownHint'), 8000);
 }
 
-/** One health probe; on success finish, on overall timeout bail. */
+/** One health probe; on success finish, on overall timeout bail.
+ *  Success requires a genuinely NEW process answered — health.ok AND a bootId
+ *  that DIFFERS from the one captured before the restart. os.execv keeps the
+ *  PID + start-time, so bootId is the only reliable 'different process' signal;
+ *  keying on it stops the old process (still draining) from being mistaken for
+ *  a completed restart. If we could not capture a pre-restart bootId, or the
+ *  server is an old build that doesn't report bootId, we degrade gracefully:
+ *  accept the first ok health that carries ANY bootId, else (no bootId field at
+ *  all) accept ok — never worse than the old rule, and still bounded by the
+ *  overall timeout. */
 async function _restartCheckHealth() {
   if (_restartDone) return;
   if ((Date.now() - _restartT0) / 1000 > 80) { _restartTimeout(); return; }
   let info = null;
   try {
-    info = await Api.health.info();  // parsed JSON → carries version
+    info = await Api.health.info();  // parsed JSON → carries version + bootId
   } catch (e) { info = null; }
-  if (info && info.ok) _restartSucceed(info.version || '');
+  if (!info || !info.ok) return;
+  // Preferred, robust path: we know the old bootId AND the server reports one.
+  if (_restartPreBootId && info.bootId) {
+    if (info.bootId === _restartPreBootId) return;  // still the OLD process — keep waiting
+    _restartSucceed(info.version || '');
+    return;
+  }
+  // Degraded path (no pre-id captured, or old build without bootId): accept ok.
+  _restartSucceed(info.version || '');
 }
 
 function closeUpdateModal() {

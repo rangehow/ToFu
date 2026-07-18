@@ -168,7 +168,8 @@ function _cacheBreakReason(cb) {
   const bits = [];
   for (const k of Object.keys(cb)) {
     const val = cb[k];
-    if (k === 'server_side' || k === 'no_cache_reuse' || k === 'prefix_mutation') {
+    if (k === 'server_side' || k === 'no_cache_reuse' || k === 'prefix_mutation'
+        || k === 'turn_boundary_rebill') {
       // Render the backend's own cause string verbatim (translated). No
       // fixed label that could contradict it.
       if (val) bits.push(escapeHtml(_translateCacheCause(val)));
@@ -214,6 +215,15 @@ function _cacheBreakState(cb) {
   if ('prefix_mutation' in cb) return 'culprit';
   if (keys.some(k => k === 'system_prompt' || k === 'tools'
                   || k === 'model' || k === 'message_count')) return 'culprit';
+  // ★ Round-1 (new-turn) boundary re-bill (backend detect_cache_break, 2026-07):
+  //   the FIRST round of a new user turn read back far less than the previous
+  //   turn's warm cached prefix — the prefix was not reused across the turn
+  //   boundary and got re-billed. That round is invisible to the detector's
+  //   other predicates (they gate on call_count>0), so it used to show NO badge
+  //   and look benign — the user-facing half of "too optimistic". Its own state
+  //   so the popover surfaces it as a real, client-visible miss (likely a
+  //   tail-TTL window boundary; see the tail-TTL ticket). Keyed on the dict key.
+  if ('turn_boundary_rebill' in cb) return 'boundary';
   // Otherwise inspect the server_side / no_cache_reuse cause text.
   const txt = String(cb.server_side || cb.no_cache_reuse || '');
   // LEGACY persisted rows: the old 'upstream cache eviction' verdict + the

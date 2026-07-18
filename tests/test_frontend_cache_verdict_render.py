@@ -129,6 +129,12 @@ check('state_culprit_prefix_mutation',
 check('state_culprit_client_change',
   _cacheBreakState({ system_prompt: 'changed' }) === 'culprit');
 check('state_empty', _cacheBreakState({}) === '');
+// ROUND-1 boundary re-bill (2026-07): a new-turn round-1 miss the detector now
+// counts. It MUST get its OWN 'boundary' state — NOT '' (which would render no
+// badge and look benign, the user-facing half of "too optimistic"), and NOT
+// laundered to upstream/unproven.
+check('state_turn_boundary_rebill',
+  _cacheBreakState({ turn_boundary_rebill: 'new-turn round-1 boundary re-bill: the previous turn left a warm ~262000-token cached prefix, but this turn read back only 79000 (collapsed toward the static floor) — the cached prefix was not reused across the turn boundary and was re-billed uncached.' }) === 'boundary');
 
 // ── 3. Culprit extraction (WHICH message broke cache) ──
 const _cb = { prefix_mutation: 'cached prefix bytes changed between turns (non-idempotent history edit) — the whole body was re-billed uncached [changed: user:ab12.content, tool_result(c1).tool_result]' };
@@ -164,7 +170,7 @@ def test_cache_verdict_translates_and_culprit_renders():
     output = _run()
     fails = [ln for ln in output.splitlines() if ln.startswith('FAIL')]
     assert not fails, 'cache-verdict render failures:\n' + output
-    assert output.count('PASS') >= 12, f'expected >=12 PASS, got:\n{output}'
+    assert output.count('PASS') >= 13, f'expected >=13 PASS, got:\n{output}'
     print(output)
 
 
@@ -207,6 +213,7 @@ global.t = (k, o) => {
   if (k === 'finishInfo.cbState.upstream') return 'UPSTREAM-BADGE';
   if (k === 'finishInfo.cbState.proven') return 'PROVEN-BADGE';
   if (k === 'finishInfo.cbState.unproven') return 'UNPROVEN-BADGE';
+  if (k === 'finishInfo.cbState.boundary') return 'BOUNDARY-BADGE';
   if (k && k.indexOf('{') === -1 && o && Object.keys(o).length) {
     let s = k; for (const kk in o) s = s.replace('{'+kk+'}', o[kk]); return s;
   }
@@ -262,6 +269,16 @@ check('byteident_no_culprit_line', html2.indexOf('cp-break-culprit') === -1);
 check('byteident_state_class', html2.indexOf('cp-break-upstream') !== -1);
 check('byteident_not_unproven_class', html2.indexOf('cp-break-unproven') === -1);
 
+// A round-1 turn-boundary re-bill renders its OWN badge + own class, and the
+// verbatim cause text — NOT a bare no-badge line (the too-optimistic look) and
+// NOT the reassuring teal 'upstream cleared' badge.
+const html3 = _buildCostPopover(_ctx({ turn_boundary_rebill:
+  'new-turn round-1 boundary re-bill: the previous turn left a warm ~262000-token cached prefix, but this turn read back only 79000 (collapsed toward the static floor) — the cached prefix was not reused across the turn boundary and was re-billed uncached. Counted here so round-1 is no longer a stats blind spot (likely a TTL-window boundary miss; see the tail-TTL ticket).' }));
+check('boundary_has_badge', html3.indexOf('BOUNDARY-BADGE') !== -1);
+check('boundary_state_class', html3.indexOf('cp-break-boundary') !== -1);
+check('boundary_not_upstream_badge', html3.indexOf('UPSTREAM-BADGE') === -1);
+check('boundary_shows_cause', html3.indexOf('boundary re-bill') !== -1);
+
 console.log(out.join('\n'));
 """
 
@@ -291,7 +308,7 @@ def test_render_surfaces_culprit_and_state():
     output = _run_render()
     fails = [ln for ln in output.splitlines() if ln.startswith('FAIL')]
     assert not fails, 'render DOM failures:\n' + output
-    assert output.count('PASS') >= 8, f'expected >=8 PASS, got:\n{output}'
+    assert output.count('PASS') >= 12, f'expected >=12 PASS, got:\n{output}'
     print(output)
 
 

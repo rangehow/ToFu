@@ -3027,6 +3027,7 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .paper-qa-send-btn:activ
 .cost-popover .cp-round-break.cp-break-eviction{color:#e8a55d}
 .cost-popover .cp-round-break.cp-break-unproven{color:#e8a55d}
 .cost-popover .cp-round-break.cp-break-culprit{color:#f87171}
+.cost-popover .cp-round-break.cp-break-boundary{color:#e8a55d}
 .cost-popover .cp-break-badge{
   flex:none;font-size:9px;font-weight:600;padding:0 5px;border-radius:8px;
   line-height:1.5;border:1px solid currentColor;opacity:.95
@@ -3036,6 +3037,7 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .paper-qa-send-btn:activ
 .cost-popover .cp-break-badge-eviction{color:#e8a55d}
 .cost-popover .cp-break-badge-unproven{color:#e8a55d}
 .cost-popover .cp-break-badge-culprit{color:#f87171}
+.cost-popover .cp-break-badge-boundary{color:#e8a55d}
 /* The named culprit — WHICH message broke cache. Monospace so the msg.field
    keys read clearly; red to match the 'our fault' state. */
 .cost-popover .cp-break-culprit{

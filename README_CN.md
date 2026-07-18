@@ -54,7 +54,7 @@ Tofu 是一个**完全自托管的 AI 助手**，一条命令即可启动。它�
 > **macOS —— 想要点开即用的桌面应用？** 不走上面的 `install.sh`，可到[最新 Release](https://github.com/rangehow/ToFu/releases/latest)下载 `.dmg`，并按你的芯片选择：
 > Apple 芯片（M1/M2/M3…）选 **`Tofu-*-macos-arm64.dmg`**，Intel Mac 选 **`Tofu-*-macos-x86_64.dmg`**。
 
-就这一步。每个方式都会自动处理运行时、依赖、数据库、浏览器引擎，并启动服务器 —— 无需任何参数，无需后续操作。
+就这一步。每个方式都会自动处理运行时、依赖、数据库、浏览器引擎，并启动服务器 —— 无需任何参数，无需后续操作。数据库默认使用 **SQLite**（零配置）；仅当你需要 PostgreSQL 的更高并发（100+ 用户）时，才在 Linux/macOS 命令后加 `--with-postgres`。
 
 > 想预设 API 密钥、改端口、或安装失败需要恢复？所有可选参数和故障排查方案都在 **[docs/INSTALL.md](docs/INSTALL.md)**。
 
@@ -641,7 +641,7 @@ vim .env   # 填入你的值
 |---|:---:|:---:|:---:|
 | 核心对话与工具 | ✅ | ✅ | ✅ |
 | SQLite（默认，零配置） | ✅ | ✅ | ✅ |
-| PostgreSQL 自动初始化（可选） | ✅ | ✅ | ✅ |
+| PostgreSQL（通过 `--with-postgres` 开启） | ✅ | ✅ | ✅ |
 | 项目协作 | ✅ | ✅ | ✅ |
 | Shell 命令 | ✅ | ✅ | ✅ (`cmd.exe`) |
 | 桌面代理 | ✅ | ✅ | ✅ |

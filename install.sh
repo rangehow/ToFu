@@ -26,11 +26,18 @@
 #    --reset-env           Delete the existing conda env and recreate from scratch
 #                          (⚠️  DESTRUCTIVE: removes ANY extra packages the user
 #                           installed into this env. Only use for your own env.)
-#    --force-sqlite        Skip PostgreSQL install + bootstrap entirely and pin
-#                          TOFU_DB_BACKEND=sqlite in .env. Use this when the
-#                          host's conda-forge snapshot can't satisfy PG deps
-#                          (e.g. icu/libxml2 pin conflicts) — SQLite is fine for
-#                          single-user / <100 concurrent use.
+#    --with-postgres       Install + bootstrap PostgreSQL (opt-in). WITHOUT this
+#                          flag the installer uses SQLite by default — zero
+#                          config, no dependencies, fine for single-user /
+#                          <100 concurrent. Pass --with-postgres only when you
+#                          need PG's higher concurrency (100+ users). PG install
+#                          is the slowest, most failure-prone install step
+#                          (icu/libxml2/PG-major solve + initdb), so it is no
+#                          longer done by default.
+#    --force-sqlite        Force SQLite even if --with-postgres was also passed
+#                          (SQLite wins). Also leaves any existing pgdata in
+#                          place, unused. Historically used when the host's
+#                          conda-forge snapshot couldn't satisfy PG deps.
 #    --pg-major <N>        Force a specific PG major version (e.g. 17). Default
 #                          tries 18 → 17 → 16 in order, picking the first one
 #                          whose solve succeeds on this host.
@@ -114,6 +121,7 @@ SKIP_NODE=0
 NO_UPDATE_CONDA=0
 RESET_ENV=0
 FORCE_SQLITE=0
+WITH_POSTGRES=0     # 0 = SQLite default (PG opt-in); 1 = install+bootstrap PG
 PG_MAJOR=""         # empty = auto-pick from PG_MAJOR_CANDIDATES
 REINIT_PGDATA=0
 PG_MAJOR_CANDIDATES=(18 17 16)
@@ -136,6 +144,7 @@ while [[ $# -gt 0 ]]; do
         --no-update-conda)  NO_UPDATE_CONDA=1; shift ;;
         --reset-env)        RESET_ENV=1; shift ;;
         --force-sqlite)     FORCE_SQLITE=1; shift ;;
+        --with-postgres)    WITH_POSTGRES=1; shift ;;
         --pg-major)         PG_MAJOR="$2"; shift 2 ;;
         --reinit-pgdata)    REINIT_PGDATA=1; shift ;;
         --min-conda)        MIN_CONDA_MAJOR="$2"; shift 2 ;;
@@ -1213,8 +1222,21 @@ fi
 # icu<76). Trying older majors often succeeds because their icu pins are
 # looser. The first major whose solve succeeds wins.
 PG_INSTALLED_MAJOR=""   # set to the major we successfully installed, empty if we gave up
-if [[ "$FORCE_SQLITE" -eq 1 ]]; then
-    info "--force-sqlite: skipping PostgreSQL install entirely"
+if [[ "$WITH_POSTGRES" -ne 1 ]]; then
+    # ── SQLite is the default (2026-07). PostgreSQL is opt-in via
+    #    --with-postgres because its install (icu/libxml2/PG-major solve +
+    #    initdb + smoke-test) is the slowest, most failure-prone step and
+    #    single-user setups don't need it. Leaving PG_INSTALLED_MAJOR empty
+    #    makes the pgdata-validation + smoke-test steps below no-op cleanly
+    #    and pins TOFU_DB_BACKEND=sqlite in .env.
+    if [[ "$FORCE_SQLITE" -eq 1 ]]; then
+        info "--force-sqlite: using SQLite (PostgreSQL not installed)"
+    else
+        info "Using SQLite (default, zero-config). Pass --with-postgres to install"
+        info "PostgreSQL instead (recommended only for 100+ concurrent users)."
+    fi
+elif [[ "$FORCE_SQLITE" -eq 1 ]]; then
+    info "--force-sqlite overrides --with-postgres: skipping PostgreSQL install entirely"
 else
     # If user pinned a specific major, only try that one.
     if [[ -n "$PG_MAJOR" ]]; then
@@ -1630,6 +1652,8 @@ elif [[ -z "$PG_INSTALLED_MAJOR" ]]; then
     if [[ -n "$PGDATA_MAJOR" ]]; then
         warn "pgdata exists (PG ${PGDATA_MAJOR}) but no PG binaries installed in env"
         warn "Would cause scheduler/db retry storms \u2014 pinning TOFU_DB_BACKEND=sqlite"
+        warn "Your existing PostgreSQL data is NOT lost, just unused. To re-enable it,"
+        warn "re-run the installer with --with-postgres (installs PG ${PGDATA_MAJOR} and reuses this pgdata)."
     else
         info "No PG installed \u2014 tofu will use SQLite"
     fi

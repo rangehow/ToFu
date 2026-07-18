@@ -57,7 +57,9 @@ Pick the row that matches your OS. Each one ends with a running server on **http
 
 That's it. Each path handles conda/runtime, dependencies, the database,
 the browser engine, and starts the server — no flags, no follow-up
-steps.
+steps. The database defaults to **SQLite** (zero-config); add
+`--with-postgres` to the Linux/macOS command only if you need
+PostgreSQL's higher concurrency (100+ users).
 
 > Need to pre-set an API key, change the port, or recover from a failed
 > install? See **[docs/INSTALL.md](docs/INSTALL.md)** for all flags and
@@ -652,7 +654,7 @@ The `.env.example` file documents all supported variables. Key ones:
 |---|:---:|:---:|:---:|
 | Core chat & tools | ✅ | ✅ | ✅ |
 | SQLite (default, zero-config) | ✅ | ✅ | ✅ |
-| PostgreSQL auto-bootstrap (optional) | ✅ | ✅ | ✅ |
+| PostgreSQL (opt-in via `--with-postgres`) | ✅ | ✅ | ✅ |
 | Project co-pilot | ✅ | ✅ | ✅ |
 | Shell commands | ✅ | ✅ | ✅ (`cmd.exe`) |
 | Desktop agent | ✅ | ✅ | ✅ |

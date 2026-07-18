@@ -453,24 +453,37 @@
               </div>
             </div>
           </div>
-          <div class="paper-report-content" id="paperReviewContent">
-            <div class="paper-report-empty">
-              <p data-i18n="paper.reviewEmptyTitle">Pick a target conference above, then click below to generate a peer review</p>
-              <p class="paper-report-hint" data-i18n="paper.reviewEmptyHint">The model reviews against the venue's real scorecard and verifies code/data claims via web search</p>
-              <button class="paper-report-generate-btn" onclick="_generatePaperReview()">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3l14 9-14 9V3z"/></svg>
-                <span data-i18n="paper.reviewGenerate">Generate review</span>
-              </button>
+          <!-- Review vs Rebuttal are two MUTUALLY-EXCLUSIVE full-height
+               segments (see _setReviewSeg). Only one .paper-review-seg-panel is
+               in layout at a time, so the two long documents never compete for
+               the same flex-column height (the old stacked <details> squeezed
+               the review report to 0 once a follow-up reply was generated). -->
+          <div class="paper-review-seg" id="paperReviewSeg" role="tablist" data-i18n-aria-label="paper.reviewSegAria" aria-label="Review sub-view">
+            <button type="button" class="paper-review-seg-btn active" data-seg="review" role="tab" aria-selected="true" onclick="_setReviewSeg('review')">
+              <span data-i18n="paper.reviewSegReview">Review</span>
+            </button>
+            <button type="button" class="paper-review-seg-btn" data-seg="rebuttal" role="tab" aria-selected="false" onclick="_setReviewSeg('rebuttal')">
+              <span data-i18n="paper.reviewSegRebuttal">Rebuttal</span>
+              <!-- Lit when a follow-up reply exists for this paper (see _syncReviewSegState). -->
+              <span class="paper-review-seg-dot" id="paperRebuttalSegDot" style="display:none" data-i18n-title="paper.reviewSegHasReply" title="Follow-up reply available"></span>
+            </button>
+          </div>
+          <div class="paper-review-seg-panel" data-seg="review">
+            <div class="paper-report-content" id="paperReviewContent">
+              <div class="paper-report-empty">
+                <p data-i18n="paper.reviewEmptyTitle">Pick a target conference above, then click below to generate a peer review</p>
+                <p class="paper-report-hint" data-i18n="paper.reviewEmptyHint">The model reviews against the venue's real scorecard and verifies code/data claims via web search</p>
+                <button class="paper-report-generate-btn" onclick="_generatePaperReview()">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3l14 9-14 9V3z"/></svg>
+                  <span data-i18n="paper.reviewGenerate">Generate review</span>
+                </button>
+              </div>
             </div>
           </div>
           <!-- Rebuttal follow-up — author response → reviewer reply + score
                decision. Reuses the report engine under the sibling composite
-               key rebuttal:<venue>:<uilang>; collapsed until the reviewer opens it. -->
-          <details class="paper-rebuttal-section" id="paperRebuttalSection">
-            <summary class="paper-rebuttal-summary">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-              <span data-i18n="paper.rebuttalSectionTitle">Author rebuttal → follow-up reply</span>
-            </summary>
+               key rebuttal:<venue>:<uilang>; shown on the Rebuttal segment. -->
+          <div class="paper-review-seg-panel" data-seg="rebuttal" style="display:none">
             <div class="paper-rebuttal-body">
               <p class="paper-report-hint" data-i18n="paper.rebuttalHint">Paste the authors' rebuttal below. The reviewer replies point by point and decides whether the OA / Confidence score should change (most rebuttals should not).</p>
               <textarea id="paperRebuttalInput" class="paper-rebuttal-input" rows="6" data-i18n-placeholder="paper.rebuttalPlaceholder" placeholder="Paste the author rebuttal here…" oninput="_onRebuttalInputChange(this.value)"></textarea>
@@ -494,7 +507,7 @@
               </div>
               <div class="paper-report-content" id="paperRebuttalContent"></div>
             </div>
-          </details>
+          </div>
         </div>
         <!-- Babel PDF Panel -->
         <div class="paper-tab-panel" data-tab="translate" style="display:none">
@@ -1917,9 +1930,9 @@
 <script defer src="static/js/settings/balance.js?v=20260528a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
 <script defer src="static/js/settings/template_actions.js?v=20260528a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
 <script defer src="static/js/settings/model_edit.js?v=20260528a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
-<script defer src="static/js/settings/access_matrix.js?v=20260603a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
+<script defer src="static/js/settings/providers/access_matrix.js?v=20260603a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
 <script defer src="static/js/settings/visibility_defaults.js?v=20260528a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
-<script defer src="static/js/settings/chip_input.js?v=20260610a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
+<script defer src="static/js/widgets/chip_input.js?v=20260610a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
 <script defer src="static/js/settings/other_tabs.js?v=20260528a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
 <script defer src="static/js/settings/speech.js?v=20260709a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
 <script defer src="static/js/settings/auth_sources.js?v=20260610b" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>

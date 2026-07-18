@@ -1082,6 +1082,36 @@ textarea::placeholder{color:var(--text-tertiary)}
 .paper-lib-item:hover .paper-lib-item-del{display:flex}
 .paper-lib-item-del:hover{background:var(--error-bg);color:var(--error-text)}
 
+/* ── Paper library folders (Reading-mode; mirrors chat folders) ── */
+.paper-folder-bar{display:flex;align-items:center;justify-content:flex-end;padding:2px 8px 6px}
+.paper-folder-new-btn{display:inline-flex;align-items:center;gap:5px;padding:4px 9px;border:1px solid var(--border-light);background:var(--bg-secondary);border-radius:8px;color:var(--text-secondary);font-size:11px;font-weight:600;cursor:pointer;transition:all .15s}
+.paper-folder-new-btn:hover{background:var(--bg-hover);color:var(--text-primary)}
+.paper-folder-new-btn>svg{display:block}
+.paper-folder-group{margin-bottom:2px}
+.paper-folder-head{display:flex;align-items:center;gap:7px;padding:7px 10px;border-radius:9px;cursor:pointer;color:var(--text-secondary);font-size:12px;font-weight:600;transition:background .15s;position:relative}
+.paper-folder-head:hover{background:var(--bg-hover)}
+.paper-folder-caret{flex-shrink:0;transition:transform .15s;color:var(--text-tertiary)}
+.paper-folder-group:not(.collapsed) .paper-folder-caret{transform:rotate(90deg)}
+.paper-folder-ic{flex-shrink:0;color:var(--text-tertiary)}
+.paper-folder-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.paper-folder-count{flex-shrink:0;font-size:10px;font-weight:700;color:var(--text-tertiary);background:var(--bg-secondary);border-radius:9px;padding:1px 7px}
+.paper-folder-open,.paper-folder-rename,.paper-folder-del{display:none;flex-shrink:0;align-items:center;justify-content:center;width:20px;height:20px;border-radius:6px;color:var(--text-tertiary);cursor:pointer}
+.paper-folder-head:hover .paper-folder-open,.paper-folder-head:hover .paper-folder-rename,.paper-folder-head:hover .paper-folder-del{display:inline-flex}
+.paper-folder-open:hover,.paper-folder-rename:hover{background:var(--bg-active);color:var(--text-primary)}
+.paper-folder-del:hover{background:var(--error-bg);color:var(--error-text)}
+.paper-folder-open>svg,.paper-folder-rename>svg,.paper-folder-del>svg{display:block}
+.paper-folder-body{padding-left:8px}
+.paper-folder-group.collapsed .paper-folder-body{display:none}
+/* Folder view (drilled into one folder): a back crumb above a flat list */
+.paper-folder-crumb{display:flex;align-items:center;gap:6px;padding:8px 10px;margin-bottom:2px;border-radius:9px;cursor:pointer;color:var(--text-secondary);font-size:12px;font-weight:600;transition:background .15s}
+.paper-folder-crumb:hover{background:var(--bg-hover)}
+.paper-folder-crumb>svg{flex-shrink:0}
+.paper-folder-crumb-name{color:var(--text-primary);font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* Per-item "move to folder" select — hidden until the row is hovered, sits
+   left of the (absolute) delete button so the two never overlap. */
+.paper-lib-item-folder{display:none;flex-shrink:0;max-width:96px;margin-right:24px;font-size:10px;padding:2px 4px;border:1px solid var(--border-light);border-radius:6px;background:var(--bg-secondary);color:var(--text-secondary);cursor:pointer}
+.paper-lib-item:hover .paper-lib-item-folder{display:block}
+
 /* Paper library empty state */
 .paper-lib-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:40px 16px;color:var(--text-tertiary);text-align:center;font-size:12px}
 .paper-lib-empty-hint{font-size:11px;opacity:0.6}

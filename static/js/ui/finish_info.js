@@ -35,6 +35,40 @@ const _CACHE_CAUSE_PHRASES = [
   // leaves the remainder untranslated (e.g. the bare 'stochastic server-side
   // cache miss' alias would eat the prefix of the full sentence). Each block
   // below is sorted full-sentence → clause → short alias.
+  // ── CURRENT verdict wording ACTUALLY emitted today by
+  //    _detect.py:_resolve_break_cause (2026-07). These MUST stay at the TOP
+  //    of the array: several contain the word "endpoint", and the namespace
+  //    block below adds a bare ['endpoint', …] clause — a full sentence has to
+  //    match BEFORE that short alias can mangle it. The legacy "most likely …
+  //    shared cache pool" rows further down are kept only for old persisted
+  //    rounds. FULL sentences precede their shorter substrings. Guarded by
+  //    tests/test_frontend_cache_verdict_render.py, which DERIVES these
+  //    strings from the backend fn so any future drift turns the test red. ──
+  ['The routing was also identical (key + anthropic-beta + endpoint all match last round), so this is not a client cache-namespace switch either.',
+   '本轮的路由也完全相同（key、anthropic-beta 头、endpoint 均与上一轮一致），因此也不是客户端切换了缓存命名空间。'],
+  ['The cached prefix was not reused upstream: an upstream cache miss (a per-request gateway miss or a TTL boundary).',
+   '缓存前缀未在上游被复用：一次上游缓存未命中（网关偶发的单次未命中，或 TTL 边界）。'],
+  ['The whole cached prefix was not reused upstream: an upstream cache miss (a per-request gateway miss or a TTL boundary).',
+   '整段缓存前缀未在上游被复用：一次上游缓存未命中（网关偶发的单次未命中，或 TTL 边界）。'],
+  ['Only the body past the static prefix was not read back.',
+   '仅静态前缀之后的正文未被读回。'],
+  ['an upstream cache miss (a per-request gateway miss or a TTL boundary)',
+   '一次上游缓存未命中（网关偶发的单次未命中，或 TTL 边界）'],
+  // ── Breakpoint-lost / byte-divergence / backend-history-rewrite verdicts
+  //    (client-side culprits — also emitted today, previously untranslated). ──
+  ['cache breakpoint lost between turns (a cache_control marker the client placed did not survive to the wire — e.g. dropped in the tool_result translation) — the body past the last surviving marker was re-billed uncached',
+   '缓存断点在轮次间丢失（客户端放置的某个 cache_control 标记没能送到线上——例如在 tool_result 转换中被丢掉）——最后一个存活标记之后的正文按未命中重新计费'],
+  ['hoisted system/tools bytes changed between turns while the lossy system fingerprint matched — a canonical-invisible change in the per-turn-injected system prefix (block reorder, wrapping flip, re-serialization, or tool-param key reorder) altered the exact bytes the gateway caches on → the cached prefix was re-billed uncached',
+   '被上提的 system/tools 段字节在轮次间发生变化，而有损的 system 指纹却仍显示一致——每轮注入的 system 前缀里发生了一个规范化不可见的改动（块重排、包裹翻转、重新序列化，或工具参数键重排），改变了网关据以缓存的确切字节 → 缓存前缀按未命中重新计费'],
+  ['wire bytes changed between turns while the lossy content fingerprint matched — a canonical-invisible change (reasoning_details rebuild, consecutive same-role merge, JSON field reorder, or an OpenAI↔Anthropic envelope/endpoint switch) altered the exact bytes the gateway caches on → the affected prefix was re-billed uncached',
+   '线上字节在轮次间发生变化，而有损的内容指纹却仍显示一致——一个规范化不可见的改动（reasoning_details 重建、相邻同角色合并、JSON 字段重排，或 OpenAI↔Anthropic 信封/endpoint 切换）改变了网关据以缓存的确切字节 → 受影响的前缀按未命中重新计费'],
+  ['backend history rewrite (reconcile / committed-dict projection) edited or deleted a cached message — the prefix was re-billed uncached',
+   '后端历史重写（reconcile / committed-dict 投影）改写或删除了一条已缓存的消息——前缀按未命中重新计费'],
+  ['the body past the last surviving marker was re-billed uncached', '最后一个存活标记之后的正文按未命中重新计费'],
+  ['altered the exact bytes the gateway caches on', '改变了网关据以缓存的确切字节'],
+  ['the affected prefix was re-billed uncached', '受影响的前缀按未命中重新计费'],
+  ['the cached prefix was re-billed uncached', '缓存前缀按未命中重新计费'],
+  ['the prefix was re-billed uncached', '前缀按未命中重新计费'],
   // ── Cache-NAMESPACE switch (2026-07: byte-identical body, routing flipped —
   //    upstream key / anthropic-beta / endpoint. A CLIENT-side cold-namespace
   //    miss, NOT a server fault. See _detect.py:_resolve_break_cause. FULL

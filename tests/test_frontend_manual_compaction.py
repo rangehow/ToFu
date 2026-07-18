@@ -237,6 +237,114 @@ def test_gauge_scheme_b_fallback_present():
     assert 'FAIL' not in output, 'gauge scheme-B fallback missing/misordered:\n' + output
 
 
+# ── Gauge scheme-B BEHAVIOR: the summary estimate must win over a preserved
+#    reserve turn's STALE pre-compaction usage (the "ball never changes" bug).
+#
+#    A manual /compact rewrites the conversation to
+#      [system] + [anchor?] + [summary] + [preserved reserve turns...]
+#    The preserved reserve assistants sit AFTER the summary in ARRAY order but
+#    ran BEFORE it, so they still carry their PRE-compaction usage (the huge old
+#    prompt size). A plain newest-by-index walk reads that stale number and the
+#    liquid ball never drops. The summary carries the true post-compaction size
+#    in `_estimatedPromptTokens` and, minted at compaction time, has the NEWEST
+#    timestamp — so it must win until a genuinely newer real turn arrives.
+#    Driven through the PUBLIC updateContextBar() render path (a real
+#    .chat-wrapper is stubbed so _ensureBar builds the bar). The percentage the
+#    bar writes to `--ctx-arc-pct` is `used / limit`, so we recover `used` from
+#    it — no dependency on any private helper or non-HEAD export. ──
+_GAUGE_BEHAVIOR_HARNESS = r"""
+const fs = require('fs');
+global.window = global;
+const LIMIT = 200000;
+// A capturing element: records --ctx-arc-pct writes + dataset so we can read
+// back the rendered fill level after updateContextBar().
+let ARC_PCT = null;
+function _mkEl() {
+  const el = {
+    _children: [], classList: { add(){}, remove(){}, toggle(){} },
+    dataset: {}, attributes: {},
+    style: { setProperty(k,v){ if (k === '--ctx-arc-pct') ARC_PCT = v; } },
+    setAttribute(k,v){ this.attributes[k]=v; }, getAttribute(k){ return this.attributes[k]; },
+    appendChild(c){ this._children.push(c); return c; },
+    removeChild(){}, remove(){},
+    querySelector(){ return _mkEl(); }, querySelectorAll(){ return []; },
+    addEventListener(){}, removeEventListener(){},
+    getBoundingClientRect(){ return { left:0, right:0, top:0, bottom:0 }; },
+    get isConnected(){ return true; }, set innerHTML(v){}, get innerHTML(){ return ''; },
+    set textContent(v){}, get textContent(){ return ''; },
+  };
+  return el;
+}
+const WRAPPER = _mkEl();
+global.document = {
+  getElementById(){ return null; },
+  querySelector(sel){ return sel === '.chat-wrapper' ? WRAPPER : null; },
+  createElement(){ return _mkEl(); },
+  body: _mkEl(),
+  addEventListener(){}, removeEventListener(){}, readyState:'complete',
+};
+global.requestAnimationFrame=(fn)=>{fn();return 0;};
+global.setTimeout=()=>0; global.clearTimeout=()=>{};
+global.config={model:'m'}; global.serverModel='m'; global.activeStreams=new Map();
+global._contextPolicy={default_limit:LIMIT,output_reserve:8000,compaction_reserve:4000,
+  summary_trigger_ratio:0.9,min_usable_ratio:0.5,per_model:{}};
+global.t=(k)=>k;
+let CONV=null; global.activeConvId='c1'; global.getConvById=(id)=>((CONV&&CONV.id===id)?CONV:null);
+eval(fs.readFileSync(process.argv[2],'utf8'));   // context-bar.js
+const out=[];
+function check(n,c){out.push((c?'PASS ':'FAIL ')+n);}
+// Recover the `used` token count the bar rendered from the --ctx-arc-pct write.
+function renderedUsed(){ ARC_PCT=null; window.updateContextBar();
+  return ARC_PCT==null ? null : Math.round(parseFloat(ARC_PCT)/100*LIMIT); }
+
+// (A) Just-compacted conv: summary (ts=5000, newest) + a preserved reserve
+//     assistant (ts=2001) still carrying its STALE 180k pre-compaction usage.
+//     The rendered `used` MUST be the 8k post-compaction estimate, NOT 180k.
+CONV = { id:'c1', model:'m', messages: [
+  { role:'user', content:'goal', timestamp: 1000 },
+  { role:'assistant', _isCompactionSummary:true, _estimatedPromptTokens:8000,
+    content:'summary', timestamp: 5000 },
+  { role:'user', content:'recent', timestamp: 2000 },
+  { role:'assistant', content:'x', timestamp: 2001,
+    apiRounds:[{ usage:{ prompt_tokens:180000 } }] },
+] };
+check('reserve_stale_usage_does_not_shadow_summary', renderedUsed() === 8000);
+
+// (B) After a genuinely NEW post-compaction turn (ts newer than the summary),
+//     its fresh usage must take over — the summary is not sticky forever.
+CONV.messages.push({ role:'user', content:'next', timestamp: 6000 });
+CONV.messages.push({ role:'assistant', content:'y', timestamp: 6001,
+  apiRounds:[{ usage:{ prompt_tokens:12000 } }] });
+check('fresh_post_compaction_turn_takes_over', renderedUsed() === 12000);
+
+// (C) No compaction at all → unchanged behavior: newest real usage wins.
+CONV = { id:'c1', model:'m', messages: [
+  { role:'user', content:'q', timestamp: 1000 },
+  { role:'assistant', content:'a', timestamp: 1001,
+    apiRounds:[{ usage:{ prompt_tokens:33000 } }] },
+] };
+check('no_compaction_newest_usage_unchanged', renderedUsed() === 33000);
+console.log(out.join('\n'));
+"""
+
+
+@pytest.mark.skipif(not _node_available(), reason='node not installed')
+def test_gauge_reserve_stale_usage_does_not_shadow_summary():
+    """The 'context ball never changes after compaction' bug: a preserved
+    reserve turn's stale pre-compaction usage must NOT shadow the summary's
+    post-compaction `_estimatedPromptTokens`."""
+    proc = _run(_GAUGE_BEHAVIOR_HARNESS, os.path.join(JS_DIR, 'context-bar.js'),
+                '_gauge_behavior_harness.js')
+    output = proc.stdout.strip()
+    assert proc.returncode == 0, f'node failed: {proc.stderr}\n{output}'
+    fails = [ln for ln in output.splitlines() if ln.startswith('FAIL')]
+    assert not fails, 'gauge scheme-B shadowing regression:\n' + output
+    for want in ('PASS reserve_stale_usage_does_not_shadow_summary',
+                 'PASS fresh_post_compaction_turn_takes_over',
+                 'PASS no_compaction_newest_usage_unchanged'):
+        assert want in output, f'missing {want}\n{output}'
+
+
 # ── Card render: chat_render buildCompactionCardHtml (standalone, testable) ──
 _CARD_HARNESS = r"""
 const fs = require('fs');

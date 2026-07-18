@@ -37,7 +37,11 @@
       "fresh-cut" land cues are discrete one-shot responses to events,
       not ambient loops.
    4. No `@media` opacity rules.  The chip stays at full opacity at
-      every desktop width (>900 px); below 900 px it's hidden.
+      every width where it's shown; it's HIDDEN exactly where the "···"
+      mobile sheet takes over the compaction entry point — ≤768 px, or
+      ≤1024 px with a coarse pointer (see styles.css:~20417). On
+      fine-pointer narrow windows (769–1024 px) the chip stays visible so
+      there is never a width with no reachable "compact now" entry.
 
    Public API:
      window.updateContextBar()        — recompute + repaint (rAF-coalesced).
@@ -148,9 +152,37 @@
    * yet doesn't shadow the previous turn's number. */
   function _lastUsageTokens(conv) {
     if (!conv || !Array.isArray(conv.messages)) return 0;
+
+    /* ── Gauge scheme B, correctly ordered by RECENCY (the "ball never drops
+     *    after /compact" bug). A manual compaction rewrites the conversation to
+     *      [system] + [anchor?] + [summary] + [preserved reserve turns...]
+     *    The preserved reserve assistants sit AFTER the summary in ARRAY order
+     *    but ran BEFORE it, so they still carry their PRE-compaction usage (the
+     *    huge old prompt size). A naive newest-by-INDEX walk reads that stale
+     *    number first and the liquid never falls. The summary carries the true
+     *    post-compaction size in `_estimatedPromptTokens` and, being minted at
+     *    compaction time, has the NEWEST timestamp — so if it is at least as
+     *    recent as every real-usage assistant, it must win. A genuinely newer
+     *    real turn (typed after the compaction) naturally supersedes it. */
+    let summaryEst = 0, summaryTs = -1;
+    for (let i = conv.messages.length - 1; i >= 0; i--) {
+      const m = conv.messages[i];
+      if (m && m.role === 'assistant' && m._isCompactionSummary
+          && m._estimatedPromptTokens > 0) {
+        summaryEst = m._estimatedPromptTokens;
+        summaryTs = m.timestamp || 0;
+        break;                                   // newest summary by index
+      }
+    }
+
     for (let i = conv.messages.length - 1; i >= 0; i--) {
       const m = conv.messages[i];
       if (!m || m.role !== 'assistant') continue;
+      /* A real-usage reading only supersedes the summary estimate when its
+       * message is strictly NEWER than the summary — otherwise it is a
+       * preserved reserve turn that ran before the compaction and carries a
+       * stale (pre-compaction) prompt size. */
+      if (summaryEst > 0 && (m.timestamp || 0) <= summaryTs) continue;
       // 1. Live in-flight reading from the round_usage SSE event.
       if (m._liveLastRoundUsage && m._liveLastRoundUsage.tokensIn > 0) {
         return m._liveLastRoundUsage.tokensIn;
@@ -168,18 +200,13 @@
         const n = (Array.isArray(m.apiRounds) && m.apiRounds.length) || 1;
         if (t > 0) return n > 1 ? Math.round(t / n) : t;
       }
-      // 4. Manual-compaction summary (gauge scheme B): a just-compacted conv
-      //    whose newest assistant is the synthetic summary message carries NO
-      //    real usage, so the level would otherwise stay pinned at the old
-      //    (pre-compaction) height until the next real turn. The backend
-      //    stamps `_estimatedPromptTokens` = post-compaction size on it — read
-      //    that so the liquid drops immediately after compaction. It's a
-      //    server-computed fact, not a client inference.
-      if (m._isCompactionSummary && m._estimatedPromptTokens > 0) {
-        return m._estimatedPromptTokens;
-      }
     }
-    return 0;
+    // 4. No real-usage reading newer than the compaction summary — fall back to
+    //    the server-computed post-compaction estimate (scheme B). This is what
+    //    makes the liquid drop immediately after a /compact even though the
+    //    preserved reserve turns still carry their old usage. Server fact, not
+    //    a client inference.
+    return summaryEst;
   }
 
   /* Walk every assistant message in the active conv and collect compaction
@@ -466,10 +493,28 @@
     setTimeout(() => document.addEventListener('click', _closeCtxPopover, true), 0);
   }
 
+  /* Toggle the chip's in-progress state. The spinner is a pure-CSS overlay
+   * keyed on `data-compacting` (see styles.css) — an SVG ring, NOT a toast.
+   * This REPLACES the old optimistic "正在压缩…" info toast that stacked with
+   * the terminal toast and read as self-contradictory ("compacting" +
+   * "nothing to compact" at once). Progress lives on the chip; the toast fires
+   * exactly ONCE, at the terminal state. */
+  function _setCompacting(on) {
+    const s = _state;
+    if (!s || !s.el) return;
+    if (on) s.el.dataset.compacting = '1';
+    else delete s.el.dataset.compacting;
+  }
+
   /* ── The full success CLOSURE: POST → reload messages → re-render the
    *    boundary card → drop the gauge (scheme B) → flash the badge. Without
    *    the reload+re-render the user would click and see nothing change
-   *    (conversations.messages was rewritten server-side). */
+   *    (conversations.messages was rewritten server-side).
+   *
+   * TOAST CONTRACT (do not regress): AT MOST ONE toast per invocation, and it
+   * is always a TERMINAL toast (success / nothing / failed / busy). There is
+   * NO optimistic "starting" toast — the chip spinner conveys in-progress. So
+   * "正在压缩" and "无需压缩" can never appear together. */
   async function _runManualCompaction(convId) {
     if (!convId) return;
     const conv = getConvById(convId);
@@ -479,53 +524,74 @@
       }
       return;
     }
-    if (typeof showToast === 'function') {
-      showToast(_tt('compactNow.running', '正在压缩上下文…'), 'info');
-    }
-    let res;
+
+    /* Resolve to a single {msg, level} terminal outcome, THEN toast once. */
+    let outcome = null;
+    _setCompacting(true);
     try {
-      res = await Api.compactions.compactNow(convId, {});
-    } catch (err) {
-      const code = err && err.code;
-      let msg = _tt('compactNow.failed', '压缩失败');
-      if (code === 'task_active') msg = _tt('compactNow.busy', '任务进行中，无法压缩');
-      else if (code === 'nothing_to_compact') msg = _tt('compactNow.nothing', '上下文太短，无需压缩');
-      if (typeof showToast === 'function') showToast(msg, 'warning');
-      return;
-    }
-    if (!res || !res.ok) {
-      if (typeof showToast === 'function') showToast(_tt('compactNow.failed', '压缩失败'), 'error');
-      return;
-    }
-    /* ── CLOSURE: make the rewrite visible ── */
-    try {
-      if (typeof ConvCache !== 'undefined' && ConvCache && ConvCache.remove) {
-        await ConvCache.remove(convId);       // drop stale IDB copy
-      }
-    } catch (e) { console.warn('[compactNow] cache invalidate failed', e); }
-    const c = getConvById(convId);
-    if (c) {
-      c._needsLoad = true;                     // force a server re-fetch
+      let res;
       try {
-        if (typeof loadConversationMessages === 'function') {
-          await loadConversationMessages(convId);
+        res = await Api.compactions.compactNow(convId, {});
+      } catch (err) {
+        const code = err && err.code;
+        if (code === 'task_active') {
+          outcome = { msg: _tt('compactNow.busy', '任务进行中，无法压缩'), level: 'warning' };
+        } else if (code === 'nothing_to_compact') {
+          // Not a failure — a neutral, informative note (context already lean).
+          outcome = { msg: _tt('compactNow.nothing', '上下文已很精简，暂无需压缩'), level: 'info' };
+        } else {
+          outcome = { msg: _tt('compactNow.failed', '压缩失败'), level: 'error' };
         }
-      } catch (e) { console.warn('[compactNow] reload failed', e); }
-      if (convId === activeConvId && typeof renderChat === 'function') {
-        renderChat(c, false);                  // re-render → boundary card shows
+        return;
       }
-    }
-    updateContextBar();                        // gauge scheme B drops the level
-    if (res.archiveId != null && typeof flashGaugeForArchive === 'function') {
-      flashGaugeForArchive(res.archiveId);     // badge +1 flash
-    }
-    if (typeof showToast === 'function') {
+      if (!res || !res.ok) {
+        // Non-throwing client: map the same codes so behavior is identical.
+        const code = res && res.code;
+        if (code === 'nothing_to_compact') {
+          outcome = { msg: _tt('compactNow.nothing', '上下文已很精简，暂无需压缩'), level: 'info' };
+        } else if (code === 'task_active') {
+          outcome = { msg: _tt('compactNow.busy', '任务进行中，无法压缩'), level: 'warning' };
+        } else {
+          outcome = { msg: _tt('compactNow.failed', '压缩失败'), level: 'error' };
+        }
+        return;
+      }
+
+      /* ── CLOSURE: make the rewrite visible ── */
+      try {
+        if (typeof ConvCache !== 'undefined' && ConvCache && ConvCache.remove) {
+          await ConvCache.remove(convId);       // drop stale IDB copy
+        }
+      } catch (e) { console.warn('[compactNow] cache invalidate failed', e); }
+      const c = getConvById(convId);
+      if (c) {
+        c._needsLoad = true;                     // force a server re-fetch
+        try {
+          if (typeof loadConversationMessages === 'function') {
+            await loadConversationMessages(convId);
+          }
+        } catch (e) { console.warn('[compactNow] reload failed', e); }
+        if (convId === activeConvId && typeof renderChat === 'function') {
+          renderChat(c, false);                  // re-render → boundary card shows
+        }
+      }
+      updateContextBar();                        // gauge scheme B drops the level
+      if (res.archiveId != null && typeof flashGaugeForArchive === 'function') {
+        flashGaugeForArchive(res.archiveId);     // badge +1 flash
+      }
       const tb = res.tokensBefore || 0, ta = res.tokensAfter || 0;
       const fmt = (n) => n >= 1000 ? (n / 1000).toFixed(0) + 'k' : String(n);
-      showToast(
-        _tt('compactNow.done', '已压缩：{before} → {after} tokens（-{pct}%）',
-            { before: fmt(tb), after: fmt(ta), pct: res.reductionPct != null ? res.reductionPct : 0 }),
-        'success');
+      outcome = {
+        msg: _tt('compactNow.done', '已压缩：{before} → {after} tokens（-{pct}%）',
+                 { before: fmt(tb), after: fmt(ta),
+                   pct: res.reductionPct != null ? res.reductionPct : 0 }),
+        level: 'success',
+      };
+    } finally {
+      _setCompacting(false);
+      if (outcome && typeof showToast === 'function') {
+        showToast(outcome.msg, outcome.level);
+      }
     }
   }
 
@@ -679,10 +745,33 @@
     });
   }
 
+  /* Read-only usage snapshot for surfaces that can't show the bubble
+   * (e.g. the mobile "···" sheet, where the chip is display:none below
+   * 900 px).  Returns the SAME numbers the bubble renders — single source
+   * of truth for the percentage/zone so the two never drift. */
+  function contextUsageSummary() {
+    const conv  = _activeConv();
+    const model = _activeModel(conv);
+    const limit = _resolveContextLimit(model);
+    const used  = _lastUsageTokens(conv);
+    const pct   = limit > 0 ? Math.min(1, used / limit) : 0;
+    let zone = 'ok';
+    if      (pct >= _CRIT_THRESHOLD)          zone = 'crit';
+    else if (pct >= _compactThreshold(limit)) zone = 'hot';
+    else if (pct >= 0.60)                     zone = 'warn';
+    return {
+      used, limit, zone,
+      pct: Math.round(pct * 100),
+      hasUsage: used > 0,
+      compactions: _collectCompactions(conv).length,
+    };
+  }
+
   window.updateContextBar = updateContextBar;
   window.flashGaugeForArchive = flashGaugeForArchive;
   window._resolveContextLimit = _resolveContextLimit;
   window.runManualCompaction = _runManualCompaction;
+  window.contextUsageSummary = contextUsageSummary;
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', updateContextBar, { once: true });

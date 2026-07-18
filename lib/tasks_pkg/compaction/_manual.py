@@ -518,8 +518,18 @@ def compact_conversation_now(
                            'toolRounds': list(fold['cold_rounds'])})
     old_api = _project(fold_input, config)
     current_query = _extract_current_query(_project(plan['reserve_raw'], config))
+    # Phase timing: the summary LLM call dominates a manual /compact's wall clock
+    # (measured ~96% on a 3 MB conv — the projection/reconcile CPU is <5%). This
+    # is the ONE number that explains "compaction is slow", so log it explicitly
+    # with the input size so a slow compaction is diagnosable from app.log alone.
+    _summarize_t0 = time.monotonic()
     summary_text = _generate_query_aware_summary(
         old_api, current_query, '[ManualCompact]', conv_id=conv_id, task=task)
+    _summarize_ms = (time.monotonic() - _summarize_t0) * 1000
+    logger.info('[ManualCompact] conv=%s summary LLM call: %.0f ms  '
+                '(fold_msgs=%d, fold_tokens≈%d) — dominant cost of /compact',
+                log_id, _summarize_ms, len(old_api),
+                _estimate_total_tokens(old_api))
     if not summary_text:
         logger.warning('[ManualCompact] conv=%s summary generation failed — '
                        'leaving conversation intact', log_id)

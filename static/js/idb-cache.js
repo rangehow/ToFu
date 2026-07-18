@@ -30,9 +30,17 @@ var ConvCache = (function () {
 
   var DB_NAME = 'tofu_conv_cache';
   var LEGACY_DB_NAME = 'chatui_conv_cache';
-  var DB_VERSION = 2;
+  var DB_VERSION = 3;
   var META_STORE = 'conv_meta';
   var MSG_STORE = 'messages';
+  // v3: a SEPARATE lightweight store holding the LAST FULL server sidebar list
+  // (id/title/updatedAt/rev/msgCount/settings only — no message bodies). This
+  // is DISTINCT from META_STORE, whose invariant stays "only conversations
+  // OPENED on this device, with their full messages". sidebar_meta lets the
+  // boot path paint the ENTIRE sidebar (not just opened convs) before the
+  // server round-trip. Rewritten wholesale on every successful full load so it
+  // stays an accurate mirror (a conv deleted elsewhere falls out naturally).
+  var SIDEBAR_STORE = 'sidebar_meta';
   var LEGACY_V1_STORE = 'conversations';
   var MAX_CACHED = 200;
   // Trigger eviction every N puts so long-lived tabs don't grow past MAX_CACHED.
@@ -100,6 +108,10 @@ var ConvCache = (function () {
           if (!db.objectStoreNames.contains(MSG_STORE)) {
             // Composite key [convId, msgId] — cascade-delete via range queries.
             db.createObjectStore(MSG_STORE, { keyPath: ['convId', 'msgId'] });
+          }
+          // v2 → v3: full-list sidebar mirror (lightweight, keyed by id).
+          if (!db.objectStoreNames.contains(SIDEBAR_STORE)) {
+            db.createObjectStore(SIDEBAR_STORE, { keyPath: 'id' });
           }
         };
         req.onsuccess = function (e) {
@@ -321,6 +333,98 @@ var ConvCache = (function () {
         } catch (e) {
           console.warn('[ConvCache] getMeta exception:', e.message);
           resolve(null);
+        }
+      });
+    });
+  }
+
+  /**
+   * Replace the FULL-LIST sidebar mirror with the server's authoritative list.
+   *
+   * Distinct from `put()` (which caches OPENED convs + their messages), this
+   * stores a lightweight row per conversation the server reports — so the boot
+   * path can paint the ENTIRE sidebar before the network round-trip. Rewritten
+   * wholesale (clear + bulk put) in ONE transaction so a conv deleted elsewhere
+   * simply falls out of the mirror; the anti-resurrect judgement stays with the
+   * caller (loadConversationsFromServer's _serverRev sweep), never here.
+   *
+   * Only the cheap metadata is persisted (id/title/updatedAt/createdAt/rev/
+   * msgCount/settings) — never message bodies.
+   * @param {Array<object>} serverConvs rows from the ?meta=1 list response
+   * @returns {Promise<number>} number of rows written
+   */
+  function putSidebarList(serverConvs) {
+    if (!_available || !Array.isArray(serverConvs)) return Promise.resolve(0);
+    return _open().then(function (db) {
+      if (!db) return 0;
+      return new Promise(function (resolve) {
+        try {
+          var tx = db.transaction(SIDEBAR_STORE, 'readwrite');
+          var store = tx.objectStore(SIDEBAR_STORE);
+          store.clear();
+          var written = 0;
+          serverConvs.forEach(function (sc) {
+            if (!sc || !sc.id) return;
+            var count = sc.messageCount != null ? sc.messageCount
+              : (sc.msgCount != null ? sc.msgCount : sc.msg_count);
+            store.put({
+              id: sc.id,
+              title: sc.title || 'Untitled',
+              createdAt: sc.createdAt || sc.created_at || 0,
+              updatedAt: sc.updatedAt || sc.updated_at || sc.createdAt || 0,
+              rev: (typeof sc.rev === 'number') ? sc.rev : null,
+              msgCount: count || 0,
+              settings: sc.settings || {},
+            });
+            written++;
+          });
+          tx.oncomplete = function () {
+            console.debug('[ConvCache] putSidebarList wrote %d rows', written);
+            resolve(written);
+          };
+          tx.onerror = function () {
+            console.warn('[ConvCache] putSidebarList tx error: %o', tx.error);
+            resolve(0);
+          };
+          tx.onabort = function () {
+            console.warn('[ConvCache] putSidebarList tx aborted: %o', tx.error);
+            resolve(0);
+          };
+        } catch (e) {
+          console.warn('[ConvCache] putSidebarList exception: %s', e.message);
+          resolve(0);
+        }
+      });
+    });
+  }
+
+  /**
+   * Read the FULL-LIST sidebar mirror written by `putSidebarList`. Used by the
+   * boot path to paint the whole sidebar (not just opened convs) before the
+   * server list arrives.
+   * @returns {Promise<Array<{id,title,createdAt,updatedAt,rev,msgCount,settings}>>}
+   */
+  function getSidebarList() {
+    if (!_available) return Promise.resolve([]);
+    return _open().then(function (db) {
+      if (!db) return [];
+      return new Promise(function (resolve) {
+        try {
+          var tx = db.transaction(SIDEBAR_STORE, 'readonly');
+          var out = [];
+          var cursorReq = tx.objectStore(SIDEBAR_STORE).openCursor();
+          cursorReq.onsuccess = function (e) {
+            var c = e.target.result;
+            if (c) { out.push(c.value); c.continue(); }
+          };
+          tx.oncomplete = function () { resolve(out); };
+          tx.onerror = function () {
+            console.warn('[ConvCache] getSidebarList tx error: %o', tx.error);
+            resolve(out);
+          };
+        } catch (e) {
+          console.warn('[ConvCache] getSidebarList exception: %s', e.message);
+          resolve([]);
         }
       });
     });
@@ -630,10 +734,15 @@ var ConvCache = (function () {
       if (!db) return;
       return new Promise(function (resolve) {
         try {
-          var tx = db.transaction([META_STORE, MSG_STORE], 'readwrite');
+          var tx = db.transaction([META_STORE, MSG_STORE, SIDEBAR_STORE], 'readwrite');
           tx.objectStore(META_STORE).delete(id);
           var range = IDBKeyRange.bound([id, KEY_MIN], [id, KEY_MAX]);
           tx.objectStore(MSG_STORE).delete(range);
+          // Keep the full-list mirror consistent on an individual delete (a
+          // wholesale putSidebarList would also drop it, but this reflects the
+          // removal immediately so a boot before the next full load can't
+          // repaint a just-deleted conv).
+          tx.objectStore(SIDEBAR_STORE).delete(id);
           tx.oncomplete = function () {
             console.debug('[ConvCache] remove id=%s', id);
             resolve();
@@ -719,9 +828,10 @@ var ConvCache = (function () {
       if (!db) return;
       return new Promise(function (resolve) {
         try {
-          var tx = db.transaction([META_STORE, MSG_STORE], 'readwrite');
+          var tx = db.transaction([META_STORE, MSG_STORE, SIDEBAR_STORE], 'readwrite');
           tx.objectStore(META_STORE).clear();
           tx.objectStore(MSG_STORE).clear();
+          tx.objectStore(SIDEBAR_STORE).clear();
           tx.oncomplete = function () {
             console.info('[ConvCache] ✅ Cache cleared');
             resolve();
@@ -847,6 +957,8 @@ var ConvCache = (function () {
     get: get,
     getMeta: getMeta,
     getAllMeta: getAllMeta,
+    getSidebarList: getSidebarList,
+    putSidebarList: putSidebarList,
     getMessages: getMessages,
     put: put,
     remove: remove,

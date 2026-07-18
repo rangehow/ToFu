@@ -1043,7 +1043,24 @@ function _applySettingsToConv(conv, settings) {
 async function hydrateSidebarFromCache() {
   try {
     if (typeof ConvCache === 'undefined' || !ConvCache.isAvailable()) return 0;
-    const metas = await ConvCache.getAllMeta();
+    /* ★ Prefer the FULL-LIST sidebar mirror (putSidebarList) — it holds EVERY
+     *   conversation the server last reported, so the sidebar paints complete
+     *   on a cold boot instead of only the handful opened on this device.
+     *   Fall back to getAllMeta (opened-conv metas) when the mirror is empty
+     *   (first run before any full load, or a v2→v3 upgrade). Both shapes carry
+     *   id/title/updatedAt/settings + a message-count key, which is all the
+     *   shell builder below needs. The mirror additionally carries `rev`, which
+     *   we adopt as the CAS base so the id-keyed merge treats the shell as
+     *   known (skew-proof staleness) rather than re-pulling every body. */
+    let metas = [];
+    let fromFullList = false;
+    if (ConvCache.getSidebarList) {
+      metas = await ConvCache.getSidebarList();
+      fromFullList = !!(metas && metas.length);
+    }
+    if (!fromFullList) {
+      metas = await ConvCache.getAllMeta();
+    }
     if (!metas || !metas.length) return 0;
     const known = new Set(conversations.map(c => c.id));
     let added = 0;
@@ -1058,10 +1075,15 @@ async function hydrateSidebarFromCache() {
         _serverMsgCount: _mCount,
         _needsLoad: _mCount > 0,
         _fromCache: true,
-        createdAt: m.updatedAt || m.cachedAt || Date.now(),
+        createdAt: m.createdAt || m.updatedAt || m.cachedAt || Date.now(),
         updatedAt: m.updatedAt || m.cachedAt || Date.now(),
         activeTaskId: null,
       };
+      /* Adopt the mirror's CAS base rev when present (full-list rows carry it;
+       * opened-conv metas do not) so loadConversationsFromServer's id-keyed
+       * merge trusts the monotonic rev signal for this shell instead of a
+       * skew-prone wall-clock, and a first PUT sends a matching baseRev. */
+      if (typeof m.rev === 'number') nc._serverRev = m.rev;
       _applySettingsToConv(nc, m.settings);
       /* ★ Poor-network durability: restore the conv-level pending-sync marker
        *   from the cached meta so the flush poller can SEE a stranded pending
@@ -1172,6 +1194,17 @@ async function loadConversationsFromServer(prefetchId) {
     }
     console.log(`[loadConversationsFromServer] Got ${serverConvs.length} convs from server, local has ${conversations.length}`);
     _lastServerLoadOk = true;   // server reached + responded with a list (empty is still a valid answer)
+    /* ★ Persist the FULL authoritative list into the lightweight sidebar
+     *   mirror so the NEXT cold boot paints the entire sidebar before its
+     *   server round-trip (the "打开即在" fix). Fire-and-forget — never blocks
+     *   the merge/render, and a cache write failure is cosmetic. Guarded on a
+     *   non-empty list so a transient empty response can't wipe the mirror. */
+    if (serverConvs.length && typeof ConvCache !== 'undefined' && ConvCache.putSidebarList) {
+      try {
+        ConvCache.putSidebarList(serverConvs).catch(e =>
+          debugLog(`putSidebarList failed: ${e && e.message}`, 'warn'));
+      } catch (e) { debugLog(`putSidebarList threw: ${e && e.message}`, 'warn'); }
+    }
     if (!serverConvs.length) return;
     const localMap = new Map(conversations.map((c) => [c.id, c]));
     let merged = false,

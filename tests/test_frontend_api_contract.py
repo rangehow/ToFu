@@ -6,8 +6,8 @@ backend route surface from silently drifting apart. Complements
 outside api.js) — that guard proves nobody bypasses the client; THIS guard
 proves the client's own contract is sound in both directions.
 
-Direction 1 — every ``/api/*`` path template in api.js resolves to a REAL
-    backend route.
+Direction 1 — every ``(/api/* path, HTTP method)`` pair used by api.js resolves
+    to a REAL backend route that ACCEPTS that method.
     Authoritative source = the LIVE Quart ``url_map`` (built by the conftest
     ``flask_app`` fixture via ``server.register_all(app)``), NOT a regex scan of
     ``@route`` decorators. The url_map is the single source of truth: it already
@@ -17,6 +17,20 @@ Direction 1 — every ``/api/*`` path template in api.js resolves to a REAL
     source-only scan produces (a source scan flagged ``/api/v1/trading`` as a
     dead call because trading was extracted to a plugin). No hardcoded
     allowlist to drift.
+    METHOD-AWARE: the check is on the ``(path, method)`` pair against each
+    rule's ``rule.methods`` (auto HEAD/OPTIONS excluded), NOT a path-only set.
+    A path that exists but is called with a verb the route does not allow is a
+    runtime 405 — this guard catches that method-drift class, and the failure
+    names the offending method plus the methods the route actually allows.
+    The method for each call is resolved statically from the client's own verb
+    wrappers (``get/post/put/patch/del/stream`` → GET/POST/PUT/PATCH/DELETE/GET)
+    and from the literal ``method:`` in ``request(path, {method:'X'})`` calls —
+    including the two-pass ``const url = <literal> … request(url, {method})``
+    indirection. If a call site's method CANNOT be statically resolved (a truly
+    dynamic ``method:`` expression), the test FAILS demanding the author make it
+    explicit — it is never silently defaulted to GET, and there is no exemption
+    allowlist (that would reintroduce the drift-prone whitelist this guard
+    deliberately avoids).
     Fixture-build failure is a HARD FAIL, never a skip: a guard the environment
     can silently skip is no guard, and the whole suite already depends on this
     fixture.
@@ -73,35 +87,110 @@ def _read(path: str) -> str:
 
 
 # ── api.js parsing ────────────────────────────────────────────────────
-def _api_js_paths() -> set[str]:
-    """Every ``/api/...`` string/template literal in api.js (comments stripped),
-    normalized, EXCEPT plugin-prefix base constants.
+# Verb wrapper name → HTTP method. These wrappers encode the method in their
+# NAME (see api.js ``function get/post/put/patch/del/stream``), so the method
+# is 100% reliable from the call token.
+_VERB_METHOD = {
+    'get': 'GET', 'post': 'POST', 'put': 'PUT',
+    'patch': 'PATCH', 'del': 'DELETE', 'stream': 'GET',
+}
+# Sentinel verb for a call whose method cannot be resolved statically.
+_UNRESOLVED = '<dynamic>'
 
-    A literal assigned to a ``_*_BASE`` const (e.g. ``const _TRADING_BASE =
-    '/api/v1/trading';``) is a PREFIX that the client only ever uses as
-    ``_TRADING_BASE + path`` — the bare prefix is never hit as an endpoint, and
-    the concrete routes under it live in an external entry-point plugin
-    (``tofu.blueprints``) that mounts only when installed + enabled. Requiring
-    such a prefix to match a live route would falsely flag it whenever the
-    plugin isn't mounted (exactly the ``/api/v1/trading`` false positive a
-    source-only scan produced). Excluding ``_*_BASE`` assignments is the
-    principled, plugin-agnostic fix — no hardcoded route name. The endpoints
-    that DO get concatenated onto the base still can't be verified statically
-    (the plugin owns them), which is correct: core must not assert a plugin's
-    internal route shape.
-    """
-    s = _strip_comments(_read(API_JS))
-    # Literals bound to a _*_BASE const → plugin prefixes, excluded.
-    base_literals = set(
+
+def _base_literals(s: str) -> set[str]:
+    """Literals bound to a ``_*_BASE`` const → plugin-prefix constants."""
+    return set(
         re.findall(r"""_[A-Z][A-Z0-9_]*BASE\s*=\s*[`'"](/api/[^`'"]*)[`'"]""", s)
     )
-    out: set[str] = set()
+
+
+def _resolve_request_method(s: str, lit_end: int) -> str | None:
+    """For a ``request(<literal>, <opts>)`` call, read the literal ``method:``
+    from the opts object that follows the path literal. Returns the METHOD
+    string, ``'GET'`` when no ``method:`` key is present (request()'s default),
+    or ``_UNRESOLVED`` when a ``method:`` key exists but its value is not a
+    plain string literal (a dynamic expression → must be made explicit)."""
+    after = s[lit_end:lit_end + 240]
+    # Cut at the end of this call's opts object (first ');' or '})') to avoid
+    # reading a sibling call's method.
+    cut = re.search(r'\)\s*[;,]|\}\s*\)', after)
+    window = after[:cut.end()] if cut else after
+    km = re.search(r'method\s*:', window)
+    if not km:
+        return 'GET'  # request() defaults to GET
+    lit = re.match(r"""\s*['"]([A-Za-z]+)['"]""", window[km.end():])
+    if lit:
+        return lit.group(1).upper()
+    return _UNRESOLVED  # method: <expr> — dynamic, force explicit
+
+
+def _api_js_path_verbs():
+    """Extract every ``(normalized_path, METHOD)`` pair the client can hit,
+    plus a list of unresolved-method call sites.
+
+    Resolution strategy (see module docstring, Direction 1):
+      1. Verb wrappers ``get/post/put/patch/del/stream('/api/…')`` → method
+         from the wrapper NAME.
+      2. ``request('/api/…', {method:'X'})`` → literal method (default GET).
+      3. Two-pass indirection ``const url = <literal> … request(url,{method})``:
+         a path literal NOT directly preceded by an opener is matched to the
+         nearest following ``request(<var>, {method:'X'})`` in a bounded window.
+      4. ``_resolve('/api/…')`` URL builders (href / asset / exportUrl) → GET.
+      5. ``_*_BASE`` plugin-prefix constants → excluded (plugin owns routes).
+
+    Returns ``(pairs, unresolved)`` where ``pairs`` is a set of
+    ``(path, METHOD)`` and ``unresolved`` is a list of ``(path, reason)`` whose
+    method could not be statically determined — the caller FAILS on any.
+    """
+    s = _strip_comments(_read(API_JS))
+    bases = _base_literals(s)
+    opener = re.compile(r'(get|post|put|patch|del|stream|request|_resolve)\(\s*$')
+
+    pairs: set[tuple[str, str]] = set()
+    unresolved: list[tuple[str, str]] = []
+
     for m in re.finditer(r"""[`'"](/api/[^`'"]*)[`'"]""", s):
         raw = m.group(1)
-        if raw in base_literals:
+        if raw in bases:
             continue
-        out.add(_norm_path(raw))
-    return out
+        norm = _norm_path(raw)
+        before = s[max(0, m.start() - 48):m.start()]
+        om = opener.search(before)
+        verb: str | None
+        if om:
+            fn = om.group(1)
+            if fn in _VERB_METHOD:
+                verb = _VERB_METHOD[fn]
+            elif fn == '_resolve':
+                verb = 'GET'          # URL builder → browser GET / asset href
+            else:                     # request(<literal>, {...})
+                verb = _resolve_request_method(s, m.end())
+        else:
+            # Indirection: literal assigned to a var (const url = <lit> / ? : ),
+            # then request(url, {method:'X'}) later. Find the nearest following
+            # request(<ident>, {...}) within a bounded window and read its
+            # literal method.
+            follow = s[m.end():m.end() + 400]
+            rm = re.search(r'request\(\s*[A-Za-z_]\w*\s*,', follow)
+            if rm:
+                verb = _resolve_request_method(s, m.end() + rm.end())
+            else:
+                verb = _UNRESOLVED
+
+        if verb == _UNRESOLVED:
+            unresolved.append((norm, 'method not a string literal / no opener'))
+        else:
+            pairs.add((norm, verb))
+
+    return pairs, unresolved
+
+
+def _api_js_paths() -> set[str]:
+    """Path-only view (kept for the domain sanity checks / callers that only
+    need the set of paths). Method-aware verification uses _api_js_path_verbs."""
+    pairs, _ = _api_js_path_verbs()
+    return {p for p, _ in pairs}
 
 
 def _match_first_brace_block(s: str, open_idx: int) -> str:
@@ -177,17 +266,21 @@ def _api_call_sites() -> set[tuple[str, str, str]]:
     return out
 
 
-# ── Direction 1: FE paths ⊆ live backend routes ───────────────────────
-def _live_route_paths(flask_app) -> set[str]:
-    """Normalized set of every registered route path from the LIVE url_map."""
-    routes: set[str] = set()
+# ── Direction 1: FE (path, method) ⊆ live backend routes ──────────────
+def _live_route_methods(flask_app) -> dict[str, set[str]]:
+    """Map normalized route path → set of accepted HTTP methods from the LIVE
+    url_map (auto-added HEAD/OPTIONS excluded)."""
+    out: dict[str, set[str]] = {}
     for rule in flask_app.url_map.iter_rules():
-        routes.add(_norm_path(str(rule.rule)))
-    return routes
+        methods = {m for m in (rule.methods or set()) if m not in ('HEAD', 'OPTIONS')}
+        out.setdefault(_norm_path(str(rule.rule)), set()).update(methods)
+    return out
 
 
 def test_api_js_paths_resolve_to_real_routes(flask_app):
-    """Every /api/* template in api.js must match a real registered route.
+    """Every (/api/* path, HTTP method) pair used by api.js must match a real
+    registered route that ACCEPTS that method (checked against rule.methods —
+    NOT a path-only set, so 405 method-drift is caught, not just 404).
 
     HARD requirement: this depends on the ``flask_app`` fixture (the live app).
     If the fixture cannot build, the test FAILS — it is never skipped. A guard
@@ -197,20 +290,48 @@ def test_api_js_paths_resolve_to_real_routes(flask_app):
     assert flask_app is not None, 'flask_app fixture did not build the app'
     assert hasattr(flask_app, 'url_map'), 'flask_app has no url_map — cannot verify routes'
 
-    live = _live_route_paths(flask_app)
+    live = _live_route_methods(flask_app)
     assert live, 'url_map yielded zero routes — app built empty, cannot verify'
 
-    fe_paths = _api_js_paths()
-    assert fe_paths, 'api.js yielded zero /api paths — parser broke'
+    pairs, unresolved = _api_js_path_verbs()
+    assert pairs, 'api.js yielded zero /api (path, method) pairs — parser broke'
 
-    orphans = sorted(p for p in fe_paths if p not in live)
-    if orphans:
-        details = '\n'.join(f'  {p}' for p in orphans)
+    # (a) Any call whose method could not be statically resolved must be made
+    #     explicit — never silently defaulted, never allowlisted.
+    if unresolved:
+        details = '\n'.join(f'  {p}  ({why})' for p, why in sorted(set(unresolved)))
         pytest.fail(
-            'api.js references /api paths with NO matching backend route '
-            '(dead client calls — 404 at runtime). Either the route was '
-            'removed/renamed or the api.js template is wrong:\n' + details
+            'api.js has /api call sites whose HTTP method cannot be resolved '
+            'statically (dynamic method: expression). Make the method an '
+            'explicit string literal so the contract can be verified:\n' + details
         )
+
+    # (b) path-missing (404 class) and method-mismatch (405 class), reported
+    #     distinctly so a CI failure is diagnosable from the log alone.
+    missing_path: list[str] = []
+    method_mismatch: list[str] = []
+    for path, verb in sorted(pairs):
+        allowed = live.get(path)
+        if allowed is None:
+            missing_path.append(f'  {verb} {path}')
+        elif verb not in allowed:
+            method_mismatch.append(
+                f'  {verb} {path}  — route allows {sorted(allowed)}'
+            )
+
+    if missing_path or method_mismatch:
+        msg = ['api.js references /api routes that do not resolve as called:']
+        if missing_path:
+            msg.append('\n404 — path has NO matching backend route:')
+            msg.extend(missing_path)
+        if method_mismatch:
+            msg.append('\n405 — path exists but does NOT accept that method:')
+            msg.extend(method_mismatch)
+        msg.append(
+            '\nFix: correct the api.js path/verb, or add/adjust the backend '
+            'route so the method is accepted.'
+        )
+        pytest.fail('\n'.join(msg))
 
 
 # ── Direction 2: (domain, method) call sites ⊆ api.js definitions ──────

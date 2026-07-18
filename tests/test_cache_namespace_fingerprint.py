@@ -295,6 +295,38 @@ def test_marker_signature_captures_ttl_value():
     assert markers_ttl_flipped(sig_1h, None) is False
 
 
+def test_markers_ttl_flip_no_false_positive_on_sys_count_change():
+    """★ THE FALSE-POSITIVE FIX (regression guard). When the system marker COUNT
+    changes but every marker's ttl VALUE is unchanged — the real case where the
+    mid-history anchor arms as a conversation grows within one task and
+    ``_system_bp_budget`` drops 2→1, so the ``sys`` slot goes ['1h','1h']→['1h']
+    — this is NOT a ttl flip and must NOT fire. The old multiset compare cried
+    wolf here, mislabelling a byte-changed miss as an in-task ttl re-key
+    (observed live: conv mrqcu3o7 call 28→29). A genuine value flip on a
+    surviving slot must still fire (asserted above)."""
+    from lib.tasks_pkg.wire_fingerprint import markers_ttl_flipped
+
+    # Two sys markers @1h + tool @1h + tail (bare) → one sys marker @1h (+ mid
+    # anchor armed). ALL surviving-slot ttl VALUES unchanged (still 1h).
+    prev = {'count': 4, 'sys': 2, 'tools': 1,
+            'ttls': sorted([('sys', '1h'), ('sys', '1h'),
+                            ('tools', '1h'), ('msg:k1', '')])}
+    cur = {'count': 4, 'sys': 1, 'tools': 1,
+           'ttls': sorted([('sys', '1h'), ('tools', '1h'),
+                           ('msg:k2', ''), ('msg:k3', '')])}
+    assert markers_ttl_flipped(prev, cur) is False, (
+        'a sys marker-count change with UNCHANGED ttl value must NOT be flagged '
+        'as a ttl flip (the multiset false-positive)')
+
+    # Control: the SAME count change but the surviving sys ttl actually flips
+    # 1h→5m → this IS a real re-key and MUST still fire.
+    cur_flip = {'count': 4, 'sys': 1, 'tools': 1,
+                'ttls': sorted([('sys', ''), ('tools', '1h'),
+                                ('msg:k2', ''), ('msg:k3', '')])}
+    assert markers_ttl_flipped(prev, cur_flip) is True, (
+        'a genuine 1h→5m value flip on the surviving sys slot must still fire')
+
+
 def test_detector_names_ttl_flip_client_side_on_identical_body():
     """★ THE #2 FIX. Body byte-identical, marker count/position identical, but a
     stable marker's cache_control.ttl flipped 1h→5m (the _task_id-drop latch

@@ -593,18 +593,32 @@ def markers_ttl_flipped(prev: dict | None, cur: dict | None) -> bool:
     # Pre-fix signature (no ttls captured) → inert, never cry wolf.
     if _p is None or _c is None:
         return False
-    # Compare as multisets of (slot, ttl). A benign tail advance changes the
-    # per-message slot KEY, so restrict the comparison to the ttl values of
-    # slots PRESENT IN BOTH rounds — a value flip on a surviving slot is the
-    # signal; an added/removed slot is a count change (markers_regressed's job).
-    _pm = {}
+    # Compare the DISTINCT ttl VALUE SET per slot, on slots PRESENT IN BOTH
+    # rounds. A value flip on a surviving slot is the signal; an added/removed
+    # slot is a count change (markers_regressed's job).
+    #
+    # ★ SET, not multiset. Every marker within a slot carries the SAME ttl in
+    #   normal operation (all `sys` markers use `_cc_stable`; `tools` is one
+    #   marker; each `msg:<canonical_key>` slot is one unique message with one
+    #   marker), so a slot's value set is homogeneous. The ONLY way a multiset
+    #   compare differed from a set compare was a pure COUNT change with the
+    #   value unchanged — e.g. the `sys` slot going ['1h','1h']→['1h'] when the
+    #   mid-history anchor arms as a conversation grows and `_system_bp_budget`
+    #   drops 2→1. That is NOT a ttl flip (no value changed) yet the old
+    #   multiset compare cried wolf → a spurious <ttl-flip> "cache re-keyed"
+    #   verdict on a byte-changed round, mislabelling a real miss as an in-task
+    #   latch bypass. Comparing distinct-value sets makes that count change
+    #   inert while a genuine 1h↔5m VALUE flip on a slot ({'1h'} vs {''}) still
+    #   fires — matching this function's own documented intent ("an existing
+    #   slot's ttl value flipped").
+    _pm: dict[str, set] = {}
     for slot, ttl in _p:
-        _pm.setdefault(slot, []).append(ttl)
-    _cm = {}
+        _pm.setdefault(slot, set()).add(str(ttl))
+    _cm: dict[str, set] = {}
     for slot, ttl in _c:
-        _cm.setdefault(slot, []).append(ttl)
+        _cm.setdefault(slot, set()).add(str(ttl))
     for slot in set(_pm) & set(_cm):
-        if sorted(map(str, _pm[slot])) != sorted(map(str, _cm[slot])):
+        if _pm[slot] != _cm[slot]:
             return True
     return False
 

@@ -195,11 +195,14 @@ function _cacheBreakReason(cb) {
  *               msg.field. Actionable, our fault. (prefix_mutation key, OR any
  *               client-side change: system_prompt/tools/model/message_count.)
  *   'eviction'— LEGACY persisted rows only: an older byte-identical verdict
- *               that asserted an upstream eviction. Current byte-identical
- *               rows no longer over-claim a cause — they read as 'unproven'.
- *               (Also matches legacy 'PROVEN' rows.)
- *   'unproven'— server-side is only a possibility, not a confident cause
- *               (a byte-identical upstream miss, or no wire fingerprint).
+ *               that asserted an upstream eviction. (Also matches legacy
+ *               'PROVEN' rows.)
+ *   'upstream'— CURRENT dominant real-traffic verdict: the wire bytes were
+ *               PROVEN byte-identical to the previous round, so the miss is
+ *               NOT our client-side change — an upstream non-reuse we have
+ *               cleared ourselves of. NOT an unproven guess; do not apologise.
+ *   'unproven'— genuine guess: no wire fingerprint was captured (non-Claude /
+ *               capture failure), so server-side is only a possibility.
  *   ''        — no break.
  * Keyed off the backend cause text so it can never drift from what
  * _cacheBreakReason renders. */
@@ -213,11 +216,23 @@ function _cacheBreakState(cb) {
                   || k === 'model' || k === 'message_count')) return 'culprit';
   // Otherwise inspect the server_side / no_cache_reuse cause text.
   const txt = String(cb.server_side || cb.no_cache_reuse || '');
-  // Byte-identical prefix that wasn't read back → an upstream cache eviction
-  // (our-side LRU/routing, actionable). The legacy 'PROVEN' rows are the same
-  // phenomenon under the old (misleading "server-side") wording — fold them in.
+  // LEGACY persisted rows: the old 'upstream cache eviction' verdict + the
+  // older 'server-side … PROVEN' wording fold into 'eviction' so history
+  // renders consistently (never the reassuring teal).
   if (txt.includes('upstream cache eviction')
       || (txt.includes('PROVEN') && !txt.includes('UNPROVEN'))) return 'eviction';
+  // ★ CURRENT wire-fingerprint verdict (the DOMINANT real-traffic case): the
+  //   post-translation wire bytes were byte-identical to the previous round,
+  //   so we PROVED this miss is NOT a client-side prefix change. That is a
+  //   POSITIVE proof about our own side — it must NOT be laundered into the
+  //   apologetic 'unproven' badge (that read as a cache-miss "excuse"). Give
+  //   it its own state: an upstream non-reuse we have cleared ourselves of.
+  //   Keep this AFTER the legacy 'upstream cache eviction' check, whose text
+  //   ALSO contains "byte-identical to the previous round".
+  if (txt.includes('byte-identical to the previous round')
+      && txt.includes('NOT a client-side prefix change')) return 'upstream';
+  // Only a genuine no-wire-fingerprint fallback (non-Claude / capture failure)
+  // remains a true guess.
   if (txt.includes('UNPROVEN')) return 'unproven';
   // A cause we can't classify (legacy string) → treat as unproven guess.
   return txt ? 'unproven' : '';

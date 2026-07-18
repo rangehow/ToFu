@@ -109,10 +109,14 @@ check('english_verbatim', _translateCacheCause(_proven) === _proven);
 _i18nLang = 'zh';
 
 // ── 2. State classification ──
-// The CURRENT backend wording no longer over-claims: a byte-identical read
-// drop is named an upstream cache MISS possibility → classified 'unproven'.
+// The CURRENT dominant real-traffic verdict: a byte-identical wire proves the
+// miss is NOT our client-side change → its OWN 'upstream' state (our side
+// cleared), NOT the apologetic 'unproven' guess.
 const _byteIdent = 'prefix not read back though the wire bytes were byte-identical to the previous round — so this round is NOT a client-side prefix change. The whole cached prefix was not reused upstream: most likely an upstream cache miss (a per-request gateway miss, a TTL boundary, or contention in this key\'s shared cache pool when several large prefixes are active at once). (Most misses in this system are instead client-side and are named per-field above; this is not that class.)';
-check('state_byteident_is_unproven', _cacheBreakState({ server_side: _byteIdent }) === 'unproven');
+check('state_byteident_is_upstream', _cacheBreakState({ server_side: _byteIdent }) === 'upstream');
+// A TRUE no-fingerprint fallback (non-Claude / capture failure) stays 'unproven'.
+check('state_nofp_is_unproven',
+  _cacheBreakState({ server_side: 'prefix not reused — likely server-side miss or TTL expiry (UNPROVEN — no wire fingerprint)' }) === 'unproven');
 // LEGACY persisted rows: the old 'upstream cache eviction' verdict + the older
 // 'server-side … PROVEN' wording must still fold into 'eviction' so history
 // renders consistently (never the reassuring teal).
@@ -200,6 +204,7 @@ global.t = (k, o) => {
   if (k === 'finishInfo.cacheBreakLabel') return 'MISS: ' + (o.reason || '');
   if (k === 'finishInfo.cbState.culprit') return 'OUR-EDIT-BADGE';
   if (k === 'finishInfo.cbState.eviction') return 'EVICTION-BADGE';
+  if (k === 'finishInfo.cbState.upstream') return 'UPSTREAM-BADGE';
   if (k === 'finishInfo.cbState.proven') return 'PROVEN-BADGE';
   if (k === 'finishInfo.cbState.unproven') return 'UNPROVEN-BADGE';
   if (k && k.indexOf('{') === -1 && o && Object.keys(o).length) {
@@ -245,15 +250,17 @@ check('render_shows_culprit_text',
 check('render_has_culprit_state_class', html.indexOf('cp-break-culprit') !== -1);
 check('render_has_our_edit_badge', html.indexOf('OUR-EDIT-BADGE') !== -1);
 
-// A byte-identical round (read not reused): badge present, but NO culprit line
-// (not a client byte change) — and it must NOT render the reassuring teal
-// 'proven' class. Current wording classifies 'unproven'.
+// A byte-identical round (read not reused): the CURRENT dominant real-traffic
+// verdict. It proves the miss is NOT our client change → its OWN 'upstream'
+// badge, NOT the apologetic 'unproven' one, and NO culprit line (not a client
+// byte change). This is the exact "疑似服务端（未证实）excuse" the user rejected.
 const html2 = _buildCostPopover(_ctx({ server_side:
   'prefix not read back though the wire bytes were byte-identical to the previous round — so this round is NOT a client-side prefix change. The whole cached prefix was not reused upstream: most likely an upstream cache miss (a per-request gateway miss, a TTL boundary, or contention in this key\'s shared cache pool when several large prefixes are active at once). (Most misses in this system are instead client-side and are named per-field above; this is not that class.)' }));
-check('byteident_has_badge', html2.indexOf('UNPROVEN-BADGE') !== -1);
+check('byteident_has_upstream_badge', html2.indexOf('UPSTREAM-BADGE') !== -1);
+check('byteident_not_unproven_badge', html2.indexOf('UNPROVEN-BADGE') === -1);
 check('byteident_no_culprit_line', html2.indexOf('cp-break-culprit') === -1);
-check('byteident_state_class', html2.indexOf('cp-break-unproven') !== -1);
-check('byteident_not_proven_teal', html2.indexOf('cp-break-proven') === -1);
+check('byteident_state_class', html2.indexOf('cp-break-upstream') !== -1);
+check('byteident_not_unproven_class', html2.indexOf('cp-break-unproven') === -1);
 
 console.log(out.join('\n'));
 """

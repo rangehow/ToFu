@@ -2154,6 +2154,9 @@ var _i18n = {
   'fileChanges.undoAll': { zh: '全部撤销', en: 'Undo All' },
   'fileChanges.undoTip': { zh: '撤销本轮修改', en: 'Undo this round\u2019s changes' },
   'fileChanges.undoAllTip': { zh: '撤销所有对话中的所有修改', en: 'Undo all changes across the whole conversation' },
+  'fileChanges.redo': { zh: '重做', en: 'Redo' },
+  'fileChanges.redoTip': { zh: '重新应用本轮修改', en: 'Re-apply this round\u2019s changes' },
+  'fileChanges.undone': { zh: '{n} 个文件已撤销', en: '{n} file{s} undone' },
   // Per-file action verbs (key === backend action; unknown actions render verbatim)
   'fileChanges.action.created': { zh: '已创建', en: 'created' },
   'fileChanges.action.modified': { zh: '已修改', en: 'modified' },

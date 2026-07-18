@@ -850,6 +850,13 @@
     undoAll:       (body)     =>
       request('/api/v1/project/undo-all',
               { method: 'POST', json: body || {}, parse: 'response' }),
+    // Re-apply a previously-undone round. Backend requires taskId; the caller
+    // MUST also pin the conversation's own projectPath (undo deleted the
+    // round's record, so redo resolves the project from the pin, never the
+    // globally-active UI project). Mirrors undo's concurrency contract.
+    redo:          (body)     =>
+      request('/api/v1/project/redo',
+              { method: 'POST', json: body, parse: 'response' }),
     browse:        (path, showHidden) => post('/api/v1/project/browse', { path, showHidden: !!showHidden }),
     mkdir:         (parent, name)     =>
       request('/api/v1/project/mkdir',

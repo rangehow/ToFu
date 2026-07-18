@@ -198,6 +198,11 @@ function _msgFingerprint(msg) {
   let _fcFp = '';
   if (Array.isArray(msg.modifiedFileList) && msg.modifiedFileList.length) {
     _fcFp = _hashStr(msg.modifiedFileList.join('\n'));
+  } else if (Array.isArray(msg._undoneFileList) && msg._undoneFileList.length) {
+    /* Undone round: the "undone → Redo" bar renders off _undoneFileList, so its
+     * presence must move the fingerprint (undo flips modifiedFileList→undone,
+     * redo flips it back) or the surgical re-render would miss the state swap. */
+    _fcFp = 'u' + _hashStr(msg._undoneFileList.join('\n'));
   } else if (msg._fcResolvedFp) {
     /* Lazy file-change path (RENDER_CONTRACT L2): the extracted fallback list
      * lives in the `_fcResultByMsg` WeakMap (a DIFFERENT shape than the

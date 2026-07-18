@@ -786,11 +786,23 @@ async function undoConvModifications(msgIdx) {
           (data.failed ? ` (${data.failed} failed)` : ''),
           4000);
       }
+      // ★ Stash the round's file list + the pin needed to redo it, THEN clear
+      //   the live counter fields. Undo deletes the round's server-side record,
+      //   so redo must resupply taskId + the conversation's projectPath (the
+      //   route never falls back to the globally-active UI project). Keeping
+      //   modifiedFiles/modifiedFileList cleared keeps sidebar badges and the
+      //   render fingerprint honest — the "undone → Redo" bar renders off the
+      //   stashed _undoneFileList instead.
+      if (msg._taskId) {
+        msg._undoneFileList = Array.isArray(msg.modifiedFileList) ? msg.modifiedFileList : [];
+        msg._undoneTaskId = msg._taskId;
+        msg._undoneProjectPath = _getConvProjectPath(conv) || '';
+      }
       // Clear the modifiedFiles flag on this message
       msg.modifiedFiles = 0;
       msg.modifiedFileList = null;
       saveConversations(conv.id);
-      // Re-render the message to remove the undo button
+      // Re-render the message to swap the undo button for a redo button
       const el = document.getElementById(`msg-${msgIdx}`);
       if (el) el.outerHTML = renderMessage(msg, msgIdx);
       _lastRenderedFingerprint = _convRenderFingerprint(conv);
@@ -850,6 +862,49 @@ async function undoAllModifications() {
     }
   } catch (e) {
     debugLog("Undo all failed: " + e.message, "warn");
+  }
+}
+
+async function redoConvModifications(msgIdx) {
+  if (!projectState.active) return;
+  const conv = getActiveConv();
+  if (!conv) return;
+  const msg = conv.messages[msgIdx];
+  // Only meaningful on a round that was undone (carries the stash below).
+  if (!msg || msg.role !== "assistant" || !msg._undoneTaskId) return;
+  try {
+    // ★ Redo requires the round's taskId AND an explicit projectPath pin: undo
+    //   deleted the round's record, so the route resolves the project from the
+    //   pin, never the globally-active UI project (mirrors the undo contract;
+    //   covered by test_project_undo_redo_concurrent_resolution.py).
+    const body = { taskId: msg._undoneTaskId };
+    if (msg._undoneProjectPath) body.projectPath = msg._undoneProjectPath;
+    const resp = await Api.project.redo(body);
+    const data = resp ? await resp.json().catch(() => ({})) : {};
+    if (resp && resp.ok && data.ok) {
+      if (typeof showToast === 'function') {
+        showToast('↪️', 'Redo Complete',
+          `Re-applied ${data.redone} file change${data.redone !== 1 ? 's' : ''}`,
+          4000);
+      }
+      // Restore the live counter fields from the stash, clear the undone marks.
+      const restored = Array.isArray(msg._undoneFileList) ? msg._undoneFileList : [];
+      msg.modifiedFileList = restored;
+      msg.modifiedFiles = restored.length;
+      delete msg._undoneFileList;
+      delete msg._undoneTaskId;
+      delete msg._undoneProjectPath;
+      saveConversations(conv.id);
+      // Re-render the message to swap the redo button back for undo.
+      const el = document.getElementById(`msg-${msgIdx}`);
+      if (el) el.outerHTML = renderMessage(msg, msgIdx);
+      _lastRenderedFingerprint = _convRenderFingerprint(conv);
+      rescanProject();
+    } else {
+      debugLog("Redo failed: " + (data.error || "unknown error"), "warn");
+    }
+  } catch (e) {
+    debugLog("Redo failed: " + e.message, "warn");
   }
 }
 

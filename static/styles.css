@@ -3155,14 +3155,19 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .paper-qa-send-btn:activ
 .fc-icon.fc-pending{color:var(--text-tertiary);background:rgba(255,255,255,0.06);border-radius:50%}
 /* ── File Changes: Undo actions bar ── */
 .fc-actions{display:flex;align-items:center;gap:4px;margin-left:auto}
-.fc-undo-btn,.fc-undo-all-btn{display:inline-flex;align-items:center;gap:3px;padding:2px 8px;border:1px solid transparent;border-radius:6px;font-size:10px;font-weight:600;font-family:'JetBrains Mono',monospace;letter-spacing:.02em;cursor:pointer;transition:all .2s ease;line-height:1.3;white-space:nowrap;background:transparent}
+.fc-undo-btn,.fc-undo-all-btn,.fc-redo-btn{display:inline-flex;align-items:center;gap:3px;padding:2px 8px;border:1px solid transparent;border-radius:6px;font-size:10px;font-weight:600;font-family:'JetBrains Mono',monospace;letter-spacing:.02em;cursor:pointer;transition:all .2s ease;line-height:1.3;white-space:nowrap;background:transparent}
 .fc-undo-btn{color:rgba(96,165,250,0.85);border-color:rgba(96,165,250,0.25)}
 .fc-undo-btn:hover{color:#60a5fa;background:rgba(96,165,250,0.1);border-color:rgba(96,165,250,0.45);box-shadow:0 0 8px rgba(96,165,250,0.12)}
 .fc-undo-all-btn{color:rgba(248,113,113,0.75);border-color:rgba(248,113,113,0.2)}
 .fc-undo-all-btn:hover{color:#f87171;background:rgba(248,113,113,0.08);border-color:rgba(248,113,113,0.4);box-shadow:0 0 8px rgba(248,113,113,0.1)}
-.fc-undo-btn svg,.fc-undo-all-btn svg{flex-shrink:0;opacity:0.85}
-.fc-undo-btn:hover svg,.fc-undo-all-btn:hover svg{opacity:1}
-.fc-undo-btn:active,.fc-undo-all-btn:active{transform:scale(0.96)}
+.fc-redo-btn{color:rgba(52,211,153,0.85);border-color:rgba(52,211,153,0.25)}
+.fc-redo-btn:hover{color:#34d399;background:rgba(52,211,153,0.1);border-color:rgba(52,211,153,0.45);box-shadow:0 0 8px rgba(52,211,153,0.12)}
+.fc-undo-btn svg,.fc-undo-all-btn svg,.fc-redo-btn svg{flex-shrink:0;opacity:0.85}
+.fc-undo-btn:hover svg,.fc-undo-all-btn:hover svg,.fc-redo-btn:hover svg{opacity:1}
+.fc-undo-btn:active,.fc-undo-all-btn:active,.fc-redo-btn:active{transform:scale(0.96)}
+/* Undone round: dim the bar to read as reverted, Redo restores it. */
+.file-changes-bar.fc-undone{opacity:0.6}
+.file-changes-bar.fc-undone .fc-summary-text{text-decoration:line-through;text-decoration-thickness:1px}
 /* ── File Changes: animate new entries during streaming ── */
 .fc-pulse .fc-file{animation:fcFileIn .3s ease}
 @keyframes fcFileIn{from{opacity:0;transform:translateX(-8px)}to{opacity:1;transform:translateX(0)}}

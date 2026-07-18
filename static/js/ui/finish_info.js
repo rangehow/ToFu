@@ -1177,6 +1177,16 @@ function renderFileChangesBar(msg, msgIdx) {
     }));
     return _renderFileChangesHtml(files, false, msgIdx);
   }
+  // ★ Undone round: undo stashed the round's file list (clearing the live
+  //   modifiedFiles counter so badges/fingerprints stay honest). Render the
+  //   bar in a compact "undone → Redo" state so the action is reversible.
+  if (Array.isArray(msg._undoneFileList) && msg._undoneFileList.length) {
+    const files = msg._undoneFileList.map(f => ({
+      path: f.path, action: f.action, ok: true, count: 1,
+      root: f.root || ''
+    }));
+    return _renderFileChangesHtml(files, false, msgIdx, true);
+  }
   // Fallback: extract from toolRounds via /api/v1/messages/extract-file-changes.
   if (!msg.toolRounds || !msg.toolRounds.length) return '';
   const cached = _extractFileChangesFromRoundsCached(msg);
@@ -1207,7 +1217,7 @@ function renderFileChangesBar(msg, msgIdx) {
  * @param {Array} files - [{path, action, ok, count}]
  * @param {boolean} isStreaming - if true, add pulse animation
  */
-function _renderFileChangesHtml(files, isStreaming, msgIdx) {
+function _renderFileChangesHtml(files, isStreaming, msgIdx, isUndone) {
   if (!files.length) return '';
   const pendingCount = files.filter(f => f.pending).length;
   const okCount = files.filter(f => f.ok && !f.pending).length;
@@ -1227,9 +1237,13 @@ function _renderFileChangesHtml(files, isStreaming, msgIdx) {
 
   // Summary line
   const summaryParts = [];
-  if (okCount > 0) summaryParts.push(t('fileChanges.filesChanged', { n: okCount, s: okCount > 1 ? 's' : '' }));
-  if (pendingCount > 0) summaryParts.push(t('fileChanges.inProgress', { n: pendingCount }));
-  if (failCount > 0) summaryParts.push(t('fileChanges.failed', { n: failCount }));
+  if (isUndone) {
+    summaryParts.push(t('fileChanges.undone', { n: totalFiles, s: totalFiles > 1 ? 's' : '' }));
+  } else {
+    if (okCount > 0) summaryParts.push(t('fileChanges.filesChanged', { n: okCount, s: okCount > 1 ? 's' : '' }));
+    if (pendingCount > 0) summaryParts.push(t('fileChanges.inProgress', { n: pendingCount }));
+    if (failCount > 0) summaryParts.push(t('fileChanges.failed', { n: failCount }));
+  }
   const summaryText = summaryParts.join(t('fileChanges.summarySep'));
   const pulseClass = isStreaming ? ' fc-pulse' : '';
   const summaryIcon = '';
@@ -1268,26 +1282,35 @@ function _renderFileChangesHtml(files, isStreaming, msgIdx) {
     </div>`;
   }).join('');
 
+  // ★ Redo button — replaces Undo/Undo-All once the round has been undone.
+  //   Mirror-image icon (arrow curving the other way) to read as "re-apply".
+  const redoBtn = (isUndone && !isStreaming && typeof msgIdx === 'number')
+    ? `<button class="fc-redo-btn" onclick="event.stopPropagation();redoConvModifications(_msgElIndex(this))" title="${escapeHtml(t('fileChanges.redoTip'))}">` +
+      `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 7v6h-6"/><path d="M3 17a9 9 0 0 1 15-6.7L21 13"/></svg>` +
+      `<span>${escapeHtml(t('fileChanges.redo'))}</span></button>`
+    : '';
+
   // ★ Undo button — only for finalized (non-streaming) messages with a valid msgIdx
-  const undoBtn = (!isStreaming && typeof msgIdx === 'number')
+  const undoBtn = (!isUndone && !isStreaming && typeof msgIdx === 'number')
     ? `<button class="fc-undo-btn" onclick="event.stopPropagation();undoConvModifications(_msgElIndex(this))" title="${escapeHtml(t('fileChanges.undoTip'))}">` +
       `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-15-6.7L3 13"/></svg>` +
       `<span>${escapeHtml(t('fileChanges.undo'))}</span></button>`
     : '';
 
   // ★ Undo All button — always available as a separate interaction point
-  const undoAllBtn = (!isStreaming && typeof msgIdx === 'number')
+  const undoAllBtn = (!isUndone && !isStreaming && typeof msgIdx === 'number')
     ? `<button class="fc-undo-all-btn" onclick="event.stopPropagation();undoAllModifications()" title="${escapeHtml(t('fileChanges.undoAllTip'))}">` +
       `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-15-6.7L3 13"/><line x1="12" y1="7" x2="12" y2="3"/><line x1="8" y1="7" x2="12" y2="7"/></svg>` +
       `<span>${escapeHtml(t('fileChanges.undoAll'))}</span></button>`
     : '';
 
-  const actionBtns = (undoBtn || undoAllBtn)
-    ? `<div class="fc-actions">${undoBtn}${undoAllBtn}</div>` : '';
+  const actionBtns = (redoBtn || undoBtn || undoAllBtn)
+    ? `<div class="fc-actions">${redoBtn}${undoBtn}${undoAllBtn}</div>` : '';
 
   // Auto-expand for ≤ 5 files so users see details immediately
   const autoExpand = totalFiles <= 5 ? ' fc-expanded' : '';
-  return `<div class="file-changes-bar${pulseClass}${autoExpand}" data-fc-count="${totalFiles}">
+  const undoneClass = isUndone ? ' fc-undone' : '';
+  return `<div class="file-changes-bar${pulseClass}${autoExpand}${undoneClass}" data-fc-count="${totalFiles}">
     <div class="fc-summary" onclick="this.parentElement.classList.toggle('fc-expanded')">
       <span class="fc-summary-icon">${summaryIcon}</span>
       <span class="fc-summary-text">${summaryText}</span>

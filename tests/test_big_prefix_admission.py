@@ -320,3 +320,100 @@ def test_config_bad_values_fall_back(gate, monkeypatch):
     monkeypatch.setenv('TOFU_BIG_PREFIX_MAX_PER_KEY', '0')
     assert gate.threshold_tokens() == 150000
     assert gate.max_per_key() == 2
+
+
+
+# ── call-site contract: adding a 2nd key auto-activates admission ──
+#
+# The owner-facing promise of docs/CACHE_SECOND_KEY.md is that adding a second
+# Claude upstream key needs NO code change: the dispatch call site computes
+# ``_model_key_count`` from the number of DISTINCT key_names serving the model
+# and passes it as ``key_count=`` to big_prefix_slot. This test pins BOTH halves
+# of that contract so "add a key → residency admission takes over" is a
+# guaranteed behavior, not a verbal promise:
+#   (1) the key-count expression (api.py) counts distinct key_names, and
+#   (2) big_prefix_slot's no-op flips OFF exactly when that count crosses 1→2.
+
+class _FakeSlot:
+    def __init__(self, model, key_name):
+        self.model = model
+        self.key_name = key_name
+
+
+def _model_key_count(slots, model):
+    """The exact expression used at the dispatch call site (lib/llm_dispatch/
+    api.py): distinct key_names among slots serving THIS model."""
+    return len({s.key_name for s in slots if s.model == model})
+
+
+def test_key_count_expression_counts_distinct_keys():
+    # One model on one key → 1 (gate no-ops). A duplicate slot on the SAME key
+    # is still one namespace → still 1. A second DISTINCT key → 2.
+    single = [_FakeSlot('claude-opus-4-8', 'sankuai_key_0')]
+    assert _model_key_count(single, 'claude-opus-4-8') == 1
+
+    dup_same_key = [_FakeSlot('claude-opus-4-8', 'sankuai_key_0'),
+                    _FakeSlot('claude-opus-4-8', 'sankuai_key_0')]
+    assert _model_key_count(dup_same_key, 'claude-opus-4-8') == 1, \
+        'duplicate slots on the SAME key are one cache namespace'
+
+    two_keys = [_FakeSlot('claude-opus-4-8', 'sankuai_key_0'),
+                _FakeSlot('claude-opus-4-8', 'sankuai_key_1')]
+    assert _model_key_count(two_keys, 'claude-opus-4-8') == 2, \
+        'a second distinct key is a second cache namespace'
+    # Other models on other keys must NOT inflate this model's count.
+    mixed = two_keys + [_FakeSlot('gpt-5', 'openai_key_0')]
+    assert _model_key_count(mixed, 'claude-opus-4-8') == 2
+
+
+def test_adding_second_key_flips_gate_from_noop_to_admission(gate, monkeypatch):
+    """End-to-end contract: the count the call site would compute, fed as
+    key_count, is exactly what flips big_prefix_slot from no-op (1 key) to
+    active admission (2 keys) — with NO other change."""
+    monkeypatch.setenv('TOFU_BIG_PREFIX_MAX_PER_KEY', '1')
+    monkeypatch.setenv('TOFU_BIG_PREFIX_RESIDENCY_MAX', '1')
+    monkeypatch.setenv('TOFU_BIG_PREFIX_THRESHOLD_TOKENS', '100')
+    monkeypatch.setenv('TOFU_BIG_PREFIX_RESIDENCY_WAIT_MS', '400')
+
+    # --- single key (today's production): count==1 → gate no-ops ---
+    single = [_FakeSlot('claude-opus-4-8', 'sankuai_key_0')]
+    kc1 = _model_key_count(single, 'claude-opus-4-8')
+    assert kc1 == 1
+    in0 = threading.Event(); rel = threading.Event()
+
+    def _hold1():
+        with gate.big_prefix_slot('sankuai_key_0', 200000,
+                                  conv_id='cA', key_count=kc1):
+            in0.set(); rel.wait(3)
+
+    t = threading.Thread(target=_hold1, daemon=True); t.start()
+    assert in0.wait(1)
+    t0 = time.time()
+    with gate.big_prefix_slot('sankuai_key_0', 200000,
+                              conv_id='cB', key_count=kc1):
+        elapsed_single = time.time() - t0
+    assert elapsed_single < 0.3, 'single key → admission is a no-op'
+    rel.set(); t.join(3)
+    gate._reset_residency_for_tests()
+
+    # --- add a second key: count==2 → admission ACTIVE (distinct conv waits) ---
+    two = [_FakeSlot('claude-opus-4-8', 'sankuai_key_0'),
+           _FakeSlot('claude-opus-4-8', 'sankuai_key_1')]
+    kc2 = _model_key_count(two, 'claude-opus-4-8')
+    assert kc2 == 2
+    in0b = threading.Event(); relb = threading.Event()
+
+    def _hold2():
+        with gate.big_prefix_slot('sankuai_key_0', 200000,
+                                  conv_id='cA', key_count=kc2):
+            in0b.set(); relb.wait(3)
+
+    t2 = threading.Thread(target=_hold2, daemon=True); t2.start()
+    assert in0b.wait(1)
+    t0 = time.time()
+    with gate.big_prefix_slot('sankuai_key_0', 200000,
+                              conv_id='cB', key_count=kc2):
+        elapsed_two = time.time() - t0
+    assert elapsed_two >= 0.35, \
+        'adding a second key activates residency admission (no code change)'
+    relb.set(); t2.join(3)

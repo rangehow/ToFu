@@ -46,9 +46,13 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from lib.agent_verdict import (
+    AUTOPILOT_STUCK_WINDOW as _AUTOPILOT_STUCK_WINDOW,
     STATE_CHANGING_TOOLS_WITH_CODE_EXEC as _STATE_CHANGING_TOOLS,
+    autopilot_progress_window as _autopilot_progress_window,
     classify_verdict as _classify_verdict_core,
+    detect_diminishing_returns as _detect_diminishing_returns_core,
     detect_stuck as _detect_stuck_core,
+    parse_progress as _parse_progress,
 )
 from lib.log import get_logger
 from lib.orchestration import (
@@ -372,6 +376,15 @@ class FlowExecutor:
         self._last_producer_snapshot: dict = {}
         # Verifier feedback history (per active loop) for stuck-detection.
         self._feedback_history: list[str] = []
+        # ── VU progress ledger (per active loop, the diminishing-returns axis) ──
+        # Per VU turn: {'resolved_delta': int|None, 'targets': list[str]} —
+        # ``resolved_delta`` from the VU's mandatory [PROGRESS: resolved=X
+        # remaining=Y] line (None when absent → the guard fails open),
+        # ``targets`` = the producer's state-changing tool names that turn (the
+        # churn signal). ONLY populated when the loop's verifier is a
+        # virtual_user; critic/reviewer loops leave it empty (guard never
+        # fires). Reset per loop entry, mirroring _feedback_history.
+        self._vu_progress: list[dict] = []
         # ── Loop-exit ledger (the terminal-honesty axis) ──
         # One record per loop the walk runs: {node_id, reason, iterations}.
         # ``reason`` ∈ {'stop','stuck','no_progress','replan_exhausted',
@@ -1066,6 +1079,7 @@ class FlowExecutor:
             self._pending_feedback = ''
             self._pending_directive = ''
             self._feedback_history = []
+            self._vu_progress = []
         zero_streak = 0
         replans = 0
         # Terminal-honesty: the REAL reason this loop left. Defaults to
@@ -1104,23 +1118,74 @@ class FlowExecutor:
                 continue   # force another iteration, skip the verdict check
 
             verifier_out = self._last_verifier_output()
+            verifier_role = self._last_verifier_role()
             self._feedback_history.append(verifier_out)
             phase, defect = self._classify_verdict(
-                verifier_out, verifier_role=self._last_verifier_role())
+                verifier_out, verifier_role=verifier_role)
+
+            # ── VU progress ledger (virtual_user path only) ──
+            # Record this turn's hard progress signal + churn target set so the
+            # diminishing-returns guard can catch early churn (worker edits the
+            # same spot every turn without resolving new objective items). Only
+            # the VU is instructed to emit [PROGRESS]; a critic/reviewer never
+            # is, so this stays empty for those loops and the guard fails open.
+            if verifier_role == 'virtual_user':
+                resolved, _remaining = _parse_progress(verifier_out)
+                prev_cum = None
+                for _e in reversed(self._vu_progress):
+                    if _e.get('cum_resolved') is not None:
+                        prev_cum = _e['cum_resolved']
+                        break
+                if resolved is None:
+                    _delta, _cum = None, prev_cum
+                else:
+                    _delta = resolved - prev_cum if prev_cum is not None else resolved
+                    if _delta < 0:
+                        _delta = 0
+                    _cum = resolved
+                snap = self._last_producer_snapshot or {}
+                _targets = sorted({str(n) for n in (snap.get('names') or []) if n})
+                self._vu_progress.append({'resolved_delta': _delta,
+                                          'cum_resolved': _cum,
+                                          'targets': _targets})
 
             if phase == 'stop':
                 logger.info('[FlowEngine] loop %s STOP after iteration %d', lid, i + 1)
                 exit_reason = 'stop'
                 break
 
-            # ── Stuck detection: a repeating critic means no convergence ──
-            if self._detect_stuck() and i + 1 < cap:
+            # ── Stuck detection: a repeating verifier means no convergence.
+            #    The VU path uses AUTOPILOT_STUCK_WINDOW (3) — two near-identical
+            #    VU nudges can be a legitimate "you didn't do it, try again";
+            #    three in a row is a genuine non-converging loop. A critic keeps
+            #    the default window (2) so critic-loop semantics are unchanged. ──
+            if self._detect_stuck(verifier_role=verifier_role) and i + 1 < cap:
                 self._emit({'type': 'stuck_detected', 'node_id': lid,
                             'iteration': i + 1})
                 logger.info('[FlowEngine] loop %s STUCK (repeating feedback) — '
                             'breaking after iteration %d', lid, i + 1)
                 exit_reason = 'stuck'
                 break
+
+            # ── Diminishing-returns guard (virtual_user path only, fail-open) ──
+            # Repetition (stuck) is necessary but not sufficient: a VU that
+            # flags a genuine-but-tiny item emits NON-similar feedback each turn
+            # (stuck never fires) while the worker ships a real edit each turn
+            # (zero-deliverable never fires) — yet no NET progress. The hard
+            # [PROGRESS] signal catches exactly that. FAIL-OPEN: absent/
+            # unparseable PROGRESS ⇒ resolved_delta=None ⇒ guard can't prove
+            # no-progress ⇒ never fires (so critic/reviewer loops are untouched).
+            if verifier_role == 'virtual_user' and i + 1 < cap:
+                _pw = _autopilot_progress_window()
+                if _pw and _detect_diminishing_returns_core(
+                        self._vu_progress, window=_pw):
+                    self._emit({'type': 'no_progress', 'node_id': lid,
+                                'iteration': i + 1, 'window': _pw})
+                    logger.info('[FlowEngine] loop %s NO-PROGRESS (churn without '
+                                'net resolved items over %d turns) — breaking '
+                                'after iteration %d', lid, _pw, i + 1)
+                    exit_reason = 'no_progress'
+                    break
 
             if (phase == 'planner' and planner_id and replans < _MAX_REPLANS
                     and i + 1 < cap):
@@ -1387,14 +1452,23 @@ class FlowExecutor:
             text, verifier_role=verifier_role, loose_fallback=True)
         return res['phase'], res['plan_defect']
 
-    def _detect_stuck(self) -> bool:
-        """True if the last two verifier feedbacks are >_STUCK_JACCARD similar.
+    def _detect_stuck(self, *, verifier_role: str = '') -> bool:
+        """True if consecutive verifier feedbacks are >_STUCK_JACCARD similar.
 
         Delegates to the shared :func:`lib.agent_verdict.detect_stuck` — a
-        repeating critic means the loop is not converging; the loop breaks
+        repeating verifier means the loop is not converging; the loop breaks
         out rather than burning iterations.
+
+        The window depends on the verifier: a ``virtual_user`` uses
+        :data:`AUTOPILOT_STUCK_WINDOW` (3) — parity with the standalone
+        autopilot loop, where two near-identical VU nudges can be a legitimate
+        "you didn't do it, try again" and only three-in-a-row is genuinely
+        stuck. Any other verifier (critic / reviewer) keeps the default
+        window (2) so existing Studio-flow semantics are byte-unchanged.
         """
-        return _detect_stuck_core(self._feedback_history, threshold=_STUCK_JACCARD)
+        window = _AUTOPILOT_STUCK_WINDOW if verifier_role == 'virtual_user' else 2
+        return _detect_stuck_core(self._feedback_history, threshold=_STUCK_JACCARD,
+                                  window=window)
 
     def _append_context(self, context: str, role: str, out: str) -> str:
         block = f'[{role}]\n{out}'.strip()

@@ -20,6 +20,7 @@ from lib.tasks_pkg.cache_tracking._state import (
     _cache_lock,
     _cache_states,
     _state_key,
+    get_prev_turn_cache_read,
 )
 from lib.tasks_pkg.cache_tracking._hashing import (
     _diff_prefix_fields,
@@ -345,6 +346,7 @@ def _emit_round_record(conv_id, call_num, verdict, *, ns_switch, ttl_flip,
 
 # ── Verdict bucket taxonomy (SINGLE SOURCE — replay + live records share it) ──
 BUCKET_NAMESPACE = 'cache_namespace_switch'
+BUCKET_TURN_BOUNDARY = 'turn_boundary_rebill'
 BUCKET_TTL_FLIP = 'ttl_flip'
 BUCKET_BREAKPOINT_LOST = 'breakpoint_lost'
 BUCKET_UPSTREAM = 'upstream_identical'
@@ -368,6 +370,8 @@ def classify_verdict(verdict: dict | None) -> str:
         return BUCKET_NO_BREAK
     if BUCKET_NAMESPACE in verdict:
         return BUCKET_NAMESPACE
+    if BUCKET_TURN_BOUNDARY in verdict:
+        return BUCKET_TURN_BOUNDARY
     _cause = ' '.join(str(v) for v in verdict.values()).lower()
     if any(k in verdict for k in ('prefix_mutation', 'system_prompt', 'tools',
                                   'model', 'no_cache_reuse')):
@@ -412,6 +416,14 @@ def detect_cache_break(
         return None
 
     now = time.time()
+
+    # Cross-turn cache_read baseline for a NEW turn's round-1. MUST be read
+    # BEFORE acquiring _cache_lock below — get_prev_turn_cache_read takes the
+    # SAME lock, so calling it inside the `with _cache_lock:` block would
+    # deadlock. It EXCLUDES the current thread's own entry, so it returns the
+    # PREVIOUS turn's final cached-prefix read (carried across the run_task
+    # thread boundary), not this round's. 0 when there is no prior warm turn.
+    _cross_turn_prev_read = get_prev_turn_cache_read(conv_id)
 
     _key = _state_key(conv_id)
     with _cache_lock:
@@ -809,6 +821,29 @@ def detect_cache_break(
             prev_prefix_tokens=_prev_prefix_tokens,
         )
 
+        # ── Round-1 (new-turn) boundary re-bill — the statistics blind spot ──
+        # _classify_break's three predicates ALL gate on call_count > 0, so the
+        # FIRST round of every user turn (a fresh run_task thread → a fresh
+        # CacheState with call_count == 0) is structurally exempt: the previous
+        # turn's warm cached prefix that this round did NOT read back is never
+        # counted. That is exactly the "stats too optimistic" gap. Feed the
+        # CROSS-TURN baseline (the previous turn's final cached-prefix read,
+        # recovered across the thread boundary) so a genuine round-1 read
+        # collapse is classified and counted. Gated on call_count == 0 (round-1
+        # only — later rounds go through _classify_break's within-turn baseline)
+        # AND on a real prior warm prefix (> _MIN_CACHE_MISS_TOKENS), so a
+        # genuine first-ever call (baseline 0, cold start) stays a benign
+        # first-time cache write, never a false break. On round-1 no OTHER break
+        # predicate can fire (they all require call_count > 0), so this branch
+        # never conflicts with the client-side / namespace verdicts below.
+        turn_boundary_break = (
+            prev.call_count == 0
+            and not _was_compaction
+            and _cross_turn_prev_read > _MIN_CACHE_MISS_TOKENS
+            and cache_read < _cross_turn_prev_read * 0.95
+            and (_cross_turn_prev_read - cache_read) >= _MIN_CACHE_MISS_TOKENS
+        )
+
         # ── Update state (AFTER elapsed computation) ──
         prev.system_hash = sys_hash
         prev.tools_hash = tools_hash
@@ -912,7 +947,8 @@ def detect_cache_break(
             and _mutation_is_whole_prefix
         )
 
-        if api_break or no_reuse or partial_no_reuse or prefix_mutation_break:
+        if (api_break or no_reuse or partial_no_reuse or prefix_mutation_break
+                or turn_boundary_break):
             prev.total_breaks += 1
 
         # ── ALWAYS-ON per-round record (single-exit seam) ──
@@ -942,7 +978,31 @@ def detect_cache_break(
         # established prefix (no_reuse), OR a large write repeated round-over-
         # round while the read stays pinned (partial_no_reuse). All three mean
         # we paid to rebuild (part of) the cache instead of reading it back.
-        if api_break or no_reuse or partial_no_reuse or prefix_mutation_break:
+        if (api_break or no_reuse or partial_no_reuse or prefix_mutation_break
+                or turn_boundary_break):
+            # ── Round-1 boundary re-bill (round-1 only; no other break can
+            #    co-fire since they all require call_count > 0). Named as its
+            #    OWN bucket — NOT laundered into server_side — so the previous
+            #    turn's warm prefix that fell out across the boundary is an
+            #    honest, counted client-visible miss, not "first-cache warm-up".
+            if turn_boundary_break:
+                _boundary_cause = (
+                    'new-turn round-1 boundary re-bill: the previous turn left '
+                    f'a warm ~{_cross_turn_prev_read}-token cached prefix, but '
+                    f'this turn read back only {cache_read} (collapsed toward '
+                    'the static floor) — the cached prefix was not reused '
+                    'across the turn boundary and was re-billed uncached. '
+                    'Counted here so round-1 is no longer a stats blind spot '
+                    '(likely a TTL-window boundary miss; see the tail-TTL ticket).')
+                logger.warning(
+                    '[CacheTrack] conv=%s call=%d ⚠ TURN-BOUNDARY RE-BILL: '
+                    'cache_write=%d cache_read=%d (prev-turn read=%d, gap=%.1fs) '
+                    '— new-turn round-1 read collapsed; prefix not reused across '
+                    'the turn boundary.',
+                    conv_id[:8], prev.call_count, cache_write, cache_read,
+                    _cross_turn_prev_read, elapsed)
+                return _finish({'turn_boundary_rebill': _boundary_cause})
+
             # Build the most specific cause we can (pure; see _resolve_break_cause).
             #
             # NOTE: "cache contention" between different conversations is NOT a

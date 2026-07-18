@@ -106,6 +106,67 @@ function _stampSegTranslations(msg, byRound) {
 }
 
 /**
+ * ORDER-INDEPENDENT finalize gate — should the translate `done` DEFER its
+ * whole-bubble repaint?
+ *
+ * The auto-translate `done` push and the chat `done` SSE event are two
+ * INDEPENDENT async completions with no ordering guarantee. The chat `done`
+ * handler is the SOLE writer of the backend-committed settled fields
+ * (toolRounds/segments/finishReason/usage/cost — the `committedMessage`
+ * verbatim projection in ui/sse_pipeline.js); the translate `done` handler only
+ * stamps translatedContent/_showingTranslation.
+ *
+ * When the translate frame WINS the race (arrives while the turn is still
+ * finalizing, before the chat-`done` projection), an unconditional
+ * emitMessageChanged({kind:'full'}) re-runs renderMessage against a message
+ * whose settled fields have NOT landed — so the tool panel vanishes and
+ * renderFinishInfo (gated on finishReason||usage) degrades to a bare model tag,
+ * self-healing a beat later when chat-`done` + finishStream render the complete
+ * bubble. That transient flash is the reported "giant purple box, tools gone,
+ * stripped finish bar, then normal again".
+ *
+ * Root fix (NOT a timing tweak): DEFER the whole-bubble repaint iff the turn is
+ * NOT yet settled AND a live stream / active task is still finalizing this conv
+ * — because the imminent chat-`done` committedMessage projection + finishStream
+ * will render the COMPLETE bilingual bubble in one pass (that render reads the
+ * already-stamped translatedContent, so the translation is never lost). Repaint
+ * IMMEDIATELY when the turn is already settled (finishReason||usage present — the
+ * common / manual / historical retranslation case) or when nothing is finalizing
+ * (no other render is coming, so the translation must paint itself). The
+ * decision is order-independent: whichever `done` arrives second renders once,
+ * complete.
+ *
+ * @param {string} convId
+ * @param {object} msg
+ * @returns {boolean} true → skip the whole-bubble repaint (a settled render is imminent)
+ */
+function _translateFinalizeShouldDefer(convId, msg) {
+  if (!msg) return false;
+  // Settled: chat-`done` already projected the terminal fields, so renderMessage
+  // + renderFinishInfo have everything → repaint now.
+  if (msg.finishReason || msg.usage) return false;
+  // Not settled → only defer while the turn is genuinely finalizing (a live
+  // stream or an active task owns this conv). Otherwise nothing else will
+  // repaint, so paint now rather than strand the translation.
+  try {
+    if (typeof activeStreams !== 'undefined' && activeStreams
+        && typeof activeStreams.has === 'function' && activeStreams.has(convId)) {
+      return true;
+    }
+    if (typeof conversations !== 'undefined' && Array.isArray(conversations)) {
+      const _c = conversations.find((c) => c && c.id === convId);
+      if (_c && _c.activeTaskId) return true;
+    }
+  } catch (e) {
+    return false;  // fail open — repaint rather than swallow the translation
+  }
+  return false;
+}
+if (typeof window !== 'undefined') {
+  window._translateFinalizeShouldDefer = _translateFinalizeShouldDefer;
+}
+
+/**
  * Apply a 'done' translation result to the message and persist it.
  * Handles both fields: 'translatedContent' (assistant bilingual)
  * and 'content' (user-edit translation).
@@ -144,7 +205,13 @@ function _applyTranslationDone(convId, idx, msg, result, field) {
     _patchMessageOnServer(convId, idx, patch);
   }
 
-  emitMessageChanged(convId, idx, msg, { kind: 'full' });
+  /* ★ Order-independent finalize: skip the whole-bubble repaint when a settled
+   *   render is imminent (chat-`done` projection + finishStream), so the tool
+   *   panel / finish bar are never dropped by a translate frame that won the
+   *   race. translatedContent is already stamped above; that render reads it. */
+  if (!_translateFinalizeShouldDefer(convId, msg)) {
+    emitMessageChanged(convId, idx, msg, { kind: 'full' });
+  }
 }
 
 /**
@@ -933,7 +1000,15 @@ async function _resumePendingTranslations(convId) {
       delete msg._translatePartialByRound;
       delete msg._translateError;
       if (typeof saveConversations === 'function') saveConversations(convId);
-      emitMessageChanged(convId, idx, msg, { kind: 'full' });
+      /* ★ Order-independent finalize (see _translateFinalizeShouldDefer): when
+       *   the translate `done` beat the chat `done`, DEFER the whole-bubble
+       *   repaint — the imminent committedMessage projection + finishStream
+       *   render the COMPLETE bilingual bubble in one pass (reading the
+       *   translatedContent already stamped above), so tools / finish bar are
+       *   never transiently dropped. Settled / no-stream → repaint now. */
+      if (!_translateFinalizeShouldDefer(convId, msg)) {
+        emitMessageChanged(convId, idx, msg, { kind: 'full' });
+      }
     } catch (e) {
       console.debug('[Translate] push handler error:', e?.message);
     }

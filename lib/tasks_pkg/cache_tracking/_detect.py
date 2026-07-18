@@ -125,11 +125,11 @@ def _resolve_break_cause(
     actual sent bytes were byte-for-byte identical to the previous round.
     CRUCIALLY, byte-identity proves only that the miss is NOT a client-side
     prefix change THIS ROUND — it says nothing about the cause. A byte-identical
-    prefix that is not read back was not reused upstream; that can be an
-    ordinary upstream miss (a per-request gateway miss, a TTL boundary) or
-    contention in this key's shared cache pool when several large prefixes are
-    active at once. So the verdict names an "upstream cache miss" WITHOUT
-    asserting a single confident cause. NOTE the systemic picture: most cache
+    prefix that is not read back was not reused upstream; that is an ordinary
+    upstream cache miss (a per-request gateway miss or a TTL boundary). The
+    gateway forwards requests and does not evict, and there is no per-key cache
+    capacity limit, so this is NOT shared-pool contention. So the verdict names
+    an "upstream cache miss" WITHOUT asserting a single confident cause. NOTE the systemic picture: most cache
     misses in this system are CLIENT-side (already-cached bytes re-serialized
     differently across turns) — those take the ``<bytes>`` / ``prefix_mutation``
     branches above and are named there. This byte-identical branch is the
@@ -232,11 +232,11 @@ def _resolve_break_cause(
     # The wire fingerprint confirmed our sent bytes were IDENTICAL to last
     # round, so THIS round's miss is not a client-side prefix mutation. But
     # byte-identity does not tell us the cause: an identical prefix that comes
-    # back with a dropped cache_read simply was not reused upstream. That can be
-    # an ordinary upstream miss (a per-request gateway miss, a TTL boundary) or
-    # contention in this key's shared cache pool when several large prefixes are
-    # active at once — we do NOT claim which, and we do NOT assert it is or is
-    # not a server fault. IMPORTANT systemic note: the DOMINANT cache-miss cause
+    # back with a dropped cache_read simply was not reused upstream. That is an
+    # ordinary upstream cache miss (a per-request gateway miss or a TTL
+    # boundary) — the gateway forwards and does not evict, and there is no
+    # per-key cache capacity limit, so it is NOT shared-pool contention. We do
+    # NOT assert it is or is not a server fault. IMPORTANT systemic note: the DOMINANT cache-miss cause
     # in this system is CLIENT-side (already-cached bytes re-serialized
     # differently across turns), and those are caught+named on the <bytes> /
     # prefix_mutation branches ABOVE — a stable client (byte-identical prefixes
@@ -249,21 +249,18 @@ def _resolve_break_cause(
             return ('prefix not read back though the wire bytes were '
                     'byte-identical to the previous round — so this round is '
                     'NOT a client-side prefix change. The cached prefix was not '
-                    'reused upstream: most likely an upstream cache miss (a '
-                    'per-request gateway miss, a TTL boundary, or contention in '
-                    'this key\'s shared cache pool when several large prefixes '
-                    'are active at once). Only the body past the static prefix '
-                    'was not read back. (Most misses in this system are instead '
-                    'client-side and are named per-field above; this is not '
-                    'that class.)')
+                    'reused upstream: an upstream cache miss (a per-request '
+                    'gateway miss or a TTL boundary). Only the body past the '
+                    'static prefix was not read back. (Most misses in this '
+                    'system are instead client-side and are named per-field '
+                    'above; this is not that class.)')
         return ('prefix not read back though the wire bytes were byte-identical '
                 'to the previous round — so this round is NOT a client-side '
                 'prefix change. The whole cached prefix was not reused '
-                'upstream: most likely an upstream cache miss (a per-request '
-                'gateway miss, a TTL boundary, or contention in this key\'s '
-                'shared cache pool when several large prefixes are active at '
-                'once). (Most misses in this system are instead client-side and '
-                'are named per-field above; this is not that class.)')
+                'upstream: an upstream cache miss (a per-request gateway miss '
+                'or a TTL boundary). (Most misses in this system are instead '
+                'client-side and are named per-field above; this is not that '
+                'class.)')
     # ── Wire fingerprint UNAVAILABLE → legacy elimination guess (unproven) ──
     if cache_read > _MIN_CACHE_MISS_TOKENS:
         return ('likely server-side cache miss (UNPROVEN — no wire '

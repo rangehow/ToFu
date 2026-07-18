@@ -111,6 +111,42 @@ def test_resolve_break_cause_names_history_rewrite_branch():
     _ok('_resolve_break_cause NAMES the history_rewrite branch (surface #2)')
 
 
+
+def test_byte_identical_verdict_has_no_contention_falsehood():
+    """★ INFRA-TRUTH GUARD. The byte-identical ('NOT a client-side change')
+    verdict is what renders into the cost panel. It must NOT assert the
+    debunked 'contention in this key's shared cache pool' model: the gateway
+    only FORWARDS (never evicts) and there is no per-key cache capacity limit
+    (owner-confirmed; A/B-verified no cross-conversation contention). The honest
+    cause set is 'an upstream per-request gateway miss or a TTL boundary'. This
+    pins the wording so the debunked eviction/contention model can't silently
+    return to the user-facing string.
+    """
+    from lib.tasks_pkg.cache_tracking import _resolve_break_cause
+    # Both byte-identical sub-branches: whole-prefix (cache_read small) and
+    # partial (cache_read large). Neither may mention contention/shared pool.
+    for _cr in (0, 250000):
+        verdict = _resolve_break_cause(
+            client_changes={}, prefix_mutation_break=False, elapsed=20.0,
+            cache_read=_cr, prefix_mutated=False, prefix_culprits=None,
+            wire_proven_identical=True, history_rewrite=False)
+        low = verdict.lower()
+        assert 'contention' not in low, (
+            f'byte-identical verdict re-introduced the contention falsehood: '
+            f'{verdict!r}')
+        assert 'shared cache pool' not in low and 'shared pool' not in low, (
+            f'byte-identical verdict re-introduced the shared-pool model: '
+            f'{verdict!r}')
+        # The correct, honest cause set must still be named.
+        assert 'gateway miss' in low or 'ttl' in low, (
+            f'byte-identical verdict lost the honest cause set: {verdict!r}')
+        # And it must keep the correct 'NOT a client-side change' framing.
+        assert 'client-side' in low, (
+            f'byte-identical verdict lost the client-side framing: {verdict!r}')
+    _ok('byte-identical verdict names gateway-miss/TTL, never shared-pool '
+        'contention (infra-truth guard)')
+
+
 def test_history_rewrite_does_not_flip_proven_server_side():
     """★ THE LANDMINE. A reconcile that MUTATES a scrolled-in prefix message,
     with notify_history_rewrite set, must STILL surface prefix_mutation and must
@@ -542,6 +578,7 @@ def main():
     tests = [
         test_history_rewrite_named_not_compacted,
         test_resolve_break_cause_names_history_rewrite_branch,
+        test_byte_identical_verdict_has_no_contention_falsehood,
         test_history_rewrite_does_not_flip_proven_server_side,
         test_profile_splice_labels_without_suppressing_the_rebill,
         test_reconcile_leaves_settled_prefix_byte_identical,

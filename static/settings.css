@@ -1,0 +1,107 @@
+/* ══════════════════════════════════════════════════════
+   settings.css — styles specific to the Settings modal panels.
+
+   Extracted from static/styles.css (2026-07-18) so a settings PAGE's
+   structure (static/settings_panels/<tab>.html), logic
+   (static/js/settings/*.js) and styles (here) live together and are easy to
+   locate. Served hashed + minified by lib/css_bundler.py alongside styles.css;
+   the <link> is injected by routes/common.py right after the styles.css link.
+
+   Migration is incremental — rules move here per settings page. Shared
+   settings chrome (.settings-tab, .settings-field, .stg-*) stays in styles.css
+   until a later batch.
+   ══════════════════════════════════════════════════════ */
+
+/* ── Translation tab: Machine Translation provider selector ── */
+.mt-provider-select {
+  padding: 3px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--s-ink);
+  background: var(--s-white);
+  border: var(--s-border);
+  border-radius: 6px;
+  cursor: pointer;
+  outline: none;
+  transition: border-color .15s;
+}
+.mt-provider-select:focus { border-color: var(--accent-color, #d4a853); }
+
+/* ── Translation tab: Machine Translation provider card ── */
+.mt-provider-card {
+  background: var(--s-white);
+  border: var(--s-border);
+  border-radius: var(--s-radius);
+  box-shadow: var(--s-shadow-xs);
+  overflow: hidden;
+  margin-bottom: 14px;
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+.mt-provider-card:hover {
+  transform: translate(-1px, -1px);
+  box-shadow: var(--s-shadow-sm);
+}
+.mt-provider-card-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid rgba(26,24,20,0.08);
+  background: rgba(26,24,20,0.02);
+}
+.mt-provider-logo {
+  flex-shrink: 0;
+  width: 38px;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  background: linear-gradient(135deg, rgba(212,168,83,0.10), rgba(212,168,83,0.04));
+  border: 1px solid rgba(212,168,83,0.2);
+}
+.mt-provider-info { flex: 1; min-width: 0; }
+.mt-provider-name {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--s-ink);
+  line-height: 1.3;
+}
+.mt-provider-desc {
+  font-size: 11.5px;
+  color: var(--s-ink-soft);
+  margin-top: 2px;
+}
+.mt-apply-link {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 14px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--s-white);
+  background: var(--accent-color, #d4a853);
+  border: 2px solid var(--s-ink);
+  border-radius: 8px;
+  box-shadow: 2px 2px 0 var(--s-ink);
+  text-decoration: none;
+  transition: transform 0.1s, box-shadow 0.1s;
+  white-space: nowrap;
+}
+.mt-apply-link:hover {
+  transform: translate(1px, 1px);
+  box-shadow: 1px 1px 0 var(--s-ink);
+}
+.mt-apply-link:active {
+  transform: translate(2px, 2px);
+  box-shadow: none;
+}
+.mt-provider-card-body {
+  padding: 14px 16px;
+}
+.mt-provider-card-body .settings-row { margin-bottom: 8px; }
+.mt-provider-card-body .settings-field label {
+  font-size: 12.5px;
+  font-weight: 600;
+}

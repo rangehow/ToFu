@@ -217,18 +217,53 @@ at/above the floor is compactable (turn-based OR intra-turn 档B), so a full
 1M single-giant-turn conversation is never wrongly refused. Owner-signed
 2026-07-16 (§10.1)."""
 
-_MANUAL_RECONCILE_MAX_RETRIES = 2
-"""Bounded retries for the manual /compact reload→reconcile→CAS loop.
+_MANUAL_RECONCILE_BUDGET_SEC = 3.0
+"""Wall-clock budget for the manual /compact reload→reconcile→CAS loop.
 
 The summary LLM call takes seconds; a sibling agent turn can write to the
 conversation TAIL meanwhile. Those writes append/modify the PRESERVED region,
 NOT the folded (summarized) region — so the compaction is still valid and must
 NOT lose the concurrent work. The engine reloads after summarizing, verifies
 the folded prefix is byte-unchanged, rebuilds over the CURRENT tail, and CAS-es
-on the CURRENT ``updated_at``. This retry count covers the narrow reload→CAS
-window where yet another write can land; a true conflict (the folded region
-itself changed) short-circuits to ``stale`` WITHOUT consuming a retry. Not a
-hyperparameter that gates output quality — purely a race-window backstop."""
+on the CURRENT ``updated_at``.
+
+Why a TIME budget, not a fixed retry COUNT: the reconcile window is now
+LLM-free, but on a multi-MB conversation one reload→rebuild→CAS pass still
+costs tens-to-hundreds of ms (DB read + json.loads + sorted-key fingerprint +
+build_search_text + json_dumps_pg + UPDATE). Under a real write burst
+(~1–2 PATCHes/sec, observed 15 in 25 s) a fixed count (e.g. 3 passes) can be
+punched through — every pass loses to a fresh tail write → the user sees a 409
+on the "must never fail" path. A time budget instead keeps retrying against the
+ever-fresher tail until it lands, so a bounded write burst can no longer surface
+as a failure. Only a change WITHIN the folded region (a genuine conflict) or
+exhausting this budget yields ``stale``. Env-overridable via
+``TOFU_MANUAL_RECONCILE_BUDGET_SEC`` (FAIL-OPEN: unset/garbage→3.0, <=0→a small
+floor so we always make at least one CAS attempt)."""
+
+_MANUAL_RECONCILE_HARD_ITER_CAP = 1000
+"""Absolute iteration ceiling for the reconcile loop — a pure infinite-loop
+guard, NOT the operative bound (the time budget above is). Reached only if the
+clock never advances (e.g. a frozen/mocked time source); a real burst is bounded
+by the seconds budget long before this."""
+
+
+def manual_reconcile_budget_sec() -> float:
+    """Resolve the manual /compact reconcile time budget (seconds).
+
+    FAIL-OPEN: unset/non-float → :data:`_MANUAL_RECONCILE_BUDGET_SEC`; a
+    non-positive value is floored to 0.001 s so the loop still makes at least
+    one reload→CAS attempt (never disables the reconcile entirely). Read at call
+    time so an operator can retune without a restart."""
+    raw = (os.environ.get('TOFU_MANUAL_RECONCILE_BUDGET_SEC') or '').strip()
+    if not raw:
+        return _MANUAL_RECONCILE_BUDGET_SEC
+    try:
+        val = float(raw)
+    except (ValueError, TypeError) as e:
+        logger.debug('[Compact] TOFU_MANUAL_RECONCILE_BUDGET_SEC=%r not a float '
+                     '(%s) — using default %.1f', raw, e, _MANUAL_RECONCILE_BUDGET_SEC)
+        return _MANUAL_RECONCILE_BUDGET_SEC
+    return val if val > 0 else 0.001
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

@@ -54,9 +54,10 @@ from lib.tasks_pkg.compaction._archive import _archive_transcript
 from lib.tasks_pkg.compaction._constants import (
     _MANUAL_COMPACT_MIN_TOKENS,
     _MANUAL_INTRA_TURN_HOT_ROUNDS,
-    _MANUAL_RECONCILE_MAX_RETRIES,
+    _MANUAL_RECONCILE_HARD_ITER_CAP,
     _MAX_PRESERVE_TURNS,
     _PRESERVE_BUDGET_RATIO,
+    manual_reconcile_budget_sec,
 )
 from lib.tasks_pkg.compaction._layer2 import (
     _extract_current_query,
@@ -452,9 +453,11 @@ def compact_conversation_now(
     compaction stays valid and must not discard the concurrent work. After
     summarizing, the engine reloads the CURRENT messages, verifies the folded
     prefix is byte-unchanged, rebuilds over the CURRENT tail, and CAS-es on the
-    CURRENT ``updated_at`` (bounded retry for the reload→CAS window). ``stale``
-    is returned ONLY when the folded region itself was concurrently rewritten
-    (a genuine conflict) — never merely because the tail grew.
+    CURRENT ``updated_at``, retrying within a wall-clock budget
+    (``manual_reconcile_budget_sec``) so a sustained write burst cannot surface
+    as a 409. ``stale`` is returned ONLY when the folded region itself was
+    concurrently rewritten (a genuine conflict), or the budget is exhausted —
+    never merely because the tail grew.
     """
     config = config or {}
     log_id = conv_id[:8] if conv_id else '?'
@@ -530,20 +533,28 @@ def compact_conversation_now(
     # messages, verify the folded region is byte-unchanged (the ONLY thing that
     # would invalidate the summary), rebuild over the CURRENT tail (so no
     # concurrently-appended turn is lost), and CAS on the CURRENT ``updated_at``.
-    # A bounded retry covers the narrow reload→CAS window where yet another write
-    # can land. Only a change WITHIN the folded region is a true conflict → stale.
+    # We retry within a WALL-CLOCK BUDGET (not a fixed count): the window is now
+    # LLM-free but each pass still costs tens-to-hundreds of ms on a multi-MB
+    # conversation, and a real write burst (~1–2 PATCHes/sec) can punch through a
+    # small fixed count → a 409 on the must-never-fail path. Retrying against the
+    # ever-fresher tail until it lands makes a bounded burst un-surfaceable as a
+    # failure. Only a change WITHIN the folded region is a true conflict → stale;
+    # exhausting the budget also yields stale (defensive, not expected in prod).
     boundary = plan['boundary']
     watermark = _fold_watermark(plan)
     folded_prefix_fp = _msgs_fingerprint(raw_messages[:watermark])
     _folded_rounds = sum(len(f['cold_rounds'])
                          for f in plan.get('intra_folds', []))
 
+    budget_sec = manual_reconcile_budget_sec()
+    deadline = time.monotonic() + budget_sec
     new_messages = None
     tokens_after = 0
     msgs_after = 0
     reduction_pct = 0.0
     attempts = 0
     while True:
+        attempts += 1
         reloaded = store.load_conversation_messages(conv_id)
         if reloaded is None:
             logger.warning('[ManualCompact] conv=%s vanished during compaction '
@@ -595,14 +606,18 @@ def compact_conversation_now(
             conv_id, new_messages, cur_updated_at)
         if affected:
             break
-        attempts += 1
-        if attempts > _MANUAL_RECONCILE_MAX_RETRIES:
-            logger.warning('[ManualCompact] conv=%s CAS lost %d× in the '
-                           'reload→CAS window — aborting stale (archive %s kept)',
-                           log_id, attempts, archive_id)
+        # Lost the reload→CAS race to a fresh tail write. Retry against the
+        # newer tail as long as we have budget (a burst is bounded; each pass
+        # picks up the newest tail). The hard iter cap is an infinite-loop guard
+        # only (fires solely if the clock never advances).
+        if time.monotonic() >= deadline or attempts >= _MANUAL_RECONCILE_HARD_ITER_CAP:
+            logger.warning('[ManualCompact] conv=%s CAS lost %d× within the '
+                           '%.1fs reconcile budget — aborting stale (archive %s '
+                           'kept)', log_id, attempts, budget_sec, archive_id)
             return {'ok': False, 'error': 'stale', 'archiveId': archive_id}
-        logger.info('[ManualCompact] conv=%s reload→CAS raced (attempt %d) — '
-                    'reconciling against fresher tail', log_id, attempts)
+        logger.info('[ManualCompact] conv=%s reload→CAS raced (attempt %d, '
+                    '%.2fs left) — reconciling against fresher tail',
+                    log_id, attempts, max(0.0, deadline - time.monotonic()))
 
     if archive_id is not None:
         try:

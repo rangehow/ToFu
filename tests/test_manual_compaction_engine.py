@@ -38,6 +38,11 @@ class _FakeStore:
         self._fail_cas = False
         self.search_synced = False  # True iff the search-aware CAS path ran
         self.notified = False       # True iff conv-changed was pushed
+        # Burst simulation: for the first N CAS attempts, a concurrent sibling
+        # TAIL write lands right BEFORE our CAS (append a msg + bump updated_at),
+        # so our CAS (on the reload-time updated_at) loses. After N it lands.
+        self._races_remaining = 0
+        self._race_seq = 0
 
     def load_conversation_messages(self, conv_id):
         return (list(self.messages), self.updated_at)
@@ -61,6 +66,15 @@ class _FakeStore:
     def cas_update_conversation_messages(self, conv_id, messages, expected_updated_at):
         self.cas_calls.append(expected_updated_at)
         if self._fail_cas:
+            return 0
+        # Burst: a sibling tail write lands just before this CAS, bumping
+        # updated_at so the caller's expected value is now stale → 0 rows. The
+        # caller must reload and retry; each retry sees the fresher tail.
+        if self._races_remaining > 0:
+            self._races_remaining -= 1
+            self._race_seq += 1
+            self.messages.append(_u(f'BURST tail {self._race_seq}', 90000 + self._race_seq))
+            self.updated_at += 1
             return 0
         if expected_updated_at != self.updated_at:
             return 0
@@ -375,11 +389,16 @@ def test_manual_compaction_nothing_to_compact(monkeypatch):
 
 @pytest.mark.unit
 def test_manual_compaction_stale_cas_aborts(monkeypatch):
+    # A CAS that NEVER lands (folded region unchanged, but every write races)
+    # must exhaust the reconcile budget → stale. Use a tiny budget so the test
+    # doesn't spin for the full default (3s).
+    monkeypatch.setenv('TOFU_MANUAL_RECONCILE_BUDGET_SEC', '0.05')
     store = _FakeStore(_long_conv())
     store._fail_cas = True
     man = _install(monkeypatch, store)
     res = man.compact_conversation_now('c', config={}, task={'convId': 'c'})
     assert res['ok'] is False and res['error'] == 'stale'
+    assert store.cas_calls, 'must have attempted at least one CAS before giving up'
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -695,3 +714,100 @@ def test_neuter_without_reconcile_tail_append_would_409(monkeypatch):
     res = man.compact_conversation_now('c', config={}, task={'convId': 'c'})
     assert res['ok'] is True, (
         f'reconcile must turn the same race into a success, got {res}')
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  TIME-BUDGET reconcile — a sustained write BURST (K races > any fixed retry
+#  count) must still land within the wall-clock budget, not surface as 409.
+# ═══════════════════════════════════════════════════════════════════════════
+
+@pytest.mark.unit
+def test_reconcile_survives_write_burst_beyond_fixed_count(monkeypatch):
+    """The regression the time-budget closes: a burst of K tail writes — where
+    K exceeds any small fixed retry count — must NOT produce a 409. Each pass
+    loses the CAS to a fresh tail write; the loop keeps reconciling against the
+    ever-fresher tail until it lands (within budget)."""
+    from lib.tasks_pkg.conv_message_builder import _transform_messages
+
+    # Generous budget; K races far exceeds the old fixed cap (2 → 3 passes).
+    monkeypatch.setenv('TOFU_MANUAL_RECONCILE_BUDGET_SEC', '5.0')
+    K = 12
+    store = _FakeStore(_long_conv())
+    store._races_remaining = K
+
+    man = _install(monkeypatch, store)
+    res = man.compact_conversation_now('c', config={}, task={'convId': 'c'})
+
+    # (1) SUCCESS despite K races well beyond any fixed retry count.
+    assert res['ok'] is True, f'burst of {K} must still land within budget, got {res}'
+    # (2) it really did retry more than a small fixed count would allow.
+    assert len(store.cas_calls) >= K + 1, (
+        f'expected > {K} CAS attempts (each burst write forces a retry), '
+        f'got {len(store.cas_calls)}')
+    # (3) every BURST tail write injected during the window is preserved.
+    contents = [m.get('content', '') for m in store.messages]
+    for i in range(1, K + 1):
+        assert f'BURST tail {i}' in contents, f'BURST tail {i} lost'
+    # (4) exactly one summary, structure intact (no orphan tool).
+    summaries = [m for m in store.messages if m.get('_isCompactionSummary')]
+    assert len(summaries) == 1
+    api = _transform_messages(store.messages, {})
+    ok, why = _api_ok(api)
+    assert ok, f'burst reconcile split a tool round: {why}'
+
+
+@pytest.mark.unit
+def test_neuter_fixed_count_would_409_on_burst(monkeypatch):
+    """NEUTER: prove the TIME budget (not a fixed count) is what closes the
+    burst hole. Re-simulate the OLD fixed-count policy (cap=2 → 3 passes) on a
+    burst of K=12 races and assert it would have surfaced a 409 — exactly the
+    residual failure the time budget eliminates."""
+    OLD_FIXED_CAP = 2          # the pre-fix _MANUAL_RECONCILE_MAX_RETRIES
+    K = 12
+    store = _FakeStore(_long_conv())
+    store._races_remaining = K
+
+    # Replay the OLD loop shape (fixed attempt count) against the same store.
+    attempts = 0
+    landed = False
+    while True:
+        attempts += 1
+        # each pass: a burst write lands pre-CAS, so cas fails until races drain
+        affected = store.cas_update_conversation_messages(
+            'c', list(store.messages), store.updated_at - 1)  # deliberately stale
+        if affected:
+            landed = True
+            break
+        if attempts > OLD_FIXED_CAP:      # old: give up after cap → 409
+            break
+    assert not landed and attempts == OLD_FIXED_CAP + 1, (
+        'the OLD fixed-count policy exhausts its 3 passes on a 12-race burst '
+        'and 409s — this is exactly the hole the time budget closes')
+
+    # And the CURRENT time-budget engine lands on an equivalent burst.
+    monkeypatch.setenv('TOFU_MANUAL_RECONCILE_BUDGET_SEC', '5.0')
+    store2 = _FakeStore(_long_conv())
+    store2._races_remaining = K
+    man = _install(monkeypatch, store2)
+    res = man.compact_conversation_now('c', config={}, task={'convId': 'c'})
+    assert res['ok'] is True, (
+        f'time-budget engine must land the same {K}-race burst, got {res}')
+
+
+@pytest.mark.unit
+def test_reconcile_budget_exhaustion_is_stale(monkeypatch):
+    """When the budget genuinely runs out (writes never stop), the engine
+    returns stale rather than spinning forever — the defensive backstop."""
+    monkeypatch.setenv('TOFU_MANUAL_RECONCILE_BUDGET_SEC', '0.05')
+    store = _FakeStore(_long_conv())
+    # Never-ending burst: always races, never lands.
+    store._races_remaining = 10 ** 9
+
+    man = _install(monkeypatch, store)
+    res = man.compact_conversation_now('c', config={}, task={'convId': 'c'})
+    assert res['ok'] is False and res['error'] == 'stale'
+    assert len(store.cas_calls) >= 1, 'must attempt at least one CAS'
+    # NOT the infinite-loop guard — the time budget stopped it well under the cap.
+    from lib.tasks_pkg.compaction._constants import _MANUAL_RECONCILE_HARD_ITER_CAP
+    assert len(store.cas_calls) < _MANUAL_RECONCILE_HARD_ITER_CAP, (
+        'time budget must stop the loop long before the infinite-loop iter cap')

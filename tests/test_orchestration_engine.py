@@ -432,6 +432,37 @@ class ParallelTest(unittest.TestCase):
             self.assertIn(tok, sy_call['context'])
         self.assertEqual(out['agents_run'], 4)
 
+    def test_failed_node_is_not_silently_completed(self):
+        # A node that crashes (runner raises → folded into status='failed')
+        # must NOT be silently reported as a clean success. The flow reports
+        # ok=False / stop_reason='node_failed' and records the failure in the
+        # transcript — terminal honesty (parity with the loop path).
+        def runner(node, ctx, it):
+            if node['id'] == 'r2':
+                raise RuntimeError('boom in r2')
+            return {'output': node.get('role') + '-out', 'status': 'completed', 'error': ''}
+        events = []
+        out = FlowExecutor(self._fanout(), agent_runner=runner,
+                           on_event=events.append).run()
+        self.assertFalse(out['ok'])
+        self.assertEqual(out['stop_reason'], 'node_failed')
+        # The failed node is visible in the transcript with status='failed'.
+        failed = [e for e in out['transcript']
+                  if e.get('node_id') == 'r2' and e.get('status') == 'failed']
+        self.assertTrue(failed)
+        # A step_complete event carried the failed status (observable in UI).
+        self.assertTrue(any(e['type'] == 'step_complete'
+                            and e.get('node_id') == 'r2'
+                            and e.get('status') == 'failed'
+                            for e in events))
+
+    def test_all_branches_succeed_stays_ok(self):
+        # Guard against a regression that would flag clean fan-outs.
+        r = _MockRunner(outputs={'r1': 'A', 'r2': 'B', 'r3': 'C', 'sy': 'M'})
+        out = FlowExecutor(self._fanout(), agent_runner=r).run()
+        self.assertTrue(out['ok'])
+        self.assertEqual(out['stop_reason'], 'completed')
+
 
 class BranchAndCapsTest(unittest.TestCase):
     def test_branch_takes_first_edge(self):

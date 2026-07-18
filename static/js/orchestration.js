@@ -1663,6 +1663,10 @@ function _orchAiSetEnabled(on) {
 
 var _orchRunTaskId = null;
 var _orchRunPolling = false;
+// Monotonic run-generation token. Bumped at the start of every run so an
+// in-flight poll from a previous (aborted / superseded) run can detect it
+// is stale and stop, instead of leaking events into the new run's trace.
+var _orchRunGen = 0;
 // Per-node live run trace, keyed by node_id. Accumulated from the run
 // drawer's events (step_start / step_delta / step_complete) so the canvas
 // can show each node's status badge and the inspector can show the last
@@ -1802,8 +1806,9 @@ async function _orchRun() {
     return;
   }
   _orchRunTaskId = res.task_id;
+  var gen = ++_orchRunGen;
   _orchRunSetBusy(true);
-  _orchRunPoll(0);
+  _orchRunPoll(0, gen);
 }
 
 // Launch a DURABLE run (Task Mode) instead of the ephemeral in-drawer run.
@@ -1846,9 +1851,12 @@ function _orchRunSetBusy(on) {
   if (abort) abort.style.display = on ? '' : 'none';
 }
 
-async function _orchRunPoll(cursor) {
-  if (!_orchRunTaskId) return;
+async function _orchRunPoll(cursor, gen) {
+  // Stale-poll guard: a run that was aborted or superseded bumped
+  // _orchRunGen, so an in-flight timer from the old run bails here.
+  if (gen !== _orchRunGen || !_orchRunTaskId) return;
   var res = await Api.orchestrations.runPoll(_orchRunTaskId, cursor);
+  if (gen !== _orchRunGen) return;
   if (!res || !res.ok) {
     _orchRunLog(_ORCH_ICONS.warn + ' poll failed', 'is-err');
     _orchRunSetBusy(false);
@@ -1860,7 +1868,7 @@ async function _orchRunPoll(cursor) {
     _orchRunTaskId = null;
     return;
   }
-  setTimeout(function () { _orchRunPoll(res.next_cursor); }, 700);
+  setTimeout(function () { _orchRunPoll(res.next_cursor, gen); }, 700);
 }
 
 function _orchRenderRunEvent(ev) {
@@ -1934,9 +1942,21 @@ function _orchRenderRunEvent(ev) {
 }
 
 async function _orchRunAbort() {
-  if (!_orchRunTaskId) return;
-  await Api.orchestrations.runAbort(_orchRunTaskId);
+  var taskId = _orchRunTaskId;
+  if (!taskId) return;
+  // Reset local run state IMMEDIATELY so the Run button re-enables and any
+  // in-flight poll (bumped generation) stops — do NOT wait on the backend.
+  // Otherwise _orchRunPolling stays true forever and _orchRun's guard
+  // `if (_orchRunPolling) return;` deadlocks all future runs.
+  _orchRunGen++;
+  _orchRunTaskId = null;
+  _orchRunSetBusy(false);
   _orchRunLog(_ORCH_ICONS.stop + ' abort requested…');
+  try {
+    await Api.orchestrations.runAbort(taskId);
+  } catch (e) {
+    _orchRunLog(_ORCH_ICONS.warn + ' abort request failed', 'is-err');
+  }
 }
 
 // ════════════════════════════════════════════════════════════════════

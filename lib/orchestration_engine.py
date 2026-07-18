@@ -393,6 +393,13 @@ class FlowExecutor:
         # as an INCOMPLETE stop instead of silently reporting 'completed'.
         # A loop that exits on a clean verifier STOP records 'stop'.
         self._loop_exits: list[dict] = []
+        # Any role/subflow node that finished with status='failed' (a runner
+        # crash is caught in _run_role and folded into a failed result, so it
+        # never propagates as an exception). Without recording it the walk
+        # proceeds and the flow would report a dishonest 'completed'. run()'s
+        # terminal-honesty block consults this so a failed node surfaces as
+        # ok=False / stop_reason='node_failed'.
+        self._node_failures: list[dict] = []
         # Declared deliverables (artifact nodes) encountered during the walk.
         self._artifacts: list[dict] = []
 
@@ -456,12 +463,21 @@ class FlowExecutor:
         stop_reason = 'completed'
         incomplete = None
         if status == 'completed':
-            for ex in self._loop_exits:
-                if is_incomplete_stop(ex.get('reason') or ''):
-                    incomplete = ex
-                    break
-            if incomplete is not None:
-                stop_reason = incomplete['reason']
+            # A node that finished with status='failed' means the flow did NOT
+            # fully execute, even though the walk reached the stop node.
+            # Surface it first so the run is reported honestly rather than as
+            # a clean success (terminal-honesty parity with the loop path).
+            if self._node_failures:
+                incomplete = {'node_id': self._node_failures[0]['node_id'],
+                              'reason': 'node_failed'}
+                stop_reason = 'node_failed'
+            else:
+                for ex in self._loop_exits:
+                    if is_incomplete_stop(ex.get('reason') or ''):
+                        incomplete = ex
+                        break
+                if incomplete is not None:
+                    stop_reason = incomplete['reason']
         elif status == 'aborted':
             stop_reason = 'aborted'
         elif status == 'failed':
@@ -623,6 +639,11 @@ class FlowExecutor:
         self._record(nid, role, out, st, res.get('error') or '',
                      _elapsed, sc_count=sc_count,
                      explore_count=explore_count)
+        if st == 'failed':
+            with self._lock:
+                self._node_failures.append(
+                    {'node_id': nid, 'role': role,
+                     'error': str(res.get('error') or 'failed')})
         # Durable per-node trace: the RESOLVED brief (rendered role prompt),
         # the bounded effective input, and the full bounded output — for the
         # canvas/inspector overlay. render_role_brief is pure (same text the
@@ -1026,6 +1047,23 @@ class FlowExecutor:
         logger.info('[FlowEngine] parallel %s → %d branches, barrier=%s',
                     pid, len(branches), barrier)
 
+        # KNOWN LIMITATION (tracked ticket): the loop verdict state
+        # (_last_producer_snapshot / _pending_feedback / _cur_iteration) is
+        # single-valued, not keyed per branch. Concurrent producer turns
+        # inside a parallel region running WITHIN a loop can clobber each
+        # other's snapshot, so a later verdict may read the wrong producer's
+        # deliverable counts. The composer's recommended pattern keeps
+        # parallel branches as one-shot fresh-context agents (fan-out →
+        # barrier → synthesize), which does NOT feed loop verdict logic, so
+        # this is latent for normal flows. Flag it when it CAN bite.
+        if len(branches) > 1 and self._cur_iteration > 0:
+            logger.warning('[FlowEngine] parallel %s runs %d concurrent '
+                           'branches inside a loop (iteration=%d): loop '
+                           'verdict state is single-valued and may be '
+                           'clobbered across branches — avoid verdict-feeding '
+                           'producers in parallel regions',
+                           pid, len(branches), self._cur_iteration)
+
         outputs: list[str] = []
         # Each branch is a linear chain from the branch entry up to (not
         # including) the barrier. Runs concurrently.
@@ -1044,8 +1082,21 @@ class FlowExecutor:
                     except _AbortSignal:
                         raise
                     except Exception as e:
+                        # A runner crash is normally caught inside _run_role
+                        # and folded into a failed node result (recorded in
+                        # _node_failures). This except only fires for a rarer
+                        # structural crash in the branch walk itself; record
+                        # it the same way so terminal honesty still applies.
+                        bid = futs[fut]
                         logger.error('[FlowEngine] parallel branch %s failed: %s',
-                                     futs[fut], e, exc_info=True)
+                                     bid, e, exc_info=True)
+                        with self._lock:
+                            self._node_failures.append(
+                                {'node_id': bid, 'role': None,
+                                 'error': f'{type(e).__name__}: {e}'})
+                        self._emit({'type': 'error', 'node_id': bid,
+                                    'error': {'detail': f'parallel branch failed: {e}'}})
+                        outputs.append(f'[branch {bid} FAILED: {type(e).__name__}: {e}]')
 
         merged = context
         for o in outputs:

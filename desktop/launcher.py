@@ -292,9 +292,62 @@ def _check_for_update():
     return None
 
 
+def _start_computer_control(port: int, state: dict) -> None:
+    """Start the in-process desktop-control agent against the local server.
+
+    Runs ``lib.desktop_agent.run_agent`` on a daemon thread pointed at
+    127.0.0.1:<port> with full permissions (this is the user's OWN machine, and
+    they explicitly enabled it from the tray). A ``threading.Event`` in *state*
+    lets the tray toggle it back off cleanly. Replaces the old "install a second
+    program and run python -m lib.desktop_agent" flow.
+    """
+    if state.get('thread') and state['thread'].is_alive():
+        return
+    try:
+        from lib.desktop_agent import run_agent
+    except Exception as e:
+        _log('Computer control unavailable (import failed): %s' % e)
+        state['error'] = str(e)
+        return
+
+    stop_event = threading.Event()
+    state['stop'] = stop_event
+    state['error'] = None
+    server_url = f'http://127.0.0.1:{port}'
+    bridge_secret = (os.environ.get('TOFU_BRIDGE_SECRET') or '').strip()
+    permissions = {'allow_write': True, 'allow_exec': True, 'allow_gui': True}
+
+    def _loop():
+        try:
+            run_agent(server_url, permissions, poll_interval=1.0,
+                      bridge_secret=bridge_secret, stop_event=stop_event)
+        except Exception as e:
+            _log('Computer-control agent crashed: %s' % e)
+            state['error'] = str(e)
+        finally:
+            state['enabled'] = False
+
+    t = threading.Thread(target=_loop, daemon=True, name='tofu-desktop-agent')
+    state['thread'] = t
+    state['enabled'] = True
+    t.start()
+    _log('Computer control ENABLED (agent polling %s)' % server_url)
+
+
+def _stop_computer_control(state: dict) -> None:
+    """Signal the in-process desktop-control agent to stop at the next poll."""
+    ev = state.get('stop')
+    if ev is not None:
+        ev.set()
+    state['enabled'] = False
+    _log('Computer control DISABLED')
+
+
 def _run_tray(port: int, proc: subprocess.Popen):
     """Run the system tray icon (blocks on the main thread)."""
     url = f'http://127.0.0.1:{port}'
+    # Desktop-control agent state (started/stopped via the tray toggle below).
+    _cc_state: dict = {'enabled': False, 'thread': None, 'stop': None, 'error': None}
 
     def _shutdown():
         if proc.poll() is None:
@@ -350,7 +403,19 @@ def _run_tray(port: int, proc: subprocess.Popen):
                     _log('%s %s: %s' % ('OK' if success else 'FAIL', name, msg))
             threading.Thread(target=_bg, daemon=True).start()
 
+    def on_toggle_computer_control(icon, item):
+        """Enable/disable the in-process desktop-control agent."""
+        if _cc_state.get('enabled'):
+            _stop_computer_control(_cc_state)
+        else:
+            _start_computer_control(port, _cc_state)
+        try:
+            icon.update_menu()
+        except Exception as e:
+            _log('Could not refresh tray menu after CC toggle: %s' % e)
+
     def on_quit(icon, item):
+        _stop_computer_control(_cc_state)
         icon.stop()
         _shutdown()
         os._exit(0)
@@ -363,6 +428,8 @@ def _run_tray(port: int, proc: subprocess.Popen):
                  on_update,
                  visible=lambda item: bool(_update['tag'])),
         pystray.Menu.SEPARATOR,
+        MenuItem('Enable Computer Control', on_toggle_computer_control,
+                 checked=lambda item: bool(_cc_state.get('enabled'))),
         MenuItem('Install Components...', on_components),
         MenuItem(f'Port: {port}', None, enabled=False),
         pystray.Menu.SEPARATOR,

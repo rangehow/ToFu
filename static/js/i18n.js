@@ -2100,6 +2100,7 @@ var _i18n = {
   'finishInfo.cbState.proven': { zh: '服务端（已实证）', en: 'Server-side (proven)' },
   'finishInfo.cbState.unproven': { zh: '疑似服务端（未证实）', en: 'Likely server (unproven)' },
   'finishInfo.cbState.culprit': { zh: '本地改动（可定位）', en: 'Our edit (traceable)' },
+  'finishInfo.cbState.namespace': { zh: '换缓存命名空间（key/beta/endpoint 变了）', en: 'Cache-namespace switch (key/beta/endpoint)' },
   'finishInfo.cbState.boundary': { zh: '回合边界未复用（新回合第 1 轮）', en: 'Turn-boundary miss (new turn, round 1)' },
   'finishInfo.cbCulpritLabel': { zh: '↳ 破坏缓存的消息：{culprits}', en: '\u21b3 message(s) that broke cache: {culprits}' },
   // Legend (contains <b> HTML — rendered as innerHTML, do NOT escape)

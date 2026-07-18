@@ -18,6 +18,7 @@ from lib.tasks_pkg.system_context._reminders import (
     _system_text,
     _wrap_system_reminder,
     _append_to_system_message,
+    _refresh_tail_block,
 )
 from lib.tasks_pkg.system_context._profile import (
     _PROFILE_MARKER,
@@ -268,6 +269,7 @@ def _inject_system_contexts(messages, project_path, project_enabled,
             tool_names=tool_names,
             # User-disabled blocks from the per-block system-prompt editor.
             disabled_blocks=disabled_blocks,
+            include_date=False,
         )
         _append_to_system_message(messages, _static_block,
                                    as_separate_block=True)
@@ -722,18 +724,17 @@ Round N+3, a2's update lands. Synthesise the full picture for the user.
         else:
             _ctx_suppressed('peer_protocol', 'empty')
 
-    # ★ 4.5 Current date.
-    #   In append mode the date is already inlined by build_static_prompt()'s
-    #   section_current_date — do NOT append it again or it duplicates.
-    #   In replace mode the static block is suppressed, so the date would be
-    #   missing entirely; inject it here as its own cache-stable block
-    #   (changes once per UTC day, like the static section).
-    if _replace_static:
-        _date_line = system_prompt_cc.section_current_date()
-        if _date_line not in _existing:
-            _append_to_system_message(messages, _date_line,
-                                       as_separate_block=True)
-            _ctx_injected('date', len(_date_line))
+    # ★ 4.5 Current date rides the TRUE tail, never the cached system floor.
+    #   It changes once per UTC day; baked into the static block it re-billed
+    #   the whole prefix at the UTC rollover. Riding the true tail (the SAME
+    #   seam the digest / charter / board use) keeps the system prefix byte-
+    #   stable across the day boundary and confines the date to the already-
+    #   volatile 5m tail. build_static_prompt() is now always called with
+    #   include_date disabled, so this is the sole date source in both modes.
+    _DATE_MARKER = 'Current date:'
+    _date_spliced = _wrap_system_reminder(system_prompt_cc.section_current_date())
+    _refresh_tail_block(messages, _date_spliced, _DATE_MARKER)
+    _ctx_injected('date', len(_date_spliced))
 
     # ── Per-assembly trace: ONE INFO line naming every block spliced this
     #   assembly + the total bytes. _inject_system_contexts runs ONCE per task

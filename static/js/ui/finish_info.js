@@ -35,6 +35,17 @@ const _CACHE_CAUSE_PHRASES = [
   // leaves the remainder untranslated (e.g. the bare 'stochastic server-side
   // cache miss' alias would eat the prefix of the full sentence). Each block
   // below is sorted full-sentence → clause → short alias.
+  // ── Cache-NAMESPACE switch (2026-07: byte-identical body, routing flipped —
+  //    upstream key / anthropic-beta / endpoint. A CLIENT-side cold-namespace
+  //    miss, NOT a server fault. See _detect.py:_resolve_break_cause. FULL
+  //    sentence first, then the flipped-attribute sub-names as clauses.) ──
+  ['same prefix bytes routed to a different cache namespace — the ',
+   '相同的前缀字节被路由到了不同的缓存命名空间——'],
+  ['changed between turns (a client-side dispatch rebind on cooldown/429, or a per-task TTL-latch flip), so the byte-identical prefix landed on a COLD gateway cache and was re-billed uncached. NOT a server-side miss.',
+   '在轮次间发生了变化（客户端在冷却/429 时重新选路，或 per-task 的 TTL 锁存翻转），于是逐字节相同的前缀落到了一个冷的网关缓存上、按未命中重新计费。这不是服务端未命中。'],
+  ['anthropic-beta header (e.g. extended-cache-ttl)', 'anthropic-beta 头（如 extended-cache-ttl）'],
+  ['upstream API key', '上游 API key'],
+  ['endpoint', 'endpoint（服务端点）'],
   // ── Byte-identical upstream-miss verdict (2026-07: byte-identical prefix NOT
   //    read back — see lib/tasks_pkg/cache_tracking/_detect.py). Byte-identity
   //    proves the miss is NOT a client prefix change THIS round; it does NOT
@@ -215,6 +226,14 @@ function _cacheBreakState(cb) {
   if ('prefix_mutation' in cb) return 'culprit';
   if (keys.some(k => k === 'system_prompt' || k === 'tools'
                   || k === 'model' || k === 'message_count')) return 'culprit';
+  // ★ Cache-namespace switch (byte-identical body, routing flipped: upstream
+  //   key / anthropic-beta / endpoint). A CLIENT-side cold-namespace miss (a
+  //   dispatch rebind on cooldown/429, or a per-task TTL-latch flip) — NOT a
+  //   server fault. Its own state so the popover shows the actionable routing
+  //   switch instead of no badge (the backend already returns the key +
+  //   verbatim cause; this just classifies it). Keyed on the dict key, which
+  //   is stable regardless of the free-form cause wording.
+  if ('cache_namespace_switch' in cb) return 'namespace';
   // ★ Round-1 (new-turn) boundary re-bill (backend detect_cache_break, 2026-07):
   //   the FIRST round of a new user turn read back far less than the previous
   //   turn's warm cached prefix — the prefix was not reused across the turn

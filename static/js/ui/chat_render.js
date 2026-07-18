@@ -408,6 +408,59 @@ if (typeof window !== "undefined") {
   window._msgElIndex = _msgElIndex;
 }
 
+/* ── First-open skeleton (epic ②) ──────────────────────────────────────
+ * Paint an INSTANT placeholder into #chatInner for a `_needsLoad` conversation
+ * — before loadConversationMessages' cache/server fetch returns — so opening an
+ * unopened conv shows its title + N shimmer bubbles immediately instead of a
+ * blank screen (or the previous conv frozen under the reader) during the up-to
+ * 15s server round-trip on a flaky tunnel.
+ *
+ * DOM ALIGNMENT (zero-CLS swap): the skeleton reuses the EXACT real message
+ * structure renderMessage() emits — `#chatInner` > `.message[.user-msg]` >
+ * `.message-avatar` + `.message-content`(`.message-header`>`.message-role`,
+ * `.message-body`) — so when the real render replaces innerHTML the layout /
+ * scroll anchor don't jump. Bubbles are keyed with `id="skeleton-msg-N"` (never
+ * `msg-*`) so renderChat's surgical `_hasMsgDom` probe never mistakes them for
+ * real messages and the first real render always takes the full-wipe path.
+ *
+ * Count: clamp `msgCount` to a small visual cap (real turns render over it in
+ * milliseconds; the cap just bounds the DOM we throw away). Alternates
+ * user/assistant so it reads like a conversation. Caller guarantees msgCount>0
+ * (an empty conv gets the welcome/empty state, never a skeleton).
+ */
+function renderSkeletonChat(conv, msgCount) {
+  const inner = document.getElementById('chatInner');
+  if (!inner) return false;
+  const n = Math.max(1, Math.min(msgCount || 1, 6));
+  const title = (conv && conv.title) || 'Untitled';
+  const _skT = (k, fb) => (typeof t === 'function' && t(k) !== k) ? t(k) : fb;
+  const _roleLabel = _skT('role.assistant', 'Assistant');
+  let html = '';
+  for (let i = 0; i < n; i++) {
+    /* Newest turn is an assistant reply, so count backwards: even distance from
+     * the end = assistant, odd = user (matches a typical user→assistant tail). */
+    const isUser = ((n - 1 - i) % 2) === 1;
+    const lines = isUser ? 1 : (2 + (i % 3));   // assistant bubbles look longer
+    let body = '';
+    for (let l = 0; l < lines; l++) {
+      const w = isUser ? (55 + (i * 7) % 30) : (72 + (l * 9) % 24);
+      body += `<div class="chat-sk-line" style="width:${w}%"></div>`;
+    }
+    html += `<div class="message chat-skeleton${isUser ? ' user-msg' : ''}" id="skeleton-msg-${i}" aria-hidden="true">`
+      + `<div class="message-avatar"><div class="chat-sk-avatar"></div></div>`
+      + `<div class="message-content"><div class="message-header">`
+      + `<span class="message-role">${isUser ? _skT('role.you', 'You') : _roleLabel}</span></div>`
+      + `<div class="message-body">${body}</div></div></div>`;
+  }
+  /* Bubbles are DIRECT children of #chatInner (mirrors the real full render at
+   * inner.innerHTML=html) so the swap to real messages is zero-CLS. The wrapping
+   * `.messages` box is intentionally NOT used (the real render doesn't emit one).
+   * `title` is captured for a11y intent but not rendered as a layout box. */
+  void title;
+  inner.innerHTML = html;
+  return true;
+}
+
 function renderChat(conv, forceScroll) {
   /* ── Guard 1: skip if user is editing a message in this conversation ── */
   if (_editingMsgIdx !== null && conv.id === activeConvId) return;

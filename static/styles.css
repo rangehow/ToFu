@@ -1494,6 +1494,15 @@ body.paper-mode-active #presenceStrip{display:none !important}
 .paper-rec-sk-why{width:88%}
 .paper-rec-sk-meta{width:40%;margin-top:3px}
 @keyframes paperRecShimmer{to{background-position:-200% 0}}
+/* First-open chat skeleton (epic ②) — placeholder bubbles shown INSTANTLY when
+   opening a not-yet-loaded conversation, swapped out zero-CLS when the real
+   messages arrive. Reuses the paperRecShimmer keyframe. The `.message` /
+   `.message-content` structure is inherited from the real bubble styles so the
+   swap causes no layout jump. */
+.chat-skeleton{pointer-events:none}
+.chat-sk-avatar{width:100%;height:100%;border-radius:50%;background:linear-gradient(90deg,var(--bg-hover) 25%,var(--border) 37%,var(--bg-hover) 63%);background-size:200% 100%;animation:paperRecShimmer 1.3s ease-in-out infinite}
+.chat-sk-line{height:12px;margin:7px 0;border-radius:6px;background:linear-gradient(90deg,var(--bg-hover) 25%,var(--border) 37%,var(--bg-hover) 63%);background-size:200% 100%;animation:paperRecShimmer 1.3s ease-in-out infinite}
+@media (prefers-reduced-motion:reduce){.chat-sk-avatar,.chat-sk-line{animation:none}}
 /* Respect reduced-motion: no shimmer, no stagger, no slide — reveal instantly. */
 @media (prefers-reduced-motion:reduce){
   .paper-rec-card[data-status="grounded"]{animation:none}

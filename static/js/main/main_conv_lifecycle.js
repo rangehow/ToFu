@@ -208,25 +208,26 @@ function loadConversation(id) {
   /* ── On-demand message loading for server-only conversations ── */
   if (c._needsLoad) {
     c._initialSwitchLoad = true;   // ★ flag for renderChat: use full-render, not surgical
-    /* ★ FIX: Don't render the loading skeleton immediately — it shows a small
-     * centered div at the top of the viewport, and when messages arrive
-     * milliseconds later the full render would swap content under the reader →
-     * visible flash.
+    /* ★ Epic ②: first-open skeleton. Paint title + N shimmer bubbles IMMEDIATELY
+     *   from the mirror's msgCount (_serverMsgCount) so opening an unopened conv
+     *   never blanks / freezes the previous conv under the reader during the
+     *   up-to-15s server round-trip on a flaky tunnel. The skeleton's DOM mirrors
+     *   the real message structure (zero-CLS swap), and its bubbles are keyed
+     *   `skeleton-msg-*` (not `msg-*`) so renderChat's surgical probe treats the
+     *   first real render as a full wipe.
      *
-     * Instead, keep the previous conversation's content visible during the
-     * async IndexedDB/server fetch (typically <50ms for cache hits).  When
-     * messages arrive, renderChat does one full render that LEAVES the view at
-     * its natural post-render position (opening a conversation does not
-     * auto-scroll — owner directive), so the user sees a direct transition to
-     * the new conversation with no intermediate skeleton state and no jump.
-     *
-     * For the rare case where both cache AND server are slow (>400ms), show
-     * the skeleton as a fallback so the user knows something is loading. */
-    let _skeletonTimer = setTimeout(() => {
-      if (activeConvId === id && c._needsLoad) renderChat(c);
-    }, 400);
+     *   Only when we KNOW there's content to load (_serverMsgCount>0). An empty
+     *   conv (count 0) shows nothing here — its render is the welcome/empty
+     *   state. A cache HIT inside loadConversationMessages repaints in a few ms
+     *   (over the skeleton); a slow server path leaves the skeleton up until the
+     *   body arrives (or the failure UI replaces it with a Retry — see
+     *   loadConversationMessages' timeout/404 branches). */
+    const _skMsgCount = c._serverMsgCount || 0;
+    if (_skMsgCount > 0 && activeConvId === id
+        && typeof renderSkeletonChat === 'function') {
+      renderSkeletonChat(c, _skMsgCount);
+    }
     loadConversationMessages(id).then(() => {
-      clearTimeout(_skeletonTimer);
       const stillExists = conversations.find(x => x.id === id);
       if (!stillExists) return;
       if (activeConvId === id) {

@@ -1084,7 +1084,14 @@ function _installViewportHeightGuard() {
   /* ★ Restore last active conversation from sessionStorage (if any).
    *   If the conv exists on the server, we'll navigate to it after loading.
    *   Otherwise, fall back to the most recent conversation. */
-  const _restoredConvId = sessionStorage.getItem('tofu_activeConvId') || null;
+  /* sessionStorage is PER-TAB and dies on a browser close/reopen — it only
+   *   survives an in-tab reload. Fall back to the localStorage mirror (written
+   *   on every leave via _persistLastActiveConv below) so a genuine COLD open
+   *   (new tab / browser restarted) still knows the last-active conversation,
+   *   matching ChatGPT's restore-your-last-chat behaviour. */
+  const _restoredConvId = sessionStorage.getItem('tofu_activeConvId')
+    || (function () { try { return localStorage.getItem('tofu_lastActiveConvId'); } catch (_e) { return null; } })()
+    || null;
   newChat();  /* show welcome screen immediately */
   {
     const convList = document.getElementById('conversationList');
@@ -1121,13 +1128,47 @@ function _installViewportHeightGuard() {
        *   set activeConvId), and connectToTask/loadConversationMessages are both
        *   idempotent, so the later server reconcile is a surgical in-place
        *   refresh, not a re-open. */
-      if (!activeConvId && _restoredConvId
-          && conversations.find(c => c.id === _restoredConvId)
-          && typeof loadConversation === 'function') {
-        loadConversation(_restoredConvId);
+      if (!activeConvId && typeof loadConversation === 'function') {
+        let _target = null;
+        if (_restoredConvId && conversations.find(c => c.id === _restoredConvId)) {
+          /* Specific last-active conv IS in the cache → paint it instantly
+           *   (cache-first messages or skeleton). Covers in-tab reload AND a
+           *   cold open whose localStorage mirror resolves in the cache. */
+          _target = _restoredConvId;
+        } else if (!_restoredConvId && conversations.length > 0) {
+          /* COLD open with NO known id (first-ever visit's mirror empty, or
+           *   storage cleared): open the MOST-RECENT cached conversation.
+           *   hydrateSidebarFromCache sorts with _convSorter (active-first,
+           *   then updatedAt desc), so conversations[0] is the newest — the
+           *   sidebar's top row. This kills the cold-open "New Chat welcome →
+           *   snap to a conversation after the full round-trip" flicker too. */
+          _target = conversations[0].id;
+        }
+        /* When _restoredConvId is set but NOT in the cache, we deliberately do
+         *   NOTHING here: it can't be painted instantly anyway, and opening
+         *   conversations[0] would strand the user on the wrong conv (the
+         *   post-server _bootRestoreActiveConv opens the real id once the
+         *   authoritative server list confirms it). */
+        if (_target) loadConversation(_target);
       }
     }).catch(e => debugLog(`cache hydrate: ${e.message}`, 'warn'));
   }
+
+  /* ★ Cold-open restore mirror. sessionStorage.tofu_activeConvId is per-tab and
+   *   dies on a browser quit, so mirror the active conv id into localStorage on
+   *   every "leaving" signal — visibilitychange→hidden (the reliable one on
+   *   mobile/tablet, where pagehide/beforeunload often don't fire) plus pagehide
+   *   (desktop tab close). Boot reads this as the fallback restore id. Guarded
+   *   on a non-null activeConvId so exiting on a blank new chat never clobbers
+   *   the last REAL conversation. Best-effort; storage may be disabled. */
+  const _persistLastActiveConv = () => {
+    try { if (activeConvId) localStorage.setItem('tofu_lastActiveConvId', activeConvId); }
+    catch (_e) { /* storage disabled — no-op */ }
+  };
+  window.addEventListener('pagehide', _persistLastActiveConv);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') _persistLastActiveConv();
+  });
 
   /* ★ Event-driven cross-device sync: subscribe to the server's `notify`
    *   push so a sibling device's change (new turn / rename / delete / folder)

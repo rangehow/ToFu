@@ -1,29 +1,30 @@
 """Frontend boot first-open seamlessness (ChatGPT-parity).
 
-A returning user must land DIRECTLY in their last-active conversation the moment
-the page opens — not stare at the "New Chat" welcome screen for the whole server
-round-trip on a slow / flaky tunnel, then watch it snap to their conversation.
+A returning user must land DIRECTLY in a conversation the moment the page opens
+— not stare at the "New Chat" welcome screen for the whole server round-trip on
+a slow / flaky tunnel, then watch it snap to their conversation.
 
-Two seams make this seamless and are guarded here as SOURCE INVARIANTS (no jsdom
-— matches the repo's node-free source-assertion convention for boot wiring the
-end-to-end harness can't exercise):
+Guarded here as SOURCE INVARIANTS (no jsdom — matches the repo's node-free
+source-assertion convention for boot wiring the e2e harness can't exercise):
 
-  1. main.js — right after `hydrateSidebarFromCache()` resolves (the cache-first
-     sidebar paint, BEFORE the server round-trip), boot opens the restored
-     conversation via `loadConversation(_restoredConvId)`. loadConversation
-     paints cache-first (real messages in a few ms) or an instant skeleton, so
-     the user sees their conversation immediately. Gated on:
-       • `!activeConvId`  (user hasn't already navigated — don't yank them),
-       • the EXACT restored id EXISTS in the cache-hydrated list (never the
-         conversations[0] fallback — that stays in the post-server
-         _bootRestoreActiveConv where the server list is authoritative).
+  1. main.js — right after `hydrateSidebarFromCache()` resolves (cache-first
+     sidebar paint, BEFORE the server round-trip), boot opens a conversation
+     via `loadConversation(...)`:
+       • the SPECIFIC last-active conv when its id is known AND in the cache
+         (in-tab reload, or a cold open whose localStorage mirror resolves);
+       • else, on a COLD open with NO known id, the MOST-RECENT cached conv
+         (`conversations[0]` — hydrate sorts recency-first via _convSorter);
+       • gated on `!activeConvId` (never yank a user who already navigated).
 
-  2. main_init_tasks.js — `_ensureNewest()` must NOT repaint over an in-flight
-     first-open skeleton. When boot restored a conv that is still mid
-     initial-switch-load (`_initialSwitchLoad` + `_needsLoad` + empty messages),
-     a full renderChat there would paint the generic "Loading conversation…"
-     welcome over the nicer shimmer skeleton — a downgrade flash. The guard
-     leaves the skeleton up; the load's own `.then` lands the real messages.
+  2. Durable restore id — sessionStorage is per-tab and dies on a browser
+     close, so `_restoredConvId` also falls back to a localStorage mirror
+     (`tofu_lastActiveConvId`) written on every leave (visibilitychange→hidden /
+     pagehide). This is what makes a genuine COLD open restore the SPECIFIC
+     last conversation, matching ChatGPT.
+
+  3. main_init_tasks.js — `_ensureNewest()` must NOT repaint over an in-flight
+     first-open skeleton (`_initialSwitchLoad` + `_needsLoad` + empty messages),
+     which would flash the generic "Loading conversation…" welcome over it.
 """
 import re
 from pathlib import Path
@@ -33,41 +34,61 @@ MAIN_JS = REPO / "static" / "js" / "main.js"
 INIT_JS = REPO / "static" / "js" / "main" / "main_init_tasks.js"
 
 
-def test_boot_restores_last_conv_from_cache_before_server():
-    """After hydrateSidebarFromCache resolves, boot opens the restored conv via
-    loadConversation — inside the .then, gated on !activeConvId + the restored
-    id existing in the (cache-painted) conversations list."""
-    src = MAIN_JS.read_text()
-    # The early-restore lives in the hydrateSidebarFromCache().then(...) block.
+def _hydrate_then_block(src: str) -> str:
     m = re.search(r"hydrateSidebarFromCache\(\)\s*\.then\(\s*\(\)\s*=>\s*\{([\s\S]*?)\}\)\s*\.catch", src)
     assert m, "hydrateSidebarFromCache().then(...).catch() block not found"
-    block = m.group(1)
-    assert "loadConversation(_restoredConvId)" in block, \
-        "boot must open the restored conv from cache before the server round-trip"
-    # Gated on not-yet-navigated + restored id present in the hydrated list.
+    return m.group(1)
+
+
+def test_boot_opens_specific_last_conv_when_known_and_cached():
+    """The specific last-active conv is opened instantly when its id is known
+    AND present in the cache-hydrated list — inside the hydrate .then, gated on
+    !activeConvId, by identity match (not a positional guess)."""
+    block = _hydrate_then_block(MAIN_JS.read_text())
     assert "!activeConvId" in block, "early-restore must be gated on !activeConvId"
-    assert "_restoredConvId" in block and "conversations.find" in block, \
-        "early-restore must verify the restored id exists in the cache-painted list"
-    # It must open the restored id by identity match — never a positional
-    # fallback. (Guarded by the c.id === _restoredConvId find above; the
-    # conversations[0] fallback deliberately stays in the post-server
-    # _bootRestoreActiveConv, not this pre-server cache path.)
-    assert "c.id === _restoredConvId" in block, \
-        "early cache path must open the restored id by identity, not a positional fallback"
+    assert "_restoredConvId" in block and "conversations.find(c => c.id === _restoredConvId)" in block, \
+        "must verify the specific restored id exists in the cache-painted list by identity"
+    assert "loadConversation(" in block, "must open a conversation from the cache path"
 
 
-def test_early_restore_is_only_in_cache_then_not_synchronous():
-    """The loadConversation(_restoredConvId) early-open must live INSIDE the
-    async hydrate .then (so the cached sidebar is painted first), not fire
-    synchronously at boot before the cache list exists."""
+def test_cold_open_falls_back_to_most_recent_cached_conv():
+    """COLD open with NO known id (mirror empty / cleared) must open the
+    most-recent cached conversation (conversations[0]) so the user never sees
+    the welcome-flash → snap. Gated on !_restoredConvId so it never overrides a
+    known specific id, and on a non-empty cache."""
+    block = _hydrate_then_block(MAIN_JS.read_text())
+    assert "conversations[0]" in block, \
+        "cold open must fall back to the most-recent cached conv (conversations[0])"
+    assert "!_restoredConvId" in block and "conversations.length > 0" in block, \
+        "cold-open fallback must be gated on no-known-id AND a non-empty cache"
+
+
+def test_restore_id_has_durable_localstorage_fallback():
+    """_restoredConvId must fall back to a localStorage mirror so a genuine
+    browser-restart cold open restores the SPECIFIC last conversation (not just
+    the newest). sessionStorage alone is per-tab and dies on close."""
     src = MAIN_JS.read_text()
-    then_start = src.find("hydrateSidebarFromCache().then(")
-    assert then_start != -1
-    # The newChat() welcome paint happens earlier in boot; ensure the restore
-    # call is positioned AFTER the hydrate .then opens (not before it).
-    call_pos = src.find("loadConversation(_restoredConvId)")
-    assert call_pos != -1 and call_pos > then_start, \
-        "loadConversation(_restoredConvId) must be inside the hydrate .then block"
+    m = re.search(r"const _restoredConvId\s*=([\s\S]*?);", src)
+    assert m, "_restoredConvId declaration not found"
+    decl = m.group(1)
+    assert "sessionStorage.getItem('tofu_activeConvId')" in decl, "must still prefer sessionStorage"
+    assert "localStorage.getItem('tofu_lastActiveConvId')" in decl, \
+        "must fall back to the localStorage mirror for a browser-restart cold open"
+
+
+def test_last_active_conv_mirrored_to_localstorage_on_leave():
+    """The active conv id is mirrored into localStorage on a leave signal
+    (visibilitychange→hidden + pagehide), guarded on a non-null activeConvId so
+    exiting on a blank new chat never clobbers the last real conversation."""
+    src = MAIN_JS.read_text()
+    assert "localStorage.setItem('tofu_lastActiveConvId', activeConvId)" in src, \
+        "must mirror activeConvId into localStorage for browser-restart restore"
+    # Guarded on a truthy activeConvId (don't persist a null / blank new chat).
+    assert re.search(r"if \(activeConvId\)\s*localStorage\.setItem\('tofu_lastActiveConvId'", src), \
+        "the mirror write must be guarded on a non-null activeConvId"
+    # Registered on both a hidden-visibility signal and pagehide.
+    assert "visibilitychange" in src and "'hidden'" in src, "must persist on visibilitychange→hidden"
+    assert "'pagehide'" in src, "must persist on pagehide (desktop tab close)"
 
 
 def test_ensure_newest_preserves_inflight_skeleton():
@@ -79,7 +100,6 @@ def test_ensure_newest_preserves_inflight_skeleton():
     m = re.search(r"function _ensureNewest\s*\(\)\s*\{([\s\S]*?)\n\}", src)
     assert m, "_ensureNewest not found"
     body = m.group(1)
-    # The skeleton-preservation guard gates the renderChat(c) call.
     assert re.search(
         r"_initialSwitchLoad[\s\S]{0,80}_needsLoad[\s\S]{0,80}messages\.length\s*===\s*0[\s\S]{0,80}renderChat\(c\)",
         body,
@@ -87,7 +107,9 @@ def test_ensure_newest_preserves_inflight_skeleton():
 
 
 if __name__ == "__main__":
-    test_boot_restores_last_conv_from_cache_before_server(); print("PASS early-restore")
-    test_early_restore_is_only_in_cache_then_not_synchronous(); print("PASS in-then")
+    test_boot_opens_specific_last_conv_when_known_and_cached(); print("PASS specific")
+    test_cold_open_falls_back_to_most_recent_cached_conv(); print("PASS cold-open")
+    test_restore_id_has_durable_localstorage_fallback(); print("PASS durable-id")
+    test_last_active_conv_mirrored_to_localstorage_on_leave(); print("PASS mirror")
     test_ensure_newest_preserves_inflight_skeleton(); print("PASS skeleton-guard")
     print("ALL GREEN")

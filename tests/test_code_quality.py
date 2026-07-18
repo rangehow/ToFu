@@ -15,12 +15,19 @@ from pathlib import Path
 
 import pytest
 
-# These checks walk + AST-parse the ENTIRE lib/ + routes/ tree (thousands of
-# files); each takes minutes on a FUSE mount. They are convention guards, not
-# fast unit tests — mark the whole module ``slow`` so it runs in a dedicated
-# lint/quality CI step, not in the fast ``make test-unit`` / ``ci`` tier. (Run
-# with ``pytest -m slow tests/test_code_quality.py``.)
-pytestmark = pytest.mark.slow
+# ── Tier: this is a BLOCKING unit-tier guard, NOT slow/opt-in. ──
+# It AST-parses the lib/ + routes/ tree, but discovery is git-index-backed
+# (``git ls-files`` ~15ms, see _git_tracked_py) and the parse is pure-Python
+# with NO server / NO DB — the whole module runs in ~6s. It was FORMERLY marked
+# ``slow`` ONLY because its old ``os.walk`` discovery timed out on the FUSE
+# mount; ``slow`` quarantined it behind ``pytest -m slow``, which ``make ci``
+# does not run and CI runs ``continue-on-error`` (non-blocking) — so this
+# logging-discipline guard NEVER failed a build even when it should have (the
+# very "green because nobody runs it" rot it exists to prevent). Now that
+# discovery is fast, it belongs in the default ``unit`` tier: ``make test-unit``
+# / ``make ci`` / the blocking CI ``test-unit`` job all run ``-m unit``, so a
+# new silent catch fails the build on the PR that introduces it.
+pytestmark = pytest.mark.unit
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 LIB_DIR = PROJECT_ROOT / 'lib'

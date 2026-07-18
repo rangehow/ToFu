@@ -26,6 +26,10 @@
 #    --reset-env           Delete the existing conda env and recreate from scratch
 #                          (⚠️  DESTRUCTIVE: removes ANY extra packages the user
 #                           installed into this env. Only use for your own env.)
+#    --use-conda           Force the legacy conda install path, skipping the
+#                          default uv fast path. Use on very old systems
+#                          (glibc < 2.28) if auto-detection misfires, or when
+#                          you specifically want the conda-forge toolchain.
 #    --with-postgres       Install + bootstrap PostgreSQL (opt-in). WITHOUT this
 #                          flag the installer uses SQLite by default — zero
 #                          config, no dependencies, fine for single-user /
@@ -122,6 +126,7 @@ NO_UPDATE_CONDA=0
 RESET_ENV=0
 FORCE_SQLITE=0
 WITH_POSTGRES=0     # 0 = SQLite default (PG opt-in); 1 = install+bootstrap PG
+USE_CONDA=0        # 1 = force the legacy conda path, skip the uv fast path
 PG_MAJOR=""         # empty = auto-pick from PG_MAJOR_CANDIDATES
 REINIT_PGDATA=0
 PG_MAJOR_CANDIDATES=(18 17 16)
@@ -145,6 +150,7 @@ while [[ $# -gt 0 ]]; do
         --reset-env)        RESET_ENV=1; shift ;;
         --force-sqlite)     FORCE_SQLITE=1; shift ;;
         --with-postgres)    WITH_POSTGRES=1; shift ;;
+        --use-conda)        USE_CONDA=1; shift ;;
         --pg-major)         PG_MAJOR="$2"; shift 2 ;;
         --reinit-pgdata)    REINIT_PGDATA=1; shift ;;
         --min-conda)        MIN_CONDA_MAJOR="$2"; shift 2 ;;
@@ -239,6 +245,195 @@ case "$OS" in
     *)       fail "Unsupported OS: $OS (Windows: download Tofu-Setup-*.exe from the release page)" ;;
 esac
 info "Platform: $OS $ARCH"
+
+# ═══════════════════════════════════════════════════════════════
+#  Step 0.5: Ensure source is present (backend-agnostic)
+#
+#  Both the uv fast path and the conda path need requirements.txt in hand
+#  BEFORE choosing a backend, so resolve INSTALL_DIR / clone here using the
+#  system git. If a clone is required but git is missing, we force the conda
+#  path (which can install git from conda-forge).
+# ═══════════════════════════════════════════════════════════════
+step "Getting Tofu source code"
+if [[ -f "${INSTALL_DIR}/server.py" ]]; then
+    ok "Existing installation found at ${INSTALL_DIR}"
+    if [[ -d "${INSTALL_DIR}/.git" ]] && command -v git &>/dev/null; then
+        info "Updating via git pull..."
+        (cd "$INSTALL_DIR" && git pull --ff-only) || warn "git pull failed — continuing with existing code"
+    fi
+elif [[ -f "server.py" ]]; then
+    INSTALL_DIR="$(pwd)"
+    ok "Running from project directory: $INSTALL_DIR"
+elif command -v git &>/dev/null; then
+    info "Cloning https://github.com/rangehow/ToFu.git → ${INSTALL_DIR}"
+    git clone https://github.com/rangehow/ToFu.git "$INSTALL_DIR"
+    ok "Repository cloned"
+else
+    warn "git not found and a clone is required — forcing the conda path (it installs git)"
+    USE_CONDA=1
+fi
+REQ_FILE="${INSTALL_DIR}/requirements.txt"
+
+# ═══════════════════════════════════════════════════════════════
+#  Step 0.6: Choose install backend — uv fast path vs legacy conda
+#
+#  Default is the uv fast path: `uv venv` + `uv pip install -r requirements`,
+#  which resolves+installs prebuilt manylinux wheels in ~1-2 min with zero
+#  from-source builds — an order of magnitude faster than the conda-forge
+#  solve. We fall back to conda (unchanged) when any of these hold:
+#    • --use-conda was passed (explicit opt-out)
+#    • --with-postgres was passed (PG binaries live in conda; SQLite runs
+#      anywhere, so we don't make the user also remember --use-conda)
+#    • the host glibc is < 2.28 (PyMuPDF/Pillow ship no manylinux2014 wheel,
+#      so uv would fail resolution / hit GLIBC_x-not-found on CentOS7-era hosts)
+#    • the uv install or its import smoke-test fails (belt-and-braces: even if
+#      the glibc probe passes, a missing/broken wheel triggers the fallback)
+#  A clean fallback to conda is the compatibility floor and must never break.
+# ═══════════════════════════════════════════════════════════════
+_FAST_PATH_DONE=0
+
+# Return 0 iff this host's glibc is >= 2.28 (or non-Linux, e.g. macOS where
+# wheels are arch-tagged and the old GLIBC trap doesn't apply). Conservative:
+# if the version can't be determined, return non-zero (→ prefer conda).
+_glibc_ge_228() {
+    [[ "$OS" != "Linux" ]] && return 0
+    local v
+    v="$(ldd --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+' | head -1)"
+    [[ -z "$v" ]] && v="$(getconf GNU_LIBC_VERSION 2>/dev/null | grep -oE '[0-9]+\.[0-9]+' | head -1)"
+    [[ -z "$v" ]] && return 1
+    awk -v x="$v" 'BEGIN{n=split(x,a,".");exit !(a[1]>2||(a[1]==2&&a[2]>=28))}'
+}
+
+# Best-effort: ensure a `uv` binary is available. Returns 0 if usable.
+_ensure_uv() {
+    command -v uv &>/dev/null && return 0
+    info "uv not found — installing it (astral.sh, bounded)..."
+    local _t=""
+    command -v timeout &>/dev/null && _t="timeout -k 5 120"
+    if command -v curl &>/dev/null; then
+        $_t sh -c 'curl -LsSf https://astral.sh/uv/install.sh | sh' >/dev/null 2>&1 || true
+    fi
+    # uv installs to ~/.local/bin or ~/.cargo/bin — put both on PATH for this run.
+    export PATH="${HOME}/.local/bin:${HOME}/.cargo/bin:${PATH}"
+    command -v uv &>/dev/null
+}
+
+# The uv fast path. Sets ENV_PYTHON / ENV_PREFIX and writes .tofu_env.json on
+# success and returns 0; returns non-zero on ANY failure so the caller falls
+# back to conda. Never calls fail() — a failure here is recoverable.
+_try_uv_install() {
+    _ensure_uv || { warn "Could not obtain uv — falling back to conda"; return 1; }
+
+    local _venv="${INSTALL_DIR}/.venv"
+    info "Creating uv virtualenv at ${_venv} (Python ${PY_VER})..."
+    # --python-preference only-managed: seed the venv from uv's OWN standalone
+    # CPython, never a system/conda interpreter. Two reasons: (1) hermetic +
+    # reproducible (no dependence on whatever python the host ships); (2) it
+    # guarantees .venv/bin/python resolves (realpath) to a DISTINCT base binary,
+    # so server.py's re-exec guard is never short-circuited by a symlink
+    # collision with the interpreter the user later launches from.
+    uv venv "$_venv" --python "${PY_VER}" --python-preference only-managed 2>&1 || {
+        warn "uv venv failed — falling back to conda"; return 1; }
+
+    local _uvpy="${_venv}/bin/python"
+    [[ -x "$_uvpy" ]] || { warn "uv venv produced no python — falling back to conda"; return 1; }
+
+    local _t=""
+    command -v timeout &>/dev/null && _t="timeout -k 15 900"
+    info "Installing Python dependencies with uv (prebuilt wheels)..."
+    $_t uv pip install --python "$_uvpy" -r "$REQ_FILE" 2>&1 || {
+        warn "uv pip install failed — falling back to conda"; return 1; }
+
+    # ── Import smoke-test: THE compatibility gate ──
+    # PyMuPDF (fitz) + Pillow (PIL) are the packages with the highest manylinux
+    # glibc floor, so an old-glibc host that slipped past _glibc_ge_228 (or a
+    # broken wheel) surfaces HERE as an ImportError / GLIBC_x-not-found, and we
+    # fall back to conda cleanly. This is the belt-and-braces the owner required.
+    info "Verifying the wheel stack imports (fitz/PIL are the glibc-floor canaries)..."
+    if ! "$_uvpy" -c 'import lxml.etree, fitz, PIL, cryptography, quart, hypercorn, orjson, sqlalchemy, playwright' 2>&1; then
+        warn "uv-installed wheels failed the import smoke-test (likely glibc too old) — falling back to conda"
+        return 1
+    fi
+
+    # rg / fd are performance optimizations, NOT hard deps (grep_search degrades
+    # rg → grep → pure-Python). Detect system copies; never build from source.
+    if ! command -v rg &>/dev/null; then
+        warn "ripgrep (rg) not found — search falls back to grep/Python (slower, still works)."
+        warn "  For best speed install it from your OS: apt install ripgrep  /  yum install ripgrep"
+    fi
+    if ! command -v fd &>/dev/null && ! command -v fdfind &>/dev/null; then
+        warn "fd not found — file search falls back to a Python walker (slower, still works)."
+        warn "  Optional: apt install fd-find  /  yum install fd-find"
+    fi
+
+    # Playwright Chromium — best-effort, never blocks (browser tools degrade).
+    if [[ "$SKIP_PLAYWRIGHT" -eq 0 ]]; then
+        info "Installing Playwright Chromium (best-effort)..."
+        "$_uvpy" -m playwright install chromium >/dev/null 2>&1 \
+            && ok "Playwright Chromium installed" \
+            || warn "Playwright Chromium install skipped/failed — JS-rendered fetch disabled until you run it manually"
+    fi
+
+    # Publish the env for the shared downstream steps (.env, launch, pgdata probe).
+    ENV_PREFIX="$_venv"
+    ENV_PYTHON="$_uvpy"
+    # Write the .tofu_env.json marker with backend='uv'. server.py keys off this
+    # to skip the conda-only CONDA_PREFIX shim (a venv is not a conda env).
+    "$_uvpy" - "$INSTALL_DIR" "$_venv" "$_uvpy" <<'PYEOF'
+import json, os, sys, time
+install_dir, env_prefix, env_python = sys.argv[1:4]
+marker = {
+    'schema': 1,
+    'created_at': int(time.time()),
+    'backend': 'uv',
+    'env_prefix': env_prefix,
+    'python': env_python,
+    'owned_by_tofu_install': True,
+    'note': ('Written by install.sh (uv fast path). Read by server.py / '
+             'bootstrap.py to re-exec into the venv interpreter. Safe to '
+             'delete to disable auto-activation. NOT exported (gitignored).'),
+}
+with open(os.path.join(install_dir, '.tofu_env.json'), 'w', encoding='utf-8') as f:
+    json.dump(marker, f, indent=2)
+print(f"  ✓ Wrote {os.path.join(install_dir, '.tofu_env.json')}")
+PYEOF
+    ok "uv fast path complete (venv at ${_venv})"
+    return 0
+}
+
+if [[ "$USE_CONDA" -eq 1 ]]; then
+    info "Using the conda install path (--use-conda)."
+elif [[ "$WITH_POSTGRES" -eq 1 ]]; then
+    info "PostgreSQL requested (--with-postgres) — PG binaries live in the conda"
+    info "environment, so switching to the conda install path automatically."
+    USE_CONDA=1
+elif ! _glibc_ge_228; then
+    info "Host glibc < 2.28 (or undetectable) — using the conda path for maximum"
+    info "compatibility (PyMuPDF/Pillow ship no manylinux2014 wheel for old glibc)."
+    USE_CONDA=1
+else
+    step "Installing via uv (fast path; falls back to conda on any failure)"
+    if _try_uv_install; then
+        _FAST_PATH_DONE=1
+    else
+        warn "uv fast path did not complete — continuing with the conda install path"
+    fi
+fi
+
+# ═══════════════════════════════════════════════════════════════
+#  Steps 1–8 below are the LEGACY CONDA PATH. They run only when the uv
+#  fast path did not complete ($_FAST_PATH_DONE != 1). The whole block is
+#  guarded by a single `if` so the conda logic stays byte-for-byte intact
+#  (no reindent) — we just skip it wholesale on the fast path. Both paths
+#  converge below at Step 8.5 with ENV_PYTHON / ENV_PREFIX already set.
+#
+#  Pre-seed the conda-only globals that the SHARED launch tail references so
+#  `set -u` never trips on the uv path (where the conda block is skipped).
+#  On the uv path there is no conda base and the env is Tofu-owned.
+# ═══════════════════════════════════════════════════════════════
+CONDA_BASE="${CONDA_BASE:-}"
+CONDA_OWNED_BY_US="${CONDA_OWNED_BY_US:-0}"
+if [[ "$_FAST_PATH_DONE" -ne 1 ]]; then
 
 # ═══════════════════════════════════════════════════════════════
 #  Step 1: Locate, version-check, or install conda (Miniforge)
@@ -1570,6 +1765,8 @@ else
     info "Skipping Playwright (--skip-playwright)"
 fi
 
+fi  # ── end legacy conda path ($_FAST_PATH_DONE != 1) ──
+
 # ═══════════════════════════════════════════════════════════════
 #  Step 8.5: Validate data/pgdata/ matches installed PG major
 #
@@ -1893,7 +2090,11 @@ ok "Installation complete!"
 echo ""
 echo "  To start Tofu later, any of these work (.tofu_env.json auto-activates):"
 echo "    cd ${INSTALL_DIR} && python server.py"
-if [[ "$CONDA_OWNED_BY_US" -eq 1 ]]; then
+if [[ "$_FAST_PATH_DONE" -eq 1 ]]; then
+    echo ""
+    echo "  (Optional, to explicitly activate the uv venv — not required thanks to .tofu_env.json:)"
+    echo "    source \"${ENV_PREFIX}/bin/activate\""
+elif [[ "$CONDA_OWNED_BY_US" -eq 1 ]]; then
     echo ""
     echo "  (Optional, if you want the env on your PATH for other tools too:)"
     echo "    source \"${CONDA_BASE}/etc/profile.d/conda.sh\" && conda activate ${ENV_NAME}"

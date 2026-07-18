@@ -55,11 +55,13 @@ Pick the row that matches your OS. Each one ends with a running server on **http
 > [latest release](https://github.com/rangehow/ToFu/releases/latest) and pick the build for your chip:
 > **`Tofu-*-macos-arm64.dmg`** for Apple Silicon (M1/M2/M3…) or **`Tofu-*-macos-x86_64.dmg`** for Intel Macs.
 
-That's it. Each path handles conda/runtime, dependencies, the database,
+That's it. Each path handles the runtime, dependencies, the database,
 the browser engine, and starts the server — no flags, no follow-up
-steps. The database defaults to **SQLite** (zero-config); add
-`--with-postgres` to the Linux/macOS command only if you need
-PostgreSQL's higher concurrency (100+ users).
+steps. On Linux/macOS the installer uses a fast [uv](https://github.com/astral-sh/uv)
+path (prebuilt wheels, ~1–2 min) and falls back automatically to conda on
+older systems (glibc < 2.28); pass `--use-conda` to force conda. The
+database defaults to **SQLite** (zero-config); add `--with-postgres`
+only if you need PostgreSQL's higher concurrency (100+ users).
 
 > Need to pre-set an API key, change the port, or recover from a failed
 > install? See **[docs/INSTALL.md](docs/INSTALL.md)** for all flags and

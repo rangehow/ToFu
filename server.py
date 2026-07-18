@@ -649,13 +649,27 @@ def _tofu_maybe_reexec_into_env():
         return
     target_py = cfg.get('python') or ''
     env_prefix = cfg.get('env_prefix') or ''
+    backend = cfg.get('backend') or ''
     if not target_py or not os.access(target_py, os.X_OK):
         return
-    try:
-        same = os.path.realpath(target_py) == os.path.realpath(sys.executable)
-    except OSError:
-        same = (target_py == sys.executable)
-    if same:
+    # Are we ALREADY running inside the target env? Prefer a prefix check over a
+    # bare interpreter-path comparison: a uv venv's bin/python is a symlink to a
+    # base CPython, so realpath(target_py) can equal realpath(sys.executable)
+    # even though we are NOT running with the venv's site-packages active —
+    # comparing sys.prefix to env_prefix catches that. Fall back to the
+    # interpreter-path compare when env_prefix is absent.
+    already_in_env = False
+    if env_prefix:
+        try:
+            already_in_env = (os.path.realpath(sys.prefix) == os.path.realpath(env_prefix))
+        except OSError:
+            already_in_env = (sys.prefix == env_prefix)
+    else:
+        try:
+            already_in_env = os.path.realpath(target_py) == os.path.realpath(sys.executable)
+        except OSError:
+            already_in_env = (target_py == sys.executable)
+    if already_in_env:
         return
     if os.environ.get('_TOFU_ENV_REEXEC') == '1':
         return
@@ -667,7 +681,12 @@ def _tofu_maybe_reexec_into_env():
         env_bin = os.path.join(env_prefix, 'bin')
         if os.path.isdir(env_bin):
             os.environ['PATH'] = env_bin + os.pathsep + os.environ.get('PATH', '')
-        os.environ.setdefault('CONDA_PREFIX', env_prefix)
+        # Only masquerade as a conda env when we ARE one. A uv venv
+        # (backend='uv') is not conda; setting CONDA_PREFIX would make
+        # bootstrap.py's _running_in_conda_env() misfire and route its pip
+        # fallback down the conda-forge branch.
+        if backend != 'uv':
+            os.environ.setdefault('CONDA_PREFIX', env_prefix)
     os.environ['_TOFU_ENV_REEXEC'] = '1'
     try:
         os.execv(target_py, [target_py, *sys.argv])

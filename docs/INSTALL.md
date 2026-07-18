@@ -23,6 +23,7 @@ the server when finished.
 | `--port 8080` | Server port (default `15000`) |
 | `--dir <path>` | Install directory (default `~/tofu`) |
 | `--with-postgres` | Install + bootstrap PostgreSQL (opt-in). Default is SQLite — see below |
+| `--use-conda` | Force the legacy conda path, skipping the default uv fast path (see below) |
 | `--no-launch` | Install only; don't start the server |
 
 Example:
@@ -36,8 +37,35 @@ curl -fsSL https://raw.githubusercontent.com/rangehow/ToFu/main/install.sh \
 
 ## What the installer actually does
 
-The installer is `install.sh`. Read the script if you want every detail;
-the short version:
+The installer is `install.sh`. It has two backends and picks the fast one
+automatically:
+
+### Fast path (default): uv
+
+On a reasonably modern Linux host (glibc ≥ 2.28) or macOS, the installer
+uses [uv](https://github.com/astral-sh/uv):
+
+1. Ensures a `uv` binary (installs it from astral.sh if missing).
+2. Creates a project-local virtualenv `.venv` from uv's own managed
+   CPython (Python 3.12) — no system/conda interpreter needed.
+3. `uv pip install -r requirements.txt` — installs the whole dependency
+   stack from prebuilt manylinux wheels (typically ~1–2 min, **zero**
+   from-source builds).
+4. Runs an import smoke-test (`lxml`, `fitz`/PyMuPDF, `PIL`/Pillow,
+   `cryptography`, …). **If any import fails — e.g. an old glibc with no
+   compatible wheel — it falls back cleanly to the conda path.**
+5. Detects a system `ripgrep`/`fd` (optional speedups; the app degrades
+   to a pure-Python search fallback if absent — never a source build).
+6. Installs the Playwright Chromium binary (best-effort).
+7. Writes `.tofu_env.json` (`backend: uv`) so `python server.py` re-execs
+   into the venv even from an unactivated shell.
+
+### Fallback path: conda
+
+The installer switches to conda automatically when: `--use-conda` or
+`--with-postgres` was passed, the host glibc is < 2.28 (PyMuPDF/Pillow
+ship no manylinux2014 wheel for it), or the uv import smoke-test failed.
+The conda path:
 
 1. Locates conda, or installs a private Miniforge as a project sibling.
 2. Creates a `tofu` conda env (Python 3.12).
@@ -49,7 +77,8 @@ the short version:
 5. Installs the Playwright Chromium binary.
 6. Writes `.tofu_env.json` so `python server.py` re-execs into the right
    interpreter even from an unactivated shell.
-7. Starts the server.
+
+Both paths then configure `.env` and start the server.
 
 ## Database: SQLite by default, PostgreSQL opt-in
 

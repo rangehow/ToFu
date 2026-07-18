@@ -762,8 +762,8 @@ def _is_text_file(filepath: str) -> bool:
     """Heuristic: is this file likely text (safe to do string replacements)?"""
     text_exts = {
         '.py', '.js', '.html', '.css', '.md', '.txt', '.json', '.yaml', '.yml',
-        '.toml', '.cfg', '.ini', '.sh', '.bash', '.env', '.example', '.gitignore',
-        '.xml', '.csv', '.rst',
+        '.toml', '.cfg', '.conf', '.ini', '.sh', '.bash', '.env', '.example',
+        '.gitignore', '.xml', '.csv', '.rst',
     }
     ext = os.path.splitext(filepath)[1].lower()
     if ext in text_exts:

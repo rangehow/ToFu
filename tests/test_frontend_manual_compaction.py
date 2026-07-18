@@ -207,22 +207,18 @@ global.t=(k)=>k;
 let CONV=null; global.activeConvId='c1'; global.getConvById=(id)=>CONV;
 eval(fs.readFileSync(process.argv[2],'utf8'));
 
-// Reach _lastUsageTokens indirectly: it's private, but the whole gauge level is
-// derived from it. We assert the OBSERVABLE: a conv whose newest assistant is a
-// summary-only message (no usage) resolves a NON-ZERO used-token reading equal
-// to _estimatedPromptTokens. We probe by monkey-reading via a tiny reflection:
-// re-run the file's exported updateContextBar which calls _lastUsageTokens; but
-// since DOM is null it early-returns. So instead we duplicate the resolution by
-// invoking the exported _resolveContextLimit (proves file loaded) AND rely on a
-// direct-eval of the fallback branch presence. Simplest robust check: grep the
-// shipped source for the fallback and assert it references _estimatedPromptTokens
-// AFTER the legacy usage branch.
+// Source-level guard that the scheme-B fallback exists and is wired to the
+// compaction summary. The exact ORDERING of the branches is asserted by the
+// behavioral test (test_gauge_reserve_stale_usage_does_not_shadow_summary),
+// which drives the real render path — so here we only assert the fallback
+// references the summary estimate, is guarded by `_isCompactionSummary`, and
+// returns `summaryEst` (the recency-ordered scheme-B fallback added when the
+// gauge was fixed to not be shadowed by preserved reserve turns).
 const src = fs.readFileSync(process.argv[2],'utf8');
-const idxLegacy = src.indexOf('Legacy fallback');
 const idxEst = src.indexOf('_estimatedPromptTokens');
 const out=[];
 out.push((typeof window._resolveContextLimit==='function'?'PASS ':'FAIL ')+'file_loaded');
-out.push((idxEst>idxLegacy && idxLegacy>0 ?'PASS ':'FAIL ')+'gauge_fallback_after_legacy');
+out.push((/return\s+summaryEst\s*;/.test(src) ?'PASS ':'FAIL ')+'gauge_scheme_b_fallback_returned');
 out.push((src.indexOf('_isCompactionSummary')>0 && idxEst>0 ?'PASS ':'FAIL ')+'gauge_fallback_guarded_by_summary_flag');
 console.log(out.join('\n'));
 """

@@ -14,33 +14,60 @@ real traffic shows both already-cached-turn miss classes at zero.
 
 ---
 
-## 0. How to swap the process — ONE script
+## 0. How to swap the process
 
 **Do not** hand-run `python server.py` while the old process is up: it loses the
 `:15000` bind race, boots, and dies (observed as a storm of boot banners with no
-`Ready`), while the OLD process keeps serving stale code. Instead run the
-idempotent, kill-first restart script:
+`Ready`), while the OLD process keeps serving stale code. There are two paths;
+the managed one is preferred because it self-heals.
+
+### 0a. PREFERRED — supervisord-managed (install once, then one command forever)
+
+The root cause of the repeated "restart didn't take" is that the server ran as a
+**bare PPID=1 process nobody relaunches** — a crash/OOM left it dead and manual
+launches raced the port. Hand its lifecycle to the host `supervisord` (autostart
++ autorestart) ONCE:
+
+```bash
+bash deploy/supervisor/install.sh
+```
+
+It validates `deploy/supervisor/tofu.conf`, installs it to
+`/etc/supervisor/conf.d/`, does the one-time handoff (stops the hand-started
+listener so supervisord owns the single instance), `reread`+`update`, and
+verifies `RUNNING`. `/etc/supervisor/conf.d` is root-owned, so if the script
+lacks root / passwordless-sudo it **prints the exact `sudo` commands and stops —
+never a half-install**. After this, **every** restart is just:
+
+```bash
+sudo supervisorctl restart tofu     # graceful drain; crash/OOM self-heals
+```
+
+No more bare-process port races, and the server comes back on its own after any
+death. `deploy/supervisor/tofu.conf` is guarded by `tests/test_supervisor_conf.py`.
+
+### 0b. FALLBACK — restart_15000.sh (no supervisord)
+
+If supervisord is not available/desired, use the idempotent kill-first script:
 
 ```bash
 bash restart_15000.sh
 ```
 
-It: refuses if `supervisord` owns tofu (use `supervisorctl restart tofu` then);
-takes a serialization flock (safe under concurrent siblings); kills the EXACT
-PID listening on `:15000` (SIGTERM→SIGKILL, waits for the port to free);
-relaunches detached (`setsid nohup`) from the current HEAD tree; then self-probes
-that the intended fixes are LIVE — including **(d) the served process
-self-reports `CACHE_FIX_GEN >= 5`** (the whole prefix-cache chain), so a stale /
-wrong-tree boot fails loudly instead of a false "restarted".
+It refuses if supervisord already owns tofu (use 0a then); takes a serialization
+flock; kills the EXACT `:15000` PID (SIGTERM→SIGKILL, waits for the port to
+free); relaunches detached (`setsid nohup`) from HEAD; then self-probes the
+fixes are LIVE — including **(d) the served process self-reports
+`CACHE_FIX_GEN >= 5`** — so a stale/wrong-tree boot fails loudly, not a false
+"restarted".
 
-> **Hard rule:** run it from a shell that is **NOT a descendant of the `:15000`
-> server** (a plain VS Code terminal — not a Tofu agent's `run_command` shell).
-> The script's `[pre]` guard refuses a self-descendant to avoid killing the very
-> shell running it; that guard is *why* an agent cannot restart the server for
-> you — the operator must run it from an independent terminal.
+> **Hard rule (both paths):** run from a shell that is **NOT a descendant of the
+> `:15000` server** (a plain terminal — not a Tofu agent's `run_command` shell).
+> Both scripts refuse a self-descendant to avoid killing the very shell running
+> them; that guard is *why* an agent cannot restart the server for you — the
+> operator must run it from an independent terminal.
 
-After it prints `✅ FIX LIVE … CACHE_FIX_GEN>=5`, run the acceptance verdict
-below.
+After the server is up (managed or fallback), run the acceptance verdict below.
 
 ---
 

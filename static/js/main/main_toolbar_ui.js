@@ -364,8 +364,9 @@ function updateSubmenuCounts() {
   const aiTrigger = document.querySelector("#submenuAI .submenu-trigger");
   if (aiTrigger) aiTrigger.classList.toggle("has-active", aiCount > 0);
 
-  // Tools: browser, desktop, scheduler, image gen, human guidance
-  const toolCount = (browserEnabled ? 1 : 0) + (desktopEnabled ? 1 : 0) + (schedulerEnabled ? 1 : 0) + (imageGenEnabled ? 1 : 0) + (humanGuidanceEnabled ? 1 : 0);
+  // Tools: browser, desktop, image gen, human guidance
+  // (Scheduler is a default tool — always on, no toggle — so it does not count here.)
+  const toolCount = (browserEnabled ? 1 : 0) + (desktopEnabled ? 1 : 0) + (imageGenEnabled ? 1 : 0) + (humanGuidanceEnabled ? 1 : 0);
   _setCount(document.getElementById("submenuToolsCount"), toolCount);
   const toolTrigger = document.querySelector("#submenuTools .submenu-trigger");
   if (toolTrigger) toolTrigger.classList.toggle("has-active", toolCount > 0);
@@ -392,6 +393,7 @@ function cycleSearchMode() {
   _saveConvToolState();
   debugLog(`Search: ${searchMode}`, "success");
 }
+
 function toggleBrowser() {
   // If not enabled yet and clicking to enable — open setup modal instead of just toggling
   if (!browserEnabled) {
@@ -850,11 +852,32 @@ async function _populateFlowMenu() {
   list.innerHTML = items.map(it =>
     '<div class="flow-menu-item' + ((it.flow === activeFlow) ? ' selected' : '') + '" '
     + 'data-flow="' + escapeHtml(it.flow) + '" onclick="setActiveFlow(\'' + escapeHtml(it.flow).replace(/'/g, "\\'") + '\')">'
-    + '<span class="flow-menu-check">✓</span>'
+    + '<span class="flow-menu-icon">' + _flowMenuIcon(it.flow) + '</span>'
     + '<span class="flow-menu-text"><span class="flow-menu-name">' + escapeHtml(it.name) + '</span>'
     + '<span class="flow-menu-desc">' + escapeHtml(it.desc) + '</span></span>'
+    + '<span class="flow-menu-check">✓</span>'
     + '</div>'
   ).join('');
+}
+
+/* SVG icon for a flow-menu row (§3.4 — SVG only, never emoji). The two
+ * builtins reuse the EXACT glyphs from their Mode-menu toggles (endpointToggle
+ * / autopilotToggle) so the two surfaces read as the same capability; "none"
+ * (plain chat) is a speech bubble; any custom Studio flow is a node-graph. */
+function _flowMenuIcon(flow) {
+  const SW = 'fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"';
+  if (flow === 'builtin:endpoint') {
+    return '<svg width="16" height="16" viewBox="0 0 24 24" ' + SW + '><path d="M12 2v4"/><path d="M12 18v4"/><path d="M4.93 4.93l2.83 2.83"/><path d="M16.24 16.24l2.83 2.83"/><path d="M2 12h4"/><path d="M18 12h4"/><path d="M4.93 19.07l2.83-2.83"/><path d="M16.24 7.76l2.83-2.83"/><circle cx="12" cy="12" r="4"/></svg>';
+  }
+  if (flow === 'builtin:autopilot') {
+    return '<svg width="16" height="16" viewBox="0 0 24 24" ' + SW + '><circle cx="12" cy="12" r="3"/><path d="M12 1v6m0 10v6m11-11h-6m-10 0H1m17.66-6.34l-4.24 4.24m-5.66 5.66l-4.24 4.24m12.14 0l-4.24-4.24m-5.66-5.66L4.34 4.34"/></svg>';
+  }
+  if (!flow) {
+    // "none" — plain conversation (no engine flow)
+    return '<svg width="16" height="16" viewBox="0 0 24 24" ' + SW + '><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>';
+  }
+  // A stored custom Studio flow — node graph
+  return '<svg width="16" height="16" viewBox="0 0 24 24" ' + SW + '><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>';
 }
 
 // Close the flow menu on outside click.

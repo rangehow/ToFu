@@ -13,7 +13,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from lib.agent_verdict import VU_ROLE_PROMPT as _VU_ROLE_PROMPT
 from lib.log import get_logger
 from lib.orchestration._layout import layout_definition
 from lib.orchestration._roles import resolve_scope
@@ -104,13 +103,18 @@ def build_autopilot_definition(*, name: str = 'Autopilot',
                         'objective': 'Continue the task. Make concrete '
                         'progress every turn; act, do not just analyze.'}},
             {'id': 'vu', 'type': 'role', 'role': 'virtual_user',
+             # The VU PERSONA (the full project-owner driver prompt incl. the
+             # mandatory [PROGRESS: resolved=X remaining=Y] hard-signal line)
+             # is injected as this node's SYSTEM prompt via the single-sourced
+             # registry suffix (AGENT_ROLES['virtual_user'] → VU_ROLE_PROMPT);
+             # it does NOT belong in the objective, which is capped at
+             # MAX_OBJECTIVE_LEN (4000) and would reject the 4.5k persona. The
+             # objective is just the per-flow delegation brief.
              'params': {'emits': 'user', 'tier': 'standard',
-                        # SINGLE SOURCE: the VU persona (incl. the mandatory
-                        # [PROGRESS: resolved=X remaining=Y] hard-signal line
-                        # the diminishing-returns guard consumes) is the shared
-                        # lib.agent_verdict.VU_ROLE_PROMPT — NOT a local
-                        # paraphrase. Was a drifted 3-sentence hand-copy.
-                        'objective': _VU_ROLE_PROMPT}},
+                        'objective': 'Stand in for the human and drive the '
+                        'task to completion per your virtual-user role. Emit '
+                        '[VERDICT: STOP] (or [VU: TASK_DONE]) only when the '
+                        'objective is genuinely met.'}},
             {'id': 'stop', 'type': 'control', 'kind': 'stop'},
         ],
         'edges': [

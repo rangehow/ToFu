@@ -63,19 +63,33 @@ def test_registry_virtual_user_suffix_is_the_shared_object():
     assert get_role_system_suffix('virtual_user') is VU_ROLE_PROMPT
 
 
-def test_build_autopilot_definition_vu_node_embeds_the_shared_prompt():
-    """The canonical autopilot graph's virtual_user node carries the shared
-    persona as its objective (so ``render_role_brief`` folds the FULL persona
-    — incl. the [PROGRESS] contract — into the VU sub-agent's delegation
-    brief), not a paraphrase."""
+def test_build_autopilot_definition_is_valid_and_vu_persona_via_system_suffix():
+    """The canonical autopilot graph must VALIDATE (the VU node objective is a
+    short brief — the full 4.5k persona would exceed MAX_OBJECTIVE_LEN=4000 and
+    reject the definition), and the FULL persona reaches the VU sub-agent
+    through the single-sourced registry SYSTEM suffix, not the objective.
+
+    This pins the fix for the step-1 regression where the persona was wrongly
+    stuffed into the capped objective and broke build_autopilot_definition."""
     from lib.agent_verdict import VU_ROLE_PROMPT
-    from lib.orchestration import build_autopilot_definition, render_role_brief
+    from lib.orchestration import build_autopilot_definition, validate_definition
+    from lib.orchestration._roles import MAX_OBJECTIVE_LEN
+    from lib.swarm.registry import get_role_system_suffix
+
     defn = build_autopilot_definition()
+    # The whole definition must be structurally valid (the regression made it
+    # invalid: 'objective exceeds 4000 chars').
+    verdict = validate_definition(defn)
+    assert verdict['ok'], verdict['errors']
+
     vu = next(n for n in defn['nodes'] if n.get('role') == 'virtual_user')
-    assert vu['params']['objective'] is VU_ROLE_PROMPT
-    # And it survives brief rendering (objective renders as the lead paragraph).
-    brief = render_role_brief(vu)
-    assert '[PROGRESS: resolved=X remaining=Y]' in brief
+    obj = vu['params']['objective']
+    assert obj is not VU_ROLE_PROMPT, 'persona must NOT be in the capped objective'
+    assert len(obj) <= MAX_OBJECTIVE_LEN
+    # The FULL persona (with the [PROGRESS] contract) is the VU node's SYSTEM
+    # prompt, single-sourced from VU_ROLE_PROMPT.
+    assert get_role_system_suffix('virtual_user') is VU_ROLE_PROMPT
+    assert '[PROGRESS: resolved=X remaining=Y]' in VU_ROLE_PROMPT
 
 
 def test_no_drifted_paraphrase_survives_in_consumers():

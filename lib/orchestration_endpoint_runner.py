@@ -372,8 +372,18 @@ def _run_flow_as_endpoint_task(task: dict, defn: dict, *, label: str,
         )
         result = executor.run(initial_context=user_request)
         iterations = result.get('agents_run', 0)
+        # Terminal honesty: surface the engine's REAL stop reason. A loop that
+        # burned its budget without a verifier STOP comes back ok=False with a
+        # concrete reason ('max_iterations' / 'stuck' / 'replan_exhausted' /
+        # 'no_progress') and NO error — report that reason, NOT a bare
+        # 'completed' (the old bug) and NOT 'failed' (which is for a crash /
+        # structural error). ok=True keeps reason='completed'.
         if not result.get('ok'):
-            stop_reason = result.get('error') or 'failed'
+            stop_reason = (result.get('error')
+                           or result.get('stop_reason')
+                           or 'failed')
+        else:
+            stop_reason = result.get('stop_reason') or 'completed'
         # Final assistant content = the flow's converged result.
         with task.get('content_lock', _NullLock()):
             task['content'] = result.get('final', '')

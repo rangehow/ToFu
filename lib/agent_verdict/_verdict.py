@@ -339,6 +339,7 @@ def classify_verdict(
 INCOMPLETE_STOP_REASONS = frozenset({
     'max_iterations',
     'max_replans',
+    'replan_exhausted',
     'stuck',
     'budget_exhausted',
     'no_progress',

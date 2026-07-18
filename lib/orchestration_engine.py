@@ -52,9 +52,9 @@ from lib.agent_verdict import (
 )
 from lib.log import get_logger
 from lib.orchestration import (
-    DEFAULT_OUTPUT_NAME, IO_START_REF, MAX_SUBFLOW_DEPTH, expand_subflows,
+    IO_START_REF, MAX_SUBFLOW_DEPTH, expand_subflows,
     node_output_names, parse_io_ref, render_role_brief, resolve_emits,
-    resolve_scope, validate_definition,
+    validate_definition,
 )
 
 logger = get_logger(__name__)
@@ -372,6 +372,14 @@ class FlowExecutor:
         self._last_producer_snapshot: dict = {}
         # Verifier feedback history (per active loop) for stuck-detection.
         self._feedback_history: list[str] = []
+        # ── Loop-exit ledger (the terminal-honesty axis) ──
+        # One record per loop the walk runs: {node_id, reason, iterations}.
+        # ``reason`` ∈ {'stop','stuck','no_progress','replan_exhausted',
+        # 'max_iterations'} — the REAL reason the loop left, so run() can
+        # surface a non-converged exit (a burned budget with no STOP verdict)
+        # as an INCOMPLETE stop instead of silently reporting 'completed'.
+        # A loop that exits on a clean verifier STOP records 'stop'.
+        self._loop_exits: list[dict] = []
         # Declared deliverables (artifact nodes) encountered during the walk.
         self._artifacts: list[dict] = []
 
@@ -422,17 +430,47 @@ class FlowExecutor:
             status, error = 'failed', f'{type(e).__name__}: {e}'
             logger.error('[FlowEngine] run crashed: %s', e, exc_info=True)
 
+        # ── Terminal honesty ──
+        # A flow whose walk finished without a structural failure is
+        # status='completed' — but if a LOOP inside it burned its budget
+        # without a verifier STOP (max_iterations / stuck / replan_exhausted /
+        # no_progress), the objective is NOT verified-complete. Surface the
+        # first such incomplete exit as ``stop_reason`` so the caller reports
+        # it honestly instead of a clean 'completed' (parity with the live
+        # endpoint / autopilot loops' incomplete-stop contract). A loop that
+        # exited on a clean 'stop' is completed and does not set stop_reason.
+        from lib.agent_verdict import is_incomplete_stop
+        stop_reason = 'completed'
+        incomplete = None
+        if status == 'completed':
+            for ex in self._loop_exits:
+                if is_incomplete_stop(ex.get('reason') or ''):
+                    incomplete = ex
+                    break
+            if incomplete is not None:
+                stop_reason = incomplete['reason']
+        elif status == 'aborted':
+            stop_reason = 'aborted'
+        elif status == 'failed':
+            stop_reason = error or 'failed'
+
         elapsed = time.monotonic() - t0
         self._emit({'type': 'flow_complete', 'status': status,
-                    'agents_run': self._agents_run, 'elapsed': round(elapsed, 1)})
-        logger.info('[FlowEngine] run DONE status=%s agents=%d elapsed=%.1fs',
-                    status, self._agents_run, elapsed)
+                    'agents_run': self._agents_run, 'elapsed': round(elapsed, 1),
+                    'stop_reason': stop_reason})
+        logger.info('[FlowEngine] run DONE status=%s reason=%s agents=%d '
+                    'elapsed=%.1fs', status, stop_reason, self._agents_run, elapsed)
         return {
-            'ok': status == 'completed',
+            # ``ok`` now means BOTH "no structural failure" AND "no loop left
+            # non-converged" — a burned-budget run is ok=False so callers stop
+            # reporting it as a clean success.
+            'ok': status == 'completed' and incomplete is None,
             'status': status,
+            'stop_reason': stop_reason,
             'final': final,
             'transcript': self._transcript,
             'trace': list(self._trace),
+            'loop_exits': list(self._loop_exits),
             'agents_run': self._agents_run,
             'artifacts': list(self._artifacts),
             'error': error,
@@ -1030,10 +1068,18 @@ class FlowExecutor:
             self._feedback_history = []
         zero_streak = 0
         replans = 0
+        # Terminal-honesty: the REAL reason this loop left. Defaults to
+        # 'max_iterations' — the ``for/else`` (budget exhausted with no STOP)
+        # falls through without reassigning it, so a burned-out loop is never
+        # mislabelled 'completed'. Any convergent/early exit reassigns it.
+        exit_reason = 'max_iterations'
+        completed_iterations = 0
+        replan_exhausted = False
         for i in range(cap):
             if self._abort_check():
                 raise _AbortSignal()
             self._cur_iteration = i + 1
+            completed_iterations = i + 1
             self._emit({'type': 'loop_iteration', 'node_id': lid,
                         'iteration': i + 1, 'max': cap})
             # Run the body chain, stopping when it loops back to the loop node.
@@ -1064,6 +1110,7 @@ class FlowExecutor:
 
             if phase == 'stop':
                 logger.info('[FlowEngine] loop %s STOP after iteration %d', lid, i + 1)
+                exit_reason = 'stop'
                 break
 
             # ── Stuck detection: a repeating critic means no convergence ──
@@ -1072,6 +1119,7 @@ class FlowExecutor:
                             'iteration': i + 1})
                 logger.info('[FlowEngine] loop %s STUCK (repeating feedback) — '
                             'breaking after iteration %d', lid, i + 1)
+                exit_reason = 'stuck'
                 break
 
             if (phase == 'planner' and planner_id and replans < _MAX_REPLANS
@@ -1085,10 +1133,26 @@ class FlowExecutor:
                 context = self._run_replan(planner_id, context, defect, replans)
                 continue
 
+            # A CONTINUE_PLANNER we can no longer honour (replan budget spent):
+            # the loop keeps iterating as a worker (UNCHANGED control flow) but
+            # remember it, so a subsequent cap-hit is labelled the more precise
+            # 'replan_exhausted' rather than a bare 'max_iterations'.
+            if phase == 'planner' and replans >= _MAX_REPLANS:
+                replan_exhausted = True
+
             # phase == 'worker' (or planner exhausted/downgraded) → iterate.
         else:
-            logger.info('[FlowEngine] loop %s hit cap %d', lid, cap)
+            # Budget exhausted with no STOP verdict. Distinguish a flapping
+            # critic that ran out of replans from a plain runaway worker.
+            if replan_exhausted:
+                exit_reason = 'replan_exhausted'
+            logger.info('[FlowEngine] loop %s hit cap %d (no STOP verdict, '
+                        'reason=%s)', lid, cap, exit_reason)
 
+        # Record the loop's terminal reason so run() can surface a
+        # non-converged exit honestly (see is_incomplete_stop).
+        self._loop_exits.append({'node_id': lid, 'reason': exit_reason,
+                                 'iterations': completed_iterations})
         self._cur_iteration = 0   # left the loop — subsequent nodes are post-loop
         return context, exit_node
 

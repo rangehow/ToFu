@@ -12,7 +12,9 @@ import time
 from typing import Any
 
 from lib.log import get_logger
-from lib.tasks_pkg.wire_fingerprint import diff_canonical, markers_regressed
+from lib.tasks_pkg.wire_fingerprint import (
+    diff_canonical, markers_regressed, markers_ttl_flipped,
+)
 from lib.tasks_pkg.cache_tracking._state import (
     CacheState,
     _cache_lock,
@@ -547,17 +549,17 @@ def detect_cache_break(
             # system-tools marker change (NOT on the rolling tail's normal
             # forward move), so folding it in names the dropped breakpoint and
             # blocks the false verdict without crying wolf every round.
+            # A breakpoint being LOST (count/sys/tools drop) and a breakpoint's
+            # ttl VALUE flipping (5m↔1h, count unchanged) are DISTINCT client
+            # causes on a byte-identical body — check them INDEPENDENTLY. The
+            # old code read the ttl only INSIDE the markers_regressed branch
+            # and off a 'stable_ttls' key marker_signature never emitted, so a
+            # pure ttl flip (the _task_id-drop latch bypass) was doubly invisible
+            # on the live path and laundered into "byte-identical → server-side".
             if markers_regressed(prev.wire_markers, _cur_wire_markers):
-                # Distinguish the two marker-regression sub-causes so the cost
-                # popover names the ACTIONABLE one. A stable-block ttl VALUE
-                # flip (1h ↔ absent) is the _task_id-drop latch bypass — a
-                # different, more fixable cause than a dropped breakpoint.
-                _prev_ttls = (prev.wire_markers or {}).get('stable_ttls', [])
-                _cur_ttls = (_cur_wire_markers or {}).get('stable_ttls', [])
-                if _prev_ttls != _cur_ttls:
-                    _wire_culprits.append('<ttl-flip>')
-                else:
-                    _wire_culprits.append('<breakpoint-lost>')
+                _wire_culprits.append('<breakpoint-lost>')
+            if markers_ttl_flipped(prev.wire_markers, _cur_wire_markers):
+                _wire_culprits.append('<ttl-flip>')
             # ── TRUE-byte divergence (the lossy-canonical blind spot) ──
             # canonical_messages is deliberately lossy: it drops cache_control,
             # collapses str↔block, canonicalises tool-arg key order, and DOES

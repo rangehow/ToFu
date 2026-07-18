@@ -462,20 +462,37 @@ def marker_signature(body: dict) -> dict[str, Any]:
 
         {'count': N,                       # total cache_control markers
          'msg': [(align_key, block_ord), …],  # per-message-block marker slots
-         'sys': K, 'tools': K}             # markers on hoisted system / tools
+         'sys': K, 'tools': K,             # markers on hoisted system / tools
+         'ttls': [(slot_key, ttl), …]}     # per-marker ttl VALUE (sorted)
 
     The per-message slot uses the stable ``canonical_key`` (not the list index)
     so a benign reindex does not register as a move.
+
+    ``ttls`` fingerprints each marker's ``cache_control.ttl`` VALUE (``''`` for
+    a bare ``{'type':'ephemeral'}`` = 5-minute default, ``'1h'`` for extended).
+    The ttl is part of the gateway's cache key, so a stable-block ttl flip
+    (5m↔1h) re-keys the whole prefix even when the body bytes AND the marker
+    count/position are unchanged — the ``_task_id``-drop latch bypass. It is
+    keyed by the marker's STABLE slot (``sys``/``tools``/the per-message
+    ``canonical_key``, NOT the list index) and SORTED, so the rolling tail
+    marker's normal forward advance does not perturb it — only an actual ttl
+    VALUE change on an otherwise-stable slot does. ``markers_ttl_flipped``
+    consumes this; ``markers_regressed`` deliberately ignores it (a ttl flip is
+    not a breakpoint LOSS).
     """
-    sig: dict[str, Any] = {'count': 0, 'msg': [], 'sys': 0, 'tools': 0}
+    sig: dict[str, Any] = {'count': 0, 'msg': [], 'sys': 0, 'tools': 0,
+                           'ttls': []}
     if not isinstance(body, dict):
         return sig
 
-    def _count_cc(blocks) -> int:
+    _ttls: list = []
+
+    def _count_cc(blocks, slot: str) -> int:
         n = 0
         if isinstance(blocks, list):
             for b in blocks:
-                if isinstance(b, dict) and b.get('cache_control'):
+                if isinstance(b, dict) and isinstance(b.get('cache_control'), dict):
+                    _ttls.append((slot, b['cache_control'].get('ttl', '')))
                     n += 1
         return n
 
@@ -495,19 +512,26 @@ def marker_signature(body: dict) -> dict[str, Any]:
             for bi in marked:
                 sig['msg'].append((key, bi))
                 sig['count'] += 1
+                _cc = content[bi].get('cache_control')
+                if isinstance(_cc, dict):
+                    _ttls.append((f'msg:{key}', _cc.get('ttl', '')))
 
     # Hoisted system (Anthropic path: list of blocks) + tools.
     system = body.get('system')
     if isinstance(system, list):
-        _s = _count_cc(system)
+        _s = _count_cc(system, 'sys')
         sig['sys'] = _s
         sig['count'] += _s
     for t in body.get('tools') or ():
         if isinstance(t, dict):
             fn = t.get('function') if isinstance(t.get('function'), dict) else t
-            if isinstance(fn, dict) and fn.get('cache_control'):
+            if isinstance(fn, dict) and isinstance(fn.get('cache_control'), dict):
                 sig['tools'] += 1
                 sig['count'] += 1
+                _ttls.append(('tools', fn['cache_control'].get('ttl', '')))
+    # Sort by slot key so the list is order-stable across a benign reindex /
+    # tail advance; a genuine ttl VALUE change on a slot still shows.
+    sig['ttls'] = sorted(_ttls, key=lambda p: str(p[0]))
     return sig
 
 
@@ -537,6 +561,51 @@ def markers_regressed(prev: dict | None, cur: dict | None) -> bool:
         return True
     if prev.get('tools', 0) != cur.get('tools', 0):
         return True
+    return False
+
+
+def markers_ttl_flipped(prev: dict | None, cur: dict | None) -> bool:
+    """True if a cache_control marker's ttl VALUE changed between rounds while
+    the marker layout was otherwise stable — a CLIENT-caused cache reset.
+
+    The companion to ``markers_regressed``: that catches a breakpoint being
+    LOST (count/sys/tools drop); THIS catches a breakpoint's ttl VALUE flipping
+    (5m↔1h) with the count unchanged. The ttl is part of the gateway's cache
+    key, so a stable-block ttl flip re-keys the whole prefix on a byte-identical
+    body — the ``_task_id``-drop latch bypass, which would otherwise launder
+    into a false "byte-identical → server-side" verdict. Compares the
+    slot-keyed, sorted ``ttls`` lists ``marker_signature`` emits.
+
+    Why this is false-positive-free on the rolling tail: ``ttls`` is keyed by
+    the marker's STABLE slot (``sys`` / ``tools`` / per-message
+    ``canonical_key``), so the tail marker's normal forward advance changes
+    WHICH message carries it (a new slot key) but not any existing slot's ttl.
+    A pure add/remove of a slot is already a COUNT change caught by
+    ``markers_regressed``; here we only fire when the MULTISET of (slot, ttl)
+    pairs differs in a way that is not merely a count change — i.e. an existing
+    slot's ttl value flipped. A missing side (mid-deploy / non-Claude / a
+    pre-fix signature with no ``ttls`` key) is inert.
+    """
+    if prev is None or cur is None:
+        return False
+    _p = prev.get('ttls')
+    _c = cur.get('ttls')
+    # Pre-fix signature (no ttls captured) → inert, never cry wolf.
+    if _p is None or _c is None:
+        return False
+    # Compare as multisets of (slot, ttl). A benign tail advance changes the
+    # per-message slot KEY, so restrict the comparison to the ttl values of
+    # slots PRESENT IN BOTH rounds — a value flip on a surviving slot is the
+    # signal; an added/removed slot is a count change (markers_regressed's job).
+    _pm = {}
+    for slot, ttl in _p:
+        _pm.setdefault(slot, []).append(ttl)
+    _cm = {}
+    for slot, ttl in _c:
+        _cm.setdefault(slot, []).append(ttl)
+    for slot in set(_pm) & set(_cm):
+        if sorted(map(str, _pm[slot])) != sorted(map(str, _cm[slot])):
+            return True
     return False
 
 

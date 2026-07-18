@@ -239,5 +239,136 @@ def test_detector_NEUTER_without_routing_launders_beta_flip_to_server_side():
         f'upstream verdict — got: {r}')
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+#  Part 3 — the last unfingerprinted cache-key input: per-marker cache_control.ttl
+# ─────────────────────────────────────────────────────────────────────────────
+#  marker_signature captured WHERE breakpoints sit (count + position) but NOT
+#  their ttl VALUE. A stable-block marker whose ttl flips 5m↔1h round-over-round
+#  (the _task_id-drop latch bypass) is a CLIENT-caused cache reset on a
+#  byte-identical body — the extended-cache-ttl beta header is only a coarse
+#  proxy. The live <ttl-flip> branch was doubly dead: it read a 'stable_ttls'
+#  key marker_signature never emitted, AND it was nested inside markers_regressed
+#  which only fires on a COUNT drop (a pure ttl flip leaves count unchanged).
+
+def _marked_body(ttl):
+    """A one-round body with a single stable-block cache_control marker whose
+    ttl is `ttl` ('' = bare 5m default, '1h' = extended). Returns (msgs, wire
+    fingerprints, marker_signature) with byte-IDENTICAL semantic content
+    regardless of ttl (the marker ttl is the ONLY difference)."""
+    from lib.tasks_pkg.wire_fingerprint import (
+        canonical_messages, marker_signature, static_prefix_hash,
+        wire_byte_prefix,
+    )
+    _cc = {'type': 'ephemeral'}
+    if ttl:
+        _cc['ttl'] = ttl
+    body = {
+        'model': 'claude-opus-4',
+        'system': [{'type': 'text', 'text': 'STATIC SYSTEM',
+                    'cache_control': dict(_cc)}],
+        'messages': [
+            {'role': 'user', 'content': 'hello'},
+            {'role': 'assistant', 'content': 'hi there'},
+        ],
+    }
+    msgs = body['messages']
+    return (msgs, canonical_messages(msgs), static_prefix_hash(msgs),
+            wire_byte_prefix(msgs), marker_signature(body))
+
+
+def test_marker_signature_captures_ttl_value():
+    """marker_signature must fingerprint each stable marker's cache_control.ttl,
+    so a 5m↔1h flip changes the signature while the marker COUNT/POSITION and
+    the body bytes stay identical."""
+    from lib.tasks_pkg.wire_fingerprint import markers_ttl_flipped
+
+    *_, sig_5m = _marked_body('')      # bare ephemeral = 5-minute default
+    *_, sig_1h = _marked_body('1h')    # extended ttl
+    assert sig_5m.get('count') == sig_1h.get('count') == 1, (
+        'the marker count/position must be identical — only the ttl differs')
+    assert markers_ttl_flipped(sig_5m, sig_1h) is True, (
+        'a 5m↔1h ttl flip on the same marker must be detected')
+    assert markers_ttl_flipped(sig_5m, sig_5m) is False, (
+        'an unchanged ttl must NOT flag')
+    # A missing side (mid-deploy / non-Claude) is inert.
+    assert markers_ttl_flipped(None, sig_1h) is False
+    assert markers_ttl_flipped(sig_1h, None) is False
+
+
+def test_detector_names_ttl_flip_client_side_on_identical_body():
+    """★ THE #2 FIX. Body byte-identical, marker count/position identical, but a
+    stable marker's cache_control.ttl flipped 1h→5m (the _task_id-drop latch
+    bypass). That is a CLIENT-caused cache reset — the whole prefix re-keys — and
+    must be NAMED (<ttl-flip>), NOT laundered into a byte-identical server-side
+    verdict."""
+    from lib.tasks_pkg.cache_tracking import _cache_states, detect_cache_break
+
+    _cache_states.clear()
+    conv = 'ttl-flip-named'
+    msgs, fp, st, wb, sig_1h = _marked_body('1h')
+    _, _, _, _, sig_5m = _marked_body('')
+    u1 = {'cache_read_tokens': 90000, 'cache_creation_input_tokens': 50000,
+          '_wire_fp': fp, '_wire_static': st, '_wire_bytes': wb,
+          '_wire_markers': sig_1h}
+    u2 = {'cache_read_tokens': 40000, 'cache_creation_input_tokens': 120000,
+          '_wire_fp': fp, '_wire_static': st, '_wire_bytes': wb,
+          '_wire_markers': sig_5m}
+    detect_cache_break(conv, msgs, None, 'claude-opus-4', usage=dict(u1))
+    r = detect_cache_break(conv, msgs, None, 'claude-opus-4', usage=dict(u2))
+    assert r is not None, 'expected a break (read dropped on a re-write)'
+    assert 'server_side' not in r, (
+        f'a client-caused ttl flip must NOT be attributed server-side: {r}')
+    blob = _json.dumps(r).lower()
+    # The ttl-flip verdict names it precisely: "cache TTL marker flipped between
+    # turns … re-billed under a new cache key" — assert that culprit wording,
+    # not the bare 'ttl' substring (which the innocent upstream verdict shares).
+    assert 'marker flipped' in blob or 'new cache key' in blob, (
+        f'the verdict must name the cache_control ttl flip as the culprit: {r}')
+
+
+def test_detector_NEUTER_ttl_signature_without_ttl_launders_to_upstream():
+    """NEUTER control — proves the ttl fingerprint is load-bearing. The SAME
+    marker ttl flip, but with marker signatures that DROP the ttl field (the
+    pre-fix marker_signature), leaves the round byte-identical AND marker-count
+    identical → the miss launders back into the upstream/byte-identical verdict
+    and the <ttl-flip> culprit is never named."""
+    from lib.tasks_pkg.cache_tracking import _cache_states, detect_cache_break
+
+    _cache_states.clear()
+    conv = 'ttl-flip-neuter'
+    msgs, fp, st, wb, sig_1h = _marked_body('1h')
+    _, _, _, _, sig_5m = _marked_body('')
+
+    def _strip_ttl(sig):
+        # Reproduce the pre-fix signature: same count/position, NO ttl field.
+        return {k: v for k, v in sig.items() if k != 'ttls'}
+
+    u1 = {'cache_read_tokens': 90000, 'cache_creation_input_tokens': 50000,
+          '_wire_fp': fp, '_wire_static': st, '_wire_bytes': wb,
+          '_wire_markers': _strip_ttl(sig_1h)}
+    u2 = {'cache_read_tokens': 40000, 'cache_creation_input_tokens': 120000,
+          '_wire_fp': fp, '_wire_static': st, '_wire_bytes': wb,
+          '_wire_markers': _strip_ttl(sig_5m)}
+    detect_cache_break(conv, msgs, None, 'claude-opus-4', usage=dict(u1))
+    r = detect_cache_break(conv, msgs, None, 'claude-opus-4', usage=dict(u2))
+    assert r is not None
+    blob = _json.dumps(r).lower()
+    # NOTE: assert on the CULPRIT wording, not the bare substring 'ttl' — the
+    # innocent upstream verdict itself says "a TTL boundary", so a substring
+    # check would false-match. The fix's ttl-flip verdict says "cache TTL marker
+    # flipped between turns"; its absence is the NEUTER signal.
+    assert 'server_side' in r, (
+        f'NEUTER: without the ttl fingerprint the miss must land in the '
+        f'byte-identical server_side branch — got: {r}')
+    assert 'marker flipped' not in blob and 're-billed under a new cache key' \
+        not in blob, (
+        f'NEUTER: without the ttl in the marker signature the ttl-flip culprit '
+        f'MUST NOT be named (this is exactly the blind spot the fix closes) — '
+        f'got: {r}')
+    assert 'upstream cache miss' in blob, (
+        f'NEUTER: without the ttl fingerprint the miss launders to the '
+        f'byte-identical upstream verdict — got: {r}')
+
+
 if __name__ == '__main__':
     sys.exit(pytest.main([__file__, '-v', '-p', 'no:cacheprovider']))

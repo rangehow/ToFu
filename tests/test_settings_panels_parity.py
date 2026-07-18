@@ -205,3 +205,92 @@ def test_translate_fragment_keeps_its_mt_markup():
     assert 'id="mtCardNiutrans"' in frag and 'id="settingMtEnabled"' in frag, (
         'translate.html fragment is missing its expected MT provider markup.'
     )
+
+
+# ── CSS relocation drift guard (settings.css vs styles.css) ─────────────────
+#
+# Page-specific settings CSS was moved out of styles.css into settings.css so a
+# settings page's styles live near its markup+logic. The half-migration trap:
+# a prefix ends up SPLIT across both files — some rules moved, some left — so a
+# future editor can't tell which file owns the page and cascade surprises creep
+# in. These prefixes are page-specific selectors that MUST live ONLY in
+# settings.css (0 top-level occurrences in styles.css). Shared chrome
+# (.settings-*, .stg-btn-*, .settings-toggle, …) intentionally stays in
+# styles.css and is NOT listed here.
+#
+# NOTE: this list grows per CSS-migration commit (A→B→C). An entry is added
+# ONLY once its rules are actually in settings.css, so the guard stays green at
+# every commit boundary while still locking each migrated page against drift.
+_SETTINGS_ONLY_CSS_PREFIXES = (
+    r'\.mt-provider', r'\.mt-apply',        # translate (pilot)
+    r'\.oauth-',                            # oauth      (batch A)
+    r'\.pref-', r'\.prefs\b',               # preferences(batch A)
+    r'\.feishu-',                           # feishu     (batch A)
+    r'\.mcp-',                              # mcp        (batch B)
+    r'\.skills-',                           # skills     (batch B)
+    r'\.stg-matrix', r'\.stg-mx-',          # api / access-matrix widget (batch C)
+    r'\.sysprompt',                         # general / system-prompt editor (batch C)
+    r'\.stg-dropdown-visibility',           # preset / display (batch C)
+)
+
+# Documented cascade-safety exceptions: rules that MUST stay in styles.css even
+# though their prefix migrated — because they are nested inside a shared @media
+# block (moving them would orphan the media context) OR are genuinely shared
+# with a non-settings feature. Keep this list tiny and justified; each entry is
+# a substring that, if the ONLY styles.css occurrence(s) of a prefix, is allowed.
+_CSS_STYLES_ALLOWED_LEFTOVERS = frozenset()
+
+
+def _styles_css():
+    return _read(os.path.join(PROJECT_ROOT, 'static', 'styles.css'))
+
+
+def _settings_css():
+    return _read(os.path.join(PROJECT_ROOT, 'static', 'settings.css'))
+
+
+def _strip_css_comments(css):
+    return re.sub(r'/\*.*?\*/', '', css, flags=re.S)
+
+
+def test_settings_css_prefixes_not_left_in_styles():
+    """Half-migration guard: every page-specific prefix that was moved to
+    settings.css must have ZERO occurrences left in styles.css. A prefix
+    appearing in BOTH files is the split-brain state this guards against
+    (owner-mandated, same weight as the panel guard)."""
+    styles = _strip_css_comments(_styles_css())
+    leftovers = {}
+    for pat in _SETTINGS_ONLY_CSS_PREFIXES:
+        hits = re.findall(pat, styles)
+        if hits:
+            leftovers[pat] = len(hits)
+    assert not leftovers, (
+        'Page-specific settings CSS prefixes STILL present in styles.css '
+        '(half-migration / split-brain — they belong ONLY in settings.css): '
+        f'{leftovers}'
+    )
+
+
+def test_settings_css_prefixes_present_in_settings():
+    """Reverse: each migrated prefix must actually appear in settings.css (so
+    the styles didn't just get deleted). Guards an over-eager removal."""
+    settings = _strip_css_comments(_settings_css())
+    missing = [pat for pat in _SETTINGS_ONLY_CSS_PREFIXES
+               if not re.search(pat, settings)]
+    assert not missing, (
+        'Migrated prefixes absent from settings.css (styles deleted, not '
+        f'moved?): {missing}'
+    )
+
+
+def test_settings_css_link_after_styles_in_index():
+    """Cascade order: the settings.css <link> MUST come AFTER styles.css so
+    equal-specificity overrides resolve the same as before the move."""
+    html = _index_html()
+    i_styles = html.find('href="static/styles.css"')
+    i_settings = html.find('href="static/settings.css"')
+    assert i_styles != -1 and i_settings != -1, 'both stylesheet links must exist'
+    assert i_styles < i_settings, (
+        'settings.css <link> must come AFTER styles.css (cascade order) — '
+        'moved rules would otherwise change layering vs before the extraction.'
+    )

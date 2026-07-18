@@ -153,6 +153,78 @@ def test_coarse_toggle_cannot_collapse_to_a_sliver():
         '(flex-shrink:0 or a min-width floor) so the model picker stays visible.')
 
 
+def _wide_coarse_block(css: str) -> str:
+    """Body of the wide-coarse tablet block `@media (pointer:coarse) and
+    (min-width:1025px)` — the ≥1025px touch-tablet compaction (added 2026-07-17
+    for the 1280px WebView where the model picker collapsed). Matched on its
+    opener; brace-balanced."""
+    for m in re.finditer(r'@media[^{]*\{', css):
+        opener = m.group(0).replace(' ', '')
+        if 'pointer:coarse' in opener and 'min-width:1025px' in opener \
+                and 'max-width' not in opener:
+            i = m.end() - 1
+            depth = 0
+            for j in range(i, len(css)):
+                if css[j] == '{':
+                    depth += 1
+                elif css[j] == '}':
+                    depth -= 1
+                    if depth == 0:
+                        return css[i + 1:j]
+    raise AssertionError(
+        '@media (pointer:coarse) and (min-width:1025px) block not found — the '
+        'wide-coarse tablet model-picker fix is missing.')
+
+
+def test_wide_coarse_toggle_cannot_collapse_to_a_sliver():
+    """A ≥1025px coarse-pointer tablet (e.g. 1280px Android WebView) is above
+    the ≤1024 drawer band and TOFU_BP.tablet, so it gets the FULL desktop
+    toolbar. In project mode the rail-laden sidebar (~430px) leaves the chat
+    pane ~850px — too tight for the nowrap toolbar — and the model picker
+    (the only flex-shrinkable child) collapses to an invisible sliver. The
+    wide-coarse block must relieve the row exactly like the ≤1024 block:
+    compact the submenus into the sheet AND pin the picker floor."""
+    css = open(_CSS_PATH, encoding='utf-8').read()
+    block = _wide_coarse_block(css)
+    norm = block.replace(' ', '').replace('\n', '')
+
+    assert '#submenuAI' in block and 'display:none' in block, (
+        'wide-coarse block must hide the submenus (#submenuAI/Tools/Mode) so '
+        'the row has width for the model picker — else it collapses to a sliver '
+        'on a 1280px tablet.')
+    has_shrink0 = '.preset-toggle{flex-shrink:0' in norm or \
+                  '#modelGroup{flex-shrink:0' in norm
+    has_minwidth = bool(re.search(r'\.preset-toggle\{[^}]*min-width:\d', norm))
+    assert has_shrink0 or has_minwidth, (
+        'wide-coarse .preset-toggle / #modelGroup must resist flex-shrink '
+        '(flex-shrink:0 or a min-width floor) so the model picker stays visible.')
+    # The "···" sheet must be reachable here (base keeps it display:none).
+    assert '.mobile-more-btn' in block and 'display:flex' in block, (
+        'wide-coarse block must reveal the .mobile-more-btn so the compacted '
+        'submenus are reachable via the "···" sheet.')
+    assert '.mobile-bottom-sheet.open' in norm and 'display:block' in norm, (
+        'wide-coarse block must make .mobile-bottom-sheet.open visible — the '
+        'base rule keeps it display:none, so the "···" button would open a '
+        'sheet that never appears.')
+
+
+def test_NC_wide_coarse_floor_bites():
+    """NEUTER: strip the compaction + toggle floor from the wide-coarse block →
+    the visibility invariant must have nothing left to assert."""
+    css = open(_CSS_PATH, encoding='utf-8').read()
+    block = _wide_coarse_block(css)
+    neutered = re.sub(r'#submenuAI[^}]*\{[^}]*display:none[^}]*\}', '', block)
+    neutered = neutered.replace('flex-shrink:0', 'flex-shrink:1')
+    neutered = re.sub(r'(\.preset-toggle\{[^}]*?)min-width:\d+px;?', r'\1', neutered)
+    norm = neutered.replace(' ', '').replace('\n', '')
+    compaction = ('#submenuAI' in neutered and 'display:none' in neutered)
+    shrink0 = '.preset-toggle{flex-shrink:0' in norm or '#modelGroup{flex-shrink:0' in norm
+    minwidth = bool(re.search(r'\.preset-toggle\{[^}]*min-width:\d', norm))
+    assert not (compaction or shrink0 or minwidth), (
+        'NEUTER must bite: with compaction + toggle floor stripped, the '
+        'wide-coarse block has no relief left and the picker can collapse.')
+
+
 def test_NC_coarse_toggle_floor_bites():
     """NEUTER: strip BOTH relief mechanisms (submenu compaction + toggle floor)
     from the coarse block → the visibility invariant must fail."""

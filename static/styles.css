@@ -17529,6 +17529,53 @@ html:not([data-theme="tofu"]) .tofu-pet{display:none}
   [data-theme="tofu"] .mobile-sheet-item{font-family:var(--sans-body);font-size:13px}
 }
 
+
+/* ═══════════════════════════════════════════════════════════
+   WIDE COARSE-POINTER TABLET  (≥1025px, pointer:coarse)
+   ───────────────────────────────────────────────────────────
+   A ≥1025px touch device (e.g. a 1280px Android tablet in the WebView) is
+   ABOVE the tablet-drawer band (≤1024 coarse) and TOFU_BP.tablet=1024, so the
+   app treats it as DESKTOP: pinned sidebar + FULL composer toolbar. But in
+   project mode the sidebar carries the project rail (--project-rail-w 150 +
+   --sidebar-list-min 280 = 430px), leaving the chat pane ~850px at 1280 — too
+   tight for the nowrap toolbar (attach + model + 3 submenus + search + send).
+   The model picker is the ONLY shrinkable child (.input-actions-scroll
+   flex:0 1 auto → #modelGroup flex-shrink:1), so it collapses to an invisible
+   sliver — the SAME "model preset vanished" bug the ≤1024-coarse and ≤768
+   blocks already fix, just at a wider viewport neither of them matches.
+
+   A desktop mouse user (pointer:fine) at 1280px has no rail-tax touch layout
+   and never hits this, so the fix is gated on pointer:coarse. min-width:1025px
+   (not a max-width…coarse predicate) keeps this ADDITIVE above the drawer band
+   and preserves the single-source coarse-tablet width the coordination guard
+   (tests/test_breakpoint_coordination.py) locks at 1024. Same compaction as the
+   ≤1024 block: move submenus + standalone launchers into the "···" sheet, pin
+   the picker, and make the sheet + model dropdown reachable. Guarded by
+   tests/test_preset_dropdown_coarse_escape.py. */
+@media (pointer:coarse) and (min-width:1025px){
+  #submenuAI,#submenuTools,#submenuMode,
+  #imageGenBtn,#projectBtn{display:none!important}
+  .mobile-more-btn{display:flex!important;width:40px;height:40px;align-items:center;
+    justify-content:center;flex-shrink:0;border:1.5px solid var(--border);
+    border-radius:12px;background:var(--bg-tertiary);color:var(--text-secondary);
+    cursor:pointer;box-sizing:border-box}
+  /* Model picker must NOT shrink below a readable width now that the row has
+   * room — pin a floor so it can never collapse to a sliver again. */
+  #modelGroup{flex-shrink:0}
+  .preset-toggle{flex-shrink:0;min-width:96px;max-width:200px}
+  /* The "···" sheet + backdrop must be visible (base rule keeps them
+   * display:none). Mirror the ≤1024 coarse block. */
+  .mobile-bottom-sheet{position:fixed;bottom:0;left:0;right:0;z-index:250;
+    background:var(--bg-secondary);border-radius:16px 16px 0 0;
+    box-shadow:0 -4px 24px rgba(0,0,0,0.2);padding:12px 12px calc(12px + env(safe-area-inset-bottom,0px));
+    max-height:70dvh;max-height:calc(var(--vh100,100vh) * 0.7);overflow-y:auto;transform:translateY(100%);transition:transform .25s cubic-bezier(.4,0,.2,1);
+    display:none}
+  .mobile-bottom-sheet.open{display:block;transform:translateY(0)}
+  .mobile-bottom-sheet-backdrop{position:fixed;inset:0;background:rgba(0,0,0,0.3);z-index:249;
+    display:none;-webkit-tap-highlight-color:transparent}
+  .mobile-bottom-sheet-backdrop.open{display:block}
+  .mobile-flow-sheet{z-index:260}
+}
 /* ── Safe area insets for notched phones ──
  * env(safe-area-inset-*) resolves to 0px where unsupported, so these are
  * folded DIRECTLY into the mobile height/padding rules below (single source

@@ -172,21 +172,35 @@ def test_index_cache_key_includes_panels_signature():
     )
 
 
-# ── The pilot fragment specifically (translate) is really decoupled ─────────
+# ── ALL panels decoupled: the settings modal region is markers-only ────────
 
-def test_translate_panel_is_decoupled_not_inline():
-    """The pilot: index.html must NOT still inline the translate panel body,
-    and the fragment must own it. Guards a half-revert."""
+def test_all_panels_decoupled_not_inline():
+    """The whole-batch invariant: index.html must NOT inline ANY settings panel
+    body — every tab is a `<!-- SETTINGS_PANEL:x -->` marker + a fragment file.
+    A future edit that re-inlines a panel (or forgets its marker) fails here.
+
+    Note: sibling MODALS (mcpAddOverlay, skillsFilesOverlay, …) legitimately
+    remain inline — they are not `settingsTab_*` panels, so this only asserts
+    the panel DIVs themselves moved out."""
     html = _index_html()
-    # The marker is present…
-    assert '<!-- SETTINGS_PANEL:translate -->' in html, (
-        'translate panel marker missing from index.html.'
+    still_inline = re.findall(r'id="settingsTab_([a-z_]+)"', html)
+    assert not still_inline, (
+        'index.html still inlines these settings panels (should be markers + '
+        f'fragments): {sorted(still_inline)}'
     )
-    # …and the inline body is gone (a distinctive id only the fragment has).
-    assert 'id="settingsTab_translate"' not in html, (
-        'index.html still inlines the translate panel — it should live only in '
-        'static/settings_panels/translate.html now.'
+    # Every expected tab has its marker present.
+    missing_markers = [
+        tab for tab in _EXPECTED_TABS
+        if f'<!-- SETTINGS_PANEL:{tab} -->' not in html
+    ]
+    assert not missing_markers, (
+        f'index.html missing SETTINGS_PANEL markers for: {sorted(missing_markers)}'
     )
+
+
+def test_translate_fragment_keeps_its_mt_markup():
+    """Spot-check one fragment's content survived extraction intact (the pilot,
+    with the most distinctive markup)."""
     frag = _read(os.path.join(PANELS_DIR, 'translate.html'))
     assert 'id="mtCardNiutrans"' in frag and 'id="settingMtEnabled"' in frag, (
         'translate.html fragment is missing its expected MT provider markup.'

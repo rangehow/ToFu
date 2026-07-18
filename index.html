@@ -1074,35 +1074,10 @@
 
 
         <!-- ═══ MCP Apps Tab ═══ -->
-        <div class="settings-tab-panel" id="settingsTab_mcp">
-          <!-- Header: title · tools badge · installed badge · connect-all · search -->
-          <div class="mcp-store-header">
-            <div class="mcp-store-header-title">
-              <span class="settings-section-title">Apps</span>
-              <span class="stg-badge" id="mcpToolCount" style="font-size:10px;">0 tools</span>
-              <span class="stg-badge" id="mcpInstalledCount" style="font-size:10px;display:none;">0 installed</span>
-            </div>
-            <div class="mcp-store-header-spacer"></div>
-            <div class="skills-scope-tabs" id="mcpScopeTabs">
-              <button class="skills-scope-tab active" data-scope="all" onclick="_mcpSetScope('all')" data-i18n="mcp.scopeAll">全部</button>
-              <button class="skills-scope-tab" data-scope="installed" onclick="_mcpSetScope('installed')" data-i18n="mcp.scopeInstalled">已安装</button>
-              <button class="skills-scope-tab" data-scope="available" onclick="_mcpSetScope('available')" data-i18n="mcp.scopeAvailable">未安装</button>
-            </div>
-            <button class="btn btn-secondary btn-xs" id="mcpAddCustomBtn" onclick="_mcpOpenAddModal()" data-i18n="mcp.addCustom">+ 添加</button>
-            <button class="btn btn-primary btn-xs mcp-connect-all-btn" id="mcpConnectAllBtn" onclick="_mcpConnectAll()" style="display:none;" data-i18n="settings.connectAll">全部连接</button>
-            <input type="text" class="mcp-search" id="mcpSearch" placeholder="搜索 Apps…" data-i18n-placeholder="settings.searchApps"
-                   oninput="_mcpFilterCatalog(this.value)">
-          </div>
-
-          <!-- Category filter pills -->
-          <div class="mcp-category-bar" id="mcpCategoryBar"></div>
-
-          <!-- Catalog grid -->
-          <div id="mcpCatalogGrid" class="mcp-catalog-grid">
-            <p class="stg-loading" data-i18n="settings.loading">正在加载…</p>
-          </div>
-
-        </div>
+        <!-- ═══ MCP Apps Tab ═══ (panel markup extracted to
+             static/settings_panels/mcp.html; spliced in at render time
+             by routes/common.py via lib/settings_panels.inject_panels) -->
+        <!-- SETTINGS_PANEL:mcp -->
 
         <!-- MCP Add-Custom Modal (overlay) — code-free custom server install -->
         <div class="mcp-install-modal-overlay" id="mcpAddOverlay" style="display:none;" onclick="_mcpCloseAddModal(event)">
@@ -1173,77 +1148,16 @@
 
 
         <!-- ═══ Preferences Tab ═══ -->
-        <div class="settings-tab-panel" id="settingsTab_preferences">
-          <div class="settings-section-title" data-i18n="prefsPanel.title">个人偏好档案</div>
-          <p class="settings-desc" data-i18n="prefsPanel.intro">
-            这是助手长期记住的关于你、以及「你希望它如何工作」的信息（语言、语气、编码习惯、禁忌，以及你的角色、技术栈等）。它会在每次对话中自动注入，跨项目生效。助手会在对话中自动学习并更新这些条目，你可以随时在此修改或删除。
-          </p>
-
-          <!-- Per-item editable preference list, grouped by section -->
-          <div id="prefsList" class="prefs-list"></div>
-
-          <div class="settings-row" style="justify-content:space-between;align-items:center;margin-top:14px;">
-            <span id="prefsCharCount" class="stg-badge" style="font-size:11px;">0 / 2500</span>
-            <div style="display:flex;gap:8px;">
-              <button class="btn btn-secondary btn-sm" onclick="refreshPreferences()" data-i18n="prefsPanel.reload">重新加载</button>
-              <button class="btn btn-primary btn-sm" onclick="savePreferences(this)" data-i18n="prefsPanel.save">保存</button>
-            </div>
-          </div>
-          <div id="prefsStatus" class="settings-desc" style="font-size:12px;margin-top:6px;"></div>
-
-          <!-- ═══ Memories section (unified into this tab) ═══ -->
-          <div class="settings-section-divider"></div>
-          <div class="settings-row" style="justify-content:space-between;align-items:center;">
-            <div class="settings-section-title" data-i18n="memPrefs.memTitle">积累的记忆</div>
-            <button class="btn btn-secondary btn-sm" onclick="openMemoryModal()" data-i18n="memPrefs.manageAll">管理全部</button>
-          </div>
-          <p class="settings-desc" data-i18n="memPrefs.memIntro">
-            助手在对话中自动沉淀的经验与教训（项目约定、踩过的坑、工作流）。会按相关性在对话中检索注入。点击「管理全部」可新建、导入或拖入技能包。
-          </p>
-          <div id="prefsMemoryList" class="memory-list memory-list-embedded"></div>
-        </div>
+        <!-- ═══ Preferences Tab ═══ (panel markup extracted to
+             static/settings_panels/preferences.html; spliced in at render time
+             by routes/common.py via lib/settings_panels.inject_panels) -->
+        <!-- SETTINGS_PANEL:preferences -->
 
         <!-- ═══ Skills Tab ═══ -->
-        <div class="settings-tab-panel" id="settingsTab_skills">
-          <!-- Header: title · counts · scope tabs · search -->
-          <div class="mcp-store-header">
-            <div class="mcp-store-header-title">
-              <span class="settings-section-title" data-i18n="skills.title">Skills</span>
-              <span class="stg-badge" id="skillsTotalCount" style="font-size:10px;">0 installed</span>
-              <span class="stg-badge" id="skillsCatalogCount" style="font-size:10px;display:none;">0 in catalog</span>
-            </div>
-            <div class="mcp-store-header-spacer"></div>
-            <div class="skills-scope-tabs">
-              <button class="skills-scope-tab active" data-scope="catalog" onclick="_skillsSetScope('catalog')" data-i18n="skills.tabCatalog">市场</button>
-              <button class="skills-scope-tab" data-scope="installed" onclick="_skillsSetScope('installed')" data-i18n="skills.tabInstalled">已安装</button>
-            </div>
-            <button class="skills-scope-tab" onclick="openMemoryCreateForm()" title="手动创建一条记忆" data-i18n-title="skills.newMemoryTitle">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" style="vertical-align:-1px"><path d="M12 5v14M5 12h14"/></svg>
-              <span data-i18n="skills.newMemory">新建记忆</span>
-            </button>
-            <input type="text" class="mcp-search" id="skillsSearch" placeholder="搜索 Skills…" data-i18n-placeholder="skills.searchPh"
-                   oninput="_skillsFilter(this.value)">
-          </div>
-
-          <p class="settings-desc" style="margin:8px 0 4px;font-size:12px;opacity:.8;" data-i18n="skills.intro">
-            Skills 是 Claude / OpenClaw / AgentSkills 标准的可重用知识包（SKILL.md + references/scripts/）。可拖入 .zip 或一键安装下方推荐。
-          </p>
-
-          <!-- Category filter pills (catalog mode) -->
-          <div class="mcp-category-bar" id="skillsCategoryBar"></div>
-
-          <!-- Drag-and-drop zone (always visible, becomes prominent on dragover) -->
-          <div class="skills-drop-zone" id="skillsDropZone" onclick="document.getElementById('skillsZipInput').click()">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-            <span class="skills-drop-zone-text" data-i18n="skills.dropZone">拖入 .zip 安装本地技能包，或点击选择文件</span>
-            <input type="file" id="skillsZipInput" accept=".zip,application/zip" style="display:none" onchange="_skillsInstallFromInput(this)">
-          </div>
-
-          <!-- Catalog grid -->
-          <div id="skillsCatalogGrid" class="mcp-catalog-grid">
-            <p class="stg-loading" data-i18n="settings.loading">正在加载…</p>
-          </div>
-        </div>
+        <!-- ═══ Skills Tab ═══ (panel markup extracted to
+             static/settings_panels/skills.html; spliced in at render time
+             by routes/common.py via lib/settings_panels.inject_panels) -->
+        <!-- SETTINGS_PANEL:skills -->
 
         <!-- Skills file browser modal (per package) -->
         <div class="mcp-install-modal-overlay" id="skillsFilesOverlay" style="display:none;" onclick="_skillsCloseFiles(event)">
@@ -1268,34 +1182,10 @@
         <!-- Relay-admin panels (用户/定价/兑换码/支付) moved to the standalone
              /admin console (static/admin.html). -->
 
-        <div class="settings-tab-panel" id="settingsTab_advanced">
-          <div class="settings-section-title" data-i18n="settings.importExport">导入 / 导出</div>
-          <p class="settings-desc" data-i18n="settings.importExportDesc">将所有服务器端配置导出为 JSON，或从文件导入。</p>
-          <div class="settings-row" style="gap:10px;">
-            <button class="btn btn-secondary btn-sm" onclick="exportServerConfig()" data-i18n="settings.exportJson">⬇ 导出 JSON</button>
-            <button class="btn btn-secondary btn-sm" onclick="document.getElementById('settingsImportFile').click()" data-i18n="settings.importJson">⬆ 导入 JSON</button>
-            <input type="file" id="settingsImportFile" accept=".json" style="display:none" onchange="importServerConfig(event)">
-          </div>
-
-          <div class="settings-divider"></div>
-          <div class="settings-section-title" data-i18n="settings.pricingOverride">价格覆盖</div>
-          <p class="settings-desc" data-i18n="settings.pricingOverrideDesc">模型定价（美元 / 每百万 Token）。编辑以下 JSON 进行自定义。</p>
-          <textarea id="settingPricing" class="settings-textarea settings-mono" rows="8" placeholder="正在加载价格数据..." data-i18n-placeholder="settings.loadingPricing"></textarea>
-
-          <div class="settings-divider"></div>
-          <div class="settings-section-title" data-i18n="settings.localCache">本地缓存</div>
-          <p class="settings-desc" data-i18n="settings.localCacheDesc">对话缓存在 IndexedDB 中以实现即时加载。服务器始终是数据的唯一来源。</p>
-          <div class="settings-row" style="gap:10px; align-items:center;">
-            <span class="settings-info-value" id="settingsCacheStats" style="font-size:13px;opacity:0.7;">—</span>
-            <button class="btn btn-secondary btn-sm" id="settingsClearCacheBtn" onclick="_clearConvCacheFromSettings()" data-i18n="settings.clearCache">清除缓存</button>
-          </div>
-
-          <div class="settings-divider"></div>
-          <div class="settings-section-title" data-i18n="settings.serverInfo">服务器信息</div>
-          <div class="settings-server-info" id="settingsServerInfo">
-            <div class="settings-info-row"><span class="settings-info-label" data-i18n="settings.status">状态</span><span class="settings-info-value" id="settingsSrvStatus">—</span></div>
-          </div>
-        </div>
+        <!-- ═══ Advanced Tab ═══ (panel markup extracted to
+             static/settings_panels/advanced.html; spliced in at render time
+             by routes/common.py via lib/settings_panels.inject_panels) -->
+        <!-- SETTINGS_PANEL:advanced -->
 
       </div><!-- /settings-content -->
     </div><!-- /settings-body -->

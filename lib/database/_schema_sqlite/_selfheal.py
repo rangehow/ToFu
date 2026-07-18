@@ -29,7 +29,7 @@ _CRITICAL_COLUMNS = {
     # in the create_timer / create_task / _record_poll INSERTs, so an existing
     # DB missing them throws on every timer/proactive create until re-migrated.
     'timer_watchers': (
-        'condition_kind', 'condition_command', 'condition_regex',
+        'condition_kind', 'condition_command', 'condition_regex', 'origin',
     ),
     'scheduled_tasks': (
         'condition_kind', 'condition_command', 'condition_regex',

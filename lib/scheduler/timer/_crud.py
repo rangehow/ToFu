@@ -73,7 +73,8 @@ def create_timer(conv_id: str,
                  tools_config: dict | None = None,
                  source_task_id: str = '',
                  condition_command: str = '',
-                 condition_regex: str = '') -> dict[str, Any]:
+                 condition_regex: str = '',
+                 origin: str = 'inline') -> dict[str, Any]:
     """Create a timer watcher and persist to DB.
 
     Args:
@@ -92,6 +93,12 @@ def create_timer(conv_id: str,
             not caller-specified: see ``derive_condition_kind``.
         condition_regex: Optional regex over the predicate's stdout; empty →
             use the exit code (0=ready) per the Unix contract.
+        origin: Provenance marker — 'inline' (the timer_create tool, which
+            BLOCKS its parent task and polls inline; the only path today) or
+            'background' (a self-driving injector). The resume-on-restart path
+            uses this to retire an orphaned inline timer whose parent task died
+            with the process, instead of silently injecting a follow-up turn
+            into an abandoned conversation.
 
     Returns:
         Timer record dict.
@@ -124,12 +131,12 @@ def create_timer(conv_id: str,
            (id, conv_id, source_task_id, check_instruction, check_command,
             continuation_message, poll_interval, max_polls, status,
             tools_config, created_at, updated_at,
-            condition_kind, condition_command, condition_regex)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?)''',
+            condition_kind, condition_command, condition_regex, origin)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?)''',
         [timer_id, conv_id, source_task_id, check_instruction, check_command,
          continuation_message, poll_interval, max_polls,
          json.dumps(tools_config or {}, ensure_ascii=False), now, now,
-         condition_kind, condition_command, condition_regex]
+         condition_kind, condition_command, condition_regex, origin]
     )
     db.commit()
 

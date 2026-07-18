@@ -123,6 +123,11 @@ def _init_system_schema(conn):
         'promotion_streak':  "ALTER TABLE timer_watchers ADD COLUMN promotion_streak INTEGER NOT NULL DEFAULT 0",
         'fallback_streak':   "ALTER TABLE timer_watchers ADD COLUMN fallback_streak INTEGER NOT NULL DEFAULT 0",
         'promoted_at':       "ALTER TABLE timer_watchers ADD COLUMN promoted_at TEXT DEFAULT ''",
+        # Provenance marker: pre-existing rows default to 'inline' — every
+        # timer created before this column existed WAS a parent-blocking
+        # inline timer_create, so the default preserves their true origin and
+        # the resume path retires them as orphans (never silent-injects).
+        'origin':            "ALTER TABLE timer_watchers ADD COLUMN origin TEXT NOT NULL DEFAULT 'inline'",
     }.items():
         if not _column_exists(conn, 'timer_watchers', _tw_col):
             cur.execute(_tw_sql)

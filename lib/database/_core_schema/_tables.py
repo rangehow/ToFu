@@ -432,6 +432,16 @@ TIMER_WATCHERS = define_table(
     sa.Column('promotion_streak', sa.Integer, nullable=False, server_default=sa.text('0')),
     sa.Column('fallback_streak', sa.Integer, nullable=False, server_default=sa.text('0')),
     sa.Column('promoted_at', sa.Text, server_default=''),
+    # ── Provenance marker ──────────────────────────────────────────────
+    # 'inline'     — created by the timer_create tool, which BLOCKS its
+    #                parent task and polls inline. This is the ONLY way a
+    #                timer is created today, so every existing row is inline.
+    # 'background' — a self-driving background injector (future / proactive).
+    # The resume-on-restart path uses this to tell a parent-blocking inline
+    # timer (whose parent task died with the process → an orphan) apart from a
+    # genuine background timer, so a resumed orphan is retired instead of
+    # silently injecting a follow-up turn into an abandoned conversation.
+    sa.Column('origin', sa.Text, nullable=False, server_default='inline'),
 )
 
 # timer_poll_log — append-only timer poll decisions. Auto-increment PK.

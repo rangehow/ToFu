@@ -19,6 +19,7 @@ from ._poll import (
     _increment_poll_count,
     _mark_exhausted,
     _mark_expired,
+    _mark_orphaned,
     _record_poll,
     poll_timer,
 )
@@ -277,10 +278,38 @@ def resume_active_timers() -> int:
             logger.warning('[Timer] Auto-expired %d over-age zombie timer(s) on startup',
                            expired)
 
+        # ── Pass 1.5: retire orphaned INLINE timers ────────────────────────
+        # An origin='inline' timer is parent-blocking: it exists only to feed
+        # its result back into the in-memory task that ran `timer_create`. That
+        # task died with the previous process, so at resume time the in-memory
+        # registry (_active_timers) is empty by definition and any still-active
+        # inline row is a definitional ORPHAN. Re-spawning it as a background
+        # injector is exactly what floated abandoned conversations to the top
+        # of the sidebar (_execute_continuation → notify_conv_changed). Retire
+        # it to 'orphaned' (distinct from over-age 'expired') and never spawn /
+        # never inject. Only genuine 'background' timers proceed to re-spawn.
+        # (Rows with a non-'inline' origin — e.g. legacy/back-compat — take the
+        # background path; the query already filters to status='active', so a
+        # triggered/exhausted terminal row never reaches here.)
+        respawnable: list[dict] = []
+        orphaned = 0
+        for timer in survivors:
+            if (timer.get('origin') or 'inline') == 'inline':
+                _mark_orphaned(timer['id'])
+                orphaned += 1
+                logger.info('[Timer:%s] Orphaned inline timer retired on resume '
+                            '(parent task died with prior process) — not re-spawned, '
+                            'no follow-up injected', timer['id'])
+                continue
+            respawnable.append(timer)
+
+        if orphaned:
+            logger.info('[Timer] Retired %d orphaned inline timer(s) on startup', orphaned)
+
         # ── Pass 2: re-spawn survivors, capped ─────────────────────────────
         count = 0
         skipped = 0
-        for timer in survivors:
+        for timer in respawnable:
             timer_id = timer['id']
             # NB: must NOT hold _timers_lock across start_timer_loop() — that
             # function re-acquires the (non-reentrant) _timers_lock to register

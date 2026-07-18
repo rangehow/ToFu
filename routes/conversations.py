@@ -247,6 +247,67 @@ async def list_convs():
     real pooled connection) via ``asyncio.to_thread`` so it never blocks the loop.
     """
     import asyncio
+
+    # ── Folder-scoped / keyset-paginated metadata query ──────────────────
+    # Evaluated FIRST so it can never be short-circuited by the ?meta=1 cached
+    # branch below. This path is DELIBERATELY un-cached: the sidebar's 60s poll
+    # uses the top-N ?meta=1 cache, but a folder view (?folderId=) or a
+    # "load more" page (?before=) is a click-time direct read of a DIFFERENT
+    # result set. Routing it through the cache would (a) pollute the top-N blob
+    # and (b) move a full-table json_extract scan onto the 60s poll — exactly
+    # what constraint keeps them physically separated.
+    #
+    # A folder's members are resolved by their real folderId (stored in the
+    # settings JSON), INDEPENDENT of the global "most-recent-N" window, so a
+    # folder whose members all sort past the sidebar cap is still returned in
+    # full. json_extract(settings,'$.folderId') is dialect-translated to a PG
+    # jsonb accessor by lib/database/_sql_translate.py, so this runs on both
+    # SQLite and PG unchanged.
+    folder_id = request.args.get('folderId', '').strip()
+    before_updated = request.args.get('before', '').strip()
+    before_id = request.args.get('before_id', '').strip()
+    try:
+        req_limit = int(request.args.get('limit', '') or 0)
+    except (TypeError, ValueError):
+        req_limit = 0
+    if folder_id or before_updated:
+        where = ['user_id=?']
+        params = [DEFAULT_USER_ID]
+        if folder_id:
+            where.append("json_extract(settings,'$.folderId')=?")
+            params.append(folder_id)
+        if before_updated:
+            # Keyset cursor on (updated_at, id) — strictly "older than" the last
+            # loaded row, tie-broken by id so a same-timestamp boundary neither
+            # skips nor duplicates. Both halves of the OR carry updated_at so the
+            # comparison stays index-friendly.
+            where.append('(updated_at < ? OR (updated_at = ? AND id < ?))')
+            params.extend([before_updated, before_updated, before_id])
+        page_limit = req_limit if req_limit > 0 else (300 if folder_id else 100)
+        sql = ('SELECT id, title, msg_count, created_at, updated_at, settings, rev '
+               'FROM conversations WHERE ' + ' AND '.join(where) +
+               ' ORDER BY updated_at DESC, id DESC LIMIT ?')
+        # Fetch one extra row to compute hasMore without a second COUNT.
+        params.append(page_limit + 1)
+        rows = await async_fetchall(sql, tuple(params), domain=DOMAIN_CHAT)
+        has_more = len(rows) > page_limit
+        rows = rows[:page_limit]
+        convs = [_conv_row_to_meta_dict(r) for r in rows]
+        envelope = {'conversations': convs, 'hasMore': has_more}
+        if rows:
+            last = rows[-1]
+            envelope['nextBefore'] = last['updated_at']
+            envelope['nextBeforeId'] = last['id']
+        if folder_id:
+            # Real member count so the frontend distinguishes a genuinely empty
+            # folder from one whose members simply aren't loaded yet.
+            cnt = await async_fetchone(
+                "SELECT COUNT(*) AS c FROM conversations "
+                "WHERE user_id=? AND json_extract(settings,'$.folderId')=?",
+                (DEFAULT_USER_ID, folder_id), domain=DOMAIN_CHAT)
+            envelope['totalCount'] = (cnt['c'] if cnt else 0)
+        return jsonify(envelope)
+
     meta_only = request.args.get('meta') == '1'
     prefetch_id = request.args.get('prefetch', '').strip()
     if meta_only:
@@ -257,6 +318,11 @@ async def list_convs():
             db = _pool_get()
             try:
                 payload, etag = _refresh_meta_cache_if_stale(db)
+                # Authoritative global total (captured at cache rebuild, read
+                # from the cached entry — no extra query on a warm poll). Powers
+                # the sidebar "N earlier not loaded" affordance (C4).
+                from lib.conversations.meta_cache import get_cached_total
+                total = get_cached_total()
                 prefetch_data = None
                 if prefetch_id:
                     try:
@@ -268,11 +334,11 @@ async def list_convs():
                             prefetch_data = _prefetch_reconciled_dict(db, prefetch_id, r)
                     except Exception as e:
                         logger.warning('[Common] prefetch conv %s failed: %s', prefetch_id[:12], e)
-                return payload, etag, prefetch_data
+                return payload, etag, prefetch_data, total
             finally:
                 _pool_put(db)
 
-        payload, etag, prefetch_data = await asyncio.to_thread(_meta_branch)
+        payload, etag, prefetch_data, total = await asyncio.to_thread(_meta_branch)
 
         if prefetch_id:
             combo = json.dumps({
@@ -281,6 +347,8 @@ async def list_convs():
             }, ensure_ascii=False).encode('utf-8')
             combo_resp = Response(combo, mimetype='application/json')
             combo_resp.headers['Cache-Control'] = 'no-cache'
+            if total is not None:
+                combo_resp.headers['X-Total-Count'] = str(total)
             return combo_resp
 
         if request.if_none_match and etag in request.if_none_match:
@@ -288,6 +356,8 @@ async def list_convs():
         resp = Response(payload, mimetype='application/json')
         resp.headers['ETag'] = etag
         resp.headers['Cache-Control'] = 'private, max-age=5'
+        if total is not None:
+            resp.headers['X-Total-Count'] = str(total)
         return resp
 
     # Default: metadata-only (no message BODIES) — a headless caller listing
@@ -2324,6 +2394,38 @@ def _delete_conv_blocking(db, conv_id):
     except Exception as _cm_e:
         logger.warning('[delete_conv] autopilot marker disarm failed for conv=%s '
                        '(continuing with delete): %s', conv_id[:12], _cm_e)
+    # ── Cascade-cancel this conv's timer watchers BEFORE wiping its row ──
+    # A timer_watchers row is keyed on conv_id, not FK-linked to conversations,
+    # so deleting the conv leaves any active timer orphaned in the DB. On the
+    # next restart resume_active_timers() would resurrect it against a conv that
+    # no longer exists (an inline timer is now retired as orphaned, but a
+    # background one would still inject into a ghost conv). Cancel them here so
+    # a deleted conversation can never spawn a timer again. Best-effort: a
+    # cancel failure must NEVER block the delete (mirrors the abort/disarm
+    # blocks above).
+    try:
+        from lib.database import DOMAIN_SYSTEM, get_thread_db as _get_sysdb
+        _sysdb = _get_sysdb(DOMAIN_SYSTEM)
+        _trows = _sysdb.execute(
+            "SELECT id FROM timer_watchers WHERE conv_id=? AND status='active'",
+            (conv_id,)).fetchall()
+        if _trows:
+            from lib.scheduler.timer import cancel_timer as _cancel_timer
+            _n_timers = 0
+            for _tr in _trows:
+                _tid = _tr['id'] if isinstance(_tr, dict) else _tr[0]
+                try:
+                    if _cancel_timer(_tid):
+                        _n_timers += 1
+                except Exception as _te:
+                    logger.warning('[delete_conv] cancel_timer(%s) failed for conv=%s '
+                                   '(continuing): %s', _tid, conv_id[:12], _te)
+            if _n_timers:
+                logger.info('[delete_conv] Cancelled %d active timer(s) for conv=%s '
+                            'before delete', _n_timers, conv_id[:12])
+    except Exception as _tw_e:
+        logger.warning('[delete_conv] timer cascade-cancel failed for conv=%s '
+                       '(continuing with delete): %s', conv_id[:12], _tw_e)
 
     # Capture the conv's messages + timestamps BEFORE deleting so we can scope
     # the cost-cache invalidation to only the day(s) it contributed cost to.

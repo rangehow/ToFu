@@ -122,6 +122,11 @@ def _init_system_schema(conn):
     cur.execute('ALTER TABLE timer_watchers ADD COLUMN IF NOT EXISTS promotion_streak INTEGER NOT NULL DEFAULT 0')
     cur.execute('ALTER TABLE timer_watchers ADD COLUMN IF NOT EXISTS fallback_streak INTEGER NOT NULL DEFAULT 0')
     cur.execute("ALTER TABLE timer_watchers ADD COLUMN IF NOT EXISTS promoted_at TEXT DEFAULT ''")
+    # Provenance marker: pre-existing rows default to 'inline' — every timer
+    # created before this column existed WAS a parent-blocking inline
+    # timer_create, so the default preserves their true origin and the resume
+    # path retires them as orphans (never silent-injects a follow-up turn).
+    cur.execute("ALTER TABLE timer_watchers ADD COLUMN IF NOT EXISTS origin TEXT NOT NULL DEFAULT 'inline'")
     # Migration: predicate-promotion audit columns on timer_poll_log.
     cur.execute("ALTER TABLE timer_poll_log ADD COLUMN IF NOT EXISTS tier TEXT NOT NULL DEFAULT 'llm'")
     cur.execute('ALTER TABLE timer_poll_log ADD COLUMN IF NOT EXISTS predicate_matched INTEGER NOT NULL DEFAULT -1')

@@ -1041,7 +1041,8 @@ LIVE_PG_TIMER_WATCHERS = """
         condition_regex TEXT NOT NULL DEFAULT '',
         promotion_streak INTEGER NOT NULL DEFAULT 0,
         fallback_streak INTEGER NOT NULL DEFAULT 0,
-        promoted_at TEXT DEFAULT ''
+        promoted_at TEXT DEFAULT '',
+        origin TEXT NOT NULL DEFAULT 'inline'
     )
 """
 LIVE_SQLITE_TIMER_WATCHERS = LIVE_PG_TIMER_WATCHERS  # identical (all TEXT/INTEGER)

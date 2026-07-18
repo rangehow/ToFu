@@ -25,7 +25,6 @@ from lib.scheduler._shared import (
     reconcile_and_decide,
 )
 
-from ._crud import _get_timer_row
 from ._state import _active_timers, _cmd_outputs_lock, _last_cmd_outputs, _timers_lock
 
 logger = get_logger(__name__)
@@ -702,6 +701,39 @@ def _mark_expired(timer_id: str) -> None:
         db.commit()
     except Exception as e:
         logger.warning('[Timer:%s] Failed to mark expired: %s', timer_id, e, exc_info=True)
+    with _timers_lock:
+        _active_timers.pop(timer_id, None)
+    with _cmd_outputs_lock:
+        _last_cmd_outputs.pop(timer_id, None)
+    with _reconcile_audit_lock:
+        _reconcile_audit.pop(timer_id, None)
+
+
+def _mark_orphaned(timer_id: str) -> None:
+    """Retire an orphaned INLINE timer on resume (distinct terminal state).
+
+    An ``origin='inline'`` timer is parent-blocking: its life is bound to the
+    in-memory parent task that created it via ``timer_create``. That task dies
+    with the process, so on the next boot an ``active`` inline row has no live
+    parent — it is an ORPHAN. Retiring it to ``'orphaned'`` (NOT ``'expired'``,
+    which means over-age zombie) stops ``resume_active_timers`` from re-spawning
+    it as a background injector, which is what floated abandoned conversations
+    to the top of the sidebar (via ``_execute_continuation`` →
+    ``notify_conv_changed``). The frontend already renders this via the
+    ``_timerOrphaned`` badge ("task interrupted, timer still active in
+    background") — here we make that the DB truth: the timer is done.
+    """
+    try:
+        from lib.database import DOMAIN_SYSTEM, get_thread_db
+        db = get_thread_db(DOMAIN_SYSTEM)
+        now = datetime.now().isoformat()
+        db.execute(
+            "UPDATE timer_watchers SET status='orphaned', updated_at=? WHERE id=?",
+            [now, timer_id]
+        )
+        db.commit()
+    except Exception as e:
+        logger.warning('[Timer:%s] Failed to mark orphaned: %s', timer_id, e, exc_info=True)
     with _timers_lock:
         _active_timers.pop(timer_id, None)
     with _cmd_outputs_lock:

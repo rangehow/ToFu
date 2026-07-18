@@ -595,12 +595,12 @@ async function restartServer(opts) {
   // post-pull button could be double-clicked) so we never spawn a second
   // poll loop or reset the progress timeline.
   if (_restartActive) return;
-  // The footer button is available with no pending update — confirm first so
-  // a stray click never interrupts running tasks.
-  if (opts && opts.confirm && !await showConfirm(t('update.restartConfirm'), { danger: true })) return;
   _restartActive = true;
   const btn = document.getElementById('updateRestartBtn')
     || document.getElementById('updateRestartNowBtn');
+  const _restoreBtn = function () {
+    if (btn) { btn.disabled = false; btn.textContent = t('update.restartBtn'); }
+  };
   if (btn) { btn.disabled = true; btn.textContent = t('update.restarting'); }
 
   // Capture the CURRENT process's bootId first, so we can require the
@@ -614,17 +614,54 @@ async function restartServer(opts) {
     if (pre && pre.bootId) _restartPreBootId = pre.bootId;
   } catch (e) { _restartPreBootId = null; }
 
-  _renderRestartProgress();
-  try {
-    // force:true — a human clicking Restart is a deliberate action (the
-    // footer button confirms "in-progress tasks will be interrupted"). The
-    // backend guard's 409 refusal targets UNATTENDED / agent-initiated
-    // restarts that would silently kill sibling conversations, not this.
-    await Api.update.restart({ force: true });
-  } catch (e) {
-    if (typeof debugLog === 'function') debugLog('[Update] restart request failed: ' + (e && e.message), 'warning');
-  }
+  // Our own conversation id — the backend excludes it when counting in-flight
+  // tasks, so the running-task count reflects only OTHER conversations a
+  // restart would interrupt (never counts our own idle conv against us).
+  var _ownConv = '';
+  try { _ownConv = activeConvId || ''; } catch (_e) { _ownConv = ''; }
 
+  // Two-stage informed restart. Stage 1: request WITHOUT force. The backend
+  // 409s with {needsForce, runningTasks} only when OTHER conversations have
+  // in-flight tasks a restart would kill; an idle server accepts the
+  // force-less call immediately (no confirm). Only on that 409 do we surface a
+  // themed confirm NAMING the running-task count and, on explicit consent,
+  // retry WITH force. This replaces the old blind generic pre-flight confirm
+  // (so there is no double-confirm) and never silently kills sibling tasks.
+  var _triggered = false;
+  try {
+    await Api.update.restart({ convId: _ownConv });
+    _triggered = true;
+  } catch (e) {
+    if (e && e.status === 409 && e.body && e.body.needsForce) {
+      const count = (e.body.runningTasks || []).length;
+      const ok = await showConfirm(
+        t('update.restartForceConfirm').replace('%s', String(count)),
+        { danger: true });
+      if (!ok) {
+        // Declined — abort cleanly; leave the dialog on its current card.
+        _restartActive = false;
+        _restoreBtn();
+        return;
+      }
+      try {
+        await Api.update.restart({ force: true, convId: _ownConv });
+      } catch (e2) {
+        if (typeof debugLog === 'function') debugLog('[Update] forced restart request failed: ' + (e2 && e2.message), 'warning');
+      }
+      // The re-exec is scheduled server-side (daemon thread) before the
+      // response, so even a read error on the response means it is underway.
+      _triggered = true;
+    } else {
+      // Non-guard error (e.g. a network blip while the backend already
+      // scheduled the fire-and-forget re-exec). Proceed to the health-poll
+      // rather than abort — the poll is the source of truth for "came back".
+      if (typeof debugLog === 'function') debugLog('[Update] restart request failed: ' + (e && e.message), 'warning');
+      _triggered = true;
+    }
+  }
+  if (!_triggered) { _restartActive = false; _restoreBtn(); return; }
+
+  _renderRestartProgress();
   _restartDone = false;
   _restartT0 = Date.now();
   _restartRaf = requestAnimationFrame(_restartAnimate);

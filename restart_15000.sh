@@ -459,6 +459,44 @@ PYEOF
   fi
 fi
 
+# (d) CACHE-FIX GENERATION — the served process must self-report an in-memory
+#     CACHE_FIX_GEN >= the expected baseline. This ties restart success to the
+#     CURRENT prefix-cache deploy target (the whole ab161bf..1920827 chain =
+#     gen 5), not just the older event-loop/windowed commits above. Uses the
+#     boot-identity fields /api/health now returns (bootId + cacheFixGen). The
+#     check is >= (not ==) so a FUTURE gen never false-fails this baseline; the
+#     expected value tracks lib/llm/cache.CACHE_FIX_GEN and is overridable via
+#     env. If /api/health predates the field (old build) the loaded code is by
+#     definition older than gen 5 → FAIL (that is the point). Best-effort parse
+#     with the server interpreter (no jq dep).
+EXPECT_GEN="${CACHE_FIX_GEN_EXPECT:-5}"
+GEN_VERDICT="$("${PY}" - "${BASE}/api/health" "${EXPECT_GEN}" <<'PYEOF' 2>/dev/null
+import sys, json, urllib.request
+url, expect = sys.argv[1], int(sys.argv[2])
+try:
+    d = json.loads(urllib.request.urlopen(url, timeout=10).read())
+except Exception as e:
+    print("ERR %s" % e); sys.exit(0)
+gen = d.get('cacheFixGen')
+if not isinstance(gen, int):
+    print("gen=%r boot=%s NO_FIELD" % (gen, d.get('bootId'))); sys.exit(0)
+print("gen=%d expect>=%d boot=%s %s"
+      % (gen, expect, d.get('bootId'), "OK" if gen >= expect else "OLD"))
+PYEOF
+)"
+echo "      ${GEN_VERDICT}"
+if printf '%s' "${GEN_VERDICT}" | grep -q " OK$"; then
+  echo "✅ (d) CACHE-FIX LIVE: served process self-reports CACHE_FIX_GEN >= ${EXPECT_GEN} (in-memory)."
+elif printf '%s' "${GEN_VERDICT}" | grep -q "NO_FIELD"; then
+  echo "❌ (d) CACHE-FIX NOT LIVE: /api/health has no cacheFixGen field — the"
+  echo "       served code predates the boot-identity/self-report chain (< gen ${EXPECT_GEN})."
+  probe_fail=1
+else
+  echo "❌ (d) CACHE-FIX OLD: served CACHE_FIX_GEN < ${EXPECT_GEN} — the prefix-cache"
+  echo "       fix chain is NOT the loaded bytecode. Wrong tree booted / stale copy."
+  probe_fail=1
+fi
+
 if [ "${probe_fail}" = "1" ]; then
   echo "────────────────────────────────────────────────────────────────"
   echo "FATAL: a fix is NOT fully live on :${PORT} (pid ${NEWPID}). See above."
@@ -466,12 +504,12 @@ if [ "${probe_fail}" = "1" ]; then
 fi
 if [ "${probe_c_skipped}" = "1" ]; then
   echo "────────────────────────────────────────────────────────────────"
-  echo "⚠️  PARTIAL: off-loop backfill + new _serve guard are LIVE on :${PORT}"
-  echo "    (pid ${NEWPID}), but the windowed byte-trim (c) was SKIPPED and is"
-  echo "    NOT verified live this restart (probe conv absent). Re-run with"
-  echo "    TOFU_WINDOW_PROBE_CONV=<existing large conv id> to confirm the trim."
+  echo "⚠️  PARTIAL: off-loop backfill + new _serve guard + CACHE_FIX_GEN>=${EXPECT_GEN}"
+  echo "    are LIVE on :${PORT} (pid ${NEWPID}), but the windowed byte-trim (c) was"
+  echo "    SKIPPED and is NOT verified live this restart (probe conv absent). Re-run"
+  echo "    with TOFU_WINDOW_PROBE_CONV=<existing large conv id> to confirm the trim."
   echo "════════════════════════════════════════════════════════════════"
 else
-  echo "✅ FIX LIVE: off-loop backfill + new _serve guard + windowed byte-bounded open on :${PORT} (pid ${NEWPID})."
+  echo "✅ FIX LIVE: off-loop backfill + new _serve guard + windowed byte-bounded open + CACHE_FIX_GEN>=${EXPECT_GEN} on :${PORT} (pid ${NEWPID})."
   echo "════════════════════════════════════════════════════════════════"
 fi

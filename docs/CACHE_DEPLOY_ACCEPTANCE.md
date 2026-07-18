@@ -14,6 +14,36 @@ real traffic shows both already-cached-turn miss classes at zero.
 
 ---
 
+## 0. How to swap the process — ONE script
+
+**Do not** hand-run `python server.py` while the old process is up: it loses the
+`:15000` bind race, boots, and dies (observed as a storm of boot banners with no
+`Ready`), while the OLD process keeps serving stale code. Instead run the
+idempotent, kill-first restart script:
+
+```bash
+bash restart_15000.sh
+```
+
+It: refuses if `supervisord` owns tofu (use `supervisorctl restart tofu` then);
+takes a serialization flock (safe under concurrent siblings); kills the EXACT
+PID listening on `:15000` (SIGTERM→SIGKILL, waits for the port to free);
+relaunches detached (`setsid nohup`) from the current HEAD tree; then self-probes
+that the intended fixes are LIVE — including **(d) the served process
+self-reports `CACHE_FIX_GEN >= 5`** (the whole prefix-cache chain), so a stale /
+wrong-tree boot fails loudly instead of a false "restarted".
+
+> **Hard rule:** run it from a shell that is **NOT a descendant of the `:15000`
+> server** (a plain VS Code terminal — not a Tofu agent's `run_command` shell).
+> The script's `[pre]` guard refuses a self-descendant to avoid killing the very
+> shell running it; that guard is *why* an agent cannot restart the server for
+> you — the operator must run it from an independent terminal.
+
+After it prints `✅ FIX LIVE … CACHE_FIX_GEN>=5`, run the acceptance verdict
+below.
+
+---
+
 ## 1. The one command
 
 After you kill the old PID and restart from the current HEAD tree:

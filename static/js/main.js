@@ -1105,7 +1105,28 @@ function _installViewportHeightGuard() {
    *   with zero network dependency; the server list reconciles them in-place
    *   when it arrives (id-keyed merge). */
   if (typeof hydrateSidebarFromCache === 'function') {
-    hydrateSidebarFromCache().catch(e => debugLog(`cache hydrate: ${e.message}`, 'warn'));
+    hydrateSidebarFromCache().then(() => {
+      /* ★ First-open seamlessness (ChatGPT-parity): the moment the cached
+       *   sidebar is painted, open the user's LAST-ACTIVE conversation from the
+       *   cache — BEFORE the server round-trip. loadConversation paints
+       *   cache-first (real messages in a few ms) or an instant skeleton, so a
+       *   returning user lands directly in their conversation instead of
+       *   staring at the "New Chat" welcome for the whole boot fetch on a slow /
+       *   flaky tunnel (the welcome→snap-to-conv flash). Gated to the EXACT
+       *   restored id found in the cache — NEVER the conversations[0] fallback,
+       *   which stays in the post-server _bootRestoreActiveConv where the list
+       *   is authoritative — and only while still on the welcome screen
+       *   (activeConvId null ⇒ the user hasn't navigated yet). The post-server
+       *   _bootRestoreActiveConv then no-ops this branch (it early-returns on a
+       *   set activeConvId), and connectToTask/loadConversationMessages are both
+       *   idempotent, so the later server reconcile is a surgical in-place
+       *   refresh, not a re-open. */
+      if (!activeConvId && _restoredConvId
+          && conversations.find(c => c.id === _restoredConvId)
+          && typeof loadConversation === 'function') {
+        loadConversation(_restoredConvId);
+      }
+    }).catch(e => debugLog(`cache hydrate: ${e.message}`, 'warn'));
   }
 
   /* ★ Event-driven cross-device sync: subscribe to the server's `notify`

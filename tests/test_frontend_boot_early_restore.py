@@ -34,10 +34,21 @@ MAIN_JS = REPO / "static" / "js" / "main.js"
 INIT_JS = REPO / "static" / "js" / "main" / "main_init_tasks.js"
 
 
-def _hydrate_then_block(src: str) -> str:
+def _strip_js_comments(src: str) -> str:
+    """Remove /* block */ and // line comments so a substring assertion bites on
+    EXECUTABLE code, not comment prose. (Round-1/round-4 lesson: a bare
+    substring like "conversations[0]" also matches the explanatory comment next
+    to the statement, so the guard passes even when the statement is deleted.)"""
+    src = re.sub(r"/\*[\s\S]*?\*/", "", src)
+    src = re.sub(r"//[^\n]*", "", src)
+    return src
+
+
+def _hydrate_then_block(src: str, *, strip_comments: bool = False) -> str:
     m = re.search(r"hydrateSidebarFromCache\(\)\s*\.then\(\s*\(\)\s*=>\s*\{([\s\S]*?)\}\)\s*\.catch", src)
     assert m, "hydrateSidebarFromCache().then(...).catch() block not found"
-    return m.group(1)
+    block = m.group(1)
+    return _strip_js_comments(block) if strip_comments else block
 
 
 def test_boot_opens_specific_last_conv_when_known_and_cached():
@@ -56,11 +67,17 @@ def test_cold_open_falls_back_to_most_recent_cached_conv():
     most-recent cached conversation (conversations[0]) so the user never sees
     the welcome-flash → snap. Gated on !_restoredConvId so it never overrides a
     known specific id, and on a non-empty cache."""
-    block = _hydrate_then_block(MAIN_JS.read_text())
-    assert "conversations[0]" in block, \
-        "cold open must fall back to the most-recent cached conv (conversations[0])"
-    assert "!_restoredConvId" in block and "conversations.length > 0" in block, \
+    # Comment-stripped so the assertion bites on the EXECUTABLE assignment, not
+    # the explanatory comment (which also mentions conversations[0]).
+    code = _hydrate_then_block(MAIN_JS.read_text(), strip_comments=True)
+    assert re.search(r"_target\s*=\s*conversations\[0\]\.id", code), \
+        "cold open must ASSIGN the most-recent cached conv (_target = conversations[0].id) — " \
+        "the executable statement, not just a comment mention"
+    assert "!_restoredConvId" in code and "conversations.length > 0" in code, \
         "cold-open fallback must be gated on no-known-id AND a non-empty cache"
+    # And the resolved target is actually opened.
+    assert re.search(r"if\s*\(\s*_target\s*\)\s*loadConversation\(\s*_target\s*\)", code), \
+        "the resolved cold-open _target must be passed to loadConversation"
 
 
 def test_restore_id_has_durable_localstorage_fallback():

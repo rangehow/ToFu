@@ -561,3 +561,137 @@ def test_neuter_old_shortcircuit_would_refuse_giant_turn():
     # the guard has teeth (revert 档B ⇒ this diverges back to None).
     new_plan = man.plan_manual_compaction(raw, config={}, task={'convId': 'c'})
     assert new_plan is not None and new_plan['mode'] == 'intra_turn'
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  RECONCILE — the "manual /compact always 409 on an active conversation" fix.
+#
+#  Root cause: the summary LLM call takes seconds; a sibling agent turn writes
+#  the conversation TAIL meanwhile, bumping updated_at. The old single-shot CAS
+#  (on the LOAD-time updated_at, guarding the WHOLE row) lost that race even
+#  though the concurrent write only APPENDED to the preserved region and never
+#  touched the folded (summarized) region. The fix: reload after summarizing,
+#  verify the folded prefix is byte-unchanged, rebuild over the CURRENT tail,
+#  CAS on the CURRENT updated_at. Only a change WITHIN the folded region is a
+#  true conflict → stale.
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _install_with_concurrent_write(monkeypatch, store, mutate, summary='COMPRESSED SUMMARY'):
+    """Like _install, but the summary stub ALSO runs ``mutate(store)`` — i.e. a
+    sibling agent's concurrent write lands DURING the (slow) summary call,
+    exactly reproducing the production 35s-window race."""
+    man = _install(monkeypatch, store, summary=summary)
+
+    def _summary_then_write(*a, **k):
+        mutate(store)
+        return summary
+    monkeypatch.setattr(man, '_generate_query_aware_summary', _summary_then_write)
+    return man
+
+
+@pytest.mark.unit
+def test_reconcile_preserves_tail_appended_during_summary(monkeypatch):
+    """A sibling agent appends N new tail turns DURING the summary window. The
+    compaction must SUCCEED (not 409), keep ALL N appended messages in the
+    preserved region, and still fold the old region into a summary."""
+    from lib.tasks_pkg.conv_message_builder import _transform_messages
+
+    store = _FakeStore(_long_conv())
+    anchor_text = store.messages[0]['content']
+
+    appended = [
+        _u('SIBLING: 新的一步 A', 99000),
+        _a_tools('sibling done A', n_rounds=2, ts=99001, chars=500),
+        _u('SIBLING: 新的一步 B', 99010),
+        _a_plain('sibling done B ' + ('q' * 300), 99011),
+    ]
+
+    def _mutate(st):
+        # Sibling writes the TAIL and bumps updated_at (as a real PATCH does).
+        st.messages.extend([dict(m) for m in appended])
+        st.updated_at += 1
+
+    man = _install_with_concurrent_write(monkeypatch, store, _mutate)
+    res = man.compact_conversation_now('c', config={}, task={'convId': 'c'})
+
+    # (1) SUCCESS — not the stale/409 the old single-shot CAS produced.
+    assert res['ok'] is True, f'reconcile must succeed, got {res}'
+    assert store.search_synced is True and store.notified is True
+
+    # (2) ALL sibling-appended messages survive in the preserved region.
+    contents = [m.get('content', '') for m in store.messages]
+    assert 'SIBLING: 新的一步 A' in contents
+    assert 'SIBLING: 新的一步 B' in contents
+    sib_tools = [m for m in store.messages
+                 if m.get('role') == 'assistant' and m.get('content') == 'sibling done A']
+    assert len(sib_tools) == 1 and len(sib_tools[0].get('toolRounds', [])) == 2, (
+        'sibling tool turn appended during summary must be preserved intact')
+
+    # (3) the old region is still folded into exactly one summary, anchor kept.
+    summaries = [m for m in store.messages if m.get('_isCompactionSummary')]
+    assert len(summaries) == 1
+    assert store.messages[0].get('content') == anchor_text
+    assert res['msgsAfter'] < res['msgsBefore']
+
+    # (4) rebuild to api-form: no orphan tool / split round.
+    api = _transform_messages(store.messages, {})
+    ok, why = _api_ok(api)
+    assert ok, f'reconciled rebuild split a tool round: {why}'
+
+
+@pytest.mark.unit
+def test_reconcile_conflict_in_folded_region_aborts_stale(monkeypatch):
+    """If the concurrent write touches the FOLDED region (a message the summary
+    consumed), that is a REAL conflict — the summary no longer faithfully
+    represents what it replaced — so the engine must still return stale."""
+    store = _FakeStore(_long_conv())
+
+    def _mutate(st):
+        # Rewrite an OLD (folded) message — index 1 is well before any boundary.
+        st.messages[1] = _a_plain('MUTATED OLD CONTENT under us', 1001)
+        st.updated_at += 1
+
+    man = _install_with_concurrent_write(monkeypatch, store, _mutate)
+    res = man.compact_conversation_now('c', config={}, task={'convId': 'c'})
+
+    assert res['ok'] is False and res['error'] == 'stale', (
+        f'a folded-region rewrite is a real conflict → stale, got {res}')
+    # archive kept (harmless), but the live conversation was NOT overwritten
+    assert res.get('archiveId') is not None
+    assert not any(m.get('_isCompactionSummary') for m in store.messages), (
+        'must not persist a summary when the folded region changed under us')
+
+
+@pytest.mark.unit
+def test_neuter_without_reconcile_tail_append_would_409(monkeypatch):
+    """NEUTER: prove the reconcile is load-bearing. On the SAME tail-append
+    scenario, a single-shot CAS on the LOAD-time updated_at (the pre-fix path)
+    necessarily fails — demonstrating that removing reconcile regresses to the
+    guaranteed-409 behaviour the user reported."""
+    store = _FakeStore(_long_conv())
+    load_time_updated_at = store.updated_at
+
+    # Simulate the sibling tail write that happens during the summary window.
+    store.messages.extend([_u('SIBLING tail', 99000),
+                           _a_plain('sibling done', 99001)])
+    store.updated_at += 1
+
+    # The OLD code CAS-ed on the LOAD-time updated_at → 0 rows (lost race).
+    affected = store.cas_sync_conversation_with_search(
+        'c', list(store.messages), load_time_updated_at)
+    assert affected == 0, (
+        'pre-fix single-shot CAS on the stale load-time updated_at MUST lose '
+        'the race — this is exactly the 409 the reconcile loop eliminates')
+
+    # And the CURRENT engine, on an equivalent fresh scenario, succeeds.
+    store2 = _FakeStore(_long_conv())
+
+    def _mutate(st):
+        st.messages.extend([_u('SIBLING tail', 99000),
+                           _a_plain('sibling done', 99001)])
+        st.updated_at += 1
+
+    man = _install_with_concurrent_write(monkeypatch, store2, _mutate)
+    res = man.compact_conversation_now('c', config={}, task={'convId': 'c'})
+    assert res['ok'] is True, (
+        f'reconcile must turn the same race into a success, got {res}')

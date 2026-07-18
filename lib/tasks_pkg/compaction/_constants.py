@@ -217,6 +217,19 @@ at/above the floor is compactable (turn-based OR intra-turn 档B), so a full
 1M single-giant-turn conversation is never wrongly refused. Owner-signed
 2026-07-16 (§10.1)."""
 
+_MANUAL_RECONCILE_MAX_RETRIES = 2
+"""Bounded retries for the manual /compact reload→reconcile→CAS loop.
+
+The summary LLM call takes seconds; a sibling agent turn can write to the
+conversation TAIL meanwhile. Those writes append/modify the PRESERVED region,
+NOT the folded (summarized) region — so the compaction is still valid and must
+NOT lose the concurrent work. The engine reloads after summarizing, verifies
+the folded prefix is byte-unchanged, rebuilds over the CURRENT tail, and CAS-es
+on the CURRENT ``updated_at``. This retry count covers the narrow reload→CAS
+window where yet another write can land; a true conflict (the folded region
+itself changed) short-circuits to ``stale`` WITHOUT consuming a retry. Not a
+hyperparameter that gates output quality — purely a race-window backstop."""
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Vision-API image token estimates

@@ -54,6 +54,7 @@ from lib.tasks_pkg.compaction._archive import _archive_transcript
 from lib.tasks_pkg.compaction._constants import (
     _MANUAL_COMPACT_MIN_TOKENS,
     _MANUAL_INTRA_TURN_HOT_ROUNDS,
+    _MANUAL_RECONCILE_MAX_RETRIES,
     _MAX_PRESERVE_TURNS,
     _PRESERVE_BUDGET_RATIO,
 )
@@ -394,6 +395,40 @@ def apply_manual_compaction(
             + reserve)
 
 
+def _msgs_fingerprint(msgs: list) -> str:
+    """Stable byte-image of a message slice for conflict detection.
+
+    JSON with sorted keys so two logically-identical rows compare equal
+    regardless of dict insertion order. Used to decide whether a concurrent
+    write touched the FOLDED region (a real conflict → stale) versus only the
+    preserved tail (reconcilable → keep both the compaction and the new tail).
+    """
+    import json
+    return json.dumps(msgs, sort_keys=True, ensure_ascii=False, default=str)
+
+
+def _fold_watermark(plan: dict) -> int:
+    """Highest RAW index the compaction READS/FOLDS (exclusive upper bound).
+
+    Everything at index ``< watermark`` is consumed into the summary or is a
+    folded reserve assistant — it MUST be byte-unchanged for the compaction to
+    stay valid. Everything ``>= watermark`` is pure preserved tail that a
+    concurrent writer may freely append to / modify without invalidating the
+    summary.
+
+      • The summarized OLD region + anchor + system block all live at
+        ``< boundary``.
+      • Each intra-turn-folded reserve assistant sits at raw index
+        ``boundary + asst_idx``; folding reads its ``toolRounds``, so it (and
+        everything before it) must be stable — hence ``+ asst_idx + 1``.
+    """
+    boundary = plan['boundary']
+    watermark = boundary
+    for f in plan.get('intra_folds', []):
+        watermark = max(watermark, boundary + int(f['asst_idx']) + 1)
+    return watermark
+
+
 def compact_conversation_now(
     conv_id: str,
     *,
@@ -409,7 +444,17 @@ def compact_conversation_now(
 
     Returns a dict: ``{ok, ...}`` on success or ``{ok: False, error}``.
     Error codes: ``not_found`` / ``nothing_to_compact`` / ``summary_failed`` /
-    ``stale`` (a concurrent writer won the CAS).
+    ``stale``.
+
+    CONCURRENCY: the summary LLM call is slow; a sibling agent turn can write
+    the conversation TAIL meanwhile. Such a write only extends the PRESERVED
+    region — it does NOT touch the folded (summarized) region — so the
+    compaction stays valid and must not discard the concurrent work. After
+    summarizing, the engine reloads the CURRENT messages, verifies the folded
+    prefix is byte-unchanged, rebuilds over the CURRENT tail, and CAS-es on the
+    CURRENT ``updated_at`` (bounded retry for the reload→CAS window). ``stale``
+    is returned ONLY when the folded region itself was concurrently rewritten
+    (a genuine conflict) — never merely because the tail grew.
     """
     config = config or {}
     log_id = conv_id[:8] if conv_id else '?'
@@ -470,44 +515,94 @@ def compact_conversation_now(
             'Use read_files to review current state if needed:\n'
             f'{file_list}')
 
-    # ── REBUILD (raw shape) + measure the after-size (raw-aware) ──
-    new_messages = apply_manual_compaction(
-        raw_messages, plan, summary_text, archive_id=archive_id, tokens_after=0)
-    tokens_after = _raw_estimate_tokens(new_messages, config)
-    msgs_after = len(new_messages)
-    reduction_pct = round((1 - tokens_after / max(1, tokens_before)) * 100, 1)
-    # Stamp the full stats onto the summary message + its compaction marker so
-    # the frontend card is a PURE render of a backend-downloaded fact (never a
-    # client-side inference). See docs/MANUAL_COMPACTION_DESIGN.md §5.3.
+    # ── RECONCILE + PERSIST ──
+    # Root cause of the "manual /compact always 409 on an active conversation":
+    # the summary LLM call takes seconds, during which a sibling agent turn
+    # appends/patches the conversation TAIL. The old code CAS-ed on the LOAD-time
+    # ``updated_at`` guarding the WHOLE row, so ANY concurrent write — even one
+    # that only touched the preserved tail and left the folded region untouched —
+    # lost the CAS and returned `stale`/409. But compaction and "the tail grew a
+    # few rounds" are SEMANTICALLY MERGEABLE: the summary only consumes the FOLDED
+    # region (raw indices ``< watermark``); the tail is preserved verbatim either
+    # way.
+    #
+    # So instead of a single-shot CAS on stale state we: reload the CURRENT
+    # messages, verify the folded region is byte-unchanged (the ONLY thing that
+    # would invalidate the summary), rebuild over the CURRENT tail (so no
+    # concurrently-appended turn is lost), and CAS on the CURRENT ``updated_at``.
+    # A bounded retry covers the narrow reload→CAS window where yet another write
+    # can land. Only a change WITHIN the folded region is a true conflict → stale.
+    boundary = plan['boundary']
+    watermark = _fold_watermark(plan)
+    folded_prefix_fp = _msgs_fingerprint(raw_messages[:watermark])
     _folded_rounds = sum(len(f['cold_rounds'])
                          for f in plan.get('intra_folds', []))
-    for m in new_messages:
-        if isinstance(m, dict) and m.get('_isCompactionSummary'):
-            m['_estimatedPromptTokens'] = int(tokens_after)
-            if _folded_rounds:
-                # 档B: the card describes "folded N tool rounds", not "N msgs".
-                m['_foldedToolRounds'] = _folded_rounds
-            for mk in m.get('_compactions', []):
-                mk.update({'tokensBefore': int(tokens_before),
-                           'tokensAfter': int(tokens_after),
-                           'msgsBefore': int(msgs_before),
-                           'msgsAfter': int(msgs_after),
-                           'reductionPct': reduction_pct})
-                if _folded_rounds:
-                    mk['foldedToolRounds'] = _folded_rounds
 
-    # ── PERSIST (CAS on updated_at — a concurrent writer aborts us) ──
-    # Manual compaction REMOVES whole messages, so we must refresh msg_count +
-    # search_text + FTS in the same write (a plain cas_update leaves the sidebar
-    # count stale and lets search still match compacted-away text). The CAS
-    # guard closes the idle-check→write race: any turn that started meanwhile
-    # bumped updated_at → 0 rows → we abort as `stale` rather than clobber it.
-    affected = store.cas_sync_conversation_with_search(
-        conv_id, new_messages, updated_at)
-    if not affected:
-        logger.warning('[ManualCompact] conv=%s CAS lost — concurrent write, '
-                       'aborting (archive %s kept, harmless)', log_id, archive_id)
-        return {'ok': False, 'error': 'stale', 'archiveId': archive_id}
+    new_messages = None
+    tokens_after = 0
+    msgs_after = 0
+    reduction_pct = 0.0
+    attempts = 0
+    while True:
+        reloaded = store.load_conversation_messages(conv_id)
+        if reloaded is None:
+            logger.warning('[ManualCompact] conv=%s vanished during compaction '
+                           '(archive %s kept)', log_id, archive_id)
+            return {'ok': False, 'error': 'not_found', 'archiveId': archive_id}
+        cur_messages, cur_updated_at = reloaded
+
+        # RECONCILE gate: the folded region MUST be byte-identical. A concurrent
+        # write here means the summarized content itself changed → real conflict.
+        if _msgs_fingerprint(cur_messages[:watermark]) != folded_prefix_fp:
+            logger.warning('[ManualCompact] conv=%s folded region changed under '
+                           'us (real conflict) — aborting stale (archive %s kept)',
+                           log_id, archive_id)
+            return {'ok': False, 'error': 'stale', 'archiveId': archive_id}
+
+        # Rebuild over the CURRENT tail so any turn appended during the summary
+        # window is preserved. The folded prefix is proven byte-unchanged above,
+        # so intra_folds' asst_idx (relative to ``boundary``) still address the
+        # same reserve assistants.
+        plan_current = dict(plan)
+        plan_current['reserve_raw'] = list(cur_messages[boundary:])
+        new_messages = apply_manual_compaction(
+            cur_messages, plan_current, summary_text,
+            archive_id=archive_id, tokens_after=0)
+        tokens_after = _raw_estimate_tokens(new_messages, config)
+        msgs_after = len(new_messages)
+        reduction_pct = round((1 - tokens_after / max(1, tokens_before)) * 100, 1)
+        # Stamp the full stats onto the summary message + its compaction marker so
+        # the frontend card is a PURE render of a backend-downloaded fact (never a
+        # client-side inference). See docs/MANUAL_COMPACTION_DESIGN.md §5.3.
+        for m in new_messages:
+            if isinstance(m, dict) and m.get('_isCompactionSummary'):
+                m['_estimatedPromptTokens'] = int(tokens_after)
+                if _folded_rounds:
+                    # 档B: the card describes "folded N tool rounds", not "N msgs".
+                    m['_foldedToolRounds'] = _folded_rounds
+                for mk in m.get('_compactions', []):
+                    mk.update({'tokensBefore': int(tokens_before),
+                               'tokensAfter': int(tokens_after),
+                               'msgsBefore': int(msgs_before),
+                               'msgsAfter': int(msgs_after),
+                               'reductionPct': reduction_pct})
+                    if _folded_rounds:
+                        mk['foldedToolRounds'] = _folded_rounds
+
+        # PERSIST: CAS on the CURRENT updated_at (refresh msg_count+search+FTS
+        # because compaction removes whole messages).
+        affected = store.cas_sync_conversation_with_search(
+            conv_id, new_messages, cur_updated_at)
+        if affected:
+            break
+        attempts += 1
+        if attempts > _MANUAL_RECONCILE_MAX_RETRIES:
+            logger.warning('[ManualCompact] conv=%s CAS lost %d× in the '
+                           'reload→CAS window — aborting stale (archive %s kept)',
+                           log_id, attempts, archive_id)
+            return {'ok': False, 'error': 'stale', 'archiveId': archive_id}
+        logger.info('[ManualCompact] conv=%s reload→CAS raced (attempt %d) — '
+                    'reconciling against fresher tail', log_id, attempts)
 
     if archive_id is not None:
         try:

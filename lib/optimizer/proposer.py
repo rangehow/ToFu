@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import re
 
-from lib.llm_json import strip_code_fences as _strip_fences
+from lib.llm_json import extract_json
 from lib.log import get_logger
 
 from .actions import ACTION_REGISTRY
@@ -303,18 +303,16 @@ def propose(evidence: EvidenceBundle,
     logger.info('[Optimizer.proposer] LLM returned %d chars, usage=%s',
                 len(content or ''), str(usage)[:200])
 
-    text = _strip_fences(content or '')
-    try:
-        data = json.loads(text)
-    except (json.JSONDecodeError, TypeError) as e:
-        logger.warning('[Optimizer.proposer] invalid JSON from LLM (len=%d): %s; '
-                       'preview=%.200s', len(text), e, text)
+    data = extract_json(content or '', repair=True)
+    if data is None:
+        logger.warning('[Optimizer.proposer] invalid JSON from LLM (len=%d); '
+                       'preview=%.200s', len(content or ''), content or '')
         return []
 
     raw_list = data.get('proposals') if isinstance(data, dict) else None
     if not isinstance(raw_list, list):
         logger.warning('[Optimizer.proposer] LLM JSON missing "proposals" list; '
-                       'preview=%.200s', text)
+                       'preview=%.200s', content or '')
         return []
 
     out: list[dict] = []

@@ -60,7 +60,9 @@ def _project_path() -> str:
     so it takes precedence unchanged.
     """
     explicit = None
-    if request.is_json and request.get_json(silent=True):
+    if request.is_json:
+        # Parse the body ONCE (each get_json is a cross-thread hop to the loop
+        # under the sync shim); the JSON branch still takes precedence.
         explicit = (request.get_json(silent=True) or {}).get('project_path')
     if not explicit:
         from lib.request_parser import decode_proxy_path_arg

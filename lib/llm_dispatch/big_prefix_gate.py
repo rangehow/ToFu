@@ -2,25 +2,37 @@
 
 Why this exists
 ===============
-Anthropic's prompt cache is keyed **per API key**: each upstream key has one
-shared server-side cache namespace with a finite working set.  When several
-conversations with LARGE prompt prefixes (25万–43万 token opus turns) are
-in-flight on the *same* key at once, they can LRU-evict each other's cached
-prefix — an eviction costs a full ``cache_creation`` re-write + 0% read on
-the next round, then the prefix "rebounds" to a hit once it re-writes and the
-competitor gets evicted instead.  Live evidence (2026-07-16, key ``key_0``):
-in a dense 20:42–20:47 window 5 concurrent opus convs oscillated between
-``cache_r=0`` (whole prefix evicted), ``cache_r≈79k`` (only the shared
-system/tools floor survived) and full read-back — the mutual-eviction signature.
+⚠️ CORRECTION (2026-07-18): the "per-key finite cache working set → concurrent
+big prefixes LRU-evict each other" premise this gate was built on is **FALSE**
+and was debunked by owner infra facts + the project's own A/B evidence:
+  * The upstream **gateway only FORWARDS requests — it does not evict caches.**
+  * The **AWS/Bedrock backing has NO per-key cache capacity limit** — there is
+    no bounded "shared pool" for concurrent conversations to contend over.
+  * A/B tested (see memory ``anthropic-cache-key-mechanics``): different
+    conversations do NOT evict each other (±0.0% per-round cache_read).
+  * The 2026-07-18 miss-rate vs concurrency curve is FLAT and non-monotonic
+    (a LONE big conv at concurrency=1, with nobody to evict it, still misses
+    ~23%) — refuting mutual eviction as the mechanism entirely.
 
-⚠ SCOPE / HONESTY: this concurrency eviction is a REAL but SUB-DOMINANT cause.
-The dominant cache-miss cause in this system is CLIENT-side — already-cached
-prefix bytes re-serialized differently across turns (see the ``<bytes>`` /
-prefix-mutation detection in ``lib/tasks_pkg/cache_tracking``); when the client
-wire bytes are stable, misses have been observed to drop to ~zero regardless of
-key count. Do NOT read this gate as "the" fix for prefix-cache misses — it only
-bounds the concurrency residual, and on a single key it can only SERIALIZE the
-working set, not add capacity.
+The two REAL cache-miss causes:
+  1. CLIENT-side cross-turn re-serialization of already-cached prefix bytes
+     (the ``<bytes>`` / prefix-mutation detection in ``lib/tasks_pkg/cache_tracking``).
+     This was the dominant FIXABLE leak and is now addressed by the single-source
+     ``build_assistant_tool_call_message()`` extraction (342 in-prefix rewrites
+     on 07-17 → ~0 on 07-18). When client wire bytes are stable, misses drop to
+     the infra floor.
+  2. A stochastic ~6-8% gap-independent SERVER-side per-request miss in the
+     gateway/Bedrock layer (see ``production-cache-miss-root-cause-analysis``).
+     No client change, admission gate, or SECOND KEY removes this — there is no
+     capacity limit to relieve.
+
+⚠️ Consequently this gate does NOT improve the cache hit rate. Its
+``key_count<=1`` early return is a harmless no-op on the single-key production
+setup (it skips a gate that would do nothing useful), but the residency /
+"second key = second cache namespace" rationale below is written on the false
+capacity-limit premise — do NOT invest in residency tuning or a second key as a
+cache-hit fix. The machinery is kept only because it is a safe bounded-wait
+no-op; a later cleanup may remove it entirely.
 
 This gate caps the number of concurrently-resident BIG-prefix requests on any
 one key.  A request over :func:`threshold_tokens` acquires a per-key slot before

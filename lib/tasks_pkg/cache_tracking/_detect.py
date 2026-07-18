@@ -308,6 +308,83 @@ def _resolve_break_cause(
             'or a silent prefix byte change (UNPROVEN — no wire fingerprint)')
 
 
+def _emit_round_record(conv_id, call_num, verdict, *, ns_switch, ttl_flip,
+                       breakpoint_lost, body_identical, namespace_verified,
+                       cache_read, cache_write, elapsed):
+    """Emit ONE machine-readable per-round cache-verdict record (ALWAYS, every
+    round — not only on a break).
+
+    THE ROOT FIX for "monitoring is insufficient": one ``[CacheRoundRecord]``
+    INFO line per round carrying a JSON payload with the ``bucket`` (from the
+    single-source ``classify_verdict``), the routing diff, the ttl-flip /
+    breakpoint-lost flags, the cache tokens, and whether the body was
+    byte-identical. After ONE clean deploy the real-traffic client-vs-upstream
+    bucket count is a ``grep [CacheRoundRecord] | aggregate_round_records`` —
+    no default-OFF probe, no manual replay, no restart-to-verify. Best-effort:
+    a serialization failure never disturbs the detector's return value.
+    """
+    try:
+        rec = {
+            'conv': (conv_id or '')[:8],
+            'call': call_num,
+            'bucket': classify_verdict(verdict),
+            'routing_diff': list(ns_switch or []),
+            'ttl_flip': bool(ttl_flip),
+            'breakpoint_lost': bool(breakpoint_lost),
+            'body_identical': bool(body_identical),
+            'namespace_verified': bool(namespace_verified),
+            'cache_read': int(cache_read or 0),
+            'cache_write': int(cache_write or 0),
+            'gap_s': round(float(elapsed or 0), 1),
+        }
+        import json as _json
+        logger.info('[CacheRoundRecord] %s', _json.dumps(rec, sort_keys=True))
+    except Exception as _rre:
+        logger.debug('[CacheTrack] round-record emit failed: %s', _rre)
+
+
+# ── Verdict bucket taxonomy (SINGLE SOURCE — replay + live records share it) ──
+BUCKET_NAMESPACE = 'cache_namespace_switch'
+BUCKET_TTL_FLIP = 'ttl_flip'
+BUCKET_BREAKPOINT_LOST = 'breakpoint_lost'
+BUCKET_UPSTREAM = 'upstream_identical'
+BUCKET_BODY_CHANGE = 'body_change'
+BUCKET_NO_BREAK = 'no_break'
+BUCKET_OTHER = 'other'
+
+
+def classify_verdict(verdict: dict | None) -> str:
+    """Map ONE ``detect_cache_break`` result dict to a bucket name.
+
+    THE SINGLE SOURCE OF TRUTH for cache-miss bucketing — imported by BOTH the
+    live per-round record emitter (below) AND the offline replay harness
+    (``replay.py`` re-exports this exact function), so offline counts and live
+    counts can never drift (the recurring bug class this whole effort fights).
+
+    Keys off the RETURN KEY first (most authoritative), then the cause wording
+    for the byte-identical sub-classes that share the ``server_side`` key.
+    """
+    if not verdict:
+        return BUCKET_NO_BREAK
+    if BUCKET_NAMESPACE in verdict:
+        return BUCKET_NAMESPACE
+    _cause = ' '.join(str(v) for v in verdict.values()).lower()
+    if any(k in verdict for k in ('prefix_mutation', 'system_prompt', 'tools',
+                                  'model', 'no_cache_reuse')):
+        if 'ttl marker flipped' in _cause or 'new cache key' in _cause:
+            return BUCKET_TTL_FLIP
+        if 'breakpoint lost' in _cause:
+            return BUCKET_BREAKPOINT_LOST
+        return BUCKET_BODY_CHANGE
+    if 'ttl marker flipped' in _cause or 'new cache key' in _cause:
+        return BUCKET_TTL_FLIP
+    if 'breakpoint lost' in _cause:
+        return BUCKET_BREAKPOINT_LOST
+    if 'upstream cache miss' in _cause:
+        return BUCKET_UPSTREAM
+    return BUCKET_OTHER
+
+
 def detect_cache_break(
     conv_id: str,
     messages: list,
@@ -838,6 +915,27 @@ def detect_cache_break(
         if api_break or no_reuse or partial_no_reuse or prefix_mutation_break:
             prev.total_breaks += 1
 
+        # ── ALWAYS-ON per-round record (single-exit seam) ──
+        # `_finish(v)` emits ONE machine-readable [CacheRoundRecord] with the
+        # bucket (from single-source classify_verdict) then returns v, so the
+        # client-vs-upstream classification is a logged, greppable fact for
+        # EVERY round (break AND no-break) — the root fix for "monitoring
+        # insufficient". Defined BEFORE the break branch so the no-break path
+        # below can call it too.
+        _ttl_flip = '<ttl-flip>' in (_wire_culprits or [])
+        _breakpoint_lost = '<breakpoint-lost>' in (_wire_culprits or [])
+
+        def _finish(v):
+            _emit_round_record(
+                conv_id, prev.call_count, v,
+                ns_switch=_ns_switch, ttl_flip=_ttl_flip,
+                breakpoint_lost=_breakpoint_lost,
+                body_identical=_wire_proven_identical,
+                namespace_verified=_ns_verified_same,
+                cache_read=cache_read, cache_write=cache_write,
+                elapsed=elapsed)
+            return v
+
         # ── Report ──
         # A cache break is "confirmed" when the API shows: a DROP from a prior
         # high read (api_break), a large fresh write with zero read despite an
@@ -883,7 +981,7 @@ def detect_cache_break(
                     'Cause: %s',
                     conv_id[:8], prev.call_count, cache_write, cache_read,
                     prev_cache_read, elapsed, cause_str)
-                return {'cache_namespace_switch': cause_str}
+                return _finish({'cache_namespace_switch': cause_str})
 
             # ★ Prefix mutation is the most ACTIONABLE and most CERTAIN cause —
             #   it means our own code rewrote bytes inside the cached prefix,
@@ -905,7 +1003,7 @@ def detect_cache_break(
                     conv_id[:8], prev.call_count, cache_write, cache_read,
                     prev_cache_read, elapsed, cause_str,
                 )
-                return {'prefix_mutation': cause_str}
+                return _finish({'prefix_mutation': cause_str})
 
             if no_reuse and not api_break:
                 # The expensive, previously-undetected pattern: wrote a fresh
@@ -919,8 +1017,8 @@ def detect_cache_break(
                     _prev_prefix_tokens, elapsed, cause_str,
                 )
                 if client_changes:
-                    return client_changes
-                return {'no_cache_reuse': cause_str}
+                    return _finish(client_changes)
+                return _finish({'no_cache_reuse': cause_str})
 
             if partial_no_reuse and not api_break and not no_reuse:
                 # Big write repeated while cache_read stayed pinned at the
@@ -935,8 +1033,8 @@ def detect_cache_break(
                     prev_cache_write, prev_cache_read, elapsed, cause_str,
                 )
                 if client_changes:
-                    return client_changes
-                return {'no_cache_reuse': cause_str}
+                    return _finish(client_changes)
+                return _finish({'no_cache_reuse': cause_str})
 
             # api_break path: cache_read dropped from a prior high value.
             if client_changes:
@@ -946,15 +1044,17 @@ def detect_cache_break(
                     conv_id[:8], prev.call_count, cause_str,
                     prev_cache_read, cache_read, elapsed,
                 )
-                return client_changes
+                return _finish(client_changes)
             logger.info(
                 '[CacheTrack] conv=%s call=%d cache_read dropped: %d → %d '
                 '(gap=%.1fs, %s)',
                 conv_id[:8], prev.call_count,
                 prev_cache_read, cache_read, elapsed, cause_str,
             )
-            return {'server_side': cause_str}
-        elif client_changes:
+            return _finish({'server_side': cause_str})
+        # ── No confirmed break: still emit the per-round record (bucket
+        #    no_break) so the ledger has EVERY round, not only misses. ──
+        if client_changes:
             # Client-side changes detected but cache wasn't broken (or no
             # cache stats available) — log at debug level only.
             logger.debug(
@@ -964,5 +1064,6 @@ def detect_cache_break(
                 ', '.join(f'{k}={v}' for k, v in client_changes.items()),
                 prev_cache_read, cache_read,
             )
+        _finish(None)
 
     return None

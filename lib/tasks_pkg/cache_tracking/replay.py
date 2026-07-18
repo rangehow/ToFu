@@ -42,14 +42,20 @@ from lib.log import get_logger
 logger = get_logger(__name__)
 
 
-# ── Bucket names (the objective's classification) ──
-BUCKET_NAMESPACE = 'cache_namespace_switch'
-BUCKET_TTL_FLIP = 'ttl_flip'
-BUCKET_BREAKPOINT_LOST = 'breakpoint_lost'
-BUCKET_UPSTREAM = 'upstream_identical'
-BUCKET_BODY_CHANGE = 'body_change'
-BUCKET_NO_BREAK = 'no_break'
-BUCKET_OTHER = 'other'
+# ── Bucket names + classifier: SINGLE SOURCE re-exported from _detect ──
+# classify_verdict MUST be the SAME function the live per-round record emitter
+# uses, else offline (replay) and live counts drift — the exact bug class this
+# whole effort fights. We re-export rather than re-implement.
+from lib.tasks_pkg.cache_tracking._detect import (  # noqa: E402
+    BUCKET_BODY_CHANGE,
+    BUCKET_BREAKPOINT_LOST,
+    BUCKET_NAMESPACE,
+    BUCKET_NO_BREAK,
+    BUCKET_OTHER,
+    BUCKET_TTL_FLIP,
+    BUCKET_UPSTREAM,
+    classify_verdict,
+)
 
 
 def build_round_usage(body: dict, *, cache_read: int, cache_write: int,
@@ -90,41 +96,6 @@ def build_round_usage(body: dict, *, cache_read: int, cache_write: int,
             anthropic_beta=routing.get('anthropic_beta', ''),
             endpoint=routing.get('endpoint', routing.get('url', '')))
     return usage
-
-
-def classify_verdict(verdict: dict | None) -> str:
-    """Map ONE ``detect_cache_break`` result to a bucket name.
-
-    The detector returns ``None`` (no break) or a single-key dict whose key +
-    cause string name the cause. We key off the RETURN KEY first (the most
-    authoritative signal) then the cause wording for the byte-identical
-    sub-classes that all share the ``server_side`` key.
-    """
-    if not verdict:
-        return BUCKET_NO_BREAK
-    if BUCKET_NAMESPACE in verdict:
-        return BUCKET_NAMESPACE
-    # Named client body/prefix causes (system/tools/model change, prefix
-    # mutation, hoisted-region byte flip, reasoning_details rebuild, …).
-    if any(k in verdict for k in ('prefix_mutation', 'system_prompt', 'tools',
-                                  'model', 'no_cache_reuse')):
-        # These can also carry a ttl-flip / breakpoint-lost culprit in the
-        # cause string — surface those first (they are the marker sub-causes).
-        _cause = ' '.join(str(v) for v in verdict.values()).lower()
-        if 'ttl marker flipped' in _cause or 'new cache key' in _cause:
-            return BUCKET_TTL_FLIP
-        if 'breakpoint lost' in _cause:
-            return BUCKET_BREAKPOINT_LOST
-        return BUCKET_BODY_CHANGE
-    # server_side key — the byte-identical family. Disambiguate by cause string.
-    _cause = ' '.join(str(v) for v in verdict.values()).lower()
-    if 'ttl marker flipped' in _cause or 'new cache key' in _cause:
-        return BUCKET_TTL_FLIP
-    if 'breakpoint lost' in _cause:
-        return BUCKET_BREAKPOINT_LOST
-    if 'upstream cache miss' in _cause:
-        return BUCKET_UPSTREAM
-    return BUCKET_OTHER
 
 
 def replay_rounds(rounds: list[dict], *, conv_id: str = 'replay',
@@ -206,6 +177,31 @@ def load_probe_dump_rounds(dump_dir: str,
             'routing': body.get('routing'),
         })
     return rounds
+
+
+def aggregate_round_records(lines) -> dict:
+    """Tally ``bucket`` counts from a stream of ``[CacheRoundRecord]`` log lines.
+
+    THE POST-DEPLOY 'grep | count' the objective needs: after one clean deploy,
+    ``grep '[CacheRoundRecord]' logs/app.log`` and feed the lines here to get
+    the real-traffic client-vs-upstream breakdown — no probe, no replay, no
+    restart-to-verify. Each matching line carries a JSON payload emitted by
+    ``detect_cache_break._emit_round_record``. Non-matching / malformed lines
+    are skipped. Returns ``{bucket: count}``.
+    """
+    counts: dict[str, int] = {}
+    for line in lines or ():
+        if '[CacheRoundRecord]' not in line:
+            continue
+        try:
+            payload = line.split('[CacheRoundRecord]', 1)[1].strip()
+            rec = json.loads(payload)
+        except (ValueError, IndexError):
+            continue
+        b = rec.get('bucket')
+        if b:
+            counts[b] = counts.get(b, 0) + 1
+    return counts
 
 
 def format_report(result: dict) -> str:

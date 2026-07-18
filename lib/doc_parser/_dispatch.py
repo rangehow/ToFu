@@ -45,7 +45,6 @@ _MAX_CHARS = 2_000_000
 
 def is_supported_document(filename: str) -> bool:
     """Check if a filename has a supported document extension."""
-    ext = os.path.splitext(filename)[0]  # bug-safe
     ext = os.path.splitext(filename)[1].lower()
     return ext in _ALL_SUPPORTED
 

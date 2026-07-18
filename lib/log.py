@@ -497,9 +497,3 @@ def log_suppressed(logger: logging.Logger, context: str, exc: Exception = None,
     exc_msg = str(exc)[:200] if exc else ''
     logger.log(level, '%s[suppressed] %s — %s: %s', prefix, context, exc_type, exc_msg)
 
-# ══════════════════════════════════════════
-#  Log Analysis Utilities
-# ══════════════════════════════════════════
-# NOTE: All log scanning, error fingerprinting, and resolution tracking
-# Error log scanning was previously handled by lib/project_error_tracker.py (removed).
-# No log-analysis utilities live here anymore.

@@ -69,8 +69,14 @@ _CACHESTATS_RE = re.compile(r'CacheStats')
 # CHANGED / MUTATION BREAK all share one ``conv=<8> call=<n>`` token).
 _CALL_TOKEN_RE = re.compile(r'conv=(\w+ call=\d+)')
 # The server's in-memory cache-fix self-report, printed at boot from the
-# IMPORTED lib.llm.cache module: "[CacheFixGen] CACHE_FIX_GEN=<n> (in-memory)".
+# IMPORTED lib.llm.cache module. Current form is PID-bound:
+#   "[CacheFixGen] CACHE_FIX_GEN=<n> pid=<pid> bootId=<id> (in-memory)"
+# Old builds printed the untagged "CACHE_FIX_GEN=<n> (in-memory)".
 _GEN_RE = re.compile(r'CACHE_FIX_GEN=(\d+)')
+# Same line WITH its owning pid — used to bind the gen to the actual :15000
+# listener PID so a dead short-lived replica's gen line (boot-storm) is never
+# credited to the process really holding the port.
+_GEN_PID_RE = re.compile(r'CACHE_FIX_GEN=(\d+)\s+pid=(\d+)')
 
 
 def _ts_of(line: str) -> str | None:
@@ -210,32 +216,61 @@ def _served_code_state(pid: str) -> tuple[str, str]:
                      'files in their fixed form')
 
 
-def _self_reported_gen(lines: list, boot_ts: str) -> int | None:
-    """Parse the IN-MEMORY ``CACHE_FIX_GEN`` the serving process printed at boot.
+def _self_reported_gen(lines: list, boot_ts: str, pid: str | None = None) -> int | None:
+    """Parse the IN-MEMORY ``CACHE_FIX_GEN`` the SERVING process printed at boot.
 
     Disk source freshness (``_served_code_state``) proves the FILES are new, but
     a Python process compiles ``.py`` to bytecode at import and never re-reads
     it — so the RUNNING code can still be the version loaded at boot even when
     disk is fresh. The ONLY proof of the loaded version is what the process
-    itself printed from the imported module. This scans log lines AT/AFTER the
-    serving process's boot timestamp for the newest ``CACHE_FIX_GEN=<n>`` self-
-    report and returns ``<n>`` (or None if the current boot window printed none
-    — an old build predating the self-report, or the line rotated out). Only the
-    current boot window counts: a gen printed by the PREVIOUS process must never
-    be credited to the new one.
+    itself printed from the imported module.
+
+    ★ PID-BOUND (the boot-storm cross-attribution guard). A restart storm
+    (restart_15000.sh / execv retries) spawns MANY short-lived replicas whose
+    boot lines land in the SAME app.log time window. A replica that loaded
+    gen=5, printed its gen line, then DIED (lost the :15000 bind race) must NOT
+    have its gen credited to the OLD process still holding the port — that would
+    be a false green. So when ``pid`` (the actual :15000 listener) is given and
+    ANY gen line in-window carries a ``pid=`` tag, we ONLY count the gen line
+    whose ``pid`` matches — the dead replica's line (different pid) is ignored,
+    and if the listener printed no matching line we return None (honest WAIT).
+
+    BACK-COMPAT: an OLD build prints the untagged ``CACHE_FIX_GEN=<n>`` (no
+    ``pid=``). When NO pid-tagged line exists at all, we fall back to the
+    time-window newest untagged value (prior behavior) so an old deployment is
+    not regressed to permanent WAIT. Only lines AT/AFTER ``boot_ts`` count (a
+    PREVIOUS process's line never does).
     """
-    gen = None
+    matched_gen = None   # gen from a line whose pid == the listener pid
+    untagged_gen = None  # newest untagged gen (old-build fallback)
+    saw_pid_tagged = False
     for ln in lines:
         ts = _ts_of(ln)
         if ts and ts < boot_ts:
             continue  # a PRE-boot (previous process) line — never counts
+        mp = _GEN_PID_RE.search(ln)
+        if mp:
+            saw_pid_tagged = True
+            try:
+                _g, _p = int(mp.group(1)), mp.group(2)
+            except (ValueError, TypeError):
+                continue
+            if pid is not None and _p == str(pid):
+                matched_gen = _g  # keep the newest matching-pid value
+            continue
         m = _GEN_RE.search(ln)
         if m:
             try:
-                gen = int(m.group(1))  # keep the LAST (newest) in-window value
+                untagged_gen = int(m.group(1))
             except (ValueError, TypeError):
                 continue
-    return gen
+    # A pid was requested AND at least one pid-tagged line exists → trust ONLY
+    # the matching-pid gen (dead-replica lines are excluded; no match → None).
+    if pid is not None and saw_pid_tagged:
+        return matched_gen
+    # Otherwise (no pid requested, or only untagged old-build lines) fall back
+    # to the untagged time-window value.
+    return untagged_gen
 
 
 def _serving_pid_start(port: str = '15000') -> str | None:
@@ -381,7 +416,7 @@ def analyze(log_path: str, min_samples: int) -> dict:
     # baseline → stale bytecode (WAIT); no self-report in the boot window → an
     # old build predating the self-report OR a rotated line → honest WAIT. NEVER
     # green on disk-freshness alone.
-    gen = _self_reported_gen(lines, boot_ts)
+    gen = _self_reported_gen(lines, boot_ts, _pid)
     if gen is None:
         return {'verdict': 'WAIT',
                 'reason': f'serving PID started {boot_ts} (>fix floor) and disk '

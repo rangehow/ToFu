@@ -147,7 +147,7 @@ def _wire(boot, pid, served_state, reported_gen='__match__'):
     # disk-freshness tests above are unaffected). Tests that exercise the gen
     # gate pass an explicit value.
     _gen = h.CACHE_FIX_GEN_BASELINE if reported_gen == '__match__' else reported_gen
-    h._self_reported_gen = lambda lines, boot_ts: _gen
+    h._self_reported_gen = lambda lines, boot_ts, pid=None: _gen
 
 
 def test_new_pid_stale_copy_is_not_green():
@@ -334,6 +334,89 @@ def test_newer_gen_than_baseline_is_ready():
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+#  PID-bound gen self-report — a dead short-lived replica's gen line must NOT be
+#  credited to the current listener (the boot-storm cross-attribution false-green)
+# ═══════════════════════════════════════════════════════════════════════════
+# restart_15000.sh / execv boot storms produce MANY short-lived replicas whose
+# boot lines land in the SAME app.log time window. A replica that loaded gen=5,
+# printed its gen line, then DIED (lost the port race) must not have its gen
+# credited to the OLD process still holding the port. So the gen line carries
+# pid=/bootId= and _self_reported_gen only counts the line whose pid matches the
+# actual :15000 listener PID.
+
+def test_gen_line_from_other_pid_not_credited_to_listener():
+    """The boot-storm hole: a dead replica (pid 999) printed gen=5 in the same
+    window, but the listener is pid 4242. That gen=5 must NOT be credited to
+    4242 → _self_reported_gen(pid=4242) returns None (no matching line)."""
+    fn = _parse_gen_helper()
+    boot = '2026-07-18 03:00:00'
+    lines = [
+        f'{boot} [INFO] server.boot [CacheFixGen] CACHE_FIX_GEN=5 pid=999 bootId=deadbeef (in-memory)\n',
+    ]
+    assert fn(lines, boot, '4242') is None, (
+        'a gen line from a DIFFERENT pid (dead short-lived replica) must not be '
+        'credited to the current listener pid')
+
+
+def test_gen_line_matching_listener_pid_is_credited():
+    fn = _parse_gen_helper()
+    boot = '2026-07-18 03:00:00'
+    lines = [
+        f'{boot} [INFO] server.boot [CacheFixGen] CACHE_FIX_GEN=5 pid=4242 bootId=abcd (in-memory)\n',
+    ]
+    assert fn(lines, boot, '4242') == 5
+
+
+def test_gen_dead_replica_and_live_listener_both_present():
+    """Both lines in-window: dead replica (pid 999, gen 5) AND the real listener
+    (pid 4242, gen 5). Only the listener's counts — and if the listener's line
+    were OLD (gen 4) the replica's 5 must NOT rescue it."""
+    fn = _parse_gen_helper()
+    boot = '2026-07-18 03:00:00'
+    lines = [
+        f'{boot} [INFO] server.boot [CacheFixGen] CACHE_FIX_GEN=5 pid=999 bootId=dead (in-memory)\n',
+        f'{boot} [INFO] server.boot [CacheFixGen] CACHE_FIX_GEN=4 pid=4242 bootId=live (in-memory)\n',
+    ]
+    assert fn(lines, boot, '4242') == 4, (
+        "the listener's own gen must win, never a dead replica's higher gen")
+
+
+def test_gen_untagged_line_falls_back_to_time_window():
+    """Backward-compat: an OLD build prints a gen line WITHOUT pid=. With no
+    pid-tagged line to key on, fall back to the time-window newest (the prior
+    behavior) so we don't regress old deployments to permanent WAIT."""
+    fn = _parse_gen_helper()
+    boot = '2026-07-18 03:00:00'
+    lines = [f'{boot} [INFO] server.boot [CacheFixGen] CACHE_FIX_GEN=5 (in-memory)\n']
+    assert fn(lines, boot, '4242') == 5
+    # and still None when the untagged line is absent
+    assert fn([f'{boot} [INFO] server.boot Ready\n'], boot, '4242') is None
+
+
+def test_analyze_dead_replica_gen_does_not_false_green():
+    """End-to-end: old listener (pid 4242, disk fresh) + a dead replica's gen=5
+    line in-window. Before the pid-bind fix analyze would read gen=5 and could
+    go READY; after, the listener has NO matching gen line → honest WAIT."""
+    boot = '2026-07-18 03:00:00'
+    lines = [f'{boot} [INFO] server.boot starting up\n']
+    for i in range(200):
+        lines.append(f'2026-07-18 03:{i%60:02d}:00 [INFO] [CacheStats] conv=a call={i}\n')
+    # a DEAD replica's self-report — different pid than the listener
+    lines.append(f'{boot} [INFO] server.boot [CacheFixGen] CACHE_FIX_GEN=5 pid=999 bootId=dead (in-memory)\n')
+    p = tempfile.mktemp(suffix='.log'); open(p, 'w').write(''.join(lines))
+    # real functions (un-stub), but pin the listener pid + its lstart + fresh disk
+    import importlib; importlib.reload(h)
+    h._serving_pid = lambda port='15000': '4242'
+    h._lstart_of_pid = lambda pid: boot
+    h._served_code_state = lambda pid: ('fresh', 'stub')
+    r = h.analyze(p, 150)
+    os.unlink(p)
+    assert r['verdict'] == 'WAIT', r
+    assert r.get('gen') is None, (
+        "a dead replica's gen must not be credited to the listener → gen None → WAIT")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 #  Point-3: analyze fingerprints the SAME pid whose lstart it checked
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -351,7 +434,7 @@ def test_analyze_uses_single_pid_for_lstart_and_cwd():
         seen['pids'].append(('served', pid))
         return 'fresh', 'stub'
     h._served_code_state = _fake_served
-    h._self_reported_gen = lambda lines, boot_ts: h.CACHE_FIX_GEN_BASELINE
+    h._self_reported_gen = lambda lines, boot_ts, pid=None: h.CACHE_FIX_GEN_BASELINE
     r = h.analyze(p, 150)
     os.unlink(p)
     # Every pid consumed (for lstart AND for served-code) must be the ONE pid.

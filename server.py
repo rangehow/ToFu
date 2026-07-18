@@ -2567,7 +2567,19 @@ if __name__ == '__main__':
     # can't prove this (Python compiles .py at import and never re-reads it).
     try:
         from lib.llm.cache import CACHE_FIX_GEN as _cfg
-        _boot('[CacheFixGen] CACHE_FIX_GEN=%d (in-memory)' % _cfg)
+        # Bind the self-report to THIS process (pid + bootId). A restart storm
+        # produces many short-lived replicas whose boot lines land in the same
+        # app.log time window; without the pid tag a DEAD replica that printed
+        # gen=5 then lost the port race could have its gen credited to the OLD
+        # process still holding :15000 (a cross-attribution false-green). The
+        # deploy verdict matches this pid against the actual :15000 listener PID.
+        try:
+            from lib import boot_identity as _bi
+            _bid = _bi.BOOT_ID
+        except Exception:
+            _bid = '?'
+        _boot('[CacheFixGen] CACHE_FIX_GEN=%d pid=%d bootId=%s (in-memory)'
+              % (_cfg, os.getpid(), _bid))
     except Exception as _cfg_e:  # never let a diagnostic line block boot
         _boot_logger.warning('[CacheFixGen] self-report failed: %s', _cfg_e)
 

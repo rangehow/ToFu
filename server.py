@@ -2488,6 +2488,17 @@ if __name__ == '__main__':
             except Exception as e:
                 _server_log.warning('FS keepalive failed: %s', e)
 
+            # ── code-server fileWatcher excludes sync ──
+            # Mirror the project's canonical watcherExclude globs into the
+            # User-scope code-server settings so opening a PARENT dir as the
+            # workspace root can't recurse into swebench_workdir/ and OOM the
+            # host via fileWatcher workers (see lib/code_server_excludes.py).
+            try:
+                from lib.code_server_excludes import start_code_server_excludes_sync
+                start_code_server_excludes_sync()
+            except Exception as e:
+                _server_log.warning('code-server excludes sync failed: %s', e)
+
             # ── Cross-DC detection ──
             try:
                 from lib.cross_dc import init_cross_dc_detection

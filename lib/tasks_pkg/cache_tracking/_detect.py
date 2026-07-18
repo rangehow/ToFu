@@ -113,6 +113,8 @@ def _resolve_break_cause(
     prefix_culprits: list | None = None,
     wire_proven_identical: bool = False,
     history_rewrite: bool = False,
+    namespace_switch: list | None = None,
+    namespace_verified_same: bool = False,
 ) -> str:
     """Build the single most-specific human cause string for a confirmed break.
 
@@ -225,6 +227,23 @@ def _resolve_break_cause(
                  'projection) edited or deleted a cached message — the '
                  'prefix was re-billed uncached')
         return f'{_base} [changed: {_culprits}]' if _culprits else _base
+    # ── Cache-NAMESPACE switch (byte-identical body, routing flipped) ──
+    # The request BODY was byte-identical to last round, but the cache-namespace
+    # routing changed — the upstream key, the anthropic-beta header (e.g.
+    # extended-cache-ttl presence), or the endpoint. Anthropic caches per
+    # (key + beta + endpoint), so the same prefix bytes hit a COLD namespace →
+    # a guaranteed miss. This is a CLIENT-side cause (dispatch rebind on
+    # cooldown/429, or a per-task TTL-latch flip), NOT a server/gateway fault —
+    # name the exact attribute(s) that flipped so it is never laundered upstream.
+    if namespace_switch:
+        _ns_names = {'<ns>key': 'upstream API key', '<ns>beta': 'anthropic-beta '
+                     'header (e.g. extended-cache-ttl)', '<ns>endpoint': 'endpoint'}
+        _flipped = ', '.join(_ns_names.get(c, c) for c in namespace_switch)
+        return ('same prefix bytes routed to a different cache namespace — the '
+                f'{_flipped} changed between turns (a client-side dispatch '
+                'rebind on cooldown/429, or a per-task TTL-latch flip), so the '
+                'byte-identical prefix landed on a COLD gateway cache and was '
+                're-billed uncached. NOT a server-side miss.')
     if elapsed > 300:
         return 'TTL expiry (>5min gap, prompt unchanged)'
     # ── Upstream cache miss — byte-identical, so NOT a client byte change THIS
@@ -245,22 +264,32 @@ def _resolve_break_cause(
     # it as a possibility, not a confident verdict, and never over-claim a
     # single mechanism.
     if wire_proven_identical:
+        # When routing was ALSO verified identical this round, say so explicitly
+        # — that upgrades the verdict from an elimination guess to an
+        # evidence-grade statement: body bytes AND (key + beta + endpoint) all
+        # matched last round, so the miss is genuinely upstream, not a client
+        # cache-namespace switch.
+        _ns_evidence = (' The routing was also identical (key + anthropic-beta '
+                        '+ endpoint all match last round), so this is not a '
+                        'client cache-namespace switch either.'
+                        if namespace_verified_same else '')
         if cache_read > _MIN_CACHE_MISS_TOKENS:
             return ('prefix not read back though the wire bytes were '
                     'byte-identical to the previous round — so this round is '
                     'NOT a client-side prefix change. The cached prefix was not '
                     'reused upstream: an upstream cache miss (a per-request '
                     'gateway miss or a TTL boundary). Only the body past the '
-                    'static prefix was not read back. (Most misses in this '
+                    'static prefix was not read back.' + _ns_evidence
+                    + ' (Most misses in this '
                     'system are instead client-side and are named per-field '
                     'above; this is not that class.)')
         return ('prefix not read back though the wire bytes were byte-identical '
                 'to the previous round — so this round is NOT a client-side '
                 'prefix change. The whole cached prefix was not reused '
                 'upstream: an upstream cache miss (a per-request gateway miss '
-                'or a TTL boundary). (Most misses in this system are instead '
-                'client-side and are named per-field above; this is not that '
-                'class.)')
+                'or a TTL boundary).' + _ns_evidence + ' (Most misses in this '
+                'system are instead client-side and are named per-field above; '
+                'this is not that class.)')
     # ── Wire fingerprint UNAVAILABLE → legacy elimination guess (unproven) ──
     if cache_read > _MIN_CACHE_MISS_TOKENS:
         return ('likely server-side cache miss (UNPROVEN — no wire '
@@ -470,6 +499,7 @@ def detect_cache_break(
         _cur_wire_bytes = None
         _cur_wire_field_bytes = None
         _cur_wire_region = None
+        _cur_wire_routing = None
         if usage:
             _cur_wire_fp = usage.get('_wire_fp')
             _wire_static = usage.get('_wire_static') or ''
@@ -478,6 +508,7 @@ def detect_cache_break(
             _cur_wire_bytes = usage.get('_wire_bytes')
             _cur_wire_field_bytes = usage.get('_wire_field_bytes')
             _cur_wire_region = usage.get('_wire_region')
+            _cur_wire_routing = usage.get('_wire_routing')
         _wire_available = _cur_wire_fp is not None
         _wire_prefix_changed = False
         _wire_culprits: list = []
@@ -656,6 +687,34 @@ def detect_cache_break(
                     _fci, _prior_prefix_boundary, prev.message_count, msg_count,
                     _inside_prior_prefix)
 
+        # ── Cache-NAMESPACE routing diff (the last body-invisible client var) ──
+        # Anthropic prompt caching is namespaced by (upstream key + anthropic-beta
+        # header + endpoint). The dispatch layer CAN flip the key mid-conversation
+        # (cooldown/429/401/timeout → sticky key scored inf → rebind, which drags
+        # the endpoint along) and the extended-cache-ttl beta is latched per-TASK,
+        # so a new turn can re-latch a changed global. When any flips, a
+        # BYTE-IDENTICAL prefix lands on a COLD namespace → a client-caused cold
+        # miss the BODY fingerprints above are blind to. Diffing the routing
+        # fingerprint BEFORE the break verdict lets the byte-identical branch
+        # NAME this client switch instead of laundering it into "server-side".
+        # A missing side (mid-deploy / non-Claude / capture failure) is inert.
+        _ns_switch: list = []
+        _ns_verified_same = False
+        if (_cur_wire_routing is not None and prev.wire_routing is not None
+                and prev.call_count > 0 and not _was_compaction):
+            from lib.tasks_pkg.wire_fingerprint import diff_routing
+            _ns_switch = diff_routing(prev.wire_routing, _cur_wire_routing)
+            _ns_verified_same = not _ns_switch
+            if _ns_switch:
+                logger.warning(
+                    '[CacheTrack] conv=%s call=%d ⚠ CACHE NAMESPACE SWITCH: the '
+                    'request routing changed between turns — a byte-identical '
+                    'prefix now lands on a DIFFERENT gateway cache namespace '
+                    '(client-caused cold miss, NOT server-side). changed=[%s] '
+                    'prev=%s cur=%s',
+                    conv_id[:8], prev.call_count + 1,
+                    ', '.join(_ns_switch), prev.wire_routing, _cur_wire_routing)
+
         # ── Phase-2 break classification (pure; see _classify_break) ──
         #   api_break        — cache_read dropped from a prior high read.
         #   no_reuse         — large fresh write, zero read, established prefix.
@@ -686,6 +745,11 @@ def detect_cache_break(
             prev.wire_bytes = _cur_wire_bytes
             prev.wire_field_bytes = _cur_wire_field_bytes
             prev.wire_region = _cur_wire_region
+        # Routing is captured independently of the body fingerprints — store it
+        # whenever present so a namespace flip is caught even on a round where
+        # the body wire_fp handling differs (non-Claude / partial capture).
+        if _cur_wire_routing is not None:
+            prev.wire_routing = _cur_wire_routing
         prev.model = model
         prev.message_count = msg_count
         prev.last_cache_read_tokens = cache_read
@@ -794,7 +858,30 @@ def detect_cache_break(
                 prefix_culprits=_prefix_culprits,
                 wire_proven_identical=_wire_proven_identical,
                 history_rewrite=_was_history_rewrite,
+                namespace_switch=_ns_switch,
+                namespace_verified_same=_ns_verified_same,
             )
+
+            # ★ CACHE-NAMESPACE SWITCH — a body-identical round whose ROUTING
+            #   flipped (upstream key / anthropic-beta / endpoint) is a
+            #   CLIENT-caused cold miss: the same prefix bytes were routed to a
+            #   different gateway cache namespace. It MUST NOT fall through to
+            #   the server_side branch (the exact mislabel the owner flagged —
+            #   "byte-identical → blame the gateway"). It wins over the generic
+            #   byte-identical verdict but still defers to a named body change
+            #   (client_changes / prefix_mutation_break), which is a distinct,
+            #   more-specific client culprit. Surfaced under its own key so the
+            #   cost popover names the actionable routing switch.
+            if (_ns_switch and _wire_proven_identical
+                    and not client_changes and not prefix_mutation_break):
+                logger.warning(
+                    '[CacheTrack] conv=%s call=%d ⚠ CACHE NAMESPACE SWITCH BREAK: '
+                    'cache_write=%d cache_read=%d (prev read=%d, gap=%.1fs) — '
+                    'byte-identical prefix routed to a different cache namespace. '
+                    'Cause: %s',
+                    conv_id[:8], prev.call_count, cache_write, cache_read,
+                    prev_cache_read, elapsed, cause_str)
+                return {'cache_namespace_switch': cause_str}
 
             # ★ Prefix mutation is the most ACTIONABLE and most CERTAIN cause —
             #   it means our own code rewrote bytes inside the cached prefix,

@@ -58,6 +58,7 @@ class CacheState:
         'wire_fp', 'wire_static', 'wire_system', 'wire_markers', 'wire_bytes',
         'wire_field_bytes',
         'wire_region',
+        'wire_routing',
         'total_cache_read', 'total_cache_write',
         'total_breaks', 'total_input_tokens',
         'first_call_time',
@@ -136,6 +137,16 @@ class CacheState:
         # verdict can be gated on the hoisted region too, not just messages.
         # See wire_fingerprint.wire_byte_region.
         self.wire_region: dict | None = None
+        # Cache-NAMESPACE routing fingerprint from the PREVIOUS round
+        # ({'key','beta','endpoint'} — see wire_fingerprint.routing_fingerprint).
+        # Anthropic prompt caching is namespaced by (upstream key + anthropic-beta
+        # header + endpoint); the dispatch layer CAN flip the key mid-conversation
+        # (cooldown/429/401/timeout → sticky key scored inf → rebind) and the
+        # extended-cache-ttl beta is latched per-TASK, so a byte-identical prefix
+        # can land on a COLD namespace = a client-caused miss the BODY fingerprints
+        # are blind to. detect_cache_break diffs this BEFORE the byte-identical
+        # verdict so a namespace flip is NAMED client-side, not laundered upstream.
+        self.wire_routing: dict | None = None
         self.total_cache_read: int = 0
         self.total_cache_write: int = 0
         self.total_breaks: int = 0

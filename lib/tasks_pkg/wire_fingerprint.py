@@ -802,3 +802,71 @@ def static_prefix_hash(messages: list) -> str:
         else:
             break
     return _md5('\x01'.join(parts))
+
+
+def _canon_beta(anthropic_beta: Any) -> str:
+    """Normalize an ``anthropic-beta`` header into an ORDER-INDEPENDENT token set.
+
+    The header is a comma-joined list of beta flags (e.g.
+    ``prompt-caching-2024-07-31,extended-cache-ttl-2025-04-11``). Whether
+    ``extended-cache-ttl`` is present is part of the gateway's cache key, so a
+    presence flip must show — but a mere token REORDER (or added whitespace)
+    does not change what the gateway keys on, so it must NOT. Split on ``,``,
+    strip, drop empties, sort, re-join.
+    """
+    if not anthropic_beta:
+        return ''
+    parts = [p.strip() for p in str(anthropic_beta).split(',')]
+    return ','.join(sorted(p for p in parts if p))
+
+
+def routing_fingerprint(*, key_hash: Any = '', anthropic_beta: Any = '',
+                        endpoint: Any = '') -> dict[str, str]:
+    """Fingerprint the request's CACHE-NAMESPACE-determining routing attributes.
+
+    THE LAST BLIND SPOT. ``canonical_messages`` / ``system_fingerprint`` /
+    ``wire_byte_*`` all prove whether the request BODY changed. But Anthropic
+    prompt caching is namespaced by the request's *routing* too: the upstream
+    API key (a distinct key = a distinct cache namespace), the
+    ``anthropic-beta`` header (``extended-cache-ttl`` presence is part of the
+    key), and the endpoint. The dispatch layer CAN flip the key mid-conversation
+    (cooldown / 429 / 401 / timeout → sticky key scored ``inf`` → picker
+    rebinds), which drags the endpoint along, and the beta header is latched
+    per-TASK so a new turn can re-latch a changed global. When any of these
+    flips, a BYTE-IDENTICAL prefix lands on a COLD namespace → a guaranteed
+    client-caused miss that the body fingerprints are blind to.
+
+    This captures the three attributes so ``detect_cache_break`` can diff them
+    (``diff_routing``) BEFORE it reaches the "byte-identical → upstream" verdict
+    and instead NAME a client cache-namespace switch. ``key_hash`` is the
+    already-salted+truncated non-secret discriminator ``_sse_core`` computes;
+    the beta header is normalized order-independently so a token reorder is not
+    a false flip. Any field absent → ''.
+
+    Returns ``{'key': str, 'beta': str, 'endpoint': str}``.
+    """
+    return {
+        'key': '' if key_hash is None else str(key_hash),
+        'beta': _canon_beta(anthropic_beta),
+        'endpoint': '' if endpoint is None else str(endpoint),
+    }
+
+
+def diff_routing(old: dict | None, new: dict | None) -> list[str]:
+    """Name which cache-namespace attribute(s) flipped between rounds.
+
+    Compares two ``routing_fingerprint`` outputs. Returns a stable-ordered list
+    of ``<ns>key`` / ``<ns>beta`` / ``<ns>endpoint`` for each attribute whose
+    value changed — the precise, false-positive-free signal that a byte-
+    identical prefix was routed to a DIFFERENT gateway cache namespace (→ a
+    client-caused cold miss). A missing side (mid-deploy: no prior routing
+    captured, or non-Claude / capture failure) is inert — returns ``[]`` so it
+    never cries wolf before the fingerprint exists.
+    """
+    if not old or not new:
+        return []
+    changes: list[str] = []
+    for fld in ('key', 'beta', 'endpoint'):
+        if old.get(fld) != new.get(fld):
+            changes.append('<ns>' + fld)
+    return changes

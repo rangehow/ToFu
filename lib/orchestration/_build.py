@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from lib.agent_verdict import VU_ROLE_PROMPT as _VU_ROLE_PROMPT
 from lib.log import get_logger
 from lib.orchestration._layout import layout_definition
 from lib.orchestration._roles import resolve_scope
@@ -104,10 +105,12 @@ def build_autopilot_definition(*, name: str = 'Autopilot',
                         'progress every turn; act, do not just analyze.'}},
             {'id': 'vu', 'type': 'role', 'role': 'virtual_user',
              'params': {'emits': 'user', 'tier': 'standard',
-                        'objective': 'Stand in for the human. Reply in 1-3 '
-                        'sentences to keep the task moving. Emit '
-                        '[VERDICT: STOP] (or [VU: TASK_DONE]) only when the '
-                        'assistant has clearly finished.'}},
+                        # SINGLE SOURCE: the VU persona (incl. the mandatory
+                        # [PROGRESS: resolved=X remaining=Y] hard-signal line
+                        # the diminishing-returns guard consumes) is the shared
+                        # lib.agent_verdict.VU_ROLE_PROMPT — NOT a local
+                        # paraphrase. Was a drifted 3-sentence hand-copy.
+                        'objective': _VU_ROLE_PROMPT}},
             {'id': 'stop', 'type': 'control', 'kind': 'stop'},
         ],
         'edges': [

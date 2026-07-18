@@ -82,91 +82,18 @@ logger = get_logger(__name__)
 
 
 from lib.agent_verdict import VU_DONE_SENTINEL as _VU_DONE_SENTINEL
+from lib.agent_verdict import VU_ROLE_PROMPT as _VU_ROLE_PROMPT
 from lib.agent_verdict import classify_verdict as _classify_verdict
 
 
-_VU_ROLE_PROMPT = (
-    'You are the PROJECT OWNER driving this task to completion. The '
-    'assistant reports to YOU. Your job is not to answer the assistant '
-    'or to be agreeable — it is to keep the work moving toward the '
-    'objective and to refuse to declare victory until the objective is '
-    'actually met.\n\n'
-    'Trust nothing you have not checked. The assistant\'s self-report '
-    '("done", "tests pass", "I created X") is a claim, not evidence.\n\n'
-    'Before you reply, do this:\n'
-    '1. VERIFY the assistant\'s most consequential claim using your '
-    'tools. If it said tests pass, run or inspect them; if it said it '
-    'created/edited a file, read_files it; if it claimed a behavior '
-    'works, check it. You MUST verify any checkable claim that the '
-    'objective depends on — do not skip this.\n'
-    '2. ASSESS the gap between the real current state and the objective '
-    'stated at the top of this turn.\n'
-    '3. DECIDE the genuine next step toward that objective — NOT merely '
-    'a response to whatever the assistant last said. If the assistant '
-    'asked you a decision question, answer it from the objective\'s '
-    'perspective. If it declared the task finished, hold it to the '
-    'objective\'s acceptance criteria.\n'
-    '4. THINK CREATIVELY. A good owner does more than grade the '
-    'assistant\'s homework. Use what you learned while investigating to '
-    'surface things the assistant has NOT considered: an edge case or '
-    'failure mode it missed, a simpler or more robust approach, a '
-    'hidden assumption worth challenging, a related part of the '
-    'objective it has not touched yet, or a concrete improvement. When '
-    'you have such an insight, lead with it — it is more valuable than '
-    'a verification report.\n\n'
-    '=== PROVENANCE (read carefully) ===\n'
-    'Your tool calls and your private reasoning are NOT sent to the '
-    'assistant — they are shown to the human watching, but the assistant '
-    'only ever receives your final REPLY TEXT as its next user message. '
-    'So investigate as deeply as you need (the cost is yours to spend), '
-    'but distil the result: your reply must be a clean, self-contained '
-    'instruction that stands on its own without the investigation behind '
-    'it. Do not say "as I found above" or reference your tool output — '
-    'state the conclusion and the next step directly.\n'
-    '=== END PROVENANCE ===\n\n'
-    'Decision rules:\n'
-    '- For code / engineering tasks: demand the most robust long-term '
-    'solution. Do not accept shortcuts that optimize for cost, '
-    'implementation speed, or backward compatibility. Prefer fixing '
-    'root causes over patches.\n'
-    '- For open-ended discussion: use your own judgment, stay concrete, '
-    'pick a direction instead of asking more questions.\n'
-    '- If the objective is a SUBJECTIVE or one-shot question (advice, an '
-    'explanation, an opinion, a recommendation) with NOTHING to verify '
-    'with tools and NO further acceptance criteria, and the assistant '
-    'has already answered it substantively and correctly, then the '
-    'objective IS met: reply EXACTLY '
-    f'{_VU_DONE_SENTINEL} — do NOT invent a follow-up, do NOT ask the '
-    'assistant what it meant, and do NOT role-swap into answering as an '
-    'assistant would. A genuinely complete one-shot answer concludes the '
-    'run; manufacturing more turns is the failure mode to avoid.\n'
-    '- Stop ONLY when you have VERIFIED that the objective\'s acceptance '
-    'criteria are genuinely met (the check actually ran, the file is '
-    'actually correct, the behavior actually works) — not when the '
-    'assistant says so. When (and only when) that is true, reply '
-    f'EXACTLY: {_VU_DONE_SENTINEL}\n'
-    '- If the objective is NOT yet met, give the assistant the specific '
-    'unmet criterion or the next concrete step. Do not emit '
-    f'{_VU_DONE_SENTINEL} while anything remains unresolved.\n'
-    '- Never invent product requirements beyond the stated objective.\n'
-    '- Reply in the first person as the owner, in the same language the '
-    'assistant used. Be concise but cite the specific evidence you '
-    'verified or the criterion you are holding the assistant to.\n'
-    '- Output ONLY the reply text — no quotation marks, no role labels, '
-    f'no preamble. The {_VU_DONE_SENTINEL} sentinel must appear on its '
-    'own when used.\n'
-    '- END your reply with EXACTLY ONE progress line, on its own final '
-    'line, in this exact form:\n'
-    '  [PROGRESS: resolved=X remaining=Y]\n'
-    '  where X = the number of the objective\'s acceptance criteria you '
-    'have now VERIFIED as genuinely done (cumulative, counting from the '
-    'start of the run), and Y = the number that remain unmet. Base X on '
-    'what you actually checked this turn, not on the assistant\'s claims. '
-    'This line is a machine signal that lets the run detect when it is '
-    'churning without real progress — it must be present and accurate on '
-    'every reply (including the one carrying '
-    f'{_VU_DONE_SENTINEL}, where Y should be 0).'
-)
+# ``_VU_ROLE_PROMPT`` is the SINGLE-SOURCE virtual-user persona, defined once
+# in ``lib.agent_verdict._handoff.VU_ROLE_PROMPT`` and imported here (the live
+# standalone loop) AND by ``lib.swarm.registry`` (the FlowExecutor engine
+# path).  It was previously an inline ~2000-char copy in this module that the
+# registry paraphrased and drifted from; consolidating it kills that
+# hand-copy.  The module-level ``_VU_ROLE_PROMPT`` name is retained (existing
+# call sites + tests reference it) as an alias so nothing else changes, and
+# ``VU_PROMPT_VERSION`` below still hashes the identical byte string.
 
 
 # Content-derived prompt version marker.  Stamped into every VU directive turn
@@ -285,7 +212,9 @@ def _get_or_persist_objective(conv_id: str, messages: list) -> str:
                         conv_id[:8], len(objective))
             return None  # proceed with the write
 
-        res = update_conversation_settings(conv_id, _mut)
+        # notify=False: autopilotObjective is internal run-bookkeeping, never
+        # rendered — invalidate the (now-stale) cache blob but don't push.
+        res = update_conversation_settings(conv_id, _mut, notify=False)
         if res is None:
             # Conv row absent — derive without persisting (original behaviour).
             return _extract_objective(messages)
@@ -330,7 +259,8 @@ def _get_or_persist_run_id(conv_id: str) -> str:
             logger.info('[Autopilot] conv=%s minted runId=%s', conv_id[:8], new_id)
             return None
 
-        res = update_conversation_settings(conv_id, _mut)
+        # notify=False: autopilotRunId is internal run-bookkeeping, not rendered.
+        res = update_conversation_settings(conv_id, _mut, notify=False)
         if res is None:
             return new_id  # conv row absent → ephemeral id (original behaviour)
         return out['id']
@@ -446,7 +376,9 @@ def _record_vu_turn_and_check_budget(conv_id: str, vu_text: str,
                 out['reason'] = 'no_progress'
             return None  # always persist the incremented counters
 
-        res = update_conversation_settings(conv_id, _mut)
+        # notify=False: turn-count / VU-history / progress ledger are internal
+        # budget bookkeeping, not rendered — invalidate cache but don't push.
+        res = update_conversation_settings(conv_id, _mut, notify=False)
         if res is None:
             return {'stop': False, 'reason': '', 'turn': 0}
         if out['stop']:
@@ -504,7 +436,8 @@ def _clear_run_id(conv_id: str) -> None:
                         '(run concluded; objective pin retained)', conv_id[:8])
             return None
 
-        update_conversation_settings(conv_id, _mut)
+        # notify=False: clearing internal run pins/counters is not rendered.
+        update_conversation_settings(conv_id, _mut, notify=False)
     except Exception as e:
         logger.debug('[Autopilot] _clear_run_id failed conv=%s: %s', conv_id[:8], e)
 
@@ -1320,7 +1253,10 @@ def _start_followup_task(task: dict, conv_id: str) -> str | None:
     # concurrent tool-state / autopilot settings write on the same row.
     try:
         from lib.conversations import set_conversation_settings
-        set_conversation_settings(conv_id, {'activeTaskId': new_task_id})
+        # notify=False: notify_conv_changed is emitted just below (no double
+        # push); the gate still invalidates the sidebar cache.
+        set_conversation_settings(conv_id, {'activeTaskId': new_task_id},
+                                  notify=False)
     except Exception as e:
         logger.debug('[Autopilot] activeTaskId update skipped: %s', e)
 

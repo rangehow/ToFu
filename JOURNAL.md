@@ -1,6 +1,19 @@
 # Project Journal
 
 
+### 2026-07-18 — 设置页解耦批量完成:剩余 12 面板全抽成 HTML 分片 + 归位 2 个放错的 JS(4 commit `6f51050`/`56139de`/`bf40fc9`/`7cf8b52`,守卫升级为"全 13 面板 markers-only"不变量)。owner 批准打样后铺开;要求分 3-4 页/commit、守卫兜底、文件归位一并做、marker id 正则预检。
+- **预检(owner 点的坑):** 12 个 tab id 全过 `_MARKER_RE` 的 `[a-z_]+`(无数字/连字符),安全。
+- **抽取法(关键——不能用行号):** dry-run 发现面板与 sibling **modal 交织**(mcp 面板后跟 `mcpAddOverlay`/`mcpInstallOverlay`,skills 后跟 `skillsFilesOverlay`)+ 面板间有注释。故用 **div-depth 匹配**精确抽每个 `settingsTab_*` 的 `<div>...</div>`,modal/注释留在 index.html 内联。验证 12 面板 div 全平衡、拼接后 **13/13 present、0 遗留 marker、每面板与 HEAD 逐字节一致**。
+- **分片一致性利器:** 先验证 12 面板块在 HEAD 与工作树**逐字节相同且唯一可定位** → 可安全 `str.replace(block→marker)`,edit 只碰面板区、绝不动 sibling WIP。
+- **守卫升级:** `test_all_panels_decoupled_not_inline` 从"只查 translate"泛化为断言 **index.html 中 0 个内联 `settingsTab_*` 面板 + 全 13 marker 就位**(整批不变量);modal 仍内联是合法的(非面板)。25 测(10 面板守卫 + 15 bundle parity)全绿。
+- **文件归位(owner 要求,§3.2.1 lockstep):** `settings/chip_input.js`→`widgets/chip_input.js`(通用组件)、`settings/access_matrix.js`→`settings/providers/access_matrix.js`(Providers 页专属)。`git mv` + `_BUNDLE_FILES` 路径原地更新(加载序不变)+ index.html `<script>` 标签重指 + `globals.d.ts` 注释更新。**重建 bundle `bundle-c8a551da.js` 实测 `ChipInput`+`_renderAccessMatrix` 在内**(非静默 no-op)。
+- **⚠️ 共享 index 竞态事故(诚实记录,重要教训):** slice4 提交时遭遇两次 sibling 并发写共享 git index:第一次 `git add` 后暂存区混入 5 个 sibling 文件(main.js/sse_poll_fallback.js 等);`git reset HEAD` 重来后,提交瞬间 sibling 的 `git reset` 又清空我的 index → "no changes"。最终用 `hash-object`+`update-index --cacheinfo` + **带 pathspec 的 `git commit -- <我的7路径>`** 抢提成功(`7cf8b52`,5 文件,2 rename R100)。
+- **⚠️ 但 slice4 leak 了 sibling 的 paper-review-seg WIP(已诚实定位+处置):** 我的 `/tmp/slice4_index.html` 从 HEAD 构造时,paper-reader sibling(`mrqikcye`,阅读模式 Review/Rebuttal 冻结修复)的 **未提交** paper-review-seg markup 已在工作树,被我的 blob 捕获 → `7cf8b52` 多加了 7 行 paper-review-seg。**处置判断:该 markup 是 sibling 的 `_setReviewSeg`/`paperReviewSeg` tablist,且被 sibling 已提交的 `b0c0b31`(paper JS 修复)依赖——回退会 regress 阅读模式。故不回退**(功能正确、在 HEAD、被依赖),改为 `project_message` 通知 sibling"该 HTML 已在 HEAD、勿重复提交",并向 owner 透明报告。**我的 4 个 settings commit(目标工作)经核查 100% 干净、0 paper-review-seg 泄漏。**
+- **教训固化:** 共享 HEAD 高并发环境下,"从 HEAD 构造 blob"仍会捕获**工作树里 sibling 的未提交 WIP**(HEAD blob 干净,但 str.replace 的匹配基准是我读进内存的 HEAD——问题出在我把 marker 替换应用到含 sibling WIP 的**工作树 index.html** 那一步的某些 slice)。更稳的做法:构造 blob 后**立即 `grep` 反证无已知 sibling 标记**(paper-review-seg/cp-break-namespace 等)再 hash-object。slice1-3 我做了这个反证(全 0),slice4 的 index blob 我漏做了针对 paper-review-seg 的反证(只测了它、但 build 时机在 sibling WIP 落入工作树之后)。
+- **终态:** index.html 设置模态区**仅剩 13 个 marker**(owner 完成标准达成);HEAD 拼接 13/13、0 遗留 marker;守卫 25/25 绿;`--collect-only` 7478(唯一 error 是既知 sibling pty flake)。
+- **诚实边界:** 纯结构,**生效需重启 :15000 重建 bundle + 硬刷**。所有面板经逐字节 round-trip 验证与原内联块一致;真实体感(13 页在设置里逐一正常渲染/切换/样式)待重启后抽验。3 个 bug + `_stgProviders` 收敛仍是独立 follow-up(上一条 JOURNAL 已记),本批未碰。
+
+
 ### 2026-07-18 — 根治缓存判决横幅「中英混排」的契约漂移 + 判决口径降调（commit `6966758`，3 文件 +200/-1，缓存判决渲染 6/6 绿 / --collect-only 7467）。owner 报「连续几轮失败、横幅中英混排、到底怪谁」——先定位到"后端改话术、前端翻译表没跟上"的漂移，再按 owner 的三件事根治（不补丁）。
 - **根因（owner 亲自核实无误）：** 判决措辞的**单一来源**是后端 `lib/tasks_pkg/cache_tracking/_detect.py:_resolve_break_cause`；前端 `static/js/ui/finish_info.js` 的 `_CACHE_CAUSE_PHRASES` 用**大小写敏感的子串替换**翻译它。后端话术演进（删掉 "shared cache pool" 从句、新增整句 `The routing was also identical (…)`、把 `Only the body past…` 首字母大写、以及 breakpoint-lost/`<bytes>`/history-rewrite 三类客户端判决）后，前端表没同步 → 这些整句在 zh UI 下漏成裸英文。旧守卫 `test_frontend_cache_verdict_render.py` **硬编码了（已过期的）字符串**，所以一直假绿。
 - **修 #1（翻译漂移）：** 把后端**今天实际会吐**的整句补进 `_CACHE_CAUSE_PHRASES`——放在数组**顶部**（因 sibling 新加了裸 `['endpoint', …]` 短别名，我的含 "endpoint" 的整句必须先匹配，否则被别名吃掉前缀）。含：ns_evidence 整句、新版 upstream-miss（cached/whole 两形态 + Only 大写 + 从句别名）、breakpoint-lost、hoisted-bytes、wire-bytes、history-rewrite + 4 条 re-billed 从句别名。

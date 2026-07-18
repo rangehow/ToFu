@@ -91,6 +91,7 @@ def _audit_config_once() -> None:
         audit_log('config_change', change='manual_compaction_intra_turn',
                   intra_turn_hot_rounds=_MANUAL_INTRA_TURN_HOT_ROUNDS,
                   manual_compact_min_tokens=_MANUAL_COMPACT_MIN_TOKENS,
+                  summary_input_char_cap=_SUMMARY_INPUT_CHAR_CAP,
                   approved_by='user')
     except Exception as e:
         logger.debug('[ManualCompact] config_change audit skipped: %s', e)

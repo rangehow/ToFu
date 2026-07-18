@@ -8,7 +8,10 @@ pure helpers that shape the summary LLM's input:
 """
 
 from lib.log import get_logger
-from lib.tasks_pkg.compaction._constants import _SUMMARY_MAX_TOKENS
+from lib.tasks_pkg.compaction._constants import (
+    _SUMMARY_MAX_TOKENS,
+    summary_input_char_cap,
+)
 from lib.tasks_pkg.compaction._tokens import (
     _get_context_limit,
     _usable_context,
@@ -113,14 +116,34 @@ What the assistant should do next to continue the task.
 """
 
 
-def _format_messages_for_summary(messages: list) -> str:
+_ELISION_MARKER = '\n\n... [middle of conversation elided for summary] ...\n\n'
+
+
+def _format_messages_for_summary(messages: list,
+                                 char_budget: int | None = None) -> str:
     """Render messages as readable text for the summary LLM.
 
     INCLUDES user msgs and assistant msgs with non-empty natural-language
     content.  EXCLUDES tool messages and tool-call-only assistant
     messages — they don't help a relevance-rating cheap model.
+
+    When ``char_budget`` is given and the full render would exceed it, the
+    input is trimmed MESSAGE-AWARE rather than by a blind string slice:
+
+      * EVERY ``[user]`` part is kept VERBATIM — the summary system prompt's
+        section 6 ("All User Messages — MANDATORY") must never lose a user
+        instruction, so a middle-slice on the joined string (which could cut a
+        user turn in half or drop it entirely) is unacceptable.
+      * Only ASSISTANT parts are elided, from the MIDDLE outward (keep the
+        earliest goals + the most recent working state), until the total fits.
+      * A single ``_ELISION_MARKER`` records where assistant content was
+        dropped. If the user parts alone exceed the budget they are STILL all
+        kept (correctness over budget — never silently drop an instruction).
+
+    ``char_budget=None`` (the default / legacy call) renders everything with no
+    elision, byte-identical to the pre-budget behaviour.
     """
-    parts = []
+    parts: list[tuple[str, str]] = []   # (role, rendered_part)
     skipped_tool = 0
     skipped_tool_only_assistant = 0
 
@@ -153,7 +176,7 @@ def _format_messages_for_summary(messages: list) -> str:
         if len(text) > 3000:
             text = text[:1500] + '\n...[truncated]...\n' + text[-1000:]
 
-        parts.append(f'[{role}] {text}')
+        parts.append((role, f'[{role}] {text}'))
 
     if skipped_tool or skipped_tool_only_assistant:
         logger.debug(
@@ -162,7 +185,67 @@ def _format_messages_for_summary(messages: list) -> str:
             skipped_tool, skipped_tool_only_assistant, len(parts),
         )
 
-    return '\n\n'.join(parts)
+    rendered = [p for _, p in parts]
+    if char_budget is None:
+        return '\n\n'.join(rendered)
+
+    joined = '\n\n'.join(rendered)
+    if len(joined) <= char_budget:
+        return joined
+
+    return _elide_to_budget(parts, char_budget)
+
+
+def _elide_to_budget(parts: list[tuple[str, str]], char_budget: int) -> str:
+    """Trim ``parts`` to ``char_budget`` by eliding MIDDLE assistant content only.
+
+    ``parts`` is the ordered ``(role, rendered)`` list from
+    :func:`_format_messages_for_summary`.  Every ``user`` part is always kept;
+    assistant parts are dropped from the middle outward (nearest the centre
+    first) so the earliest goals and the most recent working state both
+    survive.  A single :data:`_ELISION_MARKER` marks the elision.  If the user
+    parts alone still exceed the budget, they are ALL kept regardless (never
+    drop a user instruction).
+    """
+    sep = '\n\n'
+    keep = [True] * len(parts)
+    asst_idx = [i for i, (role, _) in enumerate(parts) if role != 'user']
+
+    def _rendered_size() -> int:
+        """Exact size of the reassembled output, including EVERY marker run —
+        so the greedy loop never under-estimates (multiple dropped runs each
+        emit their own marker)."""
+        out: list[str] = []
+        prev_dropped = False
+        for i, (_, p) in enumerate(parts):
+            if keep[i]:
+                out.append(p)
+                prev_dropped = False
+            elif not prev_dropped:
+                out.append(_ELISION_MARKER.strip())
+                prev_dropped = True
+        return len(sep.join(out)) if out else 0
+
+    # Drop assistant parts nearest the CENTRE first, working outward, so the
+    # head (early goals) and tail (recent working state) are the last to go.
+    # User parts are never in ``asst_idx`` → always kept (summary prompt §6).
+    mid = len(parts) / 2.0
+    for i in sorted(asst_idx, key=lambda i: abs(i - mid)):
+        if _rendered_size() <= char_budget:
+            break
+        keep[i] = False
+
+    # Reassemble, collapsing every maximal run of dropped parts into one marker.
+    out: list[str] = []
+    prev_dropped = False
+    for i, (_, p) in enumerate(parts):
+        if keep[i]:
+            out.append(p)
+            prev_dropped = False
+        elif not prev_dropped:
+            out.append(_ELISION_MARKER.strip())
+            prev_dropped = True
+    return sep.join(out)
 
 
 def _summary_input_char_budget(task: dict | None) -> int:
@@ -191,7 +274,16 @@ def _summary_input_char_budget(task: dict | None) -> int:
     # char), so the char cap is SAFE for Chinese/Japanese input — the exact
     # case that overflowed a 128k window in production (est_input≈122k on a
     # 200k-char summary). For latin-heavy text it trims a bit more than
-    # strictly necessary, but the summary is still produced. Clamp to the
-    # historical 200k ceiling, which only binds on large (>=~300k) windows —
-    # so 1M-context models are byte-identical to the old fixed cap.
-    return max(20_000, min(200_000, input_token_budget))
+    # strictly necessary, but the summary is still produced.
+    #
+    # §10.1 CEILING (owner sign-off 2026-07-18): clamped to _SUMMARY_INPUT_CHAR_CAP
+    # (64k), down from the old 200k. The 200k cap was ~3× redundant: a manual
+    # /compact's entire wall clock is the single cheap-model summary call
+    # (measured ~96% of a 3 MB conv's time), and feeding it up to 200k chars is
+    # what made the button slow. 64k still yields a faithful 9-section
+    # working-state summary while roughly a third of the prompt → a proportionally
+    # faster call. On small windows ``usable`` still binds first (unchanged);
+    # the cap only bites on large (>=~200k) windows. Elision beyond the cap is
+    # MESSAGE-AWARE (see _format_messages_for_summary): every user message is
+    # kept, only middle assistant content is dropped.
+    return max(20_000, min(summary_input_char_cap(), input_token_budget))

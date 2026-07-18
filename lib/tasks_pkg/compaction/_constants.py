@@ -71,6 +71,44 @@ With 1M context that's still 100k tokens of headroom."""
 _SUMMARY_MAX_TOKENS = 3000
 """Maximum output tokens for the summary LLM call."""
 
+_SUMMARY_INPUT_CHAR_CAP = 64_000
+"""Hard ceiling on the summary LLM's INPUT size, in characters (§10.1).
+
+The manual /compact's entire wall clock is the single cheap-model summary call
+(benchmarked ~96% of a 3 MB conversation's compaction time; all projection +
+reconcile CPU is <150 ms). The old ceiling was 200_000 chars — ~3× larger than
+a faithful 9-section working-state summary needs — so a giant fold fed the
+cheap model a ~200k-char prompt and that single call is what felt slow.
+
+Lowered 200k → 64k (owner sign-off 2026-07-18, §10.1). ``_summary_input_char_budget``
+takes ``min(this, usable - reserves)`` so small-window models still bind on
+``usable`` first (unchanged); this cap only bites on large (>=~200k) windows —
+exactly the multi-MB conversations where /compact was slow. Trimming beyond the
+cap is MESSAGE-AWARE (``_format_messages_for_summary``): every ``[user]`` message
+is preserved verbatim (summary prompt §6 is MANDATORY), only middle assistant
+content is elided. Env-overridable, FAIL-OPEN via
+``TOFU_SUMMARY_INPUT_CHAR_CAP`` (unset/garbage→64k; clamped to a sane
+[20k, 400k] range so a typo can neither disable the cap nor starve the summary)."""
+
+
+def summary_input_char_cap() -> int:
+    """Resolve the summary-input char ceiling (§10.1 hyperparameter).
+
+    FAIL-OPEN: unset/non-int → :data:`_SUMMARY_INPUT_CHAR_CAP`; any value is
+    clamped to [20_000, 400_000] so a bad override can neither remove the cap
+    (defeating the speed win) nor starve the summary below a usable floor. Read
+    at call time so an operator can retune without a restart."""
+    raw = (os.environ.get('TOFU_SUMMARY_INPUT_CHAR_CAP') or '').strip()
+    if not raw:
+        return _SUMMARY_INPUT_CHAR_CAP
+    try:
+        val = int(raw)
+    except (ValueError, TypeError) as e:
+        logger.debug('[Compact] TOFU_SUMMARY_INPUT_CHAR_CAP=%r not an int (%s) '
+                     '— using default %d', raw, e, _SUMMARY_INPUT_CHAR_CAP)
+        return _SUMMARY_INPUT_CHAR_CAP
+    return max(20_000, min(400_000, val))
+
 _SUMMARY_COOLDOWN = 30.0
 """Seconds between consecutive summary attempts for the same conv_id.
 Prevents rapid re-triggering when the model generates a long response

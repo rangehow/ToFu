@@ -33,26 +33,23 @@ def _generate_query_aware_summary(messages: list, current_query: str,
     """
     from lib.llm_dispatch import dispatch_chat
 
-    formatted = _format_messages_for_summary(messages)
     tag = f'{log_prefix}[Summary]' if log_prefix else '[Summary]'
+
+    # MESSAGE-AWARE elision: pass the budget INTO the formatter so it trims by
+    # dropping middle ASSISTANT content while keeping EVERY user message (summary
+    # prompt §6 is MANDATORY). The old code sliced the joined string blindly,
+    # which could cut a user turn in half or drop it entirely — losing user
+    # instructions. See _format_messages_for_summary / _elide_to_budget.
+    _char_budget = _summary_input_char_budget(task)
+    _full = _format_messages_for_summary(messages)
+    formatted = _format_messages_for_summary(messages, char_budget=_char_budget)
 
     logger.info('%s Formatting %d messages for summary (%s), query=%.80s',
                 tag, len(messages), _human_size(len(formatted)), current_query)
-
-    _char_budget = _summary_input_char_budget(task)
-    if len(formatted) > _char_budget:
-        original_len = len(formatted)
-        # Keep the head (early goals/decisions) and a larger tail (recent
-        # working state), eliding the middle — 1/3 head, 2/3 tail.
-        _head = _char_budget // 3
-        _tail = _char_budget - _head
-        formatted = (
-            formatted[:_head]
-            + '\n\n... [middle of conversation omitted for summary] ...\n\n'
-            + formatted[-_tail:]
-        )
-        logger.info('%s Input truncated to model window: %s → %s (budget %s)',
-                    tag, _human_size(original_len), _human_size(len(formatted)),
+    if len(formatted) < len(_full):
+        logger.info('%s Input elided to budget (message-aware, all user msgs '
+                    'kept): %s → %s (budget %s)',
+                    tag, _human_size(len(_full)), _human_size(len(formatted)),
                     _human_size(_char_budget))
 
     user_content = (

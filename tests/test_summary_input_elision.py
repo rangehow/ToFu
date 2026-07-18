@@ -117,3 +117,27 @@ def test_user_messages_kept_even_when_they_alone_exceed_budget():
     out = _format_messages_for_summary(msgs, char_budget=20_000)
     missing = [t for t in toks if t not in out]
     assert not missing, f'dropped user messages under tight budget: {missing[:5]}'
+
+
+
+# ── Audit trail: the §10.1 config_change must ACTUALLY fire (not swallowed) ──
+
+def test_config_change_audit_fires_with_cap(monkeypatch):
+    """Owner required an audit_log('config_change', summary_input_char_cap=...,
+    approved_by='user') for the §10.1 cap change. Regression guard: a missing
+    import of _SUMMARY_INPUT_CHAR_CAP would raise NameError INSIDE the
+    try/except in _audit_config_once and be silently swallowed at debug — the
+    audit entry would never fire and no one would notice. Assert the call
+    actually lands with the cap value."""
+    import lib.tasks_pkg.compaction._manual as man
+    calls = []
+    monkeypatch.setattr(man, 'audit_log', lambda *a, **k: calls.append((a, k)))
+    monkeypatch.setattr(man, '_CONFIG_CHANGE_LOGGED', False)
+    man._audit_config_once()
+    assert calls, ('config_change audit never fired — a NameError (e.g. a '
+                   'missing constant import) was swallowed by the try/except')
+    _args, kw = calls[0]
+    assert kw.get('change') == 'manual_compaction_intra_turn', kw
+    assert kw.get('approved_by') == 'user', kw
+    assert kw.get('summary_input_char_cap') == 64_000, (
+        f'cap not recorded in the sign-off audit entry: {kw}')

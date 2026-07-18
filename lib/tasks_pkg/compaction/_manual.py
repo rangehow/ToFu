@@ -57,6 +57,7 @@ from lib.tasks_pkg.compaction._constants import (
     _MANUAL_RECONCILE_HARD_ITER_CAP,
     _MAX_PRESERVE_TURNS,
     _PRESERVE_BUDGET_RATIO,
+    _SUMMARY_INPUT_CHAR_CAP,
     manual_reconcile_budget_sec,
 )
 from lib.tasks_pkg.compaction._layer2 import (

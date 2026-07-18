@@ -257,6 +257,86 @@ class DeliverablesTest(unittest.TestCase):
         self.assertEqual(seq['w'], 2)
 
 
+class ParallelBodyVerdictTest(unittest.TestCase):
+    """A parallel fan-out INSIDE a loop body must feed the verdict guards a
+    DETERMINISTIC aggregate of all branches, not a nondeterministic single
+    branch's counts (the _iter_producers / _aggregate_iter_producers fix)."""
+
+    def _loop_with_parallel_body(self, max_iter=4):
+        # loop → parallel → {w1, w2} → barrier → critic → loop ; loop → stop
+        return {'schema': 'tofu.orchestration/v1', 'name': 'LP', 'nodes': [
+            _ctrl('s', 'start'), _ctrl('l', 'loop', max_iterations=max_iter),
+            _ctrl('p', 'parallel', max_concurrent=2),
+            _role('w1', 'worker'), _role('w2', 'worker'),
+            _ctrl('b', 'barrier'), _role('c', 'critic'), _ctrl('e', 'stop')],
+            'edges': [{'from': 's', 'to': 'l'}, {'from': 'l', 'to': 'p'},
+                      {'from': 'p', 'to': 'w1'}, {'from': 'p', 'to': 'w2'},
+                      {'from': 'w1', 'to': 'b'}, {'from': 'w2', 'to': 'b'},
+                      {'from': 'b', 'to': 'c'}, {'from': 'c', 'to': 'l'},
+                      {'from': 'l', 'to': 'e'}]}
+
+    def test_aggregate_helper_folds_branches(self):
+        eng = FlowExecutor(self._loop_with_parallel_body(), agent_runner=_MockRunner())
+        # No producers yet → empty (old empty-snapshot semantics).
+        self.assertEqual(eng._aggregate_iter_producers(), {})
+        eng._iter_producers = [
+            {'node_id': 'w1', 'role': 'worker', 'sc_count': 0,
+             'explore_count': 2, 'names': [], 'reported': True},
+            {'node_id': 'w2', 'role': 'worker', 'sc_count': 3,
+             'explore_count': 0, 'names': ['write_file', 'apply_diff', 'write_file'],
+             'reported': True},
+        ]
+        agg = eng._aggregate_iter_producers()
+        self.assertEqual(agg['sc_count'], 3)          # summed
+        self.assertEqual(agg['explore_count'], 2)     # summed
+        self.assertTrue(agg['reported'])              # any
+        self.assertEqual(sorted(agg['names']),
+                         ['apply_diff', 'write_file', 'write_file'])
+        # Single producer folds byte-identically to that producer.
+        eng._iter_producers = [eng._iter_producers[1]]
+        self.assertEqual(eng._aggregate_iter_producers(), eng._iter_producers[0])
+
+    def test_zero_deliverable_guard_needs_ALL_branches_idle(self):
+        # One branch WRITES every turn (state-changing), the other only reads.
+        # The aggregate sc_count > 0 each turn → the zero-deliverable guard
+        # must NEVER fire (the iteration DID produce work), even though one
+        # branch alone looks idle.
+        def runner(node, ctx, it):
+            role = node.get('role')
+            if node['id'] == 'w1':
+                return {'output': 'read', 'status': 'completed',
+                        'error': '', 'tool_names': ['read_files']}
+            if node['id'] == 'w2':
+                return {'output': 'wrote', 'status': 'completed',
+                        'error': '', 'tool_names': ['write_file']}
+            if role == 'critic':
+                return {'output': 'CONTINUE: keep going', 'status': 'completed', 'error': ''}
+            return {'output': 'x', 'status': 'completed', 'error': ''}
+        events = []
+        FlowExecutor(self._loop_with_parallel_body(max_iter=4),
+                     agent_runner=runner, on_event=events.append).run()
+        self.assertFalse(any(e['type'] == 'zero_deliverable_guard' for e in events),
+                         'aggregate sc_count>0 must suppress the zero-deliverable guard')
+
+    def test_zero_deliverable_guard_fires_when_all_branches_idle(self):
+        # BOTH branches only explore every turn; critic keeps CONTINUE. The
+        # aggregate is genuinely zero-deliverable → the guard fires (parity
+        # with the linear-loop behavior, now aggregated across the fan-out).
+        def runner(node, ctx, it):
+            role = node.get('role')
+            if node['id'] in ('w1', 'w2'):
+                return {'output': 'looked', 'status': 'completed',
+                        'error': '', 'tool_names': ['read_files']}
+            if role == 'critic':
+                return {'output': 'CONTINUE: keep going', 'status': 'completed', 'error': ''}
+            return {'output': 'x', 'status': 'completed', 'error': ''}
+        events = []
+        FlowExecutor(self._loop_with_parallel_body(max_iter=5),
+                     agent_runner=runner, on_event=events.append).run()
+        self.assertTrue(any(e['type'] == 'zero_deliverable_guard' for e in events),
+                        'all-idle fan-out must trip the zero-deliverable guard')
+
+
 class ReplanTest(unittest.TestCase):
     """Engine ports endpoint's CONTINUE_PLANNER + PLAN_DEFECT gate."""
 

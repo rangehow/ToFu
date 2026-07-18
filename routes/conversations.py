@@ -1661,8 +1661,13 @@ async def patch_conv_settings(conv_id):
     Unlike PUT (which requires full messages), this only touches the settings
     column — safe to call for shell conversations that haven't loaded messages.
 
-    Body: { folderId?: str|null, pinned?: bool, ... }
-    All keys in the body are merged into the existing settings dict.
+    Body: { folderId?: str|null, pinned?: bool, touchUpdatedAt?: bool, ... }
+    All keys in the body are merged into the existing settings dict, EXCEPT the
+    reserved control flag ``touchUpdatedAt``: when true, the row's ``updated_at``
+    is also bumped to now so the conversation floats to the top of the
+    recency-first sidebar (durably, across reloads) — used by the "open an old
+    conversation → float to top" behaviour. It is popped out and never written
+    into the settings JSON.
 
     Native-async: request body is awaited; the serialized read-merge-write
     (settings_store, which guards against clobbering a concurrent settings
@@ -1673,6 +1678,14 @@ async def patch_conv_settings(conv_id):
     if not data:
         return api_bad_request('No settings provided')
 
+    # ★ Control flag (NOT a settings key): when set, ALSO bump the row's
+    #   ``updated_at`` so the conversation floats to the top of the recency-first
+    #   sidebar and the new order SURVIVES a reload. Used by the "click an old
+    #   conversation → float to top" open-bump. Popped out here so it never
+    #   pollutes the settings JSON blob. Everything else is merged as normal.
+    _touch_updated = bool(data.pop('touchUpdatedAt', False))
+    _touch_ms = int(time.time() * 1000)
+
     def _work():
         # Serialized read-merge-write (see settings_store) so a settings PATCH
         # doesn't clobber a concurrent activeTaskId / autopilot / tool-state
@@ -1681,6 +1694,10 @@ async def patch_conv_settings(conv_id):
         from lib.database._core import _pool_get, _pool_put
         db = _pool_get()
         try:
+            # A settings-only PATCH may carry ONLY the touch flag (no settings
+            # keys left after the pop). set_conversation_settings with an empty
+            # dict is a row-existence check that skips the UPDATE — exactly what
+            # we want when the caller's sole intent is the updated_at bump.
             res = set_conversation_settings(
                 conv_id, data, user_id=DEFAULT_USER_ID, db=db)
             return True if res is not None else None
@@ -1690,6 +1707,13 @@ async def patch_conv_settings(conv_id):
     ok = await asyncio.to_thread(_work)
     if ok is None:
         return api_not_found('Not found')
+    if _touch_updated:
+        # Recency bump — separate from the settings write so it works even when
+        # `data` had no settings keys. Mirrors the sidebar's `updated_at DESC`
+        # sort so the reordering is durable across a reload.
+        await async_execute(
+            'UPDATE conversations SET updated_at=? WHERE id=? AND user_id=?',
+            (_touch_ms, conv_id, DEFAULT_USER_ID), domain=DOMAIN_CHAT)
     # Metadata-only change (folder move / pin / activeTaskId): rev unchanged →
     # client does a debounced sidebar refresh, not a body refetch.
     _notify_conv_changed(conv_id, rev=None)

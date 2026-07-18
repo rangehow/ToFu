@@ -681,6 +681,13 @@ function dispatchSSEEvent(line, ctx) {
           return false;
         }
       }
+      /* ★ Seed the elapsed timer from the SERVER-AUTHORITATIVE task start so a
+       *   refresh / reconnect continues from the real elapsed instead of
+       *   restarting from 0 (twStart used the connect instant). min-guarded in
+       *   _seedStreamTimerStart — can only move startTime earlier. */
+      if (ev.createdAt && typeof _seedStreamTimerStart === 'function') {
+        _seedStreamTimerStart(convId, ev.createdAt);
+      }
       /* ★ Endpoint mode reconnection: rebuild conv.messages from endpointTurns
        *   and set the correct phase (working/reviewing) so streaming goes to
        *   the right target (assistantMsg vs _epCriticMsg). */

@@ -1860,6 +1860,11 @@ async def chat_stream(task_id):
                     EventType.STATE, content=task['content'],
                     thinking=task['thinking'], status=task['status'],
                 )
+                # ★ Server-authoritative task start (ms) — seed the elapsed timer
+                #   from the real start on a Last-Event-ID resume too.
+                _created = task.get('created_at')
+                if _created:
+                    resume_state['createdAt'] = int(_created * 1000)
                 if task['error']:
                     resume_state['error'] = task['error']
                 resume_state['toolRounds'] = task['toolRounds']
@@ -1891,6 +1896,11 @@ async def chat_stream(task_id):
                     EventType.STATE, content=task['content'],
                     thinking=task['thinking'], status=task['status'],
                 )
+                # ★ Server-authoritative task start (ms) so a reconnecting client
+                #   seeds its elapsed timer from the REAL start, not from 0.
+                _created = task.get('created_at')
+                if _created:
+                    state['createdAt'] = int(_created * 1000)
                 if task['error']:
                     state['error'] = task['error']
                 if task['toolRounds']:
@@ -2232,6 +2242,12 @@ def chat_poll(task_id):
             'id': task['id'], 'status': _reported_status,
             'content': task['content'], 'thinking': task['thinking'],
         }
+        # ★ Server-authoritative task start (ms). Lets the frontend seed its
+        #   elapsed timer from the REAL start on a reconnect/refresh instead of
+        #   restarting from 0 — see health_stream_timer.js::_seedStreamTimerStart.
+        _created = task.get('created_at')
+        if _created:
+            r['createdAt'] = int(_created * 1000)
         # Field list MUST mirror chat_poll's DB-path loop and
         # _extract_task_meta. See _extract_task_meta docstring.
         for key in ('error', 'toolRounds', 'finishReason', 'usage', 'preset',

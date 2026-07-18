@@ -841,7 +841,15 @@ function _installViewportHeightGuard() {
     }
     // ★ Folder assign button — handled above
     const item = e.target.closest(".conv-item");
-    if (item && item.dataset.convId) loadConversation(item.dataset.convId);
+    if (item && item.dataset.convId) {
+      /* ★ Float-to-top on open (durable): a genuine user click bumps the
+       *   conversation's updatedAt (+persists) so it rises to the top of the
+       *   recency-first sidebar. Scoped to THIS click path — programmatic opens
+       *   (boot restore / undo / duplicate) call loadConversation directly and
+       *   must NOT rewrite recency. Active-task guarded inside the helper. */
+      if (typeof _bumpConvOnOpen === 'function') _bumpConvOnOpen(item.dataset.convId);
+      loadConversation(item.dataset.convId);
+    }
   }
   document
     .getElementById("convList")

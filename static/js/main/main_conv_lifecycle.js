@@ -120,6 +120,48 @@ function _reconnectServerTaskIfIdle(id) {
   }
   return true;
 }
+/* ★ "Click an old conversation → float it to the top" (durable).
+ *
+ * The sidebar sorts recency-first on `updatedAt` (_convSorter), and opening a
+ * conversation historically did NOT touch `updatedAt` — so an old conv stayed
+ * buried after you opened it. This bumps `updatedAt = now` on open and persists
+ * it via a lightweight settings PATCH (touchUpdatedAt flag → server bumps the
+ * `updated_at` column), so the float-to-top SURVIVES a page reload.
+ *
+ * GUARD (mirrors saveConversations): NEVER bump while the conversation has a
+ * live/active task (`activeStreams.has(id) || conv.activeTaskId`). During
+ * streaming, saveConversations already deliberately withholds the `updatedAt`
+ * bump to stop sidebar flicker under the throttled refresh — an open-bump here
+ * would fight that and reintroduce the flicker. Opening a streaming conv still
+ * floats via _convSorter's active-first tier anyway.
+ *
+ * Called ONLY from the genuine user sidebar-click path (main.js), NOT from
+ * programmatic opens (boot restore, undo, duplicate) which pass through
+ * loadConversation directly — merely restoring/creating a conv must not
+ * rewrite its recency.
+ */
+function _bumpConvOnOpen(id) {
+  const conv = conversations.find((c) => c.id === id);
+  if (!conv) return;
+  // Active-task guard — see saveConversations' streaming carve-out.
+  if (activeStreams.has(id) || conv.activeTaskId) return;
+  conv.updatedAt = Date.now();
+  // Re-sort + repaint the sidebar so the row floats up immediately.
+  conversations.sort(_convSorter);
+  if (typeof renderConversationList === 'function') renderConversationList();
+  // Write-through to the IDB cache so a reload replays the new recency before
+  // the server list arrives (keeps the float-to-top from flashing back).
+  if (typeof ConvCache !== 'undefined') {
+    try { ConvCache.put(conv); } catch (_e) { /* best-effort */ }
+  }
+  // Persist to the server so the new order is durable across reloads. The
+  // settings PATCH carries ONLY the touchUpdatedAt control flag (no settings
+  // keys) → the endpoint bumps `updated_at` without writing the settings blob.
+  if (typeof Api !== 'undefined' && Api.conversations && Api.conversations.patchSettings) {
+    Api.conversations.patchSettings(id, { touchUpdatedAt: true })
+      .catch((e) => console.warn('[bumpConvOnOpen] PATCH failed:', e && e.message));
+  }
+}
 function loadConversation(id) {
   _sendGeneration++;           // ★ invalidate any in-flight sendMessage
   _purgeEmptyConvs();

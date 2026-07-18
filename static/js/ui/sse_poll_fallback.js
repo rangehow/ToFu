@@ -113,6 +113,14 @@ async function _pollFallback(convId, taskId, stream, assistantMsg) {
         }
       }
 
+      /* ★ Seed the elapsed timer from the SERVER-AUTHORITATIVE task start
+       *   (createdAt, ms) so a reconnect that lands on the POLL path — the
+       *   common case on a flaky tunnel — continues from the real elapsed
+       *   instead of restarting from 0. min-guarded (only moves earlier). */
+      if (data.createdAt && typeof _seedStreamTimerStart === 'function') {
+        _seedStreamTimerStart(convId, data.createdAt);
+      }
+
       /* ★ Epic C sharded-backend affinity hint. Under TOFU_RUNTIME_STATE_BACKEND
        *   =redis the poll endpoint (routes/chat.py) returns status='running'
        *   PLUS reconnect:true when the DB has a live 'running' checkpoint but

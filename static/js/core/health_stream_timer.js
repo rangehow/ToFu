@@ -773,6 +773,41 @@ function twStart(convId) {
   _streamTimers.set(convId, { startTime: now, lastDataTime: now, intervalId, _lastHealthResult: undefined, _healthChecking: false });
   _serverAlive = true; // optimistic on stream start
 }
+
+/**
+ * Rewind the elapsed timer's start to the SERVER-AUTHORITATIVE task start.
+ *
+ * `twStart` seeds `startTime` with the client-side connect instant, so on a
+ * refresh / reconnect (which re-arms the stream) the displayed elapsed would
+ * restart from 0 even though the backend task has been running for a while.
+ * The backend surfaces the real start as `createdAt` (ms) on the SSE `state`
+ * snapshot and the `chat_poll` response; call this with that value so the
+ * timer continues from the true elapsed.
+ *
+ * min-guarded: we only ever move `startTime` EARLIER (toward the real start),
+ * never later — so the displayed elapsed can never jump BACKWARD, and a bogus
+ * future timestamp (clock skew) is ignored. No-op when there is no live timer
+ * for the conv or the value is not a positive number.
+ *
+ * @param {string} convId
+ * @param {number} serverStartMs Server task start, epoch ms (`createdAt`).
+ */
+function _seedStreamTimerStart(convId, serverStartMs) {
+  const info = _streamTimers.get(convId);
+  if (!info) return;
+  const ms = Number(serverStartMs);
+  if (!Number.isFinite(ms) || ms <= 0) return;
+  // Ignore a start claimed in the future (clock skew) — never inflate elapsed
+  // beyond "now", and never move startTime later than it already is.
+  if (ms >= Date.now()) return;
+  if (ms < info.startTime) {
+    info.startTime = ms;
+    // Repaint immediately so the corrected elapsed shows without waiting for
+    // the next 1s tick (only paints when this is the active conv).
+    try { _updateStreamTimerUI(convId); } catch (_e) { /* jsdom / no DOM */ }
+  }
+}
+if (typeof window !== 'undefined') window._seedStreamTimerStart = _seedStreamTimerStart;
 /* ★ Build the updateStreamingUI payload for a streaming conv, applying the
  *   message-checkpoint fallback that EVERY render site must honour: the live
  *   `streamBufs` buffer is authoritative ONLY once it holds data; before that

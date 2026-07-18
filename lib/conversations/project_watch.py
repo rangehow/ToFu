@@ -31,9 +31,9 @@ from __future__ import annotations
 import json
 import threading
 import time
-import uuid
 
 from lib.database import DOMAIN_CHAT, get_thread_db
+from lib.ids import short_id
 from lib.log import audit_log, get_logger
 from lib.timeutil import now_ms
 
@@ -96,7 +96,7 @@ def add_watch_item(project_path: str, kind: str, text: str, *,
         return {'ok': False, 'error': 'invalid kind'}
     if not text:
         return {'ok': False, 'error': 'empty text'}
-    item_id = 'watch_' + uuid.uuid4().hex[:16]
+    item_id = short_id('watch_', 16)
     ts = _now_ms()
     try:
         db = get_thread_db(DOMAIN_CHAT)

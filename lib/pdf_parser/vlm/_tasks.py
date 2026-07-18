@@ -14,8 +14,8 @@ in-flight parse jobs.
 
 import threading
 import time as _time
-import uuid
 
+from lib.ids import short_id
 from lib.log import get_logger
 from lib.pdf_parser.vlm._parse import vlm_parse_pdf
 
@@ -32,7 +32,7 @@ _TASK_TTL = 1800  # 30 min
 def start_vlm_task(pdf_bytes: bytes, filename: str = 'document.pdf',
                    model: str | None = None) -> str:
     """Launch a background VLM parse. Returns *task_id* for polling."""
-    task_id = uuid.uuid4().hex[:12]
+    task_id = short_id(n=12)
 
     with _vlm_lock:
         _vlm_tasks[task_id] = {

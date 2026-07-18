@@ -31,11 +31,11 @@ import json
 import os
 import re
 import time
-import uuid
 from dataclasses import dataclass
 from typing import List, Optional
 
 from lib.database import DOMAIN_SYSTEM, get_thread_db as get_db
+from lib.ids import short_id
 from lib.log import audit_log, get_logger
 
 logger = get_logger(__name__)
@@ -143,7 +143,7 @@ def _verify_password(plaintext: str, stored: str) -> bool:
 # ── CRUD ─────────────────────────────────────────────────────────────
 
 def _new_user_id() -> str:
-    return f'usr_{uuid.uuid4().hex[:24]}'
+    return short_id('usr_')
 
 
 def create_user(

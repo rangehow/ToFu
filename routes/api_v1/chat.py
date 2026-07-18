@@ -22,7 +22,6 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-import uuid
 
 from flask import Blueprint
 
@@ -38,6 +37,7 @@ from lib.billing.request_flow import (
     estimate_prompt_tokens, release_reservation, reserve_for_task, settle_task,
 )
 from lib.idempotency import idempotent_post
+from lib.ids import short_id
 from lib.log import audit_log, get_logger
 from lib.openapi import api_meta
 from lib.rate_limit_api import record_tokens
@@ -135,7 +135,7 @@ def _completion_response(task, *, model: str, requested_id: str = '') -> dict:
     _tr_in = _tun['input']
     _tr_out = _tun['output']
     body = {
-        'id': requested_id or f'chatcmpl-{uuid.uuid4().hex[:24]}',
+        'id': requested_id or short_id('chatcmpl-'),
         'object': 'chat.completion',
         'created': int(time.time()),
         'model': model,
@@ -200,7 +200,7 @@ async def _stream_generator(task, model: str, requested_id: str,
     terminal ``[DONE]`` line so the customer is debited even when the
     HTTP response is in stream mode.
     """
-    completion_id = requested_id or f'chatcmpl-{uuid.uuid4().hex[:24]}'
+    completion_id = requested_id or short_id('chatcmpl-')
     emitted_role = False
     cursor = 0
     _billed = False
@@ -399,7 +399,7 @@ async def chat_completions():
     conversation_id = optional_str(body, 'conversation_id',
                                     default='', max_len=200)
     if not conversation_id:
-        conversation_id = f'api-{uuid.uuid4().hex[:12]}'
+        conversation_id = short_id('api-', 12)
 
     auth = current_auth()
     audit_log('api_chat_start',

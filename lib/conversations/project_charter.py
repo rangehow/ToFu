@@ -38,9 +38,9 @@ from __future__ import annotations
 
 import json
 import time
-import uuid
 
 from lib.database import DOMAIN_CHAT, get_thread_db
+from lib.ids import short_id
 from lib.log import audit_log, get_logger
 
 logger = get_logger(__name__)
@@ -126,7 +126,7 @@ def propose_amendment(project_path: str, conv_id: str, proposal: str, *,
     # A stable proposal id threaded into the event payload so a later commit /
     # dismiss can resolve THIS proposal by id (not fragile text equality) →
     # the pending count decrements durably once acted on.
-    proposal_id = 'prop_' + uuid.uuid4().hex[:16]
+    proposal_id = short_id('prop_', 16)
     try:
         from lib.conversations.project_feed import emit_project_event
         ev = emit_project_event(

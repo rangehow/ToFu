@@ -12,8 +12,8 @@ endpoint loop, so no cycle.
 """
 
 import threading
-import uuid
 
+from lib.ids import short_id
 from lib.log import get_logger
 
 logger = get_logger(__name__)
@@ -94,7 +94,7 @@ def run_task_sync(config: dict, *, timeout: float = 600, progress_fn=None) -> st
         The assistant's final response text, or an error message.
     """
     cfg = dict(config)
-    conv_id = cfg.pop('conversationId', f'sync-{uuid.uuid4().hex[:8]}')
+    conv_id = cfg.pop('conversationId', short_id('sync-', 8))
     messages = cfg.pop('messages', [])
 
     task = create_task(conv_id, messages, cfg)

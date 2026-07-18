@@ -33,7 +33,7 @@ def stage_pending(proposal: dict) -> dict:
     preference proposed twice doesn't pile up), and persist. Returns the
     stored proposal dict (with id).
     """
-    import uuid
+    from lib.ids import short_id
     from lib.json_store import write_json_atomic
 
     text = (proposal.get('text') or '').strip()
@@ -44,7 +44,7 @@ def stage_pending(proposal: dict) -> dict:
         if (p.get('text') or '').strip() == text:
             return p  # already staged — idempotent
     entry = {
-        'id': uuid.uuid4().hex[:12],
+        'id': short_id(n=12),
         'text': text,
         'header': proposal.get('header') or _DEFAULT_HEADER,
         'evidence': (proposal.get('evidence') or '')[:300],

@@ -81,7 +81,6 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-import uuid
 
 from flask import Blueprint
 
@@ -98,6 +97,7 @@ from lib.billing.request_flow import (
 )
 from lib.byo_resolve import resolve_model_and_provider
 from lib.idempotency import idempotent_post
+from lib.ids import short_id
 from lib.llm_dispatch.ephemeral import dispose_ephemeral_slot
 from lib.log import audit_log, get_logger
 from lib.openapi import api_meta
@@ -359,7 +359,7 @@ def _final_response(task: dict, *, model: str, requested_id: str,
     rounds = task.get('toolRounds') or []
     last_round = rounds[-1] if rounds else None
     out: dict = {
-        'id': requested_id or f'run-{uuid.uuid4().hex[:24]}',
+        'id': requested_id or short_id('run-'),
         'object': 'agent.run',
         'created': int(time.time()),
         'model': model,
@@ -527,7 +527,7 @@ async def agent_run():
     conversation_id = optional_str(body, 'conversation_id',
                                     default='', max_len=200)
     if not conversation_id:
-        conversation_id = f'agent-{uuid.uuid4().hex[:12]}'
+        conversation_id = short_id('agent-', 12)
     trajectory_fmt = optional_str(body, 'trajectory',
                                     default='', max_len=40) or None
     if trajectory_fmt and trajectory_fmt not in AVAILABLE_FORMATS:
@@ -686,7 +686,7 @@ async def agent_run():
 
     # ── 5. Stream or block ────────────────────────────────────────
     if stream:
-        completion_id = requested_id or f'run-{uuid.uuid4().hex[:24]}'
+        completion_id = requested_id or short_id('run-')
         return sse_response(
             _stream_generator(task, model_id, completion_id,
                               billing_user_id=billing_user_id),

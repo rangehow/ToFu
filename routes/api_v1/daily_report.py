@@ -597,8 +597,8 @@ async def add_manual_task():
     if not re.match(r'^\d{4}-\d{2}-\d{2}$', date_str):
         return api_bad_request('Invalid date format')
 
-    import uuid
-    todo_id = f'todo-{uuid.uuid4().hex[:8]}'
+    from lib.ids import short_id
+    todo_id = short_id('todo-', 8)
 
     report = _load_report(date_str) or {
         'streams': [], 'tomorrow': [], 'tasks': [],

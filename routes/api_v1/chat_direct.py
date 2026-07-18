@@ -35,13 +35,13 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-import uuid
 
 from flask import Blueprint
 
 from lib.agent_core.admission import controller
 from lib.api_response import api_bad_request, api_error, sse_response
 from lib.idempotency import idempotent_post
+from lib.ids import short_id
 from lib.log import audit_log, get_logger
 from lib.openapi import api_meta
 from lib.request_parser import (
@@ -247,7 +247,7 @@ async def chat_stream_direct():
                         or body.get('thinkingDepth') or ''),
     )
     requested_id = optional_str(body, 'id', default='', max_len=200)
-    completion_id = requested_id or f'chatcmpl-{uuid.uuid4().hex[:24]}'
+    completion_id = requested_id or short_id('chatcmpl-')
 
     auth = current_auth()
     audit_log('api_chat_stream_direct',

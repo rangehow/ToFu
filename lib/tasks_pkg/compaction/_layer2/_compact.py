@@ -7,8 +7,8 @@
 
 import sys as _sys
 import time
-import uuid
 
+from lib.ids import short_id
 from lib.log import get_logger
 from lib.tasks_pkg.compaction._archive import _archive_transcript
 from lib.tasks_pkg.compaction._constants import (
@@ -423,7 +423,7 @@ def force_compact_if_needed(messages: list, task: dict | None = None,
                        'caller can fall back', pfx)
         return False
 
-    compact_call_id = f'compact_{uuid.uuid4().hex[:12]}'
+    compact_call_id = short_id('compact_', 12)
 
     messages.append({
         'role': 'assistant',

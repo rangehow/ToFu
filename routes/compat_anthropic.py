@@ -12,8 +12,6 @@ SDK compatibility.
 
 from __future__ import annotations
 
-import uuid
-
 from flask import Blueprint
 
 from lib.agent_core.admission import (
@@ -30,6 +28,7 @@ from lib.compat.anthropic import (
     translate_anthropic_request,
 )
 from lib.idempotency import idempotent_post
+from lib.ids import short_id
 from lib.llm_dispatch.ephemeral import dispose_ephemeral_slot
 from lib.log import audit_log, get_logger
 from lib.openapi import api_meta
@@ -98,7 +97,7 @@ async def messages():
               n_messages=len(msgs), stream=options['stream'])
 
     from lib.tasks_pkg import create_task, spawn_task
-    conv_id = f'compat-anthropic-{uuid.uuid4().hex[:12]}'
+    conv_id = short_id('compat-anthropic-', 12)
     task = create_task(conv_id, msgs, cfg)
     task['_inline_messages'] = True
     task['_compat_anthropic'] = True

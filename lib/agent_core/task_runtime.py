@@ -37,9 +37,9 @@ Standard task dict shape:
 import asyncio
 import threading
 import time
-import uuid
 from typing import Any, Callable, Optional
 
+from lib.ids import short_id
 from lib.log import get_logger
 
 logger = get_logger(__name__)
@@ -105,7 +105,7 @@ class TaskRuntime:
     def create(self, *, task_id: str = '', meta: Optional[dict] = None) -> dict:
         """Create and register a new task. Returns the task dict."""
         if not task_id:
-            task_id = uuid.uuid4().hex[:12]
+            task_id = short_id(n=12)
         task = {
             'id': task_id,
             'kind': self.kind,

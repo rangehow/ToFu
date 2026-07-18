@@ -15,21 +15,14 @@ Pure functions, no Flask imports.
 
 from __future__ import annotations
 
-import uuid
-
+from lib.ids import short_id  # noqa: F401 — re-exported for back-compat
 from lib.log import get_logger
 
 logger = get_logger(__name__)
 
-
-def short_id(prefix: str = '', n: int = 24) -> str:
-    """Return ``<prefix><n hex chars>`` — the id shape both compat surfaces use.
-
-    Replaces the scattered ``f'chatcmpl-{uuid.uuid4().hex[:24]}'`` /
-    ``'msg_' + uuid.uuid4().hex[:16]`` / ``'toolu_' + uuid.uuid4().hex[:16]``
-    literals with one helper.
-    """
-    return f'{prefix}{uuid.uuid4().hex[:n]}'
+# ``short_id`` now lives in lib/ids.py (the single, dependency-free home shared
+# by billing / conversations / tasks / routes). Re-exported here so the compat
+# translators + test_compat_common keep importing it from lib.compat._common.
 
 
 def apply_common_cfg(cfg: dict, body: dict) -> None:

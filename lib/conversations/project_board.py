@@ -30,9 +30,9 @@ whose lease has expired is reported ``open``).
 from __future__ import annotations
 
 import json
-import uuid
 
 from lib.database import DOMAIN_CHAT, get_thread_db
+from lib.ids import short_id
 from lib.log import audit_log, get_logger
 from lib.timeutil import now_ms
 
@@ -300,7 +300,7 @@ def post_task(project_path: str, conv_id: str, title: str, *,
                        (project_path,)).fetchone()
         if n and int(n['c']) >= _MAX_BOARD_TASKS:
             return {'ok': False, 'error': 'board full (coarse epics only)'}
-        task_id = 'pt_' + uuid.uuid4().hex[:16]
+        task_id = short_id('pt_', 16)
         ts = _now_ms()
         deps = json.dumps([str(d) for d in (depends_on or [])], ensure_ascii=False)
         wset = json.dumps([str(w) for w in (write_set or [])], ensure_ascii=False)

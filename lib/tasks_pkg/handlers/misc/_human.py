@@ -40,8 +40,7 @@ def _finalize_tool_round(*args, **kwargs):
                        description='Ask the user a question and wait for their response')
 def _handle_ask_human(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg, project_path, project_enabled, all_tools=None):
     """Handle ask_human tool — block indefinitely until user responds."""
-    import uuid as _uuid
-
+    from lib.ids import short_id
     from lib.tasks_pkg.human_guidance import request_human_guidance
 
     question = fn_args.get('question', '')
@@ -88,7 +87,7 @@ def _handle_ask_human(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg, p
         _finalize_tool_round(task, rn, round_entry, [meta])
         return tc_id, tool_content, False
 
-    guidance_id = f'hg_{_uuid.uuid4().hex[:12]}'
+    guidance_id = short_id('hg_', 12)
     logger.info('[Executor] ask_human: question=%.200s, type=%s, '
                 'options=%d, guidance_id=%s, task=%s',
                 question, response_type, len(options), guidance_id,

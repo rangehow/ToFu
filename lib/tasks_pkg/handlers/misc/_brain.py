@@ -182,7 +182,7 @@ def _make_intervention_approval_fn(task, rn, tc_id, round_entry):
     auto-authorized (the VU may freely answer questions, but must not silently
     green-light stopping a sibling) → returns None (advisory fallback).
     """
-    import uuid as _uuid
+    from lib.ids import short_id
 
     def _approval_fn(prompt: str):
         from lib.tasks_pkg.autopilot import is_autopilot_enabled
@@ -190,7 +190,7 @@ def _make_intervention_approval_fn(task, rn, tc_id, round_entry):
             logger.info('[Peer] hard-abort auto-DENIED under autopilot task=%s',
                         task.get('id', '?')[:8])
             return None
-        guidance_id = f'hg_{_uuid.uuid4().hex[:12]}'
+        guidance_id = short_id('hg_', 12)
         options = [{'label': 'Approve abort', 'value': 'approve'},
                    {'label': 'Deny', 'value': 'deny'}]
         round_entry['status'] = 'awaiting_human'

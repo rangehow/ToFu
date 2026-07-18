@@ -506,6 +506,69 @@
     else delete s.el.dataset.compacting;
   }
 
+  /* ── B: live-streaming summary overlay ──────────────────────────────
+   * The manual /compact summary LLM call dominates the wait (~96%). To make
+   * that wait FEEL responsive, the backend streams the summary on an
+   * independent push channel ('compaction', convId) — summary_start →
+   * summary_delta* → summary_done. This overlay is a small anchored panel that
+   * "grows" the summary text as deltas arrive, then dissolves when the real
+   * boundary card lands (the success closure reloads + re-renders it). Purely
+   * cosmetic: if push is unavailable the POST still completes and the card
+   * appears on reload exactly as before. */
+  let _liveCard = null;         // { el, bodyNode, text, convId }
+
+  function _openLiveSummaryCard(convId) {
+    _closeLiveSummaryCard();
+    const anchor = _state && _state.el;
+    if (!anchor || typeof document === 'undefined') return;
+    const el = document.createElement('div');
+    el.id = 'ctxLiveSummary';
+    el.className = 'ctx-live-summary';
+    el.innerHTML =
+      '<div class="ctx-live-summary-head">' +
+        _tt('compactNow.streaming', '正在生成压缩摘要…') + '</div>' +
+      '<div class="ctx-live-summary-body"></div>';
+    document.body.appendChild(el);
+    const r = anchor.getBoundingClientRect();
+    el.style.position = 'fixed';
+    el.style.left = Math.round(r.left) + 'px';
+    el.style.top = Math.round(r.bottom + 6) + 'px';
+    _liveCard = { el, bodyNode: el.querySelector('.ctx-live-summary-body'),
+                  text: '', convId };
+  }
+
+  function _appendLiveSummary(convId, chunk) {
+    if (!_liveCard || _liveCard.convId !== convId || !chunk) return;
+    _liveCard.text += chunk;
+    if (_liveCard.bodyNode) {
+      // Plain text (textContent) — never render partial markdown as HTML mid
+      // stream. The settled boundary card renders markdown after reload.
+      _liveCard.bodyNode.textContent = _liveCard.text;
+      _liveCard.bodyNode.scrollTop = _liveCard.bodyNode.scrollHeight;
+    }
+  }
+
+  function _closeLiveSummaryCard() {
+    if (_liveCard && _liveCard.el) {
+      try { _liveCard.el.remove(); } catch (e) { /* detached already */ }
+    }
+    _liveCard = null;
+  }
+
+  /* Push handler for the ('compaction', convId) channel. Grows the overlay on
+   * each delta; the terminal states (done/failed) are handled by the POST
+   * closure (which reloads the real card), so here they only stop the stream. */
+  function _onCompactionPush(convId, ev) {
+    if (!ev || (ev.taskId && ev.taskId !== convId)) return;
+    if (ev.type === 'summary_start') {
+      _openLiveSummaryCard(convId);
+    } else if (ev.type === 'summary_delta') {
+      _appendLiveSummary(convId, ev.text || '');
+    }
+    // summary_done / summary_failed: the POST closure takes over (reload +
+    // renderChat or terminal toast), so we leave teardown to _runManualCompaction.
+  }
+
   /* ── The full success CLOSURE: POST → reload messages → re-render the
    *    boundary card → drop the gauge (scheme B) → flash the badge. Without
    *    the reload+re-render the user would click and see nothing change
@@ -528,6 +591,16 @@
     /* Resolve to a single {msg, level} terminal outcome, THEN toast once. */
     let outcome = null;
     _setCompacting(true);
+    /* B: subscribe to the live-summary push channel BEFORE the POST so we don't
+     * miss the summary_start the backend emits as soon as summarization begins.
+     * Best-effort — pushSubscribe may be unavailable (older bundle / no socket);
+     * the POST + reload closure works regardless. */
+    let _pushHandler = null;
+    if (typeof pushSubscribe === 'function') {
+      _pushHandler = (ev) => _onCompactionPush(convId, ev);
+      try { pushSubscribe('compaction', convId, _pushHandler); }
+      catch (e) { console.debug('[compactNow] push subscribe failed', e); _pushHandler = null; }
+    }
     try {
       let res;
       try {
@@ -589,6 +662,13 @@
       };
     } finally {
       _setCompacting(false);
+      // B: tear down the live-summary stream — the settled boundary card (from
+      // the reload+renderChat closure) or the terminal toast now stands in.
+      if (_pushHandler && typeof pushUnsubscribe === 'function') {
+        try { pushUnsubscribe('compaction', convId, _pushHandler); }
+        catch (e) { console.debug('[compactNow] push unsubscribe failed', e); }
+      }
+      _closeLiveSummaryCard();
       if (outcome && typeof showToast === 'function') {
         showToast(outcome.msg, outcome.level);
       }

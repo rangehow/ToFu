@@ -49,6 +49,7 @@ from __future__ import annotations
 import time
 
 from lib.log import audit_log, get_logger
+from lib.agent_core.push import push_event
 from lib.agent_core.store import get_conversation_store
 from lib.tasks_pkg.compaction._archive import _archive_transcript
 from lib.tasks_pkg.compaction._constants import (
@@ -76,6 +77,25 @@ logger = get_logger(__name__)
 
 _SUMMARY_HEADER = '## 上下文已压缩（主动 /compact）'
 """Marker heading prepended to the persisted summary message body."""
+
+# B — live progress channel. A manual /compact runs in the IDLE state (no live
+# task carries an SSE stream), so we push the summary as it streams on an
+# INDEPENDENT push channel keyed by conv_id. The frontend context-bar subscribes
+# to ('compaction', conv_id) around its POST and grows the card from the deltas.
+_COMPACTION_CHANNEL = 'compaction'
+
+
+def _push_compaction(conv_id: str, payload: dict) -> None:
+    """Best-effort push on the compaction channel (never breaks compaction).
+
+    The DB rewrite is the source of truth; the live card is a cosmetic overlay.
+    A missing subscriber / hub error must never surface as a compaction
+    failure, so every exception is swallowed at debug level."""
+    try:
+        push_event(_COMPACTION_CHANNEL, conv_id, payload)
+    except Exception as e:
+        logger.debug('[ManualCompact] conv=%s push %s skipped: %s',
+                     conv_id[:8] if conv_id else '?', payload.get('type'), e)
 
 # §10.1: 档B introduces two hyperparameters (intra-turn hot-round count +
 # manual-compact floor). Owner sign-off recorded in JOURNAL 2026-07-16. Emit a
@@ -520,13 +540,24 @@ def compact_conversation_now(
                            'toolRounds': list(fold['cold_rounds'])})
     old_api = _project(fold_input, config)
     current_query = _extract_current_query(_project(plan['reserve_raw'], config))
+    # B — stream the summary to the compaction card. summary_start tells the
+    # frontend to show a live-growing card; each on_delta pushes the next chunk;
+    # summary_done (below, after persist) carries the final stats. All pushes are
+    # best-effort (see _push_compaction) so a dead channel never breaks compaction.
+    _push_compaction(conv_id, {'type': 'summary_start', 'archiveId': archive_id})
+
+    def _on_summary_delta(chunk: str) -> None:
+        _push_compaction(conv_id, {'type': 'summary_delta', 'text': chunk,
+                                   'archiveId': archive_id})
+
     # Phase timing: the summary LLM call dominates a manual /compact's wall clock
     # (measured ~96% on a 3 MB conv — the projection/reconcile CPU is <5%). This
     # is the ONE number that explains "compaction is slow", so log it explicitly
     # with the input size so a slow compaction is diagnosable from app.log alone.
     _summarize_t0 = time.monotonic()
     summary_text = _generate_query_aware_summary(
-        old_api, current_query, '[ManualCompact]', conv_id=conv_id, task=task)
+        old_api, current_query, '[ManualCompact]', conv_id=conv_id, task=task,
+        on_delta=_on_summary_delta)
     _summarize_ms = (time.monotonic() - _summarize_t0) * 1000
     logger.info('[ManualCompact] conv=%s summary LLM call: %.0f ms  '
                 '(fold_msgs=%d, fold_tokens≈%d) — dominant cost of /compact',
@@ -535,6 +566,7 @@ def compact_conversation_now(
     if not summary_text:
         logger.warning('[ManualCompact] conv=%s summary generation failed — '
                        'leaving conversation intact', log_id)
+        _push_compaction(conv_id, {'type': 'summary_failed', 'archiveId': archive_id})
         return {'ok': False, 'error': 'summary_failed', 'archiveId': archive_id}
 
     recent_files = _extract_recently_accessed_files(full_api)
@@ -669,6 +701,18 @@ def compact_conversation_now(
                 'msgs: %d → %d  archive=%s',
                 log_id, tokens_before, tokens_after, reduction_pct,
                 msgs_before, msgs_after, archive_id)
+
+    # B — terminal push: the card swaps its live-growing text for the settled
+    # boundary card (same stats the REST response carries). Best-effort.
+    _push_compaction(conv_id, {
+        'type': 'summary_done',
+        'archiveId': archive_id,
+        'tokensBefore': int(tokens_before),
+        'tokensAfter': int(tokens_after),
+        'msgsBefore': int(msgs_before),
+        'msgsAfter': int(msgs_after),
+        'reductionPct': reduction_pct,
+    })
 
     return {
         'ok': True,

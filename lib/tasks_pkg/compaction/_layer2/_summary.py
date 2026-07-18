@@ -21,7 +21,8 @@ logger = get_logger(__name__)
 def _generate_query_aware_summary(messages: list, current_query: str,
                                    log_prefix: str = '',
                                    conv_id: str = '',
-                                   task: dict | None = None) -> str | None:
+                                   task: dict | None = None,
+                                   on_delta=None) -> str | None:
     """Call a cheap model to generate a query-aware summary.
 
     Degrades gracefully so the proactive path actually works on a
@@ -30,8 +31,17 @@ def _generate_query_aware_summary(messages: list, current_query: str,
     ``capability='cheap'`` dispatch fails (no model tagged cheap, or the
     single model is momentarily exhausted) it retries once against any
     text-capable slot before giving up.
+
+    ``on_delta``: optional ``fn(text_chunk)`` callback. When given, the summary
+    is STREAMED (``dispatch_stream``) and every content delta is forwarded to
+    ``on_delta`` as it arrives, so a caller can push the growing summary to a
+    live UI (the manual /compact card). The full accumulated text is still
+    returned — identical result to the non-streaming path — so callers that
+    also want the final string are unaffected. ``on_delta`` exceptions are
+    swallowed (best-effort UI) and never abort generation. When ``on_delta`` is
+    ``None`` the original non-streaming ``dispatch_chat`` path is used verbatim.
     """
-    from lib.llm_dispatch import dispatch_chat
+    from lib.llm_dispatch import dispatch_chat, dispatch_stream
 
     tag = f'{log_prefix}[Summary]' if log_prefix else '[Summary]'
 
@@ -57,17 +67,40 @@ def _generate_query_aware_summary(messages: list, current_query: str,
         f'## Conversation History to Compress\n\n{formatted}'
     )
 
+    _summary_messages = [
+        {'role': 'system', 'content': _SUMMARY_SYSTEM_PROMPT},
+        {'role': 'user', 'content': user_content},
+    ]
+
     def _dispatch(capability: str):
-        return dispatch_chat(
-            [
-                {'role': 'system', 'content': _SUMMARY_SYSTEM_PROMPT},
-                {'role': 'user', 'content': user_content},
-            ],
-            max_tokens=_SUMMARY_MAX_TOKENS,
-            temperature=0,
-            capability=capability,
-            log_prefix=tag,
-        )
+        """Return ``(content, usage)`` for either path.
+
+        With ``on_delta`` set we STREAM and forward each delta live; otherwise
+        we use the non-streaming ``dispatch_chat`` (byte-identical to before).
+        ``dispatch_stream`` returns ``(content, finish_reason, usage)`` — we
+        drop the finish_reason so both branches yield the same 2-tuple."""
+        if on_delta is None:
+            return dispatch_chat(
+                _summary_messages,
+                max_tokens=_SUMMARY_MAX_TOKENS, temperature=0,
+                capability=capability, log_prefix=tag)
+
+        def _on_content(chunk: str):
+            if not chunk:
+                return
+            try:
+                on_delta(chunk)
+            except Exception as _cb_e:
+                # Best-effort live UI — a push failure must never abort the
+                # summary generation (the DB rewrite is the source of truth).
+                logger.debug('%s on_delta callback failed: %s', tag, _cb_e)
+
+        content, _finish, usage = dispatch_stream(
+            _summary_messages,
+            on_content=_on_content,
+            max_tokens=_SUMMARY_MAX_TOKENS, temperature=0,
+            capability=capability, log_prefix=tag)
+        return content, usage
 
     try:
         try:

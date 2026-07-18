@@ -31,6 +31,19 @@ class AnthropicSSETranslator:
         self.model = model
         # content-block index → 'text' | 'tool_use' | 'thinking'
         self._block_types: dict = {}
+        # Running RAW Anthropic usage, merged across message_start (carries
+        # input_tokens + cache_creation_input_tokens + cache_read_input_tokens)
+        # and message_delta (carries the growing output_tokens). Anthropic
+        # splits usage across these two events: message_start reports the
+        # prompt-side counts (incl. the all-important cache_read), message_delta
+        # reports only the final output_tokens. The downstream SSEAccumulator
+        # OVERWRITES usage on each chunk (self.usage = chunk['usage']), so if we
+        # emitted a message_delta usage holding ONLY output_tokens the cache
+        # counts from message_start would be clobbered to zero — every cached
+        # turn mis-recorded as cache_read=0, corrupting the cost panel, the
+        # wallet debit, AND detect_cache_break (which then blames 'server-side').
+        # Merging here lets each emitted usage be the COMPLETE picture.
+        self._usage_raw: dict = {}
 
     def translate(self, data_str: str) -> list:
         try:
@@ -43,7 +56,8 @@ class AnthropicSSETranslator:
         if etype == 'message_start':
             usage = (ev.get('message') or {}).get('usage') or {}
             if usage:
-                return [{'choices': [{'delta': {}}], 'usage': _convert_usage(usage)}]
+                self._usage_raw = dict(usage)
+                return [{'choices': [{'delta': {}}], 'usage': _convert_usage(self._usage_raw)}]
             return []
 
         if etype == 'content_block_start':
@@ -88,7 +102,24 @@ class AnthropicSSETranslator:
             if stop:
                 chunk['choices'][0]['finish_reason'] = _STOP_REASON_MAP.get(stop, 'stop')
             if ev.get('usage'):
-                chunk['usage'] = _convert_usage(ev['usage'])
+                # Merge onto the message_start counts rather than replace them.
+                # output_tokens is the growing cumulative count → take the
+                # delta's value. input_tokens / cache_creation_input_tokens /
+                # cache_read_input_tokens are fixed at prompt-processing time
+                # and were reported by message_start; the delta usually OMITS
+                # them (→ absent, not zero), so keep the larger of the two so a
+                # cache-read count can never regress to zero here.
+                for k, v in ev['usage'].items():
+                    if v is None:
+                        continue
+                    if k == 'output_tokens':
+                        self._usage_raw[k] = v
+                    else:
+                        try:
+                            self._usage_raw[k] = max(int(self._usage_raw.get(k) or 0), int(v))
+                        except (TypeError, ValueError):
+                            self._usage_raw[k] = v
+                chunk['usage'] = _convert_usage(self._usage_raw)
             return [chunk]
 
         if etype == 'message_stop':

@@ -289,6 +289,43 @@ def test_manual_compaction_archives_before_rewrite(monkeypatch):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+#  Speed — do NOT re-project the WHOLE conversation to api-form more than once.
+#
+#  `_transform_messages` (the raw→api projection) is the dominant CPU cost of a
+#  manual /compact on a multi-MB conversation. The engine used to project the
+#  ENTIRE raw list three separate times (route `tokens_before`, plan-floor
+#  `total_tokens`, and `_extract_recently_accessed_files`). Those are redundant:
+#  one whole-conversation projection can feed all of them. This guard counts
+#  full-conversation projections and fails if the engine regresses to >1.
+# ═══════════════════════════════════════════════════════════════════════════
+
+@pytest.mark.unit
+def test_manual_compaction_projects_whole_conv_at_most_once(monkeypatch):
+    import lib.tasks_pkg.conv_message_builder as cmb
+    store = _FakeStore(_long_conv())
+    man = _install(monkeypatch, store)
+    full_len = len(store.messages)
+
+    real_transform = cmb._transform_messages
+    whole_conv_projections = {'n': 0}
+
+    def _counting_transform(msgs, cfg):
+        # A "whole-conversation" projection is one whose input length equals the
+        # full stored message count — the expensive case we must not repeat.
+        if isinstance(msgs, list) and len(msgs) >= full_len:
+            whole_conv_projections['n'] += 1
+        return real_transform(msgs, cfg)
+
+    monkeypatch.setattr(cmb, '_transform_messages', _counting_transform)
+
+    res = man.compact_conversation_now('c', config={}, task={'convId': 'c'})
+    assert res['ok'] is True
+    assert whole_conv_projections['n'] <= 1, (
+        f"manual compaction projected the whole conversation "
+        f"{whole_conv_projections['n']}× — must reuse a single projection")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 #  Test 4 — idempotence: compacting an already-compacted conv stays valid
 # ═══════════════════════════════════════════════════════════════════════════
 

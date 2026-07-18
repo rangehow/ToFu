@@ -240,6 +240,7 @@ def plan_manual_compaction(
     config: dict | None = None,
     task: dict | None = None,
     max_turns: int | None = None,
+    total_tokens: int | None = None,
 ) -> dict | None:
     """Compute the manual-compaction plan in RAW index space (pure, no DB/LLM).
 
@@ -274,7 +275,11 @@ def plan_manual_compaction(
     # FLOOR: the ONLY size-based decline. A conversation whose entire projected
     # size is below the floor genuinely has nothing worth compacting — so a full
     # 1M single-giant-turn conversation is never wrongly refused.
-    total_tokens = _raw_estimate_tokens(raw_messages, config)
+    # Projecting the whole raw list to api-form is the dominant CPU cost on a
+    # multi-MB conversation; the DB orchestrator computes it once and threads it
+    # in as ``total_tokens`` so we never re-project the full list here (speed).
+    if total_tokens is None:
+        total_tokens = _raw_estimate_tokens(raw_messages, config)
     if total_tokens < _MANUAL_COMPACT_MIN_TOKENS:
         return None
 
@@ -470,14 +475,24 @@ def compact_conversation_now(
         return {'ok': False, 'error': 'not_found'}
     raw_messages, updated_at = loaded
 
+    # Project the WHOLE raw conversation to api-form exactly ONCE — this is the
+    # dominant CPU cost of a manual /compact on a multi-MB conversation. Reuse
+    # this single projection for: the plan-floor total (via total_tokens=),
+    # tokens_before, and the recently-accessed-files scan below. The old code
+    # projected the full list three separate times, which made the button feel
+    # slow. Per-turn boundary sizing still projects small turn SLICES (cheap and
+    # inherent), not the whole list.
+    full_api = _project(raw_messages, config)
+    tokens_before = _estimate_total_tokens(full_api)
+
     plan = plan_manual_compaction(
-        raw_messages, config=config, task=task, max_turns=keep_recent_turns)
+        raw_messages, config=config, task=task, max_turns=keep_recent_turns,
+        total_tokens=tokens_before)
     if plan is None:
         logger.info('[ManualCompact] conv=%s nothing to compact (%d msgs)',
                     log_id, len(raw_messages))
         return {'ok': False, 'error': 'nothing_to_compact'}
 
-    tokens_before = _raw_estimate_tokens(raw_messages, config)
     msgs_before = len(raw_messages)
 
     # ── ARCHIVE the full pre-compaction snapshot BEFORE any rewrite ──
@@ -510,7 +525,7 @@ def compact_conversation_now(
                        'leaving conversation intact', log_id)
         return {'ok': False, 'error': 'summary_failed', 'archiveId': archive_id}
 
-    recent_files = _extract_recently_accessed_files(_project(raw_messages, config))
+    recent_files = _extract_recently_accessed_files(full_api)
     if recent_files:
         file_list = '\n'.join(f'  - {f}' for f in recent_files)
         summary_text += (

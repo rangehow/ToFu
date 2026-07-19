@@ -1,5 +1,14 @@
 # Project Journal
 
+### 2026-07-19 — 输入栏按钮重叠根修 + 模式选择器统一为「向上弹出小方块」(commit `5ecf10c`,3 文件 +98/-44,jsdom 烟测通过 + parity/declutter/icon-box/breakpoint 19 测全绿)。owner 报「输入框按钮全挤在一起、很丑」,并提议「把 Chat/Pro/Studio 做成点击向上展开的方块」+「统一这些 logo 和按钮的设计语言,和页面风格一致」。
+- **根因(挤压/重叠):** 三段式内联转盘 `.chat-mode-seg`(约 192px、`flex-wrap:nowrap`)+ 更多抽屉 + 编排流程 + 模型选择器 + 搜索 + 发送,在窄宽度下超出一行宽度 → 按钮互相重叠。转盘是这排里唯一的"横向大块",既占宽又和其它"药丸+弹层"控件视觉不一致。
+- **打比方:** 一排本该并肩站的人,中间硬塞了一张三人沙发(转盘),挤得两边的人叠在一起。把沙发换成一个和旁边同款的折叠凳(弹出式药丸),排面立刻不挤、且风格统一。
+- **修法(一箭双雕):** 把三段转盘收成**单个药丸触发器** `#chatModeToggle`(显示当前档的图标+名+向上箭头),点击**向上弹出** Chat/Pro/Studio 列表——**结构和视觉都克隆既有的「编排流程」弹层**(复用 `.flow-menu`/`.flow-menu-item`,三套主题自动继承样式)。省出约 100px(消除重叠),且让 **模型 · 模式 · 编排流程** 成为一致的"药丸+向上弹层"控件族。
+- **改动三处:** ①`index.html` 用 `#submenuMode`→`.submenu-trigger`+`.chat-mode-menu` 替换 `.chat-mode-seg` 标记;②`main_toolbar_ui.js` `_applyChatModeUI` 改为画触发器的图标+文字+菜单选中行(原来是画三个分段按钮),新增 `toggleChatModeMenu`/`closeChatModeMenu`+外点关闭(镜像 flow 菜单),同一时刻只开一个弹层,**`_CHAT_MODE_DEFAULTS` 一字未动→parity 测试仍绿**;③`styles.css` 删掉失效的 `.chat-mode-seg*`(base+tofu+light),触发器继承 `.submenu-trigger`、菜单继承 `.flow-menu`,只留 active-Studio 的 accent 是 bespoke。
+- **验证:** jsdom 烟测(触发器画标签+图标、开/关、选 Air→标签变"Chat"+选中态+`data-mode` 同步、3 个菜单项);`test_chat_mode_parity`(FE↔BE 表相等)+`test_frontend_toolbar_declutter`(切片 `_populateModelDropdown`/`toggleSubmenu` 未受影响)+`icon-box`+`breakpoint` 共 19 测全绿;styles.css brace depth=0、`node --check` JS OK。CSS 重建 `styles-e35fbf1e.css`。
+- **git 纪律(共享 HEAD、~130 sibling 改动在场):** `reset -q HEAD .` → 仅 add 3 文件 → `commit -F- -- <3 路径>` → 泄漏探针 = **NO LEAK**。`5ecf10c`。
+- **诚实边界:** 前端标记+逻辑+CSS,由 jsdom 烟测 + 4 相邻守卫套件验证。**生效需重建 JS/CSS bundle + 硬刷**(styles.css 走 hash、main_toolbar_ui.js 已在 `_BUNDLE_FILES`;`GET /` 按 mtime 自动重建,已跑进程无需重启)。真实体感(按钮不再重叠、模式弹层与流程弹层同款、点 Studio 仍弹项目面板)待硬刷后真机抽验。**未做(避免过度扩张 test-guarded 共享 CSS):** 未大改 Search/Send 的基础形状——tofu 主题里它们已被归一到 clay 像素药丸族(`::before` 关掉了搜索的旋转渐变边),真正的"异类"是转盘,已解决;移动端底部 sheet 的 `.mobile-mode-item` 三行保持原样(仍调 `setChatMode`,工作正常)。
+
 ### 2026-07-19 — 全站样式崩坏根修:三档转盘 CSS 前面遗留一个「空且未闭合」的 `.submenu-trigger{`,吞掉其后约 9000 行 CSS(commit `606c100`,单文件 -2 行,brace 平衡从 depth=1 复位到 0)。owner 报「相关样式全崩、连"上下文便签"也裸奔,发消息后 user 气泡都渲染不出来」。
 - **诊断(字节级证据,非猜测):** 侧栏/工具栏有样式=`styles.css` 已加载;崩坏只在消息流。对 `styles.css` 做**注释/字符串感知的花括号深度扫描**——final depth=**1**、全程从不为负 → 是真·缺一个 `}`(不是数据 URI 里的假花括号)。深度最后一次归 0 在 **12066 行**,其后一路悬挂到文件尾(21342 行),正好覆盖气泡+便签等所有靠后规则。
 - **根因:** 上一轮三档转盘提交 `374a13e` 在 12069 行插入了一个**空体、无闭合**的 `[data-theme="tofu"] .submenu-trigger{`(真正完整的同名规则在 12086 行重复了一份),那个孤立 `{` 把之后约 9000 行全当成自己的规则体吞掉,浏览器从此丢弃所有后续样式。工具栏/侧栏定义在 12069 之前,所以幸存——这就是"越靠后越崩"的成因。

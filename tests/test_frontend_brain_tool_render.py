@@ -114,6 +114,36 @@ check('transition_class', trHtml.includes('ptool-board-transition'));
 check('transition_title', trHtml.includes('FINISH EPIC'));
 check('transition_verb', trHtml.includes('completed') || trHtml.includes('complete'));
 
+// ── project_board_post → transition card MUST show the posted epic title +
+//    id chip + open status (the reported "shows nothing" bug). ──
+const postRound = {
+  status: 'done', toolName: 'project_board_post', query: 'project_board_post',
+  toolContent: 'Posted epic pt_abc123def456 to the board.', toolRounds: [],
+  results: [{ source: 'Board', boardTransition: {
+    verb: 'post', taskId: 'pt_abc123def456',
+    title: 'Redesign the release dashboard', status: 'open' } }],
+};
+const postHtml = _renderUnifiedToolLine(postRound, false);
+check('post_transition_class', postHtml.includes('ptool-board-transition'));
+check('post_transition_title', postHtml.includes('Redesign the release dashboard'));
+check('post_transition_id_chip', postHtml.includes('ptool-board-tr-id') && postHtml.includes('pt_abc123def456'));
+check('post_transition_verb', postHtml.includes('posted') || postHtml.includes('post'));
+check('post_transition_open_status', postHtml.includes('ptool-board-mini-open'));
+check('post_transition_head_friendly', postHtml.includes('Updated the team board'));
+
+// ── A transition with an EMPTY title must degrade to a labelled placeholder,
+//    NOT render a bare verb badge with nothing after it (defensive fallback
+//    for when the backend couldn't resolve a title). ──
+const untitledRound = {
+  status: 'done', toolName: 'project_board_post', query: 'project_board_post',
+  toolContent: 'Posted epic pt_deadbeef00 to the board.', toolRounds: [],
+  results: [{ source: 'Board', boardTransition: {
+    verb: 'post', taskId: 'pt_deadbeef00', title: '', status: 'open' } }],
+};
+const untitledHtml = _renderUnifiedToolLine(untitledRound, false);
+check('untitled_placeholder', untitledHtml.includes('ptool-board-tr-untitled'));
+check('untitled_still_has_id', untitledHtml.includes('pt_deadbeef00'));
+
 // ── project_peer_status → peer cards ──
 const peerRound = {
   status: 'done', toolName: 'project_peer_status', query: 'project_peer_status',
@@ -413,6 +443,10 @@ def test_structured_brain_tool_renderers():
         'PASS board_mini_claimed_epic', 'PASS board_mini_owner',
         'PASS board_mini_auto_badge', 'PASS board_mini_not_md_dump',
         'PASS transition_class', 'PASS transition_title', 'PASS transition_verb',
+        'PASS post_transition_class', 'PASS post_transition_title',
+        'PASS post_transition_id_chip', 'PASS post_transition_verb',
+        'PASS post_transition_open_status', 'PASS post_transition_head_friendly',
+        'PASS untitled_placeholder', 'PASS untitled_still_has_id',
         'PASS peer_list_class', 'PASS peer_who', 'PASS peer_round',
         'PASS peer_epic', 'PASS peer_not_md_dump', 'PASS peer_empty',
         'PASS proposal_class', 'PASS proposal_text', 'PASS proposal_pending',

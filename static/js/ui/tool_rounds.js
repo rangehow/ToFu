@@ -1221,23 +1221,37 @@ function _unescapeEntities(s) {
 
 /** Explicit transition line for a board mutation (verb + epic + new status).
  *  The epic title is rendered as light inline Markdown (bold/italic/code) with
- *  entities un-escaped, so `**x**` and `<venue>` display correctly. */
+ *  entities un-escaped, so `**x**` and `<venue>` display correctly. The epic
+ *  TITLE is the whole point of this card ("what was posted/claimed/…"), so it
+ *  gets its own prominent row; the short epic id is a monospace traceability
+ *  chip. When the backend couldn't resolve a title we degrade to a labelled
+ *  placeholder rather than rendering a bare verb badge with nothing after it
+ *  (the reported "shows nothing" card). */
 function _renderBoardTransition(tr) {
   if (!tr || !tr.verb) return "";
   const _t = (typeof t === "function") ? t : (k, d) => d;
   const verbLabel = _t("projectBrain.boardVerb." + tr.verb, tr.verb);
-  const title = tr.title || tr.taskId || "";
-  const titleHtml = (typeof _tpInlineMd === "function")
-    ? _tpInlineMd(_unescapeEntities(title))
-    : escapeHtml(title);
+  const rawTitle = (tr.title || "").trim();
+  const titleHtml = rawTitle
+    ? ((typeof _tpInlineMd === "function")
+        ? _tpInlineMd(_unescapeEntities(rawTitle))
+        : escapeHtml(rawTitle))
+    : `<span class="ptool-board-tr-untitled">${escapeHtml(
+        _t("projectBrain.boardUntitled", "(untitled epic)"))}</span>`;
+  const idChip = tr.taskId
+    ? `<span class="ptool-board-tr-id" title="${escapeHtml(tr.taskId)}">${escapeHtml(tr.taskId)}</span>`
+    : "";
   const statusLabel = tr.status
     ? `<span class="ptool-board-tr-status ptool-board-mini-${escapeHtml(tr.status)}">${escapeHtml(_t("projectBrain.lane" + tr.status.charAt(0).toUpperCase() + tr.status.slice(1), tr.status))}</span>`
     : "";
-  return `<div class="ptool-board-transition">` +
+  const headRow = `<div class="ptool-board-tr-head">` +
     `<span class="ptool-board-tr-verb">${escapeHtml(verbLabel)}</span>` +
-    `<span class="ptool-board-tr-title">${titleHtml}</span>` +
     (tr.status ? `<span class="ptool-board-tr-arrow">${(typeof Icon === "function") ? Icon("chevronDown", 12) : "→"}</span>${statusLabel}` : "") +
     `</div>`;
+  const titleRow = `<div class="ptool-board-tr-titlerow">` +
+    `<span class="ptool-board-tr-title">${titleHtml}</span>${idChip}` +
+    `</div>`;
+  return `<div class="ptool-board-transition">${headRow}${titleRow}</div>`;
 }
 
 /* Localize the small known set of backend statusLabel tokens ("generating" /

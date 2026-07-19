@@ -2901,6 +2901,7 @@ var _i18n = {
   'projectBrain.boardVerb.complete': { zh: '完成', en: 'completed' },
   'projectBrain.boardVerb.block': { zh: '标记受阻', en: 'blocked' },
   'projectBrain.boardVerb.reopen': { zh: '重开', en: 'reopened' },
+  'projectBrain.boardUntitled': { zh: '（未命名 epic）', en: '(untitled epic)' },
   // ── Transcript tool-card: activity-feed + peer-message/intervene delivery ──
   'projectBrain.thisConv': { zh: '本对话', en: 'this conversation' },
   'projectBrain.pdMessage': { zh: '发送消息', en: 'Message' },

@@ -8034,10 +8034,15 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
 .ptool-board-mini-owner { font-size: 10px; color: var(--accent); font-family: var(--mono, monospace); }
 .ptool-board-mini-auto { display: inline-flex; color: var(--accent); }
 .ptool-board-mini-empty { font-size: 11px; color: var(--text-tertiary); padding: 2px 4px; }
-/* Board transition line */
-.ptool-board-transition { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; font-size: 12.5px; }
+/* Board transition card — verb+status head row, then the epic title row (the
+   epic title is the whole point of the card; the id is a small mono chip). */
+.ptool-board-transition { display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; }
+.ptool-board-tr-head { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.ptool-board-tr-titlerow { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; padding: 6px 9px; background: var(--bg-secondary); border: 1px solid var(--border); border-left: 2px solid var(--accent); border-radius: 5px; }
 .ptool-board-tr-verb { font-weight: 700; color: var(--accent); }
-.ptool-board-tr-title { overflow-wrap: anywhere; color: var(--text-primary); }
+.ptool-board-tr-title { flex: 1; overflow-wrap: anywhere; color: var(--text-primary); }
+.ptool-board-tr-untitled { color: var(--text-tertiary); font-style: italic; }
+.ptool-board-tr-id { font-size: 10px; color: var(--text-tertiary); font-family: var(--mono, monospace); white-space: nowrap; }
 .ptool-board-tr-arrow { display: inline-flex; color: var(--text-tertiary); transform: rotate(-90deg); }
 .ptool-board-tr-status { font-size: 10.5px; font-weight: 700; padding: 1px 8px; border-radius: 8px; border: 1px solid var(--border); }
 /* Peer status cards */

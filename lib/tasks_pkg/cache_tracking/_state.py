@@ -244,18 +244,24 @@ def get_prev_turn_cache_read(conv_id: str) -> int:
 
 
 def _release_multiroot_sticky(conv_id: str) -> None:
-    """Release the tools-registry latches (multi-root + tool-schema) on evict.
+    """Release the tools-registry latches on evict.
 
-    Imported lazily so this low-level module doesn't pull in the tools
-    package at import time (and tolerates the symbol being absent). Both
-    latches key on conv_id and share the cache-state lifecycle, so they're
-    released together here.
+    Releases all three conv_id-keyed schema-stability latches together —
+    multi-root sticky, project-ready sticky, and the tool-schema latch —
+    because they share the cache-state lifecycle. Imported lazily so this
+    low-level module doesn't pull in the tools package at import time (and
+    tolerates the symbols being absent).
     """
     if not conv_id:
         return
     try:
-        from lib.tools import clear_multiroot_sticky, clear_tool_list_latch
+        from lib.tools import (
+            clear_multiroot_sticky,
+            clear_project_ready_sticky,
+            clear_tool_list_latch,
+        )
         clear_multiroot_sticky(conv_id)
+        clear_project_ready_sticky(conv_id)
         clear_tool_list_latch(conv_id)
     except Exception as e:
         logger.debug('[CacheTrack] tools-registry latch release unavailable: %s', e)

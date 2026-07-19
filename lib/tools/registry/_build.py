@@ -74,8 +74,13 @@ def _build_inspect_image(ctx: ToolContext) -> list[dict]:
 
 
 def _build_project_or_code_exec(ctx: ToolContext) -> list[dict]:
+    # ``project_ready`` (not the raw ``project_enabled``) so that attaching a
+    # project mid-conversation clears the tool-schema latch on the OFF→ON
+    # transition — otherwise a conversation whose first turn had no project
+    # would freeze a no-project snapshot and never regain run_command / the
+    # write tools even after a project is attached. See ToolContext.project_ready.
     from lib.tools import CODE_EXEC_TOOL, PROJECT_TOOLS
-    if ctx.project_enabled:
+    if ctx.project_ready:
         if ctx.multiroot_active:
             from lib.tools.project import with_multiroot_hint
             return with_multiroot_hint(PROJECT_TOOLS)
@@ -198,12 +203,16 @@ def _build_todo(ctx: ToolContext) -> list[dict]:
 
 
 def _build_scheduler(ctx: ToolContext) -> list[dict]:
-    if ctx.scheduler_enabled and ctx.has_base_tools:
-        from lib.scheduler.tool_defs import SCHEDULER_TOOLS
-        logger.debug('[Task %s] ⏰ Scheduler tools enabled (%d tools)',
-                     ctx.tid, len(SCHEDULER_TOOLS))
-        return list(SCHEDULER_TOOLS)
-    return []
+    # Scheduler tools are a DEFAULT capability (like memory / todo): they
+    # attach whenever ANY base tool exists, NOT gated on a user toggle. The
+    # scheduler_enabled flag survives on the ToolContext for back-compat but no
+    # longer controls tool exposure — there is no composer toggle anymore.
+    if not ctx.has_base_tools:
+        return []
+    from lib.scheduler.tool_defs import SCHEDULER_TOOLS
+    logger.debug('[Task %s] ⏰ Scheduler tools enabled (%d tools)',
+                 ctx.tid, len(SCHEDULER_TOOLS))
+    return list(SCHEDULER_TOOLS)
 
 
 def _build_swarm(ctx: ToolContext) -> list[dict]:

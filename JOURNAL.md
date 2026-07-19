@@ -1,6 +1,16 @@
 # Project Journal
 
 
+### 2026-07-19 — "run_command 为什么不是项目工具了"根修:会话中途挂项目被 tool-schema latch 永久遮蔽(commit `0ba1aec`,7 文件 +246/-14,新测 7/7 含真红证伪 + NEUTER,套件 30/30 / --collect-only 7577)。owner 逐轮否掉我两次错误诊断(先"编排 Planner 剥 run_command",再"Critic/Reviewer 只读 tools_hint"),最后甩出对话 ID `mrroj7zr0lso93` 让我查库——DB 把两个理论全推翻。
+- **诊断(DB 为准,前两轮全错):** `activeFlow:''`+`endpointEnabled:false` → **根本不是编排流程**(modes 是 Autopilot+Swarm)。第 1 条 user 消息 `_ctx.roots:[]`(**首轮没挂项目**),第 2 条才 `roots:[chatui]`。拒绝信息里逐字列出本轮工具:`await_task/create_memory/delete_memory/fetch_url/inspect_image` + 一大墙 `mcp__*`,**`run_command`/写文件/grep/list_dir 全缺**,但下一轮 `read_files` 成功。
+- **根因链:** `model_config.py:148` `project_enabled=bool(project_path)`,首轮 roots 空 → False → `_build.py:77` `_build_project_or_code_exec` 整个项目工具族不进 schema(`read_files`/`inspect_image` 是常开、与项目开关解耦,故独活)→ `_latch.py` 每会话 **tool-schema latch** 把这份"无项目"快照逐字节冻结复用(护 ~65k token 缓存前缀,变更延迟到下个新会话)→ 第二轮补挂项目也不恢复 → 模型调 `run_command` 被 `_ingest.py:193` 判"非真实工具"拒掉。
+- **打比方:** 工具清单是开工第一天点的名——那天没登记"chatui 工地"所以没焊枪(`run_command`);之后补登记了,但为不推翻已贴封条的清单(缓存前缀),系统继续发那份没焊枪的旧清单。锤子(`read_files`)一直在名单上,照用。
+- **修法(镜像既有 multiroot OFF→ON 先例):** 新增 `project_ready_sticky` 三件套(`_latch.py`:mark/is/clear)+ `ToolContext.project_ready` 属性(`_spec.py`)。属性取 **LIVE 值**(project 真被摘掉就该掉工具,不强钉 ON),**仅 OFF→ON 首次转换** `clear_tool_list_latch` → 项目工具在同一轮 re-freeze(一次性缓存重建,之后字节稳定)。`_build_project_or_code_exec` 改 gate 到 `ctx.project_ready`。新 sticky 随 cache-state 驱逐(`_state.py::_release_multiroot_sticky`)与另两个 latch 一起释放。两 `__init__` facade 补导出。
+- **tests-first(`TestProjectAttachRestoresTools` 7 测):** 空 roots 首轮→挂项目→下轮 `run_command` 回归 + 全项目族齐;attach 后字节稳定;转换只 fire 一次;**NEUTER 负控**(预先 mark sticky 压制 OFF→ON clear → `run_command` 保持缺席=复现 bug);stateless 无 latch。**真红证伪:** 把 `_build.py` gate 临时改回 `ctx.project_enabled` → 恰好 restore+stability 两测变红,已还原(`grep -c ctx.project_ready`=1)。30/30 绿。
+- **git 纪律(共享 HEAD ~130 sibling 改动在场):** `git reset -q HEAD .` → 精确 add 7 文件 → `--cached --numstat` 确认只这 7 个 → `git commit -F- -- <7 路径>` → 泄漏探针 `git show HEAD --name-only | grep -vE <我的7文件>` = **NO LEAK**。`0ba1aec`。
+- **诚实边界:** 纯后端逻辑,由 7 新测 + 真红证伪 + NEUTER 负控 + 套件 30/30 + `--collect-only` 7577(唯一 error 是既知 sibling `test_run_command_pty_streaming.py` 的 `pty_supported` import flake)验证。**生效需 owner 重启 :15000**(latch 在工具装配热路径,导入即生效,但已运行进程需重启加载新代码;已冻结的在场会话状态重启后自然重建)。真实体感(空开局→中途挂项目→`run_command` 恢复可用)待重启后抽验。board 满(coarse-only)无法立 ticket,故直接实现。
+
+
 ### 2026-07-19 — 宽屏平板(pointer:coarse 且 ≥1025px)点 ··· 底部面板"容器弹出但内部裸奔"根修(commit `2b9ebff`,2 文件 styles.css +69/-115、新测 +150,守卫 2/2 绿含真红证伪 / --collect-only 7563)。owner 从截图报"渲染样式全丢、CSS 没生效",并逐轮否掉我两次错误诊断(先是"settings.css/缓存",再是"只补内容层")后,精准钉死根因。
 - **诊断(owner 主导,我复核证实):** 不是 settings.css/缓存(侧栏+工具栏有样式=styles.css 已加载)。截图设备是**宽屏平板(CSS 宽度 ≥1025px + coarse-pointer)**。`static/styles.css` 三个断点块里,`.mobile-bottom-sheet` 容器规则被**逐字节各抄一份 ×3**,但 `.mobile-sheet-*`/`.mobile-depth-*` **内容规则只抄进 ≤768 与 769–1024coarse 两块,≥1025coarse 块只镜像了容器**。于是宽屏平板上 `.open` 让面板弹出(容器命中)但条目全无样式(内容漏命中)→ 裸文本列表 + `关闭/中/高` 裸按钮 + 裸 `✓`。"容器三抄、内容漏抄"即病灶。
 - **打比方:** 房间的墙(容器)在三种尺寸都砌好了,但屋里家具图纸(内容)只发给了两种尺寸段——宽屏平板这段没发到,整屋毛坯。

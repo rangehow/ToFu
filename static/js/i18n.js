@@ -983,7 +983,7 @@ var _i18n = {
   'update.shuttingDown': { zh: '正在关闭服务器…', en: 'Shutting the server down…' },
   'update.shutdownHint': { zh: '服务已停止，需要手动重新启动。', en: 'The server has stopped — start it again manually when needed.' },
   'update.restartConfirm': { zh: '确定要重启服务器吗？正在进行的任务会被中断。', en: 'Restart the server now? Any in-progress tasks will be interrupted.' },
-  'update.restartForceConfirm': { zh: '有 %s 个其他会话正在运行任务，重启会中断它们。确定要继续吗？', en: '%s other conversation(s) have running tasks that a restart will interrupt. Continue anyway?' },
+  'update.restartForceConfirm': { zh: '另有 %s 个会话仍有任务在运行，重启会中断它们。确定要继续吗？', en: '%s other conversation(s) still have running tasks that a restart will interrupt. Continue anyway?' },
   'update.restarting': { zh: '正在重启…', en: 'Restarting…' },
   'update.restartHint': { zh: '重启期间页面会短暂不可用，完成后会自动刷新。', en: 'The page will be briefly unavailable and will auto-refresh once back.' },
   'update.restartWait': { zh: '正在等待服务器恢复…', en: 'Waiting for the server to come back…' },

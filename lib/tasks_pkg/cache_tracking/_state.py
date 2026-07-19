@@ -220,7 +220,27 @@ def get_prev_turn_cache_read(conv_id: str) -> int:
                 continue
             if best is None or st.last_update_time > best.last_update_time:
                 best = st
-    return best.last_cache_read_tokens if best is not None else 0
+    if best is not None:
+        return best.last_cache_read_tokens
+
+    # ── DURABLE cold-state fallback ──────────────────────────────────────────
+    # No live sibling: this is a cold process (restart / >1h stale-eviction /
+    # multi-replica bounce). The memory-only path returns 0 here → the round-1
+    # boundary judgment short-circuits and a genuine collapsed/zero round-1 is
+    # laundered into no_break (log-proven: turn_boundary_rebill fired only 3×
+    # while dozens of floor-only round-1s went uncounted). Fall back to the
+    # DURABLE previous-turn read persisted on conversations.settings so the
+    # boundary re-bill buckets honestly even from a cold process — mirroring
+    # read_persisted_boundary's role for the compaction floor. Best-effort:
+    # a lazy import + guarded read that returns 0 on any miss (today's behavior).
+    try:
+        from lib.tasks_pkg.cache_tracking._persist import (
+            read_last_turn_cache_read)
+        return read_last_turn_cache_read(conv_id)
+    except Exception as e:
+        logger.debug('[CacheTrack] durable prev-turn read fallback '
+                     'unavailable conv=%s: %s', conv_id[:8], e)
+        return 0
 
 
 def _release_multiroot_sticky(conv_id: str) -> None:

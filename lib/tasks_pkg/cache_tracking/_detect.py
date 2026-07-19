@@ -888,6 +888,23 @@ def detect_cache_break(
                 except Exception as _pe:
                     logger.debug('[CacheTrack] advance_persisted_boundary '
                                  'failed conv=%s: %s', conv_id[:8], _pe)
+        # ── Persist the DURABLE round-1 read baseline (survives restart /
+        #    stale-eviction / replica switch). This round's cache_read becomes
+        #    the NEXT turn's cross-turn baseline; when that next turn starts on a
+        #    cold process (no live sibling), get_prev_turn_cache_read falls back
+        #    to this persisted value so a collapsed round-1 buckets honestly as
+        #    turn_boundary_rebill instead of being laundered into no_break. Only
+        #    persist a real warm read (> the miss floor) — a floor-only / zero
+        #    read is not a usable prior-warm baseline and writing it would just
+        #    lower the durable value pointlessly. Best-effort, last-writer-wins.
+        if cache_read > _MIN_CACHE_MISS_TOKENS:
+            try:
+                from lib.tasks_pkg.cache_tracking._persist import (
+                    write_last_turn_cache_read)
+                write_last_turn_cache_read(conv_id, cache_read)
+            except Exception as _pe:
+                logger.debug('[CacheTrack] write_last_turn_cache_read '
+                             'failed conv=%s: %s', conv_id[:8], _pe)
         if not prev.first_call_time:
             prev.first_call_time = now
         # Accumulate session-level stats

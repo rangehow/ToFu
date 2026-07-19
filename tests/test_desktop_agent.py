@@ -356,3 +356,100 @@ def test_run_agent_stop_event_terminates_loop():
     assert not t.is_alive(), 'run_agent did not terminate after stop_event was set'
     assert calls['n'] >= 1, 'poll loop never ran'
     assert calls['n'] <= 3, f'loop kept polling after stop_event ({calls["n"]} times)'
+
+
+
+# ══════════════════════════════════════════════════════════
+#  7. Permission policy — deny-by-default + build_permissions
+# ══════════════════════════════════════════════════════════
+
+def test_safe_default_is_read_only():
+    """Enabling the agent alone must grant NO write/exec/gui tier."""
+    from lib.desktop_agent._permissions import SAFE_DEFAULT
+    assert SAFE_DEFAULT == {'allow_write': False, 'allow_exec': False, 'allow_gui': False}
+    assert not any(SAFE_DEFAULT.values())
+
+
+def test_safe_default_returns_fresh_mutable_copy():
+    from lib.desktop_agent._permissions import safe_default, SAFE_DEFAULT
+    a = safe_default()
+    a['allow_gui'] = True
+    # Mutating the copy must not poison the module constant or a second copy.
+    assert SAFE_DEFAULT['allow_gui'] is False
+    assert safe_default()['allow_gui'] is False
+
+
+def test_build_permissions_defaults_deny_all():
+    from lib.desktop_agent._permissions import build_permissions
+    assert build_permissions() == {'allow_write': False, 'allow_exec': False, 'allow_gui': False}
+
+
+def test_build_permissions_individual_tiers():
+    from lib.desktop_agent._permissions import build_permissions
+    p = build_permissions(allow_write=True, allow_gui=1)  # truthy coerced to bool
+    assert p == {'allow_write': True, 'allow_exec': False, 'allow_gui': True}
+
+
+def test_build_permissions_allow_all_overrides_every_tier():
+    from lib.desktop_agent._permissions import build_permissions
+    p = build_permissions(allow_all=True)
+    assert p == {'allow_write': True, 'allow_exec': True, 'allow_gui': True}
+
+
+# ══════════════════════════════════════════════════════════
+#  8. desktop_system_info type=kill gate (adjacent security bug)
+# ══════════════════════════════════════════════════════════
+
+def test_system_info_read_only_types_need_no_permission():
+    """overview / processes are read-only — allowed under the deny-all default.
+    (psutil is absent here, so they reach the handler's dep-guard, proving the
+    dispatcher did NOT block them.)"""
+    from lib.desktop_agent._dispatch import dispatch_command
+    for t in ('overview', 'processes'):
+        res = dispatch_command('desktop_system_info', {'type': t}, dict(_NO_PERMS))
+        # NOT a permission rejection — it fell through to the handler.
+        assert 'requires --allow-exec' not in res.get('error', '')
+
+
+def test_system_info_kill_is_gated_behind_allow_exec():
+    """type=kill terminates a process — it MUST be blocked without allow_exec.
+    Red-verified: dropping the kill gate in dispatch_command lets this through."""
+    from lib.desktop_agent._dispatch import dispatch_command
+    res = dispatch_command('desktop_system_info',
+                           {'type': 'kill', 'pid': 4242}, dict(_NO_PERMS))
+    assert 'requires --allow-exec' in res['error']
+
+
+def test_system_info_kill_allowed_with_allow_exec():
+    """With allow_exec the kill gate passes — it then reaches the handler
+    (which dep-errors on missing psutil, proving the gate let it by)."""
+    from lib.desktop_agent import _gui
+    from lib.desktop_agent._dispatch import dispatch_command
+    perms = {'allow_write': False, 'allow_exec': True, 'allow_gui': False}
+    with mock.patch.object(_gui, 'psutil', None):
+        res = dispatch_command('desktop_system_info',
+                               {'type': 'kill', 'pid': 4242}, perms)
+    assert 'requires --allow-exec' not in res.get('error', '')
+    assert 'psutil' in res['error']  # reached the handler's dep guard
+
+
+# ══════════════════════════════════════════════════════════
+#  9. Live permission mutation — tray toggle takes effect w/o restart
+# ══════════════════════════════════════════════════════════
+
+def test_live_perm_dict_mutation_is_picked_up_by_dispatch():
+    """The tray mutates ONE shared perms dict in place; run_agent passes that
+    same dict to dispatch_command every poll. Flipping a tier on the live dict
+    must change the very next dispatch decision — no agent restart needed."""
+    from lib.desktop_agent._dispatch import dispatch_command
+    from lib.desktop_agent._permissions import safe_default
+
+    perms = safe_default()  # deny-all, the shared object
+    # Before: exec denied.
+    blocked = dispatch_command('desktop_run_command', {'command': 'echo hi'}, perms)
+    assert '--allow-exec' in blocked['error']
+
+    # Tray ticks "Allow run commands" — mutate the SAME dict in place.
+    perms['allow_exec'] = True
+    allowed = dispatch_command('desktop_run_command', {'command': 'echo live_ok'}, perms)
+    assert 'live_ok' in allowed.get('stdout', '')

@@ -170,11 +170,13 @@ Examples:
 
     args = parser.parse_args(argv)
 
-    permissions = {
-        'allow_write': args.allow_write or args.allow_all,
-        'allow_exec': args.allow_exec or args.allow_all,
-        'allow_gui': args.allow_gui or args.allow_all,
-    }
+    from lib.desktop_agent._permissions import build_permissions
+    permissions = build_permissions(
+        allow_write=args.allow_write,
+        allow_exec=args.allow_exec,
+        allow_gui=args.allow_gui,
+        allow_all=args.allow_all,
+    )
 
     bridge_secret = (args.bridge_secret
                      or os.environ.get('TOFU_BRIDGE_SECRET')

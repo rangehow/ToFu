@@ -1,6 +1,16 @@
 # Project Journal
 
 
+### 2026-07-19 — 项目看板两个缺陷根修:①失败的 board 变更在转录里"看不出失败" ②看板会被永久卡满(commit `0b1fdaf`,8 文件 +243/-7,新测通过含 NC / --collect-only 7597)。owner 报"发布工具执行视图里能看到失败信息,但前端完全没显示失败,得点开模型原文才知道",并追问"看板满了这机制会不会一直满、要不要重设计"。
+- **问题 1 根因(失败被伪装成成功):** `_brain.py` 的 board `_post_build` 对任何变更(post/claim/complete/block)都构造一份 `boardTransition{verb,title,status}`,**失败与成功字节同形**——post 失败也照样填 `status='open'`(猜的),前端 `_renderBoardTransition` 没有失败分支,于是"board full"照样渲染成正常的绿色"已发布 → open"卡片,失败只藏在原始 `toolContent` 里。**打比方:** 快递退回了,通知单上却照印"已签收",只有翻包裹内页才看到退回原因。
+- **修法 1:** 后端探测 error 哨兵(`Error`/`❌`/`NOT claimed`/`Failed` 开头),在 transition 上带 `ok`/`error` 并清掉猜测的 status(失败没发布任何东西,给 open 就是撒谎);前端加失败分支——红色 `failed` 徽章 + 独立 error 行 + `ptool-board-transition-failed` 左边框变红。+CSS +i18n(`projectBrain.boardFailed`)。
+- **问题 2 根因(看板会永久满):** `post_task` 用 `COUNT(*) ... WHERE project_path=?` 把**所有行(含 done)**跟 `_MAX_BOARD_TASKS=200` 比,而全仓**没有任何 `DELETE FROM project_tasks`**——done 行只增不减。长期项目一旦累计 200 条(多为已完成),看板就**永久"full"**,一条新 epic 都发不进去。答 owner:是的,会一直满,需要重设计。
+- **修法 2(准入只数活跃 + 有界保留):** 准入改为只数 `status!='done'` 的活跃 epic(`_MAX_ACTIVE_TASKS=200`)——完成即释放额度;done 行保留但发帖时把最老的裁到 `_MAX_DONE_RETAINED=100`(best-effort,面板/prompt 本来也只显示最近 ~8 条)。DELETE 走 `id IN (SELECT ... ORDER BY updated_at ASC LIMIT ?)` 子查询,PG/SQLite 通用。
+- **测试:** 后端 `test_project_board_post_transition.py` +3(失败 post/claim 带 ok=false+error+无猜测 status、成功 ok=true);`test_project_board.py` +2(done 不计入准入 cap、发帖裁剪最老 done 行,均缩小常量避免插 200 行);前端 `test_frontend_brain_tool_render.py` +6 断言 + 1 NC(证明 `failed` 分支 load-bearing)。三套件 68 测全绿。
+- **git 纪律(共享 HEAD,~130 sibling 改动在场):** `reset -q HEAD .` → 精确 add 8 文件 → `--cached --numstat` 确认仅这 8 个 → `commit -F- -- <8 路径>` → 泄漏探针 = NO LEAK。`0b1fdaf`。
+- **诚实边界:** 后端逻辑 + 前端渲染,由 68 测 + NC + node --check + `--collect-only` 7597(唯一 error 是既知 sibling `test_run_command_pty_streaming.py` 的 `pty_supported` flake)验证。**生效需 owner 重启 :15000**(_brain/board 在工具执行热路径,导入即生效)+ 重建 bundle + 硬刷(tool_rounds.js/i18n.js/styles.css 走 bundler hash)。真实体感(失败的发布卡片变红、满看板完成几条后能再发)待重启后抽验。既有 200 条满看板的历史项目,首次发帖即触发 done 裁剪至 100。
+
+
 ### 2026-07-19 — "run_command 为什么不是项目工具了"根修:会话中途挂项目被 tool-schema latch 永久遮蔽(commit `0ba1aec`,7 文件 +246/-14,新测 7/7 含真红证伪 + NEUTER,套件 30/30 / --collect-only 7577)。owner 逐轮否掉我两次错误诊断(先"编排 Planner 剥 run_command",再"Critic/Reviewer 只读 tools_hint"),最后甩出对话 ID `mrroj7zr0lso93` 让我查库——DB 把两个理论全推翻。
 - **诊断(DB 为准,前两轮全错):** `activeFlow:''`+`endpointEnabled:false` → **根本不是编排流程**(modes 是 Autopilot+Swarm)。第 1 条 user 消息 `_ctx.roots:[]`(**首轮没挂项目**),第 2 条才 `roots:[chatui]`。拒绝信息里逐字列出本轮工具:`await_task/create_memory/delete_memory/fetch_url/inspect_image` + 一大墙 `mcp__*`,**`run_command`/写文件/grep/list_dir 全缺**,但下一轮 `read_files` 成功。
 - **根因链:** `model_config.py:148` `project_enabled=bool(project_path)`,首轮 roots 空 → False → `_build.py:77` `_build_project_or_code_exec` 整个项目工具族不进 schema(`read_files`/`inspect_image` 是常开、与项目开关解耦,故独活)→ `_latch.py` 每会话 **tool-schema latch** 把这份"无项目"快照逐字节冻结复用(护 ~65k token 缓存前缀,变更延迟到下个新会话)→ 第二轮补挂项目也不恢复 → 模型调 `run_command` 被 `_ingest.py:193` 判"非真实工具"拒掉。

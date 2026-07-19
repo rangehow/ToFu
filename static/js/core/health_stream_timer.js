@@ -251,10 +251,81 @@ function _showDbWarningBanner() {
 }
 
 /**
- * Force-finish a stream for a given convId when server is detected as dead.
- * Sets finishReason so the user sees what happened.
+ * Enter a TRANSIENT "reconnecting" state (AC1). A failed health ping or an
+ * unreachable task-poll is NOT proof the turn failed — under a buffering proxy
+ * (the VS Code port-forward case) the server is alive and the task is still
+ * running / already finished; the SSE was merely swallowed. So we NEVER stamp a
+ * terminal `server_offline`/`interrupted` verdict from a transport hiccup. We
+ * only flip a non-persistent in-memory flag + paint a calm banner, and let the
+ * per-second timer keep polling the backend for the task's TRUE state. Nothing
+ * is written to the message (no finishReason, no error envelope) and nothing is
+ * persisted — this is a pure client-side "syncing…" indicator.
  */
-function _forceFinishDeadStream(convId) {
+function _enterReconnecting(convId, silentSec, opts) {
+  const info = _streamTimers.get(convId);
+  if (info) info._reconnecting = true;
+  console.warn(
+    `[StreamTimer] conv=${convId.slice(0,8)} connection unstable ` +
+    `(silent ${silentSec}s${opts && opts.wake ? ', wake' : ''}) — TRANSIENT reconnecting; ` +
+    `polling backend for task truth, NO terminal stamp`
+  );
+  _setBubbleLiveness(convId,
+    `<span class="stream-liveness stream-liveness-warn">${_LIVENESS_ICON_WARN} ${escapeHtml(_connT('conn.reconnecting'))}</span>`);
+}
+
+/** Leave the transient reconnecting state — the backend just answered a poll. */
+function _exitReconnecting(convId) {
+  const info = _streamTimers.get(convId);
+  if (info) info._reconnecting = false;
+}
+
+/**
+ * Manual "Force Finish" escape hatch (the button the user clicks to stop
+ * waiting). It is NO LONGER an automatic circuit breaker — the health-check /
+ * silence path never calls this anymore (AC1). Even here we consult BACKEND
+ * TRUTH first (AC2): poll the task; if it finished on the server we adopt the
+ * authoritative result with ZERO error envelope. Only when we cannot confirm a
+ * clean finish do we stamp an HONEST terminal — and the user explicitly asked
+ * to stop, so that is not a false positive.
+ */
+async function _forceFinishDeadStream(convId) {
+  const _conv0 = conversations.find(c => c.id === convId);
+  const _taskId = _conv0 && _conv0.activeTaskId;
+  if (_taskId) {
+    try {
+      const pr = await Api.chat.poll(_taskId, { signal: AbortSignal.timeout(5000) });
+      if (pr && pr.ok) {
+        const td = await pr.json();
+        if (td.status && td.status !== 'running') {
+          // Server-terminal → land the authoritative result via the SAME
+          // self-heal path the swallowed-done case uses. Zero error envelope.
+          if (_healStuckPlaceholder(convId, { status: td.status })
+              || _healStuckPlaceholder(convId, { status: td.status, background: true })) {
+            _exitReconnecting(convId);
+            return;
+          }
+        }
+      } else if (pr && pr.status === 404) {
+        if (_healStuckPlaceholder(convId, { notFound: true })
+            || _healStuckPlaceholder(convId, { notFound: true, background: true })) {
+          _exitReconnecting(convId);
+          return;
+        }
+      }
+    } catch (e) {
+      console.debug(`[StreamTimer] force-finish poll failed (will stamp honest terminal): ${e && e.message}`);
+    }
+  }
+  _stampForcedOffline(convId);
+}
+
+/**
+ * Stamp the honest terminal `server_offline` verdict + friendly error envelope.
+ * Reached ONLY from the manual Force-Finish button after a backend-truth poll
+ * could not confirm a clean finish — never from an automatic silence/health
+ * path. Sets finishReason so the user sees what happened.
+ */
+function _stampForcedOffline(convId) {
   const conv = conversations.find(c => c.id === convId);
   if (conv) {
     const last = conv.messages[conv.messages.length - 1];
@@ -410,11 +481,38 @@ function _healStuckPlaceholder(convId, probe) {
    *   Gated on ``probe.background`` so the foreground timer path (which always
    *   has a live stream) is byte-identical to before. */
   if (probe && probe.background) {
+    /* ★ AC2: terminal verdict comes from BACKEND TRUTH, never a transport
+     *   guess. A CLEAN terminal (`done`) means the turn finished successfully
+     *   server-side — the persisted conversation holds the authoritative full
+     *   result, so adopt it with ZERO error/interrupted stamp (fire-and-forget
+     *   GET; the recovery poll re-renders when it lands). Only when the task is
+     *   genuinely GONE (404) or ended NON-cleanly do we stamp the honest
+     *   `interrupted` on whatever partial content survived locally. */
+    const _cleanDone = !probe.notFound
+      && ['done', 'completed', 'complete', 'stop', 'finished'].includes(String(probe.status || '').toLowerCase());
     console.warn(
       `[StreamTimer] ★ SELF-HEAL (background) — conv=${convId.slice(0,8)} task=${taskId.slice(0,8)} ` +
-      `is gone/terminal server-side with no live stream — clearing stale busy pin.`
+      `${_cleanDone ? 'finished cleanly server-side — adopting authoritative result (no stamp)' : 'gone/interrupted server-side — clearing stale busy pin'}.`
     );
-    if (last && last.role === 'assistant' && !last.finishReason && !last.error
+    if (_cleanDone && typeof Api !== 'undefined' && Api.conversations) {
+      Promise.resolve(Api.conversations.get(convId)).then((data) => {
+        if (!data || !Array.isArray(data.messages) || data.messages.length === 0) return;
+        const sl = data.messages[data.messages.length - 1];
+        const cur = conv.messages[conv.messages.length - 1];
+        if (sl && sl.role === 'assistant' && cur && cur.role === 'assistant') {
+          cur.content = sl.content || cur.content;
+          if (sl.thinking) cur.thinking = sl.thinking;
+          if (sl.toolRounds) cur.toolRounds = sl.toolRounds;
+          if (sl.finishReason) cur.finishReason = sl.finishReason;
+          if (sl.usage) cur.usage = sl.usage;
+          if (sl.model) cur.model = sl.model;
+          if (typeof saveConversations === 'function') saveConversations(null);
+          if (typeof ConvCache !== 'undefined') { try { ConvCache.put(conv); } catch (e) { /* non-fatal */ } }
+          if (activeConvId === convId && typeof renderChat === 'function') renderChat(conv);
+          if (typeof renderConversationList === 'function') renderConversationList();
+        }
+      }).catch((e) => console.debug(`[StreamTimer] background done-adopt fetch failed: ${e && e.message}`));
+    } else if (last && last.role === 'assistant' && !last.finishReason && !last.error
         && (last.content || last.thinking
             || (Array.isArray(last.toolRounds) && last.toolRounds.length))) {
       last.finishReason = 'interrupted';
@@ -476,12 +574,59 @@ function _probeStuckStream(convId, opts) {
       : Math.floor((Date.now() - info.lastDataTime) / 1000);
     if (!alive) {
       console.error(`[StreamTimer] Server health check FAILED for conv=${convId.slice(0,8)} after ${silentSec}s silence${opts.wake ? ' (wake)' : ''}`);
-      // Auto-finish if server is dead and silence > severe threshold (or on wake).
-      if (silentSec >= _SILENCE_SEVERE || opts.wake) {
-        _forceFinishDeadStream(convId);
+      /* ★ AC1 + AC1b: a failed health ping is NOT a terminal verdict. The old
+       *   code called _forceFinishDeadStream here (and the wake path did it on
+       *   the FIRST failure), stamping server_offline + a red error envelope
+       *   WITHOUT ever polling the task — the exact false positive under a
+       *   buffering proxy where the server is alive and the turn actually
+       *   completed. Instead: enter the transient, non-persistent reconnecting
+       *   state and STILL try to reach the task directly. The health endpoint
+       *   and the task-poll can disagree (proxy quirks), and the task-poll is
+       *   the one that carries backend TRUTH, so we attempt it regardless of
+       *   the health verdict. On wake we also abort the near-certainly-dead SSE
+       *   socket so connectToTask resumes via the Last-Event-ID cursor. */
+      _enterReconnecting(convId, silentSec, opts);
+      const _conv = conversations.find(c => c.id === convId);
+      const _tid = _conv && _conv.activeTaskId;
+      if (_tid) {
+        try {
+          const pr = await Api.chat.poll(_tid, { signal: AbortSignal.timeout(5000) });
+          if (pr && pr.ok) {
+            const td = await pr.json();
+            if (td.status && td.status !== 'running') {
+              _exitReconnecting(convId);
+              if (!_healStuckPlaceholder(convId, { status: td.status })) {
+                _healStuckPlaceholder(convId, { status: td.status, background: true });
+              }
+              return;
+            }
+          } else if (pr && pr.status === 404) {
+            _exitReconnecting(convId);
+            if (!_healStuckPlaceholder(convId, { notFound: true })) {
+              _healStuckPlaceholder(convId, { notFound: true, background: true });
+            }
+            return;
+          }
+        } catch (e) {
+          console.debug(`[StreamTimer] task-poll during reconnecting failed (stay in reconnecting): ${e && e.message}`);
+        }
+        /* Task still running (or unreachable) — on wake, abort the stale SSE so
+         * connectToTask's suspended await chain resumes via Last-Event-ID. */
+        if (opts.wake) {
+          const stream = activeStreams.get(convId);
+          if (stream && stream.controller) {
+            console.warn(`[StreamTimer] ★ WAKE reconnect (health-fail) — conv=${convId.slice(0,8)} task=${_tid.slice(0,8)} aborting stale SSE to resume via cursor`);
+            stream._probeAbort = true;
+            stream.controller.abort();
+          } else if (typeof connectToTask === 'function') {
+            connectToTask(convId, _tid);
+          }
+        }
       }
       return;
     }
+    // Server answered → not reconnecting anymore (any prior transient clears).
+    _exitReconnecting(convId);
     /* ★ SERVER IS ALIVE but SSE is silent — the proxy (VS Code port forwarding,
      *   nginx, corporate proxy) may have swallowed the 'done' event.
      *   Proactively poll the task to check if it already finished. If so, abort
@@ -588,13 +733,21 @@ function _probeStuckStream(convId, opts) {
  */
 function _probeAllStuckStreamsOnWake(trigger) {
   const now = Date.now();
-  let n = 0;
+  /* Collect the silent streams first, then probe them under a concurrency
+   *   cap. Each _probeStuckStream issues an Api.chat.active()/reconnect; firing
+   *   all of them the instant a long-slept tab wakes is the reconnect
+   *   thundering herd. Bounded fan-out drains them a few at a time. Fall back
+   *   to the immediate loop only if the shared pool isn't bundled yet. */
+  const stuck = [];
   for (const [convId, info] of _streamTimers.entries()) {
     const silentSec = Math.floor((now - info.lastDataTime) / 1000);
-    if (silentSec >= _SILENCE_THRESHOLD) {
-      _probeStuckStream(convId, { silentSec, wake: true });
-      n++;
-    }
+    if (silentSec >= _SILENCE_THRESHOLD) stuck.push({ convId, silentSec });
+  }
+  const n = stuck.length;
+  if (typeof runWithConcurrency === 'function') {
+    runWithConcurrency(stuck, (s) => _probeStuckStream(s.convId, { silentSec: s.silentSec, wake: true }), 4);
+  } else {
+    for (const s of stuck) _probeStuckStream(s.convId, { silentSec: s.silentSec, wake: true });
   }
   if (n) console.info(`[StreamTimer] ★ wake sweep (${trigger}) — probed ${n} silent stream(s)`);
   return n;
@@ -678,12 +831,17 @@ async function _updateStreamTimerUI(convId) {
   // otherwise stay frozen on a live-looking "Reasoning … chars" spinner.
   const _forceFinishLbl = _connT('conn.forceFinish');
   if (info._lastHealthResult === false) {
-    // Server confirmed not responding (≥2 consecutive health-check failures).
+    /* ★ AC1: health ping failed — but this is a TRANSIENT connection hiccup,
+     *   NOT a "server dead" terminal. Paint the calm reconnecting banner (the
+     *   per-second timer is meanwhile polling the task for its true state and
+     *   will land the real result via poll-fallback). We still expose the
+     *   manual Force-Finish button as a user escape hatch, but the automatic
+     *   path never stamps a terminal error anymore. */
     el.innerHTML = elapsedHtml +
-      ` <span class="stream-stuck-severe">${_LIVENESS_ICON_DEAD} ${escapeHtml(_connT('conn.hudNotResponding'))}</span>` +
+      ` <span class="stream-stuck-warn">${_LIVENESS_ICON_WARN} ${escapeHtml(_connT('conn.reconnectingShort'))}</span>` +
       ` <button class="stream-force-finish-btn" onclick="_forceFinishDeadStream('${convId}')">${escapeHtml(_forceFinishLbl)}</button>`;
     _setBubbleLiveness(convId,
-      `<span class="stream-liveness stream-liveness-dead">${_LIVENESS_ICON_DEAD} ${escapeHtml(_connT('conn.hudNotRespondingFull', { n: silentSec }))}</span>`);
+      `<span class="stream-liveness stream-liveness-warn">${_LIVENESS_ICON_WARN} ${escapeHtml(_connT('conn.reconnecting'))}</span>`);
   } else if (_recentlyConfirmedAlive) {
     // Server confirmed the task is still running on its side — the SSE pipe is
     // just quiet.  This is the "it's our harness, not a hang" case: name what
@@ -752,6 +910,7 @@ function _streamTimerTouch(convId) {
     info._lastHealthResult = undefined; // reset — server is clearly alive if we got data
     info._taskStillRunning = false;     // fresh data supersedes the stale-probe reassurance
     info._taskProbedAt = 0;
+    info._reconnecting = false;         // fresh data → the transient hiccup is over
     _serverAlive = true;
     _consecutiveHealthFails = 0;
   }

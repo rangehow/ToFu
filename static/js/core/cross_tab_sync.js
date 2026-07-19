@@ -692,7 +692,12 @@ async function _recoverOfflineConversations(trigger) {
 
   let recovered = 0;
   const _reattachedIds = new Set();  // convs re-bound to a live stream (NOT static-adopted)
-  await Promise.all(offlineConvs.map(async (conv) => {
+  /* Bounded concurrency: each conv below may issue a heavy per-conv
+   *   Api.conversations.get() (a multi-MB payload for a long chat). Firing all
+   *   offlineConvs at once — hundreds after an overnight sleep — is the
+   *   reconnect thundering herd that saturates the proxy. Cap the fan-out;
+   *   fall back to Promise.all only if the shared pool isn't bundled yet. */
+  const _recoverWorker = async (conv) => {
     const am = conv.messages[conv.messages.length - 1];
     const localContentLen = am.content?.length || 0;
     // ★ Seamless live re-attach takes priority over static adopt.
@@ -760,6 +765,14 @@ async function _recoverOfflineConversations(trigger) {
         delete am.error;
         changed = true;
       }
+      /* ★ AC3: the health check above already confirmed the server is back. If
+       *   nothing above adopted a fresher terminal reason but the bubble is
+       *   still pinned on the frontend-only 'server_offline' badge, DROP it so
+       *   a completed answer never keeps a "connection lost" residue. */
+      if (am.finishReason === 'server_offline') {
+        delete am.finishReason;
+        changed = true;
+      }
       // ★ Only persist and count as recovered when something actually changed.
       //   Avoids false toasts and prevents pushing stale server_offline back
       //   to the server when nothing was updated.
@@ -771,7 +784,12 @@ async function _recoverOfflineConversations(trigger) {
     } catch (e) {
       console.debug(`[NetworkRecovery] Server fetch failed for conv=${conv.id.slice(0,8)}: ${e.message}`);
     }
-  }));
+  };
+  if (typeof runWithConcurrency === 'function') {
+    await runWithConcurrency(offlineConvs, _recoverWorker, 4);
+  } else {
+    await Promise.all(offlineConvs.map(_recoverWorker));
+  }
 
   const _reattachedCount = _reattachedIds.size;
   if (recovered > 0 || _reattachedCount > 0) {

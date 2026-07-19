@@ -386,6 +386,11 @@ _BUNDLE_FILES = [
     # memory + skills install dropzones. Load before memory_skill_install.js
     # and skills_install.js (both call it at runtime; core loads first anyway).
     'core/zip_drop_zone.js',
+    # Bounded-concurrency task runner (runWithConcurrency) — caps the
+    # reconnect "thundering herd" (all N conv reattach/probe calls firing at
+    # once on wake). Leaf module (window only); load before its consumers
+    # core/cross_tab_sync.js + core/health_stream_timer.js.
+    'core/async_pool.js',
     'core/cross_tab_sync.js',
     'core/conversations.js',
     # Shared SSE fetch-response read/decode/buffer loop (readSSEStream) —

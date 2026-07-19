@@ -16399,55 +16399,6 @@ html:not([data-theme="tofu"]) .tofu-pet{display:none}
    * room — pin a floor so it can never collapse to a sliver again. */
   #modelGroup{flex-shrink:0}
   .preset-toggle{flex-shrink:0;min-width:96px;max-width:200px}
-
-  /* ===== BOTTOM SHEET + backdrop at TABLET / coarse width =====
-   * The "···" more-button (and the toolbar compaction that moves tools INTO
-   * the sheet) is shown in THIS block, but the rules that make #mobileSheet
-   * actually visible (position:fixed + .open{display:block}) historically
-   * lived ONLY in @media(max-width:768px). On a 769–1024px coarse-pointer
-   * viewport (tablets, and the Android WebView when it reports a CSS width
-   * >768) the button opened a sheet that the base `.mobile-bottom-sheet
-   * {display:none}` kept hidden → tools unreachable in BOTH Chrome and the
-   * WebView. Mirror the phone sheet rules here so the button has a target.
-   * (Follows the same cross-block duplication as .mobile-more-btn.) */
-  .mobile-bottom-sheet{position:fixed;bottom:0;left:0;right:0;z-index:250;
-    background:var(--bg-secondary);border-radius:16px 16px 0 0;
-    box-shadow:0 -4px 24px rgba(0,0,0,0.2);padding:12px 12px calc(12px + env(safe-area-inset-bottom,0px));
-    max-height:70dvh;max-height:calc(var(--vh100,100vh) * 0.7);overflow-y:auto;transform:translateY(100%);transition:transform .25s cubic-bezier(.4,0,.2,1);
-    display:none}
-  .mobile-bottom-sheet.open{display:block;transform:translateY(0)}
-  .mobile-bottom-sheet-backdrop{position:fixed;inset:0;background:rgba(0,0,0,0.3);z-index:249;
-    display:none;-webkit-tap-highlight-color:transparent}
-  .mobile-bottom-sheet-backdrop.open{display:block}
-  .mobile-flow-sheet{z-index:260}
-  .mobile-sheet-header{font-size:13px;font-weight:700;color:var(--text-secondary);padding:4px 8px 10px;
-    border-bottom:1px solid var(--border);margin-bottom:8px}
-  .mobile-sheet-section{margin-bottom:8px}
-  .mobile-sheet-section-title{font-size:10px;font-weight:700;color:var(--text-tertiary);
-    text-transform:uppercase;letter-spacing:.08em;padding:4px 8px}
-  .mobile-sheet-item{display:flex;align-items:center;gap:12px;padding:12px 10px;border-radius:10px;
-    cursor:pointer;transition:background .12s;user-select:none;min-height:44px}
-  .mobile-sheet-item:active{background:var(--bg-hover)}
-  .mobile-sheet-item.active{background:var(--accent-subtle)}
-  .mobile-sheet-item-icon{width:20px;height:20px;display:flex;align-items:center;justify-content:center;
-    color:var(--text-secondary);flex-shrink:0}
-  .mobile-sheet-item.active .mobile-sheet-item-icon{color:var(--accent)}
-  .mobile-sheet-item-text{flex:1;min-width:0;display:flex;flex-direction:column}
-  .mobile-sheet-item-name{font-size:14px;font-weight:600;color:var(--text-primary);line-height:1.3}
-  .mobile-sheet-item.active .mobile-sheet-item-name{color:var(--accent)}
-  .mobile-sheet-item-desc{font-size:11px;color:var(--text-tertiary);margin-top:2px;line-height:1.3}
-  .mobile-sheet-item-check{font-size:14px;color:var(--accent);opacity:0}
-  .mobile-sheet-item.active .mobile-sheet-item-check{opacity:1}
-  .mobile-sheet-item.disabled{pointer-events:none;opacity:0.45}
-  .mobile-sheet-item.disabled .mobile-sheet-item-check{opacity:0}
-  .mobile-depth-bar{display:flex;gap:6px;padding:6px 8px}
-  .mobile-depth-btn{flex:1;padding:10px 0;border:1.5px solid var(--border);border-radius:10px;
-    background:var(--bg-tertiary);color:var(--text-secondary);font-size:13px;font-weight:600;
-    cursor:pointer;text-align:center;transition:all .15s;-webkit-tap-highlight-color:transparent}
-  .mobile-depth-btn:active{transform:scale(.96)}
-  .mobile-depth-btn.active{background:var(--accent-subtle);color:var(--accent);border-color:var(--accent)}
-  [data-theme="tofu"] .mobile-bottom-sheet{background:var(--bg-secondary);border:1px solid var(--border);border-bottom:none}
-  [data-theme="tofu"] .mobile-sheet-item{font-family:var(--sans-body);font-size:13px}
 }
 
 
@@ -16484,18 +16435,6 @@ html:not([data-theme="tofu"]) .tofu-pet{display:none}
    * room — pin a floor so it can never collapse to a sliver again. */
   #modelGroup{flex-shrink:0}
   .preset-toggle{flex-shrink:0;min-width:96px;max-width:200px}
-  /* The "···" sheet + backdrop must be visible (base rule keeps them
-   * display:none). Mirror the ≤1024 coarse block. */
-  .mobile-bottom-sheet{position:fixed;bottom:0;left:0;right:0;z-index:250;
-    background:var(--bg-secondary);border-radius:16px 16px 0 0;
-    box-shadow:0 -4px 24px rgba(0,0,0,0.2);padding:12px 12px calc(12px + env(safe-area-inset-bottom,0px));
-    max-height:70dvh;max-height:calc(var(--vh100,100vh) * 0.7);overflow-y:auto;transform:translateY(100%);transition:transform .25s cubic-bezier(.4,0,.2,1);
-    display:none}
-  .mobile-bottom-sheet.open{display:block;transform:translateY(0)}
-  .mobile-bottom-sheet-backdrop{position:fixed;inset:0;background:rgba(0,0,0,0.3);z-index:249;
-    display:none;-webkit-tap-highlight-color:transparent}
-  .mobile-bottom-sheet-backdrop.open{display:block}
-  .mobile-flow-sheet{z-index:260}
 }
 /* ── Safe area insets for notched phones ──
  * env(safe-area-inset-*) resolves to 0px where unsupported, so these are
@@ -16705,17 +16644,6 @@ html:not([data-theme="tofu"]) .tofu-pet{display:none}
   .attach-btn{display:flex!important;width:40px;height:40px;min-width:40px;margin:0;border-radius:12px;box-sizing:border-box;align-items:center;justify-content:center;flex-shrink:0}
   .attach-btn svg{width:20px;height:20px}
 
-  /* --- Bottom sheet for submenus/actions (shared mobile pattern) --- */
-  .mobile-bottom-sheet{position:fixed;bottom:0;left:0;right:0;z-index:250;
-    background:var(--bg-secondary);border-radius:16px 16px 0 0;
-    box-shadow:0 -4px 24px rgba(0,0,0,0.2);padding:12px 12px calc(12px + env(safe-area-inset-bottom,0px));
-    max-height:70dvh;max-height:calc(var(--vh100,100vh) * 0.7);overflow-y:auto;transform:translateY(100%);transition:transform .25s cubic-bezier(.4,0,.2,1);
-    display:none}
-  .mobile-bottom-sheet.open{display:block;transform:translateY(0)}
-  .mobile-bottom-sheet-backdrop{position:fixed;inset:0;background:rgba(0,0,0,0.3);z-index:249;
-    display:none;-webkit-tap-highlight-color:transparent}
-  .mobile-bottom-sheet-backdrop.open{display:block}
-
   /* --- Portaled desktop popovers (timer / optimizer) as bottom sheets ---
    * mobile_panels.js re-parents #timerPanel / #optimizerPanel to <body> and
    * adds .mobile-panel-portaled. Their desktop absolute-position rules (anchored
@@ -16732,42 +16660,6 @@ html:not([data-theme="tofu"]) .tofu-pet{display:none}
     transform:translateY(100%);transition:transform .25s cubic-bezier(.4,0,.2,1);display:block!important}
   .timer-panel.mobile-panel-portaled.visible,
   .optimizer-panel.mobile-panel-portaled.visible{transform:translateY(0)}
-  /* Flow picker sheet reuses .mobile-bottom-sheet; lift it above the shared
-   * panel backdrop so it isn't dimmed by it. */
-  .mobile-flow-sheet{z-index:260}
-  .mobile-sheet-header{font-size:13px;font-weight:700;color:var(--text-secondary);padding:4px 8px 10px;
-    border-bottom:1px solid var(--border);margin-bottom:8px}
-  .mobile-sheet-section{margin-bottom:8px}
-  .mobile-sheet-section-title{font-size:10px;font-weight:700;color:var(--text-tertiary);
-    text-transform:uppercase;letter-spacing:.08em;padding:4px 8px}
-  .mobile-sheet-item{display:flex;align-items:center;gap:12px;padding:12px 10px;border-radius:10px;
-    cursor:pointer;transition:background .12s;user-select:none;min-height:44px}
-  .mobile-sheet-item:active{background:var(--bg-hover)}
-  .mobile-sheet-item.active{background:var(--accent-subtle)}
-  .mobile-sheet-item-icon{width:20px;height:20px;display:flex;align-items:center;justify-content:center;
-    color:var(--text-secondary);flex-shrink:0}
-  .mobile-sheet-item.active .mobile-sheet-item-icon{color:var(--accent)}
-  .mobile-sheet-item-text{flex:1;min-width:0;display:flex;flex-direction:column}
-  .mobile-sheet-item-name{font-size:14px;font-weight:600;color:var(--text-primary);line-height:1.3}
-  .mobile-sheet-item.active .mobile-sheet-item-name{color:var(--accent)}
-  .mobile-sheet-item-desc{font-size:11px;color:var(--text-tertiary);margin-top:2px;line-height:1.3}
-  .mobile-sheet-item-check{font-size:14px;color:var(--accent);opacity:0}
-  .mobile-sheet-item.active .mobile-sheet-item-check{opacity:1}
-
-  .mobile-sheet-item.disabled{pointer-events:none;opacity:0.45}
-  .mobile-sheet-item.disabled .mobile-sheet-item-check{opacity:0}
-
-  /* --- Mobile depth bar (thinking depth in bottom sheet) --- */
-  .mobile-depth-bar{display:flex;gap:6px;padding:6px 8px}
-  .mobile-depth-btn{flex:1;padding:10px 0;border:1.5px solid var(--border);border-radius:10px;
-    background:var(--bg-tertiary);color:var(--text-secondary);font-size:13px;font-weight:600;
-    cursor:pointer;text-align:center;transition:all .15s;-webkit-tap-highlight-color:transparent}
-  .mobile-depth-btn:active{transform:scale(.96)}
-  .mobile-depth-btn.active{background:var(--accent-subtle);color:var(--accent);border-color:var(--accent)}
-  [data-theme="tofu"] .mobile-depth-btn{font-family:var(--sans-body);font-size:12px;
-    border-color:rgba(194,188,164,0.4);color:#5C4A33;background:#FAF8F3}
-  [data-theme="tofu"] .mobile-depth-btn.active{background:rgba(196,149,106,0.15);
-    color:#6A4E2E;border-color:#A67B52}
 
   /* --- Preset/submenu dropdowns: bottom sheet style on mobile --- */
   .preset-dropdown{position:fixed;bottom:0;left:0;right:0;top:auto;transform:none;min-width:auto;width:100%;
@@ -16815,13 +16707,6 @@ html:not([data-theme="tofu"]) .tofu-pet{display:none}
   [data-theme="tofu"] .send-btn{width:40px!important;height:40px!important}
   [data-theme="tofu"] .input-actions::before{display:none!important}
   [data-theme="tofu"] .input-actions-scroll .input-group:not(:last-child)::after{display:none!important}
-  /* Tofu theme bottom sheet styling */
-  [data-theme="tofu"] .mobile-bottom-sheet{background:var(--bg-secondary);border:1px solid var(--border);border-bottom:none}
-  [data-theme="tofu"] .mobile-sheet-item{font-family:var(--sans-body);font-size:13px}
-  [data-theme="tofu"] .mobile-sheet-item.active{background:var(--accent-subtle)}
-  [data-theme="tofu"] .mobile-sheet-item-name{color:var(--text-primary)}
-  [data-theme="tofu"] .mobile-sheet-item.active .mobile-sheet-item-name{color:var(--accent)}
-  [data-theme="tofu"] .mobile-sheet-item-check{color:var(--accent)}
   [data-theme="tofu"] .mobile-more-btn{border-color:var(--border);color:var(--text-primary);border-radius:var(--radius-xs)}
   [data-theme="tofu"] .attach-btn{color:var(--text-primary);border-radius:var(--radius-xs)}
 
@@ -16946,6 +16831,75 @@ html:not([data-theme="tofu"]) .tofu-pet{display:none}
   /* --- Bilingual blocks --- */
   .bilingual-header{padding:6px 10px}
   .bilingual-body .md-content{padding:0 10px 8px;font-size:12px}
+}
+
+
+/* ═══════════════════════════════════════════════════════════
+   ★ SINGLE SOURCE — bottom-sheet CONTAINER + CONTENT for every
+   touch/narrow viewport that can OPEN the "···" sheet.
+   Union = ≤768 (any pointer) + 769–1024 coarse + ≥1025 coarse.
+   Placed AFTER all three width blocks so it is never reverse-bitten
+   at equal specificity. fine-pointer desktops keep the full toolbar and
+   never open this sheet, so the (pointer:coarse) arm can't leak the sheet
+   layout onto them. The per-width blocks keep ONLY their real differences
+   (.mobile-more-btn value, #modelGroup pin, submenu hides, drawer geometry,
+   .preset-dropdown, topbar). Guarded by
+   tests/test_mobile_sheet_content_reaches_wide_coarse.py. Historic bug: the
+   container was copied into all 3 width blocks but the content into only 2
+   (≤768 + 769–1024 coarse) → a ≥1025 coarse tablet popped an UNSTYLED sheet
+   (bare-text rows / naked depth buttons). Single source ends that class. */
+@media (max-width:768px),(pointer:coarse){
+  /* ── Container + backdrop + flow-sheet ── */
+  .mobile-bottom-sheet{position:fixed;bottom:0;left:0;right:0;z-index:250;
+    background:var(--bg-secondary);border-radius:16px 16px 0 0;
+    box-shadow:0 -4px 24px rgba(0,0,0,0.2);padding:12px 12px calc(12px + env(safe-area-inset-bottom,0px));
+    max-height:70dvh;max-height:calc(var(--vh100,100vh) * 0.7);overflow-y:auto;transform:translateY(100%);transition:transform .25s cubic-bezier(.4,0,.2,1);
+    display:none}
+  .mobile-bottom-sheet.open{display:block;transform:translateY(0)}
+  .mobile-bottom-sheet-backdrop{position:fixed;inset:0;background:rgba(0,0,0,0.3);z-index:249;
+    display:none;-webkit-tap-highlight-color:transparent}
+  .mobile-bottom-sheet-backdrop.open{display:block}
+  .mobile-flow-sheet{z-index:260}
+
+  /* ── Sheet content ── */
+  .mobile-sheet-header{font-size:13px;font-weight:700;color:var(--text-secondary);padding:4px 8px 10px;
+    border-bottom:1px solid var(--border);margin-bottom:8px}
+  .mobile-sheet-section{margin-bottom:8px}
+  .mobile-sheet-section-title{font-size:10px;font-weight:700;color:var(--text-tertiary);
+    text-transform:uppercase;letter-spacing:.08em;padding:4px 8px}
+  .mobile-sheet-item{display:flex;align-items:center;gap:12px;padding:12px 10px;border-radius:10px;
+    cursor:pointer;transition:background .12s;user-select:none;min-height:44px}
+  .mobile-sheet-item:active{background:var(--bg-hover)}
+  .mobile-sheet-item.active{background:var(--accent-subtle)}
+  .mobile-sheet-item-icon{width:20px;height:20px;display:flex;align-items:center;justify-content:center;
+    color:var(--text-secondary);flex-shrink:0}
+  .mobile-sheet-item.active .mobile-sheet-item-icon{color:var(--accent)}
+  .mobile-sheet-item-text{flex:1;min-width:0;display:flex;flex-direction:column}
+  .mobile-sheet-item-name{font-size:14px;font-weight:600;color:var(--text-primary);line-height:1.3}
+  .mobile-sheet-item.active .mobile-sheet-item-name{color:var(--accent)}
+  .mobile-sheet-item-desc{font-size:11px;color:var(--text-tertiary);margin-top:2px;line-height:1.3}
+  .mobile-sheet-item-check{font-size:14px;color:var(--accent);opacity:0}
+  .mobile-sheet-item.active .mobile-sheet-item-check{opacity:1}
+  .mobile-sheet-item.disabled{pointer-events:none;opacity:0.45}
+  .mobile-sheet-item.disabled .mobile-sheet-item-check{opacity:0}
+  .mobile-depth-bar{display:flex;gap:6px;padding:6px 8px}
+  .mobile-depth-btn{flex:1;padding:10px 0;border:1.5px solid var(--border);border-radius:10px;
+    background:var(--bg-tertiary);color:var(--text-secondary);font-size:13px;font-weight:600;
+    cursor:pointer;text-align:center;transition:all .15s;-webkit-tap-highlight-color:transparent}
+  .mobile-depth-btn:active{transform:scale(.96)}
+  .mobile-depth-btn.active{background:var(--accent-subtle);color:var(--accent);border-color:var(--accent)}
+
+  /* ── tofu theme variants (superset from the former ≤768 block) ── */
+  [data-theme="tofu"] .mobile-bottom-sheet{background:var(--bg-secondary);border:1px solid var(--border);border-bottom:none}
+  [data-theme="tofu"] .mobile-sheet-item{font-family:var(--sans-body);font-size:13px}
+  [data-theme="tofu"] .mobile-sheet-item.active{background:var(--accent-subtle)}
+  [data-theme="tofu"] .mobile-sheet-item-name{color:var(--text-primary)}
+  [data-theme="tofu"] .mobile-sheet-item.active .mobile-sheet-item-name{color:var(--accent)}
+  [data-theme="tofu"] .mobile-sheet-item-check{color:var(--accent)}
+  [data-theme="tofu"] .mobile-depth-btn{font-family:var(--sans-body);font-size:12px;
+    border-color:rgba(194,188,164,0.4);color:#5C4A33;background:#FAF8F3}
+  [data-theme="tofu"] .mobile-depth-btn.active{background:rgba(196,149,106,0.15);
+    color:#6A4E2E;border-color:#A67B52}
 }
 
 

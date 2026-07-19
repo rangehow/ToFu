@@ -22,8 +22,8 @@ from lib.css_bundler import (
 )
 from lib.settings_panels import inject_panels as _inject_settings_panels, panels_signature as _settings_panels_signature
 from lib.js_bundler import (
-    get_bundle_script_tag as _get_bundle_tag,
-    get_feature_bundle_filename as _get_feature_bundle_filename,
+    get_bundle_script_tag_nonblocking as _get_bundle_tag,
+    get_feature_bundle_filename_nonblocking as _get_feature_bundle_filename,
 )
 from lib.log import get_logger
 from lib.api_response import api_bad_request, api_internal_error, api_ok

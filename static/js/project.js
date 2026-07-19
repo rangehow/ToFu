@@ -571,10 +571,14 @@ async function mpApplyFolders() {
   const nExtras = extras.length;
   const nRO = readOnly.length;
   debugLog(`Project set: ${primary}` + (nExtras ? ` + ${nExtras} extra folder(s)` : '') + (nRO ? ` (${nRO} read-only)` : ''), "success");
-  /* ★ Turning Project mode ON auto-enables Swarm + Autopilot (project-oriented
-   * execution modes), unless the user already enabled them or has Endpoint/Flow
-   * active. See _autoEnableProjectModes above. */
-  _autoEnableProjectModes();
+  /* ★ Attaching a project IS the Studio tier. Promote the capability dial so
+   * the UI + derived flags stay truthful. NOTE (owner-directed 2026-07-19):
+   * the tier is DECOUPLED from execution strategy — attaching a project no
+   * longer auto-enables Swarm / Autopilot (those are orthogonal B-axis modes
+   * the user turns on explicitly). _autoEnableProjectModes is retired from
+   * this path. */
+  if (typeof onProjectAttached === 'function') onProjectAttached();
+  else if (typeof _saveConvToolState === 'function') _saveConvToolState();
 
   // ── Reconcile with the server in the background ──
   try {
@@ -620,6 +624,9 @@ async function clearProject() {
   };
   _updateProjectUI();
   closeProjectModal();
+  /* ★ A project-less chat is never Studio — fall back to Pro (unless the user
+   * is deliberately in Air). Keeps the dial truthful. */
+  if (typeof onProjectCleared === 'function') onProjectCleared();
   debugLog("Project cleared", "success");
 }
 

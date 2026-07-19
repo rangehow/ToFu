@@ -12,6 +12,131 @@
 function toggleThinking() {
   thinkingEnabled = !thinkingEnabled;
 }
+
+// ══════════════════════════════════════════════════════
+// ★ Three-tier capability dial (Air / Pro / Studio)
+//   SINGLE source of truth mirrored from the backend
+//   (lib/tasks_pkg/chat_mode.chat_mode_defaults). The parity test
+//   tests/test_chat_mode_parity.py asserts this table is byte-equal to the
+//   Python one — keep them in lock-step.
+//
+//   Only the atomic flags a tier PINS are listed. Extras (browser/desktop/
+//   imageGen/humanGuidance/autoTranslate) are orthogonal — a tier switch
+//   never clobbers them.
+// ══════════════════════════════════════════════════════
+const _CHAT_MODE_DEFAULTS = {
+  air: {
+    searchMode: 'multi',
+    fetchEnabled: true,
+    codeExecEnabled: false,
+    memoryEnabled: false,
+    swarmEnabled: false,
+  },
+  pro: {
+    searchMode: 'multi',
+    fetchEnabled: true,
+    codeExecEnabled: true,
+    memoryEnabled: true,
+  },
+  studio: {
+    searchMode: 'multi',
+    fetchEnabled: true,
+    memoryEnabled: true,
+  },
+};
+if (typeof window !== 'undefined') window._CHAT_MODE_DEFAULTS = _CHAT_MODE_DEFAULTS;
+
+/* Paint the segmented control's active state + reflect the derived flags into
+ * the atomic-flag setters. Does NOT persist or open modals — that's the
+ * caller's job (setChatMode). Safe to call on restore. */
+function _applyChatModeUI(mode) {
+  mode = (mode === 'air' || mode === 'studio') ? mode : 'pro';
+  chatMode = mode;
+  const d = _CHAT_MODE_DEFAULTS[mode] || {};
+  if (typeof _applySearchModeUI === 'function') _applySearchModeUI(d.searchMode || 'multi');
+  if (typeof _applyFetchEnabledUI === 'function') _applyFetchEnabledUI(d.fetchEnabled !== false);
+  // codeExec: studio leaves it alone (run_command supersedes it in project
+  // mode); air/pro pin it explicitly.
+  if (d.codeExecEnabled !== undefined && typeof _applyCodeExecUI === 'function') {
+    _applyCodeExecUI(!!d.codeExecEnabled);
+  }
+  if (d.memoryEnabled !== undefined && typeof _applyMemoryUI === 'function') {
+    _applyMemoryUI(!!d.memoryEnabled);
+  }
+  // Air is a lean solo tier — swarm off. pro/studio leave swarm to the user.
+  if (d.swarmEnabled !== undefined && typeof _applySwarmUI === 'function') {
+    _applySwarmUI(!!d.swarmEnabled);
+  }
+  // Segmented control paint.
+  document.querySelectorAll('#chatModeSeg .chat-mode-seg-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.mode === mode);
+  });
+  const seg = document.getElementById('chatModeSeg');
+  if (seg) seg.dataset.mode = mode;
+  if (typeof updateSubmenuCounts === 'function') updateSubmenuCounts();
+}
+if (typeof window !== 'undefined') window._applyChatModeUI = _applyChatModeUI;
+
+/* User clicked a tier. Studio is special: it REQUIRES a project, so clicking
+ * it opens the project panel directly; the tier only becomes 'studio' once a
+ * project is actually attached (mpApplyFolders → onProjectAttached). Clicking
+ * Studio while a project is already attached just re-selects it. */
+function setChatMode(mode) {
+  if (mode === 'studio') {
+    const hasProject = (typeof projectState !== 'undefined')
+      && projectState && projectState.active && projectState.path;
+    if (!hasProject) {
+      // Don't flip the dial yet — wait for a real project attach. Just open
+      // the panel; onProjectAttached() promotes to studio on success.
+      if (typeof openProjectModal === 'function') openProjectModal();
+      return;
+    }
+    _applyChatModeUI('studio');
+    _saveConvToolState();
+    debugLog('Mode: Studio (project attached)', 'success');
+    return;
+  }
+  // air / pro. Switching AWAY from studio while a project is attached would be
+  // contradictory (studio ⟺ project); clearing the project is an explicit act
+  // via the project panel, so here we only change the dial + flags. If a
+  // project is attached and the user picks air/pro, we still detach-in-spirit
+  // by clearing the project so the derived state stays truthful.
+  if (mode !== 'studio'
+      && typeof projectState !== 'undefined' && projectState
+      && projectState.active && projectState.path
+      && typeof clearProject === 'function') {
+    clearProject();  // clears projectPath; async server reconcile is fire-and-forget
+  }
+  _applyChatModeUI(mode);
+  _saveConvToolState();
+  debugLog('Mode: ' + (mode === 'air' ? 'Air' : 'Pro'), 'success');
+}
+if (typeof window !== 'undefined') window.setChatMode = setChatMode;
+
+/* Called by mpApplyFolders after a project is successfully attached — promote
+ * the dial to Studio (the tier IS "a project is attached"). Kept separate from
+ * setChatMode so the project path owns the promotion. */
+function onProjectAttached() {
+  if (chatMode !== 'studio') _applyChatModeUI('studio');
+}
+if (typeof window !== 'undefined') window.onProjectAttached = onProjectAttached;
+
+/* Called by clearProject — a project-less chat is never Studio; fall back to
+ * Pro (the everyday tier) unless the user is deliberately in Air. */
+function onProjectCleared() {
+  if (chatMode === 'studio') _applyChatModeUI('pro');
+}
+if (typeof window !== 'undefined') window.onProjectCleared = onProjectCleared;
+
+/* Derive the correct tier from the current atomic flags — used on restore of
+ * an OLD conversation that has no stored chatMode (pre-feature convs). */
+function _deriveChatModeFromFlags(conv) {
+  if (conv && conv.projectPath) return 'studio';
+  // Air is the lean fingerprint: memory OFF and codeExec OFF.
+  if (conv && conv.memoryEnabled === false && !conv.codeExecEnabled) return 'air';
+  return 'pro';
+}
+if (typeof window !== 'undefined') window._deriveChatModeFromFlags = _deriveChatModeFromFlags;
 /* ★ Populate model dropdown dynamically from the registered models list.
  * Called once at startup from _loadServerConfigAndPopulate(). */
 function _populateModelDropdown(models) {
@@ -358,24 +483,20 @@ function updateSubmenuCounts() {
     el.classList.toggle("visible", want);
   };
 
-  // AI enhance: codeExec, memory, translate, swarm
-  const aiCount = (codeExecEnabled ? 1 : 0) + (memoryEnabled ? 1 : 0) + (autoTranslate ? 1 : 0) + (swarmEnabled ? 1 : 0);
-  _setCount(document.getElementById("submenuAICount"), aiCount);
-  const aiTrigger = document.querySelector("#submenuAI .submenu-trigger");
-  if (aiTrigger) aiTrigger.classList.toggle("has-active", aiCount > 0);
+  // ★ Gate the AI-drawing extra by model availability: hide the whole row when
+  //   NO image-gen model is configured (a dead button otherwise). Uses the
+  //   registered-model list captured at boot.
+  _applyImageGenAvailability();
 
-  // Tools: browser, desktop, image gen, human guidance
-  // (Scheduler is a default tool — always on, no toggle — so it does not count here.)
-  const toolCount = (browserEnabled ? 1 : 0) + (desktopEnabled ? 1 : 0) + (imageGenEnabled ? 1 : 0) + (humanGuidanceEnabled ? 1 : 0);
-  _setCount(document.getElementById("submenuToolsCount"), toolCount);
-  const toolTrigger = document.querySelector("#submenuTools .submenu-trigger");
-  if (toolTrigger) toolTrigger.classList.toggle("has-active", toolCount > 0);
-
-  // Mode: endpoint, autopilot (swarm moved to Enhance, flow is its own box)
-  const modeCount = (endpointEnabled ? 1 : 0) + (autopilotEnabled ? 1 : 0);
-  _setCount(document.getElementById("submenuModeCount"), modeCount);
-  const modeTrigger = document.querySelector("#submenuMode .submenu-trigger");
-  if (modeTrigger) modeTrigger.classList.toggle("has-active", modeCount > 0);
+  // Extras drawer count = every orthogonal capability the user turned on.
+  // (Scheduler is a default tool — no toggle — so it doesn't count.)
+  const extrasCount = (autoTranslate ? 1 : 0) + (humanGuidanceEnabled ? 1 : 0)
+    + (browserEnabled ? 1 : 0) + (desktopEnabled ? 1 : 0)
+    + (imageGenEnabled ? 1 : 0) + (swarmEnabled ? 1 : 0)
+    + (endpointEnabled ? 1 : 0) + (autopilotEnabled ? 1 : 0);
+  _setCount(document.getElementById("submenuExtrasCount"), extrasCount);
+  const extrasTrigger = document.querySelector("#submenuExtras .submenu-trigger");
+  if (extrasTrigger) extrasTrigger.classList.toggle("has-active", extrasCount > 0);
 
   // Flow: standalone box — no count pill, just reflect active-state on the trigger.
   const flowTrigger = document.getElementById("flowToggle");
@@ -385,6 +506,40 @@ function updateSubmenuCounts() {
    * pill's box.  Re-measure so .ps-label gets its space back. */
   if (widthChanged && typeof _scheduleReflow === "function") _scheduleReflow();
 }
+
+/* Hide the AI-drawing toggle(s) when no image-gen model is configured — a
+ * button that can't do anything is worse than an absent one. Detection reuses
+ * the registered-model list (_registeredModels, populated by
+ * _populateModelDropdown from /api/server-config). Best-effort: if the list
+ * isn't ready yet we leave the row visible (it re-runs on the next
+ * updateSubmenuCounts after config loads). */
+function _hasImageGenModel() {
+  const models = (typeof _registeredModels !== 'undefined' && _registeredModels) || [];
+  for (const m of models) {
+    const caps = (m && m.capabilities) || [];
+    for (let i = 0; i < caps.length; i++) if (caps[i] === 'image_gen') return true;
+  }
+  return false;
+}
+if (typeof window !== 'undefined') window._hasImageGenModel = _hasImageGenModel;
+
+function _applyImageGenAvailability() {
+  const models = (typeof _registeredModels !== 'undefined' && _registeredModels) || [];
+  if (!models.length) return;  // config not loaded yet — don't hide prematurely
+  const ok = _hasImageGenModel();
+  const ids = ['imageGenToggle', 'imageGenModeBtn', 'mobileImageGenToggle', 'mobileImageGenModeBtn'];
+  for (const id of ids) {
+    const el = document.getElementById(id);
+    if (el) el.style.display = ok ? '' : 'none';
+  }
+  // If image-gen was somehow enabled but no model exists, turn it off so the
+  // wire config never asks for a tool the server can't honor.
+  if (!ok && typeof imageGenEnabled !== 'undefined' && imageGenEnabled
+      && typeof _applyImageGenToolUI === 'function') {
+    _applyImageGenToolUI(false);
+  }
+}
+if (typeof window !== 'undefined') window._applyImageGenAvailability = _applyImageGenAvailability;
 
 function cycleSearchMode() {
   const modes = ["off", "multi"];

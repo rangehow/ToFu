@@ -523,6 +523,7 @@ function _saveConvToolState() {
   conv.imageGenEnabled = !!imageGenEnabled;
   conv.imageGenMode = !!imageGenMode;
   conv.humanGuidanceEnabled = !!humanGuidanceEnabled;
+  conv.chatMode = chatMode || 'pro';
   /* ★ FIX: Sync projectPath from the UI-visible projectState to the conv object.
    * Without this, conv.projectPath can diverge from projectState when:
    *  (a) A new conv is created (has no projectPath property at all)
@@ -607,6 +608,15 @@ function _restoreConvToolState(conv) {
   _applyImageGenToolUI(!!conv.imageGenEnabled);
   _applyImageGenUI(!!conv.imageGenMode);
   _applyHumanGuidanceUI(!!conv.humanGuidanceEnabled);
+  /* ★ Three-tier dial: use the stored tier, or derive it from the atomic
+   * flags for a pre-feature conversation. Paint-only (no persist / no modal)
+   * so restoring never clobbers the just-restored flags — _applyChatModeUI is
+   * idempotent with the setters above. */
+  if (typeof _applyChatModeUI === 'function') {
+    const _mode = conv.chatMode
+      || (typeof _deriveChatModeFromFlags === 'function' ? _deriveChatModeFromFlags(conv) : 'pro');
+    _applyChatModeUI(_mode);
+  }
   /* ★ Restore the image gen model + batch count + aspect + resolution from conv settings */
   if (conv.imageGenModel) _igSelectedModel = conv.imageGenModel;
   if (conv.imageGenCount) {
@@ -675,6 +685,10 @@ function _resetToolsToDefaults() {
   _applyFlowUI('');
   _applyImageGenToolUI(false);
   _applyImageGenUI(false);
+  /* ★ New chat defaults to the Pro tier (everyday all-rounder). This runs the
+   * derivation setters again, but they were just set to matching defaults
+   * above, so it's a no-op paint + segmented-control highlight. */
+  if (typeof _applyChatModeUI === 'function') _applyChatModeUI('pro');
   if (typeof paperMode !== 'undefined' && paperMode && typeof exitPaperMode === 'function') exitPaperMode();
   _applyAutoTranslateUI(convAutoTranslate(null));
   /* ★ Reset image gen creative mode settings to defaults */

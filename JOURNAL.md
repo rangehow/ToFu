@@ -1,5 +1,13 @@
 # Project Journal
 
+### 2026-07-19 — 「宽屏平板上同时冒出两套下拉菜单」根修:三个响应式压缩块的隐藏清单用的是**失效的旧 submenu ID**(commit `1e4f373`,2 文件 +23/-16,17 测全绿含既存红测转绿)。owner 截图报「怎么现在有两个下拉框了?」——一个是桌面版 `··· 1` 抽屉 + 编排流程,另一个是移动版 `···` 底部 sheet,coarse 平板上两套同时显示。
+- **根因(旧 ID 漂移):** 三个压缩块(≤768 手机 / 769–1024 coarse 抽屉 / ≥1025 宽 coarse)都写 `#submenuAI,#submenuTools,#submenuMode{display:none}`——但工具栏早已重构,现在的三个子菜单是 `#submenuMode`(能力模式)、`#submenuExtras`(`···` 更多抽屉)、`#submenuFlow`(编排流程)。`#submenuAI`/`#submenuTools` **根本不存在**,于是 `#submenuExtras`+`#submenuFlow` 在 coarse 平板上**从未被隐藏** → 与移动版 `···` 底部 sheet **两套并存**。sheet 里其实已含全部条目(思考深度/能力模式/自动翻译/蜂群/…),所以 coarse 下隐藏桌面菜单才是对的。
+- **打比方:** 门牌换了号(submenu 改名),但"打烊时锁哪几间铺子"的清单还照着旧门牌念,结果两间铺子(Extras/Flow)永远没锁门,和旁边新开的自助店(移动 sheet)撞在一起营业。
+- **修法:** 三处隐藏清单统一改成真 ID `#submenuExtras,#submenuFlow,#submenuMode`(`#imageGenBtn,#projectBtn` 那两个也失效但无害、保持最小 diff 未动)。
+- **测试同步(lockstep,遵 FE/BE 同步纪律):** `test_preset_dropdown_coarse_escape.py` 里 4 处 `#submenuAI` 断言/NEUTER 正则改成 `#submenuExtras`;并修正一个**在 HEAD 就已经红**的陈旧断言——它要求 `.mobile-bottom-sheet.open{display:block}` 出现在"≥1025 宽 coarse 专属块"里,但该 sheet 揭示规则在此前的"单一来源合并块"重构后已移到 `@media (max-width:768px),(pointer:coarse)`(其 coarse 臂本就覆盖 ≥1025),故改为在合并块里断言,sheet 真能弹出。
+- **诚实边界:** 纯前端 CSS(+守卫同步),由 17 测(coarse-escape 7 + breakpoint-coordination 8 + mobile-sheet-content 2)验证、CSS brace depth=0、minified 重建 `styles-52a0f820.css`。**生效需重建 CSS bundle + 硬刷**(已跑进程无需重启,纯静态资源)。真实体感(coarse 平板上桌面 Extras/Flow 菜单消失、只剩 `···` sheet 一套)待硬刷后真机抽验。
+- **git 纪律(共享 HEAD):** `reset -q HEAD .` → 仅 add 2 文件 → `commit -F- -- <2 路径>` → 泄漏探针 = **NO LEAK**。`1e4f373`。
+
 ### 2026-07-19 — 输入栏按钮重叠根修 + 模式选择器统一为「向上弹出小方块」(commit `5ecf10c`,3 文件 +98/-44,jsdom 烟测通过 + parity/declutter/icon-box/breakpoint 19 测全绿)。owner 报「输入框按钮全挤在一起、很丑」,并提议「把 Chat/Pro/Studio 做成点击向上展开的方块」+「统一这些 logo 和按钮的设计语言,和页面风格一致」。
 - **根因(挤压/重叠):** 三段式内联转盘 `.chat-mode-seg`(约 192px、`flex-wrap:nowrap`)+ 更多抽屉 + 编排流程 + 模型选择器 + 搜索 + 发送,在窄宽度下超出一行宽度 → 按钮互相重叠。转盘是这排里唯一的"横向大块",既占宽又和其它"药丸+弹层"控件视觉不一致。
 - **打比方:** 一排本该并肩站的人,中间硬塞了一张三人沙发(转盘),挤得两边的人叠在一起。把沙发换成一个和旁边同款的折叠凳(弹出式药丸),排面立刻不挤、且风格统一。

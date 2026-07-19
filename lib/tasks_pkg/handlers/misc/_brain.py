@@ -150,6 +150,17 @@ def _handle_board_tool(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg, 
             }
         else:
             # Mutation → an explicit transition (verb + target epic + status).
+            # A mutation can FAIL by RETURNING an error string (board full,
+            # already-claimed, task-not-found) rather than raising — the old
+            # transition meta looked byte-identical to a success (verb + title +
+            # a GUESSED 'open' status), so a failed post/claim rendered as a
+            # normal green card and the user only learned of the failure by
+            # opening the raw model text (the reported bug). Detect the error
+            # sentinel and carry ok/error onto the transition so the frontend
+            # can render an explicit failed card.
+            _content = _tool_content if isinstance(_tool_content, str) else str(_tool_content)
+            _failed = _content.lstrip()[:40].startswith(('Error', '❌', 'NOT claimed', 'Failed'))
+            _err_msg = _content.strip() if _failed else ''
             # A POST carries NO task_id in its args (the id is minted
             # server-side); the epic title lives in the args and the freshly
             # posted epic is always 'open'. So a post is keyed off the args +
@@ -181,8 +192,13 @@ def _handle_board_tool(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg, 
                         title = tk.get('title', '')
                         status = tk.get('status', '')
                         break
+            # A failed mutation posts/claims/etc NOTHING, so a guessed status
+            # ('open') would be a lie — clear it and surface the error instead.
+            if _failed:
+                status = ''
             meta['boardTransition'] = {
                 'verb': _verb, 'taskId': tid, 'title': title, 'status': status,
+                'ok': not _failed, 'error': _err_msg,
             }
 
     return simple_call(

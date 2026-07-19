@@ -8045,6 +8045,9 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
 .ptool-board-tr-id { font-size: 10px; color: var(--text-tertiary); font-family: var(--mono, monospace); white-space: nowrap; }
 .ptool-board-tr-arrow { display: inline-flex; color: var(--text-tertiary); transform: rotate(-90deg); }
 .ptool-board-tr-status { font-size: 10.5px; font-weight: 700; padding: 1px 8px; border-radius: 8px; border: 1px solid var(--border); }
+.ptool-board-tr-failed { display: inline-flex; align-items: center; gap: 4px; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.02em; padding: 1px 8px; border-radius: 8px; color: var(--pb-red, #ef4444); border: 1px solid color-mix(in srgb, var(--pb-red, #ef4444) 45%, transparent); }
+.ptool-board-transition-failed .ptool-board-tr-titlerow { border-left-color: var(--pb-red, #ef4444); }
+.ptool-board-tr-error { font-size: 11.5px; line-height: 1.5; color: var(--pb-red, #ef4444); overflow-wrap: anywhere; padding: 5px 9px; background: color-mix(in srgb, var(--pb-red, #ef4444) 8%, transparent); border: 1px solid color-mix(in srgb, var(--pb-red, #ef4444) 30%, transparent); border-radius: 5px; }
 /* Peer status cards */
 .ptool-peer-list { display: flex; flex-direction: column; gap: 7px; }
 .ptool-peer-card { padding: 7px 10px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; }

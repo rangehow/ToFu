@@ -146,6 +146,53 @@ def test_post_transition_no_id_in_result_still_shows_title():
 
 
 # ════════════════════════════════════════════════════════════════════
+#  A FAILED mutation must carry ok=false + error (the reported "no visible
+#  failure, only in the raw model text" bug) and NOT a guessed 'open' status.
+# ════════════════════════════════════════════════════════════════════
+
+def test_failed_post_carries_error_and_no_guessed_status():
+    meta = _run_board_post_build(
+        'project_board_post', {'title': 'A doomed epic'},
+        'Error posting epic: board full: 200 active epics '
+        '(complete or reopen some before posting more).',
+        board_tasks=[],
+    )
+    tr = meta.get('boardTransition') or {}
+    assert tr.get('ok') is False, 'a failed mutation must carry ok=false'
+    assert 'board full' in (tr.get('error') or ''), \
+        'the error message must be surfaced on the transition meta'
+    assert tr.get('status') == '', \
+        "a failed post posts NOTHING — a guessed 'open' status would be a lie"
+    assert tr.get('title') == 'A doomed epic', 'the attempted title still shows'
+
+
+def test_failed_claim_carries_error():
+    meta = _run_board_post_build(
+        'project_board_claim', {'task_id': 'pt_taken0001'},
+        'NOT claimed — epic is already being advanced by conversation cOther.',
+        board_tasks=[{'id': 'pt_taken0001', 'title': 'Contended epic',
+                      'status': 'claimed'}],
+    )
+    tr = meta.get('boardTransition') or {}
+    assert tr.get('ok') is False
+    assert 'already being advanced' in (tr.get('error') or '')
+    assert tr.get('status') == ''
+
+
+def test_successful_mutation_marks_ok_true():
+    meta = _run_board_post_build(
+        'project_board_post', {'title': 'A good epic'},
+        'Posted epic pt_good00001111 to the board.',
+        board_tasks=[{'id': 'pt_good00001111', 'title': 'A good epic',
+                      'status': 'open'}],
+    )
+    tr = meta.get('boardTransition') or {}
+    assert tr.get('ok') is True, 'a successful mutation must carry ok=true'
+    assert not (tr.get('error') or ''), 'no error on success'
+    assert tr.get('status') == 'open'
+
+
+# ════════════════════════════════════════════════════════════════════
 #  Non-post mutations still key off the task_id arg (regression guard).
 # ════════════════════════════════════════════════════════════════════
 

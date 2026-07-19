@@ -144,6 +144,26 @@ const untitledHtml = _renderUnifiedToolLine(untitledRound, false);
 check('untitled_placeholder', untitledHtml.includes('ptool-board-tr-untitled'));
 check('untitled_still_has_id', untitledHtml.includes('pt_deadbeef00'));
 
+// ── A FAILED board mutation MUST render a visible failed card (the reported
+//    bug: a failed release showed a normal green card, failure only in the raw
+//    model text). ok:false + error → failed badge + error row + no status. ──
+const failedRound = {
+  status: 'done', toolName: 'project_board_post', query: 'project_board_post',
+  toolContent: 'Error posting epic: board full: 200 active epics.', toolRounds: [],
+  results: [{ source: 'Board', boardTransition: {
+    verb: 'post', taskId: '', title: 'Redesign the release dashboard',
+    status: '', ok: false, error: 'board full: 200 active epics' } }],
+};
+const failedHtml = _renderUnifiedToolLine(failedRound, false);
+check('failed_transition_class', failedHtml.includes('ptool-board-transition-failed'));
+check('failed_transition_badge', failedHtml.includes('ptool-board-tr-failed'));
+check('failed_transition_error', failedHtml.includes('ptool-board-tr-error') && failedHtml.includes('board full: 200 active epics'));
+check('failed_transition_title', failedHtml.includes('Redesign the release dashboard'));
+// a failed mutation must NOT render a status chip (no guessed 'open')
+check('failed_transition_no_status', !failedHtml.includes('ptool-board-tr-status'));
+// a SUCCESSFUL transition (ok!==false) keeps the normal status chip, no fail markup
+check('ok_transition_no_fail', !trHtml.includes('ptool-board-transition-failed') && !trHtml.includes('ptool-board-tr-failed'));
+
 // ── project_peer_status → peer cards ──
 const peerRound = {
   status: 'done', toolName: 'project_peer_status', query: 'project_peer_status',
@@ -447,6 +467,9 @@ def test_structured_brain_tool_renderers():
         'PASS post_transition_id_chip', 'PASS post_transition_verb',
         'PASS post_transition_open_status', 'PASS post_transition_head_friendly',
         'PASS untitled_placeholder', 'PASS untitled_still_has_id',
+        'PASS failed_transition_class', 'PASS failed_transition_badge',
+        'PASS failed_transition_error', 'PASS failed_transition_title',
+        'PASS failed_transition_no_status', 'PASS ok_transition_no_fail',
         'PASS peer_list_class', 'PASS peer_who', 'PASS peer_round',
         'PASS peer_epic', 'PASS peer_not_md_dump', 'PASS peer_empty',
         'PASS proposal_class', 'PASS proposal_text', 'PASS proposal_pending',
@@ -530,6 +553,22 @@ def test_NC_board_snapshot_renderer_is_load_bearing():
         replacement='  if (false) return _renderBoardSnapshot(meta.boardSnapshot);',
         must_fail=['board_mini_class', 'board_mini_not_md_dump'],
         must_still_pass=['peer_list_class', 'proposal_class'],
+    )
+
+
+@pytest.mark.skipif(not _node_deps_available(),
+                    reason='node + jsdom dev-deps not installed (run npm install)')
+def test_NC_failed_transition_branch_is_load_bearing():
+    """Force `failed` to always be false in _renderBoardTransition → a failed
+    mutation reverts to the OLD look (no failed badge / error row) → the failed
+    checks FAIL while a normal transition + board mini still render."""
+    _nc(
+        anchor='  const failed = tr.ok === false;',
+        replacement='  const failed = false;',
+        must_fail=['failed_transition_class', 'failed_transition_badge',
+                   'failed_transition_error'],
+        must_still_pass=['transition_class', 'board_mini_class',
+                         'ok_transition_no_fail'],
     )
 
 

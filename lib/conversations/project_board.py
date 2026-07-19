@@ -101,7 +101,18 @@ _SIBLING_TAG = '[sibling]'
 _TITLE_MAX_CHARS = 2000  # epics carry multi-sentence design descriptions; a
                          # tight cap silently clipped titles mid-word (both in
                          # the board panel and the injected prompt block)
-_MAX_BOARD_TASKS = 200  # coarse epics only — a guard against runaway posting
+# Admission guard against runaway posting. This caps only the ACTIVE epics
+# (stored status != 'done') — the working set a reader actually has to reason
+# about. Completed epics are history: they must NEVER count toward admission
+# (otherwise a long-lived project accretes 200 finished epics and the board is
+# PERMANENTLY "full", unable to accept a single new epic — the reported bug).
+_MAX_ACTIVE_TASKS = 200
+# Completed epics are retained for the "Recently done" lane, but capped so the
+# table can't grow without bound over a project's life. When a post pushes the
+# done-row count past this, the OLDEST done rows are pruned (best-effort, in the
+# same connection). The panel/prompt only ever surface the last ~8 done epics.
+_MAX_DONE_RETAINED = 100
+_MAX_BOARD_TASKS = _MAX_ACTIVE_TASKS  # back-compat alias (was the total cap)
 
 
 _now_ms = now_ms
@@ -296,10 +307,36 @@ def post_task(project_path: str, conv_id: str, title: str, *,
     project_path = normalize_project_path(project_path)
     try:
         db = get_thread_db(DOMAIN_CHAT)
-        n = db.execute('SELECT COUNT(*) AS c FROM project_tasks WHERE project_path=?',
-                       (project_path,)).fetchone()
-        if n and int(n['c']) >= _MAX_BOARD_TASKS:
-            return {'ok': False, 'error': 'board full (coarse epics only)'}
+        # Admission counts ACTIVE epics only (status != 'done') — completed
+        # epics are history and must never block a new post, else a long-lived
+        # project's board is permanently "full".
+        n = db.execute(
+            "SELECT COUNT(*) AS c FROM project_tasks "
+            "WHERE project_path=? AND status!='done'",
+            (project_path,)).fetchone()
+        if n and int(n['c']) >= _MAX_ACTIVE_TASKS:
+            return {'ok': False,
+                    'error': f'board full: {_MAX_ACTIVE_TASKS} active epics '
+                             '(complete or reopen some before posting more)'}
+        # Prune the oldest completed epics so the retained history stays bounded
+        # over the project's life. Best-effort in the same connection; the
+        # "Recently done" lane only ever shows the last ~8 anyway.
+        try:
+            d = db.execute(
+                "SELECT COUNT(*) AS c FROM project_tasks "
+                "WHERE project_path=? AND status='done'",
+                (project_path,)).fetchone()
+            done_n = int(d['c']) if d else 0
+            if done_n > _MAX_DONE_RETAINED:
+                db.execute(
+                    'DELETE FROM project_tasks WHERE id IN ('
+                    "  SELECT id FROM project_tasks "
+                    "  WHERE project_path=? AND status='done' "
+                    '  ORDER BY updated_at ASC LIMIT ?)',
+                    (project_path, done_n - _MAX_DONE_RETAINED))
+        except Exception as e:
+            logger.debug('[Board] done-row prune skipped proj=%.40r: %s',
+                         project_path, e)
         task_id = short_id('pt_', 16)
         ts = _now_ms()
         deps = json.dumps([str(d) for d in (depends_on or [])], ensure_ascii=False)

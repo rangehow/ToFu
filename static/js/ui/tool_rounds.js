@@ -1230,6 +1230,11 @@ function _unescapeEntities(s) {
 function _renderBoardTransition(tr) {
   if (!tr || !tr.verb) return "";
   const _t = (typeof t === "function") ? t : (k, d) => d;
+  // A mutation can FAIL by returning an error (board full, already-claimed,
+  // task-not-found). The backend now carries `ok:false` + `error` so we render
+  // an explicit failed card instead of a green "posted → open" that lies about
+  // what happened (the reported bug: no visible failure, only in the raw text).
+  const failed = tr.ok === false;
   const verbLabel = _t("projectBrain.boardVerb." + tr.verb, tr.verb);
   const rawTitle = (tr.title || "").trim();
   const titleHtml = rawTitle
@@ -1244,14 +1249,26 @@ function _renderBoardTransition(tr) {
   const statusLabel = tr.status
     ? `<span class="ptool-board-tr-status ptool-board-mini-${escapeHtml(tr.status)}">${escapeHtml(_t("projectBrain.lane" + tr.status.charAt(0).toUpperCase() + tr.status.slice(1), tr.status))}</span>`
     : "";
+  // On failure the "→ status" chip is replaced by a FAILED badge; the error
+  // message gets its own prominent row so the user sees WHY without opening
+  // the raw model text.
+  const failBadge = failed
+    ? `<span class="ptool-board-tr-failed">${(typeof Icon === "function") ? Icon("alertTriangle", 12) : ""}<span>${escapeHtml(_t("projectBrain.boardFailed", "failed"))}</span></span>`
+    : "";
   const headRow = `<div class="ptool-board-tr-head">` +
     `<span class="ptool-board-tr-verb">${escapeHtml(verbLabel)}</span>` +
-    (tr.status ? `<span class="ptool-board-tr-arrow">${(typeof Icon === "function") ? Icon("chevronDown", 12) : "→"}</span>${statusLabel}` : "") +
+    (failed
+      ? failBadge
+      : (tr.status ? `<span class="ptool-board-tr-arrow">${(typeof Icon === "function") ? Icon("chevronDown", 12) : "→"}</span>${statusLabel}` : "")) +
     `</div>`;
   const titleRow = `<div class="ptool-board-tr-titlerow">` +
     `<span class="ptool-board-tr-title">${titleHtml}</span>${idChip}` +
     `</div>`;
-  return `<div class="ptool-board-transition">${headRow}${titleRow}</div>`;
+  const errRow = (failed && (tr.error || "").trim())
+    ? `<div class="ptool-board-tr-error">${escapeHtml((tr.error || "").trim())}</div>`
+    : "";
+  const cls = failed ? "ptool-board-transition ptool-board-transition-failed" : "ptool-board-transition";
+  return `<div class="${cls}">${headRow}${titleRow}${errRow}</div>`;
 }
 
 /* Localize the small known set of backend statusLabel tokens ("generating" /

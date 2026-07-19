@@ -289,6 +289,10 @@ var _i18n = {
   'autopilot.privateNotSent': { zh: '私有过程 · 不发送给智能体', en: 'Private · not sent to the agent' },
   'autopilot.runFold': { zh: '自动驾驶运行', en: 'Autopilot run' },
   'autopilot.runFoldHint': { zh: '轮交互 · 点击展开', en: 'turns — click to expand' },
+  // ── Image upload chip: shown on the pending-image thumbnail while it is
+  //    still compressing/uploading (upload.js::renderImagePreviews). Missing
+  //    this key made t() return the literal "upload.processing" on the chip.
+  'upload.processing': { zh: '处理中…', en: 'Processing…' },
   'tool.noContent': { zh: '无返回内容。', en: 'No content returned.' },
   // ── Model-view affordance: the exact, verbatim text a tool returned to the
   //    LLM (nothing omitted). Replaces the old ambiguous "Preview" wording,
@@ -1770,6 +1774,10 @@ var _i18n = {
   // Review tab (peer-review mode)
   // Rebuttal follow-up (author response → reviewer reply + score decision)
   'paper.rebuttalSectionTitle': { zh: '作者 Rebuttal → 后续回复', en: 'Author rebuttal → follow-up reply' },
+  'paper.reviewSegReview': { zh: '审稿报告', en: 'Review' },
+  'paper.reviewSegRebuttal': { zh: '作者回复', en: 'Rebuttal' },
+  'paper.reviewSegHasReply': { zh: '已有后续回复', en: 'Follow-up reply available' },
+  'paper.reviewSegAria': { zh: '审稿子视图', en: 'Review sub-view' },
   'paper.rebuttalHint': { zh: '把作者的 rebuttal 粘贴到下方。审稿人会逐点回复，并判断 OA / Confidence 是否应调整（多数 rebuttal 不应改分）。', en: "Paste the authors' rebuttal below. The reviewer replies point by point and decides whether the OA / Confidence score should change (most rebuttals should not)." },
   'paper.rebuttalPlaceholder': { zh: '在此粘贴作者的 rebuttal…', en: 'Paste the author rebuttal here…' },
   'paper.rebuttalGenerate': { zh: '生成后续回复', en: 'Generate follow-up' },
@@ -2902,6 +2910,7 @@ var _i18n = {
   'projectBrain.boardVerb.block': { zh: '标记受阻', en: 'blocked' },
   'projectBrain.boardVerb.reopen': { zh: '重开', en: 'reopened' },
   'projectBrain.boardUntitled': { zh: '（未命名 epic）', en: '(untitled epic)' },
+  'projectBrain.boardFailed': { zh: '失败', en: 'failed' },
   // ── Transcript tool-card: activity-feed + peer-message/intervene delivery ──
   'projectBrain.thisConv': { zh: '本对话', en: 'this conversation' },
   'projectBrain.pdMessage': { zh: '发送消息', en: 'Message' },

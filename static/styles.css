@@ -16433,7 +16433,7 @@ html:not([data-theme="tofu"]) .tofu-pet{display:none}
    * grep for hidden misses it). Root-cause fix: apply the phone's compaction —
    * move the submenus + standalone actions into the "···" bottom sheet and free
    * the row width, so the model picker keeps its natural size. */
-  #submenuAI,#submenuTools,#submenuMode,
+  #submenuExtras,#submenuFlow,#submenuMode,
   #imageGenBtn,#projectBtn{display:none!important}
   .mobile-more-btn{display:flex!important;width:40px;height:40px;align-items:center;
     justify-content:center;flex-shrink:0;border:1.5px solid var(--border);
@@ -16469,7 +16469,7 @@ html:not([data-theme="tofu"]) .tofu-pet{display:none}
    the picker, and make the sheet + model dropdown reachable. Guarded by
    tests/test_preset_dropdown_coarse_escape.py. */
 @media (pointer:coarse) and (min-width:1025px){
-  #submenuAI,#submenuTools,#submenuMode,
+  #submenuExtras,#submenuFlow,#submenuMode,
   #imageGenBtn,#projectBtn{display:none!important}
   .mobile-more-btn{display:flex!important;width:40px;height:40px;align-items:center;
     justify-content:center;flex-shrink:0;border:1.5px solid var(--border);
@@ -16651,7 +16651,7 @@ html:not([data-theme="tofu"]) .tofu-pet{display:none}
   /* --- Hide submenus & standalone action btns on mobile ---
    * These are accessible via the "more" (···) bottom sheet.
    * Only the model picker (#modelGroup) stays in the toolbar. */
-  #submenuAI,#submenuTools,#submenuMode{display:none!important}
+  #submenuExtras,#submenuFlow,#submenuMode{display:none!important}
 
   /* --- Model picker: compact, 40px tall to match the other controls --- */
   .preset-toggle{height:40px;padding:0 10px;gap:5px;max-width:150px;overflow:hidden;box-sizing:border-box;align-items:center}

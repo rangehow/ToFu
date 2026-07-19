@@ -253,7 +253,7 @@ var _i18n = {
   'toolbar.enhance': { zh: '增强', en: 'Enhance' },
   'toolbar.enhance': { zh: '增强', en: 'Enhance' },
   // ── Three-tier capability dial (Air / Pro / Studio) ──
-  'toolbar.modeAirTooltip': { zh: 'Air — 极速轻聊，工具最少、最省', en: 'Air — lean & fast, fewest tools, cheapest' },
+  'toolbar.modeAirTooltip': { zh: 'Chat — 极速轻聊，工具最少、最省', en: 'Chat — lean & fast, fewest tools, cheapest' },
   'toolbar.modeProTooltip': { zh: 'Pro — 全能助手（默认），代码执行/记忆/搜索全开', en: 'Pro — the everyday all-rounder (default): code, memory, search' },
   'toolbar.modeStudioTooltip': { zh: 'Studio — 绑定项目仓库，解锁项目工具', en: 'Studio — attach a project/repo to unlock project tools' },
   'toolbar.extrasTooltip': { zh: '更多能力', en: 'More capabilities' },

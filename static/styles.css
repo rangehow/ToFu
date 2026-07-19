@@ -753,7 +753,10 @@ textarea::placeholder{color:var(--text-tertiary)}
  * A segmented pill with a sliding highlight thumb. The ONE primary tool
  * control; ::selects a tier, which expands into the atomic tool flags. */
 .chat-mode-seg{position:relative;display:inline-flex;align-items:center;flex-shrink:0;background:var(--bg-tertiary);border:1px solid var(--border-light);border-radius:11px;padding:2px;gap:0;height:32px;box-sizing:border-box}
-.chat-mode-seg-btn{position:relative;z-index:1;display:inline-flex;align-items:center;gap:5px;padding:0 11px;height:26px;border:none;background:none;cursor:pointer;color:var(--text-tertiary);font-size:12px;font-weight:600;font-family:'Jakarta Toolbar','Plus Jakarta Sans','Jakarta Fallback',sans-serif;border-radius:8px;transition:color .18s ease;white-space:nowrap;line-height:1}
+/* Equal-width segments: flex:1 + a shared min-width so the thumb's fixed 1/3
+ * translateX math lands exactly on each slot regardless of label length
+ * ("Chat" vs "Studio" differ, so natural widths would desync the thumb). */
+.chat-mode-seg-btn{flex:1 1 0;min-width:64px;justify-content:center;position:relative;z-index:1;display:inline-flex;align-items:center;gap:5px;padding:0 11px;height:26px;border:none;background:none;cursor:pointer;color:var(--text-tertiary);font-size:12px;font-weight:600;font-family:'Jakarta Toolbar','Plus Jakarta Sans','Jakarta Fallback',sans-serif;border-radius:8px;transition:color .18s ease;white-space:nowrap;line-height:1}
 .chat-mode-seg-btn:hover{color:var(--text-secondary)}
 .chat-mode-seg-btn.active{color:#fff}
 .chat-mode-seg-ic{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px}

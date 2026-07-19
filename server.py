@@ -1415,6 +1415,41 @@ import uuid as _uuid
 _lifecycle_log = get_logger('server.lifecycle')
 _QUIET_PREFIXES = ('/api/browser/', '/api/desktop/', '/static/', '/api/task/')
 _SLOW_THRESHOLD_S = 2.0
+# Responses at/above this size are flagged even when the server returned
+# quickly — the "fast but heavy" case (e.g. a multi-MB conversation fetch)
+# that otherwise only shows up as a client-side timeout over a slow proxy.
+_HEAVY_RESPONSE_BYTES = 1_048_576  # 1 MiB
+
+
+def _response_size(response):
+    """Return the response body size in bytes from Content-Length, else None.
+
+    Streaming / chunked responses (SSE, ``Content-Range`` partials) carry no
+    reliable ``Content-Length``; we return None so the caller omits the size
+    rather than blocking to materialize the body.
+    """
+    try:
+        raw = response.headers.get('Content-Length')
+    except Exception:
+        return None
+    if raw is None:
+        return None
+    try:
+        n = int(raw)
+    except (ValueError, TypeError):
+        return None
+    return n if n >= 0 else None
+
+
+def _fmt_size(n):
+    """Format a byte count as a compact human string ('2.8MB'); '' if unknown."""
+    if not isinstance(n, int) or n < 0:
+        return ''
+    if n < 1024:
+        return '%dB' % n
+    if n < 1024 * 1024:
+        return '%.1fKB' % (n / 1024)
+    return '%.1fMB' % (n / (1024 * 1024))
 
 @app.before_request
 async def _assign_req_id_and_log():
@@ -1435,19 +1470,28 @@ async def _log_response(response):
     status = response.status_code
     is_quiet = any(path.startswith(p) for p in _QUIET_PREFIXES)
 
+    size = _response_size(response)
+    size_str = _fmt_size(size)
+    timing = '(%.3fs, %s)' % (elapsed, size_str) if size_str else '(%.3fs)' % elapsed
+
     if status >= 500:
-        _lifecycle_log.error('[%s] ← %s %s %d (%.3fs)', rid, request.method, path, status, elapsed)
+        _lifecycle_log.error('[%s] ← %s %s %d %s', rid, request.method, path, status, timing)
     elif status >= 400:
         if status == 404 and request.path.startswith('/.well-known/'):
-            _lifecycle_log.debug('[%s] ← %s %s %d (%.3fs)', rid, request.method, path, status, elapsed)
+            _lifecycle_log.debug('[%s] ← %s %s %d %s', rid, request.method, path, status, timing)
         else:
-            _lifecycle_log.warning('[%s] ← %s %s %d (%.3fs)', rid, request.method, path, status, elapsed)
+            _lifecycle_log.warning('[%s] ← %s %s %d %s', rid, request.method, path, status, timing)
     elif elapsed >= _SLOW_THRESHOLD_S and not is_quiet:
-        _lifecycle_log.warning('[%s] ← %s %s %d SLOW (%.3fs)', rid, request.method, path, status, elapsed)
+        _lifecycle_log.warning('[%s] ← %s %s %d SLOW %s', rid, request.method, path, status, timing)
+    elif size is not None and size >= _HEAVY_RESPONSE_BYTES and not is_quiet:
+        # Fast but heavy: the server was quick, yet a multi-MB body will feel
+        # slow to the client over a constrained proxy. Surface it at WARN so
+        # "fast server, heavy experience" is traceable in server logs.
+        _lifecycle_log.warning('[%s] ← %s %s %d HEAVY %s', rid, request.method, path, status, timing)
     elif not is_quiet:
-        _lifecycle_log.info('[%s] ← %s %s %d (%.3fs)', rid, request.method, path, status, elapsed)
+        _lifecycle_log.info('[%s] ← %s %s %d %s', rid, request.method, path, status, timing)
     else:
-        _lifecycle_log.debug('[%s] ← %s %s %d (%.3fs)', rid, request.method, path, status, elapsed)
+        _lifecycle_log.debug('[%s] ← %s %s %d %s', rid, request.method, path, status, timing)
 
     response.headers['X-Request-ID'] = rid
     return response

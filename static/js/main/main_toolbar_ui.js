@@ -67,15 +67,57 @@ function _applyChatModeUI(mode) {
   if (d.swarmEnabled !== undefined && typeof _applySwarmUI === 'function') {
     _applySwarmUI(!!d.swarmEnabled);
   }
-  // Segmented control paint.
-  document.querySelectorAll('#chatModeSeg .chat-mode-seg-btn').forEach(b => {
-    b.classList.toggle('active', b.dataset.mode === mode);
+  // ── Paint the popover trigger (icon + label) and the menu's selected row.
+  //    The trigger mirrors the active tier's glyph so the collapsed control
+  //    still communicates the current mode at a glance. ──
+  const _MODE_LABEL = { air: 'Chat', pro: 'Pro', studio: 'Studio' };
+  const _MODE_ICON = {
+    air: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
+    pro: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>',
+    studio: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>',
+  };
+  const lbl = document.getElementById('chatModeLabel');
+  if (lbl) lbl.textContent = _MODE_LABEL[mode] || 'Pro';
+  const ic = document.getElementById('chatModeIcon');
+  if (ic) ic.innerHTML = _MODE_ICON[mode] || _MODE_ICON.pro;
+  const trig = document.getElementById('chatModeToggle');
+  if (trig) trig.dataset.mode = mode;
+  document.querySelectorAll('#chatModeMenu .chat-mode-item').forEach(el => {
+    el.classList.toggle('selected', el.dataset.mode === mode);
   });
-  const seg = document.getElementById('chatModeSeg');
-  if (seg) seg.dataset.mode = mode;
   if (typeof updateSubmenuCounts === 'function') updateSubmenuCounts();
 }
 if (typeof window !== 'undefined') window._applyChatModeUI = _applyChatModeUI;
+
+/* Open/close the mode popover (upward). Twin of toggleFlowMenu — one popover
+ * open at a time; closes on outside click (handler below). */
+function toggleChatModeMenu(e) {
+  if (e) e.stopPropagation();
+  const menu = document.getElementById('chatModeMenu');
+  if (!menu) return;
+  const willOpen = !menu.classList.contains('open');
+  // Close the sibling flow menu so only one popover shows at once.
+  const flow = document.getElementById('flowMenu');
+  if (flow) flow.classList.remove('open');
+  menu.classList.toggle('open', willOpen);
+}
+if (typeof window !== 'undefined') window.toggleChatModeMenu = toggleChatModeMenu;
+
+function closeChatModeMenu() {
+  const menu = document.getElementById('chatModeMenu');
+  if (menu) menu.classList.remove('open');
+}
+if (typeof window !== 'undefined') window.closeChatModeMenu = closeChatModeMenu;
+
+// Close the mode menu on outside click (mirrors the flow menu handler).
+if (typeof document !== 'undefined') {
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('#modeMenuWrapper')) {
+      const menu = document.getElementById('chatModeMenu');
+      if (menu) menu.classList.remove('open');
+    }
+  });
+}
 
 /* User clicked a tier. Studio is special: it REQUIRES a project, so clicking
  * it opens the project panel directly; the tier only becomes 'studio' once a

@@ -760,20 +760,33 @@
                    the atomic tool flags (mirrors lib/tasks_pkg/chat_mode).
                    Studio opens the project panel directly; the tier becomes
                    'studio' only once a project is actually attached. -->
-              <div class="chat-mode-seg" id="chatModeSeg" data-mode="pro" role="tablist" aria-label="Capability mode">
-                <button type="button" class="chat-mode-seg-btn" data-mode="air" role="tab" onclick="setChatMode('air')" data-i18n-title="toolbar.modeAirTooltip" title="Chat — 极速轻聊，最省">
-                  <span class="chat-mode-seg-ic"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span>
-                  <span class="chat-mode-seg-tx">Chat</span>
-                </button>
-                <button type="button" class="chat-mode-seg-btn active" data-mode="pro" role="tab" onclick="setChatMode('pro')" data-i18n-title="toolbar.modeProTooltip" title="Pro — 全能助手，默认">
-                  <span class="chat-mode-seg-ic"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></span>
-                  <span class="chat-mode-seg-tx">Pro</span>
-                </button>
-                <button type="button" class="chat-mode-seg-btn" data-mode="studio" role="tab" onclick="setChatMode('studio')" data-i18n-title="toolbar.modeStudioTooltip" title="Studio — 绑定项目，最强">
-                  <span class="chat-mode-seg-ic"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></span>
-                  <span class="chat-mode-seg-tx">Studio</span>
-                </button>
-                <span class="chat-mode-seg-thumb" aria-hidden="true"></span>
+              <div class="toolbar-submenu" id="submenuMode">
+                <div class="submenu-flow-row" id="modeMenuWrapper">
+                  <button type="button" class="submenu-trigger chat-mode-trigger" id="chatModeToggle" onclick="toggleChatModeMenu(event)" aria-haspopup="true" data-i18n-title="mobile.capabilityMode" title="能力模式">
+                    <span class="chat-mode-trigger-ic" id="chatModeIcon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></span>
+                    <span class="submenu-label chat-mode-trigger-label" id="chatModeLabel">Pro</span>
+                    <span class="submenu-arrow"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></span>
+                  </button>
+                  <div class="flow-menu chat-mode-menu" id="chatModeMenu">
+                    <div class="flow-menu-list">
+                      <div class="flow-menu-item chat-mode-item" data-mode="air" role="button" onclick="setChatMode('air');closeChatModeMenu()" data-i18n-title="toolbar.modeAirTooltip" title="Chat — 极速轻聊，最省">
+                        <span class="flow-menu-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span>
+                        <span class="flow-menu-text"><span class="flow-menu-name">Chat</span><span class="flow-menu-desc" data-i18n="mobile.modeAirDesc">极速轻聊，最省</span></span>
+                        <span class="flow-menu-check">✓</span>
+                      </div>
+                      <div class="flow-menu-item chat-mode-item" data-mode="pro" role="button" onclick="setChatMode('pro');closeChatModeMenu()" data-i18n-title="toolbar.modeProTooltip" title="Pro — 全能助手，默认">
+                        <span class="flow-menu-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></span>
+                        <span class="flow-menu-text"><span class="flow-menu-name">Pro</span><span class="flow-menu-desc" data-i18n="mobile.modeProDesc">全能助手，默认</span></span>
+                        <span class="flow-menu-check">✓</span>
+                      </div>
+                      <div class="flow-menu-item chat-mode-item" data-mode="studio" role="button" onclick="setChatMode('studio');closeChatModeMenu()" data-i18n-title="toolbar.modeStudioTooltip" title="Studio — 绑定项目，最强">
+                        <span class="flow-menu-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></span>
+                        <span class="flow-menu-text"><span class="flow-menu-name">Studio</span><span class="flow-menu-desc" data-i18n="mobile.modeStudioDesc">绑定项目，最强</span></span>
+                        <span class="flow-menu-check">✓</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </div>
               <!-- ★ Extras drawer — orthogonal capabilities that a tier switch
                    must NOT clobber (they depend on physical connections / model

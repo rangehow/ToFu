@@ -12065,8 +12065,6 @@ html:not([data-theme="tofu"]) .tofu-pet{display:none}
 [data-theme="tofu"] .folder-nav-btn{border-radius:var(--radius-sm)}
 [data-theme="tofu"] .folder-nav-btn.active{background:rgba(196,149,106,0.08);color:#A67B52;border-color:rgba(196,149,106,0.22);box-shadow:none}
 
-/* ── Submenu triggers — pixel pill buttons with JetBrains Mono ── */
-[data-theme="tofu"] .submenu-trigger{
 /* ── Three-tier capability dial — tofu (clay) theme ── */
 [data-theme="tofu"] .chat-mode-seg{border-radius:6px;border:1.5px solid rgba(168,152,120,0.4);background:linear-gradient(180deg,rgba(235,232,222,0.7) 0%,rgba(226,222,210,0.7) 100%);-webkit-backdrop-filter:blur(6px) saturate(1.05);backdrop-filter:blur(6px) saturate(1.05)}
 [data-theme="tofu"] .chat-mode-seg-btn{border-radius:4px;font-family:var(--sans-body);font-weight:700;color:#8A7A56}

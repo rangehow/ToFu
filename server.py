@@ -1464,7 +1464,6 @@ async def _assign_req_id_and_log():
 
 @app.after_request
 async def _log_response(response):
-    elapsed = time.time() - getattr(request, '_start_time', time.time())
     rid = _get_req_id()
     path = request.full_path.rstrip('?')
     status = response.status_code
@@ -1472,7 +1471,20 @@ async def _log_response(response):
 
     size = _response_size(response)
     size_str = _fmt_size(size)
-    timing = '(%.3fs, %s)' % (elapsed, size_str) if size_str else '(%.3fs)' % elapsed
+
+    # Elapsed is only meaningful when before_request stamped _start_time. Some
+    # early-error / middleware paths reach after_request without it — the old
+    # `time.time() - getattr(request, '_start_time', time.time())` evaluated
+    # the left clock BEFORE the default on the right, yielding a slightly
+    # NEGATIVE span that polluted the log. Detect the absence explicitly (emit
+    # size only), and clamp against clock skew when present.
+    _start = getattr(request, '_start_time', None)
+    if _start is None:
+        elapsed = None
+        timing = '(%s)' % size_str if size_str else '(elapsed n/a)'
+    else:
+        elapsed = max(0.0, time.time() - _start)
+        timing = '(%.3fs, %s)' % (elapsed, size_str) if size_str else '(%.3fs)' % elapsed
 
     if status >= 500:
         _lifecycle_log.error('[%s] ← %s %s %d %s', rid, request.method, path, status, timing)
@@ -1481,7 +1493,7 @@ async def _log_response(response):
             _lifecycle_log.debug('[%s] ← %s %s %d %s', rid, request.method, path, status, timing)
         else:
             _lifecycle_log.warning('[%s] ← %s %s %d %s', rid, request.method, path, status, timing)
-    elif elapsed >= _SLOW_THRESHOLD_S and not is_quiet:
+    elif elapsed is not None and elapsed >= _SLOW_THRESHOLD_S and not is_quiet:
         _lifecycle_log.warning('[%s] ← %s %s %d SLOW %s', rid, request.method, path, status, timing)
     elif size is not None and size >= _HEAVY_RESPONSE_BYTES and not is_quiet:
         # Fast but heavy: the server was quick, yet a multi-MB body will feel

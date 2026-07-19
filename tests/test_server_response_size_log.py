@@ -128,6 +128,61 @@ class TestLogResponseIntegration:
         # No size suffix appended when size is unknown.
         assert 'MB' not in msgs[-1] and 'KB' not in msgs[-1]
 
+    def test_no_negative_elapsed_when_start_time_missing(self, srv):
+        """A request that reaches _log_response WITHOUT request._start_time
+        (early-error / middleware paths that skip before_request) must NOT log
+        a negative elapsed. The bare test_request_context here never sets
+        _start_time, reproducing that path. The log line must carry no '(-'
+        elapsed — root cause was `time.time() - getattr(request, '_start_time',
+        time.time())` evaluating left-before-default → a slightly negative
+        span. Size (if known) must still be emitted."""
+        from quart import Response
+        resp = Response(b'x' * 2940728, status=200)
+        msgs = self._capture(srv, resp)
+        assert msgs, 'expected a lifecycle log line'
+        line = msgs[-1]
+        assert '(-' not in line, 'negative elapsed leaked into log: %r' % line
+        # The size must still surface even though elapsed is unknown.
+        assert '2.8MB' in line, 'size dropped along with elapsed: %r' % line
+
+    def test_positive_elapsed_still_shown_when_start_time_present(self, srv):
+        """Regression guard: when _start_time IS present the elapsed is still
+        logged (we must not blanket-drop timing)."""
+        import time as _time
+        from quart import Response
+        import asyncio
+
+        records = []
+
+        class _Grab(logging.Handler):
+            def emit(self, rec):
+                records.append(rec.getMessage())
+
+        lg = srv._lifecycle_log
+        h = _Grab()
+        lg.addHandler(h)
+        old_level = lg.level
+        lg.setLevel(logging.DEBUG)
+        try:
+            async def go():
+                async with srv.app.test_request_context('/api/v1/x', method='GET'):
+                    from quart import request
+                    request._start_time = _time.time() - 0.05  # 50ms ago
+                    await srv._log_response(Response(b'ok', status=200))
+            loop = asyncio.new_event_loop()
+            try:
+                loop.run_until_complete(go())
+            finally:
+                loop.close()
+        finally:
+            lg.removeHandler(h)
+            lg.setLevel(old_level)
+        assert records
+        line = records[-1]
+        assert '(-' not in line
+        # A real positive elapsed appears (0.0xxs), not the size-only form.
+        assert 's,' in line or 's)' in line
+
 
 if __name__ == '__main__':
     sys.exit(pytest.main([__file__, '-v']))

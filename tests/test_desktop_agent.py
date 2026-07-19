@@ -17,7 +17,8 @@ from unittest import mock
 
 import pytest
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _REPO_ROOT)
 
 pytestmark = pytest.mark.unit
 
@@ -453,3 +454,142 @@ def test_live_perm_dict_mutation_is_picked_up_by_dispatch():
     perms['allow_exec'] = True
     allowed = dispatch_command('desktop_run_command', {'command': 'echo live_ok'}, perms)
     assert 'live_ok' in allowed.get('stdout', '')
+
+
+# ══════════════════════════════════════════════════════════
+#  10. Dependency-list drift guard — the root cause of the ORIGINAL bug
+# ══════════════════════════════════════════════════════════
+#
+# The head-line "users can't use it at all" bug was a runtime dep present in
+# ZERO of the packaging lists. Those deps are now maintained in THREE
+# hand-edited parallel places with nothing binding them:
+#   (a) desktop/requirements-desktop.txt   — pip install for source/manual
+#   (b) tofu.spec hidden_imports           — what PyInstaller freezes into exe
+#   (c) build-desktop.yml `pip install …`  — what CI installs before building
+#       (there are MULTIPLE such lines — one per platform job; ALL must have it)
+# If any single list silently drops one dep, the frozen build ships broken
+# again with no other test to catch it. This guard parses the REAL files (no
+# hardcoded copy of the dep list) and asserts each runtime dep is in ALL of
+# them. It goes RED naming the offending list if one drifts.
+
+# The runtime deps the desktop-control agent imports (lib/desktop_agent/_gui).
+# NOT the packaging-only tools (pyinstaller/pystray) — those aren't imported by
+# the agent at runtime, so they are out of scope for this guard.
+_DESKTOP_RUNTIME_DEPS = ('pyautogui', 'pyperclip', 'psutil')
+
+
+def _read(rel):
+    with open(os.path.join(_REPO_ROOT, rel), encoding='utf-8') as f:
+        return f.read()
+
+
+def _requirements_pkgs(text):
+    """Package names (lowercased) declared in a requirements .txt (strip the
+    version spec + comments/blanks)."""
+    import re
+    pkgs = set()
+    for line in text.splitlines():
+        line = line.split('#', 1)[0].strip()
+        if not line:
+            continue
+        name = re.split(r'[<>=!~ \[]', line, 1)[0].strip().lower()
+        if name:
+            pkgs.add(name)
+    return pkgs
+
+
+def _spec_hidden_imports(text):
+    """Module names appended to hidden_imports in tofu.spec — parsed from the
+    real source via AST so a moved/renamed literal can't fool a substring check.
+    Collects every string literal in any `hidden_imports += [...]` / `+= [..]`
+    or assignment whose target is `hidden_imports`."""
+    import ast
+    tree = ast.parse(text)
+    names = set()
+
+    def _collect_list(node):
+        if isinstance(node, ast.List):
+            for elt in node.elts:
+                if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
+                    names.add(elt.value.lower())
+
+    for node in ast.walk(tree):
+        # hidden_imports += [ ... ]
+        if isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name) \
+                and node.target.id == 'hidden_imports':
+            _collect_list(node.value)
+        # hidden_imports = [ ... ]
+        elif isinstance(node, ast.Assign):
+            for tgt in node.targets:
+                if isinstance(tgt, ast.Name) and tgt.id == 'hidden_imports':
+                    _collect_list(node.value)
+    return names
+
+
+def _ci_pip_install_lines(text):
+    """Every `pip install <pkgs>` line in the workflow that is NOT `-r
+    requirements.txt` (those are the explicit build-dep lists — one per job)."""
+    lines = []
+    for raw in text.splitlines():
+        s = raw.strip()
+        if s.startswith('pip install') and '-r ' not in s:
+            lines.append(s)
+    return lines
+
+
+def test_desktop_runtime_deps_present_in_requirements_file():
+    pkgs = _requirements_pkgs(_read('desktop/requirements-desktop.txt'))
+    missing = [d for d in _DESKTOP_RUNTIME_DEPS if d not in pkgs]
+    assert not missing, (
+        f'desktop/requirements-desktop.txt is missing runtime dep(s): {missing}. '
+        f'The frozen/manual install would ship without them — the original bug.'
+    )
+
+
+def test_desktop_runtime_deps_present_in_pyinstaller_spec():
+    hidden = _spec_hidden_imports(_read('tofu.spec'))
+    missing = [d for d in _DESKTOP_RUNTIME_DEPS if d not in hidden]
+    assert not missing, (
+        f"tofu.spec hidden_imports is missing runtime dep(s): {missing}. "
+        f"PyInstaller would not freeze them into the exe."
+    )
+
+
+def test_desktop_runtime_deps_present_in_every_ci_pip_install():
+    text = _read('.github/workflows/build-desktop.yml')
+    pip_lines = _ci_pip_install_lines(text)
+    # Sanity: the workflow really has explicit build-dep pip lines (one per
+    # platform job). If this drops to 0 the parse broke — fail loudly.
+    assert len(pip_lines) >= 3, (
+        f'expected >=3 explicit `pip install` lines in build-desktop.yml '
+        f'(one per platform job), found {len(pip_lines)}: {pip_lines}'
+    )
+    for i, line in enumerate(pip_lines):
+        low = line.lower()
+        missing = [d for d in _DESKTOP_RUNTIME_DEPS if d not in low]
+        assert not missing, (
+            f'build-desktop.yml pip install line #{i + 1} is missing runtime '
+            f'dep(s): {missing}. That platform build would ship broken.\n  line: {line}'
+        )
+
+
+def test_all_three_dep_lists_agree_on_runtime_deps():
+    """Single assertion over all three sources — the drift guard proper. If any
+    ONE list drops a dep, this names which source and which dep."""
+    sources = {
+        'desktop/requirements-desktop.txt': _requirements_pkgs(
+            _read('desktop/requirements-desktop.txt')),
+        'tofu.spec:hidden_imports': _spec_hidden_imports(_read('tofu.spec')),
+    }
+    ci_text = _read('.github/workflows/build-desktop.yml')
+    for i, line in enumerate(_ci_pip_install_lines(ci_text)):
+        sources[f'build-desktop.yml:pip#{i + 1}'] = {
+            w.lower() for w in line.split()
+        }
+
+    drift = {}
+    for src, pkgs in sources.items():
+        gone = [d for d in _DESKTOP_RUNTIME_DEPS if d not in pkgs]
+        if gone:
+            drift[src] = gone
+    assert not drift, f'dependency-list drift detected: {drift}'

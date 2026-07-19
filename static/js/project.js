@@ -967,16 +967,19 @@ function _updateProjectUI() {
   const foldersEl = document.getElementById("projectBarFolders");
 
   if (!projectState.active) {
-    bar.style.display = "none";
-    bar.classList.remove("scanning");
+    if (bar) { bar.style.display = "none"; bar.classList.remove("scanning"); }
     badge?.classList.remove("visible");
-    toggle.classList.remove("active");
+    /* #projectToggle was retired when the toolbar collapsed into the
+     * Air/Pro/Studio dial — the Studio segment IS the project affordance now.
+     * Guard it so a project-less newChat/clear never NPEs here (the crash that
+     * looked like "all CSS broke" — the throw aborted the render pipeline). */
+    toggle?.classList.remove("active");
     return;
   }
 
-  bar.style.display = "flex";
+  if (bar) bar.style.display = "flex";
   badge?.classList.add("visible");
-  toggle.classList.add("active");
+  toggle?.classList.add("active");
 
   // ── Render folder badges ──
   // ★ BUG FIX: Build badge list directly from projectState instead of

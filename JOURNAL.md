@@ -1,6 +1,15 @@
 # Project Journal
 
 
+### 2026-07-19 — 宽屏平板(pointer:coarse 且 ≥1025px)点 ··· 底部面板"容器弹出但内部裸奔"根修(commit `2b9ebff`,2 文件 styles.css +69/-115、新测 +150,守卫 2/2 绿含真红证伪 / --collect-only 7563)。owner 从截图报"渲染样式全丢、CSS 没生效",并逐轮否掉我两次错误诊断(先是"settings.css/缓存",再是"只补内容层")后,精准钉死根因。
+- **诊断(owner 主导,我复核证实):** 不是 settings.css/缓存(侧栏+工具栏有样式=styles.css 已加载)。截图设备是**宽屏平板(CSS 宽度 ≥1025px + coarse-pointer)**。`static/styles.css` 三个断点块里,`.mobile-bottom-sheet` 容器规则被**逐字节各抄一份 ×3**,但 `.mobile-sheet-*`/`.mobile-depth-*` **内容规则只抄进 ≤768 与 769–1024coarse 两块,≥1025coarse 块只镜像了容器**。于是宽屏平板上 `.open` 让面板弹出(容器命中)但条目全无样式(内容漏命中)→ 裸文本列表 + `关闭/中/高` 裸按钮 + 裸 `✓`。"容器三抄、内容漏抄"即病灶。
+- **打比方:** 房间的墙(容器)在三种尺寸都砌好了,但屋里家具图纸(内容)只发给了两种尺寸段——宽屏平板这段没发到,整屋毛坯。
+- **修法(根因,非补丁):** 把容器 + 内容 + `[data-theme="tofu"]` 变体(含 `[data-theme="tofu"] .mobile-bottom-sheet`)全部收进**单一来源块** `@media (max-width:768px),(pointer:coarse){…}`,放在三个宽度块**之后**(同特异性下不被反噬)。这个逗号并集 = ≤768(任意指针)+769–1024coarse+≥1025coarse,且 fine-pointer 桌面走全工具栏、根本不开此面板,故 coarse 臂不会泄漏 sheet 布局到窄窗桌面。三个宽度块只留真差异:`.mobile-more-btn`(≤768=`background:none;border:1px`,平板段=`border:1.5px;bg:tertiary`)、`#modelGroup{flex-shrink:0}` 钉桩、submenu 隐藏、侧栏抽屉几何、`.preset-dropdown`(A=60dvh/B=60vh,值不同**故不并**)、topbar。
+- **守卫(`test_mobile_sheet_content_reaches_wide_coarse.py` 2 测):** 解析 styles.css、逐 `@media` 对合成视口求交:`{1300,coarse}` 断言 14 个内容选择器**全命中**;`{1300,fine}` 断言**全不命中**(守住别把桌面窄窗拖进 sheet 布局)。**真红证伪:** 脚本移除单一来源块 → `{1300,coarse}` 立刻缺失全部 14 个选择器(正是原 bug),证明守卫 load-bearing。相邻 `test_breakpoint_coordination.py` 8/8 无回归(逗号并集不触发其 `... and (pointer:coarse)` 漂移正则)。
+- **git 纪律(共享 HEAD 高并发,~130 个 sibling 工作树改动在场):** `git reset -q HEAD .` → 仅 add 2 文件 → `--cached --numstat` 确认只 styles.css(69/115)+新测(150/0)→ `git commit -F- -- <2 路径>` → 泄漏探针 `git show HEAD --name-only | grep -vE <我的2文件>` = **NO LEAK**。`2b9ebff`。
+- **诚实边界:** 纯前端 CSS,由 2 新测 + 真红证伪 + 8 相邻回归 + `--collect-only` 7563(唯一 error 是既知 sibling `test_run_command_pty_streaming.py` 的 `pty_supported` import flake,与本改无关)验证。**用户可见生效需重建 JS/CSS bundle + 硬刷**(styles.css 走 css_bundler hash 服务,内容变则 hash 变);真实体感(宽屏平板 coarse 打开 ··· 面板内部样式恢复)待在真机 / DevTools coarse+1300px 抽验。前两轮我因无编辑工具只能存记忆+草拟,本轮工具恢复后一次落地。
+
+
 ### 2026-07-19 — round-1 缓存判决"冷进程说谎"根修:给 turn_boundary_break 接上可持久化的跨回合读回基线(commit `c0853aa`,4 文件 +368/-2,新测 4/4 + 相邻 17/17 绿,源码级 NEUTER 真变红 / --collect-only 7561)。owner 复核我的数据后裁定:头条答案(多轮后第一个工具调用**不是** 100% 未命中,大多命中)成立,但**回答这个问题的仪器本身在它最该准的场景里说谎**——7 个零读 + 几十个塌到 ~72-80k 静态地板的 round-1 全被洗成 `no_break` 而非 `turn_boundary_rebill`。
 - **诊断(日志+库双证):** `logs/app.log` 524 条 `[CacheRoundRecord]`——round-1 共 36(29 read>0 命中 / 7 零读),整体 412/524≈78% 读回 >90k 真实历史缓存,`body_identical=True`+`routing=[]` 证明客户端前缀干净。但 `turn_boundary_rebill` 全历史只真触发 **3 次**。根因:`turn_boundary_break` 判据要 `_cross_turn_prev_read`(上一回合末尾读回),而 `get_prev_turn_cache_read`(`_state.py`)**只扫进程内存** `_cache_states` 的兄弟线程条目——重启 / >1h stale-eviction / 多副本一弹,内存被清,基线=0,判据整条短路,塌陷静默归 `no_break`(日志里那些 `prev_rec_read=None` 就是)。库侧 `cachePrefixHWM` 已持久化(20 会话有值)但**只护压缩前缀、不喂这个读回判据**——两机制没打通。
 - **打个比方:** 缓存像恒温库房分两层货架——底层固定货架(系统+工具 ~72k/79k,永在)、上层历史货架(量大)。round-1 只读回底层=上层被清空;读回 0=整库重建。这些塌陷本该进 `turn_boundary_rebill` 桶,却因"没有上一回合基线可比"被漏计。

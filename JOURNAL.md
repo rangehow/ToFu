@@ -1,5 +1,13 @@
 # Project Journal
 
+### 2026-07-19 — 全站样式崩坏根修:三档转盘 CSS 前面遗留一个「空且未闭合」的 `.submenu-trigger{`,吞掉其后约 9000 行 CSS(commit `606c100`,单文件 -2 行,brace 平衡从 depth=1 复位到 0)。owner 报「相关样式全崩、连"上下文便签"也裸奔,发消息后 user 气泡都渲染不出来」。
+- **诊断(字节级证据,非猜测):** 侧栏/工具栏有样式=`styles.css` 已加载;崩坏只在消息流。对 `styles.css` 做**注释/字符串感知的花括号深度扫描**——final depth=**1**、全程从不为负 → 是真·缺一个 `}`(不是数据 URI 里的假花括号)。深度最后一次归 0 在 **12066 行**,其后一路悬挂到文件尾(21342 行),正好覆盖气泡+便签等所有靠后规则。
+- **根因:** 上一轮三档转盘提交 `374a13e` 在 12069 行插入了一个**空体、无闭合**的 `[data-theme="tofu"] .submenu-trigger{`(真正完整的同名规则在 12086 行重复了一份),那个孤立 `{` 把之后约 9000 行全当成自己的规则体吞掉,浏览器从此丢弃所有后续样式。工具栏/侧栏定义在 12069 之前,所以幸存——这就是"越靠后越崩"的成因。
+- **打比方:** 一扇门(`{`)开了没关,后面整条走廊的房间(所有后续 CSS 规则)都被算进这扇门的房间里、失去各自的墙——门前的房间(工具栏/侧栏)不受影响。
+- **修法:** 删掉 12068-12069 的孤立注释+悬挂 `{`(真正的 `.submenu-trigger` 规则原样保留在下方)。修后 depth 干净归 0、全程不为负;`css_bundler` 按 mtime+size 变更自动重建出 `styles-d58e71d1.css`(820KB,minified 亦 depth=0)并清掉旧 hash 文件。
+- **git 纪律(共享 HEAD,~130 sibling 工作树改动在场):** `git reset -q HEAD .` → 仅 `add static/styles.css` → `git commit -F- -- static/styles.css` → 泄漏探针 `git show HEAD --name-only | grep -v styles.css` = **NO LEAK**。`606c100`。minified 产物 untracked(运行时生成),只提交源文件。
+- **诚实边界:** 纯 CSS 单行级修复,由注释感知 brace 扫描(源 + minified 双证 depth=0)验证。**用户可见生效需重建 CSS bundle + 硬刷**(hash 已从 `f2dfc77f`→`d58e71d1`,soft reload 会命中旧缓存;`GET /` 会按 mtime 自动重建,但已在跑的进程无需重启——纯静态资源)。真实体感(气泡/上下文便签恢复样式)待硬刷后真机抽验。
+
 ### 2026-07-19 — 工具栏三档能力档(Air/Pro/Studio)落地:一个分段转盘取代「增强/工具/模式」三盒 + 单一 `chatMode` 贯穿前后端 + 按档裁工具与提示词(commit `374a13e`,16 文件,新测 15+1 parity 全绿 / --collect-only 7600)。owner 要"三档模式:极简/常规/项目",迭代确认:极简含搜索(可删搜索按钮)、项目档解耦(不再自动开蜂群/自动驾驶,自动驾驶暂不做)、命名用 A 套(Air/Pro/Studio)、点 Studio 直接弹项目面板、**FE/BE 同步要极其小心**、设计输入框样式。
 - **单一真相(owner 的头号要求):** 新增唯一 wire 字段 `cfg.chatMode ∈ {air,pro,studio}`。后端 `lib/tasks_pkg/chat_mode.py` 是**唯一**派生点(`chat_mode_defaults` 表 + `apply_chat_mode` + `is_lean_mode`);前端 `_CHAT_MODE_DEFAULTS`(main_toolbar_ui.js)逐字节镜像它,`tests/test_chat_mode_parity.py` 解析 JS 对象字面量断言两表相等——FE/BE 永不漂移。派生规则:tier 展开成原子 flag 且**覆盖**显式 flag(高层意图赢),无 tier=字节级 legacy 透传(headless/老会话不受影响)。`studio ⟺ projectPath 非空`,所以"点 Studio→选项目→才真进 studio"天然成立,消除"UI 说 studio 但后端没项目"的错位。
 - **省钱靠一个后端小改:** `ToolContext.lean`(=air)让 `_build_memory/_build_todo/_build_scheduler` 自我跳过——极简档只带 search+fetch+read+inspect(≈4 工具/~3.4k tok),而非默认的 ~15 工具/~8k。这是"比 ChatGPT 更干净"能成立的前提(记忆/todo/日程原本挂在 `has_base_tools` 上、无开关能关)。

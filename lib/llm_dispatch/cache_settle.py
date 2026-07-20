@@ -83,6 +83,7 @@ __all__ = [
     'settle_enabled',
     'settle_window_ms',
     'settle_max_wait_ms',
+    'settle_cold_enabled',
     'settle_cold_window_ms',
     'settle_cold_max_wait_ms',
     'settle_threshold_tokens',
@@ -127,9 +128,28 @@ def settle_max_wait_ms() -> float:
         return 4000.0
 
 
+def settle_cold_enabled() -> bool:
+    """Whether the LONG cold-write blocking window is active. DEFAULT OFF.
+
+    ★ Deliberately opt-in. The cold-write case (large write, ~0 read) is the
+    typical shape of a conversation's FIRST round, so a long blocking window
+    would add up to ~cold_window of wall-clock latency to the SECOND round of
+    almost every conversation — punishing the main path. Measured live: a cold
+    tool loop wastes only ~14k rewrite tokens (a fraction of a cent at Opus
+    rates) to skip the block, versus ~10s of user wait to enforce it. For a
+    cost-indifferent, experience-sensitive deployment that trade is BACKWARDS,
+    so the long block is OFF by default: cold writes keep the ordinary short
+    window (accept the cheap re-write, never stall the user). The detector
+    still names the miss ``cache_write_unsettled`` (non-blocking, honest
+    attribution) regardless. Set ``TOFU_CACHE_SETTLE_COLD=1`` to enable the
+    blocking cold window where saving the re-write tokens is worth the latency."""
+    val = os.environ.get('TOFU_CACHE_SETTLE_COLD', '0')
+    return val.strip().lower() in ('1', 'true', 'yes', 'on')
+
+
 def settle_cold_window_ms() -> float:
     """Minimum ms between a conv's prior COLD-WRITE stream END and its next big
-    send. Default 18000.
+    send. Default 18000. ONLY consulted when settle_cold_enabled() is True.
 
     A freshly-WRITTEN Anthropic cache entry is not readable for ~15–20s (the
     anthropic-sdk-python #1451 write-visibility race — reproduced live: a cold
@@ -291,9 +311,13 @@ def _compute_wait_s(conv_id: str, est_tokens: int, now: float | None) -> tuple[f
         return 0.0, 0.0, 0.0
 
     last_ts, last_cold = last
-    # A COLD write needs the long visibility window; a WARM round only the
-    # short one (else every tool-loop round would eat ~18s of blind latency).
-    if last_cold:
+    # A COLD write needs the long visibility window, but the long BLOCKING wait
+    # is opt-in (settle_cold_enabled, default OFF) because it would stall the
+    # second round of nearly every conversation to save a sub-cent re-write.
+    # When the cold block is disabled, a cold prior round falls back to the
+    # ordinary short window — we accept the cheap re-write instead of blocking
+    # the user, and the detector still names it cache_write_unsettled.
+    if last_cold and settle_cold_enabled():
         window_s = settle_cold_window_ms() / 1000.0
         cap_s = settle_cold_max_wait_ms() / 1000.0
     else:

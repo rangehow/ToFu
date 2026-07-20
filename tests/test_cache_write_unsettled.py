@@ -62,6 +62,10 @@ def _clean_env(monkeypatch):
     monkeypatch.setenv('TOFU_CACHE_SETTLE', '1')
     monkeypatch.setenv('TOFU_CACHE_SETTLE_MS', '1500')
     monkeypatch.setenv('TOFU_CACHE_SETTLE_MAX_MS', '4000')
+    # The long cold BLOCK is opt-in (default OFF). Part-A tests below exercise
+    # the ENABLED path, so turn it on here; test_cold_block_default_off_uses
+    # _short_window overrides it back to prove the default.
+    monkeypatch.setenv('TOFU_CACHE_SETTLE_COLD', '1')
     monkeypatch.setenv('TOFU_CACHE_SETTLE_COLD_MS', '18000')
     monkeypatch.setenv('TOFU_CACHE_SETTLE_COLD_MAX_MS', '20000')
     monkeypatch.delenv('TOFU_CACHE_SETTLE_THRESHOLD_TOKENS', raising=False)
@@ -101,6 +105,27 @@ def test_cold_write_uses_long_window(spy_sleep):
         f'a rapid send after a COLD write must wait the long cold window '
         f'(~17.7s remainder of 18s), got {waited}')
     assert len(spy_sleep) == 1
+
+
+def test_cold_block_default_off_uses_short_window(spy_sleep, monkeypatch):
+    """★ THE OWNER GATE: the long cold BLOCK is OPT-IN. With TOFU_CACHE_SETTLE_COLD
+    unset/0 (the default), a rapid send after a COLD write falls back to the
+    ordinary SHORT 1.5s window — we accept the cheap re-write rather than stall
+    the second round of nearly every conversation by ~18s."""
+    monkeypatch.delenv('TOFU_CACHE_SETTLE_COLD', raising=False)
+    cs.record_stream_end('convColdOff', now=1000.0, cold_write=True)
+    waited = cs.settle_before_send('convColdOff', BIG, now=1000.3)
+    assert 1.19 <= waited <= 1.21, (
+        f'with the cold block OFF (default), a cold prior round must use the '
+        f'short 1.5s window, not the 18s cold window — got {waited}')
+
+
+def test_cold_block_off_is_the_default(spy_sleep, monkeypatch):
+    """settle_cold_enabled() is False by default (no env set)."""
+    monkeypatch.delenv('TOFU_CACHE_SETTLE_COLD', raising=False)
+    assert cs.settle_cold_enabled() is False
+    monkeypatch.setenv('TOFU_CACHE_SETTLE_COLD', '1')
+    assert cs.settle_cold_enabled() is True
 
 
 def test_warm_round_keeps_short_window(spy_sleep):

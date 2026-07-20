@@ -1297,6 +1297,19 @@ def _boot(msg, *args):
 
 _boot('🫧 Tofu (async) starting up — loading core modules…')
 
+# ── Cap onnxruntime threads BEFORE any import can create an InferenceSession ──
+# pymupdf4llm → pymupdf_layout → onnxruntime (also rapidocr/cadtrans) spawns one
+# worker per HOST cpu and pins each via pthread_setaffinity_np. On a cpuset-
+# restricted host (containers, YARN/Hope, exported cluster deployments) the pins
+# fail with EINVAL → a stderr storm during `python server.py`. The guard must
+# run before the critical-import chain (tofu_search.fetch imports pymupdf4llm),
+# so install it here, first thing after the boot banner.
+try:
+    from lib.onnx_thread_guard import install_onnx_thread_guard
+    install_onnx_thread_guard()
+except Exception as _onnx_guard_err:  # never let the guard itself break boot
+    _boot('onnx thread guard install skipped: %s', _onnx_guard_err)
+
 from lib.database import close_db, init_db, warmup_db
 
 

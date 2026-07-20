@@ -1,6 +1,21 @@
 # Project Journal
 
 
+### 2026-07-20 — Prompt-cache 追零 miss **生产闭环达成**:floor-collapse 自动重发接进真实发送路径(env-gated,commit `1f4406f`),真网关走**生产路径**验收 mrsfs9d6 + mrt1ijef **等效 floor% 双双归零**。owner 拒绝停在「harness 证明有效」,要求接进 orchestrator 真实路径 + failing-first 测试 + 走生产路径的真网关验收(不是 harness 自己的 retry arm)。三项照做,闭环。
+- **落地(1f4406f,3 文件 +378):** ①新 `lib/tasks_pkg/floor_retry.py`:`floor_retry_enabled`(env `TOFU_CACHE_FLOOR_RETRY` 默认关)、`floor_retry_max`(默认 1、硬顶 3)、`is_floor_collapse`(read≤90k + write>20k)、`wire_prefix_stable`(**非破坏性**读 cache-tracking 的 `wire_fp` 与上一轮比对,证明字节稳定才重发)。②`stream_llm_response`(**单一发送 chokepoint**,与 TTL latch 同处)加重发环:仅在 byte-stable floor-collapse 触发、封顶、**遇 503/限流立即停**(不给已限流的网关堆重试——这正是之前 mt1ijef 只到 11.8% 的原因)。③恢复的重发结果(真 cache 命中)被采纳替换掉塌陷响应。
+- **failing-first + NEUTER(`test_cache_floor_retry.py` 8 测):** 谓词覆盖 + 集成(开关开→触发一次重发并采纳恢复 usage;NEUTER 控制:关→恰好一次 dispatch;前缀变了→不重发;重发遇限流→停)。**NEUTER 实证**:把 enable-gate 改成恒 False → 关键测试立即变红(只 1 次 dispatch)、恢复后复绿,证明机制 load-bearing。
+- **生产路径真网关验收(harness 加 `--production-path`,走真实 `stream_llm_response` 而非 harness 自己的 arm):**
+
+| conv | 生产路径 floor%(retry 开) | 之前(retry 关) |
+|---|---|---|
+| mrsfs9d6 | **0.0%**(R4/R5/R8 全部重发恢复) | 20-25% |
+| mrt1ijef | **0.0%**(R11/R14/R18 全部恢复) | 23-37% |
+
+  32 个回放轮**零残余 floor**;日志实见 `[FloorRetry] RECOVERED on resend` 出自 shipped 代码;个别轮重发路上撞 503,仍在下一次重发恢复(封顶+退避生效)。这是**生产代码**的等效 floor,不是 harness 模拟。
+- **诚实边界:** ①**默认仍关**(`TOFU_CACHE_FLOOR_RETRY` 未设)——与 drop 落地同纪律,验收数据已具备,设为默认仍是 owner 一句话的事。②重发有真实成本(每次塌陷多一个小请求),owner 明确不在乎、要零 miss。③这仍是**缓解非根治**——根治在网关(`docs/CACHE_GATEWAY_STOCHASTIC_REPORT.md` 已备)。④生效需 owner 在真部署里 `export TOFU_CACHE_FLOOR_RETRY=1`(或设为默认)+ 重启;本轮已在真网关证明生产路径逻辑正确。
+- **git 纪律:** `reset -q HEAD .` → 仅 add 3 文件 → `--cached --numstat` 确认(floor_retry 135/0、_stream 58/0、test 185/0)→ `commit -F- -- <3 路径>` → `git show HEAD --name-only` = 仅 3 文件,NO LEAK。`1f4406f`。collect 7732(唯一 error 仍是既知 pty flake)。
+
+
 ### 2026-07-20 — Prompt-cache 最终验收准备:锁定重启前基线 + 建一键 pre/post 分析器,等重启后收尾(commit 待填,新增 `debug/cache_cost_prepost_restart.py`)。owner 坚持验收线=**重启后真实日志证明成本降**,离线/warm-biased 不算。已同意,重启前把该准备的都备好。
 - **关键发现(诚实,决定性):** 当前 app.log 最后一次 boot 是 **21:03:15**,而我这一轮的四个 fix(`c311e34`/`18c04a6`/`a34beae`/`6bcac3e`)全部在 **21:03 之后**才提交。所以现在日志里的「post-boot」切片**仍跑旧码**——ttl_flip 仍 125 轮、mid_oow 仍 140 轮,正是「fix 尚未生效」的铁证。**必须重启到新 HEAD 才能验收**,这一步只有 owner 能做(不可用 timer 等自我重启,违反纪律)。
 - **锁定的 PRE-RESTART 基线(供重启后对照,取旧码 boot 21:03 之后那段作为「修复前」样本):** ttl_flip **125 轮(9%)**、mid_oow **140 轮(10%)**、break-write 占比 **73%**。(注:全天 app.log 累计 2002 条、跨多次代码变更,故不用整段;分析器按「最后一次 boot」切片,重启后会自动把新进程那段划成 POST。)

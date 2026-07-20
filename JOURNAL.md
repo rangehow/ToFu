@@ -1,6 +1,14 @@
 # Project Journal
 
 
+### 2026-07-20 — Prompt-cache 最终验收准备:锁定重启前基线 + 建一键 pre/post 分析器,等重启后收尾(commit 待填,新增 `debug/cache_cost_prepost_restart.py`)。owner 坚持验收线=**重启后真实日志证明成本降**,离线/warm-biased 不算。已同意,重启前把该准备的都备好。
+- **关键发现(诚实,决定性):** 当前 app.log 最后一次 boot 是 **21:03:15**,而我这一轮的四个 fix(`c311e34`/`18c04a6`/`a34beae`/`6bcac3e`)全部在 **21:03 之后**才提交。所以现在日志里的「post-boot」切片**仍跑旧码**——ttl_flip 仍 125 轮、mid_oow 仍 140 轮,正是「fix 尚未生效」的铁证。**必须重启到新 HEAD 才能验收**,这一步只有 owner 能做(不可用 timer 等自我重启,违反纪律)。
+- **锁定的 PRE-RESTART 基线(供重启后对照,取旧码 boot 21:03 之后那段作为「修复前」样本):** ttl_flip **125 轮(9%)**、mid_oow **140 轮(10%)**、break-write 占比 **73%**。(注:全天 app.log 累计 2002 条、跨多次代码变更,故不用整段;分析器按「最后一次 boot」切片,重启后会自动把新进程那段划成 POST。)
+- **备好的一键分析器 `debug/cache_cost_prepost_restart.py`:** 自动找最后一次 `Ready — handing off to Hypercorn.` boot 时间戳,把 `[CacheRoundRecord]` 切成 PRE/POST 两段,直接打三个硬数字——(1) ttl_flip 计数、(2) mid_oow 计数、(3) break-write 占比——外加 POST 段 bucket 明细。POST 段为空时提示「重启+跑流量后再来」。
+- **重启后我要做的收尾(owner 三问,全用重启后新日志算):** ①`<ttl-flip>` 独立占比应趋近 0(chokepoint 补戳);②`cache_mid_out_of_window` 应趋近 0(误报门 + drop);③break-write 占比对照 73% 的新降幅(成本真降的直接度量)。三数达标才算完成。
+- **诚实边界(再次明确):** 到此为止是「修复 + 离线验证 + 验收工装就绪」;**真省钱数字尚未取得**,因为运行进程还是旧码。不发 TASK_DONE,等 owner 重启后我在下一轮用真日志出数。
+
+
 ### 2026-07-20 — Prompt-cache 追零 miss 收官:证明「网关随机地板可被客户端『原样重发』趋零」——retry-on-floor 把等效 floor% 从 ~20-24% 压到 0-12%(harness 加 retry arm,真网关实测)。owner 拒绝停在「服务端随机、不可修」,点出我自己命名却没拉的最后一根杠杆:既然同字节重发每次塌的轮不同(IID),那检测到塌陷就原样重发一次,概率上就能趋零。照做,坐实这是真·客户端可控手段。
 - **给 harness 加 `--retry-on-floor N` arm:** 检测到某轮 byte-STABLE 塌陷(read 掉到 ~28k 地板 + 大 write、且无内容突变)就把**完全相同的 body** 原样重发最多 N 次,记录是否有某次「爬出地板」。因为塌陷是每请求独立的(前证:4 次同字节跑塌不同轮),重发就是重新掷骰子:单轮 P(floor)=p,重发 N 次后残余 ~p^(N+1)。
 - **真网关实测(两对话):**

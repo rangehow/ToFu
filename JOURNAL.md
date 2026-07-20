@@ -1,6 +1,18 @@
 # Project Journal
 
 
+### 2026-07-20 — Prompt-cache 第一笔真省钱:`<ttl-flip>` re-key 根修——在唯一 chokepoint 补 `_task_id`,让 session-stable TTL latch 无法被绕过(commit `a34beae`,1 文件 +16 + 新测 4/4 含 NEUTER;87 缓存测试绿 / collect 7708)。owner 明确「别停在诊断,TTL-flip 是不用重启就能省的第一笔钱」——照做。
+- **live 证据(culprit token 共现分析):** 144 轮 `<ttl-flip>` 是**唯一** break culprit(无 mid、无 content)= 纯缓存 re-key。稳定 system/tools 的 `cache_control.ttl` 在 1h↔5m 间翻转,re-key 整个前缀。
+- **根因(离线复现钉死):** per-task latch(`latch_extended_ttl`)在**任务内**是稳的,但 `_task_id` 由**每个 build_body 调用点各自**设置(主循环 / reactive-compact / fallback 都设了),**synthesize-answer / endpoint / 未来路径可能漏设**。漏设时 `add_cache_breakpoints` 回落读**活体全局 `CACHE_EXTENDED_TTL`**,与本任务 latch 的值不同就翻转。三场景实验证实:无 `_task_id` + 全局翻转 → `markers_ttl_flipped=True`;有稳定 `_task_id` → 不翻(全局怎么变都不翻)。找到一个真实漏设点:`_finalize.py:538` 的 synthesize-answer fallback 未设 `_task_id`。
+- **修法(单点根治、不逐个补调用点):** `stream_llm_response`(所有 task-based LLM send 的**唯一 chokepoint**)在 body 缺 `_task_id` 时补 `task['id']`(已有的不覆盖——swarm agent 用 agent_id 当 latch key)。任何调用点忘了设都无法再绕过 latch。放在函数入口、`append_event` 之前。
+- **预计省量(step 3):** ttl_flip 轮 = 6.2M 写 token,其中 5.33M 在坍塌到 74k 地板的 34 轮上(中位 ~120k 写/轮)——这是本修消掉的具体 re-key 成本。
+- **tests(`test_cache_ttl_latch_chokepoint.py` 4 测):** 前提(无 _task_id + 全局翻转 → ttl 翻 = bug)、latch 保持(稳定 _task_id 钉住 ttl)、chokepoint 补戳(stream_llm_response 给漏设的 body 补 task id)、不覆盖(预设的 _task_id 保留)。**NEUTER**(去掉补戳)→ chokepoint 守卫变红。
+- **sibling live A/B(mrtagv1p)本轮传来的 ground truth——另一笔更大的钱:** 真网关重放(byte-STABLE)证明 `drop` mid-anchor 把 floor-collapse 从 42.9%→6.7%、写 token 4.3×(335k→79k)。**mid-anchor 是净负、是坍塌驱动本身**(证实我上轮的假设 B、否掉我 offline 模型的「drop 更糟」)。已 project_message 交接:等它跑完 mrsfs9d6+mrswvxlv 复现,我再把 `TOFU_CACHE_MID_MODE=drop` 设为默认(带 failing-first 测试)。**我 OWN cache.py 布局,它 OWN 真机 A/B,划清边界不撞车。**
+- **诚实边界:** TTL-flip 修法离线验证完整(含真实漏设点定位 + NEUTER),但真实省下的 6.2M 需重启后拉带 `culprits` 的新 `[CacheRoundRecord]` 确认 `<ttl-flip>` 独立占比归零。mid-anchor drop-default 是**下一笔更大的省钱**(sibling 已 live 证实),待其复现完成 + owner 拍板默认翻转。
+- **pre-existing 失败(非我引入,已上看板 `pt_38ffa895`):** `test_cache_improvements.py::test_assistant_with_tool_calls_not_wrapped` 在 HEAD 本就红——sibling 的 `{content}` floor-miss fix 已让 cache.py Phase 0.5 故意包装 assistant+tool_calls 的 str content,而这条老测试仍断言不包装。我没碰包装逻辑,需 owner 定测试基线。
+- **git 纪律(共享 HEAD):** `reset -q HEAD .` → 仅 add 2 文件 → `--cached --numstat` 核对 → `commit -F- -- <路径>` → `git show HEAD --name-only` 仅含我 2 文件,NO LEAK。
+
+
 ### 2026-07-20 — Prompt-cache 深挖续:推翻「mid-anchor 布局是元凶」的自述,查出 `cache_mid_out_of_window` 是**检测器误报劫持**,真实成本是**逐轮前缀突变 / ttl-flip**(3 commit:`18c04a6` 误报门 + `66fb9db` culprits 可观测 + 前序 `c311e34`/`8d7218f`;48 缓存测试绿 / collect 7704)。owner 复核后指出:①检测器修法只让计数变准、没省钱;②我的 offline harness 低估坍塌率 ~7×,校准不上不能用它选 A/B 赢家。两条都对,逼出真相。
 - **owner 的量化打脸(接受):** mid_oow 共 152 轮,123 轮真坍塌到 74k 地板、烧 16.7M 写 token;我的检测器修法只摘掉 25 轮误报(589k)。真钱一分没动。harness 建模 current 只报 ~2% 坍塌 vs 真实 13–20%,差一个数量级 → 我的「mid 跳跃几何」机制故事本身可疑。
 - **校准 harness 时撞出真相(关键转折):** 解剖真实坍塌轮的完整签名——**128/128 全部 `body_identical=False`**(gap 中位 22.8s 非 TTL 过期、routing 全同)。即:**body 字节真的变了,根本不是 mid 几何问题。** 我之前的 mid 机制故事错了。

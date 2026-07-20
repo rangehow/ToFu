@@ -327,7 +327,7 @@ def _resolve_break_cause(
 
 def _emit_round_record(conv_id, call_num, verdict, *, ns_switch, ttl_flip,
                        breakpoint_lost, body_identical, namespace_verified,
-                       cache_read, cache_write, elapsed):
+                       cache_read, cache_write, elapsed, culprits=None):
     """Emit ONE machine-readable per-round cache-verdict record (ALWAYS, every
     round — not only on a break).
 
@@ -354,6 +354,14 @@ def _emit_round_record(conv_id, call_num, verdict, *, ns_switch, ttl_flip,
             'cache_write': int(cache_write or 0),
             'gap_s': round(float(elapsed or 0), 1),
         }
+        # The RAW wire-culprit tokens (e.g. '<ttl-flip>', '<mid-out-of-window>',
+        # 'assistant.content', '<hoisted>.system') that drove _wire_prefix_changed
+        # this round. Emitted so a post-fix live A/B can see the ACTUAL driver of
+        # a break, not only the final bucket — disambiguating whether a
+        # body_identical=False round was a genuine content mutation vs a
+        # layout/ttl token. Best-effort: capped to keep the line small.
+        if culprits:
+            rec['culprits'] = [str(c) for c in list(culprits)[:8]]
         import json as _json
         logger.info('[CacheRoundRecord] %s', _json.dumps(rec, sort_keys=True))
     except Exception as _rre:
@@ -1054,7 +1062,7 @@ def detect_cache_break(
                 body_identical=_wire_proven_identical,
                 namespace_verified=_ns_verified_same,
                 cache_read=cache_read, cache_write=cache_write,
-                elapsed=elapsed)
+                elapsed=elapsed, culprits=_wire_culprits)
             return v
 
         # ── Report ──

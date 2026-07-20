@@ -161,6 +161,13 @@ def test_round_record_labels_ttl_flip():
     assert r2['bucket'] == 'ttl_flip', r2
     assert r2['ttl_flip'] is True, r2
 
+    # The RAW wire-culprit tokens must be surfaced so a post-deploy live A/B can
+    # see the ACTUAL driver of a break, not only the final bucket (the
+    # disambiguation the mid_oow-misattribution investigation needed).
+    assert 'culprits' in r2, f'record must carry the raw culprit tokens: {r2}'
+    assert any('ttl-flip' in c for c in r2['culprits']), (
+        f'a ttl-flip break must name <ttl-flip> in culprits: {r2}')
+
 
 def test_round_record_labels_upstream_identical():
     """Body + routing + markers all identical → bucket=upstream_identical and

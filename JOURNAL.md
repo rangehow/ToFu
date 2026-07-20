@@ -1,5 +1,14 @@
 # Project Journal
 
+### 2026-07-20 — 编排引擎并行验证第三轴根修:verifier 的 Deliverables Snapshot 从"会被并发分支互相覆盖的单槽"改读"逐迭代确定性聚合"(commit `56e9d11`,2 文件 +53/-1,新测 2/2 failing-first+已验证,164 编排测试全绿 / collect 7613)。承接看板既记的 latent ticket(`orchestration_engine._run_parallel` 循环 verdict 状态单值化),把上一轮只修了一半的竞态补齐。
+- **根因(同一竞态、漏修的第三轴):** 循环体里 parallel fan-out 会**并发**跑 N 个 producer 分支,各自去写单槽 `_last_producer_snapshot` → 谁最后完成谁的计数留下。上一轮已把「零交付守卫」和「VU 递减收益守卫」改读确定性聚合 `_aggregate_iter_producers()`,但**注入 verifier 上下文的那段 Deliverables Snapshot 提示块**(`_append_deliverables_snapshot`,step_start 时喂给 verifier)**仍读单槽** → verifier 看到的是随机某个分支的计数,不是本轮全体分支的总和。控制流已确定、但喂给 verifier 判决的"事实"仍抖。
+- **打比方:** 三个工人同时干活、都往同一块白板写自己今天的产出,后写的盖掉先写的;班组长(verifier)只看白板最后一行就下结论。上一轮已经让"要不要加班"的自动闸门改看三人总账,但发给班组长的那张小抄还是抄的白板最后一行——这轮把小抄也改成抄总账。
+- **修法(最小、作用域精确):** `_append_deliverables_snapshot` 里 `_cur_iteration > 0`(即身处循环迭代)时改读 `_aggregate_iter_producers()`(SUM sc/explore、拼接 names、any reported);`== 0`(循环外)保持读单槽——因为循环外 `_iter_producers` 是**跨节点累积**而非"本轮 producer 集合",线性流必须字节等价旧行为。
+- **tests-first:** `test_verifier_snapshot_block_uses_loop_aggregate`(w1×2+w2×1 → 块须报 3 而非单槽的 1,首跑红:实测块报 `insert_content`/1)+ `test_verifier_snapshot_block_single_slot_outside_loop`(`_cur_iteration=0` 时须报单槽的 1、不聚合到累积的 5,首跑即绿=作用域守卫)。修后 52/52 本套 + 6 套 164 编排测试全绿。
+- **诚实边界:** 纯后端逻辑,由 2 新测(failing-first 已证第一测真红)+ 164 相邻编排绿 + `--collect-only` 7613(唯一 error 是既知 sibling `test_run_command_pty_streaming.py` 的 `pty_supported` flake)验证。**这是低烈度残留**(影响 verifier 的**提示文本**、非控制流本身——控制流那两轴上一轮已确定化),但同属一个竞态类、补齐后三轴一致。
+- **git 纪律(共享 HEAD、160 文件 sibling/aborted WIP 在场):** `reset -q HEAD .` → 仅 add 我的 2 文件 → `commit -F- -- <2 路径>` → 泄漏探针 `git show HEAD --name-only | grep -v` = 仅我 2 文件。JOURNAL 因 worktree 混有 sibling 未提交条目,用 clean-blob(HEAD:JOURNAL + 我的条目)单独提交、不碰 sibling 那段。`56e9d11`。
+
+
 ### 2026-07-19 — 「宽屏平板上同时冒出两套下拉菜单」根修:三个响应式压缩块的隐藏清单用的是**失效的旧 submenu ID**(commit `1e4f373`,2 文件 +23/-16,17 测全绿含既存红测转绿)。owner 截图报「怎么现在有两个下拉框了?」——一个是桌面版 `··· 1` 抽屉 + 编排流程,另一个是移动版 `···` 底部 sheet,coarse 平板上两套同时显示。
 - **根因(旧 ID 漂移):** 三个压缩块(≤768 手机 / 769–1024 coarse 抽屉 / ≥1025 宽 coarse)都写 `#submenuAI,#submenuTools,#submenuMode{display:none}`——但工具栏早已重构,现在的三个子菜单是 `#submenuMode`(能力模式)、`#submenuExtras`(`···` 更多抽屉)、`#submenuFlow`(编排流程)。`#submenuAI`/`#submenuTools` **根本不存在**,于是 `#submenuExtras`+`#submenuFlow` 在 coarse 平板上**从未被隐藏** → 与移动版 `···` 底部 sheet **两套并存**。sheet 里其实已含全部条目(思考深度/能力模式/自动翻译/蜂群/…),所以 coarse 下隐藏桌面菜单才是对的。
 - **打比方:** 门牌换了号(submenu 改名),但"打烊时锁哪几间铺子"的清单还照着旧门牌念,结果两间铺子(Extras/Flow)永远没锁门,和旁边新开的自助店(移动 sheet)撞在一起营业。

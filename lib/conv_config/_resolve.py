@@ -197,11 +197,12 @@ def resolve_conv_config(
     active_flow = _pick(ov.get('activeFlow'), conv.get('activeFlow'),
                         is_active=is_active)
     flow_builtin, flow_id = _parse_active_flow(active_flow)
-    # ── Three-tier chat mode (air/pro/studio) ──
+    # ── Two-tier chat mode (chat/studio) ──
     # Passthrough only: the authoritative expansion into atomic flags happens
-    # ONCE downstream in _resolve_model_config (via chat_mode.apply_chat_mode),
-    # so the tier and the flags can never diverge. Active conv reads the live
-    # toolbar value; an inactive one reads the stored per-conv value.
+    # ONCE downstream in _resolve_model_config (via chat_mode.apply_chat_mode,
+    # which also normalises legacy air/pro → chat), so the tier and the flags
+    # can never diverge. Active conv reads the live toolbar value; an inactive
+    # one reads the stored per-conv value.
     _chat_mode = _pick(ov.get('chatMode'), conv.get('chatMode'),
                        is_active=is_active)
     if isinstance(_chat_mode, str) and _chat_mode.strip():
@@ -270,7 +271,9 @@ def resolve_conv_settings(
         # is what _maybe_auto_translate_assistant reads off settings.uiLang.
         'uiLang': conv.get('uiLang') or ov.get('uiLang') or None,
     }
-    # Three-tier chat mode — persist the stored/override value (air/pro/studio).
+    # Two-tier chat mode — persist the stored/override value (chat/studio). A
+    # legacy air/pro value is left as-is here and normalised forward to 'chat'
+    # downstream by chat_mode.normalize_chat_mode at resolve time.
     _cm = conv.get('chatMode') or ov.get('chatMode')
     if isinstance(_cm, str) and _cm.strip():
         out['chatMode'] = _cm.strip().lower()

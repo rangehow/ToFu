@@ -1,17 +1,27 @@
-"""lib/tasks_pkg/chat_mode.py — Canonical three-tier chat-mode derivation.
+"""lib/tasks_pkg/chat_mode.py — Canonical two-tier chat-mode derivation.
 
-Tofu's toolbar collapses to ONE user-facing dial with three tiers:
+Tofu's toolbar collapses to ONE user-facing dial with two tiers:
 
     ┌─────────────────────────────────────────────────────────────────┐
-    │  air     — lean, cheapest.  Web search + fetch + read only.       │
-    │            No code-exec / memory / todo / scheduler / swarm.       │
-    │            Goal: cleaner than ChatGPT web, far fewer tool tokens.  │
-    │  pro      — the everyday all-rounder (the old default, now with    │
-    │            code execution ON).  Full default tool set.             │
-    │  studio   — a project/repo is attached; the project tool family    │
+    │  chat    — the everyday all-rounder (the default).  Full default   │
+    │            tool set: web search + fetch + read + code execution +  │
+    │            memory + todo + scheduler.                              │
+    │  studio  — a project/repo is attached; the project tool family     │
     │            (list_dir/grep/write/apply_diff/run_command/…) replaces │
     │            the standalone code_exec tool, plus coordination tools. │
     └─────────────────────────────────────────────────────────────────┘
+
+History
+-------
+Earlier this was a THREE-tier dial (``air`` / ``pro`` / ``studio``).  ``air``
+was a lean "cheapest, fewest tools" tier and ``pro`` the full all-rounder —
+but the two overlapped (both are the project-LESS chat surface, differing only
+in how many tools attach), which only burdened the user with a choice that
+did not map to a distinct task.  They were merged into a single ``chat`` tier
+(carrying the old ``pro`` full tool set).  Old conversations that persisted
+``chatMode='air'`` or ``'pro'`` are normalised forward to ``'chat'`` so they
+load unchanged.  The ``is_lean_mode`` seam is kept (now always False) because a
+future "auto-retract tools for simple turns" feature will reuse it.
 
 Single source of truth
 -----------------------
@@ -31,9 +41,8 @@ Authority rules (mirrors ``lib/agent_core/profiles.apply_profile``)
   never disagree.
 * **Absent ``chatMode`` ⇒ byte-identical legacy behaviour.**  Headless callers
   and old clients that send atomic flags without a ``chatMode`` are left
-  completely untouched (no override, ``lean`` stays False).  ``studio`` is
-  never inferred onto them — a project is still gated purely on
-  ``projectPath`` downstream.
+  completely untouched (no override).  ``studio`` is never inferred onto them —
+  a project is still gated purely on ``projectPath`` downstream.
 * **``studio`` ⟺ a project is attached.**  ``chatMode='studio'`` sets the
   everyday defaults; the project TOOLS still switch on only when
   ``projectPath`` is non-empty (resolved downstream).  This keeps the
@@ -57,8 +66,13 @@ __all__ = [
     'apply_chat_mode',
 ]
 
-CHAT_MODES: tuple[str, ...] = ('air', 'pro', 'studio')
-DEFAULT_CHAT_MODE = 'pro'
+CHAT_MODES: tuple[str, ...] = ('chat', 'studio')
+DEFAULT_CHAT_MODE = 'chat'
+
+# Legacy tier codes that persisted in old conversations. Both the lean ``air``
+# tier and the full ``pro`` tier were merged into the single ``chat`` tier, so
+# an old value normalises forward and the conversation loads unchanged.
+_LEGACY_ALIASES: dict[str, str] = {'air': 'chat', 'pro': 'chat'}
 
 
 def normalize_chat_mode(cfg: dict | None) -> str | None:
@@ -67,14 +81,22 @@ def normalize_chat_mode(cfg: dict | None) -> str | None:
     ``None`` (not a fallback string) is deliberate: callers must distinguish
     "the request declared a tier" (→ authoritative override) from "no tier was
     declared" (→ leave the legacy atomic flags untouched).  A malformed value
-    is treated as absent.
+    is treated as absent.  Legacy tier codes (``air`` / ``pro``) are mapped
+    forward to ``chat``.
     """
     if not cfg or not isinstance(cfg, dict):
         return None
     mode = cfg.get('chatMode')
-    if isinstance(mode, str) and mode.strip().lower() in CHAT_MODES:
-        return mode.strip().lower()
-    if mode:
+    if not isinstance(mode, str):
+        if mode:
+            logger.debug('[ChatMode] ignoring unknown chatMode=%r', mode)
+        return None
+    norm = mode.strip().lower()
+    if norm in CHAT_MODES:
+        return norm
+    if norm in _LEGACY_ALIASES:
+        return _LEGACY_ALIASES[norm]
+    if norm:
         logger.debug('[ChatMode] ignoring unknown chatMode=%r', mode)
     return None
 
@@ -93,14 +115,6 @@ def chat_mode_defaults(mode: str) -> dict[str, Any]:
     tier (they depend on physical connections / model availability), so a tier
     switch must not clobber them.
     """
-    if mode == 'air':
-        return {
-            'searchMode': 'multi',
-            'fetchEnabled': True,
-            'codeExecEnabled': False,
-            'memoryEnabled': False,
-            'swarmEnabled': False,
-        }
     if mode == 'studio':
         # A project is attached; run_command (in PROJECT_TOOLS) supersedes the
         # standalone code_exec tool, so codeExecEnabled is intentionally left
@@ -111,7 +125,7 @@ def chat_mode_defaults(mode: str) -> dict[str, Any]:
             'fetchEnabled': True,
             'memoryEnabled': True,
         }
-    # pro — the everyday all-rounder; code execution ON by default.
+    # chat — the everyday all-rounder; full default tool set, code execution ON.
     return {
         'searchMode': 'multi',
         'fetchEnabled': True,
@@ -121,14 +135,16 @@ def chat_mode_defaults(mode: str) -> dict[str, Any]:
 
 
 def is_lean_mode(mode: str | None) -> bool:
-    """True only for the ``air`` tier — the backend-authoritative lean gate.
+    """Backend-authoritative "lean tier" gate — currently always ``False``.
 
-    Consumed by the tool registry (``_build_memory`` / ``_build_todo`` /
-    ``_build_scheduler`` skip themselves when lean) to drop the ~11 always-on
-    default tools that would otherwise attach on ``has_base_tools`` and make
-    "cleaner than ChatGPT" unreachable through flags alone.
+    The lean ``air`` tier was merged away, so no tier is lean today.  The seam
+    is deliberately kept (consumed by the tool registry's ``_build_memory`` /
+    ``_build_todo`` / ``_build_scheduler``) so a future "auto-retract the
+    always-on capability tools for a simple turn" feature can re-enable it
+    without re-threading a new flag through every ``_assemble_tool_list``
+    caller.
     """
-    return mode == 'air'
+    return False
 
 
 def apply_chat_mode(cfg: dict | None) -> dict:

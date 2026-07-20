@@ -254,15 +254,13 @@ var _i18n = {
   // ══════════════════════════════════════
   'toolbar.enhance': { zh: '增强', en: 'Enhance' },
   'toolbar.enhance': { zh: '增强', en: 'Enhance' },
-  // ── Three-tier capability dial (Air / Pro / Studio) ──
-  'toolbar.modeAirTooltip': { zh: 'Chat — 极速轻聊，工具最少、最省', en: 'Chat — lean & fast, fewest tools, cheapest' },
-  'toolbar.modeProTooltip': { zh: 'Pro — 全能助手（默认），代码执行/记忆/搜索全开', en: 'Pro — the everyday all-rounder (default): code, memory, search' },
+  // ── Two-tier capability dial (Chat / Studio) ──
+  'toolbar.modeChatTooltip': { zh: 'Chat — 全能助手（默认），代码执行/记忆/搜索全开', en: 'Chat — the everyday all-rounder (default): code, memory, search' },
   'toolbar.modeStudioTooltip': { zh: 'Studio — 绑定项目仓库，解锁项目工具', en: 'Studio — attach a project/repo to unlock project tools' },
   'toolbar.extrasTooltip': { zh: '更多能力', en: 'More capabilities' },
   'toolbar.execSection': { zh: '执行策略', en: 'Execution strategy' },
   'mobile.capabilityMode': { zh: '能力模式', en: 'Capability mode' },
-  'mobile.modeAirDesc': { zh: '极速轻聊，最省', en: 'Lean & fast, cheapest' },
-  'mobile.modeProDesc': { zh: '全能助手，默认', en: 'All-rounder, default' },
+  'mobile.modeChatDesc': { zh: '全能助手，默认', en: 'All-rounder, default' },
   'mobile.modeStudioDesc': { zh: '绑定项目，最强', en: 'Attach a project' },
   'toolbar.aiEnhance': { zh: 'AI 增强', en: 'AI Enhance' },
   'toolbar.tools': { zh: '工具', en: 'Tools' },

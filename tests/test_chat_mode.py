@@ -1,14 +1,16 @@
-"""tests/test_chat_mode.py — Three-tier chat mode (air/pro/studio).
+"""tests/test_chat_mode.py — Two-tier chat mode (chat/studio).
 
 Pins the backend half of the single-source-of-truth contract:
 
   * ``chat_mode.apply_chat_mode`` expands a declared tier into atomic flags,
     tier defaults OVERRIDE explicit flags, absent tier = pass-through.
-  * The ``air`` lean tier drops the always-on capability tools
-    (memory / todo / scheduler) so the leanest tier ships only the base
-    search/fetch/read tools — the "cleaner than ChatGPT" goal.
-  * ``pro`` keeps the full default tool set (memory/todo/scheduler on).
+  * The ``chat`` tier keeps the FULL default tool set (memory/todo/scheduler +
+    code execution on) — it is the everyday all-rounder (formerly ``pro``).
   * ``studio`` ⟺ a project is attached (project tools present).
+  * Legacy tier codes ``air`` / ``pro`` persisted in old conversations
+    normalise forward to ``chat`` so they load unchanged.
+  * ``is_lean_mode`` is always False today (the lean ``air`` tier was merged
+    away) but the seam is retained for a future auto-retract feature.
 
 The FE↔BE table equality is guarded separately by
 ``tests/test_chat_mode_parity.py``.
@@ -24,6 +26,7 @@ pytestmark = pytest.mark.unit
 
 from lib.tasks_pkg.chat_mode import (
     CHAT_MODES,
+    DEFAULT_CHAT_MODE,
     apply_chat_mode,
     chat_mode_defaults,
     is_lean_mode,
@@ -64,8 +67,19 @@ class TestNormalize(unittest.TestCase):
         for m in CHAT_MODES:
             self.assertEqual(normalize_chat_mode({'chatMode': m}), m)
 
+    def test_default_is_chat(self):
+        self.assertEqual(DEFAULT_CHAT_MODE, 'chat')
+        self.assertIn('chat', CHAT_MODES)
+
     def test_case_and_whitespace(self):
-        self.assertEqual(normalize_chat_mode({'chatMode': ' Air '}), 'air')
+        self.assertEqual(normalize_chat_mode({'chatMode': ' Chat '}), 'chat')
+
+    def test_legacy_air_pro_normalize_to_chat(self):
+        # Old conversations persisted air/pro; both merge forward to chat so
+        # they load without error and get the everyday tool set.
+        self.assertEqual(normalize_chat_mode({'chatMode': 'air'}), 'chat')
+        self.assertEqual(normalize_chat_mode({'chatMode': 'pro'}), 'chat')
+        self.assertEqual(normalize_chat_mode({'chatMode': ' PRO '}), 'chat')
 
     def test_absent_and_invalid_are_none(self):
         self.assertIsNone(normalize_chat_mode({}))
@@ -78,19 +92,21 @@ class TestApply(unittest.TestCase):
         cfg = {'searchMode': 'off', 'codeExecEnabled': True}
         self.assertEqual(apply_chat_mode(cfg), cfg)
 
-    def test_tier_defaults_override_explicit_flags(self):
-        # Declaring air must FORCE codeExec/memory off even if the caller sent
-        # them on — the tier is the higher-level intent.
-        out = apply_chat_mode({'chatMode': 'air', 'codeExecEnabled': True,
-                               'memoryEnabled': True})
-        self.assertFalse(out['codeExecEnabled'])
-        self.assertFalse(out['memoryEnabled'])
-        self.assertEqual(out['searchMode'], 'multi')
-
-    def test_pro_enables_code_exec(self):
-        out = apply_chat_mode({'chatMode': 'pro'})
+    def test_chat_enables_full_tool_set(self):
+        out = apply_chat_mode({'chatMode': 'chat'})
         self.assertTrue(out['codeExecEnabled'])
         self.assertTrue(out['memoryEnabled'])
+        self.assertEqual(out['searchMode'], 'multi')
+
+    def test_legacy_pro_expands_like_chat(self):
+        # A stored 'pro' must produce the SAME flags as 'chat'.
+        self.assertEqual(
+            {k: v for k, v in apply_chat_mode({'chatMode': 'pro'}).items()
+             if k != 'chatMode'},
+            {k: v for k, v in apply_chat_mode({'chatMode': 'chat'}).items()
+             if k != 'chatMode'},
+        )
+        self.assertEqual(apply_chat_mode({'chatMode': 'pro'})['chatMode'], 'chat')
 
     def test_studio_leaves_code_exec_alone(self):
         # studio does NOT pin codeExec (run_command supersedes it downstream).
@@ -99,55 +115,48 @@ class TestApply(unittest.TestCase):
         self.assertTrue(out['memoryEnabled'])
 
     def test_input_not_mutated(self):
-        cfg = {'chatMode': 'air'}
+        cfg = {'chatMode': 'chat'}
         apply_chat_mode(cfg)
-        self.assertEqual(cfg, {'chatMode': 'air'})
+        self.assertEqual(cfg, {'chatMode': 'chat'})
 
 
 class TestLeanGate(unittest.TestCase):
-    def test_is_lean_only_air(self):
-        self.assertTrue(is_lean_mode('air'))
-        self.assertFalse(is_lean_mode('pro'))
+    def test_is_lean_always_false(self):
+        # The lean 'air' tier was merged away — no tier is lean today. The seam
+        # remains for a future auto-retract-tools feature.
+        self.assertFalse(is_lean_mode('chat'))
         self.assertFalse(is_lean_mode('studio'))
+        self.assertFalse(is_lean_mode('air'))
+        self.assertFalse(is_lean_mode('pro'))
         self.assertFalse(is_lean_mode(None))
 
-    def test_air_drops_memory_todo_scheduler(self):
-        tl, has_real, _ = _assemble({'chatMode': 'air'})
+    def test_chat_keeps_default_capability_tools(self):
+        tl, has_real, _ = _assemble({'chatMode': 'chat', 'mcpEnabled': False})
         names = _names(tl)
-        # Base tools still present.
+        self.assertTrue(has_real)
+        # Base tools present.
         self.assertIn('web_search', names)
         self.assertIn('fetch_url', names)
         self.assertIn('read_files', names)
-        self.assertIn('inspect_image', names)
-        self.assertTrue(has_real)
-        # Lean drops the always-on capability tools.
-        self.assertNotIn('create_memory', names)
-        self.assertNotIn('todo_write', names)
-        self.assertNotIn('schedule_create', names)
-        # No project / code-exec tools in air.
-        self.assertNotIn('run_command', names)
-        self.assertNotIn('code_exec', names)
-
-    def test_air_is_a_small_set(self):
-        # The whole point: air is a handful of tools, not ~15. Guard the
-        # order-of-magnitude so a future always-on tool can't silently
-        # re-inflate the lean tier (MCP may add a few if a bridge is up in
-        # some envs, so assert a generous ceiling rather than exact count).
-        tl, _, _ = _assemble({'chatMode': 'air', 'mcpEnabled': False})
-        self.assertLessEqual(len(_names(tl)), 6)
-
-    def test_pro_keeps_default_capability_tools(self):
-        tl, _, _ = _assemble({'chatMode': 'pro', 'mcpEnabled': False})
-        names = _names(tl)
+        # Everyday capability tools stay on (nothing is dropped anymore).
         self.assertIn('create_memory', names)
         self.assertIn('todo_write', names)
         self.assertIn('schedule_create', names)
-        # pro enables code exec (no project) → the standalone code-exec tool,
+        # chat enables code exec (no project) → the standalone code-exec tool,
         # whose function name is 'run_command' (CODE_EXEC_TOOL is a copy of
         # PROJECT_TOOL_RUN_COMMAND). The project-ONLY tools stay absent.
         self.assertIn('run_command', names)
         self.assertNotIn('grep_search', names)
         self.assertNotIn('write_file', names)
+
+    def test_legacy_air_gets_full_tool_set(self):
+        # A stored 'air' conv now loads with the full chat tool set (no longer
+        # a stripped-down tier).
+        tl, _, _ = _assemble({'chatMode': 'air', 'mcpEnabled': False})
+        names = _names(tl)
+        self.assertIn('create_memory', names)
+        self.assertIn('todo_write', names)
+        self.assertIn('run_command', names)
 
     def test_studio_has_project_tools_not_code_exec(self):
         tl, _, _ = _assemble({'chatMode': 'studio', 'projectPath': '/tmp/x',
@@ -162,7 +171,7 @@ class TestLeanGate(unittest.TestCase):
 
     def test_no_chatmode_is_unchanged_legacy(self):
         # A legacy caller with no chatMode keeps memory/todo/scheduler
-        # (has_base_tools path) — proves the gate is opt-in via air only.
+        # (has_base_tools path) — proves the pass-through is intact.
         tl, _, _ = _assemble({'mcpEnabled': False})
         names = _names(tl)
         self.assertIn('create_memory', names)

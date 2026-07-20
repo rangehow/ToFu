@@ -764,19 +764,14 @@
                 <div class="submenu-flow-row" id="modeMenuWrapper">
                   <button type="button" class="submenu-trigger chat-mode-trigger" id="chatModeToggle" onclick="toggleChatModeMenu(event)" aria-haspopup="true" data-i18n-title="mobile.capabilityMode" title="能力模式">
                     <span class="chat-mode-trigger-ic" id="chatModeIcon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></span>
-                    <span class="submenu-label chat-mode-trigger-label" id="chatModeLabel">Pro</span>
+                    <span class="submenu-label chat-mode-trigger-label" id="chatModeLabel">Chat</span>
                     <span class="submenu-arrow"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></span>
                   </button>
                   <div class="flow-menu chat-mode-menu" id="chatModeMenu">
                     <div class="flow-menu-list">
-                      <div class="flow-menu-item chat-mode-item" data-mode="air" role="button" onclick="setChatMode('air');closeChatModeMenu()" data-i18n-title="toolbar.modeAirTooltip" title="Chat — 极速轻聊，最省">
+                      <div class="flow-menu-item chat-mode-item" data-mode="chat" role="button" onclick="setChatMode('chat');closeChatModeMenu()" data-i18n-title="toolbar.modeChatTooltip" title="Chat — 全能助手，默认">
                         <span class="flow-menu-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span>
-                        <span class="flow-menu-text"><span class="flow-menu-name">Chat</span><span class="flow-menu-desc" data-i18n="mobile.modeAirDesc">极速轻聊，最省</span></span>
-                        <span class="flow-menu-check">✓</span>
-                      </div>
-                      <div class="flow-menu-item chat-mode-item" data-mode="pro" role="button" onclick="setChatMode('pro');closeChatModeMenu()" data-i18n-title="toolbar.modeProTooltip" title="Pro — 全能助手，默认">
-                        <span class="flow-menu-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></span>
-                        <span class="flow-menu-text"><span class="flow-menu-name">Pro</span><span class="flow-menu-desc" data-i18n="mobile.modeProDesc">全能助手，默认</span></span>
+                        <span class="flow-menu-text"><span class="flow-menu-name">Chat</span><span class="flow-menu-desc" data-i18n="mobile.modeChatDesc">全能助手，默认</span></span>
                         <span class="flow-menu-check">✓</span>
                       </div>
                       <div class="flow-menu-item chat-mode-item" data-mode="studio" role="button" onclick="setChatMode('studio');closeChatModeMenu()" data-i18n-title="toolbar.modeStudioTooltip" title="Studio — 绑定项目，最强">
@@ -1648,19 +1643,11 @@
        project panel. -->
   <div class="mobile-sheet-section">
     <div class="mobile-sheet-section-title" data-i18n="mobile.capabilityMode">能力模式</div>
-    <div class="mobile-sheet-item mobile-mode-item" id="mobileModeAir" data-mode="air" onclick="setChatMode('air');updateMobileSheet()">
-      <span class="mobile-sheet-item-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h11a3 3 0 1 0-3-3"/><path d="M3 12h15a3 3 0 1 1-3 3"/><path d="M3 16h9a2.5 2.5 0 1 1-2.5 2.5"/></svg></span>
+    <div class="mobile-sheet-item mobile-mode-item" id="mobileModeChat" data-mode="chat" onclick="setChatMode('chat');updateMobileSheet()">
+      <span class="mobile-sheet-item-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span>
       <span class="mobile-sheet-item-text">
         <span class="mobile-sheet-item-name">Chat</span>
-        <span class="mobile-sheet-item-desc" data-i18n="mobile.modeAirDesc">极速轻聊，最省</span>
-      </span>
-      <span class="mobile-sheet-item-check">✓</span>
-    </div>
-    <div class="mobile-sheet-item mobile-mode-item" id="mobileModePro" data-mode="pro" onclick="setChatMode('pro');updateMobileSheet()">
-      <span class="mobile-sheet-item-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></span>
-      <span class="mobile-sheet-item-text">
-        <span class="mobile-sheet-item-name">Pro</span>
-        <span class="mobile-sheet-item-desc" data-i18n="mobile.modeProDesc">全能助手，默认</span>
+        <span class="mobile-sheet-item-desc" data-i18n="mobile.modeChatDesc">全能助手，默认</span>
       </span>
       <span class="mobile-sheet-item-check">✓</span>
     </div>

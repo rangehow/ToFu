@@ -517,9 +517,9 @@ function closeMobileSheet() {
 }
 
 function updateMobileSheet() {
-  /* ★ Capability-mode rows (Air/Pro/Studio) mirror the segmented dial — a
+  /* ★ Capability-mode rows (Chat/Studio) mirror the segmented dial — a
    * radio-style highlight, NOT a toggle. Reflect the live chatMode global. */
-  const _mode = (typeof chatMode !== 'undefined' ? chatMode : 'pro');
+  const _mode = (typeof chatMode !== 'undefined' ? chatMode : 'chat');
   document.querySelectorAll('.mobile-mode-item').forEach(el => {
     el.classList.toggle('active', el.dataset.mode === _mode);
   });

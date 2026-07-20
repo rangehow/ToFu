@@ -184,8 +184,9 @@ def _build_memory(ctx: ToolContext) -> list[dict]:
     # Memory tools attach whenever ANY real tool exists.  Note: this is gated
     # on has_base_tools, NOT on memoryEnabled — the memoryEnabled flag only
     # controls the system-prompt memory instructions (see system_context.py).
-    # The 'air' lean tier drops them entirely (chat_mode.is_lean_mode) so the
-    # cheapest tier ships only the base search/fetch/read tools.
+    # ``ctx.lean`` is a retained seam (chat_mode.is_lean_mode, currently always
+    # False after the air/pro merge) for a future auto-retract-tools feature
+    # that would ship only the base search/fetch/read tools on a simple turn.
     if ctx.lean or not ctx.has_base_tools:
         return []
     from lib.memory import ALL_MEMORY_TOOLS
@@ -197,7 +198,8 @@ def _build_todo(ctx: ToolContext) -> list[dict]:
     # exists — it's a lightweight, always-useful progress tracker that also
     # feeds the continuation enforcer, so it needs no user-facing toggle
     # (mirrors the memory-tools attachment rule). A pure-chat turn with no
-    # tools does not get it (nothing to track). The 'air' lean tier drops it.
+    # tools does not get it (nothing to track). ``ctx.lean`` is a retained seam
+    # (always False today; see _build_memory) for a future auto-retract.
     if ctx.lean or not ctx.has_base_tools:
         return []
     from lib.tools.todo import TODO_WRITE_TOOL
@@ -209,7 +211,8 @@ def _build_scheduler(ctx: ToolContext) -> list[dict]:
     # attach whenever ANY base tool exists, NOT gated on a user toggle. The
     # scheduler_enabled flag survives on the ToolContext for back-compat but no
     # longer controls tool exposure — there is no composer toggle anymore.
-    # The 'air' lean tier drops them.
+    # ``ctx.lean`` is a retained seam (always False today; see _build_memory)
+    # for a future auto-retract.
     if ctx.lean or not ctx.has_base_tools:
         return []
     from lib.scheduler.tool_defs import SCHEDULER_TOOLS

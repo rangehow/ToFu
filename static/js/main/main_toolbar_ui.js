@@ -14,7 +14,7 @@ function toggleThinking() {
 }
 
 // ══════════════════════════════════════════════════════
-// ★ Three-tier capability dial (Air / Pro / Studio)
+// ★ Two-tier capability dial (Chat / Studio)
 //   SINGLE source of truth mirrored from the backend
 //   (lib/tasks_pkg/chat_mode.chat_mode_defaults). The parity test
 //   tests/test_chat_mode_parity.py asserts this table is byte-equal to the
@@ -23,16 +23,12 @@ function toggleThinking() {
 //   Only the atomic flags a tier PINS are listed. Extras (browser/desktop/
 //   imageGen/humanGuidance/autoTranslate) are orthogonal — a tier switch
 //   never clobbers them.
+//
+//   (The old lean 'air' tier was merged into 'chat'; legacy air/pro persisted
+//   in old convs normalise forward to 'chat' — see chat_mode.normalize.)
 // ══════════════════════════════════════════════════════
 const _CHAT_MODE_DEFAULTS = {
-  air: {
-    searchMode: 'multi',
-    fetchEnabled: true,
-    codeExecEnabled: false,
-    memoryEnabled: false,
-    swarmEnabled: false,
-  },
-  pro: {
+  chat: {
     searchMode: 'multi',
     fetchEnabled: true,
     codeExecEnabled: true,
@@ -50,36 +46,32 @@ if (typeof window !== 'undefined') window._CHAT_MODE_DEFAULTS = _CHAT_MODE_DEFAU
  * the atomic-flag setters. Does NOT persist or open modals — that's the
  * caller's job (setChatMode). Safe to call on restore. */
 function _applyChatModeUI(mode) {
-  mode = (mode === 'air' || mode === 'studio') ? mode : 'pro';
+  // Normalise legacy tier codes (air/pro) forward to the merged 'chat' tier.
+  mode = (mode === 'studio') ? 'studio' : 'chat';
   chatMode = mode;
   const d = _CHAT_MODE_DEFAULTS[mode] || {};
   if (typeof _applySearchModeUI === 'function') _applySearchModeUI(d.searchMode || 'multi');
   if (typeof _applyFetchEnabledUI === 'function') _applyFetchEnabledUI(d.fetchEnabled !== false);
   // codeExec: studio leaves it alone (run_command supersedes it in project
-  // mode); air/pro pin it explicitly.
+  // mode); chat pins it on explicitly.
   if (d.codeExecEnabled !== undefined && typeof _applyCodeExecUI === 'function') {
     _applyCodeExecUI(!!d.codeExecEnabled);
   }
   if (d.memoryEnabled !== undefined && typeof _applyMemoryUI === 'function') {
     _applyMemoryUI(!!d.memoryEnabled);
   }
-  // Air is a lean solo tier — swarm off. pro/studio leave swarm to the user.
-  if (d.swarmEnabled !== undefined && typeof _applySwarmUI === 'function') {
-    _applySwarmUI(!!d.swarmEnabled);
-  }
   // ── Paint the popover trigger (icon + label) and the menu's selected row.
   //    The trigger mirrors the active tier's glyph so the collapsed control
   //    still communicates the current mode at a glance. ──
-  const _MODE_LABEL = { air: 'Chat', pro: 'Pro', studio: 'Studio' };
+  const _MODE_LABEL = { chat: 'Chat', studio: 'Studio' };
   const _MODE_ICON = {
-    air: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
-    pro: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>',
+    chat: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
     studio: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>',
   };
   const lbl = document.getElementById('chatModeLabel');
-  if (lbl) lbl.textContent = _MODE_LABEL[mode] || 'Pro';
+  if (lbl) lbl.textContent = _MODE_LABEL[mode] || 'Chat';
   const ic = document.getElementById('chatModeIcon');
-  if (ic) ic.innerHTML = _MODE_ICON[mode] || _MODE_ICON.pro;
+  if (ic) ic.innerHTML = _MODE_ICON[mode] || _MODE_ICON.chat;
   const trig = document.getElementById('chatModeToggle');
   if (trig) trig.dataset.mode = mode;
   document.querySelectorAll('#chatModeMenu .chat-mode-item').forEach(el => {
@@ -138,11 +130,11 @@ function setChatMode(mode) {
     debugLog('Mode: Studio (project attached)', 'success');
     return;
   }
-  // air / pro. Switching AWAY from studio while a project is attached would be
+  // chat. Switching AWAY from studio while a project is attached would be
   // contradictory (studio ⟺ project); clearing the project is an explicit act
   // via the project panel, so here we only change the dial + flags. If a
-  // project is attached and the user picks air/pro, we still detach-in-spirit
-  // by clearing the project so the derived state stays truthful.
+  // project is attached and the user picks chat, we still detach-in-spirit by
+  // clearing the project so the derived state stays truthful.
   if (mode !== 'studio'
       && typeof projectState !== 'undefined' && projectState
       && projectState.active && projectState.path
@@ -151,7 +143,7 @@ function setChatMode(mode) {
   }
   _applyChatModeUI(mode);
   _saveConvToolState();
-  debugLog('Mode: ' + (mode === 'air' ? 'Air' : 'Pro'), 'success');
+  debugLog('Mode: Chat', 'success');
 }
 if (typeof window !== 'undefined') window.setChatMode = setChatMode;
 
@@ -164,19 +156,18 @@ function onProjectAttached() {
 if (typeof window !== 'undefined') window.onProjectAttached = onProjectAttached;
 
 /* Called by clearProject — a project-less chat is never Studio; fall back to
- * Pro (the everyday tier) unless the user is deliberately in Air. */
+ * the everyday Chat tier. */
 function onProjectCleared() {
-  if (chatMode === 'studio') _applyChatModeUI('pro');
+  if (chatMode === 'studio') _applyChatModeUI('chat');
 }
 if (typeof window !== 'undefined') window.onProjectCleared = onProjectCleared;
 
 /* Derive the correct tier from the current atomic flags — used on restore of
- * an OLD conversation that has no stored chatMode (pre-feature convs). */
+ * an OLD conversation that has no stored chatMode (pre-feature convs). With
+ * the air/pro merge there are only two tiers: a project ⇒ studio, else chat. */
 function _deriveChatModeFromFlags(conv) {
   if (conv && conv.projectPath) return 'studio';
-  // Air is the lean fingerprint: memory OFF and codeExec OFF.
-  if (conv && conv.memoryEnabled === false && !conv.codeExecEnabled) return 'air';
-  return 'pro';
+  return 'chat';
 }
 if (typeof window !== 'undefined') window._deriveChatModeFromFlags = _deriveChatModeFromFlags;
 /* ★ Populate model dropdown dynamically from the registered models list.

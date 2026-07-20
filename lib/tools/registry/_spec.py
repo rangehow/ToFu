@@ -75,12 +75,12 @@ class ToolContext:
     image_gen_enabled: bool = False
     human_guidance_enabled: bool = False
     scheduler_enabled: bool = False
-    # ``lean`` is the backend-authoritative "air tier" gate (set from
-    # cfg['chatMode']=='air' by the resolver). When True, the always-on
+    # ``lean`` is a retained backend seam (chat_mode.is_lean_mode, currently
+    # always False after the air/pro tier merge). When True, the always-on
     # capability tools that attach purely on has_base_tools — memory / todo /
-    # scheduler — skip themselves, so the leanest tier ships only
-    # search+fetch+read+inspect (≈4 tools) instead of ~15. See
-    # lib/tasks_pkg/chat_mode.is_lean_mode.
+    # scheduler — skip themselves, shipping only search+fetch+read+inspect
+    # (≈4 tools) instead of ~15. Kept for a future "auto-retract tools on a
+    # simple turn" feature. See lib/tasks_pkg/chat_mode.is_lean_mode.
     lean: bool = False
     messages: list[dict[str, Any]] | None = None
 

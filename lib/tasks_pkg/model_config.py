@@ -78,7 +78,7 @@ def _resolve_model_config(cfg, task_id):
     browser_enabled, desktop_enabled, swarm_enabled.
     """
     tid = task_id[:8]
-    # ── Three-tier chat mode (air/pro/studio) → atomic flags ──
+    # ── Two-tier chat mode (chat/studio) → atomic flags ──
     #   Single source of truth: lib/tasks_pkg/chat_mode. When the request
     #   declares a tier, its derived flags OVERRIDE the atomic flags below so
     #   the UI dial and the resolved tool set can never disagree; absent a
@@ -237,7 +237,8 @@ def _assemble_tool_list(cfg, project_path, project_enabled, task_id,
     # TOFU_DEFAULT_TOOL_PLUGINS env → fail-closed (no plugins). See
     # lib/tools/registry.py "Plugin isolation" and docs/TOOL_PLUGINS.md.
     enabled_plugins = resolve_enabled_plugins(cfg)
-    # Lean 'air' tier drops the always-on capability tools (memory/todo/
+    # ``lean`` is a retained seam (is_lean_mode, always False after the air/pro
+    # merge) that would drop the always-on capability tools (memory/todo/
     # scheduler). Derived from cfg here so every _assemble_tool_list caller
     # (orchestrator, swarm rehydrate, endpoint runner, tests) honors it with
     # no signature change — the chatMode key rides on cfg.

@@ -1,6 +1,20 @@
 # Project Journal
 
 
+### 2026-07-20 — OOM 自卫做扎实:在 mlock 退让之外补三层「共享 cgroup 濒满」主动防御(commit `2c607ec`,5 文件 +~630,新测 14/14 绿含每层 NEUTER + 裸机 no-op + 活机三层全触发)。owner 认可 `8578948` 但拒绝「环境层改不了」躺平——退让 6GB 只治自伤,cgroup 被邻居顶满时 tofu 仍是最胖 Python 进程、下一个申请大块内存的还是我们(日志末行 `cache_write=109969` 拼 11 万 token 就是导火索)。要求「全做①②③、一次做透」。
+- **先实测砍死一条死路(关键):** owner 提议「进程自设 `oom_score_adj` 保护自己」——活体验证 `echo -100/-500/-1000 > /proc/self/oom_score_adj` **回读仍是 0**(内核 floor,需 `CAP_SYS_RESOURCE`,我们没有)。**「改优先级系数」此路不通**。但 oom_score≈RSS,所以真正杠杆是**改 RSS 本身**:濒满时主动瘦身、别当全场最胖。`malloc_trim(0)` 实测可用、cgroup 用量/swap 可读。
+- **新增 `lib/cgroup_guard.py`(所有 reader 在 cgroup/`/proc` 不可读时优雅返回 None → 每层退化 no-op,裸机/macOS/沙箱不抛异常):**
+  - **①`startup_self_check()`**:启动时若 cgroup ≥`TOFU_CGROUP_WARN_PCT`(默认 90%)满 **且 swap=0** → `CRITICAL` 日志 + `audit_log('cgroup_near_full')`,写明「随时可能被内核 OOM SIGKILL,是环境挤爆(siblings+FUSE cache),**非 tofu bug**」。这就是 owner 最初问题的直接答案——以后拿这条日志去找 MLP 要独立 cgroup。
+  - **②`start_monitor()`**:daemon 线程、poll ≥30s(`TOFU_CGROUP_POLL_SEC`,硬 clamp≥30)、**绝不碰事件循环**;用量 ≥`TOFU_CGROUP_RELIEF_PCT`(默认 92%)时 drop 自己的 TTLCache + `malloc_trim(0)`,relief 前后打 WARN 记用量%。
+  - **③`check_request_headroom()` 接进 `dispatch_stream`**:发**大请求体**(≥`TOFU_CGROUP_REQUEST_MIN_BYTES` 默认 2MB)前,用量 ≥`TOFU_CGROUP_REQUEST_PCT`(默认 95%)则先 trim 一次、仍危险就 **fail-fast 抛 `MemoryPressureError`**(日志带 ident/body 大小/用量%),把「拼到一半无 traceback 猝死」变「有记录的可控降级」。`TOFU_CGROUP_REQUEST_GUARD=0` 可降级为只记不抛。
+- **`ttl_cache.py` 加 `WeakSet` 注册表 + `clear_all_caches()`**:每个 TTLCache 实例在 `__init__` 自动登记(弱引用、出作用域自动摘除),② 据此清掉我们自己的可回收缓存。
+- **阈值全走 env、零硬编码**(`TOFU_CGROUP_WARN_PCT`/`RELIEF_PCT`/`REQUEST_PCT`/`POLL_SEC`/`REQUEST_MIN_BYTES`/`REQUEST_GUARD`)。
+- **活机验证(本机 199.6/200GiB=99.8% 满、swap=0):** ①打出 `SHARED CGROUP NEAR-FULL: 99.8% ... NOT a tofu bug`;③对 41.9MB body trim 后仍 99.8% → 明确 refuse;②relieve `malloc_trim=True`(fresh 进程无缓存故 dropped=0,但 relief 测试证明有缓存时 dropped≥2)。
+- **tests(`test_cgroup_guard.py` 14 测):** 裸机三层全 no-op(reader 返 None→不抛);①满+无swap 告警 / 宽裕静默 / **NEUTER**(同样满但 swap>0→不告警,证明 swap 信号 load-bearing);②过阈 relieve / **NEUTER**(阈下不 relieve)/ relief 真清 TTLCache;③临界 refuse / 小 body 恒过 / 宽裕过 / trim 救回则过 / **NEUTER**(pressure()返 None→临界也放行,证明压力读数 load-bearing)。14/14 绿 + ttl_cache 20/20 无回归 + `--collect-only` 7654(唯一 error 是既知 sibling `pty_streaming` flake)。
+- **诚实边界(明确告知 owner):** 三层**都不能阻止内核在 cgroup 真爆时杀进程**——根治仍在 MLP 调度层(独立小 cgroup / 给 swap / 限并发 sibling)。本轮做的是把 tofu 从「最胖、随机、无日志猝死」改成「更瘦、有预警、濒满可控降级 + 每次留痕」。**生效需 owner 重启 :15000**(当前活进程 PID 2809182 是 17:46 旧码、`VmLck=5.3GB` 仍钉着,fix 对它零作用);重启后应见启动日志 `mlockall skipped ... full`+`VmLck≈0`、濒满 `CRITICAL` 自检行、以及 monitor 的 relief WARN。
+- **git 纪律(共享 HEAD,第三次遇 sibling `[CodeFingerprint]` WIP,已按教训处理):** server.py 工作树混有 sibling 未提交的 CodeFingerprint hunk(@@ -2717)。用「`git diff` 切出我的 cgroup hunk(@@ -2509)→ `head -n` 截到 sibling hunk 之前 → `git apply --cached` 只暂存我那段」+ 其余 4 文件整体 add,再 **`git commit` 无 pathspec 提交 index**。`2c607ec` 泄漏探针 `git show HEAD | grep '^\+.*CodeFingerprint'`=NONE、HEAD 仅我 5 文件、sibling WIP 完好留在工作树。
+
+
 ### 2026-07-20 — 「为什么总是只有 tofu 被 kill、别的程序从不」用活体证据钉死并根修:是**共享 cgroup OOM + mlockall 自伤**,不是玄学、也不是「200GB 内存够」(commit `8578948`,2 文件 +181/-5,新测 6/6 绿含 NEUTER + 活机判决 False)。owner 报 `python server.py` 跑几分钟就一句 `Killed`、无 traceback,坚持「容器有 200GB、跟内存无关」,并合理质疑「别的程序从没被杀、只有 tofu」。
 - **先证:不是玄学,是 cgroup OOM 杀了 566 次。** `/sys/fs/cgroup/memory/memory.oom_control` → `oom_kill 566`;`memory.limit_in_bytes`=200GiB 而 `usage_in_bytes`=199.7GiB(**99.87% 满**)、`max_usage`=199.99GiB。裸 `Killed` + 无 traceback = 内核 SIGKILL 指纹。
 - **owner 质疑「为何总是 tofu」——用 `/proc/*/oom_score` 回答(非推测):** 全场 `oom_score_adj` 都是 0(无人为加权),纯拼 RSS。实测 tofu server=**670(全场最高)**、第二个 tofu=669、code-server/PyCharm/postgres 全 <1GB → score 666–667。**OOM killer 按 RSS 从高到低杀,tofu 是组里最胖的进程,数学上必然第一个中枪**——精确解释「只杀 tofu」。不是针对,是它最大。

@@ -225,8 +225,12 @@ async function generateImageDirect() {
     return;
   }
 
+  // ── Wait for any still-compressing/uploading source images (mobile) so an
+  //    edit never fires with an entry whose base64 isn't ready yet. ──
+  if (typeof _waitForImageProcessing === 'function') await _waitForImageProcessing();
+
   // ── Collect source images for editing ──
-  const sourceImages = [...pendingImages];
+  const sourceImages = [...pendingImages].filter(im => im && (im.base64 || im.url));
   const isEdit = sourceImages.length > 0;
 
   // ── Route to batch generation when count > 1 or All Models selected ──
@@ -269,8 +273,10 @@ async function generateImageDirect() {
   if (conv.messages.filter(m => m.role === 'user').length === 1) {
     const titleText = isEdit ? prompt : prompt;
     conv.title = titleText.slice(0, 60) + (titleText.length > 60 ? '...' : '');
-    if (activeConvId === conv.id)
-      document.getElementById('topbarTitle').textContent = conv.title;
+    if (activeConvId === conv.id) {
+      const _tt = document.getElementById('topbarTitle');
+      if (_tt) _tt.textContent = conv.title;
+    }
     renderConversationList();
   }
 
@@ -349,7 +355,7 @@ async function generateImageDirect() {
 
     if (data.ok) {
       const imgSrc = data.image_url
-        ? apiUrl(data.image_url)
+        ? (data.image_url.startsWith('/') ? apiUrl(data.image_url) : data.image_url)
         : (data.image_b64 ? `data:${data.mime_type || 'image/png'};base64,${data.image_b64}` : '');
 
       const elapsed = ((Date.now() - t0) / 1000).toFixed(1);

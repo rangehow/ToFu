@@ -2712,10 +2712,6 @@ def _verify_exported_py_integrity(dest: Path) -> None:
 
 
 def _verify_opensource(dest: Path):
-    print(f"  {C_GREEN}\u2705 All exported JS parses cleanly.{C_END}")
-
-
-def _verify_opensource(dest: Path):
     """Post-export verification: scan exported files for leaked secrets.
 
     Uses a single ``rg`` invocation per pattern (each one returns

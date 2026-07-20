@@ -876,8 +876,9 @@ function _renderVerticalCard(v) {
   const rows = items.slice(0, 12).map(it => {
     const title = escapeHtml(String(it.title || "(untitled)"));
     const url = String(it.url || "");
-    const titleHtml = url
-      ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener">${title}</a>`
+    const safeUrl = /^https?:\/\//i.test(url) ? url : "";
+    const titleHtml = safeUrl
+      ? `<a href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener">${title}</a>`
       : `<span>${title}</span>`;
     const meta = [];
     if (it.upvotes != null && it.upvotes !== "")
@@ -2117,7 +2118,8 @@ function _renderUnifiedToolLine(round, isSearching) {
         : r.fetched
         ? `<span class="search-result-fetched${r.source === "PDF" ? " pdf" : ""}">✓ ${r.fetchedChars ? (r.fetchedChars > 1000 ? Math.round(r.fetchedChars / 1000) + "k" : r.fetchedChars) + " chars" : "fetched"}</span>`
         : "";
-      return `<div class="search-result-item"><div class="search-result-title">${r.url ? `<a href="${escapeHtml(r.url)}" target="_blank" rel="noopener">${escapeHtml(r.title)}</a>` : `<span>${escapeHtml(r.title)}</span>`}<span class="search-result-source">${escapeHtml(r.source)}</span>${fb}</div>${r.snippet ? `<div class="search-result-snippet">${escapeHtml(r.snippet)}</div>` : ""}${r.url ? `<div class="search-result-url">${escapeHtml(r.url)}</div>` : ""}</div>`;
+      const _safeRu = /^https?:\/\//i.test(String(r.url || "")) ? r.url : "";
+      return `<div class="search-result-item"><div class="search-result-title">${_safeRu ? `<a href="${escapeHtml(_safeRu)}" target="_blank" rel="noopener">${escapeHtml(r.title)}</a>` : `<span>${escapeHtml(r.title)}</span>`}<span class="search-result-source">${escapeHtml(r.source)}</span>${fb}</div>${r.snippet ? `<div class="search-result-snippet">${escapeHtml(r.snippet)}</div>` : ""}${r.url ? `<div class="search-result-url">${escapeHtml(r.url)}</div>` : ""}</div>`;
     };
     // ── Per-query grouping: when a batch search tagged each result with its
     //    source query (`_q`), render a subheader per query so the user can
@@ -2207,9 +2209,10 @@ function _renderUnifiedToolLine(round, isSearching) {
         const totalRaw = engines.reduce((s, e) => s + (eb[e] ? eb[e].length : 0), 0);
         const ebInner = engines.map((eng) => {
           const urls = eb[eng] || [];
-          const urlItems = urls.map((u) =>
-            `<div class="eb-url-item"><a href="${escapeHtml(u.url)}" target="_blank" rel="noopener">${escapeHtml(u.title || u.url)}</a><div class="eb-url-text">${escapeHtml(u.url)}</div></div>`
-          ).join("");
+          const urlItems = urls.map((u) => {
+            const _safeEu = /^https?:\/\//i.test(String(u.url || "")) ? u.url : "";
+            return `<div class="eb-url-item">${_safeEu ? `<a href="${escapeHtml(_safeEu)}" target="_blank" rel="noopener">${escapeHtml(u.title || u.url)}</a>` : `<span>${escapeHtml(u.title || u.url)}</span>`}<div class="eb-url-text">${escapeHtml(u.url)}</div></div>`;
+          }).join("");
           return `<div class="eb-engine"><div class="eb-engine-name">${escapeHtml(eng)} <span class="eb-engine-count">(${urls.length})</span></div><div class="eb-engine-urls">${urlItems}</div></div>`;
         }).join("");
         engineBkdnHtml = `<div class="eb-section">

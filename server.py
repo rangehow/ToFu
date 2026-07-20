@@ -1404,8 +1404,8 @@ async def method_override():
                 if isinstance(data, str):
                     corrected = json.dumps(json.loads(data)).encode('utf-8')
                     request._body = corrected
-            except (json.JSONDecodeError, TypeError):
-                pass
+            except (json.JSONDecodeError, TypeError) as e:
+                _lifecycle_log.debug('[method_override] body unwrap skipped: %s', e)
 
 
 # ── Request lifecycle logging ──

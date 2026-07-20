@@ -99,6 +99,20 @@ def test_floor_retry_max_clamped_and_gate(monkeypatch):
     assert fr.floor_retry_max() == 0
 
 
+def test_default_gate_is_ON_and_max_is_2(monkeypatch):
+    """★ Failing-first guard for the DEFAULT FLIP (2026-07-20): with NO env
+    var set, the mitigation must be ON and the resend cap must be 2 (so a
+    collapse whose first resend hits a 503 still gets a second attempt).
+    NEUTER: revert the module defaults to '0'/'1' and this test goes red."""
+    from lib.tasks_pkg import floor_retry as fr
+    monkeypatch.delenv('TOFU_CACHE_FLOOR_RETRY', raising=False)
+    monkeypatch.delenv('TOFU_CACHE_FLOOR_RETRY_MAX', raising=False)
+    assert fr.floor_retry_enabled() is True, (
+        'the proven mitigation must be ON by default (objective: zero misses)')
+    assert fr.floor_retry_max() == 2, (
+        'default resend cap must be 2 to cover a 503-on-first-resend round')
+
+
 def test_wire_prefix_stable_true_when_prefix_matches():
     from lib.tasks_pkg import floor_retry as fr
     _seed_wire_fp('cfr-stable', [{'k': 'a'}])

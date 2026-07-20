@@ -19,12 +19,13 @@ byte-stable body re-rolls the dice and usually hits the now-visible cache write
 
 Discipline (mirrors the TOFU_CACHE_MID_MODE=drop rollout)
 =========================================================
-  * ENV-GATED, default OFF (``TOFU_CACHE_FLOOR_RETRY``) — no behaviour change
-    until an operator opts in, and instant rollback by unsetting it.
+  * ENV-GATED (``TOFU_CACHE_FLOOR_RETRY``), DEFAULT ON after production-path
+    acceptance (0.0% floor on mrsfs9d6 / mrt1ijef); ``=0`` for instant rollback.
   * Only fires on a BYTE-STABLE floor-collapse (the wire prefix is proven
     identical to the previous round). A resend on a body the client actually
     changed would be a wasted call, so it is refused.
-  * CAPPED resends (``TOFU_CACHE_FLOOR_RETRY_MAX``, default 1) — cost is bounded.
+  * CAPPED resends (``TOFU_CACHE_FLOOR_RETRY_MAX``, default 2, hard-cap 3) —
+    cost is bounded; 2 covers a collapse whose first resend itself hit a 503.
   * 503/throttle-AWARE: a resend that raises a rate-limit/throttle error stops
     the loop immediately (do not pile retries onto an already-throttled gateway;
     that is what limited the harness mrt1ijef arm to 11.8%).
@@ -55,18 +56,29 @@ _FLOOR_WRITE_LO = 20_000
 
 
 def floor_retry_enabled() -> bool:
-    """True when the floor-collapse resend mitigation is enabled (default OFF)."""
-    raw = (getenv_compat('TOFU_CACHE_FLOOR_RETRY', default='0') or '0').strip().lower()
+    """True when the floor-collapse resend mitigation is enabled.
+
+    DEFAULT ON (2026-07-20): production-path acceptance drove effective floor%
+    to 0.0% on two real miss-heavy convs (mrsfs9d6 / mrt1ijef). Set
+    ``TOFU_CACHE_FLOOR_RETRY=0`` for instant rollback.
+    """
+    raw = (getenv_compat('TOFU_CACHE_FLOOR_RETRY', default='1') or '1').strip().lower()
     return raw in ('1', 'true', 'yes', 'on')
 
 
 def floor_retry_max() -> int:
-    """Max identical resends per collapsing round (default 1, hard-capped 3)."""
-    raw = (getenv_compat('TOFU_CACHE_FLOOR_RETRY_MAX', default='1') or '1').strip()
+    """Max identical resends per collapsing round (default 2, hard-capped 3).
+
+    DEFAULT 2 (2026-07-20): acceptance showed some collapses recover only on
+    the SECOND resend because the first resend itself hit a gateway 503 — a
+    cap of 1 would let those rounds slip through. The stop-on-throttle guard +
+    the hard cap of 3 keep the cost bounded.
+    """
+    raw = (getenv_compat('TOFU_CACHE_FLOOR_RETRY_MAX', default='2') or '2').strip()
     try:
         n = int(raw)
     except (ValueError, TypeError):
-        n = 1
+        n = 2
     return max(0, min(3, n))
 
 

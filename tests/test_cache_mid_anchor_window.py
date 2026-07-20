@@ -267,6 +267,114 @@ class TestMarkerBlockWindow:
         assert mid_anchor_out_of_window({}) is False
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+#  Part C — the DETECTOR FALSE-POSITIVE fix: the system/head marker at block 0
+#           must NOT poison the mid→tail span (OpenAI-protocol wire path).
+#
+#  Root cause (this turn's live-log investigation, 734 CacheRoundRecords):
+#  on the OpenAI-protocol path the system prompt STAYS at ``messages[0]`` (it is
+#  NOT hoisted to a top-level ``system`` field), so its cache_control marker
+#  lands at cumulative block 0. ``mid_anchor_out_of_window`` computed
+#  ``max(msg_blocks) - min(msg_blocks)`` = ``tail - 0`` = the tail's ABSOLUTE
+#  block position, which crosses the 20-block lookback on ANY long conversation
+#  — regardless of the true mid→tail geometry (measured max mid→tail span = 14,
+#  never > 20, even at parallel=20). That inflated ``cache_mid_out_of_window``
+#  into a near-constant false positive. The fix: ``marker_signature`` emits
+#  ``body_msg_blocks`` (message markers EXCLUDING the system/head marker), and
+#  the predicate measures that body-only span.
+# ─────────────────────────────────────────────────────────────────────────────
+
+@pytest.mark.unit
+class TestHeadMarkerDoesNotPoisonSpan:
+
+    def _real_openai_body_with_small_mid_tail_gap(self):
+        """Build a REAL wire body via add_cache_breakpoints on the OpenAI shape
+        (system = messages[0], gets a marker at block 0), long enough that the
+        mid anchor is armed but whose TRUE mid→tail block span is small (≤ 14).
+        """
+        import os as _os
+        _os.environ.setdefault('CACHE_EXTENDED_TTL', '1')
+        import lib as _lib
+        _lib.CACHE_EXTENDED_TTL = True
+        from lib.llm.cache import add_cache_breakpoints
+        body = _grow(18, prose=True, parallel=1)   # long enough to arm the mid
+        add_cache_breakpoints(body)
+        return body
+
+    def test_system_marker_lands_at_block_zero(self):
+        """Precondition: on the OpenAI shape the system marker really is at
+        cumulative block 0 (else this whole false-positive class wouldn't
+        exist). Guards the assumption the fix rests on."""
+        from lib.tasks_pkg.wire_fingerprint import marker_signature
+        body = self._real_openai_body_with_small_mid_tail_gap()
+        # system must have received a marker as messages[0]
+        sys0 = body['messages'][0]
+        assert sys0['role'] == 'system'
+        assert isinstance(sys0['content'], list) and \
+            any(isinstance(b, dict) and b.get('cache_control')
+                for b in sys0['content']), 'system[0] should carry a marker'
+        sig = marker_signature(body)
+        assert 0 in sig['msg_blocks'], \
+            f'system marker expected at block 0: {sig["msg_blocks"]}'
+
+    def test_true_mid_tail_gap_is_within_lookback(self):
+        """Sanity: the ACTUAL mid→tail block span (excluding system) is well
+        within the lookback — so ANY out-of-window verdict on this body is a
+        pure false positive from the head marker."""
+        from lib.llm.cache import _MID_LOOKBACK
+        body = self._real_openai_body_with_small_mid_tail_gap()
+        gap = _mid_tail_block_gap(body)   # helper already excludes system (i>0)
+        assert gap is not None, 'mid anchor should be armed at r=18'
+        assert gap <= _MID_LOOKBACK, \
+            f'true mid→tail gap {gap} should be within lookback {_MID_LOOKBACK}'
+
+    def test_predicate_false_on_small_body_span_despite_head_marker(self):
+        """★ THE FIX GUARD (failing-first before body_msg_blocks). The real body
+        has system@0 + a small mid→tail span; the predicate must be FALSE.
+        Pre-fix (span from raw msg_blocks incl. block 0 = tail-0 > 20) it was
+        TRUE — a false positive."""
+        from lib.tasks_pkg.wire_fingerprint import (
+            marker_signature, mid_anchor_out_of_window,
+        )
+        body = self._real_openai_body_with_small_mid_tail_gap()
+        sig = marker_signature(body)
+        assert mid_anchor_out_of_window(sig) is False, (
+            f'head marker at block 0 must NOT be counted in the mid→tail span; '
+            f'msg_blocks={sig.get("msg_blocks")} '
+            f'body_msg_blocks={sig.get("body_msg_blocks")}')
+
+    def test_body_msg_blocks_excludes_head_marker(self):
+        """marker_signature must emit body_msg_blocks that drops the system/head
+        marker while msg_blocks still carries it (backward-compat)."""
+        from lib.tasks_pkg.wire_fingerprint import marker_signature
+        body = self._real_openai_body_with_small_mid_tail_gap()
+        sig = marker_signature(body)
+        assert 'body_msg_blocks' in sig, 'must expose body_msg_blocks'
+        assert 0 in sig['msg_blocks'], 'msg_blocks keeps the head marker (compat)'
+        assert 0 not in sig['body_msg_blocks'], \
+            'body_msg_blocks must exclude the head marker at block 0'
+
+    def test_NEUTER_using_raw_msg_blocks_false_positives(self):
+        """NEUTER — proves body_msg_blocks is load-bearing. Reconstruct the
+        PRE-FIX behaviour by feeding a signature that DROPS body_msg_blocks so
+        the predicate falls back to raw msg_blocks (with the block-0 head
+        marker) → it FALSELY reports out-of-window on a body whose true mid→tail
+        span is within the lookback."""
+        from lib.tasks_pkg.wire_fingerprint import (
+            marker_signature, mid_anchor_out_of_window,
+        )
+        body = self._real_openai_body_with_small_mid_tail_gap()
+        sig = marker_signature(body)
+        # Emulate the pre-fix signature: keep raw msg_blocks (head at 0), drop
+        # the body-only field so the predicate uses the poisoned span.
+        neutered = {'msg_blocks': list(sig['msg_blocks'])}
+        assert min(neutered['msg_blocks']) == 0, 'precondition: head marker at 0'
+        assert mid_anchor_out_of_window(neutered) is True, (
+            'NEUTER: with only raw msg_blocks the block-0 head marker inflates '
+            'the span past the lookback → the exact false positive the fix '
+            f'removes; msg_blocks={neutered["msg_blocks"]}')
+
+
 def _identical_body():
     from lib.tasks_pkg.wire_fingerprint import (
         canonical_messages, static_prefix_hash, wire_byte_prefix,

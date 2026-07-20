@@ -481,7 +481,7 @@ def marker_signature(body: dict) -> dict[str, Any]:
     not a breakpoint LOSS).
     """
     sig: dict[str, Any] = {'count': 0, 'msg': [], 'sys': 0, 'tools': 0,
-                           'ttls': [], 'msg_blocks': []}
+                           'ttls': [], 'msg_blocks': [], 'body_msg_blocks': []}
     if not isinstance(body, dict):
         return sig
 
@@ -523,9 +523,22 @@ def marker_signature(body: dict) -> dict[str, Any]:
             entry = {'role': msg.get('role', ''),
                      'fields': _fields_of(msg), 'brief': _brief(msg)}
             key = canonical_key(entry)
+            # The system prompt sits at ``messages[0]`` on the OpenAI-protocol
+            # wire path (system is NOT hoisted out to a top-level field there),
+            # so its cache_control marker lands at cumulative block 0. That
+            # HEAD marker is the static-prefix anchor, NOT part of the mid→tail
+            # stepping-stone span. Including it in the span made
+            # ``mid_anchor_out_of_window`` compute max(msg_blocks)-min()=tail-0
+            # — always > lookback on any long conversation — a false positive
+            # unrelated to the real mid→tail geometry. ``body_msg_blocks`` keeps
+            # only the BODY (non-system) message markers so the predicate
+            # measures the true mid→tail span.
+            _is_head = msg.get('role') == 'system'
             for bi in marked:
                 sig['msg'].append((key, bi))
                 sig['msg_blocks'].append(_cum_blocks + bi)
+                if not _is_head:
+                    sig['body_msg_blocks'].append(_cum_blocks + bi)
                 sig['count'] += 1
                 _cc = content[bi].get('cache_control')
                 if isinstance(_cc, dict):
@@ -658,7 +671,18 @@ def mid_anchor_out_of_window(cur: dict | None,
     """
     if not isinstance(cur, dict):
         return False
-    blocks = cur.get('msg_blocks')
+    # Measure the BODY (non-system) marker span. The system-prompt marker sits
+    # at cumulative block 0 on the OpenAI-protocol wire path (system stays at
+    # ``messages[0]``, not hoisted), so including it makes the span
+    # tail-minus-0 \u2014 always past the lookback on any long conversation, a false
+    # positive that has nothing to do with the mid\u2192tail stepping-stone geometry.
+    # ``body_msg_blocks`` (added alongside ``msg_blocks``) excludes that HEAD
+    # marker so the predicate reflects the true mid\u2192tail reach. Fall back to
+    # the legacy ``msg_blocks`` only when the newer field is absent (a signature
+    # captured before this fix, e.g. mid-deploy).
+    blocks = cur.get('body_msg_blocks')
+    if not isinstance(blocks, list):
+        blocks = cur.get('msg_blocks')
     if not isinstance(blocks, list) or len(blocks) < 2:
         return False
     return (max(blocks) - min(blocks)) > lookback

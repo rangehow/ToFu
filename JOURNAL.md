@@ -1,5 +1,15 @@
 # Project Journal
 
+### 2026-07-20 — 编排引擎并行验证「反馈/指令通道」竞态:审计确认为**真实可达**(非仅代码内 latent),用校验器 WARNING 把不确定性暴露给画布作者(commit `dcdf753`,2 文件 +153,新测 4/4 failing-first+2 负控,204 编排测试全绿 / collect 7617)。承接上一轮 owner 点名的方向 1——审计 `_pending_feedback`/`_pending_directive` 这条与交付轴同源的竞态是否也有确定性缺口。
+- **结论(带证据的判定):** 是真实缺口,不是"只在代码里 latent"。证据链:①feedback/directive 在**节点运行中**被读(`_compose_shared_context`)、节点**跑完后**才清(`_run_role` L683),读→清窗口横跨整个节点执行,且都门控在 `isolation=='shared-context'`;②由任意 verifier 角色**写入**(`_VERIFIER_ROLES={critic,reviewer,virtual_user}`);③校验器**不禁止** verifier / shared-context 节点出现在 parallel 分支里;④parallel 分支跑在真实 `ThreadPoolExecutor` 上 → 区域内 ≥1 个 shared-context producer(读者)或 verifier(写者)时,并发分支就**在这条单值通道上竞争**,谁先清谁就把别人的反馈/指令吞掉 → 投递顺序不确定。
+- **打比方:** 上一轮修的"交付计数"像多个工人的产出可以**求和汇总**(聚合确定化);但反馈/指令是一张**只能用一次的入场券**——三个工人同时伸手抢同一张券,聚合帮不上忙,只能提醒作者"别把要用券的人放进并行区"。
+- **为何用 WARNING 而非改投递契约:** 聚合(交付轴那招)不适用于"消费一次"的状态;按分支 keying(看板选项1)会改**exactly-once 投递契约**——那正是看板一直 human-gate 的 owner-personal 领地。故取看板选项2的最小形态:校验器在 parallel 区域含 verdict-feeding producer 时发 **WARNING(不报错)**、点名违规节点。fresh-context 一次性扇出(composer 推荐范式)、barrier 之后的 verifier、endpoint/autopilot 内置定义全部**不触发**(已实证)。
+- **区域判定(纯函数):** 区域成员 = 从 parallel 各分支入口可达、但**排除公共 barrier 及其之后**的节点集合(与引擎逐分支 walk 的 span 一致)。`len(branches)<2` 的"伪并行"串行跑、不告警。
+- **tests-first:** 4 新测——shared-context/verifier 在并行区内→告警(**首跑红**,实测 warnings=[]);fresh-context 扇出→不告警(首跑绿);endpoint 内置 shared-context worker 在**线性 loop**里→不告警(负控,守住"正确的 endpoint 范式不被误伤")。另用内联探针实证:barrier **之后**的 critic(loop-with-parallel-body 那种)不告警、endpoint+autopilot 内置 ok。
+- **诚实边界:** 纯校验器逻辑(pure、无 I/O),由 4 新测 + 204 相邻编排绿 + `--collect-only` 7617(唯一 error 是既知 sibling `test_run_command_pty_streaming.py` 的 `pty_supported` flake)验证。**这是"暴露+引导"而非"消除"竞态**——真正消除需改 exactly-once 投递契约(owner-personal,human-gated);在那之前,WARNING 让作者在画布上就能看到并规避。运行时行为零改动(校验器只加 warning)。
+- **git 纪律(共享 HEAD、160 文件 sibling/aborted WIP 在场):** `reset -q HEAD .` → 仅 add 我的 2 文件 → 扫 staged 无 sibling 符号 → `commit -F- -- <2 路径>` → 泄漏探针 grep -v = 仅我 2 文件。JOURNAL 用 clean-blob(基于 HEAD)单独提交、不碰 sibling 未提交条目。`dcdf753`。
+
+
 ### 2026-07-20 — 编排引擎并行验证第三轴根修:verifier 的 Deliverables Snapshot 从"会被并发分支互相覆盖的单槽"改读"逐迭代确定性聚合"(commit `56e9d11`,2 文件 +53/-1,新测 2/2 failing-first+已验证,164 编排测试全绿 / collect 7613)。承接看板既记的 latent ticket(`orchestration_engine._run_parallel` 循环 verdict 状态单值化),把上一轮只修了一半的竞态补齐。
 - **根因(同一竞态、漏修的第三轴):** 循环体里 parallel fan-out 会**并发**跑 N 个 producer 分支,各自去写单槽 `_last_producer_snapshot` → 谁最后完成谁的计数留下。上一轮已把「零交付守卫」和「VU 递减收益守卫」改读确定性聚合 `_aggregate_iter_producers()`,但**注入 verifier 上下文的那段 Deliverables Snapshot 提示块**(`_append_deliverables_snapshot`,step_start 时喂给 verifier)**仍读单槽** → verifier 看到的是随机某个分支的计数,不是本轮全体分支的总和。控制流已确定、但喂给 verifier 判决的"事实"仍抖。
 - **打比方:** 三个工人同时干活、都往同一块白板写自己今天的产出,后写的盖掉先写的;班组长(verifier)只看白板最后一行就下结论。上一轮已经让"要不要加班"的自动闸门改看三人总账,但发给班组长的那张小抄还是抄的白板最后一行——这轮把小抄也改成抄总账。

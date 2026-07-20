@@ -1,6 +1,13 @@
 # Project Journal
 
 
+### 2026-07-20 — Prompt-cache 追零 miss **目标真正生效**:floor-retry 默认翻开 + 重发上限 1→2(commit `c462e34`,2 文件)。owner 裁定:一个验收数据齐全、生产路径证明能把 miss 打到 0 的手段,留在默认关=目标没真正生效,不符合「零 miss at all costs」。照做,按 drop 翻默认同纪律。
+- **三改(`floor_retry.py`):** ①`TOFU_CACHE_FLOOR_RETRY` 默认 `'0'`→`'1'`(默认开,`=0` 一键回滚)。②`TOFU_CACHE_FLOOR_RETRY_MAX` 默认 `'1'`→`'2'`——验收里 mrsfs9d6 R8 / mt1ijef R14 都是**首发重发撞 503、第 2 次才恢复**,上限=1 会漏这类轮;有 stop-on-throttle + 硬顶 3 兜底,提到 2 才真正趋零。③docstring 同步。
+- **failing-first + NEUTER(`test_default_gate_is_ON_and_max_is_2`):** delenv 后断言 `floor_retry_enabled()` True + `floor_retry_max()`==2。**NEUTER 实证**:把模块默认改回 `'0'` → 该测试立即变红;改回 `'1'` 复绿。证明「默认已翻」是 load-bearing 的。9/9 绿。
+- **闭环状态:** 客户端趋零手段现在**默认生效**——真部署重启后,byte-stable floor-collapse 会自动原样重发(封顶2、遇限流停),生产路径已证等效 floor%=0。根治仍在网关(报告 `docs/CACHE_GATEWAY_STOCHASTIC_REPORT.md` 待交平台团队)。
+- **git:** `reset -q HEAD .` → 仅 add 2 文件 → `--cached --numstat`(floor_retry 20/8、test 14/0)→ `commit -F- -- <2 路径>` → `git show HEAD --name-only` = 仅 2 文件,NO LEAK。`c462e34`。
+
+
 ### 2026-07-20 — Prompt-cache 追零 miss **生产闭环达成**:floor-collapse 自动重发接进真实发送路径(env-gated,commit `1f4406f`),真网关走**生产路径**验收 mrsfs9d6 + mrt1ijef **等效 floor% 双双归零**。owner 拒绝停在「harness 证明有效」,要求接进 orchestrator 真实路径 + failing-first 测试 + 走生产路径的真网关验收(不是 harness 自己的 retry arm)。三项照做,闭环。
 - **落地(1f4406f,3 文件 +378):** ①新 `lib/tasks_pkg/floor_retry.py`:`floor_retry_enabled`(env `TOFU_CACHE_FLOOR_RETRY` 默认关)、`floor_retry_max`(默认 1、硬顶 3)、`is_floor_collapse`(read≤90k + write>20k)、`wire_prefix_stable`(**非破坏性**读 cache-tracking 的 `wire_fp` 与上一轮比对,证明字节稳定才重发)。②`stream_llm_response`(**单一发送 chokepoint**,与 TTL latch 同处)加重发环:仅在 byte-stable floor-collapse 触发、封顶、**遇 503/限流立即停**(不给已限流的网关堆重试——这正是之前 mt1ijef 只到 11.8% 的原因)。③恢复的重发结果(真 cache 命中)被采纳替换掉塌陷响应。
 - **failing-first + NEUTER(`test_cache_floor_retry.py` 8 测):** 谓词覆盖 + 集成(开关开→触发一次重发并采纳恢复 usage;NEUTER 控制:关→恰好一次 dispatch;前缀变了→不重发;重发遇限流→停)。**NEUTER 实证**:把 enable-gate 改成恒 False → 关键测试立即变红(只 1 次 dispatch)、恢复后复绿,证明机制 load-bearing。

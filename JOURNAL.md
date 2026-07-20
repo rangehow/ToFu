@@ -1,6 +1,14 @@
 # Project Journal
 
 
+### 2026-07-20 — 自主接手看板 epic「index.html + image-gen.js emoji/glyph 图标违 §3.4」:先协调、再做「peer 明确让出的安全集」,把与两个活跃 sibling 重叠的 ~30 个工具栏 ✓ 延后(commit `5d93a3a`,3 文件,icon-box 守卫 8/8 绿 / collect 7693)。承接本会话早先自己上报的 `pt_afda5285`,Project Brain 自动派发。
+- **先协调(关键,避免共享 HEAD 冲突):** `project_peer_status` 显示两个 sibling 正活跃编辑我的目标文件——`mrtaaooa`(r8,重设计输入框工具栏 + project tool bar)、`mrta9qhe`(r10,index.html chat-mode UI)。**先发 `project_message` + `project_board_block[sibling]`**,而非硬改。`mrtaaooa` 回复:重设计**未启动、未授权、范围窄**(只输入行工具栏 + 顶栏),并**明确让出** image-gen 结果卡 glyph + index.html 杂项 close 按钮——「take them ALL now, no collision」,若日后重写到带 glyph 的按钮会 fold 进同一 commit 并 ping 我跳过。→ 清晰绿灯,解除 block、动手。
+- **做了(peer 让出的安全集):** ①`icons.js` 加 `maximize` Lucide glyph;②`image-gen.js`:✕Cancel→`Icon('x')`、⬇→`Icon('download')`、⛶→`Icon('maximize')`、↻Retry→`Icon('refresh')`、✦ 品牌图标兜底→`Icon('image')`、✓ 模型选择器勾选×2→`Icon('check')`;③`index.html`:3 个 ✕ close 按钮(project-brain/debug/log-clean)→内联 SVG + `.icon-box`;LoadGuard 横幅 ⚠️→在 `_showLoadBanner` 内**自包含**内联 warning SVG(**不能用 Icon()**——它在脚本加载失败时触发),并剥掉 4 条横幅串的 ⚠️ 前缀。
+- **刻意没做(边界纪律):** ①**~30 个 `.submenu/.flow-menu/.mobile-sheet` ✓ 选择勾选**——正落在两个 live sibling 编辑的 chat-mode/工具栏区,延后到重设计落地后的**残余扫描**,让图标替换**随**重设计一起走、不撞 merge;②3 个 `_igToast(⏳/🚫/⏱)` 串——route 到 `debugLog`(日志文本、非渲染 DOM 图标),按 §3.4 scope 注解不属图标范畴。
+- **验证:** `node --check` image-gen.js + icons.js 皆绿;转换后 grep 确认 image-gen.js 的 ✕⬇⛶↻✓✦ 全清、index.html ✕ close 按钮全清、`_showLoadBanner('⚠️` 全清;icon-box 对齐守卫 8/8 绿;collect-only 7693(唯一 error 既知 `pty_supported` flake)。
+- **git 纪律(共享 HEAD):** `reset -q HEAD .` → 仅 add 3 文件 → `commit -F- -- <3 路径>` → `git show HEAD --name-only` = 仅 3 文件,NO LEAK。`5d93a3a`。**epic 未 done——剩余 ~30 个 ✓ 待 sibling 重设计落地,`project_board_block[sibling]` 精确 hold 在 index.html。**
+
+
 ### 2026-07-20 — Prompt-cache「每轮都在烧钱」深挖:推翻自己最初诊断,查出 `cache_mid_out_of_window` 是**头号成本+检测器误报**,分两 commit 落地(检测器根修 `c311e34` + 布局实验骨架/replay harness `8d7218f`;46 缓存测试绿 / collect 7693)。owner 报「多轮后 prompt cache 频繁失效、成本越滚越高」,要求查日志定根因。
 - **先用数据定位(734 条 live `[CacheRoundRecord]`):** 全部重写 token 的 **68%(22.6M/33.2M)花在失效轮**;头号是 `cache_mid_out_of_window` **10.3M token(占全部 29%、失效的 43%),108 轮平均白烧 95k**,且 **21:03 重启后最新 live 码仍在触发** → 说明 journal 记的 `_MID_TRAIL=4`「根修」没堵住。各会话 mid_oow 占比 13–20%。
 - **推翻最初假设(关键、owner 也认可):** 我先以为是「并行工具轮让 mid→tail 块跨度冲破 20」。实测**真实 mid→tail 块跨度最大只有 14、`parallel=20` 也从不越 20** → 「按块收窄 trail」是空操作。逐轮追踪发现**真机制**:mid 锚点每 `_MID_STEP=8` 条消息(≈每 4 轮)向前跳一次,**跳跃轮**读回坍塌到 74095 静态地板(100/125 次)、gap 中位数 22.8s(**非 TTL 过期**)——锚点一移动,上游没法从旧缓存续上、一路退回只剩系统前缀。占比 13–20% = 跳跃节奏,数据链自洽。

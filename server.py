@@ -510,7 +510,11 @@ if _fault_shm_log is not None:
 # on a small box) pinning the whole C-extension working set can push RSS
 # past memory.max → the OOM killer SIGKILLs the process at boot (a bare
 # "Killed" with no traceback). mlockall only HELPS on a FUSE mount and is
-# only SAFE with headroom under the cgroup limit, so we gate on both.
+# only SAFE with headroom under the cgroup limit, so we gate on both the
+# limit AND live usage: on a SHARED cgroup the ceiling can be the whole
+# machine yet already ~full, and pinning there both adds unreclaimable pages
+# and inflates our oom_score so the killer targets us first — so we also skip
+# when the cgroup is already past TOFU_MLOCK_MAX_USAGE_PCT (default 85%) full.
 # Override: TOFU_MLOCK=1 forces it on, =0 forces it off (default 'auto').
 def _tofu_path_is_fuse(_path):
     """Best-effort: True if *_path* sits on a FUSE filesystem (stdlib-only)."""
@@ -558,6 +562,30 @@ def _tofu_cgroup_mem_limit_bytes():
     return None
 
 
+def _tofu_cgroup_mem_usage_bytes():
+    """Current cgroup memory usage in bytes, or None if unknown (stdlib-only).
+
+    Includes reclaimable page cache on purpose: a shared cgroup running at the
+    cache edge is exactly the contended, spike-prone state where adding
+    unreclaimable pinned pages is net-harmful (see _tofu_should_mlock).
+    """
+    for _p in ('/sys/fs/cgroup/memory.current',                    # cgroup v2
+               '/sys/fs/cgroup/memory/memory.usage_in_bytes'):      # cgroup v1
+        try:
+            with open(_p, 'r') as _f:
+                _raw = _f.read().strip()
+        except OSError:
+            continue
+        try:
+            _val = int(_raw)
+        except ValueError:
+            continue
+        if _val < 0:
+            return None
+        return _val
+    return None
+
+
 def _tofu_should_mlock():
     """Decide whether mlockall is worth it. Returns (do_it, reason)."""
     _mode = os.environ.get('TOFU_MLOCK', 'auto').strip().lower()
@@ -580,10 +608,30 @@ def _tofu_should_mlock():
     except ValueError:
         _min_gb = 8.0
     _gib = float(1 << 30)
-    if _limit >= _min_gb * _gib:
-        return True, 'on FUSE, cgroup limit %.1fGiB >= %.1fGiB' % (_limit / _gib, _min_gb)
-    return False, ('on FUSE but cgroup limit %.1fGiB < %.1fGiB — skipping to avoid '
-                   'OOM (set TOFU_MLOCK=1 to force)' % (_limit / _gib, _min_gb))
+    if _limit < _min_gb * _gib:
+        return False, ('on FUSE but cgroup limit %.1fGiB < %.1fGiB — skipping to avoid '
+                       'OOM (set TOFU_MLOCK=1 to force)' % (_limit / _gib, _min_gb))
+    # The cgroup limit is generous, but on a SHARED cgroup that ceiling can be
+    # the whole machine and already ~full of siblings + FUSE page/slab cache.
+    # Pinning here adds unreclaimable pages AND inflates our own oom_score, so
+    # the OOM killer picks us first (highest-RSS process in the group). Gate on
+    # LIVE headroom: skip if usage already sits above TOFU_MLOCK_MAX_USAGE_PCT
+    # (default 85%) of the limit. Unknown usage → proceed (matches prior behaviour).
+    _usage = _tofu_cgroup_mem_usage_bytes()
+    if _usage is not None and _usage > 0:
+        try:
+            _max_pct = float(os.environ.get('TOFU_MLOCK_MAX_USAGE_PCT', '85'))
+        except ValueError:
+            _max_pct = 85.0
+        _used_pct = 100.0 * _usage / float(_limit)
+        if _used_pct >= _max_pct:
+            return False, ('on FUSE but cgroup %.1f%% full (%.1f/%.1fGiB) >= %.0f%% — '
+                           'skipping to avoid OOM on a contended shared cgroup '
+                           '(set TOFU_MLOCK=1 to force)'
+                           % (_used_pct, _usage / _gib, _limit / _gib, _max_pct))
+        return True, ('on FUSE, cgroup limit %.1fGiB >= %.1fGiB and %.1f%% used < %.0f%%'
+                      % (_limit / _gib, _min_gb, _used_pct, _max_pct))
+    return True, 'on FUSE, cgroup limit %.1fGiB >= %.1fGiB (usage unknown)' % (_limit / _gib, _min_gb)
 
 
 _tofu_do_mlock, _tofu_mlock_reason = _tofu_should_mlock()

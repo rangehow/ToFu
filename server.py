@@ -2509,6 +2509,15 @@ if __name__ == '__main__':
             _validate_imports()
             _start_background_workers()
 
+            # Shared-cgroup memory-pressure defenses (① self-check + ② monitor).
+            # Both graceful no-ops off-cgroup. See lib/cgroup_guard.py.
+            try:
+                from lib import cgroup_guard
+                cgroup_guard.startup_self_check()
+                cgroup_guard.start_monitor()
+            except Exception as e:
+                _server_log.warning('[cgroup] pressure defenses failed to start: %s', e)
+
             if _shutdown_requested.is_set():
                 _server_log.info('[Server] Shutdown requested during import '
                                  'validation — skipping MCP + background starts.')

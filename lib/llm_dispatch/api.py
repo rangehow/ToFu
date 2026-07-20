@@ -1024,6 +1024,23 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
     # Detect if it's a pre-built body or raw messages
     is_body = isinstance(body_or_messages, dict) and 'messages' in body_or_messages
 
+    # ③ Large-request headroom guard: on a critically-full shared cgroup,
+    # assembling a huge request body (100k+ tokens) is exactly what triggers
+    # the OOM SIGKILL. Trim once, and if still critical fail fast with a clear
+    # error instead of dying mid-assembly. No-op off-cgroup / for small bodies /
+    # when TOFU_CGROUP_REQUEST_GUARD=0. See lib/cgroup_guard.py.
+    try:
+        from lib import cgroup_guard
+        _approx = cgroup_guard.approx_body_bytes(body_or_messages)
+        _ok_hr, _hr_reason = cgroup_guard.check_request_headroom(
+            ident=log_prefix or 'dispatch_stream', approx_bytes=_approx)
+        if not _ok_hr and os.environ.get('TOFU_CGROUP_REQUEST_GUARD', '1') not in ('0', 'off', 'false', 'no'):
+            raise cgroup_guard.MemoryPressureError(_hr_reason)
+    except cgroup_guard.MemoryPressureError:
+        raise
+    except Exception as _hr_e:
+        logger.debug('%s cgroup headroom check skipped: %s', log_prefix, _hr_e)
+
     # ★ hard_attempts counts only non-429 failures; 429 loops forever.
     #   Set _MAX_429_CYCLES = 0 to disable the cap (retry indefinitely).
     #   The abort_check runs every cycle so the user can always cancel.

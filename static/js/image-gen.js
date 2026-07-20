@@ -306,7 +306,7 @@ async function generateImageDirect() {
     <div class="ig-gen-subtitle">${_escapeHtmlBasic(prompt.slice(0, 100))}${prompt.length > 100 ? '…' : ''}</div>
     <div class="ig-gen-timer" id="${loadingId}-timer">0s${resLabel}</div>
     <div class="ig-gen-status" id="${loadingId}-status"></div>
-    <button class="ig-gen-cancel" onclick="_igCancelGeneration()" title="Cancel">✕ Cancel</button>
+    <button class="ig-gen-cancel" onclick="_igCancelGeneration()" title="Cancel">${Icon('x', 13)} Cancel</button>
   </div>`;
   chatDiv.insertAdjacentHTML('beforeend', loadingHtml);
   scrollToBottom();
@@ -533,8 +533,8 @@ async function _igRetryBatchSlot(msgIdx, slotIdx, prompt, model) {
             <span class="ig-meta-pill">${elapsed}s</span>
           </div>
           <div class="ig-result-actions">
-            <button onclick="event.stopPropagation();_downloadGenImage(this)" title="Download">⬇</button>
-            <button onclick="event.stopPropagation();_openImageFullscreen(this.closest('.ig-result-card').querySelector('img').src)" title="Fullscreen">⛶</button>
+            <button onclick="event.stopPropagation();_downloadGenImage(this)" title="Download">${Icon('download', 15)}</button>
+            <button onclick="event.stopPropagation();_openImageFullscreen(this.closest('.ig-result-card').querySelector('img').src)" title="Fullscreen">${Icon('maximize', 15)}</button>
           </div>
         </div>
       </div>`;
@@ -591,7 +591,7 @@ function _igBatchErrorSlotHtml(errInfo, model, msgIdx, slotIdx, prompt) {
     <div class="ig-error-icon">${icon}</div>
     <div class="ig-error-title">${_escapeHtmlBasic(modelLabel)}</div>
     <div class="ig-error-text">${_escapeHtmlBasic((errInfo.text || 'Failed').slice(0, 200))}</div>
-    <button class="ig-slot-retry-btn" onclick="_igRetryBatchSlot(${msgIdx},${slotIdx},${JSON.stringify(prompt).replace(/"/g, '&quot;')},${JSON.stringify(model).replace(/"/g, '&quot;')})" title="Retry this slot">↻ Retry</button>
+    <button class="ig-slot-retry-btn" onclick="_igRetryBatchSlot(${msgIdx},${slotIdx},${JSON.stringify(prompt).replace(/"/g, '&quot;')},${JSON.stringify(model).replace(/"/g, '&quot;')})" title="Retry this slot">${Icon('refresh', 13)} Retry</button>
   </div>`;
 }
 
@@ -620,7 +620,7 @@ async function _loadIgModels() {
     // Brand-specific SVG icons (detect from model name)
     function _igIcon(model) {
       const brand = typeof _detectBrand === 'function' ? _detectBrand(model) : 'generic';
-      return typeof _brandSvg === 'function' ? _brandSvg(brand, 14) : '✦';
+      return typeof _brandSvg === 'function' ? _brandSvg(brand, 14) : Icon('image', 14);
     }
 
     // Filter out hidden image gen models
@@ -647,7 +647,7 @@ async function _loadIgModels() {
     let html = `<div class="ig-model-option ${isAllActive ? 'active' : ''}" data-model="__all__" onclick="selectIgModel(this)">
       <span class="ig-model-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="#f472b6"><rect x="2" y="2" width="9" height="9" rx="2"/><rect x="13" y="2" width="9" height="9" rx="2"/><rect x="2" y="13" width="9" height="9" rx="2"/><rect x="13" y="13" width="9" height="9" rx="2"/></svg></span>
       <span class="ig-model-info"><span class="ig-model-name">All Models</span></span>
-      <span class="ig-model-check">✓</span>
+      <span class="ig-model-check">${Icon('check', 14)}</span>
     </div><div class="ig-model-divider"></div>`;
 
     let idx = 0;
@@ -677,7 +677,7 @@ async function _loadIgModels() {
         html += `<div class="ig-model-option ${isActive ? 'active' : ''}" data-model="${_escapeHtmlBasic(m.model)}" onclick="selectIgModel(this)">
           <span class="ig-model-icon">${_igIcon(m.model)}</span>
           <span class="ig-model-info"><span class="ig-model-name">${_escapeHtmlBasic(friendlyName)}</span></span>
-          <span class="ig-model-check">✓</span>
+          <span class="ig-model-check">${Icon('check', 14)}</span>
         </div>`;
         idx++;
       }

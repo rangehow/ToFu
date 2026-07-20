@@ -551,7 +551,7 @@
               <span class="pb-tr-toggle-ico"></span>
               <span class="pb-tr-toggle-label" data-i18n="projectBrain.translateToggle">Translate content</span>
             </button>
-            <button class="project-brain-close" onclick="closeProjectBrain()" title="Close">✕</button>
+            <button class="project-brain-close icon-box" onclick="closeProjectBrain()" title="Close"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg></button>
           </div>
         </div>
         <!-- ═══ Per-conversation Influence lens ═══
@@ -653,7 +653,7 @@
         <span id="debugTitle">Messages</span>
         <div style="display:flex;gap:4px;align-items:center;">
           <button class="debug-clear" id="debugCopyBtn" onclick="copyDebugContent()" data-i18n-title="debug.copyAllTooltip" title="复制全部">Copy</button>
-          <button class="debug-clear" onclick="closeDebug()">✕</button>
+          <button class="debug-clear icon-box" onclick="closeDebug()" title="Close"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg></button>
         </div>
       </div>
       <div id="debugContent"></div>
@@ -693,7 +693,7 @@
             <button class="log-clean-btn preview" onclick="previewLogClean()" title="对比预览" data-i18n-title="debug.previewCompare" data-i18n="debug.preview">预览</button>
             <button class="log-clean-btn apply" onclick="applyLogClean()" title="应用规则清理" data-i18n-title="debug.cleanApply" data-i18n="debug.clean">清理</button>
             <button class="log-clean-btn ai-compress" id="aiCompressBtn" onclick="aiCompressLog()" title="用 AI 智能压缩，去除冗余保留关键信息" data-i18n-title="debug.aiCompressDesc" data-i18n="debug.aiCompress">AI压缩</button>
-            <button class="log-clean-btn dismiss" onclick="hideLogCleanBanner()" title="保持原文" data-i18n-title="debug.keepOriginal">✕</button>
+            <button class="log-clean-btn dismiss icon-box" onclick="hideLogCleanBanner()" title="保持原文" data-i18n-title="debug.keepOriginal"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg></button>
           </div>
         </div>
         <div id="pendingQueueContainer"></div>
@@ -1984,7 +1984,7 @@ function _loadGuardCheck() {
   // Check 1: Did any script tags fail to load?
   if (_scriptLoadErrors.length > 0) {
     console.error('[LoadGuard] ⚠️ ' + _scriptLoadErrors.length + ' script(s) failed to load:', _scriptLoadErrors);
-    _showLoadBanner('⚠️ Failed to load: ' + _scriptLoadErrors.map(function(s) { return s.split('/').pop(); }).join(', ') + '. <a href="javascript:location.reload()" style="color:#fef08a;text-decoration:underline">Reload</a>.');
+    _showLoadBanner('Failed to load: ' + _scriptLoadErrors.map(function(s) { return s.split('/').pop(); }).join(', ') + '. <a href="javascript:location.reload()" style="color:#fef08a;text-decoration:underline">Reload</a>.');
     return;
   }
   // Check 2: Are scripts still downloading? (loaded+errored < total)
@@ -1997,7 +1997,7 @@ function _loadGuardCheck() {
       setTimeout(_loadGuardCheck, 5000);
     } else {
       console.error('[LoadGuard] ⚠️ Scripts still not loaded after multiple retries (' + completed + '/' + _scriptTotal + ')');
-      _showLoadBanner('⚠️ Scripts taking too long to load. Check your network connection, then <a href="javascript:location.reload()" style="color:#fef08a;text-decoration:underline">reload</a>.');
+      _showLoadBanner('Scripts taking too long to load. Check your network connection, then <a href="javascript:location.reload()" style="color:#fef08a;text-decoration:underline">reload</a>.');
     }
     return;
   }
@@ -2016,7 +2016,7 @@ function _loadGuardCheck() {
     } else {
       console.error('[LoadGuard] ⚠️ Scripts loaded but init failed. Check console for errors.');
     }
-    _showLoadBanner('⚠️ App initialization failed.' + (detail ? ' (' + detail + ')' : ' Check browser console (F12) for details.') + ' <a href="javascript:location.reload()" style="color:#fef08a;text-decoration:underline">Reload</a>.');
+    _showLoadBanner('App initialization failed.' + (detail ? ' (' + detail + ')' : ' Check browser console (F12) for details.') + ' <a href="javascript:location.reload()" style="color:#fef08a;text-decoration:underline">Reload</a>.');
     return;
   }
 }
@@ -2051,7 +2051,7 @@ function _capabilityCheck() {
   }
   if (missing.length > 0) {
     console.error('[LoadGuard] ⚠️ App booted but load-bearing capabilities are missing:', missing);
-    _showLoadBanner('⚠️ App initialization failed. Missing: ' + missing.join(', ')
+    _showLoadBanner('App initialization failed. Missing: ' + missing.join(', ')
       + ' — a required script was dropped from the bundle. <a href="javascript:location.reload()" style="color:#fef08a;text-decoration:underline">Reload</a>.');
   }
 }
@@ -2073,7 +2073,10 @@ function _showLoadBanner(html) {
   var banner = document.createElement('div');
   banner.id = 'load-fail-banner';
   banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:#dc2626;color:#fff;padding:12px 20px;text-align:center;font-size:14px;font-family:system-ui,sans-serif;';
-  banner.innerHTML = html;
+  // Inline warning SVG (§3.4: no emoji glyph). Self-contained on purpose — this
+  // failsafe fires when scripts fail to load, so it must NOT depend on Icon().
+  var warnSvg = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:6px"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>';
+  banner.innerHTML = warnSvg + html;
   document.body.prepend(banner);
 }
 </script>

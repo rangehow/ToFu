@@ -1,6 +1,24 @@
 # Project Journal
 
 
+### 2026-07-20 — Prompt-cache「零 miss」攻坚:建**真网关 A/B 回放器**,用真实 miss 对话在实时网关上裁决——坐实 mid-anchor 是净负担,drop 把 floor-collapse 从 ~34% 砍到 ~8%、重计费写 token 降 3.1×(harness 落 `debug/`(gitignore 约定),守卫测试 commit `51475b5`,10/10 绿 / collect 7718)。owner 说「不在乎成本,只要零 miss,可以改后端,直接用数据库里真实 miss 对话 replay 测所有修复」——照做,并全程与正在改 `cache.py` 的 sibling `mrswvxlv` 划界协调。
+- **补上「三缺一」的最后一块:** 现有三个工具各覆盖一个轴、都缺另两个——`cache_tracking/replay.py` 只跑**检测器**(离线、不碰网关)、`debug/cache_live_experiment.py` 只发**合成**循环(sibling 自认离线模型低估 floor-collapse ~7×)、`debug/cache_replay_mrne3bqe.py` 只**离线 byte-diff**。新 `debug/cache_db_replay_live.py` = 三者交集:**从 DB 取真实 miss 对话 → 用生产 `build_api_messages_from_db` + `_inject_system_contexts` 逐轮重建真 wire body → 发到真网关 → 读真 `cache_read/cache_write`**。关键:进程内直接 import 磁盘上的 `cache.py`,**绕开了「验收要重启、重启杀死验收者自己」的死结**(所有前序 epic 被 human-gate 的原因)。
+- **保真度两处坐实:** ①用真 `_inject_system_contexts` 重建头部——`system`(16.5k 字)+ CLAUDE.md `<system-reminder>`(60.9k 字)+ 40 个工具定义(66k 字)= 复现真实 **74k floor**;手搓 system 串只有 ~20k floor、根本触发不了 collapse。②每轮用生产 `wire_byte_field_prefix` 指纹 + `diff_byte_field_prefix` 比对共享前缀,过滤掉「byte-field-len A→B」纯增长 token,只留真正的 `<bytes>key{field}` 就地突变。
+- **决定性发现(推翻 sibling 的「body 突变才是主因」假设,用冻结字节证):** 我回放的是**冻结的 DB 字节**,每轮共享前缀 `wire_byte_field_prefix` diff = **全程 prefix-STABLE、零字段突变**——**可 50% 的轮次仍 FLOOR-COLLAPSE**(cache_read 掉到 27705/0、重计费 40-72k 写 token)。即:在字节稳定的前缀上,collapse 由 **mid-anchor 布局/回看几何**驱动,**不是** prefix 突变。锯齿签名(塌→回升→塌)正是 mid-anchor 每 `_MID_STEP` 跳一次的节奏。
+- **三对话 live A/B(R1 冷轮排除、真网关、冻结字节、74k floor):**
+
+| conv | current floor% | drop floor% | 写 token current→drop | 倍数 |
+|---|---|---|---|---|
+| mrt1ijef | 42.9% | **6.7%** | 335k→**79k** | 4.3× |
+| mrsfs9d6 | 25.0% | **12.5%** | 292k→**132k** | 2.2× |
+| mrswvxlv | 35.3% | **5.9%** | 316k→**95k** | 3.3× |
+
+  合计 50 回放轮:floor-collapse ~34%→~8%,重计费写 943k→306k(**3.1× 削减**),**drop 从不输**,两臂前缀均 byte-STABLE。坐实 sibling 假设 (B)「mid anchor 可能净负」live 成立、(A) smooth-trail 无必要。
+- **划界协调(sibling `mrswvxlv` 在同时改 `cache.py`):** 明确「我拥有真网关 A/B harness、你拥有 `add_cache_breakpoints()` + `TOFU_CACHE_MID_MODE` seam」。中途撞上 `_detect.py` 语法半成品(sibling 写一半的 `logger.warning(` 未闭合)——**没碰它的文件**,发消息告知 + 等其提交到可 import,符合「跨 agent 竞态:等 sibling 写完 facade 再重试 import」偏好。sibling 已接受 A/B 为 ground truth,将**自己**落地 default 翻转(current→drop + failing-first 测试断言 mode=drop 不放 mid marker)并**带我的 A/B 表交 owner 拍板**——因为翻转生产默认是全对话热路径、宽爆炸半径、且此 epic 反复 human-gated,归 owner 决定。我不碰 `cache.py`。
+- **诚实边界:** ①replay 的 prefix-STABLE 是因为我发**冻结字节**;**生产**里 `body_identical=False` 是另一层真实效应(每轮 fresh 重建 context/reasoning_details),我的 replay 看不到——但 collapse 在**无突变**时仍发生,证明 drop 对两种情况都有益。②真网关有偶发 503 限流(harness 已按轮容错跳过)。③默认翻转**未落地**——待 owner 批准(sibling 备好 commit + 测试)。harness 保留为「翻转后重跑确认 live floor% 下降」的永久验收器。
+- **git 纪律(共享 HEAD、~130 sibling 文件在工作树):** harness 落 `debug/`(全仓 gitignore 约定,与其余 debug 脚本一致、不入库);仅提交守卫测试 `tests/test_cache_db_replay_live.py`(缺 harness 时优雅 skip、不成为 CI 依赖)。`reset -q HEAD .` → 仅 add 该测试 → `--cached --numstat` 确认(178/0)→ `commit -F- -- <该测试>` → `git show HEAD --name-only` = 仅该文件,NO LEAK。`51475b5`。唯一 collection error 仍是既知 `test_run_command_pty_streaming.py::pty_supported` flake。
+
+
 ### 2026-07-20 — Prompt-cache 第一笔真省钱:`<ttl-flip>` re-key 根修——在唯一 chokepoint 补 `_task_id`,让 session-stable TTL latch 无法被绕过(commit `a34beae`,1 文件 +16 + 新测 4/4 含 NEUTER;87 缓存测试绿 / collect 7708)。owner 明确「别停在诊断,TTL-flip 是不用重启就能省的第一笔钱」——照做。
 - **live 证据(culprit token 共现分析):** 144 轮 `<ttl-flip>` 是**唯一** break culprit(无 mid、无 content)= 纯缓存 re-key。稳定 system/tools 的 `cache_control.ttl` 在 1h↔5m 间翻转,re-key 整个前缀。
 - **根因(离线复现钉死):** per-task latch(`latch_extended_ttl`)在**任务内**是稳的,但 `_task_id` 由**每个 build_body 调用点各自**设置(主循环 / reactive-compact / fallback 都设了),**synthesize-answer / endpoint / 未来路径可能漏设**。漏设时 `add_cache_breakpoints` 回落读**活体全局 `CACHE_EXTENDED_TTL`**,与本任务 latch 的值不同就翻转。三场景实验证实:无 `_task_id` + 全局翻转 → `markers_ttl_flipped=True`;有稳定 `_task_id` → 不翻(全局怎么变都不翻)。找到一个真实漏设点:`_finalize.py:538` 的 synthesize-answer fallback 未设 `_task_id`。

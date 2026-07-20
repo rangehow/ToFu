@@ -2819,6 +2819,53 @@ _GIT_REPOS = {
 }
 
 
+def _is_nonff_push_rejection(err_text: str) -> bool:
+    """True when a failed ``git push`` was a non-fast-forward REJECTION.
+
+    A force-push only makes sense when the remote rejected the update because
+    its history diverged (the normal case for a freshly re-``git init``'d
+    export tree that shares no ancestry with the mirror). For any OTHER push
+    failure — authentication, DNS/connection, permission, protocol, missing
+    repo — force-pushing is useless at best and destructive at worst, so the
+    caller re-raises instead. Matching is on the git stderr text (lower-cased).
+
+    Args:
+        err_text: The combined git stderr/stdout from the failed push.
+
+    Returns:
+        True iff the text carries a recognised non-fast-forward / rejected
+        signal; False for auth/network/other errors (and empty input).
+    """
+    if not err_text:
+        return False
+    low = err_text.lower()
+    # Signals git emits specifically for a diverged / behind rejection.
+    reject_markers = (
+        'non-fast-forward',
+        '[rejected]',
+        'failed to push some refs',
+        'fetch first',
+        'tip of your current branch is behind',
+        'updates were rejected',
+    )
+    if not any(m in low for m in reject_markers):
+        return False
+    # Guard against false positives: an auth/network failure never carries a
+    # non-ff marker, but if git ever combines messages, an explicit auth/host
+    # failure should NOT be treated as a safe-to-force divergence.
+    hard_failures = (
+        'authentication failed',
+        'could not read username',
+        'permission denied',
+        'could not resolve host',
+        'connection refused',
+        'repository not found',
+    )
+    if any(h in low for h in hard_failures):
+        return False
+    return True
+
+
 def _git_push(dest: Path, mode: str, commit_msg: str | None = None,
               is_release: bool = False, branch_override: str | None = None):
     """Initialize git (if needed), commit all files, and push to upstream(s).
@@ -2942,7 +2989,15 @@ def _git_push(dest: Path, mode: str, commit_msg: str | None = None,
                 # First push to a new branch — try setting upstream
                 try:
                     _run(['git', 'push', '-u', rname, branch])
-                except RuntimeError:
+                except RuntimeError as upstream_err:
+                    # Only force-push when the remote REJECTED us for a
+                    # non-fast-forward divergence (the normal case for a
+                    # freshly re-init'd export tree). For any other failure
+                    # (auth, network, permission, missing repo) forcing is
+                    # useless-or-destructive, so re-raise and let the outer
+                    # handler report it instead of clobbering the remote.
+                    if not _is_nonff_push_rejection(str(upstream_err)):
+                        raise
                     # History diverged — force push, but warn loudly
                     print(f"  {C_YELLOW}\u26a0 History diverged on {rname}/{branch}. "
                           f"Force-pushing (previous remote commits will be lost).{C_END}")

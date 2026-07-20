@@ -29,6 +29,8 @@ Usage:
 from __future__ import annotations
 
 import json
+import os
+import re
 import sys
 from collections import Counter
 
@@ -37,6 +39,16 @@ _BOOT_MARKERS = (
     'Ready — handing off to Hypercorn.',
     'Ready - handing off to Hypercorn.',   # ascii-dash fallback
 )
+
+# Minimum steady-state rounds (post round-1 / turn-boundary exclusion) below
+# which ttl_flip=0 / mid_oow=0 are NOT trustworthy — they could just mean
+# 'traffic too short to have triggered the miss', not 'the fix works'. Override
+# with env CACHE_ACCEPT_MIN_STEADY.
+_MIN_STEADY = int(os.environ.get('CACHE_ACCEPT_MIN_STEADY', '200'))
+
+# The boot self-report server.py emits (in-memory resolved mode), e.g.
+# '[CacheMidMode] TOFU_CACHE_MID_MODE=drop pid=123 bootId=abc (in-memory)'.
+_MIDMODE_RE = re.compile(r'\[CacheMidMode\] TOFU_CACHE_MID_MODE=(\w+)')
 
 
 def _last_boot_ts(path: str) -> str:
@@ -47,6 +59,23 @@ def _last_boot_ts(path: str) -> str:
             if any(m in line for m in _BOOT_MARKERS):
                 last = line[:19]
     return last
+
+
+def _boot_mid_mode(path: str, boot_ts: str) -> str:
+    """The resolved TOFU_CACHE_MID_MODE the SERVING process self-reported at/after
+    the last boot (server.py's [CacheMidMode] line). Empty if not found (an OLD
+    build that predates the self-report, or a log without it)."""
+    mode = ''
+    if not boot_ts:
+        return mode
+    with open(path, encoding='utf-8', errors='replace') as f:
+        for line in f:
+            if line[:19] < boot_ts:
+                continue
+            m = _MIDMODE_RE.search(line)
+            if m:
+                mode = m.group(1)
+    return mode
 
 
 def _load_records(path: str):
@@ -77,6 +106,20 @@ def _metrics(rows: list) -> dict:
                    and all(c == '<ttl-flip>' for c in r['culprits']))
     mid = buckets.get('cache_mid_out_of_window', 0)
     tbr = buckets.get('turn_boundary_rebill', 0)
+    # Rounds whose record shows a mid stepping-stone was PLACED. The record's
+    # marker signature carries body_msg_blocks (body markers excl. system/head);
+    # >=2 body markers ⇒ a mid was armed alongside the tail. drop-mode places
+    # NONE, so post-fix this must be 0 — a POSITIVE confirmation independent of
+    # whether any round happened to collapse. Falls back to 0 when the field is
+    # absent (older records) — reported honestly as 'unknown' by the caller.
+    mid_placed = 0
+    mid_field_seen = 0
+    for r in rows:
+        bmb = r.get('body_msg_blocks')
+        if isinstance(bmb, list):
+            mid_field_seen += 1
+            if len(bmb) >= 2:
+                mid_placed += 1
     tot_w = sum(int(r.get('cache_write', 0)) for r in rows)
     brk_w = sum(int(r.get('cache_write', 0))
                 for r in rows if r.get('bucket') != 'no_break')
@@ -98,6 +141,7 @@ def _metrics(rows: list) -> dict:
     return {
         'n': n, 'buckets': dict(buckets),
         'ttl_any': ttl_any, 'ttl_sole': ttl_sole, 'mid': mid, 'tbr': tbr,
+        'mid_placed': mid_placed, 'mid_field_seen': mid_field_seen,
         'tot_w': tot_w, 'brk_w': brk_w,
         'brk_pct': (100 * brk_w // tot_w) if tot_w else 0,
         'n_steady': len(steady),
@@ -148,6 +192,39 @@ def main(argv):
     print(f'     steady-state rounds  {mp["n_steady"]:5}         {mq["n_steady"]:5}'
           f'         [denominator of the clean ratio]')
     print(f'\nPOST-restart bucket breakdown: {mq["buckets"]}')
+
+    # ── GUARD 1: minimum-sample floor (anti-false-negative on the 0s) ──
+    print('\n── acceptance guards ──')
+    if mq['n_steady'] < _MIN_STEADY:
+        print(f'⚠ SAMPLE TOO SMALL: {mq["n_steady"]} steady-state rounds '
+              f'< {_MIN_STEADY} floor. ttl_flip={mq["ttl_any"]} / '
+              f'mid_oow={mq["mid"]} are NOT yet trustworthy — a 0 here may just '
+              f'mean traffic was too short to trigger the miss, not that the fix '
+              f'works. Keep generating multi-round traffic and re-run.')
+    else:
+        print(f'✓ sample sufficient: {mq["n_steady"]} steady-state rounds '
+              f'>= {_MIN_STEADY} floor — the 0-counts are meaningful.')
+
+    # ── GUARD 2: positive drop confirmation (not just mid_oow=0 by absence) ──
+    boot_mode = _boot_mid_mode(path, boot)
+    if boot_mode:
+        print(f'✓ boot self-report: running TOFU_CACHE_MID_MODE={boot_mode} '
+              f'(in-memory) — proves WHICH layout the serving process loaded.')
+        if boot_mode != 'drop':
+            print(f'  ⚠ mode is NOT drop — the drop-default fix is not the '
+                  f'active layout; mid_oow=0 would NOT be attributable to it.')
+    else:
+        print('⚠ no [CacheMidMode] boot self-report found — cannot positively '
+              'confirm drop is running (old build predating server.py self-report, '
+              'or pre-restart log). Restart onto new HEAD to get it.')
+    if mq['mid_field_seen'] == 0:
+        print('  mid-placement evidence: UNKNOWN (records carry no '
+              'body_msg_blocks field — pre-fix records).')
+    else:
+        print(f'  mid-placement evidence: {mq["mid_placed"]} of '
+              f'{mq["mid_field_seen"]} records PLACED a mid marker '
+              f'(drop-mode target = 0). >0 means some send still armed a mid '
+              f'→ drop not fully in effect.')
     return 0
 
 

@@ -2736,6 +2736,18 @@ if __name__ == '__main__':
             _bid = '?'
         _boot('[CacheFixGen] CACHE_FIX_GEN=%d pid=%d bootId=%s (in-memory)'
               % (_cfg, os.getpid(), _bid))
+        # Also self-report the RESOLVED mid-anchor layout mode. The cache-cost
+        # acceptance analyzer reads this to POSITIVELY confirm the running
+        # process placed no mid stepping-stone (mode=drop) — so a post-restart
+        # cache_mid_out_of_window=0 is attributable to the fix, not merely to
+        # traffic too short to have armed a mid. In-memory (post-import) value,
+        # so it reflects the bytecode + env actually loaded.
+        try:
+            from lib.llm.cache import _mid_placement_mode as _mpm
+            _boot('[CacheMidMode] TOFU_CACHE_MID_MODE=%s pid=%d bootId=%s (in-memory)'
+                  % (_mpm(), os.getpid(), _bid))
+        except Exception as _mpm_e:
+            _boot_logger.warning('[CacheMidMode] self-report failed: %s', _mpm_e)
     except Exception as _cfg_e:  # never let a diagnostic line block boot
         _boot_logger.warning('[CacheFixGen] self-report failed: %s', _cfg_e)
 

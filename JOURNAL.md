@@ -1,5 +1,13 @@
 # Project Journal
 
+
+### 2026-07-20 — 自主接手看板 epic「网关关键词 sanitizer 全 no-op」:做完「零判断的诚实修复」+ 回归守卫,把真正需政策判断的替换值 [human-gated] 挂起(commit `7bc0542`,2 文件,新测 6/6 绿 / collect 7673)。承接本会话早先自己上报的 `pt_871a26c7`(全仓 bug 扫描分出的 TICKET),由 Project Brain 自动派发。
+- **先分清「能自己做的」和「必须 owner 定的」:** `_GATEWAY_BLOCKED_TERMS` 5 个词全是**恒等占位**(`'习主席':'习主席'`)——sanitizer 一直空转。但真正的交付物(填入真实替换值)**两重门槛**:①给政治敏感词选替换(委婉词 or 隐形分隔符技巧绕过公司内容过滤)是**内容/政策判断**,不该由 agent 凭空发明;②有效性**本地无法验证**——只能拿真网关 `aigc.sankuai.com` 探(owner 于 2026-04-03 探过),CI/dev 不可达。发明一个未验证的绕过还宣称「修好了」= 违反诚实报告。
+- **但绝不 silent no-op——抓到一个相邻的、零判断的真 bug:** 原循环对恒等项也走 `text.replace(x,x)` 并记日志 `[Sanitize] Replaced 1 term(s): 习主席→习主席`——**声称清洗了、实则啥没干**。修:循环里 `if blocked == safe: continue` 跳过恒等占位,日志恢复诚实;并给 `_GATEWAY_BLOCKED_TERMS` 加 NOTE 说明当前 inert + owner-gated 缘由 + 如何激活(把某个值改成真实替换即生效)。
+- **回归守卫(`test_gateway_sanitize.py` 6 测):** ①记录当前全恒等占位(有真实值时此断言翻红=删除信号)②恒等词原样透传 ③恒等词**不产生** false「Replaced」日志(caplog 断言)④空/None/干净文本 ⑤**NEUTER**:monkeypatch 塞一个真实非恒等替换 → 必须替换+记日志(删了替换循环就翻红,证明机制非永久死代码)⑥messages list 的 string + list-of-blocks 两种 content 形态都替换、非 text block 不动。
+- **诚实边界 + 挂起:** 零判断部分已落 HEAD;残留(真实替换值)`project_board_block` 打 `[human-gated]`——非 sibling 依赖(无其他会话拥有这些值),owner 填任一真实值即激活。collect-only 7673(baseline+6 新+sibling 增量),唯一 error 仍是既知 `test_run_command_pty_streaming.py::pty_supported` flake。
+- **git 纪律(共享 HEAD):** `reset -q HEAD .` → 仅 add 2 文件 → `commit -F- -- <2 路径>` → `git show HEAD --name-only` = 仅 2 文件,NO LEAK。`7bc0542`。
+
 ### 2026-07-20 — 自动派发接手 triage 票 `pt_257e338912274463`:`test_continue_lossless.py::test_thinking_without_signature_not_carried` HEAD 红——判定为**陈旧测试基线**,非丢门,改测试对齐已提交契约(commit `1d3f346`,单测试文件 +23/-2,40/40 绿)。此票是上一轮崩溃恢复根修时按 owner「latent/pre-existing 单独上票」偏好剥离出来的。
 - **取证定性(哪边权威):** 用 `git log -- _toolcalls.py` 锁定 commit **`8ecbbcf`**(「freeze the thinking-no-signature `{reasoning_content}` live↔replay flip」)——它**故意**让 `build_assistant_tool_call_message` 在有 thinking 文本时**无视签名**一律带上 `reasoning_content`,使 replay 路径与 live tail 不再分叉。三处旁证一致指向「测试陈旧」:①该函数 docstring 明写「carried whenever thinking text is present (INDEPENDENT of signature)」;②**失败测试自己的类 docstring** 就说「ALWAYS attaches vendor fields when the data is present; provider-specific stripping happens later」——与它自己那条断言自相矛盾;③下游安全网另有测试 `TestAnthropicOutboundReplay::test_unsigned_thinking_block_dropped` 证明 `openai_body_to_anthropic` 会把无签名 thinking 块剥掉(故不会 HTTP 400)。结论:reconstructor 是 provider-agnostic、保留字段正确,测试停留在 `8ecbbcf` 之前的老契约、没跟上。
 - **修法(改测试、非改产品):** 把 case 重命名为 `test_thinking_without_signature_carries_reasoning_not_signature`,断言文档化契约——`reasoning_content=='unsigned'` 被带上、`thinking_signature` 不带(本就无签名);补一段说明引用 `8ecbbcf` + 下游剥离守卫。顺手补 `pytestmark = pytest.mark.unit`(该文件缺 tier marker、之前被 auto-tag 警告)。**零产品行为改动。**

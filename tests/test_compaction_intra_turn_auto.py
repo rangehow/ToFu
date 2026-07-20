@@ -186,6 +186,81 @@ def test_auto_fold_noop_on_small_turn(stub_summary):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+#  #1b — SUCCESS-PATH CONVERGENCE: fold+summary succeeds but the preserved
+#        hot-tail rounds are themselves oversized → execute_compact_tool must
+#        converge the PROJECTED request under the trigger ceiling in the SAME
+#        round, not defer to next-round / reactive-413.
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _ceiling_for(task):
+    """The same ceiling execute_compact_tool checks against: usable × ratio."""
+    from lib.tasks_pkg.compaction._tokens import _get_context_limit, _usable_context
+    from lib.tasks_pkg.compaction._constants import _SUMMARY_TRIGGER_RATIO
+    usable = _usable_context(_get_context_limit(task))
+    return int(usable * _SUMMARY_TRIGGER_RATIO)
+
+
+@pytest.mark.unit
+def test_auto_compact_converges_when_hot_tail_still_overflows(stub_summary):
+    """★ Fold + summary succeed, but the 8 preserved HOT rounds are each so
+    large that the projected request still exceeds the trigger ceiling. The
+    success-path convergence check must head-truncate (pairing-safe) so the
+    result fits the window THIS round — no orphan, objective preserved."""
+    from lib.tasks_pkg.compaction import (
+        _estimate_total_tokens, execute_compact_tool)
+
+    # gpt-4 → 128k window; each hot round ~45k chars so 8 hot rounds alone
+    # blow past the ~80.6k-token ceiling even after the cold body is folded.
+    task = {'convId': 'conv_conv', 'id': 't', 'config': {'model': 'gpt-4'}}
+    ceiling = _ceiling_for(task)
+    msgs = _giant_turn_api(n_rounds=40, chars=45_000)
+
+    meta: dict = {}
+    execute_compact_tool(msgs, task=task, _result_meta=meta,
+                         _compaction_skip_archive=True)
+
+    assert meta['compacted'] is True, 'fold+summary must have succeeded'
+    after = _estimate_total_tokens(msgs)
+    assert after <= ceiling, (
+        f'convergence must bring the preserved region under the ceiling: '
+        f'{after} > {ceiling}')
+    ok, why = _api_pairs_ok(msgs)
+    assert ok, f'convergence head-truncate orphaned a tool result: {why}'
+    # The objective (leading user) survives the convergence truncation.
+    assert any(m.get('role') == 'user' and '修复登录 bug' in (m.get('content') or '')
+               for m in msgs), 'objective must survive success-path convergence'
+
+
+@pytest.mark.unit
+def test_NC_no_convergence_leaves_projected_over_ceiling(stub_summary, monkeypatch):
+    """NEUTER #1b: neuter the convergence head-truncate (make it a no-op) → the
+    oversized hot tail survives whole and the preserved region stays OVER the
+    ceiling. Proves the success-path convergence check is what bounds it (revert
+    → the over-window request reappears)."""
+    from lib.tasks_pkg.compaction import (
+        _estimate_total_tokens, execute_compact_tool)
+    import lib.tasks_pkg.compaction._reactive as reactive_mod
+
+    # Neuter: the convergence check calls this and drops nothing.
+    monkeypatch.setattr(reactive_mod, '_head_truncate',
+                        lambda *a, **k: 0)
+
+    task = {'convId': 'conv_nc', 'id': 't', 'config': {'model': 'gpt-4'}}
+    ceiling = _ceiling_for(task)
+    msgs = _giant_turn_api(n_rounds=40, chars=45_000)
+
+    meta: dict = {}
+    execute_compact_tool(msgs, task=task, _result_meta=meta,
+                         _compaction_skip_archive=True)
+
+    assert meta['compacted'] is True
+    after = _estimate_total_tokens(msgs)
+    assert after > ceiling, (
+        f'without convergence the oversized hot tail must stay over the '
+        f'ceiling: {after} <= {ceiling} (neuter failed to expose the gap)')
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 #  #2 — head-truncate NEVER splits a tool pair
 # ═══════════════════════════════════════════════════════════════════════════
 

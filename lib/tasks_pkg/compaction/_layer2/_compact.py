@@ -16,6 +16,7 @@ from lib.tasks_pkg.compaction._constants import (
     _cooldown_lock,
     _MAX_PRESERVE_TURNS,
     _PRESERVE_BUDGET_RATIO,
+    _SUMMARY_TRIGGER_RATIO,
     _summary_cooldowns,
 )
 from lib.tasks_pkg.compaction._tokens import (
@@ -336,8 +337,71 @@ def execute_compact_tool(messages: list, task: dict | None = None, **kwargs) -> 
         f'{reduction_pct:.0f}% reduction)\n',
         summary_text,
     ]
+    compact_result = '\n'.join(result_parts)
 
-    return '\n'.join(result_parts)
+    # ── SUCCESS-PATH CONVERGENCE CHECK (post-fold hot-tail overflow) ──
+    #   The fold + summary succeeded, but ``_find_turn_boundary`` preserves the
+    #   hot-tail rounds WHOLE. If those surviving rounds are themselves so large
+    #   that the PROJECTED request — the current ``messages`` PLUS the summary
+    #   tool-pair the caller (``force_compact_if_needed``) will append — STILL
+    #   exceeds the same trigger ceiling, sending it would only be bounded next
+    #   round or by the reactive 413 net. In an OOM-kill-prone deploy the "next
+    #   round" may never arrive, so converge NOW with the pairing-safe
+    #   head-truncate rather than emit an over-window request. Measured with the
+    #   SAME yardstick as ``_should_force_compact`` (authoritative count vs
+    #   ``usable × _SUMMARY_TRIGGER_RATIO``) so the check and the trigger agree.
+    _summary_pair = [
+        {'role': 'assistant', 'content': None,
+         'tool_calls': [{'id': '_conv_proj', 'type': 'function',
+                         'function': {'name': _COMPACT_TOOL_NAME,
+                                      'arguments': '{}'}}]},
+        {'role': 'tool', 'tool_call_id': '_conv_proj',
+         'name': _COMPACT_TOOL_NAME, 'content': compact_result},
+    ]
+
+    def _project_tokens() -> tuple[int, str]:
+        try:
+            return _count_tokens_authoritative(list(messages) + _summary_pair, task)
+        except Exception as _pe:
+            logger.debug('%s [Compact] convergence projection count failed '
+                         '(%s) — using heuristic', pfx, _pe)
+            return _estimate_total_tokens(messages), 'heuristic'
+
+    ceiling = int(usable * _SUMMARY_TRIGGER_RATIO)
+    proj_tokens, proj_method = _project_tokens()
+    if proj_tokens > ceiling:
+        logger.warning(
+            '%s [Compact] Post-fold STILL over ceiling: projected=%d (via %s) '
+            '> ceiling=%d (usable=%d × %.2f) — preserved hot-tail rounds are '
+            'oversized; converging with pairing-safe head-truncate',
+            pfx, proj_tokens, proj_method, ceiling, usable, _SUMMARY_TRIGGER_RATIO)
+        from lib.tasks_pkg.compaction._reactive import _head_truncate
+        _tok_pre = _estimate_total_tokens(messages)
+        _dropped = _head_truncate(
+            messages, task, reported_token_count=proj_tokens,
+            event_name='post_compact_converge')
+        _tok_post = _estimate_total_tokens(messages)
+        logger.warning(
+            '%s [Compact] Post-fold head-truncate dropped %d message(s): '
+            'preserved-region tokens %d → %d (conv=%s round=%s)',
+            pfx, _dropped, _tok_pre, _tok_post, log_id,
+            (task.get('round_num') if task else '?'))
+        # Re-measure. If STILL over (pathological: a single hot round bigger
+        # than the window — head-truncate is floored at system_end+4 messages),
+        # do NOT raise and abort the round. Log an ERROR so this boundary is
+        # visible in error.log, and pass through: the reactive 413 net is the
+        # last resort this round.
+        proj_after, _ = _project_tokens()
+        if proj_after > ceiling:
+            logger.error(
+                '%s [Compact] Post-fold convergence INCOMPLETE — projected still '
+                '%d > ceiling=%d after head-truncate (dropped=%d; only the system '
+                'prefix + an oversized hot round remain). Passing through; the '
+                'reactive 413 net must bound this request. conv=%s round=%s',
+                pfx, proj_after, ceiling, _dropped, log_id,
+                (task.get('round_num') if task else '?'))
+
+    return compact_result
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

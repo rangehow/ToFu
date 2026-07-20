@@ -96,6 +96,8 @@ var _i18n = {
   //    stream stalls / the server stops responding. {n}=silent seconds,
   //    {what}=current activity label. zh primary. ──
   'conn.forceFinish': { zh: '强制结束', en: 'Force Finish' },
+  'conn.reconnectingShort': { zh: '正在重连…', en: 'Reconnecting…' },
+  'conn.reconnecting': { zh: '连接不稳定，正在重连并与服务器同步…', en: 'Connection unstable — reconnecting and syncing with the server…' },
   'conn.hudNotResponding': { zh: '服务器无响应', en: 'server not responding' },
   'conn.hudNotRespondingFull': { zh: '服务器无响应（静默 {n}s）— 健康检查失败', en: 'Server not responding ({n}s silent) — health check failed' },
   'conn.hudStillWorking': { zh: '仍在处理', en: 'still working' },
@@ -1013,6 +1015,8 @@ var _i18n = {
   'update.phase.bind': { zh: '绑定端口，等待服务器响应…', en: 'Binding port, waiting for the server…' },
   'update.phase.online': { zh: '已恢复在线', en: 'Back online' },
   'update.restartElapsed': { zh: '已用时 %ss', en: 'elapsed %ss' },
+  'update.codeUnchangedTitle': { zh: '服务器已重启，但代码未改变', en: 'Server restarted, but code is unchanged' },
+  'update.codeUnchangedHint': { zh: '新进程加载的源码与重启前完全一致 —— 你的本地改动可能没有生效（是否改了别的目录，或改动被还原？）。', en: 'The new process loaded byte-identical source — your local changes may not have taken effect (edited a different checkout, or the changes were reverted?).' },
   'update.dirty': { zh: '检测到对受版本控制的源码文件的本地改动，已阻止自动更新（不会自动暂存或覆盖）。请先提交或还原以下文件：', en: 'Local changes to tracked source files were detected — the update is blocked (we never auto-stash or overwrite). Commit or revert these first:' },
   'update.noGit': { zh: '当前不是 git 检出目录，将通过下载发布包覆盖更新。', en: 'Not a git checkout — updating by downloading and overlaying the release archive.' },
   'update.tarballNote': { zh: '当前非 git 目录，将下载官方发布包并覆盖更新（你的设置、数据与记忆不受影响；被替换的文件会备份到 .update_backup/）。', en: 'Not a git checkout — the official release archive will be downloaded and overlaid (your settings, data and memories are untouched; replaced files are backed up to .update_backup/).' },

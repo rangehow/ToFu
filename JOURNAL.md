@@ -1,6 +1,15 @@
 # Project Journal
 
 
+### 2026-07-20 — 确认对话框支持纯键盘操作:方向键左右移选中框 + Enter 激活当前聚焦按钮(commit `f5cd432`,3 文件 +169/-1,新测 3/3 绿含 NEUTER)。owner 报「日志噪音的『清理并发送』确认框有个外层选中框,但只能用鼠标点左边那个『保持原文』,想用键盘左右方向键切换选中、再回车」。
+- **根因(不是缺聚焦,是 Enter 无视聚焦):** 截图的框是共享 `showConfirm`(`static/js/core/dialog.js` 的 `_openDialog`),发送时检测到日志噪音由 `main_send_pipeline.js:271` 触发。两处挡住纯键盘:①开框只 `okBtn.focus()`,**无方向键导航**、选中框搬不动;②`onKey` 里 Enter 恒 `close(okResult)`,**无视当前聚焦哪个按钮**——就算能搬也没用。且 CSS 只有 `.app-dialog-ok:focus-visible` 描边,cancel 按钮聚焦时看不到选中框。
+- **打比方:** 有个高亮框卡在「确定」上、搬不走,而且不管框停在哪、按回车都按「确定」——等于键盘只能确认、不能选。
+- **修法(最小、惠及全站所有 confirm):** `onKey` 加 `ArrowLeft`→`cancelBtn.focus()` / `ArrowRight`→`okBtn.focus()`(仅非 prompt 且有 cancel 时);Enter 改为「聚焦在 cancel 就 `close(cancelResult)`,否则 `close(okResult)`」,prompt 分支不动(仍确认输入值),默认聚焦仍是 OK(不按方向键直接回车=旧行为)。CSS 加 `.app-dialog-cancel:focus-visible` 描边,镜像既有 OK 的,让选中框在两侧都可见。
+- **tests(`test_frontend_dialog_arrow_nav.py` 3 测,jsdom 驱动真 `showConfirm`):** 方向键左右切聚焦到 Cancel/OK;Enter 激活当前聚焦(停 Cancel→false、默认→true);**NEUTER**——把 Enter 改回恒 OK,则「停在 Cancel 按回车」错误返回 OK,证明 focus-aware Enter 是 load-bearing。相邻 `test_frontend_inject_mode_prompt.py` 4/4 无回归。
+- **git 纪律(共享 HEAD):** `reset -q HEAD .` → 仅 add 3 文件 → `--cached --numstat` 确认(dialog 12/1、styles 1/0、新测 156/0)→ `commit -F- -- <3 路径>` → 泄漏探针 = **NO LEAK**。`f5cd432`。
+- **诚实边界:** 纯前端(JS+CSS),由 3 新测(含 NEUTER)+ `node --check` + 4 相邻回归验证。**生效需重建 JS/CSS bundle + 硬刷**(dialog.js 已在 `_BUNDLE_FILES`、styles.css 走 hash,`GET /` 按 mtime 自动重建,已跑进程无需重启)。真实体感(方向键搬选中框、Enter 激活选中的那个)待硬刷后真机抽验。
+
+
 ### 2026-07-20 — 全仓「逐文件排查 bug」多智能体扫描:11 个 reviewer 分片扫完 BE+FE,修掉 8 个高置信自包含缺陷(commit `48ea182`,8 文件,96 基础单测绿 / collect 7631)。owner 要求「所有前后端文件逐一检查、用多个 agent」。
 - **打法(分片并行,像分区体检):** 拆成两波 `spawn_agents`——后端 6 片(server/export/routes 顶层、routes/api_v1、tasks_pkg+agent_core、llm*、conversations+orchestration+swarm、database+memory+billing+scheduler+mcp+leaf),前端 5 片(top-level A–M、N–Z、core/+ui/、main/+settings/+paper/+bundler 白名单、index.html+styles.css 结构)。每个 agent 只报「实锤 bug」(file:line+症状+为何错+一行修法),明确跳过风格/假设/大改 latent。
 - **8 个 CONFIRM-FIX(已修):** ①`server.py:1409` method_override 的 `except:pass` 静默吞异常(§2.2)→ 补 debug 日志;②`export.py:2714` `_verify_opensource` 重复定义、前一个是死桩 → 删;③`lib/memory/storage/_files.py` 记忆文件裸 `open().write()` → 改 `write_text_atomic`(崩溃不再写坏 .md);④`billing.py`(ledger/codes/payments)+`users.py`(list)查询参 `int()` 未包异常、非数字返 500 应 400 → 包 try/except(对齐 usage.py 既有约定);⑤`voice.js:51` `showToast(kind,msg)` 实参顺序反了 → 交换;⑥`image-gen.js` `topbarTitle` 无空守卫 + 单成功路径 `apiUrl()` 未判 `startsWith('/')`(批量路径本有守卫)→ 两处对齐;⑦`tool_rounds.js:880/2120/2211` 三处结果 `href` 无 scheme 校验 → `javascript:`/`data:` XSS,补 `^https?://` 守卫(1679 行本就有正确守卫,这三处是漏抄的副本)。

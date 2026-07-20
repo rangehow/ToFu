@@ -1,6 +1,15 @@
 # Project Journal
 
 
+### 2026-07-20 — 全仓「逐文件排查 bug」多智能体扫描:11 个 reviewer 分片扫完 BE+FE,修掉 8 个高置信自包含缺陷(commit `48ea182`,8 文件,96 基础单测绿 / collect 7631)。owner 要求「所有前后端文件逐一检查、用多个 agent」。
+- **打法(分片并行,像分区体检):** 拆成两波 `spawn_agents`——后端 6 片(server/export/routes 顶层、routes/api_v1、tasks_pkg+agent_core、llm*、conversations+orchestration+swarm、database+memory+billing+scheduler+mcp+leaf),前端 5 片(top-level A–M、N–Z、core/+ui/、main/+settings/+paper/+bundler 白名单、index.html+styles.css 结构)。每个 agent 只报「实锤 bug」(file:line+症状+为何错+一行修法),明确跳过风格/假设/大改 latent。
+- **8 个 CONFIRM-FIX(已修):** ①`server.py:1409` method_override 的 `except:pass` 静默吞异常(§2.2)→ 补 debug 日志;②`export.py:2714` `_verify_opensource` 重复定义、前一个是死桩 → 删;③`lib/memory/storage/_files.py` 记忆文件裸 `open().write()` → 改 `write_text_atomic`(崩溃不再写坏 .md);④`billing.py`(ledger/codes/payments)+`users.py`(list)查询参 `int()` 未包异常、非数字返 500 应 400 → 包 try/except(对齐 usage.py 既有约定);⑤`voice.js:51` `showToast(kind,msg)` 实参顺序反了 → 交换;⑥`image-gen.js` `topbarTitle` 无空守卫 + 单成功路径 `apiUrl()` 未判 `startsWith('/')`(批量路径本有守卫)→ 两处对齐;⑦`tool_rounds.js:880/2120/2211` 三处结果 `href` 无 scheme 校验 → `javascript:`/`data:` XSS,补 `^https?://` 守卫(1679 行本就有正确守卫,这三处是漏抄的副本)。
+- **4 个 TICKET(上看板,需 owner 定或大改/运行时验证):** `pt_871a26c7` 网关敏感词替换全 no-op(替换串==原串,真实替换值已丢,需 owner 给);`pt_6598ae21` `export.py` 推送失败一律 force-push(非快进也强推=数据丢失,需 owner 定策略);`pt_afda5285` index.html+image-gen.js ~30+ emoji/glyph 图标违 §3.4(清理型批量);`pt_0ef1d30b` `conv_window.js` 上翻加载滚动锚点测错元素(`#chatInner` vs `#chatContainer`,需真机复现)。
+- **DISCARD:** `static/vendor/` 实际存在(fe_e 误报,已 find_files 核实 10 个文件在);be_c/be_d/be_e/be_f 报「本片无 bug」(代码防御性极强,except 均有日志);method-override scope、PgConnection cursor 等低置信项。
+- **诚实边界:** 8 修全是后端逻辑/纯前端小改,由 ast.parse + `node --check` 3 JS 全绿 + 96 基础单测(api_response/json_store/request_parser)+ collect-only 7631 验证。**唯一残留 collection error 是既知 sibling `test_run_command_pty_streaming.py` 的 `pty_supported` flake**(与本改无关);`routes/push.py` 的 `@push_bp.websocket` AttributeError 是导入期 Quart/Flask shim 的既知 flake、非我引入。前端真实体感(XSS 守卫、toast 文案、image-gen 空守卫)**待重建 JS bundle + 硬刷**后抽验(voice/image-gen 已在 `_BUNDLE_FILES`,tool_rounds 在 ui/ 核心包,无新增顶层文件)。
+- **git 纪律(共享 HEAD):** `reset -q HEAD .` → 仅 add 8 文件 → `commit -F- -- <8 路径>` → `git show HEAD --name-only` = 仅 8 文件,NO LEAK。`48ea182`。
+
+
 ### 2026-07-20 — 导出产物「静默残缺」根修:给 `export.py` 补构建期 Python 完整性自检(commit `3a24232`,单文件 +87,合成 dest 双向功能验证通过)。owner 报导出的 `tofu-internal` 跑 `install.sh` 时 server 一启动就崩:`ImportError: cannot import name 'command_queue' from 'lib.desktop'`。
 - **两条信息分清:** PG 冒烟失败→回落 SQLite 是**设计好的降级**(不用管);真正崩溃是最后那个 ImportError。
 - **根因(现场抓到):** 排查时发现**当时正有一个 `export.py --mode internal --dest .../tofu-internal` 进程在跑**,且子进程正 `rm -rf` 整个 dest 重拷。owner 安装用的是**更早一次导出留下的残缺产物**——`lib/desktop/__init__.py` 被写成 **0 字节**(facade 空转:bridge.py 8771B 完好,但门口那张 re-export「名片」是白纸,`from lib.desktop import command_queue` 找不到路)。源码在工作区/HEAD 都是 1310B 健康,bug 纯在导出环节。两次导出叠在同一 dest + 跨机房 FUSE(`hadoop-nlp-sh02` vs 我方 `hadoop-aipnlp`)原子移动窗口 → 半写残片。

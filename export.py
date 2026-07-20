@@ -373,6 +373,7 @@ ALWAYS_EXCLUDE_GLOBS = {
     '*.pyc',
     '*.pyo',
     'bundle-*.js',    # auto-generated JS bundle (rebuilt at startup)
+    'node_modules*',  # npm deps AND timestamped local backups (node_modules.local_bak.*) — regenerable, not Tofu source
     '*.db',
     '*.db-journal',
     '*.db-wal',
@@ -2394,6 +2395,7 @@ def export_project(mode: str, dest: Path, dry_run: bool = False,
         # export loudly instead of shipping a white-screening tree.
         if mode in ('internal', 'opensource'):
             _verify_exported_js_syntax(dest)
+            _verify_exported_py_integrity(dest)
         if push:
             _git_push(dest, mode, commit_msg, is_release=is_release,
                       branch_override=branch_override)
@@ -2522,11 +2524,22 @@ def _run_ruff_autofix(dest: Path):
     This ensures the exported code stays clean even if the source has minor
     style drift (import sorting, deprecated typing imports, Optional→X|None,
     etc.).  All auto-fixable rules are applied.
+
+    CRITICAL: ``--unfixable F401,F811`` forbids the autofix from ever DELETING
+    imports (or duplicate defs), even though those diagnostics are still
+    reported. Tofu's facade-preserving split packages import symbols in a
+    submodule purely so the package ``__init__`` can re-export them; ruff sees
+    those as "unused" (F401) and, left to its own devices, would delete them —
+    silently breaking ``import lib.mcp`` / ``import lib.tasks_pkg.orchestrator``
+    at boot in the shipped opensource build. The source tree is already
+    lint-clean, so the export never needs to strip imports to stay green;
+    removing an import is pure downside here. Keep this guard.
     """
     print(f"\n  {C_BOLD}🔧 Running ruff auto-fix on exported code…{C_END}")
     try:
         result = subprocess.run(
             ['python', '-m', 'ruff', 'check', '--fix', '--unsafe-fixes',
+             '--unfixable', 'F401,F811',
              str(dest / 'lib'), str(dest / 'routes'), str(dest / 'tests')],
             capture_output=True, text=True, timeout=60,
         )
@@ -2613,6 +2626,92 @@ def _verify_exported_js_syntax(dest: Path) -> None:
             'Sanitizer produced %d syntactically-invalid JS file(s): %s'
             % (len(broken), ', '.join(f'{rel} ({err})' for rel, err in broken))
         )
+class ExportIntegrityError(RuntimeError):
+    """Raised when the exported Python tree is missing/truncated vs the source.
+
+    The classic failure this guards against: a facade ``__init__.py`` that
+    re-exports symbols from a submodule ends up 0 bytes in the export (a
+    concurrent export into the same ``--dest`` + a cross-DC FUSE atomic-move
+    window can leave a half-written file). A 0-byte file still ``py_compile``s
+    cleanly, so a syntax check would NOT catch it — only a byte-size check
+    against the source does. The result is a tree that installs "successfully"
+    yet crashes at boot with ``ImportError: cannot import name X`` the moment
+    ``routes/__init__.py`` touches the empty facade. Fail the export loudly at
+    build time instead of shipping that.
+    """
+
+
+def _verify_exported_py_integrity(dest: Path) -> None:
+    """Verify every tracked source ``.py`` copied to ``dest`` non-empty.
+
+    Compares the git-tracked Python file list (fast, local) against the export:
+    a file that is non-empty in the source but MISSING or 0 bytes in ``dest``
+    is a corrupted copy. Each dest stat is retried a few times to absorb
+    cross-datacenter FUSE latency / atomic-move windows (a spurious ENOENT on a
+    remote mount would otherwise flag a file that is actually fine).
+
+    Raises:
+        ExportIntegrityError: if any tracked source ``.py`` is missing or
+            truncated to 0 bytes in the export.
+    """
+    try:
+        listed = subprocess.run(
+            ['git', 'ls-files', 'lib/*.py', 'lib/**/*.py',
+             'routes/*.py', 'routes/**/*.py', 'server.py', 'bootstrap.py'],
+            cwd=str(ROOT), capture_output=True, text=True, timeout=30,
+        )
+    except (subprocess.TimeoutExpired, OSError) as e:
+        logger.warning('py-integrity: git ls-files failed (%s) — skipping check', e)
+        print(f"  {C_DIM}\u23ed git ls-files unavailable \u2014 skipping Python integrity check{C_END}")
+        return
+
+    rels = [ln.strip() for ln in (listed.stdout or '').splitlines() if ln.strip().endswith('.py')]
+    print(f"  {C_BOLD}\U0001f50d Verifying exported Python integrity ({len(rels)} files)\u2026{C_END}")
+
+    def _size_with_retry(p: Path) -> int:
+        """Return file size, retrying to ride out FUSE ENOENT flakiness.
+
+        Returns -1 only if every attempt failed (treated as truly missing).
+        """
+        for attempt in range(5):
+            try:
+                return p.stat().st_size
+            except OSError as e:
+                logger.debug('py-integrity stat retry %d for %s: %s', attempt, p, e)
+                time.sleep(0.4)
+        return -1
+
+    bad: list[tuple[str, str]] = []
+    for rel in rels:
+        # Only flag files that are genuinely non-empty in the source: an empty
+        # source file (rare) copying to empty is not corruption.
+        try:
+            if (ROOT / rel).stat().st_size == 0:
+                continue
+        except OSError:
+            continue
+        size = _size_with_retry(dest / rel)
+        if size < 0:
+            bad.append((rel, 'missing'))
+            print(f"    {C_RED}\u2717 {rel}: missing{C_END}")
+        elif size == 0:
+            bad.append((rel, '0 bytes'))
+            print(f"    {C_RED}\u2717 {rel}: 0 bytes (truncated copy){C_END}")
+
+    if bad:
+        print(f"\n  {C_RED}\u26a0 {len(bad)} exported Python file(s) missing/truncated \u2014 "
+              f"the export tree is incomplete.{C_END}")
+        print(f"  {C_DIM}Likely cause: a concurrent export into the same --dest, or a "
+              f"cross-DC FUSE write interrupted mid-copy. Re-run the export (ensure no "
+              f"other export.py targets this dest).{C_END}")
+        raise ExportIntegrityError(
+            'Export tree incomplete: %d tracked .py file(s) missing/empty: %s'
+            % (len(bad), ', '.join(f'{rel} ({why})' for rel, why in bad))
+        )
+    print(f"  {C_GREEN}\u2705 All exported Python files present and non-empty.{C_END}")
+
+
+def _verify_opensource(dest: Path):
     print(f"  {C_GREEN}\u2705 All exported JS parses cleanly.{C_END}")
 
 

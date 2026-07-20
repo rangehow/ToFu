@@ -1,6 +1,17 @@
 # Project Journal
 
 
+### 2026-07-20 — Prompt-cache 最大一笔省钱落地:`TOFU_CACHE_MID_MODE` 默认 `current`→`drop`(owner 授权,commit `6bcac3e`,2 文件 +163/-23,57 缓存测试绿含 Part E 5 测 + NEUTER / collect 7723)。承接 sibling mrtagv1p 的真机 A/B ground truth。
+- **真机 A/B(sibling 跑,3 个真实会话,frozen byte-STABLE 前缀,R1 排除):** drop 把 74k floor-collapse 率 ~34%→~8%、re-billed 写 token **3.1×(943k→306k/50 轮)**,且 **drop 从不输**。证明 mid 垫脚石在 byte-stable 前缀上是**净负、是坍塌驱动本身**——彻底否掉我上上轮 offline 模型的「drop 更糟」误判(owner 早预警过我的模型低估 7×)。
+- **修法:** `_mid_placement_mode()` 默认从 `current` 改 `drop`;`_mid_armed` 已同时门控预留+放置,drop 干净移除 mid marker。`current` 保留为**显式 env opt-in**(`TOFU_CACHE_MID_MODE=current` 秒回退);reserved 名(smooth/cascade)与 typo 现回落 `drop`(不再回落净负的 current)。
+- **tests(Part E 5 测 + autouse env 隔离 fixture):** 默认(无 env)放**唯一 tail marker、无 mid**;**NEUTER**(显式 current)→ mid 重现、2 marker(证明翻转 load-bearing,源码回退默认也验证守卫变红);env 回退可用;reserved 回落 drop;drop 守 4-marker 上限。既有 current-mode 几何测试(Part A/C)显式 opt-in current。
+- **三笔省钱本轮全进 HEAD:** ①`18c04a6` mid_oow 误报门(归因准);②`a34beae` ttl-flip chokepoint 补戳(6.2M 写);③`6bcac3e` drop-default(3.1× 写削减,**最大一笔**)。
+- **残留(owner 北极星=zero miss,本 commit 未做):** drop 仍在 byte-stable 前缀上 ~8% floor-collapse。假设(sibling 正用 harness 量):20 块回看限制**从 mid 移到了 TAIL**——单轮大并行批(>20 内容块)让 tail 断点够不着上一轮缓存边界。若坐实,zero-miss 解是**tail 侧自适应/多断点布局**(我 cache.py 的活),等 sibling 的 per-round tail 块跨度数据再设计。**未实现,明确 deferred。**
+- **验收线(未达成):** 真实成本下降需 owner 重启带新代码 + 拉 `culprits` 新日志 + sibling harness 复测真实 floor%/break-write 占比确认。方向、修复、证据都齐了,但「真省下」以重启后真日志为准。
+- **协作边界:** 我 OWN cache.py 布局 + TOFU_CACHE_MID_MODE;sibling OWN 真机 A/B harness(`debug/cache_db_replay_live.py`,留作永久 live 验证器)。drop-default 我落地、它复测。tail-fix 我设计、它供数据。
+- **git 纪律(共享 HEAD):** `reset -q HEAD .` → 仅 add 2 文件 → `--cached --numstat` 核对 → `commit -F- -- <路径>` → `git show HEAD --name-only` 仅含我 2 文件,NO LEAK。
+
+
 ### 2026-07-20 — Prompt-cache「零 miss」攻坚:建**真网关 A/B 回放器**,用真实 miss 对话在实时网关上裁决——坐实 mid-anchor 是净负担,drop 把 floor-collapse 从 ~34% 砍到 ~8%、重计费写 token 降 3.1×(harness 落 `debug/`(gitignore 约定),守卫测试 commit `51475b5`,10/10 绿 / collect 7718)。owner 说「不在乎成本,只要零 miss,可以改后端,直接用数据库里真实 miss 对话 replay 测所有修复」——照做,并全程与正在改 `cache.py` 的 sibling `mrswvxlv` 划界协调。
 - **补上「三缺一」的最后一块:** 现有三个工具各覆盖一个轴、都缺另两个——`cache_tracking/replay.py` 只跑**检测器**(离线、不碰网关)、`debug/cache_live_experiment.py` 只发**合成**循环(sibling 自认离线模型低估 floor-collapse ~7×)、`debug/cache_replay_mrne3bqe.py` 只**离线 byte-diff**。新 `debug/cache_db_replay_live.py` = 三者交集:**从 DB 取真实 miss 对话 → 用生产 `build_api_messages_from_db` + `_inject_system_contexts` 逐轮重建真 wire body → 发到真网关 → 读真 `cache_read/cache_write`**。关键:进程内直接 import 磁盘上的 `cache.py`,**绕开了「验收要重启、重启杀死验收者自己」的死结**(所有前序 epic 被 human-gate 的原因)。
 - **保真度两处坐实:** ①用真 `_inject_system_contexts` 重建头部——`system`(16.5k 字)+ CLAUDE.md `<system-reminder>`(60.9k 字)+ 40 个工具定义(66k 字)= 复现真实 **74k floor**;手搓 system 串只有 ~20k floor、根本触发不了 collapse。②每轮用生产 `wire_byte_field_prefix` 指纹 + `diff_byte_field_prefix` 比对共享前缀,过滤掉「byte-field-len A→B」纯增长 token,只留真正的 `<bytes>key{field}` 就地突变。

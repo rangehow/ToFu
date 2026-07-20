@@ -1338,8 +1338,10 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
             # (see cache_settle.py / settle_before_send above).
             if _cache_conv_id:
                 try:
-                    from lib.llm_dispatch.cache_settle import record_stream_end
-                    record_stream_end(_cache_conv_id)
+                    from lib.llm_dispatch.cache_settle import (
+                        is_cold_write, record_stream_end)
+                    record_stream_end(_cache_conv_id,
+                                      cold_write=is_cold_write(usage))
                 except ImportError as _cs_err:
                     logger.debug('%s cache-settle record unavailable: %s',
                                  tag, _cs_err)
@@ -1673,8 +1675,10 @@ async def async_dispatch_stream(body_or_messages, *, on_thinking=None,
                          'latency=%.0fms', log_prefix, finish, slot.model, latency)
             if _cache_conv_id:
                 try:
-                    from lib.llm_dispatch.cache_settle import record_stream_end
-                    record_stream_end(_cache_conv_id)
+                    from lib.llm_dispatch.cache_settle import (
+                        is_cold_write, record_stream_end)
+                    record_stream_end(_cache_conv_id,
+                                      cold_write=is_cold_write(usage))
                 except ImportError as _cs_err:
                     logger.debug('%s cache-settle record (async) unavailable: %s',
                                  tag, _cs_err)

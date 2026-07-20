@@ -366,6 +366,7 @@ BUCKET_TURN_BOUNDARY = 'turn_boundary_rebill'
 BUCKET_TTL_FLIP = 'ttl_flip'
 BUCKET_BREAKPOINT_LOST = 'breakpoint_lost'
 BUCKET_MID_WINDOW = 'cache_mid_out_of_window'
+BUCKET_WRITE_UNSETTLED = 'cache_write_unsettled'
 BUCKET_UPSTREAM = 'upstream_identical'
 BUCKET_BODY_CHANGE = 'body_change'
 BUCKET_NO_BREAK = 'no_break'
@@ -387,6 +388,8 @@ def classify_verdict(verdict: dict | None) -> str:
         return BUCKET_NO_BREAK
     if BUCKET_NAMESPACE in verdict:
         return BUCKET_NAMESPACE
+    if BUCKET_WRITE_UNSETTLED in verdict:
+        return BUCKET_WRITE_UNSETTLED
     if BUCKET_MID_WINDOW in verdict:
         return BUCKET_MID_WINDOW
     if BUCKET_TURN_BOUNDARY in verdict:
@@ -1079,6 +1082,62 @@ def detect_cache_break(
                 namespace_switch=_ns_switch,
                 namespace_verified_same=_ns_verified_same,
             )
+
+            # ★ CACHE WRITE-VISIBILITY RACE (Anthropic SDK #1451) — a
+            #   byte-identical, same-routing round whose read collapsed AND
+            #   which arrived within the cold-write settle window since THIS
+            #   conv's prior COLD write. A freshly-written cache entry is not
+            #   readable for ~15–20s (reproduced live: a cold prefix re-sent
+            #   every 4s missed at t=3s/t=10s, HIT at t≈16s), so a fast tool
+            #   loop that fires the next round ~8s later misses and re-writes
+            #   the whole prefix — NOT a server/gateway fault and NOT a client
+            #   byte change. Named FIRST (it is the most specific timing cause)
+            #   when the prior-round cold-write gap marker is present and inside
+            #   the window; the cache_settle gate is the fix that prevents it.
+            # The cold-write gap: prefer an explicit usage marker (test / future
+            # plumbing), else DERIVE it from internal state — the prior round
+            # was a COLD WRITE when its write dominated its read, and ``elapsed``
+            # is precisely the gap since that round ended. This keeps the
+            # detector self-contained (no dispatch plumbing) while staying
+            # overridable.
+            _cold_gap = None
+            if usage is not None:
+                _cold_gap = usage.get('_prev_cold_write_gap_s')
+            if _cold_gap is None:
+                _prev_was_cold = (prev_cache_write >= _MIN_CACHE_MISS_TOKENS
+                                  and prev_cache_read < prev_cache_write)
+                if _prev_was_cold and elapsed > 0:
+                    _cold_gap = elapsed
+            _within_settle_window = False
+            if _cold_gap is not None:
+                try:
+                    from lib.llm_dispatch.cache_settle import settle_cold_window_ms
+                    _within_settle_window = (
+                        float(_cold_gap) < (settle_cold_window_ms() / 1000.0))
+                except Exception as _cse:
+                    logger.debug('[CacheTrack] cold-window lookup failed: %s', _cse)
+            if (_within_settle_window and _wire_proven_identical
+                    and not _ns_switch and not client_changes
+                    and not prefix_mutation_break):
+                _unsettled_cause = (
+                    'prefix not read back though the wire bytes were '
+                    'byte-identical and the routing was identical — but this '
+                    f'round arrived only {float(_cold_gap):.1f}s after the '
+                    'previous round COLD-WROTE this prefix, inside the '
+                    '~15–20s Anthropic cache write-visibility window (SDK '
+                    '#1451): the just-written entry was not yet visible '
+                    'upstream, so the prefix was re-billed uncached. A '
+                    'CLIENT-side timing race (fast tool loop firing before the '
+                    'write settled), NOT a server/gateway miss — the '
+                    'cache-settle gate is meant to hold the next send until '
+                    'the write is visible.')
+                logger.warning(
+                    '[CacheTrack] conv=%s call=%d ⚠ CACHE WRITE UNSETTLED: '
+                    'cache_write=%d cache_read=%d (prev read=%d, cold-write gap='
+                    '%.1fs, gap=%.1fs) — prior cold write not yet visible.',
+                    conv_id[:8], prev.call_count, cache_write, cache_read,
+                    prev_cache_read, float(_cold_gap), elapsed)
+                return _finish({'cache_write_unsettled': _unsettled_cause})
 
             # ★ CACHE-NAMESPACE SWITCH — a body-identical round whose ROUTING
             #   flipped (upstream key / anthropic-beta / endpoint) is a

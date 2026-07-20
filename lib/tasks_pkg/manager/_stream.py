@@ -56,6 +56,22 @@ def stream_llm_response(task, body, tag='', on_tool_call_ready=None):
     """
     pfx = f'[Task {task["id"][:8]}][{tag}]'
     model = body.get('model', '?')
+    # ★ SESSION-STABLE TTL LATCH — single chokepoint guarantee. Every
+    #   task-based LLM send flows through here, so stamp the task id on the body
+    #   unconditionally (only when absent — never clobber a call site that set
+    #   its own latch key, e.g. the swarm agent's agent_id). add_cache_breakpoints
+    #   keys the CACHE_EXTENDED_TTL decision on _task_id via latch_extended_ttl();
+    #   a body that reaches the wire WITHOUT it silently falls back to the LIVE
+    #   GLOBAL CACHE_EXTENDED_TTL — which can differ from the value this task
+    #   latched, flipping the stable system/tools cache_control ttl (1h↔5m) and
+    #   re-keying the ENTIRE prefix (the live "<ttl-flip> sole culprit" re-key,
+    #   144 rounds in one log window). The main loop / reactive-compact /
+    #   fallback set it too, but a synthesize-answer / endpoint / future path can
+    #   forget; stamping HERE makes the latch impossible to bypass regardless of
+    #   which call site built the body.
+    _tid = task.get('id')
+    if _tid and not body.get('_task_id'):
+        body['_task_id'] = _tid
     # ★ Init to 0.0 (epoch) so the FIRST content/thinking delta checkpoints
     #   immediately, then settle into the _STREAM_CHECKPOINT_INTERVAL cadence.
     #   Starting at time.time() left a pre-first-checkpoint window where a

@@ -337,6 +337,46 @@ class ParallelBodyVerdictTest(unittest.TestCase):
                         'all-idle fan-out must trip the zero-deliverable guard')
 
 
+    def test_verifier_snapshot_block_uses_loop_aggregate(self):
+        # Inside a loop iteration the verifier-injected Deliverables Snapshot
+        # must reflect the AGGREGATE of all parallel branches, not whichever
+        # branch happened to write the single _last_producer_snapshot slot
+        # last. w1 writes twice, w2 once → aggregate sc_count must be 3.
+        eng = FlowExecutor(self._loop_with_parallel_body(), agent_runner=_MockRunner())
+        eng._cur_iteration = 1
+        eng._iter_producers = [
+            {'node_id': 'w1', 'role': 'worker', 'sc_count': 2,
+             'explore_count': 0, 'names': ['write_file', 'apply_diff'],
+             'reported': True},
+            {'node_id': 'w2', 'role': 'worker', 'sc_count': 1,
+             'explore_count': 1, 'names': ['insert_content'], 'reported': True},
+        ]
+        # The racy single slot holds only the LAST branch to finish (w2).
+        eng._last_producer_snapshot = dict(eng._iter_producers[1])
+        block = eng._append_deliverables_snapshot('CTX')
+        self.assertIn('3 state-changing', block)
+        self.assertNotIn('1 state-changing', block)
+        for name in ('write_file', 'apply_diff', 'insert_content'):
+            self.assertIn(name, block)
+
+    def test_verifier_snapshot_block_single_slot_outside_loop(self):
+        # Outside a loop (_cur_iteration == 0) the block must be byte-identical
+        # to the legacy single-slot behavior — no aggregation across the
+        # cross-node _iter_producers accumulation.
+        eng = FlowExecutor(self._loop_with_parallel_body(), agent_runner=_MockRunner())
+        eng._cur_iteration = 0
+        eng._iter_producers = [
+            {'node_id': 'a', 'role': 'worker', 'sc_count': 5,
+             'explore_count': 0, 'names': ['write_file'] * 5, 'reported': True},
+        ]
+        eng._last_producer_snapshot = {
+            'node_id': 'b', 'role': 'worker', 'sc_count': 1,
+            'explore_count': 0, 'names': ['apply_diff'], 'reported': True}
+        block = eng._append_deliverables_snapshot('CTX')
+        self.assertIn('1 state-changing', block)
+        self.assertNotIn('5 state-changing', block)
+
+
 class ReplanTest(unittest.TestCase):
     """Engine ports endpoint's CONTINUE_PLANNER + PLAN_DEFECT gate."""
 

@@ -925,9 +925,21 @@ class FlowExecutor:
         Mirrors endpoint's _format_deliverables_snapshot: tells the verifier
         how many state-changing vs exploratory calls the producer just made,
         with the endpoint pre-verdict hint when the producer did zero work.
+
+        Inside a loop iteration a parallel fan-out records N producers that
+        race on the single ``_last_producer_snapshot`` slot, so the block is
+        built from the deterministic per-iteration AGGREGATE — matching the
+        zero-deliverable / VU-churn guards, which already read the aggregate.
+        Outside a loop (``_cur_iteration == 0``) ``_iter_producers`` is a
+        cross-node accumulation, not a per-turn set, so the single slot is
+        kept there (byte-identical to the legacy behavior for linear flows).
         """
         with self._lock:
-            snap = dict(self._last_producer_snapshot)
+            in_loop = self._cur_iteration > 0
+        snap = self._aggregate_iter_producers() if in_loop else None
+        if not snap:
+            with self._lock:
+                snap = dict(self._last_producer_snapshot)
         if not snap or not snap.get('reported'):
             return context
         sc = snap.get('sc_count', 0)

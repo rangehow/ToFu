@@ -1,6 +1,15 @@
 # Project Journal
 
 
+### 2026-07-20 — 自主接手看板 epic「export.py 推送失败一律 force-push」:做完「零判断的安全半」(force 只在非快进 REJECT 时触发,其余错误重抛)+ 回归守卫,把「默认要不要 force」的策略翻转 [human-gated] 挂起(commit `4795d5f`,2 文件,新测 4/4 + 既有 export 套件 18 全绿 / collect 7682)。承接本会话早先自己上报的 `pt_6598ae21`,Project Brain 自动派发。
+- **先读全链路分清「能自己做」vs「owner 定」:** `_git_push` 把导出树镜像到 git remote。**dest 常被重新 `git init`(单 commit、与远端无共同祖先),所以远端合理地以「非快进」拒绝——那里的 `--force` 是刻意的、带告警的单向镜像行为,是 load-bearing 的**。真 bug 在:回退分支对 `git push -u` 抛的**任何** `RuntimeError` 都 force,包括 auth 失败/DNS/连接拒绝/权限/仓库不存在——那些场景 force 无用,且若瞬时错误之后恢复还会**冲掉远端历史**。
+- **打比方:** 「历史分叉了就强推覆盖」在一次性镜像里是对的;但代码现在是「**只要推送失败(哪怕是网断、密码错)就强推**」——等于家门没锁好就直接拆墙重砌,风险全压在偶发故障上。
+- **修法(零判断安全增益、不动 load-bearing 行为):** 新增纯函数 `_is_nonff_push_rejection(stderr)`,匹配 git 的非快进/rejected 信号(`non-fast-forward`/`[rejected]`/`failed to push some refs`/`fetch first`/`updates were rejected`/`behind`),并显式排除 auth/网络/权限/仓库不存在等硬失败(即使消息里混了 reject 标记也判硬失败)。回退分支改成:**仅当分类为非快进拒绝才 force,否则 `raise`** 交外层报告——不再盲目覆盖。
+- **owner 门槛(已挂起):** 把**默认**从「分叉就 force」翻成「分叉就 abort」是行为变更、影响共享远端且难回滚,而 force-on-diverge 对「新树重导出」模式是必要的——属 owner 判断,`project_board_block` 打 `[human-gated]`。
+- **tests(`test_export_push_force_guard.py` 4 测,纯字符串分类、无 git/网络):** 非快进拒绝(3 种真实 stderr)→ 可 force;auth/could-not-read-username/DNS/连接拒绝/权限/仓库不存在/空串/无关文本 → 不可 force;auth+rejected 混合消息 → 判硬失败(不 force);大小写不敏感。既有 4 个 export 套件 18 测无回归(合计 22 绿)。collect-only 7682,唯一 error 仍是既知 `pty_supported` flake。
+- **git 纪律(共享 HEAD):** `reset -q HEAD .` → 仅 add 2 文件 → `commit -F- -- <2 路径>` → `git show HEAD --name-only` = 仅 2 文件,NO LEAK。`4795d5f`。
+
+
 ### 2026-07-20 — 自主接手看板 epic「网关关键词 sanitizer 全 no-op」:做完「零判断的诚实修复」+ 回归守卫,把真正需政策判断的替换值 [human-gated] 挂起(commit `7bc0542`,2 文件,新测 6/6 绿 / collect 7673)。承接本会话早先自己上报的 `pt_871a26c7`(全仓 bug 扫描分出的 TICKET),由 Project Brain 自动派发。
 - **先分清「能自己做的」和「必须 owner 定的」:** `_GATEWAY_BLOCKED_TERMS` 5 个词全是**恒等占位**(`'习主席':'习主席'`)——sanitizer 一直空转。但真正的交付物(填入真实替换值)**两重门槛**:①给政治敏感词选替换(委婉词 or 隐形分隔符技巧绕过公司内容过滤)是**内容/政策判断**,不该由 agent 凭空发明;②有效性**本地无法验证**——只能拿真网关 `aigc.sankuai.com` 探(owner 于 2026-04-03 探过),CI/dev 不可达。发明一个未验证的绕过还宣称「修好了」= 违反诚实报告。
 - **但绝不 silent no-op——抓到一个相邻的、零判断的真 bug:** 原循环对恒等项也走 `text.replace(x,x)` 并记日志 `[Sanitize] Replaced 1 term(s): 习主席→习主席`——**声称清洗了、实则啥没干**。修:循环里 `if blocked == safe: continue` 跳过恒等占位,日志恢复诚实;并给 `_GATEWAY_BLOCKED_TERMS` 加 NOTE 说明当前 inert + owner-gated 缘由 + 如何激活(把某个值改成真实替换即生效)。

@@ -481,7 +481,7 @@ def marker_signature(body: dict) -> dict[str, Any]:
     not a breakpoint LOSS).
     """
     sig: dict[str, Any] = {'count': 0, 'msg': [], 'sys': 0, 'tools': 0,
-                           'ttls': []}
+                           'ttls': [], 'msg_blocks': []}
     if not isinstance(body, dict):
         return sig
 
@@ -497,11 +497,25 @@ def marker_signature(body: dict) -> dict[str, Any]:
         return n
 
     # Messages (both envelopes: OpenAI shape + translated Anthropic shape).
+    # ``_cum_blocks`` tracks each message-marker's CUMULATIVE content-block
+    # position in Anthropic's block space — the unit its ~20-block cache
+    # lookback is measured in. ``mid_anchor_out_of_window`` uses these positions
+    # to tell when the rolling tail can no longer reach the mid stepping-stone
+    # (the sawtooth whole-prefix rewrite). A block ≈ one content entry; an
+    # assistant ``tool_calls`` turn also emits one tool_use block per call.
+    _cum_blocks = 0
     for msg in body.get('messages') or ():
         if not isinstance(msg, dict):
+            _cum_blocks += 1
             continue
         content = msg.get('content')
+        _blocks_here = (len(content) if isinstance(content, list)
+                        else (1 if content else 0))
+        if isinstance(msg.get('tool_calls'), list):
+            _blocks_here += len(msg['tool_calls'])
+        _blocks_here = max(1, _blocks_here)
         if not isinstance(content, list):
+            _cum_blocks += _blocks_here
             continue
         marked = [bi for bi, b in enumerate(content)
                   if isinstance(b, dict) and b.get('cache_control')]
@@ -511,10 +525,12 @@ def marker_signature(body: dict) -> dict[str, Any]:
             key = canonical_key(entry)
             for bi in marked:
                 sig['msg'].append((key, bi))
+                sig['msg_blocks'].append(_cum_blocks + bi)
                 sig['count'] += 1
                 _cc = content[bi].get('cache_control')
                 if isinstance(_cc, dict):
                     _ttls.append((f'msg:{key}', _cc.get('ttl', '')))
+        _cum_blocks += _blocks_here
 
     # Hoisted system (Anthropic path: list of blocks) + tools.
     system = body.get('system')
@@ -621,6 +637,31 @@ def markers_ttl_flipped(prev: dict | None, cur: dict | None) -> bool:
         if _pm[slot] != _cm[slot]:
             return True
     return False
+
+
+def mid_anchor_out_of_window(cur: dict | None,
+                             lookback: int = 20) -> bool:
+    """True when the mid-history stepping-stone breakpoint sits FARTHER than
+    Anthropic's ~``lookback``-block cache window behind the rolling tail — so
+    the tail can no longer extend the mid entry and the whole prefix past the
+    mid is re-written on a byte-identical body.
+
+    Reads the cumulative message-marker BLOCK positions ``marker_signature``
+    records in ``msg_blocks``. The two message-level markers are the mid anchor
+    (earliest) and the rolling tail (latest); their block span is what must stay
+    within the lookback. This is a CLIENT-side breakpoint-LAYOUT miss (the
+    add_cache_breakpoints trail/step params let the stone slip past the window),
+    NOT a server/gateway fault — detect_cache_break names it so a periodic
+    read-collapse on a byte-identical, same-routing round is never laundered
+    into "upstream cache miss". Inert when the fingerprint is missing / pre-fix
+    (no ``msg_blocks``) or fewer than 2 message markers exist (no mid armed).
+    """
+    if not isinstance(cur, dict):
+        return False
+    blocks = cur.get('msg_blocks')
+    if not isinstance(blocks, list) or len(blocks) < 2:
+        return False
+    return (max(blocks) - min(blocks)) > lookback
 
 
 def _strip_cache_control(obj: Any) -> Any:

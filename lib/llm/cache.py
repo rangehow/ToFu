@@ -71,7 +71,19 @@ _MID_LOOKBACK = 20
 # caches once, is read back for the next _MID_STEP rounds, then jumps forward.
 # _MID_TRAIL < 20 so the stone stays inside the rolling tail's lookback window.
 _MID_STEP = 8
-_MID_TRAIL = 12
+# _MID_TRAIL is measured in MESSAGES, but Anthropic's ~20-block lookback is in
+# CONTENT BLOCKS. A tool round emits ~3 blocks (assistant prose + tool_use +
+# tool_result), and the stone only JUMPS forward every _MID_STEP messages, so
+# between jumps the rolling tail keeps pulling away: with _MID_TRAIL=12 the
+# mid→tail BLOCK span sawtoothed 17→20→23→26 and spent HALF the rounds PAST 20,
+# on which the tail could no longer extend the mid entry → the whole prefix
+# past the mid was re-written every such round (measured live: read collapsing
+# to the ~74–80k static floor on a byte-identical, same-routing body, then
+# mislabelled "upstream_identical"). _MID_TRAIL=4 keeps the peak block span at
+# ~16 (< the 20-block lookback with margin) across prose / empty / parallel-
+# tool shapes, while the stone stays quantized (jumps every _MID_STEP rounds,
+# never on the early-user turn). Verified by test_cache_mid_anchor_window.py.
+_MID_TRAIL = 4
 
 
 def _is_prefill_converted(msg) -> bool:

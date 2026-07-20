@@ -14,6 +14,7 @@ from typing import Any
 from lib.log import get_logger
 from lib.tasks_pkg.wire_fingerprint import (
     diff_canonical, markers_regressed, markers_ttl_flipped,
+    mid_anchor_out_of_window,
 )
 from lib.tasks_pkg.cache_tracking._state import (
     CacheState,
@@ -178,6 +179,21 @@ def _resolve_break_cause(
                 'the client placed did not survive to the wire — e.g. dropped '
                 'in the tool_result translation) — the body past the last '
                 'surviving marker was re-billed uncached')
+    # ── Mid-anchor slipped past the ~20-block cache lookback window ──
+    # The mid-history stepping-stone drifted FARTHER than Anthropic's ~20-block
+    # lookback behind the rolling tail, so the tail could not extend the prior
+    # cache entry and the whole prefix past the mid was re-written — on a
+    # byte-identical body. This is a CLIENT-side breakpoint-LAYOUT miss (the
+    # add_cache_breakpoints trail/step params), NOT a server miss — name it so
+    # it is never laundered into "upstream cache miss".
+    if prefix_culprits and '<mid-out-of-window>' in prefix_culprits:
+        return ('mid-history cache anchor drifted past Anthropic\'s ~20-block '
+                'cache lookback window behind the rolling tail — the tail could '
+                'not extend the prior cache entry, so the whole prefix past the '
+                'mid anchor was re-billed uncached even though the body bytes '
+                'were identical. A client-side breakpoint-layout miss (the '
+                'stepping-stone trail/step params), NOT a server-side or '
+                'gateway fault.')
     # ── TRUE-byte divergence with an IDENTICAL lossy-canonical fingerprint ──
     # canonical_messages matched (same tokenized content) yet the RAW serialized
     # bytes of a prefix message changed. The lossy canonicaliser is blind to
@@ -349,6 +365,7 @@ BUCKET_NAMESPACE = 'cache_namespace_switch'
 BUCKET_TURN_BOUNDARY = 'turn_boundary_rebill'
 BUCKET_TTL_FLIP = 'ttl_flip'
 BUCKET_BREAKPOINT_LOST = 'breakpoint_lost'
+BUCKET_MID_WINDOW = 'cache_mid_out_of_window'
 BUCKET_UPSTREAM = 'upstream_identical'
 BUCKET_BODY_CHANGE = 'body_change'
 BUCKET_NO_BREAK = 'no_break'
@@ -370,6 +387,8 @@ def classify_verdict(verdict: dict | None) -> str:
         return BUCKET_NO_BREAK
     if BUCKET_NAMESPACE in verdict:
         return BUCKET_NAMESPACE
+    if BUCKET_MID_WINDOW in verdict:
+        return BUCKET_MID_WINDOW
     if BUCKET_TURN_BOUNDARY in verdict:
         return BUCKET_TURN_BOUNDARY
     _cause = ' '.join(str(v) for v in verdict.values()).lower()
@@ -377,11 +396,15 @@ def classify_verdict(verdict: dict | None) -> str:
                                   'model', 'no_cache_reuse')):
         if 'ttl marker flipped' in _cause or 'new cache key' in _cause:
             return BUCKET_TTL_FLIP
+        if 'lookback window' in _cause:
+            return BUCKET_MID_WINDOW
         if 'breakpoint lost' in _cause:
             return BUCKET_BREAKPOINT_LOST
         return BUCKET_BODY_CHANGE
     if 'ttl marker flipped' in _cause or 'new cache key' in _cause:
         return BUCKET_TTL_FLIP
+    if 'lookback window' in _cause:
+        return BUCKET_MID_WINDOW
     if 'breakpoint lost' in _cause:
         return BUCKET_BREAKPOINT_LOST
     if 'upstream cache miss' in _cause:
@@ -649,6 +672,24 @@ def detect_cache_break(
                 _wire_culprits.append('<breakpoint-lost>')
             if markers_ttl_flipped(prev.wire_markers, _cur_wire_markers):
                 _wire_culprits.append('<ttl-flip>')
+            # ── Mid-anchor slipped past the ~20-block lookback (the sawtooth
+            #    whole-prefix rewrite) ──
+            # The mid-history stepping-stone trails the rolling tail so the tail
+            # can extend the prior cache entry, but if the trail/step params let
+            # it slip FARTHER than Anthropic's ~20-block lookback the tail can
+            # no longer reach it and the whole prefix past the mid is re-written
+            # — on a BYTE-IDENTICAL body, which would otherwise launder into the
+            # "upstream cache miss" verdict. Only meaningful when the read
+            # actually collapsed this round (a same-layout warm round reads back
+            # fine); gate it on _read_collapsed so a within-window round with a
+            # benign write is not falsely named. This is the LAST body-invisible
+            # CLIENT cause, mirroring <ttl-flip> / <breakpoint-lost>.
+            if (not _was_compaction
+                    and mid_anchor_out_of_window(_cur_wire_markers)
+                    and prev_cache_read > _MIN_CACHE_MISS_TOKENS
+                    and cache_read < prev_cache_read * 0.95
+                    and (prev_cache_read - cache_read) >= _MIN_CACHE_MISS_TOKENS):
+                _wire_culprits.append('<mid-out-of-window>')
             # ── TRUE-byte divergence (the lossy-canonical blind spot) ──
             # canonical_messages is deliberately lossy: it drops cache_control,
             # collapses str↔block, canonicalises tool-arg key order, and DOES
@@ -1059,6 +1100,29 @@ def detect_cache_break(
                     conv_id[:8], prev.call_count, cache_write, cache_read,
                     prev_cache_read, elapsed, cause_str)
                 return _finish({'cache_namespace_switch': cause_str})
+
+            # ★ MID-ANCHOR OUT-OF-WINDOW — a byte-identical round whose mid
+            #   stepping-stone drifted past the ~20-block lookback so the tail
+            #   could not extend it → the whole prefix past the mid was
+            #   re-written. It is a CLIENT-side breakpoint-LAYOUT miss and MUST
+            #   NOT fall through to server_side/upstream (the "blame the
+            #   gateway" mislabel this fix targets). It wins over the generic
+            #   byte-identical / prefix_mutation verdicts (it is the SPECIFIC
+            #   named layout cause) but still defers to a concrete body change
+            #   (client_changes) which is a distinct, differently-named client
+            #   culprit. Surfaced under its own key so the record buckets it as
+            #   cache_mid_out_of_window, never upstream_identical.
+            if ('<mid-out-of-window>' in (_wire_culprits or [])
+                    and not client_changes):
+                logger.warning(
+                    '[CacheTrack] conv=%s call=%d ⚠ MID-ANCHOR OUT OF WINDOW: '
+                    'cache_write=%d cache_read=%d (prev read=%d, gap=%.1fs) — '
+                    'mid stepping-stone drifted past the ~20-block lookback; '
+                    'tail could not extend the prior entry → whole prefix past '
+                    'the mid re-billed on a byte-identical body. Cause: %s',
+                    conv_id[:8], prev.call_count, cache_write, cache_read,
+                    prev_cache_read, elapsed, cause_str)
+                return _finish({'cache_mid_out_of_window': cause_str})
 
             # ★ Prefix mutation is the most ACTIONABLE and most CERTAIN cause —
             #   it means our own code rewrote bytes inside the cached prefix,

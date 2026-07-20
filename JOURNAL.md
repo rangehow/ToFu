@@ -1,6 +1,14 @@
 # Project Journal
 
 
+### 2026-07-20 — 重启迟迟不落地(4h watcher 未等到),owner 给了不依赖重启的过渡硬证据项:真实体走新代码。已交付 `debug/cache_replay_newcode_bridge.py`(commit `29fe340`),#1/#2 PASS、#3 诚实挂活体。
+- **背景:** 活体三数(ttl_flip→0、mid_oow→0、CLEAN 占比降)仍是金标准、不撤销;但 :15000 一直没重启(watcher 跑满 120 poll、`CacheMidMode` 仍 0 次)。owner 要「从真实体走真实新代码」拿最强过渡证据,同时给最终活体读数排雷。
+- **#1 误报门(18c04a6)PASS——用生产 `detect_cache_break` 真跑:** 构造真实前缀突变体对(round-2 改写已缓存消息)+ 会触发 `<mid-out-of-window>` 的越窗几何,喂进新代码 → bucket=`body_change`(日志实打 `PREFIX MUTATION BREAK changed=[assistant.content]`,真元凶浮现、不再被布局标签劫持)。**佐证硬数字:真实旧日志里 233 轮 mid_oow 全部 `body_identical=False` → 100% 是误报,新门下 mid_oow 桶 233→0。**
+- **#2 drop-default(6bcac3e)PASS——用生产 `add_cache_breakpoints` 真跑:** 无 env 时 resolved mode=`drop`,长度 10/20/30/40 的真实体上 body marker 恒=1(仅 tail、**零 mid**)。
+- **#3 ttl-flip(a34beae)诚实挂活体:** 是**发送路径**属性(`stream_llm_response` chokepoint 补 `_task_id`),进程内检测重放**不能**证,继续挂活体后验(ttl_flip→0),**不在此冒充**。
+- **边界(再次明确):** 这是「真实体 + 真实新字节码」的最强过渡证据,证了 #1/#2 在新代码里确实按预期动作;但**成本真实下降的金标准仍是重启后活体日志**(CLEAN 占比降 + 样本过 200 + boot 自报 drop)。在那之前不发 TASK_DONE。工装齐全:`cache_cost_prepost_restart.py`(活体验收)+ `cache_replay_newcode_bridge.py`(过渡桥证)。
+
+
 ### 2026-07-20 — Prompt-cache 追零 miss **目标真正生效**:floor-retry 默认翻开 + 重发上限 1→2(commit `c462e34`,2 文件)。owner 裁定:一个验收数据齐全、生产路径证明能把 miss 打到 0 的手段,留在默认关=目标没真正生效,不符合「零 miss at all costs」。照做,按 drop 翻默认同纪律。
 - **三改(`floor_retry.py`):** ①`TOFU_CACHE_FLOOR_RETRY` 默认 `'0'`→`'1'`(默认开,`=0` 一键回滚)。②`TOFU_CACHE_FLOOR_RETRY_MAX` 默认 `'1'`→`'2'`——验收里 mrsfs9d6 R8 / mt1ijef R14 都是**首发重发撞 503、第 2 次才恢复**,上限=1 会漏这类轮;有 stop-on-throttle + 硬顶 3 兜底,提到 2 才真正趋零。③docstring 同步。
 - **failing-first + NEUTER(`test_default_gate_is_ON_and_max_is_2`):** delenv 后断言 `floor_retry_enabled()` True + `floor_retry_max()`==2。**NEUTER 实证**:把模块默认改回 `'0'` → 该测试立即变红;改回 `'1'` 复绿。证明「默认已翻」是 load-bearing 的。9/9 绿。

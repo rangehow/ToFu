@@ -1,6 +1,16 @@
 # Project Journal
 
 
+### 2026-07-20 — 自主接手看板 epic「conv_window.js 上翻加载滚动锚点测错元素」:根因坐实并根修(commit `4a0b3a8`,2 文件,conv-window 全套 19 绿含新 NEUTER / collect 7693)。承接本会话早先自己上报的 `pt_0ef1d30b`,Project Brain 自动派发;此 epic 无 owner 门槛,已 `project_board_complete`。
+- **坐实哪个才是真滚动框(epic 全靠这点):** `styles.css:327` **`.chat-container{overflow-y:auto}`** 是真滚动框;`.chat-inner` 只有 `max-width/margin/padding`、**无 overflow**,永不滚动(`scrollTop` 恒 0、`scrollHeight===clientHeight`)。HTML `#chatContainer` 外层包 `#chatInner` 内层。全项目其余处(`_getChatContainer`/`isNearBottom`/`scrollToBottom`/滚动到底 pill)都正确用 `#chatContainer`,唯独 `loadEarlierMessages` 用了 `#chatInner`。
+- **两处同源 bug:** ①上翻预取前量 `prevTop/prevHeight` 用 `#chatInner`、prepend 后又把 `scrollTop = prevTop + (newH-oldH)` 写回 `#chatInner`——`prevTop` 恒 0、写的是不滚动的元素 → 每次插入更早的一页,**视口跳到顶部**;②`wireConvWindowScrollLoader` 的 scroll 监听也挂在 `#chatInner`——一个永不 fire `scroll` 事件的框 → 滚到顶自动预取的**触发器本身是死的**。
+- **打比方:** 你想「插入旧内容后让当前这条停在原位」,却对着一块**根本不会滚的贴纸**量尺寸、又把结果写回那块贴纸;真正滚动的是外面那扇窗——所以每翻一页,窗「哐」地弹回最顶。
+- **修法(纯机械、行为守恒):** 量、回钉、挂监听全部改到 `#chatContainer`(与 `_getChatContainer` 对齐)。锚点算式不变(`prevTop + (newHeight - prevHeight)`),只是作用到对的元素上。
+- **为何此前没被测出(关键):** 既有 scroll-up harness 把 `getElementById` 直接 stub 成 `() => null`,锚点几何从没被执行过——所以 bug 一路溜过。新测给 `#chatContainer` 真实可变的 `scrollTop/scrollHeight`、给 `#chatInner` 一个不滚动的 stub,断言 prepend 后锚点落在 container 的 `1300`(=500+(2000-1200))且 inner 未被写。**NEUTER 实证:把量测元素改回 `#chatInner` → 新测立即变红**,改回 `#chatContainer` 复绿,证明断言 load-bearing。
+- **验证:** `node --check` 绿;conv-window 三套件 19 测全绿(14 既有 + 1 新,+read/frontend);collect-only 7693,唯一 error 仍是既知 `pty_supported` flake。
+- **git 纪律(共享 HEAD):** `reset -q HEAD .` → 仅 add 2 文件 → `commit -F- -- <2 路径>` → `git show HEAD --name-only` = 仅 2 文件,NO LEAK。`4a0b3a8`。
+
+
 ### 2026-07-20 — 自主接手看板 epic「export.py 推送失败一律 force-push」:做完「零判断的安全半」(force 只在非快进 REJECT 时触发,其余错误重抛)+ 回归守卫,把「默认要不要 force」的策略翻转 [human-gated] 挂起(commit `4795d5f`,2 文件,新测 4/4 + 既有 export 套件 18 全绿 / collect 7682)。承接本会话早先自己上报的 `pt_6598ae21`,Project Brain 自动派发。
 - **先读全链路分清「能自己做」vs「owner 定」:** `_git_push` 把导出树镜像到 git remote。**dest 常被重新 `git init`(单 commit、与远端无共同祖先),所以远端合理地以「非快进」拒绝——那里的 `--force` 是刻意的、带告警的单向镜像行为,是 load-bearing 的**。真 bug 在:回退分支对 `git push -u` 抛的**任何** `RuntimeError` 都 force,包括 auth 失败/DNS/连接拒绝/权限/仓库不存在——那些场景 force 无用,且若瞬时错误之后恢复还会**冲掉远端历史**。
 - **打比方:** 「历史分叉了就强推覆盖」在一次性镜像里是对的;但代码现在是「**只要推送失败(哪怕是网断、密码错)就强推**」——等于家门没锁好就直接拆墙重砌,风险全压在偶发故障上。

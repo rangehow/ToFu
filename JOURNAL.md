@@ -1,6 +1,16 @@
 # Project Journal
 
 
+### 2026-07-20 — Prompt-cache「每轮都在烧钱」深挖:推翻自己最初诊断,查出 `cache_mid_out_of_window` 是**头号成本+检测器误报**,分两 commit 落地(检测器根修 `c311e34` + 布局实验骨架/replay harness `8d7218f`;46 缓存测试绿 / collect 7693)。owner 报「多轮后 prompt cache 频繁失效、成本越滚越高」,要求查日志定根因。
+- **先用数据定位(734 条 live `[CacheRoundRecord]`):** 全部重写 token 的 **68%(22.6M/33.2M)花在失效轮**;头号是 `cache_mid_out_of_window` **10.3M token(占全部 29%、失效的 43%),108 轮平均白烧 95k**,且 **21:03 重启后最新 live 码仍在触发** → 说明 journal 记的 `_MID_TRAIL=4`「根修」没堵住。各会话 mid_oow 占比 13–20%。
+- **推翻最初假设(关键、owner 也认可):** 我先以为是「并行工具轮让 mid→tail 块跨度冲破 20」。实测**真实 mid→tail 块跨度最大只有 14、`parallel=20` 也从不越 20** → 「按块收窄 trail」是空操作。逐轮追踪发现**真机制**:mid 锚点每 `_MID_STEP=8` 条消息(≈每 4 轮)向前跳一次,**跳跃轮**读回坍塌到 74095 静态地板(100/125 次)、gap 中位数 22.8s(**非 TTL 过期**)——锚点一移动,上游没法从旧缓存续上、一路退回只剩系统前缀。占比 13–20% = 跳跃节奏,数据链自洽。
+- **检测器的独立 bug(可安全离线修,commit `c311e34`):** OpenAI 协议路径下 system 留在 `messages[0]`、标记落在**块 0**,`mid_anchor_out_of_window` 用 `max(msg_blocks)-min()` = `tail-0` = 队尾绝对块位,长对话必 >20 → 无视真实 mid→tail 几何、几乎恒真误报,污染成本归因计数。**根修:** `marker_signature` 新增 `body_msg_blocks`(排除 system/head 标记),predicate 只测 body 跨度、对旧签名回落 `msg_blocks`。纯检测器改,不动布局。测试 +5(Part C):真 OpenAI body(system@0 + 真 mid→tail=14)→ 修前 True 误报、修后 False;**NEUTER**(源码回退到裸 `msg_blocks`)→ 重新变红(输出实锤 `msg_blocks=[0,47,55]` span=55 vs `body_msg_blocks=[47,55]` span=8)。
+- **布局根修改为 env-gated 实验(commit `8d7218f`),因为它赌一个离线证不了的续接语义:** 数学上单个 mid 锚点在正文过 ~40 块后无法同时桥接 system 和 tail(单跳最优 = ceil(tail/2)),但「平滑挪 vs 去 mid」哪个对取决于 Anthropic 续接行为。做成 `TOFU_CACHE_MID_MODE=current|drop|smooth|cascade`(默认 `current` 字节等价、零风险;smooth/cascade 保留名回落 current,不让未验证布局进热路径)。`_mid_placement_mode()` 门控 `_mid_armed`(它已同时管预留+放置),`drop` 干净移除 mid。
+- **offline replay harness 的意外结论(与 owner 猜想相反):** 建模 Anthropic 逐轮 20 块回看续接,跑「小轮+大并行批」真实序列——**去掉 mid 反而更糟**(current head-collapse=1、drop=3)。mid 垫脚石**恰好桥接了单轮塞进 15+ 块的大并行批**,光靠 tail 标记够不着批次那头。所以布局解**不是「删 mid」**,而是「大批次后仍保留可达锚点」。真实 token 量级待重启后 live A/B 裁决。
+- **诚实边界:** 检测器修法安全、已验证;布局部分只落了**默认零风险的可切换骨架 + 建模数据**,真正的省钱验收(mid_oow floor-collapse 占比从 13–20% 显著下降 + 总 break write 占比下降)**需重启带 env 跑真流量做 A/B**,离线证不了续接语义。
+- **git 纪律(共享 HEAD、~130 sibling 文件在工作树):** 两次都 `reset -q HEAD .` → 仅 `git add -- <我的2文件>` → `git diff --cached --numstat` 确认 → `git commit -F- -- <路径>` → `git show HEAD --name-only` 验证仅含我的文件,NO LEAK。
+
+
 ### 2026-07-20 — 自主接手看板 epic「conv_window.js 上翻加载滚动锚点测错元素」:根因坐实并根修(commit `4a0b3a8`,2 文件,conv-window 全套 19 绿含新 NEUTER / collect 7693)。承接本会话早先自己上报的 `pt_0ef1d30b`,Project Brain 自动派发;此 epic 无 owner 门槛,已 `project_board_complete`。
 - **坐实哪个才是真滚动框(epic 全靠这点):** `styles.css:327` **`.chat-container{overflow-y:auto}`** 是真滚动框;`.chat-inner` 只有 `max-width/margin/padding`、**无 overflow**,永不滚动(`scrollTop` 恒 0、`scrollHeight===clientHeight`)。HTML `#chatContainer` 外层包 `#chatInner` 内层。全项目其余处(`_getChatContainer`/`isNearBottom`/`scrollToBottom`/滚动到底 pill)都正确用 `#chatContainer`,唯独 `loadEarlierMessages` 用了 `#chatInner`。
 - **两处同源 bug:** ①上翻预取前量 `prevTop/prevHeight` 用 `#chatInner`、prepend 后又把 `scrollTop = prevTop + (newH-oldH)` 写回 `#chatInner`——`prevTop` 恒 0、写的是不滚动的元素 → 每次插入更早的一页,**视口跳到顶部**;②`wireConvWindowScrollLoader` 的 scroll 监听也挂在 `#chatInner`——一个永不 fire `scroll` 事件的框 → 滚到顶自动预取的**触发器本身是死的**。

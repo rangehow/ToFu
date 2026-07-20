@@ -1,6 +1,20 @@
 # Project Journal
 
 
+### 2026-07-20 — 收尾 §3.4 图标清理 epic:sibling 让出 lease 后扫掉剩余 30 个工具栏/模式菜单 ✓ 勾选(commit `79e070e`,单文件,icon-box 守卫 8/8 / tag 平衡 / collect 7724)。承接本会话早先自己上报的 `pt_afda5285`,Project Brain 再次派发——这次 lease 已释放,故完成并 `project_board_complete`。
+- **先判 lease 是否释放(关键,决定扫 or 再 block):** 上轮把这 30 个 ✓ 延后并 `[sibling] path=index.html` 挂起,因两个 sibling(`mrtaaooa` 工具栏重设计、`mrta9qhe` chat-mode UI)正 live 编辑该区。本轮复查:`project_peer_status` 显示**两者都已不活跃**、`git log 5d93a3a..HEAD -- index.html`=**空**、`git status --porcelain index.html`=**clean**(无未提交 sibling WIP)。`mrtaaooa` 当初的重设计「未启动/未授权/可能不落地」确实没落,且其留言明说「proceed on your full list」。→ lease 释放,安全扫。
+- **做了(4 个 `replace_all`,共 30 处 ✓→内联 SVG check + `.icon-box`):** 2 `.flow-menu-check`(Chat/Studio 模式菜单)+ 8 `.submenu-item-check`(extras 抽屉开关)+ 12 `.mobile-sheet-item-check`(可见)+ 8 `.mobile-sheet-item-check`(默认 opacity:0)。这些勾选纯靠 CSS `opacity`(`.active .X-check{opacity:1}`)显隐,把 glyph 包成 span→svg **完全保留** toggle 行为。
+- **验证:** grep 确认 index.html 再无 ✓/✕/⬇/⛶/↻/⚠️ UI glyph(仅剩 `★` 注释 + `console.error` 日志串,非图标);tag 平衡(span 332/332、svg 192/192);icon-box 对齐守卫 8/8 绿;collect-only 7724(唯一 error 既知 `pty_supported` flake)。合并本轮 + 上轮 `5d93a3a`,epic 全部完成。
+- **git 纪律(共享 HEAD):** `reset -q HEAD .` → 仅 add index.html → `commit -F- -- index.html` → `git show HEAD --name-only` = 仅 1 文件,NO LEAK。`79e070e`。epic `project_board_complete`。
+
+
+### 2026-07-20 — 两件小事:①闭合 pre-existing 测试基线 epic(commit `46f4017`)②修正 drop-default A/B 的量级夸大(sibling 发现排序 confound)。
+- **epic `pt_38ffa895`(自主派发,test-only):** `test_assistant_with_tool_calls_not_wrapped` 断言的是 **pre-fix 行为**(assistant+tool_calls 的 str content 不包装),但已被 HEAD committed 的 `ab161bf`(`{content}` floor-miss fix)取代——该 fix **故意**把非空此类 content 归一化成单块,让锚定只切换 cache_control key(旧 str↔block flip 每轮重billing 前缀)。代码是权威且已提交(`git diff HEAD`=0),测试才是陈旧的。修法:把 1 条陈旧测试拆成 2 条断言**当前契约**——非空→包装成 `[{type:text}]`;空→保持裸 str(幸存的 carve-out,绝不造 `[{text:''}]` 假块)。实测两形态验证。62 测绿 / collect 7724。epic 已 `project_board_complete`。
+- **⚠️ 修正 drop-default(`6bcac3e`)commit note 的量级(sibling mrtagv1p 复核发现):** 我引用的「3.1× 写削减 / drop 6.7%」是 **warm-biased**——sibling 早先的 drop 是**跟在 current 之后跑**的,而网关缓存是**全局共享状态**,current 已把近乎相同的前缀字节预热过,所以那个 6.7% 沾了 current 的光。**cold-vs-cold 真值:current 42.9% vs drop 36.8%——drop 仍赢但只 ~6pp,不是 4.3×。** 另外 floor 值本身 run-to-run 变(74095/28654/0)= 网关侧随机信号。**结论不变:drop ≥ current(cold),drop-default 落地仍正确;但省钱幅度我此前夸大了,诚实记正。**
+- **tail-fix HOLD(sibling 数据未坐实):** 「20 块回看从 mid 移到 tail」假设在 mrt1ijef 上被**证伪**——每轮 lookback 仅 3-7 块、+blk 2-6、从不 >20,却仍 37% floor-collapse(byte-stable)。但该 conv 无大并行批(+blk 最大 6),测不了 >20 的情形。sibling 正在:(a) 测网关随机方差、(b) 找带大 fan-out 的 conv 真测 >20、(c) 建 cold/interleaved 对照。**我按约定不在数据坐实前动 tail 布局。**
+- **净结论(诚实收口):** 本轮 4 个 cache commit(`18c04a6` 误报门 / `a34beae` ttl chokepoint / `6bcac3e` drop-default / `46f4017` 测试基线)方向都对、离线验证完整,但**真实省钱幅度待重启后真日志 + cold-vs-cold 真机复测确认**,不能只报离线/warm-biased 数字。owner 北极星 zero-miss 仍未达成——残留坍塌的真机制尚未定位(tail 假设已被单会话证伪)。
+
+
 ### 2026-07-20 — Prompt-cache 最大一笔省钱落地:`TOFU_CACHE_MID_MODE` 默认 `current`→`drop`(owner 授权,commit `6bcac3e`,2 文件 +163/-23,57 缓存测试绿含 Part E 5 测 + NEUTER / collect 7723)。承接 sibling mrtagv1p 的真机 A/B ground truth。
 - **真机 A/B(sibling 跑,3 个真实会话,frozen byte-STABLE 前缀,R1 排除):** drop 把 74k floor-collapse 率 ~34%→~8%、re-billed 写 token **3.1×(943k→306k/50 轮)**,且 **drop 从不输**。证明 mid 垫脚石在 byte-stable 前缀上是**净负、是坍塌驱动本身**——彻底否掉我上上轮 offline 模型的「drop 更糟」误判(owner 早预警过我的模型低估 7×)。
 - **修法:** `_mid_placement_mode()` 默认从 `current` 改 `drop`;`_mid_armed` 已同时门控预留+放置,drop 干净移除 mid marker。`current` 保留为**显式 env opt-in**(`TOFU_CACHE_MID_MODE=current` 秒回退);reserved 名(smooth/cascade)与 typo 现回落 `drop`(不再回落净负的 current)。

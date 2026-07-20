@@ -1,5 +1,15 @@
 # Project Journal
 
+### 2026-07-20 — 编排校验器 WARNING 的「最后一公里」闭环:studio 从"只报数量"改为"显示告警正文",否则我上一轮加的并行 verdict-channel 告警是 no-op(commit `cb9500e`,2 文件 +169/-9,新测 jsdom 12/12 + NEUTER 证伪 / collect 7629)。owner 要求闭环——"WARNING 只有真的传到作者眼前才算 real,否则该考虑硬规则"。
+- **端到端审计(带 file:line 证据):** 后端链路**完好**——`routes/api_v1/orchestrations.py:126` `/validate` 原样返回 `{ok,errors,warnings}`;create/update 成功时 `resp['warnings']=verdict['warnings']`(L197/L237)、失败时也带上(L175/L215);前端 `Api.orchestrations.validate/create/update`(`api.js:250`)也在。**唯一断点在最后一跳**:`orchestration.js` 的 `_orchSave`(旧 L2137)只拼 `Saved "X" (1 warning)`——**只有数量、没有正文**;AI-compose(旧 L1645)同病。作者看到"1 warning"却不知道**哪个节点、怎么改** → 我上一轮那条点名节点+给修法的告警等于被吞。
+- **打比方:** 快递(告警正文)从仓库一路送到楼下,最后保安只在群里说"你有 1 个包裹",却不告诉你是哪个、放哪了——等于没送到。这轮把"包裹内容"直接摆到作者面前。
+- **修法(最小、纯前端、目标文件 HEAD-clean):** `_orchToast(text,isErr,opts)` 新增 `opts{detail,warn,dwell}`——detail 渲染成正文块、dwell 拉长到 6.5s、warn 加醒目边框;新 `_orchWarnToast(prefix,warnings)` 把后端 `warnings[]` 逐条显示;save + compose 两处都改走它。无告警时 → 退回原样纯 toast(零行为变化)。附 `.orch-toast-detail`/`.is-warn` 三主题继承的 CSS。
+- **为何不上硬规则(error):** owner 给的备选是"要么接上显示、要么考虑硬结构规则"。选前者——因为 fresh-context 一次性扇出是 composer **推荐且合法**的范式,把并行区里有 verdict-feeding producer 一律判 error 会误伤合法草稿;WARNING+可读正文已让作者在画布上看到并自主规避,契约级根治仍留给 human-gated 的 exactly-once 改造。
+- **tests-first + NEUTER:** 新 jsdom harness 从**真·shipped** `orchestration.js` 里 brace-match 抽出 `_orchToast`+`_orchWarnToast`(整文件 2500 行、含大量顶层 Api/window 引用,故只提这两个纯 DOM helper 而非 eval 全文),断言告警正文(违规节点 id `['w1']` + 修法提示 `order-dependent`)真进 DOM、warn class/detail block 就位、无告警→无 detail。**NEUTER**(抽掉 detail 渲染)令 5 条断言变红——证明测试 load-bearing,精确复现"告警变 no-op"这个回归。
+- **诚实边界:** 纯前端逻辑+CSS,由 12 jsdom 断言 + NEUTER + 相邻 76 编排/校验绿 + `--collect-only` 7629(唯一 error 是既知 sibling `test_run_command_pty_streaming.py` 的 `pty_supported` flake)验证。`orchestration.js` **不在 `_BUNDLE_FILES`**、走 index.html 自带 `<script src=...?v=>` 标签加载(整个 studio 都这样),故我改的是已加载文件、生效路径不变;**用户可见生效需硬刷**(`?v=` 未变则可能命中缓存,owner 侧改 mtime/版本或强刷即可)。真实体感(保存含并行区违规的流时 toast 显示告警正文)待硬刷后真机抽验。
+- **git 纪律(共享 HEAD、160 文件 sibling/aborted WIP 在场,`api.js` 亦 dirty 但无需改):** `reset -q HEAD .` → 仅 add 我的 2 文件(orchestration.js HEAD-clean)→ 扫 staged 无 sibling 符号 → `commit -F- -- <2 路径>` → 泄漏探针 grep -v = 仅我 2 文件。JOURNAL clean-blob 单独提交、不碰 sibling 未提交条目。`cb9500e`。
+
+
 ### 2026-07-20 — 编排引擎并行验证「反馈/指令通道」竞态:审计确认为**真实可达**(非仅代码内 latent),用校验器 WARNING 把不确定性暴露给画布作者(commit `dcdf753`,2 文件 +153,新测 4/4 failing-first+2 负控,204 编排测试全绿 / collect 7617)。承接上一轮 owner 点名的方向 1——审计 `_pending_feedback`/`_pending_directive` 这条与交付轴同源的竞态是否也有确定性缺口。
 - **结论(带证据的判定):** 是真实缺口,不是"只在代码里 latent"。证据链:①feedback/directive 在**节点运行中**被读(`_compose_shared_context`)、节点**跑完后**才清(`_run_role` L683),读→清窗口横跨整个节点执行,且都门控在 `isolation=='shared-context'`;②由任意 verifier 角色**写入**(`_VERIFIER_ROLES={critic,reviewer,virtual_user}`);③校验器**不禁止** verifier / shared-context 节点出现在 parallel 分支里;④parallel 分支跑在真实 `ThreadPoolExecutor` 上 → 区域内 ≥1 个 shared-context producer(读者)或 verifier(写者)时,并发分支就**在这条单值通道上竞争**,谁先清谁就把别人的反馈/指令吞掉 → 投递顺序不确定。
 - **打比方:** 上一轮修的"交付计数"像多个工人的产出可以**求和汇总**(聚合确定化);但反馈/指令是一张**只能用一次的入场券**——三个工人同时伸手抢同一张券,聚合帮不上忙,只能提醒作者"别把要用券的人放进并行区"。

@@ -661,6 +661,11 @@ def health_check():
         result['pid'] = _bi.PID
         result['bootId'] = _bi.BOOT_ID
         result['cacheFixGen'] = _bi.cache_fix_gen()
+        # Source-tree fingerprint (HEAD + uncommitted tracked edits) so the
+        # restart client can prove the NEW process loaded the code the operator
+        # edited — not just that SOME new process answered. None on a
+        # non-git deploy; the client then falls back to the bootId-only rule.
+        result['codeFingerprint'] = _bi.code_fingerprint()
     except Exception as _bi_e:
         logger.debug('[Health] boot identity unavailable: %s', _bi_e)
 

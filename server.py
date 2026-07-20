@@ -2726,6 +2726,19 @@ if __name__ == '__main__':
     except Exception as _cfg_e:  # never let a diagnostic line block boot
         _boot_logger.warning('[CacheFixGen] self-report failed: %s', _cfg_e)
 
+    # ── Source-tree fingerprint (restart-applied-my-edits ground truth) ──
+    # Warm + freeze the code fingerprint at boot so it reflects the on-disk
+    # source THIS process actually loaded (HEAD + uncommitted tracked edits).
+    # The restart UI captures the OLD process's digest and only declares
+    # "your changes are live" when the NEW process reports a DIFFERENT one.
+    try:
+        from lib import boot_identity as _bi2
+        _fp = _bi2.code_fingerprint()
+        _boot('[CodeFingerprint] head=%s dirty=%s digest=%s'
+              % (_fp.get('head'), _fp.get('dirty'), _fp.get('digest')))
+    except Exception as _fp_e:  # never let a diagnostic line block boot
+        _boot_logger.warning('[CodeFingerprint] self-report failed: %s', _fp_e)
+
     _boot('Ready — handing off to Hypercorn.')
     try:
         sys.stderr.write('\n' + _banner + '\n\n')

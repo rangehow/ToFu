@@ -1642,8 +1642,7 @@ async function _orchAiSend() {
   if (result.ok && result.definition) {
     // Keep the current backend id (this is an edit of the open flow).
     _orchApplyDefinition(result.definition, _orchCurrentId);
-    var warns = (result.validation && result.validation.warnings) || [];
-    _orchToast('Graph updated' + (warns.length ? ' (' + warns.length + ' warning' + (warns.length > 1 ? 's' : '') + ')' : ''));
+    _orchWarnToast('Graph updated', (result.validation && result.validation.warnings) || []);
   }
 }
 
@@ -2134,9 +2133,7 @@ async function _orchSave() {
       return;
     }
     if (data.id) _orchCurrentId = data.id;
-    var warn = (data.warnings && data.warnings.length)
-      ? ' (' + data.warnings.length + ' warning' + (data.warnings.length > 1 ? 's' : '') + ')' : '';
-    _orchToast('Saved "' + _orchName + '"' + warn);
+    _orchWarnToast('Saved "' + _orchName + '"', data.warnings);
   } catch (e) {
     _orchToast('Save failed: ' + e.message, true);
   }
@@ -2219,12 +2216,41 @@ function _orchApplyDefinition(def, id) {
   if (needsLayout && _orchNodes.length) _orchTidy({ silent: true });
 }
 
-function _orchToast(text, isErr) {
+function _orchToast(text, isErr, opts) {
+  opts = opts || {};
   var el = document.createElement('div');
-  el.className = 'orch-toast' + (isErr ? ' is-err' : '');
-  el.textContent = text;
+  el.className = 'orch-toast' + (isErr ? ' is-err' : '') + (opts.warn ? ' is-warn' : '');
+  el.appendChild(document.createTextNode(text));
+  // Optional detail lines (e.g. the actual validation-warning text) so the
+  // author sees WHAT is wrong, not just a count. Rendered as a smaller block
+  // under the headline; kept up longer so it is readable.
+  var detail = opts.detail;
+  if (detail && detail.length) {
+    var lines = Array.isArray(detail) ? detail : [String(detail)];
+    var box = document.createElement('div');
+    box.className = 'orch-toast-detail';
+    lines.forEach(function (ln) {
+      var row = document.createElement('div');
+      row.textContent = String(ln);
+      box.appendChild(row);
+    });
+    el.appendChild(box);
+  }
   document.body.appendChild(el);
-  setTimeout(function () { el.style.opacity = '0'; setTimeout(function () { el.remove(); }, 300); }, 2600);
+  var dwell = opts.dwell || 2600;
+  setTimeout(function () { el.style.opacity = '0'; setTimeout(function () { el.remove(); }, 300); }, dwell);
+  return el;
+}
+
+// Surface validator warnings to the author as readable text (not just a
+// count). ``prefix`` is the headline (e.g. 'Saved "Flow"'); ``warnings`` is
+// the string[] straight from the backend {ok,errors,warnings} contract.
+function _orchWarnToast(prefix, warnings) {
+  var warns = (warnings || []).filter(function (w) { return w; });
+  if (!warns.length) { _orchToast(prefix); return; }
+  var n = warns.length;
+  var head = prefix + ' — ' + n + ' warning' + (n > 1 ? 's' : '');
+  _orchToast(head, false, { warn: true, detail: warns, dwell: 6500 });
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -2474,6 +2500,10 @@ function _orchInjectStyles() {
 .orch-conn-row{flex:1;font-size:11px;color:var(--text-secondary);text-align:center}
 .orch-toast{position:fixed;bottom:28px;left:50%;transform:translateX(-50%);z-index:9999;background:var(--bg-tertiary);border:1px solid var(--border-light);color:var(--text-primary);font-size:13px;padding:11px 18px;border-radius:var(--orch-r-md);box-shadow:var(--orch-elev-pop);transition:opacity .3s}
 .orch-toast.is-err{border-color:var(--error-border);color:var(--error-text)}
+.orch-toast.is-warn{border-color:var(--warning-border,var(--accent));max-width:min(520px,90vw)}
+.orch-toast-detail{margin-top:7px;font-size:11.5px;line-height:1.5;color:var(--text-secondary);text-align:left;max-height:40vh;overflow:auto}
+.orch-toast-detail>div{padding:3px 0}
+.orch-toast-detail>div+div{border-top:1px solid var(--border-light)}
 .orch-m-only{display:none}
 .orch-sheet-head{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border-bottom:var(--orch-rail);font-size:13px;font-weight:800;color:var(--text-secondary)}
 .orch-sheet-hint{padding:9px 14px;font-size:11.5px;line-height:1.5;color:var(--text-tertiary);border-bottom:var(--orch-rail)}

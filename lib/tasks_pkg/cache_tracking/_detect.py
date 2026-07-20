@@ -687,12 +687,13 @@ def detect_cache_break(
             # fine); gate it on _read_collapsed so a within-window round with a
             # benign write is not falsely named. This is the LAST body-invisible
             # CLIENT cause, mirroring <ttl-flip> / <breakpoint-lost>.
-            if (not _was_compaction
-                    and mid_anchor_out_of_window(_cur_wire_markers)
-                    and prev_cache_read > _MIN_CACHE_MISS_TOKENS
-                    and cache_read < prev_cache_read * 0.95
-                    and (prev_cache_read - cache_read) >= _MIN_CACHE_MISS_TOKENS):
-                _wire_culprits.append('<mid-out-of-window>')
+            #
+            # NOTE: the ``<mid-out-of-window>`` layout token is appended LATER
+            # (just before ``_wire_prefix_changed`` is computed), AFTER every
+            # content-culprit detector (canonical diff, <bytes>, <hoisted>
+            # region) has run — so a genuine prefix mutation ALWAYS blocks the
+            # byte-identity gate and the layout token can never hijack the
+            # verdict of a real body change. See the gated append below.
             # ── TRUE-byte divergence (the lossy-canonical blind spot) ──
             # canonical_messages is deliberately lossy: it drops cache_control,
             # collapses str↔block, canonicalises tool-arg key order, and DOES
@@ -771,7 +772,30 @@ def detect_cache_break(
                         'changed=[%s]',
                         conv_id[:8], prev.call_count + 1,
                         ', '.join(_region_culprits) or '?')
+            # ── Mid-anchor slipped past the ~20-block lookback (LAYOUT-ONLY,
+            #    byte-identity-gated) ──
+            # Appended HERE, AFTER every content-culprit detector (canonical
+            # diff + <bytes> + <hoisted> region), and ONLY when NONE of them
+            # fired (``not _wire_culprits``): this is a LAYOUT-ONLY cause that
+            # only explains a miss when the prefix BYTES were identical (the mid
+            # marker moved but no content changed). Otherwise the miss is a
+            # genuine PREFIX MUTATION and the layout token would merely CO-OCCUR
+            # (the read collapse is a shared symptom) while its verdict branch
+            # preempts ``prefix_mutation`` / ``body_change`` — MASKING the real,
+            # actionable culprit. Live evidence: 128/128 real floor-collapses
+            # previously labelled cache_mid_out_of_window had
+            # body_identical=False, i.e. the body DID change and the layout
+            # token was hijacking the verdict. Gated on _read_collapsed so a
+            # within-window round with a benign write is not falsely named.
+            if (not _wire_culprits
+                    and not _was_compaction
+                    and mid_anchor_out_of_window(_cur_wire_markers)
+                    and prev_cache_read > _MIN_CACHE_MISS_TOKENS
+                    and cache_read < prev_cache_read * 0.95
+                    and (prev_cache_read - cache_read) >= _MIN_CACHE_MISS_TOKENS):
+                _wire_culprits.append('<mid-out-of-window>')
             _wire_prefix_changed = bool(_wire_culprits)
+
             if _wire_prefix_changed:
                 # ── Position evidence (the "which part & was it already
                 #    cached" ground truth) ──

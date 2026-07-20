@@ -456,6 +456,114 @@ def test_detector_NEUTER_without_block_positions_launders_to_upstream():
         f'byte-identical upstream verdict — got: {r}')
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+#  Part D — the MISATTRIBUTION fix: <mid-out-of-window> must NOT hijack the
+#           verdict of a round whose prefix BYTES genuinely changed.
+#
+#  Live evidence (this turn, 734 CacheRoundRecords): 128/128 real floor-collapses
+#  bucketed cache_mid_out_of_window had body_identical=False — the body DID
+#  change. The layout token was appended on any read-collapse regardless of
+#  byte-identity and its verdict branch preempted prefix_mutation/body_change,
+#  MASKING the true, actionable culprit (a per-round prefix mutation). The fix
+#  gates the token on the prefix being otherwise byte-clean (no content culprit),
+#  and appends it AFTER every content-culprit detector.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _changed_body_pair():
+    """Two rounds whose SHARED prefix bytes DIFFER (a real content mutation):
+    round-2 rewrites an already-sent message's content. Returns per-round
+    (msgs, canonical_fp, static, wire_bytes)."""
+    from lib.tasks_pkg.wire_fingerprint import (
+        canonical_messages, static_prefix_hash, wire_byte_prefix,
+    )
+    base = [{'role': 'system', 'content': 'STATIC SYSTEM'},
+            {'role': 'user', 'content': 'hello'},
+            {'role': 'assistant', 'content': 'analysis v1 of the prefix'},
+            {'role': 'user', 'content': 'more'},
+            {'role': 'assistant', 'content': 'tail turn'}]
+    # round 2: mutate an ALREADY-cached prefix message (index 2) in place.
+    changed = [dict(m) for m in base]
+    changed[2] = {'role': 'assistant', 'content': 'analysis v2 REWRITTEN prefix'}
+
+    def _pack(msgs):
+        return (msgs, canonical_messages(msgs), static_prefix_hash(msgs),
+                wire_byte_prefix(msgs))
+    return _pack(base), _pack(changed)
+
+
+def test_body_change_not_mislabelled_mid_out_of_window():
+    """★ THE MISATTRIBUTION GUARD (failing-first before the byte-identity gate).
+    A round whose prefix BYTES changed AND whose mid anchor is out of window AND
+    whose read collapsed must be bucketed by its REAL culprit (prefix mutation /
+    body change), NEVER cache_mid_out_of_window (a layout-only cause). Pre-fix
+    the <mid-out-of-window> token was appended regardless of byte-identity and
+    its verdict branch preempted the real culprit."""
+    from lib.tasks_pkg.cache_tracking import _cache_states, detect_cache_break
+    from lib.tasks_pkg.cache_tracking._detect import classify_verdict
+    from lib.tasks_pkg.wire_fingerprint import routing_fingerprint
+
+    _cache_states.clear()
+    conv = 'mid-oow-bodychange'
+    (m1, fp1, st1, wb1), (m2, fp2, st2, wb2) = _changed_body_pair()
+    r_same = routing_fingerprint(key_hash='keyAAA',
+                                 anthropic_beta='prompt-caching-2024',
+                                 endpoint='https://gw/claude/messages')
+    # mid anchor far from tail (span 30 > 20) on BOTH rounds — the geometry that
+    # WOULD add <mid-out-of-window> if it were not byte-identity-gated.
+    mk = {'count': 4, 'sys': 1, 'tools': 1, 'ttls': [],
+          'msg': [('mid', 0), ('tail', 0)], 'msg_blocks': [12, 42],
+          'body_msg_blocks': [12, 42]}
+    u1 = {'cache_read_tokens': 260000, 'cache_creation_input_tokens': 8000,
+          '_wire_fp': fp1, '_wire_static': st1, '_wire_bytes': wb1,
+          '_wire_routing': dict(r_same), '_wire_markers': dict(mk)}
+    u2 = {'cache_read_tokens': 79615, 'cache_creation_input_tokens': 190000,
+          '_wire_fp': fp2, '_wire_static': st2, '_wire_bytes': wb2,
+          '_wire_routing': dict(r_same), '_wire_markers': dict(mk)}
+    detect_cache_break(conv, m1, None, 'claude-opus-4', usage=dict(u1))
+    r = detect_cache_break(conv, m2, None, 'claude-opus-4', usage=dict(u2))
+    assert r is not None, 'expected a break (prefix mutated + read collapsed)'
+    assert 'cache_mid_out_of_window' not in r, (
+        f'a round whose prefix BYTES changed must NOT be labelled '
+        f'cache_mid_out_of_window (layout-only cause) — the real prefix '
+        f'mutation must win: {r}')
+    assert classify_verdict(r) != 'cache_mid_out_of_window', (
+        f'bucket must reflect the real body-change culprit, not the layout '
+        f'co-symptom: bucket={classify_verdict(r)} verdict={r}')
+
+
+def test_mid_out_of_window_still_fires_when_body_identical():
+    """Companion guard: the byte-identity gate must NOT over-correct — a truly
+    byte-identical round with the same out-of-window geometry MUST still be
+    named cache_mid_out_of_window (the legitimate layout miss). This is the
+    NEUTER's opposite pole: proves the gate discriminates on byte-identity, not
+    that it disabled the bucket wholesale."""
+    from lib.tasks_pkg.cache_tracking import _cache_states, detect_cache_break
+    from lib.tasks_pkg.cache_tracking._detect import classify_verdict
+    from lib.tasks_pkg.wire_fingerprint import routing_fingerprint
+
+    _cache_states.clear()
+    conv = 'mid-oow-identical'
+    msgs, fp, st, wb = _identical_body()
+    r_same = routing_fingerprint(key_hash='keyAAA',
+                                 anthropic_beta='prompt-caching-2024',
+                                 endpoint='https://gw/claude/messages')
+    mk = {'count': 4, 'sys': 1, 'tools': 1, 'ttls': [],
+          'msg': [('mid', 0), ('tail', 0)], 'msg_blocks': [12, 42],
+          'body_msg_blocks': [12, 42]}
+    u1 = {'cache_read_tokens': 260000, 'cache_creation_input_tokens': 8000,
+          '_wire_fp': fp, '_wire_static': st, '_wire_bytes': wb,
+          '_wire_routing': dict(r_same), '_wire_markers': dict(mk)}
+    u2 = {'cache_read_tokens': 79615, 'cache_creation_input_tokens': 190000,
+          '_wire_fp': fp, '_wire_static': st, '_wire_bytes': wb,
+          '_wire_routing': dict(r_same), '_wire_markers': dict(mk)}
+    detect_cache_break(conv, msgs, None, 'claude-opus-4', usage=dict(u1))
+    r = detect_cache_break(conv, msgs, None, 'claude-opus-4', usage=dict(u2))
+    assert r is not None
+    assert classify_verdict(r) == 'cache_mid_out_of_window', (
+        f'a byte-IDENTICAL out-of-window collapse must still be named the '
+        f'layout miss (the gate discriminates, not disables): {r}')
+
+
 def test_classify_verdict_maps_mid_out_of_window_bucket():
     """The single-source bucketer maps the new verdict key to its own bucket so
     live records + offline replay count it identically (never as upstream)."""

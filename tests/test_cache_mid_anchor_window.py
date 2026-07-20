@@ -49,6 +49,21 @@ import pytest  # noqa: E402
 pytestmark = pytest.mark.unit
 
 
+@pytest.fixture(autouse=True)
+def _isolate_mid_mode_env():
+    """Save/restore TOFU_CACHE_MID_MODE around every test so a test that pins a
+    mode (e.g. the CURRENT-mode geometry tests) never leaks into another test
+    (e.g. the drop-DEFAULT tests, which must run with the env UNSET)."""
+    _prev = os.environ.get('TOFU_CACHE_MID_MODE')
+    try:
+        yield
+    finally:
+        if _prev is None:
+            os.environ.pop('TOFU_CACHE_MID_MODE', None)
+        else:
+            os.environ['TOFU_CACHE_MID_MODE'] = _prev
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  Shared helpers
 # ─────────────────────────────────────────────────────────────────────────────
@@ -130,9 +145,12 @@ class TestMidAnchorWithinBlockWindow:
         growing tool loop, the mid→tail BLOCK gap must NEVER exceed the ~20-block
         lookback — else the tail cannot extend the mid entry and the prefix is
         re-written that round. Old params sawtooth to 26–30 → this FAILS; the
-        fix keeps every round ≤ lookback."""
+        fix keeps every round ≤ lookback. (CURRENT mode — the DEFAULT is now
+        `drop`, which arms no mid; this test guards the current-mode geometry
+        still reachable via the env opt-in.)"""
         import os as _os
         _os.environ.setdefault('CACHE_EXTENDED_TTL', '1')
+        _os.environ['TOFU_CACHE_MID_MODE'] = 'current'
         import lib as _lib
         _lib.CACHE_EXTENDED_TTL = True
         from lib.llm.cache import add_cache_breakpoints
@@ -159,9 +177,11 @@ class TestMidAnchorWithinBlockWindow:
 
     def test_mid_anchor_stays_quantized(self):
         """The anchor must still JUMP (occupy few distinct positions over many
-        rounds), not move every round — else it is always a fresh write."""
+        rounds), not move every round — else it is always a fresh write.
+        (CURRENT mode opt-in — the DEFAULT `drop` arms no mid.)"""
         import os as _os
         _os.environ.setdefault('CACHE_EXTENDED_TTL', '1')
+        _os.environ['TOFU_CACHE_MID_MODE'] = 'current'
         import lib as _lib
         _lib.CACHE_EXTENDED_TTL = True
         from lib.llm.cache import add_cache_breakpoints
@@ -179,9 +199,11 @@ class TestMidAnchorWithinBlockWindow:
 
     def test_mid_anchor_never_on_early_user(self):
         """The anti-oscillation invariant survives the trail shrink: the mid /
-        tail marker must never collapse onto the first user turn (msg[1])."""
+        tail marker must never collapse onto the first user turn (msg[1]).
+        (CURRENT mode opt-in — the DEFAULT `drop` arms no mid.)"""
         import os as _os
         _os.environ.setdefault('CACHE_EXTENDED_TTL', '1')
+        _os.environ['TOFU_CACHE_MID_MODE'] = 'current'
         import lib as _lib
         _lib.CACHE_EXTENDED_TTL = True
         from lib.llm.cache import add_cache_breakpoints
@@ -193,9 +215,12 @@ class TestMidAnchorWithinBlockWindow:
                 f'r={r}: a marker landed on the early user turn (msg[1])'
 
     def test_total_never_exceeds_four(self):
-        """Even after the fix, total markers never exceed Anthropic's hard 4."""
+        """Even after the fix, total markers never exceed Anthropic's hard 4.
+        (CURRENT mode opt-in — it arms the mid, the worst case for marker
+        count; the DEFAULT `drop` places strictly fewer.)"""
         import os as _os
         _os.environ.setdefault('CACHE_EXTENDED_TTL', '1')
+        _os.environ['TOFU_CACHE_MID_MODE'] = 'current'
         import lib as _lib
         _lib.CACHE_EXTENDED_TTL = True
         from lib.llm.cache import add_cache_breakpoints
@@ -294,6 +319,9 @@ class TestHeadMarkerDoesNotPoisonSpan:
         """
         import os as _os
         _os.environ.setdefault('CACHE_EXTENDED_TTL', '1')
+        # This class tests the CURRENT-mode mid-anchor geometry, so it must opt
+        # INTO current mode (the DEFAULT is now `drop`, which arms no mid).
+        _os.environ['TOFU_CACHE_MID_MODE'] = 'current'
         import lib as _lib
         _lib.CACHE_EXTENDED_TTL = True
         from lib.llm.cache import add_cache_breakpoints
@@ -562,6 +590,109 @@ def test_mid_out_of_window_still_fires_when_body_identical():
     assert classify_verdict(r) == 'cache_mid_out_of_window', (
         f'a byte-IDENTICAL out-of-window collapse must still be named the '
         f'layout miss (the gate discriminates, not disables): {r}')
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Part E — the LAYOUT DEFAULT flip: drop the mid stepping-stone by default.
+#
+#  Live-A/B ground truth (2026-07-20, sibling real-gateway replay, 3 real
+#  conversations, frozen byte-STABLE prefixes, R1 excluded): dropping the mid
+#  stone cut the ~74k floor-collapse rate ~34%→~8% and re-billed write tokens
+#  3.1x (943k→306k across 50 rounds), and `drop` NEVER lost. The mid
+#  stepping-stone is NET-NEGATIVE on byte-stable prefixes — so TOFU_CACHE_MID_MODE
+#  now defaults to `drop`. `current` stays reachable as an explicit env opt-in
+#  for instant rollback.
+# ─────────────────────────────────────────────────────────────────────────────
+
+@pytest.mark.unit
+class TestDropIsDefault:
+
+    def _long_body(self):
+        import lib as _lib
+        _lib.CACHE_EXTENDED_TTL = True
+        return _grow(24, prose=True, parallel=1)  # long enough that current would arm a mid
+
+    def test_default_places_no_mid_marker(self):
+        """★ THE DEFAULT-FLIP GUARD (failing-first before the drop default).
+        With NO env set, a long conversation body must carry ONLY the tail body
+        marker — the mid stepping-stone is NOT placed. Pre-flip (default
+        `current`) this body armed a mid → 2 body markers → FAILS."""
+        import os as _os
+        _os.environ.setdefault('CACHE_EXTENDED_TTL', '1')
+        _os.environ.pop('TOFU_CACHE_MID_MODE', None)   # DEFAULT path
+        from lib.llm.cache import add_cache_breakpoints, _mid_placement_mode
+        assert _mid_placement_mode() == 'drop', (
+            'the default mid mode must be drop (the live-A/B winner)')
+        body = self._long_body()
+        add_cache_breakpoints(body)
+        marks = _msg_marker_indices(body)
+        assert len(marks) == 1, (
+            f'default (drop) must place exactly ONE body marker (the tail), no '
+            f'mid stepping-stone — got body-marker indices {marks}')
+
+    def test_NEUTER_current_default_would_arm_two_markers(self):
+        """NEUTER — proves the default flip is load-bearing. Explicitly select
+        `current` (the pre-flip default) on the SAME body → the mid arms and
+        there are 2 body markers again. This is exactly what the drop default
+        removes."""
+        import os as _os
+        _os.environ.setdefault('CACHE_EXTENDED_TTL', '1')
+        _os.environ['TOFU_CACHE_MID_MODE'] = 'current'
+        from lib.llm.cache import add_cache_breakpoints, _mid_placement_mode
+        assert _mid_placement_mode() == 'current'
+        body = self._long_body()
+        add_cache_breakpoints(body)
+        marks = _msg_marker_indices(body)
+        assert len(marks) == 2, (
+            f'NEUTER: current mode must arm the mid → 2 body markers (the layout '
+            f'the drop default removes) — got {marks}')
+
+    def test_env_rollback_to_current_still_works(self):
+        """Emergency rollback path must stay functional: TOFU_CACHE_MID_MODE=
+        current re-arms the mid on a long body, so an operator can revert the
+        default flip instantly without a code change."""
+        import os as _os
+        _os.environ.setdefault('CACHE_EXTENDED_TTL', '1')
+        _os.environ['TOFU_CACHE_MID_MODE'] = 'current'
+        from lib.llm.cache import add_cache_breakpoints
+        body = self._long_body()
+        add_cache_breakpoints(body)
+        assert len(_msg_marker_indices(body)) == 2, \
+            'env opt-in to current must restore the mid marker (rollback path)'
+
+    def test_reserved_modes_fall_back_to_drop_default(self):
+        """A reserved-but-unimplemented mode (smooth/cascade) or a typo must
+        degrade to the DEFAULT (drop), never silently ship an unvalidated
+        layout NOR revert to the net-negative current."""
+        import os as _os
+        from lib.llm.cache import _mid_placement_mode
+        for _m in ('smooth', 'cascade', 'bogus-typo', ''):
+            _os.environ['TOFU_CACHE_MID_MODE'] = _m
+            assert _mid_placement_mode() == 'drop', (
+                f'reserved/unknown mode {_m!r} must fall back to the drop '
+                f'default, got {_mid_placement_mode()!r}')
+
+    def test_drop_default_never_exceeds_four_markers(self):
+        """The drop default must still respect Anthropic's hard 4-marker ceiling
+        (trivially — it places fewer — but guard it explicitly)."""
+        import os as _os
+        _os.environ.setdefault('CACHE_EXTENDED_TTL', '1')
+        _os.environ.pop('TOFU_CACHE_MID_MODE', None)
+        from lib.llm.cache import add_cache_breakpoints
+        for r in (2, 8, 16, 30, 50):
+            body = _grow(r)
+            add_cache_breakpoints(body)
+            n = 0
+            for m in body['messages']:
+                c = m.get('content')
+                if isinstance(c, list):
+                    n += sum(1 for x in c
+                             if isinstance(x, dict) and x.get('cache_control'))
+            for t in body.get('tools') or []:
+                fn = t.get('function', {})
+                if isinstance(fn, dict) and fn.get('cache_control'):
+                    n += 1
+            assert n <= 4, f'r={r}: drop default exceeded 4 markers ({n})'
 
 
 def test_classify_verdict_maps_mid_out_of_window_bucket():

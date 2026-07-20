@@ -1,6 +1,22 @@
 # Project Journal
 
 
+### 2026-07-20 — Prompt-cache 追零 miss 收官:证明「网关随机地板可被客户端『原样重发』趋零」——retry-on-floor 把等效 floor% 从 ~20-24% 压到 0-12%(harness 加 retry arm,真网关实测)。owner 拒绝停在「服务端随机、不可修」,点出我自己命名却没拉的最后一根杠杆:既然同字节重发每次塌的轮不同(IID),那检测到塌陷就原样重发一次,概率上就能趋零。照做,坐实这是真·客户端可控手段。
+- **给 harness 加 `--retry-on-floor N` arm:** 检测到某轮 byte-STABLE 塌陷(read 掉到 ~28k 地板 + 大 write、且无内容突变)就把**完全相同的 body** 原样重发最多 N 次,记录是否有某次「爬出地板」。因为塌陷是每请求独立的(前证:4 次同字节跑塌不同轮),重发就是重新掷骰子:单轮 P(floor)=p,重发 N 次后残余 ~p^(N+1)。
+- **真网关实测(两对话):**
+
+| conv | mode | 原始 floor% | 重发后等效 floor% | 重发次数 |
+|---|---|---|---|---|
+| mrt1ijef | drop, retry=2 | 23.5% | **11.8%** | 7 |
+| mrsfs9d6 | drop, retry=3 | 20.0% | **0.0%** | 5 |
+
+  mrsfs9d6:3 次塌陷全部重发恢复(R2 第 3 次爬出、R13/R15 第 1 次就爬出)→ **等效 floor 归零**。mrt1ijef 只降到 11.8% 是因为**两次重发撞上 503 限流**(retry1 报 503、剩余 retry 仍地板)——不是重发无效,是被限流污染。
+- **机制定性(比 IID 更精确):** 重发能恢复,说明塌陷往往是**写可见性滞后**——塌陷轮的缓存写「稍后」才对读可见,延迟原样重发正好命中它(与 SDK #1451 同源)。所以「原样重发」是一根**真实的客户端杠杆**,不是玄学。唯一的实际干扰是网关 503 限流会吃掉重发预算。
+- **诚实边界 + 交付判据:** ①重发有真实成本(每次塌陷多一个小请求),owner 明确不在乎成本、要零 miss,所以这是可接受的 trade。②在 503 频繁时重发会被限流削弱——生产实现需带退避 + 限流感知。③这仍是**缓解(mitigation)非根治**——根治在网关侧。④**尚未落地生产**:这轮只在 harness 里证明了机制有效,把它接进 orchestrator 的真实重发路径(检测 floor-collapse → 原样重发 byte-stable body)是**下一步、需 owner 拍板的独立改动**(动 `_sse_core`/stream 重试语义,宽爆炸半径)。
+- **给网关团队的问题报告(待起草):** 带四组同字节不同塌陷 + tail-span 恒<20 + 重发可恢复的证据,坐实是 Bedrock/网关侧缓存写可见性随机 + 写后读滞后,请服务端修——这是真正够到零的根治路径。
+- **产出:** harness 加 retry-on-floor arm(`debug/`,不入库);guard 测试仍 10/10 绿。无新生产代码改动(retry 接入 orchestrator 待 owner 批)。
+
+
 ### 2026-07-20 — Prompt-cache 追零 miss:owner 批准 drop 落地(sibling commit `6bcac3e`),但**残余塌陷证伪了 tail-span 假设、坐实是网关侧随机**——用真网关 replay 做三重对照实验钉死「无客户端可修的杠杆」。owner 北极星是零 miss,盯住 drop 后仍有轮次在「字节全稳」下 FLOOR-COLLAPSE,要我量 tail 块跨度、排除限流、给出零判据。我照做,并诚实推翻了 owner 与我自己先前的假设。
 - **给 harness 加 tail 块几何探针:** 每轮在 `openai_body_to_anthropic` 后把所有消息内容块拍平,量 `total_blocks`、tail 断点块位、`lookback_needed`(=本轮队尾距上轮 tail 断点的块数)、`append_delta`(本轮追加块数=并行批大小)。这是 owner 假设「20-block 回看从 mid 移到 tail」的判据。
 - **假设被证伪(关键、诚实优先):** mrt1ijef 的 drop 臂**每一轮 lookback 只有 3–7 块、append_delta 只有 2–6,从不超过 20**,可**仍有 13–37% 轮次 FLOOR-COLLAPSE**(全程 byte-STABLE)。即残余塌陷**不是** tail 回看几何。且此对话没有大并行批(+blk 最大 6),无法在其上测「>20 块爆发」——需要另找带大 fan-out 的对话才能测那个 case。

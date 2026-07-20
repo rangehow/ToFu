@@ -76,14 +76,32 @@ def _metrics(rows: list) -> dict:
                    if r.get('culprits')
                    and all(c == '<ttl-flip>' for c in r['culprits']))
     mid = buckets.get('cache_mid_out_of_window', 0)
+    tbr = buckets.get('turn_boundary_rebill', 0)
     tot_w = sum(int(r.get('cache_write', 0)) for r in rows)
     brk_w = sum(int(r.get('cache_write', 0))
                 for r in rows if r.get('bucket') != 'no_break')
+    # ── CLEAN-BASIS break-write (the owner's anti-pollution guard) ──
+    # A conversation's round-1 carries a LEGITIMATE first write (no prior prefix
+    # to read back) — counting it as a 'break' inflates the ratio purely from
+    # conversation-length structure, unrelated to cache invalidation. So the
+    # honest cost metric excludes round-1 (call<=1) AND the turn_boundary_rebill
+    # bucket (the new-turn round-1 boundary re-bill, which is that same
+    # structural first-write across a turn boundary). Denominator excludes those
+    # rounds' writes too, so it is a like-for-like ratio over STEADY-STATE
+    # rounds only.
+    def _r1(r):
+        return int(r.get('call', 0) or 0) <= 1 or r.get('bucket') == 'turn_boundary_rebill'
+    steady = [r for r in rows if not _r1(r)]
+    tot_w_clean = sum(int(r.get('cache_write', 0)) for r in steady)
+    brk_w_clean = sum(int(r.get('cache_write', 0))
+                      for r in steady if r.get('bucket') != 'no_break')
     return {
         'n': n, 'buckets': dict(buckets),
-        'ttl_any': ttl_any, 'ttl_sole': ttl_sole, 'mid': mid,
+        'ttl_any': ttl_any, 'ttl_sole': ttl_sole, 'mid': mid, 'tbr': tbr,
         'tot_w': tot_w, 'brk_w': brk_w,
         'brk_pct': (100 * brk_w // tot_w) if tot_w else 0,
+        'n_steady': len(steady),
+        'brk_pct_clean': (100 * brk_w_clean // tot_w_clean) if tot_w_clean else 0,
         'span': (rows[0]['_ts'], rows[-1]['_ts']) if rows else ('', ''),
     }
 
@@ -122,7 +140,13 @@ def main(argv):
     print(f'(2) cache_mid_out_of_win {mp["mid"]:5} ({_rate(mp,"mid"):2}%)   '
           f'{mq["mid"]:5} ({_rate(mq,"mid"):2}%)   [target→0: gate + drop]')
     print(f'(3) break-write %% of all {mp["brk_pct"]:4}%%        {mq["brk_pct"]:4}%%'
-          f'         [the direct cost metric]')
+          f'         [RAW — polluted by round-1 first-writes]')
+    print(f'(3c) break-write %% CLEAN {mp["brk_pct_clean"]:4}%%        {mq["brk_pct_clean"]:4}%%'
+          f'         [★ excl. round-1 (call<=1) + turn_boundary_rebill]')
+    print(f'     turn_boundary_rebill {mp["tbr"]:5}         {mq["tbr"]:5}'
+          f'         [broken out — structural first-write, not cache invalidation]')
+    print(f'     steady-state rounds  {mp["n_steady"]:5}         {mq["n_steady"]:5}'
+          f'         [denominator of the clean ratio]')
     print(f'\nPOST-restart bucket breakdown: {mq["buckets"]}')
     return 0
 

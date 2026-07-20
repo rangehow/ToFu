@@ -85,6 +85,46 @@ _MID_STEP = 8
 # never on the early-user turn). Verified by test_cache_mid_anchor_window.py.
 _MID_TRAIL = 4
 
+# ── Mid-anchor LAYOUT MODE (env-gated experiment seam) ──
+# The single mid stepping-stone is mathematically insufficient to keep BOTH the
+# system→mid and mid→tail hops within the ~20-block lookback once the body grows
+# past ~40 blocks (proven: with one stone, min achievable max-hop = ceil(tail/2),
+# which exceeds 20 beyond block 40). Worse, every _MID_STEP-message JUMP writes a
+# fresh mid entry the tail can't chain back to the system prefix from — the live
+# "read collapses to the 74k static floor" sawtooth (~13-20% of rounds/conv).
+# Because the FIX depends on Anthropic's cache-EXTENSION semantics that cannot be
+# verified offline (does a per-round-moving marker ever read back? is the mid net
+# NEGATIVE?), the candidate layouts are gated behind an env var so a live A/B can
+# decide the winner WITHOUT a risky default change:
+#   current  — today's behaviour (single far mid, message-quantized). DEFAULT.
+#   drop     — place NO mid stone (tests the "mid is net-negative" hypothesis);
+#              the freed marker slot is left unused (system prefix is contiguous,
+#              one marker already caches it).
+#   smooth / cascade — RESERVED names for future single-stone reshuffles; until
+#              the offline harness + live A/B justify one, they fall back to
+#              `current` (with a one-shot debug note) so no unvalidated layout
+#              ships to the hot path by default.
+# Read per-call (cheap); default keeps byte-identical output to pre-experiment.
+_MID_MODE_VALID = ('current', 'drop', 'smooth', 'cascade')
+_MID_MODE_IMPLEMENTED = ('current', 'drop')
+
+
+def _mid_placement_mode() -> str:
+    """Return the active mid-anchor layout mode from ``TOFU_CACHE_MID_MODE``.
+
+    Unknown or not-yet-implemented modes degrade to ``current`` so a typo or a
+    reserved name never silently ships an unvalidated layout. Default
+    ``current`` — byte-identical to the pre-experiment behaviour.
+    """
+    raw = (getenv_compat('TOFU_CACHE_MID_MODE', default='current')
+           or 'current').strip().lower()
+    if raw not in _MID_MODE_VALID:
+        return 'current'
+    if raw not in _MID_MODE_IMPLEMENTED:
+        # Reserved-but-stubbed: behave as current until the harness/A-B lands it.
+        return 'current'
+    return raw
+
 
 def _is_prefill_converted(msg) -> bool:
     """True if ``msg`` is a trailing assistant turn that was converted to a
@@ -269,7 +309,9 @@ def add_cache_breakpoints(body, log_prefix=''):
     # past the head.
     _head_floor = _n_sys + 1  # system block(s) + the first user turn
     _mid_target = len(messages) - _MID_TRAIL
-    _mid_armed = _mid_target >= _head_floor + _MID_LOOKBACK
+    _mid_mode = _mid_placement_mode()
+    _mid_armed = (_mid_mode != 'drop'
+                  and _mid_target >= _head_floor + _MID_LOOKBACK)
     _reserve = 0
     if body.get('tools'):
         _reserve += _TOOL_RESERVED_BP

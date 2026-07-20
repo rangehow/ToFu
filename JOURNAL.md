@@ -1,6 +1,23 @@
 # Project Journal
 
 
+### 2026-07-20 — Prompt-cache 追零 miss:owner 批准 drop 落地(sibling commit `6bcac3e`),但**残余塌陷证伪了 tail-span 假设、坐实是网关侧随机**——用真网关 replay 做三重对照实验钉死「无客户端可修的杠杆」。owner 北极星是零 miss,盯住 drop 后仍有轮次在「字节全稳」下 FLOOR-COLLAPSE,要我量 tail 块跨度、排除限流、给出零判据。我照做,并诚实推翻了 owner 与我自己先前的假设。
+- **给 harness 加 tail 块几何探针:** 每轮在 `openai_body_to_anthropic` 后把所有消息内容块拍平,量 `total_blocks`、tail 断点块位、`lookback_needed`(=本轮队尾距上轮 tail 断点的块数)、`append_delta`(本轮追加块数=并行批大小)。这是 owner 假设「20-block 回看从 mid 移到 tail」的判据。
+- **假设被证伪(关键、诚实优先):** mrt1ijef 的 drop 臂**每一轮 lookback 只有 3–7 块、append_delta 只有 2–6,从不超过 20**,可**仍有 13–37% 轮次 FLOOR-COLLAPSE**(全程 byte-STABLE)。即残余塌陷**不是** tail 回看几何。且此对话没有大并行批(+blk 最大 6),无法在其上测「>20 块爆发」——需要另找带大 fan-out 的对话才能测那个 case。
+- **两个我先前数据里的混杂变量,主动纠正(诚实):** ①**预热偏置**:早先的 A/B 里 drop 是**紧跟 current 之后**跑的,而网关缓存是共享全局态——current 先把近乎相同的前缀字节焐热了,所以 drop 的 6.7% 是**被预热高估**的。冷对冷实测:current 42.9% vs drop 36.8%——drop 仍赢但只 ~6pp,**不是**我先报的 4.3×。drop 落地依然正确(冷对冷 drop≥current),但**幅度被高估**,已让 sibling 在 commit note 更正。②floor 读值**逐次跳变**(74095/28654/0)。
+- **三重对照实验坐实「网关侧随机」(不是客户端可修):**
+
+| 运行 | gap | floor% | 塌陷轮次 |
+|---|---|---|---|
+| A | 2s | 36.8% | R2,3,4,6,9,11,18 |
+| B | 2s | 13.3% | R8,15 |
+| C | 8s | 28.6% | R3,5,8,11 |
+
+  **同字节、同 gap 两次跑(A vs B)塌陷的是完全不同的轮次、率从 36.8% 跳到 13.3%**;把 gap 从 2s 加到 8s(C)**没降低**塌陷率。→ 既非确定性客户端几何(否则每次塌同样轮次)、也非读写时序竞态(否则加大 gap 会降)。结论:残余塌陷是**网关侧缓存写可见性随机**(与既往 2026-07-20 `6e5e1bb` 记录的 Anthropic 缓存写可见性竞态 SDK #1451 同源),**无进一步客户端杠杆**。
+- **诚实边界(北极星未达、且判定不可达):** 「零 miss」在客户端侧**已到极限**——前缀字节稳定、断点几何在窗内、mid 已删、TTL 已锁。残余是服务端随机信号,客户端改布局是「拿客户端补丁去治服务端病」。真要再降,只能靠网关/Bedrock 侧(不在本仓可控范围),或接受该随机地板。sibling 已停 cache lane(除非我数据翻出真客户端因)。harness 保留为回归验收器。
+- **产出:** harness tail-几何探针增强(`debug/`,不入库);无新客户端修复(因为查明无客户端根因);drop 落地由 sibling `6bcac3e`。**不宣布「零 miss 达成」——诚实报告为「客户端侧已尽,残余是服务端随机」。**
+
+
 ### 2026-07-20 — 收尾 §3.4 图标清理 epic:sibling 让出 lease 后扫掉剩余 30 个工具栏/模式菜单 ✓ 勾选(commit `79e070e`,单文件,icon-box 守卫 8/8 / tag 平衡 / collect 7724)。承接本会话早先自己上报的 `pt_afda5285`,Project Brain 再次派发——这次 lease 已释放,故完成并 `project_board_complete`。
 - **先判 lease 是否释放(关键,决定扫 or 再 block):** 上轮把这 30 个 ✓ 延后并 `[sibling] path=index.html` 挂起,因两个 sibling(`mrtaaooa` 工具栏重设计、`mrta9qhe` chat-mode UI)正 live 编辑该区。本轮复查:`project_peer_status` 显示**两者都已不活跃**、`git log 5d93a3a..HEAD -- index.html`=**空**、`git status --porcelain index.html`=**clean**(无未提交 sibling WIP)。`mrtaaooa` 当初的重设计「未启动/未授权/可能不落地」确实没落,且其留言明说「proceed on your full list」。→ lease 释放,安全扫。
 - **做了(4 个 `replace_all`,共 30 处 ✓→内联 SVG check + `.icon-box`):** 2 `.flow-menu-check`(Chat/Studio 模式菜单)+ 8 `.submenu-item-check`(extras 抽屉开关)+ 12 `.mobile-sheet-item-check`(可见)+ 8 `.mobile-sheet-item-check`(默认 opacity:0)。这些勾选纯靠 CSS `opacity`(`.active .X-check{opacity:1}`)显隐,把 glyph 包成 span→svg **完全保留** toggle 行为。

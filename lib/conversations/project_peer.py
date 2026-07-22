@@ -62,6 +62,13 @@ _PEER_MSG_MAX_PER_WINDOW = 3
 # Soft cap on a peer message body (mirrors the feed summary cap intent).
 _PEER_MSG_MAX_CHARS = 1200
 
+
+# The canonical conversation-id width the message-queue / task-registry key is
+# matched on. A shorter value is a TRUNCATED id (a prefix a peer copied from a
+# status view); enqueuing under it lands in a phantom queue no conversation
+# drains. _resolve_target_conv_id fails CLOSED for a sub-length id on DB error.
+_FULL_CONV_ID_LEN = 14
+
 # In-memory sliding-window history: (sender_conv, target_conv) -> [ts_seconds].
 # Guarded by _rate_lock. Bounded (pruned on every check) so it can't grow.
 _peer_msg_history: dict[tuple, list] = {}
@@ -336,8 +343,10 @@ def _resolve_target_conv_id(to_conv_id: str) -> tuple:
     Returns ``(full_id, '')`` on success, or ``('', reason)`` where reason is
     ``'unknown_target'`` (no conversation matches) or ``'ambiguous_target'``
     (the prefix matches >1 conversation — refuse rather than mis-deliver). On a
-    DB error the id is returned UNCHANGED (fail-open: no worse than the prior
-    behaviour, and the subsequent enqueue would surface the DB fault anyway).
+    DB error a FULL-length id is passed through unchanged (already canonical —
+    a transient blip must not drop a valid send), but a sub-length (truncated /
+    prefix) id fails CLOSED with ``'resolve_failed'``: enqueuing a truncated id
+    is exactly the phantom-queue silent loss this function exists to prevent.
     """
     tid = (to_conv_id or '').strip()
     if not tid:
@@ -364,6 +373,14 @@ def _resolve_target_conv_id(to_conv_id: str) -> tuple:
     except Exception as e:
         logger.warning('[PeerMsg] target-id resolve failed for %s: %s',
                        tid[:12], e)
+        # Fail-CLOSED for a truncated/prefix id: enqueuing it would land in a
+        # phantom queue key no conversation drains (silent loss) — the exact
+        # thing this function exists to prevent. A full-length id is already
+        # canonical, so passing it through on a transient DB blip is harmless
+        # (the subsequent enqueue surfaces any real DB fault). _FULL_CONV_ID_LEN
+        # is the registry-key width the drain path matches on.
+        if len(tid) < _FULL_CONV_ID_LEN:
+            return '', 'resolve_failed'
         return tid, ''
 
 

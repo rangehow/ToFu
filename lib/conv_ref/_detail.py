@@ -62,6 +62,30 @@ def _digest_tool_desc(rnd):
     return {'name': name, 'arg': arg, 'status': rnd.get('status', 'done')}
 
 
+def _msg_fallback_text(msg):
+    """Fallback display text for a message whose ``content`` is empty.
+
+    A tool-only assistant round (the model called tools and emitted no visible
+    prose THAT round) has empty ``content`` — so a digest row for it would
+    otherwise render as a bare "(no text)". A conversation's conclusion often
+    sits amid such rounds, so an empty row buries exactly what the reader
+    wants. Fall back to the round's ``thinking`` first (real prose), else a
+    compact summary of its tool calls (name + primary arg). Returns '' only
+    when there is genuinely nothing to show.
+    """
+    if not isinstance(msg, dict):
+        return ''
+    thinking = msg.get('thinking')
+    if isinstance(thinking, str) and thinking.strip():
+        return thinking.strip()
+    parts = []
+    for r in (msg.get('toolRounds') or []):
+        d = _digest_tool_desc(r)
+        if d:
+            parts.append(d['name'] + (f' {d["arg"]}' if d['arg'] else ''))
+    return ', '.join(parts)
+
+
 def _coerce_json(value, default, label=''):
     """Parse a JSON column value regardless of DB backend.
 
@@ -261,25 +285,62 @@ def build_conversation_digest(conversation_id, current_conv_id=None,
         return (s[:DIGEST_FULL_CAP] + '…') if len(s) > DIGEST_FULL_CAP else s
 
     n = len(messages)
+
+    # ── TAIL ANCHORING ──
+    # The tail must END on the conversation's CONCLUSION, not on a trailing
+    # run of tool-only rounds. Find the last message that carries SUBSTANTIVE
+    # prose — real ``content`` OR ``thinking`` (a round's model reasoning is
+    # substantive; a bare cleanup tool call with neither is the "empty closer"
+    # we drop) — and anchor the tail there, dropping the rounds after it.
+    # Without this a tool-heavy ending fills the tail with blank rows and the
+    # "where did it end up" half of head+tail shows nothing.
+    def _is_anchor_worthy(m):
+        if not isinstance(m, dict):
+            return False
+        if _extract_text(m.get('content', '')).strip():
+            return True
+        th = m.get('thinking')
+        return isinstance(th, str) and bool(th.strip())
+
+    last_content_idx = None
+    for idx in range(n - 1, -1, -1):
+        if _is_anchor_worthy(messages[idx]):
+            last_content_idx = idx
+            break
+    tail_end = last_content_idx if last_content_idx is not None else n - 1
+    trailing_dropped = (n - 1) - tail_end
+
     # HEAD+TAIL selection with 1-based original indices preserved, so a message
     # row always reports its true position in the conversation.
-    if n <= head + tail:
-        kept = list(enumerate(messages))  # (0-based index, msg)
+    if tail_end + 1 <= head + tail:
+        # Head and tail windows meet/overlap — no middle gap.
+        kept = list(enumerate(messages[:tail_end + 1]))
         omitted = 0
     else:
+        tail_start = tail_end - tail + 1
         kept = list(enumerate(messages[:head]))
-        kept += [(i, messages[i]) for i in range(n - tail, n)]
-        omitted = n - head - tail
+        kept += [(i, messages[i]) for i in range(tail_start, tail_end + 1)]
+        omitted = tail_start - head
 
     def _row(i, msg):
         role = msg.get('role', 'unknown')
         full_text = _extract_text(msg.get('content', ''))
+        is_fallback = False
+        if not full_text.strip():
+            fb = _msg_fallback_text(msg)
+            if fb:
+                full_text, is_fallback = fb, True
         preview = _preview(full_text)
         entry = {
             'index': i + 1,
             'role': role,
             'text': preview,
         }
+        # A row whose text is a thinking/tool summary (not the message's own
+        # visible content) is flagged so the frontend can style it as a
+        # summary rather than pass it off as the real message.
+        if is_fallback:
+            entry['textFallback'] = True
         full = _full(full_text)
         # Only carry `full` when it adds something beyond the preview, so the
         # frontend knows whether an "expand" affordance is meaningful.
@@ -326,8 +387,9 @@ def build_conversation_digest(conversation_id, current_conv_id=None,
         'createdAt': row['created_at'] or 0,
         'updatedAt': row['updated_at'] or 0,
         'messages': rows,
-        'truncated': omitted > 0,
+        'truncated': bool(omitted or trailing_dropped),
         'omitted': omitted,
+        'trailingDropped': trailing_dropped,
     }
 
 

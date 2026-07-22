@@ -194,3 +194,95 @@ class TestGetConversationRaw:
         finally:
             db.execute('DELETE FROM conversations WHERE id=?', (cid,))
             db.commit()
+
+    def test_build_digest_empty_content_tool_round_fallback(self, flask_client):
+        # An assistant round with EMPTY content but toolRounds/thinking must NOT
+        # render as blank — it falls back to thinking, else a tool summary, and
+        # is flagged textFallback so the frontend styles it as a summary.
+        from lib.database import DOMAIN_CHAT, get_thread_db
+        from lib.database._core_schema import CONVERSATIONS, upsert
+        now = int(time.time() * 1000)
+        cid = f'cvfb-{now}'
+        msgs = [
+            {'role': 'user', 'content': 'do the thing', 'timestamp': now},
+            # empty content, only toolRounds → tool summary fallback
+            {'role': 'assistant', 'content': '', 'timestamp': now + 1,
+             'toolRounds': [
+                 {'toolName': 'read_files', 'status': 'done',
+                  'args': {'path': 'lib/bar.py'}},
+                 {'toolName': 'grep_search', 'status': 'done',
+                  'args': {'pattern': 'needle'}}]},
+            # empty content, but has thinking → thinking wins over tool summary
+            {'role': 'assistant', 'content': '', 'timestamp': now + 2,
+             'thinking': 'Considering the approach carefully',
+             'toolRounds': [{'toolName': 'list_dir', 'status': 'done',
+                             'args': {'path': '.'}}]},
+        ]
+        db = get_thread_db(DOMAIN_CHAT)
+        upsert(db, CONVERSATIONS, {
+            'id': cid, 'user_id': 1, 'title': 'FB', 'messages': json.dumps(msgs),
+            'created_at': now, 'updated_at': now + 10, 'settings': '{}',
+            'msg_count': 3, 'search_text': 'thing',
+        }, insert_cols=['id', 'user_id', 'title', 'messages', 'created_at',
+                        'updated_at', 'settings', 'msg_count', 'search_text'],
+           retry=True)
+        try:
+            d = build_conversation_digest(cid)
+            tool_only = d['messages'][1]
+            # Tool-summary fallback (no thinking): text carries the tool names,
+            # flagged textFallback, NOT an empty "(no text)".
+            assert tool_only['text']
+            assert 'read_files' in tool_only['text'] and 'lib/bar.py' in tool_only['text']
+            assert tool_only.get('textFallback') is True
+            # Thinking beats tool summary.
+            think_row = d['messages'][2]
+            assert 'Considering the approach' in think_row['text']
+            assert think_row.get('textFallback') is True
+        finally:
+            db.execute('DELETE FROM conversations WHERE id=?', (cid,))
+            db.commit()
+
+    def test_build_digest_tail_anchors_last_content(self, flask_client):
+        # THE CORE FIX: a conversation ending in a run of tool-only (empty
+        # content) assistant rounds must anchor its tail on the LAST
+        # content-bearing message (the conclusion), dropping the trailing
+        # tool-only rounds — so the digest's last row is the real conclusion,
+        # not a blank tool round.
+        from lib.database import DOMAIN_CHAT, get_thread_db
+        from lib.database._core_schema import CONVERSATIONS, upsert
+        now = int(time.time() * 1000)
+        cid = f'cvtail-{now}'
+        msgs = [{'role': 'user', 'content': f'q{i}', 'timestamp': now + i}
+                for i in range(4)]
+        # The real conclusion — index 5 (1-based) — with substantive content.
+        msgs.append({'role': 'assistant', 'content': 'THE FINAL ANSWER is 42',
+                     'timestamp': now + 100})
+        # …followed by 3 trailing tool-only rounds (empty content).
+        for j in range(3):
+            msgs.append({'role': 'assistant', 'content': '', 'timestamp': now + 200 + j,
+                         'toolRounds': [{'toolName': 'run_command', 'status': 'done',
+                                         'args': {'command': f'cleanup {j}'}}]})
+        db = get_thread_db(DOMAIN_CHAT)
+        upsert(db, CONVERSATIONS, {
+            'id': cid, 'user_id': 1, 'title': 'Tail', 'messages': json.dumps(msgs),
+            'created_at': now, 'updated_at': now + 300, 'settings': '{}',
+            'msg_count': len(msgs), 'search_text': 'answer',
+        }, insert_cols=['id', 'user_id', 'title', 'messages', 'created_at',
+                        'updated_at', 'settings', 'msg_count', 'search_text'],
+           retry=True)
+        try:
+            d = build_conversation_digest(cid, head=2, tail=2)
+            content_rows = [m for m in d['messages'] if 'omitted' not in m]
+            # The LAST content row must be the real conclusion (index 5), not a
+            # trailing tool-only round (index 6/7/8).
+            last = content_rows[-1]
+            assert last['index'] == 5
+            assert 'THE FINAL ANSWER' in last['text']
+            # The 3 trailing tool-only rounds were dropped.
+            assert d['trailingDropped'] == 3
+            assert d['truncated'] is True
+            # No dropped tool-only round leaked into the rows.
+            assert all(m.get('index') != 8 for m in content_rows)
+        finally:
+            db.execute('DELETE FROM conversations WHERE id=?', (cid,))
+            db.commit()

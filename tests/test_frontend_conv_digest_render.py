@@ -49,6 +49,9 @@ _DIGEST_JSON = r"""{
         { "name": "run_command", "arg": "git status", "status": "error" }
       ] },
     { "omitted": 12 },
+    { "index": 19, "role": "assistant", "text": "read_files lib/bar.py, grep_search needle",
+      "textFallback": true, "ts": 1700000400000,
+      "tools": [ { "name": "read_files", "arg": "lib/bar.py", "status": "done" } ] },
     { "index": 20, "role": "assistant", "text": "final conclusion", "ts": 1700000500000 }
   ],
   "truncated": true,
@@ -114,6 +117,16 @@ check('omission_marker', !!d.querySelector('.ptool-convdigest-omitted'));
 // (5) it kept the tail message (conclusion), not just the head
 check('tail_kept', html.indexOf('final conclusion') !== -1);
 
+// (6) a textFallback row (empty content → tool/thinking summary) renders as a
+// styled SUMMARY with its tag, NEVER as a bare '(no text)' blank.
+check('fallback_summary_class', !!d.querySelector('.ptool-convdigest-summary'));
+check('fallback_summary_tag', !!d.querySelector('.ptool-convdigest-summary-tag'));
+check('fallback_has_text', html.indexOf('lib/bar.py') !== -1);
+check('fallback_not_notext', (function () {
+  const summ = d.querySelector('.ptool-convdigest-summary');
+  return summ && !summ.classList.contains('ptool-convdigest-notext');
+})());
+
 report();
 """.replace("DIGEST_JSON_PH", __import__("json").dumps(_DIGEST_JSON))
 
@@ -123,7 +136,7 @@ def test_conv_digest_render():
         target_js=os.path.join(JS_DIR, "ui", "tool_rounds.js"),
         body_js=_BODY,
         extra_targets=[os.path.join(JS_DIR, "ui", "streaming_swarm_panel.js")],
-        min_pass=13,
+        min_pass=17,
         label="conv digest render",
     )
 

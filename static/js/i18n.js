@@ -3009,6 +3009,7 @@ var _i18n = {
   'convDigest.updated': { zh: '更新于 {t}', en: 'updated {t}' },
   'convDigest.expand': { zh: '展开', en: 'expand' },
   'convDigest.omitted': { zh: '… 省略 {n} 条消息 …', en: '… {n} messages omitted …' },
+  'convDigest.summary': { zh: '摘要', en: 'summary' },
   // ── Commit result card (project_commit) ──
   'commitCard.outCommitted': { zh: '已提交', en: 'committed' },
   'commitCard.outPlanned': { zh: '仅预览', en: 'plan only' },

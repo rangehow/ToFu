@@ -8158,6 +8158,8 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
 .ptool-convdigest-msgbody { flex: 1; min-width: 0; }
 .ptool-convdigest-text { font-size: 12.5px; line-height: 1.55; color: var(--text-primary); overflow-wrap: anywhere; }
 .ptool-convdigest-notext { color: var(--text-tertiary); font-style: italic; }
+.ptool-convdigest-summary { color: var(--text-secondary); }
+.ptool-convdigest-summary-tag { display: inline-flex; align-items: center; height: 14px; margin-right: 6px; padding: 0 6px; font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; color: var(--text-tertiary); background: var(--bg-tertiary); border-radius: 6px; vertical-align: 1px; }
 .ptool-convdigest-expand > summary { cursor: pointer; list-style: none; }
 .ptool-convdigest-expand > summary::-webkit-details-marker { display: none; }
 .ptool-convdigest-expand-hint { margin-left: 6px; font-size: 10px; font-weight: 600; color: var(--accent); text-transform: uppercase; letter-spacing: 0.03em; opacity: 0.8; }

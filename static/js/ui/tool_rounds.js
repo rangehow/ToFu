@@ -1193,16 +1193,25 @@ function _renderConvDigest(cd) {
     // preview, render a <details> so the user can open THIS message in place
     // instead of jumping to the model view.
     const full = (typeof m.full === "string") ? m.full.trim() : "";
+    // `textFallback` marks a row whose text is a thinking/tool SUMMARY (the
+    // message's own content was empty — a tool-only round), so we style it as
+    // a muted summary with a label, never passing it off as real prose.
+    const isFallback = !!m.textFallback;
+    const fallbackCls = isFallback ? " ptool-convdigest-summary" : "";
+    const fallbackTag = isFallback
+      ? `<span class="ptool-convdigest-summary-tag">${escapeHtml(
+        _t("convDigest.summary", "summary"))}</span>`
+      : "";
     let textHtml;
     if (text && full && full !== text) {
       textHtml = `<details class="ptool-convdigest-expand">` +
-        `<summary class="ptool-convdigest-text">${escapeHtml(text)}` +
+        `<summary class="ptool-convdigest-text${fallbackCls}">${fallbackTag}${escapeHtml(text)}` +
         `<span class="ptool-convdigest-expand-hint">${escapeHtml(
           _t("convDigest.expand", "expand"))}</span></summary>` +
         `<div class="ptool-convdigest-full">${escapeHtml(full)}</div></details>`;
     } else {
       textHtml = text
-        ? `<div class="ptool-convdigest-text">${escapeHtml(text)}</div>`
+        ? `<div class="ptool-convdigest-text${fallbackCls}">${fallbackTag}${escapeHtml(text)}</div>`
         : (hints.length ? "" : `<div class="ptool-convdigest-text ptool-convdigest-notext">${escapeHtml(
           _t("convDigest.noText", "(no text)"))}</div>`);
     }

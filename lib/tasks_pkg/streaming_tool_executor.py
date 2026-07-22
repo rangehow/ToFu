@@ -181,6 +181,96 @@ class StreamingToolAccumulator:
         """Map of tc_id → (roundNum, round_entry) for already-announced tools."""
         return dict(self._announced)
 
+    def reconcile_announced_rounds(self, assistant_msg: dict) -> int:
+        """Settle orphan early-announced rounds left by a discarded stream retry.
+
+        ``on_tool_call_ready`` fires PER STREAM ATTEMPT, and ``stream_chat``
+        (lib/llm/stream.py) transparently RE-RUNS the SSE stream up to
+        ``MAX_STREAM_RETRIES`` times on a transient mid-stream error while
+        reusing the SAME callback. If an early attempt streamed a tool call's
+        arguments far enough to fire the callback, ``_emit_tool_start`` already
+        appended a ``status='searching'`` round to ``task['toolRounds']`` and
+        emitted a ``tool_start`` — the live spinner. The retry then re-streams
+        the same call under a FRESH ``tc_id``. Only the FINAL attempt's tool
+        calls survive into ``assistant_msg['tool_calls']``, so the dispatch
+        pipeline only ever settles those ids; every discarded attempt's round
+        is orphaned at ``searching`` forever (a permanently-spinning tool row,
+        live AND after reload since it persists into ``conversations.messages``).
+
+        This runs once, right after the LLM call returns, BEFORE
+        ``parse_tool_calls``: for every announced round whose ``tc_id`` is NOT
+        present in the final ``assistant_msg['tool_calls']``, it stamps a
+        terminal ``aborted`` status and emits a ``tool_result``-class event (via
+        ``_finalize_tool_round``) so the live stream and the persisted/reloaded
+        DB state agree — the same discipline as the task-end dangling sweep
+        (``orchestrator._finalize_dangling_tool_rounds``), applied here at the
+        per-round seam where the orphan is created.
+
+        Returns the number of orphan rounds finalized.
+        """
+        if not self._announced:
+            return 0
+        final_ids = {
+            (tc.get('id') or '')
+            for tc in (assistant_msg.get('tool_calls') or [])
+            if isinstance(tc, dict)
+        }
+        orphans = [
+            (tc_id, rn, entry)
+            for tc_id, (rn, entry) in self._announced.items()
+            if tc_id not in final_ids
+        ]
+        if not orphans:
+            return 0
+
+        from lib.tasks_pkg.executor import _finalize_tool_round
+
+        finalized = 0
+        for tc_id, rn, entry in orphans:
+            if not isinstance(entry, dict):
+                continue
+            # Only settle a still-unsettled round — never overwrite a real
+            # result (defensive: an orphan should never carry one).
+            if entry.get('status') not in (None, 'searching', 'executing') \
+                    or entry.get('results'):
+                continue
+            tool_name = entry.get('toolName') or 'tool'
+            query = entry.get('query') or tool_name
+            meta = {
+                'toolName': tool_name,
+                'title': query,
+                'snippet': 'Superseded — the stream reconnected and re-issued this call.',
+                'source': 'Interrupted',
+                'fetched': False,
+                'fetchedChars': 0,
+                'badge': 'superseded',
+                'interrupted': True,
+            }
+            try:
+                _finalize_tool_round(self._task, rn, entry, [meta],
+                                     query_override=query)
+                # _finalize_tool_round sets status='done'; downgrade to the more
+                # accurate 'aborted' so the renderer shows the interrupted state.
+                entry['status'] = 'aborted'
+                finalized += 1
+                logger.info(
+                    '[%s] StreamingToolExec: settled orphan early-announced '
+                    'round %s (tool=%s tc_id=%s) — left "searching" by a '
+                    'discarded stream-retry attempt',
+                    self._tid, rn, tool_name, tc_id[:8])
+            except Exception as e:
+                entry['status'] = 'aborted'
+                finalized += 1
+                logger.warning(
+                    '[%s] StreamingToolExec: _finalize_tool_round failed for '
+                    'orphan round %s (tool=%s): %s — status stamped aborted anyway',
+                    self._tid, rn, tool_name, e, exc_info=True)
+        if finalized:
+            logger.info('[%s] StreamingToolExec: reconciled %d orphan '
+                        'early-announced round(s) after stream retry',
+                        self._tid, finalized)
+        return finalized
+
     def on_tool_call_ready(self, tool_call: dict):
         """Callback fired when a tool call's arguments finish streaming.
 

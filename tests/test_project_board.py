@@ -128,6 +128,44 @@ def test_done_epics_do_not_count_toward_admission_cap(flask_app):
     assert _MAX_ACTIVE_TASKS >= 1
 
 
+def test_claim_cas_prevents_concurrent_double_claim(flask_app, monkeypatch):
+    """TOCTOU guard: two conversations racing an OPEN epic must NOT both
+    succeed. We force the read→write interleave deterministically — during the
+    LOSER's claim, right after its eligibility SELECT (in _effective_status), a
+    competing conversation's claim commits. With the CAS precondition the
+    loser's UPDATE matches 0 rows → advisory refusal naming the real owner, and
+    the board shows exactly ONE owner."""
+    import lib.conversations.project_board as pb
+    from lib.conversations.project_board import claim_task, post_task, read_board
+
+    with flask_app.app_context():
+        tid = post_task('/b/cas', 'cWinner', 'contended epic')['id']
+
+        real_eff = pb._effective_status
+        fired = {'done': False}
+
+        def _racing_eff(stored, lease, now):
+            # First call happens inside cLoser's claim, after its SELECT and
+            # before its UPDATE. Slip the winner's full claim in there ONCE.
+            if not fired['done']:
+                fired['done'] = True
+                res = claim_task('/b/cas', 'cWinner', tid)
+                assert res['ok'], f'winner claim should succeed: {res}'
+            return real_eff(stored, lease, now)
+
+        monkeypatch.setattr(pb, '_effective_status', _racing_eff)
+        loser = claim_task('/b/cas', 'cLoser', tid)
+
+        assert loser['ok'] is False, 'loser must NOT also succeed (no silent steal)'
+        assert loser.get('error') == 'already_claimed'
+        assert loser.get('owner') == 'cWinner'
+
+        monkeypatch.undo()
+        board = read_board('/b/cas')
+    owners = [t['owner_conv_id'] for t in board['tasks'] if t['status'] == 'claimed']
+    assert owners == ['cWinner'], f'exactly one owner must hold the epic, got {owners}'
+
+
 def test_old_done_epics_are_pruned_on_post(flask_app):
     """Completed epics are retained but BOUNDED — posting past the done-retain
     cap prunes the OLDEST done rows so project_tasks can't grow forever."""

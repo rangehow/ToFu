@@ -387,13 +387,43 @@ def claim_task(project_path: str, conv_id: str, task_id: str, *,
         if (row['status'] or '') == 'done':
             return {'ok': False, 'error': 'already_done'}
         lease = now + max(60_000, int(ttl_ms or DEFAULT_LEASE_TTL_MS))
-        db.execute(
+        # ── CAS claim (TOCTOU guard) ──
+        # The eligibility read above and this write are two statements; two
+        # conversations racing an OPEN epic would both read 'open' and, with an
+        # unconditional UPDATE, both write their own owner (last-writer-wins) —
+        # each getting ok=True while only one truly holds the advisory lease.
+        # Make the write CONDITIONAL on the exact (owner, lease) pre-state we
+        # decided on, so the DB serializes the two writers: the loser's UPDATE
+        # matches 0 rows (the winner already changed owner_conv_id /
+        # lease_expires_at) and is reported as an advisory refusal, never a
+        # silent steal. The precondition admits all three eligible cases —
+        # open ('' owner), self-refresh (owner==conv), and expired-lease reclaim
+        # (lease<=now) — via the OR below.
+        prev_owner = owner
+        prev_lease = int(row['lease_expires_at'] or 0)
+        res = db.execute(
             "UPDATE project_tasks SET status='claimed', owner_conv_id=?, "
             'lease_expires_at=?, dispatched=?, updated_at=? '
-            'WHERE id=? AND project_path=?',
+            'WHERE id=? AND project_path=? '
+            '  AND COALESCE(owner_conv_id,?)=? '
+            '  AND COALESCE(lease_expires_at,0)=?',
             (conv_id or '', lease, 1 if dispatched else 0, now,
-             task_id, project_path))
+             task_id, project_path, prev_owner, prev_owner, prev_lease))
         db.commit()
+        if getattr(res, 'rowcount', 1) == 0:
+            # Lost the race: another writer claimed/refreshed between our read
+            # and write. Re-read to report the current owner (advisory refusal).
+            cur = db.execute(
+                'SELECT owner_conv_id FROM project_tasks '
+                'WHERE id=? AND project_path=?', (task_id, project_path)).fetchone()
+            cur_owner = (cur['owner_conv_id'] if cur else '') or ''
+            if cur_owner and cur_owner != (conv_id or ''):
+                logger.info('[Board] claim lost race proj=%.40r task=%s → owner=%s',
+                            project_path, task_id, cur_owner)
+                return {'ok': False, 'error': 'already_claimed', 'owner': cur_owner}
+            # Rare: state changed but not into a foreign claim (e.g. concurrent
+            # complete). Report generically rather than a false success.
+            return {'ok': False, 'error': 'claim_conflict'}
         title = _task_title(db, project_path, task_id)
     except Exception as e:
         logger.error('[Board] claim failed proj=%.40r task=%s: %s',

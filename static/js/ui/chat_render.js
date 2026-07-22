@@ -1678,7 +1678,14 @@ function renderMessage(msg, idx) {
   /* messageTime is a formatter output (digits + localized separators) —
    * escape it by default via safeHtml (it carries no markup). */
   const messageTimeHtml = messageTime ? safeHtml`<span class="message-time">${messageTime}</span>` : '';
-  const mfpAttr = typeof idx === "number" ? raw(` data-mfp="${_msgFingerprint(msg)}"`) : "";
+  /* Escape the fingerprint for attribute storage: it now folds in fields that
+   * can contain HTML-special chars (e.g. a run_command round's `title` = the
+   * raw shell command, with literal `"`). A plain-string `raw()` splice let a
+   * quote close the attribute early and spill the rest of the fingerprint into
+   * the DOM as visible text. `safeHtml` &quot;-escapes it; the surgical-diff
+   * read at line ~636 uses getAttribute(), which returns the browser-DECODED
+   * value, so the escaped storage stays byte-equal to _msgFingerprint(msg). */
+  const mfpAttr = typeof idx === "number" ? safeHtml` data-mfp="${_msgFingerprint(msg)}"` : "";
   const epWorkerCls = (!isUser && !msg._isEndpointPlanner && !msg._isEndpointReview) ? ' ep-worker-msg' : '';
   const epPlannerCls = msg._isEndpointPlanner ? ' ep-planner-msg' : '';
   const vuCls = msg._isVirtualUser ? ' vu-user-msg' : '';

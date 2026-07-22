@@ -162,7 +162,10 @@ def _build_user_message(msg: dict) -> dict:
             f'{refs_block}\n\n---\n\n{text_content}'
         )
 
-    # 6. Inline PDF text
+    # 6. Inline PDF/doc text — each block carries a STABLE attachment ref so a
+    #    tool (or a later turn) can re-read the full extracted text by that ref
+    #    via lib.attachments.resolve_attachment. The ref is a backend-computed
+    #    FACT (content hash), never a path the model fabricates.
     pdf_texts = msg.get('pdfTexts') or []
     _pdf_chars_before = len(text_content)
     for pdf in pdf_texts:
@@ -170,9 +173,16 @@ def _build_user_message(msg: dict) -> dict:
         pages = pdf.get('pages', '?')
         text_len = pdf.get('textLength', len(pdf.get('text', '')))
         text = pdf.get('text', '')
+        try:
+            from lib.attachments import attachment_text_ref
+            _ref = attachment_text_ref(pdf)
+        except Exception as _are:
+            logger.debug('[Context] attachment_text_ref failed: %s', _are)
+            _ref = ''
+        _ref_line = f' [attachment ref: {_ref}]' if _ref else ''
         text_content += (
             f'\n\n{"═" * 50}\n'
-            f'PDF Document: {name} ({pages} pages, {text_len / 1024:.1f}KB)\n'
+            f'PDF Document: {name} ({pages} pages, {text_len / 1024:.1f}KB){_ref_line}\n'
             f'{"═" * 50}\n{text}'
         )
     if pdf_texts:
@@ -223,6 +233,27 @@ def _build_user_message(msg: dict) -> dict:
                     'type': 'image_url',
                     'image_url': {'url': img_url},
                 })
+                # Stable re-access ref: prefer the disk-backed /api/images/ URL
+                # (survives compaction stripping the inline block); the model
+                # passes this to inspect_image to zoom the ORIGINAL. Emitted as
+                # a backend FACT so the model never fabricates a path.
+                # canonical_image_ref tolerates a reverse-proxy prefix
+                # (``/proxy/<port>/api/images/<f>``) and strips it to the
+                # canonical ``/api/images/...`` tail — WITHOUT it the guard
+                # missed every proxied upload, so no ref hint was emitted and
+                # the model fabricated a bogus path from the tool docstring.
+                try:
+                    from lib.attachments import canonical_image_ref
+                    _img_ref = canonical_image_ref(img.get('url') or '')
+                except Exception as _cre:
+                    logger.debug('[Context] canonical_image_ref failed: %s', _cre)
+                    _img_ref = ''
+                if _img_ref:
+                    content_blocks.append({
+                        'type': 'text',
+                        'text': f'[image ref: {_img_ref} — call inspect_image with '
+                                f'path="{_img_ref}" to zoom/crop the original]',
+                    })
                 if img.get('caption'):
                     content_blocks.append({
                         'type': 'text',

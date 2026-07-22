@@ -31,6 +31,7 @@ from ._image import (
     _INSPECT_MAX_PX,
     _compress_image,
     _read_image,
+    inspect_image_bytes,
     inspect_image_file,
 )
 from ._router import (
@@ -49,4 +50,5 @@ from ._router import (
 logger = get_logger(__name__)
 
 # Preserved verbatim from the pre-split module.
-__all__ = ['read_local_file', 'inspect_image_file', 'IMAGE_EXTENSIONS', 'SUPPORTED_EXTENSIONS']
+__all__ = ['read_local_file', 'inspect_image_file', 'inspect_image_bytes',
+           'IMAGE_EXTENSIONS', 'SUPPORTED_EXTENSIONS']

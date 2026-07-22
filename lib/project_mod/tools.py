@@ -551,7 +551,27 @@ def _exec_inspect_image(fn_args, base_path, conv_id, task_id, kwargs):
     raw_path = fn_args.get('path')
     if not raw_path or not isinstance(raw_path, str):
         return ('Error: inspect_image requires a "path" string pointing to '
-                'an image file.')
+                'an image file, or an attachment reference (e.g. /api/images/<file>).')
+
+    # ── Uploaded-attachment reference: resolve via the centralized resolver ──
+    # A chat-uploaded image has no filesystem path — it is referenced by
+    # /api/images/<f> (or a data:/http(s) ref). Pass the raw ref straight
+    # through (do NOT run it through project-root resolution, which would
+    # mangle it into a bogus path) plus the task's messages so text refs can
+    # be located.
+    from lib.attachments import is_attachment_ref
+    if is_attachment_ref(raw_path):
+        task = kwargs.get('task') or {}
+        messages = task.get('messages') if isinstance(task, dict) else None
+        return tool_inspect_image(
+            base_path, raw_path,
+            crop=fn_args.get('crop'),
+            rotate=fn_args.get('rotate', 0),
+            zoom=fn_args.get('zoom'),
+            grid=bool(fn_args.get('grid', False)),
+            messages=messages,
+        )
+
     bp, rp = _rb(base_path, raw_path)
     return tool_inspect_image(
         bp, rp,

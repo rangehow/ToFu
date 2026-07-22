@@ -102,30 +102,24 @@ _INSPECT_JPEG_QUALITY = 88
 
 
 def inspect_image_file(path, *, crop=None, rotate=0, zoom=None, grid=False):
-    """Re-render a region of an image at full source resolution.
+    """Re-render a region of a local image file at full source resolution.
 
-    Opens the ORIGINAL file on disk (never the already-downscaled snapshot)
-    and applies, in order: rotate → crop → zoom (centre) → optional grid
-    overlay → fit-to-budget. Returns a ``__screenshot__`` protocol dict so
-    the caller routes it through the native image_url path.
+    Reads the ORIGINAL file on disk and delegates to
+    :func:`inspect_image_bytes`. Kept for callers that already have a
+    filesystem path (project-relative reads, absolute paths). For a
+    chat-uploaded image referenced by ``/api/images/<f>`` (which has no path
+    the model can name), route through
+    :func:`lib.project_mod.read_tools.tool_inspect_image` → the centralized
+    attachment resolver instead.
 
     Args:
         path: Absolute or user-expandable image file path.
-        crop: Optional ``[x0, y0, x1, y1]`` box. Values in ``[0, 1]`` are
-            treated as fractions of width/height; values > 1 are absolute
-            pixels. ``None`` keeps the full frame.
-        rotate: Clockwise rotation in degrees — one of 0, 90, 180, 270.
-        zoom: Optional float > 1 — centre-crop by this factor (e.g. 2.0
-            keeps the middle quarter). Applied after ``crop``.
-        grid: When True, overlay a labelled coordinate grid (tenths of the
-            view) so the model can pick the next crop precisely.
+        crop / rotate / zoom / grid: See :func:`inspect_image_bytes`.
 
     Returns:
         ``__screenshot__`` dict on success, or an ``Error: …`` string the
         caller surfaces verbatim to the model.
     """
-    import io
-
     if path.startswith('file://'):
         path = path[7:]
     path = os.path.abspath(os.path.expanduser(path))
@@ -145,19 +139,63 @@ def inspect_image_file(path, *, crop=None, rotate=0, zoom=None, grid=False):
                 f'(max {MAX_IMAGE_BYTES // (1024 * 1024)} MB)')
 
     try:
+        with open(path, 'rb') as f:
+            raw = f.read()
+    except Exception as e:
+        logger.error('[FileReader] inspect_image failed to read %s: %s', path, e, exc_info=True)
+        return f'Error: Failed to open image: {e}'
+
+    return inspect_image_bytes(raw, source_name=os.path.basename(path),
+                               crop=crop, rotate=rotate, zoom=zoom, grid=grid)
+
+
+def inspect_image_bytes(raw, *, source_name='image', crop=None, rotate=0,
+                        zoom=None, grid=False):
+    """Re-render a region of in-memory image bytes at full source resolution.
+
+    This is the transform half of image inspection — decoupled from where the
+    bytes came from (disk file, disk-backed ``/api/images/`` upload, DB base64,
+    remote download). Applies, in order: rotate → crop → zoom (centre) →
+    optional grid overlay → fit-to-budget, then encodes to a ``__screenshot__``
+    protocol dict so the caller routes it through the native image_url path.
+
+    Args:
+        raw: The original (pre-downscale) image bytes.
+        source_name: Display name used in logs and the text fallback.
+        crop: Optional ``[x0, y0, x1, y1]`` box. Values in ``[0, 1]`` are
+            treated as fractions of width/height; values > 1 are absolute
+            pixels. ``None`` keeps the full frame.
+        rotate: Clockwise rotation in degrees — one of 0, 90, 180, 270.
+        zoom: Optional float > 1 — centre-crop by this factor (e.g. 2.0
+            keeps the middle quarter). Applied after ``crop``.
+        grid: When True, overlay a labelled coordinate grid (tenths of the
+            view) so the model can pick the next crop precisely.
+
+    Returns:
+        ``__screenshot__`` dict on success, or an ``Error: …`` string the
+        caller surfaces verbatim to the model.
+    """
+    import io
+
+    file_size = len(raw)
+    if file_size > MAX_IMAGE_BYTES:
+        return (f'Error: Image too large: {file_size:,} bytes '
+                f'(max {MAX_IMAGE_BYTES // (1024 * 1024)} MB)')
+
+    try:
         from PIL import Image, ImageDraw
     except ImportError as e:
         logger.debug('[FileReader] Pillow import failed, using fallback: %s', e)
         return ('Error: image inspection requires Pillow (PIL), which is not '
                 'installed on the server.')
 
-    filename = os.path.basename(path)
+    filename = source_name
     try:
-        img = Image.open(path)
+        img = Image.open(io.BytesIO(raw))
         img.load()
     except Exception as e:
         logger.error('[FileReader] inspect_image failed to open %s: %s',
-                     path, e, exc_info=True)
+                     filename, e, exc_info=True)
         return f'Error: Failed to open image: {e}'
 
     src_w, src_h = img.size
@@ -255,7 +293,7 @@ def inspect_image_file(path, *, crop=None, rotate=0, zoom=None, grid=False):
         img.save(buf, format=out_format, **save_kw)
     except Exception as e:
         logger.error('[FileReader] inspect_image encode failed for %s: %s',
-                     path, e, exc_info=True)
+                     filename, e, exc_info=True)
         return f'Error: Failed to encode inspected image: {e}'
 
     out_bytes = buf.getvalue()

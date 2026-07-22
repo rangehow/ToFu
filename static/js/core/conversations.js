@@ -218,8 +218,13 @@ function _hydrateImageBase64(conv) {
     if (!msg.images || msg.images.length === 0) continue;
     for (const img of msg.images) {
       if (img.base64) continue;  // already has base64
-      const url = img.url || img.preview || "";
-      if (!url || url.endsWith("...")) continue;  // truncated placeholder
+      const rawUrl = img.url || img.preview || "";
+      if (!rawUrl || rawUrl.endsWith("...")) continue;  // truncated placeholder
+      // Stored img.url is now the CANONICAL '/api/images/<f>' (no proxy
+      // prefix). A bare fetch of that would bypass the reverse-proxy base
+      // path, so prefix server-relative URLs with apiUrl() at fetch time.
+      const url = (rawUrl.charAt(0) === "/" && typeof apiUrl === "function")
+        ? apiUrl(rawUrl) : rawUrl;
       // Fetch in background — tracked via promise so message builder can use base64
       const p = fetch(url)
         .then(resp => { if (!resp.ok) throw new Error(`HTTP ${resp.status}`); return resp.blob(); })
@@ -606,8 +611,12 @@ async function syncConversationToServer(conv, { allowTruncate = false } = {}) {
           images: m.images.map((img) => {
             const o = { mediaType: img.mediaType, sizeKB: img.sizeKB };
             if (img.url) {
+              // Persist the canonical '/api/images/<f>' url unchanged, but the
+              // preview is a render src — prefix with apiUrl() so it resolves
+              // through the reverse-proxy base path.
               o.url = img.url;
-              o.preview = img.url;
+              o.preview = (img.url.charAt(0) === "/" && typeof apiUrl === "function")
+                ? apiUrl(img.url) : img.url;
             } else {
               o.preview = (img.preview || "").slice(0, 200) + "...";
             }

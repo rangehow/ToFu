@@ -603,15 +603,36 @@ def tool_read_files(base, reads):
 #  inspect_image
 # ═══════════════════════════════════════════════════════
 
-def tool_inspect_image(base, path, *, crop=None, rotate=0, zoom=None, grid=False):
+def tool_inspect_image(base, path, *, crop=None, rotate=0, zoom=None, grid=False,
+                       messages=None):
     """Re-render a region of an image at full resolution (zoom/rotate/crop).
 
-    Resolves ``path`` the same way ``read_files`` does — absolute / ~ paths
-    pass straight through, project-relative paths resolve under ``base`` —
-    then delegates to :func:`lib.file_reader.inspect_image_file`.
+    Resolution order:
+      1. **Uploaded-attachment reference** (``/api/images/<f>``, ``data:`` URI,
+         ``http(s)://`` URL) — resolved via the centralized
+         :func:`lib.attachments.resolve_attachment` to the ORIGINAL bytes,
+         then transformed in memory. This is how a chat-uploaded image (which
+         has NO filesystem path the model can name) is inspected — the fix for
+         the model inventing a bogus ``/dev/null`` path.
+      2. **Filesystem path** — absolute / ~ paths pass straight through,
+         project-relative paths resolve under ``base``; delegates to
+         :func:`lib.file_reader.inspect_image_file`.
 
     Returns a ``__screenshot__`` dict on success or an ``Error: …`` string.
     """
+    from lib.attachments import is_attachment_ref, resolve_attachment
+    if is_attachment_ref(path):
+        resolved = resolve_attachment(path, messages=messages)
+        if not resolved:
+            return (f'Error: could not resolve attachment reference {path!r}. '
+                    'The uploaded file may no longer be available.')
+        if resolved.get('kind') != 'image':
+            return (f'Error: reference {path!r} is a text attachment, not an image; '
+                    'inspect_image only works on images.')
+        from lib.file_reader import inspect_image_bytes
+        return inspect_image_bytes(resolved['raw'], source_name=os.path.basename(path) or 'image',
+                                   crop=crop, rotate=rotate, zoom=zoom, grid=grid)
+
     if _is_absolute_path(path):
         target = path
     else:

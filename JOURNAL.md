@@ -1,5 +1,14 @@
 # Project Journal
 
+### 2026-07-22(续13) — 「查看对话」digest 首尾方案自身缺陷根修:尾部被 tool-only 空 content 轮填满、结论被埋(owner 指出的同目标失败模式,commit `de52a21`,6 文件 +187/-8,后端 11/11 + 前端 2/2 + brain 17/17 绿 / collect 7781)。
+- **缺陷(owner 指出,不是新需求):** 上一版 head+tail 按「物理最后 N 条」取尾。但长对话结尾常是一串**只发工具调用、`content` 为空**的 assistant 轮(可见文本在更早轮或 `thinking` 里)。于是尾部塞进大量空行、前端渲成 `(no text)`——「看结论」的诉求被搬到尾部后依旧空白,正是「显示内容不完整」的核心症状。(旁边 sibling 会话独立报了同一现象。)
+- **修 #1 尾部锚定(`_detail.py`):** 新增 `_is_anchor_worthy(m)`——真 `content` **或** `thinking` 才算实质。从后往前找最后一条 anchor-worthy 消息作 `tail_end`,丢其后的 tool-only 轮;返回 `trailingDropped`,`truncated` 反映任意隐藏行。保证 digest 最后一行落在真结论上。
+- **修 #2 空内容回退(`_detail.py`):** 新增 `_msg_fallback_text(msg)`——content 空时优先 `thinking`,否则工具调用摘要(name+主参数,复用 `_digest_tool_desc`)。`_row` 用到回退置 `textFallback=True`。
+- **前端(`tool_rounds.js`+CSS+i18n):** `textFallback` 行加 `.ptool-convdigest-summary` 灰化 + `摘要`/`summary` 标签(`convDigest.summary`);绝不再落 `(no text)`。
+- **设计张力(自查修正):** 初版只看 content 会把「带 thinking 的收尾轮」误丢——改 content∨thinking 后带推理结论轮正确锚定,纯 cleanup 轮才丢。
+- **测试:** `test_conv_ref_raw.py` +2(空内容回退:thinking 胜出;尾部锚定丢 3 trailing tool-only 轮、最后一行=真结论 index 5),11/11;JSDOM +1 fixture +4 断言(`textFallback` 渲成 summary 非 notext),min_pass 13→17,2/2。
+- **git 纪律:** `reset -q HEAD .` → 仅 add 6 文件 → `--cached --numstat` 核对 → `commit -F- -- <路径>` → `git show HEAD --stat` = 仅 6 文件,NO LEAK。`de52a21`。
+
 ### 2026-07-22(续12) — 「查看对话」工具(get_conversation)digest 卡片长期方案重做:内容补全 + 时间戳 + 视觉重做,一次到位(commit `cc7e0cf`,7 文件 +509/-52,后端 9/9 + 新 JSDOM 2/2 + brain 渲染 17/17 绿含 NEUTER / collect 7779,唯一 error 仍是既知 pty flake)。
 - **诊断(owner 已核对准确):** digest 三处硬截断在 `lib/conv_ref/_detail.py::build_conversation_digest`——①只取前 40 条 `messages[:max_messages]`、②每条正文只留 180 字、③工具轮只收集 `toolName`;且 SELECT 只取 `id,title,messages,settings`,没取时间列。人类卡片 `_renderConvDigest`(tool_rounds.js)默认折叠。「取更多信息」≠「多查 DB」——messages 早已全量读进内存,是投影层丢的;唯一真需多查的是 `created_at/updated_at`。
 - **后端(`build_conversation_digest` 重写):** 签名 `max_messages=40` → `head=3, tail=60`。**首尾保留**:`n<=head+tail` 全留,否则头 3 + 尾 60,中间插一条 `{omitted:X}` 标记行(在 head/tail 索引跳变的接缝处只插一次),原始 1-based `index` 全程保留。预览 180→400,另带 capped `full`(4000)供前端就地展开(仅当 `full!=preview` 才带)。工具轮从裸名改为 `{name, arg, status}` 描述符,`arg` 复用 prose 渲染器同款主参数启发式(query→path/file_path/command/pattern/url/… →首个标量)。SELECT 补 `created_at/updated_at`,每条消息 `timestamp`/`ts` 透出为 `ts`。返回体新增 `createdAt/updatedAt/omitted`。

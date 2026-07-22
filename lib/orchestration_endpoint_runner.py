@@ -339,8 +339,19 @@ def _run_flow_as_endpoint_task(task: dict, defn: dict, *, label: str,
                 logger.warning('[FlowChat] per-turn DB sync/translate failed '
                                '(non-fatal) task=%s: %s', tid, e)
 
+    # Detect a virtual_user (autopilot) graph so the adapter stamps a
+    # SYNTHETIC guard row as a VU turn (not a critic review) when this flow's
+    # verifier is the VU. Real VU turns are detected per-node by role; this
+    # flag only governs the roleless synthetic guard. Anchor VU turns to the
+    # task id so they group as one autopilot run (parity with the live path).
+    _vu_flow = any(
+        isinstance(n, dict) and n.get('role') == 'virtual_user'
+        for n in (defn.get('nodes') or [])
+    )
     adapter = EndpointEventAdapter(emit=_persist_endpoint_msg,
-                                   on_stream=_stream_endpoint_event)
+                                   on_stream=_stream_endpoint_event,
+                                   vu_flow=_vu_flow,
+                                   vu_run_id=(task['id'] if _vu_flow else ''))
     _adapter_ref['messages'] = adapter.messages
 
     # Surface raw engine progress too (loop/replan/guard) for diagnostics.

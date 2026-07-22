@@ -17,6 +17,50 @@ logger = get_logger(__name__)
 # model's context window. Applies to both the prose transcript and the raw dump.
 MAX_CHARS = 80000
 
+# ── Conversation-digest (human-view card) shaping constants ──
+# The digest is a bounded PROJECTION of a conversation for the frontend card,
+# NOT the verbatim transcript (that stays in get_conversation / the "model
+# view" button). A long conversation keeps its HEAD (what it was about) and its
+# TAIL (where it ended up / the conclusion) with a "… X omitted …" marker in
+# between — showing only the opening N messages is the least useful slice.
+DIGEST_HEAD = 3          # opening messages always kept (the "what is this about")
+DIGEST_TAIL = 60         # most-recent messages kept (the "where did it end up")
+DIGEST_PREVIEW = 400     # per-message text preview length (chars)
+DIGEST_FULL_CAP = 4000   # per-message expandable full-text cap (chars)
+
+
+def _digest_tool_desc(rnd):
+    """Build a compact ``{name, arg, status}`` descriptor for one tool round.
+
+    Reuses the same primary-argument heuristic the prose renderer
+    (:func:`_format_tool_rounds`) relies on — ``query`` first, then the common
+    single-value arg keys — so the card shows ``read_files → lib/foo.py`` /
+    ``run_command → git status`` instead of a bare tool name. Returns ``None``
+    for a non-dict round or one with no resolvable name.
+    """
+    if not isinstance(rnd, dict):
+        return None
+    name = (rnd.get('toolName') or rnd.get('tool_name') or '').strip()
+    if not name:
+        return None
+    arg = rnd.get('query') or ''
+    if not arg:
+        args = rnd.get('args') or rnd.get('arguments') or {}
+        if isinstance(args, dict):
+            for key in ('path', 'file_path', 'command', 'pattern', 'url',
+                        'query', 'conversation_id', 'title'):
+                if args.get(key):
+                    arg = args[key]
+                    break
+            else:
+                # Fall back to the first scalar arg value.
+                for val in args.values():
+                    if isinstance(val, (str, int, float)) and str(val).strip():
+                        arg = val
+                        break
+    arg = _truncate(str(arg), 90) if arg else ''
+    return {'name': name, 'arg': arg, 'status': rnd.get('status', 'done')}
+
 
 def _coerce_json(value, default, label=''):
     """Parse a JSON column value regardless of DB backend.
@@ -151,7 +195,8 @@ def get_conversation(conversation_id, include_tool_details=True,
     return result
 
 
-def build_conversation_digest(conversation_id, current_conv_id=None, max_messages=40):
+def build_conversation_digest(conversation_id, current_conv_id=None,
+                              head=DIGEST_HEAD, tail=DIGEST_TAIL):
     """Build a STRUCTURED digest of a conversation for the human-view card.
 
     This is the display sibling of :func:`get_conversation` (which returns the
@@ -163,23 +208,36 @@ def build_conversation_digest(conversation_id, current_conv_id=None, max_message
     typed structure (mirrors the ``boardSnapshot`` / ``peerStatus`` pattern in
     ``lib/tasks_pkg/handlers/misc/_brain.py``).
 
+    HEAD+TAIL policy: a long conversation keeps its opening ``head`` messages
+    (what it is about) AND its most-recent ``tail`` messages (where it ended
+    up), with a structured ``omitted`` marker row between them — showing only
+    the first N messages is the least useful slice. Each message carries a
+    truncated ``text`` preview plus the ``full`` text (capped) so the frontend
+    can expand a single message in place instead of forcing a jump to the
+    "model view". Assistant messages carry per-round ``tools`` descriptors
+    (name + primary arg + status), not just tool names.
+
     Args:
         conversation_id: the conversation to summarize.
         current_conv_id: the active conversation (self-reference is a no-op).
-        max_messages: cap on per-message rows included in the digest.
+        head: opening messages always kept.
+        tail: most-recent messages kept.
 
     Returns:
-        A dict ``{convId, title, preset, msgCount, messages: [...], truncated}``
-        or ``None`` when the conversation can't be read (self-ref / missing /
-        empty) so the caller falls back to the prose dump.
+        A dict ``{convId, title, preset, msgCount, createdAt, updatedAt,
+        messages: [...], truncated, omitted}`` or ``None`` when the
+        conversation can't be read (self-ref / missing / empty) so the caller
+        falls back to the prose dump. Each message row is either a content row
+        (``role``/``text``/``full``/``ts``/``tools``/…) or an omission marker
+        (``{omitted: X}``).
     """
     if current_conv_id and conversation_id == current_conv_id:
         return None
     try:
         db = _get_db()
         row = db.execute(
-            'SELECT id, title, messages, settings FROM conversations '
-            'WHERE id=? AND user_id=?',
+            'SELECT id, title, messages, settings, created_at, updated_at '
+            'FROM conversations WHERE id=? AND user_id=?',
             (conversation_id, DEFAULT_USER_ID)
         ).fetchone()
     except Exception as e:
@@ -194,20 +252,42 @@ def build_conversation_digest(conversation_id, current_conv_id=None, max_message
         return None
     settings = _coerce_json(row['settings'], default={}, label='conv-digest-settings')
 
-    def _preview(text, limit=180):
+    def _preview(text, limit=DIGEST_PREVIEW):
         s = ' '.join(str(text or '').split())
         return (s[:limit] + '…') if len(s) > limit else s
 
-    rows = []
-    for i, msg in enumerate(messages[:max_messages]):
-        if not isinstance(msg, dict):
-            continue
+    def _full(text):
+        s = str(text or '').strip()
+        return (s[:DIGEST_FULL_CAP] + '…') if len(s) > DIGEST_FULL_CAP else s
+
+    n = len(messages)
+    # HEAD+TAIL selection with 1-based original indices preserved, so a message
+    # row always reports its true position in the conversation.
+    if n <= head + tail:
+        kept = list(enumerate(messages))  # (0-based index, msg)
+        omitted = 0
+    else:
+        kept = list(enumerate(messages[:head]))
+        kept += [(i, messages[i]) for i in range(n - tail, n)]
+        omitted = n - head - tail
+
+    def _row(i, msg):
         role = msg.get('role', 'unknown')
+        full_text = _extract_text(msg.get('content', ''))
+        preview = _preview(full_text)
         entry = {
             'index': i + 1,
             'role': role,
-            'text': _preview(_extract_text(msg.get('content', ''))),
+            'text': preview,
         }
+        full = _full(full_text)
+        # Only carry `full` when it adds something beyond the preview, so the
+        # frontend knows whether an "expand" affordance is meaningful.
+        if full and full != preview:
+            entry['full'] = full
+        ts = msg.get('timestamp') or msg.get('ts')
+        if isinstance(ts, (int, float)) and ts > 0:
+            entry['ts'] = int(ts)
         imgs = msg.get('images')
         if imgs:
             entry['images'] = len(imgs)
@@ -215,23 +295,39 @@ def build_conversation_digest(conversation_id, current_conv_id=None, max_message
         if pdfs:
             entry['pdfs'] = len(pdfs)
         if role == 'assistant':
-            tools = [
-                (r.get('toolName') or r.get('tool_name') or '')
-                for r in (msg.get('toolRounds') or [])
-                if isinstance(r, dict)
-            ]
-            tools = [t for t in tools if t]
+            tools = []
+            for r in (msg.get('toolRounds') or []):
+                desc = _digest_tool_desc(r)
+                if desc:
+                    tools.append(desc)
             if tools:
                 entry['tools'] = tools
-        rows.append(entry)
+        return entry
+
+    rows = []
+    inserted_marker = False
+    prev_idx = None
+    for i, msg in kept:
+        if not isinstance(msg, dict):
+            continue
+        # Insert the omission marker at the head/tail seam (first index jump).
+        if (omitted and not inserted_marker and prev_idx is not None
+                and i - prev_idx > 1):
+            rows.append({'omitted': omitted})
+            inserted_marker = True
+        rows.append(_row(i, msg))
+        prev_idx = i
 
     return {
         'convId': conversation_id,
         'title': row['title'] or '(untitled)',
         'preset': settings.get('preset', ''),
-        'msgCount': len(messages),
+        'msgCount': n,
+        'createdAt': row['created_at'] or 0,
+        'updatedAt': row['updated_at'] or 0,
         'messages': rows,
-        'truncated': len(messages) > max_messages,
+        'truncated': omitted > 0,
+        'omitted': omitted,
     }
 
 

@@ -103,14 +103,24 @@ class TestGetConversationRaw:
         assert d['preset'] == 'sonnet'
         assert d['msgCount'] == 2
         assert len(d['messages']) == 2
-        # user row: text preview, no tools
+        # Row-level timestamps are now carried (the "multi-query DB" ask).
+        assert d['createdAt'] > 0 and d['updatedAt'] > 0
+        assert d['updatedAt'] >= d['createdAt']
+        assert d['truncated'] is False and d['omitted'] == 0
+        # user row: text preview, per-message timestamp, no tools
         u = d['messages'][0]
         assert u['role'] == 'user' and 'hello there' in u['text']
+        assert u['ts'] > 0  # message-level timestamp surfaced
         assert 'tools' not in u
-        # assistant row: carries the toolRounds tool names
+        # assistant row: tools are now rich descriptors (name + arg + status),
+        # NOT bare tool-name strings.
         a = d['messages'][1]
         assert a['role'] == 'assistant'
-        assert a['tools'] == ['read_files']
+        assert isinstance(a['tools'], list) and len(a['tools']) == 1
+        td = a['tools'][0]
+        assert td['name'] == 'read_files'
+        assert td['arg'] == 'lib/foo.py'   # primary arg extracted from args.path
+        assert td['status'] == 'done'
 
     def test_build_digest_self_reference_is_none(self):
         # Digesting the CURRENT conversation is a no-op (caller falls back).
@@ -118,3 +128,69 @@ class TestGetConversationRaw:
 
     def test_build_digest_missing_is_none(self):
         assert build_conversation_digest('does-not-exist-xyz') is None
+
+    def test_build_digest_long_preview(self, flask_client):
+        # A message longer than the 400-char preview must be previewed to ~400
+        # and carry an (expandable) `full` that is longer than the preview.
+        from lib.database import DOMAIN_CHAT, get_thread_db
+        from lib.database._core_schema import CONVERSATIONS, upsert
+        now = int(time.time() * 1000)
+        cid = f'cvlong-{now}'
+        body = 'word ' * 400  # ~2000 chars
+        msgs = [{'role': 'user', 'content': body, 'timestamp': now}]
+        db = get_thread_db(DOMAIN_CHAT)
+        upsert(db, CONVERSATIONS, {
+            'id': cid, 'user_id': 1, 'title': 'Long', 'messages': json.dumps(msgs),
+            'created_at': now, 'updated_at': now, 'settings': '{}',
+            'msg_count': 1, 'search_text': 'word',
+        }, insert_cols=['id', 'user_id', 'title', 'messages', 'created_at',
+                        'updated_at', 'settings', 'msg_count', 'search_text'],
+           retry=True)
+        try:
+            d = build_conversation_digest(cid)
+            row = d['messages'][0]
+            # Preview is bounded (400 + ellipsis), full is much longer.
+            assert 380 <= len(row['text']) <= 402
+            assert row['text'].endswith('…')
+            assert 'full' in row and len(row['full']) > len(row['text'])
+        finally:
+            db.execute('DELETE FROM conversations WHERE id=?', (cid,))
+            db.commit()
+
+    def test_build_digest_head_tail_omission(self, flask_client):
+        # A conversation longer than head+tail keeps the first `head` and last
+        # `tail`, drops the middle, and inserts a single {omitted: X} marker
+        # between the head slice and the tail slice.
+        from lib.database import DOMAIN_CHAT, get_thread_db
+        from lib.database._core_schema import CONVERSATIONS, upsert
+        now = int(time.time() * 1000)
+        cid = f'cvht-{now}'
+        # 20 messages; digest head=3, tail=5 → 12 omitted.
+        msgs = [{'role': 'user' if i % 2 == 0 else 'assistant',
+                 'content': f'msg-{i}', 'timestamp': now + i} for i in range(20)]
+        db = get_thread_db(DOMAIN_CHAT)
+        upsert(db, CONVERSATIONS, {
+            'id': cid, 'user_id': 1, 'title': 'HT', 'messages': json.dumps(msgs),
+            'created_at': now, 'updated_at': now + 100, 'settings': '{}',
+            'msg_count': 20, 'search_text': 'msg',
+        }, insert_cols=['id', 'user_id', 'title', 'messages', 'created_at',
+                        'updated_at', 'settings', 'msg_count', 'search_text'],
+           retry=True)
+        try:
+            d = build_conversation_digest(cid, head=3, tail=5)
+            assert d['msgCount'] == 20
+            assert d['truncated'] is True and d['omitted'] == 12
+            content_rows = [m for m in d['messages'] if 'omitted' not in m]
+            marker_rows = [m for m in d['messages'] if 'omitted' in m]
+            # Exactly one omission marker, carrying the omitted count.
+            assert len(marker_rows) == 1 and marker_rows[0]['omitted'] == 12
+            # 3 head + 5 tail content rows, original indices preserved.
+            assert len(content_rows) == 8
+            assert [m['index'] for m in content_rows[:3]] == [1, 2, 3]
+            assert [m['index'] for m in content_rows[-5:]] == [16, 17, 18, 19, 20]
+            # The head slice must contain msg-0 and the tail slice msg-19.
+            assert 'msg-0' in content_rows[0]['text']
+            assert 'msg-19' in content_rows[-1]['text']
+        finally:
+            db.execute('DELETE FROM conversations WHERE id=?', (cid,))
+            db.commit()

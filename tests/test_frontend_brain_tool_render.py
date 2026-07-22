@@ -410,10 +410,11 @@ check('digest_image_hint', dHtml.includes('ptool-convdigest-att') && dHtml.inclu
 // the raw ═══ transcript prose must NOT be dumped as Markdown
 check('digest_not_md_dump', !dHtml.includes('MD-DUMP:'));
 check('digest_is_conv_meta', _isRoundConvMeta({ toolName: 'get_conversation' }));
-// routine read → collapsed, with an at-a-glance message-count chip + why caption
+// get_conversation is the PRIMARY viewing product → default EXPANDED (not a
+// collapsed routine read). The message count lives in the digest meta row.
 function _isOpenD(h) { return h.includes('ptool-convmeta-block" open'); }
-check('digest_collapsed', dHtml.includes('ptool-convmeta-block" data-rn') && !_isOpenD(dHtml));
-check('digest_count_chip', dHtml.includes('ptool-convmeta-count') && dHtml.includes('1 messages'));
+check('digest_open', _isOpenD(dHtml));
+check('digest_count_in_meta', dHtml.includes('ptool-convdigest-msgcount') && dHtml.includes('1 messages'));
 check('digest_why_caption', dHtml.includes('ptool-convmeta-why') && dHtml.includes('full transcript'));
 check('digest_head_friendly', dHtml.includes('Opened a past conversation'));
 
@@ -507,8 +508,8 @@ def test_structured_brain_tool_renderers():
         'PASS digest_user_text', 'PASS digest_assistant_text',
         'PASS digest_role_chip', 'PASS digest_tools_hint',
         'PASS digest_image_hint', 'PASS digest_not_md_dump',
-        'PASS digest_is_conv_meta', 'PASS digest_collapsed',
-        'PASS digest_count_chip', 'PASS digest_why_caption',
+        'PASS digest_is_conv_meta', 'PASS digest_open',
+        'PASS digest_count_in_meta', 'PASS digest_why_caption',
         'PASS digest_head_friendly', 'PASS digest_raw_falls_back',
     ):
         assert must in output, output

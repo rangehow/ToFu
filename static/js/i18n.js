@@ -3006,6 +3006,9 @@ var _i18n = {
   'convDigest.noText': { zh: '（无文本）', en: '(no text)' },
   'convDigest.empty': { zh: '该会话没有消息。', en: 'This conversation has no messages.' },
   'convDigest.truncated': { zh: '… 已省略较早的消息——展开「模型原文」查看完整记录。', en: '… earlier messages omitted — open the model view for the full transcript.' },
+  'convDigest.updated': { zh: '更新于 {t}', en: 'updated {t}' },
+  'convDigest.expand': { zh: '展开', en: 'expand' },
+  'convDigest.omitted': { zh: '… 省略 {n} 条消息 …', en: '… {n} messages omitted …' },
   // ── Commit result card (project_commit) ──
   'commitCard.outCommitted': { zh: '已提交', en: 'committed' },
   'commitCard.outPlanned': { zh: '仅预览', en: 'plan only' },

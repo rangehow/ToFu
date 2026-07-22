@@ -1130,7 +1130,7 @@ function _renderConvDigest(cd) {
     if (r === "system") return _t("convDigest.roleSystem", "System");
     return escapeHtml(r || "");
   };
-  // ── Meta row: preset + message count. ──
+  // ── Meta row: preset + message count + last-updated time. ──
   const metaBits = [];
   if (cd.preset) {
     metaBits.push(`<span class="ptool-convdigest-preset">${escapeHtml(cd.preset)}</span>`);
@@ -1138,6 +1138,12 @@ function _renderConvDigest(cd) {
   const nMsg = (cd.msgCount != null) ? cd.msgCount : (cd.messages || []).length;
   metaBits.push(`<span class="ptool-convdigest-msgcount">${escapeHtml(
     _t("convDigest.msgCount", "{n} messages").replace("{n}", nMsg))}</span>`);
+  const updRel = _convMetaRelTime(cd.updatedAt);
+  if (updRel) {
+    metaBits.push(`<span class="ptool-convdigest-time" title="${escapeHtml(
+      _convMetaAbsTime(cd.updatedAt))}">${escapeHtml(
+      _t("convDigest.updated", "updated {t}").replace("{t}", updRel))}</span>`);
+  }
   let html = `<div class="ptool-convdigest">` +
     `<div class="ptool-convdigest-meta">${metaBits.join("")}</div>` +
     `<div class="ptool-convdigest-msgs">`;
@@ -1147,13 +1153,32 @@ function _renderConvDigest(cd) {
       _t("convDigest.empty", "This conversation has no messages."))}</div>`;
   }
   for (const m of msgs) {
+    // Omission marker row (head/tail seam).
+    if (m && m.omitted != null) {
+      html += `<div class="ptool-convdigest-omitted">${escapeHtml(
+        _t("convDigest.omitted", "… {n} messages omitted …").replace("{n}", m.omitted))}</div>`;
+      continue;
+    }
     const roleCls = (m.role === "user" || m.role === "assistant" || m.role === "system")
       ? m.role : "other";
     const hints = [];
     if (Array.isArray(m.tools) && m.tools.length) {
+      const shown = m.tools.slice(0, 6);
+      const chips = shown.map(function (tl) {
+        // Tools may be a rich descriptor {name, arg, status} (new) or a bare
+        // string (legacy). Render name + primary arg, with a failed-status cue.
+        const isObj = tl && typeof tl === "object";
+        const name = isObj ? (tl.name || "") : String(tl || "");
+        const arg = isObj ? (tl.arg || "") : "";
+        const st = isObj ? (tl.status || "") : "";
+        const failed = /error|fail|reject|abort/i.test(st);
+        return `<span class="ptool-convdigest-tool${failed ? " ptool-convdigest-tool-failed" : ""}">` +
+          `<span class="ptool-convdigest-tool-name">${escapeHtml(name)}</span>` +
+          (arg ? `<span class="ptool-convdigest-tool-arg">${escapeHtml(arg)}</span>` : "") +
+          `</span>`;
+      }).join("");
       hints.push(`<span class="ptool-convdigest-tools">${(typeof Icon === "function") ? Icon("wrench", 10) : ""}` +
-        `<span>${escapeHtml(m.tools.slice(0, 6).join(", "))}` +
-        `${m.tools.length > 6 ? " +" + (m.tools.length - 6) : ""}</span></span>`);
+        chips + `${m.tools.length > 6 ? `<span class="ptool-convdigest-tool-more">+${m.tools.length - 6}</span>` : ""}</span>`);
     }
     if (m.images) {
       hints.push(`<span class="ptool-convdigest-att">${escapeHtml(
@@ -1164,23 +1189,56 @@ function _renderConvDigest(cd) {
         _t("convDigest.pdfs", "{n} PDF").replace("{n}", m.pdfs))}</span>`);
     }
     const text = (m.text || "").trim();
-    const textHtml = text
-      ? `<div class="ptool-convdigest-text">${escapeHtml(text)}</div>`
-      : (hints.length ? "" : `<div class="ptool-convdigest-text ptool-convdigest-notext">${escapeHtml(
-        _t("convDigest.noText", "(no text)"))}</div>`);
+    // Per-message expand: when a capped `full` text exists and differs from the
+    // preview, render a <details> so the user can open THIS message in place
+    // instead of jumping to the model view.
+    const full = (typeof m.full === "string") ? m.full.trim() : "";
+    let textHtml;
+    if (text && full && full !== text) {
+      textHtml = `<details class="ptool-convdigest-expand">` +
+        `<summary class="ptool-convdigest-text">${escapeHtml(text)}` +
+        `<span class="ptool-convdigest-expand-hint">${escapeHtml(
+          _t("convDigest.expand", "expand"))}</span></summary>` +
+        `<div class="ptool-convdigest-full">${escapeHtml(full)}</div></details>`;
+    } else {
+      textHtml = text
+        ? `<div class="ptool-convdigest-text">${escapeHtml(text)}</div>`
+        : (hints.length ? "" : `<div class="ptool-convdigest-text ptool-convdigest-notext">${escapeHtml(
+          _t("convDigest.noText", "(no text)"))}</div>`);
+    }
+    const msgRel = _convMetaRelTime(m.ts);
+    const idxHtml = `<span class="ptool-convdigest-idx">#${escapeHtml(String(m.index || ""))}</span>`;
+    const tsHtml = msgRel
+      ? `<span class="ptool-convdigest-msgtime" title="${escapeHtml(
+        _convMetaAbsTime(m.ts))}">${escapeHtml(msgRel)}</span>`
+      : "";
     html += `<div class="ptool-convdigest-msg ptool-convdigest-${escapeHtml(roleCls)}">` +
+      `<div class="ptool-convdigest-gutter">` +
       `<span class="ptool-convdigest-role">${escapeHtml(roleLabel(m.role))}</span>` +
+      idxHtml + `</div>` +
       `<div class="ptool-convdigest-msgbody">${textHtml}` +
-      (hints.length ? `<div class="ptool-convdigest-hints">${hints.join("")}</div>` : "") +
+      ((hints.length || tsHtml) ? `<div class="ptool-convdigest-hints">${hints.join("")}${tsHtml}</div>` : "") +
       `</div></div>`;
   }
   html += `</div>`;
-  if (cd.truncated) {
+  if (cd.truncated && !(cd.omitted > 0)) {
+    // Fallback marker when a truncation happened without an inline seam.
     html += `<div class="ptool-convdigest-more">${escapeHtml(
       _t("convDigest.truncated", "… earlier messages omitted — open the model view for the full transcript."))}</div>`;
   }
   html += `</div>`;
   return html;
+}
+
+/* Absolute-time formatter (locale string) for the digest tooltips. */
+function _convMetaAbsTime(ts) {
+  const n = Number(ts) || 0;
+  if (!n) return "";
+  try {
+    return new Date(n).toLocaleString();
+  } catch (e) {
+    return String(n);
+  }
 }
 
 /** Mini-kanban for project_board_read: counts + per-lane epic titles. */
@@ -1535,12 +1593,15 @@ function _renderCommitResult(cr) {
    mutations) represent an action the agent TOOK and stay OPEN. */
 const _CONV_META_ROUTINE_READS = new Set([
   "project_peer_status", "project_board_read", "project_feed_read",
-  "project_charter_read", "list_conversations", "get_conversation",
+  "project_charter_read", "list_conversations",
 ]);
 function _convMetaDefaultOpen(round) {
   const tn = round.toolName || "";
   // Board MUTATIONS (post/claim/complete/block) are actions → open.
   if (tn.startsWith("project_board_") && tn !== "project_board_read") return true;
+  // get_conversation is the PRIMARY viewing product of the "View Conversation"
+  // tool — its digest card is the main deliverable, so it stays OPEN (default
+  // expanded) rather than hiding the transcript behind a click.
   return !_CONV_META_ROUTINE_READS.has(tn);
 }
 

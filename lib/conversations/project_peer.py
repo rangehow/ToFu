@@ -101,6 +101,37 @@ def _prune_and_check(timestamps: list, now: float, *,
     return False, kept, retry_after
 
 
+def _refund_rate_slot(from_conv: str, to_conv: str, ts: float) -> bool:
+    """Give back the rate-limit slot recorded by :func:`_rate_gate` for one
+    (sender, target) pair — used when the send it was gating FAILED.
+
+    ``_rate_gate`` records ``ts`` at CHECK time (before the fallible enqueue) so
+    concurrent/rapid retries correctly see the budget consumed and cannot storm
+    a live target. But if the enqueue then RAISES, no message was delivered, so
+    a flapping target would otherwise silently drain a sender's window budget.
+    This removes exactly ONE occurrence of ``ts`` (the slot that send took),
+    restoring the budget without disarming the guard for the racing case.
+
+    Returns True if a slot was removed. Thread-safe (takes ``_rate_lock``).
+    """
+    key = (from_conv, to_conv)
+    with _rate_lock:
+        hist = _peer_msg_history.get(key)
+        if not hist:
+            return False
+        try:
+            hist.remove(ts)
+        except ValueError:
+            # The exact timestamp already aged out / was pruned — nothing to
+            # refund (the window moved on, which is itself budget relief).
+            return False
+        if hist:
+            _peer_msg_history[key] = hist
+        else:
+            _peer_msg_history.pop(key, None)
+        return True
+
+
 def _authorize_hard_abort(hard_abort: bool, approved_by: str) -> tuple:
     """Pure gate for the coercive hard-abort path.
 
@@ -545,7 +576,14 @@ def send_peer_message(project_path: str, from_conv_id: str, to_conv_id: str,
         res = enqueue_message(
             to_conv_id, payload, config or {}, kind=KIND_PEER_MSG)
     except Exception as e:
-        logger.error('[PeerMsg] enqueue failed %s→%s: %s',
+        # The send FAILED — no message was delivered, so refund the rate-limit
+        # slot _rate_gate consumed at check time. Otherwise a flapping (always-
+        # raising) target would silently drain the sender's per-window budget
+        # for messages that never landed. The refund keeps the storm guard
+        # intact for the concurrent case (the slot WAS held during the attempt)
+        # while not penalising the sender for the target's failure.
+        _refund_rate_slot(from_conv_id, to_conv_id, now)
+        logger.error('[PeerMsg] enqueue failed %s→%s (rate slot refunded): %s',
                      from_conv_id[:8], to_conv_id[:8], e, exc_info=True)
         return {'ok': False, 'error': str(e)}
 

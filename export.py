@@ -1245,6 +1245,52 @@ def _opensource_sanitize_triggers() -> list[str]:
     return triggers
 
 
+# rg's per-file size ceiling for the secret/endpoint scan. rg SKIPS files
+# above this — which is a leak if a large text file carries a secret — so
+# _scan_oversized_text_files scans anything above it in-process. Kept as a
+# constant so the rg flag and the supplement guard can never drift apart.
+_RG_MAX_FILESIZE = '5M'
+_RG_MAX_FILESIZE_BYTES = 5 * 1024 * 1024
+
+
+def _scan_oversized_text_files(root: Path, combined_rx: str,
+                               extra_globs: list[str] | None = None) -> set[str]:
+    """Regex-scan TEXT files larger than the rg ``--max-filesize`` cap.
+
+    rg silently skips files above ``_RG_MAX_FILESIZE``; on the opensource
+    export that means an oversized text file with a secret / internal hostname
+    would ship un-sanitized. This walks ``root`` for text files strictly above
+    the byte cap and returns those whose content matches ``combined_rx`` —
+    closing the leak rg leaves open. Bounded work: only files ABOVE the cap are
+    read (rare in a source tree). ``extra_globs`` are advisory only here (the
+    heavy dirs they exclude are almost never text), so we simply skip obvious
+    non-text via ``_is_text_file``.
+    """
+    try:
+        rx = re.compile(combined_rx)
+    except re.error as e:
+        logger.warning('[export] oversized-scan regex compile failed: %s', e)
+        return set()
+    out: set[str] = set()
+    for dirpath, _dirnames, filenames in os.walk(root):
+        for fn in filenames:
+            fpath = Path(dirpath) / fn
+            if not _is_text_file(str(fpath)):
+                continue
+            try:
+                if fpath.stat().st_size <= _RG_MAX_FILESIZE_BYTES:
+                    continue  # rg already covered it
+                content = fpath.read_text(encoding='utf-8', errors='ignore')
+            except OSError:
+                continue
+            if rx.search(content):
+                out.add(str(fpath.relative_to(root)))
+                logger.warning('[export] oversized text file matched sanitize '
+                               'trigger (rg would have SKIPPED it): %s',
+                               fpath.relative_to(root))
+    return out
+
+
 def _rg_files_with_matches(root: Path, patterns: list[str],
                             extra_globs: list[str] | None = None) -> set[str]:
     """Return relative paths under ``root`` that match any of ``patterns``.
@@ -1267,7 +1313,7 @@ def _rg_files_with_matches(root: Path, patterns: list[str],
         try:
             cmd = ['rg', '--files-with-matches', '--no-messages',
                    '--hidden', '--no-ignore-vcs',
-                   '--max-filesize', '5M']
+                   '--max-filesize', _RG_MAX_FILESIZE]
             for g in (extra_globs or []):
                 cmd.extend(['--glob', g])
             cmd.extend(['-e', combined, str(root)])
@@ -1279,6 +1325,15 @@ def _rg_files_with_matches(root: Path, patterns: list[str],
                     str(Path(p).relative_to(root))
                     for p in r.stdout.splitlines() if p.strip()
                 }
+                # ── Oversized-text-file leak guard (SECURITY) ──
+                # rg silently SKIPS files above --max-filesize, so a >cap text
+                # file carrying a secret / internal hostname would never enter
+                # the candidate set and would ship UN-sanitized. rg only scans
+                # files it did NOT skip, so we must scan the oversized ones
+                # ourselves: walk for text files above the cap and regex them
+                # in-process (rare, so the cost is bounded). A match adds the
+                # file to the candidate set exactly as the rg path would.
+                hits |= _scan_oversized_text_files(root, combined, extra_globs)
                 return hits
             logger.warning('rg returned rc=%s: %s', r.returncode,
                            (r.stderr or '')[:300])
@@ -2747,7 +2802,7 @@ def _verify_opensource(dest: Path):
             try:
                 r = subprocess.run(
                     ['rg', '--no-messages', '--no-ignore-vcs', '--hidden',
-                     '--max-filesize', '5M',
+                     '--max-filesize', _RG_MAX_FILESIZE,
                      '-n', '-e', pat, str(dest)],
                     capture_output=True, text=True, timeout=120,
                     stdin=subprocess.DEVNULL,
@@ -2770,6 +2825,29 @@ def _verify_opensource(dest: Path):
                     leaks_found += 1
             except (subprocess.TimeoutExpired, OSError) as e:
                 logger.warning('rg verify failed for %s: %s', pat, e)
+        # ── Oversized-file supplement (SECURITY) ──
+        # rg skipped every file above _RG_MAX_FILESIZE, so the verify above
+        # cannot see a leak living in an oversized text file. Scan those files
+        # in-process against the SAME patterns so verification can never give a
+        # false "no secrets" all-clear on an oversized leak.
+        for dirpath, _, filenames in os.walk(dest):
+            for filename in filenames:
+                fpath = Path(dirpath) / filename
+                if not _is_text_file(str(fpath)):
+                    continue
+                try:
+                    if fpath.stat().st_size <= _RG_MAX_FILESIZE_BYTES:
+                        continue  # rg already scanned it above
+                    content = fpath.read_text(encoding='utf-8', errors='ignore')
+                except OSError:
+                    continue
+                for pat, desc in leak_patterns:
+                    for m in re.finditer(pat, content):
+                        line_num = content[:m.start()].count('\n') + 1
+                        rel = fpath.relative_to(dest)
+                        print(f"    {C_RED}\u26a0 LEAK:{C_END} {rel}:{line_num} "
+                              f"\u2014 {desc} (oversized file — rg skipped)")
+                        leaks_found += 1
     else:
         # Python fallback — slow but always works.
         for dirpath, _, filenames in os.walk(dest):

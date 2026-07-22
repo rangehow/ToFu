@@ -108,5 +108,18 @@ class AnthropicTranslateTest(unittest.TestCase):
         self.assertIn('event: message_stop', out)
 
 
+    def test_malformed_body_raises_valueerror_for_count_tokens_guard(self):
+        # count_tokens now wraps translate_anthropic_request in try/except
+        # ValueError → 400 (mirroring /v1/messages). This asserts the raise
+        # the guard relies on: a non-array `messages` is a ValueError, not an
+        # uncaught 500. (NEUTER context: without the route guard this same
+        # exception escapes count_tokens as a 500.)
+        from lib.compat.anthropic import translate_anthropic_request
+        with self.assertRaises(ValueError):
+            translate_anthropic_request({
+                'model': 'claude', 'max_tokens': 10, 'messages': 'not-a-list',
+            })
+
+
 if __name__ == '__main__':
     unittest.main()

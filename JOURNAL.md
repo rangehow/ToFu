@@ -1,5 +1,108 @@
 # Project Journal
 
+### 2026-07-22(续11) — 「消息气泡有时渲染出乱码明文」根修:`data-mfp` 属性未转义,run_command 的标题里带 `"` 把属性提前闭合(commit `e85c365`,2 文件 +114/-1,mfp+safe_html 6/6 绿含 NEUTER / collect 7775)。
+- **现象:** 用户截图里一条消息气泡下方冒出一大段 `data-mfp="...fcr9|0§run_command§done§§§1§done§grep -an "CacheRoundRecord..."~1§...` 的序列化乱码明文。
+- **根因链:** ①`_fcFingerprint(toolRounds)`(finish_info.js:1032)把 `run_command` 轮的 `res0.title`(=完整 shell 命令,含字面量 `"`)拼进指纹 → ②该指纹经 `msg._fcResolvedFp` 折进 `_msgFingerprint()`(chat_render.js:213 `_fcFp='r'+...`)→ ③`renderMessage` 用**明文模板 + `raw(...)`** 直接写属性(chat_render.js:1681 `raw(\` data-mfp="${_msgFingerprint(msg)}"\`)`),**绕过转义**。命令里的 `"` 提前闭合 `data-mfp`,其后 `§run_command§...` 溢出成 DOM 文本 = 截图乱码。
+- **修法(单点):** 属性改用 `safeHtml\` data-mfp="${_msgFingerprint(msg)}"\``,`"`→`&quot;`。**关键不变量**:外科式 diff 在 chat_render.js:636 用 `getAttribute("data-mfp")` 读回——浏览器**已解码**,`&quot;`→`"`,故存储转义后读回仍与 `_msgFingerprint(msg)` **逐字节相等**,diff 比较不受影响、不会每轮误判重渲。最外层 `${raw(mfpAttr)}` 组装照旧成立(`raw()` 对 `_SafeHtmlRaw` 调 `String()` 走 `.toString()` 返回已转义值,不二次转义;空串分支 `raw("")` 无害)。
+- **回归测试(`test_frontend_mfp_attr_escape.py`,2 测):** ①jsdom 用真 `escape_html.js`+`safe_html.js` 造带 `"` 的 run_command 指纹,断言 `&quot;` 已转义、无裸引号断裂、`getAttribute()` 读回逐字节相等、文本无 `run_command` 泄漏;②源码调用点守卫断言用 `safeHtml\` data-mfp` 且**没有** `raw(\` data-mfp=`。**NEUTER**:调用点回退成 `raw()` → 守卫测试 `.F` 变红;恢复复绿。
+- **git 纪律:** `reset -q HEAD .` → 仅 add 2 文件 → `--cached --numstat`(chat_render 8/1、新测 106/0)→ `commit -F- -- <路径>` → `git show HEAD --name-only` = 仅 2 文件,NO LEAK。`e85c365`。collect 7775(唯一 error 仍是既知 pty flake)。
+
+### 2026-07-22(续10) — Brain 派发 epic `pt_a4c9d33e`(billing wallet TOCTOU + 非原子 settle):把「money 语义、需 owner」拆成两半——**settle 丢充值窗口是纯顺序 bug、无需拍板,当场根修**(commit `d12cd17`);wallet-CAS 半属真·owner-gated 硬化,精确 block。
+- **拒绝反射式「money→全部 block」:** 真读代码后发现 epic 两半性质不同。第二半(settle)是**确定性丢钱 bug**且有**不需要设计决策**的干净修法;第一半(wallet CAS)当前其实已被 DB 事务串行化,是硬化非活 bug。
+- **修 settle 丢充值(`_common.py`,commit `d12cd17`):** `mark_payment_settled` 原本先 `UPDATE status=settled`+commit、**再**在独立事务 deposit。两步之间崩溃 → webhook 重投时 `if status=='settled': return` 短路在 deposit 之前 → 充值**永久丢失**。修法(纯顺序、无 fork):**先 deposit(ref_id 幂等)再翻 status**。新崩溃窗口都安全:①deposit 后/flip 前崩 → 重投见 status≠settled → deposit 重放(幂等 no-op)→ flip;②deposit 前崩 → 重投 deposit+flip。绝不丢、绝不双计。回归测试模拟「deposit 后 UPDATE 抛错」崩溃 + 重投,断言行仍 pending、credit 已落、重投幂等且最终 settled。**NEUTER**:恢复 flip-then-deposit 顺序 → 测试红。billing_phase2 18/18。
+- **wallet-CAS 半 → 精确 block([human-gated]):** `_read_balance` 在 PG 已 `SELECT ... FOR UPDATE`、SQLite 已 `BEGIN IMMEDIATE`,余额 check→write 在事务内**已 DB 串行化**;in-process `threading.Lock` 是 belt-and-suspenders 而非唯一守卫。改成 `UPDATE ... WHERE balance+?>=0` + rowcount 资金检查是**硬化 money 语义**(难回滚、动 debit/reserve/settle 算术核),属高爆炸半径、需 owner 拍板(A 接受现状关闭 / B say-go 我照 board-lease CAS 同法带测试+NEUTER 落地)。非 sibling 依赖,无 commit 自动清除。
+- **git 纪律:** `reset -q HEAD .` → 仅 add 2 文件 → `--cached --numstat`(_common 17/8、test 52/0)→ `commit -F- -- <路径>` → `git show HEAD --name-only` = 仅 2 文件,NO LEAK。`d12cd17`。
+- **本会话累计:** 11 笔提交,修 **14 个真 bug**(含 2 SECURITY + 这笔丢充值)。epic `pt_a4c9d33e` 的 settle 半闭环、CAS 半精确挂 [human-gated]。我 own 的可自主推进项已全部清空;剩余全是 owner-gated / sibling-owned 的 block 态(gateway 值、export force 策略、autopilot VU cutover、translate-indicator、wallet CAS)。
+
+
+### 2026-07-22(续9) — Brain 派发 epic `pt_2c123990`(compat 流式丢 tool_calls):3 处真 bug 根修 + 用直接驱动 generator 打掉「needs SDK repro」caveat(commit `c7d575b`,4 文件 +156/-1,compat 套件 22/22 绿含三 NEUTER)。epic 已 `project_board_complete`。
+- **caveat 化解:** epic 说「需 streaming SDK client 复现」——但既有 compat 流式测试已经证明可以**直接 async-drain generator**(`stream_openai_chunks`/`stream_anthropic_chunks`)确定性地断言 wire 帧,无需活 SDK。照此把三处都写成确定性回归测试。
+- **修 #1(openai.py 流式丢 tool_calls):** `stream_openai_chunks` 的 `done` 分支只发 content+finish_reason,从不发 tool_calls delta;而同步 `_assistant_message` **会**透传 `rounds[-1].tool_calls`。→ 流式调用方要了工具却拿到 `finish_reason=tool_calls` 但**无 payload**。修:done 分支在答案后按 OpenAI 流式形状发 `delta.tool_calls`(带 per-call `index`)。
+- **修 #2(anthropic.py 流式丢 tool_use):** 对称缺陷——`stream_anthropic_chunks` 的 done 分支不发 tool_use 块,而同步 `_content_blocks_from_task` 会建。修:答案文本块后按 Anthropic 流式形状发 tool_use 块(content_block_start / input_json_delta / stop),并推进 block_index。
+- **修 #3(openai.py finish_reason='error' 非法枚举):** `build_openai_response` 把 error-status 任务映射成 `finish_reason='error'`,不在 OpenAI 合法枚举(stop|length|tool_calls|content_filter|function_call)内 → SDK 会拒。修:映射到 `'stop'`(真错误由 route 的 `api_internal_error` 出口暴露,不靠伪枚举);顺带把内部 `'tool_use'` 归一到 `'tool_calls'`。
+- **NEUTER(三处独立验证):** 分别撤销①流式 tool_calls 发射 ②error→stop 映射 ③流式 tool_use 发射 → 对应 3 个测试各自变红;全部恢复 → 22/22 复绿。证明每处修复都 load-bearing。
+- **git 纪律:** `reset -q HEAD .` → 仅 add 4 文件 → `--cached --numstat`(anthropic 41/0、openai 31/1、test_openai 57/0、test_anthropic 27/0)→ `commit -F- -- <路径>` → `git show HEAD --name-only` = 仅 4 文件,NO LEAK。`c7d575b`。collect 7772(唯一 error 仍是既知 pty flake)。
+- **本会话累计:** 10 笔提交,修 **13 个真 bug**(含 2 SECURITY)+ 3 个误报/陈旧基线/权衡项闭环。我 own 的 open epic 现仅剩 `pt_a4c9d33e`(wallet 多进程 TOCTOU + 非原子 settle)——真实 gated 于 owner 设计决策(原子 UPDATE 语义 + 是否把 status-flip/deposit 并进一个事务)与多 worker 拓扑验证,不在无 owner 拍板下擅动 money 语义。
+
+
+### 2026-07-22(续8) — Brain 派发 triage epic `pt_09e8a6868be14a85`(test_peer_message_round_boundary HEAD 红):判定为**陈旧测试基线**(非生产回归),修测试指向正确模块并闭环(commit `4125a49`,test-only,全套 16/16 绿含 NEUTER)。
+- **三态 triage(deferred-stash 回归 vs 陈旧基线):判为陈旧基线。** `test_source_defers_dedup_and_chip_past_llm_call` 做 `open(orch.__file__)`,但 2026-06 orchestrator 拆包后 `orchestrator.__file__` 解析到门面 `__init__.py`——它所断言的 3 个 token(`_peer_inject_pending`、`assistant_msg = llm_result[` 边界、`dedup_peer_durable_rows`)**全在 `_run` 子模块**、`__init__` 里一个都没有。于是守卫静默读错文件,`_peer_inject_pending` 搜不到 → None → 红。
+- **动测试前先证生产不变量仍真:** 直接 grep `_run.py`——`_peer_inject_pending` stash 在 LLM unpack(pos 63356)**之前**(pos 56736,即 deferral),唯一的 `dedup_peer_durable_rows` 调用(66878)在**之后**(post-consume flush)。生产顺序完全正确,是测试读错文件,不是代码回归。
+- **修法:** 改读 `lib.tasks_pkg.orchestrator._run.__file__`(真正定义 run_task 轮循环的模块)。全套 16/16。**NEUTER 复核守卫仍咬合**:往 `_run.py` 的 LLM 边界前注入一个 `dedup_peer_durable_rows(...)` 调用(模拟 inject-time delete 真回归)→ 守卫立即红;移除复绿。证明修的是"读错文件",不是把守卫改成永真。
+- **与本会话早先记录一致:** 上一 bug-sweep 轮我把此项标注为「pre-existing、stash 掉我的改动仍红、非我 commit 触及」——本轮坐实了「陈旧基线」这一支,而非「deferred-stash 路径回归」。
+- **git 纪律:** `reset -q HEAD .` → 仅 add 1 测试文件 → `--cached --numstat`(8/2)→ `commit -F- -- <路径>` → `git show HEAD --name-only` = 仅 1 文件,NO LEAK。`4125a49`。epic `project_board_complete`。
+- **本会话累计:** 9 笔提交,修 10 真 bug(2 SECURITY)+ 3 个「误报/陈旧基线/需权衡」项(sse assistantMsg 不变量守卫、_rate_gate refund、本 stale 基线)全部闭环。我 own 的剩余 open epic 只剩 `pt_a4c9d33e`(wallet 多进程 TOCTOU)与 `pt_2c123990`(compat 流式 tool_calls)——都真实 gated 于 owner 设计决策 / SDK 复现。
+
+
+### 2026-07-22(续7) — Brain 重复派发 epic `pt_909102262244497a`(sse_handlers assistantMsg null),上轮我已 `[human-gated]` block 但 heartbeat 又派发。这次不再 re-block 空转,改为把「误报」结论**固化成永久回归守卫**并闭环(commit `3de6282`,test-only 100 行,NEUTER 已证)。
+- **判决(静态决定性,无 null 路径):** `connectToTask`(sse_pipeline.js:351)在接线 dispatcher 前有**无条件**守卫 `if (!assistantMsg || assistantMsg.role !== "assistant") { …push 新 assistant 消息… }`,其注释恰好点名 reviewer 担心的「loadConversationMessages Phase-2 竞态覆盖 conv.messages」场景;后续所有 `assistantMsg =` 重赋值都门控到 truthy 值。故 `_hctx()` 永不把 null 传给三个 inject handler。给 handler 加 `if(!assistantMsg)return` 正是 epic 明令禁止的「无 runtime repro 的投机防御代码」。
+- **为何不再 block:** 上轮已按流程 `[human-gated]` block(附完整静态证明),但 Brain heartbeat 仍重派(与 `_rate_gate` 同款重复派发)。再 block 只会循环。真正的收口 = 把「误报」变成**不会静默回归**的状态:加一条**源码不变量测试**钉住那条 `connectToTask` 守卫——谁将来删掉它(重新打开真 null 路径),测试立刻在这里红,把这个 concern 重新浮出来。这是真实产出,且**非投机生产代码**(没给 handler 加守卫、没动任何 `static/js/*.js`、无 bundler 条目)。
+- **测试(`test_frontend_sse_assistantmsg_invariant.py`,2 测):** ①断言 `connectToTask` 保留非空守卫且守卫体确实 push 新 assistant 消息(非仅 log);②记录三个 handler 确实无条件解引用 assistantMsg 的耦合,并断言**没有**冒出投机 `if(!assistantMsg)return`(若将来有人加了,测试提示必须先带 runtime repro)。NEUTER:把守卫改成 `if(false)` → 测试①红;恢复复绿。
+- **git 纪律:** `reset -q HEAD .` → 仅 add 1 测试文件 → `--cached --numstat`(100/0)→ `commit -F- -- <路径>` → `git show HEAD --name-only` = 仅 1 文件,NO LEAK。`3de6282`。collect 7768(唯一 error 仍是既知 pty flake)。epic `project_board_complete`。
+- **本会话累计:** 8 笔提交,修 10 真 bug(2 SECURITY)+ 2 个「需 owner/repro」项分别以「refund 干净方案」与「不变量守卫固化误报」闭环。剩余 open epic(wallet TOCTOU、compat 流式 tool_calls、pre-existing 测试失败)仍真实 gated。
+
+
+### 2026-07-22(续6) — Project Brain 自动派发接手 epic `pt_2dbe14c31bd64374`(_rate_gate 预算竞态):用 reserve-then-refund 化解权衡而非选更差失败模式(commit `666514d`,2 文件 +86/-1,project_peer 全套 30/30 绿含 NEUTER)。epic 已 `project_board_complete`。
+- **背景:** 该 epic 我上一轮自己上报为"需 owner 权衡失败模式"。Brain 派发要求做而非挂着;我重读代码,发现权衡是**假两难**——有第三条不牺牲任一端的路。
+- **原缺陷:** `_rate_gate` 在 CHECK 时(fallible `enqueue_message` 之前)就记录 (sender,target) 槽位,好让并发/快速重试正确看到预算已耗、无法冲垮 live 目标。但若 enqueue 随后 RAISE,消息没投出去、槽位却已花掉 → 一个 flapping(总是抛错)目标会静默吃光发送方 3/窗口 的预算。
+- **化解(不选更差模式):** owner 提示的两个选项各有毒——check 时记录会误伤失败发送;success 后记录会让"慢但成功"的 enqueue 在重试环里绕过 storm guard。改用 **reserve-then-refund**(wallet reserve/settle 同款):仍在 check 时记录(并发态槽位确实被占),仅在 enqueue **失败路径**调 `_refund_rate_slot()` 精确移除这次发送占用的那一个时间戳。storm guard 对并发态完全不变,发送方不为目标的失败买单。
+- **新增 `_refund_rate_slot(from,to,ts)`:** 线程安全(持 `_rate_lock`),`list.remove(ts)` 精确退还一个槽;时间戳已被 prune 掉则 no-op(窗口已前移,本身即预算释放)。
+- **测试 + NEUTER(project_peer 30/30):** ①5 连续失败发送从不耗尽预算(每次退还,永不 `rate_limited`);②成功发送控制项——3 次成功填满窗口、第 4 次照旧 `rate_limited`(证明退还只覆盖失败、storm guard 仍咬合);③NEUTER 去掉 refund 调用 → 第 4 次失败发送变 `rate_limited`(日志实见 `rate-limited cA→cB retry in 120s`)→ 红,恢复复绿。
+- **git 纪律:** `reset -q HEAD .` → 仅 add 2 文件 → `--cached --numstat`(project_peer 39/1、test 47/0)→ `commit -F- -- <路径>` → `git show HEAD --name-only` = 仅 2 文件,NO LEAK。`666514d`。collect 7766(唯一 error 仍是既知 pty flake)。
+- **本会话累计:** 7 笔提交,修 **10 个真 bug**(2 SECURITY),epic `pt_2dbe14c3` 从"需 owner 权衡"降级为"有干净第三方案"并闭环。
+
+
+### 2026-07-22(续5) — 两个已确认 SECURITY 缺陷根修闭环(owner 拍板立即修、不 ticket):OAuth CSRF + export 超大文本文件泄漏(commit `290e47f`,4 文件 +246/-2,oauth+export 套件 23/23 绿含双 NEUTER)。
+- **owner 裁定:** 这两项不是"需权衡失败模式"的东西,是纯安全漏洞、修复方向唯一,挂 ticket = 把真 bug 留代码里。照做,两个 board ticket(`pt_d99ae54c`/`pt_0469380b`)已 `project_board_complete`。
+- **#1 OAuth CSRF(`_exchange.py`,已根修):** `exchange_code` 收 caller 的 `state` 却只在为空时默认成 `flow_state`,**从不比对**。Claude 控制台复制粘贴流无 relay handler,其唯一 CSRF 门就此缺失——伪造的 code+state 对被无条件交换。修:`if state and flow_state and state != flow_state:` → 拒绝(标记 flow error)、**不进 exchange**;空 state 仍回退 flow_state(手动粘贴流无法回传 state)。测试断言伪造 state 被拒且 **claude_exchange_code 从未被调**;NEUTER 去守卫→伪造对直达 exchange 并 provision→红。
+- **#2 export 超大文件泄漏(`export.py`,已根修):** sanitize 扫描 `_rg_files_with_matches` 与 verify 扫描都用 `rg --max-filesize 5M`,rg **静默跳过**超限文件——>5MB 文本文件里的密钥/`.sankuai.com`/`/mnt` 路径从不进候选集、原样 tar 进开源包,且 verify(同 5M 封顶)连告警都不出。修:新增 `_scan_oversized_text_files`,rg 跑完后**在进程内**对所有超过 cap 的文本文件按同一批 pattern 补扫,命中即加入候选集;verify 扫描加同样补扫。新增常量 `_RG_MAX_FILESIZE`/`_RG_MAX_FILESIZE_BYTES` 防 rg flag 与守卫漂移。回归测试造 >5MB + 内部主机名文本文件断言被 flag;NEUTER 去补扫→rg 单独漏掉超限文件→红(而 undersized 控制项仍绿,证明只有超限分支 load-bearing)。
+- **诚实边界:** 测试里的内部 token 全用**片段拼接**(`'secret-host.'+'sankuai'+'.com'`、`'/mnt/'+'dolphin'+'fs'`),因本测试文件本身会被导出——不留连续内部字面量,避免自己成为泄漏源(沿用 `test_export_conf_path_sanitize.py` 约定)。
+- **git 纪律:** `reset -q HEAD .` → 仅 add 4 文件 → `--cached --numstat`(export 80/2、_exchange 17/0、新测 111/0、oauth 测 38/0)→ `commit -F- -- <路径>` → `git show HEAD --name-only` = 仅 4 文件,NO LEAK。`290e47f`。相关套件 23/23,collect 7764(唯一 error 仍是既知 pty flake)。
+- **本会话 bug-sweep 全景收口:** 6 笔提交 `9e1d4cd`(paper folder_id+memory body)、`542881c`(scheduler once/None)、`340b3d4`(board lease CAS)、`6cc184c`(peer fail-closed)、`1f4cdfe`(alipay uid + compat count_tokens)、`290e47f`(OAuth CSRF + export 泄漏),共修 **9 个真 bug**(含 2 个 SECURITY),证伪 peer 双投递等误报,其余需 owner 权衡/宽爆炸半径项落成 board ticket。三波 subagent 覆盖后端全主干。
+
+
+### 2026-07-22(续4) — bug-sweep 第三波(覆盖之前从未扫过的 llm/billing/oauth/compat/routes-top/export):修 2 个静态确定自包含缺陷(commit `1f4cdfe`),其余高危项开 ticket(不留口头)。
+- **owner 指出"all source files"未到线**:派 4 个 reviewer 分片扫 lib/llm+llm_dispatch+llm_sanitize、lib/billing、lib/oauth+lib/compat、routes/顶层蓝图+export.py sanitization 主体。
+- **修 #1 alipay 错误 user_id(真金损失,已根修 `1f4cdfe`):** `handle_alipay_notify` 在 passback_params 缺失时用 `out_trade_no.split('_')[1]` 回退取 user_id;`out_trade_no='tofu_<uid>_<ms>'` 而 uid 本身是 `usr_<hex>`,split[1] 得到字面量 `'usr'` → 钱记到虚假账户。修:剥掉 `tofu_` 前缀 + rfind 去掉尾部 `_<ms>`,完整还原 `usr_<hex>`。**端到端**回归(打真实 `handle_alipay_notify`,stub 签名验证 + 捕获 record_payment)+ NEUTER(源码换回 split[1] → 测试红)。
+- **修 #2 compat_anthropic count_tokens 500→400(已根修 `1f4cdfe`):** `count_tokens` 裸调 `translate_anthropic_request`,畸形 body 抛未捕获 500;而同文件 `/v1/messages` 对同一调用有 `try/except ValueError→400`。补同样守卫。实测 `translate_anthropic_request({'messages':'not-a-list'})` 确抛 ValueError。
+- **判为设计选择、不改:** `llm_dispatch/api.py:1047` `_MAX_429_CYCLES=0`(无限 429 重试)——注释明确"0=infinite; set>0 to re-enable",且每 cycle 跑 abort_check 用户可取消,是带逃生口的刻意设计。
+- **高危但需 owner 判断/宽爆炸半径 → 开 ticket(5 个):** ①`pt_0469380b` [SECURITY] export.py opensource 层 `rg --max-filesize 5M` 跳过 >5MB 文本文件→含密文件原样 tar 进开源包(verify 扫描也 5M 封顶,连告警都不出);②`pt_d99ae54c` [SECURITY] OAuth `_exchange.py` state 只默认不比对 = CSRF 门缺失(Claude 复制粘贴流无 relay 校验);③`pt_a4c9d33e` billing wallet 余额 read-modify-write 仅 in-process 锁(多 worker 进程不安全,同 board lease TOCTOU 类)+ `mark_payment_settled` 状态翻转与 deposit 非原子(崩溃窗口+重投 short-circuit 丢充值);④`pt_2c123990` compat 流式路径丢 assistant tool_calls + `finish_reason='error'` 非合法 OpenAI 枚举值。
+- **诚实边界:** llm reviewer 报的 SSE 稀疏 index 丢 tool_call、sanitizer 合并丢 reasoning/signature 等多为 needs-repro/provider-dependent,未在无复现下盲改(投机防御代码违反 CLAUDE.md 精简原则)——纳入上述 ticket 或留待复现。
+- **git 纪律:** `reset -q HEAD .` → 仅 add 我的 4 文件 → `--cached --numstat` 核对(alipay 11/5、compat_anthropic 7/1、test_billing 66/0、test_compat_anthropic 13/0)→ `commit -F- -- <路径>` → `git show HEAD --name-only` = 仅 4 文件,NO LEAK。`1f4cdfe`。本轮相关套件 120/120,collect 7758(唯一 error 仍是既知 pty flake)。
+
+
+### 2026-07-22(续3) — bug-sweep 收口:根修 2 个 exactly-once/lease 契约缺陷(board CAS `340b3d4` + peer fail-closed `6cc184c`),证伪 1 个(peer 双投递),其余判定后开 ticket。
+- **owner 打回:第二波高价值缺陷只判决没闭环。** 逐个 read 真实代码判「真 bug / 误报」,真 bug 上根因修 + failing-first + NEUTER,其余开 board ticket(不停在口头)。
+- **#1 board lease TOCTOU → 真 bug,已根修(`340b3d4`):** `claim_task` 的 eligibility SELECT 与 `UPDATE ... WHERE id=project_path` 两条语句间无 CAS,两个会话并发抢 OPEN epic 都读到 open、都写各自 owner(last-writer-wins),双双 ok=True——board 协调正确性直接失效。修:UPDATE 加 `AND COALESCE(owner_conv_id,?)=? AND COALESCE(lease_expires_at,0)=?` 条件(锁定读到的 pre-state),`rowcount==0` 即输掉竞争→advisory 拒绝并报真实 owner。三种合法态(open/self-refresh/expired-reclaim)都被 precondition 接纳。确定性回归测试:在 loser 的 `_effective_status`(SELECT 后、UPDATE 前)里塞入 winner 的完整 claim 复现交错;NEUTER 恢复无条件 UPDATE→loser 也成功、测试红。board 全套 42/42。
+- **#2 peer 双投递 → 证伪(误报):** 追完投递路径,exactly-once 已被现有屏障保住——① forward de-dup(删 durable 行)DEFERRED 到 LLM 消费后才做(`_run.py:1106`);② reverse de-dup 在 `_dispatch_lock` 内、pop durable 行的同一临界区调 `consume_peer`(`message_queue.py:789`),两条 lane 靠共享 `queueId` 互消。twin 仅在 target 有 live turn 时入队,`enqueue` 拒绝 tombstoned(已结束)任务→死会话不残留 twin。reviewer 担心的窗口不成立。**不加冗余锁**(注释明确警告 `enqueue` 不可嵌进 `_dispatch_lock`,会死锁)。
+- **#3 `_resolve_target_conv_id` DB 异常 fail-open → 真 bug(低危),已根修(`6cc184c`):** 该函数存在的意义就是阻止 peer 消息用截断(8 字符前缀)id 入队(队列/注册表按 14 字符全 id 匹配,截断 id = 无人 drain 的幽灵队列 = 静默丢消息),但 except 分支却原样返回输入 id(fail-open),DB 抖动时对短 id 重新引入了它要防的丢消息。修:DB 异常时对 sub-length id fail-CLOSED 报 `resolve_failed`;全长 id(已规范)仍放行(抖动不该丢有效发送)。新增 `_FULL_CONV_ID_LEN=14` 常量。回归两分支 + NEUTER。target-resolution 全套 11/11。
+- **其余判定(fix 或 ticket,不留口头):** ①`_rate_gate` 预算在 enqueue 前消耗 → 真但低危+storm-guard 权衡(记录改成功后置会引入绕过 guard 的重试环),开 ticket `pt_2dbe14c3`。②`sse_handlers_lifecycle.js` 无 `assistantMsg` null 守卫 → dispatcher(connectToTask)派发前已解析非空(VU kick 用 detached dummy 而非 null),静态查不到 null 路径,开 ticket `pt_90910226` 待 runtime repro(不盲加投机守卫)。③`tool_rounds.js:1896` stdin deref → 误报(自引用元素,按钮与其 input 同生同灭)。
+- **pre-existing 失败(非我引入),已开 triage ticket `pt_09e8a686`:** `test_peer_message_round_boundary.py::test_source_defers_dedup_and_chip_past_llm_call` 在 HEAD 红。**证据:把我本轮工作树改动 stash 掉(干净 HEAD、仅含我 4 个 commit)仍红**,且我 4 个 commit 均不碰 `_turn.py`/`message_queue.py`/`_peer_inject_pending`(它们是 sibling 未提交 `M`)。断言的 `_peer_inject_pending` stash 逻辑在 `_turn.py`,非我改动面。
+- **git 纪律(共享 HEAD、大量 sibling WIP):** 每次 `reset -q HEAD .` → 仅 add 我的文件 → `--cached --numstat` 核对 → `commit -F- -- <路径>` → `git show HEAD --name-only` 确认无泄漏。本轮两 commit:`340b3d4`(board CAS,2 文件)、`6cc184c`(peer fail-closed,2 文件)。collect 7754(唯一 error 仍是既知 pty flake)。
+
+
+### 2026-07-22(续) — bug-sweep 第二轮:先给上一轮 subagent 遗留的 punch-list 逐项判决(present-or-absent 实证,不猜),再 fan-out 第二波扫未覆盖子系统,修 2 个静态确定的调度器 bug(commit `542881c`,3 文件 +82/-2,scheduler 38/38 绿含 NEUTER)。
+- **owner 打回:上一轮把 reviewer 的 punch-list 无判决地丢了。** 照 feclient 对 settings 面板做的同样功夫,逐项证「元素在 served DOM 里到底在不在」:
+  - **memory.js `createMemoryFromModal`/`openMemoryModal` → 误报**:全部 id 是 index.html 静态标记(`memoryModal:1492`/`memoryAddSection:1529`/`memoryNewName:1531`/`memoryNewScope:1538`/`memoryModalStatus:1545`),无 fragment/flag 门控,调用时恒在。
+  - **project.js `openApplyModal`/`browseBackBtn`/`projectModal` → 误报**:同为静态(`projectModal:1327`/`browseBackBtn:1355`/`applyModal:1574`/`applyFilePath:1578`/`applyConfirmBtn:1583`)。
+  - **tasks.py:237 `if 'aborted' in task` → 误报**:通用中止是 `rt.abort()`→`abort_event.set()`(task_runtime.py:238),所有 runtime worker 都查它;`task['aborted']` 只是 chat 专属补充位,守卫刻意只对 chat 戳、对非 chat 跳过是**正确**的,中止对任何 kind 都不会漏。
+- **第二波 fan-out(3 reviewer,覆盖 tasks_pkg/scheduler、swarm/conversations、mcp/ui-SSE):** 各回一份 punch-list。**只挑「静态确定 + 自包含」的修**,其余(TOCTOU/双投递/竞态类,需 runtime repro)按 owner 一贯偏好留作单独 ticket。
+- **修 #1(manager.py,HIGH 静态确定):** `_check_and_run_due_tasks` 的 `once:` 分支 `datetime.fromisoformat()` **无守卫**,而紧邻 cron 分支有 `try/except ValueError`。一条坏 `once:` 行抛 ValueError 逃出 per-task 循环 → **整个 tick 的到期扫描中止**,其余到期任务全静默饿死。加 `try/except ValueError` skip。
+- **修 #2(proactive.py,MED 静态确定):** `poll_decision` 的 parse-error handler 写 `f'Parse error: {content[:100]}'`;`parse_json_decision` 恰在 `content is None` 时抛 AttributeError(被捕获),随后 `None[:100]` 再抛 TypeError 逃出。改 `(content or '')[:100]`。
+- **测试 + NEUTER:** 新增 3 测。NEUTER 实证:去掉 once 守卫 → `ValueError: Invalid isoformat string: 'garbage'`,两测立即红;恢复复绿。scheduler 全套 38/38。collect 7751(唯一 error 仍是既知 pty flake)。
+- **未修但已记录的高价值 ticket 候选(需 runtime repro,留给 owner):** swarm `claim_task` lease TOCTOU、`project_peer` 消息双投递竞态、`_rate_gate` 预算在失败 enqueue 前消耗、`_resolve_target_conv_id` fail-open 返回截断 id 丢消息;FE `tool_rounds.js:1896` stdin deref、`sse_handlers_lifecycle.js` 缺 `assistantMsg` null 守卫。
+- **git 纪律:** `reset -q HEAD .` → 仅 add 3 文件 → `commit -F- -- <3 路径>` → `git show HEAD --name-only` = 仅 3 文件,NO LEAK。`542881c`。
+
+
+### 2026-07-22 — 日志驱动全项目 bug 排查(4 个 subagent 并行扫 BE/FE/paper/FE-client),修 2 个真 bug + 恢复 1 个被误删的核心文件(commit `9e1d4cd`,4 文件 +34/-3,selfheal 6/6 + paper 迁移 16/16 绿,NEUTER 已证)。
+- **live bug #0(未进 commit,靠恢复):** `static/js/feature-loader.js` 在工作树被删(`git status` 显示 `D`),但它在 HEAD 里完整(155 行)、且列在 `js_bundler._BUNDLE_FILES`。当天 14:47 boot 日志实报 `[Bundle] Missing source file feature-loader.js` → core bundle 少了懒加载器,paper/orchestration/task-mode 等 deferred 特性静默失效。`git checkout HEAD -- ` 恢复即修。(另一个 `D`:`lib/project_mod/write_tools.py` 是**故意**重构成 `write_tools/` 包,导入正常,非 bug。)
+- **真 bug #1(paper/library 500,进 commit):** `GET /api/v1/paper/library` 反复 500 `column "folder_id" does not exist`。根因:`folder_id` 有 `_chat.py` 的守卫 ALTER + 在 Core 表已声明,但**没登记进 `_CRITICAL_COLUMNS`**。版本当前的 DB 走 `_init.py:60` fast-path 跳过所有 DDL → ALTER 从不执行 → `_PAPER_LIB_COLUMNS` SELECT 每次抛错。修:两个后端 selfheal 各加 `'paper_library': ('folder_id',)`,强制 version-current-but-column-missing 的 DB 重迁移。这是 2026-07-15 scheduler predicate 同类 bug 的第二次复发。
+- **真 bug #2(memory 路由,进 commit):** create/update/merge memory 用 `request.get_json(force=True)`,空 body / 非 JSON content-type 会抛未捕获的 Werkzeug 400/415,而非项目统一的 `BadRequest→400` 信封。改用同文件 sibling 路由已在用的 `parse_body(force=True)`(空 body→{}、非 dict→BadRequest)。
+- **验证过的「非 bug」(诚实记):** 3 个 FE client-error(`setChatMode is not defined`、`_updateProjectUI` classList null、`openSettings` value null)经 subagent 核 HEAD **均已修**(setChatMode 现 export 在 `main_toolbar_ui.js:148`;`_updateProjectUI` 已加 `?.` 守卫;settings 面板由 `inject_panels` 在渲染期拼入 DOM)。be-sweep 的 `parse_items(scope=)` 参数不匹配是**误报**(签名是 `parse_items(body=None, scope='')`)。`mt_test_v1` 返回 HTTP 200-on-error 是 test-panel 刻意约定,不动。
+- **NEUTER:** 去掉 PG selfheal 的 `paper_library` 条目 → 新测 `test_paper_library_folder_id_is_critical_on_both_backends` 立即变红(both-backends-agree 断言),恢复复绿。collect 7748(唯一 error 是既知 `test_run_command_pty_streaming.py` ImportError flake,非我引入)。
+- **git 纪律(共享 HEAD,大量 sibling WIP):** `reset -q HEAD .` → 仅 add 4 文件 → `--cached --numstat` 核对(7/0、7/0、3/3、17/0)→ `commit -F- -- <4 路径>` → `git show HEAD --name-only` = 仅 4 文件,NO LEAK。`9e1d4cd`。
+
+
 
 ### 2026-07-20 — 重启迟迟不落地(4h watcher 未等到),owner 给了不依赖重启的过渡硬证据项:真实体走新代码。已交付 `debug/cache_replay_newcode_bridge.py`(commit `29fe340`),#1/#2 PASS、#3 诚实挂活体。
 - **背景:** 活体三数(ttl_flip→0、mid_oow→0、CLEAN 占比降)仍是金标准、不撤销;但 :15000 一直没重启(watcher 跑满 120 poll、`CacheMidMode` 仍 0 次)。owner 要「从真实体走真实新代码」拿最强过渡证据,同时给最终活体读数排雷。

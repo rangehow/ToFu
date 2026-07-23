@@ -24,6 +24,44 @@ from lib.log import get_logger
 logger = get_logger(__name__)
 
 
+def _spawn_narration_backfill(conv_id, msg_idx, msg_id, target_lang, messages):
+    """Fire-and-forget the path-independent terminal narration backfill.
+
+    Guards on a CHEAP pure predicate first (no LLM) — only spawns the daemon
+    thread when the target message actually has a narration text segment whose
+    ``translatedText`` is still empty. The backfill itself
+    (``backfill_message_narration_sync``) is enrich-only + idempotent, so a
+    spurious spawn would be a no-op anyway; the pre-check just avoids the thread
+    churn on the common already-stamped case.
+
+    Runs off-thread because it makes REAL LLM calls (one per still-missing
+    narration segment) and must never block the sync / run_task caller.
+    """
+    try:
+        from lib.translate.segment_backfill import has_untranslated_narration
+        msg = None
+        if isinstance(msg_idx, int) and 0 <= msg_idx < len(messages):
+            msg = messages[msg_idx]
+        if not (isinstance(msg, dict) and has_untranslated_narration(msg)):
+            return
+
+        def _run():
+            try:
+                from lib.translate.segment_backfill import backfill_message_narration_sync
+                backfill_message_narration_sync(
+                    conv_id, msg_idx, msg_id or '', target_lang, source='English',
+                    log_tag=(conv_id or '?')[:8])
+            except Exception as e:
+                logger.warning('[AutoTranslate] conv=%s narration backfill thread '
+                               'failed: %s', (conv_id or '?')[:8], e)
+
+        threading.Thread(target=_run, daemon=True,
+                         name=f'narration-backfill-{(conv_id or "x")[:8]}').start()
+    except Exception as e:
+        logger.debug('[AutoTranslate] conv=%s spawn narration backfill skipped: %s',
+                     (conv_id or '?')[:8], e)
+
+
 def _maybe_auto_translate_assistant(conv_id, content, msg_idx, db=None, task=None):
     """Automatically translate the assistant's response on the server side.
 
@@ -74,8 +112,16 @@ def _maybe_auto_translate_assistant(conv_id, content, msg_idx, db=None, task=Non
         # unpredictably. Now every trigger path resolves through the single
         # lib.conv_config.resolve_auto_translate (default OFF).
         settings = json.loads(row[1] or '{}') if row[1] else {}
-        from lib.conv_config import resolve_auto_translate
+        from lib.conv_config import resolve_auto_translate, resolve_translate_target, target_lang_code
         auto_translate = resolve_auto_translate(settings)
+        # ── OUTPUT-side target language (model reply → human) ──
+        # Resolve from the UI language the frontend froze into settings.uiLang
+        # (config wins over settings when the task carries a fresher one).
+        # Falls back to Chinese when unresolved, so a headless / old-frontend
+        # conv is byte-identical to the historical hard-pin.
+        _task_cfg = (task or {}).get('config') or {}
+        target_lang = resolve_translate_target(_task_cfg, settings)
+        target_code = target_lang_code(target_lang)
         if not auto_translate:
             logger.info('%s conv=%s msg=%d autoTranslate=false (resolved) — '
                         'skipping (settings.autoTranslate=%r)',
@@ -154,21 +200,65 @@ def _maybe_auto_translate_assistant(conv_id, content, msg_idx, db=None, task=Non
                 else:
                     logger.debug('%s conv=%s msg=%d already has translatedContent (%d chars) — skipping',
                                  pfx, conv_id[:8], msg_idx, len(existing_tc))
+                    # ★ PATH-INDEPENDENT narration backfill (Path B fix): the
+                    #   DELIVERABLE is already translated, but that must NOT be
+                    #   a reason to leave the interleaved tool narration in
+                    #   English. Enrich any narration segment still missing
+                    #   translatedText off-thread (enrich-only + idempotent →
+                    #   a no-op / zero LLM calls when already stamped).
+                    _spawn_narration_backfill(conv_id, eff_idx, _msg_id,
+                                              target_lang, messages)
                     return
 
-        # ── Skip already-Chinese content ──
-        # The target language is hard-pinned to Chinese (see _run_translate
-        # below). When the assistant already replied in Chinese (e.g. a Qwen/
-        # Kimi model with a "default Chinese" system prompt), translating it to
-        # Chinese is a no-op the engine's echo detector misreads as "model
-        # echoed input" — it burns the full retry budget then FAILS the
-        # translation outright. Short-circuit here, mirroring the frontend
-        # _isAlreadyChinese guard (lib.text_lang.is_predominantly_chinese).
-        from lib.text_lang import is_predominantly_chinese
-        if is_predominantly_chinese(content):
-            logger.info('%s conv=%s msg=%d content already predominantly Chinese '
-                        '(target=Chinese) — skipping auto-translate (no-op)',
-                        pfx, conv_id[:8], msg_idx)
+        # ── Skip content already in the target language ──
+        # When the assistant already replied in the target language (e.g. a
+        # Qwen/Kimi model that defaults to Chinese, or a genuinely-Japanese
+        # reply into a Japanese UI), re-translating is a no-op the engine's
+        # echo detector misreads as "model echoed input" — it burns the full
+        # retry budget then FAILS outright. Detect with force_fasttext=True:
+        # the script+heuristic tier CANNOT tell kanji-heavy Japanese from
+        # Chinese (both use the CJK-ideograph block), so a plain
+        # is_predominantly_chinese gate wrongly skipped Japanese as "already
+        # Chinese" and never translated it — the reported bug. The statistical
+        # model separates ja/zh. Accepted corner case: pure-kanji, no-kana
+        # Japanese still resolves 'zh' (linguistically indistinguishable from
+        # Chinese at the character level).
+        from lib.text_lang import detect_language
+        if detect_language(content, force_fasttext=True).code == target_code:
+            logger.info('%s conv=%s msg=%d content already in target language '
+                        '(target=%s/%s) — skipping auto-translate (no-op)',
+                        pfx, conv_id[:8], msg_idx, target_lang, target_code)
+            # ★ FIX #1 (don't discard already-translated narration): when an
+            #   incremental accumulator is active, it already translated the
+            #   inter-round narration LIVE. The deliverable needs no
+            #   translatedContent (it's already in the target language), but the
+            #   cancel_incremental in the finally would THROW AWAY those cached
+            #   segments — the reported loss. Hand the accumulator a STAMP-ONLY
+            #   finalize instead: it commits the cached per-round Chinese onto
+            #   the settled render (self-healing a segment-less row via
+            #   fallback_segments) and takes ownership so the finally skips the
+            #   cancel. Falls through to the backfill below when no accumulator
+            #   exists (segment-less historical turn → toolRounds synthesis).
+            if task is not None:
+                try:
+                    from lib.translate import finalize_incremental_stamp_only
+                    if finalize_incremental_stamp_only(task, conv_id, eff_idx,
+                                                       msg_id=_msg_id or None):
+                        _inc_handed_off = True
+                        logger.info('%s conv=%s msg=%d stamp-only finalize owns the '
+                                    'cached narration (already-target deliverable)',
+                                    pfx, conv_id[:8], eff_idx)
+                except Exception as se:
+                    logger.warning('%s conv=%s stamp-only finalize failed, falling '
+                                   'back to backfill: %s', pfx, conv_id[:8], se)
+            # ★ PATH-INDEPENDENT narration backfill (Path B fix): the
+            #   DELIVERABLE is already in the target language (so it has no
+            #   translatedContent), but the interleaved English narration still
+            #   needs translating. Enrich off-thread (enrich-only + idempotent).
+            #   This ALSO covers the segment-less historical turn (no live
+            #   accumulator) by synthesising narration from toolRounds.
+            _spawn_narration_backfill(conv_id, eff_idx, _msg_id,
+                                      target_lang, messages)
             return
 
         logger.debug('%s conv=%s msg=%d autoTranslate is ON — starting translation',
@@ -199,7 +289,7 @@ def _maybe_auto_translate_assistant(conv_id, content, msg_idx, db=None, task=Non
         if task is not None:
             try:
                 from lib.translate import finalize_incremental
-                if finalize_incremental(task, conv_id, eff_idx, content, msg_id=_msg_id or None):
+                if finalize_incremental(task, conv_id, eff_idx, content, msg_id=_msg_id or None, target=target_lang):
                     _inc_handed_off = True
                     # The incremental worker now owns BOTH the accumulator and
                     # the in-flight guard; it releases the guard when it commits
@@ -223,6 +313,7 @@ def _maybe_auto_translate_assistant(conv_id, content, msg_idx, db=None, task=Non
         # mutations.
         _spawn_msg_id = _msg_id
         _spawn_idx = eff_idx
+        _spawn_target = target_lang
 
         def _run_translate():
             try:
@@ -239,7 +330,7 @@ def _maybe_auto_translate_assistant(conv_id, content, msg_idx, db=None, task=Non
                     'msgIdx': _spawn_idx,
                     'msgId': _spawn_msg_id,
                     'field': 'translatedContent',
-                    'targetLang': 'Chinese',
+                    'targetLang': target_lang,
                     'textLen': len(content),
                     'created_at': time.time(),
                     'completed_at': None,
@@ -247,7 +338,7 @@ def _maybe_auto_translate_assistant(conv_id, content, msg_idx, db=None, task=Non
                 with _translate_tasks_lock:
                     _translate_tasks[task_id] = task
                 logger.info('%s task=%s conv=%s Translate thread started', pfx, task_id, conv_id[:8])
-                _do_translate(task_id, content, 'Chinese', 'English', conv_id, _spawn_idx, 'translatedContent',
+                _do_translate(task_id, content, _spawn_target, 'English', conv_id, _spawn_idx, 'translatedContent',
                               msg_id=_spawn_msg_id or None)
             except Exception as e:
                 logger.error('%s conv=%s Translate thread failed: %s', pfx, conv_id[:8], e, exc_info=True)

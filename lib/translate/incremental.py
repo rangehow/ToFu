@@ -56,7 +56,6 @@ import queue
 import threading
 
 from lib.log import get_logger
-from lib.text_lang import is_predominantly_chinese
 
 logger = get_logger(__name__)
 
@@ -69,10 +68,23 @@ _KILL_ENV = 'TOFU_INCREMENTAL_TRANSLATE'
 _WORKER_IDLE_TIMEOUT = 300.0
 
 # Assistant replies are authored in English when autoTranslate is on (the user
-# message was translated to English before the turn ran). Mirrors
-# _maybe_auto_translate_assistant's _do_translate(..., 'Chinese', 'English').
-_TARGET = 'Chinese'
+# message was translated to English before the turn ran) — so SOURCE is always
+# English. The TARGET, historically hard-pinned to Chinese, is now the UI
+# language (resolved per-task from task['config'].uiLang via
+# resolve_translate_target); it falls back to Chinese when unresolved so an
+# old-frontend / headless task is byte-identical to the former behaviour.
+_TARGET_DEFAULT = 'Chinese'
 _SOURCE = 'English'
+
+
+def _resolve_target(task) -> str:
+    """Resolve the per-task OUTPUT target language name (falls back to Chinese)."""
+    try:
+        from lib.conv_config import resolve_translate_target
+        return resolve_translate_target((task or {}).get('config') or {})
+    except Exception as e:
+        logger.debug('[IncTranslate] target resolve failed (→Chinese): %s', e)
+        return _TARGET_DEFAULT
 
 _accumulators: dict[str, '_Acc'] = {}
 _acc_lock = threading.Lock()
@@ -148,6 +160,16 @@ class _Acc:
         # caller didn't supply one (old frontend / non-UI start path): we then
         # simply skip the live preview and still finalize at task end.
         self.msg_id = task.get('_assistantMsgId') or ''
+        # Per-task OUTPUT target language (UI language) + its detector code,
+        # resolved once at accumulator construction. All segment / whole /
+        # already-target checks below use these instead of a Chinese hard-pin.
+        self.target = _resolve_target(task)
+        try:
+            from lib.conv_config import target_lang_code
+            self.target_code = target_lang_code(self.target)
+        except Exception as e:
+            logger.debug('[IncTranslate] target_lang_code resolve failed (→zh): %s', e)
+            self.target_code = 'zh'
         self.q: queue.Queue = queue.Queue()
         self.segments: dict[int, str] = {}   # round_num -> translated text
         self.originals: dict[int, str] = {}  # round_num -> original text
@@ -172,7 +194,7 @@ class _Acc:
         from lib.translate.notranslate import (_extract_notranslate_blocks,
                                                 _reattach_notranslate_blocks)
         from lib.translate.prompt import _build_translate_prompt
-        system_prompt = _build_translate_prompt(_TARGET, _SOURCE)
+        system_prompt = _build_translate_prompt(self.target, _SOURCE)
         helpers = (system_prompt, _translate_freetext,
                    _extract_notranslate_blocks, _reattach_notranslate_blocks)
         while True:
@@ -215,6 +237,12 @@ class _Acc:
                     self._do_finalize(conv_id, msg_idx, content, msg_id, *helpers)
                     self._cleanup()
                     return
+                elif kind == 'finstamp':
+                    _, conv_id, msg_idx, msg_id, fallback_segments = item
+                    self._fallback_segments = fallback_segments
+                    self._do_stamp_only(conv_id, msg_idx, msg_id)
+                    self._cleanup()
+                    return
                 elif kind == 'cancel':
                     logger.info('[IncTranslate] task=%s cancelled before finalize '
                                 '(%d segments translated, discarded) — caller skipped '
@@ -236,7 +264,7 @@ class _Acc:
         if not original.strip():
             return
         try:
-            if is_predominantly_chinese(original):
+            if self._already_target(original):
                 # Already in the target language — keep the segment verbatim.
                 with self.lock:
                     self.originals[round_num] = original
@@ -248,7 +276,7 @@ class _Acc:
                 translated = original
             else:
                 translated, usage = translate_fn(
-                    body, system_prompt, source=_SOURCE, target=_TARGET)
+                    body, system_prompt, source=_SOURCE, target=self.target)
                 translated = (translated or '').strip()
                 if nt_blocks:
                     translated = reattach_nt(translated, nt_blocks)
@@ -358,17 +386,83 @@ class _Acc:
                     self.task_id[:8], len(translated), len(self.segments),
                     self.model)
 
+        # ★ PATH-INDEPENDENT narration backfill (Path A fix). The live cache
+        #   (self.segments) only holds rounds this accumulator actually
+        #   translated during the task — a late-started / partially-reclaimed
+        #   accumulator, or a round whose _translate_segment raised, leaves DB
+        #   narration segments with an empty translatedText even though the
+        #   DELIVERABLE just committed. Trust the DB, not only the live cache:
+        #   rebuild + stamp any narration segment still missing translatedText.
+        #   Enrich-only + idempotent — a no-op (0 LLM calls) when the live
+        #   stamp already covered every round.
+        try:
+            from lib.translate.segment_backfill import backfill_message_narration_sync
+            backfill_message_narration_sync(
+                conv_id, msg_idx, msg_id or '', self.target, source=_SOURCE,
+                log_tag=self.task_id[:8])
+        except Exception as be:
+            logger.debug('[IncTranslate] task=%s narration backfill (finalize) '
+                         'failed: %s', self.task_id[:8], be)
+
+    def _do_stamp_only(self, conv_id, msg_idx, msg_id):
+        """Stamp the accumulator's ALREADY-CACHED per-round narration WITHOUT
+        committing a ``translatedContent``.
+
+        This is the ``already in target language`` path: the DELIVERABLE needs no
+        translation, but the worker already translated N inter-round narration
+        segments live. Before this existed, that path returned then
+        ``cancel_incremental`` DISCARDED those N segments — the reported "the
+        narration I already translated gets thrown away" loss. Here we drain the
+        cached ``{round_num: 中文}`` and commit a STAMP-ONLY (``field=None``)
+        write so the settled timeline shows the interleaved Chinese, reusing the
+        same self-heal ``fallback_segments`` the finalize path uses so a
+        segment-less DB row still receives the stamp.
+
+        Releases the in-flight guard on exit (this path OWNS it, like finalize).
+        """
+        try:
+            from lib.translate.commit import _commit_translation_to_db
+            with self.lock:
+                seg_trans = {rn: txt for rn, txt in self.segments.items()
+                             if txt and txt.strip()}
+            if not seg_trans:
+                logger.debug('[IncTranslate] task=%s stamp-only: no cached '
+                             'segments to stamp', self.task_id[:8])
+                return
+            _commit_translation_to_db(conv_id, msg_idx, None, '',
+                                      msg_id=msg_id or None,
+                                      segment_translations=seg_trans,
+                                      fallback_segments=self._fallback_segments)
+            segments_by_round = {str(rn): txt for rn, txt in seg_trans.items()}
+            self._push({'type': 'done', 'status': 'done',
+                        'segmentsByRound': segments_by_round},
+                       conv_id, msg_idx, msg_id)
+            logger.info('[IncTranslate] task=%s ✓ stamp-only committed %d cached '
+                        'narration segment(s) (deliverable already in target '
+                        'language — no translatedContent)',
+                        self.task_id[:8], len(seg_trans))
+        except Exception as e:
+            logger.warning('[IncTranslate] task=%s stamp-only failed: %s',
+                           self.task_id[:8], e, exc_info=True)
+        finally:
+            try:
+                from lib.translate.inflight import release_inflight
+                release_inflight(conv_id, msg_id, msg_idx)
+            except Exception as e:
+                logger.debug('[IncTranslate] task=%s stamp-only release_inflight '
+                             'failed: %s', self.task_id[:8], e)
+
     def _translate_whole(self, content, system_prompt, translate_fn,
                          extract_nt, reattach_nt, conv_id, msg_idx, msg_id):
         """Single whole-content translation fallback. Returns text or None."""
         try:
-            if is_predominantly_chinese(content):
+            if self._already_target(content):
                 return content
             body, nt_blocks = extract_nt(content)
             if not body.strip():
                 return content
             translated, usage = translate_fn(body, system_prompt,
-                                             source=_SOURCE, target=_TARGET)
+                                             source=_SOURCE, target=self.target)
             translated = (translated or '').strip()
             if nt_blocks:
                 translated = reattach_nt(translated, nt_blocks)
@@ -470,6 +564,22 @@ class _Acc:
             logger.debug('[IncTranslate] task=%s push failed: %s',
                          self.task_id[:8], e)
 
+    def _already_target(self, text: str) -> bool:
+        """Is ``text`` already in this task's target language? (skip gate).
+
+        Uses force_fasttext so kanji-heavy Japanese is not misread as Chinese
+        (both share the CJK-ideograph block) — the same disambiguation the
+        server-side safety net applies. Fail-open (any error → False →
+        translate anyway).
+        """
+        try:
+            from lib.text_lang import detect_language
+            return detect_language(text, force_fasttext=True).code == self.target_code
+        except Exception as e:
+            logger.debug('[IncTranslate] task=%s already-target probe failed: %s',
+                         self.task_id[:8], e)
+            return False
+
     def _cleanup(self):
         with _acc_lock:
             if _accumulators.get(self.task_id) is self:
@@ -501,12 +611,21 @@ def submit_round_segment(task, round_num, text):
                        (task or {}).get('id', '?')[:8], e)
 
 
-def finalize_incremental(task, conv_id, msg_idx, content, msg_id=None) -> bool:
+def finalize_incremental(task, conv_id, msg_idx, content, msg_id=None,
+                         target=None) -> bool:
     """Signal the per-task worker to assemble + commit the final translation.
 
     Returns True if the incremental path owns this translation (caller must
     skip the whole-message fallback), False if no incremental accumulator was
     active (caller falls back to the whole-message path).
+
+    ``target`` (accepted for call-site symmetry with the safety net, but NOT
+    used to override): every per-round segment was already translated live
+    during the task using the accumulator's own task-config-resolved target,
+    so re-pointing the target at finalize time would be too late (the cached
+    segments are already in the accumulator's target) and would desync the
+    already-built system prompt. The accumulator and the safety net resolve
+    from the SAME task config, so they agree by construction.
     """
     try:
         tid = task.get('id') if task else None
@@ -539,6 +658,46 @@ def finalize_incremental(task, conv_id, msg_idx, content, msg_id=None) -> bool:
     except Exception as e:
         logger.warning('[IncTranslate] finalize_incremental failed task=%s: %s',
                        (task or {}).get('id', '?')[:8], e)
+        return False
+
+
+def finalize_incremental_stamp_only(task, conv_id, msg_idx, msg_id=None) -> bool:
+    """Stamp the accumulator's cached narration WITHOUT committing a deliverable.
+
+    The ``already in target language`` companion to :func:`finalize_incremental`:
+    the DELIVERABLE needs no ``translatedContent`` (it is already in the target
+    language), but the worker already translated the inter-round narration live.
+    Calling this instead of :func:`cancel_incremental` on that skip path stamps
+    those cached segments onto the settled render — so the Chinese the worker
+    already produced is NOT thrown away (the reported loss). Returns True when an
+    accumulator existed and was handed the stamp-only job (caller must then
+    suppress the cancel), False otherwise (caller falls back to a fresh backfill).
+
+    Captures the authoritative thin segments now (same self-heal contract as
+    finalize) so a segment-less DB row still receives the stamp.
+    """
+    try:
+        tid = task.get('id') if task else None
+        if not tid:
+            return False
+        with _acc_lock:
+            acc = _accumulators.get(tid)
+        if acc is None:
+            return False
+        fallback_segments = None
+        try:
+            _segs = task.get('segments')
+            if _segs:
+                from lib.tasks_pkg.segments import segments_to_json
+                fallback_segments = segments_to_json(_segs)
+        except Exception as _fe:
+            logger.debug('[IncTranslate] stamp-only fallback-segments capture '
+                         'failed task=%s: %s', tid[:8], _fe)
+        acc.q.put(('finstamp', conv_id, msg_idx, msg_id, fallback_segments))
+        return True
+    except Exception as e:
+        logger.warning('[IncTranslate] finalize_incremental_stamp_only failed '
+                       'task=%s: %s', (task or {}).get('id', '?')[:8], e)
         return False
 
 

@@ -195,6 +195,83 @@ def test_resend_stops_on_throttle(monkeypatch):
     assert usage.get('cache_read_tokens') == 28654
 
 
+def test_floorretry_first_attempt_orphan_reconciled(monkeypatch):
+    """Layer-3: reconcile sits ABOVE the FloorRetry loop, so a first-attempt
+    announced round that is superseded when a RECOVERED resend response is
+    adopted gets settled (not left spinning).
+
+    Scenario through the real stream_llm_response + accumulator wiring:
+      * primary dispatch floors AND announces an early tool round (tc_A) via the
+        real on_tool_call_ready callback, returns a floored msg carrying tc_A;
+      * the FloorRetry resend (Layer-1: on_tool_call_ready=None) recovers and its
+        response carries a DIFFERENT tc_id (tc_B) — adopted as the final msg;
+      * so tc_A is announced-but-orphaned (not in the final msg) and tc_B is in
+        the final msg but was never announced.
+    The orchestrator's reconcile_announced_rounds(final_msg) — the method the
+    accumulator exposes and _run.py calls after _llm_call_with_fallback — must
+    settle tc_A to a terminal state (spinner flipped) while tc_B is left for the
+    normal dispatch pipeline. This proves the orphan-cleanup is at the RIGHT
+    layer (above FloorRetry). NEUTER: skip the reconcile call and tc_A stays
+    'searching' (the pre-fix spinning-forever state)."""
+    import threading as _thr2
+    import lib.tasks_pkg.manager as _mgr
+    from lib.tasks_pkg.streaming_tool_executor import StreamingToolAccumulator
+    monkeypatch.setenv('TOFU_CACHE_FLOOR_RETRY', '1')
+    monkeypatch.setenv('TOFU_CACHE_FLOOR_RETRY_MAX', '2')
+    conv_id = 'cfr-l3'
+    _seed_wire_fp(conv_id, [{'k': 'a'}])
+    task = {'id': 'task-fr-l3', 'convId': conv_id, 'content': '', 'thinking': '',
+            'config': {}, 'events': [], 'toolRounds': [],
+            'content_lock': _thr2.Lock(), 'events_lock': _thr2.Lock()}
+    acc = StreamingToolAccumulator(task, project_path='/tmp',
+                                   round_num=0, project_enabled=True)
+
+    calls = {'n': 0}
+
+    def _fake_dispatch(body, **kwargs):
+        i = calls['n']
+        calls['n'] += 1
+        cb = kwargs.get('on_tool_call_ready')
+        if i == 0:
+            # Primary attempt: announce tc_A (early tool_start), floor-collapse.
+            if cb:
+                cb({'id': 'tc_A', 'type': 'function',
+                    'function': {'name': 'read_files', 'arguments': '{}'}})
+            return ({'role': 'assistant',
+                     'tool_calls': [{'id': 'tc_A', 'type': 'function',
+                                     'function': {'name': 'read_files', 'arguments': '{}'}}]},
+                    'tool_calls', dict(_FLOOR_USAGE))
+        # Resend (Layer-1: cb is None) — recovers, DIFFERENT tc_id tc_B.
+        assert cb is None, 'Layer-1 broken: resend still carries the tool callback'
+        return ({'role': 'assistant',
+                 'tool_calls': [{'id': 'tc_B', 'type': 'function',
+                                 'function': {'name': 'read_files', 'arguments': '{}'}}]},
+                'tool_calls', dict(_HIT_USAGE))
+
+    _orig = _mgr.dispatch_stream
+    _mgr.dispatch_stream = _fake_dispatch
+    try:
+        msg, _fin, _usage = _mgr.stream_llm_response(
+            task, _body(), tag='R1', on_tool_call_ready=acc.on_tool_call_ready)
+    finally:
+        _mgr.dispatch_stream = _orig
+
+    # Adopted msg = recovered resend (tc_B). tc_A announced, tc_B not announced.
+    assert [tc['id'] for tc in msg['tool_calls']] == ['tc_B']
+    announced = acc.announced_tc_map
+    assert 'tc_A' in announced, 'primary attempt must have announced tc_A'
+    assert 'tc_B' not in announced, 'Layer-1: resend must not have announced tc_B'
+    # tc_A is spinning ('searching') until reconcile runs.
+    assert announced['tc_A'][1]['status'] == 'searching'
+
+    # The orchestrator layer's reconcile (above FloorRetry) settles the orphan.
+    n = acc.reconcile_announced_rounds(msg)
+    assert n == 1, f'reconcile must settle the FloorRetry first-attempt orphan; settled={n}'
+    assert acc.announced_tc_map['tc_A'][1]['status'] == 'aborted'
+    # And it carries NO toolContent, so Layer-2 drops it from model history.
+    assert acc.announced_tc_map['tc_A'][1].get('toolContent') is None
+
+
 def test_resend_does_not_reuse_tool_callback(monkeypatch):
     """Layer-1 orphan fix: the FIRST dispatch carries the orchestrator's
     on_tool_call_ready (early tool_start announcements), but every FloorRetry

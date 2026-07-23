@@ -1,5 +1,29 @@
 # Project Journal
 
+
+### 2026-07-23(续2) — 「一条正常完成的会话,前端显示的却是半截 preamble、不是那份大报告」根因钉死并根修:FloorRetry 采纳流用 `on_content=None`,`task['content']` 停在首发残留,`_sync` 落库丢全文(commit `6464592`,2 文件 +284,新测 5/5 绿含双门 NEUTER + segments 双列一致实证 / collect 7801 唯一既知 pty flake)。
+- **现象(owner 截图 `mrwwmp0z6u0gkn`):** message[3] 是一条 `finishReason=stop` 正常完成的 assistant 消息,但气泡里渲染的是「This is important — the `activeTaskId` clear at line 326…」这句**中途过渡语(215 字符)**,不是模型真正生成的那份 `## 一句话结论` 大报告。owner 质疑「明明最后内容是大报告,前端为什么显示错」。
+- **诊断分两层,且**两次都先证伪自己**:**
+  - **L1 前端没错:** 活体 DB 查证——message[3] 落库 `content` 就是那 215 字符;`translatedContent` 是它的 gemini 译文;大报告的关键词(`一句话结论`/`三本账`/`冒烟枪`)在 conversations.messages 和 task_results **任何字段里都不存在**。前端忠实渲染了 `content`——**病根在落库,不在渲染**。R4 计费 **4528 output tokens** 却只落 215 字符 = ~4400 token 静默蒸发。
+  - **L2 归因纠错(诚实):** 我第一版归到「孤儿工具轮」错了;owner 依据 metadata `_dispatch.attempt=1` 判「无重试」也被骗了——那是**被采纳的那次 resend 自己的**单次 dispatch 记录。真凭据是 `app.log`:**15031/15041 `[FloorRetry] resending identical body (1/2)(2/2)` → 15050 `RECOVERED on resend 2` → 15052 `content=3411chars` → 15072 `Synced content=215chars`**,同秒同进程,3411→215 铁证。R4 确实 floor-retry 了、且成功恢复拿到全文。
+- **根因(两条 content 轨道在 FloorRetry 采纳点分叉):**
+  - 轨道 A `task['content']`(`_stream.py::_on_content` 累积,`_sync.py:483` 落库读**这条**)——只吃到**首发 floor-collapse 流**的 215 字符 preamble。
+  - FloorRetry 重发为修上一个孤儿轮 bug(`21adb4c`)刻意用 `on_thinking=None, on_content=None`(`_stream.py:269`),所以**采纳流的 3411 字符从不进 `task['content']`**。
+  - 轨道 B 返回值 `assistant_msg['content']`——拿到完整 3411(供下一轮 API 上下文),但**落库不读它**。
+  - **两个采纳门**都只换返回值 `msg=_rmsg`、不回灌 `task['content']`:`286-290` RECOVERED、`293` 仍 floored 循环耗尽。owner 精准指出**只修 286 会漏 293**(换种 floor 命中方式就复现)。
+- **根修(`_stream.py`,+31,commit `6464592`):** 不在单分支补,改为**循环后统一收敛**——加 `_fr_adopted` 标志(两门各置 True),floor-retry 块退出后无条件 `task['content']=msg.get('content')`、`task['thinking']=msg.get('reasoning_content')`(**整体替换**,byte-identical body 全新生成)。**不发 `DELTA_RESET`/不重放**(live tab 靠 done 事件 committedMessage 收敛,零新视觉行为)。**未动 `_sync` 读取口径**(那侧是对的,病根在写入轨道分叉)。
+- **segments 双列一致(owner point 3):** 落库另一列 `segments[terminal].text` 由 `assemble_segments`(`_assemble.py:186/196`)从 `task['content']`/`['thinking']` **纯投影**派生。回灌发生在 `_sync` 调 `assemble_segments` **之前**,故两列自动一致。活体端到端实证:content 3405 + segments 终局 text 3405/thinking 2206,PARTIAL 零泄漏。
+- **回归护栏 + 双门 NEUTER(`test_floor_retry_content_reinjection.py`,5 测):** ①RECOVERED 门回灌;②循环耗尽门(293)回灌——**这个是 owner 指出的第二入口**;③健康轮控制(不 floor→不 resend→不 clobber);④⑤segments 终局段投影正确/失败模式锚定。NEUTER 把收敛块改 `if False and _fr_adopted` → **①②双双变红**(`task['content']` 停在 `PARTIAL_PREAMBLE_FIRST_ATTEMPT`),③④⑤仍绿;恢复复绿。证明收敛行 load-bearing 且两门都被覆盖。
+- **git 纪律:** `reset -q HEAD .`(共享 HEAD sibling WIP)→ 仅 add 2 文件 → `--cached --numstat`(_stream 31/0、新测 253/0)→ `commit -F- -- <路径>` → `git show HEAD --stat` = 仅 2 文件 +284,NO LEAK。`6464592`。collect 7801(唯一 error 仍是既知 `test_run_command_pty_streaming.py` pty ImportError flake,非我文件)。
+
+### 2026-07-23(续) — 关掉"打地鼠引擎":给 `_NC_GUARDED_SOURCES` 加自执行 meta-guard + session-start 崩溃投毒探测器(commit `e54dcc0`,2 文件 +469,meta-guard 5/5 + 合并 54 passed / 5 个受护源跑后逐字节不变)。
+- **owner 复盘:** 上一轮修了 3 个 mole + 手动把 `tofu-scene.js` 加进名单,但**那份手维护清单本身就是根源脆弱性**——下一个 sibling 加的原地写者会和 tofu-scene 一样静默漏网。这才是"每次跑测试冒新 bug"的引擎,还在转。
+- **#1 自执行 meta-guard(`tests/test_nc_guard_registry.py`):** 仿 `test_db_guard.py` 的自发现 ratchet。AST 扫描全部 `tests/*.py`,找原地写 shipped-source 的调用(`open(...,'w')` / `write_text` / `os.replace` / `shutil.copy*`,目标解析到 `lib/|routes/|static/` 且非 `tmp_path`/`mkdtemp`/`.nc_copy` 树),**含 `_patch_restore(CONST,...)` 的 helper 间接层**(局部函数写其首参 → 在调用点解析常量),断言每个目标都在 `_NC_GUARDED_SOURCES`。带两个负控(合成新写者必被抓、tmp_path/copy 写者不误报)。**首跑即抓到 3 个手清单漏掉的真写者:**`static/styles.css`(test_memory_modal_specificity + test_mobile_tofu_touch_polish)、`lib/conversations/reconcile.py`(test_orphan_resumable_classifier)——已补进名单。证明脆弱性是真的、不是假想。
+- **#2 崩溃投毒探测器(`conftest.warn_on_nc_source_poison_at_session_start`):** 实测钉死 belt 的洞——autouse fixture 的 `finally` 在**普通失败/异常/KeyboardInterrupt 会跑**(会 heal),但**SIGKILL/OOM/`os._exit` 硬崩会跳过**(实测 `os._exit` finally 不执行);且下一 session 的 lazy 快照会把残留 neuter **当成 baseline 收编**(实测 snapshot=poison / healed=[] / still poisoned=True)。**为何不做静默 git 自愈:** 共享 HEAD 下受护文件可能带 sibling 合法 WIP(此刻 `message_queue.py` 就 dirty),盲 `git checkout` 会毁 WIP。所以做**检测+响亮告警**:session start 用 git HEAD 当 known-good oracle,列出所有偏离 HEAD 的受护文件(WIP 或前次崩溃投毒),让人先核对再信任 green/red。并把快照从"首个测试 lazy"提前到 `pytest_configure` eager。
+- **诚实交代 #2 是"检测非自愈":** 没让它自动改文件——那在此环境不安全。它把"静默投毒"变成"启动即响亮点名",配合 #1 的"忘记注册即红":忘注册→红;真被前次崩溃投毒→启动告警点名 + 文案给出 `git checkout HEAD -- <file>` 清除法。
+- **scanner 已知小限:** `message_queue.py` 经函数内局部常量 `_MQ_SRC` 引用,module-const 解析器看不到——但它本就在名单里,registry 不变量仍成立;不过度工程化。
+- **git 纪律:** `reset -q HEAD .` → 仅 add 2 文件 → `--cached --numstat`(conftest 58/0、新测 411/0)→ `commit -F- -- <路径>` → `git show HEAD --name-only` = 仅 2 文件,NO LEAK。`e54dcc0`。
+
 ### 2026-07-23 — 「工具轮 interrupted 满屏 + 后续轮模型对整turn失忆」四层根修:FloorRetry 复用工具回调制造孤儿轮 + 重建器 all-or-nothing 门塌整turn(4 commit `f83de51`/`e8acae3`/`466a690`/`02019db`,相关套件 137/137 绿 + collect 7794 唯一既知 pty flake)。
 - **现象(owner 截图 `mrw0rubcbb5qv9`):** 一条正常完成(`finishReason=stop`)的会话里冒出 21 个 `interrupted` 工具轮徽章;更严重的是后续轮**模型完全看不到这一turn的 66 次工具调用**。
 - **推翻自己前两轮的错误诊断(诚实纠错):** ①「每个孤儿有 done 双胞胎」→ 错,19/21 无双胞胎;②「孤儿来自 stream.py 瞬时断线重连」→ 错,日志 `Transient error:1`、`reconciled orphan:0`。**真凶是 `manager/_stream.py` 的 `[FloorRetry]`**(缓存地板塌陷时重发相同 body 重掷网关缓存骰子,默认 ON):它**复用同一个 `on_tool_call_ready`**,每次被丢弃的重发都 announce 一个新 tc_id 的 `searching` 轮 → 进不了最终 `assistant_msg` → 孤儿 → task-end `_finalize_dangling_tool_rounds` 扫成 `aborted`+空结果。

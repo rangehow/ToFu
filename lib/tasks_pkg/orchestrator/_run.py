@@ -99,7 +99,8 @@ from lib.tasks_pkg.orchestrator._finalize import (
 from lib.tasks_pkg.orchestrator._vu_startup import (
     _probe_external_edits,  # noqa: F401  (imported for wire-parity guard + back-compat)
     _vu_phase as _extracted_vu_phase,
-    start_external_edit_probe,
+    setup_project_context,
+    start_external_edit_probe,  # noqa: F401  (also invoked indirectly via setup_project_context)
 )
 from lib.tasks_pkg.orchestrator._prefetch import start_prefetches
 
@@ -258,80 +259,11 @@ def run_task(task: dict[str, Any]) -> None:
         fetch_enabled   = mcfg['fetch_enabled']
         project_path    = mcfg['project_path']
         project_enabled = mcfg['project_enabled']
-        if project_enabled and project_path:
-            # ★ Extract extra root paths from projectPaths (frontend sends all roots).
-            #   projectPaths[0] = primary (same as projectPath), rest are extras.
-            _all_paths = cfg.get('projectPaths') or []
-            _extra_paths = [p for p in _all_paths[1:] if p and p != project_path] if len(_all_paths) > 1 else []
-            # ★ Read-only roots: a subset of the configured paths the user
-            #   attached for reference only. Writes/edits/create_project and
-            #   destructive run_command targeting these are refused; reads are
-            #   always allowed. Empty list = today's all-writable behaviour.
-            _readonly_paths = [p for p in (cfg.get('readOnlyPaths') or []) if p]
-            logger.info('[Task:%s] project_path=%s extra_roots=%d readonly=%d',
-                        task['id'], project_path, len(_extra_paths),
-                        len(_readonly_paths))
-            # ★ Ensure the server's global project state matches this task's
-            # project path + extras.  Another conversation may have switched the
-            # server to a different project, causing get_context_for_prompt to miss
-            # the file tree (path mismatch → no tree in system prompt → LLM
-            # doesn't know the project structure → "backend cannot use tools").
-            from lib.project_mod import ensure_project_state
-            # ★ Pass conv_id for per-conversation root isolation (2026-05-05).
-            #   Prevents concurrent tasks from clobbering each other's
-            #   workspace-root namespace when they call set_project with
-            #   different primary paths. See lib/project_mod/config.py
-            #   ::set_conv_roots docstring for background.
-            _conv_id_for_roots = task.get('convId') or task.get('id') or ''
-            ensure_project_state(project_path, extra_paths=_extra_paths,
-                                 conv_id=_conv_id_for_roots,
-                                 readonly_paths=_readonly_paths)
-            # ── Presence: announce this conversation as a live peer of the
-            #    project root (the "who is working here now" feed). Idempotent
-            #    per convId — an autopilot follow-up turn refreshes the SAME
-            #    peer rather than spawning a new one. Best-effort; a presence
-            #    failure must never affect the task.
-            if task.get('convId'):
-                try:
-                    from lib.presence import announce as _presence_announce
-                    _presence_announce(
-                        project_path, task['convId'],
-                        task_id=task['id'],
-                        run_id=cfg.get('autopilotRunId') or '',
-                        title=cfg.get('convTitle') or '',
-                        objective=cfg.get('autopilotObjective') or '',
-                        phase='working',
-                    )
-                except Exception as _pe:
-                    logger.debug('[Task:%s] presence announce failed: %s',
-                                 task['id'][:8], _pe)
-            # ── File-history: capture any external (IDE) edits made between rounds.
-            #
-            #   Runs SILENTLY in a background thread: no phase event, no UI
-            #   status — the LLM response starts streaming immediately.  Cost
-            #   is bounded by the size of the tracked-files set (files the
-            #   assistant has touched this session), not the worktree, so
-            #   this is cheap even on slow filesystems.
-            #
-            #   Correctness guard: if the round has already started mutating
-            #   files by the time the probe finishes, we skip the synthetic
-            #   external-edit snapshot to avoid misattribution.  The next
-            #   round's probe catches the drift cleanly on top of a stable
-            #   timeline.
-            try:
-                from lib import file_history as fh
-
-                if fh.is_enabled() and fh.probe_enabled():
-                    # _probe_external_edits + its daemon-thread spawn moved
-                    # to lib.tasks_pkg.orchestrator._vu_startup (pt_03f4cdf1
-                    # slice 2). Same behaviour + same daemon-thread name
-                    # prefix; the previous inline closure was a byte-for-
-                    # byte transliteration of the function body now living
-                    # in the extracted module.
-                    start_external_edit_probe(task, project_path)
-            except Exception as e:
-                logger.warning('[Task:%s] could not start external-edit probe: %s',
-                               task['id'][:8], e)
+        # ── One-shot project-scope startup (pt_03f4cdf1 slice 4):
+        #    server-state reconcile + presence announce + external-edit
+        #    probe kick. Gate lives INSIDE the extracted helper so
+        #    non-project turns simply return.
+        setup_project_context(task, cfg, project_path, project_enabled)
         code_exec_enabled = mcfg['code_exec_enabled']
         memory_enabled  = mcfg['memory_enabled']
         browser_enabled = mcfg['browser_enabled']

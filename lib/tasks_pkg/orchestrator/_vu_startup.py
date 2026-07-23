@@ -153,4 +153,110 @@ def start_external_edit_probe(task: dict[str, Any], project_path: str) -> None:
     ).start()
 
 
-__all__ = ['_vu_phase', '_probe_external_edits', 'start_external_edit_probe']
+def setup_project_context(
+    task: dict[str, Any],
+    cfg: dict[str, Any],
+    project_path: str,
+    project_enabled: bool,
+) -> None:
+    """One-shot project-scope startup: server root, presence, edit-probe.
+
+    Runs once per task, at the start of ``run_task``, when the task
+    targets a project. Aggregates three side effects that all share the
+    same ``project_enabled AND project_path`` gate:
+
+      1. ``ensure_project_state(project_path, ...)`` — reconciles the
+         server's global project state with THIS task's roots (primary
+         + extras from ``cfg['projectPaths'][1:]``) + read-only paths
+         from ``cfg['readOnlyPaths']``. Prevents concurrent tasks from
+         clobbering each other's workspace-root namespace.
+      2. ``presence.announce(...)`` — best-effort registration of this
+         conv as a live peer of the project root (feeds the
+         "who is working here now" panel). A presence failure MUST NOT
+         affect the task.
+      3. ``start_external_edit_probe(task, project_path)`` — kicks the
+         daemon-thread FUSE probe that captures any IDE-side edits made
+         between rounds. Guarded by ``file_history.is_enabled() and
+         file_history.probe_enabled()``.
+
+    The gate lives INSIDE this function so callers can invoke it
+    unconditionally — an ordinary chat task with no project attached
+    simply returns immediately.
+
+    Args:
+        task: the live task dict — read for ``id`` / ``convId``, and
+            passed to presence + probe.
+        cfg: the resolved task config — read for ``projectPaths`` /
+            ``readOnlyPaths`` / ``autopilotRunId`` / ``convTitle`` /
+            ``autopilotObjective``.
+        project_path: primary project root (may be empty).
+        project_enabled: the outer feature gate.
+    """
+    if not (project_enabled and project_path):
+        return
+
+    # ★ Extract extra root paths from projectPaths (frontend sends all roots).
+    #   projectPaths[0] = primary (same as projectPath), rest are extras.
+    _all_paths = cfg.get('projectPaths') or []
+    _extra_paths = (
+        [p for p in _all_paths[1:] if p and p != project_path]
+        if len(_all_paths) > 1 else [])
+    # ★ Read-only roots: a subset of the configured paths the user
+    #   attached for reference only. Writes/edits/create_project and
+    #   destructive run_command targeting these are refused; reads are
+    #   always allowed. Empty list = today's all-writable behaviour.
+    _readonly_paths = [p for p in (cfg.get('readOnlyPaths') or []) if p]
+    logger.info('[Task:%s] project_path=%s extra_roots=%d readonly=%d',
+                task['id'], project_path, len(_extra_paths),
+                len(_readonly_paths))
+    # ★ Ensure the server's global project state matches this task's
+    #   project path + extras. Another conversation may have switched
+    #   the server to a different project, causing
+    #   get_context_for_prompt to miss the file tree (path mismatch →
+    #   no tree in system prompt → LLM doesn't know the project
+    #   structure → "backend cannot use tools").
+    from lib.project_mod import ensure_project_state
+    # ★ Pass conv_id for per-conversation root isolation (2026-05-05).
+    #   Prevents concurrent tasks from clobbering each other's
+    #   workspace-root namespace when they call set_project with
+    #   different primary paths. See lib/project_mod/config.py
+    #   ::set_conv_roots docstring for background.
+    _conv_id_for_roots = task.get('convId') or task.get('id') or ''
+    ensure_project_state(project_path, extra_paths=_extra_paths,
+                         conv_id=_conv_id_for_roots,
+                         readonly_paths=_readonly_paths)
+
+    # ── Presence: announce this conversation as a live peer of the
+    #    project root. Best-effort; a presence failure must NEVER
+    #    affect the task.
+    if task.get('convId'):
+        try:
+            from lib.presence import announce as _presence_announce
+            _presence_announce(
+                project_path, task['convId'],
+                task_id=task['id'],
+                run_id=cfg.get('autopilotRunId') or '',
+                title=cfg.get('convTitle') or '',
+                objective=cfg.get('autopilotObjective') or '',
+                phase='working',
+            )
+        except Exception as _pe:
+            logger.debug('[Task:%s] presence announce failed: %s',
+                         task['id'][:8], _pe)
+
+    # ── File-history: capture any external (IDE) edits made between
+    #    rounds. Runs SILENTLY in a background thread — no phase event,
+    #    no UI status; the LLM response starts streaming immediately.
+    try:
+        from lib import file_history as fh
+        if fh.is_enabled() and fh.probe_enabled():
+            start_external_edit_probe(task, project_path)
+    except Exception as e:
+        logger.warning('[Task:%s] could not start external-edit probe: %s',
+                       task['id'][:8], e)
+
+
+__all__ = [
+    '_vu_phase', '_probe_external_edits',
+    'start_external_edit_probe', 'setup_project_context',
+]

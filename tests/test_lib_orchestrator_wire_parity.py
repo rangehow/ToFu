@@ -464,6 +464,104 @@ def test_prefetch_behaviour_flags_gate_the_two_submits():
                 del orig_memory.build_memory_context
 
 
+# ── Slice 4: project setup extraction ─────────────────────────────
+# Extracts the ~77-line ``if project_enabled and project_path:`` block
+# (ensure_project_state + presence announce + external-edit probe) into
+# a single ``setup_project_context(task, cfg, project_path)`` in
+# ``_vu_startup.py`` (its "startup helpers" seam extends naturally to
+# this block — it runs once at task start).
+
+@_unit
+def test_setup_project_context_present_on_vu_startup():
+    """Slice 4 (pt_03f4cdf1): ``setup_project_context`` exposed by
+    ``lib.tasks_pkg.orchestrator._vu_startup`` as a module-level
+    callable. Regression tripwire for future extraction moves."""
+    import importlib
+    mod = importlib.import_module('lib.tasks_pkg.orchestrator._vu_startup')
+    assert hasattr(mod, 'setup_project_context'), (
+        'lib.tasks_pkg.orchestrator._vu_startup missing setup_project_context')
+    assert callable(mod.setup_project_context), (
+        f'setup_project_context is not callable '
+        f'(got {type(mod.setup_project_context).__name__})')
+
+
+@_unit
+def test_run_py_calls_setup_project_context():
+    """Slice 4: _run.py must actually CALL setup_project_context —
+    if a future refactor accidentally reverts to the inline block, the
+    source-string guard trips."""
+    import os
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(root, 'lib/tasks_pkg/orchestrator/_run.py'),
+              encoding='utf-8') as f:
+        src = f.read()
+    assert 'setup_project_context' in src, (
+        '_run.py must reference setup_project_context (slice 4 pt_03f4cdf1)')
+    # AND the previous inline block's signature line must be GONE.
+    # If future maintainers un-extract this block, the specific
+    # inline pattern below returns — that would defeat the extraction.
+    assert 'from lib.project_mod import ensure_project_state' not in src, (
+        '_run.py must NOT contain the inline ensure_project_state import '
+        '(slice 4: that import belongs to _vu_startup.setup_project_context)')
+
+
+@_unit
+def test_setup_project_context_disabled_path_is_no_op():
+    """Slice 4: when project_enabled is off OR project_path is empty,
+    setup_project_context does nothing observable — no
+    ensure_project_state, no presence announce, no probe spawn.
+    Byte-identical to the pre-slice ``if project_enabled and
+    project_path:`` gate."""
+    import lib.tasks_pkg.orchestrator._vu_startup as vus
+
+    calls = []
+
+    # Monkey-patch the three side-effect points to observation shims.
+    import sys
+    proj_mod = sys.modules.get('lib.project_mod')
+    presence_mod = sys.modules.get('lib.presence')
+
+    orig_ensure = getattr(proj_mod, 'ensure_project_state', None) if proj_mod else None
+    orig_announce = getattr(presence_mod, 'announce', None) if presence_mod else None
+    orig_start_probe = vus.start_external_edit_probe
+    try:
+        if proj_mod is not None:
+            proj_mod.ensure_project_state = lambda *a, **kw: calls.append(('ensure', a, kw))
+        if presence_mod is not None:
+            presence_mod.announce = lambda *a, **kw: calls.append(('announce', a, kw))
+        vus.start_external_edit_probe = lambda *a, **kw: calls.append(('probe', a, kw))
+
+        # Case A: project_enabled=False → no calls.
+        vus.setup_project_context(
+            task={'id': 'tid-off', 'convId': 'cv1'},
+            cfg={},
+            project_path='/proj/A',
+            project_enabled=False,
+        )
+        assert calls == [], f'project_enabled=False must be no-op; got {calls}'
+
+        # Case B: project_enabled=True + empty project_path → no calls.
+        vus.setup_project_context(
+            task={'id': 'tid-empty', 'convId': 'cv2'},
+            cfg={},
+            project_path='',
+            project_enabled=True,
+        )
+        assert calls == [], f'empty project_path must be no-op; got {calls}'
+    finally:
+        if proj_mod is not None:
+            if orig_ensure is not None:
+                proj_mod.ensure_project_state = orig_ensure
+            else:
+                del proj_mod.ensure_project_state
+        if presence_mod is not None:
+            if orig_announce is not None:
+                presence_mod.announce = orig_announce
+            else:
+                del presence_mod.announce
+        vus.start_external_edit_probe = orig_start_probe
+
+
 if __name__ == '__main__':
     tests = [
         test_orchestrator_facade_symbols_all_importable,
@@ -477,6 +575,9 @@ if __name__ == '__main__':
         test_prefetch_submodule_exists_and_exposes_start_prefetches,
         test_run_py_imports_the_extracted_prefetch_helper,
         test_prefetch_behaviour_flags_gate_the_two_submits,
+        test_setup_project_context_present_on_vu_startup,
+        test_run_py_calls_setup_project_context,
+        test_setup_project_context_disabled_path_is_no_op,
     ]
     for fn in tests:
         fn()

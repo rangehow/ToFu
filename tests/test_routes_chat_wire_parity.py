@@ -432,6 +432,63 @@ def test_api_v1_chat_bp_rules_snapshot():
               f'update the expected_prefixes set to record them')
 
 
+# ── Slice 4: _start_task_for_conv extraction ──────────────────────────
+# Moves the ~150-line task-starter orchestrator (called from chat_send,
+# chat_regenerate, chat_continue, chat_branch_start) into a dedicated
+# routes/chat_task_start.py. routes/chat.py keeps it re-exported so
+# the 3 test files that ``monkeypatch.setattr('routes.chat._start_task_for_conv',
+# ...)`` continue to work unchanged.
+
+@_unit
+def test_chat_task_start_submodule_exists():
+    """Slice 4 (pt_04686ac6): routes/chat_task_start.py holds
+    _start_task_for_conv as a module-level callable."""
+    import importlib
+    mod = importlib.import_module('routes.chat_task_start')
+    assert hasattr(mod, '_start_task_for_conv'), (
+        'routes.chat_task_start missing _start_task_for_conv')
+    assert callable(mod._start_task_for_conv), (
+        f'_start_task_for_conv is not callable '
+        f'(got {type(mod._start_task_for_conv).__name__})')
+
+
+@_unit
+def test_routes_chat_reexports_start_task_for_conv():
+    """Slice 4: routes/chat.py MUST re-export _start_task_for_conv so
+    the 3 test files that do ``monkeypatch.setattr(
+    'routes.chat._start_task_for_conv', ...)``  keep working unchanged.
+    Same-object identity is required — a copy would let a monkey-patch
+    on one namespace be invisible on the other."""
+    import routes.chat as _rc
+    import routes.chat_task_start as _cts
+    assert hasattr(_rc, '_start_task_for_conv'), (
+        'routes.chat missing _start_task_for_conv re-export — 3 test '
+        'files monkeypatch this path')
+    assert _rc._start_task_for_conv is _cts._start_task_for_conv, (
+        'routes.chat._start_task_for_conv must be the SAME object as '
+        'routes.chat_task_start._start_task_for_conv')
+
+
+@_unit
+def test_run_py_no_longer_carries_inline_start_task_for_conv():
+    """Slice 4: the inline function body must be GONE from routes/chat.py
+    — guards against a future silent revert (someone re-adds the body
+    inline while the new module still exists, splitting the definition
+    into two copies)."""
+    import os
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(root, 'routes/chat.py'), encoding='utf-8') as f:
+        src = f.read()
+    # The 3-argument def line MUST be gone from chat.py (function body
+    # moved to chat_task_start.py).
+    assert 'def _start_task_for_conv(conv_id, config, data=None):' not in src, (
+        'routes/chat.py still contains the inline def line — extraction '
+        'was undone or never landed')
+    # The re-export MUST be present.
+    assert 'from routes.chat_task_start import' in src, (
+        'routes/chat.py must import from routes.chat_task_start')
+
+
 if __name__ == '__main__':
     tests = [
         test_routes_chat_symbols_all_importable,
@@ -439,6 +496,9 @@ if __name__ == '__main__':
         test_pure_helper_wire_parity_smoke,
         test_abort_marker_bundle_semantics,
         test_truncate_conv_history_side_effect_wire,
+        test_chat_task_start_submodule_exists,
+        test_routes_chat_reexports_start_task_for_conv,
+        test_run_py_no_longer_carries_inline_start_task_for_conv,
         test_chat_bp_rules_snapshot,
         test_api_v1_chat_bp_rules_snapshot,
     ]

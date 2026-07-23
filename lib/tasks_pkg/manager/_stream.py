@@ -233,6 +233,16 @@ def stream_llm_response(task, body, tag='', on_tool_call_ready=None):
     #   collapse, capped, and STOP on a throttle error (don't pile retries on
     #   an already-throttled gateway). See lib/tasks_pkg/floor_retry.py +
     #   docs/CACHE_GATEWAY_STOCHASTIC_REPORT.md.
+    # ★ Tracks whether ANY floor-retry resend's response was adopted into the
+    #   returned (msg, finish_reason, usage). Both adoption sites below
+    #   (RECOVERED and still-floored-loop-exhausted) stream with
+    #   on_content=None / on_thinking=None, so the adopted resend's text NEVER
+    #   reached task['content']/task['thinking'] — those still hold ONLY the
+    #   FIRST attempt's (floor-collapsed, often partial) deltas. Since _sync
+    #   persists from task['content'] (not the returned msg), an adopted resend
+    #   would silently persist the first-attempt residue (the live 3411→215
+    #   loss). We converge ONCE after the loop, covering both doors.
+    _fr_adopted = False
     try:
         from lib.tasks_pkg import floor_retry as _fr
         _conv_for_fr = task.get('convId', '') or ''
@@ -288,11 +298,32 @@ def stream_llm_response(task, body, tag='', on_tool_call_ready=None):
                                    (_rusage or {}).get('cache_read_tokens'),
                                    (_rusage or {}).get('cache_creation_input_tokens'))
                     msg, finish_reason, usage = _rmsg, _rfin, _rusage
+                    _fr_adopted = True
                     break
                 # Still floored — keep the freshest usage and try again.
                 msg, finish_reason, usage = _rmsg, _rfin, _rusage
+                _fr_adopted = True
     except Exception as _fre:
         logger.debug('%s [FloorRetry] mitigation skipped (non-fatal): %s', pfx, _fre)
+
+    # ★ FloorRetry content-track convergence (fixes the 3411→215 silent loss).
+    #   When a resend was adopted, its full text lives ONLY in the returned
+    #   `msg` — the adopted resend streamed with on_content=None/on_thinking=None,
+    #   so task['content']/task['thinking'] still hold the FIRST attempt's
+    #   (floor-collapsed, partial) deltas. _sync persists from task['content'],
+    #   so without this the partial first-attempt text is what lands in the DB.
+    #   A resend is a byte-identical-body FRESH generation, so REPLACE (not
+    #   append) — the adopted msg is the whole, authoritative answer. We do NOT
+    #   emit DELTA_RESET / replay here: the live tab is reconciled by the done
+    #   event's committedMessage (existing mechanism), so no new visual behavior.
+    if _fr_adopted:
+        with task['content_lock']:
+            task['content'] = msg.get('content') or ''
+            task['thinking'] = msg.get('reasoning_content') or ''
+        logger.info('%s [FloorRetry] converged task content/thinking from adopted '
+                    'resend (content=%dchars thinking=%dchars) — prevents first-'
+                    'attempt residue from being persisted',
+                    pfx, len(task['content']), len(task['thinking']))
 
     # ★ Propagate provider_id from dispatch metadata into task
     _dispatch = (usage or {}).get('_dispatch', {})

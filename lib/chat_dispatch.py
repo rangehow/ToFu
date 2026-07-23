@@ -1,6 +1,13 @@
-"""lib/chat_dispatch.py — chat_send business-logic pipeline (pt_04686ac6 slice 5).
+"""lib/chat_dispatch.py — chat_send + chat_stream business-logic sinks (pt_04686ac6 slices 5-6).
 
-**Extraction context** (board epic ``pt_04686ac6054a451e``, slice 5):
+**Extraction context** (board epic ``pt_04686ac6054a451e``):
+
+  * Slice 5 — ``classify_send_intent``: chat_send's ~175-line queue-
+    classification + steer + abort-on-send pipeline.
+  * Slice 6 — ``build_cold_replay_response``: chat_stream's ~170-line
+    cold-path (task not in memory) resume-serviceability + snapshot
+    generation for both the persisted-events replay and the DB-only
+    synthetic state+done paths.
 
 ``routes/chat.py::chat_send`` used to inline ~175 lines of business
 logic between "user_msg was built with auto-translate" and "no active
@@ -293,4 +300,232 @@ def classify_send_intent(
     return None
 
 
-__all__ = ['SendIntent', 'classify_send_intent']
+async def build_cold_replay_response(task_id: str, last_event_id_header: str):
+    """chat_stream cold-path handler (pt_04686ac6 slice 6).
+
+    Called by ``routes/chat.py::chat_stream`` when the task is not in
+    the in-memory ``tasks`` dict (crashed / cleaned up / restarted /
+    reconnecting past cleanup_old_tasks). Two sub-paths:
+
+    1. **Persisted event replay** — if the client sends a valid
+       ``Last-Event-ID`` header AND ``lib.tasks_pkg.event_log`` has
+       persisted events since that cursor, replay every event from the
+       log. On no persisted 'done' event, synthesize a state+done pair
+       from the ``task_results`` row folded with ``event_fold``.
+
+    2. **DB snapshot** — if no valid Last-Event-ID (or the log had
+       nothing since it) but ``task_results`` still has the row,
+       emit a single ``state`` event (content + thinking, folded via
+       event_fold; toolRounds either from the DB column or rebuilt from
+       the conversation) followed by a ``done`` event with all the
+       expected metadata keys (finishReason / usage / preset / model /
+       provider_id / thinkingDepth / apiRounds / modifiedFiles /
+       modifiedFileList / fallbackModel/from/reason/kind).
+
+    3. **Not found** — no persisted events AND no ``task_results`` row
+       → return ``api_not_found('Task not found')``.
+
+    Args:
+        task_id: The task id from the URL path.
+        last_event_id_header: The raw ``Last-Event-ID`` HTTP header
+            value (empty string when the client didn't send one).
+
+    Returns:
+        A Flask/Quart response ready to hand back from chat_stream, OR
+        ``None`` in the degenerate case that a caller should fall through
+        (kept as a sentinel; not currently used — the three sub-paths
+        above always produce a real response).
+    """
+    import asyncio
+    import json
+
+    from lib.agent_core.events import EventType, build_event
+    from lib.api_response import api_not_found, sse_response
+    from lib.database import DOMAIN_CHAT, get_db
+
+    # Late imports (matches routes/chat.py's late-import style; keeps
+    # this module import-lightweight for tests).
+    from routes.chat import _dumps_yielding, _loads_yielding
+    from lib.chat.persistence import extract_db_meta as _extract_db_meta
+
+    # ── Persisted event replay path ──
+    _replay_cursor_hdr = (last_event_id_header or '').strip()
+    if _replay_cursor_hdr:
+        try:
+            _replay_cursor = int(_replay_cursor_hdr)
+        except (ValueError, TypeError) as _e_audit:
+            logger.debug('[chat_dispatch] cold-replay caught %s: %s',
+                         type(_e_audit).__name__, _e_audit)
+            _replay_cursor = None
+        if _replay_cursor is not None and _replay_cursor >= 0:
+            from lib.tasks_pkg.event_log import read_events as _read_events
+            _persisted = await asyncio.to_thread(
+                _read_events, task_id, since_event_id=_replay_cursor)
+            if _persisted:
+                logger.info('[Chat] Stream %s cold replay from event_log: '
+                            '%d event(s) since id=%d',
+                            task_id[:8], len(_persisted), _replay_cursor)
+
+                def gen_persisted():
+                    # SSE preamble: 4 large-comment lines force any
+                    # buffering proxy to flush headers immediately.
+                    for _ in range(4):
+                        yield ':' + ' ' * 2048 + '\n\n'
+                    for ev in _persisted:
+                        eid = ev['event_id']
+                        payload = ev['payload']
+                        yield f'id: {eid}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n'
+                        if isinstance(payload, dict) and payload.get('type') == 'done':
+                            return
+                    # No persisted 'done' — synthesize state+done from
+                    # task_results.  We MUST emit a 'state' event before
+                    # 'done' here: a client whose Last-Event-ID points
+                    # past the end of the persisted log (e.g. TTL prune
+                    # ran, or the client's last cursor was very recent)
+                    # would otherwise see only metadata and lose all
+                    # text. Mirrors the warm-fallback shape further down.
+                    try:
+                        db_local = get_db(DOMAIN_CHAT)
+                        row_local = db_local.execute(
+                            'SELECT conv_id,content,thinking,error,status,tool_rounds,metadata '
+                            'FROM task_results WHERE task_id=?',
+                            (task_id,)
+                        ).fetchone()
+                        if row_local:
+                            # ★ Close the 5s cold-replay window: fold
+                            #   the lossless per-delta task_events log
+                            #   instead of trusting the (up to 5s stale)
+                            #   task_results checkpoint. The fold
+                            #   reconstructs the EXACT text the client
+                            #   saw; on an empty/failed log it returns
+                            #   the checkpoint pair unchanged.
+                            from lib.tasks_pkg.event_fold import fold_cold_state_text
+                            _fold_c, _fold_t = fold_cold_state_text(
+                                task_id, row_local['content'] or '',
+                                row_local['thinking'] or '')
+                            state_local = build_event(
+                                EventType.STATE,
+                                content=_fold_c,
+                                thinking=_fold_t,
+                                status=row_local['status'],
+                            )
+                            if row_local['tool_rounds']:
+                                try:
+                                    state_local['toolRounds'] = _loads_yielding(row_local['tool_rounds'])
+                                except (json.JSONDecodeError, ValueError, TypeError) as _e:
+                                    logger.debug('[Chat] cold-replay tool_rounds parse failed: %s', _e)
+                            else:
+                                from lib.tasks_pkg import load_tool_rounds_from_conversation
+                                _tr = load_tool_rounds_from_conversation(row_local['conv_id'])
+                                if _tr:
+                                    state_local['toolRounds'] = _tr
+                            if row_local['error']:
+                                from lib.error_envelope import from_json as _err_from_json
+                                state_local['error'] = _err_from_json(row_local['error'])
+                            yield f'data: {_dumps_yielding(state_local)}\n\n'
+                        done_evt_local = build_event(EventType.DONE)
+                        if row_local:
+                            if row_local['metadata']:
+                                try:
+                                    m = json.loads(row_local['metadata'])
+                                    # Field list MUST mirror
+                                    # _extract_task_meta / _extract_db_meta
+                                    # / chat_poll's DB-path loop.  See
+                                    # _extract_task_meta docstring for why.
+                                    for k in ('finishReason', 'usage', 'preset', 'toolSummary',
+                                              'model', 'provider_id', 'thinkingDepth',
+                                              'apiRounds', 'modifiedFiles', 'modifiedFileList',
+                                              'fallbackModel', 'fallbackFrom',
+                                              'fallbackReason', 'fallbackKind'):
+                                        if m.get(k):
+                                            done_evt_local[k] = m[k]
+                                except (json.JSONDecodeError, TypeError) as _e_audit:
+                                    logger.debug('[chat_dispatch] gen_persisted caught %s: %s',
+                                                 type(_e_audit).__name__, _e_audit)
+                            if row_local['error']:
+                                from lib.error_envelope import from_json as _err_from_json
+                                done_evt_local['error'] = _err_from_json(row_local['error'])
+                        yield f'data: {_dumps_yielding(done_evt_local)}\n\n'
+                    except Exception as _e:
+                        logger.debug('[Chat] cold-replay synthetic done failed: %s', _e)
+
+                return sse_response(gen_persisted())
+
+    # ── DB snapshot path (no persisted events / no valid cursor) ──
+    db = get_db(DOMAIN_CHAT)
+    row = await asyncio.to_thread(
+        lambda: db.execute(
+            'SELECT conv_id,content,thinking,error,status,tool_rounds,metadata '
+            'FROM task_results WHERE task_id=?',
+            (task_id,)
+        ).fetchone())
+    if row:
+        # ★ Close the 5s cold-replay window (see gen_persisted above):
+        #   fold the lossless per-delta task_events log; falls back to
+        #   the checkpoint pair on an empty/failed log.
+        from lib.tasks_pkg.event_fold import fold_cold_state_text
+        _fold_c, _fold_t = fold_cold_state_text(
+            task_id, row['content'] or '', row['thinking'] or '')
+        state = build_event(
+            EventType.STATE, content=_fold_c,
+            thinking=_fold_t, status=row['status'],
+        )
+        if row['error']:
+            from lib.error_envelope import from_json as _err_from_json
+            state['error'] = _err_from_json(row['error'])
+        if row['tool_rounds']:
+            try:
+                state['toolRounds'] = await asyncio.to_thread(_loads_yielding, row['tool_rounds'])
+            except (json.JSONDecodeError, ValueError, TypeError) as e:
+                logger.warning('[Chat] Failed to parse tool_rounds for task %s: %s',
+                               task_id, e, exc_info=True)
+        else:
+            from lib.tasks_pkg import load_tool_rounds_from_conversation
+            _tr = await asyncio.to_thread(load_tool_rounds_from_conversation, row['conv_id'])
+            if _tr:
+                state['toolRounds'] = _tr
+        meta = _extract_db_meta(row)
+        # Field lists MUST stay aligned with _extract_task_meta and the
+        # chat_poll DB-path loop. See _extract_task_meta docstring.
+        for key in ('finishReason', 'usage', 'preset', 'model',
+                    'provider_id', 'thinkingDepth',
+                    'apiRounds', 'modifiedFiles', 'modifiedFileList'):
+            if meta.get(key):
+                state[key] = meta[key]
+        done_evt = build_event(EventType.DONE)
+        for key in ('finishReason', 'usage', 'preset', 'toolSummary',
+                    'model', 'provider_id', 'thinkingDepth',
+                    'apiRounds', 'modifiedFiles', 'modifiedFileList'):
+            if meta.get(key):
+                done_evt[key] = meta[key]
+        if meta.get('fallbackModel'):
+            done_evt['fallbackModel'] = meta['fallbackModel']
+            done_evt['fallbackFrom'] = meta.get('fallbackFrom', '')
+            if meta.get('fallbackReason'):
+                done_evt['fallbackReason'] = meta['fallbackReason']
+            if meta.get('fallbackKind'):
+                done_evt['fallbackKind'] = meta['fallbackKind']
+        if row['error']:
+            from lib.error_envelope import from_json as _err_from_json
+            done_evt['error'] = _err_from_json(row['error'])
+
+        logger.info('[Chat] Stream %s served from DB — status=%s content=%dchars '
+                    'finishReason=%s model=%s error=%s',
+                    task_id[:8], row['status'], len(row['content'] or ''),
+                    meta.get('finishReason', '?'), meta.get('model', '?'),
+                    row['error'] or 'none')
+
+        def gen_done():
+            for _ in range(4):
+                yield ':' + ' ' * 2048 + '\n\n'
+            yield f'data: {_dumps_yielding(state)}\n\n'
+            yield f'data: {_dumps_yielding(done_evt)}\n\n'
+
+        return sse_response(gen_done())
+
+    # ── Not found ──
+    logger.warning('[Chat] Task %s not found (stream)', task_id)
+    return api_not_found('Task not found')
+
+
+__all__ = ['SendIntent', 'classify_send_intent', 'build_cold_replay_response']

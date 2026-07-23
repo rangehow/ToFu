@@ -610,6 +610,102 @@ def test_classify_send_intent_aborted_kind_on_translate_abort():
         _rs._was_aborted_after = orig
 
 
+# ── Slice 6: chat_stream cold-path → lib/chat_dispatch.build_cold_replay_response ─
+# Extracts the ~170-line cold-path (task not in memory) block:
+# persisted-event replay OR DB snapshot OR not-found.
+
+@_unit
+def test_chat_dispatch_exposes_build_cold_replay_response():
+    """Slice 6 (pt_04686ac6): lib/chat_dispatch.py exposes
+    build_cold_replay_response as a module-level async callable."""
+    import importlib
+    import inspect
+    mod = importlib.import_module('lib.chat_dispatch')
+    assert hasattr(mod, 'build_cold_replay_response'), (
+        'lib.chat_dispatch missing build_cold_replay_response')
+    fn = mod.build_cold_replay_response
+    assert callable(fn), 'build_cold_replay_response must be callable'
+    assert inspect.iscoroutinefunction(fn), (
+        'build_cold_replay_response MUST be async (chat_stream is async '
+        'and uses asyncio.to_thread inside)')
+
+
+@_unit
+def test_chat_stream_delegates_cold_path_to_dispatch():
+    """Slice 6: routes/chat.py::chat_stream must call
+    build_cold_replay_response for its cold-path (task not in memory)
+    branch. Guards against silent revert to the inline ~170-line block."""
+    import os
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(root, 'routes/chat.py'), encoding='utf-8') as f:
+        src = f.read()
+    assert 'from lib.chat_dispatch import build_cold_replay_response' in src, (
+        'routes/chat.py must import build_cold_replay_response '
+        '(slice 6 pt_04686ac6)')
+    assert 'build_cold_replay_response(' in src, (
+        'routes/chat.py must CALL build_cold_replay_response at the '
+        'cold-path branch of chat_stream')
+    # Specific inline call-site marker strings that USED to live inside
+    # chat_stream's cold-path are GONE.
+    assert 'Stream %s cold replay from event_log' not in src, (
+        'routes/chat.py must NOT carry the "cold replay from event_log" '
+        'log line — extracted')
+    assert 'Stream %s served from DB' not in src, (
+        'routes/chat.py must NOT carry the "served from DB" log line — '
+        'extracted')
+    assert 'def gen_persisted():' not in src, (
+        'routes/chat.py must NOT carry the gen_persisted closure def — '
+        'extracted')
+    # But routes/chat.py MUST still return sse_response somewhere (for
+    # the LIVE-stream branch that stays inline).
+    assert 'sse_response(' in src, (
+        'routes/chat.py must still call sse_response for the live-stream '
+        'branch — that branch is NOT part of this slice')
+
+
+@_unit
+def test_build_cold_replay_response_returns_not_found_when_task_absent():
+    """Slice 6: cold-path branch 3 (no persisted events + no task_results
+    row) MUST return api_not_found('Task not found'). Byte-identical to
+    the pre-slice inline block's final ``return api_not_found(...)``."""
+    import asyncio
+    import lib.chat_dispatch as cd
+    from lib.database import DOMAIN_CHAT, get_db
+
+    # Direct call with a task_id that has no persisted events and no
+    # task_results row. Use a synthetic id unlikely to collide.
+    _task_id = 'cv-cold-not-found-xyz-987'
+
+    # Best-effort: ensure the row really is absent (test isolation on a
+    # shared test DB).
+    try:
+        db = get_db(DOMAIN_CHAT)
+        db.execute('DELETE FROM task_results WHERE task_id=?', (_task_id,))
+        db.commit()
+    except Exception:
+        pass  # DB not available in this test env → build_cold_replay
+              # will still return not_found via the row-is-None path.
+
+    async def _run():
+        # Empty Last-Event-ID → no persisted-replay branch fires.
+        return await cd.build_cold_replay_response(_task_id, '')
+
+    # Need a Quart app context because api_not_found returns a Quart Response.
+    from quart import Quart
+    app = Quart(__name__)
+
+    async def _wrapped():
+        async with app.test_request_context('/x'):
+            resp = await _run()
+            # api_not_found returns (Response, 404).
+            assert isinstance(resp, tuple), (
+                f'expected (Response, status) tuple; got {type(resp).__name__}')
+            _r, _status = resp
+            assert _status == 404, f'expected 404 not-found; got {_status}'
+
+    asyncio.run(_wrapped())
+
+
 if __name__ == '__main__':
     tests = [
         test_routes_chat_symbols_all_importable,
@@ -626,6 +722,9 @@ if __name__ == '__main__':
         test_chat_send_delegates_to_classify_send_intent,
         test_classify_send_intent_none_on_no_running_task,
         test_classify_send_intent_aborted_kind_on_translate_abort,
+        test_chat_dispatch_exposes_build_cold_replay_response,
+        test_chat_stream_delegates_cold_path_to_dispatch,
+        test_build_cold_replay_response_returns_not_found_when_task_absent,
     ]
     for fn in tests:
         fn()

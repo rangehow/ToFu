@@ -1,5 +1,12 @@
 # Project Journal
 
+### 2026-07-23(续13) — 「项目助手按钮没了、Studio 点不动就改不了项目路径」根修:Studio 档现在**总是**打开项目面板(commit `288f0d3a`,2 文件 +143/-8,新测 3/3 绿含 NEUTER + 相邻 toolbar/chat_mode 18/18 无回归)。
+- **owner 诉求:** 独立的「项目助手」按钮被折进 Air/Pro/Studio 档位后,Studio 成了管理项目的唯一入口;但已经绑了项目再点 Studio 没反应 → **改不了项目路径**。
+- **真因(读代码钉死,`main_toolbar_ui.js:118` `setChatMode`):** `mode==='studio'` 只在 `!hasProject`(尚未绑项目)时才 `openProjectModal()`;一旦已绑项目走 `_applyChatModeUI('studio')` + `return`,**从不重开面板**。旧世界里还有独立项目按钮兜底,折叠进档位后这条兜底没了 → 已 Studio 的会话彻底没有改路径的入口(反复点 Studio = 静默 no-op)。
+- **修法(+12/-8):** Studio 档 = 项目 affordance,**无条件** `openProjectModal()`。`hasProject` 时仍先 `_applyChatModeUI('studio')`+`_saveConvToolState()`(保持档位真实),再打开面板供改路径;无项目时不翻档、只开面板,等 `onProjectAttached` 真正绑上后再升 studio。
+- **failing-first + NEUTER(`test_frontend_studio_reopens_project.py`,3 测):** 驱动**真** shipped `setChatMode` under node —— ①无项目→开面板且不翻档;②已绑项目→**仍开面板**(bug 修复面)+ 档位=studio + 保存 1 次;③NEUTER 把「已绑项目分支的 early-return」塞回 → `openCount==0`(bug 复现),证明无条件打开是承重的。
+- **git 纪律(共享 HEAD、~130 sibling WIP 脏文件):** `reset -q HEAD .` → 仅 add 2 文件 → `--cached --numstat` 核对 → `commit -F- -- <2 路径>` → `git show HEAD --stat` = 仅 2 文件,NO LEAK。**部署说明:** 前端改动需服务器重启重建 bundle + 硬刷新浏览器才生效(bundler 无热更新)。
+
 
 
 ### 2026-07-23(续13) — 「stream 阶段显示的文本没走 i18n」根修:PHASE 事件补 `detailKey`(+ `detailArgs`),前端优先走 `t()` 定位化,英文 `detail` 保留给 headless 客户端做兜底(12 文件 +330 左右,新测 8/8 绿 + 相邻 20/20 无回归 + event-registry 5/5)。

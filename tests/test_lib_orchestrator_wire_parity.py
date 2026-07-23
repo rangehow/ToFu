@@ -217,6 +217,96 @@ def test_finalize_and_turn_submodule_names_present():
             f'lib.tasks_pkg.orchestrator._turn missing {name!r}')
 
 
+# ── Slice 2 (real source extraction): _vu_startup submodule ──────────
+# The first REAL source-movement slice of pt_03f4cdf1. Extracts two
+# self-contained closures from _run.py's ``run_task``:
+#   * ``_vu_phase(task, detail, *, vu_startup: bool)`` — emit a PHASE
+#     event only when this is a VU sub-task's startup window.
+#   * ``_probe_external_edits(task, project_path)`` — the daemon-thread
+#     target that runs the FUSE external-edit probe.
+# Both moved to ``lib.tasks_pkg.orchestrator._vu_startup``. _run.py imports
+# them + calls them at the same source sites.
+
+@_unit
+def test_vu_startup_submodule_exists_and_exposes_helpers():
+    """Slice 2 (pt_03f4cdf1): the new ``_vu_startup`` submodule must
+    exist and expose ``_vu_phase`` + ``_probe_external_edits`` as
+    module-level callables (not closures). Regression tripwire for
+    anyone removing or renaming these during a future re-organisation."""
+    import importlib
+    mod = importlib.import_module('lib.tasks_pkg.orchestrator._vu_startup')
+    for name in ('_vu_phase', '_probe_external_edits'):
+        assert hasattr(mod, name), (
+            f'lib.tasks_pkg.orchestrator._vu_startup missing {name}')
+        assert callable(getattr(mod, name)), (
+            f'lib.tasks_pkg.orchestrator._vu_startup.{name} is not callable '
+            f'(got {type(getattr(mod, name)).__name__})')
+
+
+@_unit
+def test_run_py_imports_the_extracted_vu_startup_helpers():
+    """Slice 2 (pt_03f4cdf1): _run.py must actually IMPORT the extracted
+    helpers from lib.tasks_pkg.orchestrator._vu_startup. A future
+    accidental un-import (helpers still resident in _vu_startup.py but
+    _run.py silently reverted to its own inline closures) would break
+    the strangler-fig invariant that there's ONE definition of each.
+    """
+    import os
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(root, 'lib/tasks_pkg/orchestrator/_run.py'),
+              encoding='utf-8') as f:
+        src = f.read()
+    assert 'from lib.tasks_pkg.orchestrator._vu_startup import' in src, (
+        '_run.py must import from lib.tasks_pkg.orchestrator._vu_startup '
+        '(slice 2 pt_03f4cdf1). The absence of this import means either '
+        'the slice never landed, or _run.py was reverted to inline the '
+        'closures again — either way, the extraction has been undone.')
+    for name in ('_vu_phase', '_probe_external_edits'):
+        assert name in src, (
+            f'_run.py must reference {name} (as an imported callable '
+            f'now, no longer as a nested def)')
+
+
+@_unit
+def test_vu_phase_behavior_gated_on_vu_startup_flag():
+    """Slice 2 (pt_03f4cdf1): ``_vu_phase`` MUST behave exactly as its
+    original closure form did:
+      * vu_startup=False → NO append_event call (silent path — the
+        default for ordinary worker/endpoint turns; must stay byte-
+        identical to pre-slice behaviour).
+      * vu_startup=True → EXACTLY ONE append_event call whose event
+        carries the given detail (this is the VU sub-task path).
+    Monkey-patches append_event on the _vu_startup module to observe
+    the call count + payload; does NOT touch a live task."""
+    import lib.tasks_pkg.orchestrator._vu_startup as vus
+
+    calls = []
+    orig = vus.append_event
+    try:
+        vus.append_event = lambda task, ev: calls.append((task.get('id'), ev))
+        # Silent path.
+        vus._vu_phase({'id': 'tid-silent'}, 'prep', vu_startup=False)
+        assert calls == [], (
+            f'vu_startup=False must NOT emit; got {calls}')
+        # Startup-visible path.
+        vus._vu_phase({'id': 'tid-loud'}, 'inject-context', vu_startup=True)
+        assert len(calls) == 1, (
+            f'vu_startup=True must emit exactly once; got {len(calls)}')
+        tid, ev = calls[0]
+        assert tid == 'tid-loud'
+        assert isinstance(ev, dict), f'expected dict event, got {type(ev)!r}'
+        # The build_event(EventType.PHASE, phase='working', detail=...)
+        # produces a dict whose serialised form carries the detail.
+        # Rather than couple to the internal EventType enum, we assert
+        # the detail string survives in the payload SOMEWHERE — which
+        # is what the frontend renderer actually reads.
+        payload_text = str(ev)
+        assert 'inject-context' in payload_text, (
+            f'detail string missing from emitted event: {ev!r}')
+    finally:
+        vus.append_event = orig
+
+
 if __name__ == '__main__':
     tests = [
         test_orchestrator_facade_symbols_all_importable,
@@ -224,6 +314,9 @@ if __name__ == '__main__':
         test_run_task_is_callable,
         test_build_body_binding_is_rebindable_on_facade,
         test_finalize_and_turn_submodule_names_present,
+        test_vu_startup_submodule_exists_and_exposes_helpers,
+        test_run_py_imports_the_extracted_vu_startup_helpers,
+        test_vu_phase_behavior_gated_on_vu_startup_flag,
     ]
     for fn in tests:
         fn()

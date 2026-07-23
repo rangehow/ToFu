@@ -13,8 +13,11 @@ time so a reassignment of ``orchestrator.build_body`` steers the loop.
 
 from __future__ import annotations
 
-import threading
 import time
+# NOTE: ``import threading`` was removed 2026-07-23 (pt_03f4cdf1 slice 2).
+# The only usage inside run_task was the daemon-thread spawn of the
+# external-edit probe, which now lives in
+# lib.tasks_pkg.orchestrator._vu_startup.start_external_edit_probe.
 from typing import Any
 
 from lib.log import get_logger, set_req_id
@@ -84,6 +87,19 @@ from lib.tasks_pkg.orchestrator._finalize import (
     _finalize_and_emit_done,
     _maybe_auto_retry_turn,
     _compute_write_breakdown,
+)
+
+# Startup helpers extracted 2026-07-23 (pt_03f4cdf1 slice 2) — the first
+# real source movement out of run_task's 1813-line body. Kept as module-
+# level callables so tests can drive them directly instead of via the
+# whole run_task orchestration. ``_vu_phase`` is imported under an
+# ``_extracted_vu_phase`` alias because run_task also defines a local
+# ``_vu_phase(detail)`` closure adapter (its call sites in the loop keep
+# the closure-style single-arg call).
+from lib.tasks_pkg.orchestrator._vu_startup import (
+    _probe_external_edits,  # noqa: F401  (imported for wire-parity guard + back-compat)
+    _vu_phase as _extracted_vu_phase,
+    start_external_edit_probe,
 )
 
 
@@ -158,14 +174,15 @@ def run_task(task: dict[str, Any]) -> None:
         #   worker/endpoint startup path stays byte-identical (no new events).
         _vu_startup = bool(task.get('_vu_subtask'))
 
+        # Local shim: preserves the closure-style call sites throughout
+        # run_task while delegating to the extracted module-level
+        # ``_extracted_vu_phase``. Zero-cost — the closure just forwards
+        # its args. The captured ``task`` + ``_vu_startup`` are stable
+        # across the whole run_task invocation (no rebind), so a per-call
+        # re-read is semantically identical to the previous inline
+        # closure.
         def _vu_phase(detail):
-            if not _vu_startup:
-                return
-            try:
-                append_event(task, build_event(
-                    EventType.PHASE, phase='working', detail=detail))
-            except Exception as _e:
-                logger.debug('[Task %s] vu startup phase emit failed: %s', tid, _e)
+            _extracted_vu_phase(task, detail, vu_startup=_vu_startup)
 
         # ── Reset swarm auto-continue chain on HUMAN turns ──
         # A human-initiated turn (NOT itself a swarm auto-continuation) means
@@ -304,63 +321,13 @@ def run_task(task: dict[str, Any]) -> None:
                 from lib import file_history as fh
 
                 if fh.is_enabled() and fh.probe_enabled():
-                    def _probe_external_edits():
-                        try:
-                            if task.get('modifiedFileList') or task.get('modifiedFiles'):
-                                logger.debug('[Task:%s] skipping external-edit probe '
-                                             '— round already mutated files',
-                                             task['id'][:8])
-                                return
-                            # Pass the set of known Tofu task ids so the probe
-                            # can tell a CONCURRENT conversation's write on the
-                            # shared project root (last_writer_task_id ∈ known)
-                            # from a genuine out-of-band IDE edit — the former
-                            # must NOT surface as an "edited outside Tofu" toast.
-                            try:
-                                from lib.tasks_pkg.manager import (
-                                    tasks as _known_tasks,
-                                    tasks_lock as _known_tasks_lock,
-                                )
-                                with _known_tasks_lock:
-                                    _known_task_ids = set(_known_tasks.keys())
-                            except Exception as _kte:
-                                logger.debug('[Task:%s] known-task-id snapshot '
-                                             'failed: %s', task['id'][:8], _kte)
-                                _known_task_ids = None
-                            _ext = fh.detect_external_edits(
-                                project_path, known_task_ids=_known_task_ids)
-                            if _ext.get('siblingFiles'):
-                                logger.info('[Task:%s] external-edit probe '
-                                            'attributed %d drifted file(s) to '
-                                            'concurrent Tofu task(s) — suppressed '
-                                            'IDE toast', task['id'][:8],
-                                            len(_ext.get('siblingFiles', [])))
-                            if (task.get('modifiedFileList')
-                                    or task.get('modifiedFiles')):
-                                logger.debug('[Task:%s] external-edit probe '
-                                             'completed after round started '
-                                             'mutating files — not emitting '
-                                             'SSE event (attribution ambiguous)',
-                                             task['id'][:8])
-                                return
-                            if _ext.get('committed'):
-                                append_event(task, build_event(
-                                    EventType.PROJECT_EXTERNAL_EDIT,
-                                    files=_ext.get('files', []),
-                                    sha=_ext.get('snapshotId'),
-                                ))
-                                logger.info('[Task:%s] captured %d external edit(s) snap=%s',
-                                            task['id'][:8], len(_ext.get('files', [])),
-                                            (_ext.get('snapshotId') or '')[:8])
-                        except Exception as e:
-                            logger.warning('[Task:%s] external-edit detection failed: %s',
-                                           task['id'][:8], e)
-
-                    threading.Thread(
-                        target=_probe_external_edits,
-                        name=f'ext-edit-probe-{task["id"][:8]}',
-                        daemon=True,
-                    ).start()
+                    # _probe_external_edits + its daemon-thread spawn moved
+                    # to lib.tasks_pkg.orchestrator._vu_startup (pt_03f4cdf1
+                    # slice 2). Same behaviour + same daemon-thread name
+                    # prefix; the previous inline closure was a byte-for-
+                    # byte transliteration of the function body now living
+                    # in the extracted module.
+                    start_external_edit_probe(task, project_path)
             except Exception as e:
                 logger.warning('[Task:%s] could not start external-edit probe: %s',
                                task['id'][:8], e)

@@ -251,10 +251,23 @@ def stream_llm_response(task, body, tag='', on_tool_call_ready=None):
                     (usage or {}).get('cache_creation_input_tokens'),
                     _fr_i + 1, _fr_max)
                 try:
+                    # ★ Layer-1 orphan fix: a FloorRetry resend re-streams the
+                    #   IDENTICAL body purely to re-roll the gateway's cache-write
+                    #   dice for a cheaper usage — its token/tool deltas are
+                    #   THROWAWAY unless it RECOVERS (adopted below). Reusing
+                    #   on_tool_call_ready here made every discarded resend
+                    #   announce a fresh 'searching' tool round (new tc_id) that
+                    #   never survived into the final assistant_msg → an orphan
+                    #   swept to status='aborted' with an empty result, which the
+                    #   reader then had to defend against (layer 2). Pass None —
+                    #   exactly as on_thinking/on_content already are — so the
+                    #   resend announces NOTHING. If it RECOVERS, parse_tool_calls
+                    #   re-emits the adopted response's tool_start (a few-hundred-ms
+                    #   later chip; functionally lossless — owner-approved).
                     _rmsg, _rfin, _rusage = _dispatch_stream(
                         body,
                         on_thinking=None, on_content=None,
-                        on_tool_call_ready=on_tool_call_ready,
+                        on_tool_call_ready=None,
                         abort_check=lambda: task.get('aborted', False),
                         prefer_model=model, log_prefix=f'{pfx}[floor-retry{_fr_i+1}]',
                         strict_model=True, on_retry=_on_retry,

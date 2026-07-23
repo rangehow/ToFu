@@ -195,5 +195,46 @@ def test_resend_stops_on_throttle(monkeypatch):
     assert usage.get('cache_read_tokens') == 28654
 
 
+def test_resend_does_not_reuse_tool_callback(monkeypatch):
+    """Layer-1 orphan fix: the FIRST dispatch carries the orchestrator's
+    on_tool_call_ready (early tool_start announcements), but every FloorRetry
+    RESEND must pass on_tool_call_ready=None — a discarded resend that announces
+    a fresh 'searching' round leaves a result-less orphan (swept to aborted).
+
+    RED before the fix (resend reused the callback → captured callback is the
+    same non-None object on call #2); GREEN after (call #2's callback is None).
+    NEUTER: restore on_tool_call_ready=on_tool_call_ready on the resend and
+    this assertion flips red."""
+    import lib.tasks_pkg.manager as _mgr
+    monkeypatch.setenv('TOFU_CACHE_FLOOR_RETRY', '1')
+    monkeypatch.setenv('TOFU_CACHE_FLOOR_RETRY_MAX', '2')
+    conv_id = 'cfr-cb'
+    _seed_wire_fp(conv_id, [{'k': 'a'}])
+    seq = [_FLOOR_USAGE, _HIT_USAGE]
+    captured_cbs = []
+    calls = {'n': 0}
+
+    def _fake_dispatch(body, **kwargs):
+        captured_cbs.append(kwargs.get('on_tool_call_ready'))
+        i = calls['n']
+        calls['n'] += 1
+        return ({'role': 'assistant', 'content': 'ok'}, 'stop', dict(seq[min(i, len(seq) - 1)]))
+
+    _sentinel = lambda tc: None  # noqa: E731 — a distinct non-None callback
+    _orig = _mgr.dispatch_stream
+    _mgr.dispatch_stream = _fake_dispatch
+    try:
+        _mgr.stream_llm_response(_task(conv_id), _body(), tag='FR',
+                                 on_tool_call_ready=_sentinel)
+    finally:
+        _mgr.dispatch_stream = _orig
+
+    assert len(captured_cbs) == 2, f'expected 1 resend; dispatches={len(captured_cbs)}'
+    assert captured_cbs[0] is _sentinel, 'first dispatch must carry the real tool callback'
+    assert captured_cbs[1] is None, (
+        'FloorRetry resend must pass on_tool_call_ready=None so a discarded '
+        'attempt never announces an orphan tool round')
+
+
 if __name__ == '__main__':
     sys.exit(pytest.main([__file__, '-v', '-p', 'no:cacheprovider']))
